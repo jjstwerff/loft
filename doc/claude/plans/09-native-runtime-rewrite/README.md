@@ -109,7 +109,7 @@ between work phases at decision points.
 | 03 | [Parallel-for emitter](03-parallel-emitter.md) | — (collapsed 95-line `dispatch.rs:850-944`) — **prerequisite for P202** | simplification | **DONE (2026-05-02)** |
 | 04 | [Key-keyed Op emitter](04-key-ops.md) | — (consolidates `OpGetRecord` / `OpIterate`) | simplification | **DONE (2026-05-02)** |
 | 09 | [Parallel runtime consolidation](09-parallel-runtime-consolidation.md) | — (collapses 3 near-duplicate `n_parallel_for_*_native` fns into one generic core; **must land before phase 06**) | simplification | **DONE (2026-05-02)** |
-| 05 | [File emitters](05-file.md) | P200 (write side) | bug fix | OPEN — **plan misaligned, needs rewrite** (see phase 05 doc § Diagnosis findings) |
+| 05 | [File emitters](05-file.md) | P200 (read-side comparison emission) | bug fix | **DONE (2026-05-02)** via phase 10 step 10.3 — `IntCompareEmitter` widens both operands to i64 |
 | 05a | [Introspection: after first bug fix](05a-introspect.md) | — | introspection | OPEN |
 | 06 | [Threading queue runtime fns](06-threading.md) | P202 | bug fix | **DONE (2026-05-02)** |
 | 07 | [Generic text emitter](07-generics.md) | P205 | bug fix | **DONE (2026-05-02)** |
@@ -181,7 +181,7 @@ Reference for "are we beating main yet?" (main is at 5/5).
 | Pre-plan-09 | 29/30 | 87/93 | 2/5 | -3 |
 | After phase 06 (P202) — 2026-05-02 | **30/30** | 89/93 | **3/5** | -2 |
 | After phase 07 (P205) — 2026-05-02 | 30/30 | **90/93** | 3/5 | -2 |
-| After phase 05+08 (P200) — projected | 30/30 | 91/93 | 3/5 | -2 |
+| After phase 10 step 10.3 (P200) — 2026-05-02 | 30/30 | **91/93** | **4/5** | -1 |
 | After P204 fixed via plan-11 — projected | 30/30 | 93/93 | **5/5** | 0 (PR-ready) |
 
 Each row pins an acceptance floor.  The active branch must beat
@@ -192,7 +192,7 @@ silently shrink any milestone count are regressions.
 
 | P-issue | Prior blocker | What dissolves it | Phase |
 |---|---|---|---|
-| P200 | `narrow_int_cast` dual role; fix collided with itself | **Revised by 00a**: the bug is the block-tail role (comparison-emission RHS type mismatch), not param narrowing.  Phase 02 (param-narrowing split) is no longer the prerequisite.  Phase 05 needs a comparison-emission fix that matches LHS / RHS widths or drops the block-tail narrow when consumer is `==` against a fitting constant.  Plan rewrite required | 05 (rewrite) → 08 |
+| P200 | `narrow_int_cast` dual role; fix collided with itself | Revised by 00a: the bug was block-tail comparison-emission, not param narrowing.  Phase 10 step 10.3 added `IntCompareEmitter` that widens both operands of `OpEqInt`/`OpNeInt`/`OpLtInt`/`OpLeInt` via `(operand as i64)`.  All 5 P200 sub-failures retired in one fix; phase 02 (param-narrowing split) confirmed not needed.  Phase 08 also superseded (no separate write-side fix needed) | 10 step 10.3 **CLOSED 2026-05-02** |
 | P202 | Adding queue fns duplicates 95-line parallel-for case | Phase 03 gave queue fns a slot in the emitter family; phase 09 collapsed for-par runtime fns; phase 06 added 3 flat queue runtime fns (~90 LOC vs the originally-projected ~120 LOC trait + wrappers — see phase 06 § Implementation notes for the trait-reuse-vs-flat decision) | 03 → 09 → 06 **CLOSED 2026-05-02** |
 | P203 | Template double-substitution: `OpConvIntFromEnum` substitutes `@v1` twice, so `delete(path) == FileResult.Ok` calls `delete()` twice (first deletes file, second returns NotFound) | Phase 00 step 0.7b adds let-bind-on-repeat to `DefaultTemplateEmitter` — auto-detects repeated placeholders and binds once.  Closes the bug class for all 5 affected templates simultaneously | 00 (step 0.7b) **CLOSED** |
 | P205 | Direct skip-removal might cascade; template lacks type-binding info; sibling Ops may share the dangle | Phase 07 ran the probe (2026-05-02) → Outcome B confirmed.  Implementation revealed the dangle is at TWO emit.rs sites (Value::Return wrap + block-tail wrap_result), not a single Op.  Fix: detect "function returns Type::Text but has no `Type::RefVar(Type::Text(_))` attribute" and route the value through `stores.scratch` so the backing String lives as long as `stores` | 07 **CLOSED 2026-05-02** |

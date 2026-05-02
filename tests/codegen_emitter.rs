@@ -365,6 +365,121 @@ fn p202_parallel_queue_emitter_registered() {
     }
 }
 
+/// Phase 10 step 10.5 — native baseline floor.
+///
+/// Pins the post-plan-09 native suite count.  Without this gate,
+/// future commits can silently regress (e.g. a codegen change
+/// that breaks a previously-passing test goes unnoticed because
+/// the high-level test still reports "FAILED" the same way).
+///
+/// Floor today (after plan-09 phases 06 + 07 + 10 step 10.3 closed
+/// P200/P202/P205):
+/// - native_dir:           30/30
+/// - native_scripts:       91/93 (2 P204 sub-failures remaining;
+///   close via plan-11 to reach 93/93)
+/// - native_binary_script: PASS
+/// - native_tuple_*:       PASS (× 2)
+///
+/// Update floor expectations as plan-11 (P204) ships.  This
+/// test's job: catch silent regression — any commit that drops
+/// the count below today's floor must update the floor
+/// EXPLICITLY in this test, not silently.
+#[test]
+#[ignore = "expensive — runs the full native suite; opt-in via `--ignored`"]
+fn native_suite_floor_holds() {
+    let output = std::process::Command::new("cargo")
+        .args([
+            "test",
+            "--release",
+            "--test",
+            "native",
+            "--",
+            "--test-threads=1",
+        ])
+        .current_dir(project_root())
+        .output()
+        .expect("run native suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{}{}", stdout, String::from_utf8_lossy(&output.stderr));
+
+    // native_dir → tests/docs/*.loft : 30 total, all must pass.
+    // No "native result:" summary line; check the high-level
+    // test name + ok status instead.  When a docs-test fails,
+    // native_dir reports "FAILED" instead of "ok".
+    assert!(
+        combined.contains("test native_dir ... ")
+            && !combined.contains("test native_dir ... FAILED"),
+        "native_dir failed — a tests/docs/*.loft regressed under native.  Stdout:\n{combined}"
+    );
+
+    // native_scripts → tests/scripts/*.loft : 93 total, ≥ 91 passed.
+    // Today: 91 passed, 0 compile failed, 2 run failed (P204).
+    // Plan-11 will move this to 93 passed.  The "native result"
+    // summary appears once for native_scripts.
+    let script_floor = combined.contains("native result: 91 passed,")
+        || combined.contains("native result: 92 passed,")
+        || combined.contains("native result: 93 passed,");
+    assert!(
+        script_floor,
+        "native_scripts floor regressed (expected ≥ 91/93).  Stdout:\n{combined}"
+    );
+
+    // native_binary_script must PASS (was FAILED pre-phase-10).
+    assert!(
+        combined.contains("test native_binary_script ... ok"),
+        "native_binary_script regressed.  Stdout:\n{combined}"
+    );
+}
+
+/// Phase 10 regression test: P200's read-side comparison emission
+/// fix must keep `tests/scripts/20-binary.loft` compiling under
+/// native.  Without phase 10's `IntCompareEmitter` (in
+/// `src/generation/ops/int_compare.rs`), the default `@v1 == @v2`
+/// template produces E0308 between a narrowed block-tail LHS
+/// (`(...) as u8`) and an `_i64` literal RHS.  The emitter wraps
+/// both operands in `(... as i64)` to normalise to a common width.
+#[test]
+fn p200_binary_compiles_under_native() {
+    let status = std::process::Command::new("cargo")
+        .args([
+            "run",
+            "--bin",
+            "loft",
+            "--release",
+            "--quiet",
+            "--",
+            "tests/scripts/20-binary.loft",
+        ])
+        .current_dir(project_root())
+        .status()
+        .expect("run 20-binary under native");
+    assert!(
+        status.success(),
+        "P200: 20-binary.loft native compile/run regressed — \
+         the IntCompareEmitter widening fix in \
+         src/generation/ops/int_compare.rs likely needs review."
+    );
+}
+
+/// Phase 10 structural test: the IntCompareEmitter must remain
+/// registered for all four integer comparison Ops.  Removing any
+/// entry re-opens P200 (and any other site where a narrow LHS
+/// meets an i64 RHS literal).
+#[test]
+fn p200_int_compare_emitter_registered() {
+    let src = std::fs::read_to_string(project_root().join("src/generation/ops/mod.rs"))
+        .expect("read ops/mod.rs");
+    for name in ["\"OpEqInt\"", "\"OpNeInt\"", "\"OpLtInt\"", "\"OpLeInt\""] {
+        assert!(
+            src.contains(name),
+            "build_registry missing entry for {name} — phase 10 \
+             (P200 close) registered IntCompareEmitter for these \
+             names; removing the entry re-opens E0308 on \
+             narrowed-LHS comparisons."
+        );
+    }
+}
+
 /// Phase 07 regression test: the P205 reproducer must compile +
 /// run cleanly under native.  Pins the dangling-Str fix —
 /// without phase 07's emit-time scratch routing, the generic-text-

@@ -1,6 +1,23 @@
 # Phase 10 — Final closure
 
-**Status:** OPEN
+**Status:** IN PROGRESS
+
+| Step | State |
+|---|---|
+| 10.1 — phase 05a introspection | DONE — Findings populated 2026-05-02 |
+| 10.2 — CHANGELOG entries for 06 + 07 | DONE — entries added 2026-05-02 |
+| 10.3 — P200 read-side fix | DONE — `IntCompareEmitter` shipped 2026-05-02; 91/93 native |
+| 10.4 — phase 08 redundancy decision | DONE — phase 08 marked SUPERSEDED 2026-05-02 |
+| 10.5 — pin native baseline floor | IN PROGRESS — `native_suite_floor_holds` test added (`#[ignore]`'d, opt-in via `--ignored`); needs assertion polish before enforcing |
+| 10.6 — plan-09 retrospective (08a equivalent) | OPEN — design-only at this stage; populate after plan-11 closes P204 so retrospective covers the full arc |
+| 10.7 — directory move-to-finished | OPEN — happens at PR-open time, after plan-11 + plan-09 both DONE |
+
+**Pace gate (2026-05-02):** the user noted implementation
+velocity was getting ahead of the planning discipline.  Steps
+10.5-10.6 are deliberately design-only for now; they implement
+when the plan-11 outcome (P204 fix) lets the retrospective
+cover the full arc, and when the baseline assertion can be
+properly tuned against a stable post-plan-11 test count.
 
 **Closes:** **P200** (last plan-09-scoped P-issue) + finalises
 plan-09 administratively.
@@ -333,10 +350,59 @@ cargo test --release --test codegen_emitter::native_suite_floor_holds
 
 _(append per problem)_
 
-### Step 10.3.b notes — comparison-emission code path
+### Step 10.3 outcome (2026-05-02) — IntCompareEmitter
 
-_(populate during step 10.3.b: which file:line emits LHS, which
-emits RHS, what context flow exists between them)_
+The actual-error survey confirmed all 5 failing sites are E0308
+between block-tail-narrowed LHS and `_i64` literal RHS.
+
+**Code path identified**:
+- LHS narrow: `src/generation/emit.rs:900` (block-tail) calls
+  `narrow_int_cast(&bl.result)` and emits `(value) as u8`.
+- RHS literal: `src/generation/emit.rs:53` emits `Value::Int(v)`
+  as `{v}_i64` (via the default Int emission, no
+  `i32_literal_context` flag set at comparison sites).
+- Comparison: `default/01_code.loft:192` template `@v1 == @v2`
+  stitches them — the template has no LHS/RHS type info.
+
+**Fix chosen**: option C from phase 05's plan (cast both sides
+to common width).  Implementation: new
+`src/generation/ops/int_compare.rs::IntCompareEmitter` that
+emits `((lhs) as i64) <op> ((rhs) as i64)`.  `as i64` is widening
+for u8/u16/i8/i16 and a no-op for i64.
+
+**Why option C over A/B**:
+- Option A (drop block-tail narrow when consumer is `==`): would
+  need context flow ("what consumes this block") — not readily
+  available at the block-tail emit site.  Would also break
+  cases where the consumer DOES need the narrow type (e.g.
+  function returns whose signature is narrow).
+- Option B (narrow RHS to match LHS): would require detecting
+  LHS narrow type at RHS emit time — same context-flow issue.
+  Also lossy for non-fitting RHS values (silent truncation).
+- Option C (widen both): simplest detection (none needed —
+  always wrap), preserves narrow LHS via `(... as u8) as i64`
+  (the narrow cast still applies, then widens to i64), and the
+  comparison's logical semantics is integer equality so widening
+  preserves correctness.
+
+**Registered for**: `OpEqInt`, `OpNeInt`, `OpLtInt`, `OpLeInt`.
+`OpGtInt` / `OpGeInt` don't exist — the parser desugars `>` /
+`>=` into `<` / `<=` with swapped operands.
+
+**Verified**:
+- `tests/scripts/20-binary.loft` compiles + runs under native
+  (was: rustc E0308).
+- `native_binary_script` test flips from FAILED → ok.
+- `native_scripts` count: 90/93 → 91/93 (all 5 P200 sub-failures
+  retired).
+- threading 43/43, threading_chars 35/35, issues 540/540 unchanged.
+- Two regression tests in `tests/codegen_emitter.rs`:
+  `p200_binary_compiles_under_native` (behavioural) +
+  `p200_int_compare_emitter_registered` (structural).
+
+**Net delta**: 65 lines added (`int_compare.rs` + 2 tests + docs);
+0 lines retired.  Below the doubled estimate (60 → 65) — within
+ballpark of the 05a-doubling rule.
 
 ## Implementation notes
 

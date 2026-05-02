@@ -29,6 +29,7 @@
 
 pub mod default;
 pub mod forwarding_smoke;
+pub mod int_compare;
 pub mod key_ops;
 pub mod parallel;
 
@@ -170,6 +171,15 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
         "n_parallel_buf_drop_ref",
     ] {
         r.insert(name, Box::new(parallel::ParallelBufRenameEmitter));
+    }
+
+    // Phase 10 step 10.3 — integer comparison emitter family.
+    // Closes P200 read-side: the default `@v1 == @v2` template
+    // produces E0308 when the LHS is a narrowed block (`(...) as u8`)
+    // and the RHS is an `_i64` literal.  This emitter wraps each
+    // operand in `(... as i64)` so both sides match width.
+    for name in ["OpEqInt", "OpNeInt", "OpLtInt", "OpLeInt"] {
+        r.insert(name, Box::new(int_compare::IntCompareEmitter));
     }
 
     r

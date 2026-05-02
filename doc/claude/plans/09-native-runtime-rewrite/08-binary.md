@@ -1,9 +1,29 @@
 # Phase 08 — Binary read emitter
 
-**Status:** OPEN
+**Status:** SUPERSEDED — DONE-AS-REDUNDANT (2026-05-02 via phase 10 step 10.3)
 
-**Closes:** **P200 fully** (binary file read-side width mismatch —
-the write side closes in phase 05).
+**Original closure goal:** binary file read-side width mismatch
+(P200's read side, after phase 05 closed the write side).
+
+**Why superseded:** phase 00a's actual-error survey + phase 05's
+plan rewrite found that P200 was a SINGLE bug (read-side
+comparison emission), not the read+write split this phase
+assumed.  Phase 10 step 10.3 added `IntCompareEmitter` that
+widens both operands of integer comparisons to i64 — closing
+ALL 5 P200 sub-failures (read AND any latent write sites) in
+one fix.  Phase 08's separate read-side emitter is no longer
+needed.
+
+The original phase 08 plan (kept below for historical context)
+remains valid as DESIGN reference if a future binary-codegen
+issue surfaces that step 10.3's fix doesn't reach.  Today, no
+such issue is known.
+
+**Closes (revised):** none — superseded.
+
+**Closes (original goal):** **P200 fully** (binary file read-side
+width mismatch — the write side was originally to close in
+phase 05).
 
 **Reproducer:** `tests/scripts/20-binary.loft` (specifically line 82
 "single LE roundtrip"), `tests/scripts/p200_round_trip.loft` (added

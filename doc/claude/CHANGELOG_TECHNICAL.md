@@ -9,6 +9,148 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### plan-09 phase 07: close P205 — bounded-generic text return scratch routing
+
+Closes P205 (1 of 4 native sub-failures retired).  The bug:
+bounded-generic dispatch `fn f<T: Trait>(x: T) -> text` produced
+native code that emitted `Str::new(&local_String)` whose pointer
+referenced a stack-local that dropped at function return,
+dangling the returned `Str` into freed memory.
+
+Fix in `src/generation/emit.rs` at TWO emit sites (the dangle
+isn't tied to a single Op — it's emit.rs's `Str::new(...)` wrap
+choice for text-returning functions):
+
+- **`Value::Return(val)` text-wrap path** (line 188+): detects
+  "function returns Type::Text but has no
+  `Type::RefVar(Type::Text(_))` attribute" and routes the value
+  through `stores.scratch`.
+- **Block-tail `wrap_result` path** (line 887+): same detection,
+  same routing.
+
+Detection logic:
+```rust
+let needs_p205_scratch = wrap_text && {
+    let def = self.data.def(self.def_nr);
+    matches!(def.returned, Type::Text(_))
+        && !def.attributes.iter().any(|a| {
+            matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+        })
+};
+if needs_p205_scratch {
+    write!(w, "{{ stores.scratch.push((")?;
+    self.output_code_inner(w, val)?;
+    write!(w, ").to_string()); Str::new(stores.scratch.last().unwrap()) }}")?;
+}
+```
+
+`stores.scratch` is the same Vec<String> that
+`n_parallel_buf_get_text_native` uses — lifetime stable for the
+caller's use of the returned `Str`.
+
+Detection nuance: `text_return` doesn't set `hidden=true` on the
+attributes it adds (only `ref_return` does, at
+`parser/control.rs:2452`).  Initial detection used
+`a.hidden && Type::RefVar(...)` and filtered out every
+text-returning function.  Fix dropped the `hidden` filter.
+
+Probe finding (Outcome B from phase 07's diagnostic step):
+removing the `DefType::Generic` skip at `parser/control.rs:375`
+makes `text_return` run for generic specialisations but doesn't
+help — text_return promotes locals to hidden RefVar(Text)
+parameters, but bounded-generic specialisations have no local
+text vars to promote.  The fix had to move from parser-side to
+codegen-side.
+
+Verified:
+- `repro_p205.loft` exits 0 under native (was: panic on assert)
+- `86_interfaces` no longer in run failures
+- `native_scripts`: 89/93 → 90/93
+- threading 43/43, threading_chars 35/35, issues 540/540 unchanged
+- p09 fast gate: byte-identical (baseline refreshed for
+  25-generics)
+- fmt + clippy `-D warnings` clean
+
+Regression tests in `tests/codegen_emitter.rs`:
+- `p205_repro_passes_under_native` — runs the reproducer under
+  native, asserts exit 0.
+- `p205_no_str_new_of_local_in_corpus` — greps the doc-test
+  baseline for `Str::new(&var___ret_*)` and fails if reintroduced.
+
+Commit `6151231`.
+
+### plan-09 phase 06: close P202 — n_parallel_queue family in native
+
+Closes P202 (3 of 6 native sub-failures retired: 19_threading,
+22_threading, 40_par_ref_return).  Native compilation of
+`for ... par(...)` for-loops now works.
+
+Three components ship together:
+
+1. **Runtime fns** in `src/codegen_runtime.rs`:
+   - `n_parallel_queue_native` / `_text_native` / `_ref_native`
+     — queue dispatch (closure-based, mirroring
+     `n_parallel_for_*_native`).  The ref variant adopts a
+     single result store (simpler than the interpreter's
+     per-worker dispenser); buf_drop_ref frees it.
+   - `n_parallel_buf_get_native` / `_text_native` / `_ref_native`
+     — per-row reads from the active par buffer.
+   - `n_parallel_buf_drop_native` / `_text_native` / `_ref_native`
+     — end-of-loop cleanup.
+   - All 9 take `&UnsafeCell<Stores>` per phase 01's ABI;
+     registered in `CODEGEN_RUNTIME_FNS` with `Abi::Cell`.
+   - `# Panics` sections added to satisfy
+     `clippy::missing_panics_doc`.
+
+2. **Emitters** in `src/generation/ops/parallel.rs`:
+   - `ParallelQueueEmitter` mirrors phase 03's
+     `ParallelForEmitter` but routes calls to
+     `n_parallel_queue_*_native` (returning i64 row count
+     instead of DbRef).  Reuses `closure_shape` /
+     `queue_helper_name` / extra-arg let-binding scaffolding.
+   - `ParallelBufRenameEmitter` is a pass-through name
+     rewriter for the 6 buf-get / buf-drop names — no closure
+     transformation, just appends `_native` to the call site.
+   - All 9 names registered in
+     `src/generation/ops/mod.rs::build_registry`.
+
+3. **Reachability fix** in `src/generation/mod.rs::collect_calls`:
+   - The worker-fn-via-d_nr-arg detection (originally for
+     `n_parallel_for*`) extended to the queue family.  Without
+     this, the emitter's closure refers to a worker fn that
+     never gets emitted (E0425 "cannot find function").  Caught
+     during validation, not pre-flight — the lesson is captured
+     in `feedback_forwarding_first_recipe.md` (extend reachability
+     when emitter synthesises calls by name).
+
+Trait-reuse decision (per phase 06 doc § Implementation notes):
+Phase 09's plan-doc projected 3 thin wrappers around a
+`ParQueueShape` trait following the for-par pattern.
+Implementation revealed each variant pushes to a different
+`par_*_buffer_stack` field with a different value type — a
+trait would have ~80% conditional branching.  Kept queue
+runtime fns flat (~90 LOC vs ~120 with a trait).  Codified in
+`feedback_phase_doc_trait_drafts.md` ("if 3 impls share <50%
+of method bodies, prefer flat over trait").
+
+Verified:
+- native_dir: 29/30 → **30/30** (19_threading compile fix)
+- native_scripts: 87/93 → **89/93** (22_threading +
+  40_par_ref_return compile fixes)
+- threading 43/43, threading_chars 35/35, issues 540/540 unchanged
+- p09 fast gate: 9/9 byte-identical (baseline refreshed for
+  19-threading + 22-threading — emission shape changed
+  intentionally as queue calls now route through emitter)
+- fmt + clippy `-D warnings` clean
+
+Regression tests in `tests/codegen_emitter.rs`:
+- `p202_parallel_queue_runtime_fns_registered` — pins the 9
+  runtime-fn names with `Abi::Cell`.
+- `p202_parallel_queue_emitter_registered` — pins the 9
+  build_registry entries.
+
+Commit `8cf0676`.
+
 ### plan-09 phase 00a: introspection findings + downstream updates
 
 Fired late (after phases 00, 01, 03, 04, 09 all shipped) so the
