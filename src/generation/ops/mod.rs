@@ -103,3 +103,109 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     //     r.insert("OpWriteIntFile", Box::new(op_write_int_file::Emitter));
     std::collections::HashMap::new()
 }
+
+#[cfg(test)]
+mod tests {
+    //! Smoke-test the `OpEmitter` trait shape so phase 00's claim that
+    //! "custom emitters can opt in per Op" is checked at compile time
+    //! before phase 05 lands the first real one.
+    //!
+    //! These tests are compile-only — they prove that:
+    //! - The trait can be impl'd by an external struct.
+    //! - `EmitCtx` field access works from inside an impl (split-borrow
+    //!   between `ctx.output` and `ctx.w` doesn't fight the borrow
+    //!   checker).
+    //! - The trait dispatch (`emit_op`) accepts a `&mut EmitCtx<'_, '_>`
+    //!   without lifetime gymnastics at the call site.
+    //!
+    //! What they do NOT cover (deferred until a real Output fixture
+    //! exists in the test surface):
+    //! - Calling `ctx.output.<method>` from inside an emitter.
+    //! - Verifying that the registry lookup actually finds a registered
+    //!   emitter (the real registry is `OnceLock`-backed; tests can't
+    //!   mutate it without a feature flag).
+    //!
+    //! Phase 05's first real custom emitter is the integration test for
+    //! the deferred parts.
+
+    use super::{EmitCtx, OpEmitter, has_custom_emitter, registry};
+    use crate::data::Value;
+    use std::io::{self, Write};
+
+    /// Minimal emitter that doesn't touch any context state.  Compiles
+    /// only if the trait's method signature is satisfiable by an
+    /// external impl (no hidden lifetime constraints).
+    struct StubEmitter;
+    impl OpEmitter for StubEmitter {
+        fn emit(
+            &self,
+            _ctx: &mut EmitCtx<'_, '_>,
+            _args: &[Value],
+        ) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Emitter that writes to `ctx.w`.  Compiles only if the field
+    /// access pattern works without re-borrow conflicts.
+    struct WriterEmitter;
+    impl OpEmitter for WriterEmitter {
+        fn emit(
+            &self,
+            ctx: &mut EmitCtx<'_, '_>,
+            _args: &[Value],
+        ) -> io::Result<()> {
+            write!(ctx.w, "/* writer-emitter stub */")
+        }
+    }
+
+    /// Emitter that reads `ctx.def_fn` while writing to `ctx.w`.
+    /// Compiles only if the split-borrow rules let us hold both an
+    /// immutable ref to `def_fn` and a mutable ref to `w` from the
+    /// same `&mut EmitCtx`.
+    struct DefAccessEmitter;
+    impl OpEmitter for DefAccessEmitter {
+        fn emit(
+            &self,
+            ctx: &mut EmitCtx<'_, '_>,
+            _args: &[Value],
+        ) -> io::Result<()> {
+            let name = ctx.def_fn.name.as_str();
+            write!(ctx.w, "/* {name} */")
+        }
+    }
+
+    #[test]
+    fn op_emitter_trait_is_impl_able() {
+        // If any of the three structs above don't compile, this test
+        // doesn't compile.  The body just instantiates them so the
+        // structs aren't dead-code-eliminated.
+        let _stub = StubEmitter;
+        let _writer = WriterEmitter;
+        let _def_access = DefAccessEmitter;
+    }
+
+    /// Verify the registry is queryable and (currently) empty.  When a
+    /// future phase populates it, this test's count goes up — that's
+    /// expected behaviour, not a regression, but the diff makes it
+    /// visible.
+    #[test]
+    fn registry_count_matches_sanctioned_set() {
+        let count = registry().len();
+        // Phase 00 ships an empty registry.  Future phases bump this.
+        assert!(
+            count <= 16,
+            "registry has {count} custom emitters — bump the cap if \
+             this is intentional and document in plan 09 status table"
+        );
+    }
+
+    /// Verify `has_custom_emitter` returns false for unregistered
+    /// names (today: every name).  When phase 05+ register emitters,
+    /// this test's expectations narrow.
+    #[test]
+    fn has_custom_emitter_returns_false_for_unregistered() {
+        assert!(!has_custom_emitter("ThisOpDoesNotExist"));
+        assert!(!has_custom_emitter("OpAddInt")); // common Op, not custom-overridden
+    }
+}
