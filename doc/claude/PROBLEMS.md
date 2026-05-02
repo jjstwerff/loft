@@ -36,7 +36,7 @@ existing entry, not re-open it as a bug.
 | 200 | Native codegen for binary-file read sites emitted block-tail `(read_value) as u8` (block result narrowed) but compared against `_i64` literal RHS — rustc raised E0308 mismatched types.  **Closed (2026-05-02)** by plan-09 phase 10 step 10.3: new `IntCompareEmitter` in `src/generation/ops/int_compare.rs` wraps both operands of `OpEqInt` / `OpNeInt` / `OpLtInt` / `OpLeInt` in `(operand as i64)` to normalise to a common width.  Native suite: 90/93 → 91/93 (all 5 P200 sub-failures retired); `native_binary_script` flips from FAILED → ok.  Pinned by `p200_binary_compiles_under_native` + `p200_int_compare_emitter_registered` regression tests in `tests/codegen_emitter.rs`. | Medium (closed) | n/a — fix lands in `src/generation/ops/int_compare.rs`. |
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
 | 203 | Assertion `delete(path) == FileResult.Ok` panicked with `delete existing file`.  **Closed (2026-05-02)**: actual root cause was template double-substitution — five templates in `default/01_code.loft` (lines 690, 705, 707, 751, 753) substituted `@v1`/`@v2` in multiple positions, so any side-effecting call appearing on both sides of an enum/null comparison evaluated twice.  Fix: `src/generation/calls.rs::output_call_template` now scans every template for repeated `@<name>` placeholders and hoists each into a single `let _v_<name> = …;` wrapping `{ … }` block before substitution, so each arg expression evaluates exactly once regardless of how many positions reference it.  `repro_p203.loft` exits 0; full suite: 540/540 issues, 43/43 threading, 35/35 threading_chars, native 86/92 → 87/92.  See [P203 reproducer + diagnosis](#203-native-block-scope-file-not-flushed-on-exit). | Medium (closed) | n/a — fix lands in `src/generation/calls.rs`. |
-| 204 | Native: tail-expression `return inner_call()` from a struct-returning function emits `n_inner(cell, args)` as a void STATEMENT and then `return DbRef { store_nr: u16::MAX, rec: 0, pos: 8 };` (null sentinel).  The caller does `let _src = n_wrap(...); OpCopyRecord(_src, var_q, ...)` — `_src` is null, OpCopyRecord panics with "index out of bounds: the len is X but the index is 65535" at `src/database/allocation.rs:347`.  Native FAILS, interpreter PASSES (interpreter routes the result through the `__ref_*` placeholder mechanism which native skips).  Surfaces in `87_store_leaks` and `85_yield_resume` after P199 made the surrounding code compile.  See [P204 reproducer + diagnosis](#204-tail-expression-return-of-inner-helper-call-discarded). | Medium | Avoid the tail-expression pattern: bind the result first.  `fn wrap(x) -> S { y = make_y(); r = inner(x, y); r }` — naming the result `r` produces a different IR shape that native handles correctly. |
+| 204 | Native: tail-expression `return inner_call()` from a struct-returning function emitted `n_inner(cell, args)` as a void STATEMENT and then `return DbRef { store_nr: u16::MAX, rec: 0, pos: 8 };` (null sentinel) — caller's OpCopyRecord then panics on the null sentinel.  **Closed (2026-05-02)** by plan-11: `src/generation/pre_eval.rs::detect_ref_tail_capture` now unspans `Value::Span` wrappers before matching, so the tail-position Call is properly captured via `let __native_tail_ret: DbRef = call(...);` and returned instead of the null sentinel.  Existing tail-capture infrastructure was correct; the walker just didn't see Span-wrapped operators.  Native suite: 91/93 → **93/93** (`85_yield_resume` + `87_store_leaks` closed, `repro_p204.loft` un-marked).  Pinned by `p204_tail_expression_return_passes_under_native` regression test in `tests/codegen_emitter.rs`. | Medium (closed) | n/a — fix lands in `src/generation/pre_eval.rs`. |
 | 205 | Native: bounded-generic dispatch `fn f<T: Trait>(x: T) -> text { x.to_label() }` returned a `Str` whose pointer referenced a local `String` that dropped on function return → dangling pointer, comparison failed.  **Closed (2026-05-02)** by plan-09 phase 07: `src/generation/emit.rs` now detects "function returns Type::Text but has no `Type::RefVar(Type::Text(_))` attribute" at both Value::Return and block-tail wrap_result emit sites, and routes the value through `stores.scratch` (the backing String lives as long as `stores` does — same pattern `n_parallel_buf_get_text_native` uses).  Native suite: 89/93 → 90/93 (`86_interfaces` closed).  Pinned by `p205_repro_passes_under_native` + `p205_no_str_new_of_local_in_corpus` regression tests in `tests/codegen_emitter.rs`. | Medium (closed) | n/a — fix lands in `src/generation/emit.rs`. |
 
 ## Interpreter Robustness
@@ -728,10 +728,36 @@ Reproducer `tests/scripts/repro_p203.loft` (verified: panics with
 `exit=0` after eprintln but file not on disk).  Interpreter / wrap
 test `tests/wrap.rs::file_result` PASSES — issue is native-only.
 
-### 204. Tail-expression return of inner helper call discarded
+### 204. Tail-expression return of inner helper call discarded (CLOSED 2026-05-02)
 
-**Symptom:** `cargo test --release --test native native_scripts`
-(slots `87_store_leaks` and `85_yield_resume`) panics:
+**Closed by:** plan-11 (commit landing this entry).  The fix was
+a two-character change in `src/generation/pre_eval.rs`'s
+`detect_ref_tail_capture` walker — calling `op.unspan()` before
+matching against `Value::Line(_)` / `Value::Call(_, _)` /
+`Value::Return(_)`.  Before the fix, Span-wrapped operators
+(carrying source-position info) bailed the walker on its
+`_ => return None` arm even though the underlying value was a
+Call.  After unspanning, the walker correctly identifies the
+tail Call and the existing emit-time capture path runs:
+
+```rust
+// emit at call_idx:
+let __native_tail_ret: DbRef = n_p204_inner(cell, var_p204_x, var_p204_y);
+// ... cleanup ops ...
+// emit at ret_idx (replacing Return(Null)'s null sentinel):
+return __native_tail_ret;
+```
+
+Step 11.1's actual-error survey confirmed all 3 failing tests
+(`85_yield_resume`, `87_store_leaks`, `repro_p204.loft`) shared
+the same shape: `return DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }`
+in a struct-returning function whose loft body is
+`tail_call_to_struct_returning_fn()`.  Step 11.2's parser-side
+investigation found the existing `detect_ref_tail_capture`
+infrastructure was correct but its walker didn't unspan.
+
+**Symptom (historical):** `cargo test --release --test native native_scripts`
+(slots `87_store_leaks` and `85_yield_resume`) panicked:
 
 ```
 thread 'main' panicked at src/database/allocation.rs:347:34:

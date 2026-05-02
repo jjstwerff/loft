@@ -196,7 +196,7 @@ Reference for "are we beating main yet?" (main is at 5/5).
 | After phase 06 (P202) — 2026-05-02 | **30/30** | 89/93 | **3/5** | -2 |
 | After phase 07 (P205) — 2026-05-02 | 30/30 | **90/93** | 3/5 | -2 |
 | After phase 10 step 10.3 (P200) — 2026-05-02 | 30/30 | **91/93** | **4/5** | -1 |
-| After P204 fixed via plan-11 — projected | 30/30 | 93/93 | **5/5** | 0 (PR-ready) |
+| After plan-11 (P204) — 2026-05-02 | **30/30** | **95/95** | **5/5** | **0 (PR-ready)** |
 
 Each row pins an acceptance floor.  The active branch must beat
 the highest unmet floor before moving on; future commits that

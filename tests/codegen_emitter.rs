@@ -431,6 +431,35 @@ fn native_suite_floor_holds() {
     );
 }
 
+/// Plan-11 regression test: P204 — tail-expression `return inner_call()`
+/// from a struct-returning function must compile + run cleanly under
+/// native.  Without plan-11's fix, the Call's result is discarded as
+/// a void statement and the function returns the null sentinel —
+/// callers' `OpCopyRecord(_src, ...)` then panics with index out of
+/// bounds when `_src.store_nr == u16::MAX`.
+#[test]
+fn p204_tail_expression_return_passes_under_native() {
+    let status = std::process::Command::new("cargo")
+        .args([
+            "run",
+            "--bin",
+            "loft",
+            "--release",
+            "--quiet",
+            "--",
+            "tests/scripts/repro_p204.loft",
+        ])
+        .current_dir(project_root())
+        .status()
+        .expect("run repro_p204 under native");
+    assert!(
+        status.success(),
+        "P204: tail-expression-return reproducer failed under native — \
+         the detect_ref_tail_capture fix in src/generation/pre_eval.rs \
+         likely needs review."
+    );
+}
+
 /// Phase 10 regression test: P200's read-side comparison emission
 /// fix must keep `tests/scripts/20-binary.loft` compiling under
 /// native.  Without phase 10's `IntCompareEmitter` (in

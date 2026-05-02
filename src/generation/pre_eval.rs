@@ -822,20 +822,23 @@ impl Output<'_> {
             Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {}
             _ => return None,
         }
+        // Plan-11 (P204) fix: operators may be wrapped in `Value::Span(b)`
+        // (position-tagging wrapper).  Match against the unspanned value
+        // so the walker doesn't bail on Span-wrapped Calls.
         let ret_idx = operators
             .iter()
-            .rposition(|op| !matches!(op, Value::Line(_)))?;
-        let Value::Return(ret_val) = &operators[ret_idx] else {
+            .rposition(|op| !matches!(op.unspan(), Value::Line(_)))?;
+        let Value::Return(ret_val) = operators[ret_idx].unspan() else {
             return None;
         };
-        if !matches!(**ret_val, Value::Null) {
+        if !matches!(*ret_val.unspan(), Value::Null) {
             return None;
         }
         // Walk backwards through cleanup ops to find the tail user Call.
         let mut i = ret_idx;
         while i > 0 {
             i -= 1;
-            match &operators[i] {
+            match operators[i].unspan() {
                 Value::Line(_) => {}
                 Value::Call(d_nr, _) => {
                     let name = &self.data.def(*d_nr).name;

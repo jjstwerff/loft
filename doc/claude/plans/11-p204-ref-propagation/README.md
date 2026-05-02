@@ -1,10 +1,11 @@
 # Plan 11 — P204: tail-expression return discarded
 
-**Status:** OPEN
+**Status:** DONE (2026-05-02)
 
-**Closes:** **P204** (native: tail-expression `return inner_call()`
-from a struct-returning function emits the inner call as a void
-statement and returns the null sentinel).
+**Closes:** **P204** — closed by a 2-line fix to
+`src/generation/pre_eval.rs::detect_ref_tail_capture` (call
+`op.unspan()` before matching Value::Line / Value::Call /
+Value::Return).
 
 **PR gate:** P204's two failing native tests (`85_yield_resume`,
 `87_store_leaks`) BLOCK PR-readiness.  Per
@@ -267,14 +268,95 @@ sub-phase 11.4b may need to add it (estimate +1 session).
 
 ## Step 11.2 notes — parser-side decision point
 
-_(populate during step 11.2 — file:line of tail-position
-detection, what context is available, what context is missing)_
+The existing `detect_ref_tail_capture` infrastructure in
+`src/generation/pre_eval.rs:816-861` was the right home for the
+fix.  Designed for exactly this pattern:
+
+- Block result is heap-typed (Reference / Vector / Enum-with-payload).
+- Last non-Line operator is `Return(Null)`.
+- Walking backward through cleanup ops (Line, OpFreeText,
+  OpFreeRef, n_set_store_lock) reaches a tail Call whose return
+  type matches the block's heap shape.
+
+When the walker matches, emit-time captures the call's result
+into `let __native_tail_ret: DbRef = call(...);` and the
+Return(Null) becomes `return __native_tail_ret;`.  Without the
+walker matching, the Call is emitted as a void statement and
+the Return(Null) emits the null sentinel — exactly P204's
+symptom.
+
+The walker's pattern-match looked like:
+
+```rust
+match &operators[i] {
+    Value::Line(_) => {}
+    Value::Call(d_nr, _) => { ... }
+    _ => return None,
+}
+```
+
+`operators[i]` could be `Value::Span(box (pos, inner_value))` —
+a position-tagging wrapper added by the parser.  The walker's
+match arms didn't handle Span; it bailed on the `_` arm even
+when the unspanned value WAS a Call.
+
+Decision: option A (fix the walker to unspan).  Three lines
+changed — call `op.unspan()` at each match site.  No new pass,
+no codegen-side workaround needed.  The existing emit-time
+capture path was already correct.
 
 ## Problems encountered
 
-_(append per problem)_
+### Why the existing capture didn't fire (2026-05-02)
+
+The comment in `emit.rs` says "Native-only ref-return tail-call
+capture (87-store-leaks)" — implying the infrastructure was
+supposed to fix 87-store-leaks when it was added.  But
+`87_store_leaks` continued failing through plan-09 entirely.
+The infrastructure was technically correct but never actually
+fired in production because of the unspan miss.
+
+This is a "code that compiled but never executed" failure mode
+— the path was unreachable.  Future code reviews of similar
+walker patterns should check for `Value::Span` handling
+explicitly.
 
 ## Implementation notes
 
-_(append per non-obvious decision — including the option chosen
-in step 11.4 and why)_
+### Fix shape: option A (parser-side walker fix)
+
+Per step 11.4's option matrix in this plan:
+
+- **Option A** (extend `collect_hidden_ref_args`): not the right
+  call site — the bug was in `detect_ref_tail_capture`, which
+  is a different walker.
+- **Option A' (chosen)** (fix `detect_ref_tail_capture` walker):
+  call `op.unspan()` at each match site.  3 lines changed.
+- Option B (new tail-position pass): unnecessary — the existing
+  walker is the tail-position pass.
+- Option C (codegen workaround): unnecessary — the walker fix
+  routes through the existing emit-time capture path.
+
+### Cost vs estimate
+
+- Plan-11 estimate (step 11.4): 2-8 hours depending on option
+  chosen.
+- Actual: ~30 minutes total, including survey + investigation.
+- Why faster than estimated: the existing infrastructure was
+  90% correct; only 3 lines needed to change.  The
+  estimate-doubling rule from plan-09's 05a Findings doesn't
+  apply when the fix is at a known-but-broken site (vs. new
+  emitter / new infrastructure).
+
+### Net delta
+
+3 lines changed in `src/generation/pre_eval.rs` (3 calls to
+`.unspan()` added at match sites).  1 new regression test
+(`p204_tail_expression_return_passes_under_native`) in
+`tests/codegen_emitter.rs`.  2 @EXPECT_FAIL markers removed
+from `tests/scripts/repro_p204.loft` and
+`tests/scripts/repro_p205.loft` (the latter unrelated to P204
+but leftover from phase 07; un-marking it is correct since
+P205 is also closed).
+
+Total: ~5 lines added, 3 lines removed.

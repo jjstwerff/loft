@@ -12,8 +12,12 @@
 // The vector field on the struct triggers the `__ref_*` hidden-param
 // injection in `wrap` and `inner` — without a vector / Reference field,
 // the codegen takes a different path and the bug doesn't surface.
-// See doc/claude/PROBLEMS.md § 204.
-// @EXPECT_FAIL p204_ref_placeholder_uninitialised
+// See doc/claude/PROBLEMS.md § 204.  CLOSED 2026-05-02 by plan-11
+// (commit landing this entry): the parser-side
+// `detect_ref_tail_capture` walker now unspans Value::Span wrappers
+// before matching, so the tail-position Call is properly captured
+// via `let __native_tail_ret: DbRef = call(...);` and returned
+// instead of the null sentinel.
 struct P204_S { p204_v: vector<float> }
 
 fn p204_inner(p204_a: const P204_S, p204_b: const P204_S) -> P204_S {

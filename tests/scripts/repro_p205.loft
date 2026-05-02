@@ -5,8 +5,12 @@
 // local String drops at function return, leaving the returned Str's
 // pointer dangling.  Comparison fails at runtime.
 // Native FAILS, interpreter PASSES.
-// See doc/claude/PROBLEMS.md § 205.
-// @EXPECT_FAIL p205_generic_text_return_dangles
+// See doc/claude/PROBLEMS.md § 205.  CLOSED 2026-05-02 by plan-09
+// phase 07: src/generation/emit.rs routes generic-text returns
+// through stores.scratch when the function lacks a
+// Type::RefVar(Type::Text(_)) attribute.  EXPECT_FAIL marker
+// removed alongside the plan-11 P204 closure (which removed its
+// own marker the same day).
 interface P205Labelable {
   fn p205_to_label(self: Self) -> text
 }
