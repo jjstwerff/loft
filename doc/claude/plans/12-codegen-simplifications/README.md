@@ -42,7 +42,7 @@ Span-miss pattern that caused P204.  This plan addresses those.
 | 03 | [Migrate format/append dispatch arms](03-dispatch-format-append.md) | 2 | 12 dispatch.rs arms → custom emitters | OPEN |
 | 04 | [Migrate free/record dispatch arms](04-dispatch-free-record.md) | 2 | 10 dispatch.rs arms → custom emitters | OPEN |
 | 05 | [Split `narrow_int_cast` dual role](05-narrow-int-cast-split.md) | 2 | param vs block-tail narrowing | OPEN |
-| 06 | [`#rust"..."` template migration plan stub](06-rust-template-migration-stub.md) | 3 | deferred to plan-13 | STUB |
+| 06 | [`#rust"..."` template migration plan stub](06-rust-template-migration-stub.md) | 3 | relocated to `deferred/13-rust-template-migration/` (2026-05-02) | RELOCATED |
 
 ## What stays (out of scope)
 
