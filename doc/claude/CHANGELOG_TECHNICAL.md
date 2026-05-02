@@ -9,6 +9,40 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### plan-09 phase 09: parallel runtime consolidation
+
+`src/codegen_runtime.rs`'s three `n_parallel_for_*_native` public
+fns (scalar / text / heap-ref) collapsed to thin wrappers around a
+generic `n_parallel_for_native_core<S: ParShape, F>(...)` core.
+
+Mechanism:
+
+- New `ParShape` trait with `WorkerOut: Send` + `Batches`
+  associated types, `return_sz()`, `run_workers(...)` (static),
+  `store_results(&self, ...)`.  Three impls: `ScalarShape`
+  (carries `return_size`), `TextShape` (unit), `RefShape`
+  (carries `struct_size` + `known_type`).
+- The shared core sequences allocate (`alloc_par_result`) → run
+  workers → store results → finalise (`finalize_par_result`).
+- The three existing `run_native_workers_*` free fns stay as
+  internal worker dispatchers; each `ParShape` impl's
+  `run_workers` calls the appropriate one.
+- Public fn bodies shrank from 36 / 24 / 39 lines to 20 / 13 / 24
+  lines (full pub-fn span including signature; body is ~3 lines
+  for each).  Pinned by `parallel_runtime_consolidated` test in
+  `tests/codegen_emitter.rs` (≤ 15 body lines + must call
+  `n_parallel_for_native_core`).
+- Phase 06 (P202 — adds `n_parallel_queue_*_native` queue variants)
+  will add 3 thin wrappers (~10 lines) instead of 3 full ~80-line
+  fns; cumulative saving ~240 lines.
+
+Emission stays byte-identical (codegen calls the same public fn
+names with the same ABI).  Behavioural baselines unchanged:
+threading 43/43, threading_chars 35/35, issues 540/540, native
+29/30 + 87/93 — same pre-existing failures (85_yield_resume,
+86_interfaces, 87_store_leaks; compile failures in
+19_threading / 20_binary / 22_threading / 40_par_ref_return).
+
 ### ARC.md A2: unbounded per-thread slot dispenser (8d.3 cap retired)
 
 Replaces the spine-8d.3 fixed `SLOTS_PER_THREAD = 16` per-worker

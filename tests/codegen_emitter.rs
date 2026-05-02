@@ -237,6 +237,70 @@ fn no_parallel_special_case_in_dispatch() {
     );
 }
 
+/// Phase 09 structural test: the three `n_parallel_for_*_native`
+/// public fns must remain thin wrappers around
+/// `n_parallel_for_native_core`.  Re-inflating any of them (e.g. by
+/// inlining shape-specific alloc/dispatch/merge logic into the
+/// public fn body) regresses phase 09's consolidation — that
+/// duplication is what phase 06 (queue variants) needs the shape
+/// trait to absorb.  New parallel variants should add a `ParShape`
+/// impl and call the generic core, not re-inline the skeleton.
+#[test]
+fn parallel_runtime_consolidated() {
+    let src = std::fs::read_to_string(project_root().join("src/codegen_runtime.rs"))
+        .expect("read codegen_runtime.rs");
+    for fn_name in [
+        "n_parallel_for_native",
+        "n_parallel_for_text_native",
+        "n_parallel_for_ref_native",
+    ] {
+        let needle = format!("pub fn {fn_name}<F>(");
+        let start = src
+            .find(&needle)
+            .unwrap_or_else(|| panic!("did not find `pub fn {fn_name}<F>(` in codegen_runtime.rs"));
+        // Body starts after the first `{` past the signature.
+        let body_open = start
+            + src[start..]
+                .find('{')
+                .expect("function signature missing opening brace");
+        // Walk to the matching close brace.
+        let mut depth = 0i32;
+        let mut body_close = body_open;
+        for (i, ch) in src[body_open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_close = body_open + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            body_close > body_open,
+            "{fn_name}: failed to locate closing brace"
+        );
+        let body_lines = src[body_open + 1..body_close].lines().count();
+        assert!(
+            body_lines <= 15,
+            "{fn_name} body is {body_lines} lines — phase 09 consolidation \
+             expects each public parallel-for fn to be a thin wrapper (≤ 15 \
+             body lines) calling `n_parallel_for_native_core` with a `ParShape`. \
+             If you've added shape-specific logic, extend the `ParShape` trait \
+             instead of re-inlining the skeleton."
+        );
+        assert!(
+            src[body_open..body_close].contains("n_parallel_for_native_core"),
+            "{fn_name} body must call `n_parallel_for_native_core` (phase 09 \
+             consolidation).  Direct re-implementation regresses the shape \
+             trait and inflates phase 06's queue-variant duplication."
+        );
+    }
+}
+
 /// Gate: the registry's `Abi` tags must be self-consistent — every
 /// entry's `abi_of(name)` lookup must return the entry's own tag.
 /// Trivially true when the registry is well-formed; catches a typo

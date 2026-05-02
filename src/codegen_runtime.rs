@@ -1732,6 +1732,232 @@ fn finalize_par_result(
     }
 }
 
+/// Plan-09 phase 09: shape-trait-driven parallel-for runtime.
+///
+/// The three native par variants (scalar / text / heap-ref) share an
+/// allocate-→-dispatch-workers-→-merge-→-finalise skeleton.  This
+/// trait factors the per-shape pieces — return-element width, worker
+/// dispatcher, merge logic — out of the public fns so each public fn
+/// reduces to a thin wrapper around the generic core.
+///
+/// The trait spans more variation than a single closure return type:
+/// `TextShape` runs workers via per-worker store slots that intern
+/// strings via `set_str`; `RefShape` carries each worker's `Stores`
+/// back so the parent can deep-copy structs across the worker/parent
+/// boundary.  `Self::Batches` therefore varies per shape, and the
+/// merge-into-result-store step lives on the trait too.
+trait ParShape {
+    /// Closure return type passed back from each worker invocation.
+    type WorkerOut: Send;
+    /// Shape-specific value carried from the worker phase into the
+    /// merge phase (`Vec<i64>` for scalar, `Vec<String>` for text,
+    /// `Vec<(Vec<(usize, DbRef)>, Stores)>` for ref).
+    type Batches;
+
+    /// Element width in the result vector (the third arg to
+    /// `alloc_par_result`).  4 for text, struct-size for ref,
+    /// `return_size.clamp(1, 8)` for scalar.
+    fn return_sz(&self) -> u32;
+
+    /// Run workers in parallel and gather their outputs.  Wraps the
+    /// shape's existing `run_native_workers_*` helper.
+    fn run_workers<F>(
+        stores: &Stores,
+        input: &DbRef,
+        elem_size: i32,
+        threads: i32,
+        n: usize,
+        worker: &F,
+    ) -> Self::Batches
+    where
+        F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> Self::WorkerOut + Send + Sync,
+        Self: Sized;
+
+    /// Write `batches` into the result vector at `vec_rec`,
+    /// starting at byte offset 8.  Per-shape: scalar writes
+    /// long/i32/byte; text interns + writes a 4-byte s_pos; ref
+    /// deep-copies via `copy_from_worker[_unowned]`.
+    fn store_results(
+        &self,
+        stores: &mut Stores,
+        result_db: &DbRef,
+        vec_rec: u32,
+        batches: Self::Batches,
+    );
+}
+
+struct ScalarShape {
+    return_size: i32,
+}
+
+impl ParShape for ScalarShape {
+    type WorkerOut = i64;
+    type Batches = Vec<i64>;
+
+    fn return_sz(&self) -> u32 {
+        self.return_size.clamp(1, 8) as u32
+    }
+
+    fn run_workers<F>(
+        stores: &Stores,
+        input: &DbRef,
+        elem_size: i32,
+        threads: i32,
+        n: usize,
+        worker: &F,
+    ) -> Self::Batches
+    where
+        F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
+    {
+        run_native_workers_primitive(stores, input, elem_size, threads, n, worker)
+    }
+
+    fn store_results(
+        &self,
+        stores: &mut Stores,
+        result_db: &DbRef,
+        vec_rec: u32,
+        batches: Vec<i64>,
+    ) {
+        let return_sz = self.return_sz();
+        let mut fld = 8u32;
+        for &val in &batches {
+            let store = stores.store_mut(result_db);
+            match return_sz {
+                8 => {
+                    store.set_long(vec_rec, fld, val);
+                }
+                1 => {
+                    store.set_byte(vec_rec, fld, 0, val as i32);
+                }
+                _ => {
+                    store.set_i32_raw(vec_rec, fld, val as i32);
+                }
+            }
+            fld += return_sz;
+        }
+    }
+}
+
+struct TextShape;
+
+impl ParShape for TextShape {
+    type WorkerOut = String;
+    type Batches = Vec<String>;
+
+    fn return_sz(&self) -> u32 {
+        4
+    }
+
+    fn run_workers<F>(
+        stores: &Stores,
+        input: &DbRef,
+        elem_size: i32,
+        threads: i32,
+        n: usize,
+        worker: &F,
+    ) -> Self::Batches
+    where
+        F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> String + Send + Sync,
+    {
+        run_native_workers_text(stores, input, elem_size, threads, n, worker)
+    }
+
+    fn store_results(
+        &self,
+        stores: &mut Stores,
+        result_db: &DbRef,
+        vec_rec: u32,
+        batches: Vec<String>,
+    ) {
+        for (i, s) in batches.iter().enumerate() {
+            let store = stores.store_mut(result_db);
+            let s_pos = store.set_str(s);
+            store.set_u32_raw(vec_rec, 8 + (i as u32) * 4, s_pos);
+        }
+    }
+}
+
+struct RefShape {
+    struct_size: i32,
+    known_type: i32,
+}
+
+impl ParShape for RefShape {
+    type WorkerOut = DbRef;
+    type Batches = Vec<(Vec<(usize, DbRef)>, Stores)>;
+
+    fn return_sz(&self) -> u32 {
+        self.struct_size as u32
+    }
+
+    fn run_workers<F>(
+        stores: &Stores,
+        input: &DbRef,
+        elem_size: i32,
+        threads: i32,
+        n: usize,
+        worker: &F,
+    ) -> Self::Batches
+    where
+        F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> DbRef + Send + Sync,
+    {
+        run_native_workers_ref(stores, input, elem_size, threads, n, worker)
+    }
+
+    fn store_results(
+        &self,
+        stores: &mut Stores,
+        result_db: &DbRef,
+        vec_rec: u32,
+        batches: Self::Batches,
+    ) {
+        let sz = self.return_sz();
+        let kt = self.known_type as u16;
+        // Phase 2 step 2b: cheap path for self-contained structs.
+        let unowned = !stores.has_owned_sub_fields(kt);
+        for (batch, mut worker_stores) in batches {
+            for (i, src_ref) in batch {
+                let dest = DbRef {
+                    store_nr: result_db.store_nr,
+                    rec: vec_rec,
+                    pos: 8 + (i as u32) * sz,
+                };
+                if unowned {
+                    stores.copy_from_worker_unowned(&src_ref, &dest, &mut worker_stores, kt);
+                } else {
+                    stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, kt);
+                }
+            }
+        }
+    }
+}
+
+/// Generic parallel-for core — consumed by the three public
+/// `n_parallel_for_*_native` wrappers below.  Replaces the
+/// allocate-→-dispatch-→-merge-→-finalise body each variant used
+/// to inline.
+fn n_parallel_for_native_core<S, F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    threads: i32,
+    shape: &S,
+    worker: F,
+) -> DbRef
+where
+    S: ParShape,
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> S::WorkerOut + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let return_sz = shape.return_sz();
+    let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, return_sz);
+    let batches = S::run_workers(stores, &input, elem_size, threads, n, &worker);
+    shape.store_results(stores, &result_db, vec_rec, batches);
+    finalize_par_result(stores, result_db, n, vec_rec, header_rec)
+}
+
 pub fn n_parallel_for_native<F>(
     cell: &std::cell::UnsafeCell<Stores>,
     input: DbRef,
@@ -1743,30 +1969,14 @@ pub fn n_parallel_for_native<F>(
 where
     F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
 {
-    let stores: &mut Stores = unsafe { &mut *cell.get() };
-    let n = vector::length_vector(&input, &stores.allocations) as usize;
-    let return_sz = return_size.clamp(1, 8) as u32;
-    let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, return_sz);
-
-    let results = run_native_workers_primitive(stores, &input, elem_size, threads, n, &worker);
-
-    let mut fld = 8u32;
-    for &val in &results {
-        let store = stores.store_mut(&result_db);
-        match return_sz {
-            8 => {
-                store.set_long(vec_rec, fld, val);
-            }
-            1 => {
-                store.set_byte(vec_rec, fld, 0, val as i32);
-            }
-            _ => {
-                store.set_i32_raw(vec_rec, fld, val as i32);
-            }
-        }
-        fld += return_sz;
-    }
-    finalize_par_result(stores, result_db, n, vec_rec, header_rec)
+    n_parallel_for_native_core(
+        cell,
+        input,
+        elem_size,
+        threads,
+        &ScalarShape { return_size },
+        worker,
+    )
 }
 
 /// Parallel worker dispatcher for native primitive-return par.
@@ -1826,18 +2036,7 @@ pub fn n_parallel_for_text_native<F>(
 where
     F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> String + Send + Sync,
 {
-    let stores: &mut Stores = unsafe { &mut *cell.get() };
-    let n = vector::length_vector(&input, &stores.allocations) as usize;
-    let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, 4);
-
-    let strings = run_native_workers_text(stores, &input, elem_size, threads, n, &worker);
-
-    for (i, s) in strings.iter().enumerate() {
-        let store = stores.store_mut(&result_db);
-        let s_pos = store.set_str(s);
-        store.set_u32_raw(vec_rec, 8 + (i as u32) * 4, s_pos);
-    }
-    finalize_par_result(stores, result_db, n, vec_rec, header_rec)
+    n_parallel_for_native_core(cell, input, elem_size, threads, &TextShape, worker)
 }
 
 /// Parallel worker dispatcher for native text-return par.
@@ -1928,32 +2127,17 @@ pub fn n_parallel_for_ref_native<F>(
 where
     F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> DbRef + Send + Sync,
 {
-    let stores: &mut Stores = unsafe { &mut *cell.get() };
-    let n = vector::length_vector(&input, &stores.allocations) as usize;
-    let sz = struct_size as u32;
-    let kt = known_type as u16;
-    let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, sz);
-
-    let batches = run_native_workers_ref(stores, &input, elem_size, threads, n, &worker);
-
-    // Phase 2 step 2b: cheap path for self-contained structs.
-    let unowned = !stores.has_owned_sub_fields(kt);
-    for (batch, mut worker_stores) in batches {
-        for (i, src_ref) in batch {
-            let dest = DbRef {
-                store_nr: result_db.store_nr,
-                rec: vec_rec,
-                pos: 8 + (i as u32) * sz,
-            };
-            if unowned {
-                stores.copy_from_worker_unowned(&src_ref, &dest, &mut worker_stores, kt);
-            } else {
-                stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, kt);
-            }
-        }
-    }
-
-    finalize_par_result(stores, result_db, n, vec_rec, header_rec)
+    n_parallel_for_native_core(
+        cell,
+        input,
+        elem_size,
+        threads,
+        &RefShape {
+            struct_size,
+            known_type,
+        },
+        worker,
+    )
 }
 
 /// Parallel worker dispatcher for native struct/reference-return par.

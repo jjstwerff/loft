@@ -1,6 +1,6 @@
 # Phase 09 — Parallel runtime consolidation
 
-**Status:** OPEN
+**Status:** DONE (2026-05-02)
 
 **Kind:** Simplification (no P-issue closes; **must land before
 phase 06** to prevent queue variants multiplying the duplication)
@@ -284,6 +284,79 @@ genericise cleanly over `WorkerOut` if its closure-arg shape is
 shape-specific.  If so, keep two worker dispatchers (primitive +
 heap) but share the alloc / store / finalize core.)_
 
+### Worker-dispatcher genericisation rejected (2026-05-02)
+
+The plan-doc sketch genericised `run_workers` over a single
+`WorkerOut: Send` type with a uniform `Vec<WorkerOut>` return.
+That doesn't fit text or ref:
+
+- **Text** uses per-worker output store slots (`add_output_slot`,
+  `set_str` interning) and the parent reads back via `get_str`.
+  The dispatcher returns `Vec<String>` but the merge logic on the
+  worker side is store-aware.
+- **Ref** returns `Vec<(Vec<(usize, DbRef)>, Stores)>` — each batch
+  carries the worker's full `Stores` clone so the parent can
+  `copy_from_worker[_unowned]` across the worker/parent store
+  boundary.
+
+A single `Vec<WorkerOut>` would have erased the cross-store deep-
+copy capability ref needs.
+
+**Resolution**: the trait grew a second associated type
+`Self::Batches` plus a `store_results` method — each shape carries
+its own batch type and merge implementation.  The shared core
+only owns the alloc → run_workers → store_results → finalise
+sequencing.  The three existing `run_native_workers_*` helpers
+stay as free fns, called from the trait's `run_workers`
+implementations.
+
 ## Implementation notes
 
 _(append per non-obvious decision)_
+
+### Trait shape vs the plan-doc sketch (2026-05-02)
+
+The plan-doc sketched `ParShape` with one associated type
+(`WorkerOut`) plus `alloc` and `store` methods.  Implementation
+revealed the worker phase varies more than the merge phase, so the
+trait grew:
+
+- `Self::Batches` associated type — captures the shape-specific
+  worker output (scalar: `Vec<i64>`; text: `Vec<String>`; ref:
+  `Vec<(Vec<(usize, DbRef)>, Stores)>`).
+- `run_workers(...)` static method — wraps the existing
+  `run_native_workers_*` free fns.  Static (not `&self`) because
+  the worker phase doesn't need shape state — the closure's
+  `WorkerOut` type already drives dispatcher selection via the
+  trait impl.
+- `store_results(&self, ...)` method — `&self` carries shape
+  state (`return_size` / `struct_size` / `known_type`) into the
+  per-shape merge logic.  Replaces the plan's `alloc` + `store`
+  pair; alloc reduces to a single `return_sz()` query (`u32`)
+  consumed by `alloc_par_result` in the shared core.
+
+### Net delta vs the plan-doc sketch (2026-05-02)
+
+Pre-consolidation (per `wc -l /tmp/p09-step09-baseline/*.rs`):
+36 + 24 + 39 = 99 body lines across the three public fns (worker
+dispatchers excluded — they're shared infrastructure).
+
+Post-consolidation (`pub fn` start to closing brace):
+20 + 13 + 24 = 57 body lines across the three thin wrappers, plus
+20 lines of `n_parallel_for_native_core` and ~150 lines of trait
++ 3 impls (`ScalarShape`, `TextShape`, `RefShape`).
+
+Net: ~210 lines emitted to replace ~99 lines.  Worse on raw line
+count, but:
+- Phase 06 will add 3 queue-variant public fns at ~3 lines each
+  (~10 line increase) instead of 3 ~80-line fns (~250 line
+  increase).  Cumulative saving over the queue-extension path:
+  ~240 lines.
+- The shape-specific logic is now one place to read, and the
+  invariant "every par variant goes alloc → run_workers →
+  store_results → finalise" is enforced by `n_parallel_for_native_core`'s
+  signature.
+
+The structural test `parallel_runtime_consolidated` pins this:
+each public fn body ≤ 15 lines and must call
+`n_parallel_for_native_core`.

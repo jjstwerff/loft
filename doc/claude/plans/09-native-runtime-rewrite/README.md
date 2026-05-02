@@ -108,7 +108,7 @@ between work phases at decision points.
 | 02a | [Introspection: after param adapter](02a-introspect.md) | — | introspection | OPEN |
 | 03 | [Parallel-for emitter](03-parallel-emitter.md) | — (collapsed 95-line `dispatch.rs:850-944`) — **prerequisite for P202** | simplification | **DONE (2026-05-02)** |
 | 04 | [Key-keyed Op emitter](04-key-ops.md) | — (consolidates `OpGetRecord` / `OpIterate`) | simplification | **DONE (2026-05-02)** |
-| 09 | [Parallel runtime consolidation](09-parallel-runtime-consolidation.md) | — (collapses 3 near-duplicate `n_parallel_for_*_native` fns into one generic core; **must land before phase 06**) | simplification | OPEN |
+| 09 | [Parallel runtime consolidation](09-parallel-runtime-consolidation.md) | — (collapses 3 near-duplicate `n_parallel_for_*_native` fns into one generic core; **must land before phase 06**) | simplification | **DONE (2026-05-02)** |
 | 05 | [File emitters](05-file.md) | P200 (write side) | bug fix | OPEN |
 | 05a | [Introspection: after first bug fix](05a-introspect.md) | — | introspection | OPEN |
 | 06 | [Threading queue runtime fns](06-threading.md) | P202 | bug fix | OPEN |
