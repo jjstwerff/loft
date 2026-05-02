@@ -237,6 +237,27 @@ Each bug-fix phase includes:
 - **Custom emitters live in `src/generation/ops/<op>.rs`** — one
   file per Op with override logic.
 
+## Follow-up simplifications — plan-12
+
+Plan-09's audit (2026-05-02) surfaced residual simplifications
+worth doing for future development that were out-of-scope for
+plan-09's bug-fix focus.  Captured as
+[plans/12-codegen-simplifications/README.md](../12-codegen-simplifications/README.md):
+
+- **Tier 1** (correctness + cleanup, ~45 min):
+  walker-audit (Span-miss bugs in `pre_eval.rs`) +
+  retire `forwarding_smoke.rs`.
+- **Tier 2** (structural cleanup, ~1-2 sessions):
+  migrate ~22 `dispatch.rs` special-case match arms to custom
+  emitters + split `narrow_int_cast` dual role.
+- **Tier 3** (deep refactor, deferred to plan-13):
+  unify `#rust"..."` template path with the registered emitter
+  path — ~200 Ops migrate; multi-week effort.
+
+Plan-12 opens AFTER plan-09 + plan-11 PR merges.  Per
+`feedback_branch_after_pr_only.md`, branching off main during
+plan-09's in-flight branch would lose plan-09's progress.
+
 ## P204 — explicitly out of scope (must close via plan-11 before PR)
 
 P204 (tail-expression return discarded) is a parser/scope-analysis
