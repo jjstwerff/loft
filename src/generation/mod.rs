@@ -9,6 +9,7 @@ mod calls;
 mod coroutine;
 mod dispatch;
 mod emit;
+mod ops;
 mod pre_eval;
 mod text;
 
