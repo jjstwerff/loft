@@ -96,38 +96,24 @@ fn collect_cases() -> Vec<Case> {
 ///     literal because the user-visible loft source line IS part
 ///     of the contract.
 fn normalise(raw: &str, case_name: &str, entry: &Path) -> String {
-    // Windows: `std::fs::canonicalize` returns `\\?\C:\...` UNC paths,
-    // and loft's parser canonicalises the script path internally.  Strip
-    // the UNC prefix first so the absolute-path substitutions below
-    // match cleanly.
-    let mut s = raw.replace(r"\\?\", "");
-    let entry_abs = entry.to_string_lossy().to_string();
+    // Windows: `std::fs::canonicalize` returns `\\?\C:\...` UNC paths
+    // and the OS uses backslash separators throughout.  Strip the UNC
+    // prefix and convert all backslashes to forward slashes so the
+    // baselines stay platform-neutral.  Loft's panic output never
+    // includes literal `\n`/`\t` escapes (panics produce real
+    // newlines), so this aggressive conversion is safe for the case
+    // corpus.
+    let mut s = raw.replace(r"\\?\", "").replace('\\', "/");
+    let entry_abs = entry.to_string_lossy().replace('\\', "/");
     let entry_rel = format!("<cases>/{case_name}.loft");
-    let workspace = workspace_root().to_string_lossy().to_string();
-    // `cases_dir()` is built by joining CARGO_MANIFEST_DIR (native
-    // separator) with a `tests/...` literal (forward slashes), so on
-    // Windows `entry_abs` has mixed separators and won't substring-
-    // match the all-backslash output loft emits.  Replace all three
-    // forms (native, all-backslash, all-forward) to cover both
-    // platforms uniformly.
-    let replace_path_forms = |s: &mut String, abs: &str, rel: &str| {
-        let back = abs.replace('/', "\\");
-        let fwd = abs.replace('\\', "/");
-        *s = s.replace(abs, rel);
-        if back != abs {
-            *s = s.replace(&back, rel);
-        }
-        if fwd != abs {
-            *s = s.replace(&fwd, rel);
-        }
-    };
-    replace_path_forms(&mut s, &entry_abs, &entry_rel);
-    replace_path_forms(&mut s, &workspace, "<workspace>");
+    let workspace = workspace_root().to_string_lossy().replace('\\', "/");
+    s = s.replace(&entry_abs, &entry_rel);
+    s = s.replace(&workspace, "<workspace>");
     // Also catch the directory form for multi-file cases.
     if let Some(parent) = entry.parent() {
-        let parent_abs = parent.to_string_lossy().to_string();
+        let parent_abs = parent.to_string_lossy().replace('\\', "/");
         if parent_abs != workspace {
-            replace_path_forms(&mut s, &parent_abs, &format!("<cases>/{case_name}"));
+            s = s.replace(&parent_abs, &format!("<cases>/{case_name}"));
         }
     }
     // Native scratch dir (only present if a case slips into native mode).
