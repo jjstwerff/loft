@@ -1,6 +1,16 @@
 # Plan 12 — Codegen simplifications (post-09 follow-ups)
 
-**Status:** OPEN
+**Status:** DEFERRED (2026-05-02 — Tier 2 onwards).  Tier 1 (phases
+01 + 02) shipped on branch `plan-12-codegen-simplifications`
+(commits `c0c27e5` walker audit, `d446e5d` forwarding-smoke retire);
+Tier 2 (phases 03-05) parked here until a driver arrives.
+
+**Trigger to unpause:** the same conditions that would unpause
+plan 13 (`deferred/13-rust-template-migration/`) — 3+ template-path
+bugs, major codegen evolution forcing ≥50 Op-annotation touches,
+or contributor appetite for a multi-week structural refactor.
+Plan 12 Tier 2 is plan 13's preamble; if plan 13 stays parked,
+plan 12 Tier 2 doesn't earn its keep.
 
 **Origin:** Surfaced during plan-09's simplification audit
 (2026-05-02) after plan-09 + plan-11 closed all 5 in-scope

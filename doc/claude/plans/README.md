@@ -65,7 +65,6 @@ the canonical example of this discipline in action.
 | [`06-typed-par/`](06-typed-par/) | Simple typed `par`: collapse the 7-variant runtime + 3-fn native dispatch into one store-stitch path; "everything is a store".  Retires ~1100 lines net across `src/parallel.rs` and `src/codegen_runtime.rs`. | Phase 0 (characterisation + bench) open |
 | [`07-error-messages/`](07-error-messages/) | Better error messages: every error reaches the user as `file:line:col` + concrete message + source line with caret + optional suggestion.  Spans on IR, pc→source-line table, typed `RuntimeError`, retire the implicit panic-vs-sentinel coin-flip. | Phase 0 + 1 shipped; phases 2-7 open |
 | [`08-repl-and-introspection/`](08-repl-and-introspection/) | REPL + interpreter-introspection tool — `loft>` interactive prompt with persistent state plus a clean CLI surface for IR/Rust/slot-table dumps. | Phase 0 + 1 shipped; phases 2-6 open |
-| [`12-codegen-simplifications/`](12-codegen-simplifications/) | Post-09 follow-ups: walker audit + dead-weight removal (Tier 1, done) and dispatch arm migration + `narrow_int_cast` split (Tier 2, open).  Phase 06 stub points at a future plan-13 (`#rust"..."` template migration). | Tier 1 (phases 01-02) done; Tier 2 (phases 03-05) open |
 
 ## Deferred initiatives
 
@@ -75,6 +74,7 @@ only when a concrete trigger arrives.
 | Dir | Initiative | Trigger to unpause |
 |---|---|---|
 | [`deferred/10-scope-exit-emission/`](deferred/10-scope-exit-emission/) | Scope-exit gate simplification.  Drops the `(dep.is_empty() \|\| is_work_ref) &&` prefix from `src/scopes.rs:1053` so cleanup emission no longer depends on dep-tracker precision.  Pure cognitive-clarity win; no P-issue closes here.  Originally framed as a P203 fix — that framing turned out wrong (P203 is a template double-sub bug). | A bug in this gate's territory, dep-tracking maintenance, or contributor interest. |
+| [`deferred/12-codegen-simplifications/`](deferred/12-codegen-simplifications/) | Tier 1 (walker audit + forwarding-smoke retire) shipped on branch `plan-12-codegen-simplifications` (commits `c0c27e5` / `d446e5d`).  Tier 2 (dispatch arm migration phases 03-05) parked here.  Move-the-furniture refactor with no driving bug, no waiting feature, no performance gain.  Real value is "plan 13's preamble." | Same trigger set as plan 13: 3+ template-path bugs, OR major codegen evolution forcing ≥50 Op-annotation touches, OR contributor appetite.  Plan 12 Tier 2 only earns its keep if plan 13 unpauses. |
 | [`deferred/13-rust-template-migration/`](deferred/13-rust-template-migration/) | Migrate ~200 `#rust"..."` template annotations in `default/*.loft` to hand-written runtime fns + registered emitters.  Single source of truth for Op emission.  Retires `output_call_template` and `Value::RawExpr`.  2-3 weeks of focused work. | 3+ template-path bugs accumulating, OR major codegen evolution that forces touching ≥50 Op annotations, OR contributor appetite for a multi-week structural refactor.  Plan 12 Tier 2 (phases 03-05) must land first — without it the migration target shape isn't uniform. |
 
 ## Finished initiatives
