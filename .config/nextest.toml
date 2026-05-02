@@ -42,10 +42,37 @@ path = "target/nextest/junit.xml"
 [test-groups]
 html-wasm-serial = { max-threads = 1 }
 
+# Loft-native test serialisation (plan-09 + plan-11 reproducers).
+#
+# The `loft <file>` command (without `--native-emit`) writes the
+# generated Rust to a fixed `std::env::temp_dir().join("loft_native.rs")`
+# path before invoking rustc.  Two tests that both call
+# `cargo run --bin loft --release -- tests/scripts/X.loft` race on
+# that single tmp file: one process's emit step mid-write while
+# another's rustc step reads it → corrupted source → E0765
+# unterminated-string errors or similar.
+#
+# Binding the four P-issue reproducer tests
+# (p200_binary_compiles_under_native /
+#  p203_reproducer_passes_under_native /
+#  p204_tail_expression_return_passes_under_native /
+#  p205_repro_passes_under_native) to a single-slot test-group
+# crosses the process boundary nextest's parallelism creates.
+# Same pattern as html-wasm-serial above.
+loft-native-serial = { max-threads = 1 }
+
 [[profile.default.overrides]]
 filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
 
+[[profile.default.overrides]]
+filter = 'test(/p20[0-9]_.*_native/)'
+test-group = 'loft-native-serial'
+
 [[profile.ci.overrides]]
 filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
+
+[[profile.ci.overrides]]
+filter = 'test(/p20[0-9]_.*_native/)'
+test-group = 'loft-native-serial'
