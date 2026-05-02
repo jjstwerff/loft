@@ -512,6 +512,12 @@ impl State {
                 self.code_add(clos_pos);
                 *fn_type.clone()
             }
+            // Phase 09 phase 00 step 0.7 — RawExpr is created only by
+            // native codegen (`src/generation/emit.rs` fn-ref dispatch);
+            // bytecode codegen never produces it.
+            Value::RawExpr(_) => {
+                panic!("Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen")
+            }
         }
     }
 

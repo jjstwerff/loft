@@ -392,6 +392,24 @@ pub enum Value {
     /// variant + walker arms only.  Steps 3b (codegen) and 3c
     /// (parser detection) follow.
     ParFor(Box<ParForBody>),
+    /// Plan 09 phase 00 step 0.7 — codegen-internal "raw expression"
+    /// passthrough.
+    ///
+    /// Holds a pre-emitted Rust expression string that emits verbatim
+    /// when reached by `output_code_inner`.  Used exclusively by
+    /// fn-ref dispatch in `src/generation/emit.rs` to inject
+    /// pre-evaluated `let _farg_N` bindings as synthetic arg `Value`s
+    /// into per-arm calls that route through `emit_op` /
+    /// `output_call_user_fn`.
+    ///
+    /// **Not produced by the parser.**  Created only during native
+    /// code generation, lives only on the codegen stack, and is
+    /// consumed by `output_code_inner` which writes its string
+    /// directly to the writer with no further transformation.  Other
+    /// walkers (scopes.rs liveness, pre_eval.rs, parser passes) never
+    /// see this variant — the catch-all `_ =>` arms in those walkers
+    /// suffice as a defensive default.
+    RawExpr(String),
 }
 
 /// Plan-06 PRIORITY.md spine step 3 — payload for `Value::ParFor`.
@@ -3285,6 +3303,10 @@ impl Data {
                 self.show_code(write, vars, &b.body, indent + 1, true)?;
                 write!(write, ")")
             }
+            // Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
+            // pretty-print should never see it (it's only created during
+            // native emission, downstream of this IR walker).
+            Value::RawExpr(s) => write!(write, "raw({s})"),
         }
     }
 

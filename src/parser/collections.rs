@@ -2923,5 +2923,8 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
             replace_var_in_ir(&mut b.threads, target, replacement);
             replace_var_in_ir(&mut b.body, target, replacement);
         }
+        // Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
+        // synthetic value; the parser walker never produces or sees it.
+        Value::RawExpr(_) => {}
     }
 }

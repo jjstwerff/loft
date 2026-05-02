@@ -91,6 +91,8 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         | Value::Keys(_)
         | Value::TupleGet(_, _)
         | Value::FnRef(_, _, _) => false,
+        // Phase 09 phase 00 step 0.7 — RawExpr is codegen-internal.
+        Value::RawExpr(_) => false,
     }
 }
 
@@ -166,6 +168,8 @@ pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
         | Value::Keys(_)
         | Value::TupleGet(_, _)
         | Value::FnRef(_, _, _) => {}
+        // Phase 09 phase 00 step 0.7 — codegen-internal.
+        Value::RawExpr(_) => {}
     }
 }
 

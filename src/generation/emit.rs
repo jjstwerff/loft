@@ -20,6 +20,11 @@ impl Output<'_> {
         code: &Value,
     ) -> std::io::Result<()> {
         match code {
+            // Phase 09 phase 00 step 0.7 — synthetic raw-expression
+            // passthrough used by fn-ref dispatch to thread pre-evaluated
+            // `let _farg_N` bindings through `output_call_user_fn`.  Emit
+            // the string verbatim with no transformation.
+            Value::RawExpr(s) => write!(w, "{s}")?,
             Value::Text(txt) => {
                 // Use debug format to produce a properly escaped Rust string literal.
                 write!(w, "{txt:?}")?;
@@ -389,36 +394,65 @@ impl Output<'_> {
             }
             candidates.push((d, def.name.clone(), has_closure));
         }
-        // Evaluate args into pre-eval bindings to avoid double-borrow.
-        let mut arg_exprs: Vec<String> = Vec::new();
-        for arg in args {
+        // Phase 09 phase 00 step 0.7 — fn-ref dispatch routes each
+        // candidate arm through `output_call_user_fn` (which dispatches
+        // via `emit_op`), so a custom emitter registered for any
+        // candidate target is honoured even when the call comes via
+        // fn-ref dispatch.
+        //
+        // Args evaluate exactly once across all arms (correctness for
+        // side-effecting expressions, plus the original "avoid
+        // double-borrow of `stores`" concern).  Hoist them into Rust
+        // `let _farg_N` bindings inside a wrapping block, then pass
+        // synthetic `Value::RawExpr("_farg_N")` args to each per-arm
+        // call.  `output_code_inner`'s `RawExpr` arm emits the binding
+        // name verbatim, so the per-arm code reads
+        // `fn_name(cell, _farg_0, _farg_1, …, closure_expr)` —
+        // semantically the same shape as the pre-step-0.7 direct
+        // emission, just routed through emit_op.
+        //
+        // `output_call_user_fn` iterates over the candidate's
+        // `def_fn.attributes` and emits one arg per attribute.  When
+        // `has_closure`, the candidate's last attribute is the
+        // synthetic `__closure` (a `DbRef`); we append a RawExpr arg
+        // for the closure expression so attribute count and arg count
+        // line up.
+        write!(w, "{{ ")?;
+        for (i, arg) in args.iter().enumerate() {
             let expr = self.generate_expr_buf(arg)?;
-            arg_exprs.push(expr);
+            write!(w, "let _farg_{i} = {expr}; ")?;
         }
         // Look up the closure work-var for this fn-ref variable (if any).
         let closure_var_nr = self.data.def(self.def_nr).variables.closure_var_of(v_nr);
+        let closure_expr: String = if let Some(clos_nr) = closure_var_nr {
+            // Same-scope closure: pass the local ___clos_N variable.
+            let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
+            format!("var_{clos_name}")
+        } else {
+            // Cross-scope closure — pass .1 from the fn-ref tuple.
+            format!("var_{var_name}.1")
+        };
         // match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
         write!(w, "match var_{var_name}.0 {{")?;
-        for (d_nr, fn_name, has_closure) in &candidates {
-            write!(w, " {d_nr}_u32 => {fn_name}(cell")?;
-            for expr in &arg_exprs {
-                write!(w, ", {expr}")?;
-            }
+        for (d_nr, _fn_name, has_closure) in &candidates {
+            write!(w, " {d_nr}_u32 => ")?;
+            // Build synthetic args: visible let-bindings + closure (if any).
+            let mut synthetic: Vec<Value> = (0..args.len())
+                .map(|i| Value::RawExpr(format!("_farg_{i}")))
+                .collect();
             if *has_closure {
-                if let Some(clos_nr) = closure_var_nr {
-                    // Same-scope closure: pass the local ___clos_N variable.
-                    let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
-                    write!(w, ", var_{clos_name}")?;
-                } else {
-                    // cross-scope closure — pass .1 from the fn-ref tuple.
-                    write!(w, ", var_{var_name}.1")?;
-                }
+                synthetic.push(Value::RawExpr(closure_expr.clone()));
             }
-            write!(w, "),")?;
+            // Route through output_call_user_fn → emit_op → custom emitter
+            // (or DefaultEmitter::user_fn_call_body when no emitter is
+            // registered for this candidate).
+            let candidate_def = self.data.def(*d_nr);
+            self.output_call_user_fn(w, candidate_def, &synthetic)?;
+            write!(w, ",")?;
         }
         write!(
             w,
-            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }}"
+            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }} }}"
         )?;
         Ok(())
     }
