@@ -229,64 +229,192 @@ step 10.3 lands.  Three outcomes:
 
 ### Step 10.5 — Pin native baseline floor
 
-**Action**: add a structural test that locks in the post-plan-09
+**Status (2026-05-02):** test scaffold added in commit `d8a3c73`
+but kept `#[ignore]`-flagged + assertion logic still needs
+correction.  Currently fails when run with `--ignored` because
+the floor-detection looks for "native result: 30 passed,"
+that doesn't appear (only `native_scripts` emits a `native result`
+summary; `native_dir` doesn't).  Step stays IN PROGRESS until
+the assertions match how each test reports its outcome.
+
+**Goal**: add a structural test that locks in the post-plan-09
 native suite count.  Without this, future commits can silently
 shrink the count back below today's floor.
 
+**Assertion design (post-correction)**:
+
+The native suite has 5 high-level tests; only `native_scripts`
+prints a "native result: N passed, …" summary line.  The
+others (`native_dir`, `native_binary_script`, `native_tuple_*`)
+report through the standard `test <name> ... ok|FAILED` line.
+The assertion logic must therefore split:
+
 ```rust
-// tests/codegen_emitter.rs
-#[test]
-fn native_suite_floor_holds() {
-    // After plan-09 phases 06 + 07 + 10 all DONE:
-    //   native_dir:           30/30
-    //   native_scripts:       91/93 (or 93/93 if P204 closed)
-    //   native_binary_script: PASS
-    //   native_tuple_*:       PASS
-    //
-    // Adjust expectations as plan-11 (P204) ships.  This test's
-    // job is to catch silent regression: any commit that drops
-    // the count below today's floor must update the floor
-    // EXPLICITLY, not silently.
-    //
-    // Implementation: spawn `cargo test --test native --
-    // --test-threads=1`, parse the "native result: ..." lines,
-    // assert each meets/exceeds the recorded floor.
-    ...
+// Each high-level test name + ok status:
+for name in [
+    "native_dir",
+    "native_binary_script",
+    "native_tuple_return_script",
+    "native_tuple_script",
+] {
+    assert!(combined.contains(&format!("test {name} ... ok")),
+            "{name} regressed");
 }
+
+// native_scripts uses the "native result: N passed, ..." summary:
+let script_floor_ok = combined.contains("native result: 91 passed,")
+    || combined.contains("native result: 92 passed,")
+    || combined.contains("native result: 93 passed,");
+assert!(script_floor_ok,
+        "native_scripts floor regressed (expected ≥ 91/93)");
 ```
 
-**Validation**: test passes today; future commits that regress
-are blocked at PR time.
+**Floor today (after step 10.3)**:
+- `native_dir`: 30/30 → test reports `... ok`
+- `native_scripts`: 91/93 (2 P204 sub-failures remaining)
+- `native_binary_script`: ok (was FAILED pre-step-10.3)
+- `native_tuple_return_script`: ok
+- `native_tuple_script`: ok
+
+**Floor after plan-11 closes P204**: 93/93 for `native_scripts`.
+Update the assertion accordingly when plan-11 lands.
+
+**Why `#[ignore]`**: the test spawns the full native suite
+(~30s).  Too slow for default `cargo test` runs; opt-in via
+`cargo test --test codegen_emitter native_suite_floor_holds -- --ignored`.
+Run it manually before commit; CI runs it with `--ignored` if
+configured.
+
+**Validation**: test passes today (after assertion correction)
+and on every subsequent commit that maintains or beats the
+floor; fails immediately when a commit silently regresses.
+
+**Out of scope for this step**: making the test run as part of
+default `cargo test`.  Even if expensive, the gate catches
+regressions when explicitly run; defaulting it on adds 30s to
+every commit's gate which crosses into "test budget" territory
+that's a separate decision.
 
 ### Step 10.6 — Plan-09 retrospective (08a equivalent)
 
-**Action**: write the retrospective in
-`08a-introspect.md` (the existing 08a doc; populate its
-Findings section).  Cover the whole arc:
+**Status (2026-05-02):** OPEN — design only.  Populate after
+plan-11 closes P204 so the retrospective covers the full
+narrative (plan-09 was always sequenced with P204 deferred to
+a sibling plan; the retrospective should reflect what actually
+happened including how P204 routing decisions played out).
 
-- 14 phases planned (00-09 + a-suffixes); 9 actually shipped
-  (00, 00a, 01, 03, 04, 06, 07, 09, 10).  02/02a demoted, 05/05a/
-  08/08a folded into 10.
-- 4 P-issues addressed; 3 closed (P202, P203, P205); 1 closed
-  via this phase (P200).
-- Net code delta: ~XXX lines added (emitters + runtime fns +
-  tests), ~YYY retired (special-case dispatch arms,
-  hand-aligned tables).  Compute at retrospective time.
-- 5 memory entries saved (forwarding-first, phase-doc trait
-  drafts, actual-error-survey, branch-after-PR, no-EXPECT_FAIL).
-- Wart-budget gates held throughout.
-- Lessons for future codegen plans: consolidate tail phases
-  early; bug-fix phases need actual-error survey; trait reuse
-  requires per-impl uniformity.
+**Action**: populate `08a-introspect.md` Findings section, plus
+add a closure summary at the top of plan-09 README.
 
-Decision criteria for "ship plan-09":
-- All plan-09 phases marked DONE in README.
-- P200 + P202 + P203 + P205 all CLOSED in PROBLEMS.md.
-- Native suite at recorded floor (with P204's blockers handled
-  by plan-11, which is a separate gate).
+**Outline (to populate at retrospective time)**:
+
+#### Phase counts vs original plan
+- Originally listed phases: 14 (00 / 00a / 01 / 02 / 02a / 03 /
+  04 / 05 / 05a / 06 / 07 / 08 / 08a / 09).
+- Phases actually shipped (with their commit hashes):
+  - 00 (scaffold) — 8f88639 → beb162f range
+  - 00a (introspection) — 3febb29
+  - 01 (ABI consolidation) — 3dff7c5 → 2005f6e range
+  - 03 (parallel-for emitter) — 44693cc + da46db1
+  - 04 (key-keyed ops) — 19a7a86
+  - 09 (parallel runtime consolidation) — 22070e2
+  - 06 (P202 close) — 8cf0676
+  - 07 (P205 close) — 6151231
+  - 10 (final closure incl P200 close) — d8a3c73 + tail
+- Phases demoted/superseded:
+  - 02 (param adapter) — DEMOTED by 00a; never implemented
+  - 02a — superseded (02 demoted)
+  - 05 — folded into phase 10 step 10.3 (read-side scope)
+  - 05a — fired late as phase 10 step 10.1
+  - 08 — superseded by phase 10 step 10.3 (one fix closed both
+    read + write)
+  - 08a — folded into this retrospective
+
+Net: 9 phases shipped, 5 phases consolidated/superseded.  Plan
+discipline held — every consolidation was documented as it
+happened, not retroactively rationalised.
+
+#### P-issue closures
+- P203 — closed by phase 00 step 0.7b (template let-bind-on-repeat)
+- P202 — closed by phase 06 (`n_parallel_queue*` runtime + emitter)
+- P205 — closed by phase 07 (scratch routing for bounded-generic
+  text returns)
+- P200 — closed by phase 10 step 10.3 (`IntCompareEmitter` widens
+  comparison operands to i64)
+- P204 — out of plan-09 scope; closed separately via plan-11
+
+#### Code delta
+Compute at retrospective time:
+- Lines added (emitters + runtime fns + tests + docs)
+- Lines retired (special-case dispatch arms, hand-aligned
+  tables, write-side scaffolding made redundant)
+- Net delta + commentary on whether the simplification cluster
+  paid off
+
+Suggested computation:
+```bash
+git diff --stat $(git merge-base HEAD origin/main) HEAD -- src/ tests/
+```
+
+#### Memory entries saved during plan-09
+- `feedback_forwarding_first_recipe.md` — pre-flight pattern.
+- `feedback_phase_doc_trait_drafts.md` — trait sketches are
+  drafts, not specs.
+- `feedback_actual_error_survey.md` — survey before
+  implementing.
+- `feedback_branch_after_pr_only.md` — branch hygiene rule.
+- `feedback_no_expect_fail_on_pr_bugs.md` — no @EXPECT_FAIL on
+  real bugs.
+- `feedback_zero_regression_tolerance.md` — zero tolerance for
+  regressions even at multi-year cost.
+- `feedback_ci_gate.md` (existing) — extended in 00a's findings
+  with per-commit guidance for hot-path edits.
+
+Six new entries + one extended.  Patterns transferable to
+future codegen / parser plans.
+
+#### Wart-budget gate behaviour
+- `dispatch_op_arm_budget_not_exceeded`: 26 → 24 (phases 03 + 04
+  retired 2 arms).  No regressions across the plan.
+- `no_unsanctioned_codegen_value_variants`: held; sanctioned
+  list `["RawExpr"]` unchanged.
+- `parallel_runtime_consolidated`: phase 09 added; held through
+  phase 06 + 10.
+- `p202_*` + `p205_*` + `p200_*`: bug-specific structural gates
+  added per phase; all held.
+
+#### Lessons for future plans
+- **Consolidate tail phases early.**  Phases 05/05a/08/08a
+  were planned as four separate phases; consolidating into
+  phase 10 saved ceremony without losing discipline.  Apply
+  to future plans where the tail surface is small.
+- **Bug-fix phases need actual-error survey.**  Phase 05's
+  original plan targeted a write-side fix; survey revealed
+  read-side comparison emission.  Codified in
+  `feedback_actual_error_survey.md`.
+- **Trait reuse requires per-impl uniformity.**  Phase 09's
+  `ParShape` worked because for-par variants share their
+  skeleton.  Phase 06's queue variants didn't share enough;
+  flat fns won.  Codified in
+  `feedback_phase_doc_trait_drafts.md`.
+- **Forwarding-first recipe catches dispatch-path traps.**
+  Phase 00's runtime smoke test caught it; phases 03/04 used
+  it as planned pre-flight.  Codified in
+  `feedback_forwarding_first_recipe.md`.
+- **Pace gates are real.**  When implementation gets ahead of
+  planning discipline, the user's rule is "update plans for
+  now only."  Don't accelerate past clarity.
+
+#### PR-readiness gate
+- Plan-09 phases all DONE in README ✓
+- Plan-09's 4 P-issues all CLOSED in PROBLEMS.md ✓
+- Native suite at recorded floor ✓ (after step 10.5 lands)
+- Plan-11 closes P204 (separate gate; PR opens after both)
 
 **Validation**: review.  This commit closes plan-09
-administratively.
+administratively but does NOT open the PR — that happens after
+plan-11 closes P204 + PR-readiness criteria all met (per the
+zero-regression rule).
 
 ### Step 10.7 — Plan-09 directory move-to-finished
 
