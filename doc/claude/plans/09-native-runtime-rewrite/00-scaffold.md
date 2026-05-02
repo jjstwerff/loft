@@ -172,95 +172,152 @@ for the dispatched fn can intercept.
 
 **Validation**: baseline diff stays byte-identical.
 
-### Step 0.7b — Add let-bind-on-repeat to `DefaultTemplateEmitter`
+### Step 0.7b — Let-bind-on-repeat for repeated `@<name>` placeholders
 
-**Action**: extend `substitute_template` so when a placeholder
-`@vN` appears **two or more times** in the template, the
-substitution emits a `let _vN = …;` once and substitutes the
-binding name in every position, all wrapped in a `{ … }` block:
+> **Status (2026-05-02): the structural fix already shipped** as a
+> direct edit to `src/generation/calls.rs::output_call_template`.
+> P203 closed.  This step is documentation that explains **why
+> the pattern matters**, **why the existing code resisted a
+> cleaner design**, and **what phase 00's extraction has to
+> preserve**.  Reading this section is the cheapest way for a
+> future contributor to avoid re-introducing the bug class when
+> refactoring the substitution code.
+
+#### Why the bug class exists
+
+The original substitution mechanism does string replacement:
+`res.replace("@v1", "<arg_expr>")`.  If `@v1` appears two or more
+times in the template AND `<arg_expr>` has side effects, the
+generated code evaluates the side effect once per occurrence.
+
+Five templates in `default/01_code.loft` hit this:
+
+| Line | Op | `@v1` count | `@v2` count |
+|---|---|---|---|
+| 690 | char→int (`OpConvIntFromChar`) | 2 | — |
+| 705 | enum→int (`OpConvIntFromEnum`) — P203's manifestation | 2 | — |
+| 707 | int→enum (`OpCastEnumFromInt`) | 2 | — |
+| 751 | ref equality (`OpEqRef`) | 4 | 4 |
+| 753 | ref inequality (`OpNeRef`) | 4 | 4 |
+
+P203's specific symptom: `delete(path) == FileResult.Ok` becomes
+`if (n_delete(path) as u8) == 255 { i64::MIN } else { i64::from((n_delete(path) as u8)) }`.
+First call deletes the file; second sees nothing; comparison
+fails; assertion panics.
+
+#### Why the existing substitution code was complex
+
+`src/generation/calls.rs:200-324` is the **per-parameter
+substitution matrix**: 125 lines of stacked `if matches!(…) { … continue; }`
+arms, each computing a `with` value and calling
+`res = res.replace(&name, ...)`.  The arms exist because
+substituted text needs different wrapping based on `(parameter
+type, value type)`:
+
+- enum-typed param + `Value::Null` → `(255u8)`
+- ref-typed param + `Value::Null` → null DbRef sentinel
+- char param + `Value::Int` → `char::from_u32(N)`
+- char param + char-Var/Call → `ops::to_char(...)`
+- text param + text-Call → `(&*(...))`
+- int param + char value → `as u32 as i32`
+- int param + fn-ref tuple → `(i64::from((..).0))`
+- u32-from-field-offset → `(...) as u32`
+- narrow int (u8/u16/i8/i16) → suffix patch or cast wrap
+
+Every arm re-queries the IR (variable type, return type, typedef
+enum) for the same value.  Adding the let-bind-on-repeat to each
+arm would have meant 10+ edit sites with subtle interaction
+between them — exactly the kind of change that historically
+regresses tests.
+
+This complexity is documented further in [phase 02's
+characterisation](02-param-adapter.md) — the simplification
+phase 02 retires this matrix entirely.
+
+#### What shipped (the direct fix)
+
+A **pre-pass loop**, run BEFORE the substitution arms touch the
+template.  It scans for repeated placeholders and rewrites the
+template into a let-binding form:
 
 ```rust
-fn substitute_template(ctx: &mut EmitCtx<'_, dyn Write>, args: &[Value]) -> io::Result<String> {
-    let template = ctx.def_fn.rust.as_str();
-    let mut out = template.to_string();
-    let mut lets: Vec<String> = Vec::new();
-
-    for (i, arg) in args.iter().enumerate() {
-        // Match @<paramname> per the existing matcher; here pseudocode.
-        let placeholder = format!("@{}", ctx.def_fn.attributes[i].name);
-        let count = out.matches(&placeholder).count();
-        if count == 0 {
-            continue;
-        }
-        let arg_expr = emit_arg(ctx, arg)?;          // existing per-arg emission
-        if count >= 2 {
-            // Hoist into a let so the arg expression evaluates once.
-            let local = format!("_{}", placeholder.trim_start_matches('@'));
-            lets.push(format!("let {local} = {arg_expr};"));
-            out = out.replace(&placeholder, &local);
-        } else {
-            out = out.replace(&placeholder, &arg_expr);
-        }
-    }
-
-    if lets.is_empty() {
-        Ok(out)
-    } else {
-        Ok(format!("{{ {} {} }}", lets.join(" "), out))
+// In output_call_template, immediately after the Str::new(...) unwrap:
+for a in &def_fn.attributes {
+    let placeholder = format!("@{}", a.name);
+    if res.matches(&placeholder).count() >= 2 {
+        let local = format!("_v_{}", a.name);
+        res = res.replace(&placeholder, &local);
+        res = format!("{{ let {local} = {placeholder}; {res} }}");
     }
 }
 ```
 
-**Why**: today's templates with repeated placeholders cause
-double-evaluation of side-effecting arguments.  P203's actual
-root cause is exactly this: `default/01_code.loft:705`
-substitutes `@v1` twice in the `OpConvIntFromEnum` template, and
-when `@v1` is `n_delete(...)`, the file gets deleted twice
-(second call returns `NotFound`, panic).  This refinement
-eliminates the bug class structurally; future templates with
-repeats are auto-protected.
+The arms then run unchanged.  Each arm sees:
+- A template with at most ONE `@<name>` per repeated attribute
+  (in the let-RHS, prepended by the pre-pass).
+- The arms substitute that single occurrence with their wrapped
+  value as today.
+- All other occurrences are now `_v_<name>` — Rust local names
+  that the arms ignore (they don't start with `@`).
 
-**Compatibility**:
-- Templates with each placeholder appearing ≤1 times: emission
-  unchanged → byte-identical.
-- Templates with repeated placeholders (currently 5 in
-  `default/01_code.loft`: lines 690, 705, 707, 751, 753):
-  emission shape changes to wrap in `{ let … ; … }`.  Functional
-  behaviour either improves (side-effecting calls evaluate once)
-  or is unchanged (pure-arg cases produce the same value).
+Result: the side-effecting `<value>` evaluates once (in the let
+binding); subsequent positions read `_v_<name>`.
 
-**Validation**:
+The pre-pass is ~12 lines, decoupled from the substitution arms,
+and required no changes to any of the 10+ if-arms.  This was the
+key insight: **don't try to add let-bind logic to each arm; do
+it once in a pre-pass that rewrites the template**.
+
+#### Why phase 02 (param adapter) wasn't required first
+
+The user originally hypothesised that the substitution code
+needed phase 02's simplification before P203 could land cleanly.
+That hypothesis was reasonable — the arms genuinely are tangled.
+But the pre-pass approach sidesteps the arms entirely by
+rewriting the TEMPLATE before substitution runs.  No arm-level
+edits required.
+
+So: phase 02 still has independent value (phase 02's adapter
+extraction makes the arms readable for future maintainers), but
+it isn't a prerequisite for the let-bind-on-repeat fix.  P203
+landed first; phase 02 is still on the simplification roadmap.
+
+#### What phase 00's extraction must preserve
+
+When step 0.3 hoists the substitution into
+`DefaultTemplateEmitter`, the pre-pass moves with it.  No
+behaviour change is allowed — `baseline_emission_unchanged`
+covers the byte-identical guarantee for both pure single-sub
+templates AND the let-binding shape of repeat-sub templates.
+
+If extraction produces different emission than the pre-extraction
+behaviour (for either single-sub OR repeat-sub templates), the
+extraction has a bug — fix before proceeding to step 0.4.
+
+#### Validation
 
 ```bash
-# Single-sub corpus stays byte-identical (unchanged from step 0.7):
-for t in tests/docs/03-integer.loft tests/docs/04-boolean.loft; do
-    # …diff vs golden — still must match.
-done
-
-# Repeated-sub templates change shape; verify the new shape:
-cargo run --bin loft --release --quiet -- \
-    --native-emit /tmp/p09-step07b.rs tests/scripts/repro_p203.loft
-grep -A 1 "n_delete" /tmp/p09-step07b.rs
-# Expected: ONE n_delete call wrapped in `{ let _v1 = n_delete(…); …; }`,
-# not two.
-
-# Functional verification — P203 reproducer now passes (side effect):
+# Regression guard for the structural fix:
 cargo run --bin loft --release -- tests/scripts/repro_p203.loft
-echo "Exit: $?"     # Expected: 0 (P203 closes as a side effect)
+echo "Exit: $?"     # Expected: 0
 
-# Full suite green:
+# Full suite green (must remain so after extraction):
 cargo test --release --test issues 2>&1 | tail -3            # 540/540
 cargo test --release --test threading 2>&1 | tail -3
 cargo test --release --test native -- --test-threads=1 2>&1 | grep "native result"
 ```
 
-**Note**: P203's closure here is structural — phase 09's
-DefaultTemplateEmitter eliminates the bug class.  P203 is also
-fixable as a direct edit to `default/01_code.loft`'s 5 templates
-(let-bind each by hand).  If the direct edit ships before phase 00,
-this step has nothing to demonstrate (P203 already closed); the
-let-bind-on-repeat protection still ships as a structural
-guarantee for future templates.  See PROBLEMS.md P203 entry.
+#### Extension points for future codegen contributors
+
+If adding new `#rust"…@v…"` templates that reference `@<name>`
+multiple times: **the pre-pass already protects you.**  Side-
+effecting argument expressions evaluate exactly once.  No
+explicit let-binding needed in the template itself.
+
+If the substitution mechanism is ever rewritten beyond plan 09's
+extraction (e.g., into per-Op emitters that don't go through
+template substitution at all): preserve the let-bind-on-repeat
+contract or document why it doesn't apply.
 
 ### Step 0.8 — Validation tests in `tests/codegen_emitter.rs`
 

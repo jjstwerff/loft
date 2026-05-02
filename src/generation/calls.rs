@@ -197,6 +197,22 @@ impl Output<'_> {
                 &res[end + 1..]
             );
         }
+        // P203 fix — bind repeated @<name> placeholders to a local so
+        // side-effecting argument expressions (e.g. n_delete(...) compared to
+        // an enum) evaluate exactly once.  For each attribute whose
+        // @<name> appears two or more times in the template, replace every
+        // occurrence with `_v_<name>` and prepend a `let _v_<name> = @<name>;`
+        // wrapping `{ ... }`.  The substitution loop below then rewrites the
+        // single remaining `@<name>` (the let-RHS) into the actual value
+        // expression; subsequent uses read `_v_<name>` instead of re-evaluating.
+        for a in &def_fn.attributes {
+            let placeholder = format!("@{}", a.name);
+            if res.matches(&placeholder).count() >= 2 {
+                let local = format!("_v_{}", a.name);
+                res = res.replace(&placeholder, &local);
+                res = format!("{{ let {local} = {placeholder}; {res} }}");
+            }
+        }
         for (a_nr, a) in def_fn.attributes.iter().enumerate() {
             let name = "@".to_string() + &a.name;
             if a_nr < vals.len() {

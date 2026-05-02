@@ -35,7 +35,7 @@ existing entry, not re-open it as a bug.
 | 202 | Native codegen for `for ... par(...)` for-loops calls `n_parallel_queue` (and `_text` / `_ref` / `_narrow` / `_fn` variants) which only exist in the bytecode interpreter — no `codegen_runtime.rs` implementation.  Reproducer: `tests/docs/19-threading.loft` → `cargo test --release --test native native_dir`.  Generated stub takes 5 args (loft signature); call site passes 6+ (with `n_extra` count); arg-count mismatch breaks rustc compile.  Distinct from P199 — purely a missing native implementation, not a borrow-conflict.  Also unblocks 19_threading + any par-queue use in native scripts.  See [P202 design](#202-native-n_parallel_queue-family-not-implemented). | Medium | Compile the loft source via the interpreter (`cargo run --bin loft --release -- --interpret file.loft`) — par-for works there.  Or use the par-for-native dispatch path by writing the worker as `n_parallel_for_native` directly (advanced — bypasses the for-par syntactic sugar). |
 | 200 | Native codegen for `f += <integer>` against a binary file (`BigEndian` / `LittleEndian` open mode) emits a value with mismatched expected width — `rustc` raises E0308 mismatched types.  Reproducer: `tests/scripts/20-binary.loft` line 67 / 128.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch. | Medium | Add the explicit width cast the parser warning already suggests: `f += val as i32` (or `as i8` / `as u32` etc.). |
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
-| 203 | Assertion `delete(path) == FileResult.Ok` panics with `delete existing file`.  Symptom looks like a file-flush bug; actual root cause is a template double-substitution at `default/01_code.loft:705` — `n_delete()` is evaluated twice (first call deletes the file, second call returns `NotFound`).  Fix is ~5 template let-binds in `default/01_code.loft`.  See [P203 reproducer + diagnosis](#203-native-block-scope-file-not-flushed-on-exit). | Medium | Avoid comparing side-effecting calls to enums in a single expression: bind to a local first.  `r = delete("…"); assert(r == FileResult.Ok, …);` |
+| 203 | Assertion `delete(path) == FileResult.Ok` panicked with `delete existing file`.  **Closed (2026-05-02)**: actual root cause was template double-substitution — five templates in `default/01_code.loft` (lines 690, 705, 707, 751, 753) substituted `@v1`/`@v2` in multiple positions, so any side-effecting call appearing on both sides of an enum/null comparison evaluated twice.  Fix: `src/generation/calls.rs::output_call_template` now scans every template for repeated `@<name>` placeholders and hoists each into a single `let _v_<name> = …;` wrapping `{ … }` block before substitution, so each arg expression evaluates exactly once regardless of how many positions reference it.  `repro_p203.loft` exits 0; full suite: 540/540 issues, 43/43 threading, 35/35 threading_chars, native 86/92 → 87/92.  See [P203 reproducer + diagnosis](#203-native-block-scope-file-not-flushed-on-exit). | Medium (closed) | n/a — fix lands in `src/generation/calls.rs`. |
 | 204 | Native: tail-expression `return inner_call()` from a struct-returning function emits `n_inner(cell, args)` as a void STATEMENT and then `return DbRef { store_nr: u16::MAX, rec: 0, pos: 8 };` (null sentinel).  The caller does `let _src = n_wrap(...); OpCopyRecord(_src, var_q, ...)` — `_src` is null, OpCopyRecord panics with "index out of bounds: the len is X but the index is 65535" at `src/database/allocation.rs:347`.  Native FAILS, interpreter PASSES (interpreter routes the result through the `__ref_*` placeholder mechanism which native skips).  Surfaces in `87_store_leaks` and `85_yield_resume` after P199 made the surrounding code compile.  See [P204 reproducer + diagnosis](#204-tail-expression-return-of-inner-helper-call-discarded). | Medium | Avoid the tail-expression pattern: bind the result first.  `fn wrap(x) -> S { y = make_y(); r = inner(x, y); r }` — naming the result `r` produces a different IR shape that native handles correctly. |
 | 205 | Native: bounded-generic dispatch `fn f<T: Trait>(x: T) -> text { x.to_label() }` returns a `Str` whose pointer references a local `String` that's dropped on function return → dangling pointer, comparison fails.  Reproducer: `tests/scripts/86-interfaces.loft:47` — `assert(if_label(if_it) == "widget", …)` fails despite `to_label` returning `"widget"`.  See [P205 reproducer + diagnosis](#205-generic-text-return-dangles-via-str-newlocal_string).  Interpreter passes via different text-return ABI. | Medium | Avoid bounded-generic functions returning `text`.  Inline the body or use a non-generic specialisation. |
 
@@ -428,9 +428,54 @@ P199's parallel test fixes.
 `tests/native::native_scripts` slots `22_threading`,
 `40_par_ref_return`.
 
-### 203. Native: block-scope file not flushed on exit
+### 203. Native: block-scope file not flushed on exit (CLOSED 2026-05-02)
 
-**Symptom:** `cargo test --release --test native native_scripts` (the
+**Resolution summary**
+
+The "file not flushed" framing was wrong.  Strace + diagnostic
+instrumentation showed the file IS created, written, closed
+correctly, then **deleted by the assertion's own `delete()` call**
+— which was being **evaluated twice** because the
+`OpConvIntFromEnum` template at `default/01_code.loft:705` (and
+four sibling templates) substituted `@v1` / `@v2` in multiple
+positions:
+
+```
+#rust"if @v1 == 255 {{ i64::MIN }} else {{ i64::from(@v1) }}"
+                ↑                                       ↑
+                first call                              second call
+```
+
+For `delete(path) == FileResult.Ok` the first call deletes the
+file; the second call sees no file and returns `NotFound`; the
+assertion compares `NotFound != Ok` and panics.
+
+**Fix** (commit on `roadmap-lsp-eclipse`): `src/generation/calls.rs::output_call_template`
+now pre-scans every template for repeated `@<name>` placeholders.
+For each placeholder appearing 2+ times it emits a wrapping
+`{ let _v_<name> = @<name>; … }` block, replaces every other
+occurrence with `_v_<name>`, and lets the existing substitution
+loop substitute the single remaining `@<name>` (the let-RHS).
+Result: each argument expression evaluates exactly once regardless
+of how many positions reference it.
+
+**Affected templates closed by this fix:**
+- `01_code.loft:690` (char→int)
+- `01_code.loft:705` (enum→int — P203's specific manifestation)
+- `01_code.loft:707` (int→enum)
+- `01_code.loft:751` (ref equality)
+- `01_code.loft:753` (ref inequality)
+
+**Validation:**
+- `cargo run --bin loft --release tests/scripts/repro_p203.loft` exits 0.
+- `cargo test --release --test issues`: 540/540.
+- `cargo test --release --test threading`: 43/43.
+- `cargo test --release --test threading_chars`: 35/35.
+- `cargo test --release --test native`: 87/93 (was 85/92; +2 due to P203 closure + repro_p203.loft no longer @EXPECT_FAIL).
+
+**Original diagnosis (preserved for reference):**
+
+`cargo test --release --test native native_scripts` (the
 `42_file_result` slot) panics at runtime:
 
 ```
