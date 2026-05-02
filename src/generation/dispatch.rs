@@ -718,94 +718,12 @@ impl Output<'_> {
                 }
                 return Ok(());
             }
-            "OpGetRecord" => {
-                // vals: [data, db_tp, count, key1, key2, …]
-                // Emit: OpGetRecord(cell,data, db_tp, &[Content::…, …])
-                if vals.len() >= 3
-                    && let (Value::Int(db_tp), Value::Int(_count)) = (&vals[1], &vals[2])
-                {
-                    let db_tp = *db_tp;
-                    let key_types: Vec<i8> = self
-                        .stores
-                        .types
-                        .get(usize::try_from(db_tp).unwrap_or(0))
-                        .map(|t| t.keys.iter().map(|k| k.type_nr).collect())
-                        .unwrap_or_default();
-                    let key_vals = &vals[3..];
-                    write!(w, "OpGetRecord(cell,")?;
-                    self.output_code_inner(w, &vals[0])?;
-                    write!(w, ", {db_tp}_i32, &[")?;
-                    for (i, key_val) in key_vals.iter().enumerate() {
-                        if i > 0 {
-                            write!(w, ", ")?;
-                        }
-                        let type_nr = key_types.get(i).copied().unwrap_or(1);
-                        self.emit_content(w, key_val, type_nr)?;
-                    }
-                    write!(w, "])")?;
-                    return Ok(());
-                }
-            }
-            "OpIterate" => {
-                // vals: [data, on, arg, Keys(keys), from_count, from_vals…, till_count, till_vals…]
-                // Emit: OpIterate(cell,data, on, arg, &[Key{…}], &[Content::…], &[Content::…])
-                if vals.len() >= 4
-                    && let Value::Keys(keys) = &vals[3]
-                {
-                    let keys = keys.clone();
-                    let rest = &vals[4..];
-                    let from_count = if let Some(Value::Int(n)) = rest.first() {
-                        usize::try_from(*n).unwrap_or(0)
-                    } else {
-                        0
-                    };
-                    let till_start = 1 + from_count;
-                    let till_count = if let Some(Value::Int(n)) = rest.get(till_start) {
-                        usize::try_from(*n).unwrap_or(0)
-                    } else {
-                        0
-                    };
-                    let from_vals = rest.get(1..till_start).unwrap_or(&[]);
-                    let till_vals = rest
-                        .get(till_start + 1..till_start + 1 + till_count)
-                        .unwrap_or(&[]);
-                    write!(w, "OpIterate(cell,")?;
-                    self.output_code_inner(w, &vals[0])?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, &vals[1])?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, &vals[2])?;
-                    write!(w, ", &[")?;
-                    for (i, k) in keys.iter().enumerate() {
-                        if i > 0 {
-                            write!(w, ", ")?;
-                        }
-                        write!(
-                            w,
-                            "Key {{ type_nr: {}, position: {} }}",
-                            k.type_nr, k.position
-                        )?;
-                    }
-                    write!(w, "], &[")?;
-                    for (i, v) in from_vals.iter().enumerate() {
-                        if i > 0 {
-                            write!(w, ", ")?;
-                        }
-                        let type_nr = keys.get(i).map_or(1, |k| k.type_nr);
-                        self.emit_content(w, v, type_nr)?;
-                    }
-                    write!(w, "], &[")?;
-                    for (i, v) in till_vals.iter().enumerate() {
-                        if i > 0 {
-                            write!(w, ", ")?;
-                        }
-                        let type_nr = keys.get(i).map_or(1, |k| k.type_nr);
-                        self.emit_content(w, v, type_nr)?;
-                    }
-                    write!(w, "])")?;
-                    return Ok(());
-                }
-            }
+            // Plan 09 phase 04 — `OpGetRecord` and `OpIterate` emission
+            // moved to `crate::generation::ops::key_ops::{OpGetRecordEmitter,
+            // OpIterateEmitter}` (registered in build_registry).  The
+            // phase 00 step 0.6 registry-first guard at the top of
+            // `output_call_inner` routes both names to the emitters
+            // before reaching this match.
             "OpStep"
                 // vals: [iter_var, data, on, arg]
                 // Emit: OpStep(cell,&mut var_iter, data, on, arg)

@@ -29,6 +29,7 @@
 
 pub mod default;
 pub mod forwarding_smoke;
+pub mod key_ops;
 pub mod parallel;
 
 use super::Output;
@@ -145,6 +146,11 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     // doesn't change emission shape).
     r.insert("n_parallel_for", Box::new(parallel::ParallelForEmitter));
     r.insert("n_parallel_for_light", Box::new(parallel::ParallelForEmitter));
+
+    // Phase 04 — key-keyed Op emitters.  Replaces ~70 lines of two
+    // arms in dispatch.rs (`"OpGetRecord" =>` + `"OpIterate" =>`).
+    r.insert("OpGetRecord", Box::new(key_ops::OpGetRecordEmitter));
+    r.insert("OpIterate", Box::new(key_ops::OpIterateEmitter));
 
     r
 }

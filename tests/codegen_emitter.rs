@@ -34,6 +34,8 @@ const CORPUS: &[&str] = &[
     "tests/docs/25-generics.loft",
     // Phase 03: parallel-for emission coverage.
     "tests/scripts/22-threading.loft",
+    // Phase 04: OpGetRecord / OpIterate emission coverage.
+    "tests/docs/10-sorted.loft",
 ];
 
 const BASELINE_DIR: &str = "/tmp/p09-baseline";
@@ -180,6 +182,31 @@ fn no_hardcoded_abi_lists_remain() {
              plan 09 phase 01 retired this in favour of \
              `crate::codegen_runtime::abi_of(name)`.  Add new legacy-ABI \
              runtime fns to `CODEGEN_RUNTIME_FNS` in `src/codegen_runtime.rs`."
+        );
+    }
+}
+
+/// Phase 04 structural test: `OpGetRecord` and `OpIterate` emission
+/// moved out of dispatch.rs::output_call_inner's special-case match
+/// into registered emitters in `src/generation/ops/key_ops.rs`.
+/// Re-introducing match arms for these names is a regression.
+#[test]
+fn no_key_op_special_case_in_dispatch() {
+    let src = std::fs::read_to_string(project_root().join("src/generation/dispatch.rs"))
+        .expect("read dispatch.rs");
+    for op in &["OpGetRecord", "OpIterate"] {
+        let pat = format!("\"{op}\"");
+        let has_arm = src.lines().any(|line| {
+            let t = line.trim();
+            t.starts_with(&pat) && t.contains("=>")
+        });
+        assert!(
+            !has_arm,
+            "src/generation/dispatch.rs reintroduced an `\"{op}\" => …` \
+             match arm.  Phase 04 retired this in favour of the registered \
+             emitter in `src/generation/ops/key_ops.rs`.  New key-keyed \
+             Op variants should register custom emitters there, not add \
+             match arms to dispatch.rs."
         );
     }
 }

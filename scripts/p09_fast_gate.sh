@@ -35,6 +35,9 @@ CORPUS=(
     # float closure shapes — covers the bulk of the special case
     # phase 03 retires.
     tests/scripts/22-threading.loft
+    # Phase 04: OpGetRecord / OpIterate emitter validation.
+    # 10-sorted hits both Ops 20 times across the file.
+    tests/docs/10-sorted.loft
 )
 
 REPROS=(
