@@ -163,19 +163,28 @@ impl Output<'_> {
     /// Use this to inline a `#rust` template operator by substituting `@param` placeholders
     /// with generated argument expressions.
     ///
-    /// Phase 09 phase 00 step 0.3: this public entry point is the
-    /// stable name every existing call site uses.  The substitution
-    /// body lives in [`Self::substitute_template_body`] so future
-    /// dispatch (step 0.4 — route through `emit_op`) can call back
-    /// into it via `DefaultTemplateEmitter`.  Until step 0.4 lands,
-    /// this method is byte-identical to the pre-extraction version.
+    /// Phase 09 phase 00 step 0.4: dispatches through
+    /// `crate::generation::ops::emit_op`.  When no custom emitter is
+    /// registered for `def_fn.name`, `emit_op` falls through to
+    /// `DefaultTemplateEmitter` which calls back into
+    /// [`Self::substitute_template_body`] — the byte-identical
+    /// extraction of the original substitution body.  Result: every
+    /// existing call site sees the same emission as before.
     pub(super) fn output_call_template(
         &mut self,
         w: &mut dyn Write,
         def_fn: &Definition,
         vals: &[Value],
     ) -> std::io::Result<()> {
-        self.substitute_template_body(w, def_fn, vals)
+        // Clone the name so we can pass it to `emit_op` without
+        // co-borrowing `def_fn` from inside the EmitCtx.
+        let name = def_fn.name.clone();
+        let mut ctx = crate::generation::ops::EmitCtx {
+            w,
+            def_fn,
+            output: self,
+        };
+        crate::generation::ops::emit_op(&mut ctx, &name, vals)
     }
 
     /// Internal helper holding the actual `#rust` template substitution

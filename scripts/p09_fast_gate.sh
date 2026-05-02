@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Fast regression gate for plan 09 phase 00 work.
+#
+# Compares native emission for a 7-file doc corpus against a baseline
+# captured at /tmp/p09-baseline/, then runs the P-issue reproducers as
+# native binaries.  Together these enforce phase 00's byte-identical
+# contract + closed-bug guards in well under 1.5 minutes — replacing the
+# 4-minute `cargo test --test issues` cycle for routine step-by-step work.
+#
+# Usage:
+#   scripts/p09_fast_gate.sh                # diff vs baseline + reproducers
+#   scripts/p09_fast_gate.sh --capture       # (re)capture baseline at HEAD
+#   scripts/p09_fast_gate.sh --full-suite    # also run full issues suite
+#
+# Plan reference: doc/claude/plans/09-native-runtime-rewrite/00-scaffold.md
+
+set -euo pipefail
+
+CORPUS=(
+    tests/docs/03-integer.loft
+    tests/docs/04-boolean.loft
+    tests/docs/07-vector.loft
+    tests/docs/08-struct.loft
+    tests/docs/13-file.loft
+    tests/docs/19-threading.loft
+    tests/docs/25-generics.loft
+)
+
+REPROS=(
+    tests/scripts/repro_p203.loft
+    tests/scripts/repro_p204.loft
+    tests/scripts/repro_p205.loft
+)
+
+BASELINE_DIR="/tmp/p09-baseline"
+CURRENT_DIR="/tmp/p09-current"
+
+mode="diff"
+run_full=0
+for arg in "$@"; do
+    case "$arg" in
+        --capture) mode="capture" ;;
+        --full-suite) run_full=1 ;;
+        *) echo "unknown arg: $arg" >&2; exit 2 ;;
+    esac
+done
+
+emit() {
+    local out_dir="$1"
+    mkdir -p "$out_dir"
+    for t in "${CORPUS[@]}"; do
+        local name
+        name=$(basename "$t" .loft)
+        cargo run --bin loft --release --quiet -- \
+            --native-emit "$out_dir/$name.rs" "$t" 2>/dev/null
+    done
+}
+
+if [[ "$mode" == "capture" ]]; then
+    echo "[p09 gate] capturing baseline at $BASELINE_DIR"
+    rm -rf "$BASELINE_DIR"
+    emit "$BASELINE_DIR"
+    echo "[p09 gate] baseline: $(ls "$BASELINE_DIR" | wc -l) files"
+    exit 0
+fi
+
+if [[ ! -d "$BASELINE_DIR" ]]; then
+    echo "[p09 gate] no baseline at $BASELINE_DIR — run with --capture first" >&2
+    exit 1
+fi
+
+echo "[p09 gate] emitting current corpus"
+rm -rf "$CURRENT_DIR"
+emit "$CURRENT_DIR"
+
+echo "[p09 gate] diffing vs baseline"
+diff_status=0
+for t in "${CORPUS[@]}"; do
+    name=$(basename "$t" .loft)
+    if ! diff -q "$BASELINE_DIR/$name.rs" "$CURRENT_DIR/$name.rs" >/dev/null; then
+        echo "  DIFFERS: $name.rs"
+        diff_status=1
+    fi
+done
+if [[ $diff_status -eq 0 ]]; then
+    echo "  byte-identical: $(ls "$CURRENT_DIR" | wc -l) files"
+fi
+
+echo "[p09 gate] running P-issue reproducers"
+repro_status=0
+# P203: closed by template let-bind-on-repeat fix.  Must still pass.
+# P204, P205: still open as of 2026-05-02; reported but not blocking.
+declare -A REPRO_REQUIRED=(
+    ["tests/scripts/repro_p203.loft"]=1
+    ["tests/scripts/repro_p204.loft"]=0
+    ["tests/scripts/repro_p205.loft"]=0
+)
+for r in "${REPROS[@]}"; do
+    if cargo run --bin loft --release --quiet -- "$r" 2>/dev/null; then
+        echo "  PASS: $r"
+    else
+        if [[ "${REPRO_REQUIRED[$r]:-0}" == "1" ]]; then
+            echo "  FAIL: $r  (REGRESSION — was closed)"
+            repro_status=1
+        else
+            echo "  fail: $r  (still open — informational)"
+        fi
+    fi
+done
+
+if [[ $run_full -eq 1 ]]; then
+    echo "[p09 gate] running full issues suite (this takes ~2.5 min)"
+    cargo test --release --test issues 2>&1 | tail -3
+fi
+
+if [[ $diff_status -ne 0 || $repro_status -ne 0 ]]; then
+    echo "[p09 gate] FAILED"
+    exit 1
+fi
+echo "[p09 gate] PASS"
