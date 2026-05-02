@@ -190,17 +190,34 @@ impl Output<'_> {
                 write!(w, "let mut var_{name}: {tp_str} = ")?;
             }
             // P199 — user-fn / Op-stub callees take `&UnsafeCell<Stores>`
-            // (cell), not `&mut Stores` (stores).  Legacy runtime helpers
-            // still take stores.  Plan 09 phase 01 consolidated the dual
-            // hardcoded lists into one registry in `src/codegen_runtime.rs`;
-            // `abi_of(name)` is the single lookup.
-            let is_legacy_stores_fn = def_fn.code == Value::Null
-                && crate::codegen_runtime::abi_of(&def_fn.name)
-                    == crate::codegen_runtime::Abi::LegacyStores;
-            let stores_arg = if is_legacy_stores_fn { "stores" } else { "cell" };
-            write!(w, "{}({stores_arg}", def_fn.name)?;
+            // (cell), not `&mut Stores` (stores).  Plan 09 phase 01 added
+            // per-fn ABI tagging via `crate::codegen_runtime::abi_of`:
+            //   - Cell  → `name(cell, args...)`     (default)
+            //   - LegacyStores → `name(stores, args...)`  (pre-P199.A)
+            //   - None  → `name(args...)`           (no implicit Stores)
+            let abi = if def_fn.code == Value::Null {
+                crate::codegen_runtime::abi_of(&def_fn.name)
+            } else {
+                crate::codegen_runtime::Abi::Cell
+            };
+            write!(w, "{}(", def_fn.name)?;
+            let mut first_arg = true;
+            match abi {
+                crate::codegen_runtime::Abi::Cell => {
+                    write!(w, "cell")?;
+                    first_arg = false;
+                }
+                crate::codegen_runtime::Abi::LegacyStores => {
+                    write!(w, "stores")?;
+                    first_arg = false;
+                }
+                crate::codegen_runtime::Abi::None => {}
+            }
             for (idx, arg) in args.iter().enumerate() {
-                write!(w, ", ")?;
+                if !first_arg {
+                    write!(w, ", ")?;
+                }
+                first_arg = false;
                 if let Some(ref tmp) = hoisted[idx] {
                     write!(w, "{tmp}")?;
                 } else if let Some(vr) = self.create_stack_var(arg) {

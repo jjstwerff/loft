@@ -29,18 +29,29 @@ use crate::tree;
 /// ABI of a runtime helper function defined in this module.
 ///
 /// `Cell`: takes `cell: &UnsafeCell<Stores>` and derives a `&mut Stores`
-/// at entry (the post-P199.A ABI used by all new runtime fns).
+/// at entry (the post-P199.A ABI used by all new runtime fns that need
+/// store access).
 ///
 /// `LegacyStores`: takes `stores: &mut Stores` directly.  Pre-P199.A
 /// helpers that haven't been migrated yet.  Their call sites in
 /// generated code emit `stores` (the local binding derived from `cell`)
-/// instead of `cell` itself.  Phase 01 migrates entries to `Cell` one
-/// by one; when no `LegacyStores` entry remains the enum can collapse
-/// to unit and the ABI selection logic can be removed.
+/// instead of `cell` itself.
+///
+/// `None`: takes no implicit Stores parameter at all.  For pure helpers
+/// whose body never touches `Stores` (e.g. clock reads, constant
+/// returns, thread-local RNG access).  The codegen emits `fn_name(args)`
+/// with no leading `cell` / `stores` argument.  This is strictly better
+/// than `Cell` for these fns: zero unused parameter, zero borrow churn.
+///
+/// Phase 01 migrates `LegacyStores` entries to `Cell` (when they need
+/// stores) or `None` (when they don't), one by one.  When the
+/// `LegacyStores` count reaches zero, the variant can be removed and
+/// the `if/else` ABI selection in `output_call_user_fn` simplifies.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Abi {
     Cell,
     LegacyStores,
+    None,
 }
 
 /// Single source of truth for runtime-helper ABI tags.  Replaces the
@@ -60,15 +71,15 @@ pub struct RuntimeFn {
 }
 
 pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
-    RuntimeFn { name: "n_now",                     abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_now",                     abi: Abi::None },
     RuntimeFn { name: "n_ticks",                   abi: Abi::LegacyStores },
     RuntimeFn { name: "n_get_store_lock",          abi: Abi::LegacyStores },
     RuntimeFn { name: "n_set_store_lock",          abi: Abi::LegacyStores },
-    RuntimeFn { name: "n_rand",                    abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_rand",                    abi: Abi::None },
     RuntimeFn { name: "n_rand_indices",            abi: Abi::LegacyStores },
     RuntimeFn { name: "n_parallel_for_native",     abi: Abi::LegacyStores },
     RuntimeFn { name: "n_parallel_for_ref_native", abi: Abi::LegacyStores },
-    RuntimeFn { name: "n_path_sep",                abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_path_sep",                abi: Abi::None },
     RuntimeFn { name: "n_stack_trace",             abi: Abi::LegacyStores },
     RuntimeFn { name: "n_hash_sorted",             abi: Abi::LegacyStores },
 ];
@@ -1537,8 +1548,11 @@ fn fake_clock_env(var: &str) -> Option<i64> {
 /// Returns `i64::MIN` (null) if the system clock reports a time before the epoch.
 /// Honours `LOFT_FAKE_NOW_MS` when set (deterministic snapshot tests).
 /// Bytecode equivalent: `n_now` in `src/native.rs`.
+///
+/// Plan 09 phase 01 step 1.5: migrated to the no-stores ABI
+/// (`Abi::None`).  Body doesn't touch `Stores` — wall-clock read only.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn n_now(_stores: &mut Stores) -> i64 {
+pub fn n_now() -> i64 {
     if let Some(fake) = fake_clock_env("LOFT_FAKE_NOW_MS") {
         return fake;
     }
@@ -1549,7 +1563,7 @@ pub fn n_now(_stores: &mut Stores) -> i64 {
 
 /// Bytecode equivalent: `n_now` in `src/native.rs`.
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
-pub fn n_now(_stores: &mut Stores) -> i64 {
+pub fn n_now() -> i64 {
     crate::wasm::host_time_now()
 }
 
@@ -1557,7 +1571,7 @@ pub fn n_now(_stores: &mut Stores) -> i64 {
 /// returns 0 because no host time bridge exists.  Mirror of the
 /// `n_ticks` fallback below for the same target.
 #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
-pub fn n_now(_stores: &mut Stores) -> i64 {
+pub fn n_now() -> i64 {
     0
 }
 
@@ -1589,7 +1603,9 @@ pub fn n_ticks(_stores: &mut Stores) -> i64 {
 /// Return the platform path separator as a loft character (`i32`).
 /// Returns `'/'` (47) on Unix and `'\\'` (92) on Windows.
 /// Bytecode equivalent: `n_path_sep` in `src/native.rs`.
-pub fn n_path_sep(_stores: &mut Stores) -> i32 {
+/// Plan 09 phase 01 step 1.5: migrated to the no-stores ABI — body
+/// returns a compile-time platform constant, never touches `Stores`.
+pub fn n_path_sep() -> i32 {
     crate::platform::sep() as i32
 }
 
@@ -1621,7 +1637,9 @@ pub fn n_set_store_lock(stores: &mut Stores, r: DbRef, locked: bool) {
 /// Return a random integer in `[lo, hi]` (inclusive).
 /// Returns `i64::MIN` (null) when `lo > hi`.
 /// Bytecode equivalent: `n_rand` in `src/native.rs`.
-pub fn n_rand(_stores: &mut Stores, lo: i64, hi: i64) -> i64 {
+/// Plan 09 phase 01 step 1.5: migrated to the no-stores ABI — body
+/// uses thread-local RNG state, not `Stores`.
+pub fn n_rand(lo: i64, hi: i64) -> i64 {
     cr_rand_int(lo, hi)
 }
 

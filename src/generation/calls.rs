@@ -66,19 +66,36 @@ impl Output<'_> {
         }
         // P199 — user-defined functions, generated stubs, AND Op stubs in
         // `src/codegen_runtime.rs` all take `&UnsafeCell<Stores>` (Track 1).
-        // A small set of pre-P199.A `n_*` helpers still use the legacy
-        // `&mut Stores` ABI — `abi_of(name)` consults the registry in
-        // `src/codegen_runtime.rs` to pick `cell` (default) vs `stores`
-        // (legacy) for each callee.  Plan 09 phase 01 replaced the
-        // hardcoded duplicate lists in calls.rs + dispatch.rs with this
-        // single registry lookup.
-        let is_legacy_stores_fn = def_fn.code == Value::Null
-            && crate::codegen_runtime::abi_of(&def_fn.name)
-                == crate::codegen_runtime::Abi::LegacyStores;
-        let stores_arg = if is_legacy_stores_fn { "stores" } else { "cell" };
-        write!(w, "{}({stores_arg}", def_fn.name)?;
+        // Plan 09 phase 01 added per-fn ABI tagging via the
+        // `CODEGEN_RUNTIME_FNS` registry.  `abi_of(name)` returns:
+        //   - `Cell`  → emit `name(cell, args...)`     (default)
+        //   - `LegacyStores` → emit `name(stores, args...)`  (pre-P199.A)
+        //   - `None`  → emit `name(args...)`           (no implicit Stores)
+        let abi = if def_fn.code == Value::Null {
+            crate::codegen_runtime::abi_of(&def_fn.name)
+        } else {
+            crate::codegen_runtime::Abi::Cell
+        };
+        write!(w, "{}(", def_fn.name)?;
+        let mut first_arg = true;
+        match abi {
+            crate::codegen_runtime::Abi::Cell => {
+                write!(w, "cell")?;
+                first_arg = false;
+            }
+            crate::codegen_runtime::Abi::LegacyStores => {
+                write!(w, "stores")?;
+                first_arg = false;
+            }
+            crate::codegen_runtime::Abi::None => {
+                // No implicit Stores parameter.
+            }
+        }
         for (idx, v) in vals.iter().enumerate() {
-            write!(w, ", ")?;
+            if !first_arg {
+                write!(w, ", ")?;
+            }
+            first_arg = false;
             if let Some(vr) = self.create_stack_var(v) {
                 let name = sanitize(self.data.def(self.def_nr).variables.name(vr));
                 write!(w, "&mut var_{name}")?;
