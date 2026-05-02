@@ -1,6 +1,12 @@
 # Phase 05 — File emitters
 
-**Status:** OPEN
+**Status:** OPEN — **PLAN MISALIGNED with current errors; rewrite
+required before implementation.**  See
+[Diagnosis findings](#diagnosis-findings) for details: the failing
+sites in `tests/scripts/20-binary.loft` are read-side comparison-
+emission errors (E0308 between a narrowed `as u8/u16/u32` LHS and
+an `_i64` literal RHS), not the write-side `f += val` template
+issue this plan was originally designed for.
 
 **Closes:** **P200** (binary file `f += <int>` width mismatch —
 write side).
@@ -302,6 +308,73 @@ Recommended commit order:
   5. **Step 5.4**: update PROBLEMS.md.
 
 ## Diagnosis findings
+
+### Scope misalignment surfaced 2026-05-02 — must rewrite plan before implementing
+
+`tests/scripts/20-binary.loft` was selected as the P200 reproducer
+under the assumption that the failing emission was on the **write**
+side (the `f += val` template hard-coding `i32`).  Inspection of
+today's native-emit output for that test shows the failures are
+actually on the **read** side:
+
+```rust
+// /tmp/loft_native_20_binary.rs:528-532 (representative)
+n_assert(cell, {({ //reading file_4: integer(0, 255)
+    let mut var__read_3: i64 = i64::MIN as i64;
+    OpReadFile(cell, var_f, &mut var__read_3, 1_i64, 11_i32);
+    (var__read_3) as u8
+} /*reading file_4: integer(0, 255)*/) == (0_i64)},
+    "u8 read 0", "tests/scripts/20-binary.loft", 20_i64);
+//                                                  ^^^^^^^
+// error[E0308]: expected `u8`, found `i64`
+```
+
+Five sites fail with the same shape.  The block-tail `as u8`
+narrows the read result; the comparison RHS is the integer literal
+emitted as `_i64`.  Rust will not auto-coerce one side, so the
+`==` is ill-typed.
+
+This is **comparison-emission territory**, not write-side template
+territory.  The phase 05 plan as written (custom `OpWriteIntFile`
+emitter + `EmitCtx::int_width_for` / `int_signed_for` helpers) does
+not address the actual error.  Two candidate fix sites:
+
+1. **Drop the block-tail narrow** when the consumer is `==` against
+   a constant whose value range fits the narrow type — let the
+   comparison happen at i64 width and trust the read body's range
+   to enforce the contract.
+2. **Widen the constant** at comparison emission time to match the
+   block-tail's narrowed type (`(... as u8) == (0u8)`).  Site:
+   wherever `==` is emitted with an integer literal RHS.
+
+Either fix lives in comparison-emission code (probably
+`src/generation/emit.rs` or the comparison Op emitter family),
+not in `OpWriteIntFile`'s template.  Phase 05 needs:
+
+- New diagnostic step 5.1: **identify the comparison-emission
+  site** that picks RHS type.  Confirm the narrowed-block-tail
+  pattern from `narrow_int_cast` is the LHS shape.
+- Revised step 5.3: **emit the comparison with matched widths**
+  rather than building a width-aware OpWriteIntFile emitter.
+- Phase 02 (param adapter) prerequisite no longer obvious — the
+  read-side narrow comes from the block-tail role of
+  `narrow_int_cast`, not the param role.  Phase 02's split of
+  the helper might still help (cleaner code), but is no longer
+  on the P200 critical path.
+
+The original phase 05 design (write-side `OpWriteIntFile` emitter)
+might still be needed if a separate write-side error surfaces in
+20-binary or other tests after the read-side fix.  Treat it as a
+phase 05b extension, not the main scope.
+
+**Action before phase 05 starts**:
+1. Re-read all 5 failing sites in `/tmp/loft_native_20_binary.rs`;
+   confirm read-side comparison is the only error class.
+2. Trace the comparison-emission code path that picks the RHS
+   literal's type tag (`_i64`).
+3. Rewrite phase 05's "Detailed steps" + "Why this works now" to
+   match the actual fix site.
+4. Re-evaluate whether phase 02 is still listed as prerequisite.
 
 _(populate during pre-work; document the failing test's IR shape
 and how the planned fix avoids the prior failure mode)_

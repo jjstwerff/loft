@@ -4,9 +4,16 @@
 
 **Closes:** **P202** (native missing `n_parallel_queue` family).
 
-**Depends on:** Phase 00 (scaffold) + Phase 03 (parallel-emitter
-family — without it, the queue fns each duplicate the 95-line
-`dispatch.rs:837-930` special case).
+**Depends on:**
+- Phase 00 (scaffold) — `emit_op` dispatch
+- Phase 03 (parallel-emitter family) — without it, the queue
+  emitters each duplicate the 95-line `dispatch.rs:837-930`
+  special case
+- **Phase 09 (parallel runtime consolidation)** — the
+  `ParShape` trait + `n_parallel_for_native_core` collapse the 3
+  near-duplicate `n_parallel_for_*_native` fns into one generic
+  core; phase 06 replicates that pattern for the queue family
+  (see step 6.4 below).
 
 ## Diagnosis
 
@@ -33,6 +40,17 @@ None.
   registers as ~15 lines, not 95.
 - Phase 01 has consolidated the cell-ABI tag, so the new fns slot
   in with `Abi::Cell`.
+- **Phase 09** has factored the parallel runtime fns over a
+  `ParShape` trait (`WorkerOut` + `Batches` associated types,
+  `return_sz` / `run_workers` / `store_results` methods).  The
+  three `n_parallel_for_*_native` public fns are now ~3-line
+  wrappers around `n_parallel_for_native_core<S: ParShape, F>(...)`.
+  Phase 06's queue variants follow the same pattern: a
+  `ParQueueShape` trait (or a generalised `ParShape` if the trait
+  shapes coincide cleanly), a `n_parallel_queue_native_core<S, F>`
+  generic body, and 3 thin public-fn wrappers per closure shape
+  (scalar / text / ref).  Net add: ~3 wrappers × 3 lines + 1
+  generic core, instead of 3 full ~80-line bodies.
 
 ## Detailed steps with validation
 
@@ -121,21 +139,53 @@ fn p202_queue_parallel_runs_under_native() {
 **Validation**: this test currently fails — that's the regression
 guard before the fix ships.
 
-### Step 6.4 — Add `n_parallel_queue*` runtime fns
+### Step 6.4 — Add `n_parallel_queue*` runtime fns (ParShape-based)
 
-**Action**: in `src/codegen_runtime.rs`, add the queue fn family.
-Each takes `cell: &UnsafeCell<Stores>` plus the queue arguments
-documented in step 6.1.  Body translates the interpreter
-implementation.
+**Action**: in `src/codegen_runtime.rs`, add the queue fn family
+following phase 09's consolidation pattern.
 
-Register them in `CODEGEN_RUNTIME_FNS` with `Abi::Cell` tags
-(phase 01 ABI).
+1. **Decide trait reuse vs new trait**.  Compare the queue API's
+   shape (alloc / worker / merge / finalise) to phase 09's
+   `ParShape`.  Two outcomes:
+   - **Reuse `ParShape` directly** — if the queue family's per-
+     shape variation lines up with the existing trait's
+     `WorkerOut` / `Batches` / `return_sz` / `run_workers` /
+     `store_results` decomposition.  Add a queue-specific
+     `run_workers` impl per shape (scalar / text / ref) that wraps
+     the queue worker dispatcher.  This is the cleanest outcome.
+   - **Introduce `ParQueueShape`** — if the queue protocol exposes
+     additional shape state (e.g. queue capacity, finish-callback)
+     that doesn't fit `ParShape`.  Mirror phase 09's design:
+     `ParQueueShape` with associated types + method set; three
+     impls (`QueueScalarShape`, `QueueTextShape`, `QueueRefShape`).
+   Document the choice in "Implementation notes."
+
+2. **Generic core**.  Add
+   `fn n_parallel_queue_native_core<S, F>(cell, ..., shape: &S, worker: F) -> DbRef`
+   following the alloc → run_workers → store_results → finalise
+   skeleton of `n_parallel_for_native_core`.
+
+3. **Three thin public fns**: `n_parallel_queue_native`,
+   `n_parallel_queue_text_native`, `n_parallel_queue_ref_native`
+   each ~3 lines calling the generic core with the appropriate
+   shape impl.
+
+4. Register all three in `CODEGEN_RUNTIME_FNS` with `Abi::Cell`
+   tags (phase 01 ABI).
 
 **Validation**:
 ```bash
 cargo build --release
 # The new fns compile; no callers yet.
 ```
+
+**Acceptance criterion**: each new public fn body is ≤ 15 lines and
+must call the queue generic core.  Extend the
+`parallel_runtime_consolidated` structural test in
+`tests/codegen_emitter.rs` to cover the new wrappers (or add a
+sibling `parallel_queue_runtime_consolidated` test that asserts
+the same shape).  This pins the consolidation invariant — without
+it, queue variants can drift back to inlined bodies.
 
 ### Step 6.5 — Register the emitter(s) in `parallel.rs`
 
