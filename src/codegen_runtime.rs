@@ -72,12 +72,21 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_set_store_lock",           abi: Abi::Cell },
     RuntimeFn { name: "n_rand",                     abi: Abi::None },
     RuntimeFn { name: "n_rand_indices",             abi: Abi::Cell },
-    RuntimeFn { name: "n_parallel_for_native",      abi: Abi::Cell },
-    RuntimeFn { name: "n_parallel_for_text_native", abi: Abi::Cell },
-    RuntimeFn { name: "n_parallel_for_ref_native",  abi: Abi::Cell },
-    RuntimeFn { name: "n_path_sep",                 abi: Abi::None },
-    RuntimeFn { name: "n_stack_trace",              abi: Abi::Cell },
-    RuntimeFn { name: "n_hash_sorted",              abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_for_native",        abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_for_text_native",   abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_for_ref_native",    abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_queue_native",      abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_queue_text_native", abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_queue_ref_native",  abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_get_native",    abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_get_text_native", abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_get_ref_native",  abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_drop_native",     abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_drop_text_native", abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_drop_ref_native",  abi: Abi::Cell },
+    RuntimeFn { name: "n_path_sep",                   abi: Abi::None },
+    RuntimeFn { name: "n_stack_trace",                abi: Abi::Cell },
+    RuntimeFn { name: "n_hash_sorted",                abi: Abi::Cell },
 ];
 
 /// Look up the ABI of a runtime helper.  Returns `Abi::Cell` for
@@ -2210,6 +2219,242 @@ where
         }
         (batch, ws.stores)
     })
+}
+
+// ── Plan-09 phase 06: parallel-queue runtime (P202 close) ──────────────────
+//
+// Mirror of the interpreter's `n_parallel_queue*` family in
+// `src/native.rs`, adapted to the native ABI: takes a Rust closure
+// instead of a bytecode worker fn.  Workers run via the same
+// `run_native_workers_*` helpers used by `n_parallel_for_*_native`;
+// the difference is in the merge phase — instead of writing into a
+// result vector, results are pushed onto `stores.par_*_buffer_stack`
+// and the row count is returned for use as a loop bound.
+//
+// The accompanying `n_parallel_buf_get_*_native` / `_drop_*_native`
+// fns provide the per-row read + cleanup that loft's fused for-par
+// desugars into.
+
+/// Plan-06 spine step 8a (native variant) — scalar-return Queue
+/// runtime entry.  Runs workers, packs their `i64` returns into a
+/// `Vec<u64>`, pushes onto `par_buffer_stack`, and returns the row
+/// count.  Each worker's i64 return is bit-cast to u64 (matching
+/// the interpreter's storage convention).
+pub fn n_parallel_queue_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    _return_size: i32,
+    threads: i32,
+    worker: F,
+) -> i64
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let results = run_native_workers_primitive(stores, &input, elem_size, threads, n, &worker);
+    let buf: Vec<u64> = results.into_iter().map(|v| v as u64).collect();
+    stores.par_buffer_stack.push(buf);
+    n as i64
+}
+
+/// Plan-06 spine step 8c (native variant) — text-return Queue.
+/// Workers' `String` returns are pushed verbatim onto
+/// `par_text_buffer_stack`.  `n_parallel_buf_get_text_native` reads
+/// them back through `stores.scratch` (lifetime-stabilising the
+/// `&str` returned to the caller).
+pub fn n_parallel_queue_text_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    _return_size: i32,
+    threads: i32,
+    worker: F,
+) -> i64
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> String + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let strings = run_native_workers_text(stores, &input, elem_size, threads, n, &worker);
+    stores.par_text_buffer_stack.push(strings);
+    n as i64
+}
+
+/// Plan-06 spine step 8d.1 (native variant) — heap-ref-return Queue.
+/// Allocates a single result store, deep-copies each worker-side
+/// struct return into a row-indexed slot, and pushes
+/// `(row_refs, [result_store_nr])` onto `par_ref_buffer_stack`.  The
+/// adopted-store list lets `n_parallel_buf_drop_ref_native` free the
+/// result store when the loop body completes.
+///
+/// Simpler than the interpreter's adoption-via-rebase machinery:
+/// each row is a record at offset `i * struct_size` inside one
+/// owned store, instead of a per-worker store with rebase translation.
+/// The cost: one `copy_from_worker[_unowned]` per row.  The benefit:
+/// no `worker_allocated_indices` / `StoreRebase` / dispenser plumbing
+/// in the native path.
+pub fn n_parallel_queue_ref_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    struct_size: i32,
+    known_type: i32,
+    threads: i32,
+    worker: F,
+) -> i64
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> DbRef + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let sz = struct_size as u32;
+    let kt = known_type as u16;
+
+    if n == 0 {
+        stores.par_ref_buffer_stack.push((Vec::new(), Vec::new()));
+        return 0;
+    }
+
+    let result_db = stores.null();
+    let total_words = ((n as u32) * sz).div_ceil(8).max(1);
+    let result_cr = stores.claim(&result_db, total_words);
+    let result_store_nr = result_db.store_nr;
+    let result_rec = result_cr.rec;
+
+    let batches = run_native_workers_ref(stores, &input, elem_size, threads, n, &worker);
+
+    let unowned = !stores.has_owned_sub_fields(kt);
+    let mut refs: Vec<DbRef> = vec![
+        DbRef {
+            store_nr: u16::MAX,
+            rec: 0,
+            pos: 8
+        };
+        n
+    ];
+    for (batch, mut worker_stores) in batches {
+        for (i, src_ref) in batch {
+            let dest = DbRef {
+                store_nr: result_store_nr,
+                rec: result_rec,
+                pos: (i as u32) * sz,
+            };
+            if unowned {
+                stores.copy_from_worker_unowned(&src_ref, &dest, &mut worker_stores, kt);
+            } else {
+                stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, kt);
+            }
+            refs[i] = dest;
+        }
+    }
+
+    stores
+        .par_ref_buffer_stack
+        .push((refs, vec![result_store_nr]));
+    n as i64
+}
+
+/// Read a row from the active scalar par-buffer.  The buffer is a
+/// `Vec<u64>` (workers' bit-cast returns); narrow returns leave the
+/// high bits zero.  Caller masks to the actual return width.
+///
+/// # Panics
+/// Panics if `par_buffer_stack` is empty (no active scalar queue) or
+/// if `idx` is out of range — both indicate a parser-side bug.
+pub fn n_parallel_buf_get_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> i64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let buf = stores
+        .par_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_native: par_buffer_stack is empty");
+    buf[idx as usize] as i64
+}
+
+/// Read a row from the active text par-buffer.  Stages the `String`
+/// into `stores.scratch` so the returned `Str` borrow remains valid
+/// across the call (mirrors the interpreter's text-return convention).
+///
+/// # Panics
+/// Panics if `par_text_buffer_stack` is empty (no active text queue)
+/// or if `idx` is out of range — both indicate a parser-side bug.
+pub fn n_parallel_buf_get_text_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> Str {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let s_owned = {
+        let buf = stores
+            .par_text_buffer_stack
+            .last()
+            .expect("n_parallel_buf_get_text_native: par_text_buffer_stack is empty");
+        buf[idx as usize].clone()
+    };
+    stores.scratch.push(s_owned);
+    Str::new(stores.scratch.last().unwrap())
+}
+
+/// Read a row from the active ref par-buffer.  Returns the per-row
+/// `DbRef` pointing into the result store this queue allocated.  The
+/// caller's field reads go through that store; the store stays
+/// adopted until `n_parallel_buf_drop_ref_native` fires.
+///
+/// # Panics
+/// Panics if `par_ref_buffer_stack` is empty (no active ref queue) or
+/// if `idx` is out of range — both indicate a parser-side bug.
+pub fn n_parallel_buf_get_ref_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let (refs, _) = stores
+        .par_ref_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_ref_native: par_ref_buffer_stack is empty");
+    refs[idx as usize]
+}
+
+/// Pop the active scalar par-buffer.  Called after the loop body
+/// completes.
+///
+/// # Panics
+/// Panics if `par_buffer_stack` is already empty — indicates a
+/// parser-side bug (drop emitted without a matching queue).
+pub fn n_parallel_buf_drop_native(cell: &std::cell::UnsafeCell<Stores>) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores
+        .par_buffer_stack
+        .pop()
+        .expect("n_parallel_buf_drop_native: par_buffer_stack is already empty");
+}
+
+/// Pop the active text par-buffer.
+///
+/// # Panics
+/// Panics if `par_text_buffer_stack` is already empty — indicates a
+/// parser-side bug (drop emitted without a matching queue_text).
+pub fn n_parallel_buf_drop_text_native(cell: &std::cell::UnsafeCell<Stores>) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores
+        .par_text_buffer_stack
+        .pop()
+        .expect("n_parallel_buf_drop_text_native: par_text_buffer_stack is already empty");
+}
+
+/// Pop the active ref par-buffer + free its adopted result store.
+///
+/// # Panics
+/// Panics if `par_ref_buffer_stack` is already empty — indicates a
+/// parser-side bug (drop emitted without a matching queue_ref).
+pub fn n_parallel_buf_drop_ref_native(cell: &std::cell::UnsafeCell<Stores>) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let (_refs, adopted) = stores
+        .par_ref_buffer_stack
+        .pop()
+        .expect("n_parallel_buf_drop_ref_native: par_ref_buffer_stack is already empty");
+    for store_nr in adopted {
+        let synthetic = DbRef {
+            store_nr,
+            rec: 0,
+            pos: 0,
+        };
+        stores.free_named(&synthetic, "par_buf_drop_ref");
+    }
 }
 
 // ── N8b.1: Native coroutine runtime ─────────────────────────────────────────

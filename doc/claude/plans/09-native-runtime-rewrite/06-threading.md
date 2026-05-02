@@ -1,6 +1,6 @@
 # Phase 06 — Threading queue runtime fns
 
-**Status:** OPEN
+**Status:** DONE (2026-05-02)
 
 **Closes:** **P202** (native missing `n_parallel_queue` family).
 

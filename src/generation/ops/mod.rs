@@ -146,6 +146,32 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     r.insert("OpGetRecord", Box::new(key_ops::OpGetRecordEmitter));
     r.insert("OpIterate", Box::new(key_ops::OpIterateEmitter));
 
+    // Phase 06 — parallel-queue emitter family (P202 close).  Mirrors
+    // phase 03's for-par emitter for the queue protocol: `n_parallel_queue`
+    // / `_text` / `_ref` build a worker closure and call the
+    // `n_parallel_queue_*_native` runtime fns; `n_parallel_buf_get` /
+    // `_text` / `_ref` and `n_parallel_buf_drop` / `_text` / `_ref` are
+    // pass-through renames to their `_native` runtime counterparts.
+    r.insert("n_parallel_queue", Box::new(parallel::ParallelQueueEmitter));
+    r.insert(
+        "n_parallel_queue_text",
+        Box::new(parallel::ParallelQueueEmitter),
+    );
+    r.insert(
+        "n_parallel_queue_ref",
+        Box::new(parallel::ParallelQueueEmitter),
+    );
+    for name in [
+        "n_parallel_buf_get",
+        "n_parallel_buf_get_text",
+        "n_parallel_buf_get_ref",
+        "n_parallel_buf_drop",
+        "n_parallel_buf_drop_text",
+        "n_parallel_buf_drop_ref",
+    ] {
+        r.insert(name, Box::new(parallel::ParallelBufRenameEmitter));
+    }
+
     r
 }
 

@@ -22,12 +22,22 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
     match val {
         Value::Call(d, args) => {
             calls.insert(*d);
-            // n_parallel_for passes a worker function as args[4]: an integer
-            // literal that is resolved to a closure in native output_call.
-            // Detect it here so the worker is included in the reachable set.
+            // n_parallel_for / n_parallel_queue pass a worker function as
+            // args[4]: an integer literal that the codegen emitter
+            // (src/generation/ops/parallel.rs) resolves into a closure body
+            // calling the worker by name.  Detect it here so the worker
+            // is included in the reachable set — without this, the
+            // closure refers to a fn that never gets emitted and rustc
+            // fails with "cannot find function" (E0425).
             if matches!(
                 data.def(*d).name.as_str(),
-                "n_parallel_for" | "n_parallel_for_light"
+                "n_parallel_for"
+                    | "n_parallel_for_light"
+                    | "n_parallel_queue"
+                    | "n_parallel_queue_text"
+                    | "n_parallel_queue_ref"
+                    | "n_parallel_queue_narrow"
+                    | "n_parallel_queue_fn"
             ) && args.len() >= 5
                 && let Value::Int(fn_d_nr) = &args[4]
                 && *fn_d_nr >= 0

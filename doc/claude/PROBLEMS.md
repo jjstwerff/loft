@@ -32,7 +32,7 @@ existing entry, not re-open it as a bug.
 |---|-------|----------|------------|
 | 198 | `tests/scripts/95-alias-copy.loft` leaked Database 3 + ran with aliased ac_orig/ac_copy in native.  **Closed (2026-05-01)**: scope analysis (`scan_set`) and native deep-copy emission (`output_set`) both pattern-matched `Value::Call(...)` / `Value::Var(...)` without unwrapping the parser's `Value::Span` wrapper, so the deep-copy and `make_independent` (deps-clearing) paths fell through.  Fix: bind unspanned RHS once at top of each function and pattern-match against that.  Also closes `95_alias_copy` native run failure. | High (closed) | n/a — fix landed in commit 30b01ce. |
 | 199 | Native codegen E0499/E0502 when nested calls borrow `&mut Stores` simultaneously.  **Closed (2026-05-01)** for the borrow-conflict class.  Native ABI changed from `&mut Stores` to `&UnsafeCell<Stores>` (PR1), Op-stub helpers in `src/codegen_runtime.rs` follow the new ABI (Track 1), and `OpSet*` field-write templates lift `@val` into a let-binding before `store_mut(...)` (Track 2).  Result: `native_dir` 7/30 → 28/30; canonical reproducer `native_tuple_script` PASSES; 0 interpreter regressions.  Remaining `19_threading` failure tracked as P202 (separate feature gap — `n_parallel_queue` family has no native implementation, distinct from the borrow-conflict issue P199 addressed). | Medium (closed) | Hoist the inner call into a temporary: `let r = add_pair(p); assert(r == 30);` makes the second borrow fall outside `n_assert`'s argument list — only relevant for templates / Op-stubs not yet covered by this fix. |
-| 202 | Native codegen for `for ... par(...)` for-loops calls `n_parallel_queue` (and `_text` / `_ref` / `_narrow` / `_fn` variants) which only exist in the bytecode interpreter — no `codegen_runtime.rs` implementation.  Reproducer: `tests/docs/19-threading.loft` → `cargo test --release --test native native_dir`.  Generated stub takes 5 args (loft signature); call site passes 6+ (with `n_extra` count); arg-count mismatch breaks rustc compile.  Distinct from P199 — purely a missing native implementation, not a borrow-conflict.  Also unblocks 19_threading + any par-queue use in native scripts.  See [P202 design](#202-native-n_parallel_queue-family-not-implemented). | Medium | Compile the loft source via the interpreter (`cargo run --bin loft --release -- --interpret file.loft`) — par-for works there.  Or use the par-for-native dispatch path by writing the worker as `n_parallel_for_native` directly (advanced — bypasses the for-par syntactic sugar). |
+| 202 | Native codegen for `for ... par(...)` for-loops calls `n_parallel_queue` (and `_text` / `_ref` variants) which only existed in the bytecode interpreter.  **Closed (2026-05-02)** by plan-09 phase 06 — `n_parallel_queue_*_native` runtime fns + `n_parallel_buf_get_*` / `_drop_*` per-row accessors added to `src/codegen_runtime.rs`; `ParallelQueueEmitter` + `ParallelBufRenameEmitter` registered in `src/generation/ops/parallel.rs`; reachability extended in `src/generation/mod.rs` to pull worker fns from queue d_nr args.  Native suite: 87/93 → 89/93 + native_dir 29/30 → 30/30 (closes 19_threading + 22_threading + 40_par_ref_return).  Pinned by `p202_parallel_queue_*` regression tests in `tests/codegen_emitter.rs`. | Medium (closed) | n/a — fix lands in `src/codegen_runtime.rs` + `src/generation/ops/parallel.rs` + `src/generation/mod.rs`. |
 | 200 | Native codegen for `f += <integer>` against a binary file (`BigEndian` / `LittleEndian` open mode) emits a value with mismatched expected width — `rustc` raises E0308 mismatched types.  Reproducer: `tests/scripts/20-binary.loft` line 67 / 128.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch. | Medium | Add the explicit width cast the parser warning already suggests: `f += val as i32` (or `as i8` / `as u32` etc.). |
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
 | 203 | Assertion `delete(path) == FileResult.Ok` panicked with `delete existing file`.  **Closed (2026-05-02)**: actual root cause was template double-substitution — five templates in `default/01_code.loft` (lines 690, 705, 707, 751, 753) substituted `@v1`/`@v2` in multiple positions, so any side-effecting call appearing on both sides of an enum/null comparison evaluated twice.  Fix: `src/generation/calls.rs::output_call_template` now scans every template for repeated `@<name>` placeholders and hoists each into a single `let _v_<name> = …;` wrapping `{ … }` block before substitution, so each arg expression evaluates exactly once regardless of how many positions reference it.  `repro_p203.loft` exits 0; full suite: 540/540 issues, 43/43 threading, 35/35 threading_chars, native 86/92 → 87/92.  See [P203 reproducer + diagnosis](#203-native-block-scope-file-not-flushed-on-exit). | Medium (closed) | n/a — fix lands in `src/generation/calls.rs`. |
@@ -390,9 +390,46 @@ panic's message is still the only useful diagnostic.
 **Test:** `tests/html_wasm.rs::*` (any test that runs after a
 panicked sibling).
 
-### 202. Native: `n_parallel_queue` family not implemented
+### 202. Native: `n_parallel_queue` family not implemented (CLOSED 2026-05-02)
 
-**Symptom:** native compilation fails on any script using
+**Closed by:** plan-09 phase 06 (commit landing this entry).  Three
+new components shipped together:
+
+1. **Runtime fns** in `src/codegen_runtime.rs`:
+   `n_parallel_queue_native` / `_text_native` / `_ref_native` for
+   the queue dispatch (closure-based, mirroring
+   `n_parallel_for_*_native`); `n_parallel_buf_get_native` / `_text` /
+   `_ref` for per-row reads; `n_parallel_buf_drop_native` / `_text` /
+   `_ref` for end-of-loop cleanup.  All take `&UnsafeCell<Stores>`
+   per phase 01's ABI; ref-flavour adopts a single result store
+   (simpler than the interpreter's per-worker dispenser).
+2. **Emitter** in `src/generation/ops/parallel.rs`:
+   `ParallelQueueEmitter` mirrors phase 03's `ParallelForEmitter`
+   but routes calls to the `_native` queue family.
+   `ParallelBufRenameEmitter` is a pass-through name rewriter for
+   the buf-get / buf-drop reads.  All 9 names registered in
+   `src/generation/ops/mod.rs::build_registry`.
+3. **Reachability fix** in `src/generation/mod.rs::collect_calls`
+   — the worker-fn-via-d_nr-arg detection now extends to the
+   queue family, so worker fns get pulled into the reachable set
+   when emitted.  Without this, the closure refers to a fn that
+   never gets emitted (E0425 "cannot find function").
+
+**Verification:** native suite went from 87/93 → 89/93 (+2 script
+fixes for 22_threading + 40_par_ref_return); native_dir went from
+29/30 → 30/30 (19_threading fix).  Three pre-existing P200/P204/P205
+sub-failures remain — not in plan-09 phase 06 scope.
+
+**Regression tests** in `tests/codegen_emitter.rs`:
+- `p202_parallel_queue_runtime_fns_registered` — pins the 9
+  runtime-fn names with `Abi::Cell`.
+- `p202_parallel_queue_emitter_registered` — pins the 9 emitter
+  registry entries.
+
+**Workaround (historical):** see "Workaround" below — no longer
+needed.
+
+**Symptom (historical):** native compilation fails on any script using
 `for ... par(...)`:
 
 ```

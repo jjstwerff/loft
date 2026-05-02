@@ -306,6 +306,65 @@ fn parallel_runtime_consolidated() {
     }
 }
 
+/// Phase 06 regression test: the queue + buf-access runtime fns
+/// must remain registered in `CODEGEN_RUNTIME_FNS` with `Abi::Cell`
+/// tags.  P202's reproducer (19_threading + 22_threading +
+/// 40_par_ref_return) compiles natively only when these fns exist
+/// at link time — accidentally removing them re-opens the bug.
+#[test]
+fn p202_parallel_queue_runtime_fns_registered() {
+    use loft::codegen_runtime::{Abi, abi_of};
+    for name in [
+        "n_parallel_queue_native",
+        "n_parallel_queue_text_native",
+        "n_parallel_queue_ref_native",
+        "n_parallel_buf_get_native",
+        "n_parallel_buf_get_text_native",
+        "n_parallel_buf_get_ref_native",
+        "n_parallel_buf_drop_native",
+        "n_parallel_buf_drop_text_native",
+        "n_parallel_buf_drop_ref_native",
+    ] {
+        assert_eq!(
+            abi_of(name),
+            Abi::Cell,
+            "{name} must be in CODEGEN_RUNTIME_FNS with Abi::Cell — \
+             phase 06 (P202 close) requires it for native compilation \
+             of `for ... par(...)` loops."
+        );
+    }
+}
+
+/// Phase 06 structural test: the `n_parallel_queue` family must
+/// route through the `ParallelQueueEmitter` registered in
+/// `src/generation/ops/mod.rs`.  Without this, the call sites emit
+/// fixed-arity stub calls instead of closure-shaped helper calls,
+/// reproducing P202's E0061 compile failure.
+#[test]
+fn p202_parallel_queue_emitter_registered() {
+    let src = std::fs::read_to_string(project_root().join("src/generation/ops/mod.rs"))
+        .expect("read ops/mod.rs");
+    for name in [
+        "\"n_parallel_queue\"",
+        "\"n_parallel_queue_text\"",
+        "\"n_parallel_queue_ref\"",
+        "\"n_parallel_buf_get\"",
+        "\"n_parallel_buf_get_text\"",
+        "\"n_parallel_buf_get_ref\"",
+        "\"n_parallel_buf_drop\"",
+        "\"n_parallel_buf_drop_text\"",
+        "\"n_parallel_buf_drop_ref\"",
+    ] {
+        assert!(
+            src.contains(name),
+            "build_registry missing entry for {name} — phase 06 \
+             (P202 close) registered ParallelQueueEmitter / \
+             ParallelBufRenameEmitter for these names; removing \
+             the entry re-opens E0061 on native par-queue tests."
+        );
+    }
+}
+
 /// Gate: the registry's `Abi` tags must be self-consistent — every
 /// entry's `abi_of(name)` lookup must return the entry's own tag.
 /// Trivially true when the registry is well-formed; catches a typo
