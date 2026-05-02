@@ -58,6 +58,76 @@ conflict is structurally absent.
 
 ## Detailed steps with validation
 
+### Step 5.0 — Forwarding-emitter smoke test (deferred from phase 00)
+
+**Action**: ship a no-op forwarding `OpEmitter` for `OpWriteIntFile`
+as the first commit of this phase.  The emitter does nothing more
+than call `DefaultEmitter::emit` (or directly call back into
+`Output::user_fn_call_body` / `substitute_template_body`).  Register
+it.  Re-run the byte-identical baseline gate.
+
+```rust
+// src/generation/ops/op_write_int_file.rs (forwarding stub)
+use super::{EmitCtx, OpEmitter, default::DefaultEmitter};
+use crate::data::Value;
+use std::io;
+
+pub struct Emitter;
+
+impl OpEmitter for Emitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        // Step 5.0 forwarding stub: prove the dispatch flow fires
+        // for a registered emitter.  Step 5.4 replaces this with the
+        // width-aware emission body.
+        DefaultEmitter.emit(ctx, args)
+    }
+}
+```
+
+```rust
+// src/generation/ops/mod.rs::build_registry — add:
+//     r.insert("OpWriteIntFile", Box::new(super::op_write_int_file::Emitter));
+```
+
+**Why**: phase 00's smoke test in `src/generation/ops::tests`
+compile-checks the `OpEmitter` trait shape but defers two runtime
+verifications because the registry is `OnceLock`-backed and no
+`Output` fixture exists in the test surface:
+
+1. **Registry actually fires a registered emitter** — the dispatch
+   flow `emit_op → registry().get(name) → emitter.emit()` is
+   four lines of code, but never exercised end-to-end.
+2. **Emitter can call `ctx.output.<method>` from inside its emit
+   body** — the borrow-checker reborrow chain `&mut ctx → &mut
+   ctx.output → &mut Output → &mut self` is unproven for any
+   real method call.
+
+A forwarding emitter is the cheapest place to validate both:
+- Registry fires it (or doesn't, surfacing wiring bugs immediately).
+- The forwarding call `DefaultEmitter.emit(ctx, args)` itself is a
+  test of `EmitCtx` field access from inside an `OpEmitter::emit`.
+- If anything in the dispatch is broken, the byte-identical
+  baseline diff fails on this commit, with the smallest possible
+  blame surface (one new file, one registry line).
+
+If the byte-identical gate passes after this commit: the trait
+dispatch is structurally sound, and step 5.1+ can proceed with
+confidence.  If it fails: the diff narrows the bug to the
+forwarding wiring.
+
+**Validation**:
+
+```bash
+scripts/p09_fast_gate.sh                    # byte-identical, P203 PASS
+cargo test --release --lib generation::ops  # smoke tests still pass
+cargo test --release --test codegen_emitter # 5/5 (gates)
+cargo test --release --test issues 2>&1 | tail -3  # 540/540
+```
+
+**Outcome**: confidence that the dispatch surface is live before
+step 5.1 starts writing real code.  Cost: ~15 lines of code,
+~2 minutes wall time including running the gate.
+
 ### Step 5.1 — Pre-work: pin the prior P200 failure mode
 
 **Action**: write a regression test that fails under the prior
@@ -196,8 +266,21 @@ cargo test --release --test native -- --test-threads=1 2>&1 | grep "native resul
 
 ## Commit shape
 
-3-4 commits across the steps (down from 6-7 after P203 was
-removed); ships as one PR.
+4-5 commits across the steps (down from 6-7 after P203 was
+removed; bumped to 4-5 by step 5.0's forwarding-emitter smoke test);
+ships as one PR.
+
+Recommended commit order:
+
+  1. **Step 5.0**: forwarding `OpEmitter` for `OpWriteIntFile`
+     (no-op stub).  Byte-identical baseline must still pass.
+     This is the runtime smoke test deferred from phase 00.
+  2. **Step 5.1**: pin prior P200 failure mode via regression test.
+  3. **Step 5.2**: add `EmitCtx::int_width_for` / `int_signed_for`
+     helpers (or expose via `ctx.output`).
+  4. **Step 5.3**: replace step 5.0's stub body with the
+     width-aware emission.  P200 round-trip test now passes.
+  5. **Step 5.4**: update PROBLEMS.md.
 
 ## Diagnosis findings
 

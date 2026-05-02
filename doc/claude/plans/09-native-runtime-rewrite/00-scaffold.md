@@ -513,9 +513,19 @@ evaluation against the broader plan-09 goals:
      (field width, ref flavour, generic bindings, …).
    - Whether the trait's `io::Result<()>` return type suffices, or
      emitters need to surface emission-type info to the caller.
-   - **Recommendation**: write a smoke-test custom emitter (~30
-     min) before phase 05 so lifetime/helper gotchas surface
-     early, not in the middle of a P-issue fix.
+
+   **Compile-time covered (commit `f7ea1a8`)**: three smoke tests in
+   `src/generation/ops::tests` confirm the trait can be impl'd
+   externally, `EmitCtx` fields are accessible, and split-borrows
+   between `ctx.output` and `ctx.w` work.
+
+   **Runtime portion deferred to phase 05 step 5.0**: a
+   forwarding-emitter first commit (no-op `OpEmitter` for
+   `OpWriteIntFile` that just calls `DefaultEmitter::emit`)
+   proves the dispatch fires AND that the emitter can construct/use
+   `EmitCtx` from inside its body.  That commit's byte-identical
+   baseline gate is the runtime smoke test; cost is ~15 lines and
+   ~2 minutes wall time.  See `05-file.md` step 5.0.
 
 2. **`Value::RawExpr` is a wart.**  Step 0.7 added an IR variant
    that has no parser source and no runtime semantics — pure
