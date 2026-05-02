@@ -402,33 +402,48 @@ fn native_suite_floor_holds() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let combined = format!("{}{}", stdout, String::from_utf8_lossy(&output.stderr));
 
-    // native_dir → tests/docs/*.loft : 30 total, all must pass.
-    // No "native result:" summary line; check the high-level
-    // test name + ok status instead.  When a docs-test fails,
-    // native_dir reports "FAILED" instead of "ok".
+    // The native test binary has 5 high-level tests
+    // (`native_binary_script`, `native_dir`, `native_scripts`,
+    // `native_tuple_return_script`, `native_tuple_script`).  All
+    // 5 must pass.  Per the zero-regression rule, this floor only
+    // moves UP — when a future plan adds a new high-level test
+    // that becomes part of the parity baseline, update the
+    // count here EXPLICITLY.
+    //
+    // The cargo test summary line is emitted on every run:
+    //   test result: ok. 5 passed; 0 failed; ...
+    // We check for the specific "5 passed; 0 failed" pattern.
+    //
+    // History:
+    // - Pre-plan-09: 2/5 high-level tests passed.
+    // - After plan-09 phase 06 (P202): 3/5.
+    // - After plan-09 phase 07 (P205): 3/5 (still failing on P200 + P204).
+    // - After plan-09 phase 10 step 10.3 (P200): 4/5.
+    // - After plan-11 (P204): 5/5 (parity with main).
+    let high_level_floor = combined.contains("5 passed; 0 failed")
+        || combined.contains("6 passed; 0 failed")  // future expansion
+        || combined.contains("7 passed; 0 failed");
     assert!(
-        combined.contains("test native_dir ... ")
-            && !combined.contains("test native_dir ... FAILED"),
-        "native_dir failed — a tests/docs/*.loft regressed under native.  Stdout:\n{combined}"
+        high_level_floor,
+        "native suite high-level floor regressed (expected ≥ 5/5 passing, 0 failing).  \
+         Plan-09 + plan-11 closed P200/P202/P203/P204/P205; the parity-with-main floor \
+         is 5/5.  If you've added a new high-level test, update this floor explicitly.\n\nStdout:\n{combined}"
     );
 
-    // native_scripts → tests/scripts/*.loft : 93 total, ≥ 91 passed.
-    // Today: 91 passed, 0 compile failed, 2 run failed (P204).
-    // Plan-11 will move this to 93 passed.  The "native result"
-    // summary appears once for native_scripts.
-    let script_floor = combined.contains("native result: 91 passed,")
-        || combined.contains("native result: 92 passed,")
-        || combined.contains("native result: 93 passed,");
-    assert!(
-        script_floor,
-        "native_scripts floor regressed (expected ≥ 91/93).  Stdout:\n{combined}"
-    );
-
-    // native_binary_script must PASS (was FAILED pre-phase-10).
-    assert!(
-        combined.contains("test native_binary_script ... ok"),
-        "native_binary_script regressed.  Stdout:\n{combined}"
-    );
+    // Per-test FAILED check — even if the high-level count looks
+    // OK, no individual test should report FAILED status.
+    for name in [
+        "native_dir",
+        "native_binary_script",
+        "native_scripts",
+        "native_tuple_return_script",
+        "native_tuple_script",
+    ] {
+        assert!(
+            !combined.contains(&format!("test {name} ... FAILED")),
+            "{name} regressed under native — high-level test reports FAILED.  Stdout:\n{combined}"
+        );
+    }
 }
 
 /// Plan-11 regression test: P204 — tail-expression `return inner_call()`

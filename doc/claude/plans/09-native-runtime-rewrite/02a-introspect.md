@@ -1,11 +1,17 @@
 # Phase 02a — Introspection: after param adapter
 
-**Status:** OPEN
+**Status:** SUPERSEDED (2026-05-02) — phase 02 SUPERSEDED by
+plan-12 phase 05.  Plan-12 will run its own introspection cadence
+under plan-12's phase structure if needed.  Phase 05a + the
+plan-09 retrospective (08a equivalent in phase 10 step 10.6)
+absorbed the substantive lessons; 02a's specific trigger (phase
+02 DONE) is now never going to fire.
 
 **Kind:** Review (no code)
 
-**Trigger:** Phase 02 marked DONE.  This is the first checkpoint
-where simplification effectiveness can be measured.
+**Trigger** (no longer relevant): Phase 02 marked DONE.  This
+was the first checkpoint where simplification effectiveness
+could be measured.
 
 **Time budget:** 1 day max.
 

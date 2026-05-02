@@ -1,7 +1,18 @@
 # Phase 02 — Parameter adaptation
 
-**Status:** OPEN — **demoted by phase 00a (2026-05-02): no longer
-a P200 prerequisite.**  See "Status reassessment" block below.
+**Status:** SUPERSEDED (2026-05-02) — folded into
+[plan-12 phase 05](../12-codegen-simplifications/05-narrow-int-cast-split.md).
+
+Phase 02's main scope (split `narrow_int_cast`'s dual role) is
+preserved verbatim in plan-12 phase 05.  Phase 02 was demoted by
+plan-09 phase 00a as a P200 prerequisite (P200's actual fix
+landed via phase 10 step 10.3's `IntCompareEmitter`, which
+didn't need the split); the residual simplification value remains
+and moves to plan-12 to ship as a post-plan-09 follow-up.
+
+The "Status reassessment" block below + the original phase 02
+plan body are kept as historical context.  Plan-12 phase 05 is
+the active home for this work.
 
 **Kind:** Simplification (formerly: "prerequisite for phase 05 +
 phase 08").  Phase 00a's introspection found that phase 05's

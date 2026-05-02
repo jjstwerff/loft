@@ -1,16 +1,16 @@
 # Phase 10 — Final closure
 
-**Status:** IN PROGRESS
+**Status:** DONE (2026-05-02) — all administrative steps closed.
 
 | Step | State |
 |---|---|
-| 10.1 — phase 05a introspection | DONE — Findings populated 2026-05-02 |
-| 10.2 — CHANGELOG entries for 06 + 07 | DONE — entries added 2026-05-02 |
-| 10.3 — P200 read-side fix | DONE — `IntCompareEmitter` shipped 2026-05-02; 91/93 native |
-| 10.4 — phase 08 redundancy decision | DONE — phase 08 marked SUPERSEDED 2026-05-02 |
-| 10.5 — pin native baseline floor | IN PROGRESS — `native_suite_floor_holds` test added (`#[ignore]`'d, opt-in via `--ignored`); needs assertion polish before enforcing |
-| 10.6 — plan-09 retrospective (08a equivalent) | OPEN — design-only at this stage; populate after plan-11 closes P204 so retrospective covers the full arc |
-| 10.7 — directory move-to-finished | OPEN — happens at PR-open time, after plan-11 + plan-09 both DONE |
+| 10.1 — phase 05a introspection | DONE 2026-05-02 |
+| 10.2 — CHANGELOG entries for 06 + 07 | DONE 2026-05-02 |
+| 10.3 — P200 read-side fix | DONE 2026-05-02 — `IntCompareEmitter` shipped; native 91/93 |
+| 10.4 — phase 08 redundancy decision | DONE 2026-05-02 — phase 08 marked SUPERSEDED |
+| 10.5 — pin native baseline floor | DONE 2026-05-02 — `native_suite_floor_holds` polished (uses cargo `test result: 5 passed; 0 failed` line + per-test FAILED check); passes with `--ignored` |
+| 10.6 — plan-09 retrospective (08a equivalent) | DONE 2026-05-02 — `08a-introspect.md` Findings populated; covers 9 phases shipped, 5 P-issues closed (4 in plan-09 + P204 in plan-11), decision: pattern broadly successful |
+| 10.7 — directory move-to-finished | OPEN — happens at PR-open time alongside plan-11's same step |
 
 **Pace gate (2026-05-02):** the user noted implementation
 velocity was getting ahead of the planning discipline.  Steps

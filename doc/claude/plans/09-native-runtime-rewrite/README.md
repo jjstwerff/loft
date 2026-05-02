@@ -1,5 +1,38 @@
 # Plan 09 — Per-Op emitter dispatch
 
+**Status:** DONE (2026-05-02) — administratively closed.
+Directory move to `plans/finished/` happens at PR-open time
+alongside plan-11.
+
+## Closure summary
+
+Plan-09 + sibling plan-11 closed all 5 native-codegen P-issues:
+
+| P-issue | Closed by |
+|---|---|
+| P200 | phase 10 step 10.3 — `IntCompareEmitter` widens comparison operands |
+| P202 | phase 06 — `n_parallel_queue*` runtime + emitters |
+| P203 | phase 00 step 0.7b — let-bind-on-repeat in `DefaultTemplateEmitter` |
+| P204 | plan-11 — unspan walker fix in `detect_ref_tail_capture` |
+| P205 | phase 07 — `stores.scratch` routing for bounded-generic text returns |
+
+Native suite: 2/5 high-level + 87/93 sub-tests → **5/5 + 95/95**
+(parity with `main`).
+
+9 phases shipped (00, 00a, 01, 03, 04, 06, 07, 09, 10) of
+the originally-listed 14; 5 phases consolidated/superseded
+(02 + 02a → plan-12; 05 + 05a + 08 + 08a folded into phase
+10).  Plan-12 captures residual simplifications for future
+development.
+
+7 memory entries codify the patterns that worked: forwarding-
+first recipe, phase-doc trait drafts as drafts not specs,
+actual-error survey before implementing, branch-after-PR-only,
+no-EXPECT_FAIL on PR bugs, zero-regression tolerance, and
+extended CI gate guidance.  See plan-09 retrospective at
+[`08a-introspect.md`](08a-introspect.md) § Findings for the
+full closure narrative.
+
 ## Goal
 
 Add a per-Op codegen-time emitter dispatch on top of today's
@@ -104,8 +137,8 @@ between work phases at decision points.
 | 00 | [Scaffold](00-scaffold.md) | P203 (structural — let-bind-on-repeat in `DefaultEmitter`) | infra | **DONE (2026-05-02)** |
 | 00a | [Introspection: after scaffold](00a-introspect.md) | — | introspection | **DONE (2026-05-02)** |
 | 01 | [ABI consolidation](01-abi-consolidation.md) | — (deletes `LEGACY_STORES_FNS` hardcoded list) | simplification | **DONE (2026-05-02)** |
-| 02 | [Param adapter](02-param-adapter.md) | — (splits param-narrowing role of `narrow_int_cast`) | simplification | OPEN — **demoted by 00a (no longer P200 prereq)** |
-| 02a | [Introspection: after param adapter](02a-introspect.md) | — | introspection | OPEN |
+| 02 | [Param adapter](02-param-adapter.md) | — (splits param-narrowing role of `narrow_int_cast`) | simplification | **SUPERSEDED by [plan-12 phase 05](../12-codegen-simplifications/05-narrow-int-cast-split.md)** |
+| 02a | [Introspection: after param adapter](02a-introspect.md) | — | introspection | **SUPERSEDED** (02 superseded; trigger never fires) |
 | 03 | [Parallel-for emitter](03-parallel-emitter.md) | — (collapsed 95-line `dispatch.rs:850-944`) — **prerequisite for P202** | simplification | **DONE (2026-05-02)** |
 | 04 | [Key-keyed Op emitter](04-key-ops.md) | — (consolidates `OpGetRecord` / `OpIterate`) | simplification | **DONE (2026-05-02)** |
 | 09 | [Parallel runtime consolidation](09-parallel-runtime-consolidation.md) | — (collapses 3 near-duplicate `n_parallel_for_*_native` fns into one generic core; **must land before phase 06**) | simplification | **DONE (2026-05-02)** |
@@ -115,7 +148,7 @@ between work phases at decision points.
 | 07 | [Generic text emitter](07-generics.md) | P205 | bug fix | **DONE (2026-05-02)** |
 | 08 | [Binary read emitter](08-binary.md) | P200 (read side, full closure) | bug fix | **SUPERSEDED by phase 10 step 10.3** (one fix closed read + write) |
 | 08a | [Retrospective](08a-introspect.md) | — | introspection | **superseded by phase 10 step 10.6** |
-| 10 | [Final closure](10-final-closure.md) | **P200** + plan-09 close-out | bug fix + admin | IN PROGRESS — 5/7 steps DONE (10.1-10.4 + 10.5-scaffold); 10.5 polish + 10.6 retrospective + 10.7 directory move OPEN |
+| 10 | [Final closure](10-final-closure.md) | **P200** + plan-09 close-out | bug fix + admin | **DONE (2026-05-02)** — 6/7 steps DONE; 10.7 directory move at PR-open time |
 
 Status legend: OPEN → IN PROGRESS → DONE.
 
