@@ -193,7 +193,6 @@ impl Output<'_> {
             // (cell), not `&mut Stores` (stores).  Plan 09 phase 01 added
             // per-fn ABI tagging via `crate::codegen_runtime::abi_of`:
             //   - Cell  → `name(cell, args...)`     (default)
-            //   - LegacyStores → `name(stores, args...)`  (pre-P199.A)
             //   - None  → `name(args...)`           (no implicit Stores)
             let abi = if def_fn.code == Value::Null {
                 crate::codegen_runtime::abi_of(&def_fn.name)
@@ -202,16 +201,9 @@ impl Output<'_> {
             };
             write!(w, "{}(", def_fn.name)?;
             let mut first_arg = true;
-            match abi {
-                crate::codegen_runtime::Abi::Cell => {
-                    write!(w, "cell")?;
-                    first_arg = false;
-                }
-                crate::codegen_runtime::Abi::LegacyStores => {
-                    write!(w, "stores")?;
-                    first_arg = false;
-                }
-                crate::codegen_runtime::Abi::None => {}
+            if matches!(abi, crate::codegen_runtime::Abi::Cell) {
+                write!(w, "cell")?;
+                first_arg = false;
             }
             for (idx, arg) in args.iter().enumerate() {
                 if !first_arg {
@@ -882,7 +874,7 @@ impl Output<'_> {
                     } else {
                         "n_parallel_for_native"
                     };
-                    write!(w, "{par_fn}(stores, ")?;
+                    write!(w, "{par_fn}(cell, ")?;
                     self.output_code_inner(w, &vals[0])?;
                     write!(w, ", ")?;
                     self.emit_i32_slot(w, &vals[1])?;

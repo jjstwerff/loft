@@ -29,28 +29,22 @@ use crate::tree;
 /// ABI of a runtime helper function defined in this module.
 ///
 /// `Cell`: takes `cell: &UnsafeCell<Stores>` and derives a `&mut Stores`
-/// at entry (the post-P199.A ABI used by all new runtime fns that need
+/// at entry (the post-P199.A ABI used by all runtime fns that need
 /// store access).
-///
-/// `LegacyStores`: takes `stores: &mut Stores` directly.  Pre-P199.A
-/// helpers that haven't been migrated yet.  Their call sites in
-/// generated code emit `stores` (the local binding derived from `cell`)
-/// instead of `cell` itself.
 ///
 /// `None`: takes no implicit Stores parameter at all.  For pure helpers
 /// whose body never touches `Stores` (e.g. clock reads, constant
 /// returns, thread-local RNG access).  The codegen emits `fn_name(args)`
-/// with no leading `cell` / `stores` argument.  This is strictly better
-/// than `Cell` for these fns: zero unused parameter, zero borrow churn.
+/// with no leading `cell` argument.  Strictly better than `Cell` for
+/// these fns: zero unused parameter, zero borrow churn.
 ///
-/// Phase 01 migrates `LegacyStores` entries to `Cell` (when they need
-/// stores) or `None` (when they don't), one by one.  When the
-/// `LegacyStores` count reaches zero, the variant can be removed and
-/// the `if/else` ABI selection in `output_call_user_fn` simplifies.
+/// Phase 01 retired the `LegacyStores` variant in step 1.7 — every
+/// runtime fn now uses either `Cell` or `None`.  Earlier drafts of this
+/// module had a `LegacyStores` variant for pre-P199.A `&mut Stores`
+/// helpers; phase 01 migrated all 11 entries to `Cell` (8) or `None` (3).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Abi {
     Cell,
-    LegacyStores,
     None,
 }
 
@@ -77,8 +71,9 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_set_store_lock",          abi: Abi::Cell },
     RuntimeFn { name: "n_rand",                    abi: Abi::None },
     RuntimeFn { name: "n_rand_indices",            abi: Abi::Cell },
-    RuntimeFn { name: "n_parallel_for_native",     abi: Abi::LegacyStores },
-    RuntimeFn { name: "n_parallel_for_ref_native", abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_parallel_for_native",      abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_for_text_native", abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_for_ref_native",  abi: Abi::Cell },
     RuntimeFn { name: "n_path_sep",                abi: Abi::None },
     RuntimeFn { name: "n_stack_trace",             abi: Abi::Cell },
     RuntimeFn { name: "n_hash_sorted",             abi: Abi::Cell },
@@ -1738,7 +1733,7 @@ fn finalize_par_result(
 }
 
 pub fn n_parallel_for_native<F>(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     input: DbRef,
     elem_size: i32,
     return_size: i32,
@@ -1748,6 +1743,7 @@ pub fn n_parallel_for_native<F>(
 where
     F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let return_sz = return_size.clamp(1, 8) as u32;
     let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, return_sz);
@@ -1820,7 +1816,7 @@ where
 /// accumulates `Vec<String>`; main-thread re-sequences and writes
 /// strings into the result store via `set_str` after join.
 pub fn n_parallel_for_text_native<F>(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     input: DbRef,
     elem_size: i32,
     _return_size: i32,
@@ -1830,6 +1826,7 @@ pub fn n_parallel_for_text_native<F>(
 where
     F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> String + Send + Sync,
 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, 4);
 
@@ -1920,7 +1917,7 @@ where
 /// Mirrors how `src/native.rs` wires `run_parallel_ref` for the
 /// interpreter path.
 pub fn n_parallel_for_ref_native<F>(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     input: DbRef,
     elem_size: i32,
     struct_size: i32,
@@ -1931,6 +1928,7 @@ pub fn n_parallel_for_ref_native<F>(
 where
     F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> DbRef + Send + Sync,
 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let sz = struct_size as u32;
     let kt = known_type as u16;

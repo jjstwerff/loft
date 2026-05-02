@@ -129,9 +129,14 @@ if [[ -f src/codegen_runtime.rs ]]; then
     cell_count=$(grep -c "abi: Abi::Cell" src/codegen_runtime.rs || true)
     none_count=$(grep -c "abi: Abi::None" src/codegen_runtime.rs || true)
     total=$((legacy_count + cell_count + none_count))
+    # `LegacyStores` enum variant declared?  Detects whether step 1.7
+    # cleanup has shipped (variant removed).
+    has_legacy_variant=$(grep -c "^\s*LegacyStores," src/codegen_runtime.rs || true)
     echo "  phase 01 ABI: $cell_count Cell + $none_count None + $legacy_count LegacyStores = $total runtime fns"
-    if [[ $legacy_count -eq 0 ]]; then
-        echo "  phase 01 step 1.7 cleanup is now unblocked (no LegacyStores entries)"
+    if [[ $legacy_count -eq 0 && $has_legacy_variant -eq 0 ]]; then
+        echo "  phase 01 step 1.7 DONE (LegacyStores variant retired; ABI selection collapsed)"
+    elif [[ $legacy_count -eq 0 ]]; then
+        echo "  phase 01 step 1.7 unblocked (no LegacyStores entries; variant + dispatch arm can be removed)"
     fi
 fi
 

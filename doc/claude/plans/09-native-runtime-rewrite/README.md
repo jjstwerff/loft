@@ -103,7 +103,7 @@ between work phases at decision points.
 |---|-------|--------|------|--------|
 | 00 | [Scaffold](00-scaffold.md) | P203 (structural — let-bind-on-repeat in `DefaultEmitter`) | infra | **DONE (2026-05-02)** |
 | 00a | [Introspection: after scaffold](00a-introspect.md) | — | introspection | OPEN |
-| 01 | [ABI consolidation](01-abi-consolidation.md) | — (deletes `LEGACY_STORES_FNS` hardcoded list) | simplification | OPEN |
+| 01 | [ABI consolidation](01-abi-consolidation.md) | — (deletes `LEGACY_STORES_FNS` hardcoded list) | simplification | **DONE (2026-05-02)** |
 | 02 | [Param adapter](02-param-adapter.md) | — (splits dual-role `narrow_int_cast`) — **prerequisite for P200** | simplification | OPEN |
 | 02a | [Introspection: after param adapter](02a-introspect.md) | — | introspection | OPEN |
 | 03 | [Parallel-for emitter](03-parallel-emitter.md) | — (collapses 95-line `dispatch.rs:837-930`) — **prerequisite for P202** | simplification | OPEN |

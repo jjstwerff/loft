@@ -69,7 +69,6 @@ impl Output<'_> {
         // Plan 09 phase 01 added per-fn ABI tagging via the
         // `CODEGEN_RUNTIME_FNS` registry.  `abi_of(name)` returns:
         //   - `Cell`  → emit `name(cell, args...)`     (default)
-        //   - `LegacyStores` → emit `name(stores, args...)`  (pre-P199.A)
         //   - `None`  → emit `name(args...)`           (no implicit Stores)
         let abi = if def_fn.code == Value::Null {
             crate::codegen_runtime::abi_of(&def_fn.name)
@@ -78,18 +77,9 @@ impl Output<'_> {
         };
         write!(w, "{}(", def_fn.name)?;
         let mut first_arg = true;
-        match abi {
-            crate::codegen_runtime::Abi::Cell => {
-                write!(w, "cell")?;
-                first_arg = false;
-            }
-            crate::codegen_runtime::Abi::LegacyStores => {
-                write!(w, "stores")?;
-                first_arg = false;
-            }
-            crate::codegen_runtime::Abi::None => {
-                // No implicit Stores parameter.
-            }
+        if matches!(abi, crate::codegen_runtime::Abi::Cell) {
+            write!(w, "cell")?;
+            first_arg = false;
         }
         for (idx, v) in vals.iter().enumerate() {
             if !first_arg {
