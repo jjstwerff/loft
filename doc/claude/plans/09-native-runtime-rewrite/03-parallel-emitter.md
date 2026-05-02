@@ -179,9 +179,21 @@ Plus all `tests/golden/parallel/*.rs` compile + match emission.
 Net diff target: ~95 lines deleted from `dispatch.rs`, ~120 lines
 added across `src/generation/ops/parallel.rs`.
 
-## Commit shape
+## Gate updates per step
 
-5-6 commits across the steps; ships as one PR.
+| Step | Gate update |
+|---|---|
+| 3.1 | Captures parallel goldens at `tests/golden/parallel/*.rs`. |
+| 3.2 | Helper functions extracted; byte-identical for all parallel test paths. |
+| 3.3 | `ParallelForEmitter` registered.  Gate's `custom_count` increments by 1 (or more if also covering text/ref variants).  `dispatch.rs op match arms` count drops by ~6 (the parallel special case retires). |
+| 3.4 | Documentation only. |
+| 3.5 | New structural test `no_parallel_special_case_in_dispatch`. |
+
+This phase coordinates with phase 09 (parallel runtime
+consolidation) — phase 03 cleans up the EMITTER side, phase 09
+cleans up the runtime fn side.  Phase 01 step 1.7 (cleanup) is
+unblocked once both land (the last `LegacyStores` entries are the
+`n_parallel_for_*` family).
 
 ## Problems encountered
 

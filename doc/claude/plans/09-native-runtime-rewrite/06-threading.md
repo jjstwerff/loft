@@ -193,6 +193,14 @@ cargo test --release --test issues 2>&1 | tail -3
 cargo test --release --test native -- --test-threads=1 2>&1 | grep "native result"
 ```
 
+## Gate updates per step
+
+| Step | Gate update |
+|---|---|
+| 6.4 | New `n_parallel_queue*` runtime fns added to `CODEGEN_RUNTIME_FNS`.  Gate's runtime fn count grows; ABI tags should be `Cell` (not `LegacyStores`). |
+| 6.5 | `ParallelQueueEmitter` family registered.  `custom_count` increments by ~3-4 (one per queue variant). |
+| 6.6 | New regression tests for queue / per-shape behaviour. |
+
 ## Commit shape
 
 5-6 commits across the steps; ships as one PR.

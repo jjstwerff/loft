@@ -254,6 +254,20 @@ cargo run --bin loft --release -- tests/scripts/repro_p205.loft   # exit 0
 cargo test --release --test native -- --test-threads=1 2>&1 | grep "native result"
 ```
 
+## Gate updates per step
+
+Branches by probe outcome:
+
+- **Outcome A (skip-removal clean)**: parser-only fix.  Gate's
+  emission shape changes for generic text returns — refresh
+  baseline if corpus baselines reference such paths.  No
+  `custom_count` change.
+- **Outcome B (custom emitter required)**: `OpReturnGenericText`
+  emitter registered.  `custom_count` += 1.  Baseline refresh
+  required (emission shape changes for affected sites).
+
+Both outcomes add `p205_*` regression tests.
+
 ## Commit shape
 
 3-5 commits depending on outcome:

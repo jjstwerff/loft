@@ -178,9 +178,24 @@ cargo test --release --test codegen_emitter
 cargo test --release --test issues 2>&1 | tail -3
 cargo test --release --test threading 2>&1 | tail -3
 cargo test --release --test native -- --test-threads=1 2>&1 | grep "native result"
+scripts/p09_fast_gate.sh         # legacy_count should report 0 after step 1.7
 ```
 
 Plus: `rg LEGACY_STORES_FNS src/` returns nothing.
+
+## Gate updates per step
+
+Each step should keep `scripts/p09_fast_gate.sh` accurate:
+
+| Step | Gate update |
+|---|---|
+| 1.1 | None — registry introduced.  `legacy_count = 11` initially. |
+| 1.2 | None — byte-identical refactor. |
+| 1.3 | None — byte-identical refactor. |
+| 1.4 | Adds two `tests/codegen_emitter.rs` tests (`no_hardcoded_abi_lists_remain`, `abi_of_handles_all_runtime_fns`).  `cargo test --test codegen_emitter` count goes 5 → 7. |
+| 1.5 | Migrating an unused-Stores fn to `Abi::None`: emission shape changes (no leading arg) for that fn's call sites.  If the corpus baselines reference the migrated fn, refresh via `scripts/p09_fast_gate.sh --capture`.  Gate's `legacy_count` decreases. |
+| 1.6 | Migrating a Stores-using fn to `Abi::Cell`: emission goes from `(stores,` to `(cell,`.  Gate detects this as "ABI migration shape" and prints a `--capture` hint when corpus diff is detected.  Refresh baseline; commit with the migration. |
+| 1.7 | `legacy_count` reaches 0; gate prints "phase 01 step 1.7 cleanup is now unblocked".  Cleanup deletes the `LegacyStores` enum variant + the `match abi { … }` arm; emission stays byte-identical. |
 
 ## Commit shape
 

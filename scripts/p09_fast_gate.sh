@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fast regression gate for plan 09 phase 00 work.
+# Fast regression gate for plan 09 work.
 #
 # Compares native emission for a 7-file doc corpus against a baseline
 # captured at /tmp/p09-baseline/, then runs the P-issue reproducers as
@@ -7,8 +7,14 @@
 # contract + closed-bug guards in well under 1.5 minutes — replacing the
 # 4-minute `cargo test --test issues` cycle for routine step-by-step work.
 #
+# As phases land, the gate also reports progress markers relevant to the
+# current phase (e.g. legacy-fn migration count for phase 01).  Each
+# phase doc lists the gate updates expected at that step (capture
+# refreshes, new structural assertions) — see the "Gate updates" note
+# in each phase's "Detailed steps with validation" section.
+#
 # Usage:
-#   scripts/p09_fast_gate.sh                # diff vs baseline + reproducers
+#   scripts/p09_fast_gate.sh                # diff vs baseline + reproducers + progress
 #   scripts/p09_fast_gate.sh --capture       # (re)capture baseline at HEAD
 #   scripts/p09_fast_gate.sh --full-suite    # also run full issues suite
 #
@@ -111,6 +117,62 @@ done
 if [[ $run_full -eq 1 ]]; then
     echo "[p09 gate] running full issues suite (this takes ~2.5 min)"
     cargo test --release --test issues 2>&1 | tail -3
+fi
+
+echo "[p09 gate] phase progress markers"
+
+# Phase 01 — ABI consolidation: count LegacyStores entries remaining
+# in CODEGEN_RUNTIME_FNS.  Decreases as fns migrate to Cell or None.
+# When this reaches 0, phase 01 step 1.7 (cleanup) becomes unblocked.
+if [[ -f src/codegen_runtime.rs ]]; then
+    legacy_count=$(grep -c "abi: Abi::LegacyStores" src/codegen_runtime.rs || true)
+    cell_count=$(grep -c "abi: Abi::Cell" src/codegen_runtime.rs || true)
+    none_count=$(grep -c "abi: Abi::None" src/codegen_runtime.rs || true)
+    total=$((legacy_count + cell_count + none_count))
+    echo "  phase 01 ABI: $cell_count Cell + $none_count None + $legacy_count LegacyStores = $total runtime fns"
+    if [[ $legacy_count -eq 0 ]]; then
+        echo "  phase 01 step 1.7 cleanup is now unblocked (no LegacyStores entries)"
+    fi
+fi
+
+# Phase 00 wart budget — dispatch.rs special-case Op match arm count.
+# Decreases as later phases migrate Ops into custom emitters.
+if [[ -f src/generation/dispatch.rs ]]; then
+    arms=$(awk '/fn output_call_inner/,/^    }$/' src/generation/dispatch.rs \
+        | grep -cE '^\s*"Op[A-Z][a-zA-Z]*"\s*(\|.*)?\s*=>' || true)
+    echo "  dispatch.rs op match arms: $arms (budget 26 — shrink as phases register custom emitters)"
+fi
+
+# Custom emitter registration count.  Empty during phase 00; grows as
+# phases register custom emitters (phase 05 ships the first).
+if [[ -f src/generation/ops/mod.rs ]]; then
+    # Count r.insert(...) lines inside build_registry.
+    custom_count=$(awk '/fn build_registry/,/^}/' src/generation/ops/mod.rs \
+        | grep -cE '^\s*r\.insert\(' || true)
+    echo "  custom emitters registered: $custom_count"
+fi
+
+if [[ $diff_status -ne 0 ]]; then
+    # Heuristic: if every diff file's only changes are `(stores,` →
+    # `(cell,` or `(stores)` → `(cell)` substitutions in n_* call
+    # sites, the diff is an ABI migration shape — suggest --capture.
+    abi_migration_shape=true
+    for t in "${CORPUS[@]}"; do
+        name=$(basename "$t" .loft)
+        if ! diff -q "$BASELINE_DIR/$name.rs" "$CURRENT_DIR/$name.rs" >/dev/null 2>&1; then
+            # Get the diff and check if all changed lines fit the ABI pattern.
+            diffs=$(diff "$BASELINE_DIR/$name.rs" "$CURRENT_DIR/$name.rs" | grep -E '^[<>]' || true)
+            non_abi=$(echo "$diffs" | grep -vE 'n_[a-z_]+\((stores|cell)' || true)
+            if [[ -n "$non_abi" ]]; then
+                abi_migration_shape=false
+                break
+            fi
+        fi
+    done
+    if [[ "$abi_migration_shape" == "true" ]]; then
+        echo "  [hint] diff shape looks like an ABI migration (stores↔cell only)."
+        echo "         If intentional, refresh baseline:  scripts/p09_fast_gate.sh --capture"
+    fi
 fi
 
 if [[ $diff_status -ne 0 || $repro_status -ne 0 ]]; then

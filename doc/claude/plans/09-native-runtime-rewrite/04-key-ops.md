@@ -145,9 +145,17 @@ Plus all `tests/golden/key_ops/*.rs` match emission exactly.
 Net diff target: ~85 lines deleted from `dispatch.rs`, ~110 lines
 added across `src/generation/ops/key_ops.rs`.
 
-## Commit shape
+## Gate updates per step
 
-5-6 commits across the steps; ships as one PR.
+| Step | Gate update |
+|---|---|
+| 4.1 | Captures key-op goldens at `tests/golden/key_ops/*.rs`. |
+| 4.2 | Helpers extracted; unit tests added. |
+| 4.3 | `OpGetRecordEmitter` registered.  `custom_count` += 1.  `dispatch.rs op match arms` count drops by ~1. |
+| 4.4 | `OpIterateEmitter` registered.  `custom_count` += 1.  Match arm count drops by another ~1. |
+| 4.5 | New structural test `no_key_op_special_case_in_dispatch`. |
+
+Independent of bug-fix phases — lands when convenient.
 
 ## Problems encountered
 

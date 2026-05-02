@@ -264,7 +264,15 @@ cargo test --release --test issues 2>&1 | tail -3         # 540/540
 cargo test --release --test native -- --test-threads=1 2>&1 | grep "native result"
 ```
 
-## Commit shape
+## Gate updates per step
+
+| Step | Gate update |
+|---|---|
+| 5.0 | Forwarding `OpEmitter` registered.  Gate's `custom_count` increments from 0 → 1 (the runtime smoke test).  Byte-identical baseline must stay green. |
+| 5.1 | Adds `p200_round_trip` regression test; gate's codegen_emitter test count grows. |
+| 5.2 | Adds `EmitCtx::int_width_for` / `int_signed_for` helpers; emitter unit tests added. |
+| 5.3 | Replaces step 5.0's stub body with width-aware emission.  Baseline for binary-write tests changes (intentional — width cast inline now).  Refresh baseline if corpus baselines reference `OpWriteIntFile` sites. |
+| 5.4 | PROBLEMS.md update; no gate impact. |
 
 4-5 commits across the steps (down from 6-7 after P203 was
 removed; bumped to 4-5 by step 5.0's forwarding-emitter smoke test);

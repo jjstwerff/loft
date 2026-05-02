@@ -215,6 +215,26 @@ Bug-fix phases (05-08) additionally run the regression test
 introduced by their pre-work step, which pins the prior failure
 mode.  Any regression aborts the commit.
 
+## Fast gate (every step)
+
+`scripts/p09_fast_gate.sh` (~4 seconds) is the routine step-by-step
+check between commits — it emits the doc-test corpus, diffs against
+`/tmp/p09-baseline/`, runs the P-issue reproducers, and prints
+phase-01 progress markers (legacy fn count, dispatch arm count,
+custom emitter count).
+
+**Convention**: every phase doc lists a `Gate updates per step`
+table noting:
+- Which steps refresh the baseline (`--capture`).
+- Which steps add new structural assertions to
+  `tests/codegen_emitter.rs`.
+- Which steps shift the gate's progress markers (legacy fn count,
+  dispatch arm count, etc.).
+
+The gate's progress output stays accurate as work lands because
+each phase explicitly captures its expected impact.  Phase 01's
+table is the reference shape.
+
 ## Risks
 
 | Risk | Mitigation |

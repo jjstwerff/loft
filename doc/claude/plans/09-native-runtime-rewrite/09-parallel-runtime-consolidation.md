@@ -258,6 +258,21 @@ cargo test --release --test native -- --test-threads=1 2>&1 | grep "native resul
 # (~250 lines).  Cumulative saving: ~330 lines.
 ```
 
+## Gate updates per step
+
+This phase is library-level (runtime fn bodies), not codegen.
+Emission stays byte-identical throughout — the public fn names +
+ABI tags don't change.  Gate's `legacy_count` drops from 2 → 0
+when steps 9.5 + (deferred) `n_parallel_for_*` migration ship,
+which finally unblocks phase 01 step 1.7 cleanup.
+
+| Step | Gate update |
+|---|---|
+| 9.1-9.2 | Capture parallel-runtime baselines + behavioural log. |
+| 9.3-9.5 | Refactor inside `codegen_runtime.rs`; emission unchanged. |
+| 9.5+1.6 (parallel migration) | Flip `n_parallel_for_native` / `n_parallel_for_ref_native` from `LegacyStores` → `Cell`.  `legacy_count` reaches 0; gate prints "phase 01 step 1.7 cleanup is now unblocked". |
+| 9.6 | New `parallel_runtime_consolidated` structural test. |
+
 ## Commit shape
 
 5-6 commits across the steps; ships as one PR.

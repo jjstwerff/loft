@@ -282,7 +282,23 @@ cargo test --release --test codegen_emitter::param_adaptation_does_not_route_thr
 Net diff target: ~125 lines deleted from `calls.rs`, ~150 lines
 added across `src/generation/ops/params.rs`.
 
-## Commit shape
+## Gate updates per step
+
+Phase 02 is a byte-identical refactor — emission stays matching
+the baseline throughout.  Gate impact is mostly in
+`tests/codegen_emitter.rs` additions, not corpus refreshes.
+
+| Step | Gate update |
+|---|---|
+| 2.1 | None — trait + dispatcher introduced. |
+| 2.2-2.3 | Per-adapter unit tests bump the codegen_emitter test count.  Baseline stays byte-identical (each adapter is byte-identical with the arm it replaces). |
+| 2.4 | None — loop body collapse is byte-identical. |
+| 2.5 | Adapter-ordering test added. |
+| 2.6 | `param_adaptation_does_not_route_through_narrow_int_cast` structural test added — guards phase 05's prerequisite. |
+| 2.7 | Shared `narrow_for_int` helper extracted; byte-identical. |
+
+If any step produces an unexpected baseline diff, treat it as a
+phase-02 bug (extraction wasn't faithful) — fix before proceeding.
 
 12-14 commits (one trait + ten adapters + ordering test +
 acceptance test + narrow_for_int extraction); ships as one PR.

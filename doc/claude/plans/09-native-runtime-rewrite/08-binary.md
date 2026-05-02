@@ -187,6 +187,14 @@ cargo test --release --test issues 2>&1 | tail -3
 cargo test --release --test native -- --test-threads=1 2>&1 | grep "native result"
 ```
 
+## Gate updates per step
+
+| Step | Gate update |
+|---|---|
+| 8.2 | Adds width-matrix regression tests (4 widths). |
+| 8.3 | `OpReadIntFile` emitter registered.  `custom_count` += 1.  Baseline shape changes for binary-read sites — refresh if corpus references them. |
+| 8.4 | New structural test pinning the dual-role bypass. |
+
 ## Commit shape
 
 3-4 commits across the steps; ships as one PR.
