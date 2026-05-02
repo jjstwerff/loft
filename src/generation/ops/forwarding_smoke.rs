@@ -89,11 +89,7 @@ pub const FORWARDING_OP_NAMES: &[&str] = &[
 pub struct ForwardingEmitter;
 
 impl OpEmitter for ForwardingEmitter {
-    fn emit(
-        &self,
-        ctx: &mut EmitCtx<'_, '_>,
-        args: &[Value],
-    ) -> io::Result<()> {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
         // Delegating to DefaultEmitter exercises the trait dispatch
         // without changing emission shape.  If the registry path is
         // structurally broken, this branch fails (panic, miscompile,

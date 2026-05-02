@@ -50,11 +50,7 @@ fn emit_content_array(
 pub struct OpGetRecordEmitter;
 
 impl OpEmitter for OpGetRecordEmitter {
-    fn emit(
-        &self,
-        ctx: &mut EmitCtx<'_, '_>,
-        args: &[Value],
-    ) -> io::Result<()> {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
         let (Some(Value::Int(db_tp)), Some(Value::Int(_count))) = (args.get(1), args.get(2)) else {
             // Shape didn't match the legacy `if let` guard — fall through
             // to default (matches pre-phase-04 behaviour where the
@@ -89,11 +85,7 @@ impl OpEmitter for OpGetRecordEmitter {
 pub struct OpIterateEmitter;
 
 impl OpEmitter for OpIterateEmitter {
-    fn emit(
-        &self,
-        ctx: &mut EmitCtx<'_, '_>,
-        args: &[Value],
-    ) -> io::Result<()> {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
         let Some(Value::Keys(keys)) = args.get(3) else {
             return super::default::DefaultEmitter.emit(ctx, args);
         };

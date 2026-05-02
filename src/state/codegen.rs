@@ -516,7 +516,9 @@ impl State {
             // native codegen (`src/generation/emit.rs` fn-ref dispatch);
             // bytecode codegen never produces it.
             Value::RawExpr(_) => {
-                panic!("Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen")
+                panic!(
+                    "Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen"
+                )
             }
         }
     }

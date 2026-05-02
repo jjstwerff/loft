@@ -79,11 +79,7 @@ fn helper_name(shape: ClosureShape) -> &'static str {
 pub struct ParallelForEmitter;
 
 impl OpEmitter for ParallelForEmitter {
-    fn emit(
-        &self,
-        ctx: &mut EmitCtx<'_, '_>,
-        args: &[Value],
-    ) -> io::Result<()> {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
         // Guard: the special case requires at least 5 args with vals[4]
         // a non-negative i32 (the worker fn's def_nr).  When violated,
         // fall through to the default emitter — preserves pre-phase-03
@@ -130,13 +126,12 @@ impl OpEmitter for ParallelForEmitter {
             // return_size.  Both Type::Reference and the heap-allocated
             // struct-enum (`Type::Enum(_, true, _)`) route here;
             // `heap_def_nr()` returns the def for both.
-            let (struct_size, known_type) =
-                if let Some(d_nr) = worker_ret.heap_def_nr() {
-                    let kt = ctx.output.data.def(d_nr).known_type;
-                    (i32::from(ctx.output.stores.size(kt)), i32::from(kt))
-                } else {
-                    (0, 0)
-                };
+            let (struct_size, known_type) = if let Some(d_nr) = worker_ret.heap_def_nr() {
+                let kt = ctx.output.data.def(d_nr).known_type;
+                (i32::from(ctx.output.stores.size(kt)), i32::from(kt))
+            } else {
+                (0, 0)
+            };
             write!(ctx.w, "{struct_size}, {known_type}, ")?;
         } else {
             ctx.emit_i32_slot(&args[2])?;

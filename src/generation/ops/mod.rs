@@ -51,7 +51,7 @@ pub struct EmitCtx<'a, 'b> {
     pub output: &'a mut Output<'b>,
 }
 
-impl<'a, 'b> EmitCtx<'a, 'b> {
+impl EmitCtx<'_, '_> {
     /// Convenience: emit a `Value` to `self.w`.  Equivalent to
     /// `self.output.output_code_inner(&mut *self.w, v)` but cuts the
     /// reborrow boilerplate at every emitter call site.  Phase 03
@@ -74,11 +74,7 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
 /// Trait every per-Op emitter implements.  The default emitter
 /// dispatches to `#rust` template substitution unchanged.
 pub trait OpEmitter: Send + Sync {
-    fn emit(
-        &self,
-        ctx: &mut EmitCtx<'_, '_>,
-        args: &[Value],
-    ) -> io::Result<()>;
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()>;
 }
 
 /// Dispatch entry point — every Op-emission call site routes here.
@@ -86,11 +82,7 @@ pub trait OpEmitter: Send + Sync {
 /// When `name` is registered, calls the custom emitter; otherwise falls
 /// through to `DefaultEmitter` which delegates to
 /// `Output::substitute_template_body`.
-pub fn emit_op(
-    ctx: &mut EmitCtx<'_, '_>,
-    name: &str,
-    args: &[Value],
-) -> io::Result<()> {
+pub fn emit_op(ctx: &mut EmitCtx<'_, '_>, name: &str, args: &[Value]) -> io::Result<()> {
     if let Some(emitter) = registry().get(name) {
         emitter.emit(ctx, args)
     } else {
@@ -114,9 +106,8 @@ pub fn has_custom_emitter(name: &str) -> bool {
 /// default template substitution.  Future phases populate this map by
 /// inserting boxed trait objects.
 fn registry() -> &'static std::collections::HashMap<&'static str, Box<dyn OpEmitter>> {
-    static R: std::sync::OnceLock<
-        std::collections::HashMap<&'static str, Box<dyn OpEmitter>>,
-    > = std::sync::OnceLock::new();
+    static R: std::sync::OnceLock<std::collections::HashMap<&'static str, Box<dyn OpEmitter>>> =
+        std::sync::OnceLock::new();
     R.get_or_init(build_registry)
 }
 
@@ -145,7 +136,10 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     // identically; n_parallel_for_light is a thread-count hint that
     // doesn't change emission shape).
     r.insert("n_parallel_for", Box::new(parallel::ParallelForEmitter));
-    r.insert("n_parallel_for_light", Box::new(parallel::ParallelForEmitter));
+    r.insert(
+        "n_parallel_for_light",
+        Box::new(parallel::ParallelForEmitter),
+    );
 
     // Phase 04 — key-keyed Op emitters.  Replaces ~70 lines of two
     // arms in dispatch.rs (`"OpGetRecord" =>` + `"OpIterate" =>`).
@@ -181,18 +175,14 @@ mod tests {
 
     use super::{EmitCtx, OpEmitter, has_custom_emitter, registry};
     use crate::data::Value;
-    use std::io::{self, Write};
+    use std::io;
 
     /// Minimal emitter that doesn't touch any context state.  Compiles
     /// only if the trait's method signature is satisfiable by an
     /// external impl (no hidden lifetime constraints).
     struct StubEmitter;
     impl OpEmitter for StubEmitter {
-        fn emit(
-            &self,
-            _ctx: &mut EmitCtx<'_, '_>,
-            _args: &[Value],
-        ) -> io::Result<()> {
+        fn emit(&self, _ctx: &mut EmitCtx<'_, '_>, _args: &[Value]) -> io::Result<()> {
             Ok(())
         }
     }
@@ -201,11 +191,7 @@ mod tests {
     /// access pattern works without re-borrow conflicts.
     struct WriterEmitter;
     impl OpEmitter for WriterEmitter {
-        fn emit(
-            &self,
-            ctx: &mut EmitCtx<'_, '_>,
-            _args: &[Value],
-        ) -> io::Result<()> {
+        fn emit(&self, ctx: &mut EmitCtx<'_, '_>, _args: &[Value]) -> io::Result<()> {
             write!(ctx.w, "/* writer-emitter stub */")
         }
     }
@@ -216,11 +202,7 @@ mod tests {
     /// same `&mut EmitCtx`.
     struct DefAccessEmitter;
     impl OpEmitter for DefAccessEmitter {
-        fn emit(
-            &self,
-            ctx: &mut EmitCtx<'_, '_>,
-            _args: &[Value],
-        ) -> io::Result<()> {
+        fn emit(&self, ctx: &mut EmitCtx<'_, '_>, _args: &[Value]) -> io::Result<()> {
             let name = ctx.def_fn.name.as_str();
             write!(ctx.w, "/* {name} */")
         }
@@ -231,9 +213,9 @@ mod tests {
         // If any of the three structs above don't compile, this test
         // doesn't compile.  The body just instantiates them so the
         // structs aren't dead-code-eliminated.
-        let _stub = StubEmitter;
-        let _writer = WriterEmitter;
-        let _def_access = DefAccessEmitter;
+        let _: &dyn OpEmitter = &StubEmitter;
+        let _: &dyn OpEmitter = &WriterEmitter;
+        let _: &dyn OpEmitter = &DefAccessEmitter;
     }
 
     /// Verify the registry is queryable and (currently) empty.  When a

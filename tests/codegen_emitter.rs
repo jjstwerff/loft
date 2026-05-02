@@ -51,7 +51,10 @@ fn loft_binary() -> std::path::PathBuf {
 fn baseline_present() -> bool {
     std::path::Path::new(BASELINE_DIR).exists()
         && CORPUS.iter().all(|t| {
-            let name = std::path::Path::new(t).file_stem().unwrap().to_string_lossy();
+            let name = std::path::Path::new(t)
+                .file_stem()
+                .unwrap()
+                .to_string_lossy();
             std::path::Path::new(BASELINE_DIR)
                 .join(format!("{name}.rs"))
                 .exists()
@@ -91,7 +94,10 @@ fn baseline_emission_unchanged() {
     let _ = std::fs::create_dir_all(&tmp_dir);
     let mut diffs: Vec<String> = Vec::new();
     for src in CORPUS {
-        let name = std::path::Path::new(src).file_stem().unwrap().to_string_lossy();
+        let name = std::path::Path::new(src)
+            .file_stem()
+            .unwrap()
+            .to_string_lossy();
         let out = tmp_dir.join(format!("{name}.rs"));
         emit_native(src, &out);
         let baseline = std::path::Path::new(BASELINE_DIR).join(format!("{name}.rs"));
@@ -172,8 +178,7 @@ fn let_bind_on_repeat_appears_in_emission() {
 #[test]
 fn no_hardcoded_abi_lists_remain() {
     for path in &["src/generation/calls.rs", "src/generation/dispatch.rs"] {
-        let src =
-            std::fs::read_to_string(project_root().join(path)).expect("read source file");
+        let src = std::fs::read_to_string(project_root().join(path)).expect("read source file");
         // Allow doc-comment references to the historical name; only flag
         // actual `const LEGACY_STORES_FNS` declarations.
         assert!(
@@ -397,12 +402,9 @@ const SANCTIONED_CODEGEN_VALUE_VARIANTS: &[&str] = &["RawExpr"];
 
 #[test]
 fn no_unsanctioned_codegen_value_variants() {
-    let src = std::fs::read_to_string(project_root().join("src/data.rs"))
-        .expect("read data.rs");
+    let src = std::fs::read_to_string(project_root().join("src/data.rs")).expect("read data.rs");
     // Find the Value enum body.
-    let start = src
-        .find("pub enum Value {")
-        .expect("Value enum not found");
+    let start = src.find("pub enum Value {").expect("Value enum not found");
     let end_rel = src[start..]
         .match_indices("\n}")
         .next()

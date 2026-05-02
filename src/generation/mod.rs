@@ -553,10 +553,7 @@ extern crate loft;"
         till: u32,
     ) -> std::io::Result<()> {
         Self::emit_file_header(w, self.data, self.wasm_browser)?;
-        writeln!(
-            w,
-            "fn init(cell: &std::cell::UnsafeCell<Stores>) {{"
-        )?;
+        writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
         writeln!(
             w,
             "    let db: &mut Stores = unsafe {{ &mut *cell.get() }};"
@@ -584,10 +581,7 @@ extern crate loft;"
         let reachable = reachable_functions(self.data, entry_defs);
         self.reachable.clone_from(&reachable);
         Self::emit_file_header(w, self.data, self.wasm_browser)?;
-        writeln!(
-            w,
-            "fn init(cell: &std::cell::UnsafeCell<Stores>) {{"
-        )?;
+        writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
         writeln!(
             w,
             "    let db: &mut Stores = unsafe {{ &mut *cell.get() }};"
@@ -1655,7 +1649,10 @@ extern crate loft;"
             let block_empty = bl.operators.iter().all(|v| matches!(v, Value::Line(_)));
             if block_empty && def.returned != Type::Void {
                 writeln!(w, "{{")?;
-                writeln!(w, "  let _stores: &mut Stores = unsafe {{ &mut *cell.get() }};")?;
+                writeln!(
+                    w,
+                    "  let _stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                )?;
                 writeln!(w, "  {}", default_native_value(&def.returned))?;
                 writeln!(w, "}}")?;
             } else if instrument {
@@ -1677,9 +1674,8 @@ extern crate loft;"
                 // Non-instrumented user-fn (e.g. `t_…` methods) — still
                 // needs the `&mut Stores` derivation from the UnsafeCell
                 // parameter for templates / inner calls.
-                self.call_stack_prefix = Some(
-                    "  let stores: &mut Stores = unsafe { &mut *cell.get() };".to_string(),
-                );
+                self.call_stack_prefix =
+                    Some("  let stores: &mut Stores = unsafe { &mut *cell.get() };".to_string());
                 self.output_block(w, bl, returns_text)?;
                 self.call_stack_prefix = None;
             }

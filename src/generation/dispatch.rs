@@ -63,10 +63,7 @@ impl Output<'_> {
                 )?;
                 self.indent(w)?;
             }
-            writeln!(
-                w,
-                "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);"
-            )?;
+            writeln!(w, "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);")?;
             self.indent(w)?;
             // Emit the call into a temporary, then deep-copy.
             // P198 — the inner user-fn call uses the new `cell` ABI; the
@@ -81,10 +78,7 @@ impl Output<'_> {
                     self.output_code_inner(w, arg)?;
                 }
             }
-            write!(
-                w,
-                "); OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }}"
-            )?;
+            write!(w, "); OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }}")?;
             return Ok(());
         }
         // When assigning a reference to a reference variable, a pointer copy is not
@@ -112,10 +106,7 @@ impl Output<'_> {
                 )?;
                 self.indent(w)?;
             }
-            writeln!(
-                w,
-                "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);"
-            )?;
+            writeln!(w, "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);")?;
             self.indent(w)?;
             write!(
                 w,

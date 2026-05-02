@@ -64,19 +64,20 @@ pub struct RuntimeFn {
     pub abi: Abi,
 }
 
+#[rustfmt::skip]
 pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
-    RuntimeFn { name: "n_now",                     abi: Abi::None },
-    RuntimeFn { name: "n_ticks",                   abi: Abi::Cell },
-    RuntimeFn { name: "n_get_store_lock",          abi: Abi::Cell },
-    RuntimeFn { name: "n_set_store_lock",          abi: Abi::Cell },
-    RuntimeFn { name: "n_rand",                    abi: Abi::None },
-    RuntimeFn { name: "n_rand_indices",            abi: Abi::Cell },
+    RuntimeFn { name: "n_now",                      abi: Abi::None },
+    RuntimeFn { name: "n_ticks",                    abi: Abi::Cell },
+    RuntimeFn { name: "n_get_store_lock",           abi: Abi::Cell },
+    RuntimeFn { name: "n_set_store_lock",           abi: Abi::Cell },
+    RuntimeFn { name: "n_rand",                     abi: Abi::None },
+    RuntimeFn { name: "n_rand_indices",             abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_native",      abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_text_native", abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_ref_native",  abi: Abi::Cell },
-    RuntimeFn { name: "n_path_sep",                abi: Abi::None },
-    RuntimeFn { name: "n_stack_trace",             abi: Abi::Cell },
-    RuntimeFn { name: "n_hash_sorted",             abi: Abi::Cell },
+    RuntimeFn { name: "n_path_sep",                 abi: Abi::None },
+    RuntimeFn { name: "n_stack_trace",              abi: Abi::Cell },
+    RuntimeFn { name: "n_hash_sorted",              abi: Abi::Cell },
 ];
 
 /// Look up the ABI of a runtime helper.  Returns `Abi::Cell` for
@@ -87,8 +88,7 @@ pub fn abi_of(name: &str) -> Abi {
     CODEGEN_RUNTIME_FNS
         .iter()
         .find(|f| f.name == name)
-        .map(|f| f.abi)
-        .unwrap_or(Abi::Cell)
+        .map_or(Abi::Cell, |f| f.abi)
 }
 
 /// True if `name` is a runtime helper defined in this module.  Used by
@@ -144,7 +144,12 @@ pub fn OpDatabase(cell: &std::cell::UnsafeCell<Stores>, mut db: DbRef, db_tp: i3
 /// Create a new record element inside a vector/sorted/index collection.
 /// Returns a `DbRef` pointing to the new element with default field values.
 /// Bytecode equivalent: `OpNewRecord` in `src/state/io.rs:336`.
-pub fn OpNewRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, parent_tp: i32, fld: i32) -> DbRef {
+pub fn OpNewRecord(
+    cell: &std::cell::UnsafeCell<Stores>,
+    data: DbRef,
+    parent_tp: i32,
+    fld: i32,
+) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let parent_tp = parent_tp as u16;
     let fld = fld as u16;
@@ -163,7 +168,13 @@ pub fn OpNewRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, parent_tp:
 /// Finalize a record after its fields have been assigned.
 /// For sorted/index collections this inserts the record at the correct position.
 /// Bytecode equivalent: `OpFinishRecord` in `src/state/io.rs:772`.
-pub fn OpFinishRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, record: DbRef, parent_tp: i32, fld: i32) {
+pub fn OpFinishRecord(
+    cell: &std::cell::UnsafeCell<Stores>,
+    data: DbRef,
+    record: DbRef,
+    parent_tp: i32,
+    fld: i32,
+) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.record_finish(&data, &record, parent_tp as u16, fld as u16);
 }
@@ -204,7 +215,11 @@ pub fn OpFreeRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, name: &str) {
 /// scope (adoption vs. fresh-store is a runtime choice the caller's
 /// compiler cannot resolve statically).  Bytecode equivalent:
 /// `OpFreeRefIfDistinct` in `src/fill.rs`.
-pub fn OpFreeRefIfDistinct(cell: &std::cell::UnsafeCell<Stores>, placeholder: DbRef, witness: DbRef) {
+pub fn OpFreeRefIfDistinct(
+    cell: &std::cell::UnsafeCell<Stores>,
+    placeholder: DbRef,
+    witness: DbRef,
+) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     if placeholder.store_nr != witness.store_nr {
         stores.free(&placeholder);
@@ -542,7 +557,13 @@ pub fn OpIterate(
 /// `on` and `arg` must match the corresponding `OpIterate` call.
 ///
 /// Bytecode equivalent: `State::step` in `src/state/io.rs`.
-pub fn OpStep(cell: &std::cell::UnsafeCell<Stores>, iter: &mut i64, data: DbRef, on: i32, arg: i32) -> DbRef {
+pub fn OpStep(
+    cell: &std::cell::UnsafeCell<Stores>,
+    iter: &mut i64,
+    data: DbRef,
+    on: i32,
+    arg: i32,
+) -> DbRef {
     let stores: &Stores = unsafe { &*cell.get() };
     let mut cur = (*iter as u64) as u32;
     let mut finish = ((*iter as u64) >> 32) as u32;
@@ -1212,7 +1233,12 @@ impl FileVal for DbRef {
 /// Write a value to a loft `File` record.
 /// Bytecode equivalent: `State::write_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-pub fn OpWriteFile<T: FileVal>(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, val: &mut T, db_tp: i32) {
+pub fn OpWriteFile<T: FileVal>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    file: DbRef,
+    val: &mut T,
+    db_tp: i32,
+) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return;
@@ -1251,7 +1277,13 @@ pub fn OpWriteFile<T: FileVal>(cell: &std::cell::UnsafeCell<Stores>, file: DbRef
 
 /// WASM stub: file write not available.
 #[cfg(feature = "wasm")]
-pub fn OpWriteFile<T: FileVal>(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, _val: &mut T, _db_tp: i32) {}
+pub fn OpWriteFile<T: FileVal>(
+    _cell: &std::cell::UnsafeCell<Stores>,
+    _file: DbRef,
+    _val: &mut T,
+    _db_tp: i32,
+) {
+}
 
 /// Read bytes from a loft `File` record into `val`.
 /// Bytecode equivalent: `State::read_file` in `src/state/io.rs`.
@@ -1389,7 +1421,13 @@ impl IterState for i64 {
 /// # Panics
 /// Panics if `data.store_nr == u16::MAX` (coroutine `DbRef`) — the compiler is
 /// expected to reject `e#remove` on generator iterators before this is reached.
-pub fn OpRemove<S: IterState>(cell: &std::cell::UnsafeCell<Stores>, state: &mut S, data: DbRef, on: i32, arg: i32) {
+pub fn OpRemove<S: IterState>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    state: &mut S,
+    data: DbRef,
+    on: i32,
+    arg: i32,
+) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     // Defense-in-depth: coroutine DbRefs (store_nr == u16::MAX) must not reach remove().
     // The compiler already rejects e#remove on generator iterators (CO1.5c / S24).
@@ -2008,7 +2046,7 @@ where
             // (the new ABI).  Cast `&mut ws.stores` to `&UnsafeCell<Stores>`
             // via the `repr(transparent)` layout guarantee.
             let cell: &std::cell::UnsafeCell<Stores> = unsafe {
-                &*(&mut ws.stores as *mut Stores as *const std::cell::UnsafeCell<Stores>)
+                &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>)
             };
             local.push(worker(cell, elm));
         }
@@ -2079,7 +2117,7 @@ where
             );
             // P199 — see run_native_workers_primitive comment.
             let cell: &std::cell::UnsafeCell<Stores> = unsafe {
-                &*(&mut ws.stores as *mut Stores as *const std::cell::UnsafeCell<Stores>)
+                &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>)
             };
             let s = worker(cell, elm);
             let slot_store = &mut ws.stores.allocations[slot.store_nr as usize];
@@ -2168,7 +2206,7 @@ where
                 vector::get_vector(&input_t, elem_size as u32, row_idx as i64, &ws.allocations);
             // P199 — see run_native_workers_primitive comment.
             let cell: &std::cell::UnsafeCell<Stores> = unsafe {
-                &*(&mut ws.stores as *mut Stores as *const std::cell::UnsafeCell<Stores>)
+                &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>)
             };
             let r = worker(cell, elm);
             batch.push((row_idx, r));
