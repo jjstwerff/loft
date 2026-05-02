@@ -75,6 +75,16 @@ pub fn emit_op(
     }
 }
 
+/// True when a custom emitter is registered for `name`.
+///
+/// Used by `dispatch.rs::output_call_inner` to give registered emitters
+/// priority over the special-case match arms (phase 00 step 0.6).
+/// While the registry is empty this always returns false, so the
+/// dispatch falls through to today's match unchanged.
+pub fn has_custom_emitter(name: &str) -> bool {
+    registry().contains_key(name)
+}
+
 /// Registry of custom emitters, keyed by Op name.
 ///
 /// Phase 00 ships an empty registry — every Op falls through to the

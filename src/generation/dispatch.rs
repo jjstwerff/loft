@@ -460,6 +460,21 @@ impl Output<'_> {
     ) -> std::io::Result<()> {
         let def_fn = self.data.def(def_nr);
         let name: &str = &def_fn.name;
+        // Phase 09 phase 00 step 0.6: registry-first dispatch.  When a
+        // custom emitter is registered for this Op, run it instead of
+        // the special-case match arms below.  Today the registry is
+        // empty so every Op falls through to the existing dispatch.
+        // Future phases register per-Op emitters that take over these
+        // emissions one Op at a time (without touching the bulk match).
+        if crate::generation::ops::has_custom_emitter(name) {
+            let name_owned = name.to_string();
+            let mut ctx = crate::generation::ops::EmitCtx {
+                w,
+                def_fn,
+                output: self,
+            };
+            return crate::generation::ops::emit_op(&mut ctx, &name_owned, vals);
+        }
         match name {
             "OpFormatInt" | "OpFormatStackInt" => {
                 return self.format_long(w, vals, name == "OpFormatStackInt");
