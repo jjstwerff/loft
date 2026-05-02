@@ -163,6 +163,37 @@ echo "After skip removal: $?"
 
 Document outcome in "Diagnosis findings" below.
 
+#### Probe attempt 1 (2026-05-02): Outcome B confirmed
+
+Removed `text_return`'s gate at `parser/control.rs:375` so it runs
+for `DefType::Generic` (the gate now applies only to
+`ref_return`/`Vector`/`Reference`/`Enum` paths).  Generic
+specialisations DID then receive `text_return`-shaped emission,
+but the dangling pattern persists:
+
+```rust
+fn t_6P205_S_p205_label(cell: &..., mut var_p205_x: DbRef) -> Str {
+    let mut var___ret_1: String =
+        t_6P205_S_p205_to_label(cell, var_p205_x).to_string();
+    return Str::new(&var___ret_1)   // ← var___ret_1 dropped at return
+}
+```
+
+`text_return`'s shape is a buffer-promotion: it expects to convert
+`-> text` returns into `-> ()` with a `&mut String` write-buffer
+parameter.  But for the bounded-generic specialisation it only
+created the `var___ret_1: String` local without changing the
+function signature — so the function still returns `Str` and the
+local dangles.
+
+Conclusion: the bug is not the skip itself; `text_return`'s
+transformation isn't complete enough for the bounded-generic case.
+Outcome B applies — proceed to step 7.5 (custom emitter).
+
+The emitter approach sidesteps `text_return` entirely by emitting
+owned `String` from the Op directly, eliminating the buffer
+indirection that `text_return` was trying to create.
+
 ### Step 7.4 — (Outcome A only) Land the 1-line parser fix
 
 **Action**: in main checkout, apply the same edit.  Add a regression
