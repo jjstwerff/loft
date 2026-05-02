@@ -114,7 +114,47 @@ fn normalise(raw: &str, case_name: &str, entry: &Path) -> String {
     s = scrub_thread_pid(&s);
     // Crate-internal source line numbers in Rust panic origins.
     s = scrub_crate_source_locations(&s);
+    // Strip Rust panic stack backtraces.  CI sets RUST_BACKTRACE=1 by
+    // default for diagnostics; locally it's usually unset.  The
+    // backtrace frames are environment-dependent (rustc internal
+    // paths, frame ordering varies by build) and aren't part of the
+    // test contract.  `run_case` already calls env_remove() but this
+    // is a defence-in-depth — even if a future code path leaks
+    // RUST_BACKTRACE, the comparison still works.
+    s = strip_stack_backtrace(&s);
     s
+}
+
+/// Remove "stack backtrace:" + everything until the next blank line.
+/// Some Rust panics include the backtrace inline before the
+/// "note: run with `RUST_BACKTRACE=1`" line.  This strip is robust
+/// to both forms.
+fn strip_stack_backtrace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut iter = s.lines().peekable();
+    while let Some(line) = iter.next() {
+        if line.trim_start().starts_with("stack backtrace:") {
+            // Skip until we hit a blank line OR the
+            // "note: run with `RUST_BACKTRACE`..." line OR end of input.
+            for skip in iter.by_ref() {
+                let t = skip.trim();
+                if t.is_empty() || t.starts_with("note: ") {
+                    out.push_str(skip);
+                    out.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    // Preserve trailing newline shape: if input had one, keep it; if
+    // not, drop the synthetic one we added.
+    if !s.ends_with('\n') && out.ends_with('\n') {
+        out.pop();
+    }
+    out
 }
 
 /// Replace `src/<path>.rs:NNN:NNN` with `src/<path>.rs:<line>:<col>`.
@@ -202,6 +242,11 @@ fn run_case(case: &Case) -> String {
         cmd.arg("--lib").arg(dir);
     }
     cmd.arg(&case.entry).current_dir(workspace_root());
+    // Strip RUST_BACKTRACE so CI runners (which set it to 1 for
+    // diagnostics) don't get a different output than local runs.
+    // The test contract is the panic message, not the backtrace
+    // frames.
+    cmd.env_remove("RUST_BACKTRACE");
     let out = cmd.output().expect("invoke loft binary");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -269,6 +314,8 @@ fn every_case_terminates_cleanly() {
             cmd.arg("--lib").arg(dir);
         }
         cmd.arg(&case.entry).current_dir(workspace_root());
+        // Same RUST_BACKTRACE strip as `run_case`.
+        cmd.env_remove("RUST_BACKTRACE");
         let out = cmd.output().expect("invoke loft binary");
         if out.status.code().is_none() {
             panic!(

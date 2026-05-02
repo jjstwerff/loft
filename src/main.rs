@@ -2048,7 +2048,13 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
     if native_mode || native_emit.is_some() {
         let end_def = p.data.definitions();
         let emit_path = match native_emit.as_deref() {
-            None => std::env::temp_dir().join("loft_native.rs"),
+            // Default `loft <file>` writes to a per-process tmp file
+            // so concurrent invocations (e.g. nextest's parallel test
+            // execution) don't race on a single shared
+            // `temp_dir/loft_native.rs`.  The PID suffix is a process-
+            // local choice; user-visible artefacts pass through
+            // `--native-emit <path>` which the user controls.
+            None => std::env::temp_dir().join(format!("loft_native_{}.rs", std::process::id())),
             Some("") => default_artifact_path(&abs_file, "rs"),
             Some(p) => std::path::PathBuf::from(p),
         };
@@ -2212,7 +2218,15 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
         let binary = if cached_binary.exists() {
             cached_binary.clone()
         } else {
-            let binary = std::env::temp_dir().join("loft_native_bin");
+            // Per-process tmp path — same rationale as the emit_path
+            // above: avoids races between concurrent `loft <file>`
+            // invocations.  The cached path (`cached_binary` above)
+            // is content-addressed (source_hash) and thus safe to
+            // share across processes; this fallback is only used
+            // when the cache miss; it doesn't need to be content-
+            // addressed but does need to be unique per process.
+            let binary =
+                std::env::temp_dir().join(format!("loft_native_bin_{}", std::process::id()));
             let mut cmd = std::process::Command::new("rustc");
             cmd.arg("--edition=2024")
                 .arg("-o")
@@ -2268,16 +2282,64 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 // detect the rand_core / cargo-cache staleness and print a
                 // clear recovery hint instead of a generic codegen-bug message.
                 let stderr_utf8 = String::from_utf8_lossy(&output.stderr);
-                if stderr_utf8.contains("E0460")
+                let crate_resolution_failure = (stderr_utf8.contains("E0460")
+                    || stderr_utf8.contains("E0463"))
                     && (stderr_utf8.contains("rand_core")
-                        || stderr_utf8.contains("possibly newer version of crate"))
-                {
+                        || stderr_utf8.contains("possibly newer version of crate")
+                        || stderr_utf8.contains("can't find crate"));
+                if crate_resolution_failure {
+                    // Print the rustc invocation + the deps directory listing
+                    // so the diagnostic shows what was actually attempted.
+                    // Surfaces the Windows latent issue + any future
+                    // platform-specific dep-resolution gaps.
+                    eprintln!("\nloft: rustc could not resolve a transitive crate dep.");
+                    eprintln!("\nrustc invocation:");
+                    let prog = cmd.get_program().to_string_lossy().to_string();
+                    eprintln!("  {prog}");
+                    for arg in cmd.get_args() {
+                        eprintln!("    {}", arg.to_string_lossy());
+                    }
+                    if let Some(deps) = native_deps_dir.as_ref() {
+                        eprintln!("\nDeps directory: {}", deps.display());
+                        match std::fs::read_dir(deps) {
+                            Ok(rd) => {
+                                let mut entries: Vec<_> = rd
+                                    .flatten()
+                                    .filter_map(|e| {
+                                        let n = e.file_name().to_string_lossy().to_string();
+                                        let is_rlib = std::path::Path::new(&n)
+                                            .extension()
+                                            .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"));
+                                        if n.contains("rand") || n.contains("loft") || is_rlib {
+                                            Some(n)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                entries.sort();
+                                if entries.is_empty() {
+                                    eprintln!("  (no rlibs found in deps directory)");
+                                } else {
+                                    for n in entries.iter().take(40) {
+                                        eprintln!("  {n}");
+                                    }
+                                    if entries.len() > 40 {
+                                        eprintln!("  ... ({} more)", entries.len() - 40);
+                                    }
+                                }
+                            }
+                            Err(e) => eprintln!("  (cannot read deps directory: {e})"),
+                        }
+                    } else {
+                        eprintln!(
+                            "\nNo deps directory was passed to rustc — `loft_lib_dir()` returned None."
+                        );
+                    }
                     eprintln!(
-                        "\nloft: native compilation failed because the cached `libloft.rlib` \
-                         references a different dependency version than the one now in \
-                         `target/release/deps/`.\n\n\
-                         This happens when `cargo build --bin loft` rebuilt the binary but \
-                         left the library (`--lib`) stale.\n\n\
+                        "\nMost likely cause: cached `libloft.rlib` references a different \
+                         dependency version than the one now in `target/release/deps/`, \
+                         or the deps directory is missing the named crate.\n\n\
                          Fix:  cargo build --release --lib --bin loft\n\
                          Or:   cargo clean && cargo build --release\n"
                     );
