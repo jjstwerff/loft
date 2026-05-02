@@ -154,9 +154,17 @@ pub struct Emitter;
 
 impl OpEmitter for Emitter {
     fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
-        // Use ctx.output (the &mut Output) for helpers; ctx.w for output;
-        // ctx.def_fn for the resolved Op definition.
-        write!(ctx.w, "/* custom emission for {} */", ctx.def_fn.name)
+        // ctx.w        — the writer (use `write!(ctx.w, …)` for raw text).
+        // ctx.def_fn   — the resolved Op definition.
+        // ctx.output   — back-reference to the codegen state (`Output`).
+        // Prefer ctx.emit(value) over ctx.output.output_code_inner(…)
+        // — it forwards to the same method but cuts the reborrow noise
+        // (`&mut *ctx.w`).  Same for ctx.emit_i32_slot(value).
+        write!(ctx.w, "ops::my_helper(cell, ")?;
+        ctx.emit(&args[0])?;
+        write!(ctx.w, ", ")?;
+        ctx.emit_i32_slot(&args[1])?;
+        write!(ctx.w, ")")
     }
 }
 

@@ -50,6 +50,26 @@ pub struct EmitCtx<'a, 'b> {
     pub output: &'a mut Output<'b>,
 }
 
+impl<'a, 'b> EmitCtx<'a, 'b> {
+    /// Convenience: emit a `Value` to `self.w`.  Equivalent to
+    /// `self.output.output_code_inner(&mut *self.w, v)` but cuts the
+    /// reborrow boilerplate at every emitter call site.  Phase 03
+    /// learned that real emitters call this pattern many times per
+    /// `emit()` body — the wrapper makes those call sites readable.
+    pub fn emit(&mut self, v: &Value) -> io::Result<()> {
+        self.output.output_code_inner(&mut *self.w, v)
+    }
+
+    /// Convenience: emit a `Value` as an i32-typed slot.  Used when
+    /// the call-site context expects i32 (tp-numbers, field offsets,
+    /// flag-enum slots) and the runtime helper signature is fixed at
+    /// i32.  Equivalent to
+    /// `self.output.emit_i32_slot(&mut *self.w, v)`.
+    pub fn emit_i32_slot(&mut self, v: &Value) -> io::Result<()> {
+        self.output.emit_i32_slot(&mut *self.w, v)
+    }
+}
+
 /// Trait every per-Op emitter implements.  The default emitter
 /// dispatches to `#rust` template substitution unchanged.
 pub trait OpEmitter: Send + Sync {

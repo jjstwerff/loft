@@ -112,18 +112,18 @@ impl OpEmitter for ParallelForEmitter {
         // (and not re-evaluated) inside the closure.  Each binding
         // wraps the rest of the emission in a `{ … }` block; the
         // matching `}` characters are emitted at the end.
-        for (i, arg) in args.iter().enumerate().skip(5).take(n_extra) {
-            write!(ctx.w, "{{ let _ex{} = ", i - 5)?;
-            ctx.output.output_code_inner(&mut *ctx.w, arg)?;
+        for i in 0..n_extra {
+            write!(ctx.w, "{{ let _ex{i} = ")?;
+            ctx.emit(&args[5 + i])?;
             write!(ctx.w, "; ")?;
         }
 
         // Helper call: `name(cell, input, elem_size, …, threads`
         let par_fn = helper_name(shape);
         write!(ctx.w, "{par_fn}(cell, ")?;
-        ctx.output.output_code_inner(&mut *ctx.w, &args[0])?;
+        ctx.emit(&args[0])?;
         write!(ctx.w, ", ")?;
-        ctx.output.emit_i32_slot(&mut *ctx.w, &args[1])?;
+        ctx.emit_i32_slot(&args[1])?;
         write!(ctx.w, ", ")?;
         if shape == ClosureShape::HeapRef {
             // Ref mode: emit struct_size and known_type instead of
@@ -139,10 +139,10 @@ impl OpEmitter for ParallelForEmitter {
                 };
             write!(ctx.w, "{struct_size}, {known_type}, ")?;
         } else {
-            ctx.output.emit_i32_slot(&mut *ctx.w, &args[2])?;
+            ctx.emit_i32_slot(&args[2])?;
             write!(ctx.w, ", ")?;
         }
-        ctx.output.emit_i32_slot(&mut *ctx.w, &args[3])?;
+        ctx.emit_i32_slot(&args[3])?;
 
         // Closure args: `, _ex0, _ex1, …` appended after `elm`.
         let extras = {

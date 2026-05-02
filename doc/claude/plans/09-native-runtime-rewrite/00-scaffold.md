@@ -503,29 +503,30 @@ evaluation against the broader plan-09 goals:
 
 ### Three weak spots before the first real custom emitter (phase 05+)
 
-1. **The trait has never run a real custom emitter.**  The empty
-   registry means every `emit_op` call falls through to
-   `DefaultEmitter`.  Phase 05's first custom emitter will be the
-   real test of:
-   - Whether `ctx.output.generate_expr_buf(value)` can be called
-     from inside `OpEmitter::emit` without lifetime conflicts.
-   - Whether emitters need helpers beyond what `EmitCtx` exposes
-     (field width, ref flavour, generic bindings, …).
-   - Whether the trait's `io::Result<()>` return type suffices, or
-     emitters need to surface emission-type info to the caller.
+1. **The trait has never run a real custom emitter.** ✅ **CLOSED by phase 03 (2026-05-02).**
 
-   **Compile-time covered (commit `f7ea1a8`)**: three smoke tests in
-   `src/generation/ops::tests` confirm the trait can be impl'd
-   externally, `EmitCtx` fields are accessible, and split-borrows
-   between `ctx.output` and `ctx.w` work.
+   `ParallelForEmitter` (in `src/generation/ops/parallel.rs`) is the
+   first registered custom emitter that absorbs non-trivial logic —
+   95 lines of closure-shape selection, helper-name picking, extra-
+   arg let bindings, and 4-way return-type-specific closure synthesis.
+   It runs in 5 emission sites in 22-threading.rs with byte-identical
+   output and proves end-to-end:
+   - `ctx.output.<method>(&mut *ctx.w, value)` reborrow chain works.
+   - Field access through `ctx.output.data.def(d_nr)` and
+     `ctx.output.stores.size(kt)` works.
+   - The trait's `io::Result<()>` return suffices.
 
-   **Runtime portion deferred to phase 05 step 5.0**: a
-   forwarding-emitter first commit (no-op `OpEmitter` for
-   `OpWriteIntFile` that just calls `DefaultEmitter::emit`)
-   proves the dispatch fires AND that the emitter can construct/use
-   `EmitCtx` from inside its body.  That commit's byte-identical
-   baseline gate is the runtime smoke test; cost is ~15 lines and
-   ~2 minutes wall time.  See `05-file.md` step 5.0.
+   Phase 03 also surfaced an ergonomic friction: every emitter call
+   site spelled out `ctx.output.output_code_inner(&mut *ctx.w, v)`
+   verbosely.  Two convenience methods `EmitCtx::emit(v)` and
+   `EmitCtx::emit_i32_slot(v)` were added (commit `<emit-helper-commit>`)
+   to halve the noise; `parallel.rs` migrated to use them as the
+   shape-validation point.
+
+   The forwarding-first recipe (registered for 9 non-special Ops in
+   commit `6a78d3a`) covers the trivial half; phase 03's real
+   emitter covers the non-trivial half.  No remaining open question
+   about whether the abstraction works in production.
 
 2. **`Value::RawExpr` is a wart.**  Step 0.7 added an IR variant
    that has no parser source and no runtime semantics — pure
