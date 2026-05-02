@@ -914,13 +914,14 @@ impl Output<'_> {
                     // backing String lives as long as `stores` does.
                     // Note: text_return doesn't set the `hidden` flag (only
                     // ref_return does), so we don't filter on `a.hidden`.
-                    let needs_p205_scratch = wrap_result && {
-                        let def = self.data.def(self.def_nr);
-                        matches!(def.returned, Type::Text(_))
+                    let needs_p205_scratch = wrap_result
+                        && {
+                            let def = self.data.def(self.def_nr);
+                            matches!(def.returned, Type::Text(_))
                             && !def.attributes.iter().any(|a| {
                                 matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
                             })
-                    };
+                        };
                     if is_tail_capture_call {
                         write!(w, "let __native_tail_ret: DbRef = ")?;
                     } else if needs_p205_scratch {
