@@ -1,0 +1,80 @@
+name: Bug report
+description: Something the loft compiler, interpreter, or runtime got wrong.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.  A small repro is
+        worth far more than a description — the smaller the program
+        that reproduces the problem, the faster the fix.
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproducer
+      description: A `.loft` program (or shell command) that triggers the bug.  Inline if short, otherwise a gist / paste link.
+      render: rust
+      placeholder: |
+        fn main() {
+            x = [1, 2, 3]
+            println("{x.len}")
+        }
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What you thought would happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happened.  Include the full error / panic / wrong output.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: loft version
+      description: Output of `loft --version`.  If from `git`, the commit hash.
+      placeholder: "0.8.4 (or commit abc1234)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Execution mode
+      description: Which path were you using when the bug occurred?
+      multiple: true
+      options:
+        - "--interpret (default)"
+        - "--native"
+        - "--native-debug"
+        - "browser (WASM)"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "Linux x86_64 / macOS arm64 / Windows / Firefox 124 / ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Anything else — links to related issues, screenshots, what you tried.

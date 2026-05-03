@@ -26,3 +26,27 @@
 # threshold (post-0.9.0 / 1.0.0) we can submit the PR and remove
 # this override.
 *.loft linguist-language=Rust
+
+# Mark auto-generated and vendored content so it doesn't skew the
+# repository's language-statistics bar at the top of the GitHub page.
+# `linguist-generated=true` excludes from stats AND collapses by
+# default in PR diffs (good for noisy generated content); `linguist-
+# documentation=true` excludes from stats but keeps searchable.
+
+# Auto-generated test artefacts
+tests/dumps/**       linguist-generated=true
+tests/generated/**   linguist-generated=true
+
+# Lock files
+*.lock               linguist-generated=true
+
+# wasm-pack build output checked in for GitHub Pages deploy
+doc/pkg/**           linguist-generated=true
+
+# Documentation
+doc/**.md            linguist-documentation=true
+*.md                 linguist-documentation=true
+
+# JSON / YAML grammar files are tooling, not application content
+syntaxes/**.json     linguist-detectable=false
+editors/**.json      linguist-detectable=false
