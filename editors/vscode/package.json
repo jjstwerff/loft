@@ -1,7 +1,7 @@
 {
   "name": "loft",
   "displayName": "Loft Language",
-  "description": "Syntax highlighting and snippets for the Loft programming language.",
+  "description": "Syntax highlighting, snippets, and one-click run for the Loft programming language.",
   "version": "0.1.0",
   "publisher": "loft-lang",
   "license": "LGPL-3.0-or-later",
@@ -26,6 +26,20 @@
   "bugs": {
     "url": "https://github.com/jjstwerff/loft/issues"
   },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:loft"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -p . --watch",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  },
   "contributes": {
     "languages": [
       {
@@ -47,6 +61,86 @@
         "language": "loft",
         "path": "./snippets/loft.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "loft.runFile",
+        "title": "Run Loft File",
+        "category": "Loft",
+        "icon": "$(play)"
+      },
+      {
+        "command": "loft.runFileNative",
+        "title": "Run Loft File (Native)",
+        "category": "Loft",
+        "icon": "$(rocket)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "loft.runFile",
+          "when": "resourceLangId == loft",
+          "group": "navigation@1"
+        },
+        {
+          "command": "loft.runFileNative",
+          "when": "resourceLangId == loft",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "loft.runFile",
+          "when": "resourceLangId == loft",
+          "group": "loft@1"
+        },
+        {
+          "command": "loft.runFileNative",
+          "when": "resourceLangId == loft",
+          "group": "loft@2"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "loft.runFile",
+          "when": "resourceLangId == loft",
+          "group": "loft@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "loft.runFile",
+          "when": "resourceLangId == loft"
+        },
+        {
+          "command": "loft.runFileNative",
+          "when": "resourceLangId == loft"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "loft.runFile",
+        "key": "f5",
+        "when": "editorLangId == loft && !inDebugMode"
+      },
+      {
+        "command": "loft.runFileNative",
+        "key": "ctrl+f5",
+        "mac": "cmd+f5",
+        "when": "editorLangId == loft"
+      }
+    ],
+    "configuration": {
+      "title": "Loft",
+      "properties": {
+        "loft.binaryPath": {
+          "type": "string",
+          "default": "loft",
+          "description": "Path to the `loft` binary.  Default `loft` resolves via $PATH; set to an absolute path (e.g. `/home/me/workspace/loft/target/release/loft`) to pin a specific build."
+        }
+      }
+    }
   }
 }

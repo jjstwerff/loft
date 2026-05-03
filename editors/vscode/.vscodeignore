@@ -7,10 +7,21 @@
 #   language-configuration.json
 #   syntaxes/loft.tmLanguage.json   (resolved through the symlink)
 #   snippets/loft.json
+#   out/extension.js                (TypeScript-compiled command handlers)
+#   out/extension.js.map            (source map for stack traces)
 #   README.md
 #   LICENSE                         (resolved through the symlink)
 #
 # Anything not in that list should be excluded here.
+
+# TypeScript sources + build config — only the compiled `out/` ships.
+src/
+tsconfig.json
+package-lock.json
+
+# Test scaffolding (not used today; defensive for future).
+**/*.test.js
+**/*.test.js.map
 
 # Local + editor config that has no business in a published .vsix.
 .vscode/
