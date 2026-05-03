@@ -168,30 +168,50 @@ when you're done.
 
 ### Sublime Text (alternative SH.1 cross-editor check)
 
-Skip if you don't have Sublime.  Other TextMate-aware editors
-(IntelliJ TextMate import, Atom, BBEdit) work analogously.
+Skip if you don't have Sublime.  **Caveat: not as one-step as VS
+Code.**  Sublime Text 4 reads `.sublime-syntax` (YAML, Sublime's
+native format) or `.tmLanguage` (Apple plist XML, legacy
+TextMate format).  Our `syntaxes/loft.tmLanguage.json` is **JSON**
+TextMate format — VS Code-compatible but not directly Sublime-
+parseable.  One conversion step is needed.
 
-**Install:** <https://www.sublimetext.com/download>.
+**Install Sublime:** <https://www.sublimetext.com/download>.
 
-**UI walkthrough:**
+**UI walkthrough (with conversion):**
 
-1. Open Sublime Text.
-2. **`Tools` menu** (top menu bar) → **`Developer`** submenu →
-   **`New Syntax...`**.  A new editor tab opens with a YAML
-   template.
-3. **Replace the entire template** with the contents of
-   `syntaxes/loft.tmLanguage.json` (Sublime accepts both YAML
-   and JSON `.tmLanguage` formats).
-4. **Save** with `Ctrl/Cmd+S`.  Sublime opens its file picker
-   in `~/.config/sublime-text/Packages/User/` (Linux) or
-   `~/Library/Application Support/Sublime Text/Packages/User/`
-   (macOS) by default.  Save as `Loft.sublime-syntax` (or any
-   filename — the contents register the syntax).
-5. **Open any `.loft` file** (`File > Open...` or
-   `Ctrl/Cmd+O`).  Sublime detects the `.loft` extension and
-   applies the new syntax automatically.  If colouring is
-   absent, click the bottom-right language indicator and pick
-   `Loft` from the list.
+1. **Install Package Control** (one-time): in Sublime, menu
+   `Tools > Install Package Control...`.  Wait for the
+   "successfully installed" notification.
+2. **Install PackageDev**: `Ctrl/Cmd+Shift+P` → type `Package
+   Control: Install Package` → Enter → type `PackageDev` →
+   Enter.  Wait for install (~5 seconds).
+3. **Find the Packages folder**: menu `Preferences > Browse
+   Packages...`.  Your file manager opens at the Sublime
+   `Packages/` directory.  Per-OS canonical path:
+   - **Linux:** `~/.config/sublime-text/Packages/`
+   - **macOS:** `~/Library/Application Support/Sublime Text/Packages/`
+   - **Windows:** `%APPDATA%\Sublime Text\Packages\`
+4. **Make a `User/Loft/` subfolder** (or just use `User/`
+   directly — a subfolder keeps room for future loft-related
+   add-ons like snippets).
+5. **Copy `syntaxes/loft.tmLanguage.json`** from the loft repo
+   into that folder.  Rename to `Loft.tmLanguage` (drop the
+   `.json` suffix).
+6. **Open the file in Sublime**.  Sublime should syntax-highlight
+   it as JSON.  Menu `Tools > PackageDev > Convert > tmLanguage
+   to sublime-syntax`.  Produces a `Loft.sublime-syntax` file
+   in the same directory.
+7. **Open any `.loft` file** (`File > Open...` or `Ctrl/Cmd+O`).
+   Sublime should auto-detect via the `fileTypes: ["loft"]`
+   entry and apply Loft syntax.  If not, click the bottom-right
+   language indicator and pick `Loft` from the dropdown.
+
+**Alternatively, skip Sublime for 0.8.5.**  VS Code is the
+canonical 0.8.5 deliverable; the Sublime path is a quality-gate
+fallback for confirming the grammar's scope names are vendor-
+neutral, not a primary user surface.  We can ship a YAML
+`.sublime-syntax` companion file as a 0.8.6 follow-up if
+adoption signals demand.
 
 ### IntelliJ-family IDEs (PyCharm, IDEA, WebStorm, CLion, …)
 
