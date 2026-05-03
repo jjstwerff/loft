@@ -11,20 +11,17 @@
 // file is active, and as default keybindings (F5 for run, Ctrl+F5 for
 // run-native) gated to .loft files so they don't clash with other
 // languages' debug shortcuts.
+//
+// The terminal is launched with `shellPath` + `shellArgs` so VS Code
+// executes the loft binary directly via `execve` — no shell parsing,
+// no quoting concerns.  The trade-off is that each run replaces the
+// previous "Loft" terminal (dispose + recreate); cross-run scroll-
+// back is lost, but per-run scroll within the active terminal works
+// normally.  This avoids the shell-injection class of bugs entirely
+// (CodeQL `js/incomplete-sanitization` flagged the prior `sendText`
+// + manual quote approach for not escaping backslashes on Windows).
 
 import * as vscode from "vscode";
-
-/// Reuse a single terminal named "Loft" across runs so the user
-/// doesn't accumulate stale terminal tabs.  The first invocation
-/// creates it; subsequent invocations reuse it (and clear it if the
-/// user prefers via the setting).
-function getLoftTerminal(): vscode.Terminal {
-  const existing = vscode.window.terminals.find((t) => t.name === "Loft");
-  if (existing) {
-    return existing;
-  }
-  return vscode.window.createTerminal("Loft");
-}
 
 /// Build the path argument for the `loft` invocation.  Uses the
 /// active editor's URI; if no editor is active or the file is
@@ -73,22 +70,22 @@ async function saveAndRun(extraArgs: string[]): Promise<void> {
   if (editor.document.isDirty) {
     await editor.document.save();
   }
-  const term = getLoftTerminal();
-  const argv = [loftBinary(), ...extraArgs, quoteArg(file)].join(" ");
-  term.show(true);
-  term.sendText(argv);
-}
 
-/// Quote a path so it survives the shell.  Handles spaces and the
-/// usual special characters by wrapping in single quotes (POSIX) or
-/// double quotes (Windows cmd.exe; PowerShell handles both).  This
-/// is intentionally simple — `loft` paths in practice rarely contain
-/// shell metacharacters; the wrap is defensive.
-function quoteArg(arg: string): string {
-  if (process.platform === "win32") {
-    return `"${arg.replace(/"/g, '\\"')}"`;
+  // Dispose any existing Loft terminal so we don't accumulate
+  // stale tabs across runs.  Each run gets a fresh terminal
+  // launched directly via `execve(loftBin, args)`; no shell
+  // parsing, no quoting, no injection class of bugs.
+  for (const term of vscode.window.terminals) {
+    if (term.name === "Loft") {
+      term.dispose();
+    }
   }
-  return `'${arg.replace(/'/g, "'\\''")}'`;
+  const term = vscode.window.createTerminal({
+    name: "Loft",
+    shellPath: loftBinary(),
+    shellArgs: [...extraArgs, file],
+  });
+  term.show(true);
 }
 
 export function activate(context: vscode.ExtensionContext) {
