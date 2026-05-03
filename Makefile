@@ -264,7 +264,7 @@ gallery:
 	}
 	@echo "  [4/7] checking required gallery files ..."
 	@missing=0; \
-	for f in doc/gallery.html doc/gallery-examples.js doc/loft-gl.js \
+	for f in doc/gallery.html doc/gallery-run.html doc/gallery-examples.js doc/loft-gl.js \
 	         doc/pkg/loft.js doc/pkg/loft_bg.wasm doc/pkg/loft.d.ts; do \
 		if [ ! -s "$$f" ]; then \
 			echo "    FAIL: $$f is missing or empty"; \
@@ -293,7 +293,7 @@ gallery:
 		if curl -s -o /dev/null "http://127.0.0.1:$$port/gallery.html"; then break; fi; \
 	done; \
 	failed=0; \
-	for path in /gallery.html /gallery-examples.js /loft-gl.js \
+	for path in /gallery.html /gallery-run.html /gallery-examples.js /loft-gl.js \
 	            /pkg/loft.js /pkg/loft_bg.wasm /pkg/loft.d.ts; do \
 		code=$$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$$port$$path"); \
 		if [ "$$code" != "200" ]; then \

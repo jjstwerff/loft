@@ -1,7 +1,10 @@
 
 # loft — build small games, share a link, anyone plays
 
-[![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-blue.svg)](LICENSE)
+[![CI](https://github.com/jjstwerff/loft/actions/workflows/ci.yml/badge.svg)](https://github.com/jjstwerff/loft/actions/workflows/ci.yml)
+[![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.8.4-blue.svg)](https://github.com/jjstwerff/loft/releases)
+[![Gallery](https://img.shields.io/badge/gallery-live-brightgreen)](https://jjstwerff.github.io/loft/gallery.html)
 
 [**▶ Try it in the browser**](https://jjstwerff.github.io/loft/playground.html) · [**🎮 Play Brick Buster**](https://jjstwerff.github.io/loft/brick-buster.html) · [**🖼 Graphics gallery**](https://jjstwerff.github.io/loft/gallery.html) · [**📘 Docs**](https://jjstwerff.github.io/loft/)
 

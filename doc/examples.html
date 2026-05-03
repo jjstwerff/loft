@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft Examples</title>
+<style>
+:root {
+  --bg: #1e1e2e;
+  --panel: #181825;
+  --surface: #11111b;
+  --border: #313244;
+  --text: #cdd6f4;
+  --subtext: #6c7086;
+  --accent: #89b4fa;
+  --green: #a6e3a1;
+  --mauve: #cba6f7;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+header h1 {
+  font-size: 18px;
+  color: var(--accent);
+  font-weight: 600;
+}
+.crumbs {
+  font-size: 13px;
+  color: var(--subtext);
+}
+.crumbs strong { color: var(--text); font-weight: 600; }
+nav {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+nav a {
+  color: var(--subtext);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.12s, color 0.12s;
+}
+nav a:hover { background: var(--surface); color: var(--text); }
+nav a.current { background: var(--surface); color: var(--accent); }
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 20px 40px;
+}
+.intro {
+  margin-bottom: 24px;
+  font-size: 15px;
+  color: var(--subtext);
+  line-height: 1.6;
+  max-width: 680px;
+}
+.intro strong { color: var(--text); font-weight: 600; }
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.card-body {
+  flex: 1;
+  padding: 16px 18px 12px;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+.card-body h3 {
+  font-size: 16px;
+  color: var(--accent);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.card-body .desc {
+  font-size: 13px;
+  color: var(--subtext);
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  line-clamp: 4;
+  overflow: hidden;
+}
+.card-actions {
+  display: flex;
+  gap: 1px;
+  background: var(--border);
+  border-top: 1px solid var(--border);
+}
+.card-action {
+  flex: 1;
+  text-align: center;
+  padding: 8px 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  background: var(--panel);
+  transition: background 0.12s, color 0.12s;
+}
+.card-action.open { color: var(--text); }
+.card-action.open:hover { background: var(--surface); color: var(--accent); }
+.card-action.run { color: var(--green); }
+.card-action.run:hover { background: var(--surface); }
+footer {
+  text-align: center;
+  padding: 20px;
+  color: var(--subtext);
+  font-size: 12px;
+}
+footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Loft</h1>
+  <div class="crumbs"><strong>Examples</strong> — friendly tour</div>
+  <nav>
+    <a href="examples.html" class="current">Examples</a>
+    <a href="docs.html">Documentation</a>
+    <a href="playground.html">Playground</a>
+  </nav>
+</header>
+
+<main>
+  <p class="intro">
+    Self-contained <strong>.loft</strong> programs you can read in
+    a minute and run in the browser.  Click <strong>Open</strong> to
+    load the source into the playground, or <strong>▶ Run</strong> to
+    load and execute it immediately.
+  </p>
+  <div class="card-grid" id="grid"></div>
+</main>
+
+<footer>
+  <a href="https://github.com/jjstwerff/loft">GitHub</a>
+  ·
+  <a href="https://jjstwerff.github.io/loft/">Documentation</a>
+  ·
+  <a href="https://jjstwerff.github.io/loft/gallery.html">Graphics gallery</a>
+</footer>
+
+<script type="module">
+import { EXAMPLE_GROUPS } from './examples.js';
+
+const grid = document.getElementById('grid');
+const examples = EXAMPLE_GROUPS.find((g) => g.group === 'Examples');
+if (examples) {
+  for (const ex of examples.items) {
+    const card = document.createElement('article');
+    card.className = 'card';
+    card.innerHTML = `
+      <a class="card-body" href="playground.html?example=${encodeURIComponent(ex.key)}&from=examples">
+        <h3></h3>
+        <p class="desc"></p>
+      </a>
+      <div class="card-actions">
+        <a class="card-action open" href="playground.html?example=${encodeURIComponent(ex.key)}&from=examples">Open</a>
+        <a class="card-action run" href="playground.html?example=${encodeURIComponent(ex.key)}&from=examples&autorun=1">▶ Run</a>
+      </div>
+    `;
+    card.querySelector('h3').textContent = ex.name;
+    card.querySelector('.desc').textContent = ex.desc || '';
+    grid.appendChild(card);
+  }
+}
+</script>
+</body>
+</html>
