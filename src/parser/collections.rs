@@ -6,6 +6,91 @@ use super::{
     v_block, v_if, v_loop, v_set, var_size,
 };
 
+/// Plan-06 ARC.md A3 / A3.5 — how to convert the i64 returned by
+/// `parallel_buf_get_narrow` back to the worker's actual return type.
+enum NarrowWrap {
+    /// No conversion needed — raw i64 result is what the body
+    /// expects (narrow Integer; body's `r as integer` accepts i64
+    /// natively).
+    None,
+    /// Single-arg Op call: `OpFoo(buf_get_call) -> T`.  Used for
+    /// `OpConvCharacterFromInt` (i64 → char via low 4 bytes) and
+    /// `OpCastEnumFromInt` (i64 → u8 enum variant; treats i64::MIN
+    /// as 255-sentinel).  Op functions are looked up by their bare
+    /// name (no `n_` prefix — that's reserved for user-fn `n_<name>`).
+    OpCall(&'static str),
+    /// `OpNeInt(buf_get_call, 0) -> boolean`.  Boolean's existing
+    /// `OpConvBoolFromInt` has null-check semantics (v != i64::MIN),
+    /// not value semantics (v != 0) — the buf_get always returns
+    /// 0 or 1, never i64::MIN, so the conv would yield true for
+    /// both.  `OpNeInt` gives the right 0 → false / 1 → true mapping.
+    NeZero,
+}
+
+/// Plan-06 ARC.md A3 / A3.5 — descriptor for routing a parallel
+/// worker's narrow-primitive return through `n_parallel_queue_narrow`
+/// instead of the legacy materialised-vector path.
+///
+/// Returned by [`narrow_route_for`] when the worker's return type is
+/// representable in 1/2/4 bytes per row.  `None` otherwise (8-byte
+/// integers stay on the regular `n_parallel_queue` path; reference /
+/// text / fn-ref returns have their own queue variants).
+struct NarrowRoute {
+    /// Per-row stride in bytes (1, 2, or 4).
+    width: u8,
+    /// Sign-extension flag passed to `parallel_buf_get_narrow`.
+    /// `true` for signed narrow Integer (i8/i16/i32) — buf_get
+    /// reads via `i8`/`i16`/`i32` cast.  `false` for unsigned int,
+    /// Boolean, Character, and Enum-no-payload.
+    signed: bool,
+    /// How to wrap the i64 buf_get result back to the worker's
+    /// declared return type (see [`NarrowWrap`]).
+    wrap: NarrowWrap,
+}
+
+/// Decide whether the worker's return type fits the narrow-Queue
+/// route.  Mirrors the original A3 plan's `route_narrow_queue` design:
+///
+/// | Type                              | width | signed     | wrap                          |
+/// |-----------------------------------|-------|------------|-------------------------------|
+/// | `Integer(spec)` w/ byte_width 1/2/4 | spec  | spec.min<0 | `None`                        |
+/// | `Boolean`                         | 1     | false      | `NeZero` (OpNeInt(_, 0))      |
+/// | `Character`                       | 4     | false      | `OpCall(OpConvCharacterFromInt)` |
+/// | `Enum(_, false, _)` (no payload)  | 1     | false      | `OpCall(OpCastEnumFromInt)`   |
+/// | anything else                     | None — falls through to other routes                     |
+///
+/// 8-byte Integer / Single / Float stay off this route — Single /
+/// Float await A3.6's bit-cast IR Ops; wide Integer goes through
+/// the regular `n_parallel_queue`.
+fn narrow_route_for(ret_type: &Type) -> Option<NarrowRoute> {
+    match ret_type {
+        Type::Integer(spec) => match spec.byte_width(true) {
+            w @ (1 | 2 | 4) => Some(NarrowRoute {
+                width: w,
+                signed: spec.min < 0,
+                wrap: NarrowWrap::None,
+            }),
+            _ => None,
+        },
+        Type::Boolean => Some(NarrowRoute {
+            width: 1,
+            signed: false,
+            wrap: NarrowWrap::NeZero,
+        }),
+        Type::Character => Some(NarrowRoute {
+            width: 4,
+            signed: false,
+            wrap: NarrowWrap::OpCall("OpConvCharacterFromInt"),
+        }),
+        Type::Enum(_, false, _) => Some(NarrowRoute {
+            width: 1,
+            signed: false,
+            wrap: NarrowWrap::OpCall("OpCastEnumFromInt"),
+        }),
+        _ => None,
+    }
+}
+
 impl Parser {
     pub(crate) fn iter_text(
         &mut self,
@@ -1563,29 +1648,28 @@ use #count instead"
             &Type::Integer(*spec),
             &Context::Argument,
         )) == 8);
-        // Plan-06 ARC.md A3 — narrow Integer (forced_size 1/2/4)
-        // routes through n_parallel_queue_narrow.  Wide integers
-        // (8-byte) keep using n_parallel_queue.  Other narrow
-        // primitives (Boolean, Single, Character, Float,
-        // Enum-no-payload) need IR bit-cast support before they can
-        // route through this path — deferred per the in-flight notes
-        // in ARC.md A3.3.
-        let early_narrow_int_width = match ret_type {
-            Type::Integer(spec) => match spec.byte_width(true) {
-                w @ (1 | 2 | 4) => Some(w),
-                _ => None,
-            },
-            _ => None,
-        };
+        // Plan-06 ARC.md A3 / A3.5 — narrow primitive returns route
+        // through n_parallel_queue_narrow.  The buf_get_narrow result
+        // is i64; for non-Integer shapes we wrap with a conversion Op
+        // that maps i64 → bool / character / enumerate.  Single /
+        // Float (A3.6) still need new IR bit-cast Ops.
+        //
+        // Shape coverage:
+        //   Integer narrow (forced_size 1/2/4) — A3, no wrap needed.
+        //   Boolean — A3.5, wrap with OpConvBoolFromInt.
+        //   Character — A3.5, wrap with OpConvCharacterFromInt.
+        //   Enum (no payload) — A3.5, wrap with OpCastEnumFromInt.
+        //   Single / Float — A3.6, deferred (no bit-cast IR Op).
+        let early_narrow_route = narrow_route_for(ret_type);
         let early_route_int_queue = early_is_primitive_return
             && fn_d_nr != u32::MAX
             && early_ret_size_8
             && queue_d_nr != u32::MAX
             && buf_get_d_nr != u32::MAX
             && buf_drop_d_nr != u32::MAX;
-        let early_route_narrow_int_queue = early_is_primitive_return
+        let early_route_narrow_queue = early_is_primitive_return
             && fn_d_nr != u32::MAX
-            && early_narrow_int_width.is_some()
+            && early_narrow_route.is_some()
             && queue_narrow_d_nr != u32::MAX
             && buf_get_narrow_d_nr != u32::MAX
             && buf_drop_narrow_d_nr != u32::MAX;
@@ -1625,7 +1709,7 @@ use #count instead"
             && buf_get_fn_d_nr != u32::MAX
             && buf_drop_fn_d_nr != u32::MAX;
         let early_route_through_queue = early_route_int_queue
-            || early_route_narrow_int_queue
+            || early_route_narrow_queue
             || early_route_text_queue
             || early_route_ref_queue
             || early_route_fn_queue;
@@ -1848,16 +1932,10 @@ use #count instead"
             &Type::Integer(*spec),
             &Context::Argument,
         )) == 8);
-        // Plan-06 ARC.md A3 — narrow Integer return routing.  Mirrors
-        // the early-gate logic above; see that comment for details.
-        let narrow_int_width = match ret_type {
-            Type::Integer(spec) => match spec.byte_width(true) {
-                w @ (1 | 2 | 4) => Some(w),
-                _ => None,
-            },
-            _ => None,
-        };
-        let narrow_int_signed = matches!(ret_type, Type::Integer(spec) if spec.min < 0);
+        // Plan-06 ARC.md A3 / A3.5 — narrow primitive return routing.
+        // Mirrors the early-gate logic; see comment above for shape
+        // coverage.
+        let narrow_route = narrow_route_for(ret_type);
         // 8b: integer-i64 returns route through `n_parallel_queue` +
         // `par_buffer_stack`.
         // 8c: text returns route through `n_parallel_queue_text` +
@@ -1888,11 +1966,12 @@ use #count instead"
             && queue_d_nr != u32::MAX
             && buf_get_d_nr != u32::MAX
             && buf_drop_d_nr != u32::MAX;
-        // Plan-06 ARC.md A3 — narrow Integer Queue route.  Same gate
-        // as route_int_queue but for forced widths 1/2/4.
-        let route_narrow_int_queue = is_primitive_return
+        // Plan-06 ARC.md A3 / A3.5 — narrow primitive Queue route.
+        // Same gate as route_int_queue but for narrow Integer + bool /
+        // character / enum-no-payload (each shape fits 1 or 4 bytes).
+        let route_narrow_queue = is_primitive_return
             && fn_d_nr != u32::MAX
-            && narrow_int_width.is_some()
+            && narrow_route.is_some()
             && queue_narrow_d_nr != u32::MAX
             && buf_get_narrow_d_nr != u32::MAX
             && buf_drop_narrow_d_nr != u32::MAX;
@@ -1923,7 +2002,7 @@ use #count instead"
             && buf_get_fn_d_nr != u32::MAX
             && buf_drop_fn_d_nr != u32::MAX;
         let route_through_queue = route_int_queue
-            || route_narrow_int_queue
+            || route_narrow_queue
             || route_text_queue
             || route_ref_queue
             || route_fn_queue;
@@ -1939,27 +2018,52 @@ use #count instead"
         // `n_parallel_buf_get[_text/_ref/_fn](idx)`; for the materialised
         // path it's `OpGetVector + get_field` indexing the heap
         // result vector.
-        // Plan-06 ARC.md A3 — narrow takes priority over wide int.
-        // var_size() returns 8 for all Integer stack slots (post-2c),
-        // so route_int_queue would also fire for narrow returns; the
-        // narrow path is what we actually want when the storage width
-        // is < 8.
-        let get_call = if route_narrow_int_queue {
-            // Narrow Integer reader takes (idx, return_size, signed).
-            // return_size is the per-row stride (1/2/4); signed
-            // selects sign-extension.  Returns i64 — the body's
-            // `r as integer` accepts it natively.
-            let stride = i64::from(
-                narrow_int_width.expect("narrow_int_width set when route_narrow_int_queue is true"),
-            );
-            Value::Call(
+        // Plan-06 ARC.md A3 / A3.5 — narrow takes priority over wide
+        // int.  var_size() returns 8 for all Integer stack slots
+        // (post-2c), so route_int_queue would also fire for narrow
+        // returns; the narrow path is what we want when storage
+        // width is < 8 OR the return type is Boolean / Character /
+        // Enum-no-payload.
+        let get_call = if route_narrow_queue {
+            // Narrow reader takes (idx, return_size, signed).  Returns
+            // i64; for non-Integer shapes we wrap with the matching
+            // conversion (Op call or OpNeInt-vs-zero) so the body's
+            // `r` substitution lands correctly typed.
+            let route = narrow_route
+                .as_ref()
+                .expect("narrow_route set when route_narrow_queue is true");
+            let raw_call = Value::Call(
                 buf_get_narrow_d_nr,
                 vec![
                     Value::Var(idx_var),
-                    Value::Int(stride as i32),
-                    Value::Int(i32::from(narrow_int_signed)),
+                    Value::Int(i32::from(route.width)),
+                    Value::Int(i32::from(route.signed)),
                 ],
-            )
+            );
+            match &route.wrap {
+                NarrowWrap::None => raw_call,
+                NarrowWrap::OpCall(conv_name) => {
+                    let conv_d_nr = self.data.def_nr(conv_name);
+                    if conv_d_nr == u32::MAX {
+                        // Defensive: stripped stdlib without the conv
+                        // Op.  Skip the wrap and let downstream type-
+                        // check catch the mismatch — much louder than
+                        // a silent miscompile.
+                        raw_call
+                    } else {
+                        Value::Call(conv_d_nr, vec![raw_call])
+                    }
+                }
+                NarrowWrap::NeZero => {
+                    // Boolean wrap: `OpNeInt(buf_get, 0) -> boolean`.
+                    let ne_d_nr = self.data.def_nr("OpNeInt");
+                    if ne_d_nr == u32::MAX {
+                        raw_call
+                    } else {
+                        Value::Call(ne_d_nr, vec![raw_call, Value::Int(0)])
+                    }
+                }
+            }
         } else if route_int_queue {
             Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
         } else if route_text_queue {
@@ -2116,22 +2220,22 @@ use #count instead"
                     "Parallel for loop (queue text)",
                     "Parallel for block (queue text)",
                 )
-            } else if route_narrow_int_queue {
-                // Plan-06 ARC.md A3 — for the narrow path, pf_args[2]
-                // (return_size) was set by var_size which returns the
-                // wide stack-slot width (8 bytes); the narrow runtime
-                // expects the actual stride (1/2/4).  Patch in place
-                // before the queue_call below grabs `pf_args`.
-                let stride = i64::from(
-                    narrow_int_width
-                        .expect("narrow_int_width set when route_narrow_int_queue is true"),
-                );
-                pf_args[2] = Value::Int(stride as i32);
+            } else if route_narrow_queue {
+                // Plan-06 ARC.md A3 / A3.5 — for the narrow path,
+                // pf_args[2] (return_size) was set by var_size which
+                // returns the wide stack-slot width (8 bytes); the
+                // narrow runtime expects the actual stride (1/2/4).
+                // Patch in place before the queue_call below grabs
+                // `pf_args`.
+                let route = narrow_route
+                    .as_ref()
+                    .expect("narrow_route set when route_narrow_queue is true");
+                pf_args[2] = Value::Int(i32::from(route.width));
                 (
                     queue_narrow_d_nr,
                     buf_drop_narrow_d_nr,
-                    "Parallel for loop (queue narrow int)",
-                    "Parallel for block (queue narrow int)",
+                    "Parallel for loop (queue narrow)",
+                    "Parallel for block (queue narrow)",
                 )
             } else if route_ref_queue {
                 (

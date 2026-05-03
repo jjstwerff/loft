@@ -191,10 +191,24 @@ impl OpEmitter for ParallelForEmitter {
                 ctx.w,
                 ", |cell, elm| {{ {worker_name}(cell, elm{extras}).to_bits() as i64 }})"
             )?,
-            ClosureShape::Scalar => write!(
-                ctx.w,
-                ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
-            )?,
+            ClosureShape::Scalar => {
+                // Plan-06 ARC.md A3.5 — Boolean returns map to Rust
+                // `bool`, which cannot cast directly to i64; insert
+                // an `as u8` bridge.  Other Scalar shapes (Integer
+                // narrow / wide, Character → i32, Enum-no-payload →
+                // u8) all support `as i64` natively.
+                if matches!(worker_ret, Type::Boolean) {
+                    write!(
+                        ctx.w,
+                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as u8 as i64 }})"
+                    )?;
+                } else {
+                    write!(
+                        ctx.w,
+                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
+                    )?;
+                }
+            }
         }
 
         // Close the `{ let _ex0 = … ;` blocks opened above.
@@ -296,10 +310,24 @@ impl OpEmitter for ParallelQueueEmitter {
                 ctx.w,
                 ", |cell, elm| {{ {worker_name}(cell, elm{extras}).to_bits() as i64 }})"
             )?,
-            ClosureShape::Scalar => write!(
-                ctx.w,
-                ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
-            )?,
+            ClosureShape::Scalar => {
+                // Plan-06 ARC.md A3.5 — Boolean returns map to Rust
+                // `bool`, which cannot cast directly to i64; insert
+                // an `as u8` bridge.  Other Scalar shapes (Integer
+                // narrow / wide, Character → i32, Enum-no-payload →
+                // u8) all support `as i64` natively.
+                if matches!(worker_ret, Type::Boolean) {
+                    write!(
+                        ctx.w,
+                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as u8 as i64 }})"
+                    )?;
+                } else {
+                    write!(
+                        ctx.w,
+                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
+                    )?;
+                }
+            }
         }
 
         for _ in 0..n_extra {

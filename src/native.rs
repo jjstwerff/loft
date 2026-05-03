@@ -1272,7 +1272,7 @@ fn n_parallel_queue_narrow(stores: &mut Stores, stack: &mut DbRef) {
     };
     let return_size = u32::from(stride);
 
-    let (primitive_input_size, tuple_input_types) = {
+    let (primitive_input_size, tuple_input_types, worker_return_size) = {
         let ctx = stores
             .parallel_ctx
             .as_ref()
@@ -1284,19 +1284,28 @@ fn n_parallel_queue_narrow(stores: &mut Stores, stack: &mut DbRef) {
             InputKind::Text => u32::MAX,
             InputKind::Primitive { size } => u32::from(size),
         };
-        (pis, tuple_first_arg_types(def))
+        // Plan-06 ARC.md A3 / A3.5 — derive worker_return_size from
+        // the worker's declared return type, NOT the buffer stride.
+        // Integer narrow (i8/i16/i32/u8/u16) is i64-promoted on the
+        // stack post-2c → 8.  Boolean / Enum-no-payload push 1 byte.
+        // Character pushes 4.  `var_size(.., Argument)` returns the
+        // exact stack-slot width per type — reuse it instead of
+        // hand-coding the dispatch.
+        let wrs = u32::from(crate::variables::size(
+            &def.returned,
+            &crate::data::Context::Argument,
+        ));
+        (pis, tuple_first_arg_types(def), wrs)
     };
 
-    // Plan-06 ARC.md A3 — run workers with return_size=8 (full u64
-    // slot read).  `execute_at_raw` with return_size<8 reads only
-    // the low N bytes via `get_stack::<u32>` etc., but for narrow
-    // returns (i32, u8, u16, i8, i16) workers may push 8 bytes
-    // (i64-promoted on stack post-2c); reading u32 then truncates
-    // and the high bytes leak into adjacent slots.  Reading the
-    // full u64 and packing the low `stride` bytes into the buffer
-    // is correct: the actual value lives in the low `stride` bytes
-    // (zero/sign-extended above), so the truncation happens at
-    // pack time without losing per-row distinction.
+    // Plan-06 ARC.md A3 / A3.5 — run workers with the SHAPE-NATURAL
+    // return size.  `execute_at_raw` reads exactly that many bytes
+    // off the worker's stack via `get_stack::<u8/u32/u64>`.  The
+    // pack loop below truncates each row to the buffer stride
+    // (1/2/4) — for narrow Integer the value lives in the low
+    // `stride` bytes of the i64 (zero/sign-extended), so truncation
+    // is correct; for Boolean/Character/Enum stride == worker_return_size
+    // already so the truncation is a no-op.
     let _ = return_size;
     let buf64 = crate::parallel::run_parallel_queue(
         stores,
@@ -1306,7 +1315,7 @@ fn n_parallel_queue_narrow(stores: &mut Stores, stack: &mut DbRef) {
         element_size,
         n_threads,
         &extra_args,
-        8, // full u64 read; truncation to stride happens during packing below
+        worker_return_size,
         primitive_input_size,
         tuple_input_types,
     );

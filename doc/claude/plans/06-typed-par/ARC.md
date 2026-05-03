@@ -373,40 +373,63 @@ Narrow-prim Queue (A3).  Don't bundle.
 
 **Still PENDING (split by difficulty after a 2026-05-03 re-survey):**
 
-##### A3.5 — Boolean / Character / Enum-no-payload (~30-60 min each, ~2-3 hours total)
+##### A3.5 — Boolean / Character / Enum-no-payload — DONE 2026-05-03
 
-The wrap-in-`OpConv*FromInt` approach.  All three needed conversion
-Ops already exist in `default/01_code.loft`:
+Landed via a unified `narrow_route_for(ret_type) -> Option<NarrowRoute>`
+helper at the top of `src/parser/collections.rs`.  Returns the
+per-row stride, sign-extension flag, and a `NarrowWrap` enum
+describing how to wrap the i64 buf_get result back to the worker's
+declared type:
 
-- `OpConvBoolFromInt(v1: integer) -> boolean` — line 689 ish
-- `OpConvCharacterFromInt(v1: integer) -> character` — line 668 ish
-- `OpConvEnumFromInt` — **not yet declared**; companion to the
-  existing `OpConvEnumFromNull`.  Add a 2-line decl + a one-line
-  `ops.rs` body (`(v as u32) as u32` for the no-payload enum's
-  variant index — Loft caps single-byte enums at 256 variants).
+- `NarrowWrap::None` — narrow Integer (the body's `r as integer`
+  accepts the i64 natively).
+- `NarrowWrap::OpCall("OpConvCharacterFromInt")` — Character.
+- `NarrowWrap::OpCall("OpCastEnumFromInt")` — Enum-no-payload.
+- `NarrowWrap::NeZero` — Boolean.  `OpNeInt(buf_get_call, 0)`
+  rather than `OpConvBoolFromInt`, because the existing
+  `OpConvBoolFromInt` has *null-check* semantics (`v != i64::MIN`),
+  not value semantics — buf_get always returns 0/1, never i64::MIN,
+  so the conv would yield true for both.
 
-Implementation per shape:
+The `NarrowRoute` descriptor unifies the four shapes through a
+single `route_narrow_queue` gate flag (replacing the previous
+`route_narrow_int_queue` which only handled Integer narrow).  Both
+the early and main dispatch sites in `build_parallel_for_ir` use
+the same descriptor.
 
-1. Add `route_narrow_*_queue` flags to both early/main gates in
-   `src/parser/collections.rs::build_parallel_for_ir`, mirroring
-   `route_narrow_int_queue` (already shipped) — match
-   `Type::Boolean`, `Type::Character`, `Type::Enum(_, false, _)`.
-   Each gets stride 1 (bool/enum) or 4 (character) and signed=false.
-2. Build the narrow `get_call` exactly as for narrow Integer, then
-   wrap with the matching conversion: `Value::Call(OpConvBoolFromInt_d_nr,
-   vec![narrow_call])`.
-3. The dispatch switch in `for_steps` uses the same
-   `(queue_narrow_d_nr, buf_drop_narrow_d_nr, ...)` tuple.
+**Native-side closure fix**: the codegen emitter's existing
+`ClosureShape::Scalar` arm emits `worker(...) as i64`, which is
+INVALID Rust for `bool` (Rust rejects `bool as i64`).  Special-cased
+Boolean to emit `worker(...) as u8 as i64`.  Character maps to
+Rust `i32` (per `rust_type` table) and Enum-no-payload to `u8`,
+both of which support `as i64` natively — no extra special case.
 
-**Acceptance:** `par_struct_to_bool_t4`, `par_struct_to_character_t4`
-(if it exists; else add canary), and an `Enum::Variant`-returning
-canary all pass via the narrow path.  Existing `tests/threading_chars.rs`
-`par_struct_to_bool_t4` continues green; new
-`par_struct_to_enum_no_payload_t4` opens.
+**`n_parallel_queue_narrow` runtime fix**: the original implementation
+passed `return_size=8` to `run_parallel_queue` (working around the
+i32-truncation bug from A3).  But that breaks Boolean (worker pushes
+1 byte, runtime reads 8 → "No elements left on the stack 5 < 8")
+and similar shape-natural narrow returns.  Fix: derive
+`worker_return_size` from the worker's declared return type via
+`var_size(&ret_type, &Context::Argument)` — returns 8 for Integer
+(i64-promoted), 1 for Boolean / Enum-no-payload, 4 for Character.
+The buffer pack still truncates to the declared `stride` (1/2/4)
+which is correct for both narrow Integer (low bytes) and the
+shape-natural shapes (stride == worker_return_size, no-op truncation).
 
-**Risk:** the per-shape return-type conversion runs on every body
-iteration — measured cost likely <10 ns per row; well below the
-plan-06 ±5% bench gate.
+**Acceptance:** `par_struct_to_bool_t4`, `par_struct_to_enum_t4`,
+and `par_struct_to_character_t4` (if a canary is added later) all
+pass via the narrow path.  Existing `par_struct_to_int_t1`,
+`par_struct_to_int_t4`, `par_struct_to_byte_t4`, `par_struct_to_i32_t4`
+unchanged.  35/35 `threading_chars` tests, 43/43 `threading`,
+540/540 `issues`, 18/18 `codegen_emitter` (baseline refreshed for
+the one diverging file `22-threading.rs` where Boolean-return par
+now routes through narrow Queue).
+
+**Bug-hunt yield:** 2 latent bugs surfaced (the `bool as i64` Rust
+rejection in the native closure emit + the `OpConvBoolFromInt`
+null-check semantics not matching value semantics).  Both would
+have hit anyone trying to add Boolean queue routing without the
+test coverage A3.5 added.
 
 ##### A3.6 — Single / Float (~1-2 sessions)
 
