@@ -5,9 +5,32 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 2 — Main-thread stitch via store rebase
 
-**Status: 2a complete** (`StoreRebase` + `rebase_walk_record` + 9 unit
-tests landed `<this commit>`).  Sub-phases 2b (reference-path switch),
-2c (text path), 2d (primitive path), 2e (retire `copy_claims`) remain.
+**Status: 2a complete; sub-phases 2b/2c/2d/2e OBSOLETE as written.**
+
+Sub-phase 2a landed (`StoreRebase` + `rebase_walk_record` + 9 unit
+tests, commit `7ab13ac`).  The originally-planned follow-on
+sub-phases assumed a `run_parallel_ref` direct-rebase rewrite —
+that function no longer exists.
+
+What actually happened:
+
+| Original sub-phase | Outcome |
+|---|---|
+| 2b — switch `run_parallel_ref` to rebase | **Superseded by spine-8d.0** (commit `6dda65c`) — the reference path was rewritten as `run_parallel_queue_ref` using Queue dispatch with `adopt_worker_excess` + `rebase_walk_record`.  Same goal (no deep-copy), different shape (Queue-based instead of direct rebase replacement). |
+| 2c — switch text path to rebase | **Half-done in a different way** — phase 1b shipped per-worker output stores for text (workers intern via `set_str` into their slot's store; commit `2538de2`), but the parent still copies into `Vec<String>` rather than adopting stores.  Final adoption-based shape is folded into phase 10's strategic shift (drop materialised result vector). |
+| 2d — switch primitive path | **Subsumed by Queue evolution** — primitive returns now go through `run_parallel_queue` / `_int` rather than a dedicated rebase rewrite.  Not actionable as written. |
+| 2e — retire `copy_claims` | **Not feasible from par alone** — `copy_claims` has 4 non-par callers in `src/vector.rs`, `src/codegen_runtime.rs:399,1554`, `src/state/io.rs:1108`.  It's a general helper, not par-only.  Retiring it requires a separate non-par cleanup. |
+
+The `StoreRebase` machinery from 2a is **library code retained for
+plan-06's phase 11 (`par_to_vec` opt-in materialiser)** and for
+spine-8d.0's `run_parallel_queue_ref`.  See ARC.md § "What this arc
+explicitly does NOT cover" for why phase 2 closes here without
+finishing the original 2b–2e sequence.
+
+**Recommendation:** treat phase 2 as effectively closed.  Remaining
+work that would have lived under 2b–2e either landed as part of
+spine 8d.0 / phase 1b, deferred to phase 10/11, or belongs to a
+separate non-par cleanup (2e).
 
 ## Goal
 

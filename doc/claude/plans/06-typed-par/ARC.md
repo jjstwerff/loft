@@ -89,9 +89,10 @@ Heavy `parallel_execute_and_collect` retired.  Light path
 
 ### Known fragilities (not canaries — won't be caught by tests)
 
-- **8d.3 per-thread reserved-slot cap = 16.**  Workers needing > 16
+- ~~**8d.3 per-thread reserved-slot cap = 16.**  Workers needing > 16
   fresh stores per element panic.  Latent until a workload exceeds
-  it.  No test covers this today.
+  it.  No test covers this today.~~  **CLOSED A2 2026-04-30** (commit
+  `217b3ac`) — fixed-cap retired; shared-atomic dispenser landed.
 - **`worker_slot_offset != 0` edge case.**  If parent's allocations
   table is empty when reservation runs, `offsets[0] == 0` and the
   legacy push-at-end fallback kicks in.  Harmless in practice,
@@ -655,8 +656,8 @@ selection for Reduce workers — A9.
 
 ### A6 — Close the 4 fn-ref / vector / keyed-collection canaries
 
-**Status:** OPEN
-**Effort:** L (~2 sessions)
+**Status:** DONE 2026-05-01 (all 4 sub-steps A6.a / A6.b / A6.c / A6.d landed; commits `b9f7fc1`, `17bb33f`, `f048d20`, `792ea7b`).  Acceptance test passes — all 4 canaries (`par_struct_to_vector_t4`, `par_struct_to_fn_t4`, `par_vec_of_fns_input_t4`, `par_struct_to_keyed_collection_t4`) un-`#[ignore]`'d and green.
+**Effort:** L (~2 sessions) — actual: closed in a single session due to P196 unblock retiring the 4d.C closure-storage prerequisite.
 **Acceptance test:** all 4 canaries un-`#[ignore]`'d and passing.
 
 #### Why sixth
@@ -1401,20 +1402,26 @@ None substantive — A11 is mechanical doc work.
 
 ## Cumulative shape after each arc step
 
+The "Dispatchers" + "Native fns" columns count distinct functions
+in source.  The original projections (rows A1-A2 onwards) assumed
+the Queue/Concat consolidation work would land alongside each step;
+in practice the variant family grew before A8 collapses it.  See
+the **Actual today** row for what `grep` returns now.
+
 | After | Dispatchers | Native fns | User surfaces | Ignored canaries | LOC vs baseline | Bench 11 expected |
 |---|---|---|---|---|---|---|
-| Today (committed) | 4 (`run_parallel_queue` + `_ref` + `_text` + `_discard`; legacy `parallel_execute_and_collect` still present) | 8 | 2 (par/par_light) | 8 | 0 | 44 ms / 12 ms |
-| A1 | 4 (no heavy Concat; `parallel_light_execute_and_collect` still alive) | 7 | 2 | 8 | −583 | 44 ms / 12 ms |
-| A2 | 4 | 7 | 2 | 8 | −600 | 44 ms / 12 ms |
-| A3 | 5 (Queue_narrow added) | 8 | 2 | 8 | −540 | 44 ms / 12 ms |
-| A4 | 4 (Light retired) | 6 | 2 | 8 | −840 | 44 ms / 12 ms |
-| A5 | 5 (Reduce added) | 7 | 2 | 8 | −690 | 44 ms / 12 ms |
-| A6 | 5 | 7 | 2 | 4 | −690 | 44 ms / 12 ms |
-| A7 | 5 | 7 | 2 | 0 | −690 | 44 ms / 12 ms |
-| A8 | **3** (Discard / Queue / Reduce) | 5 | 2 | 0 | −900 | 44 ms / 12 ms |
-| A9 | 3 | 4 | **1** (par only) | 0 | −1000 | 44 ms / 12 ms |
-| A10 | 3 | 4 | 1 + browser | 0 | varies | + browser numbers |
-| A11 | 3 | 4 | 1 | 0 | **−1100** | unchanged |
+| **Actual today (verified 2026-05-03)** | **8** in src/parallel.rs (`raw`, `text`, `queue_ref`, `int`, `discard`, `queue`, `queue_fn`, `light`) | **13** in src/codegen_runtime.rs (incl. buf_get/buf_drop variants from spine 8d) | 2 (par/par_light) | **4** (all tuple-return; A6 closed 4 in May) | A1's −583 cuts shipped, A6 added +N for hidden-arg infra | 44 ms / 12 ms |
+| A1 (projected) | 4 (no heavy Concat; `parallel_light_execute_and_collect` still alive) | 7 | 2 | 8 | −583 | 44 ms / 12 ms |
+| A2 (projected) | 4 | 7 | 2 | 8 | −600 | 44 ms / 12 ms |
+| A3 (projected) | 5 (Queue_narrow added) | 8 | 2 | 8 | −540 | 44 ms / 12 ms |
+| A4 (projected) | 4 (Light retired) | 6 | 2 | 8 | −840 | 44 ms / 12 ms |
+| A5 (projected) | 5 (Reduce added) | 7 | 2 | 8 | −690 | 44 ms / 12 ms |
+| A6 (DONE 2026-05-01) | 5 | 7 | 2 | **4** | −690 | 44 ms / 12 ms |
+| A7 (projected) | 5 | 7 | 2 | 0 | −690 | 44 ms / 12 ms |
+| A8 (projected) | **3** (Discard / Queue / Reduce) | 5 | 2 | 0 | −900 | 44 ms / 12 ms |
+| A9 (projected) | 3 | 4 | **1** (par only) | 0 | −1000 | 44 ms / 12 ms |
+| A10 (projected) | 3 | 4 | 1 + browser | 0 | varies | + browser numbers |
+| A11 (projected) | 3 | 4 | 1 | 0 | **−1100** | unchanged |
 
 Three of plan-06's headline numbers — "1 dispatcher" (close: 3
 because Stitch policies stay distinct), "1 user surface" (yes),
