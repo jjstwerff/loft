@@ -1,0 +1,33 @@
+// collections.loft — vector + hash side-by-side.
+//
+// Demonstrates: `vector<T>` literals + iteration, `hash<T[key]>`
+// lookup, the same record stored in both views without copying.
+
+struct Word {
+  text: text not null,
+  count: integer,
+}
+
+struct Counter {
+  // A vector preserves insertion order.
+  ordered: vector<Word>,
+  // A hash gives O(1) lookup by `text` field.
+  by_text: hash<Word[text]>,
+}
+
+fn main() {
+  c = Counter { ordered: [], by_text: {} };
+  // Add three words; both views share the same records.
+  for label in ["apple", "banana", "apple"] {
+    record = Word { text: label, count: 1 };
+    c.ordered += record;
+    c.by_text += record;
+  }
+  // Vector iteration walks in insertion order.
+  print("In insertion order:\n");
+  for entry in c.ordered {
+    print("  {entry.text} (count {entry.count})\n");
+  }
+  // Hash lookup is by key — `by_text["apple"]` returns the first match.
+  print("Hash lookup of 'apple': {c.by_text[\"apple\"].text}\n");
+}

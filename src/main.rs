@@ -125,6 +125,13 @@ fn print_help() {
     println!("  --native                      compile to native Rust via rustc and run (default)");
     println!("  --native-release              like --native but emit only reachable functions and");
     println!("                                compile with rustc -O (optimised build)");
+    println!(
+        "  --native-debug                like --native but compile with -Cdebuginfo=2 (DWARF)"
+    );
+    println!(
+        "                                and preserve the generated .rs on disk; combine with"
+    );
+    println!("                                --native-release for optimised + debug-info");
     println!("  --native-emit [out.rs]        write generated Rust source and exit");
     println!("                                (default: .loft/<script>.rs beside the script)");
     println!("  --native-wasm [out.wasm]      compile to WebAssembly (wasm32-wasip2)");
@@ -1168,6 +1175,11 @@ fn main() {
     let mut format_mode: Option<(&'static str, String)> = None;
     let mut native_mode = true;
     let mut native_release = false;
+    // Plan-0.8.5 NDB.0 — `--native-debug` flag: pass `-Cdebuginfo=2`
+    // to rustc, drop `-O` (unless `--native-release` is also set),
+    // and preserve the generated `.rs` on disk so DWARF's `.debug_line`
+    // table points at a real file the debugger can show.
+    let mut native_debug = false;
     let mut dump_only = false;
     // None  = flag not given
     // Some("") = flag given without explicit path → use .loft/ default
@@ -1328,6 +1340,11 @@ fn main() {
         } else if a == "--native-release" {
             native_mode = true;
             native_release = true;
+        } else if a == "--native-debug" {
+            // NDB.0 — emit DWARF; combine with --native-release if
+            // optimised + debug-info is wanted.
+            native_mode = true;
+            native_debug = true;
         } else if a == "--native-emit" {
             // Optional path: consume next arg only if it looks like an output path
             native_emit = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
@@ -2250,6 +2267,14 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             if native_release {
                 cmd.arg("-O");
             }
+            // NDB.0 — when --native-debug is set, emit DWARF debug
+            // info so stock GDB / LLDB can step through the native
+            // binary.  Combines with --native-release: the user gets
+            // an optimised build with debug info if both flags are
+            // present.
+            if native_debug {
+                cmd.arg("-Cdebuginfo=2");
+            }
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
@@ -2403,7 +2428,18 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             }
             binary
         };
-        let _ = std::fs::remove_file(&emit_path);
+        // NDB.0 — preserve the generated .rs on disk when
+        // --native-debug is set so DWARF's `.debug_line` table points
+        // at a real file the debugger can show.  Without this, GDB /
+        // LLDB show `(no source)` even though debug info is present.
+        if !native_debug {
+            let _ = std::fs::remove_file(&emit_path);
+        } else {
+            eprintln!(
+                "loft: source preserved at {} (--native-debug)",
+                emit_path.display()
+            );
+        }
 
         if check_only {
             // --check --native: compile succeeded, report ok and exit.

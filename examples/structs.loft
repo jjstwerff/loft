@@ -1,0 +1,25 @@
+// structs.loft — defining a Point struct and computing distances.
+//
+// Demonstrates: struct declarations, field access, methods (functions
+// whose first parameter is named `self`), float arithmetic.
+
+struct Point {
+  x: float,
+  y: float,
+}
+
+fn distance(self: Point, other: Point) -> float {
+  dx = self.x - other.x;
+  dy = self.y - other.y;
+  sqrt(dx * dx + dy * dy)
+}
+
+fn main() {
+  origin = Point { x: 0.0, y: 0.0 };
+  target = Point { x: 3.0, y: 4.0 };
+  // Method-style call: `origin.distance(target)` is the same as
+  // `distance(origin, target)` — Loft picks up the receiver from the
+  // dot syntax.
+  d = origin.distance(target);
+  print("distance from ({origin.x}, {origin.y}) to ({target.x}, {target.y}) = {d}\n");
+}

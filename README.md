@@ -73,10 +73,29 @@ cd loft
 cargo build --release     # binary at target/release/loft
 
 # try an example
-./target/release/loft lib/graphics/examples/01-hello-window.loft
+./target/release/loft examples/hello.loft
 ```
 
 Pre-built binaries on the [Releases](https://github.com/jjstwerff/loft/releases) page.
+
+### First steps
+
+- **[Learn loft in 30 minutes](doc/learn-loft.md)** — guided tour
+  with runnable code blocks for every concept.
+- **[`examples/`](examples/)** — seven self-contained `.loft` files
+  covering hello-world, fibonacci, fizzbuzz, structs, collections,
+  pattern matching, and file I/O.  Each runs standalone.
+- **[VS Code extension](editors/vscode/)** — syntax highlighting +
+  snippets for `.loft` files.  TextMate grammar at
+  [`syntaxes/loft.tmLanguage.json`](syntaxes/loft.tmLanguage.json)
+  works in any TextMate-compatible editor (Sublime Text, etc.).
+
+```sh
+loft examples/hello.loft        # Hello world
+loft examples/fibonacci.loft    # Fibonacci sequence
+loft examples/structs.loft      # Structs and methods
+loft examples/match.loft        # Pattern matching on enums
+```
 
 ## Graphics examples
 

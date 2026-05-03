@@ -1,0 +1,11 @@
+// hello.loft — the canonical first program.
+//
+// Loft has no `let`, no `var`, no type annotations on locals.  You
+// assign a value and the compiler infers the type for you.  String
+// interpolation uses braces: `"Hello, {name}!"` substitutes the
+// variable.  `print` writes without a trailing newline.
+
+fn main() {
+  name = "world";
+  print("Hello, {name}!\n");
+}
