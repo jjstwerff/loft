@@ -76,6 +76,96 @@ vsce package      # produces loft-0.1.0.vsix in the same directory
 
 **Reference:** <https://code.visualstudio.com/api/working-with-extensions/publishing-extension>.
 
+### VS Code UI walkthrough — installing + verifying the loft extension
+
+These are the actual menus / panels you'll click through to test
+the extension.  Names are stable across recent VS Code versions
+(1.75+).
+
+**1. Open the Extensions panel.**
+
+- **Sidebar icon:** four-blocks icon, usually fifth from top.
+- **Or menu:** `View > Extensions`.
+- **Or keyboard:** `Ctrl+Shift+X` (Windows / Linux) or `Cmd+Shift+X` (macOS).
+
+A panel slides in from the left listing installed + recommended
+extensions plus a search box at the top.
+
+**2. Install the local `.vsix`.**
+
+- Click the **`...` (three-dot) menu** in the top-right of the
+  Extensions panel header.  This is the "more actions" menu —
+  not the gear icon further down.
+- Choose **`Install from VSIX...`** from the dropdown.
+- A file-picker opens.  Navigate to `editors/vscode/loft-0.1.0.vsix`
+  and click **Open**.
+- VS Code installs the extension; a notification appears in the
+  bottom-right ("loft extension was installed").  No restart
+  needed for grammar / snippets.
+
+**Or via CLI** (faster if you're already in a terminal):
+```sh
+code --install-extension editors/vscode/loft-0.1.0.vsix
+```
+
+**3. Verify the extension is loaded.**
+
+- Back in the Extensions panel, type `loft` in the search box.
+  The "Loft Language" extension should appear under the
+  "Installed" group with a blue/green checkmark.
+- Click the entry to see its details panel: README rendered,
+  list of contributed languages / snippets / grammars.
+- The status bar at the bottom-right of any open `.loft` file
+  should show `Loft` as the language mode.
+
+**4. Open a `.loft` file to see highlighting.**
+
+- `File > Open File...` (or `Ctrl/Cmd+O`).
+- Pick `examples/hello.loft` (or any file in `tests/docs/`).
+- Keywords (`fn`, `for`), types (`integer`, `Point`), strings
+  with `{interpolation}`, and comments should colour
+  distinctly per your active theme.
+- If colours look wrong, the bottom-right language indicator
+  may say `Plain Text` instead of `Loft` — click it and pick
+  `Loft` from the dropdown.
+
+**5. Try a snippet.**
+
+- In an open `.loft` file, type `fn` and press `Tab`.  Should
+  expand to a function template with placeholder fields you
+  can `Tab` between.  Repeat with `for`, `match`, `struct`.
+
+**6. Open the Command Palette to confirm tasks work.**
+
+- `Ctrl/Cmd+Shift+P` opens the Command Palette.
+- Type `Tasks: Run Task` — if you've added the `tasks.json`
+  snippet from `editors/vscode/README.md` to your workspace's
+  `.vscode/tasks.json`, "Run loft" should appear.
+- Or just press `Ctrl/Cmd+Shift+B` to run the default build
+  task (which is "Run loft" once you set it up).
+
+**7. Uninstall (after testing) to keep your profile clean.**
+
+- Extensions panel → search `loft` → click the entry → click
+  the **gear icon** in the details header → **Uninstall**.
+- Or CLI: `code --uninstall-extension loft-lang.loft`.
+
+**Tip — clean profile for testing:**
+
+If you want to test the extension as a brand-new user would
+see it, without your existing settings + theme + extensions
+interfering:
+
+```sh
+mkdir -p /tmp/loft-clean-vscode
+code --user-data-dir=/tmp/loft-clean-vscode --install-extension editors/vscode/loft-0.1.0.vsix
+code --user-data-dir=/tmp/loft-clean-vscode examples/hello.loft
+```
+
+This launches VS Code with an empty profile that won't interfere
+with or be polluted by your normal setup.  Delete `/tmp/loft-clean-vscode`
+when you're done.
+
 ### Sublime Text (alternative SH.1 cross-editor check)
 
 Skip if you don't have Sublime.  Other TextMate-aware editors
@@ -83,13 +173,44 @@ Skip if you don't have Sublime.  Other TextMate-aware editors
 
 **Install:** <https://www.sublimetext.com/download>.
 
-**Use:**
+**UI walkthrough:**
+
 1. Open Sublime Text.
-2. `Tools > Developer > New Syntax`.
-3. Paste the contents of `syntaxes/loft.tmLanguage.json`.
-4. Save as `Loft.sublime-syntax` in the user packages directory
-   (Sublime auto-converts the JSON-format scope names).
-5. Open any `.loft` file — colouring should match VS Code.
+2. **`Tools` menu** (top menu bar) → **`Developer`** submenu →
+   **`New Syntax...`**.  A new editor tab opens with a YAML
+   template.
+3. **Replace the entire template** with the contents of
+   `syntaxes/loft.tmLanguage.json` (Sublime accepts both YAML
+   and JSON `.tmLanguage` formats).
+4. **Save** with `Ctrl/Cmd+S`.  Sublime opens its file picker
+   in `~/.config/sublime-text/Packages/User/` (Linux) or
+   `~/Library/Application Support/Sublime Text/Packages/User/`
+   (macOS) by default.  Save as `Loft.sublime-syntax` (or any
+   filename — the contents register the syntax).
+5. **Open any `.loft` file** (`File > Open...` or
+   `Ctrl/Cmd+O`).  Sublime detects the `.loft` extension and
+   applies the new syntax automatically.  If colouring is
+   absent, click the bottom-right language indicator and pick
+   `Loft` from the list.
+
+### IntelliJ-family IDEs (PyCharm, IDEA, WebStorm, CLion, …)
+
+JetBrains IDEs accept TextMate bundles natively — useful if
+that's your daily driver.
+
+**UI walkthrough:**
+
+1. **`Settings`** (Linux/Windows) or **`Preferences`** (macOS)
+   from the IDE menu.  Or `Ctrl/Cmd+,`.
+2. Navigate **Editor → TextMate Bundles**.
+3. Click the **`+` button** above the bundle list.
+4. Point the file picker at the **`syntaxes/`** directory of
+   the loft repo (the directory containing `loft.tmLanguage.json`,
+   not the file itself).  IntelliJ auto-detects the grammar.
+5. Click **OK** / **Apply**.
+6. Open any `.loft` file — colouring should apply.  If not,
+   right-click the file in the project tree → `Override File
+   Type → Loft`.
 
 ### `gdb` — debugger (for NDB.0 quality gate, Linux primary)
 
