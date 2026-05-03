@@ -1,5 +1,13 @@
-// Generate doc/examples.js from tests/docs/*.loft
+// Generate doc/examples.js from tests/docs/*.loft and examples/*.loft.
 // Run: loft scripts/build-playground-examples.loft
+//
+// Three artefacts feed the playground site:
+//   EXAMPLES         — { key: source-code } map (consumed by playground.html)
+//   EXAMPLE_LIST     — flat [{ key, name, desc }] list (back-compat)
+//   EXAMPLE_GROUPS   — [{ group, items: [{ key, name, desc }] }] for the
+//                      examples.html and docs.html landing pages.
+//
+// Examples (examples/*.loft) come first; doc tests (tests/docs/*.loft) follow.
 
 fn json_escape(s: text) -> text {
   r = "";
@@ -13,58 +21,144 @@ fn json_escape(s: text) -> text {
   r
 }
 
+fn pretty_example_name(base: text) -> text {
+  // examples/*.loft don't carry @NAME headers — the filename is the
+  // identity, but the playground dropdown reads better with a few
+  // human-friendly labels.
+  if base == "hello" { return "Hello world"; }
+  if base == "fibonacci" { return "Fibonacci"; }
+  if base == "fizzbuzz" { return "FizzBuzz"; }
+  if base == "structs" { return "Structs"; }
+  if base == "collections" { return "Collections"; }
+  if base == "match" { return "Pattern matching"; }
+  if base == "files" { return "File I/O"; }
+  base
+}
+
 fn main() {
   out = file("doc/examples.js");
   out += `
     // Auto-generated — regenerate with: loft scripts/build-playground-examples.loft
     export const EXAMPLES = {{
   `;
-  list = "";
-  count = 0;
+
+  // Pass 1 — examples/.  Builds source-code JSON pairs into out, and
+  // the [{key,name,desc}] list separately so EXAMPLE_GROUPS can
+  // reference each pass independently below.
+  examples_list = "";
+  examples_count = 0;
+  for f in file("examples").files() {
+    path = "{f.path}";
+    if !path.ends_with(".loft") or path.ends_with("/.loft") { continue; }
+    base = path[path.find("/") + 1..path.len() - 5];
+    if base.find("/") >= 0 { base = base[base.find("/") + 1..]; }
+    name = pretty_example_name(base);
+    code = "";
+    desc = "";
+    in_header = true;
+    for line in f.lines() {
+      if in_header {
+        if line.starts_with("//") or line.len() == 0 {
+          // Pull the first sentence of the description paragraph
+          // (skip the title-line which contains ".loft —").
+          if desc.len() < 200 and line.len() > 3 and line.starts_with("// ") {
+            body = line[3..];
+            if !body.contains(".loft —") and !body.starts_with("@") and !body.contains("Copyright") and !body.contains("SPDX") {
+              if desc.len() == 0 {
+                desc = body;
+              } else if desc.len() < 200 {
+                desc += " ";
+                desc += body;
+              }
+            }
+          }
+          continue;
+        }
+        in_header = false;
+      }
+      if code.len() > 0 { code += "\n"; }
+      code += line;
+    }
+    key = "ex_{base.to_lowercase().replace(" ", "_")}";
+    out += `
+      "{key}": "{json_escape(code)}",
+    `;
+    examples_list += `
+      {{ key: "{key}", name: "{name}", desc: "{json_escape(desc)}" }},
+    `;
+    examples_count += 1;
+  }
+
+  // Pass 2 — tests/docs/.  Same shape but reads @NAME: from the
+  // header block, falls back to basename, and uses the @TITLE:
+  // line as the description (or the first prose line below if
+  // @TITLE: is missing).
+  docs_list = "";
+  docs_count = 0;
   for f in file("tests/docs").files() {
     path = "{f.path}";
     if !path.ends_with(".loft") or path.ends_with("/.loft") { continue; }
-    lines = f.lines();
     base = path[path.find("/") + 1..path.len() - 5];
     if base.find("/") >= 0 { base = base[base.find("/") + 1..]; }
     name = base;
     code = "";
+    desc = "";
     in_header = true;
-    for line in lines {
+    for line in f.lines() {
       if in_header {
-        pos = line.find("@NAME:");
-        if pos >= 0 { name = line[pos + 7..]; }
-        if line.starts_with("//") or line.len() == 0 { continue; }
+        np = line.find("@NAME:");
+        if np >= 0 { name = line[np + 7..]; }
+        tp = line.find("@TITLE:");
+        if tp >= 0 { desc = line[tp + 8..]; }
+        if line.starts_with("//") or line.len() == 0 {
+          // Fallback: first prose line after the metadata, when
+          // @TITLE: is absent.
+          if desc.len() == 0 and line.len() > 3 and line.starts_with("// ") {
+            body = line[3..];
+            if !body.starts_with("@") and !body.contains("Copyright") and !body.contains("SPDX") {
+              desc = body;
+            }
+          }
+          continue;
+        }
         in_header = false;
       }
       if code.len() > 0 { code += "\n"; }
       code += line;
     }
     key = name.to_lowercase().replace(" ", "_");
-    escaped = json_escape(code);
     out += `
-      "{key}": "{escaped}",
+      "{key}": "{json_escape(code)}",
     `;
-    list += `
-      {{ key: "{key}", name: "{name}" }},
+    docs_list += `
+      {{ key: "{key}", name: "{name}", desc: "{json_escape(desc)}" }},
     `;
-    count += 1;
+    docs_count += 1;
   }
+
   out += `
     }};
     export const EXAMPLE_LIST = [
   `;
-  out += list;
+  out += examples_list;
+  out += docs_list;
   out += `
     ];
-    // EXAMPLE_GROUPS: shape consumed by doc/playground.html — an array
-    // of {{ group, items[] }} objects so the UI can render an
-    // <optgroup> per category.  Until the build script learns to
-    // categorise per file path, every example lands in a single
-    // "Examples" group.
+    // EXAMPLE_GROUPS shape consumed by examples.html, docs.html,
+    // and playground.html — one entry per category.  "Examples"
+    // first so first-time visitors land on the friendly tour.
     export const EXAMPLE_GROUPS = [
-      {{ group: "Examples", items: EXAMPLE_LIST }},
+      {{ group: "Examples", items: [
+  `;
+  out += examples_list;
+  out += `
+      ] }},
+      {{ group: "Documentation", items: [
+  `;
+  out += docs_list;
+  out += `
+      ] }},
     ];
   `;
-  println("Generated doc/examples.js — {count} examples");
+  println("Generated doc/examples.js — {examples_count} examples + {docs_count} doc tests");
 }

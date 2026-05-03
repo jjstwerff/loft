@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Loft Graphics Gallery</title>
+<title>Loft Documentation</title>
 <style>
 :root {
   --bg: #1e1e2e;
@@ -46,29 +46,19 @@ nav a {
 }
 nav a:hover { background: var(--surface); color: var(--text); }
 nav a.current { background: var(--surface); color: var(--accent); }
-main { max-width: 1200px; margin: 0 auto; padding: 24px 20px 40px; }
+main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 40px; }
 .intro {
   margin-bottom: 24px;
   font-size: 15px;
   color: var(--subtext);
   line-height: 1.6;
-  max-width: 720px;
+  max-width: 680px;
 }
 .intro strong { color: var(--text); font-weight: 600; }
-.section-heading {
-  font-size: 13px;
-  color: var(--subtext);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  margin: 28px 0 12px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
-}
-.section-heading:first-of-type { margin-top: 0; }
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
 }
 .card {
   background: var(--panel);
@@ -88,7 +78,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 24px 20px 40px; }
   display: block;
 }
 .card-body h3 {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--accent);
   margin-bottom: 5px;
   font-weight: 600;
@@ -135,34 +125,22 @@ footer a { color: var(--accent); text-decoration: none; }
 <body>
 <header>
   <h1>Loft</h1>
-  <div class="crumbs"><strong>Graphics gallery</strong> — 25+ live demos</div>
+  <div class="crumbs"><strong>Documentation</strong> — language reference fixtures</div>
   <nav>
     <a href="examples.html">Examples</a>
-    <a href="docs.html">Documentation</a>
-    <a href="gallery.html" class="current">Gallery</a>
+    <a href="docs.html" class="current">Documentation</a>
     <a href="playground.html">Playground</a>
   </nav>
 </header>
 
 <main>
   <p class="intro">
-    Adapted from the <strong>LearnOpenGL</strong> tutorials and extended
-    with a complete arcade game.  Every demo runs live in your browser
-    via WebGL.  Click <strong>Open</strong> to view the source, or
-    <strong>▶ Run</strong> to launch it on a canvas.
+    Each card here is a runnable <strong>.loft</strong> program from
+    <code>tests/docs/</code> — the same fixtures that compile with
+    every release.  They cover one language feature at a time:
+    keywords, types, collections, functions, threading, I/O.
   </p>
-
-  <div class="section-heading">Fundamentals — windows, shaders, transformations, camera</div>
-  <div class="card-grid" data-range="fundamentals"></div>
-
-  <div class="section-heading">Lighting &amp; scenes — materials, multiple lights, scene graph</div>
-  <div class="card-grid" data-range="lighting"></div>
-
-  <div class="section-heading">Advanced rendering — blending, shadows, post-processing, PBR</div>
-  <div class="card-grid" data-range="advanced"></div>
-
-  <div class="section-heading">Complete projects — full renderer, arcade game</div>
-  <div class="card-grid" data-range="projects"></div>
+  <div class="card-grid" id="grid"></div>
 </main>
 
 <footer>
@@ -170,51 +148,31 @@ footer a { color: var(--accent); text-decoration: none; }
   ·
   <a href="https://jjstwerff.github.io/loft/">Documentation</a>
   ·
-  <a href="lib/graphics/examples/README.md">Source on GitHub</a>
+  <a href="https://jjstwerff.github.io/loft/gallery.html">Graphics gallery</a>
 </footer>
 
 <script type="module">
-import { GALLERY_LIST } from './gallery-examples.js';
+import { EXAMPLE_GROUPS } from './examples.js';
 
-// Carve the 25-ish demos into four readable sections by example number.
-// Numbers correspond to the leading digits of each filename (e.g. 01-…).
-// 00-smoke is a build smoke test, not a user-facing demo.
-const RANGES = {
-  fundamentals: (n) => n >= 1 && n <= 7,
-  lighting:     (n) => n >= 8 && n <= 13,
-  advanced:     (n) => n >= 14 && n <= 19,
-  projects:     (n) => n >= 20,
-};
-
-function exampleNumber(key) {
-  const m = key.match(/^(\d+)/);
-  return m ? parseInt(m[1], 10) : -1;
-}
-
-function renderCard(ex) {
-  const card = document.createElement('article');
-  card.className = 'card';
-  card.innerHTML = `
-    <a class="card-body" href="gallery-run.html?example=${encodeURIComponent(ex.key)}">
-      <h3></h3>
-      <p class="desc"></p>
-    </a>
-    <div class="card-actions">
-      <a class="card-action open" href="gallery-run.html?example=${encodeURIComponent(ex.key)}">Open</a>
-      <a class="card-action run" href="gallery-run.html?example=${encodeURIComponent(ex.key)}&autorun=1">▶ Run</a>
-    </div>
-  `;
-  card.querySelector('h3').textContent = ex.name;
-  card.querySelector('.desc').textContent = ex.desc || '';
-  return card;
-}
-
-for (const [name, predicate] of Object.entries(RANGES)) {
-  const grid = document.querySelector(`[data-range="${name}"]`);
-  if (!grid) continue;
-  const items = GALLERY_LIST.filter((ex) => predicate(exampleNumber(ex.key)));
-  for (const ex of items) {
-    grid.appendChild(renderCard(ex));
+const grid = document.getElementById('grid');
+const docs = EXAMPLE_GROUPS.find((g) => g.group === 'Documentation');
+if (docs) {
+  for (const ex of docs.items) {
+    const card = document.createElement('article');
+    card.className = 'card';
+    card.innerHTML = `
+      <a class="card-body" href="playground.html?example=${encodeURIComponent(ex.key)}&from=docs">
+        <h3></h3>
+        <p class="desc"></p>
+      </a>
+      <div class="card-actions">
+        <a class="card-action open" href="playground.html?example=${encodeURIComponent(ex.key)}&from=docs">Open</a>
+        <a class="card-action run" href="playground.html?example=${encodeURIComponent(ex.key)}&from=docs&autorun=1">▶ Run</a>
+      </div>
+    `;
+    card.querySelector('h3').textContent = ex.name;
+    card.querySelector('.desc').textContent = ex.desc || '';
+    grid.appendChild(card);
   }
 }
 </script>

@@ -41,7 +41,43 @@ header {
   flex-shrink: 0;
 }
 header h1 { font-size: 16px; color: var(--accent); font-weight: 600; }
-.toolbar { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.toolbar { display: flex; gap: 8px; align-items: center; }
+.current-label {
+  font-size: 12px;
+  color: var(--subtext);
+  margin-left: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+.current-label strong { color: var(--text); font-weight: 600; }
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.back-link:hover { background: var(--panel); color: var(--accent); border-color: var(--accent); }
+.spacer { flex: 1; }
+.nav-link {
+  color: var(--subtext);
+  text-decoration: none;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 0.12s, color 0.12s;
+}
+.nav-link:hover { background: var(--surface); color: var(--text); }
 button {
   background: var(--accent);
   color: var(--surface);
@@ -224,8 +260,12 @@ select {
 <header>
   <h1>Loft Playground</h1>
   <div class="toolbar">
-    <select id="examples"><option value="">— Examples —</option></select>
+    <a id="back-link" class="back-link" href="examples.html" style="display:none">← Back</a>
     <button id="run-btn" onclick="run()" disabled>▶ Run</button>
+    <span id="current-label" class="current-label"></span>
+    <span class="spacer"></span>
+    <a class="nav-link" href="examples.html">Examples</a>
+    <a class="nav-link" href="docs.html">Docs</a>
   </div>
 </header>
 
@@ -467,7 +507,8 @@ const output = document.getElementById('output');
 const status = document.getElementById('status');
 const timing = document.getElementById('timing');
 const runBtn = document.getElementById('run-btn');
-const exampleSelect = document.getElementById('examples');
+const currentLabel = document.getElementById('current-label');
+const backLink = document.getElementById('back-link');
 
 function syncHighlight() {
   highlightEl.innerHTML = highlight(editor.value);
@@ -494,41 +535,43 @@ editor.addEventListener('keydown', (e) => {
   }
 });
 
-// URL parameter: ?example=key pre-selects an example
+function setCurrent(name, kind) {
+  currentLabel.innerHTML = name
+    ? `${kind}: <strong>${name}</strong>`
+    : '';
+}
+
+// URL parameters drive everything the playground used to do via
+// dropdowns:
+//   ?example=KEY   load that example into the editor
+//   ?from=examples show "← Back to Examples" pointing at examples.html
+//   ?from=docs     show "← Back to Documentation" pointing at docs.html
+//   ?autorun=1     run the loaded example as soon as the runtime is ready
 const urlParams = new URLSearchParams(window.location.search);
 const preselect = urlParams.get('example');
+const fromParam = urlParams.get('from');
+const autorun = urlParams.get('autorun') === '1';
 
-// Examples (grouped with optgroup)
-for (const grp of EXAMPLE_GROUPS) {
-  const og = document.createElement('optgroup');
-  og.label = grp.group;
-  for (const ex of grp.items) {
-    const opt = document.createElement('option');
-    opt.value = ex.key;
-    opt.textContent = ex.name;
-    og.appendChild(opt);
-  }
-  exampleSelect.appendChild(og);
+if (fromParam === 'examples') {
+  backLink.href = 'examples.html';
+  backLink.textContent = '← Back to Examples';
+  backLink.style.display = '';
+} else if (fromParam === 'docs') {
+  backLink.href = 'docs.html';
+  backLink.textContent = '← Back to Documentation';
+  backLink.style.display = '';
 }
-exampleSelect.addEventListener('change', () => {
-  const key = exampleSelect.value;
-  if (key && EXAMPLES[key]) {
-    editor.value = EXAMPLES[key];
-    syncHighlight();
-    output.textContent = '';
-    renderDiagnostics([]);
-    renderAsserts([]);
-    status.textContent = 'Ready';
-    status.className = 'info';
-    timing.textContent = '';
-  }
-  exampleSelect.value = '';
-});
 
-// Pre-select example from URL parameter
 if (preselect && EXAMPLES[preselect]) {
   editor.value = EXAMPLES[preselect];
   syncHighlight();
+  for (const grp of EXAMPLE_GROUPS) {
+    const hit = grp.items.find((ex) => ex.key === preselect);
+    if (hit) {
+      setCurrent(hit.name, grp.group === 'Examples' ? 'Example' : 'Doc test');
+      break;
+    }
+  }
 }
 
 // ── Run ──────────────────────────────────────────────────────────────
@@ -543,6 +586,9 @@ async function initLoft() {
     status.textContent = 'Ready';
     status.className = 'ok';
     syncHighlight();
+    if (autorun && preselect && EXAMPLES[preselect]) {
+      window.run();
+    }
   } catch (e) {
     document.getElementById('loading').textContent = 'Failed to load: ' + e.message;
     status.textContent = 'Failed';
