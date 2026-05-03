@@ -1,7 +1,10 @@
 ==== exit: 1 ====
 ==== stdout ====
-Error: Cannot break outside a loop at <cases>/13_scope_break_outside_loop.loft:2:9
+error: Cannot break outside a loop
+  --> <cases>/13_scope_break_outside_loop.loft:2:9
   |
-   2 |   break;
-     |         ^
+2 |   break;
+  |         ^
+
+error: aborting due to 1 previous error
 ==== stderr ====

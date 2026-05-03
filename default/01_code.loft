@@ -1132,10 +1132,29 @@ fn parallel_buf_drop_ref();
 // IR-only entry the fused for-par desugar emits.
 fn parallel_queue_narrow(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
 // Plan-06 ARC.md A3 — read one narrow row.  return_size is the
-// per-row stride (1, 2, or 4); signed selects sign-extension.
-fn parallel_buf_get_narrow(idx: integer, return_size: integer, signed: boolean) -> integer;
+// per-row stride (1, 2, or 4); signed selects sign-extension
+// (passed as integer 0/1 — boolean would push only 1 byte but
+// the runtime reads i64 from the stack).
+fn parallel_buf_get_narrow(idx: integer, return_size: integer, signed: integer) -> integer;
 // Plan-06 ARC.md A3 — pop the active narrow-queue buffer.
 fn parallel_buf_drop_narrow();
+// Plan-06 ARC.md A5 — Stitch::Reduce runtime entry.  Workers split
+// the input vector across `threads`, each accumulating over its
+// slice via `fold(acc, row) -> acc` starting from `init`.  Main
+// thread combines per-worker partials with the same fold fn,
+// preserving left-to-right input-order ordering.
+//
+// V1 restriction: input is `vector<integer>` and fold is
+// `fn(integer, integer) -> integer`.  Heterogeneous types
+// (vector<T>, fold(R, T) -> R) require either an extra `combine`
+// arg or restricting fold to associative-on-acc-type — deferred
+// to a follow-up.
+//
+// Not callable from user code — IR-only entry the future
+// `par_fold(items, init, fold, threads)` builtin desugars to.
+// Rust-side tests in `tests/threading.rs` exercise the runtime
+// directly via `parallel::run_parallel_fold`.
+fn parallel_fold(input: reference, init: integer, fold: integer, threads: integer) -> integer;
 #impure(par_call)
 // Plan-06 ARC.md A6.b — fn-ref-return Queue runtime entry.  Same
 // arg layout as parallel_for; workers return 20-byte fn-ref blobs

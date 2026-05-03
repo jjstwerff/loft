@@ -17,7 +17,7 @@ use loft::compile::byte_code;
 use loft::database::Stores;
 use loft::keys::DbRef;
 use loft::parallel::{
-    WorkerProgram, run_parallel_discard, run_parallel_int, run_parallel_queue,
+    WorkerProgram, run_parallel_discard, run_parallel_fold, run_parallel_int, run_parallel_queue,
     run_parallel_queue_ref, run_parallel_text,
 };
 use loft::parser::Parser;
@@ -1742,5 +1742,124 @@ fn par_fn_buffer_stack_initially_empty_in_clone() {
         "Stores::clone must reset par_fn_buffer_stack — runtime state, \
          not type schema (cloned len = {})",
         cloned.par_fn_buffer_stack.len()
+    );
+}
+
+// ── Plan-06 ARC.md A5 — Stitch::Reduce / par_fold runtime ───────────────────
+
+/// A5 v1 acceptance: `par_fold` over `vector<integer>` correctly sums
+/// to the expected i64 total.  Workers each accumulate over their slice;
+/// main combines per-worker partials with the same fold fn.  The monoid
+/// (i64 + i64, identity 0) is associative + commutative, so any worker
+/// split produces the same result.
+#[test]
+fn par_fold_int_sum() {
+    let code = r#"
+fn add_pair(acc: integer, row: integer) -> integer { acc + row }
+"#;
+    let (mut state, data) = compile(code);
+    // Sum 1..=100 = 5050.
+    let values: Vec<i32> = (1..=100).collect();
+    let input = build_int_vector(&mut state.database, &values);
+
+    let d_nr = data.def_nr("n_add_pair");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+
+    let result = run_parallel_fold(
+        &state.database,
+        program,
+        fn_pos,
+        &input,
+        8,   // element_size: integer (8 bytes)
+        0,   // init = 0
+        4,   // n_threads
+        &[], // no extras
+    );
+    assert_eq!(
+        result, 5050,
+        "par_fold int sum: expected 5050, got {result}"
+    );
+}
+
+/// A5 acceptance: `par_fold` over an empty vector returns `init`
+/// without dispatching workers.
+#[test]
+fn par_fold_empty_input() {
+    let code = r#"
+fn add_pair(acc: integer, row: integer) -> integer { acc + row }
+"#;
+    let (mut state, data) = compile(code);
+    let input = build_int_vector(&mut state.database, &[]);
+
+    let d_nr = data.def_nr("n_add_pair");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+
+    let result = run_parallel_fold(&state.database, program, fn_pos, &input, 8, 42, 4, &[]);
+    assert_eq!(
+        result, 42,
+        "par_fold empty: expected init (42), got {result}"
+    );
+}
+
+/// A5 acceptance: max via fold (non-commutative-looking but still
+/// associative — exercises a fold fn that isn't simple addition).
+/// The fold returns the larger of (acc, row); init = i64::MIN
+/// guarantees row wins on first call per worker.
+#[test]
+fn par_fold_max() {
+    let code = r#"
+fn max_pair(acc: integer, row: integer) -> integer {
+    if row > acc { row } else { acc }
+}
+"#;
+    let (mut state, data) = compile(code);
+    let values: Vec<i32> = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3];
+    let input = build_int_vector(&mut state.database, &values);
+
+    let d_nr = data.def_nr("n_max_pair");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+
+    // Use i32::MIN as init (well below any element value).
+    let result = run_parallel_fold(
+        &state.database,
+        program,
+        fn_pos,
+        &input,
+        8,
+        i64::from(i32::MIN),
+        4,
+        &[],
+    );
+    assert_eq!(result, 9, "par_fold max: expected 9, got {result}");
+}
+
+/// A5 acceptance: single-thread fold matches the multi-thread result.
+/// Confirms the combine step (main-thread partial reduction) doesn't
+/// drop or double-count any partial.
+#[test]
+fn par_fold_single_thread_matches_multi_thread() {
+    let code = r#"
+fn add_pair(acc: integer, row: integer) -> integer { acc + row }
+"#;
+    let (mut state, data) = compile(code);
+    let values: Vec<i32> = (1..=50).collect();
+    let input = build_int_vector(&mut state.database, &values);
+
+    let d_nr = data.def_nr("n_add_pair");
+    let fn_pos = data.def(d_nr).code_position;
+
+    let program_1 = worker_program(&state);
+    let result_1 = run_parallel_fold(&state.database, program_1, fn_pos, &input, 8, 0, 1, &[]);
+
+    let program_8 = worker_program(&state);
+    let result_8 = run_parallel_fold(&state.database, program_8, fn_pos, &input, 8, 0, 8, &[]);
+
+    assert_eq!(result_1, 1275, "1-thread sum 1..=50: expected 1275");
+    assert_eq!(
+        result_1, result_8,
+        "1-thread vs 8-thread: {result_1} vs {result_8}"
     );
 }

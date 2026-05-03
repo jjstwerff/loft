@@ -39,6 +39,7 @@ mod const_eval;
 mod crash_report;
 mod data;
 mod database;
+pub mod diagnostic_render;
 mod extensions;
 mod fill;
 mod formatter;
@@ -1173,6 +1174,9 @@ fn main() {
     // Some(path) = explicit output path
     let mut native_emit: Option<String> = None;
     let mut native_wasm: Option<String> = None;
+    // Plan-07 phase 2: --errors=compact|pretty CLI flag (overrides
+    // LOFT_ERRORS env var).  None = use env-or-default (Pretty).
+    let mut error_mode_arg: Option<String> = None;
     let mut html_out: Option<String> = None;
     let mut tests_dir: Option<String> = None;
     // Plan-08 phase 01: --introspect mode collects per-section
@@ -1266,6 +1270,17 @@ fn main() {
             format_mode = Some(("check", path));
         } else if a == "--interpret" || a == "--bytecode" {
             native_mode = false;
+        } else if let Some(rest) = a.strip_prefix("--errors=") {
+            // Plan-07 phase 2: --errors=compact|pretty selects the
+            // diagnostic renderer.  Pretty is default; compact is
+            // single-line for harnesses + CI.
+            error_mode_arg = Some(rest.to_string());
+        } else if a == "--errors" {
+            // Two-arg form: `--errors compact`.
+            error_mode_arg = argv.get(i).cloned();
+            if error_mode_arg.is_some() {
+                i += 1;
+            }
         } else if a == "--dump" {
             native_mode = false;
             dump_only = true;
@@ -1693,24 +1708,23 @@ fn main() {
     }
     p.parse(&abs_file, false);
     if !p.diagnostics.is_empty() {
-        // Cache source files for source-line display.
-        let mut source_cache: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for entry in p.diagnostics.entries() {
-            if entry.level == Level::Debug {
-                continue;
+        let mode = crate::diagnostic_render::ErrorMode::from_cli_and_env(error_mode_arg.as_deref());
+        match mode {
+            crate::diagnostic_render::ErrorMode::Pretty => {
+                let loader = crate::diagnostic_render::FileSourceLoader::new();
+                let out = crate::diagnostic_render::render_pretty_all(
+                    &p.diagnostics,
+                    &loader,
+                    crate::diagnostic_render::ColorMode::Auto,
+                );
+                print!("{out}");
             }
-            println!("{}", entry.to_string_compact());
-            // Show the offending source line with a caret.
-            if entry.line > 0 && !entry.file.is_empty() {
-                let src = source_cache
-                    .entry(entry.file.clone())
-                    .or_insert_with(|| std::fs::read_to_string(&entry.file).unwrap_or_default());
-                if let Some(line_text) = src.lines().nth(entry.line as usize - 1) {
-                    let col = entry.col.saturating_sub(1) as usize;
-                    println!("  |");
-                    println!("{:>4} | {}", entry.line, line_text);
-                    println!("     | {:>width$}^", "", width = col);
+            crate::diagnostic_render::ErrorMode::Compact => {
+                for entry in p.diagnostics.entries() {
+                    if entry.level == Level::Debug {
+                        continue;
+                    }
+                    println!("{}", entry.to_string_compact());
                 }
             }
         }

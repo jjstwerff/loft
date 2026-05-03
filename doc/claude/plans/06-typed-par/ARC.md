@@ -89,9 +89,10 @@ Heavy `parallel_execute_and_collect` retired.  Light path
 
 ### Known fragilities (not canaries — won't be caught by tests)
 
-- **8d.3 per-thread reserved-slot cap = 16.**  Workers needing > 16
+- ~~**8d.3 per-thread reserved-slot cap = 16.**  Workers needing > 16
   fresh stores per element panic.  Latent until a workload exceeds
-  it.  No test covers this today.
+  it.  No test covers this today.~~  **CLOSED A2 2026-04-30** (commit
+  `217b3ac`) — fixed-cap retired; shared-atomic dispenser landed.
 - **`worker_slot_offset != 0` edge case.**  If parent's allocations
   table is empty when reservation runs, `offsets[0] == 0` and the
   legacy push-at-end fallback kicks in.  Harmless in practice,
@@ -357,25 +358,128 @@ Narrow-prim Queue (A3).  Don't bundle.
 
 ### A3 — Extend Queue dispatch for narrow-primitive returns
 
-**Status:** IN-FLIGHT (2026-05-01 — infrastructure landed; parser gate pending)
-**Effort:** L (~1.5 sessions)
+**Status:** narrow-Integer DONE (2026-05-03); Boolean/Single/Character/Float/Enum-no-payload still PENDING (need IR bit-cast support per the original in-flight note).
+**Effort:** L (~1.5 sessions) — narrow-Integer landed in <1 session.
 
-**In-flight notes:**
+**Narrow-Integer subset closure:**
 
-- A3.1 (par_narrow_buffer_stack field) — DONE: `Stores.par_narrow_buffer_stack: Vec<(Vec<u8>, u8)>` added at all 4 init sites (`database/mod.rs::Stores::new`, `Clone`, both `database/allocation.rs::WorkerStores::new` paths).
-- A3.2 (3 narrow Queue native fns) — DONE: `n_parallel_queue_narrow` / `_buf_get_narrow` / `_buf_drop_narrow` registered + `default/01_code.loft` decls + 3 round-trip Rust tests in `tests/threading.rs`.
-- A3.4 (codegen extras) — partial: extras-push (state/codegen.rs:1948) + extras-subtract (state/codegen.rs:2117) entries added for `n_parallel_queue_narrow`.
-- A3.3 (parser route_narrow_queue gate) — PENDING.  Investigation surfaced a typed-substitution issue: when `Var(b_var: u8)` is replaced inline by `Call(buf_get_narrow, idx, size, signed) -> integer`, the body's narrow-typed expressions (Float arithmetic, Boolean test, Character comparison) lose their typed semantics.  Two paths forward:
-  1. Per-narrow-type getters (`_get_bool` / `_get_single` / `_get_character`) that return the right type — clean but multiplies the surface.
-  2. Single i64-returning getter wrapped at substitution time with the appropriate `OpConv*FromInt` op (`OpConvBoolFromInt` / `OpConvCharacterFromInt` exist; bit-cast for Single/Float NOT in IR today — would need `OpBitcastSingleFromInt` / `OpBitcastFloatFromInt`).
+- A3.1 (par_narrow_buffer_stack field) — DONE.
+- A3.2 (3 narrow Queue native fns in src/native.rs) — DONE; codegen-side native fns (`n_parallel_queue_narrow_native` / `n_parallel_buf_get_narrow_native` / `n_parallel_buf_drop_narrow_native`) added to `src/codegen_runtime.rs` 2026-05-03.
+- A3.3 (parser gate) — DONE for narrow Integer (forced_size 1/2/4).  `route_narrow_int_queue` flag added to both early and main dispatch sites in `src/parser/collections.rs::build_parallel_for_ir`; narrow-int returns now route through `n_parallel_queue_narrow` / `_buf_get_narrow` / `_buf_drop_narrow` instead of the legacy materialised-vector path.  Body's `b` accessor calls `parallel_buf_get_narrow(idx, return_size, signed)` (signed passed as integer 0/1).
+- A3.4 (codegen extras) — DONE; extras-push and extras-subtract entries already covered `n_parallel_queue_narrow`.
+- Codegen `ParallelQueueEmitter` extended to detect narrow-Integer returns and emit `n_parallel_queue_narrow_native` instead of the wide variant.  `n_parallel_buf_get_narrow` and `n_parallel_buf_drop_narrow` registered with `ParallelBufRenameEmitter`.
+- Bug fix discovered during implementation: `n_parallel_queue_narrow` (interpreter) was calling `run_parallel_queue` with `return_size=4`, but `execute_at_raw` reads only the low 4 bytes via `get_stack::<u32>` for return_size=4 — this loses the actual i32 value because workers push 8 bytes (i64-promoted) but only the low 4 are read into one slot, leaving the high 4 to leak into adjacent state.  Fix: always pass `return_size=8` to `run_parallel_queue` from inside the narrow runtime, then truncate to stride bytes during packing.  The actual narrow value lives in the low `stride` bytes of the i64 (zero/sign-extended), so the truncation is correct.
+- `parallel_buf_get_narrow` declared signature changed from `signed: boolean` to `signed: integer` — the runtime reads i64 from the stack (8 bytes), so a boolean (1 byte) push left 7 bytes of garbage on the stack, corrupting subsequent pops.
 
-  Narrow Integer (forced_size 1/2/4) is the simplest case: substitution should work directly because narrow Integer values fit naturally in i64 representation (the body's `r as integer` pattern accepts the i64 result as-is).  Suggest landing narrow Integer first as the next session's PR; Boolean / Single / Character / Float / Enum-no-payload follow with the IR-cast support story sorted.
-**Acceptance test:** the existing `par_struct_to_bool_t4`,
-`par_struct_to_byte_t4`, `par_struct_to_single_t4`,
-`par_struct_to_character_t4`, `par_struct_to_float_t4` re-route
-through Queue with no behaviour change; `grep
-"parallel_light_execute_and_collect" src/parser/ src/state/` returns
-zero call sites.
+**Still PENDING (split by difficulty after a 2026-05-03 re-survey):**
+
+##### A3.5 — Boolean / Character / Enum-no-payload — DONE 2026-05-03
+
+Landed via a unified `narrow_route_for(ret_type) -> Option<NarrowRoute>`
+helper at the top of `src/parser/collections.rs`.  Returns the
+per-row stride, sign-extension flag, and a `NarrowWrap` enum
+describing how to wrap the i64 buf_get result back to the worker's
+declared type:
+
+- `NarrowWrap::None` — narrow Integer (the body's `r as integer`
+  accepts the i64 natively).
+- `NarrowWrap::OpCall("OpConvCharacterFromInt")` — Character.
+- `NarrowWrap::OpCall("OpCastEnumFromInt")` — Enum-no-payload.
+- `NarrowWrap::NeZero` — Boolean.  `OpNeInt(buf_get_call, 0)`
+  rather than `OpConvBoolFromInt`, because the existing
+  `OpConvBoolFromInt` has *null-check* semantics (`v != i64::MIN`),
+  not value semantics — buf_get always returns 0/1, never i64::MIN,
+  so the conv would yield true for both.
+
+The `NarrowRoute` descriptor unifies the four shapes through a
+single `route_narrow_queue` gate flag (replacing the previous
+`route_narrow_int_queue` which only handled Integer narrow).  Both
+the early and main dispatch sites in `build_parallel_for_ir` use
+the same descriptor.
+
+**Native-side closure fix**: the codegen emitter's existing
+`ClosureShape::Scalar` arm emits `worker(...) as i64`, which is
+INVALID Rust for `bool` (Rust rejects `bool as i64`).  Special-cased
+Boolean to emit `worker(...) as u8 as i64`.  Character maps to
+Rust `i32` (per `rust_type` table) and Enum-no-payload to `u8`,
+both of which support `as i64` natively — no extra special case.
+
+**`n_parallel_queue_narrow` runtime fix**: the original implementation
+passed `return_size=8` to `run_parallel_queue` (working around the
+i32-truncation bug from A3).  But that breaks Boolean (worker pushes
+1 byte, runtime reads 8 → "No elements left on the stack 5 < 8")
+and similar shape-natural narrow returns.  Fix: derive
+`worker_return_size` from the worker's declared return type via
+`var_size(&ret_type, &Context::Argument)` — returns 8 for Integer
+(i64-promoted), 1 for Boolean / Enum-no-payload, 4 for Character.
+The buffer pack still truncates to the declared `stride` (1/2/4)
+which is correct for both narrow Integer (low bytes) and the
+shape-natural shapes (stride == worker_return_size, no-op truncation).
+
+**Acceptance:** `par_struct_to_bool_t4`, `par_struct_to_enum_t4`,
+and `par_struct_to_character_t4` (if a canary is added later) all
+pass via the narrow path.  Existing `par_struct_to_int_t1`,
+`par_struct_to_int_t4`, `par_struct_to_byte_t4`, `par_struct_to_i32_t4`
+unchanged.  35/35 `threading_chars` tests, 43/43 `threading`,
+540/540 `issues`, 18/18 `codegen_emitter` (baseline refreshed for
+the one diverging file `22-threading.rs` where Boolean-return par
+now routes through narrow Queue).
+
+**Bug-hunt yield:** 2 latent bugs surfaced (the `bool as i64` Rust
+rejection in the native closure emit + the `OpConvBoolFromInt`
+null-check semantics not matching value semantics).  Both would
+have hit anyone trying to add Boolean queue routing without the
+test coverage A3.5 added.
+
+##### A3.6 — Single / Float (~1-2 sessions)
+
+Need new IR bit-cast Ops because `OpConvSingleFromInt` /
+`OpConvFloatFromInt` are *value* conversions
+(`5_i64 → 5.0_f32`), not bit-casts.  Workers store
+`f32::to_bits()` / `f64::to_bits()` as i64 in the buffer; reading
+back via the value-conv ops would treat those bytes as a number,
+not as float bits.
+
+New decls in `default/01_code.loft`:
+
+```loft
+fn OpBitcastSingleFromInt(v1: integer) -> single;
+   #rust"f32::from_bits((@v1) as u32)"
+fn OpBitcastFloatFromInt(v1: integer) -> float;
+   #rust"f64::from_bits((@v1) as u64)"
+```
+
+Plus the corresponding entries in `src/ops.rs` (one-liners) and
+the wart-budget gate bump in
+`tests/codegen_emitter.rs::dispatch_op_arm_budget_not_exceeded`
+(adds 2 to the OP count).
+
+Then same wrapping pattern as A3.5: narrow path for Single (stride
+4), wide path for Float (stride 8 — already works through the
+regular `n_parallel_queue`; just need the bit-cast wrap on the
+body's `r` accessor when the ret type is Float).
+
+**Acceptance:** `par_struct_to_single_t4` and `par_struct_to_float_t4`
+route through the queue path (narrow for Single, wide for Float)
+and pass.  Existing tests continue green.
+
+**Risk:** new IR Ops touch the opcode count.  Plan-09's wart-budget
+gate caps the count; adding 2 needs a documented bump.  If the
+bump conversation feels heavier than the value (Single/Float
+returns are uncommon in real par workloads), defer A3.6 indefinitely
+— the materialised path keeps working for these shapes.
+
+##### Sequencing
+
+A3.5 lands first as a cheap follow-up to today's A3 (narrow
+Integer).  A3.6 is gated on appetite for the new IR ops.  After
+A3.5, A4 (retire light Concat path) becomes actionable for the
+bool/char/enum shapes too.  After A3.6, A4 cleanup is total.
+
+Today's narrow-Integer subset already unblocks A4 for the
+i32/u8/u16/i8/i16 return shapes that `light` was the fallback for.
+
+**Acceptance test:** `par_struct_to_i32_t4` and `par_struct_to_byte_t4` route through the new narrow Queue path (verified by smoke-testing `target/release/loft /tmp/par_i32_b.loft` showing the expected `sum=-10`); `cargo test --release --test threading_chars` passes 35/35; `cargo test --release --test threading` passes 43/43; `cargo test --release --test issues` passes 540/540.
 
 #### Why third
 
@@ -546,11 +650,54 @@ In `default/01_code.loft`:
 
 ### A5 — `Stitch::Reduce` runtime + `par_fold` surface
 
-**Status:** OPEN
-**Effort:** M (~1 session)
-**Acceptance test:** new tests `par_fold_int_sum`, `par_fold_max`,
-`par_fold_string_concat`, `par_fold_empty_input`,
-`par_fold_nested_inside_par`.
+**Status:** runtime DONE 2026-05-03; user-facing parser builtin OPEN.
+**Effort:** M (~1 session) — runtime + tests in <1 session.
+**Acceptance test:** `par_fold_int_sum` (sum 1..=100 = 5050),
+`par_fold_max`, `par_fold_empty_input`, and
+`par_fold_single_thread_matches_multi_thread` all pass in
+`tests/threading.rs`.
+
+**Runtime closure (this session):**
+
+- `run_parallel_fold` added to `src/parallel.rs` (threading +
+  no-threading variants).  Workers split input across N threads,
+  each accumulates over its slice via `fold(acc, row) -> acc`
+  starting from `init`, then main thread combines per-worker
+  partials with the same fold fn (preserving worker-completion
+  order).  V1 restricted to integer accumulator + integer row type.
+- `n_parallel_fold` native fn in `src/native.rs` pops args
+  (input/init/fold_d_nr/threads/extras) from the runtime stack,
+  invokes `run_parallel_fold`, pushes the i64 result.
+- Stdlib decl `fn parallel_fold(input, init, fold, threads) ->
+  integer` in `default/01_code.loft` (line ~1140).
+- Codegen extras-push + extras-subtract entries in
+  `src/state/codegen.rs` mirror the existing queue-family pattern.
+- 4 round-trip tests in `tests/threading.rs` exercise the runtime
+  via direct `run_parallel_fold` calls (compile + load worker fn
+  + invoke).
+
+**Still PENDING — user-facing parser builtin (~1 session):**
+
+The runtime is callable from loft as `parallel_fold(items, 0,
+fn_ref_d_nr_int, 4)` but loft programs don't write d_nrs by hand.
+Need either:
+
+- A parser-level builtin `par_fold(items, init, fn_name, threads)`
+  that resolves the fn-name to a d_nr at parse time (mirrors how
+  par() currently constructs `n_parallel_for` calls — see
+  `src/parser/collections.rs::build_parallel_for_ir`).
+- OR auto-detection per A5.3: rewrite `sum(parallel_for(items,
+  worker, 4))` patterns into `par_fold(items, 0, worker, 4)`.
+
+Either lifts the runtime to a usable user surface.  Out of scope
+for the runtime closure landed today; recommended as the next
+A5 follow-up.
+
+**Bug-hunt yield this session:** zero — the runtime built cleanly
+on top of existing infrastructure (`execute_at_raw_primitive_input`,
+`parallel_workers`, `merge_batches`).  No latent bugs surfaced;
+the well-trodden `(acc, row, extras)` parameter shape mapped
+directly to existing primitive-input dispatch.
 
 #### Why fifth
 
@@ -655,8 +802,8 @@ selection for Reduce workers — A9.
 
 ### A6 — Close the 4 fn-ref / vector / keyed-collection canaries
 
-**Status:** OPEN
-**Effort:** L (~2 sessions)
+**Status:** DONE 2026-05-01 (all 4 sub-steps A6.a / A6.b / A6.c / A6.d landed; commits `b9f7fc1`, `17bb33f`, `f048d20`, `792ea7b`).  Acceptance test passes — all 4 canaries (`par_struct_to_vector_t4`, `par_struct_to_fn_t4`, `par_vec_of_fns_input_t4`, `par_struct_to_keyed_collection_t4`) un-`#[ignore]`'d and green.
+**Effort:** L (~2 sessions) — actual: closed in a single session due to P196 unblock retiring the 4d.C closure-storage prerequisite.
 **Acceptance test:** all 4 canaries un-`#[ignore]`'d and passing.
 
 #### Why sixth
@@ -1401,20 +1548,26 @@ None substantive — A11 is mechanical doc work.
 
 ## Cumulative shape after each arc step
 
+The "Dispatchers" + "Native fns" columns count distinct functions
+in source.  The original projections (rows A1-A2 onwards) assumed
+the Queue/Concat consolidation work would land alongside each step;
+in practice the variant family grew before A8 collapses it.  See
+the **Actual today** row for what `grep` returns now.
+
 | After | Dispatchers | Native fns | User surfaces | Ignored canaries | LOC vs baseline | Bench 11 expected |
 |---|---|---|---|---|---|---|
-| Today (committed) | 4 (`run_parallel_queue` + `_ref` + `_text` + `_discard`; legacy `parallel_execute_and_collect` still present) | 8 | 2 (par/par_light) | 8 | 0 | 44 ms / 12 ms |
-| A1 | 4 (no heavy Concat; `parallel_light_execute_and_collect` still alive) | 7 | 2 | 8 | −583 | 44 ms / 12 ms |
-| A2 | 4 | 7 | 2 | 8 | −600 | 44 ms / 12 ms |
-| A3 | 5 (Queue_narrow added) | 8 | 2 | 8 | −540 | 44 ms / 12 ms |
-| A4 | 4 (Light retired) | 6 | 2 | 8 | −840 | 44 ms / 12 ms |
-| A5 | 5 (Reduce added) | 7 | 2 | 8 | −690 | 44 ms / 12 ms |
-| A6 | 5 | 7 | 2 | 4 | −690 | 44 ms / 12 ms |
-| A7 | 5 | 7 | 2 | 0 | −690 | 44 ms / 12 ms |
-| A8 | **3** (Discard / Queue / Reduce) | 5 | 2 | 0 | −900 | 44 ms / 12 ms |
-| A9 | 3 | 4 | **1** (par only) | 0 | −1000 | 44 ms / 12 ms |
-| A10 | 3 | 4 | 1 + browser | 0 | varies | + browser numbers |
-| A11 | 3 | 4 | 1 | 0 | **−1100** | unchanged |
+| **Actual today (verified 2026-05-03)** | **8** in src/parallel.rs (`raw`, `text`, `queue_ref`, `int`, `discard`, `queue`, `queue_fn`, `light`) | **13** in src/codegen_runtime.rs (incl. buf_get/buf_drop variants from spine 8d) | 2 (par/par_light) | **4** (all tuple-return; A6 closed 4 in May) | A1's −583 cuts shipped, A6 added +N for hidden-arg infra | 44 ms / 12 ms |
+| A1 (projected) | 4 (no heavy Concat; `parallel_light_execute_and_collect` still alive) | 7 | 2 | 8 | −583 | 44 ms / 12 ms |
+| A2 (projected) | 4 | 7 | 2 | 8 | −600 | 44 ms / 12 ms |
+| A3 (projected) | 5 (Queue_narrow added) | 8 | 2 | 8 | −540 | 44 ms / 12 ms |
+| A4 (projected) | 4 (Light retired) | 6 | 2 | 8 | −840 | 44 ms / 12 ms |
+| A5 (projected) | 5 (Reduce added) | 7 | 2 | 8 | −690 | 44 ms / 12 ms |
+| A6 (DONE 2026-05-01) | 5 | 7 | 2 | **4** | −690 | 44 ms / 12 ms |
+| A7 (projected) | 5 | 7 | 2 | 0 | −690 | 44 ms / 12 ms |
+| A8 (projected) | **3** (Discard / Queue / Reduce) | 5 | 2 | 0 | −900 | 44 ms / 12 ms |
+| A9 (projected) | 3 | 4 | **1** (par only) | 0 | −1000 | 44 ms / 12 ms |
+| A10 (projected) | 3 | 4 | 1 + browser | 0 | varies | + browser numbers |
+| A11 (projected) | 3 | 4 | 1 | 0 | **−1100** | unchanged |
 
 Three of plan-06's headline numbers — "1 dispatcher" (close: 3
 because Stitch policies stay distinct), "1 user surface" (yes),

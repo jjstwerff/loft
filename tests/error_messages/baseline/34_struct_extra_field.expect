@@ -1,27 +1,40 @@
 ==== exit: 1 ====
 ==== stdout ====
-Error: Unknown field Player.level at <cases>/34_struct_extra_field.loft:3:37
+error: Unknown field Player.level
+  --> <cases>/34_struct_extra_field.loft:3:37
   |
-   3 |   p = Player { name: "Bob", level: 5 };
-     |                                     ^
-Error: Expect token } at <cases>/34_struct_extra_field.loft:3:37
+3 |   p = Player { name: "Bob", level: 5 };
+  |                                     ^
+
+error: Expect token }
+  --> <cases>/34_struct_extra_field.loft:3:37
   |
-   3 |   p = Player { name: "Bob", level: 5 };
-     |                                     ^
-Error: Expect token ; at <cases>/34_struct_extra_field.loft:3:37
+3 |   p = Player { name: "Bob", level: 5 };
+  |                                     ^
+
+error: Expect token ;
+  --> <cases>/34_struct_extra_field.loft:3:37
   |
-   3 |   p = Player { name: "Bob", level: 5 };
-     |                                     ^
-Error: Expect token = at <cases>/34_struct_extra_field.loft:4:9
+3 |   p = Player { name: "Bob", level: 5 };
+  |                                     ^
+
+error: Expect token =
+  --> <cases>/34_struct_extra_field.loft:4:9
   |
-   4 |   print("{p.name}");
-     |         ^
-Error: Expect constants to be in upper case style at <cases>/34_struct_extra_field.loft:4:9
+4 |   print("{p.name}");
+  |         ^
+
+error: Expect constants to be in upper case style
+  --> <cases>/34_struct_extra_field.loft:4:9
   |
-   4 |   print("{p.name}");
-     |         ^
-Error: Syntax error: unexpected '}' at <cases>/34_struct_extra_field.loft:5:2
+4 |   print("{p.name}");
+  |         ^
+
+error: Syntax error: unexpected '}'
+  --> <cases>/34_struct_extra_field.loft:5:2
   |
-   5 | }
-     |  ^
+5 | }
+  |  ^
+
+error: aborting due to 6 previous errors
 ==== stderr ====

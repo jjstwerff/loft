@@ -153,13 +153,23 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
         "n_parallel_queue_ref",
         Box::new(parallel::ParallelQueueEmitter),
     );
+    // Plan-06 ARC.md A3 — narrow-Integer queue routes through the
+    // same emitter (which checks the worker return type and swaps
+    // to `n_parallel_queue_narrow_native`).  buf_get_narrow and
+    // buf_drop_narrow are pass-through renames.
+    r.insert(
+        "n_parallel_queue_narrow",
+        Box::new(parallel::ParallelQueueEmitter),
+    );
     for name in [
         "n_parallel_buf_get",
         "n_parallel_buf_get_text",
         "n_parallel_buf_get_ref",
+        "n_parallel_buf_get_narrow",
         "n_parallel_buf_drop",
         "n_parallel_buf_drop_text",
         "n_parallel_buf_drop_ref",
+        "n_parallel_buf_drop_narrow",
     ] {
         r.insert(name, Box::new(parallel::ParallelBufRenameEmitter));
     }

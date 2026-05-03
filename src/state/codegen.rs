@@ -1961,6 +1961,7 @@ impl State {
             || stack.data.def(op).name == "n_parallel_queue_ref"
             || stack.data.def(op).name == "n_parallel_queue_narrow"
             || stack.data.def(op).name == "n_parallel_queue_fn"
+            || stack.data.def(op).name == "n_parallel_fold"
         {
             let n_declared = stack.data.def(op).attributes.len();
             for extra in parameters.iter().skip(n_declared) {
@@ -2132,6 +2133,7 @@ impl State {
                 || stack.data.def(op).name == "n_parallel_queue_ref"
                 || stack.data.def(op).name == "n_parallel_queue_narrow"
                 || stack.data.def(op).name == "n_parallel_queue_fn"
+                || stack.data.def(op).name == "n_parallel_fold"
             {
                 let n_declared = stack.data.def(op).attributes.len();
                 for extra in parameters.iter().skip(n_declared) {

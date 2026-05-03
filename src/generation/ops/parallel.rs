@@ -83,6 +83,37 @@ fn queue_helper_name(shape: ClosureShape) -> &'static str {
     }
 }
 
+/// Plan-06 ARC.md A3 — narrow-Integer queue helper name.  Narrow
+/// integer returns (byte_width 1/2/4) need the byte-packing variant
+/// instead of the wide `Vec<u64>` queue.
+fn queue_narrow_helper_name() -> &'static str {
+    "n_parallel_queue_narrow_native"
+}
+
+/// True when the worker's return type rides the narrow-Queue path
+/// (byte-packed buffer, stride 1/2/4).  Mirrors the parser-side
+/// `narrow_route_for` decision in `src/parser/collections.rs`:
+///
+/// - `Integer(spec)` with `byte_width 1/2/4` (A3 narrow Integer)
+/// - `Boolean` (A3.5)
+/// - `Character` (A3.5)
+/// - `Enum(_, false, _)` no-payload (A3.5)
+///
+/// Used by `ParallelQueueEmitter` to swap the runtime helper to the
+/// narrow variant `n_parallel_queue_narrow_native`.  Without this,
+/// the parser routes via `n_parallel_queue_narrow` (narrow buffer)
+/// while the emitter would call `n_parallel_queue_native` (wide
+/// buffer) — body's `parallel_buf_get_narrow` then reads from an
+/// empty narrow buffer and panics.
+fn is_narrow_int_return(ret: &Type) -> bool {
+    match ret {
+        Type::Integer(spec) => matches!(spec.byte_width(true), 1 | 2 | 4),
+        Type::Boolean | Type::Character => true,
+        Type::Enum(_, false, _) => true,
+        _ => false,
+    }
+}
+
 /// `n_parallel_for` / `n_parallel_for_light` emitter.
 ///
 /// Lifts the legacy match-arm body verbatim into a custom emitter
@@ -177,10 +208,24 @@ impl OpEmitter for ParallelForEmitter {
                 ctx.w,
                 ", |cell, elm| {{ {worker_name}(cell, elm{extras}).to_bits() as i64 }})"
             )?,
-            ClosureShape::Scalar => write!(
-                ctx.w,
-                ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
-            )?,
+            ClosureShape::Scalar => {
+                // Plan-06 ARC.md A3.5 — Boolean returns map to Rust
+                // `bool`, which cannot cast directly to i64; insert
+                // an `as u8` bridge.  Other Scalar shapes (Integer
+                // narrow / wide, Character → i32, Enum-no-payload →
+                // u8) all support `as i64` natively.
+                if matches!(worker_ret, Type::Boolean) {
+                    write!(
+                        ctx.w,
+                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as u8 as i64 }})"
+                    )?;
+                } else {
+                    write!(
+                        ctx.w,
+                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
+                    )?;
+                }
+            }
         }
 
         // Close the `{ let _ex0 = … ;` blocks opened above.
@@ -233,7 +278,14 @@ impl OpEmitter for ParallelQueueEmitter {
             write!(ctx.w, "; ")?;
         }
 
-        let par_fn = queue_helper_name(shape);
+        // Plan-06 ARC.md A3 — narrow-Integer returns route through
+        // `n_parallel_queue_narrow_native` (byte-packed buffer);
+        // wide / non-Integer scalars stay on `n_parallel_queue_native`.
+        let par_fn = if is_narrow_int_return(&worker_ret) {
+            queue_narrow_helper_name()
+        } else {
+            queue_helper_name(shape)
+        };
         write!(ctx.w, "{par_fn}(cell, ")?;
         ctx.emit(&args[0])?;
         write!(ctx.w, ", ")?;
@@ -275,10 +327,24 @@ impl OpEmitter for ParallelQueueEmitter {
                 ctx.w,
                 ", |cell, elm| {{ {worker_name}(cell, elm{extras}).to_bits() as i64 }})"
             )?,
-            ClosureShape::Scalar => write!(
-                ctx.w,
-                ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
-            )?,
+            ClosureShape::Scalar => {
+                // Plan-06 ARC.md A3.5 — Boolean returns map to Rust
+                // `bool`, which cannot cast directly to i64; insert
+                // an `as u8` bridge.  Other Scalar shapes (Integer
+                // narrow / wide, Character → i32, Enum-no-payload →
+                // u8) all support `as i64` natively.
+                if matches!(worker_ret, Type::Boolean) {
+                    write!(
+                        ctx.w,
+                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as u8 as i64 }})"
+                    )?;
+                } else {
+                    write!(
+                        ctx.w,
+                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
+                    )?;
+                }
+            }
         }
 
         for _ in 0..n_extra {

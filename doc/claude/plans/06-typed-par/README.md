@@ -47,6 +47,49 @@ verified 2026-04-25) and `src/codegen_runtime.rs:1581-1805` (224
 lines), plus the parser auto-light heuristic at
 `src/parser/builtins.rs:403::check_light_eligible`.
 
+## Realised value (so far) — bug discovery
+
+Plan-06's headline metric is "~1100 LOC retired."  That undersells
+the work: getting there has surfaced **14+ P-issues** in the
+type-system × native-codegen × parallel-runtime intersection that
+would have hit users in their own threading code with much harder
+reproducers than a curated canary.  The plan functions as a
+structured fuzz/bug-hunt of that intersection — every canary
+triage round, every G-surface coverage extension, every D11
+type-spectrum sweep is a probe that has, in fact, kept finding
+real bugs.
+
+Filed and/or closed during plan-06 work (chronological):
+
+| P-issue | Surface | Title |
+|---|---|---|
+| P188 | keyed collections | `field += elem` on hash/index/sorted (compound-assign codegen) |
+| P189 | par dispatch | typed wide-input dispatch + tuple-as-vector-element |
+| P189c | par dispatch | vector<tuple> element write + light wide path |
+| P190 | type registration | local-var sorted/hash/index types weren't registered on demand |
+| P191 | keyed bookkeeping | `index<T[key]>` 4-byte int<0,false> (range-bookkeeping mismatch) |
+| P192 | stdlib | `len()` overload missing for hash/index |
+| P194 | tuple structs | tuple-struct field reassignment |
+| P195 | lexer | chained tuple-index lex (`n.v.0.0`) |
+| P196 | native codegen | tuple-of-fn-ref native codegen ((u32, DbRef) as i32) |
+| P197 | dep tracking | dep-tracked text reads (bundled with P194) |
+| P198 | scan_set | unwrap Span in scan_set + native deep-copy emission |
+| P199 | native ABI | `&mut Stores` → `&UnsafeCell<Stores>` (3-commit fix series) |
+| P200 | native codegen | int compare emission (closed in plan-09; surfaced here) |
+| P201 | misc | branch-local regression (filed 2026-04-29) |
+
+Several of these (P191, P195, P196, P198, P199) are bugs that
+ordinary doc-tests do not surface — they require the specific
+type-shape interactions that the par() canaries force.
+
+The implication for evaluating plan-06's value: **as long as
+canaries keep surfacing P-issues, plan-06's per-day yield is
+high.**  When canaries stop surfacing new bugs, that's itself a
+useful signal that this surface is mature — at which point
+finishing the LOC retirement becomes the dominant remaining
+value.  Today (2026-05-02) we are still in the bug-finding
+regime.
+
 ## Phase 0 findings folded back into the plan
 
 Phase 0a's source survey + characterisation tests + bench surfaced
@@ -124,7 +167,7 @@ single PR with its own `make ci` run.
 | Phase | File | Status | Effort | Summary |
 |---|---|---|---|---|
 | 0 | [00-baseline-and-bench.md](00-baseline-and-bench.md) | **done** | S | Characterisation suite (0a — `tests/threading_chars.rs` 16 positives + 17 canaries), realistic perf bench (0b — `bench/11_par/` with python + rust + loft-wasm columns), baseline recorded in THREADING.md (0c), D11 type-coverage tracker pre-populated (0d).  Surface gaps G1 / G2 / G3 surfaced and tracked. |
-| 1 | [01-output-store.md](01-output-store.md) | **effectively done; 2 deferred canaries** | M | Workers write to per-worker output Stores instead of `out_ptr` / channel.  Landed: G1 struct-enum returns (heavy path routing), G2 primitive-input dispatch (1/4/8-byte slot promotion), G2.1 narrow-integer stride (vector<u8>/<i32>), G3 text-input dispatch (16-byte Str slots), G4 partial fn-ref return scaffolding (parser + execute_at_raw_to wired; closure layout still off).  Remaining `#[ignore]`d canaries: `par-fn-return` (`tests/threading_chars.rs:686`, deferred to phase 4 — closure DbRef sentinel offset bug, deep codegen work) and `par-vector-return` (line 639, deferred to phase 7 — needs hidden-arg per-worker destination machinery).  Per the [PRIORITY.md](PRIORITY.md) audit (2026-04-29), these belong to their final-resting phases by design and are not phase-1 invariant blockers; the spine's foundation (per-worker output stores in production paths) is in place. |
+| 1 | [01-output-store.md](01-output-store.md) | **done** | M | Workers write to per-worker output Stores instead of `out_ptr` / channel.  Landed: G1 struct-enum returns (heavy path routing), G2 primitive-input dispatch (1/4/8-byte slot promotion), G2.1 narrow-integer stride (vector<u8>/<i32>), G3 text-input dispatch (16-byte Str slots), G4 fn-ref return scaffolding.  The two previously-deferred `#[ignore]`d canaries (`par-fn-return`, `par-vector-return`) **closed in May 2026** via ARC.md A6.a (vector return → `run_parallel_queue_ref`) and A6.b (fn-ref return → packed-buffer Queue route).  Comments at `tests/threading_chars.rs:648` (vector) and `:711` (fn-ref) cross-reference the closing commits. |
 | 1.5 | [01.5-rayon-pool.md](01.5-rayon-pool.md) | **done** | S | Native runtime now uses a shared rayon work-stealing pool via `parallel_workers<R, F>` template (`src/parallel.rs:122`).  All `run_parallel_*` variants funnel through it. |
 | 2 | [02-stitch-not-copy.md](02-stitch-not-copy.md) | **partial; remaining work folded into phase 11** | M | Main-thread stitch via store-pointer rebase.  Landed: `Stores::adopt_store`, `WorkerStores::add_output_slot/take_slot/take_all_owned`, per-variant ownership dispatch for struct-enums (`copy_from_worker_unowned` skips copy_claims for owned-free types, with peek-discriminant per element).  **2a complete** — `StoreRebase::with_parent_count` + `translate` (3-category rule from D11c: worker-own / parent-shared / cross-worker debug-panic), recursive `rebase_walk_record` type-driven via `data::owned_elements`, cycle-safe via `visited` HashSet, plus `Stores::adopt_worker_excess` helper, 12 unit tests in `tests/parallel_rebase.rs`.  Sub-phases 2b/2c/2d/2e (wiring into the materialised-result-vector path) **defer to phase 11's `par_to_vec` opt-in** — phase 10's strategic shift makes the materialised path opt-in, so the rebase machinery becomes phase 11's tool, not the default. |
 | 3 | [03-one-native-fn.md](03-one-native-fn.md) | **partial** | S | Sub-phases landed: 3c (collapsed primitive-return arms in `parallel_execute_and_collect` — single `run_parallel_direct` handles all inline 1-8 byte returns), 3d (runtime derives DispatchMode from `def.returned`; sentinel `return_size` is now backstop only), **3b.1 helper extraction** (`alloc_par_result` / `finalize_par_result` in `codegen_runtime.rs` — shared prologue + epilogue for the 3 native par fns; `parallel::merge_batches<R>` — shared per-thread merge loop used by 5 sites across `parallel.rs` + `codegen_runtime.rs`; ~55 lines retired across both helpers, no API change so generated test fixtures unaffected).  `Stitch::Reduce` runtime (3e) and 3b.2 (true unification with a `Stitch` trait — different closure return types `-> i64` / `-> String` / `-> DbRef` need trait dispatch + ~30 generated fixtures regenerated) still pending. |
