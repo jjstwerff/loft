@@ -1,0 +1,35 @@
+// match.loft — pattern matching on enums.
+//
+// Demonstrates: plain enums, struct-enum variants (each variant
+// carries its own fields), `match` exhaustiveness, method dispatch
+// across variants.
+
+enum Shape {
+  Circle { radius: float },
+  Rect   { width: float, height: float },
+  Square { side: float },
+}
+
+fn area(self: Shape) -> float {
+  match self {
+    Circle { radius } => 3.14159 * radius * radius,
+    Rect   { width, height } => width * height,
+    Square { side } => side * side,
+  }
+}
+
+fn main() {
+  shapes = [
+    Circle { radius: 1.0 },
+    Rect   { width: 2.0, height: 3.0 },
+    Square { side: 4.0 },
+  ];
+  for s in shapes {
+    a = s.area();
+    match s {
+      Circle { radius } => print("Circle r={radius} area={a}\n"),
+      Rect   { width, height } => print("Rect {width}x{height} area={a}\n"),
+      Square { side } => print("Square {side}x{side} area={a}\n"),
+    }
+  }
+}

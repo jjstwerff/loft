@@ -1,0 +1,27 @@
+// files.loft — write a text file, read it back, count its lines.
+//
+// Demonstrates: file I/O via the `file()` constructor + method-style
+// `f.write(...)` and `f.content()`.  See STDLIB.md for the full API.
+//
+// The example is hermetic — it writes to a per-run path under
+// /tmp/ and prints the contents back.
+
+fn main() {
+  path = "/tmp/loft_example_files.txt";
+  // `file(path)` returns a File handle even if the path doesn't
+  // exist yet; the first `write` creates it.
+  out = file(path);
+  out.write("first line\nsecond line\nthird line\n");
+  // Re-open to read the contents.
+  contents = file(path).content();
+  // Count newlines for the line count.
+  line_count = 0;
+  for ch in contents {
+    if ch == '\n' { line_count += 1; }
+  }
+  print("Wrote {len(contents)} bytes, {line_count} lines, to {path}\n");
+  // Show what we read.
+  print("---\n");
+  print(contents);
+  print("---\n");
+}
