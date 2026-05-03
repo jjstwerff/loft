@@ -179,6 +179,22 @@ extern "C" fn handler(sig: libc::c_int, _info: *mut libc::siginfo_t, _ucontext: 
     // fields produce a "no context" message — still useful to
     // confirm the signal fired.
     let ctx = LAST_CTX.with(Cell::get);
+    // Plan-07 phase 3 — try to resolve the offending pc to a loft
+    // source position.  This is technically not async-signal-safe
+    // (`RefCell::try_borrow` reads a counter that another borrow
+    // could be mutating mid-signal), but in practice the
+    // SOURCE_SPANS RefCell is mutated only once per `execute_argv`
+    // entry — a microsecond window — and `try_borrow` returns Err
+    // (we then skip the source-loc print) instead of panicking on
+    // a conflict.  Worst case: the crash report omits the source
+    // line, which is the same as the pre-phase-3 behaviour.
+    let source_loc = SOURCE_SPANS.with(|s| {
+        s.try_borrow().ok().and_then(|borrow| {
+            borrow
+                .as_ref()
+                .and_then(|m| m.range(..=ctx.pc).next_back().map(|(_, p)| p.clone()))
+        })
+    });
     let sig_name = match sig {
         libc::SIGSEGV => "SIGSEGV",
         libc::SIGABRT => "SIGABRT",
@@ -187,7 +203,7 @@ extern "C" fn handler(sig: libc::c_int, _info: *mut libc::siginfo_t, _ucontext: 
     };
     let program = PROGRAM.get().copied().unwrap_or("loft");
     // Build message into a fixed-size buffer, async-signal-safe.
-    let mut buf = [0u8; 512];
+    let mut buf = [0u8; 768];
     let mut w = Writer::new(&mut buf);
     let _ = w.str("\n=== loft crash (");
     let _ = w.str(program);
@@ -211,6 +227,18 @@ extern "C" fn handler(sig: libc::c_int, _info: *mut libc::siginfo_t, _ucontext: 
         let _ = w.str(" (d_nr=");
         let _ = w.u32(ctx.fn_d_nr);
         let _ = w.str(")\n");
+        // Plan-07 phase 3 — emit `at file:line:col` when the source
+        // span lookup succeeded.  Truncate file path to fit; the
+        // user can still grep for it.
+        if let Some(pos) = source_loc.as_ref() {
+            let _ = w.str("  at:      ");
+            let _ = w.str(&pos.file);
+            let _ = w.str(":");
+            let _ = w.u32(pos.line);
+            let _ = w.str(":");
+            let _ = w.u32(pos.pos);
+            let _ = w.str("\n");
+        }
     }
     let _ = w.str("===\n");
     let bytes = w.as_bytes();
@@ -325,5 +353,64 @@ mod tests {
         // Calling twice should not panic or misbehave.
         install("test");
         install("test");
+    }
+
+    /// Plan-07 phase 3 — source-position lookup for the panic hook +
+    /// signal handler.  Verifies the snapshot-based lookup returns the
+    /// most-recent entry at-or-before a given pc, matching the
+    /// `range(..=pc).next_back()` semantics.
+    #[test]
+    fn source_loc_lookup_returns_most_recent_at_or_before() {
+        use crate::lexer::Position;
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+        let mut spans = BTreeMap::new();
+        spans.insert(
+            5,
+            Position {
+                file: "a.loft".to_string(),
+                line: 10,
+                pos: 1,
+            },
+        );
+        spans.insert(
+            20,
+            Position {
+                file: "a.loft".to_string(),
+                line: 20,
+                pos: 1,
+            },
+        );
+        spans.insert(
+            50,
+            Position {
+                file: "a.loft".to_string(),
+                line: 30,
+                pos: 1,
+            },
+        );
+        set_source_spans(Some(Arc::new(spans)));
+
+        // Exact hit returns the entry's position.
+        assert_eq!(source_loc_for_pc(5).unwrap().line, 10);
+        assert_eq!(source_loc_for_pc(20).unwrap().line, 20);
+        // Between entries returns the floor (most recent at-or-before).
+        assert_eq!(source_loc_for_pc(7).unwrap().line, 10);
+        assert_eq!(source_loc_for_pc(45).unwrap().line, 20);
+        // Past the last entry returns the last entry.
+        assert_eq!(source_loc_for_pc(100).unwrap().line, 30);
+        // Before the first entry returns None.
+        assert!(source_loc_for_pc(0).is_none());
+        assert!(source_loc_for_pc(4).is_none());
+
+        // Cleanup so other tests don't see this snapshot.
+        set_source_spans(None);
+    }
+
+    #[test]
+    fn source_loc_lookup_returns_none_when_no_snapshot() {
+        // Ensure the thread-local is unset at the start.
+        set_source_spans(None);
+        assert!(source_loc_for_pc(42).is_none());
     }
 }

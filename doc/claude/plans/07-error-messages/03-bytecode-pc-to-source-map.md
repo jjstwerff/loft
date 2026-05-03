@@ -5,7 +5,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 3 — pc → source-line map
 
-Status: open
+Status: shipped (2026-05-03).  Core machinery (pc → Position table,
+publish-to-thread-local snapshot, panic-hook source-loc print) had
+already landed during plan-09 work.  Phase 3's missing piece — the
+SIGSEGV / SIGABRT / SIGBUS handler emitting the source location —
+landed in this session along with regression tests covering the
+lookup semantics.
+
+The plan's 3a (compact `SourceSpanTable` + `PositionInterner`) was
+skipped — `BTreeMap<u32, Position>` + `Arc<...>` snapshot is fine
+for the panic-only access pattern, and the per-op overhead the
+plan was guarding against (3e) doesn't apply: nothing reads the
+map per-op.  Lookup happens only on a fault.
+
+3d (LOFT_LOG=crash_tail prefix) was deferred — low value (the
+trace already prints op names + pcs) and would require either
+per-op formatting cost or significant log-routing surgery.
 
 ## Goal
 
