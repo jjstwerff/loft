@@ -1,0 +1,52 @@
+{
+  "name": "loft",
+  "displayName": "Loft Language",
+  "description": "Syntax highlighting and snippets for the Loft programming language.",
+  "version": "0.1.0",
+  "publisher": "loft-lang",
+  "license": "LGPL-3.0-or-later",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "loft",
+    "scripting",
+    "rust"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jjstwerff/loft.git",
+    "directory": "editors/vscode"
+  },
+  "homepage": "https://github.com/jjstwerff/loft",
+  "bugs": {
+    "url": "https://github.com/jjstwerff/loft/issues"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "loft",
+        "aliases": ["Loft", "loft"],
+        "extensions": [".loft"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "loft",
+        "scopeName": "source.loft",
+        "path": "./syntaxes/loft.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "loft",
+        "path": "./snippets/loft.json"
+      }
+    ]
+  }
+}

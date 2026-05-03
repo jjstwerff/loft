@@ -1,0 +1,111 @@
+{
+  "fn": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:params}) -> ${3:integer} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Function declaration"
+  },
+  "fn-void": {
+    "prefix": "fnv",
+    "body": [
+      "fn ${1:name}(${2:params}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Void function declaration"
+  },
+  "main": {
+    "prefix": "main",
+    "body": [
+      "fn main() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "main entry point"
+  },
+  "struct": {
+    "prefix": "struct",
+    "body": [
+      "struct ${1:Name} {",
+      "\t${2:field}: ${3:integer},",
+      "\t$0",
+      "}"
+    ],
+    "description": "Struct declaration"
+  },
+  "enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:Variant},",
+      "\t$0",
+      "}"
+    ],
+    "description": "Enum declaration"
+  },
+  "for": {
+    "prefix": "for",
+    "body": [
+      "for ${1:item} in ${2:collection} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "For loop"
+  },
+  "while": {
+    "prefix": "while",
+    "body": [
+      "while ${1:condition} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "While loop"
+  },
+  "match": {
+    "prefix": "match",
+    "body": [
+      "match ${1:expr} {",
+      "\t${2:pattern} => ${3:value},",
+      "\t_ => ${4:default},",
+      "}"
+    ],
+    "description": "Match expression"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If statement"
+  },
+  "if-else": {
+    "prefix": "ife",
+    "body": [
+      "if ${1:condition} {",
+      "\t${2:then}",
+      "} else {",
+      "\t${3:else}",
+      "}"
+    ],
+    "description": "If/else statement"
+  },
+  "assert": {
+    "prefix": "assert",
+    "body": [
+      "assert(${1:condition}, \"${2:message}\");"
+    ],
+    "description": "Assertion"
+  },
+  "println": {
+    "prefix": "println",
+    "body": [
+      "println(\"${1:message}\");"
+    ],
+    "description": "Print line"
+  }
+}
