@@ -20,6 +20,191 @@ stock GDB or LLDB.
 
 ---
 
+## Tooling prerequisites
+
+Each tool is **only needed for the specific quality gate noted**.
+You can skip the install if you're not running that gate yourself.
+
+### VS Code (for SH.1 visual check + SH.2 install / package check)
+
+VS Code is Microsoft's free editor; the SH.2 extension targets it.
+Other editors (Sublime, Vim, Emacs) consume the same TextMate
+grammar via different paths — see the SH.1 cross-editor note below
+if you want to skip VS Code entirely.
+
+**Install:**
+- **Linux:** `sudo snap install code --classic` OR
+  download the `.deb` / `.rpm` from <https://code.visualstudio.com/Download>.
+- **macOS:** `brew install --cask visual-studio-code` OR
+  download the `.dmg`.
+- **Windows:** download the installer from <https://code.visualstudio.com/Download>.
+- **CLI inside VS Code:** after install, the `code` command should
+  be on your PATH.  If not, in VS Code: `Cmd/Ctrl+Shift+P` → "Shell
+  Command: Install 'code' command in PATH".
+
+**Verify:**
+```sh
+code --version    # prints version + commit hash
+```
+
+### `vsce` — VS Code extension packager (for SH.2 `vsce package` check)
+
+`vsce` is the official command-line tool that bundles an
+`editors/vscode/` directory into a single `.vsix` file you can
+install or publish.  It's a Node.js package.
+
+**Install:**
+```sh
+# requires Node.js (20.x or newer); install Node first if needed:
+#   Linux:   sudo apt install nodejs npm   OR   nvm install 20
+#   macOS:   brew install node
+#   Windows: download from https://nodejs.org/
+
+npm install -g @vscode/vsce
+```
+
+**Verify:**
+```sh
+vsce --version    # prints version
+```
+
+**Use (for SH.2 quality gate):**
+```sh
+cd editors/vscode
+vsce package      # produces loft-0.1.0.vsix in the same directory
+```
+
+**Reference:** <https://code.visualstudio.com/api/working-with-extensions/publishing-extension>.
+
+### Sublime Text (alternative SH.1 cross-editor check)
+
+Skip if you don't have Sublime.  Other TextMate-aware editors
+(IntelliJ TextMate import, Atom, BBEdit) work analogously.
+
+**Install:** <https://www.sublimetext.com/download>.
+
+**Use:**
+1. Open Sublime Text.
+2. `Tools > Developer > New Syntax`.
+3. Paste the contents of `syntaxes/loft.tmLanguage.json`.
+4. Save as `Loft.sublime-syntax` in the user packages directory
+   (Sublime auto-converts the JSON-format scope names).
+5. Open any `.loft` file — colouring should match VS Code.
+
+### `gdb` — debugger (for NDB.0 quality gate, Linux primary)
+
+GNU Debugger.  Used to verify that `--native-debug` produces a
+binary you can step through.
+
+**Install:**
+- **Linux:** `sudo apt install gdb` (Debian/Ubuntu) or
+  `sudo dnf install gdb` (Fedora) — usually pre-installed.
+- **macOS:** `gdb` is awkward on macOS post-Mojave; use **lldb**
+  instead (pre-installed with Xcode Command Line Tools).
+- **Windows:** comes with `MSYS2` / `mingw-w64` builds; or use
+  the Visual Studio Debugger via VS Code's native debugger
+  extension.  Easiest path on Windows is WSL2 + Linux gdb.
+
+**Verify:**
+```sh
+gdb --version    # GNU gdb (...) X.Y
+```
+
+**Use (for NDB.0 quality gate):**
+```sh
+loft --native --native-debug examples/hello.loft
+# Note the binary path printed in cache, e.g.
+#   examples/.loft/cache/hello-<hash>
+gdb examples/.loft/cache/hello-<hash>
+(gdb) break n_main
+(gdb) run
+(gdb) step
+(gdb) print var_x
+(gdb) continue
+(gdb) quit
+```
+
+### `lldb` — debugger (NDB.0 alternative, macOS primary)
+
+LLVM Debugger.  Same use case as GDB; the canonical macOS choice.
+
+**Install:**
+- **macOS:** comes with Xcode Command Line Tools (`xcode-select --install`).
+- **Linux:** `sudo apt install lldb` or `sudo dnf install lldb`.
+- **Windows:** ships with LLVM (<https://releases.llvm.org/>).
+
+**Verify:**
+```sh
+lldb --version
+```
+
+**Use (for NDB.0 quality gate):**
+```sh
+lldb examples/.loft/cache/hello-<hash>
+(lldb) breakpoint set --name n_main
+(lldb) run
+(lldb) step
+(lldb) frame variable
+(lldb) continue
+(lldb) quit
+```
+
+### `objdump` — DWARF inspector (NDB.0 sanity check)
+
+Standard binutils tool.  Confirms DWARF debug-info actually made
+it into the binary, independent of whether GDB / LLDB cooperate.
+
+**Install:**
+- **Linux:** `sudo apt install binutils` — usually pre-installed.
+- **macOS:** `brew install binutils` (provides `gobjdump`; the
+  Apple-shipped `objdump` is LLVM-based and uses different flag
+  names).
+- **Windows:** ships with MSYS2 / mingw-w64 / WSL2.
+
+**Use (for NDB.0 quality gate):**
+```sh
+objdump --dwarf=info examples/.loft/cache/hello-<hash> | head -20
+# Should show DW_TAG_subprogram + DW_AT_name entries.
+```
+
+### `node` — for JS-glue probes (browser quality gate)
+
+Already present if you installed Node for `vsce`.  The
+`make gallery` step uses Node to instantiate the WASM bundle as
+a browser would, catching `LinkError` mismatches before they
+reach users.
+
+**Use (already wired into CI):**
+```sh
+make gallery   # rebuilds doc/pkg/ + probes the bundle
+```
+
+### `python3` — JSON validation (universal, already common)
+
+Used for one-line JSON schema validation:
+```sh
+python3 -c "import json; json.load(open('syntaxes/loft.tmLanguage.json'))"
+```
+
+If `python3` exits 0, the JSON parses; if not, you get a clear
+`JSONDecodeError` line + col.  Already part of every modern OS.
+
+### Quick "what do I need for which gate?" table
+
+| Gate | Tool needed | Skip if… |
+|---|---|---|
+| SH.1 visual (VS Code) | VS Code | you have Sublime / Vim / Emacs and use those instead |
+| SH.1 visual (Sublime) | Sublime Text | you have VS Code |
+| SH.2 `vsce package` | `vsce` (+ Node) | you'll publish from CI later |
+| SH.2 install | `code` CLI | you'll smoke-test in your daily editor |
+| NDB.0 GDB | `gdb` | you're on macOS — use LLDB |
+| NDB.0 LLDB | `lldb` | you'll run on Linux only |
+| NDB.0 DWARF | `objdump` | you trust GDB / LLDB to find the source |
+| Browser probe | `node` | not interested in the gallery / playground deploy |
+| Cross-cutting CI | none extra | (CI matrix on GitHub does this) |
+
+---
+
 ## Per-item checklist
 
 ### SH.1 — TextMate grammar (`syntaxes/loft.tmLanguage.json`) — ✅ DONE
