@@ -1,12 +1,23 @@
 # Loft TextMate grammar
 
 `loft.tmLanguage.json` provides syntax highlighting for `.loft` files
-in any editor that supports [TextMate grammars](https://macromates.com/manual/en/language_grammars):
+in any editor that supports JSON-format
+[TextMate grammars](https://macromates.com/manual/en/language_grammars):
 
-- VS Code (via the extension at `editors/vscode/`, planned in DX.md SH.2)
-- Sublime Text (`Tools > Developer > New Syntax`)
-- GitHub (file extension routing once published as a Linguist contribution)
-- Atom, BBEdit, IntelliJ TextMate import, etc.
+- **VS Code** — via the extension at `editors/vscode/` (SH.2 ✅)
+- **IntelliJ-family** (CLion / IDEA / PyCharm / WebStorm) — `Settings → Editor → TextMate Bundles`, point at this `syntaxes/` directory
+- **GitHub Linguist** — once published as a Linguist contribution (0.8.6 follow-up)
+- **Atom**, **BBEdit**, others with TextMate import — best-effort, not formally tested
+
+**Sublime Text** is **not** directly supported because Sublime
+Text 4 reads `.sublime-syntax` (YAML) and `.tmLanguage` (Apple
+plist XML), not the JSON tmLanguage format we ship.  The
+historical conversion path (Package Control → PackageDev) has
+broken since Sublime moved to Python 3.8.  A YAML
+`.sublime-syntax` companion file or a runtime conversion script
+is a 0.8.6 follow-up; for now Sublime users with strong
+preference can convert this file manually using one of the
+stand-alone tmLanguage→sublime-syntax tools on PyPI.
 
 ## Scope coverage
 

@@ -166,52 +166,42 @@ This launches VS Code with an empty profile that won't interfere
 with or be polluted by your normal setup.  Delete `/tmp/loft-clean-vscode`
 when you're done.
 
-### Sublime Text (alternative SH.1 cross-editor check)
+### Sublime Text — DEFERRED to 0.8.6
 
-Skip if you don't have Sublime.  **Caveat: not as one-step as VS
-Code.**  Sublime Text 4 reads `.sublime-syntax` (YAML, Sublime's
-native format) or `.tmLanguage` (Apple plist XML, legacy
-TextMate format).  Our `syntaxes/loft.tmLanguage.json` is **JSON**
-TextMate format — VS Code-compatible but not directly Sublime-
-parseable.  One conversion step is needed.
+**Status: not in scope for 0.8.5.**  Sublime Text 4 reads
+`.sublime-syntax` (YAML, Sublime's native format) or `.tmLanguage`
+(Apple plist XML, legacy TextMate format).  Our
+`syntaxes/loft.tmLanguage.json` is **JSON** TextMate format — VS
+Code-compatible but not directly Sublime-parseable.
 
-**Install Sublime:** <https://www.sublimetext.com/download>.
+The historical conversion path (Package Control → PackageDev →
+`Tools > PackageDev > Convert`) broke when Sublime Text 4 moved
+to Python 3.8; PackageDev's plugin loader hasn't tracked the
+update on every host.  Treating this as a closed door for 0.8.5
+rather than chasing a workaround.
 
-**UI walkthrough (with conversion):**
+**0.8.6 follow-up options** (pick one when adoption signals
+demand):
 
-1. **Install Package Control** (one-time): in Sublime, menu
-   `Tools > Install Package Control...`.  Wait for the
-   "successfully installed" notification.
-2. **Install PackageDev**: `Ctrl/Cmd+Shift+P` → type `Package
-   Control: Install Package` → Enter → type `PackageDev` →
-   Enter.  Wait for install (~5 seconds).
-3. **Find the Packages folder**: menu `Preferences > Browse
-   Packages...`.  Your file manager opens at the Sublime
-   `Packages/` directory.  Per-OS canonical path:
-   - **Linux:** `~/.config/sublime-text/Packages/`
-   - **macOS:** `~/Library/Application Support/Sublime Text/Packages/`
-   - **Windows:** `%APPDATA%\Sublime Text\Packages\`
-4. **Make a `User/Loft/` subfolder** (or just use `User/`
-   directly — a subfolder keeps room for future loft-related
-   add-ons like snippets).
-5. **Copy `syntaxes/loft.tmLanguage.json`** from the loft repo
-   into that folder.  Rename to `Loft.tmLanguage` (drop the
-   `.json` suffix).
-6. **Open the file in Sublime**.  Sublime should syntax-highlight
-   it as JSON.  Menu `Tools > PackageDev > Convert > tmLanguage
-   to sublime-syntax`.  Produces a `Loft.sublime-syntax` file
-   in the same directory.
-7. **Open any `.loft` file** (`File > Open...` or `Ctrl/Cmd+O`).
-   Sublime should auto-detect via the `fileTypes: ["loft"]`
-   entry and apply Loft syntax.  If not, click the bottom-right
-   language indicator and pick `Loft` from the dropdown.
+- **Hand-write a YAML `.sublime-syntax` companion** in
+  `syntaxes/loft.sublime-syntax`.  Same scope names as the JSON
+  grammar but in Sublime's native format.  Means maintaining two
+  grammar sources; tolerable as long as updates stay infrequent.
+- **Ship a build script** in `editors/sublime/` that converts the
+  JSON grammar at install time using a Python conversion library
+  (e.g. one of the stand-alone tmLanguage→sublime-syntax tools
+  on PyPI).  No source duplication but adds a build dependency.
+- **Drop Sublime support** and document VS Code as the canonical
+  editor.  Other TextMate-aware editors (IntelliJ-family, Atom,
+  BBEdit) consume the JSON grammar directly via their own
+  TextMate import paths.
 
-**Alternatively, skip Sublime for 0.8.5.**  VS Code is the
-canonical 0.8.5 deliverable; the Sublime path is a quality-gate
-fallback for confirming the grammar's scope names are vendor-
-neutral, not a primary user surface.  We can ship a YAML
-`.sublime-syntax` companion file as a 0.8.6 follow-up if
-adoption signals demand.
+**Other TextMate-aware editors** continue to work in 0.8.5:
+- **IntelliJ-family** (per the next section) imports the JSON
+  grammar directly via `Editor → TextMate Bundles`.
+- **Atom**, **BBEdit**, and others with TextMate import generally
+  read the JSON.  Per-editor verification not done; treat as
+  best-effort until reports surface.
 
 ### IntelliJ-family IDEs (PyCharm, IDEA, WebStorm, CLion, …)
 
@@ -335,7 +325,7 @@ If `python3` exits 0, the JSON parses; if not, you get a clear
 | Gate | Tool needed | Skip if… |
 |---|---|---|
 | SH.1 visual (VS Code) | VS Code | you have Sublime / Vim / Emacs and use those instead |
-| SH.1 visual (Sublime) | Sublime Text | you have VS Code |
+| SH.1 visual (Sublime) | _deferred to 0.8.6_ — see Sublime section above | always |
 | SH.2 `vsce package` | `vsce` (+ Node) | you'll publish from CI later |
 | SH.2 install | `code` CLI | you'll smoke-test in your daily editor |
 | NDB.0 GDB | `gdb` | you're on macOS — use LLDB |
