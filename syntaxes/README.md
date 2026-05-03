@@ -6,7 +6,7 @@ in any editor that supports JSON-format
 
 - **VS Code** — via the extension at `editors/vscode/` (SH.2 ✅)
 - **IntelliJ-family** (CLion / IDEA / PyCharm / RustRover / WebStorm) — via the `.tmbundle` wrapper at `editors/intellij/Loft.tmbundle/`.  JetBrains expects a proper TextMate bundle layout (`info.plist` + `Syntaxes/`) and refuses bare grammar directories with `Cannot read the following bundle`; the wrapper symlinks back to this `syntaxes/loft.tmLanguage.json` to keep a single source of truth.
-- **GitHub Linguist** — once published as a Linguist contribution (0.8.6 follow-up)
+- **GitHub** — `.loft` files in this repo render with Rust-style highlighting via the `*.loft linguist-language=Rust` directive in `.gitattributes`.  Loft is Rust-influenced enough that Rust highlighting covers ~80% of the syntax correctly.  External repos that contain `.loft` files and want the same: add `*.loft linguist-language=Rust` to their own `.gitattributes`.  Real first-class GitHub support needs an upstream contribution to [github-linguist/linguist](https://github.com/github-linguist/linguist) — gated behind ~200 public repos using loft, which is post-0.9.0 territory.
 - **Atom**, **BBEdit**, others with TextMate import — best-effort, not formally tested
 
 **Sublime Text** is **not** directly supported because Sublime

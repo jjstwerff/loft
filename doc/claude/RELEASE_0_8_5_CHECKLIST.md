@@ -447,11 +447,15 @@ If `python3` exits 0, the JSON parses; if not, you get a clear
 - [ ] **Negative check** — open a `.loft` file with deliberate syntax
       errors (unclosed string, missing brace).  Highlighting should
       degrade gracefully — no infinite-loop spinner, no all-red.
-- [ ] **Cross-editor check** — load the grammar in Sublime Text via
-      `Tools > Developer > New Syntax`; same colouring should apply.
-- [ ] **GitHub Linguist check** (later, requires fork + PR) — file at
-      `vendor/grammars/loft/syntaxes/loft.tmLanguage.json` works for
-      `.loft` extension.  **Skip for 0.8.5; track as 0.8.6 follow-up.**
+- [ ] **Cross-editor check (IntelliJ)** — load the
+      `editors/intellij/Loft.tmbundle/` per the section above;
+      colouring should apply after IDE restart.
+- [x] **GitHub rendering** — `.gitattributes` maps `*.loft` to
+      Rust highlighting via Linguist's per-repo override.  Loft
+      files render with ~80%-correct highlighting on the GitHub
+      web UI immediately on push.  First-class Linguist support
+      (an upstream PR to `github-linguist/linguist`) gates on
+      ~200-repo adoption and is deferred to post-0.9.0.
 
 #### Risks
 
@@ -773,9 +777,14 @@ small but visually impressive example like `examples/hello.loft`
 
 - **Marketplace publish of SH.2** — separate publishing step;
   needs Personal Access Token + `vsce publish` invocation.
-- **GitHub Linguist contribution** — submit the grammar to the
-  Linguist repo; gets `.loft` colour highlighting in GitHub UI
-  for free.  0.8.6 follow-up.
+- **GitHub Linguist first-class contribution** — submit a PR to
+  `github-linguist/linguist` adding loft as a recognised
+  language with its own colour and grammar.  Gated on Linguist's
+  ~200-repo adoption rule.  Until then, the
+  `*.loft linguist-language=Rust` directive in `.gitattributes`
+  delivers ~80%-correct highlighting on the GitHub web UI for
+  this repo and any external repo that copies the same line.
+  Post-0.9.0 work.
 - **NDB.1** — source-map-aware GDB / LLDB plugins.  0.8.6 work.
 - **LSP server** — a real LSP daemon exposing diagnostics /
   completion / go-to-definition.  0.8.6 LSP.1.
