@@ -650,11 +650,54 @@ In `default/01_code.loft`:
 
 ### A5 — `Stitch::Reduce` runtime + `par_fold` surface
 
-**Status:** OPEN
-**Effort:** M (~1 session)
-**Acceptance test:** new tests `par_fold_int_sum`, `par_fold_max`,
-`par_fold_string_concat`, `par_fold_empty_input`,
-`par_fold_nested_inside_par`.
+**Status:** runtime DONE 2026-05-03; user-facing parser builtin OPEN.
+**Effort:** M (~1 session) — runtime + tests in <1 session.
+**Acceptance test:** `par_fold_int_sum` (sum 1..=100 = 5050),
+`par_fold_max`, `par_fold_empty_input`, and
+`par_fold_single_thread_matches_multi_thread` all pass in
+`tests/threading.rs`.
+
+**Runtime closure (this session):**
+
+- `run_parallel_fold` added to `src/parallel.rs` (threading +
+  no-threading variants).  Workers split input across N threads,
+  each accumulates over its slice via `fold(acc, row) -> acc`
+  starting from `init`, then main thread combines per-worker
+  partials with the same fold fn (preserving worker-completion
+  order).  V1 restricted to integer accumulator + integer row type.
+- `n_parallel_fold` native fn in `src/native.rs` pops args
+  (input/init/fold_d_nr/threads/extras) from the runtime stack,
+  invokes `run_parallel_fold`, pushes the i64 result.
+- Stdlib decl `fn parallel_fold(input, init, fold, threads) ->
+  integer` in `default/01_code.loft` (line ~1140).
+- Codegen extras-push + extras-subtract entries in
+  `src/state/codegen.rs` mirror the existing queue-family pattern.
+- 4 round-trip tests in `tests/threading.rs` exercise the runtime
+  via direct `run_parallel_fold` calls (compile + load worker fn
+  + invoke).
+
+**Still PENDING — user-facing parser builtin (~1 session):**
+
+The runtime is callable from loft as `parallel_fold(items, 0,
+fn_ref_d_nr_int, 4)` but loft programs don't write d_nrs by hand.
+Need either:
+
+- A parser-level builtin `par_fold(items, init, fn_name, threads)`
+  that resolves the fn-name to a d_nr at parse time (mirrors how
+  par() currently constructs `n_parallel_for` calls — see
+  `src/parser/collections.rs::build_parallel_for_ir`).
+- OR auto-detection per A5.3: rewrite `sum(parallel_for(items,
+  worker, 4))` patterns into `par_fold(items, 0, worker, 4)`.
+
+Either lifts the runtime to a usable user surface.  Out of scope
+for the runtime closure landed today; recommended as the next
+A5 follow-up.
+
+**Bug-hunt yield this session:** zero — the runtime built cleanly
+on top of existing infrastructure (`execute_at_raw_primitive_input`,
+`parallel_workers`, `merge_batches`).  No latent bugs surfaced;
+the well-trodden `(acc, row, extras)` parameter shape mapped
+directly to existing primitive-input dispatch.
 
 #### Why fifth
 

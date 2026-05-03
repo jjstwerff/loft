@@ -966,6 +966,167 @@ pub fn run_parallel_int(
     merge_batches(batches, n_rows, i64::MIN)
 }
 
+// ── Plan-06 ARC.md A5 — Stitch::Reduce runtime ──────────────────────────────
+//
+// Workers each accumulate over their slice of the input via a user-supplied
+// monoidal fold; the main thread combines per-worker partials by repeatedly
+// applying the same fold function (now treating the partials as the row
+// values).  Returns the final scalar accumulator.
+//
+// V1 scope: integer accumulator + integer row type.  Both per-row and
+// combine use the same `fold(acc: integer, row: integer) -> integer`
+// signature.  Future extensions (heterogeneous T / R, Float / Single accs,
+// text-fold) layer on top once the runtime + dispatch shape stabilises.
+//
+// The monoid contract — associativity + identity — is the user's
+// responsibility; the runtime preserves left-to-right order within each
+// worker, then combines partials in worker-completion order (matching
+// rayon's task-queue ordering).
+
+/// Plan-06 ARC.md A5 — `Stitch::Reduce` worker runtime.
+///
+/// Splits `input` (a `vector<integer>`) across `n_threads` workers; each
+/// worker accumulates over its slice via `fold(acc, row) -> acc`, starting
+/// from `init`.  Main thread combines per-worker partials with the same
+/// `fold` (treating partials as the second arg).
+///
+/// `fold_fn_pos` is the bytecode position of the user-supplied fold fn,
+/// declared as `fn fold(acc: integer, row: integer) -> integer`.  Both
+/// arguments are i64; the `acc` slot is param 0, the `row` slot is param 1.
+///
+/// `extra_args` are additional context args appended after `acc` + `row`
+/// in the worker's parameter list — currently always empty for `par_fold`
+/// callers; reserved for future surface extensions.
+///
+/// # Panics
+/// Panics if a worker thread panics.  Empty input returns `init` without
+/// dispatching workers.
+#[cfg(feature = "threading")]
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn run_parallel_fold(
+    stores: &Stores,
+    program: WorkerProgram,
+    fold_fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    init: i64,
+    n_threads: usize,
+    extra_args: &[u64],
+) -> i64 {
+    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
+    if n_rows == 0 {
+        return init;
+    }
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+    // Each worker accumulates over its slice; returns its partial acc.
+    let partials: Vec<(usize, i64)> =
+        parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+            let mut state = prog.new_state(ws);
+            let mut acc = init;
+            for row_idx in start..end {
+                let row_ref = vector::get_vector(
+                    &input_t,
+                    element_size,
+                    row_idx as i64,
+                    &state.database.allocations,
+                );
+                // Read the row's i64 value.  V1 restricts row type to
+                // integer; future extensions read other widths via the
+                // existing read_primitive_at* family.
+                let row_val = read_primitive_at(&state.database, &row_ref, element_size);
+                // Build the extras vector for this call: [row, ...callsite_extras].
+                // The fold fn's parameter list is `(acc, row, ...extras)` so
+                // `row` slots in as the first "extra" after the primary `acc` arg.
+                let mut call_extras = Vec::with_capacity(1 + extras.len());
+                call_extras.push(row_val);
+                call_extras.extend_from_slice(&extras);
+                // execute_at_raw_primitive_input pushes (acc, ...extras) onto
+                // the worker's stack frame; the fold fn reads acc as param 0,
+                // row as param 1.  Returns the new acc as u64.
+                let new_acc = state.execute_at_raw_primitive_input(
+                    fold_fn_pos,
+                    acc as u64,
+                    8, // acc is i64
+                    &call_extras,
+                    8, // result is i64
+                );
+                acc = new_acc as i64;
+            }
+            (start, acc)
+        });
+    // Combine partials in worker-completion order.  Use a single-threaded
+    // State borrowed back from the parent; for the v1 we do this on the
+    // main thread (no `parallel_workers` indirection — small N).
+    //
+    // The combine call uses the SAME fold fn, with `partial_acc` as the
+    // row argument.  Per the monoid contract, fold(a, b) == fold(b, a)
+    // shouldn't matter (associative + identity), but the runtime
+    // preserves left-to-right ordering for users who care.
+    let mut sorted_partials: Vec<(usize, i64)> = partials;
+    sorted_partials.sort_by_key(|(start, _)| *start);
+    // Build a transient main-thread State for the combine pass.  The
+    // worker programs already hold a reference to the bytecode + library
+    // we need; reuse one.
+    if sorted_partials.is_empty() {
+        return init;
+    }
+    let mut combine_state = prog.new_state(stores.clone_for_worker());
+    let mut acc = init;
+    for (_, partial) in sorted_partials {
+        let new_acc = combine_state.execute_at_raw_primitive_input(
+            fold_fn_pos,
+            acc as u64,
+            8,
+            &[partial as u64],
+            8,
+        );
+        acc = new_acc as i64;
+    }
+    acc
+}
+
+#[cfg(not(feature = "threading"))]
+#[allow(clippy::too_many_arguments, dead_code)]
+#[must_use]
+pub fn run_parallel_fold(
+    stores: &Stores,
+    program: WorkerProgram,
+    fold_fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    init: i64,
+    _n_threads: usize,
+    extra_args: &[u64],
+) -> i64 {
+    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
+    if n_rows == 0 {
+        return init;
+    }
+    let prog = Arc::new(program);
+    let mut state = prog.new_state(stores.clone_for_worker());
+    let mut acc = init;
+    let extras = extra_args.to_vec();
+    for row_idx in 0..n_rows {
+        let row_ref = vector::get_vector(
+            input,
+            element_size,
+            row_idx as i64,
+            &state.database.allocations,
+        );
+        let row_val = read_primitive_at(&state.database, &row_ref, element_size);
+        let mut call_extras = Vec::with_capacity(1 + extras.len());
+        call_extras.push(row_val);
+        call_extras.extend_from_slice(&extras);
+        let new_acc =
+            state.execute_at_raw_primitive_input(fold_fn_pos, acc as u64, 8, &call_extras, 8);
+        acc = new_acc as i64;
+    }
+    acc
+}
+
 // ── Plan-06 PRIORITY.md spine step 2 — Stitch::Discard runtime ──────────────
 //
 // Discard is the simplest of the three streaming Stitch policies: workers run,

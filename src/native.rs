@@ -144,6 +144,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(feature = "threading")]
     ("n_parallel_queue", n_parallel_queue),
     #[cfg(feature = "threading")]
+    ("n_parallel_fold", n_parallel_fold),
+    #[cfg(feature = "threading")]
     ("n_parallel_buf_get", n_parallel_buf_get),
     #[cfg(feature = "threading")]
     ("n_parallel_buf_drop", n_parallel_buf_drop),
@@ -913,6 +915,75 @@ fn n_parallel_queue(stores: &mut Stores, stack: &mut DbRef) {
     let n_rows = buf.len() as i64;
     stores.par_buffer_stack.push(buf);
     stores.put(stack, n_rows);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 ARC.md A5 — `Stitch::Reduce` runtime entry.
+///
+/// V1 stack layout (LIFO pop): `n_extra` (i64), N extras (i64), threads
+/// (i32), fold_fn_d_nr (i32), init (i64), input (DbRef).
+///
+/// `fold_fn` must be declared as `fn fold(acc: integer, row: integer) ->
+/// integer`; the runtime invokes it once per row to update each worker's
+/// accumulator, then combines per-worker partials with the same fn.
+/// Restricts to `vector<integer>` input — see ARC.md A5 for the future
+/// extension story.
+fn n_parallel_fold(stores: &mut Stores, stack: &mut DbRef) {
+    let n_extra = *stores.get::<i64>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i64>(stack) as u64);
+    }
+    extra_args.reverse();
+
+    let v_threads = *stores.get::<i64>(stack) as i32;
+    let v_func = *stores.get::<i64>(stack) as i32;
+    let v_init = *stores.get::<i64>(stack);
+    let v_input = *stores.get::<DbRef>(stack);
+
+    let (fn_pos, program, element_size) = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_fold called outside State::execute()");
+        let data = unsafe { &*ctx.data };
+        assert!(
+            v_func >= 0,
+            "parallel_fold: invalid function reference {v_func}"
+        );
+        let d_nr = v_func as u32;
+        let fn_pos = data.def(d_nr).code_position;
+        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
+        let library = unsafe { Arc::clone(&*ctx.library) };
+        // V1: input is vector<integer>; element_size = 8.  Future
+        // versions might derive this from the worker's row arg type.
+        let elem_size = 8u32;
+        (
+            fn_pos,
+            WorkerProgram {
+                bytecode,
+                library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+                data_ptr: ctx.data,
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+                line_numbers: Arc::new(std::collections::BTreeMap::new()),
+            },
+            elem_size,
+        )
+    };
+
+    let n_threads = (v_threads as usize).max(1);
+    let result = crate::parallel::run_parallel_fold(
+        stores,
+        program,
+        fn_pos,
+        &v_input,
+        element_size,
+        v_init,
+        n_threads,
+        &extra_args,
+    );
+    stores.put(stack, result);
 }
 
 #[cfg(feature = "threading")]
