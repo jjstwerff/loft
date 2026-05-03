@@ -53,6 +53,16 @@ header h1 { font-size: 16px; color: var(--accent); font-weight: 600; }
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 .back-link:hover { background: var(--panel); color: var(--accent); border-color: var(--accent); }
+.nav-link {
+  color: var(--subtext);
+  text-decoration: none;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 0.12s, color 0.12s;
+}
+.nav-link:hover { background: var(--surface); color: var(--text); }
 .current-label {
   font-size: 12px;
   color: var(--subtext);
@@ -84,61 +94,29 @@ select {
   border-radius: 4px;
   font-size: 12px;
 }
-.main { flex: 1; display: flex; min-height: 0; }
-.canvas-col {
+.main {
   flex: 1;
   display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border-right: 1px solid var(--border);
+  min-height: 0;
   background: #000;
   align-items: center;
   justify-content: center;
 }
-.source-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.pane-header {
-  padding: 4px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--subtext);
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
 #gl-canvas { max-width: 100%; max-height: 100%; }
-#source {
-  flex: 1;
-  background: var(--surface);
-  color: var(--text);
-  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  padding: 10px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
 #output {
-  height: 120px;
-  min-height: 40px;
   background: var(--surface);
   color: var(--text);
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
   line-height: 1.5;
-  padding: 8px 10px;
+  padding: 6px 10px;
+  max-height: 120px;
   overflow: auto;
   white-space: pre-wrap;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
+#output:empty { display: none; }
 .status-bar {
   padding: 3px 10px;
   font-size: 11px;
@@ -174,20 +152,15 @@ select {
     <button id="run-btn" onclick="runExample()" disabled>&#9654; Run</button>
     <button id="stop-btn" onclick="loftGL.shouldClose=true">&#9632; Stop</button>
     <span id="current-label" class="current-label"></span>
+    <span class="spacer"></span>
+    <a id="view-source" class="nav-link" href="#" target="_blank" rel="noopener" style="display:none">View source</a>
   </div>
 </header>
 
 <div class="main">
-  <div class="canvas-col">
-    <canvas id="gl-canvas" width="800" height="600"></canvas>
-  </div>
-  <div class="source-col">
-    <div class="pane-header">Source</div>
-    <pre id="source">Select an example to view its source code.</pre>
-    <div class="pane-header">Output</div>
-    <div id="output"></div>
-  </div>
+  <canvas id="gl-canvas" width="800" height="600"></canvas>
 </div>
+<div id="output"></div>
 
 <div class="status-bar">
   <span id="status" class="info">Ready</span>
@@ -262,20 +235,26 @@ async function preloadAssets(exampleKey) {
 }
 
 // ── UI ───────────────────────────────────────────────────────────────────────
-const sourceEl = document.getElementById('source');
 const outputEl = document.getElementById('output');
 const statusEl = document.getElementById('status');
 const timingEl = document.getElementById('timing');
 const runBtn = document.getElementById('run-btn');
 const currentLabel = document.getElementById('current-label');
+const viewSourceLink = document.getElementById('view-source');
 
 let currentSource = '';
 let currentKey = '';
 let loftReady = false;
 
 // URL parameters drive the runner:
-//   ?example=KEY  load that example's source into the viewer
+//   ?example=KEY  load that example's source for execution
 //   ?autorun=1    start the example as soon as the runtime is ready
+//
+// The on-page UI is canvas-dominant — visual is the point of the
+// gallery.  Users who want to read the source follow the
+// "View source" link in the toolbar, which lands them on the GitHub
+// view of the .loft file (with Rust syntax highlighting via the
+// .gitattributes Linguist override).
 const urlParams = new URLSearchParams(window.location.search);
 const preselect = urlParams.get('example');
 const autorun = urlParams.get('autorun') === '1';
@@ -283,11 +262,12 @@ const autorun = urlParams.get('autorun') === '1';
 if (preselect && GALLERY_EXAMPLES[preselect]) {
   currentKey = preselect;
   currentSource = GALLERY_EXAMPLES[preselect];
-  sourceEl.textContent = currentSource;
   const meta = GALLERY_LIST.find((ex) => ex.key === preselect);
   if (meta) {
     currentLabel.innerHTML = `Example: <strong>${meta.name}</strong>`;
   }
+  viewSourceLink.href = `https://github.com/jjstwerff/loft/blob/main/lib/graphics/examples/${encodeURIComponent(preselect)}.loft`;
+  viewSourceLink.style.display = '';
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
