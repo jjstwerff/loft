@@ -5,7 +5,7 @@ in any editor that supports JSON-format
 [TextMate grammars](https://macromates.com/manual/en/language_grammars):
 
 - **VS Code** — via the extension at `editors/vscode/` (SH.2 ✅)
-- **IntelliJ-family** (CLion / IDEA / PyCharm / WebStorm) — `Settings → Editor → TextMate Bundles`, point at this `syntaxes/` directory
+- **IntelliJ-family** (CLion / IDEA / PyCharm / RustRover / WebStorm) — via the `.tmbundle` wrapper at `editors/intellij/Loft.tmbundle/`.  JetBrains expects a proper TextMate bundle layout (`info.plist` + `Syntaxes/`) and refuses bare grammar directories with `Cannot read the following bundle`; the wrapper symlinks back to this `syntaxes/loft.tmLanguage.json` to keep a single source of truth.
 - **GitHub Linguist** — once published as a Linguist contribution (0.8.6 follow-up)
 - **Atom**, **BBEdit**, others with TextMate import — best-effort, not formally tested
 

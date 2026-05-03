@@ -203,10 +203,19 @@ demand):
   read the JSON.  Per-editor verification not done; treat as
   best-effort until reports surface.
 
-### IntelliJ-family IDEs (PyCharm, IDEA, WebStorm, CLion, …)
+### IntelliJ-family IDEs (CLion, IDEA, PyCharm, RustRover, WebStorm, …)
 
-JetBrains IDEs accept TextMate bundles natively — useful if
-that's your daily driver.
+JetBrains IDEs accept TextMate bundles, but they expect the
+proper TextMate `.tmbundle` directory layout (a directory with
+`info.plist` at the top level and grammars in `Syntaxes/`).
+Pointing them at the bare top-level `syntaxes/` directory fails
+with `Cannot read the following bundle: ...` because that
+directory has no `info.plist`.
+
+We ship a bundle wrapper at `editors/intellij/Loft.tmbundle/`
+that satisfies the layout requirement and symlinks back to the
+canonical grammar.  Use that directory, not the top-level
+`syntaxes/`.
 
 **UI walkthrough:**
 
@@ -214,9 +223,10 @@ that's your daily driver.
    from the IDE menu.  Or `Ctrl/Cmd+,`.
 2. Navigate **Editor → TextMate Bundles**.
 3. Click the **`+` button** above the bundle list.
-4. Point the file picker at the **`syntaxes/`** directory of
-   the loft repo (the directory containing `loft.tmLanguage.json`,
-   not the file itself).  IntelliJ auto-detects the grammar.
+4. Point the file picker at **`editors/intellij/Loft.tmbundle/`**
+   (the `.tmbundle` directory inside the loft repo — not the
+   top-level `syntaxes/`, which is the canonical grammar
+   storage but lacks the bundle metadata JetBrains needs).
 5. Click **OK** / **Apply**.
 6. Open any `.loft` file — colouring should apply.  If not,
    right-click the file in the project tree → `Override File
