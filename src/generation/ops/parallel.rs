@@ -83,6 +83,20 @@ fn queue_helper_name(shape: ClosureShape) -> &'static str {
     }
 }
 
+/// Plan-06 ARC.md A3 — narrow-Integer queue helper name.  Narrow
+/// integer returns (byte_width 1/2/4) need the byte-packing variant
+/// instead of the wide `Vec<u64>` queue.
+fn queue_narrow_helper_name() -> &'static str {
+    "n_parallel_queue_narrow_native"
+}
+
+/// True when the worker's return type is a narrow Integer
+/// (byte_width 1/2/4).  Used by `ParallelQueueEmitter` to swap the
+/// helper to the narrow variant.
+fn is_narrow_int_return(ret: &Type) -> bool {
+    matches!(ret, Type::Integer(spec) if matches!(spec.byte_width(true), 1 | 2 | 4))
+}
+
 /// `n_parallel_for` / `n_parallel_for_light` emitter.
 ///
 /// Lifts the legacy match-arm body verbatim into a custom emitter
@@ -233,7 +247,14 @@ impl OpEmitter for ParallelQueueEmitter {
             write!(ctx.w, "; ")?;
         }
 
-        let par_fn = queue_helper_name(shape);
+        // Plan-06 ARC.md A3 — narrow-Integer returns route through
+        // `n_parallel_queue_narrow_native` (byte-packed buffer);
+        // wide / non-Integer scalars stay on `n_parallel_queue_native`.
+        let par_fn = if is_narrow_int_return(&worker_ret) {
+            queue_narrow_helper_name()
+        } else {
+            queue_helper_name(shape)
+        };
         write!(ctx.w, "{par_fn}(cell, ")?;
         ctx.emit(&args[0])?;
         write!(ctx.w, ", ")?;

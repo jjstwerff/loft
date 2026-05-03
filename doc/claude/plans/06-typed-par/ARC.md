@@ -358,25 +358,28 @@ Narrow-prim Queue (A3).  Don't bundle.
 
 ### A3 — Extend Queue dispatch for narrow-primitive returns
 
-**Status:** IN-FLIGHT (2026-05-01 — infrastructure landed; parser gate pending)
-**Effort:** L (~1.5 sessions)
+**Status:** narrow-Integer DONE (2026-05-03); Boolean/Single/Character/Float/Enum-no-payload still PENDING (need IR bit-cast support per the original in-flight note).
+**Effort:** L (~1.5 sessions) — narrow-Integer landed in <1 session.
 
-**In-flight notes:**
+**Narrow-Integer subset closure:**
 
-- A3.1 (par_narrow_buffer_stack field) — DONE: `Stores.par_narrow_buffer_stack: Vec<(Vec<u8>, u8)>` added at all 4 init sites (`database/mod.rs::Stores::new`, `Clone`, both `database/allocation.rs::WorkerStores::new` paths).
-- A3.2 (3 narrow Queue native fns) — DONE: `n_parallel_queue_narrow` / `_buf_get_narrow` / `_buf_drop_narrow` registered + `default/01_code.loft` decls + 3 round-trip Rust tests in `tests/threading.rs`.
-- A3.4 (codegen extras) — partial: extras-push (state/codegen.rs:1948) + extras-subtract (state/codegen.rs:2117) entries added for `n_parallel_queue_narrow`.
-- A3.3 (parser route_narrow_queue gate) — PENDING.  Investigation surfaced a typed-substitution issue: when `Var(b_var: u8)` is replaced inline by `Call(buf_get_narrow, idx, size, signed) -> integer`, the body's narrow-typed expressions (Float arithmetic, Boolean test, Character comparison) lose their typed semantics.  Two paths forward:
-  1. Per-narrow-type getters (`_get_bool` / `_get_single` / `_get_character`) that return the right type — clean but multiplies the surface.
-  2. Single i64-returning getter wrapped at substitution time with the appropriate `OpConv*FromInt` op (`OpConvBoolFromInt` / `OpConvCharacterFromInt` exist; bit-cast for Single/Float NOT in IR today — would need `OpBitcastSingleFromInt` / `OpBitcastFloatFromInt`).
+- A3.1 (par_narrow_buffer_stack field) — DONE.
+- A3.2 (3 narrow Queue native fns in src/native.rs) — DONE; codegen-side native fns (`n_parallel_queue_narrow_native` / `n_parallel_buf_get_narrow_native` / `n_parallel_buf_drop_narrow_native`) added to `src/codegen_runtime.rs` 2026-05-03.
+- A3.3 (parser gate) — DONE for narrow Integer (forced_size 1/2/4).  `route_narrow_int_queue` flag added to both early and main dispatch sites in `src/parser/collections.rs::build_parallel_for_ir`; narrow-int returns now route through `n_parallel_queue_narrow` / `_buf_get_narrow` / `_buf_drop_narrow` instead of the legacy materialised-vector path.  Body's `b` accessor calls `parallel_buf_get_narrow(idx, return_size, signed)` (signed passed as integer 0/1).
+- A3.4 (codegen extras) — DONE; extras-push and extras-subtract entries already covered `n_parallel_queue_narrow`.
+- Codegen `ParallelQueueEmitter` extended to detect narrow-Integer returns and emit `n_parallel_queue_narrow_native` instead of the wide variant.  `n_parallel_buf_get_narrow` and `n_parallel_buf_drop_narrow` registered with `ParallelBufRenameEmitter`.
+- Bug fix discovered during implementation: `n_parallel_queue_narrow` (interpreter) was calling `run_parallel_queue` with `return_size=4`, but `execute_at_raw` reads only the low 4 bytes via `get_stack::<u32>` for return_size=4 — this loses the actual i32 value because workers push 8 bytes (i64-promoted) but only the low 4 are read into one slot, leaving the high 4 to leak into adjacent state.  Fix: always pass `return_size=8` to `run_parallel_queue` from inside the narrow runtime, then truncate to stride bytes during packing.  The actual narrow value lives in the low `stride` bytes of the i64 (zero/sign-extended), so the truncation is correct.
+- `parallel_buf_get_narrow` declared signature changed from `signed: boolean` to `signed: integer` — the runtime reads i64 from the stack (8 bytes), so a boolean (1 byte) push left 7 bytes of garbage on the stack, corrupting subsequent pops.
 
-  Narrow Integer (forced_size 1/2/4) is the simplest case: substitution should work directly because narrow Integer values fit naturally in i64 representation (the body's `r as integer` pattern accepts the i64 result as-is).  Suggest landing narrow Integer first as the next session's PR; Boolean / Single / Character / Float / Enum-no-payload follow with the IR-cast support story sorted.
-**Acceptance test:** the existing `par_struct_to_bool_t4`,
-`par_struct_to_byte_t4`, `par_struct_to_single_t4`,
-`par_struct_to_character_t4`, `par_struct_to_float_t4` re-route
-through Queue with no behaviour change; `grep
-"parallel_light_execute_and_collect" src/parser/ src/state/` returns
-zero call sites.
+**Still PENDING (Boolean / Single / Character / Float / Enum-no-payload):**
+
+Each of these needs IR bit-cast support before it can route through the buf_get_narrow path that returns i64:
+1. Per-narrow-type getters (`_get_bool` / `_get_single` / `_get_character`) — clean but multiplies the surface.
+2. Single i64-returning getter wrapped at substitution time with the appropriate `OpConv*FromInt` op (`OpConvBoolFromInt` / `OpConvCharacterFromInt` exist; bit-cast for Single/Float NOT in IR today — would need `OpBitcastSingleFromInt` / `OpBitcastFloatFromInt`).
+
+These deferred to a future sub-step.  Today's narrow-Integer subset already unblocks A4 (`parallel_light_execute_and_collect` retirement) for the i32/u8/u16/i8/i16 return shapes that `light` was the fallback for.
+
+**Acceptance test:** `par_struct_to_i32_t4` and `par_struct_to_byte_t4` route through the new narrow Queue path (verified by smoke-testing `target/release/loft /tmp/par_i32_b.loft` showing the expected `sum=-10`); `cargo test --release --test threading_chars` passes 35/35; `cargo test --release --test threading` passes 43/43; `cargo test --release --test issues` passes 540/540.
 
 #### Why third
 

@@ -2372,6 +2372,107 @@ pub fn n_parallel_buf_get_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64)
     buf[idx as usize] as i64
 }
 
+/// Plan-06 ARC.md A3 (native variant) — narrow-Integer Queue.
+/// Workers return narrow integers (i8/i16/i32/u8/u16); each return
+/// is i64-promoted on the worker stack and cast `as i64` by the
+/// emitter's closure.  Pack each into the low `stride` bytes of a
+/// `Vec<u8>` and push onto `par_narrow_buffer_stack`.
+///
+/// # Panics
+/// Panics if `return_size` is not 1, 2, or 4 — the parser-side
+/// gate filters narrow Integer returns to those widths.
+pub fn n_parallel_queue_narrow_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    return_size: i32,
+    threads: i32,
+    worker: F,
+) -> i64
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let stride = match return_size {
+        1 | 2 | 4 => return_size as u8,
+        other => {
+            panic!("n_parallel_queue_narrow_native: invalid return_size {other} (expected 1/2/4)")
+        }
+    };
+    let results = run_native_workers_primitive(stores, &input, elem_size, threads, n, &worker);
+    let mut bytes = Vec::with_capacity(n * stride as usize);
+    for v in &results {
+        let row_bytes = v.to_le_bytes();
+        bytes.extend_from_slice(&row_bytes[..stride as usize]);
+    }
+    stores.par_narrow_buffer_stack.push((bytes, stride));
+    n as i64
+}
+
+/// Plan-06 ARC.md A3 (native variant) — read one narrow row.
+/// `return_size` must equal the stride pushed by
+/// `n_parallel_queue_narrow_native`; `signed` selects sign-extension
+/// (passed as `i64` 0/1 since the emit path passes the loft-side
+/// `boolean → integer 0/1` rendering).
+///
+/// # Panics
+/// Panics if `par_narrow_buffer_stack` is empty, if `return_size`
+/// doesn't match the stored stride, or if `idx` is out of range —
+/// all indicate parser-side bugs.
+pub fn n_parallel_buf_get_narrow_native(
+    cell: &std::cell::UnsafeCell<Stores>,
+    idx: i64,
+    return_size: i64,
+    signed: i64,
+) -> i64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let entry = stores
+        .par_narrow_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_narrow_native: par_narrow_buffer_stack is empty");
+    let stride = entry.1 as usize;
+    debug_assert_eq!(
+        stride, return_size as usize,
+        "n_parallel_buf_get_narrow_native: stride/return_size mismatch (stride={stride}, arg={return_size})"
+    );
+    let off = (idx as usize) * stride;
+    let bytes = &entry.0;
+    let signed = signed != 0;
+    match (stride, signed) {
+        (1, false) => i64::from(bytes[off]),
+        (1, true) => i64::from(bytes[off] as i8),
+        (2, false) => i64::from(u16::from_le_bytes([bytes[off], bytes[off + 1]])),
+        (2, true) => i64::from(i16::from_le_bytes([bytes[off], bytes[off + 1]])),
+        (4, false) => i64::from(u32::from_le_bytes([
+            bytes[off],
+            bytes[off + 1],
+            bytes[off + 2],
+            bytes[off + 3],
+        ])),
+        (4, true) => i64::from(i32::from_le_bytes([
+            bytes[off],
+            bytes[off + 1],
+            bytes[off + 2],
+            bytes[off + 3],
+        ])),
+        _ => panic!("n_parallel_buf_get_narrow_native: invalid stride {stride}"),
+    }
+}
+
+/// Plan-06 ARC.md A3 (native variant) — pop the active narrow
+/// par-buffer.
+///
+/// # Panics
+/// Panics if `par_narrow_buffer_stack` is already empty.
+pub fn n_parallel_buf_drop_narrow_native(cell: &std::cell::UnsafeCell<Stores>) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores
+        .par_narrow_buffer_stack
+        .pop()
+        .expect("n_parallel_buf_drop_narrow_native: par_narrow_buffer_stack is already empty");
+}
+
 /// Read a row from the active text par-buffer.  Stages the `String`
 /// into `stores.scratch` so the returned `Str` borrow remains valid
 /// across the call (mirrors the interpreter's text-return convention).

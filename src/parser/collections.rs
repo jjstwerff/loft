@@ -1538,6 +1538,9 @@ use #count instead"
         let queue_d_nr = self.data.def_nr("n_parallel_queue");
         let buf_get_d_nr = self.data.def_nr("n_parallel_buf_get");
         let buf_drop_d_nr = self.data.def_nr("n_parallel_buf_drop");
+        let queue_narrow_d_nr = self.data.def_nr("n_parallel_queue_narrow");
+        let buf_get_narrow_d_nr = self.data.def_nr("n_parallel_buf_get_narrow");
+        let buf_drop_narrow_d_nr = self.data.def_nr("n_parallel_buf_drop_narrow");
         let queue_text_d_nr = self.data.def_nr("n_parallel_queue_text");
         let buf_get_text_d_nr = self.data.def_nr("n_parallel_buf_get_text");
         let buf_drop_text_d_nr = self.data.def_nr("n_parallel_buf_drop_text");
@@ -1560,12 +1563,32 @@ use #count instead"
             &Type::Integer(*spec),
             &Context::Argument,
         )) == 8);
+        // Plan-06 ARC.md A3 — narrow Integer (forced_size 1/2/4)
+        // routes through n_parallel_queue_narrow.  Wide integers
+        // (8-byte) keep using n_parallel_queue.  Other narrow
+        // primitives (Boolean, Single, Character, Float,
+        // Enum-no-payload) need IR bit-cast support before they can
+        // route through this path — deferred per the in-flight notes
+        // in ARC.md A3.3.
+        let early_narrow_int_width = match ret_type {
+            Type::Integer(spec) => match spec.byte_width(true) {
+                w @ (1 | 2 | 4) => Some(w),
+                _ => None,
+            },
+            _ => None,
+        };
         let early_route_int_queue = early_is_primitive_return
             && fn_d_nr != u32::MAX
             && early_ret_size_8
             && queue_d_nr != u32::MAX
             && buf_get_d_nr != u32::MAX
             && buf_drop_d_nr != u32::MAX;
+        let early_route_narrow_int_queue = early_is_primitive_return
+            && fn_d_nr != u32::MAX
+            && early_narrow_int_width.is_some()
+            && queue_narrow_d_nr != u32::MAX
+            && buf_get_narrow_d_nr != u32::MAX
+            && buf_drop_narrow_d_nr != u32::MAX;
         let early_route_text_queue = matches!(ret_type, Type::Text(_))
             && fn_d_nr != u32::MAX
             && queue_text_d_nr != u32::MAX
@@ -1602,6 +1625,7 @@ use #count instead"
             && buf_get_fn_d_nr != u32::MAX
             && buf_drop_fn_d_nr != u32::MAX;
         let early_route_through_queue = early_route_int_queue
+            || early_route_narrow_int_queue
             || early_route_text_queue
             || early_route_ref_queue
             || early_route_fn_queue;
@@ -1808,6 +1832,9 @@ use #count instead"
         let queue_d_nr = self.data.def_nr("n_parallel_queue");
         let buf_get_d_nr = self.data.def_nr("n_parallel_buf_get");
         let buf_drop_d_nr = self.data.def_nr("n_parallel_buf_drop");
+        let queue_narrow_d_nr = self.data.def_nr("n_parallel_queue_narrow");
+        let buf_get_narrow_d_nr = self.data.def_nr("n_parallel_buf_get_narrow");
+        let buf_drop_narrow_d_nr = self.data.def_nr("n_parallel_buf_drop_narrow");
         let queue_text_d_nr = self.data.def_nr("n_parallel_queue_text");
         let buf_get_text_d_nr = self.data.def_nr("n_parallel_buf_get_text");
         let buf_drop_text_d_nr = self.data.def_nr("n_parallel_buf_drop_text");
@@ -1821,6 +1848,16 @@ use #count instead"
             &Type::Integer(*spec),
             &Context::Argument,
         )) == 8);
+        // Plan-06 ARC.md A3 — narrow Integer return routing.  Mirrors
+        // the early-gate logic above; see that comment for details.
+        let narrow_int_width = match ret_type {
+            Type::Integer(spec) => match spec.byte_width(true) {
+                w @ (1 | 2 | 4) => Some(w),
+                _ => None,
+            },
+            _ => None,
+        };
+        let narrow_int_signed = matches!(ret_type, Type::Integer(spec) if spec.min < 0);
         // 8b: integer-i64 returns route through `n_parallel_queue` +
         // `par_buffer_stack`.
         // 8c: text returns route through `n_parallel_queue_text` +
@@ -1851,6 +1888,14 @@ use #count instead"
             && queue_d_nr != u32::MAX
             && buf_get_d_nr != u32::MAX
             && buf_drop_d_nr != u32::MAX;
+        // Plan-06 ARC.md A3 — narrow Integer Queue route.  Same gate
+        // as route_int_queue but for forced widths 1/2/4.
+        let route_narrow_int_queue = is_primitive_return
+            && fn_d_nr != u32::MAX
+            && narrow_int_width.is_some()
+            && queue_narrow_d_nr != u32::MAX
+            && buf_get_narrow_d_nr != u32::MAX
+            && buf_drop_narrow_d_nr != u32::MAX;
         let route_text_queue = matches!(ret_type, Type::Text(_))
             && fn_d_nr != u32::MAX
             && queue_text_d_nr != u32::MAX
@@ -1877,8 +1922,11 @@ use #count instead"
             && queue_fn_d_nr != u32::MAX
             && buf_get_fn_d_nr != u32::MAX
             && buf_drop_fn_d_nr != u32::MAX;
-        let route_through_queue =
-            route_int_queue || route_text_queue || route_ref_queue || route_fn_queue;
+        let route_through_queue = route_int_queue
+            || route_narrow_int_queue
+            || route_text_queue
+            || route_ref_queue
+            || route_fn_queue;
 
         let stop_cond = self.cl("OpLeInt", &[Value::Var(len_var), Value::Var(idx_var)]);
         let stop = v_if(
@@ -1891,7 +1939,28 @@ use #count instead"
         // `n_parallel_buf_get[_text/_ref/_fn](idx)`; for the materialised
         // path it's `OpGetVector + get_field` indexing the heap
         // result vector.
-        let get_call = if route_int_queue {
+        // Plan-06 ARC.md A3 — narrow takes priority over wide int.
+        // var_size() returns 8 for all Integer stack slots (post-2c),
+        // so route_int_queue would also fire for narrow returns; the
+        // narrow path is what we actually want when the storage width
+        // is < 8.
+        let get_call = if route_narrow_int_queue {
+            // Narrow Integer reader takes (idx, return_size, signed).
+            // return_size is the per-row stride (1/2/4); signed
+            // selects sign-extension.  Returns i64 — the body's
+            // `r as integer` accepts it natively.
+            let stride = i64::from(
+                narrow_int_width.expect("narrow_int_width set when route_narrow_int_queue is true"),
+            );
+            Value::Call(
+                buf_get_narrow_d_nr,
+                vec![
+                    Value::Var(idx_var),
+                    Value::Int(stride as i32),
+                    Value::Int(i32::from(narrow_int_signed)),
+                ],
+            )
+        } else if route_int_queue {
             Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
         } else if route_text_queue {
             Value::Call(buf_get_text_d_nr, vec![Value::Var(idx_var)])
@@ -2046,6 +2115,23 @@ use #count instead"
                     buf_drop_text_d_nr,
                     "Parallel for loop (queue text)",
                     "Parallel for block (queue text)",
+                )
+            } else if route_narrow_int_queue {
+                // Plan-06 ARC.md A3 — for the narrow path, pf_args[2]
+                // (return_size) was set by var_size which returns the
+                // wide stack-slot width (8 bytes); the narrow runtime
+                // expects the actual stride (1/2/4).  Patch in place
+                // before the queue_call below grabs `pf_args`.
+                let stride = i64::from(
+                    narrow_int_width
+                        .expect("narrow_int_width set when route_narrow_int_queue is true"),
+                );
+                pf_args[2] = Value::Int(stride as i32);
+                (
+                    queue_narrow_d_nr,
+                    buf_drop_narrow_d_nr,
+                    "Parallel for loop (queue narrow int)",
+                    "Parallel for block (queue narrow int)",
                 )
             } else if route_ref_queue {
                 (

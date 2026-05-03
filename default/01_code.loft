@@ -1132,8 +1132,10 @@ fn parallel_buf_drop_ref();
 // IR-only entry the fused for-par desugar emits.
 fn parallel_queue_narrow(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
 // Plan-06 ARC.md A3 — read one narrow row.  return_size is the
-// per-row stride (1, 2, or 4); signed selects sign-extension.
-fn parallel_buf_get_narrow(idx: integer, return_size: integer, signed: boolean) -> integer;
+// per-row stride (1, 2, or 4); signed selects sign-extension
+// (passed as integer 0/1 — boolean would push only 1 byte but
+// the runtime reads i64 from the stack).
+fn parallel_buf_get_narrow(idx: integer, return_size: integer, signed: integer) -> integer;
 // Plan-06 ARC.md A3 — pop the active narrow-queue buffer.
 fn parallel_buf_drop_narrow();
 #impure(par_call)
