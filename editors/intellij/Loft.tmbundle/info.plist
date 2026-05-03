@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>name</key>
+    <string>Loft</string>
+    <key>uuid</key>
+    <string>9f78d178-610d-47f6-af3d-c1c29b460906</string>
+    <key>description</key>
+    <string>Syntax highlighting for the Loft programming language.  Wraps the canonical JSON TextMate grammar at syntaxes/loft.tmLanguage.json into the .tmbundle directory layout that JetBrains IDEs (CLion, IDEA, PyCharm, RustRover, WebStorm) expect for TextMate Bundles import.</string>
+    <key>contactName</key>
+    <string>Jurjen Stellingwerff</string>
+    <key>fileTypes</key>
+    <array>
+        <string>loft</string>
+    </array>
+</dict>
+</plist>

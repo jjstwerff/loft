@@ -2214,8 +2214,15 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             source_bytes.hash(&mut h);
-            // Include the release flag in the hash so debug/release don't collide.
+            // Include the release + debug flags in the hash so each
+            // distinct rustc invocation produces a distinct cached
+            // binary.  Without this, switching between `--native`
+            // and `--native --native-debug` returns whichever build
+            // ran first — debugger sees a stripped binary, or a
+            // user accidentally runs an unoptimised build under
+            // `--native-release` because the debug build was cached.
             native_release.hash(&mut h);
+            native_debug.hash(&mut h);
             // Include modification times of native package rlibs and loft's
             // own rlib so the cache invalidates when dependencies are rebuilt.
             if let Some(lib_dir) = loft_lib_dir() {

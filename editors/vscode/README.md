@@ -5,6 +5,14 @@ language](https://github.com/jjstwerff/loft) in Visual Studio Code.
 
 ## Features
 
+- **Run Loft File** button (▶ play icon) in the editor title bar.
+  One click runs `loft <current-file>` in an integrated terminal.
+  Default keybinding **F5**.
+- **Run Loft File (Native)** button (🚀 rocket icon) next to it.
+  Runs `loft --native <current-file>` for the AOT-compiled path.
+  Default keybinding **Ctrl+F5** (Cmd+F5 on macOS).
+- Both also appear in the right-click context menu (in the editor
+  and the Explorer) and in the Command Palette.
 - Syntax highlighting for `.loft` files (TextMate grammar — see
   `syntaxes/loft.tmLanguage.json`, symlinked to the canonical
   copy at the repo root)
@@ -19,16 +27,37 @@ A full-featured Language Server (diagnostics, completion,
 go-to-definition, hover) is planned for a future release —
 see [LSP.md](../../doc/claude/LSP.md).
 
+## Configuration
+
+Add to your VS Code settings (`Ctrl+,`):
+
+```json
+{
+  "loft.binaryPath": "/path/to/your/loft"
+}
+```
+
+Default is `loft`, which resolves via `$PATH`.  Set to an absolute
+path if you have multiple loft installs and want this extension to
+use a specific one (e.g. a local dev build at
+`~/workspace/loft/target/release/loft`).
+
 ## Installation
 
 ### From VSIX (manual / pre-marketplace)
 
 ```sh
 cd editors/vscode
-npm install -g @vscode/vsce       # one-time
-vsce package
+npm install -g @vscode/vsce       # one-time, the package builder
+npm install                       # one-time, fetches typescript + @types
+vsce package                      # runs vscode:prepublish → tsc → bundles
 code --install-extension loft-0.1.0.vsix
 ```
+
+The first `npm install` fetches the TypeScript compiler and VS
+Code type definitions used to build the run-button command
+handlers in `src/extension.ts`.  Subsequent `vsce package` runs
+re-trigger the build via the `vscode:prepublish` script.
 
 ### From the marketplace
 
@@ -69,11 +98,18 @@ The `loft` binary must be on your `PATH`.
 
 ```
 editors/vscode/
-├── package.json              ← extension manifest
+├── package.json              ← extension manifest + contributes
+├── tsconfig.json             ← TypeScript build config
 ├── language-configuration.json ← brackets, indent, auto-close
+├── src/
+│   └── extension.ts          ← Run / Run-Native command handlers
+├── out/                      ← TypeScript compile output (gitignored)
+│   └── extension.js
 ├── snippets/loft.json        ← snippet definitions
 ├── syntaxes/
 │   └── loft.tmLanguage.json  → symlink to ../../../syntaxes/loft.tmLanguage.json
+├── LICENSE                   → symlink to ../../LICENSE
+├── .vscodeignore             ← deny-list for `vsce package`
 └── README.md                 ← this file
 ```
 
@@ -82,6 +118,12 @@ The TextMate grammar lives canonically at the repo root
 the same file.  The extension's `syntaxes/` directory is a
 symlink; `vsce package` follows the symlink and bundles the
 target file into the `.vsix`.
+
+The `src/extension.ts` is the only TypeScript file — kept small
+on purpose so non-frontend reviewers can audit it end-to-end.
+It registers two commands (`loft.runFile`, `loft.runFileNative`)
+that send `loft <file>` or `loft --native <file>` to a reusable
+terminal named "Loft".
 
 ## Contributing
 

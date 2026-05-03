@@ -1,0 +1,10 @@
+# TypeScript compile output — produced by `npm run build` /
+# `vsce package`'s prepublish hook.  Re-built per packaging run.
+out/
+
+# npm install state.
+node_modules/
+package-lock.json
+
+# Packaged extension archive — produced by `vsce package`.
+*.vsix

@@ -1,12 +1,23 @@
 # Loft TextMate grammar
 
 `loft.tmLanguage.json` provides syntax highlighting for `.loft` files
-in any editor that supports [TextMate grammars](https://macromates.com/manual/en/language_grammars):
+in any editor that supports JSON-format
+[TextMate grammars](https://macromates.com/manual/en/language_grammars):
 
-- VS Code (via the extension at `editors/vscode/`, planned in DX.md SH.2)
-- Sublime Text (`Tools > Developer > New Syntax`)
-- GitHub (file extension routing once published as a Linguist contribution)
-- Atom, BBEdit, IntelliJ TextMate import, etc.
+- **VS Code** — via the extension at `editors/vscode/` (SH.2 ✅)
+- **IntelliJ-family** (CLion / IDEA / PyCharm / RustRover / WebStorm) — via the `.tmbundle` wrapper at `editors/intellij/Loft.tmbundle/`.  JetBrains expects a proper TextMate bundle layout (`info.plist` + `Syntaxes/`) and refuses bare grammar directories with `Cannot read the following bundle`; the wrapper symlinks back to this `syntaxes/loft.tmLanguage.json` to keep a single source of truth.
+- **GitHub** — `.loft` files in this repo render with Rust-style highlighting via the `*.loft linguist-language=Rust` directive in `.gitattributes`.  Loft is Rust-influenced enough that Rust highlighting covers ~80% of the syntax correctly.  External repos that contain `.loft` files and want the same: add `*.loft linguist-language=Rust` to their own `.gitattributes`.  Real first-class GitHub support needs an upstream contribution to [github-linguist/linguist](https://github.com/github-linguist/linguist) — gated behind ~200 public repos using loft, which is post-0.9.0 territory.
+- **Atom**, **BBEdit**, others with TextMate import — best-effort, not formally tested
+
+**Sublime Text** is **not** directly supported because Sublime
+Text 4 reads `.sublime-syntax` (YAML) and `.tmLanguage` (Apple
+plist XML), not the JSON tmLanguage format we ship.  The
+historical conversion path (Package Control → PackageDev) has
+broken since Sublime moved to Python 3.8.  A YAML
+`.sublime-syntax` companion file or a runtime conversion script
+is a 0.8.6 follow-up; for now Sublime users with strong
+preference can convert this file manually using one of the
+stand-alone tmLanguage→sublime-syntax tools on PyPI.
 
 ## Scope coverage
 

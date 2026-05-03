@@ -9,3 +9,20 @@
 *.json text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+
+# Tell GitHub Linguist to render `.loft` files using Rust syntax
+# highlighting on the web UI.  Loft is Rust-influenced enough that
+# Rust highlighting covers ~80% of the syntax correctly (keywords,
+# comments, strings, doc comments, struct/enum/fn/match constructs).
+# The remaining mismatches (`text`/`integer` types render as
+# identifiers, `not null` modifier and `#rust"..."` annotations
+# render as strings, string interpolation `{expr}` doesn't nest)
+# are visually minor.
+#
+# Real GitHub-wide highlighting needs an upstream contribution to
+# `github-linguist/linguist` adding loft as a first-class language;
+# Linguist's policy requires ~200 public repos using the language
+# before they accept new entries.  When loft hits that adoption
+# threshold (post-0.9.0 / 1.0.0) we can submit the PR and remove
+# this override.
+*.loft linguist-language=Rust

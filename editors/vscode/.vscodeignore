@@ -1,0 +1,44 @@
+# Files NOT to include in the packaged .vsix.
+#
+# `vsce package` packages everything in `editors/vscode/` by default;
+# this file is the deny-list.  We want the .vsix to contain only:
+#
+#   package.json
+#   language-configuration.json
+#   syntaxes/loft.tmLanguage.json   (resolved through the symlink)
+#   snippets/loft.json
+#   out/extension.js                (TypeScript-compiled command handlers)
+#   out/extension.js.map            (source map for stack traces)
+#   README.md
+#   LICENSE                         (resolved through the symlink)
+#
+# Anything not in that list should be excluded here.
+
+# TypeScript sources + build config — only the compiled `out/` ships.
+src/
+tsconfig.json
+package-lock.json
+
+# Test scaffolding (not used today; defensive for future).
+**/*.test.js
+**/*.test.js.map
+
+# Local + editor config that has no business in a published .vsix.
+.vscode/
+.vscode-test/
+.gitignore
+.github/
+
+# Source-control + node noise (none today, but defensive — `vsce`
+# packages shouldn't ship `.git/` or `node_modules/` if either ever
+# gets created in this directory).
+.git/
+node_modules/
+
+# Previously-packaged outputs.  Without this, every `vsce package`
+# bundles its own previous output, doubling the .vsix size each
+# iteration.
+*.vsix
+
+# This file itself is build metadata, not extension content.
+.vscodeignore

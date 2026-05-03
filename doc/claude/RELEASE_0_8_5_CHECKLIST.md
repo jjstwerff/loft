@@ -20,6 +20,395 @@ stock GDB or LLDB.
 
 ---
 
+## Tooling prerequisites
+
+Each tool is **only needed for the specific quality gate noted**.
+You can skip the install if you're not running that gate yourself.
+
+### VS Code (for SH.1 visual check + SH.2 install / package check)
+
+VS Code is Microsoft's free editor; the SH.2 extension targets it.
+Other editors (Sublime, Vim, Emacs) consume the same TextMate
+grammar via different paths — see the SH.1 cross-editor note below
+if you want to skip VS Code entirely.
+
+**Install:**
+- **Linux:** `sudo snap install code --classic` OR
+  download the `.deb` / `.rpm` from <https://code.visualstudio.com/Download>.
+- **macOS:** `brew install --cask visual-studio-code` OR
+  download the `.dmg`.
+- **Windows:** download the installer from <https://code.visualstudio.com/Download>.
+- **CLI inside VS Code:** after install, the `code` command should
+  be on your PATH.  If not, in VS Code: `Cmd/Ctrl+Shift+P` → "Shell
+  Command: Install 'code' command in PATH".
+
+**Verify:**
+```sh
+code --version    # prints version + commit hash
+```
+
+### `vsce` — VS Code extension packager (for SH.2 `vsce package` check)
+
+`vsce` is the official command-line tool that bundles an
+`editors/vscode/` directory into a single `.vsix` file you can
+install or publish.  It's a Node.js package.
+
+**Install:**
+```sh
+# requires Node.js (20.x or newer); install Node first if needed:
+#   Linux:   sudo apt install nodejs npm   OR   nvm install 20
+#   macOS:   brew install node
+#   Windows: download from https://nodejs.org/
+
+npm install -g @vscode/vsce
+```
+
+**Verify:**
+```sh
+vsce --version    # prints version
+```
+
+**Use (for SH.2 quality gate):**
+```sh
+cd editors/vscode
+vsce package      # produces loft-0.1.0.vsix in the same directory
+```
+
+**Reference:** <https://code.visualstudio.com/api/working-with-extensions/publishing-extension>.
+
+### VS Code UI walkthrough — installing + verifying the loft extension
+
+These are the actual menus / panels you'll click through to test
+the extension.  Names are stable across recent VS Code versions
+(1.75+).
+
+**1. Open the Extensions panel.**
+
+- **Sidebar icon:** four-blocks icon, usually fifth from top.
+- **Or menu:** `View > Extensions`.
+- **Or keyboard:** `Ctrl+Shift+X` (Windows / Linux) or `Cmd+Shift+X` (macOS).
+
+A panel slides in from the left listing installed + recommended
+extensions plus a search box at the top.
+
+**2. Install the local `.vsix`.**
+
+- Click the **`...` (three-dot) menu** in the top-right of the
+  Extensions panel header.  This is the "more actions" menu —
+  not the gear icon further down.
+- Choose **`Install from VSIX...`** from the dropdown.
+- A file-picker opens.  Navigate to `editors/vscode/loft-0.1.0.vsix`
+  and click **Open**.
+- VS Code installs the extension; a notification appears in the
+  bottom-right ("loft extension was installed").  No restart
+  needed for grammar / snippets.
+
+**Or via CLI** (faster if you're already in a terminal):
+```sh
+code --install-extension editors/vscode/loft-0.1.0.vsix
+```
+
+**3. Verify the extension is loaded.**
+
+- Back in the Extensions panel, type `loft` in the search box.
+  The "Loft Language" extension should appear under the
+  "Installed" group with a blue/green checkmark.
+- Click the entry to see its details panel: README rendered,
+  list of contributed languages / snippets / grammars.
+- The status bar at the bottom-right of any open `.loft` file
+  should show `Loft` as the language mode.
+
+**4. Open a `.loft` file to see highlighting.**
+
+- `File > Open File...` (or `Ctrl/Cmd+O`).
+- Pick `examples/hello.loft` (or any file in `tests/docs/`).
+- Keywords (`fn`, `for`), types (`integer`, `Point`), strings
+  with `{interpolation}`, and comments should colour
+  distinctly per your active theme.
+- If colours look wrong, the bottom-right language indicator
+  may say `Plain Text` instead of `Loft` — click it and pick
+  `Loft` from the dropdown.
+
+**5. Try a snippet.**
+
+- In an open `.loft` file, type `fn` and press `Tab`.  Should
+  expand to a function template with placeholder fields you
+  can `Tab` between.  Repeat with `for`, `match`, `struct`.
+
+**6. Open the Command Palette to confirm tasks work.**
+
+- `Ctrl/Cmd+Shift+P` opens the Command Palette.
+- Type `Tasks: Run Task` — if you've added the `tasks.json`
+  snippet from `editors/vscode/README.md` to your workspace's
+  `.vscode/tasks.json`, "Run loft" should appear.
+- Or just press `Ctrl/Cmd+Shift+B` to run the default build
+  task (which is "Run loft" once you set it up).
+
+**7. Uninstall (after testing) to keep your profile clean.**
+
+- Extensions panel → search `loft` → click the entry → click
+  the **gear icon** in the details header → **Uninstall**.
+- Or CLI: `code --uninstall-extension loft-lang.loft`.
+
+**Tip — clean profile for testing:**
+
+If you want to test the extension as a brand-new user would
+see it, without your existing settings + theme + extensions
+interfering:
+
+```sh
+mkdir -p /tmp/loft-clean-vscode
+code --user-data-dir=/tmp/loft-clean-vscode --install-extension editors/vscode/loft-0.1.0.vsix
+code --user-data-dir=/tmp/loft-clean-vscode examples/hello.loft
+```
+
+This launches VS Code with an empty profile that won't interfere
+with or be polluted by your normal setup.  Delete `/tmp/loft-clean-vscode`
+when you're done.
+
+### Sublime Text — DEFERRED to 0.8.6
+
+**Status: not in scope for 0.8.5.**  Sublime Text 4 reads
+`.sublime-syntax` (YAML, Sublime's native format) or `.tmLanguage`
+(Apple plist XML, legacy TextMate format).  Our
+`syntaxes/loft.tmLanguage.json` is **JSON** TextMate format — VS
+Code-compatible but not directly Sublime-parseable.
+
+The historical conversion path (Package Control → PackageDev →
+`Tools > PackageDev > Convert`) broke when Sublime Text 4 moved
+to Python 3.8; PackageDev's plugin loader hasn't tracked the
+update on every host.  Treating this as a closed door for 0.8.5
+rather than chasing a workaround.
+
+**0.8.6 follow-up options** (pick one when adoption signals
+demand):
+
+- **Hand-write a YAML `.sublime-syntax` companion** in
+  `syntaxes/loft.sublime-syntax`.  Same scope names as the JSON
+  grammar but in Sublime's native format.  Means maintaining two
+  grammar sources; tolerable as long as updates stay infrequent.
+- **Ship a build script** in `editors/sublime/` that converts the
+  JSON grammar at install time using a Python conversion library
+  (e.g. one of the stand-alone tmLanguage→sublime-syntax tools
+  on PyPI).  No source duplication but adds a build dependency.
+- **Drop Sublime support** and document VS Code as the canonical
+  editor.  Other TextMate-aware editors (IntelliJ-family, Atom,
+  BBEdit) consume the JSON grammar directly via their own
+  TextMate import paths.
+
+**Other TextMate-aware editors** continue to work in 0.8.5:
+- **IntelliJ-family** (per the next section) imports the JSON
+  grammar directly via `Editor → TextMate Bundles`.
+- **Atom**, **BBEdit**, and others with TextMate import generally
+  read the JSON.  Per-editor verification not done; treat as
+  best-effort until reports surface.
+
+### IntelliJ-family IDEs (CLion, IDEA, PyCharm, RustRover, WebStorm, …)
+
+JetBrains IDEs accept TextMate bundles, but they expect the
+proper TextMate `.tmbundle` directory layout (a directory with
+`info.plist` at the top level and grammars in `Syntaxes/`).
+Pointing them at the bare top-level `syntaxes/` directory fails
+with `Cannot read the following bundle: ...` because that
+directory has no `info.plist`.
+
+We ship a bundle wrapper at `editors/intellij/Loft.tmbundle/`
+that satisfies the layout requirement and symlinks back to the
+canonical grammar.  Use that directory, not the top-level
+`syntaxes/`.
+
+**UI walkthrough:**
+
+1. **`Settings`** (Linux/Windows) or **`Preferences`** (macOS)
+   from the IDE menu.  Or `Ctrl/Cmd+,`.
+2. Navigate **Editor → TextMate Bundles**.
+3. Click the **`+` button** above the bundle list.
+4. Point the file picker at **`editors/intellij/Loft.tmbundle/`**
+   (the `.tmbundle` directory inside the loft repo — not the
+   top-level `syntaxes/`, which is the canonical grammar
+   storage but lacks the bundle metadata JetBrains needs).
+5. Click **OK** / **Apply**.
+6. **Restart the IDE** (`File → Restart` or quit + relaunch).
+   JetBrains caches file-type bindings at startup; the bundle
+   loads on Apply but the `.loft` extension association from
+   `info.plist` only takes effect after a restart.  Verified
+   on RustRover 2025.x — `.loft` files keep opening as plain
+   text without this step.
+7. Open any `.loft` file — colouring should apply.  If it
+   still doesn't, right-click the file in the project tree →
+   `Override File Type → Loft`.
+
+### `gdb` — debugger (for NDB.0 quality gate, Linux primary)
+
+GNU Debugger.  Used to verify that `--native-debug` produces a
+binary you can step through.
+
+**Install:**
+- **Linux:** `sudo apt install gdb` (Debian/Ubuntu) or
+  `sudo dnf install gdb` (Fedora) — usually pre-installed.
+- **macOS:** `gdb` is awkward on macOS post-Mojave; use **lldb**
+  instead (pre-installed with Xcode Command Line Tools).
+- **Windows:** comes with `MSYS2` / `mingw-w64` builds; or use
+  the Visual Studio Debugger via VS Code's native debugger
+  extension.  Easiest path on Windows is WSL2 + Linux gdb.
+
+**Verify:**
+```sh
+gdb --version    # GNU gdb (...) X.Y
+```
+
+**Use (for NDB.0 quality gate):**
+
+Step 1: build the debug binary.
+
+```sh
+loft --native --native-debug examples/hello.loft
+# Output:
+#   loft: source preserved at /tmp/loft_native_<pid>.rs (--native-debug)
+#   Hello, world!
+# Note both the preserved source path and the binary in cache.
+ls examples/.loft/cache/
+# hello-<hash>
+```
+
+Step 2: pick a source line to break on.  **`break n_main` does
+NOT work** — rustc emits the symbol as Rust-mangled and
+file-local (`_ZN…n_main…E`, lowercase `t` in the symbol table),
+which gdb's plain-name lookup can't reach.  Break by source
+line instead.
+
+```sh
+grep -n "fn n_main" /tmp/loft_native_<pid>.rs
+# 1927:fn n_main(cell: &std::cell::UnsafeCell<Stores>) { ...
+```
+
+Step 3: pick a line a few lines INTO the function (after at
+least one variable is set, so `print var_<name>` has something
+to read).
+
+```sh
+gdb examples/.loft/cache/hello-<hash>
+(gdb) break /tmp/loft_native_<pid>.rs:1934
+Breakpoint 1 at 0x...: file /tmp/loft_native_<pid>.rs, line 1935.
+(gdb) run
+Breakpoint 1, loft_native_<pid>::n_main (cell=0x...) at /tmp/loft_native_<pid>.rs:1935
+(gdb) info locals
+var_name = alloc::string::String { ..., len: 5 }
+(gdb) print var_name
+$1 = alloc::string::String { ..., len: 5 }
+(gdb) continue
+Hello, world!
+[Inferior 1 (process N) exited normally]
+(gdb) quit
+```
+
+Loft variable `name` becomes Rust binding `var_name`; loft
+variable `score` becomes `var_score`; etc.  The `var_` prefix
+is part of NDB.0's "rust-internal names" caveat — NDB.1 will
+add a source map that lets gdb show the loft-side names.
+
+### `lldb` — debugger (NDB.0 alternative, macOS primary)
+
+LLVM Debugger.  Same use case as GDB; the canonical macOS choice.
+
+**Install:**
+- **macOS:** comes with Xcode Command Line Tools (`xcode-select --install`).
+- **Linux:** `sudo apt install lldb` or `sudo dnf install lldb`.
+- **Windows:** ships with LLVM (<https://releases.llvm.org/>).
+
+**Verify:**
+```sh
+lldb --version
+```
+
+**Use (for NDB.0 quality gate):**
+
+Same constraint as gdb — `breakpoint set --name n_main` does NOT
+work (rustc emits a Rust-mangled, file-local symbol).  Set the
+breakpoint by source line.
+
+```sh
+loft --native --native-debug examples/hello.loft
+# loft: source preserved at /tmp/loft_native_<pid>.rs (--native-debug)
+# Hello, world!
+
+grep -n "fn n_main" /tmp/loft_native_<pid>.rs
+# 1927:fn n_main(...)
+
+lldb examples/.loft/cache/hello-<hash>
+(lldb) breakpoint set --file /tmp/loft_native_<pid>.rs --line 1934
+Breakpoint 1: where = ...::n_main + 612 at loft_native_<pid>.rs:1935:3
+(lldb) run
+Process stopped at breakpoint 1
+   1933	  let mut var_name: String = "world".to_string();
+-> 1935	  n_print(cell, ...
+(lldb) frame variable var_name
+(alloc::string::String) var_name = { ..., len: 5 }
+(lldb) continue
+Hello, world!
+(lldb) quit
+```
+
+Loft variable `name` becomes Rust binding `var_name`; same
+naming pattern as gdb.  Verified on lldb 18 (Ubuntu) — Apple's
+lldb on macOS uses the same command surface.
+
+### `objdump` — DWARF inspector (NDB.0 sanity check)
+
+Standard binutils tool.  Confirms DWARF debug-info actually made
+it into the binary, independent of whether GDB / LLDB cooperate.
+
+**Install:**
+- **Linux:** `sudo apt install binutils` — usually pre-installed.
+- **macOS:** `brew install binutils` (provides `gobjdump`; the
+  Apple-shipped `objdump` is LLVM-based and uses different flag
+  names).
+- **Windows:** ships with MSYS2 / mingw-w64 / WSL2.
+
+**Use (for NDB.0 quality gate):**
+```sh
+objdump --dwarf=info examples/.loft/cache/hello-<hash> | head -20
+# Should show DW_TAG_subprogram + DW_AT_name entries.
+```
+
+### `node` — for JS-glue probes (browser quality gate)
+
+Already present if you installed Node for `vsce`.  The
+`make gallery` step uses Node to instantiate the WASM bundle as
+a browser would, catching `LinkError` mismatches before they
+reach users.
+
+**Use (already wired into CI):**
+```sh
+make gallery   # rebuilds doc/pkg/ + probes the bundle
+```
+
+### `python3` — JSON validation (universal, already common)
+
+Used for one-line JSON schema validation:
+```sh
+python3 -c "import json; json.load(open('syntaxes/loft.tmLanguage.json'))"
+```
+
+If `python3` exits 0, the JSON parses; if not, you get a clear
+`JSONDecodeError` line + col.  Already part of every modern OS.
+
+### Quick "what do I need for which gate?" table
+
+| Gate | Tool needed | Skip if… |
+|---|---|---|
+| SH.1 visual (VS Code) | VS Code | you have Sublime / Vim / Emacs and use those instead |
+| SH.1 visual (Sublime) | _deferred to 0.8.6_ — see Sublime section above | always |
+| SH.2 `vsce package` | `vsce` (+ Node) | you'll publish from CI later |
+| SH.2 install | `code` CLI | you'll smoke-test in your daily editor |
+| NDB.0 GDB | `gdb` | you're on macOS — use LLDB |
+| NDB.0 LLDB | `lldb` | you'll run on Linux only |
+| NDB.0 DWARF | `objdump` | you trust GDB / LLDB to find the source |
+| Browser probe | `node` | not interested in the gallery / playground deploy |
+| Cross-cutting CI | none extra | (CI matrix on GitHub does this) |
+
+---
+
 ## Per-item checklist
 
 ### SH.1 — TextMate grammar (`syntaxes/loft.tmLanguage.json`) — ✅ DONE
@@ -58,11 +447,15 @@ stock GDB or LLDB.
 - [ ] **Negative check** — open a `.loft` file with deliberate syntax
       errors (unclosed string, missing brace).  Highlighting should
       degrade gracefully — no infinite-loop spinner, no all-red.
-- [ ] **Cross-editor check** — load the grammar in Sublime Text via
-      `Tools > Developer > New Syntax`; same colouring should apply.
-- [ ] **GitHub Linguist check** (later, requires fork + PR) — file at
-      `vendor/grammars/loft/syntaxes/loft.tmLanguage.json` works for
-      `.loft` extension.  **Skip for 0.8.5; track as 0.8.6 follow-up.**
+- [ ] **Cross-editor check (IntelliJ)** — load the
+      `editors/intellij/Loft.tmbundle/` per the section above;
+      colouring should apply after IDE restart.
+- [x] **GitHub rendering** — `.gitattributes` maps `*.loft` to
+      Rust highlighting via Linguist's per-repo override.  Loft
+      files render with ~80%-correct highlighting on the GitHub
+      web UI immediately on push.  First-class Linguist support
+      (an upstream PR to `github-linguist/linguist`) gates on
+      ~200-repo adoption and is deferred to post-0.9.0.
 
 #### Risks
 
@@ -270,30 +663,30 @@ item that plan-07 phase 2 already shipped)_.
 
 #### Quality gates (before ship)
 
-- [ ] **Build works** — `loft --native --native-debug examples/hello.loft`
-      produces a runnable binary at `/tmp/loft_native_bin_<pid>` (or
-      a user-provided path).
-- [ ] **Binary contains DWARF** — `objdump --dwarf=info /tmp/loft_native_bin_<pid>
-      | head -20` shows non-empty DWARF info.
-- [ ] **Source file present** — `/tmp/loft_native_<pid>.rs` exists
-      after the build (not deleted).
-- [ ] **GDB step works** — per the design's expected interaction:
-      ```
-      $ gdb /tmp/loft_native_bin_<pid>
-      (gdb) break n_main
-      (gdb) run
-      Breakpoint 1, n_main () at /tmp/loft_native_<pid>.rs:NN
-      (gdb) step
-      (gdb) print var_x
-      ```
-      Variable names will be rust-internal (`var_x` not `x`) — that's
-      expected for NDB.0; NDB.1 adds the source map.
-- [ ] **LLDB step works** — same flow with `lldb` instead of `gdb`.
-      Test on macOS if access is available; Linux LLDB also works.
+- [x] **Build works** — `loft --native --native-debug examples/hello.loft`
+      produces a runnable binary at `examples/.loft/cache/hello-<hash>`
+      (cache path; the cache key now includes the debug flag so
+      switching between `--native` and `--native-debug` doesn't
+      reuse the wrong binary).
+- [x] **Binary contains DWARF** — verified locally:
+      `objdump -h examples/.loft/cache/hello-<hash>` lists all
+      five DWARF sections (`.debug_abbrev`, `.debug_info` 1.5 MB,
+      `.debug_str`, `.debug_line`, `.debug_line_str`).
+- [x] **Source file present + referenced in DWARF** —
+      `/tmp/loft_native_<pid>.rs` is preserved (the
+      `--native-debug` post-compile branch doesn't delete it),
+      and `objdump --dwarf=decodedline` shows `.debug_line` rows
+      referencing it.
+- [x] **GDB step works** — verified locally on gdb 17.1.  See the
+      gdb section above for the full recipe.  Key: break by
+      source line (not function name); `info locals` and
+      `print var_name` work after the breakpoint hits.
+- [x] **LLDB step works** — verified locally on lldb 18.  Same
+      recipe shape with `breakpoint set --file ... --line ...`.
 - [ ] **`--native-release` interaction** — `loft --native
       --native-release --native-debug examples/hello.loft` produces an
       optimised binary WITH debug info.  Confirms the two flags
-      compose.
+      compose; not yet verified locally.
 
 #### Risks
 
@@ -384,9 +777,14 @@ small but visually impressive example like `examples/hello.loft`
 
 - **Marketplace publish of SH.2** — separate publishing step;
   needs Personal Access Token + `vsce publish` invocation.
-- **GitHub Linguist contribution** — submit the grammar to the
-  Linguist repo; gets `.loft` colour highlighting in GitHub UI
-  for free.  0.8.6 follow-up.
+- **GitHub Linguist first-class contribution** — submit a PR to
+  `github-linguist/linguist` adding loft as a recognised
+  language with its own colour and grammar.  Gated on Linguist's
+  ~200-repo adoption rule.  Until then, the
+  `*.loft linguist-language=Rust` directive in `.gitattributes`
+  delivers ~80%-correct highlighting on the GitHub web UI for
+  this repo and any external repo that copies the same line.
+  Post-0.9.0 work.
 - **NDB.1** — source-map-aware GDB / LLDB plugins.  0.8.6 work.
 - **LSP server** — a real LSP daemon exposing diagnostics /
   completion / go-to-definition.  0.8.6 LSP.1.
