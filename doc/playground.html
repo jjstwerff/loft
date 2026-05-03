@@ -310,6 +310,21 @@ select {
 <script type="module">
 import init, { compile_and_run } from './pkg/loft.js';
 import { EXAMPLES, EXAMPLE_GROUPS } from './examples.js';
+import { createHost } from './loft-rt.js';
+
+// Wire the JSON-backed VirtFS + host used by the WASM test harness
+// (tests/wasm/virt-fs.mjs + tests/wasm/host.mjs, merged into
+// loft-rt.js for browser delivery) into the playground.  The Rust
+// side calls `globalThis.loftHost.fs_*` for every file operation;
+// without a host, `file(path).write(...)` is a silent no-op and
+// `file(path).content()` returns "" — exactly the symptom seen on
+// examples/files.loft before this change.
+//
+// `createHost()` also wires random / time / log / storage stubs,
+// so examples touching those get working defaults too.  Files
+// persist for the lifetime of the page (refresh clears them).
+const { host } = createHost();
+window.loftHost = host;
 
 // ── Syntax highlighting ──────────────────────────────────────────────
 const KEYWORDS = new Set([
