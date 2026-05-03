@@ -371,13 +371,90 @@ Narrow-prim Queue (A3).  Don't bundle.
 - Bug fix discovered during implementation: `n_parallel_queue_narrow` (interpreter) was calling `run_parallel_queue` with `return_size=4`, but `execute_at_raw` reads only the low 4 bytes via `get_stack::<u32>` for return_size=4 — this loses the actual i32 value because workers push 8 bytes (i64-promoted) but only the low 4 are read into one slot, leaving the high 4 to leak into adjacent state.  Fix: always pass `return_size=8` to `run_parallel_queue` from inside the narrow runtime, then truncate to stride bytes during packing.  The actual narrow value lives in the low `stride` bytes of the i64 (zero/sign-extended), so the truncation is correct.
 - `parallel_buf_get_narrow` declared signature changed from `signed: boolean` to `signed: integer` — the runtime reads i64 from the stack (8 bytes), so a boolean (1 byte) push left 7 bytes of garbage on the stack, corrupting subsequent pops.
 
-**Still PENDING (Boolean / Single / Character / Float / Enum-no-payload):**
+**Still PENDING (split by difficulty after a 2026-05-03 re-survey):**
 
-Each of these needs IR bit-cast support before it can route through the buf_get_narrow path that returns i64:
-1. Per-narrow-type getters (`_get_bool` / `_get_single` / `_get_character`) — clean but multiplies the surface.
-2. Single i64-returning getter wrapped at substitution time with the appropriate `OpConv*FromInt` op (`OpConvBoolFromInt` / `OpConvCharacterFromInt` exist; bit-cast for Single/Float NOT in IR today — would need `OpBitcastSingleFromInt` / `OpBitcastFloatFromInt`).
+##### A3.5 — Boolean / Character / Enum-no-payload (~30-60 min each, ~2-3 hours total)
 
-These deferred to a future sub-step.  Today's narrow-Integer subset already unblocks A4 (`parallel_light_execute_and_collect` retirement) for the i32/u8/u16/i8/i16 return shapes that `light` was the fallback for.
+The wrap-in-`OpConv*FromInt` approach.  All three needed conversion
+Ops already exist in `default/01_code.loft`:
+
+- `OpConvBoolFromInt(v1: integer) -> boolean` — line 689 ish
+- `OpConvCharacterFromInt(v1: integer) -> character` — line 668 ish
+- `OpConvEnumFromInt` — **not yet declared**; companion to the
+  existing `OpConvEnumFromNull`.  Add a 2-line decl + a one-line
+  `ops.rs` body (`(v as u32) as u32` for the no-payload enum's
+  variant index — Loft caps single-byte enums at 256 variants).
+
+Implementation per shape:
+
+1. Add `route_narrow_*_queue` flags to both early/main gates in
+   `src/parser/collections.rs::build_parallel_for_ir`, mirroring
+   `route_narrow_int_queue` (already shipped) — match
+   `Type::Boolean`, `Type::Character`, `Type::Enum(_, false, _)`.
+   Each gets stride 1 (bool/enum) or 4 (character) and signed=false.
+2. Build the narrow `get_call` exactly as for narrow Integer, then
+   wrap with the matching conversion: `Value::Call(OpConvBoolFromInt_d_nr,
+   vec![narrow_call])`.
+3. The dispatch switch in `for_steps` uses the same
+   `(queue_narrow_d_nr, buf_drop_narrow_d_nr, ...)` tuple.
+
+**Acceptance:** `par_struct_to_bool_t4`, `par_struct_to_character_t4`
+(if it exists; else add canary), and an `Enum::Variant`-returning
+canary all pass via the narrow path.  Existing `tests/threading_chars.rs`
+`par_struct_to_bool_t4` continues green; new
+`par_struct_to_enum_no_payload_t4` opens.
+
+**Risk:** the per-shape return-type conversion runs on every body
+iteration — measured cost likely <10 ns per row; well below the
+plan-06 ±5% bench gate.
+
+##### A3.6 — Single / Float (~1-2 sessions)
+
+Need new IR bit-cast Ops because `OpConvSingleFromInt` /
+`OpConvFloatFromInt` are *value* conversions
+(`5_i64 → 5.0_f32`), not bit-casts.  Workers store
+`f32::to_bits()` / `f64::to_bits()` as i64 in the buffer; reading
+back via the value-conv ops would treat those bytes as a number,
+not as float bits.
+
+New decls in `default/01_code.loft`:
+
+```loft
+fn OpBitcastSingleFromInt(v1: integer) -> single;
+   #rust"f32::from_bits((@v1) as u32)"
+fn OpBitcastFloatFromInt(v1: integer) -> float;
+   #rust"f64::from_bits((@v1) as u64)"
+```
+
+Plus the corresponding entries in `src/ops.rs` (one-liners) and
+the wart-budget gate bump in
+`tests/codegen_emitter.rs::dispatch_op_arm_budget_not_exceeded`
+(adds 2 to the OP count).
+
+Then same wrapping pattern as A3.5: narrow path for Single (stride
+4), wide path for Float (stride 8 — already works through the
+regular `n_parallel_queue`; just need the bit-cast wrap on the
+body's `r` accessor when the ret type is Float).
+
+**Acceptance:** `par_struct_to_single_t4` and `par_struct_to_float_t4`
+route through the queue path (narrow for Single, wide for Float)
+and pass.  Existing tests continue green.
+
+**Risk:** new IR Ops touch the opcode count.  Plan-09's wart-budget
+gate caps the count; adding 2 needs a documented bump.  If the
+bump conversation feels heavier than the value (Single/Float
+returns are uncommon in real par workloads), defer A3.6 indefinitely
+— the materialised path keeps working for these shapes.
+
+##### Sequencing
+
+A3.5 lands first as a cheap follow-up to today's A3 (narrow
+Integer).  A3.6 is gated on appetite for the new IR ops.  After
+A3.5, A4 (retire light Concat path) becomes actionable for the
+bool/char/enum shapes too.  After A3.6, A4 cleanup is total.
+
+Today's narrow-Integer subset already unblocks A4 for the
+i32/u8/u16/i8/i16 return shapes that `light` was the fallback for.
 
 **Acceptance test:** `par_struct_to_i32_t4` and `par_struct_to_byte_t4` route through the new narrow Queue path (verified by smoke-testing `target/release/loft /tmp/par_i32_b.loft` showing the expected `sum=-10`); `cargo test --release --test threading_chars` passes 35/35; `cargo test --release --test threading` passes 43/43; `cargo test --release --test issues` passes 540/540.
 
