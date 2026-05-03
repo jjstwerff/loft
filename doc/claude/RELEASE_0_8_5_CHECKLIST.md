@@ -258,18 +258,54 @@ gdb --version    # GNU gdb (...) X.Y
 ```
 
 **Use (for NDB.0 quality gate):**
+
+Step 1: build the debug binary.
+
 ```sh
 loft --native --native-debug examples/hello.loft
-# Note the binary path printed in cache, e.g.
-#   examples/.loft/cache/hello-<hash>
+# Output:
+#   loft: source preserved at /tmp/loft_native_<pid>.rs (--native-debug)
+#   Hello, world!
+# Note both the preserved source path and the binary in cache.
+ls examples/.loft/cache/
+# hello-<hash>
+```
+
+Step 2: pick a source line to break on.  **`break n_main` does
+NOT work** — rustc emits the symbol as Rust-mangled and
+file-local (`_ZN…n_main…E`, lowercase `t` in the symbol table),
+which gdb's plain-name lookup can't reach.  Break by source
+line instead.
+
+```sh
+grep -n "fn n_main" /tmp/loft_native_<pid>.rs
+# 1927:fn n_main(cell: &std::cell::UnsafeCell<Stores>) { ...
+```
+
+Step 3: pick a line a few lines INTO the function (after at
+least one variable is set, so `print var_<name>` has something
+to read).
+
+```sh
 gdb examples/.loft/cache/hello-<hash>
-(gdb) break n_main
+(gdb) break /tmp/loft_native_<pid>.rs:1934
+Breakpoint 1 at 0x...: file /tmp/loft_native_<pid>.rs, line 1935.
 (gdb) run
-(gdb) step
-(gdb) print var_x
+Breakpoint 1, loft_native_<pid>::n_main (cell=0x...) at /tmp/loft_native_<pid>.rs:1935
+(gdb) info locals
+var_name = alloc::string::String { ..., len: 5 }
+(gdb) print var_name
+$1 = alloc::string::String { ..., len: 5 }
 (gdb) continue
+Hello, world!
+[Inferior 1 (process N) exited normally]
 (gdb) quit
 ```
+
+Loft variable `name` becomes Rust binding `var_name`; loft
+variable `score` becomes `var_score`; etc.  The `var_` prefix
+is part of NDB.0's "rust-internal names" caveat — NDB.1 will
+add a source map that lets gdb show the loft-side names.
 
 ### `lldb` — debugger (NDB.0 alternative, macOS primary)
 
@@ -286,15 +322,36 @@ lldb --version
 ```
 
 **Use (for NDB.0 quality gate):**
+
+Same constraint as gdb — `breakpoint set --name n_main` does NOT
+work (rustc emits a Rust-mangled, file-local symbol).  Set the
+breakpoint by source line.
+
 ```sh
+loft --native --native-debug examples/hello.loft
+# loft: source preserved at /tmp/loft_native_<pid>.rs (--native-debug)
+# Hello, world!
+
+grep -n "fn n_main" /tmp/loft_native_<pid>.rs
+# 1927:fn n_main(...)
+
 lldb examples/.loft/cache/hello-<hash>
-(lldb) breakpoint set --name n_main
+(lldb) breakpoint set --file /tmp/loft_native_<pid>.rs --line 1934
+Breakpoint 1: where = ...::n_main + 612 at loft_native_<pid>.rs:1935:3
 (lldb) run
-(lldb) step
-(lldb) frame variable
+Process stopped at breakpoint 1
+   1933	  let mut var_name: String = "world".to_string();
+-> 1935	  n_print(cell, ...
+(lldb) frame variable var_name
+(alloc::string::String) var_name = { ..., len: 5 }
 (lldb) continue
+Hello, world!
 (lldb) quit
 ```
+
+Loft variable `name` becomes Rust binding `var_name`; same
+naming pattern as gdb.  Verified on lldb 18 (Ubuntu) — Apple's
+lldb on macOS uses the same command surface.
 
 ### `objdump` — DWARF inspector (NDB.0 sanity check)
 
@@ -602,30 +659,30 @@ item that plan-07 phase 2 already shipped)_.
 
 #### Quality gates (before ship)
 
-- [ ] **Build works** — `loft --native --native-debug examples/hello.loft`
-      produces a runnable binary at `/tmp/loft_native_bin_<pid>` (or
-      a user-provided path).
-- [ ] **Binary contains DWARF** — `objdump --dwarf=info /tmp/loft_native_bin_<pid>
-      | head -20` shows non-empty DWARF info.
-- [ ] **Source file present** — `/tmp/loft_native_<pid>.rs` exists
-      after the build (not deleted).
-- [ ] **GDB step works** — per the design's expected interaction:
-      ```
-      $ gdb /tmp/loft_native_bin_<pid>
-      (gdb) break n_main
-      (gdb) run
-      Breakpoint 1, n_main () at /tmp/loft_native_<pid>.rs:NN
-      (gdb) step
-      (gdb) print var_x
-      ```
-      Variable names will be rust-internal (`var_x` not `x`) — that's
-      expected for NDB.0; NDB.1 adds the source map.
-- [ ] **LLDB step works** — same flow with `lldb` instead of `gdb`.
-      Test on macOS if access is available; Linux LLDB also works.
+- [x] **Build works** — `loft --native --native-debug examples/hello.loft`
+      produces a runnable binary at `examples/.loft/cache/hello-<hash>`
+      (cache path; the cache key now includes the debug flag so
+      switching between `--native` and `--native-debug` doesn't
+      reuse the wrong binary).
+- [x] **Binary contains DWARF** — verified locally:
+      `objdump -h examples/.loft/cache/hello-<hash>` lists all
+      five DWARF sections (`.debug_abbrev`, `.debug_info` 1.5 MB,
+      `.debug_str`, `.debug_line`, `.debug_line_str`).
+- [x] **Source file present + referenced in DWARF** —
+      `/tmp/loft_native_<pid>.rs` is preserved (the
+      `--native-debug` post-compile branch doesn't delete it),
+      and `objdump --dwarf=decodedline` shows `.debug_line` rows
+      referencing it.
+- [x] **GDB step works** — verified locally on gdb 17.1.  See the
+      gdb section above for the full recipe.  Key: break by
+      source line (not function name); `info locals` and
+      `print var_name` work after the breakpoint hits.
+- [x] **LLDB step works** — verified locally on lldb 18.  Same
+      recipe shape with `breakpoint set --file ... --line ...`.
 - [ ] **`--native-release` interaction** — `loft --native
       --native-release --native-debug examples/hello.loft` produces an
       optimised binary WITH debug info.  Confirms the two flags
-      compose.
+      compose; not yet verified locally.
 
 #### Risks
 
