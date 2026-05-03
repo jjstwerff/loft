@@ -55,26 +55,23 @@ fn main() {
     name = pretty_example_name(base);
     code = "";
     desc = "";
-    in_header = true;
     for line in f.lines() {
-      if in_header {
-        if line.starts_with("//") or line.len() == 0 {
-          // Pull the first sentence of the description paragraph
-          // (skip the title-line which contains ".loft —").
-          if desc.len() < 200 and line.len() > 3 and line.starts_with("// ") {
-            body = line[3..];
-            if !body.contains(".loft —") and !body.starts_with("@") and !body.contains("Copyright") and !body.contains("SPDX") {
-              if desc.len() == 0 {
-                desc = body;
-              } else if desc.len() < 200 {
-                desc += " ";
-                desc += body;
-              }
-            }
+      // Build the description from the leading prose-comment block,
+      // skipping the "<file>.loft — short title" header-line and any
+      // metadata.  This is independent of the source preserved in
+      // `code` — every line of the file (including the comments)
+      // ends up in the editor so the playground matches what the
+      // user sees on GitHub.
+      if desc.len() < 200 and line.len() > 3 and line.starts_with("// ") {
+        body = line[3..];
+        if !body.contains(".loft —") and !body.starts_with("@") and !body.contains("Copyright") and !body.contains("SPDX") {
+          if desc.len() == 0 {
+            desc = body;
+          } else if desc.len() < 200 {
+            desc += " ";
+            desc += body;
           }
-          continue;
         }
-        in_header = false;
       }
       if code.len() > 0 { code += "\n"; }
       code += line;
@@ -103,26 +100,24 @@ fn main() {
     name = base;
     code = "";
     desc = "";
-    in_header = true;
     for line in f.lines() {
-      if in_header {
-        np = line.find("@NAME:");
-        if np >= 0 { name = line[np + 7..]; }
-        tp = line.find("@TITLE:");
-        if tp >= 0 { desc = line[tp + 8..]; }
-        if line.starts_with("//") or line.len() == 0 {
-          // Fallback: first prose line after the metadata, when
-          // @TITLE: is absent.
-          if desc.len() == 0 and line.len() > 3 and line.starts_with("// ") {
-            body = line[3..];
-            if !body.starts_with("@") and !body.contains("Copyright") and !body.contains("SPDX") {
-              desc = body;
-            }
-          }
-          continue;
+      np = line.find("@NAME:");
+      if np >= 0 { name = line[np + 7..]; }
+      tp = line.find("@TITLE:");
+      if tp >= 0 { desc = line[tp + 8..]; }
+      // Fallback description: first prose line after the metadata.
+      if desc.len() == 0 and line.len() > 3 and line.starts_with("// ") {
+        body = line[3..];
+        if !body.starts_with("@") and !body.contains("Copyright") and !body.contains("SPDX") {
+          desc = body;
         }
-        in_header = false;
       }
+      // Strip the test-fixture boilerplate from the editor source —
+      // Copyright + SPDX + every `@FIELD:` directive.  Everything
+      // else (prose comments, code) is preserved so the playground
+      // matches what's at tests/docs/ on GitHub.
+      if line.contains("Copyright") or line.contains("SPDX-License-Identifier") { continue; }
+      if line.starts_with("// @") { continue; }
       if code.len() > 0 { code += "\n"; }
       code += line;
     }
