@@ -90,11 +90,28 @@ fn queue_narrow_helper_name() -> &'static str {
     "n_parallel_queue_narrow_native"
 }
 
-/// True when the worker's return type is a narrow Integer
-/// (byte_width 1/2/4).  Used by `ParallelQueueEmitter` to swap the
-/// helper to the narrow variant.
+/// True when the worker's return type rides the narrow-Queue path
+/// (byte-packed buffer, stride 1/2/4).  Mirrors the parser-side
+/// `narrow_route_for` decision in `src/parser/collections.rs`:
+///
+/// - `Integer(spec)` with `byte_width 1/2/4` (A3 narrow Integer)
+/// - `Boolean` (A3.5)
+/// - `Character` (A3.5)
+/// - `Enum(_, false, _)` no-payload (A3.5)
+///
+/// Used by `ParallelQueueEmitter` to swap the runtime helper to the
+/// narrow variant `n_parallel_queue_narrow_native`.  Without this,
+/// the parser routes via `n_parallel_queue_narrow` (narrow buffer)
+/// while the emitter would call `n_parallel_queue_native` (wide
+/// buffer) — body's `parallel_buf_get_narrow` then reads from an
+/// empty narrow buffer and panics.
 fn is_narrow_int_return(ret: &Type) -> bool {
-    matches!(ret, Type::Integer(spec) if matches!(spec.byte_width(true), 1 | 2 | 4))
+    match ret {
+        Type::Integer(spec) => matches!(spec.byte_width(true), 1 | 2 | 4),
+        Type::Boolean | Type::Character => true,
+        Type::Enum(_, false, _) => true,
+        _ => false,
+    }
 }
 
 /// `n_parallel_for` / `n_parallel_for_light` emitter.
