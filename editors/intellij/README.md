@@ -17,9 +17,15 @@ supports TextMate Bundles: **CLion**, **IntelliJ IDEA**, **PyCharm**,
    `syntaxes/` directory — that's the canonical grammar storage,
    but JetBrains needs the bundle wrapper.)
 5. Click **OK** / **Apply**.
-6. Open any `.loft` file — colouring should apply.  If not,
-   right-click the file in the project tree → `Override File
-   Type → Loft`.
+6. **Restart the IDE** (`File → Restart` or quit + relaunch).
+   JetBrains caches file-type bindings at startup; the bundle
+   loads on Apply but the `.loft` extension association from
+   `info.plist` only takes effect after a restart.  Without
+   this step, `.loft` files keep opening as plain text even
+   though the bundle is listed in the TextMate Bundles panel.
+7. Open any `.loft` file — colouring should apply.  If it
+   still doesn't, right-click the file in the project tree →
+   `Override File Type → Loft`.
 
 ## What's in here
 

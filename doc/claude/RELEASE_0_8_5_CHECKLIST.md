@@ -228,9 +228,15 @@ canonical grammar.  Use that directory, not the top-level
    top-level `syntaxes/`, which is the canonical grammar
    storage but lacks the bundle metadata JetBrains needs).
 5. Click **OK** / **Apply**.
-6. Open any `.loft` file — colouring should apply.  If not,
-   right-click the file in the project tree → `Override File
-   Type → Loft`.
+6. **Restart the IDE** (`File → Restart` or quit + relaunch).
+   JetBrains caches file-type bindings at startup; the bundle
+   loads on Apply but the `.loft` extension association from
+   `info.plist` only takes effect after a restart.  Verified
+   on RustRover 2025.x — `.loft` files keep opening as plain
+   text without this step.
+7. Open any `.loft` file — colouring should apply.  If it
+   still doesn't, right-click the file in the project tree →
+   `Override File Type → Loft`.
 
 ### `gdb` — debugger (for NDB.0 quality gate, Linux primary)
 
