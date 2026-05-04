@@ -90,6 +90,7 @@ impl Parser {
             });
         }
         let fn_nr = self.data.add_fn(&mut self.lexer, &name, &args);
+        self.data.mark_synthetic(fn_nr, "enum_dispatcher");
         self.context = fn_nr;
         self.vars = Function::new(&name, &self.data.def(from_nr).position.file);
         self.data

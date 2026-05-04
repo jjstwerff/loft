@@ -143,25 +143,15 @@ impl Parser {
                     // Only fire when `t_<Parent>_<field>` is the
                     // user's direct declaration on the enum, NOT the
                     // auto-generated polymorphic dispatcher built
-                    // from per-variant impls.  Distinguisher: the
-                    // auto-dispatcher only exists when at least one
-                    // variant has its own `t_<Variant>_<field>`; a
-                    // direct decl coexists with no per-variant
-                    // impls (loft rejects mixing the two).  Without
+                    // from per-variant impls (which carries
+                    // `synthetic = Some("enum_dispatcher")` —
+                    // see `Definition.synthetic` doc).  Without
                     // this guard, `r.area()` on a variant lacking
                     // its own impl would bypass the long-standing
                     // "Unknown field Rect.area" error and silently
                     // dispatch through the warning-only stub.
-                    let has_per_variant_impl = (0..self.data.definitions()).any(|sib_d| {
-                        if self.data.def(sib_d).parent != parent_d {
-                            return false;
-                        }
-                        let sib_name = &self.data.def(sib_d).name;
-                        let probe = format!("t_{}{}_{}", sib_name.len(), sib_name, field);
-                        self.data.def_nr(&probe) != u32::MAX
-                    });
                     if md_nr != u32::MAX
-                        && !has_per_variant_impl
+                        && self.data.def(md_nr).synthetic.is_none()
                         && matches!(
                             self.data.def_type(md_nr),
                             DefType::Function | DefType::Generic

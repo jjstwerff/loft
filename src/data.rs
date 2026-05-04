@@ -1584,6 +1584,18 @@ pub struct Definition {
     /// index instance, covering `#left_N` / `#right_N` / `#color_N`).
     /// Empty for ordinary user-defined structs.
     pub field_groups: Vec<LinkedFieldGroup>,
+    /// Origin tag for definitions the compiler synthesises rather than
+    /// the user declaring directly.  `None` for user-written defs
+    /// (the common case); `Some(reason)` identifies the synthesis
+    /// site (e.g. `"enum_dispatcher"` for the polymorphic stub
+    /// `create_enum_dispatch_fn` builds when only per-variant impls
+    /// exist).  Used by parser fallbacks (e.g. method-on-parent-enum
+    /// dispatch in `parser/fields.rs`) that must distinguish
+    /// user-declared methods from auto-generated stubs to avoid
+    /// silently bypassing intentional compile-time errors.  The
+    /// reason string is `&'static` for zero-cost comparison and easy
+    /// grep.
+    pub synthetic: Option<&'static str>,
 }
 
 impl Definition {
@@ -1958,9 +1970,18 @@ impl Data {
             forced_size: None,
             purity: Purity::Unknown,
             field_groups: Vec::new(),
+            synthetic: None,
         };
         self.definitions.push(new_def);
         rec
+    }
+
+    /// Mark a definition as synthesised by the compiler with a
+    /// `&'static` reason string.  Used by fallback dispatch paths
+    /// (e.g. `parser/fields.rs::field`'s parent-enum lookup) to skip
+    /// auto-generated stubs that look identical to user decls.
+    pub fn mark_synthetic(&mut self, d_nr: u32, reason: &'static str) {
+        self.definitions[d_nr as usize].synthetic = Some(reason);
     }
 
     /**
