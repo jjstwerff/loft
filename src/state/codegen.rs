@@ -1389,6 +1389,55 @@ impl State {
     /// `slot_offset = stack.position - v.stack_pos` (positional init
     /// ops) or push-then-`OpPut*(slot_offset)` (for paths whose only
     /// way to produce the value is via the eval stack).
+    /// Emit per-leaf `OpPut*` ops that pop a tuple value off TOS into
+    /// the slot at absolute offset `tuple_base`.  Recurses through
+    /// nested tuples so an outer element of type `Tuple(...)` is
+    /// flattened to its leaf scalars/refs.
+    ///
+    /// Iteration is reverse-order (last leaf first) because TOS holds
+    /// the value pushed last — exactly the layout `generate` produces
+    /// for a tuple literal evaluated left-to-right depth-first.  Each
+    /// `OpPut*` consumes its slot's bytes from TOS.
+    ///
+    /// P212 — nested tuple literals (`((1,2),(3,4))`, triply-nested,
+    /// or any tuple containing a tuple) previously panicked here
+    /// because the inline match in `gen_set_first_at_tos` had no arm
+    /// for `Type::Tuple(_)` elements.  Recursion handles arbitrary
+    /// nesting depth using the same offset arithmetic.
+    fn emit_tuple_put_ops(&mut self, stack: &mut Stack, elems: &[Type], tuple_base: u16) {
+        let offsets = crate::data::element_offsets(elems);
+        for i in (0..elems.len()).rev() {
+            let elem_abs = tuple_base + offsets[i] as u16;
+            if let Type::Tuple(inner) = &elems[i] {
+                self.emit_tuple_put_ops(stack, inner, elem_abs);
+                continue;
+            }
+            // Compute pos BEFORE add_op — `stack.add_op` calls
+            // `operator(...)` which decrements `stack.position` by the
+            // op's pop size, but the offset argument we encode in the
+            // bytecode stream is relative to the stack position
+            // *before* the pop (it's the offset from TOS at op-fire
+            // time, which is then `stack_pos + size - pos` inside
+            // `put_var`).  Mirrors the original flat-tuple loop.
+            let pos = stack.position - elem_abs;
+            match &elems[i] {
+                Type::Integer(_) | Type::Function(_, _, _) => stack.add_op("OpPutInt", self),
+                Type::Boolean => stack.add_op("OpPutBool", self),
+                Type::Float => stack.add_op("OpPutFloat", self),
+                Type::Single => stack.add_op("OpPutSingle", self),
+                Type::Character => stack.add_op("OpPutCharacter", self),
+                Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
+                Type::Text(_) => stack.add_op("OpPutText", self),
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+                    stack.add_op("OpPutRef", self)
+                }
+                Type::Tuple(_) => unreachable!("handled above"),
+                other => panic!("emit_tuple_put_ops: unsupported elem {other:?}"),
+            }
+            self.code_add(pos);
+        }
+    }
+
     fn gen_set_first_at_tos(&mut self, stack: &mut Stack, v: u16, value: &Value) {
         if matches!(*stack.function.tp(v), Type::Text(_)) {
             self.gen_set_first_text(stack, v, value);
@@ -1506,30 +1555,8 @@ impl State {
                 | Type::Index(_, _, _)
                 | Type::Spacial(_, _, _) => stack.add_op("OpPutRef", self),
                 Type::Tuple(elems) => {
-                    let offsets = crate::data::element_offsets(&elems);
                     let tuple_var_base = stack.function.stack(v);
-                    for i in (0..elems.len()).rev() {
-                        let elem_abs = tuple_var_base + offsets[i] as u16;
-                        let pos = stack.position - elem_abs;
-                        match &elems[i] {
-                            Type::Integer(_) | Type::Function(_, _, _) => {
-                                stack.add_op("OpPutInt", self);
-                            }
-                            Type::Boolean => stack.add_op("OpPutBool", self),
-                            Type::Float => stack.add_op("OpPutFloat", self),
-                            Type::Single => stack.add_op("OpPutSingle", self),
-                            Type::Character => stack.add_op("OpPutCharacter", self),
-                            Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
-                            Type::Text(_) => stack.add_op("OpPutText", self),
-                            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
-                                stack.add_op("OpPutRef", self)
-                            }
-                            other => panic!(
-                                "gen_set_first_at_tos tuple fallthrough: unsupported elem {other:?}"
-                            ),
-                        }
-                        self.code_add(pos);
-                    }
+                    self.emit_tuple_put_ops(stack, &elems, tuple_var_base);
                     return;
                 }
                 other => panic!(

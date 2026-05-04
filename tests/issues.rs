@@ -11123,6 +11123,42 @@ fn run() -> integer {
     .result(Value::Int(37));
 }
 
+/// P212 — closed 2026-05-04.  Nested tuple literals
+/// (`((1,2),(3,4))`, triply nested, etc.) panicked at
+/// `src/state/codegen.rs:1527` because the inline match in
+/// `gen_set_first_at_tos`'s `Type::Tuple` arm had no case for an
+/// inner element of `Type::Tuple(_)` — it fell through to the
+/// "unsupported elem" panic.  Fix extracts the per-leaf
+/// `OpPut*` emission into a recursive helper
+/// `emit_tuple_put_ops` that descends through nested tuples,
+/// computing each leaf's absolute slot offset.  Iteration is
+/// reverse-order to match the depth-first push order used by
+/// tuple-literal evaluation.
+#[test]
+fn p212_nested_tuple_literal() {
+    code!(
+        "fn run() -> integer {
+    t = ((1, 2), (3, 4));
+    t.0.0 * 1000 + t.0.1 * 100 + t.1.0 * 10 + t.1.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1234));
+}
+
+/// P212 follow-up — triply nested tuple literal `(1, (2, (3, 4)))`.
+#[test]
+fn p212_triply_nested_tuple_literal() {
+    code!(
+        "fn run() -> integer {
+    t = (1, (2, (3, 4)));
+    t.0 * 1000 + t.1.0 * 100 + t.1.1.0 * 10 + t.1.1.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1234));
+}
+
 /// P210 — closed 2026-05-04.  Native coroutine `while … { yield … }`
 /// silently returned 0 because `collect_segments` in
 /// `src/generation/coroutine.rs` only recognised `Value::Block`
