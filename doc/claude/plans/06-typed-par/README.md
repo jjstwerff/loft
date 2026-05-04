@@ -156,13 +156,16 @@ output stores into one result store" regardless of element type.
 Each phase preserves every currently-green test.  Each phase is a
 single PR with its own `make ci` run.
 
-> **For the next session: read [ARC.md](ARC.md) first.**
-> ARC.md is the live development arc (A1–A11) that supersedes the
-> earlier two-layer "spine vs. phases" structure.  PRIORITY.md
-> remains as historical artifact (spine steps 1–7 are committed
-> there); the phase table below stays as per-topic detail but is no
-> longer the work order.  ARC.md has the scope-locked,
-> single-PR-per-step plan with named acceptance tests.
+> **The phase table below is a topic grouping, NOT the work order.**
+> Read [ARC.md](ARC.md) for the live execution sequence (A1–A11) —
+> scope-locked, single-PR-per-step, with named acceptance tests.
+> Phases are kept as per-topic detail because each phase has its
+> own design doc (`0X-….md`); ARC steps reference those docs and
+> close the relevant phase chunks.  PRIORITY.md is historical (spine
+> steps 1–7 committed there).  The ARC↔Phase mapping table after
+> the phase table tells you which phase chunks each ARC step closes.
+> When a future session asks "what should I work on next?", the
+> answer is "the next OPEN ARC step", not "the next OPEN phase row."
 
 | Phase | File | Status | Effort | Summary |
 |---|---|---|---|---|
@@ -176,7 +179,7 @@ single PR with its own `make ci` run.
 | 6 | [06-cleanup-and-doc.md](06-cleanup-and-doc.md) | open | XS | Delete the now-unreachable runtime variants (~520 lines from `src/parallel.rs`, ~336 from `codegen_runtime.rs`, ~70 from `default/01_code.loft`); rewrite THREADING.md's par sections; CHANGELOG entry. |
 | 7 | [07-fused-for-par.md](07-fused-for-par.md) | open | MH | Fused `for x in ls par(r = foo(x), 4) { … }` construction + parser-side desugaring of the value-position `par(input, fn, threads)` call form to the same `Value::ParFor` IR node.  Sub-phase 7d adds `par_fold(input, init, fold, threads) -> U` surface and auto-detects pure-fold bodies in the fused for-loop, both compiling to `Stitch::Reduce`.  One primitive (the fused form); two sugar shortcuts (`par`, `par_fold`); one runtime path; smart compiler-side policy selection.  `par_light` is removed from the user surface entirely. |
 | 8 | [08-browser-workers.md](08-browser-workers.md) | open | MH | Browser parallel par via `wasm-bindgen-rayon` Web Worker pool.  Per-worker output Stores from phase 1 + the Stitch policy from phase 3 plug directly into a 4-worker pool.  COOP/COEP headers on the deployed gallery + playground enable SharedArrayBuffer.  Phase-2 rebase walk runs after `postMessage` transfer to rewrite worker-local `store_nr` fields (DESIGN.md D13).  Hashed WASM filenames + JS-shim runtime check on `crossOriginIsolated` close the cache-coherence gap.  Sub-phases 8f–8g add explicit **par-correctness + parallelism gates** (output equivalence vs native, ≥ 2× speedup at threads=4, DbRef rebase verification after postMessage, WebGL goldens) — all run headless under Chrome via the `scripts/browser/` harness.  After phase 8, the only acceptable sequential par is no-threads-feature WASM minimal builds — every other target (interp / native / browser) is real-parallel.  Vital for the "Brick Buster in your browser" story; replaces the previously-deferred ROADMAP W1.14 entry. |
-| 9 | [09-tuple-support.md](09-tuple-support.md) | open | M | Tuple inputs and returns for `par`: `vector<(T, U)>` input, `(T, U)` return, fused `for (a, b) in pairs par(...) { … }` destructure.  Phase 9 has T1.8a (function tuple-return convention) as a **standalone prerequisite milestone** — it ships independently of plan-06 and benefits any `-> (A, B)` function in loft, not just par.  Phases 9b–9e are gated on T1.8a; if T1.8a slips, plan-06 ships without tuple-par support and D11b's "✅ when tuples land" placeholder remains.  When all sub-phases land, closes the placeholder and gives plan-06 full type coverage on the tuple axis. |
+| 9 | [09-tuple-support.md](09-tuple-support.md) | **9a closed (2026-05-04); 9b/9c/9d/9e open** | M | Tuple inputs and returns for `par`: `vector<(T, U)>` input, `(T, U)` return, fused `for (a, b) in pairs par(...) { … }` destructure.  9a (T1.8a function tuple-return convention) closed via commit `023ca15` on branch `plan-14-tuple-validation` — actual fix was ~30 LoC type-context routing in `src/generation/{mod.rs,emit.rs,dispatch.rs}`, not the original 200-LoC opcode design.  Phases 9b/9c/9d remain par-side dispatch work (worker tuple-output stitch shape, fused-for parser).  Test inventory expanded with 3 new canaries (`par_tuple_return_three_arity`, `par_tuple_return_nested`, `par_vec_of_capturing_fns_t4`) from the type-spectrum audit; first two closed by 9c, third NOT closed by phase 9 (different fix surface — vector storage gap, see DESIGN.md D11a row 8 split + plan-15 D4). |
 | 10 | [10-no-output-vector.md](10-no-output-vector.md) | open | MH | **Strategic shift — drop the materialised result vector entirely.**  `par(...)` becomes stream-only: every result is consumed exactly once (Stitch::Discard / Reduce / Queue).  Constructions that need random access, multi-pass, or storage in `vector<S>` fields are rejected at compile time with a "did you mean" hint.  Retires `Stitch::Concat` runtime + `parallel_execute_and_collect` + the `result_db` allocation (~25 MB saved on 100K-element 256-byte struct workloads).  Phase 7's fused for-par becomes the canonical surface; the value-position `let r = parallel_for(...)` shape stays valid for **single-pass** uses only.  Depends on phases 7 (Discard/Queue runtimes) and 5 (IR walk infrastructure for the per-result use-site analysis). |
 | 11 | (out of scope, sketched in 10) | open | S | **`par_to_vec(input, fn, threads) -> vector<S>` opt-in materialiser.**  Re-adds the explicit vector helper for users who genuinely need it (sort, persistence, multi-pass, storage in `vector<S>` field).  Internally uses phase 2's `StoreRebase` + `rebase_walk_record` + `adopt_worker_excess` — so the rebase machinery shipped in 2a + 2b-prep gets a real consumer.  The materialisation cost becomes visible at the call site instead of being the implicit default. |
 
