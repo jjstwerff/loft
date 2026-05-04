@@ -5,7 +5,27 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 9 — Tuple support for `par`
 
-**Status: open**
+**Status: 9a closed (2026-05-04); 9b/9c/9d/9e open**
+
+> **9a closed.**  Per the original design, 9a was the standalone
+> prerequisite that gated 9b–9e.  The actual-error survey
+> (plan-14 phase 01 follow-up) showed 9a's design was over-engineered
+> — the basic `-> (A, B)` return convention already worked end-to-end;
+> only tuple-of-text returns under `--native` had a real bug, fixed
+> by recursing `rust_type` with `Context::Variable` for tuple
+> elements in `Context::Result` plus `tuple_text_to_string` flag
+> wiring at the return site.  See PLANNING.md § T1.8a for the full
+> note.  The `OpReturnTuple` opcode and `Value::ReturnTuple` IR
+> variant the original design proposed were NOT needed.
+>
+> 9b/9c/9d/9e remain open and are NOT closed by the T1.8a fix —
+> they need par-dispatch-specific work in `src/codegen_runtime.rs`
+> (worker tuple-output stitch shape, parser support for the fused
+> `for (a, b) in pairs par(...) { … }` binding).  The 4 ignored
+> canaries in `tests/threading_chars.rs` (`par_tuple_return_int_int`,
+> `par_tuple_return_int_text`, `par_tuple_return_struct_text`,
+> `par_tuple_destructure_in_for`) confirm via direct error messages
+> that the gates are par-side, not general-fn-return-side.
 
 ## Goal
 
@@ -96,46 +116,43 @@ the rebase pass (phase 2) translates the DbRef when stitching.
 
 ## Per-commit landing plan
 
-### 9a — T1.8a function-return convention (standalone prerequisite)
+### 9a — T1.8a function-return convention *(closed 2026-05-04)*
 
-Land T1.8a as a **standalone milestone with its own acceptance
-criteria** before wiring it into par.  Self-contained ~200 LOC;
-lives outside par scope and benefits any `-> (A, B)` function in
-loft, not just par workers.
+**Closed by commit `023ca15` on branch `plan-14-tuple-validation`.**
+The original design (new IR variant + new opcode + caller-pre-
+allocated slot, ~200 LoC) was over-engineered.  Actual-error survey
+(plan-14 phase 01 follow-up) showed:
 
-**Why standalone, not "first sub-commit of phase 9".**  T1.8a is
-tracked independently in PLANNING.md § T1.8 and TUPLES.md § T1.8;
-multiple unrelated features depend on it (e.g. `match foo() { ... }`
-where `foo` returns a tuple).  Folding it into phase 9 as a sub-
-phase obscures its independent value and makes phase 9 the chokepoint
-for any unrelated tuple-return work.  9a-as-prerequisite means it can
-land and be released even if phases 9b–9e slip.
+- `fn make_pair() -> (integer, integer) { (3, 7) }` already worked
+  end-to-end on interp + native.
+- `(a, b) = make_pair()` (destructure) already worked.
+- `match make_pair() { … }` (call as match subject) already worked.
+- Only **tuple-of-text returns under `--native`** failed, with three
+  coupled type mismatches at signature / body / caller.
 
-**Acceptance criteria for 9a (independent of par):**
-- `Value::ReturnTuple` IR variant lands in `src/data.rs`.
-- `OpReturnTuple(size)` opcode in `src/fill.rs` copies callee
-  stack to caller's pre-allocated slot.
-- Codegen at the call site: allocate tuple slot, pass slot pointer
-  via the call frame, generate `OpReturnTuple` at the return.
-- `tests/tuples.rs` gains `tuple_return_int_int`,
-  `tuple_return_int_text`, `tuple_return_struct_text`.  All three
-  green on Linux / macOS / Windows.
-- PLANNING.md § T1.8a entry transitions from "Pulled into plan-06
-  phase 9a" to "✅ shipped — see commit XXX"; the entry remains
-  cross-referenced from this plan but is no longer dependent on
-  plan-06's overall schedule.
+Fix landed in three files (`src/generation/{mod.rs,emit.rs,
+dispatch.rs}`) totalling ~30 LoC:
 
-**Failure-mode contract.**  If 9a slips past plan-06's milestone
-window, phases 9b–9e ship without tuple-return support — they are
-explicitly gated on 9a's `OpReturnTuple` being available.  D11b's
-"✅ when tuples land" caveat in DESIGN.md stays in place until 9a
-ships.  No "partial 9" scenario.
+1. `rust_type` for `Type::Tuple` in `Context::Result` recurses with
+   `Context::Variable` for elements (signature is `(String, …)`).
+2. `Value::Return` sets the existing `tuple_text_to_string` flag
+   when returning a tuple-of-text literal.
+3. `output_set` adds a `tuple_text_elem_clone` arm so destructure
+   from a tuple-text element emits `var_t.0.clone()` instead of
+   `&var_t.0.to_string()`.
 
-**Cross-reference update.**  PLANNING.md § T1.8a is updated in
-the same commit as 9a's landing to drop the "phase 9a" wording and
-reflect its independent status.  This plan's README phase-9 entry
-keeps the prerequisite reference for context but no longer
-implies 9a is plan-06-internal.
+Pinned by `e1_d2_return_int_int` and `e2_d2_return_text_text`
+un-ignored cells in `tests/tuple_matrix.rs` (running under both
+interp and `--native` with byte-identical stdout via the
+plan-14 cross-mode harness).  PLANNING.md § T1.8a is updated.
+
+**No `OpReturnTuple` opcode was added** — the original design
+called for one but the actual fix needed only existing flags and
+type-context routing.  The `Value::ReturnTuple` IR variant was
+similarly not needed.  A future contributor should not introduce
+those without a concrete failure they would solve.
+
+### Phases 9b–9e — par-specific tuple work (open)
 
 ### 9b — Tuple-element vector inputs to par
 
@@ -211,8 +228,13 @@ Phase 9 closes these `#[ignore]`d canaries from
 - **Phase 2 (stitch via rebase) must land first** — the rebase
   pass handles tuple-internal DbRef offsets the same way it handles
   struct-internal ones.
-- **T1.8a (function-return convention)** — landed in 9a as a
-  prerequisite.
+- **T1.8a (function-return convention)** — *closed 2026-05-04 by
+  commit `023ca15`.*  See § 9a above for the actual-survey-vs-
+  original-design note.  Phase 9c may discover that the par
+  worker-dispatch path needs additional shape changes beyond what
+  T1.8a delivered (the par canaries still fail with par-specific
+  error messages, not general-fn-return errors), but the
+  general-purpose return convention is no longer the gate.
 
 ## Acceptance criteria
 
@@ -230,8 +252,8 @@ Phase 9 closes these `#[ignore]`d canaries from
 
 | Risk | Mitigation |
 |---|---|
-| 9a slips and orphans phases 9b–9e | 9a is now a standalone milestone with its own acceptance criteria (see 9a above) — it ships and gets released independently of par work.  Phases 9b–9e are explicitly gated on 9a; if 9a slips, plan-06 ships without tuple-par support and D11b's "✅ when tuples land" placeholder remains. |
-| T1.8a's caller-pre-allocated-slot convention conflicts with the worker dispatch trampoline | Keep T1.8a's slot-pointer parameter convention symmetric with how struct returns work today; the trampoline already passes a result-slot pointer |
+| ~~9a slips and orphans phases 9b–9e~~ | *Retired 2026-05-04* — 9a closed via commit `023ca15`; phases 9b–9e are now unblocked. |
+| ~~T1.8a's caller-pre-allocated-slot convention conflicts with the worker dispatch trampoline~~ | *Retired 2026-05-04* — the actual T1.8a fix did not introduce a caller-pre-allocated-slot convention; it routes tuple-of-text returns through `(String, …)` Variable-context types instead.  No trampoline conflict to mitigate. |
 | Tuple-with-text return needs DbRef rebase across tuple element offsets | Phase 2's rebase already walks `owned_elements`; tuples expose the same accessor — no new rebase code.  D11c.1 covers the per-element category rules (worker-own / parent-shared / cross-worker) without tuple-specific runtime logic. |
 | Tuple element holds a `Reference<ParentSharedStruct>` (e.g. shared cache) | Per D11c.1: parent-shared references pass through the rebase unchanged.  Test `par_tuple_return_with_parent_shared_ref` (added in 9c) asserts this. |
 | Tuple elements with nested vectors / hashes | Out of scope for phase 9 — covered by D11a "nested vector input" canary which closes in phase 4; tuple elements are either primitive, text, or DbRef in plan-06 |
