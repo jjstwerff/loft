@@ -1409,7 +1409,21 @@ Phase 5c Arc-wrap parent stores.  Non-`par_light` deprecation paths.
 
 ### A10 — Browser parallel via wasm-bindgen-rayon
 
-**Status:** OPEN
+**Status:** OPEN — strategic showcase track.  Advanced when
+validation phases hit natural breakpoints; **does not displace
+validation work** (loft-improvement is the first priority per
+the user's 2026-05-04 priority statement; A10 is the highest-
+priority recruitment deliverable but its severity is S2 —
+sequential WASM works, A10 lifts it to parallel — so it doesn't
+qualify for the severity-override of "finish plans first").
+See `USER_FACING.md § Strategic showcase track` for sequencing.
+
+The named consumer is the user themselves: parallel chunk-mesh
+generation for browser-rendered 3D worlds.  The supporting
+infrastructure (WebGL bindings, native OpenGL, gallery runner,
+`brick-buster.html`) is already shipped.  A10 is the missing
+parallelism unlock.
+
 **Effort:** XL (2-3 sessions, split into 3 sub-PRs)
 **Acceptance test:** the gallery's `bricks_par.loft` example runs at
 ≥ 2× single-thread speed in Chrome with `crossOriginIsolated`;

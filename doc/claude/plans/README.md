@@ -38,6 +38,37 @@ new feature work.  Override only when USER_FACING.md surfaces an
 S0 item or an S1 item that's been deferred for two releases — see
 USER_FACING.md § "Severity override".
 
+### Two tracks: validation (primary) and showcase (parallel)
+
+Sessions follow two complementary tracks:
+
+- **Validation track (primary).**  Finish-plans-first: validation
+  matrices, P-issue closure, language-quality work.  This is where
+  the bug yield comes from and what makes loft *worth using*.
+  Severity-driven (USER_FACING.md S0/S1/S2 tiers).  **Default
+  candidate for every session.**
+
+- **Showcase track (parallel).**  Strategic-recruitment work:
+  brick-buster, browser-parallel (A10), world-rendering demos,
+  performance benchmarks.  This is what makes loft *visible* and
+  attracts contributors.  Strategic-driven (USER_FACING.md
+  § Strategic showcase track).  **Worked when validation work hits
+  a natural breakpoint** — phase closes, pre-flight survey shows
+  low yield for the next phase, or the showcase item is gating an
+  external commitment (demo date, talk).
+
+The two tracks are orthogonal — a piece of work isn't both
+validation and showcase.  The user's 2026-05-04 priority statement
+locked this in: "[the demo] will not keep me from improving loft
+(that is my first priority) but the OpenGL demo in a good state is
+our biggest asset to get more developers."  Improving loft is the
+first track; the demo is the second.
+
+When a session opens with no clear next step, pick from the
+validation track first.  Only if validation has no S0/S1 work in
+flight AND no S2 work in mid-investigation, advance the showcase
+track.
+
 ## Conventions
 
 - Subdirectory names are numbered (`NN-slug`) so they sort in the

@@ -145,9 +145,79 @@ demands it.  The bar for override is "user code can't do its job"
 with two-release decay).  Pure feature gaps (S2/S3) wait their
 turn in the matrix.
 
+---
+
+## Strategic showcase track — recruitment deliverables
+
+Distinct from severity-driven open work above.  Items here are
+**strategic deliverables** that attract developers to the project:
+visible demos, performance showpieces, "look what loft can do"
+moments.  They're not severity-tiered because they don't represent
+broken behaviour — they represent **opportunities**.
+
+**Priority axis:** these advance when natural breakpoints occur
+between validation phases (a heavy bug-fix session closes; the
+matrix's next plan hasn't opened yet; bug yield drops below
+threshold).  They do **not** displace validation work — improving
+loft is the first priority; recruitment work fills the gaps where
+validation is between phases.
+
+**Why a separate track.**  Severity-driven open work answers "is
+this broken?"  Strategic-recruitment work answers "is this
+worth showing?"  The two are orthogonal — a feature can be
+unbroken-but-unshowcased (no S-tier, but a recruitment opportunity)
+or broken-but-already-flashy (S-tier, irrelevant to recruitment).
+Mixing them in one queue led to mis-sequencing in the May 2026
+session: A10 (browser parallel) was almost promoted to "next
+milestone" on recruitment value alone, but its severity is S2 and
+that's the real deciding factor for sequencing against validation
+plans.
+
+### Open showcase items
+
+| Item | Why it attracts developers | What it needs | Track status |
+|---|---|---|---|
+| **`brick-buster.html` — playable game in browser** | "Loft programs run real games in your browser" — concrete proof-of-life that the language works for non-trivial workloads.  Already a partly-built page at `doc/brick-buster.html`; needs the underlying infra to ship for the demo to feel responsive. | A10 (browser parallel via wasm-bindgen-rayon) for parallel chunk-mesh generation; possibly A7 if mesh workers return tuples; world/chunk app-level loft code. | OPEN — fills natural gaps in validation work; advanced when sessions have room. |
+| **Parallel chunk-mesh world rendering (browser)** | Multi-threaded WASM running a 3D world in the browser is a strong demonstration that loft scales beyond toy examples.  Per ARC.md A10 sub-deliverable. | A10 8a (`wasm-bindgen-rayon` integration + COOP/COEP), 8b (rebase walk after `postMessage`), 8c (cache coherence + tests). | OPEN — same parallel-track scheduling as brick-buster. |
+| **Native OpenGL world demo** | Demonstrates loft's native build is production-ready for game/sim workloads.  Builds on `lib/graphics/` (`mesh.loft`, `scene.loft`, `render.loft`) and the Moros-editor OpenGL infrastructure (already shipped per `finished/03-native-moros-editor`). | App-level loft code only — no interpreter work needed.  Reuses existing par over `vector<Reference<Chunk>>` returning Mesh. | OPEN — pure application code; can be done by any contributor with no plan-06 dependency. |
+| **Performance showcase: parallel-WASM benchmark suite** | Concrete numbers showing browser-parallel vs sequential vs native.  Same shape as `bench/11_par/`, adds a browser column. | Depends on A10 landing.  Adds `bench/12_browser_par/`. | OPEN — natural follow-on to A10 8c. |
+
+### How showcase items move through this section
+
+```
+OPEN (strategic) ──A10/8a/8b/8c lands──► IN-FLIGHT (demo polish)
+                                                │
+                                                ▼
+                                        SHIPPED (release notes)
+                                                │
+                                                ▼
+                              row removed; demo is now a permanent
+                              gallery entry / blog post / readme
+                              feature
+```
+
+Each shipped showcase item gets a release-note line AND a project-
+level visibility update (`README.md`, `gallery.html`, project
+landing page).  These are the artifacts that bring developers in.
+
+### Sequencing rule
+
+Severity-driven open work is the **primary track** — every session's
+default candidate.  Showcase items are the **secondary track**
+worked when:
+- the session has time after the primary work is in a stable state, OR
+- a primary plan reaches a natural breakpoint (phase closes,
+  pre-flight survey shows the next phase is low-yield), OR
+- a showcase item gates an external commitment (specific demo
+  date, conference talk, contributor's reasonable expectation).
+
+The default ordering when starting a session: pick from the
+severity table first.  Only if no S0/S1 work is open AND no S2 work
+is mid-investigation, advance the showcase track.
+
 ### Today's snapshot (2026-05-04)
 
-All 8 open rows in the table above are **S1** or **S2**:
+**Severity-driven open work** — all 8 rows are S1 or S2:
 - "Implicit generic-tuple inference" — S1 (would block 1.0 if
   still unfixed by then; documented workaround exists for now).
 - "Bounded-T method-call return inference" — S1 (same shape).
@@ -163,6 +233,13 @@ All 8 open rows in the table above are **S1** or **S2**:
 **No S0 today.**  Plan-20's panic would have been S0 if it
 reproduced; it doesn't, so it's deferred with a re-surface
 trigger.  Continue with the "finish plans first" default.
+
+**Strategic showcase track** — 4 open rows (none broken; all are
+visibility opportunities).  Today's work pulls from the severity
+table first; showcase items advance when validation work hits a
+natural break.  No S0 escalation has consumed validation time;
+similarly no showcase item is yet at the "external commitment"
+gate that would justify pulling it forward.
 
 ---
 
