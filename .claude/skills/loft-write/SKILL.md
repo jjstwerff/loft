@@ -108,6 +108,20 @@ Parameter modifiers:
 
 A function body ending in an expression (no `;`) returns that value. Functions without `->` return `void`.
 
+**Nested fn definitions are forbidden.**  `fn` declarations must be at file
+scope.  Code like
+
+```loft
+fn outer() {
+    fn inner() { ... }   // PARSE ERROR
+}
+```
+
+produces *"'fn' definitions must be at file scope, not inside a function or
+block"*.  Move helper fns alongside the caller, not inside it.  Lambdas
+(`|x| { ... }` or `fn(x: T) { ... }`) are the only "function-shaped" thing
+allowed inside a fn body.
+
 ---
 
 ## Imports
@@ -142,6 +156,64 @@ item.count += 1;
 ```
 
 Field names may overlap across structs — lookups are type-scoped.
+
+---
+
+## Tuples
+
+Anonymous, fixed-arity, stack-allocated compound values.  Use them to
+return multiple values without naming a struct.  Shipped in 0.8.3
+(T1.1–T1.11); see [doc/claude/TUPLES.md](../../doc/claude/TUPLES.md).
+
+```loft
+// Type notation — two or more element types (single-element tuples
+// are not allowed; use the bare type instead).
+t: (integer, text) = (3, "hi");
+
+// Literal
+pair = (1, "hello");
+
+// Element access (zero-based integer literal — NOT a variable index).
+a = pair.0;        // integer
+b = pair.1;        // text
+
+// Element assignment
+pair.0 = 5;
+pair.0 += 3;
+
+// Destructuring
+(lo, hi) = min_max(values);
+
+// Function return
+fn classify(t: (integer, text)) -> text {
+    match t {
+        (0, _)   => "zero",
+        (n, msg) => "{n}: {msg}",
+    }
+}
+
+// Nested tuples — chain the `.N` accessors.
+nested: ((integer, integer), boolean) = ((1, 2), true);
+inner_first  = nested.0.0;       // 1
+inner_second = nested.0.1;       // 2
+flag         = nested.1;          // true
+```
+
+**Restrictions:**
+- **No single-element tuples** — `(integer)` is just `integer`.
+- **No named tuple fields** — use a struct.
+- **No tuple iteration / whole-tuple formatting** — access elements one
+  by one.
+- **`integer` elements default to nullable** — use `integer not null` if
+  the slot must reject null.
+- **Compound assignment on tuple LHS is rejected** — `(a, b) += (1, 2)`
+  is a compile error; rewrite as `a += 1; b += 2;` or rebuild the tuple.
+
+**Known native bug (P207):** comparing a `character` element read from a
+tuple against a character literal under `--native` fails to compile
+(`t.0 == 'a'` where `t` is `(character, integer)`).  Workaround: cast to
+integer (`t.0 as integer == 97`) or destructure first
+(`(c, _) = t; c == 'a'`).
 
 ---
 
@@ -382,9 +454,26 @@ match shape {
     Rect { w, h } if w == h => println("square"),
     _ => {},
 }
+
+// Tuple match — destructure into element patterns.
+match (3, 7) {
+    (0, _)   => "zero",
+    (n, m)   => "{n},{m}",
+}
 ```
 
 Match is an expression — all arms must produce the same type (or void).
+
+**The arm separator is `=>`, never `->`.**  `->` is the lambda /
+function return-type arrow; using it in a match arm produces a clear
+diagnostic ("match arm separator is `=>`, not `->`") — but only because
+the parser was hardened against it.  Older drafts of TUPLES.md showed
+`->` for arms; that was always wrong.  If a `match` arm in your code
+uses `->`, fix it before running anything.
+
+**Scalar-match arms need commas between them**; enum and tuple match
+also accept newline-separated arms.  When in doubt, comma-separate —
+it's universally accepted.
 
 ---
 
@@ -544,6 +633,10 @@ Example binary reader/writer patterns live in
 | `<fn> is not found` for `say(...)` | Use `println()` |
 | `Unknown record N` on nested field access | Avoid deep chaining on vector elements (P105) |
 | `Cannot pass a literal or expression to a '&' parameter` | Assign to a named variable first, then pass it. `v[i]` and `s.field` work directly (P160). |
+| `match arm separator is \`=>\`, not \`->\`` | Replace `->` with `=>` in the arm.  (P206 — was a parser hang before the recovery helper landed.) |
+| `'fn' definitions must be at file scope, not inside a function or block` | Move the helper fn out of the enclosing fn body.  Lambdas (`|x| { … }` or `fn(x: T) { … }`) are the only function-shaped values allowed inside a fn body. |
+| `compound assignment is not supported for tuple destructuring — use (a, b) = expr instead` | Rebuild the tuple: `(a, b) = (a + 1, b + 2)` — or update each element directly. |
+| Native E0308 on `t.0 == 'a'` where `t` is `(character, …)` | P207 — known native codegen bug.  Workaround: cast to integer (`t.0 as integer == 97`) or destructure first (`(c, _) = t; c == 'a'`). |
 
 ---
 
@@ -562,6 +655,7 @@ loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 ## Pre-flight checklist
 
 - [ ] All loop variables are unique across the entire file
+- [ ] No nested `fn` definitions — helpers live at file scope
 - [ ] Hash collections are struct fields, not standalone locals
 - [ ] No `arr[lo..hi]` passed as `vector<T>` argument
 - [ ] `len`, `sorted`, `ticks`, `round`, `map`, `filter`, `reduce` not used as variable names
@@ -572,3 +666,8 @@ loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 - [ ] No `character == text` comparisons — use `"{c}" == t`
 - [ ] Never reassign a text parameter — copy to local first
 - [ ] `v[i]` and `s.field` can be passed directly as `&` parameters
+- [ ] Match arm separator is `=>`, never `->` (the parser used to hang on this — P206)
+- [ ] No single-element tuples; `(integer)` is just `integer`
+- [ ] Tuple element access uses an integer literal (`t.0`, not `t.i`)
+- [ ] No compound assignment on a tuple LHS (`(a, b) +=` is rejected)
+- [ ] If comparing a tuple-element `character` against a literal under `--native`, cast to integer first (P207 workaround)
