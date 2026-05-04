@@ -4,6 +4,40 @@ Multi-phase initiatives that span more than one session.  Each
 subdirectory holds the README (goal + index) plus one markdown file
 per phase.
 
+## Companion indexes — every parked item is discoverable
+
+Two files complement this README; together they ensure deferred
+work is never silently dropped.
+
+- **[`DEFERRED.md`](DEFERRED.md)** — internal index of every parked
+  validation phase, deferred P-issue, and "noted but not now" item.
+  Each row carries an explicit `Trigger to unpause:` value.
+- **[`../USER_FACING.md`](../USER_FACING.md)** — the subset of
+  DEFERRED.md that downstream users would notice if shipped, with
+  release-note language, workarounds, and severity tiers
+  (S0 / S1 / S2 / S3).  S0 items are release-blocking; S1 items
+  must ship within two releases of being filed.
+
+**Pre-release ritual:**
+
+```bash
+# 1. Every parked test (lock-in regression net):
+cargo test --release -- --ignored 2>&1 | grep "^test " | head -50
+#    Items now passing → un-ignore + add release note.
+
+# 2. Every parked doc trigger:
+grep -r "Trigger to unpause:" doc/claude/
+#    Walk the list, refresh `Last reviewed:` lines.
+
+# 3. USER_FACING.md status pass:
+#    Every open row gets shipped / still-deferred / dropped tag.
+```
+
+**Default discipline:** finish the validation plans before shipping
+new feature work.  Override only when USER_FACING.md surfaces an
+S0 item or an S1 item that's been deferred for two releases — see
+USER_FACING.md § "Severity override".
+
 ## Conventions
 
 - Subdirectory names are numbered (`NN-slug`) so they sort in the

@@ -11094,3 +11094,54 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(37));
 }
+
+/// plan-17/01 (A) caveat — lock-in for the user-facing implicit
+/// type-inference gap.  Same shape as `plan17_generic_tuple_return_with_annotation`
+/// but **without** the explicit `(integer, integer)` annotation on `t`.
+/// Today the parser tags `t` with `Type::Unknown` (the substituted
+/// generic-call return type doesn't propagate to the receiving slot),
+/// so `t.0` rejects with "Expect token ;".  This test goes green
+/// automatically when the inference path lands; un-ignore in the same
+/// commit that closes the gap.
+///
+/// Trigger to unpause: the fix in plan-17 phase 01 follow-up (likely
+/// shares root cause with bug B — see DEFERRED.md).
+#[test]
+#[ignore = "plan-17 (A) caveat — implicit generic-tuple type inference; un-ignore when the parser propagates substituted return types to receiving variables (DEFERRED.md / USER_FACING.md)"]
+fn plan17_a_implicit_generic_tuple_type_inference() {
+    code!(
+        "fn min_max<T: Ordered>(a: T, b: T) -> (T, T) {
+    if a < b { (a, b) } else { (b, a) }
+}
+fn run() -> integer {
+    t = min_max(7, 3);
+    t.0 * 10 + t.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(37));
+}
+
+/// plan-17/01 (B) — lock-in for the user-facing bounded-T method-call
+/// return-type inference gap.  `<T: Printable>(x: T) -> text { x.to_text() ++ "!" }`
+/// today rejects with "No matching operator '+' on 'unknown(0)' and 'text'"
+/// because `x.to_text()` returns `Type::Unknown(0)` instead of the
+/// `Printable` interface's declared `text` return type.  Probably shares
+/// root cause with the (A) caveat — both stem from `fields.rs:61` skipping
+/// the I7 bounded-method-dispatch path on first pass and the second pass
+/// not re-resolving.
+///
+/// Trigger to unpause: the fix in plan-17 phase 01 follow-up (see DEFERRED.md
+/// for the investigation depth).
+#[test]
+#[ignore = "plan-17 (B) — bounded-T method-call return type inference; un-ignore when fields.rs:61 propagates the bound's t-stub return type on first pass (DEFERRED.md / USER_FACING.md)"]
+fn plan17_b_bounded_method_return_type_propagates() {
+    code!(
+        "fn label<T: Printable>(x: T) -> text {
+    x.to_text() + \"!\"
+}
+fn run() -> text { label(42) }"
+    )
+    .expr("run()")
+    .result(Value::Text("42!".to_string()));
+}

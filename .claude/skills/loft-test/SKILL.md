@@ -257,7 +257,12 @@ status).
 ## `#[ignore = "<reason>"]` conventions
 
 Every `#[ignore]` attribute MUST carry a reason.  Bare `#[ignore]` is
-opaque and breaks the audit trail.  Reason categories:
+opaque and breaks the audit trail.  **The reason MUST name the
+trigger to resume** so a future `cargo test -- --ignored` run +
+`grep` audit can locate every parked test and tell what should
+re-activate it.
+
+Reason categories:
 
 | Reason format | Meaning | Example |
 |---|---|---|
@@ -265,9 +270,51 @@ opaque and breaks the audit trail.  Reason categories:
 | `<feature-tag> — <plan-ref>` | Waiting on a feature or plan phase that hasn't shipped.  Un-ignore in a one-line follow-up commit when the feature lands. | `#[ignore = "T1.8a — plan-06 phase 9a"]` |
 | `tuple_matrix — run with …` | Heavy-by-default test.  Auto-applied by `cross_mode!`.  Don't write by hand. | (macro-applied) |
 | `<plan>-<phase>` | Pending implementation in a multi-phase plan.  Same un-ignore rules as P### but tracked via the plan rather than PROBLEMS.md. | `#[ignore = "plan-14 phase 03"]` |
+| `<plan> (<sub>) — un-ignore when <trigger>` | User-facing lock-in test: the test demonstrates a today-broken behaviour, marked ignored so CI stays green; auto-flips to PASS when the trigger fires. | `#[ignore = "plan-17 (A) caveat — implicit generic-tuple type inference; un-ignore when the parser propagates substituted return types to receiving variables (DEFERRED.md / USER_FACING.md)"]` |
+
+**The trigger phrase is mandatory.** Acceptable forms include
+`un-ignore when <X>`, `triggers when <X>`, or `<plan>-phase <N>`.
+The convention is greppable: `cargo test -- --ignored` + reading
+the reason should tell a future contributor what to do.
 
 When un-ignoring, the commit message names the reason being retired and
 the new test status (`P207 closes; cell flips from #[ignore] to PASS`).
+
+### Lock-in tests for user-facing deferred items
+
+When deferring an item that affects user code (anything that
+belongs in `doc/claude/USER_FACING.md`), **write the lock-in test
+in the same commit as the deferral**.  The test exercises the
+today-broken shape, asserts the post-fix behaviour, and is
+`#[ignore]`d with a trigger.  When the fix lands, the test goes
+green automatically — preventing accidental release without the
+fix.
+
+Example (plan-17 phase 01 follow-up):
+
+```rust
+#[test]
+#[ignore = "plan-17 (A) caveat — implicit generic-tuple type inference; un-ignore when the parser propagates substituted return types to receiving variables (DEFERRED.md / USER_FACING.md)"]
+fn plan17_a_implicit_generic_tuple_type_inference() {
+    code!(
+        "fn min_max<T: Ordered>(a: T, b: T) -> (T, T) {
+    if a < b { (a, b) } else { (b, a) }
+}
+fn run() -> integer {
+    t = min_max(7, 3);                         // <- no annotation
+    t.0 * 10 + t.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(37));
+}
+```
+
+The two-file index — `doc/claude/plans/DEFERRED.md` (every parked
+item) and `doc/claude/USER_FACING.md` (user-visible subset) — is
+the single source of truth.  A lock-in test references the
+relevant file in its ignore reason so a future contributor can
+trace the audit trail in one grep.
 
 ---
 
