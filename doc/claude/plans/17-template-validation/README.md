@@ -32,15 +32,41 @@ Closed (2026-05-04):
 
 Open:
 - **(B) bounded-T method-call return type inference.**
-  `<T: Printable>(x: T) -> text { x.to_text() ++ "!" }` rejects
-  with "No matching operator '+' on 'unknown(0)' and 'text'".
-  `x.to_text()` returns `Type::Unknown(0)` instead of the
-  interface-declared `text`.  Probably the same dispatch path
-  that drives (A)'s caveat — the bounded-T dispatch isn't
-  propagating the bound's declared return type into the
-  inference flow.  Phase 01 follow-up; deeper fix than (A) and
-  (C) (likely touches `parse_method` / `call_dependencies` or
-  the t-stub return-type lookup).
+  `<T: Printable>(x: T) -> text { s = x.to_text(); s + "!" }`
+  rejects with "No matching operator '+' on 'unknown(0)' and 'text'".
+  Investigation 2026-05-04:
+  - **First pass** (top of `parse_function`): the parser reaches
+    `field()` for `x.to_text()` with `tp = Reference(tv_nr, [])`
+    and `field = "to_text"`.  `data.attr(tv_nr, "to_text")`
+    returns `usize::MAX` (T's def has no `to_text` attribute —
+    correct, the t-stub `t_<n>T_to_text` is a *separate* def).
+    `fields.rs:61` then takes the first-pass branch:
+    `self.first_pass && self.lexer.has_token("(")` →
+    `skip_remaining_args()`, **falls through, returns
+    `Type::Unknown(0)`**.  The I7 path (lines 95-106) is gated
+    on `else if !self.first_pass` and is therefore not reached
+    on first pass.
+  - The Unknown(0) propagates: `s = x.to_text()` types `s` as
+    Unknown; `change_var_type(s, Unknown)` is a no-op (the
+    `is_unknown` early-return in `Variables::change_var_type`),
+    so `s` stays Unknown.
+  - **Second pass** does NOT re-enter `field()` for
+    `x.to_text()` — confirmed by adding a debug eprintln at
+    the top of `field()` and observing zero second-pass entries
+    with `tp = Reference(tv_nr, …)`.  The exact reason the
+    second-pass body parse skips re-resolution is unclear from
+    a 30-minute investigation; suspect a parse-state cache
+    or short-circuit on Unknown LHS.
+  - End result: the second pass sees `s` typed Unknown and
+    `s + "!"` fires the no-matching-operator diagnostic.
+  - **Likely fix shape:** drop the first-pass-bare-skip at
+    `fields.rs:61` for the bounded-T case so the I7 path runs
+    on both passes (giving the t-stub's declared return type
+    on first pass too).  Trade-off: needs care to keep
+    first-pass diagnostics quiet for non-bounded generics.
+  - Status: deferred from phase 01 — needs a longer focused
+    session; this plan's value is captured in (A) and (C),
+    which are sufficient closure for the phase.
 
 ## Goal
 
