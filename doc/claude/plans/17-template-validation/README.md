@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 17 — Bounded-generic / interface validation
 
-**Status: phase 01 partial — 2 of 3 pre-flight bugs closed, 1 open.**
+**Status: phase 01 — 3 of 3 pre-flight bugs closed (interpreter); native (B) follow-up filed as P208.**
 
 Closed (2026-05-04):
 - **(C) built-in `to_text` impls.**  Six `to_text` impls added at
@@ -30,43 +30,52 @@ Closed (2026-05-04):
   as the phase-01 follow-up alongside (B) — likely the same
   root cause.
 
+- **(B) bounded-T method-call return type inference (interpreter).**
+  *Closed 2026-05-04.*  Two coordinated fixes:
+  - `src/parser/fields.rs` — the I7 bounded-method-dispatch
+    path now runs on **both passes** (was second-pass-only).  The
+    first-pass branch was returning `Type::Unknown(0)` after
+    consuming args; the receiving variable then stayed Unknown
+    because `change_var_type` is a no-op for Unknown assignments,
+    and downstream operators like `s + "!"` rejected.
+  - `src/parser/definitions.rs` — bound resolution and t-stub
+    creation now run on **both passes** (was second-pass-only).
+    Forward-decl tolerated via silent skip when the interface
+    isn't yet known on first pass; the second pass catches
+    genuinely-unknown bounds with the error.  Necessary for the
+    I7 dispatch's `find_fn(stub_name)` and `has_bound_for_method`
+    queries to succeed on first pass.
+  Pinned by `plan17_b_bounded_method_return_type_propagates` in
+  `tests/issues.rs` (now PASS).  Originally hypothesised as
+  shared root cause with (A) caveat — turned out to be DIFFERENT
+  root cause; (A) is in the `try_generic_instantiation` path
+  (free-fn calls), not the method-dispatch path.
+
 Open:
-- **(B) bounded-T method-call return type inference.**
-  `<T: Printable>(x: T) -> text { s = x.to_text(); s + "!" }`
-  rejects with "No matching operator '+' on 'unknown(0)' and 'text'".
-  Investigation 2026-05-04:
-  - **First pass** (top of `parse_function`): the parser reaches
-    `field()` for `x.to_text()` with `tp = Reference(tv_nr, [])`
-    and `field = "to_text"`.  `data.attr(tv_nr, "to_text")`
-    returns `usize::MAX` (T's def has no `to_text` attribute —
-    correct, the t-stub `t_<n>T_to_text` is a *separate* def).
-    `fields.rs:61` then takes the first-pass branch:
-    `self.first_pass && self.lexer.has_token("(")` →
-    `skip_remaining_args()`, **falls through, returns
-    `Type::Unknown(0)`**.  The I7 path (lines 95-106) is gated
-    on `else if !self.first_pass` and is therefore not reached
-    on first pass.
-  - The Unknown(0) propagates: `s = x.to_text()` types `s` as
-    Unknown; `change_var_type(s, Unknown)` is a no-op (the
-    `is_unknown` early-return in `Variables::change_var_type`),
-    so `s` stays Unknown.
-  - **Second pass** does NOT re-enter `field()` for
-    `x.to_text()` — confirmed by adding a debug eprintln at
-    the top of `field()` and observing zero second-pass entries
-    with `tp = Reference(tv_nr, …)`.  The exact reason the
-    second-pass body parse skips re-resolution is unclear from
-    a 30-minute investigation; suspect a parse-state cache
-    or short-circuit on Unknown LHS.
-  - End result: the second pass sees `s` typed Unknown and
-    `s + "!"` fires the no-matching-operator diagnostic.
-  - **Likely fix shape:** drop the first-pass-bare-skip at
-    `fields.rs:61` for the bounded-T case so the I7 path runs
-    on both passes (giving the t-stub's declared return type
-    on first pass too).  Trade-off: needs care to keep
-    first-pass diagnostics quiet for non-bounded generics.
-  - Status: deferred from phase 01 — needs a longer focused
-    session; this plan's value is captured in (A) and (C),
-    which are sufficient closure for the phase.
+- **(B-native) P208 — native E0282 on the same shape.**  After
+  the parser fix landed, the `--native` build still rejects
+  `<T: Printable>(x: T) -> text { x.to_text() + "!" }` with
+  "type annotations needed".  Generated code wraps the inner
+  `Value::Return` text-result in `stores.scratch.push(...)` AND
+  then wraps the surrounding expression in another scratch-push;
+  the inner `return` makes the outer push unreachable, so rustc
+  can't infer the unreachable expression's type.  Filed as
+  P208 in PROBLEMS.md.  Likely fix in
+  `src/generation/emit.rs::Value::Return` text-wrapping path:
+  detect-and-suppress the redundant wrap when the inner is a
+  returning text expression.  Workaround: use `--interpret`.
+
+- **(A) caveat — implicit type-inference of generic-tuple call
+  results.**  `t = min_max(7, 3); t.0` still rejects with
+  "Expect token ;".  My initial hypothesis that this shared bug
+  B's root cause turned out wrong; (A) is in the
+  `try_generic_instantiation` path (free-fn calls), gated on
+  `!self.first_pass` at `parser/mod.rs:1065` — same first-vs-
+  second-pass timing pattern as B but in a different code
+  path.  The fix shape is similar (run on both passes) but
+  needs care because `try_generic_instantiation` creates a new
+  monomorphised function definition, not just dispatches a
+  call.  Phase 01 follow-up.
 
 ## Goal
 

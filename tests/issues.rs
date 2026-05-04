@@ -11122,19 +11122,20 @@ fn run() -> integer {
     .result(Value::Int(37));
 }
 
-/// plan-17/01 (B) — lock-in for the user-facing bounded-T method-call
-/// return-type inference gap.  `<T: Printable>(x: T) -> text { x.to_text() ++ "!" }`
-/// today rejects with "No matching operator '+' on 'unknown(0)' and 'text'"
-/// because `x.to_text()` returns `Type::Unknown(0)` instead of the
-/// `Printable` interface's declared `text` return type.  Probably shares
-/// root cause with the (A) caveat — both stem from `fields.rs:61` skipping
-/// the I7 bounded-method-dispatch path on first pass and the second pass
-/// not re-resolving.
-///
-/// Trigger to unpause: the fix in plan-17 phase 01 follow-up (see DEFERRED.md
-/// for the investigation depth).
+/// plan-17/01 (B) — closed 2026-05-04.  Two coordinated fixes: the
+/// I7 bounded-method dispatch in fields.rs now runs on both passes,
+/// and definitions.rs installs bounds plus t-stubs on the first pass
+/// too (was second-pass-only).  Was: `<T: Printable>(x: T) -> text`
+/// with body `x.to_text() + "!"` rejected with "No matching operator
+/// '+' on 'unknown(0)' and 'text'" because `x.to_text()` returned
+/// `Type::Unknown(0)` on first pass.  Now: bounds and t-stubs install
+/// on both passes (forward-decl tolerated via silent skip when the
+/// interface isn't yet known); the I7 dispatch runs on both passes
+/// and returns the bound's declared method return type from first
+/// pass onward.  The receiving variable (`s` in `s = x.to_text()`)
+/// is correctly typed `text`, and downstream operators like `s
+/// concat-op "!"` resolve cleanly.
 #[test]
-#[ignore = "plan-17 (B) — bounded-T method-call return type inference; un-ignore when fields.rs:61 propagates the bound's t-stub return type on first pass (DEFERRED.md / USER_FACING.md)"]
 fn plan17_b_bounded_method_return_type_propagates() {
     code!(
         "fn label<T: Printable>(x: T) -> text {

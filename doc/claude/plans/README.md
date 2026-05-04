@@ -33,6 +33,35 @@ grep -r "Trigger to unpause:" doc/claude/
 #    Every open row gets shipped / still-deferred / dropped tag.
 ```
 
+### Closed-work hygiene rule
+
+DEFERRED.md and USER_FACING.md are **open-queue documents**.
+When an item closes, its row is **removed entirely** — not
+struck-through, not moved to a "recently shipped" subsection,
+not retained as historical record.
+
+Closed work already lives in the right places, and duplicating it
+across the open queues lets them drift from "actionable" to
+"universal log":
+
+- **Git history** — commit message documents what changed and why.
+- **Regression test** in `tests/*.rs` — un-ignored when the fix
+  lands; permanent behavioural lock-in.
+- **Plan README** — the relevant plan's closed-section absorbs
+  any architectural lesson learned.
+- **PROBLEMS.md** — closed P-id entries stay (file convention)
+  for cross-reference history.
+- **CHANGELOG.md** — user-facing release notes.
+
+Five places, each the right one for its information shape.  The
+grep target `grep -r "Trigger to unpause:" doc/claude/` should
+always show only currently-actionable items.
+
+**Sole exception**: USER_FACING.md's "Closed-by-decision" section
+is a permanent historical record of explicit non-goals.  Those
+stay so a future contributor finds the decision before
+re-proposing.  They're orthogonal to the open queue.
+
 **Default discipline:** finish the validation plans before shipping
 new feature work.  Override only when USER_FACING.md surfaces an
 S0 item or an S1 item that's been deferred for two releases — see

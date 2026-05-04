@@ -16,6 +16,11 @@ the **concrete signal** that should re-activate the work.  No row
 without a trigger.  When the signal arrives, the row moves out of
 this file (into a current plan, a P-issue fix, or a release note).
 
+**Closed-work hygiene** — see `plans/README.md § Companion indexes`
+for the project-wide rule.  Short version: closed items are
+removed entirely; their closure is recorded in git history,
+regression tests, plan READMEs, PROBLEMS.md, and CHANGELOG.md.
+
 **Discoverability.** Two grep targets:
 
 ```bash
@@ -48,7 +53,7 @@ by a future session.
 
 | Item | Plan / phase | Trigger to unpause |
 |---|---|---|
-| Bug B — bounded-T method-call return type inference | plan-17 phase 01 follow-up | Investigation depth recorded in plan-17 README; likely fix is dropping the first-pass-bare-skip in `fields.rs:61` for the bounded-T case.  Trigger: any focused 2-4-hour session OR a plan-17 phase 02+ cell that re-surfaces it. |
+| **P208 — native E0282 on bounded-T method + concat** | plan-17 phase 01 follow-up | Trigger: the codegen fix lands (likely in `src/generation/emit.rs` Value::Return wrapping — suppress outer scratch-wrap when inner expression already returns).  Reproducer + workaround documented in PROBLEMS.md P208. |
 | (A) caveat — implicit type-inference of generic-tuple call results | plan-17 phase 01 (A) follow-up | Likely shares root cause with bug B.  Trigger: same as bug B (one fix may close both). |
 | `name @ pattern` inside or-patterns | plan-18 phase 01 feature decision | Default sequence (phase 02+ would address).  External trigger: user request, or 2nd request in any forum showing the workaround is awkward. |
 | Plan-06 phase 9b — tuple-element vector input to par | plan-06 (phase 9a closed by T1.8a) | Default sequence.  External trigger: any consumer that wants `par(vector<(A,B)>, …)` shape. |

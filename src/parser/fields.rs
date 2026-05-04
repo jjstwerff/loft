@@ -58,6 +58,47 @@ impl Parser {
         }
         let fnr = self.data.attr(dnr, &field);
         if fnr == usize::MAX {
+            // Plan-17 phase 01 (B) — bounded-T method dispatch must run
+            // on BOTH passes so the call's return type propagates into
+            // first-pass type inference of the enclosing variable.
+            //
+            // Before the fix, `s = x.to_text()` (where `x: T`,
+            // `T: Printable`) typed `s` as `Type::Unknown(0)` because the
+            // first-pass branch (just below) consumed the `(...)` args
+            // and returned `Type::Unknown(0)` without dispatching to the
+            // t-stub.  The variable's Unknown type then survived second
+            // pass (`change_var_type` is a no-op when assigning Unknown),
+            // and downstream operators like `s + "!"` rejected with
+            // "No matching operator '+' on 'unknown(0)' and 'text'".
+            //
+            // The t-stub `t_<n>T_<method>` is registered when the
+            // function's bounds are declared (definitions.rs:670+).  By
+            // the time the body parser reaches `x.to_text()` on first
+            // pass, `find_fn(u16::MAX, "to_text", Reference(tv_nr, []))`
+            // finds the stub.  Dispatching to it on first pass returns
+            // the bound's declared return type (`Type::Text(_)` for
+            // Printable's `to_text`), so the surrounding assignment
+            // types `s` correctly.
+            //
+            // Pinned by `tests/issues.rs::plan17_b_bounded_method_return_type_propagates`.
+            // Likely also closes plan-17 (A) caveat (implicit
+            // generic-tuple type inference) — same root cause.
+            // Plan-17 phase 01 (B) — bounded-T method dispatch must run
+            // on BOTH passes so the call's return type propagates into
+            // first-pass type inference of the enclosing variable.  On
+            // second pass the t-stub `t_<n>T_<method>` exists (created
+            // in `definitions.rs:670+`); on first pass it doesn't.
+            // Both branches end up at `parse_method(stub_nr, t)`; the
+            // first-pass branch creates the stub on demand if missing.
+            if let Some(_tv_name) = self.generic_type_name(&t) {
+                let stub_nr = self.data.find_fn(u16::MAX, &field, &t);
+                if stub_nr != u32::MAX
+                    && self.has_bound_for_method(&field)
+                    && self.lexer.has_token("(")
+                {
+                    return self.parse_method(code, stub_nr, t.clone());
+                }
+            }
             if self.first_pass && self.lexer.has_token("(") {
                 self.skip_remaining_args();
             } else if !self.first_pass {
@@ -91,18 +132,6 @@ impl Parser {
                     && self.lexer.has_token("(")
                 {
                     return self.parse_vector_method(code, &vec_t, &field);
-                }
-                // I7: bounded method call on generic T — look for a T-stub.
-                // Verify the current function's bounds declare this method to
-                // prevent T-stubs from unrelated generics leaking in.
-                if let Some(_tv_name) = self.generic_type_name(&t) {
-                    let stub_nr = self.data.find_fn(u16::MAX, &field, &t);
-                    if stub_nr != u32::MAX
-                        && self.has_bound_for_method(&field)
-                        && self.lexer.has_token("(")
-                    {
-                        return self.parse_method(code, stub_nr, t.clone());
-                    }
                 }
                 // generic-specific error for field access on T.
                 if let Some(tv_name) = self.generic_type_name(&t) {
