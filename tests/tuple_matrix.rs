@@ -82,26 +82,23 @@ cross_mode!(
     "#
 );
 
-// e1_d1_char_int_local — see P207 (PROBLEMS.md): native codegen E0308 on
-// `t.0 == 'a'` when `t.0` is a tuple-element character.  Workaround would be
-// `t.0 as integer == 97` but that defeats the cell's purpose (validating
-// character equality through tuple storage).  Marked ignored on the P207 tag
-// so a later fix removes the tag in a one-line follow-up.
-#[ignore = "P207 — native char-tuple-elem eq codegen bug"]
-#[test]
-fn e1_d1_char_int_local() {
-    common::cross_mode::run_cross_mode(
-        "e1_d1_char_int_local",
-        r#"
-        fn test() {
-            t = ('a', 42);
-            print("{t.0},{t.1}\n");
-            assert(t.0 == 'a', "e1_d1 char");
-            assert(t.1 == 42, "e1_d1 int");
-        }
-        "#,
-    );
-}
+// e1_d1_char_int_local — closed by P207 fix 2026-05-04.
+// `src/generation/calls.rs::substitute_template_body` now wraps a
+// Type::Character TupleGet argument with `ops::to_char(...)` (mirroring
+// the existing `Value::Var` char wrap), so the OpConvIntFromCharacter
+// template's `@v1 == char::from(0)` comparison gets a `char`, not the
+// `i32`-typed tuple-element read.
+cross_mode!(
+    e1_d1_char_int_local,
+    r#"
+    fn test() {
+        t = ('a', 42);
+        print("{t.0},{t.1}\n");
+        assert(t.0 == 'a', "e1_d1 char");
+        assert(t.1 == 42, "e1_d1 int");
+    }
+    "#
+);
 
 // E1×D2 — basic scalars on the direct stack.
 

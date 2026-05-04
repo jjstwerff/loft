@@ -307,6 +307,22 @@ impl Output<'_> {
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
+                // P207 — same wrap applies to a `Value::TupleGet` whose element
+                // type is `Type::Character`.  The tuple's stored layout uses
+                // `i32` for the character slot (per `rust_type` Variable
+                // context); reading it back gives `i32`, but the template
+                // expects `char`.  Without this wrap the OpConvIntFromCharacter
+                // template emits `if _v_v1 == char::from(0)` where `_v_v1` is
+                // `i32` (from `var_t.0`) and rustc rejects with E0308.
+                if matches!(a.typedef, Type::Character)
+                    && let Value::TupleGet(v, idx) = vals[a_nr].unspan()
+                    && let Type::Tuple(elems) = self.data.def(self.def_nr).variables.tp(*v)
+                    && elems.get(*idx as usize).is_some_and(|e| matches!(e, Type::Character))
+                {
+                    let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    res = res.replace(&name, &format!("(ops::to_char({inner}))"));
+                    continue;
+                }
                 // For character-typed parameters, a call returning character yields `i32`
                 // (due to the `as u32 as i32` auto-cast), so wrap with ops::to_char().
                 if matches!(a.typedef, Type::Character)

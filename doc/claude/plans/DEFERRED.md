@@ -66,7 +66,6 @@ by a future session.
 
 | ID | What | Trigger to unpause |
 |---|---|---|
-| P207 | Native codegen E0308 on tuple-element character equality (`t.0 == 'a'` where `t: (character, _)`).  Cell `e1_d1_char_int_local` in `tests/tuple_matrix.rs` is `#[ignore]`d. | When `src/generation/ops/int_compare.rs` (the P200 fix site) handles char-element width normalisation when source is a `Type::Tuple` element read.  Test will auto-flip to PASS. |
 
 ## Decision-pending items (not bugs, but choices)
 
