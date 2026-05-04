@@ -11123,6 +11123,38 @@ fn run() -> integer {
     .result(Value::Int(37));
 }
 
+/// P210 — closed 2026-05-04.  Native coroutine `while … { yield … }`
+/// silently returned 0 because `collect_segments` in
+/// `src/generation/coroutine.rs` only recognised `Value::Block`
+/// containing yields (the for-loop shape) and missed `Value::Loop`
+/// (the while-loop shape).  The state machine ended up with no arms,
+/// so every `next_i64` call returned `COROUTINE_EXHAUSTED` and the
+/// driving for-loop broke immediately.  Interp drives generators via
+/// the bytecode VM, not the state-machine lowering, so it was
+/// unaffected.  Fix extends the matcher to `Value::Block(_) |
+/// Value::Loop(_)`.
+#[test]
+fn p210_native_coroutine_while_yield() {
+    code!(
+        "fn count_to(n: integer) -> iterator<integer> {
+    i = 0;
+    while i < n {
+        yield i;
+        i = i + 1;
+    }
+}
+fn run() -> integer {
+    sum = 0;
+    for v in count_to(5) {
+        sum = sum + v;
+    }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(10));
+}
+
 /// P209 — closed 2026-05-04.  Match guard arms with pattern bindings
 /// (`x if x < 0 => …`) saw the binding variable as uninitialised
 /// because the binding `v_set(x, subject)` was prepended only to the

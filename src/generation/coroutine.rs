@@ -132,10 +132,19 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
                 pre: std::mem::take(&mut pre),
                 init,
             });
-        } else if matches!(inner_op, Value::Block(_)) && contains_yield(inner_op) {
-            // A block (typically a for-loop) that contains yields somewhere inside.
-            // Use the eager-collect approach: the factory will run the block and
-            // push all yielded values to a Vec<i64>; next_i64 pops from that buffer.
+        } else if matches!(inner_op, Value::Block(_) | Value::Loop(_)) && contains_yield(inner_op) {
+            // A block (for-loop) or loop (while/loop) that contains
+            // yields somewhere inside.  Use the eager-collect approach:
+            // the factory will run the block/loop and push all yielded
+            // values to a Vec<i64>; next_i64 pops from that buffer.
+            //
+            // P210 — `Value::Loop` previously fell through to the
+            // `pre` accumulator, so a generator like `fn g() { i = 0;
+            // while i < n { yield i; i += 1; } }` produced an empty
+            // state machine (every `next_i64` returned
+            // COROUTINE_EXHAUSTED).  The for-loop body case worked
+            // because its body is `Value::Block`; while-loops were
+            // missed.
             segments.push(YieldSegment::ForLoopBody {
                 pre: std::mem::take(&mut pre),
                 body: inner_op.clone(),

@@ -42,7 +42,6 @@ a future contributor finds the decision before re-proposing.
 
 | Item | What user hits today | Workaround | Surfaced by | Lock-in test |
 |---|---|---|---|---|
-| **Coroutine `yield integer` + `for v in gen()` silently returns 0 (P210, S0, native only)** | Native build silently produces 0 instead of the correct sum.  Interp returns the right value | Use interp until the state-machine lowering is fixed | plan-16 pre-flight | none yet — file with the fix |
 | **Coroutine `yield text` empty / fails (P211, S1)** | Interp returns empty stdout; native fails codegen with "cast cannot be followed by a method call".  Yielding owned text is broken end-to-end | n/a — yielding text is unusable | plan-16 pre-flight | none yet — file with the fix |
 | **Nested tuple literals panic (P212, S1)** | `((1,2),(3,4))` and any tuple containing a tuple panics at codegen.rs:1527 on both backends | Decompose into separate scalars and access individually | plan-14 phase 02 pre-flight | none yet — file with the fix |
 | **Capturing closure in struct field (P213, S2)** | Storing a capturing lambda in a struct field panics under interp at store.rs:963 ("Write to locked store"); native rejects with E0308.  Affects all capture shapes (basic, text, Reference) | Don't store capturing lambdas in struct fields; pass via fn-typed parameter or define at top level | plan-15 D3 cluster pre-flight | none yet — file with the fix |
