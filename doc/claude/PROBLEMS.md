@@ -1074,14 +1074,16 @@ Phase 07 needs a custom emitter (Outcome B path) that emits owned
 
 ### 213. Capturing closures cannot be stored in struct fields — full design for the proper fix
 
-**Status:** parse-time diagnostic shipped 2026-05-04 (commit 5b407d6); the
-*proper* fix that lets capturing closures actually persist in struct fields
-is **near-term planned work** — not a "maybe someday" item.  This section
-is the design-of-record for whoever picks it up.
+**Status:** parse-time diagnostic shipped 2026-05-04 (commit 5b407d6) —
+that's the correct behaviour for the current release.  The
+layout-widening fix that lets capturing closures actually persist in
+struct fields is a **wanted future feature**, not a release blocker.
+This section is the design-of-record so the work can land cleanly when
+its consumers come into focus.
 
-**Why this lands soon, not "deferred indefinitely":** capturing closures
-in struct fields are the natural shape for several patterns loft will
-ship:
+**Why this matters for a future release:** capturing closures in
+struct fields are the natural shape for several patterns loft will
+eventually ship:
 
 - **Async / IO event handlers** — a single struct holding multiple
   capturing callbacks (`on_message: fn(Message) -> void`,
@@ -1101,15 +1103,17 @@ ship:
 
 A programmer building any of these will reach for
 `struct Handler { on_X: fn(...) -> ... }` and assign capturing
-lambdas — that's the natural code to write.  Today they'll hit the
+lambdas — that's the natural code to write.  Today they hit the
 diagnostic; the workaround (top-level fns + manual context-passing)
-becomes very awkward at scale.  Forcing the pattern through plain
+becomes awkward at scale.  Forcing the pattern through plain
 function pointers turns every real handler into a multi-arg fn that
 re-derives context from arguments, defeating the point of having
 local state.
 
-The diagnostic is therefore a holding pattern, not a final answer.
-The fix should land before any of the libraries above ship.
+The diagnostic is the right answer for the current release: it
+keeps users out of the panic, points at the workaround, and stays
+stable until the layout fix lands.  The proper fix is queued for a
+future release rather than rushed in.
 
 #### Why the diagnostic was shipped first
 
@@ -1342,7 +1346,9 @@ New tests to add when the fix lands:
 
 #### Sequencing
 
-This work should land **before** any of these ship:
+Not gating the current release.  Co-schedule with whichever of these
+lands first — they're the natural consumers and the work is cheaper
+done together than retrofitted later:
 
 - The `server` library (`doc/claude/WEB_SERVER_LIB.md`) — handler
   registries are the canonical use case.
@@ -1351,10 +1357,10 @@ This work should land **before** any of these ship:
 - Plan-15 phase 03 (closure-DbRef leak fix) — step 5 of this design
   IS phase 03's get_free_vars extension; do them together.
 
-Reasonable order: (a) layout widening + step 2/3 codegen so the
-basic case works, (b) get_free_vars + leak tests so it doesn't
-leak, (c) native codegen + cross-mode validation, (d) un-`@EXPECT_FAIL`
-the existing diagnostic regression test and replace with positive
+Reasonable internal order once started: (a) layout widening + step
+2/3 codegen so the basic case works, (b) get_free_vars + leak tests
+so it doesn't leak, (c) native codegen + cross-mode validation,
+(d) remove the diagnostic regression test and replace with positive
 end-to-end tests, (e) pre-flight a server-handler-registry mini-spike
 to confirm the design holds at real-program scale.
 
