@@ -116,11 +116,7 @@ impl Parser {
             // can pick up the next arm or exit cleanly instead of
             // looping forever.
             if !self.first_pass {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Expect token =>"
-                );
+                diagnostic!(self.lexer, Level::Error, "Expect token =>");
             }
             self.lexer.recover_to(&[",", "}", ";"]);
         }

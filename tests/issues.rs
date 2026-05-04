@@ -11123,6 +11123,38 @@ fn run() -> integer {
     .result(Value::Int(37));
 }
 
+/// plan-19 phase 03 — closed 2026-05-04.  Method-on-parent-enum
+/// dispatch.  When a method is declared on an enum
+/// (`fn classify(self: Shape)`) and called via `.method()` syntax on
+/// a variant value (`s = Circle { … }; s.classify()`), the parser
+/// previously rejected with "Unknown field Circle.classify".  The
+/// fix in `parser/fields.rs` looks up the method on the parent
+/// enum's namespace (`t_<n>Shape_<method>`) before emitting the
+/// unknown-field error, runs on both passes so the call's return
+/// type propagates into first-pass inference of the enclosing
+/// variable, and dispatches via `parse_method`.
+#[test]
+fn plan19_method_on_enum_variant_via_dot() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { w: float, h: float },
+}
+fn classify(self: Shape) -> float {
+    match self {
+        Circle { radius } => 3.14 * radius * radius,
+        Rect { w, h } => w * h,
+    }
+}
+fn run() -> float {
+    s = Circle { radius: 2.0 };
+    s.classify()
+}"
+    )
+    .expr("run()")
+    .result(Value::Float(12.56));
+}
+
 /// plan-17/01 (B) — closed 2026-05-04.  Two coordinated fixes: the
 /// I7 bounded-method dispatch in fields.rs now runs on both passes,
 /// and definitions.rs installs bounds plus t-stubs on the first pass

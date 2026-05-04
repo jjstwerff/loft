@@ -5,7 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 19 — Struct-enum + variant field-capture validation
 
-**Status: open** (no commits yet)
+**Status: phase 03 closed (2026-05-04)** — pre-flight C5 method-resolution
+gap fixed in `src/parser/fields.rs`; pinned by
+`tests/issues.rs::plan19_method_on_enum_variant_via_dot`.  Phases 00,
+01, 02, 04-06 still parked under default "finish plans first"
+sequence.
 
 ## Goal
 
@@ -29,10 +33,11 @@ that already absorbed two recent native-codegen P-issues.
 | `is`-capture in `if` (`if s is Rect { w, h }`) | ✅ |
 | `is` boolean check (`s is Circle`) | ✅ |
 | Match dispatch on parent-enum-typed self | ✅ |
-| **Method on parent-enum type called via `.method()` on a variant value** | ❌ "Unknown field Circle.classify" — the variant value's method-resolution doesn't search the parent enum's methods |
+| Method on parent-enum type called via `.method()` on a variant value | ✅ (closed 2026-05-04 via parent-enum lookup in `parser/fields.rs::field`; only fires when the parent has a direct `fn …(self: Enum)` decl, never the auto-dispatcher built from per-variant impls — preserves the long-standing "Unknown field Variant.method" error when only a sibling variant has the impl) |
 
-20% pre-flight rate (1/5).  The failure is a method-resolution
-gap; under-tested and not surfaced by existing tests.
+20% pre-flight rate (1/5) at survey time; rate now 0/5.  The
+fix was a single localized parser-side dispatch fallback —
+matches the pre-flight gate's prediction.
 
 ## The matrix
 
@@ -69,7 +74,7 @@ Two axes.
 | [00 — matrix freeze + harness wiring](00-matrix.md) | (table) | (table) | Frozen matrix; `tests/struct_enum_matrix.rs` binary; smoke test.  No production change. |
 | 01 — V0/V1 baseline | V0, V1 | C1–C7 | Most should pass.  Establishes the harness shape against the simplest variants. |
 | 02 — text payload (V2) | V2 | C1–C7 | Active risk: text lifetime through variant dispatch.  Cross-cuts P205 territory. |
-| 03 — fix C5 method resolution | V0–V4 | C5 | Active risk from pre-flight: method-on-parent-enum dispatch via `.method()` on a variant value fails.  Investigate whether this is a parser issue (`s.classify()` lookup misses the parent type) or a codegen issue.  Likely a parser-side fix. |
+| 03 — fix C5 method resolution | V0–V4 | C5 | **Closed 2026-05-04.** Parser-side fix in `src/parser/fields.rs::field` adds a parent-enum method lookup (`t_<n>Parent_<field>`) when the receiver is `Type::Reference(child_d, …)` and `child_d`'s parent is an enum.  Guarded against the auto-generated polymorphic dispatcher (only fires when no sibling variant has a per-variant impl) so the "Unknown field Variant.method" error remains for unimplemented-variant calls.  Runs on both passes for first-pass type propagation.  Pinned by `tests/issues.rs::plan19_method_on_enum_variant_via_dot`. |
 | 04 — multi-field + tuple payloads | V4, V5 | C1–C7 | Cross-cuts plan-14 phase 05; tuple-payload variants are the natural extension once tuple-in-struct-field is settled. |
 | 05 — Reference + nested | V3, V6 | C1–C7 | DbRef payload is straightforward; nested struct-enum is the stretch. |
 | 06 — freeze + doc | — | — | Update LOFT.md § Struct enums where the matrix surfaces under-documented behaviour. |

@@ -67,7 +67,11 @@ impl Parser {
             "field={} dnr={} fnr={} t={:?} first_pass={}",
             field,
             dnr,
-            if fnr == usize::MAX { "MAX".to_string() } else { fnr.to_string() },
+            if fnr == usize::MAX {
+                "MAX".to_string()
+            } else {
+                fnr.to_string()
+            },
             t,
             self.first_pass,
         );
@@ -111,6 +115,61 @@ impl Parser {
                     && self.lexer.has_token("(")
                 {
                     return self.parse_method(code, stub_nr, t.clone());
+                }
+            }
+            // Plan-19 phase 03 — method-on-parent-enum dispatch.  When
+            // the receiver is a variant value (`Type::Reference(child_d, …)`
+            // for a struct enum variant) and the method is declared on
+            // the parent enum (e.g. `fn classify(self: Shape)`), look
+            // up `t_<n>Shape_classify` on the parent and dispatch
+            // there.  Without this fallback, `s.classify()` where
+            // `s = Circle { … }` (inferred type `Reference(Circle)`)
+            // rejected with "Unknown field Circle.classify" — even
+            // though `s: Shape = Circle { … }` followed by
+            // `s.classify()` worked.
+            //
+            // Runs on both passes so the call's return type propagates
+            // into first-pass inference of the enclosing variable
+            // (same reason plan-17 (B) bounded-T dispatch runs on both
+            // passes).
+            //
+            // Pinned by `tests/issues.rs::plan19_method_on_enum_variant_via_dot`.
+            if let Type::Reference(child_d, _) = &t {
+                let parent_d = self.data.def(*child_d).parent;
+                if parent_d != u32::MAX && matches!(self.data.def_type(parent_d), DefType::Enum) {
+                    let parent_name = self.data.def(parent_d).name.clone();
+                    let stub_name = format!("t_{}{}_{}", parent_name.len(), parent_name, field);
+                    let md_nr = self.data.def_nr(&stub_name);
+                    // Only fire when `t_<Parent>_<field>` is the
+                    // user's direct declaration on the enum, NOT the
+                    // auto-generated polymorphic dispatcher built
+                    // from per-variant impls.  Distinguisher: the
+                    // auto-dispatcher only exists when at least one
+                    // variant has its own `t_<Variant>_<field>`; a
+                    // direct decl coexists with no per-variant
+                    // impls (loft rejects mixing the two).  Without
+                    // this guard, `r.area()` on a variant lacking
+                    // its own impl would bypass the long-standing
+                    // "Unknown field Rect.area" error and silently
+                    // dispatch through the warning-only stub.
+                    let has_per_variant_impl = (0..self.data.definitions()).any(|sib_d| {
+                        if self.data.def(sib_d).parent != parent_d {
+                            return false;
+                        }
+                        let sib_name = &self.data.def(sib_d).name;
+                        let probe = format!("t_{}{}_{}", sib_name.len(), sib_name, field);
+                        self.data.def_nr(&probe) != u32::MAX
+                    });
+                    if md_nr != u32::MAX
+                        && !has_per_variant_impl
+                        && matches!(
+                            self.data.def_type(md_nr),
+                            DefType::Function | DefType::Generic
+                        )
+                        && self.lexer.has_token("(")
+                    {
+                        return self.parse_method(code, md_nr, t.clone());
+                    }
                 }
             }
             if self.first_pass && self.lexer.has_token("(") {

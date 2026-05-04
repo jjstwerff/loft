@@ -1067,7 +1067,11 @@ impl Parser {
             name,
             types,
             d_nr,
-            if d_nr == u32::MAX { None } else { Some(self.data.def(d_nr).def_type.clone()) },
+            if d_nr == u32::MAX {
+                None
+            } else {
+                Some(self.data.def(d_nr).def_type.clone())
+            },
             self.first_pass,
         );
         // skip generic templates — they are not callable directly.

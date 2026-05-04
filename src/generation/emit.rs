@@ -913,9 +913,7 @@ impl Output<'_> {
                     fn tail_is_return(v: &Value) -> bool {
                         match v.unspan() {
                             Value::Return(_) => true,
-                            Value::Block(bl) => {
-                                bl.operators.last().is_some_and(tail_is_return)
-                            }
+                            Value::Block(bl) => bl.operators.last().is_some_and(tail_is_return),
                             _ => false,
                         }
                     }

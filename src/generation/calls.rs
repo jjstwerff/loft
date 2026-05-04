@@ -317,7 +317,9 @@ impl Output<'_> {
                 if matches!(a.typedef, Type::Character)
                     && let Value::TupleGet(v, idx) = vals[a_nr].unspan()
                     && let Type::Tuple(elems) = self.data.def(self.def_nr).variables.tp(*v)
-                    && elems.get(*idx as usize).is_some_and(|e| matches!(e, Type::Character))
+                    && elems
+                        .get(*idx as usize)
+                        .is_some_and(|e| matches!(e, Type::Character))
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));
