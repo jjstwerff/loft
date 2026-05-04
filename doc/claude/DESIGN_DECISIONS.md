@@ -166,6 +166,67 @@ altogether (i.e. a fundamental rewrite of the lambda story).
 
 ---
 
+## C63 — No nested `fn` definitions inside fn bodies
+
+**Question.** Should loft accept `fn` declarations inside another
+function's body (e.g. `fn outer() { fn helper(x: integer) -> integer
+{ x * 2 } helper(5) }`)?
+
+**Evaluation.** Loft already has two orthogonal forms for the
+"function-shaped local helper" use case:
+
+- `let helper = |x| { x * 2 };` — closure shorthand, inferred types.
+- `let helper = fn(x: integer) -> integer { x * 2 };` — typed
+  closure form.
+
+Both bind a function value to a local variable, callable inside
+the parent fn (`helper(5)`), invisible outside, dropped at scope
+exit.  Adding a third syntax via nested `fn` declarations forks
+into one of two semantic choices, neither of which is good:
+
+1. **Captures parent locals** — re-implements closures with
+   different syntax.  Two forms now mean the same thing; users
+   coin-flip between them with no clear heuristic.  Documentation
+   surface grows for cosmetic-only gain.
+2. **Doesn't capture** — contradicts every mainstream language
+   (Python, JS, Rust, Swift all give nested fns access to outer
+   locals).  Users write `fn helper() { use(outer_var) }` expecting
+   it to work; the parser rejects with "can't find outer_var."
+   That's a worse experience than the current "no nested fns"
+   rule, which fails clearly with a single-line diagnostic.
+
+Implementation cost is also non-trivial: parser path for local
+fn decls; scope analysis for capture/no-capture; codegen path or
+desugaring rules to existing closures; edge cases for forward
+refs, recursive nested fns, mutual recursion.  Estimated 1-2
+focused sessions for a feature whose runtime benefit is zero
+(closures already cover every use case) and whose only gain is
+cosmetic locality.
+
+The "with working closures" framing is the giveaway: if inline
+fn semantics ARE just "closure with implicit name binding," the
+feature is pure sugar.  Sugar that's not load-bearing for any
+concrete user need is exactly what pre-1.0 should refuse —
+every additional surface is one more thing to validate,
+document, and maintain.
+
+**Decision.** **Closed — declined.**  Dated 2026-05-04.  The
+parser continues to reject `fn` definitions inside function
+bodies with the existing `'fn' definitions must be at file
+scope, not inside a function or block` diagnostic.  The
+loft-write skill's "Nested fn definitions are forbidden"
+section documents the workaround (typed lambda).
+
+**Revisit when.** A concrete user workflow surfaces where the
+typed-lambda form (`let helper = fn(x: T) -> R { ... };`) is
+genuinely awkward enough to cost more developer time than the
+inline-fn implementation cost.  Today (2026-05-04): no such
+workflow has surfaced; the loft-test cross_mode harness pulls
+helper fns to file scope cleanly, and `lib/graphics/` plus the
+stdlib never need local-helper recursion.
+
+---
+
 ## Adding a new entry
 
 When closing a question, append a new `##` section using the
