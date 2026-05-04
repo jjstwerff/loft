@@ -1553,7 +1553,7 @@ impl Parser {
             }
 
             // parse optional guard clause.
-            let guard_opt = if self.lexer.has_token("if") {
+            let mut guard_opt = if self.lexer.has_token("if") {
                 let mut guard_code = Value::Null;
                 let guard_type = self.expression(&mut guard_code);
                 if !self.first_pass && guard_type != Type::Boolean {
@@ -1583,6 +1583,23 @@ impl Parser {
             };
             if result_type == Type::Void {
                 result_type = arm_type.clone();
+            }
+            // P209 — when the arm has both a guard and pattern bindings
+            // (e.g. `x if x < 0 => …`), the guard must see the bound
+            // variable.  Prepend the binding assignments to the guard
+            // expression so the bound name is initialised before the
+            // guard reads it.  Without this the guard saw the
+            // uninitialised slot (typically 0), causing `x if x < 0`
+            // to mis-fire and either skip the arm (interp) or fall
+            // through to a sibling guard (`x == 0`) silently.  The
+            // enum-variant struct-field path at the call site of
+            // `build_scalar_chain` already wraps guards this way.
+            if !arm_bindings.is_empty()
+                && let Some(guard) = guard_opt.take()
+            {
+                let mut stmts = arm_bindings.clone();
+                stmts.push(guard);
+                guard_opt = Some(v_block(stmts, Type::Boolean, "binding_guard"));
             }
             // prepend any binding assignments (from `name @ pattern` or bare `name`)
             // to the arm body so the variable is assigned before the body executes.

@@ -42,7 +42,6 @@ a future contributor finds the decision before re-proposing.
 
 | Item | What user hits today | Workaround | Surfaced by | Lock-in test |
 |---|---|---|---|---|
-| **Match guards select wrong arm (P209, S0)** | `match n { x if x<0 => "neg", x if x==0 => "zero", _ => "pos" }` returns wrong arm on **both** backends, *differently* wrong on each (interp shifts by one; native always matches arm 2).  Most common conditional-match idiom is unusable | Replace `match … if` with an `if/else if/else` chain | plan-18 phase 02 pre-flight | none yet — file with the fix |
 | **Coroutine `yield integer` + `for v in gen()` silently returns 0 (P210, S0, native only)** | Native build silently produces 0 instead of the correct sum.  Interp returns the right value | Use interp until the state-machine lowering is fixed | plan-16 pre-flight | none yet — file with the fix |
 | **Coroutine `yield text` empty / fails (P211, S1)** | Interp returns empty stdout; native fails codegen with "cast cannot be followed by a method call".  Yielding owned text is broken end-to-end | n/a — yielding text is unusable | plan-16 pre-flight | none yet — file with the fix |
 | **Nested tuple literals panic (P212, S1)** | `((1,2),(3,4))` and any tuple containing a tuple panics at codegen.rs:1527 on both backends | Decompose into separate scalars and access individually | plan-14 phase 02 pre-flight | none yet — file with the fix |

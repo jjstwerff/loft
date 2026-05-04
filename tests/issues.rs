@@ -11123,6 +11123,37 @@ fn run() -> integer {
     .result(Value::Int(37));
 }
 
+/// P209 — closed 2026-05-04.  Match guard arms with pattern bindings
+/// (`x if x < 0 => …`) saw the binding variable as uninitialised
+/// because the binding `v_set(x, subject)` was prepended only to the
+/// arm body, not to the guard expression.  Result: `x` read as 0
+/// inside the guard, so `x if x < 0` failed for every input on both
+/// backends, and `x if x == 0` matched everything (interp shifted
+/// arms by one; native always returned arm 2).  Fix in
+/// `src/parser/control.rs::parse_scalar_match` wraps the guard in a
+/// `binding_guard` block whose statements run the bindings first
+/// then evaluate the guard.  The enum-variant struct-field path at
+/// `build_scalar_chain`'s call site already did this correctly; the
+/// scalar-match path was the missing case.
+#[test]
+fn p209_scalar_match_guard_sees_pattern_binding() {
+    // Three-arm classify: input -3 must reach arm 1 (`x < 0`).
+    code!(
+        "fn classify(n: integer) -> text {
+    match n {
+        x if x < 0 => \"neg\",
+        x if x == 0 => \"zero\",
+        _ => \"pos\",
+    }
+}
+fn run() -> text {
+    \"{classify(-3)}|{classify(0)}|{classify(7)}\"
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("neg|zero|pos".to_string()));
+}
+
 /// plan-19 phase 03 — closed 2026-05-04.  Method-on-parent-enum
 /// dispatch.  When a method is declared on an enum
 /// (`fn classify(self: Shape)`) and called via `.method()` syntax on

@@ -5,12 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 18 — Match expression validation
 
-**Status: phase 01 closed (PR #207).  Phase 02 pre-flight 2026-05-04
-found P209 — match guard arms select wrong branch on BOTH backends,
-*differently* wrong on each (interp shifts arms by one; native always
-matches second arm).  Range patterns (`0..=9`) work correctly.
-P209 is S0 (most common conditional-match idiom, silent wrong result);
-gating the rest of phase 02.**
+**Status: phase 01 closed (PR #207).  Phase 02 — P209 (match guards
+saw pattern bindings as uninitialised) closed 2026-05-04 in
+`src/parser/control.rs::parse_scalar_match`.  Range patterns work.
+Phase 02 wiring (matrix tests for range / guard / null patterns)
+not yet started.**
 
 Closed (2026-05-04):
 - **Hang fix**: `expect_match_arm_arrow` recovers via
