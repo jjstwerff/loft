@@ -5,7 +5,28 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 18 — Match expression validation
 
-**Status: open** (no commits yet)
+**Status: phase 01 partial — or-pattern + `@`-binding hang fixed.**
+
+Closed (2026-05-04):
+- **Hang fix**: `expect_match_arm_arrow` recovers via
+  `lexer.recover_to(&[",", "}", ";"])` after a missing `=>` so a
+  malformed pattern (e.g. `x @ 1 | x @ 2 => …`) no longer spins
+  the surrounding scalar/tuple/enum match loop indefinitely.
+  Pinned by `plan18_at_binding_in_or_pattern_does_not_hang` in
+  `tests/parse_errors.rs`.
+  Earlier pre-flight observation that `1 | 2 | 3 => …` itself
+  hung was incorrect — re-running shows that simple or-patterns
+  (no `@`-binding) parse and execute correctly.  The actual hang
+  trigger was specifically `x @ N | x @ M …` where
+  `parse_match_pattern` doesn't recognise `name @ pattern` in the
+  or-loop and silently fails, leaving the lexer parked.
+
+Open: deciding whether to support `x @ pattern` *inside*
+or-patterns (parser feature) or document it as an explicit
+non-goal — same shape as plan-17 phase 03 (`Printable`
+satisfaction add-vs-retract decision).  Phase 02+ of this plan
+covers other cells but the hang fix removes the only known
+DoS-class issue.
 
 ## Goal
 

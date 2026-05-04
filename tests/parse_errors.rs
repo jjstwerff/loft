@@ -797,6 +797,24 @@ fn p206_match_arrow_rejected_tuple() {
         .error("match arm separator is `=>`, not `->` at p206_match_arrow_rejected_tuple:1:57");
 }
 
+/// plan-18/01: an or-pattern containing `@`-bindings (`x @ 1 | x @ 2 => …`)
+/// previously hung the parser indefinitely.  `parse_match_pattern`
+/// doesn't recognise `name @ pattern` inside the or-pattern loop — it
+/// only handles literals, ranges, and bare expressions — so the
+/// inner parse stopped without consuming `@`, and the outer
+/// scalar/tuple/enum match loop re-entered pattern parsing on the
+/// same unconsumed token (infinite loop, eventually OOM).
+///
+/// Fix: `expect_match_arm_arrow` now recovers via
+/// `lexer.recover_to(&[",", "}", ";"])` after a missing `=>` so the
+/// outer loop can pick up the next arm or exit cleanly.  The
+/// diagnostic stays "Expect token =>".
+#[test]
+fn plan18_at_binding_in_or_pattern_does_not_hang() {
+    code!("fn test() { n = 2; match n { x @ 1 | x @ 2 => 0, _ => 99 } }")
+        .error("Expect token => at plan18_at_binding_in_or_pattern_does_not_hang:1:41");
+}
+
 // ── I1/I3 — Interface declarations ───────────────────────────────────────────
 
 /// I3: a minimal empty interface declaration parses without error.

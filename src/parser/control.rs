@@ -89,8 +89,28 @@ impl Parser {
                 );
             }
             self.lexer.has_token("->");
-        } else {
-            self.lexer.token("=>");
+        } else if !self.lexer.has_token("=>") {
+            // P206 + plan-18: emit the missing-arrow diagnostic, then
+            // recover to the next arm boundary.  Without recovery, a
+            // malformed pattern like `x @ 1 | x @ 2 => …` (where the
+            // or-pattern loop's `parse_match_pattern` doesn't consume
+            // `x @ N`) leaves the lexer parked on an unexpected token;
+            // the surrounding scalar/tuple/enum match loop then
+            // re-enters pattern parsing on the same unconsumed token
+            // and spins (PROBLEMS.md plan-18 phase 01 finding).
+            //
+            // `token("=>")` already emitted "Expect token =>"; here we
+            // skip ahead until a `,`, `}`, or `;` so the outer loop
+            // can pick up the next arm or exit cleanly instead of
+            // looping forever.
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect token =>"
+                );
+            }
+            self.lexer.recover_to(&[",", "}", ";"]);
         }
     }
 
