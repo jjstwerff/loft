@@ -80,6 +80,18 @@ impl Parser {
     /// recovery the surrounding loop spins on the unconsumed token —
     /// see PROBLEMS.md P206.
     fn expect_match_arm_arrow(&mut self) {
+        // Trace point: match arm-arrow consumption.  Captures whether
+        // the parser is looking at `->` (wrong), `=>` (right), or
+        // something else (recover via `recover_to`).  Recurring
+        // vantage during match-pattern debugging (P206, plan-18).
+        // Enable with `LOFT_TRACE=match`.
+        crate::loft_trace!(
+            match_arm,
+            "expect arrow: peek_arrow={} peek_eq={} first_pass={}",
+            self.lexer.peek_token("->"),
+            self.lexer.peek_token("=>"),
+            self.first_pass,
+        );
         if self.lexer.peek_token("->") {
             if !self.first_pass {
                 diagnostic!(

@@ -427,6 +427,81 @@ for runtime panics that have no diagnostic-printing path.
 
 ---
 
+## Parser tracing (`LOFT_TRACE`)
+
+Compile-time debugging vantages with near-zero overhead when
+disabled.  Distinct from `LOFT_LOG` (runtime/bytecode) and
+log-config (loft-program-level).  See `src/trace.rs` for the
+implementation; this section documents *when to use it*.
+
+### Enabling
+
+```bash
+# Single category:
+LOFT_TRACE=call cargo run --release --bin loft -- --interpret /tmp/foo.loft
+
+# Multiple categories, comma-separated:
+LOFT_TRACE=call,field,generic cargo run ...
+
+# Everything:
+LOFT_TRACE=all cargo run ...
+
+# During tests (use --nocapture to see stderr):
+LOFT_TRACE=generic cargo test --release --test issues plan17 -- --nocapture
+```
+
+When `LOFT_TRACE` is unset (default), trace calls compile to one
+bool load + one branch; the branch predictor learns "always-false"
+fast and the overhead is below measurement.  Format-string args
+are evaluated only when the branch fires.
+
+### Currently registered categories
+
+| Category | Site | Use when debugging |
+|---|---|---|
+| `call` | `Parser::call` after `find_fn` | "Which def did the parser resolve, and was it skipped as Generic?"  Used heavily in plan-17 (A). |
+| `field` | `Parser::field` after attr lookup | "Did method dispatch find the attribute, what's the receiver type?"  Used in plan-17 (B). |
+| `generic` | `predict_generic_return_type` + `try_generic_instantiation` | "What did first-pass predict?  What did second-pass instantiate?"  Used in plan-17 (A). |
+| `match` | `expect_match_arm_arrow` | "What arrow did the parser see at the arm boundary?"  Used in P206 + plan-18. |
+
+### Adding a new category — selective rule
+
+The `LOFT_TRACE` infrastructure is designed for **recurring**
+diagnostic vantages — not one-off probes.  When debugging surfaces
+a useful eprintln, ask:
+
+- **One-off** (specific to this bug, unlikely to recur): keep the
+  `eprintln!` local, remove before commit.  No trace point.
+- **Recurring** (likely to be revisited for similar bugs in the
+  same subsystem): convert to a `loft_trace!(category, …)` call.
+  Permanent; future sessions enable the category and observe.
+
+Categories live where the recurrence justifies them.  Today's
+four categories cover parser-time debugging because that's where
+the recent bug-fix density was.  Future categories MAY cover:
+
+- `database` — store allocation, free, leak tracking.
+- `data` / `types` — type resolution, narrowing, deps.
+- `codegen` — generation/* template substitution + emit.
+
+Add categories only when a real recurring use case appears, not
+pre-emptively.  `src/trace.rs` documents the steps:
+
+1. Add a `pub <name>: bool` field to `TraceCategories`.
+2. Add the initialiser line.
+3. Add a macro arm in `loft_trace!` (mirror existing pattern).
+4. Update the table above.
+
+### When NOT to use `LOFT_TRACE`
+
+- Runtime/bytecode debugging — use `LOFT_LOG` (TESTING.md).
+- Loft-program-level logging — use `log_info` / `log_warn` /
+  `log_error` from inside loft programs (STDLIB.md § Logging).
+- One-time diagnostic probes — temporary `eprintln!` is fine
+  for a single session; remove before commit.
+
+---
+
 ## Cross-references
 
 - [TESTING.md](../../doc/claude/TESTING.md) — runtime debugging knobs:

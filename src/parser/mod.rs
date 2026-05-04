@@ -1057,6 +1057,19 @@ impl Parser {
                 },
             )
         };
+        // Trace point: post-find_fn dispatch state.  Captures the most
+        // common debugging vantage — what name resolved to which
+        // d_nr, whether it was a Generic that got skipped, and which
+        // pass we're on.  Enable with `LOFT_TRACE=call`.
+        crate::loft_trace!(
+            call,
+            "name={} types={:?} d_nr={} def_type={:?} first_pass={}",
+            name,
+            types,
+            d_nr,
+            if d_nr == u32::MAX { None } else { Some(self.data.def(d_nr).def_type.clone()) },
+            self.first_pass,
+        );
         // skip generic templates — they are not callable directly.
         if d_nr != u32::MAX && self.data.def(d_nr).def_type == DefType::Generic {
             d_nr = u32::MAX;
@@ -1240,7 +1253,19 @@ impl Parser {
             return Type::Unknown(0);
         }
         let tmpl_returned = self.data.definitions[g_nr as usize].returned.clone();
-        Self::substitute_type(tmpl_returned, tv_nr, &concrete)
+        let predicted = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
+        // Trace point: predicted return type for first-pass type
+        // inference of generic call sites.  Used during plan-17 (A)
+        // debugging.  Enable with `LOFT_TRACE=generic`.
+        crate::loft_trace!(
+            generic,
+            "predict name={} types={:?} concrete={:?} → {:?}",
+            name,
+            types,
+            concrete,
+            predicted,
+        );
+        predicted
     }
 
     /// Try to instantiate a generic function template for the given call-site types.
@@ -1323,7 +1348,20 @@ impl Parser {
             self.data.set_attr_value(d_nr, a_nr, a.default.clone());
         }
         self.data.definitions[d_nr as usize].code = new_code;
-        self.data.set_returned(d_nr, new_returned);
+        self.data.set_returned(d_nr, new_returned.clone());
+        // Trace point: full instantiation result.  Used during plan-17
+        // (A) debugging when verifying that the second-pass def
+        // creation produced the right monomorphised signature.
+        // Enable with `LOFT_TRACE=generic`.
+        crate::loft_trace!(
+            generic,
+            "instantiate name={} mangled={} d_nr={} concrete={:?} returned={:?}",
+            name,
+            mangled,
+            d_nr,
+            concrete,
+            new_returned,
+        );
         // Copy the variable table with substituted types.
         let mut vars = Function::copy(&tmpl_vars);
         vars.substitute_type(tv_nr, &concrete);

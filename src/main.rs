@@ -31,6 +31,8 @@
 
 #[macro_use]
 pub mod diagnostics;
+#[macro_use]
+mod trace;
 mod base64;
 mod calc;
 mod codegen_runtime;

@@ -57,6 +57,20 @@ impl Parser {
             return Type::Void;
         }
         let fnr = self.data.attr(dnr, &field);
+        // Trace point: field/method dispatch entry state.  Captures
+        // what type and field name reached `field()`, whether the
+        // attribute was found, and which pass we're on.  Recurring
+        // vantage during method-dispatch debugging (plan-17 B).
+        // Enable with `LOFT_TRACE=field`.
+        crate::loft_trace!(
+            field,
+            "field={} dnr={} fnr={} t={:?} first_pass={}",
+            field,
+            dnr,
+            if fnr == usize::MAX { "MAX".to_string() } else { fnr.to_string() },
+            t,
+            self.first_pass,
+        );
         if fnr == usize::MAX {
             // Plan-17 phase 01 (B) — bounded-T method dispatch must run
             // on BOTH passes so the call's return type propagates into
