@@ -1,6 +1,6 @@
 ---
 name: loft-test
-description: Reference for writing Rust integration tests for the loft interpreter and native backend. Apply whenever adding, editing, or reviewing tests/*.rs. Covers test-binary layout, the `code!` and `cross_mode!` macros, ignore conventions, P-id rules, and the targeted-suite map for subsystem changes.
+description: Reference for writing tests against the loft interpreter, --native backend, and WASM build. Apply whenever adding, editing, or reviewing tests/*.rs or tests/scripts/*.loft / tests/docs/*.loft. Covers test-binary layout, the `code!` and `cross_mode!` macros, the @EXPECT_ERROR / @EXPECT_FAIL / @ARGS / @NAME / @TITLE annotations on `.loft` files, ignore conventions, P-id rules, and the targeted-suite map for subsystem changes.
 user-invocable: false
 ---
 
@@ -155,6 +155,105 @@ target/.  That's why they're not on the default path.
 
 ---
 
+## Pure loft tests — `tests/scripts/*.loft` and `tests/docs/*.loft`
+
+A `.loft` test file is **three tests for the price of one**.  The same
+file is picked up by:
+
+- `tests/wrap.rs::dir` (and `::loft_suite`) — runs it through the
+  **interpreter** end-to-end.
+- `tests/native.rs::tests` — generates Rust source, compiles with
+  `rustc`, runs the **native** binary.
+- `tests/wrap.rs::wasm_dir` — compiles via `--native-wasm`, optionally
+  runs with `wasmtime` (skipped silently if `wasm32-wasip2` or
+  `wasmtime` is unavailable).
+
+**That's why pure loft tests have a bigger testing scope than Rust
+integration tests.**  A `code!(...)` test in `tests/issues.rs`
+exercises one execution path (the in-process interpreter via
+`State::execute`).  A `.loft` script automatically exercises all three
+backends — interpreter, `--native`, and WASM — and any divergence
+between them surfaces as a backend-specific failure.  When you fix a
+codegen bug, dropping a single `.loft` reproducer into `tests/scripts/`
+locks all three backends in one stroke; the same coverage in Rust
+would be three separate tests.
+
+This is also why **the cross-mode Rust harness exists at all**: plan-14
+needs precise per-cell control of which loft snippet runs in which
+mode and a stdout-equivalence assertion.  For broader regression
+coverage where you trust the assertions in the script body itself, a
+`.loft` file under `tests/scripts/` is the lighter-weight option.
+
+### Where to put a new `.loft` test
+
+| Location | Purpose | Doc fields required? |
+|---|---|---|
+| `tests/scripts/<NN>-<topic>.loft` | Regression script for a fix or a feature corner case.  Numbered prefix sorts the run order; new files get the next free number. | No |
+| `tests/docs/<NN>-<topic>.loft` | Topic-level documentation script.  Output is part of the public language reference (`gendoc` writes HTML from these). | **Yes** — `@NAME` + `@TITLE` |
+| `tests/lib/<name>.loft` | Library fixture for tests using `// @ARGS: --lib tests/lib`. | No |
+
+### Test-driver annotations
+
+All annotations are line comments of the form `// @KEY[: VALUE]`, placed
+either in the file header (above the first declaration) or just above a
+specific `fn`.
+
+| Annotation | Scope | Effect |
+|---|---|---|
+| `// @NAME: <short>` | Header (docs only) | Short name for the HTML doc index.  Required in `tests/docs/*.loft`. |
+| `// @TITLE: <text>` | Header (docs only) | Full title for the rendered doc page.  Required in `tests/docs/*.loft`. |
+| `// @ARGS: --lib <dir>` | Header | Extra CLI args passed to both wrap.rs and native.rs runners.  Only `--lib <dir>` is recognised at the test layer; other flags are ignored.  Use to point a script at a fixture directory (e.g. `// @ARGS: --lib tests/lib`). |
+| `// @EXPECT_ERROR: <substring>` | Anywhere | The script is expected to fail parse / scope-check / runtime with a diagnostic containing this substring.  Multiple `@EXPECT_ERROR:` lines accumulate.  Native runs **skip** files with `@EXPECT_ERROR` (the negative test only runs against the interpreter). |
+| `// @EXPECT_WARNING: <substring>` | Anywhere | Like `@EXPECT_ERROR` but for warnings — execution proceeds. |
+| `// @EXPECT_FAIL` | File-level (header) **or** fn-level (the comment block immediately above a `fn`) | Tolerate a panic.  File-level: parse / scope-check / runtime failures are accepted anywhere.  Fn-level: only the named fn's panic is tolerated; sibling fns still must pass.  Add a colon-trailing reason when known: `// @EXPECT_FAIL: native function not loaded`.  Native runs **skip** files with `@EXPECT_FAIL` entirely. |
+| `// #warn <text>` | Anywhere | Older-style expected warning.  Still supported; `@EXPECT_WARNING:` is preferred for new tests. |
+
+**Diagnostic-format rule:** the `<substring>` for `@EXPECT_ERROR` and
+`@EXPECT_WARNING` is a substring match against the rendered diagnostic.
+Don't include the trailing ` at file:line:col` location — that's
+appended by the renderer and would break when line numbers shift.  Just
+the message text.
+
+### File-level skip arrays
+
+When a script can't run in one backend (rare; usually a known feature
+gap), name it in the relevant skip array instead of marking the script
+itself with `@EXPECT_FAIL`:
+
+| Constant | File | When to add |
+|---|---|---|
+| `SUITE_SKIP` (in `wrap.rs`) | Currently empty.  Used for "interpreter can't run this" — extremely rare since the interpreter is the reference backend. |
+| `WASM_SKIP` (in `wrap.rs`) | Add when WASM build can't accept the script (e.g. threading model differences).  Each entry includes a `// todo!()` comment explaining why. |
+| `NATIVE_SKIP` (in `native.rs`) | Currently empty for `tests/docs/`.  Same idea: native-specific feature gap. |
+| `SCRIPTS_NATIVE_SKIP` (in `native.rs`) | Same as `NATIVE_SKIP` but for `tests/scripts/`. |
+
+Prefer `@EXPECT_FAIL` for "this is broken right now" (single source of
+truth in the script) and the skip arrays for "this backend
+fundamentally can't run this kind of script" (orthogonal to the bug
+status).
+
+### When a `.loft` test is preferred over a Rust unit test
+
+- The bug reproduces in a sequence of statements that already mirrors
+  loft idioms (file I/O, struct construction, vector ops).
+- You want all three backends to assert the same behaviour without
+  writing the assertion three times.
+- The fix is in codegen / runtime, where backend divergence is the
+  actual hazard.
+
+### When a Rust unit test is preferred
+
+- The behaviour is a pure parse-error (no runtime to verify) — use
+  `code!(...).error(...)` in `tests/parse_errors.rs`, faster than
+  spinning up wrap+native+wasm.
+- You need precise control over a `Value` comparison or type — use
+  `code!(...).expr(...).result(Value::Int(...))` in `tests/issues.rs`.
+- The bug is in the testing harness itself.
+- Cross-mode equivalence with byte-identical stdout matters (use
+  `cross_mode!`).
+
+---
+
 ## `#[ignore = "<reason>"]` conventions
 
 Every `#[ignore]` attribute MUST carry a reason.  Bare `#[ignore]` is
@@ -274,6 +373,10 @@ for runtime panics that have no diagnostic-printing path.
 - [ ] No `->` arm separators in any `match` (use `=>`).
 - [ ] No `cross_mode!` body shorter than `fn test() { … }` (the harness appends `fn main`, nothing else).
 - [ ] If introducing a new `tests/*.rs` binary, added a row to the test-binary table above.
+- [ ] If adding a `.loft` test, picked the right location: `tests/scripts/` (regression) vs `tests/docs/` (also drives HTML).
+- [ ] `tests/docs/*.loft` files have both `@NAME:` and `@TITLE:` header comments.
+- [ ] `@EXPECT_ERROR:` / `@EXPECT_WARNING:` substrings do NOT include the `at file:line:col` tail.
+- [ ] `@EXPECT_FAIL` placement is correct: file-level only when the comment is in the header above the first declaration; fn-level only when the comment is the line(s) immediately above the target `fn`.
 
 ---
 
