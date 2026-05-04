@@ -1190,24 +1190,52 @@ field that owns the closure record.  No new lifetime concept is needed.
 Aliasing is solved by deep-copy on field assignment, exactly as
 `Type::Reference` solves it today.
 
-#### Implementation plan — six steps
+#### Implementation plan — seven steps (revised after 2026-05-04 spike)
 
-**Step 1 — Widen the layout.**
+**Step 1 — Add a 20-byte raw storage type to the database.**
+
+The current code at `src/data.rs:3008` and `:3048` routes
+`Type::Function` through `def_nr("i32")` for storage purposes —
+which gives a 4-byte field.  Without changing this routing, widening
+`element_size` doesn't propagate to the actual record allocation:
+the database still allocates 4 bytes per fn-ref field, and writes
+beyond that corrupt adjacent state.
+
+Required:
+- Register a new raw storage type "fnref" in `src/database/types.rs`
+  (mirror of `dbref()` at line 1231) with `size = 20` and a
+  `Parts::Raw20` variant if needed (or reuse `Parts::DbRef`'s
+  raw-bytes shape with a custom size).
+- Add `pub type fnref size(20);` to `default/01_code.loft` so the
+  type has a loft-level def with the right known_type.
+- Update `Data::type_def_nr` and `Data::type_elm`'s `Type::Function`
+  arms to return the `fnref` def_nr instead of `i32`.
+
+This is the genuinely new layer of work missed in the original
+design.  Without it, steps 2-7 produce code that compiles but
+corrupts at runtime because the underlying record only has 4 bytes
+allocated for each fn-ref field.
+
+**Step 2 — Update `element_size` / `element_align`.**
 
 In `src/data.rs`:
-- `element_size(Type::Function) = 16` (was 4).
-- `element_align(Type::Function) = 4` (already is — keep).
-- Verify `element_offsets` and `element_offsets_alignment_max` produce
-  correct positions for nested cases (e.g. `(integer, fn() -> int)`,
-  `(fn() -> int, integer)`, `vector<fn() -> int>`).
+- `element_size(Type::Function) = 20` (was 4).
+- `element_align(Type::Function) = 8` (was 4) — for natural
+  alignment of the i64 d_nr at offset 0.
+- Update the duplicate align match at `src/data.rs:2418` (in
+  `LinkedFieldGroup` setup for tuple struct fields).
+- Verify `element_offsets` and `element_offsets_alignment_max`
+  produce correct positions for nested cases.
 
-This cascade automatically updates tuple element offsets, vector element
-width, and struct field positions.  Every site that computes layout via
-`element_size` picks up the new value without further change.
+This cascade automatically updates tuple element offsets, vector
+element width, and struct field positions — but only IF step 1 has
+landed first.  Without step 1, layout calc says "20 bytes" but
+allocator gives 4.
 
-**Step 2 — Field-write codegen.**
+**Step 3 — Field-write codegen.**
 
-In `src/parser/mod.rs::set_field_check`'s `Type::Function` arm, replace
+After step 1 + 2 land (storage actually 20 bytes wide), in
+`src/parser/mod.rs::set_field_check`'s `Type::Function` arm, replace
 the diagnostic + `OpSetInt4`-only path with:
 
 ```rust
@@ -1269,7 +1297,7 @@ The helpers `is_non_capturing`, `extract_fn_ref_d_nr`,
 `fn_ref_with_closure` path in `src/parser/vectors.rs:735` (where
 `Value::FnRef(d_nr, w, fn_type)` is appended to `alloc_steps`).
 
-**Step 3 — Field-read codegen.**
+**Step 4 — Field-read codegen.**
 
 In `src/parser/mod.rs::get_val`'s `Type::Function` arm (currently around
 line 1921), replace the "read d_nr + push null sentinel" pattern with:
@@ -1303,7 +1331,7 @@ path, not the field-read path; field-read produces 20B directly so no
 correction is needed.  Document this distinction in a comment at the
 field-read site to prevent confusion.
 
-**Step 4 — Default-init path.**
+**Step 5 — Default-init path.**
 
 `to_default(Type::Function)` currently produces `Value::FnRef(0, u16::MAX, …)`
 (see `src/data.rs:526`).  After widening, the default-init field write
@@ -1316,7 +1344,7 @@ construction.
 `p4d_fn_ref_field_bare_default` test this path; they should keep
 passing after the fix.
 
-**Step 5 — Free path: extend `get_free_vars` for `Type::Function` fields.**
+**Step 6 — Free path: extend `get_free_vars` for `Type::Function` fields.**
 
 `src/scopes.rs::get_free_vars` and the `OpFreeRef` recursive walker
 need a `Type::Function` arm that, for each fn-ref struct field,
@@ -1332,7 +1360,7 @@ also leaks).  Steps 5 and the stack-slot leak fix can land together
 since they share the "walk the 12B at offset+4 of the fn-ref slot"
 logic.
 
-**Step 6 — Native codegen mirror.**
+**Step 7 — Native codegen mirror.**
 
 In `src/generation/`:
 - `set_field_check`'s `Type::Function` arm currently emits a single
@@ -1472,10 +1500,34 @@ to confirm the design holds at real-program scale.
 
 #### Estimated effort
 
-1-2 focused sessions.  Step 1 is mechanical; step 2 is the bulk
-(~150 lines of parser + helpers); steps 3-5 are smaller follow-ons;
-step 6 (native) doubles the effort but is templated by existing
-Reference-field patterns.  Run full suite after each step.
+Revised after the 2026-05-04 spike: 2-3 focused sessions
+(originally estimated as 1-2; the database-type registration in
+step 1 is the additional layer that wasn't visible without trying
+the implementation).
+
+- Step 1 (database type) — touches `database/types.rs`,
+  `default/01_code.loft`, and `data.rs`'s type_def_nr / type_elm
+  routing.  ~50-80 lines including a `Parts::FnRef` variant or
+  Raw20 reuse, plus the loft-side `pub type fnref size(20);` and
+  routing updates.  Highest risk-of-cascade step — every layout
+  consumer must agree on the new size.
+- Step 2 (element_size / element_align) — mechanical, ~10 lines.
+- Step 3 (field-write codegen) — ~50 lines parser + helpers.
+- Step 4 (field-read codegen) — ~20 lines.
+- Step 5 (default-init) — ~10 lines extension to step 3.
+- Step 6 (get_free_vars) — folds plan-15 phase 03 leak fix; ~30 lines.
+- Step 7 (native codegen mirror) — doubles the codegen effort but
+  follows existing Reference-field native templates; ~80 lines.
+
+Run full suite after each step.  Run
+`./scripts/find_problems.sh --bg` after step 1 alone — that's the
+step where silent layout cascades are most likely.
+
+**Lesson from the 2026-05-04 spike:** the fix isn't bug-shaped, it's
+a layout-system migration.  Treat it like one — checkpoint after
+step 1, validate the suite passes with the new database type
+registered (and `element_size` still at 4 if necessary, just to
+confirm step 1 in isolation), then proceed to step 2.
 
 #### Why prioritise this even though no shipped feature gates on it
 
