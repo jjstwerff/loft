@@ -44,7 +44,7 @@ existing entry, not re-open it as a bug.
 | 210 | Native coroutine `while … { yield … }` silently returned 0 because `collect_segments` in `src/generation/coroutine.rs` only recognised `Value::Block` containing yields (the for-loop shape) and missed `Value::Loop` (the while-loop shape).  The state machine ended up with no arms, so every `next_i64` call returned `COROUTINE_EXHAUSTED` and the driving for-loop broke immediately.  Interp drives generators via the bytecode VM, not the state-machine lowering, so it was unaffected.  **Closed (2026-05-04)** by extending the matcher to `Value::Block(_) \| Value::Loop(_)`.  Pinned by `tests/issues.rs::p210_native_coroutine_while_yield`. | High (closed) | n/a — fix lands in `src/generation/coroutine.rs`. |
 | 211 | Coroutine `yield text` produces wrong output on both backends.  Interp returns rc=0 with **empty stdout** (should print three names); native fails codegen with "cast cannot be followed by a method call".  Yielded text's backing String likely doesn't survive the yield boundary.  Reproducer: `fn names() -> iterator<text> { yield "alice"; yield "bob"; yield "carol"; }`.  Surfaced by plan-16 pre-flight (2026-05-04).  Same active-risk class as P205 (text lifetime through codegen layers).  Reproducer in /tmp/p16_probes/y2_x1_text_for.loft. | High (S1, open) | n/a — yielding text is broken end-to-end. |
 | 212 | Nested tuple literals (`((1,2), (3,4))`, triply nested, or any tuple containing a tuple) panicked at `src/state/codegen.rs:1527:38` because the inline match in `gen_set_first_at_tos`'s `Type::Tuple` arm had no case for an inner element of `Type::Tuple(_)` — it fell through to the "unsupported elem" panic.  **Closed (2026-05-04)** by extracting per-leaf `OpPut*` emission into a recursive helper `emit_tuple_put_ops` that descends through nested tuples, computing each leaf's absolute slot offset and emitting in reverse to match the depth-first push order used by tuple-literal evaluation.  Pinned by `tests/issues.rs::p212_nested_tuple_literal` + `p212_triply_nested_tuple_literal`. | High (closed) | n/a — fix lands in `src/state/codegen.rs`. |
-| 213 | Capturing closure stored in struct field panicked under interp at `src/store.rs:963` and rejected in native with E0308 because struct fn-ref fields allocate 4 bytes (just the d_nr) but a capturing-closure value is 16 bytes (4B d_nr + 12B closure DbRef).  Codegen wrote 4 bytes via OpSetInt4 leaving 12 bytes of corrupted state on the stack.  **Closed (2026-05-04, partial)** — `src/parser/mod.rs::set_field_check`'s `Type::Function` arm now detects a `Value::FnRef` with a non-MAX closure_var (walked through Block/Span/Set wrappers via `capturing_fn_ref` helper) and emits a clear diagnostic with the workaround.  The proper fix (widen fn-ref struct fields to 16 bytes so captures persist) is a multi-session refactor touching field allocation, OpSet*/OpGet* family, native codegen, and tuple/vector layouts; tracked as a follow-up.  Pinned by `tests/parse_errors.rs::p213_capturing_closure_in_struct_field_rejected` + `p213_noncapturing_closure_in_struct_field_works`. | High (closed via diagnostic; layout fix deferred) | Define the function at file scope or pass the closure via a fn-typed parameter / return value instead of storing in a struct field. |
+| 213 | Capturing closure stored in struct field panicked under interp at `src/store.rs:963` and rejected in native with E0308 because struct fn-ref fields allocate 4 bytes (just the d_nr) but a capturing-closure value is 16 bytes (4B d_nr + 12B closure DbRef).  Codegen wrote 4 bytes via OpSetInt4 leaving 12 bytes of corrupted state on the stack.  **Closed (2026-05-04, partial)** — parse-time diagnostic shipped; layout-widening fix has a [full design plan in §213 below](#213-capturing-closures-cannot-be-stored-in-struct-fields--full-design-for-the-proper-fix).  Pinned by `tests/parse_errors.rs::p213_capturing_closure_in_struct_field_rejected` + `p213_noncapturing_closure_in_struct_field_works`. | High (closed via diagnostic; layout fix deferred — design recorded) | Define the function at file scope or pass the closure via a fn-typed parameter / return value instead of storing in a struct field. |
 | 214 | **Non-capturing** vector-of-closures (`vector<fn(integer) -> integer> = [|x| {x+1}, |x| {x*2}]`) panics under interp at `src/state/mod.rs:319` and rejects in native with E0605 cast `DbRef as (u32, DbRef)`.  Plan-15 README claims D4 should pass for non-capturing closures; pre-flight shows the documented-supported shape doesn't work.  Surfaced by plan-15 pre-flight (2026-05-04).  Reproducer in /tmp/p15_probes/c0_d4_noncap_vec.loft. | High (S2, open) | Define each fn at top level and pass the names: `fn f(x:integer)->integer{x+1} fn g(x:integer)->integer{x*2}; v = [f, g];`. |
 | 215 | Closure-typed local var unreachable from inside another closure body.  Calling `inner(y)` where `inner = fn(x:integer)->integer{…}` from inside `outer = fn(y:integer)->integer{ inner(y) + 1 }` rejects with "Unknown function inner".  Workaround `(inner)(y)` panics with index-out-of-bounds at `src/database/allocation.rs:162`.  Captured-closure name resolution gap.  Surfaced by plan-15 pre-flight (2026-05-04).  Reproducer in /tmp/p15_probes/c6_d1_nested_local.loft. | High (S2, open) | Inline the inner body, or define both at top level. |
 | 216 | Tuple-capture in closure body diverges silently between backends.  `t = (3, 7); f = fn(x:integer)->integer { t.0 + x }; f(10)` panics under interp at `src/store.rs:227` and produces empty output (rc=0) under native instead of `13`.  Surfaced by plan-15 pre-flight (2026-05-04).  Reproducer in /tmp/p15_probes/c4_d1_tuple_local.loft. | High (S1, open) | Pre-extract: `t0 = t.0; f = fn(x:integer)->integer { t0 + x };`. |
@@ -1071,6 +1071,312 @@ Phase 07 needs a custom emitter (Outcome B path) that emits owned
 `text_return` was trying to create.  See
 `doc/claude/plans/finished/09-native-runtime-rewrite/07-generics.md` step
 7.5 for the emitter-implementation plan.
+
+### 213. Capturing closures cannot be stored in struct fields — full design for the proper fix
+
+**Status:** parse-time diagnostic shipped 2026-05-04 (commit 5b407d6); the
+*proper* fix that lets capturing closures actually persist in struct fields
+is **near-term planned work** — not a "maybe someday" item.  This section
+is the design-of-record for whoever picks it up.
+
+**Why this lands soon, not "deferred indefinitely":** capturing closures
+in struct fields are the natural shape for several patterns loft will
+ship:
+
+- **Async / IO event handlers** — a single struct holding multiple
+  capturing callbacks (`on_message: fn(Message) -> void`,
+  `on_error: fn(Error) -> void`, `on_close: fn() -> void`) where each
+  callback closes over the connection's local state.
+- **Server main loops tracking many signals** — a `Server` struct with
+  fields like `on_request: fn(Request) -> Response`, `on_shutdown:
+  fn() -> void`, `on_metric: fn(Metric) -> void`; each handler
+  captures server-local state (config, counters, db handle).
+- **Game main loops** — an `EventBus` struct or a per-entity
+  `Behaviour` struct with capturing callbacks for collision,
+  damage, level-up, AI tick.  The natural decomposition of a game
+  loop puts handlers in fields keyed by signal name.
+- **State machines** — transition tables stored as struct fields
+  where each transition is a closure capturing the current state's
+  context.
+
+A programmer building any of these will reach for
+`struct Handler { on_X: fn(...) -> ... }` and assign capturing
+lambdas — that's the natural code to write.  Today they'll hit the
+diagnostic; the workaround (top-level fns + manual context-passing)
+becomes very awkward at scale.  Forcing the pattern through plain
+function pointers turns every real handler into a multi-arg fn that
+re-derives context from arguments, defeating the point of having
+local state.
+
+The diagnostic is therefore a holding pattern, not a final answer.
+The fix should land before any of the libraries above ship.
+
+#### Why the diagnostic was shipped first
+
+A struct field of `Type::Function` allocates 4 bytes (just the function id
+`d_nr`) per the existing `element_size(Type::Function) = 4` in
+`src/data.rs`.  A capturing closure value on the eval-stack is 16 bytes:
+4B `d_nr` + 12B `DbRef` pointing at the closure record (which holds the
+captured variables).  Writing 16B into a 4B field corrupted the
+following 12 bytes of host-record state, manifesting as
+"Write to locked store at rec=… fld=…" in interp and `E0308 mismatched
+types` / `E0605 non-primitive cast` in native.
+
+The proper fix is *layout widening*: make struct fn-ref fields hold the
+full 16 bytes so the closure half is real storage.  Pre-existing tests
+at `tests/issues.rs::p4d_fn_ref_as_struct_field`,
+`p4d_tuple_field_with_fn_ref`, `p4d_fn_ref_field_default_init`, and
+`p4d_fn_ref_field_bare_default` were written under the
+"closure half is intentionally null" assumption (see comment at
+`tests/issues.rs:1915`); the proper fix retains that semantic for
+*non-capturing* closures (closure half stays null sentinel) and extends
+it for *capturing* closures (closure half holds a real DbRef to a
+field-owned closure record).
+
+#### The lifetime model is the same as Reference fields
+
+A struct field of `Type::Reference(S, _)` is a 12B `DbRef` whose target
+record is *owned by the host struct*: deep-copied on field write,
+freed when the host is freed, dep-tracked via `get_free_vars`.  All of
+this machinery already exists.  A `Type::Function` field is structurally
+identical with a 4B `d_nr` prefix — the 12B half is a Reference-shaped
+field that owns the closure record.  No new lifetime concept is needed.
+Aliasing is solved by deep-copy on field assignment, exactly as
+`Type::Reference` solves it today.
+
+#### Implementation plan — six steps
+
+**Step 1 — Widen the layout.**
+
+In `src/data.rs`:
+- `element_size(Type::Function) = 16` (was 4).
+- `element_align(Type::Function) = 4` (already is — keep).
+- Verify `element_offsets` and `element_offsets_alignment_max` produce
+  correct positions for nested cases (e.g. `(integer, fn() -> int)`,
+  `(fn() -> int, integer)`, `vector<fn() -> int>`).
+
+This cascade automatically updates tuple element offsets, vector element
+width, and struct field positions.  Every site that computes layout via
+`element_size` picks up the new value without further change.
+
+**Step 2 — Field-write codegen.**
+
+In `src/parser/mod.rs::set_field_check`'s `Type::Function` arm, replace
+the diagnostic + `OpSetInt4`-only path with:
+
+```rust
+Type::Function(_, _, _) => {
+    // Step 2a: write the 4B d_nr at offset 0.
+    let d_nr_only = match &val_code {
+        Value::FnRef(d, _, _) => Value::Int(*d),
+        // For Block-wrapped FnRef (capturing-closure literal), peek
+        // through to find the FnRef and emit the alloc_steps separately.
+        // Use `capturing_fn_ref` walker to find the FnRef.
+        other => extract_fn_ref_d_nr(other).unwrap_or_else(|| other.clone()),
+    };
+    let set_dnr = self.cl("OpSetInt4", &[ref_code.clone(), pos_val.clone(), d_nr_only]);
+
+    // Step 2b: write the 12B closure DbRef at offset+4.
+    //
+    // For non-capturing (closure_var == u16::MAX), write the null
+    // DbRef sentinel to offset+4.  For capturing, deep-copy the
+    // closure record: allocate a new record in the closure-record
+    // store via OpDatabase, copy bytes via OpCopyRecord, store the
+    // new DbRef at offset+4 via the Reference-field mechanism.
+    let closure_pos = Value::Int(if let Value::Int(p) = &pos_val {
+        p + 4   // offset+4 within the host record
+    } else { 4 });
+    let closure_op = if is_non_capturing(&val_code) {
+        // Pad with null DbRef.  See OpNullRefSentinel for the stack-side
+        // analog; here we need a field-write op that stores 12B null at
+        // offset+4 of host_ref's record.  Either:
+        //   (a) New OpSetNullRef(host_ref, pos+4) op.
+        //   (b) Reuse existing default-init path for Reference fields.
+        self.cl("OpSetNullRef", &[ref_code.clone(), closure_pos])
+    } else {
+        // Capturing: emit closure-record alloc + OpCopyRecord into the
+        // field's 12B slot.  Source is the closure_var holding the
+        // already-allocated closure record (from the Block's
+        // alloc_steps).  Pattern matches Type::Reference field write
+        // at line 2295-2308: OpGetField produces the field address;
+        // OpCopyRecord copies source bytes into it.
+        let closure_d_nr = closure_record_known_type(&val_code);  // type of synthetic struct
+        let type_nr = Value::Int(i32::from(self.data.def(closure_d_nr).known_type));
+        let field_ref = self.cl("OpGetField", &[ref_code.clone(), closure_pos, type_nr.clone()]);
+        let closure_var_ref = closure_var_db_ref(&val_code);  // Value::Var(w)
+        self.cl("OpCopyRecord", &[closure_var_ref, field_ref, type_nr])
+    };
+
+    // Sequence them as a Block.  alloc_steps from val_code (closure-record
+    // allocation, captured-var writes) must run BEFORE set_dnr/closure_op.
+    let alloc_steps = extract_block_alloc_steps(&val_code);
+    let mut ops = alloc_steps;
+    ops.push(set_dnr);
+    ops.push(closure_op);
+    v_block(ops, Type::Void, "fn_ref_field_set")
+}
+```
+
+The helpers `is_non_capturing`, `extract_fn_ref_d_nr`,
+`closure_record_known_type`, `closure_var_db_ref`,
+`extract_block_alloc_steps` walk the `Value::Block(...)` produced by the
+`fn_ref_with_closure` path in `src/parser/vectors.rs:735` (where
+`Value::FnRef(d_nr, w, fn_type)` is appended to `alloc_steps`).
+
+**Step 3 — Field-read codegen.**
+
+In `src/parser/mod.rs::get_val`'s `Type::Function` arm (currently around
+line 1921), replace the "read d_nr + push null sentinel" pattern with:
+
+```rust
+Type::Function(_, _, _) => {
+    // Read d_nr (8B push, sign-extended from i32) at offset 0.
+    let read_dnr = self.cl("OpGetInt4", &[code.clone(), p.clone()]);
+    // Read 12B closure DbRef at offset+4.  Mirrors how Reference
+    // fields read their embedded DbRef.
+    let p_plus_4 = match &p {
+        Value::Int(n) => Value::Int(n + 4),
+        _ => /* compose with arithmetic */,
+    };
+    // Choose the closure-record type from the function's declared dep
+    // (the closure_var w's type registers a synthetic struct).
+    let info = self.type_info(/* closure record type */);
+    let read_clos = self.cl("OpGetField", &[code, p_plus_4, info]);
+    v_block(vec![read_dnr, read_clos], tp.clone(), "fn_ref_field_read")
+}
+```
+
+The result is a 20B push (8B d_nr + 12B closure DbRef) — the same
+shape `gen_fn_ref_value` produces on the stack today, so downstream
+`OpCallRef` etc. work without further change.
+
+Note the existing 20B-vs-16B inconsistency at `gen_set_first_at_tos`'s
+`Type::Function` branch (`stack.position -= 4` correction after
+`OpPutFnRef`).  That correction is in the stack-var initialisation
+path, not the field-read path; field-read produces 20B directly so no
+correction is needed.  Document this distinction in a comment at the
+field-read site to prevent confusion.
+
+**Step 4 — Default-init path.**
+
+`to_default(Type::Function)` currently produces `Value::FnRef(0, u16::MAX, …)`
+(see `src/data.rs:526`).  After widening, the default-init field write
+must also write a null DbRef to offset+4.  The `is_non_capturing` branch
+in step 2's codegen handles this — it fires for every literal
+`Value::FnRef` whose `closure_var == u16::MAX`, including the default
+construction.
+
+`tests/issues.rs::p4d_fn_ref_field_default_init` and
+`p4d_fn_ref_field_bare_default` test this path; they should keep
+passing after the fix.
+
+**Step 5 — Free path: extend `get_free_vars` for `Type::Function` fields.**
+
+`src/scopes.rs::get_free_vars` and the `OpFreeRef` recursive walker
+need a `Type::Function` arm that, for each fn-ref struct field,
+reads the 12B closure DbRef at offset+4 and frees the target record.
+The existing `Type::Reference` arm is the template — the only
+difference is the 4B offset for the closure half and the
+short-circuit when the embedded DbRef is null sentinel
+(non-capturing case).
+
+LIFETIME.md § "Function (`Type::Function`) — NOT YET HANDLED"
+documents the broader gap (closure DbRef in 16B fn-ref *stack* slots
+also leaks).  Steps 5 and the stack-slot leak fix can land together
+since they share the "walk the 12B at offset+4 of the fn-ref slot"
+logic.
+
+**Step 6 — Native codegen mirror.**
+
+In `src/generation/`:
+- `set_field_check`'s `Type::Function` arm currently emits a single
+  `OpSetInt4`-equivalent template that stores the i32 d_nr.  Extend to
+  emit the 4B d_nr write *plus* the closure-record alloc + DbRef
+  store at offset+4.  The Reference-field native template already
+  shows how to write a DbRef to a struct field's offset; reuse
+  that pattern for the closure half.
+- Field-read native template needs to produce a `(u32, DbRef)` value
+  by reading both halves: `(stores.store(&db).get_i32(rec, fld_off),
+  stores.store(&db).get_dbref(rec, fld_off + 4))`.  Existing native
+  Reference-field reads provide the second half's pattern; the i32
+  d_nr read is `set_i32_raw`'s sibling.
+- The `(u32, DbRef)` fn-ref tuple shape is already the native value
+  representation — `src/generation/calls.rs::substitute_template_body`
+  has the projection logic that places `.0` (d_nr) and `.1` (closure
+  DbRef) where they're needed.  Field reads/writes feed into this
+  same projection.
+
+Run `cargo test --release --test wrap` and `cargo test --release
+--test issues p4d_fn_ref` after each native-side change to catch
+silent layout breaks.
+
+#### Existing tests to keep green
+
+| Test | Path | Expected after fix |
+|---|---|---|
+| `p4d_fn_ref_as_struct_field` | `tests/issues.rs:1919` | Still passes — non-capturing fns write null sentinel to offset+4 |
+| `p4d_tuple_field_with_fn_ref` | `tests/issues.rs:1985` | Still passes — same path, tuple element |
+| `p4d_fn_ref_field_default_init` | `tests/issues.rs:2123` | Still passes — default `Holder { n: 7 }` writes null sentinel |
+| `p4d_fn_ref_field_bare_default` | `tests/issues.rs:2138` | Still passes — `Holder {}` writes null sentinel |
+| `p213_capturing_closure_in_struct_field_rejected` | `tests/parse_errors.rs` | **Removed** — capturing case now compiles instead of erroring |
+| `p213_noncapturing_closure_in_struct_field_works` | `tests/parse_errors.rs` | Still passes |
+
+New tests to add when the fix lands:
+- `p213_capturing_closure_basic_int` — capture an integer, call via field, verify result.
+- `p213_capturing_closure_text` — capture a text, call via field, verify result.
+- `p213_capturing_closure_reference` — capture a struct-Reference, call via field, verify field of captured ref.
+- `p213_capturing_closure_in_vector_of_struct` — `vector<Box>` where each Box has a capturing closure, exercise them all.
+- `p213_capturing_closure_freed_with_struct` — leak test pattern: allocate Box with capturing closure, drop Box, assert closure record is freed (mirrors `tests/leak.rs` style).
+- `p213_capturing_closure_field_reassignment` — overwrite `b.cb = new_capturing` and verify the old closure record is freed before the new one is copied in (the "free-source bit" pattern from Type::Reference reassignment).
+
+#### Risk register
+
+| Risk | Mitigation |
+|---|---|
+| Layout widening cascades into tuple/vector tests in unexpected ways | Run `./scripts/find_problems.sh --bg` after step 1 alone; check for layout-related panics or silent value drift before proceeding to step 2. |
+| `gen_fn_ref_value`'s 20B-vs-16B `stack.position -= 4` correction conflicts with field-read producing 20B directly | Field-read path uses a separate `v_block` that emits 8B + 12B = 20B; no correction needed.  Document the asymmetry next to the field-read site. |
+| Closure record's synthetic struct type isn't known at every field-write site (e.g. when val_code is a Var, not a literal FnRef) | Walk the Var's declared type — `Type::Function(p, r, dep)` carries `dep` containing the closure_var.  Look up the closure_var's type to get the synthetic struct's d_nr. |
+| `OpCopyRecord` requires the destination to be an existing allocation; freshly-default-init'd field has null DbRef | First-write path needs OpDatabase to allocate the destination closure record before OpCopyRecord copies into it.  Reassignment path uses the existing record (free old, then OpCopyRecord overwrites). |
+| Aliasing — same closure literal stored into two struct fields | Each field write deep-copies via OpCopyRecord into a field-owned record.  No aliasing because each field has its own destination record.  Same model as Reference fields. |
+| Native codegen wrinkles around the `(u32, DbRef)` tuple representation when field-write source is a Block | Pre-existing native template machinery (`substitute_template_body`) already handles projection; the new bit is recognising fn-ref-into-field as a 16B store rather than a 4B store. |
+
+#### Sequencing
+
+This work should land **before** any of these ship:
+
+- The `server` library (`doc/claude/WEB_SERVER_LIB.md`) — handler
+  registries are the canonical use case.
+- The `game_client` / OpenGL game-loop work that registers per-entity
+  behaviours via callback fields.
+- Plan-15 phase 03 (closure-DbRef leak fix) — step 5 of this design
+  IS phase 03's get_free_vars extension; do them together.
+
+Reasonable order: (a) layout widening + step 2/3 codegen so the
+basic case works, (b) get_free_vars + leak tests so it doesn't
+leak, (c) native codegen + cross-mode validation, (d) un-`@EXPECT_FAIL`
+the existing diagnostic regression test and replace with positive
+end-to-end tests, (e) pre-flight a server-handler-registry mini-spike
+to confirm the design holds at real-program scale.
+
+#### Out-of-scope
+
+- Allowing closures to capture *by reference* (loft's closure model is
+  copy-at-definition, per [DESIGN_DECISIONS.md § C38](DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)).
+  Field-stored closures stay copy-at-definition.
+- Heterogeneous `vector<fn(...) -> ...>` of capturing closures with
+  different capture shapes (per the loft-write skill restriction).
+  The layout widening makes it possible in principle, but the type
+  system still requires homogeneous element types in the vector — a
+  separate plan-15 question.
+
+#### Estimated effort
+
+1-2 focused sessions.  Step 1 is mechanical; step 2 is the bulk
+(~150 lines of parser + helpers); steps 3-5 are smaller follow-ons;
+step 6 (native) doubles the effort but is templated by existing
+Reference-field patterns.  Run full suite after each step.
+
+---
 
 ## Web Services
 
