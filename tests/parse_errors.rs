@@ -282,6 +282,31 @@ fn test() {
     );
 }
 
+// P215 — folded into P213.  Same layout limitation, different
+// surface: a fn-typed local var captured into another closure's
+// synthetic closure record gets the same 4B-vs-16B truncation as a
+// user-written struct field.  Diagnostic in
+// `src/parser/control.rs::try_fn_ref_call` keeps users out of the
+// downstream panic ("fn_call_ref: d_nr out of range") that the
+// truncated bytes produce; both close together when P213's
+// layout-widening fix lands.
+#[test]
+fn p215_captured_fn_in_nested_closure_rejected() {
+    code!(
+        "fn test() {
+    inner = fn(x: integer) -> integer { x * 2 };
+    outer = fn(y: integer) -> integer { inner(y) + 1 };
+    print(\"{outer(10)}\\n\");
+}"
+    )
+    .error(
+        "captured fn-typed variable 'inner' cannot be called from inside another closure body (captures of `fn(...) -> ...` types share P213's struct-field layout limitation; the captured fn-ref's d_nr is truncated to 4 bytes when stored in the closure record); define the inner function at file scope, or inline its body inside the outer closure at p215_captured_fn_in_nested_closure_rejected:3:51",
+    )
+    .warning(
+        "Variable inner is never read at p215_captured_fn_in_nested_closure_rejected:2:12",
+    );
+}
+
 #[test]
 fn p213_noncapturing_closure_in_struct_field_works() {
     // Non-capturing closures still parse and work — only the

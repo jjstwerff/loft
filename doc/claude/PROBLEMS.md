@@ -44,7 +44,8 @@ existing entry, not re-open it as a bug.
 | 210 | Native coroutine `while … { yield … }` silently returned 0 because `collect_segments` in `src/generation/coroutine.rs` only recognised `Value::Block` containing yields (the for-loop shape) and missed `Value::Loop` (the while-loop shape).  The state machine ended up with no arms, so every `next_i64` call returned `COROUTINE_EXHAUSTED` and the driving for-loop broke immediately.  Interp drives generators via the bytecode VM, not the state-machine lowering, so it was unaffected.  **Closed (2026-05-04)** by extending the matcher to `Value::Block(_) \| Value::Loop(_)`.  Pinned by `tests/issues.rs::p210_native_coroutine_while_yield`. | High (closed) | n/a — fix lands in `src/generation/coroutine.rs`. |
 | 211 | Coroutine `yield text` produces wrong output on both backends.  Interp returns rc=0 with **empty stdout** (should print three names); native fails codegen with "cast cannot be followed by a method call".  Yielded text's backing String likely doesn't survive the yield boundary.  Reproducer: `fn names() -> iterator<text> { yield "alice"; yield "bob"; yield "carol"; }`.  Surfaced by plan-16 pre-flight (2026-05-04).  Same active-risk class as P205 (text lifetime through codegen layers).  Reproducer in /tmp/p16_probes/y2_x1_text_for.loft. | High (S1, open) | n/a — yielding text is broken end-to-end. |
 | 212 | Nested tuple literals (`((1,2), (3,4))`, triply nested, or any tuple containing a tuple) panicked at `src/state/codegen.rs:1527:38` because the inline match in `gen_set_first_at_tos`'s `Type::Tuple` arm had no case for an inner element of `Type::Tuple(_)` — it fell through to the "unsupported elem" panic.  **Closed (2026-05-04)** by extracting per-leaf `OpPut*` emission into a recursive helper `emit_tuple_put_ops` that descends through nested tuples, computing each leaf's absolute slot offset and emitting in reverse to match the depth-first push order used by tuple-literal evaluation.  Pinned by `tests/issues.rs::p212_nested_tuple_literal` + `p212_triply_nested_tuple_literal`. | High (closed) | n/a — fix lands in `src/state/codegen.rs`. |
-| 213 | Capturing closure stored in struct field panicked under interp at `src/store.rs:963` and rejected in native with E0308 because struct fn-ref fields allocate 4 bytes (just the d_nr) but a capturing-closure value is 16 bytes (4B d_nr + 12B closure DbRef).  Codegen wrote 4 bytes via OpSetInt4 leaving 12 bytes of corrupted state on the stack.  **Closed (2026-05-04, partial)** — parse-time diagnostic shipped; layout-widening fix has a [full design plan in §213 below](#213-capturing-closures-cannot-be-stored-in-struct-fields--full-design-for-the-proper-fix).  Pinned by `tests/parse_errors.rs::p213_capturing_closure_in_struct_field_rejected` + `p213_noncapturing_closure_in_struct_field_works`. | High (closed via diagnostic; layout fix deferred — design recorded) | Define the function at file scope or pass the closure via a fn-typed parameter / return value instead of storing in a struct field. |
+| 213 | Single root cause covering two surfaces: (a) capturing closure stored in a user-written struct field, (b) fn-typed local var captured into another closure (which stores it in the synthetic closure record).  Both: 4B field allocation vs 16B fn-ref value → d_nr truncated, downstream panic ("Write to locked store" / "fn_call_ref: d_nr out of range") or native E0308.  **Closed (2026-05-04, partial)** — parse-time diagnostics shipped on both surfaces; layout-widening fix has a [full design plan in §213 below](#213-capturing-closures-cannot-be-stored-in-struct-fields--full-design-for-the-proper-fix).  Pinned by `tests/parse_errors.rs::p213_capturing_closure_in_struct_field_rejected` + `p213_noncapturing_closure_in_struct_field_works` + `p215_captured_fn_in_nested_closure_rejected`. | High (closed via diagnostic; layout fix deferred — design recorded) | Define inner functions at file scope, or inline their bodies — same workaround serves both surfaces. |
+| 215 | **Duplicate of P213** — same layout limitation, different surface (captured fn-typed local var inside another closure body).  Tracked in P213's section. | (closed alongside P213) | Same as P213. |
 | 214 | **Non-capturing** vector-of-closures (`vector<fn(integer) -> integer> = [|x| {x+1}, |x| {x*2}]`) panics under interp at `src/state/mod.rs:319` and rejects in native with E0605 cast `DbRef as (u32, DbRef)`.  Plan-15 README claims D4 should pass for non-capturing closures; pre-flight shows the documented-supported shape doesn't work.  Surfaced by plan-15 pre-flight (2026-05-04).  Reproducer in /tmp/p15_probes/c0_d4_noncap_vec.loft. | High (S2, open) | Define each fn at top level and pass the names: `fn f(x:integer)->integer{x+1} fn g(x:integer)->integer{x*2}; v = [f, g];`. |
 | 215 | Closure-typed local var unreachable from inside another closure body.  Calling `inner(y)` where `inner = fn(x:integer)->integer{…}` from inside `outer = fn(y:integer)->integer{ inner(y) + 1 }` rejects with "Unknown function inner".  Workaround `(inner)(y)` panics with index-out-of-bounds at `src/database/allocation.rs:162`.  Captured-closure name resolution gap.  Surfaced by plan-15 pre-flight (2026-05-04).  Reproducer in /tmp/p15_probes/c6_d1_nested_local.loft. | High (S2, open) | Inline the inner body, or define both at top level. |
 | 216 | Tuple-capture in closure body diverges silently between backends.  `t = (3, 7); f = fn(x:integer)->integer { t.0 + x }; f(10)` panics under interp at `src/store.rs:227` and produces empty output (rc=0) under native instead of `13`.  Surfaced by plan-15 pre-flight (2026-05-04).  Reproducer in /tmp/p15_probes/c4_d1_tuple_local.loft. | High (S1, open) | Pre-extract: `t0 = t.0; f = fn(x:integer)->integer { t0 + x };`. |
@@ -1072,14 +1073,31 @@ Phase 07 needs a custom emitter (Outcome B path) that emits owned
 `doc/claude/plans/finished/09-native-runtime-rewrite/07-generics.md` step
 7.5 for the emitter-implementation plan.
 
-### 213. Capturing closures cannot be stored in struct fields — full design for the proper fix
+### 213. `Type::Function` storage layout limit — full design for the proper fix
 
-**Status:** parse-time diagnostic shipped 2026-05-04 (commit 5b407d6) —
-that's the correct behaviour for the current release.  The
-layout-widening fix that lets capturing closures actually persist in
-struct fields is a **wanted future feature**, not a release blocker.
-This section is the design-of-record so the work can land cleanly when
-its consumers come into focus.
+**Status:** parse-time diagnostics shipped on two surfaces (struct
+fields 2026-05-04 commit 5b407d6; nested-closure captures 2026-05-04
+follow-up).  These are the correct behaviour for the current release.
+The layout-widening fix that lets fn-ref values actually persist
+through every storage path is **wanted to stop the bug from
+surfacing again** — we've already discovered it twice in one session
+(P213 user struct fields + P215 nested-closure captures), and the
+same root cause sits behind several open feature gaps in plan-15
+(D3, D4, C4, C6) and a subset of plan-06's deferred work.  This
+section is the design-of-record so the work can land cleanly when
+prioritised.
+
+#### Why we keep stumbling into this
+
+The bug isn't one place — it's a layout decision (`element_size(Type::Function) = 4`)
+threaded through every storage container.  Every container that
+takes a `Type::Function` element silently truncates fn-ref values
+from 16/20B down to 4B.  The corrupted bytes look like a random
+d_nr at runtime, so failures present as "fn_call_ref: d_nr out of
+range" / "Write to locked store" / `E0308` / `E0605` in different
+contexts — none of which obviously points back at "your fn-ref slot
+is too narrow."  Over time we'll keep filing P-issues against
+*symptoms* of this single root cause unless we widen the layout.
 
 **Why this matters for a future release:** capturing closures in
 struct fields are the natural shape for several patterns loft will
@@ -1125,6 +1143,30 @@ captured variables).  Writing 16B into a 4B field corrupted the
 following 12 bytes of host-record state, manifesting as
 "Write to locked store at rec=… fld=…" in interp and `E0308 mismatched
 types` / `E0605 non-primitive cast` in native.
+
+#### Surface inventory — every container that touches `Type::Function`
+
+The layout limit appears wherever `element_size(Type::Function) = 4`
+is consulted.  Today's storage container summary (✓ = works fully,
+✕ = layout-limited / diagnostic shipped, ? = under-tested):
+
+| Container | Non-capturing fn-ref | Capturing fn-ref | Status |
+|---|---|---|---|
+| Stack-frame variable (20B slot) | ✓ | ✓ | Works. `gen_fn_ref_value` pads to 16B; `OpPutFnRef` writes 20B; `fn_call_ref` reads d_nr at offset 0, closure DbRef at offset+4. |
+| Struct field (`struct S { cb: fn(...) }`) | ✓ | ✕ (P213) | Diagnostic shipped — capturing closures rejected at parse time |
+| Synthetic closure record's fn-typed field | ✓ | ✕ (P215, dup of P213) | Diagnostic shipped — captured fn-typed vars rejected at parse time |
+| Tuple element (`(fn(...), …)`) | ✓ | ✕ | Existing test at `p4d_tuple_field_with_fn_ref` only covers non-capturing.  Capturing case panics symmetrically; no diagnostic yet. |
+| Vector element (`vector<fn(...)>`) | ✕ partly (P214) | ✕ | Even non-capturing case rejects (P214); capturing case never worked.  Both share this layout root cause. |
+| Hash/Sorted/Index value type | ? | ? | Untested.  Likely fails identically. |
+| Reference-of-fn-typed (`Reference<fn(...)>`) | ? | ? | Probably nonsense / parse error already.  Worth confirming. |
+
+**The fix unifies all rows.**  Once `element_size(Type::Function) = 16`,
+every container's existing "write 16/20B fn-ref into element slot,
+read it back" works because the slot is wide enough.  No per-container
+special case needed beyond the OpSet/OpGet plumbing (step 2/3 below).
+
+Every diagnostic shipped under this issue gets *removed* when the fix
+lands and replaced with positive end-to-end tests (matrix below).
 
 The proper fix is *layout widening*: make struct fn-ref fields hold the
 full 16 bytes so the closure half is real storage.  Pre-existing tests
@@ -1324,25 +1366,78 @@ silent layout breaks.
 | `p4d_fn_ref_field_bare_default` | `tests/issues.rs:2138` | Still passes — `Holder {}` writes null sentinel |
 | `p213_capturing_closure_in_struct_field_rejected` | `tests/parse_errors.rs` | **Removed** — capturing case now compiles instead of erroring |
 | `p213_noncapturing_closure_in_struct_field_works` | `tests/parse_errors.rs` | Still passes |
+| `p215_captured_fn_in_nested_closure_rejected` | `tests/parse_errors.rs` | **Removed** — nested-closure case now compiles instead of erroring |
 
-New tests to add when the fix lands:
-- `p213_capturing_closure_basic_int` — capture an integer, call via field, verify result.
-- `p213_capturing_closure_text` — capture a text, call via field, verify result.
-- `p213_capturing_closure_reference` — capture a struct-Reference, call via field, verify field of captured ref.
-- `p213_capturing_closure_in_vector_of_struct` — `vector<Box>` where each Box has a capturing closure, exercise them all.
-- `p213_capturing_closure_freed_with_struct` — leak test pattern: allocate Box with capturing closure, drop Box, assert closure record is freed (mirrors `tests/leak.rs` style).
-- `p213_capturing_closure_field_reassignment` — overwrite `b.cb = new_capturing` and verify the old closure record is freed before the new one is copied in (the "free-source bit" pattern from Type::Reference reassignment).
+#### Test matrix to pin the fix
+
+When the layout fix lands, every cell here ships as a positive
+end-to-end test (interp + native cross-mode parity via the
+`cross_mode!` harness).  Cells are intentionally exhaustive — the
+layout limit threads through enough container × capture-type
+combinations that selective coverage will leave silent corruption
+in production code we haven't yet written.
+
+| Test | Container | Capture type | Pattern |
+|---|---|---|---|
+| `p213_struct_field_basic_int` | struct | `integer` | `struct S { cb: fn(int) -> int }; n = 5; s = S { cb: fn(x) { x+n } }; s.cb(10) == 15` |
+| `p213_struct_field_text` | struct | `text` | capture `s = "tag"`, callback returns `"{s}: {x}"` |
+| `p213_struct_field_reference` | struct | `Reference<S>` | capture a struct ref, callback returns a field of it |
+| `p213_struct_field_tuple_capture` | struct | `(int, int)` | capture a tuple, callback uses both elements |
+| `p213_struct_field_multi_capture` | struct | mixed `int + text` | two captures, disjoint types |
+| `p213_struct_field_reassignment` | struct | any | `s.cb = new_lambda` — old closure record freed, new one copied; mirrors `Type::Reference` reassignment |
+| `p213_struct_field_default_init` | struct | none (default) | `S { other: …}` with `cb` defaulted to null fn-ref; calling `s.cb(10)` should diagnose at parse time (calling a null fn-ref is undefined) |
+| `p213_struct_field_aliasing` | struct | any | `s2 = S { cb: s1.cb };` — verify s2 has its own closure record (no shared mutation) |
+| `p213_struct_field_freed_with_struct` | struct | any | leak test (mirrors `tests/leak.rs`): allocate, drop, assert closure record freed |
+| `p215_nested_noncapturing` | closure record | `fn(int) -> int` (non-capturing inner) | `outer = fn(y) { inner(y) + 1 }` with `inner = fn(x) { x*2 }` at `outer`'s call site |
+| `p215_nested_capturing` | closure record | `fn(int) -> int` (capturing inner) | `inner` itself captures from outer-outer scope |
+| `p215_three_level_nesting` | closure record | nested closures | `f1 = fn() { f2 = fn() { f3 = fn() { … } } }` — two layers of synthetic records |
+| `p4d_tuple_field_capturing_fn_int` | tuple | `int` | `(fn(int) -> int, integer)` where the fn captures |
+| `p4d_tuple_field_capturing_fn_text` | tuple | `text` | text capture in a tuple-element fn |
+| `p214_vector_capturing_fn_homogeneous` | vector | shared capture shape | `vector<fn(int) -> int>` of capturing lambdas with the same captured types |
+| `p214_vector_noncapturing_lift` | vector | none | the existing P214 case (non-capturing in vector) — currently rejects, should pass after layout fix |
+| `p213_hash_value_fn_typed` | hash | `int` | `hash<text → fn(int) -> int>` registry |
+| `p213_sorted_value_fn_typed` | sorted | `int` | sorted-by-key with fn-typed value |
+| `p213_index_value_fn_typed` | index | `int` | index of `(key, fn)` pairs |
+| `p213_fn_field_passes_to_other_fn` | struct → fn arg | any | `do_thing(s.cb, x)` — fn-ref read from field, passed as fn-typed arg |
+| `p213_fn_field_returns_from_fn` | struct → fn ret | any | `fn extract(s: S) -> fn(int) -> int { s.cb }` — fn-ref read from field, returned |
+| `p213_fn_field_par_worker` | struct → par | any | `for s in items par(r = s.cb(x), 4) { … }` — captured fn-ref called inside parallel worker |
+
+Cross-mode parity: every cell asserted via `cross_mode!` so interp
+and native produce byte-identical stdout.  Leak tests (`*_freed_*`)
+also assert via the `tests/leak.rs` framework that no store
+allocations remain after `test()` returns.
+
+Existing tests that must keep passing through the cascade:
+
+| Test | Path | Why it matters |
+|---|---|---|
+| `p4d_fn_ref_as_struct_field` | `tests/issues.rs:1919` | Non-capturing struct field — should work after fix; the comment "closure half is intentionally null" updates to "closure half is null sentinel for non-capturing fn-refs" |
+| `p4d_tuple_field_with_fn_ref` | `tests/issues.rs:1985` | Non-capturing tuple element — same |
+| `p4d_fn_ref_field_default_init` | `tests/issues.rs:2123` | Default-init fn-ref field — null sentinel still correct |
+| `p4d_fn_ref_field_bare_default` | `tests/issues.rs:2138` | Default-init bare struct — same |
+| All `tests/scripts/*.loft` using fn-refs in any container | `tests/scripts/` | Run via `cargo test --test wrap` — layout cascade may surface silent breaks |
+| Coroutines yielding fn-typed values (plan-16 Y5) | `tests/coroutine_matrix.rs` (when wired) | Yielded fn-ref must round-trip through the state-machine lowering with the new width |
+
+Diagnostic-only regression tests to remove when the fix lands:
+
+- `tests/parse_errors.rs::p213_capturing_closure_in_struct_field_rejected`
+- `tests/parse_errors.rs::p213_noncapturing_closure_in_struct_field_works` (rename to positive test)
+- `tests/parse_errors.rs::p215_captured_fn_in_nested_closure_rejected`
 
 #### Risk register
 
 | Risk | Mitigation |
 |---|---|
 | Layout widening cascades into tuple/vector tests in unexpected ways | Run `./scripts/find_problems.sh --bg` after step 1 alone; check for layout-related panics or silent value drift before proceeding to step 2. |
-| `gen_fn_ref_value`'s 20B-vs-16B `stack.position -= 4` correction conflicts with field-read producing 20B directly | Field-read path uses a separate `v_block` that emits 8B + 12B = 20B; no correction needed.  Document the asymmetry next to the field-read site. |
+| `gen_fn_ref_value`'s 20B-vs-16B `stack.position -= 4` correction (the existing hand-managed asymmetry between stack-var fn-ref slots and on-stack fn-ref values) conflicts with field-read producing 20B directly | Field-read path uses a separate `v_block` that emits 8B + 12B = 20B; no correction needed.  Document the asymmetry next to the field-read site. |
 | Closure record's synthetic struct type isn't known at every field-write site (e.g. when val_code is a Var, not a literal FnRef) | Walk the Var's declared type — `Type::Function(p, r, dep)` carries `dep` containing the closure_var.  Look up the closure_var's type to get the synthetic struct's d_nr. |
 | `OpCopyRecord` requires the destination to be an existing allocation; freshly-default-init'd field has null DbRef | First-write path needs OpDatabase to allocate the destination closure record before OpCopyRecord copies into it.  Reassignment path uses the existing record (free old, then OpCopyRecord overwrites). |
 | Aliasing — same closure literal stored into two struct fields | Each field write deep-copies via OpCopyRecord into a field-owned record.  No aliasing because each field has its own destination record.  Same model as Reference fields. |
 | Native codegen wrinkles around the `(u32, DbRef)` tuple representation when field-write source is a Block | Pre-existing native template machinery (`substitute_template_body`) already handles projection; the new bit is recognising fn-ref-into-field as a 16B store rather than a 4B store. |
+| Default-init fn-ref field (struct allocated without explicit `cb: …`) leaves the closure DbRef half as garbage if not initialised | `to_default(Type::Function)` produces `Value::FnRef(0, u16::MAX, …)` — extend the field-write path to write null DbRef (12 zero bytes) at offset+4 alongside the d_nr.  `tests/issues.rs::p4d_fn_ref_field_default_init` pins this. |
+| Two-pass parser: closure record's struct definition is registered on first pass, but the captured types may be inferred on second pass — element layout changes mid-parse | The closure record's fields are added in `synthesize_closure_record` from `captured_names`, which is finalised at the end of the lambda body parse on each pass.  After the layout fix, fn-typed captures occupy 16B per field on both passes consistently. |
+| `get_free_vars` cascade — extending the `Type::Function` arm here also fires for stack-var fn-ref slots (currently leaked per LIFETIME.md "NOT YET HANDLED").  Side effect of step 5 | Welcome — that's the closure-DbRef leak fix plan-15 phase 03 has been waiting on.  Land them together; ship as a single coordinated fix rather than two near-duplicate ones. |
+| WASM codegen path | The WASM target piggybacks on the same Op stream; no WASM-specific changes expected.  Validate by running `tests/html_wasm.rs` after the fix. |
 
 #### Sequencing
 
@@ -1381,6 +1476,29 @@ to confirm the design holds at real-program scale.
 (~150 lines of parser + helpers); steps 3-5 are smaller follow-ons;
 step 6 (native) doubles the effort but is templated by existing
 Reference-field patterns.  Run full suite after each step.
+
+#### Why prioritise this even though no shipped feature gates on it
+
+We've discovered this layout limit twice in one session (P213 +
+P215, both folded here).  The surface inventory above shows several
+other containers that haven't been carefully tested against capturing
+fn-refs (hash, sorted, index, fn-typed Reference) — those will
+produce more P-issues whenever a programmer reaches into them with
+a capturing closure.  Each of those will look like a different bug
+("array index out of bounds in hash::find", "stale DbRef in
+sorted::insert", etc.) and require diagnosis from scratch.
+
+Fixing the layout once removes the entire class.  The cost is a
+focused 1-2 sessions; the alternative is paying diagnosis cost
+every time the bug surfaces in a new container, plus shipping
+diagnostics that have to be written and removed each time, plus
+the risk that one of the silent-truncation cases (e.g. deep inside
+a hash bucket walk) lands in production code before we notice.
+
+This is the kind of root-cause fix that compounds: the same code
+that lifts P213 + P215 also closes plan-15 D3/D4/C4/C6, partly
+unblocks plan-06's deferred fn-typed worker patterns, and shrinks
+the design surface we have to validate per release.
 
 ---
 

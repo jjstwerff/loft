@@ -3040,6 +3040,48 @@ impl Parser {
         types: &[Type],
     ) -> Option<Type> {
         if !self.vars.name_exists(name) {
+            // P215 — a captured fn-typed var from the enclosing scope
+            // (`outer = fn(y) { inner(y) + 1 }` where `inner` lives
+            // in the surrounding fn) is not callable from inside
+            // another lambda's body.  Routing through the existing
+            // capture mechanism would require persisting the
+            // captured fn-ref through the synthetic closure record's
+            // `Type::Function` field — but that field is only 4B
+            // (just the d_nr) while a fn-ref value is 16B, the same
+            // layout limitation that gates P213 (capturing closures
+            // in struct fields).  Rather than ship a broken halfway
+            // dispatch (interp panics with "fn_call_ref: d_nr out of
+            // range" because the truncated bytes look like a random
+            // d_nr), surface a clear diagnostic at parse time.  The
+            // proper fix lands when P213's layout-widening fix lands
+            // — see PROBLEMS.md § 213 for the design.
+            if let Some((_n, ctype)) = self
+                .capture_context
+                .iter()
+                .find(|(n, t)| n == name && matches!(t, Type::Function(_, _, _)))
+                .cloned()
+            {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "captured fn-typed variable '{name}' cannot be called from inside another closure body \
+                         (captures of `fn(...) -> ...` types share P213's struct-field layout limitation; \
+                         the captured fn-ref's d_nr is truncated to 4 bytes when stored in the closure record); \
+                         define the inner function at file scope, or inline its body inside the outer closure"
+                    );
+                }
+                // Swallow the call-site so the cascade
+                // ("Unknown function inner" + "never read") doesn't
+                // pile on top of the real diagnostic.  Return the
+                // captured fn-ref's declared return type so the
+                // surrounding expression still type-checks against
+                // its expected operand width.
+                let Type::Function(_, ret, _) = ctype else {
+                    unreachable!()
+                };
+                return Some(*ret);
+            }
             return None;
         }
         let v_nr = self.vars.var(name);
