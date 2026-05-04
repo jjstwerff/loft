@@ -285,17 +285,37 @@ impl Output<'_> {
                         let vars = &self.data.def(self.def_nr).variables;
                         !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Text(_))
                     });
+                // T1.8a: same pattern when the source is a `TupleGet` of a
+                // text element from a Variable-context tuple — the tuple's
+                // text fields are `String`, and `output_code_inner` for
+                // `Value::TupleGet` of a text element emits `&var_t.0`
+                // (borrow to &str).  Appending `.to_string()` yields
+                // `&String` not `String`, breaking destructuring of a
+                // tuple-of-text return.  Emit `var_t.0.clone()` instead.
+                let tuple_text_elem_clone = needs_to_string
+                    && matches!(to, Value::TupleGet(v, idx) if {
+                        let vars = &self.data.def(self.def_nr).variables;
+                        !vars.is_argument(*v)
+                            && matches!(vars.tp(*v),
+                                Type::Tuple(elems)
+                                if elems.get(*idx as usize).is_some_and(|e| matches!(e, Type::Text(_))))
+                    });
                 if text_local_clone {
                     if let Value::Var(v) = to {
                         let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{src_name}.clone()")?;
+                    }
+                } else if tuple_text_elem_clone {
+                    if let Value::TupleGet(v, idx) = to {
+                        let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        write!(w, "var_{src_name}.{idx}.clone()")?;
                     }
                 } else {
                     self.output_code_inner(w, to)?;
                 }
                 self.fn_ref_context = prev_ctx;
                 self.tuple_text_to_string = prev_tuple_text;
-                if needs_to_string && !text_local_clone {
+                if needs_to_string && !text_local_clone && !tuple_text_elem_clone {
                     write!(w, ".to_string()")?;
                 } else if wrap_fn_ref {
                     write!(

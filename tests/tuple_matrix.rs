@@ -159,22 +159,20 @@ cross_mode!(
     "#
 );
 
-// E1×D2 return — requires T1.8a tuple-return convention (plan-06 phase 9a).
-#[ignore = "T1.8a — plan-06 phase 9a"]
-#[test]
-fn e1_d2_return_int_int() {
-    common::cross_mode::run_cross_mode(
-        "e1_d2_return_int_int",
-        r#"
-        fn make_pair() -> (integer, integer) { (3, 7) }
-        fn test() {
-            t = make_pair();
-            print("{t.0},{t.1}\n");
-            assert(t.0 == 3 && t.1 == 7, "e1_d2_return");
-        }
-        "#,
-    );
-}
+// E1×D2 return — T1.8a (tuple-return convention) lands the supporting
+// codegen for tuple-of-text returns; basic int/int returns already worked
+// before the fix.  Cell un-ignored once T1.8a closes.
+cross_mode!(
+    e1_d2_return_int_int,
+    r#"
+    fn make_pair() -> (integer, integer) { (3, 7) }
+    fn test() {
+        t = make_pair();
+        print("{t.0},{t.1}\n");
+        assert(t.0 == 3 && t.1 == 7, "e1_d2_return");
+    }
+    "#
+);
 
 // E1n — `integer not null` element (T1.7).
 
@@ -256,19 +254,15 @@ cross_mode!(
     "#
 );
 
-// E2×D2 return — requires T1.8a.
-#[ignore = "T1.8a — plan-06 phase 9a"]
-#[test]
-fn e2_d2_return_text_text() {
-    common::cross_mode::run_cross_mode(
-        "e2_d2_return_text_text",
-        r#"
-        fn make_pair() -> (text, text) { ("alpha", "beta") }
-        fn test() {
-            t = make_pair();
-            print("{t.0}|{t.1}\n");
-            assert(t.0 == "alpha" && t.1 == "beta", "e2_d2_return");
-        }
-        "#,
-    );
-}
+// E2×D2 return — closed by T1.8a fix (tuple-of-text return codegen).
+cross_mode!(
+    e2_d2_return_text_text,
+    r#"
+    fn make_pair() -> (text, text) { ("alpha", "beta") }
+    fn test() {
+        t = make_pair();
+        print("{t.0}|{t.1}\n");
+        assert(t.0 == "alpha" && t.1 == "beta", "e2_d2_return");
+    }
+    "#
+);

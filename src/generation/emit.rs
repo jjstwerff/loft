@@ -185,6 +185,23 @@ impl Output<'_> {
                             && !self.data.def(*d).name.starts_with("Op")
                     );
                     let wrap_text = returns_text && !inner_already_str;
+                    // T1.8a: a tuple return whose signature contains
+                    // `Type::Text` elements emits `(String, …)` per the
+                    // Result-context recursion in `rust_type`.  Each text
+                    // element of the returned tuple literal must produce
+                    // an owned `String`, not a borrowed `&str`.  The same
+                    // `tuple_text_to_string` flag that `output_set` uses
+                    // when assigning to a `(String, …)` local is the
+                    // mechanism: setting it before emitting the
+                    // `Value::Tuple` causes each text element to gain a
+                    // `.to_string()` suffix.
+                    let prev_tuple_text = self.tuple_text_to_string;
+                    if let Type::Tuple(elems) = returned
+                        && elems.iter().any(|e| matches!(e, Type::Text(_)))
+                        && matches!(&**val, Value::Tuple(_))
+                    {
+                        self.tuple_text_to_string = true;
+                    }
                     // P205 (plan-09 phase 07): if the function returns
                     // Type::Text but has no `Type::RefVar(Type::Text(_))`
                     // attribute (no proper work buffer set up by
@@ -208,6 +225,7 @@ impl Output<'_> {
                         write!(w, "(")?;
                     }
                     self.output_code_inner(w, val)?;
+                    self.tuple_text_to_string = prev_tuple_text;
                     if needs_p205_scratch {
                         write!(
                             w,
