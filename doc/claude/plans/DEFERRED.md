@@ -42,7 +42,7 @@ by a future session.
 | Plan | Status | Trigger to unpause |
 |---|---|---|
 | [`14-tuple-validation/`](14-tuple-validation/) phases 02–06 | Phases 00 + 01 shipped in PR #207.  P212 (nested-tuple panic) closed 2026-05-04.  Phase 02 matrix wiring not yet started; phases 03-06 untouched. | Default sequence.  No outstanding S0/S1 bugs in the nested-tuple shape. |
-| [`15-closure-validation/`](15-closure-validation/) | Drafted; phase 00 wiring not started.  **Pre-flight 2026-05-04: 6/12 fail (50% yield).**  Filed P213 (closure-in-struct cluster, C1/C2/C3 × D3, panic at store.rs:963), P214 (vector of non-capturing closures, C0/D4, supposedly-supported shape rejected), P215 (nested closure name resolution, C6/D1, "Unknown function"), P216 (tuple capture in closure, C4/D1, silent divergence). | Any of P213-P216 fixed lifts the first batch of cells; phase 00 wiring becomes regression-cheap once a couple of clusters close. |
+| [`15-closure-validation/`](15-closure-validation/) | Drafted; phase 00 wiring not started.  P213 closed 2026-05-04 (parse-time diagnostic; layout-widening fix deferred).  Open: P214 (vector of non-capturing closures, C0/D4), P215 (nested closure name resolution, C6/D1), P216 (tuple capture in closure, C4/D1). | Any of P214-P216 fixed lifts the next batch of cells. |
 | [`16-coroutine-validation/`](16-coroutine-validation/) | Drafted; phase 00 wiring not started.  P210 closed 2026-05-04 (Value::Loop missed in collect_segments).  P211 (yield text) still open; Y3/Y4 cells need re-probe. | Re-probe Y3/Y4 to see if P210's fix lifted them; otherwise P211 (text lifetime) is the next coroutine fix. |
 | [`17-template-validation/`](17-template-validation/) phases 02–06 | Phase 01 closed in PR #207.  **Phase 02 pre-flight 2026-05-04 confirmed feature gap, not bugs** — `<T: A+B>`, `<A,B>`, `where` clauses all parse-error.  Single-bound generics work; multi-bound and multi-T are scheduled feature work. | Feature work; not bug-yield gated.  Schedule against language priorities. |
 | [`18-match-validation/`](18-match-validation/) phases 02–05 | Phase 01 closed in PR #207 (or-pattern + `@`-binding hang).  P209 (match-guard binding) closed 2026-05-04.  Range patterns + guards now pass; phase 02 wiring (matrix tests for range / guard / null patterns) not yet started. | Default sequence.  No outstanding S0 in match guards. |
@@ -65,6 +65,7 @@ by a future session.
 
 | ID | What | Trigger to unpause |
 |---|---|---|
+| P213 layout fix | Widen fn-ref struct fields from 4B (just d_nr) to 16B (d_nr + closure DbRef) so capturing closures can be stored.  Touches `element_size(Type::Function)`, `set_field_check`, native codegen for OpSet*/OpGet*, and tuple/vector layouts.  Parse-time diagnostic shipped 2026-05-04 keeps users out of the panic. | A user asks for capturing-closures-in-struct-fields with a real use case (game state machine, callback registry, etc.) that the workaround doesn't serve.  Or: validation matrix wires the C1/C2/C3 × D3 cells as PASS rather than CLOSED-rejected. |
 
 ## Decision-pending items (not bugs, but choices)
 

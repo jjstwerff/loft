@@ -6,12 +6,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Plan 15 — Closure validation: capture × storage matrix
 
 **Status: pre-flight surveyed 2026-05-04 — 6/12 probes fail (50% yield).**
-Five P-issues filed: P213 (closure-in-struct-field cluster, C1/C2/C3 × D3),
-P214 (non-capturing vector-of-closure C0/D4), P215 (nested-closure name
-resolution C6/D1), P216 (tuple-capture in closure C4/D1).  Phase 00
-wiring not yet started; bug fixes will likely land first because the
-yield is high enough to make matrix-cell tests cheap regression guards
-on the way through.
+P213 closed 2026-05-04 (capturing-closure-in-struct-field rejected at
+parse time with clear diagnostic; proper layout-widening fix deferred).
+Open: P214 (non-capturing vector-of-closure C0/D4), P215 (nested-closure
+name resolution C6/D1), P216 (tuple-capture in closure C4/D1).  Phase
+00 wiring not yet started; remaining fixes follow.
 
 ## Goal
 

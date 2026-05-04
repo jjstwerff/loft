@@ -255,6 +255,46 @@ fn test() { r = Rect { w: 3.0, h: 4.0 }; r.area(); }"
     // no .error() → compilation must succeed
 }
 
+// P213 — capturing closure stored in struct field used to panic at
+// `src/store.rs:963` ("Write to locked store") in interp and emit
+// E0308 in native because the field allocates 4 bytes (just the
+// d_nr) but a capturing-closure value is 16 bytes (d_nr + closure
+// DbRef).  The codegen wrote 4 bytes via OpSetInt4 leaving 12 bytes
+// of corrupted state on the stack.  Now rejected at parse time with
+// a clear diagnostic plus the workaround.  The proper fix (widen
+// fn-ref struct fields to 16 bytes) is a multi-session refactor
+// touching field allocation, OpSet*/OpGet* family, native codegen,
+// and tuple/vector layouts; until that lands the diagnostic keeps
+// users out of the trap.
+#[test]
+fn p213_capturing_closure_in_struct_field_rejected() {
+    // C1/D3: basic-type capture
+    code!(
+        "struct Box { cb: fn(integer) -> integer }
+fn test() {
+    n = 5;
+    b = Box { cb: fn(x: integer) -> integer { x + n } };
+    print(\"{b.cb(10)}\\n\");
+}"
+    )
+    .error(
+        "capturing closures cannot be stored in struct fields (struct fn-ref fields hold only the function id, not the captured environment); define the function at file scope, or pass the closure as a parameter / return it from a function at p213_capturing_closure_in_struct_field_rejected:4:56",
+    );
+}
+
+#[test]
+fn p213_noncapturing_closure_in_struct_field_works() {
+    // Non-capturing closures still parse and work — only the
+    // capturing case is rejected.
+    code!(
+        "struct Box { cb: fn(integer) -> integer }
+fn test() {
+    b = Box { cb: fn(x: integer) -> integer { x + 1 } };
+    print(\"{b.cb(10)}\\n\");
+}"
+    );
+}
+
 // Direct call to a method that exists on the enum but has no implementation for the variant
 #[test]
 fn direct_call_unimplemented_variant() {
