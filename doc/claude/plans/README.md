@@ -69,6 +69,28 @@ validation track first.  Only if validation has no S0/S1 work in
 flight AND no S2 work in mid-investigation, advance the showcase
 track.
 
+**Yield-based transition rule.** The validation track stays
+primary while matrix bug-yield rates remain high.  When a plan's
+pre-flight survey closes a phase with **0-1 P-issues found in 5+
+cells**, that's the signal that the cheap bugs in that surface
+are exhausted.  Plans that consistently hit the 0-1 threshold
+across consecutive phases get demoted to "matrix-as-documentation"
+(per the gating already documented in plans 15/16/17 risk
+sections) and the freed time advances the showcase track.
+
+This rule keeps both tracks honest:
+- Real-world workloads (OpenGL/world-chunk) DO find bugs, but at
+  lower per-hour rates than the matrix work currently produces
+  (3-6 P-issues/session in May 2026).  Most real-world bugs are
+  also downstream of matrix-foundational bugs, so fixing the
+  matrix first means the showcase work doesn't trip over them.
+- The matrix work is finite — once validated, the same surface
+  doesn't yield more.  When the rate drops, switching to
+  showcase gets a higher marginal yield.
+
+The May 2026 snapshot has matrix yield well above this threshold;
+validation stays primary.  Reconsider per-session as plans close.
+
 ## Conventions
 
 - Subdirectory names are numbered (`NN-slug`) so they sort in the
