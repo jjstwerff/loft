@@ -5,7 +5,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 16 — Coroutine validation: yielded-type × drive-context matrix
 
-**Status: open** (no commits yet)
+**Status: pre-flight surveyed 2026-05-04 — 0/7 probes pass (100% yield,
+including S0 silent-divergence).**  Two P-issues filed: P210 (Y1/X1 yield
+integer + for, native silently returns 0 instead of correct sum — the
+canonical "hello world" coroutine cell), P211 (Y2/X1 yield text + for,
+empty output on interp / native codegen error — same active-risk class
+as P205).  Y3/Y4 cells (Reference, tuple) also fail with backend-specific
+errors but are likely unblocked by P210's fix since they share the
+state-machine lowering path.  Coroutine validation has the highest bug
+density of any current plan — schedule P210 fix as the gating phase 01
+work.
 
 ## Goal
 

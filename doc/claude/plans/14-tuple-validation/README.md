@@ -5,7 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 14 — Tuple validation: full element × destination matrix
 
-**Status: open** (no commits yet)
+**Status: phases 00 + 01 shipped (PR #207).  Phase 02 pre-flight
+2026-05-04 found P212 — nested tuple literals (`((1,2),(3,4))` and
+any tuple containing a tuple) panic at `src/state/codegen.rs:1527`
+on both backends, single shared root cause across 3 probes.  Phase
+02 wiring blocked on P212; phases 03-06 untouched.**
 
 ## Goal
 
