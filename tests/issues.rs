@@ -11095,19 +11095,20 @@ fn run() -> integer {
     .result(Value::Int(37));
 }
 
-/// plan-17/01 (A) caveat — lock-in for the user-facing implicit
-/// type-inference gap.  Same shape as `plan17_generic_tuple_return_with_annotation`
-/// but **without** the explicit `(integer, integer)` annotation on `t`.
-/// Today the parser tags `t` with `Type::Unknown` (the substituted
-/// generic-call return type doesn't propagate to the receiving slot),
-/// so `t.0` rejects with "Expect token ;".  This test goes green
-/// automatically when the inference path lands; un-ignore in the same
-/// commit that closes the gap.
-///
-/// Trigger to unpause: the fix in plan-17 phase 01 follow-up (likely
-/// shares root cause with bug B — see DEFERRED.md).
+/// plan-17/01 (A) caveat — closed 2026-05-04.  Two coordinated changes:
+/// new `predict_generic_return_type` helper (pure read, no def
+/// mutation), and first-pass dispatch in `parser/mod.rs::call`.
+/// Was: `t = min_max(7, 3)` without explicit type annotation typed
+/// `t` as `Type::Unknown` because `try_generic_instantiation` was
+/// second-pass-only; downstream `t.0` rejected with "Expect token ;"
+/// (parser doesn't see Tuple on Unknown receiver), and that error
+/// aborted second pass entirely.  Now: the prediction helper computes
+/// the substituted return type on first pass without creating the
+/// monomorphised def (which would otherwise capture stale first-pass
+/// body IR).  The receiving variable gets the right Tuple type from
+/// first pass; `t.0` parses correctly; second pass runs full
+/// instantiation as before.
 #[test]
-#[ignore = "plan-17 (A) caveat — implicit generic-tuple type inference; un-ignore when the parser propagates substituted return types to receiving variables (DEFERRED.md / USER_FACING.md)"]
 fn plan17_a_implicit_generic_tuple_type_inference() {
     code!(
         "fn min_max<T: Ordered>(a: T, b: T) -> (T, T) {

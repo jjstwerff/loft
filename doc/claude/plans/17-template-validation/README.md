@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 17 — Bounded-generic / interface validation
 
-**Status: phase 01 — 3 of 3 pre-flight bugs closed (interpreter); native (B) follow-up filed as P208.**
+**Status: phase 01 — 3 of 3 pre-flight bugs closed (interpreter); (A) caveat closed too (4 lock-in tests PASS); native (B) follow-up filed as P208.**
 
 Closed (2026-05-04):
 - **(C) built-in `to_text` impls.**  Six `to_text` impls added at
@@ -66,16 +66,20 @@ Open:
   returning text expression.  Workaround: use `--interpret`.
 
 - **(A) caveat — implicit type-inference of generic-tuple call
-  results.**  `t = min_max(7, 3); t.0` still rejects with
-  "Expect token ;".  My initial hypothesis that this shared bug
-  B's root cause turned out wrong; (A) is in the
-  `try_generic_instantiation` path (free-fn calls), gated on
-  `!self.first_pass` at `parser/mod.rs:1065` — same first-vs-
-  second-pass timing pattern as B but in a different code
-  path.  The fix shape is similar (run on both passes) but
-  needs care because `try_generic_instantiation` creates a new
-  monomorphised function definition, not just dispatches a
-  call.  Phase 01 follow-up.
+  results.**  *Closed 2026-05-04.*  Fix in `parser/mod.rs::call`
+  + new `predict_generic_return_type` helper.  The original
+  `try_generic_instantiation` was second-pass-only because it
+  creates a new monomorphised function definition; running it
+  on first pass would capture stale first-pass body IR (verified
+  experimentally — first-pass instantiation produced a runtime
+  free()/SIGABRT crash from corrupted code).  The fix splits the
+  work: on first pass, a pure-read prediction helper computes
+  the substituted return type without creating any def; on
+  second pass, the full instantiation runs as before.  The
+  receiving variable (`t = min_max(7, 3)`) gets a correctly
+  Tuple-typed slot from first pass; downstream `t.0` parses
+  cleanly.  Pinned by `tests/issues.rs::plan17_a_implicit_generic_tuple_type_inference`
+  (now PASS).
 
 ## Goal
 

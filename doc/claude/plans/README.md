@@ -107,6 +107,56 @@ across consecutive phases get demoted to "matrix-as-documentation"
 (per the gating already documented in plans 15/16/17 risk
 sections) and the freed time advances the showcase track.
 
+**Two quality metrics for confidence in the language**, in priority
+order:
+
+1. **Velocity of bug closure.** Not "how many bugs do we have"
+   (every language has bugs) but "how fast can we close them when
+   they appear."  May 2026 baseline: 5-7 P-issues closed per
+   focused session, each pinned by a regression test and clean
+   under both clippy gates.  This rate is the actual product-
+   quality signal — what makes loft trustworthy is that bugs are
+   resolved quickly when found.  Two weeks before this baseline,
+   the rate was structurally lower because the regression net was
+   thinner; the matrix infrastructure (cross-mode harness, lock-in
+   tests, hygiene rule, plan-phase discipline) is what turned
+   one-off fixes into compounding velocity.
+2. **Primary vs. add-on bug location.** Equal-weight to velocity
+   because where a bug lives determines its blast radius:
+   - **Primary implementation bugs** (parser, type system,
+     codegen, runtime) can break entire user projects.  Closing
+     them pre-1.0 is foundational quality work.
+   - **Add-on feature bugs** (specific stdlib functions, niche
+     operators, format-spec corners) usually have viable
+     workarounds; impact is bounded.
+
+   The matrix work is currently primary-heavy by design — that's
+   exactly the right yield for pre-1.0.  As the matrices close
+   their high-yield phases, future bug yield will skew toward
+   add-on features.  When that ratio inverts, the language has
+   reached a new stability tier — fewer foundational issues, more
+   "polish" issues.  That's the natural transition point for
+   shifting attention to the showcase track and reducing matrix
+   intensity.
+
+May 2026 snapshot — closure breakdown (8 P-issues this session):
+
+| ID | Where | Tier |
+|---|---|---|
+| P206 | parser core (match-arm separator) | primary |
+| T1.8a | native codegen (tuple-of-text return) | primary |
+| plan-17 (A) | parser/type-inference (generic-call return propagation) | primary |
+| plan-17 (B) | parser/type-inference (bounded-T method dispatch) | primary |
+| plan-17 (C) | stdlib `to_text` impls | add-on |
+| plan-18 hang | parser core (match arm-arrow recovery) | primary |
+| P207 | native codegen (char-tuple-elem comparison) | primary, narrow |
+| P208 | native codegen (nested scratch.push wrapping) | primary, narrow |
+
+Seven of eight bugs are primary-implementation work; two of those
+are narrow codegen paths users can avoid.  The one add-on item
+(stdlib `Printable` impls) was a doc-vs-stdlib mismatch, not a
+runtime bug.  This is the right yield mix for pre-1.0.
+
 This rule keeps both tracks honest:
 - Real-world workloads (OpenGL/world-chunk) DO find bugs, but at
   lower per-hour rates than the matrix work currently produces
