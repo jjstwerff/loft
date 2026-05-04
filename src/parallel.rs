@@ -541,10 +541,7 @@ pub fn rebase_walk_record(
 /// Panics if a worker thread panics.
 #[allow(clippy::too_many_arguments)]
 // See `run_parallel_direct` for the threading-vs-non-threading split rationale.
-#[cfg_attr(
-    not(feature = "threading"),
-    allow(clippy::needless_pass_by_value)
-)]
+#[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
 #[allow(dead_code)] // tested by tests/threading.rs but no production caller post-phase-3c
 #[must_use]
 pub fn run_parallel_raw(
@@ -930,10 +927,7 @@ fn revive_record_chain(
 /// # Panics
 /// Panics if a worker thread panics.
 // See `run_parallel_direct` for the threading-vs-non-threading split rationale.
-#[cfg_attr(
-    not(feature = "threading"),
-    allow(clippy::needless_pass_by_value)
-)]
+#[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
 #[allow(dead_code)] // tested by tests/threading.rs but no production caller post-phase-4b'
 #[must_use]
 pub fn run_parallel_int(
@@ -1164,10 +1158,7 @@ pub fn run_parallel_fold(
 /// sentinel) is silently absorbed — the caller is expected to enforce
 /// par-safety + side-effect-correctness via phase 5's analyser before
 /// reaching this dispatcher.
-#[cfg_attr(
-    not(feature = "threading"),
-    allow(clippy::needless_pass_by_value)
-)]
+#[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
 #[allow(dead_code, clippy::too_many_arguments)] // step 3 is the first consumer; tested via tests/threading.rs
 pub fn run_parallel_discard(
     stores: &Stores,

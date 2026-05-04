@@ -71,6 +71,29 @@ fn match_arm_types_unify(a: &Type, b: &Type) -> bool {
 }
 
 impl Parser {
+    /// Consume the `=>` separator that follows a match-arm pattern.
+    ///
+    /// If the user wrote `->` instead (a common slip — `->` is the lambda
+    /// return-arrow and the historical TUPLES.md design draft used `->`
+    /// for arms), emit a precise diagnostic and consume the wrong arrow
+    /// so the arm-loop can continue and parse the body.  Without this
+    /// recovery the surrounding loop spins on the unconsumed token —
+    /// see PROBLEMS.md P206.
+    fn expect_match_arm_arrow(&mut self) {
+        if self.lexer.peek_token("->") {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "match arm separator is `=>`, not `->`"
+                );
+            }
+            self.lexer.has_token("->");
+        } else {
+            self.lexer.token("=>");
+        }
+    }
+
     // <block> ::= '}' | <expression> {';' <expression} '}'
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_block(&mut self, context: &str, val: &mut Value, result: &Type) -> Type {
@@ -669,7 +692,7 @@ impl Parser {
                     }
                     self.lexer.token("}");
                 }
-                self.lexer.token("=>");
+                self.expect_match_arm_arrow();
                 let mut arm_code = Value::Null;
                 self.expression(&mut arm_code);
                 continue;
@@ -842,7 +865,7 @@ impl Parser {
                 }
             }
 
-            self.lexer.token("=>");
+            self.expect_match_arm_arrow();
 
             // Parse the arm body expression.
             // If the body starts with `{`, parse it as a scoped block so
@@ -1003,7 +1026,7 @@ impl Parser {
     fn parse_match_wildcard_arm(&mut self, result_type: &mut Type) -> (EnumArm, bool) {
         let guard_opt = self.parse_optional_guard();
         let is_exhaustive = guard_opt.is_none();
-        self.lexer.token("=>");
+        self.expect_match_arm_arrow();
         let mut arm_code = Value::Null;
         let arm_type = if self.lexer.peek_token("{") {
             self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
@@ -1078,7 +1101,7 @@ impl Parser {
             }
             self.lexer.token("}");
         }
-        self.lexer.token("=>");
+        self.expect_match_arm_arrow();
         let mut arm_code = Value::Null;
         let arm_type = if self.lexer.peek_token("{") {
             self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
@@ -1523,7 +1546,7 @@ impl Parser {
                 has_wildcard = true;
             }
 
-            self.lexer.token("=>");
+            self.expect_match_arm_arrow();
             let mut arm_code = Value::Null;
             let arm_type = if self.lexer.peek_token("{") {
                 self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
@@ -1714,7 +1737,7 @@ impl Parser {
             } else {
                 None
             };
-            self.lexer.token("=>");
+            self.expect_match_arm_arrow();
             let mut arm_code = Value::Null;
             let arm_type = self.expression(&mut arm_code);
             if result_type == Type::Void {
@@ -1907,7 +1930,7 @@ impl Parser {
                 has_wildcard = true;
             }
 
-            self.lexer.token("=>");
+            self.expect_match_arm_arrow();
 
             let arm_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
