@@ -32,6 +32,7 @@ unsafe impl Sync for SendMutPtr {}
 /// All three fields are `Arc`-wrapped so that spawning many workers only
 /// increments a reference count per thread instead of deep-copying the
 /// bytecode and library on every `parallel_for` call.
+#[derive(Clone)]
 pub struct WorkerProgram {
     pub bytecode: Arc<Vec<u8>>,
     pub library: Arc<Vec<Call>>,
@@ -540,10 +541,7 @@ pub fn rebase_walk_record(
 /// Panics if a worker thread panics.
 #[allow(clippy::too_many_arguments)]
 // See `run_parallel_direct` for the threading-vs-non-threading split rationale.
-#[cfg_attr(
-    not(feature = "threading"),
-    allow(clippy::needless_pass_by_value, dead_code)
-)]
+#[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
 #[allow(dead_code)] // tested by tests/threading.rs but no production caller post-phase-3c
 #[must_use]
 pub fn run_parallel_raw(
@@ -929,10 +927,7 @@ fn revive_record_chain(
 /// # Panics
 /// Panics if a worker thread panics.
 // See `run_parallel_direct` for the threading-vs-non-threading split rationale.
-#[cfg_attr(
-    not(feature = "threading"),
-    allow(clippy::needless_pass_by_value, dead_code)
-)]
+#[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
 #[allow(dead_code)] // tested by tests/threading.rs but no production caller post-phase-4b'
 #[must_use]
 pub fn run_parallel_int(
@@ -1163,10 +1158,7 @@ pub fn run_parallel_fold(
 /// sentinel) is silently absorbed — the caller is expected to enforce
 /// par-safety + side-effect-correctness via phase 5's analyser before
 /// reaching this dispatcher.
-#[cfg_attr(
-    not(feature = "threading"),
-    allow(clippy::needless_pass_by_value, dead_code)
-)]
+#[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
 #[allow(dead_code, clippy::too_many_arguments)] // step 3 is the first consumer; tested via tests/threading.rs
 pub fn run_parallel_discard(
     stores: &Stores,
@@ -1360,7 +1352,7 @@ pub fn run_parallel_queue(
 #[must_use]
 pub fn run_parallel_queue_fn(
     stores: &Stores,
-    program: WorkerProgram,
+    program: &WorkerProgram,
     fn_pos: u32,
     input: &DbRef,
     element_size: u32,
@@ -1376,7 +1368,7 @@ pub fn run_parallel_queue_fn(
     let buf_ptr = Arc::new(SendMutPtr(buf.as_mut_ptr()));
     let input_t = *input;
     let extras = extra_args.to_vec();
-    let prog = Arc::new(program);
+    let prog = Arc::new(program.clone());
 
     let _batches: Vec<()> = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
         let mut state = prog.new_state(ws);
@@ -1406,7 +1398,7 @@ pub fn run_parallel_queue_fn(
 #[must_use]
 pub fn run_parallel_queue_fn(
     stores: &Stores,
-    program: WorkerProgram,
+    program: &WorkerProgram,
     fn_pos: u32,
     input: &DbRef,
     element_size: u32,

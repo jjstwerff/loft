@@ -778,6 +778,43 @@ fn tuple_compound_assign_rejected() {
         .error("compound assignment is not supported for tuple destructuring — use (a, b) = expr instead at tuple_compound_assign_rejected:1:36");
 }
 
+/// P206: a `match` arm written with `->` (the lambda return-arrow) instead
+/// of the canonical `=>` separator must produce a clear diagnostic — and
+/// MUST NOT hang the parser.  Before the fix, `lexer.token("=>")` failed
+/// silently, the lexer never advanced, and the surrounding arm-loop spun
+/// indefinitely consuming gigabytes of memory before OOM-kill.
+#[test]
+fn p206_match_arrow_rejected_scalar() {
+    code!("fn test() { x = 1; match x { 0 => 0, _ -> 99 } }")
+        .error("match arm separator is `=>`, not `->` at p206_match_arrow_rejected_scalar:1:42");
+}
+
+/// P206: same hazard inside a tuple match — the `parse_tuple_match` loop
+/// shares the arrow-consume helper and must report the same diagnostic.
+#[test]
+fn p206_match_arrow_rejected_tuple() {
+    code!("fn test() { t = (1, 2); match t { (0, _) => 0, (a, b) -> a + b } }")
+        .error("match arm separator is `=>`, not `->` at p206_match_arrow_rejected_tuple:1:57");
+}
+
+/// plan-18/01: an or-pattern containing `@`-bindings (`x @ 1 | x @ 2 => …`)
+/// previously hung the parser indefinitely.  `parse_match_pattern`
+/// doesn't recognise `name @ pattern` inside the or-pattern loop — it
+/// only handles literals, ranges, and bare expressions — so the
+/// inner parse stopped without consuming `@`, and the outer
+/// scalar/tuple/enum match loop re-entered pattern parsing on the
+/// same unconsumed token (infinite loop, eventually OOM).
+///
+/// Fix: `expect_match_arm_arrow` now recovers via
+/// `lexer.recover_to(&[",", "}", ";"])` after a missing `=>` so the
+/// outer loop can pick up the next arm or exit cleanly.  The
+/// diagnostic stays "Expect token =>".
+#[test]
+fn plan18_at_binding_in_or_pattern_does_not_hang() {
+    code!("fn test() { n = 2; match n { x @ 1 | x @ 2 => 0, _ => 99 } }")
+        .error("Expect token => at plan18_at_binding_in_or_pattern_does_not_hang:1:41");
+}
+
 // ── I1/I3 — Interface declarations ───────────────────────────────────────────
 
 /// I3: a minimal empty interface declaration parses without error.

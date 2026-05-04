@@ -11053,3 +11053,129 @@ fn third() -> text {
     .expr("third()")
     .result(Value::Text("hello".to_string()));
 }
+
+// plan-17 phase 01 regressions — bounded-generic / interface validation.
+
+/// plan-17/01 (C): built-in `integer` satisfies `Printable` automatically
+/// per the documented contract.  Before the stdlib `to_text` impls landed,
+/// `<T: Printable>(v: vector<T>)` rejected `vector<integer>` with
+/// "'integer' does not satisfy interface 'Printable': missing to_text".
+#[test]
+fn plan17_printable_integer_satisfies() {
+    code!(
+        "fn first<T: Printable>(v: vector<T>) -> text { v[0].to_text() }
+fn run() -> text {
+    nums: vector<integer> = [10, 20, 30];
+    first(nums)
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("10".to_string()));
+}
+
+/// plan-17/01 (A): `<T: Bound>(...) -> (T, T)` must monomorphise the
+/// return type's tuple element types via `substitute_type`.  Before the
+/// fix the function signature stayed `(DbRef, DbRef)` (parametric T form)
+/// while parameters substituted to `i64`, causing native E0308.  Explicit
+/// element-type annotation is needed today because implicit type-inference
+/// from generic-call results doesn't yet propagate the substituted return
+/// type — see plan-17 phase 01 follow-up.
+#[test]
+fn plan17_generic_tuple_return_with_annotation() {
+    code!(
+        "fn min_max<T: Ordered>(a: T, b: T) -> (T, T) {
+    if a < b { (a, b) } else { (b, a) }
+}
+fn run() -> integer {
+    t: (integer, integer) = min_max(7, 3);
+    t.0 * 10 + t.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(37));
+}
+
+/// plan-17/01 (A) caveat — closed 2026-05-04.  Two coordinated changes:
+/// new `predict_generic_return_type` helper (pure read, no def
+/// mutation), and first-pass dispatch in `parser/mod.rs::call`.
+/// Was: `t = min_max(7, 3)` without explicit type annotation typed
+/// `t` as `Type::Unknown` because `try_generic_instantiation` was
+/// second-pass-only; downstream `t.0` rejected with "Expect token ;"
+/// (parser doesn't see Tuple on Unknown receiver), and that error
+/// aborted second pass entirely.  Now: the prediction helper computes
+/// the substituted return type on first pass without creating the
+/// monomorphised def (which would otherwise capture stale first-pass
+/// body IR).  The receiving variable gets the right Tuple type from
+/// first pass; `t.0` parses correctly; second pass runs full
+/// instantiation as before.
+#[test]
+fn plan17_a_implicit_generic_tuple_type_inference() {
+    code!(
+        "fn min_max<T: Ordered>(a: T, b: T) -> (T, T) {
+    if a < b { (a, b) } else { (b, a) }
+}
+fn run() -> integer {
+    t = min_max(7, 3);
+    t.0 * 10 + t.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(37));
+}
+
+/// plan-19 phase 03 — closed 2026-05-04.  Method-on-parent-enum
+/// dispatch.  When a method is declared on an enum
+/// (`fn classify(self: Shape)`) and called via `.method()` syntax on
+/// a variant value (`s = Circle { … }; s.classify()`), the parser
+/// previously rejected with "Unknown field Circle.classify".  The
+/// fix in `parser/fields.rs` looks up the method on the parent
+/// enum's namespace (`t_<n>Shape_<method>`) before emitting the
+/// unknown-field error, runs on both passes so the call's return
+/// type propagates into first-pass inference of the enclosing
+/// variable, and dispatches via `parse_method`.
+#[test]
+fn plan19_method_on_enum_variant_via_dot() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { w: float, h: float },
+}
+fn classify(self: Shape) -> float {
+    match self {
+        Circle { radius } => 3.14 * radius * radius,
+        Rect { w, h } => w * h,
+    }
+}
+fn run() -> float {
+    s = Circle { radius: 2.0 };
+    s.classify()
+}"
+    )
+    .expr("run()")
+    .result(Value::Float(12.56));
+}
+
+/// plan-17/01 (B) — closed 2026-05-04.  Two coordinated fixes: the
+/// I7 bounded-method dispatch in fields.rs now runs on both passes,
+/// and definitions.rs installs bounds plus t-stubs on the first pass
+/// too (was second-pass-only).  Was: `<T: Printable>(x: T) -> text`
+/// with body `x.to_text() + "!"` rejected with "No matching operator
+/// '+' on 'unknown(0)' and 'text'" because `x.to_text()` returned
+/// `Type::Unknown(0)` on first pass.  Now: bounds and t-stubs install
+/// on both passes (forward-decl tolerated via silent skip when the
+/// interface isn't yet known); the I7 dispatch runs on both passes
+/// and returns the bound's declared method return type from first
+/// pass onward.  The receiving variable (`s` in `s = x.to_text()`)
+/// is correctly typed `text`, and downstream operators like `s
+/// concat-op "!"` resolve cleanly.
+#[test]
+fn plan17_b_bounded_method_return_type_propagates() {
+    code!(
+        "fn label<T: Printable>(x: T) -> text {
+    x.to_text() + \"!\"
+}
+fn run() -> text { label(42) }"
+    )
+    .expr("run()")
+    .result(Value::Text("42!".to_string()));
+}

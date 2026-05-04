@@ -1057,13 +1057,55 @@ impl Parser {
                 },
             )
         };
+        // Trace point: post-find_fn dispatch state.  Captures the most
+        // common debugging vantage — what name resolved to which
+        // d_nr, whether it was a Generic that got skipped, and which
+        // pass we're on.  Enable with `LOFT_TRACE=call`.
+        crate::loft_trace!(
+            call,
+            "name={} types={:?} d_nr={} def_type={:?} first_pass={}",
+            name,
+            types,
+            d_nr,
+            if d_nr == u32::MAX {
+                None
+            } else {
+                Some(self.data.def(d_nr).def_type.clone())
+            },
+            self.first_pass,
+        );
         // skip generic templates — they are not callable directly.
         if d_nr != u32::MAX && self.data.def(d_nr).def_type == DefType::Generic {
             d_nr = u32::MAX;
         }
-        // if no exact match, try generic instantiation.
-        if d_nr == u32::MAX && !self.first_pass && !self.default {
-            d_nr = self.try_generic_instantiation(name, types);
+        // Plan-17 phase 01 (A) — propagate the substituted return type
+        // on first pass so receiving variables (`t = min_max(7, 3)`)
+        // get a correctly-typed `Type::Tuple([…])` slot, enabling
+        // `t.0` / `t.1` on the SAME pass.  Without this, first-pass
+        // returned `Type::Unknown(0)`; the receiving variable stayed
+        // Unknown (change_var_type is a no-op for Unknown); downstream
+        // `t.0` rejected with "Expect token ;" because tuple element
+        // access requires a typed Tuple receiver.  That error aborted
+        // second pass entirely (lexer.token() emits errors regardless
+        // of pass), so the second-pass full instantiation never ran.
+        //
+        // The fix splits the work: on first pass, we predict the
+        // return type only (no def creation — first-pass body IR is
+        // still being built and would produce a stale instantiation);
+        // on second pass, the full `try_generic_instantiation`
+        // creates the monomorphised def.  First-pass IR for the call
+        // is `Value::Null` placeholder; second-pass re-parse builds
+        // the real `Value::Call`.
+        if d_nr == u32::MAX && !self.default {
+            if self.first_pass {
+                let predicted = self.predict_generic_return_type(name, types);
+                if !predicted.is_unknown() {
+                    *code = Value::Null;
+                    return predicted;
+                }
+            } else {
+                d_nr = self.try_generic_instantiation(name, types);
+            }
         }
         if d_nr != u32::MAX {
             self.call_with_named(code, d_nr, list, types, named_args, true)
@@ -1185,6 +1227,51 @@ impl Parser {
         receivers
     }
 
+    /// Plan-17 phase 01 (A) — predict the substituted return type of a
+    /// generic call WITHOUT instantiating the def.  Used on first pass
+    /// so the receiving variable's type is set correctly for downstream
+    /// inference (e.g. `t = min_max(7, 3)` followed by `t.0`).  Returns
+    /// `Type::Unknown(0)` if no prediction is possible (forward decl,
+    /// unresolvable type variable, etc.) — caller falls back to the
+    /// existing first-pass-Unknown path.
+    ///
+    /// Pure read of the generic template's already-populated `returned`
+    /// field plus the type-substitution helper.  No state mutation;
+    /// safe to call multiple times.
+    fn predict_generic_return_type(&self, name: &str, types: &[Type]) -> Type {
+        let generic_name = format!("n_{name}");
+        let g_nr = self.data.def_nr(&generic_name);
+        if g_nr == u32::MAX || self.data.def(g_nr).def_type != DefType::Generic {
+            return Type::Unknown(0);
+        }
+        if types.is_empty() || types[0].is_unknown() {
+            return Type::Unknown(0);
+        }
+        let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes[0].typedef);
+        if tv_nr == u32::MAX {
+            return Type::Unknown(0);
+        }
+        let concrete =
+            Self::resolve_type_var(&self.data.def(g_nr).attributes[0].typedef, tv_nr, &types[0]);
+        if concrete.is_unknown() {
+            return Type::Unknown(0);
+        }
+        let tmpl_returned = self.data.definitions[g_nr as usize].returned.clone();
+        let predicted = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
+        // Trace point: predicted return type for first-pass type
+        // inference of generic call sites.  Used during plan-17 (A)
+        // debugging.  Enable with `LOFT_TRACE=generic`.
+        crate::loft_trace!(
+            generic,
+            "predict name={} types={:?} concrete={:?} → {:?}",
+            name,
+            types,
+            concrete,
+            predicted,
+        );
+        predicted
+    }
+
     /// Try to instantiate a generic function template for the given call-site types.
     /// Returns the `def_nr` of the instantiated function, or `u32::MAX` if no generic matches.
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
@@ -1194,11 +1281,16 @@ impl Parser {
             return u32::MAX;
         }
         if types.is_empty() || types[0].is_unknown() {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot infer type for generic parameter — provide an explicit type annotation"
-            );
+            // First-pass argument types may be incomplete; defer the diagnostic
+            // to second pass when types are stable.  Returning MAX here is the
+            // same effect; it just doesn't emit a noisy first-pass error.
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot infer type for generic parameter — provide an explicit type annotation"
+                );
+            }
             return u32::MAX;
         }
         // Find the type variable def_nr and resolve the concrete type T maps to.
@@ -1209,11 +1301,13 @@ impl Parser {
         let concrete =
             Self::resolve_type_var(&self.data.def(g_nr).attributes[0].typedef, tv_nr, &types[0]);
         if concrete.is_unknown() {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot resolve generic type parameter from argument type"
-            );
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot resolve generic type parameter from argument type"
+                );
+            }
             return u32::MAX;
         }
         // Build the mangled name for the instantiated function.
@@ -1258,7 +1352,20 @@ impl Parser {
             self.data.set_attr_value(d_nr, a_nr, a.default.clone());
         }
         self.data.definitions[d_nr as usize].code = new_code;
-        self.data.set_returned(d_nr, new_returned);
+        self.data.set_returned(d_nr, new_returned.clone());
+        // Trace point: full instantiation result.  Used during plan-17
+        // (A) debugging when verifying that the second-pass def
+        // creation produced the right monomorphised signature.
+        // Enable with `LOFT_TRACE=generic`.
+        crate::loft_trace!(
+            generic,
+            "instantiate name={} mangled={} d_nr={} concrete={:?} returned={:?}",
+            name,
+            mangled,
+            d_nr,
+            concrete,
+            new_returned,
+        );
         // Copy the variable table with substituted types.
         let mut vars = Function::copy(&tmpl_vars);
         vars.substitute_type(tv_nr, &concrete);
@@ -1412,6 +1519,18 @@ impl Parser {
             Type::Vector(inner, deps) => Type::Vector(
                 Box::new(Self::substitute_type(*inner, tv_nr, concrete)),
                 deps,
+            ),
+            // Plan-17 phase 01 — substitute through tuple element types so a
+            // generic `<T: Bound>` returning `(T, T)` (or any tuple shape
+            // containing T) monomorphises correctly.  Without this, the
+            // signature stayed `(DbRef, DbRef)` (the parametric T form)
+            // even when params became `i64`, and native codegen rejected
+            // the body's tuple literal with E0308.
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .into_iter()
+                    .map(|e| Self::substitute_type(e, tv_nr, concrete))
+                    .collect(),
             ),
             other => other,
         }

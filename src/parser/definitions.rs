@@ -90,6 +90,7 @@ impl Parser {
             });
         }
         let fn_nr = self.data.add_fn(&mut self.lexer, &name, &args);
+        self.data.mark_synthetic(fn_nr, "enum_dispatcher");
         self.context = fn_nr;
         self.vars = Function::new(&name, &self.data.def(from_nr).position.file);
         self.data
@@ -638,25 +639,49 @@ impl Parser {
         if self.context == u32::MAX {
             return false;
         }
-        // I4: resolve pending bound names to interface def_nrs in the second pass.
-        if !self.first_pass && !pending_bounds.is_empty() {
+        // Plan-17 phase 01 (B) — bound resolution + t-stub creation now
+        // happens on BOTH passes.  Before, this block was gated on
+        // `!self.first_pass`, leaving `definitions[ctx].bounds` empty
+        // on first pass.  The body parser's bounded-T method-dispatch
+        // path (`fields.rs::field` I7) then couldn't find the t-stub,
+        // returned `Type::Unknown(0)`, and the receiving variable
+        // stayed Unknown — `s + "!"` after `s = x.to_text()` then
+        // failed with "No matching operator '+' on 'unknown(0)' and
+        // 'text'".  By resolving on first pass too, the t-stub exists
+        // when the body parses on first pass and the dispatch returns
+        // the bound's declared return type.
+        //
+        // First-pass forward-decl tolerance: if a bound's interface
+        // hasn't been declared yet (forward reference), `def_nr` returns
+        // u32::MAX.  We skip the diagnostic on first pass (it'll fire
+        // again on second pass with all defs visible) but still install
+        // any bounds we CAN resolve so the body can dispatch.
+        // I4: resolve pending bound names to interface def_nrs.
+        if !pending_bounds.is_empty() {
             let mut bounds = Vec::new();
             for bname in &pending_bounds {
                 let b_nr = self.data.def_nr(bname);
                 if b_nr == u32::MAX {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "'{}' is not a known interface",
-                        bname
-                    );
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "'{}' is not a known interface",
+                            bname
+                        );
+                    }
+                    // First pass: silent skip — interface may be a
+                    // forward declaration; second pass will catch
+                    // genuinely-unknown ones.
                 } else if !matches!(self.data.def_type(b_nr), DefType::Interface) {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "'{}' is not an interface — bounds must be interface names",
-                        bname
-                    );
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "'{}' is not an interface — bounds must be interface names",
+                            bname
+                        );
+                    }
                 } else {
                     bounds.push(b_nr);
                 }

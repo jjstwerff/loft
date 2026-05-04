@@ -765,7 +765,8 @@ removed by the store-typed pipeline.
 | `vector<StructEnum>` | ❌ size > 8 (G1) | ✅ | phase 1 |
 | `sorted<T[key]>` / `hash<T[key]>` / `index<T[key]>` | ❌ rejected | ✅ | phase 4 — `for x in sorted/hash/index` semantics already exist; typed surface plumbs them through |
 | `vector<vector<T>>` (nested) | ❓ | ✅ | phase 4 — element is a Reference<vector<T>>; workers iterate inner via normal vector ops |
-| `vector<fn(...) -> T>` | ❓ | ✅ | phase 1 — fn-refs are 16-byte values, same path as primitives |
+| `vector<fn(...) -> T>` of **non-capturing** lambdas / named fn-refs | ✅ today | ✅ | phase 1 — fn-refs are 16-byte values, same path as primitives.  Pinned by `par_vec_of_fns_input_t4`. |
+| `vector<fn(...) -> T>` of **capturing** lambdas with heterogeneous captures | ❌ rejected today (vector type-check + interp store-write panic) | ⚠ — gated on a pre-par fix to the lambda → vector storage path | Verified by `par_vec_of_capturing_fns_t4` ignored canary.  Failure is **not** in par's worker dispatch — both shorthand and explicit-fn forms fail before par is even reached: shorthand triggers "No common type function([unknown(0)], void, [])" because `\|x\|` can't infer `x`'s type from the vector slot, and explicit `fn(x: integer) -> integer { x * captured }` panics in the interpreter with "Write to locked store" when constructing the vector and fails native codegen with `(u32, DbRef)` vs `i64` mismatch.  Phase 1 closed the par dispatch surface ✅; the lambda → vector storage path is a separate gap tracked by this canary. |
 | `vector<(T, U)>` (tuple element) | ❌ rejected today | ✅ | phase 9 — tuple records have layout via `Type::Tuple::element_size`/`element_offsets`; same stride machinery as struct elements |
 | Generic `vector<T>` (bounded) | ❓ depends on monomorphisation | ✅ | bounded generics already monomorphise at call site |
 
@@ -833,6 +834,22 @@ dictionary, a constant table).  Forbidding parent-shared
 references would force every worker to copy that state into its
 own output, defeating Arc-borrow's whole purpose.  The cost is
 one extra branch per DbRef field at stitch time; cheap.
+
+### D11c.2 — Coroutines (`iterator<T>`) — non-goal
+
+`iterator<T>` is **excluded** from D11a inputs and D11b outputs.
+Two cells one might naively expect:
+
+| Cell | Why excluded |
+|---|---|
+| `par(my_generator(), worker, N)` — generator as par input | Generators are sequential by construction.  `next()` produces the i-th value only after the (i-1)-th has been consumed.  Par needs random / batched access to distribute rows across workers, which the generator protocol doesn't provide.  Even an "eagerly drain into a vector first" coercion is the wrong shape — at that point the user wrote `par(collect(my_generator()), worker, N)` and the input type is `vector<T>` (already covered by D11a), not `iterator<T>`. |
+| Worker returning `iterator<T>` — generator as par output | A generator's suspended frame is heap-allocated in the **worker**'s stores.  Cross-worker handoff would require either copying the frame (potentially several KB of stack snapshot) or extending the rebase walk to chase suspended-frame DbRefs across the worker→parent boundary on every yield.  No real consumer needs this; the worker can collect into a `vector<T>` and return that instead (covered). |
+
+Plan-16 (coroutine validation) confirms that single-threaded
+iterator semantics cover every consumer pattern in the standard
+library, the bench suite, and the example apps.  Revisit only if a
+concrete consumer surfaces — open a follow-up in plan-06 with the
+specific shape, don't pre-design around it.
 
 ### D11c.1 — Tuples and references
 

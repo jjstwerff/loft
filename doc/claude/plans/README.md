@@ -4,6 +4,172 @@ Multi-phase initiatives that span more than one session.  Each
 subdirectory holds the README (goal + index) plus one markdown file
 per phase.
 
+## Companion indexes — every parked item is discoverable
+
+Two files complement this README; together they ensure deferred
+work is never silently dropped.
+
+- **[`DEFERRED.md`](DEFERRED.md)** — internal index of every parked
+  validation phase, deferred P-issue, and "noted but not now" item.
+  Each row carries an explicit `Trigger to unpause:` value.
+- **[`../USER_FACING.md`](../USER_FACING.md)** — the subset of
+  DEFERRED.md that downstream users would notice if shipped, with
+  release-note language, workarounds, and severity tiers
+  (S0 / S1 / S2 / S3).  S0 items are release-blocking; S1 items
+  must ship within two releases of being filed.
+
+**Pre-release ritual:**
+
+```bash
+# 1. Every parked test (lock-in regression net):
+cargo test --release -- --ignored 2>&1 | grep "^test " | head -50
+#    Items now passing → un-ignore + add release note.
+
+# 2. Every parked doc trigger:
+grep -r "Trigger to unpause:" doc/claude/
+#    Walk the list, refresh `Last reviewed:` lines.
+
+# 3. USER_FACING.md status pass:
+#    Every open row gets shipped / still-deferred / dropped tag.
+```
+
+### Closed-work hygiene rule
+
+DEFERRED.md and USER_FACING.md are **open-queue documents**.
+When an item closes, its row is **removed entirely** — not
+struck-through, not moved to a "recently shipped" subsection,
+not retained as historical record.
+
+Closed work already lives in the right places, and duplicating it
+across the open queues lets them drift from "actionable" to
+"universal log":
+
+- **Git history** — commit message documents what changed and why.
+- **Regression test** in `tests/*.rs` — un-ignored when the fix
+  lands; permanent behavioural lock-in.
+- **Plan README** — the relevant plan's closed-section absorbs
+  any architectural lesson learned.
+- **PROBLEMS.md** — closed P-id entries stay (file convention)
+  for cross-reference history.
+- **CHANGELOG.md** — user-facing release notes.
+
+Five places, each the right one for its information shape.  The
+grep target `grep -r "Trigger to unpause:" doc/claude/` should
+always show only currently-actionable items.
+
+**Sole exception**: USER_FACING.md's "Closed-by-decision" section
+is a permanent historical record of explicit non-goals.  Those
+stay so a future contributor finds the decision before
+re-proposing.  They're orthogonal to the open queue.
+
+**Default discipline:** finish the validation plans before shipping
+new feature work.  Override only when USER_FACING.md surfaces an
+S0 item or an S1 item that's been deferred for two releases — see
+USER_FACING.md § "Severity override".
+
+### Two tracks: validation (primary) and showcase (parallel)
+
+Sessions follow two complementary tracks:
+
+- **Validation track (primary).**  Finish-plans-first: validation
+  matrices, P-issue closure, language-quality work.  This is where
+  the bug yield comes from and what makes loft *worth using*.
+  Severity-driven (USER_FACING.md S0/S1/S2 tiers).  **Default
+  candidate for every session.**
+
+- **Showcase track (parallel).**  Strategic-recruitment work:
+  brick-buster, browser-parallel (A10), world-rendering demos,
+  performance benchmarks.  This is what makes loft *visible* and
+  attracts contributors.  Strategic-driven (USER_FACING.md
+  § Strategic showcase track).  **Worked when validation work hits
+  a natural breakpoint** — phase closes, pre-flight survey shows
+  low yield for the next phase, or the showcase item is gating an
+  external commitment (demo date, talk).
+
+The two tracks are orthogonal — a piece of work isn't both
+validation and showcase.  The user's 2026-05-04 priority statement
+locked this in: "[the demo] will not keep me from improving loft
+(that is my first priority) but the OpenGL demo in a good state is
+our biggest asset to get more developers."  Improving loft is the
+first track; the demo is the second.
+
+When a session opens with no clear next step, pick from the
+validation track first.  Only if validation has no S0/S1 work in
+flight AND no S2 work in mid-investigation, advance the showcase
+track.
+
+**Yield-based transition rule.** The validation track stays
+primary while matrix bug-yield rates remain high.  When a plan's
+pre-flight survey closes a phase with **0-1 P-issues found in 5+
+cells**, that's the signal that the cheap bugs in that surface
+are exhausted.  Plans that consistently hit the 0-1 threshold
+across consecutive phases get demoted to "matrix-as-documentation"
+(per the gating already documented in plans 15/16/17 risk
+sections) and the freed time advances the showcase track.
+
+**Two quality metrics for confidence in the language**, in priority
+order:
+
+1. **Velocity of bug closure.** Not "how many bugs do we have"
+   (every language has bugs) but "how fast can we close them when
+   they appear."  May 2026 baseline: 5-7 P-issues closed per
+   focused session, each pinned by a regression test and clean
+   under both clippy gates.  This rate is the actual product-
+   quality signal — what makes loft trustworthy is that bugs are
+   resolved quickly when found.  Two weeks before this baseline,
+   the rate was structurally lower because the regression net was
+   thinner; the matrix infrastructure (cross-mode harness, lock-in
+   tests, hygiene rule, plan-phase discipline) is what turned
+   one-off fixes into compounding velocity.
+2. **Primary vs. add-on bug location.** Equal-weight to velocity
+   because where a bug lives determines its blast radius:
+   - **Primary implementation bugs** (parser, type system,
+     codegen, runtime) can break entire user projects.  Closing
+     them pre-1.0 is foundational quality work.
+   - **Add-on feature bugs** (specific stdlib functions, niche
+     operators, format-spec corners) usually have viable
+     workarounds; impact is bounded.
+
+   The matrix work is currently primary-heavy by design — that's
+   exactly the right yield for pre-1.0.  As the matrices close
+   their high-yield phases, future bug yield will skew toward
+   add-on features.  When that ratio inverts, the language has
+   reached a new stability tier — fewer foundational issues, more
+   "polish" issues.  That's the natural transition point for
+   shifting attention to the showcase track and reducing matrix
+   intensity.
+
+May 2026 snapshot — closure breakdown (8 P-issues this session):
+
+| ID | Where | Tier |
+|---|---|---|
+| P206 | parser core (match-arm separator) | primary |
+| T1.8a | native codegen (tuple-of-text return) | primary |
+| plan-17 (A) | parser/type-inference (generic-call return propagation) | primary |
+| plan-17 (B) | parser/type-inference (bounded-T method dispatch) | primary |
+| plan-17 (C) | stdlib `to_text` impls | add-on |
+| plan-18 hang | parser core (match arm-arrow recovery) | primary |
+| P207 | native codegen (char-tuple-elem comparison) | primary, narrow |
+| P208 | native codegen (nested scratch.push wrapping) | primary, narrow |
+
+Seven of eight bugs are primary-implementation work; two of those
+are narrow codegen paths users can avoid.  The one add-on item
+(stdlib `Printable` impls) was a doc-vs-stdlib mismatch, not a
+runtime bug.  This is the right yield mix for pre-1.0.
+
+This rule keeps both tracks honest:
+- Real-world workloads (OpenGL/world-chunk) DO find bugs, but at
+  lower per-hour rates than the matrix work currently produces
+  (3-6 P-issues/session in May 2026).  Most real-world bugs are
+  also downstream of matrix-foundational bugs, so fixing the
+  matrix first means the showcase work doesn't trip over them.
+- The matrix work is finite — once validated, the same surface
+  doesn't yield more.  When the rate drops, switching to
+  showcase gets a higher marginal yield.
+
+The May 2026 snapshot has matrix yield well above this threshold;
+validation stays primary.  Reconsider per-session as plans close.
+
 ## Conventions
 
 - Subdirectory names are numbered (`NN-slug`) so they sort in the
@@ -62,9 +228,16 @@ the canonical example of this discipline in action.
 
 | Dir | Initiative | Status |
 |---|---|---|
-| [`06-typed-par/`](06-typed-par/) | Simple typed `par`: collapse the 7-variant runtime + 3-fn native dispatch into one store-stitch path; "everything is a store".  Retires ~1100 lines net across `src/parallel.rs` and `src/codegen_runtime.rs`.  **Doubles as a structured bug-hunt of the type-system × native-codegen × parallel-runtime intersection** — 14+ P-issues filed/closed during the work so far (P188-P201 family).  See plan README § "Realised value (so far)" for the running tally. | Phases 0/1/1.5/2a + ARC steps A1/A2/A6 done; A3 in-flight (parser gate pending); A4/A5/A7-A11 open; bug-finding regime active.  **4 ignored canaries** (all tuple, blocked on T1.8a) |
+| [`06-typed-par/`](06-typed-par/) | Simple typed `par`: collapse the 7-variant runtime + 3-fn native dispatch into one store-stitch path; "everything is a store".  Retires ~1100 lines net across `src/parallel.rs` and `src/codegen_runtime.rs`.  **Doubles as a structured bug-hunt of the type-system × native-codegen × parallel-runtime intersection** — 14+ P-issues filed/closed during the work so far (P188-P201 family).  See plan README § "Realised value (so far)" for the running tally. | Phases 0/1/1.5/2a + ARC steps A1/A2/A6 done; A3 in-flight (parser gate pending); A4/A5/A7-A11 open; bug-finding regime active.  Phase 9a (T1.8a prerequisite) closed 2026-05-04; phases 9b/9c/9d/9e unblocked but still open.  **4 ignored canaries** (all par-side tuple dispatch — blocked on 9b/9c/9d, no longer on T1.8a) |
 | [`07-error-messages/`](07-error-messages/) | Better error messages: every error reaches the user as `file:line:col` + concrete message + source line with caret + optional suggestion.  Spans on IR, pc→source-line table, typed `RuntimeError`, retire the implicit panic-vs-sentinel coin-flip. | Phases 0/1/2/3 shipped (rustc-style renderer + caret + UTF-8/tab + cascade dedup + summary line + `LOFT_ERRORS` env + `--errors` CLI + pc→source-loc on panic + SIGSEGV); phases 4-7 open |
 | [`08-repl-and-introspection/`](08-repl-and-introspection/) | REPL + interpreter-introspection tool — `loft>` interactive prompt with persistent state plus a clean CLI surface for IR/Rust/slot-table dumps. | Phase 0 + 1 shipped; phases 2-6 open |
+| [`14-tuple-validation/`](14-tuple-validation/) | Validate tuples are fully typed and round-trip-correct across every {element type × storage destination} cell, with mandatory **interp/native byte-identical stdout** under a new cross-mode harness.  Closes T1.8c (struct-ref move semantics) and decides T1.11a (tuples in struct fields).  Phase 00 freezes the matrix and ships the harness; phases 01-05 fill the cells; phase 06 doc-reconciles. | Phase 00 + 01 shipped (16/17 cells PASS, 1 P207-ignored); P206 (parser hang on `->` arm) and T1.8a (tuple-of-text return under `--native`) closed in passing.  Phases 02-06 open. |
+| [`15-closure-validation/`](15-closure-validation/) | Validate closures (`Type::Function`) round-trip across every {capture composition × storage destination} cell.  Reuses the plan-14 cross-mode harness.  Active risk: closure-DbRef leak in `LIFETIME.md § Function — NOT YET HANDLED`.  Phase 03 (text captures) decides leak fix vs document. | Plan drafted; phase 00 ladder + matrix open. |
+| [`16-coroutine-validation/`](16-coroutine-validation/) | Validate coroutines (`fn() -> iterator<T>`) round-trip across every {yielded type × drive context} cell.  Reuses the plan-14 cross-mode harness.  Pins `yield from` (CO1.4) deferral via CLOSED cells until 1.1+.  Phase 02 (yielded text) is the active state-machine-lowering risk. | Plan drafted; phase 00 ladder + matrix open. |
+| [`17-template-validation/`](17-template-validation/) | Validate bounded generics / interfaces (`<T: Bound>`) across every {T-parameter usage × bound shape} cell.  Reuses the plan-14 cross-mode harness.  Pre-flight survey (5 tests) found a 60% bug rate — three subsystem-distinct issues: parser doesn't extend tuple element/destructure to bounded-generic results; type inference in generic body doesn't propagate bound-supplied method signatures; built-in `Printable` satisfaction contradicts the documented contract.  Highest expected bug yield of the four matrix plans. | Plan drafted; phase 00 ladder + matrix open. |
+| [`18-match-validation/`](18-match-validation/) | Validate `match` expression dispatch across every {subject type × pattern shape} cell.  Reuses the plan-14 cross-mode harness.  Pre-flight (6 tests) found 33% hang rate on or-patterns (`1 \| 2 \| 3 => …`) and `@` bindings — likely sibling of the P206 fix in different `parse_*_match` variants.  Phase 01 closes those hangs; phases 02-05 conditional on yield. | Plan drafted; phase 00 ladder + matrix open. |
+| [`19-struct-enum-validation/`](19-struct-enum-validation/) | Validate struct-enum dispatch (`is`, field capture, match arms, methods) across every {variant payload × dispatch context} cell.  Reuses the plan-14 cross-mode harness.  Pre-flight (5 tests) found 1 bug (20%): method-on-parent-enum-type called via `.method()` on a variant value fails with "Unknown field Variant.method".  Phase 03 closes the C5 method-resolution gap. | Plan drafted; phase 00 ladder + matrix open. |
+| [`20-collection-validation/`](20-collection-validation/) | Validate keyed collections (hash / sorted / index / spacial) across every {collection × operation} cell, with a value-element sub-axis.  Pre-flight (3 tests) hit 67% panic rate — `sorted<>` and `index<>` cleanup both panic with `index out of bounds: the len is 66 but the index is 65535` at `src/database/structures.rs:609` (both backends; basic usage; correct output produced first then panic on scope exit).  Phase 01 closes the cleanup panic; phases 02-05 conditional on yield. | Plan drafted; phase 00 ladder + matrix open. |
 
 ## Deferred initiatives
 

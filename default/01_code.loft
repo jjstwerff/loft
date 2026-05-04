@@ -1235,3 +1235,18 @@ pub struct StructField {
   name:  text not null,
   value: FieldValue,
 }
+
+// Built-in `to_text` impls so primitives satisfy `Printable`
+// automatically.  Placed after every OpFormat* / OpAppend*
+// declaration above so format-string interpolation in the bodies
+// can resolve to the relevant built-in.  Without these impls,
+// `<T: Printable>(x: T)` rejects built-in element types with
+// "missing to_text" (plan-17 phase 03 — also restores the
+// INTERFACES.md and loft-write-skill claim that built-ins
+// satisfy Printable automatically).
+pub fn to_text(self: integer) -> text { "{self}" }
+pub fn to_text(self: float) -> text { "{self}" }
+pub fn to_text(self: single) -> text { "{self}" }
+pub fn to_text(self: boolean) -> text { "{self}" }
+pub fn to_text(self: character) -> text { "{self}" }
+pub fn to_text(self: text) -> text { self }

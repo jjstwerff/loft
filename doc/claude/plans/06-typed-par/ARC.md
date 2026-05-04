@@ -1102,12 +1102,44 @@ Tuple returns — A7.  Tuple inputs — out of plan-06.
 
 ---
 
-### A7 — Close the 4 tuple canaries (gated on T1.8a)
+### A7 — Close the par-tuple canaries (T1.8a unblocked 2026-05-04)
 
-**Status:** OPEN (BLOCKED on T1.8a)
-**Effort:** M (~1 session, post T1.8a)
-**Acceptance test:** all 4 tuple canaries pass; D11b "✅ when tuples
-land" placeholder retires.
+**Status:** OPEN — unblocked 2026-05-04 by T1.8a fix in branch
+`plan-14-tuple-validation` (commit `023ca15`).  T1.8a's actual-error
+survey turned the original ~200-LoC design (new `Value::ReturnTuple`
+IR variant + `OpReturnTuple` opcode + caller-pre-allocated slot)
+into a ~30-LoC fix in `src/generation/{mod.rs,emit.rs,dispatch.rs}`
+— see PLANNING.md § T1.8a for details.  No `OpReturnTuple` opcode
+exists; the par dispatch wires through the same Variable-context
+tuple-element type-routing the general fn-return path uses.
+
+A7's per-arity expectation list grew from the plan-14 phase 02 /
+type-spectrum audit (2026-05-04, plan-06 type-spectrum commit
+`9db18fd`).  The 4 originally-tracked canaries plus the 3 new
+broader-coverage canaries are now A7's full target set.
+
+**Effort:** M (~1 session)
+**Acceptance test:** all 7 tuple canaries pass; D11b "✅ when
+tuples land" placeholder retires.
+
+#### Canaries closed by A7
+
+| Canary | Shape | Closed by sub-step |
+|---|---|---|
+| `par_tuple_input_int_int` | 2-arity scalar input | A7.0 (input dispatch) — already closed by phase 4d.B + P189; verify still green |
+| `par_tuple_input_int_text` | 2-arity mixed input | A7.0 — closed by P189d; verify |
+| `par_tuple_return_int_int` | 2-arity scalar return | A7.1 (Wide-return path) |
+| `par_tuple_return_int_text` | 2-arity mixed return | A7.1 |
+| `par_tuple_return_struct_text` | 2-arity ref + text return | A7.1 |
+| `par_tuple_return_three_arity` *(new 2026-05-04)* | 3-arity scalar return — pins "any arity" claim | A7.1 |
+| `par_tuple_return_nested` *(new 2026-05-04)* | `((A, B), C)` nested-tuple return | A7.1 |
+| `par_tuple_destructure_in_for` | fused-for tuple destructure binding | A7.2 (Destructure binding) |
+
+Adjacent canary, NOT closed by A7 (different fix surface):
+- `par_vec_of_capturing_fns_t4` — heterogeneous capturing closures
+  in `vector<fn(...)>`.  Failure is at vector-construction (lambda
+  → vector storage path), not at par dispatch.  Tracked in plan-15
+  D4; cross-referenced by DESIGN.md D11a row 8.
 
 #### Why seventh
 
@@ -1165,8 +1197,9 @@ for _t in pairs par(r = work(_t.0, _t.1), 4) { use(r) }
 
 | Risk | Mitigation |
 |---|---|
-| T1.8a slips beyond plan-06's window | A7 punts; ARC.md closes without A7; D11b placeholder remains. |
+| ~~T1.8a slips beyond plan-06's window~~ | *Retired 2026-05-04* — T1.8a closed via commit `023ca15`. |
 | P199 (native E0499 double-borrow on tuple) lands as a blocker for native tuple compilation | Document in PROBLEMS.md P199 follow-up; A7 covers interpreter mode first; native-mode tuple par becomes A7.1.  Note: A1 confirmed P199 also fires in `tests/html_wasm.rs::moros_editor_html_smoke` (`OpCopyRecord(stores, n_build_chunk(stores, …), …)`) and in `bench/11_par/bench.loft` native column (`format_float(&mut s, t_5float_round(stores, …), …)`) — A7's hoist-inner-`&mut stores` fix closes all three simultaneously. |
+| Native par dispatch rejects `Type::Tuple` worker returns at `Parallel worker return type 'tuple(...)' (size 16) is not supported` | A7.1 is exactly this fix — the per-canary failure mode is uniform across the 5 return-cases; one Wide-return route closes all of them.  Pre-flight verified the failure shape is independent of element type / arity. |
 
 #### Out of scope
 
@@ -1376,7 +1409,21 @@ Phase 5c Arc-wrap parent stores.  Non-`par_light` deprecation paths.
 
 ### A10 — Browser parallel via wasm-bindgen-rayon
 
-**Status:** OPEN
+**Status:** OPEN — strategic showcase track.  Advanced when
+validation phases hit natural breakpoints; **does not displace
+validation work** (loft-improvement is the first priority per
+the user's 2026-05-04 priority statement; A10 is the highest-
+priority recruitment deliverable but its severity is S2 —
+sequential WASM works, A10 lifts it to parallel — so it doesn't
+qualify for the severity-override of "finish plans first").
+See `USER_FACING.md § Strategic showcase track` for sequencing.
+
+The named consumer is the user themselves: parallel chunk-mesh
+generation for browser-rendered 3D worlds.  The supporting
+infrastructure (WebGL bindings, native OpenGL, gallery runner,
+`brick-buster.html`) is already shipped.  A10 is the missing
+parallelism unlock.
+
 **Effort:** XL (2-3 sessions, split into 3 sub-PRs)
 **Acceptance test:** the gallery's `bricks_par.loft` example runs at
 ≥ 2× single-thread speed in Chrome with `crossOriginIsolated`;

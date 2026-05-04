@@ -185,6 +185,23 @@ impl Output<'_> {
                             && !self.data.def(*d).name.starts_with("Op")
                     );
                     let wrap_text = returns_text && !inner_already_str;
+                    // T1.8a: a tuple return whose signature contains
+                    // `Type::Text` elements emits `(String, …)` per the
+                    // Result-context recursion in `rust_type`.  Each text
+                    // element of the returned tuple literal must produce
+                    // an owned `String`, not a borrowed `&str`.  The same
+                    // `tuple_text_to_string` flag that `output_set` uses
+                    // when assigning to a `(String, …)` local is the
+                    // mechanism: setting it before emitting the
+                    // `Value::Tuple` causes each text element to gain a
+                    // `.to_string()` suffix.
+                    let prev_tuple_text = self.tuple_text_to_string;
+                    if let Type::Tuple(elems) = returned
+                        && elems.iter().any(|e| matches!(e, Type::Text(_)))
+                        && matches!(&**val, Value::Tuple(_))
+                    {
+                        self.tuple_text_to_string = true;
+                    }
                     // P205 (plan-09 phase 07): if the function returns
                     // Type::Text but has no `Type::RefVar(Type::Text(_))`
                     // attribute (no proper work buffer set up by
@@ -208,6 +225,7 @@ impl Output<'_> {
                         write!(w, "(")?;
                     }
                     self.output_code_inner(w, val)?;
+                    self.tuple_text_to_string = prev_tuple_text;
                     if needs_p205_scratch {
                         write!(
                             w,
@@ -882,7 +900,24 @@ impl Output<'_> {
                     // `Str::new(...)` would produce `Str::new(return Str::new(X))`
                     // which fails Rust type-check.  Same reasoning for narrow
                     // int casts: the return statement carries the right type.
-                    let value_is_return = matches!(v.unspan(), Value::Return(_));
+                    //
+                    // P208 (plan-17 phase 01 follow-up): the same redundancy
+                    // applies when the value is a `Value::Block` whose tail
+                    // expression is a `Value::Return` (recursively).  The
+                    // inner Return handles its own scratch.push wrap; the
+                    // outer wrap_result wrap then surrounds an unreachable
+                    // expression (the Block's tail has type `!`), which
+                    // rustc rejects with E0282 because `to_string()` can't
+                    // be inferred on the never type.  Walk through Blocks
+                    // and Spans to detect tail-Return.
+                    fn tail_is_return(v: &Value) -> bool {
+                        match v.unspan() {
+                            Value::Return(_) => true,
+                            Value::Block(bl) => bl.operators.last().is_some_and(tail_is_return),
+                            _ => false,
+                        }
+                    }
+                    let value_is_return = tail_is_return(v);
                     let wrap_result = is_return_expr && is_text_result && !value_is_return;
                     // Iterator-next blocks (name "iter next" / "sorted iter next")
                     // return their element value OR `i64::MIN` as the

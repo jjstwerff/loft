@@ -330,8 +330,22 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         Type::Keys => "&[Key]",
         Type::Void => "()",
         // N8a.1: emit the correct Rust tuple type, e.g. (i32, i64) for (integer, long).
+        // T1.8a: in Result context, recurse with Variable context for element
+        // types so a tuple-of-text return signature is `(String, String)` —
+        // matching the caller's owned-tuple slot.  Without this the signature
+        // becomes `(Str, Str)` (Result-context Text → "Str") while the
+        // caller's local declares `(String, String)` (Variable-context),
+        // producing a type mismatch.  Argument/Variable contexts already
+        // recurse with their own context (giving `(&str, &str)` or
+        // `(String, String)` respectively), which matches the call site
+        // and the variable slot.
         Type::Tuple(elems) => {
-            let parts: Vec<String> = elems.iter().map(|e| rust_type(e, context)).collect();
+            let elem_context = if matches!(context, Context::Result) {
+                &Context::Variable
+            } else {
+                context
+            };
+            let parts: Vec<String> = elems.iter().map(|e| rust_type(e, elem_context)).collect();
             return format!("({})", parts.join(", "));
         }
         Type::Rewritten(inner) => return rust_type(inner, context),
