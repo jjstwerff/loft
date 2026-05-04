@@ -5,7 +5,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 20 — Keyed collection validation (hash / sorted / index / spacial)
 
-**Status: open** (no commits yet)
+**Status: deferred — pre-flight panic does not currently reproduce.**
+
+The 2026-05-04 pre-flight survey saw a runtime panic
+(`index out of bounds: the len is 66 but the index is 65535` at
+`src/database/structures.rs:609`) on basic `sorted<>` and
+`index<>` cleanup, both backends.  A follow-up run-30-times
+hammer on the same inputs produced 0 panics, on an identical
+binary, with no intervening source change.  The panic is either
+flaky (timing/memory-layout-dependent) or required some
+intermediate session state I can't identify post-hoc.
+
+**Trigger to unpause:** any user-reported `index out of bounds`
+panic at `src/database/structures.rs:609`, or a deterministic
+reproducer that surfaces during plan-15/16/17/18/19 cell runs.
+The matrix in [00-matrix.md](00-matrix.md) is preserved as
+documentation; the phase ladder is correct if/when the bug
+re-surfaces.
 
 ## Goal
 

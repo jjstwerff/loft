@@ -5,7 +5,42 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 17 — Bounded-generic / interface validation
 
-**Status: open** (no commits yet)
+**Status: phase 01 partial — 2 of 3 pre-flight bugs closed, 1 open.**
+
+Closed (2026-05-04):
+- **(C) built-in `to_text` impls.**  Six `to_text` impls added at
+  the end of `default/01_code.loft` (after every OpFormat /
+  OpAppend declaration so `"{self}"` interpolation resolves) —
+  one each for `integer`, `float`, `single`, `boolean`,
+  `character`, and `text`.  Built-in types now satisfy
+  `Printable` automatically as the docs claimed.  Pinned by
+  `plan17_printable_integer_satisfies` in `tests/issues.rs`.
+- **(A) `substitute_type` recurses through `Type::Tuple`.**
+  Before the fix, a `<T: Bound>(a: T, b: T) -> (T, T)` had
+  parameters substituted to `i64` but the return type stayed
+  `(DbRef, DbRef)` (parametric T form), causing native E0308.
+  Fix: `Type::Tuple(elems)` arm in `Parser::substitute_type`
+  maps each element through the substitution.  Pinned by
+  `plan17_generic_tuple_return_with_annotation`.  **Caveat:** the
+  fix requires an **explicit element-type annotation** on the
+  receiving variable (`t: (integer, integer) = …`).  Implicit
+  type-inference from a generic-call result doesn't yet
+  propagate the substituted return type to the receiving slot,
+  so `t = min_max(7, 3); t.0` still trips the parser.  Tracked
+  as the phase-01 follow-up alongside (B) — likely the same
+  root cause.
+
+Open:
+- **(B) bounded-T method-call return type inference.**
+  `<T: Printable>(x: T) -> text { x.to_text() ++ "!" }` rejects
+  with "No matching operator '+' on 'unknown(0)' and 'text'".
+  `x.to_text()` returns `Type::Unknown(0)` instead of the
+  interface-declared `text`.  Probably the same dispatch path
+  that drives (A)'s caveat — the bounded-T dispatch isn't
+  propagating the bound's declared return type into the
+  inference flow.  Phase 01 follow-up; deeper fix than (A) and
+  (C) (likely touches `parse_method` / `call_dependencies` or
+  the t-stub return-type lookup).
 
 ## Goal
 

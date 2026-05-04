@@ -1413,6 +1413,18 @@ impl Parser {
                 Box::new(Self::substitute_type(*inner, tv_nr, concrete)),
                 deps,
             ),
+            // Plan-17 phase 01 — substitute through tuple element types so a
+            // generic `<T: Bound>` returning `(T, T)` (or any tuple shape
+            // containing T) monomorphises correctly.  Without this, the
+            // signature stayed `(DbRef, DbRef)` (the parametric T form)
+            // even when params became `i64`, and native codegen rejected
+            // the body's tuple literal with E0308.
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .into_iter()
+                    .map(|e| Self::substitute_type(e, tv_nr, concrete))
+                    .collect(),
+            ),
             other => other,
         }
     }

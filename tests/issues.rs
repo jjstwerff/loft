@@ -11053,3 +11053,44 @@ fn third() -> text {
     .expr("third()")
     .result(Value::Text("hello".to_string()));
 }
+
+// plan-17 phase 01 regressions — bounded-generic / interface validation.
+
+/// plan-17/01 (C): built-in `integer` satisfies `Printable` automatically
+/// per the documented contract.  Before the stdlib `to_text` impls landed,
+/// `<T: Printable>(v: vector<T>)` rejected `vector<integer>` with
+/// "'integer' does not satisfy interface 'Printable': missing to_text".
+#[test]
+fn plan17_printable_integer_satisfies() {
+    code!(
+        "fn first<T: Printable>(v: vector<T>) -> text { v[0].to_text() }
+fn run() -> text {
+    nums: vector<integer> = [10, 20, 30];
+    first(nums)
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("10".to_string()));
+}
+
+/// plan-17/01 (A): `<T: Bound>(...) -> (T, T)` must monomorphise the
+/// return type's tuple element types via `substitute_type`.  Before the
+/// fix the function signature stayed `(DbRef, DbRef)` (parametric T form)
+/// while parameters substituted to `i64`, causing native E0308.  Explicit
+/// element-type annotation is needed today because implicit type-inference
+/// from generic-call results doesn't yet propagate the substituted return
+/// type — see plan-17 phase 01 follow-up.
+#[test]
+fn plan17_generic_tuple_return_with_annotation() {
+    code!(
+        "fn min_max<T: Ordered>(a: T, b: T) -> (T, T) {
+    if a < b { (a, b) } else { (b, a) }
+}
+fn run() -> integer {
+    t: (integer, integer) = min_max(7, 3);
+    t.0 * 10 + t.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(37));
+}
