@@ -219,7 +219,14 @@ Phase 9 closes these `#[ignore]`d canaries from
 | `par_tuple_return_int_int` | 9c |
 | `par_tuple_return_int_text` | 9c |
 | `par_tuple_return_struct_text` | 9c |
+| `par_tuple_return_three_arity` | 9c — pins the "any arity" claim concretely |
+| `par_tuple_return_nested` | 9c — pins the nested-tuple-return shape |
 | `par_tuple_destructure_in_for` | 9d |
+
+Adjacent canary (NOT closed by phase 9 — different fix surface):
+- `par_vec_of_capturing_fns_t4` — fails at vector construction
+  (lambda → vector storage path), not at par dispatch.  See
+  DESIGN.md D11a row 8 (split row).  Tracked in plan-15 D4.
 
 ## Loft-side prerequisites
 

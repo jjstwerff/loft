@@ -858,3 +858,101 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(36));
 }
+
+// ── Capturing-closure-in-vector canary (DESIGN.md D11a row 8 verification) ──
+//
+// D11a row 8 was originally optimistic about `vector<fn(...) -> T>`.  This
+// canary pins the actual behaviour: capturing lambdas with **heterogeneous**
+// captured environments cannot be stored in a `vector<fn(...) -> T>` even
+// before par is reached.
+//
+// Failure modes (verified 2026-05-04):
+// - Shorthand `|x| { x * a }`: parser emits "No common type
+//   function([unknown(0)], void, [])" because the shorthand has no context
+//   for `x`'s type when stored in a vector slot.
+// - Explicit `fn(x: integer) -> integer { x * a }`: interp panics with
+//   "Write to locked store at rec=549 fld=0" during vector construction;
+//   `--native` codegen rejects the assignment with a `(u32, DbRef)` vs `i64`
+//   type mismatch.
+//
+// The fix is upstream of par — in the lambda → vector storage path — so the
+// closing phase is NOT plan-06 phase 1 (which closed the par dispatch
+// surface for fn-refs and remains valid for non-capturing forms via
+// `par_vec_of_fns_input_t4`).  Filed against plan-15 phase-04ish work:
+// closure-DbRef heterogeneity in vector storage.
+
+#[test]
+#[ignore = "vector<capturing-fn> with heterogeneous captures rejected at vector-construction; not a par-side bug.  See DESIGN.md D11a row 8 (split row)."]
+fn par_vec_of_capturing_fns_t4() {
+    // Each lambda captures a distinct scalar `n` and applies `f(10)`.
+    // Expected once the underlying vector storage works:
+    // 10*2 + 10*3 + 10*4 + 10*5 = 140.
+    code!(
+        "fn apply(f: fn(integer) -> integer) -> integer { f(10) }
+fn run() -> integer {
+    a = 2;
+    b = 3;
+    c = 4;
+    d = 5;
+    fs: vector<fn(integer) -> integer> = [
+        |x| { x * a },
+        |x| { x * b },
+        |x| { x * c },
+        |x| { x * d }
+    ];
+    total = 0;
+    for f in fs par(r = apply(f), 4) { total += r; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(140));
+}
+
+// ── Tuple-arity coverage canaries (phase 9 inventory follow-up) ──
+//
+// Phase 9's narrative says "any arity, any element type" but the existing 4
+// canaries are all 2-arity scalar/text/Reference combinations.  Two
+// canaries cover the "any-arity" claim concretely:
+//   - 3-arity scalar tuple I/O
+//   - Nested-tuple I/O (`((A, B), C)`)
+// Both reuse the existing par_tuple_return ignore reason since they live in
+// the same fix surface.
+
+#[test]
+#[ignore = "par-tuple-return: 3-arity tuple workers — covered by plan-06 phase 9c"]
+fn par_tuple_return_three_arity() {
+    code!(
+        "struct Score { value: integer }
+fn triple(s: const Score) -> (integer, integer, integer) {
+    (s.value, s.value * 2, s.value * 3)
+}
+fn run() -> integer {
+    sl: vector<Score> = [Score { value: 1 }, Score { value: 2 }];
+    sum = 0;
+    for s in sl par(r = triple(s), 4) { sum += r.0 + r.1 + r.2; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(18)); // (1+2+3) + (2+4+6) = 18
+}
+
+#[test]
+#[ignore = "par-tuple-return: nested-tuple workers — covered by plan-06 phase 9c"]
+fn par_tuple_return_nested() {
+    code!(
+        "struct Score { value: integer }
+fn pair_and_double(s: const Score) -> ((integer, integer), integer) {
+    ((s.value, s.value + 1), s.value * 2)
+}
+fn run() -> integer {
+    sl: vector<Score> = [Score { value: 1 }, Score { value: 2 }];
+    sum = 0;
+    for s in sl par(r = pair_and_double(s), 4) { sum += r.0.0 + r.0.1 + r.1; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(14)); // ((1,2),2)+((2,3),4) → (1+2+2)+(2+3+4) = 5+9 = 14
+}

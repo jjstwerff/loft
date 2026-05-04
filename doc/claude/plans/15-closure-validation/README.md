@@ -80,7 +80,7 @@ Two axes.  Every cell is `PASS:test_name`, `FIX:phase`, or
 | D1 | **Local variable** — `f = \|x\| { … }; f(3)` | Primary tested path |
 | D2 | **Direct stack** — function arg (`f(my_lambda)`), return value, inline `(\|x\| {…})(3)` | Partial coverage |
 | D3 | **Struct field** — `struct S { cb: fn(integer) -> integer }`, instantiate, call `s.cb(arg)` | LIFETIME.md says struct-field closures work but the closure-leak gap may bite here |
-| D4 | **Vector element** — `vector<fn(integer) -> integer>` | Restricted: non-capturing lambdas only, OR all elements the same closure type.  Cells split into PASS (non-capturing, monomorphic) and CLOSED (capturing-heterogeneous → exact diagnostic) |
+| D4 | **Vector element** — `vector<fn(integer) -> integer>` | Restricted: non-capturing lambdas only, OR all elements the same closure type.  Cells split into PASS (non-capturing, monomorphic) and CLOSED (capturing-heterogeneous → exact diagnostic).  Verified failure mode: shorthand `\|x\|` triggers "No common type function([unknown(0)], void, [])"; explicit `fn(x: T) { … }` form panics in interp ("Write to locked store") and rejects in native (`(u32, DbRef)` vs `i64`).  Pinned by `par_vec_of_capturing_fns_t4` ignored canary in `tests/threading_chars.rs`. |
 | D5 | **Tuple element** | Covered by plan-14 phase 03 — cross-reference, no new cells here |
 
 ### Cell key
