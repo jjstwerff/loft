@@ -1526,7 +1526,7 @@ fn n_parallel_queue_fn(stores: &mut Stores, stack: &mut DbRef) {
 
     let buf = crate::parallel::run_parallel_queue_fn(
         stores,
-        program,
+        &program,
         fn_pos,
         &v_input,
         element_size,
