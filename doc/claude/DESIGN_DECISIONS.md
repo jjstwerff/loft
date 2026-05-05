@@ -100,9 +100,11 @@ planned `Mutable<T>` stdlib helper covers the
 [EventLoop](EVENT_LOOP.md) and first-game use cases acceptably;
 the closure-model evolution should be designed against
 real-world friction observed once a real game ships, not
-pre-emptively.  See [EVENT_LOOP.md § Future direction — closer
-to Rust's closure model](EVENT_LOOP.md#future-direction--closer-to-rusts-closure-model)
-for sequencing.
+pre-emptively.  Sequencing for the evolution lives in
+[MUTABLE_CLOSURES.md](MUTABLE_CLOSURES.md) (the design spec) and
+[MUTABLE_CLOSURES_DISCUSSION.md](MUTABLE_CLOSURES_DISCUSSION.md)
+(alternatives considered, including the full Rust borrow-checker
+option F).
 
 ---
 

@@ -94,7 +94,8 @@ that exercises the next layer up:
 - **Three independent handlers on one connection.**  The client has
   more than one thing to listen for and more than one thing to send.
   This is the first concrete consumer of the handler-id-on-the-wire
-  idea (see [EVENT_LOOP.md § Wire format](EVENT_LOOP.md#wire-format--library-internal-never-seen-by-the-programmer)).
+  idea (see [EVENT_PROTOCOL.md](EVENT_PROTOCOL.md) for the
+  binary-frame wire spec).
 - **State on both ends.**  The server owns the authoritative game
   state; the client renders a copy.  This is the shape every
   multiplayer loft game will have — first concrete instance.
@@ -219,44 +220,60 @@ Three IDs, three handlers on the client (one outbound, two
 inbound).  The server has the inverse: one inbound (player
 clicks) and two outbound (placements, game-over).
 
-### Why `(#N):` and not the full EventLoop binary header?
+### Why text frames and not the full EventLoop binary header?
 
 [EVENT_LOOP.md](EVENT_LOOP.md) specifies a 12-byte binary header
 with handler id, priority, sequence, flags, length.  This game
-deliberately does **not** ship that yet — the user's directive
-was *"no priority or digital layer yet."*  The `(#N):` text form
-is the smallest thing that can distinguish handlers on a single
-connection, fits in WebSocket text frames, and round-trips
-through the existing text-only `ws_send` / `ws_recv` pair without
-binary-frame work.
+deliberately does **not** ship that yet — the directive was
+*"no priority or digital layer yet."*  The `<id>:<payload>`
+text form is the smallest thing that can distinguish handlers
+on a single connection, fits in WebSocket text frames, and
+round-trips through the existing text-only `ws_send` / `ws_recv`
+pair without binary-frame work.
 
-When the EventLoop wire format lands, this game is the natural
-first port: replace the text prefix with the binary header,
-keep the handlers' shape unchanged.
+When the EventLoop binary wire format lands, this game is the
+natural first port: replace the text encoder/decoder with the
+binary header; the handlers, registry, and MAP handshake stay
+unchanged.
 
 ### Programmer-level dispatch (today)
 
 Library-level multiplexing across handlers requires storing one
 closure per handler in a struct field — currently blocked by
 [P213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix).
-For this milestone, the programmer's `pump()` callback parses
-the `(#N):` prefix and dispatches:
+For this milestone, the program's loop drains messages with
+`web::try_recv()` and matches the parsed integer id against the
+handler ids learned from the MAP frame:
 
 ```loft
-ws.pump(fn(raw) {
-    let (tag, payload) = parse_tag(raw);
-    if tag == 1 { handle_placement(payload); }
-    else if tag == 2 { handle_game_over(payload); }
-});
+raw = ws.try_recv();
+if raw == null { /* nothing yet */ }
+else {
+    id = parse_id(raw);
+    body = parse_payload(raw);
+    if id == h_placement { handle_placement(body); }
+    else if id == h_gameover { handle_game_over(body); }
+}
 ```
 
-`handle_placement` and `handle_game_over` are top-level fns (or
-closures captured-by-reference) that mutate a `Reference<Board>`
-held in a Store.  Same workaround pattern as `hello_client.loft`.
+`handle_placement` and `handle_game_over` are top-level fns
+(or closures capturing `Reference<Board>`) that mutate a
+`Board` held in a Store.  Same workaround pattern as
+`hello_client.loft`.
 
 ---
 
 ## Client architecture
+
+> **Implementation status.**  The shipped first cut
+> (`lib/game_protocol/examples/tictactoe_client.loft`) is
+> **text-only**: it sends a hardcoded sequence of clicks and
+> prints the placements / winner it receives, validating the
+> wire protocol and registry mechanics end-to-end.  The
+> graphical client described below — three handlers with mouse
+> + sound + render via `lib/graphics` — is the next step;
+> it's the v1 spec's full shape, layered on top of the same
+> protocol the text-only client already drives.
 
 Three loft-level handlers, sharing a single WebSocket connection:
 
@@ -267,45 +284,58 @@ inside a board cell:
 1. Compute (row, col) from mouse coords.
 2. Play a click sound (lib/graphics has audio support in moros_*
    examples; choose the simplest `play_sound` API).
-3. Send `(#3):row,col` over the WebSocket.
+3. Send `<click_id>:row,col` over the WebSocket, where
+   `click_id` is the integer assigned to the `Click` handler by
+   the server's MAP frame.
 
 The mouse handler does *not* update the local board — it just
-sends the click.  The server's reply (handler #1) is what causes
-the visible mark.  This keeps the server authoritative.
+sends the click.  The server's reply (Placement frame) is what
+causes the visible mark.  This keeps the server authoritative.
 
 ### 2. Drawing handler (inbound)
 
-Triggered when a `(#1):mark,row,col` message arrives.  Updates
-the `Board` struct's cell, which the per-frame render reads to
-draw X / O glyphs.  Does not draw directly — sets state; the
-render loop draws.
+Triggered when a `<placement_id>:mark,row,col` message arrives.
+Updates the `Board` struct's cell, which the per-frame render
+reads to draw X / O glyphs.  Does not draw directly — sets
+state; the render loop draws.
 
 ### 3. Winner handler (inbound)
 
-Triggered when a `(#2):winner` message arrives.  Sets a
-`game_over` flag in the board struct with the winner's mark (or
-"draw").  The render loop displays a banner.  Optionally: stop
-sending mouse clicks once `game_over` is set.
+Triggered when a `<gameover_id>:winner` message arrives.  Sets
+a `game_over` flag in the board struct with the winner's mark
+(or "draw").  The render loop displays a banner.  Optionally:
+stop sending mouse clicks once `game_over` is set.
 
-### Main loop shape
+### Main loop shape (graphical v1, future)
 
 ```
 fn main() {
     state = init_board();
     ws = ws_handler("ws://localhost:7878/");
 
+    // Phase 1: handshake — populate registry from MAP frame.
+    // (See tictactoe_client.loft for the actual pattern.)
+    let h_click     = ...;
+    let h_placement = ...;
+    let h_gameover  = ...;
+
+    // Phase 2: play.
     while !state.game_over {
         // outbound
         if mouse_just_clicked() {
             let (r, c) = mouse_to_cell(...);
             play_click_sound();
-            ws.send(format!("(#3):{r},{c}"));
+            ws.send("{h_click}:{r},{c}");
         }
 
         // inbound — programmer-level dispatch
-        ws.pump(fn(raw) {
-            // ... parse_tag, branch on tag id ...
-        });
+        raw = ws.try_recv();
+        if raw != null {
+            id = parse_id(raw);
+            body = parse_payload(raw);
+            if id == h_placement       { state.apply_placement(body); }
+            else if id == h_gameover    { state.set_winner(body); }
+        }
 
         render_board(state);
         gl_swap_buffers();
@@ -314,8 +344,11 @@ fn main() {
 ```
 
 `state` is allocated in a Store; `Reference<Board>` is captured
-by the pump closure (today's workaround per
-[MUTABLE_CLOSURES.md § Status](MUTABLE_CLOSURES.md)).
+by handler functions (today's workaround per
+[MUTABLE_CLOSURES.md](MUTABLE_CLOSURES.md)).  The shipped
+text-only first cut omits `mouse_just_clicked` / `render_board`
+/ `gl_swap_buffers` and walks through a hardcoded click sequence
+instead.
 
 ---
 
@@ -329,22 +362,24 @@ right architecture for the game and is documented as future work
 in [§ Server-side handler API (future)](#server-side-handler-api-future)
 below.
 
-For the **first build of tic-tac-toe today**, the existing
-lifecycle-explicit `lib/server` API is acceptable: one client at
-a time, sequential accept / upgrade / recv loop in loft.  Rough
-shape:
+For the **shipped first build** (`tictactoe_server.loft`), the
+existing lifecycle-explicit `lib/server` API is acceptable: one
+client at a time, sequential accept / upgrade / recv loop in
+loft.  Rough shape:
 
 1. Accept WebSocket upgrade.
-2. Receive `(#3):row,col` from the client.
-3. Validate: is it the player's turn, is the cell empty?
-4. Place the player's mark.  Send `(#1):X,row,col` to the client.
-5. Check for win / draw.  If terminal, send
-   `(#2):winner_or_draw` and reset.
-6. Else: pick the simplest legal move (first empty cell,
-   left-to-right top-to-bottom).  Place server's mark.  Send
-   `(#1):O,row,col`.
-7. Check for win / draw again.  If terminal, send `(#2):...`.
-8. Loop.
+2. Send the MAP frame: `MAP:Click=<id>,Placement=<id>,GameOver=<id>`.
+3. Receive a Click frame `<click_id>:row,col`.
+4. Validate: is the cell empty?
+5. Place the player's mark (X).  Send Placement
+   `<placement_id>:X,row,col` to the client.
+6. Check for win / draw.  If terminal, send GameOver
+   `<gameover_id>:winner_or_draw` and disconnect.
+7. Else: pick the simplest legal move (first empty cell,
+   left-to-right top-to-bottom).  Place server's mark (O).
+   Send Placement `<placement_id>:O,row,col`.
+8. Check for win / draw again.  If terminal, send GameOver.
+9. Loop back to step 3.
 
 No turn timer, no rematch, no error frames.  Invalid moves are
 silently dropped.
@@ -381,8 +416,8 @@ srv.close();
 Outbound:
 
 ```loft
-srv.send_to(client_id, "(#1):X,1,2");
-srv.broadcast("(#2):X");
+srv.send_to(client_id, "{h_placement}:X,1,2");
+srv.broadcast("{h_gameover}:X");
 srv.disconnect(client_id);
 ```
 
@@ -448,32 +483,38 @@ after v1 ships.
 
 | Component | Status | Notes |
 |---|---|---|
-| `lib/web` WebSocket client | New in current session | Handler-style API; auto-reconnect with backoff; needs hello-world to validate. |
-| `lib/server` WebSocket server | Shipped (paper API + native impl); blocked by Str/LoftStr type mismatch in native compile | Pre-existing bug surfacing once `[native] crate` was added; ~10-line fix. |
-| `lib/graphics` mouse + render + sound | Shipped (used by `moros_*` and `lib/graphics/examples/`) | Reuse existing primitives. |
-| Tagged-text protocol parser | New (small) | A `parse_tag(text) -> (integer, text)` helper, ~10 lines of loft. |
-| Board state struct + render | New (small) | 3×3 array, X/O/empty, plus a `game_over: text` field. |
+| `lib/web` WebSocket client | **Shipped & validated** | Handler-style API (`ws_handler` / `send` / `pump` / `try_recv` / `close`); auto-reconnect with backoff; multi-address resolution.  Validated end-to-end by hello-world and the text-only tic-tac-toe v1. |
+| `lib/server` WebSocket server | **Shipped** (interpret mode); native-compile mode has a separate pre-existing `Str`/`LoftStr` mismatch that doesn't affect this game | The WS handshake header bug (reading from `LAST_BODY` instead of `LAST_HEADERS`) was fixed in this branch.  Native-compile path of programs using lib/server still needs the C-ABI return-type fix; interpret-mode runs cleanly. |
+| `lib/graphics` mouse + render + sound | Shipped (used by `moros_*` and `lib/graphics/examples/`) | Reuse existing primitives.  **Not yet wired into tic-tac-toe** — the shipped first cut is text-only. |
+| Wire-frame parser | **Shipped (inline)** | `parse_id(raw)` and `parse_payload(raw)` in `tictactoe_server.loft` and `tictactoe_client.loft`; ~6 lines each.  Same shape on both sides. |
+| Board state struct | **Shipped (server side)** | 9-cell vector with null = empty, plus a `winner: text` field, in `tictactoe_server.loft`.  Render-side board does not exist yet (text-only client). |
 
 No new native code required for this game; everything builds on
-shipped or in-flight pieces.
+already-shipped pieces.
 
 ---
 
 ## What this validates
 
 - **Handler-id-on-the-wire as a real concept.**  Three named
-  channels coexisting on one connection, each with distinct
-  semantics, distinguished by an id the receiver reads.
-- **Asymmetric channels.**  Handler #3 is client-out / server-in;
-  handlers #1 and #2 are server-out / client-in.  No handler
-  echoes — each is genuinely one-way.  Mirrors the EventLoop
-  spec's per-direction model.
+  channels (`Click`, `Placement`, `GameOver`) coexisting on one
+  connection, each with distinct semantics, distinguished by an
+  integer id the receiver reads.
+- **Server-arbited handshake.**  The server's MAP frame
+  authoritatively assigns ids; the client conforms.  Validated
+  in `tictactoe_server.loft` (sends MAP) and
+  `tictactoe_client.loft` (parses MAP into a local registry).
+- **Asymmetric channels.**  `Click` is client-out / server-in;
+  `Placement` and `GameOver` are server-out / client-in.  No
+  handler echoes — each is genuinely one-way.  Mirrors the
+  EventLoop spec's per-direction model.
 - **Programmer-level dispatch works.**  Even without library
-  closure-in-struct routing, parsing the tag in the pump callback
-  is ergonomic enough for a real game.
+  closure-in-struct routing, parsing the integer id in a
+  poll-driven loop (via `web::try_recv`) is ergonomic enough
+  for a real game.
 - **Server-authoritative state.**  The client never assumes a
-  click landed; it waits for `(#1):` to confirm.  This is the
-  pattern every multiplayer loft game will follow.
+  click landed; it waits for the Placement frame to confirm.
+  This is the pattern every multiplayer loft game will follow.
 - **Auto-reconnect doesn't disturb the game logic.**  If the
   connection blips, the game pauses; once reconnected, the next
   user click resumes flow.  No special game-side handling.
@@ -499,14 +540,26 @@ explicitly out of scope here so this game stays minimal.
 
 ## Sequencing
 
-1. **Land hello-world end-to-end** — clear the pre-existing
-   blockers (transitive native dlopen for non-native parent
-   packages, and lib/server `Str`/`LoftStr` mismatch in native
-   compile mode).
-2. **Tic-tac-toe v1** — this document.  Single client, single
-   server, single window, no audio if `lib/graphics`'s sound API
-   isn't immediately available (silent click is acceptable
-   fallback).
+1. ~~**Land hello-world end-to-end**~~ — **DONE.**  Cleared two
+   pre-existing blockers along the way: transitive native
+   dlopen for non-native parent packages (parser fix), and the
+   lib/server WS-handshake header bug (read from a dedicated
+   `LAST_HEADERS` thread-local).  The lib/server `Str`/`LoftStr`
+   native-compile mismatch is unrelated and only affects native
+   mode; interpret mode runs cleanly.  Validated by
+   `lib/game_protocol/examples/hello_*.loft`.
+2. **Tic-tac-toe v1 (text-only first cut)** — **DONE.**
+   Server-arbited MAP handshake; full game state machine on the
+   server; text-driven client with hardcoded winning sequence;
+   `<id>:<payload>` text frames over WebSocket.  Validates the
+   namespace handler registry, the wire protocol, and the
+   server-authoritative state model.  Files:
+   `tictactoe_server.loft`, `tictactoe_client.loft`.
+3. **Tic-tac-toe v1 (graphical)** — **NEXT.**  Same protocol;
+   add mouse polling + click sound + 3×3 board render via
+   `lib/graphics`.  No protocol changes.  Single window, no audio
+   if `lib/graphics`'s sound API isn't immediately available
+   (silent click is acceptable fallback).
 3. **Tic-tac-toe v2 — two simultaneous clients with spectator
    view.**  Server accepts two concurrent clients; each plays
    their own game vs the server; each client *also* sees the
@@ -533,31 +586,34 @@ Once v1 runs, this is the next concrete validation step.
   B's display has two boards: their own (playable) and A's
   (read-only).
 
-### New wire IDs (extension to v1)
+### New handler names (extension to v1)
 
-In addition to v1's `#1` / `#2` / `#3`, two more handler ids
-distinguish own-game from spectator updates:
+In addition to v1's `Click` / `Placement` / `GameOver`, two more
+handler names distinguish own-game from spectator updates.  The
+server's MAP frame assigns ids to all five at handshake; both
+sides learn the assignments from the same map.
 
-| ID | Direction | Meaning | Payload |
+| Name | Direction | Meaning | Payload |
 |---|---|---|---|
-| `#1` | server → client | placement update — *own* game | `mark,row,col` |
-| `#2` | server → client | game over — *own* game | `winner` or `draw` |
-| `#3` | client → server | player click | `row,col` |
-| `#4` | server → client | placement update — *spectator* (other client's game) | `mark,row,col` |
-| `#5` | server → client | game over — *spectator* | `winner` or `draw` |
+| `Click` | client → server | player click | `row,col` |
+| `Placement` | server → client | placement update — *own* game | `mark,row,col` |
+| `GameOver` | server → client | game over — *own* game | `winner` or `draw` |
+| `SpectatorPlacement` | server → client | placement update — other client's game | `mark,row,col` |
+| `SpectatorGameOver` | server → client | game over — other client's game | `winner` or `draw` |
 
-The wire format stays text-prefixed `(#N):payload`.  No
-peer-id is needed in the payload because each client only ever
+The wire format stays `<id>:<payload>` text frames.  No peer-id
+is needed in the payload because each client only ever
 spectates exactly one other client (the partner the server
 paired them with at connect time).
 
 ### Client architecture (v2)
 
-The client gains two more inbound handlers (spectator
-placement, spectator game-over) and renders a second board next
-to the first.  The mouse handler is unchanged — it still only
-sends `(#3):row,col` for the player's own game.  The own-board
-is interactive; the spectator-board is purely display.
+The client gains two more inbound handlers
+(`SpectatorPlacement`, `SpectatorGameOver`) and renders a second
+board next to the first.  The mouse handler is unchanged — it
+still only sends `<click_id>:row,col` for the player's own
+game.  The own-board is interactive; the spectator-board is
+purely display.
 
 ```
 ┌──────────────────┬──────────────────┐
@@ -580,9 +636,9 @@ Per-client state: `Board` keyed on `client_id`.  Client pairing
 strategy for v2: simple — pair the first two connected clients;
 reject the third.  When client A clicks:
 1. Process the move on A's board (player mark + server's mark).
-2. Send `(#1)` / `(#2)` back to A as before.
-3. ALSO send `(#4)` / `(#5)` to B with the same placements,
-   tagged as spectator events.
+2. Send `Placement` / `GameOver` back to A as before.
+3. ALSO send `SpectatorPlacement` / `SpectatorGameOver` to B
+   with the same placements, tagged as spectator events.
 
 If a client disconnects, the partner's spectator view freezes
 on the last update; the partner's own game continues.  No
@@ -595,11 +651,11 @@ rematch handling.
   on each connection.
 - **Per-client state on the server side** — first concrete
   consumer of the multi-connection capability.
-- **Asymmetric handler-id usage between clients** — both
-  clients use the same set of inbound ids (#1–#5) but the
-  *meaning* of #4 and #5 (spectator) implies the server is
-  doing real routing, not echo.  This is the simplest
-  validation of "the server actively uses handler ids to mean
+- **Asymmetric handler-name usage between clients** — both
+  clients use the same set of inbound names but the *meaning*
+  of `Spectator*` (the other client's game) implies the server
+  is doing real routing, not echo.  This is the simplest
+  validation of "the server actively uses handler names to mean
   more than just message-type labels."
 - **Five-handler clients** — pushes the programmer-level
   dispatch in `pump()` callback hard enough to demonstrate the
@@ -740,12 +796,12 @@ without rebuilding+redeploying through a separate CI loop.
   page that lets the player (in dev mode) edit a loft snippet
   (e.g., the AI strategy for the server's tic-tac-toe player,
   or a custom client behaviour).
-- **Upload protocol** — a new handler-id, e.g. `(#10):script` →
-  the client posts source text to the server.
+- **Upload protocol** — a new handler name, e.g. `ScriptUpload`
+  → the client posts source text to the server.
 - **Server-side compile** — the server invokes the loft
   compiler (`loft --native-wasm` or equivalent in-process API)
   on the uploaded source.  Diagnostics are returned via another
-  handler-id, e.g. `(#11):diagnostics`.
+  handler, e.g. `Diagnostics`.
 - **WASM hot-swap** — on success, the server sends the compiled
   WASM bytes back via a binary frame on the WebSocket
   (introduces the binary-payload path the EventLoop spec
@@ -822,7 +878,7 @@ boundary, no opcode is mid-execution; no Rust-side I/O is
 in-flight; the heap is in a consistent state.  This is the
 correct point to switch.
 
-When a `(#11):wasm-ready` event arrives on the WebSocket:
+When a `WasmReady` event arrives on the WebSocket:
 
 1. Game loop finishes the current frame normally.
 2. Before starting the next frame, the runtime invokes

@@ -24,7 +24,7 @@ parallel mechanism are superseded:
 | Earlier design | Status | Replaced by |
 |---|---|---|
 | `Dispatcher` struct + `dispatch(env, &Dispatcher)` ([GAME_CLIENT_LIB.md § Dispatcher](GAME_CLIENT_LIB.md#dispatcher-in-loft)) | Superseded paper, never implemented | EventLoop bidirectional handlers |
-| `run_game_loop(GameLoop, tick_fn)` ([WEB_SERVER_LIB.md § Server-side game loop](WEB_SERVER_LIB.md)) | Superseded paper, never implemented | `el::run` (frame-driven) and `el::run_async` (kernel-driven) |
+| `run_game_loop(GameLoop, tick_fn)` ([WEB_SERVER_LIB.md § Server-side game loop](WEB_SERVER_LIB.md)) | Superseded paper, never implemented | `el::run` with a programmer-supplied `poll_sources` callback (kernel-multiplexed source polling is recorded as future work in [EVENT_LOOP_DISCUSSION.md](EVENT_LOOP_DISCUSSION.md), not as a separate API) |
 | `GameEnvelope { sender, recipient, sequence, timestamp, message: WsMessage }` + `MsgType` enum (`lib/game_protocol/src/game_protocol.loft`, 104 lines, used only by its own tests) | Superseded shipped paper — the structs compile but nothing depends on them | EventLoop wire frame: `[handler_id][priority][seq][flags][length][payload]` |
 
 The shipped `lib/game_protocol` will be reshaped (or replaced) to
@@ -609,7 +609,7 @@ struct HandlerId<R> { id: integer }
 // tuning phase.
 struct Handler {
     id:       integer,         // library-assigned, returned to user as HandlerId<R>
-    name:     text,            // derived from def_name(R) by default
+    name:     text,            // derived from R's canonical name by default
     encoding: Encoding,        // derived from R's shape by default
     priority: Priority,        // set by tuning phase; defaults to NORMAL
     recv:     fn(bytes) -> void,   // type-erased; wraps user's typed closure
@@ -638,9 +638,12 @@ struct EventEntry { handler_id: integer, payload: bytes }
 
 The basic API takes the recv closure and nothing else.  The
 library reflects on the closure's parameter type to derive the
-handler name (the type's canonical name from `data.def_name`)
-and the encoding (JSON for plain structs/enums; Raw for
-bytes-payload wrappers).  For two handlers of the same recv-type
+handler name (the type's canonical user-visible name as the
+compiler resolved it, e.g. `lib_world::WorldChunk` for a
+type defined in `lib_world` — the actual API is whatever
+accessor the loft compiler exposes for `Definition.name` when
+this work lands) and the encoding (JSON for plain structs /
+enums; Raw for bytes-payload wrappers).  For two handlers of the same recv-type
 in different roles, `on_at` adds an instance suffix.  For full
 overrides (matching legacy peer protocols, etc.), `on_with`
 takes a `HandlerOptions` struct.  See § Handler registration:

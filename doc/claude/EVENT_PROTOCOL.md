@@ -206,9 +206,10 @@ the payload should bypass JSON decoding.  Three modes:
 - **Binary** (typed-struct packing): deferred for v1; revisit
   if benchmarks show JSON encoding dominates frame cost.
 
-Encoding selection is invisible to the loft programmer; see
-[EVENT_LOOP.md § Three encoding modes](EVENT_LOOP.md) for how
-the library derives them from the recv-type.
+Encoding selection is invisible to the loft programmer — the
+library derives the mode from the recv-type at registration
+time (see [EVENT_LOOP.md](EVENT_LOOP.md) for how handler
+registration consumes the recv-type).
 
 ### Per-direction priority
 

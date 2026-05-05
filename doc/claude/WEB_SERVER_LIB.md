@@ -1061,11 +1061,16 @@ a server-side fixed-timestep loop.
 > **Superseded by [EVENT_LOOP.md](EVENT_LOOP.md).**  The
 > `GameLoop` / `run_game_loop` design below was never
 > implemented.  The canonical loop API is now EventLoop's
-> `el::run` (frame-driven, for clients) and `el::run_async`
-> (kernel-multiplexed, for servers).  Server tick is a Tick
-> event submitted by a timer source; the same priority lanes
-> handle player input, world tick, and ambient work.  The
-> sketch below is retained for design history only.
+> `el::run` (frame-driven, with a programmer-supplied
+> `poll_sources` callback for OS / network event sources).
+> Server tick is a Tick event submitted by a timer source; the
+> same priority lanes handle player input, world tick, and
+> ambient work.  Kernel-multiplexed source polling (epoll /
+> kqueue / IOCP) is recorded as future work in
+> [EVENT_LOOP_DISCUSSION.md](EVENT_LOOP_DISCUSSION.md) but
+> doesn't ship as a separate API; the existing `el::run` is
+> the one entry point for both shapes.  The sketch below is
+> retained for design history only.
 
 ```loft
 struct GameLoop {
