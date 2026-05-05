@@ -1,0 +1,322 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Tic-tac-toe server (v2) — multi-client + spectator.
+//
+// Pairs the first two connected clients; each plays their own game
+// against the server (X = player, O = server placing at first empty).
+// Each client receives their own placements via `Placement` /
+// `GameOver`, and the partner's placements via `SpectatorPlacement` /
+// `SpectatorGameOver`.
+//
+// This is a TIC_TAC_TOE v2 protocol-only ground-layer verifier — no
+// graphics, no rendering.  It exercises the multi-client `lib/server`
+// primitives shipped alongside this program.
+//
+//   /home/ubuntu/loft/target/release/loft --interpret \
+//       lib/game_protocol/examples/tictactoe_server_v2.loft
+
+use server;
+
+// ── Namespace handler registry ──────────────────────────────
+
+struct RegEntry { name: text, id: integer }
+
+struct Registry {
+  by_name: hash<RegEntry[name]>,
+  next_id: integer
+}
+
+fn register(reg: Registry, name: text) -> integer {
+  id = reg.next_id;
+  reg.by_name += [RegEntry { name: name, id: id }];
+  reg.next_id = id + 1;
+  id
+}
+
+// ── Wire frame helpers ──────────────────────────────────────
+
+fn pack(id: integer, payload: text) -> text {
+  "{id}:{payload}"
+}
+
+fn parse_id(raw: text) -> integer {
+  i = raw.find(":");
+  if i == null { return -1; }
+  raw[..i] as integer
+}
+
+fn parse_payload(raw: text) -> text {
+  i = raw.find(":");
+  if i == null { return ""; }
+  raw[i + 1..]
+}
+
+// ── Game state ──────────────────────────────────────────────
+
+struct Game {
+  cells: vector<text>,
+  turn: integer,
+  winner: text
+}
+
+fn new_game() -> Game {
+  // Empty cells AND "no-winner-yet" are both represented as null;
+  // loft text fields initialised to "" read back as null, so we use
+  // null consistently for the sentinel and check `!= null` everywhere.
+  cs: vector<text> = [];
+  for _ in 0..9 { cs += [null]; }
+  Game { cells: cs, turn: 0, winner: null }
+}
+
+fn cell_empty(g: Game, idx: integer) -> boolean {
+  v = g.cells[idx];
+  v == null
+}
+
+// Returns the winning mark or "" (no winner on this line).
+fn line_winner(g: Game, i: integer, j: integer, k: integer) -> text {
+  a = g.cells[i];
+  if a != null && a == g.cells[j] && a == g.cells[k] {
+    return a;
+  }
+  ""
+}
+
+// Returns the winning mark, "draw", or "" (game continues).
+fn check_winner(g: Game) -> text {
+  w = line_winner(g, 0, 1, 2); if w != "" { return w; }
+  w = line_winner(g, 3, 4, 5); if w != "" { return w; }
+  w = line_winner(g, 6, 7, 8); if w != "" { return w; }
+  w = line_winner(g, 0, 3, 6); if w != "" { return w; }
+  w = line_winner(g, 1, 4, 7); if w != "" { return w; }
+  w = line_winner(g, 2, 5, 8); if w != "" { return w; }
+  w = line_winner(g, 0, 4, 8); if w != "" { return w; }
+  w = line_winner(g, 2, 4, 6); if w != "" { return w; }
+  if g.turn >= 9 { return "draw"; }
+  ""
+}
+
+fn first_empty(g: Game) -> integer {
+  for i in 0..9 {
+    if cell_empty(g, i) { return i; }
+  }
+  -1
+}
+
+// ── Per-client server state ─────────────────────────────────
+
+struct ClientState {
+  cs_id:      integer,        // WS client id (key)
+  cs_partner: integer,        // partner's id, -1 if none yet
+  cs_game:    Game
+}
+
+struct ServerState {
+  ss_clients: hash<ClientState[cs_id]>,
+  ss_count:   integer
+}
+
+// ── Click handling ──────────────────────────────────────────
+
+fn send_placement_pair(
+  state: ServerState,
+  client_id: integer,
+  mark: text, r: integer, c: integer,
+  h_placement: integer,
+  h_spec_placement: integer
+) {
+  // Tell the player about their own placement.
+  server::ws_send_to(client_id, pack(h_placement, "{mark},{r},{c}"));
+  // Tell the partner about it as a spectator update.
+  cs = state.ss_clients[client_id];
+  if cs.cs_partner >= 0 {
+    server::ws_send_to(cs.cs_partner, pack(h_spec_placement, "{mark},{r},{c}"));
+  }
+}
+
+fn send_gameover_pair(
+  state: ServerState,
+  client_id: integer,
+  winner: text,
+  h_gameover: integer,
+  h_spec_gameover: integer
+) {
+  server::ws_send_to(client_id, pack(h_gameover, winner));
+  cs = state.ss_clients[client_id];
+  if cs.cs_partner >= 0 {
+    server::ws_send_to(cs.cs_partner, pack(h_spec_gameover, winner));
+  }
+}
+
+// Send the test-orchestration shutdown frame to a client.  The
+// server calls this whenever it has finished sending all the
+// frames that client will ever care about (its own game-over,
+// plus any partner spectator-frames already in flight).  The
+// client recognizes the frame and exits cleanly.
+fn send_shutdown(client_id: integer, reason: text, h_shutdown: integer) {
+  if client_id < 0 { return; }
+  server::ws_send_to(client_id, pack(h_shutdown, reason));
+}
+
+// After a client's game ends, decide whether to shut down BOTH
+// the player and (if both sides are done) the partner.  Called
+// from handle_click after the gameover frames are sent.
+fn maybe_shutdown_after_game_over(
+  state: ServerState,
+  client_id: integer,
+  h_shutdown: integer
+) {
+  cs = state.ss_clients[client_id];
+  if !cs { return; }
+  // The player whose game just ended doesn't need any more own-
+  // frames, but might still want to spectate a still-running partner.
+  // Shutdown only when both sides are done.
+  partner_id = cs.cs_partner;
+  if partner_id < 0 {
+    // No partner; this player has nothing more to do.
+    send_shutdown(client_id, "own-game-complete-no-partner", h_shutdown);
+    log_info("shutdown sent to {client_id} (no partner)");
+    return;
+  }
+  partner = state.ss_clients[partner_id];
+  if !partner { return; }
+  if partner.cs_game.winner != null {
+    // Both done — shutdown both.
+    send_shutdown(client_id, "both-games-complete", h_shutdown);
+    send_shutdown(partner_id, "both-games-complete", h_shutdown);
+    log_info("shutdown sent to {client_id} and {partner_id}");
+  }
+}
+
+fn handle_click(
+  state: ServerState,
+  client_id: integer,
+  body: text,
+  h_placement: integer,
+  h_gameover: integer,
+  h_spec_placement: integer,
+  h_spec_gameover: integer,
+  h_shutdown: integer
+) {
+  cs = state.ss_clients[client_id];
+  if !cs { return; }
+  if cs.cs_game.winner != null { return; }   // game over already
+
+  comma = body.find(",");
+  if comma == null { return; }
+  r = body[..comma] as integer;
+  c = body[comma + 1..] as integer;
+  if r < 0 || r > 2 || c < 0 || c > 2 { return; }
+
+  idx = r * 3 + c;
+  if !cell_empty(cs.cs_game, idx) { return; }
+
+  cs.cs_game.cells[idx] = "X";
+  cs.cs_game.turn = cs.cs_game.turn + 1;
+  send_placement_pair(state, client_id, "X", r, c, h_placement, h_spec_placement);
+  log_info("client {client_id}: X at {r},{c}");
+
+  w = check_winner(cs.cs_game);
+  if w != "" {
+    cs.cs_game.winner = w;
+    send_gameover_pair(state, client_id, w, h_gameover, h_spec_gameover);
+    log_info("client {client_id}: game over - {w}");
+    maybe_shutdown_after_game_over(state, client_id, h_shutdown);
+    return;
+  }
+
+  s = first_empty(cs.cs_game);
+  if s < 0 { return; }
+  sr = s / 3;
+  sc = s - sr * 3;
+  cs.cs_game.cells[s] = "O";
+  cs.cs_game.turn = cs.cs_game.turn + 1;
+  send_placement_pair(state, client_id, "O", sr, sc, h_placement, h_spec_placement);
+  log_info("client {client_id}: O at {sr},{sc}");
+
+  w = check_winner(cs.cs_game);
+  if w != "" {
+    cs.cs_game.winner = w;
+    send_gameover_pair(state, client_id, w, h_gameover, h_spec_gameover);
+    log_info("client {client_id}: game over - {w}");
+    maybe_shutdown_after_game_over(state, client_id, h_shutdown);
+  }
+}
+
+// ── Main loop ───────────────────────────────────────────────
+
+fn main() {
+  log_info("=== v2 server main() entry ===");
+  reg = Registry { next_id: 0 };
+  h_click          = register(reg, "Click");
+  h_placement      = register(reg, "Placement");
+  h_gameover       = register(reg, "GameOver");
+  h_spec_placement = register(reg, "SpectatorPlacement");
+  h_spec_gameover  = register(reg, "SpectatorGameOver");
+  // Test-orchestration channel: the server uses this to tell the
+  // client "wrap up, close the connection, exit cleanly".  Not a
+  // game-protocol message — the client just acts on it.  Useful for
+  // deterministic timing in integration tests so they don't rely on
+  // idle-poll timeouts or guess when both sides are done.
+  h_shutdown       = register(reg, "__Shutdown__");
+
+  map_text = "Click={h_click},Placement={h_placement},GameOver={h_gameover},SpectatorPlacement={h_spec_placement},SpectatorGameOver={h_spec_gameover},__Shutdown__={h_shutdown}";
+
+  srv = server::listen(7878);
+  // Banner stays on stdout so the operator sees it.
+  println("v2 server listening on :7878");
+  log_info("v2 server listening on :7878");
+  log_info("registered: Click={h_click} Placement={h_placement} GameOver={h_gameover} SpectatorPlacement={h_spec_placement} SpectatorGameOver={h_spec_gameover}");
+
+  state = ServerState { ss_count: 0 };
+
+  while true {
+    // Try to accept any pending new connection.
+    new_id = srv.ws_accept();
+    if new_id == -2 {
+      log_warn("accept error; ignoring");
+    } else if new_id >= 0 {
+      if state.ss_count >= 2 {
+        server::ws_send_to(new_id, "MAP:{map_text}");
+        server::ws_send_to(new_id, pack(h_gameover, "server-full"));
+        server::ws_disconnect(new_id);
+        log_info("rejected extra client {new_id}");
+      } else {
+        sent_map = server::ws_send_to(new_id, "MAP:{map_text}");
+        log_info("MAP send to {new_id}: {sent_map}");
+        partner = -1;
+        if state.ss_count == 1 {
+          for i in 0..server::ws_clients_len() {
+            if i != new_id && server::ws_client_active(i) && state.ss_clients[i] {
+              partner = i;
+              state.ss_clients[i].cs_partner = new_id;
+              break;
+            }
+          }
+        }
+        state.ss_clients += [ClientState {
+          cs_id: new_id,
+          cs_partner: partner,
+          cs_game: new_game()
+        }];
+        state.ss_count = state.ss_count + 1;
+        log_info("client {new_id} connected; partner={partner}; total={state.ss_count}");
+      }
+    }
+
+    // Poll every active WS client for one frame.
+    n = server::ws_clients_len();
+    for i in 0..n {
+      if !server::ws_client_active(i) { continue; }
+      if !state.ss_clients[i] { continue; }
+      raw = server::ws_poll(i);
+      if raw == null { continue; }
+      id = parse_id(raw);
+      body = parse_payload(raw);
+      if id == h_click {
+        handle_click(state, i, body, h_placement, h_gameover, h_spec_placement, h_spec_gameover, h_shutdown);
+      }
+    }
+  }
+}

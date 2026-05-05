@@ -100,3 +100,61 @@ pub fn send(self: WebSocket, msg: text) -> boolean {
 pub fn close(self: WebSocket) {
   ws_close_native(self.ws_id);
 }
+
+// --- Multi-client WebSocket server (TIC_TAC_TOE v2 ground layer) ---
+//
+// `ws_accept` is non-blocking: returns -1 when no connection is
+// pending, -2 on a real error, or a non-negative client id on
+// successful upgrade.  The accept does the HTTP read + WS handshake
+// in one step, so the caller skips the `next() / ws_upgrade()` dance.
+//
+// `ws_poll(client_id)` reads one frame non-blocking from a specific
+// client; returns the message text or null when nothing is pending.
+//
+// Iteration: `for i in 0..ws_clients_len()` and skip slots where
+// `ws_client_active(i)` is false.
+
+fn ws_accept_native(handle: integer) -> integer;
+#native "n_ws_accept_nonblocking"
+
+fn ws_clients_len_native() -> integer;
+#native "n_ws_clients_len"
+
+fn ws_client_active_native(id: integer) -> boolean;
+#native "n_ws_client_active"
+
+// Try to accept a pending WebSocket connection.  Returns the
+// client id (>= 0) on success; -1 if no connection is pending;
+// -2 on accept / parse / upgrade error.
+pub fn ws_accept(self: Server) -> integer {
+  ws_accept_native(self.handle)
+}
+
+// Try to read one message from the given client.  Returns the
+// frame text or null when the client has no pending data this
+// poll.  Non-blocking.
+pub fn ws_poll(client_id: integer) -> text {
+  if !ws_recv_native(client_id) { return null; }
+  ws_message_native()
+}
+
+// Send a frame to a specific client.  Returns true on success.
+pub fn ws_send_to(client_id: integer, msg: text) -> boolean {
+  ws_send_native(client_id, msg)
+}
+
+// Close a single client's connection.  Frees its slot for reuse
+// by future `ws_accept` calls.
+pub fn ws_disconnect(client_id: integer) {
+  ws_close_native(client_id);
+}
+
+// Total slot count (active + freed).  Iterate `0..ws_clients_len()`
+// and skip slots where `ws_client_active(i)` is false.
+pub fn ws_clients_len() -> integer {
+  ws_clients_len_native()
+}
+
+pub fn ws_client_active(id: integer) -> boolean {
+  ws_client_active_native(id)
+}

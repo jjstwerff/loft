@@ -273,6 +273,102 @@ pub extern "C" fn n_ws_close(handle: i32) {
     });
 }
 
+// ── Multi-client server primitives (TIC_TAC_TOE v2 ground layer) ─────────
+//
+// The legacy flow is `n_tcp_accept` (blocking) → `n_ws_upgrade` (consumes
+// CURRENT_CONN) → one client at a time.  The multi-client flow below
+// combines accept + parse + upgrade into a single non-blocking call so
+// the loft program can hold many concurrent WebSocket clients and poll
+// each without head-of-line blocking on any one of them.
+//
+//   loft loop:
+//     loop {
+//         id = n_ws_accept_nonblocking(listener);  // -1 if no pending
+//         if id >= 0 { register new client }
+//         for each active id: n_ws_recv (returns false fast on no data)
+//         small sleep to avoid CPU spin
+//     }
+//
+// Per-client streams are set non-blocking with a short read timeout
+// (20 ms) on accept so n_ws_recv polls cleanly.
+
+/// Try to accept a pending connection on a non-blocking listener.  If
+/// one is pending, parse the HTTP request, perform the WebSocket
+/// upgrade, register the stream as a client, and return its id (>= 0).
+/// If no connection is pending, returns -1.  Returns -2 on a listener
+/// or upgrade error so loft can distinguish "not yet" from "broken".
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_accept_nonblocking(listener_handle: i32) -> i32 {
+    // Snapshot the listener and ensure non-blocking, then try accept.
+    let stream_opt = LISTENERS.with(|l| {
+        let l = l.borrow();
+        let listener = l
+            .get(listener_handle as usize)
+            .and_then(|opt| opt.as_ref())?;
+        let _ = listener.set_nonblocking(true);
+        match listener.accept() {
+            Ok((s, _)) => Some(Ok(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => None,
+            Err(_) => Some(Err(())),
+        }
+    });
+    let mut stream = match stream_opt {
+        None => return -1,
+        Some(Ok(s)) => s,
+        Some(Err(())) => return -2,
+    };
+    // The accepted stream inherits non-blocking state on some platforms;
+    // force blocking for the HTTP read (small, finite), then switch to
+    // a short read timeout for the post-upgrade WS read polling.
+    let _ = stream.set_nonblocking(false);
+    let (headers_opt, _path_opt) = match parse_request(&stream) {
+        Some((_method, path, headers, _body)) => (Some(headers), Some(path)),
+        None => return -2,
+    };
+    let headers = headers_opt.unwrap_or_default();
+    if !websocket::ws_upgrade(&mut stream, &headers) {
+        return -2;
+    }
+    // Switch to short-timeout reads so n_ws_recv polls without blocking.
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(20)));
+    WS_CONNS.with(|conns| {
+        let mut conns = conns.borrow_mut();
+        // Reuse a freed slot if any (id stability across reconnects is
+        // not required at this layer; ids are reused after close).
+        for (i, slot) in conns.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(stream);
+                return i as i32;
+            }
+        }
+        let idx = conns.len();
+        conns.push(Some(stream));
+        idx as i32
+    })
+}
+
+/// Total length of the WS_CONNS table (active + closed slots).  Loft
+/// programs iterate `0..n_ws_clients_len()` and skip slots where
+/// `n_ws_client_active` returns false.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_clients_len() -> i32 {
+    WS_CONNS.with(|conns| conns.borrow().len() as i32)
+}
+
+/// True iff the WS_CONNS slot at `id` is currently occupied (a live
+/// client connection).  Slots become inactive after `n_ws_close` or
+/// when a peer disconnects.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_client_active(id: i32) -> bool {
+    WS_CONNS.with(|conns| {
+        conns
+            .borrow()
+            .get(id as usize)
+            .map(|o| o.is_some())
+            .unwrap_or(false)
+    })
+}
+
 loft_ffi::loft_register! {
     n_tcp_listen,
     n_tcp_accept,
@@ -286,4 +382,7 @@ loft_ffi::loft_register! {
     n_ws_message,
     n_ws_send,
     n_ws_close,
+    n_ws_accept_nonblocking,
+    n_ws_clients_len,
+    n_ws_client_active,
 }

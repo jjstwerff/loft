@@ -14,7 +14,7 @@
 mod native_impl {
     use std::cell::RefCell;
     use std::collections::VecDeque;
-    use std::io::{BufRead, BufReader, Read, Write};
+    use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::{Duration, Instant};
 
@@ -176,23 +176,54 @@ mod native_impl {
         if stream.write_all(req.as_bytes()).is_err() {
             return false;
         }
-        // Read until we see CRLF CRLF.
-        let mut reader = BufReader::new(stream.try_clone().ok().unwrap_or_else(|| stream.try_clone().unwrap()));
-        let mut status_ok = false;
-        let mut accept_seen: Option<String> = None;
+        // Read the response headers BYTE-BY-BYTE.  We deliberately do NOT
+        // use BufReader here: when the server sends the first WS frame
+        // immediately after the 101 response (typical for a server that
+        // wants to push a handshake / MAP frame as soon as the upgrade
+        // completes), a BufReader's internal buffer happily slurps both
+        // the headers AND the leading bytes of the WS frame.  When the
+        // BufReader gets dropped at the end of this function, those
+        // post-header bytes vanish — the application's first ws_recv
+        // then misses the very first frame the server sent.
+        //
+        // Reading byte-by-byte until "\r\n\r\n" leaves the WS frame
+        // bytes in the kernel buffer, where the subsequent
+        // ws_read_frame call picks them up correctly.
+        let mut window: [u8; 4] = [0, 0, 0, 0];
+        let mut header_text = String::new();
         loop {
-            let mut line = String::new();
-            if reader.read_line(&mut line).is_err() || line.is_empty() {
-                return false;
+            let mut byte = [0u8; 1];
+            match stream.read(&mut byte) {
+                Ok(0) => return false, // EOF before headers complete
+                Ok(_) => {}
+                Err(_) => return false,
             }
-            let trimmed = line.trim_end_matches(['\r', '\n']);
-            if trimmed.is_empty() {
+            header_text.push(byte[0] as char);
+            window[0] = window[1];
+            window[1] = window[2];
+            window[2] = window[3];
+            window[3] = byte[0];
+            if window == *b"\r\n\r\n" {
                 break;
             }
-            if trimmed.starts_with("HTTP/1.1 101") || trimmed.starts_with("HTTP/1.0 101") {
+            // Cap how much we'll absorb to avoid slurping a hostile
+            // peer's giant header block forever.
+            if header_text.len() > 16 * 1024 {
+                return false;
+            }
+        }
+        // Parse the captured header text the same way the BufReader
+        // version did, but without any reader buffering.
+        let mut status_ok = false;
+        let mut accept_seen: Option<String> = None;
+        for line in header_text.split("\r\n") {
+            if line.is_empty() {
+                continue;
+            }
+            if line.starts_with("HTTP/1.1 101") || line.starts_with("HTTP/1.0 101") {
                 status_ok = true;
             }
-            if let Some((k, v)) = trimmed.split_once(':') {
+            if let Some((k, v)) = line.split_once(':') {
                 if k.trim().eq_ignore_ascii_case("sec-websocket-accept") {
                     accept_seen = Some(v.trim().to_string());
                 }
