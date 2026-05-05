@@ -120,7 +120,10 @@ impl ServerGuard {
     }
 
     fn wait_listening(&self) -> bool {
-        wait_for_port(self.port, Duration::from_secs(5), 50)
+        // 30s timeout: Windows CI cold-runners can take 10+s to compile
+        // / launch the loft binary on first invocation.  Local runs
+        // bind in <1s, so the bump only affects flake-prone CI.
+        wait_for_port(self.port, Duration::from_secs(30), 50)
     }
 }
 
@@ -169,12 +172,12 @@ fn v2_single_client_completes_game() {
     // is bumped).
     let _server = {
         let s = ServerGuard::spawn("tictactoe_server_v2.loft", 7878);
-        assert!(s.wait_listening(), "server failed to start within 5s");
+        assert!(s.wait_listening(), "server failed to start within 30s");
         s
     };
 
     let client = spawn_client("S");
-    let (out, status) = drain_with_timeout(client, Duration::from_secs(15));
+    let (out, status) = drain_with_timeout(client, Duration::from_secs(30));
 
     assert_eq!(
         status,
@@ -209,7 +212,7 @@ fn v2_single_client_completes_game() {
 fn v2_two_clients_with_spectator_routing() {
     let _server = {
         let s = ServerGuard::spawn("tictactoe_server_v2.loft", 7878);
-        assert!(s.wait_listening(), "server failed to start within 5s");
+        assert!(s.wait_listening(), "server failed to start within 30s");
         s
     };
 
@@ -220,8 +223,8 @@ fn v2_two_clients_with_spectator_routing() {
     thread::sleep(Duration::from_millis(50));
     let b = spawn_client("B");
 
-    let (a_out, a_status) = drain_with_timeout(a, Duration::from_secs(20));
-    let (b_out, b_status) = drain_with_timeout(b, Duration::from_secs(20));
+    let (a_out, a_status) = drain_with_timeout(a, Duration::from_secs(40));
+    let (b_out, b_status) = drain_with_timeout(b, Duration::from_secs(40));
 
     assert_eq!(
         a_status,
@@ -293,13 +296,13 @@ fn v2_two_clients_with_spectator_routing() {
 fn v2_late_join_independent_games() {
     let _server = {
         let s = ServerGuard::spawn("tictactoe_server_v2.loft", 7878);
-        assert!(s.wait_listening(), "server failed to start within 5s");
+        assert!(s.wait_listening(), "server failed to start within 30s");
         s
     };
 
     // A connects, plays, finishes.
     let a = spawn_client("A");
-    let (a_out, a_status) = drain_with_timeout(a, Duration::from_secs(15));
+    let (a_out, a_status) = drain_with_timeout(a, Duration::from_secs(30));
     assert_eq!(a_status, Some(0), "A did not exit; stdout=\n{a_out}");
     assert!(
         a_out.contains("[A] GameOver: X"),
@@ -312,7 +315,7 @@ fn v2_late_join_independent_games() {
     // B connects; should still play to completion despite A having
     // already finished.
     let b = spawn_client("B");
-    let (b_out, b_status) = drain_with_timeout(b, Duration::from_secs(15));
+    let (b_out, b_status) = drain_with_timeout(b, Duration::from_secs(30));
     assert_eq!(b_status, Some(0), "B did not exit; stdout=\n{b_out}");
     assert!(
         b_out.contains("[B] GameOver: X"),
