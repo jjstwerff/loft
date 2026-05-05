@@ -1,0 +1,56 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Hello-world WebSocket client.
+//
+// Opens a session to ws://localhost:7878/, sends "hello world",
+// pumps until the server's "bye world" reply lands, then prints it.
+// Auto-reconnect in the Rust layer absorbs transient server-not-up
+// failures so this client can be started before, after, or alongside
+// `hello_server.loft` and still complete.
+//
+// State pattern: the reply field lives in a struct allocated in a
+// Store; the closure passed to `pump` captures a Reference to that
+// struct so its mutation is visible after the closure returns.  This
+// is the documented workaround for closure-in-struct-field captures
+// (PROBLEMS.md § 213) and produces the exact same handler shape the
+// post-fix version will use.
+//
+//   cargo run --release --bin loft -- \
+//       lib/game_protocol/examples/hello_client.loft
+
+use web;
+
+fn main() {
+  println("client start");
+
+  ws = web::ws_handler("ws://localhost:7878/");
+  if ws == null {
+    println("malformed URL");
+    return;
+  }
+
+  // Send the prompt.  Auto-reconnect retries while the server warms
+  // up, so we tolerate `false` here and pump while waiting.
+  attempts = 0;
+  while !ws.send("hello world") {
+    ws.pump(fn(m: text) {});  // drain stragglers while reconnect is in backoff
+    attempts = attempts + 1;
+    if attempts > 200 {
+      println("send still failing; giving up");
+      return;
+    }
+  }
+  println("sent: hello world");
+
+  // Pump until exactly one reply has been received.  The closure body
+  // prints the reply; we count messages via pump's return value (no
+  // capture mutation needed for the round-trip demo).
+  count = 0;
+  while count == 0 {
+    count = ws.pump(fn(msg: text) { println("got reply: " + msg) });
+  }
+
+  ws.close();
+  println("done");
+}

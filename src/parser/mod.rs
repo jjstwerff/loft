@@ -2268,6 +2268,29 @@ impl Parser {
                 // native template substitution in
                 // `src/generation/calls.rs` projects `.0` from the
                 // `(u32, DbRef)` fn-ref tuple before the i32 cast.
+                //
+                // P213 — a *capturing* closure (`Value::FnRef` with a
+                // non-MAX closure_var, typically wrapped in a
+                // `fn_ref_with_closure` Block that allocates the
+                // record) cannot be stored: the field is 4 bytes but
+                // the value is 16 (4B d_nr + 12B closure DbRef).
+                // Previously fell into `other => other`, leaving the
+                // 16-byte Block to OpSetInt4 which wrote 4 bytes and
+                // left 12 bytes of the closure DbRef on the stack
+                // corrupting downstream state (interp panic at
+                // `store.rs:963`, native E0308).  Now we walk the
+                // val_code looking for a capturing FnRef and reject
+                // with a clear diagnostic plus the workaround.
+                let captures = capturing_fn_ref(&val_code);
+                if !self.first_pass && captures {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "capturing closures cannot be stored in struct fields \
+                         (struct fn-ref fields hold only the function id, not the captured environment); \
+                         define the function at file scope, or pass the closure as a parameter / return it from a function"
+                    );
+                }
                 let d_nr_only = match val_code {
                     Value::FnRef(d_nr, _, _) => Value::Int(d_nr),
                     other => other,
@@ -3352,6 +3375,27 @@ impl Parser {
             return;
         };
         let pkg_dir = pkg_dir.to_string_lossy().to_string();
+        // Register the dlopen-side native lib path (interpreter mode).  The
+        // `[library] native = "..."` form registers the cdylib for dlopen;
+        // the separate `[native] crate = "..."` block (handled below)
+        // registers the rlib for the native-compile path.  Both must run
+        // here for sibling-package and ancestor-walk paths, otherwise
+        // packages depended on by a no-native parent (e.g. an examples
+        // package that uses `lib/server`) lose their native bindings in
+        // interpreter mode.
+        if let Some(ref stem) = m.native {
+            let filename = crate::extensions::platform_lib_name(stem);
+            let prebuilt = format!("{pkg_dir}/native/{filename}");
+            if std::path::Path::new(&prebuilt).exists() {
+                if !self.pending_native_libs.contains(&prebuilt) {
+                    self.pending_native_libs.push(prebuilt);
+                }
+            } else if let Some(built) = crate::extensions::auto_build_native(&pkg_dir, stem)
+                && !self.pending_native_libs.contains(&built)
+            {
+                self.pending_native_libs.push(built);
+            }
+        }
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
             if !self
@@ -3971,6 +4015,23 @@ fn tests_base_dir(cur_dir: &str) -> &str {
         &cur_dir[..idx]
     } else {
         ""
+    }
+}
+
+/// Walk a parsed expression looking for a `Value::FnRef` with a
+/// non-MAX closure_var — the marker that the closure captures one or
+/// more outer variables.  Used by `set_field_check`'s `Type::Function`
+/// arm (P213) to reject capturing closures that can't fit the 4-byte
+/// struct-field layout.  Descends through Block, Span, and Set
+/// wrappers since the parser typically wraps the FnRef in a
+/// `fn_ref_with_closure` block alongside the closure-record allocation
+/// statements.
+fn capturing_fn_ref(v: &Value) -> bool {
+    match v.unspan() {
+        Value::FnRef(_, w, _) => *w != u16::MAX,
+        Value::Block(bl) => bl.operators.iter().any(capturing_fn_ref),
+        Value::Set(_, rhs) => capturing_fn_ref(rhs),
+        _ => false,
     }
 }
 

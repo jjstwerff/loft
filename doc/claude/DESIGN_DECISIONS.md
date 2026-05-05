@@ -91,6 +91,21 @@ Regression guard: `tests/scripts/56-closures.loft::test_capture_timing`.
 ergonomically with value capture AND the alternative has been
 prototyped to show it doesn't destabilise the store-based heap.
 
+**Future direction (recorded 2026-05-04, not a re-opening).**  The
+long-term ambition is to move closer to Rust's closure model —
+borrow-checked `&T` / `&mut T`, FnOnce / FnMut / Fn capability
+hierarchy, statically-enforced single-mutator-or-multiple-readers.
+The current copy-at-definition model with `Reference<T>` and a
+planned `Mutable<T>` stdlib helper covers the
+[EventLoop](EVENT_LOOP.md) and first-game use cases acceptably;
+the closure-model evolution should be designed against
+real-world friction observed once a real game ships, not
+pre-emptively.  Sequencing for the evolution lives in
+[MUTABLE_CLOSURES.md](MUTABLE_CLOSURES.md) (the design spec) and
+[MUTABLE_CLOSURES_DISCUSSION.md](MUTABLE_CLOSURES_DISCUSSION.md)
+(alternatives considered, including the full Rust borrow-checker
+option F).
+
 ---
 
 ## C54.D — Rust-style numeric literal suffixes

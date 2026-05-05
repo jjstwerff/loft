@@ -17,9 +17,14 @@ thread_local! {
     static LAST_METHOD: RefCell<String> = const { RefCell::new(String::new()) };
     static LAST_PATH: RefCell<String> = const { RefCell::new(String::new()) };
     static LAST_BODY: RefCell<String> = const { RefCell::new(String::new()) };
+    /// Raw header block from the most recent accept (line-separated
+    /// `Key: Value` lines).  Stored separately from the body so the
+    /// existing HTTP API keeps its `body`-only semantics while
+    /// `n_ws_upgrade` can find `Sec-WebSocket-Key`.
+    static LAST_HEADERS: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
-fn parse_request(stream: &TcpStream) -> Option<(String, String, String)> {
+fn parse_request(stream: &TcpStream) -> Option<(String, String, String, String)> {
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
     reader.read_line(&mut request_line).ok()?;
@@ -30,6 +35,7 @@ fn parse_request(stream: &TcpStream) -> Option<(String, String, String)> {
     let method = parts[0].to_string();
     let path = parts[1].to_string();
 
+    let mut headers = String::new();
     let mut content_length: usize = 0;
     loop {
         let mut line = String::new();
@@ -42,6 +48,8 @@ fn parse_request(stream: &TcpStream) -> Option<(String, String, String)> {
                 content_length = value.trim().parse().unwrap_or(0);
             }
         }
+        headers.push_str(line.trim_end_matches(['\r', '\n']));
+        headers.push('\n');
     }
 
     let mut body = String::new();
@@ -51,7 +59,7 @@ fn parse_request(stream: &TcpStream) -> Option<(String, String, String)> {
         body = String::from_utf8_lossy(&buf).to_string();
     }
 
-    Some((method, path, body))
+    Some((method, path, headers, body))
 }
 
 // ── C-ABI exports ───────────────────────────────────────────────────────
@@ -93,9 +101,10 @@ pub extern "C" fn n_tcp_accept(handle: i32) -> bool {
         None => return false,
     };
     match parse_request(&stream) {
-        Some((method, path, body)) => {
+        Some((method, path, headers, body)) => {
             LAST_METHOD.with(|m| *m.borrow_mut() = method);
             LAST_PATH.with(|p| *p.borrow_mut() = path);
+            LAST_HEADERS.with(|h| *h.borrow_mut() = headers);
             LAST_BODY.with(|b| *b.borrow_mut() = body);
             CURRENT_CONN.with(|c| *c.borrow_mut() = Some(stream));
             true
@@ -176,16 +185,10 @@ thread_local! {
 /// Upgrade the current HTTP connection to WebSocket. Returns handle (>= 0) or -1.
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_upgrade() -> i32 {
-    let headers = LAST_BODY.with(|b| b.borrow().clone()); // reuse body field for headers
+    let hdrs = LAST_HEADERS.with(|h| h.borrow().clone());
     let stream = CURRENT_CONN.with(|c| c.borrow_mut().take());
     match stream {
         Some(mut s) => {
-            // Read headers from the original request
-            let hdrs = LAST_PATH.with(|_| {
-                // Headers were parsed during tcp_accept; we need them for the upgrade.
-                // For now, use a simplified approach: re-read from stored headers.
-                headers.clone()
-            });
             if !websocket::ws_upgrade(&mut s, &hdrs) {
                 return -1;
             }

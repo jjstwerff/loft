@@ -5,7 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 16 — Coroutine validation: yielded-type × drive-context matrix
 
-**Status: open** (no commits yet)
+**Status: pre-flight 2026-05-04 surfaced 0/7 cells passing.  P210
+closed 2026-05-04** — `collect_segments` in
+`src/generation/coroutine.rs` now recognises `Value::Loop` (while)
+alongside `Value::Block` (for), so `while …; yield …` generators
+no longer produce empty state machines.  P211 (yield text) still
+open; Y3 (Reference) and Y4 (tuple) cells likely also still fail
+on text/Reference/tuple lifetime through the state machine — to be
+re-probed.  Phase 00 wiring not yet started.
 
 ## Goal
 

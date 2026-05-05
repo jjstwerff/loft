@@ -260,7 +260,20 @@ struct MsgLoadWasm { module_id: text, url: text, signature: text }
 struct MsgError    { code: integer, message: text }
 ```
 
-### Dispatcher (in loft)
+### Dispatcher (in loft) — SUPERSEDED
+
+> **Superseded by [EVENT_LOOP.md](EVENT_LOOP.md).**  This
+> `Dispatcher` struct + `dispatch(env, &Dispatcher)` design was
+> never implemented.  The canonical model is now EventLoop's
+> typed handlers: `el::on(loop, fn(e: T) { ... })` registers a
+> handler keyed on the recv-type's canonical name with the
+> library deriving the encoding from R's shape; the wire
+> frame's `handler_id` field (see
+> [EVENT_PROTOCOL.md](EVENT_PROTOCOL.md)) replaces the
+> variant-tagged dispatch shown below.  See
+> [EVENT_LOOP.md § three-tier registration](EVENT_LOOP.md#three-tier-registration)
+> for the full registration API (`on` / `on_at` / `on_with`).
+> The struct sketch is retained here only for design history.
 
 ```loft
 // Process one envelope received from the server.

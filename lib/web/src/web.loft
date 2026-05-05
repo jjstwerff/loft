@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// --- HTTP Client ---
+// --- HTTP Client + WebSocket Client ---
 // Blocking HTTP client for consuming web services.
+// Polling WebSocket client for browser-and-native communication.
 
 // The result of an HTTP request.
 pub struct HttpResponse {
@@ -83,4 +84,99 @@ pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse 
 pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse {
   status = http_do("DELETE", url, "", join_headers(headers));
   HttpResponse { status: status, body: http_body() }
+}
+
+// --- WebSocket client ---
+//
+// Handler-style API: the programmer opens a session with `ws_handler`,
+// then drives event delivery by calling `pump(handler, on_message)`
+// from a main loop.  The library manages the connection lifecycle:
+// connect at registration time, auto-reconnect on transient failure
+// (exponential backoff capped at 10 seconds), close on `close()`.
+//
+// The `pump` closure is passed in per call rather than stored in the
+// `WsHandler` struct — that's the workaround for the layout limit on
+// closure-in-struct-field captures (PROBLEMS.md § 213).  Once full
+// closure support lands, `on_message` will move into the struct so
+// it can be registered once at `ws_handler` time.  The architecture
+// validated here is the one the eventual API targets; only the
+// "where does the closure live" detail changes.
+//
+// State pattern: the closure typically captures a `Reference<T>` to
+// state held in a Store (the "store with a fixed pointer" workaround
+// — the pointer is snapshotted at capture time, and the record it
+// points at remains mutable through the pointer).  This makes the
+// per-message handler look identical to the future direct-capture
+// style.
+
+pub struct WsHandler {
+  id: integer            // Rust-side connection slot
+}
+
+// --- Internal natives (lifecycle primitives) ---
+
+fn ws_connect_native(url: text) -> integer;
+#native "n_ws_connect"
+
+fn ws_send_native(handle: integer, msg: text) -> boolean;
+#native "n_ws_client_send"
+
+// Returns true when a message has been delivered to the receive
+// buffer; false when the queue is empty or the connection is currently
+// down.  After true, call ws_message_native() to read the payload.
+fn ws_recv_native(handle: integer) -> boolean;
+#native "n_ws_client_recv"
+
+fn ws_message_native() -> text;
+#native "n_ws_client_message"
+
+fn ws_close_native(handle: integer);
+#native "n_ws_client_close"
+
+// --- Public API ---
+
+// Open a WebSocket session.  Returns null only if the URL is
+// malformed; transient connection failures (server not yet up,
+// network blip) are absorbed by the auto-reconnect loop in the Rust
+// layer, so this call always returns a usable handle for any
+// well-formed `ws://...` URL.
+pub fn ws_handler(url: text) -> WsHandler {
+  id = ws_connect_native(url);
+  if id < 0 { return null; }
+  WsHandler { id: id }
+}
+
+// Send a text message to the server.  Returns true on success; false
+// means the connection is currently in backoff / reconnecting and the
+// caller may retry after the next `pump()`.
+pub fn send(self: WsHandler, msg: text) -> boolean {
+  ws_send_native(self.id, msg)
+}
+
+// Drain any pending received messages, firing `on_message` for each.
+// Returns the count of messages delivered this call.  Call this from
+// a main loop (and yield to the host between iterations on the browser
+// target) to drive event delivery without async.
+pub fn pump(self: WsHandler, on_message: fn(text)) -> integer {
+  count = 0;
+  while ws_recv_native(self.id) {
+    on_message(ws_message_native());
+    count += 1;
+  }
+  count
+}
+
+// Non-blocking single-message receive.  Returns the next pending
+// message text if one is available, null otherwise.  Equivalent to a
+// single iteration of pump without the callback — useful when the
+// receiver wants to drive its own loop and accumulate messages
+// locally without capturing state inside a closure.
+pub fn try_recv(self: WsHandler) -> text {
+  if !ws_recv_native(self.id) { return null; }
+  ws_message_native()
+}
+
+// Permanently close the session (no further reconnect attempts).
+pub fn close(self: WsHandler) {
+  ws_close_native(self.id);
 }

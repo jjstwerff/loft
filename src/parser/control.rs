@@ -1553,7 +1553,7 @@ impl Parser {
             }
 
             // parse optional guard clause.
-            let guard_opt = if self.lexer.has_token("if") {
+            let mut guard_opt = if self.lexer.has_token("if") {
                 let mut guard_code = Value::Null;
                 let guard_type = self.expression(&mut guard_code);
                 if !self.first_pass && guard_type != Type::Boolean {
@@ -1583,6 +1583,23 @@ impl Parser {
             };
             if result_type == Type::Void {
                 result_type = arm_type.clone();
+            }
+            // P209 — when the arm has both a guard and pattern bindings
+            // (e.g. `x if x < 0 => …`), the guard must see the bound
+            // variable.  Prepend the binding assignments to the guard
+            // expression so the bound name is initialised before the
+            // guard reads it.  Without this the guard saw the
+            // uninitialised slot (typically 0), causing `x if x < 0`
+            // to mis-fire and either skip the arm (interp) or fall
+            // through to a sibling guard (`x == 0`) silently.  The
+            // enum-variant struct-field path at the call site of
+            // `build_scalar_chain` already wraps guards this way.
+            if !arm_bindings.is_empty()
+                && let Some(guard) = guard_opt.take()
+            {
+                let mut stmts = arm_bindings.clone();
+                stmts.push(guard);
+                guard_opt = Some(v_block(stmts, Type::Boolean, "binding_guard"));
             }
             // prepend any binding assignments (from `name @ pattern` or bare `name`)
             // to the arm body so the variable is assigned before the body executes.
@@ -3023,6 +3040,48 @@ impl Parser {
         types: &[Type],
     ) -> Option<Type> {
         if !self.vars.name_exists(name) {
+            // P215 — a captured fn-typed var from the enclosing scope
+            // (`outer = fn(y) { inner(y) + 1 }` where `inner` lives
+            // in the surrounding fn) is not callable from inside
+            // another lambda's body.  Routing through the existing
+            // capture mechanism would require persisting the
+            // captured fn-ref through the synthetic closure record's
+            // `Type::Function` field — but that field is only 4B
+            // (just the d_nr) while a fn-ref value is 16B, the same
+            // layout limitation that gates P213 (capturing closures
+            // in struct fields).  Rather than ship a broken halfway
+            // dispatch (interp panics with "fn_call_ref: d_nr out of
+            // range" because the truncated bytes look like a random
+            // d_nr), surface a clear diagnostic at parse time.  The
+            // proper fix lands when P213's layout-widening fix lands
+            // — see PROBLEMS.md § 213 for the design.
+            if let Some((_n, ctype)) = self
+                .capture_context
+                .iter()
+                .find(|(n, t)| n == name && matches!(t, Type::Function(_, _, _)))
+                .cloned()
+            {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "captured fn-typed variable '{name}' cannot be called from inside another closure body \
+                         (captures of `fn(...) -> ...` types share P213's struct-field layout limitation; \
+                         the captured fn-ref's d_nr is truncated to 4 bytes when stored in the closure record); \
+                         define the inner function at file scope, or inline its body inside the outer closure"
+                    );
+                }
+                // Swallow the call-site so the cascade
+                // ("Unknown function inner" + "never read") doesn't
+                // pile on top of the real diagnostic.  Return the
+                // captured fn-ref's declared return type so the
+                // surrounding expression still type-checks against
+                // its expected operand width.
+                let Type::Function(_, ret, _) = ctype else {
+                    unreachable!()
+                };
+                return Some(*ret);
+            }
             return None;
         }
         let v_nr = self.vars.var(name);

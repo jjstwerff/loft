@@ -5,7 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 17 — Bounded-generic / interface validation
 
-**Status: phase 01 — 3 of 3 pre-flight bugs closed (interpreter); (A) caveat closed too (4 lock-in tests PASS); native (B) follow-up filed as P208.**
+**Status: phase 01 closed (PR #207).  Phase 02 (multi-bound, two-T)
+pre-flight 2026-05-04 confirmed feature gaps, not bugs — `<T: A + B>`,
+`<A, B>`, and `where`-clauses all parse-error at `>` because loft's
+generics currently support a single type parameter.  No P-issue filed;
+phases 02-06 are scheduled feature work, not bug-fix gating.  P208
+was closed in PR #207.**
 
 Closed (2026-05-04):
 - **(C) built-in `to_text` impls.**  Six `to_text` impls added at

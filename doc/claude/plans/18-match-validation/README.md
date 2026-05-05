@@ -5,7 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 18 — Match expression validation
 
-**Status: phase 01 partial — or-pattern + `@`-binding hang fixed.**
+**Status: phase 01 closed (PR #207).  Phase 02 — P209 (match guards
+saw pattern bindings as uninitialised) closed 2026-05-04 in
+`src/parser/control.rs::parse_scalar_match`.  Range patterns work.
+Phase 02 wiring (matrix tests for range / guard / null patterns)
+not yet started.**
 
 Closed (2026-05-04):
 - **Hang fix**: `expect_match_arm_arrow` recovers via

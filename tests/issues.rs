@@ -11123,6 +11123,105 @@ fn run() -> integer {
     .result(Value::Int(37));
 }
 
+/// P212 — closed 2026-05-04.  Nested tuple literals
+/// (`((1,2),(3,4))`, triply nested, etc.) panicked at
+/// `src/state/codegen.rs:1527` because the inline match in
+/// `gen_set_first_at_tos`'s `Type::Tuple` arm had no case for an
+/// inner element of `Type::Tuple(_)` — it fell through to the
+/// "unsupported elem" panic.  Fix extracts the per-leaf
+/// `OpPut*` emission into a recursive helper
+/// `emit_tuple_put_ops` that descends through nested tuples,
+/// computing each leaf's absolute slot offset.  Iteration is
+/// reverse-order to match the depth-first push order used by
+/// tuple-literal evaluation.
+#[test]
+fn p212_nested_tuple_literal() {
+    code!(
+        "fn run() -> integer {
+    t = ((1, 2), (3, 4));
+    t.0.0 * 1000 + t.0.1 * 100 + t.1.0 * 10 + t.1.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1234));
+}
+
+/// P212 follow-up — triply nested tuple literal `(1, (2, (3, 4)))`.
+#[test]
+fn p212_triply_nested_tuple_literal() {
+    code!(
+        "fn run() -> integer {
+    t = (1, (2, (3, 4)));
+    t.0 * 1000 + t.1.0 * 100 + t.1.1.0 * 10 + t.1.1.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1234));
+}
+
+/// P210 — closed 2026-05-04.  Native coroutine `while … { yield … }`
+/// silently returned 0 because `collect_segments` in
+/// `src/generation/coroutine.rs` only recognised `Value::Block`
+/// containing yields (the for-loop shape) and missed `Value::Loop`
+/// (the while-loop shape).  The state machine ended up with no arms,
+/// so every `next_i64` call returned `COROUTINE_EXHAUSTED` and the
+/// driving for-loop broke immediately.  Interp drives generators via
+/// the bytecode VM, not the state-machine lowering, so it was
+/// unaffected.  Fix extends the matcher to `Value::Block(_) |
+/// Value::Loop(_)`.
+#[test]
+fn p210_native_coroutine_while_yield() {
+    code!(
+        "fn count_to(n: integer) -> iterator<integer> {
+    i = 0;
+    while i < n {
+        yield i;
+        i = i + 1;
+    }
+}
+fn run() -> integer {
+    sum = 0;
+    for v in count_to(5) {
+        sum = sum + v;
+    }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(10));
+}
+
+/// P209 — closed 2026-05-04.  Match guard arms with pattern bindings
+/// (`x if x < 0 => …`) saw the binding variable as uninitialised
+/// because the binding `v_set(x, subject)` was prepended only to the
+/// arm body, not to the guard expression.  Result: `x` read as 0
+/// inside the guard, so `x if x < 0` failed for every input on both
+/// backends, and `x if x == 0` matched everything (interp shifted
+/// arms by one; native always returned arm 2).  Fix in
+/// `src/parser/control.rs::parse_scalar_match` wraps the guard in a
+/// `binding_guard` block whose statements run the bindings first
+/// then evaluate the guard.  The enum-variant struct-field path at
+/// `build_scalar_chain`'s call site already did this correctly; the
+/// scalar-match path was the missing case.
+#[test]
+fn p209_scalar_match_guard_sees_pattern_binding() {
+    // Three-arm classify: input -3 must reach arm 1 (`x < 0`).
+    code!(
+        "fn classify(n: integer) -> text {
+    match n {
+        x if x < 0 => \"neg\",
+        x if x == 0 => \"zero\",
+        _ => \"pos\",
+    }
+}
+fn run() -> text {
+    \"{classify(-3)}|{classify(0)}|{classify(7)}\"
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("neg|zero|pos".to_string()));
+}
+
 /// plan-19 phase 03 — closed 2026-05-04.  Method-on-parent-enum
 /// dispatch.  When a method is declared on an enum
 /// (`fn classify(self: Shape)`) and called via `.method()` syntax on
