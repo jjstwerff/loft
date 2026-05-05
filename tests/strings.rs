@@ -34,26 +34,34 @@ fn string_scope() {
   \"{a} via {b}\"
 "
     )
+    // Slot expectation refreshed after P223 (work-text wrap on
+    // self-referencing text assignments) added 2 extra `__work_*`
+    // slots — the fix wraps `b += rhs-with-self-ref` and `t += "2"`
+    // shapes in protective work-buffers so the interpreter's
+    // clear-before-evaluate text-Set semantics don't destroy the
+    // accumulator.  See `parser/expressions.rs:1273-1295`.
     .slots(
         "\
   block:1
-  __work_3+24=4 [0..127]
-  __work_2+24=28 [3..126]
-  __work_1+24=52 [6..125]
-  test_value+24=76 [9..124]
+  __work_5+24=4 [0..145]
+  __work_4+24=28 [3..144]
+  __work_3+24=52 [6..143]
+  __work_2+24=76 [9..142]
+  __work_1+24=100 [12..141]
+  test_value+24=124 [15..140]
   │ block:2
-  │ a+8=100 [11..86]
-  │ b+24=108 [12..103]
+  │ a+8=148 [17..102]
+  │ b+24=156 [18..119]
   │ │ for:3
-  │ │ n#index+8=132 [16..82]
-  │ │ │ loop:4L [seq 17..83]
-  │ │ │ n+8=140 [29..70]
+  │ │ n#index+8=180 [22..98]
+  │ │ │ loop:4L [seq 23..99]
+  │ │ │ n+8=188 [35..81]
   │ │ │ │ block:6
-  │ │ │ │ t+24=148 [30..82]
-  │ │ │ │ │ for:8
-  │ │ │ │ │ _m#index+8=172 [54..70]
-  │ │ │ │ │ │ loop:9L [seq 55..71]
-  │ │ │ │ │ │ _m+8=180 [67..67]",
+  │ │ │ │ t+24=196 [36..98]
+  │ │ │ │ │ for:9
+  │ │ │ │ │ _m#index+8=220 [65..81]
+  │ │ │ │ │ │ loop:10L [seq 66..82]
+  │ │ │ │ │ │ _m+8=228 [78..78]",
     )
     .result(Value::str("136 via n:1=1 n:2=12 n:3=122 "));
 }
