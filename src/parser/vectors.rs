@@ -769,6 +769,16 @@ impl Parser {
                 .data
                 .add_def(&record_name, self.lexer.pos(), DefType::Struct);
             for (name, tp) in &captures {
+                // P216: ensure the synthetic `__tuple<…>` struct exists
+                // for any tuple-typed capture before `fill_database`
+                // walks the closure record's attributes — without this,
+                // `type_elm(&Type::Tuple(_))` returns `u32::MAX` and the
+                // closure record's tuple-typed attribute is silently
+                // skipped at `typedef.rs:381`, leaving the closure
+                // record with size 0 and the `OpDatabase` allocation
+                // panicking with "Incomplete record" at
+                // `src/store.rs:227`.
+                ensure_tuple_defs_for_capture(&mut self.data, &mut self.lexer, tp);
                 self.data
                     .add_attribute(&mut self.lexer, record_d_nr, name, tp.clone());
             }
@@ -1788,4 +1798,32 @@ impl Parser {
     }
 
     // <children> ::=
+}
+
+/// P216: walk a captured variable's `Type` and call `tuple_def` for
+/// every `Type::Tuple` (including nested) so the synthetic
+/// `__tuple<…>` struct exists by the time `fill_database` walks the
+/// closure record's attributes.  Without this, a tuple-typed capture
+/// surfaces `u32::MAX` from `type_elm` and the attribute is silently
+/// skipped — closure record allocates with size 0 → `OpDatabase`
+/// panics "Incomplete record" / native dispatches with field offsets
+/// at `u16::MAX` → silent corruption.
+fn ensure_tuple_defs_for_capture(
+    data: &mut crate::data::Data,
+    lexer: &mut crate::lexer::Lexer,
+    tp: &Type,
+) {
+    match tp {
+        Type::Tuple(elems) => {
+            // Recurse first so nested tuples register inside-out.
+            for inner in elems {
+                ensure_tuple_defs_for_capture(data, lexer, inner);
+            }
+            data.tuple_def(lexer, elems);
+        }
+        Type::Vector(inner, _) | Type::RefVar(inner) => {
+            ensure_tuple_defs_for_capture(data, lexer, inner);
+        }
+        _ => {}
+    }
 }

@@ -146,6 +146,84 @@ impl Stores {
         }
     }
 
+    /// P213: claim a fresh record in `host_field`'s Store of size matching
+    /// `content_kt`, deep-copy `src`'s payload + nested heap fields into
+    /// it, then write the new rec-id u32 into `host_field`.  Used by
+    /// capturing-closure-in-struct-field writes to co-locate the
+    /// parent-Store closure record in host's Store.  The new record's
+    /// lifetime is bound to the host: `Parts::ChildRec(content_kt)`'s
+    /// cascade in `copy_claims` / `remove_claims` deep-copies and frees
+    /// it whenever the host is copied or freed.
+    pub fn claim_child_rec(&mut self, host_field: &DbRef, src: &DbRef, content_kt: u16) {
+        if src.rec == 0 {
+            return;
+        }
+        let size = u32::from(self.size(content_kt));
+        let new_rec = self.allocations[host_field.store_nr as usize].claim(size);
+        let new_db = DbRef {
+            store_nr: host_field.store_nr,
+            rec: new_rec,
+            pos: 8,
+        };
+        // Cross-store byte copy of the child record's payload.
+        if host_field.store_nr == src.store_nr {
+            self.store_mut(host_field).copy_block(
+                src.rec,
+                src.pos as isize,
+                new_rec,
+                new_db.pos as isize,
+                size as isize,
+            );
+        } else {
+            let src_store: &Store;
+            let dst_store: &mut Store;
+            unsafe {
+                src_store = keys::store(src, &*std::ptr::from_ref::<[Store]>(&self.allocations));
+                dst_store = keys::mut_store(
+                    host_field,
+                    &mut *std::ptr::from_mut::<[Store]>(&mut self.allocations),
+                );
+            }
+            src_store.copy_block_between(
+                src.rec,
+                src.pos as isize,
+                dst_store,
+                new_rec,
+                new_db.pos as isize,
+                size as isize,
+            );
+        }
+        // Deep-copy nested heap fields (text, Reference, vector, ...).
+        self.copy_claims(src, &new_db, content_kt);
+        // Write the new rec-id into host's field as a u32.
+        self.store_mut(host_field)
+            .set_u32_raw(host_field.rec, host_field.pos, new_rec);
+    }
+
+    /// P213: read the rec-id u32 at `host_field` and construct a `DbRef`
+    /// pointing at element [0]'s standard struct payload start (`pos=8`)
+    /// in the same Store as the host.  Returns the null sentinel
+    /// (`store_nr=u16::MAX, rec=0, pos=0`) when the rec-id is 0
+    /// (non-capturing / default-init case).
+    #[must_use]
+    pub fn ref_from_child_rec(&self, host_field: &DbRef) -> DbRef {
+        let store = keys::store(host_field, &self.allocations);
+        let rec = store.get_u32_raw(host_field.rec, host_field.pos);
+        if rec == 0 {
+            DbRef {
+                store_nr: u16::MAX,
+                rec: 0,
+                pos: 0,
+            }
+        } else {
+            DbRef {
+                store_nr: host_field.store_nr,
+                rec,
+                pos: 8,
+            }
+        }
+    }
+
     pub fn vector_add(&mut self, db: &DbRef, o_db: &DbRef, known: u16) {
         let o_length = vector::length_vector(o_db, &self.allocations);
         if o_length == 0 {
@@ -421,6 +499,12 @@ impl Stores {
                 at: 0,
                 path: path.clone(),
             }),
+            // P213: child-record pointer (closures) — same JSON
+            // restriction as DbRef.
+            Parts::ChildRec(_) => Err(WalkErr {
+                at: 0,
+                path: path.clone(),
+            }),
         }
     }
 
@@ -667,6 +751,11 @@ impl Stores {
                 s.set_u32_raw(rec.rec, rec.pos, 0);
                 s.set_u32_raw(rec.rec, rec.pos + 4, 0);
                 s.set_u32_raw(rec.rec, rec.pos + 8, 0);
+            }
+            // P213: default child-record pointer = 0 (null sentinel /
+            // empty / non-capturing).
+            Parts::ChildRec(_) => {
+                self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
             }
             Parts::Base => {
                 panic!(

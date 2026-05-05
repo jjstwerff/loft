@@ -885,6 +885,22 @@ fn OpFinishRecord(data: reference, rec: reference, parent_tp: const u16, fld: co
 fn OpAppendVector(r: vector, other: vector, tp: const u16);
 #rust"s.database.vector_add(&@r, &@other, @tp);"
 #impure(parent_write)
+// P213: claim a fresh record in `field`'s Store, deep-copy `src`'s
+// payload + nested heap data into it, write the new rec-id u32 into
+// `field`.  Used by capturing-closure-in-struct-field writes to
+// co-locate the parent-Store closure record in host's Store.
+// `Parts::ChildRec(content_tp)` cascade frees the new record when the
+// host is freed via `OpFreeRef` / `remove_claims`.
+fn OpClaimChildRec(field: reference, src: reference, tp: const u16);
+#rust"s.database.claim_child_rec(&@field, &@src, @tp);"
+#impure(parent_write)
+// P213: read the rec-id u32 stored at `field` and construct a `DbRef`
+// pointing at the child record (rec, pos=8) co-located in the same
+// Store as the host.  Returns the null sentinel when rec==0
+// (non-capturing closure / default-init).
+fn OpRefFromChildRec(field: reference) -> reference[field];
+#rust"s.database.ref_from_child_rec(&@field)"
+#pure
 // Get a record from a structure. This operator also reads a dynamic key from stack (not shown here)
 fn OpGetRecord(data: reference, db_tp: const u16, no_keys: const u8) -> reference[data];
 fn OpValidate(data: reference, db_tp: const u16);

@@ -434,6 +434,38 @@ pub fn OpInsertVector(
     new_value
 }
 
+/// P213: read element [0] of a vector field as a `DbRef`, or null
+/// when the vector is empty.  Used by capturing-closure-in-struct-
+/// field reads to extract the closure record's `DbRef` from the
+/// host's `cb__closure_rec` vector field.  Mirrors
+/// `vector_first_or_null` in `src/fill.rs`.
+#[must_use]
+pub fn op_vector_first_or_null(stores: &[crate::store::Store], host: &DbRef) -> DbRef {
+    let store = crate::keys::store(host, stores);
+    let vec_rec = store.get_u32_raw(host.rec, host.pos);
+    if vec_rec == 0 {
+        return DbRef {
+            store_nr: u16::MAX,
+            rec: 0,
+            pos: 0,
+        };
+    }
+    let length = store.get_u32_raw(vec_rec, 4);
+    if length == 0 {
+        DbRef {
+            store_nr: u16::MAX,
+            rec: 0,
+            pos: 0,
+        }
+    } else {
+        DbRef {
+            store_nr: host.store_nr,
+            rec: vec_rec,
+            pos: 8,
+        }
+    }
+}
+
 /// Return the UTF-8 byte length of a character (encoded as `i32` in loft).
 /// Returns 0 for the null character sentinel.
 /// Bytecode equivalent: `State::length_character` in `src/state/text.rs:54`.

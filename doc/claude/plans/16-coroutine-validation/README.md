@@ -23,12 +23,25 @@ falling through to the broken `as i32` arm.  Pinned by
 in `tests/issues.rs` and the extended
 `tests/scripts/51-coroutines.loft`.
 
-Two P211-adjacent bugs filed 2026-05-05 while probing fix variants:
-P218 (format-string interpolating a parameter inside a generator
-body — `__work` buffer scope mismatch, native E0425) and P219
-(for-loop over a vector literal in a generator body — factory
-function E0308 unit/Box mismatch; range-for works).  Both are
-distinct from the next_text channel and unblock once fixed.
+P218 closed 2026-05-05 — `__work_*` text-format buffers used across
+multiple state arms (or in the eager-collect factory body for
+while/for-yields) are now pre-declared at function scope in both
+`emit_next_i64` and `emit_for_body_factory` so they're visible from
+every per-state emission.  Pinned by
+`p218_coroutine_yield_format_with_param` +
+`p218_coroutine_while_yield_format` in `tests/issues.rs` and the
+extended `tests/scripts/51-coroutines.loft`.
+
+P219 closed 2026-05-05 — `emit_for_body_factory` now strips
+trailing `Return` ops from the body's operator list before emit,
+so `patch_hoisted_returns`' `[Loop, Return(Null)]` →
+`[Return(Loop)]` coalesce no longer reaches the factory's body.
+Pinned by `tests/issues.rs::p219_vector_for_yield_in_generator`
++ `p219_vector_for_yield_text`.
+
+P226 (mixed Simple + ForLoopBody yield segments — `__vdb_*`
+backing locals scoped to one arm) filed 2026-05-05 during P219
+fix-variant probing.  Same scoping family as P218 / P224.
 
 Y3 (Reference) and Y4 (tuple) cells still need re-probe with the
 new yield-type infrastructure.  Phase 00 wiring not yet started.

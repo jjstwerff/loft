@@ -978,6 +978,60 @@ impl Stores {
             Parts::Vector(v) | Parts::Sorted(v, _) => {
                 self.copy_claims_seq_vector(rec, to, *v);
             }
+            Parts::ChildRec(content_kt) => {
+                // P213: read source rec-id; if 0 (empty / non-capturing),
+                // clear destination.  Otherwise claim a fresh record in
+                // dest's Store, byte-copy the child's payload, recurse on
+                // the child's nested heap fields, and write the new rec-id
+                // into dest's field.
+                let src_rec = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if src_rec == 0 {
+                    self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
+                } else {
+                    let content_kt = *content_kt;
+                    let size = u32::from(self.size(content_kt));
+                    let new_rec = self.allocations[to.store_nr as usize].claim(size);
+                    let src_db = DbRef {
+                        store_nr: rec.store_nr,
+                        rec: src_rec,
+                        pos: 8,
+                    };
+                    let new_db = DbRef {
+                        store_nr: to.store_nr,
+                        rec: new_rec,
+                        pos: 8,
+                    };
+                    // Cross-store byte copy of payload.
+                    if rec.store_nr == to.store_nr {
+                        self.store_mut(to)
+                            .copy_block(src_rec, 8, new_rec, 8, size as isize);
+                    } else {
+                        let src_store: &Store;
+                        let dst_store: &mut Store;
+                        unsafe {
+                            src_store = crate::keys::store(
+                                &src_db,
+                                &*std::ptr::from_ref::<[Store]>(&self.allocations),
+                            );
+                            dst_store = crate::keys::mut_store(
+                                to,
+                                &mut *std::ptr::from_mut::<[Store]>(&mut self.allocations),
+                            );
+                        }
+                        src_store.copy_block_between(
+                            src_rec,
+                            8,
+                            dst_store,
+                            new_rec,
+                            8,
+                            size as isize,
+                        );
+                    }
+                    // Deep-copy nested heap fields (text, Reference, etc.).
+                    self.copy_claims(&src_db, &new_db, content_kt);
+                    self.store_mut(to).set_u32_raw(to.rec, to.pos, new_rec);
+                }
+            }
             Parts::Array(v) | Parts::Ordered(v, _) => {
                 self.copy_claims_array_body(rec, to, *v);
             }
@@ -1049,6 +1103,27 @@ impl Stores {
                         tp,
                     );
                 }
+                let store = self.store_mut(rec);
+                store.delete(cur);
+                store.set_u32_raw(rec.rec, rec.pos, 0);
+            }
+            Parts::ChildRec(content_kt) => {
+                // P213: read rec-id; if 0, nothing to free.  Otherwise
+                // recurse to free child's nested heap data first, then
+                // delete the child record itself.  Resets the field's
+                // u32 to 0 so reassignment / re-host-construction starts
+                // from a clean slate.
+                let content_kt = *content_kt;
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 {
+                    return;
+                }
+                let child_db = DbRef {
+                    store_nr: rec.store_nr,
+                    rec: cur,
+                    pos: 8,
+                };
+                self.remove_claims(&child_db, content_kt);
                 let store = self.store_mut(rec);
                 store.delete(cur);
                 store.set_u32_raw(rec.rec, rec.pos, 0);

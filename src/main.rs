@@ -1820,6 +1820,7 @@ fn main() {
                 fn_ref_context: false,
                 i32_literal_context: false,
                 tuple_text_to_string: false,
+                coroutine_persistent_vars: HashSet::new(),
                 call_stack_prefix: None,
                 wasm_browser: false,
             };
@@ -1917,6 +1918,7 @@ fn main() {
                 fn_ref_context: false,
                 i32_literal_context: false,
                 tuple_text_to_string: false,
+                coroutine_persistent_vars: HashSet::new(),
                 call_stack_prefix: None,
                 wasm_browser: true,
             };
@@ -2120,6 +2122,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 fn_ref_context: false,
                 i32_literal_context: false,
                 tuple_text_to_string: false,
+                coroutine_persistent_vars: HashSet::new(),
                 call_stack_prefix: None,
                 wasm_browser: false,
             };

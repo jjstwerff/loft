@@ -123,6 +123,15 @@ pub enum Parts {
     // fn-ref struct field can round-trip through storage.
     // No element type — DbRef bytes are opaque at this layer.
     DbRef,
+    // P213: 4-byte u32 rec-id pointing at a child record (of type
+    // `content`) co-located in the SAME Store as the host record.
+    // Lifetime is exactly the host's: `copy_claims` / `remove_claims`
+    // cascade automatically claim/free the child via the cascade arms
+    // for this variant.  Distinct from `Vector(c)` (which holds N
+    // elements with a length-prefixed chunk) and `DbRef` (12B opaque
+    // pointer with no cascade).  Used by capturing-closure-in-struct-
+    // field codegen to co-locate the closure record in host's Store.
+    ChildRec(u16),
 }
 
 impl PartialEq for Content {

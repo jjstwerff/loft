@@ -125,6 +125,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,
+            coroutine_persistent_vars: std::collections::HashSet::new(),
             call_stack_prefix: None,
             wasm_browser: false,
         };

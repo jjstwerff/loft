@@ -126,7 +126,14 @@ impl Output<'_> {
             Value::Var(var) => {
                 let variables = &self.data.def(self.def_nr).variables;
                 let var_name = sanitize(variables.name(*var));
-                if variables.is_argument(*var) {
+                if self.coroutine_persistent_vars.contains(var) {
+                    // P224: read from the coroutine struct field.
+                    if matches!(variables.tp(*var), Type::Text(_)) {
+                        write!(w, "&self.var_{var_name}")?;
+                    } else {
+                        write!(w, "self.var_{var_name}")?;
+                    }
+                } else if variables.is_argument(*var) {
                     if let Type::RefVar(inner) = variables.tp(*var) {
                         // By-ref argument: variable holds &mut T — dereference to read value.
                         if matches!(**inner, Type::Text(_)) {
@@ -387,6 +394,15 @@ impl Output<'_> {
             write!(w, "{:?}", crate::data::Value::CallRef(v_nr, args.to_vec()))?;
             return Ok(());
         };
+        // P227: parser appends ONE work-buffer arg for text-returning
+        // fn-ref calls.  The candidate filter compares against the
+        // user-visible param count, not raw `args.len()`.
+        let is_text_return_match = matches!(ret_type, Type::Text(_));
+        let user_arg_match = if is_text_return_match && args.len() > param_types.len() {
+            args.len() - 1
+        } else {
+            args.len()
+        };
         // Collect all definitions with a matching signature.
         // Only include native-callable functions (n_ / t_ prefix) in the reachable set;
         // bytecode ops (Op* prefix) are never callable via fn-refs in native mode.
@@ -409,20 +425,26 @@ impl Output<'_> {
             // attribute. The closure is injected explicitly at the call site (in arg_exprs),
             // so total arg count must equal the full attribute count.
             let has_closure = def.attributes.last().is_some_and(|a| a.name == "__closure");
-            let visible_attr_count = if has_closure {
-                def.attributes.len() - 1
-            } else {
-                def.attributes.len()
-            };
-            // Visible arg count must equal args provided at call site (closure is injected separately).
-            if visible_attr_count != args.len() {
-                continue;
-            }
-            // Compare visible parameter types only (Type::Function excludes __closure).
-            let params_match = def
+            // P227: hidden-attribute detection is TYPE-based, not name-based.
+            // Text-return work-buffers ride as `Type::RefVar(Type::Text(_))`
+            // attributes that the parser names after the user-visible variable
+            // they shadow (e.g. `a` for `a = "first: {n}"; a`) — a name-prefix
+            // check (`starts_with("__")`) would miss these and reject otherwise
+            // matching candidates.  Closure records remain detected by the
+            // exact `__closure` name (its typedef is plain `DbRef`).
+            let visible_attrs: Vec<&crate::data::Attribute> = def
                 .attributes
                 .iter()
-                .take(visible_attr_count)
+                .filter(|a| {
+                    !matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Text(_)))
+                        && a.name != "__closure"
+                })
+                .collect();
+            if visible_attrs.len() != user_arg_match {
+                continue;
+            }
+            let params_match = visible_attrs
+                .iter()
                 .zip(param_types.iter())
                 .all(|(a, expected)| {
                     rust_type(&a.typedef, &Context::Argument)
@@ -460,6 +482,27 @@ impl Output<'_> {
         // synthetic `__closure` (a `DbRef`); we append a RawExpr arg
         // for the closure expression so attribute count and arg count
         // line up.
+        // P227: for text-returning fn-refs, the parser appends ONE
+        // work-buffer arg to `args` (a `Value::Block` evaluating to
+        // `&mut String` referencing a caller-function-scope work-text
+        // variable).  Split it off so candidate matching uses the
+        // user-visible args only; pass the work-buffer via `_farg_<n>`
+        // to any candidate whose attribute list has a `RefVar(Text)`
+        // hidden attr.  Function-scope lifetime means the lambda's
+        // returned `Str` borrows a buffer that lives long enough for
+        // the outer assignment / format consumer to read it — no
+        // block-scope buffer, no per-arm `.to_string()` clone.
+        let is_text_return = matches!(ret_type, Type::Text(_));
+        let user_arg_count = if is_text_return && args.len() > param_types.len() {
+            args.len() - 1
+        } else {
+            args.len()
+        };
+        let work_buf_idx = if is_text_return && args.len() > user_arg_count {
+            Some(args.len() - 1)
+        } else {
+            None
+        };
         write!(w, "{{ ")?;
         for (i, arg) in args.iter().enumerate() {
             let expr = self.generate_expr_buf(arg)?;
@@ -475,22 +518,65 @@ impl Output<'_> {
             // Cross-scope closure — pass .1 from the fn-ref tuple.
             format!("var_{var_name}.1")
         };
+        let work_buf_expr: String = if let Some(idx) = work_buf_idx {
+            format!("_farg_{idx}")
+        } else {
+            // No parser-allocated work-buffer (e.g. fn-ref type isn't
+            // text-return, or call site predates Step 2).  Fall back to
+            // a block-scope buffer; arms that never write to it are
+            // unaffected.  This branch should be unreachable when ret
+            // is text after Step 2, but kept as a defensive default.
+            String::new()
+        };
         // match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
         write!(w, "match var_{var_name}.0 {{")?;
         for (d_nr, _fn_name, has_closure) in &candidates {
             write!(w, " {d_nr}_u32 => ")?;
-            // Build synthetic args: visible let-bindings + closure (if any).
-            let mut synthetic: Vec<Value> = (0..args.len())
-                .map(|i| Value::RawExpr(format!("_farg_{i}")))
-                .collect();
-            if *has_closure {
-                synthetic.push(Value::RawExpr(closure_expr.clone()));
+            // P227: text-return arms wrap each call result with
+            // `.to_string()` so heterogeneous candidate Rust signatures
+            // (some return `Str`, some return `String`) collapse to a
+            // uniform `String` for the match expression.  Both `Str`
+            // and `String` implement `ToString` (via `Display` / blanket
+            // impl), so this works for any text-typed candidate.  No
+            // `stores.scratch` usage — the produced `String` is owned
+            // by the match arm and naturally drops when the outer
+            // expression has consumed it.
+            if is_text_return {
+                write!(w, "(")?;
             }
+            // Build synthetic args matching this candidate's attribute list.
+            // The candidate's attrs are interleaved: user params, then
+            // hidden `RefVar(Text)` work-buffers, then `__closure` (if
+            // has_closure).  Detection is type-based for work-buffers,
+            // name-based only for `__closure`.
+            let candidate_def = self.data.def(*d_nr);
+            let mut synthetic: Vec<Value> = Vec::with_capacity(candidate_def.attributes.len());
+            let mut user_idx = 0_usize;
+            for a in &candidate_def.attributes {
+                if matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Text(_)))
+                {
+                    if work_buf_expr.is_empty() {
+                        // Defensive — shouldn't happen for text-returning
+                        // candidate without parser-supplied buffer.
+                        synthetic.push(Value::RawExpr("&mut String::new()".to_string()));
+                    } else {
+                        synthetic.push(Value::RawExpr(work_buf_expr.clone()));
+                    }
+                } else if a.name == "__closure" {
+                    synthetic.push(Value::RawExpr(closure_expr.clone()));
+                } else {
+                    synthetic.push(Value::RawExpr(format!("_farg_{user_idx}")));
+                    user_idx += 1;
+                }
+            }
+            let _ = has_closure;
             // Route through output_call_user_fn → emit_op → custom emitter
             // (or DefaultEmitter::user_fn_call_body when no emitter is
             // registered for this candidate).
-            let candidate_def = self.data.def(*d_nr);
             self.output_call_user_fn(w, candidate_def, &synthetic)?;
+            if is_text_return {
+                write!(w, ").to_string()")?;
+            }
             write!(w, ",")?;
         }
         write!(

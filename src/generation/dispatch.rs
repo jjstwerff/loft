@@ -18,15 +18,43 @@ impl Output<'_> {
         to: &Value,
     ) -> std::io::Result<()> {
         let variables = &self.data.def(self.def_nr).variables;
+        // P224: writes to coroutine-persistent locals target the struct
+        // field directly so the value survives across `next_*` calls.
+        // The same Var/Set pair would otherwise produce a state-arm-scoped
+        // `let mut var_X = …` shadow that arm 1+ cannot see.
+        if self.coroutine_persistent_vars.contains(&var) {
+            let name = sanitize(variables.name(var));
+            let needs_to_string = matches!(variables.tp(var), Type::Text(_));
+            write!(w, "self.var_{name} = ")?;
+            if needs_to_string {
+                write!(w, "(")?;
+            }
+            self.output_code_inner(w, to)?;
+            if needs_to_string {
+                write!(w, ").to_string()")?;
+            }
+            return Ok(());
+        }
         if variables.is_argument(var)
             && let Type::RefVar(inner) = variables.tp(var)
         {
             if to != &Value::Null {
                 let name = sanitize(variables.name(var));
                 write!(w, "*var_{name} = ")?;
+                let needs_text_coerce = matches!(**inner, Type::Text(_));
+                if needs_text_coerce {
+                    // P223: wrap the RHS in `(...)` so that `.to_string()`
+                    // attaches to the whole expression — without parens
+                    // an inner `Var(text_local)` (which emits `&var_x`)
+                    // would parse as `&(var_x.to_string())` (E0308:
+                    // `&String` vs `String`) per Rust method-call
+                    // precedence.  The parens are harmless for other
+                    // RHS shapes that already produce `String`/`&str`.
+                    write!(w, "(")?;
+                }
                 self.output_code_inner(w, to)?;
-                if matches!(**inner, Type::Text(_)) {
-                    write!(w, ".to_string()")?;
+                if needs_text_coerce {
+                    write!(w, ").to_string()")?;
                 }
             }
             return Ok(());
