@@ -5,3 +5,7 @@ loft = ">=0.8"
 
 [library]
 entry = "src/game_protocol.loft"
+
+[dependencies]
+server = { path = "../server" }
+web    = { path = "../web" }

@@ -7,5 +7,8 @@ loft = ">=0.8"
 entry = "src/server.loft"
 native = "loft_server"
 
+[native]
+crate = "loft-server"
+
 [dependencies]
 web = ">=0.1"

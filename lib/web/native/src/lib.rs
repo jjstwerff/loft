@@ -1,9 +1,14 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Native HTTP client. No loft dependency — uses ureq + loft-ffi only.
+//! Native HTTP client + WebSocket client.  HTTP uses ureq; WebSocket uses
+//! plain std::net (native build) or host imports (wasm build).
+//! WebSocket sessions auto-reconnect on connection failure with exponential
+//! backoff capped at 10 seconds — see `ws_client::ensure_connected`.
 
 use loft_ffi::LoftStr;
+
+mod ws_client;
 
 fn do_request(
     method: &str,
@@ -91,7 +96,65 @@ thread_local! {
     static LAST_BODY: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
+// ── WebSocket client C-ABI exports ───────────────────────────────────────
+
+/// Open (or queue for retry) a WebSocket connection.  Always returns a
+/// non-negative handle unless the URL is malformed.  If the initial
+/// handshake fails, the slot is created in disconnected state and the
+/// next send/recv will trigger a reconnect attempt subject to backoff.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ws_connect(url_ptr: *const u8, url_len: usize) -> i32 {
+    let url = unsafe { loft_ffi::text(url_ptr, url_len) };
+    ws_client::connect(url)
+}
+
+/// Send a text message on a WebSocket.  Returns true on success, false if
+/// the connection is not currently live (caller may retry on the next
+/// poll — reconnect is automatic with backoff).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ws_client_send(
+    handle: i32,
+    msg_ptr: *const u8,
+    msg_len: usize,
+) -> bool {
+    let msg = unsafe { loft_ffi::text(msg_ptr, msg_len) };
+    ws_client::send(handle, msg)
+}
+
+/// Poll for the next received message.  Returns true if a message was
+/// delivered (then call n_ws_client_message), false if the queue is
+/// empty or the connection is currently down.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_client_recv(handle: i32) -> bool {
+    ws_client::recv(handle)
+}
+
+/// Get the last message returned by `n_ws_client_recv`.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_client_message() -> LoftStr {
+    LAST_WS_MSG.with(|m| {
+        let new = ws_client::last_message();
+        *m.borrow_mut() = new;
+        loft_ffi::ret_ref(&m.borrow())
+    })
+}
+
+/// Close a WebSocket session permanently (no reconnect).
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_client_close(handle: i32) {
+    ws_client::close(handle);
+}
+
+thread_local! {
+    static LAST_WS_MSG: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
 loft_ffi::loft_register! {
     n_http_do,
     n_http_body,
+    n_ws_connect,
+    n_ws_client_send,
+    n_ws_client_recv,
+    n_ws_client_message,
+    n_ws_client_close,
 }

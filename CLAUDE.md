@@ -249,6 +249,12 @@ The rule: **always commit before any operation that changes the working tree.**
 | [LIFETIME.md](doc/claude/LIFETIME.md) | Dependency tracking and scope-based freeing — dep field semantics, Text vs Reference, closures |
 | [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) | Web services design evaluation — HTTP/JSON approach comparison, issues #54/#55 |
 | [WEB_SERVER_LIB.md](doc/claude/WEB_SERVER_LIB.md) | `server` library design — HTTP server, WebSockets, TLS, ACME, auth, RBAC, game server additions |
+| [EVENT_LOOP.md](doc/claude/EVENT_LOOP.md) | Prioritised event-loop abstraction (client + server) — concrete spec: bidirectional handlers, library-assigned ids, separate tuning phase, library-assembled streaming, JSON-by-default wire format, depends on P213 v4 |
+| [EVENT_LOOP_DISCUSSION.md](doc/claude/EVENT_LOOP_DISCUSSION.md) | EventLoop open issues, alternatives considered, design history — companion to EVENT_LOOP.md |
+| [EVENT_PROTOCOL.md](doc/claude/EVENT_PROTOCOL.md) | Wire-format spec — text-mode `<id>:payload` (v1, shipped), binary-mode 12-byte header (v2, designed), server-arbited MAP handshake, encoding modes, streaming reassembly; companion to EVENT_LOOP.md |
+| [MUTABLE_CLOSURES.md](doc/claude/MUTABLE_CLOSURES.md) | Spec: novice-fit closure capture — four-case classification (A read-only, B co-scoped, C moved, D aliased rejected), implicit-by-body, Reference + cell lowerings, diagnostic shape |
+| [MUTABLE_CLOSURES_DISCUSSION.md](doc/claude/MUTABLE_CLOSURES_DISCUSSION.md) | Companion discussion: alternatives surveyed (A-F), implementation analysis sketch, open questions, design history — companion to MUTABLE_CLOSURES.md |
+| [TIC_TAC_TOE.md](doc/claude/TIC_TAC_TOE.md) | Validation milestone: minimal multiplayer tic-tac-toe with three client handlers (mouse-out, drawing-in, winner-in), tagged-text wire protocol `(#N):payload`, server-authoritative state |
 | [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) | `game_client` library design — WebSocket client, multiplayer protocol, prediction, WASM script loading |
 | [SERVER_FEATURES.md](doc/claude/SERVER_FEATURES.md) | Language features for server/client ergonomics — C55 type aliases, C56 `?? return`, A15 `parallel {}`, I13 iterator protocol, C57 decorators |
 | [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | W1.1 single-file HTML export — native WASM compilation for browser |

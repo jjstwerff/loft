@@ -1160,229 +1160,350 @@ is consulted.  Today's storage container summary (✓ = works fully,
 | Hash/Sorted/Index value type | ? | ? | Untested.  Likely fails identically. |
 | Reference-of-fn-typed (`Reference<fn(...)>`) | ? | ? | Probably nonsense / parse error already.  Worth confirming. |
 
-**The fix unifies all rows.**  Once `element_size(Type::Function) = 16`,
-every container's existing "write 16/20B fn-ref into element slot,
-read it back" works because the slot is wide enough.  No per-container
-special case needed beyond the OpSet/OpGet plumbing (step 2/3 below).
+**Scope of the current fix:** the co-located-closure-record approach
+below targets the **struct field** and **synthetic closure record**
+rows (which share a code path).  Tuple / vector / hash / sorted /
+index / Reference rows are deferred follow-on work — they share the
+same root cause but the co-located-record pattern needs per-container
+extensions (e.g., a tuple element of fn-ref would need the closure
+record allocated against the host record holding the tuple, with
+the rec-id as part of the tuple element's bytes).  This staging
+keeps the current fix's blast radius tight.
 
-Every diagnostic shipped under this issue gets *removed* when the fix
-lands and replaced with positive end-to-end tests (matrix below).
+The diagnostics shipped today (P213 + P215 in the struct-field /
+synthetic-closure-record paths) get *removed* when the struct-field
+surface lands and are replaced with positive end-to-end tests
+(matrix below).  Diagnostics (or current-behaviour-as-is) for
+tuple/vector/hash rows stay in place until those rows' follow-on
+plans land.
 
-The proper fix is *layout widening*: make struct fn-ref fields hold the
-full 16 bytes so the closure half is real storage.  Pre-existing tests
-at `tests/issues.rs::p4d_fn_ref_as_struct_field`,
-`p4d_tuple_field_with_fn_ref`, `p4d_fn_ref_field_default_init`, and
-`p4d_fn_ref_field_bare_default` were written under the
-"closure half is intentionally null" assumption (see comment at
-`tests/issues.rs:1915`); the proper fix retains that semantic for
-*non-capturing* closures (closure half stays null sentinel) and extends
-it for *capturing* closures (closure half holds a real DbRef to a
-field-owned closure record).
+Pre-existing tests at `tests/issues.rs::p4d_fn_ref_as_struct_field`,
+`p4d_fn_ref_field_default_init`, `p4d_fn_ref_field_bare_default`
+exercise the non-capturing struct-field path; they must keep passing
+through the layout change.  The capturing path was unsupported and
+gets new positive tests with this fix.
 
-#### The lifetime model is the same as Reference fields
+#### The lifetime model is the same as vector-as-struct-field
 
-A struct field of `Type::Reference(S, _)` is a 12B `DbRef` whose target
-record is *owned by the host struct*: deep-copied on field write,
-freed when the host is freed, dep-tracked via `get_free_vars`.  All of
-this machinery already exists.  A `Type::Function` field is structurally
-identical with a 4B `d_nr` prefix — the 12B half is a Reference-shaped
-field that owns the closure record.  No new lifetime concept is needed.
-Aliasing is solved by deep-copy on field assignment, exactly as
-`Type::Reference` solves it today.
+A `vector<T>` struct field today stores a 4-byte rec-id pointing at a
+vector-header record in the SAME Store as the host.  Pushed elements
+become subsequent records in that Store.  Freeing the host struct
+cascades to free all the vector's records via `copy_claims` /
+`remove_claims` walking the host's `Parts::Vector` field
+(`src/database/allocation.rs:937-1046`).  Cross-store moves
+(`OpCopyRecord` from one Store to another) deep-copy the entire
+nested record graph through the same cascade.  All this machinery
+already exists.
 
-#### Implementation plan — seven steps (revised after 2026-05-04 spike)
+A `Type::Function` struct field follows the identical pattern after
+this fix: the host's field stores a rec-id pointing at a closure
+record co-located in the host's Store.  The closure record holds the
+captured-environment variables.  Free / copy cascade flows through
+existing `Parts::Vector`-style walking; lifetime is exactly as long
+as the host's; aliasing is impossible because field writes always
+deep-copy.
 
-**Step 1 — Add a 20-byte raw storage type to the database.**
+The earlier "synthetic-struct with embedded 12B DbRef pointer"
+approach was ruled out: an embedded DbRef can target a record in a
+DIFFERENT Store than the host, decoupling the closure record's
+lifetime from the host's.  Cross-store host moves leave the embedded
+DbRef pointing at the original Store — dangling once the original
+Store is freed.  Co-locating the closure record in the host's Store
+removes that failure mode entirely.
 
-The current code at `src/data.rs:3008` and `:3048` routes
-`Type::Function` through `def_nr("i32")` for storage purposes —
-which gives a 4-byte field.  Without changing this routing, widening
-`element_size` doesn't propagate to the actual record allocation:
-the database still allocates 4 bytes per fn-ref field, and writes
-beyond that corrupt adjacent state.
+#### Implementation plan — co-located closure record via OpAppendVector (revised 2026-05-04)
 
-Required:
-- Register a new raw storage type "fnref" in `src/database/types.rs`
-  (mirror of `dbref()` at line 1231) with `size = 20` and a
-  `Parts::Raw20` variant if needed (or reuse `Parts::DbRef`'s
-  raw-bytes shape with a custom size).
-- Add `pub type fnref size(20);` to `default/01_code.loft` so the
-  type has a loft-level def with the right known_type.
-- Update `Data::type_def_nr` and `Data::type_elm`'s `Type::Function`
-  arms to return the `fnref` def_nr instead of `i32`.
+Two earlier framings of this plan are superseded:
+- v1: "synthetic-struct + new Parts::FnRef variant" (inline 16B per
+  field).  Cascaded too widely.  Reverted in commit 2938edf.
+- v2: "v_set(w, host_ref) + OpDatabase retarget".  **Fatally
+  broken** — a critical-pass review against the actual code surfaced
+  that `OpDatabase` calls `database.clear(&db)` (`src/state/io.rs:637`)
+  which calls `Store::init()` (`src/database/allocation.rs:306-316`).
+  Setting `w` to `host_ref` would reinitialise host's Store, wiping
+  the host record we just allocated.  The simple retarget is unsafe.
 
-This is the genuinely new layer of work missed in the original
-design.  Without it, steps 2-7 produce code that compiles but
-corrupts at runtime because the underlying record only has 4 bytes
-allocated for each fn-ref field.
+**v3 — OpAppendVector path.**  Use the existing
+`OpAppendVector` op (`src/fill.rs:1661`, calls `vector_add` at
+`src/database/structures.rs:149`, calls `vector_append` at
+`src/vector.rs:97`).  Unlike `OpDatabase`, `vector_add` →
+`vector_append` calls `store.claim(...)` directly without
+`database.clear(...)`.  No store wipe.  This is the existing
+"claim a child record in an existing store" primitive that
+vector-as-struct-field already uses; we re-purpose it for fn-ref
+struct fields.
 
-**Step 2 — Update `element_size` / `element_align`.**
+**Critical-pass findings that shaped v3.**
 
-In `src/data.rs`:
-- `element_size(Type::Function) = 20` (was 4).
-- `element_align(Type::Function) = 8` (was 4) — for natural
-  alignment of the i64 d_nr at offset 0.
-- Update the duplicate align match at `src/data.rs:2418` (in
-  `LinkedFieldGroup` setup for tuple struct fields).
-- Verify `element_offsets` and `element_offsets_alignment_max`
-  produce correct positions for nested cases.
+| # | Finding (against code) | Impact |
+|---|---|---|
+| 1 | `OpDatabase` always calls `clear()` which wipes the target store | v2 was fatally broken — switched to OpAppendVector |
+| 2 | No existing `OpRecOf`/`OpVectorFirstOrNull` primitive | Need one small new op (~15 lines) for the read path |
+| 3 | Heap-captured pointers (text/Reference/vector) live in parent's Store; closure record in host's Store has dangling pointers if host outlives parent | Handled automatically at `copy_claims`/`remove_claims` time when host moves cross-store or is freed — but **only if the cascade actually walks**.  Plan inline-construction stays inside parent's scope, OR explicitly cross-Store-moves the host via `OpCopyRecord`-style cascade.  Pin with leak test. |
+| 4 | `LinkedFieldGroup` is for "place fields contiguously", NOT "alias one loft attribute to N fields"; only used by `tuple_def` today | Drop LinkedFieldGroup; handle two database fields per loft attribute via custom codegen at set_field_check / get_val Type::Function arms (the loft attribute name "cb" doesn't need to map to a single database field — codegen knows to read both `cb__d_nr` and `cb__closure_rec`). |
+| 5 | Parent-scope `OpFreeRef` suppression on `w` | Use existing `Function::set_skip_free(v)` at `src/scopes.rs:1192`; ~5 lines. |
+| 6 | Closure record's `known_type` must be filled before host struct's field registration uses it | Mirror the existing tuple-as-field recurse-fill pattern at `src/typedef.rs:491-496`. |
 
-This cascade automatically updates tuple element offsets, vector
-element width, and struct field positions — but only IF step 1 has
-landed first.  Without step 1, layout calc says "20 bytes" but
-allocator gives 4.
+**The architectural picture.**
 
-**Step 3 — Field-write codegen.**
+The lambda's existing codegen (`src/parser/vectors.rs:710-735`)
+allocates a closure record in a fresh dedicated Store via
+`OpDatabase`.  We DO NOT touch that allocation.  Instead, at the
+field-write site we use `OpAppendVector` to deep-copy the
+parent-Store closure record into a freshly-claimed record in
+host's Store as the first element of a vector held by the
+`__closure_rec` field.  The parent-Store closure record then gets
+freed by the existing parent-scope cleanup; the host owns its own
+copy.
 
-After step 1 + 2 land (storage actually 20 bytes wide), in
-`src/parser/mod.rs::set_field_check`'s `Type::Function` arm, replace
-the diagnostic + `OpSetInt4`-only path with:
+This is structurally the same pattern that `vector<T>` fields use
+today — host's struct field stores a vector header, vector
+elements live as records in the same Store.  We're treating the
+fn-ref's closure half as a 1-element vector.
+
+**Layout summary.**
+
+```
+struct Box { cb: fn(integer) -> integer }
+                   ↓ database registration ↓
+Parts::Struct of Box {
+    cb__d_nr        : Parts::Int(4 bytes)         // function's d_nr
+    cb__closure_rec : Parts::Vector(closure_kt)   // 4B vector header
+                                                   // → element [0] is the
+                                                   //   closure record in
+                                                   //   host's Store; 0 = empty
+                                                   //   (non-capturing case)
+}
+```
+
+No LinkedFieldGroup needed.  The two database fields are tied
+together purely by codegen knowing the naming convention.
+
+The closure record's known_type is the existing
+`synthesize_closure_record` schema — captured vars only; no
+schema change.  It's allocated by the existing `OpDatabase` op
+just retargeted at host's Store; freed automatically when the
+host is freed via existing `copy_claims` / `remove_claims`
+cascade walking the host's `Parts::Vector` field.
+
+**Step 1 — Decide the storage Parts variant for the closure-rec field.**
+
+Two options to evaluate at implementation time:
+
+| Option | Description | Risk |
+|---|---|---|
+| (a) Reuse `Parts::Vector(closure_kt)` with single-element semantics | The host's `cb__closure_rec` field is registered as a vector pointing at exactly one record.  All `copy_claims` / `remove_claims` walking already exists. | Vector machinery assumes >0 length; need to confirm single-element case doesn't trip vector-specific opcodes (sequences, iteration).  Probably fine since the field is never iterated via loft-level vector ops. |
+| (b) Add a new `Parts::ChildRec(u16)` variant | Mirror `Parts::Vector`'s cascade arms (~5 match sites in io/search/format/structures/allocation) but for "follow rec-id to a single child record". | Small new variant; cleaner semantics; ~30 lines of mechanical match-arm additions. |
+
+Pick whichever matches existing patterns more cleanly during
+implementation.  (a) is preferred for minimal change unless
+single-element vector semantics actually break.
+
+**Step 2 — Register the host's fn-ref field as two database fields.**
+
+In `src/typedef.rs::fill_database` (around line 470, the
+`Type::Function` arm):
 
 ```rust
 Type::Function(_, _, _) => {
-    // Step 2a: write the 4B d_nr at offset 0.
-    let d_nr_only = match &val_code {
-        Value::FnRef(d, _, _) => Value::Int(*d),
-        // For Block-wrapped FnRef (capturing-closure literal), peek
-        // through to find the FnRef and emit the alloc_steps separately.
-        // Use `capturing_fn_ref` walker to find the FnRef.
-        other => extract_fn_ref_d_nr(other).unwrap_or_else(|| other.clone()),
-    };
-    let set_dnr = self.cl("OpSetInt4", &[ref_code.clone(), pos_val.clone(), d_nr_only]);
+    // P213 — split fn-ref struct fields into two database fields:
+    //   <attr>__d_nr        : 4B Parts::Int (function id)
+    //   <attr>__closure_rec : 4B Parts::Vector / Parts::ChildRec
+    //                         (rec-id of closure record co-located
+    //                         in host's Store; 0 = null = non-capturing)
+    let attr_name = data.attr_name(d_nr, a_nr);
+    let closure_kt = /* known_type of the lambda's closure record */;
+    database.field(s_type,
+        &format!("{attr_name}__d_nr"),
+        database.int(0, false));
+    database.field(s_type,
+        &format!("{attr_name}__closure_rec"),
+        database.vector(closure_kt));  // or database.child_rec(closure_kt)
+    register_fn_ref_field_group(database, s_type, attr_name);
+    continue;
+}
+```
 
-    // Step 2b: write the 12B closure DbRef at offset+4.
-    //
-    // For non-capturing (closure_var == u16::MAX), write the null
-    // DbRef sentinel to offset+4.  For capturing, deep-copy the
-    // closure record: allocate a new record in the closure-record
-    // store via OpDatabase, copy bytes via OpCopyRecord, store the
-    // new DbRef at offset+4 via the Reference-field mechanism.
-    let closure_pos = Value::Int(if let Value::Int(p) = &pos_val {
-        p + 4   // offset+4 within the host record
-    } else { 4 });
-    let closure_op = if is_non_capturing(&val_code) {
-        // Pad with null DbRef.  See OpNullRefSentinel for the stack-side
-        // analog; here we need a field-write op that stores 12B null at
-        // offset+4 of host_ref's record.  Either:
-        //   (a) New OpSetNullRef(host_ref, pos+4) op.
-        //   (b) Reuse existing default-init path for Reference fields.
-        self.cl("OpSetNullRef", &[ref_code.clone(), closure_pos])
-    } else {
-        // Capturing: emit closure-record alloc + OpCopyRecord into the
-        // field's 12B slot.  Source is the closure_var holding the
-        // already-allocated closure record (from the Block's
-        // alloc_steps).  Pattern matches Type::Reference field write
-        // at line 2295-2308: OpGetField produces the field address;
-        // OpCopyRecord copies source bytes into it.
-        let closure_d_nr = closure_record_known_type(&val_code);  // type of synthetic struct
-        let type_nr = Value::Int(i32::from(self.data.def(closure_d_nr).known_type));
-        let field_ref = self.cl("OpGetField", &[ref_code.clone(), closure_pos, type_nr.clone()]);
-        let closure_var_ref = closure_var_db_ref(&val_code);  // Value::Var(w)
-        self.cl("OpCopyRecord", &[closure_var_ref, field_ref, type_nr])
-    };
+The closure record's known_type is the SAME type the lambda would
+otherwise allocate.  Resolving it requires looking up the lambda's
+closure_record d_nr — available via `data.def(lambda_d_nr).closure_record`
+when the lambda's def is in scope, or stored on the host struct's
+attribute as a side-data link.
 
-    // Sequence them as a Block.  alloc_steps from val_code (closure-record
-    // allocation, captured-var writes) must run BEFORE set_dnr/closure_op.
-    let alloc_steps = extract_block_alloc_steps(&val_code);
-    let mut ops = alloc_steps;
-    ops.push(set_dnr);
-    ops.push(closure_op);
+**Step 3 — Field-write codegen — OpAppendVector path.**
+
+In `src/parser/mod.rs::set_field_check`'s `Type::Function` arm:
+
+```rust
+Type::Function(_, _, _) => {
+    let (alloc_steps, fn_ref) = split_fn_ref_for_field_write(&val_code);
+    let Value::FnRef(d_nr, w, _) = fn_ref else { unreachable!() };
+    let dnr_pos  = pos_val.clone();                  // cb__d_nr
+    let crec_pos = pos_plus(pos_val.clone(), 4);     // cb__closure_rec
+
+    let mut ops = Vec::new();
+
+    // 1. Lambda's existing alloc_steps run as today — closure record
+    //    is allocated in a parent-scope Store via OpDatabase.  We do
+    //    NOT retarget it (v2 idea was broken — OpDatabase wipes the
+    //    target store via database.clear()).
+    ops.extend(alloc_steps);
+
+    // 2. Write d_nr (4B) at the host's __d_nr position.
+    ops.push(self.cl("OpSetInt4",
+        &[ref_code.clone(), dnr_pos, Value::Int(d_nr)]));
+
+    if w != u16::MAX {
+        // 3. Capturing case: append the parent-Store closure record
+        //    as element [0] of the host's __closure_rec vector.
+        //    OpAppendVector → vector_add → vector_append:
+        //      a. Claims a fresh record in host's Store (no clear).
+        //      b. Deep-copies bytes from var(w)'s record.
+        //    The vector header at `crec_pos` is updated.
+        let crec_field = self.cl("OpGetField",
+            &[ref_code.clone(), crec_pos.clone(), closure_kt_value]);
+        ops.push(self.cl("OpAppendVector",
+            &[crec_field, Value::Var(w), closure_kt_value]));
+    }
+    // Non-capturing case: vector stays empty (default header value 0
+    // from struct allocation), no op needed.
+
     v_block(ops, Type::Void, "fn_ref_field_set")
 }
 ```
 
-The helpers `is_non_capturing`, `extract_fn_ref_d_nr`,
-`closure_record_known_type`, `closure_var_db_ref`,
-`extract_block_alloc_steps` walk the `Value::Block(...)` produced by the
-`fn_ref_with_closure` path in `src/parser/vectors.rs:735` (where
-`Value::FnRef(d_nr, w, fn_type)` is appended to `alloc_steps`).
+Everything downstream is unchanged: closure record schema (no d_nr
+embedded, just captures), capture writes, fn-ref slot shape on
+stack, fn_call_ref.
 
 **Step 4 — Field-read codegen.**
 
-In `src/parser/mod.rs::get_val`'s `Type::Function` arm (currently around
-line 1921), replace the "read d_nr + push null sentinel" pattern with:
+In `src/parser/mod.rs::get_val`'s `Type::Function` arm:
 
 ```rust
 Type::Function(_, _, _) => {
-    // Read d_nr (8B push, sign-extended from i32) at offset 0.
-    let read_dnr = self.cl("OpGetInt4", &[code.clone(), p.clone()]);
-    // Read 12B closure DbRef at offset+4.  Mirrors how Reference
-    // fields read their embedded DbRef.
-    let p_plus_4 = match &p {
-        Value::Int(n) => Value::Int(n + 4),
-        _ => /* compose with arithmetic */,
-    };
-    // Choose the closure-record type from the function's declared dep
-    // (the closure_var w's type registers a synthetic struct).
-    let info = self.type_info(/* closure record type */);
-    let read_clos = self.cl("OpGetField", &[code, p_plus_4, info]);
+    let dnr_pos  = p.clone();
+    let crec_pos = pos_plus(p.clone(), 4);
+    let read_dnr  = self.cl("OpGetInt4",
+        &[code.clone(), dnr_pos]);
+    // New op OpVectorFirstOrNull: reads vector header at crec_pos.
+    // If empty (length 0): returns null DbRef sentinel which
+    // fn_call_ref handles correctly (state/mod.rs:329).
+    // If non-empty: returns DbRef of element [0] = the closure
+    // record in host's Store.
+    let read_clos = self.cl("OpVectorFirstOrNull",
+        &[code.clone(), crec_pos]);
     v_block(vec![read_dnr, read_clos], tp.clone(), "fn_ref_field_read")
 }
 ```
 
-The result is a 20B push (8B d_nr + 12B closure DbRef) — the same
-shape `gen_fn_ref_value` produces on the stack today, so downstream
-`OpCallRef` etc. work without further change.
+Result: 20B on stack (8B d_nr + 12B DbRef) — the fn-ref slot shape
+`fn_call_ref` consumes unchanged.
 
-Note the existing 20B-vs-16B inconsistency at `gen_set_first_at_tos`'s
-`Type::Function` branch (`stack.position -= 4` correction after
-`OpPutFnRef`).  That correction is in the stack-var initialisation
-path, not the field-read path; field-read produces 20B directly so no
-correction is needed.  Document this distinction in a comment at the
-field-read site to prevent confusion.
+**Step 4b — New op `OpVectorFirstOrNull`.**
 
-**Step 5 — Default-init path.**
+Add to `src/fill.rs` (~15 lines):
 
-`to_default(Type::Function)` currently produces `Value::FnRef(0, u16::MAX, …)`
-(see `src/data.rs:526`).  After widening, the default-init field write
-must also write a null DbRef to offset+4.  The `is_non_capturing` branch
-in step 2's codegen handles this — it fires for every literal
-`Value::FnRef` whose `closure_var == u16::MAX`, including the default
-construction.
+```rust
+fn vector_first_or_null(s: &mut State) {
+    let v_fld = *s.code::<u16>();
+    let v_host = *s.get_stack::<DbRef>();
+    let store = s.database.store(&v_host);
+    let vec_rec = store.get_u32_raw(v_host.rec, v_host.pos + u32::from(v_fld));
+    let result = if vec_rec == 0 {
+        DbRef { store_nr: u16::MAX, rec: 0, pos: 0 }
+    } else {
+        let length = store.get_u32_raw(vec_rec, 4);
+        if length == 0 {
+            DbRef { store_nr: u16::MAX, rec: 0, pos: 0 }
+        } else {
+            DbRef { store_nr: v_host.store_nr, rec: vec_rec, pos: 8 }
+        }
+    };
+    s.put_stack(result);
+}
+```
+
+And entry in `default/01_code.loft`:
+
+```
+fn OpVectorFirstOrNull(host: reference, fld: const u16) -> reference;
+```
+
+**Step 5 — Suppress parent-scope `OpFreeRef` on `w`.**
+
+The lambda's `alloc_steps` allocate the closure record in parent's
+Store and bind it to `w`.  After step 3's OpAppendVector deep-copies
+the record into host's Store, parent's record is REDUNDANT but
+still owned by parent's scope.  Today's `get_free_vars` would emit
+`OpFreeRef(w)` at parent scope exit — that's CORRECT behaviour
+because parent owns its allocation.
+
+Note: this differs from v2, where we needed to suppress the free.
+With v3 (OpAppendVector deep-copies), the parent's closure record
+is independent of the host's; freeing it normally is fine.
+
+So step 5 is **no-op** — existing dep tracking and `OpFreeRef`
+emission for `w` are correct.
+
+**Step 6 — Default-init.**
+
+`to_default(Type::Function)` produces `Value::FnRef(0, u16::MAX, …)`
+which step 3's `w == u16::MAX` non-capturing branch handles
+correctly: writes 0 to `__d_nr` and 0 to `__closure_rec`.
 
 `tests/issues.rs::p4d_fn_ref_field_default_init` and
-`p4d_fn_ref_field_bare_default` test this path; they should keep
-passing after the fix.
+`p4d_fn_ref_field_bare_default` cover this path; both must stay
+green after the fix.
 
-**Step 6 — Free path: extend `get_free_vars` for `Type::Function` fields.**
+**Step 7 — Free / copy cascade — automatic via the chosen Parts variant.**
 
-`src/scopes.rs::get_free_vars` and the `OpFreeRef` recursive walker
-need a `Type::Function` arm that, for each fn-ref struct field,
-reads the 12B closure DbRef at offset+4 and frees the target record.
-The existing `Type::Reference` arm is the template — the only
-difference is the 4B offset for the closure half and the
-short-circuit when the embedded DbRef is null sentinel
-(non-capturing case).
+If step 1 chose `Parts::Vector` reuse: zero new code — existing
+copy_claims / remove_claims arms walk it already.
 
-LIFETIME.md § "Function (`Type::Function`) — NOT YET HANDLED"
-documents the broader gap (closure DbRef in 16B fn-ref *stack* slots
-also leaks).  Steps 5 and the stack-slot leak fix can land together
-since they share the "walk the 12B at offset+4 of the fn-ref slot"
-logic.
+If step 1 chose `Parts::ChildRec`: ~5 match-arm additions across
+`src/database/allocation.rs`, `io.rs`, `search.rs`, `format.rs`,
+`structures.rs` mirroring the Parts::Vector cascade.
 
-**Step 7 — Native codegen mirror.**
+**Step 8 — Native codegen mirror.**
 
 In `src/generation/`:
-- `set_field_check`'s `Type::Function` arm currently emits a single
-  `OpSetInt4`-equivalent template that stores the i32 d_nr.  Extend to
-  emit the 4B d_nr write *plus* the closure-record alloc + DbRef
-  store at offset+4.  The Reference-field native template already
-  shows how to write a DbRef to a struct field's offset; reuse
-  that pattern for the closure half.
-- Field-read native template needs to produce a `(u32, DbRef)` value
-  by reading both halves: `(stores.store(&db).get_i32(rec, fld_off),
-  stores.store(&db).get_dbref(rec, fld_off + 4))`.  Existing native
-  Reference-field reads provide the second half's pattern; the i32
-  d_nr read is `set_i32_raw`'s sibling.
-- The `(u32, DbRef)` fn-ref tuple shape is already the native value
-  representation — `src/generation/calls.rs::substitute_template_body`
-  has the projection logic that places `.0` (d_nr) and `.1` (closure
-  DbRef) where they're needed.  Field reads/writes feed into this
-  same projection.
+- Field-write template emits the retarget (`v_set` of `w` to the
+  host's native `(u32, DbRef)` shape) + native equivalents of
+  `OpDatabase` and the capture writes.  Existing native helpers
+  (`stores.claim`, `store.set_u32_raw`) compose into this.
+- Field-read template emits `stores.store(&host).get_u32(...)` for
+  d_nr and `stores.get_ref(&host, ...)` for the closure DbRef.
 
 Run `cargo test --release --test wrap` and `cargo test --release
---test issues p4d_fn_ref` after each native-side change to catch
+--test issues p4d_fn_ref` after the native-side change to catch
 silent layout breaks.
+
+**Step 9 — Remove the P213/P215 diagnostics + flip tests positive.**
+
+Once steps 1-8 land:
+- Delete `src/parser/mod.rs::set_field_check`'s P213 diagnostic
+  (around line 2284-2293).
+- Delete `src/parser/control.rs::try_fn_ref_call`'s P215 diagnostic
+  (around line 3042-3093).
+- Delete `src/parser/mod.rs::capturing_fn_ref` helper (no longer
+  needed).
+- Delete `tests/parse_errors.rs::p213_capturing_closure_in_struct_field_rejected`
+  and `p215_captured_fn_in_nested_closure_rejected`.
+- Add positive end-to-end tests in `tests/issues.rs` (see § Test
+  matrix below).
+
+**Out-of-scope at this stage (deferred to follow-on plans):**
+- Non-inline assignment patterns: `f = fn(...){...}; b = Box { cb: f };`
+  or `b = Box { cb: get_callback() };`.  These need either a
+  diagnostic ("only inline lambdas can be stored in struct fields
+  for now") or an OpCopyRecord-based deep-copy fallback.  The
+  diagnostic stays in place for these specific shapes; the
+  inline-only case is what this plan delivers.
+- Field reassignment after host already exists: `b.cb = fn(...);`.
+  Same constraint as non-inline assignment.
+- Tuple / vector / hash element of fn-ref — same retargeting trick
+  applies but per-container; deferred follow-on plans.
 
 #### Existing tests to keep green
 
@@ -1456,16 +1577,17 @@ Diagnostic-only regression tests to remove when the fix lands:
 
 | Risk | Mitigation |
 |---|---|
-| Layout widening cascades into tuple/vector tests in unexpected ways | Run `./scripts/find_problems.sh --bg` after step 1 alone; check for layout-related panics or silent value drift before proceeding to step 2. |
-| `gen_fn_ref_value`'s 20B-vs-16B `stack.position -= 4` correction (the existing hand-managed asymmetry between stack-var fn-ref slots and on-stack fn-ref values) conflicts with field-read producing 20B directly | Field-read path uses a separate `v_block` that emits 8B + 12B = 20B; no correction needed.  Document the asymmetry next to the field-read site. |
-| Closure record's synthetic struct type isn't known at every field-write site (e.g. when val_code is a Var, not a literal FnRef) | Walk the Var's declared type — `Type::Function(p, r, dep)` carries `dep` containing the closure_var.  Look up the closure_var's type to get the synthetic struct's d_nr. |
-| `OpCopyRecord` requires the destination to be an existing allocation; freshly-default-init'd field has null DbRef | First-write path needs OpDatabase to allocate the destination closure record before OpCopyRecord copies into it.  Reassignment path uses the existing record (free old, then OpCopyRecord overwrites). |
-| Aliasing — same closure literal stored into two struct fields | Each field write deep-copies via OpCopyRecord into a field-owned record.  No aliasing because each field has its own destination record.  Same model as Reference fields. |
-| Native codegen wrinkles around the `(u32, DbRef)` tuple representation when field-write source is a Block | Pre-existing native template machinery (`substitute_template_body`) already handles projection; the new bit is recognising fn-ref-into-field as a 16B store rather than a 4B store. |
-| Default-init fn-ref field (struct allocated without explicit `cb: …`) leaves the closure DbRef half as garbage if not initialised | `to_default(Type::Function)` produces `Value::FnRef(0, u16::MAX, …)` — extend the field-write path to write null DbRef (12 zero bytes) at offset+4 alongside the d_nr.  `tests/issues.rs::p4d_fn_ref_field_default_init` pins this. |
-| Two-pass parser: closure record's struct definition is registered on first pass, but the captured types may be inferred on second pass — element layout changes mid-parse | The closure record's fields are added in `synthesize_closure_record` from `captured_names`, which is finalised at the end of the lambda body parse on each pass.  After the layout fix, fn-typed captures occupy 16B per field on both passes consistently. |
-| `get_free_vars` cascade — extending the `Type::Function` arm here also fires for stack-var fn-ref slots (currently leaked per LIFETIME.md "NOT YET HANDLED").  Side effect of step 5 | Welcome — that's the closure-DbRef leak fix plan-15 phase 03 has been waiting on.  Land them together; ship as a single coordinated fix rather than two near-duplicate ones. |
+| Free cycle out of sync — closure record not freed when host is freed, or freed twice | `Parts::Vector(closure_kt)` is already on the cascade path of `copy_claims` / `remove_claims` (`src/database/allocation.rs:937-1046`).  No new wiring needed.  Pin with leak regression test (`p213_struct_field_freed_with_struct`) using `tests/leak.rs` style. |
+| Heap-captured pointers (text / Reference / vector) inside the closure record point at parent's Store after the deep-copy lands | `copy_claims` already deep-copies these field types when their parent record is moved.  At deep-copy time (OpAppendVector → vector_add → byte copy), the captured-pointer bytes are copied verbatim — POINTERS still point at parent.  When parent's Store survives long enough for the host to copy out (e.g., host returns from parent fn → `copy_record` cascade fires → captures get deep-copied), this is fine.  When host stays in parent's scope and uses captures while parent's vars are alive, fine.  **DANGER ZONE:** host with heap-capturing closures persists past parent's Store's death without ever crossing-store-copying.  Pin with `p213_struct_field_text_capture_escapes_via_return` test that verifies cross-store deep-copy on return. |
+| Allocation overhead — closure record exists in BOTH parent's Store AND host's Store after the field-write | Parent's closure record is freed by parent's existing `OpFreeRef(w)` at scope exit; this is correct because parent owns its allocation.  The deep-copy in the host's Store is independent.  Bounded overhead: 1 record per fn-ref field per Box construction.  Future optimisation: skip the parent allocation entirely for inline-lambda-as-field-value cases (host's Store known at parse time); deferred. |
+| `OpDatabase` clears the target store via `database.clear()` — proven lethal for retarget approach | Use `OpAppendVector` instead (does NOT call `clear()`; just `store.claim()` + byte copy).  Plan revised; v2 retarget abandoned. |
+| `OpVectorFirstOrNull` is new infrastructure | ~15 lines in `src/fill.rs` + 1 line in `default/01_code.loft`.  Mirrors existing vector-element-read patterns.  Includes both backends (interp + native via `codegen_runtime`). |
+| Aliasing — same lambda literal stored into two struct fields | Each field-write does its own OpAppendVector deep-copy.  No aliasing because each host has its own closure record co-located in its own Store.  Matches loft's existing single-owner model. |
+| Native codegen wrinkles around the `(u32, DbRef)` fn-ref tuple representation | Native side mirrors interp via the runtime helpers.  `OpAppendVector` already has a native code path (used by vector struct fields).  `OpVectorFirstOrNull` needs a native helper; ~10 lines in `codegen_runtime.rs`. |
+| Default-init fn-ref field (struct allocated without explicit `cb: …`) | `to_default(Type::Function)` produces `Value::FnRef(0, u16::MAX, …)` — step 3's `w == u16::MAX` branch writes 0 to `__d_nr` and skips OpAppendVector (vector header stays at default 0 = empty).  Field-read returns null DbRef sentinel; calling such a fn-ref is undefined (expected for default-init).  `tests/issues.rs::p4d_fn_ref_field_default_init` pins this. |
+| Closure record's `known_type` resolution at typedef.rs:470 (Type::Function arm) | Mirror tuple-as-field's recurse-into-fill pattern at `typedef.rs:491-496`.  Look up the lambda's `closure_record` via the loft attribute's metadata; ~5 lines added. |
 | WASM codegen path | The WASM target piggybacks on the same Op stream; no WASM-specific changes expected.  Validate by running `tests/html_wasm.rs` after the fix. |
+| Tuple/vector-of-fn-ref tests (`p4d_tuple_field_with_fn_ref`, vector-of-fn-ref) might pick up changes unintentionally | Plan explicitly leaves `element_size(Type::Function) = 4` and the tuple/vector-of-fn-ref paths unchanged.  Tuple/vector containers keep their existing 4B-d_nr-only behaviour and current diagnostics.  Only the struct-field path uses the new two-database-field layout. |
 
 #### Sequencing
 
@@ -1477,15 +1599,24 @@ done together than retrofitted later:
   registries are the canonical use case.
 - The `game_client` / OpenGL game-loop work that registers per-entity
   behaviours via callback fields.
-- Plan-15 phase 03 (closure-DbRef leak fix) — step 5 of this design
-  IS phase 03's get_free_vars extension; do them together.
+- Plan-15 phase 03 (closure-DbRef leak fix) — overlaps with this
+  plan's heap-capture lifetime tests; co-schedule.
 
-Reasonable internal order once started: (a) layout widening + step
-2/3 codegen so the basic case works, (b) get_free_vars + leak tests
-so it doesn't leak, (c) native codegen + cross-mode validation,
-(d) remove the diagnostic regression test and replace with positive
-end-to-end tests, (e) pre-flight a server-handler-registry mini-spike
-to confirm the design holds at real-program scale.
+Reasonable internal order once started:
+1. Step 4b (new `OpVectorFirstOrNull` op) — smallest standalone unit;
+   ship + test in isolation against existing vector code.
+2. Step 2 (typedef.rs two-database-fields per attribute) — verify
+   that allocating a host struct with a fn-ref field still compiles
+   and existing non-capturing tests still pass (vector header reads
+   as 0 → null DbRef → fn_call_ref's null path).
+3. Step 3 (set_field_check OpAppendVector emit) — basic capturing
+   case works.
+4. Step 4 (get_val OpVectorFirstOrNull emit) — read path mirrors.
+5. Reproducer at /tmp/p213.loft passes.
+6. Step 8 (native codegen mirror).
+7. Step 9 (remove diagnostics + flip tests positive).
+8. Pre-flight a server-handler-registry mini-spike to confirm the
+   design holds at real-program scale.
 
 #### Out-of-scope
 
@@ -1500,34 +1631,38 @@ to confirm the design holds at real-program scale.
 
 #### Estimated effort
 
-Revised after the 2026-05-04 spike: 2-3 focused sessions
-(originally estimated as 1-2; the database-type registration in
-step 1 is the additional layer that wasn't visible without trying
-the implementation).
+Revised 2026-05-04 (v3 — OpAppendVector path after critical-pass
+findings against v2): 1-2 focused sessions.
 
-- Step 1 (database type) — touches `database/types.rs`,
-  `default/01_code.loft`, and `data.rs`'s type_def_nr / type_elm
-  routing.  ~50-80 lines including a `Parts::FnRef` variant or
-  Raw20 reuse, plus the loft-side `pub type fnref size(20);` and
-  routing updates.  Highest risk-of-cascade step — every layout
-  consumer must agree on the new size.
-- Step 2 (element_size / element_align) — mechanical, ~10 lines.
-- Step 3 (field-write codegen) — ~50 lines parser + helpers.
-- Step 4 (field-read codegen) — ~20 lines.
-- Step 5 (default-init) — ~10 lines extension to step 3.
-- Step 6 (get_free_vars) — folds plan-15 phase 03 leak fix; ~30 lines.
-- Step 7 (native codegen mirror) — doubles the codegen effort but
-  follows existing Reference-field native templates; ~80 lines.
+- Step 1 (no decision needed — `Parts::Vector(closure_kt)` reused).
+- Step 2 (typedef.rs split-attribute registration with two database
+  fields per loft attribute, recurse-fill closure_kt) — ~30 lines.
+- Step 3 (set_field_check codegen — alloc_steps + OpSetInt4 +
+  OpAppendVector) — ~30 lines parser + helpers.
+- Step 4 (get_val codegen — OpGetInt4 + OpVectorFirstOrNull) — ~15 lines.
+- Step 4b (new op `OpVectorFirstOrNull`) — ~15 lines fill.rs +
+  1 line 01_code.loft.
+- Step 5 (default-init verification) — no new code.
+- Step 6 (parent-scope OpFreeRef for `w`) — no change; existing
+  behaviour is correct under the deep-copy model.
+- Step 7 (free / copy cascade) — no new code (Parts::Vector
+  already participates in copy_claims/remove_claims).
+- Step 8 (native codegen mirror) — ~40 lines following existing
+  vector-element-allocation native templates.  Includes
+  `OpVectorFirstOrNull`'s native runtime helper.
+- Step 9 (remove diagnostics + flip tests positive) — ~30 lines net
+  (delete diagnostics + helpers, add 4-6 positive tests).
 
-Run full suite after each step.  Run
-`./scripts/find_problems.sh --bg` after step 1 alone — that's the
-step where silent layout cascades are most likely.
+Run full suite + `tests/leak.rs`-style heap-capture leak test
+after each step.
 
-**Lesson from the 2026-05-04 spike:** the fix isn't bug-shaped, it's
-a layout-system migration.  Treat it like one — checkpoint after
-step 1, validate the suite passes with the new database type
-registered (and `element_size` still at 4 if necessary, just to
-confirm step 1 in isolation), then proceed to step 2.
+**Lesson from the 2026-05-04 spike:** the previous design widened
+storage to 20B inline per fn-ref field, which cascaded into every
+container that touches `Type::Function` storage (vectors, tuples,
+hashes).  The co-located-record approach avoids that cascade by
+keeping the field size unchanged at 4B (the rec-id pointer) and
+moving the closure data to a child record.  Lifetime stays correct
+by construction because the child record lives in the host's Store.
 
 #### Why prioritise this even though no shipped feature gates on it
 

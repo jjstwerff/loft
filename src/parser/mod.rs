@@ -3375,6 +3375,27 @@ impl Parser {
             return;
         };
         let pkg_dir = pkg_dir.to_string_lossy().to_string();
+        // Register the dlopen-side native lib path (interpreter mode).  The
+        // `[library] native = "..."` form registers the cdylib for dlopen;
+        // the separate `[native] crate = "..."` block (handled below)
+        // registers the rlib for the native-compile path.  Both must run
+        // here for sibling-package and ancestor-walk paths, otherwise
+        // packages depended on by a no-native parent (e.g. an examples
+        // package that uses `lib/server`) lose their native bindings in
+        // interpreter mode.
+        if let Some(ref stem) = m.native {
+            let filename = crate::extensions::platform_lib_name(stem);
+            let prebuilt = format!("{pkg_dir}/native/{filename}");
+            if std::path::Path::new(&prebuilt).exists() {
+                if !self.pending_native_libs.contains(&prebuilt) {
+                    self.pending_native_libs.push(prebuilt);
+                }
+            } else if let Some(built) = crate::extensions::auto_build_native(&pkg_dir, stem) {
+                if !self.pending_native_libs.contains(&built) {
+                    self.pending_native_libs.push(built);
+                }
+            }
+        }
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
             if !self

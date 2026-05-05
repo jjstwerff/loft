@@ -1058,6 +1058,15 @@ module, and broadcasting the new state.
 **Addition:** `game_loop.loft` — a new source file in `server/src/` providing
 a server-side fixed-timestep loop.
 
+> **Superseded by [EVENT_LOOP.md](EVENT_LOOP.md).**  The
+> `GameLoop` / `run_game_loop` design below was never
+> implemented.  The canonical loop API is now EventLoop's
+> `el::run` (frame-driven, for clients) and `el::run_async`
+> (kernel-multiplexed, for servers).  Server tick is a Tick
+> event submitted by a timer source; the same priority lanes
+> handle player input, world tick, and ambient work.  The
+> sketch below is retained for design history only.
+
 ```loft
 struct GameLoop {
     tick_rate:      integer,   // ticks per second; default 20

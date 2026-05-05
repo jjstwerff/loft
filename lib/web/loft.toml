@@ -6,3 +6,6 @@ loft = ">=0.8"
 [library]
 entry = "src/web.loft"
 native = "loft_web"
+
+[native]
+crate = "loft-web"
