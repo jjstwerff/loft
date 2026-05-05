@@ -651,13 +651,23 @@ impl Output<'_> {
             def_nr,
         )?;
         if has_for_body {
-            self.emit_for_body_factory(w, &fn_name, &struct_name, &attrs, &segments, &yield_tp)?;
+            self.emit_for_body_factory(
+                w,
+                &fn_name,
+                &struct_name,
+                &attrs,
+                &segments,
+                &yield_tp,
+                &persistent,
+                def_nr,
+            )?;
         }
         Ok(())
     }
 
     /// Emit the factory function for a generator that contains for-loop bodies
     /// with yields.  Runs the body eagerly, pushing all yielded values to a Vec.
+    #[allow(clippy::too_many_arguments)]
     fn emit_for_body_factory(
         &mut self,
         w: &mut dyn Write,
@@ -666,6 +676,8 @@ impl Output<'_> {
         attrs: &[crate::data::Attribute],
         segments: &[YieldSegment],
         yield_tp: &Type,
+        persistent: &[(u16, Type)],
+        def_nr: u32,
     ) -> std::io::Result<()> {
         let is_text = matches!(yield_tp, Type::Text(_));
         let (vec_ty, push_wrap_open, push_wrap_close, sub_advance, sub_exhaust) = if is_text {
@@ -811,6 +823,18 @@ impl Output<'_> {
                 Type::Text(_) => writeln!(w, "        var_{aname}: var_{aname}.to_string(),")?,
                 _ => writeln!(w, "        var_{aname},")?,
             }
+        }
+        // P224: initialise persistent locals to default — same as the
+        // non-for-body factory path.  Without this the eager-collect
+        // factory builds a `StructName { … }` with the user-attribute
+        // fields but omits the persistent-locals fields that
+        // `emit_struct_def` declared, producing a Rust E0063 ("missing
+        // fields in initializer").
+        let var_table = &self.data.def(def_nr).variables;
+        for (v, tp) in persistent {
+            let n = sanitize(var_table.name(*v));
+            let init = persistent_default(tp);
+            writeln!(w, "        var_{n}: {init},")?;
         }
         // ForLoopBody: value buffer + index.
         writeln!(w, "        __values,")?;
