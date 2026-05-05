@@ -1244,8 +1244,31 @@ use a separate collection or add after the loop"
                 self.vars.name(var_nr)
             );
         }
-        if matches!(code, Value::Insert(_)) {
-            // nothing
+        if let Value::Insert(ls) = code {
+            // P217: same self-append handling as `Parser::assign_text`
+            // (operators.rs).  When the RHS expression was `var + parts`,
+            // `parse_append_text` emits the first op as
+            // `OpAppendText(var, Var(var))` (self-append).  Without
+            // detection, the downstream emit clears the destination
+            // before the appends and so destroys the existing value
+            // (interp's `out = out + "y"` produced "xxy"; native rejected
+            // with E0502 because `*var += &*(&*var)` is borrow-conflict).
+            // The check unspans both args so a `Span(Var(...))` operand
+            // (the parser's source-position wrapper) doesn't slip past.
+            if op == "=" {
+                let self_append = ls.first().is_some_and(|first| {
+                    if let Value::Call(_, args) = first.unspan() {
+                        args.len() >= 2
+                            && matches!(args[0].unspan(), Value::Var(v) if *v == var_nr)
+                            && matches!(args[1].unspan(), Value::Var(v) if *v == var_nr)
+                    } else {
+                        false
+                    }
+                });
+                if self_append {
+                    ls.remove(0);
+                }
+            }
         } else if op == "=" {
             *code = v_set(var_nr, code.clone());
         } else if s_type == &Type::Character {

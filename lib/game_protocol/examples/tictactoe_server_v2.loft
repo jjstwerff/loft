@@ -50,10 +50,13 @@ struct Game {
 }
 
 fn new_game() -> Game {
-  // Empty cells AND "no-winner-yet" are both represented as null;
-  // loft text fields initialised to "" read back as null, so we
-  // use null consistently for the sentinel and check `!= null`
-  // everywhere.
+  // Empty cells AND "no-winner-yet" are both represented as null
+  // — explicit-null is the cleanest sentinel for "no value yet"
+  // in this game, and `!= null` reads naturally at every check
+  // site.  (Historic note: an earlier version used `""` here
+  // and ran into P220 — `""` round-tripping as `null` through
+  // the struct's deep-copy.  P220 closed 2026-05-05 in
+  // `Stores::copy_claims`; either sentinel now works.)
   cs: vector<text> = [];
   for _ in 0..9 { cs += [null]; }
   Game { cells: cs, turn: 0, winner: null }

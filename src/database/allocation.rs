@@ -938,12 +938,21 @@ impl Stores {
         // TODO prevent copying secondary structures
         match &self.types[tp as usize].parts {
             Parts::Base if tp == 5 => {
-                // text
+                // text — P220: discriminate null source from empty-string
+                // source.  `get_str(0)` returns `STRING_NULL` ("\0"), so the
+                // old `s.is_empty()` check never fired for a null source
+                // (s would be "\0", not "") — but it DID fire for a
+                // genuinely empty `""` source, writing 0 (the null
+                // sentinel) into the destination and silently
+                // re-classifying the value as null.  Result: a `""`
+                // element copied through this path read back as `null`.
+                // Discriminate on the source `cur` instead.
                 let store = self.store(rec);
-                let s = store.get_str(store.get_u32_raw(rec.rec, rec.pos));
-                if s.is_empty() {
+                let cur = store.get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 {
                     self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
                 } else {
+                    let s = store.get_str(cur);
                     let into = self.store_mut(to);
                     let s_pos = into.set_str(s);
                     into.set_u32_raw(to.rec, to.pos, s_pos);

@@ -36,6 +36,24 @@ fn outer_with_from() -> iterator<integer> {
   yield 2;
 }
 
+// P211: text-yielding generator with sequential top-level yields.
+fn names() -> iterator<text> {
+  yield "alice";
+  yield "bob";
+  yield "carol";
+}
+
+// P211: text-yielding generator driven by `while` (exercises both
+// P210's Value::Loop arm in collect_segments and the next_text path
+// for non-trivial state).
+fn ticks_text(n: integer) -> iterator<text> {
+  i = 0;
+  while i < n {
+    yield "tick";
+    i = i + 1;
+  }
+}
+
 fn main() {
   // --- CO1.3: next() advances generator ---
   gen = count();
@@ -70,6 +88,16 @@ fn main() {
   yf_total = 0;
   for n in outer_with_from() { yf_total += n; }
   assert(yf_total == 33, "yield from: {yf_total}");
+
+  // --- P211: text-yielding generator round-trips ---
+  joined = "";
+  for s in names() { joined = joined + s + ","; }
+  assert(joined == "alice,bob,carol,", "text yield concat: {joined}");
+
+  // --- P211: text yield from a `while` loop ---
+  ticks_seen = 0;
+  for t in ticks_text(4) { ticks_seen = ticks_seen + 1; assert(t == "tick", "tick val"); }
+  assert(ticks_seen == 4, "ticks count: {ticks_seen}");
 
   println("CO1: coroutines ok");
 }

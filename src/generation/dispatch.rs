@@ -525,6 +525,11 @@ impl Output<'_> {
                             w,
                             "(loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) != 0)"
                         )?,
+                        // size_of::<&str>() == 16 — text-yielding generator.
+                        16 => write!(
+                            w,
+                            "loft::codegen_runtime::coroutine_next_text({gen_code}, stores)"
+                        )?,
                         _ => write!(
                             w,
                             "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) as i32"

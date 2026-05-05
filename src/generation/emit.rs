@@ -319,7 +319,11 @@ impl Output<'_> {
                     // Inside a ForLoopBody factory: push to the collector instead.
                     write!(w, "__values.push((")?;
                     self.output_code_inner(w, inner)?;
-                    write!(w, ") as i64)")?;
+                    if self.yield_collect_text {
+                        write!(w, ").to_string())")?;
+                    } else {
+                        write!(w, ") as i64)")?;
+                    }
                 } else {
                     write!(w, "yield ")?;
                     self.output_code_inner(w, inner)?;

@@ -812,6 +812,50 @@ debug than the original problem.
    verified.  The test must pass cleanly — `wrap.rs` will print `FIXED` for
    functions that pass despite having `@EXPECT_FAIL`, confirming the annotation
    can be removed.
+8. **File pre-existing bugs surfaced during diagnosis BEFORE moving on.**  See
+   the "Bug-filing during a hunt" section below.
+
+---
+
+## Bug-filing During a Hunt — MANDATORY
+
+A bug hunt routinely surfaces *other* bugs that aren't the original report —
+sibling shapes, latent issues flagged in comments, symptoms unrelated to the
+active fix.  **File those before picking up the next bug or feature.**
+
+Why: bugs found during a hunt are the cheapest bugs in the project's lifetime —
+the relevant code paths are loaded, the diagnostic infrastructure is warmed up,
+a working reproducer is within reach.  Moving on without filing means
+re-discovering each finding from scratch later, paying the surrounding-code
+relearning cost again.
+
+Required action when a non-target bug surfaces:
+
+1. **Save the reproducer** to `/tmp/p_followups/p<N>_<slug>.loft` (one
+   `.loft` file per finding).  Captures the smallest input that reproduces.
+2. **Add a P-issue row** to [PROBLEMS.md](PROBLEMS.md) with: minimal
+   reproducer text or `/tmp` path, observed behaviour on each backend (interp
+   and `--native`), severity tier (S0/S1/S2), workaround if any, and how it
+   was surfaced (commit / probe / fix variant).
+3. **If user-visible**, mirror the row in
+   [USER_FACING.md](USER_FACING.md).
+4. **If the bug deserves CI lock-in** (most do not until they're being fixed),
+   add a regression to `tests/scripts/` or `tests/issues.rs`.  Don't gate the
+   filing on writing a test — the row in PROBLEMS.md is the load-bearing
+   artefact.
+
+Filing is **not** a license to scope-creep the active fix.  Continue to ship
+the original-report fix as a focused change; file follow-ups as separate
+P-issue rows.  Bundle into the same patch only when the follow-ups share a
+single fix site (and the commit message lists every P-id closed).
+
+The rule applies even when the bug looks obvious, narrow, or "clearly
+unrelated."  Survey method that worked in past sessions:
+`grep -E "(workaround|caveat|but the|but is|currently ignored|FIXME|TODO)"`
+over the diff and the surrounding files surfaces self-flagged latent bugs;
+running variant probes (different LHS, different scope, different element
+type) surfaces sibling shapes; comparing the new fix against any symmetric
+unfixed path surfaces parallel bugs that didn't get the symmetric fix.
 
 ---
 

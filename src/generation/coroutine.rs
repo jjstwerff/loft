@@ -162,6 +162,7 @@ fn emit_struct_def(
     struct_name: &str,
     attrs: &[crate::data::Attribute],
     segments: &[YieldSegment],
+    yield_tp: &Type,
 ) -> std::io::Result<()> {
     writeln!(w, "struct {struct_name} {{")?;
     writeln!(w, "    state: u32,")?;
@@ -188,7 +189,12 @@ fn emit_struct_def(
         .iter()
         .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }))
     {
-        writeln!(w, "    __values: Vec<i64>,")?;
+        let elem_ty = if matches!(yield_tp, Type::Text(_)) {
+            "String"
+        } else {
+            "i64"
+        };
+        writeln!(w, "    __values: Vec<{elem_ty}>,")?;
         writeln!(w, "    __idx: usize,")?;
     }
     writeln!(w, "}}\n")
@@ -258,18 +264,36 @@ impl Output<'_> {
         }
     }
 
-    /// Emit the `next_i64` method body for a coroutine state machine.
+    /// Emit the `next_*` method body for a coroutine state machine.
+    /// `yield_tp` selects which trait method to override: `next_i64` for
+    /// 8-byte-or-less yields, `next_text` for text yields.
     fn emit_next_i64(
         &mut self,
         w: &mut dyn Write,
         attrs: &[crate::data::Attribute],
         segments: &[YieldSegment],
         has_yf: bool,
+        yield_tp: &Type,
     ) -> std::io::Result<()> {
-        writeln!(
-            w,
-            "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {{"
-        )?;
+        let is_text = matches!(yield_tp, Type::Text(_));
+        let (sig, exhaust, advance, wrap_open, wrap_close) = if is_text {
+            (
+                "    fn next_text(&mut self, stores: &mut Stores) -> String {",
+                "loft::state::STRING_NULL.to_string()",
+                "next_text",
+                "(",
+                ").to_string()",
+            )
+        } else {
+            (
+                "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {",
+                "loft::codegen_runtime::COROUTINE_EXHAUSTED",
+                "next_i64",
+                "(",
+                ") as i64",
+            )
+        };
+        writeln!(w, "{sig}")?;
         // P199 — coroutine state-machine bodies call user fns that take
         // `&UnsafeCell<Stores>` (the new ABI).  The `LoftCoroutine` trait
         // method still receives `&mut Stores`; derive a `cell` view via
@@ -308,7 +332,10 @@ impl Output<'_> {
                     }
                     writeln!(w, "                self.state = {};", state_idx + 1)?;
                     let yield_code = self.generate_expr_buf(val)?;
-                    writeln!(w, "                return ({yield_code}) as i64;")?;
+                    writeln!(
+                        w,
+                        "                return {wrap_open}{yield_code}{wrap_close};"
+                    )?;
                 }
                 YieldSegment::YieldFrom { pre, init } => {
                     for stmt in pre {
@@ -324,12 +351,9 @@ impl Output<'_> {
                     writeln!(w, "                }}")?;
                     writeln!(
                         w,
-                        "                let val = self.sub_{state_idx}.as_mut().unwrap().next_i64(stores);"
+                        "                let val = self.sub_{state_idx}.as_mut().unwrap().{advance}(stores);"
                     )?;
-                    writeln!(
-                        w,
-                        "                if val == loft::codegen_runtime::COROUTINE_EXHAUSTED {{"
-                    )?;
+                    writeln!(w, "                if val == {exhaust} {{")?;
                     writeln!(w, "                    self.sub_{state_idx} = None;")?;
                     writeln!(w, "                    self.state = {};", state_idx + 1)?;
                     writeln!(w, "                    continue;")?;
@@ -339,29 +363,27 @@ impl Output<'_> {
                 YieldSegment::ForLoopBody { .. } => {
                     // Values were collected eagerly in the factory. Just pop from the buffer.
                     writeln!(w, "                if self.__idx < self.__values.len() {{")?;
-                    writeln!(w, "                    let v = self.__values[self.__idx];")?;
+                    if is_text {
+                        writeln!(
+                            w,
+                            "                    let v = self.__values[self.__idx].clone();"
+                        )?;
+                    } else {
+                        writeln!(w, "                    let v = self.__values[self.__idx];")?;
+                    }
                     writeln!(w, "                    self.__idx += 1;")?;
                     writeln!(w, "                    return v;")?;
                     writeln!(w, "                }}")?;
-                    writeln!(
-                        w,
-                        "                return loft::codegen_runtime::COROUTINE_EXHAUSTED;"
-                    )?;
+                    writeln!(w, "                return {exhaust};")?;
                 }
             }
             writeln!(w, "            }}")?;
         }
         // Exhausted arm.
         if has_yf {
-            writeln!(
-                w,
-                "            _ => return loft::codegen_runtime::COROUTINE_EXHAUSTED,"
-            )?;
+            writeln!(w, "            _ => return {exhaust},")?;
         } else {
-            writeln!(
-                w,
-                "            _ => loft::codegen_runtime::COROUTINE_EXHAUSTED,"
-            )?;
+            writeln!(w, "            _ => {exhaust},")?;
         }
         writeln!(w, "        }}")?;
         if has_yf {
@@ -407,16 +429,20 @@ impl Output<'_> {
             .iter()
             .any(|s| matches!(s, YieldSegment::YieldFrom { .. }));
         let attrs: Vec<_> = def.attributes.clone();
+        let yield_tp = match &def.returned {
+            Type::Iterator(inner, _) => (**inner).clone(),
+            other => other.clone(),
+        };
 
         // ── 1. Struct definition ─────────────────────────────────────────────
-        emit_struct_def(w, &struct_name, &attrs, &segments)?;
+        emit_struct_def(w, &struct_name, &attrs, &segments, &yield_tp)?;
 
         // ── 2. impl LoftCoroutine ────────────────────────────────────────────
         writeln!(
             w,
             "impl loft::codegen_runtime::LoftCoroutine for {struct_name} {{"
         )?;
-        self.emit_next_i64(w, &attrs, &segments, has_yf)?;
+        self.emit_next_i64(w, &attrs, &segments, has_yf, &yield_tp)?;
         writeln!(w, "}}\n")?;
 
         // ── 3. Factory function ──────────────────────────────────────────────
@@ -427,7 +453,7 @@ impl Output<'_> {
             .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }));
         emit_factory_fn(w, &fn_name, &struct_name, &attrs, &segments)?;
         if has_for_body {
-            self.emit_for_body_factory(w, &fn_name, &struct_name, &attrs, &segments)?;
+            self.emit_for_body_factory(w, &fn_name, &struct_name, &attrs, &segments, &yield_tp)?;
         }
         Ok(())
     }
@@ -441,7 +467,26 @@ impl Output<'_> {
         struct_name: &str,
         attrs: &[crate::data::Attribute],
         segments: &[YieldSegment],
+        yield_tp: &Type,
     ) -> std::io::Result<()> {
+        let is_text = matches!(yield_tp, Type::Text(_));
+        let (vec_ty, push_wrap_open, push_wrap_close, sub_advance, sub_exhaust) = if is_text {
+            (
+                "String",
+                "(",
+                ").to_string()",
+                "next_text",
+                "loft::state::STRING_NULL",
+            )
+        } else {
+            (
+                "i64",
+                "(",
+                ") as i64",
+                "next_i64",
+                "loft::codegen_runtime::COROUTINE_EXHAUSTED",
+            )
+        };
         write!(w, "fn {fn_name}(cell: &std::cell::UnsafeCell<Stores>")?;
         for attr in attrs {
             let arg_tp = rust_type(&attr.typedef, &Context::Argument);
@@ -461,9 +506,10 @@ impl Output<'_> {
                 _ => writeln!(w, "    let var_{aname} = var_{aname};")?,
             }
         }
-        writeln!(w, "    let mut __values: Vec<i64> = Vec::new();")?;
+        writeln!(w, "    let mut __values: Vec<{vec_ty}> = Vec::new();")?;
         // Run each for-loop body with yield_collect enabled.
         self.yield_collect = true;
+        self.yield_collect_text = is_text;
         for seg in segments {
             match seg {
                 YieldSegment::ForLoopBody { pre, body } => {
@@ -480,7 +526,10 @@ impl Output<'_> {
                         writeln!(w, "    {stmt_code};")?;
                     }
                     let val_code = self.generate_expr_buf(val)?;
-                    writeln!(w, "    __values.push(({val_code}) as i64);")?;
+                    writeln!(
+                        w,
+                        "    __values.push({push_wrap_open}{val_code}{push_wrap_close});"
+                    )?;
                 }
                 YieldSegment::YieldFrom { pre, init } => {
                     // Eagerly drain the sub-generator.
@@ -492,11 +541,8 @@ impl Output<'_> {
                     writeln!(w, "    {{")?;
                     writeln!(w, "        let mut __sub = {factory};")?;
                     writeln!(w, "        loop {{")?;
-                    writeln!(w, "            let v = __sub.next_i64(stores);")?;
-                    writeln!(
-                        w,
-                        "            if v == loft::codegen_runtime::COROUTINE_EXHAUSTED {{ break; }}"
-                    )?;
+                    writeln!(w, "            let v = __sub.{sub_advance}(stores);")?;
+                    writeln!(w, "            if v == {sub_exhaust} {{ break; }}")?;
                     writeln!(w, "            __values.push(v);")?;
                     writeln!(w, "        }}")?;
                     writeln!(w, "    }}")?;
@@ -504,6 +550,7 @@ impl Output<'_> {
             }
         }
         self.yield_collect = false;
+        self.yield_collect_text = false;
         writeln!(w, "    Box::new({struct_name} {{")?;
         writeln!(w, "        state: 0,")?;
         for attr in attrs {

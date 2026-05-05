@@ -423,6 +423,7 @@ impl Test {
             loop_stack: Vec::new(),
             next_format_count: 0,
             yield_collect: false,
+            yield_collect_text: false,
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,

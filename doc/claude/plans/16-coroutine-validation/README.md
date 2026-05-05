@@ -6,13 +6,32 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Plan 16 — Coroutine validation: yielded-type × drive-context matrix
 
 **Status: pre-flight 2026-05-04 surfaced 0/7 cells passing.  P210
-closed 2026-05-04** — `collect_segments` in
-`src/generation/coroutine.rs` now recognises `Value::Loop` (while)
-alongside `Value::Block` (for), so `while …; yield …` generators
-no longer produce empty state machines.  P211 (yield text) still
-open; Y3 (Reference) and Y4 (tuple) cells likely also still fail
-on text/Reference/tuple lifetime through the state machine — to be
-re-probed.  Phase 00 wiring not yet started.
+closed 2026-05-04, P211 closed 2026-05-05.**
+
+P210: `collect_segments` in `src/generation/coroutine.rs` now
+recognises `Value::Loop` (while) alongside `Value::Block` (for),
+so `while …; yield …` generators no longer produce empty state
+machines.
+
+P211: native state machine now has a parallel `next_text` channel
+(`LoftCoroutine::next_text` + `coroutine_next_text` runtime
+helper); text-yielding generators override `next_text` (selected
+on the function's `Iterator<T>` return type), and
+`OpCoroutineNext` size 16 dispatches to the new helper instead of
+falling through to the broken `as i32` arm.  Pinned by
+`p211_coroutine_yield_text` + `p211_coroutine_yield_text_while`
+in `tests/issues.rs` and the extended
+`tests/scripts/51-coroutines.loft`.
+
+Two P211-adjacent bugs filed 2026-05-05 while probing fix variants:
+P218 (format-string interpolating a parameter inside a generator
+body — `__work` buffer scope mismatch, native E0425) and P219
+(for-loop over a vector literal in a generator body — factory
+function E0308 unit/Box mismatch; range-for works).  Both are
+distinct from the next_text channel and unblock once fixed.
+
+Y3 (Reference) and Y4 (tuple) cells still need re-probe with the
+new yield-type infrastructure.  Phase 00 wiring not yet started.
 
 ## Goal
 

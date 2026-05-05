@@ -173,6 +173,50 @@ states that are harder to debug than the original problem.
 
 ---
 
+## Bug-filing policy — MANDATORY
+
+**File pre-existing bugs encountered during a bug hunt before moving on to any
+other bug or feature.**
+
+While diagnosing or fixing a bug you will often surface *other* bugs:
+
+- Sibling shapes ("the original P-issue was `out + s`; my variant probes show
+  `s = s + s` and `s = "lit" + s` are also broken differently").
+- Latent issues flagged in code comments that never made it to PROBLEMS.md
+  (for example, a `// loft text fields initialised to "" read back as null`
+  comment in a working example).
+- Symptoms surfaced during diagnosis but unrelated to the active fix
+  ("native E0502 in this unrelated borrow path").
+
+These findings are the **cheapest bugs you will ever file** — the relevant
+code paths are loaded into your head, the diagnostic infrastructure is warmed
+up, and a working reproducer is within reach.  Moving on without filing
+means re-discovering each one from scratch in a future session.
+
+**Required action before picking up the next bug or feature:**
+
+1. Add a P-issue row to [PROBLEMS.md](doc/claude/PROBLEMS.md) with a minimal
+   reproducer (path, expected output, observed output on each backend),
+   severity tier, and the workaround if any.
+2. If user-visible, mirror the row in
+   [USER_FACING.md](doc/claude/USER_FACING.md).
+3. If the bug is small enough to test cheaply, save the reproducer to
+   `/tmp/p_followups/` (so re-validation later is one command) or, when the
+   shape deserves CI lock-in, add a regression test to `tests/scripts/`.
+
+The rule applies even when the bug looks obvious, narrow, or "clearly
+unrelated."  One row in PROBLEMS.md costs ~30 seconds.  The cost of
+re-discovering the bug six months later — relearning the surrounding
+code, rebuilding a reproducer, re-running the diagnostic — is two orders
+of magnitude higher.
+
+This rule is **not** a license to scope-creep the active fix.  Continue to
+ship the original-report fix as a focused change.  File the follow-ups as
+*new* P-issue rows; do not bundle them into the same patch unless they share
+a single fix site.
+
+---
+
 ## Git safety — MANDATORY
 
 ### Never use `git stash pop` or `git pull` with uncommitted changes

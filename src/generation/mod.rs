@@ -226,6 +226,10 @@ pub struct Output<'a> {
     /// instead of `yield expr`.  Used in the eager-collect factory function
     /// for `ForLoopBody` coroutine segments.
     pub yield_collect: bool,
+    /// When set alongside `yield_collect`, the eager-collect buffer is
+    /// `Vec<String>` (text-yielding generator) and the `Value::Yield`
+    /// emission wraps the value in `.to_string()` instead of `as i64`.
+    pub yield_collect_text: bool,
     /// When true, `Value::Int` emits a `(d_nr_u32, null_DbRef)` tuple
     /// instead of `d_nr_i32`.  Set during fn-ref variable assignment so
     /// if-else branches produce the correct tuple type.

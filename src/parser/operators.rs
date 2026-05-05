@@ -62,15 +62,24 @@ impl Parser {
             }
         } else if let Value::Insert(ls) = code {
             if op == "=" {
-                // Detect `h = h + expr`: the first Insert entry is a self-append
-                // OpAppendText(var, Var(var)).  Converting to += semantics by
-                // removing the self-append and skipping the clear.  Without this,
-                // the clear destroys h's content before the append reads it.
+                // P217: detect `h = h + expr`: the first Insert entry is a
+                // self-append `OpAppendText(var, Var(var))`.  Convert to
+                // `+=` semantics by removing the self-append and skipping
+                // the up-front clear.  Without this, the clear destroys
+                // h's content before the appends read it.
+                //
+                // The `args[1]` operand is whatever `parse_append_text`
+                // received as `code` — a `Var(var)` wrapped by the parser
+                // in a `Value::Span` for source-position tracking.  We
+                // unspan to compare structural identity, not literal
+                // equality (the original `args[1] == Value::Var(var_nr)`
+                // check missed every Span-wrapped self-reference and let
+                // the clear-then-append path corrupt `h`).
                 let self_append = ls.first().is_some_and(|first| {
                     if let Value::Call(_, args) = first.unspan() {
                         args.len() >= 2
-                            && args[0] == Value::Var(var_nr)
-                            && args[1] == Value::Var(var_nr)
+                            && matches!(args[0].unspan(), Value::Var(v) if *v == var_nr)
+                            && matches!(args[1].unspan(), Value::Var(v) if *v == var_nr)
                     } else {
                         false
                     }

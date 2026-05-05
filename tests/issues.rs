@@ -947,6 +947,7 @@ fn n1_native_pipeline_trivial_program() {
         loop_stack: Vec::new(),
         next_format_count: 0,
         yield_collect: false,
+        yield_collect_text: false,
         fn_ref_context: false,
         i32_literal_context: false,
         tuple_text_to_string: false,
@@ -8873,6 +8874,7 @@ fn p144_ref_param_forward_native() {
             loop_stack: Vec::new(),
             next_format_count: 0,
             yield_collect: false,
+            yield_collect_text: false,
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,
@@ -9264,6 +9266,7 @@ fn p157_native_refvar_forwarding_with_preeval() {
             loop_stack: Vec::new(),
             next_format_count: 0,
             yield_collect: false,
+            yield_collect_text: false,
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,
@@ -11189,6 +11192,170 @@ fn run() -> integer {
     )
     .expr("run()")
     .result(Value::Int(10));
+}
+
+/// P211 — closed 2026-05-05.  Coroutine `yield text` now round-trips
+/// through the native state-machine.  The trait `LoftCoroutine` only
+/// had `next_i64`, so the lowering for a `iterator<text>` generator
+/// emitted `return ("alice") as i64;` (rejected by rustc with E0606
+/// "casting `&'static str` as `i64` is invalid"), and the consumer's
+/// `OpCoroutineNext` size-16 fallback emitted `... as i32` followed
+/// by `.to_string()` (E0425 "cast cannot be followed by a method
+/// call").  Fix adds `next_text` next to `next_i64` on the trait
+/// (each defaulted to its type's exhaustion sentinel), routes
+/// text-yielding generators to override `next_text`, and dispatches
+/// `OpCoroutineNext` size 16 (= `size_of::<&str>()`) to a new
+/// `coroutine_next_text` runtime helper.  Interp drove the test
+/// through the bytecode VM (which already supported size-16 yields)
+/// so it always worked; this test pins the native fix via the
+/// `tests/scripts/51-coroutines.loft` integration test that runs
+/// under `--native`, plus an interp-side smoke check here.
+#[test]
+fn p211_coroutine_yield_text() {
+    // Sum the character lengths of three yielded texts.  Length-sum
+    // guards against both the original interp symptom (empty stdout)
+    // and the native codegen errors (E0606 / E0425) that motivated
+    // the fix, while sidestepping a separate text-concat issue
+    // (`out + s + ","` codegen) that's unrelated to P211.
+    code!(
+        "fn names() -> iterator<text> {
+    yield \"alice\";
+    yield \"bob\";
+    yield \"carol\";
+}
+fn run() -> integer {
+    total = 0;
+    for s in names() { total = total + s.len(); }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(13));
+}
+
+/// P211 follow-up — text yield driven by a `while` loop.  Combines
+/// P210's `Value::Loop` arm in `collect_segments` with the new
+/// `next_text` channel — the state machine must collect a `Loop`
+/// segment AND emit `next_text` (not `next_i64`) when the yield
+/// type is `text`.
+#[test]
+fn p211_coroutine_yield_text_while() {
+    code!(
+        "fn ticks_for_p211(n: integer) -> iterator<text> {
+    i = 0;
+    while i < n {
+        yield \"tick\";
+        i = i + 1;
+    }
+}
+fn run() -> integer {
+    seen = 0;
+    for t in ticks_for_p211(3) { if t == \"tick\" { seen = seen + 1; } }
+    seen
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(3));
+}
+
+/// P217 — closed 2026-05-05.  Text-accumulator pattern `out = out + …`
+/// emitted `OpAppendText(out, Var(out))` as the FIRST op (self-append),
+/// followed by the per-piece appends.  Interp doubled the existing
+/// content (`"x"; out = out + "y"` → `"xxy"`); native rejected with
+/// E0502 ("cannot borrow `*var_out` as mutable because it is also
+/// borrowed as immutable") because the lowering produced
+/// `*var_out += &*(&*var_out);`.  Fix in
+/// `src/parser/vectors.rs::parse_append_text` detects when the first
+/// piece is `Value::Var(orig_var)` (the destination itself, possibly
+/// Span-wrapped) and skips the redundant initial append.  The
+/// accumulator already holds the correct starting value; emitting
+/// the self-append corrupted it.
+#[test]
+fn p217_text_self_accumulator() {
+    code!(
+        "fn run() -> text {
+    out = \"x\";
+    out = out + \"y\";
+    out
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("xy".to_string()));
+}
+
+/// P220 — closed 2026-05-05.  Empty `""` literals stored in a
+/// `vector<text>` and then deep-copied (via `vector_add`, struct
+/// field assignment, `OpCopyRecord`, parallel-worker boundary etc.)
+/// were silently re-classified as `null` on the destination.  Root
+/// cause was `Stores::copy_claims` in `src/database/allocation.rs`:
+/// the text arm checked the *string content* via `s.is_empty()` to
+/// decide whether to allocate or write the null sentinel.  But
+/// `get_str(0)` returns `STRING_NULL` (`"\0"`, len 1) for a null
+/// source, so the empty-content check never fired for genuine
+/// nulls — it ONLY fired when the source had a real allocated
+/// empty string.  Result: copying a `""` element produced `null`
+/// on the destination.  Surfaced during TIC_TAC_TOE v2 development
+/// (the v2 server's comment at
+/// `lib/game_protocol/examples/tictactoe_server_v2.loft:53-56`
+/// recorded the workaround discovery — "use null consistently").
+/// Fix discriminates on the source `cur` field (non-zero =
+/// allocated, regardless of length), preserving null on
+/// null-source and round-tripping `""` correctly.
+#[test]
+fn p220_empty_string_in_vector_text_round_trips_through_struct_field() {
+    code!(
+        "struct G { cells: vector<text> }
+fn run() -> integer {
+    cs: vector<text> = [];
+    for _ in 0..3 { cs += [\"\"]; }
+    g = G { cells: cs };
+    if g.cells[0] == \"\" { 1 } else { 0 }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1));
+}
+
+/// P220 follow-up — null sentinel must still be preserved across
+/// the same deep-copy path.  A `null` source must NOT become an
+/// allocated empty-string after a round-trip; it must stay null.
+/// (The original buggy code conflated empty content with null —
+/// the fix's discriminator is the source `cur` field, so this
+/// test pins the null-preserving behaviour.)
+#[test]
+fn p220_null_text_preserved_through_struct_field() {
+    code!(
+        "struct G { cells: vector<text> }
+fn run() -> integer {
+    cs: vector<text> = [];
+    cs += [null];
+    g = G { cells: cs };
+    if g.cells[0] == null { 1 } else { 0 }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1));
+}
+
+/// P217 follow-up — three-piece accumulator `out = out + a + b` (the
+/// idiom that surfaced via P211's text-yield concat).  Without the
+/// fix, the lowering emitted `OpAppendText(out, Var(out));
+/// OpAppendText(out, "a"); OpAppendText(out, "b")` so the
+/// destination's existing value was duplicated before each new piece
+/// was appended.
+#[test]
+fn p217_text_accumulator_chain() {
+    code!(
+        "fn run() -> text {
+    out = \"\";
+    for s in [\"alice\", \"bob\", \"carol\"] {
+        out = out + s + \",\";
+    }
+    out
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("alice,bob,carol,".to_string()));
 }
 
 /// P209 — closed 2026-05-04.  Match guard arms with pattern bindings
