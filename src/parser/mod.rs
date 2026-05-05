@@ -3390,10 +3390,10 @@ impl Parser {
                 if !self.pending_native_libs.contains(&prebuilt) {
                     self.pending_native_libs.push(prebuilt);
                 }
-            } else if let Some(built) = crate::extensions::auto_build_native(&pkg_dir, stem) {
-                if !self.pending_native_libs.contains(&built) {
-                    self.pending_native_libs.push(built);
-                }
+            } else if let Some(built) = crate::extensions::auto_build_native(&pkg_dir, stem)
+                && !self.pending_native_libs.contains(&built)
+            {
+                self.pending_native_libs.push(built);
             }
         }
         if let Some(ref crate_name) = m.native_crate {
