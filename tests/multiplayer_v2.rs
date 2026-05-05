@@ -209,6 +209,7 @@ fn v2_single_client_completes_game() {
 /// The exact frame *ordering* depends on scheduling, so we assert
 /// on counts, not order.
 #[test]
+#[ignore = "P229: macOS CI scheduler is fast enough that both clients finish their 3 X moves in <0.4s with no observable overlap, so neither sees the other's spectator frames. The 50ms stagger isn't enough; bumping it makes A finish before B connects in the other direction. Fix needs either real sleeps in the client or a server-side rendezvous."]
 fn v2_two_clients_with_spectator_routing() {
     let _server = {
         let s = ServerGuard::spawn("tictactoe_server_v2.loft", 7878);
