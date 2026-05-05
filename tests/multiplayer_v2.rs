@@ -223,8 +223,16 @@ fn v2_two_clients_with_spectator_routing() {
     let (a_out, a_status) = drain_with_timeout(a, Duration::from_secs(20));
     let (b_out, b_status) = drain_with_timeout(b, Duration::from_secs(20));
 
-    assert_eq!(a_status, Some(0), "A did not exit cleanly; stdout=\n{a_out}");
-    assert_eq!(b_status, Some(0), "B did not exit cleanly; stdout=\n{b_out}");
+    assert_eq!(
+        a_status,
+        Some(0),
+        "A did not exit cleanly; stdout=\n{a_out}"
+    );
+    assert_eq!(
+        b_status,
+        Some(0),
+        "B did not exit cleanly; stdout=\n{b_out}"
+    );
 
     // Each client's own game must complete.
     assert!(
@@ -260,12 +268,10 @@ fn v2_two_clients_with_spectator_routing() {
     // vice versa.  The 50 ms stagger above makes it likely (but not
     // guaranteed) that BOTH overlap; we require AT LEAST ONE side
     // to have observed the other.
-    let a_saw_b_spectator =
-        count_occurrences(&a_out, "[A] SpectatorPlacement") > 0
-            || a_out.contains("[A] SpectatorGameOver");
-    let b_saw_a_spectator =
-        count_occurrences(&b_out, "[B] SpectatorPlacement") > 0
-            || b_out.contains("[B] SpectatorGameOver");
+    let a_saw_b_spectator = count_occurrences(&a_out, "[A] SpectatorPlacement") > 0
+        || a_out.contains("[A] SpectatorGameOver");
+    let b_saw_a_spectator = count_occurrences(&b_out, "[B] SpectatorPlacement") > 0
+        || b_out.contains("[B] SpectatorGameOver");
     assert!(
         a_saw_b_spectator || b_saw_a_spectator,
         "neither client observed the other's spectator frames; \

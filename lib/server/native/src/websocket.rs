@@ -9,6 +9,7 @@ use std::net::TcpStream;
 
 /// WebSocket opcodes.
 pub const OP_TEXT: u8 = 0x01;
+#[allow(dead_code)] // RFC 6455 opcode kept for completeness
 pub const OP_BINARY: u8 = 0x02;
 pub const OP_CLOSE: u8 = 0x08;
 pub const OP_PING: u8 = 0x09;
@@ -18,6 +19,19 @@ pub const OP_PONG: u8 = 0x0A;
 pub struct WsFrame {
     pub opcode: u8,
     pub payload: Vec<u8>,
+}
+
+/// Outcome of a non-blocking frame read.
+///
+/// `ws_read_frame` collapses all three into `Option<WsFrame>`,
+/// which works for the legacy single-client paths that don't care
+/// to distinguish "no data this poll" from "peer closed".  The
+/// multi-client event pump needs the finer split so it can emit a
+/// Disconnected event exactly once per client.
+pub enum ReadOutcome {
+    NoData,
+    Frame(WsFrame),
+    Closed,
 }
 
 /// Compute the SHA-1 hash (for the WebSocket accept key).
@@ -47,14 +61,14 @@ fn sha1(data: &[u8]) -> [u8; 20] {
             w[i] = (w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16]).rotate_left(1);
         }
         let (mut a, mut b, mut c, mut d, mut e) = (h0, h1, h2, h3, h4);
-        for i in 0..80 {
+        for (i, &wi) in w.iter().enumerate() {
             let (f, k) = match i {
                 0..=19 => ((b & c) | ((!b) & d), 0x5A827999u32),
                 20..=39 => (b ^ c ^ d, 0x6ED9EBA1u32),
                 40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDCu32),
                 _ => (b ^ c ^ d, 0xCA62C1D6u32),
             };
-            let temp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[i]);
+            let temp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(wi);
             e = d; d = c; c = b.rotate_left(30); b = a; a = temp;
         }
         h0 = h0.wrapping_add(a);
@@ -125,33 +139,70 @@ pub fn ws_upgrade(stream: &mut TcpStream, headers: &str) -> bool {
 }
 
 /// Read one WebSocket frame from the stream.
+///
+/// Returns None for any error path — used by the legacy
+/// single-client `n_ws_recv` which collapses no-data, peer-close,
+/// and read-error into a single false return.  Multi-client
+/// callers should use `ws_read_frame_detailed` instead.
 pub fn ws_read_frame(stream: &mut TcpStream) -> Option<WsFrame> {
+    match ws_read_frame_detailed(stream) {
+        ReadOutcome::Frame(f) => Some(f),
+        ReadOutcome::NoData | ReadOutcome::Closed => None,
+    }
+}
+
+/// Read one WebSocket frame from the stream with finer error
+/// classification:
+///
+/// - `NoData` — the underlying read returned WouldBlock / TimedOut
+///   before any header byte was read.  Expected case for
+///   non-blocking polling; the caller should keep the stream
+///   alive and try again later.
+/// - `Frame` — a complete frame was read.
+/// - `Closed` — partial read, EOF, or any other I/O error.
+///   Treated as "peer is gone".
+pub fn ws_read_frame_detailed(stream: &mut TcpStream) -> ReadOutcome {
     let mut header = [0u8; 2];
-    stream.read_exact(&mut header).ok()?;
+    if let Err(e) = stream.read_exact(&mut header) {
+        return match e.kind() {
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                ReadOutcome::NoData
+            }
+            _ => ReadOutcome::Closed,
+        };
+    }
     let opcode = header[0] & 0x0F;
     let masked = (header[1] & 0x80) != 0;
     let mut payload_len = (header[1] & 0x7F) as u64;
 
     if payload_len == 126 {
         let mut buf = [0u8; 2];
-        stream.read_exact(&mut buf).ok()?;
+        if stream.read_exact(&mut buf).is_err() {
+            return ReadOutcome::Closed;
+        }
         payload_len = u16::from_be_bytes(buf) as u64;
     } else if payload_len == 127 {
         let mut buf = [0u8; 8];
-        stream.read_exact(&mut buf).ok()?;
+        if stream.read_exact(&mut buf).is_err() {
+            return ReadOutcome::Closed;
+        }
         payload_len = u64::from_be_bytes(buf);
     }
 
     let mask = if masked {
         let mut buf = [0u8; 4];
-        stream.read_exact(&mut buf).ok()?;
+        if stream.read_exact(&mut buf).is_err() {
+            return ReadOutcome::Closed;
+        }
         Some(buf)
     } else {
         None
     };
 
     let mut payload = vec![0u8; payload_len as usize];
-    stream.read_exact(&mut payload).ok()?;
+    if stream.read_exact(&mut payload).is_err() {
+        return ReadOutcome::Closed;
+    }
 
     if let Some(mask) = mask {
         for (i, byte) in payload.iter_mut().enumerate() {
@@ -159,7 +210,7 @@ pub fn ws_read_frame(stream: &mut TcpStream) -> Option<WsFrame> {
         }
     }
 
-    Some(WsFrame { opcode, payload })
+    ReadOutcome::Frame(WsFrame { opcode, payload })
 }
 
 /// Write a WebSocket frame to the stream (server → client, unmasked).
