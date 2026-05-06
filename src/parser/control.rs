@@ -3076,8 +3076,38 @@ impl Parser {
         list: &[Value],
         types: &[Type],
     ) -> Option<Type> {
+        // P215: name lookup for outer-scope fn-ref captures.
+        //
+        // Bare-name reads route through `parser/objects.rs:162-200`
+        // which scans `capture_context`; call syntax `name(args)`
+        // bypasses that path and lands here.  When `name` matches a
+        // `Type::Function` capturable from the outer scope, we need
+        // to (a) push it to `captured_names` (drives
+        // `synthesize_closure_record`'s attribute set), (b) create a
+        // placeholder local var on the first pass so subsequent
+        // lookups find it.  At call-emit time below, an
+        // `is_outer_fnref` test on `capture_context` decides whether
+        // to wrap the CallRef in a closure-record load.
+        let outer_fnref_type = self
+            .capture_context
+            .iter()
+            .find(|(n, t)| n == name && matches!(t, Type::Function(_, _, _)))
+            .cloned()
+            .map(|(_, t)| t);
         if !self.vars.name_exists(name) {
-            return None;
+            let ctype = outer_fnref_type.clone()?;
+            if !self.captured_names.iter().any(|(n, _)| n == name) {
+                self.captured_names.push((name.to_string(), ctype.clone()));
+            }
+            let v_nr = self.create_var(name, &ctype);
+            self.var_usages(v_nr, true);
+        } else if outer_fnref_type.is_some() && !self.captured_names.iter().any(|(n, _)| n == name)
+        {
+            // Second-pass: var exists from first pass but
+            // captured_names is fresh (reset per-lambda).  Re-record.
+            if let Some(ctype) = outer_fnref_type.clone() {
+                self.captured_names.push((name.to_string(), ctype));
+            }
         }
         let v_nr = self.vars.var(name);
         let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone() else {
@@ -3134,7 +3164,53 @@ impl Parser {
                 self.var_usages(cv, true);
             }
             self.var_usages(v_nr, true);
-            *val = Value::CallRef(v_nr, converted);
+            // P215: if we just captured this name from outer scope,
+            // populate the placeholder var from the closure record's
+            // field BEFORE the CallRef.  Without this the CallRef
+            // reads garbage from the uninitialised local slot.  The
+            // closure-record attribute was registered in
+            // `synthesize_closure_record` (parser/vectors.rs:762);
+            // `closure_param` (parser/vectors.rs:419) holds the DbRef
+            // at runtime.  `get_field` produces the (d_nr,
+            // closure_DbRef) tuple via the new fn_ref_field_read
+            // gate added in P215 (parser/mod.rs::get_field).
+            let call_ir = Value::CallRef(v_nr, converted);
+            // P215: detect "this name was captured from outer scope" by
+            // checking `captured_names` (populated either in this turn
+            // through Step 1 above, or in a prior pass).  `name_exists`
+            // returns true on the second pass even for captured names
+            // (placeholder var was created in first pass), so we can't
+            // gate just on `captured_via_closure` — that flag only
+            // fires on the first pass when the var is created fresh.
+            // P215: detect captured-from-outer status via
+            // `capture_context` rather than `captured_names`, since
+            // `captured_names` only tracks captures ADDED during the
+            // current pass — second-pass `inner(y)` lookups don't
+            // re-add and the flag would miss them.  `capture_context`
+            // is populated at `parse_lambda` entry from the outer
+            // scope's all-names (parser/vectors.rs:364) and is stable
+            // across both passes.
+            let was_captured = self
+                .capture_context
+                .iter()
+                .any(|(n, t)| n == name && matches!(t, Type::Function(_, _, _)));
+            if was_captured
+                && self.closure_param != u16::MAX
+                && let closure_rec_d = self.data.def(self.context).closure_record
+                && closure_rec_d != u32::MAX
+            {
+                let f_nr = self.data.attr(closure_rec_d, name);
+                if f_nr != usize::MAX {
+                    let load = self.get_field(closure_rec_d, f_nr, Value::Var(self.closure_param));
+                    *val = v_block(
+                        vec![crate::data::v_set(v_nr, load), call_ir],
+                        *ret_type.clone(),
+                        "captured_fn_ref_call",
+                    );
+                    return Some(*ret_type);
+                }
+            }
+            *val = call_ir;
             // for void-return capturing lambdas, write updated closure
             // record fields back to the corresponding outer variables so the caller
             // observes mutations made inside the lambda body (e.g. `count += x`).

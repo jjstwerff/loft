@@ -3070,6 +3070,7 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
         | Value::Keys(_)
         | Value::TupleGet(_, _)
         | Value::FnRef(_, _, _)
+        | Value::FnRefDnr(_)
         | Value::Null => {}
         Value::Call(_, args)
         | Value::CallRef(_, args)

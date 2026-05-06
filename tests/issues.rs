@@ -11951,3 +11951,79 @@ fn p214_vector_of_noncapturing_closures() {
     .expr("run()")
     .result(Value::Int(21)); // 11 + 10
 }
+
+/// P215 — closed 2026-05-05.  A closure-typed local variable defined
+/// in an outer scope was unreachable from inside an inner closure
+/// body that called it (`Unknown function 'inner'`).  Two coordinated
+/// changes:
+///
+/// 1. **Parser** (`src/parser/control.rs::try_fn_ref_call`): when
+///    `name` is in `capture_context` with a `Type::Function` type and
+///    not in the current function's vars, mirror the standard
+///    capture mechanism — push to `captured_names`, create a
+///    placeholder local var, and detect the capture at emit time via
+///    `capture_context` (stable across both passes).
+///
+/// 2. **Closure-record write** (`src/parser/mod.rs::emit_fn_ref_field_write`):
+///    lift the P213-deferred "only inline lambda literals" diagnostic
+///    when both target and source are non-capturing — target field
+///    has 4B int layout (`assigned_lambda_d_nr == u32::MAX`) and
+///    source var is not in `closure_vars` (the existing
+///    capturing-fn-ref tracker).  Emit `OpSetInt4(target, pos,
+///    Value::FnRefDnr(src))` to project the d_nr.
+///
+/// 3. **Closure-record read symmetry** (`src/parser/mod.rs::get_field`):
+///    for `Type::Function` fields with 4B int layout, synthesise a
+///    null DbRef for the closure half via `OpNullRefSentinel`
+///    instead of reading at `pos+4` (which would corrupt the next
+///    attribute's bytes — the legacy 4B layout has no
+///    `__closure_rec` half).
+///
+/// New IR variant `Value::FnRefDnr(u16)` projects the d_nr from a
+/// fn-ref Var on both backends — interp via `OpVarInt(slot_pos)`
+/// (the dispatcher reads 8 bytes regardless of declared type),
+/// native via `(var_<name>.0 as i64)` tuple projection.
+///
+/// Capturing source lambdas (where `inner` itself captures from
+/// further out) remain deferred — the closure-record's 4B layout
+/// can't hold the source's closure DbRef, and lifting that requires
+/// extending `synthesize_closure_record` to register the 8B split
+/// layout for fn-ref captures.
+#[test]
+fn p215_nested_closure_call() {
+    code!(
+        "fn run() -> integer {
+    inner = fn(x: integer) -> integer { x + 5 };
+    outer = fn(y: integer) -> integer { inner(y) + 1 };
+    outer(10)
+}"
+    )
+    .expr("run()")
+    // inner(10) = 15; outer(10) = 16
+    .result(Value::Int(16));
+}
+
+/// P215 — multiple non-capturing fn-refs captured into a single
+/// closure body.  Validates that several captures coexist in the
+/// closure record, each correctly populated and dispatched.  Each
+/// captured lambda is non-capturing — the case the P215 fix
+/// supports.  Capturing-source-into-closure remains deferred
+/// (requires `synthesize_closure_record` to register the 8B split
+/// layout when the source itself captures).
+#[test]
+fn p215_multiple_captures_in_one_closure() {
+    code!(
+        "fn run() -> integer {
+    add_one = fn(x: integer) -> integer { x + 1 };
+    times_two = fn(x: integer) -> integer { x * 2 };
+    minus_three = fn(x: integer) -> integer { x - 3 };
+    pipeline = fn(n: integer) -> integer {
+        minus_three(times_two(add_one(n)))
+    };
+    pipeline(5)
+}"
+    )
+    .expr("run()")
+    // 5+1=6 → 6*2=12 → 12-3=9
+    .result(Value::Int(9));
+}

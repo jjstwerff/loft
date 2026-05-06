@@ -512,6 +512,19 @@ impl State {
                 self.code_add(clos_pos);
                 *fn_type.clone()
             }
+            Value::FnRefDnr(v_nr) => {
+                // P215: project the d_nr (i64, first 8 bytes of the var
+                // slot) from a fn-ref Var.  `OpVarInt`'s dispatcher
+                // (`fill.rs::var_int`) reads 8B from the slot regardless
+                // of declared type — the fn-ref slot's first 8B is the
+                // i64 d_nr, so this works without a new opcode.  The
+                // closure DbRef component (next 12B) stays untouched in
+                // the slot.
+                let v_pos = stack.position - stack.function.stack(*v_nr);
+                stack.add_op("OpVarInt", self);
+                self.code_add(v_pos);
+                crate::data::I64.clone()
+            }
             // Phase 09 phase 00 step 0.7 — RawExpr is created only by
             // native codegen (`src/generation/emit.rs` fn-ref dispatch);
             // bytecode codegen never produces it.

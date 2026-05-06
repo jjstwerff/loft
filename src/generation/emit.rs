@@ -358,6 +358,14 @@ impl Output<'_> {
                 // Native codegen for parallel {} is not yet supported.
                 write!(w, "/* parallel {{}} — not supported in native codegen */")?;
             }
+            Value::FnRefDnr(v_nr) => {
+                // P215: project the d_nr from a fn-ref var.  `var_<name>`
+                // is the (u32, DbRef) tuple in native rust_type;
+                // `.0 as i64` widens to match the integer ABI expected
+                // by `OpSetInt4`'s template.
+                let var_name = sanitize(self.data.def(self.def_nr).variables.name(*v_nr));
+                write!(w, "(var_{var_name}.0 as i64)")?;
+            }
             // Plan-07 phase 1 — Span is transparent in native emit.
             Value::Span(b) => self.output_code_inner(w, &b.1)?,
             // Plan-06 spine step 3 — ParFor native codegen lands in

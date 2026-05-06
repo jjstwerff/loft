@@ -1832,6 +1832,24 @@ impl Parser {
         } else {
             self.data.def(d_nr).attributes[f_nr].alias_d_nr
         };
+        // P215: for fn-ref fields with the legacy 4B int layout
+        // (`assigned_lambda_d_nr == u32::MAX`), the database has no
+        // `<attr>__closure_rec` half — reading at pos+4 would corrupt
+        // the next attribute.  Synthesise the null DbRef sentinel for
+        // the closure half instead.  The 8B split layout (assigned by
+        // a capturing lambda) keeps the existing dual-read path.
+        if let Type::Function(_, _, _) = &tp
+            && f_nr != usize::MAX
+            && self.data.def(d_nr).attributes[f_nr].assigned_lambda_d_nr == u32::MAX
+        {
+            let read_dnr = self.cl("OpGetInt4", &[code, Value::Int(i32::from(pos))]);
+            let read_clos = self.cl("OpNullRefSentinel", &[]);
+            return crate::data::v_block(
+                vec![read_dnr, read_clos],
+                tp.clone(),
+                "fn_ref_field_read",
+            );
+        }
         self.get_val(&tp, nullable, u32::from(pos), code, alias)
     }
 
@@ -4077,7 +4095,7 @@ fn find_capturing_fn_ref(v: &Value) -> Option<(i32, u16)> {
 ///   diagnostic so the user sees the limitation in the second pass.
 fn emit_fn_ref_field_write(
     p: &mut Parser,
-    _d_nr: u32,
+    d_nr: u32,
     f_nr: usize,
     ref_code: Value,
     pos_val: Value,
@@ -4152,9 +4170,50 @@ fn emit_fn_ref_field_write(
             }
             v_block(ops, Type::Void, "fn_ref_field_set")
         }
-        Value::Var(_) | Value::Call(_, _) => {
-            // P213-deferred: non-inline source.  This release supports
-            // only inline lambda literals in fn-ref struct fields.
+        Value::Var(v) => {
+            // P215: lift the deferred diagnostic when both sides are
+            // non-capturing — target field is 4B int layout
+            // (`assigned_lambda_d_nr == u32::MAX`) AND the source var
+            // is not in `closure_vars` (presence in that map signals a
+            // capturing-lambda assignment per
+            // `parser/expressions.rs:1217`).  In that case writing
+            // just the d_nr is lossless: the source's closure DbRef
+            // component is the null sentinel and there's no
+            // `__closure_rec` half on the target to receive it.
+            //
+            // Closure-record-internal fn-ref fields always satisfy the
+            // target check (synthesize_closure_record never sets
+            // `assigned_lambda_d_nr`), so capturing fn-ref names from
+            // outer scopes now write through to the closure record
+            // when the captured lambda itself is non-capturing —
+            // which is the canonical P215 reproducer.
+            let target_is_4b = if (d_nr as usize) < p.data.definitions.len()
+                && f_nr < p.data.def(d_nr).attributes.len()
+            {
+                p.data.def(d_nr).attributes[f_nr].assigned_lambda_d_nr == u32::MAX
+            } else {
+                false
+            };
+            let source_is_noncapturing =
+                matches!(p.vars.tp(v), Type::Function(_, _, _)) && !p.closure_vars.contains_key(&v);
+            if target_is_4b && source_is_noncapturing {
+                return p.cl("OpSetInt4", &[ref_code, pos_val, Value::FnRefDnr(v)]);
+            }
+            if !p.first_pass {
+                diagnostic!(
+                    p.lexer,
+                    Level::Error,
+                    "only inline lambda literals can be stored in fn-ref struct fields; \
+                     non-inline (variable / call) sources are not yet supported when the \
+                     source closure may capture (P215-deferred)"
+                );
+            }
+            // Emit a no-op so the rest of construction proceeds.
+            p.cl("OpSetInt4", &[ref_code, pos_val, Value::Int(0)])
+        }
+        Value::Call(_, _) => {
+            // P213-deferred: non-inline source.  Capturing-call
+            // sources need closure-DbRef copy; deferred.
             if !p.first_pass {
                 diagnostic!(
                     p.lexer,
@@ -4163,7 +4222,6 @@ fn emit_fn_ref_field_write(
                      bind the lambda directly inside the struct constructor"
                 );
             }
-            // Emit a no-op so the rest of construction proceeds.
             p.cl("OpSetInt4", &[ref_code, pos_val, Value::Int(0)])
         }
         other => {

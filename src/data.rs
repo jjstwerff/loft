@@ -362,6 +362,16 @@ pub enum Value {
     // Construct a 16-byte fn-ref on the stack: push d_nr (4B via OpConstInt)
     // then push the closure DbRef (12B via OpVarRef of clos_var_nr). No new opcode.
     FnRef(i32, u16, Box<Type>),
+    // P215: project the d_nr (i64, first 8B of slot) from a fn-ref Var.
+    // Used when writing a captured non-capturing fn-ref into a 4B-int
+    // field (closure record) — the source's closure DbRef is the null
+    // sentinel and is dropped, so only the d_nr needs writing.
+    // - Interp codegen: `OpVarInt(var_pos)` — the dispatcher
+    //   (`fill.rs::var_int`) reads 8B from the slot regardless of the
+    //   variable's declared type.
+    // - Native codegen: `(var_<name>.0 as i64)` — projects the u32
+    //   d_nr from the (u32, DbRef) tuple and widens to i64.
+    FnRefDnr(u16),
     /// Parallel { arm1; arm2; } — each arm runs concurrently.
     Parallel(Vec<Value>),
     /// Plan-06 PRIORITY.md spine step 3 — fused for-par IR shape
@@ -3296,6 +3306,9 @@ impl Data {
             }
             Value::FnRef(d_nr, clos_var, _) => {
                 write!(write, "FnRef({d_nr}, {})", vars.name(*clos_var))
+            }
+            Value::FnRefDnr(v_nr) => {
+                write!(write, "FnRefDnr({})", vars.name(*v_nr))
             }
             Value::Parallel(arms) => {
                 writeln!(write, "parallel {{")?;
