@@ -1443,6 +1443,28 @@ extern crate loft;"
                     }
                 }
             }
+            // P214: vector<fn-ref> elements route through narrow_vector_content
+            // to a 4-byte int (Parts::Int with size=4) — match the parser's
+            // `vector_of` path so the emitted `db.vector(narrow_int)`
+            // matches the runtime narrow Parts.  Without this, the
+            // `type_def_nr(Type::Function)` path returns `i32` whose
+            // `known_type` is `u16::MAX` → emits `db.vector(u16::MAX)`
+            // which panics in `Stores::field`'s parent-tracking when the
+            // wrapper struct is registered.
+            if matches!(**c, Type::Function(_, _, _)) {
+                let narrow = self.stores.name("int<0,false>");
+                if narrow != u16::MAX {
+                    let content_ref = type_id_ref(narrow);
+                    emit_db_field(
+                        w,
+                        s_var,
+                        field_name,
+                        "vec",
+                        &format!("db.vector({content_ref})"),
+                    )?;
+                    return Ok(());
+                }
+            }
             let c_def = self.data.type_def_nr(c);
             if c_def != u32::MAX {
                 let content = self.data.def(c_def).known_type;

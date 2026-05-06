@@ -11917,3 +11917,37 @@ fn run() -> text {
     .expr("run()")
     .result(Value::Text("z: 42".to_string()));
 }
+
+/// P214 — closed 2026-05-05.  `vector<fn(integer) -> integer>` of
+/// non-capturing closures panicked under interp (`fn_call_ref:
+/// d_nr=12884901896 out of range`) and rejected on native with E0605
+/// `DbRef as (u32, DbRef)`.  Two coordinated changes:
+///
+/// 1. **Parser** (`src/parser/fields.rs`): the vector-element-size
+///    computation in `parse_index_apply` falls back to
+///    `narrow_vector_content` for fn-ref types so `elm_size` is 4
+///    (the d_nr stride) instead of 0 (which made every index hit
+///    slot 0).  Adds a `Type::Function` branch that reads the d_nr
+///    via `OpGetInt4` and pairs it with `OpNullRefSentinel` for the
+///    closure DbRef half — assembling the (u32, DbRef) tuple shape
+///    via the existing `fn_ref_field_read` block-name shortcut in
+///    native codegen.
+/// 2. **Native init** (`src/generation/mod.rs::emit_field`): when
+///    the field's vector content is `Type::Function`, emit
+///    `db.vector(narrow_int)` instead of `db.vector(u16::MAX)` so
+///    the runtime parent-tracking pass in `Stores::field` finds
+///    the proper int content type.
+#[test]
+fn p214_vector_of_noncapturing_closures() {
+    code!(
+        "fn run() -> integer {
+    v: vector<fn(integer) -> integer> = [
+        fn(x: integer) -> integer { x + 1 },
+        fn(x: integer) -> integer { x * 2 },
+    ];
+    v[0](10) + v[1](5)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(21)); // 11 + 10
+}

@@ -523,6 +523,16 @@ impl Parser {
             && let Some(n) = spec.vector_narrow_width()
         {
             i32::from(n)
+        } else if let Some(narrow) = self.data.narrow_vector_content(etp, &mut self.database) {
+            // P214: Type::Function vector elements route through
+            // `narrow_vector_content` to a `database.int(0, false)`
+            // (size 4 d_nr storage).  The previous fallback via
+            // `data.def(elm_td).known_type` returned `u16::MAX` for
+            // synthetic `i32` defs without a registered known_type,
+            // making `database.size(known) = 0` and producing a
+            // stride-0 read that always hit slot 0 regardless of
+            // index.
+            i32::from(self.database.size(narrow))
         } else {
             i32::from(self.database.size(known))
         };
@@ -582,6 +592,29 @@ impl Parser {
                 *code = self.get_val(etp, true, 0, code.clone(), u32::MAX);
             } else if let Type::Tuple(elems) = etp {
                 *code = self.unbox_tuple_from_dbref(code.clone(), elems);
+            } else if matches!(etp, Type::Function(_, _, _)) {
+                // P214: vector elements of `fn(...) -> ...` type are
+                // stored as 4-byte d_nr only (non-capturing — capturing
+                // closures in vectors are deferred).  The variable's
+                // stack representation is `(u32, DbRef)` (a fn-ref
+                // tuple), so the read assembles the tuple from the
+                // 4B slot d_nr + a null closure sentinel.  Mirrors the
+                // struct-field non-capturing path in
+                // `parser/mod.rs::get_val` Type::Function arm but uses
+                // an explicit `OpNullRefSentinel` for the closure half
+                // since vectors don't have a separate `__closure_rec`
+                // sub-field.
+                let slot = code.clone();
+                let read_dnr = self.cl("OpGetInt4", &[slot, Value::Int(0)]);
+                let read_clos = self.cl("OpNullRefSentinel", &[]);
+                *code = crate::data::v_block(
+                    vec![read_dnr, read_clos],
+                    etp.clone(),
+                    // Reuse the field-read block name so native codegen's
+                    // tuple-emit shortcut (`((d_nr) as u32, closure_DbRef)`)
+                    // fires here too — the block layout is identical.
+                    "fn_ref_field_read",
+                );
             }
         }
         None
