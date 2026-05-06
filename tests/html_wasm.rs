@@ -171,7 +171,19 @@ fn run_html_wasm_with_libs(
     // Serialise: the loft `--html` driver writes to a fixed
     // `/tmp/loft_html.rs` path, so parallel test invocations would
     // overwrite each other's emitted Rust mid-build.
-    let _guard = build_lock().lock().unwrap();
+    //
+    // P201: recover from a poisoned lock via `into_inner()` so the
+    // first test to fail surfaces its real error instead of every
+    // later test reporting `PoisonError { .. }`.  The lock guards a
+    // shared file path, not invariant state — a panicking test leaves
+    // the file half-written, but the next test overwrites it on the
+    // next `loft --html` invocation, so consuming the poisoned guard
+    // is safe.  `assert_wasm_rlib_fresh()` already runs before this
+    // line so a stale rlib fails the test before it can poison the
+    // build serial.
+    let _guard = build_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut cmd = Command::new(&loft_bin);
     cmd.args([
         "--html",
@@ -360,6 +372,37 @@ fn main() {
         stdout.contains("depth=3 mat=1"),
         "expected 'depth=3 mat=1'.\nstdout: {stdout}\nstderr: {stderr}"
     );
+}
+
+/// P201 regression: when one html_wasm test panics while holding
+/// `build_lock()`, every subsequent test must still be able to acquire
+/// the guard.  Before the fix, a poisoned `Mutex<()>` made every later
+/// `.lock().unwrap()` call panic with `PoisonError { .. }` — a noisy
+/// cascade that hid the original failure.  The fix is the recovery
+/// pattern `.lock().unwrap_or_else(|e| e.into_inner())`; this test
+/// exercises that pattern on a local mutex so a regression in the
+/// recovery shape (e.g. someone reverts to plain `.unwrap()`) trips
+/// here without depending on the real `build_lock()` global.
+#[test]
+fn p201_poisoned_lock_recovery_pattern() {
+    use std::sync::Arc;
+    let m = Arc::new(Mutex::new(()));
+    let m2 = Arc::clone(&m);
+    let h = std::thread::spawn(move || {
+        let _g = m2.lock().expect("first acquire");
+        panic!("simulated test failure with the lock held");
+    });
+    let _ = h.join(); // expected to be Err
+    assert!(
+        m.is_poisoned(),
+        "precondition: panicking thread must poison the mutex"
+    );
+    // The fix's recovery pattern — must NOT panic on a poisoned lock.
+    let _guard = m.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Holding the recovered guard proves the pattern is live; drop it
+    // to release.  If the assertion below ever changes shape, the doc
+    // comment on `build_lock().lock()` (above) needs the same edit.
+    drop(_guard);
 }
 
 // Minimal base64 decoder — avoids adding a dev-dependency for one

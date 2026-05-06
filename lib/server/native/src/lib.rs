@@ -8,7 +8,7 @@ mod websocket;
 
 use loft_ffi::LoftStr;
 use std::cell::{Cell, RefCell};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
 thread_local! {
@@ -24,10 +24,42 @@ thread_local! {
     static LAST_HEADERS: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
-fn parse_request(stream: &TcpStream) -> Option<(String, String, String, String)> {
-    let mut reader = BufReader::new(stream);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line).ok()?;
+fn parse_request(stream: &mut TcpStream) -> Option<(String, String, String, String)> {
+    // Read the header block BYTE-BY-BYTE.  We deliberately do NOT use
+    // BufReader here: a custom client may send WebSocket frames
+    // immediately after its `Upgrade: websocket` request without
+    // waiting for the server's `101 Switching Protocols` response.
+    // A BufReader's internal buffer would slurp those leading WS
+    // frame bytes along with the header bytes; on drop they vanish,
+    // so the first ws_recv after the upgrade misses the client's
+    // first frame.  Reading byte-by-byte until "\r\n\r\n" leaves the
+    // post-header bytes in the kernel buffer for ws_read_frame.
+    // Mirrors the client-side fix in lib/web/native/src/ws_client.rs.
+    let mut window: [u8; 4] = [0, 0, 0, 0];
+    let mut header_text = String::new();
+    loop {
+        let mut byte = [0u8; 1];
+        match stream.read(&mut byte) {
+            Ok(0) => return None, // EOF before headers complete
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+        header_text.push(byte[0] as char);
+        window[0] = window[1];
+        window[1] = window[2];
+        window[2] = window[3];
+        window[3] = byte[0];
+        if window == *b"\r\n\r\n" {
+            break;
+        }
+        // Cap to avoid slurping a hostile peer's giant header block forever.
+        if header_text.len() > 16 * 1024 {
+            return None;
+        }
+    }
+
+    let mut lines = header_text.split("\r\n");
+    let request_line = lines.next()?;
     let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 {
         return None;
@@ -37,25 +69,23 @@ fn parse_request(stream: &TcpStream) -> Option<(String, String, String, String)>
 
     let mut headers = String::new();
     let mut content_length: usize = 0;
-    loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).ok()?;
-        if line.trim().is_empty() {
-            break;
+    for line in lines {
+        if line.is_empty() {
+            continue;
         }
         if let Some((key, value)) = line.split_once(':')
             && key.trim().eq_ignore_ascii_case("content-length")
         {
             content_length = value.trim().parse().unwrap_or(0);
         }
-        headers.push_str(line.trim_end_matches(['\r', '\n']));
+        headers.push_str(line);
         headers.push('\n');
     }
 
     let mut body = String::new();
     if content_length > 0 {
         let mut buf = vec![0u8; content_length];
-        reader.read_exact(&mut buf).ok()?;
+        stream.read_exact(&mut buf).ok()?;
         body = String::from_utf8_lossy(&buf).to_string();
     }
 
@@ -96,11 +126,11 @@ pub extern "C" fn n_tcp_accept(handle: i32) -> bool {
             .and_then(|opt| opt.as_ref())
             .and_then(|listener| listener.accept().ok().map(|(s, _)| s))
     });
-    let stream = match stream {
+    let mut stream = match stream {
         Some(s) => s,
         None => return false,
     };
-    match parse_request(&stream) {
+    match parse_request(&mut stream) {
         Some((method, path, headers, body)) => {
             LAST_METHOD.with(|m| *m.borrow_mut() = method);
             LAST_PATH.with(|p| *p.borrow_mut() = path);
@@ -332,7 +362,7 @@ fn try_accept_inner(listener_handle: i32) -> AcceptOutcome {
     // force blocking for the HTTP read (small, finite), then switch to
     // a short read timeout for the post-upgrade WS read polling.
     let _ = stream.set_nonblocking(false);
-    let (headers_opt, _path_opt) = match parse_request(&stream) {
+    let (headers_opt, _path_opt) = match parse_request(&mut stream) {
         Some((_method, path, headers, _body)) => (Some(headers), Some(path)),
         None => return AcceptOutcome::Error,
     };
@@ -591,4 +621,64 @@ loft_ffi::loft_register! {
     n_ws_event_payload,
     n_ws_broadcast,
     n_ws_idle_sleep_ms,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+
+    /// P221: when a client sends WS frame bytes immediately after the
+    /// upgrade request without waiting for `101 Switching Protocols`,
+    /// `parse_request` must NOT swallow them.  The bytes after the
+    /// `\r\n\r\n` header terminator must remain in the kernel buffer
+    /// for the next reader (e.g. `ws_read_frame`).  The original
+    /// `BufReader::new(stream)` implementation absorbed those bytes
+    /// into its internal buffer and lost them when the BufReader
+    /// dropped at end of `parse_request`.
+    #[test]
+    fn p221_parse_request_leaves_post_header_bytes_in_kernel_buffer() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let trailing: &[u8] = b"WS-FRAME-BYTES-XYZ";
+        let trailing_owned = trailing.to_vec();
+        let client = thread::spawn(move || {
+            let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+            // Aggressive client: write the upgrade request AND the
+            // first WS frame back-to-back, before reading the 101.
+            let req = b"GET /ws HTTP/1.1\r\n\
+                Host: 127.0.0.1\r\n\
+                Upgrade: websocket\r\n\
+                Connection: Upgrade\r\n\
+                Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                Sec-WebSocket-Version: 13\r\n\
+                \r\n";
+            s.write_all(req).expect("write headers");
+            s.write_all(&trailing_owned).expect("write trailing");
+            // Hand the stream back via a small read so the test can
+            // close once the server has consumed the trailing bytes.
+            let mut sink = [0u8; 8];
+            let _ = s.read(&mut sink);
+        });
+
+        let (mut server_stream, _peer) = listener.accept().expect("accept");
+        let parsed = parse_request(&mut server_stream).expect("parse");
+        assert_eq!(parsed.0, "GET");
+        assert_eq!(parsed.1, "/ws");
+
+        // The trailing bytes the client appended after the header
+        // terminator must still be readable from the kernel buffer.
+        server_stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let mut buf = vec![0u8; trailing.len()];
+        server_stream.read_exact(&mut buf).expect("read trailing");
+        assert_eq!(&buf[..], trailing, "post-header bytes were swallowed");
+
+        drop(server_stream);
+        let _ = client.join();
+    }
 }

@@ -12027,3 +12027,269 @@ fn p215_multiple_captures_in_one_closure() {
     // 5+1=6 → 6*2=12 → 12-3=9
     .result(Value::Int(9));
 }
+
+/// P222 — closed 2026-05-06.  `s = s + s` rejected on native with
+/// E0502 ("cannot borrow `*var_s` as mutable because it is also
+/// borrowed as immutable").  After the P217 self-append strip the
+/// IR became `OpAppendText(s, Var(s))`, which the native emitter
+/// lowered to `var_s += &*(&var_s);` — `&mut` and `&` on the same
+/// place.  Fix in `src/generation/text.rs::append_text` detects
+/// when the RHS expression references the destination variable and
+/// hoists the value through a fresh `String` so the self-borrow
+/// never overlaps the `+=` target.  Interp already produced the
+/// correct `"abab"` after the P217 fix; this test pins both
+/// backends so a future codegen refactor cannot reintroduce the
+/// self-borrow.
+#[test]
+fn p222_text_self_double() {
+    code!(
+        "fn run() -> text {
+    s = \"ab\";
+    s = s + s;
+    s
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("abab".to_string()));
+}
+
+/// P222 follow-up — triple self-reference `v = v + v + v` exercises
+/// the codegen path twice (two `OpAppendText(v, Var(v))` ops after
+/// the P217 strip).  Each must hoist independently; the second
+/// append reads `v`'s already-doubled value, producing 8 chars
+/// (`"ab"` → `"abab"` → `"abababab"`).  Both backends must agree.
+#[test]
+fn p222_text_triple_self_reference() {
+    code!(
+        "fn run() -> text {
+    v = \"ab\";
+    v = v + v + v;
+    v
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("abababab".to_string()));
+}
+
+/// P228 — closed 2026-05-06.  `label = t.0;` (where `t` is a tuple
+/// with a text-typed first element, e.g. `t = ("hello", 42)`)
+/// rejected on native with E0308 because the emitted Rust was
+/// `let mut var_label: String = &var_t.0.to_string();` —
+/// `&var_t.0.to_string()` parses as `&(var_t.0.to_string())` per
+/// Rust method-call precedence, producing `&String` against a
+/// declared `String`.  The `tuple_text_elem_clone` detection in
+/// `src/generation/dispatch.rs::output_set` (added by T1.8a)
+/// handled the same shape but pattern-matched `Value::TupleGet`
+/// directly, missing the `Value::Span(TupleGet)` wrapper the
+/// parser puts around every assignment RHS — so the `.clone()`
+/// fast-path never fired and codegen fell through to the buggy
+/// `&...to_string()` form.  Fix unspans `to` before pattern-matching;
+/// also extends the symmetric `text_local_clone` Var detection to
+/// unspan for the same reason.  Interp was unaffected (no `&` /
+/// `.to_string()` precedence concern).
+#[test]
+fn p228_text_tuple_element_assignment() {
+    code!(
+        "fn run() -> text {
+    t = (\"hello\", 42);
+    label = t.0;
+    label
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("hello".to_string()));
+}
+
+/// P228 follow-up — text element at index > 0 (mixed-type tuple
+/// with a text element in the middle).  Same Span-wrapped TupleGet
+/// shape; pins that the fix is index-agnostic, not specific to `.0`.
+#[test]
+fn p228_text_tuple_element_at_higher_index() {
+    code!(
+        "fn run() -> text {
+    t = (42, \"world\", 99);
+    s = t.1;
+    s
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("world".to_string()));
+}
+
+/// P226 — closed 2026-05-06.  Vector literals (`[1,2,3]`) inside a
+/// state-machine generator (Simple-yield-only — no for-loop body so
+/// the eager-collect path doesn't engage) allocated a `__vdb_*`
+/// `DbRef` slot that the per-state codegen declared inside one
+/// match arm via `let mut var___vdb_N: DbRef = stores.null_named(...)`,
+/// scoping the binding to that arm only.  A subsequent state arm
+/// referencing the same `__vdb_N` (e.g. two `Simple` yields each
+/// containing a vector literal) failed to compile with E0425
+/// ("cannot find value `var___vdb_N` in this scope").  Same scoping
+/// family as P218 (`__work_*` text format buffers) and P224 (general
+/// user locals).  Fix in `src/generation/coroutine.rs::emit_next_i64`
+/// pre-declares any non-argument `__vdb_*` local at function scope
+/// (mirroring P218's text pre-declaration), then adds the var to
+/// `self.declared` so the IR's per-state Set ops emit as plain
+/// assignments rather than re-declarations.  Interp was unaffected —
+/// the bytecode VM's variable scope is per-function, not per-arm.
+#[test]
+fn p226_vector_literal_in_yield_across_simple_arms() {
+    code!(
+        "fn nums() -> iterator<integer> {
+    yield [1, 2, 3].len();
+    yield [10, 20, 30, 40].len();
+}
+fn run() -> integer {
+    total = 0;
+    for v in nums() { total = total + v; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(7)); // 3 + 4
+}
+
+/// P226 follow-up — vector literal bound to a local first, then
+/// referenced.  Triggers the same `__vdb_*` slot allocation across
+/// state arms; pins that the fix covers the indirect shape too.
+#[test]
+fn p226_vector_literal_via_local_across_simple_arms() {
+    code!(
+        "fn nums() -> iterator<integer> {
+    a = [1, 2, 3];
+    yield a.len();
+    b = [10, 20, 30, 40];
+    yield b.len();
+}
+fn run() -> integer {
+    total = 0;
+    for v in nums() { total = total + v; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(7));
+}
+
+/// P232 — closed 2026-05-06.  `env_variable(name)` returned a `Str`
+/// whose pointer dangled into a dropped local `OsString` (or, on the
+/// WASM build, a dropped `String`).  Calling code observed garbage
+/// bytes — `env_variable("MYVAR")` reading `"hello"` came back as
+/// random non-UTF8 sequences, `as integer` then produced `null`.
+/// The bug had been latent because the in-tree test
+/// (`tests/scripts/19-files.loft:99`) only checked the unset case
+/// (where the empty-string return path bypassed the dangling
+/// branch).  Surfaced 2026-05-06 while wiring `LOFT_TICTACTOE_PORT`
+/// for P231.  Fix in `src/database/format.rs::Stores::os_variable`
+/// changes the signature from a static `fn(name: &str) -> Str` to
+/// `&mut self`, pushes the resolved value into `self.scratch`, and
+/// returns a `Str` borrowing from the persistent buffer (mirrors the
+/// P205 pattern for text-returning natives).  `n_env_variable` and
+/// the `#rust"stores.os_variable(@name)"` template both follow.
+/// Validates by setting the env var in-process and round-tripping
+/// through the loft runtime.
+#[test]
+fn p232_env_variable_round_trips_set_value() {
+    // Use a process-unique var name to avoid clashes with concurrent
+    // test threads.  SAFETY: `set_var` is unsafe in Rust 2024 because
+    // racing readers in other threads may observe a torn value; this
+    // test sets, reads, and removes synchronously and never relies on
+    // a parallel reader, so the race window is empty within this test.
+    let var = format!("LOFT_P232_PROBE_{}", std::process::id());
+    // SAFETY: see comment above.
+    unsafe {
+        std::env::set_var(&var, "round-trip");
+    }
+    let src = format!(
+        "fn run() -> text {{
+    env_variable(\"{var}\")
+}}"
+    );
+    code!(&src)
+        .expr("run()")
+        .result(Value::Text("round-trip".to_string()));
+    // SAFETY: see comment above.
+    unsafe {
+        std::env::remove_var(&var);
+    }
+}
+
+/// P230 — closed 2026-05-06.  `yield` inside an `if` block within a
+/// generator emitted a raw Rust `yield` keyword on native (E0627
+/// "yield expression outside of coroutine literal"), instead of
+/// translating into a state-machine return.  Interp worked because
+/// the bytecode VM handles every `OpCoroutineYield` generically.
+/// Root cause: `src/generation/coroutine.rs::collect_segments` only
+/// matched yields at the TOP LEVEL of a generator body's operator
+/// list (Simple / YieldFrom / ForLoopBody) plus `Block` and `Loop`
+/// containing yields — `Value::If` was missed.  An `if`-with-yield
+/// fell through to the `pre` accumulator, then `output_code_inner`
+/// hit `Value::Yield` and emitted literal `yield ...` Rust syntax.
+/// Fix extends the ForLoopBody matcher to `Value::Block(_) |
+/// Value::Loop(_) | Value::If(_, _, _)` so the eager-collect
+/// factory's `yield_collect = true` mode emits `__values.push(...)`
+/// instead of `yield ...` (mirroring how Block-with-yield was
+/// already handled).  `contains_yield` already walked through
+/// `Value::If` so detection works without further changes.
+#[test]
+fn p230_yield_in_if_block() {
+    code!(
+        "fn cond() -> iterator<integer> {
+    n = 5;
+    if n > 0 { yield n; }
+    yield 99;
+}
+fn run() -> integer {
+    total = 0;
+    for v in cond() { total = total + v; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(104)); // 5 + 99
+}
+
+/// P230 follow-up — yield in else branch.  Same scoping family;
+/// pins that the fix covers both arms of an if/else, not just the
+/// then-arm.
+#[test]
+fn p230_yield_in_else_branch() {
+    code!(
+        "fn cond() -> iterator<integer> {
+    n = -5;
+    if n > 0 { yield 1; } else { yield n; }
+    yield 99;
+}
+fn run() -> integer {
+    total = 0;
+    for v in cond() { total = total + v; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(94)); // -5 + 99
+}
+
+/// P230 follow-up — yield in both arms of if/else, multiple yields
+/// per arm, mixed with a top-level yield after.  Stresses the
+/// eager-collect path's ability to interleave conditional and
+/// unconditional yields in the same generator.
+#[test]
+fn p230_yield_in_both_branches_with_trailing_simple() {
+    code!(
+        "fn cond() -> iterator<integer> {
+    n = -5;
+    if n > 0 { yield 1; yield 2; }
+    else { yield n; yield n - 1; }
+    yield 99;
+}
+fn run() -> integer {
+    sum = 0;
+    for v in cond() { sum = sum + v; }
+    sum
+}"
+    )
+    .expr("run()")
+    // -5 + -6 + 99 = 88
+    .result(Value::Int(88));
+}

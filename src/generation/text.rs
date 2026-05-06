@@ -140,6 +140,19 @@ impl Output<'_> {
         if let [Value::Var(nr), val] = vals {
             let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
+            // P222: when the RHS expression references the destination
+            // variable (e.g. `s = s + s` lowers to OpAppendText(s, Var(s))
+            // after the P217 self-append strip), `var_s += &*(&var_s)`
+            // raises E0502 — mutable and immutable borrows of the same
+            // place.  Hoist the RHS through a fresh `String` so the
+            // self-borrow never overlaps the `+=` target.
+            if crate::parser::operators::code_references_var(val, *nr) {
+                write!(
+                    w,
+                    "{{ let __p222_tmp: String = (&*({val_expr})).to_string(); var_{s_nr} += &__p222_tmp; }}"
+                )?;
+                return Ok(());
+            }
             write!(w, "var_{s_nr} += &*({val_expr})")?;
             return Ok(());
         }

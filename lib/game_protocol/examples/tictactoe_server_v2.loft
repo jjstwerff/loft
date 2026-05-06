@@ -310,9 +310,15 @@ fn main() {
   map_text = "Click={h_click},Placement={h_placement},GameOver={h_gameover},SpectatorPlacement={h_spec_placement},SpectatorGameOver={h_spec_gameover},__Shutdown__={h_shutdown}";
 
   state = ServerState { ss_count: 0 };
-  srv   = server::listen(7878);
-  println("v2 server listening on :7878");
-  log_info("v2 server listening on :7878");
+  // P231: allow the test harness to assign a unique port per
+  // run via LOFT_TICTACTOE_PORT so concurrent `cargo test` runs
+  // don't collide on a single hardcoded port.  Default 7878
+  // preserves the standalone-launch behaviour.
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 7878 } else { port_raw as integer };
+  srv   = server::listen(port);
+  println("v2 server listening on :{port}");
+  log_info("v2 server listening on :{port}");
   log_info("registered: Click={h_click} Placement={h_placement} GameOver={h_gameover} SpectatorPlacement={h_spec_placement} SpectatorGameOver={h_spec_gameover}");
 
   srv.run(fn(ev: server::WsEvent) {

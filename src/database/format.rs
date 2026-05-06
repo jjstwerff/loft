@@ -290,28 +290,36 @@ impl Stores {
     }
 
     /**
-    Get the value of an environment variable
-    # Panics
-    When the OS provided incorrect variable values (non utf8 tokens inside it)
+    Get the value of an environment variable.
+
+    P232: takes `&mut self` and pushes the resolved value into
+    `self.scratch`, returning a `Str` that borrows from the buffer
+    rather than a local `OsString`.  The previous static form
+    (`fn os_variable(name: &str) -> Str`) constructed a `Str` over
+    `v.to_str().unwrap()` where `v` was a local `OsString` — the
+    `Str`'s pointer dangled the moment the function returned.
+    Callers were `n_env_variable` (interp) and the
+    `#rust"stores.os_variable(@name)"` template (native).
     */
-    #[must_use]
     #[cfg(not(feature = "wasm"))]
-    pub fn os_variable(name: &str) -> crate::keys::Str {
-        if let Some(v) = std::env::var_os(name) {
-            crate::keys::Str::new(v.to_str().unwrap())
-        } else {
-            crate::keys::Str::new("")
-        }
+    pub fn os_variable(&mut self, name: &str) -> crate::keys::Str {
+        let value = std::env::var_os(name)
+            .and_then(|s| s.into_string().ok())
+            .unwrap_or_default();
+        let idx = self.scratch.len();
+        self.scratch.push(value);
+        crate::keys::Str::new(&self.scratch[idx])
     }
 
     /**
     Get the value of an environment variable (WASM stub — always returns empty).
     */
-    #[must_use]
     #[cfg(feature = "wasm")]
-    pub fn os_variable(name: &str) -> crate::keys::Str {
+    pub fn os_variable(&mut self, name: &str) -> crate::keys::Str {
         let val = crate::wasm::host_env_variable(name);
-        crate::keys::Str::new(&val)
+        let idx = self.scratch.len();
+        self.scratch.push(val);
+        crate::keys::Str::new(&self.scratch[idx])
     }
 
     /**

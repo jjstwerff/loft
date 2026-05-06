@@ -366,7 +366,7 @@ fn n_env_variables(stores: &mut Stores, stack: &mut DbRef) {
 
 fn n_env_variable(stores: &mut Stores, stack: &mut DbRef) {
     let v_name = *stores.get::<Str>(stack);
-    let new_value = { Stores::os_variable(v_name.str()) };
+    let new_value = { stores.os_variable(v_name.str()) };
     stores.put(stack, new_value);
 }
 

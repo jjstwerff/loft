@@ -145,6 +145,19 @@ pub extern "C" fn n_ws_client_close(handle: i32) {
     ws_client::close(handle);
 }
 
+/// Block the calling thread for `ms` milliseconds.  Used by tests to
+/// pace WebSocket client behaviour deterministically when wall-clock
+/// races would otherwise dominate (P229a — macOS scheduler is fast
+/// enough that two clients complete their move sequence with no
+/// observable overlap).  Negative / zero values are no-ops.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_sleep_ms(ms: i32) {
+    if ms <= 0 {
+        return;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+}
+
 thread_local! {
     static LAST_WS_MSG: RefCell<String> = const { RefCell::new(String::new()) };
 }
@@ -157,4 +170,5 @@ loft_ffi::loft_register! {
     n_ws_client_recv,
     n_ws_client_message,
     n_ws_client_close,
+    n_sleep_ms,
 }

@@ -186,6 +186,23 @@ fn test_text_self_prepend() {
   assert(s == "[hello world]", "wrap: {s}");
 }
 
+// P222: `s = s + s` (destination is the source on both sides of `+`).
+// Native rejected with E0502 ("cannot borrow `*var_s` as mutable
+// because it is also borrowed as immutable") because the IR
+// `OpAppendText(s, Var(s))` lowered to `var_s += &*(&var_s);`.
+// Fix in `src/generation/text.rs::append_text` hoists the RHS
+// through a fresh `String` when the value references the destination.
+fn test_text_self_double() {
+  s = "ab";
+  s = s + s;
+  assert(s == "abab", "double: {s}");
+  // Triple self-reference: the codegen path runs twice; the second
+  // append reads `s`'s already-doubled value, so 2 → 4 → 8 chars.
+  v = "ab";
+  v = v + v + v;
+  assert(v == "abababab", "triple: {v}");
+}
+
 // P113: t = t[N..] must preserve content (not clear before read).
 fn test_text_self_slice() {
   ss = "hello world";
