@@ -55,6 +55,30 @@ impl Stores {
         .write(s, 0);
     }
 
+    /// Serialise a record to RFC 8259 JSON text.  Backs `T.to_json()`
+    /// (Q3 second half, P54).  Reuses the schema-walking machinery in
+    /// `ShowDb` (every `Parts::*` arm already implemented) but engages
+    /// the `json: true` formatting branches: text strings are JSON-
+    /// escaped, field names are quoted, struct-enum variants are
+    /// wrapped as `{"VariantName": {fields}}`, and `JsonValue` fields
+    /// render their existing subtree verbatim instead of as the
+    /// generic enum-variant shape.  `pretty: false` produces canonical
+    /// (single-line, no spaces) output; `pretty: true` produces the
+    /// 2-space-indent multi-line form mirroring `to_json_pretty`.
+    pub fn show_json(&self, s: &mut String, db: &DbRef, tp: u16, pretty: bool) {
+        self.valid(db);
+        ShowDb {
+            stores: self,
+            store: db.store_nr,
+            rec: db.rec,
+            pos: db.pos,
+            known_type: tp,
+            pretty,
+            json: true,
+        }
+        .write(s, 0);
+    }
+
     /**
     Get the Json-path inspired path to a record.
     # Panics
@@ -497,12 +521,24 @@ impl ShowDb<'_> {
         } else if self.known_type == 5 {
             let text_nr = self.store().get_u32_raw(self.rec, self.pos);
             if text_nr == 0 || text_nr >= self.store().capacity_words() {
-                write!(s, "<bad-text:{text_nr}>").unwrap();
+                if self.json {
+                    // Null text in JSON mode is `null`, not a debug
+                    // tag: a `text` field that was never assigned (or
+                    // a `<bad-text>` slot — both round to `null` in
+                    // canonical JSON output).
+                    s.push_str("null");
+                } else {
+                    write!(s, "<bad-text:{text_nr}>").unwrap();
+                }
             } else {
                 let text_val = self.store().get_str(text_nr);
-                s.push('\"');
-                s.push_str(text_val);
-                s.push('\"');
+                if self.json {
+                    write_json_escaped(s, text_val);
+                } else {
+                    s.push('\"');
+                    s.push_str(text_val);
+                    s.push('\"');
+                }
             }
         } else if self.known_type == 6 {
             let i = self.store().get_u32_raw(self.rec, self.pos);
@@ -514,6 +550,18 @@ impl ShowDb<'_> {
         } else if (self.known_type as usize) < self.stores.types.len() {
             match &self.stores.types[self.known_type as usize].parts {
                 Parts::Enum(vals) => {
+                    // P54 Q3 second half — when serialising in JSON mode
+                    // and the parent enum is JsonValue, render the
+                    // *value* of the variant (the JSON the JsonValue
+                    // semantically represents), not the
+                    // discriminant-tagged debug shape.  E.g. an inline
+                    // JString { value: "hi" } renders as `"hi"`, not as
+                    // `JString { value: "hi" }` or `{"JString":...}`.
+                    if self.json && self.stores.types[self.known_type as usize].name == "JsonValue"
+                    {
+                        self.write_jsonvalue(s, indent);
+                        return;
+                    }
                     let v = self.store().get_byte(self.rec, self.pos, 0);
                     let enum_val = if v <= 0 {
                         "null"
@@ -640,19 +688,60 @@ impl ShowDb<'_> {
     }
 
     fn write_struct(&self, s: &mut String, fields: &[Field], indent: u16) {
-        let complex = self.pretty && self.stores.types[self.known_type as usize].complex;
+        // P54 Q3 second half — when serialising in JSON pretty mode,
+        // ALWAYS use the multi-line shape regardless of the type's
+        // `complex` flag.  `complex` is set on collection types
+        // (vectors, hashes, etc.) for debug-display purposes; it
+        // doesn't reflect whether the JSON output should be pretty
+        // (newlines + indent vs. inline spaces).  For canonical JSON
+        // pretty output, every non-empty struct should multi-line.
+        let complex =
+            self.pretty && (self.json || self.stores.types[self.known_type as usize].complex);
+        let any_visible = self.has_visible_field(fields);
         // TODO reference to an object inside a field instead of the object itself, show the key
         s.push('{');
-        if self.pretty {
-            s.push(' ');
-        }
-        self.write_fields(s, fields, indent, complex);
-        if complex {
-            s.push_str(&ShowDb::new_line(indent));
+        // JSON pretty mode opens the body with a newline + indent
+        // (when there's something to emit).  Debug-pretty mode opens
+        // with a single space (compact `{ a: 1 }` shape) to match
+        // the existing dump format.
+        if complex && self.json && any_visible {
+            s.push_str(&ShowDb::new_line(indent + 1));
         } else if self.pretty {
             s.push(' ');
         }
+        self.write_fields(s, fields, indent, complex);
+        if complex && any_visible {
+            s.push_str(&ShowDb::new_line(indent));
+        } else if self.pretty && !complex {
+            s.push(' ');
+        }
         s.push('}');
+    }
+
+    /// Return true iff `fields` contains at least one entry that
+    /// `write_fields` would emit (skips internal `#`-prefixed names,
+    /// the `enum` discriminator, and null-valued slots).  Used by
+    /// `write_struct` so the JSON-pretty open-brace newline only
+    /// fires when there's something inside.
+    fn has_visible_field(&self, fields: &[Field]) -> bool {
+        for fld in fields {
+            if fld.name == "enum" {
+                continue;
+            }
+            if fld.name.starts_with('#')
+                || (!fld.other_indexes.is_empty() && fld.other_indexes[0] == u16::MAX)
+                || self.stores.is_null(
+                    self.store(),
+                    self.rec,
+                    self.pos + u32::from(fld.position),
+                    fld.content,
+                )
+            {
+                continue;
+            }
+            return true;
+        }
+        false
     }
 
     fn write_fields(&self, s: &mut String, fields: &[Field], indent: u16, complex: bool) {
@@ -842,6 +931,183 @@ impl ShowDb<'_> {
         }
         s.push(']');
     }
+
+    /// Render a JsonValue inline subtree as canonical RFC 8259 JSON.
+    /// `self.rec` / `self.pos` point at the JsonValue's discriminant
+    /// byte; the variant payload immediately follows at offsets given
+    /// by `position(<variant_tp>, <field>)`.  Mirrors the dispatch
+    /// in `src/native.rs::json_to_text_at` so a JsonValue field
+    /// inside a struct round-trips identically whether it was
+    /// rendered standalone via `json_value.to_json()` or as part of
+    /// the parent struct via `parent.to_json()`.
+    fn write_jsonvalue(&self, s: &mut String, indent: u16) {
+        const JV_NULL: i32 = 1;
+        const JV_BOOL: i32 = 2;
+        const JV_NUMBER: i32 = 3;
+        const JV_STRING: i32 = 4;
+        const JV_ARRAY: i32 = 5;
+        const JV_OBJECT: i32 = 6;
+        let store = self.store();
+        let discr = store.get_byte(self.rec, self.pos, 0);
+        match discr {
+            JV_NULL => s.push_str("null"),
+            JV_BOOL => {
+                let bool_tp = self.stores.name("JBool");
+                let val_pos = u32::from(self.stores.position(bool_tp, "value")) + self.pos;
+                let b = store.get_byte(self.rec, val_pos, 0);
+                s.push_str(if b != 0 { "true" } else { "false" });
+            }
+            JV_NUMBER => {
+                let num_tp = self.stores.name("JNumber");
+                let val_pos = u32::from(self.stores.position(num_tp, "value")) + self.pos;
+                let n = store.get_float(self.rec, val_pos);
+                if n.is_finite() {
+                    write!(s, "{n}").unwrap();
+                } else {
+                    s.push_str("null");
+                }
+            }
+            JV_STRING => {
+                let str_tp = self.stores.name("JString");
+                let val_pos = u32::from(self.stores.position(str_tp, "value")) + self.pos;
+                let s_rec = store.get_u32_raw(self.rec, val_pos);
+                if s_rec == 0 {
+                    s.push_str("null");
+                } else {
+                    let raw = store.get_str(s_rec).to_string();
+                    write_json_escaped(s, &raw);
+                }
+            }
+            JV_ARRAY => {
+                let array_tp = self.stores.name("JArray");
+                let items_pos = u32::from(self.stores.position(array_tp, "items")) + self.pos;
+                let items_rec = store.get_i32_raw(self.rec, items_pos);
+                if items_rec <= 0 {
+                    s.push_str("[]");
+                    return;
+                }
+                let length = i64::from(store.get_u32_raw(items_rec as u32, 4));
+                if length <= 0 {
+                    s.push_str("[]");
+                    return;
+                }
+                let jv_tp = self.stores.name("JsonValue");
+                let jv_size = u32::from(self.stores.size(jv_tp));
+                s.push('[');
+                for i in 0..length {
+                    if i > 0 {
+                        s.push(',');
+                    }
+                    if self.pretty {
+                        s.push('\n');
+                        for _ in 0..=indent {
+                            s.push_str("  ");
+                        }
+                    }
+                    let elm_offset = 8u32 + u32::try_from(i).expect("non-negative") * jv_size;
+                    let sub = ShowDb {
+                        stores: self.stores,
+                        store: self.store,
+                        rec: items_rec as u32,
+                        pos: elm_offset,
+                        known_type: jv_tp,
+                        pretty: self.pretty,
+                        json: true,
+                    };
+                    sub.write_jsonvalue(s, indent + 1);
+                }
+                if self.pretty {
+                    s.push('\n');
+                    for _ in 0..indent {
+                        s.push_str("  ");
+                    }
+                }
+                s.push(']');
+            }
+            JV_OBJECT => {
+                let obj_tp = self.stores.name("JObject");
+                let fields_pos = u32::from(self.stores.position(obj_tp, "fields")) + self.pos;
+                let fields_rec = store.get_i32_raw(self.rec, fields_pos);
+                if fields_rec <= 0 {
+                    s.push_str("{}");
+                    return;
+                }
+                let length = i64::from(store.get_u32_raw(fields_rec as u32, 4));
+                if length <= 0 {
+                    s.push_str("{}");
+                    return;
+                }
+                let jfield_tp = self.stores.name("JsonField");
+                let jf_size = u32::from(self.stores.size(jfield_tp));
+                let name_field_pos = u32::from(self.stores.position(jfield_tp, "name"));
+                let value_field_pos = u32::from(self.stores.position(jfield_tp, "value"));
+                let jv_tp = self.stores.name("JsonValue");
+                s.push('{');
+                for i in 0..length {
+                    if i > 0 {
+                        s.push(',');
+                    }
+                    if self.pretty {
+                        s.push('\n');
+                        for _ in 0..=indent {
+                            s.push_str("  ");
+                        }
+                    }
+                    let elm_offset = 8u32 + u32::try_from(i).expect("non-negative") * jf_size;
+                    let name_rec =
+                        store.get_u32_raw(fields_rec as u32, elm_offset + name_field_pos);
+                    let raw = store.get_str(name_rec).to_string();
+                    write_json_escaped(s, &raw);
+                    s.push(':');
+                    if self.pretty {
+                        s.push(' ');
+                    }
+                    let sub = ShowDb {
+                        stores: self.stores,
+                        store: self.store,
+                        rec: fields_rec as u32,
+                        pos: elm_offset + value_field_pos,
+                        known_type: jv_tp,
+                        pretty: self.pretty,
+                        json: true,
+                    };
+                    sub.write_jsonvalue(s, indent + 1);
+                }
+                if self.pretty {
+                    s.push('\n');
+                    for _ in 0..indent {
+                        s.push_str("  ");
+                    }
+                }
+                s.push('}');
+            }
+            _ => s.push_str("null"),
+        }
+    }
+}
+
+/// JSON-escape a string and wrap with `"`.  Escapes `"`, `\`, and
+/// control characters per RFC 8259.  Used by `ShowDb` (json: true)
+/// so `T.to_json()` produces canonical JSON for any text field
+/// containing quotes, backslashes, or control bytes.
+pub(crate) fn write_json_escaped(out: &mut String, raw: &str) {
+    out.push('"');
+    for ch in raw.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                write!(out, "\\u{:04x}", c as u32).unwrap();
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 // ─── DumpDb: structured debug dump with references and limits ────────────────
@@ -1154,5 +1420,98 @@ impl DumpDb<'_> {
         }
         self.sep(s, indent);
         s.push(']');
+    }
+}
+
+#[cfg(test)]
+mod json_escape_tests {
+    //! Unit-level coverage for `write_json_escaped` — backs the JSON
+    //! string-emitting paths in `Stores::show_json` (P54 Q3 second
+    //! half: `T.to_json()`).  Higher-level coverage exercising the
+    //! loft method-call surface lives in
+    //! `tests/issues.rs::q3b_struct_to_json_*`.
+    use super::write_json_escaped;
+
+    fn esc(s: &str) -> String {
+        let mut out = String::new();
+        write_json_escaped(&mut out, s);
+        out
+    }
+
+    #[test]
+    fn empty_string_renders_as_quoted_empty() {
+        assert_eq!(esc(""), r#""""#);
+    }
+
+    #[test]
+    fn ascii_passes_through_unchanged() {
+        assert_eq!(esc("hello world"), r#""hello world""#);
+    }
+
+    #[test]
+    fn double_quote_is_backslash_escaped() {
+        assert_eq!(esc(r#"a"b"#), r#""a\"b""#);
+    }
+
+    #[test]
+    fn backslash_is_doubled() {
+        assert_eq!(esc(r"a\b"), r#""a\\b""#);
+    }
+
+    #[test]
+    fn newline_uses_short_form() {
+        assert_eq!(esc("a\nb"), r#""a\nb""#);
+    }
+
+    #[test]
+    fn tab_uses_short_form() {
+        assert_eq!(esc("a\tb"), r#""a\tb""#);
+    }
+
+    #[test]
+    fn carriage_return_uses_short_form() {
+        assert_eq!(esc("a\rb"), r#""a\rb""#);
+    }
+
+    #[test]
+    fn backspace_uses_short_form() {
+        assert_eq!(esc("a\x08b"), r#""a\bb""#);
+    }
+
+    #[test]
+    fn form_feed_uses_short_form() {
+        assert_eq!(esc("a\x0cb"), r#""a\fb""#);
+    }
+
+    #[test]
+    fn other_low_control_chars_use_unicode_escape() {
+        // 0x01 hits the catch-all `(c as u32) < 0x20` arm —
+        // emits canonical `\uXXXX`, not a literal control byte.
+        assert_eq!(esc("a\x01b"), "\"a\\u0001b\"");
+        // 0x1f is the highest control char that takes the unicode form.
+        assert_eq!(esc("\x1f"), "\"\\u001f\"");
+    }
+
+    #[test]
+    fn space_passes_through_as_first_non_control_char() {
+        // 0x20 is space — boundary case for the `< 0x20` test.
+        assert_eq!(esc(" "), r#"" ""#);
+    }
+
+    #[test]
+    fn utf8_multibyte_passes_through_unchanged() {
+        // RFC 8259 allows literal UTF-8 bytes; we don't `\u`-escape
+        // them.  The Rust crab emoji and accented chars round-trip
+        // as their literal UTF-8 bytes.
+        assert_eq!(esc("🦀"), r#""🦀""#);
+        assert_eq!(esc("café"), r#""café""#);
+    }
+
+    #[test]
+    fn quotes_inside_unicode_string_still_escape() {
+        // Mixed ASCII + UTF-8 + quote — proves the per-char dispatch
+        // doesn't fall back to "everything passes through" for
+        // non-ASCII strings.
+        assert_eq!(esc(r#"x"é"y"#), r#""x\"é\"y""#);
     }
 }

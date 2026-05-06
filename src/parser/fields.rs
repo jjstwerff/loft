@@ -117,6 +117,48 @@ impl Parser {
                     return self.parse_method(code, stub_nr, t.clone());
                 }
             }
+            // P54 Q3 second half — `instance.to_json()` /
+            // `instance.to_json_pretty()` on any user struct (or
+            // struct-enum variant) lowers to a single call to
+            // `n_struct_to_json(self, struct_kt)` via the schema
+            // walker in `Stores::show_json` (`src/database/format.rs`).
+            // No per-type stub registration needed; the parser
+            // synthesises the call when the receiver is a
+            // `Type::Reference(struct_d, _)` and the method name
+            // matches.  Mirror of `parse_type_parse` (P54 step 5)
+            // for the static `T.parse(JsonValue)` form.
+            //
+            // Runs on BOTH passes so first-pass type inference of the
+            // enclosing variable sees the `Type::Text` return type
+            // (same reason the bounded-T fallback above does the
+            // same).  On first pass we consume the `()` to make
+            // parser progress; the Call population only happens on
+            // second pass when known_type / def_nr are stable.
+            if (field == "to_json" || field == "to_json_pretty")
+                && matches!(t, Type::Reference(_, _))
+                && self.lexer.peek_token("(")
+            {
+                self.lexer.token("(");
+                self.lexer.token(")");
+                if !self.first_pass {
+                    let Type::Reference(struct_d, _) = &t else {
+                        unreachable!("matches! above guards Reference shape");
+                    };
+                    let known_tp = self.data.def(*struct_d).known_type;
+                    let n_walker = if field == "to_json" {
+                        self.data.def_nr("n_struct_to_json")
+                    } else {
+                        self.data.def_nr("n_struct_to_json_pretty")
+                    };
+                    if known_tp != u16::MAX && n_walker != u32::MAX {
+                        *code = Value::Call(
+                            n_walker,
+                            vec![code.clone(), Value::Int(i32::from(known_tp))],
+                        );
+                    }
+                }
+                return Type::Text(Vec::new());
+            }
             // Plan-19 phase 03 — method-on-parent-enum dispatch.  When
             // the receiver is a variant value (`Type::Reference(child_d, …)`
             // for a struct enum variant) and the method is declared on

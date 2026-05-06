@@ -12293,3 +12293,185 @@ fn run() -> integer {
     // -5 + -6 + 99 = 88
     .result(Value::Int(88));
 }
+
+// ── P54 Q3 second half — `T.to_json()` for any user struct ──────────
+
+/// Q3.b — `instance.to_json()` on a flat struct emits canonical JSON
+/// with all primitive fields.  The parser-side intercept in
+/// `src/parser/fields.rs::field()` lowers the method call to
+/// `n_struct_to_json(self_ref, struct_kt)`, which delegates to
+/// `Stores::show_json` (`src/database/format.rs`).
+#[test]
+fn q3b_struct_to_json_basic_primitives() {
+    code!(
+        "struct U { name: text, age: integer, score: float, ok: boolean }
+fn run() -> text {
+    u = U { name: \"Alice\", age: 30, score: 4.5, ok: true };
+    u.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(
+        r#"{"name":"Alice","age":30,"score":4.5,"ok":true}"#.to_string(),
+    ));
+}
+
+/// Q3.b — round-trip via `T.parse(json_parse(...))` recovers the
+/// original struct.  This is the core property the design promises:
+/// any struct can be serialised and re-parsed without loss.
+#[test]
+fn q3b_struct_to_json_round_trip() {
+    code!(
+        "struct U { name: text, age: integer }
+fn run() -> integer {
+    u = U { name: \"Bob\", age: 25 };
+    txt = u.to_json();
+    parsed = U.parse(json_parse(txt));
+    parsed.age
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(25));
+}
+
+/// Q3.b — nested struct fields recurse correctly.  The inner struct
+/// is rendered as a nested JSON object inside the outer struct.
+#[test]
+fn q3b_struct_to_json_nested_struct() {
+    code!(
+        "struct A { city: text }
+struct U { name: text, addr: A }
+fn run() -> text {
+    u = U { name: \"X\", addr: A { city: \"NYC\" } };
+    u.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(
+        r#"{"name":"X","addr":{"city":"NYC"}}"#.to_string(),
+    ));
+}
+
+/// Q3.b — `vector<text>` field renders as a JSON array of strings.
+#[test]
+fn q3b_struct_to_json_vector_text_field() {
+    code!(
+        "struct U { tags: vector<text> }
+fn run() -> text {
+    u = U { tags: [\"dev\", \"rust\"] };
+    u.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(r#"{"tags":["dev","rust"]}"#.to_string()));
+}
+
+/// Q3.b — `vector<integer>` field renders as a JSON array of numbers.
+#[test]
+fn q3b_struct_to_json_vector_integer_field() {
+    code!(
+        "struct U { nums: vector<integer> }
+fn run() -> text {
+    u = U { nums: [1, 2, 3] };
+    u.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(r#"{"nums":[1,2,3]}"#.to_string()));
+}
+
+/// Q3.b — `JsonValue` field renders its inline subtree verbatim,
+/// not as the generic enum-variant shape (`{"JString":{"value":"x"}}`).
+/// Special-cased in `ShowDb::write` (P54 Q3): a `JsonValue`-typed
+/// struct field routes to `write_jsonvalue` for native JSON-value
+/// semantic rendering.
+#[test]
+fn q3b_struct_to_json_jsonvalue_field_renders_verbatim() {
+    code!(
+        "struct W { name: text, payload: JsonValue }
+fn run() -> text {
+    inner = json_parse(`{{\"x\":42}}`);
+    w = W { name: \"outer\", payload: inner };
+    w.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(
+        r#"{"name":"outer","payload":{"x":42}}"#.to_string(),
+    ));
+}
+
+/// Q3.b — JSON string escaping covers `"` and `\`.  The
+/// `write_json_escaped` helper in `src/database/format.rs` is shared
+/// by the struct text-field arm and the JsonValue passthrough arm,
+/// so a regression here would produce invalid JSON in either path.
+#[test]
+fn q3b_struct_to_json_string_escapes_quote_and_backslash() {
+    code!(
+        "struct M { msg: text }
+fn run() -> text {
+    m = M { msg: \"she said \\\"hi\\\" \\\\ done\" };
+    m.to_json()
+}"
+    )
+    .expr("run()")
+    // "she said \"hi\" \\ done" — quotes and backslash escaped.
+    .result(Value::Text(
+        r#"{"msg":"she said \"hi\" \\ done"}"#.to_string(),
+    ));
+}
+
+/// Q3.b — control characters (`\n`, `\t`, `\r`) get the canonical
+/// short-form escapes per RFC 8259.
+#[test]
+fn q3b_struct_to_json_string_escapes_control_chars() {
+    code!(
+        "struct M { msg: text }
+fn run() -> text {
+    m = M { msg: \"line1\\nline2\\ttab\" };
+    m.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(r#"{"msg":"line1\nline2\ttab"}"#.to_string()));
+}
+
+/// Q3.b — `to_json_pretty()` produces multi-line indented output.
+/// Every non-empty struct opens with newline + 2-space indent per
+/// nesting level and dedents the closing brace to the parent's
+/// depth.  Exact whitespace shape is part of the contract — pretty
+/// JSON consumers (logging, golden-file diffs) depend on it.
+#[test]
+fn q3b_struct_to_json_pretty_format() {
+    code!(
+        "struct U { name: text, age: integer }
+fn run() -> text {
+    u = U { name: \"Alice\", age: 30 };
+    u.to_json_pretty()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(
+        "{\n  \"name\": \"Alice\",\n  \"age\": 30\n}".to_string(),
+    ));
+}
+
+/// Q3.b — null text fields are omitted from the output (matching
+/// the legacy `dump`/`show` `is_null` filter in
+/// `ShowDb::has_visible_field`).  A text field that was never
+/// assigned has `s_rec == 0` (loft's text-null sentinel) and
+/// `is_null` returns true.  The resulting JSON omits the field
+/// entirely rather than emitting `"name": null` — matching loft's
+/// "absence is not failure" stance from the P54 design.
+#[test]
+fn q3b_struct_to_json_skips_null_text_fields() {
+    code!(
+        "struct U { name: text, age: integer }
+fn run() -> text {
+    u = U { age: 7 };
+    u.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(r#"{"age":7}"#.to_string()));
+}
