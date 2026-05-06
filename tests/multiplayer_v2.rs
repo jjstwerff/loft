@@ -161,6 +161,7 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 /// This is the same protocol the v1 client validates, but driving
 /// the v2 server.  Locks in: handshake, namespace registry, basic
 /// click → Placement → GameOver round-trip on the multi-client path.
+#[cfg_attr(target_os = "windows", ignore = "P229: v2 server can't bind on Windows CI; investigation needed")]
 #[test]
 fn v2_single_client_completes_game() {
     // Note: the current v2 server hardcodes port 7878; if multiple
@@ -208,8 +209,9 @@ fn v2_single_client_completes_game() {
 ///
 /// The exact frame *ordering* depends on scheduling, so we assert
 /// on counts, not order.
+#[cfg_attr(target_os = "macos", ignore = "P229: macOS scheduler is fast enough that both clients finish their 3 X moves with no observable overlap")]
+#[cfg_attr(target_os = "windows", ignore = "P229: v2 server can't bind on Windows CI")]
 #[test]
-#[ignore = "P229: macOS CI scheduler is fast enough that both clients finish their 3 X moves in <0.4s with no observable overlap, so neither sees the other's spectator frames. The 50ms stagger isn't enough; bumping it makes A finish before B connects in the other direction. Fix needs either real sleeps in the client or a server-side rendezvous."]
 fn v2_two_clients_with_spectator_routing() {
     let _server = {
         let s = ServerGuard::spawn("tictactoe_server_v2.loft", 7878);
@@ -293,8 +295,8 @@ fn v2_two_clients_with_spectator_routing() {
 ///
 /// We do NOT require B to receive any spectator frames from A —
 /// A finished before B's MAP arrived, so its events are gone.
+#[cfg_attr(target_os = "windows", ignore = "P229: v2 server can't bind on Windows CI")]
 #[test]
-#[ignore = "P229: Windows CI runner consistently times out (60s+) on `wait_listening` — the v2 server child appears to never bind on Windows in the CI environment.  Both retries fail at exactly the timeout boundary, suggesting the server crashes during startup rather than being slow.  Linux + macOS pass the listening check; Windows doesn't.  Ignored pending a Windows-specific investigation."]
 fn v2_late_join_independent_games() {
     let _server = {
         let s = ServerGuard::spawn("tictactoe_server_v2.loft", 7878);
