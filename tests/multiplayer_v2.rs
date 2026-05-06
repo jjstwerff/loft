@@ -161,7 +161,10 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 /// This is the same protocol the v1 client validates, but driving
 /// the v2 server.  Locks in: handshake, namespace registry, basic
 /// click → Placement → GameOver round-trip on the multi-client path.
-#[cfg_attr(target_os = "windows", ignore = "P229: v2 server can't bind on Windows CI; investigation needed")]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "P229: v2 server can't bind on Windows CI; investigation needed"
+)]
 #[test]
 fn v2_single_client_completes_game() {
     // Note: the current v2 server hardcodes port 7878; if multiple
@@ -209,8 +212,14 @@ fn v2_single_client_completes_game() {
 ///
 /// The exact frame *ordering* depends on scheduling, so we assert
 /// on counts, not order.
-#[cfg_attr(target_os = "macos", ignore = "P229: macOS scheduler is fast enough that both clients finish their 3 X moves with no observable overlap")]
-#[cfg_attr(target_os = "windows", ignore = "P229: v2 server can't bind on Windows CI")]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "P229: macOS scheduler is fast enough that both clients finish their 3 X moves with no observable overlap"
+)]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "P229: v2 server can't bind on Windows CI"
+)]
 #[test]
 fn v2_two_clients_with_spectator_routing() {
     let _server = {
@@ -295,7 +304,10 @@ fn v2_two_clients_with_spectator_routing() {
 ///
 /// We do NOT require B to receive any spectator frames from A —
 /// A finished before B's MAP arrived, so its events are gone.
-#[cfg_attr(target_os = "windows", ignore = "P229: v2 server can't bind on Windows CI")]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "P229: v2 server can't bind on Windows CI"
+)]
 #[test]
 fn v2_late_join_independent_games() {
     let _server = {
