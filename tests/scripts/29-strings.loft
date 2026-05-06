@@ -172,6 +172,20 @@ fn test_text_self_concat_loop() {
   assert(h == "start.a.b.c", "loop: {h}");
 }
 
+// P223: self-prepend `s = "literal" + s` (literal-first concat
+// where the destination is the second piece).  Was broken on both
+// backends — interp produced clear-then-append garbage; native
+// rejected with E0502.
+fn test_text_self_prepend() {
+  s = "world";
+  s = "hello " + s;
+  assert(s == "hello world", "prepend: {s}");
+  // Chained: still correct when the destination appears as the
+  // last piece in a longer concat.
+  s = "[" + s + "]";
+  assert(s == "[hello world]", "wrap: {s}");
+}
+
 // P113: t = t[N..] must preserve content (not clear before read).
 fn test_text_self_slice() {
   ss = "hello world";

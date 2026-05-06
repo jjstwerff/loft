@@ -434,6 +434,38 @@ pub fn OpInsertVector(
     new_value
 }
 
+/// P213: read element [0] of a vector field as a `DbRef`, or null
+/// when the vector is empty.  Used by capturing-closure-in-struct-
+/// field reads to extract the closure record's `DbRef` from the
+/// host's `cb__closure_rec` vector field.  Mirrors
+/// `vector_first_or_null` in `src/fill.rs`.
+#[must_use]
+pub fn op_vector_first_or_null(stores: &[crate::store::Store], host: &DbRef) -> DbRef {
+    let store = crate::keys::store(host, stores);
+    let vec_rec = store.get_u32_raw(host.rec, host.pos);
+    if vec_rec == 0 {
+        return DbRef {
+            store_nr: u16::MAX,
+            rec: 0,
+            pos: 0,
+        };
+    }
+    let length = store.get_u32_raw(vec_rec, 4);
+    if length == 0 {
+        DbRef {
+            store_nr: u16::MAX,
+            rec: 0,
+            pos: 0,
+        }
+    } else {
+        DbRef {
+            store_nr: host.store_nr,
+            rec: vec_rec,
+            pos: 8,
+        }
+    }
+}
+
 /// Return the UTF-8 byte length of a character (encoded as `i32` in loft).
 /// Returns 0 for the null character sentinel.
 /// Bytecode equivalent: `State::length_character` in `src/state/text.rs:54`.
@@ -2580,10 +2612,31 @@ pub const COROUTINE_EXHAUSTED: i64 = i64::MIN;
 /// Trait implemented by every native generator (state-machine struct).
 /// The generated `fn {name}(stores, args) -> Box<dyn LoftCoroutine>` factory
 /// constructs an instance; `alloc_coroutine` stores it and returns a `DbRef`.
+///
+/// One method per yielded primitive shape:
+/// - `next_i64` for integer / float / boolean / single / character yields
+///   (everything that fits in 8 bytes).
+/// - `next_text` for `text` yields.  Returns `STRING_NULL` ("\0") on
+///   exhaustion, matching the for-loop break-test convention used by
+///   `dispatch.rs::OpCoroutineNext`.
+///
+/// A given generator only ever overrides the method matching its yield
+/// type; the other keeps its default (returns the type's exhaustion
+/// sentinel) so a wrong-channel call drains the loop immediately rather
+/// than panicking.
 pub trait LoftCoroutine {
-    /// Advance the generator one step.  Returns the yielded value as `i64`,
-    /// or `COROUTINE_EXHAUSTED` when no further values are available.
-    fn next_i64(&mut self, stores: &mut Stores) -> i64;
+    /// Advance an integer-yielding generator one step.  Returns the yielded
+    /// value as `i64`, or `COROUTINE_EXHAUSTED` when no further values are
+    /// available.
+    fn next_i64(&mut self, _stores: &mut Stores) -> i64 {
+        COROUTINE_EXHAUSTED
+    }
+
+    /// Advance a text-yielding generator one step.  Returns the yielded
+    /// `String`, or `STRING_NULL` (`"\0"`) when the generator is exhausted.
+    fn next_text(&mut self, _stores: &mut Stores) -> String {
+        crate::state::STRING_NULL.to_string()
+    }
 }
 
 std::thread_local! {
@@ -2634,6 +2687,27 @@ pub fn coroutine_next_i64(gen_ref: DbRef, stores: &mut Stores) -> i64 {
             val
         } else {
             COROUTINE_EXHAUSTED
+        }
+    })
+}
+
+/// Advance a text-yielding native coroutine.  Returns the yielded `String`,
+/// or `STRING_NULL` (`"\0"`) when exhausted.  Frees the coroutine slot
+/// automatically on exhaustion, mirroring `coroutine_next_i64`.
+pub fn coroutine_next_text(gen_ref: DbRef, stores: &mut Stores) -> String {
+    NATIVE_COROUTINES.with(|c| {
+        let mut coroutines = c.borrow_mut();
+        let idx = gen_ref.rec as usize;
+        if let Some(slot) = coroutines.get_mut(idx)
+            && let Some(coro) = slot.as_mut()
+        {
+            let val = coro.next_text(stores);
+            if val == crate::state::STRING_NULL {
+                coroutines[idx] = None;
+            }
+            val
+        } else {
+            crate::state::STRING_NULL.to_string()
         }
     })
 }

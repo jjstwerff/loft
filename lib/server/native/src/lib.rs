@@ -7,7 +7,7 @@
 mod websocket;
 
 use loft_ffi::LoftStr;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
@@ -28,7 +28,7 @@ fn parse_request(stream: &TcpStream) -> Option<(String, String, String, String)>
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
     reader.read_line(&mut request_line).ok()?;
-    let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 {
         return None;
     }
@@ -43,10 +43,10 @@ fn parse_request(stream: &TcpStream) -> Option<(String, String, String, String)>
         if line.trim().is_empty() {
             break;
         }
-        if let Some((key, value)) = line.split_once(':') {
-            if key.trim().eq_ignore_ascii_case("content-length") {
-                content_length = value.trim().parse().unwrap_or(0);
-            }
+        if let Some((key, value)) = line.split_once(':')
+            && key.trim().eq_ignore_ascii_case("content-length")
+        {
+            content_length = value.trim().parse().unwrap_or(0);
         }
         headers.push_str(line.trim_end_matches(['\r', '\n']));
         headers.push('\n');
@@ -132,8 +132,12 @@ pub extern "C" fn n_tcp_body() -> LoftStr {
 }
 
 /// Send an HTTP response on the current connection and close it.
+///
+/// # Safety
+///
+/// `body_ptr` / `body_len` must describe a valid byte slice or be `(NULL, 0)`.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_tcp_respond(status: u16, body_ptr: *const u8, body_len: usize) {
+pub unsafe extern "C" fn n_tcp_respond(status: u16, body_ptr: *const u8, body_len: usize) {
     let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) }.unwrap_or("");
     let status_text = match status {
         200 => "OK",
@@ -247,8 +251,12 @@ pub extern "C" fn n_ws_opcode() -> u8 {
 }
 
 /// Send a text WebSocket message.
+///
+/// # Safety
+///
+/// `msg_ptr` / `msg_len` must describe a valid byte slice.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_send(handle: i32, msg_ptr: *const u8, msg_len: usize) -> bool {
+pub unsafe extern "C" fn n_ws_send(handle: i32, msg_ptr: *const u8, msg_len: usize) -> bool {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
     WS_CONNS.with(|conns| {
         let mut conns = conns.borrow_mut();
@@ -273,6 +281,294 @@ pub extern "C" fn n_ws_close(handle: i32) {
     });
 }
 
+// ── Multi-client server primitives (TIC_TAC_TOE v2 ground layer) ─────────
+//
+// The legacy flow is `n_tcp_accept` (blocking) → `n_ws_upgrade` (consumes
+// CURRENT_CONN) → one client at a time.  The multi-client flow below
+// combines accept + parse + upgrade into a single non-blocking call so
+// the loft program can hold many concurrent WebSocket clients and poll
+// each without head-of-line blocking on any one of them.
+//
+// The clean event-pump entry point (`n_ws_next_event`) is below.  Loft
+// programs use it via `Server::run(on_connect, on_message)` and never
+// see the slot table directly.  The split entry points
+// (`n_ws_accept_nonblocking`, `n_ws_clients_len`,
+// `n_ws_client_active`) are kept as a private fallback path.
+//
+// Per-client streams are set non-blocking with a short read timeout
+// (20 ms) on accept so polling stays cheap.
+
+/// Three-way result of accepting a pending connection on a
+/// non-blocking listener.  Both NoneYet and Error look identical
+/// to the event pump (nothing to deliver this poll), but the
+/// legacy `n_ws_accept_nonblocking` entry point keeps its -1 / -2
+/// distinction by reading this directly.
+enum AcceptOutcome {
+    Pending(i32),
+    NoneYet,
+    Error,
+}
+
+fn try_accept_inner(listener_handle: i32) -> AcceptOutcome {
+    // Snapshot the listener and ensure non-blocking, then try accept.
+    let stream_opt = LISTENERS.with(|l| {
+        let l = l.borrow();
+        let listener = l
+            .get(listener_handle as usize)
+            .and_then(|opt| opt.as_ref())?;
+        let _ = listener.set_nonblocking(true);
+        match listener.accept() {
+            Ok((s, _)) => Some(Ok(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => None,
+            Err(_) => Some(Err(())),
+        }
+    });
+    let mut stream = match stream_opt {
+        None => return AcceptOutcome::NoneYet,
+        Some(Ok(s)) => s,
+        Some(Err(())) => return AcceptOutcome::Error,
+    };
+    // The accepted stream inherits non-blocking state on some platforms;
+    // force blocking for the HTTP read (small, finite), then switch to
+    // a short read timeout for the post-upgrade WS read polling.
+    let _ = stream.set_nonblocking(false);
+    let (headers_opt, _path_opt) = match parse_request(&stream) {
+        Some((_method, path, headers, _body)) => (Some(headers), Some(path)),
+        None => return AcceptOutcome::Error,
+    };
+    let headers = headers_opt.unwrap_or_default();
+    if !websocket::ws_upgrade(&mut stream, &headers) {
+        return AcceptOutcome::Error;
+    }
+    // Switch to short-timeout reads so polling stays non-blocking.
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(20)));
+    let id = WS_CONNS.with(|conns| {
+        let mut conns = conns.borrow_mut();
+        // Reuse a freed slot if any (id stability across reconnects
+        // is not required at this layer; ids are reused after close).
+        for (i, slot) in conns.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(stream);
+                return i as i32;
+            }
+        }
+        let idx = conns.len();
+        conns.push(Some(stream));
+        idx as i32
+    });
+    AcceptOutcome::Pending(id)
+}
+
+/// Try to accept a pending connection on a non-blocking listener.  If
+/// one is pending, parse the HTTP request, perform the WebSocket
+/// upgrade, register the stream as a client, and return its id (>= 0).
+/// If no connection is pending, returns -1.  Returns -2 on a listener
+/// or upgrade error so loft can distinguish "not yet" from "broken".
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_accept_nonblocking(listener_handle: i32) -> i32 {
+    match try_accept_inner(listener_handle) {
+        AcceptOutcome::Pending(id) => id,
+        AcceptOutcome::NoneYet => -1,
+        AcceptOutcome::Error => -2,
+    }
+}
+
+/// Used by the event pump: collapses NoneYet and Error into None
+/// because both mean "nothing to deliver this poll".  Errors during
+/// the listener phase are not surfaced to the loft program — they
+/// would just be a noisy distraction during the normal idle path.
+fn try_accept_one(listener_handle: i32) -> Option<i32> {
+    match try_accept_inner(listener_handle) {
+        AcceptOutcome::Pending(id) => Some(id),
+        AcceptOutcome::NoneYet | AcceptOutcome::Error => None,
+    }
+}
+
+/// Total length of the WS_CONNS table (active + closed slots).
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_clients_len() -> i32 {
+    WS_CONNS.with(|conns| conns.borrow().len() as i32)
+}
+
+/// True iff the WS_CONNS slot at `id` is currently occupied.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_client_active(id: i32) -> bool {
+    WS_CONNS.with(|conns| {
+        conns
+            .borrow()
+            .get(id as usize)
+            .map(|o| o.is_some())
+            .unwrap_or(false)
+    })
+}
+
+// ── Event pump primitives (clean loft surface) ──────────────────────────
+//
+// The event pump is the single supported path for multi-client
+// servers in loft.  Loft programs call `Server::run(on_connect,
+// on_message)`, which internally drains events via
+// `n_ws_next_event` until it returns false, then sleeps briefly
+// and tries again.
+//
+// At-most-one-event-per-call keeps event order roughly real-time
+// (the loft side cannot fall behind by more than one event).
+//
+// The Disconnected kind (2) is surfaced so the loft drain loop can
+// keep advancing, but the loft `run()` body discards it without
+// calling any application callback.  This was the user's explicit
+// directive: the loft side does not know about disconnects.
+
+thread_local! {
+    static WS_EVENT_KIND:      Cell<i32>       = const { Cell::new(-1) };
+    static WS_EVENT_CLIENT_ID: Cell<i32>       = const { Cell::new(-1) };
+    static WS_EVENT_PAYLOAD:   RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+enum PollOutcome {
+    NoData,
+    Frame(String),
+    Disconnected,
+}
+
+fn poll_one_client(id: i32) -> PollOutcome {
+    WS_CONNS.with(|conns| {
+        let mut conns = conns.borrow_mut();
+        let Some(stream) = conns.get_mut(id as usize).and_then(|o| o.as_mut()) else {
+            return PollOutcome::NoData;
+        };
+        // PING is handled inline (write PONG, then keep probing).
+        // Anything else returns immediately: NoData on timeout,
+        // Frame on a real text frame, Disconnected on close / EOF.
+        loop {
+            match websocket::ws_read_frame_detailed(stream) {
+                websocket::ReadOutcome::NoData => return PollOutcome::NoData,
+                websocket::ReadOutcome::Closed => return PollOutcome::Disconnected,
+                websocket::ReadOutcome::Frame(frame) => {
+                    if frame.opcode == websocket::OP_CLOSE {
+                        return PollOutcome::Disconnected;
+                    }
+                    if frame.opcode == websocket::OP_PING {
+                        let _ = websocket::ws_write_frame(
+                            stream,
+                            websocket::OP_PONG,
+                            &frame.payload,
+                        );
+                        continue;
+                    }
+                    let payload = String::from_utf8_lossy(&frame.payload).to_string();
+                    return PollOutcome::Frame(payload);
+                }
+            }
+        }
+    })
+}
+
+/// Drain at most one event from the listener+clients on this server.
+/// Returns true if an event was found (call n_ws_event_kind /
+/// n_ws_event_client_id / n_ws_event_payload to read it).  Returns
+/// false when nothing is pending.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_next_event(listener_handle: i32) -> bool {
+    if let Some(cid) = try_accept_one(listener_handle) {
+        WS_EVENT_KIND.with(|k| k.set(0));
+        WS_EVENT_CLIENT_ID.with(|c| c.set(cid));
+        WS_EVENT_PAYLOAD.with(|p| p.borrow_mut().clear());
+        return true;
+    }
+    let len = WS_CONNS.with(|c| c.borrow().len()) as i32;
+    for i in 0..len {
+        let active = WS_CONNS.with(|c| {
+            c.borrow().get(i as usize).is_some_and(|o| o.is_some())
+        });
+        if !active {
+            continue;
+        }
+        match poll_one_client(i) {
+            PollOutcome::NoData => continue,
+            PollOutcome::Frame(s) => {
+                WS_EVENT_KIND.with(|k| k.set(1));
+                WS_EVENT_CLIENT_ID.with(|c| c.set(i));
+                WS_EVENT_PAYLOAD.with(|p| *p.borrow_mut() = s);
+                return true;
+            }
+            PollOutcome::Disconnected => {
+                WS_CONNS.with(|c| {
+                    if let Some(slot) = c.borrow_mut().get_mut(i as usize) {
+                        *slot = None;
+                    }
+                });
+                WS_EVENT_KIND.with(|k| k.set(2));
+                WS_EVENT_CLIENT_ID.with(|c| c.set(i));
+                WS_EVENT_PAYLOAD.with(|p| p.borrow_mut().clear());
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Read the kind of the last event surfaced by n_ws_next_event.
+/// 0 = Connected, 1 = Message, 2 = Disconnected.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_event_kind() -> i32 {
+    WS_EVENT_KIND.with(|k| k.get())
+}
+
+/// Read the client id of the last event surfaced by n_ws_next_event.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_event_client_id() -> i32 {
+    WS_EVENT_CLIENT_ID.with(|c| c.get())
+}
+
+/// Read the payload of the last event surfaced by n_ws_next_event.
+/// Empty string for Connected and Disconnected events.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_event_payload() -> LoftStr {
+    WS_EVENT_PAYLOAD.with(|p| loft_ffi::ret_ref(&p.borrow()))
+}
+
+/// Sleep for `ms` milliseconds.  The loft `run()` loop calls this
+/// when a drain pass produced zero events to avoid CPU-spinning in
+/// the no-clients-yet phase.  Doing the sleep in Rust keeps the
+/// loft side oblivious to timing primitives — there is no general
+/// `sleep` in the loft stdlib today.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_idle_sleep_ms(ms: i32) {
+    if ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+    }
+}
+
+/// Send a text frame to every active WebSocket client.  Returns the
+/// number of successful sends.  No iteration in loft.  The handle
+/// argument is accepted for API symmetry with send_to / disconnect
+/// but is currently ignored — WS_CONNS is a single thread-local
+/// table shared across all servers in this thread.
+///
+/// # Safety
+///
+/// `msg_ptr` / `msg_len` must describe a valid byte slice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ws_broadcast(
+    _handle: i32,
+    msg_ptr: *const u8,
+    msg_len: usize,
+) -> i32 {
+    let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
+    WS_CONNS.with(|conns| {
+        let mut conns = conns.borrow_mut();
+        let mut count: i32 = 0;
+        for slot in conns.iter_mut() {
+            if let Some(stream) = slot.as_mut()
+                && websocket::ws_write_frame(stream, websocket::OP_TEXT, msg)
+            {
+                count += 1;
+            }
+        }
+        count
+    })
+}
+
 loft_ffi::loft_register! {
     n_tcp_listen,
     n_tcp_accept,
@@ -286,4 +582,13 @@ loft_ffi::loft_register! {
     n_ws_message,
     n_ws_send,
     n_ws_close,
+    n_ws_accept_nonblocking,
+    n_ws_clients_len,
+    n_ws_client_active,
+    n_ws_next_event,
+    n_ws_event_kind,
+    n_ws_event_client_id,
+    n_ws_event_payload,
+    n_ws_broadcast,
+    n_ws_idle_sleep_ms,
 }

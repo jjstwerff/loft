@@ -9,7 +9,7 @@ use crate::state::State;
 use crate::tree;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 245] = &[
+pub const OPERATORS: &[fn(&mut State); 247] = &[
     goto,
     goto_word,
     goto_false,
@@ -200,6 +200,8 @@ pub const OPERATORS: &[fn(&mut State); 245] = &[
     new_record,
     finish_record,
     append_vector,
+    claim_child_rec,
+    ref_from_child_rec,
     get_record,
     validate,
     hash_add,
@@ -1663,6 +1665,19 @@ fn append_vector(s: &mut State) {
     let v_other = *s.get_stack::<DbRef>();
     let v_r = *s.get_stack::<DbRef>();
     s.database.vector_add(&v_r, &v_other, v_tp);
+}
+
+fn claim_child_rec(s: &mut State) {
+    let v_tp = *s.code::<u16>();
+    let v_src = *s.get_stack::<DbRef>();
+    let v_field = *s.get_stack::<DbRef>();
+    s.database.claim_child_rec(&v_field, &v_src, v_tp);
+}
+
+fn ref_from_child_rec(s: &mut State) {
+    let v_field = *s.get_stack::<DbRef>();
+    let new_value = s.database.ref_from_child_rec(&v_field);
+    s.put_stack(new_value);
 }
 
 fn get_record(s: &mut State) {

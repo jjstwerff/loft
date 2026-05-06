@@ -2441,6 +2441,37 @@ impl Parser {
                     dep.push(a as u16);
                 }
             }
+            // P227: ensure every text-returning LAMBDA has at least one
+            // `RefVar(Text)` hidden work-buffer attribute so the fn-ref
+            // dispatch ABI is uniform — callers always allocate exactly
+            // one buffer per text-returning fn-ref call, regardless of
+            // whether the assigned lambda's body uses formatting.
+            // Limited to lambdas (`n___lambda_*` prefix); the fix matches
+            // the trio used by the existing text_return arm above:
+            // (1) add_attribute, (2) create_var, (3) become_argument.
+            // Gated on first_pass to avoid duplicate-add on the second
+            // pass; the second-pass `__closure` injection (if any)
+            // happens later in parse_lambda so the trailing position is
+            // preserved.
+            let is_lambda = self.data.def(self.context).name.starts_with("n___lambda_");
+            let has_work_buf =
+                self.data.def(self.context).attributes.iter().any(
+                    |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
+                );
+            if self.first_pass && is_lambda && !has_work_buf {
+                let work_tp = Type::RefVar(Box::new(Type::Text(Vec::new())));
+                let a = self.data.add_attribute(
+                    &mut self.lexer,
+                    self.context,
+                    "__work_ret",
+                    work_tp.clone(),
+                );
+                let v = self.create_var("__work_ret", &work_tp);
+                if v != u16::MAX {
+                    self.vars.become_argument(v);
+                }
+                dep.push(a as u16);
+            }
             self.data.definitions[self.context as usize].returned = Type::Text(dep);
         }
     }
@@ -2839,13 +2870,19 @@ impl Parser {
                 if let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone()
                     && param_types.is_empty()
                 {
-                    // create/find work-buffer text variables for text-returning fn-ref calls.
-                    // work_text() adds each var to work_texts; parse_code inserts v_set(wv, Text(""))
-                    // so Zone 2 slot assignment fires.  Must run on both passes for counter sync.
-                    let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
-                        (0..deps.len())
-                            .map(|_| self.vars.work_text(&mut self.lexer))
-                            .collect()
+                    // P227: text-returning fn-ref calls need exactly ONE
+                    // work-buffer at caller-function scope (the return-value
+                    // buffer that the lambda fills via its hidden RefVar(Text)
+                    // attr).  The fn-ref TYPE's `Type::Text(deps)` is always
+                    // `deps = []`, so the previous `(0..deps.len())` count
+                    // was always zero — leaving the lambda's stack slot for
+                    // its work-buffer empty and causing a SIGSEGV when the
+                    // lambda body read it.  Allocating one work_text var here
+                    // matches the canonical "one return buffer per text fn"
+                    // ABI; lambdas with multiple `RefVar(Text)` hidden attrs
+                    // (the rare case) are diagnosed separately.
+                    let work_vars: Vec<u16> = if matches!(ret_type.as_ref(), Type::Text(_)) {
+                        vec![self.vars.work_text(&mut self.lexer)]
                     } else {
                         vec![]
                     };
@@ -3040,61 +3077,21 @@ impl Parser {
         types: &[Type],
     ) -> Option<Type> {
         if !self.vars.name_exists(name) {
-            // P215 — a captured fn-typed var from the enclosing scope
-            // (`outer = fn(y) { inner(y) + 1 }` where `inner` lives
-            // in the surrounding fn) is not callable from inside
-            // another lambda's body.  Routing through the existing
-            // capture mechanism would require persisting the
-            // captured fn-ref through the synthetic closure record's
-            // `Type::Function` field — but that field is only 4B
-            // (just the d_nr) while a fn-ref value is 16B, the same
-            // layout limitation that gates P213 (capturing closures
-            // in struct fields).  Rather than ship a broken halfway
-            // dispatch (interp panics with "fn_call_ref: d_nr out of
-            // range" because the truncated bytes look like a random
-            // d_nr), surface a clear diagnostic at parse time.  The
-            // proper fix lands when P213's layout-widening fix lands
-            // — see PROBLEMS.md § 213 for the design.
-            if let Some((_n, ctype)) = self
-                .capture_context
-                .iter()
-                .find(|(n, t)| n == name && matches!(t, Type::Function(_, _, _)))
-                .cloned()
-            {
-                if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "captured fn-typed variable '{name}' cannot be called from inside another closure body \
-                         (captures of `fn(...) -> ...` types share P213's struct-field layout limitation; \
-                         the captured fn-ref's d_nr is truncated to 4 bytes when stored in the closure record); \
-                         define the inner function at file scope, or inline its body inside the outer closure"
-                    );
-                }
-                // Swallow the call-site so the cascade
-                // ("Unknown function inner" + "never read") doesn't
-                // pile on top of the real diagnostic.  Return the
-                // captured fn-ref's declared return type so the
-                // surrounding expression still type-checks against
-                // its expected operand width.
-                let Type::Function(_, ret, _) = ctype else {
-                    unreachable!()
-                };
-                return Some(*ret);
-            }
             return None;
         }
         let v_nr = self.vars.var(name);
         let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone() else {
             return None;
         };
-        // create/find work-buffer text variables for text-returning fn-ref calls.
-        // work_text() adds each var to work_texts; parse_code inserts v_set(wv, Text(""))
-        // so Zone 2 slot assignment fires.  Must run on both passes for counter sync.
-        let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
-            (0..deps.len())
-                .map(|_| self.vars.work_text(&mut self.lexer))
-                .collect()
+        // P227: one work-buffer per text-returning fn-ref call.
+        // The fn-ref TYPE's `Type::Text(deps)` is always `deps = []`,
+        // so the previous deps-derived count was zero — leaving the
+        // lambda's stack slot for its work-buffer empty and causing
+        // SIGSEGV.  Allocating one work_text matches the canonical
+        // "one return buffer per text fn" ABI; lambdas with multiple
+        // `RefVar(Text)` hidden attrs are diagnosed separately.
+        let work_vars: Vec<u16> = if matches!(ret_type.as_ref(), Type::Text(_)) {
+            vec![self.vars.work_text(&mut self.lexer)]
         } else {
             vec![]
         };

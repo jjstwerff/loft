@@ -226,6 +226,14 @@ impl Stores {
                      pointers are store-internal and cannot be serialised",
                     self.types[tp as usize].name
                 ),
+                // P213: child-record pointer is store-internal; closures
+                // can't be serialised across machines either.
+                Parts::ChildRec(_) => panic!(
+                    "binary I/O not supported for type '{}': child-record \
+                     pointers (closures) are store-internal and cannot be \
+                     serialised",
+                    self.types[tp as usize].name
+                ),
                 Parts::Base => unreachable!(
                     "Parts::Base should never appear as a field type in read_data \
                      (type: {})",
@@ -400,6 +408,13 @@ impl Stores {
                 Parts::DbRef => panic!(
                     "binary I/O not supported for type '{}': stored DbRef \
                      pointers are store-internal and cannot be serialised",
+                    self.types[tp as usize].name
+                ),
+                // P213: see read_data's ChildRec arm.
+                Parts::ChildRec(_) => panic!(
+                    "binary I/O not supported for type '{}': child-record \
+                     pointers (closures) are store-internal and cannot be \
+                     serialised",
                     self.types[tp as usize].name
                 ),
                 Parts::Base => unreachable!(

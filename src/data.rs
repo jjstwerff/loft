@@ -1303,6 +1303,15 @@ pub struct Attribute {
     /// `fill_database` / codegen can consult `forced_size(alias_nr)`.  `0`
     /// means "no alias" — fall back to the limit()-based heuristic.
     pub alias_d_nr: u32,
+    /// P213: for fn-ref struct fields, the def_nr of the lambda assigned
+    /// at the (single) construction site.  Used by `fill_database`'s
+    /// `Type::Function` arm to look up the lambda's `closure_record`
+    /// schema and register `cb__closure_rec` as `Parts::Vector(closure_kt)`.
+    /// `u32::MAX` = no capturing-lambda assignment seen yet (or never
+    /// will be — non-capturing case).  Heterogeneous shapes (different
+    /// lambdas with different capture schemas) are rejected at the
+    /// second assignment site by `set_field_check`.
+    pub assigned_lambda_d_nr: u32,
 }
 
 impl Debug for Attribute {
@@ -1923,6 +1932,7 @@ impl Data {
             check: Value::Null,
             check_message: Value::Null,
             alias_d_nr: u32::MAX,
+            assigned_lambda_d_nr: u32::MAX,
         };
         let next_attr = self.def(on_def).attributes.len();
         let def = &mut self.definitions[on_def as usize];

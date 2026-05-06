@@ -173,6 +173,50 @@ states that are harder to debug than the original problem.
 
 ---
 
+## Bug-filing policy — MANDATORY
+
+**File pre-existing bugs encountered during a bug hunt before moving on to any
+other bug or feature.**
+
+While diagnosing or fixing a bug you will often surface *other* bugs:
+
+- Sibling shapes ("the original P-issue was `out + s`; my variant probes show
+  `s = s + s` and `s = "lit" + s` are also broken differently").
+- Latent issues flagged in code comments that never made it to PROBLEMS.md
+  (for example, a `// loft text fields initialised to "" read back as null`
+  comment in a working example).
+- Symptoms surfaced during diagnosis but unrelated to the active fix
+  ("native E0502 in this unrelated borrow path").
+
+These findings are the **cheapest bugs you will ever file** — the relevant
+code paths are loaded into your head, the diagnostic infrastructure is warmed
+up, and a working reproducer is within reach.  Moving on without filing
+means re-discovering each one from scratch in a future session.
+
+**Required action before picking up the next bug or feature:**
+
+1. Add a P-issue row to [PROBLEMS.md](doc/claude/PROBLEMS.md) with a minimal
+   reproducer (path, expected output, observed output on each backend),
+   severity tier, and the workaround if any.
+2. If user-visible, mirror the row in
+   [USER_FACING.md](doc/claude/USER_FACING.md).
+3. If the bug is small enough to test cheaply, save the reproducer to
+   `/tmp/p_followups/` (so re-validation later is one command) or, when the
+   shape deserves CI lock-in, add a regression test to `tests/scripts/`.
+
+The rule applies even when the bug looks obvious, narrow, or "clearly
+unrelated."  One row in PROBLEMS.md costs ~30 seconds.  The cost of
+re-discovering the bug six months later — relearning the surrounding
+code, rebuilding a reproducer, re-running the diagnostic — is two orders
+of magnitude higher.
+
+This rule is **not** a license to scope-creep the active fix.  Continue to
+ship the original-report fix as a focused change.  File the follow-ups as
+*new* P-issue rows; do not bundle them into the same patch unless they share
+a single fix site.
+
+---
+
 ## Git safety — MANDATORY
 
 ### Never use `git stash pop` or `git pull` with uncommitted changes
@@ -254,7 +298,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [EVENT_PROTOCOL.md](doc/claude/EVENT_PROTOCOL.md) | Wire-format spec — text-mode `<id>:payload` (v1, shipped), binary-mode 12-byte header (v2, designed), server-arbited MAP handshake, encoding modes, streaming reassembly; companion to EVENT_LOOP.md |
 | [MUTABLE_CLOSURES.md](doc/claude/MUTABLE_CLOSURES.md) | Spec: novice-fit closure capture — four-case classification (A read-only, B co-scoped, C moved, D aliased rejected), implicit-by-body, Reference + cell lowerings, diagnostic shape |
 | [MUTABLE_CLOSURES_DISCUSSION.md](doc/claude/MUTABLE_CLOSURES_DISCUSSION.md) | Companion discussion: alternatives surveyed (A-F), implementation analysis sketch, open questions, design history — companion to MUTABLE_CLOSURES.md |
-| [TIC_TAC_TOE.md](doc/claude/TIC_TAC_TOE.md) | Validation milestone: minimal multiplayer tic-tac-toe with three client handlers (mouse-out, drawing-in, winner-in), tagged-text wire protocol `(#N):payload`, server-authoritative state |
+| [TIC_TAC_TOE.md](doc/claude/TIC_TAC_TOE.md) | Protocol-validation vehicle: v1 shipped (server-arbited handshake, integer-id wire format).  v2/v3/v4 are protocol-only ground layers (multi-client, asset-serving + browser, server-side compile + hot-swap) — all verified text-mode.  Visual / playable tic-tac-toe is deferred indefinitely; real-game UX lives in MULTIPLAYER_EDITOR |
+| [MULTIPLAYER_EDITOR.md](doc/claude/MULTIPLAYER_EDITOR.md) | First real-game milestone: multi-client hex editor in the moros stack — paint hexes red on click, propagate via WebSocket to all connected clients, snapshot replay on connect.  Consumes TIC_TAC_TOE v2 ground layer (multi-client server primitives) |
 | [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) | `game_client` library design — WebSocket client, multiplayer protocol, prediction, WASM script loading |
 | [SERVER_FEATURES.md](doc/claude/SERVER_FEATURES.md) | Language features for server/client ergonomics — C55 type aliases, C56 `?? return`, A15 `parallel {}`, I13 iterator protocol, C57 decorators |
 | [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | W1.1 single-file HTML export — native WASM compilation for browser |

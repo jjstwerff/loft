@@ -425,6 +425,21 @@ impl Stores {
         #[cfg(feature = "wasm")]
         crate::wasm::host_fs_program_dir()
     }
+
+    /// Pre-existing latent symbol referenced by `default/03_text.loft`'s
+    /// `#rust"Stores::source_dir_native()"` template — never compiled
+    /// before because no test exercised the symbol.  Surfaced by P227's
+    /// fn-ref dispatch widening (every `fn() -> text` candidate is now
+    /// compiled into the dispatch table).  Returns an empty string;
+    /// `source_dir`'s real implementation requires `stores.source_dir`
+    /// access and is reachable through the `n_source_dir` interp path
+    /// (`src/native.rs:558`).  A future patch should change the loft
+    /// declaration to take `cell` and read from a stores-bearing helper
+    /// — out of scope for P227.
+    #[must_use]
+    pub fn source_dir_native() -> String {
+        String::new()
+    }
 }
 
 impl Debug for ShowDb<'_> {
@@ -582,6 +597,16 @@ impl ShowDb<'_> {
                         s.push_str("null");
                     } else {
                         write!(s, "DbRef({store_nr},{rec},{pos})").unwrap();
+                    }
+                }
+                // P213: format a child-record rec-id pointer.  Closures
+                // don't round-trip through textual format; debug shape only.
+                Parts::ChildRec(_) => {
+                    let rec = self.store().get_u32_raw(self.rec, self.pos);
+                    if rec == 0 {
+                        s.push_str("null");
+                    } else {
+                        write!(s, "ChildRec({rec})").unwrap();
                     }
                 }
                 Parts::Base => {
@@ -1005,6 +1030,15 @@ impl DumpDb<'_> {
                     s.push_str("null");
                 } else {
                     write!(s, "DbRef({store_nr},{rec},{pos})").unwrap();
+                }
+            }
+            // P213: format a child-record rec-id pointer.
+            Parts::ChildRec(_) => {
+                let rec = self.store().get_u32_raw(self.rec, self.pos);
+                if rec == 0 {
+                    s.push_str("null");
+                } else {
+                    write!(s, "ChildRec({rec})").unwrap();
                 }
             }
             Parts::Base => {

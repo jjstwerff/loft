@@ -156,12 +156,63 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
     segments
 }
 
+/// P224: collect coroutine-body locals that need to persist across
+/// `next_*` calls.  Variables `Set` in one state and `Var`-read in
+/// another would otherwise be scoped to a single match arm and produce
+/// E0425 ("cannot find value `var_X` in this scope") at compile time
+/// (or, worse, silently lose the value when the next state runs).
+///
+/// Conservative inclusion: every non-argument, user-named local of
+/// a primitive (Copy) or text type.  References are skipped — they
+/// would need Store-allocation cascade in the factory; not in P224
+/// scope.  Compiler-internal `__*` locals (work-text format buffers
+/// `__work_*`, yield-from machinery `__yf_*`, vector-literal
+/// backing `__vdb_*`, etc.) are excluded — they have their own
+/// emission paths (P218 pre-declares `__work_*` at function scope;
+/// the eager-collect factory builds `__yf_*` / `__vdb_*` inline)
+/// and adding them as struct fields would conflict with those.
+fn coroutine_persistent_locals(data: &crate::data::Data, def_nr: u32) -> Vec<(u16, Type)> {
+    let var_table = &data.def(def_nr).variables;
+    let next = var_table.next_var();
+    let mut out = Vec::new();
+    for v in 0..next {
+        if var_table.is_argument(v) {
+            continue;
+        }
+        let name = var_table.name(v);
+        if name.starts_with("__") {
+            continue;
+        }
+        let tp = var_table.tp(v);
+        let suitable = matches!(
+            tp,
+            Type::Integer(_)
+                | Type::Boolean
+                | Type::Character
+                | Type::Float
+                | Type::Single
+                | Type::Enum(_, _, _)
+                | Type::Text(_)
+        );
+        if !suitable {
+            continue;
+        }
+        out.push((v, tp.clone()));
+    }
+    out
+}
+
 /// Emit the struct definition for a coroutine state machine.
+#[allow(clippy::too_many_arguments)]
 fn emit_struct_def(
     w: &mut dyn Write,
     struct_name: &str,
     attrs: &[crate::data::Attribute],
     segments: &[YieldSegment],
+    yield_tp: &Type,
+    persistent: &[(u16, Type)],
+    data: &crate::data::Data,
+    def_nr: u32,
 ) -> std::io::Result<()> {
     writeln!(w, "struct {struct_name} {{")?;
     writeln!(w, "    state: u32,")?;
@@ -171,6 +222,16 @@ fn emit_struct_def(
             other => rust_type(other, &Context::Variable),
         };
         writeln!(w, "    var_{}: {field_tp},", sanitize(&attr.name))?;
+    }
+    // P224: persistent function-locals as struct fields.
+    let var_table = &data.def(def_nr).variables;
+    for (v, tp) in persistent {
+        let n = sanitize(var_table.name(*v));
+        let field_tp = match tp {
+            Type::Text(_) => "String".to_string(),
+            other => rust_type(other, &Context::Variable),
+        };
+        writeln!(w, "    var_{n}: {field_tp},")?;
     }
     // N8b.3: one inline sub-generator field per yield-from segment.
     // Stored as `Option<Box<dyn LoftCoroutine>>` to avoid `RefCell` double-borrow
@@ -188,19 +249,28 @@ fn emit_struct_def(
         .iter()
         .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }))
     {
-        writeln!(w, "    __values: Vec<i64>,")?;
+        let elem_ty = if matches!(yield_tp, Type::Text(_)) {
+            "String"
+        } else {
+            "i64"
+        };
+        writeln!(w, "    __values: Vec<{elem_ty}>,")?;
         writeln!(w, "    __idx: usize,")?;
     }
     writeln!(w, "}}\n")
 }
 
 /// Emit the factory function that allocates and returns a boxed coroutine.
+#[allow(clippy::too_many_arguments)]
 fn emit_factory_fn(
     w: &mut dyn Write,
     fn_name: &str,
     struct_name: &str,
     attrs: &[crate::data::Attribute],
     segments: &[YieldSegment],
+    persistent: &[(u16, Type)],
+    data: &crate::data::Data,
+    def_nr: u32,
 ) -> std::io::Result<()> {
     // ForLoopBody: the entire factory is emitted by Output::emit_for_body_factory.
     if segments
@@ -225,6 +295,13 @@ fn emit_factory_fn(
             _ => writeln!(w, "        var_{aname},")?,
         }
     }
+    // P224: initialise persistent locals to default.
+    let var_table = &data.def(def_nr).variables;
+    for (v, tp) in persistent {
+        let n = sanitize(var_table.name(*v));
+        let init = persistent_default(tp);
+        writeln!(w, "        var_{n}: {init},")?;
+    }
     // N8b.3: initialise sub-generator fields to None.
     for (idx, seg) in segments.iter().enumerate() {
         if matches!(seg, YieldSegment::YieldFrom { .. }) {
@@ -233,6 +310,19 @@ fn emit_factory_fn(
     }
     writeln!(w, "    }})")?;
     writeln!(w, "}}\n")
+}
+
+/// P224: default initialiser for a persistent coroutine local.
+/// Mirrors `default_native_value` but inlined here so the helper
+/// stays usable from the free function `emit_factory_fn`.
+fn persistent_default(tp: &Type) -> String {
+    match tp {
+        Type::Text(_) => "String::new()".to_string(),
+        Type::Boolean => "false".to_string(),
+        Type::Character => "0_u32".to_string(),
+        Type::Float | Type::Single => "0.0_f64".to_string(),
+        _ => "0_i64".to_string(),
+    }
 }
 
 impl Output<'_> {
@@ -258,18 +348,68 @@ impl Output<'_> {
         }
     }
 
-    /// Emit the `next_i64` method body for a coroutine state machine.
+    /// Emit the `next_*` method body for a coroutine state machine.
+    /// `yield_tp` selects which trait method to override: `next_i64` for
+    /// 8-byte-or-less yields, `next_text` for text yields.
     fn emit_next_i64(
         &mut self,
         w: &mut dyn Write,
         attrs: &[crate::data::Attribute],
         segments: &[YieldSegment],
         has_yf: bool,
+        yield_tp: &Type,
     ) -> std::io::Result<()> {
-        writeln!(
-            w,
-            "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {{"
-        )?;
+        let is_text = matches!(yield_tp, Type::Text(_));
+        let (sig, exhaust, advance, wrap_open, wrap_close) = if is_text {
+            (
+                "    fn next_text(&mut self, stores: &mut Stores) -> String {",
+                "loft::state::STRING_NULL.to_string()",
+                "next_text",
+                "(",
+                ").to_string()",
+            )
+        } else {
+            (
+                "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {",
+                "loft::codegen_runtime::COROUTINE_EXHAUSTED",
+                "next_i64",
+                "(",
+                ") as i64",
+            )
+        };
+        writeln!(w, "{sig}")?;
+        // P225: when the generator contains any `ForLoopBody` segment,
+        // the factory eager-collects EVERY yield (Simple, YieldFrom, and
+        // ForLoopBody alike) into `__values`.  In that case the impl
+        // collapses to a single pop-from-buffer arm — emitting per-segment
+        // arms would re-execute Simple yields a second time, producing
+        // duplicates (the original P225 symptom: first Simple yield
+        // appeared twice on native, once from state 0's explicit `return`
+        // and once from state 1's `__values[0]` pop).
+        let has_for_body = segments
+            .iter()
+            .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }));
+        if has_for_body {
+            writeln!(
+                w,
+                "        let cell: &std::cell::UnsafeCell<Stores> = unsafe \
+                 {{ &*(stores as *mut Stores as *const std::cell::UnsafeCell<Stores>) }};"
+            )?;
+            writeln!(w, "        let _ = &cell;")?;
+            writeln!(w, "        let _ = stores;")?;
+            writeln!(w, "        if self.__idx < self.__values.len() {{")?;
+            if is_text {
+                writeln!(w, "            let v = self.__values[self.__idx].clone();")?;
+            } else {
+                writeln!(w, "            let v = self.__values[self.__idx];")?;
+            }
+            writeln!(w, "            self.__idx += 1;")?;
+            writeln!(w, "            return v;")?;
+            writeln!(w, "        }}")?;
+            writeln!(w, "        {exhaust}")?;
+            writeln!(w, "    }}")?;
+            return Ok(());
+        }
         // P199 — coroutine state-machine bodies call user fns that take
         // `&UnsafeCell<Stores>` (the new ABI).  The `LoftCoroutine` trait
         // method still receives `&mut Stores`; derive a `cell` view via
@@ -281,6 +421,49 @@ impl Output<'_> {
              {{ &*(stores as *mut Stores as *const std::cell::UnsafeCell<Stores>) }};"
         )?;
         writeln!(w, "        let _ = &cell;")?;
+        // P218: pre-declare work-text locals (`var___work_*`) at function
+        // scope so they are visible from every state arm.  Without this,
+        // the IR's function-entry `Set(__work_N, "")` ops get emitted
+        // inside state 0's match arm via `let mut var___work_N: String =
+        // …`, scoping the binding to arm 0 only.  A subsequent state arm
+        // referencing the same buffer (e.g. a yielded format-string that
+        // interpolates a parameter) then fails to compile with E0425
+        // ("cannot find value `var___work_N` in this scope").  Adding
+        // them to `self.declared` keeps the per-state Set ops emitting as
+        // assignments (`var___work_N = "".to_string()`) rather than
+        // `let mut`, so each state's pre-statements still re-init
+        // correctly without redeclaring.
+        // P218: pre-declare any text-typed locals at function scope so
+        // they are visible from every state arm (`__work_*` format
+        // buffers are the canonical case — declared inside state 0's
+        // pre-statements as a `let mut`, then referenced from a later
+        // state arm where they're out of scope).  Non-argument text
+        // locals are safe to pre-declare with `String::new()` because
+        // every consumer site that uses them re-initialises before
+        // reading.  Adding them to `self.declared` keeps the per-state
+        // Set ops emitting as assignments rather than `let mut`.
+        let next = self.data.def(self.def_nr).variables.next_var();
+        let mut to_predeclare: Vec<u16> = Vec::new();
+        {
+            let var_table = &self.data.def(self.def_nr).variables;
+            for v in 0..next {
+                if var_table.is_argument(v) {
+                    continue;
+                }
+                if !matches!(var_table.tp(v), Type::Text(_)) {
+                    continue;
+                }
+                if !var_table.name(v).starts_with("__work") {
+                    continue;
+                }
+                to_predeclare.push(v);
+            }
+        }
+        for v in &to_predeclare {
+            let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+            writeln!(w, "        let mut var_{name}: String = String::new();")?;
+            self.declared.insert(*v);
+        }
         // N8b.3: wrap in `loop {}` so yield-from states can `continue` to the
         // next state immediately after sub-generator exhaustion.
         if has_yf {
@@ -308,7 +491,10 @@ impl Output<'_> {
                     }
                     writeln!(w, "                self.state = {};", state_idx + 1)?;
                     let yield_code = self.generate_expr_buf(val)?;
-                    writeln!(w, "                return ({yield_code}) as i64;")?;
+                    writeln!(
+                        w,
+                        "                return {wrap_open}{yield_code}{wrap_close};"
+                    )?;
                 }
                 YieldSegment::YieldFrom { pre, init } => {
                     for stmt in pre {
@@ -324,12 +510,9 @@ impl Output<'_> {
                     writeln!(w, "                }}")?;
                     writeln!(
                         w,
-                        "                let val = self.sub_{state_idx}.as_mut().unwrap().next_i64(stores);"
+                        "                let val = self.sub_{state_idx}.as_mut().unwrap().{advance}(stores);"
                     )?;
-                    writeln!(
-                        w,
-                        "                if val == loft::codegen_runtime::COROUTINE_EXHAUSTED {{"
-                    )?;
+                    writeln!(w, "                if val == {exhaust} {{")?;
                     writeln!(w, "                    self.sub_{state_idx} = None;")?;
                     writeln!(w, "                    self.state = {};", state_idx + 1)?;
                     writeln!(w, "                    continue;")?;
@@ -339,29 +522,27 @@ impl Output<'_> {
                 YieldSegment::ForLoopBody { .. } => {
                     // Values were collected eagerly in the factory. Just pop from the buffer.
                     writeln!(w, "                if self.__idx < self.__values.len() {{")?;
-                    writeln!(w, "                    let v = self.__values[self.__idx];")?;
+                    if is_text {
+                        writeln!(
+                            w,
+                            "                    let v = self.__values[self.__idx].clone();"
+                        )?;
+                    } else {
+                        writeln!(w, "                    let v = self.__values[self.__idx];")?;
+                    }
                     writeln!(w, "                    self.__idx += 1;")?;
                     writeln!(w, "                    return v;")?;
                     writeln!(w, "                }}")?;
-                    writeln!(
-                        w,
-                        "                return loft::codegen_runtime::COROUTINE_EXHAUSTED;"
-                    )?;
+                    writeln!(w, "                return {exhaust};")?;
                 }
             }
             writeln!(w, "            }}")?;
         }
         // Exhausted arm.
         if has_yf {
-            writeln!(
-                w,
-                "            _ => return loft::codegen_runtime::COROUTINE_EXHAUSTED,"
-            )?;
+            writeln!(w, "            _ => return {exhaust},")?;
         } else {
-            writeln!(
-                w,
-                "            _ => loft::codegen_runtime::COROUTINE_EXHAUSTED,"
-            )?;
+            writeln!(w, "            _ => {exhaust},")?;
         }
         writeln!(w, "        }}")?;
         if has_yf {
@@ -407,17 +588,51 @@ impl Output<'_> {
             .iter()
             .any(|s| matches!(s, YieldSegment::YieldFrom { .. }));
         let attrs: Vec<_> = def.attributes.clone();
+        let yield_tp = match &def.returned {
+            Type::Iterator(inner, _) => (**inner).clone(),
+            other => other.clone(),
+        };
+
+        // P224: compute persistent locals once, share across struct + impl + factory.
+        let persistent = coroutine_persistent_locals(self.data, def_nr);
 
         // ── 1. Struct definition ─────────────────────────────────────────────
-        emit_struct_def(w, &struct_name, &attrs, &segments)?;
+        emit_struct_def(
+            w,
+            &struct_name,
+            &attrs,
+            &segments,
+            &yield_tp,
+            &persistent,
+            self.data,
+            def_nr,
+        )?;
 
         // ── 2. impl LoftCoroutine ────────────────────────────────────────────
+        // Scope the persistent-vars set AND any "declared" insertions to the
+        // impl block — they only govern emission inside `next_i64` /
+        // `next_text`.  The factory function (emitted next) re-uses the same
+        // `Output` instance and would otherwise inherit stale declared marks
+        // for `__yf_*` / `__vdb_*` etc., causing E0425 in the eager-collect
+        // factory path.
+        let prev_persistent = std::mem::take(&mut self.coroutine_persistent_vars);
+        self.coroutine_persistent_vars = persistent.iter().map(|(v, _)| *v).collect();
+        let mut newly_declared = Vec::with_capacity(persistent.len());
+        for (v, _) in &persistent {
+            if self.declared.insert(*v) {
+                newly_declared.push(*v);
+            }
+        }
         writeln!(
             w,
             "impl loft::codegen_runtime::LoftCoroutine for {struct_name} {{"
         )?;
-        self.emit_next_i64(w, &attrs, &segments, has_yf)?;
+        self.emit_next_i64(w, &attrs, &segments, has_yf, &yield_tp)?;
         writeln!(w, "}}\n")?;
+        self.coroutine_persistent_vars = prev_persistent;
+        for v in newly_declared {
+            self.declared.remove(&v);
+        }
 
         // ── 3. Factory function ──────────────────────────────────────────────
         let def = self.data.def(def_nr);
@@ -425,15 +640,34 @@ impl Output<'_> {
         let has_for_body = segments
             .iter()
             .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }));
-        emit_factory_fn(w, &fn_name, &struct_name, &attrs, &segments)?;
+        emit_factory_fn(
+            w,
+            &fn_name,
+            &struct_name,
+            &attrs,
+            &segments,
+            &persistent,
+            self.data,
+            def_nr,
+        )?;
         if has_for_body {
-            self.emit_for_body_factory(w, &fn_name, &struct_name, &attrs, &segments)?;
+            self.emit_for_body_factory(
+                w,
+                &fn_name,
+                &struct_name,
+                &attrs,
+                &segments,
+                &yield_tp,
+                &persistent,
+                def_nr,
+            )?;
         }
         Ok(())
     }
 
     /// Emit the factory function for a generator that contains for-loop bodies
     /// with yields.  Runs the body eagerly, pushing all yielded values to a Vec.
+    #[allow(clippy::too_many_arguments)]
     fn emit_for_body_factory(
         &mut self,
         w: &mut dyn Write,
@@ -441,7 +675,28 @@ impl Output<'_> {
         struct_name: &str,
         attrs: &[crate::data::Attribute],
         segments: &[YieldSegment],
+        yield_tp: &Type,
+        persistent: &[(u16, Type)],
+        def_nr: u32,
     ) -> std::io::Result<()> {
+        let is_text = matches!(yield_tp, Type::Text(_));
+        let (vec_ty, push_wrap_open, push_wrap_close, sub_advance, sub_exhaust) = if is_text {
+            (
+                "String",
+                "(",
+                ").to_string()",
+                "next_text",
+                "loft::state::STRING_NULL",
+            )
+        } else {
+            (
+                "i64",
+                "(",
+                ") as i64",
+                "next_i64",
+                "loft::codegen_runtime::COROUTINE_EXHAUSTED",
+            )
+        };
         write!(w, "fn {fn_name}(cell: &std::cell::UnsafeCell<Stores>")?;
         for attr in attrs {
             let arg_tp = rust_type(&attr.typedef, &Context::Argument);
@@ -461,9 +716,38 @@ impl Output<'_> {
                 _ => writeln!(w, "    let var_{aname} = var_{aname};")?,
             }
         }
-        writeln!(w, "    let mut __values: Vec<i64> = Vec::new();")?;
+        // P218: same pre-declaration as `emit_next_i64` — `__work_*`
+        // text-format buffers used in the eager-collect body need to
+        // be declared in the factory's scope (not first-use-inside-
+        // a-loop-body, which scoped them to that block and left them
+        // invisible at later assignment sites).  Mark them declared so
+        // the IR's per-body Set ops emit as assignments.
+        let next = self.data.def(self.def_nr).variables.next_var();
+        let mut to_predeclare: Vec<u16> = Vec::new();
+        {
+            let var_table = &self.data.def(self.def_nr).variables;
+            for v in 0..next {
+                if var_table.is_argument(v) {
+                    continue;
+                }
+                if !matches!(var_table.tp(v), Type::Text(_)) {
+                    continue;
+                }
+                if !var_table.name(v).starts_with("__work") {
+                    continue;
+                }
+                to_predeclare.push(v);
+            }
+        }
+        for v in &to_predeclare {
+            let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+            writeln!(w, "    let mut var_{name}: String = String::new();")?;
+            self.declared.insert(*v);
+        }
+        writeln!(w, "    let mut __values: Vec<{vec_ty}> = Vec::new();")?;
         // Run each for-loop body with yield_collect enabled.
         self.yield_collect = true;
+        self.yield_collect_text = is_text;
         for seg in segments {
             match seg {
                 YieldSegment::ForLoopBody { pre, body } => {
@@ -471,7 +755,33 @@ impl Output<'_> {
                         let stmt_code = self.generate_expr_buf(stmt)?;
                         writeln!(w, "    {stmt_code};")?;
                     }
-                    let body_code = self.generate_expr_buf(body)?;
+                    // P219: strip trailing Return ops from the body before
+                    // emitting.  The factory drives the body purely for its
+                    // side effects (yields populate `__values`); the
+                    // factory's actual return is `Box::new(struct)` emitted
+                    // below.  But the function body's `[Loop, Return(Null)]`
+                    // pattern triggers `patch_hoisted_returns` in
+                    // `output_block` to coalesce into `[Return(Loop)]`,
+                    // which `Value::Return` then emits as
+                    // `return 'l4: loop {...}` — invalid because the loop is
+                    // unit-typed and the factory expects
+                    // `Box<dyn LoftCoroutine>`.  Stripping trailing Return
+                    // ops keeps the body as plain statements.
+                    let body_for_emit = match body.unspan() {
+                        Value::Block(bl) => {
+                            let mut bl2 = bl.clone();
+                            while bl2
+                                .operators
+                                .last()
+                                .is_some_and(|op| matches!(op.unspan(), Value::Return(_)))
+                            {
+                                bl2.operators.pop();
+                            }
+                            Value::Block(bl2)
+                        }
+                        _ => body.clone(),
+                    };
+                    let body_code = self.generate_expr_buf(&body_for_emit)?;
                     writeln!(w, "    {body_code};")?;
                 }
                 YieldSegment::Simple { pre, val } => {
@@ -480,7 +790,10 @@ impl Output<'_> {
                         writeln!(w, "    {stmt_code};")?;
                     }
                     let val_code = self.generate_expr_buf(val)?;
-                    writeln!(w, "    __values.push(({val_code}) as i64);")?;
+                    writeln!(
+                        w,
+                        "    __values.push({push_wrap_open}{val_code}{push_wrap_close});"
+                    )?;
                 }
                 YieldSegment::YieldFrom { pre, init } => {
                     // Eagerly drain the sub-generator.
@@ -492,11 +805,8 @@ impl Output<'_> {
                     writeln!(w, "    {{")?;
                     writeln!(w, "        let mut __sub = {factory};")?;
                     writeln!(w, "        loop {{")?;
-                    writeln!(w, "            let v = __sub.next_i64(stores);")?;
-                    writeln!(
-                        w,
-                        "            if v == loft::codegen_runtime::COROUTINE_EXHAUSTED {{ break; }}"
-                    )?;
+                    writeln!(w, "            let v = __sub.{sub_advance}(stores);")?;
+                    writeln!(w, "            if v == {sub_exhaust} {{ break; }}")?;
                     writeln!(w, "            __values.push(v);")?;
                     writeln!(w, "        }}")?;
                     writeln!(w, "    }}")?;
@@ -504,6 +814,7 @@ impl Output<'_> {
             }
         }
         self.yield_collect = false;
+        self.yield_collect_text = false;
         writeln!(w, "    Box::new({struct_name} {{")?;
         writeln!(w, "        state: 0,")?;
         for attr in attrs {
@@ -512,6 +823,18 @@ impl Output<'_> {
                 Type::Text(_) => writeln!(w, "        var_{aname}: var_{aname}.to_string(),")?,
                 _ => writeln!(w, "        var_{aname},")?,
             }
+        }
+        // P224: initialise persistent locals to default — same as the
+        // non-for-body factory path.  Without this the eager-collect
+        // factory builds a `StructName { … }` with the user-attribute
+        // fields but omits the persistent-locals fields that
+        // `emit_struct_def` declared, producing a Rust E0063 ("missing
+        // fields in initializer").
+        let var_table = &self.data.def(def_nr).variables;
+        for (v, tp) in persistent {
+            let n = sanitize(var_table.name(*v));
+            let init = persistent_default(tp);
+            writeln!(w, "        var_{n}: {init},")?;
         }
         // ForLoopBody: value buffer + index.
         writeln!(w, "        __values,")?;

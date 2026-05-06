@@ -1,7 +1,17 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // --- HTTP Server + WebSocket ---
-// Blocking server with polling model. Use `for req in srv` (I13 iterator).
+//
+// Two stacks:
+//   1. Single-client HTTP / WebSocket: `listen` + `next` + `ws_upgrade`.
+//      Use this for one-off request handlers and the shipped
+//      `for req in srv` iterator pattern.
+//   2. Multi-client WebSocket: `srv.run(on_connect, on_message)`.
+//      The clean event-driven surface used by multiplayer servers.
+//      Loft programs register two callbacks and Rust drives the
+//      accept loop, per-client polling, and disconnect detection.
+//      Disconnects are silently absorbed — the loft program is
+//      not notified.
 
 // --- Types (must come before all functions) ---
 
@@ -80,7 +90,7 @@ pub fn close(self: Server) {
   tcp_close(self.handle);
 }
 
-// --- WebSocket API ---
+// --- Single-client WebSocket API ---
 
 pub fn ws_upgrade() -> WebSocket {
   h = ws_upgrade_native();
@@ -99,4 +109,135 @@ pub fn send(self: WebSocket, msg: text) -> boolean {
 
 pub fn close(self: WebSocket) {
   ws_close_native(self.ws_id);
+}
+
+// --- Multi-client WebSocket primitives (internal) ---
+//
+// These wrap the per-slot accept / poll / iterate primitives that
+// the event pump uses internally.  They are NOT part of the public
+// surface — multi-client servers use `Server::run` instead.
+
+fn ws_accept_native(handle: integer) -> integer;
+#native "n_ws_accept_nonblocking"
+
+fn ws_clients_len_native() -> integer;
+#native "n_ws_clients_len"
+
+fn ws_client_active_native(id: integer) -> boolean;
+#native "n_ws_client_active"
+
+// Event-pump primitives.  `ws_next_event_native` returns true if
+// it loaded an event into the thread-local slots (kind / cid /
+// payload), false if nothing was pending.  `ws_idle_sleep_ms`
+// yields the CPU briefly when a drain pass produced zero events.
+fn ws_next_event_native(handle: integer) -> boolean;
+#native "n_ws_next_event"
+
+fn ws_event_kind_native() -> integer;
+#native "n_ws_event_kind"
+
+fn ws_event_client_id_native() -> integer;
+#native "n_ws_event_client_id"
+
+fn ws_event_payload_native() -> text;
+#native "n_ws_event_payload"
+
+fn ws_broadcast_native(handle: integer, msg: text) -> integer;
+#native "n_ws_broadcast"
+
+fn ws_idle_sleep_ms_native(ms: integer);
+#native "n_ws_idle_sleep_ms"
+
+// --- Multi-client WebSocket API (clean) ---
+//
+// The public surface for multi-client servers.  Loft programs
+// register a single event handler via `run` and Rust drives the
+// rest: accept, per-client polling, frame parsing, disconnect
+// detection.
+//
+//   srv.run(fn(ev: WsEvent) {
+//     if ev.connected {
+//       /* welcome / MAP send / seat */
+//     } else if ev.message {
+//       /* dispatch by ev.msg_id */
+//     }
+//   });
+//
+// One handler instead of two means the application's `state`
+// capture lives in a single closure — mutations through that
+// closure are visible across every invocation.
+//
+// Disconnects are absorbed silently — the loft program is never
+// notified.  This was an explicit design choice: per-client state
+// cleanup happens lazily on next access, not on a disconnect
+// callback.
+
+// Event delivered to the on_event handler.  `connected` and
+// `message` are mutually-exclusive booleans for fast dispatch
+// without an integer enum.  Wire format `<msg_id>:<payload>`
+// is parsed by `run` so msg_id and payload come pre-split.
+pub struct WsEvent {
+  connected: boolean,
+  message:   boolean,
+  cid:       integer,
+  msg_id:    integer,    // 0 for connected events
+  payload:   text        // "" for connected events
+}
+
+// Block forever, draining events and calling the handler.
+// Malformed message frames are logged at warn level and silently
+// dropped — the handler never sees them.
+pub fn run(self: Server, on_event: fn(WsEvent)) {
+  while true {
+    drained = 0;
+    while ws_next_event_native(self.handle) {
+      kind = ws_event_kind_native();
+      cid  = ws_event_client_id_native();
+      if kind == 0 {
+        on_event(WsEvent {
+          connected: true,
+          message:   false,
+          cid:       cid,
+          msg_id:    0,
+          payload:   ""
+        });
+      } else if kind == 1 {
+        raw = ws_event_payload_native();
+        i   = raw.find(":");
+        if i != null {
+          msg_id  = raw[..i] as integer;
+          payload = raw[i + 1..];
+          on_event(WsEvent {
+            connected: false,
+            message:   true,
+            cid:       cid,
+            msg_id:    msg_id,
+            payload:   payload
+          });
+        } else {
+          log_warn("server: dropped malformed frame from {cid}: {raw}");
+        }
+      }
+      // kind == 2 (Disconnected) absorbed silently.
+      drained = drained + 1;
+    }
+    if drained == 0 { ws_idle_sleep_ms_native(2); }
+  }
+}
+
+// Send a frame to a specific client.  Returns true on success.
+pub fn send_to(self: Server, client_id: integer, msg: text) -> boolean {
+  ws_send_native(client_id, msg)
+}
+
+// Send a frame to every active client.  Returns the count of
+// successful sends.  Iteration happens entirely in Rust.
+pub fn broadcast(self: Server, msg: text) -> integer {
+  ws_broadcast_native(self.handle, msg)
+}
+
+// Forcefully close one client's connection.  The slot is freed
+// for reuse by future accepts.
+pub fn disconnect(self: Server, client_id: integer) {
+  ws_close_native(client_id);
 }

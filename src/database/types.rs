@@ -904,6 +904,28 @@ impl Stores {
         }
     }
 
+    /// P213: register a `Parts::ChildRec(content)` type — a 4-byte u32
+    /// rec-id pointing at a child record co-located in the same Store
+    /// as the host.  Used by capturing-closure-in-struct-field codegen
+    /// to embed a closure record's rec-id directly in the host without
+    /// vector-header overhead.  Cascade is automatic via the
+    /// `copy_claims` / `remove_claims` `Parts::ChildRec` arms.
+    pub fn child_rec(&mut self, content: u16) -> u16 {
+        let name = if content == u16::MAX {
+            "child_rec".to_string()
+        } else {
+            format!("child_rec<{}>", &self.types[content as usize].name)
+        };
+        if let Some(nr) = self.names.get(&name) {
+            *nr
+        } else {
+            let num = self.types.len() as u16;
+            self.types.push(Type::data(&name, Parts::ChildRec(content)));
+            self.names.insert(name, num);
+            num
+        }
+    }
+
     pub fn hash(&mut self, content: u16, key: &[String]) -> u16 {
         let mut name = "hash<".to_string() + &self.types[content as usize].name + "[";
         let mut key_nrs = Vec::new();
@@ -1702,6 +1724,7 @@ impl Type {
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
             | Parts::Index(c, _, _)
+            | Parts::ChildRec(c)
             | Parts::Spacial(c, _) => c == tp,
             _ => false,
         }

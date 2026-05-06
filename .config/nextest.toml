@@ -39,13 +39,27 @@ path = "target/nextest/junit.xml"
 # them at the nextest dispatcher level, crossing the process boundary
 # the Rust Mutex can't.  The Mutex remains as belt-and-suspenders for
 # plain `cargo test` / developer loops.
+#
+# Same shape applies to multiplayer_v2: every scenario binds the
+# example v2 server on the fixed port 7878.  Without a single-slot
+# group, two scenarios racing for bind() flake the suite.
+
 [test-groups]
-html-wasm-serial = { max-threads = 1 }
+html-wasm-serial      = { max-threads = 1 }
+multiplayer-v2-serial = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
 
+[[profile.default.overrides]]
+filter = 'binary(multiplayer_v2)'
+test-group = 'multiplayer-v2-serial'
+
 [[profile.ci.overrides]]
 filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
+
+[[profile.ci.overrides]]
+filter = 'binary(multiplayer_v2)'
+test-group = 'multiplayer-v2-serial'

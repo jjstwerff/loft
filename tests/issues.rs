@@ -947,9 +947,11 @@ fn n1_native_pipeline_trivial_program() {
         loop_stack: Vec::new(),
         next_format_count: 0,
         yield_collect: false,
+        yield_collect_text: false,
         fn_ref_context: false,
         i32_literal_context: false,
         tuple_text_to_string: false,
+        coroutine_persistent_vars: std::collections::HashSet::new(),
         call_stack_prefix: None,
         wasm_browser: false,
     };
@@ -2158,6 +2160,127 @@ fn test() {
 }"
     )
     .result(Value::Null);
+}
+
+// ── P213 — Capturing closures in struct fields ──────────────────────────────
+// The capturing-closure-in-struct-field surface that was previously
+// rejected at parse time is now backed by `Parts::ChildRec(closure_kt)`
+// — a 4B u32 rec-id that points at a closure record co-located in
+// host's Store.  `OpClaimChildRec` writes; `OpRefFromChildRec` reads;
+// the cascade in `copy_claims` / `remove_claims` handles deep-copy and
+// free automatically when the host moves cross-store or is freed.
+
+/// P213: integer capture in a struct-field closure.  The canonical
+/// reproducer from PROBLEMS.md § 213.
+#[test]
+fn p213_struct_field_basic_int() {
+    code!(
+        "struct Box { cb: fn(integer) -> integer }
+fn run() -> integer {
+    n = 5;
+    b = Box { cb: fn(x: integer) -> integer { x + n } };
+    b.cb(10)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(15));
+}
+
+/// P213: multiple integer captures inside the same closure record —
+/// exercises the `Parts::ChildRec` cascade walking multiple fields of
+/// the closure record's struct.
+#[test]
+fn p213_struct_field_multi_int_capture() {
+    code!(
+        "struct Acc { add: fn(integer) -> integer }
+fn run() -> integer {
+    base = 100;
+    factor = 3;
+    a = Acc { add: fn(n: integer) -> integer { base + n * factor } };
+    a.add(7)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(121)); // 100 + 7 * 3
+}
+
+/// P216 — closed 2026-05-05.  Tuple-typed capture in closure body
+/// crashed under interp ("Incomplete record" at `src/store.rs:227`)
+/// and produced wrong results under native (read t.1 instead of t.0
+/// because field offsets were `u16::MAX`).  Root cause:
+/// `synthesize_closure_record` (`src/parser/vectors.rs:762`) added a
+/// `Type::Tuple` attribute to the closure record but never registered
+/// the synthetic `__tuple<…>` struct via `data.tuple_def(...)`.
+/// `fill_database` then saw `type_elm(&Type::Tuple(_))` return
+/// `u32::MAX` and silently skipped the attribute (line 381 gate),
+/// leaving the closure record with size 0 → `OpDatabase` panics
+/// claiming an empty record.  Fix walks each capture's `Type` in
+/// `synthesize_closure_record` and calls `tuple_def` for every
+/// `Type::Tuple` (recursively, so nested tuples register inside-out)
+/// before adding the attribute.
+#[test]
+fn p216_tuple_capture_int_first() {
+    code!(
+        "fn run() -> integer {
+    t = (3, 7);
+    f = fn(x: integer) -> integer { t.0 + x };
+    f(10)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(13)); // 3 + 10
+}
+
+/// P216 follow-up — capture of the second tuple element verifies
+/// per-element offset handling on both backends (the original native
+/// bug returned `t.1` for `t.0` reads because all element writes
+/// targeted `pos + u16::MAX`, so the last write won and both reads
+/// returned the same garbage).
+#[test]
+fn p216_tuple_capture_int_second() {
+    code!(
+        "fn run() -> integer {
+    t = (3, 7);
+    f = fn(x: integer) -> integer { t.1 + x };
+    f(10)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(17)); // 7 + 10
+}
+
+/// P216 follow-up — three-element tuple capture sums all elements.
+/// Verifies the per-element offset table (4B-aligned for i32-narrow
+/// or 8B-aligned for i64) is correctly populated in the closure
+/// record's tuple field.
+#[test]
+fn p216_tuple_capture_three_elements() {
+    code!(
+        "fn run() -> integer {
+    t = (1, 2, 3);
+    f = fn(x: integer) -> integer { t.0 + t.1 + t.2 + x };
+    f(100)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(106)); // 1+2+3+100
+}
+
+/// P213: default-initialised fn-ref field stays at `rec=0` in the
+/// closure_rec slot — no record gets claimed; reading constructs the
+/// null sentinel correctly.  Calling such a field is undefined (the
+/// d_nr is also 0); only field READ is exercised here.
+#[test]
+fn p213_struct_field_default_init() {
+    code!(
+        "struct Holder { name: text, cb: fn(integer) -> integer }
+fn run() -> text {
+    h = Holder { name: \"empty\" };
+    h.name
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("empty".to_string()));
 }
 
 // ── L6 — Field constraints and JSON-style struct literals ─────────────────────
@@ -8873,9 +8996,11 @@ fn p144_ref_param_forward_native() {
             loop_stack: Vec::new(),
             next_format_count: 0,
             yield_collect: false,
+            yield_collect_text: false,
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,
+            coroutine_persistent_vars: std::collections::HashSet::new(),
             call_stack_prefix: None,
             wasm_browser: false,
         };
@@ -9264,9 +9389,11 @@ fn p157_native_refvar_forwarding_with_preeval() {
             loop_stack: Vec::new(),
             next_format_count: 0,
             yield_collect: false,
+            yield_collect_text: false,
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,
+            coroutine_persistent_vars: std::collections::HashSet::new(),
             call_stack_prefix: None,
             wasm_browser: false,
         };
@@ -11191,6 +11318,339 @@ fn run() -> integer {
     .result(Value::Int(10));
 }
 
+/// P211 — closed 2026-05-05.  Coroutine `yield text` now round-trips
+/// through the native state-machine.  The trait `LoftCoroutine` only
+/// had `next_i64`, so the lowering for a `iterator<text>` generator
+/// emitted `return ("alice") as i64;` (rejected by rustc with E0606
+/// "casting `&'static str` as `i64` is invalid"), and the consumer's
+/// `OpCoroutineNext` size-16 fallback emitted `... as i32` followed
+/// by `.to_string()` (E0425 "cast cannot be followed by a method
+/// call").  Fix adds `next_text` next to `next_i64` on the trait
+/// (each defaulted to its type's exhaustion sentinel), routes
+/// text-yielding generators to override `next_text`, and dispatches
+/// `OpCoroutineNext` size 16 (= `size_of::<&str>()`) to a new
+/// `coroutine_next_text` runtime helper.  Interp drove the test
+/// through the bytecode VM (which already supported size-16 yields)
+/// so it always worked; this test pins the native fix via the
+/// `tests/scripts/51-coroutines.loft` integration test that runs
+/// under `--native`, plus an interp-side smoke check here.
+#[test]
+fn p211_coroutine_yield_text() {
+    // Sum the character lengths of three yielded texts.  Length-sum
+    // guards against both the original interp symptom (empty stdout)
+    // and the native codegen errors (E0606 / E0425) that motivated
+    // the fix, while sidestepping a separate text-concat issue
+    // (`out + s + ","` codegen) that's unrelated to P211.
+    code!(
+        "fn names() -> iterator<text> {
+    yield \"alice\";
+    yield \"bob\";
+    yield \"carol\";
+}
+fn run() -> integer {
+    total = 0;
+    for s in names() { total = total + s.len(); }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(13));
+}
+
+/// P211 follow-up — text yield driven by a `while` loop.  Combines
+/// P210's `Value::Loop` arm in `collect_segments` with the new
+/// `next_text` channel — the state machine must collect a `Loop`
+/// segment AND emit `next_text` (not `next_i64`) when the yield
+/// type is `text`.
+#[test]
+fn p211_coroutine_yield_text_while() {
+    code!(
+        "fn ticks_for_p211(n: integer) -> iterator<text> {
+    i = 0;
+    while i < n {
+        yield \"tick\";
+        i = i + 1;
+    }
+}
+fn run() -> integer {
+    seen = 0;
+    for t in ticks_for_p211(3) { if t == \"tick\" { seen = seen + 1; } }
+    seen
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(3));
+}
+
+/// P219 — closed 2026-05-05.  Vector-element ForLoopBody in a
+/// generator emitted invalid Rust for the eager-collect factory.
+/// Root cause: scopes' `insert_free` adds `Return(Null)` at the
+/// end of the function body block; `output_block`'s
+/// `patch_hoisted_returns` (Pass 2) coalesces `[…, Loop(…),
+/// Return(Null)]` into `[…, Return(Loop(…))]`; `Value::Return(Loop)`
+/// then emits as `return 'l4: loop {…}`, which is invalid because
+/// the loop is unit-typed and the factory expects
+/// `Box<dyn LoftCoroutine>`.  Range-for didn't trip this because
+/// its IR shape doesn't include a top-level `Loop` operator that
+/// the patch can pair with the trailing `Return(Null)`.  Fix in
+/// `src/generation/coroutine.rs::emit_for_body_factory`: strip
+/// trailing `Return` ops from the body's operator list before
+/// `generate_expr_buf` runs.  The factory drives the body purely
+/// for its yield side effects (populates `__values`); the actual
+/// factory return is `Box::new(struct_name { … })` emitted after.
+#[test]
+fn p219_vector_for_yield_in_generator() {
+    code!(
+        "fn nums() -> iterator<integer> {
+    for n in [10, 20, 30] {
+        yield n;
+    }
+}
+fn run() -> integer {
+    sum = 0;
+    for x in nums() { sum = sum + x; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(60));
+}
+
+/// P219 follow-up — text yield from a vector-for body.  Same fix
+/// site, different yield type.
+#[test]
+fn p219_vector_for_yield_text() {
+    code!(
+        "fn names() -> iterator<text> {
+    for n in [\"a\", \"bb\", \"ccc\"] {
+        yield n;
+    }
+}
+fn run() -> integer {
+    total = 0;
+    for s in names() { total = total + s.len(); }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(6)); // 1 + 2 + 3
+}
+
+/// P223 — closed 2026-05-05.  Self-prepend `s = "literal" + s`
+/// produced wrong output on both backends.  Two compounding bugs:
+/// (a) `parse_operators` captured `orig_var = s` BEFORE the
+///     recursive parse filled `code` — for a literal-first concat,
+///     `code` ends up as `Text("literal")`, but `orig_var` still
+///     pointed at `s`, so `parse_append_text` used `s` as the
+///     accumulator and emitted `OpAppendText(s, "literal")` as the
+///     first op.  Combined with `assign_text`'s pre-clear when
+///     no self-append is detected, this destroyed `s`'s original
+///     content.
+/// (b) `code_references_var` (used by `assign_text` to decide when
+///     to wrap the RHS in a protective work-text) didn't walk
+///     `Value::Block` — the work-text Block produced by
+///     `parse_append_text` for `"lit" + var` carries `Var(var)`
+///     deep inside, so the wrap was skipped and the interpreter's
+///     clear-before-evaluate text-Set semantics destroyed the
+///     content before reading.
+/// Fix: (1) `parse_operators` only passes `orig_var` to
+/// `parse_append_text` when `code` (unspanned) still equals
+/// `Var(orig_var)` after recursion; falls back to `u16::MAX`
+/// otherwise.  (2) `code_references_var` walks `Value::Block`.
+/// (3) `Parser::append_to_text` (RefVar(Text) parameter path)
+/// gained the same self-reference wrap as `assign_text`, so the
+/// text-return-buffer case gets the same protection.  (4) Native
+/// codegen's `Set(RefVar(Text), …)` emission wraps the RHS in
+/// parens before appending `.to_string()` to fix Rust method-call
+/// precedence (`&var.to_string()` parses as `&(var.to_string())`,
+/// E0308; `(&var).to_string()` is correct).
+#[test]
+fn p223_self_prepend_local_text() {
+    code!(
+        "fn run() -> text {
+    s = \"world\";
+    s = \"hello \" + s;
+    s
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("hello world".to_string()));
+}
+
+/// P223 follow-up — RefVar(Text) parameter path (text-returning
+/// function).  Same shape but exercises `append_to_text`'s wrap
+/// rather than `assign_text`'s.
+#[test]
+fn p223_self_prepend_in_text_returning_fn() {
+    code!(
+        "fn run() -> text {
+    out = \"end\";
+    out = \"start: \" + out;
+    out
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("start: end".to_string()));
+}
+
+/// P218 — closed 2026-05-05.  Coroutine yielding a format string
+/// that interpolates a captured parameter rejected under native with
+/// E0425 ("cannot find value `var___work_2` in this scope").  The
+/// IR's function-entry `Set(__work_N, "")` ops were emitted inside
+/// state 0's match arm via `let mut var___work_N: String = …`,
+/// scoping the binding to arm 0 only — every later arm referencing
+/// the same buffer (e.g. a sibling yield with another format string)
+/// failed to compile.  Two emit sites needed the fix: `emit_next_i64`
+/// (the state-machine method body) and `emit_for_body_factory` (the
+/// eager-collect factory used when the body contains a for-loop or
+/// while-loop with yields).  Both now pre-declare `__work_*` text
+/// locals at function scope before the per-state code, then mark
+/// them in `self.declared` so the per-state Set ops emit as plain
+/// assignments.  Pinned by `tests/issues.rs::p218_*` and the
+/// extended `tests/scripts/51-coroutines.loft` (covers both backends
+/// via `tests/native.rs`).
+#[test]
+fn p218_coroutine_yield_format_with_param() {
+    code!(
+        "fn greet(who: text) -> iterator<text> {
+    yield \"hello, {who}\";
+    yield \"bye, {who}\";
+}
+fn run() -> integer {
+    total = 0;
+    for s in greet(\"world\") { total = total + s.len(); }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(22)); // "hello, world" (12) + "bye, world" (10)
+}
+
+/// P218 follow-up — same fix-shape but on the eager-collect factory
+/// path (`emit_for_body_factory`).  A `while` body yielding a format
+/// string that interpolates both a captured parameter AND a
+/// state-machine local (the loop counter) needs the work-buffer
+/// pre-declaration on the factory side.
+#[test]
+fn p218_coroutine_while_yield_format() {
+    code!(
+        "fn enumerate_for_p218(label: text, n: integer) -> iterator<text> {
+    i = 0;
+    while i < n {
+        yield \"{label}={i}\";
+        i = i + 1;
+    }
+}
+fn run() -> integer {
+    total = 0;
+    for s in enumerate_for_p218(\"x\", 3) { total = total + s.len(); }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(9)); // "x=0" (3) + "x=1" (3) + "x=2" (3)
+}
+
+/// P217 — closed 2026-05-05.  Text-accumulator pattern `out = out + …`
+/// emitted `OpAppendText(out, Var(out))` as the FIRST op (self-append),
+/// followed by the per-piece appends.  Interp doubled the existing
+/// content (`"x"; out = out + "y"` → `"xxy"`); native rejected with
+/// E0502 ("cannot borrow `*var_out` as mutable because it is also
+/// borrowed as immutable") because the lowering produced
+/// `*var_out += &*(&*var_out);`.  Fix in
+/// `src/parser/vectors.rs::parse_append_text` detects when the first
+/// piece is `Value::Var(orig_var)` (the destination itself, possibly
+/// Span-wrapped) and skips the redundant initial append.  The
+/// accumulator already holds the correct starting value; emitting
+/// the self-append corrupted it.
+#[test]
+fn p217_text_self_accumulator() {
+    code!(
+        "fn run() -> text {
+    out = \"x\";
+    out = out + \"y\";
+    out
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("xy".to_string()));
+}
+
+/// P220 — closed 2026-05-05.  Empty `""` literals stored in a
+/// `vector<text>` and then deep-copied (via `vector_add`, struct
+/// field assignment, `OpCopyRecord`, parallel-worker boundary etc.)
+/// were silently re-classified as `null` on the destination.  Root
+/// cause was `Stores::copy_claims` in `src/database/allocation.rs`:
+/// the text arm checked the *string content* via `s.is_empty()` to
+/// decide whether to allocate or write the null sentinel.  But
+/// `get_str(0)` returns `STRING_NULL` (`"\0"`, len 1) for a null
+/// source, so the empty-content check never fired for genuine
+/// nulls — it ONLY fired when the source had a real allocated
+/// empty string.  Result: copying a `""` element produced `null`
+/// on the destination.  Surfaced during TIC_TAC_TOE v2 development
+/// (the v2 server's comment at
+/// `lib/game_protocol/examples/tictactoe_server_v2.loft:53-56`
+/// recorded the workaround discovery — "use null consistently").
+/// Fix discriminates on the source `cur` field (non-zero =
+/// allocated, regardless of length), preserving null on
+/// null-source and round-tripping `""` correctly.
+#[test]
+fn p220_empty_string_in_vector_text_round_trips_through_struct_field() {
+    code!(
+        "struct G { cells: vector<text> }
+fn run() -> integer {
+    cs: vector<text> = [];
+    for _ in 0..3 { cs += [\"\"]; }
+    g = G { cells: cs };
+    if g.cells[0] == \"\" { 1 } else { 0 }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1));
+}
+
+/// P220 follow-up — null sentinel must still be preserved across
+/// the same deep-copy path.  A `null` source must NOT become an
+/// allocated empty-string after a round-trip; it must stay null.
+/// (The original buggy code conflated empty content with null —
+/// the fix's discriminator is the source `cur` field, so this
+/// test pins the null-preserving behaviour.)
+#[test]
+fn p220_null_text_preserved_through_struct_field() {
+    code!(
+        "struct G { cells: vector<text> }
+fn run() -> integer {
+    cs: vector<text> = [];
+    cs += [null];
+    g = G { cells: cs };
+    if g.cells[0] == null { 1 } else { 0 }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1));
+}
+
+/// P217 follow-up — three-piece accumulator `out = out + a + b` (the
+/// idiom that surfaced via P211's text-yield concat).  Without the
+/// fix, the lowering emitted `OpAppendText(out, Var(out));
+/// OpAppendText(out, "a"); OpAppendText(out, "b")` so the
+/// destination's existing value was duplicated before each new piece
+/// was appended.
+#[test]
+fn p217_text_accumulator_chain() {
+    code!(
+        "fn run() -> text {
+    out = \"\";
+    for s in [\"alice\", \"bob\", \"carol\"] {
+        out = out + s + \",\";
+    }
+    out
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("alice,bob,carol,".to_string()));
+}
+
 /// P209 — closed 2026-05-04.  Match guard arms with pattern bindings
 /// (`x if x < 0 => …`) saw the binding variable as uninitialised
 /// because the binding `v_set(x, subject)` was prepended only to the
@@ -11277,4 +11737,183 @@ fn run() -> text { label(42) }"
     )
     .expr("run()")
     .result(Value::Text("42!".to_string()));
+}
+
+/// P224 — closed 2026-05-05.  A coroutine yielded a value derived from
+/// a function-local variable (declared inside the generator body, not a
+/// parameter); native rejected with E0425 because the local was
+/// declared as a `let mut` inside state-arm 0's match arm and out of
+/// scope from arm 1+.  Even with arm-scope fixed, the value would not
+/// have persisted across `next_*` calls (each call's stack is fresh).
+/// Fix promotes non-argument coroutine-body locals (primitive + text
+/// types) to fields on the generator struct so writes from one state
+/// arm survive into the next.  See `coroutine_persistent_locals` in
+/// `src/generation/coroutine.rs`.
+#[test]
+fn p224_coroutine_local_int_capture() {
+    code!(
+        "fn gen() -> iterator<integer> {
+    n = 10;
+    yield n + 1;
+    yield n + 2;
+}
+fn run() -> integer {
+    total = 0;
+    for x in gen() { total = total + x; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(23)); // 11 + 12
+}
+
+/// P224 — text counterpart.  A text-typed function-local interpolated
+/// into a yielded format string.  Same root cause + fix as the
+/// integer case; verifies the persistent-locals mechanism handles
+/// `Type::Text` (factory-init `String::new()`, `&self.var_X` reads,
+/// `self.var_X = (…).to_string()` writes).
+#[test]
+fn p224_coroutine_local_text_capture() {
+    code!(
+        "fn gen() -> iterator<text> {
+    name = \"alice\";
+    yield \"hi, {name}\";
+    yield \"bye, {name}\";
+}
+fn run() -> integer {
+    total = 0;
+    for s in gen() { total = total + s.len(); }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(19)); // "hi, alice" (9) + "bye, alice" (10)
+}
+
+/// P225 — closed 2026-05-05.  `yield from` mixed with `Simple` yields
+/// in the same generator produced duplicate output of the first yield
+/// on native.  Root cause: the eager-collect factory pushes ALL
+/// segments (Simple, YieldFrom, ForLoopBody) into `__values`, but
+/// `emit_next_i64` ALSO emitted per-segment match arms that
+/// re-executed the Simple yield via `return val`.  State 0 returned
+/// `"start: hi"` directly, then state 1 popped `__values[0]` which
+/// was also `"start: hi"`.  Fix: when any segment is `ForLoopBody`,
+/// the impl collapses to a single pop-from-buffer arm — the factory
+/// owns all the work.
+#[test]
+fn p225_yield_from_mixed_with_simple_yields() {
+    code!(
+        "fn inner(s: text) -> iterator<text> {
+    yield \"mid: {s}\";
+}
+fn outer(s: text) -> iterator<text> {
+    yield \"start: {s}\";
+    yield from inner(s);
+    yield \"end: {s}\";
+}
+fn run() -> integer {
+    total = 0;
+    for x in outer(\"hi\") { total = total + x.len(); }
+    total
+}"
+    )
+    .expr("run()")
+    // "start: hi" (9) + "mid: hi" (7) + "end: hi" (7) = 23
+    .result(Value::Int(23));
+}
+
+/// P227 — closed 2026-05-05.  Calling a `fn(...) -> text` value via
+/// fn-ref dispatch crashed both backends, regardless of where the
+/// fn-ref lived (local variable, struct field, parameter) or whether
+/// the lambda captured.
+///
+/// Two independent root causes:
+///
+/// 1. **Native** dispatch wrapper allocated `_fnref_work` block-scoped,
+///    so the lambda's returned `Str` borrowed a buffer that dropped
+///    before the outer `.to_string()` read its bytes ⇒
+///    `ptr::copy_nonoverlapping` UB.
+/// 2. **Interp** parser sites in `parser/control.rs` and
+///    `parser/operators.rs` allocated work-buffers as
+///    `(0..deps.len())` where `deps = []` for fn-ref types ⇒ zero
+///    buffers pushed ⇒ lambda's stack slot for `__work_1` read
+///    garbage ⇒ SIGSEGV.
+///
+/// Fix:
+/// - Parser allocates exactly ONE `work_text` var when the fn-ref
+///   return type is `Type::Text`, regardless of `deps.len()`.  The
+///   buffer lives at caller-function scope.
+/// - Native `output_call_ref` (a) detects hidden attrs by TYPE
+///   (`Type::RefVar(Type::Text)`) instead of name (work-buffer attrs
+///   are named after user-shadowed text vars, not `__work_*`); (b)
+///   strips the trailing work-buffer arg from candidate matching;
+///   (c) threads the parser-injected `&mut String` into the dispatch
+///   arm via `_farg_<n>` instead of allocating its own block-scope
+///   buffer.
+///
+/// Pinned by p227_text_fn_ref_local_call,
+/// p227_text_fn_ref_struct_field, p227_text_fn_ref_capturing_closure,
+/// p227_text_fn_ref_via_parameter.
+#[test]
+fn p227_text_fn_ref_local_call() {
+    code!(
+        "fn run() -> text {
+    f: fn(integer) -> text = fn(n: integer) -> text { \"v: {n}\" };
+    f(42)
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("v: 42".to_string()));
+}
+
+/// P227 — capturing closure assigned to a local fn-ref variable.
+/// Verifies the closure record is correctly threaded alongside the
+/// work-buffer arg (closure DbRef + `&mut String` are distinct
+/// hidden parameters; the dispatch synth-args walk must place each
+/// at the right attribute slot).
+#[test]
+fn p227_text_fn_ref_local_with_capture() {
+    code!(
+        "fn run() -> text {
+    label = \"hi\";
+    f: fn(integer) -> text = fn(n: integer) -> text { \"{label}: {n}\" };
+    f(42)
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("hi: 42".to_string()));
+}
+
+/// P227 — text-returning fn-ref stored in a struct field, no capture.
+/// Exercises the same dispatch path as P213's int variant but with
+/// the work-buffer wired through.
+#[test]
+fn p227_text_fn_ref_struct_field() {
+    code!(
+        "struct G { fmt: fn(integer) -> text }
+fn run() -> text {
+    g = G { fmt: fn(n: integer) -> text { \"v: {n}\" } };
+    g.fmt(42)
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("v: 42".to_string()));
+}
+
+/// P227 — text-returning fn-ref stored in a struct field WITH
+/// capturing closure (the original P227 reproducer).  The lambda
+/// captures `label` and reads it from the closure record while
+/// formatting into the caller's work-buffer.
+#[test]
+fn p227_text_fn_ref_struct_field_capture() {
+    code!(
+        "struct G { fmt: fn(integer) -> text }
+fn run() -> text {
+    label = \"z\";
+    g = G { fmt: fn(n: integer) -> text { \"{label}: {n}\" } };
+    g.fmt(42)
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("z: 42".to_string()));
 }

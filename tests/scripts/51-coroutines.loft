@@ -36,6 +36,57 @@ fn outer_with_from() -> iterator<integer> {
   yield 2;
 }
 
+// P211: text-yielding generator with sequential top-level yields.
+fn names() -> iterator<text> {
+  yield "alice";
+  yield "bob";
+  yield "carol";
+}
+
+// P211: text-yielding generator driven by `while` (exercises both
+// P210's Value::Loop arm in collect_segments and the next_text path
+// for non-trivial state).
+fn ticks_text(n: integer) -> iterator<text> {
+  i = 0;
+  while i < n {
+    yield "tick";
+    i = i + 1;
+  }
+}
+
+// P218: text-yielding generator yielding a format string that
+// interpolates a captured parameter.  Exercises the work-buffer
+// pre-declaration in `next_text` — without it, `var___work_*` for
+// each yield-arm's format string declared inside arm 0's scope and
+// rejected with E0425 in subsequent arms.
+fn greet_p218(who: text) -> iterator<text> {
+  yield "hello, {who}";
+  yield "bye, {who}";
+}
+
+// P218 follow-up: `while` body yielding a format string that uses
+// both a captured parameter and a state-machine local (the loop
+// counter).  Exercises pre-declaration in the eager-collect factory
+// (`emit_for_body_factory`) — same shape as `next_text` but
+// distinct codegen path.
+fn enumerate_p218(label: text, n: integer) -> iterator<text> {
+  i = 0;
+  while i < n {
+    yield "{label}={i}";
+    i = i + 1;
+  }
+}
+
+// P219: vector-element for-loop body in a generator.  Was rejected
+// under native because `patch_hoisted_returns` coalesced the
+// trailing `Return(Null)` with the `Loop` into `Return(Loop)`,
+// emitted as `return 'l4: loop {…}` (E0308 unit vs Box<...>).
+fn nums_p219() -> iterator<integer> {
+  for n in [10, 20, 30] {
+    yield n;
+  }
+}
+
 fn main() {
   // --- CO1.3: next() advances generator ---
   gen = count();
@@ -70,6 +121,33 @@ fn main() {
   yf_total = 0;
   for n in outer_with_from() { yf_total += n; }
   assert(yf_total == 33, "yield from: {yf_total}");
+
+  // --- P211: text-yielding generator round-trips ---
+  joined = "";
+  for s in names() { joined = joined + s + ","; }
+  assert(joined == "alice,bob,carol,", "text yield concat: {joined}");
+
+  // --- P211: text yield from a `while` loop ---
+  ticks_seen = 0;
+  for t in ticks_text(4) { ticks_seen = ticks_seen + 1; assert(t == "tick", "tick val"); }
+  assert(ticks_seen == 4, "ticks count: {ticks_seen}");
+
+  // --- P218: text yield interpolating a captured parameter ---
+  greet_total = 0;
+  for s in greet_p218("world") { greet_total = greet_total + s.len(); }
+  assert(greet_total == "hello, world".len() + "bye, world".len(),
+         "greet len: {greet_total}");
+
+  // --- P218 follow-up: while + format-with-param + counter ---
+  enum_total = 0;
+  for s in enumerate_p218("x", 3) { enum_total = enum_total + s.len(); }
+  assert(enum_total == "x=0".len() + "x=1".len() + "x=2".len(),
+         "enumerate len: {enum_total}");
+
+  // --- P219: vector-element for-loop in generator ---
+  p219_sum = 0;
+  for n in nums_p219() { p219_sum = p219_sum + n; }
+  assert(p219_sum == 60, "p219 sum: {p219_sum}");
 
   println("CO1: coroutines ok");
 }

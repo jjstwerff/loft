@@ -1919,17 +1919,26 @@ impl Parser {
                 self.cl("OpGetField", &[code, p, info])
             }
             Type::Function(_, _, _) => {
-                // Storage holds the 4-byte i32 d_nr; the stack-side
-                // fn-ref slot is 20 bytes (8B i64 d_nr + 12B null
-                // closure DbRef).  Read d_nr via OpGetInt4 (pushes
-                // 8B), then push a 12B null sentinel for the closure
-                // half.  Mirrors `gen_fn_ref_value`'s "if value
-                // generated < 16 bytes, fill" pattern but emits the
-                // sequence inline as a Block so callers see a single
-                // Type::Function value.
-                let read_dnr = self.cl("OpGetInt4", &[code, p]);
-                let null_clos = self.cl("OpNullRefSentinel", &[]);
-                crate::data::v_block(vec![read_dnr, null_clos], tp.clone(), "fn_ref_field_read")
+                // P213: storage is two database fields per loft attribute
+                //   `<attr>`              — 4B i32 holding the lambda's d_nr
+                //   `<attr>__closure_rec` — 4B vector header at pos+4
+                //                            (empty = non-capturing /
+                //                            default-init; populated =
+                //                            capturing closure record
+                //                            co-located in host's Store).
+                // Read both halves: `OpGetInt4` pushes the 8B d_nr,
+                // `OpVectorFirstOrNull` pushes the 12B closure DbRef
+                // (or the null sentinel when the vector is empty).
+                // Together they form the 20B stack-side fn-ref slot
+                // shape `fn_call_ref` already consumes unchanged.
+                let read_dnr = self.cl("OpGetInt4", &[code.clone(), p.clone()]);
+                let crec_pos = match &p {
+                    Value::Int(pi) => Value::Int(pi + 4),
+                    _ => Value::Int(0),
+                };
+                let crec_field = self.cl("OpGetField", &[code, crec_pos, Value::Int(0)]);
+                let read_clos = self.cl("OpRefFromChildRec", &[crec_field]);
+                crate::data::v_block(vec![read_dnr, read_clos], tp.clone(), "fn_ref_field_read")
             }
             Type::Tuple(elems) => {
                 // Plan-06 phase 4d: tuple struct field read.  Each
@@ -2256,46 +2265,61 @@ impl Parser {
                 self.cl("OpSetInt4", &[ref_code, pos_val, val_code])
             }
             Type::Function(_, _, _) => {
-                // Storage holds the 4-byte i32 d_nr only — closures
-                // (the 12-byte trailing half of a 20-byte stack
-                // fn-ref slot) are NOT stored here.  Reduce
-                // `Value::FnRef` to its bare `Value::Int(d_nr)` so
-                // the literal lambda case bypasses any tuple shape;
-                // for non-literal sources (Var of fn-ref, TupleGet
-                // of a fn-ref tuple element, function-call return)
-                // the interpreter's `TupleGet`/`Var` codegen pushes
-                // only the d_nr's 8 bytes via `OpVarInt`, and the
-                // native template substitution in
-                // `src/generation/calls.rs` projects `.0` from the
-                // `(u32, DbRef)` fn-ref tuple before the i32 cast.
+                // P213: storage is now TWO database fields per loft
+                // attribute — `<attr>` (4B int holding the lambda's
+                // d_nr; database name matches the loft attribute name
+                // so `database.position(name)` lookups still resolve)
+                // and `<attr>__closure_rec` (4B vector header at
+                // `pos + 4`, pointing at the co-located closure record
+                // in host's Store; empty for non-capturing).  At
+                // read time `OpGetInt4` recovers the d_nr;
+                // `OpVectorFirstOrNull` recovers the closure DbRef.
                 //
-                // P213 — a *capturing* closure (`Value::FnRef` with a
-                // non-MAX closure_var, typically wrapped in a
-                // `fn_ref_with_closure` Block that allocates the
-                // record) cannot be stored: the field is 4 bytes but
-                // the value is 16 (4B d_nr + 12B closure DbRef).
-                // Previously fell into `other => other`, leaving the
-                // 16-byte Block to OpSetInt4 which wrote 4 bytes and
-                // left 12 bytes of the closure DbRef on the stack
-                // corrupting downstream state (interp panic at
-                // `store.rs:963`, native E0308).  Now we walk the
-                // val_code looking for a capturing FnRef and reject
-                // with a clear diagnostic plus the workaround.
-                let captures = capturing_fn_ref(&val_code);
-                if !self.first_pass && captures {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "capturing closures cannot be stored in struct fields \
-                         (struct fn-ref fields hold only the function id, not the captured environment); \
-                         define the function at file scope, or pass the closure as a parameter / return it from a function"
-                    );
+                // Field-write paths:
+                //   - Non-capturing lambda (`FnRef(d, MAX, _)`):
+                //     write d_nr only; the closure_rec vector stays
+                //     at its zero default (no records).
+                //   - Capturing lambda (a `fn_ref_with_closure` Block
+                //     ending in `FnRef(d, w, _)`): run the lambda's
+                //     existing alloc_steps to build the closure
+                //     record in parent's Store under `var(w)`, then
+                //     write d_nr + `OpAppendVector` deep-copies the
+                //     parent-Store closure record into element [0]
+                //     of host's `__closure_rec` vector.  Parent's
+                //     record gets freed by the existing
+                //     parent-scope `OpFreeRef(w)`; host owns its own
+                //     deep-copied copy.
+                //   - Non-inline source (Var / Call returning a
+                //     fn-ref): diagnose ("only inline lambda
+                //     literals can be stored in fn-ref struct
+                //     fields in this release") — out of scope here;
+                //     follow-on plan extends to the non-inline case.
+                //
+                // Record the lambda's d_nr on the host attribute so
+                // `typedef::fill_database`'s `Type::Function` arm
+                // can register the `__closure_rec` field with the
+                // correct closure-record schema.  Heterogeneous
+                // captures across multiple constructors of the same
+                // host struct are diagnosed at the second site.
+                if let Some((lambda_d, _w)) = find_capturing_fn_ref(&val_code)
+                    && f_nr != usize::MAX
+                {
+                    let lambda_d_u = lambda_d as u32;
+                    let prev = self.data.def(d_nr).attributes[f_nr].assigned_lambda_d_nr;
+                    if prev == u32::MAX {
+                        self.data.definitions[d_nr as usize].attributes[f_nr]
+                            .assigned_lambda_d_nr = lambda_d_u;
+                    } else if prev != lambda_d_u && !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "heterogeneous capture shapes per fn-ref struct field are not supported \
+                             (this lambda's captured environment differs from the previously-assigned \
+                              lambda's); split into two structs or unify the captures"
+                        );
+                    }
                 }
-                let d_nr_only = match val_code {
-                    Value::FnRef(d_nr, _, _) => Value::Int(d_nr),
-                    other => other,
-                };
-                self.cl("OpSetInt4", &[ref_code, pos_val, d_nr_only])
+                emit_fn_ref_field_write(self, d_nr, f_nr, ref_code, pos_val, &val_code)
             }
             Type::Tuple(ref elems) => {
                 // Plan-06 phase 4d: tuple struct field assignment.
@@ -4020,18 +4044,138 @@ fn tests_base_dir(cur_dir: &str) -> &str {
 
 /// Walk a parsed expression looking for a `Value::FnRef` with a
 /// non-MAX closure_var — the marker that the closure captures one or
-/// more outer variables.  Used by `set_field_check`'s `Type::Function`
-/// arm (P213) to reject capturing closures that can't fit the 4-byte
-/// struct-field layout.  Descends through Block, Span, and Set
-/// wrappers since the parser typically wraps the FnRef in a
-/// `fn_ref_with_closure` block alongside the closure-record allocation
-/// statements.
-fn capturing_fn_ref(v: &Value) -> bool {
+/// P213: locate the capturing `Value::FnRef(d_nr, w, _)` inside `v` and
+/// return `(d_nr, w)`.  Mirrors `capturing_fn_ref` (the bool variant)
+/// but extracts the lambda's `d_nr` so callers can record it on the
+/// host attribute via `Attribute::assigned_lambda_d_nr`.  Returns
+/// `None` when no capturing FnRef is present.  Walks Block / Set /
+/// Span wrappers built by `parser/vectors.rs` around the `OpDatabase`
+/// allocation steps.
+fn find_capturing_fn_ref(v: &Value) -> Option<(i32, u16)> {
     match v.unspan() {
-        Value::FnRef(_, w, _) => *w != u16::MAX,
-        Value::Block(bl) => bl.operators.iter().any(capturing_fn_ref),
-        Value::Set(_, rhs) => capturing_fn_ref(rhs),
-        _ => false,
+        Value::FnRef(d, w, _) if *w != u16::MAX => Some((*d, *w)),
+        Value::Block(bl) => bl.operators.iter().find_map(find_capturing_fn_ref),
+        Value::Set(_, rhs) => find_capturing_fn_ref(rhs),
+        _ => None,
+    }
+}
+
+/// P213: emit the IR for writing a fn-ref to a struct field.
+///
+/// Three cases:
+/// - Inline non-capturing lambda (`Value::FnRef(d, MAX, _)`): write
+///   `OpSetInt4(d_nr)`; the closure_rec vector stays empty.
+/// - Inline capturing lambda (a `fn_ref_with_closure` Block ending in
+///   `Value::FnRef(d, w, _)`): run the lambda's existing alloc_steps
+///   (allocate the closure record in parent's Store under `var(w)`),
+///   write `OpSetInt4(d_nr)`, then `OpAppendVector` deep-copies the
+///   parent-Store closure record into element [0] of the host's
+///   `__closure_rec` vector field.  Parent's record is freed by the
+///   existing parent-scope `OpFreeRef(w)`; host owns its own copy.
+/// - Non-inline source (`Var` / `Call` returning a fn-ref) or unrecognised
+///   shape: emit a placeholder `OpSetInt4(0)` write and a parse-time
+///   diagnostic so the user sees the limitation in the second pass.
+fn emit_fn_ref_field_write(
+    p: &mut Parser,
+    _d_nr: u32,
+    f_nr: usize,
+    ref_code: Value,
+    pos_val: Value,
+    val_code: &Value,
+) -> Value {
+    let unspanned = val_code.unspan().clone();
+    match unspanned {
+        Value::FnRef(d, w, _) if w == u16::MAX => {
+            // Non-capturing inline lambda — just write the d_nr.
+            p.cl("OpSetInt4", &[ref_code, pos_val, Value::Int(d)])
+        }
+        Value::Block(bl) if bl.name == "fn_ref_with_closure" => {
+            // Capturing inline lambda.  bl.operators = [
+            //   alloc_steps...,
+            //   FnRef(d, w, _)  // last element
+            // ].
+            let last = bl.operators.last().cloned().unwrap_or(Value::Null);
+            let Value::FnRef(d, w, _) = last.unspan() else {
+                if !p.first_pass {
+                    diagnostic!(
+                        p.lexer,
+                        Level::Error,
+                        "internal: fn_ref_with_closure block did not end in FnRef"
+                    );
+                }
+                return Value::Null;
+            };
+            let (lambda_d, w_var) = (*d, *w);
+            let mut ops: Vec<Value> = bl
+                .operators
+                .iter()
+                .take(bl.operators.len() - 1)
+                .cloned()
+                .collect();
+            // Write the d_nr at the loft-attribute position (which maps
+            // to the database-side `<attr>` field — the d_nr half).
+            ops.push(p.cl(
+                "OpSetInt4",
+                &[ref_code.clone(), pos_val.clone(), Value::Int(lambda_d)],
+            ));
+            // Deep-copy the parent-Store closure record into the host's
+            // `__closure_rec` vector at pos+4.  We need the host's
+            // closure_rec field as a DbRef + the closure record's
+            // known_type for `OpAppendVector`'s type parameter.
+            if w_var != u16::MAX && f_nr != usize::MAX && !p.first_pass {
+                let closure_rec_d = p.data.def(lambda_d as u32).closure_record;
+                if closure_rec_d != u32::MAX {
+                    let closure_kt = p.data.def(closure_rec_d).known_type;
+                    let crec_pos = match &pos_val {
+                        Value::Int(pi) => Value::Int(pi + 4),
+                        _ => Value::Int(0),
+                    };
+                    // OpGetField(host_ref, pos+4, type_id) yields a DbRef
+                    // pointing at the host's closure_rec field.
+                    let crec_field = p.cl(
+                        "OpGetField",
+                        &[
+                            ref_code.clone(),
+                            crec_pos,
+                            Value::Int(i32::from(closure_kt)),
+                        ],
+                    );
+                    ops.push(p.cl(
+                        "OpClaimChildRec",
+                        &[
+                            crec_field,
+                            Value::Var(w_var),
+                            Value::Int(i32::from(closure_kt)),
+                        ],
+                    ));
+                }
+            }
+            v_block(ops, Type::Void, "fn_ref_field_set")
+        }
+        Value::Var(_) | Value::Call(_, _) => {
+            // P213-deferred: non-inline source.  This release supports
+            // only inline lambda literals in fn-ref struct fields.
+            if !p.first_pass {
+                diagnostic!(
+                    p.lexer,
+                    Level::Error,
+                    "only inline lambda literals can be stored in fn-ref struct fields in this release; \
+                     bind the lambda directly inside the struct constructor"
+                );
+            }
+            // Emit a no-op so the rest of construction proceeds.
+            p.cl("OpSetInt4", &[ref_code, pos_val, Value::Int(0)])
+        }
+        other => {
+            // Fallback (Null default-init etc.) — write 0.
+            let d_nr_only = match other {
+                Value::FnRef(d, _, _) => Value::Int(d),
+                Value::Int(n) => Value::Int(n),
+                Value::Null => Value::Int(0),
+                v => v,
+            };
+            p.cl("OpSetInt4", &[ref_code, pos_val, d_nr_only])
+        }
     }
 }
 

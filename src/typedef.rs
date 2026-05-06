@@ -468,15 +468,46 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                 }
                 Type::Enum(t, _, _) if data.def(t).name == "enumerate" => database.byte(0, false),
                 Type::Function(_, _, _) => {
-                    // Plan-06 phase 4d: storage holds the 4-byte i32 d_nr
-                    // only; the 12-byte closure half of a 20-byte stack
-                    // fn-ref slot is NOT stored.  Mirrors the vector
-                    // `get_type` path so `vector<fn(...)>` and a plain
-                    // `f: fn(...) -> ...` struct field share storage
-                    // layout.  The corresponding parser get/set arms in
-                    // `parser/mod.rs::get_val` / `set_field_check` use
-                    // `OpGetInt4` / `OpSetInt4` to match this width.
-                    database.int(0, false)
+                    // P213: when a capturing-lambda assignment has been
+                    // seen at this attribute (its d_nr recorded on
+                    // `assigned_lambda_d_nr` during first-pass parsing
+                    // of `set_field_check`), split into TWO database
+                    // fields:
+                    //   `<attr>`              : 4B int, lambda d_nr
+                    //   `<attr>__closure_rec` : `Parts::ChildRec(closure_kt)`,
+                    //                           4B u32 rec-id of the
+                    //                           co-located closure record
+                    // For attributes that never received a capturing
+                    // assignment (non-capturing fn-ref struct fields,
+                    // tuple elements of fn-ref type, default-init only)
+                    // stay with the legacy single-field 4B int layout —
+                    // closure_rec field would be wasted space and
+                    // breaks layouts of containers (tuples) that pre-
+                    // computed positions assuming 4B per fn-ref slot.
+                    let attr_name = data.def(d_nr).attributes[a_nr].name.clone();
+                    let lambda_d = data.def(d_nr).attributes[a_nr].assigned_lambda_d_nr;
+                    let closure_rec_d = if lambda_d == u32::MAX {
+                        u32::MAX
+                    } else {
+                        data.def(lambda_d).closure_record
+                    };
+                    if closure_rec_d == u32::MAX {
+                        // Legacy 4B int layout (non-capturing /
+                        // tuple-element / default-init).
+                        let int_tp = database.int(0, false);
+                        database.field(s_type, &attr_name, int_tp);
+                    } else {
+                        let mut c_tp = data.def(closure_rec_d).known_type;
+                        if c_tp == u16::MAX {
+                            fill_database(data, database, closure_rec_d);
+                            c_tp = data.def(closure_rec_d).known_type;
+                        }
+                        let dnr_tp = database.int(0, false);
+                        let crec_tp = database.child_rec(c_tp);
+                        database.field(s_type, &attr_name, dnr_tp);
+                        database.field(s_type, &format!("{attr_name}__closure_rec"), crec_tp);
+                    }
+                    continue;
                 }
                 Type::Tuple(_) => {
                     // Plan-06 phase 4d: tuple struct fields inline the

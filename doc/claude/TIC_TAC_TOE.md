@@ -3,17 +3,33 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# TIC_TAC_TOE — minimal multiplayer game (validation milestone)
+# TIC_TAC_TOE — protocol-validation vehicle (v1 shipped; v2/v3/v4 protocol-only ground layers)
 
-**Status:** spec, not yet built.  Blocked on the hello-world WebSocket
-round-trip landing first
-([lib/game_protocol/examples/hello_*.loft](../../lib/game_protocol/examples/)).
-Once that runs end-to-end, this is the next concrete game on the
-backdrop.
+**Status:** v1 shipped (text-mode protocol verifier).  v2 / v3 / v4
+are real ground-layer milestones whose **protocol mechanics are
+planned and will be built**, but **the visual side of tic-tac-toe
+is deferred indefinitely — a graphical / playable tic-tac-toe game
+is never going to ship**.
 
-This document exists so the design survives across sessions.  The
-purpose is to record what the game validates and what shape its code
-will take, **not** to design every detail in advance.
+The purpose of tic-tac-toe in this codebase is **protocol
+validation only.**  Each vN milestone adds one new protocol /
+infrastructure capability and is verified end-to-end by the
+smallest possible text-mode programs (no graphics, no real
+gameplay UX).  The actual playable game targets that consume
+these ground layers live in
+[MULTIPLAYER_EDITOR.md](MULTIPLAYER_EDITOR.md) and beyond.
+
+So when later sections describe "mouse handler", "drawing
+handler", "render the board", etc. for any vN — read those as
+**aspirational spec for what a graphical tic-tac-toe would look
+like**, not as work that ships.  The actual deliverable for vN
+is whatever text-mode test program proves the new ground-layer
+capability works on the wire.
+
+This document exists so the design survives across sessions.
+The purpose is to record what the game validates and what
+shape its code will take, **not** to design every detail in
+advance.
 
 ---
 
@@ -540,26 +556,45 @@ explicitly out of scope here so this game stays minimal.
 
 ## Sequencing
 
+The graphical tic-tac-toe is **not** on the sequence.  Each vN
+ground layer adds protocol/infrastructure capability and is
+verified by the smallest text-mode program that can exercise
+it.  The actual playable game work (mouse, render, sound) goes
+into [MULTIPLAYER_EDITOR.md](MULTIPLAYER_EDITOR.md) and beyond.
+
 1. ~~**Land hello-world end-to-end**~~ — **DONE.**  Cleared two
-   pre-existing blockers along the way: transitive native
-   dlopen for non-native parent packages (parser fix), and the
-   lib/server WS-handshake header bug (read from a dedicated
-   `LAST_HEADERS` thread-local).  The lib/server `Str`/`LoftStr`
-   native-compile mismatch is unrelated and only affects native
-   mode; interpret mode runs cleanly.  Validated by
-   `lib/game_protocol/examples/hello_*.loft`.
-2. **Tic-tac-toe v1 (text-only first cut)** — **DONE.**
-   Server-arbited MAP handshake; full game state machine on the
-   server; text-driven client with hardcoded winning sequence;
-   `<id>:<payload>` text frames over WebSocket.  Validates the
-   namespace handler registry, the wire protocol, and the
-   server-authoritative state model.  Files:
-   `tictactoe_server.loft`, `tictactoe_client.loft`.
-3. **Tic-tac-toe v1 (graphical)** — **NEXT.**  Same protocol;
-   add mouse polling + click sound + 3×3 board render via
-   `lib/graphics`.  No protocol changes.  Single window, no audio
-   if `lib/graphics`'s sound API isn't immediately available
-   (silent click is acceptable fallback).
+   pre-existing blockers: transitive native dlopen for
+   non-native parent packages (parser fix), and the lib/server
+   WS-handshake header bug (`LAST_HEADERS` thread-local).
+   Validated by `lib/game_protocol/examples/hello_*.loft`.
+2. **Tic-tac-toe v1** — **DONE.**  Server-arbited MAP handshake;
+   namespace handler registry; `<id>:<payload>` text frames;
+   server-authoritative state model.  Verified by
+   `tictactoe_server.loft` + `tictactoe_client.loft`
+   (text-mode).  No graphics — confirms the protocol works.
+3. **Tic-tac-toe v2 (protocol-only)** — multi-client server +
+   per-client state + cross-client routing.  Validated by two
+   text-mode clients connecting to the same server, each
+   playing their own game while receiving spectator updates of
+   the other.  This ground layer's primitives also unblock
+   [MULTIPLAYER_EDITOR.md](MULTIPLAYER_EDITOR.md).
+4. **Tic-tac-toe v3 (protocol-only)** — server delivers the
+   client over HTTP; browser-side WS bridge in `loft-rt.js`;
+   text-mode tic-tac-toe client compiled to WASM, loaded in a
+   browser, connecting back to the same loft server.  No
+   graphical board — `console.log` is the output.  This ground
+   layer enables real browser-hosted loft programs.
+5. **Tic-tac-toe v4 (protocol-only)** — client uploads loft
+   source over WS; server compiles via `loft --native-wasm`;
+   server returns WASM bytes via binary frame; client hot-swaps
+   the running module.  Verified text-mode (the swapped-in
+   module's behaviour is observed via console).  This ground
+   layer enables the live-edit dev workflow.
+
+Visual / playable tic-tac-toe is **deferred indefinitely** —
+the protocol patterns are validated text-mode; visual UX work
+happens in real games (the editor, eventually shipped game
+prototypes), not in tic-tac-toe.
 3. **Tic-tac-toe v2 — two simultaneous clients with spectator
    view.**  Server accepts two concurrent clients; each plays
    their own game vs the server; each client *also* sees the

@@ -7,12 +7,21 @@ use super::{
 };
 
 /// Check if a Value tree contains a reference to the given variable.
-fn code_references_var(code: &Value, var_nr: u16) -> bool {
+///
+/// P223: walks `Value::Block` too — the work-text Block produced by
+/// `parse_append_text` for shapes like `"lit" + var` carries a
+/// `Var(var)` deep inside its operator list.  Without descending into
+/// the Block, the `assign_text` self-reference branch skipped the
+/// protective work-text wrapping and the interpreter's clear-before-
+/// evaluate semantics on text Sets read `var` AFTER it had been
+/// cleared, dropping the original content.
+pub(crate) fn code_references_var(code: &Value, var_nr: u16) -> bool {
     match code {
         Value::Var(v) => *v == var_nr,
         Value::Call(_, args) => args.iter().any(|a| code_references_var(a, var_nr)),
         Value::Set(_, inner) => code_references_var(inner, var_nr),
         Value::Insert(ls) => ls.iter().any(|v| code_references_var(v, var_nr)),
+        Value::Block(bl) => bl.operators.iter().any(|v| code_references_var(v, var_nr)),
         Value::Span(b) => code_references_var(&b.1, var_nr),
         _ => false,
     }
@@ -62,15 +71,24 @@ impl Parser {
             }
         } else if let Value::Insert(ls) = code {
             if op == "=" {
-                // Detect `h = h + expr`: the first Insert entry is a self-append
-                // OpAppendText(var, Var(var)).  Converting to += semantics by
-                // removing the self-append and skipping the clear.  Without this,
-                // the clear destroys h's content before the append reads it.
+                // P217: detect `h = h + expr`: the first Insert entry is a
+                // self-append `OpAppendText(var, Var(var))`.  Convert to
+                // `+=` semantics by removing the self-append and skipping
+                // the up-front clear.  Without this, the clear destroys
+                // h's content before the appends read it.
+                //
+                // The `args[1]` operand is whatever `parse_append_text`
+                // received as `code` — a `Var(var)` wrapped by the parser
+                // in a `Value::Span` for source-position tracking.  We
+                // unspan to compare structural identity, not literal
+                // equality (the original `args[1] == Value::Var(var_nr)`
+                // check missed every Span-wrapped self-reference and let
+                // the clear-then-append path corrupt `h`).
                 let self_append = ls.first().is_some_and(|first| {
                     if let Value::Call(_, args) = first.unspan() {
                         args.len() >= 2
-                            && args[0] == Value::Var(var_nr)
-                            && args[1] == Value::Var(var_nr)
+                            && matches!(args[0].unspan(), Value::Var(v) if *v == var_nr)
+                            && matches!(args[1].unspan(), Value::Var(v) if *v == var_nr)
                     } else {
                         false
                     }
@@ -404,7 +422,27 @@ impl Parser {
                                 u16::MAX,
                             );
                         }
-                        return self.parse_append_text(code, &current_type, &ls, orig_var);
+                        // P223: `orig_var` was captured BEFORE the recursive
+                        // `parse_operators` filled `code`.  When the LHS of an
+                        // assignment is `s` (so `code` started as `Var(s)`) and
+                        // the RHS is a literal-first concat like `"hello " + s`,
+                        // `code` ends up as `Text("hello ")` after recursion —
+                        // but `orig_var` still points at `s`.  Passing this
+                        // stale `orig_var` makes `parse_append_text` use `s` as
+                        // the accumulator and emit `OpAppendText(s, "hello ")`
+                        // as the first op, which (combined with the
+                        // `assign_text` self-reference clear) destroys `s`'s
+                        // original content before the second append reads it.
+                        // Fall back to a fresh work-text whenever `code`
+                        // (unspanned) no longer is `Var(orig_var)`.
+                        let effective_orig = if orig_var != u16::MAX
+                            && !matches!(code.unspan(), Value::Var(v) if *v == orig_var)
+                        {
+                            u16::MAX
+                        } else {
+                            orig_var
+                        };
+                        return self.parse_append_text(code, &current_type, &ls, effective_orig);
                     } else if matches!(current_type, Type::Vector(_, _)) {
                         return self.parse_append_vector(code, &current_type, &ls, orig_var);
                     } else if let Type::RefVar(inner) = &current_type
@@ -657,11 +695,13 @@ impl Parser {
                     // Allocate temp variable on BOTH passes (consistent unique counter).
                     let fn_work = self.create_unique("__fn_ref_tmp", &fn_type);
                     self.vars.defined(fn_work);
-                    // Create work vars for text-returning closures (both passes for counter sync).
-                    let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
-                        (0..deps.len())
-                            .map(|_| self.vars.work_text(&mut self.lexer))
-                            .collect()
+                    // P227: one work-buffer per text-returning fn-ref
+                    // call (the return-value buffer the lambda fills via
+                    // its hidden RefVar(Text) attr).  Previously
+                    // `deps.len()` — but fn-ref types carry `deps = []`,
+                    // so the count was zero, causing SIGSEGV.
+                    let work_vars: Vec<u16> = if matches!(ret_type.as_ref(), Type::Text(_)) {
+                        vec![self.vars.work_text(&mut self.lexer)]
                     } else {
                         vec![]
                     };
