@@ -358,7 +358,7 @@ Narrow-prim Queue (A3).  Don't bundle.
 
 ### A3 — Extend Queue dispatch for narrow-primitive returns
 
-**Status:** narrow-Integer DONE (2026-05-03); Boolean/Single/Character/Float/Enum-no-payload still PENDING (need IR bit-cast support per the original in-flight note).
+**Status:** DONE — narrow-Integer 2026-05-03; Boolean/Character/Enum-no-payload 2026-05-03 (A3.5); Single/Float 2026-05-07 (A3.6).
 **Effort:** L (~1.5 sessions) — narrow-Integer landed in <1 session.
 
 **Narrow-Integer subset closure:**
@@ -431,48 +431,85 @@ null-check semantics not matching value semantics).  Both would
 have hit anyone trying to add Boolean queue routing without the
 test coverage A3.5 added.
 
-##### A3.6 — Single / Float (~1-2 sessions)
+##### A3.6 — Single / Float — DONE 2026-05-07
 
-Need new IR bit-cast Ops because `OpConvSingleFromInt` /
-`OpConvFloatFromInt` are *value* conversions
-(`5_i64 → 5.0_f32`), not bit-casts.  Workers store
-`f32::to_bits()` / `f64::to_bits()` as i64 in the buffer; reading
-back via the value-conv ops would treat those bytes as a number,
-not as float bits.
+**Closed via simpler design than the original (no new IR Ops).**
+The original plan proposed two new bit-cast IR Ops
+(`OpBitcastSingleFromInt`, `OpBitcastFloatFromInt`) wrapping the
+existing `parallel_buf_get_narrow` / `parallel_buf_get`
+i64-returning readers.  That works but adds Ops purely to
+compensate for the buf_get returning the wrong type.
 
-New decls in `default/01_code.loft`:
+**Simpler observation:** `Store::set_single` / `set_float` already
+write f32/f64 as raw bytes (typed-pointer memcpy at a slot — see
+`src/store.rs:1396-1421`).  When a worker returning `single`
+populates its return slot, the slot bytes ARE the f32 bit pattern.
+`execute_at_raw` reads those bytes as u64; the parallel buffer
+stores them via `to_le_bytes()` truncation (stride 4 for Single,
+8 for Float).  The bytes are correct — only the *reader* side
+needed a typed accessor.
 
-```loft
-fn OpBitcastSingleFromInt(v1: integer) -> single;
-   #rust"f32::from_bits((@v1) as u32)"
-fn OpBitcastFloatFromInt(v1: integer) -> float;
-   #rust"f64::from_bits((@v1) as u64)"
-```
+**Implementation (one commit):**
 
-Plus the corresponding entries in `src/ops.rs` (one-liners) and
-the wart-budget gate bump in
-`tests/codegen_emitter.rs::dispatch_op_arm_budget_not_exceeded`
-(adds 2 to the OP count).
+- `src/native.rs`: added `n_parallel_buf_get_single` (reads stride-4
+  bytes from `par_narrow_buffer_stack` via `f32::from_bits`) and
+  `n_parallel_buf_get_float` (reads u64 from `par_buffer_stack` via
+  `f64::from_bits`).  Registered in the `FUNCTIONS` table.
+- `default/01_code.loft`: added stdlib decls
+  `parallel_buf_get_single(idx) -> single` and
+  `parallel_buf_get_float(idx) -> float`.
+- `src/codegen_runtime.rs`: added `_native` siblings
+  (`n_parallel_buf_get_single_native`, `n_parallel_buf_get_float_native`)
+  and registered both in `CODEGEN_RUNTIME_FNS`.
+- `src/generation/ops/mod.rs`: registered both new natives with the
+  pass-through `ParallelBufRenameEmitter`.
+- `src/generation/ops/parallel.rs`: extended `is_narrow_int_return`
+  to include `Type::Single` so the native emitter routes Single
+  through `n_parallel_queue_narrow_native` (stride 4 packing).
+- `src/parser/collections.rs`:
+  - Added `NarrowWrap::TypedBufGet(&'static str)` variant.
+  - `narrow_route_for(Type::Single)` returns
+    `NarrowRoute { width: 4, signed: false, wrap: TypedBufGet("n_parallel_buf_get_single") }`.
+  - `route_int_queue` gate (both `early_ret_size_8` and main
+    `ret_size_8`) extended to fire for `Type::Float`.
+  - Body's `get_call` constructor: handles `TypedBufGet` (uses the
+    named typed buf_get fn directly, no wrap) and routes Float
+    through `n_parallel_buf_get_float` instead of the generic wide
+    `n_parallel_buf_get`.
 
-Then same wrapping pattern as A3.5: narrow path for Single (stride
-4), wide path for Float (stride 8 — already works through the
-regular `n_parallel_queue`; just need the bit-cast wrap on the
-body's `r` accessor when the ret type is Float).
+**Bug surfaced + fixed during implementation:** `n_parallel_buf_get_single`
+initially used `stores.put(stack, f64::from(val))` (8-byte write),
+based on a stale comment that "single slots are 8 bytes wide
+post-2c".  In fact `variables::size(Type::Single, Argument)` is 4
+(see `src/variables/mod.rs:1319`).  The 8-byte write overflowed the
+slot by 4 bytes and SIGSEGV'd at the smashed adjacent stack slot.
+Fixed: write as f32.
 
-**Acceptance:** `par_struct_to_single_t4` and `par_struct_to_float_t4`
-route through the queue path (narrow for Single, wide for Float)
-and pass.  Existing tests continue green.
+**Acceptance:** `tests/scripts/22-threading.loft` extended with
+exact-sum tests (multi-thread `score_as_single` and `score_as_float`
+both summing to 60.0 / 60.0f).  `cargo test --release --test native
+native_scripts` passes (was failing pre-patch with "n_parallel_buf_get_float_native
+not in scope" then with "par_narrow_buffer_stack is empty").
+`cargo test --release --test threading` 47/0; `--test threading_chars`
+43/0; `--test issues` 605/0.  A temporary `eprintln!` in
+`parallel_light_execute_and_collect` confirmed the materialised
+path is no longer reached for Single/Float.
 
-**Risk:** new IR Ops touch the opcode count.  Plan-09's wart-budget
-gate caps the count; adding 2 needs a documented bump.  If the
-bump conversation feels heavier than the value (Single/Float
-returns are uncommon in real par workloads), defer A3.6 indefinitely
-— the materialised path keeps working for these shapes.
+**Wart-budget gate bump avoided** — the typed-buf_get design needs
+no new IR Ops, so `dispatch_op_arm_budget_not_exceeded` stays at
+the current cap.
+
+**A4 unblocked.**  Every primitive return now routes through
+Queue; the legacy `parallel_light_execute_and_collect` is reachable
+only by the wide-input dispatch corner cases (none exercised in
+the test corpus).  A4 can ship as a near-pure delete next.
 
 ##### Sequencing
 
-A3.5 lands first as a cheap follow-up to today's A3 (narrow
-Integer).  A3.6 is gated on appetite for the new IR ops.  After
+A3.5 landed 2026-05-03 as a cheap follow-up to A3 (narrow Integer).
+A3.6 landed 2026-05-07 via the simpler typed-buf_get design (no new
+IR Ops needed).  Original sequencing note retained below for
+historical context: After
 A3.5, A4 (retire light Concat path) becomes actionable for the
 bool/char/enum shapes too.  After A3.6, A4 cleanup is total.
 

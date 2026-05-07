@@ -25,6 +25,12 @@ enum NarrowWrap {
     /// 0 or 1, never i64::MIN, so the conv would yield true for
     /// both.  `OpNeInt` gives the right 0 → false / 1 → true mapping.
     NeZero,
+    /// ARC.md A3.6 — use a different buf_get fn-name instead of
+    /// `n_parallel_buf_get_narrow`, and skip the wrap (the named
+    /// fn already returns the typed value).  Used for `single`
+    /// (routes through `n_parallel_buf_get_single` returning
+    /// `single` directly via `f32::from_bits`).
+    TypedBufGet(&'static str),
 }
 
 /// Plan-06 ARC.md A3 / A3.5 — descriptor for routing a parallel
@@ -59,9 +65,10 @@ struct NarrowRoute {
 /// | `Enum(_, false, _)` (no payload)  | 1     | false      | `OpCall(OpCastEnumFromInt)`   |
 /// | anything else                     | None — falls through to other routes                     |
 ///
-/// 8-byte Integer / Single / Float stay off this route — Single /
-/// Float await A3.6's bit-cast IR Ops; wide Integer goes through
-/// the regular `n_parallel_queue`.
+/// 8-byte Integer + Float go through the regular `n_parallel_queue`
+/// (wide u64 rows; Float reads via `parallel_buf_get_float`).
+/// Single routes here with `TypedBufGet` — its f32 bit pattern fits
+/// stride 4 and `parallel_buf_get_single` recovers the typed value.
 fn narrow_route_for(ret_type: &Type) -> Option<NarrowRoute> {
     match ret_type {
         Type::Integer(spec) => match spec.byte_width(true) {
@@ -86,6 +93,15 @@ fn narrow_route_for(ret_type: &Type) -> Option<NarrowRoute> {
             width: 1,
             signed: false,
             wrap: NarrowWrap::OpCall("OpCastEnumFromInt"),
+        }),
+        // ARC.md A3.6 — `single` (f32) routes through the narrow
+        // path with stride 4.  No wrap: the typed buf_get fn
+        // returns `single` directly via `f32::from_bits` over the
+        // same per-row bytes.  Symmetric with Store::set_single.
+        Type::Single => Some(NarrowRoute {
+            width: 4,
+            signed: false,
+            wrap: NarrowWrap::TypedBufGet("n_parallel_buf_get_single"),
         }),
         _ => None,
     }
@@ -1644,10 +1660,14 @@ use #count instead"
                 | Type::Vector(_, _)
                 | Type::Unknown(_)
         );
+        // ARC.md A3.6 — `float` (8B f64) joins 8B Integer on the
+        // wide-Queue path; the body's read goes through
+        // `parallel_buf_get_float` for typed `f64::from_bits` recovery.
         let early_ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
             &Type::Integer(*spec),
             &Context::Argument,
-        )) == 8);
+        )) == 8)
+            || matches!(ret_type, Type::Float);
         // Plan-06 ARC.md A3 / A3.5 — narrow primitive returns route
         // through n_parallel_queue_narrow.  The buf_get_narrow result
         // is i64; for non-Integer shapes we wrap with a conversion Op
@@ -1928,10 +1948,13 @@ use #count instead"
         let queue_fn_d_nr = self.data.def_nr("n_parallel_queue_fn");
         let buf_get_fn_d_nr = self.data.def_nr("n_parallel_buf_get_fn");
         let buf_drop_fn_d_nr = self.data.def_nr("n_parallel_buf_drop_fn");
+        // ARC.md A3.6 — `float` (8B f64) joins 8B Integer on the
+        // wide-Queue path (mirrors `early_ret_size_8`).
         let ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
             &Type::Integer(*spec),
             &Context::Argument,
-        )) == 8);
+        )) == 8)
+            || matches!(ret_type, Type::Float);
         // Plan-06 ARC.md A3 / A3.5 — narrow primitive return routing.
         // Mirrors the early-gate logic; see comment above for shape
         // coverage.
@@ -2032,40 +2055,77 @@ use #count instead"
             let route = narrow_route
                 .as_ref()
                 .expect("narrow_route set when route_narrow_queue is true");
-            let raw_call = Value::Call(
-                buf_get_narrow_d_nr,
-                vec![
-                    Value::Var(idx_var),
-                    Value::Int(i32::from(route.width)),
-                    Value::Int(i32::from(route.signed)),
-                ],
-            );
-            match &route.wrap {
-                NarrowWrap::None => raw_call,
-                NarrowWrap::OpCall(conv_name) => {
-                    let conv_d_nr = self.data.def_nr(conv_name);
-                    if conv_d_nr == u32::MAX {
-                        // Defensive: stripped stdlib without the conv
-                        // Op.  Skip the wrap and let downstream type-
-                        // check catch the mismatch — much louder than
-                        // a silent miscompile.
-                        raw_call
-                    } else {
-                        Value::Call(conv_d_nr, vec![raw_call])
-                    }
+            // ARC.md A3.6 — TypedBufGet bypasses the i64 reader
+            // entirely.  The named buf_get fn is signature-typed
+            // (returns `single` etc.) and reads the same per-row
+            // bytes via a typed memcpy.  No wrap needed.
+            if let NarrowWrap::TypedBufGet(typed_fn_name) = &route.wrap {
+                let typed_d_nr = self.data.def_nr(typed_fn_name);
+                if typed_d_nr == u32::MAX {
+                    // Defensive: stripped stdlib without the typed
+                    // reader.  Fall back to the raw narrow buf_get
+                    // (will type-mismatch downstream — louder than
+                    // a silent miscompile).
+                    Value::Call(
+                        buf_get_narrow_d_nr,
+                        vec![
+                            Value::Var(idx_var),
+                            Value::Int(i32::from(route.width)),
+                            Value::Int(i32::from(route.signed)),
+                        ],
+                    )
+                } else {
+                    Value::Call(typed_d_nr, vec![Value::Var(idx_var)])
                 }
-                NarrowWrap::NeZero => {
-                    // Boolean wrap: `OpNeInt(buf_get, 0) -> boolean`.
-                    let ne_d_nr = self.data.def_nr("OpNeInt");
-                    if ne_d_nr == u32::MAX {
-                        raw_call
-                    } else {
-                        Value::Call(ne_d_nr, vec![raw_call, Value::Int(0)])
+            } else {
+                let raw_call = Value::Call(
+                    buf_get_narrow_d_nr,
+                    vec![
+                        Value::Var(idx_var),
+                        Value::Int(i32::from(route.width)),
+                        Value::Int(i32::from(route.signed)),
+                    ],
+                );
+                match &route.wrap {
+                    NarrowWrap::None => raw_call,
+                    NarrowWrap::OpCall(conv_name) => {
+                        let conv_d_nr = self.data.def_nr(conv_name);
+                        if conv_d_nr == u32::MAX {
+                            // Defensive: stripped stdlib without the conv
+                            // Op.  Skip the wrap and let downstream type-
+                            // check catch the mismatch — much louder than
+                            // a silent miscompile.
+                            raw_call
+                        } else {
+                            Value::Call(conv_d_nr, vec![raw_call])
+                        }
                     }
+                    NarrowWrap::NeZero => {
+                        // Boolean wrap: `OpNeInt(buf_get, 0) -> boolean`.
+                        let ne_d_nr = self.data.def_nr("OpNeInt");
+                        if ne_d_nr == u32::MAX {
+                            raw_call
+                        } else {
+                            Value::Call(ne_d_nr, vec![raw_call, Value::Int(0)])
+                        }
+                    }
+                    NarrowWrap::TypedBufGet(_) => unreachable!("handled above"),
                 }
             }
         } else if route_int_queue {
-            Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
+            // ARC.md A3.6 — Float returns reuse the wide u64-row
+            // queue but the body needs `parallel_buf_get_float` for
+            // typed `f64::from_bits` recovery.
+            if matches!(ret_type, Type::Float) {
+                let buf_get_float_d_nr = self.data.def_nr("n_parallel_buf_get_float");
+                if buf_get_float_d_nr == u32::MAX {
+                    Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
+                } else {
+                    Value::Call(buf_get_float_d_nr, vec![Value::Var(idx_var)])
+                }
+            } else {
+                Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
+            }
         } else if route_text_queue {
             Value::Call(buf_get_text_d_nr, vec![Value::Var(idx_var)])
         } else if route_ref_queue {

@@ -81,6 +81,9 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_parallel_buf_get_native",    abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_get_text_native", abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_get_ref_native",  abi: Abi::Cell },
+    // ARC.md A3.6 — typed Single/Float readers.
+    RuntimeFn { name: "n_parallel_buf_get_single_native", abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_get_float_native",  abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_drop_native",     abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_drop_text_native", abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_drop_ref_native",  abi: Abi::Cell },
@@ -2490,6 +2493,52 @@ pub fn n_parallel_buf_get_narrow_native(
         ])),
         _ => panic!("n_parallel_buf_get_narrow_native: invalid stride {stride}"),
     }
+}
+
+/// Plan-06 ARC.md A3.6 (native variant) — typed reader for `single`
+/// (f32) returns from `n_parallel_queue_narrow_native` (stride 4).
+/// Reads the same per-row bytes as `n_parallel_buf_get_narrow_native`
+/// but interprets them as a 4-byte f32 bit pattern via
+/// `f32::from_bits` instead of returning an i64 the caller would
+/// then have to bit-cast.  Mirrors the interpreter-side
+/// `n_parallel_buf_get_single` in `src/native.rs`.
+///
+/// # Panics
+/// Panics if `par_narrow_buffer_stack` is empty, if the stride isn't
+/// 4, or if `idx` is out of range — all indicate parser-side bugs.
+pub fn n_parallel_buf_get_single_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> f32 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let entry = stores
+        .par_narrow_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_single_native: par_narrow_buffer_stack is empty");
+    let stride = entry.1 as usize;
+    debug_assert_eq!(
+        stride, 4,
+        "n_parallel_buf_get_single_native: stride must be 4 (got {stride})"
+    );
+    let off = (idx as usize) * stride;
+    let bytes = &entry.0;
+    let raw = u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+    f32::from_bits(raw)
+}
+
+/// Plan-06 ARC.md A3.6 (native variant) — typed reader for `float`
+/// (f64) returns from `n_parallel_queue_native` (wide u64 rows).
+/// Reads the same per-row u64 as `n_parallel_buf_get_native` but
+/// interprets the bits as f64 via `f64::from_bits`.  Mirrors the
+/// interpreter-side `n_parallel_buf_get_float` in `src/native.rs`.
+///
+/// # Panics
+/// Panics if `par_buffer_stack` is empty or `idx` is out of range —
+/// both indicate parser-side bugs.
+pub fn n_parallel_buf_get_float_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> f64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let row = stores
+        .par_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_float_native: par_buffer_stack is empty")[idx as usize];
+    f64::from_bits(row)
 }
 
 /// Plan-06 ARC.md A3 (native variant) — pop the active narrow

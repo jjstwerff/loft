@@ -168,6 +168,10 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(feature = "threading")]
     ("n_parallel_buf_drop_narrow", n_parallel_buf_drop_narrow),
     #[cfg(feature = "threading")]
+    ("n_parallel_buf_get_single", n_parallel_buf_get_single),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_get_float", n_parallel_buf_get_float),
+    #[cfg(feature = "threading")]
     ("n_parallel_queue_fn", n_parallel_queue_fn),
     #[cfg(feature = "threading")]
     ("n_parallel_buf_get_fn", n_parallel_buf_get_fn),
@@ -1465,6 +1469,67 @@ fn n_parallel_buf_drop_narrow(stores: &mut Stores, _stack: &mut DbRef) {
         .par_narrow_buffer_stack
         .pop()
         .expect("parallel_buf_drop_narrow: par_narrow_buffer_stack is already empty");
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 ARC.md A3.6 — typed reader for `single` (f32) returns
+/// from `n_parallel_queue_narrow` (stride 4).  Reads the same
+/// per-row bytes as `n_parallel_buf_get_narrow` but interprets them
+/// as a 4-byte f32 bit pattern via `f32::from_bits` instead of
+/// returning an i64 that the caller would then have to bit-cast.
+///
+/// Justified by symmetry with `Store::set_single` /
+/// `Store::get_single` in `src/store.rs:1406-1421`: those write /
+/// read f32 as a typed-pointer memcpy at a slot.  Worker functions
+/// returning `single` populate their return slot via the same
+/// typed pointer write, so the slot bytes ARE the f32 bit pattern.
+/// `execute_at_raw` reads those bytes as u64 (low 4 = f32 bits);
+/// `n_parallel_queue_narrow` truncates to stride 4 — preserving the
+/// f32 bit pattern.  This getter recovers the typed value with no
+/// intermediate IR Op required.
+///
+/// Pushes the value as f32 onto the operand stack — `Type::Single`
+/// has slot size 4 (per `variables::size`), matching `f32`'s width.
+/// Mirrors how `OpConvSingleFromInt` returns f32 (`src/ops.rs:502`).
+fn n_parallel_buf_get_single(stores: &mut Stores, stack: &mut DbRef) {
+    let idx = *stores.get::<i64>(stack) as usize;
+    let val: f32 = {
+        let entry = stores
+            .par_narrow_buffer_stack
+            .last()
+            .expect("parallel_buf_get_single: par_narrow_buffer_stack is empty");
+        let stride = entry.1 as usize;
+        debug_assert_eq!(
+            stride, 4,
+            "parallel_buf_get_single: stride must be 4 (got {stride})"
+        );
+        let off = idx * stride;
+        let bytes = &entry.0;
+        let raw = u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+        f32::from_bits(raw)
+    };
+    stores.put(stack, val);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 ARC.md A3.6 — typed reader for `float` (f64) returns
+/// from `n_parallel_queue` (stride 8 / Vec<u64> rows).  Reads the
+/// same per-row u64 as `n_parallel_buf_get` but interprets the bits
+/// as f64 via `f64::from_bits` instead of returning a raw i64.
+///
+/// Same justification as `n_parallel_buf_get_single`: worker
+/// functions returning `float` populate their return slot via a
+/// typed memcpy (`Store::set_float`); `execute_at_raw` reads the
+/// slot as u64 — the bytes ARE the f64 bit pattern.  This getter
+/// recovers the typed value with no intermediate IR Op.
+fn n_parallel_buf_get_float(stores: &mut Stores, stack: &mut DbRef) {
+    let idx = *stores.get::<i64>(stack) as usize;
+    let row = stores
+        .par_buffer_stack
+        .last()
+        .expect("parallel_buf_get_float: par_buffer_stack is empty")[idx];
+    let val = f64::from_bits(row);
+    stores.put(stack, val);
 }
 
 #[cfg(feature = "threading")]

@@ -166,6 +166,11 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
         "n_parallel_buf_get_text",
         "n_parallel_buf_get_ref",
         "n_parallel_buf_get_narrow",
+        // ARC.md A3.6 — typed Single/Float readers.  Same buffer
+        // stacks as buf_get_narrow / buf_get respectively; the
+        // emitter is a pass-through rename to the n_<name> impl.
+        "n_parallel_buf_get_single",
+        "n_parallel_buf_get_float",
         "n_parallel_buf_drop",
         "n_parallel_buf_drop_text",
         "n_parallel_buf_drop_ref",

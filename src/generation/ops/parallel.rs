@@ -98,6 +98,7 @@ fn queue_narrow_helper_name() -> &'static str {
 /// - `Boolean` (A3.5)
 /// - `Character` (A3.5)
 /// - `Enum(_, false, _)` no-payload (A3.5)
+/// - `Single` (A3.6) — f32 fits stride 4 with bit-pattern preserved
 ///
 /// Used by `ParallelQueueEmitter` to swap the runtime helper to the
 /// narrow variant `n_parallel_queue_narrow_native`.  Without this,
@@ -108,7 +109,7 @@ fn queue_narrow_helper_name() -> &'static str {
 fn is_narrow_int_return(ret: &Type) -> bool {
     match ret {
         Type::Integer(spec) => matches!(spec.byte_width(true), 1 | 2 | 4),
-        Type::Boolean | Type::Character => true,
+        Type::Boolean | Type::Character | Type::Single => true,
         Type::Enum(_, false, _) => true,
         _ => false,
     }
