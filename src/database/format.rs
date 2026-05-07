@@ -11,9 +11,10 @@ use std::fmt::{Debug, Formatter, Write as _};
 
 /// Render a walker / unified-parser failure as `"line N:M path:X"`.
 ///
-/// Replaces the legacy `parse_key` / `show_key` machinery — the
-/// path is now collected by the walker as it descends, and the
-/// (line, col) pair comes straight from `crate::json::line_col_of`.
+/// The path is collected by [`Stores::walk_parsed_into`] as it
+/// descends, and the (line, col) pair comes from
+/// [`crate::json::line_col_of`].  Asserted-on directly by
+/// `tests/data_structures.rs::record` (e.g. `"line 1:7 path:blame"`).
 fn format_walk_err(text: &str, at: usize, path: &[String]) -> String {
     let (line, col) = crate::json::line_col_of(text, at);
     let mut out = format!("line {line}:{col} path:");
@@ -213,16 +214,14 @@ impl Stores {
     /// Returns `None` on success, or `Some(error_path)` on failure.
     /// The error path is a human-readable string like `"line 1:15 path:items[2].name"`.
     ///
-    /// routes through the unified
-    /// `crate::json::parse_with(text, Dialect::Lenient)` + the
-    /// schema-driven [`Stores::walk_parsed_into`] walker.  On
-    /// unified-path failure (syntax error OR schema/shape
-    /// mismatch the walker doesn't yet cover) the call falls
-    /// back to the legacy hand-rolled scanner so the
-    /// `"line N:M path:X"` error shape stays consistent with
-    /// existing tests and tooling.  The fallback will be
-    /// removed once the walker's coverage is proven across the
-    /// full test matrix.
+    /// Routes through the unified
+    /// [`crate::json::parse_with(text, Dialect::Lenient)`] +
+    /// schema-driven [`Stores::walk_parsed_into`] walker.  Both
+    /// syntax-level errors (from the parser) and schema / shape
+    /// mismatches (from the walker) feed into the same
+    /// `"line N:M path:X"` shape via [`format_walk_err`], so
+    /// callers see one consistent format regardless of where the
+    /// failure originated.
     pub fn parse(&mut self, text: &str, tp: u16, result: &DbRef) -> Option<String> {
         self.try_parse_unified(text, tp, result).err()
     }
@@ -255,7 +254,7 @@ impl Stores {
         let parsed = crate::json::parse_with(text, crate::json::Dialect::Lenient)
             .map_err(|e| format_walk_err(text, e.byte_offset, &[]))?;
         let mut path: Vec<String> = Vec::new();
-        self.walk_parsed_into(&parsed, tp, tp, u16::MAX, result, &mut path)
+        self.walk_parsed_into(&parsed, tp, tp, u16::MAX, result, &mut path, 0)
             .map_err(|e| format_walk_err(text, e.at, &e.path))
     }
 

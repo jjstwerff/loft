@@ -61,6 +61,35 @@ pub fn record() {
     );
 }
 
+/// P54-U phase 3 — leaf type-mismatch errors should report the
+/// field's byte offset, not byte 0.  Before the `at`-threading fix,
+/// passing `{count: "string"}` to a struct with `count: integer`
+/// gave `"line 1:1 path:count"` (mismatch was reported at byte 0
+/// because `walk_primitive_into` defaulted `at` to 0 for every
+/// type-mismatch arm).  After the fix, the position is the field's
+/// key offset (the byte just past `count`'s `:` would be ideal,
+/// but the simpler invariant we lock here is "position is non-1").
+#[test]
+pub fn p54u_leaf_mismatch_reports_field_position() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Bag", 0);
+    stores.field(s, "count", stores.name("integer"));
+    stores.finish();
+    let msg = stores.parse_message("{count:\"oops\"}", s);
+    // The error's column must be > 1 — the mismatch fires inside the
+    // value position, not at the start of the input.  `walk_parsed_struct`
+    // passes the key's byte offset to the recursion, which
+    // `walk_primitive_into` reports on the WalkErr.
+    assert!(
+        msg.starts_with("line 1:") && !msg.starts_with("line 1:1 "),
+        "expected non-byte-0 mismatch position, got: {msg}"
+    );
+    assert!(
+        msg.ends_with("path:count"),
+        "expected path:count, got: {msg}"
+    );
+}
+
 #[test]
 pub fn vector() {
     let mut stores = Stores::new();
