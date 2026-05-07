@@ -308,8 +308,10 @@ impl Output<'_> {
                 // output_code_inner emits `&var_name` (borrow to &str), and
                 // appending `.to_string()` yields `&String` not `String`.
                 // Detect this case and emit `.clone()` on the owned String directly.
+                // Unspan the RHS so the detection fires for Span-wrapped Var
+                // (the common case for assignment RHS — same shape as P228).
                 let text_local_clone = needs_to_string
-                    && matches!(to, Value::Var(v) if {
+                    && matches!(to.unspan(), Value::Var(v) if {
                         let vars = &self.data.def(self.def_nr).variables;
                         !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Text(_))
                     });
@@ -320,8 +322,19 @@ impl Output<'_> {
                 // (borrow to &str).  Appending `.to_string()` yields
                 // `&String` not `String`, breaking destructuring of a
                 // tuple-of-text return.  Emit `var_t.0.clone()` instead.
+                //
+                // P228: unspan `to` before pattern-matching so the
+                // detection fires when the parser wraps the TupleGet in
+                // a `Value::Span` (the common case for assignment RHS).
+                // Without the unspan, plain `label = t.0` (where `t` is
+                // a tuple with a text element) emitted
+                // `let mut var_label: String = &var_t.0.to_string();` —
+                // E0308 because `&var_t.0.to_string()` parses as
+                // `&(var_t.0.to_string())` per Rust method-call
+                // precedence (`&String` vs declared `String`).
+                let to_inner = to.unspan();
                 let tuple_text_elem_clone = needs_to_string
-                    && matches!(to, Value::TupleGet(v, idx) if {
+                    && matches!(to_inner, Value::TupleGet(v, idx) if {
                         let vars = &self.data.def(self.def_nr).variables;
                         !vars.is_argument(*v)
                             && matches!(vars.tp(*v),
@@ -329,12 +342,13 @@ impl Output<'_> {
                                 if elems.get(*idx as usize).is_some_and(|e| matches!(e, Type::Text(_))))
                     });
                 if text_local_clone {
-                    if let Value::Var(v) = to {
+                    if let Value::Var(v) = to.unspan() {
                         let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{src_name}.clone()")?;
                     }
                 } else if tuple_text_elem_clone {
-                    if let Value::TupleGet(v, idx) = to {
+                    // P228: read through the same unspan as the detection above.
+                    if let Value::TupleGet(v, idx) = to.unspan() {
                         let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{src_name}.{idx}.clone()")?;
                     }

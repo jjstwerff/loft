@@ -132,11 +132,16 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
                 pre: std::mem::take(&mut pre),
                 init,
             });
-        } else if matches!(inner_op, Value::Block(_) | Value::Loop(_)) && contains_yield(inner_op) {
-            // A block (for-loop) or loop (while/loop) that contains
-            // yields somewhere inside.  Use the eager-collect approach:
-            // the factory will run the block/loop and push all yielded
-            // values to a Vec<i64>; next_i64 pops from that buffer.
+        } else if matches!(
+            inner_op,
+            Value::Block(_) | Value::Loop(_) | Value::If(_, _, _)
+        ) && contains_yield(inner_op)
+        {
+            // A block (for-loop), loop (while/loop), or conditional
+            // (if/else) that contains yields somewhere inside.  Use
+            // the eager-collect approach: the factory will run the
+            // construct and push all yielded values to a Vec<i64>;
+            // next_i64 pops from that buffer.
             //
             // P210 — `Value::Loop` previously fell through to the
             // `pre` accumulator, so a generator like `fn g() { i = 0;
@@ -145,6 +150,17 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
             // COROUTINE_EXHAUSTED).  The for-loop body case worked
             // because its body is `Value::Block`; while-loops were
             // missed.
+            //
+            // P230 — `Value::If` was likewise missed.  A generator
+            // like `if cond { yield x; }` left the conditional in
+            // `pre`, and the per-state code emit then walked the IR
+            // via `output_code_inner` which hits `Value::Yield` and
+            // emits the literal Rust `yield` keyword (only valid in
+            // unstable `gen` blocks) → E0627 native rejection.
+            // Routing the if-with-yield through the eager-collect
+            // factory uses the `yield_collect` mode that emits
+            // `__values.push(...)` instead of `yield ...`, mirroring
+            // how Block-with-yield was already handled.
             segments.push(YieldSegment::ForLoopBody {
                 pre: std::mem::take(&mut pre),
                 body: inner_op.clone(),
@@ -462,6 +478,40 @@ impl Output<'_> {
         for v in &to_predeclare {
             let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
             writeln!(w, "        let mut var_{name}: String = String::new();")?;
+            self.declared.insert(*v);
+        }
+        // P226: pre-declare vector-literal backing DbRefs (`__vdb_*`) at
+        // function scope.  Same scoping family as P218's `__work_*` fix,
+        // but for vector literals: each `[...]` expression in the
+        // generator body allocates a `__vdb_N` slot for its backing
+        // record, and the per-state `let mut var___vdb_N: DbRef = …`
+        // declaration scopes it to a single match arm.  A second state
+        // arm whose pre-statements reference the same `__vdb_N`
+        // (e.g. `yield [1,2,3].len(); yield [10,20].len();` reuses
+        // slots across both arms) then fails with E0425.  Pre-declaring
+        // at function scope and adding to `self.declared` keeps the
+        // per-state Set ops emitting as plain assignments, so each
+        // state still re-initialises before use.
+        let mut to_predeclare_vdb: Vec<u16> = Vec::new();
+        {
+            let var_table = &self.data.def(self.def_nr).variables;
+            for v in 0..next {
+                if var_table.is_argument(v) {
+                    continue;
+                }
+                let name = var_table.name(v);
+                if !name.starts_with("__vdb") {
+                    continue;
+                }
+                to_predeclare_vdb.push(v);
+            }
+        }
+        for v in &to_predeclare_vdb {
+            let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+            writeln!(
+                w,
+                "        let mut var_{name}: DbRef = stores.null_named(\"var_{name}\");"
+            )?;
             self.declared.insert(*v);
         }
         // N8b.3: wrap in `loop {}` so yield-from states can `continue` to the

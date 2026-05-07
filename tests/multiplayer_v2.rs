@@ -30,7 +30,7 @@
 #![allow(clippy::too_many_lines)]
 
 use std::io::{BufReader, Read};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -48,6 +48,21 @@ fn workspace_root() -> PathBuf {
 
 fn examples_dir() -> PathBuf {
     workspace_root().join("lib/game_protocol/examples")
+}
+
+/// P231: allocate a free TCP port by binding to `127.0.0.1:0` and
+/// immediately closing — the kernel records the port as recently used
+/// but it's still available to a follow-up bind by the spawned server.
+/// Each test gets its own port, so default `cargo test` parallelism
+/// no longer collides on a single hardcoded one.  There's still a
+/// tiny TOCTOU window (another process could grab the port between
+/// the close and the server's bind), but in practice this is the
+/// standard idiom for ephemeral test ports across Rust ecosystems.
+fn pick_free_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind 127.0.0.1:0");
+    let port = listener.local_addr().expect("local_addr after bind").port();
+    drop(listener);
+    port
 }
 
 /// Wait for a TCP listener to come up on `port`.  Polls every
@@ -125,6 +140,56 @@ impl ServerGuard {
         // bind in <1s, so the bump only affects flake-prone CI.
         wait_for_port(self.port, Duration::from_secs(60), 50)
     }
+
+    /// Diagnostic helper: when `wait_listening` fails, drain whatever
+    /// the server child wrote to stdout/stderr and check whether it
+    /// already exited.  Returns a multi-line string suitable for
+    /// inclusion in a panic message — the boring "server failed to
+    /// start within 60s" is replaced with actual signal about WHY
+    /// (server panicked at parse time, port was already taken, etc.).
+    /// P229b — the previous bare timeout swallowed all diagnostic
+    /// information from the child, which is exactly the symptom we
+    /// see on Windows CI today.
+    fn diagnose_listen_failure(&mut self) -> String {
+        let mut out = String::new();
+        if let Some(child) = self.child.as_mut() {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    out.push_str(&format!(
+                        "\n  server child already exited: status={status:?}"
+                    ));
+                }
+                Ok(None) => {
+                    out.push_str("\n  server child still running but not listening");
+                }
+                Err(e) => {
+                    out.push_str(&format!("\n  failed to query child status: {e}"));
+                }
+            }
+            let mut stdout_buf = String::new();
+            let mut stderr_buf = String::new();
+            if let Some(mut s) = child.stdout.take() {
+                let _ = s.read_to_string(&mut stdout_buf);
+            }
+            if let Some(mut s) = child.stderr.take() {
+                let _ = s.read_to_string(&mut stderr_buf);
+            }
+            if !stdout_buf.is_empty() {
+                out.push_str("\n  --- server stdout ---\n");
+                out.push_str(&stdout_buf);
+            }
+            if !stderr_buf.is_empty() {
+                out.push_str("\n  --- server stderr ---\n");
+                out.push_str(&stderr_buf);
+            }
+            if stdout_buf.is_empty() && stderr_buf.is_empty() {
+                out.push_str("\n  (server produced no stdout/stderr)");
+            }
+        } else {
+            out.push_str("\n  (no server child captured)");
+        }
+        out
+    }
 }
 
 impl Drop for ServerGuard {
@@ -138,17 +203,38 @@ impl Drop for ServerGuard {
 
 /// Spawn a v2 client as a subprocess, returning a Child whose
 /// stdout is piped (and stderr inherited).  Caller is responsible
-/// for `drain_with_timeout` and cleanup.
-fn spawn_client(label: &str) -> Child {
-    Command::new(loft_bin())
-        .arg("--interpret")
+/// for `drain_with_timeout` and cleanup.  `port` is forwarded via
+/// `LOFT_TICTACTOE_PORT` so the client targets the correct
+/// per-test server (P231).
+fn spawn_client(label: &str, port: u16) -> Child {
+    spawn_client_with_delay(label, port, 0)
+}
+
+/// P229a: spawn a v2 client with `LOFT_TICTACTOE_CLIENT_DELAY_MS`
+/// set to `delay_ms` so the client pauses after its handshake before
+/// starting moves.  The two-client overlap test needs both clients
+/// to be registered with the server before either makes a move; on
+/// fast schedulers (macOS) the default zero-delay client races
+/// through its 3 X moves in <50 ms — well before the partner has
+/// completed its own handshake — so neither sees the other's
+/// SpectatorPlacement frames.  A small delay (~200 ms) makes the
+/// overlap deterministic on every platform.
+///
+/// P231: `port` is also forwarded so the client connects to the
+/// per-test server rather than the legacy hardcoded 7878.
+fn spawn_client_with_delay(label: &str, port: u16, delay_ms: u32) -> Child {
+    let mut cmd = Command::new(loft_bin());
+    cmd.arg("--interpret")
         .arg(examples_dir().join("tictactoe_client_v2.loft"))
         .arg(label)
         .current_dir(examples_dir())
+        .env("LOFT_TICTACTOE_PORT", port.to_string())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("failed to spawn loft client")
+        .stderr(Stdio::null());
+    if delay_ms > 0 {
+        cmd.env("LOFT_TICTACTOE_CLIENT_DELAY_MS", delay_ms.to_string());
+    }
+    cmd.spawn().expect("failed to spawn loft client")
 }
 
 fn count_occurrences(haystack: &str, needle: &str) -> usize {
@@ -163,7 +249,7 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 /// click → Placement → GameOver round-trip on the multi-client path.
 #[cfg_attr(
     target_os = "windows",
-    ignore = "P229: v2 server can't bind on Windows CI; investigation needed"
+    ignore = "P229b: v2 server can't bind on Windows CI; investigation needed (diagnose_listen_failure should produce signal next run)"
 )]
 #[test]
 fn v2_single_client_completes_game() {
@@ -174,13 +260,17 @@ fn v2_single_client_completes_game() {
     // (these tests share the same binary; cargo runs them
     // sequentially by default within one binary unless --test-threads
     // is bumped).
+    let port = pick_free_port();
     let _server = {
-        let s = ServerGuard::spawn("tictactoe_server_v2.loft", 7878);
-        assert!(s.wait_listening(), "server failed to start within 60s");
+        let mut s = ServerGuard::spawn("tictactoe_server_v2.loft", port);
+        if !s.wait_listening() {
+            let diag = s.diagnose_listen_failure();
+            panic!("server failed to start within 60s{diag}");
+        }
         s
     };
 
-    let client = spawn_client("S");
+    let client = spawn_client("S", port);
     let (out, status) = drain_with_timeout(client, Duration::from_secs(60));
 
     assert_eq!(
@@ -213,27 +303,33 @@ fn v2_single_client_completes_game() {
 /// The exact frame *ordering* depends on scheduling, so we assert
 /// on counts, not order.
 #[cfg_attr(
-    target_os = "macos",
-    ignore = "P229: macOS scheduler is fast enough that both clients finish their 3 X moves with no observable overlap"
-)]
-#[cfg_attr(
     target_os = "windows",
-    ignore = "P229: v2 server can't bind on Windows CI"
+    ignore = "P229b: v2 server can't bind on Windows CI"
 )]
 #[test]
 fn v2_two_clients_with_spectator_routing() {
+    let port = pick_free_port();
     let _server = {
-        let s = ServerGuard::spawn("tictactoe_server_v2.loft", 7878);
-        assert!(s.wait_listening(), "server failed to start within 60s");
+        let mut s = ServerGuard::spawn("tictactoe_server_v2.loft", port);
+        if !s.wait_listening() {
+            let diag = s.diagnose_listen_failure();
+            panic!("server failed to start within 60s{diag}");
+        }
         s
     };
 
-    // Spawn A first; sleep briefly so they overlap; spawn B.  Both
-    // play their column-0 sequence; each must see SpectatorPlacement
-    // frames from the other.
-    let a = spawn_client("A");
+    // P229a: both clients spawn essentially simultaneously, then each
+    // pauses ~200 ms after handshake before placing its first X.  On
+    // macOS the scheduler is fast enough that without the pause the
+    // first client would complete all 3 moves before the second's
+    // handshake even reaches the server — so neither side observes
+    // the other's spectator frames.  The delay is set via the
+    // `LOFT_TICTACTOE_CLIENT_DELAY_MS` env var that the v2 client
+    // honours via `web::sleep_ms`.  Linux (already passing) tolerates
+    // the extra 200 ms with no measurable impact.
+    let a = spawn_client_with_delay("A", port, 200);
     thread::sleep(Duration::from_millis(50));
-    let b = spawn_client("B");
+    let b = spawn_client_with_delay("B", port, 200);
 
     let (a_out, a_status) = drain_with_timeout(a, Duration::from_secs(60));
     let (b_out, b_status) = drain_with_timeout(b, Duration::from_secs(60));
@@ -306,18 +402,22 @@ fn v2_two_clients_with_spectator_routing() {
 /// A finished before B's MAP arrived, so its events are gone.
 #[cfg_attr(
     target_os = "windows",
-    ignore = "P229: v2 server can't bind on Windows CI"
+    ignore = "P229b: v2 server can't bind on Windows CI"
 )]
 #[test]
 fn v2_late_join_independent_games() {
+    let port = pick_free_port();
     let _server = {
-        let s = ServerGuard::spawn("tictactoe_server_v2.loft", 7878);
-        assert!(s.wait_listening(), "server failed to start within 60s");
+        let mut s = ServerGuard::spawn("tictactoe_server_v2.loft", port);
+        if !s.wait_listening() {
+            let diag = s.diagnose_listen_failure();
+            panic!("server failed to start within 60s{diag}");
+        }
         s
     };
 
     // A connects, plays, finishes.
-    let a = spawn_client("A");
+    let a = spawn_client("A", port);
     let (a_out, a_status) = drain_with_timeout(a, Duration::from_secs(60));
     assert_eq!(a_status, Some(0), "A did not exit; stdout=\n{a_out}");
     assert!(
@@ -330,7 +430,7 @@ fn v2_late_join_independent_games() {
 
     // B connects; should still play to completion despite A having
     // already finished.
-    let b = spawn_client("B");
+    let b = spawn_client("B", port);
     let (b_out, b_status) = drain_with_timeout(b, Duration::from_secs(60));
     assert_eq!(b_status, Some(0), "B did not exit; stdout=\n{b_out}");
     assert!(

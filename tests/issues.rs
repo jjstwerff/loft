@@ -11917,3 +11917,537 @@ fn run() -> text {
     .expr("run()")
     .result(Value::Text("z: 42".to_string()));
 }
+
+/// P214 — closed 2026-05-05.  `vector<fn(integer) -> integer>` of
+/// non-capturing closures panicked under interp (`fn_call_ref:
+/// d_nr=12884901896 out of range`) and rejected on native with E0605
+/// `DbRef as (u32, DbRef)`.  Two coordinated changes:
+///
+/// 1. **Parser** (`src/parser/fields.rs`): the vector-element-size
+///    computation in `parse_index_apply` falls back to
+///    `narrow_vector_content` for fn-ref types so `elm_size` is 4
+///    (the d_nr stride) instead of 0 (which made every index hit
+///    slot 0).  Adds a `Type::Function` branch that reads the d_nr
+///    via `OpGetInt4` and pairs it with `OpNullRefSentinel` for the
+///    closure DbRef half — assembling the (u32, DbRef) tuple shape
+///    via the existing `fn_ref_field_read` block-name shortcut in
+///    native codegen.
+/// 2. **Native init** (`src/generation/mod.rs::emit_field`): when
+///    the field's vector content is `Type::Function`, emit
+///    `db.vector(narrow_int)` instead of `db.vector(u16::MAX)` so
+///    the runtime parent-tracking pass in `Stores::field` finds
+///    the proper int content type.
+#[test]
+fn p214_vector_of_noncapturing_closures() {
+    code!(
+        "fn run() -> integer {
+    v: vector<fn(integer) -> integer> = [
+        fn(x: integer) -> integer { x + 1 },
+        fn(x: integer) -> integer { x * 2 },
+    ];
+    v[0](10) + v[1](5)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(21)); // 11 + 10
+}
+
+/// P215 — closed 2026-05-05.  A closure-typed local variable defined
+/// in an outer scope was unreachable from inside an inner closure
+/// body that called it (`Unknown function 'inner'`).  Two coordinated
+/// changes:
+///
+/// 1. **Parser** (`src/parser/control.rs::try_fn_ref_call`): when
+///    `name` is in `capture_context` with a `Type::Function` type and
+///    not in the current function's vars, mirror the standard
+///    capture mechanism — push to `captured_names`, create a
+///    placeholder local var, and detect the capture at emit time via
+///    `capture_context` (stable across both passes).
+///
+/// 2. **Closure-record write** (`src/parser/mod.rs::emit_fn_ref_field_write`):
+///    lift the P213-deferred "only inline lambda literals" diagnostic
+///    when both target and source are non-capturing — target field
+///    has 4B int layout (`assigned_lambda_d_nr == u32::MAX`) and
+///    source var is not in `closure_vars` (the existing
+///    capturing-fn-ref tracker).  Emit `OpSetInt4(target, pos,
+///    Value::FnRefDnr(src))` to project the d_nr.
+///
+/// 3. **Closure-record read symmetry** (`src/parser/mod.rs::get_field`):
+///    for `Type::Function` fields with 4B int layout, synthesise a
+///    null DbRef for the closure half via `OpNullRefSentinel`
+///    instead of reading at `pos+4` (which would corrupt the next
+///    attribute's bytes — the legacy 4B layout has no
+///    `__closure_rec` half).
+///
+/// New IR variant `Value::FnRefDnr(u16)` projects the d_nr from a
+/// fn-ref Var on both backends — interp via `OpVarInt(slot_pos)`
+/// (the dispatcher reads 8 bytes regardless of declared type),
+/// native via `(var_<name>.0 as i64)` tuple projection.
+///
+/// Capturing source lambdas (where `inner` itself captures from
+/// further out) remain deferred — the closure-record's 4B layout
+/// can't hold the source's closure DbRef, and lifting that requires
+/// extending `synthesize_closure_record` to register the 8B split
+/// layout for fn-ref captures.
+#[test]
+fn p215_nested_closure_call() {
+    code!(
+        "fn run() -> integer {
+    inner = fn(x: integer) -> integer { x + 5 };
+    outer = fn(y: integer) -> integer { inner(y) + 1 };
+    outer(10)
+}"
+    )
+    .expr("run()")
+    // inner(10) = 15; outer(10) = 16
+    .result(Value::Int(16));
+}
+
+/// P215 — multiple non-capturing fn-refs captured into a single
+/// closure body.  Validates that several captures coexist in the
+/// closure record, each correctly populated and dispatched.  Each
+/// captured lambda is non-capturing — the case the P215 fix
+/// supports.  Capturing-source-into-closure remains deferred
+/// (requires `synthesize_closure_record` to register the 8B split
+/// layout when the source itself captures).
+#[test]
+fn p215_multiple_captures_in_one_closure() {
+    code!(
+        "fn run() -> integer {
+    add_one = fn(x: integer) -> integer { x + 1 };
+    times_two = fn(x: integer) -> integer { x * 2 };
+    minus_three = fn(x: integer) -> integer { x - 3 };
+    pipeline = fn(n: integer) -> integer {
+        minus_three(times_two(add_one(n)))
+    };
+    pipeline(5)
+}"
+    )
+    .expr("run()")
+    // 5+1=6 → 6*2=12 → 12-3=9
+    .result(Value::Int(9));
+}
+
+/// P222 — closed 2026-05-06.  `s = s + s` rejected on native with
+/// E0502 ("cannot borrow `*var_s` as mutable because it is also
+/// borrowed as immutable").  After the P217 self-append strip the
+/// IR became `OpAppendText(s, Var(s))`, which the native emitter
+/// lowered to `var_s += &*(&var_s);` — `&mut` and `&` on the same
+/// place.  Fix in `src/generation/text.rs::append_text` detects
+/// when the RHS expression references the destination variable and
+/// hoists the value through a fresh `String` so the self-borrow
+/// never overlaps the `+=` target.  Interp already produced the
+/// correct `"abab"` after the P217 fix; this test pins both
+/// backends so a future codegen refactor cannot reintroduce the
+/// self-borrow.
+#[test]
+fn p222_text_self_double() {
+    code!(
+        "fn run() -> text {
+    s = \"ab\";
+    s = s + s;
+    s
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("abab".to_string()));
+}
+
+/// P222 follow-up — triple self-reference `v = v + v + v` exercises
+/// the codegen path twice (two `OpAppendText(v, Var(v))` ops after
+/// the P217 strip).  Each must hoist independently; the second
+/// append reads `v`'s already-doubled value, producing 8 chars
+/// (`"ab"` → `"abab"` → `"abababab"`).  Both backends must agree.
+#[test]
+fn p222_text_triple_self_reference() {
+    code!(
+        "fn run() -> text {
+    v = \"ab\";
+    v = v + v + v;
+    v
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("abababab".to_string()));
+}
+
+/// P228 — closed 2026-05-06.  `label = t.0;` (where `t` is a tuple
+/// with a text-typed first element, e.g. `t = ("hello", 42)`)
+/// rejected on native with E0308 because the emitted Rust was
+/// `let mut var_label: String = &var_t.0.to_string();` —
+/// `&var_t.0.to_string()` parses as `&(var_t.0.to_string())` per
+/// Rust method-call precedence, producing `&String` against a
+/// declared `String`.  The `tuple_text_elem_clone` detection in
+/// `src/generation/dispatch.rs::output_set` (added by T1.8a)
+/// handled the same shape but pattern-matched `Value::TupleGet`
+/// directly, missing the `Value::Span(TupleGet)` wrapper the
+/// parser puts around every assignment RHS — so the `.clone()`
+/// fast-path never fired and codegen fell through to the buggy
+/// `&...to_string()` form.  Fix unspans `to` before pattern-matching;
+/// also extends the symmetric `text_local_clone` Var detection to
+/// unspan for the same reason.  Interp was unaffected (no `&` /
+/// `.to_string()` precedence concern).
+#[test]
+fn p228_text_tuple_element_assignment() {
+    code!(
+        "fn run() -> text {
+    t = (\"hello\", 42);
+    label = t.0;
+    label
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("hello".to_string()));
+}
+
+/// P228 follow-up — text element at index > 0 (mixed-type tuple
+/// with a text element in the middle).  Same Span-wrapped TupleGet
+/// shape; pins that the fix is index-agnostic, not specific to `.0`.
+#[test]
+fn p228_text_tuple_element_at_higher_index() {
+    code!(
+        "fn run() -> text {
+    t = (42, \"world\", 99);
+    s = t.1;
+    s
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("world".to_string()));
+}
+
+/// P226 — closed 2026-05-06.  Vector literals (`[1,2,3]`) inside a
+/// state-machine generator (Simple-yield-only — no for-loop body so
+/// the eager-collect path doesn't engage) allocated a `__vdb_*`
+/// `DbRef` slot that the per-state codegen declared inside one
+/// match arm via `let mut var___vdb_N: DbRef = stores.null_named(...)`,
+/// scoping the binding to that arm only.  A subsequent state arm
+/// referencing the same `__vdb_N` (e.g. two `Simple` yields each
+/// containing a vector literal) failed to compile with E0425
+/// ("cannot find value `var___vdb_N` in this scope").  Same scoping
+/// family as P218 (`__work_*` text format buffers) and P224 (general
+/// user locals).  Fix in `src/generation/coroutine.rs::emit_next_i64`
+/// pre-declares any non-argument `__vdb_*` local at function scope
+/// (mirroring P218's text pre-declaration), then adds the var to
+/// `self.declared` so the IR's per-state Set ops emit as plain
+/// assignments rather than re-declarations.  Interp was unaffected —
+/// the bytecode VM's variable scope is per-function, not per-arm.
+#[test]
+fn p226_vector_literal_in_yield_across_simple_arms() {
+    code!(
+        "fn nums() -> iterator<integer> {
+    yield [1, 2, 3].len();
+    yield [10, 20, 30, 40].len();
+}
+fn run() -> integer {
+    total = 0;
+    for v in nums() { total = total + v; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(7)); // 3 + 4
+}
+
+/// P226 follow-up — vector literal bound to a local first, then
+/// referenced.  Triggers the same `__vdb_*` slot allocation across
+/// state arms; pins that the fix covers the indirect shape too.
+#[test]
+fn p226_vector_literal_via_local_across_simple_arms() {
+    code!(
+        "fn nums() -> iterator<integer> {
+    a = [1, 2, 3];
+    yield a.len();
+    b = [10, 20, 30, 40];
+    yield b.len();
+}
+fn run() -> integer {
+    total = 0;
+    for v in nums() { total = total + v; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(7));
+}
+
+/// P232 — closed 2026-05-06.  `env_variable(name)` returned a `Str`
+/// whose pointer dangled into a dropped local `OsString` (or, on the
+/// WASM build, a dropped `String`).  Calling code observed garbage
+/// bytes — `env_variable("MYVAR")` reading `"hello"` came back as
+/// random non-UTF8 sequences, `as integer` then produced `null`.
+/// The bug had been latent because the in-tree test
+/// (`tests/scripts/19-files.loft:99`) only checked the unset case
+/// (where the empty-string return path bypassed the dangling
+/// branch).  Surfaced 2026-05-06 while wiring `LOFT_TICTACTOE_PORT`
+/// for P231.  Fix in `src/database/format.rs::Stores::os_variable`
+/// changes the signature from a static `fn(name: &str) -> Str` to
+/// `&mut self`, pushes the resolved value into `self.scratch`, and
+/// returns a `Str` borrowing from the persistent buffer (mirrors the
+/// P205 pattern for text-returning natives).  `n_env_variable` and
+/// the `#rust"stores.os_variable(@name)"` template both follow.
+/// Validates by setting the env var in-process and round-tripping
+/// through the loft runtime.
+#[test]
+fn p232_env_variable_round_trips_set_value() {
+    // Use a process-unique var name to avoid clashes with concurrent
+    // test threads.  SAFETY: `set_var` is unsafe in Rust 2024 because
+    // racing readers in other threads may observe a torn value; this
+    // test sets, reads, and removes synchronously and never relies on
+    // a parallel reader, so the race window is empty within this test.
+    let var = format!("LOFT_P232_PROBE_{}", std::process::id());
+    // SAFETY: see comment above.
+    unsafe {
+        std::env::set_var(&var, "round-trip");
+    }
+    let src = format!(
+        "fn run() -> text {{
+    env_variable(\"{var}\")
+}}"
+    );
+    code!(&src)
+        .expr("run()")
+        .result(Value::Text("round-trip".to_string()));
+    // SAFETY: see comment above.
+    unsafe {
+        std::env::remove_var(&var);
+    }
+}
+
+/// P230 — closed 2026-05-06.  `yield` inside an `if` block within a
+/// generator emitted a raw Rust `yield` keyword on native (E0627
+/// "yield expression outside of coroutine literal"), instead of
+/// translating into a state-machine return.  Interp worked because
+/// the bytecode VM handles every `OpCoroutineYield` generically.
+/// Root cause: `src/generation/coroutine.rs::collect_segments` only
+/// matched yields at the TOP LEVEL of a generator body's operator
+/// list (Simple / YieldFrom / ForLoopBody) plus `Block` and `Loop`
+/// containing yields — `Value::If` was missed.  An `if`-with-yield
+/// fell through to the `pre` accumulator, then `output_code_inner`
+/// hit `Value::Yield` and emitted literal `yield ...` Rust syntax.
+/// Fix extends the ForLoopBody matcher to `Value::Block(_) |
+/// Value::Loop(_) | Value::If(_, _, _)` so the eager-collect
+/// factory's `yield_collect = true` mode emits `__values.push(...)`
+/// instead of `yield ...` (mirroring how Block-with-yield was
+/// already handled).  `contains_yield` already walked through
+/// `Value::If` so detection works without further changes.
+#[test]
+fn p230_yield_in_if_block() {
+    code!(
+        "fn cond() -> iterator<integer> {
+    n = 5;
+    if n > 0 { yield n; }
+    yield 99;
+}
+fn run() -> integer {
+    total = 0;
+    for v in cond() { total = total + v; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(104)); // 5 + 99
+}
+
+/// P230 follow-up — yield in else branch.  Same scoping family;
+/// pins that the fix covers both arms of an if/else, not just the
+/// then-arm.
+#[test]
+fn p230_yield_in_else_branch() {
+    code!(
+        "fn cond() -> iterator<integer> {
+    n = -5;
+    if n > 0 { yield 1; } else { yield n; }
+    yield 99;
+}
+fn run() -> integer {
+    total = 0;
+    for v in cond() { total = total + v; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(94)); // -5 + 99
+}
+
+/// P230 follow-up — yield in both arms of if/else, multiple yields
+/// per arm, mixed with a top-level yield after.  Stresses the
+/// eager-collect path's ability to interleave conditional and
+/// unconditional yields in the same generator.
+#[test]
+fn p230_yield_in_both_branches_with_trailing_simple() {
+    code!(
+        "fn cond() -> iterator<integer> {
+    n = -5;
+    if n > 0 { yield 1; yield 2; }
+    else { yield n; yield n - 1; }
+    yield 99;
+}
+fn run() -> integer {
+    sum = 0;
+    for v in cond() { sum = sum + v; }
+    sum
+}"
+    )
+    .expr("run()")
+    // -5 + -6 + 99 = 88
+    .result(Value::Int(88));
+}
+
+// ── P54 Q3 second half — `T.to_json()` for any user struct ──────────
+
+/// Q3.b — `instance.to_json()` on a flat struct emits canonical JSON
+/// with all primitive fields.  The parser-side intercept in
+/// `src/parser/fields.rs::field()` lowers the method call to
+/// `n_struct_to_json(self_ref, struct_kt)`, which delegates to
+/// `Stores::show_json` (`src/database/format.rs`).
+#[test]
+fn q3b_struct_to_json_basic_primitives() {
+    code!(
+        "struct U { name: text, age: integer, score: float, ok: boolean }
+fn run() -> text {
+    u = U { name: \"Alice\", age: 30, score: 4.5, ok: true };
+    u.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(
+        r#"{"name":"Alice","age":30,"score":4.5,"ok":true}"#.to_string(),
+    ));
+}
+
+/// Q3.b — round-trip via `T.parse(json_parse(...))` recovers the
+/// original struct.  This is the core property the design promises:
+/// any struct can be serialised and re-parsed without loss.
+#[test]
+fn q3b_struct_to_json_round_trip() {
+    code!(
+        "struct U { name: text, age: integer }
+fn run() -> integer {
+    u = U { name: \"Bob\", age: 25 };
+    txt = u.to_json();
+    parsed = U.parse(json_parse(txt));
+    parsed.age
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(25));
+}
+
+/// Q3.b — nested struct fields recurse correctly.  The inner struct
+/// is rendered as a nested JSON object inside the outer struct.
+#[test]
+fn q3b_struct_to_json_nested_struct() {
+    code!(
+        "struct A { city: text }
+struct U { name: text, addr: A }
+fn run() -> text {
+    u = U { name: \"X\", addr: A { city: \"NYC\" } };
+    u.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(
+        r#"{"name":"X","addr":{"city":"NYC"}}"#.to_string(),
+    ));
+}
+
+/// Q3.b — `vector<text>` field renders as a JSON array of strings.
+#[test]
+fn q3b_struct_to_json_vector_text_field() {
+    code!(
+        "struct U { tags: vector<text> }
+fn run() -> text {
+    u = U { tags: [\"dev\", \"rust\"] };
+    u.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(r#"{"tags":["dev","rust"]}"#.to_string()));
+}
+
+/// Q3.b — `vector<integer>` field renders as a JSON array of numbers.
+#[test]
+fn q3b_struct_to_json_vector_integer_field() {
+    code!(
+        "struct U { nums: vector<integer> }
+fn run() -> text {
+    u = U { nums: [1, 2, 3] };
+    u.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(r#"{"nums":[1,2,3]}"#.to_string()));
+}
+
+/// Q3.b — `JsonValue` field renders its inline subtree verbatim,
+/// not as the generic enum-variant shape (`{"JString":{"value":"x"}}`).
+/// Special-cased in `ShowDb::write` (P54 Q3): a `JsonValue`-typed
+/// struct field routes to `write_jsonvalue` for native JSON-value
+/// semantic rendering.
+#[test]
+fn q3b_struct_to_json_jsonvalue_field_renders_verbatim() {
+    code!(
+        "struct W { name: text, payload: JsonValue }
+fn run() -> text {
+    inner = json_parse(`{{\"x\":42}}`);
+    w = W { name: \"outer\", payload: inner };
+    w.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(
+        r#"{"name":"outer","payload":{"x":42}}"#.to_string(),
+    ));
+}
+
+// Q3.b — JSON string escaping (`"`, `\`, control chars per RFC 8259).
+// The per-byte escape dispatch is locked in
+// `src/database/format.rs::json_escape_tests` (13 unit tests covering
+// every short-form escape, the `\uXXXX` arm, the boundary at 0x20,
+// and UTF-8 multibyte passthrough).  We don't duplicate those at the
+// loft-surface layer here — the `code!` test harness's `Value::Text`
+// expected-value embedding round-trips strings through both Rust escape
+// and loft-lexer escape semantics, which makes asserting on
+// JSON-escaped text shapes (where `\n` must mean two literal chars)
+// brittle and prone to lexer-loop hangs.
+
+/// Q3.b — `to_json_pretty()` produces multi-line indented output.
+/// Every non-empty struct opens with newline + 2-space indent per
+/// nesting level and dedents the closing brace to the parent's
+/// depth.  Exact whitespace shape is part of the contract — pretty
+/// JSON consumers (logging, golden-file diffs) depend on it.
+#[test]
+fn q3b_struct_to_json_pretty_format() {
+    code!(
+        "struct U { name: text, age: integer }
+fn run() -> text {
+    u = U { name: \"Alice\", age: 30 };
+    u.to_json_pretty()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(
+        "{\n  \"name\": \"Alice\",\n  \"age\": 30\n}".to_string(),
+    ));
+}
+
+/// Q3.b — null text fields are omitted from the output (matching
+/// the legacy `dump`/`show` `is_null` filter in
+/// `ShowDb::has_visible_field`).  A text field that was never
+/// assigned has `s_rec == 0` (loft's text-null sentinel) and
+/// `is_null` returns true.  The resulting JSON omits the field
+/// entirely rather than emitting `"name": null` — matching loft's
+/// "absence is not failure" stance from the P54 design.
+#[test]
+fn q3b_struct_to_json_skips_null_text_fields() {
+    code!(
+        "struct U { name: text, age: integer }
+fn run() -> text {
+    u = U { age: 7 };
+    u.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(r#"{"age":7}"#.to_string()));
+}

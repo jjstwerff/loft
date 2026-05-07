@@ -208,6 +208,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_item", n_item),
     ("n_len", n_len),
     ("n_struct_from_jsonvalue", n_struct_from_jsonvalue),
+    ("n_struct_to_json", n_struct_to_json),
+    ("n_struct_to_json_pretty", n_struct_to_json_pretty),
     // B7 (2026-04-13): when called with method syntax (`v.len()`),
     // the dispatcher resolves to `t_9JsonValue_<method>`.  Register
     // these aliases pointing at the same Rust impls so the call goes
@@ -366,7 +368,7 @@ fn n_env_variables(stores: &mut Stores, stack: &mut DbRef) {
 
 fn n_env_variable(stores: &mut Stores, stack: &mut DbRef) {
     let v_name = *stores.get::<Str>(stack);
-    let new_value = { Stores::os_variable(v_name.str()) };
+    let new_value = { stores.os_variable(v_name.str()) };
     stores.put(stack, new_value);
 }
 
@@ -3045,6 +3047,38 @@ fn populate_vector_from_jarray(
         }
         crate::vector::vector_finish(dest_handle, &mut stores.allocations);
     }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Q3 second half — `T.to_json()` / `T.to_json_pretty()` for any user
+// struct.  Mirror of `n_struct_from_jsonvalue` (P54 step 5) in the
+// serialise direction.  The compile-time fallback in
+// `src/parser/fields.rs::field()` lowers `instance.to_json()` to a
+// single call to `n_struct_to_json(instance, struct_kt)` regardless
+// of struct shape; the actual rendering is delegated to the
+// existing `Stores::show_json` (in `src/database/format.rs`), which
+// already walks every declared field via `Parts::Struct` /
+// `Parts::Vector` / etc. and produces canonical JSON when its
+// `json: true` flag is set.
+
+fn n_struct_to_json(stores: &mut Stores, stack: &mut DbRef) {
+    struct_to_json_dispatch(stores, stack, false);
+}
+
+fn n_struct_to_json_pretty(stores: &mut Stores, stack: &mut DbRef) {
+    struct_to_json_dispatch(stores, stack, true);
+}
+
+fn struct_to_json_dispatch(stores: &mut Stores, stack: &mut DbRef, pretty: bool) {
+    let struct_kt_arg = *stores.get::<i64>(stack) as i32;
+    let src = *stores.get::<DbRef>(stack);
+    let struct_kt = struct_kt_arg as u16;
+    let mut out = String::new();
+    stores.show_json(&mut out, &src, struct_kt, pretty);
+    let idx = stores.scratch.len();
+    stores.scratch.push(out);
+    let s = Str::new(&stores.scratch[idx]);
+    stores.put(stack, s);
 }
 
 /// Allocate a JsonValue set to the `JNull` variant and return a

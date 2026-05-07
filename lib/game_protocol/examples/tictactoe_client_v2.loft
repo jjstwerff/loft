@@ -95,7 +95,16 @@ fn main() {
   if args.len() > 0 { label = args[0]; }
   println("[{label}] client v2 start");
 
-  ws = web::ws_handler("ws://localhost:7878/");
+  // P231: pair with the server's `LOFT_TICTACTOE_PORT` so a test
+  // harness can spin up server+clients on a unique ephemeral port.
+  // Default 7878 keeps the standalone-launch behaviour.
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  url = if port_raw == "" {
+    "ws://localhost:7878/"
+  } else {
+    "ws://localhost:{port_raw}/"
+  };
+  ws = web::ws_handler(url);
   if ws == null {
     println("[{label}] malformed URL");
     return;
@@ -141,6 +150,19 @@ fn main() {
     return;
   }
   println("[{label}] handlers learned: Click={h_click} Placement={h_placement} GameOver={h_gameover} SpectatorPlacement={h_spec_placement} SpectatorGameOver={h_spec_gameover}");
+
+  // P229a: optional post-handshake pause so a partner client can
+  // complete its own handshake and register with the server before
+  // either of us starts placing X's.  Without this, on fast schedulers
+  // (macOS in particular) the first client races through its 3 moves
+  // in under 50 ms — well before the second client's MAP frame
+  // arrives — so neither client observes the other's spectator
+  // routing.  The two-client integration test sets the env var to
+  // ~200 ms; the single-client test leaves it unset (no delay).
+  delay_raw = env_variable("LOFT_TICTACTOE_CLIENT_DELAY_MS");
+  if delay_raw != "" {
+    sleep_ms(delay_raw as integer);
+  }
 
   // Phase 2 — short warmup so a second client can join (3 polls).
   poll_count = 0;

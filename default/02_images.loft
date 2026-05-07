@@ -307,7 +307,7 @@ pub fn env_variables() -> vector < EnvVariable >;
 // Returns the value of the environment variable name, or null if it is not set.
 // Use to read configuration from the shell environment.
 pub fn env_variable(name: text) -> text;
-#rust"Stores::os_variable(@name)"
+#rust"stores.os_variable(@name)"
 #impure(host_io)
 // --- Time ---
 // Returns the current wall-clock time as milliseconds since the Unix epoch

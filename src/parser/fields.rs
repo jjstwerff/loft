@@ -117,6 +117,48 @@ impl Parser {
                     return self.parse_method(code, stub_nr, t.clone());
                 }
             }
+            // P54 Q3 second half — `instance.to_json()` /
+            // `instance.to_json_pretty()` on any user struct (or
+            // struct-enum variant) lowers to a single call to
+            // `n_struct_to_json(self, struct_kt)` via the schema
+            // walker in `Stores::show_json` (`src/database/format.rs`).
+            // No per-type stub registration needed; the parser
+            // synthesises the call when the receiver is a
+            // `Type::Reference(struct_d, _)` and the method name
+            // matches.  Mirror of `parse_type_parse` (P54 step 5)
+            // for the static `T.parse(JsonValue)` form.
+            //
+            // Runs on BOTH passes so first-pass type inference of the
+            // enclosing variable sees the `Type::Text` return type
+            // (same reason the bounded-T fallback above does the
+            // same).  On first pass we consume the `()` to make
+            // parser progress; the Call population only happens on
+            // second pass when known_type / def_nr are stable.
+            if (field == "to_json" || field == "to_json_pretty")
+                && matches!(t, Type::Reference(_, _))
+                && self.lexer.peek_token("(")
+            {
+                self.lexer.token("(");
+                self.lexer.token(")");
+                if !self.first_pass {
+                    let Type::Reference(struct_d, _) = &t else {
+                        unreachable!("matches! above guards Reference shape");
+                    };
+                    let known_tp = self.data.def(*struct_d).known_type;
+                    let n_walker = if field == "to_json" {
+                        self.data.def_nr("n_struct_to_json")
+                    } else {
+                        self.data.def_nr("n_struct_to_json_pretty")
+                    };
+                    if known_tp != u16::MAX && n_walker != u32::MAX {
+                        *code = Value::Call(
+                            n_walker,
+                            vec![code.clone(), Value::Int(i32::from(known_tp))],
+                        );
+                    }
+                }
+                return Type::Text(Vec::new());
+            }
             // Plan-19 phase 03 — method-on-parent-enum dispatch.  When
             // the receiver is a variant value (`Type::Reference(child_d, …)`
             // for a struct enum variant) and the method is declared on
@@ -523,6 +565,16 @@ impl Parser {
             && let Some(n) = spec.vector_narrow_width()
         {
             i32::from(n)
+        } else if let Some(narrow) = self.data.narrow_vector_content(etp, &mut self.database) {
+            // P214: Type::Function vector elements route through
+            // `narrow_vector_content` to a `database.int(0, false)`
+            // (size 4 d_nr storage).  The previous fallback via
+            // `data.def(elm_td).known_type` returned `u16::MAX` for
+            // synthetic `i32` defs without a registered known_type,
+            // making `database.size(known) = 0` and producing a
+            // stride-0 read that always hit slot 0 regardless of
+            // index.
+            i32::from(self.database.size(narrow))
         } else {
             i32::from(self.database.size(known))
         };
@@ -582,6 +634,29 @@ impl Parser {
                 *code = self.get_val(etp, true, 0, code.clone(), u32::MAX);
             } else if let Type::Tuple(elems) = etp {
                 *code = self.unbox_tuple_from_dbref(code.clone(), elems);
+            } else if matches!(etp, Type::Function(_, _, _)) {
+                // P214: vector elements of `fn(...) -> ...` type are
+                // stored as 4-byte d_nr only (non-capturing — capturing
+                // closures in vectors are deferred).  The variable's
+                // stack representation is `(u32, DbRef)` (a fn-ref
+                // tuple), so the read assembles the tuple from the
+                // 4B slot d_nr + a null closure sentinel.  Mirrors the
+                // struct-field non-capturing path in
+                // `parser/mod.rs::get_val` Type::Function arm but uses
+                // an explicit `OpNullRefSentinel` for the closure half
+                // since vectors don't have a separate `__closure_rec`
+                // sub-field.
+                let slot = code.clone();
+                let read_dnr = self.cl("OpGetInt4", &[slot, Value::Int(0)]);
+                let read_clos = self.cl("OpNullRefSentinel", &[]);
+                *code = crate::data::v_block(
+                    vec![read_dnr, read_clos],
+                    etp.clone(),
+                    // Reuse the field-read block name so native codegen's
+                    // tuple-emit shortcut (`((d_nr) as u32, closure_DbRef)`)
+                    // fires here too — the block layout is identical.
+                    "fn_ref_field_read",
+                );
             }
         }
         None

@@ -180,3 +180,10 @@ pub fn try_recv(self: WsHandler) -> text {
 pub fn close(self: WsHandler) {
   ws_close_native(self.id);
 }
+
+// Block the calling thread for `ms` milliseconds.  Convenience for
+// tests and pacing loops; non-positive values are a no-op.  Not
+// available on the WASM target — the host event loop is the
+// equivalent.
+pub fn sleep_ms(ms: integer);
+#native "n_sleep_ms"

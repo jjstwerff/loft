@@ -107,7 +107,7 @@ Heavy `parallel_execute_and_collect` retired.  Light path
 | P-ID | Title | Relevant arc step |
 |---|---|---|
 | **P196** | ~~Tuple-of-fn-ref native codegen `(u32, DbRef).0 as i32`~~ | **CLOSED 2026-04-30** — fixed in `output_call_template` (project `.0` from fn-ref tuple → widen to i64 for the OpSetInt4 template), no longer requires 4d.C closure-storage redesign; A6.c can now proceed independently |
-| **P198** | `tests/scripts/95-alias-copy.loft` leaks Database 3 — regression on `roadmap-lsp-eclipse` | A1 — investigate before commit; possible plan-06 par-safety culprit |
+| **P198** | ~~`tests/scripts/95-alias-copy.loft` leaks Database 3 — regression on `roadmap-lsp-eclipse`~~ | **CLOSED 2026-05-01** in commit `30b01ce` — `scan_set` + native deep-copy emit both now unwrap `Value::Span` before pattern matching; A1 gate passes |
 | **P199** | Native codegen E0499 double `&mut stores` borrow on `n_assert(..., n_add_pair(...), ...)` | A7 (gated on T1.8a tuple-return convention) |
 | **P200** | Native codegen E0308 width mismatch on `f += <integer>` against binary file | Out of scope for ARC; tracked separately |
 | **P201** | `tests/html_wasm.rs` Mutex-poison cascade | Out of scope for ARC; test infra |
