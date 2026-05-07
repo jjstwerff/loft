@@ -3027,6 +3027,7 @@ impl Parser {
         }
         match name {
             "parallel_for" => return self.parse_parallel_for(val, list, types),
+            "par_fold" => return self.parse_par_fold(val, list, types),
             "map" => return self.parse_map(val, list, types),
             "filter" => return self.parse_filter(val, list, types),
             "reduce" => return self.parse_reduce(val, list, types),

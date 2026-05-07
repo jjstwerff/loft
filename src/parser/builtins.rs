@@ -402,4 +402,130 @@ impl Parser {
     // could skip per-thread store deep-copy by routing through the
     // light pool — irrelevant now that every par worker streams
     // through the Queue family.  ~110 LOC deleted.
+
+    /// ARC.md A5 — user-facing `par_fold(items, init, fold, threads)`
+    /// builtin.  Resolves the fold function reference to a d_nr at
+    /// parse time and emits a single `Call` to `n_parallel_fold`.
+    /// V1 restriction (mirrors the runtime, see
+    /// `default/01_code.loft::parallel_fold`): `items` must be
+    /// `vector<integer>`, `init` and the worker's accumulator /
+    /// row / return types must all be `integer`.  Heterogeneous
+    /// types (`vector<T>` + `fn(R, T) -> R`) await a follow-up
+    /// when the runtime relaxes its V1 gate.
+    ///
+    /// Syntax: `par_fold(items, init, fn worker, threads)` —
+    /// `fn worker` is the fn-reference form (parser converts to
+    /// `Value::Int(d_nr)` with `Type::Function(...)`).
+    pub(crate) fn parse_par_fold(
+        &mut self,
+        val: &mut Value,
+        list: &[Value],
+        types: &[Type],
+    ) -> Type {
+        let int_tp = Type::Integer(crate::data::IntegerSpec::wide());
+        if self.first_pass {
+            return int_tp;
+        }
+        if list.len() != 4 {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold requires exactly 4 arguments: items, init, fn fold, threads"
+            );
+            return Type::Unknown(0);
+        }
+        // V1: items must be vector<integer>.
+        let elem_tp = if let Type::Vector(elem, _) = &types[0] {
+            (**elem).clone()
+        } else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold: first argument must be a vector<integer>"
+            );
+            return Type::Unknown(0);
+        };
+        if !matches!(elem_tp, Type::Integer(_)) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold (V1): items element type must be integer; got {}",
+                elem_tp.name(&self.data)
+            );
+            return Type::Unknown(0);
+        }
+        // V1: init must be integer.
+        if !matches!(types[1], Type::Integer(_)) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold (V1): init must be integer; got {}",
+                types[1].name(&self.data)
+            );
+            return Type::Unknown(0);
+        }
+        // V1: fold must be fn(integer, integer) -> integer.
+        let (fn_args, fn_ret) = if let Type::Function(args, ret, _) = &types[2] {
+            (args.clone(), (**ret).clone())
+        } else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold: third argument must be a function reference (use `fn <name>`)"
+            );
+            return Type::Unknown(0);
+        };
+        if fn_args.len() != 2
+            || !matches!(fn_args[0], Type::Integer(_))
+            || !matches!(fn_args[1], Type::Integer(_))
+            || !matches!(fn_ret, Type::Integer(_))
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold (V1): fold function must have signature `fn(integer, integer) -> integer`"
+            );
+            return Type::Unknown(0);
+        }
+        // threads must be integer.
+        if !matches!(types[3], Type::Integer(_)) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold: threads must be integer; got {}",
+                types[3].name(&self.data)
+            );
+            return Type::Unknown(0);
+        }
+        let par_fold_d_nr = self.data.def_nr("n_parallel_fold");
+        if par_fold_d_nr == u32::MAX {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "internal error: n_parallel_fold not found"
+            );
+            return Type::Unknown(0);
+        }
+        // Pop order in the runtime (top of stack first):
+        //   n_extra → extras... → threads → fold → init → input
+        // So the parser pushes (left-to-right) in declared order:
+        //   input, init, fold, threads, then `n_extra` (= 0 for V1).
+        // The `n_extra` count is emitted explicitly here, mirroring
+        // `build_parallel_for_ir` at `src/parser/collections.rs:1902`
+        // (the for-par desugar's analogous emit).  Codegen at
+        // `src/state/codegen.rs:2007` would also generate any extras
+        // beyond the 4 declared params, but the n_extra COUNT itself
+        // must come from here.
+        *val = Value::Call(
+            par_fold_d_nr,
+            vec![
+                list[0].clone(), // input
+                list[1].clone(), // init
+                list[2].clone(), // fold (Value::Int(d_nr) — bare fn name)
+                list[3].clone(), // threads
+                Value::Int(0),   // n_extra (V1: no extras)
+            ],
+        );
+        int_tp
+    }
 }

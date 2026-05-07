@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// ARC.md A5 — par_fold(items, init, fn fold, threads) acceptance tests.
+//
+// V1: vector<integer> + integer init + fn(integer, integer) -> integer
+// worker.  Runtime (run_parallel_fold in src/parallel.rs) shipped
+// 2026-05-03; this landed the user-facing parser builtin 2026-05-07.
+//
+// SCRIPTS_NATIVE_SKIP: native impl of n_parallel_fold lacks a
+// `_native` runtime + emitter (the auto-generated 5-arg stub would
+// need a 6-arg shape with the worker closure, like
+// `n_parallel_queue_native`).  Tracked as A5b follow-up.  Keep
+// interp coverage intact via this file; native skip is in
+// `tests/native.rs::SCRIPTS_NATIVE_SKIP`.
+
+fn add_two(a: integer, b: integer) -> integer { a + b }
+fn max_pair(a: integer, b: integer) -> integer { if b > a { b } else { a } }
+
+fn main() {
+  // Acceptance 1: sum 1..=100 = 5050 (4 threads).
+  range100: vector<integer> = [];
+  i = 1;
+  while i <= 100 {
+    range100 += [i];
+    i = i + 1;
+  }
+  total = par_fold(range100, 0, add_two, 4);
+  assert(total == 5050, "par_fold sum 1..=100 expected 5050, got {total}");
+
+  // Acceptance 2: par_fold_max — exercises a non-add monoid.
+  m_input: vector<integer> = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
+  m = par_fold(m_input, 0, max_pair, 4);
+  assert(m == 9, "par_fold max expected 9, got {m}");
+
+  // Acceptance 3: empty input returns init unchanged.
+  empty_input: vector<integer> = [];
+  default_val = par_fold(empty_input, 42, add_two, 4);
+  assert(default_val == 42, "par_fold empty: expected 42, got {default_val}");
+
+  // Acceptance 4: single-thread vs multi-thread give the same result.
+  st = par_fold(range100, 0, add_two, 1);
+  mt = par_fold(range100, 0, add_two, 8);
+  assert(st == mt, "par_fold 1-thread {st} vs 8-thread {mt}");
+  assert(st == 5050, "par_fold 1-thread expected 5050, got {st}");
+}

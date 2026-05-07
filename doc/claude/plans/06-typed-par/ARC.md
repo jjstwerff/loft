@@ -705,7 +705,7 @@ five separate functions).
 
 ### A5 — `Stitch::Reduce` runtime + `par_fold` surface
 
-**Status:** runtime DONE 2026-05-03; user-facing parser builtin OPEN.
+**Status:** runtime DONE 2026-05-03; user-facing parser builtin DONE 2026-05-07 (interp); native runtime A5b OPEN as follow-up.
 **Effort:** M (~1 session) — runtime + tests in <1 session.
 **Acceptance test:** `par_fold_int_sum` (sum 1..=100 = 5050),
 `par_fold_max`, `par_fold_empty_input`, and
@@ -731,22 +731,51 @@ five separate functions).
   via direct `run_parallel_fold` calls (compile + load worker fn
   + invoke).
 
-**Still PENDING — user-facing parser builtin (~1 session):**
+**User-facing parser builtin DONE 2026-05-07 (interp):**
 
-The runtime is callable from loft as `parallel_fold(items, 0,
-fn_ref_d_nr_int, 4)` but loft programs don't write d_nrs by hand.
-Need either:
+`par_fold(items, init, fn_name, threads)` is now a parser builtin
+in `src/parser/builtins.rs::parse_par_fold`, dispatched from
+`src/parser/control.rs:3030`.  The builtin:
 
-- A parser-level builtin `par_fold(items, init, fn_name, threads)`
-  that resolves the fn-name to a d_nr at parse time (mirrors how
-  par() currently constructs `n_parallel_for` calls — see
-  `src/parser/collections.rs::build_parallel_for_ir`).
-- OR auto-detection per A5.3: rewrite `sum(parallel_for(items,
-  worker, 4))` patterns into `par_fold(items, 0, worker, 4)`.
+- Validates V1 type constraints (items: `vector<integer>`, init:
+  `integer`, fold: `fn(integer, integer) -> integer`, threads:
+  `integer`).
+- Resolves the fold function reference (a bare name; the parser
+  produces `Value::Int(d_nr)` with `Type::Function(...)` for it).
+- Emits a single `Call(n_parallel_fold, [input, init, fold,
+  threads, n_extra=0])`.  The `n_extra` count mirrors
+  `build_parallel_for_ir`'s analogous emit at
+  `src/parser/collections.rs:1902`.
 
-Either lifts the runtime to a usable user surface.  Out of scope
-for the runtime closure landed today; recommended as the next
-A5 follow-up.
+Acceptance tests: `tests/scripts/22b-par-fold.loft` covers all
+four canaries (sum 1..=100 = 5050; max; empty input; 1-thread vs
+multi-thread agreement).  Runs interp via `wrap loft_suite`.
+
+**A5b OPEN — native runtime (~1 session):**
+
+The native backend's `parallel_fold` call hits the auto-generated
+5-arg stub (`fn n_parallel_fold(cell, input, init, fold, threads)
+-> i64`); the parser emits a 6-arg call (with the `n_extra` count)
+and rustc rejects with E0061.  A5b adds:
+
+- `n_parallel_fold_native<F>` in `src/codegen_runtime.rs` with the
+  closure-based shape used by `n_parallel_queue_native` etc.  The
+  worker closure has signature
+  `Fn(i64, i64) -> i64 + Send + Sync` (acc, row → acc).
+- A `ParallelFoldEmitter` in `src/generation/ops/parallel.rs`
+  registered for `n_parallel_fold` (mirror of
+  `ParallelForEmitter` / `ParallelQueueEmitter`); rewrites the
+  Call to emit the worker closure body inline.
+- Removal of `tests/scripts/22b-par-fold.loft` from
+  `tests/native.rs::SCRIPTS_NATIVE_SKIP`.
+
+Until A5b lands, `tests/scripts/22b-par-fold.loft` is in
+`SCRIPTS_NATIVE_SKIP` so `cargo test --release --test native
+native_scripts` stays green.
+
+The auto-detection variant (A5.3 — rewrite `sum(parallel_for(...))`
+patterns into `par_fold(...)`) remains an open follow-up.  Builds
+on the explicit `par_fold` surface landed today.
 
 **Bug-hunt yield this session:** zero — the runtime built cleanly
 on top of existing infrastructure (`execute_at_raw_primitive_input`,
