@@ -140,8 +140,18 @@ give each item a traceable history.
    - A previous prompt that said "open a PR" does not authorise the next PR.
      Ask each time, or infer from the exact current prompt.
    - When in doubt, summarise what is ready and ask whether to push.
-4. Create branches from the tip of `main` using the naming convention in
-   [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) (e.g. `p1-1-lambda-parser`, `benchmark`).
+4. Create branches from the tip of `main`.  **Default to a GENERAL
+   name** (`quality-pass`, `cleanup`, `housekeeping`, `work`) so the
+   branch can host any theme and accumulate work across sessions —
+   each new branch eventually has to rebase against a moving `main`,
+   surfaces conflicts in unrelated files, and often fails CI on
+   patterns the new branch didn't author.  ONE long-lived working
+   branch with cross-theme commits is the cheaper failure mode.
+   ONLY a longer plan (multi-week, well-defined arc with its own
+   design doc — e.g. `plan-06-arc`, `lsp-server`) earns a specific
+   branch name.  Do not open a second branch unless the user
+   explicitly asks ("start a new branch", "fresh branch for X",
+   "switch to a new branch").
 5. Merging back to `main` is done via a GitHub pull request — not a local `git merge`.
 
 ---
