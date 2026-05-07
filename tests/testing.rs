@@ -204,10 +204,26 @@ impl Test {
 }
 
 fn replace_tokens(res: &str) -> String {
-    res.replace("{", "{{")
-        .replace("}", "}}")
-        .replace("\n", "\\n")
-        .replace("\"", "\\\"")
+    // P233: escape `\` FIRST.  When the resulting text gets embedded
+    // back into a loft string literal, loft's lexer interprets `\`
+    // as an escape introducer (e.g. `\"` → `"`, `\\` → `\`), so a
+    // lone `\` in the original `res` would otherwise let the lexer
+    // re-interpret subsequent characters and either corrupt the
+    // value or — for shapes with `\\"` after the later `"` → `\"`
+    // step — close the string literal mid-scan and trip a hang in
+    // the lexer's recovery path.  Doubling backslashes first turns
+    // each original `\` into `\\` (which the lexer reads back as
+    // exactly one `\`), making the round-trip lossless.
+    //
+    // Order matters: this MUST run before the `\n` and `"` steps
+    // below, because both add fresh `\` characters that should NOT
+    // themselves be re-escaped (those backslashes are part of the
+    // canonical escape sequences `\n` and `\"`).
+    res.replace('\\', "\\\\")
+        .replace('{', "{{")
+        .replace('}', "}}")
+        .replace('\n', "\\n")
+        .replace('"', "\\\"")
 }
 
 impl Drop for Test {
@@ -566,5 +582,114 @@ pub fn testing_expr(expr: &str, test: &str) -> Test {
         tp: Type::Unknown(0),
         sizes: HashMap::new(),
         expected_slots: None,
+    }
+}
+
+#[cfg(test)]
+mod replace_tokens_tests {
+    //! P233 regression coverage: `replace_tokens` must produce a
+    //! string that, after being embedded in a loft string literal
+    //! and parsed by loft's lexer, recovers the original input
+    //! byte-for-byte.  Without this property the test harness
+    //! corrupts JSON-escape shapes and (worse) can hang loft's
+    //! lexer on `\\"` patterns that close strings prematurely.
+    use super::replace_tokens;
+
+    /// Apply loft's string-literal escape interpretation to `src`.
+    /// Mirrors the lexer's escape table for the characters
+    /// `replace_tokens` produces: `{{`/`}}` → `{`/`}`, `\"` → `"`,
+    /// `\\` → `\`, `\n` → real newline.
+    fn loft_lex_string_literal(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let bytes = src.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if c == b'\\' && i + 1 < bytes.len() {
+                match bytes[i + 1] {
+                    b'\\' => out.push('\\'),
+                    b'"' => out.push('"'),
+                    b'n' => out.push('\n'),
+                    b't' => out.push('\t'),
+                    other => {
+                        out.push('\\');
+                        out.push(other as char);
+                    }
+                }
+                i += 2;
+                continue;
+            }
+            if c == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                out.push('{');
+                i += 2;
+                continue;
+            }
+            if c == b'}' && i + 1 < bytes.len() && bytes[i + 1] == b'}' {
+                out.push('}');
+                i += 2;
+                continue;
+            }
+            out.push(c as char);
+            i += 1;
+        }
+        out
+    }
+
+    fn roundtrip(s: &str) {
+        let encoded = replace_tokens(s);
+        let decoded = loft_lex_string_literal(&encoded);
+        assert_eq!(
+            decoded, s,
+            "replace_tokens round-trip lost data\n  input:   {s:?}\n  encoded: {encoded:?}\n  decoded: {decoded:?}"
+        );
+    }
+
+    #[test]
+    fn ascii_passthrough() {
+        roundtrip("hello world");
+    }
+
+    #[test]
+    fn quotes_round_trip() {
+        roundtrip(r#"she said "hi""#);
+    }
+
+    #[test]
+    fn double_backslash_round_trips() {
+        // The shape that hung loft's lexer before P233.
+        roundtrip(r#"a \\ b"#);
+    }
+
+    #[test]
+    fn backslash_quote_round_trips() {
+        // Literal `\"` (2 chars) — must come back as 2 chars,
+        // not be re-interpreted by the lexer as an escaped quote.
+        roundtrip(r#"a \" b"#);
+    }
+
+    #[test]
+    fn json_escaped_text_round_trips() {
+        // The exact shape used as `Value::Text` expected in
+        // `tests/issues.rs::q3b_struct_to_json_string_escapes_*`.
+        roundtrip(r#"{"msg":"she said \"hi\" \\ done"}"#);
+        roundtrip(r#"{"msg":"line1\nline2\ttab"}"#);
+    }
+
+    #[test]
+    fn real_newlines_become_escaped() {
+        roundtrip("line1\nline2");
+    }
+
+    #[test]
+    fn real_tabs_round_trip() {
+        // Note: `replace_tokens` doesn't escape real tab → `\t`,
+        // but loft's lexer accepts a literal tab in a string
+        // literal as itself.
+        roundtrip("a\tb");
+    }
+
+    #[test]
+    fn curly_braces_passthrough() {
+        roundtrip("{key: value}");
     }
 }
