@@ -2710,10 +2710,13 @@ mod par_deep_tests {
 
     #[test]
     fn deep_par_call_callee_is_safe() {
-        // parallel_for_light is Impure(ParCall) — D8 R2 says nested
-        // par() is safe under recursive Arc promotion.
+        // ARC.md A4 (closed 2026-05-07) — `parallel_for_light` was
+        // retired but any Impure(ParCall) callee still demonstrates
+        // the same D8 R2 invariant: nested par() under recursive Arc
+        // promotion is safe.  Use `parallel_queue` (a current
+        // ParCall-purity callee) as the stand-in.
         let mut d = Data::new();
-        let pf = d.add_def("parallel_for_light", &pos(), DefType::Function);
+        let pf = d.add_def("parallel_queue", &pos(), DefType::Function);
         d.definitions[pf as usize].purity = Purity::Impure(ImpureCategory::ParCall);
         let worker = d.add_def("worker", &pos(), DefType::Function);
         d.definitions[worker as usize].code = Value::Call(pf, vec![]);

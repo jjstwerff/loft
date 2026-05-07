@@ -600,129 +600,36 @@ fn n_yield_frame(stores: &mut Stores, _stack: &mut DbRef) {
 // ── Parallel threading functions (feature = "threading") ──────────────
 
 #[cfg(feature = "threading")]
-/// Plan-06 spine step 8e — `n_parallel_for` delegates to the light
-/// path.  The heavy `parallel_execute_and_collect` was retired with
-/// 8e: every worker that previously needed the heavy deep-copy path
-/// (text / reference / struct-enum / vector) now routes through
-/// Queue (8c / 8d.0–3); narrow primitives stay on `n_parallel_for_light`'s
-/// per-worker pool.  Workers genuinely incompatible with the light
-/// path (recursive store allocation in non-Queue return shapes —
-/// none exist in the test corpus) hit `run_parallel_light`'s
-/// read-only assertion at runtime.
-///
-/// The stack layout matches `n_parallel_for_light` exactly, so the
-/// delegation is a single function call — no arg unpack/repack.
-fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
-    n_parallel_for_light(stores, stack);
+/// Plan-06 ARC.md A4 (closed 2026-05-07) — the legacy materialised
+/// `parallel_for` path is unreachable.  After A3.6, every primitive
+/// return type — including Single (4-byte f32) and Float (8-byte
+/// f64) — routes through the Queue family (`n_parallel_queue` /
+/// `_narrow` / `_text` / `_ref` / `_fn`).  The materialised path
+/// (`Stitch::Concat`) had only one consumer in the parser (the
+/// `actual_par_d_nr` resolution in `build_parallel_for_ir`) which is
+/// now dead.  The function entry is retained in the FUNCTIONS table
+/// for stack-trace symbol resolution but its body panics if invoked.
+fn n_parallel_for(_stores: &mut Stores, _stack: &mut DbRef) {
+    unreachable!(
+        "n_parallel_for: ARC.md A4 retired the materialised path; \
+         all par() routes through the Queue family (n_parallel_queue / \
+         _narrow / _text / _ref / _fn).  If you reached this, the \
+         parser failed to route the worker's return type to a Queue \
+         variant — extend `narrow_route_for` / the route_*_queue \
+         gates in src/parser/collections.rs."
+    );
 }
 
 #[cfg(feature = "threading")]
-/// Lightweight variant — borrows stores read-only instead of deep-copying.
-/// Same stack layout as `n_parallel_for` plus an extra `pool_m` argument.
-fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
-    // Same stack layout as n_parallel_for: n_extra on top, then declared params.
-    // Pop order (LIFO): n_extra, extras..., func, threads, return_size, elem_size, input.
-    // Post-2c: each `integer` is 8B.
-    let n_extra = *stores.get::<i64>(stack) as usize;
-    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
-    for _ in 0..n_extra {
-        extra_args.push(*stores.get::<i64>(stack) as u64);
-    }
-    extra_args.reverse();
-
-    let v_func = *stores.get::<i64>(stack) as i32;
-    let v_threads = *stores.get::<i64>(stack) as i32;
-    let v_return_size = *stores.get::<i64>(stack) as i32;
-    let v_element_size = *stores.get::<i64>(stack) as i32;
-    let v_input = *stores.get::<DbRef>(stack);
-
-    let (fn_pos, program) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_for_light called outside State::execute()");
-        let data = unsafe { &*ctx.data };
-        assert!(
-            v_func >= 0,
-            "parallel_for_light: invalid function reference {v_func}"
-        );
-        let d_nr = v_func as u32;
-        let fn_pos = data.def(d_nr).code_position;
-        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let library = unsafe { Arc::clone(&*ctx.library) };
-        (
-            fn_pos,
-            WorkerProgram {
-                bytecode,
-                library,
-                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
-                data_ptr: ctx.data,
-                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
-                // n_parallel_for path does not propagate line_numbers; workers
-                // get function name + file but report line 0.  Fixing this
-                // requires threading line_numbers through ParallelCtx.
-                line_numbers: Arc::new(std::collections::BTreeMap::new()),
-            },
-        )
-    };
-
-    let element_size = v_element_size as u32;
-    // Plan-06 phase 3d / phase 1 G2 — derive return_size and
-    // primitive-input size from def metadata.  The light path only
-    // ever reaches this code with primitive returns (parser routes
-    // Text/Reference/struct-enum to the heavy path).  We still
-    // consult v_return_size as a backstop when def.returned is
-    // Unknown (partial-parse scaffolding).
-    let (return_size, primitive_input_size, tuple_input_types) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_for_light: missing context");
-        let data = unsafe { &*ctx.data };
-        let def = data.def(v_func as u32);
-        let derived = u32::from(crate::variables::size(
-            &def.returned,
-            &crate::data::Context::Argument,
-        ));
-        let rs = if (1..=8).contains(&derived) {
-            derived
-        } else {
-            v_return_size.clamp(1, 8) as u32
-        };
-        // Phase 4d.A — typed input dispatch (mirrors the heavy
-        // path in `n_parallel_for`).  Encodes InputKind back onto
-        // the legacy `prim_in: u32` channel.
-        let pis = match input_kind_for_first_arg(def) {
-            InputKind::Ref => 0u32,
-            InputKind::Text => u32::MAX,
-            InputKind::Primitive { size } => u32::from(size),
-        };
-        // P189d — tuple-element types of the worker's first arg
-        // (None for non-tuple) so the wide-input path can inflate
-        // text fields per-element.
-        let tt = tuple_first_arg_types(def);
-        (rs, pis, tt)
-    };
-    let n_threads = (v_threads as usize).max(1);
-    let n = crate::vector::length_vector(&v_input, &stores.allocations) as usize;
-    let pool_m: usize = 2;
-
-    // Allocate result vector using the same helper as n_parallel_for.
-    let result_ref = parallel_light_execute_and_collect(
-        stores,
-        program,
-        fn_pos,
-        &v_input,
-        element_size,
-        return_size,
-        n_threads,
-        &extra_args,
-        n,
-        pool_m,
-        primitive_input_size,
-        tuple_input_types,
+/// Plan-06 ARC.md A4 (closed 2026-05-07) — companion to
+/// `n_parallel_for`.  Was the per-worker-pool variant; same fate
+/// after A3.6 routes Single/Float through Queue.
+fn n_parallel_for_light(_stores: &mut Stores, _stack: &mut DbRef) {
+    unreachable!(
+        "n_parallel_for_light: ARC.md A4 retired the light Concat \
+         path.  See `n_parallel_for` panic message for the diagnosis \
+         hint."
     );
-    stores.put(stack, result_ref);
 }
 
 #[cfg(feature = "threading")]
@@ -1645,62 +1552,6 @@ fn n_parallel_buf_drop_fn(stores: &mut Stores, _stack: &mut DbRef) {
         .par_fn_buffer_stack
         .pop()
         .expect("parallel_buf_drop_fn: par_fn_buffer_stack is already empty");
-}
-
-#[cfg(feature = "threading")]
-/// Allocate result vector, create pool, dispatch light workers, collect.
-#[allow(clippy::too_many_arguments)]
-fn parallel_light_execute_and_collect(
-    stores: &mut Stores,
-    program: WorkerProgram,
-    fn_pos: u32,
-    input: &DbRef,
-    element_size: u32,
-    return_size: u32,
-    n_threads: usize,
-    extra_args: &[u64],
-    n: usize,
-    pool_m: usize,
-    primitive_input_size: u32,
-    tuple_input_types: Option<Vec<crate::data::Type>>,
-) -> DbRef {
-    let result_db = stores.null();
-    let vec_words = ((n as u32) * return_size + 15) / 8;
-    let vec_cr = stores.claim(&result_db, vec_words.max(1));
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
-    stores
-        .store_mut(&result_db)
-        .set_u32_raw(vec_rec, 4, n as u32);
-    stores
-        .store_mut(&result_db)
-        .set_u32_raw(header_rec, 4, vec_rec);
-    let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
-
-    let mut pool = crate::parallel::WorkerPool::new(n_threads, pool_m, 256);
-    crate::parallel::run_parallel_light(
-        stores,
-        program,
-        fn_pos,
-        input,
-        element_size,
-        return_size,
-        n_threads,
-        extra_args,
-        out_ptr,
-        n,
-        &mut pool,
-        primitive_input_size,
-        tuple_input_types,
-    );
-    // Return with pos=4 (not pos=8 from claim) — par result vector readers
-    // expect the header pointer at v_ref.pos.
-    DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    }
 }
 
 /// Parse a `LOFT_FAKE_*` env var into an `i64`.  Empty / unset / unparseable

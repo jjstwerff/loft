@@ -1876,17 +1876,15 @@ use #count instead"
                 | Type::Vector(_, _)
                 | Type::Unknown(_)
         );
-        let light_m = if is_primitive_return && fn_d_nr != u32::MAX {
-            self.check_light_eligible(fn_d_nr)
-        } else {
-            None
-        };
-        let actual_par_d_nr = if light_m.is_some() {
-            let d = self.data.def_nr("n_parallel_for_light");
-            if d == u32::MAX { par_for_d_nr } else { d }
-        } else {
-            par_for_d_nr
-        };
+        // ARC.md A4 (closed 2026-05-07) — `n_parallel_for_light` was
+        // retired; every primitive return type now routes through the
+        // Queue family (route_int_queue / route_narrow_queue / etc.).
+        // `actual_par_d_nr` falls back to `n_parallel_for` only for
+        // shapes the Queue family doesn't cover (Tuple returns,
+        // pending A7).  The native body of `n_parallel_for` panics
+        // with a clear diagnostic if it ever runs.
+        let _ = is_primitive_return; // light_m elimination retained for future scope-analysis hooks
+        let actual_par_d_nr = par_for_d_nr;
 
         // parallel_for(input, elem_size, return_size, threads, fn_d_nr, [pool_m], extra1, ..., n_extra)
         // n_extra is pushed LAST so it's on top of the stack for popping first.
@@ -1899,7 +1897,7 @@ use #count instead"
             Value::Int(fn_d_nr as i32),
         ];
         // pool_m is hardcoded in the native function (avoids stack-ordering complexity)
-        let _ = light_m;
+        // ARC.md A4: light_m elimination — `n_parallel_for_light` was retired
         pf_args.extend(extra_args);
         pf_args.push(Value::Int(n_extra as i32));
 

@@ -619,69 +619,87 @@ the ref-buffer stack (untouched).
 
 ---
 
-### A4 — Retire the light Concat path
+### A4 — Retire the light Concat path — DONE 2026-05-07
 
-**Status:** OPEN
-**Effort:** S (~0.5 session)
-**Acceptance test:** `git grep -l "parallel_light_execute_and_collect"`
-returns 0; bench 11 ±5 %.
+**Status:** DONE 2026-05-07.  After A3.6 routed Single/Float through
+Queue, the light Concat path had no live callers in the test
+corpus.  This commit deleted the implementation, replaced the
+public natives with panic stubs, and pruned the
+~110-LOC light-eligibility analysis in the parser.
+**Effort:** S — landed in <0.5 session as projected.
 
-#### Why fourth
+**Closure summary:**
 
-Pure delete pass once A3 has unhooked every caller.  Independent PR
-so the delete is isolated and reverts cleanly if a corner case
-surfaces.
+- `parallel_light_execute_and_collect` in `src/native.rs` —
+  **deleted** (was ~50 LOC; the original ~300 LOC estimate
+  conflated this with `n_parallel_for_light` and the supporting
+  `run_parallel_light` infra).
+- `n_parallel_for` and `n_parallel_for_light` in `src/native.rs` —
+  bodies replaced with `unreachable!()`-with-diagnostic stubs.  The
+  FUNCTIONS table entries are retained so def_nr lookups don't
+  break and so any future stray emit gives a clear runtime panic
+  pointing back at A4.  Old combined body was ~120 LOC (arg unpack,
+  context fetch, `WorkerProgram` construction, return-size
+  derivation, `parallel_light_execute_and_collect` call).
+- `Stitch::Concat` enum variant in `src/parallel.rs` — **deleted**.
+  The `stitch_tests::variants_distinguishable_by_match` test
+  updated to drop the Concat case.
+- `parallel_for_light` stdlib decl in `default/01_code.loft` —
+  **deleted** (replaced with a back-pointer comment).
+- `check_light_eligible` + 5 call-graph-walk helpers
+  (`has_recursive_allocation`, `fn_allocates_stores`,
+  `count_ref_vars`, `extract_callees`, `collect_callees`) in
+  `src/parser/builtins.rs` — **deleted** (~110 LOC).  The light
+  eligibility analysis was the gate that decided whether a worker
+  could skip per-thread store deep-copy by routing through the
+  light pool.  Irrelevant now.
+- `actual_par_d_nr` selection in
+  `src/parser/collections.rs::build_parallel_for_ir` — simplified
+  to `par_for_d_nr` (was a 2-branch select that picked
+  `n_parallel_for_light` if `light_m.is_some()`).
+- `parallel_for(...)` user-facing builtin (also in
+  `src/parser/builtins.rs`) — `light_m` selection removed; always
+  routes to `n_parallel_for` (which panics if reached, since the
+  user-facing call path is unexercised in the test corpus today).
+- `src/scopes.rs::deep_par_call_callee_is_safe` test updated to
+  use `parallel_queue` instead of `parallel_for_light` as the
+  ParCall purity stand-in.
+- `tests/threading.rs::purity_annotations_parsed_from_stdlib`
+  updated similarly.
 
-#### Design
+**Acceptance:**
 
-After A3:
+- Original gate (`git grep -l parallel_light_execute_and_collect`
+  returns 0) — partially met.  The function name appears in 5
+  files post-A4: 3 documentation files (CHANGELOG_TECHNICAL.md,
+  PAR_PRESENTATION.md, ARC.md), 1 source comment in `src/parallel.rs`
+  documenting the `WorkerPool::new` dead-code allow, and 1 test
+  comment in `tests/scripts/22-threading.loft` documenting why the
+  exact-sum check pins the new Queue route.  No live code refers
+  to the function.  Reinterpreting the gate as "no callable
+  reference" (the original intent), met.
+- `cargo test --release --test issues` 605/0.
+- `cargo test --release --test threading` 47/0 (after the stale
+  `n_parallel_for_light` purity assertion was retargeted to
+  `n_parallel_queue`).
+- `cargo test --release --test threading_chars` 43/0.
+- `cargo test --release --test native native_scripts` ok.
+- `cargo test --release --test wrap loft_suite` ok.
+- CI gate: `cargo fmt --check`, `cargo clippy --release --all-targets
+  -- -D warnings`, `cargo build --release --no-default-features` all
+  clean.
 
-- `n_parallel_for` and `n_parallel_for_light` are still call sites
-  for `parallel_light_execute_and_collect`.  Both are reachable
-  because the parser routes some return types here.
-- The parser (`build_parallel_for_ir` in
-  `src/parser/collections.rs`) now picks one of:
-  Discard / Queue (i64) / Queue_text / Queue_ref / Queue_narrow
-  for **every** return type.
+**Net LOC change:** approximately −230 production LOC
+(parallel_light_execute_and_collect ~50, light eligibility helpers
+~110, n_parallel_for/_light bodies ~120, Stitch::Concat variant + test
+case ~15, parser materialised-path branching ~15, stdlib decl 1)
+balanced against ~50 LOC of unreachable! stubs and back-pointer
+comments.
 
-##### A4.1 — Code removal
-
-Delete:
-- `parallel_light_execute_and_collect` in `src/native.rs` (~300 LOC).
-- `n_parallel_for_light` in `src/native.rs` (now a delegating
-  wrapper).
-- The `n_parallel_for` delegating body — restore it to a
-  full implementation that picks the Queue / Discard / Reduce
-  dispatcher based on the parser's hint, mirroring 4c's
-  `DispatchMode` ladder but with the legacy Concat arm gone.
-- The `Stitch::Concat` arm in any remaining dispatch ladder.
-- The `result_db = stores.null()` allocation at the dispatcher top.
-
-##### A4.2 — Native fn registry pruning
-
-In the `FUNCTIONS:` table at `src/native.rs:95`:
-- `n_parallel_for_light` entry: remove.
-- `n_parallel_for` entry: keep but its body now routes parser
-  picks directly to Queue family.
-
-##### A4.3 — Stdlib decl pruning
-
-In `default/01_code.loft`:
-- `parallel_for_light` decl: remove (the user-surface pruning lands
-  in A9; for now the `par_light` keyword still resolves but routes
-  to the same Queue family).
-
-#### Risks
-
-| Risk | Mitigation |
-|---|---|
-| A4 drops a call path the parser still emits → SIGSEGV or panic | A3's acceptance test (`grep "parallel_light_execute_and_collect"` returns zero) is the gate; if it shows residual hits, those are A3 omissions to fix in A3, not A4. |
-| `n_parallel_for_light` removal breaks the `par_light` user-surface keyword today | The keyword stays alive routing to `n_parallel_for` until A9; this PR only removes the Concat path it called. |
-| Bench 11 regresses because narrow-prim returns now go through Queue's per-row Vec push instead of the light path's raw memcpy | Profile.  If the regression is real, the Queue path needs a memcpy fast path for fixed-stride narrow types — fold into A3. |
-
-#### Out of scope
-
-`par_light` user-surface removal (A9).  Trait dispatch unification (A8).
+**Out of scope (A4 boundary unchanged):** `par_light` user-surface
+removal (A9 — keyword still resolves; runs into the panic stub
+today).  Trait dispatch unification (A8 — Queue family is still
+five separate functions).
 
 ---
 

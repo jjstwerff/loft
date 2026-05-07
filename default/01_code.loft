@@ -1074,11 +1074,12 @@ fn parallel_for(input: reference, element_size: integer, return_size: integer, t
 // Plan-06 phase 5a (DESIGN.md D8.1): #impure(par_call) — par-safety
 // analyser allows nested calls when the inner worker fn is itself
 // par-safe (D8 R2 / D2.1.1 recursive Arc promotion).
-#impure(par_call)
-// Internal: lightweight parallel map — borrows stores read-only instead of deep-copying.
-// The compiler automatically selects this when the worker qualifies (no recursive store
-// allocation, no text return).  Same signature as parallel_for + pool_stores_per_worker.
-fn parallel_for_light(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> reference;
+// ARC.md A4 (closed 2026-05-07) — `parallel_for_light` decl removed.
+// The light Concat path was retired when every par return type
+// routed through the Queue family (`parallel_queue` / `_narrow` /
+// `_text` / `_ref` / `_fn`).  The native bodies
+// `n_parallel_for_light` and `n_parallel_for` panic with a
+// diagnostic message if invoked.
 #impure(par_call)
 // Plan-06 PRIORITY.md spine step 3 — `Stitch::Discard` runtime entry.
 // Internal: workers run, results dropped, no result vector allocated.

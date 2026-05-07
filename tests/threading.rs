@@ -581,12 +581,16 @@ fn purity_annotations_parsed_from_stdlib() {
         Purity::Impure(ImpureCategory::ParCall),
         "parallel_for should be #impure(par_call)"
     );
-    let pfl_d_nr = p.data.def_nr("n_parallel_for_light");
-    assert_ne!(pfl_d_nr, u32::MAX, "n_parallel_for_light must be defined");
+    // ARC.md A4 (closed 2026-05-07): `parallel_for_light` stdlib
+    // decl was removed (only the native panic stub remains).  Use
+    // `parallel_queue` as the Queue-family ParCall stand-in for
+    // the same purity invariant.
+    let pq_d_nr = p.data.def_nr("n_parallel_queue");
+    assert_ne!(pq_d_nr, u32::MAX, "n_parallel_queue must be defined");
     assert_eq!(
-        p.data.def(pfl_d_nr).purity,
+        p.data.def(pq_d_nr).purity,
         Purity::Impure(ImpureCategory::ParCall),
-        "parallel_for_light should be #impure(par_call)"
+        "parallel_queue should be #impure(par_call)"
     );
     // Sanity: a fn that is genuinely Unknown should stay so.  We
     // pick a deeply internal one that no plan-06 5a sweep is going
