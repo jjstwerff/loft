@@ -12600,3 +12600,117 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(5));
 }
+
+/// P236 — function whose return type is a heap-owned reference and
+/// whose body's tail is `if/else` returning newly-constructed records
+/// corrupted the return value on `--native` (returned the typed null
+/// sentinel instead of the if/else's value).  Pre-fix native:
+/// `make_p(true) → P { x: null, y: null }`.  Interpreter accidentally
+/// worked because OpReturn read from eval-stack top.  Closed by
+/// (a) `parser/control.rs::unify_if_branches_work_refs` — pick the
+/// first branch's terminal work-ref as the shared one and rewrite the
+/// other branch's work-ref references via `substitute_work_ref` so
+/// both branches produce the same DbRef; (b) `scopes.rs::returned_var`
+/// recurses through `Value::If` and reports the shared var so
+/// `get_free_vars` skips OpFreeRef on it; (c) the catchall in
+/// `scopes.rs::free_vars` emits `Return(Var(ret_var))` instead of
+/// `Return(Null)` when a known ret_var is available.
+#[test]
+fn p236_struct_return_from_if_else_true() {
+    code!(
+        "struct P { x: integer, y: integer }
+fn make_p(c: boolean) -> P {
+    if c { P { x: 1, y: 2 } } else { P { x: 3, y: 4 } }
+}
+fn run() -> integer { p = make_p(true); p.x * 100 + p.y }"
+    )
+    .expr("run()")
+    .result(Value::Int(102));
+}
+
+/// P236 — same fn, false branch.  Verifies the unification rewrite
+/// didn't accidentally route the false branch through the true
+/// branch's value (a regression caught during initial implementation
+/// when the substitute_work_ref helper renamed user parameters).
+#[test]
+fn p236_struct_return_from_if_else_false() {
+    code!(
+        "struct P { x: integer, y: integer }
+fn make_p(c: boolean) -> P {
+    if c { P { x: 1, y: 2 } } else { P { x: 3, y: 4 } }
+}
+fn run() -> integer { p = make_p(false); p.x * 100 + p.y }"
+    )
+    .expr("run()")
+    .result(Value::Int(304));
+}
+
+/// P236 — three-way `else if` chain.  Recursive descent in
+/// `unify_if_branches_work_refs` walks nested `Value::If` nodes
+/// (else-if desugars to `else { if ... }`).
+#[test]
+fn p236_struct_return_from_else_if_chain() {
+    code!(
+        "struct P { x: integer, y: integer }
+fn make_p(c: integer) -> P {
+    if c == 1 { P { x: 11, y: 12 } }
+    else if c == 2 { P { x: 21, y: 22 } }
+    else { P { x: 31, y: 32 } }
+}
+fn run() -> integer {
+    a = make_p(1);
+    b = make_p(2);
+    c = make_p(3);
+    (a.x + a.y) + (b.x + b.y) + (c.x + c.y)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(23 + 43 + 63));
+}
+
+/// P236 — guard against the parameter-substitution regression: when
+/// both branches of the if/else return user-named parameters (NOT
+/// work-refs), the unification helper must bail out and leave the IR
+/// unchanged.  This test exercises the gate at
+/// `unify_if_branches_work_refs` that requires both terminal vars to
+/// match `__ref_*` / `__rref_*` naming.
+#[test]
+fn p236_param_returning_if_unaffected() {
+    code!(
+        "struct P { x: integer, y: integer }
+fn pick(c: boolean, a: P, b: P) -> P {
+    if c { a } else { b }
+}
+fn run() -> integer {
+    p1 = P { x: 1, y: 2 };
+    p2 = P { x: 3, y: 4 };
+    chosen = pick(false, p1, p2);
+    chosen.x * 10 + chosen.y
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(34));
+}
+
+/// P236 — A7.1 par tuple wide-return runtime relies on the same
+/// fix: the size-based gate widen in `parse_function` rewrites
+/// `(integer, integer)` returns through `Reference(__tuple<…>)`,
+/// and tail if/else with tuple branches goes through the synthetic-
+/// struct unification path.  Closes the regression where
+/// `min_max(...) -> (integer, integer) { if ... else ... }` returned
+/// (null, null) on native.
+#[test]
+fn p236_tuple_return_from_if_else() {
+    code!(
+        "fn min_max(lo: integer, hi: integer) -> (integer, integer) {
+    if lo <= hi { (lo, hi) } else { (hi, lo) }
+}
+fn run() -> integer {
+    r1 = min_max(5, 2);
+    r2 = min_max(1, 9);
+    (r1.0 * 100 + r1.1) + (r2.0 * 1000 + r2.1)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(205 + 1009));
+}

@@ -9,6 +9,25 @@ use super::{
     merge_dependencies, v_block, v_if, v_loop, v_set,
 };
 
+/// A7.1: walk a body-tail expression and report whether it ends in
+/// a literal `Value::Tuple(...)` at any reachable tail position.  Used
+/// by `block_result` to decide whether the synthetic-struct rewrite
+/// should fire.  Mirrors the recursion shape of
+/// `rewrite_tail_tuple_with_work_ref` so the gate and the rewrite stay
+/// in sync.
+fn tail_has_tuple_leaf(value: &Value) -> bool {
+    match value {
+        Value::Tuple(_) => true,
+        Value::Span(b) => tail_has_tuple_leaf(&b.1),
+        Value::If(_, then_branch, else_branch) => {
+            tail_has_tuple_leaf(then_branch) || tail_has_tuple_leaf(else_branch)
+        }
+        Value::Block(b) => b.operators.last().is_some_and(tail_has_tuple_leaf),
+        Value::Insert(ops) => ops.last().is_some_and(tail_has_tuple_leaf),
+        _ => false,
+    }
+}
+
 /// Check if the last meaningful expression in a block is divergent.
 fn is_block_divergent(ops: &[Value]) -> bool {
     ops.iter().rev().any(|v| {
@@ -407,10 +426,18 @@ impl Parser {
             // (Tuple is not assignable to Reference(__tuple<…>)) and the
             // user would see a confusing "expected __tuple<…>, got tuple([…])"
             // diagnostic.
+            // A7.1: gate broadened to also fire for `If` / `Block` /
+            // `Insert` tails — the recursive helper descends through
+            // these wrappers and rewrites every leaf `Value::Tuple` that
+            // lives at a tail position with a synthetic-struct
+            // construction sharing one work-ref.  Without this, function
+            // bodies whose final expression is `if cond { (a, b) } else
+            // { (c, d) }` left two tuple leaves and convert would then
+            // fail with Tuple → Reference(__tuple<…>).
             let tuple_rewritten = !self.first_pass
                 && context == "return from block"
                 && matches!(t, Type::Tuple(_))
-                && matches!(l[last].unspan(), Value::Tuple(_))
+                && tail_has_tuple_leaf(l[last].unspan())
                 && matches!(result, Type::Reference(d, _) if self.data.def(*d).name.starts_with("__tuple<"))
                 && {
                     let synthetic_d_nr = if let Type::Reference(d, _) = result {
@@ -421,7 +448,36 @@ impl Parser {
                     self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut l[last]);
                     true
                 };
-            if !tuple_rewritten && !self.convert(&mut l[last], t, result) && !ignore {
+            // P236: when the body's tail is a `Value::If(...)` (or
+            // `match`, which lowers to nested `If`) and the function
+            // returns a heap-owned reference, unify the branches'
+            // work-refs so all paths share one return slot.  Without
+            // this, native codegen drops the if/else's value and
+            // returns the typed null sentinel.  See `unify_if_branches_work_refs`
+            // for the full rationale.  Wrap in `Value::Return(...)` so
+            // the existing `Return(If(...))` native codegen at
+            // `src/generation/emit.rs:166-182` emits
+            // `return if cond { ... } else { ... }` correctly.
+            let if_unified = !self.first_pass
+                && context == "return from block"
+                && matches!(
+                    result,
+                    Type::Reference(_, _)
+                        | Type::Vector(_, _)
+                        | Type::Enum(_, true, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Spacial(_, _, _)
+                )
+                && matches!(l[last].unspan(), Value::If(_, _, _))
+                && self.unify_if_branches_work_refs(&mut l[last]).is_some();
+            if if_unified {
+                let inner = std::mem::replace(&mut l[last], Value::Null);
+                l[last] = Value::Return(Box::new(inner));
+            }
+            if !tuple_rewritten && !if_unified && !self.convert(&mut l[last], t, result) && !ignore
+            {
                 // for function bodies with `not null` return, downgrade to a warning.
                 if context == "return from block"
                     && self.context != u32::MAX
@@ -492,29 +548,255 @@ impl Parser {
     /// so scope analysis tracks `w`'s store as the source of the
     /// returned DbRef's lifetime — same machinery struct returns
     /// use today.
+    /// P236: when a function body's tail is `Value::If(...)` (or `match`,
+    /// which lowers to nested `If`) and each branch terminates with a
+    /// fresh work-ref via Object/struct construction, the branches end
+    /// up with DIFFERENT work-refs (`__ref_1`, `__ref_2`, …).  Native
+    /// codegen then loses the if/else's value: each branch's local DbRef
+    /// is dropped, both work-refs get freed, and the function returns the
+    /// typed null sentinel.  Interp accidentally works because OpReturn
+    /// reads from eval-stack top.
+    ///
+    /// Fix: pick the FIRST branch's terminal work-ref as the shared one
+    /// and rewrite every other branch in place — substitute their
+    /// work-ref `Var` references with the shared one, and rewrite Set
+    /// LHS slots and Block.result deps so scope analysis tracks the
+    /// shared work-ref as the unique source of the returned DbRef's
+    /// lifetime.  After unification, `returned_var(If)` (extended in
+    /// `scopes.rs::returned_var`) recognises the shared var and skips
+    /// `OpFreeRef` on it; `ref_return` promotes it to a hidden caller
+    /// arg as it would for a single-branch reference return.
+    ///
+    /// Returns `Some(shared_work_ref)` if the rewrite fired (so the
+    /// caller can wrap the if/else in `Value::Return`), `None`
+    /// otherwise (mixed shapes, no work-refs, or branches already
+    /// share a var).
+    pub(crate) fn unify_if_branches_work_refs(&mut self, tail: &mut Value) -> Option<u16> {
+        let if_value = tail.unspan_mut();
+        let Value::If(_, true_branch, false_branch) = if_value else {
+            return None;
+        };
+        let shared = Self::find_branch_terminal_var(true_branch)?;
+        let other = Self::find_branch_terminal_var(false_branch)?;
+        // P236: only unify when both branches' terminal vars are
+        // parser-internal work-refs (`__ref_N` / `__rref_N`).
+        // Renaming user-named parameters (e.g.,
+        // `if c { gen_x } else { gen_y }` in `gen_max<T: Ordered>`)
+        // would silently rewrite the false branch to return gen_x
+        // and corrupt the function's result.  When the guard fails,
+        // bail out and let the existing scope analysis handle the
+        // tail (typically B5-L3 wrap for scalar returns, or the
+        // legacy `Return(Null)` + eval-stack-top pattern for
+        // bytecode-only paths).  Skip when both branches already
+        // share the same var (no rewrite needed).
+        let shared_name = self.vars.name(shared);
+        let other_name = self.vars.name(other);
+        let both_work_refs = (shared_name.starts_with("__ref_")
+            || shared_name.starts_with("__rref_"))
+            && (other_name.starts_with("__ref_") || other_name.starts_with("__rref_"));
+        if !both_work_refs {
+            return None;
+        }
+        if shared != other {
+            Self::unify_branch_to(false_branch, shared);
+        }
+        Some(shared)
+    }
+
+    /// Walk a branch (Block / Span / nested If) to find the var nr of
+    /// its terminal `Value::Var(_)` — the work-ref this branch returns.
+    /// Returns `None` if the branch doesn't end in a `Var`.
+    fn find_branch_terminal_var(branch: &Value) -> Option<u16> {
+        match branch.unspan() {
+            Value::Var(v) => Some(*v),
+            Value::Block(bl) => bl.operators.last().and_then(Self::find_branch_terminal_var),
+            Value::Insert(ops) => ops.last().and_then(Self::find_branch_terminal_var),
+            Value::If(_, t, f) => {
+                let tv = Self::find_branch_terminal_var(t)?;
+                let fv = Self::find_branch_terminal_var(f)?;
+                if tv == fv { Some(tv) } else { None }
+            }
+            _ => None,
+        }
+    }
+
+    /// Rewrite a branch in place so its terminal work-ref is `shared`.
+    /// Walks the branch (recursively through nested If for else-if
+    /// chains) and substitutes the original terminal work-ref with
+    /// `shared` everywhere — Var references, Set LHS slots, and
+    /// Block.result deps.  No-op if the branch already uses `shared`.
+    fn unify_branch_to(branch: &mut Value, shared: u16) {
+        let Some(local) = Self::find_branch_terminal_var(branch) else {
+            return;
+        };
+        if local == shared {
+            return;
+        }
+        Self::substitute_work_ref(branch, local, shared);
+    }
+
+    /// Replace every reference to work-ref `from` with `to` in `val` —
+    /// extends `replace_var_in_ir` semantics to also rewrite `Set`
+    /// LHS slots and `Block.result` dep entries.  Used by
+    /// `unify_branch_to` so the parser-level dep tracking (which feeds
+    /// scope analysis and `ref_return`) sees only the shared work-ref
+    /// after unification.
+    fn substitute_work_ref(val: &mut Value, from: u16, to: u16) {
+        match val {
+            Value::Var(v) if *v == from => {
+                *v = to;
+            }
+            Value::Set(slot, body) => {
+                if *slot == from {
+                    *slot = to;
+                }
+                Self::substitute_work_ref(body, from, to);
+            }
+            Value::TuplePut(slot, _, body) => {
+                if *slot == from {
+                    *slot = to;
+                }
+                Self::substitute_work_ref(body, from, to);
+            }
+            Value::BreakWith(_, body) => {
+                Self::substitute_work_ref(body, from, to);
+            }
+            Value::Return(body) | Value::Drop(body) | Value::Yield(body) => {
+                Self::substitute_work_ref(body, from, to);
+            }
+            Value::Call(_, args)
+            | Value::CallRef(_, args)
+            | Value::Insert(args)
+            | Value::Tuple(args)
+            | Value::Parallel(args) => {
+                for a in args.iter_mut() {
+                    Self::substitute_work_ref(a, from, to);
+                }
+            }
+            Value::Block(bl) | Value::Loop(bl) => {
+                for op in &mut bl.operators {
+                    Self::substitute_work_ref(op, from, to);
+                }
+                Self::rewrite_dep_in_type(&mut bl.result, from, to);
+            }
+            Value::If(cond, t, f) => {
+                Self::substitute_work_ref(cond, from, to);
+                Self::substitute_work_ref(t, from, to);
+                Self::substitute_work_ref(f, from, to);
+            }
+            Value::Iter(_, a, b, c) => {
+                Self::substitute_work_ref(a, from, to);
+                Self::substitute_work_ref(b, from, to);
+                Self::substitute_work_ref(c, from, to);
+            }
+            Value::Span(b) => Self::substitute_work_ref(&mut b.1, from, to),
+            Value::ParFor(b) => {
+                Self::substitute_work_ref(&mut b.input, from, to);
+                Self::substitute_work_ref(&mut b.worker, from, to);
+            }
+            Value::Var(_)
+            | Value::Int(_)
+            | Value::Long(_)
+            | Value::Float(_)
+            | Value::Single(_)
+            | Value::Boolean(_)
+            | Value::Text(_)
+            | Value::Enum(_, _)
+            | Value::Line(_)
+            | Value::Break(_)
+            | Value::Continue(_)
+            | Value::Keys(_)
+            | Value::TupleGet(_, _)
+            | Value::FnRef(_, _, _)
+            | Value::FnRefDnr(_)
+            | Value::RawExpr(_)
+            | Value::Null => {}
+        }
+    }
+
+    /// Replace `from` with `to` in any dep list inside `tp`'s
+    /// reference-bearing variants.  Mirrors how
+    /// `Type::Reference(_, deps)` carries the source-of-lifetime var
+    /// list that scope analysis reads.
+    fn rewrite_dep_in_type(tp: &mut Type, from: u16, to: u16) {
+        let deps_mut: Option<&mut Vec<u16>> = match tp {
+            Type::Reference(_, d)
+            | Type::Vector(_, d)
+            | Type::Enum(_, true, d)
+            | Type::Sorted(_, _, d)
+            | Type::Hash(_, _, d)
+            | Type::Index(_, _, d)
+            | Type::Spacial(_, _, d)
+            | Type::Text(d) => Some(d),
+            _ => None,
+        };
+        if let Some(d) = deps_mut {
+            for v in d.iter_mut() {
+                if *v == from {
+                    *v = to;
+                }
+            }
+        }
+    }
+
     pub(crate) fn rewrite_tail_tuple_to_synthetic_struct(
         &mut self,
         synthetic_d_nr: u32,
         tail: &mut Value,
     ) {
+        // A7.1: allocate ONE shared work-ref up front, then descend
+        // recursively through `If` / `Block` / `Insert` / `Span`
+        // wrappers so every leaf `Value::Tuple` writes into the same
+        // record.  Sharing avoids ref_return promoting two separate
+        // hidden args (one per branch); the function then returns a
+        // single work-ref whose value is well-defined at the join
+        // point.  Mirrors the unification done by P236's
+        // `unify_if_branches_work_refs` for struct returns.
+        let synth_ref_type = Type::Reference(synthetic_d_nr, Vec::new());
+        let w = self.vars.work_refs(&synth_ref_type, &mut self.lexer);
+        let known_type = self.data.def(synthetic_d_nr).known_type;
+        self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, tail);
+    }
+
+    fn rewrite_tail_tuple_with_work_ref(
+        &mut self,
+        synthetic_d_nr: u32,
+        known_type: u16,
+        w: u16,
+        tail: &mut Value,
+    ) {
+        match tail {
+            Value::Span(b) => {
+                self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, &mut b.1);
+                return;
+            }
+            Value::If(_, then_branch, else_branch) => {
+                self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, then_branch);
+                self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, else_branch);
+                return;
+            }
+            Value::Block(b) => {
+                if let Some(last) = b.operators.last_mut() {
+                    self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, last);
+                }
+                b.result = Type::Reference(synthetic_d_nr, vec![w]);
+                return;
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last_mut() {
+                    self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, last);
+                }
+                return;
+            }
+            _ => {}
+        }
         let elements = match std::mem::replace(tail, Value::Null) {
             Value::Tuple(elems) => elems,
-            Value::Span(b) => {
-                if let Value::Tuple(elems) = b.1 {
-                    elems
-                } else {
-                    *tail = Value::Span(b);
-                    return;
-                }
-            }
             other => {
                 *tail = other;
                 return;
             }
         };
-        let known_type = self.data.def(synthetic_d_nr).known_type;
-        let synth_ref_type = Type::Reference(synthetic_d_nr, Vec::new());
-        let w = self.vars.work_refs(&synth_ref_type, &mut self.lexer);
         let mut ops: Vec<Value> = Vec::with_capacity(elements.len() + 3);
         ops.push(crate::data::v_set(w, Value::Null));
         ops.push(self.cl(

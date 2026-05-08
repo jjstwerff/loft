@@ -1244,46 +1244,36 @@ exercise it.
 
 ##### A7.1 — Wide-return tuple runtime (Surface 1)
 
-**Status (2026-05-08): DEFERRED — blocked on P236.**
+**Status (2026-05-08): DONE.**
 
-Second-cut implementation took the simpler route — instead of
-adding a new tuple_queue family, widen the parse_function gate
-to also rewrite pure-value tuples > 8B through the existing
-`Reference(__tuple<…>)` synthetic struct (extending Phase 07's
-`has_lifetime_concern` widen with a size-based fallback).  This
-unifies all wide-return tuple paths through the existing par
-dispatch's `route_ref_queue` path.  Verified locally: with the
-gate widen + recursive `rewrite_tail_tuple_to_synthetic_struct`
-for If/Block/Insert tails + destructure-path Reference(__tuple<…>)
-arm in `src/parser/expressions.rs:1117`, all 4 par_tuple_return
-canaries pass.
+Closed by the size-based gate widen + work-ref unification stack
+that also closes [P236](../../PROBLEMS.md):
 
-But the same widen regresses `tests/docs/28-tuples.loft::min_max`
-(`fn min_max(...) -> (integer, integer) { if cond { (a, b) }
-else { (c, d) } }`) on `--native` — the rewrite triggers a
-pre-existing native data-corruption pattern: heap-owned reference
-returns from `if/else` bodies return the typed null sentinel
-instead of the if/else's value.  Filed as [P236](../../PROBLEMS.md).
+- `src/parser/definitions.rs::parse_function` rewrites the
+  `returned` type from `Type::Tuple(elems)` to
+  `Type::Reference(tuple_def(elems))` when EITHER any element has
+  a lifetime concern (Phase 07) OR the tuple's stack size exceeds
+  the 8-byte primitive return slot (A7.1).  Pure 1-arity scalar
+  tuples that fit in 8B keep the Rust ABI.
+- `src/parser/control.rs::rewrite_tail_tuple_to_synthetic_struct`
+  recurses through `Value::If` / `Value::Block` / `Value::Insert`
+  / `Value::Span` tails with one SHARED work-ref via
+  `rewrite_tail_tuple_with_work_ref`, so all branches construct
+  into the same record.  The recursion guard `tail_has_tuple_leaf`
+  fires only when at least one tuple leaf is reachable.
+- `src/parser/expressions.rs` destructure path accepts both
+  `Type::Tuple([...])` and `Reference(__tuple<...>)` shapes.
+- The shared-work-ref pattern matches what P236's struct-case
+  unification (`unify_if_branches_work_refs`) does, so both
+  paths converge on the same scope/native-codegen behaviour.
 
-P236 is broader than tuples — affects any Reference / Vector /
-struct-enum return from if/else bodies.  Verified pre-existing
-on `eebaaa4` (struct case: `make_p() -> P { if cond { P{...} }
-else { P{...} } }` returns null in native).  Fixing P236 first
-is the prerequisite for A7.1 closure.
-
-Phase 07 already unblocked 2 of 4 canaries for free
-(`par_tuple_return_int_text`, `par_tuple_return_struct_text` —
-both have lifetime concerns and route through the same path).
-The remaining 3 (`int_int`, `three_arity`, `nested`) wait on P236.
-
-Original plan (size-based widen): see implementation snapshot
-in `~/.claude/plans/async-toasting-nest.md`.  Original plan
-(new tuple_queue family) preserved below for reference.
+All 5 par_tuple_return canaries are now un-ignored and PASSING:
+`int_int`, `int_text`, `struct_text`, `three_arity`, `nested`.
 
 ---
 
 Original A7.1 plan (new tuple_queue family — superseded by the
-widen approach but recorded for context):
+unification approach which had zero new opcodes / runtime helpers):
 
 The fn-ref pattern at `parallel.rs:1347` (`run_parallel_queue_fn`)
 is the closest template: workers pack their N-byte returns into

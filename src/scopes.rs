@@ -950,7 +950,25 @@ impl Scopes {
         } else {
             ls.insert(0, expr.clone());
             if is_return {
-                ls.push(Value::Return(Box::new(Value::Null)));
+                // P236: when `expr` is an `If/Match` whose unified
+                // tail var is known (returned_var(expr) recurses
+                // through If — see line 1454), emit
+                // `Return(Var(ret_var))` instead of the legacy
+                // `Return(Null)` pattern.  The legacy pattern relied on
+                // OpReturn(value=N) reading from eval-stack top —
+                // bytecode-only, native discards the if/else's value
+                // and returns the typed null sentinel.  After Step 2
+                // unification (parser/control.rs::unify_if_branches_work_refs)
+                // every branch of the if/else writes to the SAME work-
+                // ref via OpDatabase + per-field SetInt; the if/else
+                // statement leaves all writes in place; native
+                // `return var___ref_N` then returns the active
+                // branch's value correctly.
+                if ret_var == u16::MAX {
+                    ls.push(Value::Return(Box::new(Value::Null)));
+                } else {
+                    ls.push(Value::Return(Box::new(Value::Var(ret_var))));
+                }
             }
         }
         ls
@@ -1463,6 +1481,21 @@ fn returned_var(expr: &Value) -> u16 {
         }
         Value::Return(inner) | Value::Drop(inner) => returned_var(inner),
         Value::Insert(ops) => ops.last().map_or(u16::MAX, returned_var),
+        // P236: when both branches of a tail If terminate with the SAME
+        // var (via the work-ref unification done in `block_result`'s
+        // `unify_if_branches_work_refs`), report it so `get_free_vars`
+        // skips OpFreeRef on it — same handling Block-with-tail-Var
+        // returns get for single-branch reference returns.
+        Value::If(_, t, f) => {
+            let t_var = returned_var(t);
+            let f_var = returned_var(f);
+            if t_var == f_var && t_var != u16::MAX {
+                t_var
+            } else {
+                u16::MAX
+            }
+        }
+        Value::Span(b) => returned_var(&b.1),
         _ => u16::MAX,
     }
 }

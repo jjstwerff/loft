@@ -785,7 +785,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "ARC.md A7.1 (Surface 1 — tuple wide-return runtime).  Actual-error survey 2026-05-07: parser gate at collections.rs:1539 rejects tuples > 8B.  Relaxing the gate exposes the next layer (n_parallel_for unreachable! — routing falls back to the materialised path A4 retired).  Full fix needs a new tuple_queue family (par_tuple_buffer_stack + n_parallel_queue_tuple + n_parallel_buf_get_tuple), comparable to A5b in scope.  See ARC.md A7 'Actual-error survey' subsection."]
 fn par_tuple_return_int_int() {
     // Worker returns a tuple of two integers; main collects sum of both elements.
     code!(
@@ -803,7 +802,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "ARC.md A7.1 — same fix surface as par_tuple_return_int_int (tuple wide-return runtime).  Actual-error survey 2026-05-07."]
 fn par_tuple_return_int_text() {
     // Worker returns a tuple containing text; rebase must translate the DbRef.
     code!(
@@ -927,7 +925,6 @@ fn run() -> integer {
 // the same fix surface.
 
 #[test]
-#[ignore = "ARC.md A7.1 — same fix surface as par_tuple_return_int_int (tuple wide-return runtime).  Actual-error survey 2026-05-07."]
 fn par_tuple_return_three_arity() {
     code!(
         "struct Score { value: integer }
@@ -946,7 +943,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "ARC.md A7.1 — same fix surface as par_tuple_return_int_int (tuple wide-return runtime).  Actual-error survey 2026-05-07."]
 fn par_tuple_return_nested() {
     code!(
         "struct Score { value: integer }

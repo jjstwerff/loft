@@ -799,9 +799,24 @@ impl Parser {
         // `text_return`.
         let is_generic_template =
             self.context != u32::MAX && self.data.def_type(self.context) == DefType::Generic;
+        // A7.1: also rewrite pure-value tuples wider than the 8-byte
+        // primitive return slot.  Three- and four-arity tuples and
+        // nested tuples don't fit in a single eval-stack slot under
+        // par dispatch; routing them through the synthetic struct
+        // unifies the par-tuple-return path with the lifetime-bearing
+        // case from Phase 07.  Safe after P236's fix (work-ref
+        // unification across If branches in
+        // `parser/control.rs::unify_if_branches_work_refs`); without
+        // it, `min_max(...) -> (integer, integer) { if cond { (a, b) }
+        // else { (c, d) } }` regressed on `--native` because each
+        // branch's separate synthetic-struct work-ref dropped the
+        // if/else's value.
+        let needs_tuple_rewrite = matches!(&result, crate::data::Type::Tuple(elems)
+            if elems.iter().any(crate::data::has_lifetime_concern)
+                || u32::from(crate::variables::size(&result, &crate::data::Context::Argument)) > 8);
         if !is_generic_template
+            && needs_tuple_rewrite
             && let crate::data::Type::Tuple(elems) = &result
-            && elems.iter().any(crate::data::has_lifetime_concern)
         {
             let elems_clone = elems.clone();
             let synthetic_d_nr = self.data.tuple_def(&mut self.lexer, &elems_clone);

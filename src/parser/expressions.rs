@@ -1114,7 +1114,28 @@ use a separate collection or add after the loop"
             }
             let mut rhs = Value::Null;
             let rhs_type = self.expression(&mut rhs);
-            if let Type::Tuple(ref rhs_elems) = rhs_type {
+            // A7.1: accept both `Type::Tuple([…])` and the synthetic
+            // `Reference(__tuple<…>)` shape that A7.1's parse_function
+            // gate widen produces for tuple returns wider than 8B.
+            // For the synthetic-struct shape, element reads go through
+            // `get_val` with the struct's per-attribute offset — same
+            // path P189b's `.0` / `.1` element access takes (mirrors
+            // the for-loop destructure in collections.rs:1289-1304).
+            let (rhs_elems_opt, ref_def_nr): (Option<Vec<Type>>, u32) = match &rhs_type {
+                Type::Tuple(elems) => (Some(elems.clone()), u32::MAX),
+                Type::Reference(d_nr, _) if self.data.def(*d_nr).name.starts_with("__tuple<") => {
+                    let elems: Vec<Type> = self
+                        .data
+                        .def(*d_nr)
+                        .attributes
+                        .iter()
+                        .map(|a| a.typedef.clone())
+                        .collect();
+                    (Some(elems), *d_nr)
+                }
+                _ => (None, u32::MAX),
+            };
+            if let Some(rhs_elems) = rhs_elems_opt {
                 if rhs_elems.len() != var_nrs.len() {
                     diagnostic!(
                         self.lexer,
@@ -1138,7 +1159,23 @@ use a separate collection or add after the loop"
                             self.change_var_type(v_nr, &rhs_elems[i]);
                         }
                     }
-                    steps.push(Value::Set(v_nr, Box::new(Value::TupleGet(tmp, i as u16))));
+                    let read = if ref_def_nr == u32::MAX {
+                        Value::TupleGet(tmp, i as u16)
+                    } else {
+                        let elem_offset = if let Some(offs) =
+                            crate::data::stored_tuple_offsets_for_def(
+                                &self.data,
+                                &self.database,
+                                ref_def_nr,
+                                rhs_elems.len(),
+                            ) {
+                            u32::from(offs[i])
+                        } else {
+                            crate::data::element_offsets(&rhs_elems)[i] as u32
+                        };
+                        self.get_val(&rhs_elems[i], false, elem_offset, Value::Var(tmp), u32::MAX)
+                    };
+                    steps.push(Value::Set(v_nr, Box::new(read)));
                 }
                 *code = Value::Insert(steps);
             } else if !self.first_pass {
