@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 08 — P234 runtime: LOCAL tuple-with-lifetime-concern variables
 
-**Status: open (follow-up to Phase 07; independently executable)**
+**Status: deferred 2026-05-08 — see "Why deferred" below.**
 
 ## Goal
 
@@ -19,7 +19,53 @@ local var (this phase), destructure temp.  Pure-value tuples
 (`(integer, integer)` etc.) keep the Rust tuple ABI for
 performance.
 
-## Why this phase
+## Why deferred (2026-05-08)
+
+A first-cut implementation got far enough to confirm the
+mechanism works for the target shapes, but hit unanticipated
+friction with **vector-of-tuple index access** (P189b path):
+
+```loft
+pairs: vector<(integer, text)> = […];
+p = pairs[1];   // ← p inferred as Type::Tuple; my rewrite makes it Reference;
+                //   pairs[1]'s value emits as a Rust tuple expression;
+                //   LHS Reference vs RHS Tuple → IR / Rust type mismatch
+```
+
+P189b's index-access path produces a `Type::Tuple` IR value
+(implemented via Reference DbRef under the hood) that flows into
+assignment-typed paths.  My `change_var_type` rewrite turned the
+LHS into `Reference(__tuple<…>)`, breaking the IR/value-shape
+agreement that pre-existing code relied on.
+
+Bridging this would require either:
+- Making P189b's index access return a `Reference(__tuple<…>)`
+  IR type (broader change touching the index-access codegen
+  across both backends), OR
+- Adding a "lift Tuple expression to synthetic-struct
+  construction" path in `convert()` that walks complex blocks
+  (not just bare `Value::Tuple` literals) — non-trivial IR rewrite.
+
+Either path expands Phase 08's scope substantially.  Given Phase
+08 is a refactor for uniformity (NOT a bug fix — local
+tuple-with-lifetime works correctly today via the Rust ABI), the
+juice isn't worth the squeeze right now.
+
+**The plan below stays as a record** for whoever picks this up
+later.  The first-cut work demonstrated:
+
+- `create_var` rewrite path works for explicit declarations
+- `change_var_type` rewrite path works for type-inferred declarations
+- The `convert()` Tuple → Reference(__tuple) arm works for bare
+  `Value::Tuple` literals
+- The friction is at the index-access boundary (P189b), not at
+  the Phase 08 helpers themselves
+
+If a future contributor wants to tackle this, the leverage point
+is making P189b's index access return a proper `Reference(__tuple<…>)`
+at the IR level too, after which Phase 08 becomes trivial.
+
+## Why this phase (when picked up)
 
 1. **Uniformity.**  One routing decision (`has_lifetime_concern`)
    covers every tuple destination.  No "function returns work but
