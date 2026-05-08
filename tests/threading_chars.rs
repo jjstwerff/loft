@@ -785,7 +785,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-tuple-return: parser rejects tuple return because var_size=16 (tuple) > 8.  Tuples don't pass through the heap_def_nr() ref-routing branch.  Needs a tuple-output Stitch dispatch.  Planned for plan-06 phase 9c."]
+#[ignore = "ARC.md A7.1 (Surface 1 — tuple wide-return runtime).  Actual-error survey 2026-05-07: parser gate at collections.rs:1539 rejects tuples > 8B.  Relaxing the gate exposes the next layer (n_parallel_for unreachable! — routing falls back to the materialised path A4 retired).  Full fix needs a new tuple_queue family (par_tuple_buffer_stack + n_parallel_queue_tuple + n_parallel_buf_get_tuple), comparable to A5b in scope.  See ARC.md A7 'Actual-error survey' subsection."]
 fn par_tuple_return_int_int() {
     // Worker returns a tuple of two integers; main collects sum of both elements.
     code!(
@@ -803,7 +803,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-tuple-return: worker returning (integer, text) rejected today; planned fix in plan-06 phase 9c"]
+#[ignore = "ARC.md A7.1 — same fix surface as par_tuple_return_int_int (tuple wide-return runtime).  Actual-error survey 2026-05-07."]
 fn par_tuple_return_int_text() {
     // Worker returns a tuple containing text; rebase must translate the DbRef.
     code!(
@@ -821,10 +821,17 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-tuple-return: worker returning (Reference<Struct>, text) rejected today; planned fix in plan-06 phase 9c"]
 fn par_tuple_return_struct_text() {
     // Worker returns a tuple combining a struct ref and text;
     // rebase must walk both DbRef element offsets.
+    //
+    // Un-ignored 2026-05-08 once the P234 runtime fix routed
+    // tuple-with-Reference returns through the synthetic struct.
+    // s=1: Point{x=1,y=2} + "p1" → 1+2+2 = 5
+    // s=2: Point{x=2,y=3} + "p2" → 2+3+2 = 7
+    // sum = 12.  (Original ignore note had `Value::Int(11)`; that
+    // was an author's miscount the canary couldn't expose because
+    // the function-tuple-return ABI was broken before P234.)
     code!(
         "struct Point { x: integer, y: integer }
 struct Score { value: integer }
@@ -839,11 +846,11 @@ fn run() -> integer {
 }"
     )
     .expr("run()")
-    .result(Value::Int(11));
+    .result(Value::Int(12));
 }
 
 #[test]
-#[ignore = "par-tuple-destructure: fused for (a, b) in pairs par(...) { ... } binding untested; planned fix in plan-06 phase 9d"]
+#[ignore = "ARC.md A7.2 (Surface 2 — for-loop tuple destructure).  Actual-error survey 2026-05-07: blocked on a general parser feature gap — `for (a, b) in pairs { ... }` fails with 'Expect variable after for' even WITHOUT par.  Not a par-side fix; needs the for-loop parser to accept tuple destructure patterns.  See PROBLEMS.md (forthcoming P-id) and ARC.md A7 'Actual-error survey' subsection."]
 fn par_tuple_destructure_in_for() {
     // Tuple destructuring directly in the fused-for-par binding.
     code!(
@@ -920,7 +927,7 @@ fn run() -> integer {
 // the same fix surface.
 
 #[test]
-#[ignore = "par-tuple-return: 3-arity tuple workers — covered by plan-06 phase 9c"]
+#[ignore = "ARC.md A7.1 — same fix surface as par_tuple_return_int_int (tuple wide-return runtime).  Actual-error survey 2026-05-07."]
 fn par_tuple_return_three_arity() {
     code!(
         "struct Score { value: integer }
@@ -939,7 +946,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-tuple-return: nested-tuple workers — covered by plan-06 phase 9c"]
+#[ignore = "ARC.md A7.1 — same fix surface as par_tuple_return_int_int (tuple wide-return runtime).  Actual-error survey 2026-05-07."]
 fn par_tuple_return_nested() {
     code!(
         "struct Score { value: integer }

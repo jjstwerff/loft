@@ -161,6 +161,11 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
         "n_parallel_queue_narrow",
         Box::new(parallel::ParallelQueueEmitter),
     );
+    // Plan-06 ARC.md A5b — fold emitter.  Closure-based bridge to
+    // `n_parallel_fold_native` (runtime helper in
+    // `src/codegen_runtime.rs`).  Different arg layout from the
+    // for/queue family — see `ParallelFoldEmitter` doc.
+    r.insert("n_parallel_fold", Box::new(parallel::ParallelFoldEmitter));
     for name in [
         "n_parallel_buf_get",
         "n_parallel_buf_get_text",

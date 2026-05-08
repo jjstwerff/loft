@@ -1074,7 +1074,65 @@ use #count instead"
     }
 
     pub(crate) fn parse_for(&mut self, code: &mut Value) {
-        if let Some(id) = self.lexer.has_identifier() {
+        // P235: tuple destructure — `for (a, b, ...) in items { ... }`.
+        // Parse the parenthesised name list now; later (after the iter
+        // type is known) we synthesize a temp loop var and prepend
+        // `Set(name_i, loop_var.<i>)` to the body so `a` / `b` resolve
+        // as if the user had written them.  Closes both par and
+        // non-par destructure with one rewrite (the par variant
+        // dispatches into `parse_parallel_for_loop` which inherits
+        // `id` from us).
+        let destructure_names: Option<Vec<String>> = if self.lexer.peek_token("(") {
+            self.lexer.token("(");
+            let mut names = Vec::new();
+            loop {
+                if let Some(n) = self.lexer.has_identifier() {
+                    names.push(n);
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expect identifier in for-destructure pattern"
+                    );
+                    let _ = self.lexer.has_token(")");
+                    return;
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            if !self.lexer.has_token(")") {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect ')' to close for-destructure pattern"
+                );
+                return;
+            }
+            if names.len() < 2 {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "for-destructure pattern requires at least 2 names; got {}",
+                    names.len()
+                );
+                return;
+            }
+            Some(names)
+        } else {
+            None
+        };
+
+        // P235: when destructuring, synthesize a loop var name from
+        // the source line/column; the user-named binders are defined
+        // later as proper variables and prepended to the body.
+        let id_opt: Option<String> = if destructure_names.is_some() {
+            let pos = self.lexer.peek().position.clone();
+            Some(format!("__destructure_t_{}_{}", pos.line, pos.pos))
+        } else {
+            self.lexer.has_identifier()
+        };
+        if let Some(id) = id_opt {
             self.lexer.token("in");
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
@@ -1210,6 +1268,109 @@ use #count instead"
                 );
                 return;
             }
+            // P235 step 2: with for_var resolved, define each destructured
+            // binder as a proper variable typed as the matching tuple
+            // element.  The Set(name_i, TupleGet(for_var, i)) ops will be
+            // prepended to the body block once `parse_block` returns.
+            // Defining the variables BEFORE `parse_block` runs is essential
+            // — the body's references to `a` / `b` / etc. resolve through
+            // the parser's scope at parse time.
+            let destructure_setup: Vec<Value> = if let Some(names) = &destructure_names {
+                // Tuple element types come from one of two shapes:
+                //   - `Type::Tuple([T1, T2, ...])` — direct tuple type
+                //     (uncommon for for-loops: would require iterating
+                //     over a "tuple of …" rather than a vector<tuple>).
+                //   - `Type::Reference(d_nr, _)` where `def(d_nr).name`
+                //     starts with `__tuple<` — synthetic struct created
+                //     by `tuple_def`; element types live as attributes.
+                //     This is the common shape for `vector<(T1, T2)>`
+                //     iteration, mirroring P189b's element-access path
+                //     in `src/parser/operators.rs:608-658`.
+                let (elem_types_opt, ref_def_nr): (Option<Vec<Type>>, u32) = match &var_tp {
+                    Type::Tuple(elems) => (Some(elems.clone()), u32::MAX),
+                    Type::Reference(d_nr, _)
+                        if self.data.def(*d_nr).name.starts_with("__tuple<") =>
+                    {
+                        let elems: Vec<Type> = self
+                            .data
+                            .def(*d_nr)
+                            .attributes
+                            .iter()
+                            .map(|a| a.typedef.clone())
+                            .collect();
+                        (Some(elems), *d_nr)
+                    }
+                    _ => (None, u32::MAX),
+                };
+                if let Some(elem_types) = elem_types_opt {
+                    if elem_types.len() == names.len() {
+                        // Build per-element read.  Two shapes:
+                        //   - Direct Tuple: `Value::TupleGet(for_var, i)`
+                        //     — reads from the var's stack-resident
+                        //     tuple slot.
+                        //   - Reference(__tuple<…>): use `get_val` with
+                        //     the synthetic struct's per-attribute byte
+                        //     offset — same path P189b's `.0` / `.1`
+                        //     element access takes.
+                        names
+                            .iter()
+                            .enumerate()
+                            .map(|(i, name)| {
+                                let elem_tp = elem_types[i].clone();
+                                let var = self.create_var(name, &elem_tp);
+                                self.vars.defined(var);
+                                self.vars.in_use(var, true);
+                                let read = if ref_def_nr == u32::MAX {
+                                    Value::TupleGet(for_var, i as u16)
+                                } else {
+                                    let elem_offset = if let Some(offs) =
+                                        crate::data::stored_tuple_offsets_for_def(
+                                            &self.data,
+                                            &self.database,
+                                            ref_def_nr,
+                                            elem_types.len(),
+                                        ) {
+                                        u32::from(offs[i])
+                                    } else {
+                                        crate::data::element_offsets(&elem_types)[i] as u32
+                                    };
+                                    self.get_val(
+                                        &elem_tp,
+                                        false,
+                                        elem_offset,
+                                        Value::Var(for_var),
+                                        u32::MAX,
+                                    )
+                                };
+                                v_set(var, read)
+                            })
+                            .collect()
+                    } else {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "for-destructure: pattern has {} names but iterated tuple has {} elements",
+                                names.len(),
+                                elem_types.len()
+                            );
+                        }
+                        Vec::new()
+                    }
+                } else {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "for-destructure requires a tuple element type, got {}",
+                            var_tp.name(&self.data)
+                        );
+                    }
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
             let for_next = v_set(for_var, iter_next);
             self.vars.loop_var(for_var);
             let in_loop = self.in_loop;
@@ -1218,6 +1379,21 @@ use #count instead"
             let loop_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             self.parse_block("for", &mut block, &Type::Void);
+            // P235 step 3: prepend the destructure Set ops so each
+            // iteration unpacks the loop var into the user-named binders
+            // before the user's body runs.
+            if !destructure_setup.is_empty() {
+                if let Value::Block(ref mut bl) = block {
+                    for s in destructure_setup.into_iter().rev() {
+                        bl.operators.insert(0, s);
+                    }
+                } else {
+                    let inner = std::mem::replace(&mut block, Value::Null);
+                    let mut ops = destructure_setup;
+                    ops.push(inner);
+                    block = v_block(ops, Type::Void, "destructure_for_body");
+                }
+            }
             self.vars.restore_write_state(&loop_write_state);
             let count = self.vars.loop_counter();
             self.in_loop = in_loop;

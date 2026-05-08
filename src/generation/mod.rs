@@ -44,6 +44,18 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
             {
                 calls.insert((*fn_d_nr).cast_unsigned());
             }
+            // ARC.md A5b — par_fold uses a different arg layout than
+            // the for/queue family: the worker fn d_nr is at args[2]
+            // (after input + init).  Same reason for the insert: the
+            // ParallelFoldEmitter generates `worker_name(cell, acc, row)`
+            // and the worker must be in the reachable set.
+            if data.def(*d).name.as_str() == "n_parallel_fold"
+                && args.len() >= 4
+                && let Value::Int(fn_d_nr) = &args[2]
+                && *fn_d_nr >= 0
+            {
+                calls.insert((*fn_d_nr).cast_unsigned());
+            }
             for a in args {
                 collect_calls(a, data, calls);
             }

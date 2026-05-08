@@ -355,6 +355,55 @@ impl OpEmitter for ParallelQueueEmitter {
     }
 }
 
+/// Plan-06 ARC.md A5b — `n_parallel_fold` emitter.  Closure-based
+/// bridge to `n_parallel_fold_native` (defined in
+/// `src/codegen_runtime.rs`).  Closes the native gap left by A5
+/// (interp-only `par_fold` builtin) so the same loft surface runs
+/// on `--native`.
+///
+/// The fold Call's arg layout (from `parse_par_fold` in
+/// `src/parser/builtins.rs`) differs from the for/queue family:
+///   - args[0] — input (vector<integer>) — DbRef
+///   - args[1] — init — i64
+///   - args[2] — fold fn — Value::Int(d_nr)
+///   - args[3] — threads — i32
+///   - args[4] — n_extra (V1: Value::Int(0))
+///
+/// V1 ignores args[4]: extras pass-through is a future ARC step
+/// (per ARC.md A5).  The worker closure synthesised here has
+/// signature `Fn(cell, acc: i64, row: i64) -> i64` matching the
+/// runtime helper's bound.
+pub struct ParallelFoldEmitter;
+
+impl OpEmitter for ParallelFoldEmitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        // Guard: V1 fold has exactly 5 args with args[2] a non-negative
+        // i32 d_nr (the worker fn).  Otherwise fall through.
+        let fn_d_nr = match args.get(2) {
+            Some(Value::Int(d)) if *d >= 0 => (*d).cast_unsigned(),
+            _ => return super::default::DefaultEmitter.emit(ctx, args),
+        };
+        if args.len() < 5 {
+            return super::default::DefaultEmitter.emit(ctx, args);
+        }
+
+        let worker_def = ctx.output.data.def(fn_d_nr);
+        let worker_name = worker_def.name.clone();
+
+        // Helper call: `n_parallel_fold_native(cell, input, init, threads, |cell, acc, row| worker(cell, acc, row))`.
+        write!(ctx.w, "n_parallel_fold_native(cell, ")?;
+        ctx.emit(&args[0])?;
+        write!(ctx.w, ", ")?;
+        ctx.emit(&args[1])?;
+        write!(ctx.w, ", ")?;
+        ctx.emit_i32_slot(&args[3])?;
+        write!(
+            ctx.w,
+            ", |cell, acc, row| {{ {worker_name}(cell, acc, row) }})"
+        )
+    }
+}
+
 /// Phase 06 — `n_parallel_buf_get` / `_text` / `_ref` and
 /// `n_parallel_buf_drop` / `_text` / `_ref` emitter.  Renames the
 /// call site to the corresponding `_native` runtime fn; args pass

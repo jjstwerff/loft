@@ -705,7 +705,7 @@ five separate functions).
 
 ### A5 — `Stitch::Reduce` runtime + `par_fold` surface
 
-**Status:** runtime DONE 2026-05-03; user-facing parser builtin DONE 2026-05-07 (interp); native runtime A5b OPEN as follow-up.
+**Status:** runtime DONE 2026-05-03; user-facing parser builtin DONE 2026-05-07 (interp); native runtime A5b DONE 2026-05-07.
 **Effort:** M (~1 session) — runtime + tests in <1 session.
 **Acceptance test:** `par_fold_int_sum` (sum 1..=100 = 5050),
 `par_fold_max`, `par_fold_empty_input`, and
@@ -751,27 +751,43 @@ Acceptance tests: `tests/scripts/22b-par-fold.loft` covers all
 four canaries (sum 1..=100 = 5050; max; empty input; 1-thread vs
 multi-thread agreement).  Runs interp via `wrap loft_suite`.
 
-**A5b OPEN — native runtime (~1 session):**
+**A5b DONE 2026-05-07 — native runtime:**
 
-The native backend's `parallel_fold` call hits the auto-generated
-5-arg stub (`fn n_parallel_fold(cell, input, init, fold, threads)
--> i64`); the parser emits a 6-arg call (with the `n_extra` count)
-and rustc rejects with E0061.  A5b adds:
+Closed the native gap left by A5.  Before the fix, the native
+backend's `parallel_fold` call hit the auto-generated 5-arg stub
+(`fn n_parallel_fold(cell, input, init, fold, threads) -> i64`);
+the parser emits a 6-arg call (with the `n_extra` count) and rustc
+rejected with E0061.  Landed:
 
 - `n_parallel_fold_native<F>` in `src/codegen_runtime.rs` with the
   closure-based shape used by `n_parallel_queue_native` etc.  The
   worker closure has signature
-  `Fn(i64, i64) -> i64 + Send + Sync` (acc, row → acc).
-- A `ParallelFoldEmitter` in `src/generation/ops/parallel.rs`
-  registered for `n_parallel_fold` (mirror of
-  `ParallelForEmitter` / `ParallelQueueEmitter`); rewrites the
-  Call to emit the worker closure body inline.
-- Removal of `tests/scripts/22b-par-fold.loft` from
-  `tests/native.rs::SCRIPTS_NATIVE_SKIP`.
+  `Fn(&UnsafeCell<Stores>, i64, i64) -> i64 + Send + Sync`
+  (cell, acc, row → acc).
+- `run_native_workers_fold` helper (mirror of
+  `run_native_workers_primitive`): each worker accumulates over its
+  slice via `worker(cell, acc, row_val)` from `init` and returns
+  the final partial; main thread combines partials in
+  worker-completion order via the same closure.  V1 reads i64 rows
+  inline via unaligned load (vector<integer> stride 8).
+- `ParallelFoldEmitter` in `src/generation/ops/parallel.rs`
+  registered for `n_parallel_fold`; rewrites the Call to
+  `n_parallel_fold_native(cell, input, init, threads, |cell, acc,
+  row| worker(cell, acc, row))`.  Differs from the for/queue
+  emitters in arg layout (worker fn at `args[2]` instead of
+  `args[4]`; init at `args[1]`).
+- `n_parallel_fold` added to `collect_calls` in
+  `src/generation/mod.rs` so the worker fn (referenced via
+  `args[2]`) is included in the reachable set — without this,
+  rustc fails with E0425 ("cannot find function `n_<worker>`").
+- `tests/scripts/22b-par-fold.loft` removed from
+  `SCRIPTS_NATIVE_SKIP` — `cargo test --release --test native
+  native_scripts` exercises all 4 canaries on native.
 
-Until A5b lands, `tests/scripts/22b-par-fold.loft` is in
-`SCRIPTS_NATIVE_SKIP` so `cargo test --release --test native
-native_scripts` stays green.
+V1 ignores `args[4]` (n_extra=0); extras pass-through is a future
+ARC step if a use case surfaces.  Heterogeneous types (V2:
+`vector<T>` + `fn(R, T) -> R` with R ≠ T) and A5.3 auto-detection
+remain separate items.
 
 The auto-detection variant (A5.3 — rewrite `sum(parallel_for(...))`
 patterns into `par_fold(...)`) remains an open follow-up.  Builds
@@ -1202,9 +1218,135 @@ type-spectrum audit (2026-05-04, plan-06 type-spectrum commit
 `9db18fd`).  The 4 originally-tracked canaries plus the 3 new
 broader-coverage canaries are now A7's full target set.
 
-**Effort:** M (~1 session)
+**Effort:** L (~2-3 sessions, post-survey 2026-05-07).  Original
+M estimate revised after the actual-error survey revealed three
+distinct fix surfaces (see "Actual-error survey 2026-05-07" below).
 **Acceptance test:** all 7 tuple canaries pass; D11b "✅ when
 tuples land" placeholder retires.
+
+#### Actual-error survey 2026-05-07
+
+The 6 ignored canaries were un-ignored briefly to read the actual
+failures.  Result: NOT one fix surface but **three**, with very
+different scopes:
+
+| Surface | Canaries | Blocker | Sub-step | Effort |
+|---|---|---|---|---|
+| **A7.1** | `par_tuple_return_int_int`, `par_tuple_return_int_text`, `par_tuple_return_three_arity`, `par_tuple_return_nested` | Parser gate at `collections.rs:1539` rejects tuples > 8B.  Relaxing the gate exposes the next layer (`n_parallel_for unreachable!` — routing falls back to the materialised path A4 retired). | New tuple_queue family: `par_tuple_buffer_stack` field + `n_parallel_queue_tuple` + `n_parallel_buf_get_tuple` + `n_parallel_buf_drop_tuple` + stdlib decls + parser routing extension.  Comparable scope to A5b (closed 2026-05-07). | M (~1 session) |
+| **A7.2** | `par_tuple_destructure_in_for` | General parser feature gap — `for (a, b) in items { ... }` rejects with "Expect variable after for" **even without par**.  Filed as P235. | Extend the for-loop parser to accept `(name1, name2, …)` destructure; desugar to `for _t in items { name1 = _t.0; name2 = _t.1; … }`.  Closes both par and non-par destructure with one rewrite. | S-M (~0.5–1 session) |
+| **A7.3** | `par_tuple_return_struct_text` | Lexer bug — `tuple.0.field` syntax fails with "Problem parsing float" because `0.field` is tokenised as a malformed float literal.  Reproduces outside par.  Filed as P234.  Plus runtime gap: function-return tuples containing Reference / Text / etc. corrupt at the call boundary on `--native`. | Lexer fix (number-tokeniser when `.` is followed by a non-digit identifier start) + runtime fix routing lifetime-bearing tuple returns through synthetic `__tuple<…>` struct (Plan-14 phase 07).  Both DONE 2026-05-08; canary un-ignored. | M (~1 session) |
+
+The original ARC.md "uniform across the 5 return-cases" risk-row
+claim was wrong: only A7.1's 4 canaries share a fix surface.  A7.2
+turns out NOT to be par-specific — any for-loop user benefits.
+A7.3 is upstream of par entirely; A7's canary just happens to
+exercise it.
+
+##### A7.1 — Wide-return tuple runtime (Surface 1)
+
+The fn-ref pattern at `parallel.rs:1347` (`run_parallel_queue_fn`)
+is the closest template: workers pack their N-byte returns into
+a `Vec<u8>` via `state.execute_at_raw_to`, the buffer is pushed
+onto a per-stack-of-buffers field on `Stores`, and the body's
+`b_var` reads via `Set(b_var, Call(buf_get, [idx]))`.  Adapt
+to variable size:
+
+- `Stores::par_tuple_buffer_stack: Vec<(Vec<u8>, u32)>` — bytes
+  + per-row size (workers in one queue all use the same size).
+- `n_parallel_queue_tuple` — pops args (input, elem_size,
+  return_size, threads, fn, extras...), runs workers, pushes
+  the buffer.
+- `n_parallel_buf_get_tuple(idx, return_size)` — copies
+  `return_size` bytes from `buf[idx*return_size..]` to the stack.
+  Variable size means we cannot use `stores.put<[u8; N]>` with a
+  fixed `N`; needs a `put_bytes(stack, &slice, n)` helper or a
+  custom opcode.
+- `n_parallel_buf_drop_tuple` — pops the buffer.
+- Stdlib decls in `default/01_code.loft` (3 fns).
+- Parser changes: relax the gate to admit `Type::Tuple(_)` ≤ 64B,
+  add `route_tuple_queue` in both early and main gate sites
+  (collections.rs:1641 + :1934 areas), wire body's `b_var` Set.
+- Codegen extras-push entry for `n_parallel_queue_tuple`.
+
+The variable-size-write challenge: `b_var`'s slot is sized to
+the tuple's actual layout (not a fixed cap).  A 16B tuple's slot
+is 16B, not 64.  So `buf_get_tuple` must memcpy exactly the right
+number of bytes.  The cleanest fix is a new helper — `put_bytes`
+in `Stores` — that takes a slice and copies it; the alternative
+(per-size family `buf_get_tuple_8/16/24/.../64`) is uglier.
+
+##### A7.2 — For-loop tuple destructure (Surface 2)
+
+NOT a par-specific fix.  Tracked as P235.  The desugar is
+mechanical:
+
+```loft
+for (a, b) in items { use(a, b) }
+// rewrites to:
+for _t in items { a = _t.0; b = _t.1; use(a, b) }
+```
+
+Implementation: extend the for-loop parser dispatch to detect
+`(` after `for`, parse the comma-separated identifier list,
+allocate a synthetic temp `_t`, then prepend element-extraction
+`Set` ops to the body.
+
+**Non-par half DONE 2026-05-07** in `src/parser/collections.rs::parse_for`:
+parser detects `(` after `for`, parses the identifier list,
+synthesizes a temp loop var named `__destructure_t_<line>_<pos>`,
+defines each user-named binder as a proper variable typed as the
+matching tuple element, and prepends `Set(name_i, get_val(loop_var,
+offset_i))` ops to the body block.  Handles both direct
+`Type::Tuple([…])` and the common `Type::Reference(__tuple<…>)`
+shape (vector<(T1,T2)> via P189b's element-access path).  Pinned
+by `tests/issues.rs::p235_for_tuple_destructure_{two_arity,three_arity,int_text}`.
+
+**Par half OPEN**: ARC.md's original "par variant is automatic"
+claim was wrong — the existing par dispatch passes ONE
+per-iteration arg (the loop element) and N context args (same
+every iteration).  Destructure wants multiple per-iteration args
+derived from the tuple, which the dispatch shape doesn't support.
+Cleanest follow-up: at parse time, when destructure is paired
+with par, synthesize a wrapper worker
+`__par_destructure_w<N>(t: tuple_t) -> R { worker(t.0, t.1, …) }`
+and rewrite the par expression to call the wrapper with the
+tuple loop element.  Until then `par_tuple_destructure_in_for`
+stays ignored.
+
+##### A7.3 — Tuple-of-struct member access (Surface 3)
+
+NOT a par-specific fix.  Tracked as P234.
+
+**Lexer half DONE 2026-05-07** in `src/lexer.rs::number`: extended
+P195's `prev_was_field_dot` branch to fire regardless of what
+follows the second `.` (digit, identifier, anything).  Pre-fix
+only the `n.0.0` digit-after-dot case was split; now `r.0.x`
+(identifier-after-dot) and `r.0.;` (anything else) all emit
+integer + queue `.` so the next token re-lexes fresh.  Pinned by
+`tests/lexer::test::p234_tuple_index_then_field_does_not_glue_into_float`
+plus the surface-level reproducer
+`tests/issues.rs::p234_lexer_accepts_tuple_index_then_struct_field`.
+
+**Runtime half DONE 2026-05-08** by routing tuple-with-lifetime-concern
+returns through the existing synthetic `__tuple<…>` struct
+(Plan-14 phase 07 — see
+[../14-tuple-validation/07-p234-runtime.md](../14-tuple-validation/07-p234-runtime.md)).
+`src/parser/definitions.rs::parse_function` rewrites the function's
+`returned` from `Type::Tuple(elems)` to `Type::Reference(tuple_def(elems))`
+whenever any element has a lifetime concern (Text, Reference,
+Vector, Enum-struct, keyed collection, RefVar, or a nested tuple
+containing one).  `src/parser/control.rs::block_result` then
+detects body-tail `Value::Tuple(...)` literals and rewrites them
+via `rewrite_tail_tuple_to_synthetic_struct` into the same
+allocation + per-field-init sequence inline struct literals
+produce.  All existing struct-return ownership-transfer machinery
+applies unchanged.  Pure-value tuples keep the Rust tuple ABI;
+T1.8a's `(text, text)` text-tuple machinery becomes superseded
+but kept as defensive fallback.
+
+`par_tuple_return_struct_text` is now un-ignored and PASSING
+(2026-05-08) — the canary's expected value of 11 was an author's
+miscount; correct sum is 12.
 
 #### Canaries closed by A7
 
@@ -2013,14 +2155,16 @@ that advances a step.
 |---|---|---|---|
 | A1  | DONE 2026-04-30 | S | b9ad7af + 7153390 |
 | A2  | DONE 2026-04-30 | M | 217b3ac |
-| A3  | IN-FLIGHT (infra landed; parser gate pending) | L  | — |
-| A4  | OPEN | S  | — |
-| A5  | OPEN | M  | — |
+| A3  | DONE 2026-05-07 (incl. A3.5 + A3.6) | L | f3d0e05 + earlier |
+| A4  | DONE 2026-05-07 | S | 0adac9c |
+| A5  | DONE 2026-05-07 (interp + native) | M | 8677b32 + this commit |
 | A6.a | DONE 2026-05-01 | M | (this branch) |
 | A6.b | DONE 2026-05-01 | M | (this branch) |
 | A6.c | DONE 2026-05-01 | M | (this branch) |
 | A6.d | DONE 2026-05-01 | S | (this branch) |
-| A7  | BLOCKED on T1.8a | M | — |
+| A7.1 | OPEN (post-survey) | M | — |
+| A7.2 | non-par DONE 2026-05-07 (P235 lexer half + parser); par half OPEN | S-M | this commit |
+| A7.3 | lexer DONE 2026-05-07; runtime DONE 2026-05-08 via Plan-14 phase 07 (synthetic-struct routing); canary un-ignored | M | this commit |
 | A8  | OPEN | M  | — |
 | A9  | OPEN | M  | — |
 | A10.a | OPEN | M | — |

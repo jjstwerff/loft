@@ -397,7 +397,31 @@ impl Parser {
             let ignore = is_generator
                 || (matches!(*t, Type::Void | Type::Never)
                     && (matches!(l[last], Value::Return(_)) || definitely_returns(&l[last])));
-            if !self.convert(&mut l[last], t, result) && !ignore {
+            // Plan-14 phase 07 (P234 runtime): when the function's expected
+            // return type is `Reference(__tuple<…>)` (rewritten in
+            // `parse_function` for any tuple whose elements have lifetime
+            // concerns) AND the body's tail expression is a literal
+            // `Value::Tuple(elements)`, transform the tail into synthetic-
+            // struct construction so the existing struct-return machinery
+            // applies.  Without this rewrite, `convert` would fail
+            // (Tuple is not assignable to Reference(__tuple<…>)) and the
+            // user would see a confusing "expected __tuple<…>, got tuple([…])"
+            // diagnostic.
+            let tuple_rewritten = !self.first_pass
+                && context == "return from block"
+                && matches!(t, Type::Tuple(_))
+                && matches!(l[last].unspan(), Value::Tuple(_))
+                && matches!(result, Type::Reference(d, _) if self.data.def(*d).name.starts_with("__tuple<"))
+                && {
+                    let synthetic_d_nr = if let Type::Reference(d, _) = result {
+                        *d
+                    } else {
+                        unreachable!()
+                    };
+                    self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut l[last]);
+                    true
+                };
+            if !tuple_rewritten && !self.convert(&mut l[last], t, result) && !ignore {
                 // for function bodies with `not null` return, downgrade to a warning.
                 if context == "return from block"
                     && self.context != u32::MAX
@@ -445,6 +469,67 @@ impl Parser {
             }
         }
         tp
+    }
+
+    /// Plan-14 phase 07 (P234 runtime): rewrite a body-tail
+    /// `Value::Tuple([elem_0, elem_1, …])` into the synthetic-struct
+    /// construction sequence that an inline struct literal would
+    /// produce — `(p, 5)` becomes
+    ///
+    /// ```text
+    /// {
+    ///     w = null;
+    ///     OpDatabase(w, __tuple<…>_known_type);
+    ///     w._0 = elem_0;     // OpSet* at field offset 0
+    ///     w._1 = elem_1;     // OpSet* at field offset 16 (alignment-padded)
+    ///     w
+    /// }
+    /// ```
+    ///
+    /// Mirrors `parse_object`'s allocation + per-field-init pattern.
+    /// The work-ref `w` is created via `vars.work_refs(...)`; the
+    /// resulting block carries `Reference(synthetic_d_nr, vec![w])`
+    /// so scope analysis tracks `w`'s store as the source of the
+    /// returned DbRef's lifetime — same machinery struct returns
+    /// use today.
+    pub(crate) fn rewrite_tail_tuple_to_synthetic_struct(
+        &mut self,
+        synthetic_d_nr: u32,
+        tail: &mut Value,
+    ) {
+        let elements = match std::mem::replace(tail, Value::Null) {
+            Value::Tuple(elems) => elems,
+            Value::Span(b) => {
+                if let Value::Tuple(elems) = b.1 {
+                    elems
+                } else {
+                    *tail = Value::Span(b);
+                    return;
+                }
+            }
+            other => {
+                *tail = other;
+                return;
+            }
+        };
+        let known_type = self.data.def(synthetic_d_nr).known_type;
+        let synth_ref_type = Type::Reference(synthetic_d_nr, Vec::new());
+        let w = self.vars.work_refs(&synth_ref_type, &mut self.lexer);
+        let mut ops: Vec<Value> = Vec::with_capacity(elements.len() + 3);
+        ops.push(crate::data::v_set(w, Value::Null));
+        ops.push(self.cl(
+            "OpDatabase",
+            &[Value::Var(w), Value::Int(i32::from(known_type))],
+        ));
+        for (i, elem) in elements.into_iter().enumerate() {
+            ops.push(self.set_field_no_check(synthetic_d_nr, i, 0, Value::Var(w), elem));
+        }
+        ops.push(Value::Var(w));
+        *tail = crate::data::v_block(
+            ops,
+            Type::Reference(synthetic_d_nr, vec![w]),
+            "synthetic_tuple_return",
+        );
     }
 
     // <operator> ::= '..' ['='] |

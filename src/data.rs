@@ -952,6 +952,38 @@ impl Type {
 // ── T1.1 — Tuple element layout helpers ─────────────────────────────────────
 
 /// Natural-alignment of a single element type, in bytes.
+/// Plan-14 phase 07 (P234 runtime): does this type carry a lifetime
+/// concern that requires store-side ownership tracking?  Used by the
+/// function-return rewrite in `parser/definitions.rs` to decide
+/// whether a `Type::Tuple(elems)` return must be re-routed through
+/// the synthetic `__tuple<…>` struct (so the existing struct-return
+/// `ref_return` / `text_return` ownership-transfer machinery applies).
+///
+/// Lifetime-bearing = goes through `text_return` / `ref_return` as a
+/// direct function return today: Text, Reference, Vector, Enum-struct,
+/// Sorted / Hash / Index / Spacial keyed collections, RefVar.  Tuples
+/// recursively inherit the concern from any element.
+///
+/// Pure-value tuples (every element is a scalar value type — Integer,
+/// Float, Single, Boolean, Character, Enum-no-payload, Function fn-ref)
+/// continue to use Rust's tuple ABI under `--native` (the T1.8a path
+/// for `(integer, integer)` and similar shapes).
+#[must_use]
+pub fn has_lifetime_concern(t: &Type) -> bool {
+    matches!(
+        t,
+        Type::Text(_)
+            | Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Enum(_, true, _)
+            | Type::Sorted(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::RefVar(_)
+    ) || matches!(t, Type::Tuple(elems) if elems.iter().any(has_lifetime_concern))
+}
+
 ///
 /// Used by `element_offsets` to pad tuple-element offsets so each
 /// element lands on its natural-alignment boundary — a tuple

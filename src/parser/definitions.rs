@@ -763,7 +763,7 @@ impl Parser {
             }
         }
         let mut returned_not_null = false;
-        let result = if self.lexer.has_token("->") {
+        let mut result = if self.lexer.has_token("->") {
             // Will be the correct def_nr on the second pass
             if let Some(tp) = self.parse_type_full(self.data.def_nr(&fn_name), true) {
                 if self.lexer.has_keyword("not") {
@@ -778,6 +778,35 @@ impl Parser {
         } else {
             Type::Void
         };
+        // Plan-14 phase 07 (P234 runtime): when the declared return type
+        // is `Type::Tuple(elems)` and any element carries a lifetime
+        // concern (Text, Reference, Vector, Enum-struct, keyed
+        // collection, RefVar, or a nested tuple containing one of
+        // those), rewrite the return type to `Reference(__tuple<…>)`
+        // — the synthetic struct that loft already creates via
+        // `data.tuple_def(...)` for stored tuples (P189b path).
+        // The function then returns a DbRef and all existing
+        // `ref_return` / `text_return` ownership-transfer machinery
+        // applies unchanged.  Pure-value tuples skip the rewrite and
+        // keep using Rust's tuple ABI (the T1.8a path for shapes
+        // like `(integer, integer)`).
+        //
+        // Skip for generic templates — `T` resolves later to a concrete
+        // type which may or may not have lifetime concerns; rewriting
+        // pre-specialisation would freeze the wrong shape.  Mirrors the
+        // generic-template guard in `block_result` (control.rs ~line 426)
+        // that excludes generic templates from `ref_return` /
+        // `text_return`.
+        let is_generic_template =
+            self.context != u32::MAX && self.data.def_type(self.context) == DefType::Generic;
+        if !is_generic_template
+            && let crate::data::Type::Tuple(elems) = &result
+            && elems.iter().any(crate::data::has_lifetime_concern)
+        {
+            let elems_clone = elems.clone();
+            let synthetic_d_nr = self.data.tuple_def(&mut self.lexer, &elems_clone);
+            result = crate::data::Type::Reference(synthetic_d_nr, Vec::new());
+        }
         self.vars
             .append(&mut self.data.definitions[self.context as usize].variables);
         if self.first_pass {

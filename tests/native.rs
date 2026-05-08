@@ -29,17 +29,7 @@ use common::cached_default;
 const NATIVE_SKIP: &[&str] = &[];
 
 /// Script files to skip in native mode.
-const SCRIPTS_NATIVE_SKIP: &[&str] = &[
-    // ARC.md A5 — `par_fold(...)` user surface ships interp-only;
-    // native runtime (`n_parallel_fold_native` + `ParallelFoldEmitter`)
-    // is the A5b follow-up.  The auto-generated native stub for
-    // `n_parallel_fold` has the wrong arity today (5 args; the
-    // emitted Call has 6 with the n_extra count) and rustc rejects
-    // with E0061.  Skip this script on native until A5b lands;
-    // interp coverage via `wrap loft_suite` continues to exercise
-    // the full surface.
-    "22b-par-fold.loft",
-];
+const SCRIPTS_NATIVE_SKIP: &[&str] = &[];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
 ///

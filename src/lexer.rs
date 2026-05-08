@@ -913,10 +913,22 @@ impl Lexer {
                     Lexer::none()
                 };
             }
-            if prev_was_field_dot && self.iter.peek().is_some_and(char::is_ascii_digit) {
-                // Emit the leading integer now, queue the `.` so the next
-                // `cont()` returns it as a separator.  The next digit is
-                // re-lexed as a fresh number on the call after that.
+            if prev_was_field_dot {
+                // P195 + P234: when the previous emitted token was a `.`
+                // (field access), the current number is a tuple/struct
+                // field index — NEVER a float fragment.  This covers two
+                // shapes:
+                //   - `n.v.0.0` → `n`, `.`, `v`, `.`, `0`, `.`, `0`
+                //     (P195 — nested tuple index access).
+                //   - `r.0.x`   → `r`, `.`, `0`, `.`, `x`
+                //     (P234 — struct field access through a tuple
+                //     element).  Without this branch, `0.x` was
+                //     greedily consumed as a malformed float literal
+                //     and rejected with "Problem parsing float".
+                // Either way: emit the leading integer, queue the `.`
+                // so the next `cont()` returns it as a separator, and
+                // the following token (digit, identifier, or whatever)
+                // re-lexes fresh.
                 self.link = self.memory.len();
                 self.memory.push(LexResult::new(
                     LexItem::Token(".".to_string()),
@@ -1499,6 +1511,39 @@ mod test {
                 LexItem::Integer(0, true),
                 LexItem::Token("..".to_string()),
                 LexItem::Integer(5, false),
+            ],
+        );
+    }
+
+    /// P234: when the previous token is `.`, an integer followed by
+    /// `.<ident>` must lex as integer + `.` + ident (struct field
+    /// access through a tuple element), not as a malformed float.
+    /// Pre-fix the lexer raised "Problem parsing float" because `0.x`
+    /// matched the float-fraction grammar then failed at the
+    /// non-digit `x`.  P195 already handled the digit-after case
+    /// (`0.0`); P234 extends it to the identifier-after case (`0.x`).
+    #[test]
+    fn p234_tuple_index_then_field_does_not_glue_into_float() {
+        // r.0.x — `r` ident, `.` field, `0` tuple index, `.` field, `x` ident.
+        validate_cont(
+            "r.0.x",
+            &[
+                LexItem::Identifier("r".to_string()),
+                LexItem::Token(".".to_string()),
+                LexItem::Integer(0, true),
+                LexItem::Token(".".to_string()),
+                LexItem::Identifier("x".to_string()),
+            ],
+        );
+        // p.1.field — non-leading-zero too.
+        validate_cont(
+            "p.1.field",
+            &[
+                LexItem::Identifier("p".to_string()),
+                LexItem::Token(".".to_string()),
+                LexItem::Integer(1, false),
+                LexItem::Token(".".to_string()),
+                LexItem::Identifier("field".to_string()),
             ],
         );
     }

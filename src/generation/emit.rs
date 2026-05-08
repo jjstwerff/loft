@@ -192,23 +192,23 @@ impl Output<'_> {
                             && !self.data.def(*d).name.starts_with("Op")
                     );
                     let wrap_text = returns_text && !inner_already_str;
-                    // T1.8a: a tuple return whose signature contains
-                    // `Type::Text` elements emits `(String, …)` per the
-                    // Result-context recursion in `rust_type`.  Each text
-                    // element of the returned tuple literal must produce
-                    // an owned `String`, not a borrowed `&str`.  The same
-                    // `tuple_text_to_string` flag that `output_set` uses
-                    // when assigning to a `(String, …)` local is the
-                    // mechanism: setting it before emitting the
-                    // `Value::Tuple` causes each text element to gain a
-                    // `.to_string()` suffix.
-                    let prev_tuple_text = self.tuple_text_to_string;
-                    if let Type::Tuple(elems) = returned
-                        && elems.iter().any(|e| matches!(e, Type::Text(_)))
-                        && matches!(&**val, Value::Tuple(_))
-                    {
-                        self.tuple_text_to_string = true;
-                    }
+                    // T1.8a's tuple-of-text return path was retired by
+                    // Plan-14 phase 07 (P234 runtime closure).  Function
+                    // returns of `Type::Tuple(elems)` with any
+                    // lifetime-bearing element (Text, Reference, etc.)
+                    // are now rewritten in
+                    // `src/parser/definitions.rs::parse_function` to
+                    // `Type::Reference(__tuple<…>)` and the body's tail
+                    // tuple literal becomes a synthetic-struct
+                    // construction sequence.  So `Value::Return(Tuple)`
+                    // with text elements is unreachable from any
+                    // user-written tuple-of-text return — the
+                    // `tuple_text_to_string` save/set/restore that lived
+                    // here became dead code and was removed.
+                    // (`output_set`'s analogous handling at
+                    // dispatch.rs:295-359 stays — it serves LOCAL
+                    // tuple-with-text variables, which the rewrite does
+                    // not touch.)
                     // P205 (plan-09 phase 07): if the function returns
                     // Type::Text but has no `Type::RefVar(Type::Text(_))`
                     // attribute (no proper work buffer set up by
@@ -232,7 +232,6 @@ impl Output<'_> {
                         write!(w, "(")?;
                     }
                     self.output_code_inner(w, val)?;
-                    self.tuple_text_to_string = prev_tuple_text;
                     if needs_p205_scratch {
                         write!(
                             w,
