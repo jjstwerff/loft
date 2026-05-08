@@ -353,3 +353,8 @@ cargo test --release --test threading_chars par_tuple_return_struct_text
   reflect runtime closure
 - Update Plan-14 `00-matrix.md` if a new "function return"
   destination column gets added; ref this phase
+- See [Phase 08 — LOCAL tuple-with-lifetime-concern variables](08-p234-runtime-locals.md)
+  for the natural follow-up: extending the same routing pattern
+  to LOCAL var declarations + destructure temps + match subjects.
+  Independently executable; can be prioritised, deferred, or
+  skipped at will (it's a refactor for uniformity, not a bug fix).
