@@ -1244,6 +1244,47 @@ exercise it.
 
 ##### A7.1 — Wide-return tuple runtime (Surface 1)
 
+**Status (2026-05-08): DEFERRED — blocked on P236.**
+
+Second-cut implementation took the simpler route — instead of
+adding a new tuple_queue family, widen the parse_function gate
+to also rewrite pure-value tuples > 8B through the existing
+`Reference(__tuple<…>)` synthetic struct (extending Phase 07's
+`has_lifetime_concern` widen with a size-based fallback).  This
+unifies all wide-return tuple paths through the existing par
+dispatch's `route_ref_queue` path.  Verified locally: with the
+gate widen + recursive `rewrite_tail_tuple_to_synthetic_struct`
+for If/Block/Insert tails + destructure-path Reference(__tuple<…>)
+arm in `src/parser/expressions.rs:1117`, all 4 par_tuple_return
+canaries pass.
+
+But the same widen regresses `tests/docs/28-tuples.loft::min_max`
+(`fn min_max(...) -> (integer, integer) { if cond { (a, b) }
+else { (c, d) } }`) on `--native` — the rewrite triggers a
+pre-existing native data-corruption pattern: heap-owned reference
+returns from `if/else` bodies return the typed null sentinel
+instead of the if/else's value.  Filed as [P236](../../PROBLEMS.md).
+
+P236 is broader than tuples — affects any Reference / Vector /
+struct-enum return from if/else bodies.  Verified pre-existing
+on `eebaaa4` (struct case: `make_p() -> P { if cond { P{...} }
+else { P{...} } }` returns null in native).  Fixing P236 first
+is the prerequisite for A7.1 closure.
+
+Phase 07 already unblocked 2 of 4 canaries for free
+(`par_tuple_return_int_text`, `par_tuple_return_struct_text` —
+both have lifetime concerns and route through the same path).
+The remaining 3 (`int_int`, `three_arity`, `nested`) wait on P236.
+
+Original plan (size-based widen): see implementation snapshot
+in `~/.claude/plans/async-toasting-nest.md`.  Original plan
+(new tuple_queue family) preserved below for reference.
+
+---
+
+Original A7.1 plan (new tuple_queue family — superseded by the
+widen approach but recorded for context):
+
 The fn-ref pattern at `parallel.rs:1347` (`run_parallel_queue_fn`)
 is the closest template: workers pack their N-byte returns into
 a `Vec<u8>` via `state.execute_at_raw_to`, the buffer is pushed
