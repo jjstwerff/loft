@@ -157,4 +157,4 @@ Related documents:
 - [WEB_SERVER_LIB.md](WEB_SERVER_LIB.md) — server library design
 - [CONST_STORE.md](plans/deferred/28-const-store/README.md) — startup-speed prerequisite
 - [PACKAGES.md](PACKAGES.md) — package format + registry
-- [SERVER_FEATURES.md](SERVER_FEATURES.md) — language features for server ergonomics
+- [SERVER_FEATURES.md](plans/future/29-server-features/README.md) — language features for server ergonomics

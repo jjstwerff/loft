@@ -341,8 +341,8 @@ before tagging — no "appears fixed" exceptions.
 
 | ID     | Title                                                  | E  | Design | Source              |
 |--------|--------------------------------------------------------|----|--------|---------------------|
-| C57    | Route decorator syntax (`@get`, `@post`, `@ws`)       | H  | ✓      | SERVER_FEATURES.md  |
-| I13    | Iterator protocol (`for msg in ws` via `fn next`)     | MH | ✓      | SERVER_FEATURES.md  |
+| C57    | Route decorator syntax (`@get`, `@post`, `@ws`)       | H  | ✓      | plans/future/29-server-features/README.md|
+| I13    | Iterator protocol (`for msg in ws` via `fn next`)     | MH | ✓      | plans/future/29-server-features/README.md|
 | I12    | Interfaces: factory methods (`fn zero() -> Self`)     | S  | ✓      | INTERFACES.md       |
 | A12    | Lazy work-variable initialization                      | M  | ✓      | PLANNING.md         |
 | O2     | Stack raw pointer cache                                | M  | ✓      | PLANNING.md         |

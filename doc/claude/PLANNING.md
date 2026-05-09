@@ -3319,7 +3319,7 @@ WASM, works today).
 ## E — Library Ergonomics
 
 Features motivated by the `server` and `game_client` library designs.
-Full design rationale and before/after code examples: [SERVER_FEATURES.md](SERVER_FEATURES.md).
+Full design rationale and before/after code examples: [SERVER_FEATURES.md](plans/future/29-server-features/README.md).
 
 ---
 
