@@ -161,7 +161,7 @@ closes the loop on the mechanism without shipping a new feature.
   (e.g. linear-time NFA → compile-generated DFA, see
   [REGEX.md](../01-regex/README.md)) does not change the user's source.
 - **Bytecode / `.loftc` size scales with usage.**  Matters for WASM
-  (../../../plans/finished/31-html-export/README.md) where payload size affects load time.
+  ([HTML export pipeline](../../../HTML_EXPORT.md)) where payload size affects load time.
 - **Template for external packages** (PACKAGES.md).  The same
   trigger-registry pattern generalises to third-party libraries
   installed via `loft install`: register triggers, load on first
