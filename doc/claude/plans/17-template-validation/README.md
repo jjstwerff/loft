@@ -5,12 +5,41 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 17 — Bounded-generic / interface validation
 
-**Status: phase 01 closed (PR #207).  Phase 02 (multi-bound, two-T)
-pre-flight 2026-05-04 confirmed feature gaps, not bugs — `<T: A + B>`,
-`<A, B>`, and `where`-clauses all parse-error at `>` because loft's
-generics currently support a single type parameter.  No P-issue filed;
-phases 02-06 are scheduled feature work, not bug-fix gating.  P208
-was closed in PR #207.**
+**Status: DONE 2026-05-09.**  Matrix fully populated;
+26 PASS cells in `tests/template_matrix.rs` covering U1, U2, U3,
+U6, U7, U8 × B0/B1.O/B1.E/B1.A/B1.P/B2/B3/B4 under both interp
+and native via the cross_mode harness.  6 P-issues filed
+(P237, P238, P239, P240, P241, P242 — all open) + 2 feature
+gaps confirmed (B5 two-T generics; U4 generic structs).
+Closeout commits 2026-05-09: `ad854e4` (phase 00 harness),
+`adcc6e6` (phase 01 baseline), `61cbf06` (phase 02 tuples +
+P237/P238), `80d6b49` (phase 03 Printable+vector + P239),
+`42f9739` (phase 04 user-iface + P240), `4854b2d` (phase 05
+nested+two-T + P241/P242).
+
+Bug-yield outcome: **6 P-issues in 6 phases** — close to the
+predicted 5-10 range.  All 6 filed bugs share a root-cause
+family: generic-fn codegen emits DbRef-shaped ops for T-typed
+values without substituting T's concrete type at
+monomorphisation.  Surfaces (in order surfaced):
+- P237 — bound-supplied operator/method INSIDE a tuple
+  constructor element.
+- P238 — uniform `(T, T)` tuple return with `T = text` (native
+  only).
+- P239 — `for x in v` over `vector<T>` (consume side).
+- P240 — 2+ bound-operator locals + tuple return (cross-mode
+  divergence; backend depends on body side-effects).
+- P241 — building/pushing into `vector<T>` (construct side).
+- P242 — format-string interpolation of T variable.
+
+Most have workarounds (hoist to typed locals, explicit
+`to_text()`).  P239 / P241 / P242 all root-cause from the
+same DbRef-shaped-op-without-T-substitution problem; a
+unified fix in the second-pass generic body codegen would
+likely close all three at once.
+
+The 26 PASS cells form a regression net that catches future
+breakage of working bounded-generic shapes.
 
 Closed (2026-05-04):
 - **(C) built-in `to_text` impls.**  Six `to_text` impls added at
