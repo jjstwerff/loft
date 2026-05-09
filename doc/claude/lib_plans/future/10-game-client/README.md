@@ -9,7 +9,7 @@ that provides WebSocket connectivity, typed game message protocol, client-side
 prediction and server reconciliation, lobby management, and dynamic loading of
 loft programs compiled to WASM as hot-swappable game scripts.
 
-The companion server-side library is `server` ([WEB_SERVER_LIB.md](lib_plans/future/08-server/README.md)).
+The companion server-side library is `server` ([WEB_SERVER_LIB.md](../08-server/README.md)).
 
 ---
 
@@ -262,16 +262,16 @@ struct MsgError    { code: integer, message: text }
 
 ### Dispatcher (in loft) — SUPERSEDED
 
-> **Superseded by [EVENT_LOOP.md](plans/future/23-event-loop/README.md).**  This
+> **Superseded by [EVENT_LOOP.md](../../../plans/future/23-event-loop/README.md).**  This
 > `Dispatcher` struct + `dispatch(env, &Dispatcher)` design was
 > never implemented.  The canonical model is now EventLoop's
 > typed handlers: `el::on(loop, fn(e: T) { ... })` registers a
 > handler keyed on the recv-type's canonical name with the
 > library deriving the encoding from R's shape; the wire
 > frame's `handler_id` field (see
-> [EVENT_PROTOCOL.md](plans/future/23-event-loop/PROTOCOL.md)) replaces the
+> [EVENT_PROTOCOL.md](../../../plans/future/23-event-loop/PROTOCOL.md)) replaces the
 > variant-tagged dispatch shown below.  See
-> [EVENT_LOOP.md § three-tier registration](plans/future/23-event-loop/README.md#three-tier-registration)
+> [EVENT_LOOP.md § three-tier registration](../../../plans/future/23-event-loop/README.md#three-tier-registration)
 > for the full registration API (`on` / `on_at` / `on_with`).
 > The struct sketch is retained here only for design history.
 

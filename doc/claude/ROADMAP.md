@@ -353,12 +353,12 @@ shipped in 0.8.6 alongside LSP.1.  Web IDE W2–W6 above uses the same
 | SRV.5 | ACME / Let's Encrypt automatic certs                   | M  | ✓      | lib_plans/future/08-server/README.md|
 | SRV.6 | CORS, rate limiting, static files                      | M  | ✓      | lib_plans/future/08-server/README.md|
 | SRV.G | Game loop: ws_poll, broadcast, ConnectionRegistry      | M  | ✓      | lib_plans/future/08-server/README.md|
-| GC.1  | WebSocket client + GameEnvelope protocol               | M  | ✓      | GAME_CLIENT_LIB.md  |
-| GC.2  | Lobby + matchmaking                                    | S  | ✓      | GAME_CLIENT_LIB.md  |
-| GC.3  | Fixed-timestep game loop                               | S  | ✓      | GAME_CLIENT_LIB.md  |
-| GC.4  | Client-side prediction + reconciliation                | M  | ✓      | GAME_CLIENT_LIB.md  |
-| GC.5  | WASM script loading + Ed25519 verification             | M  | ✓      | GAME_CLIENT_LIB.md  |
-| GC.6  | Shared game logic + Tic-Tac-Toe demo                   | M  | ✓      | GAME_CLIENT_LIB.md  |
+| GC.1  | WebSocket client + GameEnvelope protocol               | M  | ✓      | lib_plans/future/10-game-client/README.md|
+| GC.2  | Lobby + matchmaking                                    | S  | ✓      | lib_plans/future/10-game-client/README.md|
+| GC.3  | Fixed-timestep game loop                               | S  | ✓      | lib_plans/future/10-game-client/README.md|
+| GC.4  | Client-side prediction + reconciliation                | M  | ✓      | lib_plans/future/10-game-client/README.md|
+| GC.5  | WASM script loading + Ed25519 verification             | M  | ✓      | lib_plans/future/10-game-client/README.md|
+| GC.6  | Shared game logic + Tic-Tac-Toe demo                   | M  | ✓      | lib_plans/future/10-game-client/README.md|
 | MP.P  | 🌐 **Moros multiplayer** — DM + players share live scene | S  | ✓      | hosted server       |
 
 ### Stability gate (no shortcuts)
@@ -437,6 +437,6 @@ own scope never blocks a language tag.
 | WASM + frame yield | [WASM.md](WASM.md) |
 | Web IDE | [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) |
 | Server library | [WEB_SERVER_LIB.md](lib_plans/future/08-server/README.md) |
-| Game client library | [GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md) |
+| Game client library | [GAME_CLIENT_LIB.md](lib_plans/future/10-game-client/README.md) |
 | Graphics | [OPENGL_IMPL.md](lib_plans/future/02-graphics/IMPLEMENTATION.md) |
 | Renderer abstraction | [RENDERER.md](lib_plans/future/02-graphics/RENDERER.md) |

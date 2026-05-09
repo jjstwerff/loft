@@ -149,7 +149,7 @@ and `game_client`.  Contains the canonical `WsMessage` enum, `GameEnvelope` stru
 separate package prevents the two libraries from diverging in their protocol definitions.
 No native layer required — pure loft.  Phases: just one (all types defined at once).
 
-**`game_client` — multi-player game client** ([GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md)):
+**`game_client` — multi-player game client** ([GAME_CLIENT_LIB.md](lib_plans/future/10-game-client/README.md)):
 Client-side companion to `server`.  Provides WebSocket connectivity, a typed game
 message protocol (envelope + dispatcher), lobby management, fixed-timestep game loop,
 client-side prediction with server reconciliation, and dynamic WASM script loading.
