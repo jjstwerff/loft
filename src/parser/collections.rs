@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Context, I32, Level, LexItem, OutputState, Parser, Parts, Type, Value, diagnostic_format,
-    v_block, v_if, v_loop, v_set, var_size,
+    Context, DefType, I32, Level, LexItem, OutputState, Parser, Parts, Type, Value,
+    diagnostic_format, v_block, v_if, v_loop, v_set, var_size,
 };
+use crate::variables::Function;
 
 /// Plan-06 ARC.md A3 / A3.5 — how to convert the i64 returned by
 /// `parallel_buf_get_narrow` back to the worker's actual return type.
@@ -1237,10 +1238,19 @@ use #count instead"
                         &Value::Var(mat_var),
                         combined_fill,
                         loop_nr,
+                        destructure_names.as_deref(),
                     );
                     return;
                 }
-                self.parse_parallel_for_loop(code, &id, &in_type, &expr, fill, loop_nr);
+                self.parse_parallel_for_loop(
+                    code,
+                    &id,
+                    &in_type,
+                    &expr,
+                    fill,
+                    loop_nr,
+                    destructure_names.as_deref(),
+                );
                 return;
             }
             // CO1.5: detect coroutine for-loop before parse_for_iter_setup consumes expr.
@@ -1558,8 +1568,193 @@ use #count instead"
         Some((fill_ir, mat_var, mat_in_type))
     }
 
+    /// P235 par half — parse the worker call inside a destructured
+    /// par expression and synthesize a wrapper fn that bridges the
+    /// gap between par dispatch's "one per-iteration arg" model and
+    /// the user's multi-arg-from-tuple call shape.
+    ///
+    /// Given `for (a, b) in pairs par(r = work(a, b), N) { ... }`
+    /// (a, b already defined in scope as tuple-element vars by
+    /// `parse_parallel_for_loop`), this method parses `work(a, b)`
+    /// and synthesizes:
+    ///
+    /// ```text
+    /// fn __par_destructure_w_<N>(t: tuple_type) -> ret_type {
+    ///     work(t.<a_idx>, t.<b_idx>, ...)
+    /// }
+    /// ```
+    ///
+    /// Each user arg that is `Var(destructure_var_nrs[i])` becomes
+    /// a tuple element read at the matching tuple position; other
+    /// args (e.g. context constants) pass through verbatim.  The
+    /// par dispatch then calls the wrapper with the tuple loop
+    /// element as its single per-iteration arg.
+    ///
+    /// Returns the wrapper's d_nr (or u32::MAX on error), the
+    /// return type, and empty extras (no context args — they're
+    /// baked into the wrapper body).
+    pub(crate) fn parse_destructure_par_worker(
+        &mut self,
+        tuple_tp: &Type,
+        destructure_var_nrs: &[u16],
+    ) -> (u32, Type, Vec<Value>, Vec<Type>) {
+        // Parse worker fn name + ( arg, arg, ... )
+        let Some(work_id) = self.lexer.has_identifier() else {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect function name in par(...) destructure worker"
+                );
+            }
+            return (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new());
+        };
+        let work_d_nr = {
+            let prefixed = format!("n_{work_id}");
+            let nr = self.data.def_nr(&prefixed);
+            if nr == u32::MAX {
+                self.data.def_nr(&work_id)
+            } else {
+                nr
+            }
+        };
+        if !self.lexer.has_token("(") {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect '(' after worker name '{work_id}'"
+                );
+            }
+            return (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new());
+        }
+        let mut user_args: Vec<Value> = Vec::new();
+        if !self.lexer.peek_token(")") {
+            loop {
+                let mut arg = Value::Null;
+                self.expression(&mut arg);
+                user_args.push(arg);
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+        }
+        self.lexer.token(")");
+
+        if work_d_nr == u32::MAX {
+            if !self.first_pass {
+                diagnostic!(self.lexer, Level::Error, "Unknown function '{work_id}'");
+            }
+            return (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new());
+        }
+        if !self.first_pass && !matches!(self.data.def_type(work_d_nr), DefType::Function) {
+            diagnostic!(self.lexer, Level::Error, "'{work_id}' is not a function");
+            return (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new());
+        }
+        let ret_type = self.data.def(work_d_nr).returned.clone();
+        if self.first_pass {
+            // First pass: return the user worker so the parser's
+            // downstream type-shape decisions (return_size, ladder
+            // routing) see realistic values.  Argcount checks in
+            // build_parallel_for_ir are gated on !first_pass, so
+            // mismatched extras don't fire here.  Second pass
+            // synthesizes the real wrapper.
+            return (work_d_nr, ret_type, Vec::new(), Vec::new());
+        }
+        self.data.def_used(work_d_nr);
+
+        // Resolve tuple element types + def_nr for offsets
+        let elem_types: Vec<Type> = match tuple_tp {
+            Type::Tuple(elems) => elems.clone(),
+            Type::Reference(d, _) => self
+                .data
+                .def(*d)
+                .attributes
+                .iter()
+                .map(|a| a.typedef.clone())
+                .collect(),
+            _ => Vec::new(),
+        };
+        let tuple_d_nr = match tuple_tp {
+            Type::Reference(d, _) => *d,
+            _ => u32::MAX,
+        };
+
+        // Allocate wrapper def
+        let wrapper_pos = self.lexer.pos().clone();
+        let wrapper_file = wrapper_pos.file.clone();
+        // Use lexer line:col + work fn name for a stable, unique
+        // synthetic name (avoids needing a Parser-level counter).
+        let wrapper_name = format!(
+            "__par_destructure_w_{}_{}_{work_id}",
+            wrapper_pos.line, wrapper_pos.pos
+        );
+        let wrapper_d_nr = self
+            .data
+            .add_def(&wrapper_name, &wrapper_pos, DefType::Function);
+        let _ = self
+            .data
+            .add_attribute(&mut self.lexer, wrapper_d_nr, "t", tuple_tp.clone());
+        self.data.set_returned(wrapper_d_nr, ret_type.clone());
+
+        // Build wrapper variable table
+        let mut wrapper_vars = Function::new(&wrapper_name, &wrapper_file);
+        let t_var = wrapper_vars.add_variable("t", tuple_tp, &mut self.lexer);
+        wrapper_vars.become_argument(t_var);
+        wrapper_vars.defined(t_var);
+
+        // Translate user_args: Var(destructure_var_nrs[i]) → tuple
+        // element read; other shapes pass through verbatim.
+        let mut wrapper_call_args: Vec<Value> = Vec::with_capacity(user_args.len());
+        for arg in &user_args {
+            let arg_var_nr = if let Value::Var(v) = arg.unspan() {
+                Some(*v)
+            } else {
+                None
+            };
+            if let Some(v) = arg_var_nr
+                && let Some(idx) = destructure_var_nrs.iter().position(|&dv| dv == v)
+            {
+                let elem_offset = if tuple_d_nr == u32::MAX {
+                    crate::data::element_offsets(&elem_types)[idx] as u32
+                } else if let Some(offs) = crate::data::stored_tuple_offsets_for_def(
+                    &self.data,
+                    &self.database,
+                    tuple_d_nr,
+                    elem_types.len(),
+                ) {
+                    u32::from(offs[idx])
+                } else {
+                    crate::data::element_offsets(&elem_types)[idx] as u32
+                };
+                let read = self.get_val(
+                    &elem_types[idx],
+                    false,
+                    elem_offset,
+                    Value::Var(t_var),
+                    u32::MAX,
+                );
+                wrapper_call_args.push(read);
+            } else {
+                wrapper_call_args.push(arg.clone());
+            }
+        }
+
+        let body_call = Value::Call(work_d_nr, wrapper_call_args);
+        let body = v_block(
+            vec![Value::Return(Box::new(body_call))],
+            ret_type.clone(),
+            "destructure_wrapper",
+        );
+        self.data.definitions[wrapper_d_nr as usize].code = body;
+        self.data.definitions[wrapper_d_nr as usize].variables = wrapper_vars;
+
+        (wrapper_d_nr, ret_type, Vec::new(), Vec::new())
+    }
+
     // Desugar `for a in vec par(b = worker(a), N) { body }` into an
     // index-based loop over the `parallel_for` result vector.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn parse_parallel_for_loop(
         &mut self,
         code: &mut Value,
@@ -1568,6 +1763,7 @@ use #count instead"
         vec_expr: &Value,
         fill: Value,
         loop_nr: u16,
+        destructure_names: Option<&[String]>,
     ) {
         // Consume opening '('.
         self.lexer.token("(");
@@ -1635,9 +1831,76 @@ use #count instead"
             self.vars.in_use(elem_var_nr, true);
         }
 
+        // P235 par half: when the for-loop binds a tuple destructure
+        // (`for (a, b) in pairs par(r = work(a, b), N) { ... }`),
+        // the destructured names need to be in scope BEFORE
+        // parse_parallel_worker parses the worker call.  Define them
+        // here as proper variables typed from the tuple's element
+        // types — same pattern as the non-par destructure setup at
+        // parse_for:1289-1346.  The variables persist through the
+        // body too (matching non-par destructure semantics).
+        //
+        // The worker call itself is parsed via a destructure-aware
+        // path (`parse_destructure_par_worker`) that captures ALL
+        // user args (parse_parallel_worker dummies the first arg)
+        // and synthesizes a wrapper fn `__par_destructure_w_<N>(t)
+        // -> ret { work(t.0, t.1, ...) }`.  Par dispatch then calls
+        // the wrapper with the tuple loop element as its single arg.
+        let destructure_var_nrs: Option<Vec<u16>> = if let Some(names) = destructure_names {
+            let elem_types_opt: Option<Vec<Type>> = match &elem_tp {
+                Type::Tuple(elems) => Some(elems.clone()),
+                Type::Reference(d_nr, _) if self.data.def(*d_nr).name.starts_with("__tuple<") => {
+                    Some(
+                        self.data
+                            .def(*d_nr)
+                            .attributes
+                            .iter()
+                            .map(|a| a.typedef.clone())
+                            .collect(),
+                    )
+                }
+                _ => None,
+            };
+            if let Some(elem_types) = elem_types_opt {
+                if elem_types.len() == names.len() {
+                    Some(
+                        names
+                            .iter()
+                            .enumerate()
+                            .map(|(i, name)| {
+                                let var = self.create_var(name, &elem_types[i]);
+                                self.vars.defined(var);
+                                self.vars.in_use(var, true);
+                                var
+                            })
+                            .collect(),
+                    )
+                } else {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "for-destructure: pattern has {} names but iterated tuple has {} elements",
+                            names.len(),
+                            elem_types.len()
+                        );
+                    }
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // Resolve worker function: consumes the worker call tokens up to the ','.
         let (fn_d_nr, ret_type, extra_vals, _extra_types) =
-            self.parse_parallel_worker(elem_var, &elem_tp);
+            if let Some(d_var_nrs) = destructure_var_nrs.as_ref() {
+                self.parse_destructure_par_worker(&elem_tp, d_var_nrs)
+            } else {
+                self.parse_parallel_worker(elem_var, &elem_tp)
+            };
 
         // Plan-06 phase 5b' — par-safety DEEP check at ERROR level.
         // Recurses through user-fn callees until it hits a direct

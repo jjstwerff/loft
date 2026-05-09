@@ -12585,6 +12585,69 @@ fn p235_for_tuple_destructure_int_text() {
     .result(Value::Int(17)); // (1+3) + (2+3) + (3+5) = 17
 }
 
+/// P235 par half — synthesized wrapper-worker for `for (a, b) in
+/// pairs par(r = work(a, b), N) { ... }`.  Pre-fix, `a` and `b`
+/// weren't in scope when `parse_parallel_worker` parsed `work(a,
+/// b)`, producing two "Unknown variable" errors.  Closed by
+/// `parse_destructure_par_worker` in
+/// `src/parser/collections.rs` — defines the destructured names
+/// in scope, parses the user call manually (capturing all args),
+/// then synthesizes a wrapper fn `__par_destructure_w_<L>_<P>_<work>(t)
+/// -> ret { work(t.0, t.1) }` and routes par dispatch through
+/// the wrapper with the tuple loop element as the single
+/// per-iteration arg.
+#[test]
+fn p235_par_half_two_arity_int_int() {
+    code!(
+        "fn add(a: integer, b: integer) -> integer { a + b }
+fn run() -> integer {
+    pairs: vector<(integer, integer)> = [(1, 2), (3, 4), (5, 6), (7, 8)];
+    sum = 0;
+    for (a, b) in pairs par(r = add(a, b), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(36)); // (1+2)+(3+4)+(5+6)+(7+8) = 36
+}
+
+/// P235 par half — three-arity destructure ensures the synthesis
+/// supports more than 2 names.  Wrapper body builds three tuple
+/// element reads and threads them into the user worker.
+#[test]
+fn p235_par_half_three_arity() {
+    code!(
+        "fn sum3(a: integer, b: integer, c: integer) -> integer { a + b + c }
+fn run() -> integer {
+    triples: vector<(integer, integer, integer)> = [(1, 2, 3), (4, 5, 6)];
+    total = 0;
+    for (a, b, c) in triples par(r = sum3(a, b, c), 4) { total += r; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(21)); // (1+2+3)+(4+5+6) = 21
+}
+
+/// P235 par half — args in non-positional order (`work(b, a)`
+/// instead of `work(a, b)`).  The wrapper body must map each user
+/// arg to its declared tuple position via the destructured var
+/// nrs, not assume positional ordering.
+#[test]
+fn p235_par_half_args_swapped() {
+    code!(
+        "fn diff(x: integer, y: integer) -> integer { x - y }
+fn run() -> integer {
+    pairs: vector<(integer, integer)> = [(10, 1), (20, 5)];
+    out = 0;
+    for (a, b) in pairs par(r = diff(b, a), 2) { out += r; }
+    out
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(-(9 + 15))); // (1-10)+(5-20) = -24
+}
+
 #[test]
 fn p234_runtime_via_run_fn() {
     code!(

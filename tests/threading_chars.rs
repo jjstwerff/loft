@@ -848,7 +848,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "ARC.md A7.2 (Surface 2 — for-loop tuple destructure).  Actual-error survey 2026-05-07: blocked on a general parser feature gap — `for (a, b) in pairs { ... }` fails with 'Expect variable after for' even WITHOUT par.  Not a par-side fix; needs the for-loop parser to accept tuple destructure patterns.  See PROBLEMS.md (forthcoming P-id) and ARC.md A7 'Actual-error survey' subsection."]
 fn par_tuple_destructure_in_for() {
     // Tuple destructuring directly in the fused-for-par binding.
     code!(

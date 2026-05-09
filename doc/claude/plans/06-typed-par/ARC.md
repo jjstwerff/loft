@@ -5,15 +5,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan-06 — Real-value Development Arc
 
-**Status (2026-05-09): closeout docs landed; 2 small items remain.**
+**Status (2026-05-09): closeout docs + P235 par half landed; 1 small item remains.**
 
-Most sub-steps closed; closeout docs (this section + acceptance
-criteria revision + A9 superseded marker + A11 partial) shipped
-2026-05-09.  Two open items defer to a follow-up session:
+Most sub-steps closed.  Closeout docs (acceptance criteria
+revision + A9 superseded marker) shipped 2026-05-09.  P235 par
+half (synthesized wrapper-worker for `for (a, b) in pairs
+par(...) { ... }`) closed 2026-05-09 — `par_tuple_destructure_in_for`
+canary now PASSING.  One open item defers to a follow-up
+session:
 
-- **P235 par half** (synthesized wrapper-worker for `for (a, b)
-  in pairs par(...) { ... }`) — closes the
-  `par_tuple_destructure_in_for` canary.  Estimated M ~1 session.
 - **A8.b stitch_id retry** in `src/native.rs` — collapse the 5
   `n_parallel_queue*` fns into thin wrappers around a shared
   `parallel_queue_impl(stores, stack, stitch)` body.  Estimated
@@ -112,16 +112,16 @@ Three concrete criteria, with the original targets and the
    analyser (`scopes.rs::analyse_par_safety_fixpoint`) ships as
    `#[allow(dead_code)]` for future par-safety diagnostics.
 3. **Zero ignored par canaries.**  `grep -c "^#\[ignore"
-   tests/threading_chars.rs`.  Original: 8.  Today: 2.  **OPEN:
-   close P235 par half** (synthesized wrapper-worker for
-   `for (a, b) in pairs par(...) { ... }`) drops to 1.  The
-   remaining ignore is heterogeneous-vec-of-fn (D11a row 8) —
-   different surface (vector construction rejects heterogeneous
-   capturing-fn captures), outside plan-06 scope; tracked in
-   DESIGN.md D11a.  Estimated M ~1 session.
+   tests/threading_chars.rs`.  Original: 8.  Today: **1** (down
+   from 2 after P235 par half closure).  The remaining ignore is
+   heterogeneous-vec-of-fn (D11a row 8) — different surface
+   (vector construction rejects heterogeneous capturing-fn
+   captures), outside plan-06 scope; tracked in DESIGN.md D11a.
+   **MET** — plan-06 takes the canary count to its lowest
+   achievable value within scope.
 
-Status (2026-05-09): #2 fully met; #1 + #3 await the small
-follow-ups noted above.  Once both land, plan-06 closes and
+Status (2026-05-09): #2 + #3 fully met; #1 awaits the A8.b
+stitch_id retry follow-up.  Once that lands, plan-06 closes and
 ARC.md status header flips to DONE.
 
 ## Inventory — what's actually in flight
@@ -1392,17 +1392,25 @@ offset_i))` ops to the body block.  Handles both direct
 shape (vector<(T1,T2)> via P189b's element-access path).  Pinned
 by `tests/issues.rs::p235_for_tuple_destructure_{two_arity,three_arity,int_text}`.
 
-**Par half OPEN**: ARC.md's original "par variant is automatic"
-claim was wrong — the existing par dispatch passes ONE
-per-iteration arg (the loop element) and N context args (same
-every iteration).  Destructure wants multiple per-iteration args
-derived from the tuple, which the dispatch shape doesn't support.
-Cleanest follow-up: at parse time, when destructure is paired
-with par, synthesize a wrapper worker
-`__par_destructure_w<N>(t: tuple_t) -> R { worker(t.0, t.1, …) }`
-and rewrite the par expression to call the wrapper with the
-tuple loop element.  Until then `par_tuple_destructure_in_for`
-stays ignored.
+**Par half DONE 2026-05-09** in
+`src/parser/collections.rs::parse_destructure_par_worker`:
+when `parse_parallel_for_loop` is called with `destructure_names`
+`Some`, the destructured names get defined in scope BEFORE
+worker parsing (mirroring the non-par destructure setup), then
+the worker call is parsed manually (capturing ALL args, not
+skipping the first like `parse_parallel_worker` does).  Second
+pass synthesizes a wrapper fn `__par_destructure_w_<line>_<pos>_<work>(t:
+tuple_t) -> R { work(t.<i>, t.<j>, …) }` via `data.add_def +
+add_attribute + set_returned`; the wrapper's variable table is
+built fresh (`Function::new + add_variable + become_argument +
+defined`).  Each user arg that is `Var(destructure_var_nrs[i])`
+becomes a tuple element read at the matching position via
+`get_val`; non-destructure-var args pass through verbatim.  Par
+dispatch then calls the wrapper with the tuple loop element as
+its single per-iteration arg.  Supports non-positional arg
+ordering (`work(b, a)` correctly maps b → t.1 + a → t.0).
+Pinned by un-ignored `par_tuple_destructure_in_for` plus 3 new
+regression tests (`p235_par_half_*`).
 
 ##### A7.3 — Tuple-of-struct member access (Surface 3)
 
@@ -1946,18 +1954,19 @@ Closeout actions shipped 2026-05-09:
   future maintainers don't re-attempt it.
 - CHANGELOG_TECHNICAL.md: plan-06 progress entry.
 
-Open items to close before plan-06 fully wraps:
-- **P235 par half** (~1 session, M-sized): synthesized wrapper-
-  worker in `src/parser/collections.rs::parse_parallel_for_loop`
-  for `for (a, b) in pairs par(r = work(a, b), N) { … }`.
-  Closes `par_tuple_destructure_in_for`, taking ignored par
-  canary count from 2 → 1.  Design in PROBLEMS.md P235.
+Open item to close before plan-06 fully wraps:
 - **A8.b stitch_id retry** (~1 hour): collapse the 5
   `n_parallel_queue*` fns in `src/native.rs` into thin wrappers
   around a shared `parallel_queue_impl(stores, stack, stitch)`
   body.  Targets the native.rs layer (different from A8's
   parallel.rs target which deferred for sound reasons).  Saves
   ~80-100 LOC.
+
+Closed since 2026-05-09 commit `f974770`:
+- **P235 par half** — `src/parser/collections.rs::parse_destructure_par_worker`
+  shipped 2026-05-09.  See A7.2 section above for details.
+  Closes `par_tuple_destructure_in_for`; ignored canary count
+  drops 2 → 1.
 
 Remaining items intentionally out-of-scope of plan-06 closure
 (stay open after A11 fully completes):
