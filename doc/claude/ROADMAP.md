@@ -260,49 +260,6 @@ Demo apps ship on their own cadence and do **not** gate any language work.  Per 
 
 ---
 
-## Upcoming presentation — audience-driven generative art
-
-Plan: [`presentations/audience-generative-art/`](presentations/audience-generative-art/).
-
-Demo concept: audience members influence a plant/crystal growth simulation on a hex map by tapping (seeds) and choosing colors (direction bias).  Native projector view auto-cameras to recent activity.  Single shared URL — everyone in the room participates from their phone or laptop.
-
-Scoped 2026-05-09.  Per-phase status lives in the plan README.  This section lists the development work the demo needs; effort estimates, no time projections.
-
-| ID | Title | E | Notes |
-|---|---|---|---|
-| AGA.1 | WebSocket server: hold seed list + bias field, broadcast world updates per tick | M | Extends `lib/server`'s starter code.  Reusable as `lib/server` primitives for later plans. |
-| AGA.2 | WebSocket client for the projector view | S | Native-side; subscribe to server, apply world updates |
-| AGA.3 | Generation script (loft) — plant/crystal growth from seeds, color-direction-biased | M | THE STAR of the demo.  2-3 variants (plant / crystal / hybrid) for between-round switching |
-| AGA.4 | Auto-camera for projector view — track activity heat field, smooth interpolation between centroid + zoom | S | Audience members see their own contribution because the camera notices where the action is |
-| AGA.5 | Audience browser page — color palette + tap-to-seed + WebSocket | XS | Pure HTML/JS; not loft code |
-| AGA.6 | Hosting — public URL reachable from venue WiFi | XS | Operational: VPS / hotspot / ngrok / cloudflared |
-| AGA.7 | Talk content — slides + presenter script + presenter notes | S | Mirrors `presentations/par/` structure |
-| AGA.8 | Rehearsal + backup recording on demo hardware | XS | Pre-record both demos as fallback for catastrophic failure |
-
-No hard dependencies on currently-open ROADMAP plans.  The WebSocket primitives AGA needs are already shipped: `lib/server/src/server.loft` ships multi-client WebSocket (`srv.run(on_event)` + `ws_clients_*`, `ws_event_*`); `lib/web/src/web.loft` ships the WebSocket client (`ws_handler`, `ws_connect`, `ws_send`, `ws_recv`).  AGA.1 + AGA.2 are application code on top of these, not library extensions.
-
-Soft dependencies — would benefit but not block:
-
-- **`lib_plans/future/13-scriptable-scenes`** — hot-reload of the generation script between rounds.  Without it, presenter restarts the script (acceptable; the talk script frames this as "now let me change the rules and re-run").
-- **`plans/future/27-developer-experience` DX.1 / DX.3** — the talk content overlaps with quick-start `examples/` and the "Learn loft in 30 minutes" walkthrough.  Can write the talk inline OR land both at once.
-- **`plans/07-error-messages` phases 4-7** — nicer errors if something goes wrong on stage.  Not blocking; presenter has rehearsed fallback.
-
-Latent risk: **`plans/future/15-closure-validation` phase 03 / closure-DbRef leak** (LIFETIME.md "NOT YET HANDLED").  Generation script uses closures heavily.  Leak is bounded per closure-creation, not per tick — a 30-60 minute demo session is fine; an unattended installation running for hours could accumulate.
-
-Upstream-feeds (this work sharpens scope for):
-
-- `lib_plans/future/08-server` — AGA.1 patterns (state hold + per-tick broadcast) reusable as server primitives
-- `lib_plans/future/13-scriptable-scenes` — AGA.3 is a proof-of-concept for the script architecture
-- `plans/future/23-event-loop` — AGA.1 is a practical EVENT_PROTOCOL instance
-
-Deliberately does NOT depend on:
-
-- `plans/future/24-multiplayer-editor` (audience client is a dumb tap-emitter, not the full moros editor)
-- `plans/future/32-tic-tac-toe` (different protocol shape)
-- `lib_plans/future/10-game-client` (not needed yet — no game-client library required)
-
----
-
 ## All open plans — index by category
 
 Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged by primary value category.
@@ -333,6 +290,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | HTTP / WS / static-file server library |
 | [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/future/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
 | [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/future/07-web-ide W2** + moros editor MO.* + script-target build mode | User-authored scene scripts (SC.1-SC.6 + SC.P) |
+| [`plans/future/36-audience-generative-art/`](plans/future/36-audience-generative-art/) | M (3M + 3S + 4XS) | — (WS primitives shipped) | Demo plan — audience-driven plant/crystal growth via shared URL.  Sibling presentation at `presentations/audience-generative-art/` |
 
 ### F — Foundation
 
