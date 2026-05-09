@@ -183,7 +183,7 @@ Performance, refactor, internal cleanup with clear payoff.
 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
-| (cross) | Native codegen follow-ups (yield-from + generic text-return + fill.rs auto-gen) | XS-M per item | ✓ | plans/future/33-native-codegen-followups/README.md |
+| (cross) | Native codegen follow-ups (yield-from + generic text-return + fill.rs auto-gen) | XS-M per item | ✓ | NATIVE.md § Open work |
 | (cross) | Performance follow-ups (P1-P3 interpreter / N1-N3 native / W1 wasm) | S-MH per item | ✓ | plans/future/34-performance-followups/README.md |
 | (cross) | Retire `stores.scratch` lifetime hazard | M | ✓ | plans/future/21-retire-scratch/README.md |
 | O4 | Native: direct-emit local collections | M | ✓ | plans/future/34-performance-followups/README.md |
@@ -322,8 +322,8 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged b
 
 | Plan | E | Depends on | Status |
 |---|---|---|---|
-| [`plans/future/21-retire-scratch/`](plans/future/21-retire-scratch/) | M | cooperates with 33 N8c.x + 34 N1 | Eliminate `stores.scratch` lifetime hazard |
-| [`plans/future/33-native-codegen-followups/`](plans/future/33-native-codegen-followups/) | XS-M per item | — | Pointer-plan.  N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
+| [`plans/future/21-retire-scratch/`](plans/future/21-retire-scratch/) | M | cooperates with NATIVE § Open work N8c.x + 34 N1 | Eliminate `stores.scratch` lifetime hazard |
+| [NATIVE.md § Open work](NATIVE.md#open-work) | XS-M per item | — | N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
 | [`plans/future/34-performance-followups/`](plans/future/34-performance-followups/) | S-MH per item | P1 blocked on opcode-table capacity | Pointer-plan.  7 optimization designs |
 
 ### N — Niche / opportunistic

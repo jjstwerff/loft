@@ -1155,6 +1155,27 @@ a `String` move.
 
 ---
 
+## Open work
+
+`--native` is production (CI-gated, all 108/108 native tests pass).
+The items below are remaining follow-ups that don't affect the
+shipped state.  Each row links to its design content above.
+
+| Item | Section | Status |
+|---|---|---|
+| **N8b.3** — `yield from` delegation | [§ N8b](#n8b--coroutine-native-codegen) (line ~944, marked CO1.3d) | Open — design drafted, not implemented.  Native coroutines support `yield value` (N8b.1 + N8b.2 shipped) but NOT `yield from <inner_iterator>` delegation. |
+| **N8c.1** — Audit generic text-return | [§ N8c](#n8c--generic-function-instantiation) | **Probably overlaps shipped work.**  Plan-17 closure landed P237 / P238 / P242 (`Value::Tuple` recursion in `substitute_type_in_value`; `tuple_text_to_string` flag).  Action: un-skip `tests/scripts/48-generics.loft`; if green, mark closed. |
+| **N8c.2** — Fix generic text-return | [§ N8c](#n8c--generic-function-instantiation) | Same overlap.  N8c.1 audit determines whether N8c.2 is needed. |
+| **N20a** — Add `ops` import to generated `fill.rs` | [§ N20](#n20--repair-fillrs-auto-generation) | Open — trivial single-line add in `src/create.rs::generate_code()`. |
+| **N20b** — Run `cargo fmt` on generated `fill.rs` | [§ N20](#n20--repair-fillrs-auto-generation) | Open — runs `rustfmt` on the generated file so formatting matches the hand-maintained version. |
+| **N10 prune** | [§ N10 below](#current-state-2026-04-07) | **Stale.**  Says "6 fail, 34 skip of 85 files"; current state is 108/108 pass.  Sub-steps are diagnostic recipes for failures that no longer exist.  Action: prune § N10 + N20 to historical pointers when N8b.3 + N8c.x close. |
+
+Suggested order: N8c.1 audit (fastest) → N20a + N20b (trivial pair)
+→ N8b.3 (actual feature work; touches `src/generation/coroutine.rs`)
+→ § N10 + § N20 cleanup.
+
+---
+
 
 # Native Code Generation: Path to Default
 

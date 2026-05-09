@@ -96,8 +96,9 @@ consumer (interpreter vs native vs wasm) needs the win first.
   cooperates with N1 (N1 narrows the scratch consumer set)
 - [`../25-native-debug/`](../25-native-debug/) — sibling
   pointer-plan for native-codegen follow-ups
-- [`../33-native-codegen-followups/`](../33-native-codegen-followups/) —
-  another pointer-plan precedent (NATIVE.md companion)
+- [`../../../NATIVE.md` § Open work](../../../NATIVE.md#open-work) —
+  precedent for the in-doc Open work section pattern
+  (collapsed from the prior plans/future/33 pointer-plan)
 - [`../../../PLANNING.md`](../../../PLANNING.md) —
   priority-ordered backlog (cites PERFORMANCE.md for the
   technical detail of each item)
