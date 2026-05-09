@@ -5,7 +5,7 @@
 # PEG-Style Match Patterns with Anchor-Revert Captures (L3)
 
 > **Status: design draft.**  Extends the base match syntax
-> ([LOFT.md](LOFT.md) § Match expressions) with sequence patterns,
+> ([LOFT.md](../../../LOFT.md) § Match expressions) with sequence patterns,
 > alternation, optionals, repetition, and multi-variable capture.
 > Backtracking is modelled on the existing `Lexer::link()` / `revert()`
 > anchor mechanic so a partially-matched branch can be cleanly undone.
@@ -40,7 +40,7 @@ match tokens {
 ```
 
 Text matching is **not** handled by this extension.  Rich text patterns
-go through the [REGEX.md](lib_plans/future/01-regex/README.md) library and integrate with `match`
+go through the [REGEX.md](../../../lib_plans/future/01-regex/README.md) library and integrate with `match`
 by destructuring the returned `Match` struct — the existing match path,
 no new syntax.  Keeping text out of this design is an explicit choice:
 one text-pattern language (regex, in a library) is easier to learn than
@@ -263,7 +263,7 @@ or repetition operator must be followed by a wildcard arm; the
 exhaustiveness checker treats the arm as non-total.
 
 This is the same rule that already applies to guarded arms today and is
-captured in [INCONSISTENCIES.md](INCONSISTENCIES.md) #26.
+captured in [INCONSISTENCIES.md](../../../INCONSISTENCIES.md) #26.
 
 ---
 
@@ -292,7 +292,7 @@ abstraction split `Lexer` has today between `Lexer::memory` (shape-
 specific) and the `links` refcount (shape-independent).
 
 Text is deliberately absent from this table — it is served by the
-[REGEX.md](lib_plans/future/01-regex/README.md) library, not by this extension.  A `vec<char>`
+[REGEX.md](../../../lib_plans/future/01-regex/README.md) library, not by this extension.  A `vec<char>`
 or a `char` iterator can still be matched as a vector/iterator shape
 if someone wants structural character patterns, but that's a niche use
 and regex is the intended answer.
@@ -385,7 +385,7 @@ match re.match(line) {
 
 Rich text matching (custom char classes, anchors, lookaround, non-
 greedy, named groups, Unicode properties) all goes through the library.
-See [REGEX.md](lib_plans/future/01-regex/README.md).
+See [REGEX.md](../../../lib_plans/future/01-regex/README.md).
 
 ---
 
@@ -397,7 +397,7 @@ See [REGEX.md](lib_plans/future/01-regex/README.md).
 | **L3.2** | Alternation `(a \| b)` with anchor/revert; per-alternative capture unification. |
 | **L3.3** | Optional `(...)?`; nullable promotion of captures.                |
 | **L3.4** | Repetition `(...)*` and `(...)+`; per-iteration anchors; vector capture. |
-| ~~**L3.5**~~ | ~~String-shaped patterns (backtick template).~~  **Withdrawn** — text matching goes through [REGEX.md](lib_plans/future/01-regex/README.md) instead, avoiding two text-pattern languages in the codebase. |
+| ~~**L3.5**~~ | ~~String-shaped patterns (backtick template).~~  **Withdrawn** — text matching goes through [REGEX.md](../../../lib_plans/future/01-regex/README.md) instead, avoiding two text-pattern languages in the codebase. |
 | **L3.6** | Iterator inputs (`match some_iter { ... }`) — anchors must spill to memory like `Lexer::memory`; bounded by a `max_lookahead` arm attribute. |
 | **L3.7** | Multi-pattern arms (comma-separated patterns per arm).  Purely additive — no new cursor work; each listed pattern compiles as today, with the first-match commit wired into arm dispatch. |
 
@@ -407,7 +407,7 @@ Phases are strictly additive.  L3.1 alone already delivers the
 ### Ship order — across MATCH_PEG and REGEX
 
 The recommended order of implementation, combining this design with
-[REGEX.md](lib_plans/future/01-regex/README.md), places text capability first because it is the
+[REGEX.md](../../../lib_plans/future/01-regex/README.md), places text capability first because it is the
 smaller, library-scoped change with the highest immediate payoff:
 
 | Step | Item | Why here |
@@ -461,10 +461,10 @@ one revert per loop exit.
 |------------------------------------|------------------------------------------------------------------------------|
 | L2 nested enum patterns            | Required prerequisite — sub-patterns inside seq must already work on fields. See PLANNING.md § L2. |
 | Slice/vector patterns              | L3 sequence *is* the generalised slice pattern; `[a, b, ...rest]` compiles identically. |
-| Tuple destructure ([TUPLES.md](TUPLES.md)) | Tuples are a fixed-arity sequence — a degenerate L3.1 case.                |
+| Tuple destructure ([TUPLES.md](../../../TUPLES.md)) | Tuples are a fixed-arity sequence — a degenerate L3.1 case.                |
 | Guards (`if` on arm)               | Guard runs *after* L3 captures are committed; failure is not revertable.   |
-| Coroutines ([COROUTINE.md](COROUTINE.md)) | Already shipped (0.8.3), both interpreter and native (state-machine lowering).  Matching on an `iterator<T>` value uses L3.6's memoised cursor; no dependency blocker. |
-| Regex library ([REGEX.md](lib_plans/future/01-regex/README.md)) | Complement — handles all text matching; returns a `Match` struct that destructures in arms here via existing struct-pattern support. |
+| Coroutines ([COROUTINE.md](../../../COROUTINE.md)) | Already shipped (0.8.3), both interpreter and native (state-machine lowering).  Matching on an `iterator<T>` value uses L3.6's memoised cursor; no dependency blocker. |
+| Regex library ([REGEX.md](../../../lib_plans/future/01-regex/README.md)) | Complement — handles all text matching; returns a `Match` struct that destructures in arms here via existing struct-pattern support. |
 | `lib/lexer.loft` (loft-level lexer) | Natural consumer.  Its `anchor()`/`revert(Anchor)` pair already matches the cursor contract.  Three integration paths — see below. |
 
 ---
@@ -566,7 +566,7 @@ memo buffer.  Worth revisiting once L3.6 is on the critical path.
    (same-name, different types).
 
 5. **Relationship to the regex library.**  All text matching goes
-   through the standalone regex library — see [REGEX.md](lib_plans/future/01-regex/README.md).
+   through the standalone regex library — see [REGEX.md](../../../lib_plans/future/01-regex/README.md).
    The two systems have disjoint domains: this extension handles
    structural sequences over vectors / enums / iterators; regex
    handles text.  They meet in user code when a regex `Match` result
@@ -576,17 +576,17 @@ memo buffer.  Worth revisiting once L3.6 is on the critical path.
 
 ## See also
 
-- [LOFT.md](LOFT.md) § Match expressions — base match syntax reference.
-- [REGEX.md](lib_plans/future/01-regex/README.md) — standalone regex library for rich text matching;
+- [LOFT.md](../../../LOFT.md) § Match expressions — base match syntax reference.
+- [REGEX.md](../../../lib_plans/future/01-regex/README.md) — standalone regex library for rich text matching;
   the intentional complement to this PEG extension.
-- [TUPLES.md](TUPLES.md) — fixed-arity sequence captures.
-- [PLANNING.md](PLANNING.md) — L2 nested-pattern backlog (prerequisite).
-- [COROUTINE.md](COROUTINE.md) — iterator-valued inputs (L3.6).
+- [TUPLES.md](../../../TUPLES.md) — fixed-arity sequence captures.
+- [PLANNING.md](../../../PLANNING.md) — L2 nested-pattern backlog (prerequisite).
+- [COROUTINE.md](../../../COROUTINE.md) — iterator-valued inputs (L3.6).
 - [LAZY_STDLIB.md](lib_plans/future/03-lazy-stdlib/README.md) — lazy-loading mechanism (regex is its
   first consumer).
 - [COMPILER.md](COMPILER.md) § pattern lowering — where L3 compiles in.
 - [INTERMEDIATE.md](INTERMEDIATE.md) — `OpMatchAnchor` / `OpMatchRevert` addition.
-- [INCONSISTENCIES.md](INCONSISTENCIES.md) #26 — guarded-arm exhaustiveness precedent.
+- [INCONSISTENCIES.md](../../../INCONSISTENCIES.md) #26 — guarded-arm exhaustiveness precedent.
 - `src/lexer.rs` § `link` / `revert` — the primitive this design mirrors.
 - `lib/lexer.loft` § `anchor` / `revert` — loft-level lexer library that
   already exposes the same cursor contract; see
