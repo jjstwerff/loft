@@ -196,9 +196,8 @@ grep -n '"OpYourOp" =>' src/generation/dispatch.rs
   forwarding step and write the real emitter directly,
   absorbing whatever the special-case arm does.
 
-The forwarding registration looks like (see
-`src/generation/ops/forwarding_smoke.rs` for the live example
-covering 9 Ops):
+The forwarding emitter is written ad-hoc as a one-shot for the
+verification pass:
 
 ```rust
 pub struct Emitter;
@@ -210,10 +209,45 @@ impl OpEmitter for Emitter {
 }
 ```
 
+(Plan-09 originally shipped a shared `forwarding_smoke.rs` file
+covering 9 forwarded Op names as a registry-dispatch smoke test;
+plan-12 phase 02 retired it once 5 production custom emitters
+proved the dispatch path was exercised end-to-end.  The recipe
+above is the residual pattern — write a one-shot forwarding
+emitter inline when adding a new Op, verify byte-identical
+baseline, then swap in the real emission logic.)
+
 Validation:
 - `cargo test --release --test codegen_emitter` runs the byte-identical
-  baseline guard + P203 regression guard.
+  baseline guard + P203 regression guard +
+  `pre_eval_walkers_unspan` structural guard (see Walker convention
+  below).
 - `scripts/p09_fast_gate.sh` is the ~4-second human-driven gate.
+
+#### Walker convention — always `.unspan()` before matching `Value::*`
+
+When implementing a walker that pattern-matches against `Value::*`
+variants (`matches!(op, Value::Set(...))`, `match &operators[i]
+{ Value::Call(...) => ... }`), call `.unspan()` on the operator
+first.  Skipping unspan is **"code that compiled but never
+executed"** — the parser commonly wraps operators in
+`Value::Span(box (pos, inner))` for source-position tracking, and
+a raw match falls through to the `_ =>` arm even when the
+unspanned value matches.
+
+Plan-11 closed P204 by fixing one such walker
+(`detect_ref_tail_capture`); plan-12 phase 01 generalised the
+audit and patched 16 walker sites across 3 files (`pre_eval.rs`,
+`emit.rs`, `coroutine.rs`).  Findings: all latent — no in-tree
+miscompile reproducer, byte-identical baseline preserved — but
+applied as insurance.
+
+The structural guard
+`tests/codegen_emitter.rs::pre_eval_walkers_unspan` slices
+`patch_hoisted_returns` + `value_mentions_var` and asserts every
+`matches!(op, Value::*)` site is paired with `.unspan()`.  Add new
+walker sites to that slice or extend the guard if you introduce a
+new pattern site outside `pre_eval.rs`.
 
 ---
 

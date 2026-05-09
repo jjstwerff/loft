@@ -1,7 +1,7 @@
 # Phase 02 — Parameter adaptation
 
 **Status:** SUPERSEDED (2026-05-02) — folded into
-[plan-12 phase 05](../12-codegen-simplifications/05-narrow-int-cast-split.md).
+[plan-12 phase 05](../../deferred/12-codegen-simplifications/05-narrow-int-cast-split.md).
 
 Phase 02's main scope (split `narrow_int_cast`'s dual role) is
 preserved verbatim in plan-12 phase 05.  Phase 02 was demoted by

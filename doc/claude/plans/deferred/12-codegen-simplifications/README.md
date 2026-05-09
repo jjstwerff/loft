@@ -1,98 +1,140 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
 # Plan 12 — Codegen simplifications (post-09 follow-ups)
 
-**Status:** DEFERRED (2026-05-02 — Tier 2 onwards).  Tier 1 (phases
-01 + 02) shipped on branch `plan-12-codegen-simplifications`
-(commits `c0c27e5` walker audit, `d446e5d` forwarding-smoke retire);
-Tier 2 (phases 03-05) parked here until a driver arrives.
+## Status
 
-**Trigger to unpause:** the same conditions that would unpause
-plan 13 (`deferred/13-rust-template-migration/`) — 3+ template-path
-bugs, major codegen evolution forcing ≥50 Op-annotation touches,
-or contributor appetite for a large structural refactor.
-Plan 12 Tier 2 is plan 13's preamble; if plan 13 stays parked,
-plan 12 Tier 2 doesn't earn its keep.
+| Tier | Phases | State |
+|---|---|---|
+| **1** — Correctness + cleanup | 01 (walker audit) + 02 (forwarding-smoke retire) | **SHIPPED 2026-05-02** on branch `plan-12-codegen-simplifications` (commits `c0c27e5` + `d446e5d`).  Reference for the walker-unspan convention lives in [NATIVE.md § Walker convention](../../NATIVE.md#walker-convention--always-unspan-before-matching-value).  The forwarding-smoke retirement is a one-time cleanup; the residual recipe stays in [NATIVE.md § Forwarding-first recipe](../../NATIVE.md#forwarding-first-recipe-verify-before-writing-real-emission). |
+| **2** — Structural cleanup | 03 (format/append dispatch arms) + 04 (free/record dispatch arms) + 05 (`narrow_int_cast` split) | **DEFERRED.**  Phase 6 file relocated to [`../13-rust-template-migration/`](../13-rust-template-migration/) (its parent). |
+| **3** — Deep refactor | (template migration) | **DEFERRED to plan-13** — see [`../13-rust-template-migration/`](../13-rust-template-migration/). |
 
-**Origin:** Surfaced during plan-09's simplification audit
-(2026-05-02) after plan-09 + plan-11 closed all 5 in-scope
-P-issues.  This plan captures the residual simplifications that
-were noted as worth doing but out-of-scope for plan-09 itself.
+This plan stays in `deferred/` because Tier 2 phases 03-05 remain.
 
-**Scope:** Three tiers of simplification, sized for incremental
-landing.  Tier 1 is correctness (latent Span-miss walker bugs);
-Tiers 2-3 are structural cleanup that reduces the maintenance
-surface for future codegen work.
+**Trigger to unpause Tier 2** (per
+[`../../DEFERRED.md`](../../DEFERRED.md)): same conditions as
+plan-13 — 3+ template-path bugs, major codegen evolution forcing
+≥50 Op-annotation touches, or contributor appetite for a large
+structural refactor.  Plan-12 Tier 2 is plan-13's preamble; if
+plan-13 stays parked, Tier 2 doesn't earn its keep.
 
-## Why now
+## Tier 1 outcome
 
-Plan-09 + plan-11 delivered:
-- 5 P-issues closed (P200, P202, P203, P204, P205)
-- `OpEmitter` registry framework + 5 production custom emitters
-- `ParShape` runtime consolidation
-- 7 memory entries codifying patterns
+### Phase 01 — Walker audit (closed 2026-05-02)
 
-But the `dispatch.rs` special-case match still has 24 arms; the
-`#rust"..."` template path coexists with the registry; and the
-walker audit during plan-11 surfaced ≥5 sites with the same
-Span-miss pattern that caused P204.  This plan addresses those.
+[`01-walker-audit.md`](01-walker-audit.md) — full implementation
+record retained as historical archaeology.
 
-## Tiered structure
+Patched 16 walker sites across 3 files (`pre_eval.rs` + `emit.rs`
++ `coroutine.rs`) to call `.unspan()` before matching `Value::*`
+variants.  All sites were latent — no in-tree miscompile
+reproducer surfaced — but the byte-identical baseline confirmed
+the unspan adds emit identically when input IR isn't Span-wrapped,
+and kicks in correctly when it is.
 
-| Tier | Cost | Value | Phases |
-|---|---|---|---|
-| 1 — Correctness + cleanup | ~45 min total | High (latent bugs + dead-weight removal) | 01, 02 |
-| 2 — Structural cleanup | ~1-2 sessions | High (reduces dispatch.rs special cases; clarifies narrow_int_cast) | 03, 04, 05 |
-| 3 — Deep refactor | H (large refactor) | High (unifies template + emitter paths) | deferred to plan-13 |
+The HIGH-severity site (`value_mentions_var`'s recursive walker
+that propagates to `target_used_between`'s collapse-safety
+decision) was patched defensively as the plan prescribed.  Pattern
+is now P204-style insurance, not bug fix.
 
-## Phases
+Over-eager fixes reverted before commit (`needs_pre_eval`,
+`create_stack_var`, `collect_pre_evals_inner` arg-handling sites,
+`body_is_only_create_stacks` filter): each caused byte-identical
+baseline to diverge because Span wrappers don't reach those leaf
+sites in practice.  **Lesson**: only patch sites the plan
+explicitly identifies; each `.unspan()` addition is a behaviour
+change that must be validated against the byte-identical baseline.
 
-| # | Phase | Tier | Value | Status |
-|---|-------|------|-------|--------|
-| 01 | [Walker audit (`pre_eval.rs`)](01-walker-audit.md) | 1 | latent Span-miss bugs | DONE (2026-05-02) |
-| 02 | [Retire `forwarding_smoke.rs`](02-forwarding-smoke-retire.md) | 1 | dead-weight in registry | DONE (2026-05-02) |
-| 03 | [Migrate format/append dispatch arms](03-dispatch-format-append.md) | 2 | 12 dispatch.rs arms → custom emitters | OPEN |
-| 04 | [Migrate free/record dispatch arms](04-dispatch-free-record.md) | 2 | 10 dispatch.rs arms → custom emitters | OPEN |
-| 05 | [Split `narrow_int_cast` dual role](05-narrow-int-cast-split.md) | 2 | param vs block-tail narrowing | OPEN |
-| 06 | [`#rust"..."` template migration plan stub](06-rust-template-migration-stub.md) | 3 | relocated to `deferred/13-rust-template-migration/` (2026-05-02) | RELOCATED |
+Structural guard `pre_eval_walkers_unspan` in
+`tests/codegen_emitter.rs:769` slices `patch_hoisted_returns` +
+`value_mentions_var` and asserts every `matches!(op, Value::*)`
+site is paired with `.unspan()`.  Prevents P204-style regressions.
 
-## What stays (out of scope)
+### Phase 02 — Retire `forwarding_smoke.rs` (closed 2026-05-02)
 
-- **The `OpEmitter` framework itself.**  Phase 00 of plan-09 is
-  load-bearing; not touched.
-- **Bug-fix work.**  All in-scope P-issues are closed.
-- **`Value::RawExpr`.**  Sanctioned per phase 00's wart-budget;
-  retiring it requires a separate fn-ref dispatch refactor.
-- **`#rust"..."` annotations in `default/*.loft`.**  Phase 06's
-  stub points at the future plan-13 that handles them.
+[`02-forwarding-smoke-retire.md`](02-forwarding-smoke-retire.md) —
+full implementation record retained as historical archaeology.
 
-## Sequencing
+Removed `src/generation/ops/forwarding_smoke.rs` and the 9
+forwarded Op-name registrations in `build_registry`.  Plan-09 +
+plan-11 shipped 5 production custom emitters
+(`ParallelForEmitter`, `OpGetRecordEmitter`, `OpIterateEmitter`,
+`ParallelQueueEmitter`, `ParallelBufRenameEmitter`,
+`IntCompareEmitter`) which proved the dispatch path was exercised
+end-to-end; the smoke-test forwarding entries became dead-weight.
 
-Tier 1 (phases 01-02) should land first — they're cheap and
-low-risk.  Tier 2 phases (03-05) are independent of each other
-and can land in any order or in parallel.  Tier 3 (phase 06)
-is a stub pointing at plan-13; do not implement under plan-12.
+Zero behavioural change — forwarding emitters delegated verbatim
+to `DefaultEmitter`.  All gate suites stayed at their expected
+counts: 540/540 issues, 43/43 threading, 35/35 threading_chars,
+95/95 native, 18 codegen_emitter (the +1 is plan-12 phase 01's
+`pre_eval_walkers_unspan`).
 
-## Dependency on plan-09 / plan-11
+The forwarding-first recipe itself stays valid — see
+[NATIVE.md § Forwarding-first recipe](../../NATIVE.md#forwarding-first-recipe-verify-before-writing-real-emission)
+for the residual one-shot pattern (write the forwarding emitter
+inline as a verification one-shot when adding a new Op, then
+swap in real logic).
 
-Plan-09 and plan-11 must be merged before plan-12 starts.  Plan-12
-operates on the post-merge codebase; doing it pre-merge would
-conflict-merge against the active branch.
+## Tier 2 — Deferred phases
 
-Per `feedback_branch_after_pr_only.md`: plan-12 opens its own
-branch from `main` AFTER plan-09's PR merges.  No exception.
+### Phase 03 — Migrate format / append dispatch arms
 
-## PR strategy
+[`03-dispatch-format-append.md`](03-dispatch-format-append.md)
 
-Plan-12 is small enough to ship as ONE PR (Tier 1 + Tier 2
-combined ~3-4 hours of focused work).  Or split:
+12 special-case match arms in `dispatch.rs::output_call_inner`
+covering format-string concatenation + append targets that today
+short-circuit through `dispatch.rs` rather than the per-Op
+emitter registry.  Each arm migrates independently; per-arm
+regression test in `tests/codegen_emitter.rs` catches any
+emission divergence.
 
-- **Plan-12a**: Tier 1 (correctness + dead-weight removal).
-  Small, fast, low-risk PR.
-- **Plan-12b**: Tier 2 (dispatch arm migration + narrow_int_cast).
-  Medium PR; structural cleanup.
+Open.  Independent of phases 04 and 05.
 
-Decision deferred to plan-12 implementation start.
+### Phase 04 — Migrate free / record dispatch arms
 
-## Acceptance gate (every phase commit)
+[`04-dispatch-free-record.md`](04-dispatch-free-record.md)
+
+10 special-case match arms in `dispatch.rs::output_call_inner`
+covering `OpFreeRef` (debug-name string + store_nr reset) and
+record-construction shapes that today short-circuit through
+`dispatch.rs`.  Same migration pattern as phase 03.
+
+Open.  Independent of phases 03 and 05.
+
+### Phase 05 — Split `narrow_int_cast` dual role
+
+[`05-narrow-int-cast-split.md`](05-narrow-int-cast-split.md)
+
+`src/generation/emit.rs::narrow_int_cast` serves two roles:
+block-tail-expression coercion AND parameter narrowing.  Plan-09's
+phase 02 was scoped to split it but DEMOTED via phase 00a's
+finding that the actual P200 bug was at the comparison level
+(closed via `IntCompareEmitter`), so the split was no longer on
+the critical path.  Phase 05 holds the design for the eventual
+split when a future bug surfaces that genuinely needs the dual
+role decoupled.
+
+Open.  Independent of phases 03 and 04.
+
+## Tier 3 — Relocated to plan-13
+
+Phase 06's stub
+([`06-rust-template-migration-stub.md`](06-rust-template-migration-stub.md))
+points at [`../13-rust-template-migration/`](../13-rust-template-migration/),
+which holds the deferred deep refactor (unify the
+`#rust"…@v0…"` template path with the registered emitter path —
+~200 Ops migrate; H effort).
+
+## Sequencing (when Tier 2 unpauses)
+
+Phases 03, 04, 05 are independent of each other and can land in
+any order or in parallel.
+
+## Acceptance gate (per phase commit)
 
 ```bash
 cargo build --release --tests
@@ -101,41 +143,41 @@ cargo test --release --test threading 2>&1 | tail -3     # 43/43
 cargo test --release --test threading_chars 2>&1 | tail -3  # 35/35
 cargo test --release --test native -- --test-threads=1 2>&1 \
     | grep "native result"  # 95/95 (plan-09 + plan-11 floor)
-cargo test --release --test codegen_emitter 2>&1 | tail -3  # 17 passed
+cargo test --release --test codegen_emitter 2>&1 | tail -3  # ≥18
 cargo fmt --all -- --check
 cargo clippy --tests --release -- -D warnings
 cargo check --no-default-features
 scripts/p09_fast_gate.sh
 ```
 
-Per `feedback_zero_regression_tolerance.md`: any regression
-aborts the commit.  No exceptions.
+Per
+[`feedback_zero_regression_tolerance`](../../../../../home/ubuntu/.claude/projects/-home-ubuntu-loft/memory/feedback_zero_regression_tolerance.md):
+any regression aborts the commit.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| Walker audit reveals more bugs than the 5 surfaced | Audit is iterative; document each find, fix in-place, re-run gate.  No predetermined scope ceiling. |
-| Dispatch arm migration breaks emission for one Op | Each arm migrates independently; per-arm regression test in `tests/codegen_emitter.rs` catches it. |
+| Dispatch arm migration breaks emission for one Op | Each arm migrates independently; per-arm regression test in `tests/codegen_emitter.rs` catches it.  The forwarding-first recipe applies. |
 | `narrow_int_cast` split surfaces a third role | Stop and document; phase 05 may need sub-phasing. |
-| Plan-12 ships in parallel with plan-13 (template migration) and they conflict | Plan-13 doesn't open until plan-12 merges; sequence enforced via plans/README convention. |
-
-## Memory entries (saved during plan-09; relevant here)
-
-- `feedback_forwarding_first_recipe.md` — pre-flight pattern
-  for new emitters.
-- `feedback_actual_error_survey.md` — survey before
-  implementing.
-- `feedback_zero_regression_tolerance.md` — no shortcuts.
-- `feedback_no_expect_fail_on_pr_bugs.md` — no @EXPECT_FAIL on
-  real bugs.
-
-These all apply to plan-12.
+| Plan-12 Tier 2 ships in parallel with plan-13 (template migration) and they conflict | Plan-13 doesn't open until plan-12 Tier 2 merges; sequence enforced via plans/README convention. |
 
 ## See also
 
-- `plans/finished/09-native-runtime-rewrite/README.md` — parent plan
-  whose audit surfaced these simplifications.
-- `plans/finished/11-p204-ref-propagation/README.md` — surfaced the
-  Span-miss walker pattern that phase 01 of plan-12
-  generalises.
+- [NATIVE.md § Walker convention](../../NATIVE.md#walker-convention--always-unspan-before-matching-value)
+  — the Tier 1 phase-01 convention extracted as contributor reference
+- [NATIVE.md § Forwarding-first recipe](../../NATIVE.md#forwarding-first-recipe-verify-before-writing-real-emission)
+  — the residual recipe after Tier 1 phase-02 retirement
+- [`../../finished/09-native-runtime-rewrite/`](../../finished/09-native-runtime-rewrite/)
+  — parent plan whose audit surfaced these simplifications
+- [`../../finished/11-p204-ref-propagation/`](../../finished/11-p204-ref-propagation/)
+  — surfaced the Span-miss walker pattern that phase 01
+  generalised
+- [`../13-rust-template-migration/`](../13-rust-template-migration/)
+  — Tier 3 deferred deep refactor
+- [`../../DEFERRED.md`](../../DEFERRED.md) — trigger row for
+  Tier 2 unpause
+- `tests/codegen_emitter.rs::pre_eval_walkers_unspan` — Tier 1
+  structural guard
+- `src/generation/ops/` — per-Op emitter implementations (Tier 2
+  migration target)
