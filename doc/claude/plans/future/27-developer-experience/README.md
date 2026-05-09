@@ -2,9 +2,25 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-# Developer Experience — 0.8.4 Designs
+# Developer Experience
 
-Designs for the DX items on the [ROADMAP](ROADMAP.md).
+Designs for the DX items on the [ROADMAP](../../../ROADMAP.md).
+Originally drafted as "0.8.4 Designs"; several items slipped to
+0.8.5 and beyond, so the version label was dropped.  Current
+mix:
+
+- **SH.1** TextMate grammar — open for 0.8.5
+- **SH.2** VS Code extension — open for 0.8.5
+- **DX.1** Quick-start `examples/` directory — open for 0.8.5
+- **DX.2** CI: package + native tests — open
+- **DX.3** "Learn loft in 30 minutes" walkthrough — open for
+  0.8.5 (the inline `*(completed)*` marker below is stale per
+  RELEASE_0_8_5_CHECKLIST.md)
+- **NT.1** Native Codegen Reliability — completed (kept as
+  historical design record)
+
+See [RELEASE_0_8_5_CHECKLIST.md](../../../RELEASE_0_8_5_CHECKLIST.md)
+for the current status of each item against the 0.8.5 ship gate.
 
 ---
 
@@ -346,14 +362,14 @@ The Levenshtein function is ~15 lines of Rust (no external crate needed).
 > Native mode is already the default (`src/main.rs:1131`).
 
 The remaining work is regression prevention: add `make test-native` to CI
-(DX.2) so native failures are caught before merge.  See [NATIVE.md](NATIVE.md)
+(DX.2) so native failures are caught before merge.  See [NATIVE.md](../../../NATIVE.md)
 for the full codegen design and any future N-series items.
 
 ---
 
 ## See also
 
-- [ROADMAP.md](ROADMAP.md) — milestone placement for these items
-- [NATIVE.md](NATIVE.md) — full native codegen design and failure analysis
-- [PACKAGES.md](PACKAGES.md) — package manager architecture
-- [LOFT.md](LOFT.md) — language syntax reference (for grammar design)
+- [ROADMAP.md](../../../ROADMAP.md) — milestone placement for these items
+- [NATIVE.md](../../../NATIVE.md) — full native codegen design and failure analysis
+- [PACKAGES.md](../../../PACKAGES.md) — package manager architecture
+- [LOFT.md](../../../LOFT.md) — language syntax reference (for grammar design)

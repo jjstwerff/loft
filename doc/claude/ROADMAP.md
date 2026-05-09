@@ -103,10 +103,10 @@ surface.  Each is a standalone tag.
 
 | ID    | Title                                                  | E  | Design | Source           |
 |-------|--------------------------------------------------------|----|--------|------------------|
-| SH.1  | TextMate grammar for `.loft`                           | S  | ✓      | DX.md            |
-| SH.2  | VS Code extension (grammar + snippets + run task)      | S  | ✓      | DX.md            |
-| DX.1  | Quick-start `examples/` directory at repo root         | XS | ✓      | DX.md            |
-| DX.3  | "Learn loft in 30 minutes" walkthrough page            | S  | ✓      | DX.md            |
+| SH.1  | TextMate grammar for `.loft`                           | S  | ✓      | plans/future/27-developer-experience/README.md|
+| SH.2  | VS Code extension (grammar + snippets + run task)      | S  | ✓      | plans/future/27-developer-experience/README.md|
+| DX.1  | Quick-start `examples/` directory at repo root         | XS | ✓      | plans/future/27-developer-experience/README.md|
+| DX.3  | "Learn loft in 30 minutes" walkthrough page            | S  | ✓      | plans/future/27-developer-experience/README.md|
 | NDB.0 | `--native-debug` flag — DWARF in `--native` builds     | XS | ✓      | plans/future/25-native-debug/README.md|
 
 *(DX.4 native-CI parity already in place — `tests/native.rs::native_dir` /
@@ -256,7 +256,7 @@ risk in later milestones.
 
 | ID    | Title                                                  | E  | Design | Source           |
 |-------|--------------------------------------------------------|----|--------|------------------|
-| DX.2  | CI: add package tests + native tests to workflow       | XS | ✓      | DX.md            |
+| DX.2  | CI: add package tests + native tests to workflow       | XS | ✓      | plans/future/27-developer-experience/README.md|
 
 ### Library extraction
 
@@ -388,7 +388,7 @@ own scope never blocks a language tag.
 
 | Area | Document |
 |---|---|
-| Developer experience | [DX.md](DX.md) |
+| Developer experience | [DX.md](plans/future/27-developer-experience/README.md) |
 | Game infrastructure | [GAME_INFRA.md](GAME_INFRA.md) |
 | Package system | [PACKAGES.md](PACKAGES.md) |
 | WASM + frame yield | [WASM.md](WASM.md) |

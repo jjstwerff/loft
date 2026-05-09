@@ -414,7 +414,7 @@ If `python3` exits 0, the JSON parses; if not, you get a clear
 ### SH.1 — TextMate grammar (`syntaxes/loft.tmLanguage.json`) — ✅ DONE
 
 **Effort:** S (~1 hour) — actual: ~45 min.
-**Source design:** `doc/claude/DX.md` § SH.1.
+**Source design:** `doc/claude/plans/future/27-developer-experience/README.md` § SH.1.
 **Commit:** _(this branch)_.
 
 #### Build checklist
@@ -472,7 +472,7 @@ If `python3` exits 0, the JSON parses; if not, you get a clear
 ### SH.2 — VS Code extension scaffold (`editors/vscode/`) — ✅ DONE
 
 **Effort:** S (~1 hour) — actual: ~30 min.
-**Source design:** `doc/claude/DX.md` § SH.2.
+**Source design:** `doc/claude/plans/future/27-developer-experience/README.md` § SH.2.
 **Commit:** _(this branch)_.
 
 #### Build checklist
@@ -521,7 +521,7 @@ If `python3` exits 0, the JSON parses; if not, you get a clear
 ### DX.1 — Quick-start `examples/` directory — ⬜ OPEN
 
 **Effort:** XS (~1-2 hours).
-**Source design:** `doc/claude/DX.md` § DX.1.
+**Source design:** `doc/claude/plans/future/27-developer-experience/README.md` § DX.1.
 **Commit:** _(not yet)_.
 
 #### Build checklist (per design)
@@ -579,7 +579,7 @@ If `python3` exits 0, the JSON parses; if not, you get a clear
 
 **Effort:** S (~half a day).
 **Source design:** _(no doc — design inline below; the existing
-`doc/claude/DX.md` § DX.3 is stale and refers to the old error-message
+`doc/claude/plans/future/27-developer-experience/README.md` § DX.3 is stale and refers to the old error-message
 item that plan-07 phase 2 already shipped)_.
 **Commit:** _(not yet)_.
 

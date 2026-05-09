@@ -425,7 +425,7 @@ Loft ships this in `doc/` as `nvim-loft.lua`.  No Vimscript.
   `--native`-compiled binaries; shares the source map with LSP.3.
 - [WEB_IDE.md](WEB_IDE.md) — W2–W6 browser IDE; uses `loft-lsp`
   compiled to WASM as its language-intelligence layer.
-- [DX.md](DX.md) — SH.1 / SH.2 / DX.1 / DX.3 / DX.4 — the 0.8.5
+- [DX.md](plans/future/27-developer-experience/README.md) — SH.1 / SH.2 / DX.1 / DX.3 / DX.4 — the 0.8.5
   developer-experience predecessors.
 - [STACKTRACE.md](STACKTRACE.md) — TR1.3 `vector<StackFrame>` API
   that LSP.3 reuses for `stackTrace`.
