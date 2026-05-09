@@ -167,7 +167,7 @@ bound) since each interacts differently with the type system.
 | **U5** vector-of-T input | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 + CLOSED:feature-gap-two-T |
 | **U6** vector-of-T output | PASS:u6_b0_no_bound_passthrough (no-iter pass-through; iter + push forms blocked by P239 / P241) | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P241 | CLOSED:feature-gap-two-T |
 | **U7** multi-T tuple-return arity ≥3 | (covered by U3) | PASS:u7_b1o_ordered_triple_arity_three + u7_b1o_ordered_nested_pair | (covered by U3) | (covered by U3) | BLOCKED:P237 | (covered by U3) | (covered by U2.B3) | (covered) | CLOSED:feature-gap-two-T |
-| **U8** T inside format / inline expr | BLOCKED:P242 (`{x}` for x:T) | PASS:u8_b1o_ordered_inline_format (call-result `.0`) | BLOCKED:P242 | PASS:u8_b4_addable_to_text_format (workaround: explicit `to_text()`) | BLOCKED:P242 | BLOCKED:P242 | BLOCKED:P242 | PASS:u8_b4_addable_to_text_format | CLOSED:feature-gap-two-T |
+| **U8** T inside format / inline expr | BLOCKED:P242 (`{x}` for x:T — only Printable bound covered by P242 fix) | PASS:u8_b1o_ordered_inline_format (call-result `.0`) | BLOCKED:P242 | PASS:u8_b4_addable_to_text_format (workaround: explicit `to_text()`) | PASS:u8_b1p_printable_inline_t (P242 closed 2026-05-09) | BLOCKED:P242 | BLOCKED:P242 | PASS:u8_b4_addable_to_text_format | CLOSED:feature-gap-two-T |
 
 `PASS-pre` = a pre-flight survey passed; the cell test still gets
 written (so the matrix is uniform and the regression net catches

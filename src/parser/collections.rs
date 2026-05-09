@@ -781,6 +781,58 @@ use #count instead"
     }
 
     #[allow(clippy::too_many_lines)]
+    /// P242: when `d_nr` is the type variable of the current
+    /// generic-function context AND that variable's bound
+    /// supplies a `to_text(self: Self) -> text` method, return a
+    /// `Value::Call(t_<len><tvname>_to_text, [format])` IR node.
+    /// Otherwise return `None`.
+    ///
+    /// Used by `append_data` to route generic-T format-string
+    /// interpolation (`println("{x}")` where `x: T`) through the
+    /// bound's stub method.  At monomorphisation time
+    /// `re_resolve_call` substitutes the stub with the concrete
+    /// type's implementation, just like an explicit
+    /// `x.to_text()` call site.
+    fn try_bound_to_text_call(&mut self, d_nr: u32, format: &Value) -> Option<Value> {
+        if self.context == u32::MAX {
+            return None;
+        }
+        let ctx_def = self.data.def(self.context);
+        if ctx_def.def_type != DefType::Generic {
+            return None;
+        }
+        // Confirm `d_nr` is the type variable of the current generic
+        // context: it should be a struct-typed def whose name appears
+        // as the type variable across the fn's attributes.
+        if self.data.def_type(d_nr) != DefType::Struct {
+            return None;
+        }
+        let tv_name = self.data.def(d_nr).name.clone();
+        if tv_name.is_empty() {
+            return None;
+        }
+        let stub_name = format!("t_{}{}_{}", tv_name.len(), tv_name, "to_text");
+        let stub_nr = self.data.def_nr(&stub_name);
+        if stub_nr == u32::MAX {
+            return None;
+        }
+        // The text-returning bound stub takes a hidden `__work_1:
+        // RefVar(Text)` second param (added by `parse_function`'s
+        // I9-text path).  Allocate a fresh work-text and wrap with
+        // `OpCreateStack` so the call site mirrors what
+        // `convert(text → &text)` would auto-generate.
+        let wv = self.vars.work_text(&mut self.lexer);
+        let work_arg = v_block(
+            vec![
+                v_set(wv, Value::Text(String::new())),
+                self.cl("OpCreateStack", &[Value::Var(wv)]),
+            ],
+            Type::Reference(self.data.def_nr("reference"), vec![wv]),
+            "p242_to_text_work",
+        );
+        Some(Value::Call(stub_nr, vec![format.clone(), work_arg]))
+    }
+
     pub(crate) fn append_data(
         &mut self,
         tp: Type,
@@ -871,17 +923,33 @@ use #count instead"
                 self.append_iter(list, append, append_value, vtp.as_ref(), format, state);
             }
             Type::Reference(d_nr, _) => {
-                let fmt = format.clone();
-                let db_tp = self.data.def(d_nr).known_type;
-                list.push(self.cl(
-                    &(start.to_owned() + "Database"),
-                    &[
-                        var,
-                        fmt,
-                        Value::Int(i32::from(db_tp)),
-                        Value::Int(state.db_format()),
-                    ],
-                ));
+                // P242 fix: when `d_nr` is the current generic
+                // function's type variable AND the bound supplies
+                // a `to_text` method, route the format through it
+                // before dispatching as text.  Without this, the
+                // codegen falls back to OpFormatDatabase with a
+                // non-DbRef arg at monomorphisation time (interp
+                // prints "null" then panics; native rejects with
+                // rustc E0308 "expected DbRef").  The bound's
+                // `to_text` stub (`t_<len><tvname>_to_text`) is
+                // already created by `parse_function`'s I7/I8.1
+                // path; `re_resolve_call` substitutes it with the
+                // concrete type's impl at instantiation time.
+                if let Some(text_call) = self.try_bound_to_text_call(d_nr, format) {
+                    self.append_data_text(list, start, var, text_call, state);
+                } else {
+                    let fmt = format.clone();
+                    let db_tp = self.data.def(d_nr).known_type;
+                    list.push(self.cl(
+                        &(start.to_owned() + "Database"),
+                        &[
+                            var,
+                            fmt,
+                            Value::Int(i32::from(db_tp)),
+                            Value::Int(state.db_format()),
+                        ],
+                    ));
+                }
             }
             Type::Enum(d_nr, is_ref, _) => {
                 let fmt = format.clone();

@@ -618,3 +618,24 @@ cross_mode!(
     }
     "#
 );
+
+// U8 × B1.P — P242 closure 2026-05-09: format-string
+// interpolation of `x: T` where T is the current generic
+// type variable AND the bound supplies `to_text` (Printable)
+// now routes through the bound's `t_<len><tv>_to_text` stub
+// automatically.  Reproducer from P242 was
+// `fn show<T: Printable>(x: T) { println("val={x}") }`;
+// this cell pins it.
+cross_mode!(
+    u8_b1p_printable_inline_t,
+    r#"
+    fn show<T: Printable>(x: T) {
+        println("val={x}");
+    }
+    fn test() {
+        show(7);
+        show(3.14);
+        show("hi");
+    }
+    "#
+);
