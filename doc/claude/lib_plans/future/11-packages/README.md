@@ -18,13 +18,21 @@ built — central registry, lock file, library extraction.
 Each item points at the relevant PACKAGES.md section + the
 ROADMAP row that schedules it.
 
+## Scope
+
+This plan covers the **package management infrastructure** —
+registry, lock file, format extensions.  The **execution arc**
+(per-library extraction once the infrastructure ships) lives
+in the sibling plan
+[`../12-library-extraction/`](../12-library-extraction/).
+
 ## Status
 
 | Item | ROADMAP row | PACKAGES.md section | Status |
 |---|---|---|---|
 | **PKG.REG** — central package registry MVP (`loft install <name>`) | ROADMAP row, 0.8.6 | [`../../../PACKAGES.md` § Package Registry](../../../PACKAGES.md) (line 704+) | Open — designed, scheduled.  Largest sub-arc.  Includes `loft install`, `loft publish`, central registry server, package signing / verification, `manifest.toml` index format. |
 | **PKG.7** — lock file (`loft.lock`) for reproducible builds | ROADMAP row, 0.8.6 | [`../../../PACKAGES.md` § Implementation phases](../../../PACKAGES.md) | Open — small.  Cite manifest.rs in ROADMAP for current implementation surface. |
-| **PKG.EXTRACT** — move `lib/*/` out into per-family GitHub repos via PKG.REG | ROADMAP row, 1.1+ | [`../../../PACKAGES.md` § Implementation phases](../../../PACKAGES.md) | Open — large.  Depends on PKG.REG landing first.  Splits the monorepo into per-family external repos consumable via the registry. |
+| **PKG.EXTRACT** — move `lib/*/` out into per-family GitHub repos | ROADMAP row, 1.1+ | (moved) | **Moved to [`../12-library-extraction/`](../12-library-extraction/)** — execution is a separate arc with per-library decisions, version-sync policy, and per-library CI; this plan kept the infrastructure work focused. |
 
 ## Why these items are here, not in PACKAGES.md
 
@@ -63,9 +71,9 @@ Suggested sequence when this plan unpauses:
    (c) `loft install <name>` CLI command
    (d) `loft publish` CLI command
    (e) package signing / verification
-3. **PKG.EXTRACT** — only after PKG.REG is solid.  Splits
-   `lib/*/` packages out into per-family GitHub repos, each
-   consumable via the registry.
+
+When this plan ships, `lib_plans/future/12-library-extraction/`
+unblocks and per-library extractions begin.
 
 ## See also
 

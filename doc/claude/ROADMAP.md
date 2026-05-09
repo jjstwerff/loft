@@ -305,7 +305,7 @@ risk in later milestones.
 
 | ID          | Title                                                  | E  | Design | Source           |
 |-------------|--------------------------------------------------------|----|--------|------------------|
-| PKG.EXTRACT | Move `lib/*/` out into per-family GitHub repos via PKG.REG | L | ✓ | lib_plans/future/11-packages/README.md |
+| PKG.EXTRACT | Move `lib/*/` out into per-family GitHub repos via PKG.REG | L | ✓ | lib_plans/future/12-library-extraction/README.md |
 
 ---
 
