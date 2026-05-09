@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 A long-form retrospective of how the parallel for-loop construct in
 loft was conceived, redesigned, and reduced.  The narrative is
-deliberately thicker than [THREADING.md](THREADING.md) (which
+deliberately thicker than [THREADING.md](../../THREADING.md) (which
 documents the *current* state) — it traces *why* each layer of the
 design exists.
 
@@ -74,7 +74,7 @@ plan with baseline numbers:
 The most consequential 24 hours in plan-06's history.  Realising
 the materialised result vector was the source of most remaining
 complexity, the topical phases got reordered into a single
-**complexity-reducing spine** ([PRIORITY.md](plans/finished/06-typed-par/PRIORITY.md)),
+**complexity-reducing spine** ([PRIORITY.md](../../plans/finished/06-typed-par/PRIORITY.md)),
 and the new phase 10 was added to retire materialisation entirely:
 
 | Commit | Step |
@@ -241,7 +241,7 @@ the "≤ 3 `run_parallel_*` fns" target.
 
 ### "Plan-06 done" — three measurable acceptance criteria
 
-From [ARC.md § Acceptance state](plans/finished/06-typed-par/ARC.md):
+From [ARC.md § Acceptance state](../../plans/finished/06-typed-par/ARC.md):
 
 | Criterion | Today |
 |---|---|
@@ -411,18 +411,18 @@ site" ergonomics.
 
 ## See also
 
-- [THREADING.md](THREADING.md) — current shipped behaviour, runtime
+- [THREADING.md](../../THREADING.md) — current shipped behaviour, runtime
   invariants, and the per-thread safety analyses (P1-R1 … P1-R5).
-- [plans/finished/06-typed-par/README.md](plans/finished/06-typed-par/README.md) —
+- [plans/finished/06-typed-par/README.md](../../plans/finished/06-typed-par/README.md) —
   per-phase design docs and the bug-yield ledger.
-- [plans/finished/06-typed-par/ARC.md](plans/finished/06-typed-par/ARC.md) — the
+- [plans/finished/06-typed-par/ARC.md](../../plans/finished/06-typed-par/ARC.md) — the
   active execution sequence (A1–A11), single source of truth for
   "what ships next".
-- [plans/finished/06-typed-par/DESIGN.md](plans/finished/06-typed-par/DESIGN.md) —
+- [plans/finished/06-typed-par/DESIGN.md](../../plans/finished/06-typed-par/DESIGN.md) —
   cross-cutting decisions referenced from every phase: Stitch
   policy enum, parent-store relationship, type spectrum, browser
   rebase across the worker boundary.
-- [plans/finished/06-typed-par/PRIORITY.md](plans/finished/06-typed-par/PRIORITY.md)
+- [plans/finished/06-typed-par/PRIORITY.md](../../plans/finished/06-typed-par/PRIORITY.md)
   — historical spine; superseded by ARC.md but retained as the
   record of how steps 1–7 were sequenced.
 - [bench/11_par/bench.loft](../../bench/11_par/bench.loft) — the
