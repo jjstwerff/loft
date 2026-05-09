@@ -524,3 +524,59 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 04 — user-defined interface (B3) ─────────────────────
+//
+// User-defined interfaces use the `interface` keyword.  Built-in
+// types satisfy them structurally if the methods exist; user
+// structs can implement them by defining matching free fns.
+// Phase 04 verifies that <T: UserIface> bounded fns dispatch
+// correctly across multiple impls.
+//
+// What still BREAKS (filed earlier; phase-04-relevant):
+// - Multi-bound + 2+ bound-operator locals + tuple return → P240
+//   (cross-mode divergence).  All cells here either avoid the
+//   2+-locals shape OR use single-bound only.
+
+// U2 × B3 — user-defined Shape interface, T return type is
+// concrete (float).  Two impls (Circle, Square); verifies
+// both monomorphisations produce the right area().
+cross_mode!(
+    u2_b3_user_iface_shape_area,
+    r#"
+    interface Shape { fn area(self: Self) -> float }
+    struct Circle { radius: float }
+    fn area(self: Circle) -> float { self.radius * self.radius * 3.14 }
+    struct Square { side: float }
+    fn area(self: Square) -> float { self.side * self.side }
+    fn show_area<T: Shape>(s: T) -> float { s.area() }
+    fn test() {
+        c = Circle { radius: 2.0 };
+        sq = Square { side: 3.0 };
+        print("{show_area(c)}|{show_area(sq)}\n");
+        assert(show_area(c) == 12.56, "u2_b3_circle");
+        assert(show_area(sq) == 9.0, "u2_b3_square");
+    }
+    "#
+);
+
+// U1 × B3 — body op using user-iface method + text concat.
+// Verifies single bound + multi-impl + body-op composition.
+cross_mode!(
+    u1_b3_user_iface_showable_concat,
+    r#"
+    interface Showable { fn label(self: Self) -> text }
+    struct Item { id: integer }
+    fn label(self: Item) -> text { "item-{self.id}" }
+    struct Note { msg: text }
+    fn label(self: Note) -> text { "note:{self.msg}" }
+    fn shout<T: Showable>(s: T) -> text { s.label() + "!" }
+    fn test() {
+        i = Item { id: 7 };
+        n = Note { msg: "hi" };
+        print("{shout(i)}|{shout(n)}\n");
+        assert(shout(i) == "item-7!", "u1_b3_item");
+        assert(shout(n) == "note:hi!", "u1_b3_note");
+    }
+    "#
+);

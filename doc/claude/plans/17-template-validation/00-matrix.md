@@ -82,8 +82,32 @@ broader scope:
   element.  PROBLEMS.md P237 entry updated 2026-05-09 to
   reflect the broader scope.
 
-Phase 04+ (multi-bound + user-defined interface) lands in
-subsequent commits.
+**Phase 04 (multi-bound + user-defined interface) DONE
+2026-05-09.**  Two new cells added: `u2_b3_user_iface_shape_area`
+(Shape interface with Circle/Square impls + T return),
+`u1_b3_user_iface_showable_concat` (Showable interface body
+op + text concat, verifies user-iface dispatch + multi-impl
++ body-op composition).  All 25 cells pass under both
+backends.  Multi-bound (B2) coverage was already complete
+from earlier phases (`u2_b2_multibound_eq_or_gt_int`,
+`u3_b2_addable_ordered_pair`, `u2_b1ao_addable_ordered_min_sum`).
+
+**Phase 04 surfaced 1 new P-issue:**
+- **P240** — bounded-generic body computing 2+ bound-supplied
+  operator results into locals + returning them in a tuple
+  constructor produces wrong values on one backend.  Direction
+  flips depending on whether the body has intervening
+  side-effects (e.g. `println!`).  Reproducer: `classify<T:
+  Ordered>(a, b) -> (integer, integer) { lt = if a<b ...; gt
+  = if a>b ...; (lt, gt) }` invoked with `classify(3, 5)` —
+  interp returns `(0, 0)` WRONG; native returns `(1, 0)`
+  correct.  Adding `println!` in body before tuple flips:
+  interp correct, native wrong.  Single-local + literal works
+  on both.  Concrete-type version works on both.  No clean
+  workaround.  Reproducer: /tmp/p_followups/p240_*.loft.
+
+Phase 05+ (op-sugar in nested contexts + two-T generics)
+lands in subsequent commits.
 
 ## Goal
 
@@ -101,8 +125,8 @@ bound) since each interacts differently with the type system.
 
 | | B0 (no bound) | B1.O Ordered | B1.E Equatable | B1.A Addable | B1.P Printable | B2 multi-bound | B3 user-iface | B4 op-sugar | B5 two-T |
 |---|---|---|---|---|---|---|---|---|---|
-| **U1** body op | PASS:u1_b0_no_bound_unused_t | PASS:u1_b1o_ordered_compare | PASS:u1_b1e_equatable_check | PASS:u1_b1a_addable_sum_three (`+` only — Addable does not include `-`) | PASS:u1_b1p_printable_concat (P208 closure verified) | PASS:u2_b1ao_addable_ordered_min_sum (covers B2 op-mix) | FIX:04 | PASS:harness_smoke_template (B4 dbl) | FIX:05 |
-| **U2** T return | PASS:u2_b0_no_bound_identity_int | PASS:u2_b1o_ordered_max_int | PASS:u2_b1e_equatable_pick | PASS:u2_b1ao_addable_ordered_min_sum (Addable+Ordered) | PASS:u2_b1p_printable_show (covers (C) closure) | PASS:u2_b2_multibound_eq_or_gt_int (cmp_eq) | FIX:04 | PASS:u1_b4_addable_dbl_float | FIX:05 |
+| **U1** body op | PASS:u1_b0_no_bound_unused_t | PASS:u1_b1o_ordered_compare | PASS:u1_b1e_equatable_check | PASS:u1_b1a_addable_sum_three (`+` only — Addable does not include `-`) | PASS:u1_b1p_printable_concat (P208 closure verified) | PASS:u2_b1ao_addable_ordered_min_sum (covers B2 op-mix) | PASS:u1_b3_user_iface_showable_concat | PASS:harness_smoke_template (B4 dbl) | FIX:05 |
+| **U2** T return | PASS:u2_b0_no_bound_identity_int | PASS:u2_b1o_ordered_max_int | PASS:u2_b1e_equatable_pick | PASS:u2_b1ao_addable_ordered_min_sum (Addable+Ordered) | PASS:u2_b1p_printable_show (covers (C) closure) | PASS:u2_b2_multibound_eq_or_gt_int (cmp_eq) | PASS:u2_b3_user_iface_shape_area | PASS:u1_b4_addable_dbl_float | FIX:05 |
 | **U3** tuple-of-T return | PASS:u3_b0_no_bound_pair_int | PASS:u3_b1o_ordered_min_max + u3_b1o_ordered_destructure | PASS:u3_b1e_equatable_pair_when_eq | PASS:u3_b1a_addable_pair_with_hoisted_sum (inline form blocked by P237) | FIX:03 (Printable inference) | PASS:u3_b2_addable_ordered_pair | FIX:04 | (covered by U1.B4 smoke + U3.B1.A hoist form) | FIX:05 |
 | **U4** struct field of T | CLOSED:no-generic-structs (verify in 01) | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED |
 | **U5** vector-of-T input | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 |
