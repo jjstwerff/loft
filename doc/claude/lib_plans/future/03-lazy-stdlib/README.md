@@ -350,7 +350,7 @@ until used.
   load.
 - **Const-store fit.**  tzdata is large, read-only, shareable
   across processes, `mmap`-friendly — exactly the const-store
-  (CONST_STORE.md) use case.  Implementing datetime validates the
+  (../28-const-store/README.md) use case.  Implementing datetime validates the
   const-store design for non-code payloads.  Promote tzdata into
   the const store once CS.C1/C2/C3 lands.
 - **WASM consideration — bridge, don't bundle.**  Browsers and
@@ -694,7 +694,7 @@ datetime, http, ...) reuses the mechanism.
   loft's non-game reach.
 - [BYTECODE_CACHE.md](BYTECODE_CACHE.md) — `.loftc` cache design
   that must key on loaded-module set.
-- [CONST_STORE.md](../../../CONST_STORE.md) — separate but complementary
+- [CONST_STORE.md](../28-const-store/README.md) — separate but complementary
   cold-start work.
 - [PACKAGES.md](../../../PACKAGES.md) — external-package loading model that
   this mechanism generalises to.

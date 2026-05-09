@@ -247,10 +247,10 @@ risk in later milestones.
 
 | ID     | Title                                                  | E  | Design | Source           |
 |--------|--------------------------------------------------------|----|--------|------------------|
-| CS.B   | mmap cache loading (native)                            | S  | ✓      | CONST_STORE.md   |
-| CS.C1  | Serialize `Data` struct to binary (prereq for CS.C2/C3) | MH | ~     | CONST_STORE.md   |
-| CS.C2  | `build.rs` pre-compile stdlib to `.loftc`              | M  | ✓      | CONST_STORE.md   |
-| CS.C3  | WASM: `include_bytes!` stdlib cache, skip re-parse     | S  | ✓      | CONST_STORE.md   |
+| CS.B   | mmap cache loading (native)                            | S  | ✓      | plans/deferred/28-const-store/README.md|
+| CS.C1  | Serialize `Data` struct to binary (prereq for CS.C2/C3) | MH | ~     | plans/deferred/28-const-store/README.md|
+| CS.C2  | `build.rs` pre-compile stdlib to `.loftc`              | M  | ✓      | plans/deferred/28-const-store/README.md|
+| CS.C3  | WASM: `include_bytes!` stdlib cache, skip re-parse     | S  | ✓      | plans/deferred/28-const-store/README.md|
 
 ### Developer experience
 

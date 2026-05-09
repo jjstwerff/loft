@@ -2331,7 +2331,7 @@ session-of-the-week background bite.
 
 8. **~~Const store mmap path on Linux.~~**  Closed as
    deferred-by-design 2026-04-14.  [CONST_STORE.md § Phase B
-   (mmap)](CONST_STORE.md#memory-mapped-constant-store) reaches the
+   (mmap)](plans/deferred/28-const-store/README.md#memory-mapped-constant-store) reaches the
    opposite conclusion: at today's cache-file sizes (5-10 KB) mmap
    overhead (syscall + page tables) exceeds the memcpy savings, so
    the implementation path is intentionally not taken.  A benchmark

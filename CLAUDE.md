@@ -296,7 +296,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
 | [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`), `--native` default plan, fix plans |
 | [PACKAGES.md](doc/claude/PACKAGES.md) | Package format, registry, governance, external libs, library extraction |
-| [CONST_STORE.md](doc/claude/CONST_STORE.md) | Constant store design -- shared read-only Store for vector/string constants, mmap, WASM fast startup |
+| [plans/deferred/28-const-store/README.md](doc/claude/plans/deferred/28-const-store/README.md) | Deferred plan — constant store.  **Phase A** (P127 fix: heap-backed const store + `OpConstRef` opcode + long-string migration) and **Phase D** (`.loftc` bytecode cache) are SHIPPED.  **Phase B** (mmap) deferred — trigger: Phase C lands a large embedded stdlib cache.  **Phase C** (WASM pre-compiled stdlib) deferred — large effort (`Data` struct serialization across 130+ public members).  Most of the work has shipped; the deferred-tail phases stay parked until their triggers fire. |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [LSP.md](doc/claude/LSP.md) | Language server (LSP.1/2) + DAP debugger (LSP.3) + Eclipse / JetBrains / Neovim plugin design |
 | [plans/future/25-native-debug/README.md](doc/claude/plans/future/25-native-debug/README.md) | Future plan — GDB / LLDB integration for `--native` builds: DWARF, source maps, plugins.  Three independently-shippable phases NDB.0 / NDB.1 / NDB.2; NDB.0 (`--native-debug` flag) is the smallest first step. |
