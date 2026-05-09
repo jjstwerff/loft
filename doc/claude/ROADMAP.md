@@ -185,7 +185,7 @@ diagnostics + outline + hover via thin marketplace plugins.
 | FFI.2   | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | lib_plans/future/05-game-infra/README.md|
 | FFI.3   | Eliminate per-function glue in native.rs               | M  | ✓      | lib_plans/future/05-game-infra/README.md|
 | FFI.4   | Docs: zero-boilerplate native function guide           | S  | ✓      | lib_plans/future/05-game-infra/README.md|
-| PKG.7   | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
+| PKG.7   | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | lib_plans/future/11-packages/README.md |
 | PKG.REG | Central package registry MVP — `loft install <name>`   | M  | ✓      | lib_plans/future/11-packages/README.md |
 
 ### Language server + IDE plugins
@@ -253,7 +253,7 @@ PKG.EXTRACT is the last 0.9.0 item — it depends on 0.8.6's PKG.REG
 | ID     | Title                                                  | E  | Design | Source           |
 |--------|--------------------------------------------------------|----|--------|------------------|
 | L1     | Error recovery after token failures                    | M  | ✓      | PLANNING.md      |
-| P2     | REPL / interactive mode                                | M  | ✓      | PLANNING.md      |
+| P2     | REPL / interactive mode                                | M  | ✓      | plans/future/08-repl-and-introspection/README.md |
 | W-warn | Developer warnings (Clippy-inspired)                   | M  | ✓      | lib_plans/future/05-game-infra/README.md|
 | AOT    | Auto-compile libraries to native shared libs           | M  | ✓      | PLANNING.md      |
 | C52    | Stdlib name clash: warning + `std::` prefix            | M  | ✓      | PLANNING.md      |
@@ -267,7 +267,6 @@ Each is a commitment, not a maybe.  Deferring any makes the
 
 | ID   | Title                                                  | E  | Source                      |
 |------|--------------------------------------------------------|----|-----------------------------|
-| C54  | `integer` → i64; `long` becomes a historical alias     | L  | CAVEATS.md, QUALITY.md      |
 | P54  | First-class `JsonValue` enum; old text-based JSON gone | MH | plans/future/35-quality-followups/README.md |
 
 ### Language server — full editing surface
@@ -401,7 +400,6 @@ before tagging — no "appears fixed" exceptions.
 | ID    | Title                                              | Notes                                     |
 |-------|----------------------------------------------------|-------------------------------------------|
 | O1    | Superinstruction peephole rewriting                | Opcode table full (254/256)               |
-| P4    | Bytecode cache (`.loftc`)                          | Superseded by native codegen              |
 
 ---
 
