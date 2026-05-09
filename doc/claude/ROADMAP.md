@@ -277,11 +277,11 @@ with hands-on testing on every supported platform.
 
 | ID    | Title                                                  | E  | Design | Source           |
 |-------|--------------------------------------------------------|----|--------|------------------|
-| W2    | Editor shell (CodeMirror 6 + Loft grammar)             | M  | ✓      | WEB_IDE.md       |
-| W3    | Symbol navigation (go-to-def, find-usages)             | M  | ✓      | WEB_IDE.md       |
-| W4    | Multi-file projects (IndexedDB)                        | M  | ✓      | WEB_IDE.md       |
-| W5    | Docs & examples browser                                | M  | ✓      | WEB_IDE.md       |
-| W6    | Export/import ZIP + PWA offline                        | M  | ✓      | WEB_IDE.md       |
+| W2    | Editor shell (CodeMirror 6 + Loft grammar)             | M  | ✓      | lib_plans/future/07-web-ide/README.md|
+| W3    | Symbol navigation (go-to-def, find-usages)             | M  | ✓      | lib_plans/future/07-web-ide/README.md|
+| W4    | Multi-file projects (IndexedDB)                        | M  | ✓      | lib_plans/future/07-web-ide/README.md|
+| W5    | Docs & examples browser                                | M  | ✓      | lib_plans/future/07-web-ide/README.md|
+| W6    | Export/import ZIP + PWA offline                        | M  | ✓      | lib_plans/future/07-web-ide/README.md|
 
 *(Desktop IDE plugins — IDE.ECLIPSE, IDE.JETBRAINS, IDE.NEOVIM —
 shipped in 0.8.6 alongside LSP.1.  Web IDE W2–W6 above uses the same
@@ -392,7 +392,7 @@ own scope never blocks a language tag.
 | Game infrastructure | [GAME_INFRA.md](lib_plans/future/05-game-infra/README.md) |
 | Package system | [PACKAGES.md](PACKAGES.md) |
 | WASM + frame yield | [WASM.md](WASM.md) |
-| Web IDE | [WEB_IDE.md](WEB_IDE.md) |
+| Web IDE | [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) |
 | Server library | [WEB_SERVER_LIB.md](WEB_SERVER_LIB.md) |
 | Game client library | [GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md) |
 | Graphics | [OPENGL_IMPL.md](lib_plans/future/02-graphics/IMPLEMENTATION.md) |

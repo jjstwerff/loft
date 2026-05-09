@@ -685,7 +685,7 @@ globalThis.loftHost = {
 ```
 
 **Browser:** backed by `localStorage` for small string data or IndexedDB for binary/large
-data (see [WEB_IDE.md](WEB_IDE.md) § M4 for IndexedDB project storage).
+data (see [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) § M4 for IndexedDB project storage).
 
 **Node.js:** backed by a plain `Map` — no persistence needed for tests.
 
@@ -1099,7 +1099,7 @@ fn host_exists(path: &str) -> bool {
 ```
 
 The `crate::wasm` module provides typed wrappers around the raw `wasm-bindgen` extern
-functions declared in `src/wasm.rs`. See [WEB_IDE.md](WEB_IDE.md) § Rust Changes for
+functions declared in `src/wasm.rs`. See [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) § Rust Changes for
 the full list of extern declarations.
 
 ### Binary data across the WASM boundary
@@ -2020,7 +2020,7 @@ cargo check --features wasm --no-default-features
 
 **Changes:**
 - `src/wasm.rs`: implement `compile_and_run(files_js: JsValue) -> JsValue` as
-  described in [WEB_IDE.md](WEB_IDE.md) § src/wasm.rs
+  described in [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) § src/wasm.rs
 - Wire up virtual FS population, parser, scope check, bytecode gen, execution,
   output collection, diagnostic collection
 - Return `{ output, diagnostics, success }`
@@ -3061,7 +3061,7 @@ Mitigations M1–M4 are structural (ownership, error handling) and add minimal c
 ---
 
 ## See also
-- [WEB_IDE.md](WEB_IDE.md) — Full Web IDE architecture, milestones, Rust changes
+- [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — Full Web IDE architecture, milestones, Rust changes
 - [STDLIB.md](STDLIB.md) § File System — loft file I/O API
 - [STDLIB.md](STDLIB.md) § Random — `rand()`, `rand_seed()`, `rand_indices()`
 - [INTERNALS.md](INTERNALS.md) — Native function registry and `src/state/io.rs`

@@ -423,7 +423,7 @@ Loft ships this in `doc/` as `nvim-loft.lua`.  No Vimscript.
 
 - [NATIVE_DEBUG.md](plans/future/25-native-debug/README.md) — GDB / LLDB integration for
   `--native`-compiled binaries; shares the source map with LSP.3.
-- [WEB_IDE.md](WEB_IDE.md) — W2–W6 browser IDE; uses `loft-lsp`
+- [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — W2–W6 browser IDE; uses `loft-lsp`
   compiled to WASM as its language-intelligence layer.
 - [DX.md](plans/future/27-developer-experience/README.md) — SH.1 / SH.2 / DX.1 / DX.3 / DX.4 — the 0.8.5
   developer-experience predecessors.

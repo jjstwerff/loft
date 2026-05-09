@@ -185,7 +185,7 @@ items a home without inflating the 1.0 scope.
 **Why include the IDE in 1.0.0?**
 A standalone interpreter 1.0 that is later extended with a breaking IDE integration
 produces two separate stability contracts to maintain.  The Web IDE (W1–W6) is already
-concretely designed in [WEB_IDE.md](WEB_IDE.md) and is bounded, testable work.  Deferring
+concretely designed in [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) and is bounded, testable work.  Deferring
 it to "post-1.0" without a milestone risks it never shipping.  In 2026, "fully featured"
 for a scripting language includes browser-accessible tooling; shipping a 1.0 without it
 would require walking back that claim at 1.1.
@@ -2739,13 +2739,13 @@ A fully serverless, single-origin HTML application that lets users write, run, a
 explore Loft programs in a browser without installing anything.  The existing Rust
 interpreter is compiled to WebAssembly via a new `wasm` Cargo feature; the IDE shell
 is plain ES-module JavaScript with no required build step after the WASM is compiled
-once.  Full design in [WEB_IDE.md](WEB_IDE.md).
+once.  Full design in [WEB_IDE.md](lib_plans/future/07-web-ide/README.md).
 
 ---
 
 
 ### W2  Editor Shell
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M2
+**Sources:** [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — M2
 **Severity/Value:** High — the visible IDE; needed by all later W items
 **Description:** A single `index.html` users can open directly (no bundler).
 - `ide/src/loft-language.js` — CodeMirror 6 `StreamLanguage` tokenizer: keywords, types, string interpolation `{...}`, line/block comments, numbers
@@ -2760,7 +2760,7 @@ JS tests (5): keyword token, string interpolation span, line comment, type names
 ---
 
 ### W3  Symbol Navigation
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M3
+**Sources:** [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — M3
 **Severity/Value:** Medium — go-to-definition and find-usages; significant IDE quality uplift
 **Description:**
 - `src/wasm.rs`: implement `get_symbols()` — walk `parser.data.def_names` and variable tables; return `[{name, kind, file, line, col, usages:[{file,line,col}]}]`
@@ -2776,7 +2776,7 @@ JS tests (3): find function definition, format usage list, no-match returns null
 ---
 
 ### W4  Multi-File Projects
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M4
+**Sources:** [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — M4
 **Severity/Value:** High — essential for any real program; single-file is a toy
 **Description:** All projects persist in IndexedDB.  Project schema: `{id, name, modified, files:[{name,content}]}`.
 - `ide/src/projects.js` — `listProjects()`, `loadProject(id)`, `saveProject(project)`, `deleteProject(id)`; auto-save on edit (debounced 2 s)
@@ -2790,7 +2790,7 @@ JS tests (4): save/load roundtrip, list all projects, delete removes entry, auto
 ---
 
 ### W5  Documentation & Examples Browser
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M5
+**Sources:** [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — M5
 **Severity/Value:** Medium — documentation access without leaving the IDE; example projects lower barrier to entry
 **Description:**
 - Build-time script `ide/scripts/bundle-docs.js`: parse `doc/*.html` → `assets/docs-bundle.json` (headings + prose + code blocks)
@@ -2806,7 +2806,7 @@ Run the bundler automatically from `build.sh` after `cargo run --bin gendoc`.
 ---
 
 ### W6  Export, Import & PWA
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M6
+**Sources:** [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — M6
 **Severity/Value:** Medium — closes the loop between browser and local development
 **Description:**
 - `ide/src/export.js`: `exportZip(project)` → `Blob` (JSZip); `importZip(blob)` → project object; drag-and-drop import
@@ -3395,5 +3395,5 @@ See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by miles
 - [FORMATTER.md](FORMATTER.md) — Code formatter design (backlog item)
 - [NATIVE.md](NATIVE.md) — Native Rust code generation: root cause analysis, step details, verification (Tier N detail)
 - [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results and implementation designs for O1–O7 (interpreter and native performance improvements)
-- [WEB_IDE.md](WEB_IDE.md) — Web IDE full design: architecture, JS API contract, per-milestone deliverables and tests, export ZIP layout (Tier W detail)
+- [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — Web IDE full design: architecture, JS API contract, per-milestone deliverables and tests, export ZIP layout (Tier W detail)
 - [RELEASE.md](RELEASE.md) — 1.0 gate items, project structure changes, release artifacts checklist, post-1.0 versioning policy

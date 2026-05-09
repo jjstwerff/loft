@@ -301,7 +301,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [LSP.md](doc/claude/LSP.md) | Language server (LSP.1/2) + DAP debugger (LSP.3) + Eclipse / JetBrains / Neovim plugin design |
 | [plans/future/25-native-debug/README.md](doc/claude/plans/future/25-native-debug/README.md) | Future plan — GDB / LLDB integration for `--native` builds: DWARF, source maps, plugins.  Three independently-shippable phases NDB.0 / NDB.1 / NDB.2; NDB.0 (`--native-debug` flag) is the smallest first step. |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
-| [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
+| [lib_plans/future/07-web-ide/README.md](doc/claude/lib_plans/future/07-web-ide/README.md) | Future library plan — fully serverless single-origin browser IDE for loft.  Zero-server: runs from `file://` or any static host.  Full WASM interpreter, CodeMirror 6 editor, problems panel, console, outline, multi-project IndexedDB storage, PWA offline.  Roadmap: W2-W6 deferred past 1.0; uses `loft-lsp` (LSP plan) for diagnostics + symbol nav. |
 | [CHANGELOG.md](CHANGELOG.md) | User-facing release notes (shipped in release archives) |
 | [CHANGELOG_TECHNICAL.md](doc/claude/CHANGELOG_TECHNICAL.md) | Full technical changelog — opcode/slot/phase detail for contributors |
 | [CAVEATS.md](doc/claude/CAVEATS.md) | Verifiable edge cases and limitations with reproducers and test references |
