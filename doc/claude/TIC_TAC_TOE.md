@@ -17,7 +17,7 @@ infrastructure capability and is verified end-to-end by the
 smallest possible text-mode programs (no graphics, no real
 gameplay UX).  The actual playable game targets that consume
 these ground layers live in
-[MULTIPLAYER_EDITOR.md](MULTIPLAYER_EDITOR.md) and beyond.
+[MULTIPLAYER_EDITOR.md](plans/future/24-multiplayer-editor/README.md) and beyond.
 
 So when later sections describe "mouse handler", "drawing
 handler", "render the board", etc. for any vN — read those as
@@ -560,7 +560,7 @@ The graphical tic-tac-toe is **not** on the sequence.  Each vN
 ground layer adds protocol/infrastructure capability and is
 verified by the smallest text-mode program that can exercise
 it.  The actual playable game work (mouse, render, sound) goes
-into [MULTIPLAYER_EDITOR.md](MULTIPLAYER_EDITOR.md) and beyond.
+into [MULTIPLAYER_EDITOR.md](plans/future/24-multiplayer-editor/README.md) and beyond.
 
 1. ~~**Land hello-world end-to-end**~~ — **DONE.**  Cleared two
    pre-existing blockers: transitive native dlopen for
@@ -577,7 +577,7 @@ into [MULTIPLAYER_EDITOR.md](MULTIPLAYER_EDITOR.md) and beyond.
    text-mode clients connecting to the same server, each
    playing their own game while receiving spectator updates of
    the other.  This ground layer's primitives also unblock
-   [MULTIPLAYER_EDITOR.md](MULTIPLAYER_EDITOR.md).
+   [MULTIPLAYER_EDITOR.md](plans/future/24-multiplayer-editor/README.md).
 4. **Tic-tac-toe v3 (protocol-only)** — server delivers the
    client over HTTP; browser-side WS bridge in `loft-rt.js`;
    text-mode tic-tac-toe client compiled to WASM, loaded in a
