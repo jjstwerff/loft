@@ -123,3 +123,135 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 01 — basic body + T-return baseline ──────────────────────────────
+//
+// Plan-17 phase 01 fills U1 × {B0, B1.O, B1.E, B1.A} and U2 ×
+// {B1.E, B1.A} cells (B1.A baselines exist via U1.B4 smoke and
+// U2.B0 PASS-pre; this phase adds explicit per-bound coverage).
+// U1.B1.P + U2.B1.P (Printable) move to phase 03 because the
+// stdlib's `to_text` story needed a separate decision (see plan-17
+// README — closed (C) added 6 to_text impls 2026-05-04).
+
+// U1 × B0 — no bound, T not used in body.  Verifies opaque-T
+// pass-through compiles and monomorphises across multiple
+// concrete arg types (integer, text, boolean) in the same
+// program.  Emits a "Parameter x is never read" warning under
+// both backends — expected; the harness compares stdout, not
+// stderr.
+cross_mode!(
+    u1_b0_no_bound_unused_t,
+    r#"
+    fn count<T>(_x: T) -> integer { 1 }
+    fn test() {
+        a = count(7);
+        b = count("hi");
+        c = count(true);
+        print("{a}|{b}|{c}\n");
+        assert(a == 1 && b == 1 && c == 1, "u1_b0_unused");
+    }
+    "#
+);
+
+// U1 × B1.O — Ordered body op.  Returns integer (-1/0/1) so the
+// cell exercises ONLY the body operation (`a > b` / `a < b`
+// comparisons via the bound), separate from U2's T-return path.
+cross_mode!(
+    u1_b1o_ordered_compare,
+    r#"
+    fn cmp<T: Ordered>(a: T, b: T) -> integer {
+        if a > b { 1 } else if a < b { -1 } else { 0 }
+    }
+    fn test() {
+        x = cmp(3, 7);
+        y = cmp(7, 3);
+        z = cmp(5, 5);
+        print("{x}|{y}|{z}\n");
+        assert(x == -1 && y == 1 && z == 0, "u1_b1o_int");
+    }
+    "#
+);
+
+// U1 × B1.E — Equatable body op.  Returns boolean so the cell
+// exercises only the equality check via the bound; verifies the
+// bounded `==` resolves to the concrete type's OpEq across both
+// integer and text monomorphisations.
+cross_mode!(
+    u1_b1e_equatable_check,
+    r#"
+    fn same<T: Equatable>(a: T, b: T) -> boolean { a == b }
+    fn test() {
+        ai = same(3, 3);
+        bi = same(3, 5);
+        at = same("hi", "hi");
+        bt = same("hi", "bye");
+        print("{ai}|{bi}|{at}|{bt}\n");
+        assert(ai == true && bi == false, "u1_b1e_int");
+        assert(at == true && bt == false, "u1_b1e_text");
+    }
+    "#
+);
+
+// U1 × B1.A — Addable body op (multi-step).  Distinct from the
+// smoke's `dbl` shape: chains `+` across three args.  Verifies
+// the bound-supplied `+` resolves correctly under the multi-
+// monomorphisation case (integer + float).  Note: stdlib
+// `Addable` declares `+` only — `-` (binary subtraction) requires
+// a concrete type or a hypothetical Subtractable bound, NOT
+// covered by Addable.
+cross_mode!(
+    u1_b1a_addable_sum_three,
+    r#"
+    fn sum3<T: Addable>(a: T, b: T, c: T) -> T { a + b + c }
+    fn test() {
+        i = sum3(1, 2, 3);
+        f = sum3(1.5, 2.5, 4.0);
+        print("{i}|{f}\n");
+        assert(i == 6, "u1_b1a_int");
+        assert(f == 8.0, "u1_b1a_float");
+    }
+    "#
+);
+
+// U2 × B1.E — Equatable T-return.  Picks one of the args based
+// on equality; the function returns T (not boolean) so the
+// generic-return-type machinery is exercised in addition to the
+// bound-supplied operator.
+cross_mode!(
+    u2_b1e_equatable_pick,
+    r#"
+    fn pick<T: Equatable>(a: T, b: T, c: T) -> T {
+        if a == b { a } else { c }
+    }
+    fn test() {
+        i = pick(3, 3, 99);
+        j = pick(3, 5, 99);
+        s = pick("yes", "yes", "NO");
+        t = pick("yes", "no", "NO");
+        print("{i}|{j}|{s}|{t}\n");
+        assert(i == 3 && j == 99, "u2_b1e_int");
+        assert(s == "yes" && t == "NO", "u2_b1e_text");
+    }
+    "#
+);
+
+// U2 × B1.A — Addable T-return (different shape from smoke
+// dbl).  Returns the smaller of (a+b) vs c for an Addable +
+// Ordered bound; structured to exercise both T-return and
+// bound-supplied operators in one cell.
+cross_mode!(
+    u2_b1ao_addable_ordered_min_sum,
+    r#"
+    fn min_sum<T: Addable + Ordered>(a: T, b: T, c: T) -> T {
+        s = a + b;
+        if s < c { s } else { c }
+    }
+    fn test() {
+        i = min_sum(2, 3, 10);
+        j = min_sum(7, 8, 4);
+        print("{i}|{j}\n");
+        assert(i == 5, "u2_b1ao_sum_smaller");
+        assert(j == 4, "u2_b1ao_c_smaller");
+    }
+    "#
+);

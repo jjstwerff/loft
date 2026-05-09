@@ -10,8 +10,29 @@ with smoke + 4 PASS-pre cells (`harness_smoke_template`,
 `u1_b4_addable_dbl_float`, `u2_b0_no_bound_identity_int`,
 `u2_b1o_ordered_max_int`, `u2_b2_multibound_eq_or_gt_int`) — all
 pass under both interp and native via the existing
-`cross_mode!` harness (no new harness code).  Phase 01 onwards
-fills the FIX cells.
+`cross_mode!` harness (no new harness code).
+
+**Phase 01 (basic body + T-return baseline) DONE 2026-05-09.**
+Six new cells added (`u1_b0_no_bound_unused_t`,
+`u1_b1o_ordered_compare`, `u1_b1e_equatable_check`,
+`u1_b1a_addable_sum_three`, `u2_b1e_equatable_pick`,
+`u2_b1ao_addable_ordered_min_sum`).  All 11 cells pass under
+both backends; the README's predicted "Most B1×U1 cells today
+fail (type inference gap)" turned out to already be closed by
+the (B) parser fix that landed 2026-05-04 (commit referenced in
+plan-17 README).  The phase 01 work was therefore purely cell
+coverage, not bug fixing.
+
+Finding (cosmetic, not blocking): stdlib `Addable` declares
+only `+`, not `-` (binary subtraction).  `-` requires either a
+concrete type or a hypothetical Subtractable bound that doesn't
+exist.  Any user expectation that `Addable` covers `-` (e.g.,
+the README claim "(+, -)" in plan-17's earlier draft) is
+inaccurate — the actual interface in `default/01_code.loft` is
+`+` only.  Documented inline in `u1_b1a_addable_sum_three`'s
+cell comment.
+
+Phase 02+ (FIX cells) lands in subsequent commits.
 
 ## Goal
 
@@ -29,8 +50,8 @@ bound) since each interacts differently with the type system.
 
 | | B0 (no bound) | B1.O Ordered | B1.E Equatable | B1.A Addable | B1.P Printable | B2 multi-bound | B3 user-iface | B4 op-sugar | B5 two-T |
 |---|---|---|---|---|---|---|---|---|---|
-| **U1** body op | FIX:01 | FIX:01 | FIX:01 | PASS-pre (`dbl`) | FIX:03 (++ inference gap) | FIX:04 | FIX:04 | PASS-pre (B4 dbl) | FIX:05 |
-| **U2** T return | PASS-pre | PASS-pre | PASS-pre | PASS-pre (P205 closed text) | FIX:03 | PASS-pre (B2 cmp_eq) | FIX:04 | PASS-pre | FIX:05 |
+| **U1** body op | PASS:u1_b0_no_bound_unused_t | PASS:u1_b1o_ordered_compare | PASS:u1_b1e_equatable_check | PASS:u1_b1a_addable_sum_three (`+` only — Addable does not include `-`) | FIX:03 (++ inference gap) | PASS:u2_b1ao_addable_ordered_min_sum (covers B2 op-mix) | FIX:04 | PASS:harness_smoke_template (B4 dbl) | FIX:05 |
+| **U2** T return | PASS:u2_b0_no_bound_identity_int | PASS:u2_b1o_ordered_max_int | PASS:u2_b1e_equatable_pick | PASS:u2_b1ao_addable_ordered_min_sum (Addable+Ordered) | FIX:03 | PASS:u2_b2_multibound_eq_or_gt_int (cmp_eq) | FIX:04 | PASS:u1_b4_addable_dbl_float | FIX:05 |
 | **U3** tuple-of-T return | FIX:02 | FIX:02 (parser gap) | FIX:02 | FIX:02 | FIX:03+02 | FIX:02 | FIX:04+02 | FIX:05+02 | FIX:05 |
 | **U4** struct field of T | CLOSED:no-generic-structs (verify in 01) | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED |
 | **U5** vector-of-T input | FIX:03 | FIX:01 | FIX:01 | FIX:01 | FIX:03 (built-in satisfaction) | FIX:04 | FIX:04 | FIX:05 | FIX:05 |
