@@ -186,7 +186,7 @@ diagnostics + outline + hover via thin marketplace plugins.
 | FFI.3   | Eliminate per-function glue in native.rs               | M  | ✓      | lib_plans/future/05-game-infra/README.md|
 | FFI.4   | Docs: zero-boilerplate native function guide           | S  | ✓      | lib_plans/future/05-game-infra/README.md|
 | PKG.7   | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
-| PKG.REG | Central package registry MVP — `loft install <name>`   | M  | ✓      | PACKAGES.md      |
+| PKG.REG | Central package registry MVP — `loft install <name>`   | M  | ✓      | lib_plans/future/11-packages/README.md |
 
 ### Language server + IDE plugins
 
@@ -305,7 +305,7 @@ risk in later milestones.
 
 | ID          | Title                                                  | E  | Design | Source           |
 |-------------|--------------------------------------------------------|----|--------|------------------|
-| PKG.EXTRACT | Move `lib/*/` out into per-family GitHub repos via PKG.REG | L | ✓ | PACKAGES.md      |
+| PKG.EXTRACT | Move `lib/*/` out into per-family GitHub repos via PKG.REG | L | ✓ | lib_plans/future/11-packages/README.md |
 
 ---
 
