@@ -953,7 +953,7 @@ integer/long overflow, shift out-of-range, null field dereference, vector OOB.
 
 
 ### A8  Slicing & comprehension on `sorted` / `index`
-**Sources:** [SORTED_SLICE.md](SORTED_SLICE.md)
+**Sources:** [SORTED_SLICE.md](plans/future/30-sorted-slice/README.md)
 **Description:** Extend `sorted<T>` and `index<T>` with key-range slicing, open-ended
 bounds, partial-key match iteration, and vector comprehensions over key ranges.
 
@@ -965,7 +965,7 @@ bounds, partial-key match iteration, and vector comprehensions over key ranges.
 - `rev(col[lo..hi])` — reverse range iteration (A8.5)
 - `match col[key] { null → ..., elm → ... }` — documented + tested (A8.6)
 
-**Fix path:** See [SORTED_SLICE.md](SORTED_SLICE.md) — 6-step plan, all work in
+**Fix path:** See [SORTED_SLICE.md](plans/future/30-sorted-slice/README.md) — 6-step plan, all work in
 `src/parser/fields.rs` and `src/codegen_runtime.rs`. No new opcodes.
 
 **Effort:** M
