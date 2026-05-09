@@ -4,6 +4,31 @@
 
 # W1.1 — Single-file HTML Export
 
+## Status
+
+**SHIPPED.**  All 10 implementation steps below are landed in
+production.  Evidence:
+
+- `loft --html program.loft` — CLI flag works (see `src/main.rs`).
+- `make game` — produces `doc/brick-buster.html` (Makefile target).
+- `tests/html_wasm.rs` — 460-line WASM-runtime safety gate; runs
+  via `make wasm-html-test`.
+- `/usr/local/share/loft/wasm32-unknown-unknown/libloft.rlib`
+  — installed by `make install` per Step 1.
+- `wasm-opt` integration per Step 9: see CHANGELOG_TECHNICAL.md
+  "loft --html switched to wasm-opt -O1".
+- CHANGELOG.md notes "`loft --html program.loft` produces a
+  single folder you can drop on a static server".
+
+The W1.x series continued past W1.1 — W1.18 added WASM Worker
+Thread infrastructure (parallel `par(...)` in browser).  See
+CHANGELOG_TECHNICAL.md for the broader W1.x history.
+
+This document is kept as the historical implementation record
+for W1.1.  The 10-step layout below is preserved as-is — it
+remains the cleanest reading order for someone learning the
+HTML-export pipeline from scratch.
+
 ## Goal
 
 `loft --html game.loft` produces a self-contained `.html` file that runs a
@@ -511,7 +536,7 @@ fn html_export_produces_file() {
 
 ## See also
 
-- [WASM.md](WASM.md) — Interpreter WASM architecture
-- [OPENGL.md](lib_plans/future/02-graphics/README.md) — Graphics library design
-- [GAME_INFRA.md](lib_plans/future/05-game-infra/README.md) § W1.1 — Original sketch
-- [OPENGL_IMPL.md](lib_plans/future/02-graphics/IMPLEMENTATION.md) — Implementation checklist
+- [WASM.md](../../../WASM.md) — Interpreter WASM architecture
+- [OPENGL.md](../../../lib_plans/future/02-graphics/README.md) — Graphics library design
+- [GAME_INFRA.md](../../../lib_plans/future/05-game-infra/README.md) § W1.1 — Original sketch
+- [OPENGL_IMPL.md](../../../lib_plans/future/02-graphics/IMPLEMENTATION.md) — Implementation checklist
