@@ -32,7 +32,34 @@ inaccurate — the actual interface in `default/01_code.loft` is
 `+` only.  Documented inline in `u1_b1a_addable_sum_three`'s
 cell comment.
 
-Phase 02+ (FIX cells) lands in subsequent commits.
+**Phase 02 (tuple-of-T returns + multi-arity + inline) DONE
+2026-05-09.**  Nine new cells added (U3, U7, U8 rows).  The
+pre-flight predicted parser breakage on tuple-of-T returns;
+the (A) fix in `Parser::substitute_type` (closed 2026-05-04)
+already handled the uniform-T canonical case.  Phase 02
+verified the fix across multiple bound shapes + arities +
+nested + destructure + inline-format paths.
+
+**Phase 02 surfaced 2 new P-issues** while writing cells:
+- **P237** — bound-supplied operator INSIDE a tuple constructor
+  element (`(x + x, 1)`, `(a, a + b)`, etc.) breaks both
+  backends.  Interp SIGSEGVs / silent garbage; native rustc
+  E0308 (T not substituted in operator-method calls inside
+  tuple constructors).  Workaround: hoist the operator to a
+  local first.  Reproducer: /tmp/p_followups/p237_*.loft.
+- **P238** — uniform `(T, T)` tuple-return with `T = text`
+  fails native compilation (`expected &str, found String`).
+  Interp works; integer + float monomorphisations work.
+  Reproducer: /tmp/p_followups/p238_*.loft.
+
+Cells covering the P237/P238 shapes stay OUT of the binary
+until those P-issues close — the cross_mode harness asserts
+both backends pass.  The U3.B1.A cell uses the workaround
+form (hoisted local) so the regression net catches future
+breakage of THAT path.
+
+Phase 03+ (Printable / built-in satisfaction; vector-of-T
+input/output) lands in subsequent commits.
 
 ## Goal
 
@@ -52,12 +79,12 @@ bound) since each interacts differently with the type system.
 |---|---|---|---|---|---|---|---|---|---|
 | **U1** body op | PASS:u1_b0_no_bound_unused_t | PASS:u1_b1o_ordered_compare | PASS:u1_b1e_equatable_check | PASS:u1_b1a_addable_sum_three (`+` only — Addable does not include `-`) | FIX:03 (++ inference gap) | PASS:u2_b1ao_addable_ordered_min_sum (covers B2 op-mix) | FIX:04 | PASS:harness_smoke_template (B4 dbl) | FIX:05 |
 | **U2** T return | PASS:u2_b0_no_bound_identity_int | PASS:u2_b1o_ordered_max_int | PASS:u2_b1e_equatable_pick | PASS:u2_b1ao_addable_ordered_min_sum (Addable+Ordered) | FIX:03 | PASS:u2_b2_multibound_eq_or_gt_int (cmp_eq) | FIX:04 | PASS:u1_b4_addable_dbl_float | FIX:05 |
-| **U3** tuple-of-T return | FIX:02 | FIX:02 (parser gap) | FIX:02 | FIX:02 | FIX:03+02 | FIX:02 | FIX:04+02 | FIX:05+02 | FIX:05 |
+| **U3** tuple-of-T return | PASS:u3_b0_no_bound_pair_int | PASS:u3_b1o_ordered_min_max + u3_b1o_ordered_destructure | PASS:u3_b1e_equatable_pair_when_eq | PASS:u3_b1a_addable_pair_with_hoisted_sum (inline form blocked by P237) | FIX:03 (Printable inference) | PASS:u3_b2_addable_ordered_pair | FIX:04 | (covered by U1.B4 smoke + U3.B1.A hoist form) | FIX:05 |
 | **U4** struct field of T | CLOSED:no-generic-structs (verify in 01) | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED |
 | **U5** vector-of-T input | FIX:03 | FIX:01 | FIX:01 | FIX:01 | FIX:03 (built-in satisfaction) | FIX:04 | FIX:04 | FIX:05 | FIX:05 |
 | **U6** vector-of-T output | FIX:03 | FIX:03 | FIX:03 | FIX:03 | FIX:03 | FIX:03 | FIX:04 | FIX:05 | FIX:05 |
-| **U7** multi-T tuple-return arity ≥3 | FIX:02 | FIX:02 | FIX:02 | FIX:02 | FIX:03+02 | FIX:02 | FIX:02 | FIX:05+02 | FIX:05 |
-| **U8** T inside format / inline expr | FIX:02 (tuple-elem-in-format) | FIX:01 | FIX:01 | PASS-pre | FIX:03 | FIX:01 | FIX:04 | FIX:05 | FIX:05 |
+| **U7** multi-T tuple-return arity ≥3 | FIX:02 | PASS:u7_b1o_ordered_triple_arity_three + u7_b1o_ordered_nested_pair | FIX:02 | FIX:02 (P237 in inline form) | FIX:03+02 | FIX:02 | FIX:02 | FIX:05+02 | FIX:05 |
+| **U8** T inside format / inline expr | FIX:02 (tuple-elem-in-format) | PASS:u8_b1o_ordered_inline_format | FIX:01 | PASS-pre | FIX:03 | FIX:01 | FIX:04 | FIX:05 | FIX:05 |
 
 `PASS-pre` = a pre-flight survey passed; the cell test still gets
 written (so the matrix is uniform and the regression net catches

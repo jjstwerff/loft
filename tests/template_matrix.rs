@@ -255,3 +255,191 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 02 — tuple-of-T returns (U3, U7, U8) ─────────────────────────────
+//
+// Plan-17 phase 02 fills U3 (uniform-T tuple return), U7 (multi-T
+// tuple-return arity ≥3), and U8 (T inside format / inline expr).
+// The pre-flight survey predicted parser breakage on these shapes
+// — turned out the (A) fix (substitute_type recurses through
+// Type::Tuple; first-pass return-type prediction via
+// predict_generic_return_type) closed the uniform-T cases.
+//
+// What still BREAKS (plan-17 phase 02 surfaced; both filed
+// 2026-05-09):
+// - **P237** — mixed-element-type generic tuple `(T, integer)`,
+//   `(T, boolean)`, etc.  Interp SIGSEGVs / silent garbage;
+//   native rustc E0308 (T not substituted in operator-method
+//   calls inside the tuple constructor).  Reproducer:
+//   `fn pair_with_one<T: Addable>(x: T) -> (T, integer) { (x+x, 1) }`.
+// - **P238** — uniform-T tuple `(T, T)` instantiated with
+//   T = text fails native rustc E0308 (`expected &str, found
+//   String`).  Interp works.  Reproducer:
+//   `fn pair_t<T: Equatable>(a: T) -> (T, T) { (a, a) }; pair_t("hi")`.
+//
+// Both bugs filed in PROBLEMS.md; reproducers in
+// /tmp/p_followups/p23{7,8}_*.loft.  Cells for these shapes
+// stay out of the binary until the P-issues close — the
+// cross_mode harness asserts BOTH backends pass, so an
+// always-failing cell would gate `--ignored` runs.
+
+// U3 × B0 — no bound, uniform tuple-of-T return.  Verifies
+// (A) fix works for the most basic case.
+cross_mode!(
+    u3_b0_no_bound_pair_int,
+    r#"
+    fn pair<T>(a: T, b: T) -> (T, T) { (a, b) }
+    fn test() {
+        t = pair(7, 3);
+        print("{t.0}|{t.1}\n");
+        assert(t.0 == 7 && t.1 == 3, "u3_b0_int");
+    }
+    "#
+);
+
+// U3 × B1.O — Ordered, tuple-of-T return.  Canonical
+// `min_max` — the pre-flight failure that's now closed by (A).
+// Verifies the fix across multiple monomorphisations
+// (integer + float).
+cross_mode!(
+    u3_b1o_ordered_min_max,
+    r#"
+    fn min_max<T: Ordered>(a: T, b: T) -> (T, T) {
+        if a < b { (a, b) } else { (b, a) }
+    }
+    fn test() {
+        ti = min_max(7, 3);
+        tf = min_max(2.5, 1.5);
+        print("{ti.0}|{ti.1}|{tf.0}|{tf.1}\n");
+        assert(ti.0 == 3 && ti.1 == 7, "u3_b1o_int");
+        assert(tf.0 == 1.5 && tf.1 == 2.5, "u3_b1o_float");
+    }
+    "#
+);
+
+// U3 × B1.E — Equatable, uniform-T tuple-of-T return that
+// uses the bound's `==` in the body.  Different from U3.B0
+// (which returns args verbatim).
+cross_mode!(
+    u3_b1e_equatable_pair_when_eq,
+    r#"
+    fn pair_when<T: Equatable>(a: T, b: T, c: T) -> (T, T) {
+        if a == b { (a, c) } else { (b, c) }
+    }
+    fn test() {
+        t = pair_when(3, 3, 99);
+        u = pair_when(3, 5, 99);
+        print("{t.0}|{t.1}|{u.0}|{u.1}\n");
+        assert(t.0 == 3 && t.1 == 99, "u3_b1e_eq_path");
+        assert(u.0 == 5 && u.1 == 99, "u3_b1e_neq_path");
+    }
+    "#
+);
+
+// U3 × B1.A — Addable, uniform-T tuple-of-T return.  The
+// inline form `(a, a + b)` triggers P237 (T's operator inside
+// a tuple constructor element fails to substitute) on both
+// backends.  The hoisted form (sum to a local first, then
+// construct) works.  Cell uses the workaround so the
+// regression net catches future cases where the workaround
+// itself breaks; the inline form is documented as a known-
+// failure shape in PROBLEMS.md P237.
+cross_mode!(
+    u3_b1a_addable_pair_with_hoisted_sum,
+    r#"
+    fn pair_sum<T: Addable>(a: T, b: T) -> (T, T) {
+        s = a + b;
+        (a, s)
+    }
+    fn test() {
+        ti = pair_sum(2, 3);
+        tf = pair_sum(1.5, 2.5);
+        print("{ti.0}|{ti.1}|{tf.0}|{tf.1}\n");
+        assert(ti.0 == 2 && ti.1 == 5, "u3_b1a_int");
+        assert(tf.0 == 1.5 && tf.1 == 4.0, "u3_b1a_float");
+    }
+    "#
+);
+
+// U3 destructure — `(lo, hi) = min_max(...)` parser path.
+// Pre-flight predicted parser rejection; verified working
+// 2026-05-09.
+cross_mode!(
+    u3_b1o_ordered_destructure,
+    r#"
+    fn min_max<T: Ordered>(a: T, b: T) -> (T, T) {
+        if a < b { (a, b) } else { (b, a) }
+    }
+    fn test() {
+        (lo, hi) = min_max(7, 3);
+        print("{lo}|{hi}\n");
+        assert(lo == 3 && hi == 7, "u3_destr");
+    }
+    "#
+);
+
+// U7 × B1.O — three-arity tuple-return.  Pre-flight predicted
+// parser breakage; verified working.
+cross_mode!(
+    u7_b1o_ordered_triple_arity_three,
+    r#"
+    fn triple<T: Ordered>(a: T, b: T) -> (T, T, T) {
+        if a < b { (a, b, a) } else { (b, a, b) }
+    }
+    fn test() {
+        t = triple(7, 3);
+        print("{t.0}|{t.1}|{t.2}\n");
+        assert(t.0 == 3 && t.1 == 7 && t.2 == 3, "u7_b1o");
+    }
+    "#
+);
+
+// U7 nested — `((T, T), T)` shape.  Verifies recursive
+// substitute_type traversal handles nested Tuple correctly.
+cross_mode!(
+    u7_b1o_ordered_nested_pair,
+    r#"
+    fn nested<T: Ordered>(a: T, b: T) -> ((T, T), T) {
+        if a < b { ((a, b), a) } else { ((b, a), b) }
+    }
+    fn test() {
+        t = nested(7, 3);
+        print("{t.0.0}|{t.0.1}|{t.1}\n");
+        assert(t.0.0 == 3 && t.0.1 == 7 && t.1 == 3, "u7_nested");
+    }
+    "#
+);
+
+// U8 × B1.O — inline tuple-element access in format string.
+// Pre-flight predicted parser breakage on `{min_max(7,3).0}`;
+// verified working 2026-05-09.
+cross_mode!(
+    u8_b1o_ordered_inline_format,
+    r#"
+    fn min_max<T: Ordered>(a: T, b: T) -> (T, T) {
+        if a < b { (a, b) } else { (b, a) }
+    }
+    fn test() {
+        print("{min_max(7, 3).0}|{min_max(7, 3).1}\n");
+    }
+    "#
+);
+
+// U3 × B2 — multi-bound tuple return.  Combines Addable +
+// Ordered to compute (smaller-of-pair, sum).
+cross_mode!(
+    u3_b2_addable_ordered_pair,
+    r#"
+    fn small_and_sum<T: Addable + Ordered>(a: T, b: T) -> (T, T) {
+        s = a + b;
+        if a < b { (a, s) } else { (b, s) }
+    }
+    fn test() {
+        t = small_and_sum(7, 3);
+        u = small_and_sum(2, 5);
+        print("{t.0}|{t.1}|{u.0}|{u.1}\n");
+        assert(t.0 == 3 && t.1 == 10, "u3_b2_a");
+        assert(u.0 == 2 && u.1 == 7, "u3_b2_b");
+    }
+    "#
+);
