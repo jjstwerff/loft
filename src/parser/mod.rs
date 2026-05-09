@@ -1639,6 +1639,36 @@ impl Parser {
                 let new_inner = Self::substitute_type_in_value(inner, tv_nr, concrete, data);
                 Value::with_span(pos, new_inner)
             }
+            // P237: tuple-constructor elements may contain calls to
+            // bound-supplied operator stubs (`t_1T_OpAdd(x, x)` etc.).
+            // Without this recursion the call stayed pointing at the
+            // generic stub instead of the concrete `t_<len>integer_OpAdd`,
+            // producing rustc E0308 (`expected DbRef, found i64`) at
+            // codegen time and silent garbage / SIGSEGV under interp.
+            Value::Tuple(elems) => Value::Tuple(
+                elems
+                    .into_iter()
+                    .map(|e| Self::substitute_type_in_value(e, tv_nr, concrete, data))
+                    .collect(),
+            ),
+            Value::TuplePut(v, idx, val) => Value::TuplePut(
+                v,
+                idx,
+                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data)),
+            ),
+            Value::BreakWith(n, val) => Value::BreakWith(
+                n,
+                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data)),
+            ),
+            Value::Yield(val) => Value::Yield(Box::new(Self::substitute_type_in_value(
+                *val, tv_nr, concrete, data,
+            ))),
+            Value::CallRef(v_nr, args) => Value::CallRef(
+                v_nr,
+                args.into_iter()
+                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data))
+                    .collect(),
+            ),
             other => other,
         }
     }

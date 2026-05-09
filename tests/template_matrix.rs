@@ -667,3 +667,30 @@ cross_mode!(
     }
     "#
 );
+
+// Plan-17 U3 × B1.A — bound-supplied operator INSIDE a tuple
+// constructor element.  Closes P237: `Value::Tuple` was missing
+// from `substitute_type_in_value`'s recursion in
+// src/parser/mod.rs, so calls to bound-supplied operator stubs
+// (`t_1T_OpAdd(x, x)` etc.) sitting inside tuple-constructor
+// elements stayed pointing at the GENERIC stub instead of being
+// re-resolved to the concrete type's method during
+// monomorphisation.  Native rejected with rustc E0308 (`expected
+// DbRef, found i64`); interp returned silent garbage / SIGSEGV.
+// Workaround was to hoist the operator into a typed local first
+// (covered by `u3_b1a_addable_pair_with_hoisted_sum` already in
+// the matrix).  Fix: added Value::Tuple, TuplePut, BreakWith,
+// Yield, CallRef arms to substitute_type_in_value.
+cross_mode!(
+    u3_b1a_addable_inline_pair_with_sum,
+    r#"
+    fn pair_with_one<T: Addable>(x: T) -> (T, integer) {
+        (x + x, 1)
+    }
+    fn test() {
+        t = pair_with_one(5);
+        u = pair_with_one(2.5);
+        println("{t.0}|{t.1}|{u.0}|{u.1}");
+    }
+    "#
+);

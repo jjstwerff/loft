@@ -47,6 +47,13 @@ nested + destructure + inline-format paths.
   E0308 (T not substituted in operator-method calls inside
   tuple constructors).  Workaround: hoist the operator to a
   local first.  Reproducer: /tmp/p_followups/p237_*.loft.
+  **Closed 2026-05-09** in `src/parser/mod.rs::substitute_type_in_value`
+  by adding the missing `Value::Tuple` arm (and sibling
+  `TuplePut` / `BreakWith` / `Yield` / `CallRef` arms).  The
+  monomorphisation pass now recurses into tuple-constructor
+  elements and re-resolves bound-method stub calls to the
+  concrete type's implementation.  Pinned by
+  `tests/template_matrix::u3_b1a_addable_inline_pair_with_sum`.
 - **P238** — uniform `(T, T)` tuple-return with `T = text`
   fails native compilation (`expected &str, found String`).
   Interp works; integer + float monomorphisations work.
@@ -58,13 +65,22 @@ nested + destructure + inline-format paths.
   in `src/generation/emit.rs` Value::Return arm.  Pinned by
   `tests/template_matrix::u2_b2_equatable_uniform_tuple_t`.
 
-Cells covering the P237 shape stay OUT of the binary
-until that P-issue closes — the cross_mode harness asserts
-both backends pass.  The U3.B1.A cell uses the workaround
-form (hoisted local) so the regression net catches future
-breakage of THAT path.  P238 closed 2026-05-09; the
-text-T uniform tuple cell `u2_b2_equatable_uniform_tuple_t`
-is now in the regression net.
+P237 closed 2026-05-09; both the workaround form
+(`u3_b1a_addable_pair_with_hoisted_sum`) and the inline form
+(`u3_b1a_addable_inline_pair_with_sum`) are now in the
+regression net.  P238 closed 2026-05-09; the text-T
+uniform tuple cell `u2_b2_equatable_uniform_tuple_t` is
+also in the net.  Cells covering P239 / P240 / P241 / P243
+stay OUT of the binary until those P-issues close — the
+cross_mode harness asserts both backends pass.
+
+The "P237 broader scope" cells noted in Phase 03 (Printable's
+to_text inside a tuple-of-text return) turned out to be a
+DIFFERENT root cause: P237 fixes the bound-method-call
+resolution, but the text-tuple-return-from-generic-fn shape
+emits its body's tuple expression as a discarded statement
+and synthesises a `(String::new(), String::new())` return.
+Filed as P243 2026-05-09.
 
 **Phase 03 (Printable + vector-of-T) DONE 2026-05-09.**  Three
 new cells added: `u2_b1p_printable_show`, `u1_b1p_printable_concat`
@@ -170,11 +186,11 @@ bound) since each interacts differently with the type system.
 |---|---|---|---|---|---|---|---|---|---|
 | **U1** body op | PASS:u1_b0_no_bound_unused_t | PASS:u1_b1o_ordered_compare | PASS:u1_b1e_equatable_check | PASS:u1_b1a_addable_sum_three (`+` only — Addable does not include `-`) | PASS:u1_b1p_printable_concat (P208 closure verified) | PASS:u2_b1ao_addable_ordered_min_sum (covers B2 op-mix) | PASS:u1_b3_user_iface_showable_concat | PASS:harness_smoke_template (B4 dbl) | CLOSED:feature-gap-two-T |
 | **U2** T return | PASS:u2_b0_no_bound_identity_int | PASS:u2_b1o_ordered_max_int | PASS:u2_b1e_equatable_pick | PASS:u2_b1ao_addable_ordered_min_sum (Addable+Ordered) | PASS:u2_b1p_printable_show (covers (C) closure) | PASS:u2_b2_multibound_eq_or_gt_int (cmp_eq) | PASS:u2_b3_user_iface_shape_area | PASS:u1_b4_addable_dbl_float | CLOSED:feature-gap-two-T |
-| **U3** tuple-of-T return | PASS:u3_b0_no_bound_pair_int | PASS:u3_b1o_ordered_min_max + u3_b1o_ordered_destructure | PASS:u3_b1e_equatable_pair_when_eq | PASS:u3_b1a_addable_pair_with_hoisted_sum (inline form blocked by P237) | BLOCKED:P237 (Printable's to_text inside tuple element same root cause) | PASS:u3_b2_addable_ordered_pair | BLOCKED:P237 (user-iface method inside tuple element) | (covered by U1.B4 smoke + U3.B1.A hoist form) | CLOSED:feature-gap-two-T |
+| **U3** tuple-of-T return | PASS:u3_b0_no_bound_pair_int | PASS:u3_b1o_ordered_min_max + u3_b1o_ordered_destructure | PASS:u3_b1e_equatable_pair_when_eq | PASS:u3_b1a_addable_pair_with_hoisted_sum + PASS:u3_b1a_addable_inline_pair_with_sum (P237 closed 2026-05-09) | BLOCKED:P243 (text-tuple return from generic fn discards body tuple) | PASS:u3_b2_addable_ordered_pair | BLOCKED:P243 (user-iface method into text-tuple return — same root cause) | (covered by U1.B4 smoke + U3.B1.A inline form) | CLOSED:feature-gap-two-T |
 | **U4** struct field of T | CLOSED:no-generic-structs (verified — `struct Box<T>` parse-errors) | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED |
 | **U5** vector-of-T input | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 + CLOSED:feature-gap-two-T |
 | **U6** vector-of-T output | PASS:u6_b0_no_bound_passthrough (no-iter pass-through; iter + push forms blocked by P239 / P241) | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P241 | CLOSED:feature-gap-two-T |
-| **U7** multi-T tuple-return arity ≥3 | (covered by U3) | PASS:u7_b1o_ordered_triple_arity_three + u7_b1o_ordered_nested_pair | (covered by U3) | (covered by U3) | BLOCKED:P237 | (covered by U3) | (covered by U2.B3) | (covered) | CLOSED:feature-gap-two-T |
+| **U7** multi-T tuple-return arity ≥3 | (covered by U3) | PASS:u7_b1o_ordered_triple_arity_three + u7_b1o_ordered_nested_pair | (covered by U3) | (covered by U3) | BLOCKED:P243 | (covered by U3) | (covered by U2.B3) | (covered) | CLOSED:feature-gap-two-T |
 | **U8** T inside format / inline expr | BLOCKED:P242 (`{x}` for x:T — only Printable bound covered by P242 fix) | PASS:u8_b1o_ordered_inline_format (call-result `.0`) | BLOCKED:P242 | PASS:u8_b4_addable_to_text_format (workaround: explicit `to_text()`) | PASS:u8_b1p_printable_inline_t (P242 closed 2026-05-09) | BLOCKED:P242 | BLOCKED:P242 | PASS:u8_b4_addable_to_text_format | CLOSED:feature-gap-two-T |
 
 `PASS-pre` = a pre-flight survey passed; the cell test still gets
