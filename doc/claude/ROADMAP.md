@@ -196,10 +196,10 @@ speaks the protocol.  Per-IDE plugins are thin marketplace shims
 
 | ID            | Title                                                  | E  | Design | Source           |
 |---------------|--------------------------------------------------------|----|--------|------------------|
-| LSP.1         | `loft-lsp` MVP — diagnostics + outline + hover         | M  | ✓      | LSP.md           |
-| IDE.ECLIPSE   | Eclipse plugin via LSP4E (LSP.1 features)              | S  | ✓      | LSP.md           |
-| IDE.JETBRAINS | JetBrains plugin via LSP4IJ (LSP.1 features)           | S  | ✓      | LSP.md           |
-| IDE.NEOVIM    | Neovim docs + `nvim-lspconfig` snippet                 | XS | ✓      | LSP.md           |
+| LSP.1         | `loft-lsp` MVP — diagnostics + outline + hover         | M  | ✓      | lib_plans/future/09-lsp/README.md|
+| IDE.ECLIPSE   | Eclipse plugin via LSP4E (LSP.1 features)              | S  | ✓      | lib_plans/future/09-lsp/README.md|
+| IDE.JETBRAINS | JetBrains plugin via LSP4IJ (LSP.1 features)           | S  | ✓      | lib_plans/future/09-lsp/README.md|
+| IDE.NEOVIM    | Neovim docs + `nvim-lspconfig` snippet                 | XS | ✓      | lib_plans/future/09-lsp/README.md|
 
 ### Ship criteria
 
@@ -278,8 +278,8 @@ perspective polish.
 
 | ID     | Title                                                  | E  | Design | Source           |
 |--------|--------------------------------------------------------|----|--------|------------------|
-| LSP.2  | `loft-lsp` editing — completion, def, refs, rename, semantic tokens, code actions | MH | ✓ | LSP.md |
-| LSP.3  | `loft-dap` MVP — DAP server for interpreter-mode debug | MH | ✓ | LSP.md |
+| LSP.2  | `loft-lsp` editing — completion, def, refs, rename, semantic tokens, code actions | MH | ✓ | lib_plans/future/09-lsp/README.md |
+| LSP.3  | `loft-dap` MVP — DAP server for interpreter-mode debug | MH | ✓ | lib_plans/future/09-lsp/README.md |
 | NDB.1  | `.loft.map` source map + `loft-gdb.py` / `loft-lldb.py` plugins | M  | ✓ | plans/future/25-native-debug/README.md|
 
 ### Compilation cache and constant store

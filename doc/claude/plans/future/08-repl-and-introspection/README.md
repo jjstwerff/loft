@@ -101,9 +101,9 @@ playground, IDE integration).
 ## Out of scope
 
 - **IDE integration** — language server protocol, diagnostic
-  pushing, completion.  Tracked separately in `doc/claude/LSP.md`.
+  pushing, completion.  Tracked separately in `doc/claude/lib_plans/future/09-lsp/README.md`.
 - **Debugger / breakpoints** — DAP-style stepping.  Tracked in
-  `doc/claude/LSP.md` (LSP.3 / NDB.0).
+  `doc/claude/lib_plans/future/09-lsp/README.md` (LSP.3 / NDB.0).
 - **Hot-reload** of `.loft` source files — the REPL reads from
   stdin only.  Editor-side hot-reload is an LSP feature, not a
   REPL feature.

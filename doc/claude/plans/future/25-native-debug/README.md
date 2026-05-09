@@ -13,7 +13,7 @@ Eclipse CDT, KDevelop, and any IDE driving GDB through MI get
 Rust intermediate.
 
 The complementary path for **interpreter-mode** debugging is the
-DAP server (LSP.3 in [LSP.md](../../../LSP.md)) — that's the right tool when
+DAP server (LSP.3 in [LSP.md](../../../lib_plans/future/09-lsp/README.md)) — that's the right tool when
 the program is interpreted rather than compiled.  This doc is only
 about post-compilation debugging.
 
@@ -406,7 +406,7 @@ LSP dependency.
 
 ## Cross-references
 
-- [LSP.md](../../../LSP.md) — LSP.1 / LSP.2 / LSP.3 design.  LSP.3's DAP server
+- [LSP.md](../../../lib_plans/future/09-lsp/README.md) — LSP.1 / LSP.2 / LSP.3 design.  LSP.3's DAP server
   consumes the same source map as the GDB plugin.
 - [NATIVE.md](../../../NATIVE.md) — `--native` codegen pipeline; this doc adds
   a debug-info concern on top of the existing emit.
