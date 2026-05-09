@@ -102,9 +102,15 @@ has a single concern.
 1. Copy this template to `plans/future/<NN>-<slug>/README.md`
    (or `lib_plans/future/<NN>-<slug>/`).
 2. Fill in Status + Goal first.
-3. Add ROADMAP row(s) citing this plan.
+3. Add ROADMAP row(s) citing this plan + tag with value
+   category (S / R / G / F / U / C / Q / N).
 4. Add lib_plans/README.md or plans/README.md table row.
-5. Add CLAUDE.md doc index entry IF the plan introduces a
-   new top-level concern.
+5. **Do NOT add a CLAUDE.md doc index entry by default.**
+   Plans are discoverable via plans/README.md (which IS in
+   CLAUDE.md doc index).  Add a CLAUDE.md entry ONLY if the
+   plan introduces a NEW top-level reference concept that
+   would otherwise have no doc-root home — vanishingly rare
+   for plans (most plan content lives at a reference doc
+   that already has its own CLAUDE.md entry).
 
 **On closing a plan:** see [`_CLOSURE_CHECKLIST.md`](_CLOSURE_CHECKLIST.md).
