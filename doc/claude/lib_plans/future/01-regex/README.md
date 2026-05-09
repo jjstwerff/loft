@@ -23,12 +23,12 @@ Two earlier plans are cancelled:
 2. **"Regex arm" inside `match`**, sharing the pattern-matching
    compile pipeline.  Cost: a whole second pattern language embedded
    in the compiler, competing with the PEG-style sequence patterns in
-   [MATCH_PEG.md](MATCH_PEG.md), with a closed character vocabulary
+   [MATCH_PEG.md](../../../MATCH_PEG.md), with a closed character vocabulary
    that inevitably grows.  Benefit: a fused syntax for text arms.
    Not worth it — PEG patterns cover structural matching; regex
    covers text; keeping them separate is cleaner than fusing them.
 
-The PEG-style match extension ([MATCH_PEG.md](MATCH_PEG.md)) stays as
+The PEG-style match extension ([MATCH_PEG.md](../../../MATCH_PEG.md)) stays as
 designed, but its scope is **structural** — vectors, enum shapes, and
 iterators.  Text matching is this library's job.  One text-pattern
 language is easier to learn than two, so the originally-sketched
@@ -214,21 +214,21 @@ Phases are strictly additive.  R1 alone covers the 95% case.
 
 **Ship order relative to MATCH_PEG:** R1 ships **first**, before any
 MATCH_PEG phase.  It is the smaller, library-scoped change, validates
-the lazy-loading mechanism from [LAZY_STDLIB.md](LAZY_STDLIB.md), and
+the lazy-loading mechanism from [LAZY_STDLIB.md](../../../LAZY_STDLIB.md), and
 delivers immediate value for CLI / server / log use cases.  See
-[MATCH_PEG.md](MATCH_PEG.md) § "Ship order" for the combined timeline.
+[MATCH_PEG.md](../../../MATCH_PEG.md) § "Ship order" for the combined timeline.
 
 ---
 
 ## See also
 
-- [LAZY_STDLIB.md](LAZY_STDLIB.md) — lazy-loading mechanism; regex is
+- [LAZY_STDLIB.md](../../../LAZY_STDLIB.md) — lazy-loading mechanism; regex is
   the first new consumer.
-- [LOFT.md](LOFT.md) § Match expressions — base match semantics.
-- [MATCH_PEG.md](MATCH_PEG.md) — PEG-style sequence patterns on
+- [LOFT.md](../../../LOFT.md) § Match expressions — base match semantics.
+- [MATCH_PEG.md](../../../MATCH_PEG.md) — PEG-style sequence patterns on
   vectors, enums, iterators, and (simple) text.  Regex is the tool
   for *complex* text; these two systems intentionally do not share a
   pattern language.
-- [STDLIB.md](STDLIB.md) — where the library's public API will be
+- [STDLIB.md](../../../STDLIB.md) — where the library's public API will be
   documented once shipped.
-- [PACKAGES.md](PACKAGES.md) — stdlib module layout.
+- [PACKAGES.md](../../../PACKAGES.md) — stdlib module layout.

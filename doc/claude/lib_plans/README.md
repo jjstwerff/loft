@@ -105,7 +105,7 @@ Promote one into "Current" when a current library plan closes.
 
 | Dir | Initiative | Pre-flight status |
 |---|---|---|
-| _(empty — populate as library design docs get promoted into plan form)_ |  |  |
+| [`future/01-regex/`](future/01-regex/) | Standalone regex library — replaces the `r"..."` raw-literal plan and "regex arm in match" plan that were sketched earlier (both withdrawn).  Library lives in stdlib via the lazy-loading mechanism (LAZY_STDLIB.md), gives full regex semantics without bloating the language surface.  First lazy-loaded stdlib consumer.  Cooperates with MATCH_PEG.md (PEG-style sequence patterns) — REGEX handles all text matching; MATCH_PEG handles structural / numeric / Unicode-class patterns. | Design draft (was `doc/claude/REGEX.md`).  Not yet implemented; depends on LAZY_STDLIB.md infrastructure landing first.  Ship order: REGEX R1 (linear NFA, basic features) is the first scheduled item once LAZY_STDLIB lands; R2-R4 (named groups, Unicode properties, backtracking fallback) gated on demand. |
 
 ## Deferred library initiatives
 

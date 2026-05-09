@@ -290,7 +290,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [BROADENING.md](doc/claude/BROADENING.md) | Strategic evaluation — using loft beyond games (CLI, server, data), sequenced unlocks |
 | [LAZY_STDLIB.md](doc/claude/LAZY_STDLIB.md) | Conditional stdlib loading — trigger-based module load, pay-for-what-you-use cold start |
 | [MATCH_PEG.md](doc/claude/MATCH_PEG.md) | L3 PEG-style match patterns — sequence/alternation/optional with anchor-revert capture (base match syntax lives in LOFT.md § Match expressions) |
-| [REGEX.md](doc/claude/REGEX.md) | Regex standalone library — replaces the `r"..."` literal / "regex arm in match" plan with a full-featured library |
+| [lib_plans/future/01-regex/README.md](doc/claude/lib_plans/future/01-regex/README.md) | Future library plan — regex standalone library: replaces the `r"..."` literal / "regex arm in match" plan with a full-featured library.  First lazy-loaded stdlib consumer. |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
 | [SORTED_SLICE.md](doc/claude/SORTED_SLICE.md) | A8: slicing, open-ended ranges, partial-key match, comprehensions on sorted/index |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
