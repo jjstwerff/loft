@@ -30,6 +30,30 @@ Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
 Native OpenGL is supported for desktop enthusiasts.  Server/multiplayer
 comes after the single-player browser experience works.
 
+### Long-term direction — every roadmap row points at a plan
+
+The end state for this file is a roadmap of **plans**, not loose
+features.  Every row's `Source` / `Notes` column eventually
+points at a directory under
+[`plans/`](plans/README.md) or
+[`lib_plans/`](lib_plans/README.md) — that plan is the single
+source of truth for the row's design, phasing, acceptance
+criteria, and closure record.
+
+**Bug fixes do not need to go through plans.**  Bugs continue to
+land directly via PROBLEMS.md + a regression test + a focused
+commit.  The plan path is reserved for **major development** —
+work that benefits from explicit phasing, multi-session
+sequencing, or design-before-implementation discipline.
+
+Today's ROADMAP rows are a mix: some already cite a plan
+(`plans/future/25-native-debug/README.md`), others still cite a
+flat `doc/claude/*.md` design doc.  As those design docs get
+promoted into plan form (see
+[plans/README.md § Companion indexes](plans/README.md#companion-indexes--every-parked-item-is-discoverable)
+and the ongoing migration in commit history), the corresponding
+ROADMAP rows update to cite the plan instead.
+
 ## Milestone narrative
 
 | Version | Headline                                       | Status |

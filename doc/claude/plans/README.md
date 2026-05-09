@@ -4,6 +4,18 @@ Multi-phase initiatives that span more than one session.  Each
 subdirectory holds the README (goal + index) plus one markdown file
 per phase.
 
+**Bugs do not require a plan.**  Bug fixes continue to land
+directly via PROBLEMS.md + a regression test + a focused commit.
+The plan path is reserved for **major development** — work that
+benefits from explicit phasing, multi-session sequencing, or
+design-before-implementation discipline.
+
+Long-term direction: every row in
+[ROADMAP.md](../ROADMAP.md) eventually points at a plan in
+this directory or in [`lib_plans/`](../lib_plans/README.md).
+Loose features without a plan home become the exception, not
+the rule.
+
 ## Companion indexes — every parked item is discoverable
 
 Two files complement this README; together they ensure deferred
