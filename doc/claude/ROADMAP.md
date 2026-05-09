@@ -290,7 +290,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | HTTP / WS / static-file server library |
 | [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/future/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
 | [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/future/07-web-ide W2** + moros editor MO.* + script-target build mode | User-authored scene scripts (SC.1-SC.6 + SC.P) |
-| [`plans/future/36-audience-generative-art/`](plans/future/36-audience-generative-art/) | M (3M + 3S + 4XS) | — (WS primitives shipped) | Demo plan — audience-driven plant/crystal growth via shared URL.  Sibling presentation at `presentations/audience-generative-art/` |
+| [`plans/future/36-audience-generative-art/`](plans/future/36-audience-generative-art/) | M | — | Audience-driven plant/crystal growth demo via shared URL |
 
 ### F — Foundation
 
