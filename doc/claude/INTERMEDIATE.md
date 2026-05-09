@@ -85,9 +85,9 @@ pub enum Type {
     Unknown(u32),         // Forward reference placeholder (linked type id or 0)
     Null,                 // No type / null literal
     Void,                 // Function return: no value
-    Integer(i32, u32),    // Range-constrained integer (min, max)
+    Never,                // Divergent expression (return/break/continue) — compatible with any type
+    Integer(IntegerSpec), // Range-constrained integer (min, max, forced_size, nullable)
     Boolean,
-    Long,                 // i64
     Float,                // f64
     Single,               // f32
     Character,            // Single unicode codepoint
@@ -109,6 +109,13 @@ pub enum Type {
     Rewritten(Box<Type>),                    // After append rewrite (Text/structs)
 }
 ```
+
+**Plan-01 (2026-04-21) removed `Type::Long`.**  All integer-family
+values now flow through `Type::Integer(IntegerSpec)` with i64
+arithmetic on the stack and per-field storage width via
+`IntegerSpec.forced_size` (see § Integer Storage Size below).
+Runtime IR literals still use `Value::Long(i64)` (the literal
+carrier), but `Type::Long` no longer exists as a distinct type.
 
 ### Integer Storage Size
 
@@ -455,8 +462,10 @@ automatically.  Only 2 slots sit unused today (0xFE, 0xFF).
 
 Docs in `ROADMAP.md`, `PLANNING.md`, and `PERFORMANCE.md` cite this
 as "254/256 used".  Superinstruction peephole work (O1) is parked
-on this count — see `QUALITY.md § C54` (sub-ticket C54.E) for a plan to reclaim
-~26 slots by unifying the `Op*Int` / `Op*Long` families post-C54.
+on this count.  Plan-01 phase 5 (2026-04-21) reclaimed 34 duplicate
+`Op*Long` slots when the integer family collapsed to i64 (OPERATORS
+table 268 → 234); further reclaims (e.g., merging text-formatting
+families) would feed O1.
 
 Categories:
 

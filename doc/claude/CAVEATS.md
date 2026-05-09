@@ -112,9 +112,11 @@ literal suffix is deprecated-warned and silently dropped.
   surface.**  Phase 5 (opcode reclamation) deletes them; until
   then dispatch table size stays 268 instead of 242.  Affects
   no semantics; just dispatch cache density.
-- **`Type::Long` enum variant lives alongside `Type::Integer`.**
-  Functionally identical post-2c; removal is round 10c (see
-  `doc/claude/plans/01-integer-i64/FINISH_MIGRATION.md`).
+- **`Type::Long` enum variant removed** (plan-01 phase 4, 2026-04-21).
+  All integer-family values flow through `Type::Integer(IntegerSpec)`
+  with i64 arithmetic on the stack and per-field storage width via
+  `IntegerSpec.forced_size`.  See
+  `doc/claude/plans/finished/01-integer-i64/04-deprecate-long.md`.
 - **Memory footprint doubled for `integer` fields** (4 → 8
   bytes).  Narrow fields (`u8 / u16 / i8 / i16 / i32`) stay
   compact via `Parts::{Byte, Short, Int}` so pixel buffers,
