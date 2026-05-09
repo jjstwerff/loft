@@ -318,7 +318,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | W1.1 single-file HTML export — native WASM compilation for browser |
 | [lib_plans/future/02-graphics/README.md](doc/claude/lib_plans/future/02-graphics/README.md) | Future library plan — graphics: 2D RGBA drawing + OpenGL/WebGL/GLB 3D rendering library design.  Companions: [IMPLEMENTATION.md](doc/claude/lib_plans/future/02-graphics/IMPLEMENTATION.md) (step-by-step ordered checklist: canvas → GLB → OpenGL → WebGL), [RENDERER.md](doc/claude/lib_plans/future/02-graphics/RENDERER.md) (high-level renderer — scene-driven PBR with shadows, helper abstractions), [GALLERY.md](doc/claude/lib_plans/future/02-graphics/GALLERY.md) (web example gallery + unified rendering across native OpenGL / WebGL / GLB). |
 | [GAME_INFRA.md](doc/claude/GAME_INFRA.md) | Game infrastructure: sprites, tilemap, collision, audio, FFI, HTML export, warnings |
-| [PIPELINE.md](doc/claude/PIPELINE.md) | Game asset pipeline: AI prototype → artist polish → integration |
+| [lib_plans/future/04-asset-pipeline/README.md](doc/claude/lib_plans/future/04-asset-pipeline/README.md) | Future library plan — game asset pipeline: AI prototype → artist polish → integration.  Three phases: procedural placeholder sprites/sounds → external-tool authoring (Aseprite, etc.) → integration via `load_sprite_sheet()` etc. |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
 
 ---
