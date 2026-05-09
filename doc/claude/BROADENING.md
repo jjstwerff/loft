@@ -35,7 +35,7 @@ ecosystem work around them, not language rework.
 | Domain | Natural fit | Gap to close |
 |---|---|---|
 | **CLI scripting / tooling** | Strong — readable syntax, static types, good error locality | Fast startup (CS.C1/C2/C3 const store + stdlib `.loftc`); stdlib for regex, shell, env, path, glob; single-binary installer |
-| **Server-side web** | Very strong — store maps naturally to request/session/DB model; JSON landed | `server` library (WEB_SERVER_LIB.md), async / non-blocking I/O, route helpers, migrations story |
+| **Server-side web** | Very strong — store maps naturally to request/session/DB model; JSON landed | `server` library (lib_plans/future/08-server/README.md), async / non-blocking I/O, route helpers, migrations story |
 | **Embedded-DB DSL** | Unique — nothing else has store + language co-designed | Mostly packaging and "SQLite + scripting as one thing" narrative; the tech exists |
 | **Data / ETL** | Good — iterators, parallel-for, DbRef, JSON | CSV/Parquet, decimal/BigInt, date/time, streaming file ops |
 | **Educational language** | Good — Python-like surface, strong types, good diagnostics | Playground (Web IDE planned), tutorial content |
@@ -78,7 +78,7 @@ Each item opens a specific segment.
 - **Standard-library breadth:**
   - *Scripting:* regex, date/time, path/glob, subprocess, env,
     logging (✓ LOGGER.md).
-  - *Server:* HTTP client + server (WEB_SERVER_LIB.md), routing,
+  - *Server:* HTTP client + server (lib_plans/future/08-server/README.md), routing,
     TLS/ACME, sessions, CSRF.
   - *Data:* CSV, Parquet, decimal, streaming I/O, compression,
     crypto (hash/HMAC/AEAD).
@@ -154,7 +154,7 @@ language features.
 Related documents:
 - [ROADMAP.md](ROADMAP.md) — milestone ordering
 - [PLANNING.md](PLANNING.md) — priority backlog (registry, FFI, LSP)
-- [WEB_SERVER_LIB.md](WEB_SERVER_LIB.md) — server library design
+- [WEB_SERVER_LIB.md](lib_plans/future/08-server/README.md) — server library design
 - [CONST_STORE.md](plans/deferred/28-const-store/README.md) — startup-speed prerequisite
 - [PACKAGES.md](PACKAGES.md) — package format + registry
 - [SERVER_FEATURES.md](plans/future/29-server-features/README.md) — language features for server ergonomics

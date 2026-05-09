@@ -119,7 +119,7 @@ These are separate repositories installed via `loft install`.  They are not
 gated to a specific interpreter milestone — they evolve alongside the interpreter
 and publish their own version numbers.  Full designs live in their own documents.
 
-**`server` — HTTP server library** ([WEB_SERVER_LIB.md](WEB_SERVER_LIB.md)):
+**`server` — HTTP server library** ([WEB_SERVER_LIB.md](lib_plans/future/08-server/README.md)):
 A fully featured HTTP server written mostly in loft with a thin native Rust layer
 for TCP, TLS, WebSockets, ACME, and cryptographic primitives.  Phases:
 

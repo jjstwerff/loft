@@ -324,13 +324,13 @@ shipped in 0.8.6 alongside LSP.1.  Web IDE W2–W6 above uses the same
 
 | ID    | Title                                                  | E  | Design | Source              |
 |-------|--------------------------------------------------------|----|--------|---------------------|
-| SRV.1 | Plain HTTP routing + middleware                        | M  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.2 | HTTPS with static PEM certificates                     | S  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.3 | WebSocket support                                      | S  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.4 | Authentication: JWT, session, API key                  | M  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.5 | ACME / Let's Encrypt automatic certs                   | M  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.6 | CORS, rate limiting, static files                      | M  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.G | Game loop: ws_poll, broadcast, ConnectionRegistry      | M  | ✓      | WEB_SERVER_LIB.md   |
+| SRV.1 | Plain HTTP routing + middleware                        | M  | ✓      | lib_plans/future/08-server/README.md|
+| SRV.2 | HTTPS with static PEM certificates                     | S  | ✓      | lib_plans/future/08-server/README.md|
+| SRV.3 | WebSocket support                                      | S  | ✓      | lib_plans/future/08-server/README.md|
+| SRV.4 | Authentication: JWT, session, API key                  | M  | ✓      | lib_plans/future/08-server/README.md|
+| SRV.5 | ACME / Let's Encrypt automatic certs                   | M  | ✓      | lib_plans/future/08-server/README.md|
+| SRV.6 | CORS, rate limiting, static files                      | M  | ✓      | lib_plans/future/08-server/README.md|
+| SRV.G | Game loop: ws_poll, broadcast, ConnectionRegistry      | M  | ✓      | lib_plans/future/08-server/README.md|
 | GC.1  | WebSocket client + GameEnvelope protocol               | M  | ✓      | GAME_CLIENT_LIB.md  |
 | GC.2  | Lobby + matchmaking                                    | S  | ✓      | GAME_CLIENT_LIB.md  |
 | GC.3  | Fixed-timestep game loop                               | S  | ✓      | GAME_CLIENT_LIB.md  |
@@ -414,7 +414,7 @@ own scope never blocks a language tag.
 | Package system | [PACKAGES.md](PACKAGES.md) |
 | WASM + frame yield | [WASM.md](WASM.md) |
 | Web IDE | [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) |
-| Server library | [WEB_SERVER_LIB.md](WEB_SERVER_LIB.md) |
+| Server library | [WEB_SERVER_LIB.md](lib_plans/future/08-server/README.md) |
 | Game client library | [GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md) |
 | Graphics | [OPENGL_IMPL.md](lib_plans/future/02-graphics/IMPLEMENTATION.md) |
 | Renderer abstraction | [RENDERER.md](lib_plans/future/02-graphics/RENDERER.md) |

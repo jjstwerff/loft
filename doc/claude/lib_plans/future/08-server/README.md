@@ -1058,7 +1058,7 @@ module, and broadcasting the new state.
 **Addition:** `game_loop.loft` — a new source file in `server/src/` providing
 a server-side fixed-timestep loop.
 
-> **Superseded by [EVENT_LOOP.md](plans/future/23-event-loop/README.md).**  The
+> **Superseded by [EVENT_LOOP.md](../../../plans/future/23-event-loop/README.md).**  The
 > `GameLoop` / `run_game_loop` design below was never
 > implemented.  The canonical loop API is now EventLoop's
 > `el::run` (frame-driven, with a programmer-supplied
@@ -1067,7 +1067,7 @@ a server-side fixed-timestep loop.
 > same priority lanes handle player input, world tick, and
 > ambient work.  Kernel-multiplexed source polling (epoll /
 > kqueue / IOCP) is recorded as future work in
-> [EVENT_LOOP_DISCUSSION.md](plans/future/23-event-loop/DISCUSSION.md) but
+> [EVENT_LOOP_DISCUSSION.md](../../../plans/future/23-event-loop/DISCUSSION.md) but
 > doesn't ship as a separate API; the existing `el::run` is
 > the one entry point for both shapes.  The sketch below is
 > retained for design history only.

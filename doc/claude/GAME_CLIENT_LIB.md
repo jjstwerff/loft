@@ -9,7 +9,7 @@ that provides WebSocket connectivity, typed game message protocol, client-side
 prediction and server reconciliation, lobby management, and dynamic loading of
 loft programs compiled to WASM as hot-swappable game scripts.
 
-The companion server-side library is `server` ([WEB_SERVER_LIB.md](WEB_SERVER_LIB.md)).
+The companion server-side library is `server` ([WEB_SERVER_LIB.md](lib_plans/future/08-server/README.md)).
 
 ---
 

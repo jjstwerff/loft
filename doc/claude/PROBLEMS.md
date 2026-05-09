@@ -1620,7 +1620,7 @@ Not gating the current release.  Co-schedule with whichever of these
 lands first — they're the natural consumers and the work is cheaper
 done together than retrofitted later:
 
-- The `server` library (`doc/claude/WEB_SERVER_LIB.md`) — handler
+- The `server` library (`doc/claude/lib_plans/future/08-server/README.md`) — handler
   registries are the canonical use case.
 - The `game_client` / OpenGL game-loop work that registers per-entity
   behaviours via callback fields.

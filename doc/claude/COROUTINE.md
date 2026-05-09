@@ -1178,7 +1178,7 @@ but done by loft's own codegen.  The trade-off is deliberate:
   `src/generation/coroutine.rs` as a *maintenance* refactor — capability
   is unchanged.
 - **Async gen is off the planning horizon.**  If loft adds async I/O
-  (see [WEB_SERVER_LIB.md](WEB_SERVER_LIB.md)), the implementation
+  (see [WEB_SERVER_LIB.md](lib_plans/future/08-server/README.md)), the implementation
   will hand-roll async state machines the same way sync coroutines do
   today — not wait for upstream.  The pattern is well understood.
 

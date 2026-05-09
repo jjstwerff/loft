@@ -24,7 +24,7 @@ parallel mechanism are superseded:
 | Earlier design | Status | Replaced by |
 |---|---|---|
 | `Dispatcher` struct + `dispatch(env, &Dispatcher)` ([GAME_CLIENT_LIB.md § Dispatcher](../../../GAME_CLIENT_LIB.md#dispatcher-in-loft)) | Superseded paper, never implemented | EventLoop bidirectional handlers |
-| `run_game_loop(GameLoop, tick_fn)` ([WEB_SERVER_LIB.md § Server-side game loop](../../../WEB_SERVER_LIB.md)) | Superseded paper, never implemented | `el::run` with a programmer-supplied `poll_sources` callback (kernel-multiplexed source polling is recorded as future work in [EVENT_LOOP_DISCUSSION.md](DISCUSSION.md), not as a separate API) |
+| `run_game_loop(GameLoop, tick_fn)` ([WEB_SERVER_LIB.md § Server-side game loop](../08-server/README.md)) | Superseded paper, never implemented | `el::run` with a programmer-supplied `poll_sources` callback (kernel-multiplexed source polling is recorded as future work in [EVENT_LOOP_DISCUSSION.md](DISCUSSION.md), not as a separate API) |
 | `GameEnvelope { sender, recipient, sequence, timestamp, message: WsMessage }` + `MsgType` enum (`lib/game_protocol/src/game_protocol.loft`, 104 lines, used only by its own tests) | Superseded shipped paper — the structs compile but nothing depends on them | EventLoop wire frame: `[handler_id][priority][seq][flags][length][payload]` |
 
 The shipped `lib/game_protocol` will be reshaped (or replaced) to
@@ -386,7 +386,7 @@ infrastructure already ships for this design.  The EventLoop
   routing is exactly what this design wants; adding priority is
   "a per-msg_type priority table."
 
-- **Server-side game-loop design** (`WEB_SERVER_LIB.md` § Gap 4):
+- **Server-side game-loop design** (`../08-server/README.md` § Gap 4):
   `run_game_loop(cfg, tick_fn)` fixed-timestep loop, `Dispatcher`
   struct + `dispatch(env, &Dispatcher)`.  Designed; not yet
   implemented.
