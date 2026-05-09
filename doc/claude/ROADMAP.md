@@ -239,6 +239,94 @@ Every item below must be checked off before tagging — no "appears fixed" excep
 
 ---
 
+## All open plans — index by priority
+
+Comprehensive list of every open plan across `plans/` and `lib_plans/`.  Sorted by priority bucket (P0 active → P1 next → P2 within year → P3 longer → D deferred).  This is the single place to read for "what's open, what depends on what, when."
+
+**Priority legend:**
+- **P0** — actively in flight (max 2-3 by the active-plan discipline)
+- **P1** — next 6-12 months; ready to start
+- **P2** — within ~1 year; design ready, scheduled
+- **P3** — longer horizon; design exists, not actively scheduled
+- **D** — deferred (won't do absent a concrete trigger)
+
+### P0 — active
+
+| Plan | E | Depends on | Milestone | Status |
+|---|---|---|---|---|
+| [`plans/07-error-messages/`](plans/07-error-messages/) | M | — | cross-cuts | Phases 0-3 shipped (rustc-style renderer + caret + `--errors` CLI); phases 4-7 open |
+| [`plans/14-tuple-validation/`](plans/14-tuple-validation/) | M | — | 0.9.0 | Phases 00-01 shipped; 02-06 open.  P212 closed in passing.  Hosts the cross-mode harness used by 15/16/17/18/19/20 |
+
+### P1 — next 6-12 months (0.8.5 / 0.8.6)
+
+| Plan | E | Depends on | Milestone | Status |
+|---|---|---|---|---|
+| [`plans/future/25-native-debug/`](plans/future/25-native-debug/) | XS (NDB.0) / M (NDB.1) | — | 0.8.5 (NDB.0) / 0.9.0 (NDB.1) | NDB.0 = `--native-debug` flag with DWARF; NDB.1 = `.loft.map` + GDB/LLDB plugins |
+| [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) | XS-S per item | — | 0.8.5 (SH.1/2 done; DX.1/3 open) | SH/DX/NT items.  Per-item landing procedures in plan README |
+| [`lib_plans/future/05-game-infra/`](lib_plans/future/05-game-infra/) | M-MH per item | — | 0.8.6 (FFI.1-4) / 0.9.0 (W-warn) | Kitchen sink: FFI marshaller, cdylib loader, sprites, tilemap, collision, audio, HTML export, warnings |
+| [`lib_plans/future/09-lsp/`](lib_plans/future/09-lsp/) | M (LSP.1) / MH (LSP.2/3) | — | 0.8.6 (LSP.1, IDE plugins) / 0.9.0 (LSP.2/3) | `loft-lsp` + `loft-dap` + thin Eclipse / JetBrains / Neovim plugins |
+| [`lib_plans/future/11-packages/`](lib_plans/future/11-packages/) | S (PKG.7) / M (PKG.REG) | — | 0.8.6 | Pointer-plan: lock file + central registry MVP.  Package format itself shipped (14 lib/* use loft.toml) |
+
+### P2 — within ~1 year (0.9.0)
+
+| Plan | E | Depends on | Milestone | Status |
+|---|---|---|---|---|
+| [`plans/future/08-repl-and-introspection/`](plans/future/08-repl-and-introspection/) | M | — | 0.9.0 (P2) | Phases 0-1 shipped; phases 2-6 open.  REPL + IR/Rust/slot-table dump CLI |
+| [`plans/future/33-native-codegen-followups/`](plans/future/33-native-codegen-followups/) | XS-M per item | — | incremental | Pointer-plan: N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
+| [`plans/future/34-performance-followups/`](plans/future/34-performance-followups/) | S-MH per item | — | incremental (1.1+ for P1) | Pointer-plan: 7 optimization designs (P1-P3, N1-N3, W1).  P1 blocked on opcode-table capacity |
+| [`plans/future/35-quality-followups/`](plans/future/35-quality-followups/) | MH (P54) / S-M (Q1-Q4) | — | 0.9.0 (P54) | Pointer-plan: P54 sprint (JsonValue enum) + Q1-Q4 JSON ecosystem + Dep-inference + B2-B7 audit |
+| [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | 0.9.0 (foundational) | Conditional stdlib loading; trigger-based.  REGEX is first downstream consumer |
+| [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **lib_plans/11-packages PKG.REG** | 1.1+ | Move `lib/*/` into per-family GitHub repos.  Multi-release execution arc |
+
+### P3 — longer horizon (1.0.0 / 1.1+)
+
+| Plan | E | Depends on | Milestone | Status |
+|---|---|---|---|---|
+| [`plans/future/22-mutable-closures/`](plans/future/22-mutable-closures/) | M-MH | — | 1.1+ (no firm slot) | Locked-in spec.  Four-case closure-capture classification; evolves C38 |
+| [`plans/future/23-event-loop/`](plans/future/23-event-loop/) | MH | **P213 v4** (compiler bug) | 1.0.0 (with multiplayer) | Design spec.  PROTOCOL v1 (text-mode) shipped; v2 binary-mode designed |
+| [`plans/future/24-multiplayer-editor/`](plans/future/24-multiplayer-editor/) | M | **plans/32 v2 ground layer** | 1.0.0 | First real-game milestone — multi-client hex editor |
+| [`plans/future/26-match-peg/`](plans/future/26-match-peg/) | MH | — | 1.1+ | L3 PEG-style match patterns.  Cooperates with `lib_plans/01-regex` |
+| [`plans/future/29-server-features/`](plans/future/29-server-features/) | S-H per item | — | 1.1+ | C55/C56/A15/I13/C57 — language features for upcoming server / game-client work |
+| [`plans/future/30-sorted-slice/`](plans/future/30-sorted-slice/) | M | — | 1.1+ | A8: slicing, open-ended ranges, partial-key match on sorted/index |
+| [`plans/future/32-tic-tac-toe/`](plans/future/32-tic-tac-toe/) | M | — | 1.0.0 (with multiplayer) | Protocol-validation vehicle.  v1 shipped; v2/v3/v4 ground layers designed |
+| [`plans/future/21-retire-scratch/`](plans/future/21-retire-scratch/) | M | cooperates with 33 N8c.x + 34 N1 | incremental cleanup | Eliminate `stores.scratch` lifetime hazard.  No firm milestone |
+| [`lib_plans/future/01-regex/`](lib_plans/future/01-regex/) | M | **lib_plans/03-lazy-stdlib** | 1.1+ | Standalone regex library.  First lazy-loaded stdlib consumer |
+| [`lib_plans/future/02-graphics/`](lib_plans/future/02-graphics/) | H (multi-arc) | — | 1.0.0 (with IDE) | Graphics library bundle: 2D canvas + GLB + OpenGL + WebGL.  Low-level `gl_*` API shipped |
+| [`lib_plans/future/04-asset-pipeline/`](lib_plans/future/04-asset-pipeline/) | M | — | 1.0.0+ | Game asset workflow: prototype → artist polish → integration |
+| [`lib_plans/future/06-web-services/`](lib_plans/future/06-web-services/) | M-H per arc | — | 1.1+ (HTTP client) | JSON shipped; HTTP client + auth + WebSocket / SSE clients designed |
+| [`lib_plans/future/07-web-ide/`](lib_plans/future/07-web-ide/) | M per W item | **lib_plans/09-lsp LSP.1** + **lib_plans/11-packages R1 workspace split** | 1.0.0 (W2-W6) | Browser IDE: zero-server, full WASM interpreter, CodeMirror 6 |
+| [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | 1.0.0 | `server` library: HTTP routing, HTTPS, WebSocket, JWT, ACME, CORS, game loop |
+| [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | 1.0.0 | `game_client` library: WebSocket client, lobby, prediction, WASM script loading |
+| [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/07-web-ide W2** + moros editor MO.* + script-target build mode | 1.0.0 | Scene scripts authored in browser IDE; sandboxed; scene-JSON-shareable |
+| [`plans/future/15-closure-validation/`](plans/future/15-closure-validation/) | M | **plans/14 cross-mode harness** | incremental | Pre-flight 50% bug yield expected.  Closure round-trip validation matrix |
+| [`plans/future/16-coroutine-validation/`](plans/future/16-coroutine-validation/) | M | **plans/14 cross-mode harness** | incremental | Pre-flight 0/7 cells passing initially.  Coroutine round-trip validation |
+| [`plans/future/18-match-validation/`](plans/future/18-match-validation/) | M | **plans/14 cross-mode harness** | incremental | Pre-flight 33% hang rate on or-patterns / `@`-bindings |
+| [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | **plans/14 cross-mode harness** | incremental | Pre-flight 20% bug rate.  Struct-enum dispatch validation |
+| [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | **plans/14 cross-mode harness** | incremental | Self-deferred at pre-flight (panic does not currently reproduce).  Trigger to unpause: any user report of `index out of bounds` at `src/database/structures.rs:609` |
+
+### D — deferred (won't do absent trigger)
+
+| Plan | Trigger to unpause |
+|---|---|
+| [`plans/deferred/10-scope-exit-emission/`](plans/deferred/10-scope-exit-emission/) | A bug in this gate's territory, dep-tracking maintenance, or contributor interest |
+| [`plans/deferred/12-codegen-simplifications/`](plans/deferred/12-codegen-simplifications/) | Same trigger set as plan 13: 3+ template-path bugs OR ≥50 Op-annotation touches OR contributor appetite.  Tier 1 shipped on branch `plan-12-codegen-simplifications` |
+| [`plans/deferred/13-rust-template-migration/`](plans/deferred/13-rust-template-migration/) | 3+ template-path bugs OR major codegen evolution touching ≥50 Op annotations OR contributor appetite for multi-week refactor |
+| [`plans/deferred/28-const-store/`](plans/deferred/28-const-store/) | Phase B: Phase C lands large embedded stdlib cache.  Phase C: contributor appetite for multi-week `Data` serialization OR demonstrated WASM cold-start gap.  Phases A + D already shipped |
+
+### Cross-tracker dependency chains worth noting
+
+- **lib_plans/03-lazy-stdlib → lib_plans/01-regex** (registry mechanism → first consumer)
+- **lib_plans/11-packages PKG.REG → lib_plans/12-library-extraction** (registry → execution of monorepo split)
+- **lib_plans/11-packages R1 + lib_plans/09-lsp LSP.1 → lib_plans/07-web-ide** (workspace split + LSP server → browser IDE)
+- **plans/23-event-loop → lib_plans/10-game-client** (protocol abstraction → client library)
+- **plans/23-event-loop → plans/24-multiplayer-editor** (depends transitively via plans/32-tic-tac-toe v2 ground layer)
+- **plans/14-tuple-validation cross-mode harness → plans/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans)
+- **plans/33 N8c.x + plans/34 N1 → plans/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
+- **plans/22-mutable-closures spec → lib_plans/13-scriptable-scenes script API** (closure semantics inform user-script ergonomics)
+- **C57 / I13 (in plans/29-server-features) → lib_plans/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)
+
+---
+
 ## Demo applications — independent lifecycles
 
 Demo apps ship on their own cadence and do **not** gate any language release.  Per [`RELEASE.md` § Explicitly out of scope here](RELEASE.md#explicitly-out-of-scope-here).  If a demo surfaces a language-side bug, the fix lands under the relevant language milestone — but the demo's own scope never blocks a tag.
