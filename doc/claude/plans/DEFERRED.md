@@ -55,10 +55,6 @@ by a future session.
 |---|---|---|
 | (A) caveat — implicit type-inference of generic-tuple call results | plan-17 phase 01 (A) follow-up | Likely shares root cause with bug B.  Trigger: same as bug B (one fix may close both). |
 | `name @ pattern` inside or-patterns | plan-18 phase 01 feature decision | Default sequence (phase 02+ would address).  External trigger: user request, or 2nd request in any forum showing the workaround is awkward. |
-| Plan-06 phase 9b — tuple-element vector input to par | plan-06 (phase 9a closed by T1.8a) | Default sequence.  External trigger: any consumer that wants `par(vector<(A,B)>, …)` shape. |
-| Plan-06 phase 9c — tuple returns from par workers | plan-06 | Default sequence.  4 ignored canaries already filed.  External trigger: a parallel benchmark or feature wanting tuple-returning workers. |
-| Plan-06 phase 9d — fused for-binding tuple destructure in par | plan-06 | Default sequence.  External trigger: parser usability complaint about pre-bind workaround. |
-| Plan-06 phase 9e — D11 doc updates | plan-06 | Triggered automatically when 9b/9c/9d close. |
 | Plan-15 closure-DbRef leak (LIFETIME.md "Type::Function — NOT YET HANDLED") | plan-15 phase 03 (active risk) | Phase 03's spike-and-decide pass.  External trigger: long-running program (server, REPL) showing memory growth from closure usage. |
 
 ## Deferred bugs / P-issues

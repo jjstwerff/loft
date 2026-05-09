@@ -5,6 +5,32 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 06 — Simple typed `par`: everything is a store
 
+## Status
+
+**DONE 2026-05-09.**  Closure record in [ARC.md](ARC.md).
+Final commits: `f974770` (closeout docs + A8 deferral marker +
+A9 superseded by A4), `15a7aab` (P235 par half via wrapper
+synthesis — closes `par_tuple_destructure_in_for`), `bcac52f`
+(A8.b stitch_id consolidation in `src/native.rs` — 5
+`n_parallel_queue*` fns collapsed to thin wrappers, ~150 LOC
+saved).
+
+Final acceptance:
+- A1–A7 + A5b + A8.b + A11 shipped.
+- A8 (Queue trait collapse in `src/parallel.rs`) deferred
+  with audit — divergence is structural, not boilerplate.
+- A9 superseded by A4 (light path retired entirely).
+- A10 (browser parallel) out-of-scope; ships as its own arc.
+- Ignored par canaries: 8 → 1.  The remaining is
+  heterogeneous-vec-of-fn (D11a row 8), outside plan-06 scope.
+
+User-facing summary in [`../../CHANGELOG_TECHNICAL.md`](../../CHANGELOG_TECHNICAL.md)
+under "Plan-06 (typed-par redesign) closed 2026-05-09".
+
+The historical narrative (Goal / Why / Realised value) below
+explains what plan-06 set out to do and the bug-finding regime
+that surfaced during the work.
+
 ## Goal
 
 Replace today's branching `par` runtime with one uniform path: every
