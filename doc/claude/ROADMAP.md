@@ -67,6 +67,28 @@ canonical example: NATIVE.md stays at the doc root as
 architecture reference, the open N8b.3 / N8c.x / N20 items
 moved to a plan that points back at NATIVE.md sections.
 
+**Closing a plan: documentation must move out.**  When a
+plan ships and moves to `plans/finished/`, its reference
+content (how things work) must move to its proper home in
+the reference layer:
+
+- Library-scoped → `lib/<name>/README.md` (and inline
+  doc comments).
+- Project-wide → `doc/claude/*.md`.
+
+The `finished/<NN>-<slug>/` directory keeps only the
+closure record (commits, P-issues filed/closed, lessons).
+Other docs link to the new reference home, NOT to the
+closed plan.  Links to closed plans rot fastest because
+nothing keeps them honest.
+
+When a ROADMAP row's plan closes, the row's `Source` /
+`Notes` column updates to point at the new reference home,
+not at `plans/finished/<NN>-<slug>/`.
+
+See `plans/README.md § Closing a plan — documentation must
+move out` for the full specification.
+
 Today's ROADMAP rows are a mix: some already cite a plan
 (`plans/future/25-native-debug/README.md`), others still cite a
 flat `doc/claude/*.md` design doc.  As those design docs get

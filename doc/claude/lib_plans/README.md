@@ -59,6 +59,24 @@ work.
   `future/` → current → `finished/`, never back to
   "indefinitely parked."
 
+### Closing a plan — documentation must move out
+
+Same rule as `plans/` (see
+[`../plans/README.md § Closing a plan`](../plans/README.md#closing-a-plan--documentation-must-move-out)
+for the full specification).
+
+For library plans specifically, the natural reference home
+when a plan closes is **inside the library itself**:
+- `lib/<name>/README.md` — top-level library reference.
+- `lib/<name>/src/*.loft` — inline doc comments on
+  user-facing types and functions.
+- Per-feature deep-dive docs go alongside the code they
+  describe, not in `doc/claude/`.
+
+The `finished/<NN>-<slug>/README.md` keeps only the closure
+record; reference content moves to `lib/<name>/`.  Other
+docs link to the library, not to the closed plan.
+
 ## Ground rule — library plans never break downstream consumers
 
 A library plan's job is to evolve a library's API + implementation

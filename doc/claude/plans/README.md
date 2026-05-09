@@ -37,6 +37,56 @@ that links back to the relevant doc sections (the
 `33-native-codegen-followups/` plan is the canonical
 example of this shape).
 
+### Closing a plan — documentation must move out
+
+When a plan ships and moves to `finished/`, its
+**documentation content must move to its proper home** in
+the reference layer:
+
+- Library-scoped reference content → `lib/<name>/README.md`
+  (or other library-internal docs).
+- Project-wide reference content → `doc/claude/*.md`
+  (architecture, runtime semantics, language / API surface).
+
+**The `finished/<NN>-<slug>/` directory is for closure
+record only** — git history pointer, commit chain, P-issues
+filed/closed, lessons learned.  It is NOT a place that other
+docs link to for ongoing reference.
+
+**Why this matters:** retaining links to `finished/`
+plans across the docs creates drift.  A future contributor
+clicking through to a closed plan finds a closure record
+where they expected design content; the actual design has
+moved elsewhere or the design has been superseded by the
+implementation itself.  Links to closed plans rot fastest
+because nothing in the project keeps them honest.
+
+**How to apply on close:**
+1. Identify which sections of the plan are reference (how
+   things work) vs which are closure record (what was done,
+   when, with what commits).
+2. Move the reference sections into the appropriate
+   `doc/claude/*.md` or `lib/<name>/README.md` (creating new
+   docs if needed; updating existing ones if they cover
+   adjacent material).
+3. The `finished/<NN>-<slug>/README.md` keeps only the
+   closure record + a "moved to: <path>" pointer for the
+   reference content.
+4. Grep the codebase for links to `plans/<NN>-<slug>/` or
+   `plans/future/<NN>-<slug>/` and rewrite to point at the
+   new reference home.  No links should remain to
+   `finished/<NN>-<slug>/` after this step (other than
+   genuine closure-record-history references — typically
+   none).
+5. The CLAUDE.md doc index entry that previously pointed at
+   the plan is rewritten to point at the new reference home.
+
+This rule applies retroactively too: if you discover an
+existing `finished/` plan being linked from current docs,
+that's a cleanup signal — the reference content from that
+finished plan never moved out, OR the linker hasn't been
+updated to the moved-out location.
+
 ## Companion indexes — every parked item is discoverable
 
 Two files complement this README; together they ensure deferred
