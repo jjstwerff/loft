@@ -291,7 +291,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
 | [NATIVE.md](doc/claude/NATIVE.md) | Reference — native code generation pipeline (`src/generation/`), architecture + `codegen_runtime`, per-Op dispatch, N1-N8 implementation history.  `--native` is shipped (CI-gated, 108/108 native tests pass).  Open follow-up work in `## Open work` section. |
-| [PACKAGES.md](doc/claude/PACKAGES.md) | Reference — package format spec (`loft.toml`), package layout, function binding model, build pipeline, target matrix (interpreter / native / WASM), OpenGL case study, security model.  Format is SHIPPED: 14 `lib/*` packages already use it.  Open infrastructure work (registry MVP, lock file) tracked in [lib_plans/future/11-packages/](doc/claude/lib_plans/future/11-packages/README.md); execution arc (per-library extraction from monorepo) in [lib_plans/future/12-library-extraction/](doc/claude/lib_plans/future/12-library-extraction/README.md). |
+| [PACKAGES.md](doc/claude/PACKAGES.md) | Reference — package format spec (`loft.toml`), package layout, function binding model, build pipeline, target matrix (interpreter / native / WASM), OpenGL case study, security model.  Format is SHIPPED: 14 `lib/*` packages already use it.  Open infrastructure work (registry MVP, lock file) in `## Open work` section; execution arc (per-library extraction from monorepo) in [lib_plans/future/12-library-extraction/](doc/claude/lib_plans/future/12-library-extraction/README.md). |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [CHANGELOG.md](CHANGELOG.md) | User-facing release notes (shipped in release archives) |
@@ -326,7 +326,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) |
 | Implement a planned language feature (Tuples/Coroutines/etc.) | [ROADMAP.md](doc/claude/ROADMAP.md) → [PLANNING.md](doc/claude/PLANNING.md) → feature design doc (TUPLES.md / COROUTINE.md / STACKTRACE.md) |
 | Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [lib_plans/future/06-web-services/](doc/claude/lib_plans/future/06-web-services/) → [STDLIB.md](doc/claude/STDLIB.md) |
-| Implement `loft install <name>` registry | [lib_plans/future/11-packages/](doc/claude/lib_plans/future/11-packages/README.md) (open work) → [PACKAGES.md](doc/claude/PACKAGES.md) (format reference) |
+| Implement `loft install <name>` registry | [PACKAGES.md § Open work](doc/claude/PACKAGES.md#open-work) → [PACKAGES.md](doc/claude/PACKAGES.md) (format reference) |
 | Build or understand the `server` library | [lib_plans/future/08-server/README.md](doc/claude/lib_plans/future/08-server/README.md) |
 | Build or understand the `game_client` library | [lib_plans/future/10-game-client/README.md](doc/claude/lib_plans/future/10-game-client/README.md) |
 | Write or review `.loft` files | `.claude/skills/loft-write/SKILL.md` |

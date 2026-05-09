@@ -113,8 +113,8 @@ Unblocks 2+ downstream plans.  Lattice points in the dependency graph.
 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
-| PKG.REG | Central package registry MVP — `loft install <name>` | M | ✓ | lib_plans/future/11-packages/README.md |
-| PKG.7 | Lock file (`loft.lock`) for reproducible builds | S | ✓ | lib_plans/future/11-packages/README.md |
+| PKG.REG | Central package registry MVP — `loft install <name>` | M | ✓ | PACKAGES.md § Open work |
+| PKG.7 | Lock file (`loft.lock`) for reproducible builds | S | ✓ | PACKAGES.md § Open work |
 | PKG.EXTRACT | Move `lib/*/` out into per-family GitHub repos | L | ✓ | lib_plans/future/12-library-extraction/README.md |
 | FFI.1 | Generic type marshaller from `#native` signature | MH | ✓ | lib_plans/future/05-game-infra/README.md |
 | FFI.2 | Generic cdylib loader — scan exports, HashMap | S | ✓ | lib_plans/future/05-game-infra/README.md |
@@ -286,7 +286,7 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged b
 | [`plans/future/24-multiplayer-editor/`](plans/future/24-multiplayer-editor/) | M | **plans/32 TIC_TAC_TOE v2 ground layer** | Plan only.  First real-game milestone |
 | [`plans/future/32-tic-tac-toe/`](plans/future/32-tic-tac-toe/) | M | — | v1 shipped; v2/v3/v4 protocol-only ground layers designed |
 | [`lib_plans/future/02-graphics/`](lib_plans/future/02-graphics/) | H (multi-arc) | — | Low-level `gl_*` API shipped; renderer abstraction designed |
-| [`lib_plans/future/07-web-ide/`](lib_plans/future/07-web-ide/) | M per W item | **lib_plans/09-lsp LSP.1** + **lib_plans/11-packages R1 workspace split** | W2-W6 |
+| [`lib_plans/future/07-web-ide/`](lib_plans/future/07-web-ide/) | M per W item | **lib_plans/09-lsp LSP.1** + **PACKAGES.md § Open work R1 workspace split** | W2-W6 |
 | [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | `lib/server/` has 1234 lines of starting code; design covers full feature set |
 | [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
 | [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/07-web-ide W2** + moros editor MO.* + script-target build mode | Plan-only |
@@ -297,8 +297,8 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged b
 |---|---|---|---|
 | [`lib_plans/future/05-game-infra/`](lib_plans/future/05-game-infra/) | M-MH per item | — | FFI.1-4 unblock third-party native extensions |
 | [`lib_plans/future/09-lsp/`](lib_plans/future/09-lsp/) | M (LSP.1) / MH (LSP.2/3) | — | Pure future.  LSP.1 unblocks 4 IDE plugins + browser IDE |
-| [`lib_plans/future/11-packages/`](lib_plans/future/11-packages/) | S-M | — | Pointer-plan.  PKG.7 + PKG.REG.  Format itself shipped (14 lib/* use loft.toml) |
-| [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **lib_plans/11-packages PKG.REG** | Multi-release execution arc |
+| [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG.  Format itself shipped (14 lib/* use loft.toml) |
+| [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
 | [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | Foundational; REGEX is first downstream consumer |
 
 ### U — Ease of use
@@ -346,8 +346,8 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged b
 ### Cross-tracker dependency chains worth noting
 
 - **lib_plans/03-lazy-stdlib → lib_plans/01-regex** (registry mechanism → first consumer)
-- **lib_plans/11-packages PKG.REG → lib_plans/12-library-extraction** (registry → execution of monorepo split)
-- **lib_plans/11-packages R1 + lib_plans/09-lsp LSP.1 → lib_plans/07-web-ide** (workspace split + LSP server → browser IDE)
+- **PACKAGES.md § Open work PKG.REG → lib_plans/12-library-extraction** (registry → execution of monorepo split)
+- **PACKAGES.md § Open work R1 + lib_plans/09-lsp LSP.1 → lib_plans/07-web-ide** (workspace split + LSP server → browser IDE)
 - **plans/23-event-loop → lib_plans/10-game-client** (protocol abstraction → client library)
 - **plans/23-event-loop → plans/24-multiplayer-editor** (depends transitively via plans/32-tic-tac-toe v2 ground layer)
 - **plans/14-tuple-validation cross-mode harness → plans/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)

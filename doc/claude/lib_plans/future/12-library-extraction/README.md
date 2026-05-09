@@ -13,13 +13,13 @@ This is the **execution arc** for **PKG.EXTRACT** in
 [ROADMAP.md](../../../ROADMAP.md).  The infrastructure work
 (package registry MVP, lock file, format extensions) lives
 in the sibling plan
-[`../11-packages/`](../11-packages/).  This plan picks up
+[PACKAGES.md § Open work](../../../PACKAGES.md#open-work).  This plan picks up
 once the infrastructure ships.
 
 ## Status
 
 **Blocked** on PKG.REG (central registry MVP) landing in
-[`../11-packages/`](../11-packages/).  Until `loft install
+[PACKAGES.md § Open work](../../../PACKAGES.md#open-work).  Until `loft install
 <name>` works against a registry, there's no consumption
 path for an extracted library.
 
@@ -28,28 +28,29 @@ validated schedule.  Some libraries may extract early
 (stable, low-churn); others stay in the monorepo until
 their API matures.
 
-## Why a separate plan from `11-packages/`
+## Why a separate plan from PACKAGES.md infrastructure work
 
-11-packages = INFRASTRUCTURE (registry, lock file, format).
-This plan = EXECUTION (which library extracts when, how
-to migrate downstream consumers, version-sync policy).
+PACKAGES.md § Open work = INFRASTRUCTURE (registry, lock
+file, format).  This plan = EXECUTION (which library
+extracts when, how to migrate downstream consumers,
+version-sync policy).
 
 Different lifecycles:
-- 11-packages targets one focused infrastructure arc
+- PACKAGES.md infrastructure work targets one focused arc
   (likely 0.8.6).
 - This plan spans multiple releases — each library extracted
   on its own validated schedule.
 
 Different acceptance criteria:
-- 11-packages: "`loft install <name>` works, `loft.lock`
-  honored, signing verifies."
+- Infrastructure work: "`loft install <name>` works,
+  `loft.lock` honored, signing verifies."
 - This plan: per-library — "lib/<X>/ removed from monorepo,
   `loft install <X>` from external repo produces identical
   behaviour, downstream consumers (other libraries, test
   scripts, examples) migrated."
 
 Different audiences:
-- 11-packages readers care about how the registry / format
+- PACKAGES.md readers care about how the registry / format
   works.
 - This plan readers care about whether their favorite
   library is going to break or move.
@@ -148,7 +149,7 @@ Listed here so future-you doesn't have to re-discover them.
 
 ## See also
 
-- [`../11-packages/`](../11-packages/) — package registry +
+- [PACKAGES.md § Open work](../../../PACKAGES.md#open-work) — package registry +
   format infrastructure (PREREQUISITE)
 - [`../../../PACKAGES.md`](../../../PACKAGES.md) — package
   format reference
