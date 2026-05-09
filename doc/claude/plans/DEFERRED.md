@@ -3,95 +3,60 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Deferred Work — Internal Index
+# Deferred Plans — Trigger Index
 
-Single source of truth for every parked validation phase, deferred
-P-issue, and "noted but not now" item.  Distinct from
-`doc/claude/USER_FACING.md` (which filters this list to
-user-visible-only) and `ROADMAP.md` (planned-but-not-started
-features).
+Index of every `plans/deferred/*` plan with the **concrete signal**
+that should re-activate it.  Distinct from:
 
-**Convention.** Every row carries a `Trigger to unpause:` value —
-the **concrete signal** that should re-activate the work.  No row
-without a trigger.  When the signal arrives, the row moves out of
-this file (into a current plan, a P-issue fix, or a release note).
+- `plans/future/*` — paused with intent to finish; tracked on
+  [`../ROADMAP.md`](../ROADMAP.md), not here.
+- `DESIGN_DECISIONS.md` — closed-by-decision (won't do, no trigger).
+- `PROBLEMS.md` — open bugs with reproducers.
 
-**Closed-work hygiene** — see `plans/README.md § Companion indexes`
-for the project-wide rule.  Short version: closed items are
-removed entirely; their closure is recorded in git history,
-regression tests, plan READMEs, PROBLEMS.md, and CHANGELOG.md.
+**Convention.**  Every row carries a `Trigger` value.  When the
+signal arrives, the plan moves from `plans/deferred/` to
+`plans/future/` (or directly into a current plan), the ROADMAP
+gains a row citing it, and the row leaves this file.
 
-**Discoverability.** Two grep targets:
-
-```bash
-# Every parked item with its trigger:
-grep -r "Trigger to unpause:" doc/claude/
-
-# Every parked test (the locked-in regression net):
-cargo test --release -- --ignored 2>&1 | grep "^test " | head -50
-```
-
-The first produces the doc index; the second produces the
-test-suite index.  Items in either grep list are auto-discoverable
-by a future session.
+Full per-plan trigger detail lives in each plan's README; this
+file is the one-line index.
 
 ---
 
-## Deferred plans (full plan parked)
+## Deferred plans
 
-| Plan | Status | Trigger to unpause |
+| Plan | One-line summary | Trigger |
 |---|---|---|
-| [`14-tuple-validation/`](14-tuple-validation/) phases 02–06 | Phases 00 + 01 shipped in PR #207.  P212 (nested-tuple panic) closed 2026-05-04.  Phase 02 matrix wiring not yet started; phases 03-06 untouched. | Default sequence.  No outstanding S0/S1 bugs in the nested-tuple shape. |
-| [`15-closure-validation/`](15-closure-validation/) | Drafted; phase 00 wiring not started.  P213 + P215 fully closed 2026-05-05 via the `Parts::ChildRec` layout-widening fix — capturing closures now work in struct fields end-to-end (int captures verified on both backends; text-return is a separate native-codegen issue tracked as P227).  Open: P214 (vector of non-capturing closures, C0/D4), P216 (tuple capture in closure, C4/D1). | Any of P214/P216 fixed lifts the next batch of cells. |
-| [`16-coroutine-validation/`](16-coroutine-validation/) | Drafted; phase 00 wiring not started.  P210 (Value::Loop missed in collect_segments) closed 2026-05-04; P211 (yield text — separate `next_text` channel on `LoftCoroutine`) closed 2026-05-05.  Y3 (Reference) and Y4 (tuple) cells still need re-probe; P218 (yield format-string with captured param) and P219 (for-vector body in generator) filed 2026-05-05 as P211-adjacent native codegen bugs. | Re-probe Y3/Y4 cells with the new yield-type infrastructure.  Then choose between P218 / P219 fixes vs scheduled feature work for Y3/Y4. |
-| [`18-match-validation/`](18-match-validation/) phases 02–05 | Phase 01 closed in PR #207 (or-pattern + `@`-binding hang).  P209 (match-guard binding) closed 2026-05-04.  Range patterns + guards now pass; phase 02 wiring (matrix tests for range / guard / null patterns) not yet started. | Default sequence.  No outstanding S0 in match guards. |
-| [`19-struct-enum-validation/`](19-struct-enum-validation/) phases 00-02 + 04-06 | Phase 03 closed in PR #207 (method-on-parent-enum dispatch).  Phase 00 wiring + remaining phases not started; not pre-flighted in 2026-05-04 round. | Default sequence.  No outstanding S0/S1 surface. |
-| [`20-collection-validation/`](20-collection-validation/) | **Self-deferred** — pre-flight panic at `src/database/structures.rs:609` does not currently reproduce (60 hammer runs, 0 panics on unchanged binary). | Any user-reported `index out of bounds: the len is N but the index is 65535` panic at `src/database/structures.rs:609`, OR a deterministic reproducer that surfaces during plans 15/16/17/18/19 cell runs. |
-
-## Deferred plan-phase items (within a partly-shipped plan)
-
-| Item | Plan / phase | Trigger to unpause |
-|---|---|---|
-| (A) caveat — implicit type-inference of generic-tuple call results | plan-17 phase 01 (A) follow-up | Likely shares root cause with bug B.  Trigger: same as bug B (one fix may close both). |
-| `name @ pattern` inside or-patterns | plan-18 phase 01 feature decision | Default sequence (phase 02+ would address).  External trigger: user request, or 2nd request in any forum showing the workaround is awkward. |
-| Plan-15 closure-DbRef leak (LIFETIME.md "Type::Function — NOT YET HANDLED") | plan-15 phase 03 (active risk) | Phase 03's spike-and-decide pass.  External trigger: long-running program (server, REPL) showing memory growth from closure usage. |
-
-## Deferred bugs / P-issues
-
-| ID | What | Trigger to unpause |
-|---|---|---|
-
-## Decision-pending items (not bugs, but choices)
-
-| Question | Surfaced by | Trigger to decide |
-|---|---|---|
-| Lift T1.11a (tuples in struct fields) — already lifted in 0.8.4 via inline `__tuple<…>` layout per `parse_field` / `set_field_check` | plan-14 phase 05 — closed by lift | (already decided / shipped) |
-| Decide closure-leak (plan-15 phase 03): fix vs document | plan-15 phase 03 active risk | Trigger: phase 03 execution (decision section filled in before any code). |
-| Decide stdlib `to_text` vs retract Printable claim (plan-17 phase 03) | plan-17 phase 01 (C) — closed by adding stdlib impls | (already decided / shipped) |
+| [`deferred/10-scope-exit-emission/`](deferred/10-scope-exit-emission/) | Drop the `(dep.is_empty() ‖ is_work_ref)` gate on scope-exit emission; align with the lift-frame rule. | A new bug surfaces that's gated by the current condition, OR the lift-frame work uncovers a clean unifying invariant. |
+| [`deferred/12-codegen-simplifications/`](deferred/12-codegen-simplifications/) | Tier-2 codegen simplifications.  Tier 1 already shipped; Tier 2 is plan-13's preamble. | Same as plan-13 — 3+ template-path bugs, major codegen evolution forcing ≥50 Op-annotation touches, or contributor appetite for a large structural refactor. |
+| [`deferred/13-rust-template-migration/`](deferred/13-rust-template-migration/) | Move per-Op codegen from string templates to typed Rust emitter functions. | Multiple template-path bugs accumulate (3+ P-issues over a few months tracing back to template-substitution edge cases), OR a major codegen evolution makes the per-emitter form pay back its migration cost. |
+| [`deferred/28-const-store/`](deferred/28-const-store/) | Phase B (mmap cache loading) + Phase C (WASM pre-compiled stdlib). | Phase B: Phase C lands a large embedded stdlib cache (mmap pays off only above some size threshold).  Phase C: contributor appetite for H-effort `Data` serialization across 130+ public members + recursive enums, OR demonstrated need for sub-100ms WASM cold-start past what `include_bytes!` + parse achieves.  Both phases roadmap-tracked (CS.B / CS.C1-C3). |
 
 ---
 
 ## How rows leave this file
 
-A row leaves DEFERRED.md when the trigger fires AND the work is
-either:
-- **Closed in code** — entry moves to `CHANGELOG.md` or
-  `CHANGELOG_TECHNICAL.md`; the regression test stays as
-  permanent lock-in.
-- **Reclassified as non-goal** — entry moves to
+A row leaves DEFERRED.md when its trigger fires:
+
+- **Trigger fires + work starts** — plan moves from `deferred/` to
+  `future/` (or directly into a current plan); ROADMAP gains a
+  row; the entry here is removed.
+- **Reclassified as won't-do** — entry moves to
   `DESIGN_DECISIONS.md` with rationale.
-- **Promoted to active plan phase** — entry no longer "deferred";
-  it's now a current phase of an open plan.
+- **Plan ships** — closure via the standard route
+  (`_CLOSURE_CHECKLIST.md`); this file isn't involved.
 
 ---
 
 ## Cross-references
 
-- [USER_FACING.md](../USER_FACING.md) — user-visible subset of
-  this file; what would go in release notes.
-- [PROBLEMS.md](../PROBLEMS.md) — open P-issues with reproducers.
-- [DESIGN_DECISIONS.md](../DESIGN_DECISIONS.md) — closed-by-decision
-  register.
-- [ROADMAP.md](../ROADMAP.md) — planned features (distinct axis from
-  deferred-during-validation).
-- [README.md](README.md) — plans index; live + deferred + finished.
+- [`README.md`](README.md) — plans index (current + future +
+  deferred + finished tables).
+- [`../ROADMAP.md`](../ROADMAP.md) — work-list view.  Future plans
+  live there; deferred plans do not appear (they only return to
+  ROADMAP when their trigger fires).
+- [`../DESIGN_DECISIONS.md`](../DESIGN_DECISIONS.md) — closed-by-
+  decision register (won't do).
+- [`../PROBLEMS.md`](../PROBLEMS.md) — open bugs with reproducers.
+- [`../USER_FACING.md`](../USER_FACING.md) — user-visible deferred
+  items (subset of this list, filtered).

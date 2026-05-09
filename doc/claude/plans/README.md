@@ -213,9 +213,11 @@ content that should move to `doc/claude/*.md`.
 Two files complement this README; together they ensure deferred
 work is never silently dropped.
 
-- **[`DEFERRED.md`](DEFERRED.md)** — internal index of every parked
-  validation phase, deferred P-issue, and "noted but not now" item.
-  Each row carries an explicit `Trigger to unpause:` value.
+- **[`DEFERRED.md`](DEFERRED.md)** — trigger index for the
+  `plans/deferred/` plans only.  Each row gives the concrete signal
+  that should re-activate the plan.  Future plans (`plans/future/`)
+  live on [`../ROADMAP.md`](../ROADMAP.md), not here — they're
+  paused with intent to finish, not awaiting a trigger.
 - **[`../USER_FACING.md`](../USER_FACING.md)** — the subset of
   DEFERRED.md that downstream users would notice if shipped, with
   release-note language, workarounds, and severity tiers
