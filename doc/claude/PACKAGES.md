@@ -693,8 +693,8 @@ nothing else works.  P5-P6 can proceed in parallel with P3-P4 since the
 
 ## See also
 - the External Libraries section below — Current Phase 1 library loading
-- [OPENGL.md](OPENGL.md) — OpenGL rendering design
-- [OPENGL_IMPL.md](OPENGL_IMPL.md) — Step-by-step OpenGL implementation
+- [OPENGL.md](lib_plans/future/02-graphics/README.md) — OpenGL rendering design
+- [OPENGL_IMPL.md](lib_plans/future/02-graphics/IMPLEMENTATION.md) — Step-by-step OpenGL implementation
 - [WASM.md](WASM.md) — WASM architecture overview
 - [WASM.md](WASM.md) — Virtual filesystem bridge steps
 

@@ -316,10 +316,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) | `game_client` library design — WebSocket client, multiplayer protocol, prediction, WASM script loading |
 | [SERVER_FEATURES.md](doc/claude/SERVER_FEATURES.md) | Language features for server/client ergonomics — C55 type aliases, C56 `?? return`, A15 `parallel {}`, I13 iterator protocol, C57 decorators |
 | [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | W1.1 single-file HTML export — native WASM compilation for browser |
-| [OPENGL.md](doc/claude/OPENGL.md) | 2D RGBA drawing library + OpenGL/WebGL/GLB 3D rendering design |
-| [OPENGL_IMPL.md](doc/claude/OPENGL_IMPL.md) | Step-by-step implementation checklist: canvas → GLB → OpenGL → WebGL |
-| [RENDERER.md](doc/claude/RENDERER.md) | High-level renderer design — scene-driven PBR with shadows, helper abstractions |
-| [WEB_EXAMPLES.md](doc/claude/WEB_EXAMPLES.md) | Web gallery + unified rendering: native OpenGL / WebGL / GLB from one API |
+| [lib_plans/future/02-graphics/README.md](doc/claude/lib_plans/future/02-graphics/README.md) | Future library plan — graphics: 2D RGBA drawing + OpenGL/WebGL/GLB 3D rendering library design.  Companions: [IMPLEMENTATION.md](doc/claude/lib_plans/future/02-graphics/IMPLEMENTATION.md) (step-by-step ordered checklist: canvas → GLB → OpenGL → WebGL), [RENDERER.md](doc/claude/lib_plans/future/02-graphics/RENDERER.md) (high-level renderer — scene-driven PBR with shadows, helper abstractions), [GALLERY.md](doc/claude/lib_plans/future/02-graphics/GALLERY.md) (web example gallery + unified rendering across native OpenGL / WebGL / GLB). |
 | [GAME_INFRA.md](doc/claude/GAME_INFRA.md) | Game infrastructure: sprites, tilemap, collision, audio, FFI, HTML export, warnings |
 | [PIPELINE.md](doc/claude/PIPELINE.md) | Game asset pipeline: AI prototype → artist polish → integration |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |

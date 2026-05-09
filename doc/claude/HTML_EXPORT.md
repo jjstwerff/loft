@@ -512,6 +512,6 @@ fn html_export_produces_file() {
 ## See also
 
 - [WASM.md](WASM.md) — Interpreter WASM architecture
-- [OPENGL.md](OPENGL.md) — Graphics library design
+- [OPENGL.md](lib_plans/future/02-graphics/README.md) — Graphics library design
 - [GAME_INFRA.md](GAME_INFRA.md) § W1.1 — Original sketch
-- [OPENGL_IMPL.md](OPENGL_IMPL.md) — Implementation checklist
+- [OPENGL_IMPL.md](lib_plans/future/02-graphics/IMPLEMENTATION.md) — Implementation checklist

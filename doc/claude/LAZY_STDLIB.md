@@ -138,8 +138,8 @@ Sub-modules are the right shape whenever:
 | `http_client` | planned (BROADENING.md) | `http.get` / `http.post` / `http.Client` reference |
 | `server` | planned (WEB_SERVER_LIB.md) | `Server` / `Route` type reference |
 | `audio` | already exists (G5/G6) | `play(...)` / `Sound` construction |
-| `opengl` | already exists (OPENGL.md) | `Scene` / `Mesh` / `Shader` reference |
-| `renderer` | planned (RENDERER.md) | `Renderer` / `Camera` reference |
+| `opengl` | already exists (lib_plans/future/02-graphics/README.md) | `Scene` / `Mesh` / `Shader` reference |
+| `renderer` | planned (lib_plans/future/02-graphics/RENDERER.md) | `Renderer` / `Camera` reference |
 | `crypto` | planned | `hash(...)` / `hmac(...)` / AEAD primitives |
 | `csv` / `parquet` | planned | reader / writer type reference |
 

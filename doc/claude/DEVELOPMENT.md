@@ -155,7 +155,7 @@ Run through this list before pushing.  Skip items that are clearly unaffected.
 | `doc/claude/CAVEATS.md` | Edge cases were fixed or **any new workaround discovered** (add with test reference) |
 | `doc/claude/TESTING.md` § Coverage Gaps | Test coverage improved or new gaps identified |
 | `README.md` | New user-facing features, CLI commands, or examples added |
-| Feature design doc (e.g. `PACKAGES.md`, `OPENGL.md`) | Implementation diverged from design, or phases completed |
+| Feature design doc (e.g. `PACKAGES.md`, `lib_plans/future/02-graphics/README.md`) | Implementation diverged from design, or phases completed |
 | `doc/claude/STDLIB.md` | New stdlib functions or types added |
 | `doc/claude/LOFT.md` | Language syntax or semantics changed |
 | `doc/claude/INTERNALS.md` | New opcodes, state changes, or native functions added |

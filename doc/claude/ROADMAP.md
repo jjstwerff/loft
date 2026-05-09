@@ -371,5 +371,5 @@ own scope never blocks a language tag.
 | Web IDE | [WEB_IDE.md](WEB_IDE.md) |
 | Server library | [WEB_SERVER_LIB.md](WEB_SERVER_LIB.md) |
 | Game client library | [GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md) |
-| Graphics | [OPENGL_IMPL.md](OPENGL_IMPL.md) |
-| Renderer abstraction | [RENDERER.md](RENDERER.md) |
+| Graphics | [OPENGL_IMPL.md](lib_plans/future/02-graphics/IMPLEMENTATION.md) |
+| Renderer abstraction | [RENDERER.md](lib_plans/future/02-graphics/RENDERER.md) |

@@ -21,7 +21,7 @@ workloads are chosen specifically because they stress areas where interpreters s
 | Matrix math per frame | Dense float arithmetic; tests `single` operation throughput |
 | `draw_text_box` wrapping | String iteration + repeated `measure_text` calls |
 
-Each phase should be **timed and recorded in [PERFORMANCE.md](PERFORMANCE.md)** when
+Each phase should be **timed and recorded in [PERFORMANCE.md](../../../PERFORMANCE.md)** when
 completed.  If a phase is unacceptably slow, the bottleneck is identified and fixed in
 the interpreter before the next phase begins — this is the primary mechanism for
 ensuring loft is fast enough for real compute workloads.

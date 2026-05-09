@@ -46,8 +46,8 @@ The deliberate choice to implement the rasterizer, matrix math, and GLB writer i
 > ready for production compute workloads.  If it is not, the bottleneck is visible and
 > measurable, and the fix goes into the interpreter.*
 
-Each phase of [OPENGL_IMPL.md](OPENGL_IMPL.md) therefore doubles as a performance
-regression test.  Benchmark numbers should be recorded in [PERFORMANCE.md](PERFORMANCE.md)
+Each phase of [OPENGL_IMPL.md](IMPLEMENTATION.md) therefore doubles as a performance
+regression test.  Benchmark numbers should be recorded in [PERFORMANCE.md](../../../PERFORMANCE.md)
 as each phase is completed.
 
 ---
@@ -1556,7 +1556,7 @@ The prefixed naming in the table below is retained for readability, not necessit
 ### Flat namespace — loop variable uniqueness
 
 All functions in a `.loft` file share one global variable namespace (see
-[LOFT.md](LOFT.md)).  Every loop variable in the library
+[LOFT.md](../../../LOFT.md)).  Every loop variable in the library
 uses a function-specific prefix (e.g. `wu_`, `bz_`, `sf_`, `sg_`, `rl_`, `us_`) to
 prevent collisions across functions.
 
