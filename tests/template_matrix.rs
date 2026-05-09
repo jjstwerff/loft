@@ -580,3 +580,41 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 05 — B4 nested + B5 two-T (mostly blocked) ───────────
+//
+// B5 (two-T parameters) is a confirmed PARSER FEATURE GAP per
+// the plan-17 README — `<A: B1, B: B2>`, `<A, B>`, and
+// `where`-clauses all parse-error at the comma in pre-flight
+// (2026-05-04).  Re-verified 2026-05-09: still parse-errors.
+// All B5 cells are CLOSED:feature-gap; no cells in the binary.
+//
+// B4 (op-sugar) was largely covered by `harness_smoke_template`
+// + `u1_b4_addable_dbl_float`.  Composition into more complex
+// shapes mostly hits other P-issues:
+// - B4 inside tuple element (`(x, x + x)`) — P237.
+// - B4 inside vector push — P241.
+// - B4 result interpolated in format-string `{x + x}` — P242.
+//
+// One workaround cell ships below: explicit `to_text()` to
+// route around P242 for op-sugar in inline format.
+
+// U8 × B4 (workaround form) — op-sugar result hoisted to local
+// then to_text()'d for format-string interpolation.  Direct
+// inline `println("val={x + x}")` triggers P242; this cell
+// pins the workaround so the regression net catches future
+// breakage of THAT path.
+cross_mode!(
+    u8_b4_addable_to_text_format,
+    r#"
+    fn show_dbl<T: Addable + Printable>(x: T) {
+        s = x + x;
+        label = s.to_text();
+        println("dbl={label}");
+    }
+    fn test() {
+        show_dbl(7);
+        show_dbl(3.5);
+    }
+    "#
+);

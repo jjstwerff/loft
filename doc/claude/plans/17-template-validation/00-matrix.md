@@ -106,8 +106,43 @@ from earlier phases (`u2_b2_multibound_eq_or_gt_int`,
   on both.  Concrete-type version works on both.  No clean
   workaround.  Reproducer: /tmp/p_followups/p240_*.loft.
 
-Phase 05+ (op-sugar in nested contexts + two-T generics)
-lands in subsequent commits.
+**Phase 05 (op-sugar nested + two-T generics) DONE 2026-05-09.**
+One new cell added: `u8_b4_addable_to_text_format` — verifies
+the workaround for P242 (op-sugar result hoisted to local then
+explicit `to_text()` for format-string interpolation).  All 26
+cells pass under both backends.
+
+**Phase 05 verified two feature gaps + surfaced 2 new
+P-issues:**
+- **B5 two-T generics** — confirmed FEATURE GAP (parse-error
+  on `<A: B1, B: B2>`, `<A, B>`, and `where`-clauses).  Per
+  the plan-17 README: "scheduled feature work, not bug-fix
+  gating."  All B5 cells flip from FIX:05 to
+  CLOSED:feature-gap-two-T.
+- **U4 generic structs** — verified FEATURE GAP (`struct
+  Box<T> { val: T }` parse-errors).  All U4 cells flip from
+  CLOSED:no-generic-structs (verify in 01) to CLOSED:no-
+  generic-structs (verified).
+- **P241** (new) — building or pushing into `vector<T>`
+  inside a generic function crashes both backends.  Sibling of
+  P239 (consume side); P241 is the construct/push side.  Same
+  root cause family.  Reproducer:
+  /tmp/p_followups/p241_*.loft.
+- **P242** (new) — format-string interpolation of a `T`
+  variable in a generic body fails on both backends.
+  Workaround: explicit `to_text()` first, then interpolate
+  the resulting text.  Reproducer:
+  /tmp/p_followups/p242_*.loft.
+
+The matrix is now fully populated:
+- 26 PASS cells across U1, U2, U3, U6, U7, U8 × B0–B4.
+- BLOCKED cells reference the relevant P-issue (P237 / P239 /
+  P241 / P242).
+- CLOSED cells reference the feature gap (no-generic-structs
+  / two-T).
+
+Phase 06 (matrix freeze + doc) and the plan-17 closeout land
+in the next commit.
 
 ## Goal
 
@@ -125,14 +160,14 @@ bound) since each interacts differently with the type system.
 
 | | B0 (no bound) | B1.O Ordered | B1.E Equatable | B1.A Addable | B1.P Printable | B2 multi-bound | B3 user-iface | B4 op-sugar | B5 two-T |
 |---|---|---|---|---|---|---|---|---|---|
-| **U1** body op | PASS:u1_b0_no_bound_unused_t | PASS:u1_b1o_ordered_compare | PASS:u1_b1e_equatable_check | PASS:u1_b1a_addable_sum_three (`+` only — Addable does not include `-`) | PASS:u1_b1p_printable_concat (P208 closure verified) | PASS:u2_b1ao_addable_ordered_min_sum (covers B2 op-mix) | PASS:u1_b3_user_iface_showable_concat | PASS:harness_smoke_template (B4 dbl) | FIX:05 |
-| **U2** T return | PASS:u2_b0_no_bound_identity_int | PASS:u2_b1o_ordered_max_int | PASS:u2_b1e_equatable_pick | PASS:u2_b1ao_addable_ordered_min_sum (Addable+Ordered) | PASS:u2_b1p_printable_show (covers (C) closure) | PASS:u2_b2_multibound_eq_or_gt_int (cmp_eq) | PASS:u2_b3_user_iface_shape_area | PASS:u1_b4_addable_dbl_float | FIX:05 |
-| **U3** tuple-of-T return | PASS:u3_b0_no_bound_pair_int | PASS:u3_b1o_ordered_min_max + u3_b1o_ordered_destructure | PASS:u3_b1e_equatable_pair_when_eq | PASS:u3_b1a_addable_pair_with_hoisted_sum (inline form blocked by P237) | FIX:03 (Printable inference) | PASS:u3_b2_addable_ordered_pair | FIX:04 | (covered by U1.B4 smoke + U3.B1.A hoist form) | FIX:05 |
-| **U4** struct field of T | CLOSED:no-generic-structs (verify in 01) | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED |
-| **U5** vector-of-T input | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 |
-| **U6** vector-of-T output | PASS:u6_b0_no_bound_passthrough (no-iter pass-through; iter forms blocked by P239) | BLOCKED:P239 (iter) | BLOCKED:P239 (iter) | BLOCKED:P239 (iter) | BLOCKED:P239 (iter) | BLOCKED:P239 (iter) | FIX:04 | FIX:05 | FIX:05 |
-| **U7** multi-T tuple-return arity ≥3 | FIX:02 | PASS:u7_b1o_ordered_triple_arity_three + u7_b1o_ordered_nested_pair | FIX:02 | FIX:02 (P237 in inline form) | FIX:03+02 | FIX:02 | FIX:02 | FIX:05+02 | FIX:05 |
-| **U8** T inside format / inline expr | FIX:02 (tuple-elem-in-format) | PASS:u8_b1o_ordered_inline_format | FIX:01 | PASS-pre | FIX:03 | FIX:01 | FIX:04 | FIX:05 | FIX:05 |
+| **U1** body op | PASS:u1_b0_no_bound_unused_t | PASS:u1_b1o_ordered_compare | PASS:u1_b1e_equatable_check | PASS:u1_b1a_addable_sum_three (`+` only — Addable does not include `-`) | PASS:u1_b1p_printable_concat (P208 closure verified) | PASS:u2_b1ao_addable_ordered_min_sum (covers B2 op-mix) | PASS:u1_b3_user_iface_showable_concat | PASS:harness_smoke_template (B4 dbl) | CLOSED:feature-gap-two-T |
+| **U2** T return | PASS:u2_b0_no_bound_identity_int | PASS:u2_b1o_ordered_max_int | PASS:u2_b1e_equatable_pick | PASS:u2_b1ao_addable_ordered_min_sum (Addable+Ordered) | PASS:u2_b1p_printable_show (covers (C) closure) | PASS:u2_b2_multibound_eq_or_gt_int (cmp_eq) | PASS:u2_b3_user_iface_shape_area | PASS:u1_b4_addable_dbl_float | CLOSED:feature-gap-two-T |
+| **U3** tuple-of-T return | PASS:u3_b0_no_bound_pair_int | PASS:u3_b1o_ordered_min_max + u3_b1o_ordered_destructure | PASS:u3_b1e_equatable_pair_when_eq | PASS:u3_b1a_addable_pair_with_hoisted_sum (inline form blocked by P237) | BLOCKED:P237 (Printable's to_text inside tuple element same root cause) | PASS:u3_b2_addable_ordered_pair | BLOCKED:P237 (user-iface method inside tuple element) | (covered by U1.B4 smoke + U3.B1.A hoist form) | CLOSED:feature-gap-two-T |
+| **U4** struct field of T | CLOSED:no-generic-structs (verified — `struct Box<T>` parse-errors) | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED |
+| **U5** vector-of-T input | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 + CLOSED:feature-gap-two-T |
+| **U6** vector-of-T output | PASS:u6_b0_no_bound_passthrough (no-iter pass-through; iter + push forms blocked by P239 / P241) | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P239+P241 | BLOCKED:P241 | CLOSED:feature-gap-two-T |
+| **U7** multi-T tuple-return arity ≥3 | (covered by U3) | PASS:u7_b1o_ordered_triple_arity_three + u7_b1o_ordered_nested_pair | (covered by U3) | (covered by U3) | BLOCKED:P237 | (covered by U3) | (covered by U2.B3) | (covered) | CLOSED:feature-gap-two-T |
+| **U8** T inside format / inline expr | BLOCKED:P242 (`{x}` for x:T) | PASS:u8_b1o_ordered_inline_format (call-result `.0`) | BLOCKED:P242 | PASS:u8_b4_addable_to_text_format (workaround: explicit `to_text()`) | BLOCKED:P242 | BLOCKED:P242 | BLOCKED:P242 | PASS:u8_b4_addable_to_text_format | CLOSED:feature-gap-two-T |
 
 `PASS-pre` = a pre-flight survey passed; the cell test still gets
 written (so the matrix is uniform and the regression net catches
