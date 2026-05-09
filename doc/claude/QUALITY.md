@@ -55,6 +55,37 @@ un-ignored and passing).  See CHANGELOG.md.
 
 ---
 
+## Open work — actionable summary
+
+Items below are "what to BUILD" derived from the design content in this document.  Each row links to the section that holds the full design.  Three clusters: JSON, Native runtime, Compiler-blocker.
+
+### JSON cluster
+
+| Item | Section | Status |
+|---|---|---|
+| **P54** — `JsonValue` enum (active sprint) | [§ Active sprint — P54](#active-sprint--p54-jsonvalue-enum) | Multi-step transition from text-based JSON to first-class `JsonValue` enum |
+| **Q1** — JSON parse-error diagnostics | [§ Active design — Q1](#active-design--q1-json-parse-error-diagnostics) | **S-class** (parse currently fails silently in some shapes) |
+| **Q2** — free-form object iteration + kind peek | [§ Active design — Q2](#active-design--q2-free-form-object-iteration--kind-peek) | API for iterating untyped JSON + peeking at value kinds |
+| **Q3** — `to_json` serialiser | [§ Active design — Q3](#active-design--q3-to_json-serialiser--struct-serialisation) | Symmetric serialisation API to `Type.parse()` |
+| **Q4** — `JsonValue` construction in loft code | [§ Active design — Q4](#active-design--q4-jsonvalue-construction-in-loft-code) | Builder API for constructing `JsonValue` trees in loft |
+| **P54-U** — unified JSON parser | [§ Active design — P54-U](#active-design--p54-u-unified-json-parser) | Phase 3 deletes ~540 lines of legacy scanner |
+
+### Native runtime cluster
+
+| Item | Section | Status |
+|---|---|---|
+| **Dep-inference** — for native fn returns (zero-leak unblock) | [§ Active design — Dep-inference](#active-design--dep-inference-for-native-fn-returns-zero-leak-unblock) | Closes closure / native-fn dep-tracking gap; cooperates with `plans/future/21-retire-scratch/` |
+
+### Compiler-blocker cluster
+
+| Item | Section | Status |
+|---|---|---|
+| **B2-B7** — struct-enum bugs gating P54 | [§ Compiler blockers](#compiler-blockers--struct-enum-bugs) | Audit needed; some may have closed via plan-17 / plan-19 sweeps |
+
+For the open programmer-biting issues list (running, not plan-shaped), see [§ Open programmer-biting issues](#open-programmer-biting-issues) above.  For ranked enhancement work, see [§ Enhancement tiers](#enhancement-tiers).  For ordering across all open items, see [§ Recommended landing order](#recommended-landing-order).
+
+---
+
 ## Active sprint — P54 (`JsonValue` enum)
 
 **Bite.** `MyStruct.parse(text)` silently returns a zero-valued struct

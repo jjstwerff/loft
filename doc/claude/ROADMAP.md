@@ -37,7 +37,7 @@ Features that "appear to work" but don't, or that lose data without indication. 
 | (cross) | Match validation — subject type × pattern shape matrix | M | ✓ | plans/future/18-match-validation/README.md |
 | (cross) | Struct-enum validation — variant payload × dispatch context matrix | M | ✓ | plans/future/19-struct-enum-validation/README.md |
 | (cross) | Keyed collection validation — collection × operation matrix | M | ✓ | plans/future/20-collection-validation/README.md |
-| Q* | JSON parse-error diagnostics (Q1) — parse currently fails silently in some shapes | S-M | ✓ | plans/future/35-quality-followups/README.md |
+| Q* | JSON parse-error diagnostics (Q1) — parse currently fails silently in some shapes | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
 | (cross) | Closure-DbRef leak (LIFETIME.md "Type::Function — NOT YET HANDLED") | M | ~ | plans/future/15-closure-validation/ phase 03 (active risk) |
 
 ---
@@ -166,7 +166,7 @@ Language correctness, removes special cases.  (Validation matrices that catch si
 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
-| P54 | First-class `JsonValue` enum; old text-based JSON gone | MH | ✓ | plans/future/35-quality-followups/README.md |
+| P54 | First-class `JsonValue` enum; old text-based JSON gone | MH | ✓ | QUALITY.md#open-work--actionable-summary |
 | (cross) | Mutable-closure capture — novice-fit four-case classification | M-MH | ✓ | plans/future/22-mutable-closures/README.md |
 | (cross) | L3 PEG-style match patterns (sequence / alternation / capture) | MH | ✓ | plans/future/26-match-peg/README.md |
 | A8 | Slicing, open-ended ranges, partial-key match on sorted/index | M | ✓ | plans/future/30-sorted-slice/README.md |
@@ -316,7 +316,6 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged b
 | [`plans/future/22-mutable-closures/`](plans/future/22-mutable-closures/) | M-MH | — | Locked-in spec; not yet implemented |
 | [`plans/future/26-match-peg/`](plans/future/26-match-peg/) | MH | — | Cooperates with `lib_plans/01-regex` |
 | [`plans/future/30-sorted-slice/`](plans/future/30-sorted-slice/) | M | — | Runtime affordance present (`key_compare` zip-prefix); only parser changes needed |
-| [`plans/future/35-quality-followups/`](plans/future/35-quality-followups/) | MH (P54) / S-M (Q1-Q4) | — | Pointer-plan.  P54 active sprint (JsonValue) — Q1 sub-item is S-class (silent parse failure); rest is C-class |
 | [`lib_plans/future/01-regex/`](lib_plans/future/01-regex/) | M | **lib_plans/03-lazy-stdlib** | First lazy-loaded stdlib consumer |
 
 ### Q — Internal quality
