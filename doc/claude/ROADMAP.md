@@ -334,13 +334,13 @@ shipped in 0.8.6 alongside LSP.1.  Web IDE W2–W6 above uses the same
 
 | ID    | Title                                                  | E  | Design | Depends on    |
 |-------|--------------------------------------------------------|----|--------|---------------|
-| SC.1  | Scene script API — hooks for hex enter/exit/interact   | M  | ✓      | MO.3, W2      |
-| SC.2  | IDE panel in scene editor                              | M  | ✓      | W2, MO.E1     |
-| SC.3  | In-browser compile + hot-reload                        | M  | ✓      | W1, SC.1      |
-| SC.4  | Script sandbox — limited API                           | S  | ✓      | SC.3          |
-| SC.5  | Built-in script templates                              | S  | ✓      | SC.1          |
-| SC.6  | Script sharing via scene JSON                          | S  | ✓      | SC.3, MO.2    |
-| SC.P  | 🌐 **Scriptable scenes** in browser                     | S  | ✓      | SC.3, MO.P    |
+| SC.1  | Scene script API — hooks for hex enter/exit/interact   | M  | ✓      | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.2  | IDE panel in scene editor                              | M  | ✓      | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.3  | In-browser compile + hot-reload                        | M  | ✓      | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.4  | Script sandbox — limited API                           | S  | ✓      | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.5  | Built-in script templates                              | S  | ✓      | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.6  | Script sharing via scene JSON                          | S  | ✓      | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.P  | 🌐 **Scriptable scenes** in browser                     | S  | ✓      | lib_plans/future/13-scriptable-scenes/README.md |
 
 ### Multiplayer
 
