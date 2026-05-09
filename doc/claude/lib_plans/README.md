@@ -61,9 +61,10 @@ work.
 
 ### Closing a plan — documentation must move out
 
-Same rule as `plans/` (see
-[`../plans/README.md § Closing a plan`](../plans/README.md#closing-a-plan--documentation-must-move-out)
-for the full specification).
+Same rule as `plans/`.  Apply the 6-step procedure in
+[`../plans/_CLOSURE_CHECKLIST.md`](../plans/_CLOSURE_CHECKLIST.md);
+the rule's full specification is in
+[`../plans/README.md § Closing a plan`](../plans/README.md#closing-a-plan--documentation-must-move-out).
 
 For library plans specifically, the natural reference home
 when a plan closes is **inside the library itself**:
@@ -76,6 +77,15 @@ when a plan closes is **inside the library itself**:
 The `finished/<NN>-<slug>/README.md` keeps only the closure
 record; reference content moves to `lib/<name>/`.  Other
 docs link to the library, not to the closed plan.
+
+### Authoring a new library plan
+
+Copy [`../plans/_TEMPLATE.md`](../plans/_TEMPLATE.md) to
+`<NN>-<slug>/README.md` (next free integer in the
+`lib_plans/` counter — independent from `plans/`).  Same
+canonical shape applies; library-specific concerns
+(downstream consumer compatibility, `lib.toml` schema, etc.)
+fold into the Sub-arcs / Open questions sections.
 
 ## Ground rule — library plans never break downstream consumers
 

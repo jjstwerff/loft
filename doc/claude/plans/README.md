@@ -61,31 +61,33 @@ moved elsewhere or the design has been superseded by the
 implementation itself.  Links to closed plans rot fastest
 because nothing in the project keeps them honest.
 
-**How to apply on close:**
-1. Identify which sections of the plan are reference (how
-   things work) vs which are closure record (what was done,
-   when, with what commits).
-2. Move the reference sections into the appropriate
-   `doc/claude/*.md` or `lib/<name>/README.md` (creating new
-   docs if needed; updating existing ones if they cover
-   adjacent material).
-3. The `finished/<NN>-<slug>/README.md` keeps only the
-   closure record + a "moved to: <path>" pointer for the
-   reference content.
-4. Grep the codebase for links to `plans/<NN>-<slug>/` or
-   `plans/future/<NN>-<slug>/` and rewrite to point at the
-   new reference home.  No links should remain to
-   `finished/<NN>-<slug>/` after this step (other than
-   genuine closure-record-history references — typically
-   none).
-5. The CLAUDE.md doc index entry that previously pointed at
-   the plan is rewritten to point at the new reference home.
+**How to apply on close:** see
+[`_CLOSURE_CHECKLIST.md`](_CLOSURE_CHECKLIST.md) for the
+6-step procedure (identify reference vs closure-record →
+pick reference home → trim plan → rewrite incoming links →
+update CLAUDE.md → update Finished table).
+
+The checklist documents two shapes: **CREATE-AND-MOVE**
+(when no comprehensive reference doc exists; create one)
+and **TRIM-ONLY** (when reference doc already covers shipped
+state; trim plan only).  Worked examples for both:
+`31-html-export` and `04-slot-assignment-redesign`.
 
 This rule applies retroactively too: if you discover an
 existing `finished/` plan being linked from current docs,
 that's a cleanup signal — the reference content from that
 finished plan never moved out, OR the linker hasn't been
 updated to the moved-out location.
+
+### Authoring a new plan
+
+Copy [`_TEMPLATE.md`](_TEMPLATE.md) to
+`<NN>-<slug>/README.md` (next free integer in the relevant
+tracker).  The template captures the canonical shape:
+Status / Goal / Effort / Sub-arcs / Phase ordering / Open
+questions / Cross-arc dependencies / See also.  Length
+budget: 100-300 lines; longer plans usually have reference
+content that should move to `doc/claude/*.md`.
 
 ## Companion indexes — every parked item is discoverable
 
