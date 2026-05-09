@@ -7,85 +7,57 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**DONE 2026-05-09.**  Closure record in [ARC.md](ARC.md).
-Final commits: `f974770` (closeout docs + A8 deferral marker +
-A9 superseded by A4), `15a7aab` (P235 par half via wrapper
-synthesis — closes `par_tuple_destructure_in_for`), `bcac52f`
-(A8.b stitch_id consolidation in `src/native.rs` — 5
-`n_parallel_queue*` fns collapsed to thin wrappers, ~150 LOC
-saved).
-
-Final acceptance:
-- A1–A7 + A5b + A8.b + A11 shipped.
-- A8 (Queue trait collapse in `src/parallel.rs`) deferred
-  with audit — divergence is structural, not boilerplate.
-- A9 superseded by A4 (light path retired entirely).
-- A10 (browser parallel) out-of-scope; ships as its own arc.
-- Ignored par canaries: 8 → 1.  The remaining is
-  heterogeneous-vec-of-fn (D11a row 8), outside plan-06 scope.
-
-User-facing summary in [`../../CHANGELOG_TECHNICAL.md`](../../CHANGELOG_TECHNICAL.md)
+**DONE 2026-05-09.**  Reference for the post-plan-06 surface
+(par(...) syntax, par_fold, dispatcher inventory) lives in
+[`../../../THREADING.md`](../../../THREADING.md).  The live
+closure record is [ARC.md](ARC.md).  User-facing summary:
+[`../../CHANGELOG_TECHNICAL.md`](../../CHANGELOG_TECHNICAL.md)
 under "Plan-06 (typed-par redesign) closed 2026-05-09".
 
-The historical narrative (Goal / Why / Realised value) below
-explains what plan-06 set out to do and the bug-finding regime
-that surfaced during the work.
+This file is the closure record for the plan as a whole; the
+phase files in this directory remain as historical archaeology.
 
-## Goal
+### Final tally
 
-Replace today's branching `par` runtime with one uniform path: every
-parallel worker takes input as a Store, writes output into its own
-output Store, and main-thread stitching concatenates the per-worker
-output stores into a single result Store.  No special cases for
-text, references, or primitives — they're all the same shape because
+- A1–A7 + A5b + A8.b + A11 shipped.
+- A8 (Queue trait collapse in `src/parallel.rs`) deferred with
+  audit — divergence is structural, not boilerplate.
+- A9 superseded by A4 (light path retired entirely).
+- A10 (browser parallel) out-of-scope; ships as its own arc.
+- Ignored par canaries: 8 → 1.  Remaining is heterogeneous-
+  vec-of-fn (D11a row 8), outside plan-06 scope.
+
+### Closure commits
+
+- `f974770` — closeout docs + A8 deferral marker + A9 superseded
+- `15a7aab` — P235 par half via wrapper synthesis (closes
+  `par_tuple_destructure_in_for`)
+- `bcac52f` — A8.b stitch_id consolidation in `src/native.rs`
+  (~150 LOC saved)
+
+## Goal (achieved)
+
+Replace today's branching `par` runtime with one uniform path:
+every parallel worker takes input as a Store, writes output
+into its own output Store, and main-thread stitching
+concatenates the per-worker output stores into a single result
+Store.  No special cases for text, references, or primitives —
 they all live in stores.
 
-## Why
+The reference content for the post-plan-06 architecture
+("everything is a store", dispatcher set, par_fold sugar)
+lives in THREADING.md.  The full pre-shipping rationale +
+phase-by-phase design is in this directory's phase files
+(00–10) and DESIGN.md, retained as historical archaeology.
 
-Today's implementation branches on type and return shape:
-
-- **3 native functions** (`n_parallel_for_native`, `n_parallel_for_text_native`, `n_parallel_for_ref_native`) with bespoke marshalling per return kind.
-- **6+ runtime variants** in `src/parallel.rs` (`run_parallel_direct` × `_raw` × `_text` × `_ref` × `_int` × `_light`).
-- **3 dispatch branches** in `src/generation/dispatch.rs:755` — Text vs. Reference vs. primitive.
-- **2 entry points** at the loft surface (`par(...)` vs. `par_light(...)`) — the user picks based on whether the worker allocates.
-- **4 getter primitives** (`parallel_get_int` / `_long` / `_float` / `_bool`) needed because the output isn't already in a Store.
-
-The cost: every type-shape change touches three layers (loft signature,
-codegen, runtime).  Adding a new return type means a new native fn,
-new dispatch arm, new getter.  Adding new optimisations (worker
-slot reuse, output-store mmap, heterogeneous types) requires
-rebuilding the marshalling for each branch.
-
-The store-typed redesign collapses all of this to:
-
-| Today | After plan-06 |
-|---|---|
-| 3 native fns × 4 getters | 1 native fn, 0 getters |
-| 6 runtime variants | 1 runtime path (parameterised by element type) |
-| 3 codegen dispatch arms | 1 |
-| `par` + `par_light` user split | 1 `par`; light vs. full chosen at compile time from the worker's effect signature |
-| Text via owned `String` channel | Text in the worker's output Store, same as any other field |
-| Reference via `copy_block` + `copy_claims` channel | Reference in the worker's output Store; main thread merges by store-pointer rebase |
-
-The size of the saving is real: ~1500 lines of bespoke marshalling
-code retire across `src/parallel.rs` (currently 739 lines —
-verified 2026-04-25) and `src/codegen_runtime.rs:1581-1805` (224
-lines), plus the parser auto-light heuristic at
-`src/parser/builtins.rs:403::check_light_eligible`.
-
-## Realised value (so far) — bug discovery
+## Realised value — bug discovery
 
 Plan-06's headline metric is "~1100 LOC retired."  That undersells
-the work: getting there has surfaced **14+ P-issues** in the
-type-system × native-codegen × parallel-runtime intersection that
+the work: getting there surfaced **18+ P-issues** in the type-
+system × native-codegen × parallel-runtime intersection that
 would have hit users in their own threading code with much harder
-reproducers than a curated canary.  The plan functions as a
-structured fuzz/bug-hunt of that intersection — every canary
-triage round, every G-surface coverage extension, every D11
-type-spectrum sweep is a probe that has, in fact, kept finding
-real bugs.
-
-Filed and/or closed during plan-06 work (chronological):
+reproducers than a curated canary.  The plan functioned as a
+structured fuzz/bug-hunt of that intersection.
 
 | P-issue | Surface | Title |
 |---|---|---|
@@ -103,210 +75,61 @@ Filed and/or closed during plan-06 work (chronological):
 | P199 | native ABI | `&mut Stores` → `&UnsafeCell<Stores>` (3-commit fix series) |
 | P200 | native codegen | int compare emission (closed in plan-09; surfaced here) |
 | P201 | misc | branch-local regression (filed 2026-04-29) |
+| P234 | lexer/runtime | tuple-of-struct member access |
+| P235 | par half | tuple-destructure-in-for |
+| P236 | native codegen | heap-owned reference returns from if/else native data corruption |
 
-Several of these (P191, P195, P196, P198, P199) are bugs that
-ordinary doc-tests do not surface — they require the specific
-type-shape interactions that the par() canaries force.
+Several (P191, P195, P196, P198, P199) are bugs that ordinary
+doc-tests don't surface — they require specific type-shape
+interactions that only the par() canaries forced.
 
-The implication for evaluating plan-06's value: **as long as
-canaries keep surfacing P-issues, plan-06's per-day yield is
-high.**  When canaries stop surfacing new bugs, that's itself a
-useful signal that this surface is mature — at which point
-finishing the LOC retirement becomes the dominant remaining
-value.  Today (2026-05-02) we are still in the bug-finding
-regime.
+## Phase index (historical)
 
-## Phase 0 findings folded back into the plan
+The phase files in this directory are kept as the design and
+implementation log.  ARC.md A-step → phase-file mapping is in
+ARC.md itself.
 
-Phase 0a's source survey + characterisation tests + bench surfaced
-findings that change how subsequent phases approach the work:
-
-1. **The interpreter is parallel; the native-codegen path was
-   sequential by mistake.**  Originally surfaced in phase 0a:
-   `run_parallel_direct` (interpreter) uses `thread::scope` × N
-   workers; `n_parallel_for_native` (native codegen) iterated
-   `for i in 0..n` in the calling thread, ignoring the user's
-   thread count argument.  Tracked as **G4**; **phase 1a already
-   landed** the `thread::scope` fix — the comment header at
-   `src/codegen_runtime.rs:1582` documents the closure.  Phases
-   1b/1c still need the per-worker-output-store migration for text
-   and reference paths.  See 01-output-store.md "Important finding
-   from phase 0a".
-
-2. **The fused for-loop syntax `for x in ls par(r = foo(x), 4) { … }`
-   already works today.**  Phase 7 isn't building this construction;
-   it's making it route through the typed pipeline + adding the
-   value-position desugar + `par_fold` sugar.  See 07-fused-for-par.md
-   "Insight from phase 0a".
-
-3. **Four surface gaps tracked under plan-06:** G1 (struct-enum
-   return rejected), G2 (primitive-element input gives garbage),
-   G3 (`--native-wasm` rejects par at codegen), G4
-   (`n_parallel_for_native` is sequential despite the parallel
-   keyword).  All four close in plan-06 phase 1 (G1, G3, G4) or
-   phase 4 (G2).  Each has an `#[ignore]`d canary in
-   `tests/threading_chars.rs` or a phase-1-acceptance bench
-   threshold (G4: loft-native ≤ ~5 ms on bench-11).
-
-4. **D11 type-spectrum tracker** in 00-baseline-and-bench.md § 0d:
-   17 `#[ignore]`d canaries cover the shapes plan-06 must accept
-   after the redesign — every input/output type combination from
-   D11.  Each plan phase un-ignores the canaries it closes.
-   Phase 9 adds 6 more tuple-flavoured canaries; the "✅ when
-   tuples land" caveat in D11b retires when phase 9 closes.
-
-5. **Bench numbers recorded** in THREADING.md § "Plan-06 phase 0
-   baseline".  Plan-06 phases re-run `make bench` and assert
-   ±5 % on `11_par`'s loft-interp + loft-native columns.  Today:
-   loft-interp 44 ms, loft-native 12 ms (vs python multiprocessing
-   33 ms, rust threads 4 ms).
-
-## Architectural anchor — "everything is a store"
-
-The whole interpreter is already store-organised: every allocation,
-every variable, every parameter lives in one of `stores.0`,
-`stores.1`, …, `stores.N`.  The reason `par` has 3 native functions
-is that the **output of a parallel call is the only place in the
-interpreter that doesn't follow this rule** — primitive results are
-written through raw byte pointers, text results are owned `String`
-buffers passed via channel, reference results are deep-copied via
-ad-hoc `copy_block` calls.
-
-If the worker writes its output into a pre-allocated per-worker
-output Store — exactly the way every other loft fn already writes
-its return value — the marshalling collapses to "stitch N per-worker
-output stores into one result store" regardless of element type.
-
-## Phases
-
-Each phase preserves every currently-green test.  Each phase is a
-single PR with its own `make ci` run.
-
-> **The phase table below is a topic grouping, NOT the work order.**
-> Read [ARC.md](ARC.md) for the live execution sequence (A1–A11) —
-> scope-locked, single-PR-per-step, with named acceptance tests.
-> Phases are kept as per-topic detail because each phase has its
-> own design doc (`0X-….md`); ARC steps reference those docs and
-> close the relevant phase chunks.  PRIORITY.md is historical (spine
-> steps 1–7 committed there).  The ARC↔Phase mapping table after
-> the phase table tells you which phase chunks each ARC step closes.
-> When a future session asks "what should I work on next?", the
-> answer is "the next OPEN ARC step", not "the next OPEN phase row."
-
-| Phase | File | Status | Effort | Summary |
-|---|---|---|---|---|
-| 0 | [00-baseline-and-bench.md](00-baseline-and-bench.md) | **done** | S | Characterisation suite (0a — `tests/threading_chars.rs` 16 positives + 17 canaries), realistic perf bench (0b — `bench/11_par/` with python + rust + loft-wasm columns), baseline recorded in THREADING.md (0c), D11 type-coverage tracker pre-populated (0d).  Surface gaps G1 / G2 / G3 surfaced and tracked. |
-| 1 | [01-output-store.md](01-output-store.md) | **done** | M | Workers write to per-worker output Stores instead of `out_ptr` / channel.  Landed: G1 struct-enum returns (heavy path routing), G2 primitive-input dispatch (1/4/8-byte slot promotion), G2.1 narrow-integer stride (vector<u8>/<i32>), G3 text-input dispatch (16-byte Str slots), G4 fn-ref return scaffolding.  The two previously-deferred `#[ignore]`d canaries (`par-fn-return`, `par-vector-return`) **closed in May 2026** via ARC.md A6.a (vector return → `run_parallel_queue_ref`) and A6.b (fn-ref return → packed-buffer Queue route).  Comments at `tests/threading_chars.rs:648` (vector) and `:711` (fn-ref) cross-reference the closing commits. |
-| 1.5 | [01.5-rayon-pool.md](01.5-rayon-pool.md) | **done** | S | Native runtime now uses a shared rayon work-stealing pool via `parallel_workers<R, F>` template (`src/parallel.rs:122`).  All `run_parallel_*` variants funnel through it. |
-| 2 | [02-stitch-not-copy.md](02-stitch-not-copy.md) | **partial; remaining work folded into phase 11** | M | Main-thread stitch via store-pointer rebase.  Landed: `Stores::adopt_store`, `WorkerStores::add_output_slot/take_slot/take_all_owned`, per-variant ownership dispatch for struct-enums (`copy_from_worker_unowned` skips copy_claims for owned-free types, with peek-discriminant per element).  **2a complete** — `StoreRebase::with_parent_count` + `translate` (3-category rule from D11c: worker-own / parent-shared / cross-worker debug-panic), recursive `rebase_walk_record` type-driven via `data::owned_elements`, cycle-safe via `visited` HashSet, plus `Stores::adopt_worker_excess` helper, 12 unit tests in `tests/parallel_rebase.rs`.  Sub-phases 2b/2c/2d/2e (wiring into the materialised-result-vector path) **defer to phase 11's `par_to_vec` opt-in** — phase 10's strategic shift makes the materialised path opt-in, so the rebase machinery becomes phase 11's tool, not the default. |
-| 3 | [03-one-native-fn.md](03-one-native-fn.md) | **partial** | S | Sub-phases landed: 3c (collapsed primitive-return arms in `parallel_execute_and_collect` — single `run_parallel_direct` handles all inline 1-8 byte returns), 3d (runtime derives DispatchMode from `def.returned`; sentinel `return_size` is now backstop only), **3b.1 helper extraction** (`alloc_par_result` / `finalize_par_result` in `codegen_runtime.rs` — shared prologue + epilogue for the 3 native par fns; `parallel::merge_batches<R>` — shared per-thread merge loop used by 5 sites across `parallel.rs` + `codegen_runtime.rs`; ~55 lines retired across both helpers, no API change so generated test fixtures unaffected).  `Stitch::Reduce` runtime (3e) and 3b.2 (true unification with a `Stitch` trait — different closure return types `-> i64` / `-> String` / `-> DbRef` need trait dispatch + ~30 generated fixtures regenerated) still pending. |
-| 4 | [04-typed-input-output.md](04-typed-input-output.md) | **partial** | M | Typed surface: `parallel_for(input: vector<T>, fn: fn(T) -> U, threads: integer) -> vector<U>` — `element_size` and `return_size` retire; the type system carries them.  Landed: 4c (`Stitch::Concat` no-payload + `DispatchMode` routing — `grep ConcatLegacy src/` zero), 4d.A (typed worker-input dispatch via `InputKind::{Ref, Text, Primitive { size }}` capped at 64 bytes), **4d.B sorted+hash+index** (parser-side `materialise_keyed_for_par` desugars `for s in {sorted,hash,index}_items par(...)` into a temp `vector<reference<T>>` + par over the vector; hash/index unblocked once P191 (index bookkeeping layout) and the P188 += dispatch fix landed — closes `par_sorted_input_t4`, `par_hash_input_t4`, `par_index_input_t4`), **P189d tuple-element text inflation** (`read_tuple_at_wide` walks tuple element types and reconstructs 16-byte `Str` slots for text fields stored as 4-byte interned pointers — closes `par_tuple_input_int_text`).  Closes 5 canaries total (`par_tuple_input_int_int` jointly with P189/P189c, `par_tuple_input_int_text` via P189d, plus the 3 keyed-input ones).  Sub-phases 4a (typed-arity declaration), 4b (5-arg-form retirement), **4d.A.2 partial** (parser fix landed 2026-04-27 — `sub_type` accepts `vector<fn(...)>`, `fn_ref_def` registers `__fn_ref` synthetic struct, `type_def_nr`/`type_elm` route Type::Function to it; canary failure mode flipped from infinite-loop in parser to fast SIGSEGV in runtime; generated Rust fixture written for first time, reveals 3 remaining bugs in vector storage / read-back / par closure — see CHANGELOG entry; effort revised to M), **4d.C** ([04d-fn-ref-closure-storage.md](04d-fn-ref-closure-storage.md), open, M) — fn-ref struct fields store BOTH d_nr and closure DbRef (16 bytes) instead of dropping the closure half; subsumes P196 (tuple-of-fn-ref native codegen) by making the storage layout match the native `(u32, DbRef)` rep byte-for-byte, and unblocks capturing lambdas as struct/tuple field values (today they truncate silently), 4e (caller-supplied destination via ref_return) remain. |
-| 5 | [05-auto-light.md](05-auto-light.md) | **partial** | MH | Sub-phases landed: **5a stdlib annotation sweep complete for user-callable fns** — every `pub fn` across `default/*.loft` is annotated (`01_code.loft` math/min/max/clamp/text-len/store-lock/atan2/log/pow, `02_images.loft` file/env/time, `03_text.loft` 30 text/character ops, `04_stacktrace.loft`, `05_coroutine.loft`, `06_json.loft`).  Internal `Op*` declarations remain unannotated by design — phase 5b' treats unannotated declared-only natives as safe.  5b' deep par-safety check at Level::Error wired (`worker_calls_parent_write_deep` recurses through user-fn callees).  5b' G5/G5.1 precision: local-arg + hidden-return-arg exceptions for ParentWrite stdlib calls.  D12 caller-graph infrastructure (`Data::user_fn_d_nrs`, `Data::callers_of`, `analyse_par_safety_fixpoint`) implemented and tested.  Auto-light selection (5b/5e fixed-point) and 5c Arc-wrap parent stores still pending. |
-| 6 | [06-cleanup-and-doc.md](06-cleanup-and-doc.md) | open | XS | Delete the now-unreachable runtime variants (~520 lines from `src/parallel.rs`, ~336 from `codegen_runtime.rs`, ~70 from `default/01_code.loft`); rewrite THREADING.md's par sections; CHANGELOG entry. |
-| 7 | [07-fused-for-par.md](07-fused-for-par.md) | open | MH | Fused `for x in ls par(r = foo(x), 4) { … }` construction + parser-side desugaring of the value-position `par(input, fn, threads)` call form to the same `Value::ParFor` IR node.  Sub-phase 7d adds `par_fold(input, init, fold, threads) -> U` surface and auto-detects pure-fold bodies in the fused for-loop, both compiling to `Stitch::Reduce`.  One primitive (the fused form); two sugar shortcuts (`par`, `par_fold`); one runtime path; smart compiler-side policy selection.  `par_light` is removed from the user surface entirely. |
-| 8 | [08-browser-workers.md](08-browser-workers.md) | open | MH | Browser parallel par via `wasm-bindgen-rayon` Web Worker pool.  Per-worker output Stores from phase 1 + the Stitch policy from phase 3 plug directly into a 4-worker pool.  COOP/COEP headers on the deployed gallery + playground enable SharedArrayBuffer.  Phase-2 rebase walk runs after `postMessage` transfer to rewrite worker-local `store_nr` fields (DESIGN.md D13).  Hashed WASM filenames + JS-shim runtime check on `crossOriginIsolated` close the cache-coherence gap.  Sub-phases 8f–8g add explicit **par-correctness + parallelism gates** (output equivalence vs native, ≥ 2× speedup at threads=4, DbRef rebase verification after postMessage, WebGL goldens) — all run headless under Chrome via the `scripts/browser/` harness.  After phase 8, the only acceptable sequential par is no-threads-feature WASM minimal builds — every other target (interp / native / browser) is real-parallel.  Vital for the "Brick Buster in your browser" story; replaces the previously-deferred ROADMAP W1.14 entry. |
-| 9 | [09-tuple-support.md](09-tuple-support.md) | **9a closed (2026-05-04); 9b/9c/9d/9e open** | M | Tuple inputs and returns for `par`: `vector<(T, U)>` input, `(T, U)` return, fused `for (a, b) in pairs par(...) { … }` destructure.  9a (T1.8a function tuple-return convention) closed via commit `023ca15` on branch `plan-14-tuple-validation` — actual fix was ~30 LoC type-context routing in `src/generation/{mod.rs,emit.rs,dispatch.rs}`, not the original 200-LoC opcode design.  Phases 9b/9c/9d remain par-side dispatch work (worker tuple-output stitch shape, fused-for parser).  Test inventory expanded with 3 new canaries (`par_tuple_return_three_arity`, `par_tuple_return_nested`, `par_vec_of_capturing_fns_t4`) from the type-spectrum audit; first two closed by 9c, third NOT closed by phase 9 (different fix surface — vector storage gap, see DESIGN.md D11a row 8 split + plan-15 D4). |
-| 10 | [10-no-output-vector.md](10-no-output-vector.md) | open | MH | **Strategic shift — drop the materialised result vector entirely.**  `par(...)` becomes stream-only: every result is consumed exactly once (Stitch::Discard / Reduce / Queue).  Constructions that need random access, multi-pass, or storage in `vector<S>` fields are rejected at compile time with a "did you mean" hint.  Retires `Stitch::Concat` runtime + `parallel_execute_and_collect` + the `result_db` allocation (~25 MB saved on 100K-element 256-byte struct workloads).  Phase 7's fused for-par becomes the canonical surface; the value-position `let r = parallel_for(...)` shape stays valid for **single-pass** uses only.  Depends on phases 7 (Discard/Queue runtimes) and 5 (IR walk infrastructure for the per-result use-site analysis). |
-| 11 | (out of scope, sketched in 10) | open | S | **`par_to_vec(input, fn, threads) -> vector<S>` opt-in materialiser.**  Re-adds the explicit vector helper for users who genuinely need it (sort, persistence, multi-pass, storage in `vector<S>` field).  Internally uses phase 2's `StoreRebase` + `rebase_walk_record` + `adopt_worker_excess` — so the rebase machinery shipped in 2a + 2b-prep gets a real consumer.  The materialisation cost becomes visible at the call site instead of being the implicit default. |
-
-## Phase → ARC step mapping
-
-Each open phase now closes through one or more ARC steps.  Read
-[ARC.md](ARC.md) for the design and acceptance test of each.
-
-| Phase | Closes via ARC step(s) |
+| File | Topic |
 |---|---|
-| 0 / 1 / 1.5 | Already done; no ARC step needed |
-| 2 | Library code retained for `par_to_vec` (out of scope for ARC; see ARC § "What this arc explicitly does NOT cover") |
-| 3 (3e Reduce + 3b.2 trait) | A5 (Reduce runtime), A8 (trait dispatch) |
-| 4 (4d.A.2 fn-ref vec, 4d.C closure storage, 4e hidden-arg dest) | A6.a (4e for vector return), A6.b (4e for fn-ref return), A6.c (4d.A.2 + 4d.C) |
-| 5 (5e fixed-point, 5c Arc-wrap) | A9 (5e); 5c out of scope, file as PERFORMANCE.md item |
-| 6 (cleanup) | A4 + A11 |
-| 7 (fused for-par + par_fold) | Already shipped via spine 3 + 8b/8c/8d; A5 adds par_fold sugar |
-| 8 (browser workers) | A10 (3 sub-PRs) |
-| 9 (tuple support) | A7 (gated on T1.8a, external) |
-| 10 (no-output-vector) | Already in effect via spine step 7 (warning → error); ARC has no separate step |
-| 11 (par_to_vec opt-in) | Out of scope for ARC; separate arc when a user needs it |
+| [00-baseline-and-bench.md](00-baseline-and-bench.md) | Characterisation suite + perf bench + D11 type-coverage tracker |
+| [01-output-store.md](01-output-store.md) | Workers write to per-worker output Stores |
+| [01.5-rayon-pool.md](01.5-rayon-pool.md) | Shared rayon pool via `parallel_workers` template |
+| [02-stitch-not-copy.md](02-stitch-not-copy.md) | Main-thread stitch via store-pointer rebase |
+| [03-one-native-fn.md](03-one-native-fn.md) | Collapse 3 native fns + stitch trait |
+| [04-typed-input-output.md](04-typed-input-output.md) | Typed `parallel_for(input: vector<T>, fn, threads) -> vector<U>` |
+| [04d-fn-ref-closure-storage.md](04d-fn-ref-closure-storage.md) | Fn-ref struct fields store both d_nr + closure DbRef (16 B) |
+| [04d-followups.md](04d-followups.md) | 4d follow-up bugs and refinements |
+| [05-auto-light.md](05-auto-light.md) | Auto-light heuristic via D12 caller-graph fixed-point |
+| [06-cleanup-and-doc.md](06-cleanup-and-doc.md) | Delete now-unreachable runtime variants |
+| [07-fused-for-par.md](07-fused-for-par.md) | Fused `for x in ls par(r=foo(x), 4) { … }` + `par_fold` sugar |
+| [08-browser-workers.md](08-browser-workers.md) | Browser par via `wasm-bindgen-rayon` (deferred to its own arc) |
+| [09-tuple-support.md](09-tuple-support.md) | Tuple inputs / returns for par |
+| [10-no-output-vector.md](10-no-output-vector.md) | Strategic shift — drop materialised result vector; stream-only |
 
-## Ground rules
+Cross-cutting design docs:
 
-Inherits the global plans rule from
-[doc/claude/plans/README.md](../README.md):
+- [ARC.md](ARC.md) — live execution sequence (A1–A11) with
+  scope-locked acceptance tests.  The authoritative closure
+  record.
+- [DESIGN.md](DESIGN.md) — cross-cutting decisions D1–D13
+  (Stitch policy enum, worker-store relationship, fn return
+  accessor, type spectrum, caller-graph infrastructure, SAB
+  transfer + DbRef rebase across worker boundary).
+- [PRIORITY.md](PRIORITY.md) — historical priority spec
+  (superseded by ARC.md).
 
-> A plan's job is to split work into manageable chunks that each land
-> cleanly without introducing new problems.  Every phase must
-> preserve every currently-green test, every currently-correct
-> user-facing behaviour, and either ship a new invariant or be a
-> no-op refactor — never a degrade-now-fix-later bargain.
+## See also
 
-Specific to this plan:
-
-1. **No perf regression past phase 0's baseline.**  The
-   characterisation benchmark in `tests/bench/par_baseline.rs`
-   (created in phase 0) must run within ±5 % at every phase boundary.
-   The store-stitching path *should* match or beat the byte-pointer
-   path; if it doesn't, the phase pauses for investigation.
-2. **WASM-single-threaded path must keep working.**  WASM has no
-   threads under default features.  Workers run sequentially in a
-   for-loop; the store-typed model must not assume real parallelism.
-3. **Reference aliasing rules tighten, not loosen.**  Today a worker
-   can hold a `DbRef` into a parent-side store (locked + debug-checked).
-   Phase 2's stitch path must keep that same enforcement; if anything,
-   make it compile-time.
-4. **`par_light` users see no behaviour change.**  Phase 5 makes the
-   compiler auto-select the light path; an explicit `par_light(...)`
-   call continues to work as a no-op alias for one release, then
-   gets a deprecation warning, then is removed in 1.0.0.
-5. **Each phase has at least one new test.**  Phase 0's baseline
-   tests cover the *current* behaviour; phases 1–6 each add an
-   invariant test for the new shape.
-
-## Risks (all addressable, none plan-blocking)
-
-| Risk | Mitigation |
-|---|---|
-| Output Store allocation per call dominates a tight loop | Pool output stores keyed by `(element_type, max_elements)`; reuse across calls.  Measured in phase 0; deferred to phase 1 if real. |
-| Reference results across worker stores need pointer rebasing | Phase 2 introduces a `StoreRebase` map (`worker_store_id → result_store_offset`) at stitch time.  Same idea as `copy_block` but at store granularity, not record. |
-| WASM async/yield interaction | Phase 1 defers WASM until the for-loop fallback is verified.  Future W1.14 (Web Worker pool) is unaffected — same store-typed shape, different scheduler. |
-| Type-checker cannot prove "worker only writes its output store" | Phase 5's auto-light heuristic falls back to the full path when proof fails.  Conservative; never produces unsafe results. |
-
-## Out of scope
-
-These are not addressed by plan-06 even though they're tempting:
-
-- **Heterogeneous worker results** (each worker returns a different
-  type).  Today `par` workers all return the same type; that stays.
-  Heterogeneous results are a different feature, not a simplification.
-- **Cross-worker reference graphs** (worker A's result references
-  worker B's output store).  Workers stay independent; results are
-  flat.
-- **Worker-pool reuse for non-`par` constructs** (e.g. `parallel { }`
-  blocks).  Plan-06 covers `par(...)` only; A15 structured concurrency
-  inherits the simplifications by virtue of routing through the
-  same runtime, but its own surface stays.
-
-## Cross-references
-
-- [DESIGN.md](DESIGN.md) — cross-cutting decisions referenced from
-  every phase: Stitch policy enum (D1 — transitional D1a +
-  final D1b), worker / parent store relationship (D2 — three
-  enforcement layers spelled out per phase), fn return-type
-  accessor (D3 — incl. why "reuse `map`'s machinery" is wrong),
-  failure model (D4), degenerate-input handling (D5), WASM
-  fallback (D6), `Value::ParFor` IR shape (D7), auto-light
-  heuristic (D8), source-span propagation (D9), call-site
-  migration (D10), type spectrum + reference-graph rules (D11
-  / D11c / D11c.1), caller-graph infrastructure (D12 — phase
-  5b' prerequisite for 5e), SAB transfer + DbRef rebase across
-  worker boundary + cache coherence (D13 — phase 8 details).
-- [THREADING.md](../../THREADING.md) — current par design, especially
-  §§ "Data flow" and "Isolation guarantees".
-- [ROADMAP.md § 1.1+ A14 / A15 / W1.14](../../ROADMAP.md#11-backlog) —
-  related parallel work; this plan is independent but compatible.
-- [src/parallel.rs](../../../../src/parallel.rs) — current 739-line
-  runtime (7 `run_parallel_*` variants verified 2026-04-25);
-  ~520 lines retired in phase 6 (~800 lines net across plan-06
-  phases).
-- [src/codegen_runtime.rs:1581-1805](../../../../src/codegen_runtime.rs) —
-  current 3-fn native dispatch; collapses in phase 3.
-- [doc/claude/plans/README.md](../README.md) — global plan ground rules.
+- [`../../../THREADING.md`](../../../THREADING.md) — reference
+  for the post-plan-06 surface (par(...) syntax, par_fold,
+  dispatcher inventory, plan-06 phase 0 baseline retained as
+  reference benchmark)
+- [`../../CHANGELOG_TECHNICAL.md`](../../CHANGELOG_TECHNICAL.md) —
+  per-A-step shipped manifest under "Plan-06 (typed-par
+  redesign) closed 2026-05-09"
+- [`../../PROBLEMS.md`](../../PROBLEMS.md) — P188–P236 family
+  bug entries (most closed; see Realised value table above)
+- [`../../ROADMAP.md`](../../ROADMAP.md) — A14 / A15 (1.1+
+  parallel work cooperators) + browser parallel arc (was A10)
+- `src/parallel.rs` / `src/native.rs` / `src/codegen_runtime.rs` —
+  shipped runtime surface

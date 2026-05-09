@@ -225,6 +225,35 @@ fn main() {
 }
 ```
 
+### `par_fold` — accumulator shorthand
+
+Plan-06 A5 added a shorthand for the pure-fold pattern (every
+element folds into a scalar accumulator with no per-iteration
+state):
+
+```loft
+total = par_fold(items, 0, |acc, e| acc + e.value, 4)
+```
+
+Equivalent to running a `par(...)` over `items` with a `Stitch::Reduce`
+worker.  Native and interpreter both back `par_fold` directly
+(A5 + A5b).  The fused `for ... in ... par(...) { sum += b }`
+form is the user-facing alternative; the parser auto-detects
+pure-fold bodies and routes them through the same runtime.
+
+### Post plan-06 surface (closed 2026-05-09)
+
+Plan-06 collapsed the 7-variant `par` runtime + 3-fn native
+dispatch into one store-stitch path.  Every parallel worker
+now writes its output into a per-worker output Store; the main
+thread stitches per-worker stores into a single result Store.
+There is no separate `par_light(...)`; the parser decides light
+vs full path from the worker's effect signature.  See
+[CHANGELOG_TECHNICAL.md § Plan-06 (typed-par redesign) closed
+2026-05-09](CHANGELOG_TECHNICAL.md) for the per-A-step shipped
+manifest, and [§ Dispatcher inventory](#dispatcher-inventory-when-adding-a-new-return-shape)
+below for the post-plan-06 dispatcher set.
+
 ---
 
 ## Plan-06 phase 0 baseline
