@@ -138,10 +138,10 @@ diagnostics + outline + hover via thin marketplace plugins.
 
 | ID      | Title                                                  | E  | Design | Source           |
 |---------|--------------------------------------------------------|----|--------|------------------|
-| FFI.1   | Generic type marshaller from `#native` signature       | MH | ✓      | GAME_INFRA.md    |
-| FFI.2   | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | GAME_INFRA.md    |
-| FFI.3   | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
-| FFI.4   | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
+| FFI.1   | Generic type marshaller from `#native` signature       | MH | ✓      | lib_plans/future/05-game-infra/README.md|
+| FFI.2   | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | lib_plans/future/05-game-infra/README.md|
+| FFI.3   | Eliminate per-function glue in native.rs               | M  | ✓      | lib_plans/future/05-game-infra/README.md|
+| FFI.4   | Docs: zero-boilerplate native function guide           | S  | ✓      | lib_plans/future/05-game-infra/README.md|
 | PKG.7   | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
 | PKG.REG | Central package registry MVP — `loft install <name>`   | M  | ✓      | PACKAGES.md      |
 
@@ -211,7 +211,7 @@ PKG.EXTRACT is the last 0.9.0 item — it depends on 0.8.6's PKG.REG
 |--------|--------------------------------------------------------|----|--------|------------------|
 | L1     | Error recovery after token failures                    | M  | ✓      | PLANNING.md      |
 | P2     | REPL / interactive mode                                | M  | ✓      | PLANNING.md      |
-| W-warn | Developer warnings (Clippy-inspired)                   | M  | ✓      | GAME_INFRA.md    |
+| W-warn | Developer warnings (Clippy-inspired)                   | M  | ✓      | lib_plans/future/05-game-infra/README.md|
 | AOT    | Auto-compile libraries to native shared libs           | M  | ✓      | PLANNING.md      |
 | C52    | Stdlib name clash: warning + `std::` prefix            | M  | ✓      | PLANNING.md      |
 | C53    | Match arms: library enums + bare variant names         | M  | ✓      | PLANNING.md      |
@@ -389,7 +389,7 @@ own scope never blocks a language tag.
 | Area | Document |
 |---|---|
 | Developer experience | [DX.md](plans/future/27-developer-experience/README.md) |
-| Game infrastructure | [GAME_INFRA.md](GAME_INFRA.md) |
+| Game infrastructure | [GAME_INFRA.md](lib_plans/future/05-game-infra/README.md) |
 | Package system | [PACKAGES.md](PACKAGES.md) |
 | WASM + frame yield | [WASM.md](WASM.md) |
 | Web IDE | [WEB_IDE.md](WEB_IDE.md) |
