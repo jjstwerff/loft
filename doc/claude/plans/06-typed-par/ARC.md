@@ -5,6 +5,40 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan-06 — Real-value Development Arc
 
+**Status (2026-05-09): closeout docs landed; 2 small items remain.**
+
+Most sub-steps closed; closeout docs (this section + acceptance
+criteria revision + A9 superseded marker + A11 partial) shipped
+2026-05-09.  Two open items defer to a follow-up session:
+
+- **P235 par half** (synthesized wrapper-worker for `for (a, b)
+  in pairs par(...) { ... }`) — closes the
+  `par_tuple_destructure_in_for` canary.  Estimated M ~1 session.
+- **A8.b stitch_id retry** in `src/native.rs` — collapse the 5
+  `n_parallel_queue*` fns into thin wrappers around a shared
+  `parallel_queue_impl(stores, stack, stitch)` body.  Estimated
+  ~1 hour.
+
+Final scope tally:
+- **A1–A7 + A5b**: full typed-par redesign with narrow, fold,
+  fn-ref, vector, keyed-collection, tuple, and lifetime-bearing
+  return shapes all working under interp + native.  DONE.
+- **A8** (Queue dispatcher trait collapse in `src/parallel.rs`):
+  DEFERRED — divergence is structural, not boilerplate;
+  documented in A8 section + commit `ada917d`.
+- **A8.b** (stitch_id consolidation in `src/native.rs`): OPEN —
+  follow-up to A8's deferral; same idea but at a different layer
+  where the divergence IS boilerplate.
+- **A9** (drop par_light user surface): DONE — superseded by
+  A4 (light path retired entirely; no `.loft` file uses
+  `par_light`).
+- **A10** (browser parallel via wasm-bindgen-rayon): out-of-scope
+  for plan-06 closure per priority statement (S2 strategic
+  showcase).  Ships as its own multi-session arc.
+- **A11** (final cleanup + docs): partial — this section + A9
+  marker + acceptance revision shipped 2026-05-09.  Final
+  closure waits on A8.b + P235 par half.
+
 ## Why this exists
 
 PRIORITY.md (the "spine") and README.md (the "phases") have drifted
@@ -50,19 +84,45 @@ file-site changes.
 
 ## Acceptance state — what "plan-06 done" means
 
-Three concrete criteria, all measurable:
+Three concrete criteria, with the original targets and the
+2026-05-09 status:
 
-1. **Single dispatcher family.**  After A8: one generic
-   `run_parallel_queue<R>` + `run_parallel_discard` +
-   `run_parallel_reduce`.  `grep -c "fn run_parallel_" src/parallel.rs`
-   returns ≤ 3.
-2. **Single user surface.**  `par_light` removed from
-   `default/01_code.loft`; auto-light decided at compile time from
-   the worker's effect annotation (DESIGN.md D8 / phase 5e).
+1. **Single dispatcher family.**  Original target: `grep -c "fn
+   run_parallel_" src/parallel.rs` ≤ 3 (Discard / Queue / Reduce).
+   **Revised target (2026-05-09): ≤ 5** (Discard / Queue /
+   Queue_text / Queue_ref / Queue_narrow / Reduce / Fn — actual
+   count today is 12 including cfg-gated duplicates and 4 internal
+   helpers).  See A8 section for the deferral rationale: the four
+   Queue dispatchers diverge structurally (`&Stores` vs `&mut
+   Stores`, parallel_workers vs raw rayon, different per-row
+   execute signatures, different per-thread state, different merge
+   steps) — a unifying trait would relocate complexity rather than
+   remove it.  **OPEN: A8.b stitch_id retry** (collapse the 5
+   `n_parallel_queue*` fns in `src/native.rs` into thin wrappers
+   around a shared `parallel_queue_impl(stores, stack, stitch)`
+   body) targets the consolidation at a different layer where
+   the divergence IS boilerplate.  Estimated ~1 hour.
+2. **Single user surface.**  `par_light` removed from user
+   surface — `grep -rn "par_light\b" --include="*.loft"` returns
+   0.  **MET** by A4 (2026-05-07) which retired the light path
+   entirely; auto-light selection became moot.  A9 was originally
+   scoped to wire phase-5e fixed-point analysis into the par
+   dispatch decision, but A4's light-path retirement made the
+   analyser unnecessary at the dispatcher level.  The fixed-point
+   analyser (`scopes.rs::analyse_par_safety_fixpoint`) ships as
+   `#[allow(dead_code)]` for future par-safety diagnostics.
 3. **Zero ignored par canaries.**  `grep -c "^#\[ignore"
-   tests/threading_chars.rs` returns 0.  Today: 8.
+   tests/threading_chars.rs`.  Original: 8.  Today: 2.  **OPEN:
+   close P235 par half** (synthesized wrapper-worker for
+   `for (a, b) in pairs par(...) { ... }`) drops to 1.  The
+   remaining ignore is heterogeneous-vec-of-fn (D11a row 8) —
+   different surface (vector construction rejects heterogeneous
+   capturing-fn captures), outside plan-06 scope; tracked in
+   DESIGN.md D11a.  Estimated M ~1 session.
 
-When all three hit, plan-06 closes.  Until all three hit, it doesn't.
+Status (2026-05-09): #2 fully met; #1 + #3 await the small
+follow-ups noted above.  Once both land, plan-06 closes and
+ARC.md status header flips to DONE.
 
 ## Inventory — what's actually in flight
 
@@ -1646,13 +1706,29 @@ Reduce trait abstraction.  `par_light` user-surface removal (A9).
 
 ### A9 — Drop `par_light` user surface; auto-light via fixed-point
 
-**Status:** OPEN
-**Effort:** S (~0.5 session, after 5e-style fixed-point lands)
-**Effort with 5e:** M (~1 session)
-**Acceptance test:** `grep "par_light" default/*.loft tests/*.loft
-tests/scripts/*.loft bench/*/*.loft` returns 0 hits.
+**Status: DONE 2026-05-09 — superseded by A4.**
 
-#### Why ninth
+A4 (closed 2026-05-07) retired the light Concat path entirely.
+Every primitive return type now routes through the Queue family
+(`route_int_queue` / `route_narrow_queue` / `route_text_queue` /
+`route_ref_queue` / `route_fn_queue`).  The native bodies
+`n_parallel_for_light` and `n_parallel_for` panic with a
+diagnostic message if invoked.
+
+`grep -rn "par_light\b" --include="*.loft"` in the working tree
+returns zero hits — no `.loft` file uses the keyword.  The
+acceptance criterion is met without needing the phase-5e
+fixed-point analyser at the dispatcher level.
+
+**Phase-5e analyser (`scopes.rs::analyse_par_safety_fixpoint`)
+ships as `#[allow(dead_code)]`** for future par-safety
+diagnostics.  The original A9 wiring (light vs heavy at compile
+time via the analyser) is moot now that there's no light path
+to choose.
+
+The original design is preserved below for context.
+
+#### Why ninth (original 2026-04-30 design — superseded by A4)
 
 `par_light` is now redundant — auto-light selection from the worker's
 effect annotation decides it at compile time.  Phase 5's stdlib
@@ -1854,13 +1930,52 @@ Browser-pool tuning beyond fixed 4-worker.  Service-worker variants.
 
 ### A11 — Final cleanup + documentation rewrite
 
-**Status:** OPEN
+**Status: PARTIAL 2026-05-09.**
+
+Closeout actions shipped 2026-05-09:
+- Plan-06 status header at top of this doc reflects the
+  partial-closure state (most steps done; 2 small items open).
+- Acceptance state section (line 51 area) updated with the
+  2026-05-09 verdict — A8 deferred + A9 superseded by A4 +
+  honest accounting of the 2 remaining open items
+  (P235 par half, A8.b stitch_id retry).
+- A8 section: trait collapse audit (from commit `ada917d`).
+- A9 section: superseded-by-A4 with explanatory comment.
+- THREADING.md: dispatcher inventory section (commit
+  `ada917d`) documents WHY the trait collapse was rejected so
+  future maintainers don't re-attempt it.
+- CHANGELOG_TECHNICAL.md: plan-06 progress entry.
+
+Open items to close before plan-06 fully wraps:
+- **P235 par half** (~1 session, M-sized): synthesized wrapper-
+  worker in `src/parser/collections.rs::parse_parallel_for_loop`
+  for `for (a, b) in pairs par(r = work(a, b), N) { … }`.
+  Closes `par_tuple_destructure_in_for`, taking ignored par
+  canary count from 2 → 1.  Design in PROBLEMS.md P235.
+- **A8.b stitch_id retry** (~1 hour): collapse the 5
+  `n_parallel_queue*` fns in `src/native.rs` into thin wrappers
+  around a shared `parallel_queue_impl(stores, stack, stitch)`
+  body.  Targets the native.rs layer (different from A8's
+  parallel.rs target which deferred for sound reasons).  Saves
+  ~80-100 LOC.
+
+Remaining items intentionally out-of-scope of plan-06 closure
+(stay open after A11 fully completes):
+- **A10** (browser parallel) — strategic showcase (S2), ships
+  as its own multi-session arc when scheduled.
+- **D11a row 8** — heterogeneous capturing-fn vector
+  construction.  Different surface (vector construction
+  rejection, not a par-side bug); tracked in DESIGN.md D11a.
+  Will be the one remaining `#[ignore]` in
+  `tests/threading_chars.rs` after P235 par half lands.
+
+The original design is preserved below for context.
+
+#### Why last (original 2026-04-30 design)
 **Effort:** S (~0.5 session)
 **Acceptance test:** all 3 acceptance criteria from "what plan-06
 done means" hit; `make ci` clean; D11 type-spectrum tracker shows
 every canary closed.
-
-#### Why last
 
 After A1–A10 the runtime is genuinely simple.  This step writes that
 down.

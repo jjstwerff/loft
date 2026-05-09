@@ -9,6 +9,76 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Plan-06 (typed-par redesign) closeout progress 2026-05-09
+
+Plan-06 ARC ran from 2026-04-30.  Shipped today: closeout docs
+in `ARC.md` + acceptance-criteria revision + A9 superseded
+marker.  Two small follow-up items remain (P235 par half,
+A8.b stitch_id retry); plan-06 fully closes once both land.
+
+**Shipped (A1–A7 + A5b + A8 deferral + A9 superseded by A4):**
+- A1: parallel workers — extra args + text/ref returns under one
+  fused-for-par codegen.
+- A2: per-thread slot cap stress test + structural fix
+  (`worker_slot_dispenser` atomic counter replaces 8d.3's fixed
+  16-slot cap).
+- A3: Queue dispatch for narrow-primitive returns (Boolean,
+  Character, Enum-no-payload, narrow Integer, Single, Float).
+- A4: retired the light Concat path entirely
+  (`n_parallel_for_light` and `n_parallel_for` panic if invoked).
+- A5: Stitch::Reduce runtime + `par_fold(items, init, fn fold,
+  threads)` parser builtin (interp + native).
+- A5b: `par_fold` native runtime mirror.
+- A6: closed 4 fn-ref / vector / keyed-collection canaries
+  (`par_struct_to_vector_t4`, `par_struct_to_fn_t4`,
+  `par_vec_of_fns_input_t4`, `par_struct_to_keyed_collection_t4`).
+- A7: closed the par-tuple canary surface — A7.1 (size-based
+  gate widen + work-ref unification — closes
+  `par_tuple_return_int_int` / `_three_arity` / `_nested`),
+  A7.3 (P234 lexer + runtime for tuple-of-struct member access).
+  Companion fix P236 (heap-owned reference returns from if/else
+  native data corruption — broader than tuples) landed alongside
+  A7.1.
+- A8 (deferred — see below).
+- A9: superseded by A4 (light path retired entirely; no `.loft`
+  file uses `par_light`).
+- A11 partial: this entry + ARC.md status update +
+  acceptance-criteria revision.
+
+**Deferred with rationale:**
+- A8 (Queue dispatcher trait collapse in `src/parallel.rs`):
+  divergence is structural, not boilerplate.  The 4-5 dispatchers
+  differ in `&Stores` vs `&mut Stores` access, worker primitive
+  (`parallel_workers` vs raw rayon), per-row execute call,
+  per-thread state, and merge step.  A unifying trait would
+  relocate complexity rather than remove it.  Full audit in
+  ARC.md A8 deferral section.  Codegen side is already collapsed
+  (`ParallelQueueEmitter`); buffer stacks per-type are
+  intentional (perf).  Commit `ada917d`.  Future revisit:
+  A8.b stitch_id retry at the `src/native.rs` layer (see open
+  items).
+- A10 (browser parallel via wasm-bindgen-rayon): out-of-scope
+  for plan-06 closure.  S2 strategic showcase; ships as its own
+  multi-session arc when scheduled.
+
+**Open items (close to fully wrap plan-06):**
+- **A7.2 / P235 par half** — synthesized wrapper-worker for
+  `for (a, b) in pairs par(r = work(a, b), N) { … }`.  Closes
+  `par_tuple_destructure_in_for`.  Estimated M ~1 session.
+  Design in PROBLEMS.md P235.
+- **A8.b stitch_id retry** — collapse the 5 `n_parallel_queue*`
+  fns in `src/native.rs` into thin wrappers around a shared
+  `parallel_queue_impl(stores, stack, stitch)` body.  Saves
+  ~80-100 LOC.  Estimated ~1 hour.
+
+**Acceptance criteria — current tally:**
+- #1 (≤ 3 dispatchers): revised to ≤ 5; A8.b retry will deliver
+  consolidation at the native.rs layer.
+- #2 (par_light removed from user surface): met by A4.
+- #3 (zero ignored par canaries): 8 → 2.  P235 par half closure
+  drops to 1; the remaining is heterogeneous-vec-of-fn (D11a
+  row 8), outside plan-06 scope.
+
 ### plan-09 phase 07: close P205 — bounded-generic text return scratch routing
 
 Closes P205 (1 of 4 native sub-failures retired).  The bug:
