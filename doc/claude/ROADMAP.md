@@ -193,12 +193,10 @@ Performance, refactor, internal cleanup with clear payoff.
 
 ### Constant store deferred-tail
 
-| ID | Title | E | Design | Source |
-|---|---|---|---|---|
-| CS.B | mmap cache loading (native) | S | ✓ | plans/deferred/28-const-store/README.md |
-| CS.C1 | Serialize `Data` struct to binary (prereq for CS.C2/C3) | MH | ~ | plans/deferred/28-const-store/README.md |
-| CS.C2 | `build.rs` pre-compile stdlib to `.loftc` | M | ✓ | plans/deferred/28-const-store/README.md |
-| CS.C3 | WASM: `include_bytes!` stdlib cache, skip re-parse | S | ✓ | plans/deferred/28-const-store/README.md |
+The CS.B / CS.C1-C3 work items are deferred (Phase A + D shipped; Phase
+B + C remain).  Trigger conditions and design content live in
+[`plans/DEFERRED.md`](plans/DEFERRED.md) and the const-store plan in
+`plans/deferred/`.  ROADMAP carries them only when the trigger fires.
 
 ---
 
@@ -286,10 +284,10 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged b
 | [`plans/future/24-multiplayer-editor/`](plans/future/24-multiplayer-editor/) | M | **plans/32 TIC_TAC_TOE v2 ground layer** | Plan only.  First real-game milestone |
 | [`plans/future/32-tic-tac-toe/`](plans/future/32-tic-tac-toe/) | M | — | v1 shipped; v2/v3/v4 protocol-only ground layers designed |
 | [`lib_plans/future/02-graphics/`](lib_plans/future/02-graphics/) | H (multi-arc) | — | Low-level `gl_*` API shipped; renderer abstraction designed |
-| [`lib_plans/future/07-web-ide/`](lib_plans/future/07-web-ide/) | M per W item | **lib_plans/09-lsp LSP.1** + **PACKAGES.md § Open work R1 workspace split** | W2-W6 |
+| [`lib_plans/future/07-web-ide/`](lib_plans/future/07-web-ide/) | M per W item | **lib_plans/future/09-lsp LSP.1** + **PACKAGES.md § Open work R1 workspace split** | W2-W6 |
 | [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | `lib/server/` has 1234 lines of starting code; design covers full feature set |
 | [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
-| [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/07-web-ide W2** + moros editor MO.* + script-target build mode | Plan-only |
+| [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/future/07-web-ide W2** + moros editor MO.* + script-target build mode | Plan-only |
 
 ### F — Foundation
 
@@ -314,9 +312,9 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged b
 | Plan | E | Depends on | Status |
 |---|---|---|---|
 | [`plans/future/22-mutable-closures/`](plans/future/22-mutable-closures/) | M-MH | — | Locked-in spec; not yet implemented |
-| [`plans/future/26-match-peg/`](plans/future/26-match-peg/) | MH | — | Cooperates with `lib_plans/01-regex` |
+| [`plans/future/26-match-peg/`](plans/future/26-match-peg/) | MH | — | Cooperates with `lib_plans/future/01-regex` |
 | [`plans/future/30-sorted-slice/`](plans/future/30-sorted-slice/) | M | — | Runtime affordance present (`key_compare` zip-prefix); only parser changes needed |
-| [`lib_plans/future/01-regex/`](lib_plans/future/01-regex/) | M | **lib_plans/03-lazy-stdlib** | First lazy-loaded stdlib consumer |
+| [`lib_plans/future/01-regex/`](lib_plans/future/01-regex/) | M | **lib_plans/future/03-lazy-stdlib** | First lazy-loaded stdlib consumer |
 
 ### Q — Internal quality
 
@@ -334,26 +332,23 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged b
 | [`lib_plans/future/04-asset-pipeline/`](lib_plans/future/04-asset-pipeline/) | M | — | Game asset workflow |
 | [`lib_plans/future/06-web-services/`](lib_plans/future/06-web-services/) | M-H per arc | — | JSON shipped; HTTP client + auth + WebSocket / SSE clients designed |
 
-### Deferred (won't do absent trigger)
+### Deferred plans
 
-| Plan | Trigger to unpause |
-|---|---|
-| [`plans/deferred/10-scope-exit-emission/`](plans/deferred/10-scope-exit-emission/) | A bug in this gate's territory, dep-tracking maintenance, or contributor interest |
-| [`plans/deferred/12-codegen-simplifications/`](plans/deferred/12-codegen-simplifications/) | Same trigger set as plan 13.  Tier 1 shipped on branch `plan-12-codegen-simplifications` |
-| [`plans/deferred/13-rust-template-migration/`](plans/deferred/13-rust-template-migration/) | 3+ template-path bugs OR major codegen evolution touching ≥50 Op annotations OR contributor appetite |
-| [`plans/deferred/28-const-store/`](plans/deferred/28-const-store/) | Phase B: Phase C lands large embedded stdlib cache.  Phase C: contributor appetite for H-effort `Data` serialization OR demonstrated WASM cold-start gap.  Phases A + D already shipped |
+Deferred plans don't appear on ROADMAP — their trigger index lives
+in [`plans/DEFERRED.md`](plans/DEFERRED.md).  When a trigger fires,
+the plan moves back to `future/` and ROADMAP gains a row.
 
 ### Cross-tracker dependency chains worth noting
 
-- **lib_plans/03-lazy-stdlib → lib_plans/01-regex** (registry mechanism → first consumer)
-- **PACKAGES.md § Open work PKG.REG → lib_plans/12-library-extraction** (registry → execution of monorepo split)
-- **PACKAGES.md § Open work R1 + lib_plans/09-lsp LSP.1 → lib_plans/07-web-ide** (workspace split + LSP server → browser IDE)
-- **plans/23-event-loop → lib_plans/10-game-client** (protocol abstraction → client library)
-- **plans/23-event-loop → plans/24-multiplayer-editor** (depends transitively via plans/32-tic-tac-toe v2 ground layer)
-- **plans/14-tuple-validation cross-mode harness → plans/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
-- **plans/33 N8c.x + plans/34 N1 → plans/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
-- **plans/22-mutable-closures spec → lib_plans/13-scriptable-scenes script API** (closure semantics inform user-script ergonomics)
-- **C57 / I13 (in plans/29-server-features) → lib_plans/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)
+- **lib_plans/future/03-lazy-stdlib → lib_plans/future/01-regex** (registry mechanism → first consumer)
+- **PACKAGES.md § Open work PKG.REG → lib_plans/future/12-library-extraction** (registry → execution of monorepo split)
+- **PACKAGES.md § Open work R1 + lib_plans/future/09-lsp LSP.1 → lib_plans/future/07-web-ide** (workspace split + LSP server → browser IDE)
+- **plans/future/23-event-loop → lib_plans/future/10-game-client** (protocol abstraction → client library)
+- **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/future/32-tic-tac-toe v2 ground layer)
+- **plans/14-tuple-validation cross-mode harness → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
+- **NATIVE.md § Open work N8c.x + PERFORMANCE.md § Open work N1 → plans/future/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
+- **plans/future/22-mutable-closures spec → lib_plans/future/13-scriptable-scenes script API** (closure semantics inform user-script ergonomics)
+- **C57 / I13 (in plans/future/29-server-features) → lib_plans/future/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)
 
 ### Features still needing plan promotion
 
