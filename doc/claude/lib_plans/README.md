@@ -62,7 +62,7 @@ work.
 ### Closing a plan — documentation must move out
 
 Same rule as `plans/`.  Apply the 6-step procedure in
-[`../plans/_CLOSURE_CHECKLIST.md`](../plans/_CLOSURE_CHECKLIST.md);
+[`../plans/_LIFECYCLE.md`](../plans/_LIFECYCLE.md);
 the rule's full specification is in
 [`../plans/README.md § Closing a plan`](../plans/README.md#closing-a-plan--documentation-must-move-out).
 

@@ -194,22 +194,16 @@ implementation itself.  Links to closed plans rot fastest
 because nothing in the project keeps them honest.
 
 **How to apply on close:** see
-[`_CLOSURE_CHECKLIST.md`](_CLOSURE_CHECKLIST.md) for the
-6-step procedure (identify reference vs closure-record →
-pick reference home → trim plan → rewrite incoming links →
-update CLAUDE.md → update Finished table).
+[`_LIFECYCLE.md`](_LIFECYCLE.md) for the 6-step procedure shared
+by close + defer.  Two shapes: **CREATE-AND-MOVE**
+(`31-html-export → HTML_EXPORT.md`) and **TRIM-ONLY**
+(`04-slot-assignment-redesign → SLOTS.md`).
 
-The checklist documents two shapes: **CREATE-AND-MOVE**
-(when no comprehensive reference doc exists; create one)
-and **TRIM-ONLY** (when reference doc already covers shipped
-state; trim plan only).  Worked examples for both:
-`31-html-export` and `04-slot-assignment-redesign`.
-
-This rule applies retroactively too: if you discover an
-existing `finished/` plan being linked from current docs,
-that's a cleanup signal — the reference content from that
-finished plan never moved out, OR the linker hasn't been
-updated to the moved-out location.
+This rule applies retroactively: a `finished/` plan being linked
+from current docs is a cleanup signal — either the reference
+content never moved out, or the link wasn't updated when it did.
+`scripts/check_doc_drift.sh` catches the common shapes
+automatically.
 
 ### Authoring a new plan
 
@@ -223,36 +217,18 @@ content that should move to `doc/claude/*.md`.
 
 ### Deferring a plan
 
-When a plan can't reach completion in the current arc but the
-remaining work has a **concrete trigger** (not just "someday"),
-move it to `deferred/`.  Full procedure in
-[`_DEFER_CHECKLIST.md`](_DEFER_CHECKLIST.md).  Summary:
+When some/all phases can't reach completion in the current arc
+but the remaining work has a **concrete trigger**, move to
+`deferred/`.  Procedure in [`_LIFECYCLE.md`](_LIFECYCLE.md) —
+shared with closing (Steps 4-6 are identical).
 
-1. **Identify the boundary** — what shipped vs what stays.  If
-   some phases shipped and others didn't, this is a *partial
-   defer*: the README's Status table grows a SHIPPED / DEFERRED
-   row split (see plan-28 + plan-12 for the canonical shape).
-2. **Extract reference content for shipped parts** — same as the
-   closure rule.  Anything load-bearing for the codebase moves
-   to `doc/claude/*.md`; the deferred plan README keeps closure
-   notes for the shipped part + design content for the deferred
-   tail.
-3. **Add a trigger row to [`DEFERRED.md`](DEFERRED.md)** — one
-   line, points at the plan's README for full detail.  No row
-   without a trigger.
-4. **Reclassify ROADMAP rows** — the shipped parts leave ROADMAP
-   (closed); the deferred parts stay if they're roadmap-tracked,
-   or get removed if they're trigger-only.
-5. **`git mv` the plan directory** to `plans/deferred/<NN>-<slug>/`.
+Partial defers (some phases shipped, others paused) grow a
+SHIPPED / DEFERRED Status table at the top of the plan README.
+Canonical shapes: plan-28, plan-12.
 
-A plan stays in `deferred/` while ANY remaining phase has a
-concrete trigger.  When the trigger fires, the plan moves to
-`plans/future/` (or directly into a current arc), the row leaves
-DEFERRED.md, and a ROADMAP row appears.
-
-If a plan has no remaining triggers (everything is "won't do
-without a driver"), it goes to `DESIGN_DECISIONS.md`, not
-`deferred/`.
+If remaining phases have no concrete trigger, the design moves to
+[`../DESIGN_DECISIONS.md`](../DESIGN_DECISIONS.md), not
+`deferred/`.  "Will get to it later" is not a trigger.
 
 ### Light flow lifecycle — `## Open work` in reference docs
 
@@ -327,161 +303,39 @@ grep -r "Trigger to unpause:" doc/claude/
 ### Closed-work hygiene rule
 
 DEFERRED.md and USER_FACING.md are **open-queue documents**.
-When an item closes, its row is **removed entirely** — not
-struck-through, not moved to a "recently shipped" subsection,
-not retained as historical record.
+When an item closes, its row is **removed entirely** — closed
+work lives in the right place for its shape: git history (commit
+message), regression tests, plan READMEs (architectural lesson),
+PROBLEMS.md (closed P-id entries stay for cross-reference),
+CHANGELOG.md (user-facing notes).  Five homes, each correct for
+its information shape.
 
-Closed work already lives in the right places, and duplicating it
-across the open queues lets them drift from "actionable" to
-"universal log":
-
-- **Git history** — commit message documents what changed and why.
-- **Regression test** in `tests/*.rs` — un-ignored when the fix
-  lands; permanent behavioural lock-in.
-- **Plan README** — the relevant plan's closed-section absorbs
-  any architectural lesson learned.
-- **PROBLEMS.md** — closed P-id entries stay (file convention)
-  for cross-reference history.
-- **CHANGELOG.md** — user-facing release notes.
-
-Five places, each the right one for its information shape.  The
-grep target `grep -r "Trigger to unpause:" doc/claude/` should
+The grep target `grep -r "Trigger to unpause:" doc/claude/` should
 always show only currently-actionable items.
 
 **Sole exception**: USER_FACING.md's "Closed-by-decision" section
-is a permanent historical record of explicit non-goals.  Those
-stay so a future contributor finds the decision before
-re-proposing.  They're orthogonal to the open queue.
+is a permanent record of explicit non-goals so future contributors
+find the decision before re-proposing.
 
-**Default discipline:** finish the validation plans before shipping
-new feature work.  Override only when USER_FACING.md surfaces an
-S0 item or an S1 item that's been deferred for two releases — see
-USER_FACING.md § "Severity override".
+### Validation-first default
 
-### Two tracks: validation (primary) and showcase (parallel)
-
-Sessions follow two complementary tracks:
-
-- **Validation track (primary).**  Finish-plans-first: validation
-  matrices, P-issue closure, language-quality work.  This is where
-  the bug yield comes from and what makes loft *worth using*.
-  Severity-driven (USER_FACING.md S0/S1/S2 tiers).  **Default
-  candidate for every session.**
-
-- **Showcase track (parallel).**  Strategic-recruitment work:
-  brick-buster, browser-parallel (A10), world-rendering demos,
-  performance benchmarks.  This is what makes loft *visible* and
-  attracts contributors.  Strategic-driven (USER_FACING.md
-  § Strategic showcase track).  **Worked when validation work hits
-  a natural breakpoint** — phase closes, pre-flight survey shows
-  low yield for the next phase, or the showcase item is gating an
-  external commitment (demo date, talk).
-
-The two tracks are orthogonal — a piece of work isn't both
-validation and showcase.  The user's 2026-05-04 priority statement
-locked this in: "[the demo] will not keep me from improving loft
-(that is my first priority) but the OpenGL demo in a good state is
-our biggest asset to get more developers."  Improving loft is the
-first track; the demo is the second.
-
-When a session opens with no clear next step, pick from the
-validation track first.  Only if validation has no S0/S1 work in
-flight AND no S2 work in mid-investigation, advance the showcase
-track.
-
-**Yield-based transition rule.** The validation track stays
-primary while matrix bug-yield rates remain high.  When a plan's
-pre-flight survey closes a phase with **0-1 P-issues found in 5+
-cells**, that's the signal that the cheap bugs in that surface
-are exhausted.  Plans that consistently hit the 0-1 threshold
-across consecutive phases get demoted to "matrix-as-documentation"
-(per the gating already documented in plans 15/16/17 risk
-sections) and the freed time advances the showcase track.
-
-**Two quality metrics for confidence in the language**, in priority
-order:
-
-1. **Velocity of bug closure.** Not "how many bugs do we have"
-   (every language has bugs) but "how fast can we close them when
-   they appear."  May 2026 baseline: 5-7 P-issues closed per
-   focused session, each pinned by a regression test and clean
-   under both clippy gates.  This rate is the actual product-
-   quality signal — what makes loft trustworthy is that bugs are
-   resolved quickly when found.  Two weeks before this baseline,
-   the rate was structurally lower because the regression net was
-   thinner; the matrix infrastructure (cross-mode harness, lock-in
-   tests, hygiene rule, plan-phase discipline) is what turned
-   one-off fixes into compounding velocity.
-2. **Primary vs. add-on bug location.** Equal-weight to velocity
-   because where a bug lives determines its blast radius:
-   - **Primary implementation bugs** (parser, type system,
-     codegen, runtime) can break entire user projects.  Closing
-     them pre-1.0 is foundational quality work.
-   - **Add-on feature bugs** (specific stdlib functions, niche
-     operators, format-spec corners) usually have viable
-     workarounds; impact is bounded.
-
-   The matrix work is currently primary-heavy by design — that's
-   exactly the right yield for pre-1.0.  As the matrices close
-   their high-yield phases, future bug yield will skew toward
-   add-on features.  When that ratio inverts, the language has
-   reached a new stability tier — fewer foundational issues, more
-   "polish" issues.  That's the natural transition point for
-   shifting attention to the showcase track and reducing matrix
-   intensity.
-
-May 2026 snapshot — closure breakdown (8 P-issues this session):
-
-| ID | Where | Tier |
-|---|---|---|
-| P206 | parser core (match-arm separator) | primary |
-| T1.8a | native codegen (tuple-of-text return) | primary |
-| plan-17 (A) | parser/type-inference (generic-call return propagation) | primary |
-| plan-17 (B) | parser/type-inference (bounded-T method dispatch) | primary |
-| plan-17 (C) | stdlib `to_text` impls | add-on |
-| plan-18 hang | parser core (match arm-arrow recovery) | primary |
-| P207 | native codegen (char-tuple-elem comparison) | primary, narrow |
-| P208 | native codegen (nested scratch.push wrapping) | primary, narrow |
-
-Seven of eight bugs are primary-implementation work; two of those
-are narrow codegen paths users can avoid.  The one add-on item
-(stdlib `Printable` impls) was a doc-vs-stdlib mismatch, not a
-runtime bug.  This is the right yield mix for pre-1.0.
-
-This rule keeps both tracks honest:
-- Real-world workloads (OpenGL/world-chunk) DO find bugs, but at
-  lower per-hour rates than the matrix work currently produces
-  (3-6 P-issues/session in May 2026).  Most real-world bugs are
-  also downstream of matrix-foundational bugs, so fixing the
-  matrix first means the showcase work doesn't trip over them.
-- The matrix work is finite — once validated, the same surface
-  doesn't yield more.  When the rate drops, switching to
-  showcase gets a higher marginal yield.
-
-The May 2026 snapshot has matrix yield well above this threshold;
-validation stays primary.  Reconsider per-session as plans close.
+Default discipline: finish validation plans before shipping new
+feature work.  When validation matrices stop yielding bugs (a
+phase closes with 0-1 P-issues across 5+ cells), the matrix is
+mature — promote that bandwidth to feature / showcase work.
+Override only when USER_FACING.md surfaces an S0 item or an S1
+item that's been deferred for two releases.
 
 ## Conventions
 
-- Subdirectory names are numbered (`NN-slug`) so they sort in the
-  order they were opened.  The number is a monotonic counter — it
-  does not imply priority.
-- A new initiative opens with an `NN-slug/README.md` stating the
-  goal, phase layout, and ground rules, plus a first phase plan
-  file (conventionally `00-<first-phase>.md`).
-- Every phase plan file begins with `Status: open | in-progress |
-  done` so a fresh session can orient quickly.
-- When an initiative is fully closed (all phases committed, no open
-  follow-ups), move its entire subdirectory into `finished/`.
-  That way `ls doc/claude/plans/` at a glance shows only live work.
-- When an initiative is intentionally paused — well-described, no
-  driving bug or feature, picked up only when triggered — move its
-  entire subdirectory into `deferred/`.  Deferred plans differ from
-  finished plans: they're not done, they're parked.  Their READMEs
-  must state the **trigger** that would unpause them (a P-issue in
-  the relevant area, a user-visible feature need, contributor
-  appetite, …).  Sitting in `deferred/` signals "available, not
-  abandoned."
+- Subdirectory names are numbered (`NN-slug`); number is monotonic
+  open-order, not priority.
+- New initiative opens with `NN-slug/README.md` (from `_TEMPLATE.md`)
+  + `00-<first-phase>.md`.
+- Phase files begin with `Status: open | in-progress | done`.
+- Closed plans → `finished/` (apply [`_LIFECYCLE.md`](_LIFECYCLE.md)).
+- Paused-with-trigger plans → `deferred/` (apply [`_LIFECYCLE.md`](_LIFECYCLE.md)
+  + add row to [`DEFERRED.md`](DEFERRED.md)).
 
 ## Ground rule — plans never allow regressions
 

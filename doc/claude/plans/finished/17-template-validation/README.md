@@ -94,11 +94,11 @@ byte-identical stdout** asserted by the `cross_mode!` harness.
   generic-tuple type inference workaround row
 - [`../../DESIGN_DECISIONS.md`](../../DESIGN_DECISIONS.md) —
   destination for any future CLOSED rows from this matrix
-- [`../../plans/14-tuple-validation/00-matrix.md`](../../plans/14-tuple-validation/00-matrix.md)
+- [`../../14-tuple-validation/00-matrix.md`](../../14-tuple-validation/00-matrix.md)
   — peer matrix (donor template for cross_mode + matrix style)
-- [`../../plans/future/15-closure-validation/`](../../plans/future/15-closure-validation/)
-  / [`../../plans/future/16-coroutine-validation/`](../../plans/future/16-coroutine-validation/)
-  / [`../../plans/future/18-match-validation/`](../../plans/future/18-match-validation/)
+- [`../../future/15-closure-validation/`](../../future/15-closure-validation/)
+  / [`../../future/16-coroutine-validation/`](../../future/16-coroutine-validation/)
+  / [`../../future/18-match-validation/`](../../future/18-match-validation/)
   — peer matrix plans following the same shape
 - `tests/template_matrix.rs` — the 26 PASS cells + harness wiring
 - `default/01_code.loft` — stdlib interfaces (Ordered / Equatable /

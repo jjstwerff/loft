@@ -44,7 +44,7 @@ A row leaves DEFERRED.md when its trigger fires:
 - **Reclassified as won't-do** — entry moves to
   `DESIGN_DECISIONS.md` with rationale.
 - **Plan ships** — closure via the standard route
-  (`_CLOSURE_CHECKLIST.md`); this file isn't involved.
+  (`_LIFECYCLE.md`); this file isn't involved.
 
 ---
 

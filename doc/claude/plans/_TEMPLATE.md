@@ -132,4 +132,4 @@ has a single concern.
    for plans (most plan content lives at a reference doc
    that already has its own CLAUDE.md entry).
 
-**On closing a plan:** see [`_CLOSURE_CHECKLIST.md`](_CLOSURE_CHECKLIST.md).
+**On closing or deferring a plan:** see [`_LIFECYCLE.md`](_LIFECYCLE.md).

@@ -39,7 +39,7 @@ file is the one-line index.
   the entry here is removed.
 - **Reclassified as won't-do** — entry moves to
   `DESIGN_DECISIONS.md` with rationale.
-- **Plan ships** — closure via `_CLOSURE_CHECKLIST.md`; this file
+- **Plan ships** — closure via `_LIFECYCLE.md`; this file
   isn't involved.
 
 ---

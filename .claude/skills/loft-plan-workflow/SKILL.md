@@ -17,8 +17,7 @@ Use this skill when working on **plan organization**:
 This skill is **procedural-only**.  Definitions / rationale / templates live in source docs:
 - [`doc/claude/plans/README.md`](../../../doc/claude/plans/README.md) — docs-vs-plans rule, three workflows, value categories (S/R/G/F/U/C/Q/N), closure rule, light-flow lifecycle, roadmap workflow
 - [`doc/claude/plans/_TEMPLATE.md`](../../../doc/claude/plans/_TEMPLATE.md) — canonical new-plan README shape (with the "pick the lightest workflow" gate)
-- [`doc/claude/plans/_CLOSURE_CHECKLIST.md`](../../../doc/claude/plans/_CLOSURE_CHECKLIST.md) — 6-step close-plan procedure
-- [`doc/claude/plans/_DEFER_CHECKLIST.md`](../../../doc/claude/plans/_DEFER_CHECKLIST.md) — 6-step defer-plan procedure (full + partial defers)
+- [`doc/claude/plans/_LIFECYCLE.md`](../../../doc/claude/plans/_LIFECYCLE.md) — 6-step procedure for closing OR deferring plans (Steps 4-6 are shared)
 - [`doc/claude/ROADMAP.md`](../../../doc/claude/ROADMAP.md) — the work tables
 
 **Cross-cuts:** branch / commit / push policy is in CLAUDE.md § Branch policy and memory entries.  This skill assumes you've already followed those.
@@ -53,25 +52,34 @@ Length budget: 100-300 lines.  Longer means reference content is leaking in — 
 
 ---
 
-## Procedure B — Close a plan (apply the closure rule)
+## Procedure B — Close or defer a plan
 
-Full spec: [`_CLOSURE_CHECKLIST.md`](../../../doc/claude/plans/_CLOSURE_CHECKLIST.md).  Summary:
+Full spec: [`_LIFECYCLE.md`](../../../doc/claude/plans/_LIFECYCLE.md) (single checklist; close + defer share Steps 4-6).
 
-1. **Identify** reference vs closure-record vs historical-archaeology sections.
-2. **Pick reference home.**  Two shapes:
-   - **CREATE-AND-MOVE** — no comprehensive reference doc exists; create `doc/claude/<NAME>.md` with extracted content.  Example: `31-html-export → HTML_EXPORT.md`.
-   - **TRIM-ONLY** — reference doc already covers shipped state; just trim plan README + update links.  Example: `04-slot-assignment-redesign → SLOTS.md` (already comprehensive).
-3. **Trim plan README** to closure-record shape (~50-150 lines).  Lead with "Reference for the SHIPPED <feature> moved to <path>.  This file is a closure record only."
-4. **Grep + rewrite incoming links** (THE most-skipped step):
+**Pick the outcome first**:
+
+- All phases shipped → **close** (`finished/`)
+- Some/all phases paused with concrete trigger → **defer** (`deferred/`).  Partial defer: Status table grows SHIPPED / DEFERRED rows (canonical: plan-28, plan-12).
+- All paused without concrete trigger → design moves to `DESIGN_DECISIONS.md`, not `deferred/`
+
+For each shipped phase (whether closing or deferring):
+
+1. **Tag** sections as REFERENCE / CLOSURE-RECORD / HISTORICAL.
+2. **Pick reference home** — CREATE-AND-MOVE (`31-html-export → HTML_EXPORT.md`) or TRIM-ONLY (`04-slot-assignment-redesign → SLOTS.md`).
+3. **Trim plan README** to ~50-150 lines.  Lead with `Status — DONE/SHIPPED YYYY-MM-DD` + reference cross-link.
+
+For partial defers, the README also keeps full design content for the deferred phases.
+
+Common to close + defer:
+
+4. **Reclassify ROADMAP rows** — shipped parts leave; deferred parts stay if roadmap-tracked.
+5. **`git mv` directory** + update tracker tables (Finished/Deferred row in `plans/README.md`).  Defer adds a row to `DEFERRED.md` with the trigger.
+6. **Grep + rewrite incoming links** (THE most-skipped step):
    ```bash
-   grep -rn "plans/<NN>-<slug>\|plans/finished/<NN>-<slug>\|plans/future/<NN>-<slug>" \
+   grep -rn "plans/<NN>-<slug>\|plans/future/<NN>-<slug>\|plans/finished/<NN>-<slug>\|plans/deferred/<NN>-<slug>" \
      CLAUDE.md doc/claude/ --include="*.md"
    ```
-   Rewrite design / how-it-works links → reference home.  Keep closure-record links pointing at the closed plan.
-5. **Update CLAUDE.md doc index** if the plan had an entry (it usually shouldn't).  CREATE-AND-MOVE: new entry for the reference doc.  TRIM-ONLY: existing reference doc entry stays.
-6. **Update plans/README.md or lib_plans/README.md** Finished table row.  Compress to one line: "Closure record only.  Reference at `<NAME>.md`."
-
-`git mv` the directory to `finished/<NN>-<slug>/` if it isn't already there.
+   Then run `scripts/check_doc_drift.sh` to catch what grep missed.
 
 ---
 
@@ -100,24 +108,7 @@ Full spec: [`_CLOSURE_CHECKLIST.md`](../../../doc/claude/plans/_CLOSURE_CHECKLIS
 
 ---
 
-## Procedure E — Defer a plan (full or partial)
-
-Full spec: [`_DEFER_CHECKLIST.md`](../../../doc/claude/plans/_DEFER_CHECKLIST.md).  Use when remaining work has a **concrete trigger** (not "someday") and won't ship in this arc.  If no trigger, the design moves to `DESIGN_DECISIONS.md` instead.
-
-Summary:
-
-1. **Identify the boundary** — for partial defers, build a Status table at the top of the plan README with one row per phase / tier and explicit SHIPPED / DEFERRED / RETIRED state.  Plan-28 + plan-12 are canonical shapes.
-2. **Extract reference content for shipped parts** — apply the closure rule for the shipped portion only (CREATE-AND-MOVE or TRIM-ONLY); deferred phases keep their design content in the README.
-3. **Add a trigger row to [`DEFERRED.md`](../../../doc/claude/plans/DEFERRED.md)** — one line, points at the plan README for full detail.  No row without a concrete trigger.
-4. **Reclassify ROADMAP rows** — shipped parts leave (closure → CHANGELOG); deferred parts stay if roadmap-tracked, otherwise removed (DEFERRED.md row is enough).
-5. **`git mv` the plan directory** to `plans/deferred/<NN>-<slug>/`; update plans/README.md tables (move to Deferred initiatives table).
-6. **Grep + rewrite incoming links** — same shell command as Procedure B step 4 (THE most-skipped step here too).
-
-When the trigger fires later, reverse Steps 5 + 4 + 3 (move back to `future/`, add ROADMAP rows, remove DEFERRED.md row).
-
----
-
-## Procedure F — Light flow (`## Open work` in a reference doc)
+## Procedure E — Light flow (`## Open work` in a reference doc)
 
 The default for TODOs that fit in a row of a reference-doc table.  Same lifecycle as a plan, just lighter.
 
@@ -190,9 +181,9 @@ S sits above R because silent failures have no error message — invisible to us
 | Why docs vs plans split | `plans/README.md § The rule — docs vs plans` |
 | Pick light vs plan vs bug | `plans/README.md § Three workflows` |
 | New plan README shape | `plans/_TEMPLATE.md` |
-| Closing a plan (full procedure) | `plans/_CLOSURE_CHECKLIST.md` |
-| Deferring a plan (full or partial) | `plans/_DEFER_CHECKLIST.md` |
+| Closing or deferring a plan (full procedure) | `plans/_LIFECYCLE.md` |
 | Light-flow lifecycle (open / work / close / defer in `## Open work`) | `plans/README.md § Light flow lifecycle` |
+| Drift detection (broken paths, stale claims, time projections) | `scripts/check_doc_drift.sh` |
 | Value category definitions + rationale | `plans/README.md § Value categories` |
 | Roadmap organization rules | `plans/README.md § Roadmap workflow` |
 | Branch / commit / push policy | `CLAUDE.md § Branch policy` |

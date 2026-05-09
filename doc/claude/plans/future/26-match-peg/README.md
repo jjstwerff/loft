@@ -582,9 +582,9 @@ memo buffer.  Worth revisiting once L3.6 is on the critical path.
 - [TUPLES.md](../../../TUPLES.md) — fixed-arity sequence captures.
 - [PLANNING.md](../../../PLANNING.md) — L2 nested-pattern backlog (prerequisite).
 - [COROUTINE.md](../../../COROUTINE.md) — iterator-valued inputs (L3.6).
-- [LAZY_STDLIB.md](lib_plans/future/03-lazy-stdlib/README.md) — lazy-loading mechanism (regex is its
+- [LAZY_STDLIB.md](../../../lib_plans/future/03-lazy-stdlib/README.md) — lazy-loading mechanism (regex is its
   first consumer).
-- [COMPILER.md](COMPILER.md) § pattern lowering — where L3 compiles in.
+- [COMPILER.md](../../../COMPILER.md) § pattern lowering — where L3 compiles in.
 - [INTERMEDIATE.md](INTERMEDIATE.md) — `OpMatchAnchor` / `OpMatchRevert` addition.
 - [INCONSISTENCIES.md](../../../INCONSISTENCIES.md) #26 — guarded-arm exhaustiveness precedent.
 - `src/lexer.rs` § `link` / `revert` — the primitive this design mirrors.

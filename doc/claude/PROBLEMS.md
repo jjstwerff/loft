@@ -756,7 +756,7 @@ template double-substitution bug).  Plan 10 was rescoped as a
 deferred structural simplification of the dep-tracking cleanup
 gate; it does NOT close P203.  The strace trace + diagnostic
 evidence is preserved at
-[plan 10's phase 00 characterisation](plans/10-scope-exit-emission/00-characterize.md)
+[plan 10's phase 00 characterisation](plans/deferred/10-scope-exit-emission/00-characterize.md)
 under "Historical context — P203 diagnostic".
 
 **Test:** `tests/native::native_scripts` slot `42_file_result`.
