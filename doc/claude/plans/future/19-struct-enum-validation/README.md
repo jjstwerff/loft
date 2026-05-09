@@ -107,5 +107,5 @@ matrix becomes documentation, not execution).
 - `src/parser/control.rs` — match dispatch.
 - [plan-14 phase 04](../14-tuple-validation/04-references.md) —
   Reference tuples cross-reference.
-- [plan-17](../17-template-validation/README.md) — generic
-  dispatch over Shape-like interfaces.
+- [plan-17](../../finished/17-template-validation/README.md) — generic
+  dispatch over Shape-like interfaces (closed 2026-05-09).
