@@ -47,11 +47,17 @@ work.
   library plans differ from finished plans: they're not done,
   they're parked.  Their READMEs must state the **trigger** that
   would unpause them.
-- "We will do this, just not yet" → `future/`.
-- "We won't do this absent a concrete trigger" → `deferred/`.
+- `future/` = **paused, not abandoned** — real commitment to
+  finish, eventually.  The long-term direction is to drain
+  `future/` to zero by shipping each plan through to
+  `finished/`.  May take years; that is fine.
+- `deferred/` = **won't do absent a concrete trigger** —
+  different intent.  May never run.
 - Same `≤3 active` discipline as `plans/`: hold the in-flight
   count to 2-3 library initiatives.  Promote one from `future/`
-  when a current one closes.
+  when a current one closes.  Work flows in one direction:
+  `future/` → current → `finished/`, never back to
+  "indefinitely parked."
 
 ## Ground rule — library plans never break downstream consumers
 
@@ -99,9 +105,12 @@ from `future/` into this section.
 
 ## Future library initiatives
 
-Library plans we intend to do, just not right now.  Ready-to-
-resume — pre-flight already done, design already drafted.
-Promote one into "Current" when a current library plan closes.
+Library plans we intend to do — paused, not abandoned.  Each
+future plan is a real commitment to finish; the long-term
+direction is to drain `future/` to zero by completing each
+plan into `finished/`.  Ready-to-resume — pre-flight already
+done, design already drafted.  Promote one into "Current" when
+a current library plan closes.
 
 | Dir | Initiative | Pre-flight status |
 |---|---|---|
@@ -110,10 +119,12 @@ Promote one into "Current" when a current library plan closes.
 
 ## Deferred library initiatives
 
-Library plans that are well-described but intentionally paused —
-picked up only when a concrete trigger arrives.  Distinct from
-`future/`, which is "we will do this, just not yet."  Deferred
-items are "we won't do this unless something specific changes."
+Library plans well-described but intentionally paused — picked
+up only when a concrete trigger arrives.  Distinct from
+`future/`, which is "we will finish this, eventually" (real
+intent to ship).  Deferred items are "we won't do this unless
+something specific changes" — they may never run, and that is
+acceptable.
 
 | Dir | Initiative | Trigger to unpause |
 |---|---|---|

@@ -256,11 +256,12 @@ shapes) — same rule applied.
 ## Current initiatives
 
 Maximum 2-3 plans in flight at a time.  When a current plan
-closes, promote the next-highest-priority plan from
-`future/` (which the user wants done eventually but not yet)
-into this section.  `deferred/` is a separate concept — items
-parked because they need a concrete trigger to be worth doing
-at all.
+closes, promote the next-highest-priority plan from `future/`
+(paused work intended to be finished eventually) into this
+section.  Long-term direction: drain `future/` to zero by
+shipping each plan through to `finished/`.  `deferred/` is a
+separate concept — items parked because they need a concrete
+trigger to be worth doing at all (may never run).
 
 | Dir | Initiative | Status |
 |---|---|---|
@@ -269,11 +270,19 @@ at all.
 
 ## Future initiatives
 
-Plans we intend to do, just not right now.  Ready-to-resume —
-pre-flight already done, design already drafted.  Promote one
-into "Current initiatives" when a current plan closes (max 2-3
-in flight).  Distinct from `deferred/`, which is for plans we
-won't do absent a concrete trigger.
+Plans we intend to do — paused, not abandoned.  Each future
+plan is a real commitment to finish; the long-term direction
+is to **drain `future/` to zero** by completing each plan into
+`finished/`.  This will take considerable time (years, not
+months — there are 8+ here), and that is fine.  What matters
+is that work flows in one direction: `future/` → current →
+`finished/`, never back to "indefinitely parked."
+
+Ready-to-resume — pre-flight already done, design already
+drafted.  Promote one into "Current initiatives" when a
+current plan closes (max 2-3 in flight).  Distinct from
+`deferred/`, which is for plans we **won't do absent a
+concrete trigger** (different intent — those may never run).
 
 | Dir | Initiative | Pre-flight status |
 |---|---|---|
