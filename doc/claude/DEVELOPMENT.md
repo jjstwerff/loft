@@ -583,8 +583,8 @@ Only add a new opcode when:
   and unacceptable (document the benchmark).
 
 **When you do add one**, follow the 10-step bootstrap procedure in
-[`plans/02-narrow-collection-elements/04b-short-encoding.md` §
-Opcode-addition procedure](plans/02-narrow-collection-elements/04b-short-encoding.md#opcode-addition-procedure-verified-2026-04-22).
+[`plans/finished/02-narrow-collection-elements/04b-short-encoding.md` §
+Opcode-addition procedure](plans/finished/02-narrow-collection-elements/04b-short-encoding.md#opcode-addition-procedure-verified-2026-04-22).
 Short summary: add Store methods first, declare in `default/01_code.loft`,
 grow the `OPERATORS` array in `src/fill.rs` to match, append placeholder
 identifiers + empty function bodies, build, then `cargo test --test issues

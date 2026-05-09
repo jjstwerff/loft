@@ -112,13 +112,49 @@ pub enum Type {
 
 ### Integer Storage Size
 
-`Integer(min, max)` is stored compactly based on range:
-- range < 256  → 1 byte (`Parts::Byte`)
-- range < 65536 → 2 bytes (`Parts::Short`)
-- `forced_size == 4` (e.g. `i32` alias) → 4 bytes (`Parts::Int`)
-- otherwise    → 8 bytes (post-2c: always i64 at rest)
+`Integer(IntegerSpec { min, max, forced_size, .. })` is stored
+compactly based on range AND on whether the value is in a struct
+field versus a vector element.
 
-Nullable integers with range exactly 256 or 65536 also use 1 or 2 bytes respectively.
+**Struct fields** (regular `Parts::*`):
+
+| Condition | Storage | Variant |
+|---|---|---|
+| range < 256 | 1 byte | `Parts::Byte` (encodes `raw = val - min + 1`; raw 0 is null sentinel) |
+| range < 65536 | 2 bytes | `Parts::Short` (encodes `raw = val - min + 1`; raw 0 is null sentinel) |
+| `forced_size == 4` (e.g. `i32` alias) | 4 bytes | `Parts::Int` (encodes `raw = val`; `i32::MIN` is null sentinel) |
+| otherwise | 8 bytes | `Parts::Long` (post-2c: always i64 at rest; `i64::MIN` sentinel) |
+
+Nullable integers with range exactly 256 or 65536 also use 1 or 2
+bytes respectively.
+
+**Vector elements** (post-plan-02 narrowing): vectors of narrow
+integer aliases honour `forced_size` via a divergent rule because
+`vector_add` raw-byte-copies element bytes — the `+1` offset of
+`Parts::Short` would cause read/write mismatch.
+
+| Width | Vector storage | Variant |
+|---|---|---|
+| 1 byte | direct `raw = val - min` (no +1 offset) | `Parts::Byte` (the encoding agrees with raw-byte copies) |
+| 2 bytes | direct `raw = val - min` | `Parts::ShortRaw` (parallel to `Parts::Short` but without the +1 sentinel offset; introduced specifically for `vector<u16>` / `vector<i16>` elements) |
+| 4 bytes | direct `raw = val` | `Parts::Int` (already direct-encoded) |
+| 8 bytes | direct `raw = val` | `Parts::Long` (default fallback) |
+
+The selection logic lives in
+`src/data.rs::IntegerSpec::vector_narrow_width()` (returns
+`Option<u8>` — `Some(1)` / `Some(2)` / `Some(4)` / `None` for the
+8-byte fallback).  The helper `Data::narrow_vector_content()`
+applies it at every parser call site that registers a vector
+content type — see [DATABASE.md § Narrow vector elements](DATABASE.md#narrow-vector-elements)
+for the storage-side details and the per-call-site registration
+pattern.
+
+Important gotcha for compiler contributors: `typedef.rs::fill_database`
+runs ONLY on struct definitions.  Local-variable / parameter /
+return-type vector registration happens at every
+`database.vector(c_tp)` call site in `src/parser/`.  Both paths
+must call `narrow_vector_content()` on their content type before
+registering, or narrowing only takes effect for struct fields.
 
 ### Content-type indexing — three numbering schemes
 

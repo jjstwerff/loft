@@ -327,6 +327,43 @@ Initial capacity claim: `(11 * element_size + 15) / 8` words — room for approx
 | `vector_step_rev(store, rec, index, size) -> u32` | Advance to previous element index (reverse) |
 | `vector_length(store, rec) -> u32` | Return element count |
 
+### Narrow vector elements
+
+Vectors of narrow integer aliases (`vector<u8>` / `vector<u16>` /
+`vector<i8>` / `vector<i16>` / `vector<i32>` / `vector<u32>`)
+honour the alias's `forced_size` so that, e.g., `vector<i32>`
+stores 4 bytes per element rather than 8.
+
+The encoding for vector elements differs from struct fields:
+
+- **Struct field** `Parts::Short` encodes `raw = val - min + 1`,
+  reserving raw 0 as the null sentinel.
+- **Vector element** `Parts::ShortRaw` (added 2026-04-22 alongside
+  the rest of plan-02) encodes `raw = val - min` directly.
+
+The divergence is required because `vector_add` raw-byte-copies
+element bytes from source to destination — the +1 offset of
+`Parts::Short` would cause read/write mismatch.  `Parts::Byte`
+and `Parts::Int` are direct-encoded already and need no separate
+"raw" variant; only the 2-byte case needed `Parts::ShortRaw`.
+The 8-byte fallback (`Parts::Long`) is also direct.
+
+Public surface (in `src/data.rs`):
+
+| API | Returns | Use |
+|---|---|---|
+| `IntegerSpec::vector_narrow_width()` | `Option<u8>` (1 / 2 / 4, or `None` for the 8-byte fallback) | "Should this vector element narrow?" |
+| `Data::narrow_vector_content(content)` | content type with `forced_size` applied | Wrap a content type before calling `database.vector(...)` |
+
+**Compiler-contributor gotcha**: `typedef.rs::fill_database`
+walks ONLY struct definitions.  Local-variable / parameter /
+return-type vector registration happens at every
+`database.vector(c_tp)` call site in `src/parser/`.  Both paths
+must call `narrow_vector_content()` on their content type before
+registering, or narrowing only takes effect for struct fields.
+See [INTERMEDIATE.md § Integer Storage Size](INTERMEDIATE.md#integer-storage-size)
+for the per-variant table and the rule selection.
+
 ### Sorted By-Value Vector (`Parts::Ordered`)
 
 Same record layout as Vector. Elements are kept in sorted order via binary search insertion.
