@@ -268,7 +268,7 @@ Each is a commitment, not a maybe.  Deferring any makes the
 | ID   | Title                                                  | E  | Source                      |
 |------|--------------------------------------------------------|----|-----------------------------|
 | C54  | `integer` → i64; `long` becomes a historical alias     | L  | CAVEATS.md, QUALITY.md      |
-| P54  | First-class `JsonValue` enum; old text-based JSON gone | MH | PROBLEMS.md #54, QUALITY.md |
+| P54  | First-class `JsonValue` enum; old text-based JSON gone | MH | plans/future/35-quality-followups/README.md |
 
 ### Language server — full editing surface
 
