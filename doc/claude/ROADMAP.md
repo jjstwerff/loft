@@ -184,12 +184,12 @@ Performance, refactor, internal cleanup with clear payoff.
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
 | (cross) | Native codegen follow-ups (yield-from + generic text-return + fill.rs auto-gen) | XS-M per item | ✓ | NATIVE.md § Open work |
-| (cross) | Performance follow-ups (P1-P3 interpreter / N1-N3 native / W1 wasm) | S-MH per item | ✓ | plans/future/34-performance-followups/README.md |
+| (cross) | Performance follow-ups (P1-P3 interpreter / N1-N3 native / W1 wasm) | S-MH per item | ✓ | PERFORMANCE.md § Open work |
 | (cross) | Retire `stores.scratch` lifetime hazard | M | ✓ | plans/future/21-retire-scratch/README.md |
-| O4 | Native: direct-emit local collections | M | ✓ | plans/future/34-performance-followups/README.md |
-| O5 | Native: omit `stores` from pure functions | M | ✓ | plans/future/34-performance-followups/README.md |
-| A12 | Lazy work-variable initialization | M | ✓ | (could fold into 34) |
-| O2 | Stack raw pointer cache | M | ✓ | (could fold into 34) |
+| O4 | Native: direct-emit local collections | M | ✓ | PERFORMANCE.md § Open work (N1) |
+| O5 | Native: omit `stores` from pure functions | M | ✓ | PERFORMANCE.md § Open work (N2) |
+| A12 | Lazy work-variable initialization | M | ✓ | PLANNING.md (no PERFORMANCE.md design yet) |
+| O2 | Stack raw pointer cache | M | ✓ | PLANNING.md (no PERFORMANCE.md design yet) |
 
 ### Constant store deferred-tail
 
@@ -322,9 +322,9 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged b
 
 | Plan | E | Depends on | Status |
 |---|---|---|---|
-| [`plans/future/21-retire-scratch/`](plans/future/21-retire-scratch/) | M | cooperates with NATIVE § Open work N8c.x + 34 N1 | Eliminate `stores.scratch` lifetime hazard |
+| [`plans/future/21-retire-scratch/`](plans/future/21-retire-scratch/) | M | cooperates with NATIVE § Open work N8c.x + PERFORMANCE § Open work N1 | Eliminate `stores.scratch` lifetime hazard |
 | [NATIVE.md § Open work](NATIVE.md#open-work) | XS-M per item | — | N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
-| [`plans/future/34-performance-followups/`](plans/future/34-performance-followups/) | S-MH per item | P1 blocked on opcode-table capacity | Pointer-plan.  7 optimization designs |
+| [PERFORMANCE.md § Open work](PERFORMANCE.md#open-work) | S-MH per item | P1 blocked on opcode-table capacity | 7 optimization designs (P1-P3 interpreter / N1-N3 native / W1 wasm) |
 
 ### N — Niche / opportunistic
 
@@ -364,5 +364,5 @@ ROADMAP rows that still cite a flat reference doc as Source rather than a plan. 
 - **C52** Stdlib name clash: warning + `std::` prefix (C)
 - **C53** Match arms: library enums + bare variant names (C)
 - **I12** Interfaces: factory methods (C)
-- **A12, O2** Performance items (Q) — could fold into `34-performance-followups` if their designs grow
+- **A12, O2** Performance items (Q) — would fold into PERFORMANCE.md § Open work if their designs grow
 - **A4** Spatial index operations (N)

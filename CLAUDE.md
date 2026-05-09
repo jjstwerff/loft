@@ -282,7 +282,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) | Closed-by-decision register — check before proposing features already declined (C3 / C38 / C54.D / …) |
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
-| [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Reference — performance analysis (benchmark results, root-cause analysis vs CPython / hand-written Rust, how the interpreter executes, wasm-vs-native gap analysis, design content for each planned optimization).  Open optimization follow-ups (P1-P3, N1-N3, W1) tracked in [plans/future/34-performance-followups/](doc/claude/plans/future/34-performance-followups/README.md). |
+| [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Reference — performance analysis (benchmark results, root-cause analysis vs CPython / hand-written Rust, how the interpreter executes, wasm-vs-native gap analysis, design content for each planned optimization).  Open optimization follow-ups (P1-P3, N1-N3, W1) in `## Open work` section. |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
 | [plans/README.md](doc/claude/plans/README.md) | Multi-phase **core-language** initiatives (current / future / deferred / finished) — compiler, runtime, validation matrices, codegen arcs, language features.  Max 2-3 active plans. |
