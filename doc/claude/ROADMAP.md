@@ -285,7 +285,7 @@ Soft dependencies — would benefit but not block:
 
 - **`lib_plans/future/13-scriptable-scenes`** — hot-reload of the generation script between rounds.  Without it, presenter restarts the script (acceptable; the talk script frames this as "now let me change the rules and re-run").
 - **`plans/future/27-developer-experience` DX.1 / DX.3** — the talk content overlaps with quick-start `examples/` and the "Learn loft in 30 minutes" walkthrough.  Can write the talk inline OR land both at once.
-- **`plans/future/07-error-messages` phases 4-7** — nicer errors if something goes wrong on stage.  Not blocking; presenter has rehearsed fallback.
+- **`plans/07-error-messages` phases 4-7** — nicer errors if something goes wrong on stage.  Not blocking; presenter has rehearsed fallback.
 
 Latent risk: **`plans/future/15-closure-validation` phase 03 / closure-DbRef leak** (LIFETIME.md "NOT YET HANDLED").  Generation script uses closures heavily.  Leak is bounded per closure-creation, not per tick — a 30-60 minute demo session is fine; an unattended installation running for hours could accumulate.
 
