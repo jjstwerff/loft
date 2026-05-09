@@ -288,6 +288,44 @@ identically on `main`.  ARC step A7 closes P199.  Once A7 lands the
 native column re-enables and gates with ±5 % against a fresh
 host-relative baseline.
 
+## Dispatcher inventory (when adding a new return shape)
+
+`src/parallel.rs` exposes 5 distinct `pub fn run_parallel_*`
+dispatchers for the par worker runtime.  They diverge structurally,
+not just in result-buffer shape — see ARC.md A8's deferral rationale
+for why a unifying trait collapse was considered and rejected.
+
+| Dispatcher | Return shape | `Stores` borrow | Worker primitive | Per-row execute call | Per-thread state | Merge step |
+|---|---|---|---|---|---|---|
+| `run_parallel_queue` (line 1251) | `Vec<u64>` (i64 / float / 8B prim) | `&Stores` | `parallel_workers` | 4-way input ladder (`execute_at_raw_text_input` / `_primitive_input_wide` / `_primitive_input` / `execute_at_raw`) | none | `merge_batches(…, 0u64)` |
+| `run_parallel_text` (line 585) | `Vec<String>` | `&Stores` | `parallel_workers` | `execute_at_text` (single shape) | per-worker output store slot via `add_output_slot` + `s_pos` array record | iterate slots, `get_str` per row |
+| `run_parallel_queue_ref` (line 669) | `(Vec<DbRef>, Vec<u16>)` | `&mut Stores` | raw rayon (`pool.install` + `into_par_iter`) | `execute_at_ref` with caller-pre-allocated hidden destination stores | `worker_slot_dispenser` (atomic) + `worker_allocated_indices.clear()` + `n_hidden_dests` claim | `mem::swap` stores at allocated indices into parent + `revive_record_chain` graph walk |
+| `run_parallel_queue_narrow` (today `run_parallel_int`, line 927) | `Vec<i64>` packed via narrow stride elsewhere | `&Stores` | `parallel_workers` | `execute_at` (i64) | none | `merge_batches(…, i64::MIN)` |
+| `run_parallel_queue_fn` (line 1347, cfg-gated) | `Vec<u8>` (packed 20-byte fn-ref blobs) | `&Stores` | `parallel_workers` | `execute_at_raw_to(fn_pos, …, dst)` writing through `SendMutPtr` to disjoint slots in a pre-allocated buffer | none | no merge — buffer filled in-place |
+
+Plus 3 non-Queue dispatchers: `run_parallel_discard` (Stitch::Discard,
+no buffer), `run_parallel_fold` (Stitch::Reduce, scalar accumulator),
+`run_parallel_block` (`parallel { arm; arm }` — internal, not a row
+loop).
+
+### When to add a new dispatcher vs extend an existing one
+
+- **Adding a return shape that fits an existing impl** (e.g. another
+  ≤ 8B primitive) → add a new route in `src/parser/collections.rs::
+  build_parallel_for_ir` pointing at `n_parallel_queue` (or
+  `_narrow` if the value width is < 8B).  No new `run_parallel_*` fn.
+- **Adding a return shape with a NEW Stores buffer-stack type** →
+  add a new buffer stack in `src/database/mod.rs` (per-type, not
+  polymorphic — see the rationale at lines 215-265), a new
+  `n_parallel_queue_<X>` native fn in `src/native.rs`, a new
+  `_native` mirror in `src/codegen_runtime.rs`, and either reuse
+  one of the existing `run_parallel_*` shapes or add a new one if
+  the per-thread state / merge truly diverges.
+- **Don't try to unify** the existing 5 dispatchers under one trait.
+  The shape differences (`&Stores` vs `&mut Stores`, parallel_workers
+  vs raw rayon, per-row execute signature, per-thread state, merge
+  step) are structural.  See ARC.md A8 for the full audit.
+
 ## See also
 - [INTERNALS.md](INTERNALS.md) — `src/parallel.rs`, `src/state/`, store cloning for workers
 - [STDLIB.md](STDLIB.md) — `par(...)` parallel for-loop user-facing API

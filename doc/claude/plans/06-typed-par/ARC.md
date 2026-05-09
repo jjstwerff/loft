@@ -1466,13 +1466,90 @@ Tuple input through par (`vector<(T, U)>` input) — out of plan-06.
 
 ### A8 — Collapse Queue / Queue_text / Queue_ref / Queue_narrow into one
 
-**Status:** OPEN
-**Effort:** M (~1 session)
-**Acceptance test:** `grep -c "fn run_parallel_" src/parallel.rs` ≤ 3
-(Discard / Queue / Reduce); all par tests green; ~30 generated test
-fixtures regenerated cleanly.
+**Status: DEFERRED 2026-05-09 after deeper review.**
 
-#### Why eighth
+The original spec ("4-5 dispatchers diverge only in result buffer
+shape") does not hold once you read each dispatcher end-to-end.
+Each has structural differences that a `QueueResult` trait would
+have to capture as 5+ associated types, with each `impl` body
+relocating most of the dispatcher code rather than removing it.
+The "shared scaffolding" is genuinely thin (4-6 lines of setup);
+extracting it as a helper would be more ceremony than the lines
+saved.
+
+**Why the trait collapse is the wrong shape.** Reading `pub fn
+run_parallel_queue` (line 1251), `run_parallel_text` (line 585),
+and `run_parallel_queue_ref` (line 669) carefully:
+
+- **`&Stores` vs `&mut Stores` access** — queue and text take
+  immutable borrows of `Stores`; `run_parallel_queue_ref` needs
+  `&mut Stores` for the `make_worker_slot_dispenser()` call and
+  the post-merge `mem::swap` of stores into the parent.  A trait
+  dispatcher would need to model this difference (associated
+  lifetime / mutability discriminator).
+- **Worker primitive differs** — queue and text use the
+  `parallel_workers(stores, n_threads, n_rows, |start, end, ws| …)`
+  helper.  `run_parallel_queue_ref` uses raw rayon
+  (`pool.install` + `into_par_iter`) because it threads its own
+  `worker_slot_dispenser = Some(Arc::clone(...))` into each
+  worker's `WorkerStores` and clears `worker_allocated_indices`.
+- **Per-row execute call signature differs** — queue dispatches
+  through a 4-way input ladder (`execute_at_raw_text_input` /
+  `_primitive_input_wide` / `_primitive_input` / `execute_at_raw`).
+  Text uses a single `execute_at_text(fn_pos, &row_ref, &extras,
+  n_hidden_text)` shape (no input ladder; text-output's per-row
+  setup is elsewhere).  Ref uses `execute_at_ref(fn_pos, &row_ref,
+  &hidden_dests, extras_ref)` with caller-pre-allocated hidden
+  destination stores.
+- **Per-thread state** — queue and text are stateless.  Ref
+  threads `worker_slot_dispenser` + clears
+  `worker_allocated_indices` per worker; text reserves an output
+  store slot via `add_output_slot` + claims an `s_pos` array
+  record.
+- **Merge step** — queue uses `merge_batches(batches, n_rows,
+  0u64)`.  Text iterates each adopted slot's `s_pos` array and
+  calls `get_str` to clone strings into a `Vec<String>`.  Ref
+  swaps stores into the parent at `worker_allocated_indices`,
+  then walks every result via `revive_record_chain` to mark
+  records active and collect adopted store_nrs.
+
+**Codegen side is already collapsed.**  `src/generation/ops/
+parallel.rs::ParallelQueueEmitter` covers all 4 queue variants in
+one emitter; `ParallelBufRenameEmitter` covers all 10
+buf_get/buf_drop variants.  No work needed there.
+
+**Buffer stacks stay per-type.**  Documented at `src/database/
+mod.rs:215-265`.  A polymorphic `Vec<QueueBuffer>` enum stack
+adds a `match` per row read in the hot path, with no clarity
+gain.
+
+**Future-extension benefit is small.**  Adding a new return
+shape today requires 4 files (`parallel.rs`, `native.rs`,
+`codegen_runtime.rs`, `parser/collections.rs`).  After a
+hypothetical trait collapse it would still touch 3 of those
+(parser routing + native bridge + codegen-runtime would all
+need entries for the new shape; only the dispatcher in
+`parallel.rs` would consolidate).  Historically this happens
+~once a year (Plan-06's narrow / fold / fn-ref additions over
+12 months); the amortised maintenance win is modest.
+
+**What would change my mind.**  If a future maintainer needs to
+add a 6th return shape (e.g. 16-byte struct returns or u128 for
+SIMD lanes), and the parser/native/codegen-runtime triplicate
+duplication becomes painful, the right move is `stitch_id`
+consolidation (collapse the 5 def_nrs in `native.rs` into one
+fn that switches on a u8 tag) rather than the trait collapse.
+That reduces parser surface and is independent of the
+dispatcher-body unification this step originally proposed.
+
+The 2026-05-09 design analysis is preserved in the original
+"#### Why eighth" / "#### Design" subsections below for
+context — they remain the right design IF the divergence had
+been pure boilerplate.  It isn't.
+
+---
+
+#### Why eighth (original 2026-04-30 design — superseded)
 
 With all canaries closed and all return shapes working, the four
 Queue dispatchers diverge only in their result buffer shape.  A
