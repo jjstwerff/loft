@@ -5,7 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 00 — Matrix freeze + harness wiring
 
-**Status: open**
+**Status: DONE 2026-05-09.**  `tests/template_matrix.rs` shipped
+with smoke + 4 PASS-pre cells (`harness_smoke_template`,
+`u1_b4_addable_dbl_float`, `u2_b0_no_bound_identity_int`,
+`u2_b1o_ordered_max_int`, `u2_b2_multibound_eq_or_gt_int`) — all
+pass under both interp and native via the existing
+`cross_mode!` harness (no new harness code).  Phase 01 onwards
+fills the FIX cells.
 
 ## Goal
 
