@@ -9,14 +9,12 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
-### Plan-06 (typed-par redesign) closeout progress 2026-05-09
+### Plan-06 (typed-par redesign) closed 2026-05-09
 
-Plan-06 ARC ran from 2026-04-30.  Shipped today: closeout docs
-in `ARC.md` + acceptance-criteria revision + A9 superseded
-marker.  Two small follow-up items remain (P235 par half,
-A8.b stitch_id retry); plan-06 fully closes once both land.
+Plan-06 ARC ran from 2026-04-30 to 2026-05-09.  All 11 sub-steps
+shipped or formally deferred with rationale.
 
-**Shipped (A1–A7 + A5b + A8 deferral + A9 superseded by A4):**
+**Shipped (A1–A7 + A5b + A8.b + A9 superseded by A4 + A11):**
 - A1: parallel workers — extra args + text/ref returns under one
   fused-for-par codegen.
 - A2: per-thread slot cap stress test + structural fix
@@ -35,15 +33,23 @@ A8.b stitch_id retry); plan-06 fully closes once both land.
 - A7: closed the par-tuple canary surface — A7.1 (size-based
   gate widen + work-ref unification — closes
   `par_tuple_return_int_int` / `_three_arity` / `_nested`),
-  A7.3 (P234 lexer + runtime for tuple-of-struct member access).
-  Companion fix P236 (heap-owned reference returns from if/else
-  native data corruption — broader than tuples) landed alongside
-  A7.1.
-- A8 (deferred — see below).
+  A7.2 (P235 par half — synthesized wrapper-worker — closes
+  `par_tuple_destructure_in_for`), A7.3 (P234 lexer + runtime
+  for tuple-of-struct member access).  Companion fix P236
+  (heap-owned reference returns from if/else native data
+  corruption — broader than tuples) landed alongside A7.1.
+- A8.b: stitch_id consolidation in `src/native.rs` — 5
+  `n_parallel_queue*` fns collapsed to thin wrappers around
+  `parallel_queue_dispatch(stores, stack, QueueStitch)`.
+  Saves ~150 LOC.  Targets the interp-bridge layer (different
+  from A8's `src/parallel.rs` target which deferred for sound
+  reasons).  Codegen-runtime mirrors stay separate (closure
+  types differ per stitch).
 - A9: superseded by A4 (light path retired entirely; no `.loft`
   file uses `par_light`).
-- A11 partial: this entry + ARC.md status update +
-  acceptance-criteria revision.
+- A11: this entry + ARC.md status header DONE + acceptance-
+  criteria final tally + THREADING.md dispatcher inventory
+  section.
 
 **Deferred with rationale:**
 - A8 (Queue dispatcher trait collapse in `src/parallel.rs`):
@@ -54,30 +60,26 @@ A8.b stitch_id retry); plan-06 fully closes once both land.
   relocate complexity rather than remove it.  Full audit in
   ARC.md A8 deferral section.  Codegen side is already collapsed
   (`ParallelQueueEmitter`); buffer stacks per-type are
-  intentional (perf).  Commit `ada917d`.  Future revisit:
-  A8.b stitch_id retry at the `src/native.rs` layer (see open
-  items).
+  intentional (perf).  Commit `ada917d`.  A8.b stitch_id retry
+  delivered consolidation at a different layer (see Shipped).
 - A10 (browser parallel via wasm-bindgen-rayon): out-of-scope
   for plan-06 closure.  S2 strategic showcase; ships as its own
   multi-session arc when scheduled.
 
-**Open items (close to fully wrap plan-06):**
-- **A7.2 / P235 par half** — synthesized wrapper-worker for
-  `for (a, b) in pairs par(r = work(a, b), N) { … }`.  Closes
-  `par_tuple_destructure_in_for`.  Estimated M ~1 session.
-  Design in PROBLEMS.md P235.
-- **A8.b stitch_id retry** — collapse the 5 `n_parallel_queue*`
-  fns in `src/native.rs` into thin wrappers around a shared
-  `parallel_queue_impl(stores, stack, stitch)` body.  Saves
-  ~80-100 LOC.  Estimated ~1 hour.
+**Acceptance criteria — final tally:**
+- #1 (≤ 3 dispatchers in `src/parallel.rs`): revised to ≤ 5;
+  consolidation delivered instead at native.rs layer via A8.b.
+  Documented in ARC.md acceptance section.
+- #2 (par_light removed from user surface): MET by A4.
+- #3 (zero ignored par canaries): 8 → 1 over the arc.  Final
+  remaining ignore is heterogeneous-vec-of-fn (D11a row 8),
+  outside plan-06 scope (different surface — vector
+  construction, not par).
 
-**Acceptance criteria — current tally:**
-- #1 (≤ 3 dispatchers): revised to ≤ 5; A8.b retry will deliver
-  consolidation at the native.rs layer.
-- #2 (par_light removed from user surface): met by A4.
-- #3 (zero ignored par canaries): 8 → 2.  P235 par half closure
-  drops to 1; the remaining is heterogeneous-vec-of-fn (D11a
-  row 8), outside plan-06 scope.
+Three closure commits land 2026-05-09: `f974770` (closeout
+docs + A8 deferral marker + A9 superseded), `15a7aab` (P235
+par half via wrapper synthesis), and the A8.b commit (this
+change).
 
 ### plan-09 phase 07: close P205 — bounded-generic text return scratch routing
 

@@ -5,19 +5,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan-06 — Real-value Development Arc
 
-**Status (2026-05-09): closeout docs + P235 par half landed; 1 small item remains.**
+**Status: DONE 2026-05-09.**
 
-Most sub-steps closed.  Closeout docs (acceptance criteria
-revision + A9 superseded marker) shipped 2026-05-09.  P235 par
-half (synthesized wrapper-worker for `for (a, b) in pairs
-par(...) { ... }`) closed 2026-05-09 — `par_tuple_destructure_in_for`
-canary now PASSING.  One open item defers to a follow-up
-session:
-
-- **A8.b stitch_id retry** in `src/native.rs` — collapse the 5
-  `n_parallel_queue*` fns into thin wrappers around a shared
-  `parallel_queue_impl(stores, stack, stitch)` body.  Estimated
-  ~1 hour.
+All sub-steps closed or formally deferred with rationale.
+Closeout docs (acceptance criteria revision + A9 superseded
+marker) shipped earlier 2026-05-09.  P235 par half closed
+(`par_tuple_destructure_in_for` canary PASSING).  A8.b
+stitch_id retry shipped: 5 `n_parallel_queue*` native fns
+collapsed to thin wrappers around `parallel_queue_dispatch` —
+~150 LOC saved in `src/native.rs`.
 
 Final scope tally:
 - **A1–A7 + A5b**: full typed-par redesign with narrow, fold,
@@ -26,18 +22,18 @@ Final scope tally:
 - **A8** (Queue dispatcher trait collapse in `src/parallel.rs`):
   DEFERRED — divergence is structural, not boilerplate;
   documented in A8 section + commit `ada917d`.
-- **A8.b** (stitch_id consolidation in `src/native.rs`): OPEN —
-  follow-up to A8's deferral; same idea but at a different layer
-  where the divergence IS boilerplate.
+- **A8.b** (stitch_id consolidation in `src/native.rs`): DONE
+  2026-05-09 — 5 `n_parallel_queue*` fns collapsed to thin
+  wrappers around `parallel_queue_dispatch`; ~150 LOC saved.
 - **A9** (drop par_light user surface): DONE — superseded by
   A4 (light path retired entirely; no `.loft` file uses
   `par_light`).
 - **A10** (browser parallel via wasm-bindgen-rayon): out-of-scope
   for plan-06 closure per priority statement (S2 strategic
   showcase).  Ships as its own multi-session arc.
-- **A11** (final cleanup + docs): partial — this section + A9
-  marker + acceptance revision shipped 2026-05-09.  Final
-  closure waits on A8.b + P235 par half.
+- **A11** (final cleanup + docs): DONE 2026-05-09 — closeout
+  docs (`f974770`) + P235 par half (`15a7aab`) + A8.b stitch_id
+  retry (this commit).
 
 ## Why this exists
 
@@ -120,9 +116,8 @@ Three concrete criteria, with the original targets and the
    **MET** — plan-06 takes the canary count to its lowest
    achievable value within scope.
 
-Status (2026-05-09): #2 + #3 fully met; #1 awaits the A8.b
-stitch_id retry follow-up.  Once that lands, plan-06 closes and
-ARC.md status header flips to DONE.
+All three criteria met (with the A8 revision + A8.b stitch_id
+retry documented above).  Plan-06 closed 2026-05-09.
 
 ## Inventory — what's actually in flight
 
@@ -1601,19 +1596,42 @@ need entries for the new shape; only the dispatcher in
 ~once a year (Plan-06's narrow / fold / fn-ref additions over
 12 months); the amortised maintenance win is modest.
 
-**What would change my mind.**  If a future maintainer needs to
-add a 6th return shape (e.g. 16-byte struct returns or u128 for
-SIMD lanes), and the parser/native/codegen-runtime triplicate
-duplication becomes painful, the right move is `stitch_id`
-consolidation (collapse the 5 def_nrs in `native.rs` into one
-fn that switches on a u8 tag) rather than the trait collapse.
-That reduces parser surface and is independent of the
-dispatcher-body unification this step originally proposed.
+**A8.b stitch_id consolidation — DONE 2026-05-09.**  After the
+A8 deferral, a smaller follow-up landed at the `src/native.rs`
+layer where the divergence IS boilerplate.  The 5 `n_parallel_queue*`
+fns share an identical pop-args + build-WorkerProgram + per-stitch
+context-fetch scaffold; only the dispatcher choice + post-
+processing + buffer-stack push differ per stitch.
 
-The 2026-05-09 design analysis is preserved in the original
-"#### Why eighth" / "#### Design" subsections below for
-context — they remain the right design IF the divergence had
-been pure boilerplate.  It isn't.
+`parallel_queue_dispatch(stores, stack, QueueStitch)` extracts
+the shared scaffold; each `n_parallel_queue*` fn becomes a
+1-line wrapper:
+
+```rust
+fn n_parallel_queue(stores, stack)        { parallel_queue_dispatch(.., QueueStitch::Int); }
+fn n_parallel_queue_text(stores, stack)   { parallel_queue_dispatch(.., QueueStitch::Text); }
+fn n_parallel_queue_ref(stores, stack)    { parallel_queue_dispatch(.., QueueStitch::Ref); }
+fn n_parallel_queue_narrow(stores, stack) { parallel_queue_dispatch(.., QueueStitch::Narrow); }
+fn n_parallel_queue_fn(stores, stack)     { parallel_queue_dispatch(.., QueueStitch::Fn); }
+```
+
+Per-stitch arms inside `parallel_queue_dispatch` cover the
+unique work — Int's input-ladder return_size derivation, Text's
+n_hidden_text + n_rows precompute, Ref's data_ptr snapshot +
+n_hidden_dests + ret_type, Narrow's stride pack loop, Fn's
+20-byte blob handling.
+
+Net savings: ~150 LOC (`src/native.rs` from 3540 → 3388).
+Codegen-runtime mirrors stay separate — their closure types
+differ per stitch (`Fn(...) -> i64` vs `-> String` vs `-> DbRef`)
+and type erasure would force `Box<dyn>` overhead.  Parser and
+def_nr table also unchanged — no parser-surface churn.
+
+The 2026-05-09 design analysis (deferring the trait collapse in
+`src/parallel.rs`) is preserved in the original "#### Why
+eighth" / "#### Design" subsections below for context — they
+remain the right design IF the divergence had been pure
+boilerplate.  It isn't.
 
 ---
 
@@ -1938,35 +1956,38 @@ Browser-pool tuning beyond fixed 4-worker.  Service-worker variants.
 
 ### A11 — Final cleanup + documentation rewrite
 
-**Status: PARTIAL 2026-05-09.**
+**Status: DONE 2026-05-09.**
 
-Closeout actions shipped 2026-05-09:
-- Plan-06 status header at top of this doc reflects the
-  partial-closure state (most steps done; 2 small items open).
-- Acceptance state section (line 51 area) updated with the
-  2026-05-09 verdict — A8 deferred + A9 superseded by A4 +
-  honest accounting of the 2 remaining open items
-  (P235 par half, A8.b stitch_id retry).
-- A8 section: trait collapse audit (from commit `ada917d`).
-- A9 section: superseded-by-A4 with explanatory comment.
-- THREADING.md: dispatcher inventory section (commit
-  `ada917d`) documents WHY the trait collapse was rejected so
-  future maintainers don't re-attempt it.
-- CHANGELOG_TECHNICAL.md: plan-06 progress entry.
+Closeout actions shipped 2026-05-09 across three commits:
+- `f974770` (closeout docs): ARC.md status header reflects
+  closure state; acceptance criteria revised with the
+  2026-05-09 verdict (A8 deferred + A9 superseded by A4); A8
+  section gets the trait collapse audit; A9 section's
+  superseded-by-A4 marker; CHANGELOG_TECHNICAL.md plan-06
+  progress entry.
+- `15a7aab` (P235 par half): synthesized wrapper-worker for
+  `for (a, b) in pairs par(...) { ... }`; closes
+  `par_tuple_destructure_in_for`; ignored canary count 2 → 1.
+- (A8.b commit, this session): collapse the 5
+  `n_parallel_queue*` fns in `src/native.rs` into thin
+  wrappers around a shared `parallel_queue_dispatch(stores,
+  stack, stitch)` body.  Saves ~150 LOC; targets the
+  interp-bridge layer (different from A8's `src/parallel.rs`
+  target which deferred for sound reasons).
 
-Open item to close before plan-06 fully wraps:
-- **A8.b stitch_id retry** (~1 hour): collapse the 5
-  `n_parallel_queue*` fns in `src/native.rs` into thin wrappers
-  around a shared `parallel_queue_impl(stores, stack, stitch)`
-  body.  Targets the native.rs layer (different from A8's
-  parallel.rs target which deferred for sound reasons).  Saves
-  ~80-100 LOC.
+THREADING.md (commit `ada917d`) documents the dispatcher
+inventory + WHY the `src/parallel.rs` trait collapse was
+rejected, so future maintainers don't re-attempt it.
 
-Closed since 2026-05-09 commit `f974770`:
-- **P235 par half** — `src/parser/collections.rs::parse_destructure_par_worker`
-  shipped 2026-05-09.  See A7.2 section above for details.
-  Closes `par_tuple_destructure_in_for`; ignored canary count
-  drops 2 → 1.
+Items intentionally out-of-scope of plan-06 closure (stay open
+permanently):
+- **A10** (browser parallel) — strategic showcase (S2), ships
+  as its own multi-session arc when scheduled.
+- **D11a row 8** — heterogeneous capturing-fn vector
+  construction.  Different surface (vector construction
+  rejection, not a par-side bug); tracked in DESIGN.md D11a.
+  The one remaining `#[ignore]` in `tests/threading_chars.rs`
+  is this canary; documented at the test site.
 
 Remaining items intentionally out-of-scope of plan-06 closure
 (stay open after A11 fully completes):
