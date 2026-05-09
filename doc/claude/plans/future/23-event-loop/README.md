@@ -136,7 +136,7 @@ The EventLoop's `step()` (or the `pump()` shape used in
 moment no opcode is mid-execution and no I/O is in-flight.
 This is precisely the consistency point that a runtime swap
 (interpreter → WASM) requires.  The V4 hot-swap described in
-[TIC_TAC_TOE.md § Tic-tac-toe v4](../../../TIC_TAC_TOE.md#tic-tac-toe-v4--client-uploaded-scripts-server-side-compile-hot-wasm-swap)
+[TIC_TAC_TOE.md § Tic-tac-toe v4](../32-tic-tac-toe/README.md#tic-tac-toe-v4--client-uploaded-scripts-server-side-compile-hot-wasm-swap)
 does not need to invent a synchronisation point — the EventLoop
 already has one.  At a frame boundary the runtime rebinds which
 code reads the heap; the next pump call dispatches under the

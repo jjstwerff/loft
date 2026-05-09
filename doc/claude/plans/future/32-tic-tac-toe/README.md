@@ -17,7 +17,7 @@ infrastructure capability and is verified end-to-end by the
 smallest possible text-mode programs (no graphics, no real
 gameplay UX).  The actual playable game targets that consume
 these ground layers live in
-[MULTIPLAYER_EDITOR.md](plans/future/24-multiplayer-editor/README.md) and beyond.
+[MULTIPLAYER_EDITOR.md](../24-multiplayer-editor/README.md) and beyond.
 
 So when later sections describe "mouse handler", "drawing
 handler", "render the board", etc. for any vN — read those as
@@ -110,7 +110,7 @@ that exercises the next layer up:
 - **Three independent handlers on one connection.**  The client has
   more than one thing to listen for and more than one thing to send.
   This is the first concrete consumer of the handler-id-on-the-wire
-  idea (see [EVENT_PROTOCOL.md](plans/future/23-event-loop/PROTOCOL.md) for the
+  idea (see [EVENT_PROTOCOL.md](../23-event-loop/PROTOCOL.md) for the
   binary-frame wire spec).
 - **State on both ends.**  The server owns the authoritative game
   state; the client renders a copy.  This is the shape every
@@ -140,14 +140,14 @@ protocol + architecture demonstrator.
 ## Wire protocol — `<id>:payload`
 
 The full wire-format spec lives in
-[EVENT_PROTOCOL.md](plans/future/23-event-loop/PROTOCOL.md).  Tic-tac-toe is the v1
+[EVENT_PROTOCOL.md](../23-event-loop/PROTOCOL.md).  Tic-tac-toe is the v1
 text-mode consumer: every WebSocket text frame after the MAP
 handshake is `<id>:<payload>` where `<id>` is an integer handed
 out by the server's name→id registry and exchanged with the
 client through the MAP frame.
 
 The shape is deliberately close to the binary v2 frame
-([EVENT_PROTOCOL.md § Binary-mode wire format](plans/future/23-event-loop/PROTOCOL.md#binary-mode-wire-format-v2))
+([EVENT_PROTOCOL.md § Binary-mode wire format](../23-event-loop/PROTOCOL.md#binary-mode-wire-format-v2))
 which carries `handler_id: u32` plus priority / seq / flags /
 length in a 12-byte header.  Going through a name→id registry
 from day one means the upgrade from v1 (text) to v2 (binary)
@@ -238,7 +238,7 @@ clicks) and two outbound (placements, game-over).
 
 ### Why text frames and not the full EventLoop binary header?
 
-[EVENT_LOOP.md](plans/future/23-event-loop/README.md) specifies a 12-byte binary header
+[EVENT_LOOP.md](../23-event-loop/README.md) specifies a 12-byte binary header
 with handler id, priority, sequence, flags, length.  This game
 deliberately does **not** ship that yet — the directive was
 *"no priority or digital layer yet."*  The `<id>:<payload>`
@@ -256,7 +256,7 @@ unchanged.
 
 Library-level multiplexing across handlers requires storing one
 closure per handler in a struct field — currently blocked by
-[P213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix).
+[P213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix).
 For this milestone, the program's loop drains messages with
 `web::try_recv()` and matches the parsed integer id against the
 handler ids learned from the MAP frame:
@@ -361,7 +361,7 @@ fn main() {
 
 `state` is allocated in a Store; `Reference<Board>` is captured
 by handler functions (today's workaround per
-[plans/future/22-mutable-closures/README.md](plans/future/22-mutable-closures/README.md)).  The shipped
+[plans/future/22-mutable-closures/README.md](../22-mutable-closures/README.md)).  The shipped
 text-only first cut omits `mouse_just_clicked` / `render_board`
 / `gl_swap_buffers` and walks through a hardcoded click sequence
 instead.
@@ -560,7 +560,7 @@ The graphical tic-tac-toe is **not** on the sequence.  Each vN
 ground layer adds protocol/infrastructure capability and is
 verified by the smallest text-mode program that can exercise
 it.  The actual playable game work (mouse, render, sound) goes
-into [MULTIPLAYER_EDITOR.md](plans/future/24-multiplayer-editor/README.md) and beyond.
+into [MULTIPLAYER_EDITOR.md](../24-multiplayer-editor/README.md) and beyond.
 
 1. ~~**Land hello-world end-to-end**~~ — **DONE.**  Cleared two
    pre-existing blockers: transitive native dlopen for
@@ -577,7 +577,7 @@ into [MULTIPLAYER_EDITOR.md](plans/future/24-multiplayer-editor/README.md) and b
    text-mode clients connecting to the same server, each
    playing their own game while receiving spectator updates of
    the other.  This ground layer's primitives also unblock
-   [MULTIPLAYER_EDITOR.md](plans/future/24-multiplayer-editor/README.md).
+   [MULTIPLAYER_EDITOR.md](../24-multiplayer-editor/README.md).
 4. **Tic-tac-toe v3 (protocol-only)** — server delivers the
    client over HTTP; browser-side WS bridge in `loft-rt.js`;
    text-mode tic-tac-toe client compiled to WASM, loaded in a
@@ -991,15 +991,15 @@ eventual target.
 
 ## Cross-references
 
-- [EVENT_LOOP.md](plans/future/23-event-loop/README.md) — eventual wire format and
+- [EVENT_LOOP.md](../23-event-loop/README.md) — eventual wire format and
   handler-id model.  Tic-tac-toe is its smallest validating
   game.
-- [EVENT_LOOP_DISCUSSION.md](plans/future/23-event-loop/DISCUSSION.md) — open
+- [EVENT_LOOP_DISCUSSION.md](../23-event-loop/DISCUSSION.md) — open
   questions on the wider design.
-- [plans/future/22-mutable-closures/README.md](plans/future/22-mutable-closures/README.md) — closure-capture
+- [plans/future/22-mutable-closures/README.md](../22-mutable-closures/README.md) — closure-capture
   spec; the dispatch workaround in this game's pump callback
   rests on the documented `Reference<T>` capture pattern.
-- [PROBLEMS.md § 213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
+- [PROBLEMS.md § 213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
   — closure-in-struct-field layout limit; lifts the workaround
   once landed.
 - `lib/web/src/web.loft` — handler-style WebSocket client API.

@@ -314,7 +314,7 @@ extension fits cleanly.
   handler registration, capture semantics, API surface.
 - [EVENT_LOOP_DISCUSSION.md](DISCUSSION.md) —
   open issues, alternatives considered, design history.
-- [TIC_TAC_TOE.md](../../../TIC_TAC_TOE.md) — v1 application using this
+- [TIC_TAC_TOE.md](../32-tic-tac-toe/README.md) — v1 application using this
   protocol; smallest validating game.
 - [lib/server/native/src/lib.rs](../../lib/server/native/src/lib.rs)
   — server-side text-mode implementation

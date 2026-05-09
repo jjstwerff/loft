@@ -11,7 +11,7 @@ talking to a real loft server, with two clients editing one
 shared world.
 
 This **consumes** the protocol ground layers laid down in
-[TIC_TAC_TOE.md](../../../TIC_TAC_TOE.md), it does not replace them:
+[TIC_TAC_TOE.md](../32-tic-tac-toe/README.md), it does not replace them:
 
 - TIC_TAC_TOE v1 (shipped) → server-arbited handshake +
   namespace registry + `<id>:<payload>` text frames.  This
@@ -345,7 +345,7 @@ stays focused.
 
 ## Cross-references
 
-- [TIC_TAC_TOE.md](../../../TIC_TAC_TOE.md) — protocol validator (v1
+- [TIC_TAC_TOE.md](../32-tic-tac-toe/README.md) — protocol validator (v1
   shipped); v2/v3 are deferred to focus this milestone instead.
 - [EVENT_PROTOCOL.md](../23-event-loop/PROTOCOL.md) — wire format spec.
 - [EVENT_LOOP.md](../23-event-loop/README.md) — full event-loop spec; this
