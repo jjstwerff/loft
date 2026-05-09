@@ -4,17 +4,38 @@ Multi-phase initiatives that span more than one session.  Each
 subdirectory holds the README (goal + index) plus one markdown file
 per phase.
 
-**Bugs do not require a plan.**  Bug fixes continue to land
-directly via PROBLEMS.md + a regression test + a focused commit.
-The plan path is reserved for **major development** — work that
-benefits from explicit phasing, multi-session sequencing, or
-design-before-implementation discipline.
+## The rule — docs vs plans
 
-Long-term direction: every row in
-[ROADMAP.md](../ROADMAP.md) eventually points at a plan in
-this directory or in [`lib_plans/`](../lib_plans/README.md).
-Loose features without a plan home become the exception, not
-the rule.
+**Documentation about how things work** (architecture, runtime
+semantics, data structures, language reference, API surface)
+lives at `doc/claude/*.md` — or, when scoped to a single
+library, inside that library (e.g. `lib/<name>/README.md`).
+This is the reference layer: anyone reading or modifying the
+code reads these.
+
+**Future work — things that need to be built** lives in
+`plans/` (core language / compiler / runtime) or `lib_plans/`
+(library work).  This is the actionable layer: anyone
+planning the next session looks here.
+
+These connect through the **roadmap**: every row in
+[`../ROADMAP.md`](../ROADMAP.md) eventually points at a plan
+in `plans/` or `lib_plans/` (loose features without a plan
+home become the exception, not the rule).
+
+**Bug fixes are the explicit exception** — they land directly
+via PROBLEMS.md + a regression test + a focused commit, no
+plan required.  The plan path is reserved for major
+development that benefits from explicit phasing, multi-
+session sequencing, or design-before-implementation
+discipline.
+
+When a `doc/claude/*.md` reference doc has open follow-up
+work mixed into the architecture content, extract the
+follow-ups into a **pointer-plan** under `plans/future/`
+that links back to the relevant doc sections (the
+`33-native-codegen-followups/` plan is the canonical
+example of this shape).
 
 ## Companion indexes — every parked item is discoverable
 

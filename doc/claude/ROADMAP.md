@@ -30,7 +30,7 @@ Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
 Native OpenGL is supported for desktop enthusiasts.  Server/multiplayer
 comes after the single-player browser experience works.
 
-### Long-term direction — every roadmap row points at a plan
+### Long-term direction — docs vs plans, with the roadmap as bridge
 
 The end state for this file is a roadmap of **plans**, not loose
 features.  Every row's `Source` / `Notes` column eventually
@@ -40,11 +40,32 @@ points at a directory under
 source of truth for the row's design, phasing, acceptance
 criteria, and closure record.
 
-**Bug fixes do not need to go through plans.**  Bugs continue to
-land directly via PROBLEMS.md + a regression test + a focused
-commit.  The plan path is reserved for **major development** —
-work that benefits from explicit phasing, multi-session
-sequencing, or design-before-implementation discipline.
+The split:
+
+- **`doc/claude/*.md` (and library-specific docs inside
+  `lib/<name>/`)** = documentation about **how things work**
+  in loft today.  Architecture, runtime semantics, data
+  structures, language reference, API surface.  Reference
+  layer; read by anyone touching the code.
+- **`plans/` and `lib_plans/`** = **future work** — things
+  that need to be built.  Actionable layer; read by anyone
+  planning the next session.
+- **`ROADMAP.md` (this file)** = the bridge — every row
+  cites its plan so the roadmap is a roadmap of plans, not
+  a flat list of features.
+- **`PROBLEMS.md`** = bug tracker.  **Bug fixes are the
+  explicit exception to the plan path** — they land
+  directly via PROBLEMS.md + regression test + focused
+  commit, no plan required.
+
+When a `doc/claude/*.md` reference doc has open follow-up
+work mixed into the architecture content, extract the
+follow-ups into a **pointer-plan** under `plans/future/`
+that links back to the relevant doc sections.  The
+`plans/future/33-native-codegen-followups/` plan is the
+canonical example: NATIVE.md stays at the doc root as
+architecture reference, the open N8b.3 / N8c.x / N20 items
+moved to a plan that points back at NATIVE.md sections.
 
 Today's ROADMAP rows are a mix: some already cite a plan
 (`plans/future/25-native-debug/README.md`), others still cite a
