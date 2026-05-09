@@ -153,7 +153,7 @@ The matrix in [00-matrix.md](00-matrix.md) marks every D3 cell as
 
 | Risk | Mitigation |
 |---|---|
-| Lift path balloons to multi-week work as record-layout primitives need touching | The feasibility spike (above) sets the scope before the Decision lands.  If the spike shows >3 days of work, decision likely "Keep". |
+| Lift path balloons to large-effort work as record-layout primitives need touching | The feasibility spike (above) sets the scope before the Decision lands.  If the spike shows >3 days of work, decision likely "Keep". |
 | Lift path passes interp but fails native silently | Cross-mode harness catches divergence per cell.  No cell ships green under one mode only. |
 | Keep path documents a rationale that the next contributor disagrees with | DESIGN_DECISIONS.md entries are appendable — a future reversal updates the entry rather than re-arguing from scratch.  The "trigger to revisit" section names a concrete bar. |
 

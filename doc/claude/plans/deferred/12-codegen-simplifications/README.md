@@ -8,7 +8,7 @@ Tier 2 (phases 03-05) parked here until a driver arrives.
 **Trigger to unpause:** the same conditions that would unpause
 plan 13 (`deferred/13-rust-template-migration/`) — 3+ template-path
 bugs, major codegen evolution forcing ≥50 Op-annotation touches,
-or contributor appetite for a multi-week structural refactor.
+or contributor appetite for a large structural refactor.
 Plan 12 Tier 2 is plan 13's preamble; if plan 13 stays parked,
 plan 12 Tier 2 doesn't earn its keep.
 
@@ -41,7 +41,7 @@ Span-miss pattern that caused P204.  This plan addresses those.
 |---|---|---|---|
 | 1 — Correctness + cleanup | ~45 min total | High (latent bugs + dead-weight removal) | 01, 02 |
 | 2 — Structural cleanup | ~1-2 sessions | High (reduces dispatch.rs special cases; clarifies narrow_int_cast) | 03, 04, 05 |
-| 3 — Deep refactor | 2-3 weeks | High (unifies template + emitter paths) | deferred to plan-13 |
+| 3 — Deep refactor | H (large refactor) | High (unifies template + emitter paths) | deferred to plan-13 |
 
 ## Phases
 

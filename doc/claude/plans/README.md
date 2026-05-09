@@ -37,6 +37,90 @@ that links back to the relevant doc sections (the
 `33-native-codegen-followups/` plan is the canonical
 example of this shape).
 
+## Roadmap workflow
+
+[`../ROADMAP.md`](../ROADMAP.md) is the work-list view: every
+open work item, grouped by value, with dependencies and
+effort.  This section documents how it's organized — the
+methodology lives here so ROADMAP itself stays tight.
+
+### Value not time — why V1/V2/V3, not by milestone
+
+ROADMAP rows are grouped by **value** (V1 / V2 / V3), not
+by release milestone (0.8.5 / 0.8.6 / etc.):
+
+- **V1** — high impact: directly enables the core use case
+  (browser games, multiplayer, learnable language) OR
+  unblocks multiple downstream plans.
+- **V2** — medium impact: meaningful capability or quality
+  improvement.  Users see the benefit but the project doesn't
+  fall over without it.
+- **V3** — niche / internal / cleanup: real value but not
+  user-visible at the language surface.  Validation backlog,
+  small specific features, single-purpose optimizations.
+
+**Why this works better than time-based grouping:** value
+rankings stay roughly stable across the project's life.
+A high-value item is high-value whether it ships this month
+or next year.  Milestone groupings (0.8.5, 0.8.6, ...) imply
+calendar timelines that constantly drift — a row tagged
+"0.8.5" may slip multiple releases without the row's
+content changing.  Value tags don't need that maintenance.
+
+**Effort estimates, not time projections.**  ROADMAP has an
+`E` column (XS / S / M / MH / H / VH / L) calibrated to
+relative work, not calendar time.  Time projections are
+inaccurate at both ends — items projected as "weeks" have
+shipped in days; items projected as "quick" have taken
+weeks.  Effort buckets are stable; calendar projections
+aren't, so we don't make them.
+
+### Maintenance rule
+
+When an item completes, **remove it from ROADMAP**.  Completed
+work belongs in CHANGELOG.md (user-facing notes) +
+CHANGELOG_TECHNICAL.md (contributor detail) + git history.
+Keeping closed rows in ROADMAP turns the work list into a
+log; we already have logs.
+
+### Features need plans
+
+Every feature row in ROADMAP should cite a plan in its `Source`
+column — or be small enough for direct PROBLEMS.md + commit
+(the bug-fix path).
+
+The plan-cadence rule: any FEATURE (multi-step, has design
+choices, touches multiple files) goes through the plan
+path even if small.  Small bug fixes, deliverables (demo
+deploys, single-action items), and operational changes
+(CI tweaks, doc fixes) can stay on ROADMAP without plans
+or land directly with no ROADMAP row at all.
+
+When a feature row still cites a flat reference doc
+(PLANNING.md, INTERFACES.md) rather than a plan, that's a
+**plan promotion candidate**.  Promote it to a plan when it
+surfaces as next-up work.
+
+### How to read the roadmap
+
+The work-table sections (V1 / V2 / V3) are the **what to
+do next**.  Within each value tier, items are loosely
+grouped by theme — pick whichever theme is closest to what
+you're touching.
+
+The "All open plans — index by value" section is the
+**comprehensive view across both trackers** (`plans/` +
+`lib_plans/` + their deferred subdirs).  Single place to
+read for "what's open, what depends on what, how valuable."
+
+The "Cross-tracker dependency chains" subsection captures
+the cross-plan arrows: which plan unblocks which.  Useful
+for picking next-up work.
+
+The "Features still needing plan promotion" subsection
+tracks ROADMAP rows that should have plans but don't yet —
+the next-up promotion candidates.
+
 ### Closing a plan — documentation must move out
 
 When a plan ships and moves to `finished/`, its
@@ -402,8 +486,8 @@ which is "we will do this, just not yet."  Deferred items are
 |---|---|---|
 | [`deferred/10-scope-exit-emission/`](deferred/10-scope-exit-emission/) | Scope-exit gate simplification.  Drops the `(dep.is_empty() \|\| is_work_ref) &&` prefix from `src/scopes.rs:1053` so cleanup emission no longer depends on dep-tracker precision.  Pure cognitive-clarity win; no P-issue closes here.  Originally framed as a P203 fix — that framing turned out wrong (P203 is a template double-sub bug). | A bug in this gate's territory, dep-tracking maintenance, or contributor interest. |
 | [`deferred/12-codegen-simplifications/`](deferred/12-codegen-simplifications/) | Tier 1 (walker audit + forwarding-smoke retire) shipped on branch `plan-12-codegen-simplifications` (commits `c0c27e5` / `d446e5d`).  Tier 2 (dispatch arm migration phases 03-05) parked here.  Move-the-furniture refactor with no driving bug, no waiting feature, no performance gain.  Real value is "plan 13's preamble." | Same trigger set as plan 13: 3+ template-path bugs, OR major codegen evolution forcing ≥50 Op-annotation touches, OR contributor appetite.  Plan 12 Tier 2 only earns its keep if plan 13 unpauses. |
-| [`deferred/13-rust-template-migration/`](deferred/13-rust-template-migration/) | Migrate ~200 `#rust"..."` template annotations in `default/*.loft` to hand-written runtime fns + registered emitters.  Single source of truth for Op emission.  Retires `output_call_template` and `Value::RawExpr`.  2-3 weeks of focused work. | 3+ template-path bugs accumulating, OR major codegen evolution that forces touching ≥50 Op annotations, OR contributor appetite for a multi-week structural refactor.  Plan 12 Tier 2 (phases 03-05) must land first — without it the migration target shape isn't uniform. |
-| [`deferred/28-const-store/`](deferred/28-const-store/) | Constant store — Phase A (P127 vector-constants fix: heap-backed const store, `OpConstRef` opcode, `text_code` retired) and Phase D (`.loftc` bytecode cache via `src/cache.rs`, SHA-256 keyed) are SHIPPED.  Two deferred-tail phases remain: Phase B (mmap cache loading — overhead exceeds memcpy savings at current 5-10 KB cache size); Phase C (WASM pre-compiled stdlib — needs `Data` struct serialisation across 130+ public members + recursive enums; MH effort).  Was `doc/claude/CONST_STORE.md`. | Phase B: Phase C lands a large embedded stdlib cache (mmap becomes worthwhile only above some size threshold).  Phase C: contributor appetite for multi-week `Data` serialization work, OR demonstrated need for sub-100ms WASM cold-start past what include_bytes! + parse achieves.  Both phases roadmap-tracked (CS.B / CS.C1-C3). |
+| [`deferred/13-rust-template-migration/`](deferred/13-rust-template-migration/) | Migrate ~200 `#rust"..."` template annotations in `default/*.loft` to hand-written runtime fns + registered emitters.  Single source of truth for Op emission.  Retires `output_call_template` and `Value::RawExpr`.  Effort: H (large structural refactor). | 3+ template-path bugs accumulating, OR major codegen evolution that forces touching ≥50 Op annotations, OR contributor appetite for a large structural refactor.  Plan 12 Tier 2 (phases 03-05) must land first — without it the migration target shape isn't uniform. |
+| [`deferred/28-const-store/`](deferred/28-const-store/) | Constant store — Phase A (P127 vector-constants fix: heap-backed const store, `OpConstRef` opcode, `text_code` retired) and Phase D (`.loftc` bytecode cache via `src/cache.rs`, SHA-256 keyed) are SHIPPED.  Two deferred-tail phases remain: Phase B (mmap cache loading — overhead exceeds memcpy savings at current 5-10 KB cache size); Phase C (WASM pre-compiled stdlib — needs `Data` struct serialisation across 130+ public members + recursive enums; MH effort).  Was `doc/claude/CONST_STORE.md`. | Phase B: Phase C lands a large embedded stdlib cache (mmap becomes worthwhile only above some size threshold).  Phase C: contributor appetite for H-effort `Data` serialization work, OR demonstrated need for sub-100ms WASM cold-start past what include_bytes! + parse achieves.  Both phases roadmap-tracked (CS.B / CS.C1-C3). |
 
 ## Finished initiatives
 

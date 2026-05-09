@@ -5,34 +5,27 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Roadmap
 
-Open work items grouped by **value** (impact per effort), with explicit dependencies.  No time projections — those rot.  Order within each value tier is suggested by effort + dependency unblocking, not calendar.
+Open work items grouped by value, with explicit dependencies and effort estimates.
+
+The methodology behind this file (value-not-time organization, features-need-plans, effort-not-projections) lives in [`plans/README.md` § Roadmap workflow](plans/README.md#roadmap-workflow).  This file holds only the work tables.
+
+| Legend | Meaning |
+|---|---|
+| **V1 / V2 / V3** | Value tier (high / medium / niche) |
+| **E** column | XS = Tiny · S = Small · M = Medium · MH = Med-High · H = High · VH = Very High · L = Large multi-arc |
+| **Design** column | ✓ = detailed · ~ = partial · — = needs design |
 
 | Companion file | Purpose |
 |---|---|
 | [`RELEASE.md`](RELEASE.md) | What MUST be true before tagging |
 | [`PLANNING.md`](PLANNING.md) | Priority-ordered backlog (next-best pickup) |
-| [`plans/README.md`](plans/README.md) | docs-vs-plans rule + plan workflow |
+| [`plans/README.md`](plans/README.md) | docs-vs-plans rule + plan workflow + roadmap workflow |
 
 **Project goal:** browser games anyone can play via a shared link.  Native OpenGL is supported for desktop enthusiasts; server/multiplayer comes after the single-player browser experience works.
-
-**Value legend:**
-- **V1** — high impact: directly enables the core use case OR unblocks multiple downstream plans
-- **V2** — medium impact: meaningful capability or quality improvement
-- **V3** — niche / internal / cleanup: real value but not user-visible at the language surface
-
-**Effort legend:** XS = Tiny · S = Small · M = Medium · MH = Med–High · H = High · VH = Very High · L = Large multi-arc
-
-**Design legend:** ✓ = detailed design in place · ~ = partial/outline · — = needs design
-
-**Maintenance rule:** When an item completes, remove it from this file.  Completed work belongs in CHANGELOG.md and git history.
-
-**Features need plans.**  Every feature row below should cite a plan in its Source column (or be small enough for direct PROBLEMS.md + commit, like a bug).  Tiny deliverables (demo deploys, single-action items) can stay on ROADMAP without plans.
 
 ---
 
 ## V1 — high value
-
-Directly enables the core use case (browser games, multiplayer, learnable language) OR unblocks multiple downstream plans.
 
 ### Foundation — unblocks ecosystem
 
@@ -70,8 +63,6 @@ Directly enables the core use case (browser games, multiplayer, learnable langua
 ---
 
 ## V2 — medium value
-
-Meaningful capability or quality improvement.  Not foundational; users see the benefit but project doesn't fall over without it.
 
 ### Language polish
 
@@ -154,8 +145,6 @@ Meaningful capability or quality improvement.  Not foundational; users see the b
 
 ## V3 — niche / internal / cleanup
 
-Real value but not user-visible at the language surface.  Validation backlog (catches latent bugs), small specific features, single-purpose optimizations.
-
 ### Validation matrix backlog (catches latent bugs across language axes)
 
 | ID | Title | E | Design | Source |
@@ -237,7 +226,7 @@ Demo apps ship on their own cadence and do **not** gate any language work.  Per 
 
 Comprehensive list of every open plan across `plans/` and `lib_plans/`.  Sorted by value bucket; within bucket by tracker then ID.  Single place to read for "what's open, what depends on what, how valuable."
 
-### V1 — high value (foundation + user-visible quality + correctness)
+### V1
 
 | Plan | E | Depends on | Status |
 |---|---|---|---|
@@ -250,7 +239,7 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`.  Sorted 
 | [`lib_plans/future/09-lsp/`](lib_plans/future/09-lsp/) | M (LSP.1) / MH (LSP.2/3) | — | Pure future.  LSP.1 unblocks 4 IDE plugins + browser IDE |
 | [`lib_plans/future/11-packages/`](lib_plans/future/11-packages/) | S-M | — | Pointer-plan.  PKG.7 + PKG.REG.  Format itself shipped (14 lib/* use loft.toml) |
 
-### V2 — medium value (capability + polish)
+### V2
 
 | Plan | E | Depends on | Status |
 |---|---|---|---|
@@ -275,7 +264,7 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`.  Sorted 
 | [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **lib_plans/11-packages PKG.REG** | Multi-release execution arc |
 | [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/07-web-ide W2** + moros editor MO.* + script-target build mode | Plan-only |
 
-### V3 — niche / internal / cleanup
+### V3
 
 | Plan | E | Depends on | Status |
 |---|---|---|---|
@@ -293,7 +282,7 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`.  Sorted 
 | [`plans/deferred/10-scope-exit-emission/`](plans/deferred/10-scope-exit-emission/) | A bug in this gate's territory, dep-tracking maintenance, or contributor interest |
 | [`plans/deferred/12-codegen-simplifications/`](plans/deferred/12-codegen-simplifications/) | Same trigger set as plan 13.  Tier 1 shipped on branch `plan-12-codegen-simplifications` |
 | [`plans/deferred/13-rust-template-migration/`](plans/deferred/13-rust-template-migration/) | 3+ template-path bugs OR major codegen evolution touching ≥50 Op annotations OR contributor appetite |
-| [`plans/deferred/28-const-store/`](plans/deferred/28-const-store/) | Phase B: Phase C lands large embedded stdlib cache.  Phase C: contributor appetite for multi-week `Data` serialization OR demonstrated WASM cold-start gap.  Phases A + D already shipped |
+| [`plans/deferred/28-const-store/`](plans/deferred/28-const-store/) | Phase B: Phase C lands large embedded stdlib cache.  Phase C: contributor appetite for MH-effort `Data` serialization OR demonstrated WASM cold-start gap.  Phases A + D already shipped |
 
 ### Cross-tracker dependency chains worth noting
 
@@ -309,7 +298,7 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`.  Sorted 
 
 ### Features still needing plan promotion
 
-The following ROADMAP rows still cite PLANNING.md or other reference docs as Source instead of having dedicated plans.  Per the docs-vs-plans rule + the "features need plan cadence" direction, each should be promoted to a plan before it ships:
+ROADMAP rows that still cite a flat reference doc as Source rather than a plan.  Promote when next-up work surfaces:
 
 - **L1** Error recovery after token failures (V2 polish)
 - **AOT** Auto-compile libraries to native shared libs (V3 small)
