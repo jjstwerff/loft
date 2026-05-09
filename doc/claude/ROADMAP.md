@@ -390,8 +390,8 @@ before tagging — no "appears fixed" exceptions.
 | A12    | Lazy work-variable initialization                      | M  | ✓      | PLANNING.md         |
 | O2     | Stack raw pointer cache                                | M  | ✓      | PLANNING.md         |
 | A4     | Spatial index operations                               | M  | ✓      | PLANNING.md         |
-| O4     | Native: direct-emit local collections                  | M  | ✓      | PLANNING.md         |
-| O5     | Native: omit `stores` from pure functions              | M  | ✓      | PLANNING.md         |
+| O4     | Native: direct-emit local collections                  | M  | ✓      | plans/future/34-performance-followups/README.md |
+| O5     | Native: omit `stores` from pure functions              | M  | ✓      | plans/future/34-performance-followups/README.md |
 | NDB.2  | DWARF rewrite — point `.debug_line` / `.debug_info` directly at `.loft`; stock debuggers need no plugin | MH | ✓ | plans/future/25-native-debug/README.md|
 
 ---
