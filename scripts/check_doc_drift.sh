@@ -18,25 +18,41 @@
 # projections are warnings only.
 #
 # Usage:
-#   scripts/check_doc_drift.sh             # all checks
-#   scripts/check_doc_drift.sh paths       # only path drift
-#   scripts/check_doc_drift.sh time        # only time projections
-#   scripts/check_doc_drift.sh stale       # only stale claims
+#   scripts/check_doc_drift.sh                 # all checks, verbose
+#   scripts/check_doc_drift.sh -q              # all checks, summary only
+#   scripts/check_doc_drift.sh paths           # only path drift
+#   scripts/check_doc_drift.sh time            # only time projections
+#   scripts/check_doc_drift.sh stale           # only stale claims
+#   scripts/check_doc_drift.sh roadmap         # only ROADMAP/disk cross-check
+#   scripts/check_doc_drift.sh refs            # only finished/deferred refs
+#
+# Exit code: 0 = clean (or only time-projection warnings), 1 = drift.
 
 set -u
 
 cd "$(dirname "$0")/.."
 
+QUIET=0
+if [ "${1:-}" = "-q" ] || [ "${1:-}" = "--quiet" ]; then
+  QUIET=1
+  shift
+fi
 CHECK="${1:-all}"
 DRIFT=0
+HITS_PATHS=0
+HITS_TIME=0
+HITS_STALE=0
+HITS_ROADMAP=0
+HITS_REFS=0
 
-red()    { printf '\033[31m%s\033[0m\n' "$*"; }
-yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
-green()  { printf '\033[32m%s\033[0m\n' "$*"; }
+red()    { [ $QUIET -eq 0 ] && printf '\033[31m%s\033[0m\n' "$*"; }
+yellow() { [ $QUIET -eq 0 ] && printf '\033[33m%s\033[0m\n' "$*"; }
+green()  { [ $QUIET -eq 0 ] && printf '\033[32m%s\033[0m\n' "$*"; }
+say()    { [ $QUIET -eq 0 ] && echo "$@"; }
 
 # ---- Check 1: broken markdown links to plans ----
 check_paths() {
-  echo "=== Broken plan links ==="
+  say "=== Broken plan links ==="
   local hits=0
   # Match markdown links [...](url) where url contains plans/<NN>-<slug>.
   # Resolve the url relative to the containing file.
@@ -71,6 +87,7 @@ check_paths() {
   done < <(grep -rn -E '\]\([^)]*(lib_plans|plans)/[^)]*[0-9]+-[a-z0-9-]+' \
               doc/claude/ CLAUDE.md --include='*.md' 2>/dev/null \
             | grep -v 'check_doc_drift.sh')
+  HITS_PATHS=$hits
   if [ $hits -eq 0 ]; then
     green "  clean"
   else
@@ -81,7 +98,7 @@ check_paths() {
 
 # ---- Check 2: time-projection language ----
 check_time() {
-  echo "=== Time projections ==="
+  say "=== Time projections ==="
   local hits=0
   local patterns=(
     'weeks? of focused'
@@ -103,6 +120,7 @@ check_time() {
       hits=$((hits + 1))
     done < <(grep -rn -E "$pat" doc/claude/ CLAUDE.md --include='*.md' 2>/dev/null)
   done
+  HITS_TIME=$hits
   if [ $hits -eq 0 ]; then
     green "  clean"
   else
@@ -113,7 +131,7 @@ check_time() {
 
 # ---- Check 3: stale claims about retired features ----
 check_stale() {
-  echo "=== Stale 'is current' claims about retired features ==="
+  say "=== Stale 'is current' claims about retired features ==="
   local hits=0
   # Tighter patterns: only Rust-code-block or definition-shape mentions
   # (excludes prose mentions in "removed/retired" context).
@@ -141,6 +159,7 @@ check_stale() {
       hits=$((hits + 1))
     done < <(grep -rn -E "$pat" doc/claude/ CLAUDE.md --include='*.md' 2>/dev/null)
   done
+  HITS_STALE=$hits
   if [ $hits -eq 0 ]; then
     green "  clean"
   else
@@ -159,7 +178,7 @@ check_stale() {
 #     action items.  Closure lives in CHANGELOG + git history.
 #     Parenthetical historical mentions are tolerated.
 check_roadmap() {
-  echo "=== ROADMAP plan-state cross-check ==="
+  say "=== ROADMAP plan-state cross-check ==="
   local hits=0
   local roadmap=doc/claude/ROADMAP.md
   if [ ! -f "$roadmap" ]; then
@@ -235,6 +254,7 @@ check_roadmap() {
     done
   done
 
+  HITS_ROADMAP=$hits
   if [ $hits -eq 0 ]; then
     green "  clean"
   else
@@ -255,7 +275,7 @@ check_roadmap() {
 # FROM the closed/deferred plan's siblings.  Flagged: links from
 # normal reference docs (doc/claude/<NAME>.md, CLAUDE.md, lib/<name>/*.md).
 check_refs() {
-  echo "=== finished/deferred plan refs from normal docs ==="
+  say "=== finished/deferred plan refs from normal docs ==="
   local hits=0
   # Find every markdown link target containing plans/finished/ or plans/deferred/.
   # Tolerance pattern (closure narrative + status annotations + design-pointer phrases).
@@ -308,6 +328,7 @@ check_refs() {
               doc/claude/ CLAUDE.md lib/ --include='*.md' 2>/dev/null \
             | grep -v 'check_doc_drift.sh')
 
+  HITS_REFS=$hits
   if [ $hits -eq 0 ]; then
     green "  clean"
   else
@@ -318,6 +339,9 @@ check_refs() {
   fi
 }
 
+# Sep between sections (verbose mode only).
+sep() { [ $QUIET -eq 0 ] && echo; }
+
 case "$CHECK" in
   paths)   check_paths ;;
   time)    check_time ;;
@@ -326,25 +350,32 @@ case "$CHECK" in
   refs)    check_refs ;;
   all)
     check_paths
-    echo
+    sep
     check_time
-    echo
+    sep
     check_stale
-    echo
+    sep
     check_roadmap
-    echo
+    sep
     check_refs
     ;;
   *)
-    echo "Usage: $0 [all|paths|time|stale|roadmap|refs]" >&2
+    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs]" >&2
     exit 2
     ;;
 esac
 
-if [ $DRIFT -eq 0 ]; then
-  green "ALL CHECKS PASSED"
+# One-line summary (always printed; even in quiet mode this is the only output).
+total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS))
+summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS"
+if [ $DRIFT -eq 0 ] && [ $HITS_TIME -eq 0 ]; then
+  printf '\033[32mclean\033[0m (%s)\n' "$summary"
+  exit 0
+elif [ $DRIFT -eq 0 ]; then
+  # Only time-projection warnings — exit 0 but flag in summary.
+  printf '\033[33mclean+warn\033[0m (%s) — %d time-projection warning(s)\n' "$summary" "$HITS_TIME"
   exit 0
 else
-  red "DRIFT DETECTED — see report above"
+  printf '\033[31mDRIFT\033[0m (%s) — %d action items\n' "$summary" "$total"
   exit 1
 fi
