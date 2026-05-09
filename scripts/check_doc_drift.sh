@@ -44,6 +44,7 @@ HITS_TIME=0
 HITS_STALE=0
 HITS_ROADMAP=0
 HITS_REFS=0
+HITS_LIBS=0
 
 red()    { [ $QUIET -eq 0 ] && printf '\033[31m%s\033[0m\n' "$*"; }
 yellow() { [ $QUIET -eq 0 ] && printf '\033[33m%s\033[0m\n' "$*"; }
@@ -339,6 +340,35 @@ check_refs() {
   fi
 }
 
+# ---- Check 6: lib/<name>/ hygiene (warn-only) ----
+# Every lib/<name>/ should have both loft.toml (package manifest) and
+# README.md (downstream-consumer documentation).  Missing files are
+# warnings, not errors — they're long-tail hygiene that doesn't gate
+# release.
+check_libs() {
+  say "=== lib/ hygiene ==="
+  local hits=0
+  [ -d lib ] || { say "  no lib/ — skipping"; return; }
+  for d in lib/*/; do
+    [ -d "$d" ] || continue
+    name=$(basename "$d")
+    missing=""
+    [ -f "$d/loft.toml" ] || missing="$missing loft.toml"
+    [ -f "$d/README.md" ] || missing="$missing README.md"
+    if [ -n "$missing" ]; then
+      yellow "  $name: missing$missing"
+      hits=$((hits + 1))
+    fi
+  done
+  HITS_LIBS=$hits
+  if [ $hits -eq 0 ]; then
+    green "  clean"
+  else
+    yellow "  $hits libraries with missing hygiene files"
+    # Warning-only: doesn't set DRIFT.
+  fi
+}
+
 # Sep between sections (verbose mode only).
 sep() { [ $QUIET -eq 0 ] && echo; }
 
@@ -348,6 +378,7 @@ case "$CHECK" in
   stale)   check_stale ;;
   roadmap) check_roadmap ;;
   refs)    check_refs ;;
+  libs)    check_libs ;;
   all)
     check_paths
     sep
@@ -358,22 +389,25 @@ case "$CHECK" in
     check_roadmap
     sep
     check_refs
+    sep
+    check_libs
     ;;
   *)
-    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs]" >&2
+    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs]" >&2
     exit 2
     ;;
 esac
 
 # One-line summary (always printed; even in quiet mode this is the only output).
 total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS))
-summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS"
-if [ $DRIFT -eq 0 ] && [ $HITS_TIME -eq 0 ]; then
+warns=$((HITS_TIME + HITS_LIBS))
+summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS"
+if [ $DRIFT -eq 0 ] && [ $warns -eq 0 ]; then
   printf '\033[32mclean\033[0m (%s)\n' "$summary"
   exit 0
 elif [ $DRIFT -eq 0 ]; then
-  # Only time-projection warnings — exit 0 but flag in summary.
-  printf '\033[33mclean+warn\033[0m (%s) — %d time-projection warning(s)\n' "$summary" "$HITS_TIME"
+  # Only warn-level findings — exit 0 but flag in summary.
+  printf '\033[33mclean+warn\033[0m (%s) — %d warning(s)\n' "$summary" "$warns"
   exit 0
 else
   printf '\033[31mDRIFT\033[0m (%s) — %d action items\n' "$summary" "$total"

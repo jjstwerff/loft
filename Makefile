@@ -807,6 +807,34 @@ ci-full: ci
 	$(MAKE) test-gl-smoke >> result.txt 2>&1 && \
 	$(MAKE) test-gl-golden >> result.txt 2>&1
 
+# Doc hygiene checks — non-blocking.
+#
+# Runs scripts/check_doc_drift.sh:
+#   - paths   : every markdown link to a plan resolves
+#   - stale   : retired-feature claims (Type::Long, text_code, .loftc, …)
+#   - roadmap : every active plan on ROADMAP at canonical path; no
+#               finished/deferred crept in as action items
+#   - refs    : no normal docs deep-link into closed/deferred plans
+#               (closure-rule enforcement)
+#   - time    : (warn) calendar-time projections that should be effort letters
+#   - libs    : (warn) lib/<name>/ has loft.toml + README.md
+#
+# Exit code:
+#   0 = clean OR only warnings (time/libs)
+#   1 = real drift (paths/stale/roadmap/refs)
+#
+# Intentionally NOT a `ci` dependency.  Doc drift is a soft failure:
+# bad links + closure-rule violations don't break the binary.  Run
+# locally before opening a PR; the user makes the call.  If you want
+# to gate a PR on doc cleanliness, run `make doc-check` and check
+# the exit code yourself, OR wire it into a separate non-blocking
+# GitHub Actions job.
+doc-check:
+	@scripts/check_doc_drift.sh
+
+doc-check-quiet:
+	@scripts/check_doc_drift.sh -q
+
 # QUALITY Tier 4 #12 — the single pre-push gate.
 #
 # `ci` optimises for the full automated pipeline: it logs to result.txt,
