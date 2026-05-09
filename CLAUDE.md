@@ -269,7 +269,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [INTERNALS.md](doc/claude/INTERNALS.md) | calc.rs, stack.rs, create.rs, native.rs, ops.rs, png_store.rs, parallel.rs, main.rs, logger.rs |
 | [THREADING.md](doc/claude/THREADING.md) | Parallel execution — `par(...)`, `par_light(...)`, thread safety analysis, store isolation |
 | [INTERFACES.md](doc/claude/INTERFACES.md) | Interface/trait system — bounded generics, operator overloading, phase design |
-| [WASM.md](doc/claude/WASM.md) | WASM architecture — wasm32-wasip2 target, VirtFS, host bridges, feature gates, FS bridge steps |
+| [WASM.md](doc/claude/WASM.md) | Reference — WASM runtime architecture: wasm32-wasip2 target, VirtFS, layered FS, host bridges, feature gates, threading two-tier design, frame yield, PNG decoding, logging.  All major W1.x phases shipped (W1.15 CallRef, W1.16 file I/O, W1.17 store locks, W1.18-1..5 worker thread infrastructure, W1.19 random, W1.20 time, frame yield, etc.).  Lone open item: W1.18-6 (test enablement for `19-threading.loft` under Node.js Worker Threads — single small task, not plan-shaped).  The doc's "Implementation Plan" Steps 1-14 + FS-A..FS-F are HISTORICAL build records (all shipped). |
 | [LOGGER.md](doc/claude/LOGGER.md) | Runtime logging framework (log_info/warn/error/fatal, config, rate limiting, production mode) |
 | [TESTING.md](doc/claude/TESTING.md) | Test framework, `LogConfig` debug-logging presets, `LOFT_LOG` env var, suite files |
 | [DOC.md](doc/claude/DOC.md) | HTML documentation generation (gendoc.rs + documentation.rs) |
