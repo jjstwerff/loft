@@ -39,6 +39,19 @@ ROADMAP rows directly at it (e.g.
 Single source of truth, no indirection — pointer-plans were
 tried (33/35/lib-11) and shown to be over-engineering.
 
+## Three workflows for TODO items — pick the lightest that fits
+
+| Flow | Where the TODO lives | When to use |
+|---|---|---|
+| **Bug fix** | [`../PROBLEMS.md`](../PROBLEMS.md) row + regression test + focused commit | Single root cause, fits in one commit, no design choices, no multi-phase sequencing. |
+| **Light — `## Open work` section** | A `## Open work` section in the relevant `doc/claude/<NAME>.md` reference doc | The normal flow.  TODO is co-located with the architecture it touches; one row per item; closure is "remove the row + update the reference content."  Used by NATIVE.md, PERFORMANCE.md, PACKAGES.md, QUALITY.md today. |
+| **Plan — `plans/<NN>-<slug>/`** | Full directory with README + per-phase files | Multi-session initiative with explicit phasing, design-before-implementation discipline, cross-arc dependencies, or a long arc that needs its own document space.  Capped at 2-3 active per `plans/` (see `feedback_max_three_active_plans`). |
+
+The light flow is the default.  Promote to a plan only when
+the work is genuinely multi-phase and benefits from its own
+directory — most TODOs don't, even ones that take several
+sessions.
+
 ## Roadmap workflow
 
 [`../ROADMAP.md`](../ROADMAP.md) is the work-list view: every
@@ -207,6 +220,78 @@ Status / Goal / Effort / Sub-arcs / Phase ordering / Open
 questions / Cross-arc dependencies / See also.  Length
 budget: 100-300 lines; longer plans usually have reference
 content that should move to `doc/claude/*.md`.
+
+### Deferring a plan
+
+When a plan can't reach completion in the current arc but the
+remaining work has a **concrete trigger** (not just "someday"),
+move it to `deferred/`.  Full procedure in
+[`_DEFER_CHECKLIST.md`](_DEFER_CHECKLIST.md).  Summary:
+
+1. **Identify the boundary** — what shipped vs what stays.  If
+   some phases shipped and others didn't, this is a *partial
+   defer*: the README's Status table grows a SHIPPED / DEFERRED
+   row split (see plan-28 + plan-12 for the canonical shape).
+2. **Extract reference content for shipped parts** — same as the
+   closure rule.  Anything load-bearing for the codebase moves
+   to `doc/claude/*.md`; the deferred plan README keeps closure
+   notes for the shipped part + design content for the deferred
+   tail.
+3. **Add a trigger row to [`DEFERRED.md`](DEFERRED.md)** — one
+   line, points at the plan's README for full detail.  No row
+   without a trigger.
+4. **Reclassify ROADMAP rows** — the shipped parts leave ROADMAP
+   (closed); the deferred parts stay if they're roadmap-tracked,
+   or get removed if they're trigger-only.
+5. **`git mv` the plan directory** to `plans/deferred/<NN>-<slug>/`.
+
+A plan stays in `deferred/` while ANY remaining phase has a
+concrete trigger.  When the trigger fires, the plan moves to
+`plans/future/` (or directly into a current arc), the row leaves
+DEFERRED.md, and a ROADMAP row appears.
+
+If a plan has no remaining triggers (everything is "won't do
+without a driver"), it goes to `DESIGN_DECISIONS.md`, not
+`deferred/`.
+
+### Light flow lifecycle — `## Open work` in reference docs
+
+The light flow follows the same lifecycle as plans, just with a
+single row instead of a directory.
+
+**Open** — add a row to the relevant reference doc's
+`## Open work` table (create the section if it doesn't exist;
+see NATIVE.md / PERFORMANCE.md / PACKAGES.md / QUALITY.md for
+canonical shape).  Add a ROADMAP row tagged with value category
++ link directly at the section.
+
+**Work** — when implementing, edit the reference doc's
+architecture content directly (it's the same file).  Cross-link
+between the Open work row and the section it touches if useful.
+
+**Close** — when shipped:
+- Remove the row from `## Open work`.
+- Update the surrounding architecture content to reflect the new
+  reality (the same edit that closed the work usually does this).
+- Remove the ROADMAP row.
+- Closure record lives in the commit message + CHANGELOG_TECHNICAL.md;
+  no separate closure-record file.
+
+**Defer** — if work is paused with a concrete trigger:
+- Annotate the row inline (e.g. `**Blocked on X** — unpauses
+  when Y happens`) or move the trigger detail to
+  [`DEFERRED.md`](DEFERRED.md) if it's cross-cutting.
+- Keep the row in `## Open work` (it's still tracked work, just
+  paused).
+
+**Promote to plan** — if the row grows into a multi-phase
+initiative, copy `_TEMPLATE.md` and migrate.  Don't promote
+prematurely; multi-row clusters often stay light if each row is
+independent.
+
+The recent collapses of pointer-plans 33 / 34 / 35 / lib-11 into
+NATIVE.md / PERFORMANCE.md / QUALITY.md / PACKAGES.md `## Open
+work` sections are the canonical examples.
 
 ## Companion indexes — every parked item is discoverable
 

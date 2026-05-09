@@ -12,6 +12,13 @@ The closure rule (see [`README.md` § Closing a plan](README.md#closing-a-plan--
 **reference content moves OUT of the plan into its proper
 home; the finished plan keeps only the closure record.**
 
+**Not closing — deferring instead?**  See
+[`_DEFER_CHECKLIST.md`](_DEFER_CHECKLIST.md).  Deferral applies
+when remaining work has a concrete trigger but won't ship in
+this arc; the shipped portion still follows the extraction
+steps below for its reference content, but the directory moves
+to `deferred/` rather than `finished/`.
+
 ## The 6 steps
 
 ### Step 1 — Identify reference vs closure-record sections

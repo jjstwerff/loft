@@ -13,6 +13,25 @@ The sections below are the canonical shape.  Sections marked
 **(REQUIRED)** must be present in every plan; sections marked
 **(OPTIONAL)** depend on plan shape.
 
+## Before you copy — pick the lightest workflow
+
+Per [`README.md § Three workflows`](README.md#three-workflows-for-todo-items--pick-the-lightest-that-fits):
+
+- **Bug fix** — PROBLEMS.md row + regression test + commit.
+  No plan, no Open work entry.
+- **Light TODO** — add a row to `## Open work` in the relevant
+  `doc/claude/<NAME>.md` reference doc.  This is the default;
+  most TODOs fit here even when they take several sessions.
+- **Plan** — this template.  Reserve for genuinely multi-phase
+  work that benefits from its own directory: explicit phasing,
+  design-before-implementation discipline, cross-arc
+  dependencies, multiple sub-files (DESIGN.md, ARC.md, per-phase
+  files).  Capped at 2-3 active per `plans/`.
+
+If your TODO fits in one row of a reference-doc table with one
+sentence of design, you don't need a plan — close this template
+and add the row.
+
 ---
 
 # <NN> — <Plan title>
