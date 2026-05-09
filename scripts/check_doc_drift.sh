@@ -340,7 +340,7 @@ check_refs() {
   fi
 }
 
-# ---- Check 6: lib/<name>/ hygiene (warn-only) ----
+# ---- Check 7: lib/<name>/ hygiene (warn-only) ----
 # Every lib/<name>/ should have both loft.toml (package manifest) and
 # README.md (downstream-consumer documentation).  Missing files are
 # warnings, not errors — they're long-tail hygiene that doesn't gate

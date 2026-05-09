@@ -38,8 +38,14 @@ and add the row.
 
 ## Status (REQUIRED)
 
-One paragraph.  State of the world today + what this plan
-will change.  Examples:
+This is the **single source of truth** for what's shipped / open /
+deferred / blocked.  Other docs (ROADMAP, DEFERRED.md, downstream
+plans) carry the plan name + dependencies but not the per-phase
+status — readers who want the exact state come here.  No
+duplication, no sync.
+
+One paragraph.  State of the world today + what this plan will
+change.  Examples:
 
 - "Open — design ready, no implementation yet.  Routes here
   per the docs-vs-plans rule."

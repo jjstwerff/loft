@@ -264,61 +264,63 @@ Demo apps ship on their own cadence and do **not** gate any language work.  Per 
 
 Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged by primary value category.
 
+For per-phase status (what's shipped, what's in flight, what's blocked) **read the plan README directly** — it's the source of truth.  This index gives you the plan name, remaining effort, dependencies, and a one-line "what is this plan about" descriptor.
+
 ### S — Silent failure / data-loss prevention
 
-| Plan | E | Depends on | Status |
+| Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/14-tuple-validation/`](plans/14-tuple-validation/) | M | — | Active.  Phases 00-01 shipped; 02-06 open.  Hosts cross-mode harness used by 15/16/18/19/20 |
-| [`plans/future/15-closure-validation/`](plans/future/15-closure-validation/) | M | **plans/14 cross-mode harness** | Pre-flight 50% bug yield expected.  Phase 03 also closes the closure-DbRef leak |
-| [`plans/future/16-coroutine-validation/`](plans/future/16-coroutine-validation/) | M | **plans/14 cross-mode harness** | Pre-flight 0/7 cells initially |
-| [`plans/future/18-match-validation/`](plans/future/18-match-validation/) | M | **plans/14 cross-mode harness** | Pre-flight 33% hang rate on or-patterns / `@`-bindings |
-| [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | **plans/14 cross-mode harness** | Pre-flight 20% bug rate |
-| [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | **plans/14 cross-mode harness** | Self-deferred; trigger to unpause: user report of `index out of bounds` at `src/database/structures.rs:609` |
+| [`plans/14-tuple-validation/`](plans/14-tuple-validation/) | M | — | Hosts cross-mode harness used by 15/16/18/19/20 |
+| [`plans/future/15-closure-validation/`](plans/future/15-closure-validation/) | M | **plans/14 cross-mode harness** | Phase 03 also closes the closure-DbRef leak |
+| [`plans/future/16-coroutine-validation/`](plans/future/16-coroutine-validation/) | M | **plans/14 cross-mode harness** | Yielded type × drive context matrix |
+| [`plans/future/18-match-validation/`](plans/future/18-match-validation/) | M | **plans/14 cross-mode harness** | Subject type × pattern shape matrix |
+| [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | **plans/14 cross-mode harness** | Variant payload × dispatch context matrix |
+| [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | **plans/14 cross-mode harness** | Hash / sorted / index / spacial × operation matrix |
 
 ### G — Goal-enabling
 
-| Plan | E | Depends on | Status |
+| Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/future/25-native-debug/`](plans/future/25-native-debug/) | XS-MH | — | Design.  NDB.0 = `--native-debug` flag; NDB.1 = `.loft.map` + plugins; NDB.2 = full DWARF rewrite |
-| [`plans/future/23-event-loop/`](plans/future/23-event-loop/) | MH | **P213 v4** (compiler bug) | Design spec.  PROTOCOL v1 (text-mode) shipped |
-| [`plans/future/24-multiplayer-editor/`](plans/future/24-multiplayer-editor/) | M | **plans/32 TIC_TAC_TOE v2 ground layer** | Plan only.  First real-game milestone |
-| [`plans/future/32-tic-tac-toe/`](plans/future/32-tic-tac-toe/) | M | — | v1 shipped; v2/v3/v4 protocol-only ground layers designed |
-| [`lib_plans/future/02-graphics/`](lib_plans/future/02-graphics/) | H (multi-arc) | — | Low-level `gl_*` API shipped; renderer abstraction designed |
-| [`lib_plans/future/07-web-ide/`](lib_plans/future/07-web-ide/) | M per W item | **lib_plans/future/09-lsp LSP.1** + **PACKAGES.md § Open work R1 workspace split** | W2-W6 |
-| [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | `lib/server/` has 1234 lines of starting code; design covers full feature set |
-| [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
-| [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/future/07-web-ide W2** + moros editor MO.* + script-target build mode | Plan-only |
+| [`plans/future/25-native-debug/`](plans/future/25-native-debug/) | XS-MH | — | NDB.0 / NDB.1 / NDB.2 — GDB / LLDB integration for `--native` |
+| [`plans/future/23-event-loop/`](plans/future/23-event-loop/) | MH | **P213 v4** (compiler bug) | Bidirectional event-loop abstraction (client + server) |
+| [`plans/future/24-multiplayer-editor/`](plans/future/24-multiplayer-editor/) | M | **plans/future/32 TIC_TAC_TOE v2 ground layer** | First real-game milestone |
+| [`plans/future/32-tic-tac-toe/`](plans/future/32-tic-tac-toe/) | M | — | Protocol-validation vehicle (v1-v4 ground layers) |
+| [`lib_plans/future/02-graphics/`](lib_plans/future/02-graphics/) | H (multi-arc) | — | Low-level GL + renderer abstraction |
+| [`lib_plans/future/07-web-ide/`](lib_plans/future/07-web-ide/) | M per W item | **lib_plans/future/09-lsp LSP.1** + **PACKAGES.md § Open work R1 workspace split** | Browser IDE (W2-W6) |
+| [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | HTTP / WS / static-file server library |
+| [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/future/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
+| [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/future/07-web-ide W2** + moros editor MO.* + script-target build mode | User-authored scene scripts (SC.1-SC.6 + SC.P) |
 
 ### F — Foundation
 
-| Plan | E | Depends on | Status |
+| Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`lib_plans/future/05-game-infra/`](lib_plans/future/05-game-infra/) | M-MH per item | — | FFI.1-4 unblock third-party native extensions |
-| [`lib_plans/future/09-lsp/`](lib_plans/future/09-lsp/) | M (LSP.1) / MH (LSP.2/3) | — | Pure future.  LSP.1 unblocks 4 IDE plugins + browser IDE |
-| [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG.  Format itself shipped (14 lib/* use loft.toml) |
+| [`lib_plans/future/05-game-infra/`](lib_plans/future/05-game-infra/) | M-MH per item | — | FFI.1-4 — third-party native extensions |
+| [`lib_plans/future/09-lsp/`](lib_plans/future/09-lsp/) | M (LSP.1) / MH (LSP.2/3) | — | LSP.1 unblocks 4 IDE plugins + browser IDE |
+| [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
 | [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
-| [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | Foundational; REGEX is first downstream consumer |
+| [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | Foundational — REGEX is first downstream consumer |
 
 ### U — Ease of use
 
-| Plan | E | Depends on | Status |
+| Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/07-error-messages/`](plans/07-error-messages/) | M | — | Active.  Phases 0-3 shipped; phases 4-7 open |
-| [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) | XS-S per item | — | SH.1 + SH.2 shipped.  DX.1, DX.2, DX.3 open |
-| [`plans/future/08-repl-and-introspection/`](plans/future/08-repl-and-introspection/) | M | — | Phases 0-1 shipped; phases 2-6 open |
+| [`plans/07-error-messages/`](plans/07-error-messages/) | M | — | `file:line:col` + caret + suggestions across parser / type / runtime / native |
+| [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) | XS-S per item | — | SH.* / DX.* / NT.* — DX grab-bag (some shipped) |
+| [`plans/future/08-repl-and-introspection/`](plans/future/08-repl-and-introspection/) | M | — | `loft>` interactive prompt + IR/Rust/slot-table CLI |
 
 ### C — Clean features
 
-| Plan | E | Depends on | Status |
+| Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/future/22-mutable-closures/`](plans/future/22-mutable-closures/) | M-MH | — | Locked-in spec; not yet implemented |
-| [`plans/future/26-match-peg/`](plans/future/26-match-peg/) | MH | — | Cooperates with `lib_plans/future/01-regex` |
-| [`plans/future/30-sorted-slice/`](plans/future/30-sorted-slice/) | M | — | Runtime affordance present (`key_compare` zip-prefix); only parser changes needed |
+| [`plans/future/22-mutable-closures/`](plans/future/22-mutable-closures/) | M-MH | — | Novice-fit closure capture (evolves C38) |
+| [`plans/future/26-match-peg/`](plans/future/26-match-peg/) | MH | — | L3 PEG-style match patterns (cooperates with regex lib) |
+| [`plans/future/30-sorted-slice/`](plans/future/30-sorted-slice/) | M | — | A8 — slicing / open-ended ranges / partial-key match on sorted/index |
 | [`lib_plans/future/01-regex/`](lib_plans/future/01-regex/) | M | **lib_plans/future/03-lazy-stdlib** | First lazy-loaded stdlib consumer |
 
 ### Q — Internal quality
 
-| Plan | E | Depends on | Status |
+| Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/future/21-retire-scratch/`](plans/future/21-retire-scratch/) | M | cooperates with NATIVE § Open work N8c.x + PERFORMANCE § Open work N1 | Eliminate `stores.scratch` lifetime hazard |
 | [NATIVE.md § Open work](NATIVE.md#open-work) | XS-M per item | — | N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
@@ -326,11 +328,11 @@ Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged b
 
 ### N — Niche / opportunistic
 
-| Plan | E | Depends on | Status |
+| Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/future/29-server-features/`](plans/future/29-server-features/) | S-H per item | — | C55/C56/A15/I13/C57 — language features for server / game-client |
 | [`lib_plans/future/04-asset-pipeline/`](lib_plans/future/04-asset-pipeline/) | M | — | Game asset workflow |
-| [`lib_plans/future/06-web-services/`](lib_plans/future/06-web-services/) | M-H per arc | — | JSON shipped; HTTP client + auth + WebSocket / SSE clients designed |
+| [`lib_plans/future/06-web-services/`](lib_plans/future/06-web-services/) | M-H per arc | — | JSON / HTTP client / auth / WebSocket / SSE clients |
 
 ### Deferred plans
 

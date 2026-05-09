@@ -398,6 +398,22 @@ filed in the same commit window; none were lost.  The P217
 follow-up hunt then surfaced P222 / P223 (narrower self-concat
 shapes) — same rule applied.
 
+### Per-plan status lives in the plan README — not on ROADMAP
+
+ROADMAP's "All open plans — index by category" tables carry only
+the stable parts of each plan: name, remaining effort (E),
+dependencies, and a one-line "what is this plan about" descriptor.
+Per-phase status (what's shipped, what's in flight, what's
+blocked) lives in the plan README's Status block — that's the
+single source of truth.
+
+Why: per-phase status changes every time a phase ships or is
+deferred.  Mirroring it on ROADMAP doubled the edit cost and
+created a recurring drift surface (manual audit 2026-05-09 caught
+plan-14 phase 08 deferral missing, plan-07 phase 1 status stale).
+ROADMAP's job is "which plans exist + how big + what blocks them";
+the plan README's job is "where it stands today."
+
 ## Where to look for plans by state
 
 The filesystem is the source of truth — duplicate per-state tables
