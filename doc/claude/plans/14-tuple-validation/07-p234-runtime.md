@@ -241,7 +241,7 @@ function-return ABI was broken.
 | `tests/issues.rs` | `p234_runtime_*` regression tests (one already added; add cross-mode) |
 | `src/state/codegen.rs` | Step 5: keep or revert padding fix based on verification |
 | `doc/claude/PROBLEMS.md` | Mark P234 fully closed (lexer + runtime) |
-| `doc/claude/plans/06-typed-par/ARC.md` | A7.3 status: lexer + runtime closed; verify `par_tuple_return_struct_text` un-ignorable |
+| `doc/claude/plans/finished/06-typed-par/ARC.md` | A7.3 status: lexer + runtime closed; verify `par_tuple_return_struct_text` un-ignorable |
 
 ## Existing infrastructure to reuse
 
@@ -349,7 +349,7 @@ cargo test --release --test threading_chars par_tuple_return_struct_text
 
 - Update `doc/claude/PROBLEMS.md` P234 row: lexer + runtime closed,
   remove the workaround note
-- Update `doc/claude/plans/06-typed-par/ARC.md` A7.3 status to
+- Update `doc/claude/plans/finished/06-typed-par/ARC.md` A7.3 status to
   reflect runtime closure
 - Update Plan-14 `00-matrix.md` if a new "function return"
   destination column gets added; ref this phase

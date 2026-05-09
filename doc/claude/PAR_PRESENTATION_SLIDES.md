@@ -187,7 +187,7 @@ Three patterns of shortcut Claude proposed and the user shut down:
 
 ```
 CLAUDE.md           — ground rules; never lets Claude branch/push without ask
-plans/06-typed-par/
+plans/finished/06-typed-par/
     README.md       — phases by topic (historical)
     PRIORITY.md     — spine (historical)
     ARC.md          — scope-locked steps (current source of truth)
