@@ -34,11 +34,16 @@ reviewed, CI-green pull request.
 
 Rules:
 - Never `git commit` directly on `main`.
-- Never `git push` without an explicit user instruction.
+- Pushing commits is OK by default — unless there's an open PR on the branch
+  that the push would disturb.  For a long-lived working branch with no open
+  PR, push freely after each green-CI commit so the remote stays in sync.
+  When the branch has an open PR, do NOT push without an explicit user
+  instruction (force-pushes / rebases / unexpected commits disrupt review).
+  Check `gh pr list --head <branch>` before pushing if uncertain.
 - **Never create a branch unless the user explicitly says "create a branch".**
   Do not create branches as part of a workflow, sprint start, or task planning.
   Work on the current branch and commit locally.  The user decides when to
-  branch, push, or open a PR.
+  branch or open a PR.
 - Never create a feature branch from another feature branch — always branch from `main`.
 - Merging to `main` is done via a GitHub pull request, not a local `git merge`.
 
@@ -719,10 +724,17 @@ see [Validation Against CODE.md](#validation-against-codemd) for the exception p
 
 ### Remote CI / Pull Request
 
-Once the local gate is clean and the user asks to push, open a pull request against `main`.
-Do **not** push automatically — wait for an explicit instruction:
+Pushing commits is OK by default once the local gate is clean (so the remote
+stays in sync without the user having to ask each time).  Opening a PR
+remains gated by an explicit user instruction.  When the branch already has
+an open PR, do NOT push without explicit ask — force-pushes / rebases /
+surprise commits disrupt review-in-progress.
 
 ```bash
+# OK by default after green local gate (no open PR):
+git push
+
+# Opening a PR — only after explicit user ask:
 git push -u origin p1-1-p1-2-p1-3-lambda-expressions
 gh pr create --title "P1: lambda expressions (all 3 phases)" \
              --body "Implements fn(params)->type block inline lambdas with map/filter/reduce integration."

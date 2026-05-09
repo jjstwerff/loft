@@ -127,19 +127,23 @@ give each item a traceable history.
 
 1. **Never `git commit` directly on `main`.** If you accidentally land on `main`, move
    the change to a feature branch before anything else.
-2. **Never `git push` without an explicit user instruction** — see the Remote CI section
-   of [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md).
-3. **Never create a branch, push, or open a PR unless the user explicitly asks.**
+2. **Pushing commits is OK by default — unless there's an open PR on the branch
+   that the push would disturb.**  For a long-lived working branch with no open
+   PR, push freely after each green-CI commit so the remote stays in sync (the
+   user wants commits visible without having to ask each time).  When the
+   branch has an open PR, do NOT push without an explicit user instruction —
+   force-pushes, rebases, or unexpected commits disrupt review-in-progress.
+   Check with `gh pr list --head <branch>` before pushing if uncertain.
+3. **Never create a branch or open a PR unless the user explicitly asks.**
    Each pull request costs the user real review time — more than the code took to
-   write.  Default mode is: work on the current branch, commit locally, report what
-   changed, and wait.  Only run `gh pr create`, `git push`, or `git checkout -b`
-   after the user explicitly says "push", "create PR", "open a PR", "merge", or
-   "switch to a new branch".
+   write.  Default mode is: work on the current branch, commit locally (or push
+   per Rule 2), report what changed, and wait.  Only run `gh pr create` or
+   `git checkout -b` after the user explicitly says "create PR", "open a PR",
+   "merge", or "switch to a new branch".
    - "fix X" or "implement Y" is *not* a PR instruction.  Commit locally and stop.
-   - "commit and push" is a push instruction, not a PR instruction.
    - A previous prompt that said "open a PR" does not authorise the next PR.
      Ask each time, or infer from the exact current prompt.
-   - When in doubt, summarise what is ready and ask whether to push.
+   - When in doubt about PR creation, summarise what is ready and ask.
 4. Create branches from the tip of `main`.  **Default to a GENERAL
    name** (`quality-pass`, `cleanup`, `housekeeping`, `work`) so the
    branch can host any theme and accumulate work across sessions —
