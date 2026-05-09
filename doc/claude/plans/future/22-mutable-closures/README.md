@@ -8,10 +8,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Status:** locked-in spec.  Not yet implemented.  Companion
 discussion (options surveyed, alternatives considered,
 implementation analysis sketch, design history) lives in
-[MUTABLE_CLOSURES_DISCUSSION.md](MUTABLE_CLOSURES_DISCUSSION.md).
+[DISCUSSION.md](DISCUSSION.md).
 
 This spec evolves
-[C38](DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)
+[C38](../../../DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)
 (closures are copy-at-definition).  Default closure semantics
 remain unchanged; the spec adds opt-in *behaviour by body* for
 closures whose bodies mutate captures.
@@ -79,7 +79,7 @@ programmer wasn't asked to specify.
 
 | Construct | Programmer writes | Compiler/runtime picks based on | Modes |
 |---|---|---|---|
-| `par(...)` | one form | build target | native multithreaded; WASM sequential ([C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially)) |
+| `par(...)` | one form | build target | native multithreaded; WASM sequential ([C3](../../../DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially)) |
 | `fn(...)` closure | one form | body's use of each capture, escape, and outer liveness | A read-only; B co-scoped (Reference); C moved (ownership); D rejected |
 
 ---
@@ -390,7 +390,7 @@ subsystems are required.  Pieces involved:
 The detailed analysis sketch (algorithm pseudocode, paper-trace
 against three snippets, gaps to verify in implementation) lives
 in
-[MUTABLE_CLOSURES_DISCUSSION.md § Analysis sketch](MUTABLE_CLOSURES_DISCUSSION.md).
+[DISCUSSION.md § Analysis sketch](DISCUSSION.md).
 
 ---
 
@@ -457,17 +457,17 @@ must be resolved before estimation is meaningful.
 
 ## Cross-references
 
-- [MUTABLE_CLOSURES_DISCUSSION.md](MUTABLE_CLOSURES_DISCUSSION.md)
+- [DISCUSSION.md](DISCUSSION.md)
   — alternatives considered, implementation-analysis sketch,
   open questions, design history.
-- [DESIGN_DECISIONS.md § C38](DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)
+- [DESIGN_DECISIONS.md § C38](../../../DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)
   — the closed-by-decision entry this spec evolves; long-term
   direction note recorded 2026-05-04.
 - [EVENT_LOOP.md](EVENT_LOOP.md) — the spec waiting on
   novice-fit closures.
 - [EVENT_LOOP_DISCUSSION.md § Novice-readiness](EVENT_LOOP_DISCUSSION.md#novice-readiness-evaluation-2026-05-05--pivot-trigger)
   — the evaluation that prompted this work.
-- [LIFETIME.md](LIFETIME.md) — dep tracking, scope-based
+- [LIFETIME.md](../../../LIFETIME.md) — dep tracking, scope-based
   freeing, Reference<T> semantics.
 - [PROBLEMS.md § 213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
   — P213 v4 layout for closures-in-struct-fields.

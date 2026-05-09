@@ -361,7 +361,7 @@ fn main() {
 
 `state` is allocated in a Store; `Reference<Board>` is captured
 by handler functions (today's workaround per
-[MUTABLE_CLOSURES.md](MUTABLE_CLOSURES.md)).  The shipped
+[plans/future/22-mutable-closures/README.md](plans/future/22-mutable-closures/README.md)).  The shipped
 text-only first cut omits `mouse_just_clicked` / `render_board`
 / `gl_swap_buffers` and walks through a hardcoded click sequence
 instead.
@@ -996,7 +996,7 @@ eventual target.
   game.
 - [EVENT_LOOP_DISCUSSION.md](EVENT_LOOP_DISCUSSION.md) — open
   questions on the wider design.
-- [MUTABLE_CLOSURES.md](MUTABLE_CLOSURES.md) — closure-capture
+- [plans/future/22-mutable-closures/README.md](plans/future/22-mutable-closures/README.md) — closure-capture
   spec; the dispatch workaround in this game's pump callback
   rests on the documented `Reference<T>` capture pattern.
 - [PROBLEMS.md § 213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)

@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # MUTABLE_CLOSURES_DISCUSSION — open issues, alternatives, analysis sketch, history
 
-**Status:** companion to [MUTABLE_CLOSURES.md](MUTABLE_CLOSURES.md).
+**Status:** companion to [README.md](README.md).
 This file holds:
 
 - The implementation-analysis sketch the spec depends on (the
@@ -18,7 +18,7 @@ This file holds:
 - Design-history notes — including refinements made through the
   conversation that produced the spec.
 
-The locked-in design lives in `MUTABLE_CLOSURES.md`.  This
+The locked-in design lives in `README.md`.  This
 document is its counterpart for design conversation; settled
 items move from here into the spec.
 
@@ -29,7 +29,7 @@ items move from here into the spec.
 The
 [novice-readiness evaluation in EVENT_LOOP_DISCUSSION.md](EVENT_LOOP_DISCUSSION.md#novice-readiness-evaluation-2026-05-05--pivot-trigger)
 identified closure capture by value (loft's
-[C38](DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition))
+[C38](../../../DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition))
 as the dominant blocker for novice game programmers.  Every
 novice's first instinct, on every game framework they've ever
 used:
@@ -171,7 +171,7 @@ hierarchy, lifetime annotations on captured references.
 
 **Outcome:** eliminated as a near-term option.  Stays as the
 recorded long-term direction in
-[C38](DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition).
+[C38](../../../DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition).
 
 ### G. Co-scoped mutable capture — adopted and refined
 
@@ -579,10 +579,10 @@ content.  User direction: *"Create a locked-in mutable closure
 design and a discussion part like for the event loop."*
 
 Resulting structure:
-- `MUTABLE_CLOSURES.md` — locked-in spec, design at a glance,
+- `README.md` — locked-in spec, design at a glance,
   four cases, lowerings, diagnostic shape, foundations,
   verification, sequencing, cross-references.
-- `MUTABLE_CLOSURES_DISCUSSION.md` (this file) — alternatives,
+- `DISCUSSION.md` (this file) — alternatives,
   analysis sketch, open questions, design history.
 
 ---
@@ -606,17 +606,17 @@ Resulting structure:
 
 ## Cross-references
 
-- [MUTABLE_CLOSURES.md](MUTABLE_CLOSURES.md) — the locked-in
+- [README.md](README.md) — the locked-in
   spec.
-- [DESIGN_DECISIONS.md § C38](DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)
+- [DESIGN_DECISIONS.md § C38](../../../DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)
   — closed-by-decision entry; long-term direction note recorded
   2026-05-04.
-- [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially)
+- [DESIGN_DECISIONS.md § C3](../../../DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially)
   — `par(...)` internal-switch precedent.
 - [EVENT_LOOP.md](EVENT_LOOP.md) and
   [EVENT_LOOP_DISCUSSION.md](EVENT_LOOP_DISCUSSION.md) — the
   spec waiting on novice-fit closures.
-- [LIFETIME.md](LIFETIME.md) — dep tracking, scope-based
+- [LIFETIME.md](../../../LIFETIME.md) — dep tracking, scope-based
   freeing, Reference<T> semantics.
 - [PROBLEMS.md § 213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
   — P213 v4 layout for closures-in-struct-fields.
