@@ -21,7 +21,7 @@ plugin that just registers the `.loft` content type and points at the
 binary.
 
 For native-mode debugging (`loft --native` produces an ELF / Mach-O /
-PE binary), see [NATIVE_DEBUG.md](NATIVE_DEBUG.md) — that path is
+PE binary), see [NATIVE_DEBUG.md](plans/future/25-native-debug/README.md) — that path is
 GDB / LLDB-driven and complementary; the source map is shared.
 
 ---
@@ -421,7 +421,7 @@ Loft ships this in `doc/` as `nvim-loft.lua`.  No Vimscript.
 
 ## Cross-references
 
-- [NATIVE_DEBUG.md](NATIVE_DEBUG.md) — GDB / LLDB integration for
+- [NATIVE_DEBUG.md](plans/future/25-native-debug/README.md) — GDB / LLDB integration for
   `--native`-compiled binaries; shares the source map with LSP.3.
 - [WEB_IDE.md](WEB_IDE.md) — W2–W6 browser IDE; uses `loft-lsp`
   compiled to WASM as its language-intelligence layer.

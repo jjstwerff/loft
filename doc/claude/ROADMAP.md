@@ -83,7 +83,7 @@ surface.  Each is a standalone tag.
 | SH.2  | VS Code extension (grammar + snippets + run task)      | S  | ✓      | DX.md            |
 | DX.1  | Quick-start `examples/` directory at repo root         | XS | ✓      | DX.md            |
 | DX.3  | "Learn loft in 30 minutes" walkthrough page            | S  | ✓      | DX.md            |
-| NDB.0 | `--native-debug` flag — DWARF in `--native` builds     | XS | ✓      | NATIVE_DEBUG.md  |
+| NDB.0 | `--native-debug` flag — DWARF in `--native` builds     | XS | ✓      | plans/future/25-native-debug/README.md|
 
 *(DX.4 native-CI parity already in place — `tests/native.rs::native_dir` /
 `native_scripts` run inside `cargo nextest run --profile ci` with empty
@@ -213,7 +213,7 @@ perspective polish.
 |--------|--------------------------------------------------------|----|--------|------------------|
 | LSP.2  | `loft-lsp` editing — completion, def, refs, rename, semantic tokens, code actions | MH | ✓ | LSP.md |
 | LSP.3  | `loft-dap` MVP — DAP server for interpreter-mode debug | MH | ✓ | LSP.md |
-| NDB.1  | `.loft.map` source map + `loft-gdb.py` / `loft-lldb.py` plugins | M  | ✓ | NATIVE_DEBUG.md  |
+| NDB.1  | `.loft.map` source map + `loft-gdb.py` / `loft-lldb.py` plugins | M  | ✓ | plans/future/25-native-debug/README.md|
 
 ### Compilation cache and constant store
 
@@ -325,7 +325,7 @@ before tagging — no "appears fixed" exceptions.
 | A4     | Spatial index operations                               | M  | ✓      | PLANNING.md         |
 | O4     | Native: direct-emit local collections                  | M  | ✓      | PLANNING.md         |
 | O5     | Native: omit `stores` from pure functions              | M  | ✓      | PLANNING.md         |
-| NDB.2  | DWARF rewrite — point `.debug_line` / `.debug_info` directly at `.loft`; stock debuggers need no plugin | MH | ✓ | NATIVE_DEBUG.md |
+| NDB.2  | DWARF rewrite — point `.debug_line` / `.debug_info` directly at `.loft`; stock debuggers need no plugin | MH | ✓ | plans/future/25-native-debug/README.md|
 
 ---
 

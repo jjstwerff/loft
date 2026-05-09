@@ -643,7 +643,7 @@ item that plan-07 phase 2 already shipped)_.
 ### NDB.0 — `--native-debug` flag (DWARF in `--native` builds) — ⬜ OPEN
 
 **Effort:** XS (~1-2 hours).
-**Source design:** `doc/claude/NATIVE_DEBUG.md` § NDB.0.
+**Source design:** `doc/claude/plans/future/25-native-debug/README.md` § NDB.0.
 **Commit:** _(not yet)_.
 
 #### Build checklist (per design)

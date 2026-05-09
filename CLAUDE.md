@@ -299,7 +299,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [CONST_STORE.md](doc/claude/CONST_STORE.md) | Constant store design -- shared read-only Store for vector/string constants, mmap, WASM fast startup |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [LSP.md](doc/claude/LSP.md) | Language server (LSP.1/2) + DAP debugger (LSP.3) + Eclipse / JetBrains / Neovim plugin design |
-| [NATIVE_DEBUG.md](doc/claude/NATIVE_DEBUG.md) | GDB / LLDB integration for `--native` builds — DWARF, source maps, plugins (NDB.0/1/2) |
+| [plans/future/25-native-debug/README.md](doc/claude/plans/future/25-native-debug/README.md) | Future plan — GDB / LLDB integration for `--native` builds: DWARF, source maps, plugins.  Three independently-shippable phases NDB.0 / NDB.1 / NDB.2; NDB.0 (`--native-debug` flag) is the smallest first step. |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
 | [CHANGELOG.md](CHANGELOG.md) | User-facing release notes (shipped in release archives) |
