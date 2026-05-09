@@ -58,8 +58,32 @@ both backends pass.  The U3.B1.A cell uses the workaround
 form (hoisted local) so the regression net catches future
 breakage of THAT path.
 
-Phase 03+ (Printable / built-in satisfaction; vector-of-T
-input/output) lands in subsequent commits.
+**Phase 03 (Printable + vector-of-T) DONE 2026-05-09.**  Three
+new cells added: `u2_b1p_printable_show`, `u1_b1p_printable_concat`
+(verifies P208 closure + (C) built-in satisfaction across
+integer/float/boolean/text monomorphisations), and
+`u6_b0_no_bound_passthrough` (vector pass-through — no
+iteration).  All 23 cells pass under both backends.
+
+**Phase 03 surfaced 1 new P-issue** plus confirmed P237 in
+broader scope:
+- **P239** — `for x in v` over `vector<T>` in a generic
+  function (any bound or no bound, x used or unused) crashes
+  both backends.  Interp SIGSEGVs on opcode dispatch; native
+  rejects with rustc E0610 (`i64` doesn't have field `.rec`)
+  because the iterator codegen always emits a DbRef-shaped
+  null check regardless of T.  No clean workaround — caller
+  must specialise the function or take a `fn(T)` callback.
+  Blocks ALL U5 (vector-of-T input) cells and U6 cells with
+  internal iteration.  Reproducer: /tmp/p_followups/p239_*.loft.
+- **P237 in broader scope** — confirmed `(x.to_text(), "x")`
+  triggers the same bug as `(x + x, 1)`; the bug is about ANY
+  bound-supplied method/operator INSIDE a tuple constructor
+  element.  PROBLEMS.md P237 entry updated 2026-05-09 to
+  reflect the broader scope.
+
+Phase 04+ (multi-bound + user-defined interface) lands in
+subsequent commits.
 
 ## Goal
 
@@ -77,12 +101,12 @@ bound) since each interacts differently with the type system.
 
 | | B0 (no bound) | B1.O Ordered | B1.E Equatable | B1.A Addable | B1.P Printable | B2 multi-bound | B3 user-iface | B4 op-sugar | B5 two-T |
 |---|---|---|---|---|---|---|---|---|---|
-| **U1** body op | PASS:u1_b0_no_bound_unused_t | PASS:u1_b1o_ordered_compare | PASS:u1_b1e_equatable_check | PASS:u1_b1a_addable_sum_three (`+` only — Addable does not include `-`) | FIX:03 (++ inference gap) | PASS:u2_b1ao_addable_ordered_min_sum (covers B2 op-mix) | FIX:04 | PASS:harness_smoke_template (B4 dbl) | FIX:05 |
-| **U2** T return | PASS:u2_b0_no_bound_identity_int | PASS:u2_b1o_ordered_max_int | PASS:u2_b1e_equatable_pick | PASS:u2_b1ao_addable_ordered_min_sum (Addable+Ordered) | FIX:03 | PASS:u2_b2_multibound_eq_or_gt_int (cmp_eq) | FIX:04 | PASS:u1_b4_addable_dbl_float | FIX:05 |
+| **U1** body op | PASS:u1_b0_no_bound_unused_t | PASS:u1_b1o_ordered_compare | PASS:u1_b1e_equatable_check | PASS:u1_b1a_addable_sum_three (`+` only — Addable does not include `-`) | PASS:u1_b1p_printable_concat (P208 closure verified) | PASS:u2_b1ao_addable_ordered_min_sum (covers B2 op-mix) | FIX:04 | PASS:harness_smoke_template (B4 dbl) | FIX:05 |
+| **U2** T return | PASS:u2_b0_no_bound_identity_int | PASS:u2_b1o_ordered_max_int | PASS:u2_b1e_equatable_pick | PASS:u2_b1ao_addable_ordered_min_sum (Addable+Ordered) | PASS:u2_b1p_printable_show (covers (C) closure) | PASS:u2_b2_multibound_eq_or_gt_int (cmp_eq) | FIX:04 | PASS:u1_b4_addable_dbl_float | FIX:05 |
 | **U3** tuple-of-T return | PASS:u3_b0_no_bound_pair_int | PASS:u3_b1o_ordered_min_max + u3_b1o_ordered_destructure | PASS:u3_b1e_equatable_pair_when_eq | PASS:u3_b1a_addable_pair_with_hoisted_sum (inline form blocked by P237) | FIX:03 (Printable inference) | PASS:u3_b2_addable_ordered_pair | FIX:04 | (covered by U1.B4 smoke + U3.B1.A hoist form) | FIX:05 |
 | **U4** struct field of T | CLOSED:no-generic-structs (verify in 01) | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED | CLOSED |
-| **U5** vector-of-T input | FIX:03 | FIX:01 | FIX:01 | FIX:01 | FIX:03 (built-in satisfaction) | FIX:04 | FIX:04 | FIX:05 | FIX:05 |
-| **U6** vector-of-T output | FIX:03 | FIX:03 | FIX:03 | FIX:03 | FIX:03 | FIX:03 | FIX:04 | FIX:05 | FIX:05 |
+| **U5** vector-of-T input | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 | BLOCKED:P239 |
+| **U6** vector-of-T output | PASS:u6_b0_no_bound_passthrough (no-iter pass-through; iter forms blocked by P239) | BLOCKED:P239 (iter) | BLOCKED:P239 (iter) | BLOCKED:P239 (iter) | BLOCKED:P239 (iter) | BLOCKED:P239 (iter) | FIX:04 | FIX:05 | FIX:05 |
 | **U7** multi-T tuple-return arity ≥3 | FIX:02 | PASS:u7_b1o_ordered_triple_arity_three + u7_b1o_ordered_nested_pair | FIX:02 | FIX:02 (P237 in inline form) | FIX:03+02 | FIX:02 | FIX:02 | FIX:05+02 | FIX:05 |
 | **U8** T inside format / inline expr | FIX:02 (tuple-elem-in-format) | PASS:u8_b1o_ordered_inline_format | FIX:01 | PASS-pre | FIX:03 | FIX:01 | FIX:04 | FIX:05 | FIX:05 |
 

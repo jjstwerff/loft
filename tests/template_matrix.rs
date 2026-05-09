@@ -443,3 +443,84 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 03 — Printable + vector-of-T (U1.B1.P, U2.B1.P,
+//                  U5.B1.P, U6.B1.P) ──────────────────────────
+//
+// (C) closure 2026-05-04 added 6 `to_text` impls to
+// `default/01_code.loft` (integer / float / single / boolean /
+// character / text), making built-ins satisfy `Printable`
+// automatically as the docs claim.  P208 (text concat in
+// bounded body) closed 2026-05-04.  Phase 03 cells exercise
+// the working surface.
+//
+// What still BREAKS (filed as P237 above and P239 below):
+// - U3 × B1.P with method call inside tuple constructor — same
+//   pattern as P237 (`(x.to_text(), "x")` triggers it because
+//   to_text is a bound-supplied method).  Workaround: hoist
+//   to local first.
+// - U5 × * (any bound, including no-bound) — for-loop over
+//   `vector<T>` in a generic context crashes both backends.
+//   Filed as P239.  No clean workaround — caller must
+//   specialise.  All U5 cells stay out of the binary until
+//   P239 closes.
+// - U6 × * with internal iteration (vector<T> input + push to
+//   output) — fails via P239 (the input iteration crashes
+//   before output construction matters).  U6 cells with simple
+//   pass-through (no iteration) work and ship below.
+
+// U2 × B1.P — Printable bound, T return that's text via
+// to_text().  Verifies the (C) closure's built-in
+// satisfaction across integer / float / boolean / text
+// monomorphisations + the P208 fix.
+cross_mode!(
+    u2_b1p_printable_show,
+    r#"
+    fn show<T: Printable>(x: T) -> text { x.to_text() }
+    fn test() {
+        i = show(42);
+        f = show(3.14);
+        b = show(true);
+        s = show("hi");
+        print("{i}|{f}|{b}|{s}\n");
+        assert(i == "42", "u2_b1p_int");
+        assert(b == "true", "u2_b1p_bool");
+        assert(s == "hi", "u2_b1p_text");
+    }
+    "#
+);
+
+// U1 × B1.P — Printable body op + text concatenation.
+// Pre-flight (B-native) failure path; P208 closed 2026-05-04.
+// Verifies the fix across multiple monomorphisations.
+cross_mode!(
+    u1_b1p_printable_concat,
+    r#"
+    fn shout<T: Printable>(x: T) -> text { x.to_text() + "!" }
+    fn test() {
+        i = shout(42);
+        f = shout(3.14);
+        s = shout("hi");
+        print("{i}|{f}|{s}\n");
+        assert(i == "42!", "u1_b1p_int");
+        assert(s == "hi!", "u1_b1p_text");
+    }
+    "#
+);
+
+// U6 simplest — pass-through `vector<T>` return, no iteration
+// inside the generic body.  Works because there's no for-loop
+// to trip P239; the vector value passes through verbatim.
+cross_mode!(
+    u6_b0_no_bound_passthrough,
+    r#"
+    fn passthru<T>(v: vector<T>) -> vector<T> { v }
+    fn test() {
+        nums: vector<integer> = [1, 2, 3];
+        out = passthru(nums);
+        print("{out.len()}|{out[0]}|{out[1]}|{out[2]}\n");
+        assert(out.len() == 3, "u6_b0_len");
+        assert(out[0] == 1 && out[1] == 2 && out[2] == 3, "u6_b0_vals");
+    }
+    "#
+);
