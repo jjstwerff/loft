@@ -44,28 +44,61 @@ open work item, grouped by value, with dependencies and
 effort.  This section documents how it's organized — the
 methodology lives here so ROADMAP itself stays tight.
 
-### Value not time — why V1/V2/V3, not by milestone
+### Value categories — what KIND of value, not just how much
 
-ROADMAP rows are grouped by **value** (V1 / V2 / V3), not
-by release milestone (0.8.5 / 0.8.6 / etc.):
+ROADMAP rows are grouped by **value category**, not by release
+milestone (0.8.5 / 0.8.6 / etc.).  Eight categories in default
+reading order (read top to bottom; pick from the highest tier
+that has open work):
 
-- **V1** — high impact: directly enables the core use case
-  (browser games, multiplayer, learnable language) OR
-  unblocks multiple downstream plans.
-- **V2** — medium impact: meaningful capability or quality
-  improvement.  Users see the benefit but the project doesn't
-  fall over without it.
-- **V3** — niche / internal / cleanup: real value but not
-  user-visible at the language surface.  Validation backlog,
-  small specific features, single-purpose optimizations.
+| Tag | Meaning | Examples |
+|---|---|---|
+| **S** | **Silent failure / data-loss prevention** — features that "appear to work" but don't; corruptions that have no error message; data loss without indication.  HIGHEST priority because invisible to users and erodes trust most | Validation matrices (catch backend divergence), JSON-correctness sweeps, closure-DbRef leak, native-vs-interpreter parity gates |
+| **R** | **Regression / release-blocker** — known broken behavior, PROBLEMS.md High-severity, gates the next tag | (none today; bugs land as P-issues, not plans — would surface here if a regression blocked a release) |
+| **G** | **Goal-enabling** — directly enables loft's core use case: browser games anyone can play via shared link, multiplayer, native-game debugging | Server / game-client libraries, scriptable scenes, multiplayer protocol stack, web IDE, graphics library, native debug |
+| **F** | **Foundation** — unblocks 2+ downstream plans (lattice point in the dependency graph) | Lazy stdlib, package registry, FFI generic marshaller, LSP server MVP, library extraction |
+| **U** | **Ease of use** — first-time-user experience, daily ergonomics, IDE polish | Better error messages, REPL, syntax highlighting, VS Code extension, tutorial, LSP editing surface, developer warnings |
+| **C** | **Clean features** — language correctness, removes special cases | Mutable closures (cleaner capture), match-PEG (cleaner pattern syntax), sorted slicing (removes special-case), JsonValue (replaces text-based JSON), error recovery, factory methods |
+| **Q** | **Internal quality** — performance, refactor, internal cleanup with clear payoff | Performance follow-ups, native codegen follow-ups, retire-scratch, const-store completion |
+| **N** | **Niche / opportunistic** — small specific features, low-priority items | Route decorators, asset pipeline, HTTP client, tic-tac-toe (protocol-only validator), AOT auto-compile |
+
+**Why S is its own category, separate from R:**
+
+A regression (R) is a **known broken** behavior — we have a
+test failure, a panic, or a wrong output we can document and
+gate releases on.  A silent failure (S) is **invisibly broken**
+— the program runs to completion, returns "successfully," but
+the result is wrong / data is lost / state is corrupted.
+
+S is more urgent than R because:
+- Users hit S without warning (no error message to file)
+- Data loss without indication is the worst class of bug
+- "Appears to work" hides decay in the codebase
+- Trust erodes faster from one silent corruption than from a
+  loud crash
+
+The validation matrices (plans 14 / 15 / 16 / 18 / 19 / 20)
+are precisely S-prevention work: every {input × backend × API
+shape} cell is exercised end-to-end with byte-identical
+output assertions.  They're cataloged here as S, not C, because
+their value is preventing silent divergence.
+
+**Why named categories instead of V1/V2/V3:**
+
+The previous V1/V2/V3 collapsed two distinct dimensions —
+"importance" and "what kind of work" — into one ranking.
+Named categories separate them: a plan in **G** (goal-enabling)
+ranks above a plan in **U** (ease-of-use) because of WHAT the
+work delivers, not just because someone declared it more
+important.  Re-ranking happens when categories change (rare),
+not when calendar perception shifts.
 
 **Why this works better than time-based grouping:** value
-rankings stay roughly stable across the project's life.
-A high-value item is high-value whether it ships this month
+categories stay stable across the project's life.  A goal-
+enabling item is goal-enabling whether it ships this month
 or next year.  Milestone groupings (0.8.5, 0.8.6, ...) imply
-calendar timelines that constantly drift — a row tagged
-"0.8.5" may slip multiple releases without the row's
-content changing.  Value tags don't need that maintenance.
+calendar timelines that constantly drift; named categories
+don't need that maintenance.
 
 **Effort estimates, not time projections.**  ROADMAP has an
 `E` column (XS / S / M / MH / H / VH / L) calibrated to
