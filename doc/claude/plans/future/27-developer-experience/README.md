@@ -9,18 +9,21 @@ Originally drafted as "0.8.4 Designs"; several items slipped to
 0.8.5 and beyond, so the version label was dropped.  Current
 mix:
 
-- **SH.1** TextMate grammar — open for 0.8.5
-- **SH.2** VS Code extension — open for 0.8.5
+- **SH.1** TextMate grammar — **DONE** (shipped to
+  `syntaxes/loft.tmLanguage.json`)
+- **SH.2** VS Code extension — **DONE** (shipped to
+  `editors/vscode/`)
 - **DX.1** Quick-start `examples/` directory — open for 0.8.5
 - **DX.2** CI: package + native tests — open
 - **DX.3** "Learn loft in 30 minutes" walkthrough — open for
-  0.8.5 (the inline `*(completed)*` marker below is stale per
-  RELEASE_0_8_5_CHECKLIST.md)
+  0.8.5 (the inline `*(completed)*` marker below is stale —
+  applies to a different walkthrough item that did ship)
 - **NT.1** Native Codegen Reliability — completed (kept as
   historical design record)
 
-See [RELEASE_0_8_5_CHECKLIST.md](../../../RELEASE_0_8_5_CHECKLIST.md)
-for the current status of each item against the 0.8.5 ship gate.
+Per-item landing procedures (build checklists, quality gates,
+risks, decision points) live below in the **§ Landing
+procedure (0.8.5 release)** section.
 
 ---
 
@@ -364,6 +367,199 @@ The Levenshtein function is ~15 lines of Rust (no external crate needed).
 The remaining work is regression prevention: add `make test-native` to CI
 (DX.2) so native failures are caught before merge.  See [NATIVE.md](../../../NATIVE.md)
 for the full codegen design and any future N-series items.
+
+---
+
+## Landing procedure (0.8.5 release)
+
+Per-item ship criteria for the 0.8.5 release.  Generic per-
+release content (tooling prerequisites, repository hygiene
+gates, cross-platform smoke, release artefacts) lives in
+[`../../../RELEASE.md`](../../../RELEASE.md).
+
+### SH.1 — TextMate grammar — ✅ DONE
+
+**Effort:** ~45 min actual.
+**Shipped:** `syntaxes/loft.tmLanguage.json` + `syntaxes/README.md`.
+
+Build checklist (all done):
+- Full SH.1 scope-mapping table per § SH.1 above.
+- String interpolation `{expr}` as nested scope.
+- `{{` / `}}` literal-brace escapes.
+- Hex / binary / octal / decimal / float number variants.
+- Doc comments (`///`) distinct from line comments (`//`).
+- Test annotations (`@EXPECT_*`) distinct from compiler annotations.
+- JSON validity verified via `python3 -m json.tool`.
+
+Pre-ship visual sanity:
+- Open `tests/docs/00-general.loft` / `06-function.loft` /
+  `09-enum.loft` in VS Code with SH.2 installed; confirm
+  keywords / strings / numbers / comments / interpolation all
+  highlight correctly.
+- Compare side-by-side against a Rust file (similar density).
+- GitHub web UI: `*.loft linguist-language=Rust` in
+  `.gitattributes` delivers ~80% via Rust's grammar; confirm
+  acceptable on a sample loft file.
+
+### SH.2 — VS Code extension scaffold — ✅ DONE
+
+**Effort:** ~1 hour actual.
+**Shipped:** `editors/vscode/` (package.json, snippets/loft.json,
+language-configuration.json, syntaxes/loft.tmLanguage.json
+symlinked to project root).
+
+Build checklist (all done):
+- `editors/vscode/package.json` (publisher / engine / activation
+  / contributes.languages / contributes.grammars / contributes.snippets).
+- `editors/vscode/language-configuration.json` (autoclose pairs,
+  brackets, indentation, comment behaviour).
+- `editors/vscode/snippets/loft.json` (10 essential snippets:
+  fn, struct, enum, match, for, if/else, …).
+- `editors/vscode/README.md` (install instructions + screenshot
+  placeholder).
+- Symlink to project root grammar (single source of truth).
+- `vsce package` produces a clean `.vsix` (no warnings).
+
+Pre-ship checks:
+- Install the `.vsix` in fresh VS Code; open a `.loft` file;
+  confirm syntax highlighting + snippet completion.
+- Snippets trigger on the right prefixes.
+- Comment toggle (Ctrl+/) wraps with `//` correctly.
+- No "extension activation" errors in the VS Code Output panel.
+
+### DX.1 — Quick-start `examples/` directory — ⬜ OPEN
+
+**Effort:** XS (~1-2 hours).
+
+Build checklist (per § DX.1 design above):
+- `examples/hello.loft` — Hello world; `println` + interpolation.
+- `examples/fibonacci.loft` — Recursive + iterative; functions /
+  loops / recursion.
+- `examples/fizzbuzz.loft` — If/else, modulo, format strings.
+- `examples/structs.loft` — Point + distance; structs, methods, math.
+- `examples/collections.loft` — Vector + sorted + hash; collection
+  types, iteration.
+- `examples/match.loft` — Pattern matching on enums.
+- `examples/files.loft` — Read/write a text file; file I/O.
+
+Per-file requirements:
+- Each file runnable standalone: `loft examples/<name>.loft`.
+- No dependencies on `lib/` packages.
+- Each file < 30 lines.
+- Comments explaining the key concept.
+- Output self-explanatory.
+
+Quality gates (before ship):
+- All seven examples run cleanly under both `loft` and
+  `loft --native`.
+- Output review: read each example's output as a first-time user.
+  Meaningful results, not "test passed".
+- README.md update: append the "Examples" section per § DX.1.
+- CI: add `examples/` to the test-suite shape used by
+  `tests/scripts/`.  Catches regressions where stdlib changes
+  break an example.
+
+Risks:
+- `files.loft` requires hermetic file I/O — write to `/tmp/` or
+  example-created temp file.
+- `collections.loft` may exceed 30 lines if it covers vector +
+  sorted + hash all together.  Trim to one collection per file
+  if so.
+
+### DX.3 — "Learn loft in 30 minutes" walkthrough — ⬜ OPEN
+
+**Effort:** S (~half a day).
+
+Suggested structure (10 sections, ~3 minutes each):
+
+| § | Title | Content |
+|---|---|---|
+| 1 | Hello, Loft | Install loft, run `loft examples/hello.loft`, edit it |
+| 2 | Variables and types | No `let`; type inference; `assert` |
+| 3 | Functions | `fn`, params, return type, default args, last-expr return |
+| 4 | Control flow | `if`, `else`, `for`, `while`, `match` (one liners) |
+| 5 | Strings | `"text"`, `{interpolation}`, `{{` escape, `len`, `+` |
+| 6 | Collections | `vector`, `sorted`, `hash` — one example each |
+| 7 | Structs | Define, construct, method-style call (`p.distance(q)`) |
+| 8 | Enums | Plain enum + struct-enum variant; `match` on it |
+| 9 | Files and JSON | Read a file, parse JSON, print a field |
+| 10 | Where next | Pointer to STDLIB.md / this plan / `lib/` + GitHub issue tracker |
+
+Build checklist:
+- `doc/learn-loft.md` (or similar — pick a stable URL slug since
+  README + extension marketplace will link to it).
+- Each section ≤ 200 words of prose + 1-2 runnable code blocks.
+- Every code block extracted from `examples/` (DX.1) so it's
+  pre-verified to run.
+- Closing section links to STDLIB.md, the examples directory,
+  GitHub issue tracker.
+- README.md links to the walkthrough in install / first-run section.
+
+Quality gates (before ship):
+- **Time check** — read it cold, top-to-bottom, no prior loft
+  exposure.  25-35 minutes including running each code block.
+  Trim a section if > 35.
+- **External-reader check** — see § Ship-criterion test below.
+- No broken examples — every code block runs as-is (CI extracts
+  and runs them; or they're in `examples/` already and the
+  walkthrough embeds them).
+- Linker discipline — every term with a STDLIB.md / LOFT.md
+  entry links to it on first use.
+
+Risks:
+- "30 minutes" is hand-wavy.  Acceptance = real external reader
+  hits it.  Without that, the walkthrough is unverified
+  marketing copy.
+
+### Ship-criterion external test (per ROADMAP § 0.8.5)
+
+The ROADMAP states:
+
+> One external programmer (outside the loft project) can install
+> SH.2 from VS Code Marketplace, open `examples/10-2d-canvas.loft`,
+> read DX.3 top-to-bottom, and run the demo within 30 minutes from
+> zero prior exposure.  Hands-on feedback collected before tagging.
+
+Two known issues with this as written:
+
+1. **SH.2 not on marketplace yet** — install from `.vsix` is the
+   v1 path; marketplace publish gates on a separate Personal
+   Access Token step (see Out of scope below).
+2. **`examples/10-2d-canvas.loft` doesn't exist** — DX.1's table
+   doesn't include it.  Either add it (would demonstrate 2D
+   canvas / OpenGL bindings) or pick a different example for
+   the ship criterion.
+
+**Recommendation for 0.8.5:** swap to a small but visually
+impressive example like `examples/hello.loft` + `examples/structs.loft`.
+Add `examples/canvas.loft` only if the 2D canvas API surface is
+stable enough to demo.
+
+### Out of scope for 0.8.5 (tracked separately)
+
+- **Marketplace publish of SH.2** — needs Personal Access Token
+  + `vsce publish` invocation.  Separate publishing step.
+- **GitHub Linguist first-class contribution** — submit PR to
+  `github-linguist/linguist` adding loft.  Gated on Linguist's
+  ~200-repo adoption rule.  Until then, the
+  `*.loft linguist-language=Rust` directive in `.gitattributes`
+  delivers ~80% via Rust's grammar.  Post-0.9.0 work.
+- **NDB.1** — source-map-aware GDB / LLDB plugins.  See
+  [`../25-native-debug/`](../25-native-debug/), 0.8.6 work.
+- **LSP server** — real LSP daemon.  See
+  [`../../lib_plans/future/09-lsp/`](../../../lib_plans/future/09-lsp/),
+  0.8.6 LSP.1.
+
+### Decision points
+
+1. **Should DX.1 add a `canvas.loft` example?**  Optional but
+   it's what the ROADMAP ship criterion references.  If yes:
+   ~1 hour extra.  If no: edit the ROADMAP ship criterion to
+   pick a different example (`hello.loft` + `structs.loft` is
+   the recommended swap above).
+2. **Marketplace publish of SH.2 — block 0.8.5 or defer?**
+   Recommend defer: `.vsix` install is the v1 path; marketplace
+   publish lands as a 0.8.5.x patch.
 
 ---
 

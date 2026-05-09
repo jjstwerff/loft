@@ -413,3 +413,79 @@ LSP dependency.
 - [STACKTRACE.md](../../../STACKTRACE.md) — TR1.3 `vector<StackFrame>` API,
   used by interpreter-mode DAP.  Native-mode debugging instead reads
   the OS-level call stack via DWARF unwinding.
+
+---
+
+## Landing procedure (NDB.0 in 0.8.5 release)
+
+Per-item ship criteria for NDB.0 in the 0.8.5 release.
+Generic per-release content (tooling prerequisites, repository
+hygiene gates, cross-platform smoke, release artefacts) lives
+in [`../../../RELEASE.md`](../../../RELEASE.md).  NDB.1 + NDB.2
+landing procedures will be filled in when those phases land
+(0.8.6 / 0.9.0+).
+
+### NDB.0 — `--native-debug` flag (DWARF in `--native` builds) — ⬜ OPEN
+
+**Effort:** XS (~1-2 hours).
+
+Build checklist (per § NDB.0 design above):
+- Add `--native-debug` CLI flag in `src/main.rs` (parse + bool flag).
+- When flag is set:
+  - Push `-Cdebuginfo=2 -g` to the rustc invocation.
+  - Drop `-O` (debug builds; opt level 0) UNLESS
+    `--native-release` is also set.
+  - Preserve `/tmp/loft_native_<pid>.rs` (per-process tmp) on
+    disk so DWARF's `.debug_line` table points at a real file.
+    Today's behaviour deletes it after compilation.
+  - Emit a `.loft.map` sidecar next to the binary (NDB.1
+    consumes this; NDB.0 emits it but doesn't use it).  Defer
+    the format of `.loft.map` to NDB.1; for NDB.0 either emit
+    a stub `{}` or skip emission entirely (decide at impl time).
+
+Quality gates (before ship):
+- **Build works** — `loft --native --native-debug examples/hello.loft`
+  produces a runnable binary.  Cache key now includes the
+  debug flag so switching between `--native` and
+  `--native-debug` doesn't reuse the wrong binary.
+- **Binary contains DWARF** — verify with
+  `objdump -h <binary>`.  Should show `.debug_info`, `.debug_line`,
+  `.debug_str`, `.debug_aranges`, `.debug_abbrev`, `.debug_ranges`
+  sections.
+- **GDB can launch the binary** — `gdb <binary>` then `run`,
+  `start`, `break n_main`, `step`, `info locals`.  All work.
+  Source view shows the **generated Rust** intermediate (NOT
+  yet the loft source — that's NDB.1).
+- **LLDB equivalent** — `lldb <binary>` then `process launch`,
+  `breakpoint set --name n_main`, `step`, `frame variable`.
+- **Tmp source preserved** — the `/tmp/loft_native_<pid>.rs`
+  file referenced by DWARF's `.debug_line` exists for the
+  binary's lifetime.  GDB / LLDB shows source on `list`.
+- **Cache invalidates correctly** — running with `--native`
+  then `--native-debug` produces two distinct cached binaries.
+- **Performance penalty acceptable** — debug build runs
+  noticeably slower than release.  Document trade-off in `--help`.
+- **`--native-release` flag** — optional sibling combining
+  `-Cdebuginfo=2` (debug symbols) WITH `-O` (optimisation).
+  Useful for production debugging.  May land in NDB.0 or
+  defer to NDB.1 (decide at impl time).
+
+Cross-platform notes:
+- **Linux primary** — `gdb` is the reference debugger.  DWARF
+  is the standard format on ELF.
+- **macOS** — `lldb` is the reference; DWARF embedded in
+  Mach-O.  `dsymutil` may or may not be needed for
+  externalised debug info (default to embedded).
+- **Windows** — `lldb` works on PE; `gdb` via MinGW also works.
+  PDB format is the Microsoft alternative; out of scope for
+  NDB.0 (Rust's PDB output via MSVC toolchain works
+  automatically when `-Cdebuginfo=2` is set).
+
+Risks:
+- Binary size growth — debug info is large.  Document the
+  trade-off; users opt in via the flag.
+- Cache key collision risk if the flag isn't included in the
+  hash.  Tested by the cache-invalidation gate above.
+- DWARF version compatibility — Rust emits DWARF 4 by default;
+  ancient `gdb` versions may need DWARF 2 or 3.  Specify
+  minimum versions in `--help` text.
