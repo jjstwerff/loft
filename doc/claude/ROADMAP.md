@@ -279,11 +279,21 @@ Scoped 2026-05-09.  Per-phase status lives in the plan README.  This section lis
 | AGA.7 | Talk content — slides + presenter script + presenter notes | S | Mirrors `presentations/par/` structure |
 | AGA.8 | Rehearsal + backup recording on demo hardware | XS | Pre-record both demos as fallback for catastrophic failure |
 
-This work upstream-feeds three pre-existing plans (demo-driven scope sharpens what those plans need anyway):
+No hard dependencies on currently-open ROADMAP plans.  The WebSocket primitives AGA needs are already shipped: `lib/server/src/server.loft` ships multi-client WebSocket (`srv.run(on_event)` + `ws_clients_*`, `ws_event_*`); `lib/web/src/web.loft` ships the WebSocket client (`ws_handler`, `ws_connect`, `ws_send`, `ws_recv`).  AGA.1 + AGA.2 are application code on top of these, not library extensions.
 
-- **`lib_plans/future/08-server`** — AGA.1 becomes reusable server primitives
-- **`lib_plans/future/13-scriptable-scenes`** — AGA.3 is a proof-of-concept for the hot-reload script architecture
-- **`plans/future/23-event-loop`** — AGA.1 is a practical EVENT_PROTOCOL instance
+Soft dependencies — would benefit but not block:
+
+- **`lib_plans/future/13-scriptable-scenes`** — hot-reload of the generation script between rounds.  Without it, presenter restarts the script (acceptable; the talk script frames this as "now let me change the rules and re-run").
+- **`plans/future/27-developer-experience` DX.1 / DX.3** — the talk content overlaps with quick-start `examples/` and the "Learn loft in 30 minutes" walkthrough.  Can write the talk inline OR land both at once.
+- **`plans/future/07-error-messages` phases 4-7** — nicer errors if something goes wrong on stage.  Not blocking; presenter has rehearsed fallback.
+
+Latent risk: **`plans/future/15-closure-validation` phase 03 / closure-DbRef leak** (LIFETIME.md "NOT YET HANDLED").  Generation script uses closures heavily.  Leak is bounded per closure-creation, not per tick — a 30-60 minute demo session is fine; an unattended installation running for hours could accumulate.
+
+Upstream-feeds (this work sharpens scope for):
+
+- `lib_plans/future/08-server` — AGA.1 patterns (state hold + per-tick broadcast) reusable as server primitives
+- `lib_plans/future/13-scriptable-scenes` — AGA.3 is a proof-of-concept for the script architecture
+- `plans/future/23-event-loop` — AGA.1 is a practical EVENT_PROTOCOL instance
 
 Deliberately does NOT depend on:
 
