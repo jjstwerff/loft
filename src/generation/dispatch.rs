@@ -497,8 +497,18 @@ impl Output<'_> {
         // type number are plain integers, not fn-ref d_nr values.
         let saved_ctx = self.fn_ref_context;
         self.fn_ref_context = false;
+        // P238: clear tuple_text_to_string inside calls — call arguments
+        // bind to the callee's parameter signature (typically `&str` for
+        // text params), not to the outer assignment target's tuple slot
+        // type.  Without this clear, `let var_s: (String, String) =
+        // t_4text_pair_t(cell, "hi")` would emit `"hi".to_string()` for
+        // the arg because the outer `(String, String)` flag propagated
+        // into `Value::Text` rendering.
+        let saved_tuple = self.tuple_text_to_string;
+        self.tuple_text_to_string = false;
         let result = self.output_call_inner(w, def_nr, vals);
         self.fn_ref_context = saved_ctx;
+        self.tuple_text_to_string = saved_tuple;
         result
     }
 

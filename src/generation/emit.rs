@@ -231,7 +231,27 @@ impl Output<'_> {
                     } else if narrow.is_some() {
                         write!(w, "(")?;
                     }
+                    // P238: when the function's return type is a tuple
+                    // with text element(s) and the body's return value is
+                    // a `Value::Tuple` literal, set `tuple_text_to_string`
+                    // so each text element gets a `.to_string()` wrap to
+                    // fit the `(String, …)` slot.  The parser's
+                    // tuple-of-text → synthetic-struct rewrite (Plan-14
+                    // phase 07 / P234) does NOT fire for generic
+                    // monomorphisations: the source fn was parsed with T
+                    // as a generic struct, so the return type at parse
+                    // time was `(T, T)` with no Text elements; the
+                    // rewrite trigger missed.  At monomorphisation time
+                    // the type becomes `(String, String)` but the body
+                    // is still a plain `Value::Tuple`.
+                    let returns_text_tuple = matches!(returned, Type::Tuple(elems)
+                        if elems.iter().any(|e| matches!(e, Type::Text(_))));
+                    let prev_tuple_text = self.tuple_text_to_string;
+                    if returns_text_tuple && matches!(&**val, Value::Tuple(_)) {
+                        self.tuple_text_to_string = true;
+                    }
                     self.output_code_inner(w, val)?;
+                    self.tuple_text_to_string = prev_tuple_text;
                     if needs_p205_scratch {
                         write!(
                             w,

@@ -51,12 +51,20 @@ nested + destructure + inline-format paths.
   fails native compilation (`expected &str, found String`).
   Interp works; integer + float monomorphisations work.
   Reproducer: /tmp/p_followups/p238_*.loft.
+  **Closed 2026-05-09** in two places: arg-side
+  `tuple_text_to_string` flag leak in
+  `src/generation/dispatch.rs::output_call`, and return-side
+  flag never set for generic-monomorphisation tuple returns
+  in `src/generation/emit.rs` Value::Return arm.  Pinned by
+  `tests/template_matrix::u2_b2_equatable_uniform_tuple_t`.
 
-Cells covering the P237/P238 shapes stay OUT of the binary
-until those P-issues close — the cross_mode harness asserts
+Cells covering the P237 shape stay OUT of the binary
+until that P-issue closes — the cross_mode harness asserts
 both backends pass.  The U3.B1.A cell uses the workaround
 form (hoisted local) so the regression net catches future
-breakage of THAT path.
+breakage of THAT path.  P238 closed 2026-05-09; the
+text-T uniform tuple cell `u2_b2_equatable_uniform_tuple_t`
+is now in the regression net.
 
 **Phase 03 (Printable + vector-of-T) DONE 2026-05-09.**  Three
 new cells added: `u2_b1p_printable_show`, `u1_b1p_printable_concat`

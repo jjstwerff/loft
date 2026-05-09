@@ -639,3 +639,31 @@ cross_mode!(
     }
     "#
 );
+
+// Plan-17 U2 × Bx — uniform `(T, T)` tuple return for T = text.
+// Closes P238: native codegen emitted `t_4text_pair_t(cell,
+// "hi".to_string())` (call-site wrapped `&str` literal in
+// `.to_string()` because the assignment target's
+// `tuple_text_to_string` flag leaked into argument processing) and
+// the fn body emitted `return (var_a, var_a)` without
+// `.to_string()` wrap (the parser's tuple-of-text →
+// synthetic-struct rewrite never fires for generic
+// monomorphisations because at parse time the tuple element type
+// was a generic struct, not Text).  Both bugs fixed at the
+// codegen layer in `src/generation/dispatch.rs::output_call`
+// (clear `tuple_text_to_string` for arg processing) and
+// `src/generation/emit.rs` Value::Return arm (set the flag for
+// `Value::Tuple` returned from a tuple-of-text-typed fn).
+cross_mode!(
+    u2_b2_equatable_uniform_tuple_t,
+    r#"
+    fn pair_t<T: Equatable>(a: T) -> (T, T) {
+        (a, a)
+    }
+    fn test() {
+        t = pair_t(42);
+        s = pair_t("hi");
+        println("{t.0}|{t.1}|{s.0}|{s.1}");
+    }
+    "#
+);
