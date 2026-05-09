@@ -214,8 +214,7 @@ The actual numeric `op_nr` values are resolved via the operator registry in
 
 ```rust
 pub struct State {
-    bytecode: Vec<u8>,          // Main bytecode stream
-    text_code: Vec<u8>,         // String constant pool
+    bytecode: Arc<Vec<u8>>,     // Main bytecode stream
     stack_cur: DbRef,           // Current stack frame (a DB record in store 1000)
     pub stack_pos: u32,         // Current stack pointer
     pub code_pos: u32,          // Current position in bytecode
@@ -225,15 +224,33 @@ pub struct State {
     pub vars: HashMap<u32, u16>,  // code_pos -> variable stack position
     pub calls: HashMap<u32, Vec<u32>>, // code_pos -> called def_nrs
     pub types: HashMap<u32, u16>,      // code_pos -> type id
-    pub library: Vec<Call>,            // Extern Rust function table
+    pub library: Arc<Vec<Call>>,       // Extern Rust function table
     pub library_names: HashMap<String, u16>,
     text_positions: BTreeSet<u32>,   // debug: set of absolute positions of live Strings
-    line_numbers: HashMap<u32, u32>,
+    line_numbers: BTreeMap<u32, u32>,
     fn_positions: Vec<u32>,          // d_nr → bytecode entry point (for OpCallRef)
+    pub const_refs: Vec<DbRef>,      // d_nr → CONST_STORE DbRef for vector constants
 }
 
 pub type Call = fn(&mut Stores, &mut DbRef);
 ```
+
+**`const_refs`** (plan-28 Phase A, 2026): one entry per definition;
+zero for non-constant defs, populated for vector constants whose
+records were pre-built into `CONST_STORE` (store 1) during
+`byte_code()`.  `OpConstRef(d_nr)` indexes into this vector.
+The previous `text_code: Vec<u8>` string constant pool was retired
+when long strings (>= 256 bytes) moved into `CONST_STORE` via
+`OpConstStoreText`; short strings stay embedded in the bytecode
+stream via `OpConstText`.
+
+The `State` struct in production carries additional fields for
+source-position lookup, coroutine frames, parallel arms, the
+shadow call-frame vector, and `data_ptr` — see `src/state/mod.rs`
+for the canonical definition.  See also
+[DATABASE.md § Constant store (`CONST_STORE`)](DATABASE.md#constant-store-const_store)
+for the storage-side view of `OpConstRef` and the lifetime + safety
+properties.
 
 The stack is stored as a database record in store 1000 (index 0 in `Stores::allocations`).
 `stack_pos` starts at 4 (offset past the 4-byte record header slot reserved for the return address

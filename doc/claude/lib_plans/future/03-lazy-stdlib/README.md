@@ -350,7 +350,8 @@ until used.
   load.
 - **Const-store fit.**  tzdata is large, read-only, shareable
   across processes, `mmap`-friendly — exactly the const-store
-  (../28-const-store/README.md) use case.  Implementing datetime validates the
+  ([`plans/deferred/28-const-store/`](../../../plans/deferred/28-const-store/README.md))
+  use case.  Implementing datetime validates the
   const-store design for non-code payloads.  Promote tzdata into
   the const store once CS.C1/C2/C3 lands.
 - **WASM consideration — bridge, don't bundle.**  Browsers and
@@ -694,8 +695,12 @@ datetime, http, ...) reuses the mechanism.
   loft's non-game reach.
 - [BYTECODE_CACHE.md](BYTECODE_CACHE.md) — `.loftc` cache design
   that must key on loaded-module set.
-- [CONST_STORE.md](../28-const-store/README.md) — separate but complementary
-  cold-start work.
+- [`plans/deferred/28-const-store/`](../../../plans/deferred/28-const-store/README.md) —
+  separate but complementary cold-start work; Phase A shipped
+  (CONST_STORE + OpConstRef), Phase D shipped-then-retired
+  (.loftc cache), Phase B + C deferred.
+  Reference for shipped Phase A in
+  [DATABASE.md § Constant store](../../../DATABASE.md#constant-store-const_store).
 - [PACKAGES.md](../../../PACKAGES.md) — external-package loading model that
   this mechanism generalises to.
 - [INTERNALS.md](../../../INTERNALS.md) § Native Function Registry —
