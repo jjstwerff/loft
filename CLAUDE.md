@@ -151,9 +151,9 @@ give each item a traceable history.
    surfaces conflicts in unrelated files, and often fails CI on
    patterns the new branch didn't author.  ONE long-lived working
    branch with cross-theme commits is the cheaper failure mode.
-   ONLY a longer plan (multi-week, well-defined arc with its own
-   design doc — e.g. `plan-06-arc`, `lsp-server`) earns a specific
-   branch name.  Do not open a second branch unless the user
+   ONLY a substantial plan (well-defined arc with its own design
+   doc — e.g. `plan-06-arc`, `lsp-server`) earns a specific branch
+   name.  Do not open a second branch unless the user
    explicitly asks ("start a new branch", "fresh branch for X",
    "switch to a new branch").
 5. Merging back to `main` is done via a GitHub pull request — not a local `git merge`.

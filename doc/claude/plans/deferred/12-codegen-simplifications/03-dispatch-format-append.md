@@ -8,7 +8,7 @@ and Append* Op families.
 
 **Tier:** 2 (structural cleanup)
 
-**Estimated cost:** ~3-4 hours.
+**Effort:** S.
 
 ## What's being migrated
 
