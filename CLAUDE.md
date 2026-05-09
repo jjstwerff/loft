@@ -285,6 +285,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmarks, optimisation plans, string alloc, const data, block copy analysis |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
+| [plans/README.md](doc/claude/plans/README.md) | Multi-phase **core-language** initiatives (current / future / deferred / finished) — compiler, runtime, validation matrices, codegen arcs, language features.  Max 2-3 active plans. |
+| [lib_plans/README.md](doc/claude/lib_plans/README.md) | Multi-phase **library** initiatives (current / future / deferred / finished) — `server`, `game_client`, graphics, regex, package format, asset pipeline, web examples, IDE.  Same `≤3 active` discipline as `plans/`; numbering independent. |
 | [BROADENING.md](doc/claude/BROADENING.md) | Strategic evaluation — using loft beyond games (CLI, server, data), sequenced unlocks |
 | [LAZY_STDLIB.md](doc/claude/LAZY_STDLIB.md) | Conditional stdlib loading — trigger-based module load, pay-for-what-you-use cold start |
 | [MATCH_PEG.md](doc/claude/MATCH_PEG.md) | L3 PEG-style match patterns — sequence/alternation/optional with anchor-revert capture (base match syntax lives in LOFT.md § Match expressions) |
