@@ -288,7 +288,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [plans/README.md](doc/claude/plans/README.md) | Multi-phase **core-language** initiatives (current / future / deferred / finished) — compiler, runtime, validation matrices, codegen arcs, language features.  Max 2-3 active plans. |
 | [lib_plans/README.md](doc/claude/lib_plans/README.md) | Multi-phase **library** initiatives (current / future / deferred / finished) — `server`, `game_client`, graphics, regex, package format, asset pipeline, web examples, IDE.  Same `≤3 active` discipline as `plans/`; numbering independent. |
 | [BROADENING.md](doc/claude/BROADENING.md) | Strategic evaluation — using loft beyond games (CLI, server, data), sequenced unlocks |
-| [LAZY_STDLIB.md](doc/claude/LAZY_STDLIB.md) | Conditional stdlib loading — trigger-based module load, pay-for-what-you-use cold start |
+| [lib_plans/future/03-lazy-stdlib/README.md](doc/claude/lib_plans/future/03-lazy-stdlib/README.md) | Future library plan — conditional stdlib loading: trigger-based module load, pay-for-what-you-use cold start.  Critical-path infrastructure: REGEX (lib_plans 01) is the first scheduled consumer once this lands. |
 | [MATCH_PEG.md](doc/claude/MATCH_PEG.md) | L3 PEG-style match patterns — sequence/alternation/optional with anchor-revert capture (base match syntax lives in LOFT.md § Match expressions) |
 | [lib_plans/future/01-regex/README.md](doc/claude/lib_plans/future/01-regex/README.md) | Future library plan — regex standalone library: replaces the `r"..."` literal / "regex arm in match" plan with a full-featured library.  First lazy-loaded stdlib consumer. |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
