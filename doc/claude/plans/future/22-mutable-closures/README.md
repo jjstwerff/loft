@@ -445,7 +445,7 @@ This spec sits on the dependency stack for first-game ship:
 |---|---|---|
 | 1 | [P213 v4](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix) — closures-in-struct-fields layout | None (separate plan) |
 | 2 | This spec — implicit-by-body classifier with cases A/B/C/D | P213 v4 |
-| 3 | EventLoop core ([EVENT_LOOP.md](EVENT_LOOP.md)) | This spec |
+| 3 | EventLoop core ([EVENT_LOOP.md](../23-event-loop/README.md)) | This spec |
 | 4 | First playable single-player game | Phase 2 |
 | 5 | First multiplayer game | Phase 3 |
 
@@ -463,9 +463,9 @@ must be resolved before estimation is meaningful.
 - [DESIGN_DECISIONS.md § C38](../../../DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)
   — the closed-by-decision entry this spec evolves; long-term
   direction note recorded 2026-05-04.
-- [EVENT_LOOP.md](EVENT_LOOP.md) — the spec waiting on
+- [EVENT_LOOP.md](../23-event-loop/README.md) — the spec waiting on
   novice-fit closures.
-- [EVENT_LOOP_DISCUSSION.md § Novice-readiness](EVENT_LOOP_DISCUSSION.md#novice-readiness-evaluation-2026-05-05--pivot-trigger)
+- [EVENT_LOOP_DISCUSSION.md § Novice-readiness](../23-event-loop/DISCUSSION.md#novice-readiness-evaluation-2026-05-05--pivot-trigger)
   — the evaluation that prompted this work.
 - [LIFETIME.md](../../../LIFETIME.md) — dep tracking, scope-based
   freeing, Reference<T> semantics.

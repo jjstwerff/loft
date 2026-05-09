@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status:** spec.  V1 (text-mode) is implemented and validated by
 the tic-tac-toe demo; binary-mode is designed but not yet
-implemented.  Companion to [EVENT_LOOP.md](EVENT_LOOP.md), which
+implemented.  Companion to [EVENT_LOOP.md](README.md), which
 covers the application-layer dispatch and handler-registration
 concerns.
 
@@ -91,7 +91,7 @@ MAP:Click=0,Placement=1,GameOver=2
 - Reserved prefix `MAP:`.
 - Followed by comma-separated `name=id` pairs.
 - Names follow the handler-name discipline from
-  [EVENT_LOOP.md § Three-tier registration](EVENT_LOOP.md#three-tier-registration):
+  [EVENT_LOOP.md § Three-tier registration](README.md#three-tier-registration):
   fully-qualified type names (tier 1), `type/instance` (tier 2),
   or explicit overrides (tier 3).
 - Ids are non-negative integers in ASCII.
@@ -208,7 +208,7 @@ the payload should bypass JSON decoding.  Three modes:
 
 Encoding selection is invisible to the loft programmer — the
 library derives the mode from the recv-type at registration
-time (see [EVENT_LOOP.md](EVENT_LOOP.md) for how handler
+time (see [EVENT_LOOP.md](README.md) for how handler
 registration consumes the recv-type).
 
 ### Per-direction priority
@@ -310,11 +310,11 @@ extension fits cleanly.
 
 ## Cross-references
 
-- [EVENT_LOOP.md](EVENT_LOOP.md) — application-layer dispatch,
+- [EVENT_LOOP.md](README.md) — application-layer dispatch,
   handler registration, capture semantics, API surface.
-- [EVENT_LOOP_DISCUSSION.md](EVENT_LOOP_DISCUSSION.md) —
+- [EVENT_LOOP_DISCUSSION.md](DISCUSSION.md) —
   open issues, alternatives considered, design history.
-- [TIC_TAC_TOE.md](TIC_TAC_TOE.md) — v1 application using this
+- [TIC_TAC_TOE.md](../../../TIC_TAC_TOE.md) — v1 application using this
   protocol; smallest validating game.
 - [lib/server/native/src/lib.rs](../../lib/server/native/src/lib.rs)
   — server-side text-mode implementation
@@ -322,6 +322,6 @@ extension fits cleanly.
 - [lib/web/native/src/ws_client.rs](../../lib/web/native/src/ws_client.rs)
   — client-side text-mode implementation including handshake and
   auto-reconnect with backoff.
-- [PROBLEMS.md § 213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
+- [PROBLEMS.md § 213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
   — closure-in-struct-fields layout limit; gates full
   library-managed dispatch.

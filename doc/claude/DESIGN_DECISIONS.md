@@ -97,7 +97,7 @@ borrow-checked `&T` / `&mut T`, FnOnce / FnMut / Fn capability
 hierarchy, statically-enforced single-mutator-or-multiple-readers.
 The current copy-at-definition model with `Reference<T>` and a
 planned `Mutable<T>` stdlib helper covers the
-[EventLoop](EVENT_LOOP.md) and first-game use cases acceptably;
+[EventLoop](plans/future/23-event-loop/README.md) and first-game use cases acceptably;
 the closure-model evolution should be designed against
 real-world friction observed once a real game ships, not
 pre-emptively.  Sequencing for the evolution lives in

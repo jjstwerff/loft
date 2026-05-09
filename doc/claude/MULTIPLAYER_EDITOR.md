@@ -347,8 +347,8 @@ stays focused.
 
 - [TIC_TAC_TOE.md](TIC_TAC_TOE.md) — protocol validator (v1
   shipped); v2/v3 are deferred to focus this milestone instead.
-- [EVENT_PROTOCOL.md](EVENT_PROTOCOL.md) — wire format spec.
-- [EVENT_LOOP.md](EVENT_LOOP.md) — full event-loop spec; this
+- [EVENT_PROTOCOL.md](plans/future/23-event-loop/PROTOCOL.md) — wire format spec.
+- [EVENT_LOOP.md](plans/future/23-event-loop/README.md) — full event-loop spec; this
   demo lives below the EventLoop's implementation.
 - `lib/server/src/server.loft` — extension target for Step 1.
 - `lib/moros_editor/`, `lib/moros_map/`, `lib/moros_render/` —

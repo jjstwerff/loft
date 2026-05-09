@@ -110,7 +110,7 @@ that exercises the next layer up:
 - **Three independent handlers on one connection.**  The client has
   more than one thing to listen for and more than one thing to send.
   This is the first concrete consumer of the handler-id-on-the-wire
-  idea (see [EVENT_PROTOCOL.md](EVENT_PROTOCOL.md) for the
+  idea (see [EVENT_PROTOCOL.md](plans/future/23-event-loop/PROTOCOL.md) for the
   binary-frame wire spec).
 - **State on both ends.**  The server owns the authoritative game
   state; the client renders a copy.  This is the shape every
@@ -140,14 +140,14 @@ protocol + architecture demonstrator.
 ## Wire protocol — `<id>:payload`
 
 The full wire-format spec lives in
-[EVENT_PROTOCOL.md](EVENT_PROTOCOL.md).  Tic-tac-toe is the v1
+[EVENT_PROTOCOL.md](plans/future/23-event-loop/PROTOCOL.md).  Tic-tac-toe is the v1
 text-mode consumer: every WebSocket text frame after the MAP
 handshake is `<id>:<payload>` where `<id>` is an integer handed
 out by the server's name→id registry and exchanged with the
 client through the MAP frame.
 
 The shape is deliberately close to the binary v2 frame
-([EVENT_PROTOCOL.md § Binary-mode wire format](EVENT_PROTOCOL.md#binary-mode-wire-format-v2))
+([EVENT_PROTOCOL.md § Binary-mode wire format](plans/future/23-event-loop/PROTOCOL.md#binary-mode-wire-format-v2))
 which carries `handler_id: u32` plus priority / seq / flags /
 length in a 12-byte header.  Going through a name→id registry
 from day one means the upgrade from v1 (text) to v2 (binary)
@@ -238,7 +238,7 @@ clicks) and two outbound (placements, game-over).
 
 ### Why text frames and not the full EventLoop binary header?
 
-[EVENT_LOOP.md](EVENT_LOOP.md) specifies a 12-byte binary header
+[EVENT_LOOP.md](plans/future/23-event-loop/README.md) specifies a 12-byte binary header
 with handler id, priority, sequence, flags, length.  This game
 deliberately does **not** ship that yet — the directive was
 *"no priority or digital layer yet."*  The `<id>:<payload>`
@@ -991,10 +991,10 @@ eventual target.
 
 ## Cross-references
 
-- [EVENT_LOOP.md](EVENT_LOOP.md) — eventual wire format and
+- [EVENT_LOOP.md](plans/future/23-event-loop/README.md) — eventual wire format and
   handler-id model.  Tic-tac-toe is its smallest validating
   game.
-- [EVENT_LOOP_DISCUSSION.md](EVENT_LOOP_DISCUSSION.md) — open
+- [EVENT_LOOP_DISCUSSION.md](plans/future/23-event-loop/DISCUSSION.md) — open
   questions on the wider design.
 - [plans/future/22-mutable-closures/README.md](plans/future/22-mutable-closures/README.md) — closure-capture
   spec; the dispatch workaround in this game's pump callback

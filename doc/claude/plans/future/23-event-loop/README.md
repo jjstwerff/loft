@@ -6,12 +6,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # EVENT_LOOP — Prioritised event-loop abstraction (client + server)
 
 **Status:** Design spec.  Not yet implemented.  Depends on
-[P213 v4](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
+[P213 v4](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
 (capturing closures in struct fields).
 
 This document is the concrete design.  Open questions, alternatives
 considered, and design history live in
-[EVENT_LOOP_DISCUSSION.md](EVENT_LOOP_DISCUSSION.md).
+[EVENT_LOOP_DISCUSSION.md](DISCUSSION.md).
 
 ---
 
@@ -23,8 +23,8 @@ parallel mechanism are superseded:
 
 | Earlier design | Status | Replaced by |
 |---|---|---|
-| `Dispatcher` struct + `dispatch(env, &Dispatcher)` ([GAME_CLIENT_LIB.md § Dispatcher](GAME_CLIENT_LIB.md#dispatcher-in-loft)) | Superseded paper, never implemented | EventLoop bidirectional handlers |
-| `run_game_loop(GameLoop, tick_fn)` ([WEB_SERVER_LIB.md § Server-side game loop](WEB_SERVER_LIB.md)) | Superseded paper, never implemented | `el::run` with a programmer-supplied `poll_sources` callback (kernel-multiplexed source polling is recorded as future work in [EVENT_LOOP_DISCUSSION.md](EVENT_LOOP_DISCUSSION.md), not as a separate API) |
+| `Dispatcher` struct + `dispatch(env, &Dispatcher)` ([GAME_CLIENT_LIB.md § Dispatcher](../../../GAME_CLIENT_LIB.md#dispatcher-in-loft)) | Superseded paper, never implemented | EventLoop bidirectional handlers |
+| `run_game_loop(GameLoop, tick_fn)` ([WEB_SERVER_LIB.md § Server-side game loop](../../../WEB_SERVER_LIB.md)) | Superseded paper, never implemented | `el::run` with a programmer-supplied `poll_sources` callback (kernel-multiplexed source polling is recorded as future work in [EVENT_LOOP_DISCUSSION.md](DISCUSSION.md), not as a separate API) |
 | `GameEnvelope { sender, recipient, sequence, timestamp, message: WsMessage }` + `MsgType` enum (`lib/game_protocol/src/game_protocol.loft`, 104 lines, used only by its own tests) | Superseded shipped paper — the structs compile but nothing depends on them | EventLoop wire frame: `[handler_id][priority][seq][flags][length][payload]` |
 
 The shipped `lib/game_protocol` will be reshaped (or replaced) to
@@ -136,7 +136,7 @@ The EventLoop's `step()` (or the `pump()` shape used in
 moment no opcode is mid-execution and no I/O is in-flight.
 This is precisely the consistency point that a runtime swap
 (interpreter → WASM) requires.  The V4 hot-swap described in
-[TIC_TAC_TOE.md § Tic-tac-toe v4](TIC_TAC_TOE.md#tic-tac-toe-v4--client-uploaded-scripts-server-side-compile-hot-wasm-swap)
+[TIC_TAC_TOE.md § Tic-tac-toe v4](../../../TIC_TAC_TOE.md#tic-tac-toe-v4--client-uploaded-scripts-server-side-compile-hot-wasm-swap)
 does not need to invent a synchronisation point — the EventLoop
 already has one.  At a frame boundary the runtime rebinds which
 code reads the heap; the next pump call dispatches under the
@@ -545,7 +545,7 @@ binary header layout, name→id MAP handshake, priority byte,
 encoding modes (JSON / Raw / Binary), multi-frame streaming
 reassembly, reserved prefixes, version negotiation — live in the
 companion document
-[EVENT_PROTOCOL.md](EVENT_PROTOCOL.md).  This document focuses
+[EVENT_PROTOCOL.md](PROTOCOL.md).  This document focuses
 on the application-layer concerns (registration, dispatch, captures,
 priority lanes as a runtime concept); EVENT_PROTOCOL is what
 implementers and wire-level debuggers read.
@@ -761,7 +761,7 @@ This abstraction depends on:
 1. **P213 v4 (capturing closures in struct fields)** — the
    `Handler.recv` field holds a fn-ref that captures the user's
    typed closure.  Today's diagnostic blocks this.  P213 v4
-   unblocks it.  See [PROBLEMS.md § 213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix).
+   unblocks it.  See [PROBLEMS.md § 213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix).
 
 2. **`OpFormatDatabase` + `database.parse`** — round-trip JSON.
    Already shipped.
