@@ -43,7 +43,8 @@ struct world {
 struct cell {
     q: i64,
     r: i64,
-    color: i64,               // palette index
+    color: i64,               // palette index 0-9: 0 = empty (no cell rendered),
+                              // 1-9 = the 9 palette colours (see phase 0 doc)
     age: i64,                 // ticks since planted
     planted_by: i64,          // player_id that originally seeded this cluster
     planted_at_tick: i64,     // server-tick timestamp; projector uses this to drive

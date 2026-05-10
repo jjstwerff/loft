@@ -83,6 +83,39 @@ lines preferentially connect into longer fern-like features,
 while the crevices between them give the eye depth cues at the
 appropriate scale.
 
+### Plant vs crystal — emergent from filled-region shape
+
+There is **one renderer**, not two.  The "plant" vs "crystal"
+distinction the README mentions emerges from how the renderer
+reads the shape of the filled region around each crystal:
+
+- **Thin linear features (dotted, 1-wide, or 2-wide lines of
+  filled hexes)** — the renderer detects the line direction and
+  aligns each cell's ridges along it.  When the line **curves**,
+  the ridges curve too: the bend is **anticipated 2 cells before
+  and trailed 2 cells after** the sudden direction change, so
+  the visual sweep is smooth, not stepped.  This produces the
+  **plant / fern** aesthetic — flowing, organic stems that
+  follow the audience's gesture.
+- **Wider features (3+ hex blob, irregular cluster)** — edge
+  detection cannot find a single dominant direction.  Each
+  cell's ridges fall back to a **default crystal pattern**
+  (radial / random with cluster-coherence bias).  This produces
+  the **crystal** aesthetic — faceted territory with no
+  dominant flow.
+
+This means a single drawn line **swings between aesthetics** as
+audience input continues: a thin meandering line reads as plant;
+once it broadens into a blob (more taps fill in around it), the
+edge detection drops out and the same area transitions to the
+crystal look.  This swing is part of the spectacle — audiences
+visibly change the world's character by changing how they paint.
+
+The transition is not instantaneous: as edge detection weakens,
+ridge directions blend toward the default before settling, so
+the swing reads as a wave through the cluster rather than a
+hard switch.
+
 Per-cell rendering rules:
 
 - **Empty hex (background)**: black fill, slightly lighter outline
@@ -173,6 +206,8 @@ moments.  CI-4 picks between hold-still and slow-orbit.
 | 3.3 | Camera transform — world coordinates → screen pixels with pan + zoom | S |
 | 3.4 | Per-filled-hex height + lateral-reach computation: height = `f(filled_neighbor_count)`; lateral reach toward each filled hex within bridge range (gap of 1) | S |
 | 3.4a | Crystal-top mesh generator: ridge lines at even height flanked by triangles sloping into shallow crevices.  Never produces flat plates.  Ridge directions on adjacent filled hexes preferentially connect so multi-hex masses read as continuous geological features | M |
+| 3.4c | Edge / line detection on the filled-hex pattern: classify each cell's local neighborhood as `thin-line` (dotted / 1-wide / 2-wide line, with a detected direction + curvature) or `blob` (3+ wide / irregular).  Thin-line cells take their ridge direction from the line tangent; blob cells use the default crystal pattern.  Line curvature lookahead extends 2 cells before + 2 cells after a bend so the curve is anticipated and trailed, not stepped | M |
+| 3.4d | Aesthetic-swing transition: when a cell crosses the thin-line ↔ blob boundary as audience input changes the local shape, ridge directions interpolate smoothly toward the new pattern over a short window.  Reads as a visible wave through the cluster, not a hard pop | S |
 | 3.4b | Per-triangle colour assignment: each triangle gets one solid palette colour from the {self, 1-away neighbours, 2-away tiles} set with dominance self ≫ 1-away ≫ 2-away.  Hard edges between triangles, no shader-side blending.  Stable assignment (same triangle keeps its colour across frames so the mosaic reads as texture, not noise) | S |
 | 3.5 | Heat-field tracker — accumulate events, decay over time | S |
 | 3.6 | Camera target derivation — centroid + spread → target + zoom | S |
@@ -196,14 +231,26 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   not closed hulls.  Reference image: ice forming on a window
   pane — central spine + feathery branches + needle tips, mostly
   negative space.  Tops are ridge-and-crevice (never flat
-  plates).  Open questions: pick the procedural-frost generator
+  plates).  Open question: pick the procedural-frost generator
   (single-spine + perpendicular branches?  recursive dendrite?
-  symmetric vs. asymmetric branching?) and the ridge-direction
-  strategy (random per cell vs. inherited from cluster-growth
-  direction so multi-hex masses get coherent fern-like
-  features) at CI-3 after a render-spike.  Keep triangle counts
-  low enough that a busy world (~500 filled hexes) still hits
-  frame budget.
+  symmetric vs. asymmetric branching?) at CI-3 after a render-
+  spike.  Keep triangle counts low enough that a busy world
+  (~500 filled hexes) still hits frame budget.
+- **Edge / line detection — exact classifier** — needs to
+  reliably distinguish dotted-line vs 1-wide vs 2-wide line vs
+  blob, return a tangent direction + curvature for each
+  thin-line cell, and gracefully drop out for 3+-wide regions.
+  Open questions at CI-3: what neighborhood radius does the
+  classifier scan?  How is curvature computed (3-point fit?
+  5-point fit?)?  How fast does the classifier converge when
+  audience input changes the local shape (per frame? per server
+  tick?)?
+- **Aesthetic-swing window length** — when a cell crosses the
+  thin-line ↔ blob boundary, the interpolation window decides
+  how long the visible transition takes.  Too short = pops; too
+  long = the audience can fill the area before the transition
+  completes and the visual lags behind reality.  First cut:
+  ~1 second, tune at CI-3.
 - **Triangle-colour mix ratios** — exact share for self vs
   1-away vs 2-away (each triangle is one solid palette colour;
   this picks how many of the crystal's triangles fall into each

@@ -145,15 +145,21 @@ override hotkey to lock the camera.
 
 ## Open design questions
 
-1. **Plant vs crystal aesthetic** — both work mechanically but
-   produce very different visual character.  Plant = organic
-   branching, lignifying older cells, asymmetric growth;
-   crystal = faceted territory boundaries, frozen-on-contact,
-   geometric symmetry.  Phase 2 prototypes both before talk-deck
-   freeze.
-2. **Color palette size** — small (4-6 colors, easy thumb-pick on
-   phone) vs. large (12-20 colors, more expressive).  Recommend
-   6-8.
+1. **Plant vs crystal aesthetic** — RESOLVED: they are not
+   separate variants.  Both emerge from a single renderer based
+   on the local shape of the filled region.  Thin lines (dotted,
+   1-wide, 2-wide) read as **plant** with ridges following the
+   line tangent and curving smoothly through bends (anticipated
+   2 cells before, trailed 2 cells after).  Wider blobs read as
+   **crystal** with the default radial pattern.  A single drawn
+   line **swings between the two** as audience input continues.
+   Detail in [`03-projector-view.md` § Plant vs crystal — emergent
+   from filled-region shape](03-projector-view.md#plant-vs-crystal--emergent-from-filled-region-shape).
+2. **Color palette size** — RESOLVED at 9: indices 1-3 RGB
+   primaries, 4-6 CMY additive mixes, 7-9 white / grey / brown.
+   Index 0 is reserved for "empty hex" in the world state and is
+   never sent in a `seed` event.  Detail in
+   [`00-audience-browser-page.md` § Zone 2](00-audience-browser-page.md#zone-2--color-palette-middle).
 3. **Direction-bias mechanic** — does an audience member's color
    choice influence growth ONLY at their seed site, or globally
    as a vector pull on the field?  Local-only is simpler;
@@ -199,8 +205,8 @@ survives the talk.
 
 | Question | Resolved at | Decision | Why |
 |---|---|---|---|
-| Q1 plant vs crystal | (pending CI-3) | — | — |
-| Q2 palette size | (pending CI-1) | — | — |
+| Q1 plant vs crystal | 2026-05-10 (design review) | Single renderer, both aesthetics emerge from local-shape edge detection | Thin-line cells follow line tangent with curve lookahead 2 cells before/after a bend (plant); wider blobs fall back to default radial pattern (crystal); the swing between aesthetics as audience input changes is part of the spectacle |
+| Q2 palette size | 2026-05-10 (design review) | 9 colours, indices 1-9; index 0 = empty | RGB primaries (1-3) + CMY mixes (4-6) + white/grey/brown (7-9) covers spectrum + neutrals; 9 is comfortable for thumb-pick on phone; 0 reserved for world-state "empty hex" so colour and emptiness share one field |
 | Q3 direction-bias mechanic | (pending CI-3) | — | — |
 | Q4 round structure | (pending CI-2) | — | — |
 | Q5 audience platform | (pending CI-1) | — | — |

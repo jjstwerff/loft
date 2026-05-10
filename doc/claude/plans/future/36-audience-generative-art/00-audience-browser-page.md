@@ -50,17 +50,32 @@ shifts.
 
 ### Zone 2 — Color palette (middle)
 
-A horizontal row of **9 color hex tiles**:
+A horizontal row of **9 color hex tiles**, plus reserved index 0
+for "empty / open space" (which is not a palette tile — it is
+the absence of a colour, i.e. an empty hex on the world).
 
-- 3 primaries (R / Y / B or R / G / B — locked at CI-1)
-- 3 mixes (orange / green / purple — derived from the primaries)
-- 1 white
-- 1 grey
-- 1 brown
+| Index | Color |
+|---|---|
+| 0 | Reserved — empty / open space.  Never a palette tile |
+| 1 | Red |
+| 2 | Green |
+| 3 | Blue |
+| 4 | Cyan (Green + Blue) |
+| 5 | Magenta (Red + Blue) |
+| 6 | Yellow (Red + Green) |
+| 7 | White |
+| 8 | Grey |
+| 9 | Brown |
 
-Tap a color to make it the **active color**.  The active color
-shows a selected indicator (border / glow).  At most one color is
-active at a time.
+Indices 1-3 are the RGB primaries; 4-6 are the additive mixes;
+7-9 round out the palette with white, grey, and brown for
+neutrals.
+
+Tap a palette tile (1-9) to make it the **active color**.  The
+active color shows a selected indicator (border / glow).  At
+most one color is active at a time.  The Clear-color box (zone 3)
+sets the active color back to "none" — distinct from index 0,
+which is the *world's* state for an empty cell.
 
 ### Zone 3 — Control row (bottom)
 
@@ -92,13 +107,16 @@ the world scroll under their finger.
 Locked at CI-0 in the parent README.  First cut:
 
 ```json
-{ "type": "seed",  "x": <q>, "y": <r>, "color": "<palette_id>" }
+{ "type": "seed",  "x": <q>, "y": <r>, "color": <1..9> }
 { "type": "clear", "x": <q>, "y": <r> }
 ```
 
-Where `<q>`, `<r>` are world hex coordinates (axial), not local
-view coordinates.  The client translates view-coordinates → world
-coordinates using its current pan offset.
+`color` is the palette index (1-9 from the table above).  The
+server treats a `clear` event as setting the cell to colour
+**0** (empty).  `<q>`, `<r>` are world hex coordinates (axial),
+not local view coordinates.  The client translates
+view-coordinates → world coordinates using its current pan
+offset.
 
 ## WebSocket events (server → client)
 
@@ -127,9 +145,9 @@ color and triggers the **Jump to active** box's flash.
 
 ## Open design questions
 
-- **Color encoding on the wire** — palette index (0-8) or hex
-  string (`"#ff0000"`)?  Index is smaller; string is
-  self-describing for talk-readability.  Recommend palette index.
+- ~~**Color encoding on the wire**~~ — RESOLVED.  Palette
+  index 1-9 over the wire; index 0 is reserved for "empty hex"
+  in the world state and is never sent in a `seed` event.
 - **Coordinate system** — axial (q, r) or offset (col, row)?
   Axial is simpler for distance / direction maths in the
   generation script (phase 2).  Recommend axial.
