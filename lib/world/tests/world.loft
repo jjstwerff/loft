@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// world: smoke test for the sparse 32x32-chunk World data model.
+// Validates that get/set round-trips, chunks are created on demand,
+// and the floor-division addressing handles negative coordinates.
+use world;
+
+fn main() {
+  // Empty world has no chunks.
+  w = world::world_empty();
+  assert(len(w.chunks) == 0, "fresh world has no chunks");
+  assert(w.tick == 0, "fresh world tick=0");
+
+  // Reading a missing cell returns the empty default (no panic).
+  c = w.get_cell(5, 7);
+  assert(c.c_color == 0, "missing cell color = 0");
+  assert(c.c_height == 0, "missing cell height = 0");
+  assert(c.c_age == 0, "missing cell age = 0");
+
+  // Writing creates the chunk on demand.
+  w.set_cell(5, 7, world::Cell { c_color: 3, c_height: 12, c_age: 100 });
+  assert(len(w.chunks) == 1, "one chunk after first write");
+  c2 = w.get_cell(5, 7);
+  assert(c2.c_color == 3, "round-trip color");
+  assert(c2.c_height == 12, "round-trip height");
+  assert(c2.c_age == 100, "round-trip age");
+
+  // Different (q, r) in the same chunk doesn't add a new chunk.
+  w.set_cell(6, 8, world::Cell { c_color: 5, c_height: 0, c_age: 0 });
+  assert(len(w.chunks) == 1, "second write in same chunk reuses it");
+
+  // Negative coordinates land in a different chunk.
+  w.set_cell(-1, 0, world::Cell { c_color: 7, c_height: 0, c_age: 0 });
+  assert(len(w.chunks) == 2, "negative coord lands in chunk -1, fresh chunk");
+  c3 = w.get_cell(-1, 0);
+  assert(c3.c_color == 7, "negative round-trip works");
+
+  // chunk_idx_32 / hex_idx_32 — boundary spot-checks.
+  assert(world::chunk_idx_32(0) == 0, "0 → chunk 0");
+  assert(world::chunk_idx_32(31) == 0, "31 → chunk 0");
+  assert(world::chunk_idx_32(32) == 1, "32 → chunk 1");
+  assert(world::chunk_idx_32(-1) == -1, "-1 → chunk -1");
+  assert(world::chunk_idx_32(-32) == -1, "-32 → chunk -1");
+  assert(world::chunk_idx_32(-33) == -2, "-33 → chunk -2");
+
+  assert(world::hex_idx_32(0) == 0, "hex 0");
+  assert(world::hex_idx_32(31) == 31, "hex 31");
+  assert(world::hex_idx_32(32) == 0, "hex 32 wraps to 0");
+  assert(world::hex_idx_32(-1) == 31, "hex -1 wraps to 31");
+
+  println("world smoke ok");
+}

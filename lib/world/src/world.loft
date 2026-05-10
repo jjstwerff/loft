@@ -1,0 +1,157 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// world — sparse 32x32-chunk world data model shared by TTT v5
+// (lib/game_protocol/examples/v5_*) and the audience-generative-art
+// demo (plans/future/36-audience-generative-art/).
+//
+// Reuses the lib/moros_map chunk addressing pattern (32-wide chunks,
+// floor-division for negative coords) but with a slimmer 4-byte Cell
+// (no separate Hex struct, no per-cell layer, no editor metadata).
+//
+// Wire layout — each Cell packs to exactly 4 bytes:
+//   [c_color: u8] [c_height: u8] [c_age: u16-LE]
+//
+// The server holds the canonical World; the projector + phone clients
+// receive binary world_snapshot / world_delta blobs (5-byte header
+// `[type:u8] [session:u32-LE]` + payload).  TTT v5 reuses the same
+// shape; only the colour-byte semantics differ (1 = X, 2 = O, vs.
+// 1-9 = palette colours in the demo).
+
+// ── Types ───────────────────────────────────────────────────────────
+
+// 4-byte cell.  c_color uses the u8 typedef (integer limit(0,255)
+// size(1)); c_age uses u16 (size(2)).  Storage packs to exactly 4
+// bytes per cell — the projector ships them through the binary
+// surface in chunk-major order.
+//
+// c_color = 0 means "empty" (no crystal, no TTT mark).  Both clients
+// treat 0 as background; non-zero as live content.
+pub struct Cell {
+  c_color:  u8 not null,
+  c_height: u8 not null,
+  c_age:    u16 not null,
+}
+
+// 32x32 grid at chunk coords (ck_cx, ck_cz).  Index into ck_cells:
+// hx * 32 + hz where hx, hz ∈ [0, 31].  Same shape as moros_map's
+// Chunk minus the cy layer (this world is single-layer).
+pub struct Chunk {
+  ck_cx:    integer not null,
+  ck_cz:    integer not null,
+  ck_cells: vector<Cell>,
+}
+
+// Top-level container.  Sparse: only chunks with at least one
+// non-empty cell live in `chunks`; empty chunks are removed by the
+// tick loop's GC pass.  `tick` is monotonic per server lifetime.
+pub struct World {
+  chunks: vector<Chunk>,
+  tick:   integer not null,
+}
+
+// ── Addressing helpers ────────────────────────────────────────────
+//
+// Public so packing / unpacking code in TTT v5 + plan-36 can route
+// world (q, r) coordinates to the right chunk + intra-chunk slot
+// without re-implementing the floor-division dance for negatives.
+
+// floor(v / 32) — handles negative v correctly (C-style `/` rounds
+// toward zero, which silently maps cell (-1, 0) to chunk 0 instead
+// of chunk -1).
+pub fn chunk_idx_32(v: integer) -> integer {
+  vr = v % 32;
+  if vr < 0 { (v - vr - 32) / 32 } else { (v - vr) / 32 }
+}
+
+// v mod 32, always in [0, 31].
+pub fn hex_idx_32(v: integer) -> integer {
+  vr = v % 32;
+  if vr < 0 { vr + 32 } else { vr }
+}
+
+// ── Constructors ──────────────────────────────────────────────────
+
+// Default empty cell.  All fields zero; serialises to four 0x00
+// bytes on the wire.
+pub fn cell_empty() -> Cell {
+  Cell { c_color: 0, c_height: 0, c_age: 0 }
+}
+
+// Build a 32x32 chunk filled with empty cells at chunk coords
+// (cx, cz).
+pub fn build_chunk(cx: integer, cz: integer) -> Chunk {
+  cells: vector<Cell> = [];
+  for _ in 0..1024 { cells += [cell_empty()]; }
+  Chunk { ck_cx: cx, ck_cz: cz, ck_cells: cells }
+}
+
+// New empty world, tick 0, no chunks.
+pub fn world_empty() -> World {
+  World { chunks: [], tick: 0 }
+}
+
+// ── Cell access ───────────────────────────────────────────────────
+//
+// Linear scan through `chunks` for the matching (cx, cz).  Sparse
+// worlds keep `chunks` small (typically <100), so the scan is cheap
+// — matches moros_map's design choice and avoids a separate
+// hash-by-chunk-coord index.  If profiling shows a hot site, the
+// indexed variant lives in moros_map's pattern and can be lifted
+// here.
+
+// True iff a chunk exists at the global (q, r).
+pub fn has_chunk(self: World, q: integer, r: integer) -> boolean {
+  cx = chunk_idx_32(q);
+  cz = chunk_idx_32(r);
+  for hc_c in self.chunks {
+    if hc_c.ck_cx == cx && hc_c.ck_cz == cz { return true; }
+  }
+  false
+}
+
+// Ensure a chunk exists at the global (q, r); creates a 32x32 of
+// empty cells if absent.
+pub fn ensure_chunk(self: &World, q: integer, r: integer) {
+  cx = chunk_idx_32(q);
+  cz = chunk_idx_32(r);
+  for ec_c in self.chunks {
+    if ec_c.ck_cx == cx && ec_c.ck_cz == cz { return; }
+  }
+  self.chunks += [build_chunk(cx, cz)];
+}
+
+// Read the cell at global (q, r).  Returns `cell_empty()` when the
+// chunk does not exist (sparse-world convention — empty chunks are
+// implicitly all-empty).
+pub fn get_cell(self: World, q: integer, r: integer) -> Cell {
+  cx = chunk_idx_32(q);
+  cz = chunk_idx_32(r);
+  hx = hex_idx_32(q);
+  hz = hex_idx_32(r);
+  idx = hx * 32 + hz;
+  for gc_c in self.chunks {
+    if gc_c.ck_cx == cx && gc_c.ck_cz == cz {
+      return gc_c.ck_cells[idx];
+    }
+  }
+  cell_empty()
+}
+
+// Write a cell at global (q, r).  Creates the containing chunk on
+// demand; does NOT GC empty chunks (the tick loop's end-of-tick
+// pass owns that).
+pub fn set_cell(self: &World, q: integer, r: integer, value: Cell) {
+  ensure_chunk(self, q, r);
+  cx = chunk_idx_32(q);
+  cz = chunk_idx_32(r);
+  hx = hex_idx_32(q);
+  hz = hex_idx_32(r);
+  idx = hx * 32 + hz;
+  for sc_c in self.chunks {
+    if sc_c.ck_cx == cx && sc_c.ck_cz == cz {
+      sc_c.ck_cells[idx] = value;
+      return;
+    }
+  }
+}
