@@ -54,18 +54,34 @@ crystal one cell away.  When both reach toward each other, they
 meet over the empty cell and form a span.  Cells with no partner
 within bridge range have no lateral extension on that side.
 
+**Reference aesthetic — ice forming on a cold window pane.**
+Each crystal's silhouette is dendritic / fern-like: a central
+spine with feathery secondary branches radiating outward, mostly
+negative space, fine needle tips.  Bridges between adjacent
+filled hexes look like two frost tendrils meeting in the middle,
+not like solid arches.  Light passes through the gaps; colour
+reads against the dark background; the structure feels grown,
+not built.
+
 **Crystals and bridges are not solid masses** — they're faceted
 / skeletal geometry with **visible negative space**.  The camera
 can look *through* a bridge to see crystals behind it, and
 through the gaps of any single crystal to see what is past it.
-The aesthetic is closer to a quartz cluster or open lattice
-than to a hill of lava — light, shadow, and the world behind
-each crystal all read through the gaps.
 
 This means the per-crystal mesh is a sparse arrangement of
-faces (spires, plates, lattice struts) rather than a closed
+faces (spines, branches, needle tips) rather than a closed
 hull.  Lighting + back-face visibility need to be tuned so the
 through-look reads clearly on a projector at venue distance.
+
+**Crystal tops are never flat plates.**  The mesh-generation
+algorithm produces a top surface made of **ridge lines at even
+height** (the frost spines) flanked by triangles that **slope
+down into shallow crevices** (between branches).  Even a fully-
+surrounded high-plateau cell shows a ridged / branched top, not
+a smooth flat top.  Across many adjacent filled hexes, the ridge
+lines preferentially connect into longer fern-like features,
+while the crevices between them give the eye depth cues at the
+appropriate scale.
 
 Per-cell rendering rules:
 
@@ -156,6 +172,7 @@ moments.  CI-4 picks between hold-still and slow-orbit.
 | 3.2 | 3D hex-grid renderer at projection resolution (target 1920x1080+).  Likely fork `lib/moros_editor` — already a 3D hex world | M |
 | 3.3 | Camera transform — world coordinates → screen pixels with pan + zoom | S |
 | 3.4 | Per-filled-hex height + lateral-reach computation: height = `f(filled_neighbor_count)`; lateral reach toward each filled hex within bridge range (gap of 1) | S |
+| 3.4a | Crystal-top mesh generator: ridge lines at even height flanked by triangles sloping into shallow crevices.  Never produces flat plates.  Ridge directions on adjacent filled hexes preferentially connect so multi-hex masses read as continuous geological features | M |
 | 3.4b | Per-triangle colour assignment: each triangle gets one solid palette colour from the {self, 1-away neighbours, 2-away tiles} set with dominance self ≫ 1-away ≫ 2-away.  Hard edges between triangles, no shader-side blending.  Stable assignment (same triangle keeps its colour across frames so the mosaic reads as texture, not noise) | S |
 | 3.5 | Heat-field tracker — accumulate events, decay over time | S |
 | 3.6 | Camera target derivation — centroid + spread → target + zoom | S |
@@ -175,14 +192,18 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   the auto-camera here.  CI-3 confirms after a render-spike on
   representative geometry (~50 filled hexes, ~5 second growth in
   flight).
-- **Crystal mesh shape — sparse / skeletal** — crystals are not
-  closed hulls.  They are faceted clusters (think quartz spikes,
-  open lattice struts, plate facets) with **visible negative
-  space** so the camera can see past them to crystals behind.
-  Open question: pick the mesh primitive set (spikes? plates?
-  combination?) at CI-3 after a render-spike.  Keep counts low
-  enough that a busy world (~500 filled hexes) still hits frame
-  budget.
+- **Crystal mesh shape — frost on cold glass** — crystals are
+  not closed hulls.  Reference image: ice forming on a window
+  pane — central spine + feathery branches + needle tips, mostly
+  negative space.  Tops are ridge-and-crevice (never flat
+  plates).  Open questions: pick the procedural-frost generator
+  (single-spine + perpendicular branches?  recursive dendrite?
+  symmetric vs. asymmetric branching?) and the ridge-direction
+  strategy (random per cell vs. inherited from cluster-growth
+  direction so multi-hex masses get coherent fern-like
+  features) at CI-3 after a render-spike.  Keep triangle counts
+  low enough that a busy world (~500 filled hexes) still hits
+  frame budget.
 - **Triangle-colour mix ratios** — exact share for self vs
   1-away vs 2-away (each triangle is one solid palette colour;
   this picks how many of the crystal's triangles fall into each

@@ -70,11 +70,17 @@ form a small **bridge** by each extending laterally toward the
 other and meeting over the empty cell between them.  A line of
 filled hexes forms a continuous **ridge**.
 
-Both crystals and bridges are **sparse / skeletal** — faceted
-geometry with visible negative space.  The camera can see
-*through* a bridge to crystals behind, and through the gaps of
-any single crystal to what is past it.  Aesthetic: quartz cluster
-or open lattice, not solid lava hill.
+Reference aesthetic: **ice forming on a cold window pane** —
+dendritic / fern-like silhouettes with a central spine, feathery
+secondary branches, and needle tips.  Mostly negative space.
+The camera can see *through* a bridge to crystals behind, and
+through the gaps of any single crystal to what is past it.
+
+Crystal **tops are never flat**.  The mesh-generation algorithm
+produces ridge lines at even height (the frost spines) flanked
+by triangles that slope into shallow crevices (between
+branches).  Across many adjacent filled hexes, ridge lines
+preferentially connect into longer fern-like features.
 
 Each crystal's mesh is built from triangles, **each triangle one
 solid palette colour with hard edges to its neighbours** — no
