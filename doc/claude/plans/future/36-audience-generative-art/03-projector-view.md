@@ -171,7 +171,7 @@ Once `growth_progress` reaches 1.0, the cell sits at its
 server-supplied height (`c_height` from the chunk payload) for
 the remainder of its lifetime.
 
-### Distance fade
+### Distance fade + adaptive draw distance
 
 Crystals beyond a configurable distance from the camera centre
 **fade out** (alpha → 0 over a fade band) rather than being
@@ -183,9 +183,26 @@ crystals.
 |---|---|
 | `CAMERA_FADE_START_HEXES` | 100 (fade begins at this many hex-distances from the camera centre) |
 | `CAMERA_FADE_BAND_HEXES` | (CI-3 picks; first cut ~20 hex distances of falloff) |
+| `CAMERA_FADE_MIN_HEXES` | 30 (lower bound the auto-tuner is allowed to shrink the fade-start to under load) |
+| `CAMERA_FADE_MAX_HEXES` | 250 (upper bound the auto-tuner can grow to when frames are cheap) |
 
-Both kept as renderer-side constants so they can be retuned at
-the prototype + rehearsal stages without touching server code.
+Each client (desktop + projector — the phone is 2D and skips
+this entirely) **measures its own frame time** and adapts
+`CAMERA_FADE_START_HEXES` between the configured min and max:
+
+- Frame time consistently above the budget (e.g. >18 ms at
+  60 FPS target) → shrink the draw distance by a small step
+  each second to reduce render cost.
+- Frame time comfortably under budget (e.g. <12 ms) → grow the
+  draw distance by a small step each second until either the
+  max is reached or frame time approaches the budget.
+
+The auto-tuner is intentionally slow (per-second adjustments,
+small steps) so the audience does not see crystals popping in
+and out as the distance changes.  All four constants live as
+renderer-side values tunable at the prototype + rehearsal
+stages without touching server code.
+
 Rendering note: the fade applies to the crystal mesh only — the
 projector still does not render the base hex lattice at all, so
 the fade has nothing to mute on empty cells.

@@ -27,21 +27,29 @@ server / client / generation.
 
 ## Demo concept
 
-Audience members influence a **plant / crystal growth** simulation
-on a hex map in two ways:
+Audience members **paint directly** onto a shared hex world from
+their phones (or laptops), and a 3D crystal mesh grows out of
+the painted hexes on the projector for everyone to watch:
 
-- **Tap a hex** in their browser → seeds growth at that location
-- **Choose a color** → biases the dominant color in the direction
-  growth spreads
+- **Tap a hex** in their browser → places a crystal at that
+  location in the chosen colour
+- **Swipe** → paints a line of crystals
+- **Tap own-colour crystal** → erases it
+- **Choose a color** from the 9-tile palette (RGB primaries +
+  CMY mixes + white / grey / brown)
 
-Native projector view auto-cameras to recent activity.  Single
-shared URL — everyone in the room participates from their phone or
-laptop.  Spectacle is the **emergent collaborative patterns**, not
-any single person's contribution.
+The projector's auto-camera follows recent activity; sluggish-
+by-design pacing means each placed crystal grows over ~5 seconds
+and old crystals decay slowly after 5 minutes — the canvas
+self-cleans rather than requiring resets.  Single shared URL —
+everyone in the room participates from their phone or laptop.
+Spectacle is the **emergent collaborative patterns**, not any
+single person's contribution.
 
 (Full design: see the [development plan](../../plans/future/36-audience-generative-art/)
-including the generation algorithm sketch, auto-camera tuning, and
-6 open design questions.)
+including the three-view roles, the chunked world data layout,
+the dual JSON-events + binary-blobs protocol, and the design
+decisions log.)
 
 ## Talk shape
 
