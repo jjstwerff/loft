@@ -111,6 +111,32 @@ The outer-ring movement composes with swipe gestures: a player can
 draw arbitrarily long lines by swiping toward an edge and letting
 the world scroll under their finger.
 
+## Onboarding state — already-ready on first load
+
+When the page finishes loading and the WebSocket completes its
+initial handshake, the client puts the user **in a ready-to-paint
+state immediately** — no UI discovery is required before the
+first tap can do something useful:
+
+- **A palette colour is pre-selected at random** from indices
+  1-9.  The user sees a chosen colour highlighted in the palette
+  the moment the page is ready.  No "tap a colour first or your
+  taps do nothing" failure mode.
+- **The world view is centred on a point of current activity**
+  if any exists — using the same jump-to-active logic the
+  control-row button uses.  The user's first view shows other
+  people's recent crystals nearby; the first tap lands somewhere
+  visually meaningful instead of in empty space far from the
+  action.  If the world is fully blank (very early in the talk),
+  the view centres on world (0, 0).
+
+This pair of defaults is the **first line of UX defence** against
+audience confusion.  An audience member who opens the page and
+just starts tapping immediately produces visible crystals near
+visible activity in their pre-chosen colour — they learn the
+rest of the UI (colour switching, swipe, jump-to-active,
+movement zones) by exploration, not by reading instructions.
+
 ## Connection-loss recovery
 
 If the client detects it has fallen behind (gap in incoming
@@ -299,7 +325,7 @@ param override for rehearsal + testing.
 | 0.6 | Outer-ring movement zones — continuous pan while held | S |
 | 0.7 | WebSocket client (open / send / receive / reconnect on drop) | XS |
 | 0.8 | Jump-to-active button + flash animation | XS |
-| 0.9 | Onboarding self-explanation (no instructions text — UI must be obvious from first glance) | S |
+| 0.9 | Onboarding self-explanation: random pre-selected colour at page-load + view centred on current-activity point (or (0, 0) if blank); no instructions text — UI must be obvious from first glance | S |
 
 ## Open design questions
 
