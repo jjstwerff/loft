@@ -336,11 +336,25 @@ unattended installation running for hours could accumulate.
 - `plans/future/23-event-loop` — phase 1 is a practical
   EVENT_PROTOCOL instance
 
+**Wire-protocol primitives validated by TTT v5:**
+
+`plans/future/32-tic-tac-toe` § "Tic-tac-toe v5" carries the
+binary-frame extension to `lib/server` + `lib/web`, the
+session-tagged blob protocol, the N-client routing pattern,
+the catch-up recovery handler, and the sluggish-tempo tick-loop
+behaviour — each validated with the smallest possible text-mode
+test program.  The TTT board uses the same `World` / `Chunk` /
+`Cell` data model this plan defines, so primitives proven there
+translate to plan-36 with zero protocol glue.
+
+Build TTT v5 first; this plan's phase 1 (server) and phase 0
+(phone client binary decoder) become consumers of proven
+infrastructure rather than co-developing it.
+
 **Deliberately does NOT depend on:**
 
 - `plans/future/24-multiplayer-editor` — audience client is a
   dumb tap-emitter, not the full moros editor
-- `plans/future/32-tic-tac-toe` — different protocol shape
 - `lib_plans/future/10-game-client` — not needed yet
 
 ## Risks

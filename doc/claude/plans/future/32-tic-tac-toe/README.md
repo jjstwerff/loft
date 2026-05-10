@@ -987,6 +987,154 @@ platform**, not just a language.  Keeping it documented here
 means the architecture decisions in v1-v3 stay coherent with the
 eventual target.
 
+## Tic-tac-toe v5 — binary world stream + many clients + reconnect catch-up + sluggish tempo
+
+**Status:** scoped 2026-05-10 to validate the wire-protocol
+primitives [`plans/future/36-audience-generative-art/`](../36-audience-generative-art/)
+needs.  Builds **before v4** in the practical sequence — v4
+also depends on binary WS frames; v5 lands them and v4
+inherits.
+
+The actual deliverable for v5 is **the smallest possible
+text-mode test programs** that exercise each primitive.  Visual
+tic-tac-toe boards remain off-limits (per the v1 protocol-
+validation-only framing); the test program for v5 is a
+multi-client world-bytes streamer that proves the primitives
+work on the wire.
+
+### Shared world data model — TTT board mirrors plan-36
+
+The v5 test programs use the **same `World` / `Chunk` / `Cell`
+structures as plan-36's audience-generative-art demo**.  TTT's
+3×3 board sits inside the corner of one 32×32 chunk; per-cell
+payload is the same 4 bytes (1 byte colour + 1 byte height +
+2 bytes age).  Colour values are reinterpreted for TTT
+semantics:
+
+| Colour byte | TTT meaning | plan-36 meaning |
+|---|---|---|
+| 0 | empty cell | empty hex |
+| 1 | X | red |
+| 2 | O | green |
+| 3-9 | unused | other palette colours |
+
+`c_height` and `c_age` are present in the TTT cell but TTT can
+leave them at default (0) — the binary serialiser still writes
+them, the binary deserialiser still reads them, the wire format
+is byte-identical.  This means primitives developed against the
+TTT test programs **translate to plan-36 with zero protocol
+glue**: same struct definitions, same chunk addressing
+(`chunk_idx_32` / `hex_idx_32`), same blob-pack/unpack code,
+same session-tag header, same catch-up event shape.
+
+The TTT board reuses the demo's data model; the demo reuses
+TTT's proven wire infrastructure.
+
+### What v5 adds (over v3 / v4)
+
+Five new wire-protocol capabilities, each validated by its own
+text-mode test:
+
+1. **Binary WebSocket frames** in `lib/server` + `lib/web`.
+   Currently both libraries route text frames only.  v5 extends
+   `ws_send` / `ws_recv` (and the server-side equivalents) to
+   send and receive raw byte arrays alongside the existing text
+   path.
+2. **Session-tagged binary blobs.**  Server can emit multiple
+   binary frames sharing a session id (one word in the blob
+   header, monotonic per server restart).  Client buffers blobs
+   by session id and applies them as a unit, so a single
+   logical update that spans multiple chunks renders coherently
+   regardless of packet ordering.
+3. **N-client routing with active-player signalling.**  Server
+   tracks 30+ concurrent connections, holds per-client state,
+   and broadcasts world deltas + a periodic active-player
+   signal to all subscribers.  v2's two-client cap is lifted
+   and the routing pattern generalised.
+4. **Catch-up recovery on reconnect.**  Client tracks its
+   last-applied session id; on reconnect (or detected gap in
+   incoming session ids) it sends a JSON `catch_up` request
+   carrying that id.  Server replies with either replayed
+   missed deltas (if cached) or a fresh full-state snapshot,
+   under a single new session id the client renders as one
+   coherent update.
+5. **Sluggish-by-design world timings.**  Server runs a 10 Hz
+   tick that ages cells (state grows on placement events,
+   decays after a 5-minute base lifetime extended by per-
+   neighbour leases, removes after a 30-second decay window).
+   Validates that the server's tick loop is stable for hours
+   and that the timing constants produce the desired
+   inverse-growth aesthetic — even though the v5 test program
+   does not render anything 3D.
+
+### Test programs
+
+Each primitive ships with one text-mode test program small
+enough to fit in a single `.loft` file:
+
+| Test | What it proves |
+|---|---|
+| `t1_binary_ws.loft` | A 4-byte payload sent as a binary frame in one direction round-trips back unchanged through a binary echo handler.  Server side + client side both hit the new primitive |
+| `t2_session_blobs.loft` | Server emits 5 binary blobs sharing session id 7 then a single blob with session id 8.  Client logs "applied session 7 (5 blobs)" then "applied session 8 (1 blob)" — proves grouping works and the new-session-id flush triggers |
+| `t3_n_clients.loft` | Spawn 30 simulated clients all sending periodic input; server keeps all 30 alive for 5 minutes without dropping any; broadcasts a periodic active-player signal that all 30 receive |
+| `t4_catch_up.loft` | Client connects, applies sessions 1-5, then simulates a 30-second disconnect; on reconnect sends `{"type":"catch_up","last_session":5}`; server replies with replayed sessions 6-N or a fresh snapshot under a new session id; client logs that it caught up cleanly |
+| `t5_world_timings.loft` | Server runs a small synthetic world for 10 minutes at 10 Hz; logs cell counts at 1 / 5 / 6 / 11 / 12 minute marks; verifies isolated cells decay around the 5-minute mark + 30 s window, fully-surrounded cells survive past the 11-minute mark |
+
+The text-mode programs print short status lines that a wrap-
+suite test can grep to verify behaviour.  No visual output, no
+3D mesh, no JSON-events-vs-binary-blobs UI overlay — pure wire-
+protocol verification.
+
+### What v5 validates
+
+- **The complete wire-protocol surface plan-36 needs.**  Plan-36
+  (audience-generative-art demo) becomes a straightforward
+  consumer of proven primitives.  No protocol research happens
+  on the demo's critical path.
+- **`lib/server` + `lib/web` binary-frame extension** —
+  required by v4 also; v5 lands it first.
+- **Multi-client server stability** — pre-v5, the largest
+  validated configuration is v2's two-client cap.  v5 forces
+  the routing pattern to handle 30+ and reveals any per-
+  connection state leaks the smaller test missed.
+- **Tick-loop time-keeping under load** — a 10 Hz tick running
+  for 10+ minutes with 30 active clients exercises drift /
+  catch-up / pause handling that no shorter test surfaces.
+
+### Out of scope for v5
+
+- Any 3D rendering.  v5 ships text-mode tests; the demo's
+  renderer is plan-36's phase 3 work, layered on top of v5's
+  wire primitives.
+- Edge / line classification, frost mesh, ridge-and-crevice
+  tops — all renderer-side, all in plan-36's scope.
+- Visual UX (palette, movement zones, jump-to-active) —
+  plan-36's phase 0.
+- HTTP asset serving — that stays v3's concern.
+- Hot WASM swap — that stays v4's concern.
+
+### Sequencing relative to broader loft work
+
+v5 depends on:
+- v1's `<id>:payload` text protocol (still used for `catch_up`
+  and other JSON events alongside the new binary path).
+- The lifecycle-explicit `lib/server` API v2 documented (v5
+  forces v2's `ws_serve / pump` pattern to ship if it hasn't
+  yet).
+- No language features beyond what v1 already needed.
+
+v5 unblocks:
+- v4 (hot WASM swap) — inherits the binary-frame primitive
+  rather than rebuilding it.
+- Plan-36 phase 1 (server) and phase 0 (phone client binary
+  decoder) — both consume v5's primitives directly.
+
+### Build order recommendation
+
+Build v5 before v3 / v4 if the audience-demo deadline drives
+priority.  The v3/v4 progression (asset serving → hot WASM
+swap) is its own arc and can land in parallel or after.
+
 ---
 
 ## Cross-references
