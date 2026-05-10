@@ -230,13 +230,18 @@ moments.  CI-4 picks between hold-still and slow-orbit.
 
 ## Open design questions
 
-- **Build on `lib/moros_editor` or fresh?** — the world is 3D
-  with a per-hex height field, which moros editor already
-  supports (and `lib/graphics` underneath).  Strong recommend
-  fork the moros renderer + replace its manual-orbit camera with
-  the auto-camera here.  CI-3 confirms after a render-spike on
+- ~~**Build on `lib/moros_editor` or fresh?**~~ — RESOLVED
+  2026-05-10: **fork the lib/moros_editor renderer**.  Moros
+  editor already has a 3D hex-world renderer + camera +
+  lighting on top of `lib/graphics`.  This demo forks the
+  renderer module, swaps the manual-orbit camera for an
+  auto-camera (projector) or mouse-drag + WASD camera (desktop
+  client), and drops the wall / item / spawn-point gear that
+  this demo doesn't need.  Saves a lot of plumbing and reuses
+  tested code.  CI-3 confirms with a render-spike on
   representative geometry (~50 filled hexes, ~5 second growth in
-  flight).
+  flight) that the fork is the right shape before the projector
+  + desktop renderer code paths diverge.
 - **Crystal mesh shape — frost on cold glass** — crystals are
   not closed hulls.  Reference image: ice forming on a window
   pane — central spine + feathery branches + needle tips, mostly
