@@ -5,9 +5,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 14 — Tuple validation: full element × destination matrix
 
-**Status: phases 00 + 01 + 02 + 03 + 04 + 07 shipped.  Phase 02 —
-full matrix wiring done 2026-05-11; 5/5 e3 cells green.
-P212 panic fix shipped 2026-05-04 (recursive
+**Status: phases 00 + 01 + 02 + 03 + 04 + 05 + 07 shipped.
+Phase 02 — full matrix wiring done 2026-05-11; 5/5 e3 cells
+green.  P212 panic fix shipped 2026-05-04 (recursive
 `emit_tuple_put_ops`).  Two more bugs filed + closed during
 phase 02: P247 (nested-tuple text move in format strings) and
 P248 (element-of-element assignment).  Phase 03 — full matrix
@@ -28,8 +28,17 @@ the canonical shapes as regression guards and rejects the
 "copy + null" alternative.  Loop-iteration aliasing bug filed
 as P250 (stale FIRST-arg DbRef after `for { (q1, q2) =
 make_pair(pa, pb); }` re-enters scope) — separate dep-tracking
-fix, parked.  Full tuple_matrix suite: 33/33 green on both
-backends.  Phases 05-06 untouched; phase 08 still deferred.**
+fix, parked.  Phase 05 — D3 cells written 2026-05-11; 6/7 D3
+cells green (E1, E1 update, E1n, E2 with text element update,
+E3 nested, E5 struct-ref).  Decision: LIFT — already shipped
+by Plan-06 phase 4d (parser accepts tuple struct fields,
+storage routes through `__tuple<…>` synthetic struct positions).
+E4_d3 (closure-element tuple AS a struct field) blocked on
+P251 (native projection bug for fn-ref-tuple-in-struct-field
+write path; P196's projection fix didn't extend to the wrapping-
+tuple case) — cell parked.  Full tuple_matrix suite: 39/39
+green on both backends.  Phase 06 untouched; phase 08 still
+deferred.**
 
 ## Goal
 

@@ -5,7 +5,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 05 — D3 decision: tuples in struct fields
 
-**Status: open**
+**Status: shipped 2026-05-11.  6/7 D3 cells green on both backends
+(E1, E1 update, E1n, E2, E3, E5).  Decision: LIFT — already shipped
+by Plan-06 phase 4d, which removed the `Type::Tuple` rejection in
+`parse_field` and routes tuple-field storage through the synthetic
+`__tuple<…>` struct positions.  E4 (closure-element tuple AS A
+struct field) hits a separate native codegen projection bug — the
+runtime `(u32, DbRef)` fn-ref tuple needs `.0` projection before
+the `as i32` cast for the struct-field-write path, and P196's
+projection patch didn't extend to this nested case.  Filed P251;
+e4_d3 cell parked behind it.**
 
 ## Goal
 
@@ -23,13 +32,37 @@ If kept: the phase records the rationale (compile error stays in
 place; the matrix marks every D3 cell as `CLOSED:rationale`) and the
 plan closes one phase early.
 
-## Decision (filled in during phase 05)
+## Decision (recorded 2026-05-11)
 
-> **Decision:** _to be recorded here at the start of the phase_ —
-> Lift T1.11a (implement tuple struct fields) or Keep the rejection
-> (close as design decision).  Reviewer sign-off date: ____.
+> **Decision: LIFT** — already shipped by Plan-06 phase 4d.
+> Reviewer sign-off date: 2026-05-11.
 >
-> Rationale: ____.
+> **Rationale:** the lift was implemented on a prior arc.  The
+> rejection in `src/parser/definitions.rs::parse_field` was
+> already removed; struct field types of `Type::Tuple` route
+> through `parser/mod.rs::set_field_check`'s Tuple arm
+> (line 2372) which emits per-element write ops at the
+> synthetic `__tuple<…>` struct's element positions, and field
+> READS go through `get_val`'s Tuple arm using the same offset
+> table.  The phase 05 spike was therefore a verification pass:
+> instantiate, read, update (whole-tuple and per-element),
+> nested, with `text` / `Reference` / `integer not null` /
+> mixed elements — all observed identical between interpreter
+> and `--native`.
+>
+> The "Keep" alternative was already foreclosed by the prior
+> lift; reverting it would break `tests/parse_errors.rs:797-803`
+> (which documents the lifted state) and the `__tuple<…>` storage
+> machinery already exercised by P189b's vector-of-tuple element
+> access.
+>
+> **E4 (closure as a tuple-element of a struct field) corollary:**
+> P251 opens a follow-up for the native projection bug surfaced
+> during this phase — the codegen path that writes a tuple
+> containing a fn-ref into a struct field doesn't project the
+> runtime `(u32, DbRef)` fn-ref tuple's `.0` before the `as i32`
+> cast (P196 only fixed the direct fn-ref-as-struct-field path,
+> not the wrapping-tuple case).  E4_d3 cell parks behind P251.
 
 ## Feasibility spike (precedes any larger commit)
 

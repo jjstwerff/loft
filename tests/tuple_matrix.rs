@@ -541,3 +541,115 @@ cross_mode!(
 // The single-call shapes above lock today's correct behaviour as a
 // regression guard; the loop case lands as a follow-up cell when
 // P250 closes.
+
+// ── Phase 05 — destination 3 (tuples in struct fields) ───────────────────────
+//
+// **Decision: LIFT** (already shipped — Plan-06 phase 4d removed
+// the `Type::Tuple` rejection in `parse_field`; tuple fields now
+// lay out their elements inline using the synthetic `__tuple<…>`
+// struct's positions).  Pre-flight pass on E1, E1n, E2, E3, E5
+// shapes (read, whole-tuple update, single-element update, nested,
+// (text, text), (Reference, Reference)) all green on both backends.
+//
+// E4 (closure-typed tuple element STORED in a struct field, then
+// CALLED via `s.field.0(args)`) hits a separate fn-ref-via-
+// struct-field-via-tuple-element dispatch bug — interp panics with
+// `index out of bounds` in `database/allocation.rs:162`, native
+// rejects with rustc E0308/E0605 from a tuple-vs-i64 cast.  Filed
+// P251.  E4_d3 cell here is STORE-ONLY (mirrors the e4_d1_closure_local
+// pattern) and locks the read side; the call shape lands as a
+// follow-up cell when P251 closes.
+
+cross_mode!(
+    e1_d3_field_int_int,
+    r#"
+    struct S { t: (integer, integer) }
+    fn test() {
+        s = S { t: (3, 7) };
+        print("{s.t.0},{s.t.1}\n");
+        assert(s.t.0 == 3 && s.t.1 == 7, "e1_d3_field_int_int");
+    }
+    "#
+);
+
+cross_mode!(
+    e1_d3_field_update,
+    r#"
+    struct S { t: (integer, integer) }
+    fn test() {
+        s = S { t: (3, 7) };
+        // whole-tuple write to the field
+        s.t = (10, 20);
+        print("{s.t.0},{s.t.1}\n");
+        assert(s.t.0 == 10 && s.t.1 == 20, "field whole-tuple update");
+        // single-element write through the field
+        s.t.0 = 99;
+        print("{s.t.0},{s.t.1}\n");
+        assert(s.t.0 == 99 && s.t.1 == 20, "field element update");
+    }
+    "#
+);
+
+cross_mode!(
+    e1n_d3_field_intnotnull_bool,
+    r#"
+    struct S { t: (integer not null, boolean) }
+    fn test() {
+        s = S { t: (42, true) };
+        print("{s.t.0},{s.t.1}\n");
+        assert(s.t.0 == 42 && s.t.1, "e1n_d3_field_intnotnull_bool");
+    }
+    "#
+);
+
+cross_mode!(
+    e2_d3_field_text_text,
+    r#"
+    struct S { t: (text, text) }
+    fn test() {
+        s = S { t: ("hello", "world") };
+        print("{s.t.0},{s.t.1}\n");
+        assert(s.t.0 == "hello" && s.t.1 == "world", "field read");
+        // single-element text update
+        s.t.0 = "X";
+        print("{s.t.0},{s.t.1}\n");
+        assert(s.t.0 == "X" && s.t.1 == "world", "field text element update");
+    }
+    "#
+);
+
+cross_mode!(
+    e3_d3_field_nested,
+    r#"
+    struct S { t: ((integer, integer), boolean) }
+    fn test() {
+        s = S { t: ((1, 2), true) };
+        print("{s.t.0.0},{s.t.0.1},{s.t.1}\n");
+        assert(s.t.0.0 == 1 && s.t.0.1 == 2 && s.t.1, "e3_d3_field_nested");
+    }
+    "#
+);
+
+// e4_d3_field_closure_local INTENTIONALLY OMITTED — even
+// STORE-ONLY (`s.t.1` read-back of a `(fn(integer)->integer,
+// integer)` field) fails native compilation with rustc E0605
+// `(u32, DbRef) as i32`: the codegen for storing a tuple
+// containing a fn-ref element INTO a struct field doesn't
+// project `.0` from the runtime fn-ref tuple before the
+// `as i32` cast (P196 fix didn't reach this path).  Filed
+// P251.  Cell lands when P251 closes.
+
+cross_mode!(
+    e5_d3_field_struct_ref,
+    r#"
+    struct P { v: integer }
+    struct Pair { t: (P, P) }
+    fn test() {
+        a = P { v: 10 };
+        b = P { v: 20 };
+        pair = Pair { t: (a, b) };
+        print("{pair.t.0.v},{pair.t.1.v}\n");
+        assert(pair.t.0.v == 10 && pair.t.1.v == 20, "e5_d3_field_struct_ref");
+    }
+    "#
+);
