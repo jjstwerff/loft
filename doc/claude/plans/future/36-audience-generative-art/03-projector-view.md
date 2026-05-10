@@ -333,11 +333,12 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   renderer-side constant tunable at first prototype; presenter
   override always available to lock the camera if a quiet
   moment wants to read as deliberate stillness.
-- **Recently-changed pulse** — every changed cell pulses, or
-  only audience-driven changes (not generation-driven growth)?
-  Pulsing every cell distracts from the growth aesthetic;
-  pulsing only audience changes makes it clear what the audience
-  is doing.  Recommend audience-only.
+- ~~**Recently-changed pulse**~~ — RESOLVED 2026-05-10:
+  **audience changes only**.  Pulses fire on placement / erase
+  events that came from audience taps and swipes; decay-removals
+  do **not** pulse.  Makes audience-driven activity visually
+  distinct from the autonomous decay rule and prevents the
+  screen from constantly twinkling as old cells die.
 
 ## Deliverable
 
