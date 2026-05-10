@@ -1,0 +1,89 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TTT v5 — t2 server.  Session-tagged binary blobs.
+//
+// Sends 5 blobs with session id 7, then 1 blob with session id 8, in
+// order, each as its own binary frame.  Each blob is 9 bytes:
+//
+//   [type:u8] [session:u32-LE] [color:u8] [height:u8] [age:u16-LE]
+//
+// The 4-byte payload mirrors the v5 Cell shape (lib/world::Cell).
+// Type byte: 2 = world_delta (per the v5 wire-format table).
+// Session id is what the client uses to flush + apply a coherent
+// group; t2 validates that the new-session-id transition triggers
+// flush.
+//
+// Stdout shape:
+//   v5-t2: listening port=<n>
+//   v5-t2: upgraded
+//   v5-t2: sent session=7 blobs=5
+//   v5-t2: sent session=8 blobs=1
+//   v5-t2: done
+
+use server;
+use web;
+
+TYPE_DELTA = 2;
+
+fn send_blob(ws: server::WebSocket, kind: integer, session: integer,
+             color: integer, height: integer, age: integer) -> boolean {
+  web::pack_reset();
+  web::pack_u8(kind);
+  web::pack_u32_le(session);
+  web::pack_u8(color);
+  web::pack_u8(height);
+  web::pack_u16_le(age);
+  ws.send_binary(web::pack_take())
+}
+
+fn main() {
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 18092 } else { port_raw as integer };
+
+  srv = server::listen(port);
+  if srv.handle < 0 {
+    println("v5-t2: bind-failed port={port}");
+    return;
+  }
+  println("v5-t2: listening port={port}");
+
+  req = srv.next();
+  if req == null { println("v5-t2: accept-failed"); return; }
+
+  ws = server::ws_upgrade();
+  if ws == null { println("v5-t2: upgrade-failed"); return; }
+  println("v5-t2: upgraded");
+
+  // Five blobs sharing session id 7 — payload bytes vary so the
+  // client can confirm each blob is a distinct frame, not a single
+  // frame the kernel coalesced.
+  for sb_i in 0..5 {
+    sb_color = 1 + sb_i;       // 1,2,3,4,5
+    sb_height = 10 + sb_i;     // 10,11,12,13,14
+    sb_age = 100 + sb_i;       // 100..104
+    if !send_blob(ws, TYPE_DELTA, 7, sb_color, sb_height, sb_age) {
+      println("v5-t2: send-failed session=7 i={sb_i}");
+      return;
+    }
+    // Tiny pacing so the kernel emits each blob as its own WS frame
+    // rather than coalescing the writes into one big frame the
+    // receiver can't split (loft's framer is one-frame-per-recv).
+    web::sleep_ms(5);
+  }
+  println("v5-t2: sent session=7 blobs=5");
+
+  // One blob with session id 8 — triggers the new-session-id
+  // transition on the client.
+  if !send_blob(ws, TYPE_DELTA, 8, 9, 20, 200) {
+    println("v5-t2: send-failed session=8");
+    return;
+  }
+  println("v5-t2: sent session=8 blobs=1");
+
+  // Settle window before close so the client drains both sessions.
+  web::sleep_ms(100);
+  ws.close();
+  srv.close();
+  println("v5-t2: done");
+}

@@ -217,3 +217,55 @@ pub fn close(self: WsHandler) {
 // equivalent.
 pub fn sleep_ms(ms: integer);
 #native "n_sleep_ms"
+
+// --- Binary buffer construction (TTT v5 + plan-36) ---
+//
+// Loft `text` is a UTF-8 byte buffer; a NUL byte (codepoint 0) is the
+// `character` null sentinel, so a `text` built via `"{c}{c}…"`
+// interpolation silently drops zero bytes.  Binary protocols that
+// include zero bytes (e.g. the v5 5-byte blob header `[type:u8]
+// [session:u32-LE]` for any small session id) cannot be assembled
+// that way.
+//
+// `pack_*` are a thread-local builder pattern: `pack_reset()` empties
+// the buffer, `pack_u8` / `pack_u16_le` / `pack_u32_le` append fields
+// by type, and `pack_take()` returns a `text` whose bytes carry the
+// binary payload verbatim — NUL bytes preserved.  The buffer survives
+// across calls within a single thread; reset before each blob.  The
+// returned `text` lives until the next `pack_take()`, so `send_binary`
+// it (or copy it) before reusing the builder.
+//
+// On the receive side, `byte_at(t, i)` returns the single byte at
+// offset `i` of `t` (regardless of UTF-8 interpretation).  Use it to
+// decode binary frames returned by `try_recv` / `pump` field-by-field.
+
+// Empty the per-thread pack buffer.  Call before each blob.
+pub fn pack_reset();
+#native "n_pack_reset"
+
+// Append a single byte to the pack buffer.  `b` is masked to 8 bits.
+pub fn pack_u8(b: integer);
+#native "n_pack_u8"
+
+// Append a 2-byte little-endian unsigned value.
+pub fn pack_u16_le(v: integer);
+#native "n_pack_u16_le"
+
+// Append a 4-byte little-endian unsigned value.  Loft `integer` is
+// i32 — bit-cast to u32 to preserve the LE byte pattern across the
+// sign boundary.
+pub fn pack_u32_le(v: integer);
+#native "n_pack_u32_le"
+
+// Take the contents of the pack buffer and return them as a `text`
+// whose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer.
+pub fn pack_take() -> text;
+#native "n_pack_take"
+
+// Read the byte at `idx` of the text payload.  Out-of-range (negative
+// or past the end) returns -1.  Use to decode binary frames received
+// via `try_recv` / `pump`.  Argument order is (idx, t) — the C-ABI
+// auto-marshal in src/extensions.rs supports (I32, Text) -> I32 but
+// not (Text, I32) -> I32.
+pub fn byte_at(idx: integer, t: text) -> integer;
+#native "n_byte_at"

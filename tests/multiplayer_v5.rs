@@ -248,6 +248,17 @@ fn spawn_client(client_script: &str, port: u16) -> Child {
     cmd.spawn().expect("failed to spawn loft v5 client")
 }
 
+/// Convenience: spawn server + wait for its "listening port=N"
+/// marker, panic with a useful diagnostic if it doesn't appear.
+fn spawn_listening_server(script: &str, port: u16, label: &str) -> ServerGuard {
+    let mut s = ServerGuard::spawn(script, port);
+    if !s.wait_listening() {
+        let diag = s.diagnose_listen_failure();
+        panic!("{label} server failed to start within 60s{diag}");
+    }
+    s
+}
+
 // ── t1: 4-byte binary frame round-trip ──────────────────────────────────
 
 /// Validates that `send_binary` + `last_opcode` compose end-to-end
@@ -262,11 +273,7 @@ fn spawn_client(client_script: &str, port: u16) -> Child {
 #[test]
 fn v5_t1_binary_round_trip() {
     let port = pick_free_port();
-    let mut server = ServerGuard::spawn("v5_t1_binary_server.loft", port);
-    if !server.wait_listening() {
-        let diag = server.diagnose_listen_failure();
-        panic!("v5-t1 server failed to start within 60s{diag}");
-    }
+    let mut server = spawn_listening_server("v5_t1_binary_server.loft", port, "v5-t1");
 
     let client = spawn_client("v5_t1_binary_client.loft", port);
     let (out, status) = drain_with_timeout(client, Duration::from_secs(30));
@@ -286,5 +293,50 @@ fn v5_t1_binary_round_trip() {
     assert!(
         out.contains("v5-t1c: recv opcode=2"),
         "v5-t1 client received non-binary opcode; client stdout=\n{out}"
+    );
+}
+
+// ── t2: session-tagged binary blobs ────────────────────────────────────
+
+/// Server sends 5 binary blobs with session id 7, then 1 with
+/// session id 8.  Client groups by session id (flushing on every
+/// session-change) and reports "applied session=N blobs=M" for each.
+/// Validates:
+///   - lib/web pack_u8 / pack_u32_le / pack_u16_le / pack_take build
+///     the wire bytes correctly (NUL bytes preserved past the
+///     character-null-sentinel limitation of `text` interpolation)
+///   - lib/web byte_at decodes individual bytes from the inbound
+///     binary text payload
+///   - the new-session-id transition triggers a flush on the client
+///   - no blobs are coalesced or dropped (5 + 1, not 4 + 1 or 5 + 0)
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "P229b: server cannot bind on Windows CI"
+)]
+#[test]
+fn v5_t2_session_blob_grouping() {
+    let port = pick_free_port();
+    let mut server = spawn_listening_server("v5_t2_session_blobs_server.loft", port, "v5-t2");
+
+    let client = spawn_client("v5_t2_session_blobs_client.loft", port);
+    let (out, status) = drain_with_timeout(client, Duration::from_secs(30));
+
+    let server_out = server.snapshot_stdout();
+    assert_eq!(
+        status,
+        Some(0),
+        "v5-t2 client did not exit cleanly; client stdout=\n{out}\n--- server stdout:\n{server_out}"
+    );
+    assert!(
+        out.contains("v5-t2c: ok"),
+        "v5-t2 client did not reach the success line; client stdout=\n{out}\n--- server stdout:\n{server_out}"
+    );
+    assert!(
+        out.contains("v5-t2c: applied session=7 blobs=5"),
+        "v5-t2 client did not flush session 7 with 5 blobs; client stdout=\n{out}"
+    );
+    assert!(
+        out.contains("v5-t2c: applied session=8 blobs=1"),
+        "v5-t2 client did not flush session 8 with 1 blob; client stdout=\n{out}"
     );
 }
