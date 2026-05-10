@@ -1089,6 +1089,24 @@ makes it cooperative.
 multiple priority lanes.  A 30-client × 10 Hz audience-demo
 server runs on one thread.
 
+### Beyond YIELD.* — Python-parity gaps (second wave)
+
+Three additions complete async/await-shape parity with
+Python's `asyncio`, with the bonus that loft keeps its
+no-function-coloring property throughout.  Each builds on
+YIELD.1-5; cancellation is the keystone (the other two are
+combinators on top).
+
+| Phase | Adds | Python equivalent | Effort |
+|---|---|---|---|
+| **CANCEL.1** | `cancel(coro)` builtin → flips a per-coroutine flag the state-machine driver checks at every yield point; loft's existing scope-exit + dep-tracking handles cleanup automatically | `task.cancel()` + `CancelledError` propagation | S-M |
+| **CONCUR.1** | `concurrent { a(); b(); c(); }` block — single-threaded interleaving of coroutines on the EventLoop; sibling cancel on first panic / first done | `async with asyncio.TaskGroup() as tg: …` | M |
+| **TIMEOUT.1** | `select(a, b)` combinator + `timer(ms)` one-shot iterator + `timeout(ms, coro)` desugar; pure-loft on top of CANCEL + iterators | `await asyncio.wait_for(coro, 5)` | S |
+
+Order: CANCEL.1 → CONCUR.1 → TIMEOUT.1.  TIMEOUT.1 is pure-loft
+once CANCEL.1 lands.  No new runtime primitives beyond YIELD.*
+— everything else is codegen + stdlib.
+
 **Recommendation:** ship Phase 1 ASAP; design beyond Phase 2 only
 as Phase 1's real friction reveals what's actually needed.  The
 abstract design in this document and EVENT_LOOP_DISCUSSION.md is
