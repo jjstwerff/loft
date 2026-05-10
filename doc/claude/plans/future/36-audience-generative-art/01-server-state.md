@@ -205,10 +205,12 @@ heartbeat.)
 - **Delta vs full-snapshot** — every tick send a delta and
   occasionally a full snapshot?  Or always delta + new clients
   receive a snapshot on connect?  Recommend delta-always + snapshot-on-connect.
-- **Persistence** — does the world survive a server restart?
-  Probably no for the talk; restart wipes the canvas, which is a
-  feature ("watch round 2 grow from blank").  Add a `--persist`
-  flag if useful for unattended installations later.
+- ~~**Persistence**~~ — RESOLVED 2026-05-10: no persistence
+  needed.  The decay rule self-cleans the data structures over
+  time; a crash-recovery restart from blank produces the same
+  end-state the decay rule would have produced anyway given
+  enough time.  No `--persist` flag, no snapshot file, no
+  startup-restore path.
 - **Bandwidth ceiling** — at 10 Hz × N clients × M cells/tick,
   does this saturate venue WiFi?  Phase 4 hosting deals with the
   network plane; phase 1 measures the volume.

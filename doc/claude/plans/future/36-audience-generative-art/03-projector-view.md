@@ -118,9 +118,12 @@ hard switch.
 
 Per-cell rendering rules:
 
-- **Empty hex (background)**: black fill, slightly lighter outline
-  so the hex lattice is always visible — even on a blank world.
-  No mesh geometry.
+- **Empty hex (background)**: NOT rendered.  The projector is the
+  pure spectacle — only filled-hex crystals appear; empty regions
+  read as the dark background of the venue, not as an outlined
+  lattice.  The base hex grid is **not visible on the projector**
+  (the desktop client renders it, but the projector does not).
+  This keeps the auditorium's gaze on the crystal mesh.
 - **Filled hex (crystal)**: mesh built from triangles, each
   triangle a **single solid palette colour with a hard edge** to
   its neighbours.  No gradients, no per-pixel mixing, no alpha
@@ -170,10 +173,12 @@ the remainder of its lifetime.
 
 ### Visible structure on an empty world
 
-Even before any seeds are placed, the projector shows the hex
-lattice as a flat grid of outlined black hexes — the room sees a
-structured canvas, not a void.  The first tap raises the first
-crystal point.
+A blank world reads as a dark stage — no hex lattice on the
+projector.  The first audience tap raises the first crystal,
+which is the first thing the room sees on the screen.  This
+deliberately contrasts with the desktop client (which always
+shows the base lattice) and the phone client (which IS the flat
+lattice).  The projector is reserved for crystals.
 
 ## Auto-camera
 

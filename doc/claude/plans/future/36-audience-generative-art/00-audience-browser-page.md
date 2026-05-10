@@ -28,11 +28,20 @@ target height fits an unzoomed phone portrait viewport.
 A **9 × 7 roughly-square hex pattern** showing the user's local
 window into the much larger shared world.
 
-Each hex has a visible outline.  Empty hexes are filled with
-**black**; painted hexes are filled with their palette colour.
-The outline is a slightly lighter shade (e.g. dark grey) so the
-grid lattice is always legible — even on an entirely empty world,
-the audience sees a structured canvas, not a void.
+The phone is **2D pure orthogonal fixed hex grid** — no
+perspective, no 3D crystal mesh, no rotation.  Each hex is drawn
+as a flat top-down hex with a fixed orientation.  Filled hexes
+take their palette colour; empty hexes are filled with black.
+Each hex has a visible outline in a slightly lighter shade
+(e.g. dark grey) so the grid lattice stays legible — even on an
+entirely empty world the audience member sees a structured
+canvas, not a void.
+
+The phone deliberately does **not** render the 3D crystal
+animation, growth tilts, or ridge-and-crevice tops.  Those live
+on the projector and the desktop client; the phone is the
+smallest possible flat paint surface so it stays responsive on
+modest hardware and reads instantly.
 
 The two outer rings of the hex pattern double as a movement
 control:
