@@ -242,15 +242,16 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   representative geometry (~50 filled hexes, ~5 second growth in
   flight) that the fork is the right shape before the projector
   + desktop renderer code paths diverge.
-- **Crystal mesh shape — frost on cold glass** — crystals are
-  not closed hulls.  Reference image: ice forming on a window
-  pane — central spine + feathery branches + needle tips, mostly
-  negative space.  Tops are ridge-and-crevice (never flat
-  plates).  Open question: pick the procedural-frost generator
-  (single-spine + perpendicular branches?  recursive dendrite?
-  symmetric vs. asymmetric branching?) at CI-3 after a render-
-  spike.  Keep triangle counts low enough that a busy world
-  (~500 filled hexes) still hits frame budget.
+- ~~**Crystal mesh shape — frost on cold glass**~~ — RESOLVED
+  2026-05-10: **recursive dendrite generator**.  Each crystal
+  is a branching tree — central spine extrudes upward,
+  secondary branches fork at angles, tertiary needles fork off
+  those.  Depth budget (suggested 3 levels) caps triangle count.
+  Symmetric vs. asymmetric branching is a remaining tuning
+  knob: pick at CI-3 after a render-spike on representative
+  geometry.  Keep triangle counts low enough that a busy world
+  (~500 filled hexes) still hits frame budget; reduce depth
+  level dynamically if the budget is exceeded.
 - **Edge / line detection — exact classifier** — needs to
   reliably distinguish dotted-line vs 1-wide vs 2-wide line vs
   blob, return a tangent direction + curvature for each
