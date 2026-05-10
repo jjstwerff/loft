@@ -116,7 +116,7 @@ on the same connection:
 
 | Direction | Format | Used for |
 |---|---|---|
-| client → server | JSON text | All input events: `seed`, `clear`, `color_select`.  Small, low frequency (per-tap), human-readable on the wire for debug |
+| client → server | JSON text | All input events: `seed`, `clear`, `color_select`, `swipe` (single drag → one batched event with the full cell list).  Small, low frequency, human-readable on the wire for debug.  No binary needed on the input side — even drag gestures fit comfortably in JSON |
 | server → client | JSON text | Small events: `active_player_signal`, control / status |
 | server → client | **Binary blob** | Bulk world data — `world_snapshot` (sent on connect, full chunk dump) and large `world_delta` payloads.  Naturally packs at 4 bytes per cell using the `Cell` payload (1 byte colour + 1 byte height + 2 bytes age) plus a small per-chunk header (cx, cz + cell-count).  Each blob carries a **session id** in its header — primarily useful for the **initial snapshot**, which the server splits across one blob per chunk so a new client's view does not block on serialising the entire world into a single frame |
 
@@ -142,6 +142,34 @@ single frame and don't need session grouping.  The session id
 is included in their header anyway (cheap; one word) so the
 client logic stays uniform across snapshot + delta paths.
 
+### Catch-up mode
+
+A client with connection problems (dropped packets, network
+blip, reconnect after a brief outage) can fall behind the
+session id stream.  The client detects this when it sees a gap
+in incoming session ids or no delta arrives within a watchdog
+window.  Recovery:
+
+1. Client sends a JSON `catch_up` request with its last-known
+   session id (the most recent one it fully applied).
+2. Server picks the cheaper response:
+   - **If the missed range is small + still in the server's
+     short delta-cache**: replay the missed `world_delta`
+     blobs in order, all sharing the catch-up session id so
+     the client buffers them as one.
+   - **Otherwise**: send a fresh `world_snapshot` (one blob
+     per chunk under a new session id) — the same path used
+     for a brand-new client.
+
+The client treats the catch-up payload exactly like a normal
+session: buffer all blobs sharing the session id, render as one
+coherent update.  No special render path; recovery is a
+configuration of the same primitives.
+
+```json
+{ "type": "catch_up", "last_session": <session_id> }
+```
+
 Event-side JSON stays small enough that text encoding cost is
 negligible and the wire stays human-readable for the talk
 ("here is a `seed` event going to the server, this is exactly
@@ -151,10 +179,11 @@ what your tap sent").
 
 | Event type | Server action |
 |---|---|
-| `seed` | Append to `cells` if empty; if hex was own-color, treat as removal; if hex was other-color, ignore.  Update `player.color` + `last_active_*`.  Add active-player signal entry |
-| `clear` | Clear active color on the player (no world change) |
+| `seed` | Set the cell's `c_color` if empty; if hex was own-color, treat as removal (set to 0); if hex was other-color, ignore.  Reset `c_age` to 0.  Update `player.last_active_*`.  Add active-player signal entry |
+| `swipe` | Apply the same logic as `seed` for each cell in the batch list (with the same semantics for own / other / empty).  Single delta tick covers the whole gesture |
+| `clear` | Set the cell's `c_color` to 0 (empty) following the same own / other / empty rules as `seed` |
 | `color_select` | Update `player.color` and broadcast active-player signal |
-| `connect` (implicit on WS open) | Assign player_id, broadcast initial world snapshot |
+| `connect` (implicit on WS open) | Assign player_id, send initial world snapshot (binary, session-tagged across one blob per chunk) |
 | `disconnect` (implicit on WS close) | Mark player inactive but keep their cells |
 
 ## Tick loop

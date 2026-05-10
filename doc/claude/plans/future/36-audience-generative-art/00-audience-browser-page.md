@@ -111,21 +111,42 @@ The outer-ring movement composes with swipe gestures: a player can
 draw arbitrarily long lines by swiping toward an edge and letting
 the world scroll under their finger.
 
+## Connection-loss recovery
+
+If the client detects it has fallen behind (gap in incoming
+session ids, or no delta within a watchdog window), it sends a
+JSON `catch_up` event with its last-known session id.  The
+server replies with either replayed deltas or a fresh
+world_snapshot, all under a single new session id which the
+client buffers and renders as one coherent update.  No special
+render path — recovery uses the same primitives as a normal
+connect.
+
+```json
+{ "type": "catch_up", "last_session": <session_id> }
+```
+
 ## WebSocket events (client → server)
 
-Locked at CI-0 in the parent README.  First cut:
+Locked at CI-0 in the parent README.  First cut, all JSON text
+frames (no binary needed on the input side — single taps and
+even drag-swipes fit comfortably in JSON):
 
 ```json
 { "type": "seed",  "x": <q>, "y": <r>, "color": <1..9> }
 { "type": "clear", "x": <q>, "y": <r> }
+{ "type": "color_select", "color": <1..9> }
+{ "type": "swipe", "color": <1..9>, "cells": [ {"x": q, "y": r}, ... ] }
 ```
 
 `color` is the palette index (1-9 from the table above).  The
 server treats a `clear` event as setting the cell to colour
-**0** (empty).  `<q>`, `<r>` are world hex coordinates (axial),
-not local view coordinates.  The client translates
-view-coordinates → world coordinates using its current pan
-offset.
+**0** (empty).  A `swipe` is a single batched event covering an
+entire drag gesture — one frame instead of one per cell crossed,
+keeping the input-side wire volume modest.  `<q>`, `<r>` are
+world hex coordinates (axial), not local view coordinates.  The
+client translates view-coordinates → world coordinates using its
+current pan offset.
 
 ## WebSocket events (server → client)
 
