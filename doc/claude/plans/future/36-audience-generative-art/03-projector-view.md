@@ -266,12 +266,13 @@ moments.  CI-4 picks between hold-still and slow-orbit.
     5-point fit?), how fast the classifier converges when
     audience input changes the local shape (per frame? per
     server tick?).
-- **Aesthetic-swing window length** — when a cell crosses the
-  thin-line ↔ blob boundary, the interpolation window decides
-  how long the visible transition takes.  Too short = pops; too
-  long = the audience can fill the area before the transition
-  completes and the visual lags behind reality.  First cut:
-  ~1 second, tune at CI-3.
+- ~~**Aesthetic-swing window length**~~ — RESOLVED 2026-05-10
+  at **~2 seconds**.  Cinematic; the swing reads as a longer-
+  form motion through the cluster, matching the ~5 s growth
+  animation tempo.  Trade-off accepted: audience filling an
+  area faster than 2 s will see the visual lag behind reality
+  for the duration of the swing.  Re-tune at CI-3 if rehearsal
+  shows the lag feels disconnected.
 - **Triangle-colour mix ratios** — exact share for self vs
   1-away vs 2-away (each triangle is one solid palette colour;
   this picks how many of the crystal's triangles fall into each
