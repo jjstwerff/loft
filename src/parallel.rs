@@ -1811,7 +1811,12 @@ impl WorkerPool {
 // See `run_parallel_direct` for the threading-vs-non-threading split rationale.
 // (dead_code already allowed above — only needless_pass_by_value is feature-gated.)
 #[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
-pub fn run_parallel_block(stores: &Stores, program: WorkerProgram, arm_positions: &[u32]) {
+pub fn run_parallel_block(
+    stores: &Stores,
+    program: WorkerProgram,
+    arm_positions: &[u32],
+    parent_snapshot: &Arc<Vec<u8>>,
+) {
     if arm_positions.is_empty() {
         return;
     }
@@ -1822,9 +1827,10 @@ pub fn run_parallel_block(stores: &Stores, program: WorkerProgram, arm_positions
             for &pos in arm_positions {
                 let worker_stores = stores.clone_for_worker();
                 let prog = Arc::clone(&program);
+                let snapshot = Arc::clone(parent_snapshot);
                 s.spawn(move || {
                     let mut state = prog.new_state(worker_stores);
-                    state.execute_at_void(pos);
+                    state.execute_at_void_with_snapshot(pos, &snapshot);
                 });
             }
         });
@@ -1834,7 +1840,7 @@ pub fn run_parallel_block(stores: &Stores, program: WorkerProgram, arm_positions
         // Sequential fallback (WASM or threading disabled).
         for &pos in arm_positions {
             let mut state = program.new_state(stores.clone_for_worker());
-            state.execute_at_void(pos);
+            state.execute_at_void_with_snapshot(pos, parent_snapshot.as_ref());
         }
     }
 }

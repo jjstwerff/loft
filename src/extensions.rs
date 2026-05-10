@@ -418,16 +418,25 @@ fn native_auto_dispatch(stores: &mut crate::database::Stores, stack: &mut crate:
     // Read the current library index from the thread-local.
     let lib_idx = CURRENT_LIB_IDX.with(std::cell::Cell::get);
 
-    let guard = NATIVE_SIGS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let sig_table = guard.as_ref().expect("NATIVE_SIGS not initialized");
-    let (sym, sig) = match sig_table.get(&lib_idx) {
-        Some(entry) => entry,
-        None => panic!("no signature for lib_idx {lib_idx}"),
+    // P245: clone the (sym, sig) entry out of NATIVE_SIGS and DROP the
+    // mutex guard before invoking the native function.  The native fn
+    // may block (e.g. `n_tcp_accept` waits in `listener.accept()`) —
+    // holding the guard across the call serialises every parallel arm
+    // that calls into native code, manifesting as a hang on the
+    // sibling worker.  The Mutex is now used only for the table
+    // lookup itself, never for the call.
+    let (sym, sig) = {
+        let guard = NATIVE_SIGS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sig_table = guard.as_ref().expect("NATIVE_SIGS not initialized");
+        match sig_table.get(&lib_idx) {
+            Some((s, sg)) => (s.clone(), sg.clone()),
+            None => panic!("no signature for lib_idx {lib_idx}"),
+        }
     };
 
-    let fp = unsafe { get_native_fn_raw(sym) }.unwrap_or_else(|| {
+    let fp = unsafe { get_native_fn_raw(&sym) }.unwrap_or_else(|| {
         panic!("native symbol '{sym}' not loaded");
     });
 

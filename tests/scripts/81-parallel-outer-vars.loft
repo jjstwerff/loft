@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// P245 regression guard — `parallel { }` arms must observe outer-scope
+// variables at their declared values.  Pre-fix the worker's stack was
+// empty when the arm body ran, so reads at the parent's frame offsets
+// returned 0 / garbage; arm bodies that called fns with outer-scope
+// args (`server_arm(port)`) saw the args as 0.
+
+// Forwards `n` so the parallel arm has work to do; the arm-body
+// codegen reads `n` (the call argument) from the parent's frame
+// position — this is the read that returned 0 pre-P245-fix.
+fn forward(n: integer) -> integer {
+  assert(n == 42, "arm received outer var unchanged: got {n}");
+  n
+}
+
+fn main() {
+  outer = 42;
+  parallel {
+    forward(outer);
+    forward(outer);
+  }
+  // After the parallel block completes, the parent's outer is
+  // unchanged (each arm's writes go to its own worker stack).
+  assert(outer == 42, "outer var preserved across parallel block");
+}

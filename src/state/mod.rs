@@ -1343,12 +1343,29 @@ impl State {
 
     /// `parallel {}` — spawn threads for all recorded arms and join.
     /// Each arm runs as a void function at its bytecode position.
+    ///
+    /// P245: captures the parent's stack contents (offsets 4..stack_pos)
+    /// as a snapshot and hands it to each worker.  This lets arm
+    /// bodies reference outer-scope variables — the arm's bytecode
+    /// addresses them at offsets that match the parent's layout, and
+    /// without the snapshot the worker reads garbage from an empty
+    /// stack.  Arms still get isolated `Stores` clones, so writes
+    /// inside an arm don't propagate back to the parent.
     pub fn parallel_join(&mut self) {
         let positions: Vec<u32> = self
             .parallel_arm_positions
             .drain(..)
             .map(|off| self.code_pos + u32::from(off))
             .collect();
+        let parent_snapshot: Arc<Vec<u8>> = if self.stack_pos > 4 {
+            let store = self.database.store(&self.stack_cur);
+            let ptr = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + 4);
+            let len = (self.stack_pos - 4) as usize;
+            let bytes = unsafe { std::slice::from_raw_parts(ptr, len).to_vec() };
+            Arc::new(bytes)
+        } else {
+            Arc::new(Vec::new())
+        };
         let program = crate::parallel::WorkerProgram {
             bytecode: Arc::clone(&self.bytecode),
             library: Arc::clone(&self.library),
@@ -1357,7 +1374,7 @@ impl State {
             fn_positions: Arc::new(self.fn_positions.clone()),
             line_numbers: Arc::new(self.line_numbers.clone()),
         };
-        crate::parallel::run_parallel_block(&self.database, program, &positions);
+        crate::parallel::run_parallel_block(&self.database, program, &positions, &parent_snapshot);
     }
 
     pub fn get_var<T>(&mut self, pos: u16) -> &T {
@@ -2365,8 +2382,46 @@ impl State {
     /// Execute a void function at `fn_pos` with no arguments.
     /// Used by `parallel {}` arms.
     pub fn execute_at_void(&mut self, fn_pos: u32) {
+        self.execute_at_void_with_snapshot(fn_pos, &[]);
+    }
+
+    /// Execute a void function at `fn_pos` after seeding the worker's
+    /// stack with `parent_snapshot` (P245).
+    ///
+    /// `parent_snapshot` is the parent's stack contents from offset 4
+    /// onwards (skipping the parent's leading sentinel slot).  When a
+    /// `parallel {}` arm references an outer-scope variable, the
+    /// arm's bytecode addresses it relative to the parent's stack
+    /// layout — without copying the parent's bytes into the worker,
+    /// those reads return whatever was previously at that offset
+    /// (typically 0 / garbage / a stale pointer that triggers
+    /// downstream SIGSEGV).
+    ///
+    /// The snapshot is overlaid on the worker's stack starting at
+    /// offset 4 (replacing the worker's freshly-pushed return
+    /// sentinel — the parent's bytes at that offset already encode
+    /// whatever return PC the parent function was using, which is
+    /// the right value for `fn_return` to read at the end of the
+    /// arm body).  An empty snapshot keeps the worker's own
+    /// `u32::MAX` sentinel and runs as before.
+    pub fn execute_at_void_with_snapshot(&mut self, fn_pos: u32, parent_snapshot: &[u8]) {
         self.stack_pos = 4;
-        self.put_stack(u32::MAX); // return sentinel
+        self.put_stack(u32::MAX); // return sentinel — possibly overwritten below
+        if !parent_snapshot.is_empty() {
+            // Overlay parent's bytes on the worker's stack starting
+            // at offset 4.  This includes the parent's own sentinel
+            // slot (offset 4..8) — replacing the worker's u32::MAX
+            // with whatever the parent had there.
+            let store = self.database.store_mut(&self.stack_cur);
+            let dst = store.addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + 4);
+            unsafe {
+                std::ptr::copy_nonoverlapping(parent_snapshot.as_ptr(), dst, parent_snapshot.len());
+            }
+            // After the overlay, stack_pos must mirror the parent's
+            // stack_pos so variable reads resolve at the right
+            // offsets.  Snapshot length = parent_stack_pos - 4.
+            self.stack_pos = 4 + parent_snapshot.len() as u32;
+        }
         self.code_pos = fn_pos;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
