@@ -325,9 +325,14 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   so the audience sees what they're missing, then resumes
   follow-action.  Presenter hotkey override always available
   to lock or steer manually.
-- **Idle behavior** — slow drift over the painted region (camera
-  treats whole world as low-heat) vs. hold still.  Test in
-  rehearsal.
+- ~~**Idle behavior**~~ — RESOLVED 2026-05-10: **slow drift
+  over the painted region**.  When activity stops, camera
+  treats the whole painted area as low-heat and pans slowly
+  across it.  Keeps the spectacle alive during quiet stretches;
+  matches the sluggish-by-design tempo.  Drift speed is a
+  renderer-side constant tunable at first prototype; presenter
+  override always available to lock the camera if a quiet
+  moment wants to read as deliberate stillness.
 - **Recently-changed pulse** — every changed cell pulses, or
   only audience-driven changes (not generation-driven growth)?
   Pulsing every cell distracts from the growth aesthetic;
