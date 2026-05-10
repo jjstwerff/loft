@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 14 — Tuple validation: full element × destination matrix
 
-**Status: phases 00 + 01 + 02 + 03 + 07 shipped.  Phase 02 —
+**Status: phases 00 + 01 + 02 + 03 + 04 + 07 shipped.  Phase 02 —
 full matrix wiring done 2026-05-11; 5/5 e3 cells green.
 P212 panic fix shipped 2026-05-04 (recursive
 `emit_tuple_put_ops`).  Two more bugs filed + closed during
@@ -20,8 +20,16 @@ from 4/4 to 8/20 + `__fn_ref_tmp` postfix-call temp marked
 skip_free (closure DbRef aliases source — was double-freeing
 and the trailing OpFreeRef triggered a separate insert_free
 Return-wrap miscompile when the call site was the function
-tail).  Full tuple_matrix suite: 27/27 green on both backends.
-Phases 04-06 untouched; phase 08 still deferred.**
+tail).  Phase 04 — full matrix wiring done 2026-05-11; 6/6 e5
+single-iteration cells green on both backends (struct_ref_local
++ swap + ref_arg + ref_return + ref_int_local + ref_text_local).
+Decision: MOVE semantics — already implemented; phase 04 locks
+the canonical shapes as regression guards and rejects the
+"copy + null" alternative.  Loop-iteration aliasing bug filed
+as P250 (stale FIRST-arg DbRef after `for { (q1, q2) =
+make_pair(pa, pb); }` re-enters scope) — separate dep-tracking
+fix, parked.  Full tuple_matrix suite: 33/33 green on both
+backends.  Phases 05-06 untouched; phase 08 still deferred.**
 
 ## Goal
 

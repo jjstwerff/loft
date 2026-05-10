@@ -427,3 +427,117 @@ cross_mode!(
 );
 // e4_d2_closure_return DEFERRED — same T1.8a return-convention block
 // as e3_d2_nested_return.  Lands when T1.8a does.
+
+// ── Phase 04 — element type 5 (struct references) ────────────────────────────
+//
+// Tuples whose elements are `Type::Reference` (struct DbRefs).  The
+// **decision** for T1.8c is **MOVE semantics**: the source tuple's
+// scope-exit emits no per-element `OpFreeRef` (`scopes.rs:1000-1009`
+// `continue` stub), and each destructured destination variable is
+// typed as `Type::Reference` and gets normal scope-exit cleanup —
+// exactly what the runtime already does today.  See plan-14 phase 04
+// (`04-references.md`) for the full rationale and the rejected
+// "copy + null" alternative.
+//
+// Pre-flight passes on both backends for single-iteration shapes
+// (swap, arg, return, mixed Ref+int, mixed Ref+text); a separate
+// loop-iteration aliasing bug (filed P250) is parked behind a
+// `_loop_*` follow-up and not gated here — these cells lock the
+// move-semantics shape that works today as a regression guard.
+
+cross_mode!(
+    e5_d1_struct_ref_local,
+    r#"
+    struct P { v: integer }
+    fn test() {
+        a = P { v: 1 };
+        b = P { v: 2 };
+        // store-only: tuple of two struct refs, read both fields back.
+        t = (a, b);
+        print("{t.0.v},{t.1.v}\n");
+        assert(t.0.v == 1 && t.1.v == 2, "e5_d1_struct_ref_local");
+    }
+    "#
+);
+
+cross_mode!(
+    e5_d1_struct_ref_swap,
+    r#"
+    struct Point { x: integer, y: integer }
+    fn two_points(a: Point, b: Point) -> (Point, Point) { (b, a) }
+    fn test() {
+        p1 = Point { x: 1, y: 2 };
+        p2 = Point { x: 3, y: 4 };
+        (q1, q2) = two_points(p1, p2);
+        print("{q1.x},{q2.x}\n");
+        assert(q1.x == 3 && q2.x == 1, "e5_d1_struct_ref_swap");
+    }
+    "#
+);
+
+cross_mode!(
+    e5_d2_struct_ref_arg,
+    r#"
+    struct P { v: integer }
+    fn show(t: (P, P)) {
+        print("{t.0.v},{t.1.v}\n");
+        assert(t.0.v == 10 && t.1.v == 20, "e5_d2_struct_ref_arg");
+    }
+    fn test() {
+        a = P { v: 10 };
+        b = P { v: 20 };
+        show((a, b));
+    }
+    "#
+);
+
+cross_mode!(
+    e5_d2_struct_ref_return,
+    r#"
+    struct P { v: integer }
+    fn make_pair(a: P, b: P) -> (P, P) { (b, a) }
+    fn test() {
+        pa = P { v: 10 };
+        pb = P { v: 20 };
+        (q1, q2) = make_pair(pa, pb);
+        print("{q1.v},{q2.v}\n");
+        assert(q1.v == 20 && q2.v == 10, "e5_d2_struct_ref_return");
+    }
+    "#
+);
+
+cross_mode!(
+    e5_d1_ref_int_local,
+    r#"
+    struct P { v: integer }
+    fn test() {
+        a = P { v: 7 };
+        // mixed Reference + integer slot
+        t = (a, 42);
+        print("{t.0.v},{t.1}\n");
+        assert(t.0.v == 7 && t.1 == 42, "e5_d1_ref_int_local");
+    }
+    "#
+);
+
+cross_mode!(
+    e5_d1_ref_text_local,
+    r#"
+    struct P { v: integer }
+    fn test() {
+        a = P { v: 9 };
+        // mixed Reference + owned text slot
+        u = (a, "tag");
+        print("{u.0.v},{u.1}\n");
+        assert(u.0.v == 9 && u.1 == "tag", "e5_d1_ref_text_local");
+    }
+    "#
+);
+// e5_d1_struct_ref_loop INTENTIONALLY OMITTED — the loop-iteration
+// shape (`for i in 0..N { (q1, q2) = make_pair(pa, pb); … }`) shows
+// a stale-DbRef on the destructured variable that picked up the
+// FIRST argument; q1.v reads `null` on iterations >0 on both
+// backends.  Filed P250 as a separate ref-tuple aliasing bug.
+// The single-call shapes above lock today's correct behaviour as a
+// regression guard; the loop case lands as a follow-up cell when
+// P250 closes.

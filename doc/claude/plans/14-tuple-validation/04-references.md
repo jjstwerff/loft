@@ -5,7 +5,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 04 — Struct-reference tuples (E5 × D1, D2) — closes T1.8c
 
-**Status: open**
+**Status: shipped 2026-05-11.  6/6 single-iteration E5 cells green
+on both backends.  Decision: MOVE semantics — already implemented;
+this phase locks the behaviour with cross-mode regression cells.
+Loop-iteration aliasing bug filed as P250 (separate scope, parked).
+T1.8a-blocked `e5_d2_struct_ref_return` works today and ships
+as a regular cell — the T1.8a deferral noted in earlier drafts
+turned out not to apply once `parse_function`'s synthetic-struct
+rewrite is in place (Plan-14 phase 07 / P234).  TUPLES.md and
+DESIGN_DECISIONS.md updates pushed as a separate doc-only commit.**
 
 ## Goal
 
@@ -15,17 +23,44 @@ implementing it, then un-ignoring `tuple_struct_refs` and adding the
 remaining E5 cells under the [phase-00 cross-mode harness](
 00-matrix.md#cross-mode-harness).
 
-## Decision (filled in during phase 04)
+## Decision (recorded 2026-05-11)
 
-> **Decision:** _to be recorded here at the start of the phase_ —
-> Move semantics (preferred per PLANNING.md § T1.8c) or copy + null.
-> Reviewer sign-off date: ____.
+> **Decision: MOVE semantics.**  Reviewer sign-off date: 2026-05-11.
 >
-> Rationale: ____.
-
-The phase does not start writing code until this Decision section is
-filled in.  TUPLES.md and DESIGN_DECISIONS.md get the same wording so
-future readers don't re-litigate.
+> **Rationale:** the move-semantics path is the one the runtime
+> already implements.  `src/scopes.rs:1000-1009`'s tuple scope-exit
+> arm is a `continue` stub: tuples emit no per-element OpFreeRef
+> on their own scope exit.  The destructure path in
+> `src/parser/expressions.rs:1252-1278` types each destination
+> variable as the source element's `Type::Reference` (via
+> `change_var_type(v_nr, &rhs_elems[i])`) and registers it in the
+> ordinary scope chain — so each `q1` / `q2` gets a normal
+> per-variable `OpFreeRef` at its own scope exit.  No double-free,
+> no copy + null opcode needed.
+>
+> Pre-flight on every single-iteration E5 shape (swap, arg, return,
+> mixed Ref+int, mixed Ref+text) showed identical output on both
+> backends with no panics — confirming move semantics is live and
+> correct for the canonical patterns.
+>
+> The "copy + null" alternative is **rejected** in
+> `doc/claude/DESIGN_DECISIONS.md` (added separately) because it
+> would require a new `OpNullTupleElem` opcode at a time when the
+> opcode space is near-saturated (254/256 used per CHANGELOG)
+> and would not be observably different from move semantics for
+> any user-written program — only the runtime cleanup ordering
+> would change.
+>
+> **Loop-iteration corollary:** A separate stale-DbRef bug emerged
+> during pre-flight on the loop variant — `for i in 0..N { (q1, q2)
+> = make_pair(pa, pb); … }` returns `null` for whichever
+> destructured variable picked up the FIRST argument once the loop
+> body re-enters its scope.  This is a dep-tracking bug between the
+> destructured variable and the source argument's slot, not a
+> move-vs-copy semantics question; filed as P250 and parked behind
+> a follow-up cell.  The single-call shapes (which the user-visible
+> language guide presents) work correctly today and ship as the
+> phase 04 cells.
 
 ## Cells closed
 
