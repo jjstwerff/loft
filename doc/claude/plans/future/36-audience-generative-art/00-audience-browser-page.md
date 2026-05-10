@@ -320,9 +320,13 @@ param override for rehearsal + testing.
   outer ring = 1 hex / 200 ms; CI-1 tunes against thumb feel).
   Cells stay aligned to the lattice; no subpixel rendering;
   tap targets are stable.
-- **Touch vs. pointer events** — `pointerdown` / `pointermove` /
-  `pointerup` cover both touch and laptop trackpad.  Use those
-  unless a specific phone browser misbehaves.
+- ~~**Touch vs. pointer events**~~ — RESOLVED 2026-05-10:
+  **PointerEvents only**.  `pointerdown` / `pointermove` /
+  `pointerup` cover phone touch, laptop trackpad, mouse, and
+  stylus uniformly with one set of handlers.  Supported on
+  every browser shipped since ~2018.  Drop back to a
+  TouchEvents shim only if a specific phone browser surfaces a
+  bug during testing.
 
 ## Deliverable
 
