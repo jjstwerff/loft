@@ -273,16 +273,14 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   area faster than 2 s will see the visual lag behind reality
   for the duration of the swing.  Re-tune at CI-3 if rehearsal
   shows the lag feels disconnected.
-- **Triangle-colour mix ratios** — exact share for self vs
-  1-away vs 2-away (each triangle is one solid palette colour;
-  this picks how many of the crystal's triangles fall into each
-  bucket).  First cut: ~70% self / ~25% spread across 1-away
-  neighbours / ~5% spread across 2-away tiles, biased by each
-  neighbour's own colour count.  CI-3 picks the final numbers
-  after seeing the mosaic at projection scale — too many
-  neighbour-coloured triangles = the cell's own colour gets
-  lost, too few = the crystal reads as a flat solid block
-  instead of a faceted mosaic.
+- ~~**Triangle-colour mix ratios**~~ — RESOLVED 2026-05-10 at
+  **70% self / 25% 1-away neighbours / 5% 2-away tiles**, biased
+  by each neighbour's own colour count.  Self colour clearly
+  dominant; 1-away visible enough to bleed at cluster
+  boundaries; 2-away just a hint.  Re-validate at CI-3 against
+  projection scale; tighter (more self) if the mosaic feels
+  muddy, looser (more neighbour) if crystals read as flat solid
+  blocks.
 - **Bridge geometry — exact mesh shape** — each filled crystal
   has a base mesh whose top facets can extend laterally toward a
   filled partner one cell away.  Like the crystals themselves,

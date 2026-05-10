@@ -115,6 +115,35 @@ share the renderer; the desktop adds base-plane render +
 click-to-paint, the projector adds auto-camera + hides the base
 lattice.
 
+### Tempo philosophy — sluggish by design
+
+The whole demo is **deliberately sluggish**: 10 Hz server tick
+(not 20+); ~5 second crystal growth animation per placed cell;
+~2 second aesthetic-swing window; gentle decay over tens of
+seconds; placed cells don't snap on instantly, removed cells
+don't disappear instantly.  This is **a feature, not a bug**.
+
+Many audience members tapping at once would otherwise overwhelm
+the spectacle — bursts of input would produce visual chaos no
+single person could parse.  The slow tempo absorbs input rate
+spikes into a flowing visible river of growth + decay.  Each
+audience member sees their input land but with enough delay and
+animation that the result reads as part of the collective
+rather than as a private input → output reaction.
+
+Concrete consequences this principle locks in:
+
+- Server tick rate stays at 10 Hz (not faster).
+- Growth animation stays at ~5 seconds (not snappier).
+- Aesthetic-swing window stays at ~2 seconds (not 500 ms).
+- Direct-paint actions don't get optimistic local echo —
+  the lag IS the desired pacing.
+
+If a tuning question later asks "should X be faster / snappier?"
+the default answer is **no, lean into sluggish** unless
+rehearsal proves the lag has crossed from atmospheric into
+disconnected.
+
 ### Self-cleaning lifecycle
 
 Together with the decay rule, the system **self-cleans its
