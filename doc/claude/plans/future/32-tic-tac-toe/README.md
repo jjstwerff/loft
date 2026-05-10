@@ -1006,10 +1006,11 @@ work on the wire.
 
 The v5 test programs use the **same `World` / `Chunk` / `Cell`
 structures as plan-36's audience-generative-art demo**.  TTT's
-3×3 board sits inside the corner of one 32×32 chunk; per-cell
-payload is the same 4 bytes (1 byte colour + 1 byte height +
-2 bytes age).  Colour values are reinterpreted for TTT
-semantics:
+3×3 board sits at **origin (0, 0) of chunk (0, 0)** — cells
+(0, 0) through (2, 2) of the world; resolved 2026-05-10 for
+test-program simplicity.  Per-cell payload is the same 4 bytes
+(1 byte colour + 1 byte height + 2 bytes age).  Colour values
+are reinterpreted for TTT semantics:
 
 | Colour byte | TTT meaning | plan-36 meaning |
 |---|---|---|
