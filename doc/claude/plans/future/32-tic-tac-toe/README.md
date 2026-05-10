@@ -1155,6 +1155,14 @@ v5 unblocks:
 - Plan-36 phase 1 (server) and phase 0 (phone client binary
   decoder) — both consume v5's primitives directly.
 
+v5 surfaced (and deferred to a sibling plan):
+- A handful of `lib/server` polish gaps that t1-t5 hit but
+  worked around (most visibly t4's inline `n_ws_send_binary`
+  declaration because `srv.send_to` is text-only).  Captured in
+  [plan-34](../34-server-hardening/README.md) — the natural
+  prereq layer for plan-36 phase 1.  Independent of v6's
+  closure-retrofit work; either plan can land first.
+
 ### Build order recommendation
 
 Build v5 before v3 / v4 if the audience-demo deadline drives

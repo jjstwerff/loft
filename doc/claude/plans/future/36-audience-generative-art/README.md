@@ -296,16 +296,42 @@ survives the talk.
 
 ## Cross-arc dependencies
 
-**No hard dependencies on currently-open ROADMAP plans.**  The
-WebSocket primitives the demo needs are already shipped:
+**WebSocket primitives the demo needs are already shipped** (post
+TTT v5):
 
 - `lib/server/src/server.loft` ships multi-client WebSocket
-  (`srv.run(on_event)` + `ws_clients_*`, `ws_event_*`)
+  (`srv.run(on_event)` + `ws_clients_*`, `ws_event_*`) plus
+  `send_binary` + `last_opcode` on the single-client path.
 - `lib/web/src/web.loft` ships the WebSocket client (`ws_handler`,
-  `ws_connect`, `ws_send`, `ws_recv`)
+  `ws_connect`, `ws_send`, `ws_recv`) plus `send_binary`,
+  `last_opcode`, and the `pack_*` / `byte_at` binary helpers.
+- `lib/world/src/world.loft` ships the sparse 32×32 World/Chunk/
+  Cell + `tick_and_decay`.
 
 Sub-arcs 1 + 3 are application code on top, not library
 extensions.
+
+**Hard prereqs (sibling plan):**
+
+- [plan-34 — `lib/server` hardening](../34-server-hardening/README.md)
+  items (a), (b), (e):
+  - (a) `srv.broadcast_binary()` / `srv.send_binary_to()` — the
+    projector's world-snapshot + delta broadcasts depend on this.
+    Without it, plan-36 has to inline `n_ws_send_binary` in loft
+    (TTT v5 t4 already did this as a workaround; not the right
+    long-term shape).
+  - (b) Server-side binary recv via `from_utf8_unchecked` — the
+    phone client's drag events stay ASCII-safe today, but any
+    future client→server binary path (e.g. compact swipe
+    encoding) would silently corrupt without this.
+  - (e) `srv.run_with_tick(on_event, on_tick, tick_ms)` — the
+    1 Hz `active_player_signal` heartbeat needs a tick-driven
+    broadcast scaffold.  Without it, the server can only emit
+    on event arrival, which breaks the "audience always sees
+    fresh activity" property.
+- Items (c), (d), (f) of plan-34 are post-launch hardening (the
+  30-client soak, panic isolation, observability metrics).
+  Useful for production rehearsal; not blocking phase 1.
 
 **Soft dependencies — would benefit but not block:**
 
