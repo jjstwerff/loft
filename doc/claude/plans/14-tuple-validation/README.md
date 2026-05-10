@@ -5,19 +5,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 14 — Tuple validation: full element × destination matrix
 
-**Status: phases 00 + 01 + 02 + 07 shipped; phase 03 partial.
-Phase 02 — full matrix wiring done 2026-05-11; 5/5 e3 cells
-green.  P212 panic fix shipped 2026-05-04 (recursive
+**Status: phases 00 + 01 + 02 + 03 + 07 shipped.  Phase 02 —
+full matrix wiring done 2026-05-11; 5/5 e3 cells green.
+P212 panic fix shipped 2026-05-04 (recursive
 `emit_tuple_put_ops`).  Two more bugs filed + closed during
 phase 02: P247 (nested-tuple text move in format strings) and
-P248 (element-of-element assignment).  Phase 03 — matrix
-wiring done 2026-05-11; 1/5 e4 cells green
-(`e4_d1_closure_local` store-only).  4 surfaced P249 (closure-
-typed tuple elements have wrong-width layout — 4 B instead of
-P213 v4's 16 B fn-ref slot — AND no call-through-tuple parser
-path) which stays open as a Medium-effort follow-up.  Cells
-remain in the matrix as live regression guards.  Full
-tuple_matrix suite: 23/27 green (4 known-failing tied to P249).
+P248 (element-of-element assignment).  Phase 03 — full matrix
+wiring done 2026-05-11; 5/5 e4 cells green (e4_d1_closure_local
++ closure_call + closure_swap + capture_survives + d2_closure_arg).
+P249 closed: 20-byte fn-ref layout extended into all six tuple
+codegen sites (push, pop, var-load, var-write, recursive
+push/pop helpers) + element_align/size in src/data.rs raised
+from 4/4 to 8/20 + `__fn_ref_tmp` postfix-call temp marked
+skip_free (closure DbRef aliases source — was double-freeing
+and the trailing OpFreeRef triggered a separate insert_free
+Return-wrap miscompile when the call site was the function
+tail).  Full tuple_matrix suite: 27/27 green on both backends.
 Phases 04-06 untouched; phase 08 still deferred.**
 
 ## Goal

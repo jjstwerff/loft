@@ -395,8 +395,17 @@ impl State {
                     return self.insert_types(elem_tp.clone(), code_pos, stack);
                 }
                 match &elem_tp {
-                    Type::Integer(_) | Type::Function(_, _, _) => {
+                    Type::Integer(_) => {
                         stack.add_op("OpVarInt", self);
+                    }
+                    // P249 — fn-ref slots are 20 B (8 B d_nr + 12 B
+                    // closure DbRef); OpVarInt would only push 8 B and
+                    // truncate the closure half.  OpVarFnRef pushes
+                    // the full 20 B (with the same +4 stack tracker
+                    // bump generate_var uses for plain Function vars).
+                    Type::Function(_, _, _) => {
+                        stack.add_op("OpVarFnRef", self);
+                        stack.position += 4;
                     }
                     Type::Boolean => stack.add_op("OpVarBool", self),
                     Type::Float => stack.add_op("OpVarFloat", self),
@@ -495,8 +504,19 @@ impl State {
                     return Type::Void;
                 }
                 match &elem_tp {
-                    Type::Integer(_) | Type::Function(_, _, _) => {
+                    Type::Integer(_) => {
                         stack.add_op("OpPutInt", self);
+                    }
+                    // P249 — fn-ref slots are 20 B; OpPutInt would only
+                    // pop 8 B and leave the closure half (12 B) garbage
+                    // in the destination.  OpPutFnRef pops the full
+                    // 20 B in matching layout.  The opcode's stdlib
+                    // signature pops 16 B (`text`) but the runtime
+                    // actually pops 20 B; mirror gen_set_first_at_tos's
+                    // `stack.position -= 4` correction.
+                    Type::Function(_, _, _) => {
+                        stack.add_op("OpPutFnRef", self);
+                        stack.position -= 4;
                     }
                     Type::Boolean => stack.add_op("OpPutBool", self),
                     Type::Float => stack.add_op("OpPutFloat", self),
@@ -941,8 +961,15 @@ impl State {
             }
             let var_pos = stack.position - elem_abs;
             match elem {
-                Type::Integer(_) | Type::Function(_, _, _) => {
+                Type::Integer(_) => {
                     stack.add_op("OpVarInt", self);
+                }
+                // P249 — fn-ref slot is 20 B; OpVarFnRef pushes the
+                // full layout (8 B d_nr + 12 B closure DbRef) with a
+                // +4 stack tracker bump for the signature mismatch.
+                Type::Function(_, _, _) => {
+                    stack.add_op("OpVarFnRef", self);
+                    stack.position += 4;
                 }
                 Type::Boolean => stack.add_op("OpVarBool", self),
                 Type::Float => stack.add_op("OpVarFloat", self),
@@ -985,8 +1012,16 @@ impl State {
             }
             let pos = stack.position - elem_abs;
             match &elems[i] {
-                Type::Integer(_) | Type::Function(_, _, _) => {
+                Type::Integer(_) => {
                     stack.add_op("OpPutInt", self);
+                }
+                // P249 — fn-ref slot is 20 B; matches push above.
+                // OpPutFnRef's signature pops 16 B (`text`) but the
+                // runtime pops 20; mirror gen_set_first_at_tos's
+                // `stack.position -= 4` correction.
+                Type::Function(_, _, _) => {
+                    stack.add_op("OpPutFnRef", self);
+                    stack.position -= 4;
                 }
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Float => stack.add_op("OpPutFloat", self),
@@ -1446,7 +1481,17 @@ impl State {
             // `put_var`).  Mirrors the original flat-tuple loop.
             let pos = stack.position - elem_abs;
             match &elems[i] {
-                Type::Integer(_) | Type::Function(_, _, _) => stack.add_op("OpPutInt", self),
+                Type::Integer(_) => stack.add_op("OpPutInt", self),
+                // P249 — fn-ref slot is 20 B (8 d_nr + 12 closure
+                // DbRef).  OpPutInt would only pop 8 B and leave the
+                // closure half garbage in the destination.  OpPutFnRef
+                // pops 20 B; mirror gen_set_first_at_tos's
+                // `stack.position -= 4` correction (op signature
+                // declares 16 B / `text` but the runtime pops 20).
+                Type::Function(_, _, _) => {
+                    stack.add_op("OpPutFnRef", self);
+                    stack.position -= 4;
+                }
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Float => stack.add_op("OpPutFloat", self),
                 Type::Single => stack.add_op("OpPutSingle", self),
@@ -2430,8 +2475,18 @@ impl State {
                 for (i, elem_tp) in elems.iter().enumerate() {
                     let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
                     match elem_tp {
-                        Type::Integer(_) | Type::Function(_, _, _) => {
+                        Type::Integer(_) => {
                             stack.add_op("OpVarInt", self);
+                        }
+                        // P249 — fn-ref slots are 20 B (8 d_nr + 12
+                        // closure DbRef); OpVarInt would only push 8
+                        // and truncate the closure.  OpVarFnRef pushes
+                        // the full 20 with the same +4 stack tracker
+                        // bump generate_var uses for plain Function
+                        // vars.
+                        Type::Function(_, _, _) => {
+                            stack.add_op("OpVarFnRef", self);
+                            stack.position += 4;
                         }
                         Type::Boolean => stack.add_op("OpVarBool", self),
                         Type::Float => stack.add_op("OpVarFloat", self),

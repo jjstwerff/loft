@@ -995,7 +995,12 @@ pub fn has_lifetime_concern(t: &Type) -> bool {
 pub fn element_align(t: &Type) -> u8 {
     match t {
         Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Single | Type::Function(_, _, _) | Type::Character => 4,
+        Type::Single | Type::Character => 4,
+        // P249 — fn-ref slot layout per `variables::size` and
+        // `OpVarFnRef`'s `[u8; 20]` read: 8 B d_nr (i64) + 12 B
+        // closure DbRef.  The d_nr's i64 alignment dictates the
+        // overall slot alignment.
+        Type::Function(_, _, _) => 8,
         Type::Integer(_) | Type::Float => 8,
         Type::Text(_) => 4,
         Type::Reference(_, _)
@@ -1029,7 +1034,13 @@ fn element_offsets_alignment_max(types: &[Type]) -> u8 {
 pub fn element_size(t: &Type) -> usize {
     match t {
         Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Single | Type::Function(_, _, _) | Type::Character => 4,
+        Type::Single | Type::Character => 4,
+        // P249 — fn-ref slot is 20 bytes (8 B d_nr + 12 B closure DbRef);
+        // matches `variables::size(Type::Function, _) = 20` and
+        // `OpVarFnRef`'s `[u8; 20]` read.  Pre-fix returned 4, which
+        // truncated tuple-stored closures and produced garbage on
+        // call.
+        Type::Function(_, _, _) => 20,
         Type::Integer(_) | Type::Float => 8,
         Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
         Type::Reference(_, _)

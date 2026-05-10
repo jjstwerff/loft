@@ -695,6 +695,15 @@ impl Parser {
                     // Allocate temp variable on BOTH passes (consistent unique counter).
                     let fn_work = self.create_unique("__fn_ref_tmp", &fn_type);
                     self.vars.defined(fn_work);
+                    // The fn_work temp is a borrowed copy of an existing
+                    // fn-ref: its closure DbRef aliases the source's
+                    // closure store, so emitting OpFreeRef on it would
+                    // double-free.  Mark `skip_free` so scope-exit cleanup
+                    // leaves the closure alone.  Also blocks the
+                    // insert_free Return-wrap path that would otherwise
+                    // wrap the trailing OpFreeRef in `return`, returning
+                    // `()` from a value-returning block (P249-mirror).
+                    self.vars.set_skip_free(fn_work);
                     // P227: one work-buffer per text-returning fn-ref
                     // call (the return-value buffer the lambda fills via
                     // its hidden RefVar(Text) attr).  Previously
