@@ -121,7 +121,8 @@ are the in-chunk indices.  No per-cell `(q, r)` storage needed.
 
 ## Tick loop
 
-Server runs a fixed-rate tick (suggested 4-10 Hz; CI-2 to tune).
+Server runs a fixed-rate tick at **10 Hz** (100 ms per tick;
+resolved 2026-05-10).
 The tick has **no autonomous growth step** — placement is pure
 direct painting from audience events.  But it does have an
 **automatic decay step**: older cells expire and are removed,
@@ -200,8 +201,12 @@ heartbeat.)
 
 ## Open design questions
 
-- **Tick rate** — 4 Hz (cheap, choppy) or 10 Hz (smoother,
-  bandwidth heavier).  CI-2 picks after watching multi-client.
+- ~~**Tick rate**~~ — RESOLVED 2026-05-10 at **10 Hz** (100 ms
+  per tick).  Decay step + delta broadcast run at this cadence;
+  the renderer interpolates between ticks at 60 FPS to keep
+  crystal growth/decay animations smooth.  Revisit at CI-2 if
+  multi-client testing shows the projector visibly stepping or
+  the bandwidth saturating venue WiFi.
 - **Delta vs full-snapshot** — every tick send a delta and
   occasionally a full snapshot?  Or always delta + new clients
   receive a snapshot on connect?  Recommend delta-always + snapshot-on-connect.
