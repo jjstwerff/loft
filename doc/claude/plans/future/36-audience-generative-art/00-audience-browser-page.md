@@ -314,10 +314,12 @@ param override for rehearsal + testing.
   offset would have introduced direction-dependent
   asymmetries the renderer would need to actively compensate
   for).
-- **Movement cadence** — discrete (one cell per N ms while held)
-  or continuous (subpixel pan)?  Discrete is simpler and matches
-  the hex grid; continuous looks smoother.  CI-1 decides after
-  thumb-test.
+- ~~**Movement cadence**~~ — RESOLVED 2026-05-10: **discrete**
+  — one hex per fixed cadence while the finger is held
+  (suggested: fast outer ring = 1 hex / 100 ms, slow inner-of-
+  outer ring = 1 hex / 200 ms; CI-1 tunes against thumb feel).
+  Cells stay aligned to the lattice; no subpixel rendering;
+  tap targets are stable.
 - **Touch vs. pointer events** — `pointerdown` / `pointermove` /
   `pointerup` cover both touch and laptop trackpad.  Use those
   unless a specific phone browser misbehaves.
