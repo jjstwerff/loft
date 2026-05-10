@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TIC_TAC_TOE v3 — WebSocket round-trip probe.
+//
+// The v3 server's WebSocket endpoint lives on `/ws`.  This loft
+// program is the harness's probe: it opens the URL, sends one
+// message, expects "echo:<msg>" back, prints success/failure.
+// Pairs with `tictactoe_server_v3.loft` and the v3 cargo harness.
+use web;
+
+fn main() {
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 7878 } else { port_raw as integer };
+  url = "ws://127.0.0.1:{port}/ws";
+
+  println("v3-probe: connecting to {url}");
+  h = web::ws_handler(url);
+  if h == null { println("v3-probe: handler-failed"); return; }
+
+  ok = h.send("hello");
+  if !ok {
+    web::sleep_ms(100);
+    ok = h.send("hello");
+  }
+  if !ok { println("v3-probe: send-failed"); h.close(); return; }
+
+  got = "";
+  attempts = 0;
+  while got == "" {
+    raw = h.try_recv();
+    if raw != null { got = raw; break; }
+    attempts += 1;
+    if attempts > 400 { println("v3-probe: recv-timeout"); h.close(); return; }
+    web::sleep_ms(5);
+  }
+
+  if got == "echo:hello" {
+    println("v3-probe: ok got=\"{got}\"");
+  } else {
+    println("v3-probe: mismatch got=\"{got}\" want=\"echo:hello\"");
+  }
+  h.close();
+}

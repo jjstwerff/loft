@@ -12,8 +12,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 |---|---|---|
 | v1 | ✓ shipped | Single-client text protocol verifier (`tictactoe_*.loft`) |
 | v2 | ✓ shipped | Multi-client + spectator routing (3/3 `multiplayer_v2` tests green) |
-| v3 | **next** | Server delivers the client — browser-served HTML + loft-compiled WASM.  **Also the mechanism for distributing the laptop client** for any loft program (the audience demo's projector and any future single-binary loft client all use this hosting path) |
-| v4 | after v3 | Client-uploaded scripts → server-side compile → hot WASM swap (the in-browser game-dev workflow) |
+| v3 server-side | ✓ shipped 2026-05-11 | HTTP routing + Content-Type response on the same loft program that hosts the WebSocket — `tictactoe_server_v3.loft` serves `/`, `/client.loft`, `/favicon.ico` (404), unrouted (404), and upgrades `/ws` to the WebSocket game protocol.  2/2 `multiplayer_v3` tests green |
+| v3 browser bootstrap | **next** | Real browser opens `/` → loads loft-rt.js + interpreter WASM + client.loft → connects back to `/ws` and plays.  Wires up the existing `doc/loft-rt.js` host bridge from plan-31.  **Also the mechanism for distributing the laptop client** for any loft program (the audience demo's projector and any future single-binary loft client all use this hosting path) |
+| v4 | after v3 browser bootstrap | Client-uploaded scripts → server-side compile → hot WASM swap (the in-browser game-dev workflow) |
 | v5 | ✓ shipped | Binary world stream + N clients + catch-up + sluggish tempo (5/5 `multiplayer_v5` tests green) |
 | v6 | gated on plan-22 | Drop `Reference<T>` ceremony in the v5 server using writable closures.  Pure ergonomic cleanup; not on plan-36's critical path |
 

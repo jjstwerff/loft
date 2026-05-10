@@ -816,6 +816,16 @@ fn dispatch_call(
             let (p, l) = text_arg!(1);
             f(i32_arg!(0) as u16, p, l);
         }
+        // (i32, text, text) -> void  (e.g. tcp_respond_typed:
+        // status, body, content_type — TTT v3's HTML/CSS/JS/loft-mime
+        // server responses)
+        (&[ArgT::I32, ArgT::Text, ArgT::Text], None) => {
+            let f: extern "C" fn(u16, *const u8, usize, *const u8, usize) =
+                unsafe { std::mem::transmute(fp) };
+            let (p0, l0) = text_arg!(1);
+            let (p1, l1) = text_arg!(2);
+            f(i32_arg!(0) as u16, p0, l0, p1, l1);
+        }
         // (text) -> i32
         (&[ArgT::Text], Some(ArgT::I32)) => {
             let f: extern "C" fn(*const u8, usize) -> i32 = unsafe { std::mem::transmute(fp) };

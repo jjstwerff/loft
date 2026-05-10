@@ -49,6 +49,15 @@ fn tcp_body() -> text;
 fn tcp_respond(status: integer, body: text);
 #native "n_tcp_respond"
 
+// Same as `n_tcp_respond` but the caller picks the Content-Type
+// header (e.g. `"text/html; charset=utf-8"`).  Empty string falls
+// back to `"text/plain; charset=utf-8"`.  TTT v3 needs this to
+// serve the index HTML, the loft client source, and the WASM
+// payload from the same loft program that hosts the WebSocket
+// game protocol.
+fn tcp_respond_typed(status: integer, body: text, content_type: text);
+#native "n_tcp_respond_typed"
+
 fn tcp_close(handle: integer);
 #native "n_tcp_close"
 
@@ -100,6 +109,36 @@ pub fn next(self: Server) -> Request {
 
 pub fn respond(self: Request, status: integer, body: text) {
   tcp_respond(status, body);
+}
+
+// Send an HTTP response with a caller-specified Content-Type and
+// close the connection.  Use for HTML / CSS / JSON / WASM payloads;
+// `respond` defaults to `text/plain`.
+pub fn respond_typed(self: Request, status: integer, body: text, content_type: text) {
+  tcp_respond_typed(status, body, content_type);
+}
+
+// Convenience wrappers for the common cases TTT v3 needs.
+pub fn respond_html(self: Request, body: text) {
+  tcp_respond_typed(200, body, "text/html; charset=utf-8");
+}
+
+pub fn respond_css(self: Request, body: text) {
+  tcp_respond_typed(200, body, "text/css; charset=utf-8");
+}
+
+pub fn respond_js(self: Request, body: text) {
+  tcp_respond_typed(200, body, "application/javascript; charset=utf-8");
+}
+
+pub fn respond_loft(self: Request, body: text) {
+  // No registered MIME for loft source; text/plain reads cleanly in a
+  // browser tab and matches what `curl` / fetch consumers expect.
+  tcp_respond_typed(200, body, "text/plain; charset=utf-8");
+}
+
+pub fn respond_404(self: Request) {
+  tcp_respond(404, "Not Found");
 }
 
 pub fn close(self: Server) {

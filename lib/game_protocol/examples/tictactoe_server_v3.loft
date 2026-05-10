@@ -1,0 +1,163 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TIC_TAC_TOE v3 — server delivers the client.
+//
+// One loft program serves both the static assets the browser
+// needs (HTML index, loft client source, optional CSS/JS) AND
+// the WebSocket game protocol from v2.  No second process, no
+// nginx, no separate static-file server — `loft tictactoe_server_v3.loft`
+// is the entire deployment.
+//
+// HTTP routing convention:
+//   GET  /            → text/html  index page (loads loft-rt.js + WASM)
+//   GET  /client.loft → text/plain loft client source
+//   GET  /loft-rt.js  → application/javascript host bridge (when present)
+//   GET  /loft.wasm   → application/wasm interpreter binary (when present)
+//   GET  /favicon.ico → 404 (until we ship one)
+//   GET  /ws          → WebSocket upgrade → game protocol (v1 single-client
+//                       protocol; the multi-client v2 routing layer can be
+//                       layered on top once the browser-loaded client
+//                       proves the round-trip)
+//   anything else     → 404
+//
+// The "real" deployment story (load loft-rt.js + WASM into a real
+// browser, run the loft client there, connect back to /ws) is
+// validated by the v3 cargo harness via curl-style HTTP probes
+// + a WebSocket round-trip.  Bootstrapping a headless browser
+// inside CI is out of scope for this milestone.
+//
+//   /home/ubuntu/loft/target/release/loft --interpret \
+//       lib/game_protocol/examples/tictactoe_server_v3.loft
+
+use server;
+
+// Loft backtick strings interpolate `{expr}` — every literal `{`
+// in the HTML/JS/CSS body is escaped as `{{`.  The flip side is
+// `}}` for closing braces.  This is mechanical: every `{` → `{{`,
+// every `}` → `}}` (across CSS rules, JS arrow bodies, template
+// literals — anywhere a real brace appears).
+INDEX_HTML = `
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>tic-tac-toe (loft v3)</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #eee; }}
+    #status {{ font-size: 1.1rem; margin-bottom: 1rem; }}
+    #board {{ display: grid; grid-template-columns: repeat(3, 4rem); gap: 4px; }}
+    .cell  {{ width: 4rem; height: 4rem; background: #222; display: flex;
+              align-items: center; justify-content: center; font-size: 2rem;
+              cursor: pointer; user-select: none; }}
+    .cell:hover {{ background: #333; }}
+  </style>
+</head>
+<body>
+  <h1>tic-tac-toe (loft v3)</h1>
+  <div id="status">loading client …</div>
+  <div id="board"></div>
+  <script type="module">
+    // Phase 1 v3 hand-off — once the browser-side bootstrap
+    // (loft-rt.js + interpreter WASM + client.loft) is wired up,
+    // this becomes a real client.  Today it just confirms the
+    // server is responding HTML on /.
+    document.getElementById("status").textContent =
+      "v3 server is up.  Browser-side bootstrap is the next slice.";
+    const url = "ws://" + location.host + "/ws";
+    const status = document.getElementById("status");
+    try {{
+      const ws = new WebSocket(url);
+      ws.addEventListener("open", () => {{
+        status.textContent = "WS connected to " + url + " — waiting for the loft client";
+      }});
+      ws.addEventListener("error", () => {{
+        status.textContent = "WS could not connect to " + url;
+      }});
+    }} catch (e) {{
+      status.textContent = "WS init failed: " + e;
+    }}
+  </script>
+</body>
+</html>
+`;
+
+// Placeholder loft client source — the real client lands once the
+// browser-side bootstrap is wired up.  Today this is just enough
+// for `curl /client.loft` to succeed and the harness to verify the
+// content-type + body markers.
+// Same brace-escape rule as INDEX_HTML — any `{` in the embedded
+// loft source becomes `{{`.
+CLIENT_LOFT = `
+// tic-tac-toe v3 client (placeholder — runs in the browser via the
+// loft interpreter WASM).  Bootstrap sequence:
+//   1. browser fetches / → INDEX_HTML loads loft-rt.js + loft.wasm
+//   2. loft.wasm fetches /client.loft (this file) and runs it
+//   3. this file opens a WebSocket to /ws and plays the game
+fn main() {{
+  println("v3 client placeholder — browser bootstrap pending");
+}}
+`;
+
+fn handle_request(req: server::Request) {
+  if req.method != "GET" {
+    req.respond(405, "Method Not Allowed");
+    return;
+  }
+  if req.path == "/" {
+    req.respond_html(INDEX_HTML);
+  } else if req.path == "/client.loft" {
+    req.respond_loft(CLIENT_LOFT);
+  } else if req.path == "/favicon.ico" {
+    req.respond_404();
+  } else {
+    println("v3-srv: unrouted GET {req.path}");
+    req.respond_404();
+  }
+}
+
+fn handle_ws_session(ws: server::WebSocket) {
+  // Minimal echo handler — the multi-client v2 routing layer is the
+  // natural next step once the browser-bootstrap actually opens this
+  // connection from a real client.  For now this is enough for the
+  // harness's WebSocket round-trip probe.
+  while true {
+    msg = ws.next();
+    if msg == null { break; }
+    println("v3-ws: recv \"{msg}\"");
+    if !ws.send("echo:{msg}") { break; }
+  }
+  ws.close();
+}
+
+fn main() {
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 7878 } else { port_raw as integer };
+
+  srv = server::listen(port);
+  if srv.handle < 0 {
+    println("v3-srv: bind-failed port={port}");
+    return;
+  }
+  println("v3-srv: listening port={port}");
+
+  // Single-process loop: each accept either serves an HTTP page
+  // or upgrades to WebSocket.  The Upgrade-detection convention
+  // is path-based for now (`/ws`); once `tcp_headers()` ships
+  // we can detect via the actual `Upgrade: websocket` header.
+  while true {
+    req = srv.next();
+    if req == null { continue; }
+    if req.path == "/ws" {
+      ws = server::ws_upgrade();
+      if ws == null {
+        println("v3-srv: ws-upgrade-failed");
+        continue;
+      }
+      println("v3-srv: ws-upgraded");
+      handle_ws_session(ws);
+    } else {
+      handle_request(req);
+    }
+  }
+}

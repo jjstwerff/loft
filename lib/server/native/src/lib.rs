@@ -162,12 +162,47 @@ pub extern "C" fn n_tcp_body() -> LoftStr {
 }
 
 /// Send an HTTP response on the current connection and close it.
+/// Defaults to `Content-Type: text/plain; charset=utf-8` for backward
+/// compatibility with v1/v2 server programs.  Use
+/// `n_tcp_respond_typed` when serving HTML / CSS / JSON / etc.
 ///
 /// # Safety
 ///
 /// `body_ptr` / `body_len` must describe a valid byte slice or be `(NULL, 0)`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_tcp_respond(status: u16, body_ptr: *const u8, body_len: usize) {
+    unsafe { write_response(status, "text/plain; charset=utf-8", body_ptr, body_len) }
+}
+
+/// Send an HTTP response with a caller-specified Content-Type and
+/// close the connection.  TTT v3 needs this to serve the index HTML
+/// and the loft client source from the same loft program that hosts
+/// the WebSocket game protocol.
+///
+/// `content_type` should be the full media type (e.g.
+/// `"text/html; charset=utf-8"` or `"application/wasm"`); pass an
+/// empty / null pointer to fall back to `text/plain`.
+///
+/// # Safety
+///
+/// `body_ptr` / `body_len` must describe a valid byte slice or be
+/// `(NULL, 0)`.  `ct_ptr` / `ct_len` must describe a valid UTF-8
+/// slice or be `(NULL, 0)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_tcp_respond_typed(
+    status: u16,
+    body_ptr: *const u8,
+    body_len: usize,
+    ct_ptr: *const u8,
+    ct_len: usize,
+) {
+    let ct = unsafe { loft_ffi::text_opt(ct_ptr, ct_len) }
+        .filter(|s| !s.is_empty())
+        .unwrap_or("text/plain; charset=utf-8");
+    unsafe { write_response(status, ct, body_ptr, body_len) }
+}
+
+unsafe fn write_response(status: u16, content_type: &str, body_ptr: *const u8, body_len: usize) {
     let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) }.unwrap_or("");
     let status_text = match status {
         200 => "OK",
@@ -182,7 +217,7 @@ pub unsafe extern "C" fn n_tcp_respond(status: u16, body_ptr: *const u8, body_le
     let response = format!(
         "HTTP/1.1 {status} {status_text}\r\n\
          Content-Length: {}\r\n\
-         Content-Type: text/plain; charset=utf-8\r\n\
+         Content-Type: {content_type}\r\n\
          Connection: close\r\n\r\n\
          {body}",
         body.len()
@@ -630,6 +665,7 @@ loft_ffi::loft_register! {
     n_tcp_path,
     n_tcp_body,
     n_tcp_respond,
+    n_tcp_respond_typed,
     n_tcp_close,
     n_ws_upgrade,
     n_ws_recv,
