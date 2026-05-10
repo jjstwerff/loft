@@ -131,6 +131,22 @@ impl ServerGuard {
         s
     }
 
+    /// Drain stdout until `marker` appears (or `timeout` elapses).  Used
+    /// after an HTTP probe whose server-side log entry is async w.r.t.
+    /// the curl response — the curl returns when the response is written
+    /// to the socket, but the server's `println` for the same request
+    /// may not have flushed its stdout pipe yet.
+    fn wait_for_stdout_marker(&mut self, marker: &str, timeout: Duration) -> String {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let snap = self.snapshot_stdout();
+            if snap.contains(marker) || Instant::now() >= deadline {
+                return snap;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn diagnose_listen_failure(&mut self) -> String {
         let mut out = String::new();
         if !self.early_stdout.is_empty() {
@@ -316,11 +332,15 @@ fn v3_http_routing() {
 
     // Drain server stdout snapshot — the unrouted-path log should
     // surface, proving the dispatch reached the `else` arm rather
-    // than e.g. crashing silently.
-    let server_out = server.snapshot_stdout();
+    // than e.g. crashing silently.  Curl returns when the response
+    // hits the wire, but the server's `println` lands on its stdout
+    // pipe asynchronously, so wait for the marker rather than
+    // sampling once.
+    let server_out =
+        server.wait_for_stdout_marker("v3-srv: unrouted GET /unknown.html", Duration::from_secs(2));
     assert!(
         server_out.contains("v3-srv: unrouted GET /unknown.html"),
-        "v3 server didn't log the unrouted GET; server stdout:\n{server_out}"
+        "v3 server didn't log the unrouted GET within 2s; server stdout:\n{server_out}"
     );
 }
 

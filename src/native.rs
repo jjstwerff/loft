@@ -235,8 +235,183 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_9JsonValue_to_json_pretty", n_to_json_pretty),
 ];
 
+// ── lib/web natives — wasm-pack build only (TTT v3.5) ────────────────────
+//
+// Native loft loads these from `lib/web/native/`'s cdylib at runtime.
+// The wasm-pack interpreter has no dlopen, so we register them
+// statically here under `cfg(all(target_arch="wasm32",
+// feature="wasm"))`.  Real impls route to JS via `crate::wasm::host_*`;
+// stubs (panicking on call) cover the natives v3.5 doesn't need yet
+// so the loft program at least PARSES without "native function not
+// loaded" tripping during compilation.
+//
+// Adding a new lib/web native:
+//   1. Declare a Rust impl below.  `wasm` arm calls `host_*`; non-wasm
+//      arm panics or returns a sensible default.
+//   2. Append `(name, impl)` to `WEB_FUNCTIONS_WASM`.
+//   3. JS side: extend `doc/loft-rt.js::createHost` with the matching
+//      `host_*` method.
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+pub const WEB_FUNCTIONS_WASM: &[(&str, Call)] = &[
+    ("n_ws_connect", n_ws_connect),
+    ("n_ws_client_send", n_ws_client_send),
+    ("n_ws_client_send_binary", n_ws_client_send_binary),
+    ("n_ws_client_recv", n_ws_client_recv),
+    ("n_ws_client_message", n_ws_client_message),
+    ("n_ws_client_opcode", n_ws_client_opcode),
+    ("n_ws_client_close", n_ws_client_close),
+    // Non-WS lib/web natives — stubbed so a `use web` program compiles.
+    // Real impls land when a v3.5+ feature actually needs them.
+    ("n_http_do", n_stub_panic),
+    ("n_http_body", n_stub_empty_text),
+    ("n_sleep_ms", n_stub_noop),
+    ("n_pack_reset", n_pack_reset),
+    ("n_pack_u8", n_pack_u8),
+    ("n_pack_u16_le", n_pack_u16_le),
+    ("n_pack_u32_le", n_pack_u32_le),
+    ("n_pack_take", n_pack_take),
+    ("n_byte_at", n_byte_at),
+];
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_stub_panic(_stores: &mut Stores, _stack: &mut DbRef) {
+    panic!("native function not implemented in the browser-WASM build (TTT v3.5 stubs only ws_*)");
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_stub_empty_text(stores: &mut Stores, stack: &mut DbRef) {
+    let s = crate::keys::Str::new("");
+    stores.put(stack, s);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_stub_noop(stores: &mut Stores, stack: &mut DbRef) {
+    // Pop the i32 arg and discard (n_sleep_ms takes one integer).
+    let _ = *stores.get::<i64>(stack);
+}
+
+// ── Real ws_* impls (route to JS host bridge via src/wasm.rs) ──────────
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_connect(stores: &mut Stores, stack: &mut DbRef) {
+    let url = *stores.get::<crate::keys::Str>(stack);
+    let id = crate::wasm::host_ws_connect(url.str());
+    stores.put(stack, i64::from(id));
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_send(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = *stores.get::<crate::keys::Str>(stack);
+    let id = *stores.get::<i64>(stack) as i32;
+    let ok = crate::wasm::host_ws_send(id, msg.str(), false);
+    stores.put(stack, ok);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_send_binary(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = *stores.get::<crate::keys::Str>(stack);
+    let id = *stores.get::<i64>(stack) as i32;
+    let ok = crate::wasm::host_ws_send(id, msg.str(), true);
+    stores.put(stack, ok);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_recv(stores: &mut Stores, stack: &mut DbRef) {
+    let id = *stores.get::<i64>(stack) as i32;
+    let ok = crate::wasm::host_ws_recv(id);
+    stores.put(stack, ok);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_message(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = crate::wasm::host_ws_last_message();
+    stores.scratch.push(msg);
+    let s = crate::keys::Str::new(stores.scratch.last().unwrap());
+    stores.put(stack, s);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_opcode(stores: &mut Stores, stack: &mut DbRef) {
+    let op = crate::wasm::host_ws_last_opcode();
+    stores.put(stack, i64::from(op));
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_close(stores: &mut Stores, stack: &mut DbRef) {
+    let id = *stores.get::<i64>(stack) as i32;
+    crate::wasm::host_ws_close(id);
+}
+
+// ── Pack helpers (per-thread byte buffer; pure Rust, no JS host) ───────
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+thread_local! {
+    static PACK_BUF: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_pack_reset(_stores: &mut Stores, _stack: &mut DbRef) {
+    PACK_BUF.with(|b| b.borrow_mut().clear());
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_pack_u8(_stores: &mut Stores, stack: &mut DbRef) {
+    let b = *_stores.get::<i64>(stack) as i32;
+    PACK_BUF.with(|buf| buf.borrow_mut().push((b & 0xff) as u8));
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_pack_u16_le(_stores: &mut Stores, stack: &mut DbRef) {
+    let v = *_stores.get::<i64>(stack) as i32;
+    PACK_BUF.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        let v = (v & 0xffff) as u16;
+        buf.extend_from_slice(&v.to_le_bytes());
+    });
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_pack_u32_le(_stores: &mut Stores, stack: &mut DbRef) {
+    let v = *_stores.get::<i64>(stack) as i32;
+    PACK_BUF.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        let v = v as u32;
+        buf.extend_from_slice(&v.to_le_bytes());
+    });
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_pack_take(stores: &mut Stores, stack: &mut DbRef) {
+    let v = PACK_BUF.with(|buf| std::mem::take(&mut *buf.borrow_mut()));
+    let s = unsafe { String::from_utf8_unchecked(v) };
+    stores.scratch.push(s);
+    let st = crate::keys::Str::new(stores.scratch.last().unwrap());
+    stores.put(stack, st);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_byte_at(stores: &mut Stores, stack: &mut DbRef) {
+    let t = *stores.get::<crate::keys::Str>(stack);
+    let idx = *stores.get::<i64>(stack) as i32;
+    let bytes = t.str().as_bytes();
+    let result = if idx < 0 || (idx as usize) >= bytes.len() {
+        -1i32
+    } else {
+        i32::from(bytes[idx as usize])
+    };
+    stores.put(stack, i64::from(result));
+}
+
 pub fn init(state: &mut State) {
     for (name, implement) in FUNCTIONS {
+        state.static_fn(name, *implement);
+    }
+    // TTT v3.5 — register the lib/web natives in the wasm-pack
+    // interpreter so `use web` programs run in the browser without a
+    // cdylib (which the browser can't load).
+    #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+    for (name, implement) in WEB_FUNCTIONS_WASM {
         state.static_fn(name, *implement);
     }
 }
