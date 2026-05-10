@@ -72,16 +72,22 @@ Per-cell rendering rules:
 - **Empty hex (background)**: black fill, slightly lighter outline
   so the hex lattice is always visible — even on a blank world.
   No mesh geometry.
-- **Filled hex (crystal)**: mesh coloured **mostly** by the
-  cell's own palette colour, with **some triangles tinted in the
-  colours of its 1-away neighbours** and **a trace of triangles
-  tinted in 2-away tile colours**.  The dominance ordering is
-  self ≫ 1-away ≫ 2-away, so the cell's own colour is unambiguous
-  at a glance but the audience can read colour-bleed across
-  cluster boundaries — adjacent territories visibly mix at the
-  edges, distant ones leave a hint.  Faceting + lighting carry
-  the height shape on top of the colour mix.  Older cells may
-  desaturate / darken depending on the generation variant.
+- **Filled hex (crystal)**: mesh built from triangles, each
+  triangle a **single solid palette colour with a hard edge** to
+  its neighbours.  No gradients, no per-pixel mixing, no alpha
+  blending.  The colour mix on each crystal is a mosaic:
+  - **Most** triangles take the cell's **own** palette colour.
+  - **Some** triangles take a **1-away neighbour's** palette
+    colour.
+  - **A few** triangles take a **2-away tile's** palette colour.
+  The dominance ordering is self ≫ 1-away ≫ 2-away, so the
+  cell's own colour reads unambiguously at a glance.  At
+  projection distance the eye fuses the mosaic into a perceived
+  colour-bleed across cluster boundaries — but the underlying
+  geometry is always solid-colour triangles with hard edges
+  between them.  Faceting + lighting carry the height shape on
+  top of the mosaic.  Older cells may desaturate / darken
+  depending on the generation variant.
 - **Recently-changed cell**: brief highlight pulse (e.g. white
   edge flash on the crystal, decays over ~500 ms) so the audience
   sees where growth is happening even when the camera is wide.
@@ -150,7 +156,7 @@ moments.  CI-4 picks between hold-still and slow-orbit.
 | 3.2 | 3D hex-grid renderer at projection resolution (target 1920x1080+).  Likely fork `lib/moros_editor` — already a 3D hex world | M |
 | 3.3 | Camera transform — world coordinates → screen pixels with pan + zoom | S |
 | 3.4 | Per-filled-hex height + lateral-reach computation: height = `f(filled_neighbor_count)`; lateral reach toward each filled hex within bridge range (gap of 1) | S |
-| 3.4b | Per-triangle colour blending: dominant self colour + minor share of 1-away neighbour colours + trace of 2-away tile colours.  Stable assignment (same triangle stays the same colour across frames so the eye reads it as texture, not noise) | S |
+| 3.4b | Per-triangle colour assignment: each triangle gets one solid palette colour from the {self, 1-away neighbours, 2-away tiles} set with dominance self ≫ 1-away ≫ 2-away.  Hard edges between triangles, no shader-side blending.  Stable assignment (same triangle keeps its colour across frames so the mosaic reads as texture, not noise) | S |
 | 3.5 | Heat-field tracker — accumulate events, decay over time | S |
 | 3.6 | Camera target derivation — centroid + spread → target + zoom | S |
 | 3.7 | Smooth camera motion (lerp + smoothing constant tuning) | S |
@@ -177,13 +183,16 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   combination?) at CI-3 after a render-spike.  Keep counts low
   enough that a busy world (~500 filled hexes) still hits frame
   budget.
-- **Triangle-colour-blend ratios** — exact share for self vs
-  1-away vs 2-away.  First cut: ~70% self / ~25% spread across
-  1-away neighbours / ~5% spread across 2-away tiles, biased by
-  each neighbour's own colour count.  CI-3 picks the final
-  numbers after seeing the colour-bleed at projection scale —
-  too much neighbour colour = muddy, too little = boring solid
-  blocks.
+- **Triangle-colour mix ratios** — exact share for self vs
+  1-away vs 2-away (each triangle is one solid palette colour;
+  this picks how many of the crystal's triangles fall into each
+  bucket).  First cut: ~70% self / ~25% spread across 1-away
+  neighbours / ~5% spread across 2-away tiles, biased by each
+  neighbour's own colour count.  CI-3 picks the final numbers
+  after seeing the mosaic at projection scale — too many
+  neighbour-coloured triangles = the cell's own colour gets
+  lost, too few = the crystal reads as a flat solid block
+  instead of a faceted mosaic.
 - **Bridge geometry — exact mesh shape** — each filled crystal
   has a base mesh whose top facets can extend laterally toward a
   filled partner one cell away.  Like the crystals themselves,

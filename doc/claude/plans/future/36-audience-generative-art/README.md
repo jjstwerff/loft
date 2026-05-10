@@ -76,11 +76,15 @@ geometry with visible negative space.  The camera can see
 any single crystal to what is past it.  Aesthetic: quartz cluster
 or open lattice, not solid lava hill.
 
-Each crystal's mesh is **mostly its own hex colour**, with some
-triangles tinted in 1-away neighbour colours and a trace tinted
-in 2-away tile colours.  Adjacent territories visibly bleed into
-each other at the edges; distant ones leave a hint.  The cell's
-own colour stays unambiguous at a glance.
+Each crystal's mesh is built from triangles, **each triangle one
+solid palette colour with hard edges to its neighbours** — no
+gradients, no shader-side blending.  Most triangles take the
+cell's own colour; some take a 1-away neighbour's colour; a few
+take a 2-away tile's.  At projection distance the eye fuses the
+mosaic into a perceived colour-bleed across cluster boundaries,
+but the underlying geometry is always solid-colour triangles
+with hard edges.  The cell's own colour reads unambiguously at a
+glance.
 
 When a new hex becomes filled, the crystal **grows over ~5
 seconds** in the direction extruded from the cluster of older
