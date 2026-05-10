@@ -58,20 +58,30 @@ schema needs locking too — minimum: a per-tick delta of
 the growth without recomputing it.  Phase 1 + 2 + 3 all consume
 this; phase 1 produces it.
 
-## World shape — 3D height field
+## World shape — 3D crystal mesh
 
-The world the projector renders is **not flat**.  Each hex has
-a height derived from its filled-neighbor pattern: a single
-filled hex with no neighbors is the lowest crystal; a filled
-hex with all 6 neighbors filled reaches the highest plateau;
-two filled hexes one cell apart create a small bridge in the
-empty hex between them; a line of filled hexes forms a ridge.
+The world the projector renders is **not flat** — and it is
+**not a closed surface** either.  The mesh is built from filled
+hexes only; empty hexes are background lattice with no geometry.
+Each filled crystal's height grows monotonically with its filled-
+neighbor count (lone filled hex = lowest crystal point, fully-
+surrounded = highest plateau).  Two filled hexes one cell apart
+form a small **bridge** by each extending laterally toward the
+other and meeting over the empty cell between them.  A line of
+filled hexes forms a continuous **ridge**.
+
+Both crystals and bridges are **sparse / skeletal** — faceted
+geometry with visible negative space.  The camera can see
+*through* a bridge to crystals behind, and through the gaps of
+any single crystal to what is past it.  Aesthetic: quartz cluster
+or open lattice, not solid lava hill.
+
 When a new hex becomes filled, the crystal **grows over ~5
 seconds** in the direction extruded from the cluster of older
 nearby hexes toward the new one.
 
-Full rendering rules + interpolation maths in
-[`03-projector-view.md` § Visual model](03-projector-view.md#visual-model--3d-height-field).
+Full rendering rules + open mesh-shape questions in
+[`03-projector-view.md` § Visual model](03-projector-view.md#visual-model--3d-crystal-mesh).
 The audience client (phone) stays 2D top-down for input
 clarity; the projector is the spectacle that shows the world's
 true 3D shape.

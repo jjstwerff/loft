@@ -26,42 +26,59 @@ The projector view is the spectacle of the talk — what the room
 collectively watches grow.  It is **passive**: it observes server
 state, never sends events.
 
-## Visual model — 3D height field
+## Visual model — 3D crystal mesh
 
-The projector renders the world as a **3D height field over the
-hex grid**, not a flat plane.  This is the spectacle: the room
-watches crystals literally *grow upward* as audience input
-spreads.
+The projector renders the filled hexes as a **3D crystal mesh**
+sitting on top of a flat hex-lattice background.  This is the
+spectacle: the room watches crystals literally *grow upward* as
+audience input spreads.
 
-Per-hex height rules:
+**Empty hexes are not part of the mesh.**  They render only as
+the background lattice (outlined black hex tiles); no surface
+geometry sits on them.  The mesh is built from filled hexes
+only.
 
-| Configuration | Height |
+Per-filled-hex height + connectivity rules:
+
+| Configuration | Crystal shape |
 |---|---|
-| Filled hex with 0 filled neighbors | **Lowest** — a single crystal point |
-| Filled hex with all 6 neighbors filled | **Highest** — a peak / plateau |
-| Filled hex with N neighbors filled (0 < N < 6) | Monotonically rising with N |
-| Empty hex between two filled hexes (gap of 1) | Small **bridge** bump — visible elevation, lower than filled endpoints |
-| Empty hex far from any filled | Flat (zero height) |
-| Line of filled hexes | Continuous **ridge** of crystals |
+| Filled hex, 0 filled neighbors | **Lowest** — a single isolated crystal point |
+| Filled hex, all 6 neighbors filled | **Highest** — a peak / plateau within a continuous mass |
+| Filled hex, N neighbors filled (0 < N < 6) | Height monotonically rising with N |
+| Two filled hexes with exactly one empty hex between them | Each crystal **extends laterally** toward the other, meeting above the empty cell to form a small **bridge** in the mesh.  The empty hex below stays black background |
+| Line of filled hexes | Continuous **ridge** of crystals (since each filled hex has at least one filled neighbor along the line) |
 
-Height is derived from the filled-neighbor pattern in the
-neighborhood — every hex (filled or empty) gets a height value
-suitable for smooth surface rendering.  Empty hexes between
-filled ones inherit a fraction of the surrounding height, which
-produces the bridge effect naturally.
+The bridge effect is not "the empty hex has height" — it's that
+each filled crystal's mesh **reaches toward** a partner filled
+crystal one cell away.  When both reach toward each other, they
+meet over the empty cell and form a span.  Cells with no partner
+within bridge range have no lateral extension on that side.
 
-Per-cell rendering preserves the colour rules from the audience
-client:
+**Crystals and bridges are not solid masses** — they're faceted
+/ skeletal geometry with **visible negative space**.  The camera
+can look *through* a bridge to see crystals behind it, and
+through the gaps of any single crystal to see what is past it.
+The aesthetic is closer to a quartz cluster or open lattice
+than to a hill of lava — light, shadow, and the world behind
+each crystal all read through the gaps.
 
-- **Empty hex**: black fill, slightly lighter outline so the
-  hex lattice is always visible.  Empty hexes near filled ones
-  pick up some height from the bridge effect but stay black.
-- **Painted hex**: filled with the cell's palette colour, same
-  outline.  Older cells may desaturate / darken depending on
-  the generation variant.
-- **Recently-changed hex**: brief highlight pulse (e.g. white
-  edge flash, decays over ~500 ms) so the audience sees where
-  growth is happening even when the camera is wide.
+This means the per-crystal mesh is a sparse arrangement of
+faces (spires, plates, lattice struts) rather than a closed
+hull.  Lighting + back-face visibility need to be tuned so the
+through-look reads clearly on a projector at venue distance.
+
+Per-cell rendering rules:
+
+- **Empty hex (background)**: black fill, slightly lighter outline
+  so the hex lattice is always visible — even on a blank world.
+  No mesh geometry.
+- **Filled hex (crystal)**: mesh coloured by the cell's palette
+  colour with faceting + lighting that reads the height clearly.
+  Older cells may desaturate / darken depending on the generation
+  variant.
+- **Recently-changed cell**: brief highlight pulse (e.g. white
+  edge flash on the crystal, decays over ~500 ms) so the audience
+  sees where growth is happening even when the camera is wide.
 
 ### Growth animation
 
@@ -126,7 +143,7 @@ moments.  CI-4 picks between hold-still and slow-orbit.
 | 3.1 | WebSocket client (subscribe-only; reuse `lib/web` ws API) | XS |
 | 3.2 | 3D hex-grid renderer at projection resolution (target 1920x1080+).  Likely fork `lib/moros_editor` — already a 3D hex world | M |
 | 3.3 | Camera transform — world coordinates → screen pixels with pan + zoom | S |
-| 3.4 | Per-hex height computation from filled-neighbor pattern (filled + empty hexes both get height; empty inherits fractional height for the bridge effect) | S |
+| 3.4 | Per-filled-hex height + lateral-reach computation: height = `f(filled_neighbor_count)`; lateral reach toward each filled hex within bridge range (gap of 1) | S |
 | 3.5 | Heat-field tracker — accumulate events, decay over time | S |
 | 3.6 | Camera target derivation — centroid + spread → target + zoom | S |
 | 3.7 | Smooth camera motion (lerp + smoothing constant tuning) | S |
@@ -145,12 +162,23 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   the auto-camera here.  CI-3 confirms after a render-spike on
   representative geometry (~50 filled hexes, ~5 second growth in
   flight).
-- **Height-field formulation — exact math** — simplest: per-hex
-  intrinsic height = `f(filled_neighbor_count)` for filled
-  hexes, then a smooth surface (Gaussian / cubic-spline-like)
-  interpolation over centres so empties between filled hexes
-  pick up the bridge effect.  Alternative: explicit "bridge
-  weight" rule.  CI-3 picks after seeing both on a fixture.
+- **Crystal mesh shape — sparse / skeletal** — crystals are not
+  closed hulls.  They are faceted clusters (think quartz spikes,
+  open lattice struts, plate facets) with **visible negative
+  space** so the camera can see past them to crystals behind.
+  Open question: pick the mesh primitive set (spikes? plates?
+  combination?) at CI-3 after a render-spike.  Keep counts low
+  enough that a busy world (~500 filled hexes) still hits frame
+  budget.
+- **Bridge geometry — exact mesh shape** — each filled crystal
+  has a base mesh whose top facets can extend laterally toward a
+  filled partner one cell away.  Like the crystals themselves,
+  bridges are **not solid** — they consist of struts / plates
+  with gaps the camera can see through.  Two further questions:
+  (a) how far does the lateral reach extend (just to the empty
+  cell's centre?  past it to meet the partner?), (b) does the
+  bridge top arch upward, stay level, or sag?  CI-3 picks after
+  a render-spike.
 - **Growth animation cost** — 5-second per-hex interpolation
   with N concurrent growths means every frame must process N
   active growths.  At ~60 FPS × N=50 = manageable; at N=500
