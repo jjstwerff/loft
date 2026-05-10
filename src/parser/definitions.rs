@@ -457,6 +457,17 @@ impl Parser {
     // type annotation is parsed (so the parser doesn't reject the form)
     // but the inferred type from the initialiser is the source of truth.
     pub(crate) fn parse_constant(&mut self) -> bool {
+        // P246 — accept the optional `const` keyword at file scope as
+        // a synonym for the bare-name form (`const PI = 3.14;` ===
+        // `PI = 3.14;`).  Pre-fix the leading `const` swallowed
+        // identifiable name, the parser fell through to
+        // `expression()`, and `change_var_type` panicked on an empty
+        // file-scope variable table.  The two forms are identical at
+        // every level — same definition kind, same UPPER_CASE check,
+        // same code path — so the keyword is purely an explicitness
+        // signal at the declaration site (matches the in-fn `const`
+        // syntax and lib/wall.loft's existing usage).
+        let _explicit_const = self.lexer.has_keyword("const");
         if let Some(id) = self.lexer.has_identifier() {
             // Optional `: type` annotation between the identifier and `=`.
             // Parsed and discarded — the literal's element type is used.

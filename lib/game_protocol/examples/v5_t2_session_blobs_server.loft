@@ -24,7 +24,7 @@
 use server;
 use web;
 
-TYPE_DELTA = 2;
+const TYPE_DELTA = 2;
 
 fn send_blob(ws: server::WebSocket, kind: integer, session: integer,
              color: integer, height: integer, age: integer) -> boolean {
