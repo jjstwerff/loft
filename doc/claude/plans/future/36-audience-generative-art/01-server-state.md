@@ -199,6 +199,30 @@ cell's effective lease, so decay starts at the **edges** of a
 cluster (where neighbour counts are lowest) and works inward,
 rather than punching holes through the middle.
 
+**Decay timing (resolved 2026-05-10):**
+
+- **Base lifetime: 5 minutes** (3000 ticks at 10 Hz).  No cell
+  decays before that — the canvas accumulates as the audience
+  paints.
+- **Lease per filled neighbour**: a default extension on top
+  of base lifetime (suggested ~1 minute = 600 ticks; tunable
+  at first prototype).  A fully-surrounded cell with 6 neighbours
+  lives base + 6 × lease ≈ 11 minutes before becoming eligible
+  for removal; an isolated cell with no filled neighbours
+  becomes eligible exactly at 5 minutes.
+- **Decay window** (eligible → removed): even after a cell
+  becomes eligible, removal is **slow**.  Suggested window:
+  ~30 seconds (300 ticks).  Across the window the renderer
+  animates the height + crystal mesh shrinking down rather than
+  the cell disappearing on a single tick.  Server keeps the
+  cell in the world during the decay window with `c_age`
+  continuing to increment past `effective_lifetime`; cell is
+  fully removed (set to `c_color = 0`) at `c_age >=
+  effective_lifetime + decay_window`.
+
+The slow decay is part of the **sluggish-by-design** philosophy
+— see [`README.md` § Tempo philosophy](README.md#tempo-philosophy--sluggish-by-design).
+
 Each tick:
 
 1. Apply the queue of audience events received since last tick
@@ -212,10 +236,18 @@ Each tick:
    (the 2-byte ceiling).
 4. **Decay step**: for each non-empty cell, compute
    `effective_lifetime = base_lifetime + lease_per_neighbour
-   * filled_neighbour_count`.  If `c_age >= effective_lifetime`,
-   set `c_color = 0` (cell removed, becomes empty).  Edges of a
-   cluster die first because their `filled_neighbour_count` is
-   low; deep-interior cells get many leases and survive longest.
+   * filled_neighbour_count`.  If `c_age >= effective_lifetime
+   + decay_window`, set `c_color = 0` (cell fully removed).
+   For cells in the eligible-but-not-yet-removed range
+   (`effective_lifetime <= c_age < effective_lifetime +
+   decay_window`), leave `c_color` set; the renderer reads
+   `c_age` and animates the crystal shrinking over the decay
+   window.  Edges of a cluster cross the eligible threshold
+   first because their `filled_neighbour_count` is low; deep-
+   interior cells get many leases and survive longest.  Decay
+   timing values: see [`README.md` § Tempo philosophy](README.md#tempo-philosophy--sluggish-by-design)
+   and the Decay timing block above (base 5 min, ~30 s decay
+   window).
 5. Compute `world_delta`: per-chunk lists of `(hx, hz, color,
    height, age)` for cells whose payload changed since last
    tick (placements, height-recomputes, decays).

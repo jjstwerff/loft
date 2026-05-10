@@ -281,15 +281,14 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   projection scale; tighter (more self) if the mosaic feels
   muddy, looser (more neighbour) if crystals read as flat solid
   blocks.
-- **Bridge geometry — exact mesh shape** — each filled crystal
-  has a base mesh whose top facets can extend laterally toward a
-  filled partner one cell away.  Like the crystals themselves,
-  bridges are **not solid** — they consist of struts / plates
-  with gaps the camera can see through.  Two further questions:
-  (a) how far does the lateral reach extend (just to the empty
-  cell's centre?  past it to meet the partner?), (b) does the
-  bridge top arch upward, stay level, or sag?  CI-3 picks after
-  a render-spike.
+- ~~**Bridge geometry — exact mesh shape**~~ — RESOLVED
+  2026-05-10: each filled crystal extends a lateral lobe to the
+  **centre of the empty cell**, where the two lobes meet at the
+  **same height** as the source crystals (level top, no arch,
+  no sag).  Like the crystals themselves, bridges are not solid
+  — they consist of struts / plates with gaps the camera can
+  see through.  Simple, clean, sluggish-friendly aesthetic;
+  easy to compute.
 - **Growth animation cost** — 5-second per-hex interpolation
   with N concurrent growths means every frame must process N
   active growths.  At ~60 FPS × N=50 = manageable; at N=500
