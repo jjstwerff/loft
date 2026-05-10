@@ -33,10 +33,10 @@ top of them, not library extension.
 
 | # | File | Builds | Effort |
 |---|---|---|---|
-| 0 | [00-audience-browser-page.md](00-audience-browser-page.md) | Pure HTML/JS — color palette + tap-to-seed + WebSocket | XS |
-| 1 | [01-server-state.md](01-server-state.md) | Loft server: hold seed list + bias field, run growth tick, broadcast world updates.  Builds on shipped `lib/server` multi-client WS API | M |
+| 0 | [00-audience-browser-page.md](00-audience-browser-page.md) | Pure HTML/JS smartphone client — 9×7 hex world view (with movement-zone outer rings), 9-color palette, clear + jump-to-active controls, tap/swipe paint, WebSocket | S |
+| 1 | [01-server-state.md](01-server-state.md) | Loft server: hold world state, drive tick loop, broadcast world deltas + active-player signals.  Builds on shipped `lib/server` multi-client WS API | M |
 | 2 | [02-generation-script.md](02-generation-script.md) | Loft generative script: plant/crystal growth from seeds + neighbor color blending biased by direction-color votes.  2-3 variants for round-to-round switching.  THE STAR of the demo | M |
-| 3 | [03-projector-view.md](03-projector-view.md) | Native viewer: subscribe to server, render evolving hex world.  Auto-camera tracks activity heat field (smooth interpolation between centroid + zoom).  Either modify `lib/moros_editor` or a slimmer dedicated viewer | S |
+| 3 | [03-projector-view.md](03-projector-view.md) | Native loft beamer client: subscribe to server, render full hex world, auto-camera follows activity heat field, presenter hotkey overrides | M |
 | 4 | [04-hosting.md](04-hosting.md) | Public URL reachable from venue WiFi (VPS / hotspot / ngrok / cloudflared).  Operational, not code | XS |
 | 5 | [05-rehearsal-and-backup.md](05-rehearsal-and-backup.md) | One full dry run on demo hardware; record both demos as fallback for catastrophic failure | XS |
 
