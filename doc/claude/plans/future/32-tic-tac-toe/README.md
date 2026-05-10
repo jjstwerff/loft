@@ -1064,6 +1064,13 @@ text-mode test:
    missed deltas (if cached) or a fresh full-state snapshot,
    under a single new session id the client renders as one
    coherent update.
+
+   **Server-side replay cache (resolved 2026-05-10): last 60
+   seconds of sessions** — at the 10 Hz tick rate, ~600
+   sessions in cache.  Covers brief network blips; longer
+   disconnects fall back to a fresh snapshot.  Memory cost
+   small; tunable constant at first prototype if rehearsal
+   shows different need.
 5. **Sluggish-by-design world timings.**  Server runs a 10 Hz
    tick that ages cells (state grows on placement events,
    decays after a 5-minute base lifetime extended by per-
