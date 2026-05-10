@@ -289,12 +289,14 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   — they consist of struts / plates with gaps the camera can
   see through.  Simple, clean, sluggish-friendly aesthetic;
   easy to compute.
-- **Growth animation cost** — 5-second per-hex interpolation
-  with N concurrent growths means every frame must process N
-  active growths.  At ~60 FPS × N=50 = manageable; at N=500
-  (very busy round) needs measurement.  Mitigation: cap
-  concurrent growths at the renderer (queue overflow grows
-  faster) or skip per-frame for low-progress hexes.
+- ~~**Growth animation cost**~~ — RESOLVED 2026-05-10: **no
+  preemptive cap**.  Sluggish-by-design tempo (~5 s per growth,
+  ~30 s per decay window, 10 Hz tick rate) means sustained
+  100+ concurrent animations is unlikely.  Measure actual cost
+  during the first prototype and rehearsal; if a frame budget
+  breach shows up, decide on the right cap (hard cap, LOD
+  simplification, or per-frame skipping) then.  Don't optimise
+  ahead of the measurement.
 - **Camera framing** — fit-to-content (always show all painted
   cells) vs. follow-action (zoom in on the busiest cluster).
   Fit-to-content is "fair"; follow-action is "exciting."
