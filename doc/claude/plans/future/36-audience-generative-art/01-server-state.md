@@ -220,9 +220,14 @@ heartbeat.)
   end-state the decay rule would have produced anyway given
   enough time.  No `--persist` flag, no snapshot file, no
   startup-restore path.
-- **Bandwidth ceiling** — at 10 Hz × N clients × M cells/tick,
-  does this saturate venue WiFi?  Phase 4 hosting deals with the
-  network plane; phase 1 measures the volume.
+- ~~**Bandwidth ceiling**~~ — RESOLVED 2026-05-10 as a
+  measurement target, not a hard cap: phase 1's load-test
+  deliverable (`--load-test 30` for 5 minutes) measures actual
+  wire volume.  Reasonable for the meetup audience size; if
+  venue WiFi cannot sustain it we know early.  No server-side
+  per-tick cap unless the load test surfaces pathological busy
+  moments — optimisation is its own follow-up, not a phase 1
+  blocker.
 - **Authority** — server is authoritative; clients render what
   the server sends (no client-side prediction needed for this
   talk's scale).
