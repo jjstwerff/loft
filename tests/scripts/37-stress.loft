@@ -30,7 +30,7 @@ struct HashDb {
 }
 
 fn main() {
-  N = 100;
+  const N = 100;
   // ====== VECTOR: integers ======
   // Build, verify sum, remove all via #remove, repeat.
   v =[for i in 0..N {

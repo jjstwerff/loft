@@ -910,6 +910,11 @@ impl Parser {
             if !is_stub {
                 self.vars.test_used(&mut self.lexer, &self.data);
             }
+            // P246 follow-up — UPPER_CASE locals without `const`
+            // violate the "UPPER_CASE means immutable constant"
+            // convention.  Run once per function in the second pass
+            // (after const_param flags are settled).
+            self.vars.warn_upper_case_locals(&mut self.lexer);
         }
         self.lexer.has_token(";");
         self.parse_rust();

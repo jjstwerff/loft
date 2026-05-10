@@ -61,6 +61,28 @@ use crate::data::{Context, Data, Type, Value};
 use crate::diagnostics::{Level, diagnostic_format};
 use crate::keys::DbRef;
 use crate::lexer::Lexer;
+
+/// True iff `name` contains at least one uppercase letter and no
+/// lowercase letters.  Used by `warn_upper_case_locals` (P246
+/// follow-up): `_`, `_foo`, and `123` should NOT trip the warning,
+/// but `FOO`, `MAX_SIZE`, `X` should.  Distinct from the parser's
+/// `is_upper`, which accepts pure-numeric names like `42` (no
+/// lowercase chars at all but also no uppercase).
+fn is_upper_case_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let mut has_upper = false;
+    for c in name.chars() {
+        if c.is_lowercase() {
+            return false;
+        }
+        if c.is_uppercase() {
+            has_upper = true;
+        }
+    }
+    has_upper
+}
 /**
 This administrates variables and scopes for a specific function.
 - The first scope (0) is for function arguments.
@@ -1089,6 +1111,41 @@ impl Function {
                     var.name,
                 );
             }
+        }
+    }
+
+    /// Warn on UPPER_CASE non-const locals (P246 follow-up).  The
+    /// UPPER_CASE convention is reserved for constants — file-scope
+    /// `const NAME = expr;` / `NAME = expr;` and in-fn `const FOO =
+    /// expr;`.  A LOCAL written `FOO = …` without the `const` keyword
+    /// violates the convention and confuses readers — they expect
+    /// UPPER_CASE to mean "compiler-checked immutable" but the
+    /// variable can be reassigned.  Emits a Warning telling the user
+    /// to either add `const` or rename to lower_case.  Skips
+    /// arguments (the `const T` parameter modifier already handles
+    /// const-ness on parameters), `_`-prefixed names, and synthetic
+    /// names containing `#`.
+    pub fn warn_upper_case_locals(&self, lexer: &mut Lexer) {
+        for var in &self.variables {
+            if var.argument
+                || var.const_param
+                || var.name.starts_with('_')
+                || var.name.contains('#')
+            {
+                continue;
+            }
+            if !is_upper_case_name(&var.name) {
+                continue;
+            }
+            lexer.to(var.source);
+            diagnostic!(
+                lexer,
+                Level::Warning,
+                "Variable '{}' is UPPER_CASE — that style is reserved for constants.  \
+                 Declare with `const {} = …` to make it immutable, or rename to lower_case.",
+                var.name,
+                var.name
+            );
         }
     }
 

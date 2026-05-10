@@ -84,11 +84,25 @@ const t = "hello";  // works for any type
 
 ## Constants
 
+The `const` keyword is accepted at file scope as well, alongside the
+bare-name form.  Both produce the same file-scope immutable constant:
+
 ```loft
-PI = 3.14159265358979;    // file-scope UPPER_CASE constant
+PI       = 3.14159265358979;    // bare-name form
+const E  = 2.71828182845905;    // const-keyword form (P246, 2026-05-11)
+pub const MAX_SIZE = 256;       // pub + const combine for exported constants
 ```
 
-Constants must be `UPPER_CASE` and defined at file scope.
+Constants must be `UPPER_CASE`.  Prefer the `const` form when you
+want the immutability intent visible at the declaration site
+(the bare-name form relies on the UPPER_CASE convention as the only
+visual signal); both forms behave identically.
+
+**UPPER_CASE locals warn unless declared `const`.**  Inside a
+function body, `FOO = 5;` (an assignment with an UPPER_CASE name and
+no `const` keyword) emits a warning telling you to add `const` or
+rename to `lower_case`.  The convention "UPPER_CASE means immutable"
+is enforced by this check at every scope.
 
 ---
 
