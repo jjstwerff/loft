@@ -263,3 +263,89 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 02 — nested tuples (E3 × D1, D2) ──────────────────────────────────
+//
+// Closes the matrix cells for tuples-containing-tuples: `((A, B), C)`,
+// `(A, (B, C))`, `((A, B), (C, D))`, plus mixed text + element-of-element
+// assignment.  P212's panic at codegen.rs:1527 (closed 2026-05-04 by the
+// recursive `emit_tuple_put_ops` helper) is the fix that makes these run;
+// the cells below are the matrix-wiring half of phase 02.
+
+cross_mode!(
+    e3_d1_nested_local,
+    r#"
+    fn test() {
+        t = ((1, 2), 3);
+        print("{t.0.0},{t.0.1},{t.1}\n");
+        assert(t.0.0 == 1, "e3_d1 t.0.0");
+        assert(t.0.1 == 2, "e3_d1 t.0.1");
+        assert(t.1 == 3,   "e3_d1 t.1");
+    }
+    "#
+);
+
+cross_mode!(
+    e3_d1_nested_deep,
+    r#"
+    fn test() {
+        t = ((1, 2), (3, 4));
+        print("{t.0.0},{t.0.1},{t.1.0},{t.1.1}\n");
+        assert(t.0.0 == 1 && t.0.1 == 2 && t.1.0 == 3 && t.1.1 == 4, "e3_d1_deep");
+    }
+    "#
+);
+
+// e3_d1_text_inside — currently fails under `--native` with E0382
+// (use of moved value: var_t.0) when format-string interpolation
+// reads `t.0.1` of a nested tuple containing text.  Filed P247.
+// Cell stays in the matrix as the regression guard once P247 closes.
+cross_mode!(
+    e3_d1_text_inside,
+    r#"
+    fn test() {
+        t = ((1, "a"), (2, "b"));
+        print("{t.0.0}|{t.0.1}|{t.1.0}|{t.1.1}\n");
+        assert(t.0.0 == 1 && t.0.1 == "a" && t.1.0 == 2 && t.1.1 == "b",
+               "e3_d1_text_inside");
+    }
+    "#
+);
+
+// e3_d1_elem_elem_assign — currently fails on both backends:
+// `t.0.1 = 99` parses but the LHS walker doesn't recurse into
+// nested TupleGet, so the assignment falls through to "Not
+// implemented operation = for type integer".  Filed P248.  Cell
+// stays in the matrix as the regression guard once P248 closes.
+cross_mode!(
+    e3_d1_elem_elem_assign,
+    r#"
+    fn test() {
+        t = ((1, 2), (3, 4));
+        t.0.1 = 99;
+        t.1.0 = 77;
+        print("{t.0.0},{t.0.1},{t.1.0},{t.1.1}\n");
+        assert(t.0.0 == 1 && t.0.1 == 99 && t.1.0 == 77 && t.1.1 == 4,
+               "e3_d1_elem_elem_assign");
+    }
+    "#
+);
+
+cross_mode!(
+    e3_d2_nested_arg,
+    r#"
+    fn show(p: ((integer, integer), integer)) {
+        print("{p.0.0},{p.0.1},{p.1}\n");
+        assert(p.0.0 == 1 && p.0.1 == 2 && p.1 == 3, "e3_d2_nested_arg");
+    }
+    fn test() {
+        show(((1, 2), 3));
+    }
+    "#
+);
+
+// e3_d2_nested_return DEFERRED — T1.8a (nested-tuple return convention)
+// not yet implemented.  The phase 02 design doc lists this as the one
+// cell that lands together with T1.8a; the cross_mode! macro doesn't
+// take per-test attributes today, so re-add this cell when T1.8a
+// closure makes it pass.

@@ -300,8 +300,14 @@ impl Output<'_> {
                 // `(String, String)`.  See `Value::Text` in emit.rs.
                 let prev_tuple_text = self.tuple_text_to_string;
                 if let Type::Tuple(elems) = variables.tp(var)
-                    && elems.iter().any(|e| matches!(e, Type::Text(_)))
+                    && tuple_has_text_leaf(elems)
                 {
+                    // Recurse through nested tuples so `((i64, String),
+                    // (i64, String))` triggers the flag too — without
+                    // this, plan-14 phase-02 cells like
+                    // `((1, "a"), (2, "b"))` emitted `"a"` (`&str`)
+                    // against a declared `String` slot and rustc raised
+                    // E0308.
                     self.tuple_text_to_string = true;
                 }
                 // When assigning to a String variable from a text-local source,
@@ -848,4 +854,20 @@ impl Output<'_> {
             self.output_call_template(w, def_fn, vals)
         }
     }
+}
+
+/// True iff `elems` contains a `Type::Text` element at any depth —
+/// includes text reached through nested `Type::Tuple`.  Used by
+/// `tuple_text_to_string` activation in `output_set` so a tuple
+/// destination like `((i64, String), (i64, String))` triggers the
+/// `"a".to_string()` wrap on the inner literals (plan-14 phase 02).
+fn tuple_has_text_leaf(elems: &[Type]) -> bool {
+    for e in elems {
+        match e {
+            Type::Text(_) => return true,
+            Type::Tuple(inner) if tuple_has_text_leaf(inner) => return true,
+            _ => {}
+        }
+    }
+    false
 }
