@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TTT v5 — t1 server.  Single-client binary echo.
+//
+// Listens on $LOFT_TICTACTOE_PORT (or 18091), accepts ONE WebSocket
+// upgrade, reads exactly one inbound frame and echoes the same bytes
+// back as a binary frame (opcode 0x02), then closes and exits.  The
+// Rust harness in tests/multiplayer_v5.rs orchestrates this server +
+// the matching client + asserts on the round-trip.
+//
+// The server prints a single status line to stdout per significant
+// step so the harness can detect that the binary path actually fired
+// (vs. e.g. the legacy text path):
+//   v5-t1: listening port=<n>
+//   v5-t1: upgraded
+//   v5-t1: recv opcode=<n> len=<n>
+//   v5-t1: echoed
+//   v5-t1: done
+
+use server;
+use web;
+
+fn main() {
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 18091 } else { port_raw as integer };
+
+  srv = server::listen(port);
+  if srv.handle < 0 {
+    println("v5-t1: bind-failed port={port}");
+    return;
+  }
+  println("v5-t1: listening port={port}");
+
+  req = srv.next();
+  if req == null {
+    println("v5-t1: accept-failed");
+    return;
+  }
+
+  ws = server::ws_upgrade();
+  if ws == null {
+    println("v5-t1: upgrade-failed");
+    return;
+  }
+  println("v5-t1: upgraded");
+
+  msg = ws.next();
+  if msg == null {
+    println("v5-t1: recv-failed");
+    return;
+  }
+  op = ws.last_opcode();
+  println("v5-t1: recv opcode={op} len={msg.len()}");
+
+  ok = ws.send_binary(msg);
+  if !ok {
+    println("v5-t1: send-failed");
+    return;
+  }
+  println("v5-t1: echoed");
+
+  // Brief settle so the kernel flushes the echo before close.
+  web::sleep_ms(50);
+  ws.close();
+  srv.close();
+  println("v5-t1: done");
+}
