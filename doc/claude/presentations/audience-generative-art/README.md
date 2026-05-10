@@ -16,14 +16,13 @@ shape, slides, audience-participation flow, presenter notes).
 ## Goal
 
 Deliver a memorable, audience-participatory creative-coding talk
-to a local meetup of game creators + art enthusiasts.
+to a local meetup of game creators + art enthusiasts.  Frame:
+**art show with loft footnotes**, not technical walk-through.
 
-The audience walks away with concrete examples of "I could write
-this" — short, readable loft code projected on screen, doing
-something visibly *interesting that's hard to find elsewhere*:
-collaborative shared state via a single URL + a generative script
-that can be tweaked between rounds, all in one language across
-server / client / generation.
+The audience walks away with the spectacle of a 3D crystal world
+they collectively painted, plus a handful of small loft snippets
+that show why loft was the right tool for *this* shape of demo
+— compact patterns that would be awkward in JS / Python / Rust.
 
 ## Demo concept
 
@@ -53,12 +52,15 @@ decisions log.)
 
 ## Talk shape
 
-The demo runs **continuously through most of the event** — no
-rounds, no manual resets, no pauses for setup between segments.
-The canvas evolves from blank at the start to whatever the
-audience has built and the decay rule has eroded by the end.
-Presenter weaves narration and code reveals into the ongoing
-painting without breaking the spectacle.
+This is **more an art show than a technical session**.  The
+demo runs continuously through most of the event — no rounds,
+no manual resets, no pauses for setup between segments.  The
+canvas evolves from blank at the start to whatever the audience
+has built and the decay rule has eroded by the end.  Code is
+supporting evidence, not the main act: the presenter highlights
+**small loft-specific snippets** (things that read compactly in
+loft and would be awkward in JS / Python / Rust) at chosen
+moments — never a full file walk-through.
 
 ### Two-screen staging
 
@@ -76,18 +78,22 @@ same time without context-switching.
 | Beat | Time-share | What happens |
 |---|---|---|
 | Open with the project goal | brief | "Browser games anyone can play via a shared link" — frame loft's lane |
-| Set up the demo URL | brief | QR code + short URL; "open this on your phone, pick a color" |
-| Audience starts painting | longer | Audience taps; first crystals grow on the projector; presenter narrates light enough to let the visual carry |
-| Reveal the client code | shorter | Project the audience-page loft / HTML; ~30-50 lines; presenter reads through it while painting continues in the background |
-| Reveal the server code | shorter | Project the server-state loft; same shape — read through while painting continues |
-| Reveal the projector code (mesh + auto-camera) | shorter | Project the renderer loft; talk through the edge-detection rule that makes plant aesthetic emerge |
+| Set up the demo URL | brief | Big QR code + short URL slide; "open this on your phone, pick a color" |
+| Audience starts painting | longer | Audience taps; first crystals grow on the projector; presenter narrates lightly to let the visual carry |
+| Loft snippet highlight 1 | brief (30-60 s) | Small slide showing one compact loft pattern that powers something the audience just saw — e.g. the chunked sparse-storage one-liner, or the typed-binary blob read.  Read 5-15 lines aloud; back to painting |
+| Loft snippet highlight 2 | brief (30-60 s) | Another one — e.g. an edge-detection pattern, an auto-camera snippet, a generation step that fits in a few lines.  Same shape: read, return to spectacle |
+| Loft snippet highlight 3 | brief (30-60 s) | Closing snippet — the kind of thing that would be a hundred lines in another language.  Sells the "loft was the right tool" thesis without becoming a code review |
 | Decay narration moment | brief | Point out the edges receding — "no one's removing them; the world erodes itself.  Watch where it eats from first" |
 | Q&A | open | "Where do I get this?" / "What can it do beyond paint?" |
 
-Narrative arc: spectacle (audience paints) → reveal (here is the
-code that makes this happen, in three small loft files) →
-spectacle continues (the world they painted is still there,
-visibly being shaped by both their input and the decay rule).
+Narrative arc: spectacle (audience paints) → footnote (here is
+a small loft thing that made *that* compact) → spectacle
+continues.  The art show carries the room; the snippets land
+quickly enough to stay out of the way.
+
+Pick the 3 snippets at CI-3 once the actual code exists — choose
+whichever read most cleanly as standalone, not whichever cover
+the most subsystems.
 
 ## Audience-participation flow
 
@@ -122,23 +128,36 @@ phase 5 readiness.
 
 ## Open presentation-side questions
 
-1. **QR-code → URL onboarding** — single big QR on a "join here"
-   slide?  Or persistent corner element on every slide?  First is
-   cleaner; second helps late arrivals.
-2. **Voice + visual rhythm during rounds** — silence during growth
-   (let the visual carry it) vs. light narration ("watch how blue
-   pushes north")?  Probably mix per round.
-3. **When to reveal each of the three code files** (client /
-   server / projector) — early (anticipation: audience knows
-   what each layer does), late (mystery: audience figures out
-   rules from observation first), or interleaved across the
-   talk?  Recommend interleaved — reveal client first
-   (smallest, most relatable), server next (the lifecycle that
-   feels like magic), projector last (the spectacle code).
-4. **Single demo or include a second moros-editor segment?** — The
-   moros editor as "look, real creator tool exists in loft" could
-   bookend the audience-generative segment.  Adds time but
-   broadens "what loft is."
+1. ~~**QR-code → URL onboarding**~~ — RESOLVED 2026-05-10:
+   **big dedicated "join here" slide at the start**.  One large
+   QR + one short URL filling a slide.  Cleanest visual; easiest
+   to scan from the back of the room.  Late arrivals can ask a
+   neighbour or wait for the next presenter pause; the demo URL
+   stays consistent across the whole event so re-onboarding is
+   trivial.
+2. ~~**Voice + visual rhythm**~~ — RESOLVED 2026-05-10:
+   **mix — light narration during paint, silent during code
+   reveals**.  Light commentary while the audience paints
+   ("watch how blue pushes north", "see the bridges forming",
+   "look where the edges are starting to recede") keeps the
+   room engaged.  Code-reveal beats stay silent so the audience
+   can read the projected source.  Adapts to room energy.
+3. ~~**When to reveal each of the three code files**~~ —
+   RESOLVED 2026-05-10: **no full file reveals**.  This is an
+   art show, not a technical session.  Replace the three
+   file-reveal beats with **3 small loft snippet highlights**
+   (~30-60 s each) showing patterns that read compactly in loft
+   and would be awkward in JS / Python / Rust.  Pick the actual
+   3 snippets at CI-3 once the code exists — choose whichever
+   read cleanest as standalone, not whichever cover the most
+   subsystems.
+4. ~~**Single demo or include a second moros-editor segment?**~~
+   — RESOLVED 2026-05-10: **single demo, audience-generative
+   only**.  The art-show framing (Q3) reinforces this — a second
+   demo would dilute the through-line.  The moros-editor pitch
+   stays a sentence in passing ("this same renderer ships in our
+   3D editor too" — surfaces the renderer-reuse story without
+   competing for attention).
 
 ## Risks (presentation-side)
 
