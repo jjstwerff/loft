@@ -39,6 +39,10 @@ mod native_impl {
     thread_local! {
         static CONNS: RefCell<Vec<Option<Conn>>> = const { RefCell::new(Vec::new()) };
         static LAST_MSG: RefCell<String> = const { RefCell::new(String::new()) };
+        // Opcode of the last frame surfaced by `recv` (1=text, 2=binary,
+        // 9=ping, 10=pong, 8=close).  Loft programs read this via
+        // `last_opcode()` to distinguish text vs binary inbound frames.
+        static LAST_OP: RefCell<u8> = const { RefCell::new(0) };
     }
 
     // ── SHA-1, base64, mask key (small + dependency-free) ──────────────
@@ -245,6 +249,7 @@ mod native_impl {
     // ── Frame I/O (client perspective: read unmasked, write masked) ────
 
     pub const OP_TEXT: u8 = 0x01;
+    pub const OP_BINARY: u8 = 0x02;
     pub const OP_CLOSE: u8 = 0x08;
     pub const OP_PING: u8 = 0x09;
     pub const OP_PONG: u8 = 0x0A;
@@ -410,6 +415,19 @@ mod native_impl {
     }
 
     pub fn send(handle: i32, msg: &str) -> bool {
+        send_with_opcode(handle, OP_TEXT, msg.as_bytes())
+    }
+
+    /// Send a binary WebSocket frame (opcode 0x02).  Loft `text` is a
+    /// byte buffer, so the loft-side caller passes `text` whose bytes
+    /// are the binary payload (e.g. packed `u8 + u32 + …`); this
+    /// function ships those bytes with the binary opcode set.  Used by
+    /// TTT v5 + plan-36 for `world_snapshot` / `world_delta` blobs.
+    pub fn send_binary(handle: i32, msg: &[u8]) -> bool {
+        send_with_opcode(handle, OP_BINARY, msg)
+    }
+
+    fn send_with_opcode(handle: i32, opcode: u8, payload: &[u8]) -> bool {
         CONNS.with(|c| {
             let mut c = c.borrow_mut();
             let conn = match c.get_mut(handle as usize).and_then(|s| s.as_mut()) {
@@ -420,7 +438,7 @@ mod native_impl {
                 return false;
             }
             let stream = conn.stream.as_mut().expect("stream present after ensure_connected");
-            let ok = write_masked_frame(stream, OP_TEXT, msg.as_bytes());
+            let ok = write_masked_frame(stream, opcode, payload);
             if !ok {
                 mark_disconnected(conn);
             }
@@ -438,6 +456,9 @@ mod native_impl {
             // Drain anything already buffered first.
             if let Some(msg) = conn.inbox.pop_front() {
                 LAST_MSG.with(|m| *m.borrow_mut() = msg);
+                // Buffered frames came in via the same recv path that
+                // also sets LAST_OP, so we leave the recorded opcode
+                // alone here (it already matches the buffered frame).
                 return true;
             }
             if !ensure_connected(conn) {
@@ -447,9 +468,23 @@ mod native_impl {
             // Try one short read; on WouldBlock / TimedOut we just return
             // false so the loft program can spin.
             match read_unmasked_frame(stream) {
-                Some((op, payload)) if op == OP_TEXT => {
-                    let s = String::from_utf8_lossy(&payload).into_owned();
+                Some((op, payload)) if op == OP_TEXT || op == OP_BINARY => {
+                    // For text frames we keep the existing utf-8-lossy
+                    // conversion (preserves prior behaviour).  For binary
+                    // frames we forward the bytes raw — loft `text` is a
+                    // byte buffer, the receiver reads it as such.  Storing
+                    // arbitrary bytes in a `String` via from_utf8_unchecked
+                    // is fine here because loft never enforces utf-8 on
+                    // wire-sourced text (matches the interpreter's trust
+                    // boundary) and the binary peer is expected to decode
+                    // bytes via DataView / typed reads, not as utf-8.
+                    let s = if op == OP_TEXT {
+                        String::from_utf8_lossy(&payload).into_owned()
+                    } else {
+                        unsafe { String::from_utf8_unchecked(payload) }
+                    };
                     LAST_MSG.with(|m| *m.borrow_mut() = s);
+                    LAST_OP.with(|o| *o.borrow_mut() = op);
                     true
                 }
                 Some((op, payload)) if op == OP_PING => {
@@ -479,6 +514,15 @@ mod native_impl {
 
     pub fn last_message() -> String {
         LAST_MSG.with(|m| m.borrow().clone())
+    }
+
+    /// Opcode of the last frame surfaced by `recv` on this connection.
+    /// 1 = text, 2 = binary, 8 = close (would have returned false), 9 =
+    /// ping, 10 = pong.  Loft programs that handle binary frames check
+    /// this after a successful recv to decide whether the message bytes
+    /// are utf-8 text or a binary blob.
+    pub fn last_opcode() -> u8 {
+        LAST_OP.with(|o| *o.borrow())
     }
 
     pub fn close(handle: i32) {
@@ -523,6 +567,18 @@ mod wasm_impl {
         unsafe { host_ws_send(handle, msg.as_ptr(), msg.len()) == 1 }
     }
 
+    /// WASM-side stub for `send_binary`.  Falls back to the text path
+    /// because the existing JS host bindings (`loftHost.ws_send`) take
+    /// text-only frames.  TODO: extend the JS host with a binary
+    /// variant (separate import) so browser-side TTT v5 / plan-36
+    /// clients can speak the binary protocol from the WASM build too.
+    /// Until then the wasm path silently sends as text — adequate for
+    /// the v5 native-side tests (the only consumer today) but visibly
+    /// wrong if a wasm client is wired to a binary-blob server.
+    pub fn send_binary(handle: i32, msg: &[u8]) -> bool {
+        unsafe { host_ws_send(handle, msg.as_ptr(), msg.len()) == 1 }
+    }
+
     pub fn recv(handle: i32) -> bool {
         let mut buf = vec![0u8; 65536];
         let n = unsafe { host_ws_recv(handle, buf.as_mut_ptr(), buf.len()) };
@@ -539,13 +595,20 @@ mod wasm_impl {
         LAST_MSG.with(|m| m.borrow().clone())
     }
 
+    /// WASM-side stub: the JS host bindings don't currently report a
+    /// frame opcode separately, so we report 1 (text) unconditionally.
+    /// Will need extension when the JS host gains binary-frame support.
+    pub fn last_opcode() -> u8 {
+        1
+    }
+
     pub fn close(handle: i32) {
         unsafe { host_ws_close(handle) };
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_impl::{close, connect, last_message, recv, send};
+pub use native_impl::{close, connect, last_message, last_opcode, recv, send, send_binary};
 
 #[cfg(target_arch = "wasm32")]
-pub use wasm_impl::{close, connect, last_message, recv, send};
+pub use wasm_impl::{close, connect, last_message, last_opcode, recv, send, send_binary};

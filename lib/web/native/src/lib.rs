@@ -121,6 +121,26 @@ pub unsafe extern "C" fn n_ws_client_send(
     ws_client::send(handle, msg)
 }
 
+/// Send a binary message on a WebSocket.  Same byte buffer as
+/// `n_ws_client_send`, but the frame goes out with opcode `0x02`
+/// (binary) instead of `0x01` (text).  TTT v5 + plan-36 use this
+/// for `world_snapshot` / `world_delta` blobs from the client side
+/// (bulk world data; client never sends bulk in this design, but
+/// the symmetry keeps the API uniform with lib/server).
+///
+/// # Safety
+///
+/// `msg_ptr` / `msg_len` must describe a valid byte slice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ws_client_send_binary(
+    handle: i32,
+    msg_ptr: *const u8,
+    msg_len: usize,
+) -> bool {
+    let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
+    ws_client::send_binary(handle, msg)
+}
+
 /// Poll for the next received message.  Returns true if a message was
 /// delivered (then call n_ws_client_message), false if the queue is
 /// empty or the connection is currently down.
@@ -137,6 +157,16 @@ pub extern "C" fn n_ws_client_message() -> LoftStr {
         *m.borrow_mut() = new;
         loft_ffi::ret_ref(&m.borrow())
     })
+}
+
+/// Get the opcode of the last frame surfaced by `n_ws_client_recv`.
+/// 1 = text, 2 = binary, 8 = close, 9 = ping, 10 = pong.  Loft
+/// programs that handle binary frames check this after a successful
+/// recv to decide whether the message bytes are utf-8 text or a
+/// binary blob.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_client_opcode() -> u8 {
+    ws_client::last_opcode()
 }
 
 /// Close a WebSocket session permanently (no reconnect).
@@ -167,8 +197,10 @@ loft_ffi::loft_register! {
     n_http_body,
     n_ws_connect,
     n_ws_client_send,
+    n_ws_client_send_binary,
     n_ws_client_recv,
     n_ws_client_message,
+    n_ws_client_opcode,
     n_ws_client_close,
     n_sleep_ms,
 }
