@@ -76,6 +76,12 @@ geometry with visible negative space.  The camera can see
 any single crystal to what is past it.  Aesthetic: quartz cluster
 or open lattice, not solid lava hill.
 
+Each crystal's mesh is **mostly its own hex colour**, with some
+triangles tinted in 1-away neighbour colours and a trace tinted
+in 2-away tile colours.  Adjacent territories visibly bleed into
+each other at the edges; distant ones leave a hint.  The cell's
+own colour stays unambiguous at a glance.
+
 When a new hex becomes filled, the crystal **grows over ~5
 seconds** in the direction extruded from the cluster of older
 nearby hexes toward the new one.
