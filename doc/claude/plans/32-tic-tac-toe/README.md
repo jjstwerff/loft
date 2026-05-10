@@ -13,8 +13,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | v1 | ✓ shipped | Single-client text protocol verifier (`tictactoe_*.loft`) |
 | v2 | ✓ shipped | Multi-client + spectator routing (3/3 `multiplayer_v2` tests green) |
 | v3 server-side | ✓ shipped 2026-05-11 | HTTP routing + Content-Type response on the same loft program that hosts the WebSocket — `tictactoe_server_v3.loft` serves `/`, `/client.loft`, `/favicon.ico` (404), unrouted (404), and upgrades `/ws` to the WebSocket game protocol.  2/2 `multiplayer_v3` tests green |
-| v3 browser bootstrap | **next** | Real browser opens `/` → loads loft-rt.js + interpreter WASM + client.loft → connects back to `/ws` and plays.  Wires up the existing `doc/loft-rt.js` host bridge from plan-31.  **Also the mechanism for distributing the laptop client** for any loft program (the audience demo's projector and any future single-binary loft client all use this hosting path) |
-| v4 | after v3 browser bootstrap | Client-uploaded scripts → server-side compile → hot WASM swap (the in-browser game-dev workflow) |
+| v3 browser game (JS client) | ✓ shipped 2026-05-11 | Server's WS handler plays the v1-style single-game protocol; INDEX_HTML embeds an interactive vanilla-JS board.  End-to-end browser game without a loft client. 2/2 `multiplayer_v3` tests green |
+| **v3.5** loft-WASM client | designed, not started | Replace the JS client with a real loft client running in the browser via the loft interpreter WASM (already shipped on the GitHub Pages site).  Reuses `doc/pkg/loft.js` + `doc/pkg/loft_bg.wasm` + `doc/loft-rt.js` 100%; adds WS host imports + a small bootstrap HTML + a `client.loft`.  Design + sequencing in [`v3.5-loft-wasm-browser-client.md`](v3.5-loft-wasm-browser-client.md).  **Also the mechanism for distributing the laptop client** for any loft program |
+| v4 | after v3.5 | Client-uploaded scripts → server-side compile → hot WASM swap (the in-browser game-dev workflow) |
 | v5 | ✓ shipped | Binary world stream + N clients + catch-up + sluggish tempo (5/5 `multiplayer_v5` tests green) |
 | v6 | gated on plan-22 | Drop `Reference<T>` ceremony in the v5 server using writable closures.  Pure ergonomic cleanup; not on plan-36's critical path |
 
