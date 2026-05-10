@@ -144,13 +144,14 @@ Two frame types share the same connection:
 | `world_snapshot` | Sent once on connect.  Full dump of every existing chunk: per-chunk header (`cx`, `cz`, cell-count) followed by the chunk's cell array packed at 4 bytes/cell |
 | `world_delta` | Sent every tick (10 Hz).  Per-chunk list of changed cells (`hx`, `hz`, then the 4-byte payload).  Cells set to colour 0 represent decay-removal events |
 
-Each binary blob carries a **session id** in its header.  The
-client buffers blobs by session and applies them together, so a
-single audience action that touches multiple chunks (and
-therefore arrives as multiple binary frames) animates coherently
-regardless of packet ordering.  A new session id signals the
-client to flush the previous session and start the next visual
-frame.
+Each binary blob carries a **session id** in its header.  This
+matters most when a new client first connects: the server splits
+the initial `world_snapshot` into one blob per chunk, all
+sharing the same session id.  The phone client buffers them and
+renders the world as a single coherent fade-in instead of each
+chunk popping in as it arrives.  Steady-state deltas usually fit
+in one blob and don't need grouping; the session id is still in
+the header so the same render path handles both.
 
 The phone client decodes the binary frames in JS using
 `DataView` / `Uint8Array` — no JSON parse on the hot path.

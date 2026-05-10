@@ -118,7 +118,7 @@ on the same connection:
 |---|---|---|
 | client → server | JSON text | All input events: `seed`, `clear`, `color_select`.  Small, low frequency (per-tap), human-readable on the wire for debug |
 | server → client | JSON text | Small events: `active_player_signal`, control / status |
-| server → client | **Binary blob** | Bulk world data — `world_snapshot` (sent on connect, full chunk dump) and large `world_delta` payloads.  Naturally packs at 4 bytes per cell using the `Cell` payload (1 byte colour + 1 byte height + 2 bytes age) plus a small per-chunk header (cx, cz + cell-count).  Each blob carries a **session id** in its header so multiple blobs that belong to the same logical tick (or the same single audience action that produced effects across many chunks) animate together on the client regardless of which packet arrived first |
+| server → client | **Binary blob** | Bulk world data — `world_snapshot` (sent on connect, full chunk dump) and large `world_delta` payloads.  Naturally packs at 4 bytes per cell using the `Cell` payload (1 byte colour + 1 byte height + 2 bytes age) plus a small per-chunk header (cx, cz + cell-count).  Each blob carries a **session id** in its header — primarily useful for the **initial snapshot**, which the server splits across one blob per chunk so a new client's view does not block on serialising the entire world into a single frame |
 
 The binary frames use loft's existing typed-binary read/write
 pattern (see [`STDLIB.md` § File I/O](../../STDLIB.md) — the same
@@ -128,14 +128,19 @@ not just files).  Server-side serialisation is straight
 is the inverse.  No JSON parsing on the hot path for world data.
 
 **Per-blob session id** (1 word in the blob header, monotonic
-per server restart): the server can split a single tick's
-changes across multiple binary frames (one per affected chunk,
-say) and tag them all with the same session.  The client
-buffers blobs by session id and applies them as a unit, so a
-single audience action that touches multiple chunks animates
-coherently regardless of which packet arrived first.  A new
-session id signals the client to flush any prior buffered
-session and start the next visual frame.
+per server restart).  Mostly useful when starting a new client:
+the server splits the initial `world_snapshot` into one blob per
+chunk, all tagged with the same session id.  The client buffers
+all blobs sharing that session id and renders them as one
+coherent "world appears" event — rather than each chunk popping
+into existence in arrival order.  Visually, a new joiner sees
+the current world fade in as a single picture, not a chunk-by-
+chunk build-up.
+
+Steady-state per-tick `world_delta` blobs typically fit in a
+single frame and don't need session grouping.  The session id
+is included in their header anyway (cheap; one word) so the
+client logic stays uniform across snapshot + delta paths.
 
 Event-side JSON stays small enough that text encoding cost is
 negligible and the wire stays human-readable for the talk
