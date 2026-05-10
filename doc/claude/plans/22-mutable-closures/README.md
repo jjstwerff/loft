@@ -5,7 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # MUTABLE_CLOSURES — design: making closures novice-fit
 
-**Status:** locked-in spec.  Not yet implemented.  Companion
+**Status:** locked-in spec; **promoted to current 2026-05-10**.
+Drivers (see [§ Drivers](#drivers)): TTT v6 server retrofit
+([plan-32 § v6](../32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures))
++ plan-36 audience-demo server (loft code projected to the
+audience as part of the "loft snippet highlights" beats —
+visible code structure is part of the spectacle).  Companion
 discussion (options surveyed, alternatives considered,
 implementation analysis sketch, design history) lives in
 [DISCUSSION.md](DISCUSSION.md).
@@ -15,6 +20,33 @@ This spec evolves
 (closures are copy-at-definition).  Default closure semantics
 remain unchanged; the spec adds opt-in *behaviour by body* for
 closures whose bodies mutate captures.
+
+## Drivers
+
+This was always on the will-do path (lived in `plans/future/`,
+not `plans/deferred/`); promotion to current is driven by two
+concrete consumers with a soft deadline:
+
+- **TTT v5 server** (just shipped phase 0; full v5 ~weeks away)
+  uses `Reference<T>` to mutate captured server state
+  (`world`, `next_session_id`, `replay_cache`, `last_active_player`,
+  `tick_counter`).  Writable closures drop the `.inner`
+  ceremony at every access — ~10% fewer characters and one
+  fewer mental indirection.
+- **Plan-36 audience-generative-art demo** ([plans/future/36-audience-generative-art/](../future/36-audience-generative-art/))
+  is the more time-pressured driver.  The talk frames itself as
+  an "art show with loft footnotes" — small loft snippets
+  projected to the audience.  Server code with `state.inner.X`
+  every line reads worse on stage than `state.X` does.  Cleaner
+  code earns its keep at the spectacle, not only in the
+  codebase.
+
+**Non-blocking constraint**: TTT v6 + plan-36 must remain
+shippable without this plan's implementation.  If plan-22 lands
+before the talk, plan-36 server uses writable closures.  If it
+doesn't, plan-36 server uses `Reference<T>` exactly like v5.
+Either way the demo functions; only the on-screen code-snippet
+elegance differs.
 
 ---
 

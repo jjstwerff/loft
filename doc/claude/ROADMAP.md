@@ -167,7 +167,7 @@ Language correctness, removes special cases.  (Validation matrices that catch si
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
 | P54 | First-class `JsonValue` enum; old text-based JSON gone | MH | ✓ | QUALITY.md#open-work--actionable-summary |
-| (cross) | Mutable-closure capture — novice-fit four-case classification | M-MH | ✓ | plans/future/22-mutable-closures/README.md |
+| (cross) | Mutable-closure capture — novice-fit four-case classification | M-MH | ✓ | plans/22-mutable-closures/README.md |
 | (cross) | L3 PEG-style match patterns (sequence / alternation / capture) | MH | ✓ | plans/future/26-match-peg/README.md |
 | A8 | Slicing, open-ended ranges, partial-key match on sorted/index | M | ✓ | plans/future/30-sorted-slice/README.md |
 | C52 | Stdlib name clash: warning + `std::` prefix | M | ✓ | (needs plan promotion) |
@@ -314,7 +314,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/future/22-mutable-closures/`](plans/future/22-mutable-closures/) | M-MH | — | Novice-fit closure capture (evolves C38) |
+| [`plans/22-mutable-closures/`](plans/22-mutable-closures/) | M-MH | — | Novice-fit closure capture (evolves C38).  Promoted to current 2026-05-10; drivers TTT v6 + plan-36 server retrofit |
 | [`plans/future/26-match-peg/`](plans/future/26-match-peg/) | MH | — | L3 PEG-style match patterns (cooperates with regex lib) |
 | [`plans/future/30-sorted-slice/`](plans/future/30-sorted-slice/) | M | — | A8 — slicing / open-ended ranges / partial-key match on sorted/index |
 | [`lib_plans/future/01-regex/`](lib_plans/future/01-regex/) | M | **lib_plans/future/03-lazy-stdlib** | First lazy-loaded stdlib consumer |
@@ -350,7 +350,7 @@ the plan moves back to `future/` and ROADMAP gains a row.
 - **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/future/32-tic-tac-toe v2 ground layer)
 - **plans/14-tuple-validation cross-mode harness → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
 - **NATIVE.md § Open work N8c.x + PERFORMANCE.md § Open work N1 → plans/future/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
-- **plans/future/22-mutable-closures spec → lib_plans/future/13-scriptable-scenes script API** (closure semantics inform user-script ergonomics)
+- **plans/22-mutable-closures spec → lib_plans/future/13-scriptable-scenes script API** (closure semantics inform user-script ergonomics)
 - **C57 / I13 (in plans/future/29-server-features) → lib_plans/future/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)
 
 ### Features still needing plan promotion

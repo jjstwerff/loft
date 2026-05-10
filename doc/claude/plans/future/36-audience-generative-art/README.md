@@ -320,6 +320,13 @@ extensions.
   content overlaps with quick-start `examples/` and the "Learn
   loft in 30 minutes" walkthrough.  Can write the talk inline OR
   land both at once.
+- `plans/22-mutable-closures` + the [TTT v6 retrofit](../32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures)
+  — drops the `Reference<T>.inner` ceremony from the server's
+  pump callback so the loft snippets shown on stage during the
+  "loft snippet highlights" beats read at their best.  If
+  plan-22 lands before the talk, plan-36 server uses writable
+  closures; if not, it uses `Reference<T>` exactly like TTT v5.
+  Demo functions either way; only on-screen elegance differs.
 
 **Latent risk:** `plans/future/15-closure-validation` phase 03 /
 closure-DbRef leak (LIFETIME.md "NOT YET HANDLED").  Generation

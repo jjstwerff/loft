@@ -361,7 +361,7 @@ fn main() {
 
 `state` is allocated in a Store; `Reference<Board>` is captured
 by handler functions (today's workaround per
-[plans/future/22-mutable-closures/README.md](../22-mutable-closures/README.md)).  The shipped
+[plans/22-mutable-closures/README.md](../../22-mutable-closures/README.md)).  The shipped
 text-only first cut omits `mouse_just_clicked` / `render_board`
 / `gl_swap_buffers` and walks through a hardcoded click sequence
 instead.
@@ -1161,6 +1161,75 @@ Build v5 before v3 / v4 if the audience-demo deadline drives
 priority.  The v3/v4 progression (asset serving → hot WASM
 swap) is its own arc and can land in parallel or after.
 
+## Tic-tac-toe v6 — ergonomic retrofit using writable closures
+
+**Status:** scoped 2026-05-10.  Pure cleanup pass; no new
+protocol or runtime capability.  Depends on
+[plan-22 (mutable closures)](../../22-mutable-closures/README.md)
+landing in the language.  **Explicitly NOT on the audience-
+demo's critical path** — if plan-22 has not shipped by the
+meetup talk, plan-36 server uses `Reference<T>` exactly like
+v5 does today, and the demo functions identically.
+
+### What v6 adds
+
+Nothing new on the wire, in the runtime, or in the test
+coverage.  v6 is a **diff** against v5's server code:
+
+- Drop the `Reference<T>` wrapping around the server's mutable
+  captured state (`world`, `next_session_id`, `replay_cache`,
+  `last_active_player`, `tick_counter`).
+- Replace every `state.inner.X` access with `state.X` (or just
+  `X` if the binding shape is split per field).
+- The pump callback (`srv.run(fn(ev: WsEvent) { … })`) reads
+  10-20% shorter and reads as the binding pattern any reader
+  would expect from the loft snippet without knowing the
+  C38 history.
+
+### Why v6 (and not just "we'll clean up later")
+
+The audience-generative-art demo (plan-36) projects loft code
+on screen during the "loft snippet highlights" beats.  Visible
+code structure is part of the talk's value proposition (art
+show with loft footnotes) — `state.inner.X` clutter on the
+projector reads as "see this language has rough edges" rather
+than "see how compact this is."  v6 retrofits before the talk
+specifically so the projected snippets are clean.
+
+If v6 doesn't land before the talk, the snippets show
+`Reference<T>.inner` and the talk works around it ("here's a
+small ceremony loft uses today; here's the spec for the
+ergonomic version landing soon").  Demo function unaffected;
+talk loses some sales-pitch sharpness.
+
+### Test coverage
+
+v5's t1-t5 stays the assertion surface.  v6 is a pure
+refactor; if any of t1-t5 changes behaviour, the retrofit
+introduced a bug and gets reverted.
+
+### Sequencing relative to broader loft work
+
+v6 depends on:
+- plan-22 (mutable closures) implementation — currently
+  promoted to `plans/22-mutable-closures/`, locked-in spec
+  ready to build.
+
+v6 unblocks:
+- plan-36 server gets the same retrofit applied automatically
+  (the two servers share the captured-state pattern, so the v6
+  diff translates 1:1 to plan-36 phase 1).
+
+### Out of scope for v6
+
+- Any new protocol capability (those land in v5 or future vN).
+- Mutable-closure work in plan-36's *renderer* (the projector
+  + desktop client renderers are stateless per frame; the
+  capture pattern doesn't apply there).
+- Mutable-closure work in any earlier vN's reference code (v2's
+  pump callback stays as-is in the design; only v5's server
+  pattern gets retrofitted, and only if plan-22 lands in time).
+
 ---
 
 ## Cross-references
@@ -1170,9 +1239,11 @@ swap) is its own arc and can land in parallel or after.
   game.
 - [EVENT_LOOP_DISCUSSION.md](../23-event-loop/DISCUSSION.md) — open
   questions on the wider design.
-- [plans/future/22-mutable-closures/README.md](../22-mutable-closures/README.md) — closure-capture
+- [plans/22-mutable-closures/README.md](../../22-mutable-closures/README.md) — closure-capture
   spec; the dispatch workaround in this game's pump callback
   rests on the documented `Reference<T>` capture pattern.
+  Promoted to current 2026-05-10; TTT v6 is the in-game
+  consumer of the implementation.
 - [PROBLEMS.md § 213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
   — closure-in-struct-field layout limit; lifts the workaround
   once landed.

@@ -101,8 +101,8 @@ planned `Mutable<T>` stdlib helper covers the
 the closure-model evolution should be designed against
 real-world friction observed once a real game ships, not
 pre-emptively.  Sequencing for the evolution lives in
-[plans/future/22-mutable-closures/README.md](plans/future/22-mutable-closures/README.md) (the design spec) and
-[plans/future/22-mutable-closures/DISCUSSION.md](plans/future/22-mutable-closures/DISCUSSION.md)
+[plans/22-mutable-closures/README.md](plans/22-mutable-closures/README.md) (the design spec) and
+[plans/22-mutable-closures/DISCUSSION.md](plans/22-mutable-closures/DISCUSSION.md)
 (alternatives considered, including the full Rust borrow-checker
 option F).
 
