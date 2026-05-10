@@ -1,0 +1,69 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TTT v5 — t5 world tick + decay timings.
+//
+// Standalone (no server): exercises lib/world's tick_and_decay over
+// compressed timing constants and verifies the decay invariants
+// plan-36's projector view depends on:
+//
+//   - Isolated cells age out around `base_lifetime + decay_window`.
+//   - Cluster cells live considerably longer because each filled
+//     neighbour grants a `neighbour_lease`.
+//   - Once a cluster's surrounding cells decay, the now-isolated
+//     centre collapses on the next tick (cascade is one-step
+//     deferred — same-tick cascading would let large blobs
+//     vanish in a single tick, breaking the "sluggish-by-design"
+//     aesthetic).
+//
+// Compressed scale for CI: base=10, lease=10, window=5 — same shape
+// as the production constants (5min/0.5s/30s at 10 Hz) but at
+// per-tick granularity so a few-thousand iterations exercise the
+// full lifecycle.
+//
+// Stdout shape (the harness asserts on these lines):
+//   v5-t5: setup placed=8 isolated=1 cluster=7
+//   v5-t5: tick=14 cells=8           # isolated still in window
+//   v5-t5: tick=15 cells=7           # isolated removed
+//   v5-t5: tick=44 cells=7           # cluster fully alive
+//   v5-t5: tick=45 cells=1           # surrounding gone, centre alone
+//   v5-t5: tick=46 cells=0           # centre cascaded
+//   v5-t5: ok
+
+use world;
+
+BASE_LIFETIME    = 10;
+NEIGHBOUR_LEASE  = 10;
+DECAY_WINDOW     = 5;
+
+fn report(self: world::World, label: text) {
+  println("v5-t5: tick={self.tick} cells={self.cell_count()}");
+}
+
+fn main() {
+  w = world::world_empty();
+  // Isolated cell — far from the cluster so neighbour reads don't
+  // see each other.
+  w.set_cell(0, 0, world::Cell { c_color: 1, c_height: 0, c_age: 0 });
+  // Cluster: centre + 6 axial neighbours at (50, 50).
+  w.set_cell(50, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(51, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(49, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(50, 51, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(50, 49, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(51, 49, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(49, 51, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  println("v5-t5: setup placed={w.cell_count()} isolated=1 cluster=7");
+
+  // Spin the world for 50 ticks; report at the inflection points.
+  for ti in 1..=50 {
+    w.tick_and_decay(BASE_LIFETIME, NEIGHBOUR_LEASE, DECAY_WINDOW);
+    if ti == 14 { report(w, "pre-isolated-decay"); }
+    if ti == 15 { report(w, "post-isolated-decay"); }
+    if ti == 44 { report(w, "pre-surrounding-decay"); }
+    if ti == 45 { report(w, "post-surrounding-decay"); }
+    if ti == 46 { report(w, "post-centre-cascade"); }
+  }
+
+  println("v5-t5: ok");
+}

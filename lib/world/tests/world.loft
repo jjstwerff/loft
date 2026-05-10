@@ -49,5 +49,46 @@ fn main() {
   assert(world::hex_idx_32(32) == 0, "hex 32 wraps to 0");
   assert(world::hex_idx_32(-1) == 31, "hex -1 wraps to 31");
 
+  // ── tick + decay ──────────────────────────────────────────────
+  // Fresh world for the timing checks so the earlier set-cell calls
+  // don't pollute neighbour counts.
+  td_w = world::world_empty();
+  td_w.set_cell(100, 100, world::Cell { c_color: 1, c_height: 0, c_age: 0 });
+  assert(td_w.cell_count() == 1, "isolated cell placed");
+  assert(td_w.neighbour_count(100, 100) == 0, "isolated cell: 0 neighbours");
+  // base=10, lease=10, window=5 → effective_lifetime=10, removed at age 15.
+  for _ in 0..14 {
+    td_w.tick_and_decay(10, 10, 5);
+  }
+  assert(td_w.cell_count() == 1, "isolated still alive at age 14 (within decay window)");
+  td_w.tick_and_decay(10, 10, 5);   // 15 ticks total → age 15 → removed
+  assert(td_w.cell_count() == 0, "isolated removed at age 15");
+
+  // Cluster: centre + 6 axial neighbours.  In hex topology each
+  // surrounding cell shares two neighbours with the centre's other
+  // surroundings — so each surrounding has 3 filled neighbours
+  // (centre + two adjacent surroundings).  Centre has 6 neighbours.
+  // base=10, lease=10, window=5:
+  //   surrounding eff = 10 + 10*3 = 40 → removed at age 45
+  //   centre      eff = 10 + 10*6 = 70 → removed at age 75 if all
+  //               neighbours stay alive
+  cl_w = world::world_empty();
+  cl_w.set_cell(50, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(51, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(49, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(50, 51, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(50, 49, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(51, 49, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(49, 51, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  assert(cl_w.cell_count() == 7, "cluster: 7 cells placed");
+  assert(cl_w.neighbour_count(50, 50) == 6, "centre has 6 neighbours");
+  assert(cl_w.neighbour_count(51, 50) == 3, "surrounding has 3 neighbours");
+  for _ in 0..44 { cl_w.tick_and_decay(10, 10, 5); }
+  assert(cl_w.cell_count() == 7, "cluster intact at age 44 (just under threshold 45)");
+  cl_w.tick_and_decay(10, 10, 5);
+  assert(cl_w.cell_count() == 1, "only centre remains at age 45");
+  cl_w.tick_and_decay(10, 10, 5);
+  assert(cl_w.cell_count() == 0, "centre removed once neighbours gone");
+
   println("world smoke ok");
 }
