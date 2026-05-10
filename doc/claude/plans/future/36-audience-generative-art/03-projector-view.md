@@ -256,11 +256,16 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   reliably distinguish dotted-line vs 1-wide vs 2-wide line vs
   blob, return a tangent direction + curvature for each
   thin-line cell, and gracefully drop out for 3+-wide regions.
-  Open questions at CI-3: what neighborhood radius does the
-  classifier scan?  How is curvature computed (3-point fit?
-  5-point fit?)?  How fast does the classifier converge when
-  audience input changes the local shape (per frame? per server
-  tick?)?
+  - **Neighborhood radius**: RESOLVED 2026-05-10 at **radius 2
+    (5×5 hex window, ~19 hex lookups per cell)** as the
+    starting default.  Enough to catch 1-wide and 2-wide lines
+    and the 2-cell curve lookahead.  Re-validate once the
+    first prototype is running; if ambiguity is visible, widen
+    to radius 3 or pick the adaptive path.
+  - Remaining at CI-3: how curvature is computed (3-point fit?
+    5-point fit?), how fast the classifier converges when
+    audience input changes the local shape (per frame? per
+    server tick?).
 - **Aesthetic-swing window length** — when a cell crosses the
   thin-line ↔ blob boundary, the interpolation window decides
   how long the visible transition takes.  Too short = pops; too
