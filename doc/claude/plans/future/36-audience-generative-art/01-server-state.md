@@ -55,13 +55,13 @@ struct Chunk {
     ck_cells: vector<Cell>,
 }
 
-// 4-byte logical payload — matches the wire-format budget the design
-// pinned: 1 byte color + 1 byte height + 2 bytes age.  Stored as i64 fields
-// in-process (loft's integer-i64 model); packed to bytes in serialisation.
+// 4-byte cell — colour and height use loft's u8 typedef (integer
+// limit(0, 255) size(1)), age uses u16 (size(2)).  Storage packs
+// to exactly 4 bytes per cell.
 struct Cell {
-    c_color:  integer not null,  // 0 = empty (no crystal), 1-9 = palette
-    c_height: integer not null,  // 0..255, derived from filled-neighbour count
-    c_age:    integer not null,  // 0..65535 ticks since the cell became non-empty;
+    c_color:  u8 not null,       // 0 = empty (no crystal), 1-9 = palette
+    c_height: u8 not null,       // 0..255, derived from filled-neighbour count
+    c_age:    u16 not null,      // 0..65535 ticks since the cell became non-empty;
                                  // projector keys the 5-second growth animation off
                                  // this (small age = still growing, ~50 ticks at
                                  // 10 Hz tick rate = grown)
