@@ -325,8 +325,23 @@ impl Output<'_> {
                     _ => false,
                 };
                 let is_arg = variables.is_argument(*var);
+                // P247 — when `var` is a work-ref (`__ref_…`) declared
+                // inside a Block expression, a borrow `&var___ref_N.idx`
+                // escapes the block via the Block's tail expression
+                // and rustc rejects with E0597 (`var___ref_N.idx does
+                // not live long enough`).  For work-refs specifically
+                // emit `var___ref_N.idx.clone()` (returns an owned
+                // String — temporary lifetime extension keeps it
+                // alive across the enclosing statement) instead of the
+                // borrow.  Non-work-ref locals keep the borrow form
+                // since their declaration outlives the read.
+                let is_work_ref = variables.name(*var).starts_with("__ref_");
                 if elem_is_text && !is_arg {
-                    write!(w, "&var_{name}.{idx}")?;
+                    if is_work_ref {
+                        write!(w, "var_{name}.{idx}.clone()")?;
+                    } else {
+                        write!(w, "&var_{name}.{idx}")?;
+                    }
                 } else {
                     write!(w, "var_{name}.{idx}")?;
                 }

@@ -296,10 +296,8 @@ cross_mode!(
     "#
 );
 
-// e3_d1_text_inside — currently fails under `--native` with E0382
-// (use of moved value: var_t.0) when format-string interpolation
-// reads `t.0.1` of a nested tuple containing text.  Filed P247.
-// Cell stays in the matrix as the regression guard once P247 closes.
+// e3_d1_text_inside — closed by P247 fix 2026-05-11 (nested-tuple
+// text read in format strings emits `.clone()` + `&*({block})` wrap).
 cross_mode!(
     e3_d1_text_inside,
     r#"
@@ -312,11 +310,8 @@ cross_mode!(
     "#
 );
 
-// e3_d1_elem_elem_assign — currently fails on both backends:
-// `t.0.1 = 99` parses but the LHS walker doesn't recurse into
-// nested TupleGet, so the assignment falls through to "Not
-// implemented operation = for type integer".  Filed P248.  Cell
-// stays in the matrix as the regression guard once P248 closes.
+// e3_d1_elem_elem_assign — closed by P248 fix 2026-05-11
+// (nested-LHS extractor + nested-tuple TuplePut codegen).
 cross_mode!(
     e3_d1_elem_elem_assign,
     r#"

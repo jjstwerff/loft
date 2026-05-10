@@ -482,6 +482,18 @@ impl State {
                 let tuple_var_base = stack.function.stack(*var_nr);
                 let elem_abs_pos = tuple_var_base + elem_offset;
                 let var_pos = stack.position - elem_abs_pos;
+                // P248 — when the destination element is itself a tuple
+                // (e.g. nested-LHS writeback `t.0 = w0` where t.0 is
+                // `(int, int)`), the value has been pushed by
+                // `generate(value, …)` above as a sequence of leaves
+                // on the eval stack.  Pop them in reverse and
+                // OpPut* each leaf at its offset within
+                // `elem_abs_pos`.  Mirrors the read-side
+                // `emit_tuple_var_push_recursive` at line 394.
+                if let Type::Tuple(inner_elems) = &elem_tp {
+                    self.emit_tuple_var_pop_put(stack, inner_elems, elem_abs_pos);
+                    return Type::Void;
+                }
                 match &elem_tp {
                     Type::Integer(_) | Type::Function(_, _, _) => {
                         stack.add_op("OpPutInt", self);

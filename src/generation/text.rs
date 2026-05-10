@@ -174,6 +174,14 @@ impl Output<'_> {
             // All text-returning calls produce either `Str` or `String` (never `&str`).
             // Wrap with `&*` so `format_text` (which expects `&str`) always gets the right type.
             // `&*Str` and `&*String` both deref to `&str` via their `Deref<Target=str>` impls.
+            //
+            // P247 — extends to `Value::Block` whose tail emits a
+            // `String` (the nested-tuple text-read path emits
+            // `var___ref_N.idx.clone()`).  The wrap forces the
+            // temporary's lifetime to extend across the enclosing
+            // statement; without it, rustc rejects the
+            // String-returning Block with E0308 (`expected &str,
+            // found String`).
             let val_str = if let Value::Call(d, _) = val.unspan()
                 && matches!(self.data.def(*d).returned, Type::Text(_))
             {
@@ -181,6 +189,10 @@ impl Output<'_> {
             } else if let Value::CallRef(v_nr, _) = val.unspan()
                 && let Type::Function(_, ret, _) = self.data.def(self.def_nr).variables.tp(*v_nr)
                 && matches!(**ret, Type::Text(_))
+            {
+                format!("&*({val_expr})")
+            } else if let Value::Block(b) = val.unspan()
+                && matches!(b.result, Type::Text(_))
             {
                 format!("&*({val_expr})")
             } else {
