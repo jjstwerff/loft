@@ -306,9 +306,14 @@ param override for rehearsal + testing.
 - ~~**Color encoding on the wire**~~ — RESOLVED.  Palette
   index 1-9 over the wire; index 0 is reserved for "empty hex"
   in the world state and is never sent in a `seed` event.
-- **Coordinate system** — axial (q, r) or offset (col, row)?
-  Axial is simpler for distance / direction maths in the
-  generation script (phase 2).  Recommend axial.
+- ~~**Coordinate system**~~ — RESOLVED 2026-05-10: **axial
+  (q, r)**.  Same convention as `lib/moros_map`.  Preserves
+  visual symmetry across all 6 hex directions for free (the
+  renderer's plant edge detector, curve lookahead, bridge
+  geometry, and pan all read the same in every orientation;
+  offset would have introduced direction-dependent
+  asymmetries the renderer would need to actively compensate
+  for).
 - **Movement cadence** — discrete (one cell per N ms while held)
   or continuous (subpixel pan)?  Discrete is simpler and matches
   the hex grid; continuous looks smoother.  CI-1 decides after
