@@ -129,6 +129,107 @@ offset.
 hexes.  `active_player_signal` arrives when another player changes
 color and triggers the **Jump to active** box's flash.
 
+## Desktop variant — projector view + input
+
+Desktop / laptop is a **first-class second target** alongside
+phone (Q5 resolution 2026-05-10), but it is **not** a re-skin of
+the phone client.  The desktop UI shows the **same 3D crystal
+animation the projector renders**, with the **flat hex grid
+visible on the base plane underneath** the crystals.  Mouse
+clicks land on **base-plane hexes** (not on the 3D crystals
+themselves); the same `seed` / `clear` / `color_select` events
+fire as from the phone client.
+
+In effect the desktop user gets a **personal projector view they
+can also paint into** — what they paint appears under their
+mouse in 3D, and they see the same world the auditorium is
+watching, from the same kind of 3D camera.
+
+### Visual model
+
+| Layer | Rendering |
+|---|---|
+| **Base plane** | Flat hex lattice — outlined black tiles, always visible (the same lattice the phone client renders flat).  Clicks register against this layer |
+| **Crystal layer** | Same 3D crystal mesh + frost aesthetic + ridge-and-crevice tops + per-triangle hard-edge colour mosaic the projector uses.  Renders on top of the base plane |
+| **Hover indicator** | When the mouse hovers over a base-plane hex, a faint highlight on that hex shows where a click would land.  Lifts the hex slightly visually so the user can target it through any crystal currently growing on it |
+
+Camera is **user-controlled** on desktop (not auto-camera):
+**mouse-drag pans the world**, scroll-wheel zooms, **WASD also
+pans** (continuous while held — convenient for one-handed
+navigation while the other hand is on the mouse for painting).
+No orbit / no free-camera 3D rotation — the view stays in the
+same top-down framing as the projector.  No heat-field tracking
+— the user steers their own view.
+
+Implementation: standard WASM target via the existing
+`loft --html` pipeline (same as the projector binary, just
+loaded into a browser page instead of a native window).
+
+### Code reuse with the projector
+
+The desktop client and the projector view share the **same 3D
+renderer** (mesh generator + edge classifier + frost geometry
++ camera transform).  Differences:
+
+- Desktop adds a base-plane render pass + a hover indicator +
+  click-to-hex picking.
+- Desktop uses a user-controlled camera (mouse-drag + WASD pan,
+  scroll zoom); projector uses an auto-camera.
+- Desktop sends `seed` / `clear` / `color_select` events to the
+  server; projector is subscribe-only.
+
+Implementation path: shared loft renderer library compiled to
+WASM via the existing `loft --html` pipeline.  Both the desktop
+client and the projector are WASM payloads — the desktop is
+embedded in an HTML page served alongside the phone client;
+the projector binary loads it in a native window
+(or natively-linked equivalent).  CI-3 confirms the split when
+the renderer is sketched.
+
+### Input model
+
+| Phone | Desktop |
+|---|---|
+| `pointerdown` / `pointermove` / `pointerup` (touch) | Same `pointer*` events (mouse) on the canvas |
+| Tap = single colour placement | Click = single colour placement (hits the hovered base-plane hex) |
+| Swipe = paint a line | Click-and-drag = paint a line over base-plane hexes the cursor crosses |
+| Swipe starting on own-colour = erase line of own colour | Drag starting on own-colour = erase line of own colour |
+| Pan: hold finger in outer ring | Pan: mouse-drag on empty space, OR WASD / arrow keys (continuous while held) |
+| (No camera control) | Zoom: scroll wheel.  No orbit / no free-camera 3D — view stays top-down |
+| Color pick: tap palette tile | Color pick: click palette tile OR press number key 1-9 |
+
+### Controls overlay
+
+The colour palette is **set into a single panel** that also
+contains the action button (jump-to-active).  Picking a colour
+and triggering jump-to-active happen in the same screen region
+so the eye does not have to travel between them.
+
+| Element | Position on desktop |
+|---|---|
+| **Palette + action panel** (set-in panel — recessed visual style) | One side of the screen.  Contains: 9 colour tiles + the clear-color box + the jump-to-active button.  Active-player flash plays on the jump-to-active button so it stays in the same panel as the colour pick |
+| Camera reset button | Corner of the canvas (resets pan + zoom to the world centre) |
+
+Keyboard shortcuts:
+
+| Key | Effect |
+|---|---|
+| 1-9 | Pick palette colour |
+| 0 / Esc | Clear active colour |
+| W / A / S / D / arrows | Pan world (continuous while held) |
+| Mouse-drag (on empty space) | Pan world |
+| Scroll wheel | Zoom |
+| J | Jump to most-recently-active player |
+| R | Reset camera |
+
+### Detection + switching
+
+Use a small `userAgent` + viewport-width heuristic on page load:
+small viewport + touch-only → phone layout, large viewport +
+mouse → desktop layout.  Do not allow live switching after load
+(simpler).  Provide a `?layout=phone` / `?layout=desktop` query
+param override for rehearsal + testing.
+
 ## Sub-tasks
 
 | # | Task | Effort |

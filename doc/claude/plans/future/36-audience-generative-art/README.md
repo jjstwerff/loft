@@ -188,9 +188,11 @@ override hotkey to lock the camera.
    automatic decay rule keeps the canvas alive without manual
    resets.  Presenter narrates and shows code at chosen
    moments without segmenting the painting timeline.
-5. **Audience platform** — phone-touch friendly vs. laptop-only?
-   Phone-friendly opens broader participation but doubles the
-   input testing surface.
+5. ~~**Audience platform**~~ — RESOLVED 2026-05-10: both
+   phone (portrait touch) and desktop (laptop pointer + larger
+   world view) are first-class targets.  Phone is the primary
+   layout; desktop is a separate UI tuned for mouse + keyboard.
+   Detail in [`00-audience-browser-page.md` § Desktop variant](00-audience-browser-page.md#desktop-variant).
 6. **Presenter as a special role** — reserved color + extra
    controls (clear-canvas, change-script, pause-generation), or
    just another audience member with script edits handled
@@ -229,7 +231,7 @@ survives the talk.
 | Q4 round structure | 2026-05-10 (design review) | No rounds — continuous demo from start to end | Automatic decay keeps the canvas alive without manual resets, removing the original reason for round boundaries.  Presenter narrates + reveals code at chosen moments without segmenting the painting timeline.  Simplifies server (no reset RPC), client (no "round X" UI), and presenter flow |
 | Q-growth model | 2026-05-10 (design review) | Pure direct painting + automatic age-based decay (no autonomous growth) | Cells appear only from audience taps + swipes.  Server runs no generation simulation.  Decay is an automatic per-tick step: older cells expire and are removed; filled-neighbour count extends the effective lease so decay starts at the edges of clusters and works inward (inverse-growth aesthetic).  Removes Q3 (direction-bias) from scope and reshapes Q4 (round structure) |
 | Q-decay tuning | (pending CI-2) | — | New question opened by the decay-system addition: pick `base_lifetime` (in ticks) + `lease_per_neighbour` so a deep-interior cell survives a useful fraction of a round while edge cells decay visibly within ~30 seconds.  Tune at CI-2 against real multi-client input |
-| Q5 audience platform | (pending CI-1) | — | — |
+| Q5 audience platform | 2026-05-10 (design review) | Both phone (touch) and desktop (pointer + keyboard) are first-class | Phone layout is the primary; desktop is a separate UI optimised for larger world view + mouse + keyboard.  Same WebSocket protocol, same world model — just two layouts.  Doubles input testing surface but lets non-phone audience members participate fully and gives the presenter a usable laptop fallback |
 | Q6 presenter special role | (pending CI-4) | — | — |
 
 ## Cross-arc dependencies
