@@ -183,11 +183,11 @@ override hotkey to lock the camera.
    removed).  With pure direct painting, no generation step
    needs colour-direction bias.  Closed by the 2026-05-10
    "growth model" decision.
-4. **Round structure** — does the canvas reset between rounds
-   in the presentation (fresh blank world each round), or does
-   it accumulate?  (Reset between scripts no longer applies —
-   there is no generation script to swap.)  CI-2 (or earlier
-   if the presenter has a strong preference) decides.
+4. ~~**Round structure**~~ — RESOLVED 2026-05-10: no rounds.
+   Demo runs continuously from start of talk to end; the
+   automatic decay rule keeps the canvas alive without manual
+   resets.  Presenter narrates and shows code at chosen
+   moments without segmenting the painting timeline.
 5. **Audience platform** — phone-touch friendly vs. laptop-only?
    Phone-friendly opens broader participation but doubles the
    input testing surface.
@@ -226,7 +226,7 @@ survives the talk.
 | Q1 plant vs crystal | 2026-05-10 (design review) | Single renderer, both aesthetics emerge from local-shape edge detection | Thin-line cells follow line tangent with curve lookahead 2 cells before/after a bend (plant); wider blobs fall back to default radial pattern (crystal); the swing between aesthetics as audience input changes is part of the spectacle |
 | Q2 palette size | 2026-05-10 (design review) | 9 colours, indices 1-9; index 0 = empty | RGB primaries (1-3) + CMY mixes (4-6) + white/grey/brown (7-9) covers spectrum + neutrals; 9 is comfortable for thumb-pick on phone; 0 reserved for world-state "empty hex" so colour and emptiness share one field |
 | Q3 direction-bias mechanic | 2026-05-10 (design review) | MOOT — no autonomous growth | Closed by the growth-model decision: pure direct painting needs no per-direction colour bias |
-| Q4 round structure | (pending CI-2) | — | (reframed: canvas reset vs accumulate per round; no longer "swap generation script") |
+| Q4 round structure | 2026-05-10 (design review) | No rounds — continuous demo from start to end | Automatic decay keeps the canvas alive without manual resets, removing the original reason for round boundaries.  Presenter narrates + reveals code at chosen moments without segmenting the painting timeline.  Simplifies server (no reset RPC), client (no "round X" UI), and presenter flow |
 | Q-growth model | 2026-05-10 (design review) | Pure direct painting + automatic age-based decay (no autonomous growth) | Cells appear only from audience taps + swipes.  Server runs no generation simulation.  Decay is an automatic per-tick step: older cells expire and are removed; filled-neighbour count extends the effective lease so decay starts at the edges of clusters and works inward (inverse-growth aesthetic).  Removes Q3 (direction-bias) from scope and reshapes Q4 (round structure) |
 | Q-decay tuning | (pending CI-2) | — | New question opened by the decay-system addition: pick `base_lifetime` (in ticks) + `lease_per_neighbour` so a deep-interior cell survives a useful fraction of a round while edge cells decay visibly within ~30 seconds.  Tune at CI-2 against real multi-client input |
 | Q5 audience platform | (pending CI-1) | — | — |
