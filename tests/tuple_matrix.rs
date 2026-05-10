@@ -344,3 +344,86 @@ cross_mode!(
 // cell that lands together with T1.8a; the cross_mode! macro doesn't
 // take per-test attributes today, so re-add this cell when T1.8a
 // closure makes it pass.
+
+// ── Phase 03 — closure-element tuples (E4 × D1, D2) ─────────────────────────
+//
+// Tuples whose elements are closures (Type::Function).  Storing works,
+// but CALLING through the tuple (`t.0(10)`) crashes — the CallRef IR
+// today only addresses bare-name fn-ref vars, not TupleGet sources.
+// Filed P249 (2026-05-11).  Workaround: hoist the closure into a Var
+// first (`f = t.0; f(10)`).  Cells stay in the matrix as live
+// regression guards.
+
+cross_mode!(
+    e4_d1_closure_local,
+    r#"
+    fn test() {
+        add5 = fn(x: integer) -> integer { x + 5 };
+        t = (add5, 99);
+        // store-only: read tuple's non-closure half + verify
+        // closure-half still occupies the slot (no crash on print
+        // of t.1 next to t.0).
+        print("{t.1}\n");
+        assert(t.1 == 99, "e4_d1_closure_local stored");
+    }
+    "#
+);
+
+cross_mode!(
+    e4_d1_closure_call,
+    r#"
+    fn test() {
+        add5 = fn(x: integer) -> integer { x + 5 };
+        t = (add5, 99);
+        result = t.0(10);
+        print("{result},{t.1}\n");
+        assert(result == 15 && t.1 == 99, "e4_d1_closure_call");
+    }
+    "#
+);
+
+cross_mode!(
+    e4_d1_closure_swap,
+    r#"
+    fn test() {
+        a = fn(x: integer) -> integer { x + 1 };
+        b = fn(x: integer) -> integer { x * 2 };
+        t = (a, b);
+        r0 = t.0(10);
+        r1 = t.1(10);
+        print("{r0},{r1}\n");
+        assert(r0 == 11 && r1 == 20, "e4_d1_closure_swap");
+    }
+    "#
+);
+
+cross_mode!(
+    e4_d1_capture_survives,
+    r#"
+    fn test() {
+        captured = 42;
+        read_captured = fn() -> integer { captured };
+        t = (read_captured, "tag");
+        print("{t.0()}|{t.1}\n");
+        assert(t.0() == 42 && t.1 == "tag", "e4_d1_capture_survives");
+    }
+    "#
+);
+
+cross_mode!(
+    e4_d2_closure_arg,
+    r#"
+    fn invoke(p: (fn(integer) -> integer, text)) -> integer {
+        print("{p.1}\n");
+        p.0(7)
+    }
+    fn test() {
+        sq = fn(n: integer) -> integer { n * n };
+        result = invoke((sq, "sq-tag"));
+        print("{result}\n");
+        assert(result == 49, "e4_d2_closure_arg");
+    }
+    "#
+);
+// e4_d2_closure_return DEFERRED — same T1.8a return-convention block
+// as e3_d2_nested_return.  Lands when T1.8a does.

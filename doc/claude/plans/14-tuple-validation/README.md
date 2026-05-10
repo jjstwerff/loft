@@ -5,23 +5,20 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 14 — Tuple validation: full element × destination matrix
 
-**Status: phases 00 + 01 + 02 + 07 shipped.  Phase 02 — full
-matrix wiring done 2026-05-11; 5/5 e3 cells green
-(e3_d1_nested_local, e3_d1_nested_deep, e3_d1_text_inside,
-e3_d1_elem_elem_assign, e3_d2_nested_arg).  P212 panic fix
-shipped 2026-05-04 (recursive `emit_tuple_put_ops`).  Two more
-bugs filed + closed during the matrix wiring: P247 (nested-tuple
-text move in format strings — closed via `nested_tuple_clone`
-flag in dispatch.rs + work-ref `.clone()` in TupleGet emit +
-Block-result wrap in format_text) and P248 (element-of-element
-assignment — closed via `extract_nested_tuple_lhs` extractor
-in expressions.rs + `Type::Tuple` arm in codegen.rs::TuplePut).
-Also extended `src/generation/dispatch.rs::output_set` with a
-recursive `tuple_has_text_leaf` check so
-`((i64, String), (i64, String))` literal construction triggers
-the inner `.to_string()` wrap (was: E0308).  Full tuple_matrix
-suite: 22/22 green under `--ignored`.  Phases 03-06 untouched;
-phase 08 still deferred.**
+**Status: phases 00 + 01 + 02 + 07 shipped; phase 03 partial.
+Phase 02 — full matrix wiring done 2026-05-11; 5/5 e3 cells
+green.  P212 panic fix shipped 2026-05-04 (recursive
+`emit_tuple_put_ops`).  Two more bugs filed + closed during
+phase 02: P247 (nested-tuple text move in format strings) and
+P248 (element-of-element assignment).  Phase 03 — matrix
+wiring done 2026-05-11; 1/5 e4 cells green
+(`e4_d1_closure_local` store-only).  4 surfaced P249 (closure-
+typed tuple elements have wrong-width layout — 4 B instead of
+P213 v4's 16 B fn-ref slot — AND no call-through-tuple parser
+path) which stays open as a Medium-effort follow-up.  Cells
+remain in the matrix as live regression guards.  Full
+tuple_matrix suite: 23/27 green (4 known-failing tied to P249).
+Phases 04-06 untouched; phase 08 still deferred.**
 
 ## Goal
 
