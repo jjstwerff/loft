@@ -129,23 +129,40 @@ offset.
 
 ## WebSocket events (server → client)
 
+Two frame types share the same connection:
+
+**JSON text frames** (small / event-shaped):
+
 ```json
-{ "type": "world_snapshot", "chunks": [ ... ] }
-{ "type": "world_delta", "cells": [ {"x": q, "y": r, "color": <0..9>} ] }
 { "type": "active_player_signal", "x": q, "y": r }
 ```
 
-On connect the server sends a one-shot `world_snapshot` of every
-existing chunk so the new client starts in sync.  After that,
-`world_delta` arrives every server tick (10 Hz) carrying only
-the cells whose colour, height, or age changed since the last
-tick.  Cells set to colour 0 represent decay-removal events.
-The client redraws affected hexes — including changes made by
-**other players**, not just its own taps, so every audience
-member sees the full collaborative canvas as it evolves.
+**Binary frames** (bulk world data, packed 4 bytes per cell):
 
-`active_player_signal` arrives when another player changes
-colour and triggers the **Jump to active** box's flash.
+| Frame | Use |
+|---|---|
+| `world_snapshot` | Sent once on connect.  Full dump of every existing chunk: per-chunk header (`cx`, `cz`, cell-count) followed by the chunk's cell array packed at 4 bytes/cell |
+| `world_delta` | Sent every tick (10 Hz).  Per-chunk list of changed cells (`hx`, `hz`, then the 4-byte payload).  Cells set to colour 0 represent decay-removal events |
+
+Each binary blob carries a **session id** in its header.  The
+client buffers blobs by session and applies them together, so a
+single audience action that touches multiple chunks (and
+therefore arrives as multiple binary frames) animates coherently
+regardless of packet ordering.  A new session id signals the
+client to flush the previous session and start the next visual
+frame.
+
+The phone client decodes the binary frames in JS using
+`DataView` / `Uint8Array` — no JSON parse on the hot path.
+
+The client redraws affected hexes from each delta — including
+changes made by **other players**, not just its own taps, so
+every audience member sees the full collaborative canvas as it
+evolves.
+
+`active_player_signal` arrives as a JSON frame when another
+player changes colour and triggers the **Jump to active** box's
+flash.
 
 ## Desktop variant — projector view + input
 

@@ -109,6 +109,39 @@ The world coordinates of any cell are recoverable from
 `(ck_cx * 32 + hx, ck_cz * 32 + hz)` where `hx, hz ∈ [0, 31]`
 are the in-chunk indices.  No per-cell `(q, r)` storage needed.
 
+## Wire format — JSON events + binary world blobs
+
+The WebSocket carries both JSON text frames and **binary frames**
+on the same connection:
+
+| Direction | Format | Used for |
+|---|---|---|
+| client → server | JSON text | All input events: `seed`, `clear`, `color_select`.  Small, low frequency (per-tap), human-readable on the wire for debug |
+| server → client | JSON text | Small events: `active_player_signal`, control / status |
+| server → client | **Binary blob** | Bulk world data — `world_snapshot` (sent on connect, full chunk dump) and large `world_delta` payloads.  Naturally packs at 4 bytes per cell using the `Cell` payload (1 byte colour + 1 byte height + 2 bytes age) plus a small per-chunk header (cx, cz + cell-count).  Each blob carries a **session id** in its header so multiple blobs that belong to the same logical tick (or the same single audience action that produced effects across many chunks) animate together on the client regardless of which packet arrived first |
+
+The binary frames use loft's existing typed-binary read/write
+pattern (see [`STDLIB.md` § File I/O](../../STDLIB.md) — the same
+`f#read(n) as u8` / `as u16` shape works against any byte source,
+not just files).  Server-side serialisation is straight
+`vec<u8>` packing in chunk-major order; client-side deserialisation
+is the inverse.  No JSON parsing on the hot path for world data.
+
+**Per-blob session id** (1 word in the blob header, monotonic
+per server restart): the server can split a single tick's
+changes across multiple binary frames (one per affected chunk,
+say) and tag them all with the same session.  The client
+buffers blobs by session id and applies them as a unit, so a
+single audience action that touches multiple chunks animates
+coherently regardless of which packet arrived first.  A new
+session id signals the client to flush any prior buffered
+session and start the next visual frame.
+
+Event-side JSON stays small enough that text encoding cost is
+negligible and the wire stays human-readable for the talk
+("here is a `seed` event going to the server, this is exactly
+what your tap sent").
+
 ## Event handling (client → server)
 
 | Event type | Server action |
@@ -228,9 +261,13 @@ heartbeat.)
   per-tick cap unless the load test surfaces pathological busy
   moments — optimisation is its own follow-up, not a phase 1
   blocker.
-- **Authority** — server is authoritative; clients render what
-  the server sends (no client-side prediction needed for this
-  talk's scale).
+- ~~**Authority**~~ — RESOLVED 2026-05-10: server-authoritative,
+  no client-side prediction.  Clients are pure renderers of
+  server state.  Local taps show nothing on the local hex until
+  the next world_delta confirms (up to ~100 ms tick lag plus
+  network RTT).  Simplest invariant; impossible to desync; one
+  truth.  Re-evaluate only if rehearsal shows the input lag
+  feels disconnected.
 
 ## Deliverable
 
