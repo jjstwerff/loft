@@ -1062,6 +1062,33 @@ EventLoop's wire protocol, handler registry, or AsyncPoller.
 The reverse is true: once Phases 2+ ship, they can adopt the
 YIELD.* abstractions internally for cross-target portability.
 
+### Priority lanes ≠ threads
+
+Worth flagging since the question keeps coming up: **priority
+lanes (Phase 2) don't need `parallel{}` workers** — they're a
+scheduling concept, not a parallelism one.  Single-threaded loop,
+non-blocking polls per lane, drain in priority order:
+
+```loft
+while running {
+  while let ev = next_input()     { dispatch_high(ev); }   // HIGH
+  if   now() >= next_tick         { do_tick(); next_tick += period; }   // MED
+  if   let ev = next_low_event()  { dispatch_low(ev); }    // LOW
+  yield_to_host();   // no-op on interp/native; cooperative on WASM
+}
+```
+
+The bones are already in lib/server (`ws_accept_nonblocking`,
+`ws_next_event_native`, `ws_idle_sleep_ms_native`) + stdlib
+(`now()`, `ticks()`).  Phase 2 can ship on the interpreter
+without YIELD.* — the loop just spins a few % CPU until YIELD.*
+makes it cooperative.
+
+`parallel{}` workers are for **CPU-bound batches** (physics over
+10k entities, image decoding, world generation) — not for getting
+multiple priority lanes.  A 30-client × 10 Hz audience-demo
+server runs on one thread.
+
 **Recommendation:** ship Phase 1 ASAP; design beyond Phase 2 only
 as Phase 1's real friction reveals what's actually needed.  The
 abstract design in this document and EVENT_LOOP_DISCUSSION.md is
