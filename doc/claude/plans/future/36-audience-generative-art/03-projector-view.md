@@ -171,6 +171,25 @@ Once `growth_progress` reaches 1.0, the cell sits at its
 server-supplied height (`c_height` from the chunk payload) for
 the remainder of its lifetime.
 
+### Distance fade
+
+Crystals beyond a configurable distance from the camera centre
+**fade out** (alpha → 0 over a fade band) rather than being
+abruptly clipped at the view edge.  Anchors audience attention
+on the focused cluster and lightens render cost on far-away
+crystals.
+
+| Constant | Default |
+|---|---|
+| `CAMERA_FADE_START_HEXES` | 100 (fade begins at this many hex-distances from the camera centre) |
+| `CAMERA_FADE_BAND_HEXES` | (CI-3 picks; first cut ~20 hex distances of falloff) |
+
+Both kept as renderer-side constants so they can be retuned at
+the prototype + rehearsal stages without touching server code.
+Rendering note: the fade applies to the crystal mesh only — the
+projector still does not render the base hex lattice at all, so
+the fade has nothing to mute on empty cells.
+
 ### Visible structure on an empty world
 
 A blank world reads as a dark stage — no hex lattice on the
