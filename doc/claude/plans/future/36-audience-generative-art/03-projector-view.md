@@ -297,11 +297,15 @@ moments.  CI-4 picks between hold-still and slow-orbit.
   breach shows up, decide on the right cap (hard cap, LOD
   simplification, or per-frame skipping) then.  Don't optimise
   ahead of the measurement.
-- **Camera framing** — fit-to-content (always show all painted
-  cells) vs. follow-action (zoom in on the busiest cluster).
-  Fit-to-content is "fair"; follow-action is "exciting."
-  Recommend follow-action with periodic auto-zoom-out so the
-  audience sees what they're missing.
+- ~~**Camera framing**~~ — RESOLVED 2026-05-10:
+  **follow-action with periodic auto-zoom-out**.  Camera
+  centres on the heat field of recent activity; zoom inversely
+  follows the spread of activity (concentrated → zoom in,
+  dispersed → zoom out).  Every ~30 s (sluggish-by-design
+  cadence), camera auto-pulls back to a fit-all view for ~5 s
+  so the audience sees what they're missing, then resumes
+  follow-action.  Presenter hotkey override always available
+  to lock or steer manually.
 - **Idle behavior** — slow drift over the painted region (camera
   treats whole world as low-heat) vs. hold still.  Test in
   rehearsal.
