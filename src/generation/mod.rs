@@ -1898,8 +1898,23 @@ extern crate loft;"
         }
 
         let needs_ret_cast = matches!(&def.returned, Type::Integer(_));
+        // P244: `text`-returning natives return `loft_ffi::LoftStr` from the
+        // extern, but the wrapper's declared return type (per `rust_type` with
+        // `Context::Result`) is `Str`.  Capture the LoftStr as a typed local
+        // and copy its bytes into `stores.scratch`, then hand back a `Str`
+        // borrowed from the long-lived scratch buffer (mirrors the P205
+        // pattern used by text-returning loft functions).
+        let needs_text_wrap = matches!(&def.returned, Type::Text(_));
         if needs_ret_cast {
             write!(w, "  (unsafe {{ {qualified_symbol}(")?;
+        } else if needs_text_wrap {
+            // No type annotation: lib/server (and other native sub-crates)
+            // bring their own copy of `loft_ffi`; binding by inferred type
+            // sidesteps the "multiple versions of crate loft_ffi" rustc
+            // E0308.  Both copies are structurally identical (`#[repr(C)]
+            // pub struct LoftStr { pub ptr: *const u8, pub len: usize }`),
+            // so the field reads on the next lines work either way.
+            write!(w, "  let _ls = unsafe {{ {qualified_symbol}(")?;
         } else {
             write!(w, "  unsafe {{ {qualified_symbol}(")?;
         }
@@ -1957,6 +1972,17 @@ extern crate loft;"
         }
         if needs_ret_cast {
             write!(w, ") }}) as i64")?;
+        } else if needs_text_wrap {
+            writeln!(w, ") }};")?;
+            writeln!(
+                w,
+                "  let _bytes: Vec<u8> = if _ls.ptr.is_null() {{ Vec::new() }} else {{ unsafe {{ std::slice::from_raw_parts(_ls.ptr, _ls.len) }}.to_vec() }};"
+            )?;
+            writeln!(
+                w,
+                "  stores.scratch.push(unsafe {{ String::from_utf8_unchecked(_bytes) }});"
+            )?;
+            write!(w, "  Str::new(stores.scratch.last().unwrap())")?;
         } else {
             write!(w, ") }}")?;
         }
