@@ -122,23 +122,47 @@ are the in-chunk indices.  No per-cell `(q, r)` storage needed.
 ## Tick loop
 
 Server runs a fixed-rate tick (suggested 4-10 Hz; CI-2 to tune).
+The tick has **no autonomous growth step** — placement is pure
+direct painting from audience events.  But it does have an
+**automatic decay step**: older cells expire and are removed,
+producing an "inverse growth" that erodes the canvas back toward
+empty without audience effort.  Filled neighbours extend a
+cell's effective lease, so decay starts at the **edges** of a
+cluster (where neighbour counts are lowest) and works inward,
+rather than punching holes through the middle.
+
 Each tick:
 
-1. Run the generation step (phase 2 script): for each empty cell
-   adjacent to a live cell, optionally fill it with a colour
-   biased by neighbour majority + per-direction colour votes.
+1. Apply the queue of audience events received since last tick
+   (`seed`, `clear`, `color_select`).  Each event mutates one
+   cell's `c_color` (and resets that cell's `c_age` to 0 on a
+   new placement).
 2. Update `c_height` on each cell whose filled-neighbour count
    changed (cell newly filled, or a neighbour newly filled /
    emptied).  Height is derived from the local neighbour count.
 3. Increment `c_age` on every non-empty cell; clamp to 65535
    (the 2-byte ceiling).
-4. Compute `world_delta`: per-chunk lists of `(hx, hz, color,
+4. **Decay step**: for each non-empty cell, compute
+   `effective_lifetime = base_lifetime + lease_per_neighbour
+   * filled_neighbour_count`.  If `c_age >= effective_lifetime`,
+   set `c_color = 0` (cell removed, becomes empty).  Edges of a
+   cluster die first because their `filled_neighbour_count` is
+   low; deep-interior cells get many leases and survive longest.
+5. Compute `world_delta`: per-chunk lists of `(hx, hz, color,
    height, age)` for cells whose payload changed since last
-   tick.
-5. Garbage-collect chunks: any chunk whose 1024 cells are all
+   tick (placements, height-recomputes, decays).
+6. Garbage-collect chunks: any chunk whose 1024 cells are all
    empty (colour = 0) is removed from `chunks`.
-6. Broadcast delta to all subscribers (including chunk
+7. Broadcast delta to all subscribers (including chunk
    creations + chunk deletions).
+
+The renderer treats a cell-decay event symmetrically to a cell-
+placement event: a decaying cell shrinks down over the same
+~5-second window the growth animation uses.  Direction of the
+"reverse extrusion" derives from the same age-comparison-with-
+neighbours rule (the cell collapses toward where the youngest
+neighbour is — i.e., away from the most-recent painting
+direction).
 
 Note: the **3D height field** the projector renders is computed
 **from the per-cell `c_height` byte the server ships** (so all

@@ -34,9 +34,9 @@ top of them, not library extension.
 | # | File | Builds | Effort |
 |---|---|---|---|
 | 0 | [00-audience-browser-page.md](00-audience-browser-page.md) | Pure HTML/JS smartphone client — 9×7 hex world view (with movement-zone outer rings), 9-color palette, clear + jump-to-active controls, tap/swipe paint, WebSocket | S |
-| 1 | [01-server-state.md](01-server-state.md) | Loft server: hold world state, drive tick loop, broadcast world deltas + active-player signals.  Builds on shipped `lib/server` multi-client WS API | M |
-| 2 | [02-generation-script.md](02-generation-script.md) | Loft generative script: plant/crystal growth from seeds + neighbor color blending biased by direction-color votes.  2-3 variants for round-to-round switching.  THE STAR of the demo | M |
-| 3 | [03-projector-view.md](03-projector-view.md) | Native loft beamer client: subscribe to server, render full hex world, auto-camera follows activity heat field, presenter hotkey overrides | M |
+| 1 | [01-server-state.md](01-server-state.md) | Loft server: hold world state, age cells, run automatic decay (older cells removed; filled-neighbour lease extends life so shrinking starts at the edges), broadcast world deltas + active-player signals.  No autonomous growth — placement is pure direct painting from audience taps | M |
+| ~~2~~ | ~~02-generation-script.md~~ | DROPPED — closed by the 2026-05-10 growth-model decision (pure direct painting; no autonomous growth).  Renderer-side ridge / edge classification covers what would have been the "plant / crystal aesthetic" generator | — |
+| 3 | [03-projector-view.md](03-projector-view.md) | Native loft beamer client: subscribe to server, render full hex world (frost-style 3D crystal mesh + edge-detected plant/crystal aesthetic), auto-camera follows activity heat field, presenter hotkey overrides | M |
 | 4 | [04-hosting.md](04-hosting.md) | Public URL reachable from venue WiFi (VPS / hotspot / ngrok / cloudflared).  Operational, not code | XS |
 | 5 | [05-rehearsal-and-backup.md](05-rehearsal-and-backup.md) | One full dry run on demo hardware; record both demos as fallback for catastrophic failure | XS |
 
@@ -179,16 +179,15 @@ override hotkey to lock the camera.
    Index 0 is reserved for "empty hex" in the world state and is
    never sent in a `seed` event.  Detail in
    [`00-audience-browser-page.md` § Zone 2](00-audience-browser-page.md#zone-2--color-palette-middle).
-3. **Direction-bias mechanic** — does an audience member's color
-   choice influence growth ONLY at their seed site, or globally
-   as a vector pull on the field?  Local-only is simpler;
-   global-pull produces more visible "everyone's choices interact"
-   but is harder to predict.
-4. **Round structure** — continuous (always-running) vs. timed
-   rounds with reset between?  Timed rounds let the presenter
-   tweak the generation script between rounds and demo "watch the
-   same inputs produce different worlds."  Recommend timed
-   rounds.
+3. ~~**Direction-bias mechanic**~~ — MOOT (autonomous growth
+   removed).  With pure direct painting, no generation step
+   needs colour-direction bias.  Closed by the 2026-05-10
+   "growth model" decision.
+4. **Round structure** — does the canvas reset between rounds
+   in the presentation (fresh blank world each round), or does
+   it accumulate?  (Reset between scripts no longer applies —
+   there is no generation script to swap.)  CI-2 (or earlier
+   if the presenter has a strong preference) decides.
 5. **Audience platform** — phone-touch friendly vs. laptop-only?
    Phone-friendly opens broader participation but doubles the
    input testing surface.
@@ -226,8 +225,10 @@ survives the talk.
 |---|---|---|---|
 | Q1 plant vs crystal | 2026-05-10 (design review) | Single renderer, both aesthetics emerge from local-shape edge detection | Thin-line cells follow line tangent with curve lookahead 2 cells before/after a bend (plant); wider blobs fall back to default radial pattern (crystal); the swing between aesthetics as audience input changes is part of the spectacle |
 | Q2 palette size | 2026-05-10 (design review) | 9 colours, indices 1-9; index 0 = empty | RGB primaries (1-3) + CMY mixes (4-6) + white/grey/brown (7-9) covers spectrum + neutrals; 9 is comfortable for thumb-pick on phone; 0 reserved for world-state "empty hex" so colour and emptiness share one field |
-| Q3 direction-bias mechanic | (pending CI-3) | — | — |
-| Q4 round structure | (pending CI-2) | — | — |
+| Q3 direction-bias mechanic | 2026-05-10 (design review) | MOOT — no autonomous growth | Closed by the growth-model decision: pure direct painting needs no per-direction colour bias |
+| Q4 round structure | (pending CI-2) | — | (reframed: canvas reset vs accumulate per round; no longer "swap generation script") |
+| Q-growth model | 2026-05-10 (design review) | Pure direct painting + automatic age-based decay (no autonomous growth) | Cells appear only from audience taps + swipes.  Server runs no generation simulation.  Decay is an automatic per-tick step: older cells expire and are removed; filled-neighbour count extends the effective lease so decay starts at the edges of clusters and works inward (inverse-growth aesthetic).  Removes Q3 (direction-bias) from scope and reshapes Q4 (round structure) |
+| Q-decay tuning | (pending CI-2) | — | New question opened by the decay-system addition: pick `base_lifetime` (in ticks) + `lease_per_neighbour` so a deep-interior cell survives a useful fraction of a round while edge cells decay visibly within ~30 seconds.  Tune at CI-2 against real multi-client input |
 | Q5 audience platform | (pending CI-1) | — | — |
 | Q6 presenter special role | (pending CI-4) | — | — |
 
