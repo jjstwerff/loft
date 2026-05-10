@@ -324,16 +324,29 @@ fn v3_http_routing() {
     );
 }
 
-/// WebSocket coexistence — the same v3 server that just served
-/// HTML on `/` upgrades a WS request on `/ws` and echoes the
-/// payload.  Locks in that adding HTTP routing didn't regress the
-/// WebSocket plumbing inherited from v1/v2.
+/// Full game over WebSocket — the same v3 server that just served
+/// HTML on `/` upgrades a WS request on `/ws` and plays a complete
+/// tic-tac-toe game using the v3 wire protocol:
+///   client → server: `click:<row>,<col>`
+///   server → client: `place:<mark>,<row>,<col>` (X then O each turn)
+///   server → client: `gameover:<X|O|draw>`
+///
+/// The probe plays X's column-0 win — clicks (0,0), (1,0), (2,0).
+/// Server places O at the first empty cell each turn (deterministic),
+/// so the trajectory is fixed and the harness can assert on every
+/// frame.  Locks in:
+///   - HTTP routing + WebSocket coexist on the same port (HTTP
+///     probe runs first; server then accepts a WS upgrade on /ws).
+///   - The full game-protocol round-trip works end-to-end.
+///   - The interactive HTML page in INDEX_HTML embeds the
+///     equivalent JS protocol logic (verified by string-search of
+///     the served body for the protocol markers).
 #[cfg_attr(
     target_os = "windows",
     ignore = "P229b: server cannot bind on Windows CI"
 )]
 #[test]
-fn v3_websocket_round_trip_on_ws_path() {
+fn v3_full_game_over_websocket() {
     let port = pick_free_port();
     let mut server = spawn_listening_server("tictactoe_server_v3.loft", port, "v3");
 
@@ -342,6 +355,16 @@ fn v3_websocket_round_trip_on_ws_path() {
     // so HTTP-then-WS-then-HTTP is the realistic shape.
     let r = http_get(port, "/").expect("GET / pre-WS probe");
     assert_eq!(r.status, 200, "GET / pre-WS probe");
+    // The HTML body must embed the matching JS-side protocol —
+    // surface this as a check so the page-level client and the
+    // server-level handler can't drift silently.
+    for marker in ["click:", "place:", "gameover:"] {
+        assert!(
+            r.body.contains(marker),
+            "served HTML missing protocol marker `{marker}`; body:\n{}",
+            r.body
+        );
+    }
 
     let client = spawn_client("tictactoe_client_v3_probe.loft", port);
     let (out, status) = drain_with_timeout(client, Duration::from_secs(30));
@@ -350,14 +373,35 @@ fn v3_websocket_round_trip_on_ws_path() {
     assert_eq!(
         status,
         Some(0),
-        "v3 ws probe did not exit cleanly; client stdout=\n{out}\n--- server stdout:\n{server_out}"
+        "v3 game probe did not exit cleanly; client stdout=\n{out}\n--- server stdout:\n{server_out}"
     );
-    assert!(
-        out.contains("v3-probe: ok got=\"echo:hello\""),
-        "v3 ws probe didn't see the echo; client stdout=\n{out}\n--- server stdout:\n{server_out}"
-    );
-    assert!(
-        server_out.contains("v3-srv: ws-upgraded"),
-        "v3 server didn't log the upgrade; server stdout:\n{server_out}"
-    );
+    // Expected trajectory — assert each step in order.
+    for needle in [
+        "v3-probe: place X 0,0",
+        "v3-probe: place O 0,1",
+        "v3-probe: place X 1,0",
+        "v3-probe: place O 0,2",
+        "v3-probe: place X 2,0",
+        "v3-probe: gameover X",
+        "v3-probe: ok",
+    ] {
+        assert!(
+            out.contains(needle),
+            "v3 game probe missing step `{needle}`; client stdout=\n{out}\n--- server stdout:\n{server_out}"
+        );
+    }
+    // Server-side: each step logged from the game handler.
+    for needle in [
+        "v3-game: X at 0,0",
+        "v3-game: O at 0,1",
+        "v3-game: X at 1,0",
+        "v3-game: O at 0,2",
+        "v3-game: X at 2,0",
+        "v3-game: gameover X",
+    ] {
+        assert!(
+            server_out.contains(needle),
+            "v3 server missing step `{needle}`; server stdout:\n{server_out}"
+        );
+    }
 }
