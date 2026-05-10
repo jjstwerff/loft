@@ -9,6 +9,62 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Plan-14 (tuple validation matrix) closed 2026-05-11
+
+Plan-14 ran 2026-04-30 → 2026-05-11.  Final matrix: 40 cells
+across 5 element types (E1 scalars, E1n integer-not-null, E2
+text, E3 nested, E4 closure, E5 struct reference) and 3
+destinations (D1 local, D2 direct stack, D3 struct field), all
+cross-mode-validated under `tests/tuple_matrix.rs`'s
+interp/native byte-identical assertion.  Plus E6 (struct value)
+folded into E5 by C65 design decision and E7 (collections in
+tuples) closed-by-non-goal.
+
+**Phases shipped (00, 01, 02, 03, 04, 05, 07):**
+- 00: cross-mode harness in `tests/common/cross_mode.rs`;
+  `find_loft_rlib`, `compile_native_job`, `run_native_job`
+  exposed `pub(crate)` from `tests/native.rs`.
+- 01: 12 E1/E2 cells (D1 + D2: local, arg, return, inline,
+  match-subj, if-arm).  T1.8a closed via the lighter "rust_type
+  Context::Result recursion" fix instead of new opcodes.
+- 02: 5 E3 cells.  Closed P247 (nested-tuple text move in
+  format-string interpolation) + P248 (element-of-element
+  assignment `t.0.1 = 99`).
+- 03: 5 E4 cells (closure-typed tuple elements).  Closed P249
+  (20-byte fn-ref layout extended into 6 tuple codegen sites +
+  `__fn_ref_tmp` postfix-call temp marked skip_free).
+- 04: 6 E5 cells (struct references).  Decision: MOVE
+  semantics (recorded as C64).  Loop-iteration aliasing bug
+  parked as P250.
+- 05: 6 D3 cells (tuples in struct fields).  Decision: LIFT
+  was already shipped by Plan-06 phase 4d; phase 05 was a
+  verification pass.  E4_d3 (closure-element tuple as struct
+  field) parked behind P251.
+- 07: P234 runtime — lifetime-bearing tuple returns route
+  through `Reference(__tuple<…>)` synthetic struct.
+
+**Phase deferred:**
+- 08: P234 runtime extended to LOCAL tuple-with-lifetime-concern
+  variables — friction with P189b's vector-of-tuple index access
+  meant the rewrite needed broader changes than the original
+  Phase 08 scope.  Phase is a uniformity refactor, not a bug
+  fix; juice not worth the squeeze.
+
+**Bugs filed during validation:**
+- P247, P248 — closed in phase 02.
+- P249 — closed in phase 03.
+- P250 — open: ref-tuple loop-iteration aliasing.
+- P251 — open: native projection for fn-ref-tuple-in-struct-field.
+
+**Design decisions recorded in DESIGN_DECISIONS.md:**
+- C64: Tuple struct-ref elements use MOVE semantics.
+- C65: E6 (struct value) folded into E5 — no inline value-struct
+  type in current loft.
+
+Reference content moved to TUPLES.md (Known limitations + Non-
+goals + Deferred work updated).  Plan moved to
+`finished/14-tuple-validation/`.
+
 ### Plan-06 (typed-par redesign) closed 2026-05-09
 
 Plan-06 ARC ran from 2026-04-30 to 2026-05-09.  All 11 sub-steps

@@ -177,7 +177,7 @@ Each cell `(Yi, Xj)` has one of:
   "Known Limitations" section.
 - [LIFETIME.md](../../LIFETIME.md) — yielded-value lifetime
   rules for text and Reference.
-- [plan-14 phase 00](../14-tuple-validation/00-matrix.md) — donor
+- [plan-14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
   template.
 - [plan-15 closure validation](../15-closure-validation/README.md)
   — phase 05 prerequisite.

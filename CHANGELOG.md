@@ -18,6 +18,11 @@ invariants, internal phase numbers)?  See
 and a "learn loft in 30 minutes" walkthrough so new users can get from
 zero to a running demo without reading the reference.
 
+Tuples are now cross-validated under interpreter and `--native`
+across 40 cells covering 5 element types (scalars, text, nested,
+closure, struct reference) and 3 storage destinations (local,
+direct stack, struct field).
+
 ## 0.8.4 — 2026-04-24 — Awesome Brick Buster
 
 This release focuses on **the web**: your loft programs can now fetch

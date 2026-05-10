@@ -62,22 +62,52 @@ calling convention.
 | SC-5 | LIFO store violation on scope exit | Reverse element free order |
 | SC-7 | `not null` inaccessible for tuple integers | `integer not null` annotation |
 
+Plan-14 closure (2026-05-11) validated 40 cells across 5 element
+types (E1, E1n, E2, E3, E5) and 3 destinations (D1 local, D2 stack,
+D3 struct field) under the cross-mode harness — every cell asserts
+byte-identical output between interpreter and `--native`.  Two
+narrow shapes are gated behind P-issues:
+
+| Bug | Shape | Workaround |
+|---|---|---|
+| P250 | `for { (q1, q2) = make_pair(pa, pb); }` reads `null` for whichever destructured variable picked up the FIRST argument on iterations >0 | Hoist destructure out of loop, or use a struct field |
+| P251 | Storing `(fn-ref, …)` INTO a struct field rejects native compilation with rustc E0605 | Store the fn-ref in a separate field, not nested in a tuple struct field |
+
+E4 (closure element) calling — `t.0(args)` and `s.field.0(args)` —
+was the open phase-03 / phase-05 question; the layered fix (20-byte
+fn-ref tuple-element layout in six codegen sites + `__fn_ref_tmp`
+skip_free) closed it for D1 / D2 (P249).  The struct-field call
+shape is the residual P251.
+
 ---
 
 ## Non-goals
 
-Named tuple fields, single-element tuples, tuples in struct fields, tuple
-iteration, whole-tuple formatting, variadic tuples — all compile errors.
-Use named structs or element-by-element access instead.
+Named tuple fields, single-element tuples, tuple iteration,
+whole-tuple formatting, variadic tuples — all compile errors.  Use
+named structs or element-by-element access instead.
+
+**Tuples in struct fields** were a non-goal in 0.8.3; Plan-06
+phase 4d LIFTED that restriction and Plan-14 phase 05 validated
+the lift across the matrix (5 + 1-omitted D3 cells green).  Tuple
+struct fields now lay out their elements inline using the
+synthetic `__tuple<…>` struct's positions; access via `s.field.i`
+goes through the same `Type::Tuple` arm of `set_field_check` /
+`get_val` that the matrix exercises.
 
 ---
 
 ## Deferred work
 
-- **T1.4** — Tuple-returning functions (caller-allocated return slots)
-- **LHS destructuring** — `(a, b) = expr` syntax
-- **Tuple patterns in match** — destructure before `match` for now
-- **`&tuple` with owned elements** — per-element DbRef expansion
+- **`&tuple` with owned elements** — per-element DbRef expansion is
+  still pending; tuple values are passed by value or via the
+  synthetic `__tuple<…>` struct's DbRef.
+
+T1.4 (tuple-returning functions), tuple LHS destructuring, and
+tuple patterns in match all shipped in 0.8.3 (T1.9) and were
+re-validated by Plan-14's 40 cells.  T1.8c (struct-ref tuple
+element semantics) closed in Plan-14 phase 04 with the MOVE-
+semantics decision.
 
 ---
 

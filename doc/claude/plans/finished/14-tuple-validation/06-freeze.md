@@ -5,7 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 06 — Matrix freeze + doc reconciliation
 
-**Status: open**
+**Status: shipped 2026-05-11.  Matrix in `00-matrix.md` updated to
+final 40-cell state (39 PASS via cross_mode + 1 CLOSED:P251 for
+E4_d3 + E6 / E7 closed-by-design).  TUPLES.md known-limitations
+table trimmed (T1.8c, T1.11a, E6 dropped); PLANNING.md T1.x rows
+marked completed; CHANGELOG_TECHNICAL.md gained the close summary.
+DESIGN_DECISIONS.md got the E6 folding entry, the copy+null
+rejection (phase 04), and the LIFT decision (phase 05).  Plan
+moved to `finished/14-tuple-validation/`.**
 
 ## Goal
 

@@ -127,5 +127,5 @@ more cells needed."
 - [TUPLES.md § T1.9](../../TUPLES.md) — tuple match specification.
 - `src/parser/control.rs` — `parse_match`, `parse_scalar_match`,
   `parse_tuple_match`, `parse_vector_match`.
-- [plan-14 phase 03](../14-tuple-validation/03-closures.md) — tuple
+- [plan-14 phase 03](../../finished/14-tuple-validation/03-closures.md) — tuple
   match cells (cross-reference).

@@ -242,6 +242,87 @@ stdlib never need local-helper recursion.
 
 ---
 
+## C64 — Tuple struct-ref elements use MOVE semantics (not copy + null)
+
+**Question.** When a tuple element is a struct reference
+(`Type::Reference`), what semantics apply at scope exit and on
+destructuring?  Two candidates:
+
+- **Move semantics:** the source tuple's scope-exit emits no
+  per-element `OpFreeRef`; each destructured destination variable
+  owns its element.
+- **Copy + null semantics:** the destructure copies the DbRef,
+  then nulls out the source tuple's slot via a new
+  `OpNullTupleElem(var, offset)` opcode so the source's scope-exit
+  cleanup is a no-op for the moved-out element.
+
+**Evaluation.** Move semantics is what the runtime already does:
+`src/scopes.rs:1000-1009`'s tuple scope-exit arm is a `continue`
+stub (no per-element `OpFreeRef` on the source tuple), and
+`parser/expressions.rs::parse_assign`'s destructure path types
+each destination variable as the source element's `Type::Reference`
+via `change_var_type(v_nr, &rhs_elems[i])` so the destination
+gets ordinary scope-exit cleanup.  The Plan-14 phase 04 cross-mode
+harness exercised every single-iteration E5 shape (swap, arg,
+return, mixed Ref+int, mixed Ref+text, plain local) on both
+backends with byte-identical output and no panics — confirming
+move semantics is correct in practice.
+
+The "copy + null" alternative would require a new opcode at a
+time when the opcode space is near-saturation (254/256 used per
+CHANGELOG_TECHNICAL.md), would add a per-destructure runtime
+write the move path doesn't need, and produces no observable
+difference to user code — only the runtime cleanup ordering
+changes.  No concrete program shape exists that move-semantics
+gets wrong but copy+null would get right.
+
+The loop-iteration aliasing bug (P250 — `for { (q1, q2) =
+make_pair(pa, pb); }` reads `null` for whichever destructured
+variable picked up the FIRST argument on iterations >0) is a
+SEPARATE dep-tracking issue, not a move-vs-copy semantics
+question.  Both candidates would have the same loop-iter problem
+without an additional fix; the bug lives in the destructure
+path's dep propagation between source argument slot and
+destination variable slot.
+
+**Decision.** **Move semantics.**  Dated 2026-05-11.  The
+runtime path is locked by 6 cross-mode E5 cells in
+`tests/tuple_matrix.rs` (e5_d1_struct_ref_local + swap +
+ref_int_local + ref_text_local; e5_d2_struct_ref_arg + return).
+Plan-14 phase 04 records the rationale.
+
+**Revisit when.** A concrete shape appears where move semantics
+is observably wrong but copy + null would be correct — none
+known as of 2026-05-11.  P250's fix lives in dep-tracking, not
+in the move/copy axis.
+
+---
+
+## C65 — Tuple "structure value" element type folded into reference (E5 = E6)
+
+**Question.** Should the validation matrix carry a separate E6
+element type for "structure value" (an inline by-value struct
+copied into the tuple slot, distinct from `Type::Reference`)?
+
+**Evaluation.** Loft has no inline by-value struct type distinct
+from `Type::Reference`.  A `struct Foo { ... }` declaration
+produces a record laid out in a store; the loft-level "value" you
+pass around is a `Reference(struct_def, dep)` — a 12-byte
+`DbRef`.  Tuple element E5 (Reference) already covers this shape
+end-to-end.
+
+Carving out a separate E6 row would either (a) duplicate every
+E5 cell with no semantic difference, or (b) require introducing
+a new `Type::StructValue` variant — a substantial language-design
+change with no consumer.  Neither pays for itself.
+
+**Decision.** **Folded into E5.**  Dated 2026-05-11.  Plan-14's
+matrix in `00-matrix.md` marks every E6 cell as
+`CLOSED:folded into E5`.  A future feature that introduces inline
+value structs (none on the roadmap) would re-open the row.
+
+---
+
 ## Adding a new entry
 
 When closing a question, append a new `##` section using the

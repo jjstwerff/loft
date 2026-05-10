@@ -441,29 +441,19 @@ left at the last successful checkpoint.
   **T1.8b — Text elements:** `Type::Text` inside a `Type::Tuple` needs lifetime tracking and `OpFreeRef`-style cleanup for the text slot on scope exit.  `owned_elements` in `data.rs` must enumerate text positions within a tuple so `get_free_vars` can emit the right cleanup sequence.
 
   **T1.8c — Struct-ref (DbRef) tuple elements: move vs copy semantics.**
-  The `tuple_struct_refs` test fails with use-after-free.  Root cause: `scopes.rs:578-587`
-  has a stub `continue` for tuple scope exit that emits **no** `OpFreeRef` for owned
-  elements.  After destructuring `(q1, q2) = two_points(p1, p2)`, the work-ref `tmp`
-  holds two DbRef copies of the same records as `q1` and `q2`.  The fix must decide:
-  - **Move semantics (preferred):** after destructuring, `tmp`’s elements are considered
-    moved.  The `continue` in scopes.rs is correct for `tmp` — no double-free.  Must verify
-    that `q1` and `q2` themselves have `Type::Reference` and that normal `OpFreeRef` fires
-    for them at their scope exit.  If not, the parser must propagate the element type to
-    the destructured variables.
-  - **Copy + null semantics:** after destructuring, null out `tmp`’s DbRef slots (set
-    store_nr to -1).  Then `OpFreeRef` on `tmp` is a no-op.  Requires a new opcode
-    `OpNullTupleElem(var, offset)` or explicit codegen at the destructuring site.
-
-  **Guards and debugging:**
-  - `debug_assert!` in `OpFreeRef` that the record is in the store’s claims set (catches
-    double-free immediately).
-  - `LOFT_LOG=scope_debug` already traces ref-variable decisions; extend it to log tuple
-    element ownership: "tuple var={v}: {n} owned elements, treating as moved".
-  - After destructuring, verify each destination variable’s type matches the tuple element
-    type so normal scope cleanup applies.
-
-  **Effort:** Medium
-  **Target:** 0.8.3
+  *(closed 2026-05-11 by Plan-14 phase 04)* — **MOVE semantics**
+  selected and validated against the cross-mode harness.  Already
+  implemented by `src/scopes.rs:1000-1009`'s tuple scope-exit
+  `continue` stub (no per-element `OpFreeRef` on the source tuple)
+  + `parser/expressions.rs:1252-1278`'s destructure path which types
+  each destination variable as the source element's `Type::Reference`
+  (via `change_var_type(v_nr, &rhs_elems[i])`), so each `q1`/`q2`
+  gets ordinary scope-exit cleanup.  The "copy + null" alternative
+  was rejected (would need a new opcode at near-saturation 254/256
+  and is not observably different from move semantics).  6 cross-
+  mode E5 cells lock the canonical shapes (swap, arg, return,
+  mixed Ref+int, mixed Ref+text); the loop-iteration aliasing
+  shape is parked behind P250 as a separate dep-tracking bug.
 
 - **T1.9** *(completed 0.8.3)* — Tuple destructuring in `match`.  See [TUPLES.md](TUPLES.md).
 
@@ -545,20 +535,26 @@ left at the last successful checkpoint.
   | `tuple_struct_refs` | `(Point, Point)` | two DbRef slots, field access after destruct |
   | `tuple_from_vector_elements` | `(integer, integer)` from vector | index read into tuple slots |
 
-  3 of 4 tests pass; `tuple_struct_refs` remains ignored pending T1.8 DbRef lifetime
-  tracking. `tuple_homogeneous_text`, `tuple_store_text_fields`, `tuple_from_vector_elements`
-  all active.
+  All 4 tests now active.  `tuple_struct_refs` un-ignored 2026-05-11
+  by Plan-14 phase 04 with the **MOVE semantics** decision (T1.8c
+  closed); the cross-mode harness's e5_d1_struct_ref_swap cell carries
+  the same shape on both backends.
 
-- **T1.11** *(completed 0.8.3)* — Tuple type constraints: struct field rejection + compound assignment:
+- **T1.11** *(completed 0.8.3, T1.11a status updated 2026-05-11)* — Tuple type constraints:
 
-  Two small correctness items that prevent silently wrong code or confusing errors when
-  tuples are used in unsupported positions:
+  T1.11a (struct field rejection) was REVERSED by Plan-06 phase 4d
+  and validated by Plan-14 phase 05: tuples are now accepted as
+  struct field types, lay out their elements inline using the
+  synthetic `__tuple<…>` struct's positions, and round-trip through
+  `parser/mod.rs::set_field_check`'s Tuple arm and `get_val`'s Tuple
+  arm.  6/7 D3 cells green on both backends; the seventh
+  (e4_d3_field_closure_local — closure-element tuple as struct
+  field) is parked behind P251.
 
-  T1.11a: `parse_field` in `definitions.rs` rejects `Type::Tuple` via `parse_type_full`
-  (the parser's `(` branch fires before `fill_all` is ever reached).
   T1.11b: `parse_assign` in `expressions.rs` returns early (both passes) when a compound
   operator follows a tuple LHS; consumes the operator and RHS to keep parser state clean.
-  Tests: `tuple_in_struct_field_rejected`, `tuple_compound_assign_rejected`.
+  Tests: `tuple_compound_assign_rejected` (T1.11a's negative test
+  `tuple_in_struct_field_rejected` was removed when the lift shipped).
 
 **Effort:** Very High
 **Target:** 1.1+

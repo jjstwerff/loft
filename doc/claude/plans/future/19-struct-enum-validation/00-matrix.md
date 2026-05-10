@@ -50,5 +50,5 @@ v5_c1_tuple_payload_is_check        // depends on plan-14 phase 05
 ## Cross-references
 
 - [README.md](README.md)
-- [plan-14 phase 04](../14-tuple-validation/04-references.md)
-- [plan-14 phase 05](../14-tuple-validation/05-struct-field.md)
+- [plan-14 phase 04](../../finished/14-tuple-validation/04-references.md)
+- [plan-14 phase 05](../../finished/14-tuple-validation/05-struct-field.md)

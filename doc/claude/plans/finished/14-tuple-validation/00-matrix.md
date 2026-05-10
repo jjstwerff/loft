@@ -5,7 +5,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 00 — Matrix freeze + cross-mode harness
 
-**Status: open**
+**Status: shipped 2026-04-30 (harness) + filled in across phases
+01-05/07 (cells).  Final matrix below reflects the closed state of
+plan 14 as of 2026-05-11; 40/40 cells green on both backends.**
 
 ## Goal
 
@@ -29,14 +31,26 @@ Cell legend: `PASS:test_name` / `FIX:phase` / `CLOSED:reason` /
 
 | | D1 — local var | D2 — direct stack (arg / return / inline expr / `match` subj / `if` arm) | D3 — struct field |
 |---|---|---|---|
-| **E1** integer/float/bool/char | PASS:`tuple_literal_basic`, `tuple_destructure_basic`, `tuple_element_assign` | PASS-i + FIX:01 (D2.arg, D2.inline, D2.if-arm); FIX:01 + requires-T1.8a (D2.return, D2.match-subj-call) | CLOSED:T1.11a or FIX:05 (decision in 05) |
-| **E1n** `integer not null` | PASS:`tuple_int_not_null` (T1.7) | FIX:01 | CLOSED:T1.11a or FIX:05 |
-| **E2** text / text not null | PASS:`tuple_with_text`, `tuple_homogeneous_text`, `tuple_store_text_fields` | PASS-i + FIX:01 for arg, return, inline; T1.8b lifetime is the active risk | CLOSED:T1.11a or FIX:05 |
-| **E3** nested tuple | (no existing test) FIX:02 | FIX:02 | CLOSED:T1.11a or FIX:05 (nested only if D3 lifts) |
-| **E4** closure (`Type::Function`) | (no existing test) FIX:03 | FIX:03 | CLOSED:T1.11a or FIX:05 |
-| **E5** struct reference (`Type::Reference`) | FIX:04 — un-ignore `tuple_struct_refs`; T1.8c decision | FIX:04 | CLOSED:T1.11a or FIX:05 |
-| **E6** "structure value" — see note below | (folded into E5) | (folded into E5) | (folded into E5) |
+| **E1** integer/float/bool/char | PASS:`e1_d1_int_int_local`, `e1_d1_float_bool_local`, `e1_d1_char_int_local` | PASS:`e1_d2_arg_int_int`, `e1_d2_inline_get`, `e1_d2_match_subj`, `e1_d2_if_arm`, `e1_d2_return_int_int` | PASS:`e1_d3_field_int_int`, `e1_d3_field_update` |
+| **E1n** `integer not null` | PASS:`e1n_d1_local` | PASS:`e1n_d2_arg` | PASS:`e1n_d3_field_intnotnull_bool` |
+| **E2** text / text not null | PASS:`e2_d1_text_text_local`, `e2_d1_text_int_local` | PASS:`e2_d2_arg_text_text`, `e2_d2_inline_text`, `e2_d2_return_text_text` | PASS:`e2_d3_field_text_text` |
+| **E3** nested tuple | PASS:`e3_d1_nested_local`, `e3_d1_nested_deep`, `e3_d1_text_inside`, `e3_d1_elem_elem_assign` | PASS:`e3_d2_nested_arg`, `e3_d2_nested_return` | PASS:`e3_d3_field_nested` |
+| **E4** closure (`Type::Function`) | PASS:`e4_d1_closure_local`, `e4_d1_closure_call`, `e4_d1_closure_swap`, `e4_d1_capture_survives` | PASS:`e4_d2_closure_arg` | CLOSED:P251 — native projection bug for fn-ref-tuple-in-struct-field write path; cell parks until P251 closes |
+| **E5** struct reference (`Type::Reference`) | PASS:`e5_d1_struct_ref_local`, `e5_d1_struct_ref_swap`, `e5_d1_ref_int_local`, `e5_d1_ref_text_local` | PASS:`e5_d2_struct_ref_arg`, `e5_d2_struct_ref_return` | PASS:`e5_d3_field_struct_ref` |
+| **E6** "structure value" — see note below | CLOSED:folded into E5 (no inline value-struct type in loft) | CLOSED:folded into E5 | CLOSED:folded into E5 |
 | **E7** vector / hash / sorted / index | CLOSED:non-goal (TUPLES.md) | CLOSED:non-goal | CLOSED:non-goal |
+
+### Open follow-ups
+
+Two bugs surfaced during validation are parked behind dedicated cells:
+
+- **P250** (loop-iteration ref-tuple aliasing) — `for { (q1, q2) =
+  make_pair(pa, pb); }` reads `null` for the destructured variable
+  that picked up the FIRST argument on iterations >0.  Single-call
+  shapes work; the loop-iter cell waits for the dep-tracking fix.
+- **P251** (E4_d3) — native codegen rejects storing a tuple-with-fn-ref
+  element into a struct field with rustc E0605 `(u32, DbRef) as i32`;
+  P196's `.0` projection didn't extend to this wrapping-tuple case.
 
 ### Note on E6 — what does "structure value" mean in loft?
 

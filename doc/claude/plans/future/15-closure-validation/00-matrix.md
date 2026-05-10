@@ -30,7 +30,7 @@ Cell legend: `PASS:test_name` / `FIX:phase` / `CLOSED:reason` /
 | **C7** vector capture | CLOSED:non-goal | CLOSED:non-goal | CLOSED:non-goal | CLOSED:non-goal |
 
 D5 (tuple element) is intentionally absent — it's covered by
-[plan-14 phase 03](../14-tuple-validation/03-closures.md).
+[plan-14 phase 03](../../finished/14-tuple-validation/03-closures.md).
 
 ## Harness reuse
 
@@ -122,6 +122,6 @@ graduates to a FIX cell in a follow-up commit.
 
 - [README.md](README.md) — full matrix; this phase fixes its shape.
 - `tests/common/cross_mode.rs` — shared harness.
-- [plan-14 phase 00](../14-tuple-validation/00-matrix.md) — donor
+- [plan-14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
   template; same matrix style + cross-mode contract.
 - [LIFETIME.md § Function](../../LIFETIME.md) — closure leak gap.

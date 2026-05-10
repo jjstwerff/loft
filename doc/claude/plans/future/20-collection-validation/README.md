@@ -130,5 +130,5 @@ of phases 02-04 pass mostly green, close phase 05 as deferred
 - [LOFT.md § Composite types](../../LOFT.md) — language reference.
 - `src/database/structures.rs:609` — the panic site (active risk).
 - [DESIGN.md § keyed collections](../../DESIGN.md) — architecture.
-- [plan-14 phase 05](../14-tuple-validation/05-struct-field.md) —
+- [plan-14 phase 05](../../finished/14-tuple-validation/05-struct-field.md) —
   tuple-value-type cross-reference.

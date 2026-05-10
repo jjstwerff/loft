@@ -31,7 +31,6 @@ Features that "appear to work" but don't, or that lose data without indication. 
 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
-| (cross) | Tuple validation across element × destination matrix (interp/native byte-identical) | M | ✓ | plans/14-tuple-validation/README.md |
 | (cross) | Closure validation — capture × storage matrix | M | ✓ | plans/future/15-closure-validation/README.md |
 | (cross) | Coroutine validation — yielded type × drive context matrix | M | ✓ | plans/future/16-coroutine-validation/README.md |
 | (cross) | Match validation — subject type × pattern shape matrix | M | ✓ | plans/future/18-match-validation/README.md |
@@ -270,12 +269,11 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/14-tuple-validation/`](plans/14-tuple-validation/) | M | — | Hosts cross-mode harness used by 15/16/18/19/20 |
-| [`plans/future/15-closure-validation/`](plans/future/15-closure-validation/) | M | **plans/14 cross-mode harness** | Phase 03 also closes the closure-DbRef leak |
-| [`plans/future/16-coroutine-validation/`](plans/future/16-coroutine-validation/) | M | **plans/14 cross-mode harness** | Yielded type × drive context matrix |
-| [`plans/future/18-match-validation/`](plans/future/18-match-validation/) | M | **plans/14 cross-mode harness** | Subject type × pattern shape matrix |
-| [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | **plans/14 cross-mode harness** | Variant payload × dispatch context matrix |
-| [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | **plans/14 cross-mode harness** | Hash / sorted / index / spacial × operation matrix |
+| [`plans/future/15-closure-validation/`](plans/future/15-closure-validation/) | M | (cross-mode harness shipped by closed plan-14) | Phase 03 also closes the closure-DbRef leak |
+| [`plans/future/16-coroutine-validation/`](plans/future/16-coroutine-validation/) | M | (cross-mode harness shipped by closed plan-14) | Yielded type × drive context matrix |
+| [`plans/future/18-match-validation/`](plans/future/18-match-validation/) | M | (cross-mode harness shipped by closed plan-14) | Subject type × pattern shape matrix |
+| [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | (cross-mode harness shipped by closed plan-14) | Variant payload × dispatch context matrix |
+| [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | (cross-mode harness shipped by closed plan-14) | Hash / sorted / index / spacial × operation matrix |
 
 ### G — Goal-enabling
 
@@ -348,7 +346,7 @@ the plan moves back to `future/` and ROADMAP gains a row.
 - **PACKAGES.md § Open work R1 + lib_plans/future/09-lsp LSP.1 → lib_plans/future/07-web-ide** (workspace split + LSP server → browser IDE)
 - **plans/future/23-event-loop → lib_plans/future/10-game-client** (protocol abstraction → client library)
 - **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/future/32-tic-tac-toe v2 ground layer)
-- **plans/14-tuple-validation cross-mode harness → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
+- **(cross-mode harness shipped by closed plan-14) → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
 - **NATIVE.md § Open work N8c.x + PERFORMANCE.md § Open work N1 → plans/future/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
 - **plans/22-mutable-closures spec → lib_plans/future/13-scriptable-scenes script API** (closure semantics inform user-script ergonomics)
 - **C57 / I13 (in plans/future/29-server-features) → lib_plans/future/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)

@@ -128,7 +128,7 @@ in `tests/parse_errors.rs` rather than `cross_mode!`.
 
 - [README.md](README.md) — full matrix; this phase fixes its shape.
 - `tests/common/cross_mode.rs` — shared harness.
-- [plan-14 phase 00](../14-tuple-validation/00-matrix.md) — donor
+- [plan-14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
   template.
 - [plan-15 README](../15-closure-validation/README.md) — phase 05
   prerequisite.

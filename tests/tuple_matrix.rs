@@ -339,11 +339,25 @@ cross_mode!(
     "#
 );
 
-// e3_d2_nested_return DEFERRED — T1.8a (nested-tuple return convention)
-// not yet implemented.  The phase 02 design doc lists this as the one
-// cell that lands together with T1.8a; the cross_mode! macro doesn't
-// take per-test attributes today, so re-add this cell when T1.8a
-// closure makes it pass.
+cross_mode!(
+    e3_d2_nested_return,
+    r#"
+    fn make_nested() -> ((integer, integer), integer) { ((10, 20), 30) }
+    fn test() {
+        // Shallow destructure: outer tuple split into the inner tuple
+        // `t` plus the scalar `c`.  Deep `((a, b), c) = …` rejects at
+        // the parser ("Tuple destructuring requires plain variable
+        // names") — that's a separate destructure-pattern parser
+        // limitation, not the return convention.  The shallow form
+        // exercises the same return path (nested tuple value crosses
+        // the function boundary; the synthetic `__tuple<…>` rewrite
+        // from Plan-14 phase 07 carries the lifetime correctly).
+        (t, c) = make_nested();
+        print("{t.0},{t.1},{c}\n");
+        assert(t.0 == 10 && t.1 == 20 && c == 30, "e3_d2_nested_return");
+    }
+    "#
+);
 
 // ── Phase 03 — closure-element tuples (E4 × D1, D2) ─────────────────────────
 //

@@ -291,7 +291,7 @@ cells.
 
 For the per-plan matrix definitions and bug-discovery records, see:
 
-- [`plans/14-tuple-validation/`](plans/14-tuple-validation/) (active)
+- [`plans/finished/14-tuple-validation/`](plans/finished/14-tuple-validation/) (closed 2026-05-11)
 - [`plans/finished/17-template-validation/`](plans/finished/17-template-validation/) (closed 2026-05-09)
 
 ---

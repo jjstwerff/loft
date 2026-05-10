@@ -55,4 +55,4 @@ s4_p7_struct_enum_with_guard
 ## Cross-references
 
 - [README.md](README.md)
-- [plan-14 phase 00](../14-tuple-validation/00-matrix.md) — donor template.
+- [plan-14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor template.
