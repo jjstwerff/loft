@@ -1070,7 +1070,12 @@ text-mode test:
 ### Test programs
 
 Each primitive ships with one text-mode test program small
-enough to fit in a single `.loft` file:
+enough to fit in a single `.loft` file.  All v5 test programs
+live in **`tests/scripts/`** and run as part of the wrap suite
+(`cargo test`), reusing the existing 80+ loft-regression test
+infrastructure.  Status lines the programs print become the
+assertion surface (compared against expected output via the
+wrap framework).  CI catches regressions automatically.
 
 | Test | What it proves |
 |---|---|
