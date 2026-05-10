@@ -3,13 +3,24 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# TIC_TAC_TOE — protocol-validation vehicle (v1 shipped; v2/v3/v4 protocol-only ground layers)
+# TIC_TAC_TOE — protocol-validation vehicle (active — finishing v3/v4/v6)
 
-**Status:** v1 shipped (text-mode protocol verifier).  v2 / v3 / v4
-are real ground-layer milestones whose **protocol mechanics are
-planned and will be built**, but **the visual side of tic-tac-toe
-is deferred indefinitely — a graphical / playable tic-tac-toe game
-is never going to ship**.
+**Status (2026-05-11):** **promoted to active** from
+`plans/future/`.  User intent: finish soon.
+
+| Milestone | Status | What it adds |
+|---|---|---|
+| v1 | ✓ shipped | Single-client text protocol verifier (`tictactoe_*.loft`) |
+| v2 | ✓ shipped | Multi-client + spectator routing (3/3 `multiplayer_v2` tests green) |
+| v3 | **next** | Server delivers the client — browser-served HTML + loft-compiled WASM.  **Also the mechanism for distributing the laptop client** for any loft program (the audience demo's projector and any future single-binary loft client all use this hosting path) |
+| v4 | after v3 | Client-uploaded scripts → server-side compile → hot WASM swap (the in-browser game-dev workflow) |
+| v5 | ✓ shipped | Binary world stream + N clients + catch-up + sluggish tempo (5/5 `multiplayer_v5` tests green) |
+| v6 | gated on plan-22 | Drop `Reference<T>` ceremony in the v5 server using writable closures.  Pure ergonomic cleanup; not on plan-36's critical path |
+
+The protocol mechanics for v3 / v4 are **planned and will be
+built**, but **the visual side of tic-tac-toe is deferred
+indefinitely — a graphical / playable tic-tac-toe game is never
+going to ship**.
 
 The purpose of tic-tac-toe in this codebase is **protocol
 validation only.**  Each vN milestone adds one new protocol /
