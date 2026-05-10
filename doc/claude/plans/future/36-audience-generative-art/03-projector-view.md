@@ -152,16 +152,21 @@ crystal "reaching out" from the existing structure.
 
 This implies the renderer needs:
 
-- A per-hex `growth_progress` value (0.0 → 1.0 over 5 seconds
-  from `planted_at`).
-- A per-hex `growth_origin` direction (vector from the centroid
-  of nearby older filled hexes to this hex).  The growing
-  crystal tilts / leans along this vector while progress < 1.0.
-- Smooth interpolation of the heightfield each frame so the
-  surface deforms continuously rather than per-tick stepping.
+- A per-cell `growth_progress` value derived from the cell's
+  `c_age` (0.0 at age 0; 1.0 once age ≥ ~5 seconds × tick rate,
+  e.g. 50 ticks at 10 Hz).  Server ships `c_age` as 2 bytes; no
+  separate `planted_at` field.
+- A per-cell `growth_origin` direction, **computed client-side**
+  by comparing this cell's age to its 6 neighbours' ages.
+  Older-neighbour cluster on one side ⇒ direction extrudes from
+  there toward this cell.  Recomputed each frame for cells whose
+  growth_progress < 1.0; not needed once growth completes.
+- Smooth interpolation of the surface each frame so the mesh
+  deforms continuously rather than per-tick stepping.
 
 Once `growth_progress` reaches 1.0, the cell sits at its
-neighbor-derived height for the remainder of its lifetime.
+server-supplied height (`c_height` from the chunk payload) for
+the remainder of its lifetime.
 
 ### Visible structure on an empty world
 

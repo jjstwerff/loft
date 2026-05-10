@@ -30,48 +30,84 @@ Builds on the shipped `lib/server` multi-client WebSocket API
 
 ## State model
 
-A first cut of the world structure:
+The world reuses the **`lib/moros_map` chunk pattern**: a sparse
+collection of 32×32 chunks at integer chunk coordinates, with
+the same `chunk_idx_32` / `hex_idx_32` addressing helpers (which
+handle negative-coordinate floor-division correctly).  The
+per-hex payload is **slimmer** than the moros editor's `Hex`
+struct — the demo only needs colour, height, and age — but
+addressing, chunk lifecycle, and the sparse-storage discipline
+are reused as-is.
 
 ```loft
-struct world {
-    cells: vec<cell>,         // sparse — keyed by (q, r) hash
-    seeds: vec<seed>,         // active growth sources
-    players: vec<player>,     // who is connected, what colour, when last active
-    tick: i64,                // monotonic
+struct World {
+    chunks: vector<Chunk>,    // sparse — only chunks that have at least one
+                              // non-empty cell exist; emptied chunks are removed
+    players: vector<Player>,  // who is connected, what colour, when last active
+    tick: integer not null,   // monotonic
 }
 
-struct cell {
-    q: i64,
-    r: i64,
-    color: i64,               // palette index 0-9: 0 = empty (no cell rendered),
-                              // 1-9 = the 9 palette colours (see phase 0 doc)
-    age: i64,                 // ticks since planted
-    planted_by: i64,          // player_id that originally seeded this cluster
-    planted_at_tick: i64,     // server-tick timestamp; projector uses this to drive
-                              // the 5-second growth animation
-    growth_origin_q: i64,     // hex coords of the centroid of *earlier* nearby
-    growth_origin_r: i64,     // filled cells, computed at plant time.  Projector
-                              // tilts the growing crystal along (origin → here)
+// 32x32 grid at chunk coords (cx, cz).  Index into ck_cells: cx * 32 + cz.
+// Same shape as lib/moros_map's Chunk minus cy (this demo is single-layer).
+struct Chunk {
+    ck_cx:    integer not null,
+    ck_cz:    integer not null,
+    ck_cells: vector<Cell>,
 }
 
-struct seed {
-    q: i64,
-    r: i64,
-    color: i64,
-    planted_at: i64,
+// 4-byte logical payload — matches the wire-format budget the design
+// pinned: 1 byte color + 1 byte height + 2 bytes age.  Stored as i64 fields
+// in-process (loft's integer-i64 model); packed to bytes in serialisation.
+struct Cell {
+    c_color:  integer not null,  // 0 = empty (no crystal), 1-9 = palette
+    c_height: integer not null,  // 0..255, derived from filled-neighbour count
+    c_age:    integer not null,  // 0..65535 ticks since the cell became non-empty;
+                                 // projector keys the 5-second growth animation off
+                                 // this (small age = still growing, ~50 ticks at
+                                 // 10 Hz tick rate = grown)
 }
 
-struct player {
-    id: i64,                  // assigned on connect
-    color: i64,               // most recently selected color (-1 = cleared)
-    last_active_q: i64,       // most recent (q, r) the player painted at
-    last_active_r: i64,
-    last_active_tick: i64,
+struct Player {
+    p_id:               integer not null,  // assigned on connect
+    p_color:            integer not null,  // 0 = cleared (no active colour),
+                                           // 1-9 = palette index
+    p_last_active_q:    integer not null,  // most recent (q, r) painted at
+    p_last_active_r:    integer not null,
+    p_last_active_tick: integer not null,
 }
 ```
 
+The `Cell` carries no growth-direction or planting-author
+metadata.  Both are derived where they are needed:
+
+- **Growth direction** for the projector's 5-second tilt
+  animation is computed at render time from the **age
+  comparison with neighbours** — older neighbour cluster on one
+  side, this cell newer = the new cell extrudes from the older
+  side.
+- **Plant ownership** (who seeded a cluster) is not tracked
+  per-cell; the active-player signal lives on `Player` and is
+  enough to drive the audience-client jump-to-active flash.
+
 (Final shape pinned at CI-2 once multi-client behaviour is
 observed.)
+
+### Chunk lifecycle
+
+A chunk is **created on first non-empty write**: when a `seed`
+event lands at world hex (q, r), the server computes
+`(cx, cz) = (chunk_idx_32(q), chunk_idx_32(r))`, ensures a
+chunk exists at those coords (build a 32×32 of empty cells if
+not), and writes the cell.
+
+A chunk is **deleted** when all 1024 of its cells become empty
+(colour = 0).  This matches the user-visible rule: a chunk that
+is entirely black does not exist.  Garbage-collection runs at
+the end of each tick after generation + age updates.
+
+The world coordinates of any cell are recoverable from
+`(ck_cx * 32 + hx, ck_cz * 32 + hz)` where `hx, hz ∈ [0, 31]`
+are the in-chunk indices.  No per-cell `(q, r)` storage needed.
 
 ## Event handling (client → server)
 
@@ -88,25 +124,30 @@ observed.)
 Server runs a fixed-rate tick (suggested 4-10 Hz; CI-2 to tune).
 Each tick:
 
-1. Run the generation step (phase 2 script): for each empty hex
-   adjacent to a live cell, optionally fill it with a color
-   biased by neighbor majority + per-direction color votes.
-2. For each newly-filled cell, compute `growth_origin_*` from
-   the centroid of nearby older filled cells (this drives the
-   projector's 5-second growth-tilt animation).
-3. Compute `world_delta`: list of cells whose color, age, or
-   growth state changed since last tick.
-4. Broadcast delta to all subscribers.
-5. Garbage-collect: cells older than N ticks may "freeze" or
-   "die" depending on the generation variant.
+1. Run the generation step (phase 2 script): for each empty cell
+   adjacent to a live cell, optionally fill it with a colour
+   biased by neighbour majority + per-direction colour votes.
+2. Update `c_height` on each cell whose filled-neighbour count
+   changed (cell newly filled, or a neighbour newly filled /
+   emptied).  Height is derived from the local neighbour count.
+3. Increment `c_age` on every non-empty cell; clamp to 65535
+   (the 2-byte ceiling).
+4. Compute `world_delta`: per-chunk lists of `(hx, hz, color,
+   height, age)` for cells whose payload changed since last
+   tick.
+5. Garbage-collect chunks: any chunk whose 1024 cells are all
+   empty (colour = 0) is removed from `chunks`.
+6. Broadcast delta to all subscribers (including chunk
+   creations + chunk deletions).
 
-Note: the **3D height field** the projector renders is derived
-client-side from the filled-neighbor pattern (see
-[`03-projector-view.md`](03-projector-view.md)).  The server
-stays purely 2D — it only ships `(q, r, color, age,
-planted_at_tick, growth_origin_*)`.  This keeps server work
-small and lets renderer experiments happen without a server
-deploy.
+Note: the **3D height field** the projector renders is computed
+**from the per-cell `c_height` byte the server ships** (so all
+clients agree on the surface shape).  The growth-direction tilt
+on cells whose age < the 5-second window is derived
+**client-side** from comparing this cell's age with its
+neighbours' ages — older neighbours contribute the "from"
+direction.  Server state stays minimal: 4 bytes per cell, no
+per-cell direction or origin metadata.
 
 ## Active-player signal
 

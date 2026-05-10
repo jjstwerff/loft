@@ -94,7 +94,26 @@ glance.
 
 When a new hex becomes filled, the crystal **grows over ~5
 seconds** in the direction extruded from the cluster of older
-nearby hexes toward the new one.
+nearby hexes toward the new one.  Direction is derived
+client-side from comparing this cell's age with its neighbours'
+ages, so no per-cell direction metadata travels on the wire.
+
+### World data layout
+
+The world reuses the **`lib/moros_map` chunk pattern** — sparse
+32×32 chunks at integer chunk coordinates, with the same
+`chunk_idx_32` / `hex_idx_32` addressing helpers (which handle
+negative-coordinate floor-division correctly).  A chunk is
+created on first non-empty write at coordinates inside it; a
+chunk is **removed when all 1024 of its cells are empty**.
+
+Per-cell payload is **4 bytes**: 1 byte colour (0 = empty, 1-9
+= palette), 1 byte height (0..255, derived from filled-neighbour
+count), 2 bytes age (0..65535 ticks).  No per-cell `(q, r)`,
+direction, or planting-author metadata — all derivable from the
+chunk address + cell index + neighbour ages.
+
+Detail in [`01-server-state.md` § State model](01-server-state.md#state-model).
 
 Full rendering rules + open mesh-shape questions in
 [`03-projector-view.md` § Visual model](03-projector-view.md#visual-model--3d-crystal-mesh).
