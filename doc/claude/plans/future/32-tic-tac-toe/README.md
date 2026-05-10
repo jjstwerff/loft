@@ -1041,11 +1041,17 @@ text-mode test:
    send and receive raw byte arrays alongside the existing text
    path.
 2. **Session-tagged binary blobs.**  Server can emit multiple
-   binary frames sharing a session id (one word in the blob
-   header, monotonic per server restart).  Client buffers blobs
+   binary frames sharing a session id.  Client buffers blobs
    by session id and applies them as a unit, so a single
    logical update that spans multiple chunks renders coherently
    regardless of packet ordering.
+
+   **Blob header (resolved 2026-05-10): 5 bytes** —
+   `[type:u8] [session:u32] [...payload...]`.  The type byte
+   distinguishes snapshot / delta / control (256 frame types
+   available); the u32 session id covers 4 billion values
+   (plenty for one server run — at 10 Hz that is ~13 years);
+   payload length is the WebSocket frame length minus 5.
 3. **N-client routing with active-player signalling.**  Server
    tracks 30+ concurrent connections, holds per-client state,
    and broadcasts world deltas + a periodic active-player

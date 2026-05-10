@@ -127,8 +127,11 @@ not just files).  Server-side serialisation is straight
 `vec<u8>` packing in chunk-major order; client-side deserialisation
 is the inverse.  No JSON parsing on the hot path for world data.
 
-**Per-blob session id** (1 word in the blob header, monotonic
-per server restart).  Mostly useful when starting a new client:
+**Per-blob session id** (`u32` in the 5-byte blob header
+`[type:u8] [session:u32] [...payload...]` — see [TTT v5 wire
+spec](../32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo)
+for the validated format).  Mostly useful when starting a new
+client:
 the server splits the initial `world_snapshot` into one blob per
 chunk, all tagged with the same session id.  The client buffers
 all blobs sharing that session id and renders them as one
