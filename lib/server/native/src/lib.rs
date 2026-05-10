@@ -297,6 +297,30 @@ pub unsafe extern "C" fn n_ws_send(handle: i32, msg_ptr: *const u8, msg_len: usi
     })
 }
 
+/// Send a binary WebSocket message.  Same byte buffer as `n_ws_send`,
+/// but the frame goes out with opcode `0x02` (binary) instead of
+/// `0x01` (text).  TTT v5 + plan-36 use this for `world_snapshot` and
+/// `world_delta` blobs.
+///
+/// # Safety
+///
+/// `msg_ptr` / `msg_len` must describe a valid byte slice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ws_send_binary(
+    handle: i32,
+    msg_ptr: *const u8,
+    msg_len: usize,
+) -> bool {
+    let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
+    WS_CONNS.with(|conns| {
+        let mut conns = conns.borrow_mut();
+        match conns.get_mut(handle as usize).and_then(|o| o.as_mut()) {
+            Some(stream) => websocket::ws_write_frame(stream, websocket::OP_BINARY, msg),
+            None => false,
+        }
+    })
+}
+
 /// Close a WebSocket connection.
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_close(handle: i32) {
@@ -610,7 +634,9 @@ loft_ffi::loft_register! {
     n_ws_upgrade,
     n_ws_recv,
     n_ws_message,
+    n_ws_opcode,
     n_ws_send,
+    n_ws_send_binary,
     n_ws_close,
     n_ws_accept_nonblocking,
     n_ws_clients_len,
