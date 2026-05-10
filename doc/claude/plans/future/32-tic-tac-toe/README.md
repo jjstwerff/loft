@@ -1057,6 +1057,13 @@ text-mode test:
    and broadcasts world deltas + a periodic active-player
    signal to all subscribers.  v2's two-client cap is lifted
    and the routing pattern generalised.
+
+   **Active-player signal cadence (resolved 2026-05-10): once
+   per second**, steady heartbeat regardless of activity level.
+   Client always has a fresh "where is someone painting"
+   answer; cheap (1 small JSON event per second per client);
+   matches the sluggish-by-design tempo (no rapid flash bursts
+   on the audience client even during high-activity moments).
 4. **Catch-up recovery on reconnect.**  Client tracks its
    last-applied session id; on reconnect (or detected gap in
    incoming session ids) it sends a JSON `catch_up` request

@@ -278,14 +278,18 @@ per-cell direction or origin metadata.
 
 ## Active-player signal
 
-Each player change is timestamped.  Once per second, the server
-picks the most-recently-active player (excluding the recipient)
-and broadcasts an `active_player_signal { x, y }` to each
-audience client.  This drives the **Jump to active** box's flash.
+Each player change is timestamped.  **Once per second
+(resolved 2026-05-10)**, the server picks the most-recently-
+active player (excluding the recipient) and broadcasts an
+`active_player_signal { x, y }` to each audience client.  This
+drives the **Jump to active** box's flash.
 
-(Avoid sending one signal per change — overwhelms the UI with
-flashes during busy periods.  One every second feels like a
-heartbeat.)
+The 1-second steady heartbeat is the validated cadence in
+[TTT v5](../32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo).
+Per-change signalling was rejected as overwhelming during busy
+periods; tick-rate signalling (10 Hz) was rejected as wasting
+bandwidth in quiet moments.  One every second feels like a
+heartbeat and matches the sluggish-by-design tempo.
 
 ## Sub-tasks
 
