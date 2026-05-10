@@ -248,6 +248,29 @@ fn spawn_client(client_script: &str, port: u16) -> Child {
     cmd.spawn().expect("failed to spawn loft v5 client")
 }
 
+/// Same as `spawn_client` but appends a single `label` argv arg and
+/// extra env vars (e.g. `LOFT_T3_CLIENTS`).  Used by t3 to spawn
+/// multiple distinguishable client subprocesses against one server.
+fn spawn_client_with_args(
+    client_script: &str,
+    port: u16,
+    label: &str,
+    extra_env: &[(&str, &str)],
+) -> Child {
+    let mut cmd = Command::new(loft_bin());
+    cmd.arg("--interpret")
+        .arg(examples_dir().join(client_script))
+        .arg(label)
+        .current_dir(examples_dir())
+        .env("LOFT_TICTACTOE_PORT", port.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    cmd.spawn().expect("failed to spawn loft v5 client")
+}
+
 /// Convenience: spawn server + wait for its "listening port=N"
 /// marker, panic with a useful diagnostic if it doesn't appear.
 fn spawn_listening_server(script: &str, port: u16, label: &str) -> ServerGuard {
@@ -338,5 +361,92 @@ fn v5_t2_session_blob_grouping() {
     assert!(
         out.contains("v5-t2c: applied session=8 blobs=1"),
         "v5-t2 client did not flush session 8 with 1 blob; client stdout=\n{out}"
+    );
+}
+
+// ── t3: N-client routing + broadcast ───────────────────────────────────
+
+/// Spawns 5 client subprocesses concurrently against one server; each
+/// sends a "Hello" frame; server broadcasts each Hello to every
+/// connected client.  Locks in:
+///   - srv.run() handles N>2 connections without dropping events
+///     (v2's tests cap at 2)
+///   - srv.broadcast() reaches every active connection
+///   - per-client routing correctness as N concurrent connect /
+///     message storms interleave
+///
+/// Compressed from the v5 plan's "30 clients × 5 minutes" — that
+/// scenario is a deployment liveness check, not a CI test.  N=5 ×
+/// ~1 s validates the routing pattern without bloating CI runtime.
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "P229b: server cannot bind on Windows CI"
+)]
+#[test]
+fn v5_t3_n_client_broadcast() {
+    const N: usize = 5;
+    let port = pick_free_port();
+    let n_str = N.to_string();
+    let env = [("LOFT_T3_CLIENTS", n_str.as_str())];
+
+    let mut server = ServerGuard::spawn("v5_t3_n_clients_server.loft", port);
+    // The server reads LOFT_T3_CLIENTS from env, but it doesn't need
+    // it for this assertion shape — we just need the server to log
+    // "connected seat=" once per client and "broadcast hello from"
+    // once per inbound Hello.
+    if !server.wait_listening() {
+        let diag = server.diagnose_listen_failure();
+        panic!("v5-t3 server failed to start within 60s{diag}");
+    }
+
+    let labels = ["A", "B", "C", "D", "E"];
+    let mut children = Vec::with_capacity(N);
+    for label in &labels[..N] {
+        children.push(spawn_client_with_args(
+            "v5_t3_n_clients_client.loft",
+            port,
+            label,
+            &env,
+        ));
+    }
+
+    // Drain each client in parallel — each one prints its line, no
+    // ordering guarantee.  Generous per-client timeout (30 s) lets
+    // a slow CI runner finish without flake.
+    let mut handles = Vec::with_capacity(N);
+    for child in children {
+        let h = thread::spawn(move || drain_with_timeout(child, Duration::from_secs(30)));
+        handles.push(h);
+    }
+    let outs: Vec<(String, Option<i32>)> = handles
+        .into_iter()
+        .map(|h| h.join().expect("drain join"))
+        .collect();
+
+    let server_out = server.snapshot_stdout();
+    for (i, (out, status)) in outs.iter().enumerate() {
+        let label = labels[i];
+        assert_eq!(
+            *status,
+            Some(0),
+            "v5-t3 client {label} did not exit cleanly; stdout=\n{out}\n--- server stdout:\n{server_out}"
+        );
+        let needle = format!("v5-t3c[{label}]: ok received={N}");
+        assert!(
+            out.contains(&needle),
+            "v5-t3 client {label} did not see all {N} hellos; stdout=\n{out}\n--- server stdout:\n{server_out}"
+        );
+    }
+
+    // Server-side: assert it logged exactly N connects and N broadcasts.
+    let connects = server_out.matches("v5-t3: connected seat=").count();
+    let broadcasts = server_out.matches("v5-t3: broadcast hello from").count();
+    assert_eq!(
+        connects, N,
+        "v5-t3 server logged {connects} connects, expected {N}; server stdout:\n{server_out}"
+    );
+    assert_eq!(
+        broadcasts, N,
+        "v5-t3 server logged {broadcasts} broadcasts, expected {N}; server stdout:\n{server_out}"
     );
 }
