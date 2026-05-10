@@ -336,6 +336,180 @@ EventLoop is the consumer that depends on it most directly.
 
 ---
 
+## Design principle — four-target async portability
+
+The same loft client code must run unchanged across every loft
+deployment target.  The EventLoop is the abstraction that hides
+the per-target differences in *how the program waits for an
+event* — without it, every game / multiplayer / TTT-style client
+has to be ported four ways.
+
+### The four targets
+
+| Target | Entry point | Blocking semantics | Yield mechanism |
+|---|---|---|---|
+| **Interpreter** (`loft program.loft`) | `cargo run --bin loft -- program.loft` | OS thread blocks on syscalls (`thread::sleep`, `recv`); other threads run | OS scheduler |
+| **Native** (`loft --native program.loft`) | compiled-to-Rust binary | same as interpreter | OS scheduler |
+| **WASM-direct** (`loft --html program.loft`, plan-31) | per-program WASM with embedded interpreter-free generated code | nothing blocks; asyncify yields at instrumented points | `wasm-opt --asyncify --pass-arg=asyncify-imports@<fn>` instruments named host imports; the JS shell's `requestAnimationFrame` resumes |
+| **WASM-interpreter** (`compile_and_run` + browser, TTT v3.5) | `wasm-pack` build of the loft interpreter; runs loft source delivered by HTTP | nothing blocks; the only yield is *return-from-WASM-call* | `compile_and_start` + `resume_frame` re-enter from JS event loop |
+
+The differences cluster around one question: **what does the
+loft program do between events?**  In targets 1+2 it can simply
+block.  In targets 3+4 it must explicitly hand control back to
+the JS event loop so messages, paints, and timers can be
+delivered.
+
+### The unifying primitive — `yield_to_host()`
+
+A single new builtin, declared in `default/`:
+
+```loft
+// Surrender the current execution slice back to the host's event
+// loop.  In interp / native this is a hint to the OS scheduler
+// (returns immediately).  In WASM targets this returns from the
+// current WASM call so the JS event loop can dispatch pending
+// I/O / DOM / timer events; the host re-enters via
+// `resume_frame()` (WASM-interp) or the asyncify resume path
+// (WASM-direct).
+pub fn yield_to_host();
+#impure(host_io)
+```
+
+Per-target implementation:
+
+| Target | Impl |
+|---|---|
+| Interpreter | `n_yield_to_host` in `src/native.rs` calls `std::thread::yield_now()` (no-op semantically; gives other threads a turn) |
+| Native | same (generated code emits `std::thread::yield_now()`) |
+| WASM-direct | `loft_yield_to_host` is asyncify-instrumented (`--pass-arg=asyncify-imports@loft_yield_to_host`); the JS shell's resume loop calls `resume()` from `requestAnimationFrame` |
+| WASM-interpreter | `n_yield_to_host` (wasm-feature gate) sets a thread-local "yield requested" flag; the interpreter's main loop checks the flag at the next safepoint and returns from `compile_and_start` / `resume_frame`; JS calls `resume_frame` again on the next `requestAnimationFrame` |
+
+This is the **only** new primitive needed.  Every higher-level
+abstraction (`pump`, `for ev in events`, `await frame`) is built
+on top.
+
+### The portable API — events as a coroutine stream
+
+Loft already has stackful coroutines (shipped 0.8.3, lowered to
+a state machine on native).  The EventLoop's user-facing API is
+an `iterator<Event>`:
+
+```loft
+fn handler.events(self: Handler) -> iterator<Event> {
+  while !self.closed {
+    while !ws_recv_native(self.id) {
+      yield_to_host();
+    }
+    yield decode_event(ws_message_native());
+  }
+}
+
+// The portable client loop — same code in all 4 targets:
+fn play(h: Handler) {
+  for ev in h.events() {
+    match ev {
+      Place { mark, r, c } => render_cell(r, c, mark),
+      GameOver { winner }  => { show(winner); break; }
+    }
+  }
+}
+```
+
+The `for ev in h.events()` loop reads identically on every
+target.  In interp/native it busy-loops with cooperative
+`yield_to_host`s (which are no-ops); in WASM targets each
+`yield_to_host` returns control to JS, the event loop dispatches
+the WS open / message events, and `resume_frame` re-enters
+the iterator from where it yielded.
+
+### Library surface — `lib/web` migrates to the abstraction
+
+Today's `pub fn pump(self: WsHandler, on_message: fn(text)) ->
+integer` becomes a thin wrapper over the iterator:
+
+```loft
+pub fn pump(self: WsHandler, on_message: fn(text)) -> integer {
+  count = 0;
+  for msg in self.messages() {     // messages() is an iterator<text>
+    on_message(msg);
+    count += 1;
+  }
+  count
+}
+```
+
+`messages()` is the coroutine.  `pump` callers see no change —
+existing v2/v3/v5 clients keep compiling.  The internal switch
+from "while-poll-busy-loop" to "for-iterator-with-yields" is
+invisible to consumers.
+
+`web::sleep_ms` becomes a portable wrapper too:
+
+```loft
+pub fn sleep_ms(ms: integer) {
+  // interp/native: native impl blocks the OS thread (today's behaviour).
+  // WASM:          spin a yield-loop until the host's clock advances by ms.
+  end = now() + ms;
+  while now() < end { yield_to_host(); }
+}
+```
+
+The current native `n_sleep_ms` becomes the interp/native impl;
+the WASM impl is the spin-yield form.  Same loft surface in
+all four.
+
+### Sequencing (within plan-23)
+
+Phase boundaries — each is independent and can ship piecemeal:
+
+| Phase | Step | Effort |
+|---|---|---|
+| YIELD.1 | Add `yield_to_host()` to `default/02_images.loft` (or a new `default/06_async.loft`); register `n_yield_to_host` in `src/native.rs` for interp + native (`std::thread::yield_now`) | XS |
+| YIELD.2 | WASM-interpreter impl: thread-local `YIELD_REQUESTED` flag; interpreter loop checks it; `compile_and_start` returns when set; `resume_frame` clears + re-enters | M |
+| YIELD.3 | WASM-direct impl: add `loft_yield_to_host` to the `loft --html` exports + the `wasm-opt --pass-arg=asyncify-imports@…` list | S |
+| YIELD.4 | Migrate `lib/web::sleep_ms` to the portable spin-yield form (keeping the native blocking impl as the interp/native arm); migrate `pump` over the new iterator | S |
+| YIELD.5 | EventLoop's `handler.events()` iterator + the demo loop showcased in this section's example | M |
+| YIELD.T | Cross-target test matrix — same loft client runs through all 4 targets and asserts the same observable trajectory | M |
+
+YIELD.1-3 ship the primitive; YIELD.4-5 build the abstraction on
+top.  Each YIELD.* phase can land independently; the v5/v3/v2
+tests guard against regressions on interp/native through every
+step.
+
+### Cross-target test strategy
+
+A single loft client (`tests/scripts/cross_target_async.loft`)
+plus four runners that drive it through each entry point:
+
+| Runner | What it does |
+|---|---|
+| `tests/multiplayer_async_interp.rs` | Spawns the script under `loft --interpret`; asserts trajectory |
+| `tests/multiplayer_async_native.rs` | Same script under `loft --native`; same assertion |
+| `tests/multiplayer_async_wasm_html.rs` | `loft --html` produces standalone HTML; headless harness asserts trajectory via stdout-equivalent |
+| `tests/multiplayer_async_wasm_interp.rs` | `compile_and_run` (or `compile_and_start` once YIELD.2 ships) under Node + the host shim; asserts trajectory |
+
+All four use the **same loft source** — the test pin is
+"this client runs identically through every target."  Adding a
+new target later (e.g., a server-WASM rewrite) gets a fifth
+runner and the same assertion.
+
+### Why this lives in plan-23
+
+The EventLoop already declares "interpreter as baseline" as a
+design principle — the cross-target async story is the natural
+generalisation: every target sees the same loft surface, the
+runtime hides the differences.  The `yield_to_host` primitive is
+EventLoop's lowest-level building block; the iterator-of-events
+abstraction is its user-facing API.  Splitting these into a
+separate plan would require duplicating most of plan-23's
+"transport transparency" + "interpreter as baseline" sections.
+
+This section informs the YIELD.* sub-arc; the rest of plan-23
+(handler registry, message envelope, transport-agnostic protocol)
+stays as designed.
+
+---
+
 ## Context
 
 Both the loft game client and the multiplayer server want a main
@@ -858,6 +1032,35 @@ game; phases 3-5 are multiplayer infrastructure layered on top.
 | **3** | Wire protocol + bidirectional handlers + handshake + JSON encoding | 2-3 sessions | Two-player networked game |
 | **4** | AsyncPoller + mio + server scaling | 2 sessions | Server handles many clients |
 | **5** | Streaming wire format (`Raw` + multi-frame reassembly) for binary blobs | 1-2 sessions | Large world / texture streaming |
+
+### YIELD.* — four-target async portability (parallel sub-arc)
+
+The "interpreter as baseline" + "transport transparency" design
+principles generalise to **same loft code runs on every loft
+deployment target** — see § Design principle — four-target async
+portability above.  Independent of Phases 1-5; can ship in
+parallel as soon as the v3.5 spike (`compile_and_start`-driven
+WASM-interpreter clients) creates an immediate consumer.
+
+| Phase | Ships | Cost | Unlocks |
+|---|---|---|---|
+| **YIELD.1** | `yield_to_host()` builtin + interp/native impl (`std::thread::yield_now`) | XS | The primitive — no behaviour change yet |
+| **YIELD.2** | WASM-interpreter impl (thread-local YIELD_REQUESTED flag + `compile_and_start`/`resume_frame` integration) | M | TTT v3.5 browser client |
+| **YIELD.3** | WASM-direct impl (asyncify-instrument `loft_yield_to_host` in `loft --html`) | S | Plan-31 graphics programs that also do WS / async I/O |
+| **YIELD.4** | Migrate `lib/web::sleep_ms` + `pump` to the portable form | S | Existing v2/v3/v5 clients become 4-target portable for free |
+| **YIELD.5** | EventLoop's `handler.events()` iterator + the demo loop | M | The user-facing portable API — single `for ev in h.events()` works everywhere |
+| **YIELD.T** | Cross-target test matrix (one loft client × four cargo runners) | M | Regression guard: a future change can't silently break one target |
+
+**Recommended order:** YIELD.1 → YIELD.2 → YIELD.4 → YIELD.5 →
+YIELD.3 → YIELD.T.  YIELD.2 unblocks v3.5 (the immediate
+consumer); YIELD.4 makes existing clients work everywhere
+without source changes; YIELD.5 ships the iterator API; YIELD.3
+generalises to graphics programs; YIELD.T locks the contract.
+
+**Independence from Phases 1-5:** YIELD.* doesn't depend on
+EventLoop's wire protocol, handler registry, or AsyncPoller.
+The reverse is true: once Phases 2+ ship, they can adopt the
+YIELD.* abstractions internally for cross-target portability.
 
 **Recommendation:** ship Phase 1 ASAP; design beyond Phase 2 only
 as Phase 1's real friction reveals what's actually needed.  The
