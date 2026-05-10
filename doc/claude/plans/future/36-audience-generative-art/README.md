@@ -371,7 +371,7 @@ unattended installation running for hours could accumulate.
 
 **Wire-protocol primitives validated by TTT v5:**
 
-[`plans/32-tic-tac-toe`](../../32-tic-tac-toe/README.md) § "Tic-tac-toe v5" carries the
+[`plans/future/32-tic-tac-toe`](../32-tic-tac-toe/README.md) § "Tic-tac-toe v5" carries the
 binary-frame extension to `lib/server` + `lib/web`, the
 session-tagged blob protocol, the N-client routing pattern,
 the catch-up recovery handler, and the sluggish-tempo tick-loop

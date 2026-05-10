@@ -67,7 +67,7 @@ Directly enables loft's core use case: browser games anyone can play via shared 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
 | (cross) | Event-loop abstraction (client + server protocol) | MH | ✓ | plans/future/23-event-loop/README.md |
-| (cross) | Protocol-validation vehicle (TIC_TAC_TOE — v1/v2/v5 shipped, v3/v4/v6 next) | M | ✓ | plans/32-tic-tac-toe/README.md |
+| (cross) | Protocol-validation vehicle (TIC_TAC_TOE — v1/v2/v3/v5 shipped, v3.5/v4/v6 gated on plan-22 + plan-23 YIELD.2) | M | ✓ | plans/future/32-tic-tac-toe/README.md |
 | (cross) | First real-game milestone — multi-client hex editor | M | ✓ | plans/future/24-multiplayer-editor/README.md |
 | SRV.1 | Plain HTTP routing + middleware | M | ✓ | lib_plans/future/08-server/README.md |
 | SRV.2 | HTTPS with static PEM certificates | S | ✓ | lib_plans/future/08-server/README.md |
@@ -284,7 +284,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`plans/future/25-native-debug/`](plans/future/25-native-debug/) | XS-MH | — | NDB.0 / NDB.1 / NDB.2 — GDB / LLDB integration for `--native` |
 | [`plans/future/23-event-loop/`](plans/future/23-event-loop/) | MH | **P213 v4** (compiler bug) | Bidirectional event-loop abstraction (client + server) |
 | [`plans/future/24-multiplayer-editor/`](plans/future/24-multiplayer-editor/) | M | **plans/32 TIC_TAC_TOE v2 ground layer** (now active) | First real-game milestone |
-| [`plans/32-tic-tac-toe/`](plans/32-tic-tac-toe/) | M | — | **(active 2026-05-11)** Protocol-validation vehicle.  v1/v2/v5 shipped; v3/v4/v6 next |
+| [`plans/future/32-tic-tac-toe/`](plans/future/32-tic-tac-toe/) | M | **plan-23 YIELD.2** + **plan-22 phase 2** | Protocol-validation vehicle.  v1/v2/v3/v5 shipped; v3.5/v4/v6 parked (2026-05-11) waiting on infra |
 | [`lib_plans/future/02-graphics/`](lib_plans/future/02-graphics/) | H (multi-arc) | — | Low-level GL + renderer abstraction |
 | [`lib_plans/future/07-web-ide/`](lib_plans/future/07-web-ide/) | M per W item | **lib_plans/future/09-lsp LSP.1** + **PACKAGES.md § Open work R1 workspace split** | Browser IDE (W2-W6) |
 | [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | HTTP / WS / static-file server library |
@@ -347,7 +347,7 @@ the plan moves back to `future/` and ROADMAP gains a row.
 - **PACKAGES.md § Open work PKG.REG → lib_plans/future/12-library-extraction** (registry → execution of monorepo split)
 - **PACKAGES.md § Open work R1 + lib_plans/future/09-lsp LSP.1 → lib_plans/future/07-web-ide** (workspace split + LSP server → browser IDE)
 - **plans/future/23-event-loop → lib_plans/future/10-game-client** (protocol abstraction → client library)
-- **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/32-tic-tac-toe v2 ground layer)
+- **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/future/32-tic-tac-toe v2 ground layer)
 - **plans/14-tuple-validation cross-mode harness → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
 - **NATIVE.md § Open work N8c.x + PERFORMANCE.md § Open work N1 → plans/future/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
 - **plans/22-mutable-closures spec → lib_plans/future/13-scriptable-scenes script API** (closure semantics inform user-script ergonomics)

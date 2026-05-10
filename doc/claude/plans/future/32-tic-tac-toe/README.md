@@ -3,10 +3,30 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# TIC_TAC_TOE — protocol-validation vehicle (active — finishing v3/v4/v6)
+# TIC_TAC_TOE — protocol-validation vehicle (parked — blocked on infra)
 
-**Status (2026-05-11):** **promoted to active** from
-`plans/future/`.  User intent: finish soon.
+**Status (2026-05-11):** **parked back to `plans/future/`.**
+v1 / v2 / v3 (server + JS client) / v5 are shipped; the
+remaining milestones (v3.5, v4, v6) all gate on infrastructure
+that lives in other plans.  No un-gated work remains here.
+
+Resume triggers:
+- **v3.5 loft-WASM client** → unblocked by [plan-23 YIELD.2](../23-event-loop/README.md#yield--four-target-async-portability-parallel-sub-arc)
+  (the `compile_and_start` / `resume_frame` integration that lets
+  a synchronous-ish loft program drive an async WebSocket).
+- **v4 hot WASM swap** → gated on v3.5.
+- **v6 closure retrofit** → unblocked by [plan-22 phase 2](../../22-mutable-closures/README.md#sequencing)
+  (the implicit-by-body classifier).
+- **General lib/server polish that helps every TTT vN** →
+  [plan-34](../34-server-hardening/README.md) items (a) + (b);
+  XS each, can land independently.
+
+Was promoted to active 2026-05-11 with intent to finish soon;
+shipped v3 server-side + v3 JS-client browser game in that
+session, then re-parked when the v3.5 spike confirmed the
+remaining work all sits behind YIELD.2 / plan-22 phase 2.  The
+architectural ceiling here is reached for now; pick this back
+up after the gating plans land.
 
 | Milestone | Status | What it adds |
 |---|---|---|
