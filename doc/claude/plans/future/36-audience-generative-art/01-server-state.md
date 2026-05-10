@@ -207,9 +207,13 @@ heartbeat.)
   crystal growth/decay animations smooth.  Revisit at CI-2 if
   multi-client testing shows the projector visibly stepping or
   the bandwidth saturating venue WiFi.
-- **Delta vs full-snapshot** — every tick send a delta and
-  occasionally a full snapshot?  Or always delta + new clients
-  receive a snapshot on connect?  Recommend delta-always + snapshot-on-connect.
+- ~~**Delta vs full-snapshot**~~ — RESOLVED 2026-05-10:
+  delta-always + snapshot-on-connect.  Each tick the server
+  broadcasts a `world_delta` with only the cells that changed.
+  When a new client connects, the server sends a one-shot full
+  snapshot of all chunks first, then begins streaming deltas
+  starting from that point.  Simplest invariant; new clients
+  start consistent without bloating the steady-state stream.
 - ~~**Persistence**~~ — RESOLVED 2026-05-10: no persistence
   needed.  The decay rule self-cleans the data structures over
   time; a crash-recovery restart from blank produces the same

@@ -130,13 +130,22 @@ offset.
 ## WebSocket events (server → client)
 
 ```json
-{ "type": "world_delta", "cells": [ {"x": q, "y": r, "color": "<id>"} ] }
+{ "type": "world_snapshot", "chunks": [ ... ] }
+{ "type": "world_delta", "cells": [ {"x": q, "y": r, "color": <0..9>} ] }
 { "type": "active_player_signal", "x": q, "y": r }
 ```
 
-`world_delta` arrives every server tick; client redraws affected
-hexes.  `active_player_signal` arrives when another player changes
-color and triggers the **Jump to active** box's flash.
+On connect the server sends a one-shot `world_snapshot` of every
+existing chunk so the new client starts in sync.  After that,
+`world_delta` arrives every server tick (10 Hz) carrying only
+the cells whose colour, height, or age changed since the last
+tick.  Cells set to colour 0 represent decay-removal events.
+The client redraws affected hexes — including changes made by
+**other players**, not just its own taps, so every audience
+member sees the full collaborative canvas as it evolves.
+
+`active_player_signal` arrives when another player changes
+colour and triggers the **Jump to active** box's flash.
 
 ## Desktop variant — projector view + input
 
