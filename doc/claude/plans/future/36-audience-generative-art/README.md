@@ -58,6 +58,24 @@ schema needs locking too — minimum: a per-tick delta of
 the growth without recomputing it.  Phase 1 + 2 + 3 all consume
 this; phase 1 produces it.
 
+## World shape — 3D height field
+
+The world the projector renders is **not flat**.  Each hex has
+a height derived from its filled-neighbor pattern: a single
+filled hex with no neighbors is the lowest crystal; a filled
+hex with all 6 neighbors filled reaches the highest plateau;
+two filled hexes one cell apart create a small bridge in the
+empty hex between them; a line of filled hexes forms a ridge.
+When a new hex becomes filled, the crystal **grows over ~5
+seconds** in the direction extruded from the cluster of older
+nearby hexes toward the new one.
+
+Full rendering rules + interpolation maths in
+[`03-projector-view.md` § Visual model](03-projector-view.md#visual-model--3d-height-field).
+The audience client (phone) stays 2D top-down for input
+clarity; the projector is the spectacle that shows the world's
+true 3D shape.
+
 ## Generation algorithm — plant / crystal growth
 
 The seed list is a set of `{ position, color, planted_at_tick }`

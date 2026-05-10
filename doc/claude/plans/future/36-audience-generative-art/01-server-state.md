@@ -46,6 +46,11 @@ struct cell {
     color: i64,               // palette index
     age: i64,                 // ticks since planted
     planted_by: i64,          // player_id that originally seeded this cluster
+    planted_at_tick: i64,     // server-tick timestamp; projector uses this to drive
+                              // the 5-second growth animation
+    growth_origin_q: i64,     // hex coords of the centroid of *earlier* nearby
+    growth_origin_r: i64,     // filled cells, computed at plant time.  Projector
+                              // tilts the growing crystal along (origin → here)
 }
 
 struct seed {
@@ -85,11 +90,22 @@ Each tick:
 1. Run the generation step (phase 2 script): for each empty hex
    adjacent to a live cell, optionally fill it with a color
    biased by neighbor majority + per-direction color votes.
-2. Compute `world_delta`: list of cells whose color or age
-   changed since last tick.
-3. Broadcast delta to all subscribers.
-4. Garbage-collect: cells older than N ticks may "freeze" or
+2. For each newly-filled cell, compute `growth_origin_*` from
+   the centroid of nearby older filled cells (this drives the
+   projector's 5-second growth-tilt animation).
+3. Compute `world_delta`: list of cells whose color, age, or
+   growth state changed since last tick.
+4. Broadcast delta to all subscribers.
+5. Garbage-collect: cells older than N ticks may "freeze" or
    "die" depending on the generation variant.
+
+Note: the **3D height field** the projector renders is derived
+client-side from the filled-neighbor pattern (see
+[`03-projector-view.md`](03-projector-view.md)).  The server
+stays purely 2D — it only ships `(q, r, color, age,
+planted_at_tick, growth_origin_*)`.  This keeps server work
+small and lets renderer experiments happen without a server
+deploy.
 
 ## Active-player signal
 
