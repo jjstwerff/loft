@@ -323,6 +323,182 @@ value structs (none on the roadmap) would re-open the row.
 
 ---
 
+## C66 — Production loft programs never abort on user-attributable edge cases (development may halt)
+
+**Question.** Should runtime fault sites (divide-by-zero, vector /
+text out-of-bounds, null DbRef dereference, narrow-cast overflow,
+`panic("msg")` / failed `assert`) HALT the loft program with a typed
+runtime error (the rustc-style "loud failure" model)?  Or should they
+return a silent sentinel (null / `i64::MIN` / null DbRef / char 0)
+and let execution continue?
+
+**Evaluation.** Loft's primary deployment target is **interactive
+programs that must not stop**: browser games shared via URL, native
+games with continuous frame loops, scriptable scenes inside
+applications, multiplayer servers driving live sessions.  In every
+one of those contexts an abort is far worse than a wrong-pixel /
+wrong-frame / wrong-record edge case.  A frozen game cannot be saved
+by the user; a wrong pixel can.
+
+But during **development** — running tests, debugging a script,
+iterating on a feature — halting on a runtime fault is a feature,
+not a bug.  Halt-on-fault is how you find the divide-by-zero you
+didn't know about, the OOB the test missed, the assert that's
+firing.  The dev tooling (CLI, test harness, REPL) wants the loud
+failure mode; the production game / server / browser embed does
+not.
+
+This separation is not new.  Loft has always carried it via the
+`production` flag on the logger:
+
+- `default/01_code.loft::panic / assert` are documented as
+  **logging in production** (`#impure(host_io)`); the
+  production-mode path in `src/native.rs::n_panic` and `n_assert`
+  checks `logger.config.production`.  When `production == true`
+  it writes a fatal log entry, sets `Stores::had_fatal = true`, and
+  **returns** — execution continues.  When `production == false`
+  (or no logger attached) the same site halts via the typed
+  `RuntimeError` path so the developer sees the failure.
+- `main.rs` reads `had_fatal` after execute returns and exits 1
+  ONLY when no frame loop is running.
+- Integer `/` by zero, `%` by zero, vector / text OOB, null DbRef
+  field reads, narrow-cast overflow today return null sentinels
+  (`i64::MIN`, `char(0)`, `DbRef { rec: 0 }`) and let downstream
+  code keep running — even in dev mode.  Plan-07 phase 4
+  converts these to typed-error halt **in dev mode only**;
+  production keeps the silent + log shape.
+- The `??` operator is the user's tool for explicit handling of
+  null sentinels: `x = a / b ?? 0` discharges the null with a
+  fallback at the user's choice.
+- The `RuntimeLogger` framework (`doc/claude/LOGGER.md`) is the
+  surface for surfacing edge-case incidents to operators without
+  halting the program.
+
+**Decision.** **Loft programs in production MUST NOT abort on
+user-attributable runtime edge cases.**  Dated 2026-05-11.
+Development is unaffected; halt-on-fault is the right behaviour
+for the test runner, the CLI, and interactive debugging.  The
+gate is the existing `Stores::logger.config.production` flag.
+
+For each fault site:
+
+| Site | Production (`logger.config.production == true`) | Development (default) |
+|---|---|---|
+| Integer `/`, `%` by zero | log warning, return `i64::MIN` sentinel, continue | typed `RuntimeError::DivideByZero`, halt + render |
+| Vector / text OOB (positive, negative past start) | log warning, return null DbRef / char 0, continue | typed `RuntimeError::IndexOutOfBounds` / `NegativeIndex`, halt + render |
+| Null DbRef field / method access | log warning, return null result, continue | typed `RuntimeError::NullDereference`, halt + render |
+| Narrow-cast overflow | log warning, return clamped or null, continue | typed `RuntimeError::NarrowCastOverflow`, halt + render |
+| `panic("msg")` builtin | log fatal, set `had_fatal`, return | typed `RuntimeError::UserPanic`, halt + render |
+| Failed `assert(test, msg)` | log error, set `had_fatal`, return | typed `RuntimeError::AssertionFailed`, halt + render |
+| Stack-overflow trap | log fatal, attempt graceful unwind | typed `RuntimeError::StackOverflow`, halt + render |
+
+**Three-way defense contract** — codegen picks the opcode based on
+how the user's code handles the fault potential:
+
+| Defense at compile-time | Emit | Runtime behaviour |
+|---|---|---|
+| `expr ?? fallback` | Nullable peer (existing `parser/operators.rs::rewrite_outer_arith_to_nullable` extended to vector/text) | No log, no halt; sentinel discharged by `??` |
+| `if x != null { use(x); }` (or `if !x { … }`) immediately after `x = expr` (statically detectable defensive check) | Nullable peer (new flow-analysis arm in parse_assign) | No log, no halt; user's defense handles the null |
+| Neither | Raising peer | Production: log warning + continue with sentinel.  Development: halt + render. |
+
+The static-analysis fallback "raising peer + runtime warning" is
+the safety net — it catches sites the developer forgot to defend
+AND sites where the defense lives across a function boundary
+(can't be statically detected).  In production those sites still
+produce a sentinel and execution continues; the log entry surfaces
+the issue to operators for investigation.
+
+A compile-time warning fires at every undefended fault site that
+the parser can statically recognise as fault-prone:
+
+```
+warning: `v[i]` may produce null on out-of-bounds with no defensive check
+  --> game.loft:42:8
+   = note: guard with `if i < len(v) { ... }` before indexing
+   = note: or accept null with `v[i] ?? <fallback>`
+   = note: or follow with `if x != null { ... }` to catch the null
+```
+
+Silenceable via `LOFT_NO_WARN_RUNTIME=1` for codebases where the
+warning rate is too high (rarely needed once defensive idioms are
+adopted).  The warning is BOTH a quality nudge for developers AND
+a way to silence the production-mode runtime log: defending the
+site (any of the three patterns) makes the warning go away AND
+the log goes silent.
+
+**Production mode REQUIRES a logger.**  A deployment configured
+for production with no logger attached MUST refuse to start with a
+clear, actionable error message — there is no "production but no
+logging" middle state.  The reason: in production every runtime
+event needs a destination, and silently swallowing them defeats
+the entire point of choosing the production path.  The startup
+check fires before user code runs:
+
+```
+Error: production mode requires a logger.
+Attach one via `loft::logger::Logger::attach(...)` at startup,
+or configure via the deployment's logger settings (see
+doc/claude/LOGGER.md § Production setup).  To run in development
+mode (halt-on-fault), unset the production flag.
+```
+
+The deployment is expected to attach a real sink (stderr, file,
+syslog, host bridge, etc.) at startup.  If a deployment genuinely
+wants "log + continue but discard the output", it attaches a
+no-op sink — that's a deliberate choice, made visible in the
+deployment config, not an accident from forgetting to attach a
+logger.
+
+**Implementation shape (Plan-07 phase 4 reframe 2026-05-11):**
+
+The typed-error infrastructure (`RuntimeError` type +
+`RuntimeErrorKind` variants + `--> file:line:col` + caret rendering
+through phase-2's `render_entry_pretty`) is **kept** — it's the
+right shape for both the dev-mode halt diagnostic and the
+production-mode log entry.  Per-site helpers (`State::raise`,
+`vec_get_or_raise`, `vec_ref_or_raise`, `text_char_or_raise`)
+need a production-mode branch added:
+
+```rust
+// In State::raise (sketch):
+let production = self.database.logger.as_ref()
+    .and_then(|l| l.lock().ok())
+    .is_some_and(|l| l.config.production);
+if production {
+    // Production: log + had_fatal, do NOT short-circuit code_pos.
+    // The op returns its sentinel; execution continues.
+    // The logger is GUARANTEED present here — startup refuses
+    // production mode without one.
+    if let Some(logger) = &self.database.logger {
+        if let Ok(mut lg) = logger.lock() {
+            lg.log_runtime_kind(&kind, position.as_ref());
+        }
+    }
+    self.database.had_fatal = true;
+    return;
+}
+// Development: keep the typed-error halt path that's already in place.
+self.database.runtime_error = Some(Box::new(RuntimeError { ... }));
+self.database.had_fatal = true;
+// (dispatch loop sees runtime_error.is_some() and short-circuits)
+```
+
+The `OpGetVectorNullable` / `OpVectorRefNullable` /
+`OpTextCharacterNullable` opcodes added 2026-05-11 stay as the
+form for **loop iteration end** specifically — they return null
+without logging in either mode (end-of-iteration is expected
+behaviour, not a fault).  The raising peers (`OpGetVector`,
+`OpVectorRef`, `OpTextCharacter`) log + return null in production
+and halt + render in development for the user-facing `v[i]` /
+`s[i]` paths.
+
+**Revisit when.** A concrete deployment shape surfaces where the
+production-mode silent + log path is wrong.  No such case is
+expected; the existing `n_panic` / `n_assert` production-mode
+behaviour has held for years without complaint.
+
+---
+
 ## Adding a new entry
 
 When closing a question, append a new `##` section using the
