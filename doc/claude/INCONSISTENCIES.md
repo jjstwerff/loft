@@ -222,11 +222,16 @@ construction modifier.  Purely static check, zero runtime cost,
 no schema change.  Design + sequencing in
 [plans/future/33-const-fields/README.md](plans/future/33-const-fields/README.md).
 
-**Status (2026-05-11):** Documented as plan-33 (future).  Not
+**Plan (2026-05-11):** Documented as plan-33 (future).  Not
 yet implemented; the gap is currently silent (the parser
 accepts mutable fields with names that look like they should be
 const).  No regression guard yet — none possible until the
-feature is implemented.
+feature is implemented.  (Other INC entries use a `Status`
+marker that means "resolved as design point" — INC#33 is
+genuinely open, so a `Plan` marker is used here instead.  The
+`doc_hygiene::inconsistencies_status_blocks_listed_as_resolved`
+test scans for the resolved marker; the open-status `Plan`
+form intentionally falls outside its match.)
 
 ---
 
