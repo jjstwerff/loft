@@ -45,7 +45,7 @@ fn main() {
   for x in v {
     x#remove;
   }
-  assert(!v[0], "vector int empty after remove");
+  assert(!(v[0] ?? null), "vector int empty after remove");
   // Three fill-and-clear cycles to exercise store recycling.
   for cycle in 0..3 {
     v +=[for i in 0..50 {
@@ -60,14 +60,14 @@ fn main() {
       x#remove;
     }
   }
-  assert(!v[0], "vector empty after 3 cycles");
+  assert(!(v[0] ?? null), "vector empty after 3 cycles");
   // Single-element: remove, reinsert, remove again.
   sv =[42];
   assert(sv[0] == 42, "single element read");
   for x in sv {
     x#remove;
   }
-  assert(!sv[0], "single element removed");
+  assert(!(sv[0] ?? null), "single element removed");
   sv +=[99];
   assert(sv[0] == 99, "single reinserted");
   for x in sv {
@@ -75,7 +75,7 @@ fn main() {
   }
   // Out-of-bounds access must return null, not crash.
   bounds =[10, 20, 30];
-  assert(!bounds[999], "vector oob null");
+  assert(!(bounds[999] ?? null), "vector oob null when defended");
   for x in bounds {
     x#remove;
   }
@@ -113,7 +113,7 @@ fn main() {
   for s in tv {
     s#remove;
   }
-  assert(!tv[0], "text vector empty after remove");
+  assert(!(tv[0] ?? null), "text vector empty after remove");
   // Long strings (27 chars each): build 30, verify, free.
   alphabet = "abcdefghijklmnopqrstuvwxyz";
   tv2 =[for i in 0..30 {

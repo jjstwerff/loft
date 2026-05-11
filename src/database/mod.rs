@@ -975,8 +975,11 @@ impl Stores {
             self.raise_runtime(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
                 idx: index,
             });
+            // Sentinel matches `vector::get_vector` legacy OOB shape
+            // (preserve `db.store_nr`, set `rec=0`).  See
+            // `State::vec_get_or_raise` for the rationale.
             return crate::keys::DbRef {
-                store_nr: u16::MAX,
+                store_nr: db.store_nr,
                 rec: 0,
                 pos: 0,
             };
@@ -987,7 +990,7 @@ impl Stores {
                 len,
             });
             return crate::keys::DbRef {
-                store_nr: u16::MAX,
+                store_nr: db.store_nr,
                 rec: 0,
                 pos: 0,
             };
@@ -1006,9 +1009,8 @@ impl Stores {
         index: i64,
     ) -> crate::keys::DbRef {
         let inner = self.vec_get_or_raise_runtime(db, 4, index);
-        if inner.store_nr == u16::MAX {
-            return inner;
-        }
+        // `get_ref` already short-circuits to a null DbRef when
+        // `inner.rec == 0`, so no extra guard is needed.
         self.get_ref(&inner, 0)
     }
 

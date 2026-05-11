@@ -1611,8 +1611,14 @@ impl State {
         };
         if normalized < 0 {
             self.raise(crate::runtime_error::RuntimeErrorKind::NegativeIndex { idx: index });
+            // Sentinel matches the legacy `vector::get_vector` OOB
+            // shape (preserve `db.store_nr`, set `rec=0`) so wrapping
+            // ops like `OpGetText` / `OpGetByte` that call
+            // `stores.store(&db)` directly don't panic on the
+            // production-mode log-and-continue path.  `rec == 0`
+            // remains the universal null-DbRef indicator.
             return crate::keys::DbRef {
-                store_nr: u16::MAX,
+                store_nr: db.store_nr,
                 rec: 0,
                 pos: 0,
             };
@@ -1623,7 +1629,7 @@ impl State {
                 len,
             });
             return crate::keys::DbRef {
-                store_nr: u16::MAX,
+                store_nr: db.store_nr,
                 rec: 0,
                 pos: 0,
             };
@@ -1638,15 +1644,10 @@ impl State {
     #[must_use]
     pub fn vec_ref_or_raise(&mut self, db: &crate::keys::DbRef, index: i64) -> crate::keys::DbRef {
         let inner = self.vec_get_or_raise(db, 4, index);
-        // C66: in production, `runtime_error` is NOT populated on
-        // raise (only in dev) — so a downstream check on `runtime_error`
-        // would skip this guard and we'd `get_ref` on the null
-        // sentinel.  Check the sentinel value directly: if
-        // `inner.store_nr == u16::MAX` the `vec_get_or_raise` raise
-        // path fired in either mode and we must not dereference.
-        if inner.store_nr == u16::MAX {
-            return inner; // null sentinel; deref would be UB
-        }
+        // `get_ref` already short-circuits to a null DbRef when
+        // `inner.rec == 0` (which is the OOB sentinel after the
+        // store_nr-preserving sentinel change), so no extra guard
+        // is required here.
         self.database.get_ref(&inner, 0)
     }
 

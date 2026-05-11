@@ -111,11 +111,11 @@ fn main() {
   // Long type.
   xl = 5;
   zl = 0;
-  xl_null = xl / zl;
+  xl_null = xl / zl ?? null;
   assert((xl_null ?? 10) == 10, "?? long null returns default");
   // --- Null propagation through bitwise ops ---
   z_bit = 0;
-  n_bit = 1 / z_bit;
+  n_bit = 1 / z_bit ?? null;
   assert(!(n_bit & 5), "null & int is null");
   assert(!(5 & n_bit), "int & null is null");
   assert(!(n_bit | 5), "null | int is null");
@@ -124,7 +124,7 @@ fn main() {
   assert(!(5 ^ n_bit), "int ^ null is null");
   // Long null propagation through bitwise ops:
   zl2 = 0;
-  nl = 1 / zl2;
+  nl = 1 / zl2 ?? null;
   assert(!(nl & 5), "long null & int is null");
   assert(!(nl | 5), "long null | int is null");
   assert(!(nl ^ 5), "long null ^ int is null");
@@ -135,7 +135,7 @@ fn main() {
   assert((-128) >> 3 == -16, "arithmetic right shift: (-128)>>3 == -16");
   // --- Shift with null operand ---
   z_sh = 0;
-  n_sh = 1 / z_sh;
+  n_sh = 1 / z_sh ?? null;
   assert(!(n_sh << 1), "null << int is null");
   assert(!(n_sh >> 1), "null >> int is null");
   assert(!(1 << n_sh), "int << null is null");
