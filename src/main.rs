@@ -2593,13 +2593,22 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             state.resume();
         }
     }
-    state.check_store_leaks();
     // Plan-07 phase 4 — render typed runtime errors through the
-    // phase-2 pretty renderer.  `panic("msg")` and failed `assert`
-    // populate `state.database.runtime_error`; pulling it out here
-    // avoids a borrow conflict with the renderer's loader and keeps
-    // the existing `had_fatal` exit path intact.
-    if let Some(err) = state.database.runtime_error.take() {
+    // phase-2 pretty renderer.  `panic("msg")`, failed `assert`, and
+    // every fault-site opcode populate `state.database.runtime_error`;
+    // pulling it out here avoids a borrow conflict with the renderer's
+    // loader and keeps the existing `had_fatal` exit path intact.
+    //
+    // Skip `check_store_leaks` when a runtime error halted execution:
+    // the abrupt halt skips scope-exit cleanup so owned vectors / texts
+    // remain held, but those leaks are EXPECTED and the warning would
+    // bury the error message users actually care about.  Keep the
+    // leak check for clean exits where it still surfaces real bugs.
+    let runtime_err = state.database.runtime_error.take();
+    if runtime_err.is_none() {
+        state.check_store_leaks();
+    }
+    if let Some(err) = runtime_err {
         let entry = err.to_diag_entry();
         let loader = crate::diagnostic_render::FileSourceLoader::new();
         let color = crate::diagnostic_render::ColorMode::Auto;

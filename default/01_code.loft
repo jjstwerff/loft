@@ -667,6 +667,14 @@ fn OpAppendText(pos: const u16, v1: text);
 fn OpPutText(pos: const u16, value: text);
 fn OpGetTextSub(v1: text, from: integer, till: integer) -> text[v1];
 fn OpTextCharacter(v1: text, v2: integer) -> character;
+#rust"s.text_char_or_raise(@v1, @v2)"
+// Plan-07 phase 4 step 4.8 — nullable peer of OpTextCharacter for
+// for-loop iteration over text (`for c in s`).  Returns char(0) on
+// out-of-bounds; the loop driver in
+// `src/parser/collections.rs::for_text_iterator` uses the null
+// char as its end-of-iteration signal.  Mirrors the
+// OpGetVector / OpGetVectorNullable split.
+fn OpTextCharacterNullable(v1: text, v2: integer) -> character;
 #rust"ops::text_character(@v1, @v2)"
 fn OpConvBoolFromCharacter(v1: character) -> boolean;
 #rust"ops::op_conv_bool_from_character(@v1)"
@@ -858,10 +866,33 @@ pub fn clear(both: vector) {
 #impure(parent_write)
 
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
+//
+// Plan-07 phase 4 step 4.6/4.7 — user-facing `v[i]` raises a typed
+// `RuntimeError::IndexOutOfBounds` / `NegativeIndex` on out-of-bounds.
+// For-loop iteration uses `OpGetVectorNullable` / `OpVectorRefNullable`
+// (declared just below) which keep the legacy "return null DbRef on
+// OOB" semantics that the loop's pre-body null-check relies on for
+// end-of-iteration termination.  The parser dispatches between the
+// two based on whether the IR site is a `Value::Iter` step.
 fn OpGetVector(r: vector, size: const u16, index: integer) -> reference[r];
-#rust"vector::get_vector(&@r, u32::from(@size), @index, &s.database.allocations)"
+#rust"s.vec_get_or_raise(&@r, u32::from(@size), @index)"
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpVectorRef(r: vector, index: integer) -> reference[r];
+#rust"s.vec_ref_or_raise(&@r, @index)"
+// Plan-07 phase 4 step 4.6/4.7 — nullable peers of OpGetVector /
+// OpVectorRef.  Same body (return null DbRef on OOB), used by
+// for-loop iteration codegen which depends on the null result as
+// its end-of-iteration signal (parser/collections.rs:1492-1499
+// converts the loop variable via Reference→Boolean and breaks on
+// null).  The raising variants above (OpGetVector / OpVectorRef)
+// route through `s.vec_get_or_raise` / `s.vec_ref_or_raise` for
+// user-facing `v[i]`; the parser dispatches between the two pairs
+// based on whether the IR site is a `Value::Iter` step (Nullable)
+// or an explicit user expression (raising).  Mirrors the
+// OpDivInt / OpDivIntNullable C54.G-hybrid pattern.
+fn OpGetVectorNullable(r: vector, size: const u16, index: integer) -> reference[r];
+#rust"vector::get_vector(&@r, u32::from(@size), @index, &s.database.allocations)"
+fn OpVectorRefNullable(r: vector, index: integer) -> reference[r];
 #rust"stores.get_ref(&vector::get_vector(&@r, 4, @index, &s.database.allocations), 0)"
 fn OpCastVectorFromText(val: text, db_tp: const u16) -> vector;
 #rust"s.db_from_text(@val, @db_tp)"

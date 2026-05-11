@@ -2301,7 +2301,18 @@ impl State {
             | "OpCastEnumFromText" | "OpGetField" => {
                 self.types.insert(code, last);
             }
-            "OpGetVector" | "OpVectorRef" | "OpInsertVector" | "OpAppendVector" => {
+            // Plan-07 phase 4 step 4.6 — `OpGetVectorNullable` /
+            // `OpVectorRefNullable` are runtime-equivalent to their
+            // raising peers (return null DbRef on OOB instead of
+            // raising), so they need identical type-inference: the
+            // returned DbRef points at an element of the source
+            // vector's inner type.
+            "OpGetVector"
+            | "OpGetVectorNullable"
+            | "OpVectorRef"
+            | "OpVectorRefNullable"
+            | "OpInsertVector"
+            | "OpAppendVector" => {
                 if let Type::Vector(v, _) = &tps[0] {
                     self.types
                         .insert(code, stack.data.def(stack.data.type_def_nr(v)).known_type);

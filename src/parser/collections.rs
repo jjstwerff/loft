@@ -127,7 +127,16 @@ impl Parser {
             v_set(index_var, Value::Var(iter_var)),
             v_set(
                 res_var,
-                self.cl("OpTextCharacter", &[code.clone(), Value::Var(iter_var)]),
+                // Plan-07 phase 4 step 4.8 — for-loop iteration over
+                // text uses the *Nullable* peer of OpTextCharacter;
+                // OOB returns char(0) which the for-loop driver uses
+                // as its end-of-iteration signal.  User-facing `text[i]`
+                // (parser/fields.rs:750) keeps the raising
+                // OpTextCharacter.
+                self.cl(
+                    "OpTextCharacterNullable",
+                    &[code.clone(), Value::Var(iter_var)],
+                ),
             ),
             v_set(iter_var, self.cl("OpAddInt", &[Value::Var(iter_var), l])),
             Value::Var(res_var),
@@ -213,13 +222,19 @@ impl Parser {
                     } else {
                         self.database.size(db_tp)
                     };
+                    // Plan-07 phase 4 step 4.6 — for-loop iteration uses
+                    // the *Nullable* peers; OOB returns a null DbRef which
+                    // the loop's pre-body null-check
+                    // (parser/collections.rs:1492-1499) converts to false
+                    // and breaks.  User-facing `v[i]` (parser/fields.rs:629-640)
+                    // keeps the raising OpGetVector / OpVectorRef.
                     let mut ref_expr = self.cl(
-                        "OpGetVector",
+                        "OpGetVectorNullable",
                         &[code.clone(), Value::Int(i32::from(size)), i.clone()],
                     );
                     if let Type::Reference(_, _) = *vtp.clone() {
                         if self.database.is_linked(db_tp) {
-                            ref_expr = self.cl("OpVectorRef", &[code.clone(), i.clone()]);
+                            ref_expr = self.cl("OpVectorRefNullable", &[code.clone(), i.clone()]);
                         }
                     } else if matches!(*vtp.clone(), Type::Tuple(_)) {
                         // P189b: vector-of-tuple — keep ref_expr as the
@@ -2659,8 +2674,14 @@ use #count instead"
                 }
                 other => other,
             };
+            // Plan-07 phase 4 step 4.6 — par-worker iteration over the
+            // result vector uses the Nullable peer (iteration site).
+            // `idx_var` is bounded by the parallel-loop driver so OOB
+            // shouldn't fire here, but keeping the Nullable shape
+            // makes the design rule "every iteration site emits
+            // Nullable" hold uniformly.
             let get_vec = self.cl(
-                "OpGetVector",
+                "OpGetVectorNullable",
                 &[
                     Value::Var(results_var.expect(
                         "materialised path requires results_var; queue gate let it slip through",
@@ -2723,13 +2744,16 @@ use #count instead"
         // apply the same inline-alias treatment to the outer
         // iterator variable `a`.  The desugared loop increments `idx`;
         // `a` is logically `items[idx]` on every iteration.  Rewriting
-        // `Var(a)` → `OpGetVector(items, elem_size, idx)` (plus
+        // `Var(a)` → `OpGetVectorNullable(items, elem_size, idx)` (plus
         // `get_field` for non-Reference element types, mirroring the
         // `b` path) means `a` never needs a slot.  Without this the
         // allocator leaves `a` at `stack_pos == u16::MAX` and codegen
         // panics `Incorrect var a[65535] versus N`.
+        //
+        // Plan-07 phase 4 step 4.6 — fused-for-par iteration site →
+        // Nullable peer (consistent with all other iteration sites).
         let a_get_vec = self.cl(
-            "OpGetVector",
+            "OpGetVectorNullable",
             &[vec_expr.clone(), Value::Int(elem_size), Value::Var(idx_var)],
         );
         let a_accessor = if matches!(elem_tp, Type::Reference(_, _)) {

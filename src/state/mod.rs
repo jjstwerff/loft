@@ -1553,6 +1553,84 @@ impl State {
         self.database.had_fatal = true;
     }
 
+    /// Plan-07 phase 4 step 4.6 — bounds-checked vector index that raises
+    /// `IndexOutOfBounds` / `NegativeIndex` instead of returning the null
+    /// DbRef sentinel that `vector::get_vector` produced on OOB today.
+    /// Used by `OpGetVector`'s annotation; the dispatch loop's
+    /// `runtime_error.is_some()` check halts execution after the op
+    /// returns.  Negative indices use Python-style addressing
+    /// (`v[-1]` == last); only after addressing yields a still-out-of-
+    /// range value does the raise fire.
+    #[must_use]
+    pub fn vec_get_or_raise(
+        &mut self,
+        db: &crate::keys::DbRef,
+        size: u32,
+        index: i64,
+    ) -> crate::keys::DbRef {
+        let len = crate::vector::length_vector(db, &self.database.allocations);
+        let normalized = if index < 0 {
+            index + i64::from(len)
+        } else {
+            index
+        };
+        if normalized < 0 {
+            self.raise(crate::runtime_error::RuntimeErrorKind::NegativeIndex { idx: index });
+            return crate::keys::DbRef {
+                store_nr: u16::MAX,
+                rec: 0,
+                pos: 0,
+            };
+        }
+        if normalized >= i64::from(len) {
+            self.raise(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+                idx: index,
+                len,
+            });
+            return crate::keys::DbRef {
+                store_nr: u16::MAX,
+                rec: 0,
+                pos: 0,
+            };
+        }
+        crate::vector::get_vector(db, size, index, &self.database.allocations)
+    }
+
+    /// Plan-07 phase 4 step 4.6 — bounds-checked variant of
+    /// `OpVectorRef`'s body: same bounds check as `vec_get_or_raise`,
+    /// then dereferences the resulting DbRef via `Stores::get_ref`.
+    /// Single helper keeps the OpVectorRef annotation a one-liner.
+    #[must_use]
+    pub fn vec_ref_or_raise(&mut self, db: &crate::keys::DbRef, index: i64) -> crate::keys::DbRef {
+        let inner = self.vec_get_or_raise(db, 4, index);
+        if self.database.runtime_error.is_some() {
+            return inner; // already null sentinel; skip the deref
+        }
+        self.database.get_ref(&inner, 0)
+    }
+
+    /// Plan-07 phase 4 step 4.8 — bounds-checked text index.  `text[i]`
+    /// today returns `char(0)` on OOB (silent wrong-answer); raise
+    /// `IndexOutOfBounds` / `NegativeIndex` for the non-nullable path.
+    /// Negative addressing mirrors `vec_get_or_raise`.
+    #[must_use]
+    pub fn text_char_or_raise(&mut self, val: &str, index: i64) -> char {
+        let len = val.len() as i64;
+        let normalized = if index < 0 { index + len } else { index };
+        if normalized < 0 {
+            self.raise(crate::runtime_error::RuntimeErrorKind::NegativeIndex { idx: index });
+            return char::from(0);
+        }
+        if normalized >= len {
+            self.raise(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+                idx: index,
+                len: len as u32,
+            });
+            return char::from(0);
+        }
+        crate::ops::text_character(val, index)
+    }
+
     /// Execute entry-point `name`, optionally passing `argv` as a `vector<text>` argument.
     ///
     /// If the named function has exactly one `vector<…>` parameter, the strings in `argv`

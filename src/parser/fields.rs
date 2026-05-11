@@ -580,14 +580,23 @@ impl Parser {
         };
         if let Value::Iter(var, init, next, extra_init) = p {
             if matches!(*next, Value::Block(_)) {
-                // Linked structs: array stores 4-byte record pointers → use OpVectorRef
+                // Plan-07 phase 4 step 4.6 — this is the for-loop
+                // iteration branch (`Value::Iter` carrying the loop's
+                // step block).  Use the *Nullable* peers so OOB at
+                // end-of-iteration returns a null DbRef instead of
+                // raising — matches the loop-driver expectation
+                // documented at parser/collections.rs:1492-1499.
+                // The explicit `v[i]` branch below (line 629-640) is
+                // unchanged and emits the raising OpGetVector / OpVectorRef.
+                //
+                // Linked structs: array stores 4-byte record pointers → use OpVectorRefNullable
                 // which internally uses elm_size=4 and dereferences to the actual record.
-                // Base/primitive types: array stores inline values → use OpGetVector + get_val.
+                // Base/primitive types: array stores inline values → use OpGetVectorNullable + get_val.
                 let op = if self.database.is_linked(known) {
-                    self.cl("OpVectorRef", &[code.clone(), *next.clone()])
+                    self.cl("OpVectorRefNullable", &[code.clone(), *next.clone()])
                 } else {
                     let mut v = self.cl(
-                        "OpGetVector",
+                        "OpGetVectorNullable",
                         &[code.clone(), Value::Int(elm_size), *next.clone()],
                     );
                     if self.database.is_base(known) {
