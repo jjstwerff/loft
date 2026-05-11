@@ -12990,6 +12990,56 @@ fn p241_singleton_bool() {
 // DbRef), so the rewrite is verified-by-construction; the
 // behavioural guard waits on P255.
 
+/// P250 — tuple-of-Reference returned from a fn and destructured
+/// inside a loop body showed a stale-DbRef on the destructured
+/// variable that picked up the FIRST argument; q1.v read `null` on
+/// iter > 0 on both backends (q2 stayed correct).  Reproducer
+/// printed `0: 0,100 / 1: null,101 / 2: null,102 / ...`.
+///
+/// Root cause: the destructure code in
+/// `src/parser/expressions.rs::expression` (synthetic-`__tuple<…>`
+/// path) emits the LHS Reference vars (q1, q2) as `OpGetField(tmp,
+/// offset, ...)` reads — DbRefs that share `store_nr` with the
+/// outer `tmp` variable.  Without dep tracking, scope analysis
+/// emits an independent `OpFreeRef` for q1 and q2 at scope exit;
+/// each free works on a `store_nr` basis and reclaims the entire
+/// tuple's underlying store on the FIRST exit.  The next loop
+/// iteration's `tmp = make_pair(...)` reassignment then ran
+/// `OpFreeRef(tmp)` on the now-stale outer DbRef whose store_nr
+/// got recycled by the next iter's `pa` allocation, silently
+/// destroying that allocation.  q2 stayed correct because by
+/// the time q2's slot was read, the new tuple was being built
+/// from valid `pa`/`pb` allocations — the read happened before
+/// the second iter's overwrite.
+///
+/// Fix (2026-05-11): in the synthetic-struct destructure path,
+/// mark each Reference-typed LHS as `vars.depend(v_nr, tmp)` so
+/// scope analysis treats them as borrows (deps non-empty → skip
+/// `OpFreeRef`).  `tmp`'s `OpFreeRef` alone reclaims the storage
+/// at the right time (after the loop body, when `tmp` itself is
+/// reassigned or goes out of scope).  Only applies to Reference
+/// elements; primitive elements (TupleGet path) read value-typed
+/// slots that need no free.
+#[test]
+fn p250_loop_destructure_first_arg() {
+    code!(
+        "struct P250P { p250_v: integer }
+fn p250_make_pair(a: P250P, b: P250P) -> (P250P, P250P) { (a, b) }
+fn p250_run(n: integer) -> integer {
+    p250_last = -1;
+    for p250_i in 0..n {
+        p250_pa = P250P { p250_v: p250_i };
+        p250_pb = P250P { p250_v: p250_i + 100 };
+        (p250_q1, p250_q2) = p250_make_pair(p250_pa, p250_pb);
+        p250_last = p250_q1.p250_v;
+    }
+    return p250_last;
+}"
+    )
+    .expr("p250_run(3)")
+    .result(Value::Int(2));
+}
+
 /// P241 slice 4 — nested-in-if regression guard.  The
 /// rewrite recurses through `Value::If` arms; this test exercises
 /// that recursion by gating the push behind an `if` so the triplet

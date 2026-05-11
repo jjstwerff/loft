@@ -547,14 +547,41 @@ cross_mode!(
     }
     "#
 );
-// e5_d1_struct_ref_loop INTENTIONALLY OMITTED — the loop-iteration
-// shape (`for i in 0..N { (q1, q2) = make_pair(pa, pb); … }`) shows
-// a stale-DbRef on the destructured variable that picked up the
-// FIRST argument; q1.v reads `null` on iterations >0 on both
-// backends.  Filed P250 as a separate ref-tuple aliasing bug.
-// The single-call shapes above lock today's correct behaviour as a
-// regression guard; the loop case lands as a follow-up cell when
-// P250 closes.
+// P250 closed (2026-05-11): the loop-iteration destructure shape
+// works on both backends.  Root cause was that the destructured
+// LHS Reference vars (`q1`, `q2`) were emitted as independent
+// owners, each with its own `OpFreeRef` at scope exit.  Both refs
+// share the synthetic-tuple's `store_nr` (they're projections via
+// `OpGetField`), so the first scope-exit free reclaimed the entire
+// tuple store — leaving the outer-scope `tmp` variable holding a
+// stale DbRef whose store_nr got recycled by the next iteration's
+// `pa` allocation.  The second iteration's `tmp = make_pair(...)`
+// reassignment then ran `OpFreeRef(tmp)` on that stale DbRef,
+// silently destroying the freshly-allocated `pa`.  Fix: in
+// `parser/expressions.rs`'s synthetic-struct destructure path,
+// mark each Reference-typed LHS as `vars.depend(v_nr, tmp)` so
+// scope analysis treats them as borrows and skips the per-LHS
+// free.  `tmp`'s `OpFreeRef` alone reclaims the storage at the
+// right time.
+cross_mode!(
+    e5_d1_struct_ref_loop,
+    r#"
+    struct P { v: integer }
+    fn make_pair(a: P, b: P) -> (P, P) { (a, b) }
+    fn test() {
+        last_q1 = -1;
+        last_q2 = -1;
+        for i in 0..3 {
+            pa = P { v: i };
+            pb = P { v: i + 100 };
+            (q1, q2) = make_pair(pa, pb);
+            last_q1 = q1.v;
+            last_q2 = q2.v;
+        }
+        assert(last_q1 == 2 && last_q2 == 102, "e5_d1_struct_ref_loop");
+    }
+    "#
+);
 
 // ── Phase 05 — destination 3 (tuples in struct fields) ───────────────────────
 //

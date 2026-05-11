@@ -1271,6 +1271,30 @@ use a separate collection or add after the loop"
                         } else {
                             crate::data::element_offsets(&rhs_elems)[i] as u32
                         };
+                        // P250 fix (2026-05-11): when destructuring a synthetic
+                        // `__tuple<...>` struct (the wider-than-8B tuple-return
+                        // shape), each LHS Reference element is a VIEW into the
+                        // tmp's storage (`OpGetField(tmp, offset, ...)` returns
+                        // a DbRef that shares store_nr/rec with tmp).  Without a
+                        // dep, scope analysis emits an independent `OpFreeRef`
+                        // for the LHS at scope exit; that free works on a
+                        // store_nr basis and frees the entire tmp's underlying
+                        // store.  In a loop body, the next iteration's `tmp =
+                        // make_pair(...)` reassignment then runs `OpFreeRef(tmp)`
+                        // on the now-stale DbRef whose store_nr has been recycled
+                        // by an unrelated allocation (e.g. the new `pa`),
+                        // silently destroying that allocation.  The first LHS
+                        // arg's projection is most affected because the freshly-
+                        // allocated `pa` lands in the same store slot the prior
+                        // tuple occupied.  Marking the LHS dependent on tmp
+                        // suppresses its independent free; tmp's `OpFreeRef`
+                        // alone reclaims the storage at the right time.  Only
+                        // applies to the synthetic-struct path (Reference
+                        // elements); the inline `TupleGet` path (small tuples ≤
+                        // 8B) reads value-typed elements that need no free.
+                        if matches!(rhs_elems[i], Type::Reference(_, _)) {
+                            self.vars.depend(v_nr, tmp);
+                        }
                         self.get_val(&rhs_elems[i], false, elem_offset, Value::Var(tmp), u32::MAX)
                     };
                     steps.push(Value::Set(v_nr, Box::new(read)));
