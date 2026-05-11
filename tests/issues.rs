@@ -5956,7 +5956,7 @@ fn q4_constructor_kind_cross_check_string() {
 fn q4_constructor_kind_cross_check_nan_is_jnull() {
     code!(
         "fn run_q4cknan() -> text {
-    json_number(0.0 / 0.0).kind()
+    json_number(null as float).kind()
 }"
     )
     .expr("run_q4cknan()")
@@ -6810,7 +6810,7 @@ fn q4_json_number_negative_finite() {
 fn q4_json_number_nan_becomes_jnull() {
     code!(
         "fn run_q4nn3() -> integer {
-    nan_val_q4 = 0.0 / 0.0;
+    nan_val_q4 = null as float;
     v_q4nn3 = json_number(nan_val_q4);
     match v_q4nn3 { JNull => 1, _ => 0 }
 }"
@@ -7012,7 +7012,7 @@ fn q3_to_json_of_jnumber_fractional() {
 fn q3_to_json_of_nan_becomes_null() {
     code!(
         "fn run_q3tnn() -> text {
-    nan_q3 = 0.0 / 0.0;
+    nan_q3 = null as float;
     v_q3tnn = json_number(nan_q3);
     v_q3tnn.to_json()
 }"
@@ -9336,12 +9336,12 @@ fn test() { }"
     )
     .error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:365:24 — pick a different name \
+         at default{s}01_code.loft:371:24 — pick a different name \
          at p156_vector_element_shadows_constant:1:11"
     ))
     .error(&format!(
         "'E' is a Constant, not a type — the element of vector<T> must be a \
-         struct or enum (defined at default{s}01_code.loft:365:24) \
+         struct or enum (defined at default{s}01_code.loft:371:24) \
          at p156_vector_element_shadows_constant:2:26"
     ));
 }

@@ -234,9 +234,15 @@ fn OpMinSingle(v1: single, v2: single) -> single;
 #rust"@v1 - @v2"
 fn OpMulSingle(v1: single, v2: single) -> single;
 #rust"@v1 * @v2"
+// Plan-07 phase 4f.5 — single-precision div / mod by zero raise
+// `RuntimeError::DivideByZero`; mirror of the float pair above.
 fn OpDivSingle(v1: single, v2: single) -> single;
-#rust"@v1 / @v2"
+#rust"if @v2 == 0.0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); f32::NAN }} else {{ @v1 / @v2 }}"
 fn OpRemSingle(v1: single, v2: single) -> single;
+#rust"if @v2 == 0.0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); f32::NAN }} else {{ @v1 % @v2 }}"
+fn OpDivSingleNullable(v1: single, v2: single) -> single;
+#rust"@v1 / @v2"
+fn OpRemSingleNullable(v1: single, v2: single) -> single;
 #rust"@v1 % @v2"
 fn OpMathFuncSingle(fn_id: const i8, v1: single) -> single;
 #rust"match @fn_id {{ 0 => @v1.cos(), 1 => @v1.sin(), 2 => @v1.tan(), 3 => @v1.acos(), 4 => @v1.asin(), 5 => @v1.atan(), 6 => @v1.ceil(), 7 => @v1.floor(), 8 => @v1.round(), 9 => @v1.sqrt(), _ => f32::NAN }}"
@@ -511,9 +517,21 @@ fn OpMinFloat(v1: float, v2: float) -> float;
 #rust"@v1 - @v2"
 fn OpMulFloat(v1: float, v2: float) -> float;
 #rust"@v1 * @v2"
+// Plan-07 phase 4f.5 — float / single div / mod by zero raise
+// `RuntimeError::DivideByZero` like the integer peers.  Today `a / 0.0`
+// produces `Inf` (silent) and `0.0 / 0.0` produces `NaN` (silent
+// null) — both are silent-wrong-answer cases per the phase 0 rubric.
+// IEEE behaviour stays available via the `*Nullable` peers (emitted
+// only when `??` / `if x != null` defends the site, mirroring the
+// integer split).
 fn OpDivFloat(v1: float, v2: float) -> float;
-#rust"@v1 / @v2"
+#rust"if @v2 == 0.0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); f64::NAN }} else {{ @v1 / @v2 }}"
 fn OpRemFloat(v1: float, v2: float) -> float;
+#rust"if @v2 == 0.0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); f64::NAN }} else {{ @v1 % @v2 }}"
+// Silent IEEE-behaviour peers — emitted only when defended.
+fn OpDivFloatNullable(v1: float, v2: float) -> float;
+#rust"@v1 / @v2"
+fn OpRemFloatNullable(v1: float, v2: float) -> float;
 #rust"@v1 % @v2"
 fn OpEqFloat(v1: float, v2: float) -> boolean;
 #rust"!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() < 0.000_000_001f64"

@@ -346,6 +346,93 @@ fn main() {
     );
 }
 
+// ── Plan-07 phase 4f — float / single div / mod by zero raises ──────────────
+
+/// Undefended float div by zero raises and halts in dev mode.
+#[test]
+fn f4f_float_div_by_zero_raises() {
+    let source = "\
+fn main() {
+  z = 0.0;
+  bad = 1.0 / z;
+  print(\"bad={bad}\\n\");
+}
+";
+    let (stdout, _stderr, code) = run_with_warnings("4f_div_float", source);
+    assert_eq!(code, Some(1), "must halt with exit 1; got code={code:?}");
+    assert!(
+        !stdout.contains("bad="),
+        "post-fault stdout must NOT print; got stdout={stdout:?}"
+    );
+}
+
+/// Defended float div by `?? default` does NOT raise — IEEE result
+/// (Inf for `1.0 / 0.0`) is returned.
+#[test]
+fn f4f_float_div_with_nullable_does_not_raise() {
+    let source = "\
+fn main() {
+  z = 0.0;
+  good = (1.0 / z) ?? 99.0;
+  print(\"good={good}\\n\");
+}
+";
+    let (stdout, _stderr, code) = run_with_warnings("4f_div_float_def", source);
+    assert_eq!(code, Some(0), "?? defense must not halt");
+    // 1.0 / 0.0 = Inf which is NOT null, so `??` doesn't fire.
+    assert!(
+        stdout.contains("good=inf"),
+        "expected IEEE Inf; got stdout={stdout:?}"
+    );
+}
+
+/// Defended `0.0 / 0.0` (NaN, IS null for floats) `?? default` returns default.
+#[test]
+fn f4f_float_nan_with_nullable_returns_default() {
+    let source = "\
+fn main() {
+  z = 0.0;
+  good = (0.0 / z) ?? 42.0;
+  print(\"good={good}\\n\");
+}
+";
+    let (stdout, _stderr, code) = run_with_warnings("4f_nan_float_def", source);
+    assert_eq!(code, Some(0));
+    // 0.0 / 0.0 = NaN which IS null, so `??` fires.
+    assert!(
+        stdout.contains("good=42"),
+        "expected `??` default 42; got stdout={stdout:?}"
+    );
+}
+
+/// Float mod by zero raises like div.
+#[test]
+fn f4f_float_mod_by_zero_raises() {
+    let source = "\
+fn main() {
+  z = 0.0;
+  bad = 5.0 % z;
+  print(\"bad={bad}\\n\");
+}
+";
+    let (_stdout, _stderr, code) = run_with_warnings("4f_mod_float", source);
+    assert_eq!(code, Some(1));
+}
+
+/// Single-precision div by zero raises.
+#[test]
+fn f4f_single_div_by_zero_raises() {
+    let source = "\
+fn main() {
+  z = 0.0f;
+  bad = 1.0f / z;
+  print(\"bad={bad}\\n\");
+}
+";
+    let (_stdout, _stderr, code) = run_with_warnings("4f_div_single", source);
+    assert_eq!(code, Some(1));
+}
+
 // ── Plan-07 phase 4h — `not null` field-reminder hint ──────────────────
 
 /// A struct field read 10+ times with no `??` defense triggers the

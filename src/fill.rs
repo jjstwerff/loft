@@ -9,7 +9,7 @@ use crate::state::State;
 use crate::tree;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 251] = &[
+pub const OPERATORS: &[fn(&mut State); 255] = &[
     goto,
     goto_word,
     goto_false,
@@ -79,6 +79,8 @@ pub const OPERATORS: &[fn(&mut State); 251] = &[
     mul_single,
     div_single,
     rem_single,
+    div_single_nullable,
+    rem_single_nullable,
     math_func_single,
     math_func2_single,
     pow_single,
@@ -107,6 +109,8 @@ pub const OPERATORS: &[fn(&mut State); 251] = &[
     mul_float,
     div_float,
     rem_float,
+    div_float_nullable,
+    rem_float_nullable,
     eq_float,
     ne_float,
     lt_float,
@@ -694,11 +698,35 @@ fn mul_single(s: &mut State) {
 fn div_single(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = v_v1 / v_v2;
+    let new_value = if v_v2 == 0.0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        f32::NAN
+    } else {
+        v_v1 / v_v2
+    };
     s.put_stack(new_value);
 }
 
 fn rem_single(s: &mut State) {
+    let v_v2 = *s.get_stack::<f32>();
+    let v_v1 = *s.get_stack::<f32>();
+    let new_value = if v_v2 == 0.0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        f32::NAN
+    } else {
+        v_v1 % v_v2
+    };
+    s.put_stack(new_value);
+}
+
+fn div_single_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<f32>();
+    let v_v1 = *s.get_stack::<f32>();
+    let new_value = v_v1 / v_v2;
+    s.put_stack(new_value);
+}
+
+fn rem_single_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
     let new_value = v_v1 % v_v2;
@@ -904,11 +932,35 @@ fn mul_float(s: &mut State) {
 fn div_float(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = v_v1 / v_v2;
+    let new_value = if v_v2 == 0.0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        f64::NAN
+    } else {
+        v_v1 / v_v2
+    };
     s.put_stack(new_value);
 }
 
 fn rem_float(s: &mut State) {
+    let v_v2 = *s.get_stack::<f64>();
+    let v_v1 = *s.get_stack::<f64>();
+    let new_value = if v_v2 == 0.0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        f64::NAN
+    } else {
+        v_v1 % v_v2
+    };
+    s.put_stack(new_value);
+}
+
+fn div_float_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<f64>();
+    let v_v1 = *s.get_stack::<f64>();
+    let new_value = v_v1 / v_v2;
+    s.put_stack(new_value);
+}
+
+fn rem_float_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
     let new_value = v_v1 % v_v2;

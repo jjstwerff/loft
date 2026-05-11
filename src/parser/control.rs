@@ -495,6 +495,11 @@ impl Parser {
                 "GetVector" => "OpGetVectorNullable",
                 "VectorRef" => "OpVectorRefNullable",
                 "TextCharacter" => "OpTextCharacterNullable",
+                // Plan-07 phase 4f.5 — float / single div / mod peers.
+                "DivFloat" => "OpDivFloatNullable",
+                "RemFloat" => "OpRemFloatNullable",
+                "DivSingle" => "OpDivSingleNullable",
+                "RemSingle" => "OpRemSingleNullable",
                 _ => return false,
             };
             let new_nr = data.def_nr(nullable);

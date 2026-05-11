@@ -19,7 +19,7 @@ fn main() {
   assert(1.0f != 2.0f, "single ne");
   // --- Null (NaN): produced by 0.0f / 0.0f ---
   zero = 0.0f;
-  bad = zero / zero;
+  bad = (zero / zero) ?? null;
   assert(!bad, "single nan is null");
   assert(!(bad == bad), "single null == null is false");
   assert(bad != bad, "single null != null is true");
@@ -34,10 +34,10 @@ fn main() {
   assert((bad ?? 5.0f) == 5.0f, "single null ?? default");
   assert((1.0f ?? 5.0f) == 1.0f, "single non-null ?? passes through");
   // --- Infinity (not null) ---
-  pos_inf = 1.0f / 0.0f;
+  pos_inf = (1.0f / 0.0f) ?? null;
   assert(pos_inf > 1000000.0f, "single positive infinity");
   assert(!!pos_inf, "single positive infinity is not null");
-  neg_inf = -1.0f / 0.0f;
+  neg_inf = (-1.0f / 0.0f) ?? null;
   assert(neg_inf < -1000000.0f, "single negative infinity");
   // --- Conversions ---
   assert(3 as single == 3.0f, "integer as single");
@@ -54,7 +54,7 @@ fn main() {
   bad_text = "not_a_number" as single;
   assert(!bad_text, "invalid text as single is null");
   // --- Null cast results ---
-  nan_s = zero / zero;
+  nan_s = (zero / zero) ?? null;
   assert(!(nan_s as integer), "single NaN as integer is null");
   assert(!(nan_s as integer), "single NaN as integer is null");
 }

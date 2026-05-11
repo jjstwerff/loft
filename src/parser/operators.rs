@@ -838,6 +838,12 @@ impl Parser {
                 "GetVector" => "OpGetVectorNullable",
                 "VectorRef" => "OpVectorRefNullable",
                 "TextCharacter" => "OpTextCharacterNullable",
+                // Plan-07 phase 4f.5 — float / single div / mod by zero
+                // peers.  Same defense-dispatch contract as integer.
+                "DivFloat" => "OpDivFloatNullable",
+                "RemFloat" => "OpRemFloatNullable",
+                "DivSingle" => "OpDivSingleNullable",
+                "RemSingle" => "OpRemSingleNullable",
                 _ => return false,
             };
             let new_nr = data.def_nr(nullable_name);
@@ -910,8 +916,8 @@ impl Parser {
         // the inner op when wrapped.
         fn classify(name: &str) -> Option<u8> {
             match name {
-                "DivInt" => Some(1),
-                "RemInt" => Some(2),
+                "DivInt" | "DivFloat" | "DivSingle" => Some(1),
+                "RemInt" | "RemFloat" | "RemSingle" => Some(2),
                 "GetVector" | "VectorRef" | "TextCharacter" => Some(3),
                 _ => None,
             }
@@ -955,6 +961,11 @@ impl Parser {
                 "GetVector" => "OpGetVectorNullable",
                 "VectorRef" => "OpVectorRefNullable",
                 "TextCharacter" => "OpTextCharacterNullable",
+                // Plan-07 phase 4f.5 — float / single div / mod peers.
+                "DivFloat" => "OpDivFloatNullable",
+                "RemFloat" => "OpRemFloatNullable",
+                "DivSingle" => "OpDivSingleNullable",
+                "RemSingle" => "OpRemSingleNullable",
                 _ => return false,
             };
             let new_nr = data.def_nr(nullable_name);
@@ -1402,8 +1413,8 @@ impl Parser {
             Value::Call(def_nr, args) => {
                 let name = self.data.def(*def_nr).original_name();
                 let kind: Option<FaultKind> = match name.as_str() {
-                    "DivInt" => Some(FaultKind::Div),
-                    "RemInt" => Some(FaultKind::Rem),
+                    "DivInt" | "DivFloat" | "DivSingle" => Some(FaultKind::Div),
+                    "RemInt" | "RemFloat" | "RemSingle" => Some(FaultKind::Rem),
                     "GetVector" | "VectorRef" => Some(FaultKind::VectorIndex),
                     "TextCharacter" => Some(FaultKind::TextIndex),
                     _ => None,
