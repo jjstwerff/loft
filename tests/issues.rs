@@ -12935,6 +12935,81 @@ fn p241_singleton_int() {
     .result(Value::Int(42));
 }
 
+/// P241 slice 3 — Text.  Same generic shape; Text uses `OpSetText`
+/// instead of `OpSetInt`.
+#[test]
+fn p241_singleton_text() {
+    code!(
+        "fn p241_singleton_t<T>(x: T) -> vector<T> {
+    p241_out_t: vector<T> = [];
+    p241_out_t += [x];
+    return p241_out_t;
+}"
+    )
+    .expr("p241_singleton_t(\"hello\")[0]")
+    .result(Value::str("hello"));
+}
+
+/// P241 slice 3 — Float.  Verifies the Float setter dispatch.
+#[test]
+fn p241_singleton_float() {
+    code!(
+        "fn p241_singleton_f<T>(x: T) -> vector<T> {
+    p241_out_f: vector<T> = [];
+    p241_out_f += [x];
+    return p241_out_f;
+}"
+    )
+    .expr("p241_singleton_f(2.5)[0]")
+    .result(Value::Float(2.5));
+}
+
+/// P241 slice 3 — Boolean.  Verifies the OpSetByte dispatch with
+/// `min=0` arg.
+#[test]
+fn p241_singleton_bool() {
+    code!(
+        "fn p241_singleton_b<T>(x: T) -> vector<T> {
+    p241_out_b: vector<T> = [];
+    p241_out_b += [x];
+    return p241_out_b;
+}"
+    )
+    .expr("p241_singleton_b(true)[0]")
+    .result(Value::Boolean(true));
+}
+
+// P241 slice 3 — struct-T regression test deferred: capturing the
+// returned `vector<T>` into a local variable currently fails with
+// "Variable X cannot change type from vector<S> to vector<S>" at
+// the call site (filed as P255 — pre-existing bug at
+// `src/variables/mod.rs:977-989` where the Vector→Vector branch
+// of `change_var` emits the diagnostic without checking type
+// equality first).  P241's rewrite is a no-op for struct T (the
+// existing OpCopyRecord path is correct because the source IS a
+// DbRef), so the rewrite is verified-by-construction; the
+// behavioural guard waits on P255.
+
+/// P241 slice 4 — nested-in-if regression guard.  The
+/// rewrite recurses through `Value::If` arms; this test exercises
+/// that recursion by gating the push behind an `if` so the triplet
+/// lives inside an If's true-arm Block.  Without the If recursion,
+/// the rewrite would skip the triplet and the test would crash.
+#[test]
+fn p241_singleton_in_if_branch() {
+    code!(
+        "fn p241_cond_singleton<T>(x: T, p241_pick: boolean) -> vector<T> {
+    p241_out_c: vector<T> = [];
+    if p241_pick {
+        p241_out_c += [x];
+    }
+    return p241_out_c;
+}"
+    )
+    .expr("p241_cond_singleton(7, true)[0]")
+    .result(Value::Int(7));
+}
+
 /// P252 — bounded-generic for-loop over a struct-ref vector returned
 /// the FIRST item's bound-method result for every iteration instead
 /// of the per-item result.  Surfaced 2026-05-11 by phase 4 cleanup;

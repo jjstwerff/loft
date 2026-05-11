@@ -1875,6 +1875,119 @@ impl Parser {
     /// Recurses into nested Blocks / Loops / Ifs / etc.  Slice 2 ships
     /// only `Type::Integer`; struct-T is a no-op (the existing
     /// OpCopyRecord path is correct because the source IS a DbRef).
+    /// P241 fix slice 3 — true when `concrete` is a primitive type
+    /// whose vector-element write uses a primitive setter
+    /// (`OpSetInt` / `OpSetText` / `OpSetFloat` / etc.) at the
+    /// parse-time concrete-T path instead of `OpCopyRecord`.
+    /// `Type::Reference` / `Type::Vector` / etc. are NOT primitive
+    /// targets — their vector-element shape uses `OpCopyRecord`,
+    /// which the parametric IR already encodes correctly (the source
+    /// IS a DbRef regardless of substitution).
+    pub(crate) fn is_primitive_vector_element_target(tp: &Type) -> bool {
+        matches!(
+            tp,
+            Type::Integer(_)
+                | Type::Float
+                | Type::Single
+                | Type::Boolean
+                | Type::Character
+                | Type::Text(_)
+                | Type::Function(_, _, _)
+                | Type::Enum(_, false, _) // plain enum (struct-enums use OpCopyRecord)
+        )
+    }
+
+    /// P241 fix slice 3 — build the per-type primitive setter Call
+    /// for the rewritten triplet's middle op.  Mirrors the parse-time
+    /// concrete-T dispatch in `parser/vectors.rs:1560-1599`.
+    /// Returns `None` only when the type is not a primitive target
+    /// (the caller should pre-check via `is_primitive_vector_element_target`).
+    fn primitive_setter_call(
+        concrete: &Type,
+        elm_var: u16,
+        src_value: Value,
+        data: &Data,
+    ) -> Option<Value> {
+        let elm = Value::Var(elm_var);
+        let pos = Value::Int(0);
+        // Resolve op def_nrs.  Each branch resolves only the ones it needs.
+        let op = match concrete {
+            Type::Integer(spec) => {
+                // narrow-int dispatch mirrors `vectors.rs:1576-1586`.
+                // size(N) on an integer alias selects a narrower setter.
+                let alias_nr = data.type_elm(concrete);
+                let forced = data.forced_size(alias_nr);
+                match forced {
+                    Some(1) => {
+                        let m = Value::Int(spec.min);
+                        let d = data.def_nr("OpSetByte");
+                        Value::Call(d, vec![elm, pos, m, src_value])
+                    }
+                    Some(2) => {
+                        let m = Value::Int(spec.min);
+                        let d = data.def_nr("OpSetShortRaw");
+                        Value::Call(d, vec![elm, pos, m, src_value])
+                    }
+                    Some(4) => {
+                        let d = data.def_nr("OpSetInt4");
+                        Value::Call(d, vec![elm, pos, src_value])
+                    }
+                    _ => {
+                        let d = data.def_nr("OpSetInt");
+                        Value::Call(d, vec![elm, pos, src_value])
+                    }
+                }
+            }
+            Type::Float => {
+                let d = data.def_nr("OpSetFloat");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            Type::Single => {
+                let d = data.def_nr("OpSetSingle");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            Type::Boolean => {
+                // Booleans store as a 0/1 byte; same shape as `set_field`'s
+                // Boolean arm at `parser/mod.rs:2799`.  Must wrap the
+                // raw boolean value in `if val { 1 } else { 0 }` so the
+                // OpSetByte writes the correct integer encoding —
+                // without the wrap, OpSetByte sees a DbRef-shaped
+                // boolean that codegen can't decode.
+                let d = data.def_nr("OpSetByte");
+                let wrapped = crate::data::v_if(src_value, Value::Int(1), Value::Int(0));
+                Value::Call(d, vec![elm, pos, Value::Int(0), wrapped])
+            }
+            Type::Character => {
+                let d = data.def_nr("OpSetCharacter");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            Type::Text(_) => {
+                let d = data.def_nr("OpSetText");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            Type::Function(_, _, _) => {
+                // Plan-06 phase 4d.A.2 — fn-ref vector elements store the
+                // 4-byte i32 d_nr.  Same shape as `vectors.rs:1597`.
+                let d = data.def_nr("OpSetInt4");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            Type::Enum(_, false, _) => {
+                // Plain enum — variants encode as a small integer index.
+                let d = data.def_nr("OpSetEnum");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            _ => return None,
+        };
+        // Defensive: if any def_nr lookup returned u32::MAX, return None
+        // so the caller falls through (rather than emitting a malformed Call).
+        if let Value::Call(d, _) = &op
+            && *d == u32::MAX
+        {
+            return None;
+        }
+        Some(op)
+    }
+
     pub(crate) fn rewrite_generic_vector_writes(
         val: Value,
         concrete: &Type,
@@ -1882,8 +1995,12 @@ impl Parser {
         data: &Data,
         database: &mut Stores,
     ) -> Value {
-        // Only Integer in slice 2.  Other primitives in slice 3.
-        if !matches!(concrete, Type::Integer(_)) {
+        // Slice 2: Integer.  Slice 3: extended to all primitive
+        // types whose vector-element shape uses a primitive setter
+        // instead of OpCopyRecord.  Struct T (Type::Reference),
+        // Vector T, and other DbRef-backed types are no-ops because
+        // OpCopyRecord is already correct for those.
+        if !Self::is_primitive_vector_element_target(concrete) {
             return val;
         }
         match val {
@@ -2011,9 +2128,11 @@ impl Parser {
         database: &mut Stores,
     ) -> Vec<Value> {
         // Only rewrite when concrete is one of the primitive types
-        // slice 2 covers.  Struct / Reference / etc. fall through
+        // slice 3 covers all primitive vector-element targets
+        // (Integer/Text/Float/Single/Boolean/Character/Enum/Function +
+        // narrow-int variants).  Struct / Reference / etc. fall through
         // unchanged (the existing OpCopyRecord path is correct).
-        if !matches!(concrete, Type::Integer(_)) {
+        if !Self::is_primitive_vector_element_target(concrete) {
             return ops;
         }
         // Resolve op def_nrs once — re-resolution per-triplet would
@@ -2022,12 +2141,10 @@ impl Parser {
         let copy_record_d = data.def_nr("OpCopyRecord");
         let finish_record_d = data.def_nr("OpFinishRecord");
         let pre_alloc_d = data.def_nr("OpPreAllocVector");
-        let set_int_d = data.def_nr("OpSetInt");
         if new_record_d == u32::MAX
             || copy_record_d == u32::MAX
             || finish_record_d == u32::MAX
             || pre_alloc_d == u32::MAX
-            || set_int_d == u32::MAX
         {
             return ops; // missing op definitions — bail safely
         }
@@ -2100,11 +2217,21 @@ impl Parser {
                         ],
                     )),
                 ));
-                // 3. OpSetInt(Var(elm_var), Int(0), src_value)
-                out.push(Value::Call(
-                    set_int_d,
-                    vec![Value::Var(elm_var), Value::Int(0), src_value],
-                ));
+                // 3. Per-type setter (OpSetInt / OpSetText / OpSetFloat / etc.)
+                //    Mirrors the parse-time concrete-T dispatch in
+                //    `parser/vectors.rs:1560-1599` so generic-T vectors
+                //    encode element writes the same way as concrete-T
+                //    vectors.
+                let setter = Self::primitive_setter_call(concrete, elm_var, src_value, data);
+                if let Some(call) = setter {
+                    out.push(call);
+                } else {
+                    // Concrete type matched `is_primitive_vector_element_target`
+                    // but no setter mapping exists — should not happen.
+                    // Bail by emitting a no-op (the OpFinishRecord still
+                    // fires; the value just isn't written).  Defensive
+                    // fall-through to keep the IR well-formed.
+                }
                 // 4. OpFinishRecord(Var(out_var), Var(elm_var), Int(concrete_vec_tp), Int(MAX))
                 out.push(Value::Call(
                     finish_record_d,
