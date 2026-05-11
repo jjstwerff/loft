@@ -131,12 +131,8 @@ fn print_help() {
     println!(
         "  --native-debug                like --native but compile with -Cdebuginfo=2 (DWARF)"
     );
-    println!(
-        "  --dev-soft-halt               demote dev-mode runtime raises to log-and-continue"
-    );
-    println!(
-        "                                (also: LOFT_DEV_SOFT_HALT=1) — surfaces every fault"
-    );
+    println!("  --dev-soft-halt               demote dev-mode runtime raises to log-and-continue");
+    println!("                                (also: LOFT_DEV_SOFT_HALT=1) — surfaces every fault");
     println!(
         "                                site in a single run instead of halting on the first"
     );

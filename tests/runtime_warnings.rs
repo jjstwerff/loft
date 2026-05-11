@@ -346,6 +346,42 @@ fn main() {
     );
 }
 
+// ── Plan-07 phase 4f.12 — stack overflow becomes typed RuntimeError ─────────
+
+/// Infinite recursion produces a typed `StackOverflow` error
+/// (rendered with file:line:col and the call chain) instead of
+/// an opaque Rust panic.  Production mode logs and continues
+/// per C66; dev mode halts and renders.
+#[test]
+fn f4f_stack_overflow_raises_typed_error() {
+    let source = "\
+fn recurse(n: integer) -> integer {
+  return recurse(n + 1);
+}
+
+fn main() {
+  x = recurse(0);
+  print(\"x={x}\\n\");
+}
+";
+    let (_stdout, stderr, code) = run_with_warnings("f4f_stack", source);
+    assert_eq!(code, Some(1), "stack overflow must halt with exit 1");
+    // Pretty-renderer + call chain go to stderr per main.rs's
+    // `eprint!` / `eprintln!` calls.
+    assert!(
+        stderr.contains("call stack overflow"),
+        "expected typed StackOverflow error; got stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("in fn recurse() ← called from"),
+        "expected call-chain header pointing at recurse(); got stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("more frames"),
+        "expected truncation summary; got stderr={stderr:?}"
+    );
+}
+
 // ── Plan-07 phase 4g — soft-halt + call-chain rendering ─────────────────────
 
 /// `--dev-soft-halt` continues past the first fault and reports

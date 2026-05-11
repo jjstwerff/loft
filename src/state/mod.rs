@@ -27,9 +27,7 @@ use std::sync::OnceLock;
 /// log-and-continue so a single run surfaces every fault site.
 fn dev_soft_halt_enabled() -> bool {
     static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| {
-        std::env::var("LOFT_DEV_SOFT_HALT").is_ok_and(|v| v == "1" || v == "true")
-    })
+    *FLAG.get_or_init(|| std::env::var("LOFT_DEV_SOFT_HALT").is_ok_and(|v| v == "1" || v == "true"))
 }
 
 pub const STRING_NULL: &str = "\0";
@@ -290,11 +288,17 @@ impl State {
             .next_back()
             .map_or(0, |(_, &v)| v);
         self.call_depth += 1;
-        assert!(
-            self.call_depth <= Self::MAX_CALL_DEPTH,
-            "Recursion depth limit exceeded ({}) — possible infinite recursion",
-            Self::MAX_CALL_DEPTH
-        );
+        // Plan-07 phase 4f.12 — stack overflow becomes a typed
+        // RuntimeError instead of an opaque Rust panic.  Detect at
+        // call entry, raise StackOverflow, decrement so the unwind
+        // doesn't re-trip on the way out.  Production logs +
+        // continues per C66 (host frame loop decides whether to
+        // restart); dev mode halts + renders.
+        if self.call_depth > Self::MAX_CALL_DEPTH {
+            self.call_depth -= 1;
+            self.raise(crate::runtime_error::RuntimeErrorKind::StackOverflow);
+            return;
+        }
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: self.code_pos,
