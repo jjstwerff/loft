@@ -1648,9 +1648,21 @@ impl Parser {
                 // I9-vec: fix vector element access with baked-in elm_size=0.
                 // The template bakes elm_size=0 for type-variable elements and omits the
                 // value-extraction wrapper (OpGetInt/OpGetFloat/etc.).  Fix both here.
+                //
+                // P252 fix (2026-05-11): also recognise `OpGetVectorNullable`
+                // — plan-07 phase 4 step 4.6 swapped the for-loop iter step
+                // from `OpGetVector` to its Nullable peer (so OOB at end-of-
+                // iteration returns null instead of raising).  Without this
+                // arm, bounded-generic for-loops over a struct vector left
+                // the iter step at `OpGetVectorNullable(v, 0, idx)` with
+                // size=0 — every iteration read element 0, producing the
+                // FIRST item's value for every iteration (P252).  The
+                // Nullable peer's arg shape is identical to OpGetVector
+                // (r, size, idx) so the elm_size fixup logic is unchanged.
                 if new_d != u32::MAX
                     && (new_d as usize) < data.definitions.len()
-                    && data.def(new_d).name == "OpGetVector"
+                    && (data.def(new_d).name == "OpGetVector"
+                        || data.def(new_d).name == "OpGetVectorNullable")
                     && new_args.len() == 3
                 {
                     let cur_size = if let Value::Int(n) = &new_args[1] {

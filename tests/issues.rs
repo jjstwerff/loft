@@ -12782,3 +12782,37 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(205 + 1009));
 }
+
+/// P252 — bounded-generic for-loop over a struct-ref vector returned
+/// the FIRST item's bound-method result for every iteration instead
+/// of the per-item result.  Surfaced 2026-05-11 by phase 4 cleanup;
+/// bisected to slice-3 commit `6016655e` which swapped
+/// `OpGetVector` to `OpGetVectorNullable` in the for-loop iter
+/// step.  The I9-vec elm_size fixup in
+/// `parser/mod.rs::substitute_type_in_value` only recognised
+/// `OpGetVector` (not the Nullable peer); after the swap the iter
+/// step kept `size=0` for generic-T element reads → every iteration
+/// read element 0 → bound method always saw the FIRST item.
+///
+/// Fix: extend the I9-vec name match to `OpGetVectorNullable` too.
+/// Both peers have identical (r, size, idx) arg shapes so the
+/// existing fixup logic applies unchanged.
+#[test]
+fn p252_bounded_generic_for_loop_per_item_dispatch() {
+    code!(
+        "interface V {
+    fn ok(self: Self) -> boolean
+}
+struct P { v: integer }
+fn ok(self: P) -> boolean { return self.v > 0; }
+fn p252_count<T: V>(items: vector<T>) -> integer {
+    n = 0;
+    for it in items {
+        if it.ok() { n += 1; }
+    }
+    return n;
+}"
+    )
+    .expr("p252_count([P{v:1}, P{v:0}, P{v:3}])")
+    .result(Value::Int(2));
+}
