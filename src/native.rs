@@ -439,13 +439,21 @@ fn n_assert(stores: &mut Stores, stack: &mut DbRef) {
     if let Some(ref logger) = stores.logger {
         let production = logger.lock().is_ok_and(|l| l.config.production);
         if production {
+            // Plan-07 phase 4 — route through Logger::log_runtime_kind
+            // so the captured-log shape matches the rest of the
+            // production-mode runtime events (`[assertion_failed] …`).
+            // Also produces the same severity (Error) per the C66
+            // kind table.
+            let kind = crate::runtime_error::RuntimeErrorKind::AssertionFailed {
+                message: v_message.str().to_string(),
+            };
+            let pos = crate::lexer::Position {
+                file: v_file.str().to_string(),
+                line: v_line as u32,
+                pos: 1,
+            };
             if let Ok(mut lg) = logger.lock() {
-                lg.log(
-                    Severity::Error,
-                    v_file.str(),
-                    v_line as u32,
-                    v_message.str(),
-                );
+                lg.log_runtime_kind(&kind, Some(&pos));
             }
             stores.had_fatal = true;
             return;
@@ -475,13 +483,19 @@ fn n_panic(stores: &mut Stores, stack: &mut DbRef) {
     if let Some(ref logger) = stores.logger {
         let production = logger.lock().is_ok_and(|l| l.config.production);
         if production {
+            // Plan-07 phase 4 — same routing as n_assert; ensures the
+            // `[user_panic]` log entry matches the rest of the
+            // production-mode runtime events.
+            let kind = crate::runtime_error::RuntimeErrorKind::UserPanic {
+                message: v_message.str().to_string(),
+            };
+            let pos = crate::lexer::Position {
+                file: v_file.str().to_string(),
+                line: v_line as u32,
+                pos: 1,
+            };
             if let Ok(mut lg) = logger.lock() {
-                lg.log(
-                    Severity::Fatal,
-                    v_file.str(),
-                    v_line as u32,
-                    v_message.str(),
-                );
+                lg.log_runtime_kind(&kind, Some(&pos));
             }
             stores.had_fatal = true;
             return;

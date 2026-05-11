@@ -1540,8 +1540,43 @@ impl State {
     /// circuits via `code_pos = u32::MAX` — callers don't have to
     /// touch the loop machinery, just call `s.raise(kind)` and let
     /// the op finish (e.g. with a placeholder result on the stack).
+    ///
+    /// **Production-vs-development split (DESIGN_DECISIONS.md § C66).**
+    /// When `database.logger.config.production == true` the production
+    /// branch fires: log the typed event through `Logger::log_runtime_kind`,
+    /// set `had_fatal = true`, and **return without populating
+    /// `runtime_error`**.  The dispatch loop's short-circuit check
+    /// (which only fires on `runtime_error.is_some()`) does NOT trigger
+    /// — execution continues past the fault site, the op produces its
+    /// sentinel value (null DbRef / `i64::MIN` / char 0), and the
+    /// program stays alive.  This is the contract for production
+    /// deployments (games, servers, browser embeds) where halting on
+    /// an edge case would be strictly worse than a wrong-pixel
+    /// recovery.
     pub fn raise(&mut self, kind: crate::runtime_error::RuntimeErrorKind) {
         let position = self.source_loc_for(self.code_pos).cloned();
+        // Production: log + had_fatal + return.  Do NOT populate
+        // runtime_error so the dispatch loop continues (per C66).
+        // The check matches `n_panic` / `n_assert`'s production check
+        // shape from `src/native.rs`.
+        let production = self
+            .database
+            .logger
+            .as_ref()
+            .and_then(|l| l.lock().ok())
+            .is_some_and(|l| l.config.production);
+        if production {
+            if let Some(logger) = &self.database.logger
+                && let Ok(mut lg) = logger.lock()
+            {
+                lg.log_runtime_kind(&kind, position.as_ref());
+            }
+            self.database.had_fatal = true;
+            return;
+        }
+        // Development (default for CLI / tests / no logger / non-production
+        // logger): populate runtime_error so the dispatch loop
+        // short-circuits and main.rs renders the typed error.
         let message = kind.describe();
         let op_pc = self.code_pos;
         self.database.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError {
@@ -1603,8 +1638,14 @@ impl State {
     #[must_use]
     pub fn vec_ref_or_raise(&mut self, db: &crate::keys::DbRef, index: i64) -> crate::keys::DbRef {
         let inner = self.vec_get_or_raise(db, 4, index);
-        if self.database.runtime_error.is_some() {
-            return inner; // already null sentinel; skip the deref
+        // C66: in production, `runtime_error` is NOT populated on
+        // raise (only in dev) — so a downstream check on `runtime_error`
+        // would skip this guard and we'd `get_ref` on the null
+        // sentinel.  Check the sentinel value directly: if
+        // `inner.store_nr == u16::MAX` the `vec_get_or_raise` raise
+        // path fired in either mode and we must not dereference.
+        if inner.store_nr == u16::MAX {
+            return inner; // null sentinel; deref would be UB
         }
         self.database.get_ref(&inner, 0)
     }
