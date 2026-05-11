@@ -144,10 +144,36 @@ Sub-arc tracked in `~/.claude/plans/async-toasting-nest.md`
    `note:` lines naming the three defense patterns.  Silenceable
    via `LOFT_NO_WARN_RUNTIME=1` / `--no-warn-runtime`.  Defaults
    ON.  Defended sites stay quiet at compile-time AND at runtime
-   — the two paths agree.
-9. `doc/claude/LOGGER.md` § Runtime event logging + § Production
-   setup; document the three-way defense contract + warning.
-10. Status block update.
+   — the two paths agree.  Skip-list logic walks the IR after
+   `rewrite_defended_fault_sites` (4d.2) and
+   `rewrite_subtree_to_nullable` (4e.1) so the warning fires
+   exactly where neither swap fired.  (Tracked as **4e.2** in
+   the README sub-phase table.)
+9. **Distinct null tokens in format-string output** — 4e.1
+   suppression collapses every fault to bare `null` (or empty
+   for text/char), losing the *why*.  4e.3 carries the fault
+   kind from the swapped Nullable peer through to the format
+   renderer so each fault-produced sentinel renders with a
+   `(reason)` suffix in format strings only.  Examples:
+   `null(/0)` (divide-by-zero), `null(oob 999/3)` (vector OOB
+   with index/length), `null(neg -5)` (negative index),
+   `null(.field)` (chain stops at null record).  Genuine null
+   values stay as bare `null`.  Text/char nulls render as `null`
+   (never empty — empty looks like a missing variable, not a
+   fault).  **Out-of-scope contexts**: `{:j}` JSON format keeps
+   `null` (must produce valid JSON); explicit `?? "fallback"` in
+   a format string respects the fallback.  **Width handling**:
+   when the format spec has a hard width (`{x:>5}`) the suffix
+   truncates to `null(...)` so columns stay stable.
+   `LOFT_FORMAT_BARE_NULL=1` env var suppresses the suffix for
+   production deployments that surface format strings to end
+   users.  Implementation: side table keyed by IR-node identity
+   carrying `RuntimeErrorKind` from the swap point through to
+   the renderer; no `Value` enum bloat.  (Tracked as **4e.3**
+   in the README sub-phase table; queued AFTER 4e.2.)
+10. `doc/claude/LOGGER.md` § Runtime event logging + § Production
+    setup; document the three-way defense contract + warning.
+11. Status block update.
 
 ### Severity per kind (production mode)
 
