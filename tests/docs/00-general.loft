@@ -51,12 +51,15 @@ fn main() {
   // Format strings use '{expression}' — you can embed any expression, not just names.
   assert("{greeting} The answer is {x * y}." == "Hello, Loft! The answer is 42.", "Format strings interpolate expressions");
   // ## Null in practice
-  // Dividing by zero produces null instead of crashing.
-  // In a condition, null is treated as false, so '!' turns it into true.
-  // This makes it easy to handle unexpected values gracefully.
+  // Dividing by zero produces null when defended with `?? null` or a
+  // following null-check, instead of crashing.  In a condition, null
+  // is treated as false, so '!' turns it into true.  This makes it
+  // easy to handle unexpected values gracefully.  Without a defense,
+  // bare `1 / 0` halts in development with a typed error; in
+  // production it logs a warning + continues with the null sentinel.
   zero = 0;
-  result = 12 / zero;
-  assert(!result, "Dividing by zero gives null, which is false-like");
+  result = 12 / zero ?? null;
+  assert(!result, "Dividing by zero gives null when defended");
   // ## if is an expression
   // Every 'if/else' can be used on the right side of an assignment.
   // The value of the chosen branch becomes the value of the whole expression.

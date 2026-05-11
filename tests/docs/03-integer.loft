@@ -33,22 +33,27 @@ fn main() {
   assert(pow(2.0, 3.0) == 8.0, "pow() for exponentiation");
   // 'abs()' returns the absolute value — the distance from zero, always positive.
   assert(1 + abs(-2) == 3, "abs(-2) == 2");
-  // ## Division by zero produces null, not a crash
-  // Most languages crash or throw an exception on division by zero.
-  // Loft produces null instead, which behaves like false in conditions.
-  // This lets you handle missing or bad data gracefully with a simple '!'.
+  // ## Division by zero — explicit null with `?? null`
+  // Most languages crash on division by zero.  Loft has TWO modes:
+  // - **Defended** (with `?? null` or `if x != null { ... }` after):
+  //   the divide silently produces null and execution continues.
+  //   This lets you handle missing or bad data gracefully.
+  // - **Undefended** (bare `1 / 0`): in development the program halts
+  //   with a typed `error: divide by zero` and the source location;
+  //   in production the program logs a warning + continues with the
+  //   null sentinel so deployed games / servers never abort on
+  //   user-attributable edge cases.
   a = 2 * 2;
   a -= 4;
   // a is now 0
-  assert(!(12 / a), "Division by zero gives null");
+  assert(!(12 / a ?? null), "Division by zero gives null when defended with `?? null`");
   // ## Warning when you write a literal zero divisor
   // When the divisor is a literal 0 written directly in your source code, loft
   // warns you while reading your code (before running it), because that is almost
   // certainly a mistake:
   //   n / 0   // warning: Division by constant zero
   //   n % 0   // warning: Modulo by constant zero
-  // The expression still runs and returns null — the warning is informational,
-  // not an error. Use a variable (like 'a' above) when you intentionally want
+  // Use a variable (like 'a' above) when you intentionally want
   // null-on-zero division without a warning.
   // ## Embedding integers in text
   assert("a{12}b" == "a12b", "Integer in format string");

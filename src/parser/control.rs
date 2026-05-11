@@ -407,25 +407,6 @@ impl Parser {
             }
         }
         // Plan-07 phase 4d.2 — defensive-check flow-analysis.  When
-        // a fault-prone op's result is assigned to a variable AND the
-        // immediately-following sibling is an `if` whose condition
-        // mentions that variable, the user has written defensive code
-        // (`if x != null { use(x) }`, `if x { use(x) }`, etc.) — swap
-        // the source op to its Nullable peer so neither log nor halt
-        // fires.  Both `if x != null` and bare `if x` (truthy check)
-        // are accepted; loft's `if x` lowers to a Reference→Boolean
-        // conversion that's `false` for null DbRef / 0 / null int —
-        // which is exactly the defensive shape we want to honor.
-        //
-        // Single-block, single-step lookahead: covers the canonical
-        // pattern.  Cross-function defenses or many-statement gaps
-        // fall through to the raising peer + log path; phase 4e's
-        // compile-time warning will nudge those toward the
-        // recognised defenses.
-        if !self.first_pass {
-            self.rewrite_defended_fault_sites(&mut l);
-        }
-        // Plan-07 phase 4d.2 — defensive-check flow-analysis.  When
         // a fault-prone op's result is assigned to a variable AND
         // the immediately-following sibling is an `if` whose
         // condition mentions that variable, the user has written

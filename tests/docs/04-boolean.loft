@@ -25,12 +25,16 @@ fn main() {
   assert(!(1 > 2 && 3 > 2), "First false → whole 'and' is false");
   assert(!(1 > 2 || 3 > 4), "Both false → 'or' is false");
   // ## Null in boolean context
-  // Division by zero (and other failed operations) produce null.
-  // Null in a boolean context is treated as false, so '!' is true.
-  // This lets you write guard clauses without a separate null-check syntax:
+  // Division by zero (and other failed operations) produce null when
+  // defended with `?? null` (or `if result != null { ... }` after the
+  // assignment).  Null in a boolean context is treated as false, so
+  // '!' is true.  This lets you write guard clauses without a separate
+  // null-check syntax:
   //   if !result { ... handle missing value ... }
+  // Without `?? null`, a bare `1 / 0` halts in development and logs
+  // a warning + continues with the sentinel in production.
   zero = 0;
-  assert(!(12 / zero), "null from division-by-zero is false-like");
+  assert(!(12 / zero ?? null), "null from division-by-zero is false-like when defended");
   assert(12 > 0, "positive integer is true");
   // ## Bitwise operators
   // While 'and'/'or' work on true/false values, bitwise operators work on

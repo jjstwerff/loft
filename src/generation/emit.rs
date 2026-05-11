@@ -225,7 +225,19 @@ impl Output<'_> {
                     };
                     write!(w, "return ")?;
                     if needs_p205_scratch {
-                        write!(w, "{{ stores.scratch.push((")?;
+                        // Plan-07 phase 4 — pre-bind the body's text
+                        // result into a local before calling
+                        // `stores.scratch.push(...)` so the inner
+                        // expression's mutable borrow of `stores`
+                        // (e.g. `stores.vec_ref_or_raise_runtime(...)`,
+                        // `stores.text_char_or_raise_runtime(...)`,
+                        // and any other `stores.X` call introduced
+                        // by the C66 production-mode helpers) doesn't
+                        // overlap with the `stores.scratch.push(...)`
+                        // borrow.  Without the pre-bind, rustc
+                        // rejects with E0499 (`cannot borrow *stores
+                        // as mutable more than once at a time`).
+                        write!(w, "{{ let _tmp = (")?;
                     } else if wrap_text {
                         write!(w, "Str::new(")?;
                     } else if narrow.is_some() {
@@ -255,7 +267,7 @@ impl Output<'_> {
                     if needs_p205_scratch {
                         write!(
                             w,
-                            ").to_string()); Str::new(stores.scratch.last().unwrap()) }}"
+                            ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
                         )?;
                     } else if wrap_text {
                         write!(w, ")")?;
@@ -1092,11 +1104,21 @@ impl Output<'_> {
                     if is_tail_capture_call {
                         write!(w, "let __native_tail_ret: DbRef = ")?;
                     } else if needs_p205_scratch {
-                        // Move the String into stores.scratch, then return
-                        // a Str pointing into the scratch entry.  The
-                        // `(value).to_string()` coerces &str / String /
-                        // Str all into an owned String.
-                        write!(w, "{{ stores.scratch.push((")?;
+                        // Plan-07 phase 4 — pre-bind the body's text
+                        // result into a local before calling
+                        // `stores.scratch.push(...)` so the inner
+                        // expression's mutable borrow of `stores`
+                        // (e.g. `stores.vec_ref_or_raise_runtime(...)`,
+                        // and any other `stores.X` call introduced
+                        // by the C66 production-mode helpers) doesn't
+                        // overlap with the `stores.scratch.push(...)`
+                        // borrow.  Without the pre-bind, rustc rejects
+                        // with E0499.  Move the resulting String into
+                        // `stores.scratch`, then return a Str pointing
+                        // into the scratch entry.  The
+                        // `(value).to_string()` coerces &str / String
+                        // / Str all into an owned String.
+                        write!(w, "{{ let _tmp = (")?;
                     } else if wrap_result {
                         write!(w, "Str::new(")?;
                     } else if narrow_cast.is_some() {
@@ -1108,7 +1130,7 @@ impl Output<'_> {
                     if needs_p205_scratch {
                         write!(
                             w,
-                            ").to_string()); Str::new(stores.scratch.last().unwrap()) }}"
+                            ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
                         )?;
                     } else if wrap_result {
                         write!(w, ")")?;

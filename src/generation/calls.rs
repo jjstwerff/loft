@@ -423,6 +423,14 @@ impl Output<'_> {
         res = res.replace("s.database.", "stores.");
         res = res.replace("s.db_from_text(", "db_from_text(stores, ");
         res = res.replace("crate::state::", "loft::state::");
+        // Plan-07 phase 4 — RuntimeErrorKind enum lives in
+        // `loft::runtime_error` (the loft crate); annotations spell
+        // it `crate::runtime_error::...` so the interpreter context
+        // (where `crate` IS loft) compiles.  Native context's `crate`
+        // is the user's binary; rewrite to the loft-qualified path
+        // so rustc resolves it.  Mirrors the `crate::state::` rewrite
+        // above.
+        res = res.replace("crate::runtime_error::", "loft::runtime_error::");
         // Initiative 03 Phase 3b: const_refs lives on both `State`
         // (interpreter path) and `Stores` (mirrored for native).
         // Translate template references so OpConstRef / OpConstStoreText

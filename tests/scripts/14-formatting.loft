@@ -55,7 +55,7 @@ fn main() {
   assert(citer == "0:😊,4:🙃,8:4", "char iter indices built as string");
   // --- Null integer formatting ---
   zero_div = 0;
-  null_int = 1 / zero_div;
+  null_int = 1 / zero_div ?? null;
   assert("{null_int}" == "null", "null integer formats as 'null'");
   // --- Negative integer formats ---
   assert("{-42}" == "-42", "negative int default");
