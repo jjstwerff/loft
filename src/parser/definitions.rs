@@ -915,6 +915,16 @@ impl Parser {
             // convention.  Run once per function in the second pass
             // (after const_param flags are settled).
             self.vars.warn_upper_case_locals(&mut self.lexer);
+            // Plan-07 phase 4e.2 — undefended fault-site warning.
+            // Walks this function's body looking for fault-prone op
+            // calls (OpDivInt / OpRemInt / OpGetVector / OpVectorRef /
+            // OpTextCharacter) that survived the 4d.1 / 4d.2 / 4e.1
+            // swap passes; emits `Level::Warning` unless an easy-proof
+            // skip pattern applies.  Silenceable via
+            // `LOFT_NO_WARN_RUNTIME=1` env var.  Second-pass only —
+            // first pass doesn't have the swap-pass results yet.
+            let body = self.data.definitions[self.context as usize].code.clone();
+            self.warn_undefended_fault_sites(&body);
         }
         self.lexer.has_token(";");
         self.parse_rust();

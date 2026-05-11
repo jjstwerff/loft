@@ -493,8 +493,24 @@ impl Test {
             if l.starts_with("Debug: ") {
                 continue; // Debug-level diagnostics are not surfaced in tests
             }
+            // Plan-07 phase 4e.2 — filter the undefended-fault-site
+            // compile-time warning so the existing diagnostic-
+            // comparison harness doesn't see it as unexpected output.
+            // Tests that specifically want to assert on the warning
+            // can do so by including the warning text in the
+            // `Test::warnings` expected set; the filter only fires
+            // when the line was NOT explicitly expected.  Tests
+            // that exercise the fault-site warning end-to-end live
+            // in `tests/runtime_warnings.rs` (binary-level via
+            // Command::new — phase 4e.2 spec test set).
+            let is_runtime_warning = l.starts_with("Warning: integer division may produce null")
+                || l.starts_with("Warning: integer modulus may produce null")
+                || l.starts_with("Warning: `v[i]` may produce null")
+                || l.starts_with("Warning: `s[i]` may produce null");
             if expected.contains(l) {
                 expected.remove(l);
+            } else if is_runtime_warning {
+                continue;
             } else {
                 if !found.is_empty() {
                     found += "|";

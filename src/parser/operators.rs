@@ -1243,3 +1243,262 @@ impl Parser {
         None
     }
 }
+
+// ---------------------------------------------------------------------------
+// Plan-07 phase 4e.2 — undefended fault-site compile-time warning
+// ---------------------------------------------------------------------------
+//
+// Walks a parsed function body and emits `Level::Warning` at each
+// fault-prone op call (OpDivInt / OpRemInt / OpGetVector / OpVectorRef /
+// OpTextCharacter) that survived the 4d.1 / 4d.2 / 4e.1 swap passes —
+// i.e., sites with no recognised defense.  The four canonical safe
+// patterns from `04-runtime-error-kinds.md § Easy-proof skip list` are
+// recognised here and quietly suppressed; without the skip list the
+// warning would fire on most well-written loft code and developers
+// would silence it within a session, defeating its purpose.
+//
+// Skip patterns implemented (per the design):
+//   1. Constant non-zero literal divisor for OpDivInt / OpRemInt.
+//   2. Constant non-negative literal index for OpGetVector / OpVectorRef
+//      / OpTextCharacter (the developer typed a literal — trust it; if
+//      it overruns at runtime the runtime fault still fires).
+//   3. Index is the iteration variable of an enclosing for-loop
+//      (`for i in <range> { … v[i] … }` — the loop's bound is the
+//      developer's contract).
+//   4. (Implicitly) sites inside `if x != null` / `if x` / format-string
+//      interpolations — those were already swapped to Nullable peers by
+//      4d.2 / 4e.1 BEFORE this walker runs, so the raising form is
+//      gone from the IR there.
+
+#[derive(Default)]
+struct WarnCtx {
+    /// Variable slots currently active as for-loop iteration variables.
+    /// When a fault op uses `Var(v)` as its index AND `v` ∈ this set, we
+    /// skip the warning (skip pattern 3).
+    iter_vars: std::collections::HashSet<u16>,
+    /// Position of the innermost enclosing `Value::Span` — used as the
+    /// fault site's source location when we emit a warning.
+    last_pos: Option<Position>,
+}
+
+#[derive(Copy, Clone)]
+enum FaultKind {
+    Div,
+    Rem,
+    VectorIndex,
+    TextIndex,
+}
+
+impl Parser {
+    /// Plan-07 phase 4e.2 — entry point.  Called from `parse_function`
+    /// AFTER `parse_code` (the body parse) AND after `vars.test_used` /
+    /// `warn_upper_case_locals` (so the diagnostic ordering matches
+    /// existing per-function passes).  Second-pass only — the first
+    /// pass doesn't have the swap-pass results in place.
+    ///
+    /// Silenceable via `LOFT_NO_WARN_RUNTIME=1` env var.  Stdlib
+    /// (`default/*.loft`) is exempt — its functions are
+    /// language-internal trusted code (they implement the very
+    /// fault-handling primitives the warning is meant to nudge users
+    /// toward) and warning on them is noise.
+    pub(crate) fn warn_undefended_fault_sites(&mut self, body: &Value) {
+        if self.default {
+            return;
+        }
+        if std::env::var("LOFT_NO_WARN_RUNTIME").is_ok_and(|v| v == "1" || v == "true") {
+            return;
+        }
+        let mut ctx = WarnCtx::default();
+        self.walk_for_warnings(body, &mut ctx);
+    }
+
+    fn walk_for_warnings(&mut self, code: &Value, ctx: &mut WarnCtx) {
+        match code {
+            Value::Span(boxed) => {
+                let saved = ctx.last_pos.clone();
+                ctx.last_pos = Some(boxed.0.clone());
+                self.walk_for_warnings(&boxed.1, ctx);
+                ctx.last_pos = saved;
+            }
+            Value::Call(def_nr, args) => {
+                let name = self.data.def(*def_nr).original_name();
+                let kind: Option<FaultKind> = match name.as_str() {
+                    "DivInt" => Some(FaultKind::Div),
+                    "RemInt" => Some(FaultKind::Rem),
+                    "GetVector" | "VectorRef" => Some(FaultKind::VectorIndex),
+                    "TextCharacter" => Some(FaultKind::TextIndex),
+                    _ => None,
+                };
+                if let Some(kind) = kind
+                    && !is_easy_proof(kind, args, ctx)
+                {
+                    self.emit_undefended_warning(kind, ctx);
+                }
+                for arg in args {
+                    self.walk_for_warnings(arg, ctx);
+                }
+            }
+            Value::CallRef(_, args) => {
+                for arg in args {
+                    self.walk_for_warnings(arg, ctx);
+                }
+            }
+            Value::Iter(_, init, step, body) => {
+                // The Iter's `u16` is the iterator's INTERNAL var
+                // (e.g., `i#index` / `range`), NOT the user-visible
+                // loop var.  The user-visible loop var is set OUTSIDE
+                // the Iter via `Loop { Set(loop_var, Iter(…)); body }`
+                // — handled by the `Loop` arm's lookahead below.
+                self.walk_for_warnings(init, ctx);
+                self.walk_for_warnings(step, ctx);
+                self.walk_for_warnings(body, ctx);
+            }
+            Value::Block(b) => {
+                for child in &b.operators {
+                    self.walk_for_warnings(child, ctx);
+                }
+            }
+            Value::Loop(b) => {
+                // Recognise the canonical for-loop shape that the
+                // parser emits:
+                //   Loop {
+                //     Set(loop_var, Block { name: "Iter range" / "Iter …",
+                //                           operators: [increment, break-check, yield] });
+                //     Block { user body using loop_var };
+                //   }
+                // Marking `loop_var` as iter-bound for the whole
+                // Loop's operators makes skip-pattern 3 fire on
+                // `v[loop_var]` reads inside the body.
+                //
+                // We accept either:
+                //  (a) the RHS Block is named with an "Iter " prefix
+                //      (today: "Iter range" / "Iter " variants), or
+                //  (b) the RHS subtree contains a `Value::Break` (the
+                //      iter step signals end-of-iteration via break).
+                // Both are robust to parser-name changes — (b) is the
+                // semantic check, (a) is the fast-path.
+                fn contains_break(v: &Value) -> bool {
+                    match v.unspan() {
+                        Value::Break(_) | Value::BreakWith(_, _) => true,
+                        Value::Block(b) | Value::Loop(b) => {
+                            b.operators.iter().any(contains_break)
+                        }
+                        Value::If(_, t, e) => contains_break(t) || contains_break(e),
+                        Value::Set(_, s) | Value::Drop(s) | Value::Return(s) => {
+                            contains_break(s)
+                        }
+                        _ => false,
+                    }
+                }
+                let mut loop_vars_added: Vec<u16> = Vec::new();
+                for child in &b.operators {
+                    if let Value::Set(loop_var, src) = child.unspan() {
+                        let is_iter_step = match src.unspan() {
+                            Value::Iter(..) => true,
+                            Value::Block(blk) => {
+                                blk.name.starts_with("Iter ")
+                                    || blk.operators.iter().any(contains_break)
+                            }
+                            _ => false,
+                        };
+                        if is_iter_step && ctx.iter_vars.insert(*loop_var) {
+                            loop_vars_added.push(*loop_var);
+                        }
+                    }
+                }
+                for child in &b.operators {
+                    self.walk_for_warnings(child, ctx);
+                }
+                for v in loop_vars_added {
+                    ctx.iter_vars.remove(&v);
+                }
+            }
+            Value::If(cond, then_b, else_b) => {
+                self.walk_for_warnings(cond, ctx);
+                self.walk_for_warnings(then_b, ctx);
+                self.walk_for_warnings(else_b, ctx);
+            }
+            Value::Set(_, src)
+            | Value::Return(src)
+            | Value::Drop(src)
+            | Value::BreakWith(_, src)
+            | Value::Yield(src)
+            | Value::TuplePut(_, _, src) => {
+                self.walk_for_warnings(src, ctx);
+            }
+            Value::Tuple(items) | Value::Insert(items) | Value::Parallel(items) => {
+                for child in items {
+                    self.walk_for_warnings(child, ctx);
+                }
+            }
+            // Other Value variants (Int / Long / Text / Var / FnRef /
+            // Keys / Boolean / etc.) carry no nested fault-prone calls.
+            _ => {}
+        }
+    }
+
+    fn emit_undefended_warning(&mut self, kind: FaultKind, ctx: &WarnCtx) {
+        let msg = match kind {
+            FaultKind::Div => {
+                "integer division may produce null on divide-by-zero with no defensive check; \
+                 consider `a / b ?? 0` or wrap in `if b != 0 { ... }`"
+            }
+            FaultKind::Rem => {
+                "integer modulus may produce null on divide-by-zero with no defensive check; \
+                 consider `a % b ?? 0` or wrap in `if b != 0 { ... }`"
+            }
+            FaultKind::VectorIndex => {
+                "`v[i]` may produce null on out-of-bounds with no defensive check; \
+                 consider `v[i] ?? <fallback>`, `if i < len(v) { v[i] }`, \
+                 or `x = v[i]; if x != null { ... }`"
+            }
+            FaultKind::TextIndex => {
+                "`s[i]` may produce null on out-of-bounds with no defensive check; \
+                 consider `s[i] ?? <fallback>`, `if i < len(s) { s[i] }`, \
+                 or `x = s[i]; if x != null { ... }`"
+            }
+        };
+        if let Some(pos) = &ctx.last_pos {
+            self.lexer.pos_diagnostic(Level::Warning, pos, msg);
+        } else {
+            self.lexer.diagnostic(Level::Warning, msg);
+        }
+    }
+}
+
+/// Evaluate the easy-proof skip list against a fault-prone call's args.
+/// Returns `true` when a skip pattern matches and the warning should
+/// NOT fire.
+fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx) -> bool {
+    fn lit_int(v: &Value) -> Option<i64> {
+        match v.unspan() {
+            Value::Int(n) => Some(i64::from(*n)),
+            Value::Long(n) => Some(*n),
+            _ => None,
+        }
+    }
+    match kind {
+        FaultKind::Div | FaultKind::Rem => {
+            // Skip pattern 1 — divisor is a non-zero literal.
+            args.get(1).and_then(lit_int).is_some_and(|n| n != 0)
+        }
+        FaultKind::VectorIndex | FaultKind::TextIndex => {
+            // Index is the LAST arg in both `OpGetVector(coll, size, idx)`
+            // and `OpVectorRef(coll, idx)` and `OpTextCharacter(text, idx)`.
+            let Some(idx) = args.last() else {
+                return false;
+            };
+            // Skip pattern 2 — non-negative literal index.
+            if lit_int(idx).is_some_and(|n| n >= 0) {
+                return true;
+            }
+            // Skip pattern 3 — index is an active for-loop iteration var.
+            if let Value::Var(v) = idx.unspan()
+                && ctx.iter_vars.contains(v)
+            {
+                return true;
+            }
+            false
+        }
+    }
+}
