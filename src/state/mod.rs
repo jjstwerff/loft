@@ -19,6 +19,18 @@ use crate::variables::size as var_size;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Error, Write};
 use std::sync::Arc;
+use std::sync::OnceLock;
+
+/// Plan-07 phase 4g.3 — read once at first raise.  When set
+/// (env var `LOFT_DEV_SOFT_HALT=1` or CLI flag `--dev-soft-halt`
+/// which exports the env var), demote dev-mode raises to
+/// log-and-continue so a single run surfaces every fault site.
+fn dev_soft_halt_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("LOFT_DEV_SOFT_HALT").is_ok_and(|v| v == "1" || v == "true")
+    })
+}
 
 pub const STRING_NULL: &str = "\0";
 
@@ -1565,11 +1577,40 @@ impl State {
             .as_ref()
             .and_then(|l| l.lock().ok())
             .is_some_and(|l| l.config.production);
-        if production {
+        // Plan-07 phase 4g.3 — `--dev-soft-halt` (CLI flag /
+        // `LOFT_DEV_SOFT_HALT=1` env var) demotes development-mode
+        // raises to log-and-continue (matches production
+        // semantics) so a single run surfaces every fault site
+        // instead of halting on the first.  Useful when porting
+        // scripts: get the full pattern of breakage in one shot.
+        // The flag forces the production branch regardless of the
+        // logger's `production` flag.  When no logger is attached
+        // the fault is rendered to stderr via main.rs's
+        // pretty-print path on exit (had_fatal is still set so
+        // main.rs exits non-zero).
+        let dev_soft_halt = dev_soft_halt_enabled();
+        if production || dev_soft_halt {
             if let Some(logger) = &self.database.logger
                 && let Ok(mut lg) = logger.lock()
             {
                 lg.log_runtime_kind(&kind, position.as_ref());
+            }
+            // In dev-soft-halt mode, ALWAYS render the fault to
+            // stderr so the developer sees each one as it
+            // happens — they ran `--dev-soft-halt` specifically
+            // to see the full pattern of breakage in one run.
+            // Logger emission (above) doubles to the log file
+            // when a logger is attached but does NOT replace
+            // the stderr surface.
+            if dev_soft_halt {
+                eprintln!(
+                    "soft-halt: {} at {}",
+                    kind.describe(),
+                    position.as_ref().map_or_else(
+                        || "?".to_string(),
+                        |p| format!("{}:{}:{}", p.file, p.line, p.pos)
+                    )
+                );
             }
             self.database.had_fatal = true;
             return;
@@ -1579,11 +1620,33 @@ impl State {
         // short-circuits and main.rs renders the typed error.
         let message = kind.describe();
         let op_pc = self.code_pos;
+        // Plan-07 phase 4g.1 / 4g.2 slice 1 — capture the call
+        // chain (innermost first) so main.rs can render it after
+        // the typed-error block.  Each entry is the function name
+        // (the `n_` prefix from the global registry stripped).
+        // Slice 2 will add per-frame source positions and named-arg
+        // value snapshots; slice 1 ships the function-chain shape.
+        let call_chain: Vec<String> = if self.data_ptr.is_null() {
+            Vec::new()
+        } else {
+            // SAFETY: data_ptr is set at execute_argv start and
+            // cleared at exit; valid for the lifetime of `raise`.
+            let data = unsafe { &*self.data_ptr };
+            self.call_stack
+                .iter()
+                .rev() // innermost first
+                .map(|frame| {
+                    let name = data.def(frame.d_nr).name.clone();
+                    name.strip_prefix("n_").unwrap_or(&name).to_string()
+                })
+                .collect()
+        };
         self.database.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError {
             kind,
             position,
             op_pc,
             message,
+            call_chain,
         }));
         self.database.had_fatal = true;
     }

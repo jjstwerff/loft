@@ -346,6 +346,108 @@ fn main() {
     );
 }
 
+// ── Plan-07 phase 4g — soft-halt + call-chain rendering ─────────────────────
+
+/// `--dev-soft-halt` continues past the first fault and reports
+/// every fault site to stderr instead of halting on the first.
+#[test]
+fn g4g_soft_halt_continues_past_faults() {
+    let source = "\
+fn main() {
+  z = 0;
+  bad1 = 1 / z;
+  bad2 = 2 / z;
+  print(\"done\\n\");
+}
+";
+    let script_path = std::env::temp_dir().join("loft_w42_g4g_soft.loft");
+    std::fs::write(&script_path, source).expect("write");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg("--dev-soft-halt")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .env_remove("LOFT_NO_WARN_RUNTIME")
+        .output()
+        .expect("invoke loft");
+    let _ = std::fs::remove_file(&script_path);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Both faults rendered to stderr.
+    assert!(
+        stderr.contains("soft-halt: divide by zero")
+            && stderr.matches("soft-halt: divide by zero").count() == 2,
+        "expected 2 soft-halt fault lines on stderr; got {stderr:?}"
+    );
+    // Script ran past faults to print "done".
+    assert!(
+        stdout.contains("done"),
+        "soft-halt must continue execution; got stdout={stdout:?}"
+    );
+    // Exit non-zero because had_fatal was set.
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "soft-halt with faults must exit 1"
+    );
+}
+
+/// Without `--dev-soft-halt`, the first fault halts execution.
+#[test]
+fn g4g_default_halts_on_first_fault() {
+    let source = "\
+fn main() {
+  z = 0;
+  bad1 = 1 / z;
+  bad2 = 2 / z;
+  print(\"done\\n\");
+}
+";
+    let (stdout, _stderr, code) = run_with_warnings("g4g_no_soft", source);
+    assert_eq!(code, Some(1));
+    assert!(
+        !stdout.contains("done"),
+        "default mode must halt on first fault; got stdout={stdout:?}"
+    );
+}
+
+/// Faults inside a call chain render the chain after the typed
+/// error, innermost first.
+#[test]
+fn g4g_call_chain_rendered() {
+    let source = "\
+fn divide_safely(a: integer, b: integer) -> integer {
+  return a / b;
+}
+
+fn calculate_damage(base: integer, armor: integer) -> integer {
+  reduced = divide_safely(base * 100, armor);
+  return reduced;
+}
+
+fn main() {
+  enemy_armor = 0;
+  dmg = calculate_damage(50, enemy_armor);
+  print(\"damage: {dmg}\\n\");
+}
+";
+    let (_stdout, stderr, code) = run_with_warnings("g4g_chain", source);
+    assert_eq!(code, Some(1), "must halt at fault");
+    // Innermost frame named first, then chevron + outer frames.
+    assert!(
+        stderr.contains("in fn divide_safely() ← called from"),
+        "expected innermost-first chain header; got stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("fn calculate_damage()"),
+        "expected outer frame; got stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("fn main()"),
+        "expected top frame; got stderr={stderr:?}"
+    );
+}
+
 // ── Plan-07 phase 4f — float / single div / mod by zero raises ──────────────
 
 /// Undefended float div by zero raises and halts in dev mode.

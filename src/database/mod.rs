@@ -964,11 +964,20 @@ impl Stores {
             .as_ref()
             .and_then(|l| l.lock().ok())
             .is_some_and(|l| l.config.production);
-        if production {
+        // Plan-07 phase 4g.3 — `--dev-soft-halt` mirror of the
+        // State::raise path.  When the env var is set, demote to
+        // log-and-continue regardless of logger.production flag
+        // so a single run surfaces every fault site.
+        let dev_soft_halt =
+            std::env::var("LOFT_DEV_SOFT_HALT").is_ok_and(|v| v == "1" || v == "true");
+        if production || dev_soft_halt {
             if let Some(logger) = &self.logger
                 && let Ok(mut lg) = logger.lock()
             {
                 lg.log_runtime_kind(&kind, None);
+            }
+            if dev_soft_halt {
+                eprintln!("soft-halt: {}", kind.describe());
             }
             self.had_fatal = true;
             return;
@@ -979,6 +988,10 @@ impl Stores {
             position: None,
             op_pc: u32::MAX,
             message,
+            // Stores-side raise (native codegen path) has no
+            // access to call_stack; slice 2 of 4g.1 will thread
+            // it through.
+            call_chain: Vec::new(),
         }));
         self.had_fatal = true;
     }

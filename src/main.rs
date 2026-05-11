@@ -132,6 +132,15 @@ fn print_help() {
         "  --native-debug                like --native but compile with -Cdebuginfo=2 (DWARF)"
     );
     println!(
+        "  --dev-soft-halt               demote dev-mode runtime raises to log-and-continue"
+    );
+    println!(
+        "                                (also: LOFT_DEV_SOFT_HALT=1) — surfaces every fault"
+    );
+    println!(
+        "                                site in a single run instead of halting on the first"
+    );
+    println!(
         "                                and preserve the generated .rs on disk; combine with"
     );
     println!("                                --native-release for optimised + debug-info");
@@ -1348,6 +1357,21 @@ fn main() {
             // optimised + debug-info is wanted.
             native_mode = true;
             native_debug = true;
+        } else if a == "--dev-soft-halt" {
+            // Plan-07 phase 4g.3 — demote dev-mode raises to
+            // log-and-continue so a single run surfaces every
+            // fault site.  Useful for porting / first-pass
+            // scripts where the full pattern of breakage
+            // matters more than fast loop-back on one site.
+            //
+            // SAFETY: set_var is unsafe in Rust 2024.  We set
+            // the env var BEFORE any State is created (the
+            // State::raise check reads via OnceLock that
+            // captures the value on first call), so no
+            // concurrent reads are in flight.
+            unsafe {
+                std::env::set_var("LOFT_DEV_SOFT_HALT", "1");
+            }
         } else if a == "--native-emit" {
             // Optional path: consume next arg only if it looks like an output path
             native_emit = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
@@ -2614,6 +2638,29 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
         let color = crate::diagnostic_render::ColorMode::Auto;
         let rendered = crate::diagnostic_render::render_entry_pretty(&entry, &loader, color);
         eprint!("{rendered}");
+        // Plan-07 phase 4g.1 / 4g.2 slice 1 — render the
+        // call-chain captured at raise time after the typed-
+        // error block.  Innermost first so the eye lands on
+        // the function the fault fired in; chevron points
+        // outward to indicate the call sequence.  Top-level
+        // (single-frame) chains are skipped; the source
+        // location already names the function in spirit via
+        // its file:line:col.
+        if err.call_chain.len() > 1 {
+            let trimmed: Vec<&str> = err
+                .call_chain
+                .iter()
+                .map(String::as_str)
+                .take(5) // top 5 frames; rest summarised
+                .collect();
+            eprintln!("  in fn {}() ← called from", trimmed[0]);
+            for name in &trimmed[1..] {
+                eprintln!("        fn {name}()");
+            }
+            if err.call_chain.len() > 5 {
+                eprintln!("        … ({} more frames)", err.call_chain.len() - 5);
+            }
+        }
     }
     if state.database.had_fatal {
         std::process::exit(1);

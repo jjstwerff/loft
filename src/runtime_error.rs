@@ -56,6 +56,16 @@ pub struct RuntimeError {
     /// shown after the kind label (e.g. `"divide by zero in `attack /
     /// armour`"`).
     pub message: String,
+    /// Plan-07 phase 4g.1 / 4g.2 — call-chain at raise time
+    /// (innermost first).  Each entry is the function's name as it
+    /// appeared in source (the `n_<name>` registry strips its prefix).
+    /// Empty when raised outside a function (e.g., top-level script
+    /// scope) or when the State call_stack wasn't available (the
+    /// Stores-side `raise_runtime` path leaves it empty — native
+    /// codegen lacks call-stack capture today, slice-2 work).
+    /// Rendered as `  in fn <innermost>() ← fn <next>() ← …` after
+    /// the typed-error block in main.rs.
+    pub call_chain: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +148,7 @@ impl RuntimeError {
             position,
             op_pc: u32::MAX,
             message: detail,
+            call_chain: Vec::new(),
         }
     }
 
@@ -156,6 +167,7 @@ impl RuntimeError {
             position,
             op_pc: u32::MAX,
             message: detail,
+            call_chain: Vec::new(),
         }
     }
 
