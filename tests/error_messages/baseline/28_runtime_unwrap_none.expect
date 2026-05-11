@@ -1,8 +1,8 @@
 ==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-error: assertion failed: expected non-null but got null sentinel
-  --> <cases>/28_runtime_unwrap_none.loft:4:1
+error: divide by zero
+  --> <cases>/28_runtime_unwrap_none.loft:3:10
   |
-4 |   assert(x, "expected non-null but got null sentinel");
-  | ^
+3 |   x = 1 / z;
+  |          ^

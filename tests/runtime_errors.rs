@@ -121,6 +121,87 @@ fn main() {
     );
 }
 
+/// Phase 4 step 4.3 — integer `/` by zero produces a `DivideByZero`
+/// runtime error pointing at the `/` operator's source position
+/// (Plan-07 phase 1's Span wrap on binary `/`).
+#[test]
+fn kind_divide_by_zero_int_prints_pretty_error() {
+    let source = "\
+fn main() {
+  a = 10;
+  b = 0;
+  c = a / b;
+  print(\"{c}\\n\");
+}
+";
+    let (stdout, stderr, code) = run_loft_snippet("rt_div0_int", source);
+    assert_eq!(code, Some(1), "divide by zero should exit 1");
+    assert!(
+        !stdout.contains("c="),
+        "post-fault stdout should NOT print; got: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("error:") && stderr.contains("divide by zero"),
+        "stderr missing divide-by-zero entry; got: {stderr:?}"
+    );
+    // Caret should point at the `/` operator's column (Plan-07 phase 1
+    // wraps binary `/` in `Value::Span` at the operator token).
+    assert!(
+        stderr.contains("--> ") && stderr.contains(":4:"),
+        "stderr missing source location at line 4 (the `/` line); got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("panicked at"),
+        "stderr still contains a Rust panic — typed RuntimeError conversion bypassed; got: {stderr:?}"
+    );
+}
+
+/// Phase 4 step 4.4 — integer `%` by zero produces the same
+/// `DivideByZero` kind (mod-by-zero shares the kind because the
+/// underlying op is the same indeterminate-result fault).
+#[test]
+fn kind_mod_by_zero_int_prints_pretty_error() {
+    let source = "\
+fn main() {
+  c = 7 % 0;
+  print(\"{c}\\n\");
+}
+";
+    let (_stdout, stderr, code) = run_loft_snippet("rt_mod0_int", source);
+    assert_eq!(code, Some(1), "mod by zero should exit 1");
+    assert!(
+        stderr.contains("error:") && stderr.contains("divide by zero"),
+        "stderr missing divide-by-zero entry for `%`; got: {stderr:?}"
+    );
+}
+
+/// The nullable `??`-rescued shape STILL produces the sentinel +
+/// fallback; conversion to typed errors only changes the
+/// non-nullable variant per the C54.G-hybrid design.  Regression
+/// guard so a future "raise on every div" change doesn't break
+/// `?? 0` programs.
+#[test]
+fn divide_by_zero_with_nullable_rescue_does_not_raise() {
+    let source = "\
+fn main() {
+  a = 10;
+  b = 0;
+  c = a / b ?? 42;
+  print(\"{c}\\n\");
+}
+";
+    let (stdout, stderr, code) = run_loft_snippet("rt_div0_nullable", source);
+    assert_eq!(code, Some(0), "?? rescue should exit 0; stderr={stderr:?}");
+    assert!(
+        stdout.contains("42"),
+        "expected `?? 42` to surface; got: {stdout:?}"
+    );
+    assert!(
+        !stderr.contains("divide by zero"),
+        "?? rescue path must NOT raise typed error; got: {stderr:?}"
+    );
+}
+
 /// A program without a panic / failed assert exits 0 and writes
 /// nothing to stderr from the runtime-error path — guards against the
 /// renderer firing on an empty `runtime_error` slot.

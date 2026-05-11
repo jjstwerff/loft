@@ -486,14 +486,24 @@ fn mul_int(s: &mut State) {
 fn div_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_div_int(v_v1, v_v2);
+    let new_value = if v_v2 == 0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        0_i64
+    } else {
+        ops::op_div_int(v_v1, v_v2)
+    };
     s.put_stack(new_value);
 }
 
 fn rem_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_rem_int(v_v1, v_v2);
+    let new_value = if v_v2 == 0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        0_i64
+    } else {
+        ops::op_rem_int(v_v1, v_v2)
+    };
     s.put_stack(new_value);
 }
 

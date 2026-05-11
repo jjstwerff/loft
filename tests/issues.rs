@@ -5126,8 +5126,13 @@ fn inc29_bang_integer_zero_is_not_null() {
 
 #[test]
 fn inc29_bang_integer_null_is_caught() {
+    // Plan-07 phase 4 step 4.3 — `/` by zero now raises a typed
+    // RuntimeError on the non-nullable path; this test is about
+    // INC#29 (`!n` catches integer null), not about division.  Use
+    // an explicit nullable shape (`a / b ?? null`) so the divide
+    // still produces the null sentinel that `!n` is here to catch.
     code!(
-        "fn divide(a: integer, b: integer) -> integer { a / b }
+        "fn divide(a: integer, b: integer) -> integer { a / b ?? null }
 fn run() -> boolean {
     n = divide(1, 0);
     !n

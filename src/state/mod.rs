@@ -1528,6 +1528,31 @@ impl State {
         self.source_spans.range(..=pc).next_back().map(|(_, p)| p)
     }
 
+    /// Plan-07 phase 4 step 4.1 — raise a typed runtime error from a
+    /// fault-site opcode (div-by-zero, OOB, null-deref, narrow cast, …).
+    /// Resolves the offending pc back to a `Position` via the phase-1
+    /// `source_spans` table, populates `database.runtime_error`, and
+    /// sets `had_fatal = true` so `main.rs`'s exit-1 path fires after
+    /// the dispatch loop terminates.
+    ///
+    /// The dispatch loop in `execute_argv` / `resume` checks
+    /// `database.runtime_error.is_some()` AFTER each op and short-
+    /// circuits via `code_pos = u32::MAX` — callers don't have to
+    /// touch the loop machinery, just call `s.raise(kind)` and let
+    /// the op finish (e.g. with a placeholder result on the stack).
+    pub fn raise(&mut self, kind: crate::runtime_error::RuntimeErrorKind) {
+        let position = self.source_loc_for(self.code_pos).cloned();
+        let message = kind.describe();
+        let op_pc = self.code_pos;
+        self.database.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError {
+            kind,
+            position,
+            op_pc,
+            message,
+        }));
+        self.database.had_fatal = true;
+    }
+
     /// Execute entry-point `name`, optionally passing `argv` as a `vector<text>` argument.
     ///
     /// If the named function has exactly one `vector<…>` parameter, the strings in `argv`

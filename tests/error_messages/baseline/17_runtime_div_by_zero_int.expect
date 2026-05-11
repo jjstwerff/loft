@@ -1,3 +1,8 @@
-==== exit: 0 ====
+==== exit: 1 ====
 ==== stdout ====
-result=null==== stderr ====
+==== stderr ====
+error: divide by zero
+  --> <cases>/17_runtime_div_by_zero_int.loft:3:15
+  |
+3 |   result = 1 / z;
+  |               ^

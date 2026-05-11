@@ -163,9 +163,9 @@ fn OpMinInt(v1: integer, v2: integer) -> integer;
 fn OpMulInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_mul_int(@v1, @v2)"
 fn OpDivInt(v1: integer, v2: integer) -> integer;
-#rust"ops::op_div_int(@v1, @v2)"
+#rust"if @v2 == 0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); 0_i64 }} else {{ ops::op_div_int(@v1, @v2) }}"
 fn OpRemInt(v1: integer, v2: integer) -> integer;
-#rust"ops::op_rem_int(@v1, @v2)"
+#rust"if @v2 == 0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); 0_i64 }} else {{ ops::op_rem_int(@v1, @v2) }}"
 // C54.G-hybrid — nullable integer arithmetic.  Emitted only when the op's
 // result is the immediate LHS of `??` so `??` can discharge the null.
 fn OpAddIntNullable(v1: integer, v2: integer) -> integer;

@@ -5,11 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 4 — Typed runtime errors
 
-Status: in-progress (foundation + 2/9 sites shipped 2026-05-11).
-Steps 4.1, 4.2, 4.11 (panic builtin), 4.13 (assert) landed in this
-session.  Remaining: 4.3-4.10 (div, mod, vector/text index, null
-deref, narrow cast), 4.12 (stack overflow), 4.14 (backtrace
-capture), 4.15 (renderer frame list), 4.16 (bench gate).
+Status: in-progress (foundation + 4/9 sites shipped 2026-05-11).
+Steps 4.1, 4.2, 4.3 (integer `/`), 4.4 (integer `%`), 4.11
+(panic builtin), 4.13 (assert) landed.  Remaining: 4.5
+(float / single div), 4.6-4.7 (vector index OOB pos/neg), 4.8
+(text index), 4.9 (null deref), 4.10 (narrow cast), 4.12
+(stack overflow), 4.14 (backtrace capture), 4.15 (renderer
+frame list), 4.16 (bench gate).
 
 Foundation shape:
 
@@ -22,6 +24,12 @@ Foundation shape:
   `database.runtime_error.is_some()` after each op and short-
   circuits via `code_pos = u32::MAX`; `State::resume` mirrors
   the check for post-yield panic / assert.
+- `State::raise(kind)` helper resolves position via
+  `source_loc_for(code_pos)`, populates
+  `database.runtime_error`, sets `had_fatal`.  Op-level
+  fault sites use a one-line pattern in their
+  `default/01_code.loft` `#rust"..."` annotation:
+  `if @v2 == 0 { s.raise(...); 0_i64 } else { ops::op_div_int(...) }`.
 - `main.rs` renders captured errors through the existing phase-2
   `render_entry_pretty` and exits 1 via the existing
   `had_fatal` check (production-mode path unchanged: logs +
@@ -36,6 +44,18 @@ Site conversions shipped:
   `RuntimeError::user_panic`.
 - `n_assert` (`src/native.rs`): replaces Rust panic on failed
   assertion with `RuntimeError::assertion_failed`.
+- `OpDivInt` / `OpRemInt` (`default/01_code.loft` annotations,
+  regen-emitted in `src/fill.rs::div_int`, `rem_int`):
+  raises `DivideByZero` when `v2 == 0`; non-nullable variant
+  only.  Nullable `OpDivIntNullable` / `OpRemIntNullable`
+  unchanged — `??` flow keeps the sentinel.
+
+Pre-existing tests that relied on silent `i64::MIN` propagation
+(`expr_zero_divide`, `inc29_bang_integer_null_is_caught`)
+converted to use `?? null` so the divide goes through the
+nullable opcode and still produces the null sentinel for the
+test's `!n` / type-probe assertion (the runtime-error path is
+covered separately by `tests/runtime_errors.rs`).
 
 End-to-end output now reads:
 ```
