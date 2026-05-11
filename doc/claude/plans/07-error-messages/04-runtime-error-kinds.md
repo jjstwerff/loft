@@ -188,12 +188,60 @@ Sub-arc tracked in `~/.claude/plans/async-toasting-nest.md`
 | `NarrowCastOverflow` | `Warning` | Clamped value or sentinel; rare |
 | `StackOverflow` | `Fatal` | System-level; not recoverable; logged then host's frame loop decides whether to continue or restart |
 
+### Easy-proof skip list — REQUIRED for 4e.2 (not optional)
+
+Per the 2026-05-11 workflow evaluation, the 4e.2 warning is
+worse than nothing if it fires at every `v[i]` in code that
+the compiler could trivially prove safe — developers will
+silence it within a session and the safety net evaporates.
+4e.2 MUST recognise the four canonical safe patterns BEFORE
+landing.
+
+| Pattern | Skip when | Sketch |
+|---|---|---|
+| Bound loop variable | `for i in 0..len(v) { v[i] }` — `i` is bound to the exact `0..len(v)` range from the enclosing `Iter` | Track `var → CollectionLen(c)` on entry to `Value::Iter(var, init, …)` when `init` matches the `OpRange(0, OpLengthVector(c))` shape; clear on exit.  At fault-site walk, if the index var matches and the indexed collection is `c`, skip. |
+| Bound by `if i < len(v)` | The fault site is inside an `if` whose test is `Var(i) < OpLengthVector(c)` (or `<=` against `len-1`, or `i >= 0 && i < len(v)`); the indexed collection is `c` | Track `var → CollectionLen(c)` on entering the `then` branch of `Value::If`; clear on `else` and on exit.  Same lookup as the loop case. |
+| Constant-literal divisor | `Value::Int(n)` with `n != 0` (or `n.abs() > 0`) directly as the second operand of `OpDivInt` / `OpRemInt` | Pure pattern match — no context table needed. |
+| Constant-literal index | `Value::Int(n)` with `n >= 0` AND we can prove `n < known_len(c)` (only for vector literals constructed in the same block) | Track `var → KnownLen(N)` on `Set(var, OpVectorLiteral(N elements))`; same thing for `for` comprehensions with a constant range bound.  At fault-site walk, if index is a literal in `[0, N)` of the indexed `var`'s known length, skip. |
+
+The skip list grows as we observe real-world false-positive
+patterns; **each new skip case ships with a regression test
+in `tests/parse_errors.rs::warning_skip_<pattern>`**.  The bar
+for adding a skip case is low ("would a competent loft
+programmer reasonably expect this to be safe?"); the bar for
+removing one is high (silently changes from no-warning to
+warning, breaks downstream test goldens).
+
+Cases NOT covered by 4e.2 (intentionally — fall through to the
+runtime path + log entry):
+
+- Cross-function defenses: `helper_that_checks(x)` after `x =
+  v[i]`.  4e.2 has no inter-procedural analysis.
+- Indexed by a variable bound by an unrelated computation:
+  `j = compute(); v[j]`.  No way to prove `j < len(v)` without
+  CSP / range analysis.
+- Indexed by `find` / `position`: today these return either
+  `null` or an in-range index, but 4e.2's pattern matcher
+  doesn't yet recognise `Value::Set(j, OpFind(c, …))` as a
+  safe-by-source pattern.  Add as a skip case when the cost
+  of doing so is paid by a real false-positive complaint —
+  not pre-emptively.
+
 ### Remaining site conversions (steps 4.5 / 4.9 / 4.10 / 4.12)
 
 Inherit the same production-vs-dev shape via `State::raise`.
 Each adds a per-site fault check (e.g., null-DbRef field read,
 narrow-cast overflow check) that calls `s.raise(KIND)` and
-returns the existing sentinel.
+returns the existing sentinel.  ALL must also be wired through:
+
+- The 4d.1 / 4d.2 / 4e.1 swap tables — adding a new fault
+  kind WITHOUT a Nullable peer means `??` / `if x != null` /
+  format-string suppression silently fail to defend the new
+  site.  Each new fault kind ships with its Nullable peer in
+  the same commit.
+- The 4e.2 warning's per-kind diagnostic message.
+
+Sites:
 
 - 4.5 — float / single div by zero (sentinel: `f64::NAN` or
   IEEE behaviour kept on nullable)
@@ -203,7 +251,7 @@ returns the existing sentinel.
 - 4.12 — stack-overflow trap (no sentinel; production logs and
   host frame loop handles continuation)
 
-### Renderer / backtrace polish (steps 4.14, 4.15, 4.16)
+### Renderer / backtrace polish (steps 4.14, 4.15, 4.16, 4.17, 4.18)
 
 - 4.14 — capture `State::call_stack` into `RuntimeError.backtrace`
   at `raise` time, resolve each frame's source via phase-3's
@@ -213,6 +261,44 @@ returns the existing sentinel.
   for both dev-mode rendering and production-mode log entries.
 - 4.16 — bench delta ≤ 3 % vs phase 3 baseline; outline the
   fault-check branches with `#[cold]` if hot.
+- **4.17 — State snapshot at fault site.**  Per the 2026-05-11
+  workflow evaluation: today the dev-mode halt tells the
+  developer *where* `v[i]` was OOB but not *what* `v` and
+  `i` were at that moment.  The pieces are already on the
+  bytecode stack at fault time; surface them.  Capture the
+  named-arg values at `raise` time into a
+  `RuntimeError.snapshot: Vec<(String, ValueRepr)>` field
+  using the same `Display` formatter the format-string
+  renderer uses (so the snapshot prints exactly as the
+  developer would see them in `println("{x}")`).  Keep the
+  snapshot to direct argument values + the indexed
+  collection's `len`; do NOT walk arbitrary heap structures
+  (cost + cycles).  Renders inline with the diagnostic:
+
+  ```
+  error: index 5 out of bounds for length 3
+    --> game.loft:42:14
+     |
+  42 |     dmg = damage[idx];
+     |                 ^
+     = state: damage = [10, 20, 30] (len=3), idx = 5
+  ```
+
+  Production-mode log entries get the same line.  Closes the
+  "I have to add a print statement to find what i was"
+  failure mode.
+- **4.18 — `--dev-soft-halt` flag** (and `LOFT_DEV_SOFT_HALT=1`
+  env var equivalent).  Per the 2026-05-11 evaluation: dev-mode
+  halts at the first fault, which is right for tight diagnose-
+  fix loops but wrong for "show me the full pattern of breakage
+  in this newly-ported file."  The flag demotes development-mode
+  raises to log-and-continue (matches production semantics) so
+  the developer sees every fault site in a single run.  No new
+  machinery needed — the production branch in `State::raise`
+  already implements log-and-continue; the flag just toggles
+  which branch fires regardless of the logger's `production`
+  flag.  Renders the same per-kind diagnostic to stderr at each
+  fault site and exits non-zero at end if any fault fired.
 
 ## Goal
 

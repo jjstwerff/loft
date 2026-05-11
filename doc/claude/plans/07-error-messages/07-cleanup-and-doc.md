@@ -156,3 +156,22 @@ and fix.
 | Doc updates drift from code (writer reads the spec, not the source) | Phase 7 is the last phase; the writer reads the actual code (which is now stable) and the design docs as a cross-check. |
 | `LOFT_ERRORS=compact` is needed by an undocumented test that breaks under pretty default | The test harness sets `LOFT_ERRORS=compact` explicitly in `tests/common/`; user-facing default is pretty.  Any test that breaks indicates a missing harness setting and gets fixed. |
 | Future contributor adds a new fault site without a `RuntimeError` kind | The fault-site list in 04-runtime-error-kinds.md is enumerable; phase 7's COMPILER.md § Diagnostics references it as the single source of truth.  A linter rule (clippy or a custom check) is overkill — the single source is enough. |
+| Future contributor adds a new fault site without wiring the 4d/4e.1 swap tables and the 4e.2 warning message | Phase 4f's "defense-coupling rule" (per 2026-05-11 evaluation): each new fault kind ships its Nullable peer + adds itself to the swap tables + provides its 4e.2 warning message in the same commit.  Phase 7 adds the cross-check to the contributor checklist in `CONTRIBUTING.md` (or `CLAUDE.md § Adding a new fault site` if no CONTRIBUTING). |
+
+## New env-var additions to document in 7.4
+
+The plan-04 family ships several new env-var / CLI flag toggles
+that 7.4 must add to `CLAUDE.md` and `LOFT_LOG`-adjacent tables:
+
+| Flag | Effect | Phase |
+|---|---|---|
+| `LOFT_NO_WARN_RUNTIME=1` / `--no-warn-runtime` | Suppress the 4e.2 undefended-fault-site warning | 4e.2 |
+| `LOFT_FORMAT_BARE_NULL=1` | Suppress the 4e.3 `(reason)` suffix in format-string output (bare `null`) | 4e.3 |
+| `LOFT_NO_HINT_NOT_NULL=1` / `--no-hint-not-null` | Suppress the 4h `not null` field-reminder hint | 4h |
+| `LOFT_BT=full` | Render the full backtrace under a runtime-error diagnostic (default: top 3 frames) | 4g.1 |
+| `LOFT_DEV_SOFT_HALT=1` / `--dev-soft-halt` | Demote dev-mode raises to log-and-continue (matches production semantics) so a single run surfaces every fault site | 4g.3 |
+
+The toggles cluster — 7.4 introduces a `## Diagnostic toggles`
+section that lists them together with their default (always
+ON for the warning/hint/distinct-token paths; OFF for soft-halt
+and full-bt) and a one-liner for when to flip each.

@@ -497,6 +497,59 @@ production-mode silent + log path is wrong.  No such case is
 expected; the existing `n_panic` / `n_assert` production-mode
 behaviour has held for years without complaint.
 
+### Workflow corollaries (added 2026-05-11)
+
+The 2026-05-11 evaluation of the C66 framework against the
+day-to-day loft-development workflow surfaced four corollaries
+that bind the abstract C66 rule to the developer experience.
+All four are tracked under plan-07 phase 4:
+
+1. **Format strings are observability, never raise** — every
+   `{...}` interpolation auto-swaps to its Nullable peer at
+   parse time.  The `println("{x}")` you reach for to inspect
+   a bug must NEVER itself become the next bug.  Shipped as
+   phase 4e.1 (commit 8e74aa16).  Reasoning: a halt or log
+   inside the developer's diagnostic surface defeats the
+   point of the diagnostic.
+
+2. **Easy-proof skip list is REQUIRED for the warning** — the
+   4e.2 compile-time warning at undefended fault sites must
+   recognise the four canonical safe patterns (bound loop
+   variable / explicit length check / constant-literal
+   divisor / constant-literal index against known-length
+   vector) BEFORE landing.  A noisy warning gets disabled
+   within a session and the safety net evaporates; the skip
+   list is a release blocker, not a follow-up.  See
+   `plans/07-error-messages/04-runtime-error-kinds.md
+   § Easy-proof skip list — REQUIRED for 4e.2`.
+
+3. **State snapshot at fault site is the next-highest-leverage
+   workflow win** — the dev-mode halt today says *where* the
+   fault was but not *what* the values were.  Phase 4g.2
+   captures the named-arg values + indexed-collection length
+   into the rendered diagnostic so the developer sees
+   `damage = [10, 20, 30] (len=3), idx = 5` without having
+   to add a print statement to discover it.  The values are
+   already on the bytecode stack at fault time; surface them.
+
+4. **`not null` field reminder closes the long-term failure
+   mode** — when a struct field is read 47× across the
+   codebase and never compared to null, marking it `not null`
+   at the constructor eliminates the entire class of fault
+   sites for that field.  Phase 4h emits a `Level::Hint`
+   pointing at the constructor when the read pattern says
+   "this is morally not-null, mark it so."  Strictly better
+   than defending each read site individually with `?? null`.
+
+The corollaries together prevent the failure mode where
+`?? null` becomes pervasive defensive boilerplate that the
+2026-05-11 evaluation flagged ("everyone writes `?? null`
+everywhere because the warning fired").  4e.1 + 4h reduce
+the *count* of sites where the warning could fire; 4e.2's
+skip list ensures the warning only fires where defending
+is actually needed; 4g.2 makes diagnosis fast when defence
+is needed and not yet in place.
+
 ---
 
 ## Adding a new entry
