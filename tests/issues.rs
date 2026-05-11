@@ -12830,6 +12830,47 @@ fn p240_bounded_generic_two_operator_tuple_return() {
     .result(Value::Int(1));
 }
 
+/// P243 — bounded-generic fn returning a tuple with one or more
+/// `text` elements where one element is built by a bound-supplied
+/// method call (e.g. `(x.to_text(), "x")`) silently returned
+/// empty strings on `--native` because the missing `.to_string()`
+/// wrap on the bound-method element produced a `(Str, String)`
+/// tuple that rustc rejected with E0308.  Interp was correct.
+///
+/// Two coordinated fixes already shipped today addressed half of
+/// P243 incidentally:
+///   - P240's `is_t_stub_tuple_body` extension to
+///     `patch_hoisted_returns` made the tuple reach the Return
+///     position (was previously a discarded statement).
+///   - P238's `tuple_text_to_string` flag in
+///     `src/generation/emit.rs::Value::Return` already sets the
+///     wrap flag for `Tuple(text, …)` returns.
+///
+/// What remained: `infer_type` in `src/generation/emit.rs` had no
+/// `Value::Span` arm.  The parser Span-wraps fault-prone calls
+/// (every `obj.method()` site) for source-position tracking, so
+/// the bound-method call inside the tuple was `Span(Call(…))`,
+/// not bare `Call(…)`.  `infer_type(Span(Call))` returned `None`,
+/// so the Tuple emit arm's `elem_is_text` check silently failed
+/// and the `.to_string()` wrap didn't fire.
+///
+/// Fix: add `Value::Span(b) => self.infer_type(&b.1)` to the
+/// match in `infer_type` so it transparently looks through
+/// position wrappers — same shape as the Span-aware patches
+/// elsewhere in the codebase.
+#[test]
+fn p243_bounded_generic_tuple_with_text_method_call() {
+    code!(
+        "struct P243Item { p243_id: integer }
+fn to_text(self: P243Item) -> text { return \"item-{self.p243_id}\"; }
+fn p243_show_pair<T: Printable>(p243x: T) -> (text, text) {
+    return (p243x.to_text(), \"x\");
+}"
+    )
+    .expr("p243_show_pair(P243Item { p243_id: 7 }).0")
+    .result(Value::str("item-7"));
+}
+
 /// P239 — for-loop over `vector<T>` inside a generic fn crashed
 /// both backends.  Interp SIGSEGV; native rustc E0610
 /// `i64.rec`.  The for-loop iter-termination check

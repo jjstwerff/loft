@@ -645,6 +645,17 @@ impl Output<'_> {
     /// Infer the result type of an expression for generating typed null defaults.
     pub(super) fn infer_type(&self, v: &Value) -> Option<Type> {
         match v {
+            // P243 fix (2026-05-11): unwrap `Value::Span` so callers
+            // querying the wrapped expression's type get the inner
+            // value's type instead of `None`.  Without this, a
+            // bound-method call wrapped in `Span(Call(...))` (e.g.
+            // the bound-generic `x.to_text()` site that
+            // `parser/operators.rs` Span-wraps for source-position
+            // tracking) returned `None` from infer_type — and the
+            // tuple-emit arm's `.to_string()` wrap (which keys off
+            // `Some(Type::Text(_))`) silently skipped, producing a
+            // `(Str, String)` tuple that rustc rejected with E0308.
+            Value::Span(b) => self.infer_type(&b.1),
             Value::Int(_) => Some(Type::Integer(IntegerSpec::signed32())),
             Value::Long(_) => Some(crate::data::I64.clone()),
             Value::Float(_) => Some(Type::Float),
