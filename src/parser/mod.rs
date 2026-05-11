@@ -189,6 +189,30 @@ pub struct Parser {
     /// Each entry is a tab-separated record:
     /// `<fn_name>\t<line>:<col>\t<step_kind>\t<type_with_deps>`.
     pub trace_types_lines: Vec<String>,
+    /// Plan-07 phase 4h — per-(struct_d_nr, attr_idx) read counter.
+    /// Incremented by `Parser::field()` on the second pass each time a
+    /// field is READ (not assigned) on a user struct.  Surfaced at
+    /// end of parse: each non-`not_null` field whose read count >=
+    /// `HINT_NOT_NULL_THRESHOLD` AND whose `defended_field_reads` set
+    /// does NOT contain the (d_nr, attr_idx) gets a `Level::Warning`
+    /// at its declaration suggesting `not null`.  Stdlib (`self.default
+    /// == true`) is exempt.  Silenceable via `LOFT_NO_HINT_NOT_NULL=1`.
+    pub(crate) field_read_counts: std::collections::HashMap<(u32, u32), u32>,
+    /// Plan-07 phase 4h — set of (struct_d_nr, attr_idx) that have at
+    /// least one defensive read site (`obj.field ?? default` or `if
+    /// obj.field != null` flow analysis).  Membership in this set
+    /// suppresses the `not null` hint regardless of read count — the
+    /// developer has explicitly acknowledged null is possible.
+    pub(crate) defended_field_reads: std::collections::HashSet<(u32, u32)>,
+    /// Plan-07 phase 4h — site of the most recently parsed field
+    /// read.  Set by `Parser::field()` after each read, taken by
+    /// `handle_null_coalesce` to mark the read as defended when
+    /// `expr ?? default` follows.  `None` between distinct
+    /// expressions / statements.  Conservative: covers the common
+    /// `p.field ?? default` shape; complex expressions like
+    /// `(p.field + 1) ?? 0` and `if p.field != null` are
+    /// under-detected today (slice 2).
+    pub(crate) last_field_read_site: Option<(u32, u32)>,
 }
 
 // Operators ordered on their precedence
@@ -355,6 +379,9 @@ impl Parser {
             last_cast_alias: u32::MAX,
             trace_types: false,
             trace_types_lines: Vec::new(),
+            field_read_counts: std::collections::HashMap::new(),
+            defended_field_reads: std::collections::HashSet::new(),
+            last_field_read_site: None,
         }
     }
 
@@ -393,8 +420,79 @@ impl Parser {
             self.resolve_deferred_unknowns();
         }
         self.backfill_native_symbol_crates();
+        // Plan-07 phase 4h — emit `not null` field-reminder hints
+        // after the second pass completes (so all reads have been
+        // counted).  Silenceable via `LOFT_NO_HINT_NOT_NULL=1`.
+        if !self.first_pass && !default {
+            self.emit_not_null_hints();
+        }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
+    }
+
+    /// Plan-07 phase 4h — walk user struct definitions and emit
+    /// `Level::Warning` for each non-`not_null` field whose read
+    /// count exceeds `HINT_NOT_NULL_THRESHOLD` AND whose
+    /// `defended_field_reads` set is empty.  The hint suggests
+    /// adding `not null` at the field declaration so the
+    /// constructor enforces non-null at write-time, eliminating
+    /// the entire class of fault sites for that field.
+    ///
+    /// Threshold is conservative (10 reads) to keep the hint
+    /// from firing on small / illustrative struct definitions.
+    /// Lower thresholds + smarter defended-detection are slice 2.
+    ///
+    /// Stdlib (`self.default == true`) is exempt — its struct
+    /// definitions are language-internal and the suggestion target
+    /// is user code, not the host library.
+    fn emit_not_null_hints(&mut self) {
+        const HINT_NOT_NULL_THRESHOLD: u32 = 10;
+        if std::env::var("LOFT_NO_HINT_NOT_NULL").is_ok_and(|v| v == "1" || v == "true") {
+            self.field_read_counts.clear();
+            self.defended_field_reads.clear();
+            return;
+        }
+        // Snapshot the keys so we can borrow `self.lexer` mutably
+        // while iterating.
+        let counts: Vec<((u32, u32), u32)> = self
+            .field_read_counts
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        for ((d_nr, attr_idx), count) in counts {
+            if count < HINT_NOT_NULL_THRESHOLD {
+                continue;
+            }
+            if self.defended_field_reads.contains(&(d_nr, attr_idx)) {
+                continue;
+            }
+            // Re-check `nullable` at emission time — definition
+            // mutations between count + emit are unlikely but not
+            // forbidden.
+            let attrs = &self.data.def(d_nr).attributes;
+            if attr_idx as usize >= attrs.len() {
+                continue;
+            }
+            let attr = &attrs[attr_idx as usize];
+            if !attr.nullable {
+                continue;
+            }
+            let struct_name = self.data.def(d_nr).name.clone();
+            let field_name = attr.name.clone();
+            let pos = self.data.def(d_nr).position.clone();
+            self.lexer.pos_diagnostic(
+                Level::Warning,
+                &pos,
+                &format!(
+                    "field `{struct_name}.{field_name}` is read {count} times and never \
+                     defended with `??` or `if x.{field_name} != null` — consider \
+                     marking it `not null` so the constructor enforces non-null at \
+                     write-time"
+                ),
+            );
+        }
+        self.field_read_counts.clear();
+        self.defended_field_reads.clear();
     }
 
     /// after `parse_file` has run (and all `todo_files` have drained,

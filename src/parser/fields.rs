@@ -354,6 +354,27 @@ impl Parser {
                 t = t.depending(*nr);
             }
             *code = self.get_field(dnr, fnr, code.clone());
+            // Plan-07 phase 4h — count this read for the
+            // `not null` field-reminder hint.  Skip stdlib (the
+            // suggestion target is user code), skip first pass
+            // (counts must be stable; first pass isn't), skip
+            // already-`not null` fields (no recommendation
+            // possible), skip method-routine reads (constant
+            // branch above handled those), and skip when fnr is
+            // out of range (defensive — shouldn't happen here).
+            if !self.first_pass
+                && !self.default
+                && fnr != usize::MAX
+                && fnr < self.data.def(dnr).attributes.len()
+                && self.data.def(dnr).attributes[fnr].nullable
+            {
+                let key = (dnr, fnr as u32);
+                *self.field_read_counts.entry(key).or_insert(0) += 1;
+                // Record this site so `handle_null_coalesce` can
+                // mark it defended when `??` follows immediately
+                // (`p.field ?? default`).
+                self.last_field_read_site = Some(key);
+            }
         }
         self.data.attr_used(dnr, fnr);
         t

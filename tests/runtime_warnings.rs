@@ -346,6 +346,167 @@ fn main() {
     );
 }
 
+// ── Plan-07 phase 4h — `not null` field-reminder hint ──────────────────
+
+/// A struct field read 10+ times with no `??` defense triggers the
+/// `not null` hint at the struct declaration.
+#[test]
+fn hint_4h_high_read_count_suggests_not_null() {
+    let source = "\
+struct Player {
+  id: integer,
+  name: text
+}
+
+fn use_player(p: Player) -> integer {
+  s = p.id + p.id + p.id + p.id;
+  s += p.id + p.id + p.id + p.id;
+  s += p.id + p.id + p.id + p.id;
+  return s;
+}
+
+fn main() {
+  p = Player { id: 1, name: \"alice\" };
+  print(\"score={use_player(p)}\\n\");
+}
+";
+    let (_stdout, _stderr, code) = run_with_warnings("hint4h_high", source);
+    let diag = String::from_utf8_lossy(
+        &Command::new(loft_bin())
+            .arg("--interpret")
+            .arg({
+                let p = std::env::temp_dir().join("loft_w42_hint4h_high.loft");
+                std::fs::write(&p, source).expect("write");
+                p
+            })
+            .current_dir(workspace_root())
+            .env_remove("LOFT_NO_HINT_NOT_NULL")
+            .env_remove("LOFT_NO_WARN_RUNTIME")
+            .output()
+            .expect("invoke loft")
+            .stdout,
+    )
+    .into_owned();
+    assert_eq!(code, Some(0), "must not halt; got code={code:?}");
+    assert!(
+        diag.contains("field `Player.id`") && diag.contains("consider marking it `not null`"),
+        "expected not-null hint for Player.id; got diag={diag:?}"
+    );
+}
+
+/// A `not null` field with many reads must NOT trigger the hint.
+#[test]
+fn hint_4h_already_not_null_quiet() {
+    let source = "\
+struct Player {
+  id: integer not null,
+  name: text
+}
+
+fn use_player(p: Player) -> integer {
+  s = p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id;
+  return s;
+}
+
+fn main() {
+  p = Player { id: 1, name: \"alice\" };
+  print(\"score={use_player(p)}\\n\");
+}
+";
+    let p = std::env::temp_dir().join("loft_w42_hint4h_already.loft");
+    std::fs::write(&p, source).expect("write");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&p)
+        .current_dir(workspace_root())
+        .env_remove("LOFT_NO_HINT_NOT_NULL")
+        .env_remove("LOFT_NO_WARN_RUNTIME")
+        .output()
+        .expect("invoke loft");
+    let _ = std::fs::remove_file(&p);
+    let diag = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !diag.contains("consider marking it `not null`"),
+        "already-not-null field must not get hint; got diag={diag:?}"
+    );
+}
+
+/// A field read with `?? default` defense (even once) must silence
+/// the hint regardless of read count.
+#[test]
+fn hint_4h_defended_with_nullable_quiet() {
+    let source = "\
+struct Player {
+  id: integer,
+  name: text
+}
+
+fn use_player(p: Player) -> integer {
+  s = (p.id ?? 0);
+  s += p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id;
+  return s;
+}
+
+fn main() {
+  p = Player { id: 1, name: \"alice\" };
+  print(\"score={use_player(p)}\\n\");
+}
+";
+    let p = std::env::temp_dir().join("loft_w42_hint4h_defended.loft");
+    std::fs::write(&p, source).expect("write");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&p)
+        .current_dir(workspace_root())
+        .env_remove("LOFT_NO_HINT_NOT_NULL")
+        .env_remove("LOFT_NO_WARN_RUNTIME")
+        .output()
+        .expect("invoke loft");
+    let _ = std::fs::remove_file(&p);
+    let diag = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !diag.contains("consider marking it `not null`"),
+        "?? defended field must not get hint; got diag={diag:?}"
+    );
+}
+
+/// `LOFT_NO_HINT_NOT_NULL=1` env var silences the hint entirely.
+#[test]
+fn hint_4h_env_silences() {
+    let source = "\
+struct Player {
+  id: integer,
+  name: text
+}
+
+fn use_player(p: Player) -> integer {
+  s = p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id + p.id;
+  return s;
+}
+
+fn main() {
+  p = Player { id: 1, name: \"alice\" };
+  print(\"score={use_player(p)}\\n\");
+}
+";
+    let p = std::env::temp_dir().join("loft_w42_hint4h_env.loft");
+    std::fs::write(&p, source).expect("write");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&p)
+        .current_dir(workspace_root())
+        .env("LOFT_NO_HINT_NOT_NULL", "1")
+        .env("LOFT_NO_WARN_RUNTIME", "1")
+        .output()
+        .expect("invoke loft");
+    let _ = std::fs::remove_file(&p);
+    let diag = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !diag.contains("consider marking it `not null`"),
+        "LOFT_NO_HINT_NOT_NULL=1 must silence hint; got diag={diag:?}"
+    );
+}
+
 #[test]
 fn fmt43_loft_format_bare_null_env_silences_suffix() {
     let source = "\

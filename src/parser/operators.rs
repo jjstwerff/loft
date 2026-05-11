@@ -1060,6 +1060,15 @@ impl Parser {
             );
         }
         self.expr_not_null = false;
+        // Plan-07 phase 4h — if the `??` LHS is the just-emitted
+        // field read site (set by `Parser::field()`), mark the
+        // (struct, field) as defended so the not-null hint won't
+        // fire on it.  Conservative: covers `p.field ?? default`;
+        // complex expressions like `(p.field + 1) ?? 0` and
+        // `if p.field != null` are slice-2 work.
+        if let Some(key) = self.last_field_read_site.take() {
+            self.defended_field_reads.insert(key);
+        }
 
         // C54.G-hybrid: if the LHS is an immediate arithmetic call
         // (`a + b` / `a - b` / etc.), swap it to the Nullable variant so
