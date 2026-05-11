@@ -12783,6 +12783,37 @@ fn run() -> integer {
     .result(Value::Int(205 + 1009));
 }
 
+/// P239 — for-loop over `vector<T>` inside a generic fn crashed
+/// both backends.  Interp SIGSEGV; native rustc E0610
+/// `i64.rec`.  The for-loop iter-termination check
+/// (parser/collections.rs:1506-1514) emits
+/// `OpConvBoolFromRef(Var(loop_var))` for any loop variable
+/// typed `Reference(_, _)`, including `Reference(T_d_nr, …)`
+/// for generic-T element iteration.  When T monomorphises to a
+/// primitive, the substituted Var is now that primitive type
+/// but the IR still has `OpConvBoolFromRef` — interp treats
+/// `i64` as a `DbRef` (SIGSEGV) and native emits `i64.rec`
+/// (rustc E0610).
+///
+/// Fix: extend `substitute_type_in_value` to swap
+/// `OpConvBoolFromRef(Var(_))` to the matching primitive peer
+/// (`OpConvBoolFromInt` / `OpConvBoolFromText` / etc.) when the
+/// substituted concrete type is a primitive.  Reference / Vector
+/// / struct-enum / tuple stay on `OpConvBoolFromRef` (the
+/// existing behaviour works for any DbRef-shaped loop var).
+#[test]
+fn p239_for_loop_over_generic_vector() {
+    code!(
+        "fn p239_count<T>(v: vector<T>) -> integer {
+    n = 0;
+    for _ in v { n = n + 1; }
+    return n;
+}"
+    )
+    .expr("p239_count([10, 20, 30])")
+    .result(Value::Int(3));
+}
+
 /// P252 — bounded-generic for-loop over a struct-ref vector returned
 /// the FIRST item's bound-method result for every iteration instead
 /// of the per-item result.  Surfaced 2026-05-11 by phase 4 cleanup;
