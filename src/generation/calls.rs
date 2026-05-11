@@ -432,6 +432,35 @@ impl Output<'_> {
             "s.string_from_const_store",
             "stores.string_from_const_store",
         );
+        // Plan-07 phase 4c — Stores-side counterparts of the
+        // State::raise / State::vec_get_or_raise / State::vec_ref_or_raise /
+        // State::text_char_or_raise helpers (added 2026-05-11 by 4a).
+        // The interpreter's `fn(s: &mut State)` dispatcher binds `s`;
+        // the native context has only `stores: &mut Stores` (via
+        // `unsafe { &mut *cell.get() }`).  Translate `s.X(...)` →
+        // `stores.X_runtime(...)` so the same `default/01_code.loft`
+        // annotations work in both contexts.  Closes the P204 / p200 /
+        // native_tuple_* / native_binary_script regressions opened by
+        // 4a's div/mod/vec/text annotation changes.
+        //
+        // The `_runtime` suffix is mandatory — a plain
+        // `stores.raise(` substitution would let a second pass
+        // re-match `s.raise(` inside the just-produced output and
+        // accumulate `stor` prefixes (`storestores.raise(`,
+        // `storestorestores.raise(`, …).  The suffix breaks the
+        // substring relationship.  See `Stores::raise_runtime` for
+        // the full explanation.
+        //
+        // Position info is dropped on the native path today (the
+        // Stores-side helpers use `position: None`).  Phase 4g (backtrace
+        // + polish) will thread codegen-time positions through.
+        res = res.replace("s.raise(", "stores.raise_runtime(");
+        res = res.replace("s.vec_get_or_raise(", "stores.vec_get_or_raise_runtime(");
+        res = res.replace("s.vec_ref_or_raise(", "stores.vec_ref_or_raise_runtime(");
+        res = res.replace(
+            "s.text_char_or_raise(",
+            "stores.text_char_or_raise_runtime(",
+        );
         // loft represents `character` as `i32`; template functions that return `char`
         // (like `ops::text_character`) need an explicit cast at the call site.
         // Narrow integer returns (u8/u16/i8/i16) must be widened so that

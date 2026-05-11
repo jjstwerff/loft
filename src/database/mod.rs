@@ -898,6 +898,144 @@ impl Stores {
         result
     }
 
+    /// Plan-07 phase 4c — Stores-side counterpart of `State::raise`.
+    /// Used by native codegen, which has `&mut Stores` (via
+    /// `unsafe { &mut *cell.get() }`) but no `&mut State`.  The
+    /// native template rewriter in `src/generation/calls.rs`
+    /// translates `s.raise(...)` → `stores.raise_runtime(...)` so
+    /// the same `default/01_code.loft` annotations work in both
+    /// contexts.  The `_runtime` suffix is mandatory: a plain
+    /// `stores.raise(` would let a second pass of the substring-
+    /// based substitution match `s.raise(` inside the just-
+    /// produced output and accumulate `stor` prefixes
+    /// (observed: `storestorestores.raise(`).  Sibling helpers
+    /// follow the same convention (`*_runtime` rename).
+    ///
+    /// **Position is `None` for the native path today** — native
+    /// doesn't have a bytecode pc → Position lookup table.  Phase 4g
+    /// (backtrace + polish) will thread codegen-time positions
+    /// through.  For now native diagnostics omit `--> file:line:col`
+    /// (rendered as just `error: <kind detail>` without the
+    /// location header).  Better than today's `cannot find value 's'`
+    /// rustc compile error from the s.raise call.
+    ///
+    /// Production-vs-development split mirrors `State::raise` per
+    /// `DESIGN_DECISIONS.md § C66`:
+    /// - production logger attached → log via `log_runtime_kind` +
+    ///   set `had_fatal` + return without populating `runtime_error`
+    /// - development (no logger or non-production logger) → populate
+    ///   `runtime_error` so the dispatch loop's short-circuit fires
+    ///   and main.rs renders the typed error
+    pub fn raise_runtime(&mut self, kind: crate::runtime_error::RuntimeErrorKind) {
+        let production = self
+            .logger
+            .as_ref()
+            .and_then(|l| l.lock().ok())
+            .is_some_and(|l| l.config.production);
+        if production {
+            if let Some(logger) = &self.logger
+                && let Ok(mut lg) = logger.lock()
+            {
+                lg.log_runtime_kind(&kind, None);
+            }
+            self.had_fatal = true;
+            return;
+        }
+        let message = kind.describe();
+        self.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError {
+            kind,
+            position: None,
+            op_pc: u32::MAX,
+            message,
+        }));
+        self.had_fatal = true;
+    }
+
+    /// Plan-07 phase 4c — Stores-side counterpart of
+    /// `State::vec_get_or_raise`.  Same body, calls
+    /// `self.raise_runtime(...)` on OOB.  Native template rewriter
+    /// translates `s.vec_get_or_raise(...)` →
+    /// `stores.vec_get_or_raise_runtime(...)`.  The `_runtime`
+    /// suffix avoids substring-collision with the substitutor —
+    /// see `raise_runtime` for the explanation.
+    #[must_use]
+    pub fn vec_get_or_raise_runtime(
+        &mut self,
+        db: &crate::keys::DbRef,
+        size: u32,
+        index: i64,
+    ) -> crate::keys::DbRef {
+        let len = crate::vector::length_vector(db, &self.allocations);
+        let normalized = if index < 0 {
+            index + i64::from(len)
+        } else {
+            index
+        };
+        if normalized < 0 {
+            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
+                idx: index,
+            });
+            return crate::keys::DbRef {
+                store_nr: u16::MAX,
+                rec: 0,
+                pos: 0,
+            };
+        }
+        if normalized >= i64::from(len) {
+            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+                idx: index,
+                len,
+            });
+            return crate::keys::DbRef {
+                store_nr: u16::MAX,
+                rec: 0,
+                pos: 0,
+            };
+        }
+        crate::vector::get_vector(db, size, index, &self.allocations)
+    }
+
+    /// Plan-07 phase 4c — Stores-side counterpart of
+    /// `State::vec_ref_or_raise`.  Same body; native rewriter
+    /// translates `s.vec_ref_or_raise(...)` →
+    /// `stores.vec_ref_or_raise_runtime(...)`.
+    #[must_use]
+    pub fn vec_ref_or_raise_runtime(
+        &mut self,
+        db: &crate::keys::DbRef,
+        index: i64,
+    ) -> crate::keys::DbRef {
+        let inner = self.vec_get_or_raise_runtime(db, 4, index);
+        if inner.store_nr == u16::MAX {
+            return inner;
+        }
+        self.get_ref(&inner, 0)
+    }
+
+    /// Plan-07 phase 4c — Stores-side counterpart of
+    /// `State::text_char_or_raise`.  Same body; native rewriter
+    /// translates `s.text_char_or_raise(...)` →
+    /// `stores.text_char_or_raise_runtime(...)`.
+    #[must_use]
+    pub fn text_char_or_raise_runtime(&mut self, val: &str, index: i64) -> char {
+        let len = val.len() as i64;
+        let normalized = if index < 0 { index + len } else { index };
+        if normalized < 0 {
+            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
+                idx: index,
+            });
+            return char::from(0);
+        }
+        if normalized >= len {
+            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+                idx: index,
+                len: len as u32,
+            });
+            return char::from(0);
+        }
+        crate::ops::text_character(val, index)
+    }
+
     /// Initiative 03 Phase 3b: return a `Str` pointing into the
     /// constant store.  Native-mode counterpart to
     /// `State::string_from_const_store`, which pushes the Str onto
