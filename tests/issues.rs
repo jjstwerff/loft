@@ -12902,6 +12902,39 @@ fn p239_for_loop_over_generic_vector() {
     .result(Value::Int(3));
 }
 
+/// P241 — generic fn building a vector by `out += [x]` crashed both
+/// backends.  Interp panicked at `src/database/allocation.rs` because
+/// the parametric IR shape (`OpCopyRecord(src, _elm_, t_T)`) treats
+/// `src: i64` as a `DbRef` and indexes into stores with an out-of-
+/// range store_nr.  Native rustc rejected with E0308 / E0605 because
+/// the generated Rust read `src` as a struct ref but it's a primitive.
+///
+/// Fix (2026-05-11): substitution-time triplet rewrite — when
+/// `substitute_type_in_value` sees the parametric vector-element-write
+/// triplet
+///   `Set(_elm_, OpNewRecord(out, t_T, MAX))`
+///   `Call(OpCopyRecord, [src, _elm_, t_T])`
+///   `Call(OpFinishRecord, [out, _elm_, t_T, MAX])`
+/// AND the substituted concrete type is a primitive, rewrites it to
+/// the primitive shape (4 ops: `OpPreAllocVector` prefix +
+/// `OpNewRecord` + `OpSetXxx` + `OpFinishRecord`), with type-id args
+/// updated to point at the concrete vector type-id resolved via
+/// `database.vector(database.db_type(concrete, data))`.  Slice 2
+/// covers `Type::Integer(_)` only; slice 3 broadens to all
+/// primitives.
+#[test]
+fn p241_singleton_int() {
+    code!(
+        "fn p241_singleton<T>(x: T) -> vector<T> {
+    p241_out: vector<T> = [];
+    p241_out += [x];
+    return p241_out;
+}"
+    )
+    .expr("p241_singleton(42)[0]")
+    .result(Value::Int(42));
+}
+
 /// P252 — bounded-generic for-loop over a struct-ref vector returned
 /// the FIRST item's bound-method result for every iteration instead
 /// of the per-item result.  Surfaced 2026-05-11 by phase 4 cleanup;

@@ -1439,13 +1439,7 @@ impl Parser {
             .collect();
         let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
         let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
-        let new_code = Self::substitute_type_in_value(
-            tmpl_code,
-            tv_nr,
-            &concrete,
-            &self.data,
-            &mut self.database,
-        );
+        let new_code = Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete, &self.data);
         let new_returned = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
         // Register the new definition.
         let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
@@ -1455,7 +1449,6 @@ impl Parser {
                 .add_attribute(&mut self.lexer, d_nr, &a.name, a.typedef.clone());
             self.data.set_attr_value(d_nr, a_nr, a.default.clone());
         }
-        self.data.definitions[d_nr as usize].code = new_code;
         self.data.set_returned(d_nr, new_returned.clone());
         // Trace point: full instantiation result.  Used during plan-17
         // (A) debugging when verifying that the second-pass def
@@ -1473,6 +1466,21 @@ impl Parser {
         // Copy the variable table with substituted types.
         let mut vars = Function::copy(&tmpl_vars);
         vars.substitute_type(tv_nr, &concrete);
+        // P241 fix (2026-05-11): post-substitution rewrite of the
+        // parametric vector-element-write triplet to the primitive
+        // shape, plus elm-var type patch.  Runs after both code
+        // substitution AND vars substitution because the patch needs
+        // to override `vars`' substituted-to-primitive elm var type
+        // back to `Reference(...)` (it holds a DbRef, not the
+        // primitive value).  See `rewrite_generic_vector_writes`.
+        let new_code = Self::rewrite_generic_vector_writes(
+            new_code,
+            &concrete,
+            &mut vars,
+            &self.data,
+            &mut self.database,
+        );
+        self.data.definitions[d_nr as usize].code = new_code;
         self.data.definitions[d_nr as usize].variables = vars;
         // I6: verify the concrete type satisfies every declared bound.
         // Emit a diagnostic and return u32::MAX if any required method is missing.
@@ -1645,36 +1653,12 @@ impl Parser {
     /// Walks a generic-template's IR and substitutes the type variable
     /// `tv_nr` with the concrete `concrete` type, both in variable types
     /// and in IR-shape decisions that depend on T's resolved shape.
-    ///
-    /// Takes `database: &mut Stores` (P241 fix, 2026-05-11) because the
-    /// vector-element-write triplet rewrite needs to look up / register
-    /// the concrete vector-element record's type-id via
-    /// `Stores::vector(content)` — that's `&mut self` because it may
-    /// register a new entry on first use.  In practice the type is
-    /// already registered (the call site that triggers substitution
-    /// has parsed the call's return type), so the mutation rarely
-    /// fires.  Path B precedent: P252 / P239 / P240 / P243 all close
-    /// via substitution-time op rewrites; P241 is the first one that
-    /// needs database access for the rewrite's type-id arguments.
-    ///
-    /// `#[allow(clippy::only_used_in_recursion)]`: in slice 1 the
-    /// `database` param threads through recursion but isn't yet read
-    /// inside the function body — slice 2 adds the triplet-detection
-    /// arm that consumes it.  The allow is removed once slice 2
-    /// lands.
-    #[allow(clippy::only_used_in_recursion)]
-    fn substitute_type_in_value(
-        val: Value,
-        tv_nr: u32,
-        concrete: &Type,
-        data: &Data,
-        database: &mut Stores,
-    ) -> Value {
+    fn substitute_type_in_value(val: Value, tv_nr: u32, concrete: &Type, data: &Data) -> Value {
         match val {
             Value::Call(d, args) => {
                 let new_args: Vec<_> = args
                     .into_iter()
-                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data, database))
+                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data))
                     .collect();
                 // Re-resolve call target if it references the type variable.
                 let new_d = Self::re_resolve_call(d, tv_nr, concrete, data);
@@ -1762,34 +1746,37 @@ impl Parser {
                 }
                 Value::Call(new_d, new_args)
             }
-            Value::Block(bl) => Value::Block(Box::new(crate::data::Block {
-                operators: bl
+            Value::Block(bl) => {
+                let recursed: Vec<Value> = bl
                     .operators
                     .into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data, database))
-                    .collect(),
-                result: Self::substitute_type(bl.result, tv_nr, concrete),
-                name: bl.name,
-                scope: bl.scope,
-                var_size: bl.var_size,
-            })),
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
+                    .collect();
+                Value::Block(Box::new(crate::data::Block {
+                    operators: recursed,
+                    result: Self::substitute_type(bl.result, tv_nr, concrete),
+                    name: bl.name,
+                    scope: bl.scope,
+                    var_size: bl.var_size,
+                }))
+            }
             Value::Set(v, expr) => Value::Set(
                 v,
-                Box::new(Self::substitute_type_in_value(*expr, tv_nr, concrete, data, database)),
+                Box::new(Self::substitute_type_in_value(*expr, tv_nr, concrete, data)),
             ),
             Value::Return(expr) => Value::Return(Box::new(Self::substitute_type_in_value(
-                *expr, tv_nr, concrete, data, database,
+                *expr, tv_nr, concrete, data,
             ))),
             Value::If(cond, t, f) => Value::If(
-                Box::new(Self::substitute_type_in_value(*cond, tv_nr, concrete, data, database)),
-                Box::new(Self::substitute_type_in_value(*t, tv_nr, concrete, data, database)),
-                Box::new(Self::substitute_type_in_value(*f, tv_nr, concrete, data, database)),
+                Box::new(Self::substitute_type_in_value(*cond, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(*t, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(*f, tv_nr, concrete, data)),
             ),
             Value::Loop(bl) => Value::Loop(Box::new(crate::data::Block {
                 operators: bl
                     .operators
                     .into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data, database))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
                     .collect(),
                 result: Self::substitute_type(bl.result, tv_nr, concrete),
                 name: bl.name,
@@ -1797,28 +1784,26 @@ impl Parser {
                 var_size: bl.var_size,
             })),
             Value::Drop(expr) => Value::Drop(Box::new(Self::substitute_type_in_value(
-                *expr, tv_nr, concrete, data, database,
+                *expr, tv_nr, concrete, data,
             ))),
             Value::Insert(ops) => Value::Insert(
                 ops.into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data, database))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
                     .collect(),
             ),
             Value::Iter(name, create, next, extra) => Value::Iter(
                 name,
                 Box::new(Self::substitute_type_in_value(
-                    *create, tv_nr, concrete, data, database,
+                    *create, tv_nr, concrete, data,
                 )),
+                Box::new(Self::substitute_type_in_value(*next, tv_nr, concrete, data)),
                 Box::new(Self::substitute_type_in_value(
-                    *next, tv_nr, concrete, data, database,
-                )),
-                Box::new(Self::substitute_type_in_value(
-                    *extra, tv_nr, concrete, data, database,
+                    *extra, tv_nr, concrete, data,
                 )),
             ),
             Value::Span(b) => {
                 let (pos, inner) = *b;
-                let new_inner = Self::substitute_type_in_value(inner, tv_nr, concrete, data, database);
+                let new_inner = Self::substitute_type_in_value(inner, tv_nr, concrete, data);
                 Value::with_span(pos, new_inner)
             }
             // P237: tuple-constructor elements may contain calls to
@@ -1830,28 +1815,391 @@ impl Parser {
             Value::Tuple(elems) => Value::Tuple(
                 elems
                     .into_iter()
-                    .map(|e| Self::substitute_type_in_value(e, tv_nr, concrete, data, database))
+                    .map(|e| Self::substitute_type_in_value(e, tv_nr, concrete, data))
                     .collect(),
             ),
             Value::TuplePut(v, idx, val) => Value::TuplePut(
                 v,
                 idx,
-                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data, database)),
+                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data)),
             ),
             Value::BreakWith(n, val) => Value::BreakWith(
                 n,
-                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data, database)),
+                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data)),
             ),
             Value::Yield(val) => Value::Yield(Box::new(Self::substitute_type_in_value(
-                *val, tv_nr, concrete, data, database,
+                *val, tv_nr, concrete, data,
             ))),
             Value::CallRef(v_nr, args) => Value::CallRef(
                 v_nr,
                 args.into_iter()
-                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data, database))
+                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data))
                     .collect(),
             ),
             other => other,
+        }
+    }
+
+    /// P241 fix (2026-05-11) — slice 2: integer-only.  POST-PASS that
+    /// walks the substituted IR + patches the variable table to
+    /// rewrite the parametric vector-element-write triplet to its
+    /// primitive shape.  Runs AFTER `substitute_type_in_value` AND
+    /// AFTER `vars.substitute_type` so it sees the substituted-types
+    /// IR and can patch the elm variable's type back to `Reference`
+    /// (it was originally `Reference(T_d_nr, deps)` and
+    /// `vars.substitute_type` turned it into the wrong primitive
+    /// type because it holds a DbRef, not a primitive value).
+    ///
+    /// Detects the post-substitution triplet:
+    ///
+    /// ```ignore
+    /// // Triplet at adjacent positions i, i+1, i+2:
+    /// Set(elm_var, Call(OpNewRecord, [Var(out_var), Int(t_T), Int(MAX)]))
+    /// Call(OpCopyRecord, [src_value, Var(elm_var), Int(t_T)])
+    /// Call(OpFinishRecord, [Var(out_var), Var(elm_var), Int(t_T), Int(MAX)])
+    /// ```
+    ///
+    /// When `concrete` is a primitive (slice 2: only `Type::Integer`),
+    /// rewrites the triplet to the primitive shape:
+    ///
+    /// ```ignore
+    /// // 4-op sequence:
+    /// Call(OpPreAllocVector, [Var(out_var), Int(1), Int(elem_size)])
+    /// Set(elm_var, Call(OpNewRecord, [Var(out_var), Int(t_concrete_vec), Int(MAX)]))
+    /// Call(OpSetInt, [Var(elm_var), Int(0), src_value])
+    /// Call(OpFinishRecord, [Var(out_var), Var(elm_var), Int(t_concrete_vec), Int(MAX)])
+    /// ```
+    ///
+    /// AND patches `vars.set_type(elm_var, Type::Reference(...))`.
+    ///
+    /// Recurses into nested Blocks / Loops / Ifs / etc.  Slice 2 ships
+    /// only `Type::Integer`; struct-T is a no-op (the existing
+    /// OpCopyRecord path is correct because the source IS a DbRef).
+    pub(crate) fn rewrite_generic_vector_writes(
+        val: Value,
+        concrete: &Type,
+        vars: &mut crate::variables::Function,
+        data: &Data,
+        database: &mut Stores,
+    ) -> Value {
+        // Only Integer in slice 2.  Other primitives in slice 3.
+        if !matches!(concrete, Type::Integer(_)) {
+            return val;
+        }
+        match val {
+            Value::Block(bl) => {
+                let recursed: Vec<Value> = bl
+                    .operators
+                    .into_iter()
+                    .map(|v| Self::rewrite_generic_vector_writes(v, concrete, vars, data, database))
+                    .collect();
+                let rewritten =
+                    Self::rewrite_vector_write_triplets(recursed, concrete, vars, data, database);
+                Value::Block(Box::new(crate::data::Block {
+                    operators: rewritten,
+                    result: bl.result,
+                    name: bl.name,
+                    scope: bl.scope,
+                    var_size: bl.var_size,
+                }))
+            }
+            Value::Loop(lp) => {
+                let recursed: Vec<Value> = lp
+                    .operators
+                    .into_iter()
+                    .map(|v| Self::rewrite_generic_vector_writes(v, concrete, vars, data, database))
+                    .collect();
+                let rewritten =
+                    Self::rewrite_vector_write_triplets(recursed, concrete, vars, data, database);
+                Value::Loop(Box::new(crate::data::Block {
+                    operators: rewritten,
+                    result: lp.result,
+                    name: lp.name,
+                    scope: lp.scope,
+                    var_size: lp.var_size,
+                }))
+            }
+            Value::If(c, t, f) => Value::If(
+                Box::new(Self::rewrite_generic_vector_writes(
+                    *c, concrete, vars, data, database,
+                )),
+                Box::new(Self::rewrite_generic_vector_writes(
+                    *t, concrete, vars, data, database,
+                )),
+                Box::new(Self::rewrite_generic_vector_writes(
+                    *f, concrete, vars, data, database,
+                )),
+            ),
+            Value::Set(v, expr) => Value::Set(
+                v,
+                Box::new(Self::rewrite_generic_vector_writes(
+                    *expr, concrete, vars, data, database,
+                )),
+            ),
+            Value::Return(expr) => Value::Return(Box::new(Self::rewrite_generic_vector_writes(
+                *expr, concrete, vars, data, database,
+            ))),
+            Value::Drop(expr) => Value::Drop(Box::new(Self::rewrite_generic_vector_writes(
+                *expr, concrete, vars, data, database,
+            ))),
+            Value::Span(b) => {
+                let (pos, inner) = *b;
+                Value::Span(Box::new((
+                    pos,
+                    Self::rewrite_generic_vector_writes(inner, concrete, vars, data, database),
+                )))
+            }
+            Value::Call(d, args) => Value::Call(
+                d,
+                args.into_iter()
+                    .map(|a| Self::rewrite_generic_vector_writes(a, concrete, vars, data, database))
+                    .collect(),
+            ),
+            Value::Insert(ops) => Value::Insert(
+                ops.into_iter()
+                    .map(|v| Self::rewrite_generic_vector_writes(v, concrete, vars, data, database))
+                    .collect(),
+            ),
+            other => other,
+        }
+    }
+
+    /// P241 fix (2026-05-11) — slice 2: integer-only.  Walks a Block's
+    /// post-substitution operator list looking for the parametric
+    /// vector-element-write triplet emitted by
+    /// `parser/vectors.rs::new_record` (for parametric T):
+    ///
+    /// ```ignore
+    /// // Triplet at adjacent positions i, i+1, i+2:
+    /// Set(elm_var, Call(OpNewRecord, [Var(out_var), Int(t_T), Int(MAX)]))
+    /// Call(OpCopyRecord, [src_value, Var(elm_var), Int(t_T_known)])
+    /// Call(OpFinishRecord, [Var(out_var), Var(elm_var), Int(t_T), Int(MAX)])
+    /// ```
+    ///
+    /// When `concrete` is a primitive (slice 2: only `Type::Integer`),
+    /// rewrites the triplet to the primitive shape:
+    ///
+    /// ```ignore
+    /// // 4-op sequence:
+    /// Call(OpPreAllocVector, [Var(out_var), Int(1), Int(elem_size)])
+    /// Set(elm_var, Call(OpNewRecord, [Var(out_var), Int(t_concrete_vec), Int(MAX)]))
+    /// Call(OpSetInt, [Var(elm_var), Int(0), src_value])
+    /// Call(OpFinishRecord, [Var(out_var), Var(elm_var), Int(t_concrete_vec), Int(MAX)])
+    /// ```
+    ///
+    /// Where:
+    /// - `elem_size = type_element_size(concrete, data)`
+    /// - `t_concrete_vec = database.vector(database.db_type(concrete, data))`
+    ///   (mirrors the parse-time concrete path at `vectors.rs:1532-1535`).
+    ///
+    /// Slice 2 ships only the `Type::Integer` arm.  Slice 3 extends to
+    /// Text / Float / Single / Boolean / Character / Enum / Function +
+    /// narrow-int variants.  For struct T (the `Type::Reference` shape)
+    /// the rewrite is a no-op — the existing OpCopyRecord path is
+    /// correct because the source IS a DbRef.
+    ///
+    /// Tolerates `Value::Span` and `Value::Line` markers between or
+    /// inside the triplet operators by using `unspan` for shape
+    /// matching.  Multi-element pushes (`out += [a, b, c]`) produce
+    /// N adjacent triplets; this function processes them
+    /// independently — each triplet rewrites once.
+    fn rewrite_vector_write_triplets(
+        ops: Vec<Value>,
+        concrete: &Type,
+        vars: &mut crate::variables::Function,
+        data: &Data,
+        database: &mut Stores,
+    ) -> Vec<Value> {
+        // Only rewrite when concrete is one of the primitive types
+        // slice 2 covers.  Struct / Reference / etc. fall through
+        // unchanged (the existing OpCopyRecord path is correct).
+        if !matches!(concrete, Type::Integer(_)) {
+            return ops;
+        }
+        // Resolve op def_nrs once — re-resolution per-triplet would
+        // cost N lookups for a long Block.
+        let new_record_d = data.def_nr("OpNewRecord");
+        let copy_record_d = data.def_nr("OpCopyRecord");
+        let finish_record_d = data.def_nr("OpFinishRecord");
+        let pre_alloc_d = data.def_nr("OpPreAllocVector");
+        let set_int_d = data.def_nr("OpSetInt");
+        if new_record_d == u32::MAX
+            || copy_record_d == u32::MAX
+            || finish_record_d == u32::MAX
+            || pre_alloc_d == u32::MAX
+            || set_int_d == u32::MAX
+        {
+            return ops; // missing op definitions — bail safely
+        }
+        // Look up the concrete vector-element record type-id.
+        // Mirrors `vectors.rs:1532-1535` — `database.vector(content_db_type)`
+        // returns the synthetic vector<concrete> type id (registers
+        // it on first use; idempotent on subsequent calls).
+        let content_db_type = database.db_type(concrete, data);
+        let concrete_vec_tp = i32::from(database.vector(content_db_type));
+        let elem_size = Self::type_element_size(concrete, data);
+        // Walk operators looking for the triplet.  Build a new vec
+        // with rewrites applied; copy unchanged ops verbatim.
+        // Drain `ops` into a deque-like cursor so we can take owned
+        // values without index juggling — rewriting consumes 3 ops
+        // and produces 4, so we can't use simple in-place mutation.
+        let mut iter = ops.into_iter();
+        let mut out: Vec<Value> = Vec::new();
+        let mut buf: Vec<Value> = Vec::new();
+        loop {
+            // Refill buffer to at least 3 entries (the triplet length).
+            while buf.len() < 3 {
+                match iter.next() {
+                    Some(v) => buf.push(v),
+                    None => break,
+                }
+            }
+            if buf.len() < 3 {
+                // Tail — nothing left that could be a full triplet.
+                out.extend(buf);
+                break;
+            }
+            let matched = Self::match_vector_write_triplet(
+                &buf[0],
+                &buf[1],
+                &buf[2],
+                new_record_d,
+                copy_record_d,
+                finish_record_d,
+            );
+            if let Some((elm_var, out_var, src_value)) = matched {
+                // Consume the matched triplet.
+                buf.drain(0..3);
+                // Patch the elm var's type back to `Reference(content_def_nr, [out_var])`.
+                // After `vars.substitute_type`, `Reference(T_d_nr, deps)` became
+                // `Type::<concrete>` (deps lost — primitive types don't carry deps).
+                // But the elm var is the destination of `OpNewRecord`, so it
+                // holds a DbRef regardless of T's concrete type.  Without this
+                // patch, codegen emits the wrong opcodes for elm reads/writes
+                // (e.g. `VarInt` instead of `VarRef`) and the runtime reads
+                // garbage.  The dep on `out_var` mirrors `unique_elm_var`'s
+                // `self.vars.depend(elm, vec)` so elm doesn't outlive the
+                // backing store.
+                let content_def_nr = data.type_def_nr(concrete);
+                vars.set_type(elm_var, Type::Reference(content_def_nr, vec![out_var]));
+                // Emit the rewritten 4-op sequence.
+                // 1. OpPreAllocVector(Var(out_var), Int(1), Int(elem_size))
+                out.push(Value::Call(
+                    pre_alloc_d,
+                    vec![Value::Var(out_var), Value::Int(1), Value::Int(elem_size)],
+                ));
+                // 2. Set(elm_var, OpNewRecord(Var(out_var), Int(concrete_vec_tp), Int(MAX)))
+                out.push(Value::Set(
+                    elm_var,
+                    Box::new(Value::Call(
+                        new_record_d,
+                        vec![
+                            Value::Var(out_var),
+                            Value::Int(concrete_vec_tp),
+                            Value::Int(i32::from(u16::MAX)),
+                        ],
+                    )),
+                ));
+                // 3. OpSetInt(Var(elm_var), Int(0), src_value)
+                out.push(Value::Call(
+                    set_int_d,
+                    vec![Value::Var(elm_var), Value::Int(0), src_value],
+                ));
+                // 4. OpFinishRecord(Var(out_var), Var(elm_var), Int(concrete_vec_tp), Int(MAX))
+                out.push(Value::Call(
+                    finish_record_d,
+                    vec![
+                        Value::Var(out_var),
+                        Value::Var(elm_var),
+                        Value::Int(concrete_vec_tp),
+                        Value::Int(i32::from(u16::MAX)),
+                    ],
+                ));
+            } else {
+                // No triplet at this position — emit one op and slide.
+                out.push(buf.remove(0));
+            }
+        }
+        out
+    }
+
+    /// P241 fix slice 2 — pattern-matches the parametric vector-element
+    /// write triplet.  Returns `Some((elm_var, out_var, src_value))`
+    /// when all three statements match the expected shape AND the
+    /// per-statement vars cross-reference correctly:
+    /// - The Set's target var equals the OpCopyRecord's 2nd arg's
+    ///   var equals the OpFinishRecord's 2nd arg's var (`elm_var`).
+    /// - The OpNewRecord's 1st arg's var equals the OpFinishRecord's
+    ///   1st arg's var (`out_var`).
+    /// - All Int args match expected sentinel shape (Int(MAX) for
+    ///   `fld`; matching parametric type-id between OpNewRecord and
+    ///   OpFinishRecord).
+    ///
+    /// `src_value` is the OpCopyRecord's 1st arg (the value being
+    /// copied into the new vector slot).  Returned by-value (cloned
+    /// from the matched IR) so the caller can construct the new
+    /// `OpSetInt` Call without borrowing back into `ops`.
+    fn match_vector_write_triplet(
+        op0: &Value,
+        op1: &Value,
+        op2: &Value,
+        new_record_d: u32,
+        copy_record_d: u32,
+        finish_record_d: u32,
+    ) -> Option<(u16, u16, Value)> {
+        // op0: Set(elm_var, Call(OpNewRecord, [Var(out_var), Int(_), Int(MAX)]))
+        let (elm_var_set, out_var, _new_record_tp) = match op0.unspan() {
+            Value::Set(elm, set_val) => {
+                let inner = set_val.unspan();
+                if let Value::Call(d, args) = inner
+                    && *d == new_record_d
+                    && args.len() == 3
+                    && let Value::Var(out) = args[0].unspan()
+                    && let Value::Int(tp) = args[1].unspan()
+                    && let Value::Int(fld) = args[2].unspan()
+                    && *fld == i32::from(u16::MAX)
+                {
+                    (*elm, *out, *tp)
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+        // op1: Call(OpCopyRecord, [src_value, Var(elm_var), Int(_)])
+        let src_value = match op1.unspan() {
+            Value::Call(d, args) => {
+                if *d == copy_record_d
+                    && args.len() == 3
+                    && let Value::Var(elm_in_copy) = args[1].unspan()
+                    && *elm_in_copy == elm_var_set
+                {
+                    args[0].clone()
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+        // op2: Call(OpFinishRecord, [Var(out_var), Var(elm_var), Int(_), Int(MAX)])
+        match op2.unspan() {
+            Value::Call(d, args) => {
+                if *d == finish_record_d
+                    && args.len() == 4
+                    && let Value::Var(out_in_finish) = args[0].unspan()
+                    && let Value::Var(elm_in_finish) = args[1].unspan()
+                    && let Value::Int(_finish_tp) = args[2].unspan()
+                    && let Value::Int(fld) = args[3].unspan()
+                    && *out_in_finish == out_var
+                    && *elm_in_finish == elm_var_set
+                    && *fld == i32::from(u16::MAX)
+                {
+                    Some((elm_var_set, out_var, src_value))
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
