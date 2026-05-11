@@ -337,6 +337,49 @@ fn main() {
 }
 
 /// Production: a clean run produces no runtime-event log entries.
+/// Phase 4e.1 — format-string interpolation MUST NEVER halt, log, or
+/// warn even when the interpolated expression is undefended.  Format
+/// strings are the developer's debugging surface (per C66 + chat
+/// 2026-05-11): the `println("{x}")` you reach for to inspect a bug
+/// must not itself become the next bug.  Every fault-prone op inside
+/// `{...}` is auto-swapped to its Nullable peer at parse time.
+#[test]
+fn prod_format_string_div_by_zero_does_not_log() {
+    let source = "\
+fn main() {
+  z = 0;
+  print(\"a={1 / z}\\n\");
+  print(\"b={2 % z}\\n\");
+}
+";
+    let (stdout, _stderr, code, log) = run_prod("fmt_div_zero", source);
+    assert_eq!(code, Some(0), "format-string div should not halt");
+    assert!(stdout.contains("a=null"), "got {stdout:?}");
+    assert!(stdout.contains("b=null"), "got {stdout:?}");
+    assert!(
+        !log.contains("[divide_by_zero]"),
+        "format-string div MUST NOT log; got {log:?}"
+    );
+}
+
+/// Phase 4e.1 — format-string vector OOB must not halt or log.
+#[test]
+fn prod_format_string_vector_oob_does_not_log() {
+    let source = "\
+fn main() {
+  v = [10, 20, 30];
+  print(\"v[999]={v[999]}\\n\");
+}
+";
+    let (stdout, _stderr, code, log) = run_prod("fmt_vec_oob", source);
+    assert_eq!(code, Some(0), "format-string OOB should not halt");
+    assert!(stdout.contains("v[999]=null"), "got {stdout:?}");
+    assert!(
+        !log.contains("[index_out_of_bounds]"),
+        "format-string OOB MUST NOT log; got {log:?}"
+    );
+}
+
 /// Guards against the production code emitting spurious log entries
 /// for normal program execution.
 #[test]

@@ -777,6 +777,18 @@ impl Parser {
                 self.expression(&mut format)
             };
             self.in_format_expr = saved_in_fmt;
+            // Plan-07 phase 4e.1 — format strings are the user's
+            // observability surface and must NEVER halt, log, or warn
+            // (per C66 + DESIGN_DECISIONS 2026-05-11).  Walk the
+            // interpolated expression tree and swap every fault-prone
+            // op to its Nullable peer so `println("{a / b}")` /
+            // `println("{user.name}")` / `println("{v[i]}")` always
+            // render the silent sentinel ("null") instead of taking
+            // out the print statement that the developer is using to
+            // diagnose the problem in the first place.
+            if !self.first_pass {
+                Self::rewrite_subtree_to_nullable(&mut format, &self.data);
+            }
             self.un_ref(&mut tp, &mut format);
             if !self.first_pass && tp.is_unknown() {
                 diagnostic!(
