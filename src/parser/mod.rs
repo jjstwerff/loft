@@ -2792,8 +2792,28 @@ impl Parser {
                 // already pushes only the d_nr's 8 bytes via OpVarInt,
                 // and `output_call` projects `.0` natively (see the
                 // val_is_fn_ref handling in src/generation/calls.rs).
+                //
+                // P251 fix (2026-05-11): for `Value::Var(v)` where `v`
+                // has type `Function`, wrap in `Value::FnRefDnr(v)` so
+                // native emit projects `(var_v.0 as i64)` (the d_nr
+                // half of the runtime `(u32, DbRef)` tuple).  Without
+                // this projection, native codegen emits
+                // `let _v_val = (var_v); ... _v_val as i32` which
+                // rustc rejects (E0308: expected `(u32, DbRef)`,
+                // found `i64`; E0605: non-primitive cast).  The
+                // direct fn-ref-struct-field-write path
+                // (`emit_fn_ref_field_write`, parser/mod.rs:4886)
+                // already does this projection — extending it to the
+                // tuple-element-of-struct-field path closes the
+                // remaining gap.
                 let d_nr_only = match value {
                     Value::FnRef(d_nr, _, _) => Value::Int(d_nr),
+                    Value::Var(v)
+                        if matches!(self.vars.tp(v), Type::Function(_, _, _))
+                            && !self.closure_vars.contains_key(&v) =>
+                    {
+                        Value::FnRefDnr(v)
+                    }
                     other => other,
                 };
                 self.cl("OpSetInt4", &[ref_code.clone(), pos_v, d_nr_only])

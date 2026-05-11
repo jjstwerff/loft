@@ -671,14 +671,36 @@ cross_mode!(
     "#
 );
 
-// e4_d3_field_closure_local INTENTIONALLY OMITTED — even
-// STORE-ONLY (`s.t.1` read-back of a `(fn(integer)->integer,
-// integer)` field) fails native compilation with rustc E0605
-// `(u32, DbRef) as i32`: the codegen for storing a tuple
-// containing a fn-ref element INTO a struct field doesn't
-// project `.0` from the runtime fn-ref tuple before the
-// `as i32` cast (P196 fix didn't reach this path).  Filed
-// P251.  Cell lands when P251 closes.
+// P251 closed (2026-05-11): the codegen for storing a tuple
+// containing a fn-ref element INTO a struct field now projects
+// `.0` from the runtime `(u32, DbRef)` fn-ref tuple before the
+// `OpSetInt4` cast.  Fix lands in
+// `src/parser/mod.rs::emit_set_one_element` `Type::Function`
+// arm — when the value is `Value::Var(v)` with `v` typed
+// `Type::Function` (and not in the closure-vars table), wrap
+// in `Value::FnRefDnr(v)` so native emit produces
+// `(var_v.0 as i64)` instead of `(var_v) as i32`.  The direct
+// fn-ref-struct-field-write path (`emit_fn_ref_field_write`)
+// already did this; extending the tuple-element-of-struct-field
+// path closed the remaining gap.  Both store-only and call-
+// through-field shapes (`s.t.0(arg)` AND `f = s.t.0; f(arg)`)
+// work on both backends.
+cross_mode!(
+    e4_d3_field_closure_local,
+    r#"
+    struct S { t: (fn(integer) -> integer, integer) }
+    fn test() {
+        add5 = fn(x: integer) -> integer { x + 5 };
+        s = S { t: (add5, 99) };
+        // Store-only check (the original P251 surface symptom):
+        print("{s.t.1}\n");
+        assert(s.t.1 == 99, "e4_d3_field_closure_local store");
+        // Call-through-field check (compounding shape from P251):
+        r1 = s.t.0(10);
+        assert(r1 == 15, "e4_d3_field_closure_local call");
+    }
+    "#
+);
 
 cross_mode!(
     e5_d3_field_struct_ref,

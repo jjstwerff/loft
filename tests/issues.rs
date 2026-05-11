@@ -12990,6 +12990,64 @@ fn p241_singleton_bool() {
 // DbRef), so the rewrite is verified-by-construction; the
 // behavioural guard waits on P255.
 
+/// P251 — storing a tuple whose element is a fn-ref into a struct
+/// field failed native compilation with rustc E0605 `(u32, DbRef)
+/// as i32` (interp passed but the call-through-field shape
+/// `s.t.0(arg)` panicked because the projection bug fed garbage
+/// into the call dispatch).
+///
+/// Root cause: `src/parser/mod.rs::emit_set_one_element`'s
+/// `Type::Function` arm only special-cased `Value::FnRef` literal
+/// — when the source was `Value::Var(v)` with `v` typed
+/// `Type::Function`, the value passed through unchanged.  Native
+/// emit then produced `let _v_val = (var_v); ... _v_val as i32`
+/// where `var_v` is the runtime `(u32, DbRef)` tuple, which rustc
+/// rejects (E0308 + E0605).
+///
+/// Fix (2026-05-11): in the `Type::Function` arm, when the value
+/// is `Value::Var(v)` AND `v`'s type is `Function` AND `v` is not
+/// in the closure-vars table (non-capturing), wrap as
+/// `Value::FnRefDnr(v)` so native emit projects
+/// `(var_v.0 as i64)` (the d_nr half).  Mirrors the existing
+/// projection in `emit_fn_ref_field_write` (parser/mod.rs:4886)
+/// for the direct-field-write path.
+///
+/// This test exercises the original P251 surface symptom (read
+/// the integer element back).  The call-through-field shape
+/// (`s.t.0(arg)`) is covered by the matching cell in
+/// `tests/tuple_matrix.rs::e4_d3_field_closure_local`.
+#[test]
+fn p251_tuple_with_fnref_in_struct_field_read() {
+    code!(
+        "struct P251S { p251_t: (fn(integer) -> integer, integer) }
+fn p251_build() -> integer {
+    p251_add5 = fn(p251_x: integer) -> integer { p251_x + 5 };
+    p251_s = P251S { p251_t: (p251_add5, 99) };
+    return p251_s.p251_t.1;
+}"
+    )
+    .expr("p251_build()")
+    .result(Value::Int(99));
+}
+
+/// P251 — call-through-field shape: invoke the fn-ref element
+/// directly on the struct's tuple field.  Validates that the
+/// projection fix for storage also makes the call-dispatch path
+/// resolve to the correct d_nr.
+#[test]
+fn p251_tuple_with_fnref_in_struct_field_call() {
+    code!(
+        "struct P251S2 { p251_t2: (fn(integer) -> integer, integer) }
+fn p251_call() -> integer {
+    p251_add5 = fn(p251_x2: integer) -> integer { p251_x2 + 5 };
+    p251_s2 = P251S2 { p251_t2: (p251_add5, 99) };
+    return p251_s2.p251_t2.0(10);
+}"
+    )
+    .expr("p251_call()")
+    .result(Value::Int(15));
+}
+
 /// P250 — tuple-of-Reference returned from a fn and destructured
 /// inside a loop body showed a stale-DbRef on the destructured
 /// variable that picked up the FIRST argument; q1.v read `null` on
