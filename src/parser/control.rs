@@ -9,6 +9,37 @@ use super::{
     merge_dependencies, v_block, v_if, v_loop, v_set,
 };
 
+/// Plan-07 phase 4d.2 — recursive walker that returns `true` if
+/// `op` references `var_nr` anywhere.  Used by
+/// `Parser::rewrite_defended_fault_sites` to detect when an `if`
+/// condition guards on the variable assigned in the immediately-
+/// preceding `Set`.  Same recursion shape as
+/// `src/generation/pre_eval.rs::value_mentions_var` (kept as a
+/// free function here because parser/control needs it without the
+/// generation/pre_eval `impl` context).
+fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
+    match op {
+        Value::Span(b) => value_mentions_var(&b.1, var_nr),
+        Value::Var(v) => *v == var_nr,
+        Value::Set(v, inner) => *v == var_nr || value_mentions_var(inner, var_nr),
+        Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) => {
+            args.iter().any(|a| value_mentions_var(a, var_nr))
+        }
+        Value::If(cond, t, f) => {
+            value_mentions_var(cond, var_nr)
+                || value_mentions_var(t, var_nr)
+                || value_mentions_var(f, var_nr)
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            bl.operators.iter().any(|o| value_mentions_var(o, var_nr))
+        }
+        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+            value_mentions_var(inner, var_nr)
+        }
+        _ => false,
+    }
+}
+
 /// A7.1: walk a body-tail expression and report whether it ends in
 /// a literal `Value::Tuple(...)` at any reachable tail position.  Used
 /// by `block_result` to decide whether the synthetic-struct rewrite
@@ -375,9 +406,139 @@ impl Parser {
                 t = Type::Tuple(new_elems);
             }
         }
+        // Plan-07 phase 4d.2 — defensive-check flow-analysis.  When
+        // a fault-prone op's result is assigned to a variable AND the
+        // immediately-following sibling is an `if` whose condition
+        // mentions that variable, the user has written defensive code
+        // (`if x != null { use(x) }`, `if x { use(x) }`, etc.) — swap
+        // the source op to its Nullable peer so neither log nor halt
+        // fires.  Both `if x != null` and bare `if x` (truthy check)
+        // are accepted; loft's `if x` lowers to a Reference→Boolean
+        // conversion that's `false` for null DbRef / 0 / null int —
+        // which is exactly the defensive shape we want to honor.
+        //
+        // Single-block, single-step lookahead: covers the canonical
+        // pattern.  Cross-function defenses or many-statement gaps
+        // fall through to the raising peer + log path; phase 4e's
+        // compile-time warning will nudge those toward the
+        // recognised defenses.
+        if !self.first_pass {
+            self.rewrite_defended_fault_sites(&mut l);
+        }
+        // Plan-07 phase 4d.2 — defensive-check flow-analysis.  When
+        // a fault-prone op's result is assigned to a variable AND
+        // the immediately-following sibling is an `if` whose
+        // condition mentions that variable, the user has written
+        // defensive code (`if x != null { … }`, `if x { … }`,
+        // `if x > 10 { … }`, etc.) — swap the source op to its
+        // Nullable peer at COMPILE TIME so neither runtime path
+        // (production log + continue, OR development halt + render)
+        // fires.  Both modes get the same silent-sentinel behaviour
+        // because the Nullable peer never calls `s.raise`.
+        //
+        // Both `if x != null` and bare `if x` (truthy check) are
+        // accepted; loft's `if x` lowers to a Reference→Boolean
+        // conversion that's `false` for null DbRef / 0 / null int —
+        // exactly the defensive shape we want to honor.  An over-
+        // broad test like `if x > 10` also counts: any mention of
+        // `Var(x)` in the if condition signals defensive intent.
+        //
+        // Single-block, single-step lookahead: covers the canonical
+        // pattern.  Cross-function defenses or many-statement gaps
+        // fall through to the raising peer + log path; phase 4e's
+        // compile-time warning will nudge those toward the
+        // recognised defenses.
+        if !self.first_pass {
+            self.rewrite_defended_fault_sites(&mut l);
+        }
         t = self.block_result(context, result, &t, &mut l);
         *val = v_block(l, t.clone(), "block");
         t
+    }
+
+    /// Plan-07 phase 4d.2 — walks `ops` looking for adjacent
+    /// `Set(x, fault_op); If(test_using_x, …)` pairs and swaps the
+    /// fault op's def_nr to its Nullable peer.  See the call site
+    /// in `parse_block` for the rationale.  The swap suppresses
+    /// BOTH the production-mode log entry AND the development-mode
+    /// halt, because the Nullable peers never call `s.raise`.
+    pub(crate) fn rewrite_defended_fault_sites(&self, ops: &mut [Value]) {
+        // Two-pass to avoid borrow conflicts.  First pass: collect
+        // the indices of statements that need rewriting.  Second
+        // pass: apply rewrites.
+        let mut to_rewrite: Vec<usize> = Vec::new();
+        for i in 0..ops.len() {
+            let Value::Set(var, _) = ops[i].unspan() else {
+                continue;
+            };
+            let var = *var;
+            // Look ahead for the next non-Line sibling.
+            let mut j = i + 1;
+            while j < ops.len() && matches!(ops[j].unspan(), Value::Line(_)) {
+                j += 1;
+            }
+            if j >= ops.len() {
+                continue;
+            }
+            // Sibling must be an `if` whose test mentions Var(x).
+            let Value::If(test, _, _) = ops[j].unspan() else {
+                continue;
+            };
+            if !value_mentions_var(test, var) {
+                continue;
+            }
+            to_rewrite.push(i);
+        }
+        for i in to_rewrite {
+            if let Value::Set(_, source) = ops[i].unspan_mut() {
+                Self::rewrite_outer_to_nullable(source, &self.data);
+            }
+        }
+    }
+
+    /// Helper for `rewrite_defended_fault_sites` — same shape as
+    /// `parser/operators.rs::rewrite_outer_arith_to_nullable` but
+    /// recurses one level into wrapping getters
+    /// (`OpGetInt` / `OpGetByte` / `OpGetShortRaw` / `OpGetInt4`)
+    /// so integer-vector indexing's
+    /// `OpGetInt(OpGetVector(…), 0)` shape is also handled.
+    fn rewrite_outer_to_nullable(code: &mut Value, data: &crate::data::Data) {
+        fn try_swap(def_nr: &mut u32, data: &crate::data::Data) -> bool {
+            let name = data.def(*def_nr).original_name();
+            let nullable = match name.as_str() {
+                "AddInt" => "OpAddIntNullable",
+                "MinInt" => "OpMinIntNullable",
+                "MulInt" => "OpMulIntNullable",
+                "DivInt" => "OpDivIntNullable",
+                "RemInt" => "OpRemIntNullable",
+                "GetVector" => "OpGetVectorNullable",
+                "VectorRef" => "OpVectorRefNullable",
+                "TextCharacter" => "OpTextCharacterNullable",
+                _ => return false,
+            };
+            let new_nr = data.def_nr(nullable);
+            if new_nr == u32::MAX {
+                false
+            } else {
+                *def_nr = new_nr;
+                true
+            }
+        }
+        let Value::Call(def_nr, args) = code.unspan_mut() else {
+            return;
+        };
+        if try_swap(def_nr, data) {
+            return;
+        }
+        let outer_name = data.def(*def_nr).original_name();
+        if matches!(
+            outer_name.as_str(),
+            "GetInt" | "GetInt4" | "GetByte" | "GetShortRaw"
+        ) && let Some(first_arg) = args.first_mut()
+            && let Value::Call(inner_nr, _) = first_arg.unspan_mut()
+        {
+            try_swap(inner_nr, data);
+        }
     }
 
     pub(crate) fn un_ref(&mut self, t: &mut Type, code: &mut Value) {

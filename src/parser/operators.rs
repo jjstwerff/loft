@@ -820,24 +820,60 @@ impl Parser {
     /// variant isn't registered (defensive — should always be, via
     /// `default/01_code.loft`).
     fn rewrite_outer_arith_to_nullable(code: &mut Value, data: &crate::data::Data) {
-        let Value::Call(def_nr, _) = code.unspan_mut() else {
+        // Helper: try to swap the call's def_nr to its Nullable peer.
+        // Returns `true` if it found and applied a swap.
+        fn try_swap(def_nr: &mut u32, data: &crate::data::Data) -> bool {
+            let name = data.def(*def_nr).original_name();
+            let nullable_name = match name.as_str() {
+                "AddInt" => "OpAddIntNullable",
+                "MinInt" => "OpMinIntNullable",
+                "MulInt" => "OpMulIntNullable",
+                "DivInt" => "OpDivIntNullable",
+                "RemInt" => "OpRemIntNullable",
+                // Plan-07 phase 4d — vector / text indexing followed by `??`.
+                // Mirrors the C54.G-hybrid pattern: when codegen detects
+                // `??` immediately after a fault-prone op, swap to the
+                // Nullable peer so the op returns its sentinel silently
+                // (no log, no halt) and `??` discharges it.
+                "GetVector" => "OpGetVectorNullable",
+                "VectorRef" => "OpVectorRefNullable",
+                "TextCharacter" => "OpTextCharacterNullable",
+                _ => return false,
+            };
+            let new_nr = data.def_nr(nullable_name);
+            if new_nr == u32::MAX {
+                false
+            } else {
+                *def_nr = new_nr;
+                true
+            }
+        }
+        let Value::Call(def_nr, args) = code.unspan_mut() else {
             return;
         };
-        // `original_name()` on an operator returns the stripped form
-        // (e.g. "MulInt" for `OpMulInt`).  Match on that and look up the
-        // Nullable variant by its stripped name too.
-        let name = data.def(*def_nr).original_name();
-        let nullable_name = match name.as_str() {
-            "AddInt" => "OpAddIntNullable",
-            "MinInt" => "OpMinIntNullable",
-            "MulInt" => "OpMulIntNullable",
-            "DivInt" => "OpDivIntNullable",
-            "RemInt" => "OpRemIntNullable",
-            _ => return,
-        };
-        let new_nr = data.def_nr(nullable_name);
-        if new_nr != u32::MAX {
-            *def_nr = new_nr;
+        // First try the outer call.  Direct hits cover OpDivInt /
+        // OpRemInt / OpVectorRef / OpTextCharacter / arithmetic.
+        if try_swap(def_nr, data) {
+            return;
+        }
+        // Wrapped case: integer-vector indexing emits
+        // `OpGetInt(OpGetVector(v, size, idx), 0)` (and narrow
+        // variants — `OpGetByte` / `OpGetShortRaw` / `OpGetInt4`).
+        // The outer getter is null-tolerant (returns `i64::MIN` on
+        // null DbRef per its annotation guard); the inner
+        // `OpGetVector` is the one that raises.  Recurse into the
+        // first arg to swap the inner op when the outer is one of
+        // these wrappers.  Without this, `x = v[i] ?? null` over
+        // an integer vector would still log + halt because the
+        // direct `def_nr` lookup wouldn't see `OpGetVector`.
+        let outer_name = data.def(*def_nr).original_name();
+        if matches!(
+            outer_name.as_str(),
+            "GetInt" | "GetInt4" | "GetByte" | "GetShortRaw"
+        ) && let Some(first_arg) = args.first_mut()
+            && let Value::Call(inner_nr, _) = first_arg.unspan_mut()
+        {
+            try_swap(inner_nr, data);
         }
     }
 

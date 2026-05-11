@@ -211,6 +211,131 @@ fn main() {
     );
 }
 
+/// Phase 4d.1 — `expr ?? fallback` defense suppresses both the
+/// runtime log AND the program-end exit code.  Codegen swaps the
+/// outer fault-prone op to its `Nullable` peer (which silently
+/// returns the sentinel without calling `s.raise`), then `??`
+/// discharges the null with the fallback.  No log noise, exit 0.
+/// Mirrors the existing C54.G-hybrid behaviour for `a / b ?? 0`.
+#[test]
+fn prod_vector_oob_with_nullable_rescue_does_not_log() {
+    let source = "\
+fn main() {
+  v = [10, 20, 30];
+  x = v[5] ?? null;
+  if x == null { print(\"rescued\\n\"); }
+}
+";
+    let (stdout, _stderr, code, log) = run_prod("vector_oob_nullable_rescue", source);
+    assert_eq!(code, Some(0), "?? rescue should exit 0; log={log:?}");
+    assert!(
+        stdout.contains("rescued"),
+        "?? rescue should produce the fallback; got {stdout:?}"
+    );
+    assert!(
+        !log.contains("[index_out_of_bounds]"),
+        "?? rescue must NOT emit log entry; got {log:?}"
+    );
+}
+
+/// Phase 4d.1 — same shape for text indexing.  `s[i] ?? null` on
+/// OOB silently produces null.
+#[test]
+fn prod_text_oob_with_nullable_rescue_does_not_log() {
+    let source = "\
+fn main() {
+  s = \"abc\";
+  c = s[100] ?? null;
+  if c == null { print(\"rescued\\n\"); }
+}
+";
+    let (stdout, _stderr, code, log) = run_prod("text_oob_nullable_rescue", source);
+    assert_eq!(code, Some(0), "?? rescue should exit 0; log={log:?}");
+    assert!(stdout.contains("rescued"));
+    assert!(
+        !log.contains("[index_out_of_bounds]"),
+        "?? rescue must NOT emit log entry; got {log:?}"
+    );
+}
+
+/// Phase 4d.1 — struct-ref vector `vp[i] ?? null` (uses
+/// `OpVectorRef`, not `OpGetVector`) — confirms the dispatch covers
+/// both index opcodes.
+#[test]
+fn prod_struct_ref_vector_oob_with_nullable_rescue_does_not_log() {
+    let source = "\
+struct P { v: integer }
+fn main() {
+  vp = [P{v:1}, P{v:2}];
+  q = vp[5] ?? null;
+  if q == null { print(\"rescued\\n\"); }
+}
+";
+    let (stdout, _stderr, code, log) = run_prod("struct_ref_oob_nullable_rescue", source);
+    assert_eq!(code, Some(0), "?? rescue should exit 0; log={log:?}");
+    assert!(stdout.contains("rescued"));
+    assert!(
+        !log.contains("[index_out_of_bounds]"),
+        "?? rescue must NOT emit log entry; got {log:?}"
+    );
+}
+
+/// Phase 4d.2 — bare `if x != null { … }` after `x = v[i]`
+/// detected as a defensive check; codegen swaps `OpGetVector` to
+/// its `Nullable` peer at compile time so neither log nor halt
+/// fires.  Mode-independent (works in production AND dev) because
+/// the swap happens BEFORE the runtime mode branch.
+#[test]
+fn prod_vector_oob_with_bare_null_check_does_not_log() {
+    let source = "\
+fn main() {
+  v = [10, 20, 30];
+  x = v[5];
+  if x != null { print(\"hit\\n\"); }
+  else { print(\"rescued\\n\"); }
+}
+";
+    let (stdout, _stderr, code, log) = run_prod("vector_oob_bare_null_check", source);
+    assert_eq!(code, Some(0), "bare null-check should exit 0; log={log:?}");
+    assert!(
+        stdout.contains("rescued"),
+        "defensive null-check should fire; got {stdout:?}"
+    );
+    assert!(
+        !log.contains("[index_out_of_bounds]"),
+        "defended site must NOT emit log entry; got {log:?}"
+    );
+}
+
+/// Phase 4d.2 — same shape but using bare truthy `if x { … }`
+/// (loft's truthy check is `false` for null DbRef, so this also
+/// counts as a defensive check).
+#[test]
+fn prod_vector_oob_with_bare_truthy_check_does_not_log() {
+    let source = "\
+fn main() {
+  v = [10, 20, 30];
+  x = v[5];
+  if x { print(\"hit\\n\"); }
+  else { print(\"rescued\\n\"); }
+}
+";
+    let (stdout, _stderr, code, log) = run_prod("vector_oob_bare_truthy_check", source);
+    assert_eq!(
+        code,
+        Some(0),
+        "bare truthy-check should exit 0; log={log:?}"
+    );
+    assert!(
+        stdout.contains("rescued"),
+        "defensive truthy-check should fire; got {stdout:?}"
+    );
+    assert!(
+        !log.contains("[index_out_of_bounds]"),
+        "defended site must NOT emit log entry; got {log:?}"
+    );
+}
+
 /// Production: a clean run produces no runtime-event log entries.
 /// Guards against the production code emitting spurious log entries
 /// for normal program execution.
