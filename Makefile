@@ -582,6 +582,28 @@ fill:
 	@cargo test --test issues regen_fill_rs -- --ignored --nocapture > /dev/null 2>&1
 	@echo "Done. Review with: git diff src/fill.rs"
 
+# List all currently-open P-issues from PROBLEMS.md.  Source of
+# truth is the Quick-Reference table; this extracts rows whose
+# severity column contains `(open)`.  Mirror of the
+# `🔴 Currently Open (fast index)` section at the top of the
+# doc; `tests/doc_hygiene.rs::problems_open_index_matches_quickref`
+# asserts they stay in sync.
+problems:
+	@awk -F'|' '\
+	  /^## Open Issues — Quick Reference/ {flag=1; next} \
+	  /^## / && flag {exit} \
+	  flag && /^\| [0-9]+ \|/ { \
+	    pid = $$2; gsub(/ /, "", pid); \
+	    sev = $$4; gsub(/^ +| +$$/, "", sev); \
+	    if (sev ~ /\(open\)/) { \
+	      desc = $$3; gsub(/^ +/, "", desc); \
+	      pos = index(desc, "."); \
+	      if (pos > 0 && pos < 200) desc = substr(desc, 1, pos); \
+	      else if (length(desc) > 180) desc = substr(desc, 1, 180) "..."; \
+	      printf "P%-4s  %-65s  %s\n", pid, substr(sev, 1, 65), desc; \
+	    } \
+	  }' doc/claude/PROBLEMS.md
+
 test-packages:
 	@cargo build --release -q
 	@failed=0; total=0; \

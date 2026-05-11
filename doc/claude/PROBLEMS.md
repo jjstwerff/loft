@@ -18,11 +18,49 @@ produce new evidence (reproducer, incident, measurement) on the
 existing entry, not re-open it as a bug.
 
 ## Contents
+- [🔴 Currently Open (fast index)](#-currently-open-fast-index)
 - [Open Issues — Quick Reference](#open-issues--quick-reference)
 - [Unimplemented Features](#unimplemented-features)
 - [Interpreter Robustness](#interpreter-robustness)
 - [Web Services Design Constraints](#web-services-design-constraints)
 - [Graphics / WebGL](#graphics--webgl)
+
+---
+
+## 🔴 Currently Open (fast index)
+
+**At-a-glance list of every open P-issue.**  Each row jumps to the
+full entry in the Quick-Reference table below.  Keep this in sync
+with the table — `tests/doc_hygiene.rs::problems_open_index_matches_quickref`
+asserts a row appears here iff the table row's severity column
+contains `(open)`.  Run `make problems` for the same list from
+the command line.
+
+| # | Severity | One-liner |
+|---|---|---|
+| [P229](#open-issues--quick-reference) (partial) | Low (Windows half open) | `parallel { … }` worker stack snapshot bug — Windows half still open after 2026-05-10 fix |
+| [P239](#open-issues--quick-reference) | High | `for x in v` over `vector<T>` in a generic fn crashes both backends |
+| [P240](#open-issues--quick-reference) | High | Bounded-generic fn computing 2+ bound-supplied operator results in locals then returning them in a tuple swaps the values |
+| [P241](#open-issues--quick-reference) | High | Building or pushing into `vector<T>` inside a generic fn crashes both backends |
+| [P243](#open-issues--quick-reference) | High | Bounded-generic fn returning a tuple-with-text whose element comes from a bound method — native silently returns empty strings |
+| [P250](#open-issues--quick-reference) | Medium | Tuple-of-`Reference` returned from a fn and destructured inside a loop body — destination var that picked up the FIRST argument reads `null` on iter > 0 |
+| [P251](#open-issues--quick-reference) | Medium | Storing a tuple whose element is a fn-ref / closure INTO a struct field fails native compilation with E0605 `(u32, DbRef) as i32` |
+
+**Pattern**: 4 of 7 open issues (P239 / P240 / P241 / P243) are in
+the bounded-generic + something-specific cluster (for-loop, tuple
+return, vector construction, text-in-tuple).  Same root-cause
+neighborhood as the just-closed P252; fix family is mostly the
+same machinery (extending parser/codegen pattern-matches to
+recognise the Nullable peers AND/OR specialise vector / text
+shapes correctly through the type-variable substitution).  The
+other 2 (P250, P251) are tuple-of-non-trivial-element bugs around
+per-element projection in storage and lifetime.
+
+**No high-severity bugs outside the generics + tuples cluster.**
+Everything else from the older P-series (P198–P237 plus most of
+P242–P249) closed during plan-09 / plan-14 work.  Phase 4 of
+plan-07 shipped the typed-error infrastructure without
+introducing new open P-issues.
 
 ---
 
