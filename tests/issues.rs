@@ -12783,6 +12783,53 @@ fn run() -> integer {
     .result(Value::Int(205 + 1009));
 }
 
+/// P240 — bounded-generic fn computing 2+ bound-supplied operator
+/// results into locals then returning them in a tuple swapped
+/// values backend-dependently.  Two compounding root causes:
+///
+/// (a) **Interp slot aliasing**: `compute_intervals` in
+/// `src/variables/intervals.rs` had no `Value::Tuple` arm — when
+/// the IR contained `Return(Tuple([Var(a), Var(b)]))`, the
+/// recursion fell through silently and the operand vars'
+/// last_use stayed at the default value, so the slot allocator
+/// considered them dead and aliased their slots.  When `a` and
+/// `b` were both written in the same scope, the second write
+/// clobbered the first; the tuple read returned `(b_value,
+/// b_value)`.  Fix: add `Value::Tuple(elems)`,
+/// `Value::TupleGet(_, _)`, and `Value::TuplePut(_, _, _)` arms
+/// that recurse into each element so reads update the operand
+/// vars' last_use correctly.
+///
+/// (b) **Native hoisted-return guard miss**: scopes::free_vars
+/// hoists the tuple value as a separate statement before the
+/// `OpFreeText(work)` cleanup, leaving the body shape `[Set(lt),
+/// Set(gt), Call(println), Tuple, OpFreeText, Return(Null)]`.
+/// Native codegen runs `patch_hoisted_returns` to rewrite this
+/// into `Return(Tuple)` — but only when the block result type
+/// matches a small allow-list (Void / Never / `t_*` text-stub /
+/// `__ret_N` text temp).  T-stubs returning a tuple weren't in
+/// the list, so native emitted the tuple as a discarded
+/// statement and fell through to a hardcoded `return (0, 0)`
+/// (the type's null sentinel).  Fix: add `is_t_stub_tuple_body`
+/// to the guard so tuple-returning T-stubs also run the patch.
+///
+/// Without (a), the no-side-effects shape `(lt, gt)` after two
+/// `Set` ops was wrong on interp.  Without (b), the with-println
+/// shape was wrong on native.  Both shapes now correct on both
+/// backends.
+#[test]
+fn p240_bounded_generic_two_operator_tuple_return() {
+    code!(
+        "fn p240_classify<T: Ordered>(a: T, b: T) -> (integer, integer) {
+    p240lt = if a < b { 1 } else { 0 };
+    p240gt = if a > b { 1 } else { 0 };
+    return (p240lt, p240gt);
+}"
+    )
+    .expr("p240_classify(3, 5).0")
+    .result(Value::Int(1));
+}
+
 /// P239 — for-loop over `vector<T>` inside a generic fn crashed
 /// both backends.  Interp SIGSEGV; native rustc E0610
 /// `i64.rec`.  The for-loop iter-termination check

@@ -888,6 +888,20 @@ impl Output<'_> {
         // discarded statement and returns STRING_NULL.
         let fn_name = &self.data.def(self.def_nr).name;
         let is_t_stub_text_body = matches!(bl.result, Type::Text(_)) && fn_name.starts_with("t_");
+        // P240 fix (2026-05-11): bounded-generic T-stubs that return a
+        // stack-passed tuple — `t_<len><Type>_<method>` returning
+        // `Type::Tuple(...)` — go through the same hoisted-return
+        // pattern as text-returning T-stubs (the parser appends a
+        // synthetic `(lt, gt); OpFreeText(work); return null;` shape
+        // to keep the interpreter's stack-cleanup happy).  Without
+        // running `patch_hoisted_returns`, native codegen emits the
+        // tuple as a discarded statement and falls through to a
+        // hardcoded `return (0, 0)` — function always returned the
+        // type's null sentinel regardless of actual inputs.  Mirror
+        // the text branch above; same hoist logic applies because
+        // both shapes have a `Return(Null)` tail with the actual
+        // value as a preceding statement.
+        let is_t_stub_tuple_body = matches!(bl.result, Type::Tuple(_)) && fn_name.starts_with("t_");
         // Any text-returning block whose body contains the B5-L3
         // `Set(__ret_N, call); ...; Return(Var(__ret_N))` temp-transfer
         // pattern must also go through `patch_hoisted_returns` so the
@@ -905,6 +919,7 @@ impl Output<'_> {
         let operators: &[Value] = if is_void_block
             || matches!(bl.result, Type::Never)
             || is_t_stub_text_body
+            || is_t_stub_tuple_body
             || has_ret_temp
         {
             patched_ops = self.patch_hoisted_returns(&bl.operators);
