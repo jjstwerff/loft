@@ -273,3 +273,104 @@ fn main() {
         "LOFT_NO_WARN_RUNTIME=1 must silence the warning; got stdout={diag:?}"
     );
 }
+
+// ── Plan-07 phase 4e.3 — distinct null tokens in format-string output ──
+
+/// Format-string interpolation of `1 / z` (z=0) renders `null(/0)`
+/// — distinguishes fault-produced null from bare-value null.
+#[test]
+fn fmt43_div_by_zero_renders_null_div() {
+    let source = "\
+fn main() {
+  z = 0;
+  print(\"a={1 / z}\\n\");
+}
+";
+    let (stdout, _stderr, code) = run_with_warnings("fmt43_div", source);
+    assert_eq!(code, Some(0), "format-string suppression must not halt");
+    assert!(
+        stdout.contains("a=null(/0)"),
+        "expected `null(/0)` suffix; got stdout={stdout:?}"
+    );
+}
+
+#[test]
+fn fmt43_mod_by_zero_renders_null_mod() {
+    let source = "\
+fn main() {
+  z = 0;
+  print(\"a={5 % z}\\n\");
+}
+";
+    let (stdout, _stderr, code) = run_with_warnings("fmt43_mod", source);
+    assert_eq!(code, Some(0));
+    assert!(
+        stdout.contains("a=null(%0)"),
+        "expected `null(%0)` suffix; got stdout={stdout:?}"
+    );
+}
+
+#[test]
+fn fmt43_vec_oob_renders_null_oob() {
+    let source = "\
+fn main() {
+  v = [10, 20, 30];
+  print(\"a={v[999]}\\n\");
+}
+";
+    let (stdout, _stderr, code) = run_with_warnings("fmt43_vec", source);
+    assert_eq!(code, Some(0));
+    assert!(
+        stdout.contains("a=null(oob)"),
+        "expected `null(oob)` suffix; got stdout={stdout:?}"
+    );
+}
+
+#[test]
+fn fmt43_genuine_null_renders_bare_null() {
+    let source = "\
+fn main() {
+  z = null as integer;
+  print(\"a={z}\\n\");
+}
+";
+    let (stdout, _stderr, code) = run_with_warnings("fmt43_bare", source);
+    assert_eq!(code, Some(0));
+    assert!(
+        stdout.contains("a=null"),
+        "expected bare null; got stdout={stdout:?}"
+    );
+    assert!(
+        !stdout.contains("a=null("),
+        "genuine null must not get a fault suffix; got stdout={stdout:?}"
+    );
+}
+
+#[test]
+fn fmt43_loft_format_bare_null_env_silences_suffix() {
+    let source = "\
+fn main() {
+  z = 0;
+  print(\"a={1 / z}\\n\");
+}
+";
+    let script_path = std::env::temp_dir().join("loft_w42_fmt43_env.loft");
+    std::fs::write(&script_path, source).expect("write temp script");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .env("LOFT_FORMAT_BARE_NULL", "1")
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("a=null"),
+        "bare null still rendered; got stdout={stdout:?}"
+    );
+    assert!(
+        !stdout.contains("a=null("),
+        "LOFT_FORMAT_BARE_NULL=1 must silence the suffix; got stdout={stdout:?}"
+    );
+}

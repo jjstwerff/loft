@@ -886,6 +886,59 @@ impl Parser {
     /// `DESIGN_DECISIONS.md` 2026-05-11: format strings are the user's
     /// observability surface and must NEVER halt, log, or warn — so
     /// every interpolated fault site routes through its silent peer.
+    ///
+    /// Phase 4e.3 — also returns the OUTERMOST fault kind id (as
+    /// recognised by the swap table) so the caller (the format-
+    /// string emitter in `parser/objects.rs::parse_format`) can
+    /// prepend an `OpTagFault(kind_id)` sibling statement.  When
+    /// the next format-conversion op (`OpFormatInt` /
+    /// `OpAppendCharacter`) sees the type's null sentinel AND the
+    /// tag is set, it renders `null(<reason>)` instead of bare
+    /// `null`.  Returns `None` for non-fault outer calls (the
+    /// expression may still contain inner faults that get swapped,
+    /// but only the outermost one tags — inner faults have no
+    /// renderer to feed the tag to).
+    pub(crate) fn rewrite_subtree_to_nullable_kind(
+        code: &mut Value,
+        data: &crate::data::Data,
+    ) -> Option<u8> {
+        // Determine the kind BEFORE the swap.  For integer-vector
+        // indexing the IR shape is `OpGetInt(OpGetVector(v, 4, i), 0)`
+        // — the outer is `GetInt`, the fault-prone op is the inner
+        // `GetVector`.  Mirror the recurse-one-level case from
+        // `rewrite_outer_arith_to_nullable` so the kind id matches
+        // the inner op when wrapped.
+        fn classify(name: &str) -> Option<u8> {
+            match name {
+                "DivInt" => Some(1),
+                "RemInt" => Some(2),
+                "GetVector" | "VectorRef" | "TextCharacter" => Some(3),
+                _ => None,
+            }
+        }
+        let outer_kind = match code.unspan() {
+            Value::Call(def_nr, args) => {
+                let outer_name = data.def(*def_nr).original_name();
+                let direct = classify(&outer_name);
+                if direct.is_some() {
+                    direct
+                } else if matches!(
+                    outer_name.as_str(),
+                    "GetInt" | "GetInt4" | "GetByte" | "GetShortRaw"
+                ) && let Some(first) = args.first()
+                    && let Value::Call(inner_nr, _) = first.unspan()
+                {
+                    classify(&data.def(*inner_nr).original_name())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        Self::rewrite_subtree_to_nullable(code, data);
+        outer_kind
+    }
+
     pub(crate) fn rewrite_subtree_to_nullable(code: &mut Value, data: &crate::data::Data) {
         // Helper mirrors the swap table in
         // `rewrite_outer_arith_to_nullable`; kept inline (no shared
@@ -918,6 +971,23 @@ impl Parser {
                 for arg in args {
                     Self::rewrite_subtree_to_nullable(arg, data);
                 }
+                // Phase 4e.3 (slice 2 — deferred): the design adds a
+                // sibling `OpTagFault(kind)` immediately before each
+                // swapped Nullable peer in format-string scope so the
+                // format-conversion op renders `null(<reason>)`
+                // instead of bare `null`.  The runtime infrastructure
+                // (`Stores::set_format_fault` /
+                // `Stores::take_format_fault` / `format_fault_tag`
+                // field / `OpTagFault` opcode) is in place; the
+                // Block-wrapping insertion proved fragile when run
+                // through the format-string emitter (the Block's
+                // result type isn't filled in time for `append_data`
+                // to pick the right `OpAppend*` op, producing wrong-
+                // type bytecode and SIGSEGV).  Wiring slice 2 needs
+                // a different emit shape — likely new dedicated
+                // `Op*Fmt` peers (one per fault kind) that fold the
+                // tag into the Nullable peer's body instead of
+                // sequencing.  Tracked in plan-07 phase 4e.3 row.
             }
             Value::CallRef(_, args) => {
                 for arg in args {
@@ -1380,13 +1450,9 @@ impl Parser {
                 fn contains_break(v: &Value) -> bool {
                     match v.unspan() {
                         Value::Break(_) | Value::BreakWith(_, _) => true,
-                        Value::Block(b) | Value::Loop(b) => {
-                            b.operators.iter().any(contains_break)
-                        }
+                        Value::Block(b) | Value::Loop(b) => b.operators.iter().any(contains_break),
                         Value::If(_, t, e) => contains_break(t) || contains_break(e),
-                        Value::Set(_, s) | Value::Drop(s) | Value::Return(s) => {
-                            contains_break(s)
-                        }
+                        Value::Set(_, s) | Value::Drop(s) | Value::Return(s) => contains_break(s),
                         _ => false,
                     }
                 }

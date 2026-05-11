@@ -635,6 +635,40 @@ pub fn op_shift_right_int(v1: i64, v2: i64) -> i64 {
     op_shift_right_long(v1, v2)
 }
 
+/// Plan-07 phase 4e.3 — `format_long` with an optional fault-tag
+/// label.  When `val == i64::MIN` AND `tag.is_some()`, render
+/// `null(<tag>)` instead of bare `null`.  Native codegen for
+/// `OpFormatInt` emits a call to this helper preceded by
+/// `let _tag = stores.take_format_fault();` so the same per-fault
+/// nudge from `OpTagFault` (4e.1's format-scope swap sibling) reaches
+/// the native binary.  The interpreter's `State::format_int` uses
+/// the same logic inline (no separate call to keep the hot path
+/// tight).
+///
+/// # Panics
+/// Inherits `format_long`'s panic on unknown radix values.
+#[allow(clippy::too_many_arguments)]
+pub fn format_long_with_tag(
+    s: &mut String,
+    val: i64,
+    tag: Option<&str>,
+    radix: u8,
+    width: i64,
+    token: u8,
+    plus: bool,
+    note: bool,
+    dir: i8,
+) {
+    if val == i64::MIN
+        && let Some(label_str) = tag
+    {
+        let label = format!("null({label_str})");
+        format_text(s, &label, width, 1, token);
+        return;
+    }
+    format_long(s, val, radix, width, token, plus, note, dir);
+}
+
 /**
 Format an integer.
 # Panics

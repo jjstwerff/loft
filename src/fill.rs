@@ -9,7 +9,7 @@ use crate::state::State;
 use crate::tree;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 250] = &[
+pub const OPERATORS: &[fn(&mut State); 251] = &[
     goto,
     goto_word,
     goto_false,
@@ -190,6 +190,7 @@ pub const OPERATORS: &[fn(&mut State); 250] = &[
     set_short_raw,
     set_text,
     var_vector,
+    tag_fault,
     length_vector,
     length_sorted,
     clear_vector,
@@ -1611,6 +1612,11 @@ fn var_vector(s: &mut State) {
     let v_pos = *s.code::<u16>();
     let new_value = *s.get_var::<DbRef>(v_pos);
     s.put_stack(new_value);
+}
+
+fn tag_fault(s: &mut State) {
+    let v_kind = *s.code::<u8>();
+    s.database.set_format_fault(v_kind);
 }
 
 fn length_vector(s: &mut State) {

@@ -837,6 +837,15 @@ type sorted size(4);
 // All vectors are referenced by the field that points towards them.
 fn OpVarVector(pos: const u16) -> vector;
 #rust"*s.get_var::<DbRef>(@pos)"
+// Plan-07 phase 4e.3 — tag the next format-string null render with a
+// fault-kind label.  Emitted by 4e.1's format-scope swap immediately
+// before each fault-prone Nullable peer so the format conversion op
+// renders `null(/0)` / `null(oob)` / etc. instead of bare `null` —
+// genuine null values stay bare (no tag set).  Numeric kind id keeps
+// the IR stable across label-string changes (Stores::set_format_fault
+// owns the id → label mapping).  See doc/claude/plans/07-error-messages.
+fn OpTagFault(kind: const u8);
+#rust"stores.set_format_fault(@kind);"
 // The length of vectors is written at the start of their allocation.
 fn OpLengthVector(r: vector) -> integer;
 #rust"i64::from(vector::length_vector(&@r, &s.database.allocations))"

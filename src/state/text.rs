@@ -151,9 +151,24 @@ impl State {
     pub fn append_character(&mut self) {
         let pos = *self.code::<u16>();
         let c = *self.get_stack::<char>();
-        if c as u32 != 0 {
-            self.string_mut(pos - 4).push(c);
+        // Plan-07 phase 4e.3 — when a fault tag is set on the
+        // preceding `OpTagFault` (4e.1 format-scope swap) AND the
+        // char is the null sentinel, render `null(<tag>)` so the
+        // developer sees what produced the missing character
+        // instead of an empty space.  Bare `'\0'` outside format
+        // scope (no tag) keeps the legacy "skip" behaviour so
+        // string concatenation with literal `'\0'` is unchanged.
+        let tag = self.database.take_format_fault();
+        if c as u32 == 0 {
+            if let Some(label) = tag {
+                let s = self.string_mut(pos - 4);
+                s.push_str("null(");
+                s.push_str(label);
+                s.push(')');
+            }
+            return;
         }
+        self.string_mut(pos - 4).push(c);
     }
 
     #[inline]
@@ -366,6 +381,21 @@ impl State {
         let dir = *self.code::<i8>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<i64>();
+        // Plan-07 phase 4e.3 — consume the fault tag set by the
+        // 4e.1 format-scope swap's preceding `OpTagFault`.  When the
+        // value is the i64 null sentinel AND a tag is set, render
+        // `null(<tag>)` instead of bare `null`.  Take + drop the
+        // tag unconditionally so it can never leak to a downstream
+        // interpolation in the same format string.
+        let tag = self.database.take_format_fault();
+        if val == i64::MIN
+            && let Some(label_str) = tag
+        {
+            let label = format!("null({label_str})");
+            let s = self.string_mut(pos - 16);
+            ops::format_text(s, &label, width, 1, token);
+            return;
+        }
         let s = self.string_mut(pos - 16);
         ops::format_long(s, val, radix, width, token, plus, note, dir);
     }
@@ -379,6 +409,15 @@ impl State {
         let dir = *self.code::<i8>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<i64>();
+        let tag = self.database.take_format_fault();
+        if val == i64::MIN
+            && let Some(label_str) = tag
+        {
+            let label = format!("null({label_str})");
+            let s = self.string_ref_mut(pos - 16);
+            ops::format_text(s, &label, width, 1, token);
+            return;
+        }
         let s = self.string_ref_mut(pos - 16);
         ops::format_long(s, val, radix, width, token, plus, note, dir);
     }

@@ -208,7 +208,12 @@ impl Output<'_> {
         panic!("Could not parse {vals:?}");
     }
 
-    /// Use this to emit `OpFormatInt` as a call to `ops::format_long`.
+    /// Use this to emit `OpFormatInt` as a call to
+    /// `ops::format_long_with_tag` — the tag-aware wrapper that
+    /// renders `null(<reason>)` when the preceding `OpTagFault`
+    /// (4e.1 format-scope swap sibling) set a fault kind on
+    /// `stores.format_fault_tag`.  Bare `null` rendering for
+    /// genuine null values stays unchanged.
     pub(super) fn format_long(
         &mut self,
         w: &mut dyn Write,
@@ -232,7 +237,7 @@ impl Output<'_> {
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_long({prefix}var_{s_nr}, {val_expr}, {radix} as u8, {width_expr}, {token} as u8, {plus}, {note}, {dir} as i8)"
+                "ops::format_long_with_tag({prefix}var_{s_nr}, {val_expr}, stores.take_format_fault(), {radix} as u8, {width_expr}, {token} as u8, {plus}, {note}, {dir} as i8)"
             )?;
             return Ok(());
         }
