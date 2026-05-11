@@ -1439,7 +1439,13 @@ impl Parser {
             .collect();
         let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
         let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
-        let new_code = Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete, &self.data);
+        let new_code = Self::substitute_type_in_value(
+            tmpl_code,
+            tv_nr,
+            &concrete,
+            &self.data,
+            &mut self.database,
+        );
         let new_returned = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
         // Register the new definition.
         let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
@@ -1636,12 +1642,39 @@ impl Parser {
 
     /// Recursively substitute types in a Value IR tree and re-resolve Call targets
     /// whose first parameter references the type variable.
-    fn substitute_type_in_value(val: Value, tv_nr: u32, concrete: &Type, data: &Data) -> Value {
+    /// Walks a generic-template's IR and substitutes the type variable
+    /// `tv_nr` with the concrete `concrete` type, both in variable types
+    /// and in IR-shape decisions that depend on T's resolved shape.
+    ///
+    /// Takes `database: &mut Stores` (P241 fix, 2026-05-11) because the
+    /// vector-element-write triplet rewrite needs to look up / register
+    /// the concrete vector-element record's type-id via
+    /// `Stores::vector(content)` — that's `&mut self` because it may
+    /// register a new entry on first use.  In practice the type is
+    /// already registered (the call site that triggers substitution
+    /// has parsed the call's return type), so the mutation rarely
+    /// fires.  Path B precedent: P252 / P239 / P240 / P243 all close
+    /// via substitution-time op rewrites; P241 is the first one that
+    /// needs database access for the rewrite's type-id arguments.
+    ///
+    /// `#[allow(clippy::only_used_in_recursion)]`: in slice 1 the
+    /// `database` param threads through recursion but isn't yet read
+    /// inside the function body — slice 2 adds the triplet-detection
+    /// arm that consumes it.  The allow is removed once slice 2
+    /// lands.
+    #[allow(clippy::only_used_in_recursion)]
+    fn substitute_type_in_value(
+        val: Value,
+        tv_nr: u32,
+        concrete: &Type,
+        data: &Data,
+        database: &mut Stores,
+    ) -> Value {
         match val {
             Value::Call(d, args) => {
                 let new_args: Vec<_> = args
                     .into_iter()
-                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data))
+                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data, database))
                     .collect();
                 // Re-resolve call target if it references the type variable.
                 let new_d = Self::re_resolve_call(d, tv_nr, concrete, data);
@@ -1733,7 +1766,7 @@ impl Parser {
                 operators: bl
                     .operators
                     .into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data, database))
                     .collect(),
                 result: Self::substitute_type(bl.result, tv_nr, concrete),
                 name: bl.name,
@@ -1742,21 +1775,21 @@ impl Parser {
             })),
             Value::Set(v, expr) => Value::Set(
                 v,
-                Box::new(Self::substitute_type_in_value(*expr, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(*expr, tv_nr, concrete, data, database)),
             ),
             Value::Return(expr) => Value::Return(Box::new(Self::substitute_type_in_value(
-                *expr, tv_nr, concrete, data,
+                *expr, tv_nr, concrete, data, database,
             ))),
             Value::If(cond, t, f) => Value::If(
-                Box::new(Self::substitute_type_in_value(*cond, tv_nr, concrete, data)),
-                Box::new(Self::substitute_type_in_value(*t, tv_nr, concrete, data)),
-                Box::new(Self::substitute_type_in_value(*f, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(*cond, tv_nr, concrete, data, database)),
+                Box::new(Self::substitute_type_in_value(*t, tv_nr, concrete, data, database)),
+                Box::new(Self::substitute_type_in_value(*f, tv_nr, concrete, data, database)),
             ),
             Value::Loop(bl) => Value::Loop(Box::new(crate::data::Block {
                 operators: bl
                     .operators
                     .into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data, database))
                     .collect(),
                 result: Self::substitute_type(bl.result, tv_nr, concrete),
                 name: bl.name,
@@ -1764,26 +1797,28 @@ impl Parser {
                 var_size: bl.var_size,
             })),
             Value::Drop(expr) => Value::Drop(Box::new(Self::substitute_type_in_value(
-                *expr, tv_nr, concrete, data,
+                *expr, tv_nr, concrete, data, database,
             ))),
             Value::Insert(ops) => Value::Insert(
                 ops.into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data, database))
                     .collect(),
             ),
             Value::Iter(name, create, next, extra) => Value::Iter(
                 name,
                 Box::new(Self::substitute_type_in_value(
-                    *create, tv_nr, concrete, data,
+                    *create, tv_nr, concrete, data, database,
                 )),
-                Box::new(Self::substitute_type_in_value(*next, tv_nr, concrete, data)),
                 Box::new(Self::substitute_type_in_value(
-                    *extra, tv_nr, concrete, data,
+                    *next, tv_nr, concrete, data, database,
+                )),
+                Box::new(Self::substitute_type_in_value(
+                    *extra, tv_nr, concrete, data, database,
                 )),
             ),
             Value::Span(b) => {
                 let (pos, inner) = *b;
-                let new_inner = Self::substitute_type_in_value(inner, tv_nr, concrete, data);
+                let new_inner = Self::substitute_type_in_value(inner, tv_nr, concrete, data, database);
                 Value::with_span(pos, new_inner)
             }
             // P237: tuple-constructor elements may contain calls to
@@ -1795,25 +1830,25 @@ impl Parser {
             Value::Tuple(elems) => Value::Tuple(
                 elems
                     .into_iter()
-                    .map(|e| Self::substitute_type_in_value(e, tv_nr, concrete, data))
+                    .map(|e| Self::substitute_type_in_value(e, tv_nr, concrete, data, database))
                     .collect(),
             ),
             Value::TuplePut(v, idx, val) => Value::TuplePut(
                 v,
                 idx,
-                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data, database)),
             ),
             Value::BreakWith(n, val) => Value::BreakWith(
                 n,
-                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data, database)),
             ),
             Value::Yield(val) => Value::Yield(Box::new(Self::substitute_type_in_value(
-                *val, tv_nr, concrete, data,
+                *val, tv_nr, concrete, data, database,
             ))),
             Value::CallRef(v_nr, args) => Value::CallRef(
                 v_nr,
                 args.into_iter()
-                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data))
+                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data, database))
                     .collect(),
             ),
             other => other,
