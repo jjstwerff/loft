@@ -1115,6 +1115,143 @@ surfaces.
 
 ---
 
+## Stack-overflow recovery via the async substrate (deferred)
+
+**Status:** Design intent only.  No urgency.  Tracked here
+because the user's framing (chat 2026-05-11) ties recovery to
+the async/event-loop substrate rather than to the runtime-error
+plan-07 phase 4f.  Ship when the engine arrives — not before.
+
+### The user constraint
+
+> "I would only like to do something in combination with our
+> full async structure.  It doesn't matter that much if it is
+> harder to write because it will probably be library driven
+> and thus not directly the user.  But there is no real hurry,
+> just something I would like to have when we have a full-blown
+> game engine with custom user scripts."
+
+Two implications:
+
+1. **Library-driven, not user-facing.**  The recovery boundary
+   is set by the engine library, not by the user script.  User
+   scripts can recurse however they want; if they overflow, the
+   engine library catches and continues.  This reduces UX
+   pressure (no `try`/`catch` syntax bikeshed) and lets the
+   recovery mechanic look as ugly as it needs to under the hood.
+
+2. **Async-substrate-aware.**  Recovery must not fight the
+   `yield_to_host()` pump cycle, the per-handler coroutine
+   driver, or the cancellation machinery (CANCEL.1).  The
+   recovery primitive lives at the EventLoop layer where the
+   pump already controls scheduling — not at `State::raise`'s
+   layer where the dispatch loop has no notion of "frames" vs
+   "scheduled coroutines."
+
+### Why plan-07's stack-overflow typed error (4f.12) is the prerequisite, not the solution
+
+Plan-07 phase 4f slice 2 (commit `ad468876`) converted
+`State::fn_call`'s recursion-depth panic into a typed
+`RuntimeError::StackOverflow`.  The dispatch loop's
+`runtime_error.is_some()` check halts execution and `main.rs`
+renders.  This is the right shape for CLI tools and tests; it
+is NOT a recovery mechanism.
+
+The typed-error shape is a prerequisite for recovery because:
+
+- Recovery code needs to inspect the kind (was it
+  StackOverflow, OOB, divide-by-zero?) to decide what to log
+  and whether to retry.
+- The position + call chain (4g.1) lets the recovery handler
+  log "the failed handler was X at Y:Z called from W:V."
+- Production-mode log+continue already exists at the
+  `State::raise` level — the EventLoop layer just needs to
+  intercept BEFORE the runtime_error.is_some() check halts
+  the dispatch loop.
+
+### Concrete design (slice 1)
+
+When EventLoop dispatches a handler coroutine, it wraps the
+dispatch call in an `el::run_handler_with_recovery` boundary
+which:
+
+1. Calls the handler via the YIELD.1 frame-yield primitive.
+2. After each yield-to-host, checks
+   `state.database.runtime_error.is_some()` AND the kind is in
+   `RECOVERABLE_KINDS` (StackOverflow, IndexOutOfBounds,
+   DivideByZero, NullDereference — every kind except
+   AssertionFailed and UserPanic which are intentional
+   terminal calls).
+3. If recoverable: takes the runtime_error, logs the rendered
+   diagnostic via `Logger::log_runtime_kind` (production-mode
+   shape per C66), pops the call_stack down to the
+   handler-coroutine boundary, sets the handler's coroutine to
+   `Exhausted`, decrements `had_fatal` if appropriate, returns
+   to the EventLoop pump.
+4. The pump's next tick spins up new event handlers — including
+   a fresh coroutine for the same handler if its source still
+   has events.  Each fresh coroutine starts with a fresh
+   `call_depth = 0`.
+
+The "boundary" is the coroutine-frame's bytecode pc.  The
+dispatch loop unwinds to it by setting `code_pos` to the
+coroutine's parked pc (the last `yield_to_host` site) and
+restoring its stack snapshot.
+
+### Concrete design — fault-loop circuit breaker
+
+A handler that overflows on every event would spam logs
+forever.  The EventLoop tracks `(handler_id,
+recent_fault_count)` and:
+
+- On Nth (default N=5) consecutive recoverable fault for the
+  same handler: stop dispatching that handler entirely and log
+  `Level::Fatal "handler X disabled after N consecutive
+  faults"`.
+- Surface a query API (`el.disabled_handlers() ->
+  vector<text>`) so user code can introspect the breaker
+  state.
+- Reset the count when the handler completes a full event
+  cycle without faulting.
+
+### What this avoids (and why)
+
+- **No `try { } catch (e) { }` user syntax.**  Per the user
+  constraint, recovery is library-driven.  Adding new syntax
+  for a library-only mechanism would over-commit the language.
+- **No per-frame `#[recovery_point]` attribute.**  The
+  EventLoop is the single recovery boundary; no per-fn opt-in
+  needed.  If a future use case actually wants user-controlled
+  recovery points, design then — `#[recovery_point]` could be
+  layered on top of this slice without breaking it.
+- **No implicit `n_main` recovery.**  CLI scripts and tests
+  retain today's halt-on-fault behaviour (developer-friendly).
+  Only EventLoop-driven programs (engine + game scripts) get
+  recovery — explicit opt-in via the library entry point.
+
+### Sequencing — when this design is ready to ship
+
+Prerequisites already shipped (plan-07 phase 4):
+- ✅ Typed `RuntimeError` with kind + position + call_chain.
+- ✅ Production-mode log+continue at `State::raise`.
+- ✅ `--dev-soft-halt` (which proves the unwind shape works).
+
+Prerequisites in flight (this plan):
+- 🔜 YIELD.1-5 (frame-yield primitive + coroutine driver).
+- 🔜 EventLoop dispatch loop with handler coroutines.
+- 🔜 CANCEL.1 (recovery uses similar primitives — coroutine
+  state transition, dep-tracking cleanup at unwind).
+
+When all three plan-23 prerequisites land, this slice becomes
+straightforward: ~300 lines in `lib/web/src/event_loop.loft`
+plus ~50 lines of new primitive
+(`el_recover_to_handler_boundary`) in `src/state/mod.rs`
+mirroring the `frame_yield` shape.
+
+No code in this commit; this section is the design anchor.
+
+---
+
 ## Cross-references
 
 - **EVENT_LOOP_DISCUSSION.md** — open questions, alternatives
@@ -1130,3 +1267,5 @@ surfaces.
   fixed-timestep updates with interpolated render.
 - **THREADING.md** — `par(...)` parallelism.
 - **COROUTINE.md** — `iterator<T>` + `yield`.
+- **plan-07 phase 4f slice 2** (`doc/claude/plans/07-error-messages/04-runtime-error-kinds.md`) — typed `StackOverflow` RuntimeError; the
+  prerequisite for the recovery design above.
