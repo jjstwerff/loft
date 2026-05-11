@@ -12990,6 +12990,44 @@ fn p241_singleton_bool() {
 // DbRef), so the rewrite is verified-by-construction; the
 // behavioural guard waits on P255.
 
+/// P253 — hash-table collision DoS: `keys::hash` and `key_hash`
+/// previously used `DefaultHasher::new()` with a fixed seed (k0=0,
+/// k1=0).  An attacker who could supply hash-table keys could
+/// pre-compute N strings that all collide to a single bucket →
+/// O(N²) insertion / lookup.  Same root-cause class as the 2011
+/// hash-DoS in Python / Ruby / PHP / Java / Node.js.
+///
+/// Fix (2026-05-11): replace `DefaultHasher::new()` with
+/// `build_hasher()` which calls a process-wide seeded
+/// `RandomState` memoised via `OnceLock`.  Cross-process variance
+/// is a stdlib `RandomState` guarantee that's not directly
+/// testable in-process.  This test serves as a smoke check: a
+/// hash collection still inserts + looks up correctly under the
+/// seeded hasher (no behavioural regression for legitimate use).
+#[test]
+fn p253_hash_remains_functional_after_seeding() {
+    code!(
+        "struct P253E { p253_name: text, p253_value: integer }
+struct P253T { p253_data: hash<P253E[p253_name]> }
+fn p253_lookup() -> integer {
+    p253_t = P253T { p253_data: [] };
+    p253_t.p253_data += [P253E { p253_name: \"alpha\", p253_value: 1 }];
+    p253_t.p253_data += [P253E { p253_name: \"beta\", p253_value: 2 }];
+    p253_t.p253_data += [P253E { p253_name: \"gamma\", p253_value: 3 }];
+    p253_a = p253_t.p253_data[\"alpha\"];
+    p253_b = p253_t.p253_data[\"beta\"];
+    p253_g = p253_t.p253_data[\"gamma\"];
+    p253_sum = 0;
+    if p253_a != null { p253_sum = p253_sum + p253_a.p253_value; }
+    if p253_b != null { p253_sum = p253_sum + p253_b.p253_value; }
+    if p253_g != null { p253_sum = p253_sum + p253_g.p253_value; }
+    return p253_sum;
+}"
+    )
+    .expr("p253_lookup()")
+    .result(Value::Int(6));
+}
+
 /// P251 — storing a tuple whose element is a fn-ref into a struct
 /// field failed native compilation with rustc E0605 `(u32, DbRef)
 /// as i32` (interp passed but the call-through-field shape
