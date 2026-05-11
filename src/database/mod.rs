@@ -270,6 +270,17 @@ pub struct Stores {
     /// (where the error is logged instead of aborting).  `main.rs` checks this after
     /// execution and exits with code 1 so shell scripts can detect failure.
     pub had_fatal: bool,
+    /// Plan-07 phase 4 — typed runtime error captured by the most recent
+    /// fault-site opcode or native fn.  Set by callers via
+    /// [`crate::runtime_error::RuntimeError`] constructors plus
+    /// `had_fatal = true`; the interpreter dispatch loop in
+    /// `src/state/mod.rs::execute_argv` checks `runtime_error.is_some()`
+    /// after each op and breaks out of execution by setting
+    /// `code_pos = u32::MAX`.  `main.rs` then renders the error through
+    /// the phase-2 pretty renderer.  Boxed because the slot is rarely
+    /// populated and the `RuntimeError` payload (kind enum + Position
+    /// String + message String) is otherwise ~96 bytes per `Stores`.
+    pub runtime_error: Option<Box<crate::runtime_error::RuntimeError>>,
     /// Directory of the main source file being executed.
     /// Set by `main.rs` after parsing; used by `source_dir()` built-in.
     pub source_dir: String,
@@ -391,6 +402,7 @@ impl Clone for Stores {
             par_fn_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
+            runtime_error: None,
             source_dir: String::new(),
             frame_yield: false,
             poison_free: self.poison_free,
@@ -849,6 +861,7 @@ impl Stores {
             par_fn_buffer_stack: Vec::new(),
             logger: None,
             had_fatal: false,
+            runtime_error: None,
             source_dir: String::new(),
             frame_yield: false,
             poison_free: false,

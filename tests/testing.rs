@@ -421,6 +421,15 @@ impl Drop for Test {
         } else {
             state.execute("test", &p.data);
         }
+        // Plan-07 phase 4 — typed runtime errors halt execution
+        // gracefully via `database.runtime_error`; the in-process test
+        // harness re-raises them as a Rust panic so `#[should_panic]`
+        // fixtures (failed assert / `panic("…")` builtin / future
+        // `RuntimeError` kinds) keep firing.  The binary path
+        // (`src/main.rs`) renders pretty + exits 1 instead.
+        if let Some(err) = state.database.runtime_error.take() {
+            panic!("{}", err.message);
+        }
     }
 }
 

@@ -5,7 +5,48 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 4 — Typed runtime errors
 
-Status: open
+Status: in-progress (foundation + 2/9 sites shipped 2026-05-11).
+Steps 4.1, 4.2, 4.11 (panic builtin), 4.13 (assert) landed in this
+session.  Remaining: 4.3-4.10 (div, mod, vector/text index, null
+deref, narrow cast), 4.12 (stack overflow), 4.14 (backtrace
+capture), 4.15 (renderer frame list), 4.16 (bench gate).
+
+Foundation shape:
+
+- `RuntimeError { kind, position, op_pc, message }` and
+  `RuntimeErrorKind` enum live in `src/runtime_error.rs`.
+- `Stores::runtime_error: Option<Box<RuntimeError>>` field carries
+  the error across the State/native boundary (natives only see
+  `&mut Stores`, not `&mut State`).
+- `State::execute_argv`'s dispatch loop checks
+  `database.runtime_error.is_some()` after each op and short-
+  circuits via `code_pos = u32::MAX`; `State::resume` mirrors
+  the check for post-yield panic / assert.
+- `main.rs` renders captured errors through the existing phase-2
+  `render_entry_pretty` and exits 1 via the existing
+  `had_fatal` check (production-mode path unchanged: logs +
+  continues; only DEV mode now produces a typed error).
+- The in-process test harness (`tests/testing.rs`) re-raises
+  `runtime_error` as a Rust panic after `state.execute(...)`
+  returns so `#[should_panic]` fixtures keep firing.
+
+Site conversions shipped:
+
+- `n_panic` (`src/native.rs`): replaces Rust panic with
+  `RuntimeError::user_panic`.
+- `n_assert` (`src/native.rs`): replaces Rust panic on failed
+  assertion with `RuntimeError::assertion_failed`.
+
+End-to-end output now reads:
+```
+error: panic: boom!
+  --> /tmp/p_panic.loft:2:1
+  |
+2 |   panic("boom!");
+  | ^
+```
+
+instead of the legacy Rust panic frame.
 
 ## Goal
 

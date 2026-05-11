@@ -1,8 +1,8 @@
-==== exit: 101 ====
+==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-  at <cases>/28_runtime_unwrap_none.loft:4:11
-
-thread 'main' (<pid>) panicked at src/native.rs:<line>:<col>:
-expected non-null but got null sentinel (<cases>/28_runtime_unwrap_none.loft:4)
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: assertion failed: expected non-null but got null sentinel
+  --> <cases>/28_runtime_unwrap_none.loft:4:1
+  |
+4 |   assert(x, "expected non-null but got null sentinel");
+  | ^

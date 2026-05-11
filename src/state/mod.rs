@@ -1649,6 +1649,14 @@ impl State {
                 }
                 panic!("{msg}");
             }
+            // Plan-07 phase 4 — typed runtime error halt.  Native fns
+            // and fault-site opcodes set `database.runtime_error` then
+            // signal halt by short-circuiting `code_pos` here.  The
+            // outer caller (main.rs) reads `database.runtime_error`
+            // after `execute_argv` returns and renders it.
+            if self.database.runtime_error.is_some() {
+                self.code_pos = u32::MAX;
+            }
             if self.code_pos == u32::MAX {
                 break;
             }
@@ -1717,6 +1725,12 @@ impl State {
             }
             if self.database.frame_yield {
                 return true; // yielded again — still running
+            }
+            // Plan-07 phase 4 — typed runtime error halt (mirrors
+            // execute_argv).  Resume path needs the same check so a
+            // post-yield panic / failed assert halts gracefully.
+            if self.database.runtime_error.is_some() {
+                self.code_pos = u32::MAX;
             }
             if self.code_pos == u32::MAX {
                 break;

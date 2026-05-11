@@ -451,9 +451,21 @@ fn n_assert(stores: &mut Stores, stack: &mut DbRef) {
             return;
         }
     }
-    let msg = v_message.str();
-    let file = v_file.str();
-    panic!("{msg} ({file}:{v_line})");
+    // Plan-07 phase 4 — typed runtime error.  Replaces the legacy
+    // Rust panic on failed assertion with a `RuntimeError` captured
+    // on `Stores`; the dispatch loop in `state/mod.rs::execute_argv`
+    // sees `runtime_error.is_some()` and halts gracefully, then
+    // `main.rs` renders via the phase-2 pretty renderer.  Prior
+    // production-mode log path above is unchanged — production
+    // intentionally keeps logging-and-continuing semantics.
+    stores.runtime_error = Some(Box::new(
+        crate::runtime_error::RuntimeError::assertion_failed(
+            v_message.str().to_string(),
+            v_file.str().to_string(),
+            v_line as u32,
+        ),
+    ));
+    stores.had_fatal = true;
 }
 
 fn n_panic(stores: &mut Stores, stack: &mut DbRef) {
@@ -475,9 +487,15 @@ fn n_panic(stores: &mut Stores, stack: &mut DbRef) {
             return;
         }
     }
-    let msg = v_message.str();
-    let file = v_file.str();
-    panic!("{msg} ({file}:{v_line})");
+    // Plan-07 phase 4 — typed runtime error.  Same shape as n_assert
+    // above; the loft `panic("msg")` builtin lands a `UserPanic`
+    // variant.  See `RuntimeError::user_panic` for the constructor.
+    stores.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError::user_panic(
+        v_message.str().to_string(),
+        v_file.str().to_string(),
+        v_line as u32,
+    )));
+    stores.had_fatal = true;
 }
 
 fn n_log_info(stores: &mut Stores, stack: &mut DbRef) {

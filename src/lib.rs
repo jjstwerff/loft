@@ -83,6 +83,7 @@ pub mod log_config;
 pub mod logger;
 pub mod manifest;
 pub mod registry;
+pub mod runtime_error;
 mod stack;
 
 pub mod documentation;

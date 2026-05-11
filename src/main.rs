@@ -62,6 +62,7 @@ mod parser;
 mod platform;
 #[cfg(feature = "png")]
 mod png_store;
+mod runtime_error;
 mod scopes;
 mod sha256;
 mod stack;
@@ -2593,6 +2594,18 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
         }
     }
     state.check_store_leaks();
+    // Plan-07 phase 4 — render typed runtime errors through the
+    // phase-2 pretty renderer.  `panic("msg")` and failed `assert`
+    // populate `state.database.runtime_error`; pulling it out here
+    // avoids a borrow conflict with the renderer's loader and keeps
+    // the existing `had_fatal` exit path intact.
+    if let Some(err) = state.database.runtime_error.take() {
+        let entry = err.to_diag_entry();
+        let loader = crate::diagnostic_render::FileSourceLoader::new();
+        let color = crate::diagnostic_render::ColorMode::Auto;
+        let rendered = crate::diagnostic_render::render_entry_pretty(&entry, &loader, color);
+        eprint!("{rendered}");
+    }
     if state.database.had_fatal {
         std::process::exit(1);
     }
