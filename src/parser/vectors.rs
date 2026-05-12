@@ -445,6 +445,12 @@ impl Parser {
             // to rewrite outer bindings to hidden cells.  Detection-
             // only at this phase — no behavior change.
             accumulate_scalars_to_box(&mut self.data, outer_context, d_nr, &self.captured_names);
+            // Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct
+            // exists for every scalar-typed mutated capture, so
+            // 02d-iii's outer-binding rewrite has a target type to
+            // allocate.  Idempotent across all lambdas in the
+            // compilation; gated on first_pass.
+            self.synthesize_cell_structs(d_nr);
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
@@ -664,6 +670,12 @@ impl Parser {
             // to rewrite outer bindings to hidden cells.  Detection-
             // only at this phase — no behavior change.
             accumulate_scalars_to_box(&mut self.data, outer_context, d_nr, &self.captured_names);
+            // Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct
+            // exists for every scalar-typed mutated capture, so
+            // 02d-iii's outer-binding rewrite has a target type to
+            // allocate.  Idempotent across all lambdas in the
+            // compilation; gated on first_pass.
+            self.synthesize_cell_structs(d_nr);
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
@@ -810,6 +822,47 @@ impl Parser {
     /// is sufficient — the closure record itself is freed at the
     /// outer scope's exit, after which the captured value is no
     /// longer reachable.
+    /// Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct exists
+    /// for every scalar-typed mutated capture in
+    /// `self.captured_names`.
+    ///
+    /// Idempotent: a cell struct created for one lambda is reused
+    /// by every subsequent lambda that captures the same scalar
+    /// type.  Gated on `self.first_pass` because struct definitions
+    /// must be created in pass 1; pass 2 looks them up via
+    /// `data.def_nr(name)` (no creation).
+    ///
+    /// Cells whose `cell_struct_name` returns `None` (exotic
+    /// integer widths, Reference / Function / Vector / etc.) are
+    /// silently skipped — phase 02d-iii's outer-binding rewrite
+    /// detects the missing cell at the use site and falls back to
+    /// today's stack-slot codegen.
+    fn synthesize_cell_structs(&mut self, lambda_d_nr: u32) {
+        if !self.first_pass {
+            return;
+        }
+        let captures = self.captured_names.clone();
+        let mutated: Vec<String> = self.data.def(lambda_d_nr).mutated_captures.clone();
+        for (name, tp) in &captures {
+            if !mutated.iter().any(|m| m == name) {
+                continue;
+            }
+            let Some(cell_name) = cell_struct_name(tp, &self.data) else {
+                continue;
+            };
+            // Idempotent: skip if the cell struct already exists.
+            if self.data.def_nr(&cell_name) != u32::MAX {
+                continue;
+            }
+            let cell_d_nr = self
+                .data
+                .add_def(&cell_name, self.lexer.pos(), DefType::Struct);
+            let value_tp = cell_value_type(tp);
+            self.data
+                .add_attribute(&mut self.lexer, cell_d_nr, "value", value_tp);
+        }
+    }
+
     fn synthesize_closure_record(&mut self, lambda_d_nr: u32, lambda_name: &str) {
         let record_name = lambda_name.replace("__lambda_", "__closure_");
         let captures = self.captured_names.clone();
@@ -1894,6 +1947,88 @@ fn ensure_tuple_defs_for_capture(
     }
 }
 
+/// Plan-22 phase 02d-ii — canonical cell-struct name for a scalar
+/// type.
+///
+/// Returns the conventional name `__cell_<T>` used to box a scalar
+/// capture into a 1-field record so closure mutations propagate
+/// back through the auto-Reference path (phase 02b/02c encoding).
+///
+/// Returns `None` for any type the cell-synthesis pass doesn't yet
+/// support (exotic integer widths — u8/i8/u16/i16 — and any non-
+/// scalar type).  Phase 02d-i may have queued such names in
+/// `scalars_to_box` (the accumulator is intentionally inclusive);
+/// 02d-iii will detect a missing cell at the rewrite site and
+/// fall back to today's stack-slot codegen for those captures.
+/// Phase 02d-iv extends the supported set as the need surfaces.
+///
+/// Naming table (one cell per canonical type, deduped across all
+/// captures):
+///
+/// | Loft type | Cell name |
+/// |---|---|
+/// | `integer` (4-byte signed) | `__cell_integer` |
+/// | `long` / wide integer (8-byte) | `__cell_long` |
+/// | `float` | `__cell_float` |
+/// | `single` | `__cell_single` |
+/// | `boolean` | `__cell_boolean` |
+/// | `character` | `__cell_character` |
+/// | `text` | `__cell_text` |
+/// | plain enum `E` | `__cell_enum_<E>` |
+fn cell_struct_name(tp: &Type, data: &crate::data::Data) -> Option<String> {
+    match tp {
+        Type::Integer(spec) => {
+            // Default-nullable byte_width: matches the storage the
+            // cell's `value` field will take.  i32 → 8 today (the
+            // bounds-range heuristic returns 8 for the I32
+            // template; that's the canonical "integer" storage),
+            // i64 → 8.  For the foundation phase we only emit two
+            // canonical integer cells; exotic forced-size widths
+            // (u8/i8/u16/i16) defer to 02d-iv.
+            let bw = spec.byte_width(true);
+            match (bw, spec.forced_size.is_some()) {
+                (8, false) if spec.max == u32::MAX => Some("__cell_long".to_string()),
+                (8, false) => Some("__cell_integer".to_string()),
+                _ => None,
+            }
+        }
+        Type::Float => Some("__cell_float".to_string()),
+        Type::Single => Some("__cell_single".to_string()),
+        Type::Boolean => Some("__cell_boolean".to_string()),
+        Type::Character => Some("__cell_character".to_string()),
+        Type::Text(_) => Some("__cell_text".to_string()),
+        Type::Enum(d_nr, false, _) => {
+            let enum_name = &data.def(*d_nr).name;
+            Some(format!("__cell_enum_{enum_name}"))
+        }
+        _ => None,
+    }
+}
+
+/// Plan-22 phase 02d-ii — canonical type for the cell's `value`
+/// field.
+///
+/// Strips bound/dep details so multiple captures of "the same
+/// underlying type" with slightly different annotations
+/// (e.g. `text` with different lifetime deps, or
+/// `integer not null` vs `integer`) share a single cell struct.
+fn cell_value_type(tp: &Type) -> Type {
+    match tp {
+        Type::Integer(spec) => {
+            // Canonical wide vs narrow templates; bounds + null-flag
+            // are dropped to match the cell-name canonicalisation.
+            if spec.max == u32::MAX {
+                crate::data::I64.clone()
+            } else {
+                crate::data::I32.clone()
+            }
+        }
+        Type::Text(_) => Type::Text(Vec::new()),
+        Type::Enum(d_nr, _, _) => Type::Enum(*d_nr, false, Vec::new()),
+        other => other.clone(),
+    }
+}
+
 /// Plan-22 phase 02d-i — accumulate the names of scalar-typed
 /// captures that this lambda mutates onto the PARENT function's
 /// `scalars_to_box` field.
@@ -2496,6 +2631,234 @@ mod plan22_phase02d_i_scalars_to_box_tests {
             names,
             vec!["n".to_string()],
             "expected `n` queued exactly once (deduped); got {names:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase02d_ii_cell_struct_synthesis_tests {
+    //! Plan-22 phase 02d-ii — verify `synthesize_cell_structs`
+    //! creates the canonical `__cell_<T>` structs in `Data` after
+    //! parsing snippets that mutate scalar captures.  The structs
+    //! are foundation infrastructure for 02d-iii's outer-binding
+    //! rewrite; at this phase they exist but are never allocated
+    //! or referenced (no behavior change).
+
+    use crate::data::DefType;
+    use crate::parser::Parser;
+
+    /// Helper: parse a snippet and return the `(name, def_type)`
+    /// of every `__cell_*` definition that exists in `Data`.
+    fn cells_after(source: &str) -> Vec<(String, DefType)> {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(source, "phase02d_ii_test", false);
+        let mut cells = Vec::new();
+        for d_nr in 0..p.data.definitions() {
+            let def = p.data.def(d_nr);
+            if def.name.starts_with("__cell_") {
+                cells.push((def.name.clone(), def.def_type.clone()));
+            }
+        }
+        cells.sort_by(|a, b| a.0.cmp(&b.0));
+        cells
+    }
+
+    /// Helper: parse a snippet and return `value` field's type
+    /// signature for the named cell struct.  Panics if the cell or
+    /// its `value` attribute is missing — those failures should
+    /// surface as test failures, not silent `None`s.
+    fn cell_value_signature(source: &str, cell_name: &str) -> String {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(source, "phase02d_ii_test", false);
+        let d_nr = p.data.def_nr(cell_name);
+        assert_ne!(d_nr, u32::MAX, "cell `{cell_name}` not found");
+        let def = p.data.def(d_nr);
+        let attr = def
+            .attributes
+            .iter()
+            .find(|a| a.name == "value")
+            .unwrap_or_else(|| panic!("`value` attribute missing on `{cell_name}`"));
+        format!("{:?}", attr.typedef)
+    }
+
+    #[test]
+    fn integer_capture_creates_cell_integer() {
+        let cells = cells_after(
+            r"
+            fn test() {
+                n = 0;
+                f = fn() { n = n + 1; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            cells
+                .iter()
+                .any(|(n, t)| n == "__cell_integer" && *t == DefType::Struct),
+            "expected `__cell_integer` Struct in Data; got {cells:?}"
+        );
+    }
+
+    #[test]
+    fn text_capture_creates_cell_text() {
+        let cells = cells_after(
+            r#"
+            fn test() {
+                s = "";
+                f = fn() { s += "x"; };
+                f();
+            }
+            "#,
+        );
+        assert!(
+            cells
+                .iter()
+                .any(|(n, t)| n == "__cell_text" && *t == DefType::Struct),
+            "expected `__cell_text` Struct in Data; got {cells:?}"
+        );
+    }
+
+    #[test]
+    fn read_only_capture_creates_no_cell() {
+        let cells = cells_after(
+            r"
+            fn test() {
+                n = 5;
+                f = fn(x: integer) -> integer { x + n };
+                _ = f(10);
+            }
+            ",
+        );
+        assert!(
+            cells.is_empty(),
+            "no cell should be synthesised for read-only capture; got {cells:?}"
+        );
+    }
+
+    #[test]
+    fn struct_capture_creates_no_cell() {
+        // Struct (Reference) captures are handled by phase 02c's
+        // auto-Reference path, NOT by 02d's boxing.  No `__cell_*`
+        // should appear.
+        let cells = cells_after(
+            r"
+            struct S { x: integer }
+            fn test() {
+                s = S { x: 0 };
+                f = fn() { s.x = 7; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            cells.is_empty(),
+            "no cell should be synthesised for struct capture; got {cells:?}"
+        );
+    }
+
+    #[test]
+    fn dedup_two_integer_captures_share_one_cell() {
+        // Two separate scalar bindings, both integer, both
+        // mutated.  Exactly one `__cell_integer` should appear.
+        let cells = cells_after(
+            r"
+            fn test() {
+                a = 0;
+                b = 0;
+                f = fn() {
+                    a = a + 1;
+                    b = b + 2;
+                };
+                f();
+            }
+            ",
+        );
+        let count = cells.iter().filter(|(n, _)| n == "__cell_integer").count();
+        assert_eq!(
+            count, 1,
+            "expected exactly one `__cell_integer`; got {count} (cells={cells:?})"
+        );
+    }
+
+    #[test]
+    fn distinct_types_create_distinct_cells() {
+        // Mix of scalar types — each should get its own cell.
+        let cells = cells_after(
+            r#"
+            fn test() {
+                n = 0;
+                s = "";
+                b = false;
+                f = fn() {
+                    n = n + 1;
+                    s += "x";
+                    b = !b;
+                };
+                f();
+            }
+            "#,
+        );
+        let names: Vec<String> = cells.iter().map(|(n, _)| n.clone()).collect();
+        assert!(
+            names.contains(&"__cell_integer".to_string()),
+            "expected __cell_integer; got {names:?}"
+        );
+        assert!(
+            names.contains(&"__cell_text".to_string()),
+            "expected __cell_text; got {names:?}"
+        );
+        assert!(
+            names.contains(&"__cell_boolean".to_string()),
+            "expected __cell_boolean; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn cell_value_field_carries_canonical_type() {
+        // Sanity check: the cell's `value` field exists and the
+        // type signature renders as `Integer(...)` (the canonical
+        // I32 template).  Phase 02d-iii will read/write through
+        // this field.
+        let sig = cell_value_signature(
+            r"
+            fn test() {
+                n = 0;
+                f = fn() { n = n + 1; };
+                f();
+            }
+            ",
+            "__cell_integer",
+        );
+        assert!(
+            sig.starts_with("Integer("),
+            "cell `value` field should be Integer-typed; got `{sig}`"
+        );
+    }
+
+    #[test]
+    fn dedup_across_two_lambdas() {
+        // Two lambdas, each mutating its own integer capture.
+        // Both reuse the single `__cell_integer` struct (the cell
+        // is keyed by type, not by binding).
+        let cells = cells_after(
+            r"
+            fn test() {
+                a = 0;
+                b = 0;
+                f1 = fn() { a = a + 1; };
+                f2 = fn() { b = b + 1; };
+                f1();
+                f2();
+            }
+            ",
+        );
+        let count = cells.iter().filter(|(n, _)| n == "__cell_integer").count();
+        assert_eq!(
+            count, 1,
+            "expected single shared `__cell_integer` across two lambdas; got {count} (cells={cells:?})"
         );
     }
 }
