@@ -22,6 +22,7 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 - [Debugging a validate_slots Panic](#debugging-a-validate_slots-panic)
 - [Debugging a Scope Analysis Bug](#debugging-a-scope-analysis-bug)
 - [Using the Test Framework for Quick Iteration](#using-the-test-framework-for-quick-iteration)
+- [Open work](#open-work)
 
 ---
 
@@ -471,8 +472,47 @@ runner will pick it up automatically.
 
 ---
 
+## Open work
+
+Diagnostic tooling enhancements surfaced by recurring debug
+sessions across plan-22's 02d sub-phases (Sept-Oct 2026).
+Each row is a focused, single-commit improvement; collectively
+they would have shaved 10-20 hours of `eprintln!`-and-rerun
+diagnosis time across plan-22 phases 02d-iii through 02d-vii.
+Listed in ROI order (highest leverage first).
+
+| Tool | Effort | Where it would have helped | Notes |
+|---|---|---|---|
+| `LOFT_LOG=locks` — log every `set_locked(true/false)` with op + record + caller fn | XS (~1 day) | 02d-vii ("Write to locked store at rec=8 fld=2" with no provenance) | Add to `src/log_config.rs`; instrument `Store::set_locked` to print when the mode is enabled.  Highest-impact single addition. |
+| Better always-on panic context | XS (~½ day) | All store-related panics | Extend `Write to locked store` and similar to include locker identity (op name + offset).  No log mode needed; always-on. |
+| `LOFT_LOG=type_timeline:<varname>` — log every `change_var_type` / `Function::set_type` with stack trace | S (~1 day) | 02d-iii.a, 02d-v, 02d-vi, 02d-vii (each asked "what type does this var have right NOW?" 3+ times via ad-hoc `eprintln!`) | Add to `src/log_config.rs`; instrument `Variables::set_type` + `change_var_type`.  High repeat value across compiler bugs. |
+| `loft --dump-ir <fn>` — print parsed IR tree post-pass-2, pre-codegen | S-M (~2 days) | 02d-iii.e, 02d-vi (used `LOFT_LOG=full` to infer IR shape from bytecode; direct IR dump would be 5× faster to read) | Partial code already exists in `LOFT_LOG=full`'s IR section.  Extract into a standalone CLI flag that filters by fn name. |
+| `LOFT_LOG=slots:<fn>` — print slot-allocation decisions for a function, including "would-be-allocated-but-skipped-because-X" | M (~2-3 days) | 02d-v ("Incorrect var b[65535] versus 60" — slot was unallocated because no `Set/v_set` IR marked the var as defined; not visible in any current dump) | Touches `src/scopes.rs` + slot allocator; explain skipped allocations with a reason string. |
+| `loft --dump-captures <fn>` — for each lambda, print captured_names + mutated_captures + scalars_to_box contributions + closure_record attributes (auto-Reference vs inline) | M (~2 days) | 02d-iii.e (5 separate `eprintln!` cycles to inspect closure-record attribute types across passes) | One-shot view of the multi-struct capture pipeline; medium ROI, high readability. |
+| Dep-graph / lifetime visualizer | L (~1 week) | Mostly leak-guard territory; would help when leaks DO surface | Lower ROI today since leak guards catch most issues; useful for future lifetime-system overhauls. |
+
+**Why DEBUG.md and not a plan**: each row is independent
+(no cross-dependencies), each ships in a single commit, and
+the work doesn't have phases — it's classic light-flow
+infrastructure.  Per `loft-plan-workflow` skill, plans are
+for genuinely multi-phase initiatives with shared design.
+
+**Cross-cutting motivation**: the loft compiler has multiple
+passes (parse-1, parse-2, scope analysis, codegen) that each
+transform types, slots, and IR.  Mismatches between passes
+manifest as runtime panics with thin context.  The current
+debug story relies heavily on `LOFT_LOG=full` which is
+high-volume and requires reading bytecode + cross-referencing
+codegen.rs.  More targeted log modes that focus on specific
+subsystems (locks / types / slots / captures) reduce the
+cognitive load per debug session.
+
+---
+
 ## See also
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Developer guide: pipeline overview, quality requirements, feature proposals
 - [TESTING.md](TESTING.md) — Test framework, `code!` / `expr!` macros, LogConfig debug presets
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs with severity, workarounds, and fix paths
+- [SLOTS.md](SLOTS.md) — Slot assignment design (for the slots-dump enhancement)
+- [LIFETIME.md](LIFETIME.md) — Dep tracking and scope-based freeing (for the dep-graph enhancement)
 - [SLOTS.md](SLOTS.md) — Variable scoping and slot assignment details

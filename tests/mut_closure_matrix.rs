@@ -45,14 +45,20 @@
 //! and append (`log += s` lowered via compute_op_code) both
 //! route through the general `OpSetText` path.
 //!
-//! KNOWN LIMITATION: returning text from a function that uses
-//! a closure-mutated text cell surfaces "Write to locked store"
-//! at the closure-record init site.  Deferred to a follow-up
-//! investigation — the cell DbRef is captured before the cell
-//! allocation's record gets a stable store_nr.  Affects only
-//! the rare pattern `fn x() -> text { acc = ""; f = fn(...) {
-//! acc ... }; ...; acc }`; closures + text-mutation in
-//! void-return functions work correctly.
+//! Phase 02d-vii (2026-05-12) closes the text-return crash:
+//! the work-text result buffer in text-returning fns locks
+//! the closure record's store BEFORE the SetDbRef capturing
+//! the boxed-text DbRef can fire (panic at
+//! `src/store.rs:963`).  Surgical fix: skip text-cell boxing
+//! when the parent function returns text — text mutation in
+//! that shape falls back to the existing void-return write-
+//! back mechanism (which works for b_d1; b_d2/b_d3 in
+//! text-return remain pre-02d-vi behaviour, mutations lost
+//! when the closure is invoked outside the parent's frame).
+//! Deeper fix (defer the work-text lock or use a separate
+//! store) is an open follow-up — see
+//! `doc/claude/plans/22-mutable-closures/02d-iii-design.md`'s
+//! 02d-viii row.
 //!
 //! Each `body` must declare `fn test() { … }` and any helper fns
 //! at file scope; the harness appends `fn main() { test(); }`.
@@ -586,6 +592,40 @@ cross_mode!(
         loop.cb();
         print("text: {log}\n");
         assert(log == "after", "b_d3_text expected after, got {log}");
+    }
+    "#
+);
+
+// Phase 02d-vii — text APPEND in a text-returning fn.  This
+// shape used to crash with "Write to locked store" before the
+// 02d-vii guard (the work-text result buffer locks the
+// closure record's store before SetDbRef can capture the
+// boxed-text DbRef).  The guard now skips text-cell boxing in
+// text-returning fns; text append still propagates via the
+// existing void-return write-back mechanism (the
+// `OpAppendText`-on-stack-text path that pre-dates 02d-vi).
+//
+// LIMITATION: text RE-ASSIGN (`acc = "after"`) in a closure
+// inside a text-returning fn does NOT propagate today — the
+// pre-02d-vi write-back only handles append, not reassign.
+// b_d1_text_capture_local_mutates (void return + reassign)
+// still passes via the cell mechanism.  Re-assign in
+// text-returning fns is an open follow-up tied to the same
+// "deeper fix" listed for 02d-viii.
+cross_mode!(
+    b_d1_text_append_in_text_return_fn,
+    r#"
+    fn build() -> text {
+        acc = "";
+        f = fn(s: text) { acc += s; };
+        f("a");
+        f("bb");
+        acc
+    }
+    fn test() {
+        r = build();
+        print("{r}\n");
+        assert(r == "abb", "b_d1_text_append_in_text_return expected abb, got {r}");
     }
     "#
 );

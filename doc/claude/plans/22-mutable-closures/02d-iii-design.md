@@ -21,8 +21,9 @@ between a focused 5-commit arc and a multi-week debug loop.
 | 02d-iii | Outer-binding rewrite — sub-steps a-e | Shipped 2026-05-12 |
 | 02d-iv | Cells (b_d1/b_d2/b_d3 for float/single/character/enum + multi-scalar) + leak guard | Shipped 2026-05-12 |
 | 02d-v | Boolean cells via OpEqInt LHS shape recognition in `maybe_prepend_cell_alloc` | Shipped 2026-05-12 |
-| 02d-vi | Text-cell boxing — bypass guard in `parse_assign_op` skips the text-special branch when LHS is auto-deref'd boxed text; general `OpSetText` path handles re-assign + `+=` | Shipped 2026-05-12 (text-return-from-fn pending follow-up) |
-| 02d-vii | Text-return-from-fn-with-cell: "Write to locked store" at closure-record init when fn returns text mutated by closure.  Deferred follow-up. | Future |
+| 02d-vi | Text-cell boxing — bypass guard in `parse_assign_op` skips the text-special branch when LHS is auto-deref'd boxed text; general `OpSetText` path handles re-assign + `+=` | Shipped 2026-05-12 (text-return-from-fn pending → addressed in 02d-vii) |
+| 02d-vii | Text-return-from-fn-with-cell: parent-returns-text guard in `flip_scalars_to_box_types` + `box_captured_names_for_outer_scalars` skips text-cell boxing in text-returning fns.  Text mutation falls back to existing write-back mechanism (works for `+=` append; re-assign `=` is a pre-existing limitation). | Shipped 2026-05-12 |
+| 02d-viii | Deeper fix: defer work-text result-buffer lock until AFTER closure-record init OR allocate closure record in a separate store.  Would re-enable text-cell boxing in text-returning fns + fix re-assign propagation. | Future |
 
 ## Goal
 

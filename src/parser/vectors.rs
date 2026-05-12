@@ -939,6 +939,17 @@ impl Parser {
         if self.context == u32::MAX || (self.context as usize) >= self.data.definitions.len() {
             return;
         }
+        // Plan-22 phase 02d-vii — skip text-cell boxing when the
+        // parent function returns text.  In a text-returning fn,
+        // the work-text result-buffer machinery locks the
+        // closure record's store before `emit_lambda_code`'s
+        // SetDbRef can capture the boxed-text DbRef, panicking
+        // with "Write to locked store".  Reverting text vars to
+        // their pre-02d-vi behaviour (no flip → text mutation
+        // flows through the existing void-return write-back
+        // mechanism, which works for the b_d1 shape that
+        // text-returning fns are most likely to use).
+        let parent_returns_text = matches!(self.data.def(self.context).returned, Type::Text(_));
         let names = self.data.def(self.context).scalars_to_box.clone();
         for name in &names {
             let v_nr = self.vars.var(name);
@@ -953,6 +964,16 @@ impl Parser {
             if matches!(&original_tp, Type::Reference(d, _)
                 if self.data.def(*d).name.starts_with("__cell_"))
             {
+                continue;
+            }
+            // Plan-22 phase 02d-vii — text-skip when parent
+            // returns text (see above for rationale).  Skips
+            // both bare Text and RefVar(Text) (mutable stack
+            // text locals).
+            let is_text_or_reftext = matches!(&original_tp, Type::Text(_))
+                || matches!(&original_tp, Type::RefVar(inner)
+                    if matches!(inner.as_ref(), Type::Text(_)));
+            if parent_returns_text && is_text_or_reftext {
                 continue;
             }
             // Plan-22 phase 02d-iii.e / 02d-v / 02d-vi — all
@@ -2213,14 +2234,22 @@ fn box_captured_names_for_outer_scalars(
         return;
     }
     let scalars = data.def(outer_context).scalars_to_box.clone();
+    // Plan-22 phase 02d-vii — symmetric guard with
+    // `flip_scalars_to_box_types`: skip text when the parent
+    // function returns text (avoid the "Write to locked
+    // store" panic at closure-record init in text-returning
+    // fns).
+    let parent_returns_text = matches!(data.def(outer_context).returned, Type::Text(_));
     for (name, tp) in captured_names {
         if !scalars.iter().any(|s| s == name) {
             continue;
         }
-        // Plan-22 phase 02d-vi — text is now boxed (the
-        // `flip_scalars_to_box_types` no-skip ↔
-        // `box_captured_names_for_outer_scalars` no-skip
-        // invariant).  No types are skipped here today.
+        let is_text_or_reftext = matches!(tp, Type::Text(_))
+            || matches!(tp, Type::RefVar(inner)
+                if matches!(inner.as_ref(), Type::Text(_)));
+        if parent_returns_text && is_text_or_reftext {
+            continue;
+        }
         if let Some(cell_name) = cell_struct_name(tp, data) {
             let cell_d_nr = data.def_nr(&cell_name);
             if cell_d_nr != u32::MAX {

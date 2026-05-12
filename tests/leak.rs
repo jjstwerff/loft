@@ -738,11 +738,10 @@ fn p22_phase02d_iii_e_scalar_capture_no_leak() {
 ///
 /// NOTE: this guard uses void-return + assert-inside-iteration
 /// rather than returning the text from `one_iteration`.
-/// Text-return from a fn with closure-mutated text cells
-/// surfaces a separate runtime issue ("Write to locked store"
-/// — the closure-record init reads the cell DbRef before the
-/// cell's allocation finishes); deferred to a follow-up
-/// investigation.
+/// Text-return from a fn with closure-mutated text uses the
+/// existing write-back mechanism (per 02d-vii's text-skip-in-
+/// text-return guard) — covered by
+/// `p22_phase02d_vii_text_return_with_closure_no_leak` below.
 #[test]
 fn p22_phase02d_vi_text_capture_no_leak() {
     run_leak_check_str(
@@ -757,6 +756,45 @@ fn p22_phase02d_vi_text_capture_no_leak() {
             i = 0;
             while i < 100 {
                 one_iteration("before");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-22 phase 02d-vii — text-return-from-fn-with-closure
+/// leak guard.
+///
+/// 100-iteration tight loop: each iteration runs a function
+/// that returns text AND uses a closure that APPENDS to a
+/// text local.  Per 02d-vii, the parent-returns-text guard
+/// skips the text-cell flip — acc stays as `RefVar(Text)` and
+/// the existing void-return write-back mechanism propagates
+/// the closure's append mutation (this path predates 02d-vi).
+/// Verify no leak from the work-text buffer + closure record
+/// + closure-record's text attribute.
+///
+/// NOTE: the test uses APPEND (`+=`) not REASSIGN (`=`) —
+/// re-assign in closures inside text-returning fns is a
+/// pre-existing limitation tied to the same store-lock
+/// interaction that 02d-vii works around.
+#[test]
+fn p22_phase02d_vii_text_return_with_closure_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn build() -> text {
+            acc = "";
+            f = fn(s: text) { acc += s; };
+            f("a");
+            f("bb");
+            acc
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = build();
+                assert(r == "abb", "iter {i}: got {r}");
                 i = i + 1;
             }
         }
