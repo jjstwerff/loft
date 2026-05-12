@@ -158,13 +158,13 @@ fn sequential_file_blocks_read_conflict() {
 fn vector_iteration_index_inside_vec_slot() {
     code!(
         "fn test() {
-  N = 100;
+  const N = 100;
   v =[for i in 0..N { i }];
   sum = 0;
   for x in v { sum += x; }
   assert(sum == 4950, \"sum {sum}\");
   for x in v { x#remove; }
-  assert(!v[0], \"empty after remove\");
+  assert(len(v) == 0, \"empty after remove len={len(v)}\");
   for cycle in 0..3 {
     v +=[for i in 0..50 { i }];
     cnt = 0;
@@ -172,11 +172,11 @@ fn vector_iteration_index_inside_vec_slot() {
     assert(cnt == 50, \"cycle {cycle} cnt {cnt}\");
     for x in v { x#remove; }
   }
-  assert(!v[0], \"empty after 3 cycles\");
+  assert(len(v) == 0, \"empty after 3 cycles len={len(v)}\");
   sv =[42];
   assert(sv[0] == 42, \"sv read\");
   for x in sv { x#remove; }
-  assert(!sv[0], \"sv empty\");
+  assert(len(sv) == 0, \"sv empty len={len(sv)}\");
   sv +=[99];
   assert(sv[0] == 99, \"sv reinserted\");
   for x in sv { x#remove; }

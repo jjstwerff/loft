@@ -1,8 +1,14 @@
-==== exit: 101 ====
+==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-  at <cases>/27_runtime_stack_overflow.loft:2:34
-
-thread 'main' (<pid>) panicked at src/state/mod.rs:<line>:<col>:
-Recursion depth limit exceeded (500) — possible infinite recursion
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: call stack overflow
+  --> <cases>/27_runtime_stack_overflow.loft:2:34
+  |
+2 |   if n == 0 { 0 } else { deep(n - 1) + 1 }
+  |                                  ^
+  in fn deep() ← called from
+        fn deep()
+        fn deep()
+        fn deep()
+        fn deep()
+        … (496 more frames)

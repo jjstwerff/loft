@@ -413,11 +413,19 @@ fn p150_moros_map_serial_leak() {
     p.database = db;
     p.lib_dirs.push("lib".to_string());
     p.parse("lib/moros_map/tests/serial.loft", false);
-    assert!(
-        p.diagnostics.is_empty(),
-        "parse errors: {:?}",
-        p.diagnostics.lines()
-    );
+    // Filter out Warning-level diagnostics — plan-07 phase 4e.2/4h
+    // emit informational warnings for undefended division, OOB
+    // indexing, and `not null` field reminders.  Those are
+    // intentional advisory output and don't block the test.  This
+    // assertion only fires on actual parse Errors.
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
