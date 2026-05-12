@@ -51,6 +51,32 @@ No production change — P227 closed text-returning fn-ref
 calls (interp + native) 2026-05-05; phase 03 pins it as a
 regression guard plus adds the leak surface coverage.
 
+**Phase 04 SHIPPED 2026-05-12** — C3 (Reference captures)
+across D1/D2/D3: 3 cells (c3_d1_ref_capture_local +
+c3_d2_ref_capture_arg + c3_d3_ref_capture_field).  Each
+captures a struct (DbRef-allocated) into a closure body
+that reads field(s) from it.  Both backends green.
+
+Plus 2 leak guards in `tests/leak.rs`:
+`p15_phase04_closure_ref_capture_field_no_leak` and
+`p15_phase04_closure_ref_capture_local_no_leak` — 100-iteration
+tight loops, both clean.
+
+**Phase 04 finding**: no DbRef-in-closure-record leak or
+read-after-free.  The "move-vs-copy semantics gap analogous
+to plan-14 T1.8c" feared in the plan does NOT manifest for
+closures.  The dep mechanism in `vectors.rs:666-669`
+(Type::Function carries closure-record dep `[w]`) plus
+`Parts::ChildRec` cascade for D3 ensures the captured Point's
+store record stays live until the closure record is freed.
+No P-issue filed.
+
+No production change — the underlying support shipped earlier
+(P213 closed struct-field captures 2026-05-04 with
+`Parts::ChildRec`; the dep-tracking for closure records was
+in place from the original closure surface).  Phase 04 pins
+it as a regression guard.
+
 ## Goal
 
 Lock the closure-validation matrix and wire `tests/closure_matrix.rs`

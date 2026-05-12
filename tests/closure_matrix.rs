@@ -345,3 +345,68 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 04 — Reference captures (C3) across D1 / D2 / D3 ─────────────────
+//
+// C3 captures a struct (DbRef-allocated) into a closure body that
+// reads field(s) from it.  The closure record holds the captured
+// DbRef; the captured struct must outlive the closure record.
+//
+// Risk per the plan: DbRef-in-closure-record dep tracking; the
+// "move-vs-copy semantics gap analogous to plan-14 T1.8c" (where
+// a Reference variable assigned into a tuple's slot was
+// inadvertently freed by the source's scope-exit cleanup).  If
+// that gap exists for closures, the captured Point would be
+// freed on the outer scope's exit while the closure still holds
+// its DbRef — read-after-free.
+//
+// Phase 04 finding (2026-05-12): no read-after-free observed.
+// The dep mechanism in `vectors.rs:666-669` (Type::Function
+// carries closure-record dep `[w]`) plus `Parts::ChildRec`
+// cascade for D3 ensures the captured Point's store record
+// stays live until the closure record is freed.
+// `tests/leak.rs::p15_phase04_closure_ref_capture_*_no_leak`
+// adds 100-iteration tight-loop guards for D1 + D3.
+
+cross_mode!(
+    c3_d1_ref_capture_local,
+    r#"
+    struct Point { x: integer, y: integer }
+    fn test() {
+        p = Point { x: 10, y: 20 };
+        f = fn(dx: integer) -> integer { p.x + dx };
+        result = f(5);
+        print("{result}\n");
+        assert(result == 15, "c3_d1 result={result}");
+    }
+    "#
+);
+
+cross_mode!(
+    c3_d2_ref_capture_arg,
+    r#"
+    struct Point { x: integer, y: integer }
+    fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+    fn test() {
+        p = Point { x: 50, y: 0 };
+        result = apply(fn(dx: integer) -> integer { p.x + dx }, 5);
+        print("{result}\n");
+        assert(result == 55, "c3_d2 result={result}");
+    }
+    "#
+);
+
+cross_mode!(
+    c3_d3_ref_capture_field,
+    r#"
+    struct Point { x: integer, y: integer }
+    struct Holder { cb: fn(integer) -> integer }
+    fn test() {
+        p = Point { x: 100, y: 0 };
+        h = Holder { cb: fn(dx: integer) -> integer { p.x + dx } };
+        result = h.cb(7);
+        print("{result}\n");
+        assert(result == 107, "c3_d3 result={result}");
+    }
+    "#
+);

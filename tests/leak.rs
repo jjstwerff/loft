@@ -567,3 +567,78 @@ fn p15_phase03_closure_text_capture_local_no_leak() {
         "#,
     );
 }
+
+/// Plan-15 phase 04 — D3 (struct field) Reference-capture leak guard.
+///
+/// The captured value is a struct (DbRef-allocated) instead of a
+/// text.  The closure record holds the captured DbRef; the
+/// captured Point's store record must outlive the closure record,
+/// AND the closure record must be freed at host-struct scope exit
+/// for both records to release.
+///
+/// Risk: if the captured DbRef's dep-tracking lets the source
+/// scope's cleanup free Point while the closure still holds it,
+/// the closure body would read a freed store record.  100
+/// iterations × calling the closure each iteration would surface
+/// either as a leak (record never freed) or a panic (record freed
+/// while in use).
+///
+/// Actual behaviour (2026-05-12): clean.  No leak, no
+/// read-after-free.  The dep mechanism in `vectors.rs:666-669`
+/// keeps the closure-record alive long enough; `Parts::ChildRec`
+/// cascade frees both at host-struct scope exit.
+#[test]
+fn p15_phase04_closure_ref_capture_field_no_leak() {
+    run_leak_check_str(
+        r#"
+        struct Point { x: integer, y: integer }
+        struct Holder { cb: fn(integer) -> integer }
+        fn one_call() -> integer {
+            p = Point { x: 100, y: 0 };
+            h = Holder { cb: fn(dx: integer) -> integer { p.x + dx } };
+            h.cb(7)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == 107, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-15 phase 04 — D1 (local var) Reference-capture leak guard.
+///
+/// Same shape as the D3 guard above but the closure lives in a
+/// local variable instead of a struct field.  Cleanup path:
+/// stack-frame exit drops the fn-ref local, which transitively
+/// frees the closure record (holding the captured Point DbRef),
+/// which transitively frees Point's store record.
+///
+/// The dep chain `Point ← closure-record ← fn-ref local` must
+/// flow through the standard local-cleanup mechanism without
+/// leaving any record behind.
+#[test]
+fn p15_phase04_closure_ref_capture_local_no_leak() {
+    run_leak_check_str(
+        r#"
+        struct Point { x: integer, y: integer }
+        fn one_call() -> integer {
+            p = Point { x: 10, y: 20 };
+            f = fn(dx: integer) -> integer { p.x + dx };
+            f(5)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == 15, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
