@@ -471,6 +471,31 @@ End-to-end checks once implemented:
 
 ## Sequencing
 
+### Plan-22 internal phasing (added 2026-05-12)
+
+Each phase has its own design doc under `plans/22-mutable-closures/`:
+
+| Phase | Ships | Dependencies |
+|---|---|---|
+| [00 — matrix freeze + harness wiring](00-matrix.md) | `tests/mut_closure_matrix.rs` + Case A baseline cells | None |
+| [01 — mutated-captures detection](01-mutation-detection.md) | Walker that marks captures as `mutated: bool`; no behavior change | Phase 00 harness |
+| [02 — Case B (co-scoped)](02-case-b.md) | Reference / hidden-cell lowering for mutating co-scoped closures | Phase 01 |
+| [03 — Case C (moved)](03-case-c.md) | Liveness check + ownership transfer for factory pattern | Phase 02 |
+| [04 — Case D (rejection)](04-case-d.md) | Multi-position diagnostic for aliased mutating | Phase 03 |
+| [05 — `Mutable<T>` helper](05-mutable-helper.md) | Stdlib escape hatch for explicit shared ownership (DEFER-BY-DEFAULT) | Phase 04 |
+| [06 — closeout](06-closeout.md) | Purity audit + TTT v6 / plan-36 retrofit + docs | Phases 02-04 (05 optional) |
+
+**Acceptance for the whole plan**: every Case A regression cell stays green; phase 02-05 cells run cross-mode under `tests/mut_closure_matrix.rs`; phase 04 case-D rejections pinned in `tests/parse_errors.rs`; phase 06 retrofit ships TTT v6 + plan-36 servers using writable closures.
+
+P257's parse-time-rejection pattern (closed 2026-05-12) is the
+template phase 04 uses for case-D diagnostics.  Plan-15
+(closure validation, finished 2026-05-12) provides the
+regression net — its 22 cells in `tests/closure_matrix.rs`
++ 5 leak guards in `tests/leak.rs` confirm Case A semantics
+stay correct as plan-22 evolves the synthesis path.
+
+### External dependency stack (first-game ship)
+
 This spec sits on the dependency stack for first-game ship:
 
 | Phase | Ships | Dependency |
@@ -481,9 +506,8 @@ This spec sits on the dependency stack for first-game ship:
 | 4 | First playable single-player game | Phase 2 |
 | 5 | First multiplayer game | Phase 3 |
 
-Phase 2 estimate is unsized at the time of writing; the
-discussion doc's analysis sketch identifies the unknowns that
-must be resolved before estimation is meaningful.
+P213 v4 already shipped (closed 2026-05-04 via `Parts::ChildRec`
+layout-widening); plan-22 phase 2 dependency is met.
 
 ---
 
