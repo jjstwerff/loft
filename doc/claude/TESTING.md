@@ -251,8 +251,9 @@ Family today:
 | `tests/template_matrix.rs` | plan-17 | T-parameter usage × bound shape | bounded-generic / interface surface |
 
 Future matrices follow the same shape (closure validation, coroutine
-validation, match validation — see `plans/future/15-closure-validation/`,
-`16-coroutine-validation/`, `18-match-validation/`).
+validation, match validation — see `plans/15-closure-validation/`
+(active), `plans/future/16-coroutine-validation/`,
+`plans/future/18-match-validation/`).
 
 ### Pattern
 

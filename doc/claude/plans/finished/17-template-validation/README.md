@@ -96,7 +96,8 @@ byte-identical stdout** asserted by the `cross_mode!` harness.
   destination for any future CLOSED rows from this matrix
 - [`../../14-tuple-validation/00-matrix.md`](../../14-tuple-validation/00-matrix.md)
   — peer matrix (donor template for cross_mode + matrix style)
-- [`../../future/15-closure-validation/`](../../future/15-closure-validation/)
+- [`../../15-closure-validation/`](../../15-closure-validation/)
+  (active, promoted 2026-05-12)
   / [`../../future/16-coroutine-validation/`](../../future/16-coroutine-validation/)
   / [`../../future/18-match-validation/`](../../future/18-match-validation/)
   — peer matrix plans following the same shape

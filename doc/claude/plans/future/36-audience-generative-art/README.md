@@ -354,7 +354,7 @@ extensions.
   closures; if not, it uses `Reference<T>` exactly like TTT v5.
   Demo functions either way; only on-screen elegance differs.
 
-**Latent risk:** `plans/future/15-closure-validation` phase 03 /
+**Latent risk:** `plans/15-closure-validation` phase 03 /
 closure-DbRef leak (LIFETIME.md "NOT YET HANDLED").  Generation
 script will use closures heavily.  Leak is bounded per closure-
 creation, not per tick — a 30-60 minute talk session is fine; an

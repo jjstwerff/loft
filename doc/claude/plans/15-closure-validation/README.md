@@ -5,12 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 15 — Closure validation: capture × storage matrix
 
-**Status: pre-flight surveyed 2026-05-04 — 6/12 probes fail (50% yield).**
-P213 closed 2026-05-04 (capturing-closure-in-struct-field rejected at
-parse time with clear diagnostic; proper layout-widening fix deferred).
-Open: P214 (non-capturing vector-of-closure C0/D4), P215 (nested-closure
-name resolution C6/D1), P216 (tuple-capture in closure C4/D1).  Phase
-00 wiring not yet started; remaining fixes follow.
+**Status: ACTIVE — promoted to current 2026-05-12.**
+Pre-flight surveyed 2026-05-04 (6/12 probes failed → 50% bug yield);
+the surveyed P-issues (P213/P214/P215/P216) all closed in the
+2026-05-04..05 sprint, so the original motivating bugs are gone but
+the matrix itself remains unfilled and the LIFETIME.md
+"Type::Function — NOT YET HANDLED" closure-leak gap is still open.
+Phase 00 wiring is the next step.
 
 ## Goal
 

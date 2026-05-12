@@ -31,13 +31,13 @@ Features that "appear to work" but don't, or that lose data without indication. 
 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
-| (cross) | Closure validation — capture × storage matrix | M | ✓ | plans/future/15-closure-validation/README.md |
+| (cross) | Closure validation — capture × storage matrix | M | ✓ | plans/15-closure-validation/README.md |
 | (cross) | Coroutine validation — yielded type × drive context matrix | M | ✓ | plans/future/16-coroutine-validation/README.md |
 | (cross) | Match validation — subject type × pattern shape matrix | M | ✓ | plans/future/18-match-validation/README.md |
 | (cross) | Struct-enum validation — variant payload × dispatch context matrix | M | ✓ | plans/future/19-struct-enum-validation/README.md |
 | (cross) | Keyed collection validation — collection × operation matrix | M | ✓ | plans/future/20-collection-validation/README.md |
 | Q* | JSON parse-error diagnostics (Q1) — parse currently fails silently in some shapes | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
-| (cross) | Closure-DbRef leak (LIFETIME.md "Type::Function — NOT YET HANDLED") | M | ~ | plans/future/15-closure-validation/ phase 03 (active risk) |
+| (cross) | Closure-DbRef leak (LIFETIME.md "Type::Function — NOT YET HANDLED") | M | ~ | plans/15-closure-validation/ phase 03 (active risk) |
 
 ---
 
@@ -269,7 +269,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/future/15-closure-validation/`](plans/future/15-closure-validation/) | M | (cross-mode harness shipped by closed plan-14) | Phase 03 also closes the closure-DbRef leak |
+| [`plans/15-closure-validation/`](plans/15-closure-validation/) | M | (cross-mode harness shipped by closed plan-14) | **Active** (promoted 2026-05-12).  Phase 03 also closes the closure-DbRef leak. |
 | [`plans/future/16-coroutine-validation/`](plans/future/16-coroutine-validation/) | M | (cross-mode harness shipped by closed plan-14) | Yielded type × drive context matrix |
 | [`plans/future/18-match-validation/`](plans/future/18-match-validation/) | M | (cross-mode harness shipped by closed plan-14) | Subject type × pattern shape matrix |
 | [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | (cross-mode harness shipped by closed plan-14) | Variant payload × dispatch context matrix |
