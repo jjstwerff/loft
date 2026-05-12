@@ -152,7 +152,7 @@ for a single phase 02 commit.
 Phase 02 splits into three sub-commits to keep each landable
 independently:
 
-### 02a — pass-1 mutation detection (foundation)
+### 02a — pass-1 mutation detection (foundation) — SHIPPED 2026-05-12
 
 Move phase 01's mutation walker to run in pass 1 too.  Requires:
 

@@ -393,7 +393,20 @@ impl Parser {
                 }
             }
         }
-        if self.context != u32::MAX && !self.first_pass {
+        // Plan-22 phase 02a (2026-05-12): also save body in pass 1
+        // so the closure mutation walker can run in pass 1 BEFORE
+        // synthesize_closure_record sets attribute types.  The body
+        // gets overwritten in pass 2 with the properly-typed
+        // version; pass 1's body is only consulted by phase 01's
+        // walker (`collect_mutated_captures`) and never by codegen.
+        //
+        // Risk: any other code path that assumes
+        // `data.def(d_nr).code` is Null in pass 1 would break.
+        // Verified clean against the regression net (633 issues +
+        // 47 wrap + 22 closure_matrix + 6 mut_closure_matrix); if
+        // a future regression surfaces, narrow this to only-save
+        // when `self.in_lambda` is true.
+        if self.context != u32::MAX {
             self.data.definitions[self.context as usize].code = v;
         }
         result

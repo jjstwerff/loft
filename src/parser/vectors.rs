@@ -432,22 +432,19 @@ impl Parser {
         if !self.captured_names.is_empty() {
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
-        // Plan-22 phase 01 — collect mutated captures from the
-        // lambda body's IR.  Detection-only: stores result on
-        // the definition for phases 02-05 to consume.  No
-        // behavior change yet.
+        // Plan-22 phase 01/02a — collect mutated captures from the
+        // lambda body's IR.  Detection-only: stores result on the
+        // definition for phases 02c-05 to consume.
         //
-        // Gated on `closure_record` being set on the lambda's
-        // definition rather than `captured_names.is_empty()` —
-        // pass 1 populates `captured_names` and synthesises the
-        // closure record but `data.def(d_nr).code` is still null;
-        // pass 2 sees body populated but `captured_names` is empty
-        // (variable resolution doesn't re-add to the capture set).
-        // Reading `closure_record` works in BOTH passes (set in
-        // pass 1, persists across `data.reset()`'s use-name clear).
-        if !self.first_pass {
-            collect_mutated_captures(&mut self.data, d_nr);
-        }
+        // Phase 02a (2026-05-12) extended body-save to pass 1
+        // too (expressions.rs:397), so the walker now runs in
+        // BOTH passes.  Pass 1 result will drive
+        // synthesize_closure_record's attribute-type decisions
+        // in phase 02c; pass 2 result is consumed by codegen-time
+        // analysis in phases 03-05.  Both passes write to the
+        // same field — pass 2 always runs after pass 1, so
+        // pass 2's result is canonical for downstream consumers.
+        collect_mutated_captures(&mut self.data, d_nr);
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
         drop(captured);
 
@@ -652,22 +649,19 @@ impl Parser {
         if !self.captured_names.is_empty() {
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
-        // Plan-22 phase 01 — collect mutated captures from the
-        // lambda body's IR.  Detection-only: stores result on
-        // the definition for phases 02-05 to consume.  No
-        // behavior change yet.
+        // Plan-22 phase 01/02a — collect mutated captures from the
+        // lambda body's IR.  Detection-only: stores result on the
+        // definition for phases 02c-05 to consume.
         //
-        // Gated on `closure_record` being set on the lambda's
-        // definition rather than `captured_names.is_empty()` —
-        // pass 1 populates `captured_names` and synthesises the
-        // closure record but `data.def(d_nr).code` is still null;
-        // pass 2 sees body populated but `captured_names` is empty
-        // (variable resolution doesn't re-add to the capture set).
-        // Reading `closure_record` works in BOTH passes (set in
-        // pass 1, persists across `data.reset()`'s use-name clear).
-        if !self.first_pass {
-            collect_mutated_captures(&mut self.data, d_nr);
-        }
+        // Phase 02a (2026-05-12) extended body-save to pass 1
+        // too (expressions.rs:397), so the walker now runs in
+        // BOTH passes.  Pass 1 result will drive
+        // synthesize_closure_record's attribute-type decisions
+        // in phase 02c; pass 2 result is consumed by codegen-time
+        // analysis in phases 03-05.  Both passes write to the
+        // same field — pass 2 always runs after pass 1, so
+        // pass 2's result is canonical for downstream consumers.
+        collect_mutated_captures(&mut self.data, d_nr);
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
         drop(captured);
 
