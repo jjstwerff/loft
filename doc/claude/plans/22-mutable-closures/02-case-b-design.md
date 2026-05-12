@@ -195,7 +195,7 @@ type is set to `Reference(d, [v])` by direct mutation in a
 Rust-level test) shows the field reads/writes use the new
 opcodes.
 
-### 02c — wire 02a's mutation flags through to 02b's encoding
+### 02c — wire 02a's mutation flags through to 02b's encoding — SHIPPED 2026-05-12 (D1+D2 only; D3 deferred via P258)
 
 `synthesize_closure_record` consults `data.def(lambda_d_nr).mutated_captures`
 (from 02a) and, for each mutated Reference capture, adds the

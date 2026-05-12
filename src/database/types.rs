@@ -1250,13 +1250,24 @@ impl Stores {
     /// Plan-06 phase 4d.C step 2 — register the 12-byte raw `DbRef` storage
     /// shape (store_nr u32 + rec u32 + pos u32). Used for the closure half of
     /// `Type::Function = (u32, DbRef)` slots stored in vectors / fields.
+    ///
+    /// Plan-22 phase 02c (2026-05-12): override the alignment from the
+    /// default (= size = 12) to 4.  The DbRef is 3 contiguous u32
+    /// words; natural alignment is 4 bytes.  `calc::calculate_positions`
+    /// only knows about alignments {8, 4, 2, 1} — a field with align=12
+    /// gets silently skipped, leaving its position at u16::MAX and
+    /// the containing struct's size/align both 0.  Symptom: phase 02c's
+    /// auto-Reference closure record fails with `field 's' has no
+    /// position (u16::MAX)` until align=4.
     pub fn dbref(&mut self) -> u16 {
         let name = "dbref".to_string();
         if let Some(nr) = self.names.get(&name) {
             *nr
         } else {
             let num = self.types.len() as u16;
-            self.types.push(Type::new(&name, Parts::DbRef, 12));
+            let mut tp = Type::new(&name, Parts::DbRef, 12);
+            tp.align = 4;
+            self.types.push(tp);
             self.names.insert(name, num);
             num
         }

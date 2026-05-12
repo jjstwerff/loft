@@ -643,6 +643,52 @@ fn p15_phase04_closure_ref_capture_local_no_leak() {
     );
 }
 
+/// Plan-22 phase 02c — auto-Reference capture leak guard.
+///
+/// When a closure mutates a captured struct, the closure
+/// record's attribute holds a 12-byte DbRef pointing AT the
+/// outer struct's record (share-by-DbRef, not deep copy).
+/// If the cascade frees the pointed-to record when the closure
+/// drops, the outer's binding sees freed memory.  If it
+/// double-frees, leak detection trips.
+///
+/// 100-iteration tight loop: each iteration creates Counter,
+/// captures it into a closure that mutates n, calls bump 3
+/// times, returns.  The captured Counter, the closure record,
+/// and the closure's auto-Reference field all need to free
+/// cleanly at scope exit.
+///
+/// Actual behavior (2026-05-12): clean, no leak, no use-after-
+/// free.  The auto-Reference path's dep marker (`u16::MAX`
+/// sentinel) doesn't trip get_free_vars's normal free path
+/// for the closure record's attribute (Parts::DbRef has no
+/// special claim handling — bytes are copied/freed as part of
+/// the host record's lifecycle).
+#[test]
+fn p22_phase02c_auto_reference_capture_no_leak() {
+    run_leak_check_str(
+        r#"
+        struct Counter { n: integer }
+        fn one_iteration() -> integer {
+            c = Counter { n: 0 };
+            bump = fn() { c.n = c.n + 1; };
+            bump();
+            bump();
+            bump();
+            c.n
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == 3, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
 /// Plan-15 phase 05 — nested closure (C6) leak guard.
 ///
 /// `inner` is a non-capturing fn-ref local; `outer` captures

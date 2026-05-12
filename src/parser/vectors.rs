@@ -429,22 +429,18 @@ impl Parser {
             .variables
             .append(&mut self.vars);
 
+        // Plan-22 phase 02c (2026-05-12): collect mutations BEFORE
+        // synthesize_closure_record so the synthesise step can
+        // consult `data.def(d_nr).mutated_captures` to pick the
+        // right attribute type (auto-Reference for mutated
+        // Reference captures vs inline-bytes for everything else).
+        // The collect helper accepts a missing closure_record and
+        // derives captured names from the lambda's variable table
+        // in that case.
         if !self.captured_names.is_empty() {
+            collect_mutated_captures(&mut self.data, d_nr);
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
-        // Plan-22 phase 01/02a — collect mutated captures from the
-        // lambda body's IR.  Detection-only: stores result on the
-        // definition for phases 02c-05 to consume.
-        //
-        // Phase 02a (2026-05-12) extended body-save to pass 1
-        // too (expressions.rs:397), so the walker now runs in
-        // BOTH passes.  Pass 1 result will drive
-        // synthesize_closure_record's attribute-type decisions
-        // in phase 02c; pass 2 result is consumed by codegen-time
-        // analysis in phases 03-05.  Both passes write to the
-        // same field — pass 2 always runs after pass 1, so
-        // pass 2's result is canonical for downstream consumers.
-        collect_mutated_captures(&mut self.data, d_nr);
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
         drop(captured);
 
@@ -646,22 +642,18 @@ impl Parser {
             .append(&mut self.vars);
 
         // synthesize closure record if any captures were detected.
+        // Plan-22 phase 02c (2026-05-12): collect mutations BEFORE
+        // synthesize_closure_record so the synthesise step can
+        // consult `data.def(d_nr).mutated_captures` to pick the
+        // right attribute type (auto-Reference for mutated
+        // Reference captures vs inline-bytes for everything else).
+        // The collect helper accepts a missing closure_record and
+        // derives captured names from the lambda's variable table
+        // in that case.
         if !self.captured_names.is_empty() {
+            collect_mutated_captures(&mut self.data, d_nr);
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
-        // Plan-22 phase 01/02a — collect mutated captures from the
-        // lambda body's IR.  Detection-only: stores result on the
-        // definition for phases 02c-05 to consume.
-        //
-        // Phase 02a (2026-05-12) extended body-save to pass 1
-        // too (expressions.rs:397), so the walker now runs in
-        // BOTH passes.  Pass 1 result will drive
-        // synthesize_closure_record's attribute-type decisions
-        // in phase 02c; pass 2 result is consumed by codegen-time
-        // analysis in phases 03-05.  Both passes write to the
-        // same field — pass 2 always runs after pass 1, so
-        // pass 2's result is canonical for downstream consumers.
-        collect_mutated_captures(&mut self.data, d_nr);
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
         drop(captured);
 
@@ -785,9 +777,35 @@ impl Parser {
 
     /// Synthesize an anonymous struct definition for the captured variables
     /// of a lambda. Emits a diagnostic with the record layout for test verification.
+    ///
+    /// Plan-22 phase 02c (2026-05-12): for each mutated Reference
+    /// capture (per phase 01's `mutated_captures` walker, populated
+    /// in pass 1 by phase 02a), the attribute type is
+    /// `Reference(d, [u16::MAX])` instead of `Reference(d, [])`.
+    /// The non-empty dep activates phase 02b's auto-Reference
+    /// storage encoding (12-byte DbRef + OpSetDbRef + OpGetDbRef
+    /// instead of inline-bytes + OpCopyRecord + OpGetField).
+    /// Mutations made inside the closure body propagate to the
+    /// outer scope through the shared store record.
+    ///
+    /// The dep value `u16::MAX` is a SENTINEL meaning
+    /// "auto-Reference share-marker" — it's not a real outer-var
+    /// nr (we're inside the lambda's scope at synthesis time, so
+    /// the outer var nr isn't directly accessible).  Phase 03
+    /// (Case C) refines the dep value to the actual outer-var nr
+    /// for proper liveness tracking.  For phase 02c's case-B
+    /// scope (closure stays within capture's scope), the sentinel
+    /// is sufficient — the closure record itself is freed at the
+    /// outer scope's exit, after which the captured value is no
+    /// longer reachable.
     fn synthesize_closure_record(&mut self, lambda_d_nr: u32, lambda_name: &str) {
         let record_name = lambda_name.replace("__lambda_", "__closure_");
         let captures = self.captured_names.clone();
+        // Snapshot the mutation flags BEFORE add_attribute (which
+        // doesn't mutate the lambda def's `mutated_captures` field
+        // but the borrow checker enforces a tighter window).
+        let mutated: Vec<String> = self.data.def(lambda_d_nr).mutated_captures.clone();
+        let is_mutated = |name: &str| mutated.iter().any(|m| m == name);
 
         if self.first_pass {
             // Create the struct definition in the first pass.
@@ -805,8 +823,18 @@ impl Parser {
                 // panicking with "Incomplete record" at
                 // `src/store.rs:227`.
                 ensure_tuple_defs_for_capture(&mut self.data, &mut self.lexer, tp);
+                let attr_tp = match tp {
+                    Type::Reference(d, _) if is_mutated(name) => {
+                        // Plan-22 phase 02c — auto-Reference dep marker.
+                        // Activates phase 02b's share-by-DbRef storage
+                        // encoding for this attribute.  See doc-comment
+                        // above for sentinel semantics.
+                        Type::Reference(*d, vec![u16::MAX])
+                    }
+                    _ => tp.clone(),
+                };
                 self.data
-                    .add_attribute(&mut self.lexer, record_d_nr, name, tp.clone());
+                    .add_attribute(&mut self.lexer, record_d_nr, name, attr_tp);
             }
             // Store the closure record def_nr on the lambda's definition.
             self.data.definitions[lambda_d_nr as usize].closure_record = record_d_nr;
@@ -1878,21 +1906,50 @@ fn ensure_tuple_defs_for_capture(
 /// difference between this commit and the prior state.  The
 /// stored result is consulted by later phases.
 fn collect_mutated_captures(data: &mut crate::data::Data, lambda_d_nr: u32) {
+    // Plan-22 phase 02c (2026-05-12): the captured-name list comes
+    // from EITHER the closure record's attributes (when synthesize
+    // ran first — the original phase 01 path) OR from the lambda's
+    // variables that match a synthesized `__closure_<N>` struct
+    // name pattern (not currently used).  The phase-02c flow runs
+    // collect_mutated_captures BEFORE synthesize, so we accept the
+    // closure_record == MAX case as "not yet built; no names from
+    // there" and fall through to using the variables table.
+    //
+    // Phase 01's existing API stays compatible: when synthesize has
+    // already run, this function uses the closure record's
+    // attributes (the original behaviour).
     let closure_d_nr = data.def(lambda_d_nr).closure_record;
-    if closure_d_nr == u32::MAX {
-        return;
-    }
-    let captured_names: Vec<String> = data
-        .def(closure_d_nr)
-        .attributes
-        .iter()
-        .map(|a| a.name.clone())
-        .collect();
+    let variables = data.def(lambda_d_nr).variables.clone();
+    let captured_names: Vec<String> = if closure_d_nr == u32::MAX {
+        // Pre-synthesize call site — derive captured names from the
+        // lambda's variable table.  Captured names are local
+        // placeholder vars created in objects.rs:187 / control.rs:3614
+        // during body parsing.  Filter out `__closure` (the closure
+        // param), `__work*` (text work buffers), and any argument.
+        // The body walker then double-filters via the captured_names
+        // membership check in `mark()`, so over-inclusion here is
+        // safe (just spurious work).
+        (0..variables.count())
+            .filter_map(|v| {
+                let name = variables.name(v);
+                if name == "__closure" || name.starts_with("__work") || variables.is_argument(v) {
+                    None
+                } else {
+                    Some(name.to_string())
+                }
+            })
+            .collect()
+    } else {
+        data.def(closure_d_nr)
+            .attributes
+            .iter()
+            .map(|a| a.name.clone())
+            .collect()
+    };
     if captured_names.is_empty() {
         return;
     }
     let body = data.def(lambda_d_nr).code.clone();
-    let variables = data.def(lambda_d_nr).variables.clone();
     // Resolve the closure-param's var slot — it's the `__closure`
     // argument added at lambda parse time (vectors.rs:417-421).
     // In the body's IR, captured-name reads are

@@ -133,3 +133,98 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 02c — Case B (Reference capture, mutating, co-scoped) ─────────────
+//
+// The big ergonomic win.  When a closure body mutates a captured
+// struct (Reference type), the mutation propagates to the outer
+// scope through the closure record's auto-Reference attribute
+// (12-byte DbRef share, OpSetDbRef + OpGetDbRef instead of inline
+// bytes + OpCopyRecord + OpGetField).
+//
+// Sub-phases shipped 2026-05-12:
+//   - 02a — pass-1 mutation detection foundation
+//   - 02b — auto-Reference storage encoding
+//   - 02c — wire mutation flags into synthesize_closure_record
+//
+// Each cell exercises a different destination shape:
+//   - b_d1 — closure stored in a local variable, called inline
+//   - b_d2 — closure passed as fn parameter, called by the callee
+//   - b_d3 — closure stored in a struct field, called via field
+//
+// All three should observe the outer struct's mutation after the
+// closure runs.  Pre-02c these cells would silently fail (closure
+// mutates its private copy; outer unchanged).
+
+cross_mode!(
+    b_d1_ref_capture_local_mutates,
+    r#"
+    struct State { x: integer }
+    fn test() {
+        s = State { x: 0 };
+        f = fn() { s.x = 7; };
+        f();
+        print("after f(): {s.x}\n");
+        assert(s.x == 7, "b_d1 expected 7, got {s.x}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d2_ref_capture_arg_mutates,
+    r#"
+    struct State { x: integer }
+    fn invoke(f: fn()) { f(); }
+    fn test() {
+        s = State { x: 0 };
+        invoke(fn() { s.x = 11; });
+        print("after invoke: {s.x}\n");
+        assert(s.x == 11, "b_d2 expected 11, got {s.x}");
+    }
+    "#
+);
+
+// b_d3 (struct field destination) deferred — interp prints
+// `s.x = 13` correctly, but native diverges and prints
+// `s.x = 0`.  Native codegen for the Parts::ChildRec cascade
+// that carries the closure record into the host struct's
+// store doesn't preserve the auto-Reference DbRef field's
+// 12-byte content (the share-by-DbRef pointer); it falls
+// through to a default that effectively re-allocates or
+// drops the pointer.  Filed as P258.
+//
+// Once P258 closes, replace this comment with the cross_mode!
+// cell:
+//   cross_mode!(
+//       b_d3_ref_capture_field_mutates,
+//       r#"
+//       struct State { x: integer }
+//       struct Loop { cb: fn() }
+//       fn test() {
+//           s = State { x: 0 };
+//           loop = Loop { cb: fn() { s.x = 13; } };
+//           loop.cb();
+//           print("after loop.cb: {s.x}\n");
+//           assert(s.x == 13, "b_d3 expected 13, got {s.x}");
+//       }
+//       "#
+//   );
+
+// Two-call cell — proves the mutation is genuinely persistent
+// across closure invocations (not a one-shot side effect of the
+// first call's snapshot).
+cross_mode!(
+    b_d1_ref_capture_repeated_calls,
+    r#"
+    struct Counter { n: integer }
+    fn test() {
+        c = Counter { n: 0 };
+        bump = fn() { c.n = c.n + 1; };
+        bump();
+        bump();
+        bump();
+        print("after 3x bump: {c.n}\n");
+        assert(c.n == 3, "expected 3, got {c.n}");
+    }
+    "#
+);
