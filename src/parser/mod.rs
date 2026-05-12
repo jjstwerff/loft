@@ -1555,6 +1555,13 @@ impl Parser {
     /// what the type variable `tv_nr` resolves to.
     /// E.g. template `vector<T>` + concrete `vector<integer>` → `integer`.
     fn resolve_type_var(template_tp: &Type, tv_nr: u32, concrete_tp: &Type) -> Type {
+        // `Rewritten(T)` is a value-construction marker (e.g. `P { v: 99 }`
+        // becoming an Insert sequence) that should not propagate into the
+        // bound T — the type variable describes the data shape, not how
+        // a particular argument got assembled.  Strip it before unifying.
+        if let Type::Rewritten(inner) = concrete_tp {
+            return Self::resolve_type_var(template_tp, tv_nr, inner);
+        }
         match template_tp {
             Type::Reference(d, _) if *d == tv_nr => concrete_tp.clone(),
             Type::Vector(inner, _) => {
@@ -1897,6 +1904,14 @@ impl Parser {
         )
     }
 
+    /// Does the rewrite apply to this concrete type?  Both primitive and
+    /// struct (Reference) targets need the type-id substitution; the only
+    /// difference is whether OpCopyRecord is replaced (primitive) or kept
+    /// with patched type-id args (struct).
+    pub(crate) fn is_rewritable_vector_element_target(tp: &Type) -> bool {
+        Self::is_primitive_vector_element_target(tp) || matches!(tp, Type::Reference(_, _))
+    }
+
     /// P241 fix slice 3 — build the per-type primitive setter Call
     /// for the rewritten triplet's middle op.  Mirrors the parse-time
     /// concrete-T dispatch in `parser/vectors.rs:1560-1599`.
@@ -1997,10 +2012,13 @@ impl Parser {
     ) -> Value {
         // Slice 2: Integer.  Slice 3: extended to all primitive
         // types whose vector-element shape uses a primitive setter
-        // instead of OpCopyRecord.  Struct T (Type::Reference),
-        // Vector T, and other DbRef-backed types are no-ops because
-        // OpCopyRecord is already correct for those.
-        if !Self::is_primitive_vector_element_target(concrete) {
+        // instead of OpCopyRecord.  P255 (2026-05-12): also handle
+        // struct T (Type::Reference) — the OpCopyRecord shape is
+        // kept but its tp arg AND the surrounding OpNewRecord /
+        // OpFinishRecord parent_tp args must be patched from the
+        // parametric T type-id to the concrete struct's type-ids,
+        // otherwise the runtime reads the wrong record size.
+        if !Self::is_rewritable_vector_element_target(concrete) {
             return val;
         }
         match val {
@@ -2127,14 +2145,14 @@ impl Parser {
         data: &Data,
         database: &mut Stores,
     ) -> Vec<Value> {
-        // Only rewrite when concrete is one of the primitive types
-        // slice 3 covers all primitive vector-element targets
+        // Slice 3 covers all primitive vector-element targets
         // (Integer/Text/Float/Single/Boolean/Character/Enum/Function +
-        // narrow-int variants).  Struct / Reference / etc. fall through
-        // unchanged (the existing OpCopyRecord path is correct).
-        if !Self::is_primitive_vector_element_target(concrete) {
+        // narrow-int variants).  P255 extends to struct T (Reference)
+        // by keeping OpCopyRecord and patching its tp arg.
+        if !Self::is_rewritable_vector_element_target(concrete) {
             return ops;
         }
+        let is_struct_target = matches!(concrete, Type::Reference(_, _));
         // Resolve op def_nrs once — re-resolution per-triplet would
         // cost N lookups for a long Block.
         let new_record_d = data.def_nr("OpNewRecord");
@@ -2199,8 +2217,9 @@ impl Parser {
                 // backing store.
                 let content_def_nr = data.type_def_nr(concrete);
                 vars.set_type(elm_var, Type::Reference(content_def_nr, vec![out_var]));
-                // Emit the rewritten 4-op sequence.
                 // 1. OpPreAllocVector(Var(out_var), Int(1), Int(elem_size))
+                //    Mirrors `vectors.rs:1161-1178` for perf parity with
+                //    concrete-T vector pushes.
                 out.push(Value::Call(
                     pre_alloc_d,
                     vec![Value::Var(out_var), Value::Int(1), Value::Int(elem_size)],
@@ -2217,20 +2236,34 @@ impl Parser {
                         ],
                     )),
                 ));
-                // 3. Per-type setter (OpSetInt / OpSetText / OpSetFloat / etc.)
-                //    Mirrors the parse-time concrete-T dispatch in
-                //    `parser/vectors.rs:1560-1599` so generic-T vectors
-                //    encode element writes the same way as concrete-T
-                //    vectors.
-                let setter = Self::primitive_setter_call(concrete, elm_var, src_value, data);
-                if let Some(call) = setter {
-                    out.push(call);
+                // 3. Middle op:
+                //    - Primitive T: per-type setter (OpSetInt / OpSetText / …)
+                //      replaces OpCopyRecord (no DbRef to copy).
+                //    - Struct T: keep OpCopyRecord but patch its tp arg
+                //      from the parametric T's known_type to the concrete
+                //      struct's known_type so `state::copy_record` reads
+                //      the correct record size.
+                if is_struct_target {
+                    let known_tp = if (content_def_nr as usize) < data.definitions.len() {
+                        i32::from(data.def(content_def_nr).known_type)
+                    } else {
+                        i32::from(u16::MAX)
+                    };
+                    out.push(Value::Call(
+                        copy_record_d,
+                        vec![src_value, Value::Var(elm_var), Value::Int(known_tp)],
+                    ));
                 } else {
-                    // Concrete type matched `is_primitive_vector_element_target`
-                    // but no setter mapping exists — should not happen.
-                    // Bail by emitting a no-op (the OpFinishRecord still
-                    // fires; the value just isn't written).  Defensive
-                    // fall-through to keep the IR well-formed.
+                    let setter = Self::primitive_setter_call(concrete, elm_var, src_value, data);
+                    if let Some(call) = setter {
+                        out.push(call);
+                    } else {
+                        // Concrete type matched `is_primitive_vector_element_target`
+                        // but no setter mapping exists — should not happen.
+                        // Bail by emitting a no-op (the OpFinishRecord still
+                        // fires; the value just isn't written).  Defensive
+                        // fall-through to keep the IR well-formed.
+                    }
                 }
                 // 4. OpFinishRecord(Var(out_var), Var(elm_var), Int(concrete_vec_tp), Int(MAX))
                 out.push(Value::Call(

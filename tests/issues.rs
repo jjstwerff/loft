@@ -12979,16 +12979,49 @@ fn p241_singleton_bool() {
     .result(Value::Boolean(true));
 }
 
-// P241 slice 3 — struct-T regression test deferred: capturing the
-// returned `vector<T>` into a local variable currently fails with
-// "Variable X cannot change type from vector<S> to vector<S>" at
-// the call site (filed as P255 — pre-existing bug at
-// `src/variables/mod.rs:977-989` where the Vector→Vector branch
-// of `change_var` emits the diagnostic without checking type
-// equality first).  P241's rewrite is a no-op for struct T (the
-// existing OpCopyRecord path is correct because the source IS a
-// DbRef), so the rewrite is verified-by-construction; the
-// behavioural guard waits on P255.
+/// P255 — capturing a generic-fn `vector<T>` return into a local
+/// variable failed with `Variable vp cannot change type from
+/// vector<P> to vector<P>; use a new variable name or cast with
+/// 'as'`.  The error fired even though both sides display
+/// identically: the LHS (the new local var) was typed
+/// `Vector(Rewritten(Reference(P)))` because the call argument
+/// `P { v: 99 }` returned a `Rewritten`-marked type, that marker
+/// propagated into the bound T, and then into `vector<T>`.
+/// `Type::is_equal` did not look through `Rewritten`, so the
+/// Vector→Vector arm of `change_var` rejected the assignment.
+///
+/// Fix (2026-05-12) — three-part:
+/// 1. `Type::is_equal` now strips `Rewritten` wrappers on either
+///    side before unifying.
+/// 2. `Parser::resolve_type_var` strips `Rewritten` from the
+///    concrete arg type before binding T, so the marker (which
+///    describes how a value was assembled, not the value's shape)
+///    no longer enters the substituted IR.
+/// 3. `rewrite_vector_write_triplets` was extended to handle
+///    struct-T (Reference) — the OpCopyRecord shape is kept but
+///    its `tp` arg AND the surrounding OpNewRecord/OpFinishRecord
+///    `parent_tp` args are patched from the parametric T's
+///    type-id to the concrete struct's type-id.  Without this
+///    patch the runtime read the wrong record size from the
+///    parametric placeholder type and returned garbage from
+///    `vp[0].v`.
+#[test]
+fn p255_capture_generic_vector_struct_return() {
+    code!(
+        "struct P255S { p255_v: integer }
+fn p255_make<T>(p255_x: T) -> vector<T> {
+    p255_o: vector<T> = [];
+    p255_o += [p255_x];
+    return p255_o;
+}
+fn p255_get() -> integer {
+    p255_vp = p255_make(P255S { p255_v: 99 });
+    return p255_vp[0].p255_v;
+}"
+    )
+    .expr("p255_get()")
+    .result(Value::Int(99));
+}
 
 /// P253 — hash-table collision DoS: `keys::hash` and `key_hash`
 /// previously used `DefaultHasher::new()` with a fixed seed (k0=0,

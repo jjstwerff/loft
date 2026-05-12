@@ -783,6 +783,16 @@ impl Type {
 
     #[must_use]
     pub fn is_equal(&self, other: &Type) -> bool {
+        // `Rewritten(T)` is a marker on a variable that has been rewritten
+        // into append statements; semantically the type is still T.  Compare
+        // through the wrapper so a `vector<T>` LHS matches a `vector<T>` RHS
+        // even when only one side carries the marker.
+        if let Type::Rewritten(inner) = self {
+            return inner.is_equal(other);
+        }
+        if let Type::Rewritten(inner) = other {
+            return self.is_equal(inner);
+        }
         match (self, other) {
             (Type::RefVar(s), Type::RefVar(o)) => return s.is_equal(o),
             (Type::Enum(s, s_tp, _), Type::Enum(o, o_tp, _)) => return *s == *o && *s_tp == *o_tp,
