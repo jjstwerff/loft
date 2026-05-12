@@ -179,8 +179,8 @@ Each cell `(Yi, Xj)` has one of:
   rules for text and Reference.
 - [plan-14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
   template.
-- [plan-15 closure validation](../15-closure-validation/README.md)
-  — phase 05 prerequisite.
+- [plan-15 closure validation](../../finished/15-closure-validation/README.md)
+  — phase 05 prerequisite (now SHIPPED 2026-05-12).
 - `src/state/codegen.rs` — coroutine state-machine lowering.
 - `src/data.rs::Type::Iterator` — iterator type.
 - `OpCoroutineNext` opcode — drives `for` and `next()` paths.

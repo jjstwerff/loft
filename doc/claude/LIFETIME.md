@@ -440,197 +440,37 @@ Four bugs were fixed:
    carry `dep=[w]` (the closure work var), so the free is suppressed — `___clos_N`
    already handles it.
 
-### Caller-side closure free: native codegen NOT YET SUPPORTED
+### Caller-side closure free: native codegen path
 
-The interpreter correctly frees closure records via the codegen special case.
-The native codegen (`src/generation/dispatch.rs`) skips `OpFreeRef` for
-`Type::Function` variables until full fn-ref support lands.
-
----
-
-## Implementation path — small verifiable steps
-
-The two open issues are (A) cross-scope closure freeing and (B) caller-side closure
-cleanup.  They share a root cause: `get_free_vars` does not handle `Type::Function`.
-
-### Recommended approach: Approach A — codegen special case
-
-Add `Type::Function` to the `get_free_vars` match with a codegen special case that
-reads the closure DbRef from offset+4 within the fn-ref slot.  This is the smallest
-change that fixes both issues.
-
-The alternative (Approach B: split the 16B slot into separate d_nr + Reference
-variables) is cleaner long-term but requires changing the fn-ref calling convention,
-`OpCallRef`, `fn_call_ref`, `gen_fn_ref_value`, and all fn-ref opcodes — a much
-larger refactor.
+The interpreter frees closure records via the codegen special case described
+above.  Native codegen handles closure-record drop via Rust's RAII at
+stack-frame exit (no explicit `OpFreeRef` emission needed); plan-15 phase
+03–05 leak guards (`tests/leak.rs::p15_phase03_*` / `_phase04_*` /
+`_phase05_*`) confirmed both paths produce clean store state under
+100-iteration tight loops for text / Reference / nested-closure captures
+across D1 + D3.  Cross-mode equivalence (`tests/closure_matrix.rs`)
+catches any future native-vs-interp divergence in observable output.
 
 ---
 
-### Step 1: Diagnose the cross-scope free ordering bug
+## Historical implementation path (closed)
 
-**Goal**: understand why `tp.depend().contains(&___clos_1)` does not suppress the
-`OpFreeRef` for `___clos_1` in `make_greeter`.
+The three bugs that originally motivated `Type::Function` work in
+`get_free_vars` — cross-scope closure freeing, caller-side cleanup,
+and capturing-into-struct-field — closed through P213 (struct-field
+layout via `Parts::ChildRec`, 2026-05-04), P215 (nested-closure
+name resolution, 2026-05-05), and P227 (text-returning fn-ref
+calls, 2026-05-05).  Plan-15 phases 03–05 (2026-05-12) confirmed
+no residual leak via `tests/leak.rs` 100-iteration tight loops
+across capture types (text / Reference / nested) and destinations
+(local / struct field).
 
-**How to verify**:
-1. Run the ignored test with `LOFT_LOG=scope_debug`:
-   ```
-   LOFT_LOG=scope_debug cargo test closure_capture_text -- --ignored 2>&1
-   ```
-2. Read `tests/dumps/expressions_closure_capture_text.txt` — look for the
-   `[scope_debug]` lines for `___clos_1`.
-3. Check whether `tp.depend()` contains `___clos_1` at the point where
-   `get_free_vars` processes it.  If it does NOT, the dep propagation
-   (vectors.rs:701-711) is not reaching the right return type.
-4. Check the variable collection order — `___clos_1` might be collected at a
-   scope level where the return type is not yet available.
-
-**Expected output**: a clear diagnosis of whether the bug is in dep propagation
-(the return type does not carry the dep) or in scope ordering (the variable is
-collected before the return type is consulted).
-
-**Done when**: you can state which of these two causes applies, with evidence
-from the dump file.
-
----
-
-### Step 2: Fix the cross-scope free suppression
-
-**Goal**: make `___clos_1` survive function return when the fn-ref escapes.
-
-**Depends on**: Step 1 diagnosis.
-
-**If the dep is missing from the return type**:
-- Trace why `vectors.rs:701-711` does not fire.  The `if matches!(...)` guard
-  requires the enclosing function's `.returned` to already be `Type::Function`.
-  Check whether the declared return type is set before `emit_lambda_code` runs.
-
-**If the dep is present but the free fires anyway**:
-- The variable collection in `get_free_vars` may process `___clos_1` at a scope
-  where `tp` is not the function return type.  Check which `tp` is used when
-  `___clos_1` is evaluated — it should be `data.def(d_nr).returned` for function
-  return, but may be a block-level type instead.
-
-**How to verify**:
-1. Un-ignore `closure_capture_text` test.
-2. Run `cargo test closure_capture_text` — it should pass.
-3. Run `make ci` — no regressions.
-
-**Done when**: `closure_capture_text` passes and `make ci` is green.
-
----
-
-### Step 3: Add `Type::Function` to `get_free_vars`
-
-**Goal**: emit `OpFreeRef` for the closure DbRef when a fn-ref variable goes out of
-scope at the caller.
-
-**Where**: `src/scopes.rs`, in the `get_free_vars` match after the
-`Reference/Vector/Enum` arm.
-
-**What to add**:
-```rust
-if let Type::Function(_, _, dep) = function.tp(v) {
-    let emit = dep.is_empty()
-        && !tp.depend().contains(&v)
-        && !function.is_skip_free(v);
-    if emit {
-        ls.push(call("OpFreeClosureRef", v, data));
-    }
-}
-```
-
-This mirrors the Reference logic.  The new opcode `OpFreeClosureRef` reads the
-closure DbRef from offset+4 of the fn-ref slot (not offset 0).
-
-**How to verify**:
-1. Add `LOFT_LOG=scope_debug` to a same-scope closure test and confirm the new
-   `Type::Function` arm fires and emits the free.
-2. Run `make ci` — all existing closure tests still pass.
-
-**Done when**: `get_free_vars` handles `Type::Function` and all tests pass.
-
----
-
-### Step 4: Implement `OpFreeClosureRef`
-
-**Goal**: a new opcode that frees the closure DbRef embedded at offset+4 in a
-16-byte fn-ref slot.
-
-**Where**: define in `default/01_code.loft` (or `02_images.loft` near `OpVarFnRef`),
-implement in `src/fill.rs`.
-
-**Behaviour**:
-```rust
-fn op_free_closure_ref(s: &mut State) {
-    let pos = *s.code::<u16>();                 // stack slot of fn-ref variable
-    let closure = *s.get_var::<DbRef>(pos - 4); // read bytes 4..16
-    if closure.store_nr != u16::MAX {           // skip null sentinel
-        s.database.free(&closure);
-    }
-}
-```
-
-**Alternative**: instead of a new opcode, emit the offset adjustment in codegen.
-In `generate_call` (codegen.rs), when `OpFreeRef` is called on a `Type::Function`
-variable, emit `OpVarRef(var_pos - 4)` then `OpFreeRef`:
-
-```rust
-// In generate_call, special case for Function:
-if stack.data.def(op).name == "OpFreeRef"
-    && let Some(Value::Var(v)) = parameters.first()
-    && matches!(stack.function.tp(*v), Type::Function(_, _, _))
-{
-    let var_pos = stack.position - stack.function.stack(*v);
-    stack.add_op("OpVarRef", self);     // push 12B DbRef from offset+4
-    self.code_add(var_pos - 4u16);
-    stack.add_op("OpFreeRef", self);    // free the closure record
-    return Type::Void;
-}
-```
-
-This avoids adding a new opcode but hardcodes the +4 offset.
-
-**How to verify**:
-1. Write a test that stores a fn-ref in a variable, lets it go out of scope,
-   and checks no store leak (e.g. `database.store_count()` before/after).
-2. Run `make ci`.
-
-**Done when**: closure store records are freed when fn-ref variables go out of scope.
-
----
-
-### Step 5: Non-capturing lambda — verify no false free
-
-**Goal**: confirm that non-capturing lambdas (which have `OpNullRefSentinel` padding)
-are not incorrectly freed.
-
-**Risk**: the null sentinel has `store_nr = u16::MAX`.  `database.free()` must be
-a no-op for this sentinel (confirmed: `allocation.rs:81`).
-
-**How to verify**:
-1. Run all fn-ref tests that use non-capturing lambdas:
-   `fn_ref_basic_call`, `fn_ref_two_args`, `fn_ref_conditional_call`,
-   `fn_ref_as_parameter`.
-2. Add `LOFT_LOG=scope_debug` and confirm `OpFreeClosureRef` (or the codegen
-   special case) fires but `database.free` skips the null sentinel.
-3. `make ci` passes.
-
-**Done when**: non-capturing lambda fn-refs go through the free path without error.
-
----
-
-### Step 6: Un-ignore `closure_capture_text` and final validation
-
-**Goal**: all closure tests pass, including cross-scope.
-
-**How to verify**:
-1. Remove `#[ignore]` from `closure_capture_text` in tests/expressions.rs:343.
-2. `make ci` passes.
-3. Run with `LOFT_LOG=scope_debug` and verify:
-   - `___clos_1` is NOT freed at `make_greeter` return (dep suppression works).
-   - The fn-ref's closure IS freed at the caller's scope exit.
-
-**Done when**: `make ci` green with no ignored closure tests.
+The detailed step-by-step "Implementation path" that previously
+lived here described the contemplated `OpFreeClosureRef` opcode +
+`get_free_vars` extension — neither shipped because the
+`Parts::ChildRec` cascade plus standard local-cleanup already
+covers the surface.  Removed during plan-15 phase 06 closeout
+(2026-05-12); see git history if you need the original analysis.
 
 ---
 

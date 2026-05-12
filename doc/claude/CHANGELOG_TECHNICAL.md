@@ -9,6 +9,48 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Plan-15 (closure validation matrix) closed 2026-05-12
+
+Plan-15 ran in one session 2026-05-12 — promoted to current,
+shipped all 6 phases, and closed.  Final matrix: 22 cells in
+`tests/closure_matrix.rs` across 6 capture shapes (C0
+non-capturing, C1 single-int, C2 text, C3 Reference, C5 multi-
+basic, C6 nested) and 4 destinations (D1 local, D2 direct
+stack, D3 struct field, D4 vector element — D4 only for C0).
+Plus 5 leak guards in `tests/leak.rs::p15_phase0[345]_*_no_leak`
+covering text / Reference / nested-closure capture surfaces
+under 100-iteration tight loops.
+
+**Bug yield: 0** new P-issues filed.  All gaps the plan was
+designed to surface (closure-DbRef leak, "move-vs-copy
+semantics gap analogous to T1.8c") turned out to be non-
+issues — the underlying support landed earlier through P213
+(2026-05-04 — `Parts::ChildRec` layout-widening for struct-
+field captures), P214 (2026-05-05 — vector-of-non-capturing
+closures), P215 (2026-05-05 — nested closure name resolution),
+and P227 (2026-05-05 — text-returning fn-ref calls).
+
+**Per-phase summary** (all SHIPPED 2026-05-12):
+
+- **00** Harness wiring + smoke (3 cells).
+- **01** C0 (non-capturing) × D1/D2/D3/D4 (5 cells, pins P214).
+- **02** C1 + C5 (basic-type captures) × D1/D2/D3 (6 cells,
+  pins P213 + P215).
+- **03** C2 (text capture) × D1/D2/D3 (3 cells + 2 leak
+  guards) — disposed LIFETIME.md "Type::Function NOT YET
+  HANDLED" annotation as documentation drift.
+- **04** C3 (Reference capture) × D1/D2/D3 (3 cells + 2 leak
+  guards) — no read-after-free, no DbRef-in-closure-record
+  leak.
+- **05** C6 (nested closures) × D1/D2/D3 (3 cells + 1 leak
+  guard) — D3 included (matrix's "deferred" was conservative).
+- **06** Doc closeout — LIFETIME.md "Implementation path"
+  trimmed; ROADMAP.md / USER_FACING.md / plans/future/36-
+  audience-generative-art cross-refs updated; plan moved to
+  `plans/finished/15-closure-validation/`.
+
+Active plans now: 2 (07-error-messages + 22-mutable-closures).
+
 ### Plan-14 (tuple validation matrix) closed 2026-05-11
 
 Plan-14 ran 2026-04-30 → 2026-05-11.  Final matrix: 40 cells

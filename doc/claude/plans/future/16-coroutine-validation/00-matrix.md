@@ -130,6 +130,6 @@ in `tests/parse_errors.rs` rather than `cross_mode!`.
 - `tests/common/cross_mode.rs` — shared harness.
 - [plan-14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
   template.
-- [plan-15 README](../15-closure-validation/README.md) — phase 05
-  prerequisite.
+- [plan-15 README](../../finished/15-closure-validation/README.md) — phase 05
+  prerequisite (now SHIPPED 2026-05-12).
 - [COROUTINE.md](../../COROUTINE.md) — coroutine design.

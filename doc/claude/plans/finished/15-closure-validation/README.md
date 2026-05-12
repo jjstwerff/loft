@@ -5,21 +5,41 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 15 — Closure validation: capture × storage matrix
 
-**Status: ACTIVE — promoted to current 2026-05-12.**
-Phases 00–03 SHIPPED 2026-05-12.
+**Status: SHIPPED 2026-05-12 — plan closed.**
+All 6 phases (00 + 01 + 02 + 03 + 04 + 05 + 06) landed in one
+session.  Reference home: `tests/closure_matrix.rs` (22 cells)
+plus `tests/leak.rs::p15_phase0[345]_*_no_leak` (5 leak guards).
 
-Pre-flight surveyed 2026-05-04 (6/12 probes failed → 50% bug yield);
-the surveyed P-issues (P213/P214/P215/P216) all closed in the
-2026-05-04..05 sprint, so the original motivating bugs are gone.
-Phase 03 dispositioned the LIFETIME.md "Type::Function — NOT YET
-HANDLED" closure-leak gap as documentation drift, not a runtime
-bug — confirmed clean for both D1 (local) and D3 (struct field)
-text captures via 100-iteration leak guards in `tests/leak.rs`
-(`p15_phase03_closure_text_capture_*_no_leak`).  LIFETIME.md
-updated 2026-05-12 to reflect actual freed-at-scope-exit
-behaviour.
+**Per-phase summary**:
 
-Phase 04 (C3 — Reference captures) is the next step.
+| Phase | Coverage | Cells / guards | Outcome |
+|---|---|---|---|
+| 00 | Harness wiring + smoke | 3 cells | No production change. |
+| 01 | C0 (non-capturing) × D1/D2/D3/D4 | 5 cells | Pins P214 closure (vector-of-non-capturing). |
+| 02 | C1 + C5 (basic-type captures) × D1/D2/D3 | 6 cells | Pins P213's `Parts::ChildRec` layout-widening + P215 nested-name resolution. |
+| 03 | C2 (text capture) × D1/D2/D3 | 3 cells + 2 leak guards | Disposed LIFETIME.md "NOT YET HANDLED" claim — no leak; documentation drift, not a runtime bug. |
+| 04 | C3 (Reference capture) × D1/D2/D3 | 3 cells + 2 leak guards | No DbRef-in-closure-record leak; no read-after-free. |
+| 05 | C6 (nested closures) × D1/D2/D3 | 3 cells + 1 leak guard | D3 included (matrix's "deferred" was conservative); nested non-capturing inner pattern works on both backends. |
+| 06 | Doc closeout | — | LIFETIME.md "Implementation path" trimmed; ROADMAP.md / USER_FACING.md / 36-audience-generative-art cross-refs updated; plan moved to `finished/`. |
+
+**Bug yield**: 0 new P-issues filed.  All gaps the plan was
+designed to surface (closure-DbRef leak, move-vs-copy semantics
+gap analogous to T1.8c) turned out to be non-issues — the
+underlying support landed earlier through P213/P214/P215/P227 and
+plan-15 confirmed it via systematic regression coverage.
+
+**Out of scope** (deliberately; tracked in matrix + loft-write skill):
+
+- C7 (vector capture) — closing as non-goal per the matrix.
+- C1+/D4 (vector of CAPTURING closures) — known restriction;
+  failure mode is unstable (interp panic + native E0308).  No
+  CLOSED-cell parse_errors test added because there's no clean
+  parse-time diagnostic to pin.  When the language adds first-
+  class generic fn-refs (or a clean parse-time rejection), the
+  CLOSED cells graduate to FIX cells in a follow-up.
+- D5 (tuple element) — covered by `plans/finished/14-tuple-validation`.
+
+**Reference home for matrix details**: see [`00-matrix.md`](00-matrix.md).
 
 ## Goal
 

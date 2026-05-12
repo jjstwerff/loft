@@ -250,10 +250,12 @@ Family today:
 | `tests/tuple_matrix.rs` | plan-14 | element type × destructure shape | tuple bug surface |
 | `tests/template_matrix.rs` | plan-17 | T-parameter usage × bound shape | bounded-generic / interface surface |
 
-Future matrices follow the same shape (closure validation, coroutine
-validation, match validation — see `plans/15-closure-validation/`
-(active), `plans/future/16-coroutine-validation/`,
-`plans/future/18-match-validation/`).
+Future matrices follow the same shape (coroutine validation,
+match validation — see `plans/future/16-coroutine-validation/`,
+`plans/future/18-match-validation/`).  Closure validation
+shipped as `plans/finished/15-closure-validation/` 2026-05-12;
+22 cells in `tests/closure_matrix.rs` plus 5 leak guards in
+`tests/leak.rs::p15_phase0[345]_*_no_leak`.
 
 ### Pattern
 

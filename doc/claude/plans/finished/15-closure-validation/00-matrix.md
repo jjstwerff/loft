@@ -100,6 +100,35 @@ captures).
 No production change — P215 closed nested-closure name
 resolution 2026-05-05; phase 05 pins it as a regression guard.
 
+**Phase 06 SHIPPED 2026-05-12** — closeout.  LIFETIME.md
+"Implementation path" trimmed (legacy 6-step contemplated work
+that never landed because `Parts::ChildRec` + standard local-
+cleanup already covers the surface); ROADMAP.md / USER_FACING.md
+/ plans/future/36-audience-generative-art cross-refs updated;
+plan moved to `plans/finished/15-closure-validation/`.
+
+**Phase 06 finding — 1 new bug filed**: probing during closeout
+surfaced **P257** — capturing a `vector<T>` into a closure body
+crashes both backends with no clean parse-time rejection (interp
+panics with `Write to locked store`, native rejects with rustc
+E0308 + E0605).  The matrix's C7 row was CLOSED:non-goal but the
+failure mode is unstable.  Filed as Low severity — no user code
+in lib/* depends on capturing vectors into closures.
+
+**Plan-15 final bug yield**: 1 new P-issue (P257) across 22 matrix
+cells + 5 leak guards.  Below the 2-3 yield predicted in the
+README ("plan-14 phase 01 found 2 P-issues in 15 cells; plan-15
+likely surfaces a comparable rate").  The lower yield reflects
+that P213/P214/P215/P216/P227 cleared the closure surface in the
+May 4-5 sprint BEFORE plan-15 ran, so the matrix mostly pinned
+regression guards rather than finding new bugs.  P257 was found
+by deliberately probing CLOSED cells during phase 06 closeout —
+the matrix's PASS/FIX cells all worked because the support
+landed earlier.  Lesson for plan-16+: aggressive probing of the
+CLOSED-cell boundary during closeout is the highest-yield part
+of the validation arc when the underlying surface is already
+mostly clean.
+
 ## Goal
 
 Lock the closure-validation matrix and wire `tests/closure_matrix.rs`
