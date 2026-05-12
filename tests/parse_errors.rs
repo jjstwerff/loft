@@ -272,6 +272,43 @@ fn test() { r = Rect { w: 3.0, h: 4.0 }; r.area(); }"
     // no .error() → compilation must succeed
 }
 
+// P257 (2026-05-12) — capturing a vector into a closure body used to
+// crash both backends with no clean diagnostic: interp panicked with
+// "Write to locked store at rec=N fld=M" (src/store.rs:963), native
+// rejected with rustc E0308 + E0605 in the generated code.  Now
+// rejected at parse with a clear message naming the variable and the
+// recommended workaround.  Surfaced by plan-15 phase 06 closeout
+// probing — the matrix's C7 row was CLOSED:non-goal but the failure
+// mode was unstable, not a stable parse-time diagnostic.
+#[test]
+fn p257_vector_capture_in_closure_rejected() {
+    code!(
+        "fn test() {
+    items = [10, 20, 30];
+    f = fn(idx: integer) -> integer { items[idx] };
+    print(\"{f(1)}\\n\");
+}"
+    )
+    .error(
+        "vector variable 'items' cannot be captured into a closure body; bind the element you need before the lambda (e.g. `x = items[i]; f = fn(...) { ... x ... }`) — collection capture is not supported because the closure record layout doesn't model the content type at p257_vector_capture_in_closure_rejected:3:45",
+    );
+}
+
+// P257 — the workaround the diagnostic recommends actually works:
+// bind the element you need before the lambda, capture the bound
+// value (a primitive or Reference) instead of the collection itself.
+#[test]
+fn p257_bind_before_lambda_workaround_works() {
+    code!(
+        "fn test() {
+    items = [10, 20, 30];
+    x = items[1];
+    f = fn(dx: integer) -> integer { x + dx };
+    print(\"{f(5)}\\n\");
+}"
+    );
+}
+
 // P213 — capturing closure stored in struct field used to panic at
 // `src/store.rs:963` ("Write to locked store") in interp and emit
 #[test]

@@ -165,6 +165,45 @@ impl Parser {
             .find(|(n, _)| n == name)
             .cloned()
         {
+            // P257 (2026-05-12): reject collection-typed captures with a
+            // clean parse-time diagnostic.  The closure-record layout
+            // (16-byte fn-ref slot: 4B d_nr + 12B closure DbRef) holds
+            // the captured payload as a flat list of attributes; vectors
+            // and other keyed collections need an additional level of
+            // indirection (their content type) that the closure record
+            // doesn't currently model.  Without this rejection the
+            // failure mode is unstable: interp panics with `Write to
+            // locked store` (the closure record write trips the
+            // collection's internal lock), native rejects with rustc
+            // E0308 + E0605 (the generated code casts a tuple-shaped
+            // value as i32).  The bind-the-element-before-the-lambda
+            // workaround applies for any value the closure body
+            // actually needs.
+            if matches!(
+                ctype,
+                Type::Vector(_, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            ) {
+                let kind = match &ctype {
+                    Type::Vector(_, _) => "vector",
+                    Type::Hash(_, _, _) => "hash",
+                    Type::Sorted(_, _, _) => "sorted",
+                    Type::Index(_, _, _) => "index",
+                    Type::Spacial(_, _, _) => "spacial",
+                    _ => "collection",
+                };
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "{kind} variable '{name}' cannot be captured into a closure body; bind the element you need before the lambda (e.g. `x = {name}[i]; f = fn(...) {{ ... x ... }}`) — collection capture is not supported because the closure record layout doesn't model the content type"
+                );
+                t = ctype.clone();
+                *code = Value::Null;
+                return t;
+            }
             // record the capture for closure record synthesis.
             if !self.captured_names.iter().any(|(n, _)| n == name) {
                 self.captured_names.push((name.to_string(), ctype.clone()));
