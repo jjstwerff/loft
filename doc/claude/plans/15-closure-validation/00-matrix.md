@@ -5,7 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 00 — Matrix freeze + harness wiring
 
-**Status: open**
+**Status: SHIPPED 2026-05-12** — `tests/closure_matrix.rs` created;
+3 cells green under `cargo test --release --test closure_matrix --
+--ignored` (harness_smoke_basic, harness_smoke_arithmetic,
+c0_d1_non_cap_local).  No production change.  Phase 01 broadens
+the C0 row.
 
 ## Goal
 
