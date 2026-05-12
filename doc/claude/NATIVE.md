@@ -196,9 +196,8 @@ grep -n '"OpYourOp" =>' src/generation/dispatch.rs
   forwarding step and write the real emitter directly,
   absorbing whatever the special-case arm does.
 
-The forwarding registration looks like (see
-`src/generation/ops/forwarding_smoke.rs` for the live example
-covering 9 Ops):
+The forwarding emitter is written ad-hoc as a one-shot for the
+verification pass:
 
 ```rust
 pub struct Emitter;
@@ -210,10 +209,45 @@ impl OpEmitter for Emitter {
 }
 ```
 
+(Plan-09 originally shipped a shared `forwarding_smoke.rs` file
+covering 9 forwarded Op names as a registry-dispatch smoke test;
+plan-12 phase 02 retired it once 5 production custom emitters
+proved the dispatch path was exercised end-to-end.  The recipe
+above is the residual pattern — write a one-shot forwarding
+emitter inline when adding a new Op, verify byte-identical
+baseline, then swap in the real emission logic.)
+
 Validation:
 - `cargo test --release --test codegen_emitter` runs the byte-identical
-  baseline guard + P203 regression guard.
+  baseline guard + P203 regression guard +
+  `pre_eval_walkers_unspan` structural guard (see Walker convention
+  below).
 - `scripts/p09_fast_gate.sh` is the ~4-second human-driven gate.
+
+#### Walker convention — always `.unspan()` before matching `Value::*`
+
+When implementing a walker that pattern-matches against `Value::*`
+variants (`matches!(op, Value::Set(...))`, `match &operators[i]
+{ Value::Call(...) => ... }`), call `.unspan()` on the operator
+first.  Skipping unspan is **"code that compiled but never
+executed"** — the parser commonly wraps operators in
+`Value::Span(box (pos, inner))` for source-position tracking, and
+a raw match falls through to the `_ =>` arm even when the
+unspanned value matches.
+
+Plan-11 closed P204 by fixing one such walker
+(`detect_ref_tail_capture`); plan-12 phase 01 generalised the
+audit and patched 16 walker sites across 3 files (`pre_eval.rs`,
+`emit.rs`, `coroutine.rs`).  Findings: all latent — no in-tree
+miscompile reproducer, byte-identical baseline preserved — but
+applied as insurance.
+
+The structural guard
+`tests/codegen_emitter.rs::pre_eval_walkers_unspan` slices
+`patch_hoisted_returns` + `value_mentions_var` and asserts every
+`matches!(op, Value::*)` site is paired with `.unspan()`.  Add new
+walker sites to that slice or extend the guard if you introduce a
+new pattern site outside `pre_eval.rs`.
 
 ---
 
@@ -1152,6 +1186,27 @@ a `String` move.
 - [DATABASE.md](DATABASE.md) — Runtime data store and type schema
 - [COROUTINE.md](COROUTINE.md) — Interpreter coroutine design; CO1.3d text serialisation (S25)
 - [THREADING.md](THREADING.md) — Safety analysis for coroutine text handling (P2-R1/R2/R3)
+
+---
+
+## Open work
+
+`--native` is production (CI-gated, all 108/108 native tests pass).
+The items below are remaining follow-ups that don't affect the
+shipped state.  Each row links to its design content above.
+
+| Item | Section | Status |
+|---|---|---|
+| **N8b.3** — `yield from` delegation | [§ N8b](#n8b--coroutine-native-codegen) (line ~944, marked CO1.3d) | Open — design drafted, not implemented.  Native coroutines support `yield value` (N8b.1 + N8b.2 shipped) but NOT `yield from <inner_iterator>` delegation. |
+| **N8c.1** — Audit generic text-return | [§ N8c](#n8c--generic-function-instantiation) | **Probably overlaps shipped work.**  Plan-17 closure landed P237 / P238 / P242 (`Value::Tuple` recursion in `substitute_type_in_value`; `tuple_text_to_string` flag).  Action: un-skip `tests/scripts/48-generics.loft`; if green, mark closed. |
+| **N8c.2** — Fix generic text-return | [§ N8c](#n8c--generic-function-instantiation) | Same overlap.  N8c.1 audit determines whether N8c.2 is needed. |
+| **N20a** — Add `ops` import to generated `fill.rs` | [§ N20](#n20--repair-fillrs-auto-generation) | Open — trivial single-line add in `src/create.rs::generate_code()`. |
+| **N20b** — Run `cargo fmt` on generated `fill.rs` | [§ N20](#n20--repair-fillrs-auto-generation) | Open — runs `rustfmt` on the generated file so formatting matches the hand-maintained version. |
+| **N10 prune** | [§ N10 below](#current-state-2026-04-07) | **Stale.**  Says "6 fail, 34 skip of 85 files"; current state is 108/108 pass.  Sub-steps are diagnostic recipes for failures that no longer exist.  Action: prune § N10 + N20 to historical pointers when N8b.3 + N8c.x close. |
+
+Suggested order: N8c.1 audit (fastest) → N20a + N20b (trivial pair)
+→ N8b.3 (actual feature work; touches `src/generation/coroutine.rs`)
+→ § N10 + § N20 cleanup.
 
 ---
 

@@ -97,6 +97,104 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
     }
 }
 
+/// P248 — extracted nested-tuple LHS shape for assignment.
+///
+/// `t.0.1.2 = …` parses to either a single `Value::TupleGet` (depth 1)
+/// or a chain of `Block[Set(w_k, …), TupleGet(w_k, idx)]` nodes (depth
+/// ≥ 2 — operators.rs case 3 materialises the intermediate reads
+/// through work vars).  This struct flattens both shapes so the
+/// assignment dispatcher can rewrite them uniformly.
+///
+/// For `t.0.1 = 99`:
+///   - root = t_var_nr
+///   - chain = [(w0, 0)]   // w0 = t.0
+///   - leaf_idx = 1        // …w0.1 = rhs
+///
+/// For `t.0 = 99`:
+///   - root = t_var_nr
+///   - chain = []
+///   - leaf_idx = 0
+struct NestedTupleLhs {
+    root: u16,
+    /// Pairs of `(work_var, index_into_parent)`, ordered root → leaf.
+    chain: Vec<(u16, u16)>,
+    leaf_idx: u16,
+}
+
+/// Walk a Value that might be a chained tuple read (single `TupleGet`
+/// or nested `Block[Set(w, source), TupleGet(w, idx)]`) and return a
+/// flattened `NestedTupleLhs`.  Returns `None` for any other shape.
+fn extract_nested_tuple_lhs(code: &Value) -> Option<NestedTupleLhs> {
+    match code.unspan() {
+        Value::TupleGet(var_nr, idx) => Some(NestedTupleLhs {
+            root: *var_nr,
+            chain: vec![],
+            leaf_idx: *idx,
+        }),
+        Value::Block(b) if b.operators.len() == 2 => {
+            let (set_op, tail) = (&b.operators[0], &b.operators[1]);
+            if let (Value::Set(w_set, source), Value::TupleGet(w_get, leaf_idx)) = (set_op, tail)
+                && w_set == w_get
+            {
+                let inner = extract_nested_tuple_lhs(source)?;
+                let mut chain = inner.chain;
+                chain.push((*w_set, inner.leaf_idx));
+                Some(NestedTupleLhs {
+                    root: inner.root,
+                    chain,
+                    leaf_idx: *leaf_idx,
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Build the assignment IR for `<lhs> = rhs`.  For depth-1 it's a
+/// plain `TuplePut(root, leaf_idx, rhs)`.  For depth ≥ 2 we keep the
+/// existing Block's `Set` ops (they read intermediates into the same
+/// work vars), strip the trailing `TupleGet`, write the leaf via
+/// `TuplePut(deepest_w, leaf_idx, rhs)`, then write each intermediate
+/// back to its parent in reverse so the modification propagates up
+/// to `root`.
+fn build_nested_tuple_assign(orig_code: &Value, lhs: &NestedTupleLhs, rhs: Value) -> Value {
+    if lhs.chain.is_empty() {
+        return Value::TuplePut(lhs.root, lhs.leaf_idx, Box::new(rhs));
+    }
+    // Reuse the Set ops the existing Block already emitted (read
+    // chain into the same work-var slots).  Strip the trailing
+    // TupleGet — we're replacing it with writes.
+    let mut ops: Vec<Value> = if let Value::Block(b) = orig_code.unspan() {
+        let mut clone = b.operators.clone();
+        if matches!(clone.last(), Some(Value::TupleGet(_, _))) {
+            clone.pop();
+        }
+        clone
+    } else {
+        // Defensive — shouldn't happen since chain.len() >= 1 implies
+        // we matched the Block arm above.  Reconstruct the reads.
+        let mut prev = lhs.root;
+        let mut acc = Vec::with_capacity(lhs.chain.len());
+        for (w, idx) in &lhs.chain {
+            acc.push(crate::data::v_set(*w, Value::TupleGet(prev, *idx)));
+            prev = *w;
+        }
+        acc
+    };
+    let last_w = lhs.chain.last().expect("chain non-empty").0;
+    // Leaf: write rhs into the deepest work var at leaf_idx.
+    ops.push(Value::TuplePut(last_w, lhs.leaf_idx, Box::new(rhs)));
+    // Writebacks in reverse — propagate the modified intermediate
+    // back up the chain so the change reaches `root`.
+    for (k, (w, idx)) in lhs.chain.iter().enumerate().rev() {
+        let parent = if k == 0 { lhs.root } else { lhs.chain[k - 1].0 };
+        ops.push(Value::TuplePut(parent, *idx, Box::new(Value::Var(*w))));
+    }
+    crate::data::v_block(ops, Type::Void, "nested_tuple_assign")
+}
+
 /// Recursively replace every occurrence of `from` in `into` with a clone
 /// of `to`.  Used by the `field += elem` keyed-collection branch to
 /// retarget a struct-literal's field-init steps from the LHS field
@@ -1114,7 +1212,28 @@ use a separate collection or add after the loop"
             }
             let mut rhs = Value::Null;
             let rhs_type = self.expression(&mut rhs);
-            if let Type::Tuple(ref rhs_elems) = rhs_type {
+            // A7.1: accept both `Type::Tuple([…])` and the synthetic
+            // `Reference(__tuple<…>)` shape that A7.1's parse_function
+            // gate widen produces for tuple returns wider than 8B.
+            // For the synthetic-struct shape, element reads go through
+            // `get_val` with the struct's per-attribute offset — same
+            // path P189b's `.0` / `.1` element access takes (mirrors
+            // the for-loop destructure in collections.rs:1289-1304).
+            let (rhs_elems_opt, ref_def_nr): (Option<Vec<Type>>, u32) = match &rhs_type {
+                Type::Tuple(elems) => (Some(elems.clone()), u32::MAX),
+                Type::Reference(d_nr, _) if self.data.def(*d_nr).name.starts_with("__tuple<") => {
+                    let elems: Vec<Type> = self
+                        .data
+                        .def(*d_nr)
+                        .attributes
+                        .iter()
+                        .map(|a| a.typedef.clone())
+                        .collect();
+                    (Some(elems), *d_nr)
+                }
+                _ => (None, u32::MAX),
+            };
+            if let Some(rhs_elems) = rhs_elems_opt {
                 if rhs_elems.len() != var_nrs.len() {
                     diagnostic!(
                         self.lexer,
@@ -1138,7 +1257,47 @@ use a separate collection or add after the loop"
                             self.change_var_type(v_nr, &rhs_elems[i]);
                         }
                     }
-                    steps.push(Value::Set(v_nr, Box::new(Value::TupleGet(tmp, i as u16))));
+                    let read = if ref_def_nr == u32::MAX {
+                        Value::TupleGet(tmp, i as u16)
+                    } else {
+                        let elem_offset = if let Some(offs) =
+                            crate::data::stored_tuple_offsets_for_def(
+                                &self.data,
+                                &self.database,
+                                ref_def_nr,
+                                rhs_elems.len(),
+                            ) {
+                            u32::from(offs[i])
+                        } else {
+                            crate::data::element_offsets(&rhs_elems)[i] as u32
+                        };
+                        // P250 fix (2026-05-11): when destructuring a synthetic
+                        // `__tuple<...>` struct (the wider-than-8B tuple-return
+                        // shape), each LHS Reference element is a VIEW into the
+                        // tmp's storage (`OpGetField(tmp, offset, ...)` returns
+                        // a DbRef that shares store_nr/rec with tmp).  Without a
+                        // dep, scope analysis emits an independent `OpFreeRef`
+                        // for the LHS at scope exit; that free works on a
+                        // store_nr basis and frees the entire tmp's underlying
+                        // store.  In a loop body, the next iteration's `tmp =
+                        // make_pair(...)` reassignment then runs `OpFreeRef(tmp)`
+                        // on the now-stale DbRef whose store_nr has been recycled
+                        // by an unrelated allocation (e.g. the new `pa`),
+                        // silently destroying that allocation.  The first LHS
+                        // arg's projection is most affected because the freshly-
+                        // allocated `pa` lands in the same store slot the prior
+                        // tuple occupied.  Marking the LHS dependent on tmp
+                        // suppresses its independent free; tmp's `OpFreeRef`
+                        // alone reclaims the storage at the right time.  Only
+                        // applies to the synthetic-struct path (Reference
+                        // elements); the inline `TupleGet` path (small tuples ≤
+                        // 8B) reads value-typed elements that need no free.
+                        if matches!(rhs_elems[i], Type::Reference(_, _)) {
+                            self.vars.depend(v_nr, tmp);
+                        }
+                        self.get_val(&rhs_elems[i], false, elem_offset, Value::Var(tmp), u32::MAX)
+                    };
+                    steps.push(Value::Set(v_nr, Box::new(read)));
                 }
                 *code = Value::Insert(steps);
             } else if !self.first_pass {
@@ -1150,18 +1309,24 @@ use a separate collection or add after the loop"
             }
             return Type::Void;
         }
-        // T1.4-fix-a: tuple element assignment t.0 = expr.
-        // Plan-07 phase 1: unspan() so the wrap on `.` (step 1.12)
-        // does not hide the TupleGet shape.
-        if let Value::TupleGet(var_nr, idx) = code.unspan() {
-            let var_nr = *var_nr;
-            let idx = *idx;
-            if self.lexer.has_token("=") {
-                let mut rhs = Value::Null;
-                self.expression(&mut rhs);
-                *code = Value::TuplePut(var_nr, idx, Box::new(rhs));
-                return Type::Void;
-            }
+        // T1.4-fix-a + P248 — tuple element assignment `t.<chain> = expr`,
+        // including nested `t.0.1 = expr`.
+        //
+        // Plan-07 phase 1: unspan() so the wrap on `.` (step 1.12) does
+        // not hide the TupleGet shape.  For depth ≥ 2 the parser
+        // materialised the read as `Block[Set(w0, TupleGet(t, 0)),
+        // TupleGet(w0, 1)]` (operators.rs case 3 — temporary tuple
+        // work var).  Without P248's recursive extractor that Block
+        // landed at the assignment dispatcher, didn't match the
+        // single-level TupleGet arm, and fell through to the
+        // "Not implemented operation = for type integer" diagnostic.
+        if let Some(lhs) = extract_nested_tuple_lhs(code)
+            && self.lexer.has_token("=")
+        {
+            let mut rhs = Value::Null;
+            self.expression(&mut rhs);
+            *code = build_nested_tuple_assign(code, &lhs, rhs);
+            return Type::Void;
         }
         // T1.11b: compound assignment on a tuple LHS is not supported.
         // (a, b) = expr is handled above; (a, b) += expr has no defined semantics.

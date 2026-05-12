@@ -19,6 +19,16 @@ use crate::variables::size as var_size;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Error, Write};
 use std::sync::Arc;
+use std::sync::OnceLock;
+
+/// Plan-07 phase 4g.3 — read once at first raise.  When set
+/// (env var `LOFT_DEV_SOFT_HALT=1` or CLI flag `--dev-soft-halt`
+/// which exports the env var), demote dev-mode raises to
+/// log-and-continue so a single run surfaces every fault site.
+fn dev_soft_halt_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var("LOFT_DEV_SOFT_HALT").is_ok_and(|v| v == "1" || v == "true"))
+}
 
 pub const STRING_NULL: &str = "\0";
 
@@ -278,11 +288,17 @@ impl State {
             .next_back()
             .map_or(0, |(_, &v)| v);
         self.call_depth += 1;
-        assert!(
-            self.call_depth <= Self::MAX_CALL_DEPTH,
-            "Recursion depth limit exceeded ({}) — possible infinite recursion",
-            Self::MAX_CALL_DEPTH
-        );
+        // Plan-07 phase 4f.12 — stack overflow becomes a typed
+        // RuntimeError instead of an opaque Rust panic.  Detect at
+        // call entry, raise StackOverflow, decrement so the unwind
+        // doesn't re-trip on the way out.  Production logs +
+        // continues per C66 (host frame loop decides whether to
+        // restart); dev mode halts + renders.
+        if self.call_depth > Self::MAX_CALL_DEPTH {
+            self.call_depth -= 1;
+            self.raise(crate::runtime_error::RuntimeErrorKind::StackOverflow);
+            return;
+        }
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: self.code_pos,
@@ -1343,12 +1359,29 @@ impl State {
 
     /// `parallel {}` — spawn threads for all recorded arms and join.
     /// Each arm runs as a void function at its bytecode position.
+    ///
+    /// P245: captures the parent's stack contents (offsets 4..stack_pos)
+    /// as a snapshot and hands it to each worker.  This lets arm
+    /// bodies reference outer-scope variables — the arm's bytecode
+    /// addresses them at offsets that match the parent's layout, and
+    /// without the snapshot the worker reads garbage from an empty
+    /// stack.  Arms still get isolated `Stores` clones, so writes
+    /// inside an arm don't propagate back to the parent.
     pub fn parallel_join(&mut self) {
         let positions: Vec<u32> = self
             .parallel_arm_positions
             .drain(..)
             .map(|off| self.code_pos + u32::from(off))
             .collect();
+        let parent_snapshot: Arc<Vec<u8>> = if self.stack_pos > 4 {
+            let store = self.database.store(&self.stack_cur);
+            let ptr = store.addr::<u8>(self.stack_cur.rec, self.stack_cur.pos + 4);
+            let len = (self.stack_pos - 4) as usize;
+            let bytes = unsafe { std::slice::from_raw_parts(ptr, len).to_vec() };
+            Arc::new(bytes)
+        } else {
+            Arc::new(Vec::new())
+        };
         let program = crate::parallel::WorkerProgram {
             bytecode: Arc::clone(&self.bytecode),
             library: Arc::clone(&self.library),
@@ -1357,7 +1390,7 @@ impl State {
             fn_positions: Arc::new(self.fn_positions.clone()),
             line_numbers: Arc::new(self.line_numbers.clone()),
         };
-        crate::parallel::run_parallel_block(&self.database, program, &positions);
+        crate::parallel::run_parallel_block(&self.database, program, &positions, &parent_snapshot);
     }
 
     pub fn get_var<T>(&mut self, pos: u16) -> &T {
@@ -1511,6 +1544,202 @@ impl State {
         self.source_spans.range(..=pc).next_back().map(|(_, p)| p)
     }
 
+    /// Plan-07 phase 4 step 4.1 — raise a typed runtime error from a
+    /// fault-site opcode (div-by-zero, OOB, null-deref, narrow cast, …).
+    /// Resolves the offending pc back to a `Position` via the phase-1
+    /// `source_spans` table, populates `database.runtime_error`, and
+    /// sets `had_fatal = true` so `main.rs`'s exit-1 path fires after
+    /// the dispatch loop terminates.
+    ///
+    /// The dispatch loop in `execute_argv` / `resume` checks
+    /// `database.runtime_error.is_some()` AFTER each op and short-
+    /// circuits via `code_pos = u32::MAX` — callers don't have to
+    /// touch the loop machinery, just call `s.raise(kind)` and let
+    /// the op finish (e.g. with a placeholder result on the stack).
+    ///
+    /// **Production-vs-development split (DESIGN_DECISIONS.md § C66).**
+    /// When `database.logger.config.production == true` the production
+    /// branch fires: log the typed event through `Logger::log_runtime_kind`,
+    /// set `had_fatal = true`, and **return without populating
+    /// `runtime_error`**.  The dispatch loop's short-circuit check
+    /// (which only fires on `runtime_error.is_some()`) does NOT trigger
+    /// — execution continues past the fault site, the op produces its
+    /// sentinel value (null DbRef / `i64::MIN` / char 0), and the
+    /// program stays alive.  This is the contract for production
+    /// deployments (games, servers, browser embeds) where halting on
+    /// an edge case would be strictly worse than a wrong-pixel
+    /// recovery.
+    pub fn raise(&mut self, kind: crate::runtime_error::RuntimeErrorKind) {
+        let position = self.source_loc_for(self.code_pos).cloned();
+        // Production: log + had_fatal + return.  Do NOT populate
+        // runtime_error so the dispatch loop continues (per C66).
+        // The check matches `n_panic` / `n_assert`'s production check
+        // shape from `src/native.rs`.
+        let production = self
+            .database
+            .logger
+            .as_ref()
+            .and_then(|l| l.lock().ok())
+            .is_some_and(|l| l.config.production);
+        // Plan-07 phase 4g.3 — `--dev-soft-halt` (CLI flag /
+        // `LOFT_DEV_SOFT_HALT=1` env var) demotes development-mode
+        // raises to log-and-continue (matches production
+        // semantics) so a single run surfaces every fault site
+        // instead of halting on the first.  Useful when porting
+        // scripts: get the full pattern of breakage in one shot.
+        // The flag forces the production branch regardless of the
+        // logger's `production` flag.  When no logger is attached
+        // the fault is rendered to stderr via main.rs's
+        // pretty-print path on exit (had_fatal is still set so
+        // main.rs exits non-zero).
+        let dev_soft_halt = dev_soft_halt_enabled();
+        if production || dev_soft_halt {
+            if let Some(logger) = &self.database.logger
+                && let Ok(mut lg) = logger.lock()
+            {
+                lg.log_runtime_kind(&kind, position.as_ref());
+            }
+            // In dev-soft-halt mode, ALWAYS render the fault to
+            // stderr so the developer sees each one as it
+            // happens — they ran `--dev-soft-halt` specifically
+            // to see the full pattern of breakage in one run.
+            // Logger emission (above) doubles to the log file
+            // when a logger is attached but does NOT replace
+            // the stderr surface.
+            if dev_soft_halt {
+                eprintln!(
+                    "soft-halt: {} at {}",
+                    kind.describe(),
+                    position.as_ref().map_or_else(
+                        || "?".to_string(),
+                        |p| format!("{}:{}:{}", p.file, p.line, p.pos)
+                    )
+                );
+            }
+            self.database.had_fatal = true;
+            return;
+        }
+        // Development (default for CLI / tests / no logger / non-production
+        // logger): populate runtime_error so the dispatch loop
+        // short-circuits and main.rs renders the typed error.
+        let message = kind.describe();
+        let op_pc = self.code_pos;
+        // Plan-07 phase 4g.1 / 4g.2 slice 1 — capture the call
+        // chain (innermost first) so main.rs can render it after
+        // the typed-error block.  Each entry is the function name
+        // (the `n_` prefix from the global registry stripped).
+        // Slice 2 will add per-frame source positions and named-arg
+        // value snapshots; slice 1 ships the function-chain shape.
+        let call_chain: Vec<String> = if self.data_ptr.is_null() {
+            Vec::new()
+        } else {
+            // SAFETY: data_ptr is set at execute_argv start and
+            // cleared at exit; valid for the lifetime of `raise`.
+            let data = unsafe { &*self.data_ptr };
+            self.call_stack
+                .iter()
+                .rev() // innermost first
+                .map(|frame| {
+                    let name = data.def(frame.d_nr).name.clone();
+                    name.strip_prefix("n_").unwrap_or(&name).to_string()
+                })
+                .collect()
+        };
+        self.database.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError {
+            kind,
+            position,
+            op_pc,
+            message,
+            call_chain,
+        }));
+        self.database.had_fatal = true;
+    }
+
+    /// Plan-07 phase 4 step 4.6 — bounds-checked vector index that raises
+    /// `IndexOutOfBounds` / `NegativeIndex` instead of returning the null
+    /// DbRef sentinel that `vector::get_vector` produced on OOB today.
+    /// Used by `OpGetVector`'s annotation; the dispatch loop's
+    /// `runtime_error.is_some()` check halts execution after the op
+    /// returns.  Negative indices use Python-style addressing
+    /// (`v[-1]` == last); only after addressing yields a still-out-of-
+    /// range value does the raise fire.
+    #[must_use]
+    pub fn vec_get_or_raise(
+        &mut self,
+        db: &crate::keys::DbRef,
+        size: u32,
+        index: i64,
+    ) -> crate::keys::DbRef {
+        let len = crate::vector::length_vector(db, &self.database.allocations);
+        let normalized = if index < 0 {
+            index + i64::from(len)
+        } else {
+            index
+        };
+        if normalized < 0 {
+            self.raise(crate::runtime_error::RuntimeErrorKind::NegativeIndex { idx: index });
+            // Sentinel matches the legacy `vector::get_vector` OOB
+            // shape (preserve `db.store_nr`, set `rec=0`) so wrapping
+            // ops like `OpGetText` / `OpGetByte` that call
+            // `stores.store(&db)` directly don't panic on the
+            // production-mode log-and-continue path.  `rec == 0`
+            // remains the universal null-DbRef indicator.
+            return crate::keys::DbRef {
+                store_nr: db.store_nr,
+                rec: 0,
+                pos: 0,
+            };
+        }
+        if normalized >= i64::from(len) {
+            self.raise(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+                idx: index,
+                len,
+            });
+            return crate::keys::DbRef {
+                store_nr: db.store_nr,
+                rec: 0,
+                pos: 0,
+            };
+        }
+        crate::vector::get_vector(db, size, index, &self.database.allocations)
+    }
+
+    /// Plan-07 phase 4 step 4.6 — bounds-checked variant of
+    /// `OpVectorRef`'s body: same bounds check as `vec_get_or_raise`,
+    /// then dereferences the resulting DbRef via `Stores::get_ref`.
+    /// Single helper keeps the OpVectorRef annotation a one-liner.
+    #[must_use]
+    pub fn vec_ref_or_raise(&mut self, db: &crate::keys::DbRef, index: i64) -> crate::keys::DbRef {
+        let inner = self.vec_get_or_raise(db, 4, index);
+        // `get_ref` already short-circuits to a null DbRef when
+        // `inner.rec == 0` (which is the OOB sentinel after the
+        // store_nr-preserving sentinel change), so no extra guard
+        // is required here.
+        self.database.get_ref(&inner, 0)
+    }
+
+    /// Plan-07 phase 4 step 4.8 — bounds-checked text index.  `text[i]`
+    /// today returns `char(0)` on OOB (silent wrong-answer); raise
+    /// `IndexOutOfBounds` / `NegativeIndex` for the non-nullable path.
+    /// Negative addressing mirrors `vec_get_or_raise`.
+    #[must_use]
+    pub fn text_char_or_raise(&mut self, val: &str, index: i64) -> char {
+        let len = val.len() as i64;
+        let normalized = if index < 0 { index + len } else { index };
+        if normalized < 0 {
+            self.raise(crate::runtime_error::RuntimeErrorKind::NegativeIndex { idx: index });
+            return char::from(0);
+        }
+        if normalized >= len {
+            self.raise(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+                idx: index,
+                len: len as u32,
+            });
+            return char::from(0);
+        }
+        crate::ops::text_character(val, index)
+    }
+
     /// Execute entry-point `name`, optionally passing `argv` as a `vector<text>` argument.
     ///
     /// If the named function has exactly one `vector<…>` parameter, the strings in `argv`
@@ -1632,6 +1861,14 @@ impl State {
                 }
                 panic!("{msg}");
             }
+            // Plan-07 phase 4 — typed runtime error halt.  Native fns
+            // and fault-site opcodes set `database.runtime_error` then
+            // signal halt by short-circuiting `code_pos` here.  The
+            // outer caller (main.rs) reads `database.runtime_error`
+            // after `execute_argv` returns and renders it.
+            if self.database.runtime_error.is_some() {
+                self.code_pos = u32::MAX;
+            }
             if self.code_pos == u32::MAX {
                 break;
             }
@@ -1700,6 +1937,12 @@ impl State {
             }
             if self.database.frame_yield {
                 return true; // yielded again — still running
+            }
+            // Plan-07 phase 4 — typed runtime error halt (mirrors
+            // execute_argv).  Resume path needs the same check so a
+            // post-yield panic / failed assert halts gracefully.
+            if self.database.runtime_error.is_some() {
+                self.code_pos = u32::MAX;
             }
             if self.code_pos == u32::MAX {
                 break;
@@ -2365,8 +2608,46 @@ impl State {
     /// Execute a void function at `fn_pos` with no arguments.
     /// Used by `parallel {}` arms.
     pub fn execute_at_void(&mut self, fn_pos: u32) {
+        self.execute_at_void_with_snapshot(fn_pos, &[]);
+    }
+
+    /// Execute a void function at `fn_pos` after seeding the worker's
+    /// stack with `parent_snapshot` (P245).
+    ///
+    /// `parent_snapshot` is the parent's stack contents from offset 4
+    /// onwards (skipping the parent's leading sentinel slot).  When a
+    /// `parallel {}` arm references an outer-scope variable, the
+    /// arm's bytecode addresses it relative to the parent's stack
+    /// layout — without copying the parent's bytes into the worker,
+    /// those reads return whatever was previously at that offset
+    /// (typically 0 / garbage / a stale pointer that triggers
+    /// downstream SIGSEGV).
+    ///
+    /// The snapshot is overlaid on the worker's stack starting at
+    /// offset 4 (replacing the worker's freshly-pushed return
+    /// sentinel — the parent's bytes at that offset already encode
+    /// whatever return PC the parent function was using, which is
+    /// the right value for `fn_return` to read at the end of the
+    /// arm body).  An empty snapshot keeps the worker's own
+    /// `u32::MAX` sentinel and runs as before.
+    pub fn execute_at_void_with_snapshot(&mut self, fn_pos: u32, parent_snapshot: &[u8]) {
         self.stack_pos = 4;
-        self.put_stack(u32::MAX); // return sentinel
+        self.put_stack(u32::MAX); // return sentinel — possibly overwritten below
+        if !parent_snapshot.is_empty() {
+            // Overlay parent's bytes on the worker's stack starting
+            // at offset 4.  This includes the parent's own sentinel
+            // slot (offset 4..8) — replacing the worker's u32::MAX
+            // with whatever the parent had there.
+            let store = self.database.store_mut(&self.stack_cur);
+            let dst = store.addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + 4);
+            unsafe {
+                std::ptr::copy_nonoverlapping(parent_snapshot.as_ptr(), dst, parent_snapshot.len());
+            }
+            // After the overlay, stack_pos must mirror the parent's
+            // stack_pos so variable reads resolve at the right
+            // offsets.  Snapshot length = parent_stack_pos - 4.
+            self.stack_pos = 4 + parent_snapshot.len() as u32;
+        }
         self.code_pos = fn_pos;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {

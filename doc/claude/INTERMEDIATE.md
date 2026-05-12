@@ -85,9 +85,9 @@ pub enum Type {
     Unknown(u32),         // Forward reference placeholder (linked type id or 0)
     Null,                 // No type / null literal
     Void,                 // Function return: no value
-    Integer(i32, u32),    // Range-constrained integer (min, max)
+    Never,                // Divergent expression (return/break/continue) — compatible with any type
+    Integer(IntegerSpec), // Range-constrained integer (min, max, forced_size, nullable)
     Boolean,
-    Long,                 // i64
     Float,                // f64
     Single,               // f32
     Character,            // Single unicode codepoint
@@ -110,15 +110,58 @@ pub enum Type {
 }
 ```
 
+**Plan-01 (2026-04-21) removed `Type::Long`.**  All integer-family
+values now flow through `Type::Integer(IntegerSpec)` with i64
+arithmetic on the stack and per-field storage width via
+`IntegerSpec.forced_size` (see § Integer Storage Size below).
+Runtime IR literals still use `Value::Long(i64)` (the literal
+carrier), but `Type::Long` no longer exists as a distinct type.
+
 ### Integer Storage Size
 
-`Integer(min, max)` is stored compactly based on range:
-- range < 256  → 1 byte (`Parts::Byte`)
-- range < 65536 → 2 bytes (`Parts::Short`)
-- `forced_size == 4` (e.g. `i32` alias) → 4 bytes (`Parts::Int`)
-- otherwise    → 8 bytes (post-2c: always i64 at rest)
+`Integer(IntegerSpec { min, max, forced_size, .. })` is stored
+compactly based on range AND on whether the value is in a struct
+field versus a vector element.
 
-Nullable integers with range exactly 256 or 65536 also use 1 or 2 bytes respectively.
+**Struct fields** (regular `Parts::*`):
+
+| Condition | Storage | Variant |
+|---|---|---|
+| range < 256 | 1 byte | `Parts::Byte` (encodes `raw = val - min + 1`; raw 0 is null sentinel) |
+| range < 65536 | 2 bytes | `Parts::Short` (encodes `raw = val - min + 1`; raw 0 is null sentinel) |
+| `forced_size == 4` (e.g. `i32` alias) | 4 bytes | `Parts::Int` (encodes `raw = val`; `i32::MIN` is null sentinel) |
+| otherwise | 8 bytes | `Parts::Long` (post-2c: always i64 at rest; `i64::MIN` sentinel) |
+
+Nullable integers with range exactly 256 or 65536 also use 1 or 2
+bytes respectively.
+
+**Vector elements** (post-plan-02 narrowing): vectors of narrow
+integer aliases honour `forced_size` via a divergent rule because
+`vector_add` raw-byte-copies element bytes — the `+1` offset of
+`Parts::Short` would cause read/write mismatch.
+
+| Width | Vector storage | Variant |
+|---|---|---|
+| 1 byte | direct `raw = val - min` (no +1 offset) | `Parts::Byte` (the encoding agrees with raw-byte copies) |
+| 2 bytes | direct `raw = val - min` | `Parts::ShortRaw` (parallel to `Parts::Short` but without the +1 sentinel offset; introduced specifically for `vector<u16>` / `vector<i16>` elements) |
+| 4 bytes | direct `raw = val` | `Parts::Int` (already direct-encoded) |
+| 8 bytes | direct `raw = val` | `Parts::Long` (default fallback) |
+
+The selection logic lives in
+`src/data.rs::IntegerSpec::vector_narrow_width()` (returns
+`Option<u8>` — `Some(1)` / `Some(2)` / `Some(4)` / `None` for the
+8-byte fallback).  The helper `Data::narrow_vector_content()`
+applies it at every parser call site that registers a vector
+content type — see [DATABASE.md § Narrow vector elements](DATABASE.md#narrow-vector-elements)
+for the storage-side details and the per-call-site registration
+pattern.
+
+Important gotcha for compiler contributors: `typedef.rs::fill_database`
+runs ONLY on struct definitions.  Local-variable / parameter /
+return-type vector registration happens at every
+`database.vector(c_tp)` call site in `src/parser/`.  Both paths
+must call `narrow_vector_content()` on their content type before
+registering, or narrowing only takes effect for struct fields.
 
 ### Content-type indexing — three numbering schemes
 
@@ -171,8 +214,7 @@ The actual numeric `op_nr` values are resolved via the operator registry in
 
 ```rust
 pub struct State {
-    bytecode: Vec<u8>,          // Main bytecode stream
-    text_code: Vec<u8>,         // String constant pool
+    bytecode: Arc<Vec<u8>>,     // Main bytecode stream
     stack_cur: DbRef,           // Current stack frame (a DB record in store 1000)
     pub stack_pos: u32,         // Current stack pointer
     pub code_pos: u32,          // Current position in bytecode
@@ -182,15 +224,33 @@ pub struct State {
     pub vars: HashMap<u32, u16>,  // code_pos -> variable stack position
     pub calls: HashMap<u32, Vec<u32>>, // code_pos -> called def_nrs
     pub types: HashMap<u32, u16>,      // code_pos -> type id
-    pub library: Vec<Call>,            // Extern Rust function table
+    pub library: Arc<Vec<Call>>,       // Extern Rust function table
     pub library_names: HashMap<String, u16>,
     text_positions: BTreeSet<u32>,   // debug: set of absolute positions of live Strings
-    line_numbers: HashMap<u32, u32>,
+    line_numbers: BTreeMap<u32, u32>,
     fn_positions: Vec<u32>,          // d_nr → bytecode entry point (for OpCallRef)
+    pub const_refs: Vec<DbRef>,      // d_nr → CONST_STORE DbRef for vector constants
 }
 
 pub type Call = fn(&mut Stores, &mut DbRef);
 ```
+
+**`const_refs`** (plan-28 Phase A, 2026): one entry per definition;
+zero for non-constant defs, populated for vector constants whose
+records were pre-built into `CONST_STORE` (store 1) during
+`byte_code()`.  `OpConstRef(d_nr)` indexes into this vector.
+The previous `text_code: Vec<u8>` string constant pool was retired
+when long strings (>= 256 bytes) moved into `CONST_STORE` via
+`OpConstStoreText`; short strings stay embedded in the bytecode
+stream via `OpConstText`.
+
+The `State` struct in production carries additional fields for
+source-position lookup, coroutine frames, parallel arms, the
+shadow call-frame vector, and `data_ptr` — see `src/state/mod.rs`
+for the canonical definition.  See also
+[DATABASE.md § Constant store (`CONST_STORE`)](DATABASE.md#constant-store-const_store)
+for the storage-side view of `OpConstRef` and the lifetime + safety
+properties.
 
 The stack is stored as a database record in store 1000 (index 0 in `Stores::allocations`).
 `stack_pos` starts at 4 (offset past the 4-byte record header slot reserved for the return address
@@ -419,8 +479,10 @@ automatically.  Only 2 slots sit unused today (0xFE, 0xFF).
 
 Docs in `ROADMAP.md`, `PLANNING.md`, and `PERFORMANCE.md` cite this
 as "254/256 used".  Superinstruction peephole work (O1) is parked
-on this count — see `QUALITY.md § C54` (sub-ticket C54.E) for a plan to reclaim
-~26 slots by unifying the `Op*Int` / `Op*Long` families post-C54.
+on this count.  Plan-01 phase 5 (2026-04-21) reclaimed 34 duplicate
+`Op*Long` slots when the integer family collapsed to i64 (OPERATORS
+table 268 → 234); further reclaims (e.g., merging text-formatting
+families) would feed O1.
 
 Categories:
 

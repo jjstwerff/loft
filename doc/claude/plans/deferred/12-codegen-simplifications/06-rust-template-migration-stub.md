@@ -11,7 +11,7 @@ its own deferred initiative because:
 
 - It's well-described.
 - It has no driver (no open P-issue, no waiting feature).
-- It's 2-3 weeks of focused work; doesn't fit any current PR
+- It's a large structural refactor (H effort); doesn't fit any current PR
   shape.
 - The deferred convention reserves a clean home for exactly
   this kind of "available, not abandoned" work.

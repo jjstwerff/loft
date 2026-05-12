@@ -143,6 +143,74 @@ pub struct Field {
 | `unlock_store(r: &DbRef)` | Unlock the store that owns `r` |
 | `is_store_locked(r: &DbRef) -> bool` | Return whether the store that owns `r` is locked |
 
+### Constant store (`CONST_STORE`)
+
+Store index `1` is reserved for compile-time constant data:
+
+```rust
+// src/database/mod.rs
+pub const CONST_STORE: u16 = 1;
+```
+
+Allocated by `State::new()` immediately after the stack store (index 0)
+and before any runtime store.  Populated during `byte_code()` and
+**locked** before `execute()` runs.
+
+| Index | Purpose | Allocated in |
+|---|---|---|
+| 0 | Stack store (evaluation stack, record in store 1000 historical alias) | `State::new()` |
+| 1 | **Constant store** (read-only data) | `State::new()` |
+| 2+ | Runtime stores (structs, vectors) | `OpDatabase` at runtime |
+
+**What lives in `CONST_STORE`** (plan-28 Phase A, 2026):
+
+- **Vector constants** — file-scope `QUAD = [1, 2, 3];` is built as
+  a vector record in `CONST_STORE` during `byte_code()`.  Each
+  constant's `DbRef` is recorded in `Definition.const_ref` and
+  cached in `State.const_refs[d_nr]`.  Closes P127 (Var-collision
+  on inlined vector-literal IR).
+- **Long string constants** (>= 256 bytes) — `Store::set_str()`
+  copies bytes into `CONST_STORE`; `OpConstStoreText` reads the
+  `Str` pointer at runtime.  Replaced the ad-hoc `text_code:
+  Arc<Vec<u8>>` buffer that previously lived on `State`.
+- Short strings (< 256 bytes) stay embedded inline in the bytecode
+  via `OpConstText` — record-header overhead exceeds the inline
+  format's 1-byte-prefix cost at small sizes.
+
+**Reference-site codegen** for vector constants:
+
+```text
+__cv = null
+OpDatabase(__cv, vec_tp)             # allocate fresh runtime store
+OpConstRef(d_nr)                     # push the constant's DbRef
+OpCopyRecord(const, __cv, tp)        # deep-copy into __cv's store
+return __cv                          # caller owns __cv (mutable)
+```
+
+Each reference site allocates a fresh runtime store and deep-copies
+the constant record in.  Mutations to the copy never affect the
+original; the copy participates in normal `OpFreeRef` lifetime.
+
+**Lifetime + safety**:
+
+- `CONST_STORE` is **never freed** — persists for the program's lifetime.
+- **Locked** after construction (`store.locked = true`) — writes panic
+  in debug, are no-ops in release.
+- No `OpFreeRef` for `CONST_STORE` — it has no runtime refcount.
+- Parallel workers may read the locked store directly without cloning
+  (read-only = thread-safe).
+- Excluded from the debug-mode "Database N not correctly freed" exit
+  check — expected to remain allocated.
+
+See [INTERMEDIATE.md § Bytecode State](INTERMEDIATE.md#bytecode-state--srcstate)
+for `State.const_refs`'s role in `OpConstRef` dispatch.
+
+For deferred follow-ups (mmap-backed cache file; WASM
+pre-compiled stdlib including `CONST_STORE` as static bytes via
+`include_bytes!`) see
+[`plans/deferred/28-const-store/`](plans/deferred/28-const-store/) §
+Memory-mapped + WASM fast startup.
+
 ### Store Locking via `Stores`
 
 `Stores` exposes three methods that wrap the per-`Store` lock flag:
@@ -326,6 +394,43 @@ Initial capacity claim: `(11 * element_size + 15) / 8` words — room for approx
 | `vector_step(store, rec, index, size) -> u32` | Advance to next element index (forward) |
 | `vector_step_rev(store, rec, index, size) -> u32` | Advance to previous element index (reverse) |
 | `vector_length(store, rec) -> u32` | Return element count |
+
+### Narrow vector elements
+
+Vectors of narrow integer aliases (`vector<u8>` / `vector<u16>` /
+`vector<i8>` / `vector<i16>` / `vector<i32>` / `vector<u32>`)
+honour the alias's `forced_size` so that, e.g., `vector<i32>`
+stores 4 bytes per element rather than 8.
+
+The encoding for vector elements differs from struct fields:
+
+- **Struct field** `Parts::Short` encodes `raw = val - min + 1`,
+  reserving raw 0 as the null sentinel.
+- **Vector element** `Parts::ShortRaw` (added 2026-04-22 alongside
+  the rest of plan-02) encodes `raw = val - min` directly.
+
+The divergence is required because `vector_add` raw-byte-copies
+element bytes from source to destination — the +1 offset of
+`Parts::Short` would cause read/write mismatch.  `Parts::Byte`
+and `Parts::Int` are direct-encoded already and need no separate
+"raw" variant; only the 2-byte case needed `Parts::ShortRaw`.
+The 8-byte fallback (`Parts::Long`) is also direct.
+
+Public surface (in `src/data.rs`):
+
+| API | Returns | Use |
+|---|---|---|
+| `IntegerSpec::vector_narrow_width()` | `Option<u8>` (1 / 2 / 4, or `None` for the 8-byte fallback) | "Should this vector element narrow?" |
+| `Data::narrow_vector_content(content)` | content type with `forced_size` applied | Wrap a content type before calling `database.vector(...)` |
+
+**Compiler-contributor gotcha**: `typedef.rs::fill_database`
+walks ONLY struct definitions.  Local-variable / parameter /
+return-type vector registration happens at every
+`database.vector(c_tp)` call site in `src/parser/`.  Both paths
+must call `narrow_vector_content()` on their content type before
+registering, or narrowing only takes effect for struct fields.
+See [INTERMEDIATE.md § Integer Storage Size](INTERMEDIATE.md#integer-storage-size)
+for the per-variant table and the rule selection.
 
 ### Sorted By-Value Vector (`Parts::Ordered`)
 

@@ -26,9 +26,9 @@ Decisions to *not* fix something live in
 | P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / long / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  All 25 P54 + Q1 acceptance tests green.  Boolean allocator-corruption fix carried forward (`database(elem_size.max(2))` for handle stores).  **All JSON natives ship natively as of 2026-04-14 (commit `7a2329e` cleared `NATIVE_SKIP` and `SCRIPTS_NATIVE_SKIP`)** — `n_json_parse`, `n_json_array`, `n_json_object`, `n_to_json`, `n_to_json_pretty`, `n_kind`, `n_keys`, `n_fields`, `n_has_field`, `n_struct_from_jsonvalue`, etc. all dispatch through `src/native.rs` and run through `cargo nextest run --release --test native` cleanly.  The user-facing typed-impl refactor (making `MyStruct.parse(text)` enforce text-must-be-JSON typing at compile time instead of routing through the runtime auto-wrap) remains an optional follow-up — orthogonal to the JSON correctness work.  `p54_struct_parse_rejects_plain_text` was deleted (tested a rejected design decision). |
 | Q1 | `json_errors()` reports byte offset only — no path, no line:column, no context snippet | Medium | **Q1 COMPLETE 2026-04-14** — parser side: RFC 6901 path + line:column + context snippet with caret, all 5 `p54_err_*` acceptance tests green; 8 unit tests in `src/json::tests`; 6 `q1_*` tests for state-clearing.  Schema side: kind checks live inline in the unified `n_struct_from_jsonvalue` walker — primitive fields receiving a wrong JSON variant (and not `JNull`, which signals "absent field" and stays silent) push a `"<Struct>.<field>: expected <KKind>, got <KKind>"` diagnostic to `json_errors()`.  Symmetric across direct fields and `vector<struct>` element fields (same walker code path).  6 `q1_schema_side_*` tests covering type-mismatch, missing-field-silent, clean-parse, vector-element mismatch, text-receiving-number, boolean-receiving-string. |
 | Q2 | No free-form object iteration / key listing / quick `kind(v)` peek | Medium | **Q2 COMPLETE 2026-04-14**: `kind` + `has_field` + `keys` + `fields` all shipped with real JObject walks.  `keys` returns field names in insertion order; `fields` returns name + value pairs with full deep-copy (primitives and container values preserved).  See § Q2 below |
-| Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **JsonValue side complete 2026-04-14** (canonical + pretty both shipped): `to_json` walks all six variants — primitives, empty containers, non-empty containers, nested containers — full tree serialisation.  `to_json_pretty` adds 2-space indent + one-element-per-line for non-empty containers (empty stay `[]` / `{}`; `"k": v` with single space after colon).  `T.to_json()` codegen for arbitrary structs (Q3 second half) needs P54 step 5's codegen machinery.  See § Q3 below |
+| Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **JsonValue side complete 2026-04-14, T.to_json() complete 2026-05-07.**  JsonValue: `to_json` walks all six variants (primitives, empty containers, non-empty containers, nested containers) — full tree serialisation.  `to_json_pretty` adds 2-space indent + one-element-per-line for non-empty containers (empty stay `[]` / `{}`; `"k": v` with single space after colon).  `T.to_json()` / `T.to_json_pretty()` for any user struct ship via the parser-side intercept in `src/parser/fields.rs::field()` lowering to `n_struct_to_json(self_ref, struct_kt)` — which delegates to `Stores::show_json` reusing the existing `ShowDb` schema walker (`json: true` flag flips text → JSON-escaped, field names → quoted, struct-enum variants → `{"VariantName": …}`, JsonValue fields → semantic subtree).  See § Q3 below |
 | Q4 | No way to construct `JsonValue` trees in loft code (fixtures, mocking, forwarding) | — | **Q4 COMPLETE 2026-04-14**: all six constructors ship with real behaviour.  `json_null` / `json_bool` / `json_number` / `json_string` wire the primitives directly; `json_array` / `json_object` deep-copy caller-supplied items/fields into a fresh arena via a shared `dbref_to_parsed` + `materialise_primitive_into` helper, handling nested containers.  See § Q4 below |
-| P54-U | Two JSON parsers (`src/json.rs::parse` for the new JsonValue path, `src/database/structures.rs::parsing` for legacy `text→struct` direct write) accept different dialects and have different diagnostic surfaces | Medium | **Phase 1 + 2 landed 2026-04-14.**  Phase 1: `Dialect::Strict` / `Dialect::Lenient` enum + `parse_with(input, dialect)` in `src/json.rs`.  `parse_object` accepts bare-key identifier keys under Lenient, `parse_value` now also accepts bare identifier values via a new `Parsed::Ident(String)` variant (loft enum tags like `{category: Hourly}`).  Phase 2: schema-driven `walk_parsed_into` + `walk_parsed_struct` + `walk_primitive_into` in `src/database/structures.rs`; `Stores::parse` and `Stores::parse_message` route through the unified parser first and fall back to the legacy scanner only for error-path position reporting.  **Instrumentation confirmed zero success-path fallback hits across the full test suite** (`issues`, `data_structures`, `wrap`, all `.loft` scripts and docs).  Phase 3 remaining: replace the legacy error-path fallback with walker-native `Diagnostic` shape, then delete ~540 lines of hand-rolled scanner in `structures.rs`.  10 new unit tests total in `src/json.rs`.  Design in § P54-U below |
+| P54-U | Two JSON parsers (`src/json.rs::parse` for the new JsonValue path, `src/database/structures.rs::parsing` for legacy `text→struct` direct write) accept different dialects and have different diagnostic surfaces | Medium | **All three phases LANDED.**  Phase 1 (2026-04-14): `Dialect::Strict` / `Dialect::Lenient` enum + `parse_with(input, dialect)` in `src/json.rs`.  Phase 2 (2026-04-14): schema-driven `walk_parsed_into` + `walk_parsed_struct` + `walk_primitive_into` in `src/database/structures.rs`; `Stores::parse` / `parse_message` route through the unified parser; instrumentation confirmed zero success-path fallback hits across the full test suite.  Phase 3 (2026-05-07): legacy hand-rolled scanner already gone (Phase 2 superseded it); `Stores::parse` now ONLY uses the unified `parse_with` + walker path with no fallback (single error format `"line N:M path:X"` via `format_walk_err`).  Plus walker `at`-position threading: `walk_parsed_into` / `_struct` / `_primitive` take a byte-offset hint that struct field calls populate with the field's `key_at`, so leaf type-mismatches now report the field's real position instead of byte 0.  Pinned by `tests/data_structures.rs::p54u_leaf_mismatch_reports_field_position`. |
 
 Items that look open in the historical sections of PROBLEMS.md /
 CAVEATS.md but are now closed: P22, P91, P135 / C58, P137, P139, C60,
@@ -52,6 +52,37 @@ IR walk), **B5** (all layers landed — Layer 1 + 2 on 2026-04-14,
 Layer 3 closed as a side-effect of the struct-enum return work
 landed in #168→#174; `p54_b5_recursive_struct_enum` is
 un-ignored and passing).  See CHANGELOG.md.
+
+---
+
+## Open work — actionable summary
+
+Items below are "what to BUILD" derived from the design content in this document.  Each row links to the section that holds the full design.  Three clusters: JSON, Native runtime, Compiler-blocker.
+
+### JSON cluster
+
+| Item | Section | Status |
+|---|---|---|
+| **P54** — `JsonValue` enum (active sprint) | [§ Active sprint — P54](#active-sprint--p54-jsonvalue-enum) | Multi-step transition from text-based JSON to first-class `JsonValue` enum |
+| **Q1** — JSON parse-error diagnostics | [§ Active design — Q1](#active-design--q1-json-parse-error-diagnostics) | **S-class** (parse currently fails silently in some shapes) |
+| **Q2** — free-form object iteration + kind peek | [§ Active design — Q2](#active-design--q2-free-form-object-iteration--kind-peek) | API for iterating untyped JSON + peeking at value kinds |
+| **Q3** — `to_json` serialiser | [§ Active design — Q3](#active-design--q3-to_json-serialiser--struct-serialisation) | Symmetric serialisation API to `Type.parse()` |
+| **Q4** — `JsonValue` construction in loft code | [§ Active design — Q4](#active-design--q4-jsonvalue-construction-in-loft-code) | Builder API for constructing `JsonValue` trees in loft |
+| **P54-U** — unified JSON parser | [§ Active design — P54-U](#active-design--p54-u-unified-json-parser) | Phase 3 deletes ~540 lines of legacy scanner |
+
+### Native runtime cluster
+
+| Item | Section | Status |
+|---|---|---|
+| **Dep-inference** — for native fn returns (zero-leak unblock) | [§ Active design — Dep-inference](#active-design--dep-inference-for-native-fn-returns-zero-leak-unblock) | Closes closure / native-fn dep-tracking gap; cooperates with `plans/future/21-retire-scratch/` |
+
+### Compiler-blocker cluster
+
+| Item | Section | Status |
+|---|---|---|
+| **B2-B7** — struct-enum bugs gating P54 | [§ Compiler blockers](#compiler-blockers--struct-enum-bugs) | Audit needed; some may have closed via plan-17 / plan-19 sweeps |
+
+For the open programmer-biting issues list (running, not plan-shaped), see [§ Open programmer-biting issues](#open-programmer-biting-issues) above.  For ranked enhancement work, see [§ Enhancement tiers](#enhancement-tiers).  For ordering across all open items, see [§ Recommended landing order](#recommended-landing-order).
 
 ---
 
@@ -1250,14 +1281,20 @@ strategy:
    (16), `wrap` (45), docs, and scripts.
 5. **Delete** the now-unused scanner code in
    `src/database/structures.rs` (only the entry point and the
-   Parsed-walker stay).  **Pending — needs walker-native
-   `Diagnostic` shape first** (see § Unified diagnostic shape
-   below).  Error-path fallback still uses legacy
-   `parse_key`/`show_key` for the `"line N:M path:X"` error
-   format that `tests/data_structures.rs::record` asserts
-   (`"line 1:7 path:blame"`).  Once the unified
-   `format_diagnostic` can produce the same shape, the ~540
-   lines of hand-rolled scanner delete cleanly.
+   Parsed-walker stay).  ✅ **Landed 2026-05-07** — the legacy
+   hand-rolled scanner was already gone (Phase 2 walker
+   superseded it organically).  Phase 3 work: cleaned up doc
+   comments mentioning the "fallback" / "still kept for the
+   transition", and added byte-offset threading through
+   `walk_parsed_into` / `_struct` / `_primitive` so leaf
+   type-mismatches report the field's real position via the
+   `key_at` field already carried on `Parsed::Object` entries.
+   The `"line N:M path:X"` shape via `format_walk_err` continues
+   to back `tests/data_structures.rs::record` (`"line 1:7 path:blame"`).
+   New regression: `p54u_leaf_mismatch_reports_field_position`
+   in `tests/data_structures.rs` — locks the invariant that a
+   primitive type mismatch inside a struct body reports a
+   non-byte-0 position.
 
 No public API changes.  No script-side migration required.  No
 diagnostic regressions — both modes produce the rich Q1 errors
@@ -2325,7 +2362,7 @@ session-of-the-week background bite.
 
 8. **~~Const store mmap path on Linux.~~**  Closed as
    deferred-by-design 2026-04-14.  [CONST_STORE.md § Phase B
-   (mmap)](CONST_STORE.md#memory-mapped-constant-store) reaches the
+   (mmap)](plans/deferred/28-const-store/README.md#memory-mapped-constant-store) reaches the
    opposite conclusion: at today's cache-file sizes (5-10 KB) mmap
    overhead (syscall + page tables) exceeds the memcpy savings, so
    the implementation path is intentionally not taken.  A benchmark

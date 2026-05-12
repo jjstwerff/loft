@@ -193,20 +193,26 @@ fn p122_long_running_struct_loop_is_cfg_attr_ignored_in_debug_only() {
 }
 
 /// QUALITY Tier 3 #8 — the const-store mmap path is intentionally
-/// deferred per [CONST_STORE.md § Phase B] (cache files are 5-10 KB;
-/// mmap overhead exceeds memcpy savings at this size).  QUALITY.md
-/// must reflect that decision, not ask for a benchmark the design
-/// has ruled out.  This guard locks the two docs together: if
-/// CONST_STORE.md stops saying "Deferred" next to Phase B, QUALITY.md
-/// Tier 3 #8 should be re-opened at the same time; if QUALITY.md
-/// loses the closure marker, CONST_STORE.md probably did too.
+/// deferred per [plans/deferred/28-const-store § Phase B] (cache
+/// files are 5-10 KB; mmap overhead exceeds memcpy savings at this
+/// size).  QUALITY.md must reflect that decision, not ask for a
+/// benchmark the design has ruled out.  This guard locks the two
+/// docs together: if 28-const-store stops marking Phase B as
+/// deferred, QUALITY.md Tier 3 #8 should be re-opened at the same
+/// time; if QUALITY.md loses the closure marker, 28-const-store
+/// probably did too.  Note: the doc was renamed from
+/// `doc/claude/CONST_STORE.md` to
+/// `doc/claude/plans/deferred/28-const-store/README.md` (commit
+/// f0728474, "promote CONST_STORE.md to plans/deferred/").  Both
+/// the path and the deferral-marker text changed in the move; the
+/// test was updated to match (commit 2026-05-11).
 #[test]
 fn quality_const_store_mmap_matches_const_store_md() {
-    let cs = fs::read_to_string("doc/claude/CONST_STORE.md")
-        .expect("cannot read doc/claude/CONST_STORE.md");
+    let cs_path = "doc/claude/plans/deferred/28-const-store/README.md";
+    let cs = fs::read_to_string(cs_path).unwrap_or_else(|e| panic!("cannot read {cs_path}: {e}"));
     assert!(
-        cs.contains("**Phase B** (mmap): **Deferred.**"),
-        "CONST_STORE.md must document Phase B (mmap) as **Deferred.** — if the design position has changed, re-open QUALITY.md Tier 3 #8 and update this guard."
+        cs.contains("## Phase B — Memory-mapped constant store (deferred)"),
+        "{cs_path} must keep its `## Phase B — Memory-mapped constant store (deferred)` heading — if the design position has changed, re-open QUALITY.md Tier 3 #8 and update this guard."
     );
 
     let q = read_quality();
@@ -229,11 +235,11 @@ fn quality_const_store_mmap_matches_const_store_md() {
     );
     assert!(
         block.starts_with("8. **~~") || block.contains("**~~Const store mmap"),
-        "QUALITY.md Tier 3 #8 must be struck-through (`~~Const store mmap…~~`) because CONST_STORE.md § Phase B is deferred-by-design.  Block:\n{block}"
+        "QUALITY.md Tier 3 #8 must be struck-through (`~~Const store mmap…~~`) because plans/deferred/28-const-store § Phase B is deferred-by-design.  Block:\n{block}"
     );
     assert!(
-        block.contains("CONST_STORE.md"),
-        "QUALITY.md Tier 3 #8 must reference CONST_STORE.md § Phase B as the source of the deferral decision.  Block:\n{block}"
+        block.contains("28-const-store") || block.contains("CONST_STORE.md"),
+        "QUALITY.md Tier 3 #8 must reference plans/deferred/28-const-store § Phase B (or the legacy CONST_STORE.md path during transition) as the source of the deferral decision.  Block:\n{block}"
     );
 }
 
@@ -694,6 +700,99 @@ fn problems_quickref_matches_longform_status() {
         assert!(
             !fixed_longform.contains(n),
             "Issue #{n} is listed as open in PROBLEMS.md Quick-Reference but its long-form heading is crossed out (FIXED).  Update the Quick-Reference row."
+        );
+    }
+}
+
+/// PROBLEMS.md gained a `🔴 Currently Open (fast index)` section
+/// at the top (2026-05-11) so readers can find open issues
+/// without scanning the 60-row Quick-Reference table.  This guard
+/// keeps the fast-index in sync with the table — every open row
+/// (severity column contains `(open)`) must appear in the index,
+/// and no closed row may.  When the index drifts, `make problems`
+/// (which reads from the table directly) and the rendered fast
+/// index disagree — bad reader experience.
+#[test]
+fn problems_open_index_matches_quickref() {
+    let src = read_problems();
+    let fast_index_start = src.find("## 🔴 Currently Open (fast index)").expect(
+        "`🔴 Currently Open (fast index)` section missing — was it removed from PROBLEMS.md?",
+    );
+    let fast_index_end = src[fast_index_start..]
+        .find("\n## Open Issues — Quick Reference")
+        .expect("`Open Issues — Quick Reference` heading must follow the fast index")
+        + fast_index_start;
+    let fast_index = &src[fast_index_start..fast_index_end];
+    let quickref_start = fast_index_end + "\n".len(); // skip the leading newline so the next `find` lands past the Quick-Reference heading itself
+    // Skip past the Quick-Reference heading line so the next `\n## `
+    // search lands on the FOLLOWING section (not on the Quick-Reference
+    // heading itself, which would yield an empty quickref slice).
+    let quickref_body_start = src[quickref_start..]
+        .find('\n')
+        .map_or(quickref_start, |e| quickref_start + e + 1);
+    let quickref_end = src[quickref_body_start..]
+        .find("\n## ")
+        .map_or(src.len(), |e| e + quickref_body_start);
+    let quickref = &src[quickref_body_start..quickref_end];
+
+    // Extract IDs from the table that have `(open)` in their severity
+    // column — those that MUST appear in the fast index.
+    let mut open_in_table: Vec<u32> = Vec::new();
+    for line in quickref.lines() {
+        let l = line.trim_start();
+        if !l.starts_with("| ") {
+            continue;
+        }
+        let cells: Vec<&str> = l.split('|').map(str::trim).collect();
+        if cells.len() < 4 {
+            continue;
+        }
+        let id_cell = cells[1];
+        let sev_cell = cells[3];
+        if !sev_cell.contains("(open)") {
+            continue;
+        }
+        if let Ok(n) = id_cell.parse::<u32>() {
+            open_in_table.push(n);
+        }
+    }
+
+    // Extract IDs the fast index claims are open — `[P<n>]`
+    // mentions in its rows.  Each open ID should appear once.
+    let mut indexed: Vec<u32> = Vec::new();
+    for line in fast_index.lines() {
+        let l = line.trim_start();
+        if !l.starts_with("| [P") {
+            continue;
+        }
+        // `| [P229](...` — skip past `| [P` (4 bytes) then read digits.
+        let after_p = &l[4..];
+        let end = after_p
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(after_p.len());
+        if let Ok(n) = after_p[..end].parse::<u32>() {
+            indexed.push(n);
+        }
+    }
+
+    for n in &open_in_table {
+        assert!(
+            indexed.contains(n),
+            "PROBLEMS.md Quick-Reference lists P{n} as `(open)` but the `🔴 Currently Open (fast index)` section at the top doesn't mention it.  Add a row to the fast index (and re-run `make problems` to see the canonical filtered list)."
+        );
+    }
+
+    // Every fast-index entry must correspond to a real `(open)`
+    // table row OR be marked `(partial)` (e.g., P229 where one
+    // half closed but another open — a special case the table
+    // can't express in a binary `(open)` / `(closed)` cell).
+    for n in &indexed {
+        let table_has_open = open_in_table.contains(n);
+        let allowed_partial =
+            fast_index.contains(&format!("[P{n}](#open-issues--quick-reference) (partial)"));
+        assert!(
+            table_has_open || allowed_partial,
+            "P{n} appears in the `🔴 Currently Open (fast index)` but the Quick-Reference table doesn't mark it `(open)`.  Either close the fast-index row (the table is canonical), or annotate the index entry as `(partial)` if only part of the issue is still open."
         );
     }
 }

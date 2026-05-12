@@ -44,8 +44,8 @@ fn test_null_add() {
 }
 
 fn test_zero_divide() {
-  r = 2 / (3 - 2 - 1);
-  assert(!r, "div by zero is null");
+  r = 2 / (3 - 2 - 1) ?? null;
+  assert(!r, "div by zero is null when defended with `?? null`");
 }
 
 fn add_null(a: integer, b: integer) -> integer { a + b }

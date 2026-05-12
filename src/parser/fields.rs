@@ -354,6 +354,27 @@ impl Parser {
                 t = t.depending(*nr);
             }
             *code = self.get_field(dnr, fnr, code.clone());
+            // Plan-07 phase 4h — count this read for the
+            // `not null` field-reminder hint.  Skip stdlib (the
+            // suggestion target is user code), skip first pass
+            // (counts must be stable; first pass isn't), skip
+            // already-`not null` fields (no recommendation
+            // possible), skip method-routine reads (constant
+            // branch above handled those), and skip when fnr is
+            // out of range (defensive — shouldn't happen here).
+            if !self.first_pass
+                && !self.default
+                && fnr != usize::MAX
+                && fnr < self.data.def(dnr).attributes.len()
+                && self.data.def(dnr).attributes[fnr].nullable
+            {
+                let key = (dnr, fnr as u32);
+                *self.field_read_counts.entry(key).or_insert(0) += 1;
+                // Record this site so `handle_null_coalesce` can
+                // mark it defended when `??` follows immediately
+                // (`p.field ?? default`).
+                self.last_field_read_site = Some(key);
+            }
         }
         self.data.attr_used(dnr, fnr);
         t
@@ -580,14 +601,23 @@ impl Parser {
         };
         if let Value::Iter(var, init, next, extra_init) = p {
             if matches!(*next, Value::Block(_)) {
-                // Linked structs: array stores 4-byte record pointers → use OpVectorRef
+                // Plan-07 phase 4 step 4.6 — this is the for-loop
+                // iteration branch (`Value::Iter` carrying the loop's
+                // step block).  Use the *Nullable* peers so OOB at
+                // end-of-iteration returns a null DbRef instead of
+                // raising — matches the loop-driver expectation
+                // documented at parser/collections.rs:1492-1499.
+                // The explicit `v[i]` branch below (line 629-640) is
+                // unchanged and emits the raising OpGetVector / OpVectorRef.
+                //
+                // Linked structs: array stores 4-byte record pointers → use OpVectorRefNullable
                 // which internally uses elm_size=4 and dereferences to the actual record.
-                // Base/primitive types: array stores inline values → use OpGetVector + get_val.
+                // Base/primitive types: array stores inline values → use OpGetVectorNullable + get_val.
                 let op = if self.database.is_linked(known) {
-                    self.cl("OpVectorRef", &[code.clone(), *next.clone()])
+                    self.cl("OpVectorRefNullable", &[code.clone(), *next.clone()])
                 } else {
                     let mut v = self.cl(
-                        "OpGetVector",
+                        "OpGetVectorNullable",
                         &[code.clone(), Value::Int(elm_size), *next.clone()],
                     );
                     if self.database.is_base(known) {

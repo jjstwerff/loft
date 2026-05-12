@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Server smoke test: verify structs and listen/close work.
 // Full integration requires concurrent client+server (parallel {} with threading).
+//
+// TTT v5: this file also gates that the binary-WS surface compiles
+// — `send_binary` on WebSocket and `last_opcode` on WebSocket are
+// declared in lib/server/src/server.loft.  The compiler refuses
+// to build this file if either regresses.
 use server;
 
 fn main() {

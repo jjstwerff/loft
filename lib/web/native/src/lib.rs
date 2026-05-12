@@ -121,6 +121,26 @@ pub unsafe extern "C" fn n_ws_client_send(
     ws_client::send(handle, msg)
 }
 
+/// Send a binary message on a WebSocket.  Same byte buffer as
+/// `n_ws_client_send`, but the frame goes out with opcode `0x02`
+/// (binary) instead of `0x01` (text).  TTT v5 + plan-36 use this
+/// for `world_snapshot` / `world_delta` blobs from the client side
+/// (bulk world data; client never sends bulk in this design, but
+/// the symmetry keeps the API uniform with lib/server).
+///
+/// # Safety
+///
+/// `msg_ptr` / `msg_len` must describe a valid byte slice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ws_client_send_binary(
+    handle: i32,
+    msg_ptr: *const u8,
+    msg_len: usize,
+) -> bool {
+    let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
+    ws_client::send_binary(handle, msg)
+}
+
 /// Poll for the next received message.  Returns true if a message was
 /// delivered (then call n_ws_client_message), false if the queue is
 /// empty or the connection is currently down.
@@ -137,6 +157,16 @@ pub extern "C" fn n_ws_client_message() -> LoftStr {
         *m.borrow_mut() = new;
         loft_ffi::ret_ref(&m.borrow())
     })
+}
+
+/// Get the opcode of the last frame surfaced by `n_ws_client_recv`.
+/// 1 = text, 2 = binary, 8 = close, 9 = ping, 10 = pong.  Loft
+/// programs that handle binary frames check this after a successful
+/// recv to decide whether the message bytes are utf-8 text or a
+/// binary blob.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_client_opcode() -> u8 {
+    ws_client::last_opcode()
 }
 
 /// Close a WebSocket session permanently (no reconnect).
@@ -158,8 +188,95 @@ pub extern "C" fn n_sleep_ms(ms: i32) {
     std::thread::sleep(std::time::Duration::from_millis(ms as u64));
 }
 
+// ── Binary buffer construction (TTT v5 / plan-36) ──────────────────────
+//
+// Loft `text` is a UTF-8 byte buffer; the lexer + interpreter both
+// treat the codepoint 0 (NUL) as the `character` null sentinel, so a
+// `text` built via `"{c}{c}…"` interpolation silently drops zero bytes.
+// Binary protocols that include zero bytes (e.g. the v5 5-byte blob
+// header `[type:u8] [session:u32-LE]` for any small session id) cannot
+// be assembled that way.
+//
+// `n_pack_*` are a thread-local builder pattern: reset, push fields by
+// type, then take the buffer as a `text` whose bytes carry the binary
+// payload verbatim (NUL bytes preserved).  The receiver reads bytes
+// out via `n_byte_at` so multi-byte UTF-8 misinterpretation cannot
+// corrupt the stream.
+
 thread_local! {
     static LAST_WS_MSG: RefCell<String> = const { RefCell::new(String::new()) };
+    static PACK_BUF: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static LAST_PACKED: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// Empty the per-thread pack buffer.  Call before each blob.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_pack_reset() {
+    PACK_BUF.with(|b| b.borrow_mut().clear());
+}
+
+/// Append a single byte to the pack buffer.  `b` is masked to 8 bits.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_pack_u8(b: i32) {
+    PACK_BUF.with(|buf| buf.borrow_mut().push((b & 0xff) as u8));
+}
+
+/// Append a 2-byte little-endian unsigned value to the pack buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_pack_u16_le(v: i32) {
+    PACK_BUF.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        let v = (v & 0xffff) as u16;
+        buf.extend_from_slice(&v.to_le_bytes());
+    });
+}
+
+/// Append a 4-byte little-endian unsigned value to the pack buffer.
+/// Loft `integer` is i32 — bit-cast to u32 to preserve the LE byte
+/// pattern across the sign boundary.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_pack_u32_le(v: i32) {
+    PACK_BUF.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        let v = v as u32;
+        buf.extend_from_slice(&v.to_le_bytes());
+    });
+}
+
+/// Take the contents of the pack buffer and surface them as a `text`
+/// whose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer.
+/// The resulting `text` lives in `LAST_PACKED` until the next
+/// `n_pack_take` call — copy / send before reusing.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_pack_take() -> LoftStr {
+    PACK_BUF.with(|buf| {
+        let v = std::mem::take(&mut *buf.borrow_mut());
+        LAST_PACKED.with(|p| {
+            *p.borrow_mut() = unsafe { String::from_utf8_unchecked(v) };
+            loft_ffi::ret_ref(&p.borrow())
+        })
+    })
+}
+
+/// Read the byte at `idx` of the text payload.  Out-of-range returns
+/// -1.  Negative `idx` is also out-of-range.  Used to decode binary
+/// frames received via `try_recv` / `pump`.
+///
+/// Argument order is `(idx, text_ptr, text_len)` so the auto-marshal
+/// recognises the `(I32, Text) -> I32` signature in
+/// `src/extensions.rs::auto_marshal_dispatcher`.  The natural
+/// `(text, idx)` order would have demanded a `(Text, I32) -> I32`
+/// branch we'd otherwise need to add.
+///
+/// # Safety
+///
+/// `text_ptr` / `text_len` must describe a valid byte slice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_byte_at(idx: i32, text_ptr: *const u8, text_len: usize) -> i32 {
+    if idx < 0 || (idx as usize) >= text_len {
+        return -1;
+    }
+    unsafe { i32::from(*text_ptr.add(idx as usize)) }
 }
 
 loft_ffi::loft_register! {
@@ -167,8 +284,16 @@ loft_ffi::loft_register! {
     n_http_body,
     n_ws_connect,
     n_ws_client_send,
+    n_ws_client_send_binary,
     n_ws_client_recv,
     n_ws_client_message,
+    n_ws_client_opcode,
     n_ws_client_close,
     n_sleep_ms,
+    n_pack_reset,
+    n_pack_u8,
+    n_pack_u16_le,
+    n_pack_u32_le,
+    n_pack_take,
+    n_byte_at,
 }

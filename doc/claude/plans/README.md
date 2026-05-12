@@ -4,14 +4,281 @@ Multi-phase initiatives that span more than one session.  Each
 subdirectory holds the README (goal + index) plus one markdown file
 per phase.
 
+## The rule — docs vs plans
+
+**Documentation about how things work** (architecture, runtime
+semantics, data structures, language reference, API surface)
+lives at `doc/claude/*.md` — or, when scoped to a single
+library, inside that library (e.g. `lib/<name>/README.md`).
+This is the reference layer: anyone reading or modifying the
+code reads these.
+
+**Future work — things that need to be built** lives in
+`plans/` (core language / compiler / runtime) or `lib_plans/`
+(library work).  This is the actionable layer: anyone
+planning the next session looks here.
+
+These connect through the **roadmap**: every row in
+[`../ROADMAP.md`](../ROADMAP.md) eventually points at a plan
+in `plans/` or `lib_plans/` (loose features without a plan
+home become the exception, not the rule).
+
+**Bug fixes are the explicit exception** — they land directly
+via PROBLEMS.md + a regression test + a focused commit, no
+plan required.  The plan path is reserved for major
+development that benefits from explicit phasing, multi-
+session sequencing, or design-before-implementation
+discipline.
+
+When a `doc/claude/*.md` reference doc has open follow-up
+work mixed into the architecture content, add an
+`## Open work` section IN THAT REFERENCE DOC and link
+ROADMAP rows directly at it (e.g.
+[NATIVE.md § Open work](../NATIVE.md#open-work),
+[QUALITY.md § Open work](../QUALITY.md#open-work--actionable-summary)).
+Single source of truth, no indirection — pointer-plans were
+tried (33/35/lib-11) and shown to be over-engineering.
+
+## Three workflows for TODO items — pick the lightest that fits
+
+| Flow | Where the TODO lives | When to use |
+|---|---|---|
+| **Bug fix** | [`../PROBLEMS.md`](../PROBLEMS.md) row + regression test + focused commit | Single root cause, fits in one commit, no design choices, no multi-phase sequencing. |
+| **Light — `## Open work` section** | A `## Open work` section in the relevant `doc/claude/<NAME>.md` reference doc | The normal flow.  TODO is co-located with the architecture it touches; one row per item; closure is "remove the row + update the reference content."  Used by NATIVE.md, PERFORMANCE.md, PACKAGES.md, QUALITY.md today. |
+| **Plan — `plans/<NN>-<slug>/`** | Full directory with README + per-phase files | Multi-session initiative with explicit phasing, design-before-implementation discipline, cross-arc dependencies, or a long arc that needs its own document space.  Capped at 2-3 active per `plans/` (see `feedback_max_three_active_plans`). |
+
+The light flow is the default.  Promote to a plan only when
+the work is genuinely multi-phase and benefits from its own
+directory — most TODOs don't, even ones that take several
+sessions.
+
+## Roadmap workflow
+
+[`../ROADMAP.md`](../ROADMAP.md) is the work-list view: every
+open work item, grouped by value, with dependencies and
+effort.  This section documents how it's organized — the
+methodology lives here so ROADMAP itself stays tight.
+
+### Value categories — what KIND of value, not just how much
+
+ROADMAP rows are grouped by **value category**, not by release
+milestone (0.8.5 / 0.8.6 / etc.).  Eight categories in default
+reading order (read top to bottom; pick from the highest tier
+that has open work):
+
+| Tag | Meaning | Examples |
+|---|---|---|
+| **S** | **Silent failure / data-loss prevention** — features that "appear to work" but don't; corruptions that have no error message; data loss without indication.  HIGHEST priority because invisible to users and erodes trust most | Validation matrices (catch backend divergence), JSON-correctness sweeps, closure-DbRef leak, native-vs-interpreter parity gates |
+| **R** | **Regression / release-blocker** — known broken behavior, PROBLEMS.md High-severity, gates the next tag | (none today; bugs land as P-issues, not plans — would surface here if a regression blocked a release) |
+| **G** | **Goal-enabling** — directly enables loft's core use case: browser games anyone can play via shared link, multiplayer, native-game debugging | Server / game-client libraries, scriptable scenes, multiplayer protocol stack, web IDE, graphics library, native debug |
+| **F** | **Foundation** — unblocks 2+ downstream plans (lattice point in the dependency graph) | Lazy stdlib, package registry, FFI generic marshaller, LSP server MVP, library extraction |
+| **U** | **Ease of use** — first-time-user experience, daily ergonomics, IDE polish | Better error messages, REPL, syntax highlighting, VS Code extension, tutorial, LSP editing surface, developer warnings |
+| **C** | **Clean features** — language correctness, removes special cases | Mutable closures (cleaner capture), match-PEG (cleaner pattern syntax), sorted slicing (removes special-case), JsonValue (replaces text-based JSON), error recovery, factory methods |
+| **Q** | **Internal quality** — performance, refactor, internal cleanup with clear payoff | Performance follow-ups, native codegen follow-ups, retire-scratch, const-store completion |
+| **N** | **Niche / opportunistic** — small specific features, low-priority items | Route decorators, asset pipeline, HTTP client, tic-tac-toe (protocol-only validator), AOT auto-compile |
+
+**Why S is its own category, separate from R:**
+
+A regression (R) is a **known broken** behavior — we have a
+test failure, a panic, or a wrong output we can document and
+gate releases on.  A silent failure (S) is **invisibly broken**
+— the program runs to completion, returns "successfully," but
+the result is wrong / data is lost / state is corrupted.
+
+S is more urgent than R because:
+- Users hit S without warning (no error message to file)
+- Data loss without indication is the worst class of bug
+- "Appears to work" hides decay in the codebase
+- Trust erodes faster from one silent corruption than from a
+  loud crash
+
+The validation matrices (plans 14 / 15 / 16 / 18 / 19 / 20)
+are precisely S-prevention work: every {input × backend × API
+shape} cell is exercised end-to-end with byte-identical
+output assertions.  They're cataloged here as S, not C, because
+their value is preventing silent divergence.
+
+**Why named categories instead of V1/V2/V3:**
+
+The previous V1/V2/V3 collapsed two distinct dimensions —
+"importance" and "what kind of work" — into one ranking.
+Named categories separate them: a plan in **G** (goal-enabling)
+ranks above a plan in **U** (ease-of-use) because of WHAT the
+work delivers, not just because someone declared it more
+important.  Re-ranking happens when categories change (rare),
+not when calendar perception shifts.
+
+**Why this works better than time-based grouping:** value
+categories stay stable across the project's life.  A goal-
+enabling item is goal-enabling whether it ships this month
+or next year.  Milestone groupings (0.8.5, 0.8.6, ...) imply
+calendar timelines that constantly drift; named categories
+don't need that maintenance.
+
+**Effort estimates, not time projections.**  ROADMAP has an
+`E` column (XS / S / M / MH / H / VH / L) calibrated to
+relative work, not calendar time.  Time projections are
+inaccurate at both ends — items projected as "weeks" have
+shipped in days; items projected as "quick" have taken
+weeks.  Effort buckets are stable; calendar projections
+aren't, so we don't make them.
+
+### Maintenance rule
+
+When an item completes, **remove it from ROADMAP**.  Completed
+work belongs in CHANGELOG.md (user-facing notes) +
+CHANGELOG_TECHNICAL.md (contributor detail) + git history.
+Keeping closed rows in ROADMAP turns the work list into a
+log; we already have logs.
+
+### Features need plans
+
+Every feature row in ROADMAP should cite a plan in its `Source`
+column — or be small enough for direct PROBLEMS.md + commit
+(the bug-fix path).
+
+The plan-cadence rule: any FEATURE (multi-step, has design
+choices, touches multiple files) goes through the plan
+path even if small.  Small bug fixes, deliverables (demo
+deploys, single-action items), and operational changes
+(CI tweaks, doc fixes) can stay on ROADMAP without plans
+or land directly with no ROADMAP row at all.
+
+When a feature row still cites a flat reference doc
+(PLANNING.md, INTERFACES.md) rather than a plan, that's a
+**plan promotion candidate**.  Promote it to a plan when it
+surfaces as next-up work.
+
+### How to read the roadmap
+
+The work-table sections (V1 / V2 / V3) are the **what to
+do next**.  Within each value tier, items are loosely
+grouped by theme — pick whichever theme is closest to what
+you're touching.
+
+The "All open plans — index by value" section is the
+**comprehensive view across both trackers** (`plans/` +
+`lib_plans/` + their deferred subdirs).  Single place to
+read for "what's open, what depends on what, how valuable."
+
+The "Cross-tracker dependency chains" subsection captures
+the cross-plan arrows: which plan unblocks which.  Useful
+for picking next-up work.
+
+The "Features still needing plan promotion" subsection
+tracks ROADMAP rows that should have plans but don't yet —
+the next-up promotion candidates.
+
+### Closing a plan — documentation must move out
+
+When a plan ships and moves to `finished/`, its
+**documentation content must move to its proper home** in
+the reference layer:
+
+- Library-scoped reference content → `lib/<name>/README.md`
+  (or other library-internal docs).
+- Project-wide reference content → `doc/claude/*.md`
+  (architecture, runtime semantics, language / API surface).
+
+**The `finished/<NN>-<slug>/` directory is for closure
+record only** — git history pointer, commit chain, P-issues
+filed/closed, lessons learned.  It is NOT a place that other
+docs link to for ongoing reference.
+
+**Why this matters:** retaining links to `finished/`
+plans across the docs creates drift.  A future contributor
+clicking through to a closed plan finds a closure record
+where they expected design content; the actual design has
+moved elsewhere or the design has been superseded by the
+implementation itself.  Links to closed plans rot fastest
+because nothing in the project keeps them honest.
+
+**How to apply on close:** see
+[`_LIFECYCLE.md`](_LIFECYCLE.md) for the 6-step procedure shared
+by close + defer.  Two shapes: **CREATE-AND-MOVE**
+(`31-html-export → HTML_EXPORT.md`) and **TRIM-ONLY**
+(`04-slot-assignment-redesign → SLOTS.md`).
+
+This rule applies retroactively: a `finished/` plan being linked
+from current docs is a cleanup signal — either the reference
+content never moved out, or the link wasn't updated when it did.
+`scripts/check_doc_drift.sh` catches the common shapes
+automatically.
+
+### Authoring a new plan
+
+Copy [`_TEMPLATE.md`](_TEMPLATE.md) to
+`<NN>-<slug>/README.md` (next free integer in the relevant
+tracker).  The template captures the canonical shape:
+Status / Goal / Effort / Sub-arcs / Phase ordering / Open
+questions / Cross-arc dependencies / See also.  Length
+budget: 100-300 lines; longer plans usually have reference
+content that should move to `doc/claude/*.md`.
+
+### Deferring a plan
+
+When some/all phases can't reach completion in the current arc
+but the remaining work has a **concrete trigger**, move to
+`deferred/`.  Procedure in [`_LIFECYCLE.md`](_LIFECYCLE.md) —
+shared with closing (Steps 4-6 are identical).
+
+Partial defers (some phases shipped, others paused) grow a
+SHIPPED / DEFERRED Status table at the top of the plan README.
+Canonical shapes: plan-28, plan-12.
+
+If remaining phases have no concrete trigger, the design moves to
+[`../DESIGN_DECISIONS.md`](../DESIGN_DECISIONS.md), not
+`deferred/`.  "Will get to it later" is not a trigger.
+
+### Light flow lifecycle — `## Open work` in reference docs
+
+The light flow follows the same lifecycle as plans, just with a
+single row instead of a directory.
+
+**Open** — add a row to the relevant reference doc's
+`## Open work` table (create the section if it doesn't exist;
+see NATIVE.md / PERFORMANCE.md / PACKAGES.md / QUALITY.md for
+canonical shape).  Add a ROADMAP row tagged with value category
++ link directly at the section.
+
+**Work** — when implementing, edit the reference doc's
+architecture content directly (it's the same file).  Cross-link
+between the Open work row and the section it touches if useful.
+
+**Close** — when shipped:
+- Remove the row from `## Open work`.
+- Update the surrounding architecture content to reflect the new
+  reality (the same edit that closed the work usually does this).
+- Remove the ROADMAP row.
+- Closure record lives in the commit message + CHANGELOG_TECHNICAL.md;
+  no separate closure-record file.
+
+**Defer** — if work is paused with a concrete trigger:
+- Annotate the row inline (e.g. `**Blocked on X** — unpauses
+  when Y happens`) or move the trigger detail to
+  [`DEFERRED.md`](DEFERRED.md) if it's cross-cutting.
+- Keep the row in `## Open work` (it's still tracked work, just
+  paused).
+
+**Promote to plan** — if the row grows into a multi-phase
+initiative, copy `_TEMPLATE.md` and migrate.  Don't promote
+prematurely; multi-row clusters often stay light if each row is
+independent.
+
+The recent collapses of pointer-plans 33 / 34 / 35 / lib-11 into
+NATIVE.md / PERFORMANCE.md / QUALITY.md / PACKAGES.md `## Open
+work` sections are the canonical examples.
+
 ## Companion indexes — every parked item is discoverable
 
 Two files complement this README; together they ensure deferred
 work is never silently dropped.
 
-- **[`DEFERRED.md`](DEFERRED.md)** — internal index of every parked
-  validation phase, deferred P-issue, and "noted but not now" item.
-  Each row carries an explicit `Trigger to unpause:` value.
+- **[`DEFERRED.md`](DEFERRED.md)** — trigger index for the
+  `plans/deferred/` plans only.  Each row gives the concrete signal
+  that should re-activate the plan.  Future plans (`plans/future/`)
+  live on [`../ROADMAP.md`](../ROADMAP.md), not here — they're
+  paused with intent to finish, not awaiting a trigger.
 - **[`../USER_FACING.md`](../USER_FACING.md)** — the subset of
   DEFERRED.md that downstream users would notice if shipped, with
   release-note language, workarounds, and severity tiers
@@ -36,161 +303,39 @@ grep -r "Trigger to unpause:" doc/claude/
 ### Closed-work hygiene rule
 
 DEFERRED.md and USER_FACING.md are **open-queue documents**.
-When an item closes, its row is **removed entirely** — not
-struck-through, not moved to a "recently shipped" subsection,
-not retained as historical record.
+When an item closes, its row is **removed entirely** — closed
+work lives in the right place for its shape: git history (commit
+message), regression tests, plan READMEs (architectural lesson),
+PROBLEMS.md (closed P-id entries stay for cross-reference),
+CHANGELOG.md (user-facing notes).  Five homes, each correct for
+its information shape.
 
-Closed work already lives in the right places, and duplicating it
-across the open queues lets them drift from "actionable" to
-"universal log":
-
-- **Git history** — commit message documents what changed and why.
-- **Regression test** in `tests/*.rs` — un-ignored when the fix
-  lands; permanent behavioural lock-in.
-- **Plan README** — the relevant plan's closed-section absorbs
-  any architectural lesson learned.
-- **PROBLEMS.md** — closed P-id entries stay (file convention)
-  for cross-reference history.
-- **CHANGELOG.md** — user-facing release notes.
-
-Five places, each the right one for its information shape.  The
-grep target `grep -r "Trigger to unpause:" doc/claude/` should
+The grep target `grep -r "Trigger to unpause:" doc/claude/` should
 always show only currently-actionable items.
 
 **Sole exception**: USER_FACING.md's "Closed-by-decision" section
-is a permanent historical record of explicit non-goals.  Those
-stay so a future contributor finds the decision before
-re-proposing.  They're orthogonal to the open queue.
+is a permanent record of explicit non-goals so future contributors
+find the decision before re-proposing.
 
-**Default discipline:** finish the validation plans before shipping
-new feature work.  Override only when USER_FACING.md surfaces an
-S0 item or an S1 item that's been deferred for two releases — see
-USER_FACING.md § "Severity override".
+### Validation-first default
 
-### Two tracks: validation (primary) and showcase (parallel)
-
-Sessions follow two complementary tracks:
-
-- **Validation track (primary).**  Finish-plans-first: validation
-  matrices, P-issue closure, language-quality work.  This is where
-  the bug yield comes from and what makes loft *worth using*.
-  Severity-driven (USER_FACING.md S0/S1/S2 tiers).  **Default
-  candidate for every session.**
-
-- **Showcase track (parallel).**  Strategic-recruitment work:
-  brick-buster, browser-parallel (A10), world-rendering demos,
-  performance benchmarks.  This is what makes loft *visible* and
-  attracts contributors.  Strategic-driven (USER_FACING.md
-  § Strategic showcase track).  **Worked when validation work hits
-  a natural breakpoint** — phase closes, pre-flight survey shows
-  low yield for the next phase, or the showcase item is gating an
-  external commitment (demo date, talk).
-
-The two tracks are orthogonal — a piece of work isn't both
-validation and showcase.  The user's 2026-05-04 priority statement
-locked this in: "[the demo] will not keep me from improving loft
-(that is my first priority) but the OpenGL demo in a good state is
-our biggest asset to get more developers."  Improving loft is the
-first track; the demo is the second.
-
-When a session opens with no clear next step, pick from the
-validation track first.  Only if validation has no S0/S1 work in
-flight AND no S2 work in mid-investigation, advance the showcase
-track.
-
-**Yield-based transition rule.** The validation track stays
-primary while matrix bug-yield rates remain high.  When a plan's
-pre-flight survey closes a phase with **0-1 P-issues found in 5+
-cells**, that's the signal that the cheap bugs in that surface
-are exhausted.  Plans that consistently hit the 0-1 threshold
-across consecutive phases get demoted to "matrix-as-documentation"
-(per the gating already documented in plans 15/16/17 risk
-sections) and the freed time advances the showcase track.
-
-**Two quality metrics for confidence in the language**, in priority
-order:
-
-1. **Velocity of bug closure.** Not "how many bugs do we have"
-   (every language has bugs) but "how fast can we close them when
-   they appear."  May 2026 baseline: 5-7 P-issues closed per
-   focused session, each pinned by a regression test and clean
-   under both clippy gates.  This rate is the actual product-
-   quality signal — what makes loft trustworthy is that bugs are
-   resolved quickly when found.  Two weeks before this baseline,
-   the rate was structurally lower because the regression net was
-   thinner; the matrix infrastructure (cross-mode harness, lock-in
-   tests, hygiene rule, plan-phase discipline) is what turned
-   one-off fixes into compounding velocity.
-2. **Primary vs. add-on bug location.** Equal-weight to velocity
-   because where a bug lives determines its blast radius:
-   - **Primary implementation bugs** (parser, type system,
-     codegen, runtime) can break entire user projects.  Closing
-     them pre-1.0 is foundational quality work.
-   - **Add-on feature bugs** (specific stdlib functions, niche
-     operators, format-spec corners) usually have viable
-     workarounds; impact is bounded.
-
-   The matrix work is currently primary-heavy by design — that's
-   exactly the right yield for pre-1.0.  As the matrices close
-   their high-yield phases, future bug yield will skew toward
-   add-on features.  When that ratio inverts, the language has
-   reached a new stability tier — fewer foundational issues, more
-   "polish" issues.  That's the natural transition point for
-   shifting attention to the showcase track and reducing matrix
-   intensity.
-
-May 2026 snapshot — closure breakdown (8 P-issues this session):
-
-| ID | Where | Tier |
-|---|---|---|
-| P206 | parser core (match-arm separator) | primary |
-| T1.8a | native codegen (tuple-of-text return) | primary |
-| plan-17 (A) | parser/type-inference (generic-call return propagation) | primary |
-| plan-17 (B) | parser/type-inference (bounded-T method dispatch) | primary |
-| plan-17 (C) | stdlib `to_text` impls | add-on |
-| plan-18 hang | parser core (match arm-arrow recovery) | primary |
-| P207 | native codegen (char-tuple-elem comparison) | primary, narrow |
-| P208 | native codegen (nested scratch.push wrapping) | primary, narrow |
-
-Seven of eight bugs are primary-implementation work; two of those
-are narrow codegen paths users can avoid.  The one add-on item
-(stdlib `Printable` impls) was a doc-vs-stdlib mismatch, not a
-runtime bug.  This is the right yield mix for pre-1.0.
-
-This rule keeps both tracks honest:
-- Real-world workloads (OpenGL/world-chunk) DO find bugs, but at
-  lower per-hour rates than the matrix work currently produces
-  (3-6 P-issues/session in May 2026).  Most real-world bugs are
-  also downstream of matrix-foundational bugs, so fixing the
-  matrix first means the showcase work doesn't trip over them.
-- The matrix work is finite — once validated, the same surface
-  doesn't yield more.  When the rate drops, switching to
-  showcase gets a higher marginal yield.
-
-The May 2026 snapshot has matrix yield well above this threshold;
-validation stays primary.  Reconsider per-session as plans close.
+Default discipline: finish validation plans before shipping new
+feature work.  When validation matrices stop yielding bugs (a
+phase closes with 0-1 P-issues across 5+ cells), the matrix is
+mature — promote that bandwidth to feature / showcase work.
+Override only when USER_FACING.md surfaces an S0 item or an S1
+item that's been deferred for two releases.
 
 ## Conventions
 
-- Subdirectory names are numbered (`NN-slug`) so they sort in the
-  order they were opened.  The number is a monotonic counter — it
-  does not imply priority.
-- A new initiative opens with an `NN-slug/README.md` stating the
-  goal, phase layout, and ground rules, plus a first phase plan
-  file (conventionally `00-<first-phase>.md`).
-- Every phase plan file begins with `Status: open | in-progress |
-  done` so a fresh session can orient quickly.
-- When an initiative is fully closed (all phases committed, no open
-  follow-ups), move its entire subdirectory into `finished/`.
-  That way `ls doc/claude/plans/` at a glance shows only live work.
-- When an initiative is intentionally paused — well-described, no
-  driving bug or feature, picked up only when triggered — move its
-  entire subdirectory into `deferred/`.  Deferred plans differ from
-  finished plans: they're not done, they're parked.  Their READMEs
-  must state the **trigger** that would unpause them (a P-issue in
-  the relevant area, a user-visible feature need, contributor
-  appetite, …).  Sitting in `deferred/` signals "available, not
-  abandoned."
+- Subdirectory names are numbered (`NN-slug`); number is monotonic
+  open-order, not priority.
+- New initiative opens with `NN-slug/README.md` (from `_TEMPLATE.md`)
+  + `00-<first-phase>.md`.
+- Phase files begin with `Status: open | in-progress | done`.
+- Closed plans → `finished/` (apply [`_LIFECYCLE.md`](_LIFECYCLE.md)).
+- Paused-with-trigger plans → `deferred/` (apply [`_LIFECYCLE.md`](_LIFECYCLE.md)
+  + add row to [`DEFERRED.md`](DEFERRED.md)).
 
 ## Ground rule — plans never allow regressions
 
@@ -253,44 +398,47 @@ filed in the same commit window; none were lost.  The P217
 follow-up hunt then surfaced P222 / P223 (narrower self-concat
 shapes) — same rule applied.
 
-## Current initiatives
+### Per-plan status lives in the plan README — not on ROADMAP
 
-| Dir | Initiative | Status |
-|---|---|---|
-| [`06-typed-par/`](06-typed-par/) | Simple typed `par`: collapse the 7-variant runtime + 3-fn native dispatch into one store-stitch path; "everything is a store".  Retires ~1100 lines net across `src/parallel.rs` and `src/codegen_runtime.rs`.  **Doubles as a structured bug-hunt of the type-system × native-codegen × parallel-runtime intersection** — 14+ P-issues filed/closed during the work so far (P188-P201 family).  See plan README § "Realised value (so far)" for the running tally. | Phases 0/1/1.5/2a + ARC steps A1/A2/A6 done; A3 in-flight (parser gate pending); A4/A5/A7-A11 open; bug-finding regime active.  Phase 9a (T1.8a prerequisite) closed 2026-05-04; phases 9b/9c/9d/9e unblocked but still open.  **4 ignored canaries** (all par-side tuple dispatch — blocked on 9b/9c/9d, no longer on T1.8a) |
-| [`07-error-messages/`](07-error-messages/) | Better error messages: every error reaches the user as `file:line:col` + concrete message + source line with caret + optional suggestion.  Spans on IR, pc→source-line table, typed `RuntimeError`, retire the implicit panic-vs-sentinel coin-flip. | Phases 0/1/2/3 shipped (rustc-style renderer + caret + UTF-8/tab + cascade dedup + summary line + `LOFT_ERRORS` env + `--errors` CLI + pc→source-loc on panic + SIGSEGV); phases 4-7 open |
-| [`08-repl-and-introspection/`](08-repl-and-introspection/) | REPL + interpreter-introspection tool — `loft>` interactive prompt with persistent state plus a clean CLI surface for IR/Rust/slot-table dumps. | Phase 0 + 1 shipped; phases 2-6 open |
-| [`14-tuple-validation/`](14-tuple-validation/) | Validate tuples are fully typed and round-trip-correct across every {element type × storage destination} cell, with mandatory **interp/native byte-identical stdout** under a new cross-mode harness.  Closes T1.8c (struct-ref move semantics) and decides T1.11a (tuples in struct fields).  Phase 00 freezes the matrix and ships the harness; phases 01-05 fill the cells; phase 06 doc-reconciles. | Phase 00 + 01 shipped (16/17 cells PASS, 1 P207-ignored); P206 (parser hang on `->` arm) and T1.8a (tuple-of-text return under `--native`) closed in passing.  Phases 02-06 open. |
-| [`15-closure-validation/`](15-closure-validation/) | Validate closures (`Type::Function`) round-trip across every {capture composition × storage destination} cell.  Reuses the plan-14 cross-mode harness.  Active risk: closure-DbRef leak in `LIFETIME.md § Function — NOT YET HANDLED`.  Phase 03 (text captures) decides leak fix vs document. | Plan drafted; phase 00 ladder + matrix open. |
-| [`16-coroutine-validation/`](16-coroutine-validation/) | Validate coroutines (`fn() -> iterator<T>`) round-trip across every {yielded type × drive context} cell.  Reuses the plan-14 cross-mode harness.  Pins `yield from` (CO1.4) deferral via CLOSED cells until 1.1+.  Phase 02 (yielded text) is the active state-machine-lowering risk. | Plan drafted; phase 00 ladder + matrix open. |
-| [`17-template-validation/`](17-template-validation/) | Validate bounded generics / interfaces (`<T: Bound>`) across every {T-parameter usage × bound shape} cell.  Reuses the plan-14 cross-mode harness.  Pre-flight survey (5 tests) found a 60% bug rate — three subsystem-distinct issues: parser doesn't extend tuple element/destructure to bounded-generic results; type inference in generic body doesn't propagate bound-supplied method signatures; built-in `Printable` satisfaction contradicts the documented contract.  Highest expected bug yield of the four matrix plans. | Plan drafted; phase 00 ladder + matrix open. |
-| [`18-match-validation/`](18-match-validation/) | Validate `match` expression dispatch across every {subject type × pattern shape} cell.  Reuses the plan-14 cross-mode harness.  Pre-flight (6 tests) found 33% hang rate on or-patterns (`1 \| 2 \| 3 => …`) and `@` bindings — likely sibling of the P206 fix in different `parse_*_match` variants.  Phase 01 closes those hangs; phases 02-05 conditional on yield. | Plan drafted; phase 00 ladder + matrix open. |
-| [`19-struct-enum-validation/`](19-struct-enum-validation/) | Validate struct-enum dispatch (`is`, field capture, match arms, methods) across every {variant payload × dispatch context} cell.  Reuses the plan-14 cross-mode harness.  Pre-flight (5 tests) found 1 bug (20%): method-on-parent-enum-type called via `.method()` on a variant value fails with "Unknown field Variant.method".  Phase 03 closes the C5 method-resolution gap. | Plan drafted; phase 00 ladder + matrix open. |
-| [`20-collection-validation/`](20-collection-validation/) | Validate keyed collections (hash / sorted / index / spacial) across every {collection × operation} cell, with a value-element sub-axis.  Pre-flight (3 tests) hit 67% panic rate — `sorted<>` and `index<>` cleanup both panic with `index out of bounds: the len is 66 but the index is 65535` at `src/database/structures.rs:609` (both backends; basic usage; correct output produced first then panic on scope exit).  Phase 01 closes the cleanup panic; phases 02-05 conditional on yield. | Plan drafted; phase 00 ladder + matrix open. |
+ROADMAP's "All open plans — index by category" tables carry only
+the stable parts of each plan: name, remaining effort (E),
+dependencies, and a one-line "what is this plan about" descriptor.
+Per-phase status (what's shipped, what's in flight, what's
+blocked) lives in the plan README's Status block — that's the
+single source of truth.
 
-## Deferred initiatives
+Why: per-phase status changes every time a phase ships or is
+deferred.  Mirroring it on ROADMAP doubled the edit cost and
+created a recurring drift surface (manual audit 2026-05-09 caught
+plan-14 phase 08 deferral missing, plan-07 phase 1 status stale).
+ROADMAP's job is "which plans exist + how big + what blocks them";
+the plan README's job is "where it stands today."
 
-Plans that are well-described but intentionally paused — picked up
-only when a concrete trigger arrives.
+## Where to look for plans by state
 
-| Dir | Initiative | Trigger to unpause |
-|---|---|---|
-| [`deferred/10-scope-exit-emission/`](deferred/10-scope-exit-emission/) | Scope-exit gate simplification.  Drops the `(dep.is_empty() \|\| is_work_ref) &&` prefix from `src/scopes.rs:1053` so cleanup emission no longer depends on dep-tracker precision.  Pure cognitive-clarity win; no P-issue closes here.  Originally framed as a P203 fix — that framing turned out wrong (P203 is a template double-sub bug). | A bug in this gate's territory, dep-tracking maintenance, or contributor interest. |
-| [`deferred/12-codegen-simplifications/`](deferred/12-codegen-simplifications/) | Tier 1 (walker audit + forwarding-smoke retire) shipped on branch `plan-12-codegen-simplifications` (commits `c0c27e5` / `d446e5d`).  Tier 2 (dispatch arm migration phases 03-05) parked here.  Move-the-furniture refactor with no driving bug, no waiting feature, no performance gain.  Real value is "plan 13's preamble." | Same trigger set as plan 13: 3+ template-path bugs, OR major codegen evolution forcing ≥50 Op-annotation touches, OR contributor appetite.  Plan 12 Tier 2 only earns its keep if plan 13 unpauses. |
-| [`deferred/13-rust-template-migration/`](deferred/13-rust-template-migration/) | Migrate ~200 `#rust"..."` template annotations in `default/*.loft` to hand-written runtime fns + registered emitters.  Single source of truth for Op emission.  Retires `output_call_template` and `Value::RawExpr`.  2-3 weeks of focused work. | 3+ template-path bugs accumulating, OR major codegen evolution that forces touching ≥50 Op annotations, OR contributor appetite for a multi-week structural refactor.  Plan 12 Tier 2 (phases 03-05) must land first — without it the migration target shape isn't uniform. |
+The filesystem is the source of truth — duplicate per-state tables
+in this README rotted faster than they helped.  Use:
 
-## Finished initiatives
+```bash
+ls doc/claude/plans/[0-9]*/             # current (max 2-3)
+ls doc/claude/plans/future/             # paused, intent to finish
+ls doc/claude/plans/deferred/           # paused, awaits trigger (see DEFERRED.md)
+ls doc/claude/plans/finished/           # closed (closure records only)
+ls doc/claude/lib_plans/{future,deferred,finished}/   # library plans
+```
 
-| Dir | Initiative | Closed |
-|---|---|---|
-| `finished/00-inline-lift-safety/` | Eliminate silent memory corruption from inline struct-returning calls in expression contexts (P181 family). | 2026-04-18 — all phases done; 18 snippet variants pass; spec captured in `doc/claude/LIFETIME.md` |
-| `finished/01-integer-i64/` | Eliminate `i32::MIN`-as-null sentinel and silent wrap / div-by-zero; decouple arithmetic width (i64) from storage width. | 2026-04-21 — `integer` is i64 end-to-end; `Type::Long` + `long` keyword + `l` suffix removed; 34 duplicate `Op*Long` opcodes reclaimed; binary-format lint; `.loftc` cache removed. |
-| `finished/02-narrow-collection-elements/` | Make `vector<i32>` / `hash<T[key]>` / `sorted<T[key]>` / `index<T[key]>` honour the `size(N)` annotation on integer aliases (P184 — post-C54 follow-up). | 2026-04-22 — all phases (0/1/2/3/4a/4b/5/6) done.  Phase 4b landed via Option L-minimal after two earlier attempts uncovered a pre-existing `narrow_int_cast` bug in iter-next blocks (Bug α) — fixed alongside the `Parts::ShortRaw` direct-encoding variant. |
-| `finished/03-native-moros-editor/` | Wire the Moros editor into a runnable native OpenGL program (windowed or fullscreen), filling the input API + fullscreen gaps the existing graphics library didn't cover. | 2026-04-22 — all seven phases (0/1/2/3a/3b/4/5/6) done.  Phase 3b landed with a native codegen fix for the `s.const_refs` / `s.string_from_const_store` gap that previously blocked any loft function reconstructing constants under `--native`.  `make editor-dist` produces a shippable `dist/moros-editor/`. |
-| `finished/04-slot-assignment-redesign/` | Replace the two-zone allocator + orphan-placer post-pass with a single-pass liveness-driven algorithm.  V2-drive retracted; landed the incremental refit (positional init ops, single function-entry `OpReserveFrame(frame_hwm)`, slot-move deletion, `OpText` deletion, I7 invariant).  V1 still drives codegen; V2 stays as a shadow validator. | 2026-04-23 — A / B.1 / B.2 / B.3 (atomic bundle `06a8d14`) / B.3-follow-up v2 (`f47cc93`) / B.4 all landed.  Original V2-drive goal retracted; companion plan-05 closed the orphan-placer elimination. |
-| `finished/05-orphan-placer-elimination/` | Delete `place_orphaned_vars` by extending the main IR walk to reach every variable; fix P185. | 2026-04-23 — Phases 1a / 1b / 2 / 2c landed (`e0a020f` / `494e5c7` / `309e0f4` / `f74f78c`); ~150 LOC retired, P185 un-ignored.  Phase 2b (I8 invariant) dropped — defensive, no driving bug. |
-| `finished/09-native-runtime-rewrite/` | Per-Op emitter dispatch on top of `#rust` template substitution; closed P200 / P202 / P203 / P205 in production via `OpEmitter` registry framework + 5 production custom emitters + `ParShape` runtime consolidation. | 2026-05-02 — all phases done; PR #197 merged. |
-| `finished/11-p204-ref-propagation/` | Close P204 — refresh the unspan walker in `detect_ref_tail_capture` so the tail-call rewrite fires on Span-wrapped IR.  Surfaced the walker Span-miss pattern that plan-12 phase 01 generalised. | 2026-05-02 — bundled into PR #197. |
+Each plan directory contains a `README.md` with Status block, Goal,
+and per-phase index — that's the per-plan source of truth.
+
+For a work-list view across plans, see `../ROADMAP.md`: every active
+plan has rows there tagged with value category + dependencies.
+Deferred plans live in `DEFERRED.md` (trigger index).  Finished
+plans have a one-line closure note in their README pointing at the
+reference home.
+
+Run `scripts/check_doc_drift.sh roadmap` to verify every active plan
+is on ROADMAP at the right path and no finished/deferred plan has
+crept into ROADMAP as an action item.
 
 ## One-off plans elsewhere
 

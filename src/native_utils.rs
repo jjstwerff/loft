@@ -262,3 +262,206 @@ pub(crate) fn project_dir() -> String {
     }
     with_trailing_sep(dir)
 }
+
+/// P254 — cache-poisoning defense.  Returns true when a cached
+/// native binary at `path` is safe to execute under the current
+/// uid.  All platforms reject symlinks (a symlink lets an attacker
+/// redirect execution to anything they can name).  On Unix we
+/// additionally require:
+///
+/// - The file owner equals the current effective uid (root-owned
+///   files are also rejected when running as a non-root user — a
+///   common shared-machine attack drops a SUID binary owned by
+///   root).
+/// - No group/other permission bits set (mode `& 0o077 == 0`).
+///
+/// Failed checks return false WITHOUT a side effect; the caller
+/// recompiles and overwrites the suspect cache file.  We do not
+/// `eprintln!` from the helper so unit tests can assert the
+/// boolean cleanly; the recompile path's `eprintln!` covers user
+/// visibility.
+#[must_use]
+pub(crate) fn cache_safe_to_execute(path: &std::path::Path) -> bool {
+    // symlink_metadata reports the link itself rather than the
+    // target; if the target is owned by the current uid but the
+    // link itself isn't, plain metadata() would say "safe" and
+    // we'd execute attacker-pointed code.
+    let lmd = match std::fs::symlink_metadata(path) {
+        Ok(md) => md,
+        Err(_) => return false,
+    };
+    if lmd.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if lmd.uid() != unsafe { libc::geteuid() } {
+            return false;
+        }
+        // Reject group/other permissions — only owner may read,
+        // write, or execute.  An attacker with group access
+        // could swap the file between our stat and exec; even
+        // group-readable files leak compiled output that may
+        // contain secrets.
+        if lmd.mode() & 0o077 != 0 {
+            return false;
+        }
+        // Reject SUID/SGID — cached binaries should never carry
+        // privilege-escalation bits.
+        if lmd.mode() & 0o6000 != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// P254 — companion check for the cache directory itself.
+/// Same shape as `cache_safe_to_execute` but applied to the
+/// directory: symlink rejected; on Unix, owner-uid match and
+/// no group/other bits required.  Used at cache-write time —
+/// if the directory exists with weak permissions, we tighten
+/// it via `tighten_cache_dir` before writing.
+#[must_use]
+pub(crate) fn cache_dir_safe(dir: &std::path::Path) -> bool {
+    let lmd = match std::fs::symlink_metadata(dir) {
+        Ok(md) => md,
+        Err(_) => return false,
+    };
+    if lmd.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if lmd.uid() != unsafe { libc::geteuid() } {
+            return false;
+        }
+        if lmd.mode() & 0o077 != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// P254 — set the cache directory's mode to `0o700` on Unix.
+/// No-op on non-Unix (NTFS / ReFS use ACLs that the parent
+/// directory already restricts; the symlink check still applies).
+/// Called both immediately after `create_dir_all` and before any
+/// cache write to repair pre-existing cache directories left over
+/// from earlier loft versions.
+pub(crate) fn tighten_cache_dir(dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let _ = dir;
+}
+
+/// P254 — set a freshly written cache binary's mode to `0o700`
+/// on Unix (rwx for owner, nothing for group/other).  Called
+/// after `std::fs::copy(&binary, &cached_binary)`.  No-op on
+/// non-Unix.
+pub(crate) fn tighten_cache_binary(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+    }
+    let _ = path;
+}
+
+#[cfg(test)]
+mod p254_cache_safety {
+    use super::*;
+
+    #[test]
+    fn nonexistent_cache_is_unsafe() {
+        let p = std::env::temp_dir().join("loft_p254_does_not_exist_xyz_12345");
+        let _ = std::fs::remove_file(&p);
+        assert!(!cache_safe_to_execute(&p));
+    }
+
+    #[test]
+    fn freshly_written_owner_only_cache_is_safe() {
+        let p = std::env::temp_dir().join(format!(
+            "loft_p254_safe_{}_{}",
+            std::process::id(),
+            chrono_ish_nanos()
+        ));
+        let _ = std::fs::remove_file(&p);
+        std::fs::write(&p, b"#!/bin/sh\necho hi\n").unwrap();
+        tighten_cache_binary(&p);
+        assert!(cache_safe_to_execute(&p), "owner-only file should be safe");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn group_writable_cache_is_unsafe() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = std::env::temp_dir().join(format!(
+            "loft_p254_groupwrite_{}_{}",
+            std::process::id(),
+            chrono_ish_nanos()
+        ));
+        let _ = std::fs::remove_file(&p);
+        std::fs::write(&p, b"x").unwrap();
+        // 0o766 has group write and other rwx — attacker-modifiable.
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o766)).unwrap();
+        assert!(!cache_safe_to_execute(&p));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_cache_is_unsafe() {
+        let target = std::env::temp_dir().join(format!(
+            "loft_p254_symtarget_{}_{}",
+            std::process::id(),
+            chrono_ish_nanos()
+        ));
+        let link = std::env::temp_dir().join(format!(
+            "loft_p254_symlink_{}_{}",
+            std::process::id(),
+            chrono_ish_nanos()
+        ));
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_file(&link);
+        std::fs::write(&target, b"x").unwrap();
+        tighten_cache_binary(&target);
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        // Even though the symlink TARGET would pass, the link
+        // itself routes through `symlink_metadata` and is rejected.
+        assert!(!cache_safe_to_execute(&link));
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_file(&target);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn suid_cache_is_unsafe() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = std::env::temp_dir().join(format!(
+            "loft_p254_suid_{}_{}",
+            std::process::id(),
+            chrono_ish_nanos()
+        ));
+        let _ = std::fs::remove_file(&p);
+        std::fs::write(&p, b"x").unwrap();
+        // 0o4700 — owner rwx + setuid bit.
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o4700)).unwrap();
+        assert!(!cache_safe_to_execute(&p));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Lightweight nanosecond suffix to keep test temp paths
+    /// from colliding when `cargo test` runs the cases in
+    /// parallel without `--test-threads=1`.
+    fn chrono_ish_nanos() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    }
+}

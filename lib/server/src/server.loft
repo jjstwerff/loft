@@ -49,6 +49,15 @@ fn tcp_body() -> text;
 fn tcp_respond(status: integer, body: text);
 #native "n_tcp_respond"
 
+// Same as `n_tcp_respond` but the caller picks the Content-Type
+// header (e.g. `"text/html; charset=utf-8"`).  Empty string falls
+// back to `"text/plain; charset=utf-8"`.  TTT v3 needs this to
+// serve the index HTML, the loft client source, and the WASM
+// payload from the same loft program that hosts the WebSocket
+// game protocol.
+fn tcp_respond_typed(status: integer, body: text, content_type: text);
+#native "n_tcp_respond_typed"
+
 fn tcp_close(handle: integer);
 #native "n_tcp_close"
 
@@ -61,8 +70,24 @@ fn ws_recv_native(handle: integer) -> boolean;
 fn ws_message_native() -> text;
 #native "n_ws_message"
 
+// Opcode of the last frame surfaced by `ws_recv_native`.
+// 1 = text, 2 = binary, 8 = close, 9 = ping, 10 = pong.
+// Loft programs that handle binary frames check this after a
+// successful recv to decide whether the message bytes are text
+// (utf-8) or a binary blob.
+fn ws_opcode_native() -> integer;
+#native "n_ws_opcode"
+
 fn ws_send_native(handle: integer, msg: text) -> boolean;
 #native "n_ws_send"
+
+// Send the byte buffer as a binary WebSocket frame (opcode 2)
+// instead of a text frame (opcode 1).  Same payload encoding —
+// loft `text` is a byte buffer; this just changes the frame
+// type the peer sees.  Used by TTT v5 + plan-36 for
+// world_snapshot / world_delta blobs.
+fn ws_send_binary_native(handle: integer, msg: text) -> boolean;
+#native "n_ws_send_binary"
 
 fn ws_close_native(handle: integer);
 #native "n_ws_close"
@@ -86,6 +111,36 @@ pub fn respond(self: Request, status: integer, body: text) {
   tcp_respond(status, body);
 }
 
+// Send an HTTP response with a caller-specified Content-Type and
+// close the connection.  Use for HTML / CSS / JSON / WASM payloads;
+// `respond` defaults to `text/plain`.
+pub fn respond_typed(self: Request, status: integer, body: text, content_type: text) {
+  tcp_respond_typed(status, body, content_type);
+}
+
+// Convenience wrappers for the common cases TTT v3 needs.
+pub fn respond_html(self: Request, body: text) {
+  tcp_respond_typed(200, body, "text/html; charset=utf-8");
+}
+
+pub fn respond_css(self: Request, body: text) {
+  tcp_respond_typed(200, body, "text/css; charset=utf-8");
+}
+
+pub fn respond_js(self: Request, body: text) {
+  tcp_respond_typed(200, body, "application/javascript; charset=utf-8");
+}
+
+pub fn respond_loft(self: Request, body: text) {
+  // No registered MIME for loft source; text/plain reads cleanly in a
+  // browser tab and matches what `curl` / fetch consumers expect.
+  tcp_respond_typed(200, body, "text/plain; charset=utf-8");
+}
+
+pub fn respond_404(self: Request) {
+  tcp_respond(404, "Not Found");
+}
+
 pub fn close(self: Server) {
   tcp_close(self.handle);
 }
@@ -105,6 +160,20 @@ pub fn next(self: WebSocket) -> text {
 
 pub fn send(self: WebSocket, msg: text) -> boolean {
   ws_send_native(self.ws_id, msg)
+}
+
+// Send `msg` as a binary WebSocket frame (opcode 2).  Loft
+// `text` is a byte buffer — pack u8/u16/i32/etc. into it via
+// `to_bytes` style code, then ship it.
+pub fn send_binary(self: WebSocket, msg: text) -> boolean {
+  ws_send_binary_native(self.ws_id, msg)
+}
+
+// Opcode of the last frame returned by `next` on this socket.
+// Use after `next` to decide whether to interpret the payload
+// as utf-8 text or as a binary blob.
+pub fn last_opcode(self: WebSocket) -> integer {
+  ws_opcode_native()
 }
 
 pub fn close(self: WebSocket) {

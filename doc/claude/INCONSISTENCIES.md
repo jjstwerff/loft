@@ -18,6 +18,7 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 - [8. Method vs. Free Function Is an Arbitrary Standard-Library Choice](#8-method-vs-free-function-is-an-arbitrary-standard-library-choice)
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
 - [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
+- [33. `const` Applies to Locals and Parameters but Not Fields](#33-const-applies-to-locals-and-parameters-but-not-fields)
 - [Summary by Severity](#summary-by-severity)
 
 ---
@@ -191,6 +192,49 @@ both semantics.
 
 ---
 
+## 33. `const` Applies to Locals and Parameters but Not Fields
+
+**Severity: Low**
+
+After [P246](PROBLEMS.md) closed (file-scope `const NAME = expr;`
+accepted) and the UPPER_CASE-non-const warning landed, loft's
+immutability story is uniform at every scope **except** struct
+fields:
+
+| Where | Immutable form |
+|---|---|
+| File-scope constant | `const PI = 3.14;` (or bare-name `PI = 3.14;`) |
+| Local variable | `const x = 5;` |
+| Function parameter | `fn f(const x: T)` |
+| **Struct field** | **(no equivalent — every field is implicitly mutable)** |
+
+The asymmetry is the only place where "I want this thing
+immutable" can't be expressed.  The first concrete consumer is
+[lib/world's `Cell`](../../lib/world/src/world.loft):
+`c_color`, `c_height`, `c_age` should ALL be const after
+construction (the tick loop rebuilds the entire cell via
+`chunk.ck_cells[idx] = Cell{…}`, never via in-place field
+writes), but loft can't express the constraint, so a future
+contributor writing `cell.c_color = 0;` gets no compiler help.
+
+**Advice:** Extend `const` to struct fields as a write-once-at-
+construction modifier.  Purely static check, zero runtime cost,
+no schema change.  Design + sequencing in
+[plans/future/33-const-fields/README.md](plans/future/33-const-fields/README.md).
+
+**Plan (2026-05-11):** Documented as plan-33 (future).  Not
+yet implemented; the gap is currently silent (the parser
+accepts mutable fields with names that look like they should be
+const).  No regression guard yet — none possible until the
+feature is implemented.  (Other INC entries use a `Status`
+marker that means "resolved as design point" — INC#33 is
+genuinely open, so a `Plan` marker is used here instead.  The
+`doc_hygiene::inconsistencies_status_blocks_listed_as_resolved`
+test scans for the resolved marker; the open-status `Plan`
+form intentionally falls outside its match.)
+
+---
+
 
 ## Summary by Severity
 
@@ -201,7 +245,8 @@ _All fixed — see CHANGELOG.md._
 _All documented + regression-guarded — see the Resolved-as-design-point table below._
 
 ### Low (cosmetic or minor)
-_All documented + regression-guarded — see the Resolved-as-design-point table below._
+- [33. `const` Applies to Locals and Parameters but Not Fields](#33-const-applies-to-locals-and-parameters-but-not-fields) — open; resolution path in [plans/future/33-const-fields/](plans/future/33-const-fields/README.md)
+_Other Low items: documented + regression-guarded — see the Resolved-as-design-point table below._
 
 ### Resolved as design point (documented + regression-guarded)
 

@@ -777,6 +777,36 @@ impl Parser {
                 self.expression(&mut format)
             };
             self.in_format_expr = saved_in_fmt;
+            // Plan-07 phase 4e.1 — format strings are the user's
+            // observability surface and must NEVER halt, log, or warn
+            // (per C66 + DESIGN_DECISIONS 2026-05-11).  Walk the
+            // interpolated expression tree and swap every fault-prone
+            // op to its Nullable peer so `println("{a / b}")` /
+            // `println("{user.name}")` / `println("{v[i]}")` always
+            // render the silent sentinel ("null") instead of taking
+            // out the print statement that the developer is using to
+            // diagnose the problem in the first place.
+            //
+            // Phase 4e.3 — when the OUTERMOST swapped op is
+            // fault-prone (div / mod / vector-index / text-index),
+            // append an `OpTagFault(kind)` SIBLING statement to the
+            // statement list BEFORE the format-conversion op so the
+            // conversion op sees the tag and renders `null(<reason>)`
+            // instead of bare `null` on the null sentinel.  Inner
+            // faults (`"{a + v[i] / b}"`) get their Nullable peer
+            // swap from the recursion but do NOT tag — there's no
+            // renderer to consume their tag in mid-expression.
+            let outer_fault_kind = if self.first_pass {
+                None
+            } else {
+                Self::rewrite_subtree_to_nullable_kind(&mut format, &self.data)
+            };
+            if let Some(kind) = outer_fault_kind
+                && self.data.def_nr("OpTagFault") != u32::MAX
+            {
+                let tag_call = self.cl("OpTagFault", &[Value::Int(i32::from(kind))]);
+                list.push(tag_call);
+            }
             self.un_ref(&mut tp, &mut format);
             if !self.first_pass && tp.is_unknown() {
                 diagnostic!(

@@ -418,16 +418,25 @@ fn native_auto_dispatch(stores: &mut crate::database::Stores, stack: &mut crate:
     // Read the current library index from the thread-local.
     let lib_idx = CURRENT_LIB_IDX.with(std::cell::Cell::get);
 
-    let guard = NATIVE_SIGS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let sig_table = guard.as_ref().expect("NATIVE_SIGS not initialized");
-    let (sym, sig) = match sig_table.get(&lib_idx) {
-        Some(entry) => entry,
-        None => panic!("no signature for lib_idx {lib_idx}"),
+    // P245: clone the (sym, sig) entry out of NATIVE_SIGS and DROP the
+    // mutex guard before invoking the native function.  The native fn
+    // may block (e.g. `n_tcp_accept` waits in `listener.accept()`) —
+    // holding the guard across the call serialises every parallel arm
+    // that calls into native code, manifesting as a hang on the
+    // sibling worker.  The Mutex is now used only for the table
+    // lookup itself, never for the call.
+    let (sym, sig) = {
+        let guard = NATIVE_SIGS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sig_table = guard.as_ref().expect("NATIVE_SIGS not initialized");
+        match sig_table.get(&lib_idx) {
+            Some((s, sg)) => (s.clone(), sg.clone()),
+            None => panic!("no signature for lib_idx {lib_idx}"),
+        }
     };
 
-    let fp = unsafe { get_native_fn_raw(sym) }.unwrap_or_else(|| {
+    let fp = unsafe { get_native_fn_raw(&sym) }.unwrap_or_else(|| {
         panic!("native symbol '{sym}' not loaded");
     });
 
@@ -806,6 +815,16 @@ fn dispatch_call(
             let f: extern "C" fn(u16, *const u8, usize) = unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(1);
             f(i32_arg!(0) as u16, p, l);
+        }
+        // (i32, text, text) -> void  (e.g. tcp_respond_typed:
+        // status, body, content_type — TTT v3's HTML/CSS/JS/loft-mime
+        // server responses)
+        (&[ArgT::I32, ArgT::Text, ArgT::Text], None) => {
+            let f: extern "C" fn(u16, *const u8, usize, *const u8, usize) =
+                unsafe { std::mem::transmute(fp) };
+            let (p0, l0) = text_arg!(1);
+            let (p1, l1) = text_arg!(2);
+            f(i32_arg!(0) as u16, p0, l0, p1, l1);
         }
         // (text) -> i32
         (&[ArgT::Text], Some(ArgT::I32)) => {
@@ -1385,30 +1404,73 @@ enum ArgVal {
 
 // ── Auto-build ──────────────────────────────────────────────────────────
 
-/// Auto-build a package's native crate if the shared library is missing.
+/// Auto-build a package's native crate if the shared library OR
+/// rlib is missing.
+///
+/// Both artifacts are produced by the same `cargo build` invocation
+/// (every `lib/*/native/Cargo.toml` declares
+/// `crate-type = ["cdylib", "rlib"]`).  The cdylib is loaded by the
+/// runtime extension loader; the rlib is consumed by `--native`
+/// codegen via `--extern <crate>=<path>` (see
+/// `src/main.rs::add_native_extern_flags`).
+///
+/// Pre-2026-05-12 this function checked ONLY the cdylib before
+/// returning early, which let a parallel test see "cdylib exists"
+/// → skip the build → then fail later when `add_native_extern_flags`
+/// looked for the rlib that hadn't been written yet.  On Windows
+/// (where file-system flush ordering between cdylib and rlib differs
+/// from ext4/APFS, and file-locks held by another concurrent cargo
+/// invocation block reads even when the file is on disk) this race
+/// surfaced as `error[E0463]: can't find crate for <name>` in
+/// `tests/codegen_emitter.rs::p244_text_native_wrapper_compiles_under_native`
+/// and any other test that ran in parallel with a fresh build.
+///
+/// Fix: also require the rlib to exist before returning early.  If
+/// either artifact is missing, run cargo (which is itself
+/// fcntl-locked per target dir, so concurrent invocations serialize
+/// and only one actually rebuilds).
 #[must_use]
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
-    let cargo_toml = format!("{pkg_dir}/native/Cargo.toml");
-    if !std::path::Path::new(&cargo_toml).exists() {
+    use std::path::PathBuf;
+    // P244-windows fix #2 (2026-05-12): use PathBuf::join, not
+    // `format!("{pkg_dir}/...")`.  When `pkg_dir` arrives as a
+    // canonicalized Windows extended-length path (e.g.
+    // `\\?\D:\a\loft\loft\lib\server`), concatenating with `/native/...`
+    // produces a malformed path: the `\\?\` verbatim prefix bypasses
+    // Rust's path normalization, so the mixed-separator suffix
+    // doesn't resolve and `Path::exists()` returns false even when
+    // the file is on disk.  PathBuf::join handles each component
+    // through proper Path semantics on every platform.
+    let pkg = PathBuf::from(pkg_dir);
+    let cargo_toml = pkg.join("native").join("Cargo.toml");
+    if !cargo_toml.exists() {
         return None;
     }
     let lib_name = platform_lib_name(stem);
-    let release_path = format!("{pkg_dir}/native/target/release/{lib_name}");
-    if std::path::Path::new(&release_path).exists() {
-        return Some(release_path);
+    let rlib_name = format!("lib{stem}.rlib");
+    let release_dir = pkg.join("native").join("target").join("release");
+    let release_path = release_dir.join(&lib_name);
+    let release_rlib_path = release_dir.join(&rlib_name);
+    if release_path.exists() && release_rlib_path.exists() {
+        return Some(release_path.to_string_lossy().to_string());
     }
-    let debug_path = format!("{pkg_dir}/native/target/debug/{lib_name}");
-    if std::path::Path::new(&debug_path).exists() {
-        return Some(debug_path);
+    let debug_dir = pkg.join("native").join("target").join("debug");
+    let debug_path = debug_dir.join(&lib_name);
+    let debug_rlib_path = debug_dir.join(&rlib_name);
+    if debug_path.exists() && debug_rlib_path.exists() {
+        return Some(debug_path.to_string_lossy().to_string());
     }
     let built_path = release_path;
     let status = std::process::Command::new("cargo")
-        .args(["build", "--release", "--manifest-path", &cargo_toml])
+        .args(["build", "--release", "--manifest-path"])
+        .arg(&cargo_toml)
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .status();
     match status {
-        Ok(s) if s.success() && std::path::Path::new(&built_path).exists() => Some(built_path),
+        Ok(s) if s.success() && built_path.exists() => {
+            Some(built_path.to_string_lossy().to_string())
+        }
         _ => None,
     }
 }

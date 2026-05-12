@@ -127,21 +127,35 @@ give each item a traceable history.
 
 1. **Never `git commit` directly on `main`.** If you accidentally land on `main`, move
    the change to a feature branch before anything else.
-2. **Never `git push` without an explicit user instruction** — see the Remote CI section
-   of [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md).
-3. **Never create a branch, push, or open a PR unless the user explicitly asks.**
+2. **Pushing commits is OK by default — unless there's an open PR on the branch
+   that the push would disturb.**  For a long-lived working branch with no open
+   PR, push freely after each green-CI commit so the remote stays in sync (the
+   user wants commits visible without having to ask each time).  When the
+   branch has an open PR, do NOT push without an explicit user instruction —
+   force-pushes, rebases, or unexpected commits disrupt review-in-progress.
+   Check with `gh pr list --head <branch>` before pushing if uncertain.
+3. **Never create a branch or open a PR unless the user explicitly asks.**
    Each pull request costs the user real review time — more than the code took to
-   write.  Default mode is: work on the current branch, commit locally, report what
-   changed, and wait.  Only run `gh pr create`, `git push`, or `git checkout -b`
-   after the user explicitly says "push", "create PR", "open a PR", "merge", or
-   "switch to a new branch".
+   write.  Default mode is: work on the current branch, commit locally (or push
+   per Rule 2), report what changed, and wait.  Only run `gh pr create` or
+   `git checkout -b` after the user explicitly says "create PR", "open a PR",
+   "merge", or "switch to a new branch".
    - "fix X" or "implement Y" is *not* a PR instruction.  Commit locally and stop.
-   - "commit and push" is a push instruction, not a PR instruction.
    - A previous prompt that said "open a PR" does not authorise the next PR.
      Ask each time, or infer from the exact current prompt.
-   - When in doubt, summarise what is ready and ask whether to push.
-4. Create branches from the tip of `main` using the naming convention in
-   [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) (e.g. `p1-1-lambda-parser`, `benchmark`).
+   - When in doubt about PR creation, summarise what is ready and ask.
+4. Create branches from the tip of `main`.  **Default to a GENERAL
+   name** (`quality-pass`, `cleanup`, `housekeeping`, `work`) so the
+   branch can host any theme and accumulate work across sessions —
+   each new branch eventually has to rebase against a moving `main`,
+   surfaces conflicts in unrelated files, and often fails CI on
+   patterns the new branch didn't author.  ONE long-lived working
+   branch with cross-theme commits is the cheaper failure mode.
+   ONLY a substantial plan (well-defined arc with its own design
+   doc — e.g. `plan-06-arc`, `lsp-server`) earns a specific branch
+   name.  Do not open a second branch unless the user
+   explicitly asks ("start a new branch", "fresh branch for X",
+   "switch to a new branch").
 5. Merging back to `main` is done via a GitHub pull request — not a local `git merge`.
 
 ---
@@ -255,7 +269,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [INTERNALS.md](doc/claude/INTERNALS.md) | calc.rs, stack.rs, create.rs, native.rs, ops.rs, png_store.rs, parallel.rs, main.rs, logger.rs |
 | [THREADING.md](doc/claude/THREADING.md) | Parallel execution — `par(...)`, `par_light(...)`, thread safety analysis, store isolation |
 | [INTERFACES.md](doc/claude/INTERFACES.md) | Interface/trait system — bounded generics, operator overloading, phase design |
-| [WASM.md](doc/claude/WASM.md) | WASM architecture — wasm32-wasip2 target, VirtFS, host bridges, feature gates, FS bridge steps |
+| [WASM.md](doc/claude/WASM.md) | Reference — WASM runtime architecture: wasm32-wasip2 target, VirtFS, layered FS, host bridges, feature gates, threading two-tier design, frame yield, PNG decoding, logging.  All major W1.x phases shipped (W1.15 CallRef, W1.16 file I/O, W1.17 store locks, W1.18-1..5 worker thread infrastructure, W1.19 random, W1.20 time, frame yield, etc.).  Lone open item: W1.18-6 (test enablement for `19-threading.loft` under Node.js Worker Threads — single small task, not plan-shaped).  The doc's "Implementation Plan" Steps 1-14 + FS-A..FS-F are HISTORICAL build records (all shipped). |
 | [LOGGER.md](doc/claude/LOGGER.md) | Runtime logging framework (log_info/warn/error/fatal, config, rate limiting, production mode) |
 | [TESTING.md](doc/claude/TESTING.md) | Test framework, `LogConfig` debug-logging presets, `LOFT_LOG` env var, suite files |
 | [DOC.md](doc/claude/DOC.md) | HTML documentation generation (gendoc.rs + documentation.rs) |
@@ -264,51 +278,28 @@ The rule: **always commit before any operation that changes the working tree.**
 | [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) | Development workflow — branching, WIP commit, rebase sequence, CI |
 | [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |
 | [PROBLEMS.md](doc/claude/PROBLEMS.md) | Known bugs, limitations, workarounds, and fix plans |
-| [QUALITY.md](doc/claude/QUALITY.md) | Open programmer-biting issues, active sprint (P54), active design (C54), compiler blockers, enhancement tiers |
+| [QUALITY.md](doc/claude/QUALITY.md) | Reference + open work — open programmer-biting issues, active sprint (P54 JsonValue enum), active designs (Q1-Q4 JSON ecosystem, P54-U unified parser, Dep-inference for native fn returns), compiler blockers (B2-B7 struct-enum bugs), enhancement tiers, recommended landing order.  C54 (integer→i64) historical record kept as the canonical "LANDED via …" closure pattern.  See [§ Open work — actionable summary](doc/claude/QUALITY.md#open-work--actionable-summary) for the at-a-glance status table. |
 | [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) | Closed-by-decision register — check before proposing features already declined (C3 / C38 / C54.D / …) |
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
-| [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmarks, optimisation plans, string alloc, const data, block copy analysis |
+| [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Reference — performance analysis (benchmark results, root-cause analysis vs CPython / hand-written Rust, how the interpreter executes, wasm-vs-native gap analysis, design content for each planned optimization).  Open optimization follow-ups (P1-P3, N1-N3, W1) in `## Open work` section. |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
+| [plans/README.md](doc/claude/plans/README.md) | Multi-phase **core-language** initiatives (current / future / deferred / finished) — compiler, runtime, validation matrices, codegen arcs, language features.  Max 2-3 active plans. |
+| [lib_plans/README.md](doc/claude/lib_plans/README.md) | Multi-phase **library** initiatives (current / future / deferred / finished) — `server`, `game_client`, graphics, regex, package format, asset pipeline, web examples, IDE.  Same `≤3 active` discipline as `plans/`; numbering independent. |
 | [BROADENING.md](doc/claude/BROADENING.md) | Strategic evaluation — using loft beyond games (CLI, server, data), sequenced unlocks |
-| [LAZY_STDLIB.md](doc/claude/LAZY_STDLIB.md) | Conditional stdlib loading — trigger-based module load, pay-for-what-you-use cold start |
-| [MATCH_PEG.md](doc/claude/MATCH_PEG.md) | L3 PEG-style match patterns — sequence/alternation/optional with anchor-revert capture (base match syntax lives in LOFT.md § Match expressions) |
-| [REGEX.md](doc/claude/REGEX.md) | Regex standalone library — replaces the `r"..."` literal / "regex arm in match" plan with a full-featured library |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
-| [SORTED_SLICE.md](doc/claude/SORTED_SLICE.md) | A8: slicing, open-ended ranges, partial-key match, comprehensions on sorted/index |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
-| [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`), `--native` default plan, fix plans |
-| [PACKAGES.md](doc/claude/PACKAGES.md) | Package format, registry, governance, external libs, library extraction |
-| [CONST_STORE.md](doc/claude/CONST_STORE.md) | Constant store design -- shared read-only Store for vector/string constants, mmap, WASM fast startup |
+| [NATIVE.md](doc/claude/NATIVE.md) | Reference — native code generation pipeline (`src/generation/`), architecture + `codegen_runtime`, per-Op dispatch, N1-N8 implementation history.  `--native` is shipped (CI-gated, 108/108 native tests pass).  Open follow-up work in `## Open work` section. |
+| [PACKAGES.md](doc/claude/PACKAGES.md) | Reference — package format spec (`loft.toml`), package layout, function binding model, build pipeline, target matrix (interpreter / native / WASM), OpenGL case study, security model.  Format is SHIPPED: 14 `lib/*` packages already use it.  Open infrastructure work (registry MVP, lock file) in `## Open work` section; execution arc (per-library extraction from monorepo) in [lib_plans/future/12-library-extraction/](doc/claude/lib_plans/future/12-library-extraction/README.md). |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
-| [LSP.md](doc/claude/LSP.md) | Language server (LSP.1/2) + DAP debugger (LSP.3) + Eclipse / JetBrains / Neovim plugin design |
-| [NATIVE_DEBUG.md](doc/claude/NATIVE_DEBUG.md) | GDB / LLDB integration for `--native` builds — DWARF, source maps, plugins (NDB.0/1/2) |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
-| [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
 | [CHANGELOG.md](CHANGELOG.md) | User-facing release notes (shipped in release archives) |
 | [CHANGELOG_TECHNICAL.md](doc/claude/CHANGELOG_TECHNICAL.md) | Full technical changelog — opcode/slot/phase detail for contributors |
 | [CAVEATS.md](doc/claude/CAVEATS.md) | Verifiable edge cases and limitations with reproducers and test references |
 | [COROUTINE.md](doc/claude/COROUTINE.md) | Coroutine design — stackful `yield`, `iterator<T>`, `yield from` (planned, 1.1+) |
 | [LIFETIME.md](doc/claude/LIFETIME.md) | Dependency tracking and scope-based freeing — dep field semantics, Text vs Reference, closures |
-| [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) | Web services design evaluation — HTTP/JSON approach comparison, issues #54/#55 |
-| [WEB_SERVER_LIB.md](doc/claude/WEB_SERVER_LIB.md) | `server` library design — HTTP server, WebSockets, TLS, ACME, auth, RBAC, game server additions |
-| [EVENT_LOOP.md](doc/claude/EVENT_LOOP.md) | Prioritised event-loop abstraction (client + server) — concrete spec: bidirectional handlers, library-assigned ids, separate tuning phase, library-assembled streaming, JSON-by-default wire format, depends on P213 v4 |
-| [EVENT_LOOP_DISCUSSION.md](doc/claude/EVENT_LOOP_DISCUSSION.md) | EventLoop open issues, alternatives considered, design history — companion to EVENT_LOOP.md |
-| [EVENT_PROTOCOL.md](doc/claude/EVENT_PROTOCOL.md) | Wire-format spec — text-mode `<id>:payload` (v1, shipped), binary-mode 12-byte header (v2, designed), server-arbited MAP handshake, encoding modes, streaming reassembly; companion to EVENT_LOOP.md |
-| [MUTABLE_CLOSURES.md](doc/claude/MUTABLE_CLOSURES.md) | Spec: novice-fit closure capture — four-case classification (A read-only, B co-scoped, C moved, D aliased rejected), implicit-by-body, Reference + cell lowerings, diagnostic shape |
-| [MUTABLE_CLOSURES_DISCUSSION.md](doc/claude/MUTABLE_CLOSURES_DISCUSSION.md) | Companion discussion: alternatives surveyed (A-F), implementation analysis sketch, open questions, design history — companion to MUTABLE_CLOSURES.md |
-| [TIC_TAC_TOE.md](doc/claude/TIC_TAC_TOE.md) | Protocol-validation vehicle: v1 shipped (server-arbited handshake, integer-id wire format).  v2/v3/v4 are protocol-only ground layers (multi-client, asset-serving + browser, server-side compile + hot-swap) — all verified text-mode.  Visual / playable tic-tac-toe is deferred indefinitely; real-game UX lives in MULTIPLAYER_EDITOR |
-| [MULTIPLAYER_EDITOR.md](doc/claude/MULTIPLAYER_EDITOR.md) | First real-game milestone: multi-client hex editor in the moros stack — paint hexes red on click, propagate via WebSocket to all connected clients, snapshot replay on connect.  Consumes TIC_TAC_TOE v2 ground layer (multi-client server primitives) |
-| [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) | `game_client` library design — WebSocket client, multiplayer protocol, prediction, WASM script loading |
-| [SERVER_FEATURES.md](doc/claude/SERVER_FEATURES.md) | Language features for server/client ergonomics — C55 type aliases, C56 `?? return`, A15 `parallel {}`, I13 iterator protocol, C57 decorators |
-| [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | W1.1 single-file HTML export — native WASM compilation for browser |
-| [OPENGL.md](doc/claude/OPENGL.md) | 2D RGBA drawing library + OpenGL/WebGL/GLB 3D rendering design |
-| [OPENGL_IMPL.md](doc/claude/OPENGL_IMPL.md) | Step-by-step implementation checklist: canvas → GLB → OpenGL → WebGL |
-| [RENDERER.md](doc/claude/RENDERER.md) | High-level renderer design — scene-driven PBR with shadows, helper abstractions |
-| [WEB_EXAMPLES.md](doc/claude/WEB_EXAMPLES.md) | Web gallery + unified rendering: native OpenGL / WebGL / GLB from one API |
-| [GAME_INFRA.md](doc/claude/GAME_INFRA.md) | Game infrastructure: sprites, tilemap, collision, audio, FFI, HTML export, warnings |
-| [PIPELINE.md](doc/claude/PIPELINE.md) | Game asset pipeline: AI prototype → artist polish → integration |
+| [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | Reference — `loft --html` pipeline: cdylib codegen, WebGL2 import bridge, frame-yield contract for browser game loops, `wasm-opt` integration, HTML assembly format.  Where each piece lives in the code today.  Closed plan-31 (build sequence + commits) at [`plans/finished/31-html-export/`](doc/claude/plans/finished/31-html-export/README.md). |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
 
 ---
@@ -334,10 +325,10 @@ The rule: **always commit before any operation that changes the working tree.**
 | Add or fix native code generation | [NATIVE.md](doc/claude/NATIVE.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) § Native |
 | Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) |
 | Implement a planned language feature (Tuples/Coroutines/etc.) | [ROADMAP.md](doc/claude/ROADMAP.md) → [PLANNING.md](doc/claude/PLANNING.md) → feature design doc (TUPLES.md / COROUTINE.md / STACKTRACE.md) |
-| Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) → [STDLIB.md](doc/claude/STDLIB.md) |
-| Implement `loft install <name>` registry | [PACKAGES.md](doc/claude/PACKAGES.md) |
-| Build or understand the `server` library | [WEB_SERVER_LIB.md](doc/claude/WEB_SERVER_LIB.md) |
-| Build or understand the `game_client` library | [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) |
+| Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [lib_plans/future/06-web-services/](doc/claude/lib_plans/future/06-web-services/) → [STDLIB.md](doc/claude/STDLIB.md) |
+| Implement `loft install <name>` registry | [PACKAGES.md § Open work](doc/claude/PACKAGES.md#open-work) → [PACKAGES.md](doc/claude/PACKAGES.md) (format reference) |
+| Build or understand the `server` library | [lib_plans/future/08-server/README.md](doc/claude/lib_plans/future/08-server/README.md) |
+| Build or understand the `game_client` library | [lib_plans/future/10-game-client/README.md](doc/claude/lib_plans/future/10-game-client/README.md) |
 | Write or review `.loft` files | `.claude/skills/loft-write/SKILL.md` |
 | Understand variable lifetimes / dep tracking | [LIFETIME.md](doc/claude/LIFETIME.md) → [DATABASE.md](doc/claude/DATABASE.md) |
 

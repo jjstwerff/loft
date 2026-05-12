@@ -300,8 +300,14 @@ impl Output<'_> {
                 // `(String, String)`.  See `Value::Text` in emit.rs.
                 let prev_tuple_text = self.tuple_text_to_string;
                 if let Type::Tuple(elems) = variables.tp(var)
-                    && elems.iter().any(|e| matches!(e, Type::Text(_)))
+                    && tuple_has_text_leaf(elems)
                 {
+                    // Recurse through nested tuples so `((i64, String),
+                    // (i64, String))` triggers the flag too — without
+                    // this, plan-14 phase-02 cells like
+                    // `((1, "a"), (2, "b"))` emitted `"a"` (`&str`)
+                    // against a declared `String` slot and rustc raised
+                    // E0308.
                     self.tuple_text_to_string = true;
                 }
                 // When assigning to a String variable from a text-local source,
@@ -341,6 +347,22 @@ impl Output<'_> {
                                 Type::Tuple(elems)
                                 if elems.get(*idx as usize).is_some_and(|e| matches!(e, Type::Text(_))))
                     });
+                // P247 — destination is a tuple-typed work var (e.g.
+                // `__ref_N: (i64, String)` materialised by the
+                // operators.rs nested-TupleGet read path) AND the
+                // source is a `TupleGet(parent, idx)` whose result
+                // type contains a non-Copy leaf (Text / Reference).
+                // Default emission `let __ref_N = var_t.0;` MOVES
+                // `var_t.0`, invalidating subsequent reads of
+                // `var_t.0.X` in the same expression.  Emit
+                // `var_t.0.clone()` instead so each chained access
+                // gets its own owned copy.
+                let nested_tuple_clone = matches!(variables.tp(var), Type::Tuple(elems)
+                    if tuple_has_non_copy_leaf(elems))
+                    && matches!(to_inner, Value::TupleGet(v, _) if {
+                        let vars = &self.data.def(self.def_nr).variables;
+                        !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Tuple(_))
+                    });
                 if text_local_clone {
                     if let Value::Var(v) = to.unspan() {
                         let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
@@ -352,12 +374,21 @@ impl Output<'_> {
                         let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{src_name}.{idx}.clone()")?;
                     }
+                } else if nested_tuple_clone {
+                    if let Value::TupleGet(v, idx) = to.unspan() {
+                        let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        write!(w, "var_{src_name}.{idx}.clone()")?;
+                    }
                 } else {
                     self.output_code_inner(w, to)?;
                 }
                 self.fn_ref_context = prev_ctx;
                 self.tuple_text_to_string = prev_tuple_text;
-                if needs_to_string && !text_local_clone && !tuple_text_elem_clone {
+                if needs_to_string
+                    && !text_local_clone
+                    && !tuple_text_elem_clone
+                    && !nested_tuple_clone
+                {
                     write!(w, ".to_string()")?;
                 } else if wrap_fn_ref {
                     write!(
@@ -497,8 +528,18 @@ impl Output<'_> {
         // type number are plain integers, not fn-ref d_nr values.
         let saved_ctx = self.fn_ref_context;
         self.fn_ref_context = false;
+        // P238: clear tuple_text_to_string inside calls — call arguments
+        // bind to the callee's parameter signature (typically `&str` for
+        // text params), not to the outer assignment target's tuple slot
+        // type.  Without this clear, `let var_s: (String, String) =
+        // t_4text_pair_t(cell, "hi")` would emit `"hi".to_string()` for
+        // the arg because the outer `(String, String)` flag propagated
+        // into `Value::Text` rendering.
+        let saved_tuple = self.tuple_text_to_string;
+        self.tuple_text_to_string = false;
         let result = self.output_call_inner(w, def_nr, vals);
         self.fn_ref_context = saved_ctx;
+        self.tuple_text_to_string = saved_tuple;
         result
     }
 
@@ -838,4 +879,46 @@ impl Output<'_> {
             self.output_call_template(w, def_fn, vals)
         }
     }
+}
+
+/// True iff `elems` contains a `Type::Text` element at any depth —
+/// includes text reached through nested `Type::Tuple`.  Used by
+/// `tuple_text_to_string` activation in `output_set` so a tuple
+/// destination like `((i64, String), (i64, String))` triggers the
+/// `"a".to_string()` wrap on the inner literals (plan-14 phase 02).
+fn tuple_has_text_leaf(elems: &[Type]) -> bool {
+    for e in elems {
+        match e {
+            Type::Text(_) => return true,
+            Type::Tuple(inner) if tuple_has_text_leaf(inner) => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True iff `elems` contains a leaf type that doesn't impl `Copy` in
+/// generated Rust — text, references, vectors, hash/index/sorted/
+/// spacial, iterators, struct-enums.  Used by `nested_tuple_clone`
+/// (P247) to decide whether `let __ref_N = var_t.0;` needs a
+/// `.clone()` to avoid moving non-Copy data out of the parent tuple.
+/// Plain integers / floats / booleans / characters / plain enums
+/// are Copy and don't need cloning.
+fn tuple_has_non_copy_leaf(elems: &[Type]) -> bool {
+    for e in elems {
+        match e {
+            Type::Text(_)
+            | Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Hash(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Sorted(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::Iterator(_, _)
+            | Type::Enum(_, true, _) => return true,
+            Type::Tuple(inner) if tuple_has_non_copy_leaf(inner) => return true,
+            _ => {}
+        }
+    }
+    false
 }

@@ -50,7 +50,7 @@ TEX_VERT_2D `1 - aPos.y`, ortho `-2/H`) collapsed to one: the ortho
 is the only compensating flip, matching the GL convention.  Canvases
 and PNG textures now share the same orientation in GL.  Locked as a
 language-level invariant in [OPENGL.md § Canvas coordinate
-convention](OPENGL.md).  Regression guard: 2×2 atlas corner check in
+convention](lib_plans/future/02-graphics/README.md).  Regression guard: 2×2 atlas corner check in
 `tests/scripts/snap_smoke.sh`.
 
 ### P135 / C58 (historical) — Canvas Y direction is not locked in
@@ -112,9 +112,11 @@ literal suffix is deprecated-warned and silently dropped.
   surface.**  Phase 5 (opcode reclamation) deletes them; until
   then dispatch table size stays 268 instead of 242.  Affects
   no semantics; just dispatch cache density.
-- **`Type::Long` enum variant lives alongside `Type::Integer`.**
-  Functionally identical post-2c; removal is round 10c (see
-  `doc/claude/plans/01-integer-i64/FINISH_MIGRATION.md`).
+- **`Type::Long` enum variant removed** (plan-01 phase 4, 2026-04-21).
+  All integer-family values flow through `Type::Integer(IntegerSpec)`
+  with i64 arithmetic on the stack and per-field storage width via
+  `IntegerSpec.forced_size`.  See
+  `doc/claude/plans/finished/01-integer-i64/04-deprecate-long.md`.
 - **Memory footprint doubled for `integer` fields** (4 → 8
   bytes).  Narrow fields (`u8 / u16 / i8 / i16 / i32`) stay
   compact via `Parts::{Byte, Short, Int}` so pixel buffers,
@@ -531,7 +533,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | ~~C7/P22~~ | — | **Done** — diagnostic now references 1.1+ timeline; regression guard added |
 | C38    | —         | Accepted — value-semantic capture by design (like Rust `move`) |
 | ~~C54~~ | — | **Done** 2026-04-20 — `integer` is i64 end-to-end; `long` is a historical alias.  See CAVEATS.md § C54 long-form for post-migration footguns |
-| ~~C58/P135~~ | — | **Done** — canonical `(0, 0) = screen-top-left`; upload no longer pre-flips rows; convention locked in OPENGL.md.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
+| ~~C58/P135~~ | — | **Done** — canonical `(0, 0) = screen-top-left`; upload no longer pre-flips rows; convention locked in lib_plans/future/02-graphics/README.md.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~C60~~ | — | **Done** 2026-04-13 — `for kv in hash` yields a `HashEntry` with `.key` / `.value` in insertion/deletion-aware order via the internal ordered index.  See CAVEATS.md § C60 long-form |
 | ~~C61.local~~ | — | **Done** — pass-1 reject via `was_loop_var`; stdlib docs cleaned up; unblocked by #139 |
 | P54    | 0.9.0     | First-class `JsonValue` enum + `json_parse`; old text-based JSON surface withdrawn |

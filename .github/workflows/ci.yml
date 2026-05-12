@@ -238,3 +238,42 @@ jobs:
       # that both pipelines *build* and every asset loads — which
       # catches the common failure mode of a source change that
       # breaks the browser pipeline without the contributor noticing.
+
+  # Doc hygiene — non-blocking visibility job.
+  #
+  # Runs scripts/check_doc_drift.sh (paths / time / stale / roadmap /
+  # refs / libs).  Fails on real drift (broken links, stale "is
+  # current" claims, ROADMAP/disk mismatch, finished/deferred plan
+  # refs from normal docs); warns on time projections + missing lib
+  # READMEs.
+  #
+  # `continue-on-error: true` — surfaces the result on every PR
+  # without blocking merge.  Doc drift is soft failure: bad links
+  # don't break the binary.  Authors see the red X next to this job
+  # on the PR page and can choose to fix it (most should) or land
+  # the PR if the change is urgent.
+  #
+  # If you want to gate merges on this, remove `continue-on-error:
+  # true` and re-test that the false-positive rate stays at 0.
+  doc-check:
+    name: Doc hygiene (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run drift checks
+        run: scripts/check_doc_drift.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "Run \`make doc-check\` locally to reproduce."
+            echo ""
+            echo "Summary line:"
+            echo '```'
+            scripts/check_doc_drift.sh -q 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

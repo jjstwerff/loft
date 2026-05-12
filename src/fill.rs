@@ -9,7 +9,7 @@ use crate::state::State;
 use crate::tree;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 247] = &[
+pub const OPERATORS: &[fn(&mut State); 255] = &[
     goto,
     goto_word,
     goto_false,
@@ -79,6 +79,8 @@ pub const OPERATORS: &[fn(&mut State); 247] = &[
     mul_single,
     div_single,
     rem_single,
+    div_single_nullable,
+    rem_single_nullable,
     math_func_single,
     math_func2_single,
     pow_single,
@@ -107,6 +109,8 @@ pub const OPERATORS: &[fn(&mut State); 247] = &[
     mul_float,
     div_float,
     rem_float,
+    div_float_nullable,
+    rem_float_nullable,
     eq_float,
     ne_float,
     lt_float,
@@ -126,6 +130,7 @@ pub const OPERATORS: &[fn(&mut State); 247] = &[
     put_text,
     get_text_sub,
     text_character,
+    text_character_nullable,
     conv_bool_from_character,
     clear_text,
     free_text,
@@ -189,11 +194,14 @@ pub const OPERATORS: &[fn(&mut State); 247] = &[
     set_short_raw,
     set_text,
     var_vector,
+    tag_fault,
     length_vector,
     length_sorted,
     clear_vector,
     get_vector,
     vector_ref,
+    get_vector_nullable,
+    vector_ref_nullable,
     cast_vector_from_text,
     remove_vector,
     insert_vector,
@@ -486,14 +494,24 @@ fn mul_int(s: &mut State) {
 fn div_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_div_int(v_v1, v_v2);
+    let new_value = if v_v2 == 0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        0_i64
+    } else {
+        ops::op_div_int(v_v1, v_v2)
+    };
     s.put_stack(new_value);
 }
 
 fn rem_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_rem_int(v_v1, v_v2);
+    let new_value = if v_v2 == 0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        0_i64
+    } else {
+        ops::op_rem_int(v_v1, v_v2)
+    };
     s.put_stack(new_value);
 }
 
@@ -680,11 +698,35 @@ fn mul_single(s: &mut State) {
 fn div_single(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = v_v1 / v_v2;
+    let new_value = if v_v2 == 0.0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        f32::NAN
+    } else {
+        v_v1 / v_v2
+    };
     s.put_stack(new_value);
 }
 
 fn rem_single(s: &mut State) {
+    let v_v2 = *s.get_stack::<f32>();
+    let v_v1 = *s.get_stack::<f32>();
+    let new_value = if v_v2 == 0.0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        f32::NAN
+    } else {
+        v_v1 % v_v2
+    };
+    s.put_stack(new_value);
+}
+
+fn div_single_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<f32>();
+    let v_v1 = *s.get_stack::<f32>();
+    let new_value = v_v1 / v_v2;
+    s.put_stack(new_value);
+}
+
+fn rem_single_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
     let new_value = v_v1 % v_v2;
@@ -890,11 +932,35 @@ fn mul_float(s: &mut State) {
 fn div_float(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = v_v1 / v_v2;
+    let new_value = if v_v2 == 0.0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        f64::NAN
+    } else {
+        v_v1 / v_v2
+    };
     s.put_stack(new_value);
 }
 
 fn rem_float(s: &mut State) {
+    let v_v2 = *s.get_stack::<f64>();
+    let v_v1 = *s.get_stack::<f64>();
+    let new_value = if v_v2 == 0.0 {
+        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        f64::NAN
+    } else {
+        v_v1 % v_v2
+    };
+    s.put_stack(new_value);
+}
+
+fn div_float_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<f64>();
+    let v_v1 = *s.get_stack::<f64>();
+    let new_value = v_v1 / v_v2;
+    s.put_stack(new_value);
+}
+
+fn rem_float_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
     let new_value = v_v1 % v_v2;
@@ -992,6 +1058,13 @@ fn get_text_sub(s: &mut State) {
 }
 
 fn text_character(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = s.string();
+    let new_value = s.text_char_or_raise(v_v1.str(), v_v2);
+    s.put_stack(new_value);
+}
+
+fn text_character_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = s.string();
     let new_value = ops::text_character(v_v1.str(), v_v2);
@@ -1593,6 +1666,11 @@ fn var_vector(s: &mut State) {
     s.put_stack(new_value);
 }
 
+fn tag_fault(s: &mut State) {
+    let v_kind = *s.code::<u8>();
+    s.database.set_format_fault(v_kind);
+}
+
 fn length_vector(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = i64::from(vector::length_vector(&v_r, &s.database.allocations));
@@ -1614,11 +1692,26 @@ fn get_vector(s: &mut State) {
     let v_size = *s.code::<u16>();
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = vector::get_vector(&v_r, u32::from(v_size), v_index, &s.database.allocations);
+    let new_value = s.vec_get_or_raise(&v_r, u32::from(v_size), v_index);
     s.put_stack(new_value);
 }
 
 fn vector_ref(s: &mut State) {
+    let v_index = *s.get_stack::<i64>();
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = s.vec_ref_or_raise(&v_r, v_index);
+    s.put_stack(new_value);
+}
+
+fn get_vector_nullable(s: &mut State) {
+    let v_size = *s.code::<u16>();
+    let v_index = *s.get_stack::<i64>();
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = vector::get_vector(&v_r, u32::from(v_size), v_index, &s.database.allocations);
+    s.put_stack(new_value);
+}
+
+fn vector_ref_nullable(s: &mut State) {
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
     let new_value = s.database.get_ref(

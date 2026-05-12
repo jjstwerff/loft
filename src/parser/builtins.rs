@@ -357,25 +357,17 @@ impl Parser {
         };
         // A14.5/A14.6: check if the worker qualifies for the light path.
         // Light path: primitive return (not text, not reference), no recursive store alloc.
-        // A14.5/A14.6: auto-select light path for eligible workers.
-        let worker_d_nr = if let Value::Int(d) = &list[0] {
-            *d as u32
-        } else {
-            u32::MAX
-        };
-        let is_primitive_return =
-            !matches!(&worker_ret_type, Type::Text(_) | Type::Reference(_, _));
-        let light_m = if is_primitive_return && worker_d_nr != u32::MAX {
-            self.check_light_eligible(worker_d_nr)
-        } else {
-            None
-        };
-
-        let (par_fn_name, extra_pool_arg) = if let Some(m) = light_m {
-            ("n_parallel_for_light", Some(Value::Int(m as i32)))
-        } else {
-            ("n_parallel_for", None)
-        };
+        // ARC.md A4 (closed 2026-05-07) — `n_parallel_for_light` was
+        // retired and `n_parallel_for` is a panic stub.  This
+        // user-facing `parallel_for(...)` builtin path has no
+        // exerciser in the test corpus today; the `for ... par(...)`
+        // clause goes through `build_parallel_for_ir` instead.  If
+        // a future caller exercises this path, the panic stub fires
+        // with a clear diagnostic pointing back to A4.  Keep the
+        // routing wired so def-resolution succeeds even though the
+        // landed call panics at runtime.
+        let _ = worker_ret_type;
+        let par_fn_name = "n_parallel_for";
         let par_for_d_nr = self.data.def_nr(par_fn_name);
         if par_for_d_nr == u32::MAX {
             diagnostic!(
@@ -394,7 +386,6 @@ impl Parser {
             list[0].clone(),                // func: d_nr as integer
         ];
         // pool_m is hardcoded in the native function
-        let _ = extra_pool_arg;
         // Append any extra args (verified count above; types passed through).
         for extra in list.iter().skip(3) {
             augmented.push(extra.clone());
@@ -403,117 +394,138 @@ impl Parser {
         result_ref_type
     }
 
-    /// Check if a worker function qualifies for the light parallel path.
-    /// Returns `Some(M)` (pool stores per worker) if eligible, `None` otherwise.
-    /// Eligible = no text return AND no store allocation inside recursive calls.
-    pub(crate) fn check_light_eligible(&self, worker_d_nr: u32) -> Option<usize> {
-        if worker_d_nr as usize >= self.data.definitions.len() {
-            return None;
+    // ARC.md A4 (closed 2026-05-07) — `check_light_eligible` and its
+    // 5 call-graph-walk helpers (`has_recursive_allocation`,
+    // `fn_allocates_stores`, `count_ref_vars`, `extract_callees`,
+    // `collect_callees`) were removed when the light Concat path
+    // was retired.  The eligibility check decided whether a worker
+    // could skip per-thread store deep-copy by routing through the
+    // light pool — irrelevant now that every par worker streams
+    // through the Queue family.  ~110 LOC deleted.
+
+    /// ARC.md A5 — user-facing `par_fold(items, init, fold, threads)`
+    /// builtin.  Resolves the fold function reference to a d_nr at
+    /// parse time and emits a single `Call` to `n_parallel_fold`.
+    /// V1 restriction (mirrors the runtime, see
+    /// `default/01_code.loft::parallel_fold`): `items` must be
+    /// `vector<integer>`, `init` and the worker's accumulator /
+    /// row / return types must all be `integer`.  Heterogeneous
+    /// types (`vector<T>` + `fn(R, T) -> R`) await a follow-up
+    /// when the runtime relaxes its V1 gate.
+    ///
+    /// Syntax: `par_fold(items, init, fn worker, threads)` —
+    /// `fn worker` is the fn-reference form (parser converts to
+    /// `Value::Int(d_nr)` with `Type::Function(...)`).
+    pub(crate) fn parse_par_fold(
+        &mut self,
+        val: &mut Value,
+        list: &[Value],
+        types: &[Type],
+    ) -> Type {
+        let int_tp = Type::Integer(crate::data::IntegerSpec::wide());
+        if self.first_pass {
+            return int_tp;
         }
-        // Text return disqualifies — needs special work-buffer handling.
-        if matches!(self.data.def(worker_d_nr).returned, Type::Text(_)) {
-            return None;
+        if list.len() != 4 {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold requires exactly 4 arguments: items, init, fn fold, threads"
+            );
+            return Type::Unknown(0);
         }
-        // Walk the call graph to detect recursive store allocation.
-        let mut visited = std::collections::HashSet::new();
-        let mut on_stack = std::collections::HashSet::new();
-        let mut max_stores = 0usize;
-        if self.has_recursive_allocation(worker_d_nr, &mut visited, &mut on_stack, &mut max_stores)
+        // V1: items must be vector<integer>.
+        let elem_tp = if let Type::Vector(elem, _) = &types[0] {
+            (**elem).clone()
+        } else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold: first argument must be a vector<integer>"
+            );
+            return Type::Unknown(0);
+        };
+        if !matches!(elem_tp, Type::Integer(_)) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold (V1): items element type must be integer; got {}",
+                elem_tp.name(&self.data)
+            );
+            return Type::Unknown(0);
+        }
+        // V1: init must be integer.
+        if !matches!(types[1], Type::Integer(_)) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold (V1): init must be integer; got {}",
+                types[1].name(&self.data)
+            );
+            return Type::Unknown(0);
+        }
+        // V1: fold must be fn(integer, integer) -> integer.
+        let (fn_args, fn_ret) = if let Type::Function(args, ret, _) = &types[2] {
+            (args.clone(), (**ret).clone())
+        } else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold: third argument must be a function reference (use `fn <name>`)"
+            );
+            return Type::Unknown(0);
+        };
+        if fn_args.len() != 2
+            || !matches!(fn_args[0], Type::Integer(_))
+            || !matches!(fn_args[1], Type::Integer(_))
+            || !matches!(fn_ret, Type::Integer(_))
         {
-            return None;
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold (V1): fold function must have signature `fn(integer, integer) -> integer`"
+            );
+            return Type::Unknown(0);
         }
-        Some(max_stores + 1)
-    }
-
-    /// DFS walk of the call graph. Returns true if a cycle contains store allocation.
-    fn has_recursive_allocation(
-        &self,
-        d_nr: u32,
-        visited: &mut std::collections::HashSet<u32>,
-        on_stack: &mut std::collections::HashSet<u32>,
-        max_stores: &mut usize,
-    ) -> bool {
-        if on_stack.contains(&d_nr) {
-            // Cycle detected — check if this function allocates stores.
-            return self.fn_allocates_stores(d_nr);
+        // threads must be integer.
+        if !matches!(types[3], Type::Integer(_)) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par_fold: threads must be integer; got {}",
+                types[3].name(&self.data)
+            );
+            return Type::Unknown(0);
         }
-        if visited.contains(&d_nr) {
-            return false;
+        let par_fold_d_nr = self.data.def_nr("n_parallel_fold");
+        if par_fold_d_nr == u32::MAX {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "internal error: n_parallel_fold not found"
+            );
+            return Type::Unknown(0);
         }
-        visited.insert(d_nr);
-        on_stack.insert(d_nr);
-
-        // Count reference-type variables in this function (store allocations).
-        let ref_count = self.count_ref_vars(d_nr);
-        *max_stores = (*max_stores).max(ref_count);
-
-        // Walk all calls in the function body.
-        let code = self.data.def(d_nr).code.clone();
-        let callees = self.extract_callees(&code);
-        for callee in callees {
-            if self.has_recursive_allocation(callee, visited, on_stack, max_stores) {
-                on_stack.remove(&d_nr);
-                return true;
-            }
-        }
-        on_stack.remove(&d_nr);
-        false
-    }
-
-    /// Check if a function body contains store allocation (`OpDatabase` calls).
-    fn fn_allocates_stores(&self, d_nr: u32) -> bool {
-        self.count_ref_vars(d_nr) > 0
-    }
-
-    /// Count reference-type local variables (each may need a store).
-    /// Count locally-allocated reference variables (excluding arguments — those
-    /// are passed by the caller and don't allocate new stores).
-    fn count_ref_vars(&self, d_nr: u32) -> usize {
-        if d_nr as usize >= self.data.definitions.len() {
-            return 0;
-        }
-        let vars = &self.data.def(d_nr).variables;
-        (0..vars.next_var())
-            .filter(|&v| !vars.is_argument(v) && matches!(vars.tp(v), Type::Reference(_, _)))
-            .count()
-    }
-
-    /// Extract all direct callee `d_nr`s from a Value tree.
-    fn extract_callees(&self, val: &Value) -> Vec<u32> {
-        let mut callees = Vec::new();
-        self.collect_callees(val, &mut callees);
-        callees
-    }
-
-    fn collect_callees(&self, val: &Value, out: &mut Vec<u32>) {
-        match val {
-            Value::Call(d, args) => {
-                if *d != u32::MAX && (*d as usize) < self.data.definitions.len() {
-                    out.push(*d);
-                }
-                for a in args {
-                    self.collect_callees(a, out);
-                }
-            }
-            Value::Block(bl) | Value::Loop(bl) => {
-                for op in &bl.operators {
-                    self.collect_callees(op, out);
-                }
-            }
-            Value::Set(_, expr) | Value::Return(expr) | Value::Drop(expr) => {
-                self.collect_callees(expr, out);
-            }
-            Value::If(c, t, f) => {
-                self.collect_callees(c, out);
-                self.collect_callees(t, out);
-                self.collect_callees(f, out);
-            }
-            Value::Insert(ops) => {
-                for op in ops {
-                    self.collect_callees(op, out);
-                }
-            }
-            _ => {}
-        }
+        // Pop order in the runtime (top of stack first):
+        //   n_extra → extras... → threads → fold → init → input
+        // So the parser pushes (left-to-right) in declared order:
+        //   input, init, fold, threads, then `n_extra` (= 0 for V1).
+        // The `n_extra` count is emitted explicitly here, mirroring
+        // `build_parallel_for_ir` at `src/parser/collections.rs:1902`
+        // (the for-par desugar's analogous emit).  Codegen at
+        // `src/state/codegen.rs:2007` would also generate any extras
+        // beyond the 4 declared params, but the n_extra COUNT itself
+        // must come from here.
+        *val = Value::Call(
+            par_fold_d_nr,
+            vec![
+                list[0].clone(), // input
+                list[1].clone(), // init
+                list[2].clone(), // fold (Value::Int(d_nr) — bare fn name)
+                list[3].clone(), // threads
+                Value::Int(0),   // n_extra (V1: no extras)
+            ],
+        );
+        int_tp
     }
 }

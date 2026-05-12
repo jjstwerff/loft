@@ -5,371 +5,364 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Roadmap
 
-## Roadmap vs. release plan
+Open work items grouped by value category, with explicit dependencies and effort estimates.
 
-This file is the **wish list**: items we want to do, ordered by
-when they fit best into the project's arc.  Not every roadmap
-item blocks a release — many can slip from one milestone to the
-next without holding up a ship.
+The methodology behind this file (categories, no-time-projections, features-need-plans) lives in [`plans/README.md` § Roadmap workflow](plans/README.md#roadmap-workflow).  This file holds only the work tables.
 
-The companion file [RELEASE.md](RELEASE.md) answers a narrower
-question: "what MUST be true before we tag and publish?"  When a
-roadmap item is also a release blocker, it gets echoed into
-RELEASE.md's gate lists.
+| Legend | Meaning |
+|---|---|
+| **S / R / G / F / U / C / Q / N** | Value category (silent-failure / regression / goal / foundation / UX / clean / quality / niche).  Default reading order — pick from the highest tier with open work. |
+| **E** column | XS = Tiny · S = Small · M = Medium · MH = Med-High · H = High · VH = Very High · L = Large multi-arc |
+| **Design** column | ✓ = detailed · ~ = partial · — = needs design |
 
-| File | Scope | Question it answers |
-|---|---|---|
-| **ROADMAP.md** (this file) | Things we'd like to do | "What's the arc of work, and in what order?" |
-| **[RELEASE.md](RELEASE.md)** | Ship checklist | "What must be true before we can publish?" |
-| **[PLANNING.md](PLANNING.md)** | Priority-ordered backlog | "What's the next best thing to pick up?" |
+| Companion file | Purpose |
+|---|---|
+| [`RELEASE.md`](RELEASE.md) | What MUST be true before tagging |
+| [`PLANNING.md`](PLANNING.md) | Priority-ordered backlog (next-best pickup) |
+| [`plans/README.md`](plans/README.md) | docs-vs-plans rule + plan workflow + roadmap workflow + value categories |
 
-Items in expected implementation order, grouped by milestone.
-Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
-
-**Project goal:** browser games that anyone can play via a shared link.
-Native OpenGL is supported for desktop enthusiasts.  Server/multiplayer
-comes after the single-player browser experience works.
-
-## Milestone narrative
-
-| Version | Headline                                       | Status |
-|---------|------------------------------------------------|--------|
-| 0.8.0–0.8.4 | Game-ready interpreter, web export, JSON / HTTP, Brick Buster | **Shipped** (latest 0.8.4 — 2026-04-25) |
-| 0.8.5   | **loft is learnable** — syntax highlighting, VS Code extension, 30-minute tutorial, native-CI parity | Next |
-| 0.8.6   | **loft is extensible** — `loft install <name>` + package registry + zero-boilerplate native extensions | Planned |
-| 0.9.0   | **Fully working loft language** — REPL + error recovery + warnings + libraries extracted to their own repos | Planned |
-| 1.0.0   | **Totally sure everything works** — IDE + multiplayer + stability contract | Planned |
-
-**Demo applications** (Brick Buster, Moros editor, Web IDE, game-client / server
-libraries) ship on their own cadence — not gated by language releases.  See
-[Demo applications — independent lifecycles](#demo-applications--independent-lifecycles)
-at the end of this file for their backlogs.
-
-**Effort:** XS = Tiny · S = Small · M = Medium · MH = Med–High · H = High · VH = Very High
-
-**Design:** ✓ = detailed design in place · ~ = partial/outline · — = needs design
-
-**Maintenance rule:** When an item is completed, remove it from this file.
-Completed work belongs in CHANGELOG.md and git history.
+**Project goal:** browser games anyone can play via a shared link.  Native OpenGL is supported for desktop enthusiasts; server/multiplayer comes after the single-player browser experience works.
 
 ---
 
-## Carried over from 0.8.4
+## S — Silent failure / data-loss prevention
 
-| ID    | Title                                                  | E  | Notes |
-|-------|--------------------------------------------------------|----|-------|
-| G3    | Tilemap rendering (grid-based 2D, batched draw)        | M  | Partial — the brick grid + `level_brick(lv,r,c)` dispatcher in Brick Buster is the tilemap for that game; a generic `lib/tilemap` package is still open. |
-| G7.P  | 🌐 **Playable Brick Buster on itch.io** — `--html` works and Pages already serves the build; a separate itch.io upload remains.  Demo-app deliverable; no language work attached. | S | Optional |
+Features that "appear to work" but don't, or that lose data without indication.  HIGHEST priority because invisible to users.  See [plans/README.md § Value categories](plans/README.md#value-categories--what-kind-of-value-not-just-how-much) for why S sits above R.
 
----
-
-## 0.8.5 — loft is learnable
-
-**Goal:** a first-time visitor installs loft, gets syntax highlighting
-in their editor, works through a 30-minute tutorial, and can step
-through a `--native` build under stock GDB or LLDB.  Closes the "on
-your own" wall newcomers hit today.
-
-**Advertising narrative:** "learnable" is the first of three
-advertising-readiness ships (0.8.5 / 0.8.6 / 0.9.0).  0.8.6 adds
-extensibility + first-class IDE support; 0.9.0 finishes the language
-surface.  Each is a standalone tag.
-
-### Tooling polish
-
-| ID    | Title                                                  | E  | Design | Source           |
-|-------|--------------------------------------------------------|----|--------|------------------|
-| SH.1  | TextMate grammar for `.loft`                           | S  | ✓      | DX.md            |
-| SH.2  | VS Code extension (grammar + snippets + run task)      | S  | ✓      | DX.md            |
-| DX.1  | Quick-start `examples/` directory at repo root         | XS | ✓      | DX.md            |
-| DX.3  | "Learn loft in 30 minutes" walkthrough page            | S  | ✓      | DX.md            |
-| NDB.0 | `--native-debug` flag — DWARF in `--native` builds     | XS | ✓      | NATIVE_DEBUG.md  |
-
-*(DX.4 native-CI parity already in place — `tests/native.rs::native_dir` /
-`native_scripts` run inside `cargo nextest run --profile ci` with empty
-NATIVE_SKIP / SCRIPTS_NATIVE_SKIP lists.)*
-
-### Ship criteria
-
-- Every item above merged to main with `make ci` green.
-- One external programmer (outside the loft project) can install
-  SH.2 from VS Code Marketplace, open `examples/10-2d-canvas.loft`,
-  read DX.3 top-to-bottom, and run the demo within 30 minutes from
-  zero prior exposure.  Hands-on feedback collected before tagging.
-- `loft --native --native-debug hello.loft` produces a binary that
-  steps cleanly under stock `gdb` / `lldb` — variable names are
-  rust-internal but the basic motion works.
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| (cross) | Closure validation — capture × storage matrix | M | ✓ | plans/15-closure-validation/README.md |
+| (cross) | Coroutine validation — yielded type × drive context matrix | M | ✓ | plans/future/16-coroutine-validation/README.md |
+| (cross) | Match validation — subject type × pattern shape matrix | M | ✓ | plans/future/18-match-validation/README.md |
+| (cross) | Struct-enum validation — variant payload × dispatch context matrix | M | ✓ | plans/future/19-struct-enum-validation/README.md |
+| (cross) | Keyed collection validation — collection × operation matrix | M | ✓ | plans/future/20-collection-validation/README.md |
+| Q* | JSON parse-error diagnostics (Q1) — parse currently fails silently in some shapes | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
+| (cross) | Closure-DbRef leak (LIFETIME.md "Type::Function — NOT YET HANDLED") | M | ~ | plans/15-closure-validation/ phase 03 (active risk) |
 
 ---
 
-## 0.8.6 — loft is extensible + first-class editor support
+## R — Regression / release-blocker
 
-**Goal:** `loft install <name>` works; a user can add external
-libraries without cloning and wiring by hand; the native-extension
-author experience is boilerplate-free.  In parallel, the Loft
-Language Server lights up VSCode, Eclipse, JetBrains, and Neovim with
-diagnostics + outline + hover via thin marketplace plugins.
+Known broken behavior that gates the next release.  Currently empty — bug-fix workflow lands these as P-issues directly (PROBLEMS.md + test + commit), not as plans.  Items would surface here when a regression accumulates beyond a single fix.
 
-### Ecosystem foundation
-
-| ID      | Title                                                  | E  | Design | Source           |
-|---------|--------------------------------------------------------|----|--------|------------------|
-| FFI.1   | Generic type marshaller from `#native` signature       | MH | ✓      | GAME_INFRA.md    |
-| FFI.2   | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | GAME_INFRA.md    |
-| FFI.3   | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
-| FFI.4   | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
-| PKG.7   | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
-| PKG.REG | Central package registry MVP — `loft install <name>`   | M  | ✓      | PACKAGES.md      |
-
-### Language server + IDE plugins
-
-One LSP server unlocks first-class support across every editor that
-speaks the protocol.  Per-IDE plugins are thin marketplace shims
-(~200 lines each) on top of LSP4E / LSP4IJ / nvim-lspconfig.
-
-| ID            | Title                                                  | E  | Design | Source           |
-|---------------|--------------------------------------------------------|----|--------|------------------|
-| LSP.1         | `loft-lsp` MVP — diagnostics + outline + hover         | M  | ✓      | LSP.md           |
-| IDE.ECLIPSE   | Eclipse plugin via LSP4E (LSP.1 features)              | S  | ✓      | LSP.md           |
-| IDE.JETBRAINS | JetBrains plugin via LSP4IJ (LSP.1 features)           | S  | ✓      | LSP.md           |
-| IDE.NEOVIM    | Neovim docs + `nvim-lspconfig` snippet                 | XS | ✓      | LSP.md           |
-
-### Ship criteria
-
-- `loft install <name>` resolves and installs from the public
-  registry for at least 3 libraries.
-- FFI.1–4 land together; `lib/graphics/native/` has at most 3
-  hand-written type-pun functions remaining (down from ~15 today).
-- A worked example of a third-party library outside the `loft`
-  repo registering to the registry and being `loft install`-able.
-- All 0.8.5 tooling (SH.1 / SH.2 / DX.1 / DX.3) still green against
-  the registry-resolved libraries — no tutorial drift.
-- `loft-lsp` serves diagnostics + outline + hover under VSCode,
-  Eclipse, JetBrains, and Neovim on a sample 1k-line program, with
-  re-parse latency under 100 ms in release mode.
-- Eclipse Marketplace listing live; JetBrains Marketplace listing
-  live; `nvim-loft.lua` snippet shipped under `doc/`.
+*(no entries today)*
 
 ---
 
-## 0.9.0 — Fully working loft language
+## G — Goal-enabling
 
-**Goal:** the language itself is feature-complete and the library
-ecosystem lives in its own GitHub repos, leaving the `loft` project
-as a lean interpreter + compiler + stdlib core.  Building on 0.8.5
-(learnability) and 0.8.6 (extensibility), 0.9.0 closes the remaining
-language gaps — error recovery, REPL, developer warnings — that
-made "fully working language" a premature label in the earlier
-plan, and completes the repo split that lets the ecosystem scale
-beyond the solo-maintainer monorepo.
+Directly enables loft's core use case: browser games anyone can play via shared link, multiplayer, native-game debugging.
 
-**Advertising readiness** — the 0.8.5 / 0.8.6 / 0.9.0 sequence is
-the three-ship progression:
-- **0.8.5** — *learnable*: syntax highlighting, VS Code extension,
-  30-minute tutorial, native-mode debugging in stock GDB / LLDB.
-- **0.8.6** — *extensible + first-class IDE*: `loft install <name>`,
-  package registry, zero-boilerplate FFI, language server with
-  Eclipse / JetBrains / Neovim plugins.
-- **0.9.0** — *fully working*: language polish (L1 + P2 + W-warn +
-  C52 + C53), full LSP editing surface + DAP debugger, plus
-  `PKG.EXTRACT` moving every library out of the interpreter repo.
+### Native game debugging
 
-Each ship is a standalone tag with its own CHANGELOG entry — users
-don't wait for 0.9.0 to see loft graduate from "curious hobby
-project" to "bettable scripting language".
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| NDB.0 | `--native-debug` flag — DWARF in `--native` builds | XS | ✓ | plans/future/25-native-debug/README.md |
+| NDB.1 | `.loft.map` source map + `loft-gdb.py` / `loft-lldb.py` plugins | M | ✓ | plans/future/25-native-debug/README.md |
+| NDB.2 | DWARF rewrite — point `.debug_line` / `.debug_info` directly at `.loft` | MH | ✓ | plans/future/25-native-debug/README.md |
 
-PKG.EXTRACT is the last 0.9.0 item — it depends on 0.8.6's PKG.REG
-+ FFI.1–4, so starting it earlier duplicates work.
+### Multiplayer + protocol stack
 
-### Language polish
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| (cross) | Event-loop abstraction (client + server protocol) | MH | ✓ | plans/future/23-event-loop/README.md |
+| (cross) | Protocol-validation vehicle (TIC_TAC_TOE — v1/v2/v3/v5 shipped, v3.5/v4/v6 gated on plan-22 + plan-23 YIELD.2) | M | ✓ | plans/future/32-tic-tac-toe/README.md |
+| (cross) | First real-game milestone — multi-client hex editor | M | ✓ | plans/future/24-multiplayer-editor/README.md |
+| (cross) | `lib/server` hardening (binary broadcast / send_to, recv-bytes, observability) — prereq for plan-36 | M | ✓ | plans/future/34-server-hardening/README.md |
+| SRV.1 | Plain HTTP routing + middleware | M | ✓ | lib_plans/future/08-server/README.md |
+| SRV.2 | HTTPS with static PEM certificates | S | ✓ | lib_plans/future/08-server/README.md |
+| SRV.3 | WebSocket support | S | ✓ | lib_plans/future/08-server/README.md |
+| SRV.4 | Authentication: JWT, session, API key | M | ✓ | lib_plans/future/08-server/README.md |
+| SRV.5 | ACME / Let's Encrypt automatic certs | M | ✓ | lib_plans/future/08-server/README.md |
+| SRV.6 | CORS, rate limiting, static files | M | ✓ | lib_plans/future/08-server/README.md |
+| SRV.G | Game loop: ws_poll, broadcast, ConnectionRegistry | M | ✓ | lib_plans/future/08-server/README.md |
+| GC.1 | WebSocket client + GameEnvelope protocol | M | ✓ | lib_plans/future/10-game-client/README.md |
+| GC.2 | Lobby + matchmaking | S | ✓ | lib_plans/future/10-game-client/README.md |
+| GC.3 | Fixed-timestep game loop | S | ✓ | lib_plans/future/10-game-client/README.md |
+| GC.4 | Client-side prediction + reconciliation | M | ✓ | lib_plans/future/10-game-client/README.md |
+| GC.5 | WASM script loading + Ed25519 verification | M | ✓ | lib_plans/future/10-game-client/README.md |
+| GC.6 | Shared game logic + Tic-Tac-Toe demo | M | ✓ | lib_plans/future/10-game-client/README.md |
 
-| ID     | Title                                                  | E  | Design | Source           |
-|--------|--------------------------------------------------------|----|--------|------------------|
-| L1     | Error recovery after token failures                    | M  | ✓      | PLANNING.md      |
-| P2     | REPL / interactive mode                                | M  | ✓      | PLANNING.md      |
-| W-warn | Developer warnings (Clippy-inspired)                   | M  | ✓      | GAME_INFRA.md    |
-| AOT    | Auto-compile libraries to native shared libs           | M  | ✓      | PLANNING.md      |
-| C52    | Stdlib name clash: warning + `std::` prefix            | M  | ✓      | PLANNING.md      |
-| C53    | Match arms: library enums + bare variant names         | M  | ✓      | PLANNING.md      |
+### Browser game UI + scriptable scenes
 
-### User-biting caveats — all ship in 0.9.0
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| W2 | Editor shell (CodeMirror 6 + Loft grammar) | M | ✓ | lib_plans/future/07-web-ide/README.md |
+| W3 | Symbol navigation (go-to-def, find-usages) | M | ✓ | lib_plans/future/07-web-ide/README.md |
+| W4 | Multi-file projects (IndexedDB) | M | ✓ | lib_plans/future/07-web-ide/README.md |
+| W5 | Docs & examples browser | M | ✓ | lib_plans/future/07-web-ide/README.md |
+| W6 | Export/import ZIP + PWA offline | M | ✓ | lib_plans/future/07-web-ide/README.md |
+| SC.1 | Scene script API — hooks for hex enter/exit/interact | M | ✓ | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.2 | IDE panel in scene editor | M | ✓ | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.3 | In-browser compile + hot-reload | M | ✓ | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.4 | Script sandbox — limited API | S | ✓ | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.5 | Built-in script templates | S | ✓ | lib_plans/future/13-scriptable-scenes/README.md |
+| SC.6 | Script sharing via scene JSON | S | ✓ | lib_plans/future/13-scriptable-scenes/README.md |
 
-Each is a commitment, not a maybe.  Deferring any makes the
-"fully working language" label dishonest.  Step plans:
-[QUALITY.md](QUALITY.md).
+### Game rendering
 
-| ID   | Title                                                  | E  | Source                      |
-|------|--------------------------------------------------------|----|-----------------------------|
-| C54  | `integer` → i64; `long` becomes a historical alias     | L  | CAVEATS.md, QUALITY.md      |
-| P54  | First-class `JsonValue` enum; old text-based JSON gone | MH | PROBLEMS.md #54, QUALITY.md |
-
-### Language server — full editing surface
-
-Builds on LSP.1 from 0.8.6.  Once these land, parity with JDT-for-Java
-in Eclipse is achievable, modulo optional project-wizard / debug-
-perspective polish.
-
-| ID     | Title                                                  | E  | Design | Source           |
-|--------|--------------------------------------------------------|----|--------|------------------|
-| LSP.2  | `loft-lsp` editing — completion, def, refs, rename, semantic tokens, code actions | MH | ✓ | LSP.md |
-| LSP.3  | `loft-dap` MVP — DAP server for interpreter-mode debug | MH | ✓ | LSP.md |
-| NDB.1  | `.loft.map` source map + `loft-gdb.py` / `loft-lldb.py` plugins | M  | ✓ | NATIVE_DEBUG.md  |
-
-### Compilation cache and constant store
-
-The `.loftc` bytecode cache and `CONST_STORE` are implemented
-(Phase A + D).  Remaining work must land in 0.9.0 to avoid stability
-risk in later milestones.
-
-| ID     | Title                                                  | E  | Design | Source           |
-|--------|--------------------------------------------------------|----|--------|------------------|
-| CS.B   | mmap cache loading (native)                            | S  | ✓      | CONST_STORE.md   |
-| CS.C1  | Serialize `Data` struct to binary (prereq for CS.C2/C3) | MH | ~     | CONST_STORE.md   |
-| CS.C2  | `build.rs` pre-compile stdlib to `.loftc`              | M  | ✓      | CONST_STORE.md   |
-| CS.C3  | WASM: `include_bytes!` stdlib cache, skip re-parse     | S  | ✓      | CONST_STORE.md   |
-
-### Developer experience
-
-| ID    | Title                                                  | E  | Design | Source           |
-|-------|--------------------------------------------------------|----|--------|------------------|
-| DX.2  | CI: add package tests + native tests to workflow       | XS | ✓      | DX.md            |
-
-### Library extraction
-
-| ID          | Title                                                  | E  | Design | Source           |
-|-------------|--------------------------------------------------------|----|--------|------------------|
-| PKG.EXTRACT | Move `lib/*/` out into per-family GitHub repos via PKG.REG | L | ✓ | PACKAGES.md      |
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| (cross) | Graphics library bundle (2D canvas + GLB + OpenGL + WebGL) — low-level `gl_*` shipped; high-level renderer designed | H | ✓ | lib_plans/future/02-graphics/README.md |
 
 ---
 
-## 1.0.0 — Totally sure everything works
+## F — Foundation
 
-**Goal:** the stability contract. Anyone can write, run, and share a
-program — terminal or browser — and trust that it will keep working.
-Ship the IDE, ship multiplayer, and prove the language is bulletproof
-with hands-on testing on every supported platform.
+Unblocks 2+ downstream plans.  Lattice points in the dependency graph.
 
-### IDE + multiplayer must-haves
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| PKG.REG | Central package registry MVP — `loft install <name>` | M | ✓ | PACKAGES.md § Open work |
+| PKG.7 | Lock file (`loft.lock`) for reproducible builds | S | ✓ | PACKAGES.md § Open work |
+| PKG.EXTRACT | Move `lib/*/` out into per-family GitHub repos | L | ✓ | lib_plans/future/12-library-extraction/README.md |
+| FFI.1 | Generic type marshaller from `#native` signature | MH | ✓ | lib_plans/future/05-game-infra/README.md |
+| FFI.2 | Generic cdylib loader — scan exports, HashMap | S | ✓ | lib_plans/future/05-game-infra/README.md |
+| FFI.3 | Eliminate per-function glue in native.rs | M | ✓ | lib_plans/future/05-game-infra/README.md |
+| FFI.4 | Docs: zero-boilerplate native function guide | S | ✓ | lib_plans/future/05-game-infra/README.md |
+| LSP.1 | `loft-lsp` MVP — diagnostics + outline + hover | M | ✓ | lib_plans/future/09-lsp/README.md |
+| (cross) | Lazy stdlib loading — trigger-based pay-for-what-you-use | M | ✓ | lib_plans/future/03-lazy-stdlib/README.md |
 
-| ID    | Title                                                  | E  | Design | Source           |
-|-------|--------------------------------------------------------|----|--------|------------------|
-| W2    | Editor shell (CodeMirror 6 + Loft grammar)             | M  | ✓      | WEB_IDE.md       |
-| W3    | Symbol navigation (go-to-def, find-usages)             | M  | ✓      | WEB_IDE.md       |
-| W4    | Multi-file projects (IndexedDB)                        | M  | ✓      | WEB_IDE.md       |
-| W5    | Docs & examples browser                                | M  | ✓      | WEB_IDE.md       |
-| W6    | Export/import ZIP + PWA offline                        | M  | ✓      | WEB_IDE.md       |
+---
 
-*(Desktop IDE plugins — IDE.ECLIPSE, IDE.JETBRAINS, IDE.NEOVIM —
-shipped in 0.8.6 alongside LSP.1.  Web IDE W2–W6 above uses the same
-`loft-lsp` server compiled to WASM.)*
+## U — Ease of use
 
-### Scene scripting
+First-time-user experience, daily ergonomics, IDE polish.
 
-| ID    | Title                                                  | E  | Design | Depends on    |
-|-------|--------------------------------------------------------|----|--------|---------------|
-| SC.1  | Scene script API — hooks for hex enter/exit/interact   | M  | ✓      | MO.3, W2      |
-| SC.2  | IDE panel in scene editor                              | M  | ✓      | W2, MO.E1     |
-| SC.3  | In-browser compile + hot-reload                        | M  | ✓      | W1, SC.1      |
-| SC.4  | Script sandbox — limited API                           | S  | ✓      | SC.3          |
-| SC.5  | Built-in script templates                              | S  | ✓      | SC.1          |
-| SC.6  | Script sharing via scene JSON                          | S  | ✓      | SC.3, MO.2    |
-| SC.P  | 🌐 **Scriptable scenes** in browser                     | S  | ✓      | SC.3, MO.P    |
+### First-time experience + tutorial
 
-### Multiplayer
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| (cross) | Better error messages — `file:line:col` + caret + suggestion | M | ✓ | plans/07-error-messages/README.md |
+| SH.1 | TextMate grammar for `.loft` | S | ✓ | plans/future/27-developer-experience/README.md |
+| SH.2 | VS Code extension (grammar + snippets + run task) | S | ✓ | plans/future/27-developer-experience/README.md |
+| DX.1 | Quick-start `examples/` directory at repo root | XS | ✓ | plans/future/27-developer-experience/README.md |
+| DX.3 | "Learn loft in 30 minutes" walkthrough page | S | ✓ | plans/future/27-developer-experience/README.md |
+| DX.2 | CI: add package tests + native tests to workflow | XS | ✓ | plans/future/27-developer-experience/README.md |
 
-| ID    | Title                                                  | E  | Design | Source              |
-|-------|--------------------------------------------------------|----|--------|---------------------|
-| SRV.1 | Plain HTTP routing + middleware                        | M  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.2 | HTTPS with static PEM certificates                     | S  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.3 | WebSocket support                                      | S  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.4 | Authentication: JWT, session, API key                  | M  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.5 | ACME / Let's Encrypt automatic certs                   | M  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.6 | CORS, rate limiting, static files                      | M  | ✓      | WEB_SERVER_LIB.md   |
-| SRV.G | Game loop: ws_poll, broadcast, ConnectionRegistry      | M  | ✓      | WEB_SERVER_LIB.md   |
-| GC.1  | WebSocket client + GameEnvelope protocol               | M  | ✓      | GAME_CLIENT_LIB.md  |
-| GC.2  | Lobby + matchmaking                                    | S  | ✓      | GAME_CLIENT_LIB.md  |
-| GC.3  | Fixed-timestep game loop                               | S  | ✓      | GAME_CLIENT_LIB.md  |
-| GC.4  | Client-side prediction + reconciliation                | M  | ✓      | GAME_CLIENT_LIB.md  |
-| GC.5  | WASM script loading + Ed25519 verification             | M  | ✓      | GAME_CLIENT_LIB.md  |
-| GC.6  | Shared game logic + Tic-Tac-Toe demo                   | M  | ✓      | GAME_CLIENT_LIB.md  |
-| MP.P  | 🌐 **Moros multiplayer** — DM + players share live scene | S  | ✓      | hosted server       |
+### Day-to-day ergonomics
 
-### Stability gate (no shortcuts)
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| P2 | REPL / interactive mode | M | ✓ | plans/future/08-repl-and-introspection/README.md |
+| W-warn | Developer warnings (Clippy-inspired) | M | ✓ | lib_plans/future/05-game-infra/README.md |
+| L1 | Error recovery after token failures | M | ✓ | (needs plan promotion) |
 
-The 1.0.0 stability contract requires every item below to be checked off
-before tagging — no "appears fixed" exceptions.
+### IDE editing surface
+
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| LSP.2 | `loft-lsp` editing — completion, def, refs, rename, semantic tokens, code actions | MH | ✓ | lib_plans/future/09-lsp/README.md |
+| LSP.3 | `loft-dap` MVP — DAP server for interpreter-mode debug | MH | ✓ | lib_plans/future/09-lsp/README.md |
+| IDE.ECLIPSE | Eclipse plugin via LSP4E (LSP.1 features) | S | ✓ | lib_plans/future/09-lsp/README.md |
+| IDE.JETBRAINS | JetBrains plugin via LSP4IJ (LSP.1 features) | S | ✓ | lib_plans/future/09-lsp/README.md |
+| IDE.NEOVIM | Neovim docs + `nvim-lspconfig` snippet | XS | ✓ | lib_plans/future/09-lsp/README.md |
+
+---
+
+## C — Clean features
+
+Language correctness, removes special cases.  (Validation matrices that catch silent-failure variants live in S above; this section holds clean-feature work that doesn't primarily prevent silent failure.)
+
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| P54 | First-class `JsonValue` enum; old text-based JSON gone | MH | ✓ | QUALITY.md#open-work--actionable-summary |
+| (cross) | Mutable-closure capture — novice-fit four-case classification | M-MH | ✓ | plans/22-mutable-closures/README.md |
+| (cross) | L3 PEG-style match patterns (sequence / alternation / capture) | MH | ✓ | plans/future/26-match-peg/README.md |
+| A8 | Slicing, open-ended ranges, partial-key match on sorted/index | M | ✓ | plans/future/30-sorted-slice/README.md |
+| C52 | Stdlib name clash: warning + `std::` prefix | M | ✓ | (needs plan promotion) |
+| C53 | Match arms: library enums + bare variant names | M | ✓ | (needs plan promotion) |
+| (cross) | `const` struct fields (write-once-at-construction) — closes INCONSISTENCIES.md § 33 | M | ✓ | plans/future/33-const-fields/README.md |
+| I12 | Interfaces: factory methods (`fn zero() -> Self`) | S | ✓ | (needs plan promotion) |
+| (cross) | Standalone regex library (cleaner text-pattern story) | M | ✓ | lib_plans/future/01-regex/README.md |
+
+---
+
+## Q — Internal quality
+
+Performance, refactor, internal cleanup with clear payoff.
+
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| (cross) | Native codegen follow-ups (yield-from + generic text-return + fill.rs auto-gen) | XS-M per item | ✓ | NATIVE.md § Open work |
+| (cross) | Performance follow-ups (P1-P3 interpreter / N1-N3 native / W1 wasm) | S-MH per item | ✓ | PERFORMANCE.md § Open work |
+| (cross) | Retire `stores.scratch` lifetime hazard | M | ✓ | plans/future/21-retire-scratch/README.md |
+| O4 | Native: direct-emit local collections | M | ✓ | PERFORMANCE.md § Open work (N1) |
+| O5 | Native: omit `stores` from pure functions | M | ✓ | PERFORMANCE.md § Open work (N2) |
+| A12 | Lazy work-variable initialization | M | ✓ | PLANNING.md (no PERFORMANCE.md design yet) |
+| O2 | Stack raw pointer cache | M | ✓ | PLANNING.md (no PERFORMANCE.md design yet) |
+
+### Constant store deferred-tail
+
+The CS.B / CS.C1-C3 work items are deferred (Phase A + D shipped; Phase
+B + C remain).  Trigger conditions and design content live in
+[`plans/DEFERRED.md`](plans/DEFERRED.md) and the const-store plan in
+`plans/deferred/`.  ROADMAP carries them only when the trigger fires.
+
+---
+
+## N — Niche / opportunistic
+
+Small specific features, low-priority items.
+
+| ID | Title | E | Design | Source |
+|---|---|---|---|---|
+| (cross) | Game asset pipeline (prototype → artist polish → integration) | M | ✓ | lib_plans/future/04-asset-pipeline/README.md |
+| (cross) | Web services — HTTP client + URL handling + auth + SSE/WS | M-H per arc | ✓ | lib_plans/future/06-web-services/README.md |
+| C57 | Route decorator syntax (`@get`, `@post`, `@ws`) | H | ✓ | plans/future/29-server-features/README.md |
+| I13 | Iterator protocol (`for msg in ws` via `fn next`) | MH | ✓ | plans/future/29-server-features/README.md |
+| AOT | Auto-compile libraries to native shared libs | M | ✓ | (needs plan promotion) |
+| A4 | Spatial index operations | M | ✓ | (needs plan promotion) |
+
+### Deliverables (no plan needed — single-action items)
+
+| ID | Title | E | Notes |
+|---|---|---|---|
+| G3 | Tilemap rendering (grid-based 2D, batched draw) — generic `lib/tilemap` | M | Brick Buster has level_brick dispatcher as own tilemap; generic library still open |
+| G7.P | 🌐 Brick Buster on itch.io | S | Optional demo deploy; `--html` works, GH Pages already serves |
+| MP.P | 🌐 Moros multiplayer — DM + players share live scene | S | Hosted-server demo |
+
+---
+
+## Stability gate (stability contract)
+
+Every item below must be checked off before the project claims its stability bar — no "appears fixed" exceptions.  Cross-references the safety gate in [`RELEASE.md`](RELEASE.md).
 
 - [ ] **PROBLEMS.md** has zero open `**High**` severity entries
-- [ ] All `⚠️ Appears fixed but unverified` flags from 0.9.0 have been
-      definitively closed via real-world testing (not just regression guards)
-- [ ] **valgrind clean** on a debug build of `tests/scripts/50-tuples.loft`
-      and the full brick-buster game (`25-brick-buster.loft`) for 5+ minutes of play
+- [ ] All `⚠️ Appears fixed but unverified` flags definitively closed via real-world testing (not just regression guards)
+- [ ] **valgrind clean** on a debug build of `tests/scripts/50-tuples.loft` and the full brick-buster game (`25-brick-buster.loft`) for 5+ minutes of play
 - [ ] `make ci` green on Linux, macOS Intel, macOS ARM, Windows
 - [ ] All `~~Fixed~~` PROBLEMS.md entries removed (history lives in CHANGELOG.md)
-- [ ] `doc/claude/INCONSISTENCIES.md` reviewed: each entry resolved or
-      explicitly accepted in LOFT.md / CHANGELOG.md
+- [ ] `doc/claude/INCONSISTENCIES.md` reviewed: each entry resolved or explicitly accepted in LOFT.md / CHANGELOG.md
 - [ ] Pre-built binaries on the GitHub release for all four platforms
 - [ ] HTML reference and PDF up to date and linked from the release page
 
 ---
 
-## 1.1+ — Backlog
-
-| ID     | Title                                                  | E  | Design | Source              |
-|--------|--------------------------------------------------------|----|--------|---------------------|
-| C57    | Route decorator syntax (`@get`, `@post`, `@ws`)       | H  | ✓      | SERVER_FEATURES.md  |
-| I13    | Iterator protocol (`for msg in ws` via `fn next`)     | MH | ✓      | SERVER_FEATURES.md  |
-| I12    | Interfaces: factory methods (`fn zero() -> Self`)     | S  | ✓      | INTERFACES.md       |
-| A12    | Lazy work-variable initialization                      | M  | ✓      | PLANNING.md         |
-| O2     | Stack raw pointer cache                                | M  | ✓      | PLANNING.md         |
-| A4     | Spatial index operations                               | M  | ✓      | PLANNING.md         |
-| O4     | Native: direct-emit local collections                  | M  | ✓      | PLANNING.md         |
-| O5     | Native: omit `stores` from pure functions              | M  | ✓      | PLANNING.md         |
-| NDB.2  | DWARF rewrite — point `.debug_line` / `.debug_info` directly at `.loft`; stock debuggers need no plugin | MH | ✓ | NATIVE_DEBUG.md |
-
----
-
 ## Deferred indefinitely
 
-| ID    | Title                                              | Notes                                     |
-|-------|----------------------------------------------------|-------------------------------------------|
-| O1    | Superinstruction peephole rewriting                | Opcode table full (254/256)               |
-| P4    | Bytecode cache (`.loftc`)                          | Superseded by native codegen              |
+| ID | Title | Notes |
+|---|---|---|
+| O1 | Superinstruction peephole rewriting | Opcode table full (254/256) |
 
 ---
 
 ## Demo applications — independent lifecycles
 
-Per [RELEASE.md § Explicitly out of scope here](RELEASE.md#explicitly-out-of-scope-here),
-demo applications ship on their own cadence and do **not** gate
-any language release.  They may ship before, during, or after any
-of the language milestones above.
+Demo apps ship on their own cadence and do **not** gate any language work.  Per [`RELEASE.md` § Explicitly out of scope here](RELEASE.md#explicitly-out-of-scope-here).  If a demo surfaces a language-side bug, the fix lands under the relevant plan — but the demo's own scope never blocks anything.
 
-| Demo | State | Backlog location |
-|---|---|---|
-| **Brick Buster** (`lib/graphics/examples/25-brick-buster.loft`) | **Shipped 2026-04-25** to GH Pages via the v0.8.4 release workflow ([brick-buster.html](https://jjstwerff.github.io/loft/brick-buster.html)).  itch.io publication still optional. | Carried-over note above |
-| **Moros hex RPG editor — native** | **Shipped 2026-04-22** via plan-03 (`plans/finished/03-native-moros-editor/`); `make editor-dist` builds a self-contained `dist/moros-editor/` runnable without `loft` on the machine.  Fullscreen, scroll-wheel + expanded key codes, panel UI overlay, `editor_click` routing. | Historical — see plan-03 README. |
-| **Moros hex RPG editor — web** | Designed but not built (~20 open sprints: MO.1–MO.13 covering map data model, JS scene editor, WASM build, 3D renderer, GLB export).  Depends on the loft libraries that will be extracted per PKG.EXTRACT; once those ship independently, the web editor can iterate without touching the language repo. | `../moros/doc/claude/` + `PLANNING.md` MO.* entries |
-| **Web IDE** (W1.1 HTML export is language-side and done; W2–W6 are IDE work) | Deferred past 1.0 per ROADMAP.md § 1.0.0.  Independent project. | ROADMAP.md § 1.0.0 IDE+multiplayer block |
-| **Server library** (`lib/server`), **game-client library** (`lib/game_client`), **scene scripting** layer | 1.1+ — `WEB_SERVER_LIB.md`, `GAME_CLIENT_LIB.md`, `SERVER_FEATURES.md` | Own design docs |
-
-If a demo's progress reveals a language-side bug or a missing
-primitive, the fix lands under the relevant language milestone
-(0.9.0 for language polish, 1.0.0 for stability).  But the demo's
-own scope never blocks a language tag.
+| Demo | State |
+|---|---|
+| **Brick Buster** | Shipped 2026-04-25 ([brick-buster.html](https://jjstwerff.github.io/loft/brick-buster.html)).  itch.io publication optional. |
+| **Moros editor — native** | Shipped 2026-04-22 (plans/finished/03-native-moros-editor/).  `make editor-dist` builds a self-contained `dist/moros-editor/`. |
+| **Moros editor — web** | Designed, not built.  ~20 sprints (MO.1–MO.13).  Lives in `../moros/doc/claude/` + PLANNING.md MO.* once PKG.EXTRACT lets the libraries iterate independently. |
+| **Web IDE** (W2–W6) | G category above (Browser game UI section). |
+| **Server / game-client / scene scripting libraries** | G category above (Multiplayer + protocol stack and Browser game UI sections). |
 
 ---
 
-**Design documents:**
+## All open plans — index by category
 
-| Area | Document |
-|---|---|
-| Developer experience | [DX.md](DX.md) |
-| Game infrastructure | [GAME_INFRA.md](GAME_INFRA.md) |
-| Package system | [PACKAGES.md](PACKAGES.md) |
-| WASM + frame yield | [WASM.md](WASM.md) |
-| Web IDE | [WEB_IDE.md](WEB_IDE.md) |
-| Server library | [WEB_SERVER_LIB.md](WEB_SERVER_LIB.md) |
-| Game client library | [GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md) |
-| Graphics | [OPENGL_IMPL.md](OPENGL_IMPL.md) |
-| Renderer abstraction | [RENDERER.md](RENDERER.md) |
+Comprehensive list of every open plan across `plans/` and `lib_plans/`, tagged by primary value category.
+
+For per-phase status (what's shipped, what's in flight, what's blocked) **read the plan README directly** — it's the source of truth.  This index gives you the plan name, remaining effort, dependencies, and a one-line "what is this plan about" descriptor.
+
+### S — Silent failure / data-loss prevention
+
+| Plan | E | Depends on | Notes |
+|---|---|---|---|
+| [`plans/15-closure-validation/`](plans/15-closure-validation/) | M | (cross-mode harness shipped by closed plan-14) | **Active** (promoted 2026-05-12).  Phase 03 also closes the closure-DbRef leak. |
+| [`plans/future/16-coroutine-validation/`](plans/future/16-coroutine-validation/) | M | (cross-mode harness shipped by closed plan-14) | Yielded type × drive context matrix |
+| [`plans/future/18-match-validation/`](plans/future/18-match-validation/) | M | (cross-mode harness shipped by closed plan-14) | Subject type × pattern shape matrix |
+| [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | (cross-mode harness shipped by closed plan-14) | Variant payload × dispatch context matrix |
+| [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | (cross-mode harness shipped by closed plan-14) | Hash / sorted / index / spacial × operation matrix |
+
+### G — Goal-enabling
+
+| Plan | E | Depends on | Notes |
+|---|---|---|---|
+| [`plans/future/25-native-debug/`](plans/future/25-native-debug/) | XS-MH | — | NDB.0 / NDB.1 / NDB.2 — GDB / LLDB integration for `--native` |
+| [`plans/future/23-event-loop/`](plans/future/23-event-loop/) | MH | **P213 v4** (compiler bug) | Bidirectional event-loop abstraction (client + server) |
+| [`plans/future/24-multiplayer-editor/`](plans/future/24-multiplayer-editor/) | M | **plans/32 TIC_TAC_TOE v2 ground layer** (now active) | First real-game milestone |
+| [`plans/future/32-tic-tac-toe/`](plans/future/32-tic-tac-toe/) | M | **plan-23 YIELD.2** + **plan-22 phase 2** | Protocol-validation vehicle.  v1/v2/v3/v5 shipped; v3.5/v4/v6 parked (2026-05-11) waiting on infra |
+| [`lib_plans/future/02-graphics/`](lib_plans/future/02-graphics/) | H (multi-arc) | — | Low-level GL + renderer abstraction |
+| [`lib_plans/future/07-web-ide/`](lib_plans/future/07-web-ide/) | M per W item | **lib_plans/future/09-lsp LSP.1** + **PACKAGES.md § Open work R1 workspace split** | Browser IDE (W2-W6) |
+| [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | HTTP / WS / static-file server library |
+| [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/future/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
+| [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/future/07-web-ide W2** + moros editor MO.* + script-target build mode | User-authored scene scripts (SC.1-SC.6 + SC.P) |
+| [`plans/future/34-server-hardening/`](plans/future/34-server-hardening/) | M | — | `lib/server` polish: binary broadcast / send_to, recv-bytes, observability — prereq for plan-36 |
+| [`plans/future/36-audience-generative-art/`](plans/future/36-audience-generative-art/) | M | **plans/future/34-server-hardening** | Audience-driven plant/crystal growth demo via shared URL |
+
+### F — Foundation
+
+| Plan | E | Depends on | Notes |
+|---|---|---|---|
+| [`lib_plans/future/05-game-infra/`](lib_plans/future/05-game-infra/) | M-MH per item | — | FFI.1-4 — third-party native extensions |
+| [`lib_plans/future/09-lsp/`](lib_plans/future/09-lsp/) | M (LSP.1) / MH (LSP.2/3) | — | LSP.1 unblocks 4 IDE plugins + browser IDE |
+| [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
+| [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
+| [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | Foundational — REGEX is first downstream consumer |
+
+### U — Ease of use
+
+| Plan | E | Depends on | Notes |
+|---|---|---|---|
+| [`plans/07-error-messages/`](plans/07-error-messages/) | M | — | `file:line:col` + caret + suggestions across parser / type / runtime / native |
+| [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) | XS-S per item | — | SH.* / DX.* / NT.* — DX grab-bag (some shipped) |
+| [`plans/future/08-repl-and-introspection/`](plans/future/08-repl-and-introspection/) | M | — | `loft>` interactive prompt + IR/Rust/slot-table CLI |
+
+### C — Clean features
+
+| Plan | E | Depends on | Notes |
+|---|---|---|---|
+| [`plans/22-mutable-closures/`](plans/22-mutable-closures/) | M-MH | — | Novice-fit closure capture (evolves C38).  Promoted to current 2026-05-10; drivers TTT v6 + plan-36 server retrofit |
+| [`plans/future/26-match-peg/`](plans/future/26-match-peg/) | MH | — | L3 PEG-style match patterns (cooperates with regex lib) |
+| [`plans/future/30-sorted-slice/`](plans/future/30-sorted-slice/) | M | — | A8 — slicing / open-ended ranges / partial-key match on sorted/index |
+| [`plans/future/33-const-fields/`](plans/future/33-const-fields/) | M | — | `const` struct fields — closes INCONSISTENCIES.md § 33 (locals/params already support it) |
+| [`lib_plans/future/01-regex/`](lib_plans/future/01-regex/) | M | **lib_plans/future/03-lazy-stdlib** | First lazy-loaded stdlib consumer |
+
+### Q — Internal quality
+
+| Plan | E | Depends on | Notes |
+|---|---|---|---|
+| [`plans/future/21-retire-scratch/`](plans/future/21-retire-scratch/) | M | cooperates with NATIVE § Open work N8c.x + PERFORMANCE § Open work N1 | Eliminate `stores.scratch` lifetime hazard |
+| [NATIVE.md § Open work](NATIVE.md#open-work) | XS-M per item | — | N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
+| [PERFORMANCE.md § Open work](PERFORMANCE.md#open-work) | S-MH per item | P1 blocked on opcode-table capacity | 7 optimization designs (P1-P3 interpreter / N1-N3 native / W1 wasm) |
+
+### N — Niche / opportunistic
+
+| Plan | E | Depends on | Notes |
+|---|---|---|---|
+| [`plans/future/29-server-features/`](plans/future/29-server-features/) | S-H per item | — | C55/C56/A15/I13/C57 — language features for server / game-client |
+| [`lib_plans/future/04-asset-pipeline/`](lib_plans/future/04-asset-pipeline/) | M | — | Game asset workflow |
+| [`lib_plans/future/06-web-services/`](lib_plans/future/06-web-services/) | M-H per arc | — | JSON / HTTP client / auth / WebSocket / SSE clients |
+
+### Deferred plans
+
+Deferred plans don't appear on ROADMAP — their trigger index lives
+in [`plans/DEFERRED.md`](plans/DEFERRED.md).  When a trigger fires,
+the plan moves back to `future/` and ROADMAP gains a row.
+
+### Cross-tracker dependency chains worth noting
+
+- **lib_plans/future/03-lazy-stdlib → lib_plans/future/01-regex** (registry mechanism → first consumer)
+- **PACKAGES.md § Open work PKG.REG → lib_plans/future/12-library-extraction** (registry → execution of monorepo split)
+- **PACKAGES.md § Open work R1 + lib_plans/future/09-lsp LSP.1 → lib_plans/future/07-web-ide** (workspace split + LSP server → browser IDE)
+- **plans/future/23-event-loop → lib_plans/future/10-game-client** (protocol abstraction → client library)
+- **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/future/32-tic-tac-toe v2 ground layer)
+- **(cross-mode harness shipped by closed plan-14) → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
+- **NATIVE.md § Open work N8c.x + PERFORMANCE.md § Open work N1 → plans/future/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
+- **plans/22-mutable-closures spec → lib_plans/future/13-scriptable-scenes script API** (closure semantics inform user-script ergonomics)
+- **C57 / I13 (in plans/future/29-server-features) → lib_plans/future/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)
+
+### Features still needing plan promotion
+
+ROADMAP rows that still cite a flat reference doc as Source rather than a plan.  Promote when next-up work surfaces:
+
+- **L1** Error recovery after token failures (U)
+- **AOT** Auto-compile libraries to native shared libs (N)
+- **C52** Stdlib name clash: warning + `std::` prefix (C)
+- **C53** Match arms: library enums + bare variant names (C)
+- **I12** Interfaces: factory methods (C)
+- **A12, O2** Performance items (Q) — would fold into PERFORMANCE.md § Open work if their designs grow
+- **A4** Spatial index operations (N)

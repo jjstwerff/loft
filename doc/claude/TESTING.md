@@ -236,6 +236,67 @@ pub fn test() {
 
 ---
 
+## Validation matrices (`tests/{tuple,template,…}_matrix.rs`)
+
+A **validation matrix** is a test binary that systematically covers
+a 2-axis grid of language-feature interactions, with every cell
+running under both backends (interp + `--native`) via the
+`cross_mode!` harness in `tests/common/cross_mode.rs`.
+
+Family today:
+
+| Binary | Plan | Axes | Cells |
+|---|---|---|---|
+| `tests/tuple_matrix.rs` | plan-14 | element type × destructure shape | tuple bug surface |
+| `tests/template_matrix.rs` | plan-17 | T-parameter usage × bound shape | bounded-generic / interface surface |
+
+Future matrices follow the same shape (closure validation, coroutine
+validation, match validation — see `plans/15-closure-validation/`
+(active), `plans/future/16-coroutine-validation/`,
+`plans/future/18-match-validation/`).
+
+### Pattern
+
+- **Every cell is `#[ignore]` by default.**  Each cell shells out to
+  `loft --interpret` and `loft --native` (the latter invokes `rustc`)
+  — too heavy for the default `cargo test` path.
+- **Cell name encodes the matrix coordinate** so the test name
+  identifies the cell at-a-glance (e.g. `u3_b1a_addable_inline_pair_with_sum`
+  = T-usage U3 × bound B1 Addable × specific shape).  Naming
+  conventions are per-plan (plan-14 `e<E>_d<D>`, plan-17
+  `u<U>_b<B>_…`) to avoid cross-binary collision.
+- **PASS / FIX / CLOSED** — every cell is one of three states.
+  PASS = cell is covered by a passing test; FIX = cell needs
+  implementation work, tracked as a `#[ignore]`d test that's
+  expected to start passing once the fix lands; CLOSED = design
+  decision (no cell test; reason recorded in `DESIGN_DECISIONS.md`).
+- **Bug yield is the headline metric.**  Plan-14 found 2 P-issues
+  in 15 cells (13%); plan-17 found 6 P-issues in 6 phases (close
+  to the predicted 5-10).  Each filed P-issue blocks plan
+  acceptance; each PASS cell becomes a regression net.
+
+Run a whole matrix:
+```bash
+cargo test --release --test template_matrix -- --ignored
+```
+
+A single cell:
+```bash
+cargo test --release --test template_matrix -- --ignored u3_b1a_addable_inline_pair_with_sum
+```
+
+The `cross_mode!` macro (heavy-by-default) is documented in detail
+in [`.claude/skills/loft-test/SKILL.md`](../../.claude/skills/loft-test/SKILL.md)
+§ "The `cross_mode!` macro" — read that before authoring matrix
+cells.
+
+For the per-plan matrix definitions and bug-discovery records, see:
+
+- [`plans/finished/14-tuple-validation/`](plans/finished/14-tuple-validation/) (closed 2026-05-11)
+- [`plans/finished/17-template-validation/`](plans/finished/17-template-validation/) (closed 2026-05-09)
+
+---
+
 ## Generated Test Files (`tests/generated/`)
 
 Generated files are written only in **debug builds** (`#[cfg(debug_assertions)]`). They are produced inside `Test::generate_code`, called from `Drop::drop`.
@@ -652,9 +713,13 @@ tests/
   parse_errors.rs         # Interpreter tests: expected parser errors (diagnostic)
   immutability.rs         # Interpreter tests: immutability diagnostics
   threading.rs            # Interpreter tests: Rust-level parallel API
+  tuple_matrix.rs         # Plan-14 validation matrix (cross-mode; ignored by default)
+  template_matrix.rs      # Plan-17 validation matrix (cross-mode; ignored by default)
   expressions_auto_convert.rs  # Hand-written generated-style test (pre-generator)
   issues.rs               # Regression tests for known issues (see [PROBLEMS.md](PROBLEMS.md))
   wrap.rs                 # Runner for docs/ and scripts/; also generates HTML docs
+  common/
+    cross_mode.rs         # Harness used by *_matrix.rs binaries (interp ↔ native equivalence)
   docs/
     00-general.loft ... 21-random.loft     # User documentation loft programs (22 files)
     wordlist.txt                           # Edge-case string keys for 21-stress.loft

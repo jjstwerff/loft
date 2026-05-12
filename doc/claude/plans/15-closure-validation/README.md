@@ -5,12 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan 15 — Closure validation: capture × storage matrix
 
-**Status: pre-flight surveyed 2026-05-04 — 6/12 probes fail (50% yield).**
-P213 closed 2026-05-04 (capturing-closure-in-struct-field rejected at
-parse time with clear diagnostic; proper layout-widening fix deferred).
-Open: P214 (non-capturing vector-of-closure C0/D4), P215 (nested-closure
-name resolution C6/D1), P216 (tuple-capture in closure C4/D1).  Phase
-00 wiring not yet started; remaining fixes follow.
+**Status: ACTIVE — promoted to current 2026-05-12.**
+Pre-flight surveyed 2026-05-04 (6/12 probes failed → 50% bug yield);
+the surveyed P-issues (P213/P214/P215/P216) all closed in the
+2026-05-04..05 sprint, so the original motivating bugs are gone but
+the matrix itself remains unfilled and the LIFETIME.md
+"Type::Function — NOT YET HANDLED" closure-leak gap is still open.
+Phase 00 wiring is the next step.
 
 ## Goal
 
@@ -148,9 +149,9 @@ Each cell `(C, D)` has one of:
 - [LOFT.md § Closures](../../LOFT.md) — language reference.
 - [loft-write skill § Higher-order functions](../../../.claude/skills/loft-write/SKILL.md)
   — capture semantics summary.
-- [plan-14 phase 03](../14-tuple-validation/03-closures.md) — tuple
+- [plan-14 phase 03](../../finished/14-tuple-validation/03-closures.md) — tuple
   cells with closure elements; closure-in-tuple is the D5 cell here.
-- [plan-14 README](../14-tuple-validation/README.md) — same matrix
+- [plan-14 README](../../finished/14-tuple-validation/README.md) — same matrix
   template and cross-mode contract.
 - `src/data.rs::Type::Function` — definition.
 - `src/scopes.rs:578` — tuple/closure scope-exit gate (T1.8c

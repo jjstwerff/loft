@@ -31,11 +31,12 @@ fn main() {
   // - plain `enum`      — byte value 255 is null (limits enums to 255 variants)
   //
   // This means there is one value per type that you cannot distinguish from
-  // null. For integers, that is -2 147 483 648. Division by zero also
-  // produces this same value, so both paths look the same to your code:
+  // null. For integers, that is -2 147 483 648.  When defended with
+  // `?? null` (or a following null-check), division by zero produces
+  // this same value, so both paths look the same to your code:
   zero = 0;
-  n = 1 / zero;
-  assert(!n, "div-by-zero is null");
+  n = 1 / zero ?? null;
+  assert(!n, "div-by-zero defended with `?? null` is null");
   assert(n != 0, "null is not zero; it is -2 147 483 648");
   assert(n < 0, "i32::MIN is the most negative 32-bit integer");
   // Arithmetic on null propagates: null plus anything is null.

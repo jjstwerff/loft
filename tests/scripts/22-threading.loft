@@ -103,6 +103,20 @@ fn main() {
     fcount += 1;
   }
   assert(fcount == 3, "form-1 float return: {fcount} elements");
+  // --- ARC.md A3.6: float return body sums via parallel_buf_get_float ---
+  // This exercises the typed wide-buf reader (n_parallel_buf_get_float)
+  // that recovers f64 via f64::from_bits.  Before A3.6, float returns
+  // fell through to the materialised path (parallel_light_execute_and_collect)
+  // and the body's `b` accessor read raw bytes via OpGetVector — never
+  // exercising the Queue family.  The exact-sum assertion (60.0 ==
+  // 10+20+30 in f64) catches any bit-cast or width error in the typed
+  // reader.  Multi-thread (4) confirms the per-thread merge preserves
+  // order-independent commutative sum.
+  ftotal = 0.0;
+  for a in q.items par(b = score_as_float(a), 4) {
+    ftotal += b;
+  }
+  assert(ftotal == 60.0, "form-1 float multi-thread sum: {ftotal}");
   // --- Form 1: boolean return ---
   pos = 0;
   for a in q.items par(b = score_positive(a), 1) {
@@ -156,6 +170,18 @@ fn main() {
     stotal += s;
   }
   assert(stotal > 59.0f, "form-1 single: {stotal}");
+  // --- ARC.md A3.6: single return body sums via parallel_buf_get_single ---
+  // This exercises the typed narrow-buf reader (n_parallel_buf_get_single)
+  // that recovers f32 via f32::from_bits over stride-4 bytes.  Before
+  // A3.6, single returns fell through to the materialised path.  The
+  // exact-sum assertion is safe: 10.0 + 20.0 + 30.0 = 60.0 is exactly
+  // representable in f32 (no rounding).  Multi-thread (4) confirms the
+  // per-thread Queue partial accumulator preserves the f32 bit pattern.
+  stotal_mt = 0.0f;
+  for a in q.items par(s = score_as_single(a), 4) {
+    stotal_mt += s;
+  }
+  assert(stotal_mt == 60.0f, "form-1 single multi-thread sum: {stotal_mt}");
   // --- Form 1: enum return ---
   highs = 0;
   for a in q.items par(g = score_grade(a), 1) {

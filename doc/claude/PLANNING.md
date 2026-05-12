@@ -119,7 +119,7 @@ These are separate repositories installed via `loft install`.  They are not
 gated to a specific interpreter milestone — they evolve alongside the interpreter
 and publish their own version numbers.  Full designs live in their own documents.
 
-**`server` — HTTP server library** ([WEB_SERVER_LIB.md](WEB_SERVER_LIB.md)):
+**`server` — HTTP server library** ([WEB_SERVER_LIB.md](lib_plans/future/08-server/README.md)):
 A fully featured HTTP server written mostly in loft with a thin native Rust layer
 for TCP, TLS, WebSockets, ACME, and cryptographic primitives.  Phases:
 
@@ -149,7 +149,7 @@ and `game_client`.  Contains the canonical `WsMessage` enum, `GameEnvelope` stru
 separate package prevents the two libraries from diverging in their protocol definitions.
 No native layer required — pure loft.  Phases: just one (all types defined at once).
 
-**`game_client` — multi-player game client** ([GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md)):
+**`game_client` — multi-player game client** ([GAME_CLIENT_LIB.md](lib_plans/future/10-game-client/README.md)):
 Client-side companion to `server`.  Provides WebSocket connectivity, a typed game
 message protocol (envelope + dispatcher), lobby management, fixed-timestep game loop,
 client-side prediction with server reconciliation, and dynamic WASM script loading.
@@ -185,7 +185,7 @@ items a home without inflating the 1.0 scope.
 **Why include the IDE in 1.0.0?**
 A standalone interpreter 1.0 that is later extended with a breaking IDE integration
 produces two separate stability contracts to maintain.  The Web IDE (W1–W6) is already
-concretely designed in [WEB_IDE.md](WEB_IDE.md) and is bounded, testable work.  Deferring
+concretely designed in [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) and is bounded, testable work.  Deferring
 it to "post-1.0" without a milestone risks it never shipping.  In 2026, "fully featured"
 for a scripting language includes browser-accessible tooling; shipping a 1.0 without it
 would require walking back that claim at 1.1.
@@ -441,29 +441,19 @@ left at the last successful checkpoint.
   **T1.8b — Text elements:** `Type::Text` inside a `Type::Tuple` needs lifetime tracking and `OpFreeRef`-style cleanup for the text slot on scope exit.  `owned_elements` in `data.rs` must enumerate text positions within a tuple so `get_free_vars` can emit the right cleanup sequence.
 
   **T1.8c — Struct-ref (DbRef) tuple elements: move vs copy semantics.**
-  The `tuple_struct_refs` test fails with use-after-free.  Root cause: `scopes.rs:578-587`
-  has a stub `continue` for tuple scope exit that emits **no** `OpFreeRef` for owned
-  elements.  After destructuring `(q1, q2) = two_points(p1, p2)`, the work-ref `tmp`
-  holds two DbRef copies of the same records as `q1` and `q2`.  The fix must decide:
-  - **Move semantics (preferred):** after destructuring, `tmp`’s elements are considered
-    moved.  The `continue` in scopes.rs is correct for `tmp` — no double-free.  Must verify
-    that `q1` and `q2` themselves have `Type::Reference` and that normal `OpFreeRef` fires
-    for them at their scope exit.  If not, the parser must propagate the element type to
-    the destructured variables.
-  - **Copy + null semantics:** after destructuring, null out `tmp`’s DbRef slots (set
-    store_nr to -1).  Then `OpFreeRef` on `tmp` is a no-op.  Requires a new opcode
-    `OpNullTupleElem(var, offset)` or explicit codegen at the destructuring site.
-
-  **Guards and debugging:**
-  - `debug_assert!` in `OpFreeRef` that the record is in the store’s claims set (catches
-    double-free immediately).
-  - `LOFT_LOG=scope_debug` already traces ref-variable decisions; extend it to log tuple
-    element ownership: "tuple var={v}: {n} owned elements, treating as moved".
-  - After destructuring, verify each destination variable’s type matches the tuple element
-    type so normal scope cleanup applies.
-
-  **Effort:** Medium
-  **Target:** 0.8.3
+  *(closed 2026-05-11 by Plan-14 phase 04)* — **MOVE semantics**
+  selected and validated against the cross-mode harness.  Already
+  implemented by `src/scopes.rs:1000-1009`'s tuple scope-exit
+  `continue` stub (no per-element `OpFreeRef` on the source tuple)
+  + `parser/expressions.rs:1252-1278`'s destructure path which types
+  each destination variable as the source element's `Type::Reference`
+  (via `change_var_type(v_nr, &rhs_elems[i])`), so each `q1`/`q2`
+  gets ordinary scope-exit cleanup.  The "copy + null" alternative
+  was rejected (would need a new opcode at near-saturation 254/256
+  and is not observably different from move semantics).  6 cross-
+  mode E5 cells lock the canonical shapes (swap, arg, return,
+  mixed Ref+int, mixed Ref+text); the loop-iteration aliasing
+  shape is parked behind P250 as a separate dep-tracking bug.
 
 - **T1.9** *(completed 0.8.3)* — Tuple destructuring in `match`.  See [TUPLES.md](TUPLES.md).
 
@@ -545,20 +535,26 @@ left at the last successful checkpoint.
   | `tuple_struct_refs` | `(Point, Point)` | two DbRef slots, field access after destruct |
   | `tuple_from_vector_elements` | `(integer, integer)` from vector | index read into tuple slots |
 
-  3 of 4 tests pass; `tuple_struct_refs` remains ignored pending T1.8 DbRef lifetime
-  tracking. `tuple_homogeneous_text`, `tuple_store_text_fields`, `tuple_from_vector_elements`
-  all active.
+  All 4 tests now active.  `tuple_struct_refs` un-ignored 2026-05-11
+  by Plan-14 phase 04 with the **MOVE semantics** decision (T1.8c
+  closed); the cross-mode harness's e5_d1_struct_ref_swap cell carries
+  the same shape on both backends.
 
-- **T1.11** *(completed 0.8.3)* — Tuple type constraints: struct field rejection + compound assignment:
+- **T1.11** *(completed 0.8.3, T1.11a status updated 2026-05-11)* — Tuple type constraints:
 
-  Two small correctness items that prevent silently wrong code or confusing errors when
-  tuples are used in unsupported positions:
+  T1.11a (struct field rejection) was REVERSED by Plan-06 phase 4d
+  and validated by Plan-14 phase 05: tuples are now accepted as
+  struct field types, lay out their elements inline using the
+  synthetic `__tuple<…>` struct's positions, and round-trip through
+  `parser/mod.rs::set_field_check`'s Tuple arm and `get_val`'s Tuple
+  arm.  6/7 D3 cells green on both backends; the seventh
+  (e4_d3_field_closure_local — closure-element tuple as struct
+  field) is parked behind P251.
 
-  T1.11a: `parse_field` in `definitions.rs` rejects `Type::Tuple` via `parse_type_full`
-  (the parser's `(` branch fires before `fill_all` is ever reached).
   T1.11b: `parse_assign` in `expressions.rs` returns early (both passes) when a compound
   operator follows a tuple LHS; consumes the operator and RHS to keep parser state clean.
-  Tests: `tuple_in_struct_field_rejected`, `tuple_compound_assign_rejected`.
+  Tests: `tuple_compound_assign_rejected` (T1.11a's negative test
+  `tuple_in_struct_field_rejected` was removed when the lift shipped).
 
 **Effort:** Very High
 **Target:** 1.1+
@@ -953,7 +949,7 @@ integer/long overflow, shift out-of-range, null field dereference, vector OOB.
 
 
 ### A8  Slicing & comprehension on `sorted` / `index`
-**Sources:** [SORTED_SLICE.md](SORTED_SLICE.md)
+**Sources:** [SORTED_SLICE.md](plans/future/30-sorted-slice/README.md)
 **Description:** Extend `sorted<T>` and `index<T>` with key-range slicing, open-ended
 bounds, partial-key match iteration, and vector comprehensions over key ranges.
 
@@ -965,7 +961,7 @@ bounds, partial-key match iteration, and vector comprehensions over key ranges.
 - `rev(col[lo..hi])` — reverse range iteration (A8.5)
 - `match col[key] { null → ..., elm → ... }` — documented + tested (A8.6)
 
-**Fix path:** See [SORTED_SLICE.md](SORTED_SLICE.md) — 6-step plan, all work in
+**Fix path:** See [SORTED_SLICE.md](plans/future/30-sorted-slice/README.md) — 6-step plan, all work in
 `src/parser/fields.rs` and `src/codegen_runtime.rs`. No new opcodes.
 
 **Effort:** M
@@ -2357,7 +2353,7 @@ In `output_call`, when emitting a call from a pure context to a pure callee, emi
 
 ## H — HTTP / Web Services
 
-Full design rationale and approach comparison: [WEB_SERVICES.md](WEB_SERVICES.md).
+Full design rationale and approach comparison: [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md).
 
 The `#json` annotation is the key enabler: it synthesises `to_json` and `from_json` for a
 struct, making `Type.from_json` a first-class callable fn-ref that composes with `map` and
@@ -2368,7 +2364,7 @@ gated behind an `http` Cargo feature.
 ---
 
 ### H1  `#json` annotation — parser and `to_json` synthesis
-**Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B, Phase 1
+**Sources:** [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md) § Approach B, Phase 1
 **Description:** Extend the annotation parser to accept `#json` (no value) before a struct
 declaration.  For every annotated struct, the compiler synthesises a `to_json` method that
 reuses the existing `:j` JSON format flag.  No new Rust dependencies are needed.
@@ -2413,7 +2409,7 @@ variants and dedicated read/write helpers — see
 [STDLIB.md § JSON](STDLIB.md)).  The original design is preserved
 below as a historical record; do not implement.
 
-**Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B; CODE.md § Dependencies
+**Sources:** [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md) § Approach B; CODE.md § Dependencies
 **Description:** Add a new stdlib module `default/06_web.loft` with JSON field-extraction
 functions.  Functions extract a single typed value from a JSON object body supplied as
 a `text` string.  No `serde_json` dependency — the existing parsing primitives in
@@ -2508,7 +2504,7 @@ calling any `json_*` function raises a compile-time error:
 ---
 
 ### H3  `from_json` codegen — scalar struct fields
-**Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B, Phase 2
+**Sources:** [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md) § Approach B, Phase 2
 **Description:** For each `#json`-annotated struct whose fields are all primitive types
 (`text`, `integer`, `long`, `float`, `single`, `boolean`, `character`), the compiler
 synthesises a `from_json(body: text) -> T` function.  The result is a normal callable
@@ -2550,7 +2546,7 @@ Verify that `Type.from_json` resolves as a callable fn-ref with type
 ---
 
 ### H4  HTTP client stdlib and `HttpResponse`
-**Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B, stdlib additions; PROBLEMS #55
+**Sources:** [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md) § Approach B, stdlib additions; PROBLEMS #55
 **Description:** Add blocking HTTP functions to `default/06_web.loft` backed by `ureq`.
 All functions return `HttpResponse` — a plain struct — so there is no thread-local status
 state and the API is parallel-safe (see PROBLEMS #55).
@@ -2639,7 +2635,7 @@ body is non-empty (the common case).  Callers who need a different content type 
 ---
 
 ### H5  Nested/array/enum `from_json` and integration tests
-**Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B, Phases 3–4
+**Sources:** [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md) § Approach B, Phases 3–4
 **Description:** Extend the H3 `from_json` synthesiser to handle nested `#json` structs,
 `vector<T>` array fields, and plain enum fields.  Add an integration test suite that calls
 real HTTP endpoints and verifies the full round-trip.
@@ -2739,13 +2735,13 @@ A fully serverless, single-origin HTML application that lets users write, run, a
 explore Loft programs in a browser without installing anything.  The existing Rust
 interpreter is compiled to WebAssembly via a new `wasm` Cargo feature; the IDE shell
 is plain ES-module JavaScript with no required build step after the WASM is compiled
-once.  Full design in [WEB_IDE.md](WEB_IDE.md).
+once.  Full design in [WEB_IDE.md](lib_plans/future/07-web-ide/README.md).
 
 ---
 
 
 ### W2  Editor Shell
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M2
+**Sources:** [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — M2
 **Severity/Value:** High — the visible IDE; needed by all later W items
 **Description:** A single `index.html` users can open directly (no bundler).
 - `ide/src/loft-language.js` — CodeMirror 6 `StreamLanguage` tokenizer: keywords, types, string interpolation `{...}`, line/block comments, numbers
@@ -2760,7 +2756,7 @@ JS tests (5): keyword token, string interpolation span, line comment, type names
 ---
 
 ### W3  Symbol Navigation
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M3
+**Sources:** [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — M3
 **Severity/Value:** Medium — go-to-definition and find-usages; significant IDE quality uplift
 **Description:**
 - `src/wasm.rs`: implement `get_symbols()` — walk `parser.data.def_names` and variable tables; return `[{name, kind, file, line, col, usages:[{file,line,col}]}]`
@@ -2776,7 +2772,7 @@ JS tests (3): find function definition, format usage list, no-match returns null
 ---
 
 ### W4  Multi-File Projects
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M4
+**Sources:** [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — M4
 **Severity/Value:** High — essential for any real program; single-file is a toy
 **Description:** All projects persist in IndexedDB.  Project schema: `{id, name, modified, files:[{name,content}]}`.
 - `ide/src/projects.js` — `listProjects()`, `loadProject(id)`, `saveProject(project)`, `deleteProject(id)`; auto-save on edit (debounced 2 s)
@@ -2790,7 +2786,7 @@ JS tests (4): save/load roundtrip, list all projects, delete removes entry, auto
 ---
 
 ### W5  Documentation & Examples Browser
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M5
+**Sources:** [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — M5
 **Severity/Value:** Medium — documentation access without leaving the IDE; example projects lower barrier to entry
 **Description:**
 - Build-time script `ide/scripts/bundle-docs.js`: parse `doc/*.html` → `assets/docs-bundle.json` (headings + prose + code blocks)
@@ -2806,7 +2802,7 @@ Run the bundler automatically from `build.sh` after `cargo run --bin gendoc`.
 ---
 
 ### W6  Export, Import & PWA
-**Sources:** [WEB_IDE.md](WEB_IDE.md) — M6
+**Sources:** [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — M6
 **Severity/Value:** Medium — closes the loop between browser and local development
 **Description:**
 - `ide/src/export.js`: `exportZip(project)` → `Blob` (JSZip); `importZip(blob)` → project object; drag-and-drop import
@@ -3319,7 +3315,7 @@ WASM, works today).
 ## E — Library Ergonomics
 
 Features motivated by the `server` and `game_client` library designs.
-Full design rationale and before/after code examples: [SERVER_FEATURES.md](SERVER_FEATURES.md).
+Full design rationale and before/after code examples: [SERVER_FEATURES.md](plans/future/29-server-features/README.md).
 
 ---
 
@@ -3395,5 +3391,5 @@ See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by miles
 - [FORMATTER.md](FORMATTER.md) — Code formatter design (backlog item)
 - [NATIVE.md](NATIVE.md) — Native Rust code generation: root cause analysis, step details, verification (Tier N detail)
 - [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results and implementation designs for O1–O7 (interpreter and native performance improvements)
-- [WEB_IDE.md](WEB_IDE.md) — Web IDE full design: architecture, JS API contract, per-milestone deliverables and tests, export ZIP layout (Tier W detail)
+- [WEB_IDE.md](lib_plans/future/07-web-ide/README.md) — Web IDE full design: architecture, JS API contract, per-milestone deliverables and tests, export ZIP layout (Tier W detail)
 - [RELEASE.md](RELEASE.md) — 1.0 gate items, project structure changes, release artifacts checklist, post-1.0 versioning policy

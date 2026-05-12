@@ -168,6 +168,10 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(feature = "threading")]
     ("n_parallel_buf_drop_narrow", n_parallel_buf_drop_narrow),
     #[cfg(feature = "threading")]
+    ("n_parallel_buf_get_single", n_parallel_buf_get_single),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_get_float", n_parallel_buf_get_float),
+    #[cfg(feature = "threading")]
     ("n_parallel_queue_fn", n_parallel_queue_fn),
     #[cfg(feature = "threading")]
     ("n_parallel_buf_get_fn", n_parallel_buf_get_fn),
@@ -231,8 +235,183 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_9JsonValue_to_json_pretty", n_to_json_pretty),
 ];
 
+// ── lib/web natives — wasm-pack build only (TTT v3.5) ────────────────────
+//
+// Native loft loads these from `lib/web/native/`'s cdylib at runtime.
+// The wasm-pack interpreter has no dlopen, so we register them
+// statically here under `cfg(all(target_arch="wasm32",
+// feature="wasm"))`.  Real impls route to JS via `crate::wasm::host_*`;
+// stubs (panicking on call) cover the natives v3.5 doesn't need yet
+// so the loft program at least PARSES without "native function not
+// loaded" tripping during compilation.
+//
+// Adding a new lib/web native:
+//   1. Declare a Rust impl below.  `wasm` arm calls `host_*`; non-wasm
+//      arm panics or returns a sensible default.
+//   2. Append `(name, impl)` to `WEB_FUNCTIONS_WASM`.
+//   3. JS side: extend `doc/loft-rt.js::createHost` with the matching
+//      `host_*` method.
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+pub const WEB_FUNCTIONS_WASM: &[(&str, Call)] = &[
+    ("n_ws_connect", n_ws_connect),
+    ("n_ws_client_send", n_ws_client_send),
+    ("n_ws_client_send_binary", n_ws_client_send_binary),
+    ("n_ws_client_recv", n_ws_client_recv),
+    ("n_ws_client_message", n_ws_client_message),
+    ("n_ws_client_opcode", n_ws_client_opcode),
+    ("n_ws_client_close", n_ws_client_close),
+    // Non-WS lib/web natives — stubbed so a `use web` program compiles.
+    // Real impls land when a v3.5+ feature actually needs them.
+    ("n_http_do", n_stub_panic),
+    ("n_http_body", n_stub_empty_text),
+    ("n_sleep_ms", n_stub_noop),
+    ("n_pack_reset", n_pack_reset),
+    ("n_pack_u8", n_pack_u8),
+    ("n_pack_u16_le", n_pack_u16_le),
+    ("n_pack_u32_le", n_pack_u32_le),
+    ("n_pack_take", n_pack_take),
+    ("n_byte_at", n_byte_at),
+];
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_stub_panic(_stores: &mut Stores, _stack: &mut DbRef) {
+    panic!("native function not implemented in the browser-WASM build (TTT v3.5 stubs only ws_*)");
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_stub_empty_text(stores: &mut Stores, stack: &mut DbRef) {
+    let s = crate::keys::Str::new("");
+    stores.put(stack, s);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_stub_noop(stores: &mut Stores, stack: &mut DbRef) {
+    // Pop the i32 arg and discard (n_sleep_ms takes one integer).
+    let _ = *stores.get::<i64>(stack);
+}
+
+// ── Real ws_* impls (route to JS host bridge via src/wasm.rs) ──────────
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_connect(stores: &mut Stores, stack: &mut DbRef) {
+    let url = *stores.get::<crate::keys::Str>(stack);
+    let id = crate::wasm::host_ws_connect(url.str());
+    stores.put(stack, i64::from(id));
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_send(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = *stores.get::<crate::keys::Str>(stack);
+    let id = *stores.get::<i64>(stack) as i32;
+    let ok = crate::wasm::host_ws_send(id, msg.str(), false);
+    stores.put(stack, ok);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_send_binary(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = *stores.get::<crate::keys::Str>(stack);
+    let id = *stores.get::<i64>(stack) as i32;
+    let ok = crate::wasm::host_ws_send(id, msg.str(), true);
+    stores.put(stack, ok);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_recv(stores: &mut Stores, stack: &mut DbRef) {
+    let id = *stores.get::<i64>(stack) as i32;
+    let ok = crate::wasm::host_ws_recv(id);
+    stores.put(stack, ok);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_message(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = crate::wasm::host_ws_last_message();
+    stores.scratch.push(msg);
+    let s = crate::keys::Str::new(stores.scratch.last().unwrap());
+    stores.put(stack, s);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_opcode(stores: &mut Stores, stack: &mut DbRef) {
+    let op = crate::wasm::host_ws_last_opcode();
+    stores.put(stack, i64::from(op));
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_ws_client_close(stores: &mut Stores, stack: &mut DbRef) {
+    let id = *stores.get::<i64>(stack) as i32;
+    crate::wasm::host_ws_close(id);
+}
+
+// ── Pack helpers (per-thread byte buffer; pure Rust, no JS host) ───────
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+thread_local! {
+    static PACK_BUF: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_pack_reset(_stores: &mut Stores, _stack: &mut DbRef) {
+    PACK_BUF.with(|b| b.borrow_mut().clear());
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_pack_u8(_stores: &mut Stores, stack: &mut DbRef) {
+    let b = *_stores.get::<i64>(stack) as i32;
+    PACK_BUF.with(|buf| buf.borrow_mut().push((b & 0xff) as u8));
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_pack_u16_le(_stores: &mut Stores, stack: &mut DbRef) {
+    let v = *_stores.get::<i64>(stack) as i32;
+    PACK_BUF.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        let v = (v & 0xffff) as u16;
+        buf.extend_from_slice(&v.to_le_bytes());
+    });
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_pack_u32_le(_stores: &mut Stores, stack: &mut DbRef) {
+    let v = *_stores.get::<i64>(stack) as i32;
+    PACK_BUF.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        let v = v as u32;
+        buf.extend_from_slice(&v.to_le_bytes());
+    });
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_pack_take(stores: &mut Stores, stack: &mut DbRef) {
+    let v = PACK_BUF.with(|buf| std::mem::take(&mut *buf.borrow_mut()));
+    let s = unsafe { String::from_utf8_unchecked(v) };
+    stores.scratch.push(s);
+    let st = crate::keys::Str::new(stores.scratch.last().unwrap());
+    stores.put(stack, st);
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn n_byte_at(stores: &mut Stores, stack: &mut DbRef) {
+    let t = *stores.get::<crate::keys::Str>(stack);
+    let idx = *stores.get::<i64>(stack) as i32;
+    let bytes = t.str().as_bytes();
+    let result = if idx < 0 || (idx as usize) >= bytes.len() {
+        -1i32
+    } else {
+        i32::from(bytes[idx as usize])
+    };
+    stores.put(stack, i64::from(result));
+}
+
 pub fn init(state: &mut State) {
     for (name, implement) in FUNCTIONS {
+        state.static_fn(name, *implement);
+    }
+    // TTT v3.5 — register the lib/web natives in the wasm-pack
+    // interpreter so `use web` programs run in the browser without a
+    // cdylib (which the browser can't load).
+    #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+    for (name, implement) in WEB_FUNCTIONS_WASM {
         state.static_fn(name, *implement);
     }
 }
@@ -260,21 +439,41 @@ fn n_assert(stores: &mut Stores, stack: &mut DbRef) {
     if let Some(ref logger) = stores.logger {
         let production = logger.lock().is_ok_and(|l| l.config.production);
         if production {
+            // Plan-07 phase 4 — route through Logger::log_runtime_kind
+            // so the captured-log shape matches the rest of the
+            // production-mode runtime events (`[assertion_failed] …`).
+            // Also produces the same severity (Error) per the C66
+            // kind table.
+            let kind = crate::runtime_error::RuntimeErrorKind::AssertionFailed {
+                message: v_message.str().to_string(),
+            };
+            let pos = crate::lexer::Position {
+                file: v_file.str().to_string(),
+                line: v_line as u32,
+                pos: 1,
+            };
             if let Ok(mut lg) = logger.lock() {
-                lg.log(
-                    Severity::Error,
-                    v_file.str(),
-                    v_line as u32,
-                    v_message.str(),
-                );
+                lg.log_runtime_kind(&kind, Some(&pos));
             }
             stores.had_fatal = true;
             return;
         }
     }
-    let msg = v_message.str();
-    let file = v_file.str();
-    panic!("{msg} ({file}:{v_line})");
+    // Plan-07 phase 4 — typed runtime error.  Replaces the legacy
+    // Rust panic on failed assertion with a `RuntimeError` captured
+    // on `Stores`; the dispatch loop in `state/mod.rs::execute_argv`
+    // sees `runtime_error.is_some()` and halts gracefully, then
+    // `main.rs` renders via the phase-2 pretty renderer.  Prior
+    // production-mode log path above is unchanged — production
+    // intentionally keeps logging-and-continuing semantics.
+    stores.runtime_error = Some(Box::new(
+        crate::runtime_error::RuntimeError::assertion_failed(
+            v_message.str().to_string(),
+            v_file.str().to_string(),
+            v_line as u32,
+        ),
+    ));
+    stores.had_fatal = true;
 }
 
 fn n_panic(stores: &mut Stores, stack: &mut DbRef) {
@@ -284,21 +483,33 @@ fn n_panic(stores: &mut Stores, stack: &mut DbRef) {
     if let Some(ref logger) = stores.logger {
         let production = logger.lock().is_ok_and(|l| l.config.production);
         if production {
+            // Plan-07 phase 4 — same routing as n_assert; ensures the
+            // `[user_panic]` log entry matches the rest of the
+            // production-mode runtime events.
+            let kind = crate::runtime_error::RuntimeErrorKind::UserPanic {
+                message: v_message.str().to_string(),
+            };
+            let pos = crate::lexer::Position {
+                file: v_file.str().to_string(),
+                line: v_line as u32,
+                pos: 1,
+            };
             if let Ok(mut lg) = logger.lock() {
-                lg.log(
-                    Severity::Fatal,
-                    v_file.str(),
-                    v_line as u32,
-                    v_message.str(),
-                );
+                lg.log_runtime_kind(&kind, Some(&pos));
             }
             stores.had_fatal = true;
             return;
         }
     }
-    let msg = v_message.str();
-    let file = v_file.str();
-    panic!("{msg} ({file}:{v_line})");
+    // Plan-07 phase 4 — typed runtime error.  Same shape as n_assert
+    // above; the loft `panic("msg")` builtin lands a `UserPanic`
+    // variant.  See `RuntimeError::user_panic` for the constructor.
+    stores.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError::user_panic(
+        v_message.str().to_string(),
+        v_file.str().to_string(),
+        v_line as u32,
+    )));
+    stores.had_fatal = true;
 }
 
 fn n_log_info(stores: &mut Stores, stack: &mut DbRef) {
@@ -596,129 +807,36 @@ fn n_yield_frame(stores: &mut Stores, _stack: &mut DbRef) {
 // ── Parallel threading functions (feature = "threading") ──────────────
 
 #[cfg(feature = "threading")]
-/// Plan-06 spine step 8e — `n_parallel_for` delegates to the light
-/// path.  The heavy `parallel_execute_and_collect` was retired with
-/// 8e: every worker that previously needed the heavy deep-copy path
-/// (text / reference / struct-enum / vector) now routes through
-/// Queue (8c / 8d.0–3); narrow primitives stay on `n_parallel_for_light`'s
-/// per-worker pool.  Workers genuinely incompatible with the light
-/// path (recursive store allocation in non-Queue return shapes —
-/// none exist in the test corpus) hit `run_parallel_light`'s
-/// read-only assertion at runtime.
-///
-/// The stack layout matches `n_parallel_for_light` exactly, so the
-/// delegation is a single function call — no arg unpack/repack.
-fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
-    n_parallel_for_light(stores, stack);
+/// Plan-06 ARC.md A4 (closed 2026-05-07) — the legacy materialised
+/// `parallel_for` path is unreachable.  After A3.6, every primitive
+/// return type — including Single (4-byte f32) and Float (8-byte
+/// f64) — routes through the Queue family (`n_parallel_queue` /
+/// `_narrow` / `_text` / `_ref` / `_fn`).  The materialised path
+/// (`Stitch::Concat`) had only one consumer in the parser (the
+/// `actual_par_d_nr` resolution in `build_parallel_for_ir`) which is
+/// now dead.  The function entry is retained in the FUNCTIONS table
+/// for stack-trace symbol resolution but its body panics if invoked.
+fn n_parallel_for(_stores: &mut Stores, _stack: &mut DbRef) {
+    unreachable!(
+        "n_parallel_for: ARC.md A4 retired the materialised path; \
+         all par() routes through the Queue family (n_parallel_queue / \
+         _narrow / _text / _ref / _fn).  If you reached this, the \
+         parser failed to route the worker's return type to a Queue \
+         variant — extend `narrow_route_for` / the route_*_queue \
+         gates in src/parser/collections.rs."
+    );
 }
 
 #[cfg(feature = "threading")]
-/// Lightweight variant — borrows stores read-only instead of deep-copying.
-/// Same stack layout as `n_parallel_for` plus an extra `pool_m` argument.
-fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
-    // Same stack layout as n_parallel_for: n_extra on top, then declared params.
-    // Pop order (LIFO): n_extra, extras..., func, threads, return_size, elem_size, input.
-    // Post-2c: each `integer` is 8B.
-    let n_extra = *stores.get::<i64>(stack) as usize;
-    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
-    for _ in 0..n_extra {
-        extra_args.push(*stores.get::<i64>(stack) as u64);
-    }
-    extra_args.reverse();
-
-    let v_func = *stores.get::<i64>(stack) as i32;
-    let v_threads = *stores.get::<i64>(stack) as i32;
-    let v_return_size = *stores.get::<i64>(stack) as i32;
-    let v_element_size = *stores.get::<i64>(stack) as i32;
-    let v_input = *stores.get::<DbRef>(stack);
-
-    let (fn_pos, program) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_for_light called outside State::execute()");
-        let data = unsafe { &*ctx.data };
-        assert!(
-            v_func >= 0,
-            "parallel_for_light: invalid function reference {v_func}"
-        );
-        let d_nr = v_func as u32;
-        let fn_pos = data.def(d_nr).code_position;
-        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let library = unsafe { Arc::clone(&*ctx.library) };
-        (
-            fn_pos,
-            WorkerProgram {
-                bytecode,
-                library,
-                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
-                data_ptr: ctx.data,
-                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
-                // n_parallel_for path does not propagate line_numbers; workers
-                // get function name + file but report line 0.  Fixing this
-                // requires threading line_numbers through ParallelCtx.
-                line_numbers: Arc::new(std::collections::BTreeMap::new()),
-            },
-        )
-    };
-
-    let element_size = v_element_size as u32;
-    // Plan-06 phase 3d / phase 1 G2 — derive return_size and
-    // primitive-input size from def metadata.  The light path only
-    // ever reaches this code with primitive returns (parser routes
-    // Text/Reference/struct-enum to the heavy path).  We still
-    // consult v_return_size as a backstop when def.returned is
-    // Unknown (partial-parse scaffolding).
-    let (return_size, primitive_input_size, tuple_input_types) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_for_light: missing context");
-        let data = unsafe { &*ctx.data };
-        let def = data.def(v_func as u32);
-        let derived = u32::from(crate::variables::size(
-            &def.returned,
-            &crate::data::Context::Argument,
-        ));
-        let rs = if (1..=8).contains(&derived) {
-            derived
-        } else {
-            v_return_size.clamp(1, 8) as u32
-        };
-        // Phase 4d.A — typed input dispatch (mirrors the heavy
-        // path in `n_parallel_for`).  Encodes InputKind back onto
-        // the legacy `prim_in: u32` channel.
-        let pis = match input_kind_for_first_arg(def) {
-            InputKind::Ref => 0u32,
-            InputKind::Text => u32::MAX,
-            InputKind::Primitive { size } => u32::from(size),
-        };
-        // P189d — tuple-element types of the worker's first arg
-        // (None for non-tuple) so the wide-input path can inflate
-        // text fields per-element.
-        let tt = tuple_first_arg_types(def);
-        (rs, pis, tt)
-    };
-    let n_threads = (v_threads as usize).max(1);
-    let n = crate::vector::length_vector(&v_input, &stores.allocations) as usize;
-    let pool_m: usize = 2;
-
-    // Allocate result vector using the same helper as n_parallel_for.
-    let result_ref = parallel_light_execute_and_collect(
-        stores,
-        program,
-        fn_pos,
-        &v_input,
-        element_size,
-        return_size,
-        n_threads,
-        &extra_args,
-        n,
-        pool_m,
-        primitive_input_size,
-        tuple_input_types,
+/// Plan-06 ARC.md A4 (closed 2026-05-07) — companion to
+/// `n_parallel_for`.  Was the per-worker-pool variant; same fate
+/// after A3.6 routes Single/Float through Queue.
+fn n_parallel_for_light(_stores: &mut Stores, _stack: &mut DbRef) {
+    unreachable!(
+        "n_parallel_for_light: ARC.md A4 retired the light Concat \
+         path.  See `n_parallel_for` panic message for the diagnosis \
+         hint."
     );
-    stores.put(stack, result_ref);
 }
 
 #[cfg(feature = "threading")]
@@ -816,19 +934,51 @@ fn n_parallel_discard(stores: &mut Stores, stack: &mut DbRef) {
     // fn knows it returns void and does not pop a result.
 }
 
+/// Plan-06 ARC.md A8.b — discriminator for the shared queue
+/// dispatcher.  Each variant matches one of the 5 `n_parallel_queue*`
+/// native fns; the per-stitch behaviour lives in
+/// `parallel_queue_dispatch`'s match arms (dispatcher choice +
+/// post-processing + per-type buffer-stack push).
 #[cfg(feature = "threading")]
-/// Plan-06 PRIORITY.md spine step 8a — `Stitch::Queue` runtime entry.
-/// Pops the same arg layout as `n_parallel_for` (input, element_size,
-/// return_size, threads, func, extras..., n_extra), dispatches the
-/// worker fn per row via `run_parallel_queue` (step 4), and pushes
-/// the resulting `Vec<u64>` onto `stores.par_buffer_stack`.  The
-/// row count is pushed onto the operand stack so the caller can use
-/// it as a loop bound.
+#[derive(Copy, Clone)]
+enum QueueStitch {
+    Int,
+    Text,
+    Ref,
+    Narrow,
+    Fn,
+}
+
+/// Plan-06 ARC.md A8.b — shared queue dispatcher.  Replaces the
+/// boilerplate that was duplicated across `n_parallel_queue`,
+/// `_text`, `_ref`, `_narrow`, and `_fn`.  Pops the common 7 args
+/// from the runtime stack (n_extra, extras, fn, threads,
+/// return_size, element_size, input), builds a `WorkerProgram` +
+/// per-stitch context fetches (n_hidden_text, n_hidden_dests,
+/// ret_type, data_ptr, primitive_input_size, tuple_input_types,
+/// worker_return_size) in ONE parallel_ctx borrow scope, then
+/// dispatches via match on `stitch`.
 ///
-/// Step 8b is the first parser-side consumer; until then the only
-/// caller is the Rust unit test in `tests/threading.rs`.
-fn n_parallel_queue(stores: &mut Stores, stack: &mut DbRef) {
-    // Same stack layout / pop order as n_parallel_for.
+/// The 5 native fns each become a 1-line wrapper calling this with
+/// the matching `QueueStitch` value.  Net ~150-200 LOC saved.
+///
+/// ARC.md A8 (collapse the 5 `run_parallel_*` dispatchers in
+/// `src/parallel.rs` under one trait) was deferred — those
+/// dispatchers diverge structurally.  A8.b targets a different
+/// layer (interp-bridge native fns) where the divergence IS
+/// boilerplate.
+#[cfg(feature = "threading")]
+#[allow(clippy::too_many_lines)]
+fn parallel_queue_dispatch(stores: &mut Stores, stack: &mut DbRef, stitch: QueueStitch) {
+    let fn_label = match stitch {
+        QueueStitch::Int => "parallel_queue",
+        QueueStitch::Text => "parallel_queue_text",
+        QueueStitch::Ref => "parallel_queue_ref",
+        QueueStitch::Narrow => "parallel_queue_narrow",
+        QueueStitch::Fn => "parallel_queue_fn",
+    };
+
+    // Pop common args (same layout as legacy n_parallel_for).
     let n_extra = *stores.get::<i64>(stack) as usize;
     let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
     for _ in 0..n_extra {
@@ -842,81 +992,220 @@ fn n_parallel_queue(stores: &mut Stores, stack: &mut DbRef) {
     let v_element_size = *stores.get::<i64>(stack) as i32;
     let v_input = *stores.get::<DbRef>(stack);
 
-    let (fn_pos, program) = {
+    // Build (fn_pos, program) + per-stitch context fetches in one
+    // parallel_ctx borrow scope.  Snapshot raw `data_ptr` so the
+    // Ref stitch's downstream call (which needs `&mut Stores`) can
+    // dereference after we give up the borrow.  The ParallelCtx
+    // outlives this fn's stack frame (set by State::execute before
+    // any par fn dispatches).
+    let (
+        fn_pos,
+        program,
+        n_hidden_text,
+        n_hidden_dests,
+        ret_type,
+        data_ptr,
+        primitive_input_size,
+        tuple_input_types,
+        worker_return_size,
+    ) = {
         let ctx = stores
             .parallel_ctx
             .as_ref()
-            .expect("parallel_queue called outside State::execute()");
+            .unwrap_or_else(|| panic!("{fn_label} called outside State::execute()"));
         let data = unsafe { &*ctx.data };
         assert!(
             v_func >= 0,
-            "parallel_queue: invalid function reference {v_func}"
+            "{fn_label}: invalid function reference {v_func}"
         );
         let d_nr = v_func as u32;
-        let fn_pos = data.def(d_nr).code_position;
+        let def = data.def(d_nr);
+        let fn_pos = def.code_position;
         let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
         let library = unsafe { Arc::clone(&*ctx.library) };
+        let program = WorkerProgram {
+            bytecode,
+            library,
+            stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+            data_ptr: ctx.data,
+            fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+            line_numbers: Arc::new(std::collections::BTreeMap::new()),
+        };
+        // Per-stitch extras (computed unconditionally; cost is a
+        // few attribute reads, not heap allocations).
+        let n_hidden_text = def
+            .attributes
+            .iter()
+            .filter(|a| a.name.starts_with("__"))
+            .count();
+        let n_hidden_dests = def
+            .attributes
+            .iter()
+            .filter(|a| a.hidden && !a.name.starts_with("__"))
+            .count();
+        let ret_type = def.returned.clone();
+        let primitive_input_size = match input_kind_for_first_arg(def) {
+            InputKind::Ref => 0u32,
+            InputKind::Text => u32::MAX,
+            InputKind::Primitive { size } => u32::from(size),
+        };
+        let tuple_input_types = tuple_first_arg_types(def);
+        let worker_return_size = u32::from(crate::variables::size(
+            &def.returned,
+            &crate::data::Context::Argument,
+        ));
         (
             fn_pos,
-            WorkerProgram {
-                bytecode,
-                library,
-                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
-                data_ptr: ctx.data,
-                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
-                line_numbers: Arc::new(std::collections::BTreeMap::new()),
-            },
+            program,
+            n_hidden_text,
+            n_hidden_dests,
+            ret_type,
+            ctx.data,
+            primitive_input_size,
+            tuple_input_types,
+            worker_return_size,
         )
     };
 
     let element_size = v_element_size as u32;
     let n_threads = (v_threads as usize).max(1);
-    // Plan-06 spine step 8b' — derive return_size, primitive_input_size,
-    // and tuple_input_types from the worker fn's def, matching the
-    // dispatch shape `n_parallel_for` computes for the legacy path.
-    // Without these, primitive / text / tuple-input workers would
-    // dispatch through the DbRef-input arm and read garbage from
-    // slot 0.
-    let (return_size, primitive_input_size, tuple_input_types) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_queue: missing context");
-        let data = unsafe { &*ctx.data };
-        let def = data.def(v_func as u32);
-        let derived = u32::from(crate::variables::size(
-            &def.returned,
-            &crate::data::Context::Argument,
-        ));
-        let rs = if (1..=8).contains(&derived) {
-            derived
-        } else {
-            (v_return_size.clamp(1, 8)) as u32
-        };
-        let pis = match input_kind_for_first_arg(def) {
-            InputKind::Ref => 0u32,
-            InputKind::Text => u32::MAX,
-            InputKind::Primitive { size } => u32::from(size),
-        };
-        let tuple_types = tuple_first_arg_types(def);
-        (rs, pis, tuple_types)
+
+    // Per-stitch dispatcher call + buffer-stack push.
+    let n_rows: i64 = match stitch {
+        QueueStitch::Int => {
+            // Plan-06 spine step 8b' — derive return_size from the
+            // worker fn's def so primitive / text / tuple-input
+            // workers dispatch through the right input arm.
+            let return_size = if (1..=8).contains(&worker_return_size) {
+                worker_return_size
+            } else {
+                (v_return_size.clamp(1, 8)) as u32
+            };
+            let buf = crate::parallel::run_parallel_queue(
+                stores,
+                program,
+                fn_pos,
+                &v_input,
+                element_size,
+                n_threads,
+                &extra_args,
+                return_size,
+                primitive_input_size,
+                tuple_input_types,
+            );
+            let n = buf.len() as i64;
+            stores.par_buffer_stack.push(buf);
+            n
+        }
+        QueueStitch::Text => {
+            let _ = v_return_size; // text mode ignores caller-supplied size
+            let n_rows = vector::length_vector(&v_input, &stores.allocations) as usize;
+            let buf = run_parallel_text(
+                stores,
+                program,
+                fn_pos,
+                &v_input,
+                element_size,
+                n_threads,
+                &extra_args,
+                n_rows,
+                n_hidden_text,
+            );
+            let n = buf.len() as i64;
+            stores.par_text_buffer_stack.push(buf);
+            n
+        }
+        QueueStitch::Ref => {
+            let _ = v_return_size; // ref mode uses ret_type directly
+            let n_rows = crate::vector::length_vector(&v_input, &stores.allocations) as usize;
+            // SAFETY: data_ptr was snapshotted from parallel_ctx
+            // above; the ParallelCtx outlives this stack frame.
+            let data: &crate::data::Data = unsafe { &*data_ptr };
+            let (refs, adopted) = crate::parallel::run_parallel_queue_ref(
+                stores,
+                program,
+                fn_pos,
+                &v_input,
+                element_size,
+                n_threads,
+                &extra_args,
+                n_rows,
+                &ret_type,
+                data,
+                n_hidden_dests,
+            );
+            let n = refs.len() as i64;
+            stores.par_ref_buffer_stack.push((refs, adopted));
+            n
+        }
+        QueueStitch::Narrow => {
+            // Plan-06 ARC.md A3 / A3.5 — workers run with the
+            // SHAPE-NATURAL return size; the pack loop below
+            // truncates each u64 row to the buffer stride.
+            let stride = match v_return_size {
+                1 | 2 | 4 => v_return_size as u8,
+                other => {
+                    panic!("parallel_queue_narrow: invalid return_size {other} (expected 1/2/4)")
+                }
+            };
+            let buf64 = crate::parallel::run_parallel_queue(
+                stores,
+                program,
+                fn_pos,
+                &v_input,
+                element_size,
+                n_threads,
+                &extra_args,
+                worker_return_size,
+                primitive_input_size,
+                tuple_input_types,
+            );
+            let mut bytes = Vec::with_capacity(buf64.len() * stride as usize);
+            for u in &buf64 {
+                let row_bytes = u.to_le_bytes();
+                bytes.extend_from_slice(&row_bytes[..stride as usize]);
+            }
+            let n = buf64.len() as i64;
+            stores.par_narrow_buffer_stack.push((bytes, stride));
+            n
+        }
+        QueueStitch::Fn => {
+            let _ = v_return_size; // always 20 for fn-ref
+            let buf = crate::parallel::run_parallel_queue_fn(
+                stores,
+                &program,
+                fn_pos,
+                &v_input,
+                element_size,
+                n_threads,
+                &extra_args,
+            );
+            let n = (buf.len() / 20) as i64;
+            stores.par_fn_buffer_stack.push(buf);
+            n
+        }
     };
 
-    let buf = crate::parallel::run_parallel_queue(
-        stores,
-        program,
-        fn_pos,
-        &v_input,
-        element_size,
-        n_threads,
-        &extra_args,
-        return_size,
-        primitive_input_size,
-        tuple_input_types,
-    );
-    let n_rows = buf.len() as i64;
-    stores.par_buffer_stack.push(buf);
     stores.put(stack, n_rows);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 PRIORITY.md spine step 8a — `Stitch::Queue` runtime entry.
+/// Pops the same arg layout as `n_parallel_for` (input, element_size,
+/// return_size, threads, func, extras..., n_extra), dispatches the
+/// worker fn per row via `run_parallel_queue` (step 4), and pushes
+/// the resulting `Vec<u64>` onto `stores.par_buffer_stack`.  The
+/// row count is pushed onto the operand stack so the caller can use
+/// it as a loop bound.
+///
+/// Step 8b is the first parser-side consumer; until then the only
+/// caller is the Rust unit test in `tests/threading.rs`.
+///
+/// Plan-06 ARC.md A8.b: body now delegates to
+/// `parallel_queue_dispatch` — the shared scaffolding that was
+/// duplicated across all 5 `n_parallel_queue*` fns.
+fn n_parallel_queue(stores: &mut Stores, stack: &mut DbRef) {
+    parallel_queue_dispatch(stores, stack, QueueStitch::Int);
 }
 
 #[cfg(feature = "threading")]
@@ -1035,72 +1324,7 @@ fn n_parallel_buf_drop(stores: &mut Stores, _stack: &mut DbRef) {
 /// heap text-vector.  Reads use `n_parallel_buf_get_text` (clones
 /// into scratch following the standard text-return convention).
 fn n_parallel_queue_text(stores: &mut Stores, stack: &mut DbRef) {
-    // Same stack layout / pop order as n_parallel_for.
-    let n_extra = *stores.get::<i64>(stack) as usize;
-    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
-    for _ in 0..n_extra {
-        extra_args.push(*stores.get::<i64>(stack) as u64);
-    }
-    extra_args.reverse();
-
-    let v_func = *stores.get::<i64>(stack) as i32;
-    let v_threads = *stores.get::<i64>(stack) as i32;
-    let _v_return_size = *stores.get::<i64>(stack) as i32;
-    let v_element_size = *stores.get::<i64>(stack) as i32;
-    let v_input = *stores.get::<DbRef>(stack);
-
-    let (fn_pos, program, n_hidden_text) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_queue_text called outside State::execute()");
-        let data = unsafe { &*ctx.data };
-        assert!(
-            v_func >= 0,
-            "parallel_queue_text: invalid function reference {v_func}"
-        );
-        let d_nr = v_func as u32;
-        let fn_pos = data.def(d_nr).code_position;
-        let n_hidden = data
-            .def(d_nr)
-            .attributes
-            .iter()
-            .filter(|a| a.name.starts_with("__"))
-            .count();
-        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let library = unsafe { Arc::clone(&*ctx.library) };
-        (
-            fn_pos,
-            WorkerProgram {
-                bytecode,
-                library,
-                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
-                data_ptr: ctx.data,
-                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
-                line_numbers: Arc::new(std::collections::BTreeMap::new()),
-            },
-            n_hidden,
-        )
-    };
-
-    let element_size = v_element_size as u32;
-    let n_threads = (v_threads as usize).max(1);
-    let n_rows = vector::length_vector(&v_input, &stores.allocations) as usize;
-
-    let buf = run_parallel_text(
-        stores,
-        program,
-        fn_pos,
-        &v_input,
-        element_size,
-        n_threads,
-        &extra_args,
-        n_rows,
-        n_hidden_text,
-    );
-    let count = buf.len() as i64;
-    stores.par_text_buffer_stack.push(buf);
-    stores.put(stack, count);
+    parallel_queue_dispatch(stores, stack, QueueStitch::Text);
 }
 
 #[cfg(feature = "threading")]
@@ -1153,94 +1377,7 @@ fn n_parallel_buf_drop_text(stores: &mut Stores, _stack: &mut DbRef) {
 /// Step 8d.2 wires this through the parser; until then this is
 /// exercised only by Rust unit tests in `tests/threading.rs`.
 fn n_parallel_queue_ref(stores: &mut Stores, stack: &mut DbRef) {
-    // Same stack layout / pop order as n_parallel_for.
-    let n_extra = *stores.get::<i64>(stack) as usize;
-    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
-    for _ in 0..n_extra {
-        extra_args.push(*stores.get::<i64>(stack) as u64);
-    }
-    extra_args.reverse();
-
-    let v_func = *stores.get::<i64>(stack) as i32;
-    let v_threads = *stores.get::<i64>(stack) as i32;
-    let _v_return_size = *stores.get::<i64>(stack) as i32;
-    let v_element_size = *stores.get::<i64>(stack) as i32;
-    let v_input = *stores.get::<DbRef>(stack);
-
-    // Snapshot the worker fn's return type and a pointer to Data
-    // before we hand the closure-bound WorkerProgram off; both are
-    // borrowed from `stores.parallel_ctx` which we cannot keep across
-    // the run_parallel_queue_ref mutable borrow of `stores`.
-    let (fn_pos, program, ret_type, data_ptr, n_hidden_dests) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_queue_ref called outside State::execute()");
-        let data = unsafe { &*ctx.data };
-        assert!(
-            v_func >= 0,
-            "parallel_queue_ref: invalid function reference {v_func}"
-        );
-        let d_nr = v_func as u32;
-        let fn_pos = data.def(d_nr).code_position;
-        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let library = unsafe { Arc::clone(&*ctx.library) };
-        let ret_type = data.def(d_nr).returned.clone();
-        // ARC.md A6.a — count hidden caller-supplied destination
-        // params.  `ref_return` (parser/control.rs) adds an
-        // attribute with `hidden = true` for every Vector / Reference /
-        // Enum-payload return-typed local at the source-level fn body.
-        // The dispatcher must allocate a fresh DbRef per hidden arg
-        // per row in the worker output store so the worker writes
-        // into worker-local storage; without this, the worker
-        // dereferences uninitialized stack at the hidden-arg offset
-        // and writes into the parent's locked store (SIGSEGV).
-        let n_hidden_dests = data
-            .def(d_nr)
-            .attributes
-            .iter()
-            .filter(|a| a.hidden && !a.name.starts_with("__"))
-            .count();
-        (
-            fn_pos,
-            WorkerProgram {
-                bytecode,
-                library,
-                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
-                data_ptr: ctx.data,
-                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
-                line_numbers: Arc::new(std::collections::BTreeMap::new()),
-            },
-            ret_type,
-            ctx.data,
-            n_hidden_dests,
-        )
-    };
-
-    let element_size = v_element_size as u32;
-    let n_threads = (v_threads as usize).max(1);
-    let n_rows = crate::vector::length_vector(&v_input, &stores.allocations) as usize;
-
-    // SAFETY: `data_ptr` was just read from `parallel_ctx` and the
-    // ParallelCtx outlives this native fn's stack frame (set by
-    // State::execute before any par fn dispatches).
-    let data: &crate::data::Data = unsafe { &*data_ptr };
-    let (refs, adopted) = crate::parallel::run_parallel_queue_ref(
-        stores,
-        program,
-        fn_pos,
-        &v_input,
-        element_size,
-        n_threads,
-        &extra_args,
-        n_rows,
-        &ret_type,
-        data,
-        n_hidden_dests,
-    );
-    let count = refs.len() as i64;
-    stores.par_ref_buffer_stack.push((refs, adopted));
-    stores.put(stack, count);
+    parallel_queue_dispatch(stores, stack, QueueStitch::Ref);
 }
 
 #[cfg(feature = "threading")]
@@ -1297,114 +1434,7 @@ fn n_parallel_buf_drop_ref(stores: &mut Stores, _stack: &mut DbRef) {
 ///
 /// Reads use `n_parallel_buf_get_narrow(idx, return_size, signed)`.
 fn n_parallel_queue_narrow(stores: &mut Stores, stack: &mut DbRef) {
-    let n_extra = *stores.get::<i64>(stack) as usize;
-    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
-    for _ in 0..n_extra {
-        extra_args.push(*stores.get::<i64>(stack) as u64);
-    }
-    extra_args.reverse();
-
-    let v_func = *stores.get::<i64>(stack) as i32;
-    let v_threads = *stores.get::<i64>(stack) as i32;
-    let v_return_size = *stores.get::<i64>(stack) as i32;
-    let v_element_size = *stores.get::<i64>(stack) as i32;
-    let v_input = *stores.get::<DbRef>(stack);
-
-    let (fn_pos, program) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_queue_narrow called outside State::execute()");
-        let data = unsafe { &*ctx.data };
-        assert!(
-            v_func >= 0,
-            "parallel_queue_narrow: invalid function reference {v_func}"
-        );
-        let d_nr = v_func as u32;
-        let fn_pos = data.def(d_nr).code_position;
-        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let library = unsafe { Arc::clone(&*ctx.library) };
-        (
-            fn_pos,
-            WorkerProgram {
-                bytecode,
-                library,
-                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
-                data_ptr: ctx.data,
-                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
-                line_numbers: Arc::new(std::collections::BTreeMap::new()),
-            },
-        )
-    };
-
-    let element_size = v_element_size as u32;
-    let n_threads = (v_threads as usize).max(1);
-    let stride = match v_return_size {
-        1 | 2 | 4 => v_return_size as u8,
-        other => panic!("parallel_queue_narrow: invalid return_size {other} (expected 1/2/4)"),
-    };
-    let return_size = u32::from(stride);
-
-    let (primitive_input_size, tuple_input_types, worker_return_size) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_queue_narrow: missing context");
-        let data = unsafe { &*ctx.data };
-        let def = data.def(v_func as u32);
-        let pis = match input_kind_for_first_arg(def) {
-            InputKind::Ref => 0u32,
-            InputKind::Text => u32::MAX,
-            InputKind::Primitive { size } => u32::from(size),
-        };
-        // Plan-06 ARC.md A3 / A3.5 — derive worker_return_size from
-        // the worker's declared return type, NOT the buffer stride.
-        // Integer narrow (i8/i16/i32/u8/u16) is i64-promoted on the
-        // stack post-2c → 8.  Boolean / Enum-no-payload push 1 byte.
-        // Character pushes 4.  `var_size(.., Argument)` returns the
-        // exact stack-slot width per type — reuse it instead of
-        // hand-coding the dispatch.
-        let wrs = u32::from(crate::variables::size(
-            &def.returned,
-            &crate::data::Context::Argument,
-        ));
-        (pis, tuple_first_arg_types(def), wrs)
-    };
-
-    // Plan-06 ARC.md A3 / A3.5 — run workers with the SHAPE-NATURAL
-    // return size.  `execute_at_raw` reads exactly that many bytes
-    // off the worker's stack via `get_stack::<u8/u32/u64>`.  The
-    // pack loop below truncates each row to the buffer stride
-    // (1/2/4) — for narrow Integer the value lives in the low
-    // `stride` bytes of the i64 (zero/sign-extended), so truncation
-    // is correct; for Boolean/Character/Enum stride == worker_return_size
-    // already so the truncation is a no-op.
-    let _ = return_size;
-    let buf64 = crate::parallel::run_parallel_queue(
-        stores,
-        program,
-        fn_pos,
-        &v_input,
-        element_size,
-        n_threads,
-        &extra_args,
-        worker_return_size,
-        primitive_input_size,
-        tuple_input_types,
-    );
-    // Pack each u64 row down to `stride` little-endian bytes.  The
-    // worker writes its narrow return into the low `stride` bytes of
-    // the u64 slot already (zero/sign-extended via `to_le_bytes` in
-    // `execute_at_raw_*`), so taking the low bytes preserves the
-    // value bit-for-bit.
-    let mut bytes = Vec::with_capacity(buf64.len() * stride as usize);
-    for u in &buf64 {
-        let row_bytes = u.to_le_bytes();
-        bytes.extend_from_slice(&row_bytes[..stride as usize]);
-    }
-    let n_rows = buf64.len() as i64;
-    stores.par_narrow_buffer_stack.push((bytes, stride));
-    stores.put(stack, n_rows);
+    parallel_queue_dispatch(stores, stack, QueueStitch::Narrow);
 }
 
 #[cfg(feature = "threading")]
@@ -1468,6 +1498,67 @@ fn n_parallel_buf_drop_narrow(stores: &mut Stores, _stack: &mut DbRef) {
 }
 
 #[cfg(feature = "threading")]
+/// Plan-06 ARC.md A3.6 — typed reader for `single` (f32) returns
+/// from `n_parallel_queue_narrow` (stride 4).  Reads the same
+/// per-row bytes as `n_parallel_buf_get_narrow` but interprets them
+/// as a 4-byte f32 bit pattern via `f32::from_bits` instead of
+/// returning an i64 that the caller would then have to bit-cast.
+///
+/// Justified by symmetry with `Store::set_single` /
+/// `Store::get_single` in `src/store.rs:1406-1421`: those write /
+/// read f32 as a typed-pointer memcpy at a slot.  Worker functions
+/// returning `single` populate their return slot via the same
+/// typed pointer write, so the slot bytes ARE the f32 bit pattern.
+/// `execute_at_raw` reads those bytes as u64 (low 4 = f32 bits);
+/// `n_parallel_queue_narrow` truncates to stride 4 — preserving the
+/// f32 bit pattern.  This getter recovers the typed value with no
+/// intermediate IR Op required.
+///
+/// Pushes the value as f32 onto the operand stack — `Type::Single`
+/// has slot size 4 (per `variables::size`), matching `f32`'s width.
+/// Mirrors how `OpConvSingleFromInt` returns f32 (`src/ops.rs:502`).
+fn n_parallel_buf_get_single(stores: &mut Stores, stack: &mut DbRef) {
+    let idx = *stores.get::<i64>(stack) as usize;
+    let val: f32 = {
+        let entry = stores
+            .par_narrow_buffer_stack
+            .last()
+            .expect("parallel_buf_get_single: par_narrow_buffer_stack is empty");
+        let stride = entry.1 as usize;
+        debug_assert_eq!(
+            stride, 4,
+            "parallel_buf_get_single: stride must be 4 (got {stride})"
+        );
+        let off = idx * stride;
+        let bytes = &entry.0;
+        let raw = u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+        f32::from_bits(raw)
+    };
+    stores.put(stack, val);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 ARC.md A3.6 — typed reader for `float` (f64) returns
+/// from `n_parallel_queue` (stride 8 / Vec<u64> rows).  Reads the
+/// same per-row u64 as `n_parallel_buf_get` but interprets the bits
+/// as f64 via `f64::from_bits` instead of returning a raw i64.
+///
+/// Same justification as `n_parallel_buf_get_single`: worker
+/// functions returning `float` populate their return slot via a
+/// typed memcpy (`Store::set_float`); `execute_at_raw` reads the
+/// slot as u64 — the bytes ARE the f64 bit pattern.  This getter
+/// recovers the typed value with no intermediate IR Op.
+fn n_parallel_buf_get_float(stores: &mut Stores, stack: &mut DbRef) {
+    let idx = *stores.get::<i64>(stack) as usize;
+    let row = stores
+        .par_buffer_stack
+        .last()
+        .expect("parallel_buf_get_float: par_buffer_stack is empty")[idx];
+    let val = f64::from_bits(row);
+    stores.put(stack, val);
+}
+
+#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A6.b — fn-ref-return Queue runtime entry.  Same
 /// arg layout as `n_parallel_queue` but workers return 20-byte
 /// fn-ref blobs (8B i64 d_nr + 12B closure DbRef per Rust's
@@ -1482,62 +1573,7 @@ fn n_parallel_buf_drop_narrow(stores: &mut Stores, _stack: &mut DbRef) {
 /// `Set(b_var, Call(buf_get_fn, [idx]))` so the body's
 /// `CallRef(b_var, ...)` reads `b_var`'s 20-byte slot directly.
 fn n_parallel_queue_fn(stores: &mut Stores, stack: &mut DbRef) {
-    // Same stack layout / pop order as n_parallel_queue.
-    let n_extra = *stores.get::<i64>(stack) as usize;
-    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
-    for _ in 0..n_extra {
-        extra_args.push(*stores.get::<i64>(stack) as u64);
-    }
-    extra_args.reverse();
-
-    let v_func = *stores.get::<i64>(stack) as i32;
-    let v_threads = *stores.get::<i64>(stack) as i32;
-    let _v_return_size = *stores.get::<i64>(stack) as i32; // always 20 for fn-ref
-    let v_element_size = *stores.get::<i64>(stack) as i32;
-    let v_input = *stores.get::<DbRef>(stack);
-
-    let (fn_pos, program) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_queue_fn called outside State::execute()");
-        let data = unsafe { &*ctx.data };
-        assert!(
-            v_func >= 0,
-            "parallel_queue_fn: invalid function reference {v_func}"
-        );
-        let d_nr = v_func as u32;
-        let fn_pos = data.def(d_nr).code_position;
-        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let library = unsafe { Arc::clone(&*ctx.library) };
-        (
-            fn_pos,
-            WorkerProgram {
-                bytecode,
-                library,
-                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
-                data_ptr: ctx.data,
-                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
-                line_numbers: Arc::new(std::collections::BTreeMap::new()),
-            },
-        )
-    };
-
-    let element_size = v_element_size as u32;
-    let n_threads = (v_threads as usize).max(1);
-
-    let buf = crate::parallel::run_parallel_queue_fn(
-        stores,
-        &program,
-        fn_pos,
-        &v_input,
-        element_size,
-        n_threads,
-        &extra_args,
-    );
-    let n_rows = (buf.len() / 20) as i64;
-    stores.par_fn_buffer_stack.push(buf);
-    stores.put(stack, n_rows);
+    parallel_queue_dispatch(stores, stack, QueueStitch::Fn);
 }
 
 #[cfg(feature = "threading")]
@@ -1580,62 +1616,6 @@ fn n_parallel_buf_drop_fn(stores: &mut Stores, _stack: &mut DbRef) {
         .par_fn_buffer_stack
         .pop()
         .expect("parallel_buf_drop_fn: par_fn_buffer_stack is already empty");
-}
-
-#[cfg(feature = "threading")]
-/// Allocate result vector, create pool, dispatch light workers, collect.
-#[allow(clippy::too_many_arguments)]
-fn parallel_light_execute_and_collect(
-    stores: &mut Stores,
-    program: WorkerProgram,
-    fn_pos: u32,
-    input: &DbRef,
-    element_size: u32,
-    return_size: u32,
-    n_threads: usize,
-    extra_args: &[u64],
-    n: usize,
-    pool_m: usize,
-    primitive_input_size: u32,
-    tuple_input_types: Option<Vec<crate::data::Type>>,
-) -> DbRef {
-    let result_db = stores.null();
-    let vec_words = ((n as u32) * return_size + 15) / 8;
-    let vec_cr = stores.claim(&result_db, vec_words.max(1));
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
-    stores
-        .store_mut(&result_db)
-        .set_u32_raw(vec_rec, 4, n as u32);
-    stores
-        .store_mut(&result_db)
-        .set_u32_raw(header_rec, 4, vec_rec);
-    let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
-
-    let mut pool = crate::parallel::WorkerPool::new(n_threads, pool_m, 256);
-    crate::parallel::run_parallel_light(
-        stores,
-        program,
-        fn_pos,
-        input,
-        element_size,
-        return_size,
-        n_threads,
-        extra_args,
-        out_ptr,
-        n,
-        &mut pool,
-        primitive_input_size,
-        tuple_input_types,
-    );
-    // Return with pos=4 (not pos=8 from claim) — par result vector readers
-    // expect the header pointer at v_ref.pos.
-    DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    }
 }
 
 /// Parse a `LOFT_FAKE_*` env var into an `i64`.  Empty / unset / unparseable

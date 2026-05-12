@@ -457,6 +457,17 @@ impl Parser {
     // type annotation is parsed (so the parser doesn't reject the form)
     // but the inferred type from the initialiser is the source of truth.
     pub(crate) fn parse_constant(&mut self) -> bool {
+        // P246 — accept the optional `const` keyword at file scope as
+        // a synonym for the bare-name form (`const PI = 3.14;` ===
+        // `PI = 3.14;`).  Pre-fix the leading `const` swallowed
+        // identifiable name, the parser fell through to
+        // `expression()`, and `change_var_type` panicked on an empty
+        // file-scope variable table.  The two forms are identical at
+        // every level — same definition kind, same UPPER_CASE check,
+        // same code path — so the keyword is purely an explicitness
+        // signal at the declaration site (matches the in-fn `const`
+        // syntax and lib/wall.loft's existing usage).
+        let _explicit_const = self.lexer.has_keyword("const");
         if let Some(id) = self.lexer.has_identifier() {
             // Optional `: type` annotation between the identifier and `=`.
             // Parsed and discarded — the literal's element type is used.
@@ -763,7 +774,7 @@ impl Parser {
             }
         }
         let mut returned_not_null = false;
-        let result = if self.lexer.has_token("->") {
+        let mut result = if self.lexer.has_token("->") {
             // Will be the correct def_nr on the second pass
             if let Some(tp) = self.parse_type_full(self.data.def_nr(&fn_name), true) {
                 if self.lexer.has_keyword("not") {
@@ -778,6 +789,67 @@ impl Parser {
         } else {
             Type::Void
         };
+        // Plan-14 phase 07 (P234 runtime): when the declared return type
+        // is `Type::Tuple(elems)` and any element carries a lifetime
+        // concern (Text, Reference, Vector, Enum-struct, keyed
+        // collection, RefVar, or a nested tuple containing one of
+        // those), rewrite the return type to `Reference(__tuple<…>)`
+        // — the synthetic struct that loft already creates via
+        // `data.tuple_def(...)` for stored tuples (P189b path).
+        // The function then returns a DbRef and all existing
+        // `ref_return` / `text_return` ownership-transfer machinery
+        // applies unchanged.  Pure-value tuples skip the rewrite and
+        // keep using Rust's tuple ABI (the T1.8a path for shapes
+        // like `(integer, integer)`).
+        //
+        // Skip for generic templates — `T` resolves later to a concrete
+        // type which may or may not have lifetime concerns; rewriting
+        // pre-specialisation would freeze the wrong shape.  Mirrors the
+        // generic-template guard in `block_result` (control.rs ~line 426)
+        // that excludes generic templates from `ref_return` /
+        // `text_return`.
+        let is_generic_template =
+            self.context != u32::MAX && self.data.def_type(self.context) == DefType::Generic;
+        // A7.1: also rewrite pure-value tuples wider than the 8-byte
+        // primitive return slot.  Three- and four-arity tuples and
+        // nested tuples don't fit in a single eval-stack slot under
+        // par dispatch; routing them through the synthetic struct
+        // unifies the par-tuple-return path with the lifetime-bearing
+        // case from Phase 07.  Safe after P236's fix (work-ref
+        // unification across If branches in
+        // `parser/control.rs::unify_if_branches_work_refs`); without
+        // it, `min_max(...) -> (integer, integer) { if cond { (a, b) }
+        // else { (c, d) } }` regressed on `--native` because each
+        // branch's separate synthetic-struct work-ref dropped the
+        // if/else's value.
+        //
+        // P196 follow-up (2026-05-12): exclude tuples that contain a
+        // `Type::Function` element from the size>8 trigger.  Function
+        // values are 16 bytes (u32 d_nr + DbRef closure ref), so any
+        // tuple containing one trips size>8 even when the OTHER
+        // elements are pure primitives — but the synthetic struct
+        // wrapping breaks at the assignment site `Pair { v: pp }` where
+        // `Pair.v: (fn, integer)` stays as a bare tuple type but
+        // `pp: Reference(__tuple<fn, integer>)` after the rewrite.
+        // Function-element tuple returns worked correctly BEFORE
+        // commit 44fdd098 added the size>8 trigger, so excluding them
+        // preserves the original P196 codegen path while keeping the
+        // A7.1 win for pure-primitive 3+ arity tuples.  The
+        // `has_lifetime_concern` arm still fires for Text / Reference /
+        // Vector / etc. elements that genuinely need by-reference
+        // passing; only the size-driven trigger is narrowed.
+        let needs_tuple_rewrite = matches!(&result, crate::data::Type::Tuple(elems)
+            if elems.iter().any(crate::data::has_lifetime_concern)
+                || (u32::from(crate::variables::size(&result, &crate::data::Context::Argument)) > 8
+                    && !elems.iter().any(|e| matches!(e, crate::data::Type::Function(_, _, _)))));
+        if !is_generic_template
+            && needs_tuple_rewrite
+            && let crate::data::Type::Tuple(elems) = &result
+        {
+            let elems_clone = elems.clone();
+            let synthetic_d_nr = self.data.tuple_def(&mut self.lexer, &elems_clone);
+            result = crate::data::Type::Reference(synthetic_d_nr, Vec::new());
+        }
         self.vars
             .append(&mut self.data.definitions[self.context as usize].variables);
         if self.first_pass {
@@ -855,6 +927,21 @@ impl Parser {
             if !is_stub {
                 self.vars.test_used(&mut self.lexer, &self.data);
             }
+            // P246 follow-up — UPPER_CASE locals without `const`
+            // violate the "UPPER_CASE means immutable constant"
+            // convention.  Run once per function in the second pass
+            // (after const_param flags are settled).
+            self.vars.warn_upper_case_locals(&mut self.lexer);
+            // Plan-07 phase 4e.2 — undefended fault-site warning.
+            // Walks this function's body looking for fault-prone op
+            // calls (OpDivInt / OpRemInt / OpGetVector / OpVectorRef /
+            // OpTextCharacter) that survived the 4d.1 / 4d.2 / 4e.1
+            // swap passes; emits `Level::Warning` unless an easy-proof
+            // skip pattern applies.  Silenceable via
+            // `LOFT_NO_WARN_RUNTIME=1` env var.  Second-pass only —
+            // first pass doesn't have the swap-pass results yet.
+            let body = self.data.definitions[self.context as usize].code.clone();
+            self.warn_undefended_fault_sites(&body);
         }
         self.lexer.has_token(";");
         self.parse_rust();

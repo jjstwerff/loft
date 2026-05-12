@@ -1,0 +1,441 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Jurjen Stellingwerff
+  SPDX-License-Identifier: LGPL-3.0-or-later
+
+  Source for par_slides.pdf.  Render with:
+      chromium --headless=new --no-sandbox \
+               --no-pdf-header-footer \
+               --print-to-pdf=par_slides.pdf \
+               file:///abs/path/par_slides.html
+
+  Layout: two A4-landscape sheets (297 × 210 mm).  All sizes are mm.
+  Print backgrounds must be enabled — handled by `print-color-adjust`.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Built with Claude — par(…)</title>
+<style>
+  @page { size: A4 landscape; margin: 0; }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+                 Arial, sans-serif;
+    color: #1c2530;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* ---- one slide = one A4-landscape sheet ----
+     Side padding 16mm — visible safe border around all content.
+     Bottom padding 19mm reserves a band for the absolutely-positioned
+     page indicator (bottom: 7mm, ~4mm tall) plus a 6–8mm clear gap so
+     wrapping table text in the bottom row cannot reach it. */
+  .slide {
+    width: 297mm;
+    height: 210mm;
+    padding: 12mm 16mm 19mm 16mm;
+    page-break-after: always;
+    position: relative;
+    overflow: hidden;
+  }
+  .slide:last-child { page-break-after: auto; }
+
+  h1 {
+    font-size: 23pt;
+    font-weight: 700;
+    margin: 0 0 3mm 0;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+  }
+  h1 code {
+    font-size: 21pt;
+    background: none;
+    padding: 0;
+  }
+  .lede {
+    font-size: 12.5pt;
+    font-style: italic;
+    color: #4a5868;
+    line-height: 1.4;
+    max-width: 245mm;
+    margin: 0 0 7mm 0;
+  }
+
+  code, pre {
+    font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  /* ---- sheet 1: three-column code grid ----
+     Explicit mm widths sized to the longest hard-coded line in each
+     code block at 8.5pt monospace (≈1.7mm/char):
+       loft  47 chars → 88mm (80mm content + 8mm padding)
+       Java  42 chars → 80mm
+       Go    44 chars → fits in the remaining 1fr (~96mm)
+     Equal-fr ratios were too narrow for the longest loft / Java lines
+     and clipped real characters. */
+  .lang-grid {
+    display: grid;
+    grid-template-columns: 88mm 80mm 1fr;
+    gap: 5mm;
+    margin-bottom: 5mm;
+  }
+  .lang { min-width: 0; }
+  .lang h2 {
+    font-size: 15pt;
+    color: #1f5fa8;
+    margin: 0 0 2mm 0;
+  }
+  /* Code blocks deliberately stay at the original size — they fit the
+     three-column comparison and bigger code wraps Go's hand-rolled
+     scaffold past the right edge. */
+  .lang pre {
+    background: #f5f6f8;
+    border: 0.3mm solid #e3e6ec;
+    border-radius: 1.5mm;
+    padding: 3mm 4mm;
+    font-size: 8.5pt;
+    line-height: 1.45;
+    margin: 0;
+    white-space: pre;
+    overflow: hidden;
+  }
+  .kw  { color: #a020a0; }
+  .ty  { color: #1f5fa8; font-weight: 500; }
+  .fn  { color: #4b3a99; }
+  .num { color: #b3531e; }
+  .str { color: #2c7a3f; }
+  .cm  { color: #6c7a89; font-style: italic; }
+
+  /* ---- sheet 1: comparison table ---- */
+  .compare {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5pt;
+    margin-top: 4mm;
+  }
+  .compare th, .compare td {
+    text-align: left;
+    padding: 2.5mm 4mm;
+    border-bottom: 0.2mm solid #d8dde5;
+  }
+  .compare th {
+    font-size: 10.5pt;
+    color: #4a5868;
+    font-weight: 600;
+    background: #f5f6f8;
+  }
+  .compare td:first-child { font-weight: 700; width: 14%; }
+  .compare td:nth-child(2) { width: 30%; }
+  .compare td:nth-child(3) { width: 56%; }
+
+  /* ---- sheet 2: KPI strip ---- */
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6mm;
+    margin: 0 0 7mm 0;
+  }
+  .kpi {
+    border: 0.3mm solid #d8dde5;
+    border-radius: 1.5mm;
+    padding: 4mm 4mm 3mm 4mm;
+    text-align: center;
+    position: relative;
+  }
+  .kpi .num {
+    font-size: 34pt;
+    font-weight: 700;
+    line-height: 1;
+    color: inherit;
+  }
+  .kpi .num strong {
+    color: #1f5fa8;
+    font-weight: 700;
+  }
+  .kpi .label {
+    font-size: 11.5pt;
+    color: #4a5868;
+    margin-top: 2mm;
+  }
+  .kpi.fun {
+    background: #fff7d6;
+    border-color: #f0e0a0;
+  }
+  .kpi.fun .num strong { color: #a87a00; }
+  .kpi.fun .tag {
+    position: absolute;
+    top: 2.5mm;
+    right: 3mm;
+    font-size: 8.5pt;
+    letter-spacing: 0.05em;
+    color: #a87a00;
+    font-weight: 700;
+  }
+
+  /* ---- sheet 2: lesson grid ---- */
+  .lessons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4mm 9mm;
+    margin-bottom: 5mm;
+  }
+  .lesson {
+    display: grid;
+    grid-template-columns: 10mm 1fr;
+    gap: 3mm;
+    padding: 3mm 0 3mm 0;
+    border-top: 0.2mm solid #e3e6ec;
+  }
+  .lesson .n {
+    font-size: 22pt;
+    font-weight: 700;
+    color: #1f5fa8;
+    line-height: 1;
+  }
+  .lesson h3 {
+    margin: 0 0 1.5mm 0;
+    font-size: 13pt;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  .lesson p {
+    margin: 0;
+    font-size: 11pt;
+    line-height: 1.4;
+    color: #2a3441;
+  }
+  .lesson p strong { color: #1f5fa8; }
+
+  /* ---- sheet 2: footer ---- */
+  .closer {
+    border-top: 0.2mm solid #d8dde5;
+    padding-top: 3mm;
+    text-align: center;
+    font-style: italic;
+    font-size: 12pt;
+    color: #2a3441;
+  }
+  .closer strong { color: #1c2530; font-style: normal; font-weight: 700; }
+  .colophon {
+    text-align: center;
+    margin-top: 2mm;
+    font-size: 10pt;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    color: #4a5868;
+  }
+  .colophon .sep { padding: 0 2mm; }
+  .colophon .name { font-family: inherit; font-style: normal; }
+
+  /* ---- page indicator ----
+     Lives in the slide's bottom-right margin.  Slide padding-bottom is
+     19mm; pageno bottom is 7mm and the glyph is ~4mm tall, so the
+     pageno occupies y = 199–203mm.  Content stops at y = 191mm
+     (slide-bottom 210 − padding-bottom 19), leaving an 8mm clear
+     gap so wrapping table text cannot reach it. */
+  .pageno {
+    position: absolute;
+    right: 16mm;
+    bottom: 7mm;
+    font-size: 10pt;
+    color: #6c7a89;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<!-- SHEET 1                                                       -->
+<!-- ============================================================ -->
+<section class="slide">
+
+  <h1>Built with Claude: <code>par(...)</code> &mdash; make a for-loop run in parallel</h1>
+
+  <p class="lede">
+    loft is a programming language I've been building for 9 years &mdash;
+    recently with Claude as a collaborator.  Over the past two months we
+    worked on several things; the parallel for-loop below was one of the
+    bigger pieces.
+  </p>
+
+  <div class="lang-grid">
+
+    <div class="lang">
+      <h2>loft</h2>
+<pre><span class="kw">fn</span> <span class="fn">process</span>(d: <span class="kw">const</span> <span class="ty">Document</span>) -&gt; <span class="ty">Report</span> { ... }
+<span class="kw">fn</span> <span class="fn">handle</span>(r: <span class="ty">Report</span>) { ... }
+
+<span class="kw">fn</span> <span class="fn">main</span>() {
+    <span class="kw">for</span> x <span class="kw">in</span> work <span class="kw">par</span>(r = <span class="fn">process</span>(x), <span class="num">4</span>) {
+        <span class="fn">handle</span>(r);
+    }
+}</pre>
+    </div>
+
+    <div class="lang">
+      <h2>Java</h2>
+<pre><span class="kw">static</span> <span class="ty">Report</span> <span class="fn">process</span>(<span class="ty">Document</span> d)  { ... }
+<span class="kw">static</span> <span class="kw">void</span>   <span class="fn">handle</span>(<span class="ty">Report</span> r)    { ... }
+
+work.<span class="fn">stream</span>()
+    .<span class="fn">parallel</span>()
+    .<span class="fn">map</span>(Main::process)
+    .<span class="fn">forEach</span>(Main::handle);</pre>
+    </div>
+
+    <div class="lang">
+      <h2>Go</h2>
+<pre><span class="kw">func</span> <span class="fn">process</span>(d <span class="ty">Document</span>) <span class="ty">Report</span> { ... }
+<span class="kw">func</span> <span class="fn">handle</span>(r <span class="ty">Report</span>)          { ... }
+
+results := <span class="fn">make</span>(<span class="kw">chan</span> <span class="ty">Report</span>, <span class="fn">len</span>(work))
+<span class="kw">var</span> wg sync.WaitGroup
+chunk := <span class="fn">len</span>(work) / workers
+<span class="kw">for</span> t := <span class="num">0</span>; t &lt; workers; t++ {
+    wg.<span class="fn">Add</span>(<span class="num">1</span>)
+    <span class="kw">go</span> <span class="kw">func</span>(t <span class="ty">int</span>) {
+        <span class="kw">defer</span> wg.<span class="fn">Done</span>()
+        lo, hi := t*chunk, (t+<span class="num">1</span>)*chunk
+        <span class="kw">if</span> t == workers-<span class="num">1</span> { hi = <span class="fn">len</span>(work) }
+        <span class="kw">for</span> _, x := <span class="kw">range</span> work[lo:hi] {
+            results &lt;- <span class="fn">process</span>(x)
+        }
+    }(t)
+}
+<span class="kw">go</span> <span class="kw">func</span>() { wg.<span class="fn">Wait</span>(); <span class="fn">close</span>(results) }()
+
+<span class="kw">for</span> r := <span class="kw">range</span> results {
+    <span class="fn">handle</span>(r)
+}</pre>
+    </div>
+
+  </div>
+
+  <table class="compare">
+    <thead>
+      <tr>
+        <th>Language</th>
+        <th>What you write</th>
+        <th>What is hard or impossible</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>loft</td><td>one extra clause on the for-loop</td>
+          <td>nothing &mdash; the safety rules are checked by the compiler</td></tr>
+      <tr><td>Java</td><td>one method call</td>
+          <td>controlling thread count or how work is split</td></tr>
+      <tr><td>Go</td><td>a hand-built scaffold</td>
+          <td>writing it concisely &mdash; the type system can't catch a worker that touches the wrong data</td></tr>
+    </tbody>
+  </table>
+
+  <div class="pageno">1 / 2</div>
+</section>
+
+
+<!-- ============================================================ -->
+<!-- SHEET 2                                                       -->
+<!-- ============================================================ -->
+<section class="slide">
+
+  <h1>Four lessons from a long Claude collaboration</h1>
+  <p class="lede">
+    Two months of pair-programming.  The lessons were not about parallel code.
+  </p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="num"><strong>2</strong></div>
+                     <div class="label">months</div></div>
+    <div class="kpi"><div class="num"><strong>3</strong></div>
+                     <div class="label">plan rewrites</div></div>
+    <div class="kpi"><div class="num"><strong>14+</strong></div>
+                     <div class="label">hidden bugs found</div></div>
+    <div class="kpi fun">
+      <div class="tag">FUN FACT</div>
+      <div class="num"><strong>&minus;565</strong></div>
+      <div class="label">lines, biggest single delete</div>
+    </div>
+  </div>
+
+  <div class="lessons">
+
+    <div class="lesson">
+      <div class="n">1</div>
+      <div>
+        <h3>The wrong version teaches you the right one</h3>
+        <p>
+          We rewrote the planning document three times in eight days because
+          each version eventually drifted from reality.  The same is true of
+          code: it is fine to let Claude implement something you suspect will
+          need to be redone.
+          <strong>Let Claude write the imperfect version first; the tests
+          and the bug list survive the rewrite.</strong>
+        </p>
+      </div>
+    </div>
+
+    <div class="lesson">
+      <div class="n">2</div>
+      <div>
+        <h3>Evidence is cheaper than design</h3>
+        <p>
+          Claude's instinct is to design from the problem description.  For
+          one bug that produced a ~200-line plan with new compiler concepts.
+          Thirty seconds reading the actual error message collapsed it to a
+          30-line routing change.
+          <strong>Make Claude paste the actual error before it writes the
+          fix.</strong>
+        </p>
+      </div>
+    </div>
+
+    <div class="lesson">
+      <div class="n">3</div>
+      <div>
+        <h3>Sometimes the side-effect is the point</h3>
+        <p>
+          The plan was to delete a thousand lines of complicated code.  But
+          the small test programs we wrote along the way kept finding
+          completely different bugs in places no normal test would touch.
+          <strong>File every bug Claude's work surfaces, even the unrelated
+          ones &mdash; they're the cheapest you'll ever find.</strong>
+        </p>
+      </div>
+    </div>
+
+    <div class="lesson">
+      <div class="n">4</div>
+      <div>
+        <h3>A 9-year project does not optimise for &ldquo;ship this week&rdquo;</h3>
+        <p>
+          I had to say no to marking failing tests as &ldquo;allowed to
+          fail&rdquo;, to branching off main while work was unfinished, and
+          to accepting small slowdowns for short-term wins.
+          <strong>The second time you tell Claude &ldquo;no&rdquo; to the
+          same thing, save it to memory.</strong>
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="closer">
+    The interesting part of this collaboration wasn't the parallel code.
+    It was discovering
+    <strong>what structure a long-running Claude session needs around it</strong>.
+  </div>
+  <div class="colophon">
+    github.com/jjstwerff/loft
+    <span class="sep">&middot;</span>
+    <span class="name">Jurjen Stellingwerff</span>
+  </div>
+
+  <div class="pageno">2 / 2</div>
+</section>
+
+</body>
+</html>

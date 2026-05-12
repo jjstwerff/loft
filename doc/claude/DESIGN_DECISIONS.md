@@ -97,12 +97,12 @@ borrow-checked `&T` / `&mut T`, FnOnce / FnMut / Fn capability
 hierarchy, statically-enforced single-mutator-or-multiple-readers.
 The current copy-at-definition model with `Reference<T>` and a
 planned `Mutable<T>` stdlib helper covers the
-[EventLoop](EVENT_LOOP.md) and first-game use cases acceptably;
+[EventLoop](plans/future/23-event-loop/README.md) and first-game use cases acceptably;
 the closure-model evolution should be designed against
 real-world friction observed once a real game ships, not
 pre-emptively.  Sequencing for the evolution lives in
-[MUTABLE_CLOSURES.md](MUTABLE_CLOSURES.md) (the design spec) and
-[MUTABLE_CLOSURES_DISCUSSION.md](MUTABLE_CLOSURES_DISCUSSION.md)
+[plans/22-mutable-closures/README.md](plans/22-mutable-closures/README.md) (the design spec) and
+[plans/22-mutable-closures/DISCUSSION.md](plans/22-mutable-closures/DISCUSSION.md)
 (alternatives considered, including the full Rust borrow-checker
 option F).
 
@@ -239,6 +239,316 @@ inline-fn implementation cost.  Today (2026-05-04): no such
 workflow has surfaced; the loft-test cross_mode harness pulls
 helper fns to file scope cleanly, and `lib/graphics/` plus the
 stdlib never need local-helper recursion.
+
+---
+
+## C64 — Tuple struct-ref elements use MOVE semantics (not copy + null)
+
+**Question.** When a tuple element is a struct reference
+(`Type::Reference`), what semantics apply at scope exit and on
+destructuring?  Two candidates:
+
+- **Move semantics:** the source tuple's scope-exit emits no
+  per-element `OpFreeRef`; each destructured destination variable
+  owns its element.
+- **Copy + null semantics:** the destructure copies the DbRef,
+  then nulls out the source tuple's slot via a new
+  `OpNullTupleElem(var, offset)` opcode so the source's scope-exit
+  cleanup is a no-op for the moved-out element.
+
+**Evaluation.** Move semantics is what the runtime already does:
+`src/scopes.rs:1000-1009`'s tuple scope-exit arm is a `continue`
+stub (no per-element `OpFreeRef` on the source tuple), and
+`parser/expressions.rs::parse_assign`'s destructure path types
+each destination variable as the source element's `Type::Reference`
+via `change_var_type(v_nr, &rhs_elems[i])` so the destination
+gets ordinary scope-exit cleanup.  The Plan-14 phase 04 cross-mode
+harness exercised every single-iteration E5 shape (swap, arg,
+return, mixed Ref+int, mixed Ref+text, plain local) on both
+backends with byte-identical output and no panics — confirming
+move semantics is correct in practice.
+
+The "copy + null" alternative would require a new opcode at a
+time when the opcode space is near-saturation (254/256 used per
+CHANGELOG_TECHNICAL.md), would add a per-destructure runtime
+write the move path doesn't need, and produces no observable
+difference to user code — only the runtime cleanup ordering
+changes.  No concrete program shape exists that move-semantics
+gets wrong but copy+null would get right.
+
+The loop-iteration aliasing bug (P250 — `for { (q1, q2) =
+make_pair(pa, pb); }` reads `null` for whichever destructured
+variable picked up the FIRST argument on iterations >0) is a
+SEPARATE dep-tracking issue, not a move-vs-copy semantics
+question.  Both candidates would have the same loop-iter problem
+without an additional fix; the bug lives in the destructure
+path's dep propagation between source argument slot and
+destination variable slot.
+
+**Decision.** **Move semantics.**  Dated 2026-05-11.  The
+runtime path is locked by 6 cross-mode E5 cells in
+`tests/tuple_matrix.rs` (e5_d1_struct_ref_local + swap +
+ref_int_local + ref_text_local; e5_d2_struct_ref_arg + return).
+Plan-14 phase 04 records the rationale.
+
+**Revisit when.** A concrete shape appears where move semantics
+is observably wrong but copy + null would be correct — none
+known as of 2026-05-11.  P250's fix lives in dep-tracking, not
+in the move/copy axis.
+
+---
+
+## C65 — Tuple "structure value" element type folded into reference (E5 = E6)
+
+**Question.** Should the validation matrix carry a separate E6
+element type for "structure value" (an inline by-value struct
+copied into the tuple slot, distinct from `Type::Reference`)?
+
+**Evaluation.** Loft has no inline by-value struct type distinct
+from `Type::Reference`.  A `struct Foo { ... }` declaration
+produces a record laid out in a store; the loft-level "value" you
+pass around is a `Reference(struct_def, dep)` — a 12-byte
+`DbRef`.  Tuple element E5 (Reference) already covers this shape
+end-to-end.
+
+Carving out a separate E6 row would either (a) duplicate every
+E5 cell with no semantic difference, or (b) require introducing
+a new `Type::StructValue` variant — a substantial language-design
+change with no consumer.  Neither pays for itself.
+
+**Decision.** **Folded into E5.**  Dated 2026-05-11.  Plan-14's
+matrix in `00-matrix.md` marks every E6 cell as
+`CLOSED:folded into E5`.  A future feature that introduces inline
+value structs (none on the roadmap) would re-open the row.
+
+---
+
+## C66 — Production loft programs never abort on user-attributable edge cases (development may halt)
+
+**Question.** Should runtime fault sites (divide-by-zero, vector /
+text out-of-bounds, null DbRef dereference, narrow-cast overflow,
+`panic("msg")` / failed `assert`) HALT the loft program with a typed
+runtime error (the rustc-style "loud failure" model)?  Or should they
+return a silent sentinel (null / `i64::MIN` / null DbRef / char 0)
+and let execution continue?
+
+**Evaluation.** Loft's primary deployment target is **interactive
+programs that must not stop**: browser games shared via URL, native
+games with continuous frame loops, scriptable scenes inside
+applications, multiplayer servers driving live sessions.  In every
+one of those contexts an abort is far worse than a wrong-pixel /
+wrong-frame / wrong-record edge case.  A frozen game cannot be saved
+by the user; a wrong pixel can.
+
+But during **development** — running tests, debugging a script,
+iterating on a feature — halting on a runtime fault is a feature,
+not a bug.  Halt-on-fault is how you find the divide-by-zero you
+didn't know about, the OOB the test missed, the assert that's
+firing.  The dev tooling (CLI, test harness, REPL) wants the loud
+failure mode; the production game / server / browser embed does
+not.
+
+This separation is not new.  Loft has always carried it via the
+`production` flag on the logger:
+
+- `default/01_code.loft::panic / assert` are documented as
+  **logging in production** (`#impure(host_io)`); the
+  production-mode path in `src/native.rs::n_panic` and `n_assert`
+  checks `logger.config.production`.  When `production == true`
+  it writes a fatal log entry, sets `Stores::had_fatal = true`, and
+  **returns** — execution continues.  When `production == false`
+  (or no logger attached) the same site halts via the typed
+  `RuntimeError` path so the developer sees the failure.
+- `main.rs` reads `had_fatal` after execute returns and exits 1
+  ONLY when no frame loop is running.
+- Integer `/` by zero, `%` by zero, vector / text OOB, null DbRef
+  field reads, narrow-cast overflow today return null sentinels
+  (`i64::MIN`, `char(0)`, `DbRef { rec: 0 }`) and let downstream
+  code keep running — even in dev mode.  Plan-07 phase 4
+  converts these to typed-error halt **in dev mode only**;
+  production keeps the silent + log shape.
+- The `??` operator is the user's tool for explicit handling of
+  null sentinels: `x = a / b ?? 0` discharges the null with a
+  fallback at the user's choice.
+- The `RuntimeLogger` framework (`doc/claude/LOGGER.md`) is the
+  surface for surfacing edge-case incidents to operators without
+  halting the program.
+
+**Decision.** **Loft programs in production MUST NOT abort on
+user-attributable runtime edge cases.**  Dated 2026-05-11.
+Development is unaffected; halt-on-fault is the right behaviour
+for the test runner, the CLI, and interactive debugging.  The
+gate is the existing `Stores::logger.config.production` flag.
+
+For each fault site:
+
+| Site | Production (`logger.config.production == true`) | Development (default) |
+|---|---|---|
+| Integer `/`, `%` by zero | log warning, return `i64::MIN` sentinel, continue | typed `RuntimeError::DivideByZero`, halt + render |
+| Vector / text OOB (positive, negative past start) | log warning, return null DbRef / char 0, continue | typed `RuntimeError::IndexOutOfBounds` / `NegativeIndex`, halt + render |
+| Null DbRef field / method access | log warning, return null result, continue | typed `RuntimeError::NullDereference`, halt + render |
+| Narrow-cast overflow | log warning, return clamped or null, continue | typed `RuntimeError::NarrowCastOverflow`, halt + render |
+| `panic("msg")` builtin | log fatal, set `had_fatal`, return | typed `RuntimeError::UserPanic`, halt + render |
+| Failed `assert(test, msg)` | log error, set `had_fatal`, return | typed `RuntimeError::AssertionFailed`, halt + render |
+| Stack-overflow trap | log fatal, attempt graceful unwind | typed `RuntimeError::StackOverflow`, halt + render |
+
+**Three-way defense contract** — codegen picks the opcode based on
+how the user's code handles the fault potential:
+
+| Defense at compile-time | Emit | Runtime behaviour |
+|---|---|---|
+| `expr ?? fallback` | Nullable peer (existing `parser/operators.rs::rewrite_outer_arith_to_nullable` extended to vector/text) | No log, no halt; sentinel discharged by `??` |
+| `if x != null { use(x); }` (or `if !x { … }`) immediately after `x = expr` (statically detectable defensive check) | Nullable peer (new flow-analysis arm in parse_assign) | No log, no halt; user's defense handles the null |
+| Neither | Raising peer | Production: log warning + continue with sentinel.  Development: halt + render. |
+
+The static-analysis fallback "raising peer + runtime warning" is
+the safety net — it catches sites the developer forgot to defend
+AND sites where the defense lives across a function boundary
+(can't be statically detected).  In production those sites still
+produce a sentinel and execution continues; the log entry surfaces
+the issue to operators for investigation.
+
+A compile-time warning fires at every undefended fault site that
+the parser can statically recognise as fault-prone:
+
+```
+warning: `v[i]` may produce null on out-of-bounds with no defensive check
+  --> game.loft:42:8
+   = note: guard with `if i < len(v) { ... }` before indexing
+   = note: or accept null with `v[i] ?? <fallback>`
+   = note: or follow with `if x != null { ... }` to catch the null
+```
+
+Silenceable via `LOFT_NO_WARN_RUNTIME=1` for codebases where the
+warning rate is too high (rarely needed once defensive idioms are
+adopted).  The warning is BOTH a quality nudge for developers AND
+a way to silence the production-mode runtime log: defending the
+site (any of the three patterns) makes the warning go away AND
+the log goes silent.
+
+**Production mode REQUIRES a logger.**  A deployment configured
+for production with no logger attached MUST refuse to start with a
+clear, actionable error message — there is no "production but no
+logging" middle state.  The reason: in production every runtime
+event needs a destination, and silently swallowing them defeats
+the entire point of choosing the production path.  The startup
+check fires before user code runs:
+
+```
+Error: production mode requires a logger.
+Attach one via `loft::logger::Logger::attach(...)` at startup,
+or configure via the deployment's logger settings (see
+doc/claude/LOGGER.md § Production setup).  To run in development
+mode (halt-on-fault), unset the production flag.
+```
+
+The deployment is expected to attach a real sink (stderr, file,
+syslog, host bridge, etc.) at startup.  If a deployment genuinely
+wants "log + continue but discard the output", it attaches a
+no-op sink — that's a deliberate choice, made visible in the
+deployment config, not an accident from forgetting to attach a
+logger.
+
+**Implementation shape (Plan-07 phase 4 reframe 2026-05-11):**
+
+The typed-error infrastructure (`RuntimeError` type +
+`RuntimeErrorKind` variants + `--> file:line:col` + caret rendering
+through phase-2's `render_entry_pretty`) is **kept** — it's the
+right shape for both the dev-mode halt diagnostic and the
+production-mode log entry.  Per-site helpers (`State::raise`,
+`vec_get_or_raise`, `vec_ref_or_raise`, `text_char_or_raise`)
+need a production-mode branch added:
+
+```rust
+// In State::raise (sketch):
+let production = self.database.logger.as_ref()
+    .and_then(|l| l.lock().ok())
+    .is_some_and(|l| l.config.production);
+if production {
+    // Production: log + had_fatal, do NOT short-circuit code_pos.
+    // The op returns its sentinel; execution continues.
+    // The logger is GUARANTEED present here — startup refuses
+    // production mode without one.
+    if let Some(logger) = &self.database.logger {
+        if let Ok(mut lg) = logger.lock() {
+            lg.log_runtime_kind(&kind, position.as_ref());
+        }
+    }
+    self.database.had_fatal = true;
+    return;
+}
+// Development: keep the typed-error halt path that's already in place.
+self.database.runtime_error = Some(Box::new(RuntimeError { ... }));
+self.database.had_fatal = true;
+// (dispatch loop sees runtime_error.is_some() and short-circuits)
+```
+
+The `OpGetVectorNullable` / `OpVectorRefNullable` /
+`OpTextCharacterNullable` opcodes added 2026-05-11 stay as the
+form for **loop iteration end** specifically — they return null
+without logging in either mode (end-of-iteration is expected
+behaviour, not a fault).  The raising peers (`OpGetVector`,
+`OpVectorRef`, `OpTextCharacter`) log + return null in production
+and halt + render in development for the user-facing `v[i]` /
+`s[i]` paths.
+
+**Revisit when.** A concrete deployment shape surfaces where the
+production-mode silent + log path is wrong.  No such case is
+expected; the existing `n_panic` / `n_assert` production-mode
+behaviour has held for years without complaint.
+
+### Workflow corollaries (added 2026-05-11)
+
+The 2026-05-11 evaluation of the C66 framework against the
+day-to-day loft-development workflow surfaced four corollaries
+that bind the abstract C66 rule to the developer experience.
+All four are tracked under plan-07 phase 4:
+
+1. **Format strings are observability, never raise** — every
+   `{...}` interpolation auto-swaps to its Nullable peer at
+   parse time.  The `println("{x}")` you reach for to inspect
+   a bug must NEVER itself become the next bug.  Shipped as
+   phase 4e.1 (commit 8e74aa16).  Reasoning: a halt or log
+   inside the developer's diagnostic surface defeats the
+   point of the diagnostic.
+
+2. **Easy-proof skip list is REQUIRED for the warning** — the
+   4e.2 compile-time warning at undefended fault sites must
+   recognise the four canonical safe patterns (bound loop
+   variable / explicit length check / constant-literal
+   divisor / constant-literal index against known-length
+   vector) BEFORE landing.  A noisy warning gets disabled
+   within a session and the safety net evaporates; the skip
+   list is a release blocker, not a follow-up.  See
+   `plans/07-error-messages/04-runtime-error-kinds.md
+   § Easy-proof skip list — REQUIRED for 4e.2`.
+
+3. **State snapshot at fault site is the next-highest-leverage
+   workflow win** — the dev-mode halt today says *where* the
+   fault was but not *what* the values were.  Phase 4g.2
+   captures the named-arg values + indexed-collection length
+   into the rendered diagnostic so the developer sees
+   `damage = [10, 20, 30] (len=3), idx = 5` without having
+   to add a print statement to discover it.  The values are
+   already on the bytecode stack at fault time; surface them.
+
+4. **`not null` field reminder closes the long-term failure
+   mode** — when a struct field is read 47× across the
+   codebase and never compared to null, marking it `not null`
+   at the constructor eliminates the entire class of fault
+   sites for that field.  Phase 4h emits a `Level::Hint`
+   pointing at the constructor when the read pattern says
+   "this is morally not-null, mark it so."  Strictly better
+   than defending each read site individually with `?? null`.
+
+The corollaries together prevent the failure mode where
+`?? null` becomes pervasive defensive boilerplate that the
+2026-05-11 evaluation flagged ("everyone writes `?? null`
+everywhere because the warning fired").  4e.1 + 4h reduce
+the *count* of sites where the warning could fire; 4e.2's
+skip list ensures the warning only fires where defending
+is actually needed; 4g.2 makes diagnosis fast when defence
+is needed and not yet in place.
 
 ---
 

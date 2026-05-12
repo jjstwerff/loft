@@ -1,0 +1,76 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TTT v5 — t1 client.  Connect, send a 4-byte binary frame, read the
+// echo, verify the bytes match.  Pairs with v5_t1_binary_server.loft.
+//
+// Uses an ASCII payload ("ABCD" — bytes 0x41 0x42 0x43 0x44) so the
+// 4 bytes round-trip through both backends' utf-8-trusting text path
+// safely.  Exercises the BINARY frame opcode end-to-end — t2 will add
+// the session-tagged 5-byte blob header on top.
+//
+// Stdout shape:
+//   v5-t1c: connecting port=<n>
+//   v5-t1c: handler id=<n>
+//   v5-t1c: sent
+//   v5-t1c: recv opcode=<n> len=<n>
+//   v5-t1c: ok
+
+use web;
+
+fn main() {
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 18091 } else { port_raw as integer };
+  url = "ws://127.0.0.1:{port}";
+
+  println("v5-t1c: connecting port={port}");
+  h = web::ws_handler(url);
+  if h == null {
+    println("v5-t1c: ws_handler-failed");
+    return;
+  }
+  println("v5-t1c: handler id={h.id}");
+
+  payload = "ABCD";
+  ok = h.send_binary(payload);
+  if !ok {
+    println("v5-t1c: send-failed");
+    h.close();
+    return;
+  }
+  println("v5-t1c: sent");
+
+  // Poll for the echo (up to ~5 s).
+  got = "";
+  attempts = 0;
+  while got == "" {
+    raw = h.try_recv();
+    if raw != null {
+      got = raw;
+      break;
+    }
+    attempts += 1;
+    if attempts > 1000 {
+      println("v5-t1c: recv-timeout");
+      h.close();
+      return;
+    }
+    web::sleep_ms(5);
+  }
+  op = h.last_opcode();
+  println("v5-t1c: recv opcode={op} len={got.len()}");
+
+  if op != 2 {
+    println("v5-t1c: opcode-mismatch op={op}");
+    h.close();
+    return;
+  }
+  if got != payload {
+    println("v5-t1c: payload-mismatch got=\"{got}\" want=\"{payload}\"");
+    h.close();
+    return;
+  }
+
+  println("v5-t1c: ok");
+  h.close();
+}

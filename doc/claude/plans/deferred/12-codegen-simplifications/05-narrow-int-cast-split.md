@@ -11,7 +11,7 @@ maintainability.
 
 **Tier:** 2 (structural cleanup)
 
-**Estimated cost:** ~3-5 hours.
+**Effort:** S-M.
 
 ## What's tangled today
 

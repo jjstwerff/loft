@@ -1,3 +1,8 @@
-==== exit: 0 ====
+==== exit: 1 ====
 ==== stdout ====
-x=null==== stderr ====
+==== stderr ====
+error: index 100 out of bounds for length 3
+  --> <cases>/20_runtime_index_oob_vector.loft:3:9
+  |
+3 |   x = v[100];
+  |         ^

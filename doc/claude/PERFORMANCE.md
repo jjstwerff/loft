@@ -2558,3 +2558,38 @@ mutable store references.
 - [PERFORMANCE.md](PERFORMANCE.md) — Benchmark data and root-cause analysis
 - [INTERMEDIATE.md](INTERMEDIATE.md) — Bytecode layout and State stack model
 - [DATABASE.md](DATABASE.md) — Store allocator and `copy_block` API
+
+---
+
+## Open work
+
+The 7 design entries above (P1, P2, P3, N1, N2, N3, W1) are
+all open optimization items.  Tracking table for ROADMAP and
+plan-cleanup audits:
+
+| Item | Section | ROADMAP row | Tier | Status |
+|---|---|---|---|---|
+| **P1** — Superinstruction merging | § Design: P1 | O1 | Interpreter | Open — **blocked by opcode-table capacity** (254/256 used).  Decide between retiring rare Op codes vs widening the opcode field before P1 itself starts. |
+| **P2** — Reduce store indirection on the stack | § Design: P2 | (cited in PLANNING.md) | Interpreter | Open — design ready, no scheduled slot. |
+| **P3** — Confirm integer paths carry no `long` sentinel | § Design: P3 | — | Interpreter | Open — small verification + audit task; verifies the Plan-01 `i32::MIN`-removal stuck. |
+| **N1** — Direct-emit local collections in native codegen | § Design: N1 | **O4** | Native | Open — design ready.  Cooperates with `lib_plans/future/03-lazy-stdlib/` and `plans/future/21-retire-scratch/` (N1 narrows the scratch consumer set). |
+| **N2** — Omit `stores` parameter from pure native fns | § Design: N2 | **O5** | Native | Open — design ready. |
+| **N3** — Remove `long` null-sentinel from generated code | § Design: N3 | — | Native | Open — verification + cleanup; small. |
+| **W1** — wasm string representation | § Design: W1 | — | WASM | Open — design ready, scheduled for wasm-priority workloads (game-client + browser-IDE consumers). |
+
+Other ROADMAP rows that conceptually belong here but lack
+PERFORMANCE.md design content yet — A12 (lazy work-variable
+init), O2 (stack raw pointer cache), A4 (spatial index ops).
+Each stays as a PLANNING.md-cited row until design content
+lands here.
+
+Suggested order when this work unpauses:
+1. **P3 + N3** — small verification/cleanup; clears the deck.
+2. **N2** — pure-fn `stores` omission; small native win, independent.
+3. **N1** — direct-emit local collections; cooperates with plan 21.
+4. **P1** — biggest interpreter win.  BLOCKED on opcode-table decision.
+5. **P2** — store indirection reduction; smaller than P1, architecturally cleaner.
+6. **W1** — wasm string representation when wasm becomes priority.
+
+Items are independent — order can shift based on which consumer
+(interpreter / native / wasm) needs the win first.

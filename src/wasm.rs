@@ -467,6 +467,114 @@ pub fn host_log_write(line: &str) {
     }
 }
 
+// ── TTT v3.5  WebSocket bridge (browser-WASM only) ───────────────────────
+//
+// Host-side counterparts on `globalThis.loftHost`:
+//   ws_connect(url) → integer (slot id, -1 on bad url)
+//   ws_send(id, msg, binary) → 0 / 1
+//   ws_recv(id) → 0 / 1   (1 = a message landed; read via ws_last_message)
+//   ws_last_message() → text
+//   ws_last_opcode()  → integer (1 = text, 2 = binary, …)
+//   ws_close(id)
+//
+// Mirrors the surface in `lib/web/native/src/ws_client.rs::wasm_impl`
+// but lifts the bridge into the loft interpreter binary itself so
+// the `compile_and_run` browser-WASM build can run `use web` programs
+// without a separately-loaded cdylib (impossible in the browser).
+
+/// Open a WebSocket to `url`.  Returns the host's slot id (-1 on bad URL).
+pub fn host_ws_connect(url: &str) -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&url.into());
+        host_call("ws_connect", &args)
+            .as_f64()
+            .map_or(-1, |n| n as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = url;
+        -1
+    }
+}
+
+/// Send `msg` on slot `id`.  `binary=true` ships an opcode-2 frame;
+/// `binary=false` ships opcode-1 (text).  Returns 1 on success, 0 if
+/// the slot is in backoff / disconnected.
+pub fn host_ws_send(id: i32, msg: &str, binary: bool) -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of3(&id.into(), &msg.into(), &binary.into());
+        host_call("ws_send", &args).as_f64().map_or(0, |n| n as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (id, msg, binary);
+        0
+    }
+}
+
+/// Poll slot `id` for an inbound frame.  Returns 1 if a message landed
+/// (then call `host_ws_last_message` + `host_ws_last_opcode`), 0 if
+/// the queue is empty.
+pub fn host_ws_recv(id: i32) -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&id.into());
+        host_call("ws_recv", &args).as_f64().map_or(0, |n| n as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = id;
+        0
+    }
+}
+
+/// Read the message bytes the most recent successful `host_ws_recv`
+/// surfaced.  Empty string when no recent message.
+pub fn host_ws_last_message() -> String {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::new();
+        host_call("ws_last_message", &args)
+            .as_string()
+            .unwrap_or_default()
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        String::new()
+    }
+}
+
+/// Read the opcode of the most recent successful `host_ws_recv`.
+/// 1 = text, 2 = binary, 8 = close, 9 = ping, 10 = pong.
+pub fn host_ws_last_opcode() -> i32 {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::new();
+        host_call("ws_last_opcode", &args)
+            .as_f64()
+            .map_or(0, |n| n as i32)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        0
+    }
+}
+
+/// Close slot `id` permanently.
+pub fn host_ws_close(id: i32) {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&id.into());
+        host_call("ws_close", &args);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = id;
+    }
+}
+
 // ── W1.9  Virtual filesystem (VIRT_FS) ───────────────────────────────────────
 
 use std::cell::RefCell;
@@ -540,6 +648,13 @@ const BUNDLED_LIB_FILES: &[(&str, &str)] = &[
     ),
     ("glb.loft", include_str!("../lib/graphics/src/glb.loft")),
     ("shapes.loft", include_str!("../lib/shapes/src/shapes.loft")),
+    // TTT v3.5 — `use web` resolves in the browser via this baked-in
+    // source.  The native fns it declares (`n_ws_*`, `n_http_*`,
+    // `n_sleep_ms`, `n_pack_*`, `n_byte_at`) are registered in
+    // `src/native.rs` under `cfg(all(target_arch="wasm32",
+    // feature="wasm"))` and route through `host_*` JS bridges in
+    // this file.
+    ("web.loft", include_str!("../lib/web/src/web.loft")),
 ];
 
 /// Run a loft program supplied as a JSON array of `{name, content}` file objects.

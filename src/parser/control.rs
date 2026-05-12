@@ -9,6 +9,56 @@ use super::{
     merge_dependencies, v_block, v_if, v_loop, v_set,
 };
 
+/// Plan-07 phase 4d.2 — recursive walker that returns `true` if
+/// `op` references `var_nr` anywhere.  Used by
+/// `Parser::rewrite_defended_fault_sites` to detect when an `if`
+/// condition guards on the variable assigned in the immediately-
+/// preceding `Set`.  Same recursion shape as
+/// `src/generation/pre_eval.rs::value_mentions_var` (kept as a
+/// free function here because parser/control needs it without the
+/// generation/pre_eval `impl` context).
+fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
+    match op {
+        Value::Span(b) => value_mentions_var(&b.1, var_nr),
+        Value::Var(v) => *v == var_nr,
+        Value::Set(v, inner) => *v == var_nr || value_mentions_var(inner, var_nr),
+        Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) => {
+            args.iter().any(|a| value_mentions_var(a, var_nr))
+        }
+        Value::If(cond, t, f) => {
+            value_mentions_var(cond, var_nr)
+                || value_mentions_var(t, var_nr)
+                || value_mentions_var(f, var_nr)
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            bl.operators.iter().any(|o| value_mentions_var(o, var_nr))
+        }
+        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+            value_mentions_var(inner, var_nr)
+        }
+        _ => false,
+    }
+}
+
+/// A7.1: walk a body-tail expression and report whether it ends in
+/// a literal `Value::Tuple(...)` at any reachable tail position.  Used
+/// by `block_result` to decide whether the synthetic-struct rewrite
+/// should fire.  Mirrors the recursion shape of
+/// `rewrite_tail_tuple_with_work_ref` so the gate and the rewrite stay
+/// in sync.
+fn tail_has_tuple_leaf(value: &Value) -> bool {
+    match value {
+        Value::Tuple(_) => true,
+        Value::Span(b) => tail_has_tuple_leaf(&b.1),
+        Value::If(_, then_branch, else_branch) => {
+            tail_has_tuple_leaf(then_branch) || tail_has_tuple_leaf(else_branch)
+        }
+        Value::Block(b) => b.operators.last().is_some_and(tail_has_tuple_leaf),
+        Value::Insert(ops) => ops.last().is_some_and(tail_has_tuple_leaf),
+        _ => false,
+    }
+}
+
 /// Check if the last meaningful expression in a block is divergent.
 fn is_block_divergent(ops: &[Value]) -> bool {
     ops.iter().rev().any(|v| {
@@ -356,9 +406,125 @@ impl Parser {
                 t = Type::Tuple(new_elems);
             }
         }
+        // Plan-07 phase 4d.2 — defensive-check flow-analysis.  When
+        // a fault-prone op's result is assigned to a variable AND
+        // the immediately-following sibling is an `if` whose
+        // condition mentions that variable, the user has written
+        // defensive code (`if x != null { … }`, `if x { … }`,
+        // `if x > 10 { … }`, etc.) — swap the source op to its
+        // Nullable peer at COMPILE TIME so neither runtime path
+        // (production log + continue, OR development halt + render)
+        // fires.  Both modes get the same silent-sentinel behaviour
+        // because the Nullable peer never calls `s.raise`.
+        //
+        // Both `if x != null` and bare `if x` (truthy check) are
+        // accepted; loft's `if x` lowers to a Reference→Boolean
+        // conversion that's `false` for null DbRef / 0 / null int —
+        // exactly the defensive shape we want to honor.  An over-
+        // broad test like `if x > 10` also counts: any mention of
+        // `Var(x)` in the if condition signals defensive intent.
+        //
+        // Single-block, single-step lookahead: covers the canonical
+        // pattern.  Cross-function defenses or many-statement gaps
+        // fall through to the raising peer + log path; phase 4e's
+        // compile-time warning will nudge those toward the
+        // recognised defenses.
+        if !self.first_pass {
+            self.rewrite_defended_fault_sites(&mut l);
+        }
         t = self.block_result(context, result, &t, &mut l);
         *val = v_block(l, t.clone(), "block");
         t
+    }
+
+    /// Plan-07 phase 4d.2 — walks `ops` looking for adjacent
+    /// `Set(x, fault_op); If(test_using_x, …)` pairs and swaps the
+    /// fault op's def_nr to its Nullable peer.  See the call site
+    /// in `parse_block` for the rationale.  The swap suppresses
+    /// BOTH the production-mode log entry AND the development-mode
+    /// halt, because the Nullable peers never call `s.raise`.
+    pub(crate) fn rewrite_defended_fault_sites(&self, ops: &mut [Value]) {
+        // Two-pass to avoid borrow conflicts.  First pass: collect
+        // the indices of statements that need rewriting.  Second
+        // pass: apply rewrites.
+        let mut to_rewrite: Vec<usize> = Vec::new();
+        for i in 0..ops.len() {
+            let Value::Set(var, _) = ops[i].unspan() else {
+                continue;
+            };
+            let var = *var;
+            // Look ahead for the next non-Line sibling.
+            let mut j = i + 1;
+            while j < ops.len() && matches!(ops[j].unspan(), Value::Line(_)) {
+                j += 1;
+            }
+            if j >= ops.len() {
+                continue;
+            }
+            // Sibling must be an `if` whose test mentions Var(x).
+            let Value::If(test, _, _) = ops[j].unspan() else {
+                continue;
+            };
+            if !value_mentions_var(test, var) {
+                continue;
+            }
+            to_rewrite.push(i);
+        }
+        for i in to_rewrite {
+            if let Value::Set(_, source) = ops[i].unspan_mut() {
+                Self::rewrite_outer_to_nullable(source, &self.data);
+            }
+        }
+    }
+
+    /// Helper for `rewrite_defended_fault_sites` — same shape as
+    /// `parser/operators.rs::rewrite_outer_arith_to_nullable` but
+    /// recurses one level into wrapping getters
+    /// (`OpGetInt` / `OpGetByte` / `OpGetShortRaw` / `OpGetInt4`)
+    /// so integer-vector indexing's
+    /// `OpGetInt(OpGetVector(…), 0)` shape is also handled.
+    fn rewrite_outer_to_nullable(code: &mut Value, data: &crate::data::Data) {
+        fn try_swap(def_nr: &mut u32, data: &crate::data::Data) -> bool {
+            let name = data.def(*def_nr).original_name();
+            let nullable = match name.as_str() {
+                "AddInt" => "OpAddIntNullable",
+                "MinInt" => "OpMinIntNullable",
+                "MulInt" => "OpMulIntNullable",
+                "DivInt" => "OpDivIntNullable",
+                "RemInt" => "OpRemIntNullable",
+                "GetVector" => "OpGetVectorNullable",
+                "VectorRef" => "OpVectorRefNullable",
+                "TextCharacter" => "OpTextCharacterNullable",
+                // Plan-07 phase 4f.5 — float / single div / mod peers.
+                "DivFloat" => "OpDivFloatNullable",
+                "RemFloat" => "OpRemFloatNullable",
+                "DivSingle" => "OpDivSingleNullable",
+                "RemSingle" => "OpRemSingleNullable",
+                _ => return false,
+            };
+            let new_nr = data.def_nr(nullable);
+            if new_nr == u32::MAX {
+                false
+            } else {
+                *def_nr = new_nr;
+                true
+            }
+        }
+        let Value::Call(def_nr, args) = code.unspan_mut() else {
+            return;
+        };
+        if try_swap(def_nr, data) {
+            return;
+        }
+        let outer_name = data.def(*def_nr).original_name();
+        if matches!(
+            outer_name.as_str(),
+            "GetInt" | "GetInt4" | "GetByte" | "GetShortRaw"
+        ) && let Some(first_arg) = args.first_mut()
+            && let Value::Call(inner_nr, _) = first_arg.unspan_mut()
+        {
+            try_swap(inner_nr, data);
+        }
     }
 
     pub(crate) fn un_ref(&mut self, t: &mut Type, code: &mut Value) {
@@ -397,7 +563,68 @@ impl Parser {
             let ignore = is_generator
                 || (matches!(*t, Type::Void | Type::Never)
                     && (matches!(l[last], Value::Return(_)) || definitely_returns(&l[last])));
-            if !self.convert(&mut l[last], t, result) && !ignore {
+            // Plan-14 phase 07 (P234 runtime): when the function's expected
+            // return type is `Reference(__tuple<…>)` (rewritten in
+            // `parse_function` for any tuple whose elements have lifetime
+            // concerns) AND the body's tail expression is a literal
+            // `Value::Tuple(elements)`, transform the tail into synthetic-
+            // struct construction so the existing struct-return machinery
+            // applies.  Without this rewrite, `convert` would fail
+            // (Tuple is not assignable to Reference(__tuple<…>)) and the
+            // user would see a confusing "expected __tuple<…>, got tuple([…])"
+            // diagnostic.
+            // A7.1: gate broadened to also fire for `If` / `Block` /
+            // `Insert` tails — the recursive helper descends through
+            // these wrappers and rewrites every leaf `Value::Tuple` that
+            // lives at a tail position with a synthetic-struct
+            // construction sharing one work-ref.  Without this, function
+            // bodies whose final expression is `if cond { (a, b) } else
+            // { (c, d) }` left two tuple leaves and convert would then
+            // fail with Tuple → Reference(__tuple<…>).
+            let tuple_rewritten = !self.first_pass
+                && context == "return from block"
+                && matches!(t, Type::Tuple(_))
+                && tail_has_tuple_leaf(l[last].unspan())
+                && matches!(result, Type::Reference(d, _) if self.data.def(*d).name.starts_with("__tuple<"))
+                && {
+                    let synthetic_d_nr = if let Type::Reference(d, _) = result {
+                        *d
+                    } else {
+                        unreachable!()
+                    };
+                    self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut l[last]);
+                    true
+                };
+            // P236: when the body's tail is a `Value::If(...)` (or
+            // `match`, which lowers to nested `If`) and the function
+            // returns a heap-owned reference, unify the branches'
+            // work-refs so all paths share one return slot.  Without
+            // this, native codegen drops the if/else's value and
+            // returns the typed null sentinel.  See `unify_if_branches_work_refs`
+            // for the full rationale.  Wrap in `Value::Return(...)` so
+            // the existing `Return(If(...))` native codegen at
+            // `src/generation/emit.rs:166-182` emits
+            // `return if cond { ... } else { ... }` correctly.
+            let if_unified = !self.first_pass
+                && context == "return from block"
+                && matches!(
+                    result,
+                    Type::Reference(_, _)
+                        | Type::Vector(_, _)
+                        | Type::Enum(_, true, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Spacial(_, _, _)
+                )
+                && matches!(l[last].unspan(), Value::If(_, _, _))
+                && self.unify_if_branches_work_refs(&mut l[last]).is_some();
+            if if_unified {
+                let inner = std::mem::replace(&mut l[last], Value::Null);
+                l[last] = Value::Return(Box::new(inner));
+            }
+            if !tuple_rewritten && !if_unified && !self.convert(&mut l[last], t, result) && !ignore
+            {
                 // for function bodies with `not null` return, downgrade to a warning.
                 if context == "return from block"
                     && self.context != u32::MAX
@@ -445,6 +672,293 @@ impl Parser {
             }
         }
         tp
+    }
+
+    /// Plan-14 phase 07 (P234 runtime): rewrite a body-tail
+    /// `Value::Tuple([elem_0, elem_1, …])` into the synthetic-struct
+    /// construction sequence that an inline struct literal would
+    /// produce — `(p, 5)` becomes
+    ///
+    /// ```text
+    /// {
+    ///     w = null;
+    ///     OpDatabase(w, __tuple<…>_known_type);
+    ///     w._0 = elem_0;     // OpSet* at field offset 0
+    ///     w._1 = elem_1;     // OpSet* at field offset 16 (alignment-padded)
+    ///     w
+    /// }
+    /// ```
+    ///
+    /// Mirrors `parse_object`'s allocation + per-field-init pattern.
+    /// The work-ref `w` is created via `vars.work_refs(...)`; the
+    /// resulting block carries `Reference(synthetic_d_nr, vec![w])`
+    /// so scope analysis tracks `w`'s store as the source of the
+    /// returned DbRef's lifetime — same machinery struct returns
+    /// use today.
+    /// P236: when a function body's tail is `Value::If(...)` (or `match`,
+    /// which lowers to nested `If`) and each branch terminates with a
+    /// fresh work-ref via Object/struct construction, the branches end
+    /// up with DIFFERENT work-refs (`__ref_1`, `__ref_2`, …).  Native
+    /// codegen then loses the if/else's value: each branch's local DbRef
+    /// is dropped, both work-refs get freed, and the function returns the
+    /// typed null sentinel.  Interp accidentally works because OpReturn
+    /// reads from eval-stack top.
+    ///
+    /// Fix: pick the FIRST branch's terminal work-ref as the shared one
+    /// and rewrite every other branch in place — substitute their
+    /// work-ref `Var` references with the shared one, and rewrite Set
+    /// LHS slots and Block.result deps so scope analysis tracks the
+    /// shared work-ref as the unique source of the returned DbRef's
+    /// lifetime.  After unification, `returned_var(If)` (extended in
+    /// `scopes.rs::returned_var`) recognises the shared var and skips
+    /// `OpFreeRef` on it; `ref_return` promotes it to a hidden caller
+    /// arg as it would for a single-branch reference return.
+    ///
+    /// Returns `Some(shared_work_ref)` if the rewrite fired (so the
+    /// caller can wrap the if/else in `Value::Return`), `None`
+    /// otherwise (mixed shapes, no work-refs, or branches already
+    /// share a var).
+    pub(crate) fn unify_if_branches_work_refs(&mut self, tail: &mut Value) -> Option<u16> {
+        let if_value = tail.unspan_mut();
+        let Value::If(_, true_branch, false_branch) = if_value else {
+            return None;
+        };
+        let shared = Self::find_branch_terminal_var(true_branch)?;
+        let other = Self::find_branch_terminal_var(false_branch)?;
+        // P236: only unify when both branches' terminal vars are
+        // parser-internal work-refs (`__ref_N` / `__rref_N`).
+        // Renaming user-named parameters (e.g.,
+        // `if c { gen_x } else { gen_y }` in `gen_max<T: Ordered>`)
+        // would silently rewrite the false branch to return gen_x
+        // and corrupt the function's result.  When the guard fails,
+        // bail out and let the existing scope analysis handle the
+        // tail (typically B5-L3 wrap for scalar returns, or the
+        // legacy `Return(Null)` + eval-stack-top pattern for
+        // bytecode-only paths).  Skip when both branches already
+        // share the same var (no rewrite needed).
+        let shared_name = self.vars.name(shared);
+        let other_name = self.vars.name(other);
+        let both_work_refs = (shared_name.starts_with("__ref_")
+            || shared_name.starts_with("__rref_"))
+            && (other_name.starts_with("__ref_") || other_name.starts_with("__rref_"));
+        if !both_work_refs {
+            return None;
+        }
+        if shared != other {
+            Self::unify_branch_to(false_branch, shared);
+        }
+        Some(shared)
+    }
+
+    /// Walk a branch (Block / Span / nested If) to find the var nr of
+    /// its terminal `Value::Var(_)` — the work-ref this branch returns.
+    /// Returns `None` if the branch doesn't end in a `Var`.
+    fn find_branch_terminal_var(branch: &Value) -> Option<u16> {
+        match branch.unspan() {
+            Value::Var(v) => Some(*v),
+            Value::Block(bl) => bl.operators.last().and_then(Self::find_branch_terminal_var),
+            Value::Insert(ops) => ops.last().and_then(Self::find_branch_terminal_var),
+            Value::If(_, t, f) => {
+                let tv = Self::find_branch_terminal_var(t)?;
+                let fv = Self::find_branch_terminal_var(f)?;
+                if tv == fv { Some(tv) } else { None }
+            }
+            _ => None,
+        }
+    }
+
+    /// Rewrite a branch in place so its terminal work-ref is `shared`.
+    /// Walks the branch (recursively through nested If for else-if
+    /// chains) and substitutes the original terminal work-ref with
+    /// `shared` everywhere — Var references, Set LHS slots, and
+    /// Block.result deps.  No-op if the branch already uses `shared`.
+    fn unify_branch_to(branch: &mut Value, shared: u16) {
+        let Some(local) = Self::find_branch_terminal_var(branch) else {
+            return;
+        };
+        if local == shared {
+            return;
+        }
+        Self::substitute_work_ref(branch, local, shared);
+    }
+
+    /// Replace every reference to work-ref `from` with `to` in `val` —
+    /// extends `replace_var_in_ir` semantics to also rewrite `Set`
+    /// LHS slots and `Block.result` dep entries.  Used by
+    /// `unify_branch_to` so the parser-level dep tracking (which feeds
+    /// scope analysis and `ref_return`) sees only the shared work-ref
+    /// after unification.
+    fn substitute_work_ref(val: &mut Value, from: u16, to: u16) {
+        match val {
+            Value::Var(v) if *v == from => {
+                *v = to;
+            }
+            Value::Set(slot, body) => {
+                if *slot == from {
+                    *slot = to;
+                }
+                Self::substitute_work_ref(body, from, to);
+            }
+            Value::TuplePut(slot, _, body) => {
+                if *slot == from {
+                    *slot = to;
+                }
+                Self::substitute_work_ref(body, from, to);
+            }
+            Value::BreakWith(_, body) => {
+                Self::substitute_work_ref(body, from, to);
+            }
+            Value::Return(body) | Value::Drop(body) | Value::Yield(body) => {
+                Self::substitute_work_ref(body, from, to);
+            }
+            Value::Call(_, args)
+            | Value::CallRef(_, args)
+            | Value::Insert(args)
+            | Value::Tuple(args)
+            | Value::Parallel(args) => {
+                for a in args.iter_mut() {
+                    Self::substitute_work_ref(a, from, to);
+                }
+            }
+            Value::Block(bl) | Value::Loop(bl) => {
+                for op in &mut bl.operators {
+                    Self::substitute_work_ref(op, from, to);
+                }
+                Self::rewrite_dep_in_type(&mut bl.result, from, to);
+            }
+            Value::If(cond, t, f) => {
+                Self::substitute_work_ref(cond, from, to);
+                Self::substitute_work_ref(t, from, to);
+                Self::substitute_work_ref(f, from, to);
+            }
+            Value::Iter(_, a, b, c) => {
+                Self::substitute_work_ref(a, from, to);
+                Self::substitute_work_ref(b, from, to);
+                Self::substitute_work_ref(c, from, to);
+            }
+            Value::Span(b) => Self::substitute_work_ref(&mut b.1, from, to),
+            Value::ParFor(b) => {
+                Self::substitute_work_ref(&mut b.input, from, to);
+                Self::substitute_work_ref(&mut b.worker, from, to);
+            }
+            Value::Var(_)
+            | Value::Int(_)
+            | Value::Long(_)
+            | Value::Float(_)
+            | Value::Single(_)
+            | Value::Boolean(_)
+            | Value::Text(_)
+            | Value::Enum(_, _)
+            | Value::Line(_)
+            | Value::Break(_)
+            | Value::Continue(_)
+            | Value::Keys(_)
+            | Value::TupleGet(_, _)
+            | Value::FnRef(_, _, _)
+            | Value::FnRefDnr(_)
+            | Value::RawExpr(_)
+            | Value::Null => {}
+        }
+    }
+
+    /// Replace `from` with `to` in any dep list inside `tp`'s
+    /// reference-bearing variants.  Mirrors how
+    /// `Type::Reference(_, deps)` carries the source-of-lifetime var
+    /// list that scope analysis reads.
+    fn rewrite_dep_in_type(tp: &mut Type, from: u16, to: u16) {
+        let deps_mut: Option<&mut Vec<u16>> = match tp {
+            Type::Reference(_, d)
+            | Type::Vector(_, d)
+            | Type::Enum(_, true, d)
+            | Type::Sorted(_, _, d)
+            | Type::Hash(_, _, d)
+            | Type::Index(_, _, d)
+            | Type::Spacial(_, _, d)
+            | Type::Text(d) => Some(d),
+            _ => None,
+        };
+        if let Some(d) = deps_mut {
+            for v in d.iter_mut() {
+                if *v == from {
+                    *v = to;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn rewrite_tail_tuple_to_synthetic_struct(
+        &mut self,
+        synthetic_d_nr: u32,
+        tail: &mut Value,
+    ) {
+        // A7.1: allocate ONE shared work-ref up front, then descend
+        // recursively through `If` / `Block` / `Insert` / `Span`
+        // wrappers so every leaf `Value::Tuple` writes into the same
+        // record.  Sharing avoids ref_return promoting two separate
+        // hidden args (one per branch); the function then returns a
+        // single work-ref whose value is well-defined at the join
+        // point.  Mirrors the unification done by P236's
+        // `unify_if_branches_work_refs` for struct returns.
+        let synth_ref_type = Type::Reference(synthetic_d_nr, Vec::new());
+        let w = self.vars.work_refs(&synth_ref_type, &mut self.lexer);
+        let known_type = self.data.def(synthetic_d_nr).known_type;
+        self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, tail);
+    }
+
+    fn rewrite_tail_tuple_with_work_ref(
+        &mut self,
+        synthetic_d_nr: u32,
+        known_type: u16,
+        w: u16,
+        tail: &mut Value,
+    ) {
+        match tail {
+            Value::Span(b) => {
+                self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, &mut b.1);
+                return;
+            }
+            Value::If(_, then_branch, else_branch) => {
+                self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, then_branch);
+                self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, else_branch);
+                return;
+            }
+            Value::Block(b) => {
+                if let Some(last) = b.operators.last_mut() {
+                    self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, last);
+                }
+                b.result = Type::Reference(synthetic_d_nr, vec![w]);
+                return;
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last_mut() {
+                    self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, last);
+                }
+                return;
+            }
+            _ => {}
+        }
+        let elements = match std::mem::replace(tail, Value::Null) {
+            Value::Tuple(elems) => elems,
+            other => {
+                *tail = other;
+                return;
+            }
+        };
+        let mut ops: Vec<Value> = Vec::with_capacity(elements.len() + 3);
+        ops.push(crate::data::v_set(w, Value::Null));
+        ops.push(self.cl(
+            "OpDatabase",
+            &[Value::Var(w), Value::Int(i32::from(known_type))],
+        ));
+        for (i, elem) in elements.into_iter().enumerate() {
+            ops.push(self.set_field_no_check(synthetic_d_nr, i, 0, Value::Var(w), elem));
+        }
+        ops.push(Value::Var(w));
+        *tail = crate::data::v_block(
+            ops,
+            Type::Reference(synthetic_d_nr, vec![w]),
+            "synthetic_tuple_return",
+        );
     }
 
     // <operator> ::= '..' ['='] |
@@ -3027,6 +3541,7 @@ impl Parser {
         }
         match name {
             "parallel_for" => return self.parse_parallel_for(val, list, types),
+            "par_fold" => return self.parse_par_fold(val, list, types),
             "map" => return self.parse_map(val, list, types),
             "filter" => return self.parse_filter(val, list, types),
             "reduce" => return self.parse_reduce(val, list, types),

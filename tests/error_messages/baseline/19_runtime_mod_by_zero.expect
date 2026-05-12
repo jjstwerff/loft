@@ -1,3 +1,13 @@
-==== exit: 0 ====
+==== exit: 1 ====
 ==== stdout ====
-result=null==== stderr ====
+warning: integer modulus may produce null on divide-by-zero with no defensive check; consider `a % b ?? 0` or wrap in `if b != 0 { ... }`
+  --> <cases>/19_runtime_mod_by_zero.loft:3:15
+  |
+3 |   result = 1 % z;
+  |               ^
+==== stderr ====
+error: divide by zero
+  --> <cases>/19_runtime_mod_by_zero.loft:3:15
+  |
+3 |   result = 1 % z;
+  |               ^

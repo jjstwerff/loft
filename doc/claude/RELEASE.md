@@ -405,6 +405,65 @@ Verify that `gendoc` completes without warnings and that the generated HTML file
 
 ---
 
+## Tooling prerequisites for release verification
+
+These are the host-side tools used to verify a release before
+tagging.  Install instructions live with each tool's upstream
+docs (don't duplicate them here — they rot).  When a release
+adds an item that needs a new tool, add the tool here.
+
+| Tool | Used for | Install hint |
+|---|---|---|
+| Rust toolchain (`cargo`, `rustc`) | Build + test loft itself | https://rustup.rs |
+| `cargo nextest` | CI-locally test runner (matches CI matrix) | `cargo install cargo-nextest` |
+| VS Code | SH.1 grammar visual sanity + SH.2 extension verification | https://code.visualstudio.com |
+| `vsce` | VS Code extension packager (`vsce package` for SH.2) | `npm install -g vsce` (needs Node 20+) |
+| `gdb` | NDB.0 quality gate (Linux primary debugger) | OS package manager |
+| `lldb` | NDB.0 quality gate (macOS primary, Linux alternative) | OS package manager / Xcode CLI tools |
+| `objdump` | DWARF inspection for NDB.0 (`-h` lists debug sections) | OS package manager (GNU binutils) |
+| `node` | JS-glue probes for browser quality gate; `vsce` runtime | https://nodejs.org (20.x+) |
+| `python3` | JSON validation (`python3 -m json.tool`); generic scripting | OS package manager |
+| `chromium` / `google-chrome` | WASM HTML build verification (already used by `make wasm-html-test`) | OS package manager |
+
+### Cross-platform smoke test (per release)
+
+Performed manually before each release tag, on each supported
+platform:
+
+- **Linux:** install loft from a fresh git clone, run any
+  newly-shipped walkthrough top-to-bottom, install the VS Code
+  extension, open an example.
+- **macOS:** same.
+- **Windows:** same — pay attention to symlink behaviour (the
+  VS Code extension grammar symlink is the most likely point
+  of failure on Windows).
+
+### Per-release ship checklist (in addition to the safety gate above)
+
+For each release, the relevant per-item plans hold their own
+landing procedures (e.g. for 0.8.5: SH.1, SH.2, DX.1, DX.3 in
+[`plans/future/27-developer-experience/`](plans/future/27-developer-experience/);
+NDB.0 in [`plans/future/25-native-debug/`](plans/future/25-native-debug/)).
+The cross-cutting work for ANY release is:
+
+- [ ] All per-item landing procedures in the release's plans
+      passed.
+- [ ] `cargo fmt --all -- --check` clean.
+- [ ] `cargo clippy --tests --release -- -D warnings` clean.
+- [ ] Full local test suite green (`cargo nextest run --profile ci`).
+- [ ] CI matrix on push (Windows / macOS / Linux) all green.
+- [ ] Safety gate above (no new crashes, no leaks, no new H
+      P-issues opened during the release window).
+- [ ] Cross-platform smoke test done.
+- [ ] Release artefacts produced (see § Release Artifacts
+      Checklist below).
+- [ ] `Cargo.toml` version bumped.
+- [ ] `CHANGELOG.md` (user-facing) + `CHANGELOG_TECHNICAL.md`
+      (contributor) entries written.
+- [ ] Tag pushed; `release.yml` workflow runs.
+
+---
+
 ## Release Artifacts Checklist
 
 | Artifact | Required | How |

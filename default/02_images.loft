@@ -295,7 +295,7 @@ pub fn files(self: File) -> vector < File > {
 // Writes v as UTF-8 text to the file. Overwrites existing content.
 
 pub fn write(self: File, v: text);
-#rust"stores.write_file(&@self, @v);"
+#rust"{{ let __wf_v = @v; stores.write_file(&@self, __wf_v); }}"
 #impure(io)
 // --- Environment ---
 // Returns all environment variables as a vector of EnvVariable records (fields: name, value).

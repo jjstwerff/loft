@@ -186,3 +186,15 @@ diagnostic strings, no runtime change.  Bound: ≤ 0.5 % drift.
 | `Type::render_user` and `Display` drift (someone adds a variant only to one) | `#[deny(unreachable_patterns)]` on the match in `render_user` plus a test that exhaustively matches every variant.  Same trick as `src/data.rs` already uses for `op_code` checks. |
 | Hidden test couplings to old message phrasing | Phase 0's baseline corpus and phase 1's grep audit list every test that asserts on diagnostic text.  Any other coupling surfaces in batch 1 and is fixed before batch 2. |
 | Localisation gets harder if messages become longer | Plan-07's out-of-scope statement excludes localisation; that's a future plan.  English-only stays. |
+
+## Cross-reference — null-vs-not-null in type messages (per 4h)
+
+Phase 4h adds `Level::Hint` for "field read 47× with no defense
+— consider `not null`."  The hint is a runtime/usage observation,
+not a type mismatch.  But the hint's text references `not null`
+as a type annotation — phase 6's `Type::render_user` MUST
+reproduce `not null` consistently with what 4h's hint shows
+(both quote the keyword exactly: `not null`, not `notnull` or
+`Not Null`).  Phase 6 owns the type-string rendering used by
+both type errors AND 4h hints; one source of truth (per
+06.B-followup) keeps the two layers in sync.

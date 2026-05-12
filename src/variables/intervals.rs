@@ -235,6 +235,48 @@ pub fn compute_intervals(
             );
             compute_intervals(&b.body, function, free_text_nr, free_ref_nr, seq, depth + 1);
         }
+        // P240 fix (2026-05-11): tuple-literal reads.  Without explicit
+        // arms, `Return(Tuple([Var(a), Var(b)]))` fell through to the
+        // catch-all below — Var(a) and Var(b) were never visited so
+        // their `last_use` stayed at the default value, slot allocator
+        // considered them dead, and aliased their slots.  When a and b
+        // were both written in the same scope (`a = …; b = …; (a, b)`),
+        // the second write clobbered the first; the tuple read returned
+        // `(b_value, b_value)` instead of `(a_value, b_value)`.
+        // Recurse into each element so reads of operand vars update
+        // their `last_use`.
+        Value::Tuple(elems) => {
+            for elem in elems {
+                compute_intervals(elem, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            }
+            *seq += 1;
+        }
+        Value::TupleGet(v, _) => {
+            // Tuple-element read on a tuple variable.  The Var read
+            // updates the tuple var's last_use; the index is a const
+            // discriminator with no liveness impact.
+            let v = *v as usize;
+            if v < function.variables.len() {
+                function.variables[v].last_use = function.variables[v].last_use.max(*seq);
+            }
+            *seq += 1;
+        }
+        Value::TuplePut(v, _, inner) => {
+            // Element write into a tuple variable.  The tuple var is
+            // both read (for its other elements) and written here, so
+            // update last_use AND first_def (Set-style).  Recurse into
+            // the inner value expression so the RHS's variable reads
+            // get tracked.
+            compute_intervals(inner, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            let v = *v as usize;
+            if v < function.variables.len() {
+                if function.variables[v].first_def == u32::MAX {
+                    function.variables[v].first_def = *seq;
+                }
+                function.variables[v].last_use = function.variables[v].last_use.max(*seq);
+            }
+            *seq += 1;
+        }
         _ => {
             *seq += 1;
         }

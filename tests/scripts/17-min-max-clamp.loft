@@ -23,7 +23,7 @@ fn main() {
   assert(clamp(-5, -10, -1) == -5, "int clamp all negative");
   // --- integer null propagation ---
   z = 0;
-  n = 1 / z;
+  n = 1 / z ?? null;
   assert(!min(n, 5), "int min null left is null");
   assert(!min(5, n), "int min null right is null");
   assert(!max(n, 5), "int max null left is null");
@@ -37,7 +37,7 @@ fn main() {
   assert(clamp(12, 1, 10) == 10, "long clamp above hi");
   assert(clamp(5, 1, 10) == 5, "long clamp inside");
   zl = 0;
-  nl = 1 / zl;
+  nl = 1 / zl ?? null;
   assert(!min(nl, 5), "long min null propagation");
   assert(!max(nl, 5), "long max null propagation");
   assert(!clamp(nl, 1, 10), "long clamp null propagation");

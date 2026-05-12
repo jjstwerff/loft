@@ -783,6 +783,16 @@ impl Type {
 
     #[must_use]
     pub fn is_equal(&self, other: &Type) -> bool {
+        // `Rewritten(T)` is a marker on a variable that has been rewritten
+        // into append statements; semantically the type is still T.  Compare
+        // through the wrapper so a `vector<T>` LHS matches a `vector<T>` RHS
+        // even when only one side carries the marker.
+        if let Type::Rewritten(inner) = self {
+            return inner.is_equal(other);
+        }
+        if let Type::Rewritten(inner) = other {
+            return self.is_equal(inner);
+        }
         match (self, other) {
             (Type::RefVar(s), Type::RefVar(o)) => return s.is_equal(o),
             (Type::Enum(s, s_tp, _), Type::Enum(o, o_tp, _)) => return *s == *o && *s_tp == *o_tp,
@@ -952,6 +962,38 @@ impl Type {
 // ── T1.1 — Tuple element layout helpers ─────────────────────────────────────
 
 /// Natural-alignment of a single element type, in bytes.
+/// Plan-14 phase 07 (P234 runtime): does this type carry a lifetime
+/// concern that requires store-side ownership tracking?  Used by the
+/// function-return rewrite in `parser/definitions.rs` to decide
+/// whether a `Type::Tuple(elems)` return must be re-routed through
+/// the synthetic `__tuple<…>` struct (so the existing struct-return
+/// `ref_return` / `text_return` ownership-transfer machinery applies).
+///
+/// Lifetime-bearing = goes through `text_return` / `ref_return` as a
+/// direct function return today: Text, Reference, Vector, Enum-struct,
+/// Sorted / Hash / Index / Spacial keyed collections, RefVar.  Tuples
+/// recursively inherit the concern from any element.
+///
+/// Pure-value tuples (every element is a scalar value type — Integer,
+/// Float, Single, Boolean, Character, Enum-no-payload, Function fn-ref)
+/// continue to use Rust's tuple ABI under `--native` (the T1.8a path
+/// for `(integer, integer)` and similar shapes).
+#[must_use]
+pub fn has_lifetime_concern(t: &Type) -> bool {
+    matches!(
+        t,
+        Type::Text(_)
+            | Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Enum(_, true, _)
+            | Type::Sorted(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::RefVar(_)
+    ) || matches!(t, Type::Tuple(elems) if elems.iter().any(has_lifetime_concern))
+}
+
 ///
 /// Used by `element_offsets` to pad tuple-element offsets so each
 /// element lands on its natural-alignment boundary — a tuple
@@ -963,7 +1005,12 @@ impl Type {
 pub fn element_align(t: &Type) -> u8 {
     match t {
         Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Single | Type::Function(_, _, _) | Type::Character => 4,
+        Type::Single | Type::Character => 4,
+        // P249 — fn-ref slot layout per `variables::size` and
+        // `OpVarFnRef`'s `[u8; 20]` read: 8 B d_nr (i64) + 12 B
+        // closure DbRef.  The d_nr's i64 alignment dictates the
+        // overall slot alignment.
+        Type::Function(_, _, _) => 8,
         Type::Integer(_) | Type::Float => 8,
         Type::Text(_) => 4,
         Type::Reference(_, _)
@@ -997,7 +1044,13 @@ fn element_offsets_alignment_max(types: &[Type]) -> u8 {
 pub fn element_size(t: &Type) -> usize {
     match t {
         Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Single | Type::Function(_, _, _) | Type::Character => 4,
+        Type::Single | Type::Character => 4,
+        // P249 — fn-ref slot is 20 bytes (8 B d_nr + 12 B closure DbRef);
+        // matches `variables::size(Type::Function, _) = 20` and
+        // `OpVarFnRef`'s `[u8; 20]` read.  Pre-fix returned 4, which
+        // truncated tuple-stored closures and produced garbage on
+        // call.
+        Type::Function(_, _, _) => 20,
         Type::Integer(_) | Type::Float => 8,
         Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
         Type::Reference(_, _)

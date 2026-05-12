@@ -537,6 +537,42 @@ fn p200_int_compare_emitter_registered() {
     }
 }
 
+/// P244 regression test: any program that links a native sub-crate
+/// declaring a `text`-returning native (e.g. `lib/server`'s
+/// `n_ws_message`, `n_ws_event_payload`, `n_tcp_method`, etc.) must
+/// compile + run cleanly under default `--native`.  Without the
+/// `needs_text_wrap` branch in `output_native_direct_call`, rustc
+/// rejects every wrapper for these natives with E0308 ("expected
+/// `Str`, found `LoftStr`") because the wrapper signature is `Str`
+/// but the underlying extern returns `loft_ffi::LoftStr`.  Fix:
+/// extract the LoftStr bytes, push into `stores.scratch`, and
+/// return a `Str` borrowed from there (mirrors P205 lifetime
+/// pattern).  Type annotation on the temporary is omitted so the
+/// "multiple versions of crate loft_ffi" case (one per native
+/// sub-crate) doesn't surface as a sibling E0308.
+#[test]
+fn p244_text_native_wrapper_compiles_under_native() {
+    let status = std::process::Command::new("cargo")
+        .args([
+            "run",
+            "--bin",
+            "loft",
+            "--release",
+            "--quiet",
+            "--",
+            "lib/server/tests/server.loft",
+        ])
+        .current_dir(project_root())
+        .status()
+        .expect("run lib/server smoke under native");
+    assert!(
+        status.success(),
+        "P244: lib/server smoke test failed under default --native — \
+         the LoftStr→Str wrapper fix in src/generation/mod.rs \
+         (output_native_direct_call::needs_text_wrap branch) regressed."
+    );
+}
+
 /// Phase 07 regression test: the P205 reproducer must compile +
 /// run cleanly under native.  Pins the dangling-Str fix —
 /// without phase 07's emit-time scratch routing, the generic-text-

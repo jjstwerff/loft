@@ -244,13 +244,6 @@ where
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stitch {
-    /// Concatenate per-worker output stores into one result vector.
-    /// No payload — the dispatcher routes by the caller-supplied
-    /// `DispatchMode` (Text / Ref / Primitive) and reads sizes from
-    /// `Data::fn_return_type`.  This is the phase-4c (DESIGN.md
-    /// D1b) **final** shape.
-    Concat,
-
     /// Run workers, drop their results.  Used by the fused for-loop
     /// when the body never references `r`, and by future
     /// `par_for_each`.  Lands in plan-06 phase 7.
@@ -295,8 +288,10 @@ mod stitch_tests {
 
     #[test]
     fn variants_distinguishable_by_match() {
+        // ARC.md A4 (closed 2026-05-07) — Stitch::Concat removed.
+        // The materialised result-vector dispatch was retired when
+        // every par return type routed through the Queue family.
         let cases = [
-            Stitch::Concat,
             Stitch::Discard,
             Stitch::Reduce { fold_fn: 42 },
             Stitch::Queue { capacity: 16 },
@@ -304,13 +299,12 @@ mod stitch_tests {
         let names: Vec<&str> = cases
             .iter()
             .map(|s| match s {
-                Stitch::Concat => "concat",
                 Stitch::Discard => "discard",
                 Stitch::Reduce { .. } => "reduce",
                 Stitch::Queue { .. } => "queue",
             })
             .collect();
-        assert_eq!(names, vec!["concat", "discard", "reduce", "queue"]);
+        assert_eq!(names, vec!["discard", "reduce", "queue"]);
     }
 }
 
@@ -1781,9 +1775,15 @@ pub struct WorkerPool {
 impl WorkerPool {
     /// Create a pool with `n_workers × stores_per_worker` stores, each with
     /// `store_capacity` words of initial capacity.
-    // Only called from the threading-enabled path; under `--no-default-features`
-    // the binary's view of this module has no callers.  See `run_parallel_direct`.
+    // ARC.md A4 (closed 2026-05-07) — the binary side has no callers
+    // any more: `parallel_light_execute_and_collect` (the sole user)
+    // was deleted when every par return type routed through Queue.
+    // The pool stays for `run_parallel_light` itself, which still
+    // exercises tests at `parallel.rs::par_light_*` until A8 collapses
+    // the dispatcher family.  `cfg_attr` retained for `--no-default-
+    // features` builds.
     #[cfg_attr(not(feature = "threading"), allow(dead_code))]
+    #[allow(dead_code)] // bin sees no callers post-A4; tests at parallel::par_light_* still use it
     #[must_use]
     pub fn new(n_workers: usize, stores_per_worker: usize, store_capacity: u32) -> Self {
         let total = n_workers * stores_per_worker;
@@ -1811,7 +1811,12 @@ impl WorkerPool {
 // See `run_parallel_direct` for the threading-vs-non-threading split rationale.
 // (dead_code already allowed above — only needless_pass_by_value is feature-gated.)
 #[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
-pub fn run_parallel_block(stores: &Stores, program: WorkerProgram, arm_positions: &[u32]) {
+pub fn run_parallel_block(
+    stores: &Stores,
+    program: WorkerProgram,
+    arm_positions: &[u32],
+    parent_snapshot: &Arc<Vec<u8>>,
+) {
     if arm_positions.is_empty() {
         return;
     }
@@ -1822,9 +1827,10 @@ pub fn run_parallel_block(stores: &Stores, program: WorkerProgram, arm_positions
             for &pos in arm_positions {
                 let worker_stores = stores.clone_for_worker();
                 let prog = Arc::clone(&program);
+                let snapshot = Arc::clone(parent_snapshot);
                 s.spawn(move || {
                     let mut state = prog.new_state(worker_stores);
-                    state.execute_at_void(pos);
+                    state.execute_at_void_with_snapshot(pos, &snapshot);
                 });
             }
         });
@@ -1834,7 +1840,7 @@ pub fn run_parallel_block(stores: &Stores, program: WorkerProgram, arm_positions
         // Sequential fallback (WASM or threading disabled).
         for &pos in arm_positions {
             let mut state = program.new_state(stores.clone_for_worker());
-            state.execute_at_void(pos);
+            state.execute_at_void_with_snapshot(pos, parent_snapshot.as_ref());
         }
     }
 }

@@ -62,6 +62,7 @@ mod parser;
 mod platform;
 #[cfg(feature = "png")]
 mod png_store;
+mod runtime_error;
 mod scopes;
 mod sha256;
 mod stack;
@@ -129,6 +130,11 @@ fn print_help() {
     println!("                                compile with rustc -O (optimised build)");
     println!(
         "  --native-debug                like --native but compile with -Cdebuginfo=2 (DWARF)"
+    );
+    println!("  --dev-soft-halt               demote dev-mode runtime raises to log-and-continue");
+    println!("                                (also: LOFT_DEV_SOFT_HALT=1) — surfaces every fault");
+    println!(
+        "                                site in a single run instead of halting on the first"
     );
     println!(
         "                                and preserve the generated .rs on disk; combine with"
@@ -1090,6 +1096,13 @@ fn add_native_extern_flags(
     for (crate_name, pkg_dir) in &data.native_packages {
         // Look for the compiled rlib in the package's native crate output.
         let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
+        // P244-windows fix #2 (2026-05-12): use single-segment joins,
+        // not `.join("native/target/release")` with embedded slashes.
+        // When `pkg_dir` is a Windows extended-length path (`\\?\D:\…`),
+        // a multi-segment join string with `/` separators inside the
+        // verbatim namespace doesn't normalize and the resulting path
+        // doesn't match real on-disk files.  Each `.join("X")` with a
+        // single component is normalized correctly by `Path` semantics.
         let rlib_path = if let Some(tgt) = target {
             // WASM: check prebuilt first, then native/target/<target>/release/
             let prebuilt = std::path::PathBuf::from(pkg_dir)
@@ -1100,7 +1113,8 @@ fn add_native_extern_flags(
                 prebuilt
             } else {
                 std::path::PathBuf::from(pkg_dir)
-                    .join("native/target")
+                    .join("native")
+                    .join("target")
                     .join(tgt)
                     .join("release")
                     .join(&rlib_name)
@@ -1108,7 +1122,9 @@ fn add_native_extern_flags(
         } else {
             // Native: check native/target/release/
             std::path::PathBuf::from(pkg_dir)
-                .join("native/target/release")
+                .join("native")
+                .join("target")
+                .join("release")
                 .join(&rlib_name)
         };
         if rlib_path.exists() {
@@ -1347,6 +1363,21 @@ fn main() {
             // optimised + debug-info is wanted.
             native_mode = true;
             native_debug = true;
+        } else if a == "--dev-soft-halt" {
+            // Plan-07 phase 4g.3 — demote dev-mode raises to
+            // log-and-continue so a single run surfaces every
+            // fault site.  Useful for porting / first-pass
+            // scripts where the full pattern of breakage
+            // matters more than fast loop-back on one site.
+            //
+            // SAFETY: set_var is unsafe in Rust 2024.  We set
+            // the env var BEFORE any State is created (the
+            // State::raise check reads via OnceLock that
+            // captures the value on first call), so no
+            // concurrent reads are in flight.
+            unsafe {
+                std::env::set_var("LOFT_DEV_SOFT_HALT", "1");
+            }
         } else if a == "--native-emit" {
             // Optional path: consume next arg only if it looks like an output path
             native_emit = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
@@ -2261,8 +2292,33 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             .to_string();
         let cached_binary = cache_dir.join(format!("{source_stem}-{source_hash}"));
 
-        // Use cached binary if it exists, otherwise compile and cache.
-        let binary = if cached_binary.exists() {
+        // P254 — cache-poisoning defense.  Bypass the cache entirely
+        // when the user opts out via `LOFT_NATIVE_NO_CACHE=1` (matches
+        // the behaviour the workaround in PROBLEMS.md described before
+        // this fix landed; documented here so paranoid users have a
+        // hard kill switch even if the safety helpers gain a future
+        // bug).  We also reject the cache when the cached file fails
+        // the safety helpers — symlinked cache, wrong owner uid,
+        // group/other-readable, or SUID-set.  In every reject case we
+        // recompile (rather than refusing to run) so a poisoned cache
+        // doesn't deny the user service; it just costs them a
+        // recompile.
+        let no_cache = std::env::var("LOFT_NATIVE_NO_CACHE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let cache_usable = !no_cache
+            && cached_binary.exists()
+            && native_utils::cache_safe_to_execute(&cached_binary);
+        if !no_cache && cached_binary.exists() && !cache_usable {
+            eprintln!(
+                "loft: rejecting suspicious cached binary at {} (P254 — wrong owner, world-writable, symlink, or SUID); recompiling",
+                cached_binary.display()
+            );
+        }
+
+        // Use cached binary if it exists AND passes the safety check;
+        // otherwise compile and cache.
+        let binary = if cache_usable {
             cached_binary.clone()
         } else {
             // Per-process tmp path — same rationale as the emit_path
@@ -2428,18 +2484,45 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 }
                 std::process::exit(1);
             }
-            // Store in cache for next run.
-            if std::fs::create_dir_all(&cache_dir).is_ok() {
-                // Remove stale cached binaries for THIS source file only.
-                let prefix = format!("{source_stem}-");
-                if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-                    for entry in entries.flatten() {
-                        if entry.file_name().to_string_lossy().starts_with(&prefix) {
-                            let _ = std::fs::remove_file(entry.path());
+            // Store in cache for next run.  P254 — also opt out
+            // when LOFT_NATIVE_NO_CACHE=1 is set so paranoid users
+            // can avoid leaving a cache file on disk at all.
+            if !no_cache && std::fs::create_dir_all(&cache_dir).is_ok() {
+                // P254 — tighten cache-dir mode to 0700 so a future
+                // attacker can't drop files into our cache (or
+                // remove ours from under us).  Repairs pre-existing
+                // wider-mode cache directories left over from earlier
+                // loft versions.  No-op on non-Unix.
+                native_utils::tighten_cache_dir(&cache_dir);
+                if !native_utils::cache_dir_safe(&cache_dir) {
+                    // Couldn't tighten the directory — bail on the
+                    // cache write so we don't write a binary the
+                    // next run will reject anyway.  Common case:
+                    // the cache dir lives on a network mount whose
+                    // server enforces a different mode than we
+                    // requested.
+                    eprintln!(
+                        "loft: cache directory {} has unsafe permissions and could not be tightened; skipping cache write (P254)",
+                        cache_dir.display()
+                    );
+                } else {
+                    // Remove stale cached binaries for THIS source file only.
+                    let prefix = format!("{source_stem}-");
+                    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+                        for entry in entries.flatten() {
+                            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                                let _ = std::fs::remove_file(entry.path());
+                            }
                         }
                     }
+                    if std::fs::copy(&binary, &cached_binary).is_ok() {
+                        // P254 — tighten the freshly written binary
+                        // to 0700.  std::fs::copy preserves source
+                        // mode, which for `/tmp/loft_native_bin_<pid>`
+                        // is typically 0644 — wider than we want.
+                        native_utils::tighten_cache_binary(&cached_binary);
+                    }
                 }
-                let _ = std::fs::copy(&binary, &cached_binary);
             }
             binary
         };
@@ -2592,7 +2675,51 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             state.resume();
         }
     }
-    state.check_store_leaks();
+    // Plan-07 phase 4 — render typed runtime errors through the
+    // phase-2 pretty renderer.  `panic("msg")`, failed `assert`, and
+    // every fault-site opcode populate `state.database.runtime_error`;
+    // pulling it out here avoids a borrow conflict with the renderer's
+    // loader and keeps the existing `had_fatal` exit path intact.
+    //
+    // Skip `check_store_leaks` when a runtime error halted execution:
+    // the abrupt halt skips scope-exit cleanup so owned vectors / texts
+    // remain held, but those leaks are EXPECTED and the warning would
+    // bury the error message users actually care about.  Keep the
+    // leak check for clean exits where it still surfaces real bugs.
+    let runtime_err = state.database.runtime_error.take();
+    if runtime_err.is_none() {
+        state.check_store_leaks();
+    }
+    if let Some(err) = runtime_err {
+        let entry = err.to_diag_entry();
+        let loader = crate::diagnostic_render::FileSourceLoader::new();
+        let color = crate::diagnostic_render::ColorMode::Auto;
+        let rendered = crate::diagnostic_render::render_entry_pretty(&entry, &loader, color);
+        eprint!("{rendered}");
+        // Plan-07 phase 4g.1 / 4g.2 slice 1 — render the
+        // call-chain captured at raise time after the typed-
+        // error block.  Innermost first so the eye lands on
+        // the function the fault fired in; chevron points
+        // outward to indicate the call sequence.  Top-level
+        // (single-frame) chains are skipped; the source
+        // location already names the function in spirit via
+        // its file:line:col.
+        if err.call_chain.len() > 1 {
+            let trimmed: Vec<&str> = err
+                .call_chain
+                .iter()
+                .map(String::as_str)
+                .take(5) // top 5 frames; rest summarised
+                .collect();
+            eprintln!("  in fn {}() ← called from", trimmed[0]);
+            for name in &trimmed[1..] {
+                eprintln!("        fn {name}()");
+            }
+            if err.call_chain.len() > 5 {
+                eprintln!("        … ({} more frames)", err.call_chain.len() - 5);
+            }
+        }
+    }
     if state.database.had_fatal {
         std::process::exit(1);
     }

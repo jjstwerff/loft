@@ -500,5 +500,101 @@ export function createHost(tree = { '/': {} }, options = {}) {
     storage_remove: (k) => { storage.delete(k); },
   };
 
+  // ── TTT v3.5 — WebSocket bridge ─────────────────────────────────────────
+  // Mirrors `lib/web/native/src/ws_client.rs` — the loft side calls
+  // `web::ws_handler(url)` etc., the interpreter routes through
+  // `host_ws_*`, and these handlers wrap browser's `WebSocket` (or
+  // a `WebSocket`-shaped fallback under Node — see options.WebSocket).
+  //
+  // State per slot: `{ socket, inbox, lastMessage, lastOpcode, ready }`.
+  // `inbox` queues raw frames; `lastMessage` / `lastOpcode` reflect the
+  // most-recently-popped frame (read by host_ws_last_message /
+  // host_ws_last_opcode after a positive host_ws_recv).
+  const WS = options.WebSocket
+    || (typeof WebSocket !== 'undefined' ? WebSocket : null);
+  const wsConns = [];
+  const wsOpen = (slot) => {
+    slot.socket.binaryType = 'arraybuffer';
+    slot.socket.addEventListener('open',  () => { slot.ready = true; });
+    slot.socket.addEventListener('close', () => { slot.ready = false; });
+    slot.socket.addEventListener('error', () => { slot.ready = false; });
+    slot.socket.addEventListener('message', (ev) => {
+      if (typeof ev.data === 'string') {
+        slot.inbox.push({ data: ev.data, opcode: 1 });
+      } else {
+        // ArrayBuffer or Blob — for Node `ws` it's Buffer (Uint8Array-like).
+        const u8 = ev.data instanceof ArrayBuffer
+          ? new Uint8Array(ev.data)
+          : new Uint8Array(ev.data);
+        // Stash binary as a JS string of bytes (latin-1) so the loft side
+        // can recover them via `byte_at(i, t)` regardless of UTF-8 validity.
+        let s = '';
+        for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+        slot.inbox.push({ data: s, opcode: 2 });
+      }
+    });
+  };
+  host.ws_connect = (url) => {
+    if (!WS) return -1;
+    let socket;
+    try { socket = new WS(url); } catch { return -1; }
+    const id = wsConns.length;
+    const slot = {
+      socket, inbox: [], lastMessage: '', lastOpcode: 0, ready: false,
+    };
+    wsConns.push(slot);
+    wsOpen(slot);
+    return id;
+  };
+  host.ws_send = (id, msg, binary) => {
+    const slot = wsConns[id];
+    if (!slot || !slot.ready) return 0;
+    try {
+      if (binary) {
+        // Loft passed a JS string whose codepoints are the byte values
+        // (latin-1).  Convert back to bytes for binary send.
+        const u8 = new Uint8Array(msg.length);
+        for (let i = 0; i < msg.length; i++) u8[i] = msg.charCodeAt(i) & 0xff;
+        slot.socket.send(u8);
+      } else {
+        slot.socket.send(msg);
+      }
+      return 1;
+    } catch { return 0; }
+  };
+  host.ws_recv = (id) => {
+    const slot = wsConns[id];
+    if (!slot) return 0;
+    if (slot.inbox.length === 0) return 0;
+    const next = slot.inbox.shift();
+    slot.lastMessage = next.data;
+    slot.lastOpcode  = next.opcode;
+    return 1;
+  };
+  host.ws_last_message = () => {
+    // Without a slot id, return the most recent across any slot.  The
+    // loft side calls ws_recv(id) immediately before ws_last_message()
+    // so the per-slot lastMessage/lastOpcode is current; we just return
+    // whichever slot last popped.
+    let s = '', best = -1;
+    for (const slot of wsConns) {
+      if (slot.lastOpcode && slot.lastMessage !== '') {
+        s = slot.lastMessage; best = slot.lastOpcode;
+      }
+    }
+    void best;
+    return s;
+  };
+  host.ws_last_opcode = () => {
+    let op = 0;
+    for (const slot of wsConns) if (slot.lastOpcode) op = slot.lastOpcode;
+    return op;
+  };
+  host.ws_close = (id) => {
+    const slot = wsConns[id];
+    if (!slot) return;
+    try { slot.socket.close(); } catch {}
+  };
+
   return { host, fs, storage };
 }

@@ -192,23 +192,23 @@ impl Output<'_> {
                             && !self.data.def(*d).name.starts_with("Op")
                     );
                     let wrap_text = returns_text && !inner_already_str;
-                    // T1.8a: a tuple return whose signature contains
-                    // `Type::Text` elements emits `(String, …)` per the
-                    // Result-context recursion in `rust_type`.  Each text
-                    // element of the returned tuple literal must produce
-                    // an owned `String`, not a borrowed `&str`.  The same
-                    // `tuple_text_to_string` flag that `output_set` uses
-                    // when assigning to a `(String, …)` local is the
-                    // mechanism: setting it before emitting the
-                    // `Value::Tuple` causes each text element to gain a
-                    // `.to_string()` suffix.
-                    let prev_tuple_text = self.tuple_text_to_string;
-                    if let Type::Tuple(elems) = returned
-                        && elems.iter().any(|e| matches!(e, Type::Text(_)))
-                        && matches!(&**val, Value::Tuple(_))
-                    {
-                        self.tuple_text_to_string = true;
-                    }
+                    // T1.8a's tuple-of-text return path was retired by
+                    // Plan-14 phase 07 (P234 runtime closure).  Function
+                    // returns of `Type::Tuple(elems)` with any
+                    // lifetime-bearing element (Text, Reference, etc.)
+                    // are now rewritten in
+                    // `src/parser/definitions.rs::parse_function` to
+                    // `Type::Reference(__tuple<…>)` and the body's tail
+                    // tuple literal becomes a synthetic-struct
+                    // construction sequence.  So `Value::Return(Tuple)`
+                    // with text elements is unreachable from any
+                    // user-written tuple-of-text return — the
+                    // `tuple_text_to_string` save/set/restore that lived
+                    // here became dead code and was removed.
+                    // (`output_set`'s analogous handling at
+                    // dispatch.rs:295-359 stays — it serves LOCAL
+                    // tuple-with-text variables, which the rewrite does
+                    // not touch.)
                     // P205 (plan-09 phase 07): if the function returns
                     // Type::Text but has no `Type::RefVar(Type::Text(_))`
                     // attribute (no proper work buffer set up by
@@ -225,18 +225,49 @@ impl Output<'_> {
                     };
                     write!(w, "return ")?;
                     if needs_p205_scratch {
-                        write!(w, "{{ stores.scratch.push((")?;
+                        // Plan-07 phase 4 — pre-bind the body's text
+                        // result into a local before calling
+                        // `stores.scratch.push(...)` so the inner
+                        // expression's mutable borrow of `stores`
+                        // (e.g. `stores.vec_ref_or_raise_runtime(...)`,
+                        // `stores.text_char_or_raise_runtime(...)`,
+                        // and any other `stores.X` call introduced
+                        // by the C66 production-mode helpers) doesn't
+                        // overlap with the `stores.scratch.push(...)`
+                        // borrow.  Without the pre-bind, rustc
+                        // rejects with E0499 (`cannot borrow *stores
+                        // as mutable more than once at a time`).
+                        write!(w, "{{ let _tmp = (")?;
                     } else if wrap_text {
                         write!(w, "Str::new(")?;
                     } else if narrow.is_some() {
                         write!(w, "(")?;
+                    }
+                    // P238: when the function's return type is a tuple
+                    // with text element(s) and the body's return value is
+                    // a `Value::Tuple` literal, set `tuple_text_to_string`
+                    // so each text element gets a `.to_string()` wrap to
+                    // fit the `(String, …)` slot.  The parser's
+                    // tuple-of-text → synthetic-struct rewrite (Plan-14
+                    // phase 07 / P234) does NOT fire for generic
+                    // monomorphisations: the source fn was parsed with T
+                    // as a generic struct, so the return type at parse
+                    // time was `(T, T)` with no Text elements; the
+                    // rewrite trigger missed.  At monomorphisation time
+                    // the type becomes `(String, String)` but the body
+                    // is still a plain `Value::Tuple`.
+                    let returns_text_tuple = matches!(returned, Type::Tuple(elems)
+                        if elems.iter().any(|e| matches!(e, Type::Text(_))));
+                    let prev_tuple_text = self.tuple_text_to_string;
+                    if returns_text_tuple && matches!(&**val, Value::Tuple(_)) {
+                        self.tuple_text_to_string = true;
                     }
                     self.output_code_inner(w, val)?;
                     self.tuple_text_to_string = prev_tuple_text;
                     if needs_p205_scratch {
                         write!(
                             w,
-                            ").to_string()); Str::new(stores.scratch.last().unwrap()) }}"
+                            ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
                         )?;
                     } else if wrap_text {
                         write!(w, ")")?;
@@ -306,8 +337,23 @@ impl Output<'_> {
                     _ => false,
                 };
                 let is_arg = variables.is_argument(*var);
+                // P247 — when `var` is a work-ref (`__ref_…`) declared
+                // inside a Block expression, a borrow `&var___ref_N.idx`
+                // escapes the block via the Block's tail expression
+                // and rustc rejects with E0597 (`var___ref_N.idx does
+                // not live long enough`).  For work-refs specifically
+                // emit `var___ref_N.idx.clone()` (returns an owned
+                // String — temporary lifetime extension keeps it
+                // alive across the enclosing statement) instead of the
+                // borrow.  Non-work-ref locals keep the borrow form
+                // since their declaration outlives the read.
+                let is_work_ref = variables.name(*var).starts_with("__ref_");
                 if elem_is_text && !is_arg {
-                    write!(w, "&var_{name}.{idx}")?;
+                    if is_work_ref {
+                        write!(w, "var_{name}.{idx}.clone()")?;
+                    } else {
+                        write!(w, "&var_{name}.{idx}")?;
+                    }
                 } else {
                     write!(w, "var_{name}.{idx}")?;
                 }
@@ -599,6 +645,17 @@ impl Output<'_> {
     /// Infer the result type of an expression for generating typed null defaults.
     pub(super) fn infer_type(&self, v: &Value) -> Option<Type> {
         match v {
+            // P243 fix (2026-05-11): unwrap `Value::Span` so callers
+            // querying the wrapped expression's type get the inner
+            // value's type instead of `None`.  Without this, a
+            // bound-method call wrapped in `Span(Call(...))` (e.g.
+            // the bound-generic `x.to_text()` site that
+            // `parser/operators.rs` Span-wraps for source-position
+            // tracking) returned `None` from infer_type — and the
+            // tuple-emit arm's `.to_string()` wrap (which keys off
+            // `Some(Type::Text(_))`) silently skipped, producing a
+            // `(Str, String)` tuple that rustc rejected with E0308.
+            Value::Span(b) => self.infer_type(&b.1),
             Value::Int(_) => Some(Type::Integer(IntegerSpec::signed32())),
             Value::Long(_) => Some(crate::data::I64.clone()),
             Value::Float(_) => Some(Type::Float),
@@ -842,6 +899,20 @@ impl Output<'_> {
         // discarded statement and returns STRING_NULL.
         let fn_name = &self.data.def(self.def_nr).name;
         let is_t_stub_text_body = matches!(bl.result, Type::Text(_)) && fn_name.starts_with("t_");
+        // P240 fix (2026-05-11): bounded-generic T-stubs that return a
+        // stack-passed tuple — `t_<len><Type>_<method>` returning
+        // `Type::Tuple(...)` — go through the same hoisted-return
+        // pattern as text-returning T-stubs (the parser appends a
+        // synthetic `(lt, gt); OpFreeText(work); return null;` shape
+        // to keep the interpreter's stack-cleanup happy).  Without
+        // running `patch_hoisted_returns`, native codegen emits the
+        // tuple as a discarded statement and falls through to a
+        // hardcoded `return (0, 0)` — function always returned the
+        // type's null sentinel regardless of actual inputs.  Mirror
+        // the text branch above; same hoist logic applies because
+        // both shapes have a `Return(Null)` tail with the actual
+        // value as a preceding statement.
+        let is_t_stub_tuple_body = matches!(bl.result, Type::Tuple(_)) && fn_name.starts_with("t_");
         // Any text-returning block whose body contains the B5-L3
         // `Set(__ret_N, call); ...; Return(Var(__ret_N))` temp-transfer
         // pattern must also go through `patch_hoisted_returns` so the
@@ -859,6 +930,7 @@ impl Output<'_> {
         let operators: &[Value] = if is_void_block
             || matches!(bl.result, Type::Never)
             || is_t_stub_text_body
+            || is_t_stub_tuple_body
             || has_ret_temp
         {
             patched_ops = self.patch_hoisted_returns(&bl.operators);
@@ -1058,11 +1130,21 @@ impl Output<'_> {
                     if is_tail_capture_call {
                         write!(w, "let __native_tail_ret: DbRef = ")?;
                     } else if needs_p205_scratch {
-                        // Move the String into stores.scratch, then return
-                        // a Str pointing into the scratch entry.  The
-                        // `(value).to_string()` coerces &str / String /
-                        // Str all into an owned String.
-                        write!(w, "{{ stores.scratch.push((")?;
+                        // Plan-07 phase 4 — pre-bind the body's text
+                        // result into a local before calling
+                        // `stores.scratch.push(...)` so the inner
+                        // expression's mutable borrow of `stores`
+                        // (e.g. `stores.vec_ref_or_raise_runtime(...)`,
+                        // and any other `stores.X` call introduced
+                        // by the C66 production-mode helpers) doesn't
+                        // overlap with the `stores.scratch.push(...)`
+                        // borrow.  Without the pre-bind, rustc rejects
+                        // with E0499.  Move the resulting String into
+                        // `stores.scratch`, then return a Str pointing
+                        // into the scratch entry.  The
+                        // `(value).to_string()` coerces &str / String
+                        // / Str all into an owned String.
+                        write!(w, "{{ let _tmp = (")?;
                     } else if wrap_result {
                         write!(w, "Str::new(")?;
                     } else if narrow_cast.is_some() {
@@ -1074,7 +1156,7 @@ impl Output<'_> {
                     if needs_p205_scratch {
                         write!(
                             w,
-                            ").to_string()); Str::new(stores.scratch.last().unwrap()) }}"
+                            ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
                         )?;
                     } else if wrap_result {
                         write!(w, ")")?;

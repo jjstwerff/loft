@@ -1,8 +1,13 @@
-==== exit: 101 ====
+==== exit: 1 ====
 ==== stdout ====
+warning: integer division may produce null on divide-by-zero with no defensive check; consider `a / b ?? 0` or wrap in `if b != 0 { ... }`
+  --> <cases>/28_runtime_unwrap_none.loft:3:10
+  |
+3 |   x = 1 / z;
+  |          ^
 ==== stderr ====
-  at <cases>/28_runtime_unwrap_none.loft:4:11
-
-thread 'main' (<pid>) panicked at src/native.rs:<line>:<col>:
-expected non-null but got null sentinel (<cases>/28_runtime_unwrap_none.loft:4)
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: divide by zero
+  --> <cases>/28_runtime_unwrap_none.loft:3:10
+  |
+3 |   x = 1 / z;
+  |          ^

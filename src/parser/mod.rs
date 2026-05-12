@@ -189,6 +189,30 @@ pub struct Parser {
     /// Each entry is a tab-separated record:
     /// `<fn_name>\t<line>:<col>\t<step_kind>\t<type_with_deps>`.
     pub trace_types_lines: Vec<String>,
+    /// Plan-07 phase 4h — per-(struct_d_nr, attr_idx) read counter.
+    /// Incremented by `Parser::field()` on the second pass each time a
+    /// field is READ (not assigned) on a user struct.  Surfaced at
+    /// end of parse: each non-`not_null` field whose read count >=
+    /// `HINT_NOT_NULL_THRESHOLD` AND whose `defended_field_reads` set
+    /// does NOT contain the (d_nr, attr_idx) gets a `Level::Warning`
+    /// at its declaration suggesting `not null`.  Stdlib (`self.default
+    /// == true`) is exempt.  Silenceable via `LOFT_NO_HINT_NOT_NULL=1`.
+    pub(crate) field_read_counts: std::collections::HashMap<(u32, u32), u32>,
+    /// Plan-07 phase 4h — set of (struct_d_nr, attr_idx) that have at
+    /// least one defensive read site (`obj.field ?? default` or `if
+    /// obj.field != null` flow analysis).  Membership in this set
+    /// suppresses the `not null` hint regardless of read count — the
+    /// developer has explicitly acknowledged null is possible.
+    pub(crate) defended_field_reads: std::collections::HashSet<(u32, u32)>,
+    /// Plan-07 phase 4h — site of the most recently parsed field
+    /// read.  Set by `Parser::field()` after each read, taken by
+    /// `handle_null_coalesce` to mark the read as defended when
+    /// `expr ?? default` follows.  `None` between distinct
+    /// expressions / statements.  Conservative: covers the common
+    /// `p.field ?? default` shape; complex expressions like
+    /// `(p.field + 1) ?? 0` and `if p.field != null` are
+    /// under-detected today (slice 2).
+    pub(crate) last_field_read_site: Option<(u32, u32)>,
 }
 
 // Operators ordered on their precedence
@@ -355,6 +379,9 @@ impl Parser {
             last_cast_alias: u32::MAX,
             trace_types: false,
             trace_types_lines: Vec::new(),
+            field_read_counts: std::collections::HashMap::new(),
+            defended_field_reads: std::collections::HashSet::new(),
+            last_field_read_site: None,
         }
     }
 
@@ -393,8 +420,79 @@ impl Parser {
             self.resolve_deferred_unknowns();
         }
         self.backfill_native_symbol_crates();
+        // Plan-07 phase 4h — emit `not null` field-reminder hints
+        // after the second pass completes (so all reads have been
+        // counted).  Silenceable via `LOFT_NO_HINT_NOT_NULL=1`.
+        if !self.first_pass && !default {
+            self.emit_not_null_hints();
+        }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
+    }
+
+    /// Plan-07 phase 4h — walk user struct definitions and emit
+    /// `Level::Warning` for each non-`not_null` field whose read
+    /// count exceeds `HINT_NOT_NULL_THRESHOLD` AND whose
+    /// `defended_field_reads` set is empty.  The hint suggests
+    /// adding `not null` at the field declaration so the
+    /// constructor enforces non-null at write-time, eliminating
+    /// the entire class of fault sites for that field.
+    ///
+    /// Threshold is conservative (10 reads) to keep the hint
+    /// from firing on small / illustrative struct definitions.
+    /// Lower thresholds + smarter defended-detection are slice 2.
+    ///
+    /// Stdlib (`self.default == true`) is exempt — its struct
+    /// definitions are language-internal and the suggestion target
+    /// is user code, not the host library.
+    fn emit_not_null_hints(&mut self) {
+        const HINT_NOT_NULL_THRESHOLD: u32 = 10;
+        if std::env::var("LOFT_NO_HINT_NOT_NULL").is_ok_and(|v| v == "1" || v == "true") {
+            self.field_read_counts.clear();
+            self.defended_field_reads.clear();
+            return;
+        }
+        // Snapshot the keys so we can borrow `self.lexer` mutably
+        // while iterating.
+        let counts: Vec<((u32, u32), u32)> = self
+            .field_read_counts
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        for ((d_nr, attr_idx), count) in counts {
+            if count < HINT_NOT_NULL_THRESHOLD {
+                continue;
+            }
+            if self.defended_field_reads.contains(&(d_nr, attr_idx)) {
+                continue;
+            }
+            // Re-check `nullable` at emission time — definition
+            // mutations between count + emit are unlikely but not
+            // forbidden.
+            let attrs = &self.data.def(d_nr).attributes;
+            if attr_idx as usize >= attrs.len() {
+                continue;
+            }
+            let attr = &attrs[attr_idx as usize];
+            if !attr.nullable {
+                continue;
+            }
+            let struct_name = self.data.def(d_nr).name.clone();
+            let field_name = attr.name.clone();
+            let pos = self.data.def(d_nr).position.clone();
+            self.lexer.pos_diagnostic(
+                Level::Warning,
+                &pos,
+                &format!(
+                    "field `{struct_name}.{field_name}` is read {count} times and never \
+                     defended with `??` or `if x.{field_name} != null` — consider \
+                     marking it `not null` so the constructor enforces non-null at \
+                     write-time"
+                ),
+            );
+        }
+        self.field_read_counts.clear();
+        self.defended_field_reads.clear();
     }
 
     /// after `parse_file` has run (and all `todo_files` have drained,
@@ -1351,7 +1449,6 @@ impl Parser {
                 .add_attribute(&mut self.lexer, d_nr, &a.name, a.typedef.clone());
             self.data.set_attr_value(d_nr, a_nr, a.default.clone());
         }
-        self.data.definitions[d_nr as usize].code = new_code;
         self.data.set_returned(d_nr, new_returned.clone());
         // Trace point: full instantiation result.  Used during plan-17
         // (A) debugging when verifying that the second-pass def
@@ -1369,6 +1466,21 @@ impl Parser {
         // Copy the variable table with substituted types.
         let mut vars = Function::copy(&tmpl_vars);
         vars.substitute_type(tv_nr, &concrete);
+        // P241 fix (2026-05-11): post-substitution rewrite of the
+        // parametric vector-element-write triplet to the primitive
+        // shape, plus elm-var type patch.  Runs after both code
+        // substitution AND vars substitution because the patch needs
+        // to override `vars`' substituted-to-primitive elm var type
+        // back to `Reference(...)` (it holds a DbRef, not the
+        // primitive value).  See `rewrite_generic_vector_writes`.
+        let new_code = Self::rewrite_generic_vector_writes(
+            new_code,
+            &concrete,
+            &mut vars,
+            &self.data,
+            &mut self.database,
+        );
+        self.data.definitions[d_nr as usize].code = new_code;
         self.data.definitions[d_nr as usize].variables = vars;
         // I6: verify the concrete type satisfies every declared bound.
         // Emit a diagnostic and return u32::MAX if any required method is missing.
@@ -1443,6 +1555,13 @@ impl Parser {
     /// what the type variable `tv_nr` resolves to.
     /// E.g. template `vector<T>` + concrete `vector<integer>` → `integer`.
     fn resolve_type_var(template_tp: &Type, tv_nr: u32, concrete_tp: &Type) -> Type {
+        // `Rewritten(T)` is a value-construction marker (e.g. `P { v: 99 }`
+        // becoming an Insert sequence) that should not propagate into the
+        // bound T — the type variable describes the data shape, not how
+        // a particular argument got assembled.  Strip it before unifying.
+        if let Type::Rewritten(inner) = concrete_tp {
+            return Self::resolve_type_var(template_tp, tv_nr, inner);
+        }
         match template_tp {
             Type::Reference(d, _) if *d == tv_nr => concrete_tp.clone(),
             Type::Vector(inner, _) => {
@@ -1538,6 +1657,9 @@ impl Parser {
 
     /// Recursively substitute types in a Value IR tree and re-resolve Call targets
     /// whose first parameter references the type variable.
+    /// Walks a generic-template's IR and substitutes the type variable
+    /// `tv_nr` with the concrete `concrete` type, both in variable types
+    /// and in IR-shape decisions that depend on T's resolved shape.
     fn substitute_type_in_value(val: Value, tv_nr: u32, concrete: &Type, data: &Data) -> Value {
         match val {
             Value::Call(d, args) => {
@@ -1550,9 +1672,21 @@ impl Parser {
                 // I9-vec: fix vector element access with baked-in elm_size=0.
                 // The template bakes elm_size=0 for type-variable elements and omits the
                 // value-extraction wrapper (OpGetInt/OpGetFloat/etc.).  Fix both here.
+                //
+                // P252 fix (2026-05-11): also recognise `OpGetVectorNullable`
+                // — plan-07 phase 4 step 4.6 swapped the for-loop iter step
+                // from `OpGetVector` to its Nullable peer (so OOB at end-of-
+                // iteration returns null instead of raising).  Without this
+                // arm, bounded-generic for-loops over a struct vector left
+                // the iter step at `OpGetVectorNullable(v, 0, idx)` with
+                // size=0 — every iteration read element 0, producing the
+                // FIRST item's value for every iteration (P252).  The
+                // Nullable peer's arg shape is identical to OpGetVector
+                // (r, size, idx) so the elm_size fixup logic is unchanged.
                 if new_d != u32::MAX
                     && (new_d as usize) < data.definitions.len()
-                    && data.def(new_d).name == "OpGetVector"
+                    && (data.def(new_d).name == "OpGetVector"
+                        || data.def(new_d).name == "OpGetVectorNullable")
                     && new_args.len() == 3
                 {
                     let cur_size = if let Value::Int(n) = &new_args[1] {
@@ -1569,6 +1703,43 @@ impl Parser {
                     }
                     return Self::wrap_vector_get_val(Value::Call(new_d, new_args), concrete, data);
                 }
+                // P239 fix (2026-05-11): the for-loop iter-termination
+                // check generated by `parser/collections.rs::iter_for`
+                // emits `OpConvBoolFromRef(Var(loop_var))` for any
+                // loop variable typed `Reference` — including
+                // `Reference(T_d_nr, …)` for generic-T element
+                // iteration.  When T monomorphises to a primitive
+                // (integer / text / float / single / character /
+                // enum), the substituted Var is now that primitive
+                // type but the IR still has `OpConvBoolFromRef`,
+                // which crashes interp (treats `i64` as a `DbRef` —
+                // SIGSEGV) and breaks native (rustc E0610 `i64.rec`).
+                // Swap the conversion op to the matching primitive
+                // peer when the substituted concrete type tells us
+                // what shape the value actually is.
+                if new_d != u32::MAX
+                    && (new_d as usize) < data.definitions.len()
+                    && data.def(new_d).name == "OpConvBoolFromRef"
+                    && new_args.len() == 1
+                {
+                    let conv_name = match concrete {
+                        Type::Integer(_) => Some("OpConvBoolFromInt"),
+                        Type::Text(_) => Some("OpConvBoolFromText"),
+                        Type::Float => Some("OpConvBoolFromFloat"),
+                        Type::Single => Some("OpConvBoolFromSingle"),
+                        Type::Enum(_, false, _) => Some("OpConvBoolFromEnum"),
+                        // Reference / Vector / struct-enum / tuple stay
+                        // on OpConvBoolFromRef (the existing behaviour
+                        // works for any DbRef-shaped loop variable).
+                        _ => None,
+                    };
+                    if let Some(name) = conv_name {
+                        let conv_d_nr = data.def_nr(name);
+                        if conv_d_nr != u32::MAX {
+                            return Value::Call(conv_d_nr, new_args);
+                        }
+                    }
+                }
                 // I9-text fixup: when a T-stub had an extra __work_1 parameter
                 // (for text-returning interface methods) but the concrete method
                 // doesn't, drop the trailing argument to match the concrete signature.
@@ -1582,17 +1753,20 @@ impl Parser {
                 }
                 Value::Call(new_d, new_args)
             }
-            Value::Block(bl) => Value::Block(Box::new(crate::data::Block {
-                operators: bl
+            Value::Block(bl) => {
+                let recursed: Vec<Value> = bl
                     .operators
                     .into_iter()
                     .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
-                    .collect(),
-                result: Self::substitute_type(bl.result, tv_nr, concrete),
-                name: bl.name,
-                scope: bl.scope,
-                var_size: bl.var_size,
-            })),
+                    .collect();
+                Value::Block(Box::new(crate::data::Block {
+                    operators: recursed,
+                    result: Self::substitute_type(bl.result, tv_nr, concrete),
+                    name: bl.name,
+                    scope: bl.scope,
+                    var_size: bl.var_size,
+                }))
+            }
             Value::Set(v, expr) => Value::Set(
                 v,
                 Box::new(Self::substitute_type_in_value(*expr, tv_nr, concrete, data)),
@@ -1639,7 +1813,553 @@ impl Parser {
                 let new_inner = Self::substitute_type_in_value(inner, tv_nr, concrete, data);
                 Value::with_span(pos, new_inner)
             }
+            // P237: tuple-constructor elements may contain calls to
+            // bound-supplied operator stubs (`t_1T_OpAdd(x, x)` etc.).
+            // Without this recursion the call stayed pointing at the
+            // generic stub instead of the concrete `t_<len>integer_OpAdd`,
+            // producing rustc E0308 (`expected DbRef, found i64`) at
+            // codegen time and silent garbage / SIGSEGV under interp.
+            Value::Tuple(elems) => Value::Tuple(
+                elems
+                    .into_iter()
+                    .map(|e| Self::substitute_type_in_value(e, tv_nr, concrete, data))
+                    .collect(),
+            ),
+            Value::TuplePut(v, idx, val) => Value::TuplePut(
+                v,
+                idx,
+                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data)),
+            ),
+            Value::BreakWith(n, val) => Value::BreakWith(
+                n,
+                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data)),
+            ),
+            Value::Yield(val) => Value::Yield(Box::new(Self::substitute_type_in_value(
+                *val, tv_nr, concrete, data,
+            ))),
+            Value::CallRef(v_nr, args) => Value::CallRef(
+                v_nr,
+                args.into_iter()
+                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data))
+                    .collect(),
+            ),
             other => other,
+        }
+    }
+
+    /// P241 fix (2026-05-11) — slice 2: integer-only.  POST-PASS that
+    /// walks the substituted IR + patches the variable table to
+    /// rewrite the parametric vector-element-write triplet to its
+    /// primitive shape.  Runs AFTER `substitute_type_in_value` AND
+    /// AFTER `vars.substitute_type` so it sees the substituted-types
+    /// IR and can patch the elm variable's type back to `Reference`
+    /// (it was originally `Reference(T_d_nr, deps)` and
+    /// `vars.substitute_type` turned it into the wrong primitive
+    /// type because it holds a DbRef, not a primitive value).
+    ///
+    /// Detects the post-substitution triplet:
+    ///
+    /// ```ignore
+    /// // Triplet at adjacent positions i, i+1, i+2:
+    /// Set(elm_var, Call(OpNewRecord, [Var(out_var), Int(t_T), Int(MAX)]))
+    /// Call(OpCopyRecord, [src_value, Var(elm_var), Int(t_T)])
+    /// Call(OpFinishRecord, [Var(out_var), Var(elm_var), Int(t_T), Int(MAX)])
+    /// ```
+    ///
+    /// When `concrete` is a primitive (slice 2: only `Type::Integer`),
+    /// rewrites the triplet to the primitive shape:
+    ///
+    /// ```ignore
+    /// // 4-op sequence:
+    /// Call(OpPreAllocVector, [Var(out_var), Int(1), Int(elem_size)])
+    /// Set(elm_var, Call(OpNewRecord, [Var(out_var), Int(t_concrete_vec), Int(MAX)]))
+    /// Call(OpSetInt, [Var(elm_var), Int(0), src_value])
+    /// Call(OpFinishRecord, [Var(out_var), Var(elm_var), Int(t_concrete_vec), Int(MAX)])
+    /// ```
+    ///
+    /// AND patches `vars.set_type(elm_var, Type::Reference(...))`.
+    ///
+    /// Recurses into nested Blocks / Loops / Ifs / etc.  Slice 2 ships
+    /// only `Type::Integer`; struct-T is a no-op (the existing
+    /// OpCopyRecord path is correct because the source IS a DbRef).
+    /// P241 fix slice 3 — true when `concrete` is a primitive type
+    /// whose vector-element write uses a primitive setter
+    /// (`OpSetInt` / `OpSetText` / `OpSetFloat` / etc.) at the
+    /// parse-time concrete-T path instead of `OpCopyRecord`.
+    /// `Type::Reference` / `Type::Vector` / etc. are NOT primitive
+    /// targets — their vector-element shape uses `OpCopyRecord`,
+    /// which the parametric IR already encodes correctly (the source
+    /// IS a DbRef regardless of substitution).
+    pub(crate) fn is_primitive_vector_element_target(tp: &Type) -> bool {
+        matches!(
+            tp,
+            Type::Integer(_)
+                | Type::Float
+                | Type::Single
+                | Type::Boolean
+                | Type::Character
+                | Type::Text(_)
+                | Type::Function(_, _, _)
+                | Type::Enum(_, false, _) // plain enum (struct-enums use OpCopyRecord)
+        )
+    }
+
+    /// Does the rewrite apply to this concrete type?  Both primitive and
+    /// struct (Reference) targets need the type-id substitution; the only
+    /// difference is whether OpCopyRecord is replaced (primitive) or kept
+    /// with patched type-id args (struct).
+    pub(crate) fn is_rewritable_vector_element_target(tp: &Type) -> bool {
+        Self::is_primitive_vector_element_target(tp) || matches!(tp, Type::Reference(_, _))
+    }
+
+    /// P241 fix slice 3 — build the per-type primitive setter Call
+    /// for the rewritten triplet's middle op.  Mirrors the parse-time
+    /// concrete-T dispatch in `parser/vectors.rs:1560-1599`.
+    /// Returns `None` only when the type is not a primitive target
+    /// (the caller should pre-check via `is_primitive_vector_element_target`).
+    fn primitive_setter_call(
+        concrete: &Type,
+        elm_var: u16,
+        src_value: Value,
+        data: &Data,
+    ) -> Option<Value> {
+        let elm = Value::Var(elm_var);
+        let pos = Value::Int(0);
+        // Resolve op def_nrs.  Each branch resolves only the ones it needs.
+        let op = match concrete {
+            Type::Integer(spec) => {
+                // narrow-int dispatch mirrors `vectors.rs:1576-1586`.
+                // size(N) on an integer alias selects a narrower setter.
+                let alias_nr = data.type_elm(concrete);
+                let forced = data.forced_size(alias_nr);
+                match forced {
+                    Some(1) => {
+                        let m = Value::Int(spec.min);
+                        let d = data.def_nr("OpSetByte");
+                        Value::Call(d, vec![elm, pos, m, src_value])
+                    }
+                    Some(2) => {
+                        let m = Value::Int(spec.min);
+                        let d = data.def_nr("OpSetShortRaw");
+                        Value::Call(d, vec![elm, pos, m, src_value])
+                    }
+                    Some(4) => {
+                        let d = data.def_nr("OpSetInt4");
+                        Value::Call(d, vec![elm, pos, src_value])
+                    }
+                    _ => {
+                        let d = data.def_nr("OpSetInt");
+                        Value::Call(d, vec![elm, pos, src_value])
+                    }
+                }
+            }
+            Type::Float => {
+                let d = data.def_nr("OpSetFloat");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            Type::Single => {
+                let d = data.def_nr("OpSetSingle");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            Type::Boolean => {
+                // Booleans store as a 0/1 byte; same shape as `set_field`'s
+                // Boolean arm at `parser/mod.rs:2799`.  Must wrap the
+                // raw boolean value in `if val { 1 } else { 0 }` so the
+                // OpSetByte writes the correct integer encoding —
+                // without the wrap, OpSetByte sees a DbRef-shaped
+                // boolean that codegen can't decode.
+                let d = data.def_nr("OpSetByte");
+                let wrapped = crate::data::v_if(src_value, Value::Int(1), Value::Int(0));
+                Value::Call(d, vec![elm, pos, Value::Int(0), wrapped])
+            }
+            Type::Character => {
+                let d = data.def_nr("OpSetCharacter");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            Type::Text(_) => {
+                let d = data.def_nr("OpSetText");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            Type::Function(_, _, _) => {
+                // Plan-06 phase 4d.A.2 — fn-ref vector elements store the
+                // 4-byte i32 d_nr.  Same shape as `vectors.rs:1597`.
+                let d = data.def_nr("OpSetInt4");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            Type::Enum(_, false, _) => {
+                // Plain enum — variants encode as a small integer index.
+                let d = data.def_nr("OpSetEnum");
+                Value::Call(d, vec![elm, pos, src_value])
+            }
+            _ => return None,
+        };
+        // Defensive: if any def_nr lookup returned u32::MAX, return None
+        // so the caller falls through (rather than emitting a malformed Call).
+        if let Value::Call(d, _) = &op
+            && *d == u32::MAX
+        {
+            return None;
+        }
+        Some(op)
+    }
+
+    pub(crate) fn rewrite_generic_vector_writes(
+        val: Value,
+        concrete: &Type,
+        vars: &mut crate::variables::Function,
+        data: &Data,
+        database: &mut Stores,
+    ) -> Value {
+        // Slice 2: Integer.  Slice 3: extended to all primitive
+        // types whose vector-element shape uses a primitive setter
+        // instead of OpCopyRecord.  P255 (2026-05-12): also handle
+        // struct T (Type::Reference) — the OpCopyRecord shape is
+        // kept but its tp arg AND the surrounding OpNewRecord /
+        // OpFinishRecord parent_tp args must be patched from the
+        // parametric T type-id to the concrete struct's type-ids,
+        // otherwise the runtime reads the wrong record size.
+        if !Self::is_rewritable_vector_element_target(concrete) {
+            return val;
+        }
+        match val {
+            Value::Block(bl) => {
+                let recursed: Vec<Value> = bl
+                    .operators
+                    .into_iter()
+                    .map(|v| Self::rewrite_generic_vector_writes(v, concrete, vars, data, database))
+                    .collect();
+                let rewritten =
+                    Self::rewrite_vector_write_triplets(recursed, concrete, vars, data, database);
+                Value::Block(Box::new(crate::data::Block {
+                    operators: rewritten,
+                    result: bl.result,
+                    name: bl.name,
+                    scope: bl.scope,
+                    var_size: bl.var_size,
+                }))
+            }
+            Value::Loop(lp) => {
+                let recursed: Vec<Value> = lp
+                    .operators
+                    .into_iter()
+                    .map(|v| Self::rewrite_generic_vector_writes(v, concrete, vars, data, database))
+                    .collect();
+                let rewritten =
+                    Self::rewrite_vector_write_triplets(recursed, concrete, vars, data, database);
+                Value::Loop(Box::new(crate::data::Block {
+                    operators: rewritten,
+                    result: lp.result,
+                    name: lp.name,
+                    scope: lp.scope,
+                    var_size: lp.var_size,
+                }))
+            }
+            Value::If(c, t, f) => Value::If(
+                Box::new(Self::rewrite_generic_vector_writes(
+                    *c, concrete, vars, data, database,
+                )),
+                Box::new(Self::rewrite_generic_vector_writes(
+                    *t, concrete, vars, data, database,
+                )),
+                Box::new(Self::rewrite_generic_vector_writes(
+                    *f, concrete, vars, data, database,
+                )),
+            ),
+            Value::Set(v, expr) => Value::Set(
+                v,
+                Box::new(Self::rewrite_generic_vector_writes(
+                    *expr, concrete, vars, data, database,
+                )),
+            ),
+            Value::Return(expr) => Value::Return(Box::new(Self::rewrite_generic_vector_writes(
+                *expr, concrete, vars, data, database,
+            ))),
+            Value::Drop(expr) => Value::Drop(Box::new(Self::rewrite_generic_vector_writes(
+                *expr, concrete, vars, data, database,
+            ))),
+            Value::Span(b) => {
+                let (pos, inner) = *b;
+                Value::Span(Box::new((
+                    pos,
+                    Self::rewrite_generic_vector_writes(inner, concrete, vars, data, database),
+                )))
+            }
+            Value::Call(d, args) => Value::Call(
+                d,
+                args.into_iter()
+                    .map(|a| Self::rewrite_generic_vector_writes(a, concrete, vars, data, database))
+                    .collect(),
+            ),
+            Value::Insert(ops) => Value::Insert(
+                ops.into_iter()
+                    .map(|v| Self::rewrite_generic_vector_writes(v, concrete, vars, data, database))
+                    .collect(),
+            ),
+            other => other,
+        }
+    }
+
+    /// P241 fix (2026-05-11) — slice 2: integer-only.  Walks a Block's
+    /// post-substitution operator list looking for the parametric
+    /// vector-element-write triplet emitted by
+    /// `parser/vectors.rs::new_record` (for parametric T):
+    ///
+    /// ```ignore
+    /// // Triplet at adjacent positions i, i+1, i+2:
+    /// Set(elm_var, Call(OpNewRecord, [Var(out_var), Int(t_T), Int(MAX)]))
+    /// Call(OpCopyRecord, [src_value, Var(elm_var), Int(t_T_known)])
+    /// Call(OpFinishRecord, [Var(out_var), Var(elm_var), Int(t_T), Int(MAX)])
+    /// ```
+    ///
+    /// When `concrete` is a primitive (slice 2: only `Type::Integer`),
+    /// rewrites the triplet to the primitive shape:
+    ///
+    /// ```ignore
+    /// // 4-op sequence:
+    /// Call(OpPreAllocVector, [Var(out_var), Int(1), Int(elem_size)])
+    /// Set(elm_var, Call(OpNewRecord, [Var(out_var), Int(t_concrete_vec), Int(MAX)]))
+    /// Call(OpSetInt, [Var(elm_var), Int(0), src_value])
+    /// Call(OpFinishRecord, [Var(out_var), Var(elm_var), Int(t_concrete_vec), Int(MAX)])
+    /// ```
+    ///
+    /// Where:
+    /// - `elem_size = type_element_size(concrete, data)`
+    /// - `t_concrete_vec = database.vector(database.db_type(concrete, data))`
+    ///   (mirrors the parse-time concrete path at `vectors.rs:1532-1535`).
+    ///
+    /// Slice 2 ships only the `Type::Integer` arm.  Slice 3 extends to
+    /// Text / Float / Single / Boolean / Character / Enum / Function +
+    /// narrow-int variants.  For struct T (the `Type::Reference` shape)
+    /// the rewrite is a no-op — the existing OpCopyRecord path is
+    /// correct because the source IS a DbRef.
+    ///
+    /// Tolerates `Value::Span` and `Value::Line` markers between or
+    /// inside the triplet operators by using `unspan` for shape
+    /// matching.  Multi-element pushes (`out += [a, b, c]`) produce
+    /// N adjacent triplets; this function processes them
+    /// independently — each triplet rewrites once.
+    fn rewrite_vector_write_triplets(
+        ops: Vec<Value>,
+        concrete: &Type,
+        vars: &mut crate::variables::Function,
+        data: &Data,
+        database: &mut Stores,
+    ) -> Vec<Value> {
+        // Slice 3 covers all primitive vector-element targets
+        // (Integer/Text/Float/Single/Boolean/Character/Enum/Function +
+        // narrow-int variants).  P255 extends to struct T (Reference)
+        // by keeping OpCopyRecord and patching its tp arg.
+        if !Self::is_rewritable_vector_element_target(concrete) {
+            return ops;
+        }
+        let is_struct_target = matches!(concrete, Type::Reference(_, _));
+        // Resolve op def_nrs once — re-resolution per-triplet would
+        // cost N lookups for a long Block.
+        let new_record_d = data.def_nr("OpNewRecord");
+        let copy_record_d = data.def_nr("OpCopyRecord");
+        let finish_record_d = data.def_nr("OpFinishRecord");
+        let pre_alloc_d = data.def_nr("OpPreAllocVector");
+        if new_record_d == u32::MAX
+            || copy_record_d == u32::MAX
+            || finish_record_d == u32::MAX
+            || pre_alloc_d == u32::MAX
+        {
+            return ops; // missing op definitions — bail safely
+        }
+        // Look up the concrete vector-element record type-id.
+        // Mirrors `vectors.rs:1532-1535` — `database.vector(content_db_type)`
+        // returns the synthetic vector<concrete> type id (registers
+        // it on first use; idempotent on subsequent calls).
+        let content_db_type = database.db_type(concrete, data);
+        let concrete_vec_tp = i32::from(database.vector(content_db_type));
+        let elem_size = Self::type_element_size(concrete, data);
+        // Walk operators looking for the triplet.  Build a new vec
+        // with rewrites applied; copy unchanged ops verbatim.
+        // Drain `ops` into a deque-like cursor so we can take owned
+        // values without index juggling — rewriting consumes 3 ops
+        // and produces 4, so we can't use simple in-place mutation.
+        let mut iter = ops.into_iter();
+        let mut out: Vec<Value> = Vec::new();
+        let mut buf: Vec<Value> = Vec::new();
+        loop {
+            // Refill buffer to at least 3 entries (the triplet length).
+            while buf.len() < 3 {
+                match iter.next() {
+                    Some(v) => buf.push(v),
+                    None => break,
+                }
+            }
+            if buf.len() < 3 {
+                // Tail — nothing left that could be a full triplet.
+                out.extend(buf);
+                break;
+            }
+            let matched = Self::match_vector_write_triplet(
+                &buf[0],
+                &buf[1],
+                &buf[2],
+                new_record_d,
+                copy_record_d,
+                finish_record_d,
+            );
+            if let Some((elm_var, out_var, src_value)) = matched {
+                // Consume the matched triplet.
+                buf.drain(0..3);
+                // Patch the elm var's type back to `Reference(content_def_nr, [out_var])`.
+                // After `vars.substitute_type`, `Reference(T_d_nr, deps)` became
+                // `Type::<concrete>` (deps lost — primitive types don't carry deps).
+                // But the elm var is the destination of `OpNewRecord`, so it
+                // holds a DbRef regardless of T's concrete type.  Without this
+                // patch, codegen emits the wrong opcodes for elm reads/writes
+                // (e.g. `VarInt` instead of `VarRef`) and the runtime reads
+                // garbage.  The dep on `out_var` mirrors `unique_elm_var`'s
+                // `self.vars.depend(elm, vec)` so elm doesn't outlive the
+                // backing store.
+                let content_def_nr = data.type_def_nr(concrete);
+                vars.set_type(elm_var, Type::Reference(content_def_nr, vec![out_var]));
+                // 1. OpPreAllocVector(Var(out_var), Int(1), Int(elem_size))
+                //    Mirrors `vectors.rs:1161-1178` for perf parity with
+                //    concrete-T vector pushes.
+                out.push(Value::Call(
+                    pre_alloc_d,
+                    vec![Value::Var(out_var), Value::Int(1), Value::Int(elem_size)],
+                ));
+                // 2. Set(elm_var, OpNewRecord(Var(out_var), Int(concrete_vec_tp), Int(MAX)))
+                out.push(Value::Set(
+                    elm_var,
+                    Box::new(Value::Call(
+                        new_record_d,
+                        vec![
+                            Value::Var(out_var),
+                            Value::Int(concrete_vec_tp),
+                            Value::Int(i32::from(u16::MAX)),
+                        ],
+                    )),
+                ));
+                // 3. Middle op:
+                //    - Primitive T: per-type setter (OpSetInt / OpSetText / …)
+                //      replaces OpCopyRecord (no DbRef to copy).
+                //    - Struct T: keep OpCopyRecord but patch its tp arg
+                //      from the parametric T's known_type to the concrete
+                //      struct's known_type so `state::copy_record` reads
+                //      the correct record size.
+                if is_struct_target {
+                    let known_tp = if (content_def_nr as usize) < data.definitions.len() {
+                        i32::from(data.def(content_def_nr).known_type)
+                    } else {
+                        i32::from(u16::MAX)
+                    };
+                    out.push(Value::Call(
+                        copy_record_d,
+                        vec![src_value, Value::Var(elm_var), Value::Int(known_tp)],
+                    ));
+                } else {
+                    let setter = Self::primitive_setter_call(concrete, elm_var, src_value, data);
+                    if let Some(call) = setter {
+                        out.push(call);
+                    } else {
+                        // Concrete type matched `is_primitive_vector_element_target`
+                        // but no setter mapping exists — should not happen.
+                        // Bail by emitting a no-op (the OpFinishRecord still
+                        // fires; the value just isn't written).  Defensive
+                        // fall-through to keep the IR well-formed.
+                    }
+                }
+                // 4. OpFinishRecord(Var(out_var), Var(elm_var), Int(concrete_vec_tp), Int(MAX))
+                out.push(Value::Call(
+                    finish_record_d,
+                    vec![
+                        Value::Var(out_var),
+                        Value::Var(elm_var),
+                        Value::Int(concrete_vec_tp),
+                        Value::Int(i32::from(u16::MAX)),
+                    ],
+                ));
+            } else {
+                // No triplet at this position — emit one op and slide.
+                out.push(buf.remove(0));
+            }
+        }
+        out
+    }
+
+    /// P241 fix slice 2 — pattern-matches the parametric vector-element
+    /// write triplet.  Returns `Some((elm_var, out_var, src_value))`
+    /// when all three statements match the expected shape AND the
+    /// per-statement vars cross-reference correctly:
+    /// - The Set's target var equals the OpCopyRecord's 2nd arg's
+    ///   var equals the OpFinishRecord's 2nd arg's var (`elm_var`).
+    /// - The OpNewRecord's 1st arg's var equals the OpFinishRecord's
+    ///   1st arg's var (`out_var`).
+    /// - All Int args match expected sentinel shape (Int(MAX) for
+    ///   `fld`; matching parametric type-id between OpNewRecord and
+    ///   OpFinishRecord).
+    ///
+    /// `src_value` is the OpCopyRecord's 1st arg (the value being
+    /// copied into the new vector slot).  Returned by-value (cloned
+    /// from the matched IR) so the caller can construct the new
+    /// `OpSetInt` Call without borrowing back into `ops`.
+    fn match_vector_write_triplet(
+        op0: &Value,
+        op1: &Value,
+        op2: &Value,
+        new_record_d: u32,
+        copy_record_d: u32,
+        finish_record_d: u32,
+    ) -> Option<(u16, u16, Value)> {
+        // op0: Set(elm_var, Call(OpNewRecord, [Var(out_var), Int(_), Int(MAX)]))
+        let (elm_var_set, out_var, _new_record_tp) = match op0.unspan() {
+            Value::Set(elm, set_val) => {
+                let inner = set_val.unspan();
+                if let Value::Call(d, args) = inner
+                    && *d == new_record_d
+                    && args.len() == 3
+                    && let Value::Var(out) = args[0].unspan()
+                    && let Value::Int(tp) = args[1].unspan()
+                    && let Value::Int(fld) = args[2].unspan()
+                    && *fld == i32::from(u16::MAX)
+                {
+                    (*elm, *out, *tp)
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+        // op1: Call(OpCopyRecord, [src_value, Var(elm_var), Int(_)])
+        let src_value = match op1.unspan() {
+            Value::Call(d, args) => {
+                if *d == copy_record_d
+                    && args.len() == 3
+                    && let Value::Var(elm_in_copy) = args[1].unspan()
+                    && *elm_in_copy == elm_var_set
+                {
+                    args[0].clone()
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+        // op2: Call(OpFinishRecord, [Var(out_var), Var(elm_var), Int(_), Int(MAX)])
+        match op2.unspan() {
+            Value::Call(d, args) => {
+                if *d == finish_record_d
+                    && args.len() == 4
+                    && let Value::Var(out_in_finish) = args[0].unspan()
+                    && let Value::Var(elm_in_finish) = args[1].unspan()
+                    && let Value::Int(_finish_tp) = args[2].unspan()
+                    && let Value::Int(fld) = args[3].unspan()
+                    && *out_in_finish == out_var
+                    && *elm_in_finish == elm_var_set
+                    && *fld == i32::from(u16::MAX)
+                {
+                    Some((elm_var_set, out_var, src_value))
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
@@ -2105,8 +2825,28 @@ impl Parser {
                 // already pushes only the d_nr's 8 bytes via OpVarInt,
                 // and `output_call` projects `.0` natively (see the
                 // val_is_fn_ref handling in src/generation/calls.rs).
+                //
+                // P251 fix (2026-05-11): for `Value::Var(v)` where `v`
+                // has type `Function`, wrap in `Value::FnRefDnr(v)` so
+                // native emit projects `(var_v.0 as i64)` (the d_nr
+                // half of the runtime `(u32, DbRef)` tuple).  Without
+                // this projection, native codegen emits
+                // `let _v_val = (var_v); ... _v_val as i32` which
+                // rustc rejects (E0308: expected `(u32, DbRef)`,
+                // found `i64`; E0605: non-primitive cast).  The
+                // direct fn-ref-struct-field-write path
+                // (`emit_fn_ref_field_write`, parser/mod.rs:4886)
+                // already does this projection — extending it to the
+                // tuple-element-of-struct-field path closes the
+                // remaining gap.
                 let d_nr_only = match value {
                     Value::FnRef(d_nr, _, _) => Value::Int(d_nr),
+                    Value::Var(v)
+                        if matches!(self.vars.tp(v), Type::Function(_, _, _))
+                            && !self.closure_vars.contains_key(&v) =>
+                    {
+                        Value::FnRefDnr(v)
+                    }
                     other => other,
                 };
                 self.cl("OpSetInt4", &[ref_code.clone(), pos_v, d_nr_only])

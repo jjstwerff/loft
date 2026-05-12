@@ -19,7 +19,13 @@ fn expr_add_null() {
 
 #[test]
 fn expr_zero_divide() {
-    expr!("2 / (3 - 2 - 1)").tp(INTEGER);
+    // Plan-07 phase 4 step 4.3 — `/` by zero now raises a typed
+    // RuntimeError (DivideByZero) on the non-nullable path.  Use the
+    // nullable `??` form to keep the original "is the type still
+    // INTEGER under div-by-zero" probe without halting the test
+    // harness.  The runtime-error path is covered separately by
+    // `tests/runtime_errors.rs::kind_divide_by_zero_int_prints_pretty_error`.
+    expr!("2 / (3 - 2 - 1) ?? null").tp(INTEGER);
 }
 
 #[test]

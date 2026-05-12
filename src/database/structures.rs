@@ -341,18 +341,25 @@ impl Stores {
         store.set_u32_raw(vec_rec, 4, length + adding);
     }
 
-    /// walk a [`crate::json::Parsed`] tree into
-    /// the record at `to`, dispatching on the target type's
-    /// [`Parts`] variant.  Returns `true` on success, `false`
-    /// on a shape/type mismatch that can't be recovered.
+    /// Walk a [`crate::json::Parsed`] tree into the record at
+    /// `to`, dispatching on the target type's [`Parts`] variant.
+    /// Returns `Ok(())` on success, `Err(WalkErr)` with byte offset
+    /// + dotted path on a shape/type mismatch.
     ///
-    /// This is the schema-driven counterpart to the parser-side
-    /// `crate::json::parse_with(text, Dialect::Lenient)` — the
+    /// `at` is the byte offset in the source text where this value
+    /// was parsed (for struct fields, the field's key offset; for
+    /// array elements / top-level, 0 — `Parsed::Array` doesn't carry
+    /// per-element offsets).  Used to populate the `at` field of
+    /// `WalkErr` when a leaf hits a type mismatch, so users see the
+    /// real "line N:M path:X" instead of "line 1:1 path:X".
+    ///
+    /// Schema-driven counterpart to the parser-side
+    /// [`crate::json::parse_with(text, Dialect::Lenient)`] — the
     /// parser stays schema-free; all type dispatch lives here.
-    /// Replaces the hand-rolled `parsing` scanner in the
-    /// legacy `text → struct` path (still kept for the
-    /// transition).
-    #[allow(clippy::ptr_arg)] // path needs push/pop, slice not enough
+    /// Together they form the only `text → struct` path in the
+    /// crate; the legacy hand-rolled scanner was removed when
+    /// every Parts arm gained walker coverage.
+    #[allow(clippy::ptr_arg, clippy::too_many_arguments)] // path push/pop; arg-count is intrinsic to the dispatch
     pub(super) fn walk_parsed_into(
         &mut self,
         parsed: &crate::json::Parsed,
@@ -361,6 +368,7 @@ impl Stores {
         field: u16,
         to: &DbRef,
         path: &mut Vec<String>,
+        at: usize,
     ) -> Result<(), WalkErr> {
         // `null` at any target position resets to the type's
         // default sentinel — mirrors the legacy scanner's
@@ -369,8 +377,12 @@ impl Stores {
             self.set_default_value(tp, to);
             return Ok(());
         }
+        let mismatch = || WalkErr {
+            at,
+            path: path.clone(),
+        };
         match self.types[tp as usize].parts.clone() {
-            Parts::Base => self.walk_primitive_into(parsed, tp, to, path),
+            Parts::Base => self.walk_primitive_into(parsed, tp, to, path, at),
             Parts::Sorted(c, _)
             | Parts::Vector(c)
             | Parts::Array(c)
@@ -379,22 +391,19 @@ impl Stores {
             | Parts::Spacial(c, _)
             | Parts::Index(c, _, _) => {
                 let crate::json::Parsed::Array(items) = parsed else {
-                    return Err(WalkErr {
-                        at: 0,
-                        path: path.clone(),
-                    });
+                    return Err(mismatch());
                 };
                 for (idx, item) in items.iter().enumerate() {
                     path.push(format!("[{idx}]"));
                     let res = self.record_new(to, rec_tp, field);
-                    self.walk_parsed_into(item, c, c, u16::MAX, &res, path)?;
+                    self.walk_parsed_into(item, c, c, u16::MAX, &res, path, at)?;
                     self.record_finish(to, &res, rec_tp, field);
                     path.pop();
                 }
                 Ok(())
             }
             Parts::Struct(object) | Parts::EnumValue(_, object) => {
-                self.walk_parsed_struct(parsed, tp, to, &object, path)
+                self.walk_parsed_struct(parsed, tp, to, &object, path, at)
             }
             Parts::Enum(fields) => {
                 // Three accepted shapes:
@@ -410,12 +419,7 @@ impl Stores {
                     crate::json::Parsed::Object(entries) if entries.len() == 1 => {
                         (entries[0].0.as_str(), Some(&entries[0].2))
                     }
-                    _ => {
-                        return Err(WalkErr {
-                            at: 0,
-                            path: path.clone(),
-                        });
-                    }
+                    _ => return Err(mismatch()),
                 };
                 let mut enum_tp = u16::MAX;
                 let val = if name == "null" {
@@ -440,16 +444,13 @@ impl Stores {
                     && enum_tp != u16::MAX
                     && self.types[enum_tp as usize].size > 1
                 {
-                    return self.walk_parsed_into(body, enum_tp, rec_tp, field, to, path);
+                    return self.walk_parsed_into(body, enum_tp, rec_tp, field, to, path, at);
                 }
                 Ok(())
             }
             Parts::Byte(from, _null) => {
                 let crate::json::Parsed::Number(n) = parsed else {
-                    return Err(WalkErr {
-                        at: 0,
-                        path: path.clone(),
-                    });
+                    return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
                 self.store_mut(to).set_byte(to.rec, to.pos, from, *n as i32);
@@ -457,10 +458,7 @@ impl Stores {
             }
             Parts::Short(from, _null) => {
                 let crate::json::Parsed::Number(n) = parsed else {
-                    return Err(WalkErr {
-                        at: 0,
-                        path: path.clone(),
-                    });
+                    return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
                 self.store_mut(to)
@@ -469,10 +467,7 @@ impl Stores {
             }
             Parts::ShortRaw(from, _null) => {
                 let crate::json::Parsed::Number(n) = parsed else {
-                    return Err(WalkErr {
-                        at: 0,
-                        path: path.clone(),
-                    });
+                    return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
                 self.store_mut(to)
@@ -481,10 +476,7 @@ impl Stores {
             }
             Parts::Int(_from, _null) => {
                 let crate::json::Parsed::Number(n) = parsed else {
-                    return Err(WalkErr {
-                        at: 0,
-                        path: path.clone(),
-                    });
+                    return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
                 let v = *n as i64;
@@ -495,23 +487,19 @@ impl Stores {
             // Plan-06 phase 4d.C step 2: stored DbRef pointer has no
             // JSON-representable form — closures don't survive a JSON
             // round-trip.  Surface as a clean error.
-            Parts::DbRef => Err(WalkErr {
-                at: 0,
-                path: path.clone(),
-            }),
+            Parts::DbRef => Err(mismatch()),
             // P213: child-record pointer (closures) — same JSON
             // restriction as DbRef.
-            Parts::ChildRec(_) => Err(WalkErr {
-                at: 0,
-                path: path.clone(),
-            }),
+            Parts::ChildRec(_) => Err(mismatch()),
         }
     }
 
     /// Schema-driven struct fill from a [`crate::json::Parsed::Object`].
     /// Matches fields by name, recurses into the walker for each
-    /// value, default-fills any unmentioned field (mirroring the
-    /// legacy scanner's "missing field → default" behaviour).
+    /// value (passing the field's key byte offset as the recursion's
+    /// `at` hint so a leaf type-mismatch reports the field's position),
+    /// default-fills any unmentioned field (mirroring the legacy
+    /// scanner's "missing field → default" behaviour).
     #[allow(clippy::ptr_arg)] // path needs push/pop, slice not enough
     fn walk_parsed_struct(
         &mut self,
@@ -520,10 +508,11 @@ impl Stores {
         to: &DbRef,
         object: &[Field],
         path: &mut Vec<String>,
+        at: usize,
     ) -> Result<(), WalkErr> {
         let crate::json::Parsed::Object(entries) = parsed else {
             return Err(WalkErr {
-                at: 0,
+                at,
                 path: path.clone(),
             });
         };
@@ -547,9 +536,17 @@ impl Stores {
                             rec,
                             pos: fld + u32::from(f.position),
                         };
-                        self.walk_parsed_into(value, f.content, tp, f_nr as u16, &slot, path)
+                        self.walk_parsed_into(
+                            value,
+                            f.content,
+                            tp,
+                            f_nr as u16,
+                            &slot,
+                            path,
+                            *key_at,
+                        )
                     } else {
-                        self.walk_parsed_into(value, f.content, tp, f_nr as u16, to, path)
+                        self.walk_parsed_into(value, f.content, tp, f_nr as u16, to, path, *key_at)
                     };
                     res?;
                     path.pop();
@@ -592,6 +589,9 @@ impl Stores {
     /// Schema-driven primitive write.  `tp` is one of the
     /// low-numbered base-type IDs (0 = int32/Reference, 1 = long,
     /// 2 = single, 3 = float, 4 = bool, 5 = text, 6 = Reference).
+    /// `at` is the byte offset where this primitive was parsed —
+    /// reported on the [`WalkErr`] of any type mismatch so users
+    /// see the real position instead of byte 0.
     #[allow(clippy::ptr_arg)] // path needs push/pop, slice not enough
     fn walk_primitive_into(
         &mut self,
@@ -599,9 +599,10 @@ impl Stores {
         tp: u16,
         to: &DbRef,
         path: &mut Vec<String>,
+        at: usize,
     ) -> Result<(), WalkErr> {
         let mismatch = || WalkErr {
-            at: 0,
+            at,
             path: path.clone(),
         };
         match tp {

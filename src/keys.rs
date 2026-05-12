@@ -15,8 +15,35 @@
 
 use crate::store::Store;
 use std::cmp::Ordering;
+use std::collections::hash_map::RandomState;
 use std::fmt::Formatter;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{BuildHasher, DefaultHasher, Hash, Hasher};
+use std::sync::OnceLock;
+
+/// P253 fix (2026-05-11) — process-wide seeded `RandomState` so the
+/// `keys::hash` / `key_hash` functions produce a different hash
+/// distribution across processes.  Without seeding, `DefaultHasher::new()`
+/// constructs a SipHash-1-3 hasher with fixed seed (k0=0, k1=0); every
+/// loft process used the identical hash function, so an attacker who
+/// supplied hash-table keys could pre-compute N strings that all
+/// collided to a single bucket → O(N²) insertion / lookup.  Same root
+/// cause as the 2011/2012 hash-DoS in Python / Ruby / PHP / Java /
+/// Node.js (CVE-2011-4815 et al.).
+///
+/// `RandomState::new()` seeds from `getrandom` on first call; we
+/// memoise on a `OnceLock` so subsequent hashers share the same seed
+/// (otherwise resize / lookup would see a different distribution than
+/// insertion).  Lookups via `hasher()` clone the seed-state and build
+/// a fresh `DefaultHasher` per call — same shape as `HashMap`.
+fn hasher_state() -> &'static RandomState {
+    static STATE: OnceLock<RandomState> = OnceLock::new();
+    STATE.get_or_init(RandomState::new)
+}
+
+#[must_use]
+fn build_hasher() -> DefaultHasher {
+    hasher_state().build_hasher()
+}
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Str {
@@ -323,7 +350,7 @@ pub fn get_simple(record: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<Simple>
 
 #[must_use]
 pub fn hash(rec: &DbRef, stores: &[Store], keys: &[Key]) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = build_hasher();
     for key in keys {
         let pos = rec.pos + u32::from(key.position);
         hash_ref(rec, stores, key, pos, &mut hasher);
@@ -333,7 +360,7 @@ pub fn hash(rec: &DbRef, stores: &[Store], keys: &[Key]) -> u64 {
 
 #[must_use]
 pub fn key_hash(key: &[Content]) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = build_hasher();
     for k in key {
         match k {
             Content::Long(l) => l.hash(&mut hasher),

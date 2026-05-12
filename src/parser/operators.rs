@@ -695,6 +695,15 @@ impl Parser {
                     // Allocate temp variable on BOTH passes (consistent unique counter).
                     let fn_work = self.create_unique("__fn_ref_tmp", &fn_type);
                     self.vars.defined(fn_work);
+                    // The fn_work temp is a borrowed copy of an existing
+                    // fn-ref: its closure DbRef aliases the source's
+                    // closure store, so emitting OpFreeRef on it would
+                    // double-free.  Mark `skip_free` so scope-exit cleanup
+                    // leaves the closure alone.  Also blocks the
+                    // insert_free Return-wrap path that would otherwise
+                    // wrap the trailing OpFreeRef in `return`, returning
+                    // `()` from a value-returning block (P249-mirror).
+                    self.vars.set_skip_free(fn_work);
                     // P227: one work-buffer per text-returning fn-ref
                     // call (the return-value buffer the lambda fills via
                     // its hidden RefVar(Text) attr).  Previously
@@ -811,24 +820,228 @@ impl Parser {
     /// variant isn't registered (defensive — should always be, via
     /// `default/01_code.loft`).
     fn rewrite_outer_arith_to_nullable(code: &mut Value, data: &crate::data::Data) {
-        let Value::Call(def_nr, _) = code.unspan_mut() else {
+        // Helper: try to swap the call's def_nr to its Nullable peer.
+        // Returns `true` if it found and applied a swap.
+        fn try_swap(def_nr: &mut u32, data: &crate::data::Data) -> bool {
+            let name = data.def(*def_nr).original_name();
+            let nullable_name = match name.as_str() {
+                "AddInt" => "OpAddIntNullable",
+                "MinInt" => "OpMinIntNullable",
+                "MulInt" => "OpMulIntNullable",
+                "DivInt" => "OpDivIntNullable",
+                "RemInt" => "OpRemIntNullable",
+                // Plan-07 phase 4d — vector / text indexing followed by `??`.
+                // Mirrors the C54.G-hybrid pattern: when codegen detects
+                // `??` immediately after a fault-prone op, swap to the
+                // Nullable peer so the op returns its sentinel silently
+                // (no log, no halt) and `??` discharges it.
+                "GetVector" => "OpGetVectorNullable",
+                "VectorRef" => "OpVectorRefNullable",
+                "TextCharacter" => "OpTextCharacterNullable",
+                // Plan-07 phase 4f.5 — float / single div / mod by zero
+                // peers.  Same defense-dispatch contract as integer.
+                "DivFloat" => "OpDivFloatNullable",
+                "RemFloat" => "OpRemFloatNullable",
+                "DivSingle" => "OpDivSingleNullable",
+                "RemSingle" => "OpRemSingleNullable",
+                _ => return false,
+            };
+            let new_nr = data.def_nr(nullable_name);
+            if new_nr == u32::MAX {
+                false
+            } else {
+                *def_nr = new_nr;
+                true
+            }
+        }
+        let Value::Call(def_nr, args) = code.unspan_mut() else {
             return;
         };
-        // `original_name()` on an operator returns the stripped form
-        // (e.g. "MulInt" for `OpMulInt`).  Match on that and look up the
-        // Nullable variant by its stripped name too.
-        let name = data.def(*def_nr).original_name();
-        let nullable_name = match name.as_str() {
-            "AddInt" => "OpAddIntNullable",
-            "MinInt" => "OpMinIntNullable",
-            "MulInt" => "OpMulIntNullable",
-            "DivInt" => "OpDivIntNullable",
-            "RemInt" => "OpRemIntNullable",
-            _ => return,
+        // First try the outer call.  Direct hits cover OpDivInt /
+        // OpRemInt / OpVectorRef / OpTextCharacter / arithmetic.
+        if try_swap(def_nr, data) {
+            return;
+        }
+        // Wrapped case: integer-vector indexing emits
+        // `OpGetInt(OpGetVector(v, size, idx), 0)` (and narrow
+        // variants — `OpGetByte` / `OpGetShortRaw` / `OpGetInt4`).
+        // The outer getter is null-tolerant (returns `i64::MIN` on
+        // null DbRef per its annotation guard); the inner
+        // `OpGetVector` is the one that raises.  Recurse into the
+        // first arg to swap the inner op when the outer is one of
+        // these wrappers.  Without this, `x = v[i] ?? null` over
+        // an integer vector would still log + halt because the
+        // direct `def_nr` lookup wouldn't see `OpGetVector`.
+        let outer_name = data.def(*def_nr).original_name();
+        if matches!(
+            outer_name.as_str(),
+            "GetInt" | "GetInt4" | "GetByte" | "GetShortRaw"
+        ) && let Some(first_arg) = args.first_mut()
+            && let Value::Call(inner_nr, _) = first_arg.unspan_mut()
+        {
+            try_swap(inner_nr, data);
+        }
+    }
+
+    /// Plan-07 phase 4e.1 — recursive variant of
+    /// [`Self::rewrite_outer_arith_to_nullable`].  Walks the whole
+    /// `Value` tree and swaps every fault-prone call to its Nullable
+    /// peer.  Used in format-string contexts (`"{expr}"` interpolation)
+    /// where the interpolated expression may contain arbitrarily nested
+    /// fault-prone ops (`"{a + v[i] / b}"`).  Per C66 +
+    /// `DESIGN_DECISIONS.md` 2026-05-11: format strings are the user's
+    /// observability surface and must NEVER halt, log, or warn — so
+    /// every interpolated fault site routes through its silent peer.
+    ///
+    /// Phase 4e.3 — also returns the OUTERMOST fault kind id (as
+    /// recognised by the swap table) so the caller (the format-
+    /// string emitter in `parser/objects.rs::parse_format`) can
+    /// prepend an `OpTagFault(kind_id)` sibling statement.  When
+    /// the next format-conversion op (`OpFormatInt` /
+    /// `OpAppendCharacter`) sees the type's null sentinel AND the
+    /// tag is set, it renders `null(<reason>)` instead of bare
+    /// `null`.  Returns `None` for non-fault outer calls (the
+    /// expression may still contain inner faults that get swapped,
+    /// but only the outermost one tags — inner faults have no
+    /// renderer to feed the tag to).
+    pub(crate) fn rewrite_subtree_to_nullable_kind(
+        code: &mut Value,
+        data: &crate::data::Data,
+    ) -> Option<u8> {
+        // Determine the kind BEFORE the swap.  For integer-vector
+        // indexing the IR shape is `OpGetInt(OpGetVector(v, 4, i), 0)`
+        // — the outer is `GetInt`, the fault-prone op is the inner
+        // `GetVector`.  Mirror the recurse-one-level case from
+        // `rewrite_outer_arith_to_nullable` so the kind id matches
+        // the inner op when wrapped.
+        fn classify(name: &str) -> Option<u8> {
+            match name {
+                "DivInt" | "DivFloat" | "DivSingle" => Some(1),
+                "RemInt" | "RemFloat" | "RemSingle" => Some(2),
+                "GetVector" | "VectorRef" | "TextCharacter" => Some(3),
+                _ => None,
+            }
+        }
+        let outer_kind = match code.unspan() {
+            Value::Call(def_nr, args) => {
+                let outer_name = data.def(*def_nr).original_name();
+                let direct = classify(&outer_name);
+                if direct.is_some() {
+                    direct
+                } else if matches!(
+                    outer_name.as_str(),
+                    "GetInt" | "GetInt4" | "GetByte" | "GetShortRaw"
+                ) && let Some(first) = args.first()
+                    && let Value::Call(inner_nr, _) = first.unspan()
+                {
+                    classify(&data.def(*inner_nr).original_name())
+                } else {
+                    None
+                }
+            }
+            _ => None,
         };
-        let new_nr = data.def_nr(nullable_name);
-        if new_nr != u32::MAX {
-            *def_nr = new_nr;
+        Self::rewrite_subtree_to_nullable(code, data);
+        outer_kind
+    }
+
+    pub(crate) fn rewrite_subtree_to_nullable(code: &mut Value, data: &crate::data::Data) {
+        // Helper mirrors the swap table in
+        // `rewrite_outer_arith_to_nullable`; kept inline (no shared
+        // helper) so the dispatch table stays grep-discoverable from
+        // both swap sites.
+        fn try_swap(def_nr: &mut u32, data: &crate::data::Data) -> bool {
+            let name = data.def(*def_nr).original_name();
+            let nullable_name = match name.as_str() {
+                "AddInt" => "OpAddIntNullable",
+                "MinInt" => "OpMinIntNullable",
+                "MulInt" => "OpMulIntNullable",
+                "DivInt" => "OpDivIntNullable",
+                "RemInt" => "OpRemIntNullable",
+                "GetVector" => "OpGetVectorNullable",
+                "VectorRef" => "OpVectorRefNullable",
+                "TextCharacter" => "OpTextCharacterNullable",
+                // Plan-07 phase 4f.5 — float / single div / mod peers.
+                "DivFloat" => "OpDivFloatNullable",
+                "RemFloat" => "OpRemFloatNullable",
+                "DivSingle" => "OpDivSingleNullable",
+                "RemSingle" => "OpRemSingleNullable",
+                _ => return false,
+            };
+            let new_nr = data.def_nr(nullable_name);
+            if new_nr == u32::MAX {
+                false
+            } else {
+                *def_nr = new_nr;
+                true
+            }
+        }
+        match code.unspan_mut() {
+            Value::Call(def_nr, args) => {
+                try_swap(def_nr, data);
+                for arg in args {
+                    Self::rewrite_subtree_to_nullable(arg, data);
+                }
+                // Phase 4e.3 (slice 2 — deferred): the design adds a
+                // sibling `OpTagFault(kind)` immediately before each
+                // swapped Nullable peer in format-string scope so the
+                // format-conversion op renders `null(<reason>)`
+                // instead of bare `null`.  The runtime infrastructure
+                // (`Stores::set_format_fault` /
+                // `Stores::take_format_fault` / `format_fault_tag`
+                // field / `OpTagFault` opcode) is in place; the
+                // Block-wrapping insertion proved fragile when run
+                // through the format-string emitter (the Block's
+                // result type isn't filled in time for `append_data`
+                // to pick the right `OpAppend*` op, producing wrong-
+                // type bytecode and SIGSEGV).  Wiring slice 2 needs
+                // a different emit shape — likely new dedicated
+                // `Op*Fmt` peers (one per fault kind) that fold the
+                // tag into the Nullable peer's body instead of
+                // sequencing.  Tracked in plan-07 phase 4e.3 row.
+            }
+            Value::CallRef(_, args) => {
+                for arg in args {
+                    Self::rewrite_subtree_to_nullable(arg, data);
+                }
+            }
+            Value::Block(b) => {
+                for child in &mut b.operators {
+                    Self::rewrite_subtree_to_nullable(child, data);
+                }
+            }
+            Value::Loop(b) => {
+                for child in &mut b.operators {
+                    Self::rewrite_subtree_to_nullable(child, data);
+                }
+            }
+            Value::If(cond, then_b, else_b) => {
+                Self::rewrite_subtree_to_nullable(cond, data);
+                Self::rewrite_subtree_to_nullable(then_b, data);
+                Self::rewrite_subtree_to_nullable(else_b, data);
+            }
+            Value::Set(_, src)
+            | Value::Return(src)
+            | Value::Drop(src)
+            | Value::BreakWith(_, src)
+            | Value::Yield(src)
+            | Value::TuplePut(_, _, src) => {
+                Self::rewrite_subtree_to_nullable(src, data);
+            }
+            Value::Iter(_, init, step, body) => {
+                Self::rewrite_subtree_to_nullable(init, data);
+                Self::rewrite_subtree_to_nullable(step, data);
+                Self::rewrite_subtree_to_nullable(body, data);
+            }
+            Value::Tuple(items) | Value::Insert(items) | Value::Parallel(items) => {
+                for child in items {
+                    Self::rewrite_subtree_to_nullable(child, data);
+                }
+            }
+            // Other Value variants (Int / Text / Var / FnRef / Keys / etc.)
+            // carry no nested fault-prone calls to rewrite.  Spans are
+            // stripped by `unspan_mut` above.
+            _ => {}
         }
     }
 
@@ -858,6 +1071,15 @@ impl Parser {
             );
         }
         self.expr_not_null = false;
+        // Plan-07 phase 4h — if the `??` LHS is the just-emitted
+        // field read site (set by `Parser::field()`), mark the
+        // (struct, field) as defended so the not-null hint won't
+        // fire on it.  Conservative: covers `p.field ?? default`;
+        // complex expressions like `(p.field + 1) ?? 0` and
+        // `if p.field != null` are slice-2 work.
+        if let Some(key) = self.last_field_read_site.take() {
+            self.defended_field_reads.insert(key);
+        }
 
         // C54.G-hybrid: if the LHS is an immediate arithmetic call
         // (`a + b` / `a - b` / etc.), swap it to the Nullable variant so
@@ -1109,5 +1331,260 @@ impl Parser {
             }
         }
         None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plan-07 phase 4e.2 — undefended fault-site compile-time warning
+// ---------------------------------------------------------------------------
+//
+// Walks a parsed function body and emits `Level::Warning` at each
+// fault-prone op call (OpDivInt / OpRemInt / OpGetVector / OpVectorRef /
+// OpTextCharacter) that survived the 4d.1 / 4d.2 / 4e.1 swap passes —
+// i.e., sites with no recognised defense.  The four canonical safe
+// patterns from `04-runtime-error-kinds.md § Easy-proof skip list` are
+// recognised here and quietly suppressed; without the skip list the
+// warning would fire on most well-written loft code and developers
+// would silence it within a session, defeating its purpose.
+//
+// Skip patterns implemented (per the design):
+//   1. Constant non-zero literal divisor for OpDivInt / OpRemInt.
+//   2. Constant non-negative literal index for OpGetVector / OpVectorRef
+//      / OpTextCharacter (the developer typed a literal — trust it; if
+//      it overruns at runtime the runtime fault still fires).
+//   3. Index is the iteration variable of an enclosing for-loop
+//      (`for i in <range> { … v[i] … }` — the loop's bound is the
+//      developer's contract).
+//   4. (Implicitly) sites inside `if x != null` / `if x` / format-string
+//      interpolations — those were already swapped to Nullable peers by
+//      4d.2 / 4e.1 BEFORE this walker runs, so the raising form is
+//      gone from the IR there.
+
+#[derive(Default)]
+struct WarnCtx {
+    /// Variable slots currently active as for-loop iteration variables.
+    /// When a fault op uses `Var(v)` as its index AND `v` ∈ this set, we
+    /// skip the warning (skip pattern 3).
+    iter_vars: std::collections::HashSet<u16>,
+    /// Position of the innermost enclosing `Value::Span` — used as the
+    /// fault site's source location when we emit a warning.
+    last_pos: Option<Position>,
+}
+
+#[derive(Copy, Clone)]
+enum FaultKind {
+    Div,
+    Rem,
+    VectorIndex,
+    TextIndex,
+}
+
+impl Parser {
+    /// Plan-07 phase 4e.2 — entry point.  Called from `parse_function`
+    /// AFTER `parse_code` (the body parse) AND after `vars.test_used` /
+    /// `warn_upper_case_locals` (so the diagnostic ordering matches
+    /// existing per-function passes).  Second-pass only — the first
+    /// pass doesn't have the swap-pass results in place.
+    ///
+    /// Silenceable via `LOFT_NO_WARN_RUNTIME=1` env var.  Stdlib
+    /// (`default/*.loft`) is exempt — its functions are
+    /// language-internal trusted code (they implement the very
+    /// fault-handling primitives the warning is meant to nudge users
+    /// toward) and warning on them is noise.
+    pub(crate) fn warn_undefended_fault_sites(&mut self, body: &Value) {
+        if self.default {
+            return;
+        }
+        if std::env::var("LOFT_NO_WARN_RUNTIME").is_ok_and(|v| v == "1" || v == "true") {
+            return;
+        }
+        let mut ctx = WarnCtx::default();
+        self.walk_for_warnings(body, &mut ctx);
+    }
+
+    fn walk_for_warnings(&mut self, code: &Value, ctx: &mut WarnCtx) {
+        match code {
+            Value::Span(boxed) => {
+                let saved = ctx.last_pos.clone();
+                ctx.last_pos = Some(boxed.0.clone());
+                self.walk_for_warnings(&boxed.1, ctx);
+                ctx.last_pos = saved;
+            }
+            Value::Call(def_nr, args) => {
+                let name = self.data.def(*def_nr).original_name();
+                let kind: Option<FaultKind> = match name.as_str() {
+                    "DivInt" | "DivFloat" | "DivSingle" => Some(FaultKind::Div),
+                    "RemInt" | "RemFloat" | "RemSingle" => Some(FaultKind::Rem),
+                    "GetVector" | "VectorRef" => Some(FaultKind::VectorIndex),
+                    "TextCharacter" => Some(FaultKind::TextIndex),
+                    _ => None,
+                };
+                if let Some(kind) = kind
+                    && !is_easy_proof(kind, args, ctx)
+                {
+                    self.emit_undefended_warning(kind, ctx);
+                }
+                for arg in args {
+                    self.walk_for_warnings(arg, ctx);
+                }
+            }
+            Value::CallRef(_, args) => {
+                for arg in args {
+                    self.walk_for_warnings(arg, ctx);
+                }
+            }
+            Value::Iter(_, init, step, body) => {
+                // The Iter's `u16` is the iterator's INTERNAL var
+                // (e.g., `i#index` / `range`), NOT the user-visible
+                // loop var.  The user-visible loop var is set OUTSIDE
+                // the Iter via `Loop { Set(loop_var, Iter(…)); body }`
+                // — handled by the `Loop` arm's lookahead below.
+                self.walk_for_warnings(init, ctx);
+                self.walk_for_warnings(step, ctx);
+                self.walk_for_warnings(body, ctx);
+            }
+            Value::Block(b) => {
+                for child in &b.operators {
+                    self.walk_for_warnings(child, ctx);
+                }
+            }
+            Value::Loop(b) => {
+                // Recognise the canonical for-loop shape that the
+                // parser emits:
+                //   Loop {
+                //     Set(loop_var, Block { name: "Iter range" / "Iter …",
+                //                           operators: [increment, break-check, yield] });
+                //     Block { user body using loop_var };
+                //   }
+                // Marking `loop_var` as iter-bound for the whole
+                // Loop's operators makes skip-pattern 3 fire on
+                // `v[loop_var]` reads inside the body.
+                //
+                // We accept either:
+                //  (a) the RHS Block is named with an "Iter " prefix
+                //      (today: "Iter range" / "Iter " variants), or
+                //  (b) the RHS subtree contains a `Value::Break` (the
+                //      iter step signals end-of-iteration via break).
+                // Both are robust to parser-name changes — (b) is the
+                // semantic check, (a) is the fast-path.
+                fn contains_break(v: &Value) -> bool {
+                    match v.unspan() {
+                        Value::Break(_) | Value::BreakWith(_, _) => true,
+                        Value::Block(b) | Value::Loop(b) => b.operators.iter().any(contains_break),
+                        Value::If(_, t, e) => contains_break(t) || contains_break(e),
+                        Value::Set(_, s) | Value::Drop(s) | Value::Return(s) => contains_break(s),
+                        _ => false,
+                    }
+                }
+                let mut loop_vars_added: Vec<u16> = Vec::new();
+                for child in &b.operators {
+                    if let Value::Set(loop_var, src) = child.unspan() {
+                        let is_iter_step = match src.unspan() {
+                            Value::Iter(..) => true,
+                            Value::Block(blk) => {
+                                blk.name.starts_with("Iter ")
+                                    || blk.operators.iter().any(contains_break)
+                            }
+                            _ => false,
+                        };
+                        if is_iter_step && ctx.iter_vars.insert(*loop_var) {
+                            loop_vars_added.push(*loop_var);
+                        }
+                    }
+                }
+                for child in &b.operators {
+                    self.walk_for_warnings(child, ctx);
+                }
+                for v in loop_vars_added {
+                    ctx.iter_vars.remove(&v);
+                }
+            }
+            Value::If(cond, then_b, else_b) => {
+                self.walk_for_warnings(cond, ctx);
+                self.walk_for_warnings(then_b, ctx);
+                self.walk_for_warnings(else_b, ctx);
+            }
+            Value::Set(_, src)
+            | Value::Return(src)
+            | Value::Drop(src)
+            | Value::BreakWith(_, src)
+            | Value::Yield(src)
+            | Value::TuplePut(_, _, src) => {
+                self.walk_for_warnings(src, ctx);
+            }
+            Value::Tuple(items) | Value::Insert(items) | Value::Parallel(items) => {
+                for child in items {
+                    self.walk_for_warnings(child, ctx);
+                }
+            }
+            // Other Value variants (Int / Long / Text / Var / FnRef /
+            // Keys / Boolean / etc.) carry no nested fault-prone calls.
+            _ => {}
+        }
+    }
+
+    fn emit_undefended_warning(&mut self, kind: FaultKind, ctx: &WarnCtx) {
+        let msg = match kind {
+            FaultKind::Div => {
+                "integer division may produce null on divide-by-zero with no defensive check; \
+                 consider `a / b ?? 0` or wrap in `if b != 0 { ... }`"
+            }
+            FaultKind::Rem => {
+                "integer modulus may produce null on divide-by-zero with no defensive check; \
+                 consider `a % b ?? 0` or wrap in `if b != 0 { ... }`"
+            }
+            FaultKind::VectorIndex => {
+                "`v[i]` may produce null on out-of-bounds with no defensive check; \
+                 consider `v[i] ?? <fallback>`, `if i < len(v) { v[i] }`, \
+                 or `x = v[i]; if x != null { ... }`"
+            }
+            FaultKind::TextIndex => {
+                "`s[i]` may produce null on out-of-bounds with no defensive check; \
+                 consider `s[i] ?? <fallback>`, `if i < len(s) { s[i] }`, \
+                 or `x = s[i]; if x != null { ... }`"
+            }
+        };
+        if let Some(pos) = &ctx.last_pos {
+            self.lexer.pos_diagnostic(Level::Warning, pos, msg);
+        } else {
+            self.lexer.diagnostic(Level::Warning, msg);
+        }
+    }
+}
+
+/// Evaluate the easy-proof skip list against a fault-prone call's args.
+/// Returns `true` when a skip pattern matches and the warning should
+/// NOT fire.
+fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx) -> bool {
+    fn lit_int(v: &Value) -> Option<i64> {
+        match v.unspan() {
+            Value::Int(n) => Some(i64::from(*n)),
+            Value::Long(n) => Some(*n),
+            _ => None,
+        }
+    }
+    match kind {
+        FaultKind::Div | FaultKind::Rem => {
+            // Skip pattern 1 — divisor is a non-zero literal.
+            args.get(1).and_then(lit_int).is_some_and(|n| n != 0)
+        }
+        FaultKind::VectorIndex | FaultKind::TextIndex => {
+            // Index is the LAST arg in both `OpGetVector(coll, size, idx)`
+            // and `OpVectorRef(coll, idx)` and `OpTextCharacter(text, idx)`.
+            let Some(idx) = args.last() else {
+                return false;
+            };
+            // Skip pattern 2 — non-negative literal index.
+            if lit_int(idx).is_some_and(|n| n >= 0) {
+                return true;
+            }
+            // Skip pattern 3 — index is an active for-loop iteration var.
+            if let Value::Var(v) = idx.unspan()
+                && ctx.iter_vars.contains(v)
+            {
+                return true;
+            }
+            false
+        }
     }
 }

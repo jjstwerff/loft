@@ -5126,8 +5126,13 @@ fn inc29_bang_integer_zero_is_not_null() {
 
 #[test]
 fn inc29_bang_integer_null_is_caught() {
+    // Plan-07 phase 4 step 4.3 — `/` by zero now raises a typed
+    // RuntimeError on the non-nullable path; this test is about
+    // INC#29 (`!n` catches integer null), not about division.  Use
+    // an explicit nullable shape (`a / b ?? null`) so the divide
+    // still produces the null sentinel that `!n` is here to catch.
     code!(
-        "fn divide(a: integer, b: integer) -> integer { a / b }
+        "fn divide(a: integer, b: integer) -> integer { a / b ?? null }
 fn run() -> boolean {
     n = divide(1, 0);
     !n
@@ -5951,7 +5956,7 @@ fn q4_constructor_kind_cross_check_string() {
 fn q4_constructor_kind_cross_check_nan_is_jnull() {
     code!(
         "fn run_q4cknan() -> text {
-    json_number(0.0 / 0.0).kind()
+    json_number(null as float).kind()
 }"
     )
     .expr("run_q4cknan()")
@@ -6805,7 +6810,7 @@ fn q4_json_number_negative_finite() {
 fn q4_json_number_nan_becomes_jnull() {
     code!(
         "fn run_q4nn3() -> integer {
-    nan_val_q4 = 0.0 / 0.0;
+    nan_val_q4 = null as float;
     v_q4nn3 = json_number(nan_val_q4);
     match v_q4nn3 { JNull => 1, _ => 0 }
 }"
@@ -7007,7 +7012,7 @@ fn q3_to_json_of_jnumber_fractional() {
 fn q3_to_json_of_nan_becomes_null() {
     code!(
         "fn run_q3tnn() -> text {
-    nan_q3 = 0.0 / 0.0;
+    nan_q3 = null as float;
     v_q3tnn = json_number(nan_q3);
     v_q3tnn.to_json()
 }"
@@ -9331,12 +9336,12 @@ fn test() { }"
     )
     .error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:365:24 — pick a different name \
+         at default{s}01_code.loft:371:24 — pick a different name \
          at p156_vector_element_shadows_constant:1:11"
     ))
     .error(&format!(
         "'E' is a Constant, not a type — the element of vector<T> must be a \
-         struct or enum (defined at default{s}01_code.loft:365:24) \
+         struct or enum (defined at default{s}01_code.loft:371:24) \
          at p156_vector_element_shadows_constant:2:26"
     ));
 }
@@ -12401,16 +12406,46 @@ fn run() -> text {
     ));
 }
 
-// Q3.b — JSON string escaping (`"`, `\`, control chars per RFC 8259).
-// The per-byte escape dispatch is locked in
-// `src/database/format.rs::json_escape_tests` (13 unit tests covering
-// every short-form escape, the `\uXXXX` arm, the boundary at 0x20,
-// and UTF-8 multibyte passthrough).  We don't duplicate those at the
-// loft-surface layer here — the `code!` test harness's `Value::Text`
-// expected-value embedding round-trips strings through both Rust escape
-// and loft-lexer escape semantics, which makes asserting on
-// JSON-escaped text shapes (where `\n` must mean two literal chars)
-// brittle and prone to lexer-loop hangs.
+/// Q3.b — JSON string escaping covers `"` and `\`.  The
+/// `write_json_escaped` helper in `src/database/format.rs` is shared
+/// by the struct text-field arm and the JsonValue passthrough arm,
+/// so a regression here would produce invalid JSON in either path.
+///
+/// P233 — re-enabled 2026-05-07 after `tests/testing.rs::replace_tokens`
+/// was fixed to escape `\` first, so the loft-lexer round-trip of
+/// the expected `Value::Text` literal is now lossless.  The
+/// per-byte escape dispatch is also locked at the Rust unit level
+/// in `src/database/format.rs::json_escape_tests` (13 tests).
+#[test]
+fn q3b_struct_to_json_string_escapes_quote_and_backslash() {
+    code!(
+        "struct M { msg: text }
+fn run() -> text {
+    m = M { msg: \"she said \\\"hi\\\" \\\\ done\" };
+    m.to_json()
+}"
+    )
+    .expr("run()")
+    // "she said \"hi\" \\ done" — quotes and backslash escaped.
+    .result(Value::Text(
+        r#"{"msg":"she said \"hi\" \\ done"}"#.to_string(),
+    ));
+}
+
+/// Q3.b — control characters (`\n`, `\t`, `\r`) get the canonical
+/// short-form escapes per RFC 8259.  Re-enabled with P233 fix.
+#[test]
+fn q3b_struct_to_json_string_escapes_control_chars() {
+    code!(
+        "struct M { msg: text }
+fn run() -> text {
+    m = M { msg: \"line1\\nline2\\ttab\" };
+    m.to_json()
+}"
+    )
+    .expr("run()")
+    .result(Value::Text(r#"{"msg":"line1\nline2\ttab"}"#.to_string()));
+}
 
 /// Q3.b — `to_json_pretty()` produces multi-line indented output.
 /// Every non-empty struct opens with newline + 2-space indent per
@@ -12450,4 +12485,740 @@ fn run() -> text {
     )
     .expr("run()")
     .result(Value::Text(r#"{"age":7}"#.to_string()));
+}
+
+/// P234 — `r.0.x` lexer fix: the inner `0.x` previously parsed as
+/// a malformed float literal because the number-tokeniser greedily
+/// consumed `.` followed by anything.  P195's fix split the digit-
+/// after case (`r.0.0` → integer + `.` + integer); P234 extends it
+/// to the identifier-after case (`r.0.x` → integer + `.` + ident).
+/// Verified via `tests/lexer::test::p234_tuple_index_then_field_does_not_glue_into_float`;
+/// here we pin the surface-level reproducer that exposed it (the
+/// runtime "tuple-of-struct member access" half is still open per
+/// PROBLEMS.md P234, so this test only checks that PARSING reaches
+/// the runtime — it asserts the program compiles without the
+/// "Problem parsing float" diagnostic).
+#[test]
+fn p234_lexer_accepts_tuple_index_then_struct_field() {
+    code!(
+        "struct Point { x: integer, y: integer }
+fn run() -> integer {
+    p = Point { x: 10, y: 20 };
+    r: (Point, integer) = (p, 5);
+    inner = r.0;
+    inner.x
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(10));
+}
+
+#[test]
+fn p234_runtime_tuple_with_struct_return_int_field() {
+    code!(
+        "struct Point { x: integer, y: integer }
+fn make() -> (Point, integer) {
+    p = Point { x: 10, y: 20 };
+    (p, 5)
+}
+fn run() -> integer {
+    r = make();
+    r.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(5));
+}
+
+/// P235 — for-loop tuple destructure (non-par half).  Pre-fix,
+/// `for (a, b) in pairs { ... }` rejected with "Expect variable
+/// after for"; the for-loop parser only accepted a single
+/// identifier as the loop var.  After the fix, the parser
+/// synthesizes a temp loop var, defines `a` / `b` as proper
+/// variables typed from the iterated tuple's element types, and
+/// prepends `Set` ops to the body so each iteration unpacks the
+/// tuple before user code runs.  Closes the general parser feature
+/// gap; the par half (`for (a, b) in pairs par(...) { ... }`)
+/// remains open per PROBLEMS.md P235.
+#[test]
+fn p235_for_tuple_destructure_two_arity() {
+    code!(
+        "fn run() -> integer {
+    pairs: vector<(integer, integer)> = [(1, 2), (3, 4), (5, 6)];
+    sum = 0;
+    for (a, b) in pairs {
+        sum += a + b;
+    }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(21)); // (1+2) + (3+4) + (5+6) = 21
+}
+
+/// P235 — three-arity destructure pins the "any arity" claim.
+#[test]
+fn p235_for_tuple_destructure_three_arity() {
+    code!(
+        "fn run() -> integer {
+    triples: vector<(integer, integer, integer)> = [(1, 2, 3), (4, 5, 6)];
+    sum = 0;
+    for (a, b, c) in triples {
+        sum += a + b + c;
+    }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(21)); // (1+2+3) + (4+5+6) = 21
+}
+
+/// P235 — mixed scalar/text element types.
+#[test]
+fn p235_for_tuple_destructure_int_text() {
+    code!(
+        "fn run() -> integer {
+    items: vector<(integer, text)> = [(1, \"one\"), (2, \"two\"), (3, \"three\")];
+    total = 0;
+    for (n, label) in items {
+        total += n + len(label);
+    }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(17)); // (1+3) + (2+3) + (3+5) = 17
+}
+
+/// P235 par half — synthesized wrapper-worker for `for (a, b) in
+/// pairs par(r = work(a, b), N) { ... }`.  Pre-fix, `a` and `b`
+/// weren't in scope when `parse_parallel_worker` parsed `work(a,
+/// b)`, producing two "Unknown variable" errors.  Closed by
+/// `parse_destructure_par_worker` in
+/// `src/parser/collections.rs` — defines the destructured names
+/// in scope, parses the user call manually (capturing all args),
+/// then synthesizes a wrapper fn `__par_destructure_w_<L>_<P>_<work>(t)
+/// -> ret { work(t.0, t.1) }` and routes par dispatch through
+/// the wrapper with the tuple loop element as the single
+/// per-iteration arg.
+#[test]
+fn p235_par_half_two_arity_int_int() {
+    code!(
+        "fn add(a: integer, b: integer) -> integer { a + b }
+fn run() -> integer {
+    pairs: vector<(integer, integer)> = [(1, 2), (3, 4), (5, 6), (7, 8)];
+    sum = 0;
+    for (a, b) in pairs par(r = add(a, b), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(36)); // (1+2)+(3+4)+(5+6)+(7+8) = 36
+}
+
+/// P235 par half — three-arity destructure ensures the synthesis
+/// supports more than 2 names.  Wrapper body builds three tuple
+/// element reads and threads them into the user worker.
+#[test]
+fn p235_par_half_three_arity() {
+    code!(
+        "fn sum3(a: integer, b: integer, c: integer) -> integer { a + b + c }
+fn run() -> integer {
+    triples: vector<(integer, integer, integer)> = [(1, 2, 3), (4, 5, 6)];
+    total = 0;
+    for (a, b, c) in triples par(r = sum3(a, b, c), 4) { total += r; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(21)); // (1+2+3)+(4+5+6) = 21
+}
+
+/// P235 par half — args in non-positional order (`work(b, a)`
+/// instead of `work(a, b)`).  The wrapper body must map each user
+/// arg to its declared tuple position via the destructured var
+/// nrs, not assume positional ordering.
+#[test]
+fn p235_par_half_args_swapped() {
+    code!(
+        "fn diff(x: integer, y: integer) -> integer { x - y }
+fn run() -> integer {
+    pairs: vector<(integer, integer)> = [(10, 1), (20, 5)];
+    out = 0;
+    for (a, b) in pairs par(r = diff(b, a), 2) { out += r; }
+    out
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(-(9 + 15))); // (1-10)+(5-20) = -24
+}
+
+#[test]
+fn p234_runtime_via_run_fn() {
+    code!(
+        "struct Point { x: integer, y: integer }
+fn make() -> (Point, integer) {
+    (Point { x: 10, y: 20 }, 5)
+}
+fn run() -> integer {
+    r = make();
+    r.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(5));
+}
+
+/// P236 — function whose return type is a heap-owned reference and
+/// whose body's tail is `if/else` returning newly-constructed records
+/// corrupted the return value on `--native` (returned the typed null
+/// sentinel instead of the if/else's value).  Pre-fix native:
+/// `make_p(true) → P { x: null, y: null }`.  Interpreter accidentally
+/// worked because OpReturn read from eval-stack top.  Closed by
+/// (a) `parser/control.rs::unify_if_branches_work_refs` — pick the
+/// first branch's terminal work-ref as the shared one and rewrite the
+/// other branch's work-ref references via `substitute_work_ref` so
+/// both branches produce the same DbRef; (b) `scopes.rs::returned_var`
+/// recurses through `Value::If` and reports the shared var so
+/// `get_free_vars` skips OpFreeRef on it; (c) the catchall in
+/// `scopes.rs::free_vars` emits `Return(Var(ret_var))` instead of
+/// `Return(Null)` when a known ret_var is available.
+#[test]
+fn p236_struct_return_from_if_else_true() {
+    code!(
+        "struct P { x: integer, y: integer }
+fn make_p(c: boolean) -> P {
+    if c { P { x: 1, y: 2 } } else { P { x: 3, y: 4 } }
+}
+fn run() -> integer { p = make_p(true); p.x * 100 + p.y }"
+    )
+    .expr("run()")
+    .result(Value::Int(102));
+}
+
+/// P236 — same fn, false branch.  Verifies the unification rewrite
+/// didn't accidentally route the false branch through the true
+/// branch's value (a regression caught during initial implementation
+/// when the substitute_work_ref helper renamed user parameters).
+#[test]
+fn p236_struct_return_from_if_else_false() {
+    code!(
+        "struct P { x: integer, y: integer }
+fn make_p(c: boolean) -> P {
+    if c { P { x: 1, y: 2 } } else { P { x: 3, y: 4 } }
+}
+fn run() -> integer { p = make_p(false); p.x * 100 + p.y }"
+    )
+    .expr("run()")
+    .result(Value::Int(304));
+}
+
+/// P236 — three-way `else if` chain.  Recursive descent in
+/// `unify_if_branches_work_refs` walks nested `Value::If` nodes
+/// (else-if desugars to `else { if ... }`).
+#[test]
+fn p236_struct_return_from_else_if_chain() {
+    code!(
+        "struct P { x: integer, y: integer }
+fn make_p(c: integer) -> P {
+    if c == 1 { P { x: 11, y: 12 } }
+    else if c == 2 { P { x: 21, y: 22 } }
+    else { P { x: 31, y: 32 } }
+}
+fn run() -> integer {
+    a = make_p(1);
+    b = make_p(2);
+    c = make_p(3);
+    (a.x + a.y) + (b.x + b.y) + (c.x + c.y)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(23 + 43 + 63));
+}
+
+/// P236 — guard against the parameter-substitution regression: when
+/// both branches of the if/else return user-named parameters (NOT
+/// work-refs), the unification helper must bail out and leave the IR
+/// unchanged.  This test exercises the gate at
+/// `unify_if_branches_work_refs` that requires both terminal vars to
+/// match `__ref_*` / `__rref_*` naming.
+#[test]
+fn p236_param_returning_if_unaffected() {
+    code!(
+        "struct P { x: integer, y: integer }
+fn pick(c: boolean, a: P, b: P) -> P {
+    if c { a } else { b }
+}
+fn run() -> integer {
+    p1 = P { x: 1, y: 2 };
+    p2 = P { x: 3, y: 4 };
+    chosen = pick(false, p1, p2);
+    chosen.x * 10 + chosen.y
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(34));
+}
+
+/// P236 — A7.1 par tuple wide-return runtime relies on the same
+/// fix: the size-based gate widen in `parse_function` rewrites
+/// `(integer, integer)` returns through `Reference(__tuple<…>)`,
+/// and tail if/else with tuple branches goes through the synthetic-
+/// struct unification path.  Closes the regression where
+/// `min_max(...) -> (integer, integer) { if ... else ... }` returned
+/// (null, null) on native.
+#[test]
+fn p236_tuple_return_from_if_else() {
+    code!(
+        "fn min_max(lo: integer, hi: integer) -> (integer, integer) {
+    if lo <= hi { (lo, hi) } else { (hi, lo) }
+}
+fn run() -> integer {
+    r1 = min_max(5, 2);
+    r2 = min_max(1, 9);
+    (r1.0 * 100 + r1.1) + (r2.0 * 1000 + r2.1)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(205 + 1009));
+}
+
+/// P240 — bounded-generic fn computing 2+ bound-supplied operator
+/// results into locals then returning them in a tuple swapped
+/// values backend-dependently.  Two compounding root causes:
+///
+/// (a) **Interp slot aliasing**: `compute_intervals` in
+/// `src/variables/intervals.rs` had no `Value::Tuple` arm — when
+/// the IR contained `Return(Tuple([Var(a), Var(b)]))`, the
+/// recursion fell through silently and the operand vars'
+/// last_use stayed at the default value, so the slot allocator
+/// considered them dead and aliased their slots.  When `a` and
+/// `b` were both written in the same scope, the second write
+/// clobbered the first; the tuple read returned `(b_value,
+/// b_value)`.  Fix: add `Value::Tuple(elems)`,
+/// `Value::TupleGet(_, _)`, and `Value::TuplePut(_, _, _)` arms
+/// that recurse into each element so reads update the operand
+/// vars' last_use correctly.
+///
+/// (b) **Native hoisted-return guard miss**: scopes::free_vars
+/// hoists the tuple value as a separate statement before the
+/// `OpFreeText(work)` cleanup, leaving the body shape `[Set(lt),
+/// Set(gt), Call(println), Tuple, OpFreeText, Return(Null)]`.
+/// Native codegen runs `patch_hoisted_returns` to rewrite this
+/// into `Return(Tuple)` — but only when the block result type
+/// matches a small allow-list (Void / Never / `t_*` text-stub /
+/// `__ret_N` text temp).  T-stubs returning a tuple weren't in
+/// the list, so native emitted the tuple as a discarded
+/// statement and fell through to a hardcoded `return (0, 0)`
+/// (the type's null sentinel).  Fix: add `is_t_stub_tuple_body`
+/// to the guard so tuple-returning T-stubs also run the patch.
+///
+/// Without (a), the no-side-effects shape `(lt, gt)` after two
+/// `Set` ops was wrong on interp.  Without (b), the with-println
+/// shape was wrong on native.  Both shapes now correct on both
+/// backends.
+#[test]
+fn p240_bounded_generic_two_operator_tuple_return() {
+    code!(
+        "fn p240_classify<T: Ordered>(a: T, b: T) -> (integer, integer) {
+    p240lt = if a < b { 1 } else { 0 };
+    p240gt = if a > b { 1 } else { 0 };
+    return (p240lt, p240gt);
+}"
+    )
+    .expr("p240_classify(3, 5).0")
+    .result(Value::Int(1));
+}
+
+/// P243 — bounded-generic fn returning a tuple with one or more
+/// `text` elements where one element is built by a bound-supplied
+/// method call (e.g. `(x.to_text(), "x")`) silently returned
+/// empty strings on `--native` because the missing `.to_string()`
+/// wrap on the bound-method element produced a `(Str, String)`
+/// tuple that rustc rejected with E0308.  Interp was correct.
+///
+/// Two coordinated fixes already shipped today addressed half of
+/// P243 incidentally:
+///   - P240's `is_t_stub_tuple_body` extension to
+///     `patch_hoisted_returns` made the tuple reach the Return
+///     position (was previously a discarded statement).
+///   - P238's `tuple_text_to_string` flag in
+///     `src/generation/emit.rs::Value::Return` already sets the
+///     wrap flag for `Tuple(text, …)` returns.
+///
+/// What remained: `infer_type` in `src/generation/emit.rs` had no
+/// `Value::Span` arm.  The parser Span-wraps fault-prone calls
+/// (every `obj.method()` site) for source-position tracking, so
+/// the bound-method call inside the tuple was `Span(Call(…))`,
+/// not bare `Call(…)`.  `infer_type(Span(Call))` returned `None`,
+/// so the Tuple emit arm's `elem_is_text` check silently failed
+/// and the `.to_string()` wrap didn't fire.
+///
+/// Fix: add `Value::Span(b) => self.infer_type(&b.1)` to the
+/// match in `infer_type` so it transparently looks through
+/// position wrappers — same shape as the Span-aware patches
+/// elsewhere in the codebase.
+#[test]
+fn p243_bounded_generic_tuple_with_text_method_call() {
+    code!(
+        "struct P243Item { p243_id: integer }
+fn to_text(self: P243Item) -> text { return \"item-{self.p243_id}\"; }
+fn p243_show_pair<T: Printable>(p243x: T) -> (text, text) {
+    return (p243x.to_text(), \"x\");
+}"
+    )
+    .expr("p243_show_pair(P243Item { p243_id: 7 }).0")
+    .result(Value::str("item-7"));
+}
+
+/// P239 — for-loop over `vector<T>` inside a generic fn crashed
+/// both backends.  Interp SIGSEGV; native rustc E0610
+/// `i64.rec`.  The for-loop iter-termination check
+/// (parser/collections.rs:1506-1514) emits
+/// `OpConvBoolFromRef(Var(loop_var))` for any loop variable
+/// typed `Reference(_, _)`, including `Reference(T_d_nr, …)`
+/// for generic-T element iteration.  When T monomorphises to a
+/// primitive, the substituted Var is now that primitive type
+/// but the IR still has `OpConvBoolFromRef` — interp treats
+/// `i64` as a `DbRef` (SIGSEGV) and native emits `i64.rec`
+/// (rustc E0610).
+///
+/// Fix: extend `substitute_type_in_value` to swap
+/// `OpConvBoolFromRef(Var(_))` to the matching primitive peer
+/// (`OpConvBoolFromInt` / `OpConvBoolFromText` / etc.) when the
+/// substituted concrete type is a primitive.  Reference / Vector
+/// / struct-enum / tuple stay on `OpConvBoolFromRef` (the
+/// existing behaviour works for any DbRef-shaped loop var).
+#[test]
+fn p239_for_loop_over_generic_vector() {
+    code!(
+        "fn p239_count<T>(v: vector<T>) -> integer {
+    n = 0;
+    for _ in v { n = n + 1; }
+    return n;
+}"
+    )
+    .expr("p239_count([10, 20, 30])")
+    .result(Value::Int(3));
+}
+
+/// P241 — generic fn building a vector by `out += [x]` crashed both
+/// backends.  Interp panicked at `src/database/allocation.rs` because
+/// the parametric IR shape (`OpCopyRecord(src, _elm_, t_T)`) treats
+/// `src: i64` as a `DbRef` and indexes into stores with an out-of-
+/// range store_nr.  Native rustc rejected with E0308 / E0605 because
+/// the generated Rust read `src` as a struct ref but it's a primitive.
+///
+/// Fix (2026-05-11): substitution-time triplet rewrite — when
+/// `substitute_type_in_value` sees the parametric vector-element-write
+/// triplet
+///   `Set(_elm_, OpNewRecord(out, t_T, MAX))`
+///   `Call(OpCopyRecord, [src, _elm_, t_T])`
+///   `Call(OpFinishRecord, [out, _elm_, t_T, MAX])`
+/// AND the substituted concrete type is a primitive, rewrites it to
+/// the primitive shape (4 ops: `OpPreAllocVector` prefix +
+/// `OpNewRecord` + `OpSetXxx` + `OpFinishRecord`), with type-id args
+/// updated to point at the concrete vector type-id resolved via
+/// `database.vector(database.db_type(concrete, data))`.  Slice 2
+/// covers `Type::Integer(_)` only; slice 3 broadens to all
+/// primitives.
+#[test]
+fn p241_singleton_int() {
+    code!(
+        "fn p241_singleton<T>(x: T) -> vector<T> {
+    p241_out: vector<T> = [];
+    p241_out += [x];
+    return p241_out;
+}"
+    )
+    .expr("p241_singleton(42)[0]")
+    .result(Value::Int(42));
+}
+
+/// P241 slice 3 — Text.  Same generic shape; Text uses `OpSetText`
+/// instead of `OpSetInt`.
+#[test]
+fn p241_singleton_text() {
+    code!(
+        "fn p241_singleton_t<T>(x: T) -> vector<T> {
+    p241_out_t: vector<T> = [];
+    p241_out_t += [x];
+    return p241_out_t;
+}"
+    )
+    .expr("p241_singleton_t(\"hello\")[0]")
+    .result(Value::str("hello"));
+}
+
+/// P241 slice 3 — Float.  Verifies the Float setter dispatch.
+#[test]
+fn p241_singleton_float() {
+    code!(
+        "fn p241_singleton_f<T>(x: T) -> vector<T> {
+    p241_out_f: vector<T> = [];
+    p241_out_f += [x];
+    return p241_out_f;
+}"
+    )
+    .expr("p241_singleton_f(2.5)[0]")
+    .result(Value::Float(2.5));
+}
+
+/// P241 slice 3 — Boolean.  Verifies the OpSetByte dispatch with
+/// `min=0` arg.
+#[test]
+fn p241_singleton_bool() {
+    code!(
+        "fn p241_singleton_b<T>(x: T) -> vector<T> {
+    p241_out_b: vector<T> = [];
+    p241_out_b += [x];
+    return p241_out_b;
+}"
+    )
+    .expr("p241_singleton_b(true)[0]")
+    .result(Value::Boolean(true));
+}
+
+/// P255 — capturing a generic-fn `vector<T>` return into a local
+/// variable failed with `Variable vp cannot change type from
+/// vector<P> to vector<P>; use a new variable name or cast with
+/// 'as'`.  The error fired even though both sides display
+/// identically: the LHS (the new local var) was typed
+/// `Vector(Rewritten(Reference(P)))` because the call argument
+/// `P { v: 99 }` returned a `Rewritten`-marked type, that marker
+/// propagated into the bound T, and then into `vector<T>`.
+/// `Type::is_equal` did not look through `Rewritten`, so the
+/// Vector→Vector arm of `change_var` rejected the assignment.
+///
+/// Fix (2026-05-12) — three-part:
+/// 1. `Type::is_equal` now strips `Rewritten` wrappers on either
+///    side before unifying.
+/// 2. `Parser::resolve_type_var` strips `Rewritten` from the
+///    concrete arg type before binding T, so the marker (which
+///    describes how a value was assembled, not the value's shape)
+///    no longer enters the substituted IR.
+/// 3. `rewrite_vector_write_triplets` was extended to handle
+///    struct-T (Reference) — the OpCopyRecord shape is kept but
+///    its `tp` arg AND the surrounding OpNewRecord/OpFinishRecord
+///    `parent_tp` args are patched from the parametric T's
+///    type-id to the concrete struct's type-id.  Without this
+///    patch the runtime read the wrong record size from the
+///    parametric placeholder type and returned garbage from
+///    `vp[0].v`.
+#[test]
+fn p255_capture_generic_vector_struct_return() {
+    code!(
+        "struct P255S { p255_v: integer }
+fn p255_make<T>(p255_x: T) -> vector<T> {
+    p255_o: vector<T> = [];
+    p255_o += [p255_x];
+    return p255_o;
+}
+fn p255_get() -> integer {
+    p255_vp = p255_make(P255S { p255_v: 99 });
+    return p255_vp[0].p255_v;
+}"
+    )
+    .expr("p255_get()")
+    .result(Value::Int(99));
+}
+
+/// P253 — hash-table collision DoS: `keys::hash` and `key_hash`
+/// previously used `DefaultHasher::new()` with a fixed seed (k0=0,
+/// k1=0).  An attacker who could supply hash-table keys could
+/// pre-compute N strings that all collide to a single bucket →
+/// O(N²) insertion / lookup.  Same root-cause class as the 2011
+/// hash-DoS in Python / Ruby / PHP / Java / Node.js.
+///
+/// Fix (2026-05-11): replace `DefaultHasher::new()` with
+/// `build_hasher()` which calls a process-wide seeded
+/// `RandomState` memoised via `OnceLock`.  Cross-process variance
+/// is a stdlib `RandomState` guarantee that's not directly
+/// testable in-process.  This test serves as a smoke check: a
+/// hash collection still inserts + looks up correctly under the
+/// seeded hasher (no behavioural regression for legitimate use).
+#[test]
+fn p253_hash_remains_functional_after_seeding() {
+    code!(
+        "struct P253E { p253_name: text, p253_value: integer }
+struct P253T { p253_data: hash<P253E[p253_name]> }
+fn p253_lookup() -> integer {
+    p253_t = P253T { p253_data: [] };
+    p253_t.p253_data += [P253E { p253_name: \"alpha\", p253_value: 1 }];
+    p253_t.p253_data += [P253E { p253_name: \"beta\", p253_value: 2 }];
+    p253_t.p253_data += [P253E { p253_name: \"gamma\", p253_value: 3 }];
+    p253_a = p253_t.p253_data[\"alpha\"];
+    p253_b = p253_t.p253_data[\"beta\"];
+    p253_g = p253_t.p253_data[\"gamma\"];
+    p253_sum = 0;
+    if p253_a != null { p253_sum = p253_sum + p253_a.p253_value; }
+    if p253_b != null { p253_sum = p253_sum + p253_b.p253_value; }
+    if p253_g != null { p253_sum = p253_sum + p253_g.p253_value; }
+    return p253_sum;
+}"
+    )
+    .expr("p253_lookup()")
+    .result(Value::Int(6));
+}
+
+/// P251 — storing a tuple whose element is a fn-ref into a struct
+/// field failed native compilation with rustc E0605 `(u32, DbRef)
+/// as i32` (interp passed but the call-through-field shape
+/// `s.t.0(arg)` panicked because the projection bug fed garbage
+/// into the call dispatch).
+///
+/// Root cause: `src/parser/mod.rs::emit_set_one_element`'s
+/// `Type::Function` arm only special-cased `Value::FnRef` literal
+/// — when the source was `Value::Var(v)` with `v` typed
+/// `Type::Function`, the value passed through unchanged.  Native
+/// emit then produced `let _v_val = (var_v); ... _v_val as i32`
+/// where `var_v` is the runtime `(u32, DbRef)` tuple, which rustc
+/// rejects (E0308 + E0605).
+///
+/// Fix (2026-05-11): in the `Type::Function` arm, when the value
+/// is `Value::Var(v)` AND `v`'s type is `Function` AND `v` is not
+/// in the closure-vars table (non-capturing), wrap as
+/// `Value::FnRefDnr(v)` so native emit projects
+/// `(var_v.0 as i64)` (the d_nr half).  Mirrors the existing
+/// projection in `emit_fn_ref_field_write` (parser/mod.rs:4886)
+/// for the direct-field-write path.
+///
+/// This test exercises the original P251 surface symptom (read
+/// the integer element back).  The call-through-field shape
+/// (`s.t.0(arg)`) is covered by the matching cell in
+/// `tests/tuple_matrix.rs::e4_d3_field_closure_local`.
+#[test]
+fn p251_tuple_with_fnref_in_struct_field_read() {
+    code!(
+        "struct P251S { p251_t: (fn(integer) -> integer, integer) }
+fn p251_build() -> integer {
+    p251_add5 = fn(p251_x: integer) -> integer { p251_x + 5 };
+    p251_s = P251S { p251_t: (p251_add5, 99) };
+    return p251_s.p251_t.1;
+}"
+    )
+    .expr("p251_build()")
+    .result(Value::Int(99));
+}
+
+/// P251 — call-through-field shape: invoke the fn-ref element
+/// directly on the struct's tuple field.  Validates that the
+/// projection fix for storage also makes the call-dispatch path
+/// resolve to the correct d_nr.
+#[test]
+fn p251_tuple_with_fnref_in_struct_field_call() {
+    code!(
+        "struct P251S2 { p251_t2: (fn(integer) -> integer, integer) }
+fn p251_call() -> integer {
+    p251_add5 = fn(p251_x2: integer) -> integer { p251_x2 + 5 };
+    p251_s2 = P251S2 { p251_t2: (p251_add5, 99) };
+    return p251_s2.p251_t2.0(10);
+}"
+    )
+    .expr("p251_call()")
+    .result(Value::Int(15));
+}
+
+/// P250 — tuple-of-Reference returned from a fn and destructured
+/// inside a loop body showed a stale-DbRef on the destructured
+/// variable that picked up the FIRST argument; q1.v read `null` on
+/// iter > 0 on both backends (q2 stayed correct).  Reproducer
+/// printed `0: 0,100 / 1: null,101 / 2: null,102 / ...`.
+///
+/// Root cause: the destructure code in
+/// `src/parser/expressions.rs::expression` (synthetic-`__tuple<…>`
+/// path) emits the LHS Reference vars (q1, q2) as `OpGetField(tmp,
+/// offset, ...)` reads — DbRefs that share `store_nr` with the
+/// outer `tmp` variable.  Without dep tracking, scope analysis
+/// emits an independent `OpFreeRef` for q1 and q2 at scope exit;
+/// each free works on a `store_nr` basis and reclaims the entire
+/// tuple's underlying store on the FIRST exit.  The next loop
+/// iteration's `tmp = make_pair(...)` reassignment then ran
+/// `OpFreeRef(tmp)` on the now-stale outer DbRef whose store_nr
+/// got recycled by the next iter's `pa` allocation, silently
+/// destroying that allocation.  q2 stayed correct because by
+/// the time q2's slot was read, the new tuple was being built
+/// from valid `pa`/`pb` allocations — the read happened before
+/// the second iter's overwrite.
+///
+/// Fix (2026-05-11): in the synthetic-struct destructure path,
+/// mark each Reference-typed LHS as `vars.depend(v_nr, tmp)` so
+/// scope analysis treats them as borrows (deps non-empty → skip
+/// `OpFreeRef`).  `tmp`'s `OpFreeRef` alone reclaims the storage
+/// at the right time (after the loop body, when `tmp` itself is
+/// reassigned or goes out of scope).  Only applies to Reference
+/// elements; primitive elements (TupleGet path) read value-typed
+/// slots that need no free.
+#[test]
+fn p250_loop_destructure_first_arg() {
+    code!(
+        "struct P250P { p250_v: integer }
+fn p250_make_pair(a: P250P, b: P250P) -> (P250P, P250P) { (a, b) }
+fn p250_run(n: integer) -> integer {
+    p250_last = -1;
+    for p250_i in 0..n {
+        p250_pa = P250P { p250_v: p250_i };
+        p250_pb = P250P { p250_v: p250_i + 100 };
+        (p250_q1, p250_q2) = p250_make_pair(p250_pa, p250_pb);
+        p250_last = p250_q1.p250_v;
+    }
+    return p250_last;
+}"
+    )
+    .expr("p250_run(3)")
+    .result(Value::Int(2));
+}
+
+/// P241 slice 4 — nested-in-if regression guard.  The
+/// rewrite recurses through `Value::If` arms; this test exercises
+/// that recursion by gating the push behind an `if` so the triplet
+/// lives inside an If's true-arm Block.  Without the If recursion,
+/// the rewrite would skip the triplet and the test would crash.
+#[test]
+fn p241_singleton_in_if_branch() {
+    code!(
+        "fn p241_cond_singleton<T>(x: T, p241_pick: boolean) -> vector<T> {
+    p241_out_c: vector<T> = [];
+    if p241_pick {
+        p241_out_c += [x];
+    }
+    return p241_out_c;
+}"
+    )
+    .expr("p241_cond_singleton(7, true)[0]")
+    .result(Value::Int(7));
+}
+
+/// P252 — bounded-generic for-loop over a struct-ref vector returned
+/// the FIRST item's bound-method result for every iteration instead
+/// of the per-item result.  Surfaced 2026-05-11 by phase 4 cleanup;
+/// bisected to slice-3 commit `6016655e` which swapped
+/// `OpGetVector` to `OpGetVectorNullable` in the for-loop iter
+/// step.  The I9-vec elm_size fixup in
+/// `parser/mod.rs::substitute_type_in_value` only recognised
+/// `OpGetVector` (not the Nullable peer); after the swap the iter
+/// step kept `size=0` for generic-T element reads → every iteration
+/// read element 0 → bound method always saw the FIRST item.
+///
+/// Fix: extend the I9-vec name match to `OpGetVectorNullable` too.
+/// Both peers have identical (r, size, idx) arg shapes so the
+/// existing fixup logic applies unchanged.
+#[test]
+fn p252_bounded_generic_for_loop_per_item_dispatch() {
+    code!(
+        "interface V {
+    fn ok(self: Self) -> boolean
+}
+struct P { v: integer }
+fn ok(self: P) -> boolean { return self.v > 0; }
+fn p252_count<T: V>(items: vector<T>) -> integer {
+    n = 0;
+    for it in items {
+        if it.ok() { n += 1; }
+    }
+    return n;
+}"
+    )
+    .expr("p252_count([P{v:1}, P{v:0}, P{v:3}])")
+    .result(Value::Int(2));
 }

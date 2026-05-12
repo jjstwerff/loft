@@ -1,3 +1,8 @@
-==== exit: 0 ====
+==== exit: 1 ====
 ==== stdout ====
-c===== stderr ====
+==== stderr ====
+error: index 100 out of bounds for length 3
+  --> <cases>/21_runtime_index_oob_text.loft:3:9
+  |
+3 |   c = t[100];
+  |         ^

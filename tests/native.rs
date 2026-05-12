@@ -28,7 +28,7 @@ use common::cached_default;
 /// Doc files to skip in native mode. Empty — all docs now compile natively.
 const NATIVE_SKIP: &[&str] = &[];
 
-/// Script files to skip in native mode. Empty — all scripts now compile natively.
+/// Script files to skip in native mode.
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.

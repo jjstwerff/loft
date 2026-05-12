@@ -5,24 +5,311 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 4 — Typed runtime errors
 
-Status: open
+**REFRAMED 2026-05-11 — see [DESIGN_DECISIONS.md § C66](../../DESIGN_DECISIONS.md#c66--no-runtime-exceptions-in-production-loft-programs-never-abort-on-user-attributable-edge-cases).**
+The original phase-4 spec called for HALTING the loft program on
+any typed runtime fault (`State::raise` short-circuiting the
+dispatch loop via `code_pos = u32::MAX`).  This violates loft's
+fundamental "programs must not abort on user-attributable edge
+cases" rule (C66) — loft's primary deployment is interactive
+games / scripted scenes / multiplayer servers where halt is
+strictly worse than a wrong-pixel edge case.
+
+The rendering half (typed `RuntimeErrorKind` variants +
+`--> file:line:col` + caret + source-line gutter via phase-2's
+`render_entry_pretty`) is **kept** — it's exactly the right
+diagnostic shape.  What changes is the halt half: `State::raise`
+becomes "log + continue with sentinel" instead of "short-circuit
+the dispatch loop."
+
+After the reframe lands the model is:
+
+1. **Per-site detection** continues to fire — `vec_get_or_raise`,
+   `vec_ref_or_raise`, `text_char_or_raise`, the integer div/mod
+   `if v2 == 0` annotation guard, `n_panic`/`n_assert` — they all
+   still recognise the fault.
+2. **`State::raise(kind)` logs + continues**: writes a
+   `RuntimeError`-shaped entry to `Stores::logger` (when attached),
+   stores the entry in `Stores::runtime_error` for the renderer at
+   exit, sets `had_fatal = true`, and **returns**.  The calling op
+   completes normally and produces its sentinel (null DbRef, char 0,
+   `i64::MIN`, etc.).  User code keeps running; defensive idioms
+   like `if v[i] != null { use(v[i]); }` and `x = a / b ?? 0` keep
+   working because the sentinel is what the user already expects.
+3. **Dispatch loop** drops the `runtime_error.is_some()` check —
+   no more short-circuit via `code_pos = u32::MAX`.  Execution
+   continues past every fault site.
+4. **`main.rs`** renders the LAST captured `runtime_error` at exit
+   for CLI / test feedback.  In a long-running game the renderer
+   fires only at shutdown; the operator-visible signal during the
+   run is the logger entry.
+5. **Loop-iteration peers** (`OpGetVectorNullable`,
+   `OpVectorRefNullable`, `OpTextCharacterNullable`) stay — they
+   skip the diagnostic emission entirely so the hot loop-iter
+   path doesn't pay for it (end-of-iteration is expected
+   behaviour, not a fault).  The user-facing peers
+   (`OpGetVector` / `OpVectorRef` / `OpTextCharacter`) log + return
+   the same sentinel.
+6. **Optional `--strict-runtime` / `LOFT_STRICT=1`** for
+   development: restores halt-on-fault as a debug-mode opt-in for
+   catching bugs.  Default and production are always log + continue.
+
+Per-site rename in the next iteration: `vec_get_or_raise` →
+`vec_get_logged`, `vec_ref_or_raise` → `vec_ref_logged`,
+`text_char_or_raise` → `text_char_logged`, `State::raise` →
+`State::log_runtime_event` to make the contract obvious.
+
+---
+
+## Status (2026-05-11 reframe)
+
+Phase 4 ships the typed `RuntimeError` infrastructure + per-site
+detection in BOTH modes; the **behaviour at the fault site is
+mode-dependent** (production logs + continues, development halts +
+renders).  See [DESIGN_DECISIONS.md § C66](../../DESIGN_DECISIONS.md#c66--production-loft-programs-never-abort-on-user-attributable-edge-cases-development-may-halt)
+for the rule.
+
+### Shipped (2026-05-11) — dev-mode halt path
+
+- Foundation: `RuntimeError { kind, position, op_pc, message }` +
+  `RuntimeErrorKind` in `src/runtime_error.rs`;
+  `Stores::runtime_error: Option<Box<RuntimeError>>` field;
+  `State::raise(kind)` helper; dispatch-loop short-circuit in
+  `State::execute_argv` and `State::resume`; renderer integration
+  in `main.rs` via `render_entry_pretty`.
+- Site conversions (steps 4.3/4.4/4.6/4.7/4.8/4.11/4.13):
+  - `n_panic` / `n_assert` (production check already in place;
+    dev-mode now routes through typed error)
+  - `OpDivInt` / `OpRemInt` (annotation guard `if @v2 == 0 { s.raise(...); 0_i64 } else { ops::op_div_int(...) }`)
+  - `OpGetVector` / `OpVectorRef` / `OpTextCharacter` (raising
+    annotations route through `s.vec_get_or_raise` /
+    `s.vec_ref_or_raise` / `s.text_char_or_raise`)
+- Loop-iteration peers: new opcodes `OpGetVectorNullable` /
+  `OpVectorRefNullable` / `OpTextCharacterNullable` keep the
+  legacy "return null on OOB" behaviour for the loop driver's
+  end-of-iteration check (`parser/collections.rs:1492-1499`).
+  Six parser emit sites rerouted; user-facing `v[i]` / `s[i]`
+  keep emitting the raising peers.
+- In-process test harness (`tests/testing.rs`) re-raises
+  `runtime_error` as a Rust panic so `#[should_panic]` fixtures
+  keep firing.
+- Pre-existing tests that relied on silent `i64::MIN`
+  propagation (`expr_zero_divide`,
+  `inc29_bang_integer_null_is_caught`) converted to use the
+  explicit `?? null` form.
+
+End-to-end dev-mode output:
+```
+error: panic: boom!
+  --> /tmp/p_panic.loft:2:1
+  |
+2 |   panic("boom!");
+  | ^
+```
+
+### Open — production log-and-continue path + defense dispatch + warning (next slice)
+
+Sub-arc tracked in `~/.claude/plans/async-toasting-nest.md`
+(10-commit landing sequence).  Headline pieces:
+
+1. `Logger::log_runtime_kind(&mut self, kind, position)` in
+   `src/logger.rs` — formats via the rendered diagnostic shape,
+   routes through `self.log(severity, file, line, msg)`, applies
+   rate-limit keyed by `(file, line, kind.label())`.
+2. Production branch in `State::raise`: when
+   `database.logger.config.production == true`, log via
+   `log_runtime_kind` + `had_fatal` + return without populating
+   `runtime_error`.  Dev path unchanged.
+3. Startup check in `main.rs` (and any embedding entry point):
+   refuse to boot when production mode is requested without a
+   logger attached, with a clear actionable error message naming
+   the fix path (see C66 + LOGGER.md).
+4. `tests/runtime_logging.rs` — production-mode test harness
+   attaches a capturing Logger, asserts continue-and-log shape
+   for each kind.
+5. `n_panic` / `n_assert` cosmetic alignment to `log_runtime_kind`
+   so all production-mode log entries share the rendered shape.
+6. **Defense dispatch — `??`**: extend
+   `parser/operators.rs::rewrite_outer_arith_to_nullable` to also
+   handle OpGetVector / OpVectorRef / OpTextCharacter when followed
+   by `??`.  `x = v[i] ?? null` then routes through the Nullable
+   peer (no log / no halt) — matches today's arithmetic-only
+   behaviour.
+7. **Defense dispatch — `if x != null` flow-analysis**: in
+   `parse_assign`, when the source is a fault-prone op AND the
+   immediately-following sibling is `Value::If(Var(x) != null, ...)`
+   (or `!Var(x)`), swap the source to its Nullable peer.  Single-
+   block scope (next sibling only).  Cross-function defenses fall
+   through to the raising peer + log path.
+8. **Compile-time warning** at every undefended fault site with
+   `note:` lines naming the three defense patterns.  Silenceable
+   via `LOFT_NO_WARN_RUNTIME=1` / `--no-warn-runtime`.  Defaults
+   ON.  Defended sites stay quiet at compile-time AND at runtime
+   — the two paths agree.  Skip-list logic walks the IR after
+   `rewrite_defended_fault_sites` (4d.2) and
+   `rewrite_subtree_to_nullable` (4e.1) so the warning fires
+   exactly where neither swap fired.  (Tracked as **4e.2** in
+   the README sub-phase table.)
+9. **Distinct null tokens in format-string output** — 4e.1
+   suppression collapses every fault to bare `null` (or empty
+   for text/char), losing the *why*.  4e.3 carries the fault
+   kind from the swapped Nullable peer through to the format
+   renderer so each fault-produced sentinel renders with a
+   `(reason)` suffix in format strings only.  Examples:
+   `null(/0)` (divide-by-zero), `null(oob 999/3)` (vector OOB
+   with index/length), `null(neg -5)` (negative index),
+   `null(.field)` (chain stops at null record).  Genuine null
+   values stay as bare `null`.  Text/char nulls render as `null`
+   (never empty — empty looks like a missing variable, not a
+   fault).  **Out-of-scope contexts**: `{:j}` JSON format keeps
+   `null` (must produce valid JSON); explicit `?? "fallback"` in
+   a format string respects the fallback.  **Width handling**:
+   when the format spec has a hard width (`{x:>5}`) the suffix
+   truncates to `null(...)` so columns stay stable.
+   `LOFT_FORMAT_BARE_NULL=1` env var suppresses the suffix for
+   production deployments that surface format strings to end
+   users.  Implementation: side table keyed by IR-node identity
+   carrying `RuntimeErrorKind` from the swap point through to
+   the renderer; no `Value` enum bloat.  (Tracked as **4e.3**
+   in the README sub-phase table; queued AFTER 4e.2.)
+10. `doc/claude/LOGGER.md` § Runtime event logging + § Production
+    setup; document the three-way defense contract + warning.
+11. Status block update.
+
+### Severity per kind (production mode)
+
+| Kind | Severity | Rationale |
+|---|---|---|
+| `UserPanic` | `Fatal` | Already Fatal in n_panic production path; intentional terminal call |
+| `AssertionFailed` | `Error` | Already Error in n_assert production path; intentional invariant violation |
+| `DivideByZero` | `Warning` | Recoverable via `??`; sentinel takes over silently |
+| `IndexOutOfBounds` | `Warning` | Recoverable via defensive `if x != null`; sentinel takes over |
+| `NegativeIndex` | `Warning` | Same as IOB |
+| `NullDereference` | `Warning` | Same; sentinel propagates; `if x != null` rescues |
+| `NarrowCastOverflow` | `Warning` | Clamped value or sentinel; rare |
+| `StackOverflow` | `Fatal` | System-level; not recoverable; logged then host's frame loop decides whether to continue or restart |
+
+### Easy-proof skip list — REQUIRED for 4e.2 (not optional)
+
+Per the 2026-05-11 workflow evaluation, the 4e.2 warning is
+worse than nothing if it fires at every `v[i]` in code that
+the compiler could trivially prove safe — developers will
+silence it within a session and the safety net evaporates.
+4e.2 MUST recognise the four canonical safe patterns BEFORE
+landing.
+
+| Pattern | Skip when | Sketch |
+|---|---|---|
+| Bound loop variable | `for i in 0..len(v) { v[i] }` — `i` is bound to the exact `0..len(v)` range from the enclosing `Iter` | Track `var → CollectionLen(c)` on entry to `Value::Iter(var, init, …)` when `init` matches the `OpRange(0, OpLengthVector(c))` shape; clear on exit.  At fault-site walk, if the index var matches and the indexed collection is `c`, skip. |
+| Bound by `if i < len(v)` | The fault site is inside an `if` whose test is `Var(i) < OpLengthVector(c)` (or `<=` against `len-1`, or `i >= 0 && i < len(v)`); the indexed collection is `c` | Track `var → CollectionLen(c)` on entering the `then` branch of `Value::If`; clear on `else` and on exit.  Same lookup as the loop case. |
+| Constant-literal divisor | `Value::Int(n)` with `n != 0` (or `n.abs() > 0`) directly as the second operand of `OpDivInt` / `OpRemInt` | Pure pattern match — no context table needed. |
+| Constant-literal index | `Value::Int(n)` with `n >= 0` AND we can prove `n < known_len(c)` (only for vector literals constructed in the same block) | Track `var → KnownLen(N)` on `Set(var, OpVectorLiteral(N elements))`; same thing for `for` comprehensions with a constant range bound.  At fault-site walk, if index is a literal in `[0, N)` of the indexed `var`'s known length, skip. |
+
+The skip list grows as we observe real-world false-positive
+patterns; **each new skip case ships with a regression test
+in `tests/parse_errors.rs::warning_skip_<pattern>`**.  The bar
+for adding a skip case is low ("would a competent loft
+programmer reasonably expect this to be safe?"); the bar for
+removing one is high (silently changes from no-warning to
+warning, breaks downstream test goldens).
+
+Cases NOT covered by 4e.2 (intentionally — fall through to the
+runtime path + log entry):
+
+- Cross-function defenses: `helper_that_checks(x)` after `x =
+  v[i]`.  4e.2 has no inter-procedural analysis.
+- Indexed by a variable bound by an unrelated computation:
+  `j = compute(); v[j]`.  No way to prove `j < len(v)` without
+  CSP / range analysis.
+- Indexed by `find` / `position`: today these return either
+  `null` or an in-range index, but 4e.2's pattern matcher
+  doesn't yet recognise `Value::Set(j, OpFind(c, …))` as a
+  safe-by-source pattern.  Add as a skip case when the cost
+  of doing so is paid by a real false-positive complaint —
+  not pre-emptively.
+
+### Remaining site conversions (steps 4.5 / 4.9 / 4.10 / 4.12)
+
+Inherit the same production-vs-dev shape via `State::raise`.
+Each adds a per-site fault check (e.g., null-DbRef field read,
+narrow-cast overflow check) that calls `s.raise(KIND)` and
+returns the existing sentinel.  ALL must also be wired through:
+
+- The 4d.1 / 4d.2 / 4e.1 swap tables — adding a new fault
+  kind WITHOUT a Nullable peer means `??` / `if x != null` /
+  format-string suppression silently fail to defend the new
+  site.  Each new fault kind ships with its Nullable peer in
+  the same commit.
+- The 4e.2 warning's per-kind diagnostic message.
+
+Sites:
+
+- 4.5 — float / single div by zero (sentinel: `f64::NAN` or
+  IEEE behaviour kept on nullable)
+- 4.9 — null DbRef field / method access (sentinel: null-
+  propagating null)
+- 4.10 — narrow-cast overflow (sentinel: clamped or null)
+- 4.12 — stack-overflow trap (no sentinel; production logs and
+  host frame loop handles continuation)
+
+### Renderer / backtrace polish (steps 4.14, 4.15, 4.16, 4.17, 4.18)
+
+- 4.14 — capture `State::call_stack` into `RuntimeError.backtrace`
+  at `raise` time, resolve each frame's source via phase-3's
+  `Data::source_at_pc`.
+- 4.15 — render the backtrace through the pretty renderer (top-3
+  frames + "(use `LOFT_BT=full` for more)" if more).  Same shape
+  for both dev-mode rendering and production-mode log entries.
+- 4.16 — bench delta ≤ 3 % vs phase 3 baseline; outline the
+  fault-check branches with `#[cold]` if hot.
+- **4.17 — State snapshot at fault site.**  Per the 2026-05-11
+  workflow evaluation: today the dev-mode halt tells the
+  developer *where* `v[i]` was OOB but not *what* `v` and
+  `i` were at that moment.  The pieces are already on the
+  bytecode stack at fault time; surface them.  Capture the
+  named-arg values at `raise` time into a
+  `RuntimeError.snapshot: Vec<(String, ValueRepr)>` field
+  using the same `Display` formatter the format-string
+  renderer uses (so the snapshot prints exactly as the
+  developer would see them in `println("{x}")`).  Keep the
+  snapshot to direct argument values + the indexed
+  collection's `len`; do NOT walk arbitrary heap structures
+  (cost + cycles).  Renders inline with the diagnostic:
+
+  ```
+  error: index 5 out of bounds for length 3
+    --> game.loft:42:14
+     |
+  42 |     dmg = damage[idx];
+     |                 ^
+     = state: damage = [10, 20, 30] (len=3), idx = 5
+  ```
+
+  Production-mode log entries get the same line.  Closes the
+  "I have to add a print statement to find what i was"
+  failure mode.
+- **4.18 — `--dev-soft-halt` flag** (and `LOFT_DEV_SOFT_HALT=1`
+  env var equivalent).  Per the 2026-05-11 evaluation: dev-mode
+  halts at the first fault, which is right for tight diagnose-
+  fix loops but wrong for "show me the full pattern of breakage
+  in this newly-ported file."  The flag demotes development-mode
+  raises to log-and-continue (matches production semantics) so
+  the developer sees every fault site in a single run.  No new
+  machinery needed — the production branch in `State::raise`
+  already implements log-and-continue; the flag just toggles
+  which branch fires regardless of the logger's `production`
+  flag.  Renders the same per-kind diagnostic to stderr at each
+  fault site and exits non-zero at end if any fault fired.
 
 ## Goal
 
-Replace the implicit "panic = bug; sentinel = user error" coin-flip
-with an explicit `RuntimeError { kind, position, op_pc }` raised at
-a small set of well-known fault sites.  Today these sites either:
-
-- Return `i64::MIN` (the null sentinel) — a silent wrong answer
-  unless the result is consumed by `??`.  See
-  `src/ops.rs:305::op_div_long` returning `i64::MIN` on `v2 == 0`.
-- Panic with no source-level context — see the implicit panics
-  inside C-coercion paths.
-
-After phase 4, every fault attributable to user code is a
-`RuntimeError` with a source position and a stable kind.  Anything
-*not* attributable to user code stays a hard panic and is treated
-as an interpreter bug.
+Make every user-attributable runtime fault visible with a typed
+kind + a `--> file:line:col` + caret diagnostic — through the
+**rendered output** in development (halt-and-display so the
+developer sees it loudly) and through the **logger** in production
+(silent recovery via the existing sentinel, but an operator-
+visible log entry so issues are still triaged).  Anything *not*
+attributable to user code stays a hard panic and is treated as an
+interpreter bug.
 
 ## Decision 04.A — sentinel, panic, or RuntimeError per site
 
@@ -103,39 +390,50 @@ Out of scope (stays a panic — interpreter bug if it ever fires):
 - Type-tag mismatch on a `Value` that codegen should have resolved
 - `unreachable!` in second-pass walkers
 
-### 4c — Per-site refactor pattern
+### 4c — Per-site refactor pattern (REFRAMED — must always produce a sentinel)
 
-Each site converts in three lines:
+Each site converts to call `s.raise(KIND)` AND continue producing
+a sentinel value.  `State::raise` decides per-mode whether to halt
+or log + continue (see `~/.claude/plans/async-toasting-nest.md` for
+the production branch detail); the per-site code is identical for
+both modes — it always produces the sentinel after the raise call:
 
 ```rust
-// Before:
+// Today (lenient sentinel — silent wrong answer, no diagnostic):
 fn div_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_div_int(v_v1, v_v2);    // returns i64::MIN on v2=0
+    let new_value = ops::op_div_int(v_v1, v_v2);    // returns i64::MIN on v2=0 silently
     s.put_stack(new_value);
 }
 
-// After:
+// After phase 4 (sentinel kept, but raise emits the diagnostic):
 fn div_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    if v_v2 == 0 {
+    let new_value = if v_v2 == 0 {
         s.raise(RuntimeErrorKind::DivideByZero);
-        return;
-    }
-    s.put_stack(ops::op_div_int_checked(v_v1, v_v2));
+        // Production: raise logged + returned; we now produce the
+        //   sentinel so downstream `?? 0` / `if x != null` defenses
+        //   keep working.  Execution continues.
+        // Development: raise populated runtime_error; the dispatch
+        //   loop will halt at this op's exit.  The sentinel we
+        //   produce here is harmless — the dispatch loop fires
+        //   before any consumer sees it.
+        i64::MIN
+    } else {
+        ops::op_div_int(v_v1, v_v2)
+    };
+    s.put_stack(new_value);
 }
 ```
 
-`State::raise` populates the error cell, sets `code_pos = u32::MAX`,
-and (importantly) does *not* write a result to the stack — the
-caller's stack is in an indeterminate state, but execution is about
-to end so it does not matter.
-
-The nullable opcode (`OpDivIntNullable`) is unchanged — codegen
-selects it when `??` is next, and the sentinel + `??` flow keeps
-working.  Phase 4 only changes non-nullable behaviour.
+The nullable opcode (`OpDivIntNullable`) and the loop-iteration
+nullable peers (`OpGetVectorNullable` / `OpVectorRefNullable` /
+`OpTextCharacterNullable`) skip the `s.raise(...)` call entirely
+— they're the path codegen selects when `??` follows OR when
+the IR site is a loop-iter step where end-of-iteration is
+expected behaviour, not a fault.
 
 ### 4d — Stack-trace capture
 

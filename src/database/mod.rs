@@ -21,7 +21,18 @@ use crate::keys::{Content, DbRef};
 use crate::store::Store;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Write as _};
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
+
+/// Plan-07 phase 4e.3 — `LOFT_FORMAT_BARE_NULL=1` opt-out for the
+/// `null(<reason>)` format-string suffix.  Read once per process so
+/// the format-string hot path stays branch-light.
+fn format_bare_null_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("LOFT_FORMAT_BARE_NULL").is_ok_and(|v| v == "1" || v == "true")
+    })
+}
 // the `--html` build compiles for wasm32-unknown-unknown
 // WITHOUT the `wasm` feature (the feature carries wasm-bindgen
 // host bridges that `--html`'s hand-rolled JS runtime does not
@@ -270,6 +281,36 @@ pub struct Stores {
     /// (where the error is logged instead of aborting).  `main.rs` checks this after
     /// execution and exits with code 1 so shell scripts can detect failure.
     pub had_fatal: bool,
+    /// Plan-07 phase 4 — typed runtime error captured by the most recent
+    /// fault-site opcode or native fn.  Set by callers via
+    /// [`crate::runtime_error::RuntimeError`] constructors plus
+    /// `had_fatal = true`; the interpreter dispatch loop in
+    /// `src/state/mod.rs::execute_argv` checks `runtime_error.is_some()`
+    /// after each op and breaks out of execution by setting
+    /// `code_pos = u32::MAX`.  `main.rs` then renders the error through
+    /// the phase-2 pretty renderer.  Boxed because the slot is rarely
+    /// populated and the `RuntimeError` payload (kind enum + Position
+    /// String + message String) is otherwise ~96 bytes per `Stores`.
+    pub runtime_error: Option<Box<crate::runtime_error::RuntimeError>>,
+    /// Plan-07 phase 4e.3 — fault-kind tag for the next format-string
+    /// rendering of a null sentinel.  Set by the small `OpTagFault`
+    /// op (emitted by 4e.1's format-scope swap right BEFORE each
+    /// fault-prone Nullable-peer call).  Read AND cleared by the
+    /// format-conversion ops (`OpFormatInt` / `OpAppendCharacter` /
+    /// etc.) when they encounter the type's null sentinel — they
+    /// render `null(<tag>)` instead of bare `null`.  When the value
+    /// is non-null the tag is also cleared on consumption (so it
+    /// doesn't leak to a downstream interpolation).
+    ///
+    /// Always cleared at format-string boundaries by the same swap
+    /// pass (no need for runtime begin/end markers — 4e.1's
+    /// rewrite knows the format scope at parse time and only emits
+    /// `OpTagFault` immediately before its paired Nullable peer).
+    ///
+    /// `LOFT_FORMAT_BARE_NULL=1` env var makes the format ops
+    /// ignore this field (and emit bare `null`) for production
+    /// deployments that surface format strings to end users.
+    pub format_fault_tag: Option<&'static str>,
     /// Directory of the main source file being executed.
     /// Set by `main.rs` after parsing; used by `source_dir()` built-in.
     pub source_dir: String,
@@ -391,6 +432,8 @@ impl Clone for Stores {
             par_fn_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
+            runtime_error: None,
+            format_fault_tag: None,
             source_dir: String::new(),
             frame_yield: false,
             poison_free: self.poison_free,
@@ -849,6 +892,8 @@ impl Stores {
             par_fn_buffer_stack: Vec::new(),
             logger: None,
             had_fatal: false,
+            runtime_error: None,
+            format_fault_tag: None,
             source_dir: String::new(),
             frame_yield: false,
             poison_free: false,
@@ -883,6 +928,200 @@ impl Stores {
         result.base_type("text", 4); // 5
         result.base_type("character", 4); // 6
         result
+    }
+
+    /// Plan-07 phase 4c — Stores-side counterpart of `State::raise`.
+    /// Used by native codegen, which has `&mut Stores` (via
+    /// `unsafe { &mut *cell.get() }`) but no `&mut State`.  The
+    /// native template rewriter in `src/generation/calls.rs`
+    /// translates `s.raise(...)` → `stores.raise_runtime(...)` so
+    /// the same `default/01_code.loft` annotations work in both
+    /// contexts.  The `_runtime` suffix is mandatory: a plain
+    /// `stores.raise(` would let a second pass of the substring-
+    /// based substitution match `s.raise(` inside the just-
+    /// produced output and accumulate `stor` prefixes
+    /// (observed: `storestorestores.raise(`).  Sibling helpers
+    /// follow the same convention (`*_runtime` rename).
+    ///
+    /// **Position is `None` for the native path today** — native
+    /// doesn't have a bytecode pc → Position lookup table.  Phase 4g
+    /// (backtrace + polish) will thread codegen-time positions
+    /// through.  For now native diagnostics omit `--> file:line:col`
+    /// (rendered as just `error: <kind detail>` without the
+    /// location header).  Better than today's `cannot find value 's'`
+    /// rustc compile error from the s.raise call.
+    ///
+    /// Production-vs-development split mirrors `State::raise` per
+    /// `DESIGN_DECISIONS.md § C66`:
+    /// - production logger attached → log via `log_runtime_kind` +
+    ///   set `had_fatal` + return without populating `runtime_error`
+    /// - development (no logger or non-production logger) → populate
+    ///   `runtime_error` so the dispatch loop's short-circuit fires
+    ///   and main.rs renders the typed error
+    pub fn raise_runtime(&mut self, kind: crate::runtime_error::RuntimeErrorKind) {
+        let production = self
+            .logger
+            .as_ref()
+            .and_then(|l| l.lock().ok())
+            .is_some_and(|l| l.config.production);
+        // Plan-07 phase 4g.3 — `--dev-soft-halt` mirror of the
+        // State::raise path.  When the env var is set, demote to
+        // log-and-continue regardless of logger.production flag
+        // so a single run surfaces every fault site.
+        let dev_soft_halt =
+            std::env::var("LOFT_DEV_SOFT_HALT").is_ok_and(|v| v == "1" || v == "true");
+        if production || dev_soft_halt {
+            if let Some(logger) = &self.logger
+                && let Ok(mut lg) = logger.lock()
+            {
+                lg.log_runtime_kind(&kind, None);
+            }
+            if dev_soft_halt {
+                eprintln!("soft-halt: {}", kind.describe());
+            }
+            self.had_fatal = true;
+            return;
+        }
+        let message = kind.describe();
+        self.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError {
+            kind,
+            position: None,
+            op_pc: u32::MAX,
+            message,
+            // Stores-side raise (native codegen path) has no
+            // access to call_stack; slice 2 of 4g.1 will thread
+            // it through.
+            call_chain: Vec::new(),
+        }));
+        self.had_fatal = true;
+    }
+
+    /// Plan-07 phase 4e.3 — set the next-format-render fault tag.
+    /// Called by `OpTagFault(kind_id)` which 4e.1 emits IMMEDIATELY
+    /// before each fault-prone Nullable peer in format-string
+    /// scope.  The next format-conversion op (`OpFormatInt`,
+    /// `OpAppendCharacter`, etc.) reads the tag and, when the value
+    /// is the type's null sentinel, renders `null(<tag>)` instead
+    /// of bare `null`.
+    ///
+    /// Kind-id mapping (numeric IDs keep the IR stable across
+    /// label-string changes):
+    ///   1 → `/0`   (DivByZero)
+    ///   2 → `%0`   (ModByZero / RemByZero)
+    ///   3 → `oob`  (IndexOutOfBounds)
+    ///   4 → `neg`  (NegativeIndex)
+    ///   _ → bare null (no tag)
+    ///
+    /// `LOFT_FORMAT_BARE_NULL=1` env var (read once per process via
+    /// `format_bare_null_enabled()`) suppresses the tag entirely so
+    /// production deployments that surface format strings to end
+    /// users get clean `null` output.
+    pub fn set_format_fault(&mut self, kind_id: u8) {
+        if format_bare_null_enabled() {
+            self.format_fault_tag = None;
+            return;
+        }
+        self.format_fault_tag = match kind_id {
+            1 => Some("/0"),
+            2 => Some("%0"),
+            3 => Some("oob"),
+            4 => Some("neg"),
+            _ => None,
+        };
+    }
+
+    /// Plan-07 phase 4e.3 — read + clear the format-fault tag.
+    /// Called by format-conversion ops on a null-sentinel value.
+    #[must_use]
+    pub fn take_format_fault(&mut self) -> Option<&'static str> {
+        self.format_fault_tag.take()
+    }
+
+    /// Plan-07 phase 4c — Stores-side counterpart of
+    /// `State::vec_get_or_raise`.  Same body, calls
+    /// `self.raise_runtime(...)` on OOB.  Native template rewriter
+    /// translates `s.vec_get_or_raise(...)` →
+    /// `stores.vec_get_or_raise_runtime(...)`.  The `_runtime`
+    /// suffix avoids substring-collision with the substitutor —
+    /// see `raise_runtime` for the explanation.
+    #[must_use]
+    pub fn vec_get_or_raise_runtime(
+        &mut self,
+        db: &crate::keys::DbRef,
+        size: u32,
+        index: i64,
+    ) -> crate::keys::DbRef {
+        let len = crate::vector::length_vector(db, &self.allocations);
+        let normalized = if index < 0 {
+            index + i64::from(len)
+        } else {
+            index
+        };
+        if normalized < 0 {
+            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
+                idx: index,
+            });
+            // Sentinel matches `vector::get_vector` legacy OOB shape
+            // (preserve `db.store_nr`, set `rec=0`).  See
+            // `State::vec_get_or_raise` for the rationale.
+            return crate::keys::DbRef {
+                store_nr: db.store_nr,
+                rec: 0,
+                pos: 0,
+            };
+        }
+        if normalized >= i64::from(len) {
+            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+                idx: index,
+                len,
+            });
+            return crate::keys::DbRef {
+                store_nr: db.store_nr,
+                rec: 0,
+                pos: 0,
+            };
+        }
+        crate::vector::get_vector(db, size, index, &self.allocations)
+    }
+
+    /// Plan-07 phase 4c — Stores-side counterpart of
+    /// `State::vec_ref_or_raise`.  Same body; native rewriter
+    /// translates `s.vec_ref_or_raise(...)` →
+    /// `stores.vec_ref_or_raise_runtime(...)`.
+    #[must_use]
+    pub fn vec_ref_or_raise_runtime(
+        &mut self,
+        db: &crate::keys::DbRef,
+        index: i64,
+    ) -> crate::keys::DbRef {
+        let inner = self.vec_get_or_raise_runtime(db, 4, index);
+        // `get_ref` already short-circuits to a null DbRef when
+        // `inner.rec == 0`, so no extra guard is needed.
+        self.get_ref(&inner, 0)
+    }
+
+    /// Plan-07 phase 4c — Stores-side counterpart of
+    /// `State::text_char_or_raise`.  Same body; native rewriter
+    /// translates `s.text_char_or_raise(...)` →
+    /// `stores.text_char_or_raise_runtime(...)`.
+    #[must_use]
+    pub fn text_char_or_raise_runtime(&mut self, val: &str, index: i64) -> char {
+        let len = val.len() as i64;
+        let normalized = if index < 0 { index + len } else { index };
+        if normalized < 0 {
+            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
+                idx: index,
+            });
+            return char::from(0);
+        }
+        if normalized >= len {
+            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+                idx: index,
+                len: len as u32,
+            });
+            return char::from(0);
+        }
+        crate::ops::text_character(val, index)
     }
 
     /// Initiative 03 Phase 3b: return a `Str` pointing into the

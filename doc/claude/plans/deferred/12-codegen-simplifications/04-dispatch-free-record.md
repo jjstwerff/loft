@@ -8,7 +8,7 @@ and Record/Ref-comparison Op families.
 
 **Tier:** 2 (structural cleanup)
 
-**Estimated cost:** ~2-3 hours.
+**Effort:** S.
 
 ## What's being migrated
 

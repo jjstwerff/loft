@@ -34,11 +34,16 @@ reviewed, CI-green pull request.
 
 Rules:
 - Never `git commit` directly on `main`.
-- Never `git push` without an explicit user instruction.
+- Pushing commits is OK by default — unless there's an open PR on the branch
+  that the push would disturb.  For a long-lived working branch with no open
+  PR, push freely after each green-CI commit so the remote stays in sync.
+  When the branch has an open PR, do NOT push without an explicit user
+  instruction (force-pushes / rebases / unexpected commits disrupt review).
+  Check `gh pr list --head <branch>` before pushing if uncertain.
 - **Never create a branch unless the user explicitly says "create a branch".**
   Do not create branches as part of a workflow, sprint start, or task planning.
   Work on the current branch and commit locally.  The user decides when to
-  branch, push, or open a PR.
+  branch or open a PR.
 - Never create a feature branch from another feature branch — always branch from `main`.
 - Merging to `main` is done via a GitHub pull request, not a local `git merge`.
 
@@ -150,7 +155,7 @@ Run through this list before pushing.  Skip items that are clearly unaffected.
 | `doc/claude/CAVEATS.md` | Edge cases were fixed or **any new workaround discovered** (add with test reference) |
 | `doc/claude/TESTING.md` § Coverage Gaps | Test coverage improved or new gaps identified |
 | `README.md` | New user-facing features, CLI commands, or examples added |
-| Feature design doc (e.g. `PACKAGES.md`, `OPENGL.md`) | Implementation diverged from design, or phases completed |
+| Relevant feature design doc (reference doc or active plan README) | Implementation diverged from design, or phases completed |
 | `doc/claude/STDLIB.md` | New stdlib functions or types added |
 | `doc/claude/LOFT.md` | Language syntax or semantics changed |
 | `doc/claude/INTERNALS.md` | New opcodes, state changes, or native functions added |
@@ -577,22 +582,70 @@ Only add a new opcode when:
 - Performance is critical and the overhead of multiple opcodes is measurable
   and unacceptable (document the benchmark).
 
-**When you do add one**, follow the 10-step bootstrap procedure in
-[`plans/02-narrow-collection-elements/04b-short-encoding.md` §
-Opcode-addition procedure](plans/02-narrow-collection-elements/04b-short-encoding.md#opcode-addition-procedure-verified-2026-04-22).
-Short summary: add Store methods first, declare in `default/01_code.loft`,
-grow the `OPERATORS` array in `src/fill.rs` to match, append placeholder
-identifiers + empty function bodies, build, then `cargo test --test issues
-regen_fill_rs -- --ignored --nocapture` to regenerate `src/fill.rs`.
-Rebuild the WASM rlib and the `native_pkg` fixture cdylib (the
-freshness checks in `tests/html_wasm.rs` and `tests/native_loader.rs`
-catch this).  Audit `src/codegen_runtime.rs` manually — regen does
-NOT touch it.  **Run `cargo test --release --test native native_dir`
-before commit** to catch the silent-hang class of regression that
-bit the P184 Phase 4b attempt on 2026-04-21.  Never reorder existing
-opcode declarations while adding new ones — opcode numbers are
-positional and any reorder invalidates stored / pre-compiled
-packages that embed them.
+**When you do add one**, follow the 10-step bootstrap procedure
+below.  New opcodes require a bootstrap because `regen_fill_rs`
+compiles `loft` to discover declared ops, and `loft` cannot
+compile without the generated dispatch entries the regeneration
+produces.
+
+1. **Add any new Store/stores methods first.**  The `#rust"…"`
+   bodies you'll declare next reference them.  E.g.
+   `Store::get_u16_raw` / `set_u16_raw` must exist in
+   `src/store.rs` before regen can compile their callers.
+2. **Declare the opcodes in `default/01_code.loft`** with
+   `fn OpName(...) -> ret;` plus the `#rust"…"` body.  Keep the
+   declaration adjacent to the existing `Op*` family it extends
+   (e.g. new `OpGetShortRaw` next to `OpGetInt4`) so regen output
+   is readable.
+3. **Grow the `OPERATORS` array size in `src/fill.rs`** — change
+   `&[fn(&mut State); N]` to `&[fn(&mut State); N+k]` where `k`
+   is the number of new ops.  Without this, regen panics with
+   `Too many defined operators (N of N used)`.
+4. **Append placeholder identifiers at the bottom of the
+   `OPERATORS` array**, matching the snake_case form of the new
+   op names (`OpGetShortRaw` → `get_short_raw`).  Append in the
+   order declared in `default/01_code.loft` — array index becomes
+   the opcode number and must match what the parser emits via
+   `data.def_nr("OpGetShortRaw")`.
+5. **Add placeholder function definitions** with matching
+   signatures at the end of `src/fill.rs`.  Empty bodies are
+   fine — regen overwrites them.  Required so the array
+   references resolve and the crate compiles.
+6. **Build**: `cargo build --release`.  Must succeed before
+   regen runs.
+7. **Regenerate**: `cargo test --release --test issues
+   regen_fill_rs -- --ignored --nocapture`.  Overwrites
+   `src/fill.rs` with canonical content derived from every
+   `#rust"…"` body in `default/*.loft`.
+8. **Rebuild dependents**:
+   - `cargo build --release --lib` — refreshes the interpreter.
+   - `cargo build --release --target wasm32-unknown-unknown --lib
+     --no-default-features --features random` — refreshes the
+     WASM rlib.  The freshness check in `tests/html_wasm.rs`
+     catches this.
+   - `(cd tests/lib/native_pkg/native && cargo build --release)`
+     — refreshes the fixture cdylib.  Same freshness check in
+     `tests/native_loader.rs`.
+9. **Audit native codegen** (`src/codegen_runtime.rs`):
+   regen_fill_rs does NOT touch this file.  `match parts` arms
+   that enumerate every `Parts::*` variant get a non-exhaustive
+   warning when a new variant is added — add the new arm
+   manually.  For opcodes that add new `stores.method()` calls,
+   mirror them in codegen_runtime.rs (look for parallel
+   `OpGetInt4` / `OpSetInt4` handling).
+10. **Run `native_dir` before committing**: `cargo test --release
+    --test native native_dir`.  Pure native-mode test compilation;
+    catches the silent-hang class of regression where every unit
+    test passes but a native-compiled script hangs.  Do NOT
+    commit based on unit-test success alone.
+
+**Ordering constraint**: opcode number is determined by entry
+order in `OPERATORS`, which `regen_fill_rs` derives from
+declaration order in `default/*.loft`.  Reordering existing
+opcode declarations invalidates every pre-compiled package that
+embeds the old numbers — **never reorder existing op
+declarations while adding new ones**.  Append at the end of the
+relevant family.
 
 ---
 
@@ -719,10 +772,17 @@ see [Validation Against CODE.md](#validation-against-codemd) for the exception p
 
 ### Remote CI / Pull Request
 
-Once the local gate is clean and the user asks to push, open a pull request against `main`.
-Do **not** push automatically — wait for an explicit instruction:
+Pushing commits is OK by default once the local gate is clean (so the remote
+stays in sync without the user having to ask each time).  Opening a PR
+remains gated by an explicit user instruction.  When the branch already has
+an open PR, do NOT push without explicit ask — force-pushes / rebases /
+surprise commits disrupt review-in-progress.
 
 ```bash
+# OK by default after green local gate (no open PR):
+git push
+
+# Opening a PR — only after explicit user ask:
 git push -u origin p1-1-p1-2-p1-3-lambda-expressions
 gh pr create --title "P1: lambda expressions (all 3 phases)" \
              --body "Implements fn(params)->type block inline lambdas with map/filter/reduce integration."

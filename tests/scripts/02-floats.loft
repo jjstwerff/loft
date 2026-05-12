@@ -72,7 +72,7 @@ fn main() {
   assert(abs(0.0) == 0.0, "float abs zero");
   assert(abs(-0.0) == 0.0, "float abs negative zero");
   // --- Null (NaN) propagation ---
-  bad = 0.0 / 0.0;
+  bad = (0.0 / 0.0) ?? null;
   assert(!(bad + 1.0), "nan + float is null");
   assert(!(bad * 2.0), "nan * float is null");
   assert(!(1.0 + bad), "float + nan is null");
@@ -86,7 +86,7 @@ fn main() {
   log_zero = log(0.0, 10.0);
   assert(log_zero < -1000000.0, "log(0, base) is negative infinity");
   // --- Division producing positive infinity (not null) ---
-  pos_inf = 1.0 / 0.0;
+  pos_inf = (1.0 / 0.0) ?? null;
   assert(pos_inf > 1000000.0, "1.0/0.0 is positive infinity");
   // --- Special power cases ---
   assert(pow(0.0, 0.0) == 1.0, "0^0 == 1 by convention");
@@ -126,9 +126,9 @@ fn main() {
   nan_val = sqrt(-1.0);
   assert(!(nan_val as integer), "NaN as integer is null");
   assert(!(nan_val as integer), "NaN as integer is null");
-  inf_pos = 1.0 / 0.0;
+  inf_pos = (1.0 / 0.0) ?? null;
   assert(inf_pos as integer == 9223372036854775807, "positive infinity as integer saturates to i64::MAX");
-  inf_neg = -1.0 / 0.0;
+  inf_neg = (-1.0 / 0.0) ?? null;
   assert(!(inf_neg as integer), "negative infinity as integer is null (i32::MIN)");
   assert(!(inf_neg as integer), "negative infinity as integer is null (i64::MIN)");
   assert(inf_pos as integer > 1000000000, "positive infinity as integer saturates");
@@ -137,7 +137,7 @@ fn main() {
   assert(!(inf_pos - inf_pos), "inf - inf is NaN (null)");
   assert(!(inf_pos * 0.0), "inf * 0.0 is NaN (null)");
   // --- NaN comparisons return false (not null) ---
-  nan_cmp = 0.0 / 0.0;
+  nan_cmp = (0.0 / 0.0) ?? null;
   assert(!(nan_cmp < 0.0), "nan < 0.0 is false");
   assert(!(0.0 < nan_cmp), "0.0 < nan is false");
   assert(!(nan_cmp <= nan_cmp), "nan <= nan is false");

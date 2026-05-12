@@ -9,6 +9,134 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Plan-14 (tuple validation matrix) closed 2026-05-11
+
+Plan-14 ran 2026-04-30 → 2026-05-11.  Final matrix: 40 cells
+across 5 element types (E1 scalars, E1n integer-not-null, E2
+text, E3 nested, E4 closure, E5 struct reference) and 3
+destinations (D1 local, D2 direct stack, D3 struct field), all
+cross-mode-validated under `tests/tuple_matrix.rs`'s
+interp/native byte-identical assertion.  Plus E6 (struct value)
+folded into E5 by C65 design decision and E7 (collections in
+tuples) closed-by-non-goal.
+
+**Phases shipped (00, 01, 02, 03, 04, 05, 07):**
+- 00: cross-mode harness in `tests/common/cross_mode.rs`;
+  `find_loft_rlib`, `compile_native_job`, `run_native_job`
+  exposed `pub(crate)` from `tests/native.rs`.
+- 01: 12 E1/E2 cells (D1 + D2: local, arg, return, inline,
+  match-subj, if-arm).  T1.8a closed via the lighter "rust_type
+  Context::Result recursion" fix instead of new opcodes.
+- 02: 5 E3 cells.  Closed P247 (nested-tuple text move in
+  format-string interpolation) + P248 (element-of-element
+  assignment `t.0.1 = 99`).
+- 03: 5 E4 cells (closure-typed tuple elements).  Closed P249
+  (20-byte fn-ref layout extended into 6 tuple codegen sites +
+  `__fn_ref_tmp` postfix-call temp marked skip_free).
+- 04: 6 E5 cells (struct references).  Decision: MOVE
+  semantics (recorded as C64).  Loop-iteration aliasing bug
+  parked as P250.
+- 05: 6 D3 cells (tuples in struct fields).  Decision: LIFT
+  was already shipped by Plan-06 phase 4d; phase 05 was a
+  verification pass.  E4_d3 (closure-element tuple as struct
+  field) parked behind P251.
+- 07: P234 runtime — lifetime-bearing tuple returns route
+  through `Reference(__tuple<…>)` synthetic struct.
+
+**Phase deferred:**
+- 08: P234 runtime extended to LOCAL tuple-with-lifetime-concern
+  variables — friction with P189b's vector-of-tuple index access
+  meant the rewrite needed broader changes than the original
+  Phase 08 scope.  Phase is a uniformity refactor, not a bug
+  fix; juice not worth the squeeze.
+
+**Bugs filed during validation:**
+- P247, P248 — closed in phase 02.
+- P249 — closed in phase 03.
+- P250 — open: ref-tuple loop-iteration aliasing.
+- P251 — open: native projection for fn-ref-tuple-in-struct-field.
+
+**Design decisions recorded in DESIGN_DECISIONS.md:**
+- C64: Tuple struct-ref elements use MOVE semantics.
+- C65: E6 (struct value) folded into E5 — no inline value-struct
+  type in current loft.
+
+Reference content moved to TUPLES.md (Known limitations + Non-
+goals + Deferred work updated).  Plan moved to
+`finished/14-tuple-validation/`.
+
+### Plan-06 (typed-par redesign) closed 2026-05-09
+
+Plan-06 ARC ran from 2026-04-30 to 2026-05-09.  All 11 sub-steps
+shipped or formally deferred with rationale.
+
+**Shipped (A1–A7 + A5b + A8.b + A9 superseded by A4 + A11):**
+- A1: parallel workers — extra args + text/ref returns under one
+  fused-for-par codegen.
+- A2: per-thread slot cap stress test + structural fix
+  (`worker_slot_dispenser` atomic counter replaces 8d.3's fixed
+  16-slot cap).
+- A3: Queue dispatch for narrow-primitive returns (Boolean,
+  Character, Enum-no-payload, narrow Integer, Single, Float).
+- A4: retired the light Concat path entirely
+  (`n_parallel_for_light` and `n_parallel_for` panic if invoked).
+- A5: Stitch::Reduce runtime + `par_fold(items, init, fn fold,
+  threads)` parser builtin (interp + native).
+- A5b: `par_fold` native runtime mirror.
+- A6: closed 4 fn-ref / vector / keyed-collection canaries
+  (`par_struct_to_vector_t4`, `par_struct_to_fn_t4`,
+  `par_vec_of_fns_input_t4`, `par_struct_to_keyed_collection_t4`).
+- A7: closed the par-tuple canary surface — A7.1 (size-based
+  gate widen + work-ref unification — closes
+  `par_tuple_return_int_int` / `_three_arity` / `_nested`),
+  A7.2 (P235 par half — synthesized wrapper-worker — closes
+  `par_tuple_destructure_in_for`), A7.3 (P234 lexer + runtime
+  for tuple-of-struct member access).  Companion fix P236
+  (heap-owned reference returns from if/else native data
+  corruption — broader than tuples) landed alongside A7.1.
+- A8.b: stitch_id consolidation in `src/native.rs` — 5
+  `n_parallel_queue*` fns collapsed to thin wrappers around
+  `parallel_queue_dispatch(stores, stack, QueueStitch)`.
+  Saves ~150 LOC.  Targets the interp-bridge layer (different
+  from A8's `src/parallel.rs` target which deferred for sound
+  reasons).  Codegen-runtime mirrors stay separate (closure
+  types differ per stitch).
+- A9: superseded by A4 (light path retired entirely; no `.loft`
+  file uses `par_light`).
+- A11: this entry + ARC.md status header DONE + acceptance-
+  criteria final tally + THREADING.md dispatcher inventory
+  section.
+
+**Deferred with rationale:**
+- A8 (Queue dispatcher trait collapse in `src/parallel.rs`):
+  divergence is structural, not boilerplate.  The 4-5 dispatchers
+  differ in `&Stores` vs `&mut Stores` access, worker primitive
+  (`parallel_workers` vs raw rayon), per-row execute call,
+  per-thread state, and merge step.  A unifying trait would
+  relocate complexity rather than remove it.  Full audit in
+  ARC.md A8 deferral section.  Codegen side is already collapsed
+  (`ParallelQueueEmitter`); buffer stacks per-type are
+  intentional (perf).  Commit `ada917d`.  A8.b stitch_id retry
+  delivered consolidation at a different layer (see Shipped).
+- A10 (browser parallel via wasm-bindgen-rayon): out-of-scope
+  for plan-06 closure.  S2 strategic showcase; ships as its own
+  multi-session arc when scheduled.
+
+**Acceptance criteria — final tally:**
+- #1 (≤ 3 dispatchers in `src/parallel.rs`): revised to ≤ 5;
+  consolidation delivered instead at native.rs layer via A8.b.
+  Documented in ARC.md acceptance section.
+- #2 (par_light removed from user surface): MET by A4.
+- #3 (zero ignored par canaries): 8 → 1 over the arc.  Final
+  remaining ignore is heterogeneous-vec-of-fn (D11a row 8),
+  outside plan-06 scope (different surface — vector
+  construction, not par).
+
+Three closure commits land 2026-05-09: `f974770` (closeout
+docs + A8 deferral marker + A9 superseded), `15a7aab` (P235
+par half via wrapper synthesis), and the A8.b commit (this
+change).
+
 ### plan-09 phase 07: close P205 — bounded-generic text return scratch routing
 
 Closes P205 (1 of 4 native sub-failures retired).  The bug:

@@ -266,6 +266,43 @@ impl Logger {
         self.write_line(&line_str);
     }
 
+    /// Plan-07 phase 4 — log a typed runtime event (`RuntimeError`)
+    /// at the severity prescribed by the kind table (see DESIGN_DECISIONS
+    /// § C66).  Single-line message shape: `[<kind_label>] <kind.describe()>`
+    /// — the label is a stable machine-readable identifier for grepping
+    /// log files; the describe() gives the human-readable detail with
+    /// any structured-field values (idx, len, message, etc.) inline.
+    /// Routes through `Logger::log` so rate-limiting + level filtering
+    /// + rotation all apply uniformly.
+    ///
+    /// Used by `State::raise` in production mode (when
+    /// `config.production == true`) to surface the runtime event to
+    /// operators without halting the program.  In development mode the
+    /// caller (`State::raise` else-branch) uses `render_entry_pretty`
+    /// instead for the multi-line halt + caret display.
+    pub fn log_runtime_kind(
+        &mut self,
+        kind: &crate::runtime_error::RuntimeErrorKind,
+        position: Option<&crate::lexer::Position>,
+    ) {
+        use crate::runtime_error::RuntimeErrorKind as Rk;
+        let severity = match kind {
+            Rk::UserPanic { .. } | Rk::StackOverflow => Severity::Fatal,
+            Rk::AssertionFailed { .. } => Severity::Error,
+            Rk::DivideByZero
+            | Rk::IndexOutOfBounds { .. }
+            | Rk::NegativeIndex { .. }
+            | Rk::NullDereference
+            | Rk::NarrowCastOverflow { .. } => Severity::Warn,
+        };
+        let label = kind.label();
+        let detail = kind.describe();
+        let msg = format!("[{label}] {detail}");
+        let (file, line) =
+            position.map_or_else(|| (String::new(), 0), |p| (p.file.clone(), p.line));
+        self.log(severity, &file, line, &msg);
+    }
+
     /// Check if the config file has changed and reload if so.  Only does I/O if 5+ seconds
     /// have passed since the last check.
     pub fn check_reload(&mut self) {
@@ -595,4 +632,163 @@ fn days_to_ymd(z: u64) -> (u32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // month [1, 12]
     let y = if m <= 2 { y + 1 } else { y };
     (y as u32, m as u32, d as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Position;
+    use crate::runtime_error::RuntimeErrorKind;
+
+    fn tmp_logger() -> Logger {
+        let tmp = std::env::temp_dir().join(format!(
+            "loft_logger_{}_{}.log",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let config = RuntimeLogConfig {
+            log_path: tmp,
+            default_level: Severity::Info,
+            rate_per_minute: 0, // disable rate limit for these tests
+            ..Default::default()
+        };
+        Logger::new(config, None)
+    }
+
+    fn pos(file: &str, line: u32) -> Position {
+        Position {
+            file: file.into(),
+            line,
+            pos: 1,
+        }
+    }
+
+    fn read_log(logger: &Logger) -> String {
+        std::fs::read_to_string(&logger.config.log_path).unwrap_or_default()
+    }
+
+    fn drop_log(logger: Logger) {
+        let path = logger.config.log_path.clone();
+        drop(logger);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn runtime_kind_user_panic_logs_at_fatal() {
+        let mut lg = tmp_logger();
+        let kind = RuntimeErrorKind::UserPanic {
+            message: "boom".into(),
+        };
+        lg.log_runtime_kind(&kind, Some(&pos("game.loft", 7)));
+        let out = read_log(&lg);
+        assert!(out.contains("FATAL"), "expected FATAL severity in {out:?}");
+        assert!(
+            out.contains("[user_panic]"),
+            "expected kind label tag; got {out:?}"
+        );
+        assert!(
+            out.contains("panic: boom"),
+            "expected describe()d detail; got {out:?}"
+        );
+        assert!(
+            out.contains("game.loft:7"),
+            "expected source location; got {out:?}"
+        );
+        drop_log(lg);
+    }
+
+    #[test]
+    fn runtime_kind_assertion_failed_logs_at_error() {
+        let mut lg = tmp_logger();
+        let kind = RuntimeErrorKind::AssertionFailed {
+            message: "x == 5".into(),
+        };
+        lg.log_runtime_kind(&kind, Some(&pos("test.loft", 12)));
+        let out = read_log(&lg);
+        assert!(
+            out.contains("ERROR"),
+            "expected ERROR severity; got {out:?}"
+        );
+        assert!(out.contains("[assertion_failed]"));
+        drop_log(lg);
+    }
+
+    #[test]
+    fn runtime_kind_div_by_zero_logs_at_warn() {
+        let mut lg = tmp_logger();
+        lg.log_runtime_kind(&RuntimeErrorKind::DivideByZero, Some(&pos("math.loft", 3)));
+        let out = read_log(&lg);
+        assert!(out.contains("WARN"), "expected WARN severity; got {out:?}");
+        assert!(out.contains("[divide_by_zero]"));
+        assert!(out.contains("divide by zero"));
+        drop_log(lg);
+    }
+
+    #[test]
+    fn runtime_kind_oob_carries_structured_fields() {
+        let mut lg = tmp_logger();
+        lg.log_runtime_kind(
+            &RuntimeErrorKind::IndexOutOfBounds { idx: 5, len: 3 },
+            Some(&pos("v.loft", 8)),
+        );
+        let out = read_log(&lg);
+        assert!(out.contains("[index_out_of_bounds]"));
+        assert!(
+            out.contains("index 5 out of bounds for length 3"),
+            "expected idx + len in message; got {out:?}"
+        );
+        drop_log(lg);
+    }
+
+    #[test]
+    fn runtime_kind_stack_overflow_is_fatal() {
+        let mut lg = tmp_logger();
+        lg.log_runtime_kind(&RuntimeErrorKind::StackOverflow, None);
+        let out = read_log(&lg);
+        assert!(
+            out.contains("FATAL"),
+            "expected FATAL severity; got {out:?}"
+        );
+        assert!(out.contains("[stack_overflow]"));
+        drop_log(lg);
+    }
+
+    #[test]
+    fn runtime_kind_without_position_logs_with_empty_file() {
+        let mut lg = tmp_logger();
+        lg.log_runtime_kind(
+            &RuntimeErrorKind::NullDereference,
+            None, // no position resolved
+        );
+        let out = read_log(&lg);
+        assert!(out.contains("[null_dereference]"));
+        // No source file → empty file field renders as `:0`
+        assert!(
+            out.contains(":0"),
+            "expected line:0 when no position; got {out:?}"
+        );
+        drop_log(lg);
+    }
+
+    #[test]
+    fn runtime_kind_rate_limit_suppresses_repeats() {
+        let mut lg = tmp_logger();
+        // Override rate limit so the suppression path fires within the test.
+        lg.config.rate_per_minute = 2;
+        for _ in 0..5 {
+            lg.log_runtime_kind(&RuntimeErrorKind::DivideByZero, Some(&pos("loop.loft", 4)));
+        }
+        let out = read_log(&lg);
+        // Should see only 2 emissions of the divide-by-zero line (the rate cap);
+        // the remaining 3 are suppressed.
+        let div_lines = out
+            .lines()
+            .filter(|l| l.contains("[divide_by_zero]"))
+            .count();
+        assert_eq!(div_lines, 2, "expected rate cap to fire; got {out:?}");
+        drop_log(lg);
+    }
 }

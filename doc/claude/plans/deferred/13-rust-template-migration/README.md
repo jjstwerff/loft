@@ -46,8 +46,8 @@ The trigger to unpause:
   feature (e.g. interfaces, generics extensions, new operators)
   forces touching ~50+ Op annotations.  Doing that across the
   dual path costs more than unifying first.
-- **Contributor appetite for multi-week structural work** — plan
-  13 is 2-3 weeks of focused effort with low user-visible payoff.
+- **Contributor appetite for H-effort structural work** — plan
+  13 is large-effort (H) structural work with low user-visible payoff.
 
 Without one of those triggers, plan 13 is busywork.
 
@@ -118,7 +118,7 @@ floor is).  Per zero-regression rule.
 
 ## What plan 13 would cost
 
-- 2-3 weeks of focused work.
+- Large effort (H) — structural refactor across ~200 sites.
 - ~2000-6000 lines of new emitter code (templates were dense;
   emitters are verbose).
 - Onboarding regression: adding a new Op currently requires a

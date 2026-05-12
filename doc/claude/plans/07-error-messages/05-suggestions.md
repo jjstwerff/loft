@@ -182,3 +182,31 @@ suggestion-quality regression target.
 | Wrong candidate scope produces misleading suggestions ("did you mean a function called `x`?" when the user typed a struct field `x`) | 05.A's per-site scoping is the safety belt; never use a wildcard "all names" set. |
 | Levenshtein cost on large candidate lists | Stdlib has ~300 fn names; the pass runs only on a not-found error (rare).  No hot path. |
 | `Level::Note` insertion changes ordering in `Diagnostics::lines()` and breaks other consumers | `lines()` is an iteration order, not a sort.  Notes are appended after their parent error; existing consumers see them as additional entries.  Audit existing callers (test harnesses, formatter): all just print/concat. |
+
+## Cross-reference — `Level::Note` reuse for 4e.2 / 4h hints
+
+Phase 4e.2 (undefended-fault-site warning) and 4h (`not null`
+field-reminder hint) both consume the `Level::Note` machinery
+this phase introduces — each warning ends with `note:` lines
+naming the three defense patterns (length check / `??` /
+`if x != null`).  Land 5.2 (`Level::Note` between Debug and
+Warning + ordering rules) BEFORE 4e.2 to avoid 4e.2 inventing
+its own ad-hoc note rendering.  4e.2 / 4h then reuse the
+note-line emission pattern documented in 5.12.
+
+Concretely: 4e.2 plumbs the diagnostic as
+
+```rust
+diagnostic_with_notes(self.lexer, Level::Warning,
+    format!("`v[i]` may produce null on out-of-bounds with no defensive check"),
+    vec![
+        "guard with `if i < len(v) { ... }` before indexing".into(),
+        "or accept null with `v[i] ?? <fallback>`".into(),
+        "or follow with `if x != null { ... }` to catch the null".into(),
+    ]);
+```
+
+The renderer cascades each note as `= note: …` indented under
+the warning line — same shape as phase 5's "did you mean …?"
+suggestions.  No new diagnostic infrastructure needed for
+4e.2 / 4h beyond what 5.2 ships.

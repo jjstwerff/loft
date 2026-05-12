@@ -45,7 +45,7 @@ fn main() {
   assert(b == "no", "if-expr false branch");
   // --- Null is falsy ---
   z = 0;
-  assert(!(1 / z), "null is falsy");
+  assert(!(1 / z ?? null), "null is falsy");
   // --- Chained comparisons ---
   v = 5;
   assert(v > 3 && v < 10, "chained comparison");

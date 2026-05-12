@@ -196,15 +196,32 @@ fn undefined_as() {
 
 #[test]
 fn undefined_enum() {
+    // V2 is undefined here — used as a stand-in to trigger the
+    // "unknown variable" diagnostic.  The post-P246 warning sweep
+    // also flags V2 as UPPER_CASE-without-const because the parser
+    // synthesised a placeholder local for it during recovery.
     code!("enum E1 { V1 }\nfn test(v: E1) -> boolean { v > V2 }")
-        .error("Unknown variable 'V2' — did you mean 'v'? at undefined_enum:2:37");
+        .error("Unknown variable 'V2' — did you mean 'v'? at undefined_enum:2:37")
+        .warning(
+            "Variable 'V2' is UPPER_CASE — that style is reserved for constants.  \
+             Declare with `const V2 = …` to make it immutable, or rename to lower_case. \
+             at undefined_enum:2:37",
+        );
 }
 
 #[test]
 fn unknown_sizeof() {
+    // Same shape as undefined_enum — `C` is undeclared, the parser
+    // synthesises a placeholder local that the UPPER_CASE-without-
+    // const sweep then flags (P246 follow-up).
     code!("fn test() { sizeof(C); }")
         .error("Expect a variable or type after sizeof at unknown_sizeof:1:22")
-        .error("Unknown variable 'C' at unknown_sizeof:1:22");
+        .error("Unknown variable 'C' at unknown_sizeof:1:22")
+        .warning(
+            "Variable 'C' is UPPER_CASE — that style is reserved for constants.  \
+             Declare with `const C = …` to make it immutable, or rename to lower_case. \
+             at unknown_sizeof:1:22",
+        );
 }
 
 #[test]
@@ -973,7 +990,7 @@ fn p85b_enum_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("enum E { Foo, Bar }\nfn test() {}").error(&format!(
         "enum 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:365:24 — pick a different name \
+         at default{s}01_code.loft:371:24 — pick a different name \
          at p85b_enum_shadowing_stdlib_constant_emits_diagnostic:1:9"
     ));
 }
@@ -983,7 +1000,7 @@ fn p85b_struct_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("struct E { n: integer }\nfn test() {}").error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:365:24 — pick a different name \
+         at default{s}01_code.loft:371:24 — pick a different name \
          at p85b_struct_shadowing_stdlib_constant_emits_diagnostic:1:11"
     ));
 }
@@ -993,7 +1010,7 @@ fn p85b_type_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("type E = integer;\nfn test() {}").error(&format!(
         "type 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:365:24 — pick a different name \
+         at default{s}01_code.loft:371:24 — pick a different name \
          at p85b_type_shadowing_stdlib_constant_emits_diagnostic:1:9"
     ));
 }
@@ -1003,7 +1020,7 @@ fn p85b_constant_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("E = 42;\nfn test() {}").error(&format!(
         "constant 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:365:24 — pick a different name \
+         at default{s}01_code.loft:371:24 — pick a different name \
          at p85b_constant_shadowing_stdlib_constant_emits_diagnostic:1:8"
     ));
 }

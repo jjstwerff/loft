@@ -277,14 +277,18 @@ in `Arc` for zero-copy sharing.
 
 ```rust
 pub struct ParallelCtx {
-    pub bytecode:  *const Vec<u8>,
-    pub text_code: *const Vec<u8>,
-    pub library:   *const Vec<Call>,
-    pub data:      *const Data,
+    pub bytecode: *const Arc<Vec<u8>>,
+    pub library:  *const Arc<Vec<Call>>,
+    pub data:     *const Data,
+    // Plus stack_trace_lib_nr cache (worker-snapshot helper).
 }
 unsafe impl Send for ParallelCtx {}
 unsafe impl Sync for ParallelCtx {}
 ```
+
+**Plan-28 Phase A note:** the previous `text_code: *const Vec<u8>`
+field was retired when long string constants moved into `CONST_STORE`.
+See [DATABASE.md § Constant store](DATABASE.md#constant-store-const_store).
 
 Stored as `Stores.parallel_ctx: Option<Box<ParallelCtx>>`. Populated by `State::execute()` immediately before the main execution loop using raw pointers into the same `State`. Cleared to `None` after the loop finishes. Enables native functions called during execution (e.g. `n_parallel_for_int` in `src/native.rs`) to access the interpreter's bytecode and `Data` metadata, which is not otherwise reachable from `&mut Stores`.
 

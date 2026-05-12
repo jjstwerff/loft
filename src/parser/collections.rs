@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Context, I32, Level, LexItem, OutputState, Parser, Parts, Type, Value, diagnostic_format,
-    v_block, v_if, v_loop, v_set, var_size,
+    Context, DefType, I32, Level, LexItem, OutputState, Parser, Parts, Type, Value,
+    diagnostic_format, v_block, v_if, v_loop, v_set, var_size,
 };
+use crate::variables::Function;
 
 /// Plan-06 ARC.md A3 / A3.5 — how to convert the i64 returned by
 /// `parallel_buf_get_narrow` back to the worker's actual return type.
@@ -25,6 +26,12 @@ enum NarrowWrap {
     /// 0 or 1, never i64::MIN, so the conv would yield true for
     /// both.  `OpNeInt` gives the right 0 → false / 1 → true mapping.
     NeZero,
+    /// ARC.md A3.6 — use a different buf_get fn-name instead of
+    /// `n_parallel_buf_get_narrow`, and skip the wrap (the named
+    /// fn already returns the typed value).  Used for `single`
+    /// (routes through `n_parallel_buf_get_single` returning
+    /// `single` directly via `f32::from_bits`).
+    TypedBufGet(&'static str),
 }
 
 /// Plan-06 ARC.md A3 / A3.5 — descriptor for routing a parallel
@@ -59,9 +66,10 @@ struct NarrowRoute {
 /// | `Enum(_, false, _)` (no payload)  | 1     | false      | `OpCall(OpCastEnumFromInt)`   |
 /// | anything else                     | None — falls through to other routes                     |
 ///
-/// 8-byte Integer / Single / Float stay off this route — Single /
-/// Float await A3.6's bit-cast IR Ops; wide Integer goes through
-/// the regular `n_parallel_queue`.
+/// 8-byte Integer + Float go through the regular `n_parallel_queue`
+/// (wide u64 rows; Float reads via `parallel_buf_get_float`).
+/// Single routes here with `TypedBufGet` — its f32 bit pattern fits
+/// stride 4 and `parallel_buf_get_single` recovers the typed value.
 fn narrow_route_for(ret_type: &Type) -> Option<NarrowRoute> {
     match ret_type {
         Type::Integer(spec) => match spec.byte_width(true) {
@@ -87,6 +95,15 @@ fn narrow_route_for(ret_type: &Type) -> Option<NarrowRoute> {
             signed: false,
             wrap: NarrowWrap::OpCall("OpCastEnumFromInt"),
         }),
+        // ARC.md A3.6 — `single` (f32) routes through the narrow
+        // path with stride 4.  No wrap: the typed buf_get fn
+        // returns `single` directly via `f32::from_bits` over the
+        // same per-row bytes.  Symmetric with Store::set_single.
+        Type::Single => Some(NarrowRoute {
+            width: 4,
+            signed: false,
+            wrap: NarrowWrap::TypedBufGet("n_parallel_buf_get_single"),
+        }),
         _ => None,
     }
 }
@@ -110,7 +127,16 @@ impl Parser {
             v_set(index_var, Value::Var(iter_var)),
             v_set(
                 res_var,
-                self.cl("OpTextCharacter", &[code.clone(), Value::Var(iter_var)]),
+                // Plan-07 phase 4 step 4.8 — for-loop iteration over
+                // text uses the *Nullable* peer of OpTextCharacter;
+                // OOB returns char(0) which the for-loop driver uses
+                // as its end-of-iteration signal.  User-facing `text[i]`
+                // (parser/fields.rs:750) keeps the raising
+                // OpTextCharacter.
+                self.cl(
+                    "OpTextCharacterNullable",
+                    &[code.clone(), Value::Var(iter_var)],
+                ),
             ),
             v_set(iter_var, self.cl("OpAddInt", &[Value::Var(iter_var), l])),
             Value::Var(res_var),
@@ -196,13 +222,19 @@ impl Parser {
                     } else {
                         self.database.size(db_tp)
                     };
+                    // Plan-07 phase 4 step 4.6 — for-loop iteration uses
+                    // the *Nullable* peers; OOB returns a null DbRef which
+                    // the loop's pre-body null-check
+                    // (parser/collections.rs:1492-1499) converts to false
+                    // and breaks.  User-facing `v[i]` (parser/fields.rs:629-640)
+                    // keeps the raising OpGetVector / OpVectorRef.
                     let mut ref_expr = self.cl(
-                        "OpGetVector",
+                        "OpGetVectorNullable",
                         &[code.clone(), Value::Int(i32::from(size)), i.clone()],
                     );
                     if let Type::Reference(_, _) = *vtp.clone() {
                         if self.database.is_linked(db_tp) {
-                            ref_expr = self.cl("OpVectorRef", &[code.clone(), i.clone()]);
+                            ref_expr = self.cl("OpVectorRefNullable", &[code.clone(), i.clone()]);
                         }
                     } else if matches!(*vtp.clone(), Type::Tuple(_)) {
                         // P189b: vector-of-tuple — keep ref_expr as the
@@ -764,6 +796,58 @@ use #count instead"
     }
 
     #[allow(clippy::too_many_lines)]
+    /// P242: when `d_nr` is the type variable of the current
+    /// generic-function context AND that variable's bound
+    /// supplies a `to_text(self: Self) -> text` method, return a
+    /// `Value::Call(t_<len><tvname>_to_text, [format])` IR node.
+    /// Otherwise return `None`.
+    ///
+    /// Used by `append_data` to route generic-T format-string
+    /// interpolation (`println("{x}")` where `x: T`) through the
+    /// bound's stub method.  At monomorphisation time
+    /// `re_resolve_call` substitutes the stub with the concrete
+    /// type's implementation, just like an explicit
+    /// `x.to_text()` call site.
+    fn try_bound_to_text_call(&mut self, d_nr: u32, format: &Value) -> Option<Value> {
+        if self.context == u32::MAX {
+            return None;
+        }
+        let ctx_def = self.data.def(self.context);
+        if ctx_def.def_type != DefType::Generic {
+            return None;
+        }
+        // Confirm `d_nr` is the type variable of the current generic
+        // context: it should be a struct-typed def whose name appears
+        // as the type variable across the fn's attributes.
+        if self.data.def_type(d_nr) != DefType::Struct {
+            return None;
+        }
+        let tv_name = self.data.def(d_nr).name.clone();
+        if tv_name.is_empty() {
+            return None;
+        }
+        let stub_name = format!("t_{}{}_{}", tv_name.len(), tv_name, "to_text");
+        let stub_nr = self.data.def_nr(&stub_name);
+        if stub_nr == u32::MAX {
+            return None;
+        }
+        // The text-returning bound stub takes a hidden `__work_1:
+        // RefVar(Text)` second param (added by `parse_function`'s
+        // I9-text path).  Allocate a fresh work-text and wrap with
+        // `OpCreateStack` so the call site mirrors what
+        // `convert(text → &text)` would auto-generate.
+        let wv = self.vars.work_text(&mut self.lexer);
+        let work_arg = v_block(
+            vec![
+                v_set(wv, Value::Text(String::new())),
+                self.cl("OpCreateStack", &[Value::Var(wv)]),
+            ],
+            Type::Reference(self.data.def_nr("reference"), vec![wv]),
+            "p242_to_text_work",
+        );
+        Some(Value::Call(stub_nr, vec![format.clone(), work_arg]))
+    }
+
     pub(crate) fn append_data(
         &mut self,
         tp: Type,
@@ -854,17 +938,33 @@ use #count instead"
                 self.append_iter(list, append, append_value, vtp.as_ref(), format, state);
             }
             Type::Reference(d_nr, _) => {
-                let fmt = format.clone();
-                let db_tp = self.data.def(d_nr).known_type;
-                list.push(self.cl(
-                    &(start.to_owned() + "Database"),
-                    &[
-                        var,
-                        fmt,
-                        Value::Int(i32::from(db_tp)),
-                        Value::Int(state.db_format()),
-                    ],
-                ));
+                // P242 fix: when `d_nr` is the current generic
+                // function's type variable AND the bound supplies
+                // a `to_text` method, route the format through it
+                // before dispatching as text.  Without this, the
+                // codegen falls back to OpFormatDatabase with a
+                // non-DbRef arg at monomorphisation time (interp
+                // prints "null" then panics; native rejects with
+                // rustc E0308 "expected DbRef").  The bound's
+                // `to_text` stub (`t_<len><tvname>_to_text`) is
+                // already created by `parse_function`'s I7/I8.1
+                // path; `re_resolve_call` substitutes it with the
+                // concrete type's impl at instantiation time.
+                if let Some(text_call) = self.try_bound_to_text_call(d_nr, format) {
+                    self.append_data_text(list, start, var, text_call, state);
+                } else {
+                    let fmt = format.clone();
+                    let db_tp = self.data.def(d_nr).known_type;
+                    list.push(self.cl(
+                        &(start.to_owned() + "Database"),
+                        &[
+                            var,
+                            fmt,
+                            Value::Int(i32::from(db_tp)),
+                            Value::Int(state.db_format()),
+                        ],
+                    ));
+                }
             }
             Type::Enum(d_nr, is_ref, _) => {
                 let fmt = format.clone();
@@ -1058,7 +1158,65 @@ use #count instead"
     }
 
     pub(crate) fn parse_for(&mut self, code: &mut Value) {
-        if let Some(id) = self.lexer.has_identifier() {
+        // P235: tuple destructure — `for (a, b, ...) in items { ... }`.
+        // Parse the parenthesised name list now; later (after the iter
+        // type is known) we synthesize a temp loop var and prepend
+        // `Set(name_i, loop_var.<i>)` to the body so `a` / `b` resolve
+        // as if the user had written them.  Closes both par and
+        // non-par destructure with one rewrite (the par variant
+        // dispatches into `parse_parallel_for_loop` which inherits
+        // `id` from us).
+        let destructure_names: Option<Vec<String>> = if self.lexer.peek_token("(") {
+            self.lexer.token("(");
+            let mut names = Vec::new();
+            loop {
+                if let Some(n) = self.lexer.has_identifier() {
+                    names.push(n);
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expect identifier in for-destructure pattern"
+                    );
+                    let _ = self.lexer.has_token(")");
+                    return;
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            if !self.lexer.has_token(")") {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect ')' to close for-destructure pattern"
+                );
+                return;
+            }
+            if names.len() < 2 {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "for-destructure pattern requires at least 2 names; got {}",
+                    names.len()
+                );
+                return;
+            }
+            Some(names)
+        } else {
+            None
+        };
+
+        // P235: when destructuring, synthesize a loop var name from
+        // the source line/column; the user-named binders are defined
+        // later as proper variables and prepended to the body.
+        let id_opt: Option<String> = if destructure_names.is_some() {
+            let pos = self.lexer.peek().position.clone();
+            Some(format!("__destructure_t_{}_{}", pos.line, pos.pos))
+        } else {
+            self.lexer.has_identifier()
+        };
+        if let Some(id) = id_opt {
             self.lexer.token("in");
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
@@ -1163,10 +1321,19 @@ use #count instead"
                         &Value::Var(mat_var),
                         combined_fill,
                         loop_nr,
+                        destructure_names.as_deref(),
                     );
                     return;
                 }
-                self.parse_parallel_for_loop(code, &id, &in_type, &expr, fill, loop_nr);
+                self.parse_parallel_for_loop(
+                    code,
+                    &id,
+                    &in_type,
+                    &expr,
+                    fill,
+                    loop_nr,
+                    destructure_names.as_deref(),
+                );
                 return;
             }
             // CO1.5: detect coroutine for-loop before parse_for_iter_setup consumes expr.
@@ -1194,6 +1361,109 @@ use #count instead"
                 );
                 return;
             }
+            // P235 step 2: with for_var resolved, define each destructured
+            // binder as a proper variable typed as the matching tuple
+            // element.  The Set(name_i, TupleGet(for_var, i)) ops will be
+            // prepended to the body block once `parse_block` returns.
+            // Defining the variables BEFORE `parse_block` runs is essential
+            // — the body's references to `a` / `b` / etc. resolve through
+            // the parser's scope at parse time.
+            let destructure_setup: Vec<Value> = if let Some(names) = &destructure_names {
+                // Tuple element types come from one of two shapes:
+                //   - `Type::Tuple([T1, T2, ...])` — direct tuple type
+                //     (uncommon for for-loops: would require iterating
+                //     over a "tuple of …" rather than a vector<tuple>).
+                //   - `Type::Reference(d_nr, _)` where `def(d_nr).name`
+                //     starts with `__tuple<` — synthetic struct created
+                //     by `tuple_def`; element types live as attributes.
+                //     This is the common shape for `vector<(T1, T2)>`
+                //     iteration, mirroring P189b's element-access path
+                //     in `src/parser/operators.rs:608-658`.
+                let (elem_types_opt, ref_def_nr): (Option<Vec<Type>>, u32) = match &var_tp {
+                    Type::Tuple(elems) => (Some(elems.clone()), u32::MAX),
+                    Type::Reference(d_nr, _)
+                        if self.data.def(*d_nr).name.starts_with("__tuple<") =>
+                    {
+                        let elems: Vec<Type> = self
+                            .data
+                            .def(*d_nr)
+                            .attributes
+                            .iter()
+                            .map(|a| a.typedef.clone())
+                            .collect();
+                        (Some(elems), *d_nr)
+                    }
+                    _ => (None, u32::MAX),
+                };
+                if let Some(elem_types) = elem_types_opt {
+                    if elem_types.len() == names.len() {
+                        // Build per-element read.  Two shapes:
+                        //   - Direct Tuple: `Value::TupleGet(for_var, i)`
+                        //     — reads from the var's stack-resident
+                        //     tuple slot.
+                        //   - Reference(__tuple<…>): use `get_val` with
+                        //     the synthetic struct's per-attribute byte
+                        //     offset — same path P189b's `.0` / `.1`
+                        //     element access takes.
+                        names
+                            .iter()
+                            .enumerate()
+                            .map(|(i, name)| {
+                                let elem_tp = elem_types[i].clone();
+                                let var = self.create_var(name, &elem_tp);
+                                self.vars.defined(var);
+                                self.vars.in_use(var, true);
+                                let read = if ref_def_nr == u32::MAX {
+                                    Value::TupleGet(for_var, i as u16)
+                                } else {
+                                    let elem_offset = if let Some(offs) =
+                                        crate::data::stored_tuple_offsets_for_def(
+                                            &self.data,
+                                            &self.database,
+                                            ref_def_nr,
+                                            elem_types.len(),
+                                        ) {
+                                        u32::from(offs[i])
+                                    } else {
+                                        crate::data::element_offsets(&elem_types)[i] as u32
+                                    };
+                                    self.get_val(
+                                        &elem_tp,
+                                        false,
+                                        elem_offset,
+                                        Value::Var(for_var),
+                                        u32::MAX,
+                                    )
+                                };
+                                v_set(var, read)
+                            })
+                            .collect()
+                    } else {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "for-destructure: pattern has {} names but iterated tuple has {} elements",
+                                names.len(),
+                                elem_types.len()
+                            );
+                        }
+                        Vec::new()
+                    }
+                } else {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "for-destructure requires a tuple element type, got {}",
+                            var_tp.name(&self.data)
+                        );
+                    }
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
             let for_next = v_set(for_var, iter_next);
             self.vars.loop_var(for_var);
             let in_loop = self.in_loop;
@@ -1202,6 +1472,21 @@ use #count instead"
             let loop_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             self.parse_block("for", &mut block, &Type::Void);
+            // P235 step 3: prepend the destructure Set ops so each
+            // iteration unpacks the loop var into the user-named binders
+            // before the user's body runs.
+            if !destructure_setup.is_empty() {
+                if let Value::Block(ref mut bl) = block {
+                    for s in destructure_setup.into_iter().rev() {
+                        bl.operators.insert(0, s);
+                    }
+                } else {
+                    let inner = std::mem::replace(&mut block, Value::Null);
+                    let mut ops = destructure_setup;
+                    ops.push(inner);
+                    block = v_block(ops, Type::Void, "destructure_for_body");
+                }
+            }
             self.vars.restore_write_state(&loop_write_state);
             let count = self.vars.loop_counter();
             self.in_loop = in_loop;
@@ -1366,8 +1651,193 @@ use #count instead"
         Some((fill_ir, mat_var, mat_in_type))
     }
 
+    /// P235 par half — parse the worker call inside a destructured
+    /// par expression and synthesize a wrapper fn that bridges the
+    /// gap between par dispatch's "one per-iteration arg" model and
+    /// the user's multi-arg-from-tuple call shape.
+    ///
+    /// Given `for (a, b) in pairs par(r = work(a, b), N) { ... }`
+    /// (a, b already defined in scope as tuple-element vars by
+    /// `parse_parallel_for_loop`), this method parses `work(a, b)`
+    /// and synthesizes:
+    ///
+    /// ```text
+    /// fn __par_destructure_w_<N>(t: tuple_type) -> ret_type {
+    ///     work(t.<a_idx>, t.<b_idx>, ...)
+    /// }
+    /// ```
+    ///
+    /// Each user arg that is `Var(destructure_var_nrs[i])` becomes
+    /// a tuple element read at the matching tuple position; other
+    /// args (e.g. context constants) pass through verbatim.  The
+    /// par dispatch then calls the wrapper with the tuple loop
+    /// element as its single per-iteration arg.
+    ///
+    /// Returns the wrapper's d_nr (or u32::MAX on error), the
+    /// return type, and empty extras (no context args — they're
+    /// baked into the wrapper body).
+    pub(crate) fn parse_destructure_par_worker(
+        &mut self,
+        tuple_tp: &Type,
+        destructure_var_nrs: &[u16],
+    ) -> (u32, Type, Vec<Value>, Vec<Type>) {
+        // Parse worker fn name + ( arg, arg, ... )
+        let Some(work_id) = self.lexer.has_identifier() else {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect function name in par(...) destructure worker"
+                );
+            }
+            return (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new());
+        };
+        let work_d_nr = {
+            let prefixed = format!("n_{work_id}");
+            let nr = self.data.def_nr(&prefixed);
+            if nr == u32::MAX {
+                self.data.def_nr(&work_id)
+            } else {
+                nr
+            }
+        };
+        if !self.lexer.has_token("(") {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect '(' after worker name '{work_id}'"
+                );
+            }
+            return (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new());
+        }
+        let mut user_args: Vec<Value> = Vec::new();
+        if !self.lexer.peek_token(")") {
+            loop {
+                let mut arg = Value::Null;
+                self.expression(&mut arg);
+                user_args.push(arg);
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+        }
+        self.lexer.token(")");
+
+        if work_d_nr == u32::MAX {
+            if !self.first_pass {
+                diagnostic!(self.lexer, Level::Error, "Unknown function '{work_id}'");
+            }
+            return (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new());
+        }
+        if !self.first_pass && !matches!(self.data.def_type(work_d_nr), DefType::Function) {
+            diagnostic!(self.lexer, Level::Error, "'{work_id}' is not a function");
+            return (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new());
+        }
+        let ret_type = self.data.def(work_d_nr).returned.clone();
+        if self.first_pass {
+            // First pass: return the user worker so the parser's
+            // downstream type-shape decisions (return_size, ladder
+            // routing) see realistic values.  Argcount checks in
+            // build_parallel_for_ir are gated on !first_pass, so
+            // mismatched extras don't fire here.  Second pass
+            // synthesizes the real wrapper.
+            return (work_d_nr, ret_type, Vec::new(), Vec::new());
+        }
+        self.data.def_used(work_d_nr);
+
+        // Resolve tuple element types + def_nr for offsets
+        let elem_types: Vec<Type> = match tuple_tp {
+            Type::Tuple(elems) => elems.clone(),
+            Type::Reference(d, _) => self
+                .data
+                .def(*d)
+                .attributes
+                .iter()
+                .map(|a| a.typedef.clone())
+                .collect(),
+            _ => Vec::new(),
+        };
+        let tuple_d_nr = match tuple_tp {
+            Type::Reference(d, _) => *d,
+            _ => u32::MAX,
+        };
+
+        // Allocate wrapper def
+        let wrapper_pos = self.lexer.pos().clone();
+        let wrapper_file = wrapper_pos.file.clone();
+        // Use lexer line:col + work fn name for a stable, unique
+        // synthetic name (avoids needing a Parser-level counter).
+        let wrapper_name = format!(
+            "__par_destructure_w_{}_{}_{work_id}",
+            wrapper_pos.line, wrapper_pos.pos
+        );
+        let wrapper_d_nr = self
+            .data
+            .add_def(&wrapper_name, &wrapper_pos, DefType::Function);
+        let _ = self
+            .data
+            .add_attribute(&mut self.lexer, wrapper_d_nr, "t", tuple_tp.clone());
+        self.data.set_returned(wrapper_d_nr, ret_type.clone());
+
+        // Build wrapper variable table
+        let mut wrapper_vars = Function::new(&wrapper_name, &wrapper_file);
+        let t_var = wrapper_vars.add_variable("t", tuple_tp, &mut self.lexer);
+        wrapper_vars.become_argument(t_var);
+        wrapper_vars.defined(t_var);
+
+        // Translate user_args: Var(destructure_var_nrs[i]) → tuple
+        // element read; other shapes pass through verbatim.
+        let mut wrapper_call_args: Vec<Value> = Vec::with_capacity(user_args.len());
+        for arg in &user_args {
+            let arg_var_nr = if let Value::Var(v) = arg.unspan() {
+                Some(*v)
+            } else {
+                None
+            };
+            if let Some(v) = arg_var_nr
+                && let Some(idx) = destructure_var_nrs.iter().position(|&dv| dv == v)
+            {
+                let elem_offset = if tuple_d_nr == u32::MAX {
+                    crate::data::element_offsets(&elem_types)[idx] as u32
+                } else if let Some(offs) = crate::data::stored_tuple_offsets_for_def(
+                    &self.data,
+                    &self.database,
+                    tuple_d_nr,
+                    elem_types.len(),
+                ) {
+                    u32::from(offs[idx])
+                } else {
+                    crate::data::element_offsets(&elem_types)[idx] as u32
+                };
+                let read = self.get_val(
+                    &elem_types[idx],
+                    false,
+                    elem_offset,
+                    Value::Var(t_var),
+                    u32::MAX,
+                );
+                wrapper_call_args.push(read);
+            } else {
+                wrapper_call_args.push(arg.clone());
+            }
+        }
+
+        let body_call = Value::Call(work_d_nr, wrapper_call_args);
+        let body = v_block(
+            vec![Value::Return(Box::new(body_call))],
+            ret_type.clone(),
+            "destructure_wrapper",
+        );
+        self.data.definitions[wrapper_d_nr as usize].code = body;
+        self.data.definitions[wrapper_d_nr as usize].variables = wrapper_vars;
+
+        (wrapper_d_nr, ret_type, Vec::new(), Vec::new())
+    }
+
     // Desugar `for a in vec par(b = worker(a), N) { body }` into an
     // index-based loop over the `parallel_for` result vector.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn parse_parallel_for_loop(
         &mut self,
         code: &mut Value,
@@ -1376,6 +1846,7 @@ use #count instead"
         vec_expr: &Value,
         fill: Value,
         loop_nr: u16,
+        destructure_names: Option<&[String]>,
     ) {
         // Consume opening '('.
         self.lexer.token("(");
@@ -1443,9 +1914,76 @@ use #count instead"
             self.vars.in_use(elem_var_nr, true);
         }
 
+        // P235 par half: when the for-loop binds a tuple destructure
+        // (`for (a, b) in pairs par(r = work(a, b), N) { ... }`),
+        // the destructured names need to be in scope BEFORE
+        // parse_parallel_worker parses the worker call.  Define them
+        // here as proper variables typed from the tuple's element
+        // types — same pattern as the non-par destructure setup at
+        // parse_for:1289-1346.  The variables persist through the
+        // body too (matching non-par destructure semantics).
+        //
+        // The worker call itself is parsed via a destructure-aware
+        // path (`parse_destructure_par_worker`) that captures ALL
+        // user args (parse_parallel_worker dummies the first arg)
+        // and synthesizes a wrapper fn `__par_destructure_w_<N>(t)
+        // -> ret { work(t.0, t.1, ...) }`.  Par dispatch then calls
+        // the wrapper with the tuple loop element as its single arg.
+        let destructure_var_nrs: Option<Vec<u16>> = if let Some(names) = destructure_names {
+            let elem_types_opt: Option<Vec<Type>> = match &elem_tp {
+                Type::Tuple(elems) => Some(elems.clone()),
+                Type::Reference(d_nr, _) if self.data.def(*d_nr).name.starts_with("__tuple<") => {
+                    Some(
+                        self.data
+                            .def(*d_nr)
+                            .attributes
+                            .iter()
+                            .map(|a| a.typedef.clone())
+                            .collect(),
+                    )
+                }
+                _ => None,
+            };
+            if let Some(elem_types) = elem_types_opt {
+                if elem_types.len() == names.len() {
+                    Some(
+                        names
+                            .iter()
+                            .enumerate()
+                            .map(|(i, name)| {
+                                let var = self.create_var(name, &elem_types[i]);
+                                self.vars.defined(var);
+                                self.vars.in_use(var, true);
+                                var
+                            })
+                            .collect(),
+                    )
+                } else {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "for-destructure: pattern has {} names but iterated tuple has {} elements",
+                            names.len(),
+                            elem_types.len()
+                        );
+                    }
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // Resolve worker function: consumes the worker call tokens up to the ','.
         let (fn_d_nr, ret_type, extra_vals, _extra_types) =
-            self.parse_parallel_worker(elem_var, &elem_tp);
+            if let Some(d_var_nrs) = destructure_var_nrs.as_ref() {
+                self.parse_destructure_par_worker(&elem_tp, d_var_nrs)
+            } else {
+                self.parse_parallel_worker(elem_var, &elem_tp)
+            };
 
         // Plan-06 phase 5b' — par-safety DEEP check at ERROR level.
         // Recurses through user-fn callees until it hits a direct
@@ -1644,10 +2182,14 @@ use #count instead"
                 | Type::Vector(_, _)
                 | Type::Unknown(_)
         );
+        // ARC.md A3.6 — `float` (8B f64) joins 8B Integer on the
+        // wide-Queue path; the body's read goes through
+        // `parallel_buf_get_float` for typed `f64::from_bits` recovery.
         let early_ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
             &Type::Integer(*spec),
             &Context::Argument,
-        )) == 8);
+        )) == 8)
+            || matches!(ret_type, Type::Float);
         // Plan-06 ARC.md A3 / A3.5 — narrow primitive returns route
         // through n_parallel_queue_narrow.  The buf_get_narrow result
         // is i64; for non-Integer shapes we wrap with a conversion Op
@@ -1856,17 +2398,15 @@ use #count instead"
                 | Type::Vector(_, _)
                 | Type::Unknown(_)
         );
-        let light_m = if is_primitive_return && fn_d_nr != u32::MAX {
-            self.check_light_eligible(fn_d_nr)
-        } else {
-            None
-        };
-        let actual_par_d_nr = if light_m.is_some() {
-            let d = self.data.def_nr("n_parallel_for_light");
-            if d == u32::MAX { par_for_d_nr } else { d }
-        } else {
-            par_for_d_nr
-        };
+        // ARC.md A4 (closed 2026-05-07) — `n_parallel_for_light` was
+        // retired; every primitive return type now routes through the
+        // Queue family (route_int_queue / route_narrow_queue / etc.).
+        // `actual_par_d_nr` falls back to `n_parallel_for` only for
+        // shapes the Queue family doesn't cover (Tuple returns,
+        // pending A7).  The native body of `n_parallel_for` panics
+        // with a clear diagnostic if it ever runs.
+        let _ = is_primitive_return; // light_m elimination retained for future scope-analysis hooks
+        let actual_par_d_nr = par_for_d_nr;
 
         // parallel_for(input, elem_size, return_size, threads, fn_d_nr, [pool_m], extra1, ..., n_extra)
         // n_extra is pushed LAST so it's on top of the stack for popping first.
@@ -1879,7 +2419,7 @@ use #count instead"
             Value::Int(fn_d_nr as i32),
         ];
         // pool_m is hardcoded in the native function (avoids stack-ordering complexity)
-        let _ = light_m;
+        // ARC.md A4: light_m elimination — `n_parallel_for_light` was retired
         pf_args.extend(extra_args);
         pf_args.push(Value::Int(n_extra as i32));
 
@@ -1928,10 +2468,13 @@ use #count instead"
         let queue_fn_d_nr = self.data.def_nr("n_parallel_queue_fn");
         let buf_get_fn_d_nr = self.data.def_nr("n_parallel_buf_get_fn");
         let buf_drop_fn_d_nr = self.data.def_nr("n_parallel_buf_drop_fn");
+        // ARC.md A3.6 — `float` (8B f64) joins 8B Integer on the
+        // wide-Queue path (mirrors `early_ret_size_8`).
         let ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
             &Type::Integer(*spec),
             &Context::Argument,
-        )) == 8);
+        )) == 8)
+            || matches!(ret_type, Type::Float);
         // Plan-06 ARC.md A3 / A3.5 — narrow primitive return routing.
         // Mirrors the early-gate logic; see comment above for shape
         // coverage.
@@ -2032,40 +2575,77 @@ use #count instead"
             let route = narrow_route
                 .as_ref()
                 .expect("narrow_route set when route_narrow_queue is true");
-            let raw_call = Value::Call(
-                buf_get_narrow_d_nr,
-                vec![
-                    Value::Var(idx_var),
-                    Value::Int(i32::from(route.width)),
-                    Value::Int(i32::from(route.signed)),
-                ],
-            );
-            match &route.wrap {
-                NarrowWrap::None => raw_call,
-                NarrowWrap::OpCall(conv_name) => {
-                    let conv_d_nr = self.data.def_nr(conv_name);
-                    if conv_d_nr == u32::MAX {
-                        // Defensive: stripped stdlib without the conv
-                        // Op.  Skip the wrap and let downstream type-
-                        // check catch the mismatch — much louder than
-                        // a silent miscompile.
-                        raw_call
-                    } else {
-                        Value::Call(conv_d_nr, vec![raw_call])
-                    }
+            // ARC.md A3.6 — TypedBufGet bypasses the i64 reader
+            // entirely.  The named buf_get fn is signature-typed
+            // (returns `single` etc.) and reads the same per-row
+            // bytes via a typed memcpy.  No wrap needed.
+            if let NarrowWrap::TypedBufGet(typed_fn_name) = &route.wrap {
+                let typed_d_nr = self.data.def_nr(typed_fn_name);
+                if typed_d_nr == u32::MAX {
+                    // Defensive: stripped stdlib without the typed
+                    // reader.  Fall back to the raw narrow buf_get
+                    // (will type-mismatch downstream — louder than
+                    // a silent miscompile).
+                    Value::Call(
+                        buf_get_narrow_d_nr,
+                        vec![
+                            Value::Var(idx_var),
+                            Value::Int(i32::from(route.width)),
+                            Value::Int(i32::from(route.signed)),
+                        ],
+                    )
+                } else {
+                    Value::Call(typed_d_nr, vec![Value::Var(idx_var)])
                 }
-                NarrowWrap::NeZero => {
-                    // Boolean wrap: `OpNeInt(buf_get, 0) -> boolean`.
-                    let ne_d_nr = self.data.def_nr("OpNeInt");
-                    if ne_d_nr == u32::MAX {
-                        raw_call
-                    } else {
-                        Value::Call(ne_d_nr, vec![raw_call, Value::Int(0)])
+            } else {
+                let raw_call = Value::Call(
+                    buf_get_narrow_d_nr,
+                    vec![
+                        Value::Var(idx_var),
+                        Value::Int(i32::from(route.width)),
+                        Value::Int(i32::from(route.signed)),
+                    ],
+                );
+                match &route.wrap {
+                    NarrowWrap::None => raw_call,
+                    NarrowWrap::OpCall(conv_name) => {
+                        let conv_d_nr = self.data.def_nr(conv_name);
+                        if conv_d_nr == u32::MAX {
+                            // Defensive: stripped stdlib without the conv
+                            // Op.  Skip the wrap and let downstream type-
+                            // check catch the mismatch — much louder than
+                            // a silent miscompile.
+                            raw_call
+                        } else {
+                            Value::Call(conv_d_nr, vec![raw_call])
+                        }
                     }
+                    NarrowWrap::NeZero => {
+                        // Boolean wrap: `OpNeInt(buf_get, 0) -> boolean`.
+                        let ne_d_nr = self.data.def_nr("OpNeInt");
+                        if ne_d_nr == u32::MAX {
+                            raw_call
+                        } else {
+                            Value::Call(ne_d_nr, vec![raw_call, Value::Int(0)])
+                        }
+                    }
+                    NarrowWrap::TypedBufGet(_) => unreachable!("handled above"),
                 }
             }
         } else if route_int_queue {
-            Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
+            // ARC.md A3.6 — Float returns reuse the wide u64-row
+            // queue but the body needs `parallel_buf_get_float` for
+            // typed `f64::from_bits` recovery.
+            if matches!(ret_type, Type::Float) {
+                let buf_get_float_d_nr = self.data.def_nr("n_parallel_buf_get_float");
+                if buf_get_float_d_nr == u32::MAX {
+                    Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
+                } else {
+                    Value::Call(buf_get_float_d_nr, vec![Value::Var(idx_var)])
+                }
+            } else {
+                Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
+            }
         } else if route_text_queue {
             Value::Call(buf_get_text_d_nr, vec![Value::Var(idx_var)])
         } else if route_ref_queue {
@@ -2094,8 +2674,14 @@ use #count instead"
                 }
                 other => other,
             };
+            // Plan-07 phase 4 step 4.6 — par-worker iteration over the
+            // result vector uses the Nullable peer (iteration site).
+            // `idx_var` is bounded by the parallel-loop driver so OOB
+            // shouldn't fire here, but keeping the Nullable shape
+            // makes the design rule "every iteration site emits
+            // Nullable" hold uniformly.
             let get_vec = self.cl(
-                "OpGetVector",
+                "OpGetVectorNullable",
                 &[
                     Value::Var(results_var.expect(
                         "materialised path requires results_var; queue gate let it slip through",
@@ -2158,13 +2744,16 @@ use #count instead"
         // apply the same inline-alias treatment to the outer
         // iterator variable `a`.  The desugared loop increments `idx`;
         // `a` is logically `items[idx]` on every iteration.  Rewriting
-        // `Var(a)` → `OpGetVector(items, elem_size, idx)` (plus
+        // `Var(a)` → `OpGetVectorNullable(items, elem_size, idx)` (plus
         // `get_field` for non-Reference element types, mirroring the
         // `b` path) means `a` never needs a slot.  Without this the
         // allocator leaves `a` at `stack_pos == u16::MAX` and codegen
         // panics `Incorrect var a[65535] versus N`.
+        //
+        // Plan-07 phase 4 step 4.6 — fused-for-par iteration site →
+        // Nullable peer (consistent with all other iteration sites).
         let a_get_vec = self.cl(
-            "OpGetVector",
+            "OpGetVectorNullable",
             &[vec_expr.clone(), Value::Int(elem_size), Value::Var(idx_var)],
         );
         let a_accessor = if matches!(elem_tp, Type::Reference(_, _)) {

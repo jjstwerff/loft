@@ -378,11 +378,23 @@ impl Output<'_> {
                 // Treat any of these the same as an explicit `stores`
                 // reference for pre-eval purposes so nested user-fn args
                 // (which also take `&mut stores`) get hoisted into bindings
-                // and avoid double-borrow.
+                // and avoid double-borrow.  Plan-07 phase 4 added more
+                // `s.X` calls (`s.raise`, `s.vec_get_or_raise`,
+                // `s.vec_ref_or_raise`, `s.text_char_or_raise`) that all
+                // route to `stores` via `src/generation/calls.rs`'s
+                // rewriter — register them here so wrap-emitting
+                // contexts (e.g. `stores.scratch.push(...)` around a
+                // text-returning call that uses these helpers) hoist
+                // the inner call into a `let _pre_N = ...` binding
+                // and avoid the rustc E0499 double-borrow.
                 let template_uses_stores = def_fn.rust.contains("stores")
                     || def_fn.rust.contains("s.database.")
                     || def_fn.rust.contains("s.const_refs")
-                    || def_fn.rust.contains("s.string_from_const_store");
+                    || def_fn.rust.contains("s.string_from_const_store")
+                    || def_fn.rust.contains("s.raise(")
+                    || def_fn.rust.contains("s.vec_get_or_raise(")
+                    || def_fn.rust.contains("s.vec_ref_or_raise(")
+                    || def_fn.rust.contains("s.text_char_or_raise(");
                 let needs_pre_eval_args = block_count > 0
                     || user_fn_count > 1
                     || (template_uses_stores && user_fn_count > 0)

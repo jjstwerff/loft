@@ -78,9 +78,13 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_parallel_queue_native",      abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_queue_text_native", abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_queue_ref_native",  abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_fold_native",       abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_get_native",    abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_get_text_native", abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_get_ref_native",  abi: Abi::Cell },
+    // ARC.md A3.6 — typed Single/Float readers.
+    RuntimeFn { name: "n_parallel_buf_get_single_native", abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_get_float_native",  abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_drop_native",     abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_drop_text_native", abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_drop_ref_native",  abi: Abi::Cell },
@@ -2291,6 +2295,110 @@ where
     n as i64
 }
 
+/// Plan-06 ARC.md A5b — native runtime entry for `par_fold(items, init,
+/// fn fold, threads)`.  Closure-based bridge mirroring `n_parallel_queue_native`
+/// but accumulates per-thread instead of buffering one result per row.
+///
+/// V1: `items` is `vector<integer>` (8-byte rows), `init` and the
+/// worker's accumulator/row/return are all `i64`.  Worker closure
+/// signature is `Fn(&UnsafeCell<Stores>, acc, row) -> i64` — takes
+/// two primitive i64 args, distinct from the queue family's
+/// `Fn(cell, DbRef) -> i64` shape because fold's worker takes the row
+/// as a primitive value, not a reference.
+///
+/// Algorithm mirrors `parallel::run_parallel_fold` (interp side):
+///   1. Workers each accumulate over their slice via `worker(cell, acc, row_val)`.
+///   2. Main thread combines per-thread partials in worker-completion
+///      order using the same worker closure.
+///
+/// Shape decisions:
+/// - `threads.max(1)` matches the interp side; zero/negative collapse to 1.
+/// - Empty input short-circuits to `init` (no thread spawn).
+/// - Per-row read is a 1-line unaligned i64 load — V1 hardcodes
+///   8-byte stride.  Wider shapes (V2 heterogeneous types) belong in a
+///   future ARC step.
+pub fn n_parallel_fold_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    init: i64,
+    threads: i32,
+    worker: F,
+) -> i64
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, i64, i64) -> i64 + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    if n == 0 {
+        return init;
+    }
+    let partials = run_native_workers_fold(stores, &input, threads, n, init, &worker);
+    // Main-thread combine in worker-completion order.  Mirror of the
+    // interp-side combine in `parallel::run_parallel_fold`: feeds each
+    // partial into the same worker fn with the running acc.
+    let mut acc = init;
+    for partial in partials {
+        acc = worker(cell, acc, partial);
+    }
+    acc
+}
+
+/// Per-thread fold accumulator helper for `n_parallel_fold_native`.
+///
+/// Each worker reads V1's 8-byte i64 rows from `input`, threads them
+/// through `worker(cell, acc, row_val)` from `init`, and returns the
+/// final partial.  The wrapping `n_parallel_fold_native` combines the
+/// partials on the main thread.
+///
+/// Reuses `parallel::parallel_workers` for the rayon-pool + per-thread
+/// `Stores` clone plumbing (same template as `run_native_workers_primitive`).
+/// Differs only in the per-thread body — accumulate-into-i64 vs
+/// collect-into-Vec.
+fn run_native_workers_fold<F>(
+    stores: &Stores,
+    input: &DbRef,
+    n_threads: i32,
+    n: usize,
+    init: i64,
+    worker: &F,
+) -> Vec<i64>
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, i64, i64) -> i64 + Send + Sync,
+{
+    if n == 0 {
+        return Vec::new();
+    }
+    let input_t = *input;
+    let n_threads = n_threads.max(1) as usize;
+    let mut batches =
+        crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
+            let mut acc = init;
+            // V1: vector<integer> rows are i64s at row position; stride is
+            // 8 bytes.  Read unaligned to match `read_primitive_at` in
+            // src/parallel.rs (rows can land on any 4-byte boundary).
+            for row_idx in start..end {
+                let elm = vector::get_vector(&input_t, 8, row_idx as i64, &ws.allocations);
+                let row_val = unsafe {
+                    let store = &ws.allocations[elm.store_nr as usize];
+                    let base = store.base_ptr();
+                    let p = base.offset(elm.rec as isize * 8 + elm.pos as isize);
+                    p.cast::<i64>().read_unaligned()
+                };
+                // P199 — generated worker closures take `&UnsafeCell<Stores>`
+                // (the new ABI).  Cast `&mut ws.stores` to `&UnsafeCell<Stores>`
+                // via the `repr(transparent)` layout guarantee.
+                let cell: &std::cell::UnsafeCell<Stores> =
+                    unsafe { &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>) };
+                acc = worker(cell, acc, row_val);
+            }
+            (start, acc)
+        });
+    // Sort by start index for deterministic combine order (matches
+    // interp-side `run_parallel_fold` behaviour).
+    batches.sort_by_key(|(start, _)| *start);
+    batches.into_iter().map(|(_, acc)| acc).collect()
+}
+
 /// Plan-06 spine step 8c (native variant) — text-return Queue.
 /// Workers' `String` returns are pushed verbatim onto
 /// `par_text_buffer_stack`.  `n_parallel_buf_get_text_native` reads
@@ -2490,6 +2598,52 @@ pub fn n_parallel_buf_get_narrow_native(
         ])),
         _ => panic!("n_parallel_buf_get_narrow_native: invalid stride {stride}"),
     }
+}
+
+/// Plan-06 ARC.md A3.6 (native variant) — typed reader for `single`
+/// (f32) returns from `n_parallel_queue_narrow_native` (stride 4).
+/// Reads the same per-row bytes as `n_parallel_buf_get_narrow_native`
+/// but interprets them as a 4-byte f32 bit pattern via
+/// `f32::from_bits` instead of returning an i64 the caller would
+/// then have to bit-cast.  Mirrors the interpreter-side
+/// `n_parallel_buf_get_single` in `src/native.rs`.
+///
+/// # Panics
+/// Panics if `par_narrow_buffer_stack` is empty, if the stride isn't
+/// 4, or if `idx` is out of range — all indicate parser-side bugs.
+pub fn n_parallel_buf_get_single_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> f32 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let entry = stores
+        .par_narrow_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_single_native: par_narrow_buffer_stack is empty");
+    let stride = entry.1 as usize;
+    debug_assert_eq!(
+        stride, 4,
+        "n_parallel_buf_get_single_native: stride must be 4 (got {stride})"
+    );
+    let off = (idx as usize) * stride;
+    let bytes = &entry.0;
+    let raw = u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+    f32::from_bits(raw)
+}
+
+/// Plan-06 ARC.md A3.6 (native variant) — typed reader for `float`
+/// (f64) returns from `n_parallel_queue_native` (wide u64 rows).
+/// Reads the same per-row u64 as `n_parallel_buf_get_native` but
+/// interprets the bits as f64 via `f64::from_bits`.  Mirrors the
+/// interpreter-side `n_parallel_buf_get_float` in `src/native.rs`.
+///
+/// # Panics
+/// Panics if `par_buffer_stack` is empty or `idx` is out of range —
+/// both indicate parser-side bugs.
+pub fn n_parallel_buf_get_float_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> f64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let row = stores
+        .par_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_float_native: par_buffer_stack is empty")[idx as usize];
+    f64::from_bits(row)
 }
 
 /// Plan-06 ARC.md A3 (native variant) — pop the active narrow
