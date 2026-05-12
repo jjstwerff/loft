@@ -17,6 +17,17 @@ shapes pass interp + native cross-mode.  No production change —
 the underlying support shipped earlier (P214 closed the
 vector-of-non-capturing path 2026-05-05).
 
+**Phase 02 SHIPPED 2026-05-12** — C1 + C5 (basic-type captures)
+across D1/D2/D3: 6 cells (c1_d1_int_capture_local +
+c1_d2_int_capture_arg + c1_d3_int_capture_field +
+c5_d1_multi_capture_local + c5_d2_multi_capture_arg +
+c5_d3_multi_capture_field).  Single integer capture and
+multi-basic capture (int + bool + int) both pass.  D4 stays
+CLOSED for capturing closures.  No production change —
+P213's `Parts::ChildRec` layout-widening (closed 2026-05-04)
+already supports the struct-field capture surface; phase 02
+pins it as a regression guard.
+
 ## Goal
 
 Lock the closure-validation matrix and wire `tests/closure_matrix.rs`

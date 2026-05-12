@@ -171,3 +171,109 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 02 — basic-type captures (C1 single, C5 multi-basic) ─────────────
+//
+// C1: single integer capture (`n = 5; |x| { x + n }`).
+// C5: multi-basic capture (n + b + factor — int + bool + int).  Text
+//     and Reference captures stay out of phase 02; they land in
+//     phase 03 (text — active LIFETIME.md leak risk) and phase 04
+//     (Reference) respectively.
+//
+// Every capturing-closure shape exercises the closure-record
+// allocation path (the 16-byte fn-ref slot + the closure DbRef).
+// P213 closed the struct-field capture surface 2026-05-04 with
+// `Parts::ChildRec` layout-widening; phase 02 pins the regression
+// guard for that arc plus the simpler D1/D2 shapes.
+//
+// D4 (vector element) stays CLOSED for capturing closures per
+// the loft-write skill restriction — separate cells in the
+// CLOSED-cell sweep at the end of the binary.
+
+cross_mode!(
+    c1_d1_int_capture_local,
+    r#"
+    fn test() {
+        n = 5;
+        f = fn(x: integer) -> integer { x + n };
+        result = f(10);
+        print("{result}\n");
+        assert(result == 15, "c1_d1_int_capture_local");
+    }
+    "#
+);
+
+cross_mode!(
+    c1_d2_int_capture_arg,
+    r#"
+    fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+    fn test() {
+        n = 5;
+        result = apply(fn(x: integer) -> integer { x + n }, 10);
+        print("{result}\n");
+        assert(result == 15, "c1_d2_int_capture_arg");
+    }
+    "#
+);
+
+cross_mode!(
+    c1_d3_int_capture_field,
+    r#"
+    struct Box { cb: fn(integer) -> integer }
+    fn test() {
+        n = 5;
+        b = Box { cb: fn(x: integer) -> integer { x + n } };
+        result = b.cb(10);
+        print("{result}\n");
+        assert(result == 15, "c1_d3_int_capture_field");
+    }
+    "#
+);
+
+cross_mode!(
+    c5_d1_multi_capture_local,
+    r#"
+    fn test() {
+        n = 5;
+        flag = true;
+        factor = 3;
+        f = fn(x: integer) -> integer {
+            if flag { (x + n) * factor } else { x }
+        };
+        a = f(10);
+        b = f(2);
+        print("{a},{b}\n");
+        assert(a == 45, "c5_d1 a={a}");
+        assert(b == 21, "c5_d1 b={b}");
+    }
+    "#
+);
+
+cross_mode!(
+    c5_d2_multi_capture_arg,
+    r#"
+    fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+    fn test() {
+        base = 100;
+        factor = 3;
+        result = apply(fn(n: integer) -> integer { base + n * factor }, 7);
+        print("{result}\n");
+        assert(result == 121, "c5_d2 result={result}");
+    }
+    "#
+);
+
+cross_mode!(
+    c5_d3_multi_capture_field,
+    r#"
+    struct Acc { add: fn(integer) -> integer }
+    fn test() {
+        base = 100;
+        factor = 3;
+        a = Acc { add: fn(n: integer) -> integer { base + n * factor } };
+        result = a.add(7);
+        print("{result}\n");
+        assert(result == 121, "c5_d3 result={result}");
+    }
+    "#
+);
