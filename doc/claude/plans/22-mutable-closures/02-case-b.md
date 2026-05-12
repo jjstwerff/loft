@@ -5,7 +5,31 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 02 — Case B: co-scoped mutating closures
 
-**Status: open**
+**Status: open — sub-phased after 2026-05-12 design pass.**
+
+This README captures the original high-level design.  Pre-
+implementation investigation (recorded in
+[02-case-b-design.md](02-case-b-design.md)) showed the spec's
+"change the closure-record field type from inline-by-value to
+Reference(d, [outer_var])" assumption was incomplete — the
+existing `set_field_no_check` doesn't react to the dep list for
+Reference fields, and a new storage encoding is needed to make
+auto-Reference actually share by DbRef.
+
+Phase 02 is now sub-phased into three landable commits per
+[02-case-b-design.md § Chosen approach](02-case-b-design.md#chosen-approach-option-1-with-sub-phasing):
+
+- **02a** — pass-1 mutation detection (move walker, save body in pass 1).  No behavior change.
+- **02b** — new auto-Reference storage encoding (OpSetDbRef / OpGetDbRef when attribute deps non-empty).  No behavior change yet (the encoding is gated on attribute deps which 02c sets).
+- **02c** — wire 02a's mutation flags through to 02b's encoding.  This is when the probe snippet (`s.x = 7` inside a closure mutating outer `s`) starts working.
+
+B/Scalar (primitive captures via hidden cell) is deferred to
+**02d** — different mechanism from auto-Reference, and the
+EventLoop / TTT v6 driver mostly uses struct captures.
+
+The cell layout below stays valid as the phase-02 acceptance
+gate; what changes is that 02a-c land incrementally rather than
+as one commit.
 
 ## Goal
 
