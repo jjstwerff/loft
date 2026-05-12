@@ -642,3 +642,37 @@ fn p15_phase04_closure_ref_capture_local_no_leak() {
         "#,
     );
 }
+
+/// Plan-15 phase 05 — nested closure (C6) leak guard.
+///
+/// `inner` is a non-capturing fn-ref local; `outer` captures
+/// `inner` into its closure record.  Both fn-refs must free
+/// cleanly at scope exit:
+///   1. `outer` (fn-ref local) frees first.
+///   2. Outer's closure record (which holds inner's d_nr +
+///      closure DbRef in one slot) frees next.
+///   3. Inner's standalone fn-ref local frees last.
+///
+/// The dep chain is a stack: a leak at any link would
+/// accumulate over 100 iterations and surface in
+/// `state.check_store_leaks()`.  Confirmed clean.
+#[test]
+fn p15_phase05_nested_closure_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_call() -> integer {
+            inner = fn(x: integer) -> integer { x + 5 };
+            outer = fn(y: integer) -> integer { inner(y) + 1 };
+            outer(10)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == 16, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}

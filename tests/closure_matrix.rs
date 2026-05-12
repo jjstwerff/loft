@@ -410,3 +410,61 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 05 — nested closures (C6) across D1 / D2 / D3 ────────────────────
+//
+// C6 captures a fn-ref local into the closure body of another
+// lambda.  P215 closed the nested-closure name resolution surface
+// 2026-05-05 (the inner lambda's d_nr + closure DbRef are stored
+// in the outer closure record's slot).
+//
+// Constraint: the INNER lambda must itself be non-capturing.
+// Capturing-source-into-closure remains deferred (would need
+// `synthesize_closure_record` to register the 8B split layout
+// when the source itself captures).  This matches the matrix's
+// C6 row (which uses non-capturing inner lambdas).
+//
+// The matrix flagged D3 as "deferred — depends on C3 dep
+// propagation."  Phase 04 confirmed C3 dep propagation works,
+// so D3 is included here rather than deferred to a future phase.
+// Matrix doc updated to reflect the un-defer.
+
+cross_mode!(
+    c6_d1_nested_closure_local,
+    r#"
+    fn test() {
+        inner = fn(x: integer) -> integer { x + 5 };
+        outer = fn(y: integer) -> integer { inner(y) + 1 };
+        result = outer(10);
+        print("{result}\n");
+        assert(result == 16, "c6_d1 result={result}");
+    }
+    "#
+);
+
+cross_mode!(
+    c6_d2_nested_closure_arg,
+    r#"
+    fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+    fn test() {
+        inner = fn(x: integer) -> integer { x + 5 };
+        result = apply(fn(y: integer) -> integer { inner(y) + 1 }, 10);
+        print("{result}\n");
+        assert(result == 16, "c6_d2 result={result}");
+    }
+    "#
+);
+
+cross_mode!(
+    c6_d3_nested_closure_field,
+    r#"
+    struct Holder { cb: fn(integer) -> integer }
+    fn test() {
+        inner = fn(x: integer) -> integer { x + 5 };
+        h = Holder { cb: fn(y: integer) -> integer { inner(y) + 1 } };
+        result = h.cb(10);
+        print("{result}\n");
+        assert(result == 16, "c6_d3 result={result}");
+    }
+    "#
+);

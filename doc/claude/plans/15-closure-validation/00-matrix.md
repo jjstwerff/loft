@@ -77,6 +77,29 @@ No production change — the underlying support shipped earlier
 in place from the original closure surface).  Phase 04 pins
 it as a regression guard.
 
+**Phase 05 SHIPPED 2026-05-12** — C6 (nested closures: closure
+captures another closure) across D1/D2/D3: 3 cells
+(c6_d1_nested_closure_local + c6_d2_nested_closure_arg +
+c6_d3_nested_closure_field).  Inner lambda is non-capturing;
+outer lambda captures the inner fn-ref into its closure record.
+Both backends green.
+
+Plus 1 leak guard in `tests/leak.rs`:
+`p15_phase05_nested_closure_no_leak` — 100-iteration tight loop
+exercising the 3-link dep chain (outer fn-ref ← outer closure
+record ← inner fn-ref).  Clean — no leak accumulation.
+
+D3 was matrix-flagged as deferred ("depends on C3 dep
+propagation") but phase 04 confirmed C3 dep propagation works,
+so D3 is included.  Constraint: inner lambda must be
+non-capturing (P215's supported case); capturing-source-into-
+closure remains deferred (would need `synthesize_closure_record`
+to register the 8B split layout when the captured lambda itself
+captures).
+
+No production change — P215 closed nested-closure name
+resolution 2026-05-05; phase 05 pins it as a regression guard.
+
 ## Goal
 
 Lock the closure-validation matrix and wire `tests/closure_matrix.rs`
