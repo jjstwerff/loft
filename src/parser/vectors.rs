@@ -3145,3 +3145,214 @@ mod plan22_phase02d_iii_a_type_flip_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod plan22_phase02d_iii_b_read_auto_deref_tests {
+    //! Plan-22 phase 02d-iii.b — verify
+    //! `auto_deref_boxed_scalar` wraps reads of
+    //! `Reference(__cell_<T>, _)` variables in
+    //! `Call(OpGet<T>, [code, Int(0)])` and returns the
+    //! cell's value-field type.
+    //!
+    //! Foundation step: the helper IS hooked into `parse_var`'s
+    //! natural-return path, but it's a no-op in production
+    //! because no variable carries the trigger type yet (phase
+    //! 02d-iii.a's flip is dormant — see its test module).
+    //! Phase 02d-iii.e activates the flip + this hook fires for
+    //! real on every captured-scalar read in the parent body
+    //! and the closure body.
+    //!
+    //! These tests invoke the helper directly with constructed
+    //! inputs — they verify the wrapping logic in isolation,
+    //! independent of the integration path.
+
+    use crate::data::{Type, Value};
+    use crate::parser::Parser;
+
+    /// Helper: build a parser with defaults loaded so the OpGet*
+    /// definitions exist in `Data`, then synthesise the named
+    /// cell struct via the same machinery phase 02d-ii uses.
+    fn parser_with_cell(value_tp: &Type, cell_name: &str) -> (Parser, u32) {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        // Build the cell struct directly (mirrors
+        // `synthesize_cell_structs`).
+        let cell_d_nr = p
+            .data
+            .add_def(cell_name, p.lexer.pos(), crate::data::DefType::Struct);
+        p.data
+            .add_attribute(&mut p.lexer, cell_d_nr, "value", value_tp.clone());
+        (p, cell_d_nr)
+    }
+
+    #[test]
+    fn integer_cell_wraps_with_op_get_int() {
+        let (mut p, cell_d_nr) = parser_with_cell(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+        );
+        let mut code = Value::Var(7);
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        // Expect: Call(OpGetInt, [Var(7), Int(0)])
+        let op_d_nr = p.data.def_nr("OpGetInt");
+        match &code {
+            Value::Call(d, args) => {
+                assert_eq!(*d, op_d_nr, "expected OpGetInt; got d_nr={d}");
+                assert_eq!(args.len(), 2);
+                assert!(matches!(args[0], Value::Var(7)));
+                assert!(matches!(args[1], Value::Int(0)));
+            }
+            other => panic!("expected Call(OpGetInt, …); got {other:?}"),
+        }
+        assert!(
+            matches!(new_t, Type::Integer(_)),
+            "expected Integer return type; got {new_t:?}"
+        );
+    }
+
+    #[test]
+    fn text_cell_wraps_with_op_get_text() {
+        let (mut p, cell_d_nr) = parser_with_cell(&Type::Text(vec![]), "__cell_text");
+        let mut code = Value::Var(3);
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let op_d_nr = p.data.def_nr("OpGetText");
+        match &code {
+            Value::Call(d, args) => {
+                assert_eq!(*d, op_d_nr);
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected Call(OpGetText, …); got {other:?}"),
+        }
+        assert!(matches!(new_t, Type::Text(_)));
+    }
+
+    #[test]
+    fn boolean_cell_wraps_byte_then_eq() {
+        let (mut p, cell_d_nr) = parser_with_cell(&Type::Boolean, "__cell_boolean");
+        let mut code = Value::Var(5);
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        // Expect: Call(OpEqInt, [Call(OpGetByte, [Var(5), Int(0), Int(0)]), Int(1)])
+        let eq_d_nr = p.data.def_nr("OpEqInt");
+        let byte_d_nr = p.data.def_nr("OpGetByte");
+        match &code {
+            Value::Call(d, args) => {
+                assert_eq!(*d, eq_d_nr, "outer call should be OpEqInt");
+                assert_eq!(args.len(), 2);
+                match &args[0] {
+                    Value::Call(inner_d, inner_args) => {
+                        assert_eq!(*inner_d, byte_d_nr);
+                        assert_eq!(inner_args.len(), 3);
+                    }
+                    other => panic!("expected inner OpGetByte; got {other:?}"),
+                }
+                assert!(matches!(args[1], Value::Int(1)));
+            }
+            other => panic!("expected Call(OpEqInt, …); got {other:?}"),
+        }
+        assert_eq!(new_t, Type::Boolean);
+    }
+
+    #[test]
+    fn float_cell_wraps_with_op_get_float() {
+        let (mut p, cell_d_nr) = parser_with_cell(&Type::Float, "__cell_float");
+        let mut code = Value::Var(2);
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let op_d_nr = p.data.def_nr("OpGetFloat");
+        if let Value::Call(d, _) = &code {
+            assert_eq!(*d, op_d_nr);
+        } else {
+            panic!("expected Call(OpGetFloat, …); got {code:?}");
+        }
+        assert_eq!(new_t, Type::Float);
+    }
+
+    #[test]
+    fn character_cell_wraps_with_op_get_character() {
+        let (mut p, cell_d_nr) = parser_with_cell(&Type::Character, "__cell_character");
+        let mut code = Value::Var(4);
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let op_d_nr = p.data.def_nr("OpGetCharacter");
+        if let Value::Call(d, _) = &code {
+            assert_eq!(*d, op_d_nr);
+        } else {
+            panic!("expected Call(OpGetCharacter, …); got {code:?}");
+        }
+        assert_eq!(new_t, Type::Character);
+    }
+
+    #[test]
+    fn non_cell_reference_returns_unchanged() {
+        // A regular struct Reference (not a __cell_*) must NOT
+        // be auto-dereffed.  This is the dormancy guarantee for
+        // production code with no boxed scalars.
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        // Synthesise a non-cell struct directly so the test
+        // doesn't depend on which structs the defaults provide.
+        let s_d_nr = p
+            .data
+            .add_def("MyStruct", p.lexer.pos(), crate::data::DefType::Struct);
+        let mut code = Value::Var(1);
+        let original_code = code.clone();
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(s_d_nr, vec![]));
+        assert_eq!(
+            code, original_code,
+            "non-cell Reference must not be wrapped"
+        );
+        assert!(
+            matches!(new_t, Type::Reference(_, _)),
+            "non-cell Reference type must pass through unchanged; got {new_t:?}"
+        );
+    }
+
+    #[test]
+    fn non_reference_type_returns_unchanged() {
+        // Passing a bare Integer through the helper must be a
+        // no-op (no Reference, nothing to deref).
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let mut code = Value::Int(42);
+        let original_code = code.clone();
+        let new_t = p.auto_deref_boxed_scalar(
+            &mut code,
+            Type::Integer(crate::data::IntegerSpec::signed32()),
+        );
+        assert_eq!(code, original_code, "Integer input must not be wrapped");
+        assert!(matches!(new_t, Type::Integer(_)));
+    }
+
+    #[test]
+    fn parse_var_path_no_op_for_non_cell_locals() {
+        // Smoke test through the parse_var integration path: a
+        // normal local Integer goes through `parse_var` ->
+        // `auto_deref_boxed_scalar` -> returns unchanged.
+        // Verifies the production hook is dormant for non-boxed
+        // variables.
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(
+            r"
+            fn test() {
+                n = 42;
+                _ = n + 1;
+            }
+            ",
+            "phase02d_iii_b_test",
+            false,
+        );
+        let test_d_nr = p.data.def_nr("n_test");
+        let vars = &p.data.def(test_d_nr).variables;
+        let mut found_n = false;
+        for v_nr in 0..vars.next_var() {
+            if vars.name(v_nr) == "n" {
+                assert!(
+                    matches!(vars.tp(v_nr), Type::Integer(_)),
+                    "non-boxed `n` must stay Integer; got {:?}",
+                    vars.tp(v_nr)
+                );
+                found_n = true;
+            }
+        }
+        assert!(found_n, "`n` not found in vars table");
+    }
+}

@@ -293,7 +293,83 @@ impl Parser {
                 t = Type::Unknown(0);
             }
         }
-        t
+        // Plan-22 phase 02d-iii.b — read auto-deref for boxed
+        // scalars.  When `t` is `Reference(__cell_<T>, _)`
+        // (set by phase 02d-iii.a's flip helper for mutated-
+        // scalar-capture locals), wrap the resolved IR in
+        // `Call(OpGet<T>, [code, Int(0)])` so reads load the
+        // cell's `value` field instead of yielding the bare
+        // DbRef.  Dormant in production until 02d-iii.e
+        // activates the flip — no production variable has the
+        // trigger type today, so the hook is a no-op for every
+        // read.
+        self.auto_deref_boxed_scalar(code, t)
+    }
+
+    /// Plan-22 phase 02d-iii.b — wrap a resolved variable read
+    /// in an `OpGet<T>(code, 0)` call when its type is
+    /// `Reference(__cell_<T>, _)` (a boxed scalar created by
+    /// phase 02d-iii.a's flip).
+    ///
+    /// Returns the underlying scalar type (the cell's `value`
+    /// field type).  No-op for any other input type.
+    ///
+    /// Mirrors `wrap_vector_get_val` in `parser/mod.rs:2409` —
+    /// the same opcode-per-type table, the same boolean
+    /// `OpGetByte` + `OpEqInt` shape.
+    ///
+    /// Limitations (acceptable for 02d-iii.b foundation):
+    /// - Doesn't fire from `parse_var`'s early-return paths
+    ///   (Reference-aliasing arm at lines 141-154, the special
+    ///   `$` ref at line 18, etc.).  Those paths handle other
+    ///   concerns and aren't on the critical path for
+    ///   boxed-scalar reads.
+    /// - Cells whose `value` field type isn't in the supported
+    ///   primitive set (Integer / Float / Single / Boolean /
+    ///   Character / Text / plain Enum) fall through with the
+    ///   bare DbRef — phase 02d-ii's silent gap for exotic
+    ///   shapes carries through here.
+    pub(crate) fn auto_deref_boxed_scalar(&mut self, code: &mut Value, t: Type) -> Type {
+        let Type::Reference(d_nr, _) = &t else {
+            return t;
+        };
+        if !self.data.def(*d_nr).name.starts_with("__cell_") {
+            return t;
+        }
+        let Some(value_attr) = self.data.def(*d_nr).attributes.first() else {
+            return t;
+        };
+        if value_attr.name != "value" {
+            return t;
+        }
+        let value_tp = value_attr.typedef.clone();
+        let pos = Value::Int(0);
+        let (op_name, is_bool) = match &value_tp {
+            Type::Integer(_) => ("OpGetInt", false),
+            Type::Float => ("OpGetFloat", false),
+            Type::Single => ("OpGetSingle", false),
+            Type::Text(_) => ("OpGetText", false),
+            Type::Character => ("OpGetCharacter", false),
+            Type::Enum(_, false, _) => ("OpGetEnum", false),
+            Type::Boolean => ("OpGetByte", true),
+            _ => return t,
+        };
+        let op_d_nr = self.data.def_nr(op_name);
+        if op_d_nr == u32::MAX {
+            return t;
+        }
+        if is_bool {
+            let byte_call = Value::Call(op_d_nr, vec![code.clone(), pos, Value::Int(0)]);
+            let eq_d_nr = self.data.def_nr("OpEqInt");
+            if eq_d_nr == u32::MAX {
+                *code = byte_call;
+            } else {
+                *code = Value::Call(eq_d_nr, vec![byte_call, Value::Int(1)]);
+            }
+        } else {
+            *code = Value::Call(op_d_nr, vec![code.clone(), pos]);
+        }
+        value_tp
     }
 
     pub(crate) fn is_file_var(&self, var_nr: u16) -> bool {
