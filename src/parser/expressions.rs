@@ -1530,6 +1530,52 @@ use a separate collection or add after the loop"
         *code = self.write_to_file(file_v, rhs_code, &rhs_type, cast_alias);
     }
 
+    /// Plan-22 phase 02d-v — extract the boxed-scalar `v_nr`
+    /// from an auto-deref'd LHS expression.  Recognises two
+    /// shapes that phase 02d-iii.b's `auto_deref_boxed_scalar`
+    /// produces:
+    ///
+    /// - **Direct** (Integer / Float / Single / Character /
+    ///   Text / plain Enum):
+    ///   `Call(OpGet<T>, [Var(v_nr), Int(0)])`
+    /// - **Boolean** (byte-storage with bool conversion):
+    ///   `Call(OpEqInt, [Call(OpGetByte, [Var(v_nr), Int(0),
+    ///   Int(0)]), Int(1)])`
+    ///
+    /// Returns `None` for any other shape (struct field reads,
+    /// non-zero offsets, plain `Var` LHS, closure-body `get_field`
+    /// inner — the closure-body case doesn't need the alloc
+    /// preamble because the cell was already allocated by the
+    /// parent's first-set).
+    fn extract_boxed_var_from_lhs(&self, lhs: &Value) -> Option<u16> {
+        let Value::Call(op_d, args) = lhs.unspan() else {
+            return None;
+        };
+        let op_name = self.data.def(*op_d).name.as_str();
+        // Direct shape: Call(OpGet<T>, [Var(v_nr), Int(0)])
+        if args.len() == 2
+            && matches!(args[1].unspan(), Value::Int(0))
+            && op_name.starts_with("OpGet")
+            && let Value::Var(v_nr) = args[0].unspan()
+        {
+            return Some(*v_nr);
+        }
+        // Boolean shape: Call(OpEqInt, [Call(OpGetByte, [Var, 0, 0]), Int(1)])
+        if op_name == "OpEqInt"
+            && args.len() == 2
+            && matches!(args[1].unspan(), Value::Int(1))
+            && let Value::Call(inner_op, inner_args) = args[0].unspan()
+            && self.data.def(*inner_op).name == "OpGetByte"
+            && inner_args.len() == 3
+            && matches!(inner_args[1].unspan(), Value::Int(0))
+            && matches!(inner_args[2].unspan(), Value::Int(0))
+            && let Value::Var(v_nr) = inner_args[0].unspan()
+        {
+            return Some(*v_nr);
+        }
+        None
+    }
+
     /// Plan-22 phase 02d-iii.d — prepend cell allocation when a
     /// first-set assignment targets an uninitialised boxed-scalar
     /// local in the parent body.
@@ -1569,20 +1615,9 @@ use a separate collection or add after the loop"
         reason = "Helper invoked from tests; parse_assign_op hook activates with 02d-iii.e."
     )]
     pub(crate) fn maybe_prepend_cell_alloc(&mut self, result: Value, lhs: &Value) -> Value {
-        // Detect: lhs = Call(OpGet<T>, [Var(v_nr), Int(0)])
-        let Value::Call(_, lhs_args) = lhs.unspan() else {
+        let Some(v_nr) = self.extract_boxed_var_from_lhs(lhs) else {
             return result;
         };
-        if lhs_args.len() != 2 {
-            return result;
-        }
-        let Value::Var(v_nr) = lhs_args[0].unspan() else {
-            return result;
-        };
-        if !matches!(lhs_args[1].unspan(), Value::Int(0)) {
-            return result;
-        }
-        let v_nr = *v_nr;
         if !self.vars.exists(v_nr) {
             return result;
         }

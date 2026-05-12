@@ -955,36 +955,39 @@ impl Parser {
             {
                 continue;
             }
-            // Plan-22 phase 02d-iii.e / 02d-iv — Text + Boolean
-            // are intentionally EXCLUDED from the actual flip
-            // today.
-            //
-            // Text: mutation (`log += s`) goes through a special
+            // Plan-22 phase 02d-iii.e / 02d-v — Text remains
+            // intentionally EXCLUDED from the actual flip today.
+            // Text mutation (`log += s`) goes through a special
             // `assign_text` path in `parse_assign_op` that
             // expects a `Var(v_nr)` LHS — auto-deref'd
-            // `Call(OpGetText, [Var, 0])` would break that
-            // path.  Re-assignment (`ta = "after"`) is also a
-            // problem because it'd write to a closure-local
-            // copy without propagation (text re-assign isn't
-            // currently handled by the write-back mechanism
-            // either, so this is a pre-existing limitation).
-            //
-            // Boolean: 02d-iii.b's auto-deref wraps boolean
-            // reads in `Call(OpEqInt, [Call(OpGetByte, [Var,
-            // Int(0), Int(0)]), Int(1)])`.  When this lands on
-            // an LHS, towards_set sees `OpEqInt` as the outer
-            // call and call_to_set_op has no mapping → "Cannot
-            // assign to attribute on type 'OpEqInt'".  Boolean
-            // captures are rare in practice (and the existing
-            // write-back handles them).
+            // `Call(OpGetText, [Var, 0])` would break that path.
+            // Re-assignment (`ta = "after"`) is also a problem
+            // because it'd write to a closure-local copy without
+            // propagation (text re-assign isn't currently
+            // handled by the write-back mechanism either, so
+            // this is a pre-existing limitation).
             //
             // The cell struct + scalars_to_box entry are still
-            // synthesised for these types (so 02d-i/ii unit
-            // tests stay green); only the actual variables-table
-            // flip is skipped.  Future sub-step adds dedicated
-            // read-append-write for text + OpEqInt unwrap for
-            // boolean.
-            if matches!(&original_tp, Type::Text(_) | Type::Boolean) {
+            // synthesised for text (so 02d-i/ii unit tests stay
+            // green); only the actual variables-table flip is
+            // skipped.  Future sub-step adds dedicated
+            // read-append-write for text-cell support.
+            //
+            // Boolean was previously skipped here too because
+            // 02d-iii.b's auto-deref wraps boolean reads in
+            // `Call(OpEqInt, [Call(OpGetByte, [Var, 0, 0]),
+            // Int(1)])` — a nested shape that 02d-iii.d's
+            // `maybe_prepend_cell_alloc` originally couldn't
+            // detect.  Phase 02d-v added an
+            // `extract_boxed_var_from_lhs` helper that
+            // recognises both the direct OpGet<T> shape and the
+            // boolean OpEqInt-wrapped shape, so the alloc
+            // preamble fires for boolean too.  Boolean writes
+            // route through towards_set's existing boolean
+            // branch (collections.rs:493) which already produces
+            // the correct OpSetByte IR with the bool→byte
+            // conversion.
+            if matches!(&original_tp, Type::Text(_)) {
                 continue;
             }
             let Some(cell_name) = cell_struct_name(&original_tp, &self.data) else {
@@ -2223,15 +2226,12 @@ fn box_captured_names_for_outer_scalars(
         if !scalars.iter().any(|s| s == name) {
             continue;
         }
-        // Plan-22 phase 02d-iii.e / 02d-iv — keep text + boolean
-        // captures un-boxed (mirrors `flip_scalars_to_box_types`'s
-        // text/boolean-skip).  See that helper's doc-comment for
-        // the rationale.  Text mutation `log += s` flows through
-        // the existing write-back mechanism; boolean captures
-        // currently can't round-trip through `call_to_set_op`
-        // because 02d-iii.b's read auto-deref wraps boolean in
-        // `OpEqInt(...)` for which there's no Set counterpart.
-        if matches!(tp, Type::Text(_) | Type::Boolean) {
+        // Plan-22 phase 02d-iii.e / 02d-v — keep text captures
+        // un-boxed (mirrors `flip_scalars_to_box_types`'s
+        // text-skip).  Boolean is now boxed since 02d-v added
+        // the `OpEqInt(OpGetByte, ...)` shape recognition to
+        // `maybe_prepend_cell_alloc`.
+        if matches!(tp, Type::Text(_)) {
             continue;
         }
         if let Some(cell_name) = cell_struct_name(tp, data) {

@@ -29,18 +29,24 @@
 //! |---|---|---|---|---|
 //! | **A** read-only | PASS:00 | PASS:00 | PASS:00 | PASS:00 |
 //! | **B** co-scoped (Reference) | PASS:02c | PASS:02c | PASS:02c | n/a |
-//! | **B** co-scoped (scalar via cell — int/float/single/char/enum) | PASS:02d-iii.e/iv | PASS:02d-iii.e/iv | PASS:02d-iii.e/iv | n/a |
-//! | **B** co-scoped (scalar via cell — text/boolean) | DEFER:02d-v+ | DEFER:02d-v+ | DEFER:02d-v+ | n/a |
+//! | **B** co-scoped (scalar via cell — int/float/single/char/enum/bool) | PASS:02d-iii.e/iv/v | PASS:02d-iii.e/iv/v | PASS:02d-iii.e/iv/v | n/a |
+//! | **B** co-scoped (scalar via cell — text) | DEFER:02d-vi+ | DEFER:02d-vi+ | DEFER:02d-vi+ | n/a |
 //! | **C** moved (factory) | n/a | n/a | FIX:03 | FIX:03 |
 //! | **D** aliased mutating | REJECT:04 | REJECT:04 | REJECT:04 | REJECT:04 |
 //! | **Mutable<T> explicit** | FIX:05 | FIX:05 | FIX:05 | FIX:05 |
 //!
-//! Phase 02d-iv (2026-05-12) extends scalar boxing to float /
-//! single / character / plain enum + multi-scalar.  Text and
-//! boolean are intentionally excluded (text-`+=` flows through
-//! the existing void-return write-back; boolean reads are
-//! wrapped in `OpEqInt` which has no `OpSetEqInt` counterpart
-//! in `call_to_set_op`).  Both will be addressed in 02d-v.
+//! Phase 02d-iv (2026-05-12) extended scalar boxing to float /
+//! single / character / plain enum + multi-scalar.
+//! Phase 02d-v (2026-05-12) added boolean — required teaching
+//! `maybe_prepend_cell_alloc` to recognise the
+//! `Call(OpEqInt, [Call(OpGetByte, [Var, 0, 0]), 1])` shape
+//! that 02d-iii.b's auto-deref produces for boolean reads.
+//! The actual write IR was already correctly emitted by
+//! towards_set's existing boolean branch (collections.rs:493).
+//! Text remains excluded — text-`+=` flows through a special
+//! `assign_text` path in `parse_assign_op` that expects
+//! `Var(v_nr)` LHS (auto-deref'd `Call(OpGetText, ...)` would
+//! break it).  Text-cell support deferred to 02d-vi.
 //!
 //! Each `body` must declare `fn test() { … }` and any helper fns
 //! at file scope; the harness appends `fn main() { test(); }`.
@@ -442,6 +448,73 @@ cross_mode!(
         loop.cb();
         print("enum: {s}\n");
         assert(s == State.B, "b_d3_enum expected B");
+    }
+    "#
+);
+
+// ── Phase 02d-v — boolean cells ──────────────────────────────────────────────
+//
+// 02d-v adds the `OpEqInt(OpGetByte, ...)` shape recognition
+// to `maybe_prepend_cell_alloc` so the alloc preamble fires
+// for boolean too.  Boolean reads are wrapped by 02d-iii.b's
+// auto-deref as `Call(OpEqInt, [Call(OpGetByte, [Var, 0, 0]),
+// Int(1)])` — a nested shape distinct from the direct
+// `Call(OpGet<T>, [Var, 0])` used for other primitives.
+// Boolean writes route through towards_set's existing boolean
+// branch which produces the correct OpSetByte IR with the
+// bool→byte conversion (collections.rs:493).
+
+cross_mode!(
+    b_d1_boolean_capture_local_mutates,
+    r#"
+    fn test() {
+        b = false;
+        f = fn() { b = true; };
+        f();
+        print("bool: {b}\n");
+        assert(b == true, "b_d1_boolean expected true");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d2_boolean_capture_arg_mutates,
+    r#"
+    fn invoke(f: fn()) { f(); }
+    fn test() {
+        b = false;
+        invoke(fn() { b = true; });
+        print("bool: {b}\n");
+        assert(b == true, "b_d2_boolean expected true");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d3_boolean_capture_field_mutates,
+    r#"
+    struct Loop { cb: fn() }
+    fn test() {
+        b = false;
+        loop = Loop { cb: fn() { b = true; } };
+        loop.cb();
+        print("bool: {b}\n");
+        assert(b == true, "b_d3_boolean expected true");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d1_boolean_capture_repeated_calls,
+    r#"
+    fn test() {
+        flag = false;
+        toggle = fn() { flag = !flag; };
+        toggle();
+        toggle();
+        toggle();
+        print("flag: {flag}\n");
+        assert(flag == true, "expected true after 3x toggle, got {flag}");
     }
     "#
 );

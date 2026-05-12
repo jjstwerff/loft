@@ -727,6 +727,42 @@ fn p22_phase02d_iii_e_scalar_capture_no_leak() {
     );
 }
 
+/// Plan-22 phase 02d-v — boolean cell capture leak guard.
+///
+/// 100-iteration tight loop: each iteration boxes a boolean
+/// `flag`, captures it into a closure that toggles via shared
+/// cell DbRef, calls toggle 5 times, asserts result.  The
+/// `__cell_boolean` record (1B value field, padded to 8B per
+/// the cell struct's record layout) and the closure record's
+/// auto-Reference attribute (12B share-by-DbRef) all need to
+/// free cleanly at scope exit.  Exercises the boolean-LHS
+/// detection in `maybe_prepend_cell_alloc` under load.
+#[test]
+fn p22_phase02d_v_boolean_capture_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_iteration() -> boolean {
+            flag = false;
+            toggle = fn() { flag = !flag; };
+            toggle();
+            toggle();
+            toggle();
+            toggle();
+            toggle();
+            flag
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == true, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
 /// Plan-22 phase 02d-iv — multi-type capture leak guard.
 ///
 /// 100-iteration tight loop: each iteration boxes THREE

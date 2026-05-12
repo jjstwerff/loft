@@ -20,7 +20,8 @@ between a focused 5-commit arc and a multi-week debug loop.
 | 02d-ii | Synthesise canonical `__cell_<T>` structs (`{ value: T }`) for each scalar type used | Shipped 2026-05-12 |
 | 02d-iii | Outer-binding rewrite — sub-steps a-e | Shipped 2026-05-12 |
 | 02d-iv | Cells (b_d1/b_d2/b_d3 for float/single/character/enum + multi-scalar) + leak guard | Shipped 2026-05-12 |
-| 02d-v | Text-cell boxing (read-append-write) + Boolean cells (OpEqInt unwrap in call_to_set_op) | Future |
+| 02d-v | Boolean cells via OpEqInt LHS shape recognition in `maybe_prepend_cell_alloc` | Shipped 2026-05-12 |
+| 02d-vi | Text-cell boxing (read-append-write for `log += s`; `assign_text` path needs to accept auto-deref'd LHS) | Future |
 
 ## Goal
 
