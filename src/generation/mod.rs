@@ -1591,6 +1591,25 @@ extern crate loft;"
             emit_db_field(w, s_var, field_name, "int", "db.int(0, false)")?;
             return Ok(());
         }
+        // Plan-22 phase 02c (P258 native fix, 2026-05-12): auto-Reference
+        // attribute — when the dep list is non-empty, use the 12-byte
+        // Parts::DbRef storage shape (`db.dbref()`) instead of the
+        // inline-struct-bytes path below (which uses the inner struct's
+        // known_type).  Mirrors `src/typedef.rs::fill_database`'s
+        // `Type::Reference(_, ref deps) if !deps.is_empty()` branch so
+        // native + interp agree on layout.  Without this, native
+        // computes the closure record's auto-Reference field as
+        // inline-bytes (size = inner struct's size) but interp writes
+        // 12-byte DbRef bytes — the resulting size mismatch causes
+        // `claim_child_rec`'s byte-copy to truncate at native's
+        // smaller size and the lambda body reads garbage instead of
+        // the captured DbRef.
+        if let Type::Reference(_, deps) = typedef
+            && !deps.is_empty()
+        {
+            emit_db_field(w, s_var, field_name, "dbref", "db.dbref()")?;
+            return Ok(());
+        }
         if known_type != u16::MAX {
             let kt_ref = type_id_ref(known_type);
             writeln!(w, "    db.field({s_var}, \"{field_name}\", {kt_ref});")?;
