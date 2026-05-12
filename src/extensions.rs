@@ -1404,7 +1404,31 @@ enum ArgVal {
 
 // ── Auto-build ──────────────────────────────────────────────────────────
 
-/// Auto-build a package's native crate if the shared library is missing.
+/// Auto-build a package's native crate if the shared library OR
+/// rlib is missing.
+///
+/// Both artifacts are produced by the same `cargo build` invocation
+/// (every `lib/*/native/Cargo.toml` declares
+/// `crate-type = ["cdylib", "rlib"]`).  The cdylib is loaded by the
+/// runtime extension loader; the rlib is consumed by `--native`
+/// codegen via `--extern <crate>=<path>` (see
+/// `src/main.rs::add_native_extern_flags`).
+///
+/// Pre-2026-05-12 this function checked ONLY the cdylib before
+/// returning early, which let a parallel test see "cdylib exists"
+/// → skip the build → then fail later when `add_native_extern_flags`
+/// looked for the rlib that hadn't been written yet.  On Windows
+/// (where file-system flush ordering between cdylib and rlib differs
+/// from ext4/APFS, and file-locks held by another concurrent cargo
+/// invocation block reads even when the file is on disk) this race
+/// surfaced as `error[E0463]: can't find crate for <name>` in
+/// `tests/codegen_emitter.rs::p244_text_native_wrapper_compiles_under_native`
+/// and any other test that ran in parallel with a fresh build.
+///
+/// Fix: also require the rlib to exist before returning early.  If
+/// either artifact is missing, run cargo (which is itself
+/// fcntl-locked per target dir, so concurrent invocations serialize
+/// and only one actually rebuilds).
 #[must_use]
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     let cargo_toml = format!("{pkg_dir}/native/Cargo.toml");
@@ -1412,12 +1436,18 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         return None;
     }
     let lib_name = platform_lib_name(stem);
+    let rlib_name = format!("lib{stem}.rlib");
     let release_path = format!("{pkg_dir}/native/target/release/{lib_name}");
-    if std::path::Path::new(&release_path).exists() {
+    let release_rlib_path = format!("{pkg_dir}/native/target/release/{rlib_name}");
+    if std::path::Path::new(&release_path).exists()
+        && std::path::Path::new(&release_rlib_path).exists()
+    {
         return Some(release_path);
     }
     let debug_path = format!("{pkg_dir}/native/target/debug/{lib_name}");
-    if std::path::Path::new(&debug_path).exists() {
+    let debug_rlib_path = format!("{pkg_dir}/native/target/debug/{rlib_name}");
+    if std::path::Path::new(&debug_path).exists() && std::path::Path::new(&debug_rlib_path).exists()
+    {
         return Some(debug_path);
     }
     let built_path = release_path;
