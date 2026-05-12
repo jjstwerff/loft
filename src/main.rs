@@ -2282,8 +2282,33 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             .to_string();
         let cached_binary = cache_dir.join(format!("{source_stem}-{source_hash}"));
 
-        // Use cached binary if it exists, otherwise compile and cache.
-        let binary = if cached_binary.exists() {
+        // P254 — cache-poisoning defense.  Bypass the cache entirely
+        // when the user opts out via `LOFT_NATIVE_NO_CACHE=1` (matches
+        // the behaviour the workaround in PROBLEMS.md described before
+        // this fix landed; documented here so paranoid users have a
+        // hard kill switch even if the safety helpers gain a future
+        // bug).  We also reject the cache when the cached file fails
+        // the safety helpers — symlinked cache, wrong owner uid,
+        // group/other-readable, or SUID-set.  In every reject case we
+        // recompile (rather than refusing to run) so a poisoned cache
+        // doesn't deny the user service; it just costs them a
+        // recompile.
+        let no_cache = std::env::var("LOFT_NATIVE_NO_CACHE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let cache_usable = !no_cache
+            && cached_binary.exists()
+            && native_utils::cache_safe_to_execute(&cached_binary);
+        if !no_cache && cached_binary.exists() && !cache_usable {
+            eprintln!(
+                "loft: rejecting suspicious cached binary at {} (P254 — wrong owner, world-writable, symlink, or SUID); recompiling",
+                cached_binary.display()
+            );
+        }
+
+        // Use cached binary if it exists AND passes the safety check;
+        // otherwise compile and cache.
+        let binary = if cache_usable {
             cached_binary.clone()
         } else {
             // Per-process tmp path — same rationale as the emit_path
@@ -2449,18 +2474,45 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 }
                 std::process::exit(1);
             }
-            // Store in cache for next run.
-            if std::fs::create_dir_all(&cache_dir).is_ok() {
-                // Remove stale cached binaries for THIS source file only.
-                let prefix = format!("{source_stem}-");
-                if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-                    for entry in entries.flatten() {
-                        if entry.file_name().to_string_lossy().starts_with(&prefix) {
-                            let _ = std::fs::remove_file(entry.path());
+            // Store in cache for next run.  P254 — also opt out
+            // when LOFT_NATIVE_NO_CACHE=1 is set so paranoid users
+            // can avoid leaving a cache file on disk at all.
+            if !no_cache && std::fs::create_dir_all(&cache_dir).is_ok() {
+                // P254 — tighten cache-dir mode to 0700 so a future
+                // attacker can't drop files into our cache (or
+                // remove ours from under us).  Repairs pre-existing
+                // wider-mode cache directories left over from earlier
+                // loft versions.  No-op on non-Unix.
+                native_utils::tighten_cache_dir(&cache_dir);
+                if !native_utils::cache_dir_safe(&cache_dir) {
+                    // Couldn't tighten the directory — bail on the
+                    // cache write so we don't write a binary the
+                    // next run will reject anyway.  Common case:
+                    // the cache dir lives on a network mount whose
+                    // server enforces a different mode than we
+                    // requested.
+                    eprintln!(
+                        "loft: cache directory {} has unsafe permissions and could not be tightened; skipping cache write (P254)",
+                        cache_dir.display()
+                    );
+                } else {
+                    // Remove stale cached binaries for THIS source file only.
+                    let prefix = format!("{source_stem}-");
+                    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+                        for entry in entries.flatten() {
+                            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                                let _ = std::fs::remove_file(entry.path());
+                            }
                         }
                     }
+                    if std::fs::copy(&binary, &cached_binary).is_ok() {
+                        // P254 — tighten the freshly written binary
+                        // to 0700.  std::fs::copy preserves source
+                        // mode, which for `/tmp/loft_native_bin_<pid>`
+                        // is typically 0644 — wider than we want.
+                        native_utils::tighten_cache_binary(&cached_binary);
+                    }
                 }
-                let _ = std::fs::copy(&binary, &cached_binary);
             }
             binary
         };
