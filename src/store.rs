@@ -450,12 +450,26 @@ impl Store {
 
     /// Lock this store against writes. Any subsequent call to `addr_mut` panics.
     pub fn lock(&mut self) {
+        // Plan-22 02d-vii follow-up — `LOFT_LOG=locks` trace.
+        // Caught here (the lowest-level lock site) so direct
+        // callers bypassing `Stores::lock_store(&r)` (e.g.
+        // `compile.rs` const-store init, `native.rs` worker
+        // store init) are visible too.  The `lock_store` arm
+        // in `database/allocation.rs` also prints — both fire
+        // for ordinary const-param locks; the duplication is
+        // intentional (the per-DbRef arm has the rec context).
+        if !self.locked && crate::log_config::lock_trace_enabled() {
+            eprintln!("[locks] LOCK   (Store::lock direct call)");
+        }
         self.locked = true;
     }
 
     /// Unlock this store (only callable from Rust; loft code cannot unlock via d#lock = false
     /// on a const variable).
     pub fn unlock(&mut self) {
+        if self.locked && crate::log_config::lock_trace_enabled() {
+            eprintln!("[locks] UNLOCK (Store::unlock direct call)");
+        }
         self.locked = false;
     }
 

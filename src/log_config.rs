@@ -137,6 +137,24 @@ pub struct LogConfig {
     /// dispatch from `ptr::copy_nonoverlapping`.  Enabled with
     /// `LOFT_LOG=poison_free`.
     pub poison_free: bool,
+    /// Print every store-lock / store-unlock event to stderr with the
+    /// store_nr, record nr, and the runtime caller's location.  Use
+    /// `LOFT_LOG=locks` to activate.  Highest-leverage diagnostic for
+    /// "Write to locked store at rec=N fld=M" panics — the lock-event
+    /// trace immediately identifies which op acquired the lock.
+    /// This field is informational; `database/allocation.rs` reads
+    /// `LOFT_LOG` directly via `lock_trace_enabled()` so it works
+    /// even in test runs that don't construct a `LogConfig`.
+    pub trace_locks: bool,
+}
+
+/// Plan-22 phase 02d-vii follow-up — central check for the
+/// `LOFT_LOG=locks` mode.  Inlined at every lock/unlock site.
+/// Reads the env var on each call; fast-fail (Err return) when
+/// the variable is unset or doesn't equal "locks".
+#[must_use]
+pub fn lock_trace_enabled() -> bool {
+    std::env::var("LOFT_LOG").as_deref() == Ok("locks")
 }
 
 impl LogConfig {
@@ -160,6 +178,7 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
         }
     }
 
@@ -181,6 +200,7 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
         }
     }
 
@@ -202,6 +222,7 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
         }
     }
 
@@ -224,6 +245,7 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
         }
     }
 
@@ -245,6 +267,7 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
         }
     }
 
@@ -266,6 +289,7 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
         }
     }
 
@@ -287,6 +311,7 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
         }
     }
 
@@ -311,6 +336,7 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
         }
     }
 
@@ -338,6 +364,7 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
         }
     }
 
@@ -364,6 +391,7 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
         }
     }
 
@@ -403,6 +431,11 @@ impl LogConfig {
             Ok("poison_free") => {
                 let mut c = Self::full();
                 c.poison_free = true;
+                c
+            }
+            Ok("locks") => {
+                let mut c = Self::full();
+                c.trace_locks = true;
                 c
             }
             Ok(s) if s.starts_with("crash_tail") => {

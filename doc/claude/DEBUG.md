@@ -35,6 +35,7 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 | `full` | IR tree + bytecode + execution | Everything at once; output is very large |
 | `static` | IR tree and bytecode only (no execution) | Codegen bugs, wrong IR, wrong opcode selection |
 | `crash_tail:N` | Last N lines before panic | Crash triage when full output is too large |
+| `locks` | Every store-lock / store-unlock event with store_nr + rec | "Write to locked store at rec=N fld=M" panics — pinpoints which op acquired the lock |
 
 ---
 
@@ -483,7 +484,7 @@ Listed in ROI order (highest leverage first).
 
 | Tool | Effort | Where it would have helped | Notes |
 |---|---|---|---|
-| `LOFT_LOG=locks` — log every `set_locked(true/false)` with op + record + caller fn | XS (~1 day) | 02d-vii ("Write to locked store at rec=8 fld=2" with no provenance) | Add to `src/log_config.rs`; instrument `Store::set_locked` to print when the mode is enabled.  Highest-impact single addition. |
+| ~~`LOFT_LOG=locks`~~ — log every `set_locked(true/false)` with store_nr + rec | ~~XS~~ Shipped 2026-05-12 | 02d-vii ("Write to locked store at rec=8 fld=2" with no provenance) | Instrumented at both `Stores::lock_store(&r)` (per-DbRef arm) and `Store::lock()` (low-level arm — catches direct callers like compile.rs const-store init).  Reads `LOFT_LOG` directly via `lock_trace_enabled()`.  Use alongside `LOFT_LOG=full` (set both, locks-trace interleaves with bytecode trace) — single-mode `LOFT_LOG=locks` also shows bytecode (the preset extends `full`). |
 | Better always-on panic context | XS (~½ day) | All store-related panics | Extend `Write to locked store` and similar to include locker identity (op name + offset).  No log mode needed; always-on. |
 | `LOFT_LOG=type_timeline:<varname>` — log every `change_var_type` / `Function::set_type` with stack trace | S (~1 day) | 02d-iii.a, 02d-v, 02d-vi, 02d-vii (each asked "what type does this var have right NOW?" 3+ times via ad-hoc `eprintln!`) | Add to `src/log_config.rs`; instrument `Variables::set_type` + `change_var_type`.  High repeat value across compiler bugs. |
 | `loft --dump-ir <fn>` — print parsed IR tree post-pass-2, pre-codegen | S-M (~2 days) | 02d-iii.e, 02d-vi (used `LOFT_LOG=full` to infer IR shape from bytecode; direct IR dump would be 5× faster to read) | Partial code already exists in `LOFT_LOG=full`'s IR section.  Extract into a standalone CLI flag that filters by fn name. |

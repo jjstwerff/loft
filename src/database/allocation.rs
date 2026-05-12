@@ -431,6 +431,18 @@ impl Stores {
                 "Locking a freed store (store_nr={}, rec={})",
                 r.store_nr, r.rec
             );
+            // Plan-22 02d-vii follow-up — `LOFT_LOG=locks` trace.
+            // Prints the lock event with the store_nr + rec so a
+            // later "Write to locked store" panic at the same
+            // store_nr can be traced back to the lock origin.
+            if crate::log_config::lock_trace_enabled() {
+                eprintln!(
+                    "[locks] LOCK   store_nr={} rec={} (was_locked={})",
+                    r.store_nr,
+                    r.rec,
+                    self.allocations[r.store_nr as usize].is_locked(),
+                );
+            }
             self.allocations[r.store_nr as usize].lock();
         }
     }
@@ -445,7 +457,18 @@ impl Stores {
             // locked.  Worker stores have borrowed=true (light workers) or
             // empty claims (full clone workers).  Only unlock stores that
             // were explicitly locked by lock_store (const param lock).
-            if !store.is_borrowed() && !store.claims_empty() {
+            let will_unlock = !store.is_borrowed() && !store.claims_empty();
+            if crate::log_config::lock_trace_enabled() {
+                eprintln!(
+                    "[locks] UNLOCK store_nr={} rec={} (will_unlock={}, borrowed={}, claims_empty={})",
+                    r.store_nr,
+                    r.rec,
+                    will_unlock,
+                    store.is_borrowed(),
+                    store.claims_empty(),
+                );
+            }
+            if will_unlock {
                 store.unlock();
             }
         }
