@@ -3585,3 +3585,205 @@ mod plan22_phase02d_iii_c_assign_rewrite_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod plan22_phase02d_iii_d_alloc_prepend_tests {
+    //! Plan-22 phase 02d-iii.d — verify
+    //! `maybe_prepend_cell_alloc` wraps a first-set
+    //! `Call(OpSet<T>, [Var(n), 0, rhs])` with the cell
+    //! allocation preamble, and is a no-op for subsequent sets,
+    //! closure-body writes (where LHS inner is non-Var), and
+    //! non-boxed locals.
+    //!
+    //! The closure-body write rewrite is delivered FOR FREE by
+    //! 02d-iii.b's auto-deref + `call_to_set_op` in
+    //! `parser/operators.rs:283` — the existing machinery
+    //! already maps `OpGetInt` → `OpSetInt` when the LHS shape
+    //! is `Call(OpGetInt, [<inner>, Int(pos)])`.  This helper
+    //! delivers the OUTER-binding alloc that the auto-deref +
+    //! `call_to_set_op` path doesn't provide.
+    //!
+    //! Foundation step: helper is shipped as infrastructure;
+    //! a `parse_assign_op` hook activates it with 02d-iii.e.
+
+    use crate::data::{Type, Value};
+    use crate::parser::Parser;
+
+    /// Helper: build a parser with defaults loaded, synthesise a
+    /// `__cell_<T>` struct, and add a fresh boxed-scalar local.
+    fn parser_with_boxed_local(
+        value_tp: &Type,
+        cell_name: &str,
+        var_name: &str,
+    ) -> (Parser, u32, u16) {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let cell_d_nr = p
+            .data
+            .add_def(cell_name, p.lexer.pos(), crate::data::DefType::Struct);
+        p.data
+            .add_attribute(&mut p.lexer, cell_d_nr, "value", value_tp.clone());
+        let v_nr = p
+            .vars
+            .add_variable(var_name, &Type::Reference(cell_d_nr, vec![]), &mut p.lexer);
+        (p, cell_d_nr, v_nr)
+    }
+
+    #[test]
+    fn first_set_wraps_with_alloc() {
+        let (mut p, cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        let op_get = p.data.def_nr("OpGetInt");
+        let op_set = p.data.def_nr("OpSetInt");
+        let op_db = p.data.def_nr("OpDatabase");
+        let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(0)]);
+        let result = Value::Call(
+            op_set,
+            vec![Value::Var(v_nr), Value::Int(0), Value::Int(42)],
+        );
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type);
+        let Value::Insert(ops) = wrapped else {
+            panic!("expected Insert wrap; got non-Insert");
+        };
+        assert_eq!(ops.len(), 3);
+        match &ops[0] {
+            Value::Set(set_v, val) => {
+                assert_eq!(*set_v, v_nr);
+                assert!(matches!(**val, Value::Null));
+            }
+            other => panic!("op[0] should be Set(n, Null); got {other:?}"),
+        }
+        match &ops[1] {
+            Value::Call(d, args) => {
+                assert_eq!(*d, op_db);
+                assert!(matches!(args[0], Value::Var(x) if x == v_nr));
+                assert!(matches!(args[1], Value::Int(kt) if kt == cell_kt));
+            }
+            other => panic!("op[1] should be OpDatabase(n, kt); got {other:?}"),
+        }
+        assert_eq!(ops[2], result, "op[2] should be the original OpSetInt call");
+        assert!(
+            p.vars.is_defined(v_nr),
+            "variable should be marked defined after first-set alloc"
+        );
+    }
+
+    #[test]
+    fn subsequent_set_unchanged() {
+        let (mut p, _cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        p.vars.defined(v_nr);
+        let op_get = p.data.def_nr("OpGetInt");
+        let op_set = p.data.def_nr("OpSetInt");
+        let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(0)]);
+        let result = Value::Call(op_set, vec![Value::Var(v_nr), Value::Int(0), Value::Int(7)]);
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        assert_eq!(wrapped, result, "subsequent set should not be wrapped");
+    }
+
+    #[test]
+    fn closure_body_lhs_is_no_op() {
+        // When the LHS auto-deref's inner is a Call (e.g.
+        // get_field(closure, n_field)) instead of Var(n), the
+        // helper is a no-op — the cell was already allocated by
+        // the parent.
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let op_get = p.data.def_nr("OpGetInt");
+        let op_set = p.data.def_nr("OpSetInt");
+        let fake_get_field = Value::Call(op_get, vec![Value::Var(99), Value::Int(8)]);
+        let lhs = Value::Call(op_get, vec![fake_get_field.clone(), Value::Int(0)]);
+        let result = Value::Call(op_set, vec![fake_get_field, Value::Int(0), Value::Int(11)]);
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        assert_eq!(
+            wrapped, result,
+            "closure-body LHS (non-Var inner) should not be wrapped"
+        );
+    }
+
+    #[test]
+    fn non_boxed_lhs_is_no_op() {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let s_d_nr = p
+            .data
+            .add_def("MyStruct", p.lexer.pos(), crate::data::DefType::Struct);
+        let v_nr = p
+            .vars
+            .add_variable("s", &Type::Reference(s_d_nr, vec![]), &mut p.lexer);
+        let op_get = p.data.def_nr("OpGetInt");
+        let op_set = p.data.def_nr("OpSetInt");
+        let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(0)]);
+        let result = Value::Call(
+            op_set,
+            vec![Value::Var(v_nr), Value::Int(0), Value::Int(99)],
+        );
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        assert_eq!(
+            wrapped, result,
+            "non-cell Reference LHS should not be wrapped"
+        );
+    }
+
+    #[test]
+    fn non_call_lhs_is_no_op() {
+        let (mut p, _cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        let lhs = Value::Var(v_nr);
+        let result = Value::Set(v_nr, Box::new(Value::Int(5)));
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        assert_eq!(
+            wrapped, result,
+            "non-Call LHS (no auto-deref pattern) should not be wrapped"
+        );
+    }
+
+    #[test]
+    fn lhs_with_non_zero_offset_is_no_op() {
+        // Non-zero offset means struct field read, not cell
+        // value read.  Helper returns unchanged.
+        let (mut p, _cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        let op_get = p.data.def_nr("OpGetInt");
+        let op_set = p.data.def_nr("OpSetInt");
+        let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(8)]);
+        let result = Value::Call(op_set, vec![Value::Var(v_nr), Value::Int(8), Value::Int(3)]);
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        assert_eq!(wrapped, result, "non-zero-offset LHS should not be wrapped");
+    }
+
+    #[test]
+    fn text_cell_first_set_uses_correct_kt() {
+        let (mut p, cell_d_nr, v_nr) =
+            parser_with_boxed_local(&Type::Text(vec![]), "__cell_text", "s");
+        let op_get = p.data.def_nr("OpGetText");
+        let op_set = p.data.def_nr("OpSetText");
+        let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(0)]);
+        let result = Value::Call(
+            op_set,
+            vec![Value::Var(v_nr), Value::Int(0), Value::Text("hi".into())],
+        );
+        let wrapped = p.maybe_prepend_cell_alloc(result, &lhs);
+        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type);
+        if let Value::Insert(ops) = wrapped
+            && let Value::Call(_, args) = &ops[1]
+        {
+            assert!(matches!(args[1], Value::Int(kt) if kt == cell_kt));
+        } else {
+            panic!("expected Insert with OpDatabase op[1]");
+        }
+    }
+}

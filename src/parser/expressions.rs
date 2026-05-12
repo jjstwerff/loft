@@ -1524,6 +1524,87 @@ use a separate collection or add after the loop"
         *code = self.write_to_file(file_v, rhs_code, &rhs_type, cast_alias);
     }
 
+    /// Plan-22 phase 02d-iii.d — prepend cell allocation when a
+    /// first-set assignment targets an uninitialised boxed-scalar
+    /// local in the parent body.
+    ///
+    /// Context: phase 02d-iii.b's auto-deref wraps every read of
+    /// a boxed-scalar local as `Call(OpGet<T>, [Var(v_nr),
+    /// Int(0)])`.  When that shape lands on the LHS of an
+    /// assignment, the existing `towards_set` →
+    /// `call_to_set_op` machinery (parser/operators.rs:283)
+    /// correctly maps `OpGet<T>` → `OpSet<T>` and yields
+    /// `Call(OpSet<T>, [Var(v_nr), Int(0), rhs])`.  But for the
+    /// FIRST set, `v_nr`'s slot holds an uninitialised DbRef —
+    /// writing through it would crash the runtime.
+    ///
+    /// This helper detects that pattern and wraps the result in
+    /// `Insert([v_set(v_nr, Null), OpDatabase(v_nr, cell_kt),
+    /// result])` so the cell is allocated before the first
+    /// write.  Marks `v_nr` as defined; subsequent writes hit
+    /// the same OpSet directly without the prepend.
+    ///
+    /// CLOSURE-BODY case: when the LHS auto-deref's `inner` is
+    /// NOT a `Var` (e.g. `get_field(closure, n_field)` for a
+    /// captured boxed scalar), the helper is a no-op — the
+    /// cell was already allocated by the parent's first-set,
+    /// the closure record holds the shared DbRef, and the
+    /// closure's write goes through that DbRef directly via the
+    /// existing `Call(OpSet<T>, [get_field, Int(0), rhs])` IR.
+    /// This is the missing-write-rewrite that 02d-iii.d delivers
+    /// FOR FREE via 02d-iii.b's auto-deref + the existing
+    /// `call_to_set_op` machinery.
+    ///
+    /// Dormant in production (02d-iii.a's flip is dormant — no
+    /// variable carries `Reference(__cell_*, _)`).  Activates in
+    /// 02d-iii.e.
+    #[allow(
+        dead_code,
+        reason = "Helper invoked from tests; parse_assign_op hook activates with 02d-iii.e."
+    )]
+    pub(crate) fn maybe_prepend_cell_alloc(&mut self, result: Value, lhs: &Value) -> Value {
+        // Detect: lhs = Call(OpGet<T>, [Var(v_nr), Int(0)])
+        let Value::Call(_, lhs_args) = lhs.unspan() else {
+            return result;
+        };
+        if lhs_args.len() != 2 {
+            return result;
+        }
+        let Value::Var(v_nr) = lhs_args[0].unspan() else {
+            return result;
+        };
+        if !matches!(lhs_args[1].unspan(), Value::Int(0)) {
+            return result;
+        }
+        let v_nr = *v_nr;
+        if !self.vars.exists(v_nr) {
+            return result;
+        }
+        let tp = self.vars.tp(v_nr).clone();
+        let Type::Reference(cell_d_nr, _) = &tp else {
+            return result;
+        };
+        if !self.data.def(*cell_d_nr).name.starts_with("__cell_") {
+            return result;
+        }
+        if self.vars.is_defined(v_nr) {
+            // Subsequent: cell already exists, no alloc needed.
+            return result;
+        }
+        // First-set: prepend cell allocation.
+        let op_db = self.data.def_nr("OpDatabase");
+        if op_db == u32::MAX {
+            return result;
+        }
+        let cell_kt = i32::from(self.data.def(*cell_d_nr).known_type);
+        self.vars.defined(v_nr);
+        Value::Insert(vec![
+            v_set(v_nr, Value::Null),
+            Value::Call(op_db, vec![Value::Var(v_nr), Value::Int(cell_kt)]),
+            result,
+        ])
+    }
+
     /// Plan-22 phase 02d-iii.c — build the rewrite IR for an
     /// assignment to a boxed-scalar local.  Returns `Some(IR)`
     /// when `var_nr`'s type is `Reference(__cell_<T>, _)` and
