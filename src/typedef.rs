@@ -526,6 +526,20 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     }
                     c_tp
                 }
+                Type::Reference(_, ref deps) if !deps.is_empty() => {
+                    // Plan-22 phase 02b (2026-05-12): auto-Reference
+                    // encoding for mutated captures.  When the
+                    // attribute's dep list is non-empty, the field
+                    // holds a 12-byte `DbRef` pointing at the source
+                    // record (shared storage) instead of inline
+                    // bytes (deep-copy).  The dep list is the marker
+                    // — phase 02c is the only producer that sets it
+                    // for closure-record attributes; today's user
+                    // code path always has empty deps so the
+                    // legacy inline-bytes path stays active for
+                    // every existing struct field.
+                    database.dbref()
+                }
                 _ => data.def(t_nr).known_type,
             };
             database.field(s_type, &data.attr_name(d_nr, a_nr), tp);

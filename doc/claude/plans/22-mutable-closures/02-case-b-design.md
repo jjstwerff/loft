@@ -173,7 +173,7 @@ foundation.  Ships when the existing regression net stays green
 AND the 5 walker tests in
 `plan22_phase01_mutation_detection_tests` still pass.
 
-### 02b — new storage encoding for mutated Reference captures
+### 02b — new storage encoding for mutated Reference captures — SHIPPED 2026-05-12
 
 Implement the auto-Reference storage:
 

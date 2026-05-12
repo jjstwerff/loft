@@ -2649,12 +2649,23 @@ impl Parser {
                 let info = self.type_info(tp);
                 self.cl("OpGetField", &[code, p, info])
             }
-            Type::Reference(_, _) => {
-                // Inline struct field: OpGetField adds the field offset to the base ref.
-                // Linked/base type dereference is handled at the call site (fields.rs)
-                // using OpVectorRef, which combines the 4-byte pointer read + deref.
-                let info = self.type_info(tp);
-                self.cl("OpGetField", &[code, p, info])
+            Type::Reference(_, deps) => {
+                if deps.is_empty() {
+                    // Inline struct field: OpGetField adds the field offset to the base ref.
+                    // Linked/base type dereference is handled at the call site (fields.rs)
+                    // using OpVectorRef, which combines the 4-byte pointer read + deref.
+                    let info = self.type_info(tp);
+                    self.cl("OpGetField", &[code, p, info])
+                } else {
+                    // Plan-22 phase 02b (2026-05-12): auto-Reference field
+                    // — the field stores a 12-byte DbRef pointing at the
+                    // source record (shared storage).  Read the full
+                    // DbRef back via OpGetDbRef.  Phase 02c is the
+                    // producer that gives a closure-record attribute
+                    // non-empty deps; user struct fields always have
+                    // empty deps (legacy inline-bytes path above).
+                    self.cl("OpGetDbRef", &[code, p])
+                }
             }
             Type::Function(_, _, _) => {
                 // P213: storage is two database fields per loft attribute
@@ -3097,20 +3108,31 @@ impl Parser {
                 v_block(ops, Type::Void, "tuple_field_set")
             }
             Type::Character => self.cl("OpSetCharacter", &[ref_code, pos_val, val_code]),
-            Type::Reference(inner_tp, _) => {
-                // The value is a 12-byte DbRef; OpSetInt would only read 4 bytes of it.
-                // Copy the struct bytes into the embedded field instead.
-                let type_nr = if self.first_pass {
-                    Value::Int(i32::from(u16::MAX))
+            Type::Reference(inner_tp, deps) => {
+                if deps.is_empty() {
+                    // The value is a 12-byte DbRef; OpSetInt would only read 4 bytes of it.
+                    // Copy the struct bytes into the embedded field instead.
+                    let type_nr = if self.first_pass {
+                        Value::Int(i32::from(u16::MAX))
+                    } else {
+                        Value::Int(i32::from(self.data.def(inner_tp).known_type))
+                    };
+                    let field_ref = self.cl("OpGetField", &[ref_code, pos_val, type_nr.clone()]);
+                    // Note: the free-source high-bit for Issue #120 is set in
+                    // copy_ref() (operators.rs), which is the path for struct
+                    // field reassignment. This set_field_check path is for
+                    // construction (initial field population).
+                    self.cl("OpCopyRecord", &[val_code.clone(), field_ref, type_nr])
                 } else {
-                    Value::Int(i32::from(self.data.def(inner_tp).known_type))
-                };
-                let field_ref = self.cl("OpGetField", &[ref_code, pos_val, type_nr.clone()]);
-                // Note: the free-source high-bit for Issue #120 is set in
-                // copy_ref() (operators.rs), which is the path for struct
-                // field reassignment. This set_field_check path is for
-                // construction (initial field population).
-                self.cl("OpCopyRecord", &[val_code.clone(), field_ref, type_nr])
+                    // Plan-22 phase 02b (2026-05-12): auto-Reference field
+                    // — store the source's 12-byte DbRef directly,
+                    // sharing the underlying record.  Phase 02c sets
+                    // non-empty deps for mutated Reference captures on
+                    // closure records; today's user code paths keep
+                    // empty deps and stay on the legacy OpCopyRecord
+                    // path above.
+                    self.cl("OpSetDbRef", &[ref_code, pos_val, val_code])
+                }
             }
             Type::Enum(_, false, _) => self.cl("OpSetEnum", &[ref_code, pos_val, val_code]),
             Type::Enum(nr, true, _) => self.cl(
