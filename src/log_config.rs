@@ -146,6 +146,15 @@ pub struct LogConfig {
     /// `LOFT_LOG` directly via `lock_trace_enabled()` so it works
     /// even in test runs that don't construct a `LogConfig`.
     pub trace_locks: bool,
+    /// Print every variable type-mutation event for a specific named
+    /// variable to stderr.  Set via `LOFT_LOG=type_timeline:<varname>`
+    /// — only mutations of variables whose name matches `<varname>`
+    /// are logged.  Each entry shows old type, new type, and the
+    /// mutation site (e.g. `add_variable`, `change_var_type`,
+    /// `set_type`, `subst_type`).
+    /// This field is informational; `variables/mod.rs` reads
+    /// `LOFT_LOG` directly via `type_timeline_target()`.
+    pub trace_type_timeline: Option<String>,
 }
 
 /// Plan-22 phase 02d-vii follow-up — central check for the
@@ -155,6 +164,17 @@ pub struct LogConfig {
 #[must_use]
 pub fn lock_trace_enabled() -> bool {
     std::env::var("LOFT_LOG").as_deref() == Ok("locks")
+}
+
+/// Plan-22 02d-vii follow-up — `LOFT_LOG=type_timeline:<varname>`
+/// mode.  Returns `Some(varname)` when the env var has the
+/// `type_timeline:NAME` form; the caller then logs only var
+/// mutations matching `NAME`.  Returns `None` otherwise (fast
+/// path for the common case).
+#[must_use]
+pub fn type_timeline_target() -> Option<String> {
+    let raw = std::env::var("LOFT_LOG").ok()?;
+    raw.strip_prefix("type_timeline:").map(str::to_string)
 }
 
 impl LogConfig {
@@ -179,6 +199,7 @@ impl LogConfig {
             trace_alloc_free: false,
             poison_free: false,
             trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -201,6 +222,7 @@ impl LogConfig {
             trace_alloc_free: false,
             poison_free: false,
             trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -223,6 +245,7 @@ impl LogConfig {
             trace_alloc_free: false,
             poison_free: false,
             trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -246,6 +269,7 @@ impl LogConfig {
             trace_alloc_free: false,
             poison_free: false,
             trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -268,6 +292,7 @@ impl LogConfig {
             trace_alloc_free: false,
             poison_free: false,
             trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -290,6 +315,7 @@ impl LogConfig {
             trace_alloc_free: false,
             poison_free: false,
             trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -312,6 +338,7 @@ impl LogConfig {
             trace_alloc_free: false,
             poison_free: false,
             trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -337,6 +364,7 @@ impl LogConfig {
             trace_alloc_free: false,
             poison_free: false,
             trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -365,6 +393,7 @@ impl LogConfig {
             trace_alloc_free: false,
             poison_free: false,
             trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -392,6 +421,7 @@ impl LogConfig {
             trace_alloc_free: false,
             poison_free: false,
             trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -436,6 +466,11 @@ impl LogConfig {
             Ok("locks") => {
                 let mut c = Self::full();
                 c.trace_locks = true;
+                c
+            }
+            Ok(s) if s.starts_with("type_timeline:") => {
+                let mut c = Self::full();
+                c.trace_type_timeline = Some(s.trim_start_matches("type_timeline:").to_string());
                 c
             }
             Ok(s) if s.starts_with("crash_tail") => {

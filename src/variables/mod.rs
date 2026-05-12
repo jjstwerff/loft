@@ -625,8 +625,22 @@ impl Function {
     /// Replace all occurrences of `Type::Reference(tv_nr, _)` with `concrete`
     /// in every variable's type definition.  Used when instantiating a generic template.
     pub fn substitute_type(&mut self, tv_nr: u32, concrete: &Type) {
-        for v in &mut self.variables {
-            v.type_def = Self::subst_type(v.type_def.clone(), tv_nr, concrete);
+        let trace_target = crate::log_config::type_timeline_target();
+        for (i, v) in self.variables.iter_mut().enumerate() {
+            let new_tp = Self::subst_type(v.type_def.clone(), tv_nr, concrete);
+            if let Some(target) = &trace_target
+                && v.name == *target
+                && new_tp != v.type_def
+            {
+                eprintln!(
+                    "[type_timeline] {name} (v_nr={v_nr}) {old:?} -> {new:?}  origin=substitute_type(tv_nr={tv_nr})",
+                    name = v.name,
+                    v_nr = i,
+                    old = v.type_def,
+                    new = new_tp,
+                );
+            }
+            v.type_def = new_tp;
         }
     }
 
@@ -670,8 +684,9 @@ impl Function {
 
     pub fn depend(&mut self, var_nr: u16, on: u16) {
         if on != u16::MAX {
-            self.variables[var_nr as usize].type_def =
-                self.variables[var_nr as usize].type_def.depending(on);
+            let new_tp = self.variables[var_nr as usize].type_def.depending(on);
+            self.trace_type_change(var_nr, &new_tp, "depend");
+            self.variables[var_nr as usize].type_def = new_tp;
         }
     }
 
@@ -823,6 +838,7 @@ impl Function {
         // Due to 2 passes through the code, we will add the same variable a second time.
         if let Some(nr) = self.names.get(name) {
             if self.variables[*nr as usize].type_def.is_unknown() {
+                self.trace_type_change(*nr, type_def, "add_variable(reuse)");
                 self.variables[*nr as usize].type_def = type_def.clone();
             }
             return *nr;
@@ -837,6 +853,7 @@ impl Function {
         if let Some(nr) = self.names.get(name) {
             let nr = *nr;
             if self.variables[nr as usize].type_def.is_unknown() {
+                self.trace_type_change(nr, type_def, "add_temp_var(reuse)");
                 self.variables[nr as usize].type_def = type_def.clone();
             }
             return nr;
@@ -960,6 +977,7 @@ impl Function {
         let var_tp = &self.variables[var_nr as usize].type_def;
         // `_` is the universal unused variable — allow type changes silently.
         if self.variables[var_nr as usize].name == "_" && !type_def.is_unknown() {
+            self.trace_type_change(var_nr, type_def, "change_var_type(_)");
             self.variables[var_nr as usize].type_def = type_def.clone();
             return self.is_new(var_nr);
         }
@@ -1014,6 +1032,7 @@ impl Function {
                 type_def.name(data)
             );
         }
+        self.trace_type_change(var_nr, type_def, "change_var_type");
         self.variables[var_nr as usize].type_def = type_def.clone();
         true
     }
@@ -1331,7 +1350,34 @@ impl Function {
         self.variables[var as usize].stack_pos = pos;
     }
 
+    /// Plan-22 02d-vii follow-up — `LOFT_LOG=type_timeline:<varname>`
+    /// trace.  Called from every site that mutates a variable's
+    /// `type_def` field; logs to stderr when the env var matches the
+    /// variable's name.  No-op fast path when the env var is unset
+    /// or has a different value (one `env::var` read per call;
+    /// type-mutations are rare).
+    fn trace_type_change(&self, var_nr: u16, new_tp: &Type, origin: &str) {
+        let Some(target) = crate::log_config::type_timeline_target() else {
+            return;
+        };
+        if (var_nr as usize) >= self.variables.len() {
+            return;
+        }
+        let v = &self.variables[var_nr as usize];
+        if v.name != target {
+            return;
+        }
+        eprintln!(
+            "[type_timeline] {name} (v_nr={v_nr}) {old:?} -> {new:?}  origin={origin}",
+            name = v.name,
+            v_nr = var_nr,
+            old = v.type_def,
+            new = new_tp,
+        );
+    }
+
     pub fn set_type(&mut self, var_nr: u16, tp: Type) {
+        self.trace_type_change(var_nr, &tp, "set_type");
         self.variables[var_nr as usize].type_def = tp;
     }
 
