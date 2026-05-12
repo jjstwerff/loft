@@ -354,11 +354,13 @@ extensions.
   closures; if not, it uses `Reference<T>` exactly like TTT v5.
   Demo functions either way; only on-screen elegance differs.
 
-**Latent risk:** `plans/15-closure-validation` phase 03 /
-closure-DbRef leak (LIFETIME.md "NOT YET HANDLED").  Generation
-script will use closures heavily.  Leak is bounded per closure-
-creation, not per tick — a 30-60 minute talk session is fine; an
-unattended installation running for hours could accumulate.
+**Risk dispositioned (2026-05-12)**: plan-15 phase 03 confirmed
+the closure-DbRef leak feared in LIFETIME.md does NOT manifest
+— closure records free at scope exit via standard local-cleanup
+(D1) or `Parts::ChildRec` cascade (D3).  Heavy closure usage in
+the generation script does not accumulate state across iterations.
+See `tests/leak.rs::p15_phase03_closure_text_capture_*_no_leak`
+for the 100-iteration tight-loop guards.
 
 **Upstream-feeds (this work sharpens scope for):**
 

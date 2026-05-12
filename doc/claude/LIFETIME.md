@@ -74,11 +74,34 @@ Three conditions must ALL be true to emit `OpFreeRef`:
    after use (A14), and by `set_skip_free` for borrowed references like par-loop
    result variables.
 
-#### Function (`Type::Function`) — NOT YET HANDLED
+#### Function (`Type::Function`) — freed at scope exit (verified 2026-05-12)
 
-`Type::Function` does not appear in the `get_free_vars` match.  The closure DbRef
-embedded at offset+4 in the 16-byte fn-ref slot is never explicitly freed.  See
-"Implementation path" below.
+`Type::Function` does not appear in the `get_free_vars` match by name, but the
+closure DbRef embedded at offset+4 of the 16-byte fn-ref slot is freed at
+scope exit by two mechanisms that cover every shipped capture pattern:
+
+- **Local var (D1)**: closure record dies with the stack frame via the
+  standard local-cleanup path; the captured payload (text / reference / etc.)
+  is freed transitively.
+- **Struct field (D3)**: P213's `Parts::ChildRec` cascade walks the host
+  struct's fields at scope exit and frees the closure record co-located in
+  the host store.
+
+**Verified clean** by `tests/leak.rs::p15_phase03_closure_text_capture_*_no_leak`
+— two 100-iteration tight loops calling capturing closures (text capture in
+both D1 and D3 destinations) with `state.check_store_leaks()` asserting zero
+leaked stores after.
+
+The legacy "Implementation path" section below describes a `get_free_vars`
+`Type::Function` arm that was contemplated but never landed because the
+`Parts::ChildRec` + standard-local-cleanup combination already covers the
+surface.  The cross-scope closure work it discusses (Steps 1–4) DID land
+through P213/P215/P227 by 2026-05-05 — read it as historical context, not
+as current open work.
+
+Plan-15 phase 06 will trim the legacy "Implementation path" section once
+the matrix is complete; the C2 cells in `tests/closure_matrix.rs` plus the
+leak guards above are the canonical regression record for this surface.
 
 ---
 
@@ -87,9 +110,9 @@ embedded at offset+4 in the 16-byte fn-ref slot is never explicitly freed.  See
 | | Text (`Type::Text(dep)`) | Reference (`Type::Reference(d, dep)`) | Function (`Type::Function(p, r, dep)`) |
 |---|---|---|---|
 | **Storage** | Stack frame (`Str` = ptr + len) | Store heap (12-byte `DbRef`) | Stack frame (16B: 4B d_nr + 12B closure DbRef) |
-| **dep list used for freeing?** | No — always freed | Yes — only freed when `dep.is_empty()` | Not yet — closure leak (see below) |
+| **dep list used for freeing?** | No — always freed | Yes — only freed when `dep.is_empty()` | Indirectly — `tp.depend()` keeps closure-record dep visible to the standard `Reference` free path |
 | **dep list purpose** | Type compatibility / format string tracking | Ownership tracking | Protects closure work var via `tp.depend()` |
-| **Free opcode** | `OpFreeText` | `OpFreeRef` | None yet (closure DbRef at offset+4 not freed) |
+| **Free opcode** | `OpFreeText` | `OpFreeRef` | `OpFreeRef` on the closure-record DbRef (D1: stack-frame exit; D3: `Parts::ChildRec` cascade) |
 | **skip_free flag** | Not checked | Checked | N/A |
 | **Return-value exemption** | By `ret_var` identity only | By `ret_var` identity AND `tp.depend().contains(&v)` | Via `tp.depend()` on declared return type |
 

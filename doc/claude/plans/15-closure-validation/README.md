@@ -6,12 +6,20 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Plan 15 — Closure validation: capture × storage matrix
 
 **Status: ACTIVE — promoted to current 2026-05-12.**
+Phases 00–03 SHIPPED 2026-05-12.
+
 Pre-flight surveyed 2026-05-04 (6/12 probes failed → 50% bug yield);
 the surveyed P-issues (P213/P214/P215/P216) all closed in the
-2026-05-04..05 sprint, so the original motivating bugs are gone but
-the matrix itself remains unfilled and the LIFETIME.md
-"Type::Function — NOT YET HANDLED" closure-leak gap is still open.
-Phase 00 wiring is the next step.
+2026-05-04..05 sprint, so the original motivating bugs are gone.
+Phase 03 dispositioned the LIFETIME.md "Type::Function — NOT YET
+HANDLED" closure-leak gap as documentation drift, not a runtime
+bug — confirmed clean for both D1 (local) and D3 (struct field)
+text captures via 100-iteration leak guards in `tests/leak.rs`
+(`p15_phase03_closure_text_capture_*_no_leak`).  LIFETIME.md
+updated 2026-05-12 to reflect actual freed-at-scope-exit
+behaviour.
+
+Phase 04 (C3 — Reference captures) is the next step.
 
 ## Goal
 
@@ -43,18 +51,19 @@ That permutation was never written down as a cell.
 
 Two known gaps point at concrete bug-yield potential:
 
-1. **LIFETIME.md § "Function (`Type::Function`) — NOT YET HANDLED"**
-   says the closure DbRef at offset+4 of the 16-byte fn-ref slot
-   "is never explicitly freed" and calls it a "closure leak (see
-   below)".  A capture-of-text + storage-in-struct-field cell would
-   surface that leak as a store-leak under
-   `tests/leak.rs`-style assertion or as a `LOFT_LOG=alloc_free`
-   trace.
+1. **LIFETIME.md flagged a closure-DbRef leak** (the "Function
+   (`Type::Function`) — NOT YET HANDLED" annotation).  Phase 03
+   investigated this with capture-of-text + storage-in-struct-field
+   cells under `tests/leak.rs`-style 100-iteration assertions and
+   confirmed the leak does NOT manifest — closure records free at
+   scope exit via standard local-cleanup (D1) or `Parts::ChildRec`
+   cascade (D3).  Disposed as documentation drift; LIFETIME.md
+   updated 2026-05-12.  No P-issue filed.
 2. The loft-write skill records: *"Capturing closures in
    `vector<fn(...)>` is supported only for non-capturing lambdas or
    when all elements are the same closure type."*  That's a real
-   restriction that the matrix should pin (cells either pass or
-   match the exact diagnostic).
+   restriction that the matrix pins (cells either pass or match
+   the exact diagnostic).
 
 Per the project's bug-hunt policy (memory: `feedback_proactive_bug_hunting`), 
 extending the matrix is the way to find compiler bugs we don't know
@@ -107,7 +116,7 @@ Each cell `(C, D)` has one of:
 | 03 — text captures (C2) | C2 | D1, D2, D3 | The active risk — closure-leak gap (LIFETIME.md).  Phase 03 either confirms the leak via `tests/leak.rs` and files a P-issue, or surfaces that the leak is benign for these cells.  Decision recorded in TUPLES-style "Decision" section. |
 | 04 — Reference captures (C3) | C3 | D1, D2, D3 | DbRef-in-closure-record dep tracking; surfaces any move-vs-copy semantics gap analogous to plan-14 T1.8c. |
 | 05 — nested closures (C6) | C6 | D1, D2 | Closure-capturing-closure; verifies that the captured closure's own dep list propagates. |
-| 06 — freeze + doc | — | — | Update LIFETIME.md (close the "NOT YET HANDLED" row if phase 03 fixed it), PLANNING.md, CHANGELOG_TECHNICAL.md.  Move plan to `finished/`. |
+| 06 — freeze + doc | — | — | LIFETIME.md already updated (phase 03 closeout 2026-05-12).  Phase 06 trims the legacy "Implementation path" steps in LIFETIME.md (the 4-step plan that already shipped via P213/P215/P227), updates PLANNING.md + CHANGELOG_TECHNICAL.md, moves plan to `finished/`. |
 
 ## Acceptance for the whole plan
 
