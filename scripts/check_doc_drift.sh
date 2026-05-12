@@ -341,10 +341,20 @@ check_refs() {
 }
 
 # ---- Check 7: lib/<name>/ hygiene (warn-only) ----
-# Every lib/<name>/ should have both loft.toml (package manifest) and
-# README.md (downstream-consumer documentation).  Missing files are
-# warnings, not errors — they're long-tail hygiene that doesn't gate
-# release.
+# Every lib/<name>/ should have:
+#   - loft.toml (package manifest — essential for the package format)
+#   - src/<name>.loft (the conventional entry file)
+#   - a description comment in the entry file beyond the standard
+#     Copyright + SPDX-License-Identifier headers (the "what is this
+#     library" docstring that gives a reader 5-second orientation)
+#
+# Notably we do NOT require README.md.  README is downstream-consumer
+# documentation — useful when `loft install <pkg>` (PKG.REG) starts
+# surfacing it to users who can't see source, but premature today
+# while every consumer reads the source tree directly.  The header
+# docstring already gives a reader the "what is this" answer; adding
+# a one-line README that points at src/ is busywork without
+# additional information.  Re-add the README check when PKG.REG ships.
 check_libs() {
   say "=== lib/ hygiene ==="
   local hits=0
@@ -354,7 +364,12 @@ check_libs() {
     name=$(basename "$d")
     missing=""
     [ -f "$d/loft.toml" ] || missing="$missing loft.toml"
-    [ -f "$d/README.md" ] || missing="$missing README.md"
+    entry="$d/src/$name.loft"
+    if [ ! -f "$entry" ]; then
+      missing="$missing src/$name.loft"
+    elif ! has_header_docstring "$entry"; then
+      missing="$missing src/$name.loft:header-docstring"
+    fi
     if [ -n "$missing" ]; then
       yellow "  $name: missing$missing"
       hits=$((hits + 1))
@@ -367,6 +382,36 @@ check_libs() {
     yellow "  $hits libraries with missing hygiene files"
     # Warning-only: doesn't set DRIFT.
   fi
+}
+
+# Returns 0 (true) when the file has at least one `//` comment line
+# beyond the standard Copyright + SPDX-License-Identifier headers,
+# scanning the first 10 non-blank lines.  This is the "what does
+# this library do" description that orients a reader in 5 seconds.
+#
+# Examples that pass:
+#   // Graphics library — 2D pixel canvas with drawing primitives.
+#   // --- HTTP Server + WebSocket ---
+#   // crypto — hashing, HMAC, base64, JWT.
+#
+# Examples that fail (Copyright/SPDX only):
+#   // Copyright (c) 2026 Jurjen Stellingwerff
+#   // SPDX-License-Identifier: LGPL-3.0-or-later
+#   (blank, then code)
+has_header_docstring() {
+  local file="$1"
+  local count
+  # Take first 10 non-blank lines, keep `//` comment lines that are
+  # NOT Copyright + NOT SPDX-License-Identifier.  At least one such
+  # line means a real description is present.
+  count=$(awk '
+    /^[[:space:]]*$/ { next }
+    seen >= 10       { exit }
+    { seen++ }
+    /^\/\// && !/Copyright/ && !/SPDX-License-Identifier/ { print; matched++ }
+    END { exit (matched > 0 ? 0 : 1) }
+  ' "$file" 2>/dev/null | wc -l)
+  [ "$count" -gt 0 ]
 }
 
 # Sep between sections (verbose mode only).
