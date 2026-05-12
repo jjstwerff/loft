@@ -68,6 +68,7 @@ Directly enables loft's core use case: browser games anyone can play via shared 
 | (cross) | Event-loop abstraction (client + server protocol) | MH | ✓ | plans/future/23-event-loop/README.md |
 | (cross) | Protocol-validation vehicle (TIC_TAC_TOE — v1/v2/v3/v5 shipped, v3.5/v4/v6 gated on plan-22 + plan-23 YIELD.2) | M | ✓ | plans/future/32-tic-tac-toe/README.md |
 | (cross) | First real-game milestone — multi-client hex editor | M | ✓ | plans/future/24-multiplayer-editor/README.md |
+| (cross) | `lib/server` hardening (binary broadcast / send_to, recv-bytes, observability) — prereq for plan-36 | M | ✓ | plans/future/34-server-hardening/README.md |
 | SRV.1 | Plain HTTP routing + middleware | M | ✓ | lib_plans/future/08-server/README.md |
 | SRV.2 | HTTPS with static PEM certificates | S | ✓ | lib_plans/future/08-server/README.md |
 | SRV.3 | WebSocket support | S | ✓ | lib_plans/future/08-server/README.md |
@@ -171,6 +172,7 @@ Language correctness, removes special cases.  (Validation matrices that catch si
 | A8 | Slicing, open-ended ranges, partial-key match on sorted/index | M | ✓ | plans/future/30-sorted-slice/README.md |
 | C52 | Stdlib name clash: warning + `std::` prefix | M | ✓ | (needs plan promotion) |
 | C53 | Match arms: library enums + bare variant names | M | ✓ | (needs plan promotion) |
+| (cross) | `const` struct fields (write-once-at-construction) — closes INCONSISTENCIES.md § 33 | M | ✓ | plans/future/33-const-fields/README.md |
 | I12 | Interfaces: factory methods (`fn zero() -> Self`) | S | ✓ | (needs plan promotion) |
 | (cross) | Standalone regex library (cleaner text-pattern story) | M | ✓ | lib_plans/future/01-regex/README.md |
 
@@ -288,7 +290,8 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | HTTP / WS / static-file server library |
 | [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/future/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
 | [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/future/07-web-ide W2** + moros editor MO.* + script-target build mode | User-authored scene scripts (SC.1-SC.6 + SC.P) |
-| [`plans/future/36-audience-generative-art/`](plans/future/36-audience-generative-art/) | M | — | Audience-driven plant/crystal growth demo via shared URL |
+| [`plans/future/34-server-hardening/`](plans/future/34-server-hardening/) | M | — | `lib/server` polish: binary broadcast / send_to, recv-bytes, observability — prereq for plan-36 |
+| [`plans/future/36-audience-generative-art/`](plans/future/36-audience-generative-art/) | M | **plans/future/34-server-hardening** | Audience-driven plant/crystal growth demo via shared URL |
 
 ### F — Foundation
 
@@ -315,6 +318,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`plans/22-mutable-closures/`](plans/22-mutable-closures/) | M-MH | — | Novice-fit closure capture (evolves C38).  Promoted to current 2026-05-10; drivers TTT v6 + plan-36 server retrofit |
 | [`plans/future/26-match-peg/`](plans/future/26-match-peg/) | MH | — | L3 PEG-style match patterns (cooperates with regex lib) |
 | [`plans/future/30-sorted-slice/`](plans/future/30-sorted-slice/) | M | — | A8 — slicing / open-ended ranges / partial-key match on sorted/index |
+| [`plans/future/33-const-fields/`](plans/future/33-const-fields/) | M | — | `const` struct fields — closes INCONSISTENCIES.md § 33 (locals/params already support it) |
 | [`lib_plans/future/01-regex/`](lib_plans/future/01-regex/) | M | **lib_plans/future/03-lazy-stdlib** | First lazy-loaded stdlib consumer |
 
 ### Q — Internal quality
