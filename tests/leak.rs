@@ -727,6 +727,48 @@ fn p22_phase02d_iii_e_scalar_capture_no_leak() {
     );
 }
 
+/// Plan-22 phase 02d-iv — multi-type capture leak guard.
+///
+/// 100-iteration tight loop: each iteration boxes THREE
+/// distinct primitive captures (integer + float + character)
+/// simultaneously, mutates each via a single closure, asserts
+/// results.  Three `__cell_<T>` records per iteration, each
+/// with an auto-Reference closure-record attribute, all need
+/// to free cleanly.  Exercises the dedup invariant in
+/// `synthesize_cell_structs` (one cell per canonical type, not
+/// one per binding) under load.
+#[test]
+fn p22_phase02d_iv_multi_type_capture_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_iteration() -> integer {
+            n = 0;
+            x = 0.0;
+            c = 'a';
+            bump = fn() {
+                n = n + 1;
+                x = x + 0.5;
+                c = 'z';
+            };
+            bump();
+            bump();
+            assert(n == 2, "n: {n}");
+            assert(x == 1.0, "x: {x}");
+            assert(c == 'z', "c: {c}");
+            n
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == 2, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
 /// Plan-15 phase 05 — nested closure (C6) leak guard.
 ///
 /// `inner` is a non-capturing fn-ref local; `outer` captures

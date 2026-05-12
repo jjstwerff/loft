@@ -955,25 +955,36 @@ impl Parser {
             {
                 continue;
             }
-            // Plan-22 phase 02d-iii.e — Text is intentionally
-            // EXCLUDED from the actual flip today.  Text mutation
-            // (`log += s`) goes through a special `assign_text`
-            // path in `parse_assign_op` that expects a `Var(v_nr)`
-            // LHS — auto-deref'd `Call(OpGetText, [Var, 0])`
-            // would break that path.  The existing void-return-
-            // closure write-back mechanism in `parse_call_ref`
-            // already handles text captures correctly today
-            // (text IS in `closure_record` as inline 16B Text,
-            // write-back copies back per-call).  Text-cell boxing
-            // is a follow-up sub-step (02d-iv or later) — needs
-            // a dedicated path that decomposes `log += s` into
-            // "read cell text → append → write cell text".
+            // Plan-22 phase 02d-iii.e / 02d-iv — Text + Boolean
+            // are intentionally EXCLUDED from the actual flip
+            // today.
+            //
+            // Text: mutation (`log += s`) goes through a special
+            // `assign_text` path in `parse_assign_op` that
+            // expects a `Var(v_nr)` LHS — auto-deref'd
+            // `Call(OpGetText, [Var, 0])` would break that
+            // path.  Re-assignment (`ta = "after"`) is also a
+            // problem because it'd write to a closure-local
+            // copy without propagation (text re-assign isn't
+            // currently handled by the write-back mechanism
+            // either, so this is a pre-existing limitation).
+            //
+            // Boolean: 02d-iii.b's auto-deref wraps boolean
+            // reads in `Call(OpEqInt, [Call(OpGetByte, [Var,
+            // Int(0), Int(0)]), Int(1)])`.  When this lands on
+            // an LHS, towards_set sees `OpEqInt` as the outer
+            // call and call_to_set_op has no mapping → "Cannot
+            // assign to attribute on type 'OpEqInt'".  Boolean
+            // captures are rare in practice (and the existing
+            // write-back handles them).
             //
             // The cell struct + scalars_to_box entry are still
-            // synthesised for text (so 02d-i/ii unit tests stay
-            // green); only the actual variables-table flip is
-            // skipped.
-            if matches!(&original_tp, Type::Text(_)) {
+            // synthesised for these types (so 02d-i/ii unit
+            // tests stay green); only the actual variables-table
+            // flip is skipped.  Future sub-step adds dedicated
+            // read-append-write for text + OpEqInt unwrap for
+            // boolean.
+            if matches!(&original_tp, Type::Text(_) | Type::Boolean) {
                 continue;
             }
             let Some(cell_name) = cell_struct_name(&original_tp, &self.data) else {
@@ -2212,11 +2223,15 @@ fn box_captured_names_for_outer_scalars(
         if !scalars.iter().any(|s| s == name) {
             continue;
         }
-        // Plan-22 phase 02d-iii.e — keep text captures un-boxed
-        // (mirrors `flip_scalars_to_box_types`'s text-skip).
-        // Text mutation `log += s` flows through the existing
-        // write-back mechanism, not through cell propagation.
-        if matches!(tp, Type::Text(_)) {
+        // Plan-22 phase 02d-iii.e / 02d-iv — keep text + boolean
+        // captures un-boxed (mirrors `flip_scalars_to_box_types`'s
+        // text/boolean-skip).  See that helper's doc-comment for
+        // the rationale.  Text mutation `log += s` flows through
+        // the existing write-back mechanism; boolean captures
+        // currently can't round-trip through `call_to_set_op`
+        // because 02d-iii.b's read auto-deref wraps boolean in
+        // `OpEqInt(...)` for which there's no Set counterpart.
+        if matches!(tp, Type::Text(_) | Type::Boolean) {
             continue;
         }
         if let Some(cell_name) = cell_struct_name(tp, data) {

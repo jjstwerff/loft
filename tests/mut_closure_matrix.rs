@@ -28,14 +28,19 @@
 //! | | D1 — local var | D2 — fn parameter | D3 — struct field | D4 — return value |
 //! |---|---|---|---|---|
 //! | **A** read-only | PASS:00 | PASS:00 | PASS:00 | PASS:00 |
-//! | **B** co-scoped (Reference) | FIX:02 | FIX:02 | FIX:02 | n/a |
-//! | **B** co-scoped (scalar via cell) | FIX:02 | FIX:02 | FIX:02 | n/a |
+//! | **B** co-scoped (Reference) | PASS:02c | PASS:02c | PASS:02c | n/a |
+//! | **B** co-scoped (scalar via cell — int/float/single/char/enum) | PASS:02d-iii.e/iv | PASS:02d-iii.e/iv | PASS:02d-iii.e/iv | n/a |
+//! | **B** co-scoped (scalar via cell — text/boolean) | DEFER:02d-v+ | DEFER:02d-v+ | DEFER:02d-v+ | n/a |
 //! | **C** moved (factory) | n/a | n/a | FIX:03 | FIX:03 |
 //! | **D** aliased mutating | REJECT:04 | REJECT:04 | REJECT:04 | REJECT:04 |
 //! | **Mutable<T> explicit** | FIX:05 | FIX:05 | FIX:05 | FIX:05 |
 //!
-//! Phase 00 ships smokes + Case A baseline cells only.  B/C/D/M
-//! cells land in their respective phase commits.
+//! Phase 02d-iv (2026-05-12) extends scalar boxing to float /
+//! single / character / plain enum + multi-scalar.  Text and
+//! boolean are intentionally excluded (text-`+=` flows through
+//! the existing void-return write-back; boolean reads are
+//! wrapped in `OpEqInt` which has no `OpSetEqInt` counterpart
+//! in `call_to_set_op`).  Both will be addressed in 02d-v.
 //!
 //! Each `body` must declare `fn test() { … }` and any helper fns
 //! at file scope; the harness appends `fn main() { test(); }`.
@@ -289,6 +294,154 @@ cross_mode!(
         bump();
         print("after 3x bump: {count}\n");
         assert(count == 3, "expected 3, got {count}");
+    }
+    "#
+);
+
+// ── Phase 02d-iv — Case B (additional primitive types) ──────────────────────
+//
+// 02d-iv extends scalar-capture boxing to the remaining
+// supported primitives: float, character, single, plain enum,
+// plus the multi-scalar shape (two distinct scalars boxed
+// simultaneously into separate `__cell_<T>` records).  Boolean
+// is intentionally excluded (02d-iii.b's auto-deref wraps
+// boolean in `OpEqInt(...)` for which there's no Set
+// counterpart in `call_to_set_op`).  Text re-assignment is
+// likewise not yet supported (text mutation `log += s` flows
+// through the existing void-return write-back mechanism, not
+// through cells).
+
+cross_mode!(
+    b_d1_float_capture_local_mutates,
+    r#"
+    fn test() {
+        x = 0.0;
+        bump = fn() { x = x + 1.5; };
+        bump();
+        bump();
+        print("float: {x}\n");
+        assert(x == 3.0, "b_d1_float expected 3.0, got {x}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d1_character_capture_local_mutates,
+    r#"
+    fn test() {
+        c = 'a';
+        bump = fn() { c = 'z'; };
+        bump();
+        print("char: {c}\n");
+        assert(c == 'z', "b_d1_character expected z, got {c}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d1_single_capture_local_mutates,
+    r#"
+    fn test() {
+        x = 0.0f;
+        bump = fn() { x = x + 0.5f; };
+        bump();
+        bump();
+        bump();
+        print("single: {x}\n");
+        assert(x == 1.5f, "b_d1_single expected 1.5, got {x}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d1_enum_capture_local_mutates,
+    r#"
+    enum Mode { On, Off }
+    fn test() {
+        m = Mode.Off;
+        bump = fn() { m = Mode.On; };
+        bump();
+        print("enum: {m}\n");
+        assert(m == Mode.On, "b_d1_enum expected On");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d1_multi_scalar_capture,
+    r#"
+    fn test() {
+        n = 0;
+        x = 0.0;
+        bump = fn() {
+            n = n + 1;
+            x = x + 0.25;
+        };
+        bump();
+        bump();
+        bump();
+        bump();
+        print("n={n} x={x}\n");
+        assert(n == 4, "expected n=4, got {n}");
+        assert(x == 1.0, "expected x=1.0, got {x}");
+    }
+    "#
+);
+
+// b_d2 variants — closure passed as fn arg (cell DbRef shared
+// via auto-Reference closure-record attribute).
+cross_mode!(
+    b_d2_float_capture_arg_mutates,
+    r#"
+    fn invoke(f: fn()) { f(); }
+    fn test() {
+        x = 0.0;
+        invoke(fn() { x = x + 2.5; });
+        print("float: {x}\n");
+        assert(x == 2.5, "b_d2_float expected 2.5, got {x}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d2_character_capture_arg_mutates,
+    r#"
+    fn invoke(f: fn()) { f(); }
+    fn test() {
+        c = 'a';
+        invoke(fn() { c = 'q'; });
+        print("char: {c}\n");
+        assert(c == 'q', "b_d2_character expected q, got {c}");
+    }
+    "#
+);
+
+// b_d3 variants — closure stored in a struct field.
+cross_mode!(
+    b_d3_float_capture_field_mutates,
+    r#"
+    struct Loop { cb: fn() }
+    fn test() {
+        x = 0.0;
+        loop = Loop { cb: fn() { x = x + 4.0; } };
+        loop.cb();
+        print("float: {x}\n");
+        assert(x == 4.0, "b_d3_float expected 4.0, got {x}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d3_enum_capture_field_mutates,
+    r#"
+    enum State { A, B }
+    struct Loop { cb: fn() }
+    fn test() {
+        s = State.A;
+        loop = Loop { cb: fn() { s = State.B; } };
+        loop.cb();
+        print("enum: {s}\n");
+        assert(s == State.B, "b_d3_enum expected B");
     }
     "#
 );

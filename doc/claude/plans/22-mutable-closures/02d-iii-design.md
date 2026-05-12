@@ -18,8 +18,9 @@ between a focused 5-commit arc and a multi-week debug loop.
 |---|---|---|
 | 02d-i | Accumulate scalar mutated-capture names onto parent function's `scalars_to_box` field | Shipped 2026-05-12 |
 | 02d-ii | Synthesise canonical `__cell_<T>` structs (`{ value: T }`) for each scalar type used | Shipped 2026-05-12 |
-| **02d-iii** | **Outer-binding rewrite — promote each scalar local in `scalars_to_box` to a heap-allocated `__cell_<T>`, route every read/write through the cell's `value` field** | **THIS DOC** |
-| 02d-iv | Cells (b_d1/b_d2/b_d3 scalar variants) + leak guard | Follows 02d-iii |
+| 02d-iii | Outer-binding rewrite — sub-steps a-e | Shipped 2026-05-12 |
+| 02d-iv | Cells (b_d1/b_d2/b_d3 for float/single/character/enum + multi-scalar) + leak guard | Shipped 2026-05-12 |
+| 02d-v | Text-cell boxing (read-append-write) + Boolean cells (OpEqInt unwrap in call_to_set_op) | Future |
 
 ## Goal
 
