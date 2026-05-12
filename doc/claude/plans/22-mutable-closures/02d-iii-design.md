@@ -251,6 +251,50 @@ changes the surface area (it doesn't — cells are local to the
 parent function, not exported).  Sanity: `make game` after the
 landing commit.
 
+## Finding (added 2026-05-12 after 02d-iii.a) — existing void-return write-back
+
+While shipping 02d-iii.a, attempting to wire the type flip into
+`parse_function`'s pass-2 entry caused a SIGSEGV on
+`p86_lambda_capture_multi_mutation` (in `tests/issues.rs`).
+Diagnosis:
+
+`src/parser/control.rs::parse_call_ref` lines 3729-3755 contains
+an existing void-return-closure write-back path:
+
+> "for void-return capturing lambdas, write updated closure record
+>  fields back to the corresponding outer variables so the caller
+>  observes mutations made inside the lambda body (e.g.
+>  `count += x`)."
+
+After every `add(10)` call to a void-return closure stored in a
+named local, the parser emits IR that copies each closure-record
+attribute back to the outer variable's slot via `v_set(outer_v,
+field_val)`.  This is what makes p86's `count = 0; add = fn(x) {
+count += 1; }; add(10); add(20); add(12); assert(count == 3)`
+pass today.
+
+The write-back mechanism is essentially a different boxing
+strategy: closure record holds inline scalar; mutations propagate
+via per-call copy-back instead of shared DbRef.  It works for
+**b_d1** (closure stored in named local, void return) but NOT for
+b_d2 (closure passed as fn-arg — write-back fires in the wrong
+function) or b_d3 (closure stored in struct field — likewise).
+
+**Implication for 02d-iii.a wiring**: flipping the outer scalar's
+type to `Reference(__cell_<T>, [])` changes its slot shape from
+8B Integer to 12B DbRef.  The write-back's `v_set(outer_v,
+field_val)` then mismatches sizes → SIGSEGV.  Any pass-2 wiring
+of the type flip MUST be paired with disabling/replacing the
+write-back path for boxed scalars.
+
+**Revised phasing** — 02d-iii.a ships the helper as
+infrastructure WITHOUT wiring it into `parse_function`.  The
+helper is invoked explicitly from tests to verify the flip
+logic.  The activation moves to 02d-iii.e, AFTER 02d-iii.b-d
+have wired cell-based propagation (auto-Reference closure-record
+attribute + shared-DbRef reads/writes), at which point the
+write-back path can be removed without regressing p86.
+
 ## Implementation phasing inside 02d-iii
 
 The whole sub-phase is too large for one commit.  Split it
@@ -258,11 +302,11 @@ into 5 commits, each with its own regression net:
 
 | Sub-step | What | Acceptance |
 |---|---|---|
-| **02d-iii.a** | Type-flip hook in `parse_function` + helper `flip_scalars_to_box_types`.  No emit-site changes yet. | After parse, the variables table shows boxed scalars with type `Reference(__cell_<T>, [v_nr])`.  No behavior change in execution (codegen hasn't been adapted, so existing tests likely break — gate this commit behind a feature flag or LANDED-WITH-NEXT-COMMIT note). |
+| **02d-iii.a** | Helper `flip_scalars_to_box_types` shipped as infrastructure.  NOT wired into `parse_function` yet (per the write-back finding above).  Tests invoke the helper explicitly to verify flip logic. | After explicit invocation in lib tests, the variables table shows boxed scalars with type `Reference(__cell_<T>, [])`.  Full regression net stays green (helper is dormant in production code). |
 | **02d-iii.b** | Read auto-deref in `resolve_name` (both parent-body local arm + closure-body capture arm).  No write-side changes. | After parse, every `n` read in the IR is wrapped as `Call(OpGet<T>, [Var(n), Int(0)])`.  Reads work correctly post-flip; writes still broken (next sub-step). |
 | **02d-iii.c** | First-assignment rewrite — adds an arm to `gen_set_first_at_tos` for `Reference(__cell_*, _)` first-Set with scalar value: `OpDatabase(slot) + OpSet<T>(slot, 0, value)`.  Plus subsequent-assignment parser-level rewrite to `Call(OpSet<T>, [Var(n), 0, expr])` in the parent body. | The canonical 02d snippet works on the interpreter: `n = 0; f = fn() { n = n + 1; }; f(); f(); print(n);` prints `2`. |
 | **02d-iii.d** | Closure-body write path — `n = n + 1` inside the closure body emits `OpSet<T>(get_field(closure, n), 0, expr)` instead of `Set(var_nr, expr)`. | The canonical 02d snippet works under `--native` too (cross-mode parity). |
-| **02d-iii.e** | Type-check gate in `parse_assign_op` to accept scalar RHS for boxed-scalar LHS (needed for the rewrite path's RHS to type-check).  Plus regression sweep for tuple destructure / format strings / compound assign / etc. | Full regression net green: 633 issues + closure_matrix + mut_closure_matrix + leak + new b_d1/b_d2/b_d3 cells (from 02d-iv). |
+| **02d-iii.e** | Type-check gate in `parse_assign_op` to accept scalar RHS for boxed-scalar LHS (needed for the rewrite path's RHS to type-check).  **Activate the type flip from `parse_function` pass-2 entry.**  Remove the void-return write-back path in `parse_call_ref` (replaced by cell-based propagation from 02d-iii.b-d).  Plus regression sweep for tuple destructure / format strings / compound assign / etc. | Full regression net green: 633 issues + closure_matrix + mut_closure_matrix + leak + new b_d1/b_d2/b_d3 cells (from 02d-iv).  `p86_lambda_capture_multi_mutation` still passes via the new cell propagation (not the removed write-back). |
 
 Each sub-commit is its own focused turn.  The whole arc is
 estimated at 5 commits ≈ 5 turns based on phases 02a-c

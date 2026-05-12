@@ -863,6 +863,82 @@ impl Parser {
         }
     }
 
+    /// Plan-22 phase 02d-iii.a — at the start of pass 2 for the
+    /// parent function, replace each scalar local in
+    /// `Definition.scalars_to_box` with its boxed
+    /// `Reference(__cell_<T>, [])` type.  Runs AFTER the
+    /// pass-1 vars are restored via `Function::append`, so the
+    /// helper sees every local that pass 1 added (including the
+    /// names queued by phase 02d-i's accumulator).
+    ///
+    /// Foundation step: NO read or write rewriting yet.
+    /// Subsequent sub-phases (02d-iii.b read auto-deref, 02d-iii.c
+    /// first-set allocation, 02d-iii.d closure-body write rewrite,
+    /// 02d-iii.e type-check gate) build on this type-flip.
+    ///
+    /// Today's behavior with this commit alone: the variables
+    /// table reports the boxed type, but every emit site still
+    /// treats `n` as a stack-slot scalar.  Any function with
+    /// mutating scalar captures will hit a type-mismatch
+    /// diagnostic at the first `n = …` site (RHS scalar vs LHS
+    /// `Reference(__cell_<T>, _)`).  No existing test exercises
+    /// mutating-scalar-capture closures (they're broken pre-02d
+    /// and the matrix cells are still `#[ignore]`d), so the
+    /// regression net stays green.
+    ///
+    /// `change_var_type` (in `src/parser/expressions.rs`) is
+    /// taught to PRESERVE the flipped Reference type when the
+    /// new type is the cell's value type; without that guard,
+    /// `change_var(to, &s_type)` in `parse_assign_op` would
+    /// revert `n` back to Integer on every `n = …` line.
+    ///
+    /// Idempotent + scoped:
+    /// - No-op when `scalars_to_box` is empty (the common case
+    ///   for every function in the standard library and existing
+    ///   tests).
+    /// - Skips arguments — boxing a function parameter would
+    ///   change its call-site signature.  Argument boxing is a
+    ///   follow-up sub-step (matrix row M / Case-B-on-arg uses
+    ///   the explicit `Mutable<T>` path in phase 05).
+    /// - Skips names whose `cell_struct_name` returns `None`
+    ///   (exotic integer widths) — phase 02d-ii's silent gap.
+    /// - Skips names already flipped on a re-entry (defensive).
+    #[allow(
+        dead_code,
+        reason = "Helper exists for 02d-iii.e activation; only invoked from tests for now."
+    )]
+    pub(crate) fn flip_scalars_to_box_types(&mut self) {
+        if self.context == u32::MAX || (self.context as usize) >= self.data.definitions.len() {
+            return;
+        }
+        let names = self.data.def(self.context).scalars_to_box.clone();
+        for name in &names {
+            let v_nr = self.vars.var(name);
+            if v_nr == u16::MAX {
+                continue;
+            }
+            if self.vars.is_argument(v_nr) {
+                continue;
+            }
+            let original_tp = self.vars.tp(v_nr).clone();
+            // Skip if already flipped.
+            if matches!(&original_tp, Type::Reference(d, _)
+                if self.data.def(*d).name.starts_with("__cell_"))
+            {
+                continue;
+            }
+            let Some(cell_name) = cell_struct_name(&original_tp, &self.data) else {
+                continue;
+            };
+            let cell_d_nr = self.data.def_nr(&cell_name);
+            if cell_d_nr == u32::MAX {
+                continue;
+            }
+            self.vars
+                .set_type(v_nr, Type::Reference(cell_d_nr, Vec::new()));
+        }
+    }
+
     fn synthesize_closure_record(&mut self, lambda_d_nr: u32, lambda_name: &str) {
         let record_name = lambda_name.replace("__lambda_", "__closure_");
         let captures = self.captured_names.clone();
@@ -1975,7 +2051,7 @@ fn ensure_tuple_defs_for_capture(
 /// | `character` | `__cell_character` |
 /// | `text` | `__cell_text` |
 /// | plain enum `E` | `__cell_enum_<E>` |
-fn cell_struct_name(tp: &Type, data: &crate::data::Data) -> Option<String> {
+pub(crate) fn cell_struct_name(tp: &Type, data: &crate::data::Data) -> Option<String> {
     match tp {
         Type::Integer(spec) => {
             // Default-nullable byte_width: matches the storage the
@@ -2860,5 +2936,212 @@ mod plan22_phase02d_ii_cell_struct_synthesis_tests {
             count, 1,
             "expected single shared `__cell_integer` across two lambdas; got {count} (cells={cells:?})"
         );
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase02d_iii_a_type_flip_tests {
+    //! Plan-22 phase 02d-iii.a — verify
+    //! `flip_scalars_to_box_types` replaces each boxed scalar
+    //! local's type in the variables table with its
+    //! `Reference(__cell_<T>, [])` form when invoked.
+    //!
+    //! Foundation step: the helper is shipped but
+    //! INTENTIONALLY NOT WIRED into the parse_function pass-2
+    //! entry yet.  The existing void-return-closure write-back
+    //! mechanism in `parse_call_ref` (control.rs lines
+    //! 3729-3755) handles today's `p86_lambda_capture_*`
+    //! cases by copying the closure-record's scalar attribute
+    //! back to the outer slot after each call.  Activating the
+    //! flip in this commit would break that path
+    //! (the outer slot's shape changes from 8B Integer to 12B
+    //! DbRef, segfaulting the write-back's `v_set`).
+    //!
+    //! 02d-iii.e activates the flip from `parse_function`
+    //! AFTER 02d-iii.b-d have wired cell-based propagation
+    //! (auto-Reference closure-record attribute + shared-DbRef
+    //! reads/writes), at which point the write-back path can
+    //! be removed without a regression.
+    //!
+    //! These tests invoke the helper EXPLICITLY on a parsed
+    //! parser state — they verify the helper's logic in
+    //! isolation, independent of the integration path.
+
+    use crate::data::Type;
+    use crate::parser::Parser;
+
+    /// Helper: parse a snippet, restore pass-2 entry state for
+    /// `n_test` (set context, restore vars), invoke the flip
+    /// helper, and return the type of `var_name` after the
+    /// flip.  Panics if the function or variable is missing.
+    fn flipped_type_of_var(source: &str, var_name: &str) -> Type {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(source, "phase02d_iii_a_test", false);
+        let test_d_nr = p.data.def_nr("n_test");
+        assert_ne!(test_d_nr, u32::MAX, "function `n_test` not found");
+        // Restore parse_function pass-2 entry state for the
+        // test fn: set context + drain the def's saved vars
+        // back into self.vars (the inverse of the save at the
+        // end of parse_function).
+        p.context = test_d_nr;
+        // Reset p.vars to a fresh Function and drain the saved
+        // pass-2 variables back into it (mirrors parse_function's
+        // line-547 `Function::new` + line-853 `vars.append`).
+        p.vars = crate::variables::Function::new("phase02d_iii_a_test", "test.loft");
+        p.vars
+            .append(&mut p.data.definitions[test_d_nr as usize].variables);
+        // Invoke the flip helper under test.
+        p.flip_scalars_to_box_types();
+        let v_nr = p.vars.var(var_name);
+        assert_ne!(v_nr, u16::MAX, "variable `{var_name}` not found");
+        p.vars.tp(v_nr).clone()
+    }
+
+    #[test]
+    fn integer_mutated_capture_flipped_to_reference_cell_integer() {
+        // The canonical 02d-iii target.  After explicit flip,
+        // `n`'s type becomes `Reference(__cell_integer, [])`.
+        let tp = flipped_type_of_var(
+            r"
+            fn test() {
+                n = 0;
+                f = fn() { n = n + 1; };
+                f();
+            }
+            ",
+            "n",
+        );
+        match tp {
+            Type::Reference(_, ref deps) => {
+                assert!(
+                    deps.is_empty(),
+                    "boxed-scalar Reference should be heap-owned (empty deps); got {deps:?}"
+                );
+            }
+            other => panic!("expected Reference(__cell_integer, []); got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_only_capture_keeps_integer_type() {
+        // Case A — capture `n` for reading only.  Type stays as
+        // Integer; `flip_scalars_to_box_types` must NOT touch it.
+        let tp = flipped_type_of_var(
+            r"
+            fn test() {
+                n = 5;
+                f = fn(x: integer) -> integer { x + n };
+                _ = f(10);
+            }
+            ",
+            "n",
+        );
+        assert!(
+            matches!(tp, Type::Integer(_)),
+            "read-only capture must NOT be flipped; got {tp:?}"
+        );
+    }
+
+    #[test]
+    fn struct_capture_keeps_struct_reference_type() {
+        // Case B (Reference) — `s` is a struct; phase 02c handles
+        // the auto-Reference encoding, NOT 02d-iii's boxing.
+        let tp = flipped_type_of_var(
+            r"
+            struct S { x: integer }
+            fn test() {
+                s = S { x: 0 };
+                f = fn() { s.x = 7; };
+                f();
+            }
+            ",
+            "s",
+        );
+        match tp {
+            Type::Reference(_, _) => {
+                // d_nr should NOT be a __cell_* struct; it's S.
+                // (The flip helper doesn't touch struct
+                // captures because `cell_struct_name` returns
+                // `None` for `Type::Reference`.)
+            }
+            other => panic!("expected Reference(S, _); got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_mutation_no_flip() {
+        // Local `n` exists but is never captured by any closure —
+        // scalars_to_box is empty for `n_test`, so the helper
+        // is a no-op and `n` stays as Integer.
+        let tp = flipped_type_of_var(
+            r"
+            fn test() {
+                n = 5;
+                _ = n + 1;
+            }
+            ",
+            "n",
+        );
+        assert!(
+            matches!(tp, Type::Integer(_)),
+            "uncaptured local must NOT be flipped; got {tp:?}"
+        );
+    }
+
+    #[test]
+    fn multi_scalar_capture_flips_each() {
+        // Two distinct scalar captures, both mutated.  Both
+        // should be flipped to their respective cell References
+        // when the helper is invoked.
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(
+            r#"
+            fn test() {
+                n = 0;
+                s = "";
+                f = fn() {
+                    n = n + 1;
+                    s += "x";
+                };
+                f();
+            }
+            "#,
+            "phase02d_iii_a_test",
+            false,
+        );
+        let test_d_nr = p.data.def_nr("n_test");
+        let cell_int = p.data.def_nr("__cell_integer");
+        let cell_text = p.data.def_nr("__cell_text");
+        assert_ne!(cell_int, u32::MAX, "__cell_integer missing");
+        assert_ne!(cell_text, u32::MAX, "__cell_text missing");
+        // Restore pass-2 entry state and invoke the flip helper.
+        p.context = test_d_nr;
+        // Reset p.vars to a fresh Function and drain the saved
+        // pass-2 variables back into it (mirrors parse_function's
+        // line-547 `Function::new` + line-853 `vars.append`).
+        p.vars = crate::variables::Function::new("phase02d_iii_a_test", "test.loft");
+        p.vars
+            .append(&mut p.data.definitions[test_d_nr as usize].variables);
+        p.flip_scalars_to_box_types();
+        let n_nr = p.vars.var("n");
+        let s_nr = p.vars.var("s");
+        assert_ne!(n_nr, u16::MAX, "`n` not found in vars");
+        assert_ne!(s_nr, u16::MAX, "`s` not found in vars");
+        match p.vars.tp(n_nr) {
+            Type::Reference(d, deps) => {
+                assert_eq!(*d, cell_int, "`n` should point at __cell_integer");
+                assert!(deps.is_empty());
+            }
+            other => panic!("`n` not flipped: {other:?}"),
+        }
+        match p.vars.tp(s_nr) {
+            Type::Reference(d, deps) => {
+                assert_eq!(*d, cell_text, "`s` should point at __cell_text");
+                assert!(deps.is_empty());
+            }
+            other => panic!("`s` not flipped: {other:?}"),
+        }
     }
 }

@@ -897,6 +897,29 @@ impl Parser {
                     // Mark original as used so test_used doesn't warn.
                     self.vars.mark_used(original);
                 }
+                // Plan-22 phase 02d-iii.a — `flip_scalars_to_box_types`
+                // exists but is INTENTIONALLY NOT CALLED here.
+                //
+                // Why deferred: an existing void-return-closure
+                // write-back in `control.rs::parse_call_ref`
+                // (lines 3729-3755, "for void-return capturing
+                // lambdas, write updated closure record fields
+                // back to the corresponding outer variables") is
+                // what makes today's `p86_lambda_capture_multi_mutation`
+                // pass.  Flipping the outer scalar to
+                // `Reference(__cell_<T>, [])` changes its slot
+                // shape from 8B (Integer) to 12B (DbRef), which
+                // makes the write-back's `v_set(outer, field_val)`
+                // segfault on the slot-size mismatch.
+                //
+                // The flip activates in 02d-iii.e once 02d-iii.b-d
+                // have wired the cell-based propagation
+                // (auto-Reference closure-record attribute +
+                // shared-DbRef reads/writes), allowing the
+                // write-back path to be removed without a
+                // regression.  See
+                // `doc/claude/plans/22-mutable-closures/02d-iii-design.md`
+                // (subtleties §4 + §9) for the full rationale.
             }
             self.parse_code();
             // reset transient closure state after each function body.
