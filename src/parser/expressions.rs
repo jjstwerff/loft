@@ -850,7 +850,31 @@ use a separate collection or add after the loop"
         let _ = op;
         let _ = f_type;
         self.change_var(to, &s_type);
-        if matches!(f_type, Type::Text(_)) {
+        // Plan-22 phase 02d-vi — bypass the text-special branch
+        // when the LHS is auto-deref'd boxed text.  The general
+        // path (towards_set + call_to_set_op + maybe_prepend_cell_alloc)
+        // already has the right OpGetText → OpSetText mapping
+        // (added in 02d-iv) and alloc-preamble logic (02d-iii.d/v).
+        // The text-special branch's argument-promotion + work-buffer
+        // logic doesn't apply to boxed-text locals — they're
+        // already a Reference(__cell_text, _), not an argument
+        // and not a plain text Var.
+        let is_boxed_text_lhs = matches!(f_type, Type::Text(_))
+            && self
+                .extract_boxed_var_from_lhs(to)
+                .and_then(|v_nr| {
+                    if !self.vars.exists(v_nr) {
+                        return None;
+                    }
+                    match self.vars.tp(v_nr) {
+                        Type::Reference(d, _) if self.data.def(*d).name.starts_with("__cell_") => {
+                            Some(v_nr)
+                        }
+                        _ => None,
+                    }
+                })
+                .is_some();
+        if matches!(f_type, Type::Text(_)) && !is_boxed_text_lhs {
             // auto-promote text argument to local String on first mutation.
             let effective_var = if self.first_pass
                 && var_nr != u16::MAX

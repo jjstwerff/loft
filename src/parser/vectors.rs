@@ -955,41 +955,32 @@ impl Parser {
             {
                 continue;
             }
-            // Plan-22 phase 02d-iii.e / 02d-v — Text remains
-            // intentionally EXCLUDED from the actual flip today.
-            // Text mutation (`log += s`) goes through a special
-            // `assign_text` path in `parse_assign_op` that
-            // expects a `Var(v_nr)` LHS — auto-deref'd
-            // `Call(OpGetText, [Var, 0])` would break that path.
-            // Re-assignment (`ta = "after"`) is also a problem
-            // because it'd write to a closure-local copy without
-            // propagation (text re-assign isn't currently
-            // handled by the write-back mechanism either, so
-            // this is a pre-existing limitation).
+            // Plan-22 phase 02d-iii.e / 02d-v / 02d-vi — all
+            // boxable scalar types now flip cleanly:
             //
-            // The cell struct + scalars_to_box entry are still
-            // synthesised for text (so 02d-i/ii unit tests stay
-            // green); only the actual variables-table flip is
-            // skipped.  Future sub-step adds dedicated
-            // read-append-write for text-cell support.
+            // - Direct shapes (Integer / Float / Single /
+            //   Character / Text / plain Enum): auto-deref
+            //   produces `Call(OpGet<T>, [Var, 0])`,
+            //   `maybe_prepend_cell_alloc`'s
+            //   `extract_boxed_var_from_lhs` recognises this
+            //   shape, `call_to_set_op` maps `OpGet<T>` →
+            //   `OpSet<T>` for the write side.
             //
-            // Boolean was previously skipped here too because
-            // 02d-iii.b's auto-deref wraps boolean reads in
-            // `Call(OpEqInt, [Call(OpGetByte, [Var, 0, 0]),
-            // Int(1)])` — a nested shape that 02d-iii.d's
-            // `maybe_prepend_cell_alloc` originally couldn't
-            // detect.  Phase 02d-v added an
-            // `extract_boxed_var_from_lhs` helper that
-            // recognises both the direct OpGet<T> shape and the
-            // boolean OpEqInt-wrapped shape, so the alloc
-            // preamble fires for boolean too.  Boolean writes
-            // route through towards_set's existing boolean
-            // branch (collections.rs:493) which already produces
-            // the correct OpSetByte IR with the bool→byte
-            // conversion.
-            if matches!(&original_tp, Type::Text(_)) {
-                continue;
-            }
+            // - Boolean: auto-deref wraps in
+            //   `Call(OpEqInt, [Call(OpGetByte, [Var, 0, 0]),
+            //   Int(1)])`; phase 02d-v's `extract_boxed_var_from_lhs`
+            //   recognises this nested shape too; writes route
+            //   through towards_set's existing boolean branch
+            //   (collections.rs:493) which produces the right
+            //   OpSetByte IR with bool→byte conversion.
+            //
+            // - Text: phase 02d-vi added a bypass guard in
+            //   `parse_assign_op` that skips the text-special
+            //   branch when the LHS is auto-deref'd boxed text.
+            //   The general path then handles re-assignment
+            //   (`log = "after"`) and append (`log += s` lowered
+            //   to `log = log + s`) via `OpSetText` writes
+            //   through the cell DbRef.
             let Some(cell_name) = cell_struct_name(&original_tp, &self.data) else {
                 continue;
             };
@@ -2226,14 +2217,10 @@ fn box_captured_names_for_outer_scalars(
         if !scalars.iter().any(|s| s == name) {
             continue;
         }
-        // Plan-22 phase 02d-iii.e / 02d-v — keep text captures
-        // un-boxed (mirrors `flip_scalars_to_box_types`'s
-        // text-skip).  Boolean is now boxed since 02d-v added
-        // the `OpEqInt(OpGetByte, ...)` shape recognition to
-        // `maybe_prepend_cell_alloc`.
-        if matches!(tp, Type::Text(_)) {
-            continue;
-        }
+        // Plan-22 phase 02d-vi — text is now boxed (the
+        // `flip_scalars_to_box_types` no-skip ↔
+        // `box_captured_names_for_outer_scalars` no-skip
+        // invariant).  No types are skipped here today.
         if let Some(cell_name) = cell_struct_name(tp, data) {
             let cell_d_nr = data.def_nr(&cell_name);
             if cell_d_nr != u32::MAX {
@@ -3247,19 +3234,16 @@ mod plan22_phase02d_iii_a_type_flip_tests {
             }
             other => panic!("`n` not flipped: {other:?}"),
         }
-        // Plan-22 phase 02d-iii.e — text is intentionally NOT
-        // flipped today (text mutation flows through the
-        // existing write-back mechanism, not through cells).
-        // The `__cell_text` struct + `scalars_to_box` entry
-        // still get synthesised (so 02d-i/ii unit tests stay
-        // green); only the actual variables-table flip is
-        // skipped.  Phase 02d-iv (or later) extends to text via
-        // a dedicated read-append-write path.
-        assert!(
-            matches!(p.vars.tp(s_nr), Type::Text(_)),
-            "`s` should stay Text (text-flip is deferred to 02d-iv); got {:?}",
-            p.vars.tp(s_nr)
-        );
+        // Plan-22 phase 02d-vi — text is now flipped via the
+        // bypass guard added in `parse_assign_op` for boxed-text
+        // LHS shape.  `s` should be Reference(__cell_text, []).
+        match p.vars.tp(s_nr) {
+            Type::Reference(d, deps) => {
+                assert_eq!(*d, cell_text, "`s` should point at __cell_text");
+                assert!(deps.is_empty());
+            }
+            other => panic!("`s` not flipped to __cell_text: {other:?}"),
+        }
     }
 }
 

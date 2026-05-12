@@ -727,6 +727,43 @@ fn p22_phase02d_iii_e_scalar_capture_no_leak() {
     );
 }
 
+/// Plan-22 phase 02d-vi — text cell capture leak guard.
+///
+/// 100-iteration tight loop: each iteration boxes a text
+/// `acc`, captures it into a closure that re-assigns via
+/// shared cell DbRef, calls the closure twice, asserts result.
+/// The `__cell_text` record (16B Text value field) and the
+/// closure record's auto-Reference attribute (12B share-by-DbRef)
+/// all need to free cleanly at scope exit.
+///
+/// NOTE: this guard uses void-return + assert-inside-iteration
+/// rather than returning the text from `one_iteration`.
+/// Text-return from a fn with closure-mutated text cells
+/// surfaces a separate runtime issue ("Write to locked store"
+/// — the closure-record init reads the cell DbRef before the
+/// cell's allocation finishes); deferred to a follow-up
+/// investigation.
+#[test]
+fn p22_phase02d_vi_text_capture_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_iteration(seed: text) {
+            acc = seed;
+            f = fn() { acc = "after"; };
+            f();
+            assert(acc == "after", "got {acc}");
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                one_iteration("before");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
 /// Plan-22 phase 02d-v — boolean cell capture leak guard.
 ///
 /// 100-iteration tight loop: each iteration boxes a boolean

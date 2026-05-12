@@ -29,24 +29,30 @@
 //! |---|---|---|---|---|
 //! | **A** read-only | PASS:00 | PASS:00 | PASS:00 | PASS:00 |
 //! | **B** co-scoped (Reference) | PASS:02c | PASS:02c | PASS:02c | n/a |
-//! | **B** co-scoped (scalar via cell — int/float/single/char/enum/bool) | PASS:02d-iii.e/iv/v | PASS:02d-iii.e/iv/v | PASS:02d-iii.e/iv/v | n/a |
-//! | **B** co-scoped (scalar via cell — text) | DEFER:02d-vi+ | DEFER:02d-vi+ | DEFER:02d-vi+ | n/a |
+//! | **B** co-scoped (scalar via cell — int/float/single/char/enum/bool/text) | PASS:02d-iii.e/iv/v/vi | PASS:02d-iii.e/iv/v/vi | PASS:02d-iii.e/iv/v/vi | n/a |
 //! | **C** moved (factory) | n/a | n/a | FIX:03 | FIX:03 |
 //! | **D** aliased mutating | REJECT:04 | REJECT:04 | REJECT:04 | REJECT:04 |
 //! | **Mutable<T> explicit** | FIX:05 | FIX:05 | FIX:05 | FIX:05 |
 //!
 //! Phase 02d-iv (2026-05-12) extended scalar boxing to float /
 //! single / character / plain enum + multi-scalar.
-//! Phase 02d-v (2026-05-12) added boolean — required teaching
-//! `maybe_prepend_cell_alloc` to recognise the
-//! `Call(OpEqInt, [Call(OpGetByte, [Var, 0, 0]), 1])` shape
-//! that 02d-iii.b's auto-deref produces for boolean reads.
-//! The actual write IR was already correctly emitted by
-//! towards_set's existing boolean branch (collections.rs:493).
-//! Text remains excluded — text-`+=` flows through a special
-//! `assign_text` path in `parse_assign_op` that expects
-//! `Var(v_nr)` LHS (auto-deref'd `Call(OpGetText, ...)` would
-//! break it).  Text-cell support deferred to 02d-vi.
+//! Phase 02d-v (2026-05-12) added boolean via OpEqInt LHS shape
+//! recognition in `maybe_prepend_cell_alloc`.
+//! Phase 02d-vi (2026-05-12) added text via a bypass guard in
+//! `parse_assign_op` that skips the text-special branch
+//! (assign_text + work-buffer machinery) when the LHS is
+//! auto-deref'd boxed text.  Re-assignment (`log = "after"`)
+//! and append (`log += s` lowered via compute_op_code) both
+//! route through the general `OpSetText` path.
+//!
+//! KNOWN LIMITATION: returning text from a function that uses
+//! a closure-mutated text cell surfaces "Write to locked store"
+//! at the closure-record init site.  Deferred to a follow-up
+//! investigation — the cell DbRef is captured before the cell
+//! allocation's record gets a stable store_nr.  Affects only
+//! the rare pattern `fn x() -> text { acc = ""; f = fn(...) {
+//! acc ... }; ...; acc }`; closures + text-mutation in
+//! void-return functions work correctly.
 //!
 //! Each `body` must declare `fn test() { … }` and any helper fns
 //! at file scope; the harness appends `fn main() { test(); }`.
@@ -515,6 +521,71 @@ cross_mode!(
         toggle();
         print("flag: {flag}\n");
         assert(flag == true, "expected true after 3x toggle, got {flag}");
+    }
+    "#
+);
+
+// ── Phase 02d-vi — text cells ────────────────────────────────────────────────
+//
+// 02d-vi adds text to the cell-based propagation path.  The
+// bypass guard in `parse_assign_op` skips the text-special
+// branch when the LHS is auto-deref'd boxed text, letting the
+// general `towards_set` + `call_to_set_op` (OpGetText →
+// OpSetText) + `maybe_prepend_cell_alloc` pipeline handle
+// both re-assignment (`log = "after"`) and append
+// (`log += s` lowered to `log = log + s` via compute_op_code).
+
+cross_mode!(
+    b_d1_text_capture_local_mutates,
+    r#"
+    fn test() {
+        log = "before";
+        f = fn() { log = "after"; };
+        f();
+        print("text: {log}\n");
+        assert(log == "after", "b_d1_text expected after, got {log}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d1_text_capture_local_appends,
+    r#"
+    fn test() {
+        acc = "";
+        f = fn(s: text) { acc += s; };
+        f("a");
+        f("bb");
+        f("ccc");
+        print("text: {acc}\n");
+        assert(acc == "abbccc", "b_d1_text_append expected abbccc, got {acc}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d2_text_capture_arg_mutates,
+    r#"
+    fn invoke(f: fn()) { f(); }
+    fn test() {
+        log = "before";
+        invoke(fn() { log = "after"; });
+        print("text: {log}\n");
+        assert(log == "after", "b_d2_text expected after, got {log}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d3_text_capture_field_mutates,
+    r#"
+    struct Loop { cb: fn() }
+    fn test() {
+        log = "before";
+        loop = Loop { cb: fn() { log = "after"; } };
+        loop.cb();
+        print("text: {log}\n");
+        assert(log == "after", "b_d3_text expected after, got {log}");
     }
     "#
 );
