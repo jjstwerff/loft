@@ -26,7 +26,8 @@ pub fn byte_code(state: &mut State, data: &mut Data) {
         state.def_code(d_nr, data);
     }
     build_const_vectors(state, data);
-    state.database.allocations[crate::database::CONST_STORE as usize].lock();
+    state.database.allocations[crate::database::CONST_STORE as usize]
+        .lock_with_origin("compile.rs::compile (CONST_STORE init)");
 }
 
 /// Extract literal values from vector constant Block IR and build

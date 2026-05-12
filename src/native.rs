@@ -2055,7 +2055,8 @@ fn jv_null_sentinel(stores: &mut Stores) -> DbRef {
         .store_mut(&r)
         .set_byte(r.rec, r.pos, 0, JV_DISCR_NULL);
     if (r.store_nr as usize) < stores.allocations.len() {
-        stores.allocations[r.store_nr as usize].lock();
+        stores.allocations[r.store_nr as usize]
+            .lock_with_origin("native.rs::ensure_jnull_sentinel");
     }
     stores.jnull_sentinel = Some(r);
     r

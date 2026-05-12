@@ -443,7 +443,11 @@ impl Stores {
                     self.allocations[r.store_nr as usize].is_locked(),
                 );
             }
-            self.allocations[r.store_nr as usize].lock();
+            // Set a per-DbRef origin so "Write to locked store"
+            // panics include the lock site (rec context).  This
+            // is also a phase 02d-vii follow-up.
+            let origin = format!("lock_store(store_nr={}, rec={})", r.store_nr, r.rec);
+            self.allocations[r.store_nr as usize].lock_with_origin(origin);
         }
     }
 
