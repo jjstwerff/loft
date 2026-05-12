@@ -484,3 +484,86 @@ fn brick_buster_yield_resume() {
         }
     }
 }
+
+/// Plan-15 phase 03 — closure-DbRef leak guard.
+///
+/// LIFETIME.md flags `Type::Function` as "NOT YET HANDLED" — the
+/// closure DbRef at offset+4 of the 16-byte fn-ref slot is "never
+/// explicitly freed."  For text captures this matters because the
+/// captured text lives in the closure record's heap allocation.
+/// If the closure record never gets freed, the captured text never
+/// gets freed either → store leak.
+///
+/// This test runs the c2_d3_text_capture_field shape in a tight
+/// loop (100 iterations) and asserts `state.check_store_leaks()`
+/// passes after.  Each iteration:
+///   1. Allocates a text capture (`label = "z"`).
+///   2. Constructs a struct holding the capturing closure.
+///   3. Calls the closure (which formats into a fresh text).
+///   4. Drops the struct.
+///
+/// If the closure record (16-byte fn-ref slot's tail half) doesn't
+/// free at struct-drop time, every iteration would accumulate one
+/// leaked closure record.  100 iterations would surface as 100
+/// leaked stores in `check_store_leaks`.
+///
+/// **Actual behaviour (2026-05-12)**: clean — no leak detected
+/// for either D1 (local var) or D3 (struct field).  P213's
+/// `Parts::ChildRec` cascade plus the struct-scope-exit cleanup
+/// path frees the closure record correctly when the struct it
+/// lives inside goes out of scope; D1 frees the closure record at
+/// stack-frame exit via the standard local-cleanup path.  The
+/// LIFETIME.md "NOT YET HANDLED" annotation overstates the gap
+/// for both destinations — phase 06 should update it to reflect
+/// this finding.
+#[test]
+fn p15_phase03_closure_text_capture_field_no_leak() {
+    run_leak_check_str(
+        r#"
+        struct G { fmt: fn(integer) -> text }
+        fn one_call() -> text {
+            label = "z";
+            g = G { fmt: fn(n: integer) -> text { "{label}: {n}" } };
+            g.fmt(7)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == "z: 7", "iter {i}: got '{r}'");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-15 phase 03 — D1 (local var) text-capture leak guard.
+///
+/// Same shape as the D3 leak guard above but the closure lives in
+/// a local variable instead of a struct field.  Different cleanup
+/// path: stack-frame exit via the standard local-binding free
+/// rather than `Parts::ChildRec` cascade through struct scope.
+///
+/// 100 iterations clean → no leak; the local-binding cleanup
+/// covers fn-ref locals correctly.
+#[test]
+fn p15_phase03_closure_text_capture_local_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_call() -> text {
+            label = "y";
+            f: fn(integer) -> text = fn(n: integer) -> text { "{label}: {n}" };
+            f(11)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == "y: 11", "iter {i}: got '{r}'");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}

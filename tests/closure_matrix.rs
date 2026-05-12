@@ -277,3 +277,71 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 03 — text captures (C2) — the active LIFETIME risk ──────────────
+//
+// P227 closed text-returning fn-ref calls 2026-05-05 (interp + native)
+// — three coordinated changes (parser work-buffer count, RefVar(Text)
+// hidden attribute, native dispatch wrapper).  Phase 03 pins the
+// regression guard for that arc across D1/D2/D3.
+//
+// LIFETIME risk: LIFETIME.md flags `Type::Function` as "NOT YET
+// HANDLED" — the closure DbRef at offset+4 of the 16-byte fn-ref
+// slot is "never explicitly freed."  For text captures this matters
+// because the captured text lives in the closure record's heap
+// allocation.  If the closure record never gets freed, the captured
+// text never gets freed either → store leak.
+//
+// Phase 03 decision (2026-05-12 — recorded after running the
+// cells under `tests/leak.rs::p15_phase03_closure_text_capture_*_no_leak`):
+// **the leak does NOT manifest** in any of the C2 destinations
+// pinned here.  D1 (local var) frees the closure record at
+// stack-frame exit via the standard local-cleanup path; D3
+// (struct field) frees it via P213's `Parts::ChildRec` cascade
+// when the host struct goes out of scope.  Both confirmed clean
+// over a 100-iteration tight loop with `state.check_store_leaks()`.
+//
+// The LIFETIME.md "NOT YET HANDLED" annotation overstates the
+// gap for these shapes.  Phase 06 should update LIFETIME.md to
+// reflect the actual freed-at-scope-exit behaviour.  No P-issue
+// filed — the gap is documentation drift, not a runtime bug.
+
+cross_mode!(
+    c2_d1_text_capture_local,
+    r#"
+    fn test() {
+        label = "tag";
+        f: fn(integer) -> text = fn(n: integer) -> text { "{label}: {n}" };
+        result = f(42);
+        print("{result}\n");
+        assert(result == "tag: 42", "c2_d1 result='{result}'");
+    }
+    "#
+);
+
+cross_mode!(
+    c2_d2_text_capture_arg,
+    r#"
+    fn apply(f: fn(integer) -> text, x: integer) -> text { f(x) }
+    fn test() {
+        label = "tag";
+        result = apply(fn(n: integer) -> text { "{label}: {n}" }, 42);
+        print("{result}\n");
+        assert(result == "tag: 42", "c2_d2 result='{result}'");
+    }
+    "#
+);
+
+cross_mode!(
+    c2_d3_text_capture_field,
+    r#"
+    struct G { fmt: fn(integer) -> text }
+    fn test() {
+        label = "z";
+        g = G { fmt: fn(n: integer) -> text { "{label}: {n}" } };
+        result = g.fmt(7);
+        print("{result}\n");
+        assert(result == "z: 7", "c2_d3 result='{result}'");
+    }
+    "#
+);

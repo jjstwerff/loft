@@ -28,6 +28,29 @@ P213's `Parts::ChildRec` layout-widening (closed 2026-05-04)
 already supports the struct-field capture surface; phase 02
 pins it as a regression guard.
 
+**Phase 03 SHIPPED 2026-05-12** — C2 (text captures) across
+D1/D2/D3: 3 cells (c2_d1_text_capture_local +
+c2_d2_text_capture_arg + c2_d3_text_capture_field).  Plus 2
+leak guards in `tests/leak.rs`:
+`p15_phase03_closure_text_capture_field_no_leak` and
+`p15_phase03_closure_text_capture_local_no_leak` — both run
+100-iteration tight loops calling capturing closures and
+assert `state.check_store_leaks()` passes after.
+
+**Phase 03 decision** (the active LIFETIME risk slice):
+the closure-DbRef leak feared in LIFETIME.md does NOT manifest
+in any C2/D1/D2/D3 shape.  D1 frees the closure record at
+stack-frame exit; D3 frees via P213's `Parts::ChildRec`
+cascade when the host struct goes out of scope.  No P-issue
+filed — the LIFETIME.md "NOT YET HANDLED" annotation is
+overstated documentation drift, not a runtime bug.  Phase 06
+should update LIFETIME.md to reflect the actual freed-at-
+scope-exit behaviour.
+
+No production change — P227 closed text-returning fn-ref
+calls (interp + native) 2026-05-05; phase 03 pins it as a
+regression guard plus adds the leak surface coverage.
+
 ## Goal
 
 Lock the closure-validation matrix and wire `tests/closure_matrix.rs`
