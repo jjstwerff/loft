@@ -1431,33 +1431,46 @@ enum ArgVal {
 /// and only one actually rebuilds).
 #[must_use]
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
-    let cargo_toml = format!("{pkg_dir}/native/Cargo.toml");
-    if !std::path::Path::new(&cargo_toml).exists() {
+    use std::path::PathBuf;
+    // P244-windows fix #2 (2026-05-12): use PathBuf::join, not
+    // `format!("{pkg_dir}/...")`.  When `pkg_dir` arrives as a
+    // canonicalized Windows extended-length path (e.g.
+    // `\\?\D:\a\loft\loft\lib\server`), concatenating with `/native/...`
+    // produces a malformed path: the `\\?\` verbatim prefix bypasses
+    // Rust's path normalization, so the mixed-separator suffix
+    // doesn't resolve and `Path::exists()` returns false even when
+    // the file is on disk.  PathBuf::join handles each component
+    // through proper Path semantics on every platform.
+    let pkg = PathBuf::from(pkg_dir);
+    let cargo_toml = pkg.join("native").join("Cargo.toml");
+    if !cargo_toml.exists() {
         return None;
     }
     let lib_name = platform_lib_name(stem);
     let rlib_name = format!("lib{stem}.rlib");
-    let release_path = format!("{pkg_dir}/native/target/release/{lib_name}");
-    let release_rlib_path = format!("{pkg_dir}/native/target/release/{rlib_name}");
-    if std::path::Path::new(&release_path).exists()
-        && std::path::Path::new(&release_rlib_path).exists()
-    {
-        return Some(release_path);
+    let release_dir = pkg.join("native").join("target").join("release");
+    let release_path = release_dir.join(&lib_name);
+    let release_rlib_path = release_dir.join(&rlib_name);
+    if release_path.exists() && release_rlib_path.exists() {
+        return Some(release_path.to_string_lossy().to_string());
     }
-    let debug_path = format!("{pkg_dir}/native/target/debug/{lib_name}");
-    let debug_rlib_path = format!("{pkg_dir}/native/target/debug/{rlib_name}");
-    if std::path::Path::new(&debug_path).exists() && std::path::Path::new(&debug_rlib_path).exists()
-    {
-        return Some(debug_path);
+    let debug_dir = pkg.join("native").join("target").join("debug");
+    let debug_path = debug_dir.join(&lib_name);
+    let debug_rlib_path = debug_dir.join(&rlib_name);
+    if debug_path.exists() && debug_rlib_path.exists() {
+        return Some(debug_path.to_string_lossy().to_string());
     }
     let built_path = release_path;
     let status = std::process::Command::new("cargo")
-        .args(["build", "--release", "--manifest-path", &cargo_toml])
+        .args(["build", "--release", "--manifest-path"])
+        .arg(&cargo_toml)
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .status();
     match status {
-        Ok(s) if s.success() && std::path::Path::new(&built_path).exists() => Some(built_path),
+        Ok(s) if s.success() && built_path.exists() => {
+            Some(built_path.to_string_lossy().to_string())
+        }
         _ => None,
     }
 }

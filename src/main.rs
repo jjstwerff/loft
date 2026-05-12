@@ -1096,6 +1096,13 @@ fn add_native_extern_flags(
     for (crate_name, pkg_dir) in &data.native_packages {
         // Look for the compiled rlib in the package's native crate output.
         let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
+        // P244-windows fix #2 (2026-05-12): use single-segment joins,
+        // not `.join("native/target/release")` with embedded slashes.
+        // When `pkg_dir` is a Windows extended-length path (`\\?\D:\…`),
+        // a multi-segment join string with `/` separators inside the
+        // verbatim namespace doesn't normalize and the resulting path
+        // doesn't match real on-disk files.  Each `.join("X")` with a
+        // single component is normalized correctly by `Path` semantics.
         let rlib_path = if let Some(tgt) = target {
             // WASM: check prebuilt first, then native/target/<target>/release/
             let prebuilt = std::path::PathBuf::from(pkg_dir)
@@ -1106,7 +1113,8 @@ fn add_native_extern_flags(
                 prebuilt
             } else {
                 std::path::PathBuf::from(pkg_dir)
-                    .join("native/target")
+                    .join("native")
+                    .join("target")
                     .join(tgt)
                     .join("release")
                     .join(&rlib_name)
@@ -1114,7 +1122,9 @@ fn add_native_extern_flags(
         } else {
             // Native: check native/target/release/
             std::path::PathBuf::from(pkg_dir)
-                .join("native/target/release")
+                .join("native")
+                .join("target")
+                .join("release")
                 .join(&rlib_name)
         };
         if rlib_path.exists() {
