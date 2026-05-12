@@ -5,7 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 00 — Matrix freeze + harness wiring
 
-**Status: open**
+**Status: SHIPPED 2026-05-12** — `tests/mut_closure_matrix.rs`
+created; 6 cells green under `cargo test --release --test
+mut_closure_matrix -- --ignored` in 1.07s (harness_smoke_basic,
+harness_smoke_arithmetic, a_d1_read_only_local, a_d2_read_only_arg,
+a_d3_read_only_field, a_d4_read_only_return).  No production
+change.  Phase 01 (mutated-captures detection) is the next step.
 
 ## Goal
 
