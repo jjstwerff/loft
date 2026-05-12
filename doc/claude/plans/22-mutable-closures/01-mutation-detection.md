@@ -5,7 +5,21 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 01 — Mutated-captures detection
 
-**Status: open**
+**Status: SHIPPED 2026-05-12** — `Definition.mutated_captures: Vec<String>`
+populated by `Parser::collect_mutated_captures` after the
+lambda body is parsed (gated on `!self.first_pass` because the
+body's IR is only assigned in pass 2).  Walker recognises
+three write shapes:
+  (a) `Value::Set(slot, _)` for whole-binding rebind.
+  (b) `Value::Call(Op<Set/Append/Clear/Insert/Remove>*, [Var(closure_param), Int(fld), …])` for direct field writes through the closure record.
+  (c) `Value::Call(Op<Set/Append/Clear/Insert/Remove>*, [Call(GetField, [Var(closure_param), Int(fld)]), …])` for nested writes through a captured Reference's loaded value (e.g. `s.x = 7`).
+
+Pinned by 5 Rust-level tests in
+`src/parser/vectors.rs::plan22_phase01_mutation_detection_tests`:
+read-only-yields-empty, whole-binding-reassign,
+struct-field-write, text-append, multiple-captures-only-mutated.
+All 22 closure_matrix cells + 6 mut_closure_matrix cells +
+633 issues + 47 wrap stay green — no behavior change.
 
 ## Goal
 

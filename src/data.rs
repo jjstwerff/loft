@@ -1632,6 +1632,13 @@ pub struct Definition {
     /// Definition number of the closure record struct for capturing lambdas.
     /// `u32::MAX` if this function does not capture.
     pub closure_record: u32,
+    /// Plan-22 phase 01 — names of captured bindings whose value is
+    /// mutated inside the lambda body.  Empty for non-capturing
+    /// lambdas, for read-only captures (case A), and for non-lambda
+    /// definitions.  Populated by `Parser::collect_mutated_captures`
+    /// after the lambda body is parsed.  Phases 02-05 consume this
+    /// to drive case B/C/D classification + lowering.
+    pub mutated_captures: Vec<String>,
     /// I2: for generic functions — the `def_nr`s of all required interface bounds.
     /// Empty for non-generic or unbounded generic functions.  Multiple bounds (`<T: A + B>`)
     /// are stored as multiple entries; checked for conflicting method signatures at I6.
@@ -2038,6 +2045,7 @@ impl Data {
             variables: Function::new(name, &position.file),
             pub_visible: false,
             closure_record: u32::MAX,
+            mutated_captures: Vec::new(),
             bounds: Vec::new(),
             const_ref: None,
             forced_size: None,

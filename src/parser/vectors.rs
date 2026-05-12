@@ -432,6 +432,22 @@ impl Parser {
         if !self.captured_names.is_empty() {
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
+        // Plan-22 phase 01 — collect mutated captures from the
+        // lambda body's IR.  Detection-only: stores result on
+        // the definition for phases 02-05 to consume.  No
+        // behavior change yet.
+        //
+        // Gated on `closure_record` being set on the lambda's
+        // definition rather than `captured_names.is_empty()` —
+        // pass 1 populates `captured_names` and synthesises the
+        // closure record but `data.def(d_nr).code` is still null;
+        // pass 2 sees body populated but `captured_names` is empty
+        // (variable resolution doesn't re-add to the capture set).
+        // Reading `closure_record` works in BOTH passes (set in
+        // pass 1, persists across `data.reset()`'s use-name clear).
+        if !self.first_pass {
+            collect_mutated_captures(&mut self.data, d_nr);
+        }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
         drop(captured);
 
@@ -635,6 +651,22 @@ impl Parser {
         // synthesize closure record if any captures were detected.
         if !self.captured_names.is_empty() {
             self.synthesize_closure_record(d_nr, &lambda_name);
+        }
+        // Plan-22 phase 01 — collect mutated captures from the
+        // lambda body's IR.  Detection-only: stores result on
+        // the definition for phases 02-05 to consume.  No
+        // behavior change yet.
+        //
+        // Gated on `closure_record` being set on the lambda's
+        // definition rather than `captured_names.is_empty()` —
+        // pass 1 populates `captured_names` and synthesises the
+        // closure record but `data.def(d_nr).code` is still null;
+        // pass 2 sees body populated but `captured_names` is empty
+        // (variable resolution doesn't re-add to the capture set).
+        // Reading `closure_record` works in BOTH passes (set in
+        // pass 1, persists across `data.reset()`'s use-name clear).
+        if !self.first_pass {
+            collect_mutated_captures(&mut self.data, d_nr);
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
         drop(captured);
@@ -1825,5 +1857,349 @@ fn ensure_tuple_defs_for_capture(
             ensure_tuple_defs_for_capture(data, lexer, inner);
         }
         _ => {}
+    }
+}
+
+/// Plan-22 phase 01 — walk the lambda body's IR and identify
+/// captured bindings whose value is mutated.
+///
+/// Detection rules:
+///   - `Value::Set(slot, _)` where slot's variable name appears
+///     in the closure record → whole-binding reassignment.
+///   - `Value::Call(d, args)` where `d`'s op name is in the
+///     mutating-op set (OpSet* / OpAppend* / OpClear* /
+///     OpInsertVector / OpRemoveVector) AND `args[0]` is a
+///     `Value::Var(slot)` whose name appears in the closure
+///     record → field write through the captured value.
+///
+/// The closure record's attribute names are the canonical list
+/// of captured bindings (populated by `synthesize_closure_record`
+/// from `captured_names`).  A name in `mutated_captures` means
+/// some write opcode targets that name's underlying slot.
+///
+/// Stores result on `data.def(lambda_d_nr).mutated_captures`.
+/// Phases 02-05 consume this for case classification.
+///
+/// Detection-only: no IR rewrite, no codegen change, no behavior
+/// difference between this commit and the prior state.  The
+/// stored result is consulted by later phases.
+fn collect_mutated_captures(data: &mut crate::data::Data, lambda_d_nr: u32) {
+    let closure_d_nr = data.def(lambda_d_nr).closure_record;
+    if closure_d_nr == u32::MAX {
+        return;
+    }
+    let captured_names: Vec<String> = data
+        .def(closure_d_nr)
+        .attributes
+        .iter()
+        .map(|a| a.name.clone())
+        .collect();
+    if captured_names.is_empty() {
+        return;
+    }
+    let body = data.def(lambda_d_nr).code.clone();
+    let variables = data.def(lambda_d_nr).variables.clone();
+    // Resolve the closure-param's var slot — it's the `__closure`
+    // argument added at lambda parse time (vectors.rs:417-421).
+    // In the body's IR, captured-name reads are
+    // `Call(OpGet*, [Var(closure_param), Int(fld_idx)])` and
+    // writes are `Call(OpSet*, [Var(closure_param), Int(fld_idx),
+    // value])`.  Field indices map to attribute positions in the
+    // closure record (`captured_names[fld_idx]`).
+    let mut closure_param: Option<u16> = None;
+    for v in 0..variables.count() {
+        if variables.name(v) == "__closure" {
+            closure_param = Some(v);
+            break;
+        }
+    }
+    let mut mutated: Vec<String> = Vec::new();
+    walk_for_mutations(
+        &body,
+        &captured_names,
+        closure_param,
+        &variables,
+        data,
+        &mut mutated,
+    );
+    data.definitions[lambda_d_nr as usize].mutated_captures = mutated;
+}
+
+/// Op names whose first argument is the target of a mutation.
+/// All write through the closure record's field (when first arg
+/// is a captured-binding placeholder var).
+///
+/// `Definition::original_name()` strips the leading 2 chars
+/// (the `n_` / `Op` prefix) for functions — these names are
+/// the post-strip form, e.g. `OpSetInt` → `SetInt`,
+/// `n_my_fn` → `my_fn`.
+const MUTATING_OP_NAMES: &[&str] = &[
+    "SetInt",
+    "SetByte",
+    "SetShortRaw",
+    "SetInt4",
+    "SetFloat",
+    "SetSingle",
+    "SetText",
+    "SetCharacter",
+    "SetEnum",
+    "AppendVector",
+    "AppendText",
+    "AppendCharacter",
+    "AppendStackText",
+    "AppendStackCharacter",
+    "ClearVector",
+    "ClearText",
+    "ClearStackText",
+    "InsertVector",
+    "RemoveVector",
+];
+
+fn walk_for_mutations(
+    code: &Value,
+    captured_names: &[String],
+    closure_param: Option<u16>,
+    variables: &crate::variables::Function,
+    data: &crate::data::Data,
+    out: &mut Vec<String>,
+) {
+    let mark = |name: &str, out: &mut Vec<String>| {
+        if captured_names.iter().any(|c| c == name) && !out.iter().any(|s| s == name) {
+            out.push(name.to_string());
+        }
+    };
+    match code {
+        Value::Span(boxed) => walk_for_mutations(
+            &boxed.1,
+            captured_names,
+            closure_param,
+            variables,
+            data,
+            out,
+        ),
+        Value::Set(slot, expr) => {
+            if *slot < variables.count() {
+                mark(variables.name(*slot), out);
+            }
+            walk_for_mutations(expr, captured_names, closure_param, variables, data, out);
+        }
+        Value::Call(d, args) => {
+            if (*d as usize) < data.definitions.len() {
+                let op_name = data.def(*d).original_name();
+                if MUTATING_OP_NAMES.iter().any(|n| *n == op_name)
+                    && let Some(first) = args.first()
+                {
+                    // Three write shapes:
+                    //   (a) `OpSet*(Var(captured_local), …)` — pass-1
+                    //       form, before closure-param threading.
+                    //       Direct local-slot write to the captured
+                    //       binding's placeholder var.
+                    //   (b) `OpSet*(Var(closure_param), Int(fld_idx),
+                    //       …)` — pass-2 direct write to a captured
+                    //       primitive's slot in the closure record.
+                    //       Map fld_idx → captured_names[fld_idx].
+                    //   (c) `OpSet*(Call(GetField, [Var(closure_param),
+                    //       Int(fld_idx)]), …)` — pass-2 nested write
+                    //       through a captured Reference's loaded
+                    //       value.  E.g. `s.x = 7` for captured
+                    //       struct `s`.  The mutation targets `s`
+                    //       (via its content), so flag s as mutated.
+                    match first.unspan() {
+                        Value::Var(v) => {
+                            if Some(*v) == closure_param
+                                && let Some(Value::Int(fld)) = args.get(1).map(Value::unspan)
+                                && (*fld as usize) < captured_names.len()
+                            {
+                                mark(&captured_names[*fld as usize].clone(), out);
+                            } else if *v < variables.count() {
+                                mark(variables.name(*v), out);
+                            }
+                        }
+                        Value::Call(inner_d, inner_args)
+                            if (*inner_d as usize) < data.definitions.len() =>
+                        {
+                            // Detect nested `Call(GetField, [Var(closure_param), Int(fld)])`
+                            let inner_name = data.def(*inner_d).original_name();
+                            if (inner_name == "GetField" || inner_name.starts_with("Get"))
+                                && let Some(inner_first) = inner_args.first()
+                                && let Value::Var(v) = inner_first.unspan()
+                                && Some(*v) == closure_param
+                                && let Some(Value::Int(fld)) = inner_args.get(1).map(Value::unspan)
+                                && (*fld as usize) < captured_names.len()
+                            {
+                                mark(&captured_names[*fld as usize].clone(), out);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            for arg in args {
+                walk_for_mutations(arg, captured_names, closure_param, variables, data, out);
+            }
+        }
+        Value::CallRef(_, args) | Value::Insert(args) | Value::Tuple(args) => {
+            for arg in args {
+                walk_for_mutations(arg, captured_names, closure_param, variables, data, out);
+            }
+        }
+        Value::Block(b) | Value::Loop(b) => {
+            for child in &b.operators {
+                walk_for_mutations(child, captured_names, closure_param, variables, data, out);
+            }
+        }
+        Value::If(c, t, f) => {
+            walk_for_mutations(c, captured_names, closure_param, variables, data, out);
+            walk_for_mutations(t, captured_names, closure_param, variables, data, out);
+            walk_for_mutations(f, captured_names, closure_param, variables, data, out);
+        }
+        Value::Iter(_, init, step, body) => {
+            walk_for_mutations(init, captured_names, closure_param, variables, data, out);
+            walk_for_mutations(step, captured_names, closure_param, variables, data, out);
+            walk_for_mutations(body, captured_names, closure_param, variables, data, out);
+        }
+        Value::Return(expr)
+        | Value::Drop(expr)
+        | Value::Yield(expr)
+        | Value::TuplePut(_, _, expr)
+        | Value::BreakWith(_, expr) => {
+            walk_for_mutations(expr, captured_names, closure_param, variables, data, out);
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase01_mutation_detection_tests {
+    //! Plan-22 phase 01 — verify `collect_mutated_captures` populates
+    //! `data.def(d_nr).mutated_captures` correctly across the
+    //! representative shapes phase 02 will consume.
+
+    use crate::parser::Parser;
+
+    /// Helper: parse a snippet and find the first capturing lambda
+    /// definition.  Returns its `mutated_captures` clone.
+    fn first_capturing_lambda_mutations(source: &str) -> Vec<String> {
+        let mut p = Parser::new();
+        // Load defaults so primitive types and operators resolve.
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(source, "phase01_test", false);
+        for d_nr in 0..p.data.definitions() {
+            let def = p.data.def(d_nr);
+            if def.closure_record != u32::MAX && !def.mutated_captures.is_empty() {
+                return def.mutated_captures.clone();
+            }
+        }
+        // Fall back to the first capturing lambda even when nothing
+        // was detected — lets `assert_eq` show the actual empty vec.
+        for d_nr in 0..p.data.definitions() {
+            let def = p.data.def(d_nr);
+            if def.closure_record != u32::MAX {
+                return def.mutated_captures.clone();
+            }
+        }
+        Vec::new()
+    }
+
+    #[test]
+    fn read_only_capture_yields_empty_set() {
+        // Case A baseline — capture `n`, read it, never write.
+        // mutated_captures should stay empty (the regression-net
+        // signal that phases 02-05 must not flip).
+        let mutated = first_capturing_lambda_mutations(
+            r"
+            fn test() {
+                n = 5;
+                f = fn(x: integer) -> integer { x + n };
+                _ = f(10);
+            }
+            ",
+        );
+        assert!(
+            mutated.is_empty(),
+            "expected no mutations for read-only capture; got {mutated:?}"
+        );
+    }
+
+    #[test]
+    fn whole_binding_reassign_detected() {
+        // Case B (basic) — `n = n + 1` rewrites the captured slot.
+        // The Set arm of the walker catches this.
+        let mutated = first_capturing_lambda_mutations(
+            r"
+            fn test() {
+                n = 0;
+                f = fn() { n = n + 1; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            mutated.iter().any(|s| s == "n"),
+            "expected `n` mutation detected; got {mutated:?}"
+        );
+    }
+
+    #[test]
+    fn struct_field_write_detected() {
+        // Case B (Reference) — `s.x = ...` desugars to OpSetInt
+        // on the captured Reference.  The MUTATING_OP_NAMES arm
+        // catches it via `args[0] = Var(captured)`.
+        let mutated = first_capturing_lambda_mutations(
+            r"
+            struct S { x: integer, y: integer }
+            fn test() {
+                s = S { x: 0, y: 0 };
+                f = fn() { s.x = 7; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            mutated.iter().any(|s| s == "s"),
+            "expected `s` mutation detected; got {mutated:?}"
+        );
+    }
+
+    #[test]
+    fn text_append_detected() {
+        // Case B (text capture) — `s += "x"` desugars to
+        // OpAppendText on the captured text slot.
+        let mutated = first_capturing_lambda_mutations(
+            r#"
+            fn test() {
+                s = "";
+                f = fn() { s += "x"; };
+                f();
+            }
+            "#,
+        );
+        assert!(
+            mutated.iter().any(|s| s == "s"),
+            "expected `s` mutation detected; got {mutated:?}"
+        );
+    }
+
+    #[test]
+    fn multiple_captures_only_mutated_one_flagged() {
+        // Read `r`, write `w`.  Only `w` should appear in mutated.
+        let mutated = first_capturing_lambda_mutations(
+            r"
+            fn test() {
+                r = 100;
+                w = 0;
+                f = fn() { w = w + r; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            mutated.iter().any(|s| s == "w"),
+            "expected `w` mutation detected; got {mutated:?}"
+        );
+        assert!(
+            !mutated.iter().any(|s| s == "r"),
+            "did not expect `r` (read-only) in mutated set; got {mutated:?}"
+        );
     }
 }
