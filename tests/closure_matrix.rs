@@ -102,3 +102,72 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 01 — broaden C0 (non-capturing) across D2 / D3 / D4 ──────────────
+//
+// All four cells exercise non-capturing lambdas (no surrounding-
+// scope reads).  Each destination shape stresses a different
+// emission path:
+//   D2/arg     — fn-ref passed by value to a function parameter
+//   D2/inline  — IIFE: (fn(...) {...})(args), no intermediate var
+//   D3/field   — struct field of fn-ref type, instantiated and called
+//   D4/vector  — vector<fn(integer) -> integer> literal + index-call
+//                (the historical P214 surface — closed 2026-05-05)
+
+cross_mode!(
+    c0_d2_non_cap_arg,
+    r#"
+    fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+    fn test() {
+        result = apply(fn(n: integer) -> integer { n * n }, 7);
+        print("{result}\n");
+        assert(result == 49, "c0_d2_non_cap_arg");
+    }
+    "#
+);
+
+cross_mode!(
+    c0_d2_non_cap_inline,
+    r#"
+    fn test() {
+        result = (fn(x: integer) -> integer { x + 1 })(41);
+        print("{result}\n");
+        assert(result == 42, "c0_d2_non_cap_inline");
+    }
+    "#
+);
+
+cross_mode!(
+    c0_d3_non_cap_field,
+    r#"
+    struct Holder { cb: fn(integer) -> integer }
+    fn dbl(x: integer) -> integer { x + x }
+    fn triple(x: integer) -> integer { x * 3 }
+    fn test() {
+        h1 = Holder { cb: dbl };
+        h2 = Holder { cb: triple };
+        a = h1.cb(10);
+        b = h2.cb(10);
+        print("{a},{b}\n");
+        assert(a == 20, "h1.cb(10)={a}");
+        assert(b == 30, "h2.cb(10)={b}");
+    }
+    "#
+);
+
+cross_mode!(
+    c0_d4_non_cap_vector,
+    r#"
+    fn test() {
+        v: vector<fn(integer) -> integer> = [
+            fn(x: integer) -> integer { x + 1 },
+            fn(x: integer) -> integer { x * 2 },
+        ];
+        a = v[0](10);
+        b = v[1](5);
+        print("{a},{b}\n");
+        assert(a == 11, "v[0](10)={a}");
+        assert(b == 10, "v[1](5)={b}");
+    }
+    "#
+);

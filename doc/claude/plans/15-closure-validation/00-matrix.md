@@ -8,8 +8,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Status: SHIPPED 2026-05-12** — `tests/closure_matrix.rs` created;
 3 cells green under `cargo test --release --test closure_matrix --
 --ignored` (harness_smoke_basic, harness_smoke_arithmetic,
-c0_d1_non_cap_local).  No production change.  Phase 01 broadens
-the C0 row.
+c0_d1_non_cap_local).  No production change.
+
+**Phase 01 SHIPPED 2026-05-12** — C0 row complete: 5 cells
+(c0_d1_non_cap_local + c0_d2_non_cap_arg + c0_d2_non_cap_inline
++ c0_d3_non_cap_field + c0_d4_non_cap_vector).  All non-capturing
+shapes pass interp + native cross-mode.  No production change —
+the underlying support shipped earlier (P214 closed the
+vector-of-non-capturing path 2026-05-05).
 
 ## Goal
 
