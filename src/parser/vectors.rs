@@ -439,6 +439,12 @@ impl Parser {
         // in that case.
         if !self.captured_names.is_empty() {
             collect_mutated_captures(&mut self.data, d_nr);
+            // Plan-22 phase 02d-i (2026-05-12): accumulate scalar
+            // mutated-captures onto the parent function's
+            // `scalars_to_box` field.  Phase 02d-iii will use this
+            // to rewrite outer bindings to hidden cells.  Detection-
+            // only at this phase — no behavior change.
+            accumulate_scalars_to_box(&mut self.data, outer_context, d_nr, &self.captured_names);
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
@@ -652,6 +658,12 @@ impl Parser {
         // in that case.
         if !self.captured_names.is_empty() {
             collect_mutated_captures(&mut self.data, d_nr);
+            // Plan-22 phase 02d-i (2026-05-12): accumulate scalar
+            // mutated-captures onto the parent function's
+            // `scalars_to_box` field.  Phase 02d-iii will use this
+            // to rewrite outer bindings to hidden cells.  Detection-
+            // only at this phase — no behavior change.
+            accumulate_scalars_to_box(&mut self.data, outer_context, d_nr, &self.captured_names);
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
@@ -1882,6 +1894,67 @@ fn ensure_tuple_defs_for_capture(
     }
 }
 
+/// Plan-22 phase 02d-i — accumulate the names of scalar-typed
+/// captures that this lambda mutates onto the PARENT function's
+/// `scalars_to_box` field.
+///
+/// Per-call: one lambda's mutations contribute to the parent
+/// function's union.  Names are deduped; types decide
+/// scalar-vs-non-scalar.
+///
+/// "Scalar" set (per phase 02d design):
+///   - `Type::Integer(_)`
+///   - `Type::Float`
+///   - `Type::Single`
+///   - `Type::Boolean`
+///   - `Type::Character`
+///   - `Type::Text(_)`
+///   - `Type::Enum(_, false, _)` (plain enum)
+///
+/// Reference / Function / Vector / Hash / Sorted / Index /
+/// Spacial / Tuple captures are NOT scalars — they're handled by
+/// other paths (Reference: phase 02c; Function: phase 02c via
+/// existing fn-ref machinery; Vector + keyed: rejected by P257).
+///
+/// `parent_d_nr` is the enclosing function's def_nr; if the
+/// lambda is at top-level (no enclosing function — e.g. a lambda
+/// in a struct field default value), `parent_d_nr == u32::MAX`
+/// and the accumulator is a no-op (top-level binds aren't
+/// mutated-captured by their own scope).
+fn accumulate_scalars_to_box(
+    data: &mut crate::data::Data,
+    parent_d_nr: u32,
+    lambda_d_nr: u32,
+    captured_names: &[(String, Type)],
+) {
+    if parent_d_nr == u32::MAX || (parent_d_nr as usize) >= data.definitions.len() {
+        return;
+    }
+    let mutated = data.def(lambda_d_nr).mutated_captures.clone();
+    for name in &mutated {
+        let Some((_, tp)) = captured_names.iter().find(|(n, _)| n == name) else {
+            continue;
+        };
+        let is_scalar = matches!(
+            tp,
+            Type::Integer(_)
+                | Type::Float
+                | Type::Single
+                | Type::Boolean
+                | Type::Character
+                | Type::Text(_)
+                | Type::Enum(_, false, _)
+        );
+        if !is_scalar {
+            continue;
+        }
+        let parent = &mut data.definitions[parent_d_nr as usize];
+        if !parent.scalars_to_box.iter().any(|s| s == name) {
+            parent.scalars_to_box.push(name.clone());
+        }
+    }
+}
+
 /// Plan-22 phase 01 — walk the lambda body's IR and identify
 /// captured bindings whose value is mutated.
 ///
@@ -2251,6 +2324,178 @@ mod plan22_phase01_mutation_detection_tests {
         assert!(
             !mutated.iter().any(|s| s == "r"),
             "did not expect `r` (read-only) in mutated set; got {mutated:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase02d_i_scalars_to_box_tests {
+    //! Plan-22 phase 02d-i — verify the parent-function
+    //! `scalars_to_box` field is populated correctly across the
+    //! representative shapes phase 02d-iii will consume.  No
+    //! behavior change at this phase: the field is detection-only.
+
+    use crate::parser::Parser;
+
+    /// Helper: parse a snippet with a `fn test() { … }` and return
+    /// `test`'s `scalars_to_box` field (sorted for stable assertion).
+    fn test_fn_scalars_to_box(source: &str) -> Vec<String> {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(source, "phase02d_i_test", false);
+        let test_d_nr = p.data.def_nr("n_test");
+        if test_d_nr == u32::MAX {
+            return Vec::new();
+        }
+        let mut names = p.data.def(test_d_nr).scalars_to_box.clone();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn read_only_capture_yields_empty_box_set() {
+        // Case A — capture `n`, read it, never write.
+        // No name should be queued for boxing.
+        let names = test_fn_scalars_to_box(
+            r"
+            fn test() {
+                n = 5;
+                f = fn(x: integer) -> integer { x + n };
+                _ = f(10);
+            }
+            ",
+        );
+        assert!(
+            names.is_empty(),
+            "expected empty scalars_to_box for read-only capture; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn integer_mutated_capture_pushed() {
+        // The canonical 02d-iii target: `n = 0; f = fn() { n = n + 1; }`.
+        let names = test_fn_scalars_to_box(
+            r"
+            fn test() {
+                n = 0;
+                f = fn() { n = n + 1; };
+                f();
+            }
+            ",
+        );
+        assert_eq!(
+            names,
+            vec!["n".to_string()],
+            "expected `n` queued for boxing; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn text_mutated_capture_pushed() {
+        // `s` is text — boxable per the 02d design (Text is in
+        // the scalar set even though it has internal heap storage).
+        let names = test_fn_scalars_to_box(
+            r#"
+            fn test() {
+                s = "";
+                f = fn() { s += "x"; };
+                f();
+            }
+            "#,
+        );
+        assert_eq!(
+            names,
+            vec!["s".to_string()],
+            "expected `s` queued for boxing; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn struct_capture_not_pushed() {
+        // `s` is a struct (Reference type) — handled by phase 02c
+        // (auto-Reference), NOT by 02d-iii's boxing.  The
+        // scalars_to_box field must EXCLUDE Reference captures.
+        let names = test_fn_scalars_to_box(
+            r"
+            struct S { x: integer }
+            fn test() {
+                s = S { x: 0 };
+                f = fn() { s.x = 7; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            names.is_empty(),
+            "Reference captures must NOT be queued for boxing; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn multiple_captures_only_mutated_scalars_pushed() {
+        // Read `r`, write `w`.  Only `w` (the mutated scalar) is
+        // queued.  `r` (read-only) is excluded by phase 01's
+        // mutated_captures filter.
+        let names = test_fn_scalars_to_box(
+            r"
+            fn test() {
+                r = 100;
+                w = 0;
+                f = fn() { w = w + r; };
+                f();
+            }
+            ",
+        );
+        assert_eq!(
+            names,
+            vec!["w".to_string()],
+            "expected `w` queued (not `r`); got {names:?}"
+        );
+    }
+
+    #[test]
+    fn multi_scalar_capture_all_pushed() {
+        // Two scalars, both mutated.  Both should be queued.
+        // (Sorted by the helper for stable assertion.)
+        let names = test_fn_scalars_to_box(
+            r"
+            fn test() {
+                a = 0;
+                b = 0;
+                f = fn() {
+                    a = a + 1;
+                    b = b + 2;
+                };
+                f();
+            }
+            ",
+        );
+        assert_eq!(
+            names,
+            vec!["a".to_string(), "b".to_string()],
+            "expected both `a` and `b` queued; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn dedup_when_two_lambdas_mutate_same_capture() {
+        // Two separate lambdas in `test` both mutate `n`.  The
+        // accumulator must dedup — `n` appears once, not twice.
+        let names = test_fn_scalars_to_box(
+            r"
+            fn test() {
+                n = 0;
+                f1 = fn() { n = n + 1; };
+                f2 = fn() { n = n + 2; };
+                f1();
+                f2();
+            }
+            ",
+        );
+        assert_eq!(
+            names,
+            vec!["n".to_string()],
+            "expected `n` queued exactly once (deduped); got {names:?}"
         );
     }
 }

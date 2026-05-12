@@ -1639,6 +1639,26 @@ pub struct Definition {
     /// after the lambda body is parsed.  Phases 02-05 consume this
     /// to drive case B/C/D classification + lowering.
     pub mutated_captures: Vec<String>,
+    /// Plan-22 phase 02d-i — names of LOCAL bindings in THIS
+    /// function's scope that are captured-and-mutated by some
+    /// inner lambda, where the local's type is a scalar
+    /// (Integer / Text / Float / Single / Boolean / Character /
+    /// plain Enum).  Populated by the accumulator pass when an
+    /// inner lambda's `mutated_captures` includes scalar-typed
+    /// names: we push those names onto the parent function's
+    /// `scalars_to_box` so a future 02d-iii pass can rewrite the
+    /// outer binding to a hidden cell.
+    ///
+    /// The accumulator runs in pass 1 (right after each lambda's
+    /// mutation walker), so by pass 2 the parent function knows
+    /// which of its locals need boxing — required because the
+    /// outer-binding decision happens at variable-init time
+    /// (BEFORE the lambda literal is parsed).
+    ///
+    /// Detection-only at phase 02d-i: the field is populated but
+    /// not yet consumed.  Phase 02d-iii does the actual
+    /// outer-binding rewrite.
+    pub scalars_to_box: Vec<String>,
     /// I2: for generic functions — the `def_nr`s of all required interface bounds.
     /// Empty for non-generic or unbounded generic functions.  Multiple bounds (`<T: A + B>`)
     /// are stored as multiple entries; checked for conflicting method signatures at I6.
@@ -2046,6 +2066,7 @@ impl Data {
             pub_visible: false,
             closure_record: u32::MAX,
             mutated_captures: Vec::new(),
+            scalars_to_box: Vec::new(),
             bounds: Vec::new(),
             const_ref: None,
             forced_size: None,
