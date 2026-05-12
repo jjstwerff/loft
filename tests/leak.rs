@@ -689,6 +689,44 @@ fn p22_phase02c_auto_reference_capture_no_leak() {
     );
 }
 
+/// Plan-22 phase 02d-iii.e — boxed-scalar capture leak guard.
+///
+/// 100-iteration tight loop: each iteration creates a boxed
+/// integer `n`, captures it into a closure that mutates n via
+/// shared cell DbRef, calls bump 3 times, asserts result.  The
+/// boxed `n`'s `__cell_integer` record, the closure record, and
+/// the closure's auto-Reference field all need to free cleanly
+/// at scope exit.
+///
+/// Actual behavior (2026-05-12): clean, no leak.  The cell's
+/// type is `Reference(__cell_integer, vec![])` — heap-owned per
+/// `is_heap_owned`, so `get_free_vars` emits the standard
+/// `OpFreeRef` at scope exit.  Closure record + auto-Reference
+/// attribute follow the same path established by phase 02c.
+#[test]
+fn p22_phase02d_iii_e_scalar_capture_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_iteration() -> integer {
+            n = 0;
+            bump = fn() { n = n + 1; };
+            bump();
+            bump();
+            bump();
+            n
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == 3, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
 /// Plan-15 phase 05 — nested closure (C6) leak guard.
 ///
 /// `inner` is a non-capturing fn-ref local; `outer` captures

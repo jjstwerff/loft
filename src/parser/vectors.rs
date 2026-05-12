@@ -451,6 +451,20 @@ impl Parser {
             // allocate.  Idempotent across all lambdas in the
             // compilation; gated on first_pass.
             self.synthesize_cell_structs(d_nr);
+            // Plan-22 phase 02d-iii.e — pre-box `captured_names`
+            // entries for names in the parent's scalars_to_box
+            // BEFORE `synthesize_closure_record` builds the
+            // record's attributes.  Without this, pass 1 freezes
+            // the attribute as the un-flipped scalar (Integer)
+            // and the closure record's storage layout uses 8B
+            // inline instead of 12B share-by-DbRef — runtime
+            // then misroutes writes through `OpSetInt` and
+            // crashes on the locked store.
+            box_captured_names_for_outer_scalars(
+                &mut self.captured_names,
+                &self.data,
+                outer_context,
+            );
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
@@ -676,6 +690,20 @@ impl Parser {
             // allocate.  Idempotent across all lambdas in the
             // compilation; gated on first_pass.
             self.synthesize_cell_structs(d_nr);
+            // Plan-22 phase 02d-iii.e — pre-box `captured_names`
+            // entries for names in the parent's scalars_to_box
+            // BEFORE `synthesize_closure_record` builds the
+            // record's attributes.  Without this, pass 1 freezes
+            // the attribute as the un-flipped scalar (Integer)
+            // and the closure record's storage layout uses 8B
+            // inline instead of 12B share-by-DbRef — runtime
+            // then misroutes writes through `OpSetInt` and
+            // crashes on the locked store.
+            box_captured_names_for_outer_scalars(
+                &mut self.captured_names,
+                &self.data,
+                outer_context,
+            );
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
@@ -925,6 +953,27 @@ impl Parser {
             if matches!(&original_tp, Type::Reference(d, _)
                 if self.data.def(*d).name.starts_with("__cell_"))
             {
+                continue;
+            }
+            // Plan-22 phase 02d-iii.e — Text is intentionally
+            // EXCLUDED from the actual flip today.  Text mutation
+            // (`log += s`) goes through a special `assign_text`
+            // path in `parse_assign_op` that expects a `Var(v_nr)`
+            // LHS — auto-deref'd `Call(OpGetText, [Var, 0])`
+            // would break that path.  The existing void-return-
+            // closure write-back mechanism in `parse_call_ref`
+            // already handles text captures correctly today
+            // (text IS in `closure_record` as inline 16B Text,
+            // write-back copies back per-call).  Text-cell boxing
+            // is a follow-up sub-step (02d-iv or later) — needs
+            // a dedicated path that decomposes `log += s` into
+            // "read cell text → append → write cell text".
+            //
+            // The cell struct + scalars_to_box entry are still
+            // synthesised for text (so 02d-i/ii unit tests stay
+            // green); only the actual variables-table flip is
+            // skipped.
+            if matches!(&original_tp, Type::Text(_)) {
                 continue;
             }
             let Some(cell_name) = cell_struct_name(&original_tp, &self.data) else {
@@ -2132,6 +2181,53 @@ fn cell_value_type(tp: &Type) -> Type {
 /// in a struct field default value), `parent_d_nr == u32::MAX`
 /// and the accumulator is a no-op (top-level binds aren't
 /// mutated-captured by their own scope).
+/// Plan-22 phase 02d-iii.e — replace `captured_names` entries
+/// for names in the parent function's `scalars_to_box` with
+/// their boxed `Reference(__cell_<T>, [])` form.
+///
+/// Called from the lambda parsing site BETWEEN
+/// `synthesize_cell_structs` (which needs the original scalar
+/// type to compute the cell name) and `synthesize_closure_record`
+/// (which uses `captured_names` types directly to set the
+/// closure record's attribute types).  In pass 1, this is what
+/// makes the closure record's attribute carry
+/// `Reference(__cell_int, _)` from creation, so phase 02c's
+/// auto-Reference encoding fires (12B share-by-DbRef storage)
+/// and the closure body's reads/writes route through the
+/// shared cell.
+///
+/// In pass 2, `captured_names` is typically empty (the lambda's
+/// resolve_name takes the closure-redirect arm before the
+/// capture arm fires), so this helper is a no-op there.
+fn box_captured_names_for_outer_scalars(
+    captured_names: &mut [(String, Type)],
+    data: &crate::data::Data,
+    outer_context: u32,
+) {
+    if outer_context == u32::MAX || (outer_context as usize) >= data.definitions.len() {
+        return;
+    }
+    let scalars = data.def(outer_context).scalars_to_box.clone();
+    for (name, tp) in captured_names {
+        if !scalars.iter().any(|s| s == name) {
+            continue;
+        }
+        // Plan-22 phase 02d-iii.e — keep text captures un-boxed
+        // (mirrors `flip_scalars_to_box_types`'s text-skip).
+        // Text mutation `log += s` flows through the existing
+        // write-back mechanism, not through cell propagation.
+        if matches!(tp, Type::Text(_)) {
+            continue;
+        }
+        if let Some(cell_name) = cell_struct_name(tp, data) {
+            let cell_d_nr = data.def_nr(&cell_name);
+            if cell_d_nr != u32::MAX {
+                *tp = Type::Reference(cell_d_nr, vec![]);
+            }
+        }
+    }
+}
+
 fn accumulate_scalars_to_box(
     data: &mut crate::data::Data,
     parent_d_nr: u32,
@@ -3136,13 +3232,19 @@ mod plan22_phase02d_iii_a_type_flip_tests {
             }
             other => panic!("`n` not flipped: {other:?}"),
         }
-        match p.vars.tp(s_nr) {
-            Type::Reference(d, deps) => {
-                assert_eq!(*d, cell_text, "`s` should point at __cell_text");
-                assert!(deps.is_empty());
-            }
-            other => panic!("`s` not flipped: {other:?}"),
-        }
+        // Plan-22 phase 02d-iii.e — text is intentionally NOT
+        // flipped today (text mutation flows through the
+        // existing write-back mechanism, not through cells).
+        // The `__cell_text` struct + `scalars_to_box` entry
+        // still get synthesised (so 02d-i/ii unit tests stay
+        // green); only the actual variables-table flip is
+        // skipped.  Phase 02d-iv (or later) extends to text via
+        // a dedicated read-append-write path.
+        assert!(
+            matches!(p.vars.tp(s_nr), Type::Text(_)),
+            "`s` should stay Text (text-flip is deferred to 02d-iv); got {:?}",
+            p.vars.tp(s_nr)
+        );
     }
 }
 

@@ -220,3 +220,75 @@ cross_mode!(
     }
     "#
 );
+
+// ── Phase 02d-iii — Case B (scalar capture, mutating, co-scoped) ────────────
+//
+// Plan-22 phase 02d-iii.e shipped 2026-05-12 — boxes scalar
+// captures (Integer / Float / Single / Character / Enum) via a
+// hidden `__cell_<T>` record at the outer-binding site.  The
+// closure record holds an auto-Reference DbRef to the same cell
+// (12-byte share-by-DbRef), so closure mutations propagate back
+// to the outer scope through shared DbRef.  See
+// `doc/claude/plans/22-mutable-closures/02d-iii-design.md` for
+// the per-sub-step breakdown (a-e).
+//
+// Text is intentionally EXCLUDED from boxing today (text
+// mutation `log += s` flows through the existing void-return
+// write-back mechanism in `parse_call_ref`).  Text-cell boxing
+// is planned for 02d-iv.
+
+cross_mode!(
+    b_d1_int_capture_local_mutates,
+    r#"
+    fn test() {
+        n = 0;
+        f = fn() { n = n + 1; };
+        f();
+        f();
+        print("after 2x f(): {n}\n");
+        assert(n == 2, "b_d1 expected 2, got {n}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d2_int_capture_arg_mutates,
+    r#"
+    fn invoke(f: fn()) { f(); }
+    fn test() {
+        n = 0;
+        invoke(fn() { n = n + 5; });
+        print("after invoke: {n}\n");
+        assert(n == 5, "b_d2 expected 5, got {n}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d3_int_capture_field_mutates,
+    r#"
+    struct Loop { cb: fn() }
+    fn test() {
+        n = 0;
+        loop = Loop { cb: fn() { n = n + 7; } };
+        loop.cb();
+        print("after loop.cb: {n}\n");
+        assert(n == 7, "b_d3 expected 7, got {n}");
+    }
+    "#
+);
+
+cross_mode!(
+    b_d1_int_capture_repeated_calls,
+    r#"
+    fn test() {
+        count = 0;
+        bump = fn() { count = count + 1; };
+        bump();
+        bump();
+        bump();
+        print("after 3x bump: {count}\n");
+        assert(count == 3, "expected 3, got {count}");
+    }
+    "#
+);

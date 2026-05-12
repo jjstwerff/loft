@@ -897,29 +897,30 @@ impl Parser {
                     // Mark original as used so test_used doesn't warn.
                     self.vars.mark_used(original);
                 }
-                // Plan-22 phase 02d-iii.a — `flip_scalars_to_box_types`
-                // exists but is INTENTIONALLY NOT CALLED here.
+                // Plan-22 phase 02d-iii.e — ACTIVATE the type
+                // flip.  After this point, every mutated-scalar-
+                // capture local in this function carries
+                // `Reference(__cell_<T>, [])` instead of its
+                // original scalar type.  Lambdas inside the body
+                // will snapshot the flipped type into
+                // `capture_context`, so phase 02c's auto-Reference
+                // closure-record encoding fires correctly.
                 //
-                // Why deferred: an existing void-return-closure
-                // write-back in `control.rs::parse_call_ref`
-                // (lines 3729-3755, "for void-return capturing
-                // lambdas, write updated closure record fields
-                // back to the corresponding outer variables") is
-                // what makes today's `p86_lambda_capture_multi_mutation`
-                // pass.  Flipping the outer scalar to
-                // `Reference(__cell_<T>, [])` changes its slot
-                // shape from 8B (Integer) to 12B (DbRef), which
-                // makes the write-back's `v_set(outer, field_val)`
-                // segfault on the slot-size mismatch.
+                // Reads (parent body + closure body): wrapped by
+                // 02d-iii.b's `auto_deref_boxed_scalar` hook in
+                // `parse_var`.  Writes (parent body): wrapped by
+                // 02d-iii.d's `maybe_prepend_cell_alloc` hook in
+                // `parse_assign_op` (alloc on first-set; existing
+                // `towards_set` → `call_to_set_op` machinery
+                // emits the OpSet<T> via the auto-deref'd LHS
+                // pattern).  Writes (closure body): handled
+                // for free by the same machinery.
                 //
-                // The flip activates in 02d-iii.e once 02d-iii.b-d
-                // have wired the cell-based propagation
-                // (auto-Reference closure-record attribute +
-                // shared-DbRef reads/writes), allowing the
-                // write-back path to be removed without a
-                // regression.  See
-                // `doc/claude/plans/22-mutable-closures/02d-iii-design.md`
-                // (subtleties §4 + §9) for the full rationale.
+                // The void-return write-back path in
+                // `parse_call_ref` is gated to skip boxed-scalar
+                // attributes — propagation goes through the
+                // shared cell DbRef, not via per-call slot copy.
+                self.flip_scalars_to_box_types();
             }
             self.parse_code();
             // reset transient closure state after each function body.
