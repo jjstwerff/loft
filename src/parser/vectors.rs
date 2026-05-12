@@ -3356,3 +3356,232 @@ mod plan22_phase02d_iii_b_read_auto_deref_tests {
         assert!(found_n, "`n` not found in vars table");
     }
 }
+
+#[cfg(test)]
+mod plan22_phase02d_iii_c_assign_rewrite_tests {
+    //! Plan-22 phase 02d-iii.c — verify
+    //! `boxed_scalar_assign_rewrite` builds the correct IR for
+    //! first vs subsequent assignments to a boxed-scalar local,
+    //! plus `change_var_type` guard preserves the flipped type.
+    //!
+    //! Foundation step: helpers are shipped as infrastructure; a
+    //! `parse_assign_op` hook activates them with 02d-iii.e
+    //! (after 02d-iii.d wires the closure-body write rewrite).
+    //! With the flip dormant in production, no variable carries
+    //! the trigger type and the helpers return None / no-op for
+    //! every assignment in real code.
+
+    use crate::data::{Type, Value};
+    use crate::parser::Parser;
+
+    /// Helper: build a parser with defaults loaded, synthesise a
+    /// `__cell_<T>` struct with the given value-field type, and
+    /// add a fresh variable named `name` with type
+    /// `Reference(cell_d_nr, [])`.
+    fn parser_with_boxed_local(
+        value_tp: &Type,
+        cell_name: &str,
+        var_name: &str,
+    ) -> (Parser, u32, u16) {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let cell_d_nr = p
+            .data
+            .add_def(cell_name, p.lexer.pos(), crate::data::DefType::Struct);
+        p.data
+            .add_attribute(&mut p.lexer, cell_d_nr, "value", value_tp.clone());
+        let v_nr = p
+            .vars
+            .add_variable(var_name, &Type::Reference(cell_d_nr, vec![]), &mut p.lexer);
+        (p, cell_d_nr, v_nr)
+    }
+
+    #[test]
+    fn first_set_integer_emits_alloc_and_fill() {
+        let (p, cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        let ir = p
+            .boxed_scalar_assign_rewrite(v_nr, "=", Value::Int(42))
+            .expect("expected rewrite IR");
+        let op_db = p.data.def_nr("OpDatabase");
+        let op_set = p.data.def_nr("OpSetInt");
+        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type);
+        let Value::Insert(ops) = ir else {
+            panic!("expected Insert");
+        };
+        assert_eq!(ops.len(), 3);
+        match &ops[0] {
+            Value::Set(set_v, val) => {
+                assert_eq!(*set_v, v_nr);
+                assert!(matches!(**val, Value::Null));
+            }
+            other => panic!("op[0] should be Set(n, Null); got {other:?}"),
+        }
+        match &ops[1] {
+            Value::Call(d, args) => {
+                assert_eq!(*d, op_db);
+                assert_eq!(args.len(), 2);
+                assert!(matches!(args[0], Value::Var(x) if x == v_nr));
+                assert!(matches!(args[1], Value::Int(kt) if kt == cell_kt));
+            }
+            other => panic!("op[1] should be OpDatabase(n, kt); got {other:?}"),
+        }
+        match &ops[2] {
+            Value::Call(d, args) => {
+                assert_eq!(*d, op_set);
+                assert_eq!(args.len(), 3);
+                assert!(matches!(args[0], Value::Var(x) if x == v_nr));
+                assert!(matches!(args[1], Value::Int(0)));
+                assert!(matches!(args[2], Value::Int(42)));
+            }
+            other => panic!("op[2] should be OpSetInt(n, 0, 42); got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subsequent_set_integer_emits_field_write_only() {
+        let (mut p, _cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        p.vars.defined(v_nr);
+        let ir = p
+            .boxed_scalar_assign_rewrite(v_nr, "=", Value::Int(7))
+            .expect("expected rewrite IR");
+        let op_set = p.data.def_nr("OpSetInt");
+        match ir {
+            Value::Call(d, args) => {
+                assert_eq!(d, op_set);
+                assert_eq!(args.len(), 3);
+                assert!(matches!(args[0], Value::Var(x) if x == v_nr));
+                assert!(matches!(args[1], Value::Int(0)));
+                assert!(matches!(args[2], Value::Int(7)));
+            }
+            other => panic!("expected Call(OpSetInt, ...); got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_first_set_uses_op_set_text() {
+        let (p, _cell_d_nr, v_nr) =
+            parser_with_boxed_local(&Type::Text(vec![]), "__cell_text", "s");
+        let op_set = p.data.def_nr("OpSetText");
+        let ir = p
+            .boxed_scalar_assign_rewrite(v_nr, "=", Value::Text("hi".to_string()))
+            .expect("expected rewrite IR");
+        let Value::Insert(ops) = ir else {
+            panic!("expected Insert");
+        };
+        if let Value::Call(d, _) = &ops[2] {
+            assert_eq!(*d, op_set);
+        } else {
+            panic!("op[2] not a Call");
+        }
+    }
+
+    #[test]
+    fn float_first_set_uses_op_set_float() {
+        let (p, _cell_d_nr, v_nr) = parser_with_boxed_local(&Type::Float, "__cell_float", "f");
+        let op_set = p.data.def_nr("OpSetFloat");
+        let ir = p
+            .boxed_scalar_assign_rewrite(v_nr, "=", Value::Float(2.5))
+            .expect("expected rewrite IR");
+        if let Value::Insert(ops) = &ir
+            && let Value::Call(d, _) = &ops[2]
+        {
+            assert_eq!(*d, op_set);
+        } else {
+            panic!("expected Insert([_, _, Call(OpSetFloat, _)]); got {ir:?}");
+        }
+    }
+
+    #[test]
+    fn non_boxed_var_returns_none() {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let v_nr = p.vars.add_variable(
+            "n",
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            &mut p.lexer,
+        );
+        let result = p.boxed_scalar_assign_rewrite(v_nr, "=", Value::Int(0));
+        assert!(
+            result.is_none(),
+            "non-boxed Integer must not be rewritten; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn non_cell_reference_returns_none() {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let s_d_nr = p
+            .data
+            .add_def("MyStruct", p.lexer.pos(), crate::data::DefType::Struct);
+        let v_nr = p
+            .vars
+            .add_variable("s", &Type::Reference(s_d_nr, vec![]), &mut p.lexer);
+        let result = p.boxed_scalar_assign_rewrite(v_nr, "=", Value::Null);
+        assert!(
+            result.is_none(),
+            "non-cell Reference must not be rewritten; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn compound_op_returns_none() {
+        let (p, _cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        for op in &["+=", "-=", "*=", "/=", "%="] {
+            let result = p.boxed_scalar_assign_rewrite(v_nr, op, Value::Int(1));
+            assert!(
+                result.is_none(),
+                "op `{op}` must not be rewritten by 02d-iii.c; got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn boolean_falls_through() {
+        // OpSetByte takes (ref, fld, min, val); this helper
+        // doesn't yet handle the 4-arg shape.  Phase 02d-iii.e
+        // (or later) extends boolean.
+        let (p, _cell_d_nr, v_nr) = parser_with_boxed_local(&Type::Boolean, "__cell_boolean", "b");
+        let result = p.boxed_scalar_assign_rewrite(v_nr, "=", Value::Boolean(true));
+        assert!(
+            result.is_none(),
+            "boolean cell falls through in 02d-iii.c; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn change_var_type_guard_preserves_flipped_type() {
+        // The `change_var_type` guard added in 02d-iii.c: if the
+        // variable's current type is `Reference(__cell_integer, _)`,
+        // calling `change_var_type` with an Integer arg must NOT
+        // revert it.  Without this guard, parse_assign_op's
+        // `change_var(to, &s_type)` would undo the flip on every
+        // `n = expr`.
+        let (mut p, cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        // The guard only fires when !first_pass.
+        p.first_pass = false;
+        p.change_var_type(v_nr, &Type::Integer(crate::data::IntegerSpec::signed32()));
+        match p.vars.tp(v_nr) {
+            Type::Reference(d, _) => {
+                assert_eq!(*d, cell_d_nr, "type was reverted; flip not preserved");
+            }
+            other => panic!("type was reverted to {other:?}"),
+        }
+    }
+}

@@ -630,6 +630,32 @@ impl Parser {
     }
 
     pub(crate) fn change_var_type(&mut self, v_nr: u16, tp: &Type) {
+        // Plan-22 phase 02d-iii.c — preserve the boxed scalar's
+        // `Reference(__cell_<T>, _)` type when an assignment's
+        // RHS would otherwise revert it.  `parse_assign_op`
+        // calls `change_var(to, &s_type)` after parsing the
+        // RHS; without this guard, every `n = expr` line in
+        // the body would undo the type flip the moment the
+        // body walk begins.  Fires only when the current type
+        // is a `__cell_*` Reference AND the new type is the
+        // cell's value type (the safe "scalar-into-boxed-scalar"
+        // overwrite), leaving every other re-typing untouched.
+        //
+        // Dormant in production today (02d-iii.a's flip is
+        // dormant — no variable carries `Reference(__cell_*, _)`).
+        // Activates in 02d-iii.e together with the flip.
+        if !self.first_pass
+            && self.vars.exists(v_nr)
+            && let Type::Reference(d, _) = self.vars.tp(v_nr)
+            && self.data.def(*d).name.starts_with("__cell_")
+            && let Some(value_attr) = self.data.def(*d).attributes.first()
+            && value_attr.name == "value"
+            && (value_attr.typedef.is_equal(tp)
+                || (matches!(value_attr.typedef, Type::Integer(_))
+                    && matches!(tp, Type::Integer(_))))
+        {
+            return;
+        }
         let chg = self
             .vars
             .change_var_type(v_nr, tp, &self.data, &mut self.lexer);
@@ -1496,6 +1522,95 @@ use a separate collection or add after the loop"
         let cast_alias = self.last_cast_alias;
         self.last_cast_alias = u32::MAX;
         *code = self.write_to_file(file_v, rhs_code, &rhs_type, cast_alias);
+    }
+
+    /// Plan-22 phase 02d-iii.c — build the rewrite IR for an
+    /// assignment to a boxed-scalar local.  Returns `Some(IR)`
+    /// when `var_nr`'s type is `Reference(__cell_<T>, _)` and
+    /// the cell's value-field type is one of the supported
+    /// primitives; `None` otherwise.
+    ///
+    /// Shapes:
+    /// - **First assignment** (`!is_defined(var_nr)`):
+    ///   `Insert([v_set(n, Null), OpDatabase(n, cell_kt),
+    ///   OpSet<T>(Var(n), 0, rhs)])` — allocate a fresh cell
+    ///   record + initialise the `value` field.  Mirrors the
+    ///   pattern `parse_object` uses for struct literals
+    ///   (objects.rs:1306-1361).
+    /// - **Subsequent assignment** (`is_defined(var_nr)`):
+    ///   `Call(OpSet<T>, [Var(n), Int(0), rhs])` — write the
+    ///   `value` field of the existing cell.
+    ///
+    /// Op handling: only `=` is rewritten by this helper.
+    /// Compound `+=` / `-=` / etc. need read + compute + write,
+    /// which the parser already builds via
+    /// `n = n + 1` lowering (the read side uses 02d-iii.b's
+    /// auto-deref; the write hits this helper as a plain `=`).
+    ///
+    /// Boolean cells fall through to None — `OpSetByte` takes
+    /// 4 args (ref, fld, min, val) instead of 3, and the
+    /// boolean-to-byte conversion needs different IR.  Phase
+    /// 02d-iii.e (or later) extends to boolean if needed.
+    ///
+    /// Dormant in production today (02d-iii.a's flip is dormant).
+    /// 02d-iii.e activates the flip + this helper fires for real
+    /// on every assignment to a boxed scalar.
+    #[allow(
+        dead_code,
+        reason = "Helper invoked from tests; parse_assign_op hook activates with 02d-iii.e."
+    )]
+    pub(crate) fn boxed_scalar_assign_rewrite(
+        &self,
+        var_nr: u16,
+        op: &str,
+        rhs: Value,
+    ) -> Option<Value> {
+        if op != "=" || var_nr == u16::MAX || !self.vars.exists(var_nr) {
+            return None;
+        }
+        let tp = self.vars.tp(var_nr).clone();
+        let Type::Reference(cell_d_nr, _) = &tp else {
+            return None;
+        };
+        if !self.data.def(*cell_d_nr).name.starts_with("__cell_") {
+            return None;
+        }
+        let value_attr = self.data.def(*cell_d_nr).attributes.first()?;
+        if value_attr.name != "value" {
+            return None;
+        }
+        let value_tp = value_attr.typedef.clone();
+        let op_set_name = match &value_tp {
+            Type::Integer(_) => "OpSetInt",
+            Type::Float => "OpSetFloat",
+            Type::Single => "OpSetSingle",
+            Type::Text(_) => "OpSetText",
+            Type::Character => "OpSetCharacter",
+            Type::Enum(_, false, _) => "OpSetEnum",
+            // Boolean / exotic types: phase 02d-iii.e or later.
+            _ => return None,
+        };
+        let op_set_d_nr = self.data.def_nr(op_set_name);
+        if op_set_d_nr == u32::MAX {
+            return None;
+        }
+        let op_db_d_nr = self.data.def_nr("OpDatabase");
+        if op_db_d_nr == u32::MAX {
+            return None;
+        }
+        let cell_kt = i32::from(self.data.def(*cell_d_nr).known_type);
+        let pos = Value::Int(0);
+        if self.vars.is_defined(var_nr) {
+            // Subsequent: write value field of existing cell.
+            Some(Value::Call(op_set_d_nr, vec![Value::Var(var_nr), pos, rhs]))
+        } else {
+            // First-set: allocate cell + fill value field.
+            Some(Value::Insert(vec![
+                v_set(var_nr, Value::Null),
+                Value::Call(op_db_d_nr, vec![Value::Var(var_nr), Value::Int(cell_kt)]),
+                Value::Call(op_set_d_nr, vec![Value::Var(var_nr), pos, rhs]),
+            ]))
+        }
     }
 
     /// Determine the variable number for an assignment target.
