@@ -822,9 +822,26 @@ impl Parser {
         // else { (c, d) } }` regressed on `--native` because each
         // branch's separate synthetic-struct work-ref dropped the
         // if/else's value.
+        //
+        // P196 follow-up (2026-05-12): exclude tuples that contain a
+        // `Type::Function` element from the size>8 trigger.  Function
+        // values are 16 bytes (u32 d_nr + DbRef closure ref), so any
+        // tuple containing one trips size>8 even when the OTHER
+        // elements are pure primitives — but the synthetic struct
+        // wrapping breaks at the assignment site `Pair { v: pp }` where
+        // `Pair.v: (fn, integer)` stays as a bare tuple type but
+        // `pp: Reference(__tuple<fn, integer>)` after the rewrite.
+        // Function-element tuple returns worked correctly BEFORE
+        // commit 44fdd098 added the size>8 trigger, so excluding them
+        // preserves the original P196 codegen path while keeping the
+        // A7.1 win for pure-primitive 3+ arity tuples.  The
+        // `has_lifetime_concern` arm still fires for Text / Reference /
+        // Vector / etc. elements that genuinely need by-reference
+        // passing; only the size-driven trigger is narrowed.
         let needs_tuple_rewrite = matches!(&result, crate::data::Type::Tuple(elems)
             if elems.iter().any(crate::data::has_lifetime_concern)
-                || u32::from(crate::variables::size(&result, &crate::data::Context::Argument)) > 8);
+                || (u32::from(crate::variables::size(&result, &crate::data::Context::Argument)) > 8
+                    && !elems.iter().any(|e| matches!(e, crate::data::Type::Function(_, _, _)))));
         if !is_generic_template
             && needs_tuple_rewrite
             && let crate::data::Type::Tuple(elems) = &result
