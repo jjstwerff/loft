@@ -134,9 +134,17 @@ impl Output<'_> {
                 } else {
                     // B7-native: text-returning user fn calls produce `Str`,
                     // but callees expect `&str`.  Wrap with `&*` to deref.
+                    // P262: must unspan() before matching — the parser
+                    // wraps inline call expressions in Value::Span (for
+                    // source-position tracking), and the bare matches!
+                    // pattern does not see through Span.  Without this,
+                    // the consuming-call argument site emitted the raw
+                    // `Str`-returning call expression with no deref,
+                    // tripping rustc E0308 ("expected `&str`, found `Str`").
+                    let v_unspanned = v.unspan();
                     let needs_deref = idx < def_fn.attributes.len()
                         && matches!(def_fn.attributes[idx].typedef, Type::Text(_))
-                        && matches!(v, Value::Call(d, _) if
+                        && matches!(v_unspanned, Value::Call(d, _) if
                             matches!(self.data.def(*d).returned, Type::Text(_))
                             && self.data.def(*d).rust.is_empty()
                             && !self.data.def(*d).name.starts_with("Op"));
