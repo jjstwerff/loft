@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/idx — query the tracker-tag index (plan-37 phase 01).
+# scripts/idx — query the tracker-tag index (plan-37 phase 01 + 03).
 #
 # Reads index/tags.json (run `make index` to refresh).  All
 # output is JSON; pipe to `jq -r` for plain text if needed.
@@ -10,8 +10,23 @@
 #   idx prefix:@PLAN22            — all tags starting with prefix
 #   idx file:doc/.../PROBLEMS.md  — all tags referenced in a file
 #   idx all                       — every tag with reference count
-#   idx broken                    — broken @-references (phase 03)
+#   idx broken                    — broken @-references
 #   idx help                      — print this usage block
+#
+# Context flags (apply to tag: form; ignored elsewhere).
+# Adds an `excerpt` field per ref:
+#   --before N       — include N lines BEFORE the tag's line
+#                      (useful for in-code tags where setup
+#                      context above the comment matters)
+#   --after N        — include N lines AFTER the tag's line
+#                      (alias: --lines N for back-compat)
+#   --para N         — include lines until N consecutive empty
+#                      lines AFTER the tag (overrides --after).
+#                      Combine with --before for full paragraph.
+#   --max-bytes B    — cap excerpt at B bytes (default 4096).
+#                      If the tag's line ALONE exceeds B bytes
+#                      (PROBLEMS.md rows are huge), excerpt is
+#                      truncated to B bytes — never expanded.
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,30 +37,150 @@ if [ ! -f "$IDX" ]; then
   exit 1
 fi
 
-case "${1:-}" in
+# Defaults — context disabled.
+BEFORE=0
+AFTER=0
+PARA=0
+MAX_BYTES=4096
+QUERY=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --before)    BEFORE="$2"; shift 2 ;;
+    --after)     AFTER="$2"; shift 2 ;;
+    --lines)     AFTER="$2"; shift 2 ;;   # back-compat alias
+    --para)      PARA="$2"; shift 2 ;;
+    --max-bytes) MAX_BYTES="$2"; shift 2 ;;
+    -*|--help|help|"") QUERY="${QUERY:-$1}"; shift ;;
+    *)           if [ -z "$QUERY" ]; then QUERY="$1"; shift
+                 else echo "scripts/idx: extra arg '$1'" >&2; exit 2; fi ;;
+  esac
+done
+[ -z "$QUERY" ] && QUERY=""
+
+# extract_excerpt FILE LINE BEFORE AFTER PARA MAX_BYTES
+# Read FILE: include BEFORE lines preceding LINE, the LINE
+# itself, then either AFTER more lines OR until PARA empty
+# lines (whichever first), capped at MAX_BYTES total.
+extract_excerpt() {
+  awk -v line="$2" -v before="$3" -v after="$4" -v para="$5" -v max="$6" '
+    BEGIN {
+      start = line - before
+      if (start < 1) start = 1
+      content = ""
+      total = 0
+    }
+    NR < start { next }
+    NR >= start && NR <= line {
+      if (content == "") {
+        content = $0
+        total = length($0)
+      } else {
+        newlen = total + length($0) + 1
+        if (newlen > max) {
+          content = substr(content "\n" $0, 1, max) "...[truncated]"
+          exit
+        }
+        content = content "\n" $0
+        total = newlen
+      }
+      if (NR == line) {
+        if (total >= max) {
+          content = substr(content, 1, max) "...[truncated]"
+          exit
+        }
+        if (after == 0 && para == 0) { exit }
+        empties = 0
+        remain = after
+      }
+      next
+    }
+    NR > line {
+      if ($0 == "") {
+        empties++
+        if (para > 0 && empties >= para) { exit }
+      } else {
+        empties = 0
+      }
+      newlen = total + length($0) + 1
+      if (newlen > max) {
+        content = substr(content "\n" $0, 1, max) "...[truncated]"
+        exit
+      }
+      content = content "\n" $0
+      total = newlen
+      if (after > 0) {
+        remain--
+        if (remain <= 0) { exit }
+      }
+    }
+    END { print content }
+  ' "$1"
+}
+
+# Apply context-extraction to a JSON array of refs.
+add_excerpts() {
+  if [ "$BEFORE" -eq 0 ] && [ "$AFTER" -eq 0 ] && [ "$PARA" -eq 0 ]; then
+    cat   # no-op when no context flags
+    return
+  fi
+  local payload
+  payload=$(cat)
+  local n
+  n=$(echo "$payload" | jq 'length')
+  if [ "$n" -eq 0 ]; then echo "$payload"; return; fi
+  local i=0 out="[" first=1
+  while [ "$i" -lt "$n" ]; do
+    local ref file line excerpt
+    ref=$(echo "$payload" | jq ".[$i]")
+    file=$(echo "$ref" | jq -r '.file')
+    line=$(echo "$ref" | jq -r '.line')
+    if [ -f "$ROOT/$file" ]; then
+      excerpt=$(extract_excerpt "$ROOT/$file" "$line" "$BEFORE" "$AFTER" "$PARA" "$MAX_BYTES")
+    else
+      excerpt=""
+    fi
+    local enriched
+    enriched=$(echo "$ref" | jq --arg e "$excerpt" '. + {excerpt: $e}')
+    if [ "$first" -eq 1 ]; then first=0; else out="$out,"; fi
+    out="$out$enriched"
+    i=$((i + 1))
+  done
+  echo "$out]" | jq '.'
+}
+
+case "$QUERY" in
   tag:*)
-    jq --arg t "${1#tag:}" '.[$t] // []' "$IDX"
+    jq --arg t "${QUERY#tag:}" '.[$t] // []' "$IDX" | add_excerpts
     ;;
   prefix:*)
-    jq --arg p "${1#prefix:}" '
+    # prefix returns an OBJECT; flatten refs across all matching
+    # tags before applying excerpts, then re-group by tag.
+    jq --arg p "${QUERY#prefix:}" '
       [ to_entries[]
         | select(.key | startswith($p))
         | { (.key): .value } ]
       | add // {}
     ' "$IDX"
+    # NOTE: --lines / --para don't apply to prefix output (the
+    # nested-object shape would change).  Use tag: per match if
+    # excerpts are needed.
     ;;
   file:*)
-    jq --arg f "${1#file:}" '
+    jq --arg f "${QUERY#file:}" '
       [ to_entries[]
         | { tag: .key,
             refs: [.value[] | select(.file == $f)] }
         | select(.refs | length > 0) ]
       | sort_by(.tag)
     ' "$IDX"
+    # NOTE: same as prefix — excerpts not auto-applied to the
+    # nested refs[].
     ;;
   all)
     jq '
       [ to_entries[]
+        | select(.key != "broken")
         | { tag: .key, count: (.value | length) } ]
       | sort_by(-.count)
     ' "$IDX"
@@ -54,10 +189,10 @@ case "${1:-}" in
     jq '.broken // []' "$IDX"
     ;;
   ""|-h|--help|help)
-    sed -n '2,17p' "$0"
+    sed -n '2,30p' "$0"
     ;;
   *)
-    echo "scripts/idx: unknown query '$1' (try: idx help)" >&2
+    echo "scripts/idx: unknown query '$QUERY' (try: idx help)" >&2
     exit 2
     ;;
 esac

@@ -3,16 +3,75 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Phase 07 — Loft-native scanner + file-event monitor
+# Phase 07 — Loft-native scanner + CLI + file-event monitor
 
 **Status:** Open
 
 ## Goal
 
-Re-implement the indexer in loft, with continuous file-event
-monitoring instead of git-hook-driven refresh.  The bash
-scanner stays as the bootstrap; the loft scanner becomes the
-preferred path once it's stable.
+Re-architect the indexer as a **daemon + clients** model in
+loft:
+
+```
+        [tools/indexer/bin/loft-index] — long-running daemon
+          ├─ initial scan → in-memory tag table
+          ├─ subscribes to fs events (inotify/kqueue/Win32)
+          ├─ rebuilds incrementally on file changes
+          ├─ writes index/tags.json snapshot on each rebuild
+          │  (for bash-CLI back-compat + git-grep fallback)
+          └─ serves localhost:NNNN via lib/server WebSocket
+                 |
+                 |   binary frames for large payloads (per-tag
+                 |   ref dumps, full file excerpts, diff blobs)
+                 |   via lib/server's send_binary path
+                 v
+       ┌─────────┴───────────┬────────────────────────┐
+       v                     v                        v
+   tools/indexer/        tools/viewer/         scripts/idx (bash)
+   bin/loft-idx          bin/loft-view         (fallback if
+   (CLI client)          (subscribes for       daemon down)
+                          live updates)
+```
+
+Three artefacts:
+
+1. **Daemon** — `tools/indexer/scan.loft` →
+   `tools/indexer/bin/loft-index`.  Replaces the bash
+   scanner; runs continuously as the source of truth.
+2. **Loft CLI** — `tools/indexer/idx.loft` →
+   `tools/indexer/bin/loft-idx`.  Talks to the daemon over
+   the WebSocket; serves `tag:` / `prefix:` / `file:` /
+   `all` / `broken` queries with `--before` / `--after` /
+   `--para` / `--max-bytes` excerpt flags (matching the
+   bash CLI's surface).  Single-digit-ms responses
+   because the daemon holds everything in RAM.
+3. **Bash artefacts** — `tools/indexer/scan.sh` +
+   `scripts/idx` stay as the bootstrap fallback (no
+   loft, no daemon required).  Used by CI hygiene tests
+   and from machines without loft built.
+
+### Why WebSocket-style transport (not plain HTTP)
+
+`lib/server` ships both raw HTTP and WebSocket; the
+WebSocket path supports binary frames + multi-message
+streams.  For the indexer's payload shapes:
+
+- Large tag dumps (`tag:legacy:P200` returns 113 refs ×
+  full excerpts ≈ 50-200 KB).
+- Per-tag streaming as the daemon updates incrementally
+  (subscribe-once + receive-on-change).
+- File-diff blobs that the viewer fetches alongside tag
+  refs.
+
+Plain HTTP would force one request per query + base64
+encoding for binary content.  WebSocket binary frames are
+the natural shape for chunked, possibly-streaming data
+between local processes — and exercises lib/server's
+binary path in production, surfacing any rough edges.
+
+The daemon is BOUND to `127.0.0.1` only — no
+authentication; security model is "anyone on this VM can
+already read these files anyway."
 
 The PRIMARY motivation is **exposing loft to a long-running,
 file-event-driven workload** — a class of program loft hasn't

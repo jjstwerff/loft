@@ -50,9 +50,24 @@ Default workflow for "where is X referenced?":
 ./scripts/idx prefix:@PLAN22          # all PLAN22-* refs
 ./scripts/idx file:doc/.../PROBLEMS.md  # tags in one file
 ./scripts/idx all | jq '.[:10]'       # top 10 by reference count
-./scripts/idx broken                  # broken @-refs (phase 03)
+./scripts/idx broken                  # broken @-refs
 ./scripts/idx help                    # usage block
 ```
+
+For more than just one-line context, `tag:` queries accept
+excerpt flags:
+
+```bash
+./scripts/idx tag:legacy:P259 --before 2 --after 5
+./scripts/idx tag:legacy:P259 --before 1 --para 1
+./scripts/idx tag:legacy:P259 --max-bytes 1024
+```
+
+`--before` / `--after` are line counts; `--para N` extends
+forward until N consecutive empty lines (good for code
+comment blocks); `--max-bytes` caps each excerpt (default
+4096) so long PROBLEMS.md rows truncate gracefully instead
+of dumping kilobytes per ref.
 
 Prefer `./scripts/idx` over `grep -rn '@P259' …` — it's
 faster, returns structured JSON, and avoids pulling

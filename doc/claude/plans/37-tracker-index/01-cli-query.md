@@ -10,19 +10,45 @@ verified end-to-end against the live `index/tags.json`.
 
 ## What actually shipped
 
-`scripts/idx` (~50 lines) provides:
+`scripts/idx` (~150 lines) provides:
 
 | Form | Behaviour | Verified |
 |---|---|---|
 | `idx help` (or no arg) | Print usage block | ✓ |
-| `idx tag:@P259` | JSON array of refs to a single tag | ✓ (3 refs to @P259, 34 to legacy:P259) |
-| `idx prefix:@PLAN22` | Object: every tag with the prefix → refs | ✓ (@PLAN22, @PLAN22-2-ii, @PLAN22-2d-iii.a) |
+| `idx tag:@P259` | JSON array of refs to a single tag | ✓ |
+| `idx prefix:@PLAN22` | Object: every tag with the prefix → refs | ✓ |
 | `idx file:<path>` | Array of `{tag, refs}` for tags in that file (sorted) | ✓ |
-| `idx all` | Array of `{tag, count}` sorted by count desc | ✓ (top: legacy:P1=125, P54=121, P2=118) |
-| `idx broken` | Array of broken @-refs (empty until phase 03) | ✓ (returns `[]`) |
+| `idx all` | Array of `{tag, count}` sorted by count desc | ✓ |
+| `idx broken` | Array of broken @-refs (populated by phase 03) | ✓ |
 | `idx <unknown>` | Friendly error + exit 2 | ✓ |
 
-CLAUDE.md updated: § Tracker tags now recommends
+### Context-extraction flags (added 2026-05-13)
+
+When a tag's single-line `context` isn't enough to understand
+what's around the reference, `tag:` queries accept excerpt
+flags that read the file and add an `excerpt` field per ref:
+
+| Flag | Behaviour |
+|---|---|
+| `--before N` | Include N lines BEFORE the tag's line (useful for in-code tags where setup context above the comment matters) |
+| `--after N` | Include N lines AFTER the tag's line (alias: `--lines N` for back-compat) |
+| `--para N` | Include lines until N consecutive empty lines AFTER the tag (overrides `--after`).  Combine with `--before` for full paragraph context. |
+| `--max-bytes B` | Cap excerpt at B bytes (default 4096).  If the tag's line ALONE exceeds B (e.g., PROBLEMS.md's 4 KB-per-row table format), excerpt is truncated to B with `...[truncated]` suffix — never expanded. |
+
+Example:
+
+```bash
+$ ./scripts/idx tag:legacy:P259 --before 1 --para 1 --max-bytes 600 \
+    | jq '[.[] | select(.file == "src/parser/vectors.rs")] | .[0]'
+{
+  "file": "src/parser/vectors.rs",
+  "line": 800,
+  "context": "                    // P259: when the captured variable is a heap-owned cell",
+  "excerpt": "                    ));\n                    // P259: when the captured variable is a heap-owned cell\n                    // (Reference(__cell_*, _)), the closure record now holds\n                    // ...[truncated]"
+}
+```
+
+CLAUDE.md updated: § Tracker tags recommends
 `./scripts/idx ...` over `jq`/`grep`.
 
 ## Goal
