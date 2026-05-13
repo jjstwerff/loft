@@ -347,6 +347,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
 | [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
 | [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | Foundational — REGEX is first downstream consumer |
+| [`plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/) | M | cooperates with **plans/37-tracker-index/07** + **plans/future/32-tic-tac-toe** + **plans/future/36-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
 
 ### U — Ease of use
 

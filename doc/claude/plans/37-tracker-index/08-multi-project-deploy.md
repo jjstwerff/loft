@@ -132,6 +132,23 @@ properties this gives:
    reserved for live notifications + dynamic queries
    (e.g., excerpts that need file reads).
 
+The "survives daemon restart" property + integrity guarantee
+are owned by **[plan-38 (loft-store-durable)](../future/38-loft-store-durable/README.md)**.
+The indexer opens its store via:
+
+```loft
+store = store_durable::open(
+    ".tracker/state/tags.store",
+    DurabilityMode.IntegrityOnly,
+    on_corruption_fn,         // → full rescan from filesystem
+);
+```
+
+`IntegrityOnly` is plan-38's Tier 1 — appropriate for the
+indexer because the filesystem is the source of truth and a
+corrupted store rebuilds in <2 sec.  Game servers (TTT v5,
+plan-36) opt into Tier 2 / Tier 3 of the same API.
+
 #### Why loft's Store primitive is the right fit
 
 Loft already has `Store` (`src/store.rs`), a word-addressed
