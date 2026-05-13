@@ -4,12 +4,18 @@
 // markdown — minimal CommonMark + GFM-subset renderer for loft.
 //
 // Public API:
-//   pub fn render(source: text, base_dir: text) -> text
-//     Render `source` markdown to HTML.  `base_dir` is the
-//     repository-relative directory used to resolve relative
-//     `[text](other.md)` links — typically the directory
-//     containing the source file.  Pass `""` to disable
-//     relative-link rewriting.
+//   pub fn render(source, base_dir, tag_url_prefix, image_url_prefix) -> text
+//     Render `source` markdown to HTML.
+//       base_dir: repo-relative directory used to resolve
+//         relative `[text](other.md)` links.  Pass `""` to
+//         disable relative-link rewriting.
+//       tag_url_prefix: when non-empty, body-text occurrences
+//         of `@P<digits>` / `@PLAN<digits>(...)` get linked
+//         to `<tag_url_prefix><bare-name>` (e.g., "/tag/").
+//       image_url_prefix: when non-empty, relative image
+//         `<img src="...">` URLs get rewritten the same way
+//         relative links do, but routed through this prefix
+//         (e.g., "/raw/" so the viewer serves bytes).
 //
 // Supported constructs (block):
 //   - ATX headings #..######  (with GitHub-compatible slug ids)
@@ -74,7 +80,7 @@ fn strip_cr(s: text) -> text {
 
 // ── Public entry point ───────────────────────────────────────
 
-pub fn render(source: text, base_dir: text) -> text {
+pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_prefix: text) -> text {
     // Pre-process: strip CR (handle CRLF input cleanly).
     src = strip_cr(source);
     out = "";
@@ -116,7 +122,7 @@ pub fn render(source: text, base_dir: text) -> text {
             if is_setext_underline(line, '=') {
                 slug = slugify(pending_setext);
                 esc_slug = html_escape(slug);
-                inline = render_inline(pending_setext, base_dir);
+                inline = render_inline(pending_setext, base_dir, tag_url_prefix, image_url_prefix);
                 out += "<h1 id=\"{esc_slug}\">{inline}</h1>";
                 pending_setext = "";
                 continue;
@@ -124,7 +130,7 @@ pub fn render(source: text, base_dir: text) -> text {
             if is_setext_underline(line, '-') {
                 slug = slugify(pending_setext);
                 esc_slug = html_escape(slug);
-                inline = render_inline(pending_setext, base_dir);
+                inline = render_inline(pending_setext, base_dir, tag_url_prefix, image_url_prefix);
                 out += "<h2 id=\"{esc_slug}\">{inline}</h2>";
                 pending_setext = "";
                 continue;
@@ -142,7 +148,7 @@ pub fn render(source: text, base_dir: text) -> text {
         if table_state == 1 {
             if is_table_separator(line) {
                 table_align = parse_table_align(line);
-                out += "<table><thead>{render_table_row(table_header, true, table_align, base_dir)}</thead><tbody>";
+                out += "<table><thead>{render_table_row(table_header, true, table_align, base_dir, tag_url_prefix, image_url_prefix)}</thead><tbody>";
                 table_state = 2;
                 continue;
             } else {
@@ -156,7 +162,7 @@ pub fn render(source: text, base_dir: text) -> text {
             }
         } else if table_state == 2 {
             if is_table_row(line) {
-                out += render_table_row(line, false, table_align, base_dir);
+                out += render_table_row(line, false, table_align, base_dir, tag_url_prefix, image_url_prefix);
                 continue;
             } else {
                 out += "</tbody></table>";
@@ -174,10 +180,10 @@ pub fn render(source: text, base_dir: text) -> text {
                     chk = "";
                     if list_item_buf[1] != ' ' { chk = " checked"; }
                     rest = list_item_buf[4..bn];
-                    inner = render_inline(rest, base_dir);
+                    inner = render_inline(rest, base_dir, tag_url_prefix, image_url_prefix);
                     out += "<li><input type=\"checkbox\" disabled{chk}> {inner}</li>";
                 } else {
-                    out += "<li>{render_inline(list_item_buf, base_dir)}</li>";
+                    out += "<li>{render_inline(list_item_buf, base_dir, tag_url_prefix, image_url_prefix)}</li>";
                 }
                 list_item_buf = strip_list_marker(line);
                 continue;
@@ -199,10 +205,10 @@ pub fn render(source: text, base_dir: text) -> text {
                     chk = "";
                     if list_item_buf[1] != ' ' { chk = " checked"; }
                     rest = list_item_buf[4..bn];
-                    inner = render_inline(rest, base_dir);
+                    inner = render_inline(rest, base_dir, tag_url_prefix, image_url_prefix);
                     out += "<li><input type=\"checkbox\" disabled{chk}> {inner}</li>";
                 } else {
-                    out += "<li>{render_inline(list_item_buf, base_dir)}</li>";
+                    out += "<li>{render_inline(list_item_buf, base_dir, tag_url_prefix, image_url_prefix)}</li>";
                 }
             list_item_buf = "";
             out += "</{list_kind}>";
@@ -210,7 +216,7 @@ pub fn render(source: text, base_dir: text) -> text {
         }
         if line.starts_with("```") {
             if para_buf.len() > 0 {
-                out += "<p>{render_inline(para_buf, base_dir)}</p>";
+                out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
                 para_buf = "";
             }
             n = line.len();
@@ -237,7 +243,7 @@ pub fn render(source: text, base_dir: text) -> text {
         }
         if line == "---" || line == "***" || line == "___" {
             if para_buf.len() > 0 {
-                out += "<p>{render_inline(para_buf, base_dir)}</p>";
+                out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
                 para_buf = "";
             }
             out += "<hr>";
@@ -246,7 +252,7 @@ pub fn render(source: text, base_dir: text) -> text {
         hlevel = atx_heading_level(line);
         if hlevel > 0 {
             if para_buf.len() > 0 {
-                out += "<p>{render_inline(para_buf, base_dir)}</p>";
+                out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
                 para_buf = "";
             }
             ln = line.len();
@@ -257,13 +263,13 @@ pub fn render(source: text, base_dir: text) -> text {
             heading_text = strip_trailing_hashes(heading_text);
             slug = slugify(heading_text);
             esc_slug = html_escape(slug);
-            inline = render_inline(heading_text, base_dir);
+            inline = render_inline(heading_text, base_dir, tag_url_prefix, image_url_prefix);
             out += "<h{hlevel} id=\"{esc_slug}\">{inline}</h{hlevel}>";
             continue;
         }
         if is_ul_item(line) {
             if para_buf.len() > 0 {
-                out += "<p>{render_inline(para_buf, base_dir)}</p>";
+                out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
                 para_buf = "";
             }
             list_kind = "ul";
@@ -273,7 +279,7 @@ pub fn render(source: text, base_dir: text) -> text {
         }
         if is_ol_item(line) {
             if para_buf.len() > 0 {
-                out += "<p>{render_inline(para_buf, base_dir)}</p>";
+                out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
                 para_buf = "";
             }
             list_kind = "ol";
@@ -283,11 +289,11 @@ pub fn render(source: text, base_dir: text) -> text {
         }
         if is_table_row(line) {
             if para_buf.len() > 0 {
-                out += "<p>{render_inline(para_buf, base_dir)}</p>";
+                out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
                 para_buf = "";
             }
             if bq_buf != "" {
-                out += "<blockquote>{render_inline(bq_buf, base_dir)}</blockquote>";
+                out += "<blockquote>{render_inline(bq_buf, base_dir, tag_url_prefix, image_url_prefix)}</blockquote>";
                 bq_buf = "";
             }
             table_header = line;
@@ -296,7 +302,7 @@ pub fn render(source: text, base_dir: text) -> text {
         }
         if line.starts_with("> ") || line == ">" {
             if para_buf.len() > 0 {
-                out += "<p>{render_inline(para_buf, base_dir)}</p>";
+                out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
                 para_buf = "";
             }
             ln = line.len();
@@ -312,12 +318,12 @@ pub fn render(source: text, base_dir: text) -> text {
             continue;
         }
         if bq_buf != "" {
-            out += "<blockquote>{render_inline(bq_buf, base_dir)}</blockquote>";
+            out += "<blockquote>{render_inline(bq_buf, base_dir, tag_url_prefix, image_url_prefix)}</blockquote>";
             bq_buf = "";
         }
         if line == "" {
             if para_buf.len() > 0 {
-                out += "<p>{render_inline(para_buf, base_dir)}</p>";
+                out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
                 para_buf = "";
             }
             continue;
@@ -350,16 +356,16 @@ pub fn render(source: text, base_dir: text) -> text {
                     chk = "";
                     if list_item_buf[1] != ' ' { chk = " checked"; }
                     rest = list_item_buf[4..bn];
-                    inner = render_inline(rest, base_dir);
+                    inner = render_inline(rest, base_dir, tag_url_prefix, image_url_prefix);
                     out += "<li><input type=\"checkbox\" disabled{chk}> {inner}</li>";
                 } else {
-                    out += "<li>{render_inline(list_item_buf, base_dir)}</li>";
+                    out += "<li>{render_inline(list_item_buf, base_dir, tag_url_prefix, image_url_prefix)}</li>";
                 }
         out += "</{list_kind}>";
         list_item_buf = "";
     }
     if bq_buf != "" {
-        out += "<blockquote>{render_inline(bq_buf, base_dir)}</blockquote>";
+        out += "<blockquote>{render_inline(bq_buf, base_dir, tag_url_prefix, image_url_prefix)}</blockquote>";
         bq_buf = "";
     }
     if table_state == 2 { out += "</tbody></table>"; }
@@ -367,7 +373,7 @@ pub fn render(source: text, base_dir: text) -> text {
         esc_code = html_escape(code_buf);
         out += "<pre><code>{esc_code}</code></pre>";
     } else if para_buf.len() > 0 {
-        out += "<p>{render_inline(para_buf, base_dir)}</p>";
+        out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
     }
     out
 }
@@ -505,7 +511,7 @@ fn parse_table_align(sep: text) -> text {
     out
 }
 
-fn render_table_row(line: text, is_header: boolean, align: text, base_dir: text) -> text {
+fn render_table_row(line: text, is_header: boolean, align: text, base_dir: text, tag_url_prefix: text, image_url_prefix: text) -> text {
     cells = line.split('|');
     out = "<tr>";
     tag = "td";
@@ -523,7 +529,7 @@ fn render_table_row(line: text, is_header: boolean, align: text, base_dir: text)
             else if a == 'r' { attr = " style=\"text-align:right\""; }
             else if a == 'l' { attr = " style=\"text-align:left\""; }
         }
-        out += "<{tag}{attr}>{render_inline(trimmed, base_dir)}</{tag}>";
+        out += "<{tag}{attr}>{render_inline(trimmed, base_dir, tag_url_prefix, image_url_prefix)}</{tag}>";
         cell_idx = cell_idx + 1;
     }
     out += "</tr>";
@@ -532,7 +538,31 @@ fn render_table_row(line: text, is_header: boolean, align: text, base_dir: text)
 
 // ── Inline renderer (RECURSIVE for nested formatting) ────────
 
-pub fn render_inline(src: text, base_dir: text) -> text {
+// Rewrite an image URL through `image_url_prefix` (typically
+// "/raw/" so the viewer serves the image bytes).  Empty prefix
+// or absolute / scheme-relative URLs pass through unchanged.
+fn rewrite_image(url: text, base_dir: text, image_url_prefix: text) -> text {
+    if image_url_prefix == "" { return url; }
+    is_abs = url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:") || url.starts_with("/");
+    if is_abs { return url; }
+    cleaned = url;
+    while cleaned.starts_with("./") {
+        cl = cleaned.len();
+        cleaned = cleaned[2..cl];
+    }
+    cur_base = base_dir;
+    while cleaned.starts_with("../") {
+        cur_base = parent_dir(cur_base);
+        cl = cleaned.len();
+        cleaned = cleaned[3..cl];
+    }
+    if cur_base == "" {
+        return "{image_url_prefix}{cleaned}";
+    }
+    "{image_url_prefix}{cur_base}/{cleaned}"
+}
+
+pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_prefix: text) -> text {
     out = "";
     n = src.len();
     i = 0;
@@ -570,7 +600,7 @@ pub fn render_inline(src: text, base_dir: text) -> text {
             }
             inner = src[inner_start..i];
             if i + 1 < n { i = i + 2; }
-            out += "<del>{render_inline(inner, base_dir)}</del>";
+            out += "<del>{render_inline(inner, base_dir, tag_url_prefix, image_url_prefix)}</del>";
             continue;
         }
         if c == '<' {
@@ -617,10 +647,51 @@ pub fn render_inline(src: text, base_dir: text) -> text {
                 if k < n {
                     raw = src[url_start..k];
                     url = url_part_of(raw);
-                    esc_url = html_escape(url);
+                    // Apply image_url_prefix if non-empty + URL is
+                    // relative.  Inline the rewrite so we don't
+                    // hit the "text-returning helper called from
+                    // text-returning fn" P271-family codegen panic.
+                    final_url = rewrite_image(url, base_dir, image_url_prefix);
+                    esc_url = html_escape(final_url);
                     esc_alt = html_escape(alt_text);
                     out += "<img src=\"{esc_url}\" alt=\"{esc_alt}\">";
                     i = k + 1;
+                    continue;
+                }
+            }
+        }
+        // Tracker-tag autolink: `@P\d+([a-z])?` and
+        // `@PLAN\d+(-[\w]+)*` patterns get linked when
+        // `tag_url_prefix` is non-empty.  Detection requires
+        // the `@` to be at a word boundary (not inside
+        // identifier-ish text) — cheap heuristic: previous
+        // char must be non-alnum.
+        if c == '@' && tag_url_prefix != "" && i + 1 < n {
+            at_boundary = true;
+            if i > 0 {
+                prev = src[i - 1];
+                if (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') || (prev >= '0' && prev <= '9') || prev == '_' {
+                    at_boundary = false;
+                }
+            }
+            if at_boundary {
+                tag_start = i + 1;
+                tag_end = match_tracker_tag(src, tag_start, n);
+                if tag_end > tag_start {
+                    // Slice via byte iteration to avoid loft's
+                    // slice-bounds analysis tripping on the
+                    // computed indices (parser flags `src[a..b]`
+                    // as "Invalid index on string" when it can't
+                    // prove the bounds — see notes near top).
+                    bare = "";
+                    bi = tag_start;
+                    while bi < tag_end {
+                        bare += "{src[bi]}";
+                        bi = bi + 1;
+                    }
+                    esc_bare = html_escape(bare);
+                    out += "<a class=\"tag-ref\" href=\"{tag_url_prefix}{esc_bare}\">@{esc_bare}</a>";
+                    i = tag_end;
                     continue;
                 }
             }
@@ -645,7 +716,7 @@ pub fn render_inline(src: text, base_dir: text) -> text {
             }
             inner = src[inner_start..i];
             if i + 1 < n { i = i + 2; }
-            out += "<strong>{render_inline(inner, base_dir)}</strong>";
+            out += "<strong>{render_inline(inner, base_dir, tag_url_prefix, image_url_prefix)}</strong>";
             continue;
         }
         if c == '*' || c == '_' {
@@ -665,7 +736,7 @@ pub fn render_inline(src: text, base_dir: text) -> text {
                 }
                 inner = src[inner_start..i];
                 if i < n { i = i + 1; }
-                out += "<em>{render_inline(inner, base_dir)}</em>";
+                out += "<em>{render_inline(inner, base_dir, tag_url_prefix, image_url_prefix)}</em>";
                 continue;
             }
         }
@@ -696,7 +767,7 @@ pub fn render_inline(src: text, base_dir: text) -> text {
                         esc_title = html_escape(title);
                         title_attr = " title=\"{esc_title}\"";
                     }
-                    out += "<a href=\"{esc_url}\"{title_attr}>{render_inline(link_text, base_dir)}</a>";
+                    out += "<a href=\"{esc_url}\"{title_attr}>{render_inline(link_text, base_dir, tag_url_prefix, image_url_prefix)}</a>";
                     i = k + 1;
                     continue;
                 }
@@ -787,4 +858,138 @@ fn parent_dir(p: text) -> text {
     last_slash = p.rfind("/");
     if last_slash < 0 { return ""; }
     p[0..last_slash]
+}
+
+// Try to match a tracker-tag identifier starting at `start`
+// in `src`.  Returns the END byte offset of a successful
+// match (so `src[start..end]` is the bare-name like "P259"
+// or "PLAN35-01"), or `start` itself if no match.
+//
+// Patterns:
+//   P\d+([a-z])?          — P-issues like P259, P229b
+//   PLAN\d+(-[\w]+)*      — plans + phases like PLAN35-01,
+//                          PLAN22-2d-iii.a
+fn match_tracker_tag(src: text, start: integer, n: integer) -> integer {
+    if start >= n { return start; }
+    c0 = src[start];
+    if c0 != 'P' { return start; }
+    // Try PLAN prefix first (longer match).
+    if start + 4 < n && src[start + 1] == 'L' && src[start + 2] == 'A' && src[start + 3] == 'N' {
+        i = start + 4;
+        // Must have at least one digit after PLAN.
+        digits = 0;
+        while i < n && src[i] >= '0' && src[i] <= '9' {
+            i = i + 1;
+            digits = digits + 1;
+        }
+        if digits == 0 { return start; }
+        // Optionally consume `-segment` parts: -[a-zA-Z0-9_.]+
+        while i < n && src[i] == '-' {
+            j = i + 1;
+            seg = 0;
+            while j < n {
+                cj = src[j];
+                ok = (cj >= 'a' && cj <= 'z') || (cj >= 'A' && cj <= 'Z') || (cj >= '0' && cj <= '9') || cj == '_' || cj == '.';
+                if !ok { break; }
+                j = j + 1;
+                seg = seg + 1;
+            }
+            if seg == 0 { break; }
+            i = j;
+        }
+        return i;
+    }
+    // P<digits>([a-z])?
+    i = start + 1;
+    digits = 0;
+    while i < n && src[i] >= '0' && src[i] <= '9' {
+        i = i + 1;
+        digits = digits + 1;
+    }
+    if digits == 0 { return start; }
+    if i < n && src[i] >= 'a' && src[i] <= 'z' {
+        i = i + 1;
+    }
+    i
+}
+
+// ── TOC extraction ───────────────────────────────────────────
+
+pub struct Heading {
+    level: integer,
+    text: text,
+    slug: text
+}
+
+// Extract every heading from `source` in source order — both
+// ATX (`# Title`) and setext (`Title\n===` / `Title\n---`).
+// Each entry carries the level (1..6), the heading's plain
+// text (BEFORE inline rendering — the caller can pass it
+// through render_inline if needed), and a GitHub-compatible
+// slug (the same one the rendered headings get as `id=`).
+//
+// Useful for building an in-page table of contents: walk the
+// returned vector, indent by `level`, link each entry to
+// `#<slug>`.
+pub fn extract_headings(source: text) -> vector<Heading> {
+    out: vector<Heading> = [];
+    src = strip_cr(source);
+    lines = src.split('\n');
+    in_code = false;
+    prev = "";
+    for line in lines {
+        if in_code {
+            if line.starts_with("```") { in_code = false; }
+            prev = "";
+            continue;
+        }
+        if line.starts_with("```") {
+            in_code = true;
+            prev = "";
+            continue;
+        }
+        if prev != "" {
+            if is_setext_underline(line, '=') {
+                out += [Heading {
+                    level: 1,
+                    text: prev,
+                    slug: slugify(prev)
+                }];
+                prev = "";
+                continue;
+            }
+            if is_setext_underline(line, '-') {
+                out += [Heading {
+                    level: 2,
+                    text: prev,
+                    slug: slugify(prev)
+                }];
+                prev = "";
+                continue;
+            }
+            prev = "";
+        }
+        hlevel = atx_heading_level(line);
+        if hlevel > 0 {
+            ln = line.len();
+            start = hlevel + 1;
+            txt = "";
+            if start < ln { txt = line[start..ln]; }
+            txt = strip_trailing_hashes(txt);
+            out += [Heading {
+                level: hlevel,
+                text: txt,
+                slug: slugify(txt)
+            }];
+            continue;
+        }
+        if line != "" && !line.starts_with("- ") && !line.starts_with("* ")
+            && !line.starts_with("> ") && !line.starts_with("|")
+            && !line.starts_with("    ") {
+            prev = line;
+        } else {
+            prev = "";
+        }
+    }
+    out
 }

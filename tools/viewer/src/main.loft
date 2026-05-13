@@ -348,7 +348,12 @@ fn page_file(rel: text, f: File) -> text {
 
     src = f.content();
     if is_markdown(rel) {
-        body += markdown::render(src, parent_of(rel));
+        // Pass the viewer's tag-route prefix (`/tag/`) so body-text
+        // `@P259` / `@PLAN35-01` become clickable links; and the
+        // raw-bytes prefix (`/raw/`) so relative image URLs route
+        // through the existing /raw/<path> handler (which serves
+        // any file type — png, jpg, etc. — as application bytes).
+        body += markdown::render(src, parent_of(rel), "/tag/", "/raw/");
     } else {
         body += render_code(src);
     }

@@ -132,9 +132,15 @@ fn markdown_renderer_pins_high_impact_features() {
     assert!(body.contains("<del>strikethrough</del>"), "strikethrough");
     assert!(body.contains("literal asterisk: *"), "backslash-escape \\*");
     assert!(body.contains("literal pipe: |"), "backslash-escape \\|");
+    // The viewer passes image_url_prefix="/raw/" so relative
+    // image paths get resolved against the file's directory and
+    // routed to /raw/<resolved> (so the existing /raw/<path>
+    // handler serves the bytes as application/octet-stream).
     assert!(
-        body.contains(r#"<img src="images/logo.png" alt="image">"#),
-        "image: {body:.500}",
+        body.contains(
+            r#"<img src="/raw/tests/fixtures/images/logo.png" alt="image">"#
+        ),
+        "image (rewritten through /raw/): {body:.500}",
     );
     assert!(
         body.contains(r#"<a href="/file/tests/fixtures/other.md">link</a>"#),
