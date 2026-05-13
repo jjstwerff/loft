@@ -5,7 +5,47 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 02 — Auto-refresh on commit
 
-**Status:** Open
+**Status:** **Shipped 2026-05-13.**
+
+## What actually shipped
+
+`tools/indexer/install-hook.sh` (~50 lines) writes a
+marker-bracketed snippet into `.git/hooks/pre-commit`.  Three
+install paths handled:
+
+1. No existing hook → create with shebang + snippet.
+2. Existing hook, snippet not present → append.
+3. Existing hook, snippet present → replace in place
+   (using awk + the `# >>> plan-37 tracker-index >>>` …
+   `# <<< plan-37 tracker-index <<<` markers).
+
+All three idempotent — re-running the installer doesn't
+double-install or churn the file beyond the snippet block.
+
+The snippet itself:
+
+```bash
+# >>> plan-37 tracker-index >>>
+# Refresh index/tags.json on staged doc/code changes.
+if git diff --cached --name-only | grep -qE '\.(md|rs|loft|toml|py|sh)$'; then
+  if [ -x ./tools/indexer/scan.sh ]; then
+    ./tools/indexer/scan.sh >/dev/null 2>&1 || \
+      echo "warning: tools/indexer/scan.sh failed; index/tags.json may be stale" >&2
+  fi
+fi
+# <<< plan-37 tracker-index <<<
+```
+
+Only fires when an indexed file (`.md`, `.rs`, `.loft`,
+`.toml`, `.py`, `.sh`) is staged.  Failures print a warning
+to stderr but don't block the commit (broken hooks erode
+trust faster than stale data).
+
+### Wiring
+
+- `Makefile` adds `index-install-hook:` target.
+- `DEBUG.md` adds a § "Tracker-tag indexer" section under
+  the open-work section that documents the install + usage.
 
 ## Goal
 

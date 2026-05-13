@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index
+.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -352,6 +352,9 @@ view-refresh:
 # CLI query wrapper (`scripts/idx`) lands in plan-37 phase 01.
 index:
 	@./tools/indexer/scan.sh
+
+index-install-hook:
+	@./tools/indexer/install-hook.sh
 
 view: view-refresh
 	@if [ ! -f tools/viewer/src/main.loft ]; then \

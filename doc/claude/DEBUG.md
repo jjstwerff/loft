@@ -477,6 +477,58 @@ runner will pick it up automatically.
 
 ---
 
+## Tracker-tag indexer (`make index` + `./scripts/idx`)
+
+The tracker-tag indexer (plan-37) maintains
+`index/tags.json`, a structured map of every `@P-id` /
+`@PLAN-id` reference in the tree (plus the `legacy:`
+bare-name forms during the migration).  Replaces
+`grep -rn '@P259'` with O(1) JSON lookups.
+
+### Usage
+
+```bash
+make index                           # rebuild index/tags.json
+./scripts/idx tag:@P259              # exact tag → JSON refs
+./scripts/idx prefix:@PLAN22         # all PLAN22-* tags
+./scripts/idx file:doc/.../X.md      # tags in one file
+./scripts/idx all | jq '.[:10]'      # top-N by reference count
+./scripts/idx help                   # full usage block
+```
+
+### Auto-refresh on commit
+
+After fresh checkout, install the pre-commit hook so
+`index/tags.json` stays fresh whenever you commit doc or
+code changes:
+
+    make index-install-hook
+
+The hook is idempotent (re-running won't double-install)
+and safe with existing pre-commit content (it appends a
+marker-bracketed block).  The hook re-runs the scanner
+when any `*.md`, `*.rs`, `*.loft`, `*.toml`, `*.py`, or
+`*.sh` file is staged; commits that only touch other
+paths skip the scan.  Adds ~1 sec to commits that touch
+indexed files.
+
+If the scanner fails for any reason, the hook prints a
+warning but does NOT block the commit (broken hooks
+erode trust faster than stale index data does).
+
+### Where it lives
+
+| Path | Purpose |
+|---|---|
+| `tools/indexer/scan.sh` | The scanner |
+| `tools/indexer/install-hook.sh` | Hook installer (idempotent) |
+| `tools/indexer/ARCHITECTURE.md` | Design notes |
+| `scripts/idx` | CLI query wrapper |
+| `index/tags.json` | Output (gitignored) |
+| `doc/claude/plans/37-tracker-index/` | Plan + per-phase docs |
+
+---
+
 ## Open work
 
 Diagnostic tooling enhancements surfaced by recurring debug
