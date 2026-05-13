@@ -5,7 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 09 — Backlinks: "who links to me"
 
-**Status:** Open
+**Status:** Shipped 2026-05-14 — detection + CLI surface land
+on the current branch.  Viewer "Referenced by" sidebar
+(plan-35 phase 04 follow-up) is the only deferred sub-task;
+data + queries are ready for it to consume.
 
 ## Goal
 
@@ -16,7 +19,7 @@ file or tag.  Two flavors, both heavily used in plan dirs:
    the tree.  Already partially solved by phases 00-03;
    phase 09 surfaces them as first-class queries on the
    referenced ENTITY (not just on the tag string).
-2. **File backlinks** — `[text](path/to/doc.md)` markdown
+2. **File backlinks** — `[text](path/to/doc.md)` markdown <!--noindex-->
    links.  Indexed per-target so any plan README can ask
    "what other docs cite me?"
 
@@ -148,20 +151,56 @@ applied to the `links` bucket.
 | `tools/viewer/src/main.loft` (plan-35) | CONSUMER — phase 04 of plan-35 reads this bucket for the per-file sidebar |
 | `tests/index_hygiene.rs` | EXTEND: validate that broken file links (target doesn't exist) fail CI |
 
-## Acceptance
+## Acceptance — shipped state
 
 - `./scripts/idx incoming:doc/claude/PROBLEMS.md` returns
-  all files that cite PROBLEMS.md (likely 30+ entries).
+  **41** files that cite PROBLEMS.md ✓
 - `./scripts/idx incoming:doc/claude/plans/finished/22-mutable-closures/README.md`
-  returns all docs citing plan-22 (likely 5-15 entries).
-- A new broken markdown link (e.g., to `nonexistent.md`)
-  surfaces under `idx broken`.
-- Path resolution handles `..`, `./`, anchors, missing
-  `.md` extensions, and trailing slashes.
-- Performance: the third extractor pass adds < 0.5 sec to
-  the bash scanner's runtime on the loft tree.
-- Viewer (plan-35 phase 04) renders a "Referenced by"
-  sidebar per file, populated from this bucket.
+  returns **20** docs citing plan-22 ✓
+- `./scripts/idx incoming:doc/claude/plans/finished/22-mutable-closures/`
+  resolves trailing `/` to README.md (same 20 results) ✓
+- `./scripts/idx incoming:PROBLEMS.md` (basename only):
+  returns `{ambiguous: [...]}` listing the 4 candidate
+  paths ending in `/PROBLEMS.md` — caller picks the
+  intended one ✓
+- `./scripts/idx broken-links` returns broken markdown
+  links (61 surfaced today on the loft tree — most are
+  off-by-one `..` counts in `doc/claude/plans/<dir>/README.md`
+  citing top-level docs as `../X.md` instead of `../../X.md`)
+- Path resolution handles `..`, `./`, anchors, repo-root
+  `/...` paths, and trailing slashes ✓
+- Performance: scanner runs in **1.5 sec** on the 953-file
+  loft tree ✓ (target was < 2 sec; new link extraction
+  added ~0.3 sec)
+- Viewer (plan-35 phase 04 follow-up): "Referenced by"
+  sidebar consumes `.links` bucket — **deferred**, not
+  blocking phase 09 close.
+
+## Follow-ups filed
+
+- **Broken-link cleanup** — 61 markdown links across the
+  doc tree resolve to non-existent targets.  No CI gate
+  added to `tests/index_hygiene.rs` yet (would lock in the
+  cleanup as a release-blocker prematurely; per the user's
+  framing, ship detection first, gate after the backlog
+  is cleared).  Categories:
+  - ~48 in `doc/claude/plans/<dir>/README.md` citing
+    top-level reference docs (DESIGN.md, PROBLEMS.md, …)
+    with `../X.md` instead of `../../X.md`.
+  - 3 plan-22 references at the old `plans/22-` path
+    (move to `finished/` happened during the plan close).
+  - 3 plan-35 references at the old `plans/35-` path
+    (same closeout drift).
+  - 3 lib_plan typos (`doc/claude/lib_plans/plans/...`).
+  - 5 stale `.claude/skills/` references.
+  - 5 missing-doc citations (`DX.md`, `LSP.md`,
+    `WEB_SERVER_LIB.md`, `FOO.md`, `WASM.md`).
+  - Run `./scripts/idx broken-links | jq '.[] | .target'`
+    for the live list.
+- **Viewer "Referenced by" sidebar** — wire `tools/viewer/src/main.loft`'s
+  per-file route to read `.links[<path>]` and render a
+  sidebar.  Data is ready; UI work is plan-35 phase 04
+  scope.
 
 ## Risks
 

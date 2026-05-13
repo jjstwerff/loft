@@ -195,15 +195,182 @@ fi
 jq --argjson broken "$BROKEN_JSON" '. + {broken: $broken}' "$OUT" > "$OUT.tmp"
 mv "$OUT.tmp" "$OUT"
 
+# ── Markdown-link extraction (phase 09 — backlinks) ─────────────
+# For each .md file, grep every `[text](path.md)` or
+# `[text](path.md#anchor)` link, resolve the target against
+# the source file's directory, and emit `(target, source_file,
+# line, anchor, context)` tuples.  Joined into the `links`
+# bucket of tags.json (target → list of inbound refs).
+#
+# Path resolution rules:
+#   - http(s):// and mailto: schemes skipped (external).
+#   - `./` prefix stripped.
+#   - `../` segments walk up the source's directory.
+#   - Bare anchors (`#section`) skipped (intra-file).
+
+LINKS_TMP=$(mktemp)
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP"' EXIT
+
+# Step 1: collect all `<src>:<line>:[text](target)` matches across .md files.
+# Reuse $FILES_TMP filtered to .md — avoids a second `git ls-files`
+# call which is expensive on SSHFS / network mounts.
+grep -E '\.md$' "$FILES_TMP" \
+  | xargs -r grep -nHE '\][(]([^)#[:space:]]+)\.md(#[^)]*)?[)]' 2>/dev/null \
+  | grep -v '<!--noindex-->' \
+  > "$LINKS_TMP" || true
+
+# Step 2: extract + resolve.  Awk walks each line, finds every
+# link occurrence, computes the target path relative to repo root.
+LINKS_TSV=$(awk -F: '
+function resolve(base, target,    parts, n, out, i, segs, m) {
+    # Strip leading ./ repeatedly.
+    while (substr(target, 1, 2) == "./") {
+        target = substr(target, 3);
+    }
+    # Apply ../ segments — walk up the base.
+    while (substr(target, 1, 3) == "../") {
+        # Drop the last segment of base.
+        m = match(base, /\/[^\/]*$/);
+        if (m == 0) {
+            base = "";
+        } else {
+            base = substr(base, 1, m - 1);
+        }
+        target = substr(target, 4);
+    }
+    if (base == "") return target;
+    return base "/" target;
+}
+function dirof(p,    m) {
+    m = match(p, /\/[^\/]*$/);
+    if (m == 0) return "";
+    return substr(p, 1, m - 1);
+}
+{
+    file = $1
+    line = $2
+    content = $3
+    for (i = 4; i <= NF; i++) content = content ":" $i
+    base = dirof(file)
+    s = content
+    # Repeatedly find `](X.md...)` patterns.  We avoid a full
+    # `[text](url)` regex because awk lacks lookahead.
+    while (match(s, /\][(]([^)]+\.md)(#[^)]*)?[)]/)) {
+        # Capture RSTART/RLENGTH BEFORE calling resolve() — its
+        # internal match() calls would otherwise clobber them,
+        # so the substr advance after this loop would walk to
+        # the wrong position (causing duplicate emits).
+        rs = RSTART
+        rl = RLENGTH
+        token = substr(s, rs, rl)
+        # Strip leading `](` and trailing `)`.
+        inner = substr(token, 3, length(token) - 3)
+        # Split on `#` for optional anchor.
+        hash = index(inner, "#")
+        anchor = ""
+        target_raw = inner
+        if (hash > 0) {
+            target_raw = substr(inner, 1, hash - 1)
+            anchor = substr(inner, hash + 1)
+        }
+        # Skip schemes
+        if (target_raw ~ /^(https?|mailto):/) {
+            s = substr(s, rs + rl)
+            continue
+        }
+        if (substr(target_raw, 1, 1) == "/") {
+            # Already repo-rooted — strip leading slash.
+            resolved = substr(target_raw, 2)
+        } else {
+            resolved = resolve(base, target_raw)
+        }
+        print resolved "\t" file "\t" line "\t" anchor "\t" content
+        s = substr(s, rs + rl)
+    }
+}
+' "$LINKS_TMP")
+
+# Step 3: assemble the `links` bucket.  jq groups by target.
+# We write the bucket to a temp file rather than --argjson —
+# the loft tree has ~3000 links and the JSON exceeds ARG_MAX
+# (~128 KB on Linux).  --slurpfile reads via fd, no argv limit.
+LINKS_BUCKET_TMP=$(mktemp)
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP"' EXIT
+if [ -n "$LINKS_TSV" ]; then
+    printf "%s" "$LINKS_TSV" | jq -Rn '
+        [ inputs
+          | split("\n")[]
+          | select(length > 0)
+          | split("\t")
+          | { target: .[0],
+              file:   .[1],
+              line:   (.[2] | tonumber),
+              anchor: .[3],
+              context: .[4] }
+        ]
+        | group_by(.target)
+        | map({ (.[0].target): (
+                  map({file, line, anchor, context})
+                  | sort_by(.file, .line)
+                  | unique
+                ) })
+        | add // {}
+    ' > "$LINKS_BUCKET_TMP"
+else
+    echo '{}' > "$LINKS_BUCKET_TMP"
+fi
+
+jq --slurpfile links "$LINKS_BUCKET_TMP" '. + {links: $links[0]}' "$OUT" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
+
+# ── Broken-link detection (phase 09) ────────────────────────────
+# Walk every key in `.links`; if the resolved target file does
+# not exist, record it under `broken_links: [{target, refs: [...]}]`.
+# Mirrors the shape of `broken` (broken @-tag refs).
+BROKEN_LINKS_TMP=$(mktemp)
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP"' EXIT
+jq -r '.links | keys[]' "$OUT" | while read -r target; do
+  if [ ! -f "$target" ]; then
+    echo "$target"
+  fi
+done > "$BROKEN_LINKS_TMP" || true
+
+if [ -s "$BROKEN_LINKS_TMP" ]; then
+  BROKEN_LINKS_JSON=$(jq -Rs --slurpfile idx "$OUT" '
+    split("\n")
+    | map(select(length > 0))
+    | map({
+        target: .,
+        refs: ($idx[0].links[.] // [] | map("\(.file):\(.line)"))
+      })
+  ' "$BROKEN_LINKS_TMP")
+else
+  BROKEN_LINKS_JSON='[]'
+fi
+
+# Merge via stdin (argv could overflow on large outputs).
+BROKEN_LINKS_BUCKET_TMP=$(mktemp)
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP"' EXIT
+printf '%s' "$BROKEN_LINKS_JSON" > "$BROKEN_LINKS_BUCKET_TMP"
+jq --slurpfile bl "$BROKEN_LINKS_BUCKET_TMP" '. + {broken_links: $bl[0]}' "$OUT" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
+
 count=$(jq 'keys | length' "$OUT")
-new_count=$(jq '[keys[] | select(startswith("legacy:") | not) | select(. != "broken")] | length' "$OUT")
+new_count=$(jq '[keys[] | select(startswith("legacy:") | not) | select(. != "broken" and . != "links" and . != "broken_links")] | length' "$OUT")
 legacy_count=$(jq '[keys[] | select(startswith("legacy:"))] | length' "$OUT")
-total_refs=$(jq '[to_entries[] | select(.key != "broken") | .value | length] | add // 0' "$OUT")
+total_refs=$(jq '[to_entries[] | select(.key != "broken" and .key != "links" and .key != "broken_links") | .value | length] | add // 0' "$OUT")
 broken_count=$(jq '.broken | length' "$OUT")
+links_count=$(jq '.links | length' "$OUT")
+links_total=$(jq '[.links | to_entries[] | .value | length] | add // 0' "$OUT")
+broken_links_count=$(jq '.broken_links | length' "$OUT")
 
 echo "tools/indexer/scan.sh: wrote $OUT"
 echo "  $count distinct tags ($new_count new-form, $legacy_count legacy-form)"
 echo "  $total_refs total references"
+echo "  $links_count link targets ($links_total inbound links)"
 if [ "$broken_count" -gt 0 ]; then
   echo "  $broken_count broken @-references — run: ./scripts/idx broken"
+fi
+if [ "$broken_links_count" -gt 0 ]; then
+  echo "  $broken_links_count broken markdown links — run: ./scripts/idx broken-links"
 fi

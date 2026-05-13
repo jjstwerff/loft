@@ -136,7 +136,7 @@ allocation.
 
 ### Cross-doc link rewriting
 
-A `[text](path.md)` link where `path.md` resolves to a file
+A `[text](path.md)` link where `path.md` resolves to a file <!--noindex-->
 under the project root becomes `<a
 href="/file/<resolved-path>">text</a>`.  Anchor fragments
 (`path.md#section`) are preserved.

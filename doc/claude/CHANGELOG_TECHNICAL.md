@@ -87,6 +87,61 @@ loft-script binary against the host loft binary as a frozen pair.
 
 ---
 
+### Plan-37 phase 09 — backlinks (links bucket) shipped 2026-05-14
+
+Indexer now extracts every `[text](path.md)` markdown link <!--noindex-->
+across the repo, resolves the target relative to the source
+file's directory, and groups inbound refs under a top-level
+`links: {target: [{file, line, anchor, context}]}` bucket
+in `index/tags.json`.  Path resolution handles `..`, `./`,
+repo-root `/...` paths, anchors, and skips http(s)/mailto
+schemes.
+
+Two new CLI surfaces on `./scripts/idx`:
+
+- `incoming:<path>` — inverse of `file:`; lists everything
+  that links TO the given path.  Trailing `/` resolves to
+  `/README.md`; bare basename matches against any key
+  ending in `/<name>` (returns `{ambiguous: [...]}` when
+  multiple paths match).  `incoming:@PLAN35` delegates to
+  the existing `tag:` lookup so the same query shape works
+  for both file paths and `@`-tags.
+- `broken-links` — sibling of `broken`; lists links
+  pointing at non-existent files.  Initial scan surfaced
+  62 stale references on the loft tree (mostly off-by-one
+  `..` counts in `doc/claude/plans/<dir>/README.md` after
+  files were moved to `finished/`).  No CI gate yet — the
+  cleanup is a follow-up before tightening
+  `tests/index_hygiene.rs` to fail on broken links.
+
+**Bug fixes during the work:**
+
+- **awk match() clobber** — the link-extraction inner
+  loop's `resolve(base, target)` helper called `match()`
+  internally, clobbering `RSTART`/`RLENGTH` for the outer
+  loop's substr-advance step.  Effect: every link emitted
+  twice (the second emit re-walked the same content from
+  a stale offset).  Fixed by capturing `RSTART`/`RLENGTH`
+  into local `rs`/`rl` before any helper call.
+- **awk single-quote in shell-quoted block** — a comment
+  containing `loop's` broke out of the bash single-quoted
+  awk script, surfacing as "syntax error near token `('"
+  at the apparent line of the next awk statement.  Comment
+  rephrased to drop the apostrophe.
+- **jq `--argjson` ARG_MAX overflow** — the assembled
+  `LINKS_JSON` (~150 KB on the loft tree) exceeded the OS
+  argv limit.  Switched the merge step to `--slurpfile`
+  reading from a temp file (no argv pressure).
+
+**Performance:** scanner runs in 1.5 sec on 953 files (was
+1.0 sec without the link pass).  No CI gate impact.
+
+`tests/index_hygiene.rs` continues to enforce zero broken
+`@`-tag refs (phase 03 contract).  The `broken_links`
+bucket is detection-only for now.
+
+---
+
 ### Plan-22 (mutable closures) closed 2026-05-13
 
 Plan-22 ran 2026-05-10 → 2026-05-13.  Goal: make closures whose

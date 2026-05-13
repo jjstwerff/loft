@@ -50,8 +50,11 @@ Default workflow for "where is X referenced?":
 ./scripts/idx tag:legacy:P259         # bare-name (transition)
 ./scripts/idx prefix:@PLAN22          # all PLAN22-* refs
 ./scripts/idx file:doc/.../PROBLEMS.md  # tags in one file
+./scripts/idx incoming:doc/.../PROBLEMS.md  # backlinks (who links to me)
+./scripts/idx incoming:plans/finished/22-mutable-closures/  # trailing / → README.md
 ./scripts/idx all | jq '.[:10]'       # top 10 by reference count
 ./scripts/idx broken                  # broken @-refs
+./scripts/idx broken-links            # broken markdown links (phase 09)
 ./scripts/idx help                    # usage block
 ```
 

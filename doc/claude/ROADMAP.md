@@ -41,7 +41,7 @@ categories below for full detail.
 | Pri | Gate | Status | Source |
 |---|---|---|---|
 | 1 | **Plan-07 phase 5/6/7** — error-message closeout (suggestions polish + per-site type-mismatch wording + closeout doc).  Friends' first WTF moment is a type error; tighter messages compound into trust. | Phases 5/6/7 open; phase 6.1 (Type::name exhaustive) shipped 2026-05-13 | [`plans/07-error-messages/`](plans/07-error-messages/) |
-| 2 | **Plan-37 — tracker-tag indexer** — `@P-id` / `@PLAN-id` convention + scanner + CLI + viewer integration.  Replaces grep-based tag lookups with O(1) JSON queries.  Shrinks Claude per-task token usage; feeds plan-35 phase 08 newcomer landing's status buckets. | Phases 1-5 shipped 2026-05-13; phases 0, 6-9 open | [`plans/37-tracker-index/`](plans/37-tracker-index/) |
+| 2 | **Plan-37 — tracker-tag indexer** — `@P-id` / `@PLAN-id` convention + scanner + CLI + viewer integration.  Replaces grep-based tag lookups with O(1) JSON queries.  Shrinks Claude per-task token usage; feeds plan-35 phase 08 newcomer landing's status buckets. | Phases 1-5 shipped 2026-05-13; phase 9 (backlinks) shipped 2026-05-14; phases 0, 6-8 open | [`plans/37-tracker-index/`](plans/37-tracker-index/) |
 | 3 | **DX.2 — CI: package + native tests** — last open item in plan-27 (DX); ship + close the plan. | Open | [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) |
 
 What ships ALREADY for friend-readiness (don't reblock on these):

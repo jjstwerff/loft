@@ -9,8 +9,15 @@
 #   idx tag:legacy:P259           — bare-name (legacy) lookup
 #   idx prefix:@PLAN22            — all tags starting with prefix
 #   idx file:doc/.../PROBLEMS.md  — all tags referenced in a file
+#   idx incoming:<path>           — backlinks: who links to <path>
+#                                   (path can be a file, directory
+#                                   ending in /, or a unique
+#                                   substring; @-tag form delegates
+#                                   to `tag:`).
 #   idx all                       — every tag with reference count
 #   idx broken                    — broken @-references
+#   idx broken-links              — markdown links pointing at
+#                                   non-existent files (phase 09)
 #   idx help                      — print this usage block
 #
 # Context flags (apply to tag: form; ignored elsewhere).
@@ -169,6 +176,7 @@ case "$QUERY" in
   file:*)
     jq --arg f "${QUERY#file:}" '
       [ to_entries[]
+        | select(.key != "broken" and .key != "links" and .key != "legacy")
         | { tag: .key,
             refs: [.value[] | select(.file == $f)] }
         | select(.refs | length > 0) ]
@@ -176,6 +184,38 @@ case "$QUERY" in
     ' "$IDX"
     # NOTE: same as prefix — excerpts not auto-applied to the
     # nested refs[].
+    ;;
+  incoming:*)
+    # Backlinks (plan-37 phase 09).  Two cases:
+    #   incoming:@PLAN22  → delegates to tag:@PLAN22
+    #   incoming:<path>   → looks up .links bucket
+    # Path normalisation: trailing / → /README.md;
+    # bare basename (PROBLEMS.md) → unique match if any.
+    Q="${QUERY#incoming:}"
+    case "$Q" in
+      @*)
+        jq --arg t "$Q" '.[$t] // []' "$IDX" | add_excerpts
+        ;;
+      *)
+        # Try the path verbatim first; then with /README.md
+        # appended; then as a unique substring of any key.
+        jq --arg p "$Q" '
+          (.links // {}) as $L
+          | ($L[$p])
+            // ($L[($p | sub("/$"; "/README.md"))])
+            // ($L[($p + "/README.md")])
+            // (
+                 [ $L | to_entries[]
+                   | select(.key | endswith("/" + $p) or (. == $p))
+                   | .value ]
+                 | if length == 1 then .[0]
+                   elif length == 0 then []
+                   else {ambiguous: ([$L | keys[] | select(endswith("/" + $p))])}
+                   end
+               )
+        ' "$IDX"
+        ;;
+    esac
     ;;
   all)
     jq '
@@ -187,6 +227,9 @@ case "$QUERY" in
     ;;
   broken)
     jq '.broken // []' "$IDX"
+    ;;
+  broken-links)
+    jq '.broken_links // []' "$IDX"
     ;;
   ""|-h|--help|help)
     sed -n '2,30p' "$0"

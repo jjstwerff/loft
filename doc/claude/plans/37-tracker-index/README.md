@@ -131,7 +131,7 @@ Tag bodies follow these rules:
 | 6 | [Retroactive tagging + closeout](06-closeout.md) | S | One-shot sed pass: convert `P\d+` → `@P\d+` in PROBLEMS.md / plan READMEs / commit-message conventions.  CHANGELOG entry.  Move plan to finished/. | Open |
 | 7 | [Loft-native scanner + CLI + WebSocket daemon](07-loft-native-scanner.md) | M | Daemon + clients model: long-running loft scanner serves CLI + viewer over local WebSocket.  Drives `lib/fs_watch/` + lib/server binary frames.  Bash artefacts stay as bootstrap fallback. | Open |
 | 8 | [Multi-project deployment + mmap-backed index](08-multi-project-deploy.md) | M | Per-project `.tracker/config.toml` (configurable tag families + validators).  Daemon-per-project (filesystem registry — no shared service).  `tags.store` mmap-backed via loft's Store primitive (durability via plan-38 Tier 1).  Goal: a few static binaries in `~/bin/` that handle ANY AI/coding project, not just loft. | Open |
-| 9 | [Backlinks: "who links to me"](09-backlinks.md) | S | Index gains a `links` bucket: every `[text](path.md)` markdown link, resolved against current file's dir.  CLI `idx incoming:<path>` answers the inverse question; `idx broken` flags links to non-existent paths.  Heaviest user: plan READMEs cross-referencing each other. | Open |
+| 9 | [Backlinks: "who links to me"](09-backlinks.md) | S | Index gains a `links` bucket: every markdown link, resolved against the source file's directory.  CLI `idx incoming:<path>` answers the inverse question; `idx broken-links` flags links to non-existent paths.  Heaviest user: plan READMEs cross-referencing each other. | **Shipped 2026-05-14** |
 
 Total estimated effort: **~1 week** of focused work.  Phases
 00 + 01 are the minimum viable indexer (~1 day); the rest
