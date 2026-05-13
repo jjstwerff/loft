@@ -313,48 +313,49 @@ serve:
 	cd doc && python3 -m http.server 8000
 
 # ── Branch review viewer (plan-35) ─────────────────────────────
-# A frozen loft binary that serves a branch-aware doc + code
-# review dashboard.  See doc/claude/plans/35-branch-review-viewer/.
+# Serves a branch-aware doc + code review dashboard.
+# See doc/claude/plans/35-branch-review-viewer/.
 #
-# view-build: compile tools/viewer/src/main.loft via loft's native
-#             backend, copy the resulting binary to
-#             tools/viewer/bin/loft-view.  Built deliberately
-#             (frozen-binary contract).
-# view:       run the pre-built binary.  Refresh git state first
-#             (no-op stub today; phase 04 fills refresh.sh).
+# Phase 01 ships INTERPRETER MODE (target/release/loft --interpret).
+# Native mode is blocked by P262 (text-call inline-arg codegen quirk)
+# + a separate lib/web duplicate-native-fn issue when lib/server is
+# pulled transitively.  Phase 07 closeout revisits frozen-binary
+# packaging once those blockers close.
+#
+# view-build: ensure host loft is built; record build provenance.
+# view:       refresh state, then run script via loft --interpret.
 view-build:
-	@echo "  [1/3] building host loft binary ..."
+	@echo "  [1/2] building host loft binary ..."
 	@cargo build --release -q --lib --bin loft 2>/tmp/loft_view_host.log || { \
 	    echo "    FAIL: host cargo build — see /tmp/loft_view_host.log"; \
 	    tail -20 /tmp/loft_view_host.log; exit 1; }
-	@echo "  [2/3] compiling tools/viewer/src/main.loft via --native ..."
-	@./target/release/loft --native tools/viewer/src/main.loft \
-	    >/tmp/loft_view_compile.log 2>&1 || { \
-	    echo "    FAIL: loft --native — see /tmp/loft_view_compile.log"; \
-	    tail -20 /tmp/loft_view_compile.log; exit 1; }
-	@echo "  [3/3] copying cached binary to tools/viewer/bin/loft-view ..."
-	@cached=$$(ls -t tools/viewer/src/.loft/cache/main-* 2>/dev/null | head -1); \
-	if [ -z "$$cached" ]; then \
-	    echo "    FAIL: no binary in tools/viewer/src/.loft/cache/"; \
-	    echo "    (loft --native may have run but didn't cache; check log)"; \
-	    exit 1; \
-	fi; \
-	cp -f "$$cached" tools/viewer/bin/loft-view; \
-	chmod +x tools/viewer/bin/loft-view; \
-	host_sha=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown"); \
-	{ echo "Built $$(date -u +%Y-%m-%dT%H:%M:%SZ) against loft commit $$host_sha"; } \
-	    > tools/viewer/BUILD_NOTES.md
-	@echo "loft-view built: tools/viewer/bin/loft-view"
+	@echo "  [2/2] recording build provenance ..."
+	@host_sha=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown"); \
+	{ echo "loft-view phase 01 — interp-mode build"; \
+	  echo "Built $$(date -u +%Y-%m-%dT%H:%M:%SZ) against loft commit $$host_sha"; \
+	  echo ""; \
+	  echo "Native compilation blocked by:"; \
+	  echo "  P262 — text-returning calls passed inline get extra & wrap"; \
+	  echo "  (lib/web duplicate native fn defs in --native compile)"; \
+	  echo ""; \
+	  echo "Runs via 'loft --interpret' until those blockers close."; \
+	} > tools/viewer/BUILD_NOTES.md
+	@echo "loft-view ready: tools/viewer/src/main.loft (interp-mode)"
+	@echo "  See tools/viewer/BUILD_NOTES.md for native-mode blockers."
 
 view-refresh:
 	@./tools/viewer/refresh.sh
 
 view: view-refresh
-	@if [ ! -x tools/viewer/bin/loft-view ]; then \
-	    echo "loft-view not built; run: make view-build"; \
+	@if [ ! -f tools/viewer/src/main.loft ]; then \
+	    echo "loft-view source missing; expected tools/viewer/src/main.loft"; \
 	    exit 1; \
 	fi
-	./tools/viewer/bin/loft-view
+	@if [ ! -x target/release/loft ]; then \
+	    echo "host loft binary missing; run: make view-build"; \
+	    exit 1; \
+	fi
+	./target/release/loft --interpret --lib lib/ tools/viewer/src/main.loft
 
 # game: rebuild the efficient browser build of Brick Buster from any
 # state — clean rebuild of the wasm32-unknown-unknown rlibs + host

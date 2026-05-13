@@ -7,12 +7,295 @@
 // loft repo root.  See doc/claude/plans/35-branch-review-viewer/
 // for the full design + per-phase plans.
 //
-// Phase 00 (this file): skeleton.  Just prints the version + exits.
-// Subsequent phases add HTTP serving, file rendering, git-state
-// dashboard, etc.
+// Phase 01: HTTP server + project tree + raw file serving.
+// Routes:
+//   GET /                   landing page (entry-point links)
+//   GET /tree/<path>        directory listing
+//   GET /raw/<path>         raw file bytes (text/plain)
+//   GET /static/style.css   minimal stylesheet
+//   GET *                   404
 //
-// Built against loft commit recorded in tools/viewer/BUILD_NOTES.md.
+// Project root = current working directory when the binary runs;
+// loft sandboxes file I/O via valid_path() so paths can't escape.
+
+use server;
+
+const PORT: integer = 8765;
 
 fn main() {
-    print("loft-view v0.1 (plan-35 phase 00 — skeleton)\n");
+    // Future: read LOFT_VIEW_PORT once a stable env_variable + parse
+    // path is settled.  Today: hard-coded.
+
+    srv = server::listen(PORT);
+    // Note: println at startup triggers a native-codegen dispatch-table
+    // bug (see PROBLEMS § P262); silent for now.  Revisit when P262 is
+    // closed.
+
+    while true {
+        req = srv.next();
+        if req == null { continue; }
+        route(req);
+    }
 }
+
+fn route(req: server::Request) {
+    p = req.path;
+    if p == "/" {
+        body = page_landing();
+        req.respond_html(body);
+    } else if p == "/static/style.css" {
+        // Bind to local — works around a native codegen quirk that
+        // takes &<call-result> when a text constant is passed inline.
+        css = BASE_CSS;
+        req.respond_css(css);
+    } else if p == "/favicon.ico" {
+        req.respond_404();
+    } else if p.starts_with("/tree/") {
+        rel = p[6..len(p)];
+        body = page_tree(rel);
+        req.respond_html(body);
+    } else if p == "/tree" {
+        body = page_tree("");
+        req.respond_html(body);
+    } else if p.starts_with("/raw/") {
+        rel = p[5..len(p)];
+        respond_raw(req, rel);
+    } else {
+        serve_404_page(req, p);
+    }
+}
+
+// ── HTML escape ──────────────────────────────────────────────
+
+fn escape(s: text) -> text {
+    out = "";
+    for c in s {
+        if c == '&' {
+            out += "&amp;";
+        } else if c == '<' {
+            out += "&lt;";
+        } else if c == '>' {
+            out += "&gt;";
+        } else if c == '"' {
+            out += "&quot;";
+        } else {
+            out += "{c}";
+        }
+    }
+    out
+}
+
+// ── Page templates ───────────────────────────────────────────
+
+fn page_landing() -> text {
+    body = "<h1>loft-view <small>phase 01</small></h1>";
+    body += "<p>Branch-aware doc + code review viewer.";
+    body += " Phase 04 will add the git-state dashboard;";
+    body += " phase 03 will render markdown.";
+    body += " Today: file tree + raw file viewing.</p>";
+    body += "<h2>Browse the project</h2>";
+    body += "<ul>";
+    body += "<li><a href=\"/tree/doc\">doc/</a></li>";
+    body += "<li><a href=\"/tree/lib\">lib/</a></li>";
+    body += "<li><a href=\"/tree/src\">src/</a></li>";
+    body += "<li><a href=\"/tree/tests\">tests/</a></li>";
+    body += "<li><a href=\"/tree/tools\">tools/</a></li>";
+    body += "<li><a href=\"/tree/default\">default/</a></li>";
+    body += "<li><a href=\"/tree/examples\">examples/</a></li>";
+    body += "</ul>";
+    body += "<p><a href=\"/raw/README.md\">README.md (raw)</a></p>";
+    page("loft-view", body)
+}
+
+fn page_tree(rel: text) -> text {
+    f = file(rel);
+    if f.format == Format.NotExists {
+        // Caller (route()) wraps with respond_html which uses 200 OK;
+        // /tree/<missing> is presented as a regular missing page.
+        // For the dedicated 404 status code, /raw/ uses serve_404_page.
+        return page_404("/tree/{rel}");
+    }
+    if f.format != Format.Directory {
+        // Not a dir — redirect-style: link to /raw/<path>.
+        esc_rel = escape(rel);
+        body = "<h1>{esc_rel}</h1>";
+        body += "<p>Not a directory.";
+        body += " <a href=\"/raw/{esc_rel}\">View raw</a>.</p>";
+        return page(rel, body);
+    }
+
+    // Bind nested text calls to locals — works around P262 (native
+    // codegen quirk: text-returning calls passed inline get an extra
+    // `&` wrap in the generated Rust, fail to compile).
+    body = breadcrumbs(rel, "tree");
+    esc_rel = escape(rel);
+    body += "<h1>{esc_rel}/</h1>";
+    body += "<ul class=\"dir\">";
+    if rel != "" {
+        parent = parent_of(rel);
+        esc_parent = escape(parent);
+        body += "<li><a href=\"/tree/{esc_parent}\">..</a></li>";
+    }
+
+    // Two passes: dirs then files; alphabetical within.
+    entries = f.files();
+    for e in entries {
+        if e.format == Format.Directory && !skip(e.path) {
+            name = basename(e.path);
+            joined = rel_join(rel, name);
+            esc_joined = escape(joined);
+            esc_name = escape(name);
+            body += "<li><a class=\"d\" href=\"/tree/{esc_joined}\">{esc_name}/</a></li>";
+        }
+    }
+    for e in entries {
+        if e.format != Format.Directory && !skip(e.path) {
+            name = basename(e.path);
+            joined = rel_join(rel, name);
+            esc_joined = escape(joined);
+            esc_name = escape(name);
+            sz = e.size;
+            body += "<li><a class=\"f\" href=\"/raw/{esc_joined}\">{esc_name}</a> <span class=\"sz\">{sz}</span></li>";
+        }
+    }
+    body += "</ul>";
+    title = "{rel}/";
+    page(title, body)
+}
+
+fn respond_raw(req: server::Request, rel: text) {
+    f = file(rel);
+    if f.format == Format.NotExists {
+        serve_404_page(req, "/raw/{rel}");
+        return;
+    }
+    if f.format == Format.Directory {
+        body = page_tree(rel);
+        req.respond_html(body);
+        return;
+    }
+    // Bind to a local before passing — works around a native codegen
+    // quirk that takes &<call-result> when the text comes from an
+    // inline f.content() call site.  Phase 02 wraps in <pre>.
+    body = f.content();
+    req.respond_typed(200, body, "text/plain; charset=utf-8");
+}
+
+fn serve_404_page(req: server::Request, p: text) {
+    body = page_404(p);
+    req.respond_typed(404, body, "text/html; charset=utf-8");
+}
+
+fn page_404(p: text) -> text {
+    esc_p = escape(p);
+    body = "<h1>404 — not found</h1>";
+    body += "<p>No route matches <code>{esc_p}</code>.</p>";
+    body += "<p><a href=\"/\">back to landing</a></p>";
+    page("404", body)
+}
+
+// ── Layout shell ─────────────────────────────────────────────
+
+fn page(title: text, body: text) -> text {
+    esc_title = escape(title);
+    out = "<!doctype html>";
+    out += "<html lang=\"en\"><head>";
+    out += "<meta charset=\"utf-8\">";
+    out += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
+    out += "<title>{esc_title} — loft-view</title>";
+    out += "<link rel=\"stylesheet\" href=\"/static/style.css\">";
+    out += "</head><body>";
+    out += "<header><a href=\"/\" class=\"home\">loft-view</a></header>";
+    out += "<main>";
+    out += body;
+    out += "</main>";
+    out += "<footer>plan-35 phase 01 · "
+        + "<a href=\"/tree/doc/claude/plans/35-branch-review-viewer\">design</a>"
+        + "</footer>";
+    out += "</body></html>";
+    out
+}
+
+fn breadcrumbs(rel: text, kind: text) -> text {
+    if rel == "" { return ""; }
+    out = "<nav class=\"crumbs\">";
+    out += "<a href=\"/\">/</a>";
+    parts = rel.split('/');
+    acc = "";
+    for p in parts {
+        if p == "" { continue; }
+        if acc == "" { acc = p; } else { acc = "{acc}/{p}"; }
+        esc_acc = escape(acc);
+        esc_p = escape(p);
+        out += " / <a href=\"/{kind}/{esc_acc}\">{esc_p}</a>";
+    }
+    out += "</nav>";
+    out
+}
+
+// ── Path utilities ───────────────────────────────────────────
+
+fn parent_of(rel: text) -> text {
+    last_slash = rel.rfind("/");
+    if last_slash < 0 { return ""; }
+    rel[0..last_slash]
+}
+
+fn basename(path: text) -> text {
+    last_slash = path.rfind("/");
+    if last_slash < 0 { return path; }
+    path[last_slash + 1..len(path)]
+}
+
+fn rel_join(base: text, name: text) -> text {
+    if base == "" { return name; }
+    "{base}/{name}"
+}
+
+// Skip-list for tree walks.  Keeps the listing focused.
+fn skip(path: text) -> boolean {
+    name = basename(path);
+    name == ".git"
+        || name == "target"
+        || name == ".loft"
+        || name == "node_modules"
+        || name == ".cache"
+        || name.starts_with(".fuse_hidden")
+}
+
+// ── CSS ──────────────────────────────────────────────────────
+
+const BASE_CSS: text = `
+body{{font-family:system-ui,-apple-system,sans-serif;max-width:980px;margin:0 auto;padding:1rem;line-height:1.5;color:#222}}
+header{{border-bottom:1px solid #ccc;padding-bottom:.5rem;margin-bottom:1rem}}
+header a.home{{font-weight:600;color:#333;text-decoration:none}}
+footer{{border-top:1px solid #ccc;margin-top:2rem;padding-top:.5rem;font-size:.85rem;color:#666}}
+footer a{{color:#666}}
+main{{min-height:60vh}}
+h1{{font-size:1.4rem;margin:0 0 .5rem 0}}
+h1 small{{color:#888;font-weight:400;font-size:.7em}}
+h2{{font-size:1.1rem;margin-top:1.5rem}}
+ul.dir{{list-style:none;padding:0;font-family:ui-monospace,Menlo,monospace}}
+ul.dir li{{padding:.15rem 0;display:flex;justify-content:space-between}}
+ul.dir a.d{{font-weight:600}}
+ul.dir a.f{{color:#225}}
+ul.dir .sz{{color:#999;font-size:.85em}}
+nav.crumbs{{font-family:ui-monospace,Menlo,monospace;color:#666;margin-bottom:.5rem;font-size:.9em}}
+nav.crumbs a{{color:#225;text-decoration:none}}
+nav.crumbs a:hover{{text-decoration:underline}}
+code{{font-family:ui-monospace,Menlo,monospace;background:#f3f3f3;padding:.1em .3em;border-radius:3px}}
+a{{color:#0066cc}}
+a:visited{{color:#553388}}
+@media (prefers-color-scheme: dark){{
+  body{{background:#1a1a1a;color:#ddd}}
+  header,footer{{border-color:#444}}
+  header a.home{{color:#ddd}}
+  footer,footer a{{color:#999}}
+  ul.dir a.f{{color:#9bf}}
+  nav.crumbs{{color:#999}}
+  nav.crumbs a{{color:#9bf}}
+  code{{background:#2a2a2a}}
+  a{{color:#9bf}}
+  a:visited{{color:#caf}}
+}}
+`;
