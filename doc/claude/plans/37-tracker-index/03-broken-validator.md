@@ -5,12 +5,41 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 03 — Broken-tag validator
 
-**Status:** Open
+**Status:** **Shipped 2026-05-13.**
+
+## What actually shipped
+
+- `tools/indexer/scan.sh` extended: after writing the
+  primary tag map, computes a `broken[]` array of
+  `{tag, refs}` for every `@P<N>` whose `<N>` is not a
+  PROBLEMS.md row ID, and every `@PLAN<N>` whose `<N>`
+  has no plan directory under `plans/`,
+  `plans/finished/`, `plans/future/`, or
+  `plans/deferred/`.
+- The scanner skips lines containing the literal
+  `<!--noindex-->` marker — design docs that need to
+  MENTION fake examples can opt out.
+- `./scripts/idx broken` (already shipped phase 01) now
+  returns the actual broken array instead of `[]`.
+- `tests/index_hygiene.rs::no_broken_tracker_tags` shells
+  out to `make index` then `./scripts/idx broken`; fails
+  if the array is non-empty.  Includes friendly fix-options
+  message in the assertion failure.
+
+Verified end-to-end:
+- Pre-noindex: scanner reported 5 broken refs (all in
+  this plan's design docs as documentation examples).
+- After adding `<!--noindex-->` markers + restructuring
+  the doc examples to use placeholder forms (`@PFAKE`,
+  `@PLANXYZ`) that don't match the indexer regex: zero
+  broken refs.
+- `cargo test --release --test index_hygiene` passes
+  (1 sec).
 
 ## Goal
 
-Catch tag references that don't resolve to a real entity:
-`@P9999` (no such P-issue), `@PLAN99` (no such plan dir).
+Catch tag references that don't resolve to a real entity —
+fabricated P-ids or plan numbers that no doc/dir exists for.
 Surface as a `broken` key inside `index/tags.json` AND as a
 CI test failure so PRs that introduce broken refs get
 flagged.
@@ -37,16 +66,19 @@ flagged.
 
 Output: `index/tags.json` gains a top-level `broken` key:
 
-```json
+```
 {
-  "@P259": [...],
-  "@PLAN35-01": [...],
+  "@P259":            [...],   <!--noindex-->
+  "@PLAN35-01":       [...],   <!--noindex-->
   "broken": [
-    {"tag": "@P9999", "files": ["doc/foo.md:42"]},
-    {"tag": "@PLAN99-03", "files": ["doc/bar.md:15"]}
+    {"tag": "@PFAKE",   "files": ["doc/foo.md:42"]},
+    {"tag": "@PLANXYZ", "files": ["doc/bar.md:15"]}
   ]
 }
 ```
+
+(Example tags above use placeholder forms that don't match
+the indexer's regex; real broken-tag output uses live IDs.)
 
 ### CI hygiene test
 
@@ -84,9 +116,9 @@ per existing `tests/p254_cache_poisoning.rs`).
 - `index/tags.json` includes a `broken` key (empty array if
   all refs resolve).
 - `cargo test --test index_hygiene` passes on a clean tree.
-- Introducing a fabricated `@P9999` reference somewhere
-  → `cargo test --test index_hygiene` fails with the
-  offending file:line.
+- <!--noindex--> Introducing a fabricated `@P9999`-style
+  reference anywhere → `cargo test --test index_hygiene`
+  fails with the offending file:line.
 - Removing the bogus reference → test passes again.
 
 ## Risks

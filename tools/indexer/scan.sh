@@ -15,6 +15,11 @@
 #
 # Output: index/tags.json — see ARCHITECTURE.md for shape.
 # Performance target: ≤ 2 seconds on the loft tree.
+#
+# Opt-out: lines containing the literal `<!--noindex-->`
+# marker are skipped entirely.  Use in design docs that need
+# to MENTION fake @P-id / @PLAN-id examples without indexing
+# them as real references.
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
@@ -48,7 +53,9 @@ trap 'rm -f "$FILES_TMP" "$RAW_TMP"' EXIT
 
 xargs -a "$FILES_TMP" grep -nHE \
   '@P[0-9]+[a-z]?\b|@PLAN[0-9]+(-[a-zA-Z0-9._]+)*\b|\bP[0-9]+[a-z]?\b|\bplan-[0-9]+\b' \
-  > "$RAW_TMP" 2>/dev/null || true
+  2>/dev/null \
+  | grep -v '<!--noindex-->' \
+  > "$RAW_TMP" || true
 
 # Each line of $RAW_TMP is `<file>:<lineno>:<content>`.
 # Awk extracts every tag occurrence and emits TSV: tag\tfile\tline\tcontext
@@ -109,11 +116,94 @@ awk -F: '
       | add // {}
     ' > "$OUT"
 
+# ── Broken-tag validation (phase 03) ────────────────────────────
+# Cross-reference every @P<N> against PROBLEMS.md row IDs;
+# every @PLAN<N> against the four plan directory roots.
+# Sub-phase IDs (@PLAN35-04) validate only the parent plan
+# exists for v1; per-phase-file existence is a future step.
+
+# 1. Sets of valid IDs.
+VALID_PIDS=$(grep -oE '^\| [0-9]+ \|' doc/claude/PROBLEMS.md \
+  | grep -oE '[0-9]+' | sort -u)
+VALID_PLANS=$(find doc/claude/plans \
+  -maxdepth 2 -mindepth 1 -type d \
+  -regex 'doc/claude/plans/\(finished/\|future/\|deferred/\)?[0-9]+-.*' \
+  2>/dev/null \
+  | grep -oE '/[0-9]+-' | grep -oE '[0-9]+' | sort -u)
+
+# 2. Sets of referenced IDs.  Strip optional trailing letter
+# from @P-id (e.g., @P229b → 229).
+REF_PIDS=$(jq -r '
+  keys[]
+  | select(startswith("@P") and (startswith("@PLAN") | not))
+  | sub("^@P"; "")
+  | sub("[a-z]$"; "")
+' "$OUT" | sort -u)
+REF_PLANS=$(jq -r '
+  keys[]
+  | select(startswith("@PLAN"))
+  | capture("^@PLAN(?<n>[0-9]+)").n
+' "$OUT" | sort -u)
+
+# 3. Diff: referenced minus valid → broken.  Awk-based set
+# difference avoids the bash-3 / process-substitution gap.
+BROKEN_PIDS=$(awk 'NR==FNR{valid[$1]=1; next} !($1 in valid)' \
+  <(echo "$VALID_PIDS") <(echo "$REF_PIDS") | grep -v '^$' || true)
+BROKEN_PLANS=$(awk 'NR==FNR{valid[$1]=1; next} !($1 in valid)' \
+  <(echo "$VALID_PLANS") <(echo "$REF_PLANS") | grep -v '^$' || true)
+
+# 4. Build {tag, refs:[file:line, ...]} entries for each broken ID.
+BROKEN_TMP=$(mktemp)
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP"' EXIT
+for n in $BROKEN_PIDS; do
+  jq -r --arg n "$n" '
+    to_entries[]
+    | select(.key | test("^@P" + $n + "[a-z]?$"))
+    | .key as $tag
+    | .value[] | "\($tag)\t\(.file):\(.line)"
+  ' "$OUT" >> "$BROKEN_TMP"
+done
+for n in $BROKEN_PLANS; do
+  jq -r --arg n "$n" '
+    to_entries[]
+    | select(.key | test("^@PLAN" + $n + "(-.*)?$"))
+    | .key as $tag
+    | .value[] | "\($tag)\t\(.file):\(.line)"
+  ' "$OUT" >> "$BROKEN_TMP"
+done
+
+# 5. Group + merge into the existing tags.json under "broken" key.
+if [ -s "$BROKEN_TMP" ]; then
+  BROKEN_JSON=$(awk -F'\t' '
+    { tag=$1; ref=$2; refs[tag] = refs[tag] (refs[tag] ? "," : "") "\"" ref "\"" }
+    END {
+      printf "["
+      first=1
+      for (t in refs) {
+        if (!first) printf ","
+        printf "{\"tag\":\"%s\",\"refs\":[%s]}", t, refs[t]
+        first=0
+      }
+      printf "]"
+    }
+  ' "$BROKEN_TMP")
+else
+  BROKEN_JSON='[]'
+fi
+
+# 6. Merge into output.
+jq --argjson broken "$BROKEN_JSON" '. + {broken: $broken}' "$OUT" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
+
 count=$(jq 'keys | length' "$OUT")
-new_count=$(jq '[keys[] | select(startswith("legacy:") | not)] | length' "$OUT")
+new_count=$(jq '[keys[] | select(startswith("legacy:") | not) | select(. != "broken")] | length' "$OUT")
 legacy_count=$(jq '[keys[] | select(startswith("legacy:"))] | length' "$OUT")
-total_refs=$(jq '[.[] | length] | add // 0' "$OUT")
+total_refs=$(jq '[to_entries[] | select(.key != "broken") | .value | length] | add // 0' "$OUT")
+broken_count=$(jq '.broken | length' "$OUT")
 
 echo "tools/indexer/scan.sh: wrote $OUT"
 echo "  $count distinct tags ($new_count new-form, $legacy_count legacy-form)"
 echo "  $total_refs total references"
+if [ "$broken_count" -gt 0 ]; then
+  echo "  $broken_count broken @-references — run: ./scripts/idx broken"
+fi
