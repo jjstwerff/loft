@@ -91,6 +91,18 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_path_sep",                   abi: Abi::None },
     RuntimeFn { name: "n_stack_trace",                abi: Abi::Cell },
     RuntimeFn { name: "n_hash_sorted",                abi: Abi::Cell },
+    // P268 — JSON ecosystem (P54 sprint).  Native runtime wrappers
+    // around `crate::native::json_parse_into_stores` + the JsonValue
+    // method natives so `--native` programs can read/parse JSON
+    // instead of hitting `todo!()` stubs.  Methods are registered
+    // under their `t_<LEN><Type>_<method>` codegen names.
+    RuntimeFn { name: "n_json_parse",                 abi: Abi::Cell },
+    RuntimeFn { name: "t_9JsonValue_field",           abi: Abi::Cell },
+    RuntimeFn { name: "t_9JsonValue_item",            abi: Abi::Cell },
+    RuntimeFn { name: "t_9JsonValue_len",             abi: Abi::Cell },
+    RuntimeFn { name: "t_9JsonValue_as_text",         abi: Abi::Cell },
+    RuntimeFn { name: "t_9JsonValue_as_long",         abi: Abi::Cell },
+    RuntimeFn { name: "t_9JsonValue_kind",            abi: Abi::Cell },
 ];
 
 /// Look up the ABI of a runtime helper.  Returns `Abi::Cell` for
@@ -1721,6 +1733,192 @@ pub fn n_path_sep() -> i32 {
 pub fn n_hash_sorted(cell: &std::cell::UnsafeCell<Stores>, h: DbRef, tp: i64) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.build_hash_sorted_vec(&h, tp as u16)
+}
+
+/// P268 — JSON parser native runtime stub.  Wraps the shared
+/// `crate::native::json_parse_into_stores` helper (extracted from the
+/// interp `n_json_parse` body) so `--native`-compiled programs can
+/// call `json_parse(text) -> JsonValue` instead of hitting the
+/// per-package `todo!()` stub.  Returns a `DbRef` to the freshly
+/// allocated JsonValue tree; updates `stores.last_json_errors` on
+/// parse failure (read by `json_errors()` / `n_json_errors`).
+/// Bytecode equivalent: `n_json_parse` in `src/native.rs`.
+pub fn n_json_parse(cell: &std::cell::UnsafeCell<Stores>, raw: &str) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    crate::native::json_parse_into_stores(stores, raw)
+}
+
+/// P268 — JsonValue.field(name) native wrapper.  JObject linear-scan
+/// indexer; returns the value's DbRef, or the shared JNull sentinel
+/// for a missing key / non-JObject receiver.  Mirrors the interp
+/// `n_field` body in `src/native.rs`.
+#[allow(clippy::missing_panics_doc)] // try_from is on a non-negative loop counter
+pub fn t_9JsonValue_field(
+    cell: &std::cell::UnsafeCell<Stores>,
+    self_ref: DbRef,
+    name: &str,
+) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let discr = stores
+        .store(&self_ref)
+        .get_byte(self_ref.rec, self_ref.pos, 0);
+    if discr != crate::native::JV_DISCR_OBJECT {
+        return crate::native::jv_null_sentinel(stores);
+    }
+    let obj_tp = stores.name("JObject");
+    let fields_pos = u32::from(stores.position(obj_tp, "fields")) + self_ref.pos;
+    let fields_rec = stores
+        .store(&self_ref)
+        .get_i32_raw(self_ref.rec, fields_pos);
+    if fields_rec <= 0 {
+        return crate::native::jv_null_sentinel(stores);
+    }
+    let length = i64::from(stores.store(&self_ref).get_u32_raw(fields_rec as u32, 4));
+    let jf_tp = stores.name("JsonField");
+    let jf_size = u32::from(stores.size(jf_tp));
+    let name_field_pos = u32::from(stores.position(jf_tp, "name"));
+    let value_field_pos = u32::from(stores.position(jf_tp, "value"));
+    for i in 0..length {
+        let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
+        let name_rec = stores
+            .store(&self_ref)
+            .get_u32_raw(fields_rec as u32, elm_offset + name_field_pos);
+        let stored_name = stores.store(&self_ref).get_str(name_rec).to_owned();
+        if stored_name == name {
+            return DbRef {
+                store_nr: self_ref.store_nr,
+                rec: fields_rec as u32,
+                pos: elm_offset + value_field_pos,
+            };
+        }
+    }
+    crate::native::jv_null_sentinel(stores)
+}
+
+/// P268 — JsonValue.item(index) native wrapper.  JArray indexer.
+/// Returns the element's DbRef or JNull sentinel.  Mirrors interp
+/// `n_item`.
+#[allow(clippy::missing_panics_doc)] // try_from is on a bounds-checked non-negative index
+pub fn t_9JsonValue_item(
+    cell: &std::cell::UnsafeCell<Stores>,
+    self_ref: DbRef,
+    index: i64,
+) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let index = index as i32;
+    let discr = stores
+        .store(&self_ref)
+        .get_byte(self_ref.rec, self_ref.pos, 0);
+    if discr != crate::native::JV_DISCR_ARRAY || index < 0 {
+        return crate::native::jv_null_sentinel(stores);
+    }
+    let array_tp = stores.name("JArray");
+    let items_pos = u32::from(stores.position(array_tp, "items")) + self_ref.pos;
+    let items_rec = stores
+        .store(&self_ref)
+        .get_i32_raw(self_ref.rec, items_pos);
+    if items_rec <= 0 {
+        return crate::native::jv_null_sentinel(stores);
+    }
+    let length = stores.store(&self_ref).get_u32_raw(items_rec as u32, 4) as i32;
+    if index >= length {
+        return crate::native::jv_null_sentinel(stores);
+    }
+    let jv_tp = stores.name("JsonValue");
+    let jv_size = u32::from(stores.size(jv_tp));
+    let elm_offset =
+        8u32 + u32::try_from(index).expect("non-negative index checked above") * jv_size;
+    DbRef {
+        store_nr: self_ref.store_nr,
+        rec: items_rec as u32,
+        pos: elm_offset,
+    }
+}
+
+/// P268 — JsonValue.len() native wrapper.  Length of JArray's items
+/// or JObject's fields; `i64::MIN` (null) for primitive variants.
+/// Mirrors interp `n_len`.
+pub fn t_9JsonValue_len(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> i64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    match discr {
+        x if x == crate::native::JV_DISCR_ARRAY => {
+            let array_tp = stores.name("JArray");
+            let items_pos = u32::from(stores.position(array_tp, "items")) + v.pos;
+            let items_rec = stores.store(&v).get_i32_raw(v.rec, items_pos);
+            if items_rec <= 0 {
+                0
+            } else {
+                i64::from(stores.store(&v).get_u32_raw(items_rec as u32, 4))
+            }
+        }
+        x if x == crate::native::JV_DISCR_OBJECT => {
+            let obj_tp = stores.name("JObject");
+            let fields_pos = u32::from(stores.position(obj_tp, "fields")) + v.pos;
+            let fields_rec = stores.store(&v).get_i32_raw(v.rec, fields_pos);
+            if fields_rec <= 0 {
+                0
+            } else {
+                i64::from(stores.store(&v).get_u32_raw(fields_rec as u32, 4))
+            }
+        }
+        _ => i64::MIN,
+    }
+}
+
+/// P268 — JsonValue.as_text() native wrapper.  Returns the JString
+/// payload, or the empty-string null sentinel for any other variant.
+/// Mirrors interp `n_as_text`.
+#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
+pub fn t_9JsonValue_as_text(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Str {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    if discr == crate::native::JV_DISCR_STRING {
+        let str_tp = stores.name("JString");
+        let value_pos = u32::from(stores.position(str_tp, "value")) + v.pos;
+        let s_rec = stores.store(&v).get_u32_raw(v.rec, value_pos);
+        let s = stores.store(&v).get_str(s_rec).to_string();
+        stores.scratch.push(s);
+        Str::new(stores.scratch.last().unwrap())
+    } else {
+        Str::new(crate::state::STRING_NULL)
+    }
+}
+
+/// P268 — JsonValue.as_long() native wrapper.  Truncates the JNumber
+/// payload toward zero; returns `i64::MIN` (null) for any other
+/// variant.  Mirrors interp `n_as_long`.
+pub fn t_9JsonValue_as_long(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> i64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    if discr == crate::native::JV_DISCR_NUMBER {
+        let num_tp = stores.name("JNumber");
+        let value_pos = u32::from(stores.position(num_tp, "value")) + v.pos;
+        let n = stores.store(&v).get_float(v.rec, value_pos);
+        n.trunc() as i64
+    } else {
+        i64::MIN
+    }
+}
+
+/// P268 — JsonValue.kind() native wrapper.  Returns the variant
+/// name as a Str: "JNull" / "JBool" / "JNumber" / "JString" /
+/// "JArray" / "JObject".
+#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
+pub fn t_9JsonValue_kind(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Str {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    let s = match discr {
+        x if x == crate::native::JV_DISCR_NULL => "JNull",
+        x if x == crate::native::JV_DISCR_BOOL => "JBool",
+        x if x == crate::native::JV_DISCR_NUMBER => "JNumber",
+        x if x == crate::native::JV_DISCR_STRING => "JString",
+        x if x == crate::native::JV_DISCR_ARRAY => "JArray",
+        x if x == crate::native::JV_DISCR_OBJECT => "JObject",
+        _ => "JNull",
+    };
+    stores.scratch.push(s.to_string());
+    Str::new(stores.scratch.last().unwrap())
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.
