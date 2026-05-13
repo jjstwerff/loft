@@ -637,6 +637,10 @@ impl State {
         self.database.clear(&db);
         let r = self.database.claim(&db, u32::from(size));
         self.database.allocations[r.store_nr as usize].created_at = code_pos;
+        // P259 commit 3 — record the type allocated into this store so
+        // free_named can recognise closure-record stores at free time
+        // (cascade-free walks `__closure_*` records' DbRef fields).
+        self.database.allocations[r.store_nr as usize].known_type = db_tp;
         self.database
             .store_mut(&r)
             .set_u32_raw(r.rec, 4, u32::from(db_tp));

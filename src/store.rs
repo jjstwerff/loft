@@ -83,6 +83,15 @@ pub struct Store {
     /// so a "Write to locked store" failure points directly at the
     /// locker rather than requiring `LOFT_LOG=locks` to re-trace.
     pub lock_origin: String,
+    /// P259 — type-id of the loft type whose root record lives at
+    /// `(rec=1, pos=8)` of this store.  `u16::MAX` when unknown
+    /// (raw stores not allocated through `database_named`).
+    /// Set by `Stores::set_known_type` after `database_named`
+    /// returns the freshly-claimed store_nr.  Read by
+    /// `Stores::free_named` to gate the cascade-free walk on
+    /// closure records (type name starts with `__closure_`) —
+    /// see commit 4 of the P259 fix.
+    pub known_type: u16,
 }
 
 impl Debug for Store {
@@ -156,6 +165,7 @@ impl Store {
             generation: 0,
             ref_count: 0,
             lock_origin: String::new(),
+            known_type: u16::MAX,
         };
         store.init(); // sets claims = {PRIMARY} and free_root = 0
         store
@@ -193,6 +203,7 @@ impl Store {
             last_op_at: 0,
             ref_count: 0,
             lock_origin: String::new(),
+            known_type: u16::MAX,
         };
         if init {
             store.init();
@@ -547,6 +558,7 @@ impl Store {
             last_op_at: 0,
             ref_count: self.ref_count,
             lock_origin: "clone_locked".to_string(),
+            known_type: self.known_type,
         }
     }
 
@@ -572,6 +584,7 @@ impl Store {
             last_op_at: 0,
             ref_count: self.ref_count,
             lock_origin: "clone_locked_for_worker".to_string(),
+            known_type: self.known_type,
         }
     }
 
@@ -598,6 +611,7 @@ impl Store {
             last_op_at: 0,
             ref_count: self.ref_count,
             lock_origin: "borrow_locked_for_light_worker".to_string(),
+            known_type: self.known_type,
         }
     }
 
