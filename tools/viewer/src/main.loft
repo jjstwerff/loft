@@ -278,12 +278,21 @@ fn md_render(src: text, current_rel: text) -> text {
     code_buf = "";
     code_lang = "";
     para_buf = "";
+    // List state: list_kind = "" (no list), "ul" or "ol".
+    // list_item_buf holds the in-progress item's text — flushed as
+    // <li>...</li> when the next item starts or the list closes.
+    list_kind = "";
+    list_item_buf = "";
+    // Table state: table_rows accumulates header + body lines while
+    // we're inside a table.  table_state = 0 idle, 1 saw header
+    // (waiting on separator), 2 in body.
+    table_state = 0;
+    table_header = "";
 
     lines = src.split('\n');
     for line in lines {
         if in_code {
             if line.starts_with("```") {
-                // Close fenced code block.
                 esc_code = escape(code_buf);
                 esc_lang = escape(code_lang);
                 if len(esc_lang) > 0 {
@@ -299,22 +308,91 @@ fn md_render(src: text, current_rel: text) -> text {
             }
             continue;
         }
+        // ── Table state machine ─────────────────────────────────
+        // table_state == 1: expecting the |---|---| separator
+        // table_state == 2: in table body — accumulate <tr> rows
+        if table_state == 1 {
+            if md_is_table_separator(line) {
+                // Confirm header — emit <table><thead> for the saved
+                // header line, then start body.
+                out += "<table><thead>{md_render_table_row(table_header, true, current_rel)}</thead><tbody>";
+                table_state = 2;
+                continue;
+            } else {
+                // Header without separator → not a table after all.
+                // Replay the saved header line as a paragraph.
+                table_state = 0;
+                if len(para_buf) > 0 {
+                    para_buf += " {table_header}";
+                } else {
+                    para_buf = table_header;
+                }
+                table_header = "";
+                // fall through to normal handling for `line`
+            }
+        } else if table_state == 2 {
+            if md_is_table_row(line) {
+                out += md_render_table_row(line, false, current_rel);
+                continue;
+            } else {
+                out += "</tbody></table>";
+                table_state = 0;
+                // fall through to normal handling for `line`
+            }
+        }
+        // ── List state machine ─────────────────────────────────
+        // Each list item is buffered in `list_item_buf` until a
+        // boundary closes it: next item, blank line, non-list non-
+        // indented line, or end-of-input.  Indented continuation
+        // lines (3+ leading spaces) append to the current item
+        // with a single space — same shape as Markdown spec.
+        if list_kind != "" {
+            ul_item = md_is_ul_item(line);
+            ol_item = md_is_ol_item(line);
+            if ul_item || ol_item {
+                // Flush previous item, start a new one.
+                out += "<li>{md_inline(list_item_buf, current_rel)}</li>";
+                list_item_buf = md_strip_list_marker(line);
+                continue;
+            }
+            if line == "" {
+                // Blank line — keep list open across the blank;
+                // the next list item will append.  But we must
+                // flush the in-progress item now so its content
+                // is already in the output if the list ends.
+                continue;
+            }
+            if line.starts_with(" ") {
+                // Indented continuation — strip leading whitespace
+                // and append to current item with a single space.
+                // Plan READMEs use 2-space indent; the spec usually
+                // demands 3+ but real-world docs aren't strict.
+                trimmed = line.trim();
+                if list_item_buf == "" {
+                    list_item_buf = trimmed;
+                } else {
+                    list_item_buf += " {trimmed}";
+                }
+                continue;
+            }
+            // Non-list, non-indented, non-blank — close the list.
+            out += "<li>{md_inline(list_item_buf, current_rel)}</li>";
+            list_item_buf = "";
+            out += "</{list_kind}>";
+            list_kind = "";
+            // fall through to normal handling for `line`
+        }
         if line.starts_with("```") {
-            // Open fenced code block; flush any pending paragraph.
             if len(para_buf) > 0 {
                 out += "<p>{md_inline(para_buf, current_rel)}</p>";
                 para_buf = "";
             }
-            // Lang tag is whatever follows the opening fence.
             n = len(line);
             if n > 3 { code_lang = line[3..n]; }
             in_code = true;
             continue;
         }
         if line.starts_with("<!--") {
-            // HTML comment line — skip.  Multi-line comments would
-            // need a separate state; the loft docs use single-line
-            // comments only.
             continue;
         }
         if line == "---" || line == "***" || line == "___" {
@@ -325,7 +403,6 @@ fn md_render(src: text, current_rel: text) -> text {
             out += "<hr>";
             continue;
         }
-        // Heading: ^# / ## / ### / #### / ##### / ######
         hlevel = md_heading_level(line);
         if hlevel > 0 {
             if len(para_buf) > 0 {
@@ -333,7 +410,6 @@ fn md_render(src: text, current_rel: text) -> text {
                 para_buf = "";
             }
             ln = len(line);
-            // Skip the leading hashes + one space.
             start = hlevel + 1;
             heading_text = "";
             if start < ln { heading_text = line[start..ln]; }
@@ -343,7 +419,37 @@ fn md_render(src: text, current_rel: text) -> text {
             out += "<h{hlevel} id=\"{esc_slug}\">{inline}</h{hlevel}>";
             continue;
         }
-        // Empty line ends paragraph.
+        // ── List opens? ────────────────────────────────────────
+        if md_is_ul_item(line) {
+            if len(para_buf) > 0 {
+                out += "<p>{md_inline(para_buf, current_rel)}</p>";
+                para_buf = "";
+            }
+            list_kind = "ul";
+            out += "<ul>";
+            list_item_buf = md_strip_list_marker(line);
+            continue;
+        }
+        if md_is_ol_item(line) {
+            if len(para_buf) > 0 {
+                out += "<p>{md_inline(para_buf, current_rel)}</p>";
+                para_buf = "";
+            }
+            list_kind = "ol";
+            out += "<ol>";
+            list_item_buf = md_strip_list_marker(line);
+            continue;
+        }
+        // ── Table opens? ───────────────────────────────────────
+        if md_is_table_row(line) {
+            if len(para_buf) > 0 {
+                out += "<p>{md_inline(para_buf, current_rel)}</p>";
+                para_buf = "";
+            }
+            table_header = line;
+            table_state = 1;
+            continue;
+        }
         if line == "" {
             if len(para_buf) > 0 {
                 out += "<p>{md_inline(para_buf, current_rel)}</p>";
@@ -351,20 +457,105 @@ fn md_render(src: text, current_rel: text) -> text {
             }
             continue;
         }
-        // Otherwise accumulate into the current paragraph.
         if len(para_buf) > 0 {
             para_buf += " {line}";
         } else {
             para_buf = line;
         }
     }
+    if list_kind != "" {
+        out += "<li>{md_inline(list_item_buf, current_rel)}</li>";
+        out += "</{list_kind}>";
+        list_item_buf = "";
+    }
+    if table_state == 2 { out += "</tbody></table>"; }
     if in_code {
-        // Unterminated fence — render what we have.
         esc_code = escape(code_buf);
         out += "<pre><code>{esc_code}</code></pre>";
     } else if len(para_buf) > 0 {
         out += "<p>{md_inline(para_buf, current_rel)}</p>";
     }
+    out
+}
+
+// True for `- item` / `* item` (one-space-after-marker).
+fn md_is_ul_item(line: text) -> boolean {
+    line.starts_with("- ") || line.starts_with("* ")
+}
+
+// True for `N. item` (one-or-more digits + period + space).
+fn md_is_ol_item(line: text) -> boolean {
+    n = line.len();
+    if n < 3 { return false; }
+    i = 0;
+    while i < n && line[i] >= '0' && line[i] <= '9' {
+        i = i + 1;
+    }
+    if i == 0 { return false; }
+    if i + 1 >= n { return false; }
+    line[i] == '.' && line[i + 1] == ' '
+}
+
+// Strip the `- ` / `* ` / `N. ` prefix from a list line.
+fn md_strip_list_marker(line: text) -> text {
+    n = line.len();
+    if line.starts_with("- ") || line.starts_with("* ") {
+        return line[2..n];
+    }
+    // Ordered: skip digits + `.` + ` `
+    i = 0;
+    while i < n && line[i] >= '0' && line[i] <= '9' {
+        i = i + 1;
+    }
+    if i + 1 < n && line[i] == '.' && line[i + 1] == ' ' {
+        return line[i + 2..n];
+    }
+    line
+}
+
+// True if the line starts with `|` and contains at least one more
+// `|` — minimum-shape detection for a table row.
+fn md_is_table_row(line: text) -> boolean {
+    if !line.starts_with("|") { return false; }
+    n = line.len();
+    if n < 3 { return false; }
+    i = 1;
+    while i < n {
+        if line[i] == '|' { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// True if the line is the table header/body separator: `|---|---|`
+// or `|:--|--:|` etc.  Cells must contain only `-`, `:`, and
+// optional spaces.
+fn md_is_table_separator(line: text) -> boolean {
+    if !md_is_table_row(line) { return false; }
+    n = line.len();
+    i = 0;
+    while i < n {
+        c = line[i];
+        if c != '|' && c != '-' && c != ':' && c != ' ' { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// Render one table row as `<tr><th>...</th>...</tr>` or
+// `<tr><td>...</td>...</tr>`.  Cells split on `|`; leading/trailing
+// empty cells (from leading/trailing `|`) are dropped.
+fn md_render_table_row(line: text, is_header: boolean, current_rel: text) -> text {
+    cells = line.split('|');
+    out = "<tr>";
+    tag = "td";
+    if is_header { tag = "th"; }
+    for cell in cells {
+        trimmed = cell.trim();
+        if trimmed == "" { continue; }
+        out += "<{tag}>{md_inline(trimmed, current_rel)}</{tag}>";
+    }
+    out += "</tr>";
     out
 }
 
