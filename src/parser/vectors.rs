@@ -1035,11 +1035,6 @@ impl Parser {
     fn synthesize_closure_record(&mut self, lambda_d_nr: u32, lambda_name: &str) {
         let record_name = lambda_name.replace("__lambda_", "__closure_");
         let captures = self.captured_names.clone();
-        // Snapshot the mutation flags BEFORE add_attribute (which
-        // doesn't mutate the lambda def's `mutated_captures` field
-        // but the borrow checker enforces a tighter window).
-        let mutated: Vec<String> = self.data.def(lambda_d_nr).mutated_captures.clone();
-        let is_mutated = |name: &str| mutated.iter().any(|m| m == name);
 
         if self.first_pass {
             // Create the struct definition in the first pass.
@@ -1058,11 +1053,29 @@ impl Parser {
                 // `src/store.rs:227`.
                 ensure_tuple_defs_for_capture(&mut self.data, &mut self.lexer, tp);
                 let attr_tp = match tp {
-                    Type::Reference(d, _) if is_mutated(name) => {
-                        // Plan-22 phase 02c — auto-Reference dep marker.
-                        // Activates phase 02b's share-by-DbRef storage
-                        // encoding for this attribute.  See doc-comment
-                        // above for sentinel semantics.
+                    Type::Reference(d, _) => {
+                        // P260 (2026-05-13): ALL Reference captures
+                        // store as 12B Parts::DbRef pointing at the
+                        // live original (typedef.rs:529 arm fires on
+                        // non-empty deps).  Inline-byte storage was
+                        // wrong even for read-only captures — the
+                        // closure read sees a stale snapshot when the
+                        // outer scope mutates a non-scalar field of
+                        // the source struct, AND closure-side writes
+                        // to compound fields (vector field, nested
+                        // struct, vector element) silently no-op
+                        // against the inline copy.  Originally this
+                        // arm was gated on `is_mutated(name)` (phase
+                        // 02c) but the gate is wrong: storage
+                        // encoding is an architectural decision
+                        // ("don't deep-copy a possibly-large struct
+                        // into a closure record"), not a property of
+                        // whether THIS closure mutates the capture.
+                        // The auto-Reference marker (vec![u16::MAX])
+                        // is only consumed by `typedef.rs::fill_database`
+                        // — closure records are the sole producer, so
+                        // this doesn't affect user-defined struct
+                        // fields.
                         Type::Reference(*d, vec![u16::MAX])
                     }
                     _ => tp.clone(),

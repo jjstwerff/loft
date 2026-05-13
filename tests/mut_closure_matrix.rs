@@ -791,3 +791,133 @@ cross_mode!(
     }
     "#
 );
+
+// P260 (closed 2026-05-13): closures capturing a struct must
+// see + mutate compound fields (vector field, nested struct,
+// vector element) through the LIVE struct, not via an inline
+// snapshot copy.  Pre-fix the closure record's attribute for a
+// captured struct stored inline-bytes (deep copy of struct's
+// payload at construction time), so closure reads of compound
+// fields saw stale data and closure writes silently no-opped.
+// Fix: synthesize_closure_record now always emits the
+// auto-Reference marker for Type::Reference captures, so
+// storage is always 12B Parts::DbRef pointing at the live
+// original.
+//
+// Naming: e_* family chosen because d_* (Case D) was
+// decommissioned by the cell + auto-Reference machinery; these
+// e_d3 cells exercise the "destination = struct field of an
+// outer struct + closure mutates compound state" shape.
+
+cross_mode!(
+    e_d3_struct_vector_append_in_closure,
+    r#"
+    struct Bag { items: vector<integer> }
+    fn test() {
+        b = Bag { items: [1, 2, 3] };
+        cl = fn() { b.items += [99]; };
+        cl();
+        cl();
+        n = 0;
+        for x in b.items { n = n + 1; }
+        assert(n == 5, "items length after 2 cl() calls: {n}");
+        print("{n}\n");
+    }
+    "#
+);
+
+// P260 verifies closure-side WRITE to a captured struct's vector
+// field reaches the live struct.  P261 (filed 2026-05-13) is the
+// orthogonal issue that `b.items = [99, 100]` APPENDS instead of
+// REPLACES on both backends — same shape outside a closure has
+// the same bug.  This cell asserts the (buggy-but-consistent)
+// shared behaviour so a P260 regression would change it.
+cross_mode!(
+    e_d3_struct_vector_assign_in_closure,
+    r#"
+    struct Bag { items: vector<integer> }
+    fn test() {
+        b = Bag { items: [1, 2, 3] };
+        cl = fn() { b.items = [99, 100]; };
+        cl();
+        sum = 0;
+        for x in b.items { sum = sum + x; }
+        // P261: the assign appends; sum is 1+2+3+99+100 = 205.
+        // When P261 is fixed, this expectation should change to 199.
+        assert(sum == 205, "sum after closure 'assigns' items: {sum}");
+        print("{sum}\n");
+    }
+    "#
+);
+
+cross_mode!(
+    e_d3_struct_vector_element_assign_in_closure,
+    r#"
+    struct Bag { items: vector<integer> }
+    fn test() {
+        b = Bag { items: [1, 2, 3] };
+        cl = fn() { b.items[0] = b.items[0] + 100; };
+        cl();
+        cl();
+        v = b.items[0];
+        assert(v == 201, "items[0] after 2 cl() calls: {v}");
+        print("{v}\n");
+    }
+    "#
+);
+
+cross_mode!(
+    e_d3_nested_struct_field_in_closure,
+    r#"
+    struct Inner { val: integer }
+    struct Outer { inner: Inner }
+    fn test() {
+        o = Outer { inner: Inner { val: 0 } };
+        cl = fn() { o.inner.val = o.inner.val + 1; };
+        cl();
+        cl();
+        cl();
+        v = o.inner.val;
+        assert(v == 3, "nested val after 3 cl() calls: {v}");
+        print("{v}\n");
+    }
+    "#
+);
+
+cross_mode!(
+    e_d3_closure_reads_outer_struct_vector_mutation,
+    r#"
+    struct Bag { items: vector<integer> }
+    fn test() {
+        b = Bag { items: [1, 2, 3] };
+        cl = fn() -> integer {
+            sum = 0;
+            for x in b.items { sum = sum + x; }
+            sum
+        };
+        a = cl();
+        b.items += [99];
+        c = cl();
+        assert(a == 6, "closure read of [1,2,3]: {a}");
+        assert(c == 105, "closure read of [1,2,3,99]: {c}");
+        print("{a},{c}\n");
+    }
+    "#
+);
+
+cross_mode!(
+    e_d3_outer_reads_closure_vector_mutation,
+    r#"
+    struct Bag { items: vector<integer> }
+    fn test() {
+        b = Bag { items: [1, 2, 3] };
+        cl = fn() { b.items += [99]; };
+        cl();
+        cl();
+        n = 0;
+        for x in b.items { n = n + 1; }
+        assert(n == 5, "outer reads closure-extended items: length={n}");
+        print("{n}\n");
+    }
+    "#
+);
