@@ -77,7 +77,11 @@ indices.
 Open issues now: **P229b** (Windows multiplayer flake) +
 **P262** (native codegen `&` wrap on inline text calls,
 plan-35 phase 01 driver) + **P263** (lib/web + lib/server
-duplicate native fn defs, plan-35 phase 01 driver).
+duplicate native fn defs, plan-35 phase 01 driver) +
+**P264** (`json_parse` mangles non-ASCII strings — each
+input UTF-8 byte becomes its own codepoint, surfaced
+2026-05-13 by plan-37 phase 04a viewer rendering tag
+contexts that contain `→`).
 The plan-22 trio closed 2026-05-13:
 - **P259** (Plan-22 Case C multi-instance crash) — OpIncRc +
   cascade-free chain.
@@ -101,6 +105,23 @@ The plan-22 trio closed 2026-05-13:
   loft.toml depends on lib/web (transitive).  Workaround:
   ship via `loft --interpret` until resolved.
 
+**Surfaced 2026-05-13 by plan-37 phase 04a:**
+- **P264** — `json_parse` decodes JString payloads byte-by-byte:
+  each input UTF-8 byte (e.g., `0xE2`, `0x86`, `0x92` for `→`)
+  becomes a separate codepoint (U+00E2, U+0086, U+0092), each
+  re-encoded as 2-byte UTF-8 (`c3 a2`, `c2 86`, `c2 92`).
+  Net: 3 bytes in → 6 bytes out, displays as `âââ` in the
+  browser.  Direct string literals (`s = "→"`) round-trip
+  correctly; the bug is JSON-parser-specific.  Reproducer
+  (3-line loft program reading a JSON file containing `→`):
+  see [§ P264 below](#p264-json_parse-mangles-non-ascii-strings).
+  Surfaced by the viewer's `/tag/<tag>` route rendering ref
+  contexts pulled from `index/tags.json` (many of which contain
+  `→` for state transitions).  Workaround: pre-process the
+  JSON file with `iconv` / `sed` to strip non-ASCII before
+  parsing, OR consume the raw text via `f.content()` directly
+  when full byte-fidelity is required.
+
 **No high-severity bugs outside the generics + tuples cluster.**
 Everything else from the older P-series (P198–P237 plus most of
 P242–P249) closed during plan-09 / plan-14 work.  Phase 4 of
@@ -113,6 +134,7 @@ introducing new open P-issues.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
+| 264 | `json_parse` mangles non-ASCII strings — each input UTF-8 byte becomes its own codepoint, then re-encodes as 2-byte UTF-8.  3-byte `→` becomes 6-byte `âââ`.  Surfaced 2026-05-13 by plan-37 phase 04a viewer rendering `index/tags.json` ref contexts containing `→`.  Direct text literals round-trip fine; the bug is in the JSON parser's JString decode path.  Reproducer in `default/06_json.loft`-side fix: have the parser walk codepoints, not bytes, when materialising the JString payload — or store the raw byte slice and skip the per-byte recode entirely. | Medium | Strip non-ASCII from JSON inputs (`iconv -c -t ASCII//TRANSLIT`) or read the raw text via `f.content()` when byte-fidelity matters. |
 | 198 | `tests/scripts/95-alias-copy.loft` leaked Database 3 + ran with aliased ac_orig/ac_copy in native.  **Closed (2026-05-01)**: scope analysis (`scan_set`) and native deep-copy emission (`output_set`) both pattern-matched `Value::Call(...)` / `Value::Var(...)` without unwrapping the parser's `Value::Span` wrapper, so the deep-copy and `make_independent` (deps-clearing) paths fell through.  Fix: bind unspanned RHS once at top of each function and pattern-match against that.  Also closes `95_alias_copy` native run failure. | High (closed) | n/a — fix landed in commit 30b01ce. |
 | 199 | Native codegen E0499/E0502 when nested calls borrow `&mut Stores` simultaneously.  **Closed (2026-05-01)** for the borrow-conflict class.  Native ABI changed from `&mut Stores` to `&UnsafeCell<Stores>` (PR1), Op-stub helpers in `src/codegen_runtime.rs` follow the new ABI (Track 1), and `OpSet*` field-write templates lift `@val` into a let-binding before `store_mut(...)` (Track 2).  Result: `native_dir` 7/30 → 28/30; canonical reproducer `native_tuple_script` PASSES; 0 interpreter regressions.  Remaining `19_threading` failure tracked as P202 (separate feature gap — `n_parallel_queue` family has no native implementation, distinct from the borrow-conflict issue P199 addressed). | Medium (closed) | Hoist the inner call into a temporary: `let r = add_pair(p); assert(r == 30);` makes the second borrow fall outside `n_assert`'s argument list — only relevant for templates / Op-stubs not yet covered by this fix. |
 | 202 | Native codegen for `for ... par(...)` for-loops calls `n_parallel_queue` (and `_text` / `_ref` variants) which only existed in the bytecode interpreter.  **Closed (2026-05-02)** by plan-09 phase 06 — `n_parallel_queue_*_native` runtime fns + `n_parallel_buf_get_*` / `_drop_*` per-row accessors added to `src/codegen_runtime.rs`; `ParallelQueueEmitter` + `ParallelBufRenameEmitter` registered in `src/generation/ops/parallel.rs`; reachability extended in `src/generation/mod.rs` to pull worker fns from queue d_nr args.  Native suite: 87/93 → 89/93 + native_dir 29/30 → 30/30 (closes 19_threading + 22_threading + 40_par_ref_return).  Pinned by `p202_parallel_queue_*` regression tests in `tests/codegen_emitter.rs`. | Medium (closed) | n/a — fix lands in `src/codegen_runtime.rs` + `src/generation/ops/parallel.rs` + `src/generation/mod.rs`. |

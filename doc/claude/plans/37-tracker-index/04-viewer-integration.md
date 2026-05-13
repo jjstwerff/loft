@@ -5,9 +5,43 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 04 — Plan-35 viewer integration
 
-**Status:** Open (depends on plan-35 phase 03 + 08)
+**Status:**
+- **04a (`/tag/<tag>` route + missing-index banner)** — Shipped 2026-05-13
+- **04b (welcome landing + per-doc sidebar)** — Open (still depends on plan-35 phase 03 + 08)
 
-## Goal
+## What 04a shipped
+
+A self-contained slice that the viewer could host without
+waiting on plan-35:
+
+- `GET /tag/<bare_name>` — reads `index/tags.json` via
+  `json_parse`, surfaces BOTH the canonical (`@P259`) and
+  legacy (`legacy:P259`) buckets together so the page is the
+  full reference list during the migration.
+- "No index" banner when `index/tags.json` is absent (instructs
+  the user to run `make index`); viewer doesn't crash.
+- "No references found" message when the tag has zero matches
+  in either bucket.
+- Landing page (`/`) gains an example-tag section pointing at
+  `/tag/P259`, `/tag/P262`, `/tag/PLAN35`, `/tag/PLAN37`.
+
+URL convention is `/tag/<bare>` (`/tag/P259`, `/tag/PLAN35-01`).
+The page renders both `@P259` and `legacy:P259` together since
+the user's mental model is "show me everything that mentions
+P259," not "discriminate between the two indexer keys."
+
+**Pre-existing bug filed during 04a work**: P264 — `json_parse`
+mangles non-ASCII strings (3-byte `→` becomes 6-byte `âââ` due
+to byte-by-byte codepoint widening in the JString decoder).
+Affects the rendered context strings on tag pages.  Reproducer
+saved to `/tmp/p_followups/p264_json_utf8.sh`.  Workaround for
+the viewer is none — the corruption happens upstream of any
+text the viewer can intercept.  Filed per the bug-filing policy
+in CLAUDE.md.
+
+## What 04b is still waiting on
+
+## Goal (04b — original full plan)
 
 Wire the loft-view binary to read `index/tags.json` and surface
 tag references as cross-doc navigation.  The `/welcome`

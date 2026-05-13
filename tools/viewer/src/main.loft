@@ -63,6 +63,10 @@ fn route(req: server::Request) {
     } else if p.starts_with("/file/") {
         rel = p[6..len(p)];
         respond_file(req, rel);
+    } else if p.starts_with("/tag/") {
+        tag = p[5..len(p)];
+        body = page_tag(tag);
+        req.respond_html(body);
     } else {
         serve_404_page(req, p);
     }
@@ -91,11 +95,10 @@ fn escape(s: text) -> text {
 // ── Page templates ───────────────────────────────────────────
 
 fn page_landing() -> text {
-    body = "<h1>loft-view <small>phase 01</small></h1>";
+    body = "<h1>loft-view <small>phase 02 + 04a</small></h1>";
     body += "<p>Branch-aware doc + code review viewer.";
-    body += " Phase 04 will add the git-state dashboard;";
-    body += " phase 03 will render markdown.";
-    body += " Today: file tree + raw file viewing.</p>";
+    body += " Phase 04 (git dashboard) + phase 03 (markdown) still pending;";
+    body += " phase 04a (tracker-tag references) shipped.</p>";
     body += "<h2>Browse the project</h2>";
     body += "<ul>";
     body += "<li><a href=\"/tree/doc\">doc/</a></li>";
@@ -108,6 +111,12 @@ fn page_landing() -> text {
     body += "</ul>";
     body += "<p><a href=\"/file/README.md\">README.md</a> ";
     body += "(<a href=\"/raw/README.md\">raw</a>)</p>";
+    body += "<h2>Tracker tags</h2>";
+    body += "<p>Lookup form: <code>/tag/&lt;bare-name&gt;</code>.  Examples:";
+    body += " <a href=\"/tag/P259\">/tag/P259</a>,";
+    body += " <a href=\"/tag/P262\">/tag/P262</a>,";
+    body += " <a href=\"/tag/PLAN35\">/tag/PLAN35</a>,";
+    body += " <a href=\"/tag/PLAN37\">/tag/PLAN37</a>.</p>";
     page("loft-view", body)
 }
 
@@ -303,6 +312,86 @@ fn escape_with_tabs(s: text) -> text {
     out
 }
 
+// ── /tag/<bare_name> — phase 04a: tracker-tag references ──
+//
+// Reads index/tags.json (produced by `make index`) and lists every
+// reference to a tag.  URL form is `/tag/P259` or `/tag/PLAN35-01`
+// (bare name); the page surfaces BOTH the `@P259` and the legacy
+// `legacy:P259` buckets together so the user sees the full footprint
+// during the migration.
+
+fn page_tag(tag: text) -> text {
+    f = file("index/tags.json");
+    if f.format == Format.NotExists {
+        body = "<h1>Tracker tag <code>{escape(tag)}</code></h1>";
+        body += "<p class=\"warn\">No index found at <code>index/tags.json</code>.";
+        body += " Run <code>make index</code> from the repo root to build it.</p>";
+        body += "<p><a href=\"/\">back to landing</a></p>";
+        title = "@{tag}";
+        return page(title, body);
+    }
+
+    raw = f.content();
+    root = json_parse(raw);
+
+    // Two buckets: @-prefixed (canonical) + legacy (bare-name).  Both
+    // get rendered together so the page is the full reference list
+    // regardless of which form authors used in any given file.
+    at_key = "@{tag}";
+    legacy_key = "legacy:{tag}";
+    at_arr = root.field(at_key);
+    legacy_arr = root.field(legacy_key);
+
+    at_count = 0;
+    if at_arr.kind() == "JArray" { at_count = at_arr.len(); }
+    legacy_count = 0;
+    if legacy_arr.kind() == "JArray" { legacy_count = legacy_arr.len(); }
+    total = at_count + legacy_count;
+
+    body = "<h1>Tracker tag <code>{escape(tag)}</code> <small>{total} references</small></h1>";
+
+    if total == 0 {
+        body += "<p>No references found.</p>";
+        body += "<p><a href=\"/\">back to landing</a></p>";
+        title = "@{tag}";
+        return page(title, body);
+    }
+
+    if at_count > 0 {
+        body += "<h2><code>@{escape(tag)}</code> (canonical) — {at_count}</h2>";
+        body += render_refs(at_arr);
+    }
+    if legacy_count > 0 {
+        body += "<h2><code>{escape(tag)}</code> (legacy bare-name) — {legacy_count}</h2>";
+        body += render_refs(legacy_arr);
+    }
+
+    body += "<p><a href=\"/\">back to landing</a></p>";
+    title = "@{tag}";
+    page(title, body)
+}
+
+// Render a JArray of {file, line, context} entries as <ul>.  Each
+// entry links to /file/<path>#L<line> so the line viewer scrolls
+// directly to the cited line (phase 02 emits the L<n> anchors).
+fn render_refs(arr: JsonValue) -> text {
+    out = "<ul class=\"refs\">";
+    n = arr.len();
+    i = 0;
+    while i < n {
+        ref_v = arr.item(i);
+        file_path = ref_v.field("file").as_text();
+        line_n = ref_v.field("line").as_long();
+        ctx = ref_v.field("context").as_text();
+        esc_file = escape(file_path);
+        esc_ctx = escape(ctx);
+        out += "<li><a href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a><br><code>{esc_ctx}</code></li>";
+        i = i + 1;
+    }
+    out += "</ul>";
+    out
+}
+
 fn serve_404_page(req: server::Request, p: text) {
     body = page_404(p);
     req.respond_typed(404, body, "text/html; charset=utf-8");
@@ -415,6 +504,10 @@ a.line:hover{{background:#eef}}
 a.line:target{{background:#ffd}}
 a.line .lineno{{display:inline-block;width:3.5em;text-align:right;padding-right:1em;color:#999;user-select:none}}
 a.line .src{{color:inherit}}
+ul.refs{{list-style:none;padding:0}}
+ul.refs li{{padding:.4rem 0;border-bottom:1px solid #eee}}
+ul.refs code{{font-size:.85em}}
+.warn{{background:#ffe;border-left:3px solid #cc8;padding:.4rem .6rem;color:#553}}
 @media (prefers-color-scheme: dark){{
   body{{background:#1a1a1a;color:#ddd}}
   header,footer{{border-color:#444}}
@@ -430,5 +523,7 @@ a.line .src{{color:inherit}}
   a.line:hover{{background:#22335a}}
   a.line:target{{background:#604}}
   a.line .lineno{{color:#666}}
+  ul.refs li{{border-color:#333}}
+  .warn{{background:#332;border-left-color:#aa5;color:#cc8}}
 }}
 `;
