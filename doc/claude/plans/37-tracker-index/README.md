@@ -184,9 +184,9 @@ phases, beyond the "max 3 active plans" cap's spirit.
 
 ## Cross-references
 
-- [`plans/35-branch-review-viewer/README.md`](../35-branch-review-viewer/README.md)
+- [`plans/finished/35-branch-review-viewer/README.md`](../finished/35-branch-review-viewer/README.md)
   — the viewer this plan integrates with.
-- [`plans/35-branch-review-viewer/README.md § Stretches`](../35-branch-review-viewer/README.md#stretches-post-v1-listed-for-traceability)
+- [`plans/finished/35-branch-review-viewer/README.md § Stretches`](../finished/35-branch-review-viewer/README.md#stretches-post-v1-listed-for-traceability)
   — phase 35-08 newcomer landing depends on this plan's
   data shape.
 - [`PROBLEMS.md`](../../PROBLEMS.md) — primary source for

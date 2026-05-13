@@ -41,10 +41,8 @@ categories below for full detail.
 | Pri | Gate | Status | Source |
 |---|---|---|---|
 | 1 | **Plan-07 phase 5/6/7** — error-message closeout (suggestions polish + per-site type-mismatch wording + closeout doc).  Friends' first WTF moment is a type error; tighter messages compound into trust. | Phases 5/6/7 open; phase 6.1 (Type::name exhaustive) shipped 2026-05-13 | [`plans/07-error-messages/`](plans/07-error-messages/) |
-| 2 | **Plan-35 phases 00-03** — branch review viewer through "renders markdown + code".  Drives friend onboarding (browse the project + follow cross-doc links instead of grepping 20+ files).  The viewer is the navigation surface friends need to grasp loft's state. | Phases 00 + 01 + 02 shipped 2026-05-13 (interp-mode); phase 03 in flight | [`plans/35-branch-review-viewer/`](plans/35-branch-review-viewer/) |
-| 2 | **Plan-37 — tracker-tag indexer** — `@P-id` / `@PLAN-id` convention + scanner + CLI + viewer integration.  Replaces grep-based tag lookups with O(1) JSON queries.  Shrinks Claude per-task token usage; feeds plan-35 phase 08 newcomer landing's status buckets. | Phase 00 (scanner + Makefile + CLAUDE.md docs) shipped 2026-05-13 | [`plans/37-tracker-index/`](plans/37-tracker-index/) |
+| 2 | **Plan-37 — tracker-tag indexer** — `@P-id` / `@PLAN-id` convention + scanner + CLI + viewer integration.  Replaces grep-based tag lookups with O(1) JSON queries.  Shrinks Claude per-task token usage; feeds plan-35 phase 08 newcomer landing's status buckets. | Phases 1-5 shipped 2026-05-13; phases 0, 6-9 open | [`plans/37-tracker-index/`](plans/37-tracker-index/) |
 | 3 | **DX.2 — CI: package + native tests** — last open item in plan-27 (DX); ship + close the plan. | Open | [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) |
-| 4 | **Plan-35 phase 06 — proper GFM tables** — the marquee feature; loft docs are table-heavy and current tools render them poorly.  Tier-2 polish for friends browsing PROBLEMS.md / ROADMAP.md / plan tables. | Designed; queued after phases 00-05 | [`plans/35-branch-review-viewer/06-tables-design.md`](plans/35-branch-review-viewer/06-tables-design.md) |
 
 What ships ALREADY for friend-readiness (don't reblock on these):
 
@@ -355,7 +353,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/07-error-messages/`](plans/07-error-messages/) | M | — | `file:line:col` + caret + suggestions across parser / type / runtime / native |
-| [`plans/35-branch-review-viewer/`](plans/35-branch-review-viewer/) | M | — | Frozen loft binary; serves branch-aware doc + code review dashboard via SSH-forwarded HTTP.  Drives `lib/server` + plan-22 closures + 0.8.3 coroutines |
+| [`plans/finished/35-branch-review-viewer/`](plans/finished/35-branch-review-viewer/) | M | **Closed 2026-05-14** | Frozen loft binary serves branch-aware doc + code review dashboard via SSH-forwarded HTTP.  Shipped: dashboard / file render (markdown via new `lib/markdown` lib + line-numbered code) / diff + commit views with hunk colouring / `[Rendered ¦ Diff vs main]` toggle / `/tag/<bare>` tracker-tag references / `@P-id` autolinks in body text / image refs through `/raw/`.  Drove the seven-bug native arc P262→P269 closure as collateral. |
 | [`plans/37-tracker-index/`](plans/37-tracker-index/) | S | — | `@P-id` / `@PLAN-id` tag convention + scanner + CLI + viewer integration.  Tier-1 lookup tool for both Claude and humans |
 | [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) | XS-S per item | — | SH.* / DX.* / NT.* — DX grab-bag (some shipped) |
 | [`plans/future/08-repl-and-introspection/`](plans/future/08-repl-and-introspection/) | M | — | `loft>` interactive prompt + IR/Rust/slot-table CLI |

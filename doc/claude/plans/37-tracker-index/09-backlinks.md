@@ -55,7 +55,7 @@ extractor pass alongside `@P-id` + `@PLAN-id`:
     "doc/claude/plans/finished/22-mutable-closures/README.md": [
       {"file": "doc/claude/CHANGELOG_TECHNICAL.md", "line": 23,
        "anchor": null, "context": "..."},
-      {"file": "doc/claude/plans/35-branch-review-viewer/README.md",
+      {"file": "doc/claude/plans/finished/35-branch-review-viewer/README.md",
        "line": 99, "anchor": "drivers", "context": "..."}
     ],
     "doc/claude/PROBLEMS.md": [ ... ]
@@ -80,7 +80,7 @@ $ ./scripts/idx incoming:doc/claude/plans/finished/22-mutable-closures/README.md
   {"file": "doc/claude/CHANGELOG_TECHNICAL.md", "line": 23,
    "anchor": null,
    "context": "  - 22-mutable-closures (2026-05-13) — closures novices expect"},
-  {"file": "doc/claude/plans/35-branch-review-viewer/README.md", "line": 99,
+  {"file": "doc/claude/plans/finished/35-branch-review-viewer/README.md", "line": 99,
    "anchor": "drivers",
    "context": "...uses [plan-22 closures](../finished/22-mutable-closures/README.md#drivers)..."},
   ...
@@ -179,4 +179,4 @@ applied to the `links` bucket.
 - [Phase 01 — CLI](01-cli-query.md) — extended here with `incoming:` form
 - [Phase 03 — broken-tag validator](03-broken-validator.md) — extended here to also flag broken file links
 - [Phase 04 — viewer integration](04-viewer-integration.md) — first major consumer of the `links` bucket
-- [Plan-35 phase 03](../35-branch-review-viewer/03-markdown-minimal.md) — markdown rendering uses the same link-resolution logic (link rewrite to `/file/<resolved>`)
+- [Plan-35 phase 03](../finished/35-branch-review-viewer/03-markdown-minimal.md) — markdown rendering uses the same link-resolution logic (link rewrite to `/file/<resolved>`)

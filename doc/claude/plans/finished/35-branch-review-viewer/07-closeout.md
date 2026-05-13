@@ -216,6 +216,6 @@ test result: ok. <N> passed; 0 failed; ...
 ## Cross-references
 
 - [README § Acceptance](README.md#acceptance--full-plan)
-- [Phase 22 closeout pattern](../finished/22-mutable-closures/06-closeout.md) — the template this phase follows
+- [Phase 22 closeout pattern](../22-mutable-closures/06-closeout.md) — the template this phase follows
 - [`doc/claude/DEBUG.md`](../../DEBUG.md) — destination for the user-facing usage section
 - [`CLAUDE.md`](../../../../CLAUDE.md) — destination for the key-command entry

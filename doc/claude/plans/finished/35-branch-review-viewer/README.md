@@ -585,7 +585,7 @@ freshness target.
 
 - [`lib/server/src/server.loft`](../../../../lib/server/src/server.loft)
   — the HTTP / WebSocket primitives the viewer depends on.
-- [`plans/finished/22-mutable-closures/`](../finished/22-mutable-closures/README.md)
+- [`plans/finished/22-mutable-closures/`](../22-mutable-closures/README.md)
   — closures are the natural shape for route handlers; viewer
   is the first non-test consumer.
 - [`lib_plans/future/08-server/README.md`](../../lib_plans/future/08-server/README.md)

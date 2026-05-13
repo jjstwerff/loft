@@ -23,6 +23,20 @@ across 40 cells covering 5 element types (scalars, text, nested,
 closure, struct reference) and 3 storage destinations (local,
 direct stack, struct field).
 
+### Branch review viewer (`make view`)
+
+`make view` launches a browser-accessible doc + code review surface for
+the current loft branch.  Dashboard shows files changed vs `main`,
+recent commits, uncommitted state — all with status badges.  Click any
+file for a rendered view (`.md` rendered via the new `lib/markdown`
+library, others as line-numbered code), toggle between
+`Rendered ¦ Diff vs main`, click any commit for the per-file diff,
+click any tracker tag (`@P-id` / `@PLAN-id`) for cross-doc references.
+SSH-port-forward 8765 from the host.  Built entirely in loft + a small
+bash wrapper for `git` calls; no Python, no markdown library, no
+syntax-highlighter dep.  See
+[doc/claude/DEBUG.md § Branch review viewer](doc/claude/DEBUG.md#branch-review-viewer-make-view).
+
 ## 0.8.4 — 2026-04-24 — Awesome Brick Buster
 
 This release focuses on **the web**: your loft programs can now fetch

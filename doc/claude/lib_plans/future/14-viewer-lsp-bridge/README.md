@@ -246,7 +246,7 @@ phases 3-5 each light up one capability slice.
   — the loft-lsp SERVER side (LSP.1 / LSP.2 / LSP.3 / DAP);
   this plan is the CLIENT side and consumes it for `.loft`
   files in phase 03.
-- [`plans/35-branch-review-viewer/README.md`](../../plans/35-branch-review-viewer/README.md)
+- [`plans/finished/35-branch-review-viewer/README.md`](../../plans/finished/35-branch-review-viewer/README.md)
   — the viewer this plan extends.  The viewer's layout
   (sidebar, breadcrumbs, code rendering) is the host for the
   new LSP-driven UI elements.

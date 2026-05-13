@@ -564,6 +564,108 @@ codegen.rs.  More targeted log modes that focus on specific
 subsystems (locks / types / slots / captures) reduce the
 cognitive load per debug session.
 
+## Branch review viewer (`make view`)
+
+A loft-script binary that serves a branch-aware doc + code review
+dashboard from a browser.  Useful for reviewing in-flight work
+without scrolling through chat snippets.  Built by plan-35 (closed
+2026-05-14); lives in `tools/viewer/` + `lib/markdown/`.
+
+### Usage
+
+In the VM:
+
+```bash
+make view-build          # one-time, when updating the host loft binary
+make view                # refreshes git state + starts server on 8765
+make view-refresh        # refreshes git state without restarting the server
+```
+
+From the host:
+
+```bash
+ssh -L 8765:localhost:8765 vm-user@vm-host
+```
+
+Open `http://localhost:8765/` in a browser.
+
+### Routes
+
+| Path | Renders |
+|---|---|
+| `/` | Branch dashboard — branch name + ahead/behind vs `main` + HEAD sha/msg, changed-files list, uncommitted-files list, last 20 commits.  Status badges (M/A/D/R) on every changed file. |
+| `/file/<path>` | File view.  `.md` files render via `lib/markdown` (full subset: ATX + setext headings with GH-slug ids, lists with continuation merging, GFM tables with alignment, fenced code, inline formatting, links with relative-path resolution + title attribute, images via `/raw/`, autolinks `<https://…>` / `<email>`, `@P-id` / `@PLAN-id` autolinks, blockquotes, task lists, strikethrough, backslash escapes).  Other files render line-numbered with `<a id="L42">` anchors. |
+| `/diff/<path>` | Per-file unified diff vs `main` with hunk colouring (green +, red −, blue hunk header). |
+| `/commit/<sha>` | Commit message + per-file diffs via the same hunk-coloured renderer.  Last 20 commits captured. |
+| `/tag/<bare>` | Every tracker-tag reference for a P-id or PLAN-id (e.g., `/tag/P259` lists all references to `@P259` and `legacy:P259`).  Reads `index/tags.json` built by `make index` (plan-37). |
+| `/tree/<path>` | Directory listing; sub-dirs are clickable. |
+| `/raw/<path>` | Raw file bytes (`text/plain`).  Used by markdown to serve relative image refs. |
+
+### File-page view toggle
+
+Every `/file/<path>` page shows a `[Rendered ¦ Diff vs main]`
+toggle in the top-right.  When the file is unchanged on the
+current branch (no per-file diff), the "Diff vs main" link
+hides — only "Rendered" stays.
+
+### Architecture
+
+| Layer | Where | Purpose |
+|---|---|---|
+| Server + routes + page templates | `tools/viewer/src/main.loft` | Loft script — HTTP server via `lib/server`, route dispatch, dashboard / tag-page / commit-page / diff-page / file-page rendering |
+| Markdown rendering | `lib/markdown/` | Standalone loft library — single-file `src/markdown.loft`, comprehensive `tests/01-render.loft` |
+| Git state | `tools/viewer/state/*.json` + `state/diffs/*.diff` + `state/commits/*.diff` | Filled by `tools/viewer/refresh.sh` (uses `git` + `jq`) |
+| Tracker-tag index | `index/tags.json` | Filled by `make index` (plan-37) |
+| Static CSS | embedded in `main.loft::BASE_CSS` | Light + dark via `prefers-color-scheme` |
+
+### Dependencies
+
+- **`git`** — used by `refresh.sh` to dump branch state
+- **`jq`** — used by `refresh.sh` to safely emit JSON
+- **The host loft binary** at `target/release/loft` — built via
+  `make view-build`; the viewer is a loft script interpreted
+  by it (or `--native`-compiled via the same binary)
+
+No Python, no markdown lib, no syntax-highlighter dep, no
+template engine.  All rendering is loft-native through `lib/markdown`
++ string concatenation in `main.loft`.
+
+### Frozen-binary contract
+
+The viewer source (`tools/viewer/src/main.loft`) and the host
+loft binary it runs against form a deliberately **frozen pair**.
+`make view-build` rebuilds the host binary; `make view` runs
+the existing one.  This means the viewer keeps working through
+loft refactors — refresh by running `make view-build` against
+a known-good loft commit.
+
+### Backends
+
+The viewer runs under **both `--interpret` and `--native`**
+(since the seven-bug native arc P262→P269 closed 2026-05-13).
+`make view` invokes `--interpret` by default for fast iteration;
+edit the Makefile target to swap in `--native` for the faster
+steady-state runtime.
+
+### Troubleshooting
+
+- **Dashboard shows "No git state. Run `make view-refresh`"** —
+  the refresh script hasn't built `tools/viewer/state/*.json`
+  yet.  Run `make view-refresh`.
+- **`/tag/<bare>` shows "No index found"** — `index/tags.json`
+  is missing.  Run `make index`.
+- **`/diff/<path>` shows "No diff captured"** — the file isn't
+  on the changed-files list (no diff vs `main`), OR refresh.sh
+  capped at 100 changed files.  Run `make view-refresh`.
+- **`/commit/<sha>` shows "No diff captured"** — refresh.sh
+  only keeps the last 20 commits.  For older commits, run
+  `git show <sha>` directly.
+
+### See also
+
+- [`plans/finished/35-branch-review-viewer/README.md`](plans/finished/35-branch-review-viewer/README.md) — the full design + per-phase build log
+- [`lib/markdown/loft.toml`](../../lib/markdown/loft.toml) — the rendering library
+
 ---
 
 ## See also

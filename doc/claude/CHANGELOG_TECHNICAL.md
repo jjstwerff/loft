@@ -9,6 +9,84 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Plan-35 (branch-review viewer) closed 2026-05-14
+
+Plan-35 ran 2026-05-13 → 2026-05-14.  Goal: a browser-accessible
+doc + code review surface for the current loft branch, served by a
+loft-script binary against the host loft binary as a frozen pair.
+
+**Per-phase summary** (all shipped 2026-05-13 unless noted):
+
+- **00** Skeleton + binary build.  `tools/viewer/` package layout,
+  `make view-build` + `make view` + `make view-refresh` Makefile
+  targets, `BUILD_NOTES.md` records the loft commit the viewer was
+  built against.
+- **01** HTTP routes.  Server skeleton via `lib/server`, `/`, `/tree/<path>`,
+  `/raw/<path>`, `/static/style.css`, 404 fallback.  Originally
+  blocked from `--native` by P262 + P263; fixed in the seven-bug arc.
+- **02** Code-file rendering.  `/file/<path>` renders any text file as
+  line-numbered HTML with `<a id="L42">` anchors for fragment scrolling.
+  HTML escape + tab-to-4-spaces + binary-extension skip-list.
+- **03** Markdown subset (later extracted to `lib/markdown`).  Headings
+  with GH-slug ids, paragraphs, fenced code blocks, inline formatting
+  (bold/italic/code/strikethrough), links with relative-path resolution,
+  images, autolinks, blockquotes, lists with continuation merging,
+  GFM tables with alignment, task lists, setext headings, hard line
+  breaks, backslash escapes, HTML escaping.  Extracted as standalone
+  `lib/markdown/` library + `lib/markdown/tests/01-render.loft` (~30
+  in-library assertions, one per construct).  Two follow-up extensions
+  shipped 2026-05-14: `extract_headings(source)` returning
+  `vector<Heading>` for TOC building; `tag_url_prefix` and
+  `image_url_prefix` parameters wiring `@P-id`/`@PLAN-id` autolinks
+  + relative image rewriting (caller chooses prefixes).
+- **04** Git state via wrapper script.  `tools/viewer/refresh.sh` dumps
+  branch + changed-files + recent-commits + uncommitted state to
+  `tools/viewer/state/*.json` (uses `git` + `jq`).  Viewer reads JSON
+  via the (now fully-wired) JSON natives from P54 sprint completed
+  the same day.
+- **05** Diff + commit views.  `/diff/<path>` and `/commit/<sha>` use a
+  shared `render_diff()` helper that classifies each line and wraps it
+  in `.diff-add` / `.diff-del` / `.diff-hunk` / `.diff-head` / `.diff-meta`
+  / `.diff-ctx` / `.diff-noeol` spans.  Top-right `[Rendered ¦ Diff vs main]`
+  toggle on every `/file/` page; the diff link hides when no per-file
+  diff exists.  `breadcrumbs()` fix: parent dirs always link to
+  `/tree/<dir>`; only the leaf segment uses the page's kind, so
+  `/diff/<path>` doesn't generate broken `/diff/<dir>` parent links.
+- **06** Full GFM tables — alignment + headers + body + nested formatting
+  in cells (via `render_inline`) shipped via the `lib/markdown` table
+  renderer.  Multi-line cells + escaped pipes deferred (rare in loft
+  docs; promote when a downstream consumer needs them).
+- **07** Closeout (this entry) — DEBUG.md § Branch review viewer +
+  CHANGELOG.md user entry + this technical retrospective + plan moved
+  to `plans/finished/35-branch-review-viewer/`.
+
+**Loft drivers — features matured by building this**:
+
+- `lib/server` proven well beyond test fixtures (lib's first big
+  consumer outside the test suite).
+- The seven-bug native arc P262→P269 (closed 2026-05-13) was
+  surfaced by trying to compile the viewer to `--native`.  Each bug
+  was a real loft-codegen issue that was invisible until a real
+  consumer walked the path — `lib/web` + `lib/server` integration,
+  text-returning fn inline calls, fn-ref dispatcher work-buffers,
+  cross-crate native fn routing, JSON parser UTF-8, JSON natives
+  todo-stubs.  Closed via DESIGN_DECISIONS.md § C67 ("fail at startup,
+  not at runtime — internal-bug runtime panics caught at compile time").
+- P54 (JsonValue ecosystem) native side completed via P268 + the
+  16-fn follow-up wiring all 23 JSON natives in
+  `src/codegen_runtime.rs`.
+- New `lib/markdown` library spun out as a reusable single-file loft
+  module, ~720 lines, with comprehensive in-library tests; first
+  pure-loft library born from a real consumer.
+- Surfaced gaps not blocking the ship: subprocess primitive
+  (workaround: `refresh.sh`), regex (workaround: char-by-char
+  parsing), HTML escape lib (workaround: `html_escape` in `lib/markdown`
+  exposed publicly).
+
+**Plan moved to `plans/finished/35-branch-review-viewer/`.**
+
+---
+
 ### Plan-22 (mutable closures) closed 2026-05-13
 
 Plan-22 ran 2026-05-10 → 2026-05-13.  Goal: make closures whose
