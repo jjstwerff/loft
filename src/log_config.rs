@@ -368,6 +368,42 @@ impl LogConfig {
         }
     }
 
+    /// Plan-22 02d-vii follow-up — IR-only dump for ONE function.
+    /// `LOFT_LOG=ir:<fn_name>` builds this preset.
+    ///
+    /// Strips bytecode + execution trace down to just the parsed IR
+    /// tree for the named function.  Used to verify "did the parser
+    /// emit the IR shape I expected?" without the noise of bytecode
+    /// or runtime trace from `LOFT_LOG=full`.  The function name is
+    /// matched as a substring against fn names as parsed; e.g.
+    /// `LOFT_LOG=ir:test` matches `n_test` and any sibling fns
+    /// containing "test".  Use the full `n_<name>` form to disambiguate.
+    #[must_use]
+    pub fn ir_only(fn_name: &str) -> Self {
+        Self {
+            phases: LogPhase {
+                ir: true,
+                bytecode: false,
+                execution: false,
+            },
+            show_functions: Some(vec![fn_name.to_string()]),
+            trace_opcodes: None,
+            trace_tail: None,
+            annotate_slots: true,
+            snapshot_opcodes: None,
+            snapshot_window: 0,
+            check_bridging: false,
+            show_variables: false,
+            show_all_functions: false,
+            scope_debug: false,
+            dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
+        }
+    }
+
     /// Print scope-analysis diagnostics to stderr: freed/skipped Reference vars and
     /// any "orphaned" vars whose scope is unreachable from function-exit cleanup.
     ///
@@ -473,6 +509,7 @@ impl LogConfig {
                 c.trace_type_timeline = Some(s.trim_start_matches("type_timeline:").to_string());
                 c
             }
+            Ok(s) if s.starts_with("ir:") => Self::ir_only(&s[3..]),
             Ok(s) if s.starts_with("crash_tail") => {
                 let n = s
                     .trim_start_matches("crash_tail")

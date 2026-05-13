@@ -212,6 +212,46 @@ fn register_native_stubs(state: &mut State, data: &Data) {
     crate::extensions::set_stub_symbols(stub_syms);
 }
 
+/// Plan-22 02d-vii follow-up — IR-only dump that doesn't
+/// require `&mut State` / `&mut Data`.  Used by
+/// `execute_log_impl` to print IR before execution starts when
+/// `LOFT_LOG=ir:<fn>` is active, so `cargo run` (not just
+/// `--dump`) shows the IR.
+///
+/// # Errors
+/// Returns an error if the writer fails or `data.show_code`
+/// fails to format an IR node.
+pub fn show_ir_only(writer: &mut dyn Write, data: &Data, config: &LogConfig) -> Result<(), Error> {
+    if !config.phases.ir {
+        return Ok(());
+    }
+    for d_nr in 0..data.definitions() {
+        if !matches!(
+            data.def(d_nr).def_type,
+            DefType::Function | DefType::Dynamic
+        ) {
+            continue;
+        }
+        let is_op = data.def(d_nr).is_operator();
+        if is_op && !config.show_all_functions {
+            continue;
+        }
+        let from_default = data.def(d_nr).position.file.starts_with("default/")
+            || data.def(d_nr).position.file.starts_with("default\\");
+        if from_default && !config.show_all_functions {
+            continue;
+        }
+        if !config.show_function(&data.def(d_nr).name) {
+            continue;
+        }
+        write!(writer, "{} ", data.def(d_nr).header(data, d_nr))?;
+        let mut vars = Function::copy(&data.def(d_nr).variables);
+        data.show_code(writer, &mut vars, &data.def(d_nr).code, 0, false)?;
+        writeln!(writer, "\n")?;
+    }
+    Ok(())
+}
+
 /// Dump byte code result to the given writer, filtered by `config`.
 ///
 /// - `config.phases.ir` — whether to show IR (intermediate representation).
