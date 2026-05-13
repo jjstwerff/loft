@@ -83,14 +83,34 @@ enhancement.
 
 ## Why a loft scanner alongside the bash one
 
+Three motivations, all stated by the user:
+
+1. **Performance testing** — a long-running, file-event-
+   driven loft program is a class of workload the language
+   hasn't exercised.  Surfaces gaps that no existing test
+   touches.
+2. **Clean end-project with no runtime deps** — the
+   ambition is "a few binaries in `/bin`" that handle the
+   tooling.  No `jq`, no `bash`, no Python — just the
+   compiled loft binaries.  Easier to install, easier to
+   ship, easier to reason about.
+3. **Multi-project capability** — the binaries should
+   serve DIFFERENT AI projects, not just loft.  Different
+   tag conventions, different doc layouts, different
+   status sources — all driven by per-project config.
+
+Concrete comparison:
+
 | Concern | Bash scanner (phase 00) | Loft scanner (this phase) |
 |---|---|---|
 | Bootstrap | Works from a fresh checkout with only `bash` + `grep` + `awk` + `jq` | Requires loft + this binary built |
 | Cross-platform | POSIX-portable (Linux + macOS + BSD) | Wherever loft runs |
-| Loft language exposure | Zero | Drives file-event API + long-running programs + text-scan idioms in loft |
+| Runtime dep footprint | bash + coreutils + jq | Single static binary |
+| Loft language exposure | Zero | Drives file-event API + long-running programs + text-scan idioms |
 | Continuous refresh | No — git-hook-only | Yes — sub-second response to file edits |
 | Maintenance burden | ~80 lines bash, fragile to grep/awk changes | ~300 lines loft, tested via the loft suite |
-| Composability with viewer | Viewer reads the JSON either way | Same |
+| Multi-project | One repo, hardcoded paths | Per-project config + daemon-per-project |
+| Composability with viewer | Viewer reads the JSON either way | Same — plus live WebSocket subscribe |
 
 The bash scanner stays as the **canonical bootstrap path**
 (documented in CLAUDE.md, used by CI hygiene tests, runs

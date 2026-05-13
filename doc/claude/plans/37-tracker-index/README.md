@@ -15,33 +15,50 @@ both humans and Claude.
 
 ## Drivers
 
-Three concrete problems this solves:
+The plan answers four problems, each layered on the
+previous:
 
 1. **Grep-based tag lookup is fragile.**  Today `grep -rn
    "P259" doc/` matches `P2590`, `2P259`, prose like "the
-   P259 fix forward."  Adopting `@P\d+` syntax (and `@PLAN\d+`
-   for plans) makes regex unambiguous: `grep -rn '@P259\b'`
-   has zero false matches.
+   P259 fix forward."  Adopting `@P\d+` (and `@PLAN\d+`)
+   makes regex unambiguous: `grep -rn '@P259\b'` has zero
+   false matches.
 
 2. **Claude per-task token usage is dominated by `grep -rn`
-   on docs.**  Today: every "where is this referenced?"
-   question pulls dozens of files into context.  An indexed
-   lookup is O(1) and pulls only the exact lines + few-line
-   context.  Measurable token reduction per session.
+   on docs.**  An indexed lookup is O(1) and pulls only the
+   exact lines + few-line context.  Measurable token
+   reduction per session.
 
 3. **Plan-35 viewer needs a tag-aware navigation surface.**
-   The /welcome landing page (phase 35-08) shows "open
-   problems / recently fixed / open plans / etc." — that data
-   needs a structured source.  PROBLEMS.md row-parsing is
-   brittle; an index built from `@P-id` mentions is robust.
+   The `/welcome` landing (phase 35-08) needs structured
+   buckets (open problems / recently fixed / active plans).
+   PROBLEMS.md row-parsing is brittle; an index built from
+   `@P-id` mentions is robust.
 
-The user explicitly asked for this initiative IN ADDITION to
-plan-35: "the original design ... the index that keeps up to
-date with a command line tool for you to inspect it.  And
-integration with the viewer."  Filed as a sibling plan rather
-than a plan-35 phase because its scope is independent — the
-indexer is useful even without the viewer; the viewer is
-useful without the indexer.
+4. **A few static binaries in `~/bin/` should serve ANY AI
+   project.**  This is the user's direction
+   (2026-05-13): the tooling stack — scanner, CLI, viewer
+   — is loft-native binaries with NO runtime deps (no jq,
+   no bash, no Python).  Per-project `.tracker/config.toml`
+   selects tag conventions + validators.  Daemon-per-project
+   uses the filesystem as the registry.  Loft is the FIRST
+   consumer, the test bed; the binaries serve any project
+   the user maintains.
+
+Layered like this:
+
+| Layer | Phases | What it gives |
+|---|---|---|
+| Foundation | 00-03 | Bash scanner + JSON index + CLI + CI gate |
+| Integration | 04-06 | Plan-35 viewer reads the index; Claude uses it; legacy refs migrated |
+| Loft-native | 07 | Daemon + WebSocket clients in loft |
+| **Generic stack** | 08 | mmap-backed; per-project config; install to `~/bin/` |
+
+Filed as a sibling plan to plan-35 (not a phase of it)
+because the scope is independent — the indexer is useful
+without the viewer (Claude queries it directly); the viewer
+is useful without the indexer (the existing tree + file
+rendering works regardless).
 
 ## Architecture
 
@@ -112,7 +129,8 @@ Tag bodies follow these rules:
 | 4 | [Plan-35 viewer integration](04-viewer-integration.md) | S | Plan-35 viewer reads `index/tags.json` and surfaces tag references.  Each plan README + PROBLEMS row links to all its references.  /welcome landing's "where could I help" tags pulled from this data. | Open (depends on plan-35 phase 08) |
 | 5 | [Claude integration](05-claude-integration.md) | XS | Update CLAUDE.md "## Key commands" with `./scripts/idx <query>` as the canonical reference-lookup.  Add a § Tag convention section.  Optional MCP wrapper for token-efficient queries. | Open |
 | 6 | [Retroactive tagging + closeout](06-closeout.md) | S | One-shot sed pass: convert `P\d+` → `@P\d+` in PROBLEMS.md / plan READMEs / commit-message conventions.  CHANGELOG entry.  Move plan to finished/. | Open |
-| 7 | [Loft-native scanner + file-event watcher](07-loft-native-scanner.md) | M | Re-implement the indexer in loft with continuous file-event monitoring.  PRIMARY motivation: expose loft to a long-running, fs-event-driven workload.  Bash scanner stays as the bootstrap path; loft scanner becomes the preferred dev loop.  Drives `lib/fs_watch/` enhancement (sibling work). | Open |
+| 7 | [Loft-native scanner + CLI + WebSocket daemon](07-loft-native-scanner.md) | M | Daemon + clients model: long-running loft scanner serves CLI + viewer over local WebSocket.  Drives `lib/fs_watch/` + lib/server binary frames.  Bash artefacts stay as bootstrap fallback. | Open |
+| 8 | [Multi-project deployment + mmap-backed index](08-multi-project-deploy.md) | M | Per-project `.tracker/config.toml` (configurable tag families + validators).  Daemon-per-project (filesystem registry — no shared service).  `tags.store` mmap-backed via loft's Store primitive: survives daemon restart, zero-copy reads from clients.  Goal: a few static binaries in `~/bin/` that handle ANY AI/coding project, not just loft. | Open |
 
 Total estimated effort: **~1 week** of focused work.  Phases
 00 + 01 are the minimum viable indexer (~1 day); the rest
@@ -125,7 +143,8 @@ compound the value.
 - `make index` rebuilds `index/tags.json` in ≤ 2 seconds on
   the loft tree (~1100 .md/.rs/.loft files).
 - `./scripts/idx tag:@P259` returns JSON with all references
-  to P259 + 2-line context per match.
+  + optional excerpts via `--before` / `--after` / `--para`
+  / `--max-bytes` flags.
 - Pre-commit hook keeps `index/` fresh on every commit.
 - `tests/index_hygiene.rs` catches broken `@P-id` /
   `@PLAN-id` references at CI time.
@@ -134,7 +153,16 @@ compound the value.
   index instead of grep'ing files at request time.
 - CLAUDE.md instructs Claude to use `./scripts/idx` for
   reference lookups (measurable token reduction per session).
-- All 6 phases close → plan moves to `plans/finished/37-…`.
+- A loft-native daemon (`bin/loft-index`) + CLI
+  (`bin/loft-idx`) replace the bash artefacts as the
+  preferred dev path; bash stays as the bootstrap.
+- The daemon's index is mmap-backed (`tags.store`); kill +
+  restart resumes without re-scanning unchanged files.
+- A second AI project on the same machine can install the
+  same binaries and run its own daemon with its own
+  `.tracker/config.toml` — no shared state, no port
+  collisions.
+- All 8 phases close → plan moves to `plans/finished/37-…`.
 
 ## Why this is a separate plan from plan-35
 
