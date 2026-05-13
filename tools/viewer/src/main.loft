@@ -288,6 +288,10 @@ fn md_render(src: text, current_rel: text) -> text {
     // (waiting on separator), 2 in body.
     table_state = 0;
     table_header = "";
+    // Block-quote state: bq_buf holds accumulated quote text while
+    // consecutive `> ` lines are being seen.  Flushed when a non-
+    // quote line breaks the block.
+    bq_buf = "";
 
     lines = src.split('\n');
     for line in lines {
@@ -446,9 +450,39 @@ fn md_render(src: text, current_rel: text) -> text {
                 out += "<p>{md_inline(para_buf, current_rel)}</p>";
                 para_buf = "";
             }
+            if bq_buf != "" {
+                out += "<blockquote>{md_inline(bq_buf, current_rel)}</blockquote>";
+                bq_buf = "";
+            }
             table_header = line;
             table_state = 1;
             continue;
+        }
+        // ── Block quote? ───────────────────────────────────────
+        // `^> text` or `^>` (blank quote line).  Consecutive quote
+        // lines accumulate into bq_buf; non-quote lines flush it.
+        if line.starts_with("> ") || line == ">" {
+            if len(para_buf) > 0 {
+                out += "<p>{md_inline(para_buf, current_rel)}</p>";
+                para_buf = "";
+            }
+            ln = len(line);
+            quote_text = "";
+            if ln > 2 { quote_text = line[2..ln]; }
+            if bq_buf == "" {
+                bq_buf = quote_text;
+            } else if quote_text == "" {
+                bq_buf += " ";
+            } else {
+                bq_buf += " {quote_text}";
+            }
+            continue;
+        }
+        if bq_buf != "" {
+            // Non-quote line → flush the block quote.
+            out += "<blockquote>{md_inline(bq_buf, current_rel)}</blockquote>";
+            bq_buf = "";
+            // Fall through to handle current line normally.
         }
         if line == "" {
             if len(para_buf) > 0 {
@@ -467,6 +501,10 @@ fn md_render(src: text, current_rel: text) -> text {
         out += "<li>{md_inline(list_item_buf, current_rel)}</li>";
         out += "</{list_kind}>";
         list_item_buf = "";
+    }
+    if bq_buf != "" {
+        out += "<blockquote>{md_inline(bq_buf, current_rel)}</blockquote>";
+        bq_buf = "";
     }
     if table_state == 2 { out += "</tbody></table>"; }
     if in_code {
@@ -614,6 +652,96 @@ fn md_inline(src: text, current_rel: text) -> text {
     i = 0;
     while i < n {
         c = src[i];
+        // Backslash escape: \* \_ \` \\ \| \[ \] \( \) \! \~
+        // emit the next char literally and skip both.
+        if c == '\\' && i + 1 < n {
+            next_c = src[i + 1];
+            if next_c == '*' || next_c == '_' || next_c == '`' || next_c == '\\'
+                || next_c == '|' || next_c == '[' || next_c == ']'
+                || next_c == '(' || next_c == ')' || next_c == '!'
+                || next_c == '~' {
+                // Escape the literal char if it's a markup-significant ASCII.
+                if next_c == '&' { out += "&amp;"; }
+                else if next_c == '<' { out += "&lt;"; }
+                else if next_c == '>' { out += "&gt;"; }
+                else if next_c == '"' { out += "&quot;"; }
+                else { out += "{next_c}"; }
+                i = i + 2;
+                continue;
+            }
+        }
+        // Strikethrough ~~text~~ — scan to next `~~`.
+        if c == '~' && i + 1 < n && src[i + 1] == '~' {
+            i = i + 2;
+            inner_start = i;
+            while i + 1 < n && !(src[i] == '~' && src[i + 1] == '~') {
+                i = i + 1;
+            }
+            inner = src[inner_start..i];
+            if i + 1 < n { i = i + 2; }
+            esc_inner = escape(inner);
+            out += "<del>{esc_inner}</del>";
+            continue;
+        }
+        // Autolink <https://...> / <http://...> / <mailto:...>
+        // / <user@host>.  Plain `<...>` that contains a `://` or
+        // `@` and no whitespace is treated as a URL/email.  Other
+        // `<...>` patterns (HTML-ish) fall through to escape-as-`&lt;`.
+        if c == '<' {
+            close = i + 1;
+            ok = true;
+            while close < n && src[close] != '>' {
+                if src[close] == ' ' || src[close] == '\n' { ok = false; break; }
+                close = close + 1;
+            }
+            if ok && close < n {
+                inner = src[i + 1..close];
+                is_url = inner.find("://") >= 0;
+                is_email = !is_url && inner.find("@") >= 0;
+                if is_url {
+                    esc = escape(inner);
+                    out += "<a href=\"{esc}\">{esc}</a>";
+                    i = close + 1;
+                    continue;
+                }
+                if is_email {
+                    esc = escape(inner);
+                    out += "<a href=\"mailto:{esc}\">{esc}</a>";
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        // Image: ![alt](url) — same shape as link but with leading `!`.
+        if c == '!' && i + 1 < n && src[i + 1] == '[' {
+            text_start = i + 2;
+            j = text_start;
+            depth = 1;
+            while j < n && depth > 0 {
+                if src[j] == ']' { depth = depth - 1; if depth == 0 { break; } }
+                else if src[j] == '[' { depth = depth + 1; }
+                j = j + 1;
+            }
+            if j < n && j + 1 < n && src[j + 1] == '(' {
+                alt_text = src[text_start..j];
+                url_start = j + 2;
+                k = url_start;
+                while k < n && src[k] != ')' {
+                    k = k + 1;
+                }
+                if k < n {
+                    url = src[url_start..k];
+                    // Images don't get path-rewritten (they're raw
+                    // resource URLs); only http/https/relative
+                    // resource paths supported.
+                    esc_url = escape(url);
+                    esc_alt = escape(alt_text);
+                    out += "<img src=\"{esc_url}\" alt=\"{esc_alt}\">";
+                    i = k + 1;
+                    continue;
+                }
+            }
+        }
         if c == '`' {
             // Inline code: scan to next backtick.  P272: collect the
             // run via a single SLICE rather than per-byte accumulation,
