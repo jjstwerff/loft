@@ -827,11 +827,12 @@ cross_mode!(
 );
 
 // P260 verifies closure-side WRITE to a captured struct's vector
-// field reaches the live struct.  P261 (filed 2026-05-13) is the
-// orthogonal issue that `b.items = [99, 100]` APPENDS instead of
-// REPLACES on both backends — same shape outside a closure has
-// the same bug.  This cell asserts the (buggy-but-consistent)
-// shared behaviour so a P260 regression would change it.
+// field reaches the live struct.  P261 (closed 2026-05-13)
+// fixed the orthogonal issue that `b.items = [99, 100]` was
+// APPENDING instead of REPLACING — both inside and outside the
+// closure (parser bug in towards_set's vector-literal-replace
+// path; missing OpClearVector prefix).  This cell now asserts
+// the correct sum == 199 (= 99 + 100).
 cross_mode!(
     e_d3_struct_vector_assign_in_closure,
     r#"
@@ -842,9 +843,7 @@ cross_mode!(
         cl();
         sum = 0;
         for x in b.items { sum = sum + x; }
-        // P261: the assign appends; sum is 1+2+3+99+100 = 205.
-        // When P261 is fixed, this expectation should change to 199.
-        assert(sum == 205, "sum after closure 'assigns' items: {sum}");
+        assert(sum == 199, "sum after closure assigns items=[99,100]: {sum}");
         print("{sum}\n");
     }
     "#

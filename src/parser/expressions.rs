@@ -925,11 +925,15 @@ use a separate collection or add after the loop"
         // are now rewritten to `OpClearVector(s.v)` (+ `OpAppendVector` when
         // there is RHS data to copy in).
         //
+        // P261 (2026-05-13): the third case — `s.v = [literal items]` —
+        // previously fell through to the Insert bypass without an
+        // OpClearVector prefix, so the literal's element-construction
+        // ops appended to the existing items instead of replacing them.
+        // Fixed by prepending OpClearVector to the literal's
+        // statement list — the existing element-construction ops then
+        // run on a fresh-empty field.
+        //
         // Skipped:
-        // - `code` already a non-empty `Value::Insert` (vector literal built
-        //   inline by parse_vector — its statements construct elements
-        //   directly in the field's storage; wrapping in OpAppendVector would
-        //   double-build and break codegen).
         // - RHS type is non-Vector (e.g. `b.data = f#read(...)` where f#read
         //   returns text) — preserve the historical silent no-op rather than
         //   emit a type-mismatched OpAppendVector.
@@ -944,6 +948,13 @@ use a separate collection or add after the loop"
             let rhs_is_vector = matches!(s_type, Type::Vector(_, _));
             if is_empty_literal {
                 *code = Value::Insert(vec![self.cl("OpClearVector", std::slice::from_ref(to))]);
+                return Type::Void;
+            }
+            if is_nonempty_literal {
+                let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+                if let Value::Insert(ls) = code {
+                    ls.insert(0, clear);
+                }
                 return Type::Void;
             }
             if !is_nonempty_literal
