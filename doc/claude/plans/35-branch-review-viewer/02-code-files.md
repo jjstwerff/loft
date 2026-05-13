@@ -5,7 +5,58 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 02 — Code-file rendering with `<pre>` + line numbers
 
-**Status:** Open
+**Status:** **Shipped 2026-05-13** (interp-mode; same native
+blockers as phase 01).
+
+## What actually shipped
+
+- `GET /file/<path>` route renders any text file as
+  line-numbered HTML.
+- Each line wrapped in `<a id="L<n>" class="line">`; `#L<n>`
+  fragment scrolls + highlights via CSS `:target` (yellow
+  on light, dark purple on dark).
+- HTML escape (`&`, `<`, `>`, `"`) plus tab → 4 spaces in a
+  separate `escape_with_tabs()` helper.
+- Light skip-list of binary file extensions (`.png` /
+  `.jpg` / `.gif` / `.webp` / `.ico` / `.pdf` / `.zip` /
+  `.gz` / `.tar` / `.wasm`) renders a "Binary file (N
+  bytes)" stub with a download link instead of trying to
+  read bytes as text.
+- Markdown files (`.md`) render as code with a "Markdown
+  rendering arrives in plan-35 phase 03" banner.
+- Tree pages now link files to `/file/<path>` (rendered
+  view); `/raw/<path>` still available from each file page.
+- CSS extended with `pre.code-pre`, `a.line`, `.lineno`,
+  `:target` — light + dark.
+
+End-to-end on the current `demo_dev` branch:
+
+```
+$ curl -s http://localhost:8765/file/Cargo.toml | grep '<a id="L1"'
+<a id="L1" class="line"><span class="lineno">1</span><span class="src">[package]</span></a>
+
+# 192 KB PROBLEMS.md → 359 KB rendered HTML → 113 ms response.
+```
+
+Browser fragment test: navigating to
+`http://localhost:8765/file/src/parser/vectors.rs#L1060`
+scrolls to + highlights line 1060.
+
+## Native blockers — same as phase 01
+
+P262 + P263 still gate native compilation; phase 02 stays in
+interpreter mode.  No new native-codegen quirks surfaced.
+
+## Forward-looking — syntax highlighting (still not in v1)
+
+Phase 02 ships unstyled `<pre><code>` lines.  Highlighting
+is deferred per the original design — no new ground broken
+here.  Either a loft-native lexer (drives a future
+`lib/syntax/` library) or a pre-process via external tool
+(needs the subprocess primitive loft doesn't have yet).
+Either is a separate phase.
+
+---
 
 ## Goal
 

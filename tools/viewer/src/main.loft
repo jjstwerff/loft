@@ -60,6 +60,9 @@ fn route(req: server::Request) {
     } else if p.starts_with("/raw/") {
         rel = p[5..len(p)];
         respond_raw(req, rel);
+    } else if p.starts_with("/file/") {
+        rel = p[6..len(p)];
+        respond_file(req, rel);
     } else {
         serve_404_page(req, p);
     }
@@ -103,7 +106,8 @@ fn page_landing() -> text {
     body += "<li><a href=\"/tree/default\">default/</a></li>";
     body += "<li><a href=\"/tree/examples\">examples/</a></li>";
     body += "</ul>";
-    body += "<p><a href=\"/raw/README.md\">README.md (raw)</a></p>";
+    body += "<p><a href=\"/file/README.md\">README.md</a> ";
+    body += "(<a href=\"/raw/README.md\">raw</a>)</p>";
     page("loft-view", body)
 }
 
@@ -155,7 +159,9 @@ fn page_tree(rel: text) -> text {
             esc_joined = escape(joined);
             esc_name = escape(name);
             sz = e.size;
-            body += "<li><a class=\"f\" href=\"/raw/{esc_joined}\">{esc_name}</a> <span class=\"sz\">{sz}</span></li>";
+            // Link to /file/ for rendered view; /raw/ available from
+            // the file page itself for "give me the bytes."
+            body += "<li><a class=\"f\" href=\"/file/{esc_joined}\">{esc_name}</a> <span class=\"sz\">{sz}</span></li>";
         }
     }
     body += "</ul>";
@@ -174,11 +180,127 @@ fn respond_raw(req: server::Request, rel: text) {
         req.respond_html(body);
         return;
     }
-    // Bind to a local before passing — works around a native codegen
-    // quirk that takes &<call-result> when the text comes from an
-    // inline f.content() call site.  Phase 02 wraps in <pre>.
     body = f.content();
     req.respond_typed(200, body, "text/plain; charset=utf-8");
+}
+
+// ── /file/<path> — phase 02: rendered code with line numbers ──
+
+fn respond_file(req: server::Request, rel: text) {
+    f = file(rel);
+    if f.format == Format.NotExists {
+        serve_404_page(req, "/file/{rel}");
+        return;
+    }
+    if f.format == Format.Directory {
+        // Directories: redirect-style — show the tree page.
+        body = page_tree(rel);
+        req.respond_html(body);
+        return;
+    }
+    // For now: every file is rendered as code (HTML-escaped + line
+    // numbers).  Markdown gets a stub link to phase 03's renderer
+    // when it lands; binary detection is a v1.5 polish.
+    body = page_file(rel, f);
+    req.respond_html(body);
+}
+
+// File-extension classifier.  Markdown gets a special path; .png /
+// .jpg / .gif fall into Binary so we don't try to render bytes as
+// text.  Everything else renders as code.
+fn is_markdown(rel: text) -> boolean {
+    rel.ends_with(".md")
+}
+fn is_binary_ext(rel: text) -> boolean {
+    rel.ends_with(".png")
+        || rel.ends_with(".jpg")
+        || rel.ends_with(".jpeg")
+        || rel.ends_with(".gif")
+        || rel.ends_with(".webp")
+        || rel.ends_with(".ico")
+        || rel.ends_with(".pdf")
+        || rel.ends_with(".zip")
+        || rel.ends_with(".gz")
+        || rel.ends_with(".tar")
+        || rel.ends_with(".wasm")
+}
+
+fn page_file(rel: text, f: File) -> text {
+    body = breadcrumbs(rel, "file");
+    esc_rel = escape(rel);
+    sz = f.size;
+    body += "<h1>{esc_rel} <small>{sz} bytes</small></h1>";
+
+    if is_binary_ext(rel) {
+        esc2 = escape(rel);
+        body += "<p>Binary file ({sz} bytes).  ";
+        body += "<a href=\"/raw/{esc2}\">download raw</a></p>";
+        return page(rel, body);
+    }
+
+    if is_markdown(rel) {
+        // Phase 03 will render markdown to HTML here.  For now,
+        // render as code so the file is at least readable.
+        esc2 = escape(rel);
+        body += "<p><em>Markdown rendering arrives in plan-35 phase 03.</em>";
+        body += " Showing as code for now.";
+        body += " <a href=\"/raw/{esc2}\">View raw</a>.</p>";
+    } else {
+        esc2 = escape(rel);
+        body += "<p><a href=\"/raw/{esc2}\">View raw</a></p>";
+    }
+
+    src = f.content();
+    body += render_code(src);
+    page(rel, body)
+}
+
+// Render a text blob as line-numbered, HTML-escaped <pre><code>.
+// Each line wrapped in <a id="L<n>"> so #L42 fragment scrolls.
+fn render_code(src: text) -> text {
+    out = "<pre class=\"code-pre\"><code>";
+    line_no = 1;
+    line_buf = "";
+    for c in src {
+        if c == '\n' {
+            esc = escape_with_tabs(line_buf);
+            out += "<a id=\"L{line_no}\" class=\"line\"><span class=\"lineno\">{line_no}</span><span class=\"src\">{esc}</span></a>";
+            line_buf = "";
+            line_no = line_no + 1;
+        } else if c == '\r' {
+            // Drop \r — handles CRLF line endings.
+        } else {
+            line_buf += "{c}";
+        }
+    }
+    if len(line_buf) > 0 {
+        esc = escape_with_tabs(line_buf);
+        out += "<a id=\"L{line_no}\" class=\"line\"><span class=\"lineno\">{line_no}</span><span class=\"src\">{esc}</span></a>";
+    }
+    out += "</code></pre>";
+    out
+}
+
+// Like escape() but expands tabs to 4 spaces so indentation
+// renders consistently regardless of browser default tab width.
+fn escape_with_tabs(s: text) -> text {
+    out = "";
+    for c in s {
+        if c == '&' {
+            out += "&amp;";
+        } else if c == '<' {
+            out += "&lt;";
+        } else if c == '>' {
+            out += "&gt;";
+        } else if c == '"' {
+            out += "&quot;";
+        } else if c == '\t' {
+            out += "    ";
+        } else {
+            out += "{c}";
+        }
+    }
+    out
 }
 
 fn serve_404_page(req: server::Request, p: text) {
@@ -209,7 +331,7 @@ fn page(title: text, body: text) -> text {
     out += "<main>";
     out += body;
     out += "</main>";
-    out += "<footer>plan-35 phase 01 · "
+    out += "<footer>plan-35 phase 02 · "
         + "<a href=\"/tree/doc/claude/plans/35-branch-review-viewer\">design</a>"
         + "</footer>";
     out += "</body></html>";
@@ -286,6 +408,13 @@ nav.crumbs a:hover{{text-decoration:underline}}
 code{{font-family:ui-monospace,Menlo,monospace;background:#f3f3f3;padding:.1em .3em;border-radius:3px}}
 a{{color:#0066cc}}
 a:visited{{color:#553388}}
+pre.code-pre{{background:#f8f8f8;border:1px solid #ddd;border-radius:4px;overflow-x:auto;padding:.5rem;font-size:.85rem;line-height:1.4}}
+pre.code-pre code{{background:none;padding:0;border-radius:0;display:block}}
+a.line{{display:block;text-decoration:none;color:inherit;white-space:pre}}
+a.line:hover{{background:#eef}}
+a.line:target{{background:#ffd}}
+a.line .lineno{{display:inline-block;width:3.5em;text-align:right;padding-right:1em;color:#999;user-select:none}}
+a.line .src{{color:inherit}}
 @media (prefers-color-scheme: dark){{
   body{{background:#1a1a1a;color:#ddd}}
   header,footer{{border-color:#444}}
@@ -297,5 +426,9 @@ a:visited{{color:#553388}}
   code{{background:#2a2a2a}}
   a{{color:#9bf}}
   a:visited{{color:#caf}}
+  pre.code-pre{{background:#0e0e0e;border-color:#333}}
+  a.line:hover{{background:#22335a}}
+  a.line:target{{background:#604}}
+  a.line .lineno{{color:#666}}
 }}
 `;
