@@ -18,9 +18,25 @@ mid-broken-build.
 
 ## Drivers
 
-The user's review workflow today is "scroll through whatever
-code snippets Claude pasted into the chat console" — too narrow
-for substantive review.  Three concrete needs surfaced:
+Two distinct audiences, both pointing at the same tool:
+
+**Driver 1 — the user's own review workflow** (origin of this
+plan).  Scrolling through chat-pasted code snippets is too
+narrow for substantive review of in-flight work.
+
+**Driver 2 — friend-onboarding (added 2026-05-13)** —
+loft has crossed the threshold where developer friends with
+some Rust / ML experience can be invited to try it.  But the
+project is now ~250 markdown files in `doc/claude/` plus a
+deeply-linked plan tree.  A friend who wants to grasp "what is
+loft, what's done, what's planned, why does the codebase look
+like this" cannot do that by `grep`-ing 20+ files manually.
+The viewer becomes their **navigation surface**: open the
+dashboard, click into the relevant docs, follow cross-doc
+links naturally.  See [ROADMAP § Near-term focus —
+friend-readiness](../../ROADMAP.md#near-term-focus--friend-readiness-added-2026-05-13).
+
+Three concrete needs surfaced from the personal-review angle:
 
 1. **Read full files in context** — a 192 KB `PROBLEMS.md` or
    3.4 KB `PLANNING.md` cannot be reviewed via chat snippets.
@@ -157,6 +173,79 @@ viewer's working branch).
 | Wrapper-script approach feels janky vs. proper subprocess | Acceptable trade-off for shipping in weeks not months.  If subprocess support lands in loft (separate plan), refresh-script approach can be retired. |
 | Tables phase (06) blocks closeout | Phase 06 is its own milestone; phases 00-05 close as a usable v1 even if 06 is still in flight.  Plan can split into `35a` (v1 close) + `35b` (tables) if 06 takes too long. |
 | User wants live reload sooner than expected | Coroutines + WebSocket already in `lib/server`; live-reload becomes phase 08 if needed. |
+
+## Stretches (post-v1, listed for traceability)
+
+### Newcomer mode — curated onboarding landing page
+
+The 250-file `doc/claude/` tree is overwhelming for someone
+arriving at loft for the first time.  A `?mode=onboarding`
+query param (or a `/welcome` route) flips the dashboard into a
+curated newcomer view that hides the dev-internal docs and
+exposes a small, guided path:
+
+1. **What is loft** — short paragraph + link to root README.
+2. **Try it in 5 minutes** — links to `examples/hello.loft`,
+   `examples/structs.loft`, `examples/match.loft` rendered with
+   a "click to copy + run instructions" pattern.
+3. **Learn the language** — link to `doc/learn-loft.md`.
+4. **The standard library** — link to `STDLIB.md`.
+5. **One real program** — link to a flagship example like
+   `lib/graphics/examples/25-brick-buster.loft` or the
+   audience-demo when it ships.
+6. **Where to get help** — link to GitHub issues + the
+   project's communication channel.
+
+The default dashboard (branch state + changed files + commits)
+remains the user's review tool; newcomer mode is a separate
+landing page friends arrive at.  No filtering of the actual doc
+tree — friends can navigate anywhere from there if curious;
+this just gives them a starting path.
+
+File as **phase 08** of this plan when v1 ships.
+
+### Public-instance hosting
+
+The viewer binary is the same shape regardless of "for me in
+my VM" vs "for friends on the public web."  After phases 00-06
+ship, a small follow-up could deploy the viewer on a tiny VPS
+(or a free-tier serverless target) pointed at a public mirror
+of the loft repo.  Friends visit `https://loft-lang.example/`
+and land on the newcomer-mode page without any local setup.
+
+Acceptance:
+- Public URL serves the curated newcomer landing.
+- Read-only (the dashboard's git-state shows the public mirror's
+  current branch — typically `main`).
+- No write paths exposed (already the case — viewer has no
+  write routes).
+- Bound to `127.0.0.1` behind a reverse proxy that adds TLS.
+
+File as **phase 09** of this plan when phase 08 ships.
+
+### Why not just GitHub Pages with rendered HTML?
+
+A common alternative is to render `doc/claude/*.md` to HTML at
+CI time and host on GitHub Pages.  Considered and rejected for
+the friend-onboarding use case:
+
+- **Lag** — Pages rebuilds on push to `main`; in-flight branch
+  state never appears.  The user's review-this-week workflow is
+  invisible.
+- **Overwhelming default** — Pages would render every doc in
+  the tree at the same prominence.  Friends don't need to see
+  PROBLEMS.md first; they need a guided path.
+- **No git awareness** — diff/commit views (the personal-
+  review use case) aren't expressible in static HTML.
+- **No filtering** — the newcomer-mode landing requires
+  application logic that static rendering can't provide.
+
+GitHub Pages **is** a viable secondary surface for "I want to
+read the loft docs without installing anything" — but it
+should not be confused with the viewer's role.  If a static
+mirror is wanted, pre-rendering can be added as a separate
+small task after phase 09 (effectively `loft-view --static
+--out=site/`); not in plan-35's main scope.
 
 ## Out of scope (deferred / separate plans)
 

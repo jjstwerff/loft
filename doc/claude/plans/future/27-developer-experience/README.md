@@ -13,13 +13,24 @@ mix:
   `syntaxes/loft.tmLanguage.json`)
 - **SH.2** VS Code extension — **DONE** (shipped to
   `editors/vscode/`)
-- **DX.1** Quick-start `examples/` directory — open for 0.8.5
-- **DX.2** CI: package + native tests — open
-- **DX.3** "Learn loft in 30 minutes" walkthrough — open for
-  0.8.5 (the inline `*(completed)*` marker below is stale —
-  applies to a different walkthrough item that did ship)
+- **SH.3** IntelliJ plugin — **DONE** (shipped to
+  `editors/intellij/`; not in original spec but landed
+  alongside SH.2)
+- **DX.1** Quick-start `examples/` directory — **DONE**
+  (7 example files at `examples/`: hello, fibonacci, fizzbuzz,
+  structs, collections, match, files; README.md links them
+  under § Three ways to see loft).
+- **DX.3** "Learn loft in 30 minutes" walkthrough — **DONE**
+  (`doc/learn-loft.md`).
+- **DX.2** CI: package + native tests — **OPEN** (the only
+  remaining item in this plan).
 - **NT.1** Native Codegen Reliability — completed (kept as
   historical design record)
+
+**Plan status (2026-05-13):** Originally drafted as a six-item
+DX grab-bag.  Five of six shipped over the 0.8.4 / 0.8.5 cycle.
+**Only DX.2 remains.**  When DX.2 lands, this plan can move to
+`finished/`.
 
 Per-item landing procedures (build checklists, quality gates,
 risks, decision points) live below in the **§ Landing

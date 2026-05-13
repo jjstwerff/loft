@@ -25,6 +25,53 @@ The methodology behind this file (categories, no-time-projections, features-need
 
 ---
 
+## Near-term focus — friend-readiness (added 2026-05-13)
+
+Loft has crossed the threshold where a developer friend with
+some Rust / ML experience can be invited to try it.  The
+following items are flagged as **gates for "tier-2
+friend-readiness"** — a friend who'd follow a tutorial and
+write something small.
+
+The user explicitly named this as a near-term goal: "I can
+start to really advise friends to try it out."  Items below
+are the residual gaps; see the per-item rows in the value
+categories below for full detail.
+
+| Pri | Gate | Status | Source |
+|---|---|---|---|
+| 1 | **Plan-07 phase 5/6/7** — error-message closeout (suggestions polish + per-site type-mismatch wording + closeout doc).  Friends' first WTF moment is a type error; tighter messages compound into trust. | Phases 5/6/7 open; phase 6.1 (Type::name exhaustive) shipped 2026-05-13 | [`plans/07-error-messages/`](plans/07-error-messages/) |
+| 2 | **Plan-35 phases 00-03** — branch review viewer through "renders markdown + code".  Drives friend onboarding (browse the project + follow cross-doc links instead of grepping 20+ files).  The viewer is the navigation surface friends need to grasp loft's state. | Plan opened 2026-05-13; all phases open | [`plans/35-branch-review-viewer/`](plans/35-branch-review-viewer/) |
+| 3 | **DX.2 — CI: package + native tests** — last open item in plan-27 (DX); ship + close the plan. | Open | [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) |
+| 4 | **Plan-35 phase 06 — proper GFM tables** — the marquee feature; loft docs are table-heavy and current tools render them poorly.  Tier-2 polish for friends browsing PROBLEMS.md / ROADMAP.md / plan tables. | Designed; queued after phases 00-05 | [`plans/35-branch-review-viewer/06-tables-design.md`](plans/35-branch-review-viewer/06-tables-design.md) |
+
+What ships ALREADY for friend-readiness (don't reblock on these):
+
+- ✅ TextMate grammar (`syntaxes/loft.tmLanguage.json`)
+- ✅ VS Code extension (`editors/vscode/`) + IntelliJ plugin
+- ✅ Examples directory (7 standalone programs at `examples/`)
+- ✅ "Learn loft in 30 minutes" tutorial (`doc/learn-loft.md`)
+- ✅ Closures (plan-22 trio P259/P260/P261, shipped 2026-05-13)
+- ✅ Native backend CI-gated production
+- ✅ Coroutines (0.8.3)
+- ✅ Server lib + WebSocket (lib/server)
+
+What's deliberately deferred past the tier-2 gate (don't
+block here):
+
+- LSP server (LSP.1+) — months of work; tier-3 enabler.
+- Outbound HTTP client — in `lib_plans/future/06-web-services/`;
+  tier-3 (any friend writing a real network app).
+- Package registry (PKG.REG) — in `PACKAGES.md § Open work`;
+  tier-3 (real package consumption).
+- Plan-23 event loop — needed for games (tier 3).
+
+**Total tier-2 sprint estimate:** 2-3 weeks of focused work
+(items 1+2+3).  Item 4 (tables) extends another week but
+elevates polish.
+
+---
+
 ## S — Silent failure / data-loss prevention
 
 Features that "appear to work" but don't, or that lose data without indication.  HIGHEST priority because invisible to users.  See [plans/README.md § Value categories](plans/README.md#value-categories--what-kind-of-value-not-just-how-much) for why S sits above R.
