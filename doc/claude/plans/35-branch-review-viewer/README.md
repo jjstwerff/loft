@@ -287,29 +287,78 @@ Layout:
      ▸ doc/learn-loft.md       (30-min tutorial)
 
 ────────────  Where could I help  ────────────
-   Approachable open work — things a new contributor could
-   pick up without first reading 20 files:
+   Open work classified by WHAT YOU NEED, not just by size.
+   Some tasks are easy IF you have a specific environment;
+   the same task is hard from the wrong machine.
 
-   Easy starters (DX.2 — CI workflow extension, the kind of
-   work that's "open a PR and know when it's done"):
-     ▸ DX.2: extend .github/workflows/ci.yml with package +
-       native test matrix (full design at plans/future/27-
-       developer-experience)
+   Each item below has 3 tags: [size] [setup] [skills].
 
-   Bigger contributions (open plans with clear next phases):
-     ▸ Plan-07 phase 6 — per-site type-mismatch wording
-       (assignment + return / call args / struct fields /
-       operators / iterators / match / format)
-     ▸ Plan-35 — the viewer itself, especially phases 04+05
-       (git state wrapper, diff/commit views)
-     ▸ lib_plans/future/01-regex — first lazy-stdlib library
+   ▸ Setup tags — what hardware/OS makes this approachable
+       [linux] / [macos] / [windows] / [any-os]
+       [gpu] / [no-gpu]
+       [claude-or-ai] (an LLM assistant materially helps)
+   ▸ Skills tags — prior knowledge that helps
+       [no-loft] (no loft familiarity required)
+       [some-loft] / [deep-loft]
+       [rust] / [ml-family]
+   ▸ Size tags — XS / S / M / L
 
-   Active P-issues (currently open):
-     ▸ P229b — Windows multiplayer flake (needs Windows
-       reproducer)
+   ── Looking for an approachable starter? ──
 
-   Click any item → the relevant plan README / PROBLEMS row /
-   ROADMAP entry, with full context.
+   [S][windows][claude-or-ai][rust] — P229b: Windows
+     multiplayer flake.  Reproduces only on Windows; needs
+     someone with a Windows box (and Claude or similar AI
+     pairs perfectly with the multi-file diagnosis work).
+     Worth doing because it unblocks Windows users for the
+     multiplayer story.
+
+   [XS][any-os][no-loft][rust] — DX.2: extend GitHub Actions
+     workflow with package + native test matrices.  Pure
+     YAML + shell; design fully spec'd in plans/future/
+     27-developer-experience.
+
+   [S][any-os][some-loft][no-rust] — Add an example to
+     examples/.  Pick a small program (TODO list, anagram
+     finder, simple text adventure); ship it as one new file.
+
+   ── Larger contributions? ──
+
+   [M][any-os][some-loft][rust] — Plan-07 phase 6: per-site
+     type-mismatch wording across parser/expressions /
+     parser/control / parser/objects / parser/operators.
+     Pure rendering work once Type::name is exhaustive
+     (shipped 2026-05-13).
+
+   [M][any-os][deep-loft] — Plan-35 phases 04+05: the
+     viewer's git-state wrapper + diff/commit views.  This
+     IS the viewer you're using — contribute by making it
+     better.
+
+   [L][linux][some-loft][ml-family] — lib_plans/future/
+     01-regex: first lazy-stdlib library.  Multi-week scope;
+     touches loft text-handling depth.
+
+   ── Active P-issues (smaller scoped) ──
+   See PROBLEMS.md for the full catalogue.
+
+   Click any item → its full plan README, PROBLEMS row, or
+   ROADMAP entry, with the design and context already laid
+   out.  No need to "read 20 files" before starting.
+```
+
+The tag system makes the page **searchable by what
+contributors actually have**.  A friend with a Windows box
+and Claude scans the [windows] tag, sees P229b is a perfect
+fit, clicks through to the full PROBLEMS.md row + design
+context, and starts.
+
+The classifier in `tools/viewer/src/help_index.loft`
+populates the tags from a hand-maintained mapping of
+plan/issue → tags.  Initial mapping ships with phase 08;
+contributors update tags as they discover the right
+classification.  No automatic tagging from the open work
+itself — the heuristic isn't reliable enough to be
+algorithmic.
 
 ────────────  Where to get help  ────────────
    ▸ GitHub issues (general)
