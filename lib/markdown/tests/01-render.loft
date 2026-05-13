@@ -1,0 +1,209 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Comprehensive tests for the markdown library.  One assertion
+// (or one cohesive group) per feature so a failure names exactly
+// which construct broke.  Run via:
+//
+//   ./target/release/loft --interpret --lib lib/ lib/markdown/tests/01-render.loft
+
+use markdown;
+
+fn must_contain(haystack: text, needle: text, label: text) {
+    if haystack.find(needle) < 0 {
+        println("FAIL: {label}");
+        println("  needle: {needle}");
+        println("  haystack: {haystack}");
+        assert(false, "{label}: needle not found");
+    }
+}
+
+fn must_not_contain(haystack: text, needle: text, label: text) {
+    if haystack.find(needle) >= 0 {
+        println("FAIL: {label}");
+        println("  unexpected needle: {needle}");
+        println("  haystack: {haystack}");
+        assert(false, "{label}: unexpected needle present");
+    }
+}
+
+fn must_eq(actual: text, expected: text, label: text) {
+    if actual != expected {
+        println("FAIL: {label}");
+        println("  expected: {expected}");
+        println("  actual:   {actual}");
+        assert(false, "{label}: mismatch");
+    }
+}
+
+fn main() {
+    // ── html_escape ────────────────────────────────────────
+    must_eq(markdown::html_escape("a<b>&\"c"), "a&lt;b&gt;&amp;&quot;c", "html_escape");
+
+    // ── slugify ───────────────────────────────────────────
+    must_eq(markdown::slugify("Open work"), "open-work", "slugify simple");
+    must_eq(markdown::slugify("P259 (closed)"), "p259-closed", "slugify with parens");
+    must_eq(markdown::slugify("§1.2 — Foo"), "12--foo", "slugify drops punctuation");
+
+    // ── rewrite_link ──────────────────────────────────────
+    must_eq(markdown::rewrite_link("https://example.com", "doc"), "https://example.com",
+            "absolute https passthrough");
+    must_eq(markdown::rewrite_link("#anchor", "doc"), "#anchor", "anchor passthrough");
+    must_eq(markdown::rewrite_link("other.md", "doc/claude"), "/file/doc/claude/other.md",
+            "relative path resolution");
+    must_eq(markdown::rewrite_link("../sibling.md", "doc/claude/plans"),
+            "/file/doc/claude/sibling.md", "../ resolution");
+    must_eq(markdown::rewrite_link("./local.md", "doc"), "/file/doc/local.md",
+            "./ stripping");
+    must_eq(markdown::rewrite_link("foo.md#anchor", "doc"), "/file/doc/foo.md#anchor",
+            "anchor preservation on relative");
+
+    // ── ATX headings ──────────────────────────────────────
+    h1 = markdown::render("# Hello\n", "");
+    must_contain(h1, "<h1 id=\"hello\">Hello</h1>", "ATX H1");
+    h6 = markdown::render("###### Six\n", "");
+    must_contain(h6, "<h6 id=\"six\">Six</h6>", "ATX H6");
+    // Trailing # form
+    htrail = markdown::render("## Title ##\n", "");
+    must_contain(htrail, "<h2 id=\"title\">Title</h2>", "trailing-# stripped");
+    // Heading with inline formatting
+    hbold = markdown::render("## With **bold**\n", "");
+    must_contain(hbold, "<strong>bold</strong>", "heading inline formatting");
+
+    // ── Setext headings ───────────────────────────────────
+    s1 = markdown::render("Title One\n=====\n", "");
+    must_contain(s1, "<h1 id=\"title-one\">Title One</h1>", "setext H1");
+    s2 = markdown::render("Section Two\n----\n", "");
+    must_contain(s2, "<h2 id=\"section-two\">Section Two</h2>", "setext H2");
+
+    // ── Paragraphs ────────────────────────────────────────
+    p1 = markdown::render("hello\nworld\n", "");
+    must_contain(p1, "<p>hello world</p>", "single paragraph multi-line");
+    p2 = markdown::render("one\n\ntwo\n", "");
+    must_contain(p2, "<p>one</p>", "two paragraphs - first");
+    must_contain(p2, "<p>two</p>", "two paragraphs - second");
+
+    // ── Bold / italic / strikethrough / inline code ───────
+    inl = markdown::render("**bold** *italic* ~~del~~ `code`\n", "");
+    must_contain(inl, "<strong>bold</strong>", "bold");
+    must_contain(inl, "<em>italic</em>", "italic");
+    must_contain(inl, "<del>del</del>", "strikethrough");
+    must_contain(inl, "<code>code</code>", "inline code");
+
+    // ── Smart underscore (snake_case stays plain) ────────
+    snake = markdown::render("snake_case_word\n", "");
+    must_not_contain(snake, "<em>", "smart _ skips snake_case");
+
+    // ── Nested inline (bold inside italic, code inside link) ──
+    nest = markdown::render("**outer *inner* tail**\n", "");
+    must_contain(nest, "<strong>outer <em>inner</em> tail</strong>",
+                 "italic nested in bold");
+    nest2 = markdown::render("[`code-link`](other.md)\n", "doc");
+    must_contain(nest2, "<a href=\"/file/doc/other.md\"><code>code-link</code></a>",
+                 "code nested in link");
+
+    // ── Backslash escapes ─────────────────────────────────
+    esc = markdown::render("\\* literal star and \\| pipe and \\\\ slash\n", "");
+    must_contain(esc, "* literal star", "escape \\*");
+    must_contain(esc, "| pipe", "escape \\|");
+    must_contain(esc, "\\ slash", "escape \\\\");
+
+    // ── Images ────────────────────────────────────────────
+    img = markdown::render("![alt text](images/logo.png)\n", "");
+    must_contain(img, "<img src=\"images/logo.png\" alt=\"alt text\">", "image");
+
+    // ── Links + relative resolution + title ──────────────
+    lnk = markdown::render("[click](other.md)\n", "doc/claude");
+    must_contain(lnk, "<a href=\"/file/doc/claude/other.md\">click</a>",
+                 "relative link rewrite");
+    lnktitle = markdown::render("[click](http://example.com \"the title\")\n", "");
+    must_contain(lnktitle, "title=\"the title\"", "link title");
+
+    // ── Autolinks ────────────────────────────────────────
+    al = markdown::render("<https://example.com> and <user@host.com>\n", "");
+    must_contain(al, "<a href=\"https://example.com\">https://example.com</a>",
+                 "https autolink");
+    must_contain(al, "<a href=\"mailto:user@host.com\">user@host.com</a>",
+                 "mailto autolink");
+
+    // ── Horizontal rule ──────────────────────────────────
+    hr = markdown::render("before\n\n---\n\nafter\n", "");
+    must_contain(hr, "<hr>", "horizontal rule");
+
+    // ── Block quote ──────────────────────────────────────
+    bq = markdown::render("> first\n> second\n", "");
+    must_contain(bq, "<blockquote>first second</blockquote>",
+                 "blockquote merges consecutive lines");
+    bq2 = markdown::render("> a\n\n> b\n", "");
+    bq2_count = 0;
+    bi = bq2.find("<blockquote>");
+    while bi >= 0 {
+        bq2_count = bq2_count + 1;
+        rest = bq2[bi + 12..bq2.len()];
+        next = rest.find("<blockquote>");
+        if next < 0 { bi = -1; }
+        else { bi = bi + 12 + next; }
+    }
+    if bq2_count != 2 {
+        println("FAIL: blockquote separated by blank — got {bq2_count} blockquotes");
+        println("  rendered: {bq2}");
+        assert(false, "blockquote separated by blank line");
+    }
+
+    // ── Fenced code block ────────────────────────────────
+    fc = markdown::render("```rust\nfn x() {{}}\n```\n", "");
+    must_contain(fc, "<pre><code class=\"language-rust\">fn x() {{}}\n</code></pre>",
+                 "fenced code with lang");
+    fc2 = markdown::render("```\nplain\n```\n", "");
+    must_contain(fc2, "<pre><code>plain\n</code></pre>", "fenced code no lang");
+
+    // ── Lists (UL / OL / continuation) ───────────────────
+    ul = markdown::render("- one\n- two\n- three\n", "");
+    must_contain(ul, "<ul><li>one</li><li>two</li><li>three</li></ul>",
+                 "ul three items");
+    ol = markdown::render("1. one\n2. two\n", "");
+    must_contain(ol, "<ol><li>one</li><li>two</li></ol>", "ol two items");
+    cont = markdown::render("- first line\n  continuation\n- second\n", "");
+    must_contain(cont, "<li>first line continuation</li>",
+                 "list-item continuation merge");
+
+    // ── Task lists ───────────────────────────────────────
+    tl = markdown::render("- [ ] todo\n- [x] done\n", "");
+    must_contain(tl, "<input type=\"checkbox\" disabled> todo", "unchecked task");
+    must_contain(tl, "<input type=\"checkbox\" disabled checked> done", "checked task");
+
+    // ── Tables (header + alignment + body) ───────────────
+    tbl = markdown::render("| col1 | col2 |\n|---|---|\n| a | b |\n", "");
+    must_contain(tbl, "<table><thead>", "table thead");
+    must_contain(tbl, "<th>col1</th>", "table header cell");
+    must_contain(tbl, "<td>a</td>", "table body cell");
+    tbl_align = markdown::render("| L | C | R |\n|:--|:--:|--:|\n| a | b | c |\n", "");
+    must_contain(tbl_align, "style=\"text-align:left\"", "table align left");
+    must_contain(tbl_align, "style=\"text-align:center\"", "table align center");
+    must_contain(tbl_align, "style=\"text-align:right\"", "table align right");
+
+    // ── HTML comments stripped ───────────────────────────
+    cmt = markdown::render("<!-- hide me -->\nshow me\n", "");
+    must_not_contain(cmt, "hide me", "html comment stripped");
+    must_contain(cmt, "show me", "non-comment line preserved");
+
+    // ── CRLF handling ────────────────────────────────────
+    crlf = markdown::render("# Title\r\n\r\nbody\r\n", "");
+    must_contain(crlf, "<h1 id=\"title\">Title</h1>", "CRLF heading");
+    must_contain(crlf, "<p>body</p>", "CRLF paragraph");
+    must_not_contain(crlf, "\r", "CRLF \\r stripped");
+
+    // ── UTF-8 multi-byte preservation (P272 regression) ──
+    utf = markdown::render("# Arrow → here\n\nan em-dash — here\n", "");
+    must_contain(utf, "Arrow → here", "UTF-8 in heading");
+    must_contain(utf, "em-dash — here", "UTF-8 in paragraph");
+    must_not_contain(utf, "———", "no em-dash widening");
+    must_not_contain(utf, "→→", "no arrow widening");
+
+    // ── HTML in source escaped (no raw HTML passthrough) ──
+    htm = markdown::render("a <script>x</script> b\n", "");
+    must_contain(htm, "&lt;script&gt;", "raw HTML escaped");
+    must_not_contain(htm, "<script>x</script>", "no raw HTML passthrough");
+
+    println("ALL TESTS PASSED");
+}
