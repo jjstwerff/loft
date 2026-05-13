@@ -560,6 +560,132 @@ is needed and not yet in place.
 
 ---
 
+## C67 — Fail at startup, not at runtime (no programmer-side try/catch for internal bugs)
+
+### Question
+
+When a loft program hits an internal-bug runtime panic (a
+`todo!()`-stubbed native, a codegen mistake, an unimplemented
+operator), should we add programmer-side error-recovery
+constructs (`try { … } catch err { … }`, `#panic_safe fn(T)`
+annotations, defensive `unwrap_or_else` boilerplate) so the
+program can continue?
+
+### Evaluation
+
+Three competing pressures:
+
+1. **Robustness perception** — users want loft programs to
+   "just work."  A panic mid-execution feels broken regardless
+   of whose fault it is.
+2. **Programmer burden** — every defensive-wrap mechanism
+   forces the user to remember a pattern.  Forgetting one
+   wrap means a production crash.  The pattern proliferates
+   ("everyone writes try/catch everywhere") until it's
+   indistinguishable from the language not having had error
+   recovery at all.
+3. **VM-route fail-fast** — production loft programs run
+   under a supervisor (systemd, kubernetes, containerd) that
+   already monitors process exits and decides restart /
+   escalate / page.  Hiding crashes from the supervisor
+   defeats its job.
+
+Three layers of failure exist:
+
+- **Internal bugs** (todo!() stubs, type mismatches, codegen
+  errors) — the LANGUAGE / RUNTIME made the mistake.  Should
+  never reach a running program.
+- **Startup-time external faults** (config invalid, port bind
+  failure, missing deps) — the PROGRAM can't sensibly continue.
+  The supervisor needs to know.
+- **Steady-state external faults** (network drop, disk full,
+  transient I/O error) — the LIBRARY handles them gracefully
+  (auto-reconnect, retry, fallback to default).  The user-code
+  in the loft program never sees them.
+
+### Decision
+
+**Closed (2026-05-13)** as a layered policy.  The user's framing:
+
+> *"I do not want to burden the programmer with… write try
+> catch or your program will fail.  So everything will need a
+> try catch to function, we should not go that path.  Things
+> have to function properly.  We can fail but that should be
+> on startup and not during the running of a program."*
+>
+> *"We can still allow for runtime exceptions in the future,
+> things can and will break.  Though the detection of it needs
+> to be in a start-up phase, we go the VM route of failing
+> fast so the VM manager is informed of a problem."*
+>
+> *"After initial startup we will do our utmost best to keep
+> running."*
+
+Three load-bearing rules:
+
+1. **Internal bugs are caught at compile time, not at
+   runtime.**  The codegen refuses to emit a binary that
+   contains a reachable `todo!()` stub or any other
+   would-panic-on-call construct.  If a loft program would
+   panic from an internal mistake when called, the build
+   fails with a clear message ("native fn `n_X` has no
+   implementation; wire it in src/codegen_runtime.rs or run
+   via --interpret").  This is the **compile-time** layer.
+   Sibling work: every codegen path that historically emitted
+   `todo!()` for an unimplemented native is now a hard
+   compile-error per P269.
+2. **Startup faults exit the program with non-zero status.**
+   No catch_unwind, no logging-and-continuing.  The supervisor
+   sees the exit code and decides.  This is the **VM-route
+   fail-fast** layer.
+3. **Steady-state runtime faults are HANDLED BY LIBRARIES,
+   not by user code.**  lib/web's WebSocket auto-reconnects.
+   lib/server's eventual `serve(handler)` primitive owns its
+   own per-request `catch_unwind` (logs + 500 + continues
+   serving).  lib/io returns explicit error values rather than
+   panicking.  The USER's loft program never writes
+   `try { … } catch { … }` for these — the LIBRARY hides the
+   mechanism behind a clean API.  This is the **best-effort
+   keep-running** layer.
+
+**No `try { … } catch err { … }` language construct, no
+`#panic_safe` annotation, no programmer-side `?? null`
+boilerplate** for internal-bug recovery.  Loft's typed-error
+infrastructure (per CLAUDE.md) IS allowed — that's about
+EXPLICIT user-domain errors (parse failures, validation,
+business-logic invariants) where the user wrote code that
+returns `Result`-like values and consciously handles them.
+That's different from internal-bug recovery, which is what
+this decision rejects.
+
+### Revisit when
+
+- A class of internal bug surfaces that compile-time analysis
+  CAN'T statically prove safe (e.g. parser-generated dispatch
+  to runtime-discovered code paths).  Then the lib/server-style
+  catch boundary may need to extend deeper.
+- A real production loft program is run under a supervisor
+  that genuinely benefits from in-process recovery (e.g. a
+  long-running game server where restart cost is high), AND
+  the library-level `serve(handler)` primitives can't cover
+  the use case.  Then a narrow loft-side error-recovery
+  primitive may be evaluated.
+- User-code patterns emerge that NATURALLY want exception-style
+  flow (e.g. deeply-nested validation chains where the typed-
+  error mechanism becomes more boilerplate than the catch
+  would).  Then the typed-error infrastructure may evolve;
+  this decision specifically blocks try/catch for the
+  internal-bug-recovery use case.
+
+Pointer from the source: see PROBLEMS.md row P269 for the
+specific incident this decision was crystallised in (server
+process died on todo!() panic during the P268 fix work);
+the compile-time check shipped 2026-05-13 in
+`src/generation/mod.rs::output_function`.  Memory-system
+mirror: `feedback_fail_at_startup_not_runtime.md`.
+
+---
+
 ## Adding a new entry
 
 When closing a question, append a new `##` section using the

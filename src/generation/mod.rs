@@ -600,6 +600,19 @@ extern crate loft;"
         from: u32,
         till: u32,
     ) -> std::io::Result<()> {
+        // P269 — populate reachability from `n_main` so the unimplemented-
+        // native check (`output_function`'s `todo!()`-emit branches) can
+        // distinguish "reachable AND unimpl" (compile_error!, fail at
+        // build time per the "fail at startup, not runtime" principle)
+        // from "unreachable + unimpl" (harmless `todo!()` shim).  Without
+        // this, the reachability set was empty under `--native` (only
+        // populated by `output_native_reachable`), so EVERY unimpl native
+        // would have to compile-error or NONE could.  Now the two emit
+        // paths agree on what's actually live in the program.
+        let main_nr = self.data.def_nr("n_main");
+        if main_nr < self.data.definitions() {
+            self.reachable = reachable_functions(self.data, &[main_nr]);
+        }
         Self::emit_file_header(w, self.data, self.wasm_browser)?;
         writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
         writeln!(
@@ -1786,9 +1799,24 @@ extern crate loft;"
                     let qualified = format!("{}::{}", krate, def.native);
                     self.output_native_direct_call(w, def_nr, &qualified)?;
                 } else {
+                    // P269: refuse to emit a runtime panic for a reachable
+                    // unimplemented native — convert to a compile-time error
+                    // per the "fail at startup, not runtime" principle.
+                    // Unreachable defs keep the `todo!()` shim so unused
+                    // declarations don't reject otherwise-valid programs.
+                    let reachable = self.reachable.is_empty()
+                        || self.reachable.contains(&def_nr);
                     writeln!(w, "{{")?;
                     if def.returned != Type::Void {
-                        writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                        if reachable {
+                            writeln!(
+                                w,
+                                "  compile_error!(\"loft --native: native fn `{}` (#native \\\"{}\\\") has no implementation in any registered native crate; either run via --interpret or wire the symbol in a #native package or src/codegen_runtime.rs (P269)\")",
+                                def.name, def.native
+                            )?;
+                        } else {
+                            writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                        }
                     }
                     writeln!(w, "}}")?;
                 }
@@ -1818,7 +1846,21 @@ extern crate loft;"
                     )?;
                     writeln!(w, "  loft::codegen_runtime::i_json_errors(stores)")?;
                 } else if def.returned != Type::Void {
-                    writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                    // P269: same compile-time-error escalation as above for
+                    // reachable unimplemented natives without a `#native`
+                    // annotation.  Unreachable internal stubs (e.g. unused
+                    // `i_*` helpers) keep the `todo!()` shim.
+                    let reachable = self.reachable.is_empty()
+                        || self.reachable.contains(&def_nr);
+                    if reachable {
+                        writeln!(
+                            w,
+                            "  compile_error!(\"loft --native: built-in fn `{}` has no native implementation; wire it in src/codegen_runtime.rs or run via --interpret (P269)\")",
+                            def.name
+                        )?;
+                    } else {
+                        writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                    }
                 }
                 writeln!(w, "}}")?;
             }
