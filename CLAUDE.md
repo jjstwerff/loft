@@ -40,17 +40,26 @@ phase 03`) still work in prose; the indexer (`make index`)
 tracks both under separate `legacy:` keys for transition
 metering.
 
-To find references to a tag, query `index/tags.json` instead
-of grep'ing the tree:
+### Looking up tracker references — use `./scripts/idx`
+
+Default workflow for "where is X referenced?":
 
 ```bash
-make index                          # rebuild (run after edits)
-jq '.["legacy:P259"]' index/tags.json   # bare-name refs (today's data)
-jq '.["@P259"]' index/tags.json         # @-prefixed refs (after migration)
+./scripts/idx tag:@P259               # exact @-prefixed tag
+./scripts/idx tag:legacy:P259         # bare-name (transition)
+./scripts/idx prefix:@PLAN22          # all PLAN22-* refs
+./scripts/idx file:doc/.../PROBLEMS.md  # tags in one file
+./scripts/idx all | jq '.[:10]'       # top 10 by reference count
+./scripts/idx broken                  # broken @-refs (phase 03)
+./scripts/idx help                    # usage block
 ```
 
-Plan-37 phase 01 will ship `./scripts/idx <query>` as a
-typed wrapper.  Until then, use `jq` directly.
+Prefer `./scripts/idx` over `grep -rn '@P259' …` — it's
+faster, returns structured JSON, and avoids pulling
+unnecessary file content into context.  Run `make index`
+first if `index/tags.json` is missing or stale (the
+pre-commit hook from phase 02 keeps it fresh on most
+workflows).
 
 For any refactor likely to surface multiple test failures, kick off
 `find_problems.sh --bg` before going back to editing.  It runs

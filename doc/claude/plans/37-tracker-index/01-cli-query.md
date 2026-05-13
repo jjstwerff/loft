@@ -5,7 +5,25 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 01 — CLI query wrapper
 
-**Status:** Open
+**Status:** **Shipped 2026-05-13**.  All 7 query forms
+verified end-to-end against the live `index/tags.json`.
+
+## What actually shipped
+
+`scripts/idx` (~50 lines) provides:
+
+| Form | Behaviour | Verified |
+|---|---|---|
+| `idx help` (or no arg) | Print usage block | ✓ |
+| `idx tag:@P259` | JSON array of refs to a single tag | ✓ (3 refs to @P259, 34 to legacy:P259) |
+| `idx prefix:@PLAN22` | Object: every tag with the prefix → refs | ✓ (@PLAN22, @PLAN22-2-ii, @PLAN22-2d-iii.a) |
+| `idx file:<path>` | Array of `{tag, refs}` for tags in that file (sorted) | ✓ |
+| `idx all` | Array of `{tag, count}` sorted by count desc | ✓ (top: legacy:P1=125, P54=121, P2=118) |
+| `idx broken` | Array of broken @-refs (empty until phase 03) | ✓ (returns `[]`) |
+| `idx <unknown>` | Friendly error + exit 2 | ✓ |
+
+CLAUDE.md updated: § Tracker tags now recommends
+`./scripts/idx ...` over `jq`/`grep`.
 
 ## Goal
 

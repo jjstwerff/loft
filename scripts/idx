@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# scripts/idx — query the tracker-tag index (plan-37 phase 01).
+#
+# Reads index/tags.json (run `make index` to refresh).  All
+# output is JSON; pipe to `jq -r` for plain text if needed.
+#
+# Forms:
+#   idx tag:@P259                 — exact tag match
+#   idx tag:legacy:P259           — bare-name (legacy) lookup
+#   idx prefix:@PLAN22            — all tags starting with prefix
+#   idx file:doc/.../PROBLEMS.md  — all tags referenced in a file
+#   idx all                       — every tag with reference count
+#   idx broken                    — broken @-references (phase 03)
+#   idx help                      — print this usage block
+
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+IDX="$ROOT/index/tags.json"
+
+if [ ! -f "$IDX" ]; then
+  echo "scripts/idx: $IDX missing — run: make index" >&2
+  exit 1
+fi
+
+case "${1:-}" in
+  tag:*)
+    jq --arg t "${1#tag:}" '.[$t] // []' "$IDX"
+    ;;
+  prefix:*)
+    jq --arg p "${1#prefix:}" '
+      [ to_entries[]
+        | select(.key | startswith($p))
+        | { (.key): .value } ]
+      | add // {}
+    ' "$IDX"
+    ;;
+  file:*)
+    jq --arg f "${1#file:}" '
+      [ to_entries[]
+        | { tag: .key,
+            refs: [.value[] | select(.file == $f)] }
+        | select(.refs | length > 0) ]
+      | sort_by(.tag)
+    ' "$IDX"
+    ;;
+  all)
+    jq '
+      [ to_entries[]
+        | { tag: .key, count: (.value | length) } ]
+      | sort_by(-.count)
+    ' "$IDX"
+    ;;
+  broken)
+    jq '.broken // []' "$IDX"
+    ;;
+  ""|-h|--help|help)
+    sed -n '2,17p' "$0"
+    ;;
+  *)
+    echo "scripts/idx: unknown query '$1' (try: idx help)" >&2
+    exit 2
+    ;;
+esac

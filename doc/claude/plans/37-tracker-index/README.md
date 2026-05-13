@@ -106,7 +106,7 @@ Tag bodies follow these rules:
 | # | Phase | Effort | What ships | Status |
 |---|---|---|---|---|
 | 0 | [Tag convention + initial indexer](00-convention-and-scanner.md) | XS | `tools/indexer/scan.sh` + `make index` target + CLAUDE.md docs of the tag convention.  No retroactive tagging yet — indexer scans both old (`P259`) and new (`@P259`) forms with separate prefixes for transition tracking. | Open |
-| 1 | [CLI query wrapper](01-cli-query.md) | XS | `scripts/idx` bash wrapper around `index/tags.json`.  Supports `tag:`, `prefix:`, `file:`, `broken` queries.  Documented in CLAUDE.md as the canonical way for Claude to look up references. | Open |
+| 1 | [CLI query wrapper](01-cli-query.md) | XS | `scripts/idx` bash wrapper around `index/tags.json`.  Supports `tag:` / `prefix:` / `file:` / `all` / `broken` / `help`.  CLAUDE.md updated to recommend it as the canonical reference-lookup. | **Shipped 2026-05-13** |
 | 2 | [Auto-refresh on commit](02-auto-refresh.md) | XS | `.git/hooks/pre-commit` runs `make index` if any `*.md` / `*.rs` / `*.loft` changed.  Documented as a one-time setup in DEBUG.md. | Open |
 | 3 | [Broken-tag validator](03-broken-validator.md) | S | Indexer detects `@P-id` references that don't resolve (e.g., `@P9999`) AND `@PLAN-id` references whose plan dir doesn't exist.  CI gate via `tests/index_hygiene.rs`. | Open |
 | 4 | [Plan-35 viewer integration](04-viewer-integration.md) | S | Plan-35 viewer reads `index/tags.json` and surfaces tag references.  Each plan README + PROBLEMS row links to all its references.  /welcome landing's "where could I help" tags pulled from this data. | Open (depends on plan-35 phase 08) |
