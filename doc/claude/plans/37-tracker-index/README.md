@@ -122,7 +122,7 @@ Tag bodies follow these rules:
 
 | # | Phase | Effort | What ships | Status |
 |---|---|---|---|---|
-| 0 | [Tag convention + initial indexer](00-convention-and-scanner.md) | XS | `tools/indexer/scan.sh` + `make index` target + CLAUDE.md docs of the tag convention.  No retroactive tagging yet — indexer scans both old (`P259`) and new (`@P259`) forms with separate prefixes for transition tracking. | Open |
+| 0 | [Tag convention + initial indexer](00-convention-and-scanner.md) | XS | `tools/indexer/scan.sh` + `make index` target + CLAUDE.md docs of the tag convention.  No retroactive tagging yet — indexer scans both old (`P259`) and new (`@P259`) forms with separate prefixes for transition tracking. | **Shipped 2026-05-13** |
 | 1 | [CLI query wrapper](01-cli-query.md) | XS | `scripts/idx` bash wrapper around `index/tags.json`.  Supports `tag:` / `prefix:` / `file:` / `all` / `broken` / `help`.  CLAUDE.md updated to recommend it as the canonical reference-lookup. | **Shipped 2026-05-13** |
 | 2 | [Auto-refresh on commit](02-auto-refresh.md) | XS | `tools/indexer/install-hook.sh` writes a marker-bracketed snippet to `.git/hooks/pre-commit`; idempotent across re-runs.  Hook re-runs the scanner when an indexed file is staged.  `make index-install-hook` invokes it.  DEBUG.md gains § Tracker-tag indexer with install + usage docs. | **Shipped 2026-05-13** |
 | 3 | [Broken-tag validator](03-broken-validator.md) | S | Indexer computes `broken[]` for refs to non-existent P-ids / plans.  `<!--noindex-->` line marker for intentional doc examples.  `tests/index_hygiene.rs` CI gate. | **Shipped 2026-05-13** |

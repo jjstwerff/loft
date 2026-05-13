@@ -5,7 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 00 — Tag convention + initial indexer
 
-**Status:** Open
+**Status:** Shipped 2026-05-13 — landed alongside phase 01.
+The scanner, `make index` target, ARCHITECTURE.md, `.gitignore`
+entry, and CLAUDE.md § Tracker tags all exist and are in
+daily use.  The status field was just stale; closing it
+2026-05-14 as housekeeping.
 
 ## Goal
 
@@ -14,6 +18,30 @@ minimum viable scanner: a bash script that walks the repo,
 finds tag references, and writes `index/tags.json`.  No CLI
 wrapper yet (phase 01); no auto-refresh (phase 02); no broken-
 tag validation (phase 03).  Just the index file.
+
+## What actually shipped
+
+- `tools/indexer/scan.sh` — bash + grep + jq + awk pipeline.
+  Three extractor passes (`@P-id` + `@PLAN-id` + legacy bare-
+  name forms), grouped per-tag in `index/tags.json`.
+  Subsequent phases extended it: phase 03 added the
+  `broken[]` bucket, phase 09 added the `links{}` and
+  `broken_links[]` buckets.
+- `tools/indexer/ARCHITECTURE.md` — design notes ~30 lines,
+  unchanged from the original spec.
+- `Makefile` `index:` target — `@./tools/indexer/scan.sh`.
+- `CLAUDE.md` `## Tracker tags (plan-37)` block — convention
+  + lookup workflow + excerpt flags.
+- `.gitignore` `/index/*` entry with `!/index/.gitkeep` so
+  the dir survives `git clean`.
+- `index/.gitkeep` placeholder.
+
+Performance on the loft tree (953 indexed files):
+
+- 1.5 sec total (scan + broken-tag validate + link extract
+  + broken-link validate)
+- ~225 distinct tag families, ~3500 references after the
+  phase-06 retroactive `@`-tagging migration.
 
 ## What ships
 
