@@ -177,6 +177,16 @@ pub fn type_timeline_target() -> Option<String> {
     raw.strip_prefix("type_timeline:").map(str::to_string)
 }
 
+/// Plan-22 02d-vii follow-up — `LOFT_LOG=slots:<fn_name>`
+/// mode.  Returns `Some(fn_name)` when the env var has the
+/// `slots:NAME` form.  Caller dumps slot-allocation decisions
+/// for fns matching `NAME` (substring match).
+#[must_use]
+pub fn slots_trace_target() -> Option<String> {
+    let raw = std::env::var("LOFT_LOG").ok()?;
+    raw.strip_prefix("slots:").map(str::to_string)
+}
+
 impl LogConfig {
     // ------------------------------------------------------------------ presets
 
