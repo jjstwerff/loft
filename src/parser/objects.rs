@@ -754,7 +754,19 @@ impl Parser {
                     })
                     .map(|v| self.vars.name(v))
                     .collect();
-                let suggestion = crate::diagnostics::suggest_similar(&name, &candidates);
+                // Plan-07 phase 5: skip suggestions for very short names
+                // (1 char) where typos are too ambiguous to be meaningful
+                // (`x` vs `y` is a coin flip).  Standard `suggest_similar`
+                // (distance ≤ 2) used here instead of the more aggressive
+                // `suggest_similar_capped` because variable typos like
+                // `result` vs `reuslt` (6-char transposition, distance 2)
+                // are common and worth suggesting; the capped version's
+                // `min(2, n/4)` formula is too strict for short names.
+                let suggestion = if name.chars().count() <= 1 {
+                    None
+                } else {
+                    crate::diagnostics::suggest_similar(&name, &candidates)
+                };
                 if let Some(s) = suggestion {
                     diagnostic!(
                         self.lexer,

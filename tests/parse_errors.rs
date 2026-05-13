@@ -64,6 +64,43 @@ fn test() {}"
     .error("Undefined type Conter — did you mean 'Counter'? at p07_suggest_undefined_type:2:23");
 }
 
+// ── Plan-07 phase 5 anti-suggestion tests ────────────────────────
+// Locks in the rule that suggestions DON'T fire when the candidate
+// would be misleading.  Pre-fix the variable-suggestion site used
+// the uncapped `suggest_similar` (distance ≤ 2) which over-matched
+// 1-char names ("did you mean 'x'?" for typo `y`).  Phase-5 fix:
+// skip suggestions for ≤1-char names where typos are too ambiguous
+// to be meaningful.  Distance/scope filters cover the other cases.
+
+/// Single-letter typo must NOT suggest the other 1-char name —
+/// `x` vs `y` is a coin flip; the suggestion would be noise.
+#[test]
+fn p07_no_suggest_single_letter_typo() {
+    code!("fn test() { x = 5; y == 1 }")
+        .error("Unknown variable 'y' at p07_no_suggest_single_letter_typo:1:26")
+        .warning("Variable x is never read at p07_no_suggest_single_letter_typo:1:16");
+}
+
+/// Distant name (`printbar` vs `foo`) must NOT suggest — Levenshtein
+/// distance > 2 falls outside `suggest_similar`'s ceiling.
+#[test]
+fn p07_no_suggest_distant_name() {
+    code!("fn test() { foo = 5; printbar == 1 }")
+        .error("Unknown variable 'printbar' at p07_no_suggest_distant_name:1:35")
+        .warning("Variable foo is never read at p07_no_suggest_distant_name:1:18");
+}
+
+/// Variable in a sibling fn must NOT be suggested — the candidate
+/// set is function-scoped (`self.vars.iter()` only sees the current
+/// fn's locals + arguments).  `cousin` defined in `other()` does not
+/// leak into `test()`'s suggestion candidates for typo `cousn`.
+#[test]
+fn p07_no_suggest_sibling_fn_scope() {
+    code!("fn other() { cousin = 99; }\nfn test() { cousn == 1 }")
+        .warning("Variable cousin is never read at p07_no_suggest_sibling_fn_scope:1:22")
+        .error("Unknown variable 'cousn' at p07_no_suggest_sibling_fn_scope:1:42");
+}
+
 // Field-suggestion paths (struct-literal + field-access) and the
 // 1-char cap behaviour are end-to-end-validated by
 // `quality_6c_unknown_field_without_free_fn_has_no_hint` in
