@@ -145,6 +145,7 @@ First-time-user experience, daily ergonomics, IDE polish.
 | P2 | REPL / interactive mode | M | ✓ | plans/future/08-repl-and-introspection/README.md |
 | W-warn | Developer warnings (Clippy-inspired) | M | ✓ | lib_plans/future/05-game-infra/README.md |
 | L1 | Error recovery after token failures | M | ✓ | (needs plan promotion) |
+| (cross) | Branch-aware doc + code review viewer (loft binary) | M | ✓ | plans/35-branch-review-viewer/README.md |
 
 ### IDE editing surface
 
@@ -304,6 +305,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/07-error-messages/`](plans/07-error-messages/) | M | — | `file:line:col` + caret + suggestions across parser / type / runtime / native |
+| [`plans/35-branch-review-viewer/`](plans/35-branch-review-viewer/) | M | — | Frozen loft binary; serves branch-aware doc + code review dashboard via SSH-forwarded HTTP.  Drives `lib/server` + plan-22 closures + 0.8.3 coroutines |
 | [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) | XS-S per item | — | SH.* / DX.* / NT.* — DX grab-bag (some shipped) |
 | [`plans/future/08-repl-and-introspection/`](plans/future/08-repl-and-introspection/) | M | — | `loft>` interactive prompt + IR/Rust/slot-table CLI |
 
