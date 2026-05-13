@@ -647,6 +647,30 @@ embeds the old numbers — **never reorder existing op
 declarations while adding new ones**.  Append at the end of the
 relevant family.
 
+### Friction + improvement backlog (not yet shipped)
+
+The 10-step bootstrap above works but is manual + position-
+sensitive.  Three concrete improvements would reduce the
+maintenance cost of adding a new opcode:
+
+| # | Improvement | Current friction it removes | Effort |
+|---|---|---|---|
+| **A** | Convert `pub const OPERATORS: &[fn(&mut State); N]` to a slice-typed `&[fn(&mut State)]` (no fixed size) | Eliminates step 3 (manual array-size growth) and the chicken-and-egg bootstrap when adding the (N+1)th op.  The runtime assert at `src/data.rs:2102` already checks dynamically against `fill::OPERATORS.len()`; the fixed size 255 was for the u8-bytecode-encoding cap, but `fill::emit_op` already supports >255 via the 2-byte fallback.  After A: regen always succeeds; no manual fill.rs grow needed. | XS (~10 min) |
+| **B** | Auto-regen on `fill_rs_up_to_date` failure: have the test attempt regen + re-compare instead of just printing the command, OR convert `regen_fill_rs` from `#[ignore]` to a `build.rs` step that runs on every cargo build | Eliminates steps 7 + 8 as user-visible chores.  Editing `default/*.loft` just causes a rebuild that automatically refreshes `fill.rs`.  Test-side variant is safer than `build.rs` (no build-time codegen risk); `build.rs` is cleanest long-term but more invasive. | S (test-side ~30 min; build.rs ~2 hours) |
+| **C** | Improve the assert error message at `src/data.rs:2102` to name the EXACT line in `fill.rs` to add the placeholder + the position-sensitive note (which family the new op belongs to, where in the array it should land) | Eliminates step 4's "easy to misplace" gotcha (e.g. appending at the end when the op is from `01_code.loft` — the array entry needs to match the parse-order position, NOT just go at the end).  The current "grow the OPERATORS array" message doesn't mention placement. | XS (~15 min) |
+
+**Surfaced 2026-05-13** during P259's commit-1 work: hit the
+255-op limit when adding `OpIncRc`, had to manually patch
+`fill.rs` (size + placeholder at the right position) before
+regen could run.  Then misplaced the placeholder at the end of
+the array, only to learn the position must match parse order
+(OpIncRc is in 01_code.loft → goes after `pre_alloc_vector`,
+NOT after `const_store_text`).
+
+**Recommended order**: ship A first (XS, eliminates the
+biggest pain), then C (also XS, makes mistakes easier to spot),
+then B (S, optional polish).  None depend on each other.
+
 ---
 
 ## GitHub Issues and Releases — Hard Limits
