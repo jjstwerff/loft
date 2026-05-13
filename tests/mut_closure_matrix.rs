@@ -668,34 +668,33 @@ cross_mode!(
     "#
 );
 
-// P259 (filed 2026-05-13): multi-factory interleaved-call pattern
-// crashes with `index out of bounds` in `database/allocation.rs:347`
-// — the second `make()` call's cell or closure-record store
-// gets a store_nr higher than the allocations table's len.
-// Single-factory pattern works fine (see c_d4_make_counter_factory
-// above + p22_phase03_factory_no_leak in tests/leak.rs).
-//
-// Workaround: only construct one factory instance per `fn`.
-// Reactivate when P259 is closed.
-#[test]
-#[ignore = "P259 multi-factory interleave: two factories crash with index out of bounds"]
-fn c_d4_factory_independent_state_p259() {
-    // Snippet for reference (the cross_mode! macro is bypassed
-    // here; this test stays #[ignore]'d until the underlying
-    // bug is fixed):
-    // ```
-    // fn make() -> fn() -> integer {
-    //     n = 0;
-    //     fn() -> integer { n = n + 1; n }
-    // }
-    // fn test() {
-    //     f1 = make();
-    //     f2 = make();
-    //     a1 = f1(); a2 = f1(); b1 = f2(); a3 = f1();
-    //     assert(a1 == 1 && a2 == 2 && a3 == 3 && b1 == 1);
-    // }
-    // ```
-}
+// P259 (filed 2026-05-13, fixed 2026-05-13): multi-factory
+// interleaved-call pattern — each make() instance must have
+// its own captured cell that survives until its closure dies.
+// The fix landed via the OpIncRc + cascade-free chain:
+// commit 1 added the OpIncRc opcode, commit 2 wired emission
+// at capture in emit_lambda_code, commit 3 added
+// Store::known_type plumbing, and commit 4 added the
+// `__closure_*` cascade-free in Stores::free_named.
+cross_mode!(
+    c_d4_factory_independent_state,
+    r#"
+    fn make() -> fn() -> integer {
+        n = 0;
+        fn() -> integer { n = n + 1; n }
+    }
+    fn test() {
+        f1 = make();
+        f2 = make();
+        a1 = f1();
+        a2 = f1();
+        b1 = f2();
+        a3 = f1();
+        assert(a1 == 1 && a2 == 2 && a3 == 3 && b1 == 1,
+               "multi-factory: f1=({a1},{a2},{a3}) f2=({b1})");
+    }
+    "#
+);
 
 cross_mode!(
     c_d3_factory_into_struct_field,

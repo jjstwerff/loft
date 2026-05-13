@@ -175,6 +175,55 @@ impl Stores {
             }
             return;
         }
+        // P259 commit 4: cascade-free closure-record DbRef attributes.
+        // When the store being freed holds a `__closure_*` record,
+        // each Parts::DbRef field references a captured cell whose rc
+        // was inc'd at capture time (commit 2 OpIncRc emission).
+        // Walk those fields, read each 12-byte stored DbRef, and
+        // recursively free_named so the cell's rc drops back to its
+        // pre-capture level.  Cells shared between multiple closures
+        // only actually free when the LAST referencing closure dies
+        // (recursive free_named respects rc).
+        //
+        // Gated on the type name's `__closure_` prefix because:
+        // - Only closure records hold cells via Parts::DbRef.
+        // - User code can't define identifiers with `__` prefix
+        //   (loft parser rejects), so the prefix check is leak-free.
+        // - Cascading every Parts::DbRef field would break P213
+        //   ChildRec storage and any future DbRef-holding struct.
+        let cascade_targets: Vec<DbRef> = {
+            let store_ref = &self.allocations[al as usize];
+            let known_type = store_ref.known_type;
+            if known_type != u16::MAX
+                && self.types[known_type as usize]
+                    .name
+                    .starts_with("__closure_")
+            {
+                let dbref_positions: Vec<u16> = if let Parts::Struct(fields) =
+                    &self.types[known_type as usize].parts
+                {
+                    fields
+                        .iter()
+                        .filter(|f| matches!(self.types[f.content as usize].parts, Parts::DbRef))
+                        .map(|f| f.position)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                dbref_positions
+                    .iter()
+                    .map(|&fpos| {
+                        let off = db.pos + u32::from(fpos);
+                        let store_nr = store_ref.get_u32_raw(db.rec, off) as u16;
+                        let rec = store_ref.get_u32_raw(db.rec, off + 4);
+                        let pos = store_ref.get_u32_raw(db.rec, off + 8);
+                        DbRef { store_nr, rec, pos }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        };
         if std::env::var("LOFT_STORES").as_deref() == Ok("log") {
             let active = self.allocations.iter().filter(|s| !s.free).count();
             let label = if name.is_empty() { "" } else { name };
@@ -218,6 +267,17 @@ impl Stores {
             self.max -= 1;
             while self.max > 0 && self.allocations[(self.max - 1) as usize].free {
                 self.max -= 1;
+            }
+        }
+        // P259 commit 4: cascade-free the captured-cell DbRefs collected
+        // above.  Done AFTER the closure record's own free so that
+        // a recursive cascade on a closure-record cell sees this slot
+        // as already-freed and does not re-enter.  Skip the null
+        // sentinel pattern (store_nr=0, rec=0) which is the default
+        // value written by `set_default_value` for unset DbRef fields.
+        for target in cascade_targets {
+            if target.store_nr != 0 || target.rec != 0 {
+                self.free_named(&target, "<cascade>");
             }
         }
     }

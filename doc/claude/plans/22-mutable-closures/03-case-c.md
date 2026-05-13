@@ -5,8 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 03 — Case C: moved mutating closures (factory pattern)
 
-**Status: largely shipped 2026-05-13 by 02d-iii.e (single-factory works);
-multi-instance interleave open as P259.**
+**Status: fully shipped 2026-05-13.**  Single-factory works
+via 02d-iii.e (cell + auto-Reference machinery);
+multi-instance interleave fixed by the P259 four-commit
+chain (OpIncRc emission on capture + cascade-free in
+`Stores::free_named` gated on `__closure_` type prefix).
 
 ## Major finding (2026-05-13)
 
@@ -27,16 +30,20 @@ Verified via:
 
 All three pass on both interp + native.
 
-**Open: P259 — multi-instance interleave** (`f1 = make();
-f2 = make(); f1(); f2(); f1();`) crashes with index-out-of-
-bounds in `database/allocation.rs:347`.  Looks like a
-premature free of the second factory's cell or closure-record
-store.  Pinned by `c_d4_factory_independent_state_p259`
-(`#[ignore]`).  Single-factory shape unaffected.
+**Multi-instance interleave (`f1 = make(); f2 = make();
+f1(); f2(); f1();`) shipped 2026-05-13 via P259** — the
+closure record now actually OWNS the cells it captures
+(`inc_rc` on capture + cascade-free on close-record free
+gated on `__closure_` type prefix).  See
+[PROBLEMS.md row 259](../../PROBLEMS.md#open-issues--quick-reference)
+for the full closing story (commits, files touched,
+regression pins).
 
 The original phase-03 design (below) anticipated needing
 explicit liveness checks + cell-dep rewriting; the actual
-implementation effort is just the P259 fix.
+implementation reused the existing dep chain for
+single-factory and added `inc_rc + cascade-free` for
+multi-factory.
 
 ## Goal
 

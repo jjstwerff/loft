@@ -778,9 +778,9 @@ fn p22_phase02d_vi_text_capture_no_leak() {
 /// `make()`'s scope exit; the cell frees when the closure
 /// goes out of scope in the caller.
 ///
-/// Single-factory works.  Multi-factory interleaved-call
-/// shape crashes with `index out of bounds` in
-/// `database/allocation.rs:347` — see P259.
+/// Single-factory works.  Multi-factory shape was P259
+/// (fixed 2026-05-13) — see [`p22_phase03_multi_factory_no_leak`]
+/// below for the multi-factory regression guard.
 #[test]
 fn p22_phase03_factory_no_leak() {
     run_leak_check_str(
@@ -796,6 +796,38 @@ fn p22_phase03_factory_no_leak() {
                 _ = f();
                 _ = f();
                 _ = f();
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// P259 (fixed 2026-05-13): multi-factory closure-record cells
+/// must each free independently when their owning closure dies.
+///
+/// 100-iteration loop with TWO factory instances per iteration,
+/// interleaved calls.  Without the cascade-free in
+/// `Stores::free_named` (commit 4 of the P259 fix), each
+/// iteration would leak two cells (one per factory) for a total
+/// of 200 leaked stores by exit.  With the fix: clean.
+#[test]
+fn p22_phase03_multi_factory_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn make() -> fn() -> integer {
+            n = 0;
+            fn() -> integer { n = n + 1; n }
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                f1 = make();
+                f2 = make();
+                _ = f1();
+                _ = f2();
+                _ = f1();
+                _ = f2();
                 i = i + 1;
             }
         }
