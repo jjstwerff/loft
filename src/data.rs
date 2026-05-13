@@ -2086,26 +2086,23 @@ impl Data {
         self.definitions[d_nr as usize].synthetic = Some(reason);
     }
 
-    /**
-       Write the `op_code` on operators.
-       # Panics
-       When too many `op_codes` are written. The byte code can only handle values <256.
-    */
+    /// Assign a sequential op_code to an operator definition.
+    ///
+    /// Op_codes 0..N map to `fill::OPERATORS[0..N]`.  Bytecode encoding is
+    /// transparent via `fill::emit_op`: codes < 255 use 1 byte, codes >= 255
+    /// use 2 bytes (255 + offset).
+    ///
+    /// Op_code assignment runs at parse time and may legitimately exceed
+    /// `fill::OPERATORS.len()` when a new opcode has just been added to
+    /// `default/*.loft` and `src/fill.rs` has not yet been regenerated.  The
+    /// staleness checks (`n9_generated_fill_matches_src` and
+    /// `fill_rs_up_to_date` in `tests/issues.rs`) catch the drift; the
+    /// runtime would index-OOB on dispatch if a stale `fill.rs` were
+    /// actually executed.
     pub fn op_code(&mut self, def_nr: u32) {
         if !self.def(def_nr).is_operator() || self.def(def_nr).op_code != u16::MAX {
             return;
         }
-        // Flat table: op_codes 0..N map to OPERATORS[0..N].
-        // Bytecode encoding is transparent via fill::emit_op:
-        // codes < 255 → 1 byte; codes >= 255 → 2 bytes (255 + offset).
-        let max_ops = crate::fill::OPERATORS.len();
-        assert!(
-            (self.op_codes as usize) < max_ops,
-            "Too many defined operators ({} of {max_ops} used). \
-             To add more, grow the OPERATORS array in src/fill.rs and regenerate \
-             with `cargo test --test issues regen_fill_rs -- --ignored`.",
-            self.op_codes
-        );
         self.definitions[def_nr as usize].op_code = self.op_codes;
         self.operators.insert(self.op_codes, def_nr);
         self.op_codes += 1;

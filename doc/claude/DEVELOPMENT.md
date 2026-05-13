@@ -597,27 +597,16 @@ produces.
    declaration adjacent to the existing `Op*` family it extends
    (e.g. new `OpGetShortRaw` next to `OpGetInt4`) so regen output
    is readable.
-3. **Grow the `OPERATORS` array size in `src/fill.rs`** — change
-   `&[fn(&mut State); N]` to `&[fn(&mut State); N+k]` where `k`
-   is the number of new ops.  Without this, regen panics with
-   `Too many defined operators (N of N used)`.
-4. **Append placeholder identifiers at the bottom of the
-   `OPERATORS` array**, matching the snake_case form of the new
-   op names (`OpGetShortRaw` → `get_short_raw`).  Append in the
-   order declared in `default/01_code.loft` — array index becomes
-   the opcode number and must match what the parser emits via
-   `data.def_nr("OpGetShortRaw")`.
-5. **Add placeholder function definitions** with matching
-   signatures at the end of `src/fill.rs`.  Empty bodies are
-   fine — regen overwrites them.  Required so the array
-   references resolve and the crate compiles.
-6. **Build**: `cargo build --release`.  Must succeed before
-   regen runs.
-7. **Regenerate**: `cargo test --release --test issues
+3. **Regenerate**: `cargo test --release --test issues
    regen_fill_rs -- --ignored --nocapture`.  Overwrites
    `src/fill.rs` with canonical content derived from every
-   `#rust"…"` body in `default/*.loft`.
-8. **Rebuild dependents**:
+   `#rust"…"` body in `default/*.loft`.  No manual `fill.rs`
+   prep is needed — `OPERATORS` is slice-typed (`&[fn(&mut State)]`,
+   no fixed size) and the parse-time op-code assert was removed
+   (2026-05-13, Option A); regen handles the array grow + the
+   new function body in one pass from each new op's `#rust"…"`
+   annotation.
+4. **Rebuild dependents**:
    - `cargo build --release --lib` — refreshes the interpreter.
    - `cargo build --release --target wasm32-unknown-unknown --lib
      --no-default-features --features random` — refreshes the
@@ -626,18 +615,18 @@ produces.
    - `(cd tests/lib/native_pkg/native && cargo build --release)`
      — refreshes the fixture cdylib.  Same freshness check in
      `tests/native_loader.rs`.
-9. **Audit native codegen** (`src/codegen_runtime.rs`):
+5. **Audit native codegen** (`src/codegen_runtime.rs`):
    regen_fill_rs does NOT touch this file.  `match parts` arms
    that enumerate every `Parts::*` variant get a non-exhaustive
    warning when a new variant is added — add the new arm
    manually.  For opcodes that add new `stores.method()` calls,
    mirror them in codegen_runtime.rs (look for parallel
    `OpGetInt4` / `OpSetInt4` handling).
-10. **Run `native_dir` before committing**: `cargo test --release
-    --test native native_dir`.  Pure native-mode test compilation;
-    catches the silent-hang class of regression where every unit
-    test passes but a native-compiled script hangs.  Do NOT
-    commit based on unit-test success alone.
+6. **Run `native_dir` before committing**: `cargo test --release
+   --test native native_dir`.  Pure native-mode test compilation;
+   catches the silent-hang class of regression where every unit
+   test passes but a native-compiled script hangs.  Do NOT
+   commit based on unit-test success alone.
 
 **Ordering constraint**: opcode number is determined by entry
 order in `OPERATORS`, which `regen_fill_rs` derives from
@@ -647,29 +636,20 @@ embeds the old numbers — **never reorder existing op
 declarations while adding new ones**.  Append at the end of the
 relevant family.
 
-### Friction + improvement backlog (not yet shipped)
-
-The 10-step bootstrap above works but is manual + position-
-sensitive.  Three concrete improvements would reduce the
-maintenance cost of adding a new opcode:
-
-| # | Improvement | Current friction it removes | Effort |
-|---|---|---|---|
-| **A** | Convert `pub const OPERATORS: &[fn(&mut State); N]` to a slice-typed `&[fn(&mut State)]` (no fixed size) | Eliminates step 3 (manual array-size growth) and the chicken-and-egg bootstrap when adding the (N+1)th op.  The runtime assert at `src/data.rs:2102` already checks dynamically against `fill::OPERATORS.len()`; the fixed size 255 was for the u8-bytecode-encoding cap, but `fill::emit_op` already supports >255 via the 2-byte fallback.  After A: regen always succeeds; no manual fill.rs grow needed. | XS (~10 min) |
-| **B** | Auto-regen on `fill_rs_up_to_date` failure: have the test attempt regen + re-compare instead of just printing the command, OR convert `regen_fill_rs` from `#[ignore]` to a `build.rs` step that runs on every cargo build | Eliminates steps 7 + 8 as user-visible chores.  Editing `default/*.loft` just causes a rebuild that automatically refreshes `fill.rs`.  Test-side variant is safer than `build.rs` (no build-time codegen risk); `build.rs` is cleanest long-term but more invasive. | S (test-side ~30 min; build.rs ~2 hours) |
-| **C** | Improve the assert error message at `src/data.rs:2102` to name the EXACT line in `fill.rs` to add the placeholder + the position-sensitive note (which family the new op belongs to, where in the array it should land) | Eliminates step 4's "easy to misplace" gotcha (e.g. appending at the end when the op is from `01_code.loft` — the array entry needs to match the parse-order position, NOT just go at the end).  The current "grow the OPERATORS array" message doesn't mention placement. | XS (~15 min) |
+### Friction history + remaining backlog
 
 **Surfaced 2026-05-13** during P259's commit-1 work: hit the
 255-op limit when adding `OpIncRc`, had to manually patch
-`fill.rs` (size + placeholder at the right position) before
-regen could run.  Then misplaced the placeholder at the end of
-the array, only to learn the position must match parse order
-(OpIncRc is in 01_code.loft → goes after `pre_alloc_vector`,
-NOT after `const_store_text`).
+`fill.rs` (array size + placeholder + stub fn body) before
+regen could run.  Position-sensitive too — the array entry had
+to match parse-order position (OpIncRc declared in
+`01_code.loft` → goes after `pre_alloc_vector`, NOT at the end
+of the array).
 
-**Recommended order**: ship A first (XS, eliminates the
-biggest pain), then C (also XS, makes mistakes easier to spot),
-then B (S, optional polish).  None depend on each other.
+| # | Improvement | Status | Notes |
+|---|---|---|---|
+| **A** | Slice-typed `OPERATORS: &[fn(&mut State)]` (no fixed size) + remove the parse-time op-code assert.  Regen now handles array grow + new fn body in one pass; staleness still caught by `n9_generated_fill_matches_src` and `fill_rs_up_to_date`. | **Shipped 2026-05-13** | Eliminates steps 3-5 of the old 10-step procedure (manual array grow, placeholder identifier, placeholder fn body). |
+| **B** | Auto-regen on `fill_rs_up_to_date` failure: have the test attempt regen + re-compare instead of just printing the command, OR convert `regen_fill_rs` from `#[ignore]` to a `build.rs` step that runs on every cargo build | Open (S effort) | Test-side variant is safer than `build.rs` (no build-time codegen risk); `build.rs` is cleanest long-term but more invasive.  After B: editing `default/*.loft` just causes a rebuild that automatically refreshes `fill.rs`. |
 
 ---
 

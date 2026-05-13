@@ -9,7 +9,7 @@ use crate::state::State;
 use crate::tree;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 255] = &[
+pub const OPERATORS: &[fn(&mut State)] = &[
     goto,
     goto_word,
     goto_false,
