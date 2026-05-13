@@ -75,18 +75,18 @@ silent OOB behaviour; updated to use only in-range byte
 indices.
 
 Open issues now: **P229b** (Windows multiplayer flake).
-The remaining JSON natives in `default/06_json.loft` that
-plan-37 viewer tag pages don't exercise (`as_number`,
-`as_bool`, `kind`-other-paths, `keys`, `fields`, `has_field`,
-`to_json`, `to_json_pretty`, `json_null`, `json_bool`,
-`json_number`, `json_string`, `json_array`, `json_object`,
+The full JsonValue ecosystem (P54 sprint) now compiles and
+runs end-to-end under `--native` — all 23 JSON natives wired
+in `src/codegen_runtime.rs` (7 in P268 + 16 in the
+2026-05-13 follow-up).  Verified: `json_null`, `json_bool`,
+`json_number`, `json_string`, `json_array`, `json_object`
+constructors; `field`, `item`, `len`, `kind`, `as_text`,
+`as_number`, `as_long`, `as_bool`, `has_field`, `keys`,
+`fields`, `to_json`, `to_json_pretty` accessors;
 `struct_from_jsonvalue`, `struct_to_json`,
-`struct_to_json_pretty`) are still unimplemented under
-`--native` — but per P269 (now closed), any program that
-ACTUALLY CALLS one of them now fails AT COMPILE TIME with a
-clear "wire it in src/codegen_runtime.rs or run via --interpret"
-message, instead of producing a binary that panics at runtime.
-See § P54 in QUALITY.md for the full ecosystem status.
+`struct_to_json_pretty` codegen-side serialisers — all
+byte-identical to interp output on a multi-variant
+construct + introspect + serialise + iterate fixture.
 **P262** closed 2026-05-13 (one-line `unspan()` in
 `src/generation/calls.rs::user_fn_call_body`).
 **P266** closed 2026-05-13 by restricting the

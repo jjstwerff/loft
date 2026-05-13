@@ -2034,7 +2034,7 @@ pub(crate) const JV_DISCR_OBJECT: i32 = 6;
 /// Allocate a fresh `JsonValue` record in its own store and return
 /// the DbRef.  Caller writes the discriminant byte at pos+0 and any
 /// variant payload at pos + position(variant_tp, field_name).
-fn jv_alloc(stores: &mut Stores) -> DbRef {
+pub(crate) fn jv_alloc(stores: &mut Stores) -> DbRef {
     let jv_tp = stores.name("JsonValue");
     let size_bytes = u32::from(stores.size(jv_tp));
     // database(n) → claim(n) which expects 8-byte words; round up
@@ -2081,7 +2081,7 @@ pub(crate) fn jv_null_sentinel(stores: &mut Stores) -> DbRef {
 /// read-paths used by `n_to_json` etc.  Recurses through
 /// containers; allocates `Vec` / `String` for the Parsed
 /// representation but never touches DbRef ownership.
-fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Parsed {
+pub(crate) fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Parsed {
     let discr = stores.store(src).get_byte(src.rec, src.pos, 0);
     match discr {
         JV_DISCR_NULL => crate::json::Parsed::Null,
@@ -2158,7 +2158,11 @@ fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Parsed {
     }
 }
 
-fn materialise_primitive_into(stores: &mut Stores, slot: &DbRef, child: &crate::json::Parsed) {
+pub(crate) fn materialise_primitive_into(
+    stores: &mut Stores,
+    slot: &DbRef,
+    child: &crate::json::Parsed,
+) {
     match child {
         crate::json::Parsed::Null => {
             stores
@@ -2661,7 +2665,12 @@ fn n_struct_from_jsonvalue(stores: &mut Stores, stack: &mut DbRef) {
 /// name in `src` (which must be a `JObject` for any field lookup to
 /// succeed — wrong-kind sources leave every field at zero-init), and
 /// dispatches on the field's declared type.
-fn populate_struct_from_jsonvalue(stores: &mut Stores, dest: &DbRef, struct_kt: u16, src: &DbRef) {
+pub(crate) fn populate_struct_from_jsonvalue(
+    stores: &mut Stores,
+    dest: &DbRef,
+    struct_kt: u16,
+    src: &DbRef,
+) {
     use crate::database::Parts;
     // Cache the well-known type known_types so per-field dispatch is an
     // integer compare, not a name compare.
@@ -3430,7 +3439,7 @@ fn n_kind(stores: &mut Stores, stack: &mut DbRef) {
 /// element/field and dedent the closing bracket to the parent's
 /// depth.  Empty containers stay `[]` / `{}` regardless.
 /// Primitives are byte-identical in both modes.
-fn json_to_text(stores: &Stores, v: &DbRef, pretty: bool) -> String {
+pub(crate) fn json_to_text(stores: &Stores, v: &DbRef, pretty: bool) -> String {
     json_to_text_at(stores, v, pretty, 0)
 }
 
