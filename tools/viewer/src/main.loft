@@ -68,6 +68,10 @@ fn route(req: server::Request) {
         tag = p[5..len(p)];
         body = page_tag(tag);
         req.respond_html(body);
+    } else if p.starts_with("/commit/") {
+        sha = p[8..len(p)];
+        body = page_commit(sha);
+        req.respond_html(body);
     } else {
         serve_404_page(req, p);
     }
@@ -96,28 +100,114 @@ fn escape(s: text) -> text {
 // ── Page templates ───────────────────────────────────────────
 
 fn page_landing() -> text {
-    body = "<h1>loft-view <small>phase 02 + 04a</small></h1>";
-    body += "<p>Branch-aware doc + code review viewer.";
-    body += " Phase 04 (git dashboard) + phase 03 (markdown) still pending;";
-    body += " phase 04a (tracker-tag references) shipped.</p>";
-    body += "<h2>Browse the project</h2>";
-    body += "<ul>";
+    // ── Branch header (read tools/viewer/state/branch.json) ──
+    body = "";
+    bf = file("tools/viewer/state/branch.json");
+    if bf.format == Format.NotExists {
+        body += "<p class=\"warn\">No git state.  Run <code>make view-refresh</code> to build the dashboard.</p>";
+    } else {
+        braw = bf.content();
+        b = json_parse(braw);
+        branch = b.field("branch").as_text();
+        head_sha = b.field("head_sha").as_text();
+        head_msg = b.field("head_msg").as_text();
+        ahead = b.field("ahead").as_long();
+        behind = b.field("behind").as_long();
+        esc_branch = escape(branch);
+        esc_sha = escape(head_sha);
+        esc_msg = escape(head_msg);
+        body += "<header class=\"dash\">";
+        body += "<h1>loft-view — branch <code>{esc_branch}</code></h1>";
+        body += "<p class=\"ahead-behind\">{ahead} ahead, {behind} behind <code>main</code></p>";
+        body += "<p class=\"head\">HEAD: <code>{esc_sha}</code> {esc_msg}</p>";
+        body += "</header>";
+    }
+    // ── Changed files ──────────────────────────────────────
+    cf = file("tools/viewer/state/changed.json");
+    if cf.format != Format.NotExists {
+        cv = json_parse(cf.content());
+        n = cv.len();
+        body += "<section><h2>Changed files <small>vs main</small> <span class=\"ct\">{n}</span></h2>";
+        if n == 0 {
+            body += "<p class=\"empty\">No changed files vs <code>main</code>.</p>";
+        } else {
+            body += "<ul class=\"changed\">";
+            i = 0;
+            while i < n {
+                e = cv.item(i);
+                st = e.field("status").as_text();
+                pa = e.field("path").as_text();
+                esc_st = escape(st);
+                esc_pa = escape(pa);
+                body += "<li><span class=\"st st-{esc_st}\">{esc_st}</span> <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
+                i = i + 1;
+            }
+            body += "</ul>";
+        }
+        body += "</section>";
+    }
+    // ── Uncommitted ────────────────────────────────────────
+    uf = file("tools/viewer/state/uncommitted.json");
+    if uf.format != Format.NotExists {
+        uv = json_parse(uf.content());
+        n = uv.len();
+        body += "<section><h2>Uncommitted <span class=\"ct\">{n}</span></h2>";
+        if n == 0 {
+            body += "<p class=\"empty\">Working tree clean.</p>";
+        } else {
+            body += "<ul class=\"changed\">";
+            i = 0;
+            while i < n {
+                e = uv.item(i);
+                st = e.field("status").as_text();
+                pa = e.field("path").as_text();
+                esc_st = escape(st);
+                esc_pa = escape(pa);
+                body += "<li><span class=\"st st-{esc_st}\">{esc_st}</span> <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
+                i = i + 1;
+            }
+            body += "</ul>";
+        }
+        body += "</section>";
+    }
+    // ── Recent commits ─────────────────────────────────────
+    kf = file("tools/viewer/state/commits.json");
+    if kf.format != Format.NotExists {
+        kv = json_parse(kf.content());
+        n = kv.len();
+        body += "<section><h2>Recent commits <span class=\"ct\">{n}</span></h2>";
+        body += "<ol class=\"commits\">";
+        i = 0;
+        while i < n {
+            e = kv.item(i);
+            sh = e.field("sha").as_text();
+            ms = e.field("msg").as_text();
+            esc_sh = escape(sh);
+            esc_ms = escape(ms);
+            body += "<li><a href=\"/commit/{esc_sh}\"><code>{esc_sh}</code></a> {esc_ms}</li>";
+            i = i + 1;
+        }
+        body += "</ol>";
+        body += "</section>";
+    }
+    // ── Browse the project ─────────────────────────────────
+    body += "<section><h2>Browse</h2><ul class=\"browse\">";
     body += "<li><a href=\"/tree/doc\">doc/</a></li>";
     body += "<li><a href=\"/tree/lib\">lib/</a></li>";
     body += "<li><a href=\"/tree/src\">src/</a></li>";
     body += "<li><a href=\"/tree/tests\">tests/</a></li>";
     body += "<li><a href=\"/tree/tools\">tools/</a></li>";
     body += "<li><a href=\"/tree/default\">default/</a></li>";
-    body += "<li><a href=\"/tree/examples\">examples/</a></li>";
-    body += "</ul>";
-    body += "<p><a href=\"/file/README.md\">README.md</a> ";
-    body += "(<a href=\"/raw/README.md\">raw</a>)</p>";
-    body += "<h2>Tracker tags</h2>";
+    body += "<li><a href=\"/file/README.md\">README.md</a></li>";
+    body += "</ul></section>";
+    // ── Tracker tags ───────────────────────────────────────
+    body += "<section><h2>Tracker tags</h2>";
     body += "<p>Lookup form: <code>/tag/&lt;bare-name&gt;</code>.  Examples:";
     body += " <a href=\"/tag/P259\">/tag/P259</a>,";
     body += " <a href=\"/tag/P262\">/tag/P262</a>,";
     body += " <a href=\"/tag/PLAN35\">/tag/PLAN35</a>,";
     body += " <a href=\"/tag/PLAN37\">/tag/PLAN37</a>.</p>";
+    body += "</section>";
     page("loft-view", body)
 }
 
@@ -402,6 +492,27 @@ fn render_refs(arr: JsonValue) -> text {
     out
 }
 
+// ── /commit/<sha> — phase 04: commit detail (read prebuilt diff) ──
+//
+// Reads tools/viewer/state/commits/<sha>.diff (built by
+// refresh.sh) and renders it as line-numbered, escaped code.
+// Phase 05 will render the diff with hunk-aware highlighting.
+fn page_commit(sha: text) -> text {
+    esc_sha = escape(sha);
+    body = "<h1>commit <code>{esc_sha}</code></h1>";
+    f = file("tools/viewer/state/commits/{sha}.diff");
+    if f.format == Format.NotExists {
+        body += "<p class=\"warn\">No diff captured for <code>{esc_sha}</code>. ";
+        body += "Run <code>make view-refresh</code> to (re)build.  Only the last 20 commits are kept.</p>";
+        body += "<p><a href=\"/\">back to dashboard</a></p>";
+        return page("commit {sha}", body);
+    }
+    src = f.content();
+    body += render_code(src);
+    body += "<p><a href=\"/\">back to dashboard</a></p>";
+    page("commit {sha}", body)
+}
+
 fn serve_404_page(req: server::Request, p: text) {
     body = page_404(p);
     req.respond_typed(404, body, "text/html; charset=utf-8");
@@ -518,6 +629,24 @@ ul.refs{{list-style:none;padding:0}}
 ul.refs li{{padding:.4rem 0;border-bottom:1px solid #eee}}
 ul.refs code{{font-size:.85em}}
 .warn{{background:#ffe;border-left:3px solid #cc8;padding:.4rem .6rem;color:#553}}
+header.dash{{border-bottom:none;padding:0;margin:0 0 1rem 0}}
+header.dash h1{{margin:.2rem 0}}
+header.dash .ahead-behind{{margin:.1rem 0;color:#555}}
+header.dash .head{{margin:.1rem 0;color:#555;font-size:.95em}}
+section{{margin:1rem 0;padding:0;border:none}}
+section h2{{margin:.6rem 0 .3rem 0;font-size:1.05rem}}
+section h2 .ct{{display:inline-block;background:#eef;color:#225;font-size:.7rem;padding:.05em .4em;border-radius:8px;margin-left:.5em;font-weight:400}}
+ul.changed,ol.commits,ul.browse{{list-style:none;padding:0;font-family:ui-monospace,Menlo,monospace}}
+ul.changed li,ol.commits li,ul.browse li{{padding:.1rem 0}}
+.empty{{color:#888;font-style:italic;font-family:system-ui,sans-serif}}
+.st{{display:inline-block;width:1.6em;text-align:center;border-radius:3px;color:#fff;font-weight:600;font-size:.85em;margin-right:.3em}}
+.st-M{{background:#c80}}
+.st-A{{background:#393}}
+.st-D{{background:#c33}}
+.st-R{{background:#36c}}
+.st-?{{background:#888}}
+.st-??{{background:#888}}
+ol.commits code{{background:none;color:#225;padding:0;font-weight:600}}
 @media (prefers-color-scheme: dark){{
   body{{background:#1a1a1a;color:#ddd}}
   header,footer{{border-color:#444}}
@@ -535,5 +664,8 @@ ul.refs code{{font-size:.85em}}
   a.line .lineno{{color:#666}}
   ul.refs li{{border-color:#333}}
   .warn{{background:#332;border-left-color:#aa5;color:#cc8}}
+  header.dash .ahead-behind,header.dash .head{{color:#bbb}}
+  section h2 .ct{{background:#223;color:#9bf}}
+  ol.commits code{{color:#9bf}}
 }}
 `;

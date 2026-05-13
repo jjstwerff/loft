@@ -4,17 +4,88 @@
 #
 # tools/viewer/refresh.sh — dump git state for loft-view to consume.
 #
-# Phase 00 stub.  Filled in by plan-35 phase 04 (git state via
-# wrapper script).  See doc/claude/plans/35-branch-review-viewer/
-# 04-git-state-wrapper.md.
+# Loft has no subprocess primitive yet; this script is the bridge
+# between `git` and the viewer.  The viewer reads
+# tools/viewer/state/*.json at request time and renders the
+# branch dashboard.
 #
-# When implemented, this script will dump:
-#   tools/viewer/state/branch.json       — branch + ahead/behind
-#   tools/viewer/state/changed.json      — git diff --name-status main...HEAD
-#   tools/viewer/state/commits.json      — git log --oneline -20
-#   tools/viewer/state/uncommitted.json  — git status --short
-#   tools/viewer/state/diffs/<safe>.diff — per-file diffs vs main
-#   tools/viewer/state/commits/<sha>.diff — per-commit diffs
-
+# Re-run on demand:
+#   make view-refresh           dump state without restarting server
+#   make view                   dump state + start server
 set -euo pipefail
-echo "tools/viewer/refresh.sh: phase 00 stub (filled by phase 04)"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "tools/viewer/refresh.sh: needs jq (apt install jq / dnf install jq)" >&2
+  exit 1
+fi
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+STATE="$ROOT/tools/viewer/state"
+mkdir -p "$STATE"
+
+cd "$ROOT"
+
+# 1. Branch header — branch name, HEAD sha + msg, ahead/behind vs main.
+{
+  branch=$(git rev-parse --abbrev-ref HEAD)
+  head_sha=$(git rev-parse --short HEAD)
+  head_msg=$(git log -1 --pretty=%s)
+  if git rev-parse --verify main >/dev/null 2>&1; then
+    # `git rev-list --left-right --count main...HEAD` outputs
+    # "<commits-only-in-main>\t<commits-only-in-HEAD>", so the
+    # FIRST value is "behind main" and the SECOND is "ahead of main".
+    read -r behind ahead <<< "$(git rev-list --left-right --count main...HEAD | tr '\t' ' ')"
+  else
+    ahead=0; behind=0
+  fi
+  jq -n \
+    --arg branch "$branch" \
+    --arg head_sha "$head_sha" \
+    --arg head_msg "$head_msg" \
+    --argjson ahead "$ahead" \
+    --argjson behind "$behind" \
+    '{branch: $branch, head_sha: $head_sha, head_msg: $head_msg, ahead: $ahead, behind: $behind}'
+} > "$STATE/branch.json"
+
+# 2. Files changed vs main (name-status).  Empty array on a fresh
+# repo where `main` doesn't exist yet.
+if git rev-parse --verify main >/dev/null 2>&1; then
+  git diff --name-status main...HEAD | jq -Rn '
+    [inputs | select(. != "") | split("\t") | {status: .[0], path: .[1]}]
+  ' > "$STATE/changed.json"
+else
+  echo "[]" > "$STATE/changed.json"
+fi
+
+# 3. Recent commits (last 20)
+git log --oneline -20 --pretty='%h%x09%s' | jq -Rn '
+  [inputs | select(. != "") | split("\t") | {sha: .[0], msg: .[1]}]
+' > "$STATE/commits.json"
+
+# 4. Uncommitted (porcelain v1).  Two-char status code stripped of
+# leading/trailing space; rest is the path.
+git status --short | jq -Rn '
+  [inputs | select(. != "") | {status: .[0:2] | gsub(" "; ""), path: .[3:]}]
+' > "$STATE/uncommitted.json"
+
+# 5. Per-file diffs vs main, capped at 100 files.  Each diff is
+# saved with `/` → `__` so the filename is filesystem-safe.
+DIFFS_DIR="$STATE/diffs"
+rm -rf "$DIFFS_DIR" && mkdir -p "$DIFFS_DIR"
+if git rev-parse --verify main >/dev/null 2>&1; then
+  git diff --name-only main...HEAD | head -100 | while read -r f; do
+    [ -z "$f" ] && continue
+    safe="${f//\//__}"
+    git diff main...HEAD -- "$f" > "$DIFFS_DIR/$safe.diff"
+  done
+fi
+
+# 6. Per-commit diffs for the recent-commits list.
+COMMITS_DIR="$STATE/commits"
+rm -rf "$COMMITS_DIR" && mkdir -p "$COMMITS_DIR"
+git log --pretty=%h -20 | while read -r sha; do
+  [ -z "$sha" ] && continue
+  git show "$sha" > "$COMMITS_DIR/$sha.diff"
+done
+
+echo "loft-view state refreshed: $(date)"
