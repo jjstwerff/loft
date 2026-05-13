@@ -212,47 +212,132 @@ parsing — failures degrade to "show fewer items," not crash.
 
 #### `/welcome` landing page
 
+The page is structured around the **four questions a visitor
+asks** — in priority order:
+
+1. **What is loft and where is it going?** — vision + the
+   near-term focus the project is pursuing right now.
+2. **What did we finish recently?** — the "this is alive
+   and shipping" signal.
+3. **What interests me most?** — multiple entry points by
+   interest area; visitors pick the path that fits.
+4. **Where could I help?** — open work surfaced by
+   approachability, not just priority.
+
+Layout:
+
 ```
 [loft]                              [Branch dashboard ▸]
 
-What is loft
-   Two-paragraph elevator pitch.  Link to root README.
+────────────  Where is loft going  ────────────
+   Two-paragraph elevator pitch — what loft is, what makes
+   it different.  Link to root README + ROADMAP.
 
-Try it in 5 minutes
-   ▸ examples/hello.loft       (click → rendered + copy button)
-   ▸ examples/structs.loft
-   ▸ examples/match.loft
+   Near-term focus: friend-readiness (4 gates)
+   ▸ Plan-07 phases 5/6/7 — error messages
+   ▸ Plan-35 phases 00-03 — the viewer you're using
+   ▸ DX.2 — CI for package + native tests
+   ▸ Plan-35 phase 06 — proper GFM tables
+   (Source: ROADMAP § Near-term focus)
 
-Learn the language
-   ▸ doc/learn-loft.md
+────────────  What we finished recently  ────────────
+   Recently shipped plans (last 60 days)
+   ▸ 22-mutable-closures (2026-05-13) — closures novices expect
+   ▸ 15-closure-validation (2026-05-12) — regression matrix
+   ▸ 31-html-export (2026-04-22) — loft → wasm in browser
+   ▸ ... (more)
 
-The standard library
-   ▸ STDLIB.md  (124 functions, organised by topic)
+   Recently closed problems (last 30 days)
+   ▸ P261 (2026-05-13) — vector-field assign appended
+   ▸ P260 (2026-05-13) — closures hold live DbRef
+   ▸ P259 (2026-05-13) — multi-factory cell ownership
+   ▸ ... (more)
 
-One real program
-   ▸ lib/graphics/examples/25-brick-buster.loft
+   Click any item → that plan's README or PROBLEMS row.
 
-──────────── Project status ────────────
+────────────  Pick your interest  ────────────
+   Building games?
+     ▸ lib/graphics/examples/25-brick-buster.loft
+     ▸ Brick Buster gallery (live in-browser)
+     ▸ plans/future/23-event-loop  (where games are headed)
 
-Active plans (2)              Future plans (15)        Recently finished (3)
-  ▸ 07-error-messages           ▸ 23-event-loop          ▸ 22-mutable-closures (5/13)
-  ▸ 35-branch-review-viewer     ▸ 32-tic-tac-toe         ▸ 15-closure-validation (5/12)
-                                ▸ ... (12 more)          ▸ 31-html-export (5/12)
+   Servers + multiplayer?
+     ▸ lib/server (HTTP + WebSocket)
+     ▸ plans/future/32-tic-tac-toe (TTT v5 multiplayer)
+     ▸ plans/finished/22-mutable-closures (closures power
+       writable server state)
 
-Open problems (2)             Recently closed (4)
-  ▸ P229b — Windows multi…     ▸ P261 — vector-field assign… (5/13)
-  ▸ P261 — open               ▸ P260 — closures hold live… (5/13)
-                              ▸ P259 — multi-factory cell… (5/13)
+   Language design?
+     ▸ doc/learn-loft.md (the syntax tour)
+     ▸ DESIGN_DECISIONS.md (closed-by-decision register)
+     ▸ INCONSISTENCIES.md (known asymmetries we live with)
+     ▸ plans/07-error-messages (UX of compiler errors)
 
-Where to get help
-   ▸ GitHub issues
-   ▸ <community channel>
+     Compiler internals?
+     ▸ COMPILER.md / INTERMEDIATE.md / NATIVE.md
+     ▸ The interpreter + native + WASM three-way story
+
+   Performance?
+     ▸ PERFORMANCE.md (benchmarks + optimization arc)
+
+   Just want to try it?
+     ▸ examples/hello.loft     (click → rendered)
+     ▸ examples/structs.loft
+     ▸ examples/match.loft
+     ▸ doc/learn-loft.md       (30-min tutorial)
+
+────────────  Where could I help  ────────────
+   Approachable open work — things a new contributor could
+   pick up without first reading 20 files:
+
+   Easy starters (DX.2 — CI workflow extension, the kind of
+   work that's "open a PR and know when it's done"):
+     ▸ DX.2: extend .github/workflows/ci.yml with package +
+       native test matrix (full design at plans/future/27-
+       developer-experience)
+
+   Bigger contributions (open plans with clear next phases):
+     ▸ Plan-07 phase 6 — per-site type-mismatch wording
+       (assignment + return / call args / struct fields /
+       operators / iterators / match / format)
+     ▸ Plan-35 — the viewer itself, especially phases 04+05
+       (git state wrapper, diff/commit views)
+     ▸ lib_plans/future/01-regex — first lazy-stdlib library
+
+   Active P-issues (currently open):
+     ▸ P229b — Windows multiplayer flake (needs Windows
+       reproducer)
+
+   Click any item → the relevant plan README / PROBLEMS row /
+   ROADMAP entry, with full context.
+
+────────────  Where to get help  ────────────
+   ▸ GitHub issues (general)
+   ▸ This dashboard's branch view (what's actively shipping)
+   ▸ doc/claude/* (depth — this is where contributors live)
 ```
 
-The "Project status" block is the **history overview** —
-shows recent activity at a glance.  Friends grasp the shape
-of the project (what's active, what just shipped, what's
-broken) in one screen.
+The four sections each pull from the curation engine:
+
+| Section | Source |
+|---|---|
+| Where is loft going | `ROADMAP.md § Near-term focus` (parsed) + manual elevator pitch |
+| What we finished recently | `plans/finished/*/` mtime-sorted + PROBLEMS.md "(closed)" rows date-sorted |
+| Pick your interest | Hand-curated mapping of interest area → key docs (lives in `tools/viewer/src/interests.loft`); refreshed manually as the project evolves |
+| Where could I help | Active plans' open phases + future plans marked "approachable" + open P-issues; classified by approachability heuristic (size estimate from plan READMEs, "good first issue"-style markers) |
+
+The "Pick your interest" section is the user-described
+**"what interests me the most"** entry point — different
+visitors take different paths, all valid.
+
+The "Where could I help" section is the user-described
+**"where would I like to help"** — surfaced by approachability,
+not just priority.  A new contributor scrolls here, finds an
+"easy starter," picks one up.
+
+Both sections together transform the landing from a
+"here's our doc tree, good luck" page into a
+"here's what loft is, here's how to engage with it" page.
 
 The default dashboard (branch state + changed files + commits)
 remains the user's personal review tool; `/welcome` is a
