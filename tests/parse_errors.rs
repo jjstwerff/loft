@@ -826,7 +826,7 @@ fn par_worker_returns_generator() {
              for a in items par(b = gen_worker(a), 1) { assert(b > 0); }
          }"
     )
-    .error("parallel worker 'gen_worker' returns iterator(integer(-2147483647, 2147483647, false), null) — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
+    .error("parallel worker 'gen_worker' returns iterator<integer> — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
 }
 
 // ── T1.11 — Tuple type constraints ───────────────────────────────────────────

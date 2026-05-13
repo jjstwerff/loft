@@ -152,7 +152,7 @@ diagnostic strings, no runtime change.  Bound: ≤ 0.5 % drift.
 
 | # | Step | Test |
 |---|---|---|
-| 6.1 | Add `Type::render_user(&self) -> String` covering every variant; `#[deny(unreachable_patterns)]` on the match | Unit test per variant: `Type::Int.render_user() == "integer"`, `Type::Vector(Int, sz).render_user() == "vector<i32>"`, etc.  One assertion per variant — exhaustive |
+| 6.1 | **Shipped 2026-05-13.**  Extended the existing `Type::name(&self, &Data) -> String` (already used at user-facing error sites) to cover every variant explicitly — Unknown, Null, Void, Never, Boolean, Float, Single, Character, Integer (default / byte / bounded), Keys, Iterator, Tuple, Function — instead of falling through to the Display fallback that lower-cased the debug format (e.g. `tuple([integer(...), text([])])`).  20 unit tests in `data::type_name_user_facing_tests` cover each variant.  Three pre-existing tests updated to assert the new cleaner format: `p140_vector_range_slice_reports_type_mismatch`, `quality_6d_keyed_collection_constructor_hint`, `par_worker_returns_generator`.  Did NOT add a separate `render_user` method — `name()` already played the role; one method, no duplication. | ✓ Unit + regression tests green |
 | 6.2 | Switch `formatter.rs` to `render_user` | `tests/format.rs` green; if any test diffs, the diff is "Int" → "integer" style and is updated in the same commit |
 | 6.3 | Switch `gendoc.rs` to `render_user` | `tests/doc_hygiene.rs` green; gendoc HTML diff is the same "Int" → "integer" style |
 | 6.4 | Rewrite assignment-mismatch message + "declared on line N" note | Case 5 fixture: `.expect` regen shows `cannot assign vector<i32> to variable of type text` + decl note |
