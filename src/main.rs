@@ -2346,6 +2346,18 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             if native_debug {
                 cmd.arg("-Cdebuginfo=2");
             }
+            // P266 follow-up: each native package's rlib carries a copy
+            // of `loft_register_v1` (synthesized by the `loft_ffi::loft_register!`
+            // macro for the cdylib's dlopen registration path).  When two or
+            // more native packages are pulled into the SAME --native binary
+            // (e.g. the viewer pulls lib/web AND lib/server transitively),
+            // ld errors with `duplicate symbol: loft_register_v1`.  The
+            // binary never calls `loft_register_v1` (it inlines
+            // `loft_<crate>::n_…` directly), so the duplicates are
+            // functionally harmless.  Tell the linker to merge them
+            // (keep the first definition, skip the rest).  This matches
+            // the GNU ld / lld semantics for `-z muldefs`.
+            cmd.arg("-Clink-arg=-Wl,--allow-multiple-definition");
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));

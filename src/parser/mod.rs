@@ -4210,16 +4210,28 @@ impl Parser {
             {
                 self.data
                     .native_packages
-                    .push((crate_name.clone(), pkg_dir));
+                    .push((crate_name.clone(), pkg_dir.clone()));
             }
-            // Map all #native symbols from already-parsed definitions to this crate.
+            // P266: same ownership-driven restriction as
+            // `apply_manifest_side_effects` above — only map `#native`
+            // symbols whose definition lives in THIS package's source
+            // tree, so out-of-order manifest/source loading can't make
+            // one package claim another's symbols.
             for d_nr in 0..self.data.definitions() {
-                let sym = &self.data.def(d_nr).native;
-                if !sym.is_empty() && !self.data.native_symbol_crates.contains_key(sym) {
-                    self.data
-                        .native_symbol_crates
-                        .insert(sym.clone(), rust_crate.clone());
+                let def = self.data.def(d_nr);
+                let sym = &def.native;
+                if sym.is_empty() {
+                    continue;
                 }
+                if !def.position.file.starts_with(&pkg_dir) {
+                    continue;
+                }
+                if self.data.native_symbol_crates.contains_key(sym) {
+                    continue;
+                }
+                self.data
+                    .native_symbol_crates
+                    .insert(sym.clone(), rust_crate.clone());
             }
         }
     }
@@ -4322,15 +4334,33 @@ impl Parser {
                     .native_symbols
                     .insert(loft_name.clone(), rust_symbol.clone());
             }
-            // Map all #native symbols from this package to their crate.
-            // Definitions parsed so far include this package's functions.
+            // P266: map only `#native` symbols whose definition lives in
+            // THIS package's source tree, not every unmapped symbol in
+            // the whole `data.definitions()` list.  The earlier
+            // walk-and-claim shape over-assigned: when manifests were
+            // registered out-of-order with their sources (e.g. lib/web
+            // manifest registered before lib/server's source was parsed,
+            // then lib/server's manifest registered with both packages'
+            // defs already in the table), it left lib/web's symbols
+            // pointing at `loft_server` and lib/server's symbols pointing
+            // at `loft_web`.  Restricting by `position.file.starts_with(
+            // pkg_dir)` makes the assignment ownership-driven instead of
+            // call-order-driven.
             for d_nr in 0..self.data.definitions() {
-                let sym = &self.data.def(d_nr).native;
-                if !sym.is_empty() && !self.data.native_symbol_crates.contains_key(sym) {
-                    self.data
-                        .native_symbol_crates
-                        .insert(sym.clone(), rust_crate.clone());
+                let def = self.data.def(d_nr);
+                let sym = &def.native;
+                if sym.is_empty() {
+                    continue;
                 }
+                if !def.position.file.starts_with(pkg_dir) {
+                    continue;
+                }
+                if self.data.native_symbol_crates.contains_key(sym) {
+                    continue;
+                }
+                self.data
+                    .native_symbol_crates
+                    .insert(sym.clone(), rust_crate.clone());
             }
         }
         // PKG.3: register the package's parent directory so that
