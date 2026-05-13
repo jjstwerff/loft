@@ -75,19 +75,20 @@ silent OOB behaviour; updated to use only in-range byte
 indices.
 
 Open issues now: **P229b** (Windows multiplayer flake) +
-**P264** (`json_parse` mangles non-ASCII strings — each input
-UTF-8 byte becomes its own codepoint, surfaced 2026-05-13 by
-plan-37 phase 04a viewer) + **P265** (text-returning native
-fn called via fn-ref dispatch passes `Str` to `&str`-param
-callees without `&*` deref, surfaced 2026-05-13 during P263
-fix verification when `--native` of any lib/web user was
-attempted).
+**P265** (text-returning native fn called via fn-ref dispatch
+passes `Str` to `&str`-param callees without `&*` deref,
+surfaced 2026-05-13 during P263 fix verification when
+`--native` of any lib/web user was attempted).
 **P262** closed 2026-05-13 (one-line `unspan()` in
 `src/generation/calls.rs::user_fn_call_body`).
 **P263** closed 2026-05-13 by renaming lib/web's loft-side
 internal native-fn names to `ws_client_*_native` (matching
 their existing `#native "n_ws_client_*"` annotations) so they
 no longer collide with lib/server's `ws_*_native`.
+**P264** closed 2026-05-13 by replacing `parse_string`'s
+byte-by-byte `out.push(bytes[i] as char)` with a UTF-8
+codepoint-length-aware `out.push_str(slice)` that preserves
+multi-byte sequences verbatim.
 The plan-22 trio closed 2026-05-13:
 - **P259** (Plan-22 Case C multi-instance crash) — OpIncRc +
   cascade-free chain.
@@ -150,22 +151,27 @@ The plan-22 trio closed 2026-05-13:
   `loft --interpret`; native lib/web programs that don't
   exercise pump's fn-ref dispatch may still compile.
 
-**Surfaced 2026-05-13 by plan-37 phase 04a:**
-- **P264** — `json_parse` decodes JString payloads byte-by-byte:
+**Surfaced 2026-05-13 by plan-37 phase 04a — closed same day:**
+- **P264** — `json_parse` decoded JString payloads byte-by-byte:
   each input UTF-8 byte (e.g., `0xE2`, `0x86`, `0x92` for `→`)
-  becomes a separate codepoint (U+00E2, U+0086, U+0092), each
+  became a separate codepoint (U+00E2, U+0086, U+0092), each
   re-encoded as 2-byte UTF-8 (`c3 a2`, `c2 86`, `c2 92`).
-  Net: 3 bytes in → 6 bytes out, displays as `âââ` in the
-  browser.  Direct string literals (`s = "→"`) round-trip
-  correctly; the bug is JSON-parser-specific.  Reproducer
-  (3-line loft program reading a JSON file containing `→`):
-  see [§ P264 below](#p264-json_parse-mangles-non-ascii-strings).
-  Surfaced by the viewer's `/tag/<tag>` route rendering ref
-  contexts pulled from `index/tags.json` (many of which contain
-  `→` for state transitions).  Workaround: pre-process the
-  JSON file with `iconv` / `sed` to strip non-ASCII before
-  parsing, OR consume the raw text via `f.content()` directly
-  when full byte-fidelity is required.
+  Net: 3 bytes in → 6 bytes out, displayed as `âââ` in the
+  browser.  Direct string literals (`s = "→"`) round-tripped
+  correctly; the bug was JSON-parser-specific.  **Closed
+  (2026-05-13)**: `src/json.rs::parse_string` previously fell
+  through to `out.push(bytes[i] as char)` for any non-escape,
+  non-control byte — widening each byte to a separate
+  codepoint.  Replaced with a UTF-8-aware path: `utf8_lead_len`
+  reads the encoded length from the lead byte (1/2/3/4), then
+  `out.push_str(std::str::from_utf8(&bytes[i..i+n]))` slurps
+  the whole codepoint.  Safe because the input came from a
+  `&str`, so the bytes are valid UTF-8 by construction.
+  Pinned by `src/json.rs::tests::p264_multibyte_utf8_passthrough`
+  exercising 2-byte (`café`), 3-byte (`→`), and 4-byte (`😀`)
+  codepoints + a mixed-width string.  Viewer verification:
+  `/tag/P259` now renders `gets \`P259\` → \`@P259\`` with
+  the actual arrow character preserved.
 
 **No high-severity bugs outside the generics + tuples cluster.**
 Everything else from the older P-series (P198–P237 plus most of
@@ -179,7 +185,7 @@ introducing new open P-issues.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
-| 264 | `json_parse` mangles non-ASCII strings — each input UTF-8 byte becomes its own codepoint, then re-encodes as 2-byte UTF-8.  3-byte `→` becomes 6-byte `âââ`.  Surfaced 2026-05-13 by plan-37 phase 04a viewer rendering `index/tags.json` ref contexts containing `→`.  Direct text literals round-trip fine; the bug is in the JSON parser's JString decode path.  Reproducer in `default/06_json.loft`-side fix: have the parser walk codepoints, not bytes, when materialising the JString payload — or store the raw byte slice and skip the per-byte recode entirely. | Medium | Strip non-ASCII from JSON inputs (`iconv -c -t ASCII//TRANSLIT`) or read the raw text via `f.content()` when byte-fidelity matters. |
+| 264 | `json_parse` decoded JString payloads byte-by-byte — each input UTF-8 byte was widened to its own codepoint, then re-encoded as 2-byte UTF-8.  3-byte `→` became 6-byte `âââ`.  Surfaced 2026-05-13 by plan-37 phase 04a viewer rendering `index/tags.json` ref contexts containing `→`.  Direct text literals round-tripped fine; the bug was in the JSON parser's JString decode path.  **Closed (2026-05-13)**: `src/json.rs::parse_string` previously did `out.push(bytes[i] as char)` per byte; replaced with a UTF-8-aware path that reads the encoded length from the lead byte (`utf8_lead_len`) and `push_str`s the whole codepoint slice via `std::str::from_utf8`.  Safe because the input came from a `&str` — bytes are valid UTF-8 by construction.  Pinned by `src/json.rs::tests::p264_multibyte_utf8_passthrough` (2/3/4-byte codepoints + mixed-width).  Viewer verification: `/tag/P259` now renders the actual `→` character. | Medium (closed) | n/a — fix lands in `src/json.rs::parse_string` + new `utf8_lead_len` helper. |
 | 198 | `tests/scripts/95-alias-copy.loft` leaked Database 3 + ran with aliased ac_orig/ac_copy in native.  **Closed (2026-05-01)**: scope analysis (`scan_set`) and native deep-copy emission (`output_set`) both pattern-matched `Value::Call(...)` / `Value::Var(...)` without unwrapping the parser's `Value::Span` wrapper, so the deep-copy and `make_independent` (deps-clearing) paths fell through.  Fix: bind unspanned RHS once at top of each function and pattern-match against that.  Also closes `95_alias_copy` native run failure. | High (closed) | n/a — fix landed in commit 30b01ce. |
 | 199 | Native codegen E0499/E0502 when nested calls borrow `&mut Stores` simultaneously.  **Closed (2026-05-01)** for the borrow-conflict class.  Native ABI changed from `&mut Stores` to `&UnsafeCell<Stores>` (PR1), Op-stub helpers in `src/codegen_runtime.rs` follow the new ABI (Track 1), and `OpSet*` field-write templates lift `@val` into a let-binding before `store_mut(...)` (Track 2).  Result: `native_dir` 7/30 → 28/30; canonical reproducer `native_tuple_script` PASSES; 0 interpreter regressions.  Remaining `19_threading` failure tracked as P202 (separate feature gap — `n_parallel_queue` family has no native implementation, distinct from the borrow-conflict issue P199 addressed). | Medium (closed) | Hoist the inner call into a temporary: `let r = add_pair(p); assert(r == 30);` makes the second borrow fall outside `n_assert`'s argument list — only relevant for templates / Op-stubs not yet covered by this fix. |
 | 202 | Native codegen for `for ... par(...)` for-loops calls `n_parallel_queue` (and `_text` / `_ref` variants) which only existed in the bytecode interpreter.  **Closed (2026-05-02)** by plan-09 phase 06 — `n_parallel_queue_*_native` runtime fns + `n_parallel_buf_get_*` / `_drop_*` per-row accessors added to `src/codegen_runtime.rs`; `ParallelQueueEmitter` + `ParallelBufRenameEmitter` registered in `src/generation/ops/parallel.rs`; reachability extended in `src/generation/mod.rs` to pull worker fns from queue d_nr args.  Native suite: 87/93 → 89/93 + native_dir 29/30 → 30/30 (closes 19_threading + 22_threading + 40_par_ref_return).  Pinned by `p202_parallel_queue_*` regression tests in `tests/codegen_emitter.rs`. | Medium (closed) | n/a — fix lands in `src/codegen_runtime.rs` + `src/generation/ops/parallel.rs` + `src/generation/mod.rs`. |

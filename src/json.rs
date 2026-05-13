@@ -281,6 +281,20 @@ fn parse_literal(bytes: &[u8], i: usize, word: &[u8], value: Parsed) -> ParseRes
     Ok((value, i + word.len()))
 }
 
+/// Length of the UTF-8 codepoint whose first byte is `b`.  Returns 1 for
+/// ASCII or any malformed lead byte (continuation / 0xF8+); returns 2/3/4
+/// for the 2-byte / 3-byte / 4-byte forms.  Used by `parse_string` to
+/// slurp a whole codepoint at once instead of byte-by-byte (P264).
+fn utf8_lead_len(b: u8) -> usize {
+    match b {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => 1, // continuation byte or invalid; fall through to from_utf8 error
+    }
+}
+
 fn parse_string(bytes: &[u8], start: usize) -> ParseResult {
     debug_assert_eq!(bytes[start], b'"');
     let mut i = start + 1;
@@ -326,12 +340,22 @@ fn parse_string(bytes: &[u8], start: usize) -> ParseResult {
                 return Err((format!("raw control byte {c:#x} in string"), i));
             }
             _ => {
-                // UTF-8 continuation bytes are passed through verbatim
-                // by pushing them into the String via bytes-to-str
-                // reconstruction.  We know the input is `&str`, so the
-                // slice is valid UTF-8.
-                out.push(bytes[i] as char);
-                i += 1;
+                // P264: the input was originally `&str` so the bytes are
+                // valid UTF-8.  Slurp the whole codepoint at once via the
+                // lead byte's encoded-length field, then `push_str` the
+                // already-valid slice.  The previous one-byte-per-iteration
+                // `push(bytes[i] as char)` widened each byte to a separate
+                // codepoint (e.g. `→` U+2192 = bytes E2 86 92 → three chars
+                // U+00E2 U+0086 U+0092), each re-encoded as 2-byte UTF-8 →
+                // 3-byte input became 6-byte output, displaying as `âââ`.
+                let n = utf8_lead_len(bytes[i]);
+                let end = (i + n).min(bytes.len());
+                // Safety: parse_string is called with bytes from a `&str`,
+                // so &bytes[i..end] is a valid UTF-8 boundary slice.
+                let s = std::str::from_utf8(&bytes[i..end])
+                    .unwrap_or("\u{fffd}");
+                out.push_str(s);
+                i = end;
             }
         }
     }
@@ -546,6 +570,35 @@ mod tests {
         assert!(matches!(got, Parsed::Str(ref s) if s == "\"quote\""));
         let got = parse(r#""line\nfeed""#).unwrap();
         assert!(matches!(got, Parsed::Str(ref s) if s == "line\nfeed"));
+    }
+
+    /// P264 — multi-byte UTF-8 sequences in JSON string payloads must
+    /// round-trip byte-for-byte.  The pre-fix loop pushed each byte as
+    /// its own char, widening 0xE2/0x86/0x92 (the bytes for `→`) to
+    /// three separate codepoints (U+00E2, U+0086, U+0092), each
+    /// re-encoded as 2-byte UTF-8 → 3 input bytes became 6 output
+    /// bytes, displaying as `âââ`.
+    #[test]
+    fn p264_multibyte_utf8_passthrough() {
+        // 3-byte codepoint: U+2192 RIGHTWARDS ARROW
+        let got = parse(r#""before → after""#).unwrap();
+        let Parsed::Str(s) = got else { panic!("expected Str") };
+        assert_eq!(s, "before → after");
+        assert_eq!(s.len(), 16); // 7 + 3 + 6 = 16 UTF-8 bytes
+        // 4-byte codepoint: U+1F600 GRINNING FACE
+        let got = parse(r#""smile 😀""#).unwrap();
+        let Parsed::Str(s) = got else { panic!("expected Str") };
+        assert_eq!(s, "smile 😀");
+        assert_eq!(s.len(), 10); // 6 + 4 = 10 UTF-8 bytes
+        // 2-byte codepoint: U+00E9 LATIN SMALL LETTER E WITH ACUTE
+        let got = parse(r#""café""#).unwrap();
+        let Parsed::Str(s) = got else { panic!("expected Str") };
+        assert_eq!(s, "café");
+        assert_eq!(s.len(), 5); // 3 + 2 = 5 UTF-8 bytes
+        // Mix of all three widths in one string
+        let got = parse(r#""→ é 😀""#).unwrap();
+        let Parsed::Str(s) = got else { panic!("expected Str") };
+        assert_eq!(s, "→ é 😀");
     }
 
     #[test]
