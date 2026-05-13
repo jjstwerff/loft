@@ -131,7 +131,7 @@ working file browser with markdown rendering.
 
 | # | Phase | Effort | What ships | Status |
 |---|---|---|---|---|
-| 0 | [Skeleton + binary build](00-skeleton.md) | XS | `tools/viewer/` package, "hello world" binary, `make view-build` + `make view` Makefile targets, frozen-binary contract documented | Open |
+| 0 | [Skeleton + binary build](00-skeleton.md) | XS | `tools/viewer/` script + Makefile, "hello world" binary, `make view-build` + `make view` + `make view-refresh` targets, frozen-binary contract documented (BUILD_NOTES.md records loft commit). | **Shipped 2026-05-13** |
 | 1 | [HTTP server + static + tree](01-http-routes.md) | S | Binary serves the project tree over HTTP; clicking a file shows raw bytes; sidebar lists `doc/`, `lib/`, `src/`, `tests/` | Open |
 | 2 | [Code-file rendering with `<pre>` + line numbers](02-code-files.md) | XS | `.rs` / `.loft` / `.toml` / `.py` / `.sh` / `.json` files render with HTML escaping + per-line `<a>`-anchored line numbers | Open |
 | 3 | [Minimal markdown subset](03-markdown-minimal.md) | M | Headings, bold/italic, inline code, fenced code blocks, lists, links, paragraphs.  Cross-doc `.md` link rewriting + GitHub-compatible heading slugs.  ~250-line loft module under `tools/viewer/src/markdown.loft` | Open |

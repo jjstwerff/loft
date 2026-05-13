@@ -5,7 +5,27 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 00 — Skeleton + frozen-binary build
 
-**Status:** Open
+**Status:** **Shipped 2026-05-13.**
+
+## Deviation from the original design
+
+The original design called for a `tools/viewer/loft.toml` package
+manifest with a `[binary]` section.  PACKAGES.md's spec doesn't
+have a `[binary]` section yet (today loft packages are
+`[library]`-only — see all 14 `lib/*/loft.toml` examples).  The
+viewer is shipped as a SCRIPT + Makefile rather than a
+loft-package, until the package format gains binary support.
+
+The Makefile target compiles `tools/viewer/src/main.loft` via
+`loft --native`, finds the cached binary at
+`tools/viewer/src/.loft/cache/main-<hash>`, and copies it to
+`tools/viewer/bin/loft-view`.  Same outcome as the package
+approach: deliberate build, stable artifact path, frozen
+provenance via `tools/viewer/BUILD_NOTES.md`.
+
+When PACKAGES.md grows `[binary]` support, this can migrate to a
+proper package manifest without changing the user-facing
+contract.
 
 ## Goal
 

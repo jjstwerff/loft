@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs
+.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -311,6 +311,50 @@ serve:
 	@echo "Playground: http://localhost:8000/playground.html"
 	@echo "Gallery:    http://localhost:8000/gallery.html"
 	cd doc && python3 -m http.server 8000
+
+# ── Branch review viewer (plan-35) ─────────────────────────────
+# A frozen loft binary that serves a branch-aware doc + code
+# review dashboard.  See doc/claude/plans/35-branch-review-viewer/.
+#
+# view-build: compile tools/viewer/src/main.loft via loft's native
+#             backend, copy the resulting binary to
+#             tools/viewer/bin/loft-view.  Built deliberately
+#             (frozen-binary contract).
+# view:       run the pre-built binary.  Refresh git state first
+#             (no-op stub today; phase 04 fills refresh.sh).
+view-build:
+	@echo "  [1/3] building host loft binary ..."
+	@cargo build --release -q --lib --bin loft 2>/tmp/loft_view_host.log || { \
+	    echo "    FAIL: host cargo build — see /tmp/loft_view_host.log"; \
+	    tail -20 /tmp/loft_view_host.log; exit 1; }
+	@echo "  [2/3] compiling tools/viewer/src/main.loft via --native ..."
+	@./target/release/loft --native tools/viewer/src/main.loft \
+	    >/tmp/loft_view_compile.log 2>&1 || { \
+	    echo "    FAIL: loft --native — see /tmp/loft_view_compile.log"; \
+	    tail -20 /tmp/loft_view_compile.log; exit 1; }
+	@echo "  [3/3] copying cached binary to tools/viewer/bin/loft-view ..."
+	@cached=$$(ls -t tools/viewer/src/.loft/cache/main-* 2>/dev/null | head -1); \
+	if [ -z "$$cached" ]; then \
+	    echo "    FAIL: no binary in tools/viewer/src/.loft/cache/"; \
+	    echo "    (loft --native may have run but didn't cache; check log)"; \
+	    exit 1; \
+	fi; \
+	cp -f "$$cached" tools/viewer/bin/loft-view; \
+	chmod +x tools/viewer/bin/loft-view; \
+	host_sha=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown"); \
+	{ echo "Built $$(date -u +%Y-%m-%dT%H:%M:%SZ) against loft commit $$host_sha"; } \
+	    > tools/viewer/BUILD_NOTES.md
+	@echo "loft-view built: tools/viewer/bin/loft-view"
+
+view-refresh:
+	@./tools/viewer/refresh.sh
+
+view: view-refresh
+	@if [ ! -x tools/viewer/bin/loft-view ]; then \
+	    echo "loft-view not built; run: make view-build"; \
+	    exit 1; \
+	fi
+	./tools/viewer/bin/loft-view
 
 # game: rebuild the efficient browser build of Brick Buster from any
 # state — clean rebuild of the wasm32-unknown-unknown rlibs + host

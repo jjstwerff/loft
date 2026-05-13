@@ -1,0 +1,18 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft-view: branch-aware doc + code review viewer.
+//
+// Frozen binary built deliberately via `make view-build` from the
+// loft repo root.  See doc/claude/plans/35-branch-review-viewer/
+// for the full design + per-phase plans.
+//
+// Phase 00 (this file): skeleton.  Just prints the version + exits.
+// Subsequent phases add HTTP serving, file rendering, git-state
+// dashboard, etc.
+//
+// Built against loft commit recorded in tools/viewer/BUILD_NOTES.md.
+
+fn main() {
+    print("loft-view v0.1 (plan-35 phase 00 — skeleton)\n");
+}
