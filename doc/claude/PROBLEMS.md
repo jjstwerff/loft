@@ -75,10 +75,10 @@ silent OOB behaviour; updated to use only in-range byte
 indices.
 
 Open issues now: **P229b** (Windows multiplayer flake) +
-**P265** (text-returning native fn called via fn-ref dispatch
-passes `Str` to `&str`-param callees without `&*` deref,
-surfaced 2026-05-13 during P263 fix verification when
-`--native` of any lib/web user was attempted).
+**P266** (codegen routes ALL external-package native fns
+through one crate (`loft_server` in viewer's case) instead
+of dispatching by fn ownership; rustc E0425 — surfaced
+2026-05-13 once P262/P263/P265 cleared).
 **P262** closed 2026-05-13 (one-line `unspan()` in
 `src/generation/calls.rs::user_fn_call_body`).
 **P263** closed 2026-05-13 by renaming lib/web's loft-side
@@ -89,6 +89,11 @@ no longer collide with lib/server's `ws_*_native`.
 byte-by-byte `out.push(bytes[i] as char)` with a UTF-8
 codepoint-length-aware `out.push_str(slice)` that preserves
 multi-byte sequences verbatim.
+**P265** closed 2026-05-13 by binding text-typed `_farg_N`
+locals via a `&*` holder in the fn-ref dispatcher emit site
+(`src/generation/emit.rs::output_call_ref`) so per-arm calls
+pass `&str` regardless of whether the source expression
+produced `Str`, `String`, or already-`&str`.
 The plan-22 trio closed 2026-05-13:
 - **P259** (Plan-22 Case C multi-instance crash) — OpIncRc +
   cascade-free chain.
@@ -131,25 +136,54 @@ The plan-22 trio closed 2026-05-13:
   cdylibs (lib/web/native, lib/server/native) unchanged —
   the rename is loft-side only.
 
-**Surfaced 2026-05-13 by P263 fix verification:**
+**Surfaced 2026-05-13 by P263 fix verification — closed same day:**
 - **P265** — text-returning native fns called via fn-ref
-  dispatch (`on_message: fn(text)`, similar callbacks)
-  bind the call result to a `let _farg_0 = …;` local that
-  is typed `Str`, then dispatch through a `match` to one
-  or more `&str`-parameter callees with NO `&*` deref —
-  rustc rejects with E0308 ("expected `&str`, found `Str`").
+  dispatch (`on_message: fn(text)`, similar callbacks) bound
+  the call result to a `let _farg_0 = native_call(…);` local
+  that was typed `Str`, then dispatched through a `match` to
+  one or more `&str`-parameter callees with NO `&*` deref —
+  rustc rejected with E0308 ("expected `&str`, found `Str`").
   Same root cause as P262 (Str / &str mismatch) but a
-  DIFFERENT emit site (fn-ref dispatcher in
-  `src/generation/dispatch.rs` or similar, not the direct
-  call-arg path P262 fixed in `src/generation/calls.rs`).
-  Reproducer: `use web; fn main() { println("ok"); }` under
-  `--native` (lib/web's `pump()` registers `on_message:
-  fn(text)` which triggers the dispatcher emit even when
-  the caller's `main` doesn't use it).  Pre-existing — not
-  introduced by P263 fix; surfaced once the E0428 collision
-  was removed.  **Workaround:** ship lib/web users via
-  `loft --interpret`; native lib/web programs that don't
-  exercise pump's fn-ref dispatch may still compile.
+  DIFFERENT emit site: the fn-ref dispatcher in
+  `src/generation/emit.rs::output_call_ref`, not the direct
+  call-arg path P262 fixed in `src/generation/calls.rs`.
+  **Closed (2026-05-13)**: bind text-typed `_farg_N` via a
+  holder + `&*` deref so the per-arm calls receive a `&str`
+  regardless of whether the source expression produced `Str`,
+  `String`, or already-`&str`.  Condition `i <
+  param_types.len() && matches!(param_types[i], Type::Text(_))`
+  ensures the work-buffer arg (which sits beyond `param_types`
+  and is `Type::RefVar(Type::Text)` typed) is unaffected.
+  Pinned by `tests/scripts/repro_p265.loft` (cb: fn(text)
+  dispatching `make_text() -> text` to a `consume(s: text)`
+  callee).
+
+**Surfaced 2026-05-13 by P265 fix verification:**
+- **P266** — codegen emits external-package native-fn calls
+  with the WRONG crate prefix.  Every call to a fn declared
+  via `#native "n_…"` in any library is routed through
+  `loft_server::n_…` even when the fn lives in
+  `loft_web::n_…` (or any other native crate).  rustc
+  rejects with E0425 ("cannot find function `n_<name>` in
+  crate `loft_server`", with helpful "similarly named function"
+  suggestions pointing at the wrong crate's contents).
+  Reproducer: `use web; use server; fn main() { … }` under
+  `--native` — the viewer trips this for `n_http_do`,
+  `n_http_body`, `n_ws_connect`, `n_ws_client_send`,
+  `n_ws_client_send_binary`, `n_ws_client_recv`,
+  `n_ws_client_message`, `n_ws_client_opcode`,
+  `n_ws_client_close`, `n_sleep_ms`, `n_pack_*`, `n_byte_at`
+  — all owned by `loft_web/native`, all routed through
+  `loft_server` → 16 E0425s.  Pre-existing — masked by P262 /
+  P263 / P265 in any lib/web user before today.  Saved
+  reproducer at `/tmp/p_followups/p266_wrong_crate_routing.sh`.
+  Likely root cause in the codegen step that picks the
+  `extern crate` prefix when emitting unsafe calls — appears
+  to use the LAST loaded native crate name globally instead
+  of looking up which crate owns each fn (presumably tracked
+  via the `#native` annotation's source library).  **Workaround:**
+  use `loft --interpret` for any program that pulls multiple
+  native libraries.
 
 **Surfaced 2026-05-13 by plan-37 phase 04a — closed same day:**
 - **P264** — `json_parse` decoded JString payloads byte-by-byte:
@@ -237,7 +271,8 @@ introducing new open P-issues.
 | 249 | Closure-typed tuple elements have a wrong-width layout AND a tuple-tail Return-wrap miscompile — `t = (lambda, 99); t.0(10)` crashed the interpreter with `fn_call_ref: d_nr=<garbage> out of range` at `src/state/mod.rs:319`, and `fn invoke(p: (fn(i)->i, text)) -> integer { p.0(7) }` failed native compilation with rustc E0308 `expected i64, found ()`.  Two layered root causes: (1) **20-byte fn-ref layout missed in five tuple codegen sites** — `src/state/codegen.rs::generate_var` Tuple arm + `Value::TupleGet` arm + `Value::TuplePut` arm + `emit_tuple_var_push_recursive` + `emit_tuple_var_pop_put` + `emit_tuple_put_ops` all bucketed `Type::Function` into the `Integer` arm and emitted `OpVarInt` / `OpPutInt` (8 B), but per P213 v4 / `variables::size`, fn-ref slots are 20 B (8 B i64 d_nr + 12 B closure DbRef).  Reading only 8 B left the closure half uninitialised; the call dispatch then read a garbage d_nr and crashed.  `src/data.rs::element_align`/`element_size` Function arm also returned 4 B / 4 B (legacy 16-byte layout assumption); both raised to 8 B align / 20 B size.  (2) **fn_call_tmp scope-cleanup wrapped by insert_free** — when a tuple-of-function param's TAIL CALL pattern (`p.0(7)`) is the function's return expression and the outer body block has its own pending frees (`OpFreeText` for a sibling work-text), `scopes::insert_free` saw the inner `fn_call_tmp` Block's last operator was `OpFreeRef(__fn_ref_tmp)` (added by inner-scope cleanup), inserted the outer frees BEFORE it, and wrapped THAT cleanup in `Return(...)` — the resulting native code returned `()` from a value-returning block.  **Closed (2026-05-11)** with two coordinated changes: (a) layout fix — split `Type::Function` from `Integer` in all six tuple codegen sites; emit `OpVarFnRef` + `stack.position += 4` on push (signature returns `text` = 16 B but runtime pushes 20) and `OpPutFnRef` + `stack.position -= 4` on pop, mirroring `set_var` / `generate_var`'s plain-Function paths.  Raise `element_align(Function)` to 8 and `element_size(Function)` to 20 in `src/data.rs`.  (b) ownership fix — `src/parser/operators.rs` postfix-call path now calls `self.vars.set_skip_free(fn_work)` on the `__fn_ref_tmp` temp, since its closure DbRef ALIASES the source's closure store (freeing it would double-free, and removes the trailing-OpFreeRef that triggered the insert_free Return-wrap miscompile).  Pinned by `tests/tuple_matrix.rs::e4_d{1_closure_local,1_closure_call,1_closure_swap,1_capture_survives,2_closure_arg}` (5/5 cells now green on both backends — captures via `fn(x: integer) -> integer { x + base }` form work too).  Phase 03 of plan-14 closes with this row.  Out-of-scope: T1.8a-style closure-tuple RETURN convention (still deferred). | Medium (closed) | n/a — fix lands in `src/data.rs` (element_align/size), `src/state/codegen.rs` (six tuple-arm splits), `src/parser/operators.rs` (set_skip_free on fn_ref_tmp). |
 | 247 | Native codegen E0382 / E0597 when a nested tuple containing a non-Copy element (text / Reference) is read for format-string interpolation: `t = ((1, "a"), (2, "b")); print("{t.0.1}|{t.1.1}\n");` rejected with `use of moved value: 'var_t.0'`.  The format machinery extracts a `__ref_N: (i64, String) = var_t.0;` temporary that MOVES `var_t.0` (String isn't Copy), then a sibling read of `var_t.1` panicked because the move invalidated the parent tuple.  Surfaced 2026-05-11 by plan-14 phase 02's `e3_d1_text_inside` cell.  **Closed (2026-05-11)** with three coordinated changes: (1) `src/generation/dispatch.rs::output_set` — new `nested_tuple_clone` flag detects "destination is tuple-with-non-Copy-leaf AND source is `TupleGet(_, _)` of a tuple-typed parent"; emits `var_NAME.IDX.clone()` instead of the default move.  (2) `src/generation/emit.rs::Value::TupleGet` arm — for text-typed tuple elements where the source is a work-ref var (`__ref_N` prefix), emits `var___ref_N.IDX.clone()` (returns owned `String`) instead of `&var___ref_N.IDX` (borrow that escapes the enclosing Block scope and trips E0597).  (3) `src/generation/text.rs::format_text` wrap detection extended to `Value::Block` whose result type is `Type::Text(_)` so the `&*({block})` form forces temporary lifetime extension across the enclosing statement.  Pinned by `tests/tuple_matrix.rs::e3_d1_text_inside` (now green under `--ignored`).  Net effect: full plan-14 phase 02 matrix (5/5 e3 cells + 22/22 total) now passes. | Medium (closed) | n/a — fix lands in `src/generation/dispatch.rs` + `src/generation/emit.rs` + `src/generation/text.rs`. |
 | 248 | Element-of-element assignment on nested tuples (`t.0.1 = 99` where `t: ((integer, integer), (integer, integer))`) rejected by both backends with `Not implemented operation = for type integer` at the parser level.  The parser's assignment LHS handling supported single-level `t.0 = x` (T1.x) but didn't recurse into the nested-tuple chain — operators.rs case-3 materialised `t.0.1` as `Block[Set(w0, TupleGet(t, 0)), TupleGet(w0, 1)]`; the assignment dispatcher saw a Block (not a TupleGet) and fell through to `compute_op_code` which emits the integer-= operator on a non-lvalue.  Surfaced 2026-05-11 by plan-14 phase 02's `e3_d1_elem_elem_assign` cell.  **Closed (2026-05-11)** with two coordinated changes: (1) `src/parser/expressions.rs` — new `extract_nested_tuple_lhs` helper recursively flattens the `Block[Set, TupleGet]` chain into `(root, [(work_var, idx)…], leaf_idx)`; `build_nested_tuple_assign` rewrites the IR as `Block[<existing reads>, TuplePut(deepest_w, leaf_idx, rhs), TuplePut(parent, idx, Var(w))…]` so the modification propagates back to root via single-level TuplePuts.  (2) `src/state/codegen.rs::TuplePut` — new `Type::Tuple(inner_elems)` element-type arm that calls the existing `emit_tuple_var_pop_put` recursive helper, so writing a tuple value into a tuple slot (the writeback step) emits per-leaf `OpPut*` ops at the correct offsets within the parent.  Both backends now accept arbitrary-depth nested LHS (`t.0.1.2 = …` works the same way).  Pinned by `tests/tuple_matrix.rs::e3_d1_elem_elem_assign`. | Medium (closed) | n/a — fix lands in `src/parser/expressions.rs` + `src/state/codegen.rs`. |
-| 265 | Text-returning native fn called via fn-ref dispatch (`on_message: fn(text)`, similar callbacks) emits `let _farg_0 = native_call(…);` (typed `Str`) then dispatches through a `match` arm to multiple `&str`-parameter callees (`i_parse_error_push`, `n_print`, `n_println`, etc.) with NO `&*` deref — rustc E0308 ("expected `&str`, found `Str`").  Same root cause as P262 (Str / &str mismatch) but a DIFFERENT emit site than the one P262 fixed in `src/generation/calls.rs`.  The fn-ref dispatcher emitter (likely in `src/generation/dispatch.rs` or the OpCallRef family) needs to either: (a) bind `_farg_0` as `&str` instead of `Str` (route through the same scratch.push pattern used elsewhere), OR (b) wrap each `_farg_0` arg site with `&*(…)`.  Reproducer: `use web; fn main() { println("ok"); }` under `--native` — lib/web's `pump()` registers `on_message: fn(text)` which triggers the dispatcher emit even when main doesn't call it.  Surfaced 2026-05-13 during P263 fix verification (once E0428 collisions removed).  Pre-existing — not introduced by P263. | High | Use `loft --interpret` for any program that uses `lib/web::pump()` or analogous fn-ref-text dispatchers. |
+| 266 | Codegen emits external-package native-fn calls with the WRONG crate prefix.  Every `#native "n_…"`-declared fn is routed through `loft_server::n_…` even when the fn lives in `loft_web::n_…` (or any other native crate).  rustc rejects with E0425 "cannot find function `n_<name>` in crate `loft_server`" — with confusingly helpful "similarly named function" suggestions pointing at unrelated fns in the wrong crate.  Reproducer: `use web; use server; fn main() { web::ws_handler("…") }` under `--native` trips ~16 E0425s for `n_http_do`, `n_ws_client_*`, `n_sleep_ms`, `n_pack_*`, `n_byte_at` — all owned by `loft_web/native`, all routed through `loft_server`.  Pre-existing — masked by P262 / P263 / P265 in any lib/web user before 2026-05-13.  Reproducer saved to `/tmp/p_followups/p266_wrong_crate_routing.sh`.  Likely root cause: the codegen step that picks the `extern crate` prefix uses the LAST loaded native crate name globally instead of dispatching by fn ownership (presumably tracked via the `#native` annotation's source library).  Currently the only blocker between `--native` of the viewer and a fully working multi-language code-intelligence demo per plan-14. | High | Use `loft --interpret` for any program that pulls multiple native libraries. |
+| 265 | Text-returning native fn called via fn-ref dispatch (`on_message: fn(text)`, similar callbacks) emitted `let _farg_0 = native_call(…);` (typed `Str`) then dispatched through `match` arms to multiple `&str`-parameter callees (`i_parse_error_push`, `n_print`, `n_println`, etc.) with NO `&*` deref — rustc E0308 ("expected `&str`, found `Str`").  Same root cause as P262 (Str / &str mismatch) but a DIFFERENT emit site: the fn-ref dispatcher in `src/generation/emit.rs::output_call_ref`, not the direct call-arg path P262 fixed in `src/generation/calls.rs`.  Reproducer: `use web; fn main() { println("ok"); }` under `--native` — lib/web's `pump()` registers `on_message: fn(text)` which triggers the dispatcher emit even when main doesn't call it.  Surfaced 2026-05-13 during P263 fix verification (once E0428 collisions removed); pre-existing.  **Closed (2026-05-13)**: bind text-typed `_farg_N` locals via a holder + `&*` deref so per-arm calls receive `&str` regardless of whether the source expression produced `Str`, `String`, or already-`&str`.  Condition `i < param_types.len() && matches!(param_types[i], Type::Text(_))` ensures the work-buffer arg (which sits beyond `param_types` and is `Type::RefVar(Type::Text)` typed) is unaffected.  Pinned by `tests/scripts/repro_p265.loft` — `cb: fn(text) = consume; cb(make_text())` exercises the dispatcher path.  Surfaced P266 (separate bug, wrong-crate routing) once the E0308s cleared. | High (closed) | n/a — fix lands in `src/generation/emit.rs::output_call_ref` (text-arg holder + `&*` deref bind). |
 | 263 | `lib/web` declared loft-side internal functions with the SAME names as `lib/server` (`ws_recv_native`, `ws_message_native`, `ws_opcode_native`, `ws_send_native`, `ws_send_binary_native`, `ws_close_native`) but bound them to DIFFERENT `#native` impls (`n_ws_client_*` in lib/web vs `n_ws_*` in lib/server).  Codegen emits one `n_<loft_fn>_native` Rust function per loft declaration, so when both libs were pulled into a `--native` compile (lib/server depends on lib/web transitively per `lib/server/loft.toml [dependencies] web = ">=0.1"`), rustc rejected with E0428 ("the name `n_ws_recv_native` is defined multiple times").  Surfaced 2026-05-13 by plan-35 phase 01 (the viewer uses lib/server).  **Closed (2026-05-13)** by renaming lib/web's loft-side internal names to `ws_client_*_native` (mirroring their existing `#native "n_ws_client_*"` annotations).  All call sites are internal to `lib/web/src/web.loft`; no public-API breakage.  Native cdylibs (lib/web/native, lib/server/native) unchanged — the rename is loft-side only.  Verified: `--native --lib lib/ tools/viewer/src/main.loft` no longer reports E0428 (count: 0).  P265 (separate bug, surfaced by this fix) tracks the remaining E0308 in fn-ref dispatchers. | High (closed) | n/a — fix lands in `lib/web/src/web.loft` (rename of `ws_*_native` to `ws_client_*_native`). |
 | 262 | Native codegen omitted the `&*` deref wrap when an inline text-returning user-function call was passed as an argument to another text-typed function call.  Generated Rust looked like `f(cell, n_returns_text(...))`; rustc rejected with E0308 ("expected `&str`, found `Str`") because text-returning user fns return the wrapper struct `Str` while parameters take `&str`.  Initial PROBLEMS.md row had the symptom direction reversed (claimed an EXTRA `&`); the actual bug was a MISSING wrap.  Reproducer: `fn greet(n: text) -> text { "hi {n}" } fn upper(s: text) -> text { s.to_uppercase() } fn main() { println(upper(greet("x"))); }`.  Surfaced 2026-05-13 by plan-35 phase 01 building the viewer's HTML body.  **Closed (2026-05-13)**: `src/generation/calls.rs::user_fn_call_body`'s `needs_deref` check matched `Value::Call(d, _)` against the spanned IR — the parser wraps inline call expressions in `Value::Span` for source-position tracking, so the bare matches!() pattern missed them and `needs_deref` stayed `false`.  One-line fix: bind `let v_unspanned = v.unspan();` first, match against that.  Mirrors the pattern at line 95 in the same function (`if let Value::Call(d_nr, args) = v.unspan()`).  Pinned by `tests/scripts/repro_p262.loft` (asserts `upper(greet("x")) == "HI X"` under both backends).  Viewer-emit verification: `target/release/loft --native-emit` on `tools/viewer/src/main.loft` now produces 22 `&*(n_…)` wraps where there were rustc errors before. | Medium (closed) | n/a — fix lands in `src/generation/calls.rs::user_fn_call_body`. |
 | 261 | Vector-field assignment APPENDED instead of REPLACED on both backends, even outside closures.  Surfaced 2026-05-13 during P260 cell development.  Reproducer: `struct Bag { items: vector<integer> } fn main() { b = Bag { items: [1, 2, 3] }; b.items = [99, 100]; for x in b.items { print(" {x}"); } }` printed `1 2 3 99 100` (expected: `99 100`).  Same divergence on both interp + native — so the bug was in the parser's lowering of "assign to vector-typed field" rather than backend-specific codegen.  **Root cause:** `src/parser/expressions.rs` (towards_set's vector-field whole-replacement path, around line 936) handled three cases for `op == "="` against a vector field: (a) RHS is empty literal `[]` → emit OpClearVector; (b) RHS is a vector variable/expr → emit OpClearVector + OpAppendVector via Var-or-temp; (c) **RHS is a non-empty vector literal `[…]`** → fell through to the Insert-bypass with NO OpClearVector prefix, so the literal's element-construction ops (which build elements directly into the field's storage via OpNewRecord/OpFinishRecord) appended to the existing items instead of replacing them.  **Closed (2026-05-13)** by adding the missing `is_nonempty_literal` arm: prepend OpClearVector to the literal's statement list so the existing element-construction ops run on a fresh-empty field.  Pinned by `e_d3_struct_vector_assign_in_closure` in `tests/mut_closure_matrix.rs` (assertion now `sum == 199` for `[99,100]`, was buggy `sum == 205`). | Medium (closed) | n/a — fix lands in `src/parser/expressions.rs::towards_set` (vector-literal-replace branch). |
