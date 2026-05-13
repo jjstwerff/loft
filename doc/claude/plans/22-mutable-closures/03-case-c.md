@@ -5,7 +5,38 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 03 — Case C: moved mutating closures (factory pattern)
 
-**Status: open**
+**Status: largely shipped 2026-05-13 by 02d-iii.e (single-factory works);
+multi-instance interleave open as P259.**
+
+## Major finding (2026-05-13)
+
+Case C ALREADY WORKS for single-factory patterns under
+phase 02d-iii.e's cell + auto-Reference machinery.  The
+explicit liveness-check + closure-bound cell deps described
+below ARE NOT NEEDED for the single-factory case — the
+existing dep chain (closure-record auto-Reference attribute
+holds a DbRef into the cell store; the closure DbRef in the
+returned 16B fn-ref slot keeps the closure record alive past
+the parent fn's scope exit; the cell stays alive transitively)
+already produces correct behaviour.
+
+Verified via:
+- `c_d4_make_counter_factory` cell in `tests/mut_closure_matrix.rs`
+- `c_d3_factory_into_struct_field` cell (struct embedding)
+- `p22_phase03_factory_no_leak` leak guard (100-iter loop)
+
+All three pass on both interp + native.
+
+**Open: P259 — multi-instance interleave** (`f1 = make();
+f2 = make(); f1(); f2(); f1();`) crashes with index-out-of-
+bounds in `database/allocation.rs:347`.  Looks like a
+premature free of the second factory's cell or closure-record
+store.  Pinned by `c_d4_factory_independent_state_p259`
+(`#[ignore]`).  Single-factory shape unaffected.
+
+The original phase-03 design (below) anticipated needing
+explicit liveness checks + cell-dep rewriting; the actual
+implementation effort is just the P259 fix.
 
 ## Goal
 

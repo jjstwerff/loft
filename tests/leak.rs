@@ -763,6 +763,46 @@ fn p22_phase02d_vi_text_capture_no_leak() {
     );
 }
 
+/// Plan-22 phase 03 — Case C (factory pattern) leak guard.
+///
+/// 100-iteration tight loop: each iteration constructs a
+/// fresh factory closure, calls it 3 times, drops it.  The
+/// `__cell_integer` allocated inside `make()` must outlive
+/// `make()`'s scope (because the returned closure carries a
+/// reference) and free at the closure's drop site.
+///
+/// MAJOR FINDING (2026-05-13): Case C ALREADY WORKS under the
+/// 02d-iii.e cell + auto-Reference machinery — no separate
+/// phase-03 implementation needed.  The closure record's
+/// auto-Reference attribute keeps the cell alive past
+/// `make()`'s scope exit; the cell frees when the closure
+/// goes out of scope in the caller.
+///
+/// Single-factory works.  Multi-factory interleaved-call
+/// shape crashes with `index out of bounds` in
+/// `database/allocation.rs:347` — see P259.
+#[test]
+fn p22_phase03_factory_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn make() -> fn() -> integer {
+            n = 0;
+            fn() -> integer { n = n + 1; n }
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                f = make();
+                _ = f();
+                _ = f();
+                _ = f();
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
 /// Plan-22 phase 02d-vii — text-return-from-fn-with-closure
 /// leak guard.
 ///
