@@ -252,6 +252,98 @@ pub fn show_ir_only(writer: &mut dyn Write, data: &Data, config: &LogConfig) -> 
     Ok(())
 }
 
+/// Plan-22 02d-vii follow-up — capture-pipeline summary for fns
+/// matching `LOFT_LOG=captures:<fn_name>`.  For each parent fn:
+/// scalars_to_box.  For each lambda inside it: mutated_captures,
+/// closure_record d_nr + name, per-attribute auto-Reference
+/// status (`[12B share-by-DbRef]` vs `[N B inline]`).
+///
+/// Replaces 5+ separate `eprintln!` cycles that 02d-iii.e
+/// needed to inspect closure-record attribute types across
+/// passes.
+///
+/// # Errors
+/// Returns an error if the writer fails.
+pub fn show_captures_summary(writer: &mut dyn Write, data: &Data) -> Result<(), Error> {
+    let Some(target) = crate::log_config::captures_trace_target() else {
+        return Ok(());
+    };
+    // Two-pass dump:
+    //   1. Parent fns matching the filter that have a non-empty
+    //      scalars_to_box (the only diagnostic info parents carry).
+    //   2. ALL lambdas with a closure_record (the name filter
+    //      doesn't apply to `__lambda_N` synthetic names; instead
+    //      we dump every lambda since the user filtered the parent
+    //      already).
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function | DefType::Dynamic) {
+            continue;
+        }
+        let is_lambda = def.closure_record != u32::MAX;
+        let direct_match = def.name.contains(&target);
+        if !direct_match && !is_lambda {
+            continue;
+        }
+        if def.scalars_to_box.is_empty() && !is_lambda {
+            continue;
+        }
+        writeln!(
+            writer,
+            "[captures] === {} (d_nr={d_nr}, {kind}) ===",
+            def.name,
+            kind = if is_lambda { "lambda" } else { "parent" }
+        )?;
+        if !def.scalars_to_box.is_empty() {
+            writeln!(
+                writer,
+                "[captures]   scalars_to_box = {:?}",
+                def.scalars_to_box
+            )?;
+        }
+        if is_lambda {
+            writeln!(
+                writer,
+                "[captures]   mutated_captures = {:?}",
+                def.mutated_captures
+            )?;
+            let cr_d = def.closure_record;
+            let cr = data.def(cr_d);
+            writeln!(
+                writer,
+                "[captures]   closure_record = #{cr_d} {cr_name} ({n_attrs} attrs)",
+                cr_name = cr.name,
+                n_attrs = cr.attributes.len()
+            )?;
+            for (idx, attr) in cr.attributes.iter().enumerate() {
+                let storage = match &attr.typedef {
+                    crate::data::Type::Reference(_, deps) if deps.first() == Some(&u16::MAX) => {
+                        "[12B share-by-DbRef (auto-Reference)]"
+                    }
+                    crate::data::Type::Reference(_, _) => "[12B owned Reference]",
+                    crate::data::Type::Text(_) => "[16B inline Text]",
+                    crate::data::Type::Integer(_) => "[8B inline Integer]",
+                    crate::data::Type::Float => "[8B inline Float]",
+                    crate::data::Type::Single => "[4B inline Single]",
+                    crate::data::Type::Boolean => "[1B inline Boolean]",
+                    crate::data::Type::Character => "[4B inline Character]",
+                    crate::data::Type::Function(_, _, _) => {
+                        "[20B inline Function (16B fn-ref + 4B pad)]"
+                    }
+                    _ => "[? inline / other]",
+                };
+                writeln!(
+                    writer,
+                    "[captures]     attr[{idx}] {name} : {tp:?}  {storage}",
+                    name = attr.name,
+                    tp = attr.typedef
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Dump byte code result to the given writer, filtered by `config`.
 ///
 /// - `config.phases.ir` — whether to show IR (intermediate representation).

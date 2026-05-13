@@ -187,6 +187,18 @@ pub fn slots_trace_target() -> Option<String> {
     raw.strip_prefix("slots:").map(str::to_string)
 }
 
+/// Plan-22 02d-vii follow-up — `LOFT_LOG=captures:<fn_name>`
+/// mode.  Returns `Some(fn_name)` when the env var has the
+/// `captures:NAME` form.  Caller dumps the capture-pipeline
+/// state for fns matching `NAME` (substring match): per-fn
+/// scalars_to_box, per-lambda mutated_captures + closure_record
+/// d_nr + per-attribute auto-Reference status.
+#[must_use]
+pub fn captures_trace_target() -> Option<String> {
+    let raw = std::env::var("LOFT_LOG").ok()?;
+    raw.strip_prefix("captures:").map(str::to_string)
+}
+
 impl LogConfig {
     // ------------------------------------------------------------------ presets
 
