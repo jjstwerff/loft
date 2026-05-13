@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view
+.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -345,6 +345,13 @@ view-build:
 
 view-refresh:
 	@./tools/viewer/refresh.sh
+
+# ── Tracker-tag indexer (plan-37) ───────────────────────────────
+# Scans the repo for @P-id / @PLAN-id references, writes
+# index/tags.json.  See doc/claude/plans/37-tracker-index/.
+# CLI query wrapper (`scripts/idx`) lands in plan-37 phase 01.
+index:
+	@./tools/indexer/scan.sh
 
 view: view-refresh
 	@if [ ! -f tools/viewer/src/main.loft ]; then \

@@ -20,7 +20,37 @@ make test                                     # clippy + test; output in result.
 ./scripts/find_problems.sh --bg               # background full-suite run
 ./scripts/find_problems.sh --peek             #   inspect mid-run
 ./scripts/find_problems.sh --wait             #   block for summary
+make index                                    # rebuild index/tags.json (plan-37)
+make view                                     # branch-aware doc + code viewer (plan-35; SSH port-forward 8765)
 ```
+
+## Tracker tags (plan-37)
+
+Tracker references in docs use the `@`-prefixed form so that
+regex matches are unambiguous (the bare-name `P259` regex
+collides with `2P259`, `P2590`, prose like "the P259 fix
+forward"):
+
+- **P-issues**: `@P259`, `@P229b`, `@P262`.
+- **Plans + phases**: `@PLAN22`, `@PLAN35-01`,
+  `@PLAN22-2d-iii.a` (sub-phases via `-` and `.`).
+
+Adoption is incremental — bare-name forms (`P259`, `plan-22
+phase 03`) still work in prose; the indexer (`make index`)
+tracks both under separate `legacy:` keys for transition
+metering.
+
+To find references to a tag, query `index/tags.json` instead
+of grep'ing the tree:
+
+```bash
+make index                          # rebuild (run after edits)
+jq '.["legacy:P259"]' index/tags.json   # bare-name refs (today's data)
+jq '.["@P259"]' index/tags.json         # @-prefixed refs (after migration)
+```
+
+Plan-37 phase 01 will ship `./scripts/idx <query>` as a
+typed wrapper.  Until then, use `jq` directly.
 
 For any refactor likely to surface multiple test failures, kick off
 `find_problems.sh --bg` before going back to editing.  It runs

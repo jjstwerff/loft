@@ -5,7 +5,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 03 — Minimal markdown subset
 
-**Status:** Open
+**Status:** Open — first attempt 2026-05-13 ran into a
+runtime "Invalid index on string" error at multiple text-
+slicing sites inside the inline renderer (`md_render_inline`).
+Isolated reproductions of the same code shape work in
+standalone test files, suggesting the failure is specific to
+how the function interacts with the rest of `main.loft`.
+The WIP diff is preserved at `/tmp/phase03_wip.diff` for
+the next attempt.  Diagnosis paused to ship plan-37 (tracker
+indexer) first per user direction.
 
 ## Goal
 

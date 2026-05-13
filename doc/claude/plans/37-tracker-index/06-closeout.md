@@ -1,0 +1,136 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# Phase 06 — Retroactive tagging + closeout
+
+**Status:** Open
+
+## Goal
+
+One-shot migration: convert most existing bare-name `P\d+`
+references to `@P\d+` form so the indexer's `legacy:`
+buckets shrink toward zero.  Then close the plan.
+
+## What ships
+
+### Retroactive sed pass
+
+A scripted migration of the obvious mass-rewrites.  Three
+classes:
+
+1. **Trivially safe** — refs in PROBLEMS.md row IDs and the
+   row's own narrative.  The leading `| 259 |` table cell
+   stays bare (it's the row ID, not a reference); body text
+   gets `P259` → `@P259` rewritten.
+2. **Plan READMEs + phase docs** — references in prose.
+   `\bP\d+\b` → `@P\d+`, `\bplan-\d+\b` → `@PLAN\d+`.
+3. **Code comments + commit messages going forward** —
+   adopted by convention; no sed pass for code (would
+   produce too much churn vs benefit).
+
+A migration script `tools/indexer/migrate.sh` does the
+rewrite + diff:
+
+```bash
+# Only `.md` under doc/claude/, not source code.
+git ls-files 'doc/claude/**/*.md' | while read -r f; do
+  # @P-id rewrite — match P\d+ NOT preceded by @ or alphanum.
+  sed -E -i \
+    -e 's/(^|[^@a-zA-Z0-9])(P[0-9]+[a-z]?)(\b)/\1@\2\3/g' \
+    "$f"
+  # @PLAN-id rewrite — match plan-\d+ NOT preceded by @
+  sed -E -i \
+    -e 's/(^|[^@a-zA-Z0-9])plan-([0-9]+)(\b)/\1@PLAN\2/g' \
+    "$f"
+done
+```
+
+The script is **idempotent** (the `[^@a-zA-Z0-9]` lookbehind
+prevents double-prefixing).
+
+Run + review the diff before committing — not all
+occurrences should migrate (e.g., `P-issue` shouldn't
+become `@P-issue`).  Phase 06 reviews the diff and accepts
+or rejects per file.
+
+### Hygiene test enforcement
+
+After the migration, `tests/index_hygiene.rs` (phase 03)
+gains a SECOND test:
+
+```rust
+#[test]
+fn legacy_tag_count_under_threshold() {
+    // After phase 06 migration, expect < 50 legacy refs.
+    // Acts as a regression guard against accidental
+    // bare-name re-introductions in new docs.
+    let json = std::fs::read_to_string("index/tags.json").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let legacy_count: usize = v.as_object().unwrap()
+        .iter()
+        .filter(|(k, _)| k.starts_with("legacy:"))
+        .map(|(_, v)| v.as_array().map(|a| a.len()).unwrap_or(0))
+        .sum();
+    assert!(legacy_count < 50,
+        "legacy tag refs ({legacy_count}) exceeded threshold (50). \
+         New docs should use @P-id / @PLAN-id forms.  Run: \
+         tools/indexer/migrate.sh");
+}
+```
+
+Threshold (50) is tunable; the goal is to catch
+accidental regressions, not enforce zero.
+
+### Doc closeout
+
+- `CHANGELOG_TECHNICAL.md` — plan-37 retrospective entry
+  (per-phase summary + bug yield + adoption stats:
+  "before/after legacy ref count").
+- `ROADMAP.md` — remove plan-37 row from active section;
+  add to closed.
+- `plans/README.md` — if listed.
+- `git mv doc/claude/plans/37-tracker-index
+  doc/claude/plans/finished/37-tracker-index`.
+- Update intra-plan + sibling-plan link paths (per the
+  plan-22 closeout precedent).
+
+### Optional: rewrite scanner in loft
+
+If the bash + grep pipeline has felt fragile, phase 06 can
+optionally rewrite `tools/indexer/scan.sh` as a loft
+program: `tools/indexer/scan.loft` compiled to a binary
+similar to `loft-view`.  Drives loft's text-handling +
+file-walking + JSON-emitting capabilities.
+
+This is **optional** — bash version is shipping and works.
+Promote to "required" only if maintenance burden surfaces.
+
+## Acceptance
+
+- `tools/indexer/migrate.sh` reviewed + landed on a focused
+  branch.
+- `make index` after migration shows ≥ 80% reduction in
+  `legacy:` reference count.
+- `tests/index_hygiene.rs::legacy_tag_count_under_threshold`
+  passes.
+- ROADMAP.md, CHANGELOG_TECHNICAL.md, plan README updated.
+- Plan moved to `plans/finished/37-tracker-index/`.
+- `bash scripts/check_doc_drift.sh` (or `cargo test
+  --test doc_hygiene`) clean.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| Sed pass false-positives (e.g., `P` in chemistry context) | Manual diff review per file; accept individual non-migrations |
+| Some legacy refs are intentional (test fixtures, prose examples) | Add `# noindex` opt-out comment recognised by phase 00's scanner; document in this phase |
+| Migration churn dominates a release | Land in chunks (PROBLEMS.md alone first; plan READMEs after) |
+| Threshold of 50 too aggressive | Tune the constant; the test exists to catch accidental large regressions, not micromanage every reference |
+
+## Cross-references
+
+- [Phase 00 — scanner](00-convention-and-scanner.md) — defines the legacy form
+- [Phase 03 — broken validator](03-broken-validator.md) — tests gain the legacy-count check here
+- [README § Acceptance](README.md#acceptance--full-plan)
