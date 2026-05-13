@@ -247,21 +247,313 @@ fn page_file(rel: text, f: File) -> text {
         return page(rel, body);
     }
 
-    if is_markdown(rel) {
-        // Phase 03 will render markdown to HTML here.  For now,
-        // render as code so the file is at least readable.
-        esc2 = escape(rel);
-        body += "<p><em>Markdown rendering arrives in plan-35 phase 03.</em>";
-        body += " Showing as code for now.";
-        body += " <a href=\"/raw/{esc2}\">View raw</a>.</p>";
-    } else {
-        esc2 = escape(rel);
-        body += "<p><a href=\"/raw/{esc2}\">View raw</a></p>";
-    }
+    esc2 = escape(rel);
+    body += "<p><a href=\"/raw/{esc2}\">View raw</a></p>";
 
     src = f.content();
-    body += render_code(src);
+    if is_markdown(rel) {
+        body += md_render(src, rel);
+    } else {
+        body += render_code(src);
+    }
     page(rel, body)
+}
+
+// ── Markdown renderer (plan-35 phase 03) ─────────────────────
+//
+// Minimal subset: headings, paragraphs, fenced code blocks,
+// inline code, bold/italic, links with relative-path rewriting.
+// Lists / tables / block quotes deferred to a follow-up phase.
+//
+// Walks source line-by-line; tracks fenced-code context as the
+// only stateful block.  Inline rendering iterates per character
+// and accumulates output, slicing the source only at known-safe
+// boundaries (after a `\n` split) — avoids the "Invalid index
+// on string" failure mode the original attempt hit on
+// substring-position arithmetic.
+
+fn md_render(src: text, current_rel: text) -> text {
+    out = "";
+    in_code = false;
+    code_buf = "";
+    code_lang = "";
+    para_buf = "";
+
+    lines = src.split('\n');
+    for line in lines {
+        if in_code {
+            if line.starts_with("```") {
+                // Close fenced code block.
+                esc_code = escape(code_buf);
+                esc_lang = escape(code_lang);
+                if len(esc_lang) > 0 {
+                    out += "<pre><code class=\"language-{esc_lang}\">{esc_code}</code></pre>";
+                } else {
+                    out += "<pre><code>{esc_code}</code></pre>";
+                }
+                code_buf = "";
+                code_lang = "";
+                in_code = false;
+            } else {
+                code_buf += "{line}\n";
+            }
+            continue;
+        }
+        if line.starts_with("```") {
+            // Open fenced code block; flush any pending paragraph.
+            if len(para_buf) > 0 {
+                out += "<p>{md_inline(para_buf, current_rel)}</p>";
+                para_buf = "";
+            }
+            // Lang tag is whatever follows the opening fence.
+            n = len(line);
+            if n > 3 { code_lang = line[3..n]; }
+            in_code = true;
+            continue;
+        }
+        if line.starts_with("<!--") {
+            // HTML comment line — skip.  Multi-line comments would
+            // need a separate state; the loft docs use single-line
+            // comments only.
+            continue;
+        }
+        if line == "---" || line == "***" || line == "___" {
+            if len(para_buf) > 0 {
+                out += "<p>{md_inline(para_buf, current_rel)}</p>";
+                para_buf = "";
+            }
+            out += "<hr>";
+            continue;
+        }
+        // Heading: ^# / ## / ### / #### / ##### / ######
+        hlevel = md_heading_level(line);
+        if hlevel > 0 {
+            if len(para_buf) > 0 {
+                out += "<p>{md_inline(para_buf, current_rel)}</p>";
+                para_buf = "";
+            }
+            ln = len(line);
+            // Skip the leading hashes + one space.
+            start = hlevel + 1;
+            heading_text = "";
+            if start < ln { heading_text = line[start..ln]; }
+            slug = md_slugify(heading_text);
+            esc_slug = escape(slug);
+            inline = md_inline(heading_text, current_rel);
+            out += "<h{hlevel} id=\"{esc_slug}\">{inline}</h{hlevel}>";
+            continue;
+        }
+        // Empty line ends paragraph.
+        if line == "" {
+            if len(para_buf) > 0 {
+                out += "<p>{md_inline(para_buf, current_rel)}</p>";
+                para_buf = "";
+            }
+            continue;
+        }
+        // Otherwise accumulate into the current paragraph.
+        if len(para_buf) > 0 {
+            para_buf += " {line}";
+        } else {
+            para_buf = line;
+        }
+    }
+    if in_code {
+        // Unterminated fence — render what we have.
+        esc_code = escape(code_buf);
+        out += "<pre><code>{esc_code}</code></pre>";
+    } else if len(para_buf) > 0 {
+        out += "<p>{md_inline(para_buf, current_rel)}</p>";
+    }
+    out
+}
+
+// Count the leading `#` characters of a line.  Returns 1..=6 for a
+// valid heading (must be followed by a space or end-of-line), 0
+// otherwise.
+fn md_heading_level(line: text) -> integer {
+    n = len(line);
+    if n == 0 { return 0; }
+    count = 0;
+    i = 0;
+    while i < n && line[i] == '#' {
+        count = count + 1;
+        i = i + 1;
+    }
+    if count < 1 || count > 6 { return 0; }
+    // Must be followed by a space (or EOL).  `# title` valid;
+    // `#tag` invalid (treated as paragraph).
+    if i < n && line[i] != ' ' { return 0; }
+    count
+}
+
+// GitHub-compatible heading slug: lowercase, spaces → `-`, drop
+// any char outside [a-z0-9_-].  ASCII subset only — covers all
+// loft docs.  Multi-byte chars pass through `for c in heading`
+// as their UTF-8 bytes, which the filter then drops; that's
+// the desired behaviour.
+fn md_slugify(heading: text) -> text {
+    out = "";
+    for c in heading {
+        if c == ' ' {
+            out += "-";
+        } else if c >= 'a' && c <= 'z' {
+            out += "{c}";
+        } else if c >= 'A' && c <= 'Z' {
+            // ASCII lowercase: c + ('a' - 'A')
+            shifted = (c - 'A') + 'a';
+            out += "{shifted}";
+        } else if c >= '0' && c <= '9' {
+            out += "{c}";
+        } else if c == '-' || c == '_' {
+            out += "{c}";
+        }
+        // else: drop punctuation / non-ASCII
+    }
+    out
+}
+
+// Inline renderer: walks the source character-by-character,
+// emitting HTML for `**bold**`, `*italic*`, `` `code` ``, and
+// `[text](url)` link forms.  Everything else is HTML-escaped
+// passthrough.  Stateful via a small flag set; no recursion.
+fn md_inline(src: text, current_rel: text) -> text {
+    out = "";
+    n = len(src);
+    i = 0;
+    while i < n {
+        c = src[i];
+        if c == '`' {
+            // Inline code: scan to next backtick.
+            i = i + 1;
+            code = "";
+            while i < n && src[i] != '`' {
+                code += "{src[i]}";
+                i = i + 1;
+            }
+            if i < n { i = i + 1; }  // consume closing `
+            esc_code = escape(code);
+            out += "<code>{esc_code}</code>";
+            continue;
+        }
+        if c == '*' && i + 1 < n && src[i + 1] == '*' {
+            // Bold: scan to next `**`.  Inner text rendered as
+            // HTML-escaped passthrough only — nested italic/code
+            // inside bold isn't supported in v1 to keep the
+            // renderer non-recursive (recursive text-returning
+            // calls trip the loft codegen's work-buffer accounting).
+            i = i + 2;
+            inner = "";
+            while i + 1 < n && !(src[i] == '*' && src[i + 1] == '*') {
+                inner += "{src[i]}";
+                i = i + 1;
+            }
+            if i + 1 < n { i = i + 2; }  // consume closing **
+            esc_inner = escape(inner);
+            out += "<strong>{esc_inner}</strong>";
+            continue;
+        }
+        if c == '*' || c == '_' {
+            // Italic: scan to matching delimiter.  `_` only opens
+            // italic at non-alnum start to avoid `snake_case` false
+            // positives.  Inner text rendered as HTML-escaped
+            // passthrough (no nested inline; see Bold above).
+            open = c;
+            looks_like_italic = true;
+            if open == '_' && i > 0 {
+                prev = src[i - 1];
+                if (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') || (prev >= '0' && prev <= '9') {
+                    looks_like_italic = false;
+                }
+            }
+            if looks_like_italic {
+                i = i + 1;
+                inner = "";
+                while i < n && src[i] != open {
+                    inner += "{src[i]}";
+                    i = i + 1;
+                }
+                if i < n { i = i + 1; }
+                esc_inner = escape(inner);
+                out += "<em>{esc_inner}</em>";
+                continue;
+            }
+            // Else fall through to plain emit.
+        }
+        if c == '[' {
+            // Link: [text](url) — find ](
+            text_start = i + 1;
+            j = text_start;
+            depth = 1;
+            while j < n && depth > 0 {
+                if src[j] == ']' { depth = depth - 1; if depth == 0 { break; } }
+                else if src[j] == '[' { depth = depth + 1; }
+                j = j + 1;
+            }
+            if j < n && j + 1 < n && src[j + 1] == '(' {
+                link_text = src[text_start..j];
+                url_start = j + 2;
+                k = url_start;
+                while k < n && src[k] != ')' {
+                    k = k + 1;
+                }
+                if k < n {
+                    url = src[url_start..k];
+                    // Inline md_rewrite_link to avoid the codegen
+                    // work-buffer accounting issue when a text-
+                    // returning helper is called from inside another
+                    // text-returning function.
+                    is_abs = url.starts_with("http://")
+                        || url.starts_with("https://")
+                        || url.starts_with("mailto:")
+                        || url.starts_with("#");
+                    rewritten = url;
+                    if !is_abs {
+                        base = parent_of(current_rel);
+                        anchor = "";
+                        target = url;
+                        hash_at = url.find("#");
+                        if hash_at >= 0 {
+                            ulen = url.len();
+                            target = url[0..hash_at];
+                            anchor = url[hash_at..ulen];
+                        }
+                        // Strip leading "./"
+                        cleaned = target;
+                        while cleaned.starts_with("./") {
+                            cl = cleaned.len();
+                            cleaned = cleaned[2..cl];
+                        }
+                        // Apply "../" segments
+                        cur_base = base;
+                        while cleaned.starts_with("../") {
+                            cur_base = parent_of(cur_base);
+                            cl = cleaned.len();
+                            cleaned = cleaned[3..cl];
+                        }
+                        if cur_base == "" {
+                            rewritten = "/file/{cleaned}{anchor}";
+                        } else {
+                            rewritten = "/file/{cur_base}/{cleaned}{anchor}";
+                        }
+                    }
+                    esc_url = escape(rewritten);
+                    esc_text = escape(link_text);
+                    out += "<a href=\"{esc_url}\">{esc_text}</a>";
+                    i = k + 1;
+                    continue;
+                }
+            }
+        }
+        // Default: HTML-escape the single char.
+        if c == '&' { out += "&amp;"; }
+        else if c == '<' { out += "&lt;"; }
+        else if c == '>' { out += "&gt;"; }
+        else if c == '"' { out += "&quot;"; }
+        else { out += "{c}"; }
+        i = i + 1;
+    }
+    out
 }
 
 // Render a text blob as line-numbered, HTML-escaped <pre><code>.

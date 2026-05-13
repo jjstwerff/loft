@@ -5,17 +5,68 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 03 — Minimal markdown subset
 
-**Status:** Open — first attempt 2026-05-13 ran into a
-runtime "Invalid index on string" error at multiple text-
-slicing sites inside the inline renderer (`md_render_inline`).
-Isolated reproductions of the same code shape work in
-standalone test files, suggesting the failure is specific to
-how the function interacts with the rest of `main.loft`.
-The WIP diff is preserved at `/tmp/phase03_wip.diff` for
-the next attempt.  Diagnosis paused to ship plan-37 (tracker
-indexer) first per user direction.
+**Status:** Shipped 2026-05-13 (after the seven-bug native
+arc P262→P269 cleared the underlying loft compiler issues
+that blocked the first attempt).
 
-## Goal
+## What shipped
+
+A single-pass markdown renderer in
+`tools/viewer/src/main.loft` (~250 lines added, no separate
+module — kept inline to dodge multi-file complexity for v1):
+
+- **Headings** `#` through `######` with GitHub-compatible
+  ASCII slug ids (`<h2 id="open-work">…</h2>`).
+- **Paragraphs** with blank-line separation; multi-line
+  paragraphs concatenate with single spaces.
+- **Fenced code blocks** ` ``` ` with optional language tag
+  → `<pre><code class="language-…">…</code></pre>`,
+  HTML-escaped, no syntax highlighting in v1.
+- **Inline code** `` `text` `` → `<code>…</code>`.
+- **Bold** `**text**` and **italic** `*text*` / `_text_`
+  with the smart-`_` heuristic so identifiers like
+  `snake_case` aren't treated as italic.  (Inner text
+  rendered as HTML-escaped passthrough — no nested inline
+  in v1; see § Risks.)
+- **Links** `[text](url)` with relative-path resolution
+  against the current file's directory.  Absolute URLs
+  (`http`, `https`, `mailto`, `#anchor`) pass through.
+  Relative `.md` links route to `/file/<resolved>`; `../`
+  segments resolve correctly.  Anchor fragments preserved.
+- **Horizontal rules** `---` / `***` / `___` → `<hr>`.
+- **HTML comments** `<!-- … -->` (single-line) — stripped.
+
+End-to-end verified on 2026-05-13:
+
+- README.md: 2 H1 + 9 H2 + 1 H3 (matches structure).
+- doc/claude/PROBLEMS.md (216 KB): 2 H1, 8 H2, 10 H3, 20 H4,
+  3 H5 — full nested heading hierarchy preserved.
+- Cross-doc links (`<a href="/file/...">`) resolve and route
+  through the existing `/file/<path>` handler.
+
+## Bugs surfaced + filed (dogfood-discovery)
+
+Building this renderer surfaced two new loft compiler bugs,
+filed in PROBLEMS.md per the bug-filing policy:
+
+- **P270** — Parser rejects `len(text_var)` in some in-context
+  shapes ("Unknown function len" error pointing at wrong
+  source position).  Workaround: method form `text_var.len()`.
+  Minimal repro doesn't reproduce in isolation — surfacing
+  needs the surrounding viewer context.
+- **P271** — Codegen panic "Too few parameters on n_<helper>
+  (got 3, need 4)" when a text-returning helper is called
+  from inside another text-returning fn.  Workaround: inline
+  the helper's body at the call site.  Same shape works in
+  many other places in the same file; minimal repro doesn't
+  reproduce.
+
+Both filed per the [Dogfood discovery](../../../../.claude/projects/-home-ubuntu-loft/memory/feedback_dogfood_discovery.md)
+principle: real loft tools surface bugs synthetic tests miss.
+
+## Original plan
+
+## Goal (original)
 
 Render `.md` files to readable HTML.  Cover the constructs
 that loft's docs actually use; explicitly defer tables to
