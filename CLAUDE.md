@@ -21,7 +21,8 @@ make test                                     # clippy + test; output in result.
 ./scripts/find_problems.sh --peek             #   inspect mid-run
 ./scripts/find_problems.sh --wait             #   block for summary
 make index                                    # rebuild index/tags.json (plan-37)
-make view                                     # branch-aware doc + code viewer (plan-35; SSH port-forward 8765)
+./scripts/idx tag:@P259                       # tracker-ref lookup (plan-37; prefer over grep -rn; --before/--after/--para flags for context)
+make view                                     # branch-aware doc + code viewer (plan-35; SSH port-forward 8765; /tag/<bare> for tracker refs)
 ```
 
 ## Tracker tags (plan-37)

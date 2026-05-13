@@ -5,9 +5,35 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 05 — Claude integration
 
-**Status:** Open
+**Status:** Shipped 2026-05-13 (MCP wrapper deferred — optional)
 
-## Goal
+## What shipped
+
+- CLAUDE.md § Key commands lists `./scripts/idx tag:@P259`
+  with a brief usage hint (the `--before`/`--after`/`--para`
+  flags are mentioned for context lookups).
+- CLAUDE.md `make view` row mentions the new `/tag/<bare>`
+  route from plan-37 phase 04a so the browser-side equivalent
+  is discoverable.
+- The full canonical-lookup paragraph (§ Tracker tags →
+  "Looking up tracker references") was already in place from
+  phase 01; phase 05 did not re-touch it.
+- A persistent memory entry (`feedback_use_idx_not_grep.md`)
+  was saved to the user's auto-memory so future Claude
+  sessions default to `./scripts/idx` for tracker lookups
+  without needing the rule re-explained per session.
+
+## What's deferred
+
+- **MCP wrapper** — listed as optional in the original plan;
+  not built.  The `./scripts/idx` CLI surface is enough for
+  the token-reduction goal; an MCP wrapper would tighten it
+  further but adds tool-config burden.  Promote when token
+  budget pressure surfaces a concrete need.
+
+## Original plan
+
+## Goal (original)
 
 Make `./scripts/idx` Claude's canonical reference-lookup
 mechanism, displacing per-task `grep -rn` patterns.  The win
