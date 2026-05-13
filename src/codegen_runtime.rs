@@ -192,6 +192,26 @@ pub fn OpFinishRecord(
     stores.record_finish(&data, &record, parent_tp as u16, fld as u16);
 }
 
+/// P259: increment a store's reference count.  Native equivalent of
+/// the `OpIncRc` bytecode opcode (declared in `default/01_code.loft`).
+/// Used after each `SetDbRef` that captures a heap-owned cell
+/// (`Reference(__cell_*, _)`) into a closure record's auto-Reference
+/// attribute.  Without this inc, the parent fn's scope-exit `OpFreeRef`
+/// drops the cell's rc to 0 and frees the store while the closure
+/// record still holds the DbRef (P259 multi-factory crash).  Pairs
+/// with the cascade-free in `Stores::free_named` (P259 commit 4).
+#[allow(non_snake_case)]
+pub fn OpIncRc(cell: &std::cell::UnsafeCell<Stores>, db: DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if db.store_nr == u16::MAX {
+        return;
+    }
+    if (db.store_nr as usize) >= stores.allocations.len() {
+        return;
+    }
+    stores.inc_rc(db.store_nr);
+}
+
 /// Free a database reference.  Closes any associated file handle first.
 /// Bytecode equivalent: `OpFreeRef` in `src/state/io.rs:262`.
 /// The `name` argument is the loft variable name (e.g. `"var_p"`); it appears in

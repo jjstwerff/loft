@@ -661,6 +661,20 @@ impl Output<'_> {
                     return Ok(());
                 }
             }
+            "OpIncRc" => {
+                // P259: emit `OpIncRc(cell, <db>)` — increments the
+                // referenced store's rc.  Used by emit_lambda_code after
+                // each SetDbRef capturing a heap-owned cell into a
+                // closure record's auto-Reference attribute.  No callers
+                // emitted yet (commit 1 is infra-only); commit 2 wires
+                // the call sites.
+                if let [ref db_val] = vals[..] {
+                    write!(w, "OpIncRc(cell,")?;
+                    self.output_code_inner(w, db_val)?;
+                    write!(w, ")")?;
+                }
+                return Ok(());
+            }
             "OpFreeRef" => {
                 // Emit OpFreeRef(cell,var, "var_name") so LOFT_STORE_LOG shows the loft name.
                 // After freeing, reset the variable to null so a subsequent OpDatabase
