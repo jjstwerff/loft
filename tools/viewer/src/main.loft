@@ -615,30 +615,30 @@ fn md_inline(src: text, current_rel: text) -> text {
     while i < n {
         c = src[i];
         if c == '`' {
-            // Inline code: scan to next backtick.
+            // Inline code: scan to next backtick.  P272: collect the
+            // run via a single SLICE rather than per-byte accumulation,
+            // because src[i] returns the codepoint at byte i — for a
+            // multi-byte char, accumulating "{src[i]}" once per byte
+            // re-emits the codepoint N times.  Slice preserves bytes.
             i = i + 1;
-            code = "";
+            code_start = i;
             while i < n && src[i] != '`' {
-                code += "{src[i]}";
                 i = i + 1;
             }
+            code = src[code_start..i];
             if i < n { i = i + 1; }  // consume closing `
             esc_code = escape(code);
             out += "<code>{esc_code}</code>";
             continue;
         }
         if c == '*' && i + 1 < n && src[i + 1] == '*' {
-            // Bold: scan to next `**`.  Inner text rendered as
-            // HTML-escaped passthrough only — nested italic/code
-            // inside bold isn't supported in v1 to keep the
-            // renderer non-recursive (recursive text-returning
-            // calls trip the loft codegen's work-buffer accounting).
+            // Bold: scan to next `**`.  Inner text via SLICE (P272).
             i = i + 2;
-            inner = "";
+            inner_start = i;
             while i + 1 < n && !(src[i] == '*' && src[i + 1] == '*') {
-                inner += "{src[i]}";
                 i = i + 1;
             }
+            inner = src[inner_start..i];
             if i + 1 < n { i = i + 2; }  // consume closing **
             esc_inner = escape(inner);
             out += "<strong>{esc_inner}</strong>";
@@ -647,8 +647,7 @@ fn md_inline(src: text, current_rel: text) -> text {
         if c == '*' || c == '_' {
             // Italic: scan to matching delimiter.  `_` only opens
             // italic at non-alnum start to avoid `snake_case` false
-            // positives.  Inner text rendered as HTML-escaped
-            // passthrough (no nested inline; see Bold above).
+            // positives.  Inner text via SLICE (P272).
             open = c;
             looks_like_italic = true;
             if open == '_' && i > 0 {
@@ -659,11 +658,11 @@ fn md_inline(src: text, current_rel: text) -> text {
             }
             if looks_like_italic {
                 i = i + 1;
-                inner = "";
+                inner_start = i;
                 while i < n && src[i] != open {
-                    inner += "{src[i]}";
                     i = i + 1;
                 }
+                inner = src[inner_start..i];
                 if i < n { i = i + 1; }
                 esc_inner = escape(inner);
                 out += "<em>{esc_inner}</em>";
@@ -736,13 +735,22 @@ fn md_inline(src: text, current_rel: text) -> text {
                 }
             }
         }
-        // Default: HTML-escape the single char.
-        if c == '&' { out += "&amp;"; }
-        else if c == '<' { out += "&lt;"; }
-        else if c == '>' { out += "&gt;"; }
-        else if c == '"' { out += "&quot;"; }
-        else { out += "{c}"; }
-        i = i + 1;
+        // Default: HTML-escape the single codepoint and advance i
+        // by its UTF-8 byte length (P272 — advancing by 1 would
+        // re-emit a multi-byte codepoint N times since src[i]
+        // returns the codepoint at byte i, the same for all N
+        // bytes of the codepoint).  ASCII chars (incl. the four
+        // entity-escape special cases) are 1 byte so the special
+        // branches keep i + 1.
+        if c == '&' { out += "&amp;"; i = i + 1; }
+        else if c == '<' { out += "&lt;"; i = i + 1; }
+        else if c == '>' { out += "&gt;"; i = i + 1; }
+        else if c == '"' { out += "&quot;"; i = i + 1; }
+        else {
+            char_str = "{c}";
+            out += char_str;
+            i = i + len(char_str);
+        }
     }
     out
 }
