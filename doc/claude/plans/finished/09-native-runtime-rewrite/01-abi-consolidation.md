@@ -10,7 +10,7 @@ retired; `Abi::None` introduced for nullary fns; all 12 (now
 
 ## What's tangled today
 
-P199.A migrated most runtime fns from `&mut Stores` to
+@P199.A migrated most runtime fns from `&mut Stores` to
 `&UnsafeCell<Stores>` (the "cell" ABI), but a few helpers still
 take `stores`.  The codegen tracks which ABI to use via a
 **hardcoded name list** in two places:

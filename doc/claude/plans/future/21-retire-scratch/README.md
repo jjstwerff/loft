@@ -135,7 +135,7 @@ In `src/generation/emit.rs` (codegen wrap sites):
 
 | Site | Why scratch |
 |---|---|
-| `Value::Return` text-wrap (`:228`) | P205 — bounded-generic specialisation has no `RefVar(Text)` work buffer; emit wraps in `stores.scratch.push((expr).to_string()); Str::new(...)` |
+| `Value::Return` text-wrap (`:228`) | @P205 — bounded-generic specialisation has no `RefVar(Text)` work buffer; emit wraps in `stores.scratch.push((expr).to_string()); Str::new(...)` |
 | Block-tail `wrap_result` (`:1034`) | Same detection, same routing |
 
 In `src/extensions.rs` (cdylib LoftStr → loft `Str` bridge):
@@ -182,13 +182,13 @@ This is a *bounded* leak (bounded by the worst statement), but the
 bound is set by the most pathological line, not by the steady-state
 working set, and is invisible to the programmer.
 
-### 2.2  Cross-statement escape (P227 family)
+### 2.2  Cross-statement escape (@P227 family)
 
 The clear-on-line contract assumes nothing reads a scratch-backed `Str`
 across a line boundary.  This breaks whenever a value derived from a
 scratch `Str` survives the next `Value::Line`:
 
-- **Text-returning fn-ref calls** (`PROBLEMS.md` P227, open at S1).  The
+- **Text-returning fn-ref calls** (`PROBLEMS.md` @P227, open at S1).  The
   dispatch wrapper synthesises a `Str` whose backing `String` is in
   scratch (or a stack-local), and the `Str` outlives the dispatch arm.
   Native panics inside `<Str as Display>::fmt`'s `String::push_str`;
@@ -316,7 +316,7 @@ work buffer's lifetime is the caller's stack frame, which is exactly
 what the borrow needs.
 
 Generic specialisations don't hit this path
-(`PROBLEMS.md` P205 closed by routing through scratch instead — `:896`).
+(`PROBLEMS.md` @P205 closed by routing through scratch instead — `:896`).
 That fallback is one of the targets of the retirement plan.
 
 ### 3.3  `ref_return` — same shape for struct/vector returns
@@ -395,7 +395,7 @@ generic-specialisation paths in scratch.  The fix is to thread a
 RefVar(Text) work buffer through the generic specialisation, the same
 way `text_return` does for non-generic user fns.
 
-Investigation in P205 (closed, `PROBLEMS.md:896`) found that
+Investigation in @P205 (closed, `PROBLEMS.md:896`) found that
 `text_return` skips generics at `src/parser/control.rs:375`
 (`DefType::Generic` skip).  Outcome B in that probe found that
 removing the skip alone doesn't help — generic specialisations have
@@ -414,12 +414,12 @@ The `p205_no_str_new_of_local_in_corpus` regression test
 the absence of `Str::new(&var___ret_*)`.  After Phase B the inverse
 holds — `Str::new(&work_buf_*)` is the *correct* shape.
 
-P208 (closed via wrap suppression, `PROBLEMS.md:42`) is in the same
+@P208 (closed via wrap suppression, `PROBLEMS.md:42`) is in the same
 emit path; same Phase B fix.
 
 ### Phase C — closure / fn-ref text return + parallel buf direct read
 
-This is the prerequisite for P227 closure (S1, open).  Two pieces:
+This is the prerequisite for @P227 closure (S1, open).  Two pieces:
 
 1. **Fn-ref text return**: the dispatcher today produces a `Str`
    whose backing String is scratch or a stack local.  Fix is the
@@ -427,7 +427,7 @@ This is the prerequisite for P227 closure (S1, open).  Two pieces:
    tables: each candidate gets a `__work_*` parameter, the dispatch
    wrapper passes the caller's work buffer through.  `output_call_ref`
    in `src/generation/emit.rs` already filters `__work_*`/`__closure`
-   attrs (per the partial P227 progress note); the missing piece is
+   attrs (per the partial @P227 progress note); the missing piece is
    making the work buffer actually flow.
 2. **Parallel buf direct read**: `n_parallel_buf_get_text_native`
    (`codegen_runtime.rs:2515`) currently clones into scratch.  The
@@ -470,10 +470,10 @@ The `text_return` work-buffer logic already handles the outer
 shape (for user fns); the call-expression shape is the same problem
 shifted one level.
 
-### 5.2  P227 must close in parallel
+### 5.2  @P227 must close in parallel
 
 Phases A and B remove most producers but leave the dispatch / closure
-text path as the last consumer of scratch.  Without P227's fn-ref text
+text path as the last consumer of scratch.  Without @P227's fn-ref text
 fix in Phase C, retiring scratch in Phases A/B alone shifts the
 dangling-pointer hazard from "scratch-backed Str across a line" to
 "stack-local-backed Str across a dispatch return."  Net safety
@@ -508,7 +508,7 @@ Phase A is the right first step.  It is:
   detection).
 - Fully back-compat (the non-`_dest` natives stay registered for the
   fallback path until Phase C deletes scratch).
-- Independent of P227 (no closure / fn-ref work).
+- Independent of @P227 (no closure / fn-ref work).
 - Removes the in-statement unbounded growth hazard (§2.1) and the
   re-entrancy hazard (§2.5) for ~95% of producers.
 
@@ -517,10 +517,10 @@ that currently stand in for the missing generic-specialisation
 work-buffer.  This is the same fix shape as Phase A's parser
 extension, applied to the generic path.
 
-Phase C is the last step and depends on P227.  Until P227 closes the
+Phase C is the last step and depends on @P227.  Until @P227 closes the
 fn-ref dispatch text path, retiring scratch globally would regress
 those programs.  Plan-level work: Phase C's two pieces (fn-ref text
-work buffer, parallel buf direct read) bundle naturally with the P227
+work buffer, parallel buf direct read) bundle naturally with the @P227
 closure work; do them together.
 
 After Phase C the field, the opcode, and the `Value::Line` injection
@@ -546,9 +546,9 @@ through `stores.scratch`") becomes a closed-by-design entry.
    producer.
 6. `src/generation/emit.rs:215-245` and `:1020-1050` — the codegen
    wrap sites Phase B replaces with work-buffer threading.
-7. `doc/claude/PROBLEMS.md` P205 (`:896`) and P227 (`:61`) —
+7. `doc/claude/PROBLEMS.md` @P205 (`:896`) and @P227 (`:61`) —
    constraints on Phase B and Phase C respectively.
-8. `doc/claude/CHANGELOG_TECHNICAL.md:12-80` — the P205 close note,
+8. `doc/claude/CHANGELOG_TECHNICAL.md:12-80` — the @P205 close note,
    which explains the `needs_p205_scratch` predicate Phase B reuses.
 
 ---

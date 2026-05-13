@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**DONE 2026-05-09.**  Reference for the post-plan-06 surface
+**DONE 2026-05-09.**  Reference for the post-@PLAN06 surface
 (par(...) syntax, par_fold, dispatcher inventory) lives in
 [`../../../THREADING.md`](../../../THREADING.md).  The live
 closure record is [ARC.md](ARC.md).  User-facing summary:
@@ -25,12 +25,12 @@ phase files in this directory remain as historical archaeology.
 - A9 superseded by A4 (light path retired entirely).
 - A10 (browser parallel) out-of-scope; ships as its own arc.
 - Ignored par canaries: 8 → 1.  Remaining is heterogeneous-
-  vec-of-fn (D11a row 8), outside plan-06 scope.
+  vec-of-fn (D11a row 8), outside @PLAN06 scope.
 
 ### Closure commits
 
 - `f974770` — closeout docs + A8 deferral marker + A9 superseded
-- `15a7aab` — P235 par half via wrapper synthesis (closes
+- `15a7aab` — @P235 par half via wrapper synthesis (closes
   `par_tuple_destructure_in_for`)
 - `bcac52f` — A8.b stitch_id consolidation in `src/native.rs`
   (~150 LOC saved)
@@ -44,7 +44,7 @@ concatenates the per-worker output stores into a single result
 Store.  No special cases for text, references, or primitives —
 they all live in stores.
 
-The reference content for the post-plan-06 architecture
+The reference content for the post-@PLAN06 architecture
 ("everything is a store", dispatcher set, par_fold sugar)
 lives in THREADING.md.  The full pre-shipping rationale +
 phase-by-phase design is in this directory's phase files
@@ -71,15 +71,15 @@ structured fuzz/bug-hunt of that intersection.
 | P195 | lexer | chained tuple-index lex (`n.v.0.0`) |
 | P196 | native codegen | tuple-of-fn-ref native codegen ((u32, DbRef) as i32) |
 | P197 | dep tracking | dep-tracked text reads (bundled with P194) |
-| P198 | scan_set | unwrap Span in scan_set + native deep-copy emission |
-| P199 | native ABI | `&mut Stores` → `&UnsafeCell<Stores>` (3-commit fix series) |
-| P200 | native codegen | int compare emission (closed in plan-09; surfaced here) |
-| P201 | misc | branch-local regression (filed 2026-04-29) |
-| P234 | lexer/runtime | tuple-of-struct member access |
-| P235 | par half | tuple-destructure-in-for |
-| P236 | native codegen | heap-owned reference returns from if/else native data corruption |
+| @P198 | scan_set | unwrap Span in scan_set + native deep-copy emission |
+| @P199 | native ABI | `&mut Stores` → `&UnsafeCell<Stores>` (3-commit fix series) |
+| @P200 | native codegen | int compare emission (closed in @PLAN09; surfaced here) |
+| @P201 | misc | branch-local regression (filed 2026-04-29) |
+| @P234 | lexer/runtime | tuple-of-struct member access |
+| @P235 | par half | tuple-destructure-in-for |
+| @P236 | native codegen | heap-owned reference returns from if/else native data corruption |
 
-Several (P191, P195, P196, P198, P199) are bugs that ordinary
+Several (P191, P195, P196, @P198, @P199) are bugs that ordinary
 doc-tests don't surface — they require specific type-shape
 interactions that only the par() canaries forced.
 
@@ -121,13 +121,13 @@ Cross-cutting design docs:
 ## See also
 
 - [`../../../THREADING.md`](../../../THREADING.md) — reference
-  for the post-plan-06 surface (par(...) syntax, par_fold,
-  dispatcher inventory, plan-06 phase 0 baseline retained as
+  for the post-@PLAN06 surface (par(...) syntax, par_fold,
+  dispatcher inventory, @PLAN06 phase 0 baseline retained as
   reference benchmark)
 - [`../../CHANGELOG_TECHNICAL.md`](../../CHANGELOG_TECHNICAL.md) —
   per-A-step shipped manifest under "Plan-06 (typed-par
   redesign) closed 2026-05-09"
-- [`../../PROBLEMS.md`](../../PROBLEMS.md) — P188–P236 family
+- [`../../PROBLEMS.md`](../../PROBLEMS.md) — P188–@P236 family
   bug entries (most closed; see Realised value table above)
 - [`../../ROADMAP.md`](../../ROADMAP.md) — A14 / A15 (1.1+
   parallel work cooperators) + browser parallel arc (was A10)

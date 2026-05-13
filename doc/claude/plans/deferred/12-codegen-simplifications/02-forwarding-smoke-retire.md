@@ -10,20 +10,20 @@
 
 ## Why retire
 
-Phase 00 of plan-09 introduced
+Phase 00 of @PLAN09 introduced
 `src/generation/ops/forwarding_smoke.rs` containing
 `ForwardingEmitter` — a no-op emitter that just delegates to
 `DefaultEmitter::emit`.  9 Op names were registered to it as a
 runtime smoke test proving the dispatch path fires.
 
-That smoke test served its purpose.  Plan-09 + plan-11 shipped
+That smoke test served its purpose.  Plan-09 + @PLAN11 shipped
 **5 production custom emitters**:
 - `ParallelForEmitter` (phase 03)
 - `OpGetRecordEmitter` + `OpIterateEmitter` (phase 04)
 - `ParallelQueueEmitter` + `ParallelBufRenameEmitter` (phase 06)
 - `IntCompareEmitter` (phase 10 step 10.3)
 
-Plus the implicit P205 fix at the emit.rs level (no custom
+Plus the implicit @P205 fix at the emit.rs level (no custom
 emitter, but the dispatch is exercised heavily).
 
 The 9 forwarding entries are now:
@@ -112,11 +112,11 @@ outcome: zero behavioural change.  Suite stays at 95/95 native.
 
 `scripts/p09_fast_gate.sh` reports
 `custom emitters registered: N (X individual + Y via lists)`.
-After plan-12 phase 02:
+After @PLAN12 phase 02:
 - "via lists" drops by 9 (the forwarding loop)
 - "individual" stays unchanged
 
-Update any plan-09 docs that reference the absolute count if it
+Update any @PLAN09 docs that reference the absolute count if it
 matters; mostly it's informational.
 
 ### Step 2.8 — Update README
@@ -125,7 +125,7 @@ Plan-12 README's progress markers and any doc cross-reference
 to forwarding-smoke should clean up.  Plan-09's phase 00 doc
 references the smoke test — leave that as historical record;
 just note in the phase 02 § Findings that the smoke test served
-its purpose and was retired post-plan-09.
+its purpose and was retired post-@PLAN09.
 
 ## Acceptance
 
@@ -152,7 +152,7 @@ All clean.
 |---|---|
 | One of the 9 forwarded Ops actually NEEDS the registry entry to fire emission differently | Step 2.2's grep audit catches this.  If found, keep that specific entry. |
 | Tests that count registry size regress | Update the count assertion in the structural test (it's a number, not a behavioural assertion). |
-| The "9 via lists" entries served as a discoverability hint for new contributors | The plan-09 phase 00 doc still describes the forwarding-first recipe; that's the actual onboarding path, not the production registry entries. |
+| The "9 via lists" entries served as a discoverability hint for new contributors | The @PLAN09 phase 00 doc still describes the forwarding-first recipe; that's the actual onboarding path, not the production registry entries. |
 
 ## Findings
 
@@ -167,4 +167,4 @@ The byte-identical baseline at `/tmp/p09-baseline/` was unaffected
 
 All gate suites stayed at their expected counts: 540/540 issues,
 43/43 threading, 35/35 threading_chars, 18 codegen_emitter (the +1
-is plan-12 phase 01's `pre_eval_walkers_unspan`).
+is @PLAN12 phase 01's `pre_eval_walkers_unspan`).

@@ -13,7 +13,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
   with a brief usage hint (the `--before`/`--after`/`--para`
   flags are mentioned for context lookups).
 - CLAUDE.md `make view` row mentions the new `/tag/<bare>`
-  route from plan-37 phase 04a so the browser-side equivalent
+  route from @PLAN37 phase 04a so the browser-side equivalent
   is discoverable.
 - The full canonical-lookup paragraph (§ Tracker tags →
   "Looking up tracker references") was already in place from

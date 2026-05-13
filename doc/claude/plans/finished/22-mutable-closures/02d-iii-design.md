@@ -6,13 +6,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Phase 02d-iii — outer-binding rewrite design
 
 This doc captures the pre-implementation analysis for phase
-02d-iii (the major surgery of plan-22's scalar-capture boxing
+02d-iii (the major surgery of @PLAN22's scalar-capture boxing
 arc).  Phase 02d shipped its first two foundation sub-phases on
 2026-05-12; 02d-iii is structurally heavier than 02a-c combined.
 Locking the surface area before any code lands is the difference
 between a focused 5-commit arc and a multi-week debug loop.
 
-## Status of plan-22 phase 02d
+## Status of @PLAN22 phase 02d
 
 | Phase | What | Status |
 |---|---|---|
@@ -362,7 +362,7 @@ the end of 02d-iii.e (per the 02d design):
   phase 05.  02d-iii does NOT introduce a user-visible
   `Mutable<T>` type.
 - **Case C (factory-pattern moved closures)** — phase 03,
-  separate plan-22 phase.  The 02d design noted that 02d-iii's
+  separate @PLAN22 phase.  The 02d design noted that 02d-iii's
   outer-binding rewrite is structurally heavier than Case C
   scalar boxing (which doesn't need outer-side reads to
   rewrite); the design doc proposes 02d-iii FIRST so the
@@ -377,7 +377,7 @@ the end of 02d-iii.e (per the 02d design):
 | Closure-body write path (02d-iii.d) needs IR shape that parse_assign currently doesn't produce.  Symptom: `Set(var_nr, ...)` IR with var_nr pointing at a captured name (which has no stack slot in the closure body). | Read parser's existing capture-write path (the 02c case for Reference field-set `s.x = 7`).  If that path uses `OpSetInt(get_field(closure, s), x_pos, 7)`, the same shape works for cells with `OpSet<T>(get_field(closure, n), 0, expr)`. |
 | Compound assign `n += 1` evaluates the LHS deref twice, producing inconsistent reads under non-trivial side effects (e.g. `n += f(n)` where `f` mutates).  Symptom: wrong value, hard to spot without focused tests. | Sub-phase 02d-iii.c includes a focused test `n += f(n)` with traced eval order.  If incorrect, refactor to evaluate LHS once + reuse via a temporary. |
 | Format-string interpolation `print("{n}")` bypasses `resolve_name` and reads `n` directly.  Symptom: prints `0` even after closure mutations. | Step 02d-iii.b's regression sweep includes the format-string read path.  If broken, extend the format codegen to honour boxed scalars. |
-| Native codegen (`--native` path) emits different code for `Reference(__cell_<T>, _)` than interp.  Symptom: cross-mode parity break. | P258 already proved native vs interp layout parity for auto-Reference.  The same `db.dbref()` field arm covers cells.  Verify via `b_d1_int_capture_local_mutates` cross-mode cell early in 02d-iii.d. |
+| Native codegen (`--native` path) emits different code for `Reference(__cell_<T>, _)` than interp.  Symptom: cross-mode parity break. | @P258 already proved native vs interp layout parity for auto-Reference.  The same `db.dbref()` field arm covers cells.  Verify via `b_d1_int_capture_local_mutates` cross-mode cell early in 02d-iii.d. |
 
 ## Cross-references
 

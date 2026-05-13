@@ -187,7 +187,7 @@ Each row is one commit, lands independently, runs `make ci` green.
 |---|---|
 | The 40-case list misses a real-world failure mode | The list is a starting point; phases 4 / 6 may add cases as new `RuntimeError` kinds appear.  The acceptance bar is "covers each category with at least one case", not "exactly 40". |
 | Baseline output is non-deterministic (paths, times) | `.expect` files are normalised: absolute paths replaced with `<cases>/`, any timing scrubbed, build hashes scrubbed.  Normaliser lives in `tests/error_messages.rs`. |
-| `make bench` numbers drift | Phase 1 re-runs and compares to a tolerance band (±5 %), same convention as plan-06 phase 0. |
+| `make bench` numbers drift | Phase 1 re-runs and compares to a tolerance band (±5 %), same convention as @PLAN06 phase 0. |
 
 ## Cross-references
 

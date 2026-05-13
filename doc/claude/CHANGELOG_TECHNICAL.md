@@ -23,7 +23,7 @@ loft-script binary against the host loft binary as a frozen pair.
   built against.
 - **01** HTTP routes.  Server skeleton via `lib/server`, `/`, `/tree/<path>`,
   `/raw/<path>`, `/static/style.css`, 404 fallback.  Originally
-  blocked from `--native` by P262 + P263; fixed in the seven-bug arc.
+  blocked from `--native` by @P262 + @P263; fixed in the seven-bug arc.
 - **02** Code-file rendering.  `/file/<path>` renders any text file as
   line-numbered HTML with `<a id="L42">` anchors for fragment scrolling.
   HTML escape + tab-to-4-spaces + binary-extension skip-list.
@@ -64,7 +64,7 @@ loft-script binary against the host loft binary as a frozen pair.
 
 - `lib/server` proven well beyond test fixtures (lib's first big
   consumer outside the test suite).
-- The seven-bug native arc P262→P269 (closed 2026-05-13) was
+- The seven-bug native arc @P262→@P269 (closed 2026-05-13) was
   surfaced by trying to compile the viewer to `--native`.  Each bug
   was a real loft-codegen issue that was invisible until a real
   consumer walked the path — `lib/web` + `lib/server` integration,
@@ -72,7 +72,7 @@ loft-script binary against the host loft binary as a frozen pair.
   cross-crate native fn routing, JSON parser UTF-8, JSON natives
   todo-stubs.  Closed via DESIGN_DECISIONS.md § C67 ("fail at startup,
   not at runtime — internal-bug runtime panics caught at compile time").
-- P54 (JsonValue ecosystem) native side completed via P268 + the
+- P54 (JsonValue ecosystem) native side completed via @P268 + the
   16-fn follow-up wiring all 23 JSON natives in
   `src/codegen_runtime.rs`.
 - New `lib/markdown` library spun out as a reusable single-file loft
@@ -84,6 +84,52 @@ loft-script binary against the host loft binary as a frozen pair.
   exposed publicly).
 
 **Plan moved to `plans/finished/35-branch-review-viewer/`.**
+
+---
+
+### Plan-37 phase 06 — retroactive `@`-tagging shipped 2026-05-14
+
+`tools/indexer/migrate.py` rewrites bare-name tracker
+references to `@`-prefixed form across `doc/claude/**/*.md`:
+
+- `P259` → `@P259` when 259 is a valid PROBLEMS.md row ID.
+- `plan-22` → `@PLAN22` when 22 is a valid plan dir number.
+
+The migration is **conservative on purpose** — false
+positives in 154 files would be expensive to clean up by
+hand:
+
+- Skip `P\d+-R\d+` (phase-N risk-M notation in COROUTINE.md
+  / CHANGELOG_TECHNICAL.md / SAFE.md).
+- Skip single-digit `P[1-9]` — overloaded with PERFORMANCE.md
+  design IDs ("Design: P1") and plan-N phase-M shorthand
+  ("P5.2").  Two-digit `P54` and longer are unambiguous
+  enough.
+- Skip refs preceded by `/` (`/tag/P259` URL routes
+  shouldn't break).
+- Skip refs inside fenced code blocks.
+- Skip refs inside same-line backtick spans (so `` `P259` ``
+  examples explaining the convention survive).
+- Skip lines containing `<!--noindex-->`.
+
+Multi-line backtick spans (rare but present in CLAUDE.md's
+"## Tracker tags" section) need explicit `<!--noindex-->`
+markers per line.
+
+**Numbers**:
+
+- 1500+ refs migrated across ~150 `.md` files.
+- Legacy bucket dropped from 2643 → 1917 refs (the residue
+  is single-digit `P1`-`P9` skipped on purpose, refs to
+  closed P-issues no longer in PROBLEMS.md, and code-file
+  refs which don't migrate).
+- New form: 783 `@P-id` refs + 753 `@PLAN-id` refs.
+- `tests/index_hygiene.rs::no_broken_tracker_tags` still
+  green.
+
+Phase 06 was originally framed as "retroactive tagging +
+closeout" — the closeout half is DEFERRED to after phases
+7+8 (loft-native scanner + multi-project deploy).
 
 ---
 
@@ -155,7 +201,7 @@ annotation — implicit-by-body classification into cases A/B/C.
 - **01** Mutated-captures detection.  `walk_for_mutations` walker marks
   captures as `mutated: bool`; no behaviour change.  Known gap: first-
   pass GetField in `src/parser/vectors.rs:2498-2512` is non-load-bearing
-  post-P260 (cells handle both sides).
+  post-@P260 (cells handle both sides).
 - **02** Case B (co-scoped mutating) + all sub-phases:
   - 02b: auto-Reference attribute emission in `synthesize_closure_record`.
   - 02c: Reference-type capture routing in `typedef.rs::fill_database`.
@@ -164,7 +210,7 @@ annotation — implicit-by-body classification into cases A/B/C.
   - 02d-iii.c: boxed-scalar assign-rewrite helper + `change_var_type` guard.
   - 02d-iii.d: `cell_alloc_prepend` helper for first-set rewrites.
   - 02d-vii: text-return crash fix (cell encoding + return routing).
-- **03** Case C (factory / escaped closure).  Liveness check + P259 fix
+- **03** Case C (factory / escaped closure).  Liveness check + @P259 fix
   (4 commits — OpIncRc + cascade-free cell ownership for multi-factory
   pattern).
 - **04** DECOMMISSIONED 2026-05-13.  The cell + auto-Reference from
@@ -175,34 +221,34 @@ annotation — implicit-by-body classification into cases A/B/C.
   the shared-ownership mechanism.  Revisit only if a concrete use case
   surfaces that cells can't handle.
 - **06** Doc closeout (this entry).  DESIGN_DECISIONS.md C38 updated;
-  CAVEATS.md C38 cross-reference updated; ROADMAP.md plan-22 row
+  CAVEATS.md C38 cross-reference updated; ROADMAP.md @PLAN22 row
   removed; plan moved to `finished/`.
 
-**Bug yield — P-issues filed during plan-22:**
+**Bug yield — P-issues filed during @PLAN22:**
 
-- **P256** — vector-capture into closure crashed both backends (no clean
+- **@P256** — vector-capture into closure crashed both backends (no clean
   rejection).  Closed 2026-05-12 with parse-time rejection in
   `src/parser/objects.rs::resolve_name`.  Pinned by
   `tests/parse_errors.rs::p257_vector_capture_in_closure_rejected`.
-  *(Filed as part of plan-15 closeout probing, attributed to plan-22's
+  *(Filed as part of @PLAN15 closeout probing, attributed to @PLAN22's
   scope — collection capture is a closure-record layout issue.)*
-- **P257** — same as P256 (duplicate tracking number; see PROBLEMS.md).
-- **P258** — native + interp layout divergence for cell-encoded scalars.
+- **@P257** — same as @P256 (duplicate tracking number; see PROBLEMS.md).
+- **@P258** — native + interp layout divergence for cell-encoded scalars.
   Closed in phase 02d-iii.b.
-- **P259** — multi-factory cell ownership crash (OpIncRc missing +
+- **@P259** — multi-factory cell ownership crash (OpIncRc missing +
   cascade-free teardown).  Closed 2026-05-13 via 4 commits
   `9f00afec` / `29ee04fd` / `cfb65e8b` / `0711973b`.
-- **P260** — closures captured `Type::Reference` by deep-copy; mutations
+- **@P260** — closures captured `Type::Reference` by deep-copy; mutations
   silently no-opped.  Closed 2026-05-13 via `cfad6274` (one-line
   architectural fix: drop `is_mutated` gate in `synthesize_closure_record`).
   6 new cross-mode cells in `tests/mut_closure_matrix.rs`.
-- **P261** — vector-field literal-assign appended instead of replacing.
+- **@P261** — vector-field literal-assign appended instead of replacing.
   Closed 2026-05-13 via `a1cf258a` (prepend `OpClearVector` in
   `towards_set`'s vector-literal path).  Pinned by
   `e_d3_struct_vector_assign_in_closure`.
 
 **Final test surface**: 44 `mut_closure_matrix` cells + 22
-`closure_matrix` (plan-15 regression net) + 633 issues suite + 26
+`closure_matrix` (@PLAN15 regression net) + 633 issues suite + 26
 leak guards — all green, interp/native byte-identical.
 
 Active plans remaining after close: 1 (07-error-messages).
@@ -223,18 +269,18 @@ under 100-iteration tight loops.
 **Bug yield: 0** new P-issues filed.  All gaps the plan was
 designed to surface (closure-DbRef leak, "move-vs-copy
 semantics gap analogous to T1.8c") turned out to be non-
-issues — the underlying support landed earlier through P213
+issues — the underlying support landed earlier through @P213
 (2026-05-04 — `Parts::ChildRec` layout-widening for struct-
-field captures), P214 (2026-05-05 — vector-of-non-capturing
-closures), P215 (2026-05-05 — nested closure name resolution),
-and P227 (2026-05-05 — text-returning fn-ref calls).
+field captures), @P214 (2026-05-05 — vector-of-non-capturing
+closures), @P215 (2026-05-05 — nested closure name resolution),
+and @P227 (2026-05-05 — text-returning fn-ref calls).
 
 **Per-phase summary** (all SHIPPED 2026-05-12):
 
 - **00** Harness wiring + smoke (3 cells).
-- **01** C0 (non-capturing) × D1/D2/D3/D4 (5 cells, pins P214).
+- **01** C0 (non-capturing) × D1/D2/D3/D4 (5 cells, pins @P214).
 - **02** C1 + C5 (basic-type captures) × D1/D2/D3 (6 cells,
-  pins P213 + P215).
+  pins @P213 + @P215).
 - **03** C2 (text capture) × D1/D2/D3 (3 cells + 2 leak
   guards) — disposed LIFETIME.md "Type::Function NOT YET
   HANDLED" annotation as documentation drift.
@@ -268,34 +314,34 @@ tuples) closed-by-non-goal.
 - 01: 12 E1/E2 cells (D1 + D2: local, arg, return, inline,
   match-subj, if-arm).  T1.8a closed via the lighter "rust_type
   Context::Result recursion" fix instead of new opcodes.
-- 02: 5 E3 cells.  Closed P247 (nested-tuple text move in
-  format-string interpolation) + P248 (element-of-element
+- 02: 5 E3 cells.  Closed @P247 (nested-tuple text move in
+  format-string interpolation) + @P248 (element-of-element
   assignment `t.0.1 = 99`).
-- 03: 5 E4 cells (closure-typed tuple elements).  Closed P249
+- 03: 5 E4 cells (closure-typed tuple elements).  Closed @P249
   (20-byte fn-ref layout extended into 6 tuple codegen sites +
   `__fn_ref_tmp` postfix-call temp marked skip_free).
 - 04: 6 E5 cells (struct references).  Decision: MOVE
   semantics (recorded as C64).  Loop-iteration aliasing bug
-  parked as P250.
+  parked as @P250.
 - 05: 6 D3 cells (tuples in struct fields).  Decision: LIFT
   was already shipped by Plan-06 phase 4d; phase 05 was a
   verification pass.  E4_d3 (closure-element tuple as struct
-  field) parked behind P251.
-- 07: P234 runtime — lifetime-bearing tuple returns route
+  field) parked behind @P251.
+- 07: @P234 runtime — lifetime-bearing tuple returns route
   through `Reference(__tuple<…>)` synthetic struct.
 
 **Phase deferred:**
-- 08: P234 runtime extended to LOCAL tuple-with-lifetime-concern
+- 08: @P234 runtime extended to LOCAL tuple-with-lifetime-concern
   variables — friction with P189b's vector-of-tuple index access
   meant the rewrite needed broader changes than the original
   Phase 08 scope.  Phase is a uniformity refactor, not a bug
   fix; juice not worth the squeeze.
 
 **Bugs filed during validation:**
-- P247, P248 — closed in phase 02.
-- P249 — closed in phase 03.
-- P250 — open: ref-tuple loop-iteration aliasing.
-- P251 — open: native projection for fn-ref-tuple-in-struct-field.
+- @P247, @P248 — closed in phase 02.
+- @P249 — closed in phase 03.
+- @P250 — open: ref-tuple loop-iteration aliasing.
+- @P251 — open: native projection for fn-ref-tuple-in-struct-field.
 
 **Design decisions recorded in DESIGN_DECISIONS.md:**
 - C64: Tuple struct-ref elements use MOVE semantics.
@@ -330,9 +376,9 @@ shipped or formally deferred with rationale.
 - A7: closed the par-tuple canary surface — A7.1 (size-based
   gate widen + work-ref unification — closes
   `par_tuple_return_int_int` / `_three_arity` / `_nested`),
-  A7.2 (P235 par half — synthesized wrapper-worker — closes
-  `par_tuple_destructure_in_for`), A7.3 (P234 lexer + runtime
-  for tuple-of-struct member access).  Companion fix P236
+  A7.2 (@P235 par half — synthesized wrapper-worker — closes
+  `par_tuple_destructure_in_for`), A7.3 (@P234 lexer + runtime
+  for tuple-of-struct member access).  Companion fix @P236
   (heap-owned reference returns from if/else native data
   corruption — broader than tuples) landed alongside A7.1.
 - A8.b: stitch_id consolidation in `src/native.rs` — 5
@@ -360,7 +406,7 @@ shipped or formally deferred with rationale.
   intentional (perf).  Commit `ada917d`.  A8.b stitch_id retry
   delivered consolidation at a different layer (see Shipped).
 - A10 (browser parallel via wasm-bindgen-rayon): out-of-scope
-  for plan-06 closure.  S2 strategic showcase; ships as its own
+  for @PLAN06 closure.  S2 strategic showcase; ships as its own
   multi-session arc when scheduled.
 
 **Acceptance criteria — final tally:**
@@ -370,17 +416,17 @@ shipped or formally deferred with rationale.
 - #2 (par_light removed from user surface): MET by A4.
 - #3 (zero ignored par canaries): 8 → 1 over the arc.  Final
   remaining ignore is heterogeneous-vec-of-fn (D11a row 8),
-  outside plan-06 scope (different surface — vector
+  outside @PLAN06 scope (different surface — vector
   construction, not par).
 
 Three closure commits land 2026-05-09: `f974770` (closeout
-docs + A8 deferral marker + A9 superseded), `15a7aab` (P235
+docs + A8 deferral marker + A9 superseded), `15a7aab` (@P235
 par half via wrapper synthesis), and the A8.b commit (this
 change).
 
-### plan-09 phase 07: close P205 — bounded-generic text return scratch routing
+### @PLAN09 phase 07: close @P205 — bounded-generic text return scratch routing
 
-Closes P205 (1 of 4 native sub-failures retired).  The bug:
+Closes @P205 (1 of 4 native sub-failures retired).  The bug:
 bounded-generic dispatch `fn f<T: Trait>(x: T) -> text` produced
 native code that emitted `Str::new(&local_String)` whose pointer
 referenced a stack-local that dropped at function return,
@@ -448,9 +494,9 @@ Regression tests in `tests/codegen_emitter.rs`:
 
 Commit `6151231`.
 
-### plan-09 phase 06: close P202 — n_parallel_queue family in native
+### @PLAN09 phase 06: close @P202 — n_parallel_queue family in native
 
-Closes P202 (3 of 6 native sub-failures retired: 19_threading,
+Closes @P202 (3 of 6 native sub-failures retired: 19_threading,
 22_threading, 40_par_ref_return).  Native compilation of
 `for ... par(...)` for-loops now works.
 
@@ -520,7 +566,7 @@ Regression tests in `tests/codegen_emitter.rs`:
 
 Commit `8cf0676`.
 
-### plan-09 phase 00a: introspection findings + downstream updates
+### @PLAN09 phase 00a: introspection findings + downstream updates
 
 Fired late (after phases 00, 01, 03, 04, 09 all shipped) so the
 introspection retroactively covers the simplification cluster.
@@ -557,12 +603,12 @@ Findings populate `doc/claude/plans/finished/09-native-runtime-rewrite/00a-intro
 
 Hidden assumptions surfaced (drove downstream doc updates):
 
-1. **Phase 05's WRITE-side scope was wrong** — actual P200 bug is
+1. **Phase 05's WRITE-side scope was wrong** — actual @P200 bug is
    READ-side block-tail comparison-emission (`(_var as u8) ==
    (0_i64)` E0308), not the `f += val` template.  Plan rewrite
    required.  Documented in 05-file.md § Diagnosis findings;
-   PROBLEMS.md P200 entry updated with the surveyed shape.
-2. **Phase 02 demoted from "P200 prerequisite" to "optional
+   PROBLEMS.md @P200 entry updated with the surveyed shape.
+2. **Phase 02 demoted from "@P200 prerequisite" to "optional
    simplification"** — phase 02 splits `narrow_int_cast`'s
    param-narrowing role (role #2); phase 05's actual bug is the
    block-tail role (role #1).  02-param-adapter.md now carries a
@@ -579,7 +625,7 @@ Decision: **Continue with updated plans** (per the introspection's
 decision criteria table — "2-3 surprises that updated downstream
 phases").
 
-Memory entries saved (durable beyond plan-09):
+Memory entries saved (durable beyond @PLAN09):
 
 - `feedback_forwarding_first_recipe.md` — pre-flight pattern.
 - `feedback_phase_doc_trait_drafts.md` — trait sketches in plan
@@ -587,7 +633,7 @@ Memory entries saved (durable beyond plan-09):
 - `feedback_actual_error_survey.md` — bug-fix phases need
   `--native-emit` survey BEFORE writing implementation steps.
 
-### plan-09 CI cleanup: fmt + clippy + no-default-features green
+### @PLAN09 CI cleanup: fmt + clippy + no-default-features green
 
 Pre-existing breakage that accumulated across phases 00-04:
 
@@ -615,7 +661,7 @@ Verified: fmt + clippy + no-default-features all clean; behavioural
 baselines preserved (codegen_emitter 10/10, threading 43/43,
 threading_chars 35/35, issues 540/540).
 
-### plan-09 phase 09: parallel runtime consolidation
+### @PLAN09 phase 09: parallel runtime consolidation
 
 `src/codegen_runtime.rs`'s three `n_parallel_for_*_native` public
 fns (scalar / text / heap-ref) collapsed to thin wrappers around a
@@ -638,7 +684,7 @@ Mechanism:
   for each).  Pinned by `parallel_runtime_consolidated` test in
   `tests/codegen_emitter.rs` (≤ 15 body lines + must call
   `n_parallel_for_native_core`).
-- Phase 06 (P202 — adds `n_parallel_queue_*_native` queue variants)
+- Phase 06 (@P202 — adds `n_parallel_queue_*_native` queue variants)
   will add 3 thin wrappers (~10 lines) instead of 3 full ~80-line
   fns; cumulative saving ~240 lines.
 
@@ -967,7 +1013,7 @@ absence of a recurring heap-corruption class (P178 / P185).
   validator invoked via `LOFT_SLOT_V2=validate`; I1–I6 green on
   the corpus as a correctness gate for future V1 edits.
 
-**Retracted from the original plan-04 scope:**
+**Retracted from the original @PLAN04 scope:**
 
 - Single-pass V2 allocator driving codegen (both the
   codegen-is-allocator pivot and the direct V2-drive attempt hit
@@ -1052,7 +1098,7 @@ a struct from a JsonValue. Type mismatches are reported via
 
 ### Plan-06 phases 4c + 4d.A — typed parallel-for dispatch
 
-Two coupled phases of plan-06 ("simple typed `par`: everything is a
+Two coupled phases of @PLAN06 ("simple typed `par`: everything is a
 store") landed.  User-visible only as one extra par canary closing
 (`tests/threading_chars.rs::par_tuple_input_int_int`); structurally
 this lays the foundation for the remaining phase 4 work (4d.B
@@ -1095,7 +1141,7 @@ lookup misses, mirroring `fill_database`'s `database.sorted` /
 content+keys → same type id.  Regression test
 `tests/issues.rs::p190_local_var_sorted_iteration`.
 
-Note: this unblocked the iteration codepath; plan-06 phase
+Note: this unblocked the iteration codepath; @PLAN06 phase
 4d.B for sorted then closed by the parser-side desugar (see
 the next entry).
 
@@ -1255,7 +1301,7 @@ documenting V1/V2/V3 reduced cases).  `cargo clippy` clean.
 
 **Canary remains `#[ignore]`d** — full closure of the canary needs
 real storage support for `vector<fn-ref>`, which is its own
-plan-06 phase 4d.A.2 work (M effort, 2-3 days).  See
+@PLAN06 phase 4d.A.2 work (M effort, 2-3 days).  See
 `/home/jurjen/.claude/plans/serialized-churning-journal.md` for
 the full design (Steps A–E).
 
@@ -1416,7 +1462,7 @@ default (threading) build with two `not_unsafe_ptr_arg_deref`
 errors:
 
 - `state::execute_at_raw_to(dst: *mut u8)` (added by
-  plan-06 phase 1 G4 / 4d.A in commit 6973b182) was a public
+  @PLAN06 phase 1 G4 / 4d.A in commit 6973b182) was a public
   function that called `ptr::copy_nonoverlapping` without an
   `unsafe` signature.  Now `pub unsafe fn` with a `# Safety`
   doc-comment block; the single caller in

@@ -18,9 +18,9 @@ that phase 1 builds.
 This is **vital, not deferred**: a browser-only loft program with
 a 4-thread `par(...)` call must actually use 4 cores in the
 browser.  Anything else makes the browser the second-class target,
-contradicting plan-06's "everything is a store" uniform pipeline.
+contradicting @PLAN06's "everything is a store" uniform pipeline.
 
-## Why this is plan-06 scope, not 1.1+
+## Why this is @PLAN06 scope, not 1.1+
 
 The previous roadmap entry (W1.14 — WASM Tier 2: Web Worker pool)
 sat in 1.1+ as VH effort.  That placement assumed the typed-par
@@ -572,7 +572,7 @@ optionally under a feature flag (`CI_BROWSER=1`).
 - Worker pool reuse across `par(...)` calls — desirable
   optimisation, deferred to a follow-up.
 - Atomics-based work-stealing scheduler — the rayon backend is
-  enough for plan-06; advanced scheduling is post-1.0.
+  enough for @PLAN06; advanced scheduling is post-1.0.
 - Cross-origin SharedArrayBuffer scenarios beyond GitHub Pages
   (e.g. Cloudflare Pages, Netlify) — the COOP/COEP headers are
   the same; the deployment glue is platform-specific and can be
@@ -580,7 +580,7 @@ optionally under a feature flag (`CI_BROWSER=1`).
 
 ## Cross-references
 
-- [README.md](README.md) — plan-06 ladder, phase 8 added.
+- [README.md](README.md) — @PLAN06 ladder, phase 8 added.
 - [DESIGN.md § D6](DESIGN.md) — WASM threading: parallel by
   default; the table this phase implements.
 - [01-output-store.md](01-output-store.md) — phase 1 per-worker

@@ -22,7 +22,7 @@ What actually happened:
 | 2e — retire `copy_claims` | **Not feasible from par alone** — `copy_claims` has 4 non-par callers in `src/vector.rs`, `src/codegen_runtime.rs:399,1554`, `src/state/io.rs:1108`.  It's a general helper, not par-only.  Retiring it requires a separate non-par cleanup. |
 
 The `StoreRebase` machinery from 2a is **library code retained for
-plan-06's phase 11 (`par_to_vec` opt-in materialiser)** and for
+@PLAN06's phase 11 (`par_to_vec` opt-in materialiser)** and for
 spine-8d.0's `run_parallel_queue_ref`.  See ARC.md § "What this arc
 explicitly does NOT cover" for why phase 2 closes here without
 finishing the original 2b–2e sequence.
@@ -302,7 +302,7 @@ No runtime change yet; phase 1's `copy_block` collection still runs.
 After 2b–2d land, `copy_claims` has no callers in the par path.
 Delete the helper from `src/database/structures.rs` (it remains in
 the codebase for non-par uses, if any).  Verify by grep.  Update
-THREADING.md's P1-R3 entry to "closed in plan-06 phase 2e".
+THREADING.md's P1-R3 entry to "closed in @PLAN06 phase 2e".
 
 ## Correctness — no double-free
 

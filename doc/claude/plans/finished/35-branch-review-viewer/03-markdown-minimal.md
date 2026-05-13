@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Phase 03 — Minimal markdown subset
 
 **Status:** Shipped 2026-05-13 (after the seven-bug native
-arc P262→P269 cleared the underlying loft compiler issues
+arc @P262→@P269 cleared the underlying loft compiler issues
 that blocked the first attempt).
 
 ## What shipped
@@ -49,12 +49,12 @@ End-to-end verified on 2026-05-13:
 Building this renderer surfaced two new loft compiler bugs,
 filed in PROBLEMS.md per the bug-filing policy:
 
-- **P270** — Parser rejects `len(text_var)` in some in-context
+- **@P270** — Parser rejects `len(text_var)` in some in-context
   shapes ("Unknown function len" error pointing at wrong
   source position).  Workaround: method form `text_var.len()`.
   Minimal repro doesn't reproduce in isolation — surfacing
   needs the surrounding viewer context.
-- **P271** — Codegen panic "Too few parameters on n_<helper>
+- **@P271** — Codegen panic "Too few parameters on n_<helper>
   (got 3, need 4)" when a text-returning helper is called
   from inside another text-returning fn.  Workaround: inline
   the helper's body at the call site.  Same shape works in

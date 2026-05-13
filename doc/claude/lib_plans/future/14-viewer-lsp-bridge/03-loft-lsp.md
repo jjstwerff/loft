@@ -35,7 +35,7 @@ Implementation mirrors `RustAnalyzerServer` from phase 01 but
 with loft-specific:
 
 - **Server discovery**: `find_loft_lsp()` checks
-  `$LOFT_LSP_BIN`, then `~/bin/loft-lsp` (plan-37 phase 08
+  `$LOFT_LSP_BIN`, then `~/bin/loft-lsp` (@PLAN37 phase 08
   install), then `target/release/loft-lsp` (dev path), then
   `$PATH`.
 - **Initialize options**: pass workspace root + path to
@@ -86,9 +86,9 @@ def/refs).
 
 | Risk | Mitigation |
 |---|---|
-| loft-lsp from plan-09 isn't ready | Phase 03 depends on plan-09 LSP.1 explicitly.  If plan-14 phases 00-02 ship before plan-09 LSP.1, phase 03 waits. |
-| loft-lsp positions / URIs differ from LSP spec | Translator module in the bridge handles divergences.  Coordinate with plan-09 to keep loft-lsp spec-compliant. |
-| Loft files have no `Cargo.toml` analogue for workspace detection | Use repo root (`.git`) as the workspace boundary; same heuristic the indexer (plan-37) uses. |
+| loft-lsp from @PLAN09 isn't ready | Phase 03 depends on @PLAN09 LSP.1 explicitly.  If @PLAN14 phases 00-02 ship before @PLAN09 LSP.1, phase 03 waits. |
+| loft-lsp positions / URIs differ from LSP spec | Translator module in the bridge handles divergences.  Coordinate with @PLAN09 to keep loft-lsp spec-compliant. |
+| Loft files have no `Cargo.toml` analogue for workspace detection | Use repo root (`.git`) as the workspace boundary; same heuristic the indexer (@PLAN37) uses. |
 | Stdlib symbols (`println`, `text.split`) need to render | loft-lsp synthesises documentation for stdlib via `default/*.loft` doc comments; bridge translator rewrites `loft://stdlib/...` URIs to `/file/default/...` paths. |
 
 ## Critical files

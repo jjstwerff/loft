@@ -111,7 +111,7 @@ body.  Either the parser rewrites every `s.<field>` to
 `s[0].<field>` (intrusive: every captured-Reference read in the
 closure body needs rewriting), or the user writes `s[0]`
 explicitly (terrible ergonomics, defeats the novice-cliff goal
-plan-22 exists to solve).
+@PLAN22 exists to solve).
 
 **Verdict**: cute, but breaks the novice-cliff goal.  Rejected.
 
@@ -195,7 +195,7 @@ type is set to `Reference(d, [v])` by direct mutation in a
 Rust-level test) shows the field reads/writes use the new
 opcodes.
 
-### 02c — wire 02a's mutation flags through to 02b's encoding — SHIPPED 2026-05-12 (D1+D2 only; D3 deferred via P258)
+### 02c — wire 02a's mutation flags through to 02b's encoding — SHIPPED 2026-05-12 (D1+D2 only; D3 deferred via @P258)
 
 `synthesize_closure_record` consults `data.def(lambda_d_nr).mutated_captures`
 (from 02a) and, for each mutated Reference capture, adds the
@@ -245,7 +245,7 @@ Primitive-capture mutability is a separate ergonomic win.
 | Native + WASM codegen paths for new auto-Reference opcodes may not exist | Phase 02b lands on interp first; native + WASM follow in 02b sub-sub-commits if codegen surface needs extension.  Cells gate per backend. |
 | dep-list semantics is overloaded — already used for lifetime tracking | The dep-list-as-storage-marker semantics is added; lifetime tracking is preserved (deps still mean "this value depends on these vars for liveness").  Storage choice is a new READ of the same data, not a write.  Symmetric: any non-empty deps signal shared storage. |
 | Outer-side mutation tracking — when closure mutates `s.x`, outer reads of `s.x` after must see 7 | With auto-Reference, the closure's `s` and the outer's `s` point to the SAME store record.  Outer reads via OpGetField(s, x_off) see the live value.  No outer rewrite needed for this case.  (Contrast with B/Scalar which DOES need outer rewrite.) |
-| Drop ordering — closure-record drop must NOT free the shared struct record | The dep `[outer_var]` on the closure record's attribute tells `get_free_vars` to suppress the free.  Same mechanism as P227's text-buffer dep keeping closure work-var alive.  Confirmed by plan-15 phase 03/04 leak guards. |
+| Drop ordering — closure-record drop must NOT free the shared struct record | The dep `[outer_var]` on the closure record's attribute tells `get_free_vars` to suppress the free.  Same mechanism as @P227's text-buffer dep keeping closure work-var alive.  Confirmed by @PLAN15 phase 03/04 leak guards. |
 
 ## Verification gate for each sub-phase
 
@@ -268,4 +268,4 @@ Primitive-capture mutability is a separate ergonomic win.
 - `src/parser/mod.rs::set_field_check` — the existing storage decision (line 3100-3114).
 - `default/01_code.loft::OpSetRef` / `OpSetDbRef` / `OpGetDbRef` — the opcodes phase 02b uses.
 - [LIFETIME.md § Function](../../LIFETIME.md) — closure-record dep semantics.
-- [plan-15 phase 03/04 leak guards](../15-closure-validation/00-matrix.md) — pattern for verifying no leak under shared storage.
+- [@PLAN15 phase 03/04 leak guards](../15-closure-validation/00-matrix.md) — pattern for verifying no leak under shared storage.

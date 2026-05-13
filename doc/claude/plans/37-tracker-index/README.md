@@ -19,8 +19,8 @@ The plan answers four problems, each layered on the
 previous:
 
 1. **Grep-based tag lookup is fragile.**  Today `grep -rn
-   "P259" doc/` matches `P2590`, `2P259`, prose like "the
-   P259 fix forward."  Adopting `@P\d+` (and `@PLAN\d+`)
+   "@P259" doc/` matches `P2590`, `2P259`, prose like "the
+   @P259 fix forward."  Adopting `@P\d+` (and `@PLAN\d+`)
    makes regex unambiguous: `grep -rn '@P259\b'` has zero
    false matches.
 
@@ -54,7 +54,7 @@ Layered like this:
 | Loft-native | 07 | Daemon + WebSocket clients in loft |
 | **Generic stack** | 08 | mmap-backed; per-project config; install to `~/bin/` |
 
-Filed as a sibling plan to plan-35 (not a phase of it)
+Filed as a sibling plan to @PLAN35 (not a phase of it)
 because the scope is independent — the indexer is useful
 without the viewer (Claude queries it directly); the viewer
 is useful without the indexer (the existing tree + file
@@ -116,7 +116,7 @@ Tag bodies follow these rules:
 - **Slash-free**: phase IDs use `-` to separate
   (`@PLAN35-01`), not `/` (would conflict with file paths).
 - **Sub-phases via `.`**: `@PLAN22-2d-iii.a` is allowed.
-  Mirrors plan-22's `02d-iii.a` directory shape.
+  Mirrors @PLAN22's `02d-iii.a` directory shape.
 
 ## Phases
 
@@ -126,11 +126,11 @@ Tag bodies follow these rules:
 | 1 | [CLI query wrapper](01-cli-query.md) | XS | `scripts/idx` bash wrapper around `index/tags.json`.  Supports `tag:` / `prefix:` / `file:` / `all` / `broken` / `help`.  CLAUDE.md updated to recommend it as the canonical reference-lookup. | **Shipped 2026-05-13** |
 | 2 | [Auto-refresh on commit](02-auto-refresh.md) | XS | `tools/indexer/install-hook.sh` writes a marker-bracketed snippet to `.git/hooks/pre-commit`; idempotent across re-runs.  Hook re-runs the scanner when an indexed file is staged.  `make index-install-hook` invokes it.  DEBUG.md gains § Tracker-tag indexer with install + usage docs. | **Shipped 2026-05-13** |
 | 3 | [Broken-tag validator](03-broken-validator.md) | S | Indexer computes `broken[]` for refs to non-existent P-ids / plans.  `<!--noindex-->` line marker for intentional doc examples.  `tests/index_hygiene.rs` CI gate. | **Shipped 2026-05-13** |
-| 4 | [Plan-35 viewer integration](04-viewer-integration.md) | S | Plan-35 viewer reads `index/tags.json` and surfaces tag references.  04a (`/tag/<tag>` route + missing-index banner) **shipped 2026-05-13**; 04b (welcome landing + per-doc sidebar) still depends on plan-35 phase 03 + 08. | 04a shipped, 04b open |
+| 4 | [Plan-35 viewer integration](04-viewer-integration.md) | S | Plan-35 viewer reads `index/tags.json` and surfaces tag references.  04a (`/tag/<tag>` route + missing-index banner) **shipped 2026-05-13**; 04b (welcome landing + per-doc sidebar) still depends on @PLAN35 phase 03 + 08. | 04a shipped, 04b open |
 | 5 | [Claude integration](05-claude-integration.md) | XS | Update CLAUDE.md "## Key commands" with `./scripts/idx <query>` as the canonical reference-lookup.  Add a § Tag convention section.  Optional MCP wrapper for token-efficient queries. | **Shipped 2026-05-13** (MCP wrapper deferred — optional) |
-| 6 | [Retroactive tagging + closeout](06-closeout.md) | S | One-shot sed pass: convert `P\d+` → `@P\d+` in PROBLEMS.md / plan READMEs / commit-message conventions.  CHANGELOG entry.  Move plan to finished/. | Open |
+| 6 | [Retroactive tagging](06-closeout.md) | S | One-shot Python migration (`tools/indexer/migrate.py`): convert `P\d+` → `@P\d+` and `plan-NN` → `@PLANNN` in `doc/claude/**/*.md`.  Backtick-span / fence / `<!--noindex-->` aware; validates against PROBLEMS.md row IDs; skips `P1`-`P9` (overloaded with PERFORMANCE.md design IDs and `Pn-Rm` notation). | **Migration shipped 2026-05-14** (1500+ refs across ~150 files; closeout deferred until after phases 7+8) |
 | 7 | [Loft-native scanner + CLI + WebSocket daemon](07-loft-native-scanner.md) | M | Daemon + clients model: long-running loft scanner serves CLI + viewer over local WebSocket.  Drives `lib/fs_watch/` + lib/server binary frames.  Bash artefacts stay as bootstrap fallback. | Open |
-| 8 | [Multi-project deployment + mmap-backed index](08-multi-project-deploy.md) | M | Per-project `.tracker/config.toml` (configurable tag families + validators).  Daemon-per-project (filesystem registry — no shared service).  `tags.store` mmap-backed via loft's Store primitive (durability via plan-38 Tier 1).  Goal: a few static binaries in `~/bin/` that handle ANY AI/coding project, not just loft. | Open |
+| 8 | [Multi-project deployment + mmap-backed index](08-multi-project-deploy.md) | M | Per-project `.tracker/config.toml` (configurable tag families + validators).  Daemon-per-project (filesystem registry — no shared service).  `tags.store` mmap-backed via loft's Store primitive (durability via @PLAN38 Tier 1).  Goal: a few static binaries in `~/bin/` that handle ANY AI/coding project, not just loft. | Open |
 | 9 | [Backlinks: "who links to me"](09-backlinks.md) | S | Index gains a `links` bucket: every markdown link, resolved against the source file's directory.  CLI `idx incoming:<path>` answers the inverse question; `idx broken-links` flags links to non-existent paths.  Heaviest user: plan READMEs cross-referencing each other. | **Shipped 2026-05-14** |
 
 Total estimated effort: **~1 week** of focused work.  Phases
@@ -167,7 +167,7 @@ compound the value.
   link to the target via markdown `[text](path)` syntax.
 - All 9 phases close → plan moves to `plans/finished/37-…`.
 
-## Why this is a separate plan from plan-35
+## Why this is a separate plan from @PLAN35
 
 Plan-35 ships a viewer.  Plan-37 ships an indexer.  They
 INTERSECT at one phase (35-08 newcomer landing pulls
@@ -177,9 +177,9 @@ queries it directly via `./scripts/idx`) and the viewer is
 useful **without** the indexer (the existing tree + file
 rendering works regardless).
 
-Splitting also keeps each plan ≤7 phases — plan-35 was
+Splitting also keeps each plan ≤7 phases — @PLAN35 was
 already at 7 with two stretches (08 + 09 + 10) waiting.
-Adding the indexer to plan-35 would have pushed it to ~12
+Adding the indexer to @PLAN35 would have pushed it to ~12
 phases, beyond the "max 3 active plans" cap's spirit.
 
 ## Cross-references

@@ -13,7 +13,7 @@ Locks the (subject type × pattern shape) matrix and wires
 ## The frozen matrix
 
 Cell legend: `PASS:test_name` / `FIX:phase` / `CLOSED:reason`.
-S5 (tuple subject) is intentionally absent — covered by plan-14.
+S5 (tuple subject) is intentionally absent — covered by @PLAN14.
 
 | | P1 wild | P2 literal | P3 bind | P4 range | P5 or-pattern | P6 `@` bind | P7 guard | P8 null | P9 nested |
 |---|---|---|---|---|---|---|---|---|---|
@@ -24,7 +24,7 @@ S5 (tuple subject) is intentionally absent — covered by plan-14.
 | **S6** vector | FIX:05 | FIX:05 | FIX:05 | CLOSED:no-vec-range | FIX:05 | FIX:05 | FIX:05 | FIX:05 | FIX:05 |
 
 `PASS-pre` cells passed the pre-flight survey directly.
-S5 (tuple) row covered by plan-14 phase 03.
+S5 (tuple) row covered by @PLAN14 phase 03.
 
 ## Cell name convention
 
@@ -55,4 +55,4 @@ s4_p7_struct_enum_with_guard
 ## Cross-references
 
 - [README.md](README.md)
-- [plan-14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor template.
+- [@PLAN14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor template.

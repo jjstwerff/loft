@@ -139,12 +139,12 @@ next to its name.
 ## Test surface
 
 - `curl -s http://localhost:8765/diff/doc/claude/PROBLEMS.md`
-  returns HTML with `class="diff-add"` lines (the P259/P260/P261
+  returns HTML with `class="diff-add"` lines (the @P259/P260/P261
   rows added on `demo_dev`).
 - `curl -s http://localhost:8765/commit/cfad6274` returns the
-  P260 commit's message + per-file diffs.
+  @P260 commit's message + per-file diffs.
 - File page for `src/parser/vectors.rs` shows the toggle;
-  toggle to diff view shows the P260 hunk.
+  toggle to diff view shows the @P260 hunk.
 - File page for an unchanged file (e.g.,
   `src/lexer.rs` if untouched on this branch) hides the
   toggle.

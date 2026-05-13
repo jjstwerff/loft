@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Phase 01 — HTTP server + static + project tree
 
 **Status:** **Shipped 2026-05-13** (interp-mode; native blocked
-by P262 + P263 — see below).
+by @P262 + @P263 — see below).
 
 ## What actually shipped
 
@@ -36,25 +36,25 @@ End-to-end verified:
   HTTP 404 (path-traversal blocked).
 - `curl http://localhost:8765/xyz` → HTTP 404.
 
-## Native blockers — P262 + P263
+## Native blockers — @P262 + @P263
 
 The phase 01 design called for a frozen native binary at
 `tools/viewer/bin/loft-view`.  Native compilation is blocked
 by two surfaced bugs (filed in PROBLEMS.md):
 
-- **P262** — native codegen wraps inline text-returning calls
+- **@P262** — native codegen wraps inline text-returning calls
   in `&` even when the consumer expects `text`.  Made the
   viewer's HTML-building patterns
   (`req.respond_html(page_tree(rel))`) un-compilable.
   Worked around inside the viewer by binding every text call
   to a local first.
-- **P263** — `lib/server` depends on `lib/web` transitively;
+- **@P263** — `lib/server` depends on `lib/web` transitively;
   both libraries declare overlapping `n_ws_*_native`
   functions.  rustc rejects the generated code with
-  `E0428: defined multiple times`.  Even with the P262
+  `E0428: defined multiple times`.  Even with the @P262
   workaround applied, this kept native compilation failing.
 
-Until P262 + P263 close, phase 01 ships in **interpreter
+Until @P262 + @P263 close, phase 01 ships in **interpreter
 mode**: `make view` runs `target/release/loft --interpret
 --lib lib/ tools/viewer/src/main.loft`.  The frozen-binary
 contract is preserved in spirit (the SCRIPT is frozen,
@@ -62,13 +62,13 @@ BUILD_NOTES.md records the host loft commit), but the
 deliverable is a runnable script + the host loft binary,
 not a self-contained ELF.
 
-Phase 07 closeout will revisit binary packaging once P262 +
-P263 close.
+Phase 07 closeout will revisit binary packaging once @P262 +
+@P263 close.
 
 ## Native-codegen workarounds in `tools/viewer/src/main.loft`
 
 For future contributors editing the viewer source (and to
-document the workarounds so they can be removed when P262
+document the workarounds so they can be removed when @P262
 closes):
 
 1. **Bind every nested text call to a local** before passing
@@ -83,7 +83,7 @@ closes):
    Inside a backtick literal, escape `{` as `{{` to avoid
    format-interpolation parsing.
 
-When P262 closes, the locals can be inlined back; the
+When @P262 closes, the locals can be inlined back; the
 cleaner shape is preserved in git history.
 
 ---

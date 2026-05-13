@@ -145,7 +145,7 @@ out of the released binary.
 - All existing tests still pass (no behavioral change should be observable).
 - Rust unit tests for the walker pass against synthetic IR.
 - `a_d1_read_only_classified_as_a` cell green.
-- `tests/closure_matrix.rs` 22 cells unchanged (regression net from plan-15).
+- `tests/closure_matrix.rs` 22 cells unchanged (regression net from @PLAN15).
 - CI gate green.
 
 ## Risks

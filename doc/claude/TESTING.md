@@ -247,8 +247,8 @@ Family today:
 
 | Binary | Plan | Axes | Cells |
 |---|---|---|---|
-| `tests/tuple_matrix.rs` | plan-14 | element type × destructure shape | tuple bug surface |
-| `tests/template_matrix.rs` | plan-17 | T-parameter usage × bound shape | bounded-generic / interface surface |
+| `tests/tuple_matrix.rs` | @PLAN14 | element type × destructure shape | tuple bug surface |
+| `tests/template_matrix.rs` | @PLAN17 | T-parameter usage × bound shape | bounded-generic / interface surface |
 
 Future matrices follow the same shape (coroutine validation,
 match validation — see `plans/future/16-coroutine-validation/`,
@@ -265,7 +265,7 @@ shipped as `plans/finished/15-closure-validation/` 2026-05-12;
 - **Cell name encodes the matrix coordinate** so the test name
   identifies the cell at-a-glance (e.g. `u3_b1a_addable_inline_pair_with_sum`
   = T-usage U3 × bound B1 Addable × specific shape).  Naming
-  conventions are per-plan (plan-14 `e<E>_d<D>`, plan-17
+  conventions are per-plan (@PLAN14 `e<E>_d<D>`, @PLAN17
   `u<U>_b<B>_…`) to avoid cross-binary collision.
 - **PASS / FIX / CLOSED** — every cell is one of three states.
   PASS = cell is covered by a passing test; FIX = cell needs
@@ -273,7 +273,7 @@ shipped as `plans/finished/15-closure-validation/` 2026-05-12;
   expected to start passing once the fix lands; CLOSED = design
   decision (no cell test; reason recorded in `DESIGN_DECISIONS.md`).
 - **Bug yield is the headline metric.**  Plan-14 found 2 P-issues
-  in 15 cells (13%); plan-17 found 6 P-issues in 6 phases (close
+  in 15 cells (13%); @PLAN17 found 6 P-issues in 6 phases (close
   to the predicted 5-10).  Each filed P-issue blocks plan
   acceptance; each PASS cell becomes a regression net.
 

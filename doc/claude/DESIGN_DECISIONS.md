@@ -97,7 +97,7 @@ of C38.  The "copy-at-definition" framing now applies only to
 truly-immutable scalar captures in pure read-only contexts:
 
 - Captures of `Type::Reference` (struct, nested struct) always
-  use 12B `Parts::DbRef` pointing at the live original (P260 fix,
+  use 12B `Parts::DbRef` pointing at the live original (@P260 fix,
   `src/parser/vectors.rs::synthesize_closure_record`).  Mutations
   from either side are visible immediately.
 - Captures of scalars whose bodies write to the capture are
@@ -284,7 +284,7 @@ difference to user code — only the runtime cleanup ordering
 changes.  No concrete program shape exists that move-semantics
 gets wrong but copy+null would get right.
 
-The loop-iteration aliasing bug (P250 — `for { (q1, q2) =
+The loop-iteration aliasing bug (@P250 — `for { (q1, q2) =
 make_pair(pa, pb); }` reads `null` for whichever destructured
 variable picked up the FIRST argument on iterations >0) is a
 SEPARATE dep-tracking issue, not a move-vs-copy semantics
@@ -301,7 +301,7 @@ Plan-14 phase 04 records the rationale.
 
 **Revisit when.** A concrete shape appears where move semantics
 is observably wrong but copy + null would be correct — none
-known as of 2026-05-11.  P250's fix lives in dep-tracking, not
+known as of 2026-05-11.  @P250's fix lives in dep-tracking, not
 in the move/copy axis.
 
 ---
@@ -510,7 +510,7 @@ behaviour has held for years without complaint.
 The 2026-05-11 evaluation of the C66 framework against the
 day-to-day loft-development workflow surfaced four corollaries
 that bind the abstract C66 rule to the developer experience.
-All four are tracked under plan-07 phase 4:
+All four are tracked under @PLAN07 phase 4:
 
 1. **Format strings are observability, never raise** — every
    `{...}` interpolation auto-swaps to its Nullable peer at
@@ -633,7 +633,7 @@ Three load-bearing rules:
    via --interpret").  This is the **compile-time** layer.
    Sibling work: every codegen path that historically emitted
    `todo!()` for an unimplemented native is now a hard
-   compile-error per P269.
+   compile-error per @P269.
 2. **Startup faults exit the program with non-zero status.**
    No catch_unwind, no logging-and-continuing.  The supervisor
    sees the exit code and decides.  This is the **VM-route
@@ -677,9 +677,9 @@ this decision rejects.
   this decision specifically blocks try/catch for the
   internal-bug-recovery use case.
 
-Pointer from the source: see PROBLEMS.md row P269 for the
+Pointer from the source: see PROBLEMS.md row @P269 for the
 specific incident this decision was crystallised in (server
-process died on todo!() panic during the P268 fix work);
+process died on todo!() panic during the @P268 fix work);
 the compile-time check shipped 2026-05-13 in
 `src/generation/mod.rs::output_function`.  Memory-system
 mirror: `feedback_fail_at_startup_not_runtime.md`.

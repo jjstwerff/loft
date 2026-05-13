@@ -479,7 +479,7 @@ runner will pick it up automatically.
 
 ## Tracker-tag indexer (`make index` + `./scripts/idx`)
 
-The tracker-tag indexer (plan-37) maintains
+The tracker-tag indexer (@PLAN37) maintains
 `index/tags.json`, a structured map of every `@P-id` /
 `@PLAN-id` reference in the tree (plus the `legacy:`
 bare-name forms during the migration).  Replaces
@@ -532,10 +532,10 @@ erode trust faster than stale index data does).
 ## Open work
 
 Diagnostic tooling enhancements surfaced by recurring debug
-sessions across plan-22's 02d sub-phases (Sept-Oct 2026).
+sessions across @PLAN22's 02d sub-phases (Sept-Oct 2026).
 Each row is a focused, single-commit improvement; collectively
 they would have shaved 10-20 hours of `eprintln!`-and-rerun
-diagnosis time across plan-22 phases 02d-iii through 02d-vii.
+diagnosis time across @PLAN22 phases 02d-iii through 02d-vii.
 Listed in ROI order (highest leverage first).
 
 | Tool | Effort | Where it would have helped | Notes |
@@ -568,7 +568,7 @@ cognitive load per debug session.
 
 A loft-script binary that serves a branch-aware doc + code review
 dashboard from a browser.  Useful for reviewing in-flight work
-without scrolling through chat snippets.  Built by plan-35 (closed
+without scrolling through chat snippets.  Built by @PLAN35 (closed
 2026-05-14); lives in `tools/viewer/` + `lib/markdown/`.
 
 ### Usage
@@ -597,7 +597,7 @@ Open `http://localhost:8765/` in a browser.
 | `/file/<path>` | File view.  `.md` files render via `lib/markdown` (full subset: ATX + setext headings with GH-slug ids, lists with continuation merging, GFM tables with alignment, fenced code, inline formatting, links with relative-path resolution + title attribute, images via `/raw/`, autolinks `<https://…>` / `<email>`, `@P-id` / `@PLAN-id` autolinks, blockquotes, task lists, strikethrough, backslash escapes).  Other files render line-numbered with `<a id="L42">` anchors. |
 | `/diff/<path>` | Per-file unified diff vs `main` with hunk colouring (green +, red −, blue hunk header). |
 | `/commit/<sha>` | Commit message + per-file diffs via the same hunk-coloured renderer.  Last 20 commits captured. |
-| `/tag/<bare>` | Every tracker-tag reference for a P-id or PLAN-id (e.g., `/tag/P259` lists all references to `@P259` and `legacy:P259`).  Reads `index/tags.json` built by `make index` (plan-37). |
+| `/tag/<bare>` | Every tracker-tag reference for a P-id or PLAN-id (e.g., `/tag/P259` lists all references to `@P259` and `legacy:P259`).  Reads `index/tags.json` built by `make index` (@PLAN37). |
 | `/tree/<path>` | Directory listing; sub-dirs are clickable. |
 | `/raw/<path>` | Raw file bytes (`text/plain`).  Used by markdown to serve relative image refs. |
 
@@ -615,7 +615,7 @@ hides — only "Rendered" stays.
 | Server + routes + page templates | `tools/viewer/src/main.loft` | Loft script — HTTP server via `lib/server`, route dispatch, dashboard / tag-page / commit-page / diff-page / file-page rendering |
 | Markdown rendering | `lib/markdown/` | Standalone loft library — single-file `src/markdown.loft`, comprehensive `tests/01-render.loft` |
 | Git state | `tools/viewer/state/*.json` + `state/diffs/*.diff` + `state/commits/*.diff` | Filled by `tools/viewer/refresh.sh` (uses `git` + `jq`) |
-| Tracker-tag index | `index/tags.json` | Filled by `make index` (plan-37) |
+| Tracker-tag index | `index/tags.json` | Filled by `make index` (@PLAN37) |
 | Static CSS | embedded in `main.loft::BASE_CSS` | Light + dark via `prefers-color-scheme` |
 
 ### Dependencies
@@ -642,7 +642,7 @@ a known-good loft commit.
 ### Backends
 
 The viewer runs under **both `--interpret` and `--native`**
-(since the seven-bug native arc P262→P269 closed 2026-05-13).
+(since the seven-bug native arc @P262→@P269 closed 2026-05-13).
 `make view` invokes `--interpret` by default for fast iteration;
 edit the Makefile target to swap in `--native` for the faster
 steady-state runtime.

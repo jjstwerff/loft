@@ -1,6 +1,6 @@
 # Phase 05a — Introspection: after first bug fix
 
-**Status:** DONE (2026-05-02) — fired after phases 06 + 07 shipped, before phase 10's P200 implementation begins.
+**Status:** DONE (2026-05-02) — fired after phases 06 + 07 shipped, before phase 10's @P200 implementation begins.
 
 **Kind:** Review (no code)
 
@@ -9,8 +9,8 @@ phase marked DONE.**  The original trigger was "Phase 05 DONE";
 phase 00a's findings revised plan ordering enough that the spirit
 of 05a (validate the diagnostic-gate + regression-test-first
 pattern) applies as soon as ANY bug-fix phase ships through the
-emitter framework.  Today phase 06 (P202 close) qualifies — and
-phase 07 (P205) is queued behind it.
+emitter framework.  Today phase 06 (@P202 close) qualifies — and
+phase 07 (@P205) is queued behind it.
 
 Recommended firing point: after BOTH phase 06 and phase 07 land,
 so the introspection has two framework-based bug-fix phases to
@@ -18,8 +18,8 @@ compare and the lessons captured stay current rather than going
 stale waiting for phase 05's rewrite.
 
 **Original trigger** (kept for context): Phase 05 marked DONE
-(P200 write side + P203 either closed or rerouted).  P203 closed
-out-of-order in phase 00 step 0.7b; P200 (phase 05) is gated on
+(@P200 write side + @P203 either closed or rerouted).  @P203 closed
+out-of-order in phase 00 step 0.7b; @P200 (phase 05) is gated on
 plan rewrite.  Sticking strictly to "phase 05 DONE" would defer
 05a behind two unrelated bottlenecks — better to fire on the
 substantive trigger (first bug-fix phase shipped through the new
@@ -42,7 +42,7 @@ that claim against reality:
   did context-extraction add more complexity than expected?
 
 This is also the natural decision point for "how many more bug-fix
-phases to attempt."  P200 write + P203 is the highest-value subset;
+phases to attempt."  @P200 write + @P203 is the highest-value subset;
 phases 06/07/08 may or may not be worth the additional time.
 
 ## Questions to answer
@@ -70,13 +70,13 @@ phases 06/07/08 may or may not be worth the additional time.
 8. Did `EmitCtx::is_file_ref` need any plumbing not predicted in
    phase 00a?
 
-### P203 status
-9. Did P203 close in this phase, or reroute to parser work?
+### @P203 status
+9. Did @P203 close in this phase, or reroute to parser work?
 10. If rerouted, is it now blocked, or do we have a clear path
     outside this plan?
 
-### P200 write closure
-11. P200 write side: did the round-trip suite (including the
+### @P200 write closure
+11. @P200 write side: did the round-trip suite (including the
     historically-failing case) all pass?
 12. Are there any width × signedness combinations that aren't
     covered by the regression test?
@@ -93,7 +93,7 @@ Update these files based on findings:
   diagnostic worked well, model phase 06's pre-work after it.
 - **`07-generics.md`**: if the prior-failure-regression-test
   pattern was useful, ensure phase 07 has equivalent test for the
-  P205 reproducer.
+  @P205 reproducer.
 - **`08-binary.md`**: phase 05's experience directly informs
   phase 08 (mirrors the pattern).  If phase 05 hit unexpected
   EmitCtx complexity, phase 08 inherits it — flag.
@@ -105,11 +105,11 @@ Update these files based on findings:
 
 | Finding | Action |
 |---|---|
-| P200 write closed cleanly + P203 closed | Strong signal that the plan works.  Continue to 06/07/08 with confidence. |
-| P200 write closed + P203 rerouted but cleanly so | Plan working as designed (graceful degradation).  Continue. |
+| @P200 write closed cleanly + @P203 closed | Strong signal that the plan works.  Continue to 06/07/08 with confidence. |
+| @P200 write closed + @P203 rerouted but cleanly so | Plan working as designed (graceful degradation).  Continue. |
 | Both closed but custom emitters needed >2× planned complexity | Re-budget phases 06-08; consider deferring phase 08 (read side, less urgent than write was). |
-| P200 write closed but caused regressions outside the suite | Fix regressions, then introspect again before phase 06. |
-| P200 write didn't close (the prior-failure pattern recurred) | **Stop and investigate.**  The plan's central claim is broken; phase 02's adapter split didn't actually fix the dual-role issue. |
+| @P200 write closed but caused regressions outside the suite | Fix regressions, then introspect again before phase 06. |
+| @P200 write didn't close (the prior-failure pattern recurred) | **Stop and investigate.**  The plan's central claim is broken; phase 02's adapter split didn't actually fix the dual-role issue. |
 | Plan is going slowly enough that phases 06/07/08 won't fit | Ship what's done, mark the rest as future work, and return to other priorities. |
 
 ## Memory entries to save
@@ -130,8 +130,8 @@ Examples:
 
 ## Findings
 
-05a fired late — after phases 06 (P202 close) and 07 (P205 close)
-shipped, but before phase 10's P200 implementation begins.  This
+05a fired late — after phases 06 (@P202 close) and 07 (@P205 close)
+shipped, but before phase 10's @P200 implementation begins.  This
 means findings cover the FRAMEWORK-BASED bug fixes (those that
 shipped through `emit_op` dispatch + custom emitters), not the
 originally-anticipated phase 05 (which was rewritten and folded
@@ -187,12 +187,12 @@ work needed:
 - More closure-shape branches than the sketch (queue shape
   selection mirrors for-par's 4-way: scalar/float/text/ref).
 - More edge-case handling (the queue-ref path, the
-  `(value).to_string()` coercion, the second emit site for P205).
+  `(value).to_string()` coercion, the second emit site for @P205).
 - Doc + comment overhead — emitters need substantial inline
   documentation to be reviewable.
 
 **Lesson**: estimate emitter sizes as 2× the sketch length.
-Apply to phase 10 step 10.3's P200 fix sizing.
+Apply to phase 10 step 10.3's @P200 fix sizing.
 
 ### 4. EmitCtx surface area additions
 
@@ -215,14 +215,14 @@ too much).
 
 | P-issue | Phase | Closure mechanism |
 |---|---|---|
-| P203 | 00 step 0.7b | Let-bind-on-repeat in `DefaultTemplateEmitter`.  No custom emitter; pure template-substitution refinement. |
-| P202 | 06 | Custom emitters (`ParallelQueueEmitter`, `ParallelBufRenameEmitter`) + runtime fns + reachability extension. |
-| P205 | 07 | Direct emit.rs patches at 2 sites; no custom emitter (the dangle isn't tied to a single Op). |
+| @P203 | 00 step 0.7b | Let-bind-on-repeat in `DefaultTemplateEmitter`.  No custom emitter; pure template-substitution refinement. |
+| @P202 | 06 | Custom emitters (`ParallelQueueEmitter`, `ParallelBufRenameEmitter`) + runtime fns + reachability extension. |
+| @P205 | 07 | Direct emit.rs patches at 2 sites; no custom emitter (the dangle isn't tied to a single Op). |
 
 Three P-issues, three different closure mechanisms.  The
 "phase = custom emitter" mapping the plan implied isn't strict —
-sometimes the right fix is template-level (P203), sometimes
-emit-site-level (P205).  The framework supports all three.
+sometimes the right fix is template-level (@P203), sometimes
+emit-site-level (@P205).  The framework supports all three.
 
 **Lesson**: don't pre-commit to "this phase will write a custom
 emitter."  Survey the failing emission first; the right fix
@@ -231,20 +231,20 @@ shape emerges from the survey, not the plan.
 ### 6. Phase 02 (param adapter) status retrospective
 
 Phase 02 was the originally-anticipated load-bearing
-simplification ("prerequisite for P200 write side").  Phase 00a
+simplification ("prerequisite for @P200 write side").  Phase 00a
 demoted it.  Phase 06 + 07 didn't need it.  Phase 10 step 10.3
-will not need it (P200 read-side fix is comparison-emission, not
+will not need it (@P200 read-side fix is comparison-emission, not
 param-narrowing).
 
 **Decision**: phase 02 stays demoted.  Drop or move to a
-separate cleanup plan after plan-09 closes.  No code in plan-09's
+separate cleanup plan after @PLAN09 closes.  No code in @PLAN09's
 remaining work depends on it.
 
 ### 7. Plan velocity vs initial estimate
 
 Plan-09 phases shipped over 2 days (2026-05-01 → 05-02):
 - Day 1: phases 00 (6 commits) + 01 (4 commits) + initial
-  plan-06 spillover.
+  @PLAN06 spillover.
 - Day 2: phases 03, 04, 06, 07, 09 (each 1-2 commits) + 00a
   introspection + CI cleanup + plan refresh.
 
@@ -256,7 +256,7 @@ Plan-09 phases shipped over 2 days (2026-05-01 → 05-02):
   multi-day debugging cycles.
 - Auto-mode + memory entries kept context across sessions.
 
-Phase 10's P200 fix could be similarly fast (1 session) or
+Phase 10's @P200 fix could be similarly fast (1 session) or
 similarly surface-deep (2-3 sessions).  Apply estimate-doubling
 from § 3 above: if it looks like 30-line fix, budget 60.
 
@@ -266,11 +266,11 @@ from § 3 above: if it looks like 30-line fix, budget 60.
 |---|---|
 | Both bug-fix phases (06 + 07) closed cleanly + suite green | ✓ |
 | Custom emitters within 2× planned complexity | ✓ (within 3×, but acceptable) |
-| Plan velocity supports finishing remaining work | ✓ (phase 10 + plan-11 both within reasonable session counts) |
+| Plan velocity supports finishing remaining work | ✓ (phase 10 + @PLAN11 both within reasonable session counts) |
 | Any phase regressed outside-plan tests | ✗ (none — every phase preserved threading 43/43, threading_chars 35/35, issues 540/540) |
 
-Verdict: **continue with confidence.**  Phase 10's P200 fix +
-plan-11's P204 fix are within plan velocity; the framework holds
+Verdict: **continue with confidence.**  Phase 10's @P200 fix +
+@PLAN11's @P204 fix are within plan velocity; the framework holds
 up; the wart-budget gates are doing their job.
 
 ### Memory entries (to save if not already)
@@ -289,7 +289,7 @@ captured in memory:
 - **Estimate emitter sizes as 2× the sketch length.**  Plan-doc
   sketches consistently understate by 1.5-3×.  Bake into
   phase-budget estimates.  (NEW — but plan-09-specific; if a
-  similar pattern shows up in plan-11, save as
+  similar pattern shows up in @PLAN11, save as
   `feedback_emitter_size_estimates`.)
 - **Survey first, choose fix shape second.**  Don't pre-commit
   to "this phase will write a custom emitter" before the
@@ -318,5 +318,5 @@ Per the "Output" section of this introspection:
 - **`README.md`** — already updated multiple times.  Phase 10's
   scope reflects this introspection's findings.
 - **`10-final-closure.md`** — references this introspection at
-  step 10.1.  Step 10.3's P200 fix should apply estimate-doubling
+  step 10.1.  Step 10.3's @P200 fix should apply estimate-doubling
   rule from § 3 (target ≤ 60 lines if fix sketch suggests 30).

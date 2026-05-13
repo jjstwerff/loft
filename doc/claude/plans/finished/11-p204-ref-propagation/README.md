@@ -3,15 +3,15 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 11 — P204: tail-expression return discarded
+# Plan 11 — @P204: tail-expression return discarded
 
 ## Status — DONE 2026-05-02 (PR #197)
 
-Closes **P204** — refresh the unspan walker in
+Closes **@P204** — refresh the unspan walker in
 `src/generation/pre_eval.rs::detect_ref_tail_capture` so the
 tail-call rewrite fires on Span-wrapped IR.  3-line fix.
 
-PR-readiness gate: P204's two failing native tests
+PR-readiness gate: @P204's two failing native tests
 (`85_yield_resume`, `87_store_leaks`) blocked PR-readiness; both
 green post-fix.  P-issue closure record:
 [PROBLEMS.md § 204](../../PROBLEMS.md#204-tail-expression-return-of-inner-helper-call-discarded).
@@ -76,8 +76,8 @@ never executed" is the failure mode.
   `tests/codegen_emitter.rs`.
 - **2 @EXPECT_FAIL markers removed** from
   `tests/scripts/repro_p204.loft` and `tests/scripts/repro_p205.loft`
-  (the latter unrelated to P204 but a leftover from plan-09 phase
-  07; un-marking is correct since P205 closed too).
+  (the latter unrelated to @P204 but a leftover from @PLAN09 phase
+  07; un-marking is correct since @P205 closed too).
 
 Total: ~5 lines added, 3 lines removed.
 
@@ -87,7 +87,7 @@ Plan estimate: 3-12 hours (the dominant uncertainty was the
 parser-side architecture).  Actual: ~30 minutes including survey
 + investigation.  Why faster: the existing infrastructure was 90%
 correct; only 3 lines needed to change.  The estimate-doubling
-rule from plan-09's 05a Findings doesn't apply when the fix is at
+rule from @PLAN09's 05a Findings doesn't apply when the fix is at
 a known-but-broken site (vs. new emitter / new infrastructure).
 
 ## See also
@@ -95,7 +95,7 @@ a known-but-broken site (vs. new emitter / new infrastructure).
 - [PROBLEMS.md § 204](../../PROBLEMS.md#204-tail-expression-return-of-inner-helper-call-discarded)
   — symptom + reproducer + closure narrative
 - [`../09-native-runtime-rewrite/`](../09-native-runtime-rewrite/) —
-  parent native-runtime arc; explicitly out-of-scope for plan-09
+  parent native-runtime arc; explicitly out-of-scope for @PLAN09
   because the fix is parser/IR-side, not codegen-emitter
 - `src/generation/pre_eval.rs::detect_ref_tail_capture` — the
   walker; check for Span handling whenever extending

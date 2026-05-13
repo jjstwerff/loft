@@ -23,7 +23,7 @@ blockers as phase 01).
   bytes)" stub with a download link instead of trying to
   read bytes as text.
 - Markdown files (`.md`) render as code with a "Markdown
-  rendering arrives in plan-35 phase 03" banner.
+  rendering arrives in @PLAN35 phase 03" banner.
 - Tree pages now link files to `/file/<path>` (rendered
   view); `/raw/<path>` still available from each file page.
 - CSS extended with `pre.code-pre`, `a.line`, `.lineno`,
@@ -44,7 +44,7 @@ scrolls to + highlights line 1060.
 
 ## Native blockers — same as phase 01
 
-P262 + P263 still gate native compilation; phase 02 stays in
+@P262 + @P263 still gate native compilation; phase 02 stays in
 interpreter mode.  No new native-codegen quirks surfaced.
 
 ## Forward-looking — syntax highlighting (still not in v1)

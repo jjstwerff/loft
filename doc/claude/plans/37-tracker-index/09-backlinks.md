@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status:** Shipped 2026-05-14 — detection + CLI surface land
 on the current branch.  Viewer "Referenced by" sidebar
-(plan-35 phase 04 follow-up) is the only deferred sub-task;
+(@PLAN35 phase 04 follow-up) is the only deferred sub-task;
 data + queries are ready for it to consume.
 
 ## Goal
@@ -26,7 +26,7 @@ file or tag.  Two flavors, both heavily used in plan dirs:
 The user's framing (2026-05-13): "add to the eventual index
 a who links to me (both regular tags and file tags mostly
 in use for plans)".  Plans cross-reference each other
-densely (plan-22 → plan-15 → plan-09 → ...); knowing the
+densely (@PLAN22 → @PLAN15 → @PLAN09 → ...); knowing the
 inbound edges is essential for refactor + closeout work
 without grep'ing 250 files.
 
@@ -105,7 +105,7 @@ extensions for ergonomics:
 - `idx incoming:PROBLEMS.md` resolves the partial name to
   the unique full path if unambiguous.
 
-### Viewer integration (plan-35 phase 04 + 08)
+### Viewer integration (@PLAN35 phase 04 + 08)
 
 The viewer's per-file pages gain a "Referenced by" sidebar:
 
@@ -147,8 +147,8 @@ applied to the `links` bucket.
 |---|---|
 | `tools/indexer/scan.sh` | EXTEND: third extractor pass for markdown links; output the `links` bucket |
 | `scripts/idx` | ADD `incoming:<path>` form (works on both file paths and `@`-tags) |
-| `tools/indexer/scan.loft` (plan-37 phase 07) | EXTEND when ported: same extractor + bucket |
-| `tools/viewer/src/main.loft` (plan-35) | CONSUMER — phase 04 of plan-35 reads this bucket for the per-file sidebar |
+| `tools/indexer/scan.loft` (@PLAN37 phase 07) | EXTEND when ported: same extractor + bucket |
+| `tools/viewer/src/main.loft` (@PLAN35) | CONSUMER — phase 04 of @PLAN35 reads this bucket for the per-file sidebar |
 | `tests/index_hygiene.rs` | EXTEND: validate that broken file links (target doesn't exist) fail CI |
 
 ## Acceptance — shipped state
@@ -156,7 +156,7 @@ applied to the `links` bucket.
 - `./scripts/idx incoming:doc/claude/PROBLEMS.md` returns
   **41** files that cite PROBLEMS.md ✓
 - `./scripts/idx incoming:doc/claude/plans/finished/22-mutable-closures/README.md`
-  returns **20** docs citing plan-22 ✓
+  returns **20** docs citing @PLAN22 ✓
 - `./scripts/idx incoming:doc/claude/plans/finished/22-mutable-closures/`
   resolves trailing `/` to README.md (same 20 results) ✓
 - `./scripts/idx incoming:PROBLEMS.md` (basename only):
@@ -172,7 +172,7 @@ applied to the `links` bucket.
 - Performance: scanner runs in **1.5 sec** on the 953-file
   loft tree ✓ (target was < 2 sec; new link extraction
   added ~0.3 sec)
-- Viewer (plan-35 phase 04 follow-up): "Referenced by"
+- Viewer (@PLAN35 phase 04 follow-up): "Referenced by"
   sidebar consumes `.links` bucket — **deferred**, not
   blocking phase 09 close.
 
@@ -187,9 +187,9 @@ applied to the `links` bucket.
   - ~48 in `doc/claude/plans/<dir>/README.md` citing
     top-level reference docs (DESIGN.md, PROBLEMS.md, …)
     with `../X.md` instead of `../../X.md`.
-  - 3 plan-22 references at the old `plans/22-` path
+  - 3 @PLAN22 references at the old `plans/22-` path
     (move to `finished/` happened during the plan close).
-  - 3 plan-35 references at the old `plans/35-` path
+  - 3 @PLAN35 references at the old `plans/35-` path
     (same closeout drift).
   - 3 lib_plan typos (`doc/claude/lib_plans/plans/...`).
   - 5 stale `.claude/skills/` references.
@@ -199,7 +199,7 @@ applied to the `links` bucket.
     for the live list.
 - **Viewer "Referenced by" sidebar** — wire `tools/viewer/src/main.loft`'s
   per-file route to read `.links[<path>]` and render a
-  sidebar.  Data is ready; UI work is plan-35 phase 04
+  sidebar.  Data is ready; UI work is @PLAN35 phase 04
   scope.
 
 ## Risks

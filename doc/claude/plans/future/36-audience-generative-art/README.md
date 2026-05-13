@@ -313,11 +313,11 @@ extensions.
 
 **Hard prereqs (sibling plan):**
 
-- [plan-34 — `lib/server` hardening](../34-server-hardening/README.md)
+- [@PLAN34 — `lib/server` hardening](../34-server-hardening/README.md)
   items (a), (b), (e):
   - (a) `srv.broadcast_binary()` / `srv.send_binary_to()` — the
     projector's world-snapshot + delta broadcasts depend on this.
-    Without it, plan-36 has to inline `n_ws_send_binary` in loft
+    Without it, @PLAN36 has to inline `n_ws_send_binary` in loft
     (TTT v5 t4 already did this as a workaround; not the right
     long-term shape).
   - (b) Server-side binary recv via `from_utf8_unchecked` — the
@@ -329,7 +329,7 @@ extensions.
     broadcast scaffold.  Without it, the server can only emit
     on event arrival, which breaks the "audience always sees
     fresh activity" property.
-- Items (c), (d), (f) of plan-34 are post-launch hardening (the
+- Items (c), (d), (f) of @PLAN34 are post-launch hardening (the
   30-client soak, panic isolation, observability metrics).
   Useful for production rehearsal; not blocking phase 1.
 
@@ -350,11 +350,11 @@ extensions.
   — drops the `Reference<T>.inner` ceremony from the server's
   pump callback so the loft snippets shown on stage during the
   "loft snippet highlights" beats read at their best.  If
-  plan-22 lands before the talk, plan-36 server uses writable
+  @PLAN22 lands before the talk, @PLAN36 server uses writable
   closures; if not, it uses `Reference<T>` exactly like TTT v5.
   Demo functions either way; only on-screen elegance differs.
 
-**Risk dispositioned (2026-05-12)**: plan-15 phase 03 confirmed
+**Risk dispositioned (2026-05-12)**: @PLAN15 phase 03 confirmed
 the closure-DbRef leak feared in LIFETIME.md does NOT manifest
 — closure records free at scope exit via standard local-cleanup
 (D1) or `Parts::ChildRec` cascade (D3).  Heavy closure usage in
@@ -380,7 +380,7 @@ the catch-up recovery handler, and the sluggish-tempo tick-loop
 behaviour — each validated with the smallest possible text-mode
 test program.  The TTT board uses the same `World` / `Chunk` /
 `Cell` data model this plan defines, so primitives proven there
-translate to plan-36 with zero protocol glue.
+translate to @PLAN36 with zero protocol glue.
 
 Build TTT v5 first; this plan's phase 1 (server) and phase 0
 (phone client binary decoder) become consumers of proven

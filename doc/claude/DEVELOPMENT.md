@@ -638,7 +638,7 @@ relevant family.
 
 ### Friction history + remaining backlog
 
-**Surfaced 2026-05-13** during P259's commit-1 work: hit the
+**Surfaced 2026-05-13** during @P259's commit-1 work: hit the
 255-op limit when adding `OpIncRc`, had to manually patch
 `fill.rs` (array size + placeholder + stub fn body) before
 regen could run.  Position-sensitive too — the array entry had

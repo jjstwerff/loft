@@ -11,7 +11,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 siblings) honour the `size(N)` annotation on the integer alias.
 Hash / sorted / index struct-key narrowing also covered.
 
-Reference for the post-plan-02 storage rules lives in:
+Reference for the post-@PLAN02 storage rules lives in:
 
 - [`../../../INTERMEDIATE.md`](../../../INTERMEDIATE.md) §
   "Integer Storage Size" — the struct-field-vs-vector-element

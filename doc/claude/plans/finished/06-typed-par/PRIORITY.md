@@ -16,7 +16,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > sequenced; the 8d.3 per-thread-range design described below has
 > been replaced by A2.
 
-The original plan-06 phases are numbered by topic, not by impact.
+The original @PLAN06 phases are numbered by topic, not by impact.
 This doc reorders them as a **single sequential spine** — each step
 chosen to retire the most complexity per unit effort.  Anything not
 on the spine is explicitly deferred.
@@ -661,12 +661,12 @@ Update `CHANGELOG.md` + `CHANGELOG_TECHNICAL.md`.
 | Step 10 (cleanup) | 3 | 1 | 1 | 1 | **-500** |
 
 After step 10: par's runtime is **one dispatcher, three stitch
-policies, one user surface** — the simplification target plan-06's
+policies, one user surface** — the simplification target @PLAN06's
 intro paragraph promises.
 
 ## Explicitly deferred — not on the spine
 
-These items remain in plan-06 but **do not block** any spine step.
+These items remain in @PLAN06 but **do not block** any spine step.
 Pick them up after step 10 lands or when a concrete user need surfaces.
 
 | Item | Why deferred |

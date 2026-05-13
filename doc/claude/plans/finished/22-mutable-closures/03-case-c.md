@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status: fully shipped 2026-05-13.**  Single-factory works
 via 02d-iii.e (cell + auto-Reference machinery);
-multi-instance interleave fixed by the P259 four-commit
+multi-instance interleave fixed by the @P259 four-commit
 chain (OpIncRc emission on capture + cascade-free in
 `Stores::free_named` gated on `__closure_` type prefix).
 
@@ -31,7 +31,7 @@ Verified via:
 All three pass on both interp + native.
 
 **Multi-instance interleave (`f1 = make(); f2 = make();
-f1(); f2(); f1();`) shipped 2026-05-13 via P259** — the
+f1(); f2(); f1();`) shipped 2026-05-13 via @P259** — the
 closure record now actually OWNS the cells it captures
 (`inc_rc` on capture + cascade-free on close-record free
 gated on `__closure_` type prefix).  See
@@ -97,7 +97,7 @@ fn captures_read_after(
 The lifetime-binding lowering: the cell's free is emitted at the
 closure's drop site (when the fn-ref variable goes out of scope
 in the caller) instead of at the construction-site scope's exit.
-This reuses plan-15 phase 03's finding that closure records
+This reuses @PLAN15 phase 03's finding that closure records
 free correctly via `Parts::ChildRec` at scope exit — case C just
 moves the freeing scope from "construction-site" to "closure-
 escape-site."
@@ -197,4 +197,4 @@ fn p22_phase03_factory_no_leak() {
 - [DISCUSSION § Snippet 3](DISCUSSION.md) — paper-trace of case C classification.
 - `src/scopes.rs` — live-interval tracking.
 - `src/variables/mod.rs` — variable lookup.
-- [plan-15 phase 03 leak findings](../15-closure-validation/00-matrix.md) — `Parts::ChildRec` cascade verified.
+- [@PLAN15 phase 03 leak findings](../15-closure-validation/00-matrix.md) — `Parts::ChildRec` cascade verified.

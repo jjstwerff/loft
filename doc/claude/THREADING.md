@@ -241,7 +241,7 @@ worker.  Native and interpreter both back `par_fold` directly
 form is the user-facing alternative; the parser auto-detects
 pure-fold bodies and routes them through the same runtime.
 
-### Post plan-06 surface (closed 2026-05-09)
+### Post @PLAN06 surface (closed 2026-05-09)
 
 Plan-06 collapsed the 7-variant `par` runtime + 3-fn native
 dispatch into one store-stitch path.  Every parallel worker
@@ -252,7 +252,7 @@ vs full path from the worker's effect signature.  See
 [CHANGELOG_TECHNICAL.md § Plan-06 (typed-par redesign) closed
 2026-05-09](CHANGELOG_TECHNICAL.md) for the per-A-step shipped
 manifest, and [§ Dispatcher inventory](#dispatcher-inventory-when-adding-a-new-return-shape)
-below for the post-plan-06 dispatcher set.
+below for the post-@PLAN06 dispatcher set.
 
 ---
 
@@ -308,12 +308,12 @@ on the development workstation used for A1, both `main` and
 | Column | main (5-sample median) | branch post-A1 (5-sample median) | Δ |
 |---|---|---|---|
 | loft-interp | ~98ms | ~101ms | +3 % (within noise; ±5 % gate PASS) |
-| loft-native | n/a (P199 — `n_parallel_for_native` codegen E0499) | n/a (same) | — |
+| loft-native | n/a (@P199 — `n_parallel_for_native` codegen E0499) | n/a (same) | — |
 
 The loft-native column cannot be measured today: native compilation
-of `bench/11_par/bench.loft` hits the P199 double-borrow on
+of `bench/11_par/bench.loft` hits the @P199 double-borrow on
 `format_float(&mut s, t_5float_round(stores, …), …)`, which exists
-identically on `main`.  ARC step A7 closes P199.  Once A7 lands the
+identically on `main`.  ARC step A7 closes @P199.  Once A7 lands the
 native column re-enables and gates with ±5 % against a fresh
 host-relative baseline.
 

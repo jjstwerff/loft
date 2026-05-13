@@ -156,7 +156,7 @@ parent-store mutation, no observable side effect), reading a PRNG
 *is* an observable side effect — two consecutive calls return
 different values.  Classified `#impure`.  A user-facing `pure_random`
 that takes an explicit seed and is referentially transparent could
-be `#pure`; not in plan-06 scope.
+be `#pure`; not in @PLAN06 scope.
 
 **Allocation as side effect.**  Allocating into the caller's
 return slot does **not** count as a side effect — that's the
@@ -553,7 +553,7 @@ implementation underneath.  The cache/placeholder trick goes away.
   - `LOFT_STORES=warn` reports zero leaked stores.
 
   This fixture is the canonical "huge parent + small output"
-  workload — the shape plan-06 is optimised for.  A regression
+  workload — the shape @PLAN06 is optimised for.  A regression
   here means a stdlib `#pure` annotation was dropped or the
   analyser pessimised an obviously-pure fn; either is a P0 bug.
 

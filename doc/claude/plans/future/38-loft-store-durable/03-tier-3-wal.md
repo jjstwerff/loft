@@ -16,7 +16,7 @@ truncation.  Zero-data-loss for committed writes.
 
 Tier 3 is the right choice for any data where each write
 matters and rebuild from another source is impossible.
-First consumer: plan-36 audience-generative-art demo (every
+First consumer: @PLAN36 audience-generative-art demo (every
 audience contribution must persist; on stage, a crashed
 projector recovering with lost contributions is the worst-
 possible failure mode).

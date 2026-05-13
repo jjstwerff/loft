@@ -7,12 +7,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status:**
 - **04a (`/tag/<tag>` route + missing-index banner)** — Shipped 2026-05-13
-- **04b (welcome landing + per-doc sidebar)** — Open (still depends on plan-35 phase 03 + 08)
+- **04b (welcome landing + per-doc sidebar)** — Open (still depends on @PLAN35 phase 03 + 08)
 
 ## What 04a shipped
 
 A self-contained slice that the viewer could host without
-waiting on plan-35:
+waiting on @PLAN35:
 
 - `GET /tag/<bare_name>` — reads `index/tags.json` via
   `json_parse`, surfaces BOTH the canonical (`@P259`) and
@@ -28,9 +28,9 @@ waiting on plan-35:
 URL convention is `/tag/<bare>` (`/tag/P259`, `/tag/PLAN35-01`).
 The page renders both `@P259` and `legacy:P259` together since
 the user's mental model is "show me everything that mentions
-P259," not "discriminate between the two indexer keys."
+@P259," not "discriminate between the two indexer keys."
 
-**Pre-existing bug filed during 04a work**: P264 — `json_parse`
+**Pre-existing bug filed during 04a work**: @P264 — `json_parse`
 mangles non-ASCII strings (3-byte `→` becomes 6-byte `âââ` due
 to byte-by-byte codepoint widening in the JString decoder).
 Affects the rendered context strings on tag pages.  Reproducer
@@ -45,7 +45,7 @@ in CLAUDE.md.
 
 Wire the loft-view binary to read `index/tags.json` and surface
 tag references as cross-doc navigation.  The `/welcome`
-landing page (plan-35 phase 08) consumes the index buckets
+landing page (@PLAN35 phase 08) consumes the index buckets
 directly; per-doc pages get a "referenced from" sidebar.
 
 ## What ships
@@ -83,7 +83,7 @@ index`" banner instead of crashing.
 | Route | Purpose |
 |---|---|
 | `/tag/<tag>` | All references to a tag, with file:line + 2-line context per match |
-| `/welcome` | Landing page (plan-35 phase 08) — uses index data for the bucketed status view |
+| `/welcome` | Landing page (@PLAN35 phase 08) — uses index data for the bucketed status view |
 
 ### Per-doc "referenced from" sidebar
 
@@ -113,7 +113,7 @@ rebuild (the viewer has no subprocess primitive).
 - Browse to `/file/doc/claude/PROBLEMS.md` → sidebar shows
   the tag references for each P-id row.
 - Click any `@P259` link → `/tag/@P259` lists every file:line
-  that mentions P259.
+  that mentions @P259.
 - Editing a doc + reloading the page → if the index hasn't
   refreshed, the "stale index" footer note appears.
 - Missing `index/tags.json` → "no index — run `make index`"
@@ -124,7 +124,7 @@ rebuild (the viewer has no subprocess primitive).
 | Risk | Mitigation |
 |---|---|
 | Loft's JSON parser ergonomics for `vector<struct>` aren't yet smooth | If parsing into typed structs is painful, parse into a flatter representation (parallel arrays); or fall back to scanning the file with hand-written parsing.  File a P-issue against the JSON ecosystem if this surfaces. |
-| Index reads on every request hurt latency | Cache parsed index in memory; invalidate on file mtime change.  Use loft closures (just shipped via plan-22) for the cache. |
+| Index reads on every request hurt latency | Cache parsed index in memory; invalidate on file mtime change.  Use loft closures (just shipped via @PLAN22) for the cache. |
 | Tag references in source files (e.g., `// P259` in a Rust comment) point at a doc but aren't the doc's responsibility | Per-doc sidebar shows refs grouped by where they live (docs vs code) so the user can filter mentally |
 
 ## Dependencies
@@ -137,7 +137,7 @@ This phase depends on:
   layout.
 
 If those aren't shipped yet, phase 04 stays open.  Phases
-00-03 of plan-37 ship independently and don't block on the
+00-03 of @PLAN37 ship independently and don't block on the
 viewer.
 
 ## Cross-references

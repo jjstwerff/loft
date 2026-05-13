@@ -141,7 +141,7 @@ syntactically valid; only its allowed downstream uses tighten.
 
 ## What gets retired
 
-This phase retires several pieces from earlier plan-06 phases:
+This phase retires several pieces from earlier @PLAN06 phases:
 
 | Component | Why retired |
 |---|---|

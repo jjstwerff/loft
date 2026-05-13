@@ -117,7 +117,7 @@ literal suffix is deprecated-warned and silently dropped.
   surface.**  Phase 5 (opcode reclamation) deletes them; until
   then dispatch table size stays 268 instead of 242.  Affects
   no semantics; just dispatch cache density.
-- **`Type::Long` enum variant removed** (plan-01 phase 4, 2026-04-21).
+- **`Type::Long` enum variant removed** (@PLAN01 phase 4, 2026-04-21).
   All integer-family values flow through `Type::Integer(IntegerSpec)`
   with i64 arithmetic on the stack and per-field storage width via
   `IntegerSpec.forced_size`.  See
@@ -536,7 +536,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 |--------|-----------|----------|
 | C3     | 1.1+      | Accepted — WASM threading deferred (Web Worker pool cost > benefit today) |
 | ~~C7/P22~~ | — | **Done** — diagnostic now references 1.1+ timeline; regression guard added |
-| C38    | —         | Updated — plan-22 (2026-05-13) adds by-body mutation classification; Reference captures always via DbRef; scalars via heap cell.  Pure read-only scalar captures remain value-copy. |
+| C38    | —         | Updated — @PLAN22 (2026-05-13) adds by-body mutation classification; Reference captures always via DbRef; scalars via heap cell.  Pure read-only scalar captures remain value-copy. |
 | ~~C54~~ | — | **Done** 2026-04-20 — `integer` is i64 end-to-end; `long` is a historical alias.  See CAVEATS.md § C54 long-form for post-migration footguns |
 | ~~C58/P135~~ | — | **Done** — canonical `(0, 0) = screen-top-left`; upload no longer pre-flips rows; convention locked in lib_plans/future/02-graphics/README.md.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~C60~~ | — | **Done** 2026-04-13 — `for kv in hash` yields a `HashEntry` with `.key` / `.value` in insertion/deletion-aware order via the internal ordered index.  See CAVEATS.md § C60 long-form |

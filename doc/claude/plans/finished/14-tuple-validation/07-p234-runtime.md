@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Phase 07 — P234 runtime: tuple-with-Reference function returns
+# Phase 07 — @P234 runtime: tuple-with-Reference function returns
 
 **Status: open (lexer half closed 2026-05-07; runtime half is this phase)**
 
@@ -56,7 +56,7 @@ struct's per-attribute byte offset
 | Return type | Path |
 |---|---|
 | `(integer, integer)`, `(integer, boolean)`, `(int, character)`, etc. — every element pure value | Existing Rust-tuple ABI |
-| `(text, text)`, `(integer, text)`, `(Point, integer)`, `(vector<T>, X)`, `(Variant{x:int}, T)`, `((Point, int), text)`, etc. — any element heap-owning OR a nested tuple containing one | NEW: route through `Reference(__tuple<…>)`.  Fixes P234. |
+| `(text, text)`, `(integer, text)`, `(Point, integer)`, `(vector<T>, X)`, `(Variant{x:int}, T)`, `((Point, int), text)`, etc. — any element heap-owning OR a nested tuple containing one | NEW: route through `Reference(__tuple<…>)`.  Fixes @P234. |
 
 Two buckets, one predicate, no special cases:
 
@@ -181,7 +181,7 @@ on the eval stack.  After Steps 1-2, tuple-with-Reference
 returns no longer produce eval-stack tuple expressions — the
 rewrite uses `OpSet*` to a heap struct directly.
 
-So the padding fix is **redundant for the P234 path**.
+So the padding fix is **redundant for the @P234 path**.
 
 **Verified 2026-05-08**: padding fix is genuinely redundant.
 Full suite passes without it (issues 611/0, threading_chars 44/0,
@@ -240,7 +240,7 @@ function-return ABI was broken.
 | `src/parser/control.rs` | Step 2: tail-tuple-literal → struct-build rewrite (~20 LoC) |
 | `tests/issues.rs` | `p234_runtime_*` regression tests (one already added; add cross-mode) |
 | `src/state/codegen.rs` | Step 5: keep or revert padding fix based on verification |
-| `doc/claude/PROBLEMS.md` | Mark P234 fully closed (lexer + runtime) |
+| `doc/claude/PROBLEMS.md` | Mark @P234 fully closed (lexer + runtime) |
 | `doc/claude/plans/finished/06-typed-par/ARC.md` | A7.3 status: lexer + runtime closed; verify `par_tuple_return_struct_text` un-ignorable |
 
 ## Existing infrastructure to reuse
@@ -337,7 +337,7 @@ cargo test --release --test threading_chars par_tuple_return_struct_text
 
 ## Out of scope
 
-- ARC.md A7.1 tuple wide-return runtime (separate plan-06 step)
+- ARC.md A7.1 tuple wide-return runtime (separate @PLAN06 step)
 - Native-codegen tuple-of-text optimisation (T1.8a already shipped)
 - Splitting `ls` deps by tuple element (the conservative
   over-keep ref_return does today is fine)
@@ -347,7 +347,7 @@ cargo test --release --test threading_chars par_tuple_return_struct_text
 
 ## Follow-up after this phase closes
 
-- Update `doc/claude/PROBLEMS.md` P234 row: lexer + runtime closed,
+- Update `doc/claude/PROBLEMS.md` @P234 row: lexer + runtime closed,
   remove the workaround note
 - Update `doc/claude/plans/finished/06-typed-par/ARC.md` A7.3 status to
   reflect runtime closure

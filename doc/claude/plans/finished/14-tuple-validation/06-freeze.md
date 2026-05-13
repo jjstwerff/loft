@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Phase 06 — Matrix freeze + doc reconciliation
 
 **Status: shipped 2026-05-11.  Matrix in `00-matrix.md` updated to
-final 40-cell state (39 PASS via cross_mode + 1 CLOSED:P251 for
+final 40-cell state (39 PASS via cross_mode + 1 CLOSED:@P251 for
 E4_d3 + E6 / E7 closed-by-design).  TUPLES.md known-limitations
 table trimmed (T1.8c, T1.11a, E6 dropped); PLANNING.md T1.x rows
 marked completed; CHANGELOG_TECHNICAL.md gained the close summary.
@@ -73,7 +73,7 @@ until reconciled.
 
 - Any new test cells.  Phase 06 is doc-only.
 - Performance work (a tuple benchmark suite would be a separate
-  initiative, triggered by plan-06 phase 9 if needed).
+  initiative, triggered by @PLAN06 phase 9 if needed).
 - Coroutine / iterator-protocol cells (separate plans).
 
 ## Cross-references

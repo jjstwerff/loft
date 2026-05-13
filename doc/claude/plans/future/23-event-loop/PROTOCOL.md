@@ -303,7 +303,7 @@ extension fits cleanly.
 | Reserved prefix disambiguation | Implemented (programmer-side) | client's `if raw.starts_with("MAP:")` |
 | Binary-mode header | Designed, not implemented | EVENT_LOOP.md spec; awaits binary WebSocket frames in `lib/server` / `lib/web` |
 | Streaming reassembly | Designed, not implemented | spec only; no consumer yet |
-| Encoding mode auto-detection | Designed, not implemented | depends on closure-in-struct-field landing (P213) for full library-managed dispatch |
+| Encoding mode auto-detection | Designed, not implemented | depends on closure-in-struct-field landing (@P213) for full library-managed dispatch |
 | Version negotiation (HELLO) | Designed, not implemented | V4+ |
 
 ---

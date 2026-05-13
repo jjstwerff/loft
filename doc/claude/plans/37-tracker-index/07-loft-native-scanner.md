@@ -173,7 +173,7 @@ drives.
 | Loft gap | Today's workaround | Loft enhancement |
 |---|---|---|
 | **File-event watcher API** (inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) | None — the bash scanner relies on the git pre-commit hook (phase 02) | `lib/fs_watch/` package with a streaming `watch(path: text) -> iterator<FsEvent>` API.  Cross-platform via the same host-bridge pattern `lib/server` uses |
-| **Subprocess primitive** (already noted in plan-35 as a gap) | Wrapper script approach | Out of scope for this phase; the loft scanner does NOT shell out to `git ls-files` — it walks the filesystem itself and applies an in-loft `.gitignore` matcher |
+| **Subprocess primitive** (already noted in @PLAN35 as a gap) | Wrapper script approach | Out of scope for this phase; the loft scanner does NOT shell out to `git ls-files` — it walks the filesystem itself and applies an in-loft `.gitignore` matcher |
 | **JSON emission for nested structures** | Loft has `n_struct_from_jsonvalue`; emission less ergonomic | If pattern repeats: build a `lib/json_emit/` helper.  This phase contributes use cases. |
 | **Long-running program lifecycle** (graceful shutdown on SIGINT, log rotation) | None | Sibling enhancement — file once concrete pain shows up |
 | **Regex (or fast text-search)** | `text.find` / `text.rfind` / loops | `lib_plans/future/01-regex/` already planned; this phase contributes a real consumer |
@@ -184,7 +184,7 @@ to the better APIs as they land.
 
 ### Build pipeline
 
-Mirrors plan-35's `view-build` shape:
+Mirrors @PLAN35's `view-build` shape:
 
 ```make
 index-build:  ## Compile the loft-native scanner

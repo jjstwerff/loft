@@ -20,7 +20,7 @@ for.  Two visible jumps from phase 01:
   + warnings; richer hover popup with multiple sections;
   references panel with grouping by file.
 
-Editing (E1) is OUT of scope — that's a follow-up plan-14
+Editing (E1) is OUT of scope — that's a follow-up @PLAN14
 phase 07+ once R1+R2 has been used in anger.  Read-only
 covers ~80% of the review use case the viewer was built for.
 
@@ -132,7 +132,7 @@ stays framework-free so the surface stays reviewable.
 | Squiggle rendering jank with many diagnostics (1000+) | Cap visible squiggles at 100 per viewport; render off-screen ones via virtualised overlay. |
 | Hover-popup positioning breaks at viewport edges | Popper.js handles this; fall back to plain absolute-position if Popper fails. |
 | Keybinds collide with browser defaults | `g d` / `g r` are vim-style sequences (no modifier); `Ctrl+Click` is intercepted only in the code-render area; `?` only when no input is focused. |
-| Squiggle SVGs leak via XSS if diagnostic message has HTML | All LSP-returned text is escaped before rendering; CSP header (already in plan-35 phase 02) catches any leaks at the second layer. |
+| Squiggle SVGs leak via XSS if diagnostic message has HTML | All LSP-returned text is escaped before rendering; CSP header (already in @PLAN35 phase 02) catches any leaks at the second layer. |
 | Diagnostics from different files mix | Sidebar groups by file URI; each file panel is independent. |
 
 ## Critical files
@@ -153,13 +153,13 @@ stays framework-free so the surface stays reviewable.
 ## What phase 05 does NOT ship
 
 - **E1 (single-file edit)** — adding a real editor framework
-  (Monaco / CodeMirror); track as plan-14 phase 07.
-- **E2 (completion + signature help)** — plan-14 phase 08.
-- **E3 (refactoring + multi-file)** — plan-14 phase 09.
+  (Monaco / CodeMirror); track as @PLAN14 phase 07.
+- **E2 (completion + signature help)** — @PLAN14 phase 08.
+- **E3 (refactoring + multi-file)** — @PLAN14 phase 09.
 - **Workspace symbol search** (Ctrl+P / Cmd+P palette) —
   E2 territory.
 
-These are LISTED in the plan-14 README's "Browser-side editor
+These are LISTED in the @PLAN14 README's "Browser-side editor
 — staged" table.  They're real follow-ups, not deferred-design;
 promote to actual phase docs when R1+R2 has been used by the
 target audience and the next bottleneck is editing.

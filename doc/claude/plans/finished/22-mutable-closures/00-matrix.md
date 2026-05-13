@@ -16,7 +16,7 @@ change.  Phase 01 (mutated-captures detection) is the next step.
 
 Lock the case × destination matrix and wire `tests/mut_closure_matrix.rs`
 to the shared `cross_mode!` harness from `tests/common/cross_mode.rs`.
-Mirrors plan-15 phase 00 (closure validation) and plan-14 phase 00
+Mirrors @PLAN15 phase 00 (closure validation) and @PLAN14 phase 00
 (tuple validation) — the donor template is mature; phase 00 is pure
 test infrastructure with zero production change.
 
@@ -56,7 +56,7 @@ cross_mode!(a_d1_read_only_local, r#"
 "#);
 ```
 
-No new harness code.  Same `#[ignore]` discipline as plan-14/15.
+No new harness code.  Same `#[ignore]` discipline as @PLAN14/15.
 
 Run with:
 ```bash
@@ -96,5 +96,5 @@ a_d4_read_only_return            // make() -> fn(integer); reads outer
 
 - [README.md](README.md) — full spec; this phase fixes the test surface.
 - [DISCUSSION.md § Analysis sketch](DISCUSSION.md) — algorithm-level walkthrough.
-- [plan-15 phase 00](../15-closure-validation/00-matrix.md) — donor template.
+- [@PLAN15 phase 00](../15-closure-validation/00-matrix.md) — donor template.
 - `tests/common/cross_mode.rs` — shared harness.

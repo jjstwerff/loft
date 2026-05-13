@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # V2 Slot Allocator — Specification
 
-Status: **draft**.  Owner: plan-04 Phase 1.  Last updated: 2026-04-22.
+Status: **draft**.  Owner: @PLAN04 Phase 1.  Last updated: 2026-04-22.
 
 This is the full specification for the single-pass slot allocator.
 It satisfies the hard constraint from [README.md](README.md) — no

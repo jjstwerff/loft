@@ -31,7 +31,7 @@ contracts in.
 ### Plan-37 indexer (Tier 1) — actual wiring
 
 In `tools/indexer/scan.loft` (the loft daemon from
-plan-37 phase 07):
+@PLAN37 phase 07):
 
 ```loft
 use store_durable;
@@ -52,7 +52,7 @@ fn on_corruption_fn(path: text) {
 }
 ```
 
-The full-rescan path already exists from plan-37 phase
+The full-rescan path already exists from @PLAN37 phase
 00 (the bash scanner does it; the loft daemon mirrors
 the logic).  Tier 1 just plumbs the callback.
 
@@ -132,7 +132,7 @@ This is fast (<1 sec); ships in `make ci`.
 
 | Path | Action |
 |---|---|
-| `tools/indexer/scan.loft` (plan-37 phase 07/08) | EXTEND: open store via `IntegrityOnly` |
+| `tools/indexer/scan.loft` (@PLAN37 phase 07/08) | EXTEND: open store via `IntegrityOnly` |
 | `plans/future/32-tic-tac-toe/README.md` | ADD § Persistence (Tier 2) |
 | `plans/future/36-audience-generative-art/README.md` | ADD § Persistence (Tier 3) |
 | `tests/store_durable_smoke.rs` | NEW: per-tier consumer-shaped end-to-end smoke |
@@ -140,7 +140,7 @@ This is fast (<1 sec); ships in `make ci`.
 ## Existing functions / utilities to reuse
 
 - All three tier APIs from phases 01-03.
-- The full-rescan logic from plan-37 phases 00 + 07.
+- The full-rescan logic from @PLAN37 phases 00 + 07.
 - `lib/store_durable/` package from phases 02 + 03.
 
 ## Test surface
@@ -159,10 +159,10 @@ This is fast (<1 sec); ships in `make ci`.
 ## Acceptance
 
 - `cargo test --test store_durable_smoke` passes.
-- Indexer (plan-37 phase 07/08) demonstrably uses Tier 1
+- Indexer (@PLAN37 phase 07/08) demonstrably uses Tier 1
   in production: a deliberate `kill -9` of the daemon +
   restart triggers the rebuild path.
-- TTT v5 + plan-36 design docs cite plan-38 tiers + the
+- TTT v5 + @PLAN36 design docs cite @PLAN38 tiers + the
   acceptance contract.
 - Cross-link from this plan's README to each consumer.
 - No regression: existing non-durable Store usage (not
@@ -173,7 +173,7 @@ This is fast (<1 sec); ships in `make ci`.
 | Risk | Mitigation |
 |---|---|
 | Indexer's Tier 1 callback (full rescan) is slow on huge trees | Phase 04 stress baseline measures rescan time per repo size; phase 06 closeout documents the floor |
-| TTT v5 / plan-36 not yet shipping their persistence arcs → design-doc updates feel premature | The contracts are still useful: when v5 / plan-36 implementation begins, the API is already there + tested.  No surprise dependency. |
+| TTT v5 / @PLAN36 not yet shipping their persistence arcs → design-doc updates feel premature | The contracts are still useful: when v5 / @PLAN36 implementation begins, the API is already there + tested.  No surprise dependency. |
 | Consumer wires Tier 1 to data that needs Tier 3 | STDLIB.md (phase 06) has a clear "when to pick which tier" table; named modes make the choice visible at the call site |
 
 ## Cross-references

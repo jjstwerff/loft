@@ -22,7 +22,7 @@ bugs accumulate" is.
 | Situation | Outcome |
 |---|---|
 | All phases shipped | **Close** — `finished/` |
-| Some phases shipped, others paused with concrete trigger | **Partial defer** — `deferred/`, Status table grows SHIPPED / DEFERRED rows.  Canonical: plan-28, plan-12. |
+| Some phases shipped, others paused with concrete trigger | **Partial defer** — `deferred/`, Status table grows SHIPPED / DEFERRED rows.  Canonical: @PLAN28, @PLAN12. |
 | No phases shipped, all paused with concrete trigger | **Full defer** — `deferred/` |
 | Some phases shipped, others abandoned without trigger | Apply this checklist for the shipped portion as if closing it; remaining design moves to `DESIGN_DECISIONS.md` |
 | Waiting on a date or "appetite" with no concrete signal | Stay in `future/` (date-bound) or move design to `DESIGN_DECISIONS.md` (appetite-bound).  Don't defer. |
@@ -70,7 +70,7 @@ cross-links.
 
 For partial defers, the plan README also keeps **full design
 content for deferred phases** alongside the closure-record for
-shipped ones — see plan-28's Phase B + Phase C sections as the
+shipped ones — see @PLAN28's Phase B + Phase C sections as the
 canonical shape.
 
 ## Steps 4-6 — Common to close + defer

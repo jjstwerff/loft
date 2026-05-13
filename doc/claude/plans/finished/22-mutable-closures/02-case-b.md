@@ -39,7 +39,7 @@ classification step 2 ("destination_scope ⊆ each
 mutated_capture.defining_scope: case = B").
 
 Case B is the EventLoop / TTT v6 server retrofit case — the main
-novice-cliff driver behind plan-22's promotion to current.  When
+novice-cliff driver behind @PLAN22's promotion to current.  When
 the closure stays within its captures' defining scope (assigned
 to a local, stored in a same-scope struct field, or passed to a
 function that doesn't store it), captures are lowered from
@@ -146,10 +146,10 @@ fn test() {
 
 | Risk | Mitigation |
 |---|---|
-| B/Scalar cell allocation leaks | Phase 02 cells include leak guards in `tests/leak.rs` (mirror plan-15 phase 03/04 pattern): 100-iteration tight loops asserting `state.check_store_leaks()` clean. |
+| B/Scalar cell allocation leaks | Phase 02 cells include leak guards in `tests/leak.rs` (mirror @PLAN15 phase 03/04 pattern): 100-iteration tight loops asserting `state.check_store_leaks()` clean. |
 | Destination-scope check has false-negative (treats B as C) | Phase 03's liveness check then runs and either also confirms safe (passes as C) or rejects (D).  Either way no incorrect behavior — just suboptimal lowering.  Net: cell still green, classifier could be tightened in a follow-up. |
 | Destination-scope check has false-positive (treats C as B) | The closure outlives the cell; reads after escape see freed memory.  CRITICAL.  Mitigation: conservative default — when in doubt, treat as escape (C/D path).  Phase 02 cells include explicit "closure stays in same scope" assertions; any cell where the closure ends up referenced past its scope's exit MUST classify as C or D.  Add a cell that returns the closure (which should classify C) and asserts case is NOT B. |
-| Native codegen for B/Scalar via hidden cell unsupported on `--native` | Same `Parts::ChildRec` cascade plumbing P213 used for D3 closure records in plan-15 phase 03/04 — verified clean.  Add a native-specific cell to confirm. |
+| Native codegen for B/Scalar via hidden cell unsupported on `--native` | Same `Parts::ChildRec` cascade plumbing @P213 used for D3 closure records in @PLAN15 phase 03/04 — verified clean.  Add a native-specific cell to confirm. |
 | Mutating-closure callees with `Unknown` purity over-trigger Case B | Phase 06 audit reduces false-positives at the `default/01_code.loft` source.  Phase 02 ships with the conservative default; over-flagged cells just produce slightly larger closure records but remain correct. |
 
 ## Cross-references
@@ -157,5 +157,5 @@ fn test() {
 - [README § Case B](README.md#case-b--co-scoped-mutating)
 - [DISCUSSION § Snippet 2](DISCUSSION.md) — paper-trace of case B classification.
 - `src/parser/vectors.rs::synthesize_closure_record` — closure synthesis (the lowering hook).
-- `src/database/mod.rs::Parts::ChildRec` — the cascade primitive plan-15 phase 03/04 verified.
-- [plan-23 EVENT_LOOP](../../future/23-event-loop/README.md) — downstream consumer waiting on case B.
+- `src/database/mod.rs::Parts::ChildRec` — the cascade primitive @PLAN15 phase 03/04 verified.
+- [@PLAN23 EVENT_LOOP](../../future/23-event-loop/README.md) — downstream consumer waiting on case B.

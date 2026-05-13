@@ -224,7 +224,7 @@ shared with closing (Steps 4-6 are identical).
 
 Partial defers (some phases shipped, others paused) grow a
 SHIPPED / DEFERRED Status table at the top of the plan README.
-Canonical shapes: plan-28, plan-12.
+Canonical shapes: @PLAN28, @PLAN12.
 
 If remaining phases have no concrete trigger, the design moves to
 [`../DESIGN_DECISIONS.md`](../DESIGN_DECISIONS.md), not
@@ -389,13 +389,13 @@ for the full policy.  Plans-specific notes:
   scope-creep the active fix to "while I'm here, also fix X".  One
   fix per commit; one follow-up per row.
 
-The May 2026 P211 hunt is the canonical example: the original
+The May 2026 @P211 hunt is the canonical example: the original
 P-issue was native `yield text`, but the diagnostic probes
-surfaced P217 (text accumulator), P218 (format-with-param in
-generator body), P219 (vector-for-yield), P220 (`""` in
-`vector<text>`) and P221 (server-side BufReader).  All five were
-filed in the same commit window; none were lost.  The P217
-follow-up hunt then surfaced P222 / P223 (narrower self-concat
+surfaced @P217 (text accumulator), @P218 (format-with-param in
+generator body), @P219 (vector-for-yield), @P220 (`""` in
+`vector<text>`) and @P221 (server-side BufReader).  All five were
+filed in the same commit window; none were lost.  The @P217
+follow-up hunt then surfaced @P222 / @P223 (narrower self-concat
 shapes) — same rule applied.
 
 ### Per-plan status lives in the plan README — not on ROADMAP
@@ -410,7 +410,7 @@ single source of truth.
 Why: per-phase status changes every time a phase ships or is
 deferred.  Mirroring it on ROADMAP doubled the edit cost and
 created a recurring drift surface (manual audit 2026-05-09 caught
-plan-14 phase 08 deferral missing, plan-07 phase 1 status stale).
+@PLAN14 phase 08 deferral missing, @PLAN07 phase 1 status stale).
 ROADMAP's job is "which plans exist + how big + what blocks them";
 the plan README's job is "where it stands today."
 

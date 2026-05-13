@@ -11,7 +11,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 Ship the cheapest tier — `Store::open_durable(path,
 DurabilityMode::IntegrityOnly { on_corruption })` — and prove
-it end-to-end with the indexer (plan-37) as the first
+it end-to-end with the indexer (@PLAN37) as the first
 consumer.
 
 Tier 1 is "trust the OS for in-flight writes; on restart,
@@ -143,7 +143,7 @@ subsequent restarts.
 - `cargo test --test store_durable_tier1` passes.
 - `cargo test` overall (legacy + tier 1) green.
 - Tier 1 consumer integration: indexer phase 08
-  (plan-37) opens its `tags.store` via `IntegrityOnly`;
+  (@PLAN37) opens its `tags.store` via `IntegrityOnly`;
   `on_corruption` is the indexer's full-rescan path.
   Verified: `kill -9` mid-write + restart → detected
   corruption → full rescan → clean state in < 2 sec on

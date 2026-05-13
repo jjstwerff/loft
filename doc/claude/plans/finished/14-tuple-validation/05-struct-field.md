@@ -13,7 +13,7 @@ by Plan-06 phase 4d, which removed the `Type::Tuple` rejection in
 struct field) hits a separate native codegen projection bug — the
 runtime `(u32, DbRef)` fn-ref tuple needs `.0` projection before
 the `as i32` cast for the struct-field-write path, and P196's
-projection patch didn't extend to this nested case.  Filed P251;
+projection patch didn't extend to this nested case.  Filed @P251;
 e4_d3 cell parked behind it.**
 
 ## Goal
@@ -57,12 +57,12 @@ plan closes one phase early.
 > access.
 >
 > **E4 (closure as a tuple-element of a struct field) corollary:**
-> P251 opens a follow-up for the native projection bug surfaced
+> @P251 opens a follow-up for the native projection bug surfaced
 > during this phase — the codegen path that writes a tuple
 > containing a fn-ref into a struct field doesn't project the
 > runtime `(u32, DbRef)` fn-ref tuple's `.0` before the `as i32`
 > cast (P196 only fixed the direct fn-ref-as-struct-field path,
-> not the wrapping-tuple case).  E4_d3 cell parks behind P251.
+> not the wrapping-tuple case).  E4_d3 cell parks behind @P251.
 
 ## Feasibility spike (precedes any larger commit)
 
@@ -193,7 +193,7 @@ The matrix in [00-matrix.md](00-matrix.md) marks every D3 cell as
 ## Out of scope
 
 - Tuple-as-vector-element (E7) and other non-goal element types.
-- Tuple-returning functions (T1.8a) for D3 — covered by plan-06 phase
+- Tuple-returning functions (T1.8a) for D3 — covered by @PLAN06 phase
   9a.
 
 ## Cross-references

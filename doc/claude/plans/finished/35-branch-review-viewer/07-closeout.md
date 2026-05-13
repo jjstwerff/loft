@@ -12,7 +12,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Ship a tagged release of the viewer binary; wire it into the
 project's user-facing docs (DEBUG.md, CLAUDE.md, CHANGELOG);
 prove it works end-to-end by **using it to review the next
-plan** the user picks up.  Move plan-35 to
+plan** the user picks up.  Move @PLAN35 to
 `plans/finished/35-branch-review-viewer/`.
 
 ## What ships
@@ -131,14 +131,14 @@ Plan moved to `plans/finished/35-branch-review-viewer/`.
 
 #### `ROADMAP.md`
 
-Remove plan-35 from the "active plans" / current section;
+Remove @PLAN35 from the "active plans" / current section;
 add a one-line entry to the closed section pointing at
 `plans/finished/35-branch-review-viewer/`.
 
 ### Retrofit — proof of concept
 
 Use the viewer to review the next plan the user picks up
-(plan-07 phase 5 finishing items, or whatever's next).
+(@PLAN07 phase 5 finishing items, or whatever's next).
 Specifically:
 
 1. Open the dashboard.
@@ -154,7 +154,7 @@ This is **dogfooding evidence** that the viewer is useful.
 
 `git mv doc/claude/plans/35-branch-review-viewer
 doc/claude/plans/finished/35-branch-review-viewer`.  Update
-intra-plan link paths (per the plan-22 closeout precedent
+intra-plan link paths (per the @PLAN22 closeout precedent
 2026-05-13: `../X` → `../../future/X` for siblings under
 future/, `../finished/X` → `../X` for siblings under
 finished/).
@@ -167,8 +167,8 @@ finished/).
 | `doc/claude/DEBUG.md` | ADD § "Branch review viewer (`make view`)" |
 | `CLAUDE.md` | ADD `make view` row in § Key commands |
 | `CHANGELOG.md` | ADD user-facing entry |
-| `doc/claude/CHANGELOG_TECHNICAL.md` | ADD plan-35 retrospective |
-| `doc/claude/ROADMAP.md` | REMOVE plan-35 from active; ADD to closed |
+| `doc/claude/CHANGELOG_TECHNICAL.md` | ADD @PLAN35 retrospective |
+| `doc/claude/ROADMAP.md` | REMOVE @PLAN35 from active; ADD to closed |
 | `doc/claude/plans/35-branch-review-viewer/` | `git mv` to `finished/` |
 | `doc/claude/plans/finished/35-branch-review-viewer/*.md` | UPDATE intra-plan link paths |
 

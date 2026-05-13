@@ -1,7 +1,7 @@
 # Plan 10 — Scope-exit gate simplification (deferred)
 
-> **Status: DEFERRED.**  Plan 10 was originally framed as a P203
-> fix — that framing was wrong (P203 turned out to be a template
+> **Status: DEFERRED.**  Plan 10 was originally framed as a @P203
+> fix — that framing was wrong (@P203 turned out to be a template
 > double-substitution bug in `default/01_code.loft:705`, tracked
 > separately in PROBLEMS.md).  The underlying simplification —
 > pulling the multi-condition cleanup gate at `src/scopes.rs:1053`
@@ -40,9 +40,9 @@ suppressed), nothing about the dep-tracker's analysis.
 
 Three reasons P-issue urgency drained out of this plan:
 
-1. **P203 is solved by a different fix** (template double-sub at
+1. **@P203 is solved by a different fix** (template double-sub at
    `default/01_code.loft:705`).  The original framing — that
-   loosening the gate would close P203 — was refuted by the
+   loosening the gate would close @P203 — was refuted by the
    strace-driven phase 00 diagnostic.
 2. **The runtime already handles the harder case.**  OpFreeRef
    early-returns on `store_nr == u16::MAX`.  `Vec<Option<File>>`
@@ -100,13 +100,13 @@ Until one of these fires, the plan sits.
 
 ## What plan 10 already accomplished (phase 00 history)
 
-The first phase 00 attempt (2026-05-02) was scoped as a P203
+The first phase 00 attempt (2026-05-02) was scoped as a @P203
 diagnostic gate.  It ran the strace + instrumentation diagnostics
-that identified P203's actual root cause (template double-
+that identified @P203's actual root cause (template double-
 substitution in `default/01_code.loft`).  That discovery is
-recorded in `PROBLEMS.md` as P203's fix path.  The diagnostic work
+recorded in `PROBLEMS.md` as @P203's fix path.  The diagnostic work
 remains in [00-characterize.md](00-characterize.md) under
-"Historical context — P203 diagnostic" because the trace data is
+"Historical context — @P203 diagnostic" because the trace data is
 useful evidence for whoever picks up the simplification later
 (it confirms the runtime safety + Drop infrastructure is solid).
 
@@ -131,7 +131,7 @@ cargo test --release --test native -- --test-threads=1 2>&1 \
 
 ## Related
 
-- [P203](../../PROBLEMS.md) — closed by template fix in
+- [@P203](../../PROBLEMS.md) — closed by template fix in
   `default/01_code.loft`, NOT by this plan.
 - [Plan 09](../../finished/09-native-runtime-rewrite/README.md) —
   per-Op emitter rewrite (closed 2026-05-02); complementary

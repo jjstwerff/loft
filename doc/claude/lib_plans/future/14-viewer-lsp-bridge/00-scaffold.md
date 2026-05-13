@@ -286,7 +286,7 @@ exotic — all standard Rust ecosystem.
 | `tokio` async runtime adds startup latency the viewer notices | Bridge is a long-lived daemon; startup runs once.  Viewer connects to existing socket → cost amortised. |
 | Loft's blocking I/O calls into the Rust client lib will deadlock with `tokio` | Client lib uses BLOCKING `std::os::unix::net::UnixStream`, not tokio.  Bridge SERVER uses tokio for fan-out across multiple clients; client SIDE is blocking + simple. |
 | Length-prefix framing diverges between Rust and loft (endianness, signed vs unsigned) | Pin a fixed test corpus in `tests/lsp_bridge_echo.rs`: known-byte-sequence in, known-byte-sequence out.  Both Rust + loft sides assert against the same hex bytes. |
-| Bridge binary not on `$PATH` for the viewer to find | `make view` looks at `target/release/loft-lsp-bridge` first, then `~/bin/loft-lsp-bridge` (plan-37 phase 08 install location), then `$PATH`.  Clear error if none found. |
+| Bridge binary not on `$PATH` for the viewer to find | `make view` looks at `target/release/loft-lsp-bridge` first, then `~/bin/loft-lsp-bridge` (@PLAN37 phase 08 install location), then `$PATH`.  Clear error if none found. |
 | Logs leak to `/tmp` filling the disk | Logs roll per-PID; bridge's `Drop` cleans up the log file when the process exits.  Stretch: rotate to `/tmp/loft-lsp-bridge/` and cap retention. |
 
 ## What phase 00 explicitly does NOT ship

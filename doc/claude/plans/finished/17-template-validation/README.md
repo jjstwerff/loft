@@ -21,10 +21,10 @@ pattern lives in [`../../../TESTING.md`](../../../TESTING.md) §
 |---|---|
 | `ad854e4` | 00 — harness wiring (smoke + 4 PASS-pre cells) |
 | `adcc6e6` | 01 — basic body + T-return baseline (6 cells) |
-| `61cbf06` | 02 — tuple-of-T returns + P237/P238 |
-| `80d6b49` | 03 — Printable + vector + P239 |
-| `42f9739` | 04 — multi-bound + user-defined interface + P240 |
-| `4854b2d` | 05 — nested + two-T + P241/P242 |
+| `61cbf06` | 02 — tuple-of-T returns + @P237/P238 |
+| `80d6b49` | 03 — Printable + vector + @P239 |
+| `42f9739` | 04 — multi-bound + user-defined interface + @P240 |
+| `4854b2d` | 05 — nested + two-T + @P241/P242 |
 
 ### Bug-yield outcome — 6 P-issues across 6 phases
 
@@ -34,21 +34,21 @@ values without substituting T's concrete type at monomorphisation.
 
 | P-issue | Surface | Status |
 |---|---|---|
-| P237 | Bound-supplied operator INSIDE a tuple constructor element | Closed 2026-05-09 (`Value::Tuple` recursion arm in `substitute_type_in_value`) |
-| P238 | Uniform `(T, T)` return with `T = text` (native only) | Closed 2026-05-09 (`tuple_text_to_string` flag handling) |
-| P239 | `for x in v` over `vector<T>` (consume side) | Open — interp SIGSEGV + native E0610 |
-| P240 | 2+ bound-operator locals + tuple return (cross-mode divergence; backend depends on body side-effects) | Open |
-| P241 | Building / pushing into `vector<T>` (construct side) | Open |
-| P242 | Format-string interpolation of T variable | Closed 2026-05-09 (`try_bound_to_text_call` helper in `parse_object`) |
+| @P237 | Bound-supplied operator INSIDE a tuple constructor element | Closed 2026-05-09 (`Value::Tuple` recursion arm in `substitute_type_in_value`) |
+| @P238 | Uniform `(T, T)` return with `T = text` (native only) | Closed 2026-05-09 (`tuple_text_to_string` flag handling) |
+| @P239 | `for x in v` over `vector<T>` (consume side) | Open — interp SIGSEGV + native E0610 |
+| @P240 | 2+ bound-operator locals + tuple return (cross-mode divergence; backend depends on body side-effects) | Open |
+| @P241 | Building / pushing into `vector<T>` (construct side) | Open |
+| @P242 | Format-string interpolation of T variable | Closed 2026-05-09 (`try_bound_to_text_call` helper in `parse_object`) |
 
-P239 / P240 / P241 likely close via a unified fix in the
+@P239 / @P240 / @P241 likely close via a unified fix in the
 second-pass generic body codegen that substitutes T into all
 DbRef-shaped ops.
 
-### Earlier closures (2026-05-04, before plan-17 phases ran)
+### Earlier closures (2026-05-04, before @PLAN17 phases ran)
 
 The pre-flight survey predicted "Most B1×U1 cells fail".  Two fixes
-that landed BEFORE plan-17 phases ran inverted that prediction:
+that landed BEFORE @PLAN17 phases ran inverted that prediction:
 
 - **(C) Built-in `to_text` impls.**  Six impls added to the end of
   `default/01_code.loft` for `integer` / `float` / `single` /
@@ -88,8 +88,8 @@ byte-identical stdout** asserted by the `cross_mode!` harness.
   ignored cells, PASS / FIX / CLOSED triage)
 - [`../../INTERFACES.md`](../../INTERFACES.md) — interface design
   + I1–I9 status
-- [`../../PROBLEMS.md`](../../PROBLEMS.md) — P237 / P238 / P239 /
-  P240 / P241 / P242 + P208 (the earlier closure)
+- [`../../PROBLEMS.md`](../../PROBLEMS.md) — @P237 / @P238 / @P239 /
+  @P240 / @P241 / @P242 + @P208 (the earlier closure)
 - [`../../USER_FACING.md`](../../USER_FACING.md) — implicit
   generic-tuple type inference workaround row
 - [`../../DESIGN_DECISIONS.md`](../../DESIGN_DECISIONS.md) —

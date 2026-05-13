@@ -18,8 +18,8 @@ checks, field capture, `match` arms) round-trips every meaningful
 **variant payload type** through every meaningful **dispatch
 context**, with **interp/native byte-identical stdout**.
 
-This is loft's **polymorphic dispatch core**.  P204 (tail-call
-return through a struct-enum return type) and P205 (text-returning
+This is loft's **polymorphic dispatch core**.  @P204 (tail-call
+return through a struct-enum return type) and @P205 (text-returning
 generic dispatch) both lived here.  The matrix pins the surface
 that already absorbed two recent native-codegen P-issues.
 
@@ -49,10 +49,10 @@ Two axes.
 |---|---|---|
 | V0 | **No fields** — `enum E { A, B, C }` | Pure tag enum |
 | V1 | **Single scalar field** — `Circle { radius: float }` | Pre-flight ✅ |
-| V2 | **Single text field** — `Tag { name: text }` | Active risk: text element lifetime through dispatch (P205 territory) |
+| V2 | **Single text field** — `Tag { name: text }` | Active risk: text element lifetime through dispatch (@P205 territory) |
 | V3 | **Single Reference field** — `Wrapper { ref: Reference<S> }` | DbRef element |
 | V4 | **Multi-field mixed** — `Rect { w: float, h: float }`, `Mixed { n: integer, s: text }` | Pre-flight ✅ for scalar; text-mixed less tested |
-| V5 | **Tuple field** — `Pair { both: (integer, integer) }` | Cross-cuts plan-14 phase 05 (D3 struct field of tuple) |
+| V5 | **Tuple field** — `Pair { both: (integer, integer) }` | Cross-cuts @PLAN14 phase 05 (D3 struct field of tuple) |
 | V6 | **Nested struct-enum** — variant payload contains another struct enum | Stretch |
 
 ### Axis 2 — dispatch context
@@ -65,7 +65,7 @@ Two axes.
 | C4 | **Variant-typed method** (`fn area(self: Circle)`) | Pre-flight ✅ |
 | C5 | **Parent-enum-typed method** (`fn classify(self: Shape)`) | Pre-flight ❌ when called on a variant value via method form |
 | C6 | **Store as `Shape` then later read via match** | Polymorphic round-trip |
-| C7 | **Return as parent-enum type** | Polymorphic return; cross-cuts plan-14 phase 04 (struct-ref tuple element) |
+| C7 | **Return as parent-enum type** | Polymorphic return; cross-cuts @PLAN14 phase 04 (struct-ref tuple element) |
 
 ## Phase layout
 
@@ -73,9 +73,9 @@ Two axes.
 |---|---|---|---|
 | [00 — matrix freeze + harness wiring](00-matrix.md) | (table) | (table) | Frozen matrix; `tests/struct_enum_matrix.rs` binary; smoke test.  No production change. |
 | 01 — V0/V1 baseline | V0, V1 | C1–C7 | Most should pass.  Establishes the harness shape against the simplest variants. |
-| 02 — text payload (V2) | V2 | C1–C7 | Active risk: text lifetime through variant dispatch.  Cross-cuts P205 territory. |
+| 02 — text payload (V2) | V2 | C1–C7 | Active risk: text lifetime through variant dispatch.  Cross-cuts @P205 territory. |
 | 03 — fix C5 method resolution | V0–V4 | C5 | **Closed 2026-05-04.** Parser-side fix in `src/parser/fields.rs::field` adds a parent-enum method lookup (`t_<n>Parent_<field>`) when the receiver is `Type::Reference(child_d, …)` and `child_d`'s parent is an enum.  Guarded against the auto-generated polymorphic dispatcher (only fires when no sibling variant has a per-variant impl) so the "Unknown field Variant.method" error remains for unimplemented-variant calls.  Runs on both passes for first-pass type propagation.  Pinned by `tests/issues.rs::plan19_method_on_enum_variant_via_dot`. |
-| 04 — multi-field + tuple payloads | V4, V5 | C1–C7 | Cross-cuts plan-14 phase 05; tuple-payload variants are the natural extension once tuple-in-struct-field is settled. |
+| 04 — multi-field + tuple payloads | V4, V5 | C1–C7 | Cross-cuts @PLAN14 phase 05; tuple-payload variants are the natural extension once tuple-in-struct-field is settled. |
 | 05 — Reference + nested | V3, V6 | C1–C7 | DbRef payload is straightforward; nested struct-enum is the stretch. |
 | 06 — freeze + doc | — | — | Update LOFT.md § Struct enums where the matrix surfaces under-documented behaviour. |
 
@@ -99,13 +99,13 @@ matrix becomes documentation, not execution).
 - **JSON round-trip of struct-enums** — covered by separate JSON
   tests; this matrix is dispatch-focused.
 - **Polymorphic generic interaction** (`<T: Shape-like>`) — covered
-  by plan-17.
+  by @PLAN17.
 
 ## Cross-references
 
 - [LOFT.md § Enums](../../LOFT.md) — language reference.
 - `src/parser/control.rs` — match dispatch.
-- [plan-14 phase 04](../../finished/14-tuple-validation/04-references.md) —
+- [@PLAN14 phase 04](../../finished/14-tuple-validation/04-references.md) —
   Reference tuples cross-reference.
-- [plan-17](../../finished/17-template-validation/README.md) — generic
+- [@PLAN17](../../finished/17-template-validation/README.md) — generic
   dispatch over Shape-like interfaces (closed 2026-05-09).

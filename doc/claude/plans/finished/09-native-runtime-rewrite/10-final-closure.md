@@ -6,40 +6,40 @@
 |---|---|
 | 10.1 — phase 05a introspection | DONE 2026-05-02 |
 | 10.2 — CHANGELOG entries for 06 + 07 | DONE 2026-05-02 |
-| 10.3 — P200 read-side fix | DONE 2026-05-02 — `IntCompareEmitter` shipped; native 91/93 |
+| 10.3 — @P200 read-side fix | DONE 2026-05-02 — `IntCompareEmitter` shipped; native 91/93 |
 | 10.4 — phase 08 redundancy decision | DONE 2026-05-02 — phase 08 marked SUPERSEDED |
 | 10.5 — pin native baseline floor | DONE 2026-05-02 — `native_suite_floor_holds` polished (uses cargo `test result: 5 passed; 0 failed` line + per-test FAILED check); passes with `--ignored` |
-| 10.6 — plan-09 retrospective (08a equivalent) | DONE 2026-05-02 — `08a-introspect.md` Findings populated; covers 9 phases shipped, 5 P-issues closed (4 in plan-09 + P204 in plan-11), decision: pattern broadly successful |
-| 10.7 — directory move-to-finished | OPEN — happens at PR-open time alongside plan-11's same step |
+| 10.6 — @PLAN09 retrospective (08a equivalent) | DONE 2026-05-02 — `08a-introspect.md` Findings populated; covers 9 phases shipped, 5 P-issues closed (4 in @PLAN09 + @P204 in @PLAN11), decision: pattern broadly successful |
+| 10.7 — directory move-to-finished | OPEN — happens at PR-open time alongside @PLAN11's same step |
 
 **Pace gate (2026-05-02):** the user noted implementation
 velocity was getting ahead of the planning discipline.  Steps
 10.5-10.6 are deliberately design-only for now; they implement
-when the plan-11 outcome (P204 fix) lets the retrospective
+when the @PLAN11 outcome (@P204 fix) lets the retrospective
 cover the full arc, and when the baseline assertion can be
-properly tuned against a stable post-plan-11 test count.
+properly tuned against a stable post-@PLAN11 test count.
 
-**Closes:** **P200** (last plan-09-scoped P-issue) + finalises
-plan-09 administratively.
+**Closes:** **@P200** (last plan-09-scoped P-issue) + finalises
+@PLAN09 administratively.
 
 **Consolidates:** phases 05, 05a, 08, 08a — these phases were
-sequenced before plan-09's tail collapsed into a single coherent
+sequenced before @PLAN09's tail collapsed into a single coherent
 fix.  Phase 10 absorbs them rather than running each as separate
 phase boundaries (which would add ceremony without adding
 discipline now that the surface is small).
 
 ## Why a consolidated tail phase
 
-After phases 06 + 07 closed P202 + P205, plan-09's remaining
+After phases 06 + 07 closed @P202 + @P205, @PLAN09's remaining
 work is:
 
-- **One bug fix**: P200 (read-side comparison emission, per
+- **One bug fix**: @P200 (read-side comparison emission, per
   phase 05's rewrite).  Phase 08's "read closure" likely
   collapses into phase 05's fix or becomes redundant.
 - **One introspection**: 05a's lessons-from-bug-fix-phases
   retrospective.
 - **Administrative closure**: CHANGELOG entries for 06+07,
-  plan-09 README final pass, 08a-style retrospective, native
+  @PLAN09 README final pass, 08a-style retrospective, native
   baseline floor pinning.
 
 Splitting these across four phases (05 + 05a + 08 + 08a) means
@@ -50,9 +50,9 @@ each ship a coherent commit.
 
 ## Out of scope (handled separately)
 
-**P204** is NOT closed by phase 10 or plan-09.  P204 has its own
+**@P204** is NOT closed by phase 10 or @PLAN09.  @P204 has its own
 plan at [`plans/11-p204-ref-propagation/`](../11-p204-ref-propagation/).
-P204's two failing native tests (`85_yield_resume`,
+@P204's two failing native tests (`85_yield_resume`,
 `87_store_leaks`) BLOCK PR-readiness — they will not be
 @EXPECT_FAIL'd to "make the count match" (see
 `feedback_no_expect_fail_on_pr_bugs.md`).  Plan-11 must complete
@@ -60,7 +60,7 @@ before the merge candidate becomes PR-eligible.
 
 ## Dependencies
 
-- All earlier plan-09 phases complete: 00, 00a, 01, 03, 04, 06,
+- All earlier @PLAN09 phases complete: 00, 00a, 01, 03, 04, 06,
   07, 09 — DONE as of 2026-05-02.
 - Phase 02 (param adapter) — demoted by 00a; not a blocker.
 - Phase 05's rewritten plan in `05-file.md` § "Detailed steps
@@ -100,7 +100,7 @@ with phases 06 + 07 as the subject):
 
 **Time budget**: 1 day max.  Pure doc, low risk.
 
-**Commit**: `plan-09 phase 05a: introspection — bug-fix phase
+**Commit**: `@PLAN09 phase 05a: introspection — bug-fix phase
 patterns validated by 06 + 07`.
 
 **Validation**: review the populated Findings; confirm decision
@@ -109,7 +109,7 @@ patterns validated by 06 + 07`.
 ### Step 10.2 — CHANGELOG_TECHNICAL entries for 06 + 07
 
 **Action**: `doc/claude/CHANGELOG_TECHNICAL.md` is missing
-entries for plan-09 phase 06 (P202 close) and phase 07 (P205
+entries for @PLAN09 phase 06 (@P202 close) and phase 07 (@P205
 close).  Add them under `[Unreleased]` following the existing
 phase 09 + 00a entries' shape.  Each entry:
 
@@ -122,7 +122,7 @@ phase 09 + 00a entries' shape.  Each entry:
 
 **Validation**: review.
 
-### Step 10.3 — Phase 05 implementation (P200 read-side fix)
+### Step 10.3 — Phase 05 implementation (@P200 read-side fix)
 
 **Action**: implement phase 05's rewritten plan in `05-file.md`
 § "Detailed steps with validation" steps 5.1-5.5 (renumbered
@@ -206,8 +206,8 @@ scripts/p09_fast_gate.sh   # byte-identical or refresh w/ intentional change
 
 #### 10.3.e — PROBLEMS.md + plan README update
 
-Mark P200 CLOSED in PROBLEMS.md with the actual fix-path narrative.
-Update plan-09 README phase 05 status to DONE.
+Mark @P200 CLOSED in PROBLEMS.md with the actual fix-path narrative.
+Update @PLAN09 README phase 05 status to DONE.
 
 ### Step 10.4 — Phase 08 redundancy decision
 
@@ -237,7 +237,7 @@ that doesn't appear (only `native_scripts` emits a `native result`
 summary; `native_dir` doesn't).  Step stays IN PROGRESS until
 the assertions match how each test reports its outcome.
 
-**Goal**: add a structural test that locks in the post-plan-09
+**Goal**: add a structural test that locks in the post-@PLAN09
 native suite count.  Without this, future commits can silently
 shrink the count back below today's floor.
 
@@ -271,13 +271,13 @@ assert!(script_floor_ok,
 
 **Floor today (after step 10.3)**:
 - `native_dir`: 30/30 → test reports `... ok`
-- `native_scripts`: 91/93 (2 P204 sub-failures remaining)
+- `native_scripts`: 91/93 (2 @P204 sub-failures remaining)
 - `native_binary_script`: ok (was FAILED pre-step-10.3)
 - `native_tuple_return_script`: ok
 - `native_tuple_script`: ok
 
-**Floor after plan-11 closes P204**: 93/93 for `native_scripts`.
-Update the assertion accordingly when plan-11 lands.
+**Floor after @PLAN11 closes @P204**: 93/93 for `native_scripts`.
+Update the assertion accordingly when @PLAN11 lands.
 
 **Why `#[ignore]`**: the test spawns the full native suite
 (~30s).  Too slow for default `cargo test` runs; opt-in via
@@ -298,13 +298,13 @@ that's a separate decision.
 ### Step 10.6 — Plan-09 retrospective (08a equivalent)
 
 **Status (2026-05-02):** OPEN — design only.  Populate after
-plan-11 closes P204 so the retrospective covers the full
-narrative (plan-09 was always sequenced with P204 deferred to
+@PLAN11 closes @P204 so the retrospective covers the full
+narrative (@PLAN09 was always sequenced with @P204 deferred to
 a sibling plan; the retrospective should reflect what actually
-happened including how P204 routing decisions played out).
+happened including how @P204 routing decisions played out).
 
 **Action**: populate `08a-introspect.md` Findings section, plus
-add a closure summary at the top of plan-09 README.
+add a closure summary at the top of @PLAN09 README.
 
 **Outline (to populate at retrospective time)**:
 
@@ -318,9 +318,9 @@ add a closure summary at the top of plan-09 README.
   - 03 (parallel-for emitter) — 44693cc + da46db1
   - 04 (key-keyed ops) — 19a7a86
   - 09 (parallel runtime consolidation) — 22070e2
-  - 06 (P202 close) — 8cf0676
-  - 07 (P205 close) — 6151231
-  - 10 (final closure incl P200 close) — d8a3c73 + tail
+  - 06 (@P202 close) — 8cf0676
+  - 07 (@P205 close) — 6151231
+  - 10 (final closure incl @P200 close) — d8a3c73 + tail
 - Phases demoted/superseded:
   - 02 (param adapter) — DEMOTED by 00a; never implemented
   - 02a — superseded (02 demoted)
@@ -335,13 +335,13 @@ discipline held — every consolidation was documented as it
 happened, not retroactively rationalised.
 
 #### P-issue closures
-- P203 — closed by phase 00 step 0.7b (template let-bind-on-repeat)
-- P202 — closed by phase 06 (`n_parallel_queue*` runtime + emitter)
-- P205 — closed by phase 07 (scratch routing for bounded-generic
+- @P203 — closed by phase 00 step 0.7b (template let-bind-on-repeat)
+- @P202 — closed by phase 06 (`n_parallel_queue*` runtime + emitter)
+- @P205 — closed by phase 07 (scratch routing for bounded-generic
   text returns)
-- P200 — closed by phase 10 step 10.3 (`IntCompareEmitter` widens
+- @P200 — closed by phase 10 step 10.3 (`IntCompareEmitter` widens
   comparison operands to i64)
-- P204 — out of plan-09 scope; closed separately via plan-11
+- @P204 — out of @PLAN09 scope; closed separately via @PLAN11
 
 #### Code delta
 Compute at retrospective time:
@@ -356,7 +356,7 @@ Suggested computation:
 git diff --stat $(git merge-base HEAD origin/main) HEAD -- src/ tests/
 ```
 
-#### Memory entries saved during plan-09
+#### Memory entries saved during @PLAN09
 - `feedback_forwarding_first_recipe.md` — pre-flight pattern.
 - `feedback_phase_doc_trait_drafts.md` — trait sketches are
   drafts, not specs.
@@ -409,11 +409,11 @@ future codegen / parser plans.
 - Plan-09 phases all DONE in README ✓
 - Plan-09's 4 P-issues all CLOSED in PROBLEMS.md ✓
 - Native suite at recorded floor ✓ (after step 10.5 lands)
-- Plan-11 closes P204 (separate gate; PR opens after both)
+- Plan-11 closes @P204 (separate gate; PR opens after both)
 
-**Validation**: review.  This commit closes plan-09
+**Validation**: review.  This commit closes @PLAN09
 administratively but does NOT open the PR — that happens after
-plan-11 closes P204 + PR-readiness criteria all met (per the
+@PLAN11 closes @P204 + PR-readiness criteria all met (per the
 zero-regression rule).
 
 ### Step 10.7 — Plan-09 directory move-to-finished
@@ -423,8 +423,8 @@ zero-regression rule).
 open follow-ups), move its entire subdirectory into `finished/`"),
 move `plans/09-native-runtime-rewrite/` to `plans/finished/`.
 
-This step happens AFTER plan-11 closes P204 and the PR opens.
-NOT during phase 10 itself — phase 10 only marks plan-09's
+This step happens AFTER @PLAN11 closes @P204 and the PR opens.
+NOT during phase 10 itself — phase 10 only marks @PLAN09's
 phases DONE; the directory move is the "ship it" gesture.
 
 **Note**: this step doesn't run in phase 10 — it runs as part
@@ -457,10 +457,10 @@ cargo test --release --test codegen_emitter::native_suite_floor_holds
 |---|---|
 | 10.1 | 05a Findings populated; status DONE.  No code. |
 | 10.2 | CHANGELOG entries for 06 + 07 added.  No code. |
-| 10.3 | P200 regression test added; native floor moves to 91/93 (or higher if 08 absorbed).  Possible baseline refresh for 20-binary corpus entry. |
+| 10.3 | @P200 regression test added; native floor moves to 91/93 (or higher if 08 absorbed).  Possible baseline refresh for 20-binary corpus entry. |
 | 10.4 | 08-binary.md status decided.  May add a Notes section. |
 | 10.5 | New `native_suite_floor_holds` structural test in `tests/codegen_emitter.rs`. |
-| 10.6 | 08a Findings populated; plan-09 README phase status final pass. |
+| 10.6 | 08a Findings populated; @PLAN09 README phase status final pass. |
 | 10.7 | Plan-09 directory moves at PR-open time, not during phase 10. |
 
 ## Commit shape
@@ -469,10 +469,10 @@ cargo test --release --test codegen_emitter::native_suite_floor_holds
 
 1. Step 10.1 — 05a introspection (1 commit).
 2. Step 10.2 — CHANGELOG entries (1 commit).
-3. Step 10.3 — P200 fix (3-4 commits: regression test, fix, narrative, baseline refresh).
+3. Step 10.3 — @P200 fix (3-4 commits: regression test, fix, narrative, baseline refresh).
 4. Step 10.4 — phase 08 decision (1 commit, doc only).
 5. Step 10.5 — baseline pin (1 commit).
-6. Step 10.6 — retrospective + plan-09 closure (1 commit).
+6. Step 10.6 — retrospective + @PLAN09 closure (1 commit).
 
 ## Problems encountered
 
@@ -521,7 +521,7 @@ for u8/u16/i8/i16 and a no-op for i64.
 - `tests/scripts/20-binary.loft` compiles + runs under native
   (was: rustc E0308).
 - `native_binary_script` test flips from FAILED → ok.
-- `native_scripts` count: 90/93 → 91/93 (all 5 P200 sub-failures
+- `native_scripts` count: 90/93 → 91/93 (all 5 @P200 sub-failures
   retired).
 - threading 43/43, threading_chars 35/35, issues 540/540 unchanged.
 - Two regression tests in `tests/codegen_emitter.rs`:
@@ -538,12 +538,12 @@ _(append per non-obvious decision)_
 
 ### Why "phase 10" not "phase 11"?
 
-Plan-09's phases are numbered within plan-09's own sequence
+Plan-09's phases are numbered within @PLAN09's own sequence
 (00-09).  Phase 10 is the next sequence number.  `plan-11`
 (at `plans/11-p204-ref-propagation/`) is a SEPARATE PLAN
-covering P204; the "11" is its plan-level identifier in
-`plans/`, not a phase within plan-09.
+covering @P204; the "11" is its plan-level identifier in
+`plans/`, not a phase within @PLAN09.
 
-Plan-09 phase 10 + plan-11 are independent: plan-09 closes
-its own P-issues; plan-11 closes P204.  Both must complete
+Plan-09 phase 10 + @PLAN11 are independent: @PLAN09 closes
+its own P-issues; @PLAN11 closes @P204.  Both must complete
 before PR.

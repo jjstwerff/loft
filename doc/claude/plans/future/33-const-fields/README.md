@@ -36,7 +36,7 @@ the constructor's `Insert` IR.
 
 ## Why now
 
-After [P246](../../../PROBLEMS.md) closed (file-scope `const`
+After [@P246](../../../PROBLEMS.md) closed (file-scope `const`
 accepted) and the UPPER_CASE-non-const warning landed, loft's
 immutability story is uniform at every scope **except** struct
 fields.  Locals get `const x = 5;`; parameters get
@@ -154,7 +154,7 @@ convention.  No new warning here.
 **Total effort:** M (one focused session; no new opcodes, no
 schema changes, no runtime code touched).
 
-**Dependencies:** none.  Builds on P246's `const` story.
+**Dependencies:** none.  Builds on @P246's `const` story.
 
 ## Open questions (not blocking)
 
@@ -226,7 +226,7 @@ struct Bad { const v: integer virtual($.x * 2), x: integer }
 ## See also
 
 - [INCONSISTENCIES.md § 33](../../../INCONSISTENCIES.md) — gap motivation
-- [PROBLEMS.md P246](../../../PROBLEMS.md) — file-scope `const` (the P246 closure that motivates the symmetric rule)
+- [PROBLEMS.md @P246](../../../PROBLEMS.md) — file-scope `const` (the @P246 closure that motivates the symmetric rule)
 - [LOFT.md § Field modifiers](../../../LOFT.md) — current modifier list (to be extended)
 - `.claude/skills/loft-write/SKILL.md § Field modifiers` — user-facing reference (to be extended)
 - [lib/world/src/world.loft](../../../../../lib/world/src/world.loft) — first real consumer (Cell c_color/c_height/c_age)

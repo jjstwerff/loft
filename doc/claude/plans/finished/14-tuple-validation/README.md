@@ -7,13 +7,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status: phases 00 + 01 + 02 + 03 + 04 + 05 + 07 shipped.
 Phase 02 — full matrix wiring done 2026-05-11; 5/5 e3 cells
-green.  P212 panic fix shipped 2026-05-04 (recursive
+green.  @P212 panic fix shipped 2026-05-04 (recursive
 `emit_tuple_put_ops`).  Two more bugs filed + closed during
-phase 02: P247 (nested-tuple text move in format strings) and
-P248 (element-of-element assignment).  Phase 03 — full matrix
+phase 02: @P247 (nested-tuple text move in format strings) and
+@P248 (element-of-element assignment).  Phase 03 — full matrix
 wiring done 2026-05-11; 5/5 e4 cells green (e4_d1_closure_local
 + closure_call + closure_swap + capture_survives + d2_closure_arg).
-P249 closed: 20-byte fn-ref layout extended into all six tuple
+@P249 closed: 20-byte fn-ref layout extended into all six tuple
 codegen sites (push, pop, var-load, var-write, recursive
 push/pop helpers) + element_align/size in src/data.rs raised
 from 4/4 to 8/20 + `__fn_ref_tmp` postfix-call temp marked
@@ -26,7 +26,7 @@ single-iteration cells green on both backends (struct_ref_local
 Decision: MOVE semantics — already implemented; phase 04 locks
 the canonical shapes as regression guards and rejects the
 "copy + null" alternative.  Loop-iteration aliasing bug filed
-as P250 (stale FIRST-arg DbRef after `for { (q1, q2) =
+as @P250 (stale FIRST-arg DbRef after `for { (q1, q2) =
 make_pair(pa, pb); }` re-enters scope) — separate dep-tracking
 fix, parked.  Phase 05 — D3 cells written 2026-05-11; 6/7 D3
 cells green (E1, E1 update, E1n, E2 with text element update,
@@ -34,7 +34,7 @@ E3 nested, E5 struct-ref).  Decision: LIFT — already shipped
 by Plan-06 phase 4d (parser accepts tuple struct fields,
 storage routes through `__tuple<…>` synthetic struct positions).
 E4_d3 (closure-element tuple AS a struct field) blocked on
-P251 (native projection bug for fn-ref-tuple-in-struct-field
+@P251 (native projection bug for fn-ref-tuple-in-struct-field
 write path; P196's projection fix didn't extend to the wrapping-
 tuple case) — cell parked.  Full tuple_matrix suite: 39/39
 green on both backends.  Phase 06 untouched; phase 08 still
@@ -71,7 +71,7 @@ consumer that pushes tuples through the worker boundary and the test
 matrix is too thin to catch silent breakage.
 
 A focused validation pass also makes the next dependent work cheap:
-plan-06 phase 9 inherits a known-good baseline; T1.8a (tuple return
+@PLAN06 phase 9 inherits a known-good baseline; T1.8a (tuple return
 convention) lands on top of a regression net rather than blind; the
 "why not in struct fields" question gets answered once and recorded in
 DESIGN_DECISIONS.md instead of resurfacing every quarter.
@@ -125,9 +125,9 @@ README is up to date.
 | [04 — struct references](04-references.md) | E5 (= E6) | D1, D2 | Closes T1.8c (`tuple_struct_refs` un-ignores).  Decides move-vs-copy semantics, records in TUPLES.md, ships the fix.  Calls out that "struct value" (E6) is a synonym for E5 in current loft and stays a synonym; no new by-value variant introduced. |
 | [05 — D3 decision: tuples in struct fields](05-struct-field.md) | (all element rows) | D3 | Either lift T1.11a (parser allows tuple as struct field, codegen lays it out as inline payload, scope-exit emits per-element cleanup) **or** record the closed-by-decision rationale in DESIGN_DECISIONS.md and keep the parser error.  The decision is made in this phase, not deferred.  If the lift path is chosen, every E1–E5 row gets a D3 cell test in a follow-up sub-phase 05b. |
 | [06 — matrix freeze + doc](06-freeze.md) | — | — | Update TUPLES.md "known limitations" + "non-goals" tables to reflect the matrix; update PLANNING.md T1 entries; cross-reference closes T1.8c (and possibly T1.11a) in CHANGELOG_TECHNICAL.md. |
-| [07 — P234 runtime: lifetime-bearing tuple returns](07-p234-runtime.md) | E2, E3, E4, E5 | function-return | `fn make() -> (Point, integer)` returns correctly under `--native` (today: `r.1=0`, `r.0.x=null`).  Unified gate: any tuple whose elements have lifetime concerns (Text, Reference, Vector, Enum-struct, keyed collections, or nested tuples containing those) routes through the existing `Reference(__tuple<…>)` synthetic struct.  Pure-value tuples (`(int,int)` etc.) keep the Rust ABI.  Supersedes T1.8a's text-tuple special-case machinery for the return path.  Lexer half (P234) shipped 2026-05-07; runtime half DONE 2026-05-08 (commit `d92d5d3`). |
-| [08 — P234 runtime: LOCAL tuple-with-lifetime-concern variables](08-p234-runtime-locals.md) | E2, E3, E4, E5 | D1 (local var) | **Deferred 2026-05-08** after first-cut implementation hit friction with P189b's vector-of-tuple index access.  The rewrite needs P189b's index access to also return `Reference(__tuple<…>)` at the IR level — broader change than the original Phase 08 scope.  Phase 08 is a refactor for uniformity (NOT a bug fix); juice not worth the squeeze right now.  See the phase doc for what was tried and where the leverage point lives for whoever picks this up later. |
-| 09 — A7.1 par tuple wide-return runtime | E1 | par worker return | **DONE 2026-05-08** by closing P236 (work-ref unification across If branches in `parser/control.rs::unify_if_branches_work_refs` + scopes.rs `returned_var(If)` recursion + Return-with-ret-var emission), then re-applying the size-based gate widen + recursive `rewrite_tail_tuple_to_synthetic_struct` for If/Block/Insert tails + destructure-path Reference(__tuple<…>) arm.  All 5 `par_tuple_return_*` canaries un-ignored and PASSING.  The synthetic-struct rewrite uses ONE shared work-ref via `rewrite_tail_tuple_with_work_ref`, mirroring the unification pattern P236 uses for struct returns. |
+| [07 — @P234 runtime: lifetime-bearing tuple returns](07-p234-runtime.md) | E2, E3, E4, E5 | function-return | `fn make() -> (Point, integer)` returns correctly under `--native` (today: `r.1=0`, `r.0.x=null`).  Unified gate: any tuple whose elements have lifetime concerns (Text, Reference, Vector, Enum-struct, keyed collections, or nested tuples containing those) routes through the existing `Reference(__tuple<…>)` synthetic struct.  Pure-value tuples (`(int,int)` etc.) keep the Rust ABI.  Supersedes T1.8a's text-tuple special-case machinery for the return path.  Lexer half (@P234) shipped 2026-05-07; runtime half DONE 2026-05-08 (commit `d92d5d3`). |
+| [08 — @P234 runtime: LOCAL tuple-with-lifetime-concern variables](08-p234-runtime-locals.md) | E2, E3, E4, E5 | D1 (local var) | **Deferred 2026-05-08** after first-cut implementation hit friction with P189b's vector-of-tuple index access.  The rewrite needs P189b's index access to also return `Reference(__tuple<…>)` at the IR level — broader change than the original Phase 08 scope.  Phase 08 is a refactor for uniformity (NOT a bug fix); juice not worth the squeeze right now.  See the phase doc for what was tried and where the leverage point lives for whoever picks this up later. |
+| 09 — A7.1 par tuple wide-return runtime | E1 | par worker return | **DONE 2026-05-08** by closing @P236 (work-ref unification across If branches in `parser/control.rs::unify_if_branches_work_refs` + scopes.rs `returned_var(If)` recursion + Return-with-ret-var emission), then re-applying the size-based gate widen + recursive `rewrite_tail_tuple_to_synthetic_struct` for If/Block/Insert tails + destructure-path Reference(__tuple<…>) arm.  All 5 `par_tuple_return_*` canaries un-ignored and PASSING.  The synthetic-struct rewrite uses ONE shared work-ref via `rewrite_tail_tuple_with_work_ref`, mirroring the unification pattern @P236 uses for struct returns. |
 
 ## Acceptance for the whole plan
 
@@ -151,7 +151,7 @@ README is up to date.
 ## Out of scope (this plan)
 
 - E7 (vector / collection elements in tuples).  Tuples-of-collections
-  is a real shape but no current consumer needs it; if plan-06 phase 9
+  is a real shape but no current consumer needs it; if @PLAN06 phase 9
   surfaces one, file a follow-up under T1.x.
 - Variadic tuples / generic tuple arities.  Tuples remain
   monomorphised at compile time.
@@ -167,7 +167,7 @@ README is up to date.
 
 | Risk | Mitigation |
 |---|---|
-| T1.8a (tuple return convention) is a prerequisite for several D2 cells but ships out of plan-06 phase 9a.  If 9a slips, this plan's D2 column has gaps. | Phase 01 D2 tests that need T1.8a are explicitly marked with `// requires T1.8a` and `#[ignore = "T1.8a"]`; the rest of the column ships independently.  When 9a lands, the ignore tag is removed in a one-line follow-up commit. |
+| T1.8a (tuple return convention) is a prerequisite for several D2 cells but ships out of @PLAN06 phase 9a.  If 9a slips, this plan's D2 column has gaps. | Phase 01 D2 tests that need T1.8a are explicitly marked with `// requires T1.8a` and `#[ignore = "T1.8a"]`; the rest of the column ships independently.  When 9a lands, the ignore tag is removed in a one-line follow-up commit. |
 | Closing T1.8c (struct-ref tuple elements) requires committing to either move or copy semantics.  Either choice has user-visible behaviour. | Phase 04 makes the decision in writing (TUPLES.md) before any test changes.  Move semantics is the working hypothesis (matches RHS-passing today); reviewer sign-off recorded in the phase plan's "Decision" section. |
 | Lifting T1.11a (D3) introduces a new layout path through `definitions.rs::parse_field` and the struct-record writer; risk of touching a lot of unrelated code. | Phase 05 starts with a feasibility spike (parser change + 1 test); only after the spike compiles cleanly does the implementation phase open.  If the spike shows the change is invasive, the phase pivots to the CLOSED path with a DESIGN_DECISIONS.md entry. |
 | Native and WASM modes diverge from interp on a specific cell (often format-string lifetime issues with text-element tuples). | Each cell test runs all three modes.  When a divergence appears, the test is added to PROBLEMS.md as a P-issue with mode tag before the phase ships; the matrix records "PASS (interp), FIX (native)". |

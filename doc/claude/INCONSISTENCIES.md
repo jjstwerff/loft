@@ -196,7 +196,7 @@ both semantics.
 
 **Severity: Low**
 
-After [P246](PROBLEMS.md) closed (file-scope `const NAME = expr;`
+After [@P246](PROBLEMS.md) closed (file-scope `const NAME = expr;`
 accepted) and the UPPER_CASE-non-const warning landed, loft's
 immutability story is uniform at every scope **except** struct
 fields:
@@ -222,7 +222,7 @@ construction modifier.  Purely static check, zero runtime cost,
 no schema change.  Design + sequencing in
 [plans/future/33-const-fields/README.md](plans/future/33-const-fields/README.md).
 
-**Plan (2026-05-11):** Documented as plan-33 (future).  Not
+**Plan (2026-05-11):** Documented as @PLAN33 (future).  Not
 yet implemented; the gap is currently silent (the parser
 accepts mutable fields with names that look like they should be
 const).  No regression guard yet — none possible until the

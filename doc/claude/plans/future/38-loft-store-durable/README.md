@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # LOFT_STORE_DURABLE — three-tier opt-in durability for mmap stores
 
 **Status:** Planned (in `future/`).  Promote to active when
-plan-37 phase 07 (loft-native indexer daemon) lands or when
+@PLAN37 phase 07 (loft-native indexer daemon) lands or when
 the first game-server plan needs persistent state — whichever
 comes first.
 
@@ -24,7 +24,7 @@ its data's value:
   turn-based game state (TTT v5 sessions).
 - **Tier 3 — WAL**: write-ahead log + `fsync` per record +
   periodic checkpoints.  Zero-loss for committed writes.
-  Ideal for real-time game state (plan-36 audience demo).
+  Ideal for real-time game state (@PLAN36 audience demo).
 
 ## Drivers
 
@@ -38,7 +38,7 @@ failure mode with very different stakes:
    file doesn't crash the daemon.
 
 2. **Future game servers** (TTT v5 in `plans/future/32-…`,
-   plan-36 audience-generative-art) — hold session state,
+   @PLAN36 audience-generative-art) — hold session state,
    world state, decay timers, audience contributions that
    ARE the source of truth.  An OS-kill mid-game means
    players lose their moves; an audience-demo crash means
@@ -190,11 +190,11 @@ bounded.
 | # | Phase | Effort | What ships |
 |---|---|---|---|
 | 0 | [Foundation: integrity + tail marker on existing Store](00-foundation.md) | XS | `src/store.rs` gains `DStoreV1` signature variant + per-record CRC scaffolding (no behavior change for non-durable stores) |
-| 1 | [Tier 1: IntegrityOnly + auto-rescan hook](01-tier-1-integrity.md) | S | `Store::open_durable(.., IntegrityOnly { on_corruption })` API; integrity validation on open; corruption → callback fires; first consumer = plan-37 indexer |
+| 1 | [Tier 1: IntegrityOnly + auto-rescan hook](01-tier-1-integrity.md) | S | `Store::open_durable(.., IntegrityOnly { on_corruption })` API; integrity validation on open; corruption → callback fires; first consumer = @PLAN37 indexer |
 | 2 | [Tier 2: double-buffered snapshots](02-tier-2-snapshots.md) | M | `lib/store_durable/` package; `SnapshotEvery(interval)` mode with two-file atomic rotation + `msync` discipline |
 | 3 | [Tier 3: WAL + grouped commit](03-tier-3-wal.md) | M-MH | WAL append + fsync + checkpoint + truncate; `group_commit_window` to amortise fsync cost across batches |
 | 4 | [Stress test — `kill -9` × 1000 across all tiers](04-stress-test.md) | S | `tests/store_durable_kill.rs` runs an injection harness that spawns a daemon, kills it mid-write, validates recovery semantics per tier |
-| 5 | [First-consumer opt-in](05-consumer-optin.md) | S | Plan-37 indexer phase 08 selects Tier 1; TTT v5 design doc updated to declare Tier 2 dependency; plan-36 audience demo design doc references Tier 3 |
+| 5 | [First-consumer opt-in](05-consumer-optin.md) | S | Plan-37 indexer phase 08 selects Tier 1; TTT v5 design doc updated to declare Tier 2 dependency; @PLAN36 audience demo design doc references Tier 3 |
 | 6 | [Closeout — DESIGN_DECISIONS + STDLIB.md + finished/](06-closeout.md) | XS | "C-… durability tier choice" decision recorded; STDLIB.md `Store::open_durable` doc; plan moves to `finished/` |
 
 Total estimated effort: **2-3 weeks** of focused work.
@@ -213,9 +213,9 @@ order); 4 is the cross-tier validation; 5+6 wire downstream.
 - `DurabilityMode::WAL{..}` recovery: every write that
   returned successfully to the caller is present after
   `kill -9 + restart` (verified by `tests/store_durable_kill.rs`).
-- The indexer (plan-37 phase 08) opts into Tier 1; full-
+- The indexer (@PLAN37 phase 08) opts into Tier 1; full-
   rescan-on-corruption succeeds in ≤ 2 sec.
-- TTT v5 design doc + plan-36 audience demo design doc cite
+- TTT v5 design doc + @PLAN36 audience demo design doc cite
   Tier 2 / Tier 3 as their persistence layer.
 - All 7 phases close → plan moves to
   `plans/finished/38-loft-store-durable/`.

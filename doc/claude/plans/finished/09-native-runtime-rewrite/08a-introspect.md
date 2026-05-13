@@ -2,9 +2,9 @@
 
 **Status:** SUPERSEDED (2026-05-02) — folded into phase 10
 step 10.6.  The original 08a was sequenced as a closer for
-phases 06/07/08; plan-09's tail consolidation absorbed it
+phases 06/07/08; @PLAN09's tail consolidation absorbed it
 into phase 10's final retrospective step (which fires after
-plan-11 closes P204 so the retrospective covers the full arc
+@PLAN11 closes @P204 so the retrospective covers the full arc
 including the sibling-plan handover).
 
 **Kind:** Retrospective (no code; produces lasting memory entries
@@ -14,8 +14,8 @@ and informs future plans)
 among 06/07/08.  May fire after fewer phases if 05a decided to
 stop early.
 
-**Active trigger**: phase 10 step 10.6 — fires after plan-11
-closes P204.  See `10-final-closure.md` § Step 10.6 for the
+**Active trigger**: phase 10 step 10.6 — fires after @PLAN11
+closes @P204.  See `10-final-closure.md` § Step 10.6 for the
 populate-at-retrospective outline.
 
 **Time budget:** 1 day max.
@@ -61,7 +61,7 @@ rather than code or doc updates.
 
 ### What didn't get done
 9. Which phases didn't land?  Why?
-10. Of the four P-issues (P200, P202, P203, P205), how many
+10. Of the four P-issues (@P200, @P202, @P203, @P205), how many
     closed?  How many rerouted to other plans?
 
 ### Lessons for next plan
@@ -128,7 +128,7 @@ done.  It decides:
 
 ## Findings
 
-Populated 2026-05-02 after plan-11 closed P204 — the last
+Populated 2026-05-02 after @PLAN11 closed @P204 — the last
 sibling-plan dependency for full PR-readiness.
 
 ### 1. The bet — per-Op emitter pattern
@@ -137,8 +137,8 @@ sibling-plan dependency for full PR-readiness.
 
 | Metric | Outcome |
 |---|---|
-| P-issues closed | 4/4 in plan-09 scope (P200, P202, P203, P205) + 1 in sibling plan-11 (P204) |
-| LOC growth | ~210 lines for `ParShape` + 3 impls; ~140 lines for queue runtime + emitters; ~50 lines for P205 emit-site fix; ~60 lines for `IntCompareEmitter`; 3 lines for P204.  Net additions ~600 lines code; ~95 lines retired (parallel-for runtime consolidation). |
+| P-issues closed | 4/4 in @PLAN09 scope (@P200, @P202, @P203, @P205) + 1 in sibling @PLAN11 (@P204) |
+| LOC growth | ~210 lines for `ParShape` + 3 impls; ~140 lines for queue runtime + emitters; ~50 lines for @P205 emit-site fix; ~60 lines for `IntCompareEmitter`; 3 lines for @P204.  Net additions ~600 lines code; ~95 lines retired (parallel-for runtime consolidation). |
 | Bug-fix velocity | All 5 P-issues closed within 2 days of focused work (single-session-per-phase pace).  Faster than the 2-3 week original estimate. |
 | Mental model | Codegen now has a single dispatch entry (`emit_op`) with custom emitters in `src/generation/ops/`.  New Op contributors can add an emitter file without touching `dispatch.rs`'s special-case match.  Wart-budget gate prevents accretion. |
 
@@ -149,9 +149,9 @@ fixes?** Mixed.
   used `Abi::Cell`.  Without this, the queue + buf-rename
   emitters in phase 06 would have needed `Abi::LegacyStores`
   handling.
-- Phase 02 (param adapter): NO — demoted by 00a.  P200's actual
+- Phase 02 (param adapter): NO — demoted by 00a.  @P200's actual
   fix didn't need the param-narrowing split.  Phase 02 is
-  preserved in plan-12 phase 05 as a pure simplification.
+  preserved in @PLAN12 phase 05 as a pure simplification.
 - Phase 03 (parallel-for emitter): YES — phase 06 mirrored the
   `ParallelForEmitter` shape for queue variants.  Without
   phase 03, phase 06 would have duplicated 95 lines of dispatch
@@ -171,11 +171,11 @@ For each bug-fix phase, did the gate fire?
 
 | Phase | Diagnostic gate | Outcome |
 |---|---|---|
-| 06 (P202) | Forwarding-first recipe pre-flight | Cleanly identified safe path (no special-case match conflicts).  Fired as designed. |
-| 06 (P202) | Reachability check (`collect_calls`) | NOT a planned gate — surfaced as a runtime test failure during validation.  ~30 min wasted before recognising the pattern. |
-| 07 (P205) | Skip-removal probe (Outcome A vs B) | Cleanly confirmed Outcome B; ~30 min in disposable worktree.  Fired as designed. |
-| 10.3 (P200) | Actual-error survey (per `feedback_actual_error_survey.md`) | Found read-side, not write-side.  Fired as designed.  Phase 05 plan rewrite saved hours of wrong implementation. |
-| 11 (P204) | Actual-error survey | Confirmed all 3 failing tests share the same shape.  Fired as designed. |
+| 06 (@P202) | Forwarding-first recipe pre-flight | Cleanly identified safe path (no special-case match conflicts).  Fired as designed. |
+| 06 (@P202) | Reachability check (`collect_calls`) | NOT a planned gate — surfaced as a runtime test failure during validation.  ~30 min wasted before recognising the pattern. |
+| 07 (@P205) | Skip-removal probe (Outcome A vs B) | Cleanly confirmed Outcome B; ~30 min in disposable worktree.  Fired as designed. |
+| 10.3 (@P200) | Actual-error survey (per `feedback_actual_error_survey.md`) | Found read-side, not write-side.  Fired as designed.  Phase 05 plan rewrite saved hours of wrong implementation. |
+| 11 (@P204) | Actual-error survey | Confirmed all 3 failing tests share the same shape.  Fired as designed. |
 
 **Total**: 4/5 planned gates fired cleanly.  1 gap (the
 reachability gap in phase 06) caught by tests, not by a
@@ -213,14 +213,14 @@ better than "fire after phase 05 DONE."
 5 helpers total; 3 planned + 2 surfaced.  Plan-09's surface area
 ended LESS bloated than feared.  No `int_width_for` /
 `int_signed_for` were needed (those were phase 05's original
-plan; the actual P200 fix didn't need them).
+plan; the actual @P200 fix didn't need them).
 
 `src/generation/ops/` final state:
 
 - `mod.rs` — registry + `EmitCtx` + dispatch
 - `default.rs` — fall-through emitter
 - `forwarding_smoke.rs` — runtime smoke test (slated for
-  retirement in plan-12 phase 02)
+  retirement in @PLAN12 phase 02)
 - `parallel.rs` — for-par + queue + buf-rename emitters
 - `key_ops.rs` — OpGetRecord + OpIterate
 - `int_compare.rs` — OpEqInt / OpNeInt / OpLtInt / OpLeInt
@@ -230,7 +230,7 @@ file.  Clean extension surface.
 
 ### 5. What didn't get done
 
-- Phase 02 (param adapter) — DEMOTED then SUPERSEDED → plan-12
+- Phase 02 (param adapter) — DEMOTED then SUPERSEDED → @PLAN12
   phase 05.  Preserved as a follow-up.
 - Phase 02a — superseded with phase 02.
 - Phase 05 (file emitter, original write-side scope) — folded
@@ -261,7 +261,7 @@ file.  Clean extension surface.
 4. **Byte-identical baseline** — `scripts/p09_fast_gate.sh`
    ran every step in <5s; caught silent emission divergence
    immediately.
-5. **Memory entries** — 7 saved during plan-09 + plan-11.
+5. **Memory entries** — 7 saved during @PLAN09 + @PLAN11.
    Codify patterns once; reference from future plans.
 6. **Tail-phase consolidation** — phase 10 absorbed 4 planned
    phases (05/05a/08/08a).  When a tail surface is small,
@@ -285,7 +285,7 @@ file.  Clean extension surface.
 
 | Finding | Match |
 |---|---|
-| Pattern broadly successful | ✓ — apply per-Op emitters in future codegen work; plan-09 is a reference template |
+| Pattern broadly successful | ✓ — apply per-Op emitters in future codegen work; @PLAN09 is a reference template |
 
 Plan-09 is a **reference template** for future codegen
 refactors.  The combination of:
@@ -304,7 +304,7 @@ template.
 ## Memory entries written
 
 This retrospective references 7 memory entries saved during
-plan-09 + plan-11:
+@PLAN09 + @PLAN11:
 
 1. `feedback_forwarding_first_recipe.md` — pre-flight pattern.
 2. `feedback_phase_doc_trait_drafts.md` — sketches not specs.

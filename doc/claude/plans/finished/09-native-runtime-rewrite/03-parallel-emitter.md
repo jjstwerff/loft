@@ -5,7 +5,7 @@ for `n_parallel_for` / `n_parallel_for_light`; the 95-line
 special case in `dispatch.rs` retired.  Phase 06 reused this
 emitter family for the queue variants.
 
-**Kind:** Simplification — **prerequisite for phase 06 (P202).**
+**Kind:** Simplification — **prerequisite for phase 06 (@P202).**
 Without this, adding the missing `n_parallel_queue*` runtime fns
 duplicates the 95-line special case in `dispatch.rs:837-930` for
 each new helper.  Cleaning up the parallel-for emission first means

@@ -3,9 +3,40 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Phase 06 — Retroactive tagging + closeout
+# Phase 06 — Retroactive tagging
 
-**Status:** Open
+**Status:** Migration shipped 2026-05-14 — closeout DEFERRED
+(plan-37 phases 7 + 8 still open; the move-to-finished/ step
+happens after phase 8).
+
+## What shipped
+
+- `tools/indexer/migrate.py` — Python rewriter (sed proved
+  too risky; awk too clumsy for backtick-span detection)
+- 1500+ refs migrated across ~150 `.md` files
+- `make index` legacy bucket dropped from ~2643 → ~1900
+  refs (the residue is single-digit `P1`-`P9` skipped on
+  purpose, refs to closed P-issues no longer in
+  PROBLEMS.md, and code-file refs which don't migrate)
+- `tests/index_hygiene.rs::no_broken_tracker_tags` still
+  green; no broken tags introduced
+
+The script's safeguards (kept conservative on purpose):
+
+- Skip `P\d+-R\d+` (phase-N risk-M notation in COROUTINE.md
+  / SAFE.md / CHANGELOG_TECHNICAL.md)
+- Skip `P[0-9]` followed by single-digit only (P1-P9 are
+  heavily overloaded with PERFORMANCE.md design IDs and
+  plan-N phase-M shorthand)
+- Validate the numeric part against PROBLEMS.md row IDs
+  before rewriting (closed-and-removed P-issues don't get
+  `@`-prefixed)
+- Skip lines inside fenced code blocks
+- Skip lines containing `<!--noindex-->`
+- Skip occurrences inside same-line backtick spans (so
+  `\`P259\`` examples explaining the convention survive)
+- Skip refs preceded by `/` (URL paths like `/tag/P259`
+  shouldn't break)
 
 ## Goal
 
@@ -85,16 +116,16 @@ accidental regressions, not enforce zero.
 
 ### Doc closeout
 
-- `CHANGELOG_TECHNICAL.md` — plan-37 retrospective entry
+- `CHANGELOG_TECHNICAL.md` — @PLAN37 retrospective entry
   (per-phase summary + bug yield + adoption stats:
   "before/after legacy ref count").
-- `ROADMAP.md` — remove plan-37 row from active section;
+- `ROADMAP.md` — remove @PLAN37 row from active section;
   add to closed.
 - `plans/README.md` — if listed.
 - `git mv doc/claude/plans/37-tracker-index
   doc/claude/plans/finished/37-tracker-index`.
 - Update intra-plan + sibling-plan link paths (per the
-  plan-22 closeout precedent).
+  @PLAN22 closeout precedent).
 
 ### Optional: rewrite scanner in loft
 

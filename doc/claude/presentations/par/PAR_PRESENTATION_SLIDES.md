@@ -86,7 +86,7 @@ for _, p := range partials { total += p }
 | Go    | a hand-rolled scaffold | concise dispatch |
 
 Loft's surface is closer to Java's intent, with Go's explicit thread
-count and a named worker.  **The work of plan-06 is making the
+count and a named worker.  **The work of @PLAN06 is making the
 runtime behind that one clause as small as Go's hand-rolled
 version.**
 
@@ -156,9 +156,9 @@ routing.
 
 Plan-06's headline metric was "~1100 LOC retired."  Through April
 the canaries kept surfacing P-issues — P188, P189(a-d), P191, P195,
-P196, P198, P199, P200, P201 — at the type × codegen × par seam.
+P196, @P198, @P199, @P200, @P201 — at the type × codegen × par seam.
 
-The user's reframe: **"as long as canaries keep firing, plan-06's
+The user's reframe: **"as long as canaries keep firing, @PLAN06's
 per-day yield is high — even if no LOC retire that day."**
 
 The plan was no longer "delete the marshalling code"; it was

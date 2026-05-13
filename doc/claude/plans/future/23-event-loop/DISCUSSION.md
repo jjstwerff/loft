@@ -331,7 +331,7 @@ concrete spec.
 **P5. Plan-17 partial generics force ugly registration API.**
 *Status:* **Accepted as v1 friction.**  `HandlerId<R>` + send-type
 marker is what we get under partial generics.  Migrate to
-`HandlerId<S, R>` additively when plan-17 ships multi-param.
+`HandlerId<S, R>` additively when @PLAN17 ships multi-param.
 
 **P6. Handler-name strings are fragile coordination.**
 *Status:* **Accepted as v1 friction.**  Workaround: a shared
@@ -365,7 +365,7 @@ strategy.**  See § Teachability in EVENT_LOOP.md.
 
 **P11. The dependency stack is long.**
 *Status:* **Resolved as phased delivery.**  See § Sequencing in
-EVENT_LOOP.md.  Phases 1-2 (P213 v4 + minimal closure-using
+EVENT_LOOP.md.  Phases 1-2 (@P213 v4 + minimal closure-using
 single-player game + EventLoop core) are the gate to a running
 game; phases 3-5 (wire protocol, async multiplexer, streaming
 optimisations) are multiplayer infrastructure layered on top.
@@ -534,7 +534,7 @@ loft.  Defer Model B until real use cases demand it.
 
 ### Iteration 5 — `OpDatabase` retarget for closure record co-location
 
-Considered design for P213 v4 (capturing closures in struct
+Considered design for @P213 v4 (capturing closures in struct
 fields): preset the closure work-var `w` to the host's DbRef
 before `OpDatabase` fires, so the new closure record is claimed
 in the host's Store rather than a fresh one.
@@ -551,7 +551,7 @@ See PROBLEMS.md § 213.
 
 ### Iteration 6 — Layout widening of `element_size(Type::Function)`
 
-Initial P213 v4 attempt widened `element_size(Type::Function)`
+Initial @P213 v4 attempt widened `element_size(Type::Function)`
 from 4 to 16 (or 20) bytes so closure records could be inlined.
 
 **Why reverted:** the database layer routes `Type::Function`
@@ -582,7 +582,7 @@ demonstrates the need.  Recorded design exists; just not v1.
 ## Cross-references
 
 - **EVENT_LOOP.md** — concrete spec.
-- **PROBLEMS.md § 213** — P213 v4 design (closure-in-struct-fields,
+- **PROBLEMS.md § 213** — @P213 v4 design (closure-in-struct-fields,
   the load-bearing prerequisite).
 - **DESIGN_DECISIONS.md § C38** — closures are copy-at-definition;
   forward direction toward Rust-style references.

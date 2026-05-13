@@ -46,7 +46,7 @@ results from `04-bench.txt`)
 ### `STDLIB.md` § `Store::open_durable`
 
 API doc with copyable examples for each tier.  Cross-
-references to plan-38's per-phase docs for design context.
+references to @PLAN38's per-phase docs for design context.
 
 ### `DESIGN_DECISIONS.md` — new C-row
 
@@ -82,7 +82,7 @@ if it surfaces as a real need.
 
 ### `CHANGELOG_TECHNICAL.md` retrospective
 
-Per the plan-22 / plan-15 closeout pattern:
+Per the @PLAN22 / @PLAN15 closeout pattern:
 
 ```markdown
 ### Plan-38 (loft-store-durable) closed YYYY-MM-DD
@@ -114,7 +114,7 @@ Plan moved to `plans/finished/38-loft-store-durable/`.
 
 ### `ROADMAP.md` updates
 
-- Remove plan-38 from active section.
+- Remove @PLAN38 from active section.
 - Add to closed section pointing at `finished/38-…`.
 
 ### `CAVEATS.md` (if any tier has OS-specific gaps)
@@ -132,7 +132,7 @@ git mv doc/claude/plans/future/38-loft-store-durable \
 ```
 
 Update intra-plan + sibling-plan link paths per the
-plan-22 closeout precedent.  This plan started in
+@PLAN22 closeout precedent.  This plan started in
 `future/`, so the move is from `future/38-` to
 `finished/38-`.
 
@@ -143,8 +143,8 @@ plan-22 closeout precedent.  This plan started in
 | `doc/claude/DATABASE.md` | ADD § Durable stores |
 | `doc/claude/STDLIB.md` | ADD § `Store::open_durable` |
 | `doc/claude/DESIGN_DECISIONS.md` | ADD C-NN row for tiered durability |
-| `doc/claude/CHANGELOG_TECHNICAL.md` | ADD plan-38 retrospective |
-| `doc/claude/ROADMAP.md` | REMOVE plan-38 from active; ADD to closed |
+| `doc/claude/CHANGELOG_TECHNICAL.md` | ADD @PLAN38 retrospective |
+| `doc/claude/ROADMAP.md` | REMOVE @PLAN38 from active; ADD to closed |
 | `doc/claude/CAVEATS.md` | ADD per-OS caveats if needed |
 | `doc/claude/plans/future/38-loft-store-durable/` | `git mv` to `plans/finished/38-loft-store-durable/` |
 
@@ -164,7 +164,7 @@ plan-22 closeout precedent.  This plan started in
 
 | Risk | Mitigation |
 |---|---|
-| Closeout lands while consumers (TTT v5, plan-36) haven't actually shipped their persistent-state arcs | Closeout DOES NOT depend on consumer implementation — the API + tests + design contracts are enough.  Consumer integration is verified by the smoke test in phase 05. |
+| Closeout lands while consumers (TTT v5, @PLAN36) haven't actually shipped their persistent-state arcs | Closeout DOES NOT depend on consumer implementation — the API + tests + design contracts are enough.  Consumer integration is verified by the smoke test in phase 05. |
 | Documentation drift between this plan's docs and the consumer plans | Cross-reference paths checked by doc_hygiene.  If TTT v5's design doc cites a Tier 2 API surface that drifts, the link breaks at PR time. |
 | C-NN decision number collides with another in-flight plan | Pick the next free number at closeout time; DESIGN_DECISIONS.md has a chronological order, not strict numbering |
 

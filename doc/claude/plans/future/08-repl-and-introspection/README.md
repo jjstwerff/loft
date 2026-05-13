@@ -139,7 +139,7 @@ Inherits from [doc/claude/plans/README.md](../README.md):
 - No regression-now-fix-later trades.
 - Each phase ships its own `make ci` run + at least one new test.
 
-Specific to plan-08:
+Specific to @PLAN08:
 
 1. **Introspection tool's output is byte-stable** across loft
    versions for the same input.  Tests pin the exact text shape

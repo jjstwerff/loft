@@ -32,7 +32,7 @@ should silently fix.
 └──────────────────┘  ← frame_hwm (reserved at function entry)
 ```
 
-**Single function-entry reserve (plan-04 B.3).**  A single
+**Single function-entry reserve (@PLAN04 B.3).**  A single
 `OpReserveFrame(frame_hwm)` at function entry covers every local
 slot — both zone-1 greedy placements and zone-2 IR-walk placements.
 `frame_hwm` is the maximum `stack_pos + size` across all non-argument
@@ -76,7 +76,7 @@ by `v_size` after each placement.
 - **Inner pre-assignments:** `Set(v, Insert([Set(__lift, ...), Call(...)]))` —
   the Insert's preamble Sets are processed first so `__lift` vars get
   lower slots than `v`.
-- **Cross-scope `Set` + Insert-rooted bodies** — plan-05 extended the
+- **Cross-scope `Set` + Insert-rooted bodies** — @PLAN05 extended the
   main walk to cover variables whose first `Set` lies in a child
   `operators` list or whose function body root is `Value::Insert`.
   The former post-walk orphan placer (`place_orphaned_vars`) is deleted;
@@ -110,7 +110,7 @@ the end of each iteration resets TOS to the loop start.
 
 ---
 
-## Invariant validation (from plan-04)
+## Invariant validation (from @PLAN04)
 
 `src/variables/validate.rs::validate_slots` runs at the end of every
 codegen pass in debug / test builds (`src/state/codegen.rs:155-160`)
@@ -128,17 +128,17 @@ is searchable.
 | **I6** | Loop-iteration safety — no slot shared across loop-body boundary without a reset. |
 | **I7** | **Scope-frame consistency** — each variable's `stack_pos` lies within its declared scope's frame region `[frame_base(scope), frame_base(scope) + var_size(scope))`.  Catches the "slot above TOS" runtime panic class at compile time. |
 
-I7 was added at the 2026-04-22 close-out of plan-04.  Invariants
-I1–I6 were authored during plan-04 Phase 2 as correctness gates for
+I7 was added at the 2026-04-22 close-out of @PLAN04.  Invariants
+I1–I6 were authored during @PLAN04 Phase 2 as correctness gates for
 V2; they continue to run against V1's output unchanged.
 
-**I8 — orphan-iterator-alias** was scoped in plan-05 Phase 2b as a
+**I8 — orphan-iterator-alias** was scoped in @PLAN05 Phase 2b as a
 dep-chain-aware aliasing check guarding P185's failure shape.
 Deferred and now dropped: with `place_orphaned_vars` gone, the
 bug class it would catch is structurally prevented.  Revisit only
 if a future slot-reuse aliasing regression surfaces.
 
-## Plan-04 / plan-05 status (closed)
+## Plan-04 / @PLAN05 status (closed)
 
 - **Plan-04** (`doc/claude/plans/finished/04-slot-assignment-redesign/`)
   aimed to replace this two-zone allocator with a single-pass,
@@ -181,7 +181,7 @@ Two fixture catalogues use this harness:
 
 - `tests/strings.rs` — string-scope regressions (2 fixtures).
 - `tests/slot_v2_baseline.rs` — the **Phase 0 fixture catalogue from
-  plan-04** (see
+  @PLAN04** (see
   [`plans/finished/04-slot-assignment-redesign/`](plans/finished/04-slot-assignment-redesign/)).
   Every fixture locks one specific placement decision; the file now
   runs as a structural regression guard against V1's output and a
@@ -198,7 +198,7 @@ specific IR shapes without running codegen, by constructing synthetic
 Every pattern documented below has an explicit fixture in
 `tests/slot_v2_baseline.rs` that locks the exact slot layout
 produced by the two-zone allocator.  The catalogue is retained as a
-regression guard after plan-04's close-out; V2 (shadow validator)
+regression guard after @PLAN04's close-out; V2 (shadow validator)
 must still reproduce every layout under `LOFT_SLOT_V2=validate`.
 
 | # | Pattern | Fixture | Status |
@@ -216,7 +216,7 @@ must still reproduce every layout under `LOFT_SLOT_V2=validate`.
 | 11 | Call with Block arg (vector-comprehension in arg position) | `call_with_block_arg` | ✅ |
 | 12 | Parent var Set inside child scope | `parent_var_set_inside_child_scope` | ✅ |
 | 13 | P178 — `is`-capture in Insert-rooted body | `p178_is_capture_body` | ✅ |
-| 14 | P185 — late local after inner text-accumulator loop | `p185_late_local_after_inner_loop` | ✅ passing since plan-05 retired `place_orphaned_vars` |
+| 14 | P185 — late local after inner text-accumulator loop | `p185_late_local_after_inner_loop` | ✅ passing since @PLAN05 retired `place_orphaned_vars` |
 | 15 | Local after args-heavy signature (args-region isolation) | `fn_with_only_arguments` | ✅ |
 | 16 | Nested If with Block branches | `nested_if_block_branches` | ✅ |
 | 17 | Large vector followed by small int (zone-1/2 mixing) | `large_vector_then_small_int` | ✅ |
@@ -246,9 +246,9 @@ structural triggers were:
 
 | Scope-shape trigger | How the main walk now reaches it | Fixture |
 |---------------------|-----------------------------------|---------|
-| Function body root is `Value::Insert` (not `Block`/`Loop`) | Insert at function-body root treated as a synthetic Block with scope 1 (plan-05 Phase 1a) | `p178_is_capture_body`, `insert_preamble_lift_ordering` |
-| Parent-scope `Set` inside a child Block's `operators` | Cross-scope `Set(v)` where `v.scope != walker_scope` is handled in the parent's operator list (plan-05 Phase 1b) | `parent_var_set_inside_child_scope` |
-| Insert preamble (`Value::Insert([Set(__lift_N, ...), ...])`) wrapping a Call or format-string | Exhaustive traversal of `BreakWith / Iter / Tuple / TuplePut / Yield / Parallel` (plan-05 Phase 1b) | `insert_preamble_lift_ordering`, `sequential_lifted_calls` |
+| Function body root is `Value::Insert` (not `Block`/`Loop`) | Insert at function-body root treated as a synthetic Block with scope 1 (@PLAN05 Phase 1a) | `p178_is_capture_body`, `insert_preamble_lift_ordering` |
+| Parent-scope `Set` inside a child Block's `operators` | Cross-scope `Set(v)` where `v.scope != walker_scope` is handled in the parent's operator list (@PLAN05 Phase 1b) | `parent_var_set_inside_child_scope` |
+| Insert preamble (`Value::Insert([Set(__lift_N, ...), ...])`) wrapping a Call or format-string | Exhaustive traversal of `BreakWith / Iter / Tuple / TuplePut / Yield / Parallel` (@PLAN05 Phase 1b) | `insert_preamble_lift_ordering`, `sequential_lifted_calls` |
 
 The P178 `local_start` floor stays in the per-variable conflict check
 to keep locals from overlapping the argument + return-address region.

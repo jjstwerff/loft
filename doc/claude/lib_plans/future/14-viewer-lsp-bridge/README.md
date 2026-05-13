@@ -23,7 +23,7 @@ SERVERS (rust-analyzer, jdtls) and the loft-lsp server from
 Three layered drivers, each independently load-bearing:
 
 1. **The viewer needs to be more than a doc renderer.**  As of
-   plan-35 phase 02 + plan-37 phase 04a, `loft-view` serves
+   @PLAN35 phase 02 + @PLAN37 phase 04a, `loft-view` serves
    directory tree, code with line numbers, and tracker-tag
    references.  Reviewing branches in the chat console is now
    tolerable — but landing in any code file is still
@@ -98,16 +98,16 @@ Five reasons, each load-bearing:
    future browser IDE (`lib_plans/future/07-web-ide/`),
    terminal editors, anywhere loft-tooling needs LSP.  One
    binary, many consumers — same model as `loft-index`
-   (plan-37 phase 07).
+   (@PLAN37 phase 07).
 
 4. **Independent release cycle.**  LSP-server quirks (and
    rust-analyzer / jdtls / loft-lsp all have them) get fixed
    without churning the viewer's loft script.  Sidecar
-   binaries can be installed via `loft install` (plan-37 phase
+   binaries can be installed via `loft install` (@PLAN37 phase
    08 deploys to `~/bin/`) and updated independently.
 
 5. **Matches existing precedent.**  Plan-37 already splits
-   the indexer into `loft-index` (daemon, plan-37 phase 07) +
+   the indexer into `loft-index` (daemon, @PLAN37 phase 07) +
    `loft-idx` (CLI).  This codebase organises around small
    binaries with focused responsibilities; the bridge is the
    third such binary.
@@ -196,7 +196,7 @@ These metrics drive acceptance for each phase.
 | 0 | [Scaffold the bridge binary](00-scaffold.md) | M | `loft-lsp-bridge` Rust binary; Unix-socket protocol with length-prefixed JSON; echo-only (no LSP servers spawned yet); `lib/lsp_bridge_client/` loft library that wraps the socket. | Open |
 | 1 | [rust-analyzer end-to-end](01-rust-analyzer.md) | L | Bridge spawns rust-analyzer, forwards `initialize`/`hover`/`definition`/`references`; viewer renders hover popups + jump-to-def + refs sidebar for `.rs` files in the loft repo. | Open |
 | 2 | [Bridge intelligence](02-bridge-intelligence.md) | L | Server warm pool; multi-client multiplex; per-document state cache; debounce/backpressure; crash recovery; structured tracing.  Each capability acceptance-tested individually. | Open |
-| 3 | [loft-lsp integration](03-loft-lsp.md) | M | Once `lib_plans/future/09-lsp/` LSP.1 ships, bridge spawns `loft-lsp` for `.loft` files.  Same hover / def / refs UX as rust-analyzer.  First-class loft treatment. | Open (depends on plan-09 LSP.1) |
+| 3 | [loft-lsp integration](03-loft-lsp.md) | M | Once `lib_plans/future/09-lsp/` LSP.1 ships, bridge spawns `loft-lsp` for `.loft` files.  Same hover / def / refs UX as rust-analyzer.  First-class loft treatment. | Open (depends on @PLAN09 LSP.1) |
 | 4 | [Java via jdtls](04-jdtls.md) | M | Bridge spawns jdtls (Eclipse JDT-LS) for `.java` files.  `LOFT_JDTLS_HOME` env var or auto-discovery.  Same UI shape across all three languages. | Open |
 | 5 | [Browser editor R1 + R2](05-browser-editor.md) | M | Read-only nav + diagnostics layer in the browser.  No editor framework yet.  Completes the "review dashboard" framing.  E1 (CodeMirror inline edit) is a stretch follow-up. | Open |
 | 6 | [Closeout + colleague-onboarding doc](06-closeout.md) | S | DEBUG.md § "Multi-language code intelligence in `make view`"; install instructions for rust-analyzer/jdtls auto-discovery; CHANGELOG; move plan to finished/. | Open |
@@ -210,7 +210,7 @@ phases 3-5 each light up one capability slice.
 - `make view` on the loft repo opens a browser; clicking any
   identifier in `src/parser/expressions.rs` jumps to its
   definition; hovering shows the type signature + doc comment.
-- Same UX works on `.loft` files (via loft-lsp from plan-09)
+- Same UX works on `.loft` files (via loft-lsp from @PLAN09)
   and `.java` files (via jdtls).
 - Bridge survives `Ctrl+C` + restart cycle of `make view`
   without re-indexing rust-analyzer (warm pool hit).
@@ -261,7 +261,7 @@ phases 3-5 each light up one capability slice.
   — DX umbrella; the viewer + LSP is one of the largest DX
   wins on the roadmap.
 
-## Why this is a separate plan from plan-09
+## Why this is a separate plan from @PLAN09
 
 Plan-09 (`lib_plans/future/09-lsp/`) builds the loft-lsp
 SERVER — the language-intelligence backend that knows about
@@ -277,11 +277,11 @@ The two are independently valuable:
   IDE) without needing loft-lsp — rust-analyzer + jdtls
   alone justify it.
 
-They COMPOSE in plan-14 phase 03: once both are live, `.loft`
+They COMPOSE in @PLAN14 phase 03: once both are live, `.loft`
 files in the viewer get the same first-class treatment as
 `.rs` files do via rust-analyzer.
 
 Splitting also keeps each plan focused.  Plan-09 is about
-"loft language intelligence"; plan-14 is about "multi-language
+"loft language intelligence"; @PLAN14 is about "multi-language
 client tooling around the viewer."  Different design surface,
 different test surface, different phase shape.

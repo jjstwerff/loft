@@ -215,7 +215,7 @@ To find references: `./scripts/idx tag:@P259` (after phase
 - `jq 'keys | length' index/tags.json` returns at least 50
   (loft repo has at least 50 distinct tag mentions today
   including legacy forms).
-- `jq '.["@P259"]' index/tags.json` returns an array (P259
+- `jq '.["@P259"]' index/tags.json` returns an array (@P259
   is closed; should have ≥ 5 references in PROBLEMS.md +
   CHANGELOG_TECHNICAL.md + plan dirs).
 - The legacy bucket exposes the adoption gap:

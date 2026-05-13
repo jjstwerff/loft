@@ -29,7 +29,7 @@ hatch for the residual cases where the aliasing is intentional
 and unavoidable.
 
 Per [README § Drivers](README.md#drivers): TTT v6 server retrofit
-+ plan-36 audience-demo BOTH ship without phase 05 if it doesn't
++ @PLAN36 audience-demo BOTH ship without phase 05 if it doesn't
 land.  Real-world demand for `Mutable<T>` should drive
 prioritisation; phase 05 lands when a use case surfaces that the
 case-D message can't easily fix.
@@ -131,7 +131,7 @@ m_mutable_misuse_warning               // optional: warn if Mutable<T> used insi
   diagnostic UPDATE happened (case-D message references
   `Mutable<T>` without "not yet shipped").
 - `p22_phase05_mutable_no_leak` clean over 100 iterations.
-- Existing closure_matrix.rs cells (22 from plan-15) + Case A
+- Existing closure_matrix.rs cells (22 from @PLAN15) + Case A
   cells from phase 00 + Case B cells from phase 02 + Case C
   cells from phase 03 all still green.
 - CI gate green.
@@ -140,9 +140,9 @@ m_mutable_misuse_warning               // optional: warn if Mutable<T> used insi
 
 | Risk | Mitigation |
 |---|---|
-| `Mutable<T>` becomes the "easy escape" — users reach for it instead of restructuring code as Case B/C | Phase 05 ships with a docstring explicitly saying "Use only when plan-22 case-D rejection blocks a genuinely intentional alias.  Most uses can be rewritten."  Optional: emit a warning when `Mutable<T>` is used in a body that doesn't actually alias (the case-A misuse cell in parse_errors). |
+| `Mutable<T>` becomes the "easy escape" — users reach for it instead of restructuring code as Case B/C | Phase 05 ships with a docstring explicitly saying "Use only when @PLAN22 case-D rejection blocks a genuinely intentional alias.  Most uses can be rewritten."  Optional: emit a warning when `Mutable<T>` is used in a body that doesn't actually alias (the case-A misuse cell in parse_errors). |
 | `Mutable<T>` API ergonomics force `.get()` / `.set()` ceremony that's clunkier than the original C38 baseline | Specifically scoped — `Mutable<T>` is the case-D ONLY path; case A/B/C still use clean syntax.  The ceremony is the explicit-opt-in cost. |
-| Generic implementation pulls in cross-mode / native codegen complications | Phase 05 cells include cross-mode runs across all primitive T (integer/text/float/single/boolean/character) plus Reference T (struct).  Parallels plan-15 phase 04 coverage. |
+| Generic implementation pulls in cross-mode / native codegen complications | Phase 05 cells include cross-mode runs across all primitive T (integer/text/float/single/boolean/character) plus Reference T (struct).  Parallels @PLAN15 phase 04 coverage. |
 | Specialisation (concrete `Mutable<integer>` etc.) may be needed if generic monomorphisation is incomplete | Phase 05 verification includes a Mutable instance for each primitive T; if generic dispatch fails, file as a P-issue and continue with concrete instances. |
 
 ## Out of scope

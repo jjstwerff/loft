@@ -10,7 +10,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 A small loft application that runs in the user's development VM
 and serves a branch-aware doc + code review dashboard to a
 browser on the host (via SSH port-forward).  Built IN loft to
-dogfood the server lib + plan-22 closures + 0.8.3 coroutines.
+dogfood the server lib + @PLAN22 closures + 0.8.3 coroutines.
 Compiled to a **standalone binary that ships with the repo and
 runs decoupled from loft tree state** — so the user can review
 loft-in-flight even when loft itself is mid-refactor or
@@ -132,13 +132,13 @@ working file browser with markdown rendering.
 | # | Phase | Effort | What ships | Status |
 |---|---|---|---|---|
 | 0 | [Skeleton + binary build](00-skeleton.md) | XS | `tools/viewer/` script + Makefile, "hello world" binary, `make view-build` + `make view` + `make view-refresh` targets, frozen-binary contract documented (BUILD_NOTES.md records loft commit). | **Shipped 2026-05-13** |
-| 1 | [HTTP server + static + tree](01-http-routes.md) | S | Server serves `/`, `/tree/<path>`, `/raw/<path>`, `/static/style.css`, 404.  Verified end-to-end (curl + browser).  Native compile blocked by P262 + P263 — ships interp-mode (`make view` invokes `loft --interpret`). | **Shipped 2026-05-13** (interp-mode) |
+| 1 | [HTTP server + static + tree](01-http-routes.md) | S | Server serves `/`, `/tree/<path>`, `/raw/<path>`, `/static/style.css`, 404.  Verified end-to-end (curl + browser).  Native compile blocked by @P262 + @P263 — ships interp-mode (`make view` invokes `loft --interpret`). | **Shipped 2026-05-13** (interp-mode) |
 | 2 | [Code-file rendering with `<pre>` + line numbers](02-code-files.md) | XS | `/file/<path>` route renders any text file as line-numbered HTML; `<a id="L<n>">` per line for fragment scroll + `:target` highlight; HTML escape + tab → 4 spaces; binary-extension skip-list; markdown stub for phase 03; tree pages link files via `/file/`. | **Shipped 2026-05-13** (interp-mode) |
-| 3 | [Minimal markdown subset](03-markdown-minimal.md) | M | Headings, bold/italic, inline code, fenced code blocks, links with relative-path resolution + GitHub-compatible heading slugs, horizontal rules, HTML comments.  ~250 lines added inline to `tools/viewer/src/main.loft`.  Surfaced two new compiler bugs (P270, P271) — filed.  Lists / tables / nested inline / images deferred to a follow-up phase. | **Shipped 2026-05-13** |
+| 3 | [Minimal markdown subset](03-markdown-minimal.md) | M | Headings, bold/italic, inline code, fenced code blocks, links with relative-path resolution + GitHub-compatible heading slugs, horizontal rules, HTML comments.  ~250 lines added inline to `tools/viewer/src/main.loft`.  Surfaced two new compiler bugs (@P270, @P271) — filed.  Lists / tables / nested inline / images deferred to a follow-up phase. | **Shipped 2026-05-13** |
 | 4 | [Git state via wrapper script](04-git-state-wrapper.md) | S | `tools/viewer/refresh.sh` dumps git state to `tools/viewer/state/*.json`; viewer dashboard reads JSON via the now-fully-wired JSON natives (P54 sprint complete) and renders branch header + changed-files list + recent-commits list + uncommitted-files list with status-badge styling.  `/commit/<sha>` shows the prebuilt diff.  Phase 05 (proper diff/commit views) builds on this. | **Shipped 2026-05-13** |
 | 5 | [Diff + commit views](05-diff-and-commit.md) | M | `/diff/<path>` renders unified diff against `main` with hunk-coloured CSS (green +, red -, blue hunk header).  `/commit/<sha>` renders commit message + per-file diffs via the same renderer.  Top-right `[Rendered ¦ Diff vs main]` toggle on every file page (Diff link only when a diff exists).  Refresh script already dumps both per-file (state/diffs/) and per-commit (state/commits/) diffs from phase 04. | **Shipped 2026-05-13** |
 | 6 | [Proper tables (forward-looking)](06-tables-design.md) | M | Full GFM table support — alignment, headers, body, nested formatting inside cells (bold/italic/code/links via render_inline).  Shipped via `lib/markdown` table renderer.  Multi-line cells + escaped pipes (`\|`) deferred — rare in loft docs; promote when a downstream consumer needs them. | **Mostly shipped 2026-05-13** (multi-line cells + escaped pipes deferred) |
-| 7 | [Closeout — release binary, docs, retrofit](07-closeout.md) | S | DEBUG.md § "Branch review viewer (`make view`)" added; CLAUDE.md § Key commands already includes the row; CHANGELOG.md user-facing entry + CHANGELOG_TECHNICAL.md retrospective; ROADMAP.md updated; plan moved to `finished/`.  Retrofit: the viewer was used throughout 2026-05-13's bug-arc work (P262→P272) to read PROBLEMS.md / plan READMEs / cross-doc navigation — dogfooded continuously. | **Shipped 2026-05-13** |
+| 7 | [Closeout — release binary, docs, retrofit](07-closeout.md) | S | DEBUG.md § "Branch review viewer (`make view`)" added; CLAUDE.md § Key commands already includes the row; CHANGELOG.md user-facing entry + CHANGELOG_TECHNICAL.md retrospective; ROADMAP.md updated; plan moved to `finished/`.  Retrofit: the viewer was used throughout 2026-05-13's bug-arc work (@P262→@P272) to read PROBLEMS.md / plan READMEs / cross-doc navigation — dogfooded continuously. | **Shipped 2026-05-13** |
 
 **Phase boundaries are commit boundaries.**  Each phase lands as
 its own commit on a focused branch (or directly on the
@@ -348,7 +348,7 @@ Layout:
 
 The tag system makes the page **searchable by what
 contributors actually have**.  A friend with a Windows box
-and Claude scans the [windows] tag, sees P229b is a perfect
+and Claude scans the [windows] tag, sees @P229b is a perfect
 fit, clicks through to the full PROBLEMS.md row + design
 context, and starts.
 

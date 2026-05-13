@@ -133,7 +133,7 @@ properties this gives:
    (e.g., excerpts that need file reads).
 
 The "survives daemon restart" property + integrity guarantee
-are owned by **[plan-38 (loft-store-durable)](../future/38-loft-store-durable/README.md)**.
+are owned by **[@PLAN38 (loft-store-durable)](../future/38-loft-store-durable/README.md)**.
 The indexer opens its store via:
 
 ```loft
@@ -144,16 +144,16 @@ store = store_durable::open(
 );
 ```
 
-`IntegrityOnly` is plan-38's Tier 1 — appropriate for the
+`IntegrityOnly` is @PLAN38's Tier 1 — appropriate for the
 indexer because the filesystem is the source of truth and a
 corrupted store rebuilds in <2 sec.  Game servers (TTT v5,
-plan-36) opt into Tier 2 / Tier 3 of the same API.
+@PLAN36) opt into Tier 2 / Tier 3 of the same API.
 
 #### Why loft's Store primitive is the right fit
 
 Loft already has `Store` (`src/store.rs`), a word-addressed
 heap with optional mmap backing (`feature = "mmap"` →
-`MmapStorage`).  The plan-22 closures arc proved out the
+`MmapStorage`).  The @PLAN22 closures arc proved out the
 rc + cascade-free model on top of stores.  An indexer
 backed by a Store gets:
 
@@ -274,7 +274,7 @@ automatically: the next `--start` overwrites it.
 
 ### Viewer integration
 
-The viewer (plan-35) gains the same project-discovery
+The viewer (@PLAN35) gains the same project-discovery
 logic.  `loft-view --project /path/to/X` (or run from the
 project directory) reads the same `.tracker/config.toml`
 and connects to the same daemon.  One viewer per project,

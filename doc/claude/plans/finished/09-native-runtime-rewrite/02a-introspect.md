@@ -1,9 +1,9 @@
 # Phase 02a — Introspection: after param adapter
 
 **Status:** SUPERSEDED (2026-05-02) — phase 02 SUPERSEDED by
-plan-12 phase 05.  Plan-12 will run its own introspection cadence
-under plan-12's phase structure if needed.  Phase 05a + the
-plan-09 retrospective (08a equivalent in phase 10 step 10.6)
+@PLAN12 phase 05.  Plan-12 will run its own introspection cadence
+under @PLAN12's phase structure if needed.  Phase 05a + the
+@PLAN09 retrospective (08a equivalent in phase 10 step 10.6)
 absorbed the substantive lessons; 02a's specific trigger (phase
 02 DONE) is now never going to fire.
 
@@ -48,7 +48,7 @@ tested.
 
 ### Phase 05/08 prerequisite quality
 6. Does `param_adaptation_does_not_route_through_narrow_int_cast`
-   actually pass?  If yes, P200 fix is genuinely unblocked.
+   actually pass?  If yes, @P200 fix is genuinely unblocked.
 7. What additional `EmitCtx` helpers did phase 02 need
    (`int_width_for`, `int_signed_for`, `value_type`)?  Are they
    reusable for phase 05 or do they need refactoring?

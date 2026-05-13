@@ -72,7 +72,7 @@ audits it for legibility:
 | Type | Today | Want |
 |---|---|---|
 | `Type::Int` | `Int` | `integer` |
-| `Type::Long` | (removed in plan-01) | n/a |
+| `Type::Long` | (removed in @PLAN01) | n/a |
 | `Type::Single` | `Single` | `single` |
 | `Type::Float` | `Float` | `float` |
 | `Type::Boolean` | `Boolean` | `boolean` |

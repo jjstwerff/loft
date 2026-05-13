@@ -328,7 +328,7 @@ For case D, collect four positions:
 
 Emit either the rustc-style multi-caret diagnostic (if
 `DiagEntry` is extended for secondary positions) or the
-inline-position fallback that matches existing P213 / P215
+inline-position fallback that matches existing @P213 / @P215
 shape.
 
 ### Paper-trace against three snippets
@@ -412,7 +412,7 @@ the `closure` return).
 | Function purity (`Impure(ParentWrite)`) | Existing (`src/data.rs:1327-1364, 1580`) |
 | `Type.dep` for lifetime tracking | Existing (`src/data.rs:649,722`) — extend with capture-scope union |
 | Variable live intervals | Existing (visible via `LOFT_LOG=variables`) — needs to be consulted by parser |
-| Multi-position diagnostics | New (~75 LOC additive); inline fallback matches existing P213/P215 |
+| Multi-position diagnostics | New (~75 LOC additive); inline fallback matches existing @P213/P215 |
 | Cross-fn closure-storage annotation | New annotation system (small) |
 
 ---
@@ -598,8 +598,8 @@ Resulting structure:
 - The exact Phase 2 implementation timeline (unsized at the
   time of writing; the open questions above name the unknowns
   that must be resolved before estimation).
-- The ordering of P213 v4 and this spec's implementation (the
-  spec assumes P213 v4 as a prerequisite, but the actual order
+- The ordering of @P213 v4 and this spec's implementation (the
+  spec assumes @P213 v4 as a prerequisite, but the actual order
   depends on which is buildable first).
 
 ---
@@ -619,5 +619,5 @@ Resulting structure:
 - [LIFETIME.md](../../../LIFETIME.md) — dep tracking, scope-based
   freeing, Reference<T> semantics.
 - [PROBLEMS.md § 213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
-  — P213 v4 layout for closures-in-struct-fields.
+  — @P213 v4 layout for closures-in-struct-fields.
 - [CAVEATS.md](CAVEATS.md) — current closure capture caveat.

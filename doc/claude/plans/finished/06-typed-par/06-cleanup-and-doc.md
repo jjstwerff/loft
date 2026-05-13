@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Goal
 
-Concretise the ~1100-line net retirement claimed in plan-06's
+Concretise the ~1100-line net retirement claimed in @PLAN06's
 overview.  After phases 1–5 land, several legacy paths still exist
 in the source tree as transitional scaffolding.  Phase 6 deletes
 them, rewrites the relevant docs to describe the new world, and
@@ -27,7 +27,7 @@ After phase 1 (output stores), phase 2 (rebase), and phase 3 (one
 native fn), the following functions are unreachable from any
 opcode dispatch:
 
-| Function | Lines (approx) | Status after plan-06 |
+| Function | Lines (approx) | Status after @PLAN06 |
 |---|---|---|
 | `run_parallel_direct` (6 cfg variants) | 120 | superseded by `n_parallel_native` with `Stitch::Concat` for primitives |
 | `run_parallel_raw` | 90 | superseded by primitive arm of `n_parallel_native` |
@@ -96,7 +96,7 @@ Total: ~70 lines.
 | `default/01_code.loft` | ~70 |
 | `src/parser/builtins.rs` | ~70 |
 | **Subtotal retired** | **~1056** |
-| New code in plan-06 phases 1–5 | ~250 (output store helpers, rebase pass, Stitch enum, light analyser) |
+| New code in @PLAN06 phases 1–5 | ~250 (output store helpers, rebase pass, Stitch enum, light analyser) |
 | **Net** | **−800 lines** |
 
 The plan README's "~1100 net" claim is approximate; phase 6 makes
@@ -115,10 +115,10 @@ detail.  Replace the following sections:
 | § "par() variants" (50 lines) | One paragraph: "loft has one parallel primitive — see § Parallel for-loop" |
 | § "Light vs. full path" (80 lines) | One paragraph: "the compiler picks light path automatically; users don't choose" |
 | § "Result collection" (40 lines covering channel + copy_block) | Updated to describe the rebase pass |
-| § "P1-R1 — release-mode silent data loss" | "Closed in plan-06 phase 2 — D2's Rust-borrow-checker enforcement makes this impossible" |
-| § "P1-R3 — claims HashSet wasted per worker" | "Closed in plan-06 phase 2e" |
-| § "P1-R5 — no Rust-level proof of non-aliasing" | "Closed in plan-06 phase 2 — D2's relationship makes aliasing a compile-time error" |
-| § "P2-R6 — no compiler check for yield inside par()" | "Closed in plan-06 phase 5 — auto-light heuristic R2 rejects yield-containing workers" |
+| § "P1-R1 — release-mode silent data loss" | "Closed in @PLAN06 phase 2 — D2's Rust-borrow-checker enforcement makes this impossible" |
+| § "P1-R3 — claims HashSet wasted per worker" | "Closed in @PLAN06 phase 2e" |
+| § "P1-R5 — no Rust-level proof of non-aliasing" | "Closed in @PLAN06 phase 2 — D2's relationship makes aliasing a compile-time error" |
+| § "P2-R6 — no compiler check for yield inside par()" | "Closed in @PLAN06 phase 5 — auto-light heuristic R2 rejects yield-containing workers" |
 
 New section "§ Parallel for-loop" describes the phase 7 fused
 construction, the call-form desugar, and points users at LOFT.md
@@ -188,7 +188,7 @@ Draft text:
 > pipeline.  Existing code keeps working with no changes.
 
 The CHANGELOG entry sits in the 0.9.0 unreleased block when
-plan-06 ships.
+@PLAN06 ships.
 
 ## Per-commit landing plan
 
@@ -253,7 +253,7 @@ unreleased block.
 | Risk | Mitigation |
 |---|---|
 | A `run_parallel_*` fn is still reachable through some path I missed | Phase 6a deletes one fn at a time; if `cargo build` fails, restore that fn temporarily and investigate.  Most likely a stale opcode mapping in `src/fill.rs` (auto-generated; regenerate via `cargo test --release fill_rs_up_to_date`) |
-| THREADING.md's "P1-R*" entries reference fixes from plan-06; readers without plan-06 context get lost | Each closed entry says "Closed in plan-06 phase N — see plans/finished/06-typed-par/" — same convention plan-01/02/03/04/05 already use |
+| THREADING.md's "P1-R*" entries reference fixes from @PLAN06; readers without @PLAN06 context get lost | Each closed entry says "Closed in @PLAN06 phase N — see plans/finished/06-typed-par/" — same convention @PLAN01/02/03/04/05 already use |
 | Worker-clone consolidation in 6c regresses an edge case | The phase-0 panic-propagation fixture and the phase-1 lifetime fixture both stress this path; if either fails after 6c, revert and ship the consolidation in a follow-up |
 | LOFT.md's "Parallel execution" subsection becomes the new authoritative source | Mark it as "syntax reference; data-flow details in THREADING.md" so the deeper material has a clear home |
 | CHANGELOG entry oversells the simplification | Include the "−800 lines net" number explicitly and link to plans/finished/06-typed-par/ — readers can verify |
@@ -271,7 +271,7 @@ order.  If phase 7 (fused for-loop construction) lands first, phase
 otherwise be deferred to phase 7c).  If phase 6 lands first, phase
 7c handles the `par_light` retirement.
 
-The plan-06 README marks phase 6 as the last "internal" phase and
+The @PLAN06 README marks phase 6 as the last "internal" phase and
 phase 7 as the user-facing surface change.  Order in practice:
 6 → 7 keeps the runtime invariants stable while the surface lands;
 7 → 6 lets the user-visible feature ship sooner with internal

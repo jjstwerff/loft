@@ -238,4 +238,4 @@ visibility needed).
 - `src/typedef.rs::fill_database` — auto-Reference layout decision
   (phase 02b).
 - `src/generation/mod.rs::emit_field` — native auto-Reference
-  layout (phase 02c P258 fix).
+  layout (phase 02c @P258 fix).

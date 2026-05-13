@@ -83,7 +83,7 @@ scope exit by two mechanisms that cover every shipped capture pattern:
 - **Local var (D1)**: closure record dies with the stack frame via the
   standard local-cleanup path; the captured payload (text / reference / etc.)
   is freed transitively.
-- **Struct field (D3)**: P213's `Parts::ChildRec` cascade walks the host
+- **Struct field (D3)**: @P213's `Parts::ChildRec` cascade walks the host
   struct's fields at scope exit and frees the closure record co-located in
   the host store.
 
@@ -96,7 +96,7 @@ The legacy "Implementation path" section below describes a `get_free_vars`
 `Type::Function` arm that was contemplated but never landed because the
 `Parts::ChildRec` + standard-local-cleanup combination already covers the
 surface.  The cross-scope closure work it discusses (Steps 1–4) DID land
-through P213/P215/P227 by 2026-05-05 — read it as historical context, not
+through @P213/P215/P227 by 2026-05-05 — read it as historical context, not
 as current open work.
 
 Plan-15 phase 06 will trim the legacy "Implementation path" section once
@@ -444,7 +444,7 @@ Four bugs were fixed:
 
 The interpreter frees closure records via the codegen special case described
 above.  Native codegen handles closure-record drop via Rust's RAII at
-stack-frame exit (no explicit `OpFreeRef` emission needed); plan-15 phase
+stack-frame exit (no explicit `OpFreeRef` emission needed); @PLAN15 phase
 03–05 leak guards (`tests/leak.rs::p15_phase03_*` / `_phase04_*` /
 `_phase05_*`) confirmed both paths produce clean store state under
 100-iteration tight loops for text / Reference / nested-closure captures
@@ -457,9 +457,9 @@ catches any future native-vs-interp divergence in observable output.
 
 The three bugs that originally motivated `Type::Function` work in
 `get_free_vars` — cross-scope closure freeing, caller-side cleanup,
-and capturing-into-struct-field — closed through P213 (struct-field
-layout via `Parts::ChildRec`, 2026-05-04), P215 (nested-closure
-name resolution, 2026-05-05), and P227 (text-returning fn-ref
+and capturing-into-struct-field — closed through @P213 (struct-field
+layout via `Parts::ChildRec`, 2026-05-04), @P215 (nested-closure
+name resolution, 2026-05-05), and @P227 (text-returning fn-ref
 calls, 2026-05-05).  Plan-15 phases 03–05 (2026-05-12) confirmed
 no residual leak via `tests/leak.rs` 100-iteration tight loops
 across capture types (text / Reference / nested) and destinations
@@ -469,7 +469,7 @@ The detailed step-by-step "Implementation path" that previously
 lived here described the contemplated `OpFreeClosureRef` opcode +
 `get_free_vars` extension — neither shipped because the
 `Parts::ChildRec` cascade plus standard local-cleanup already
-covers the surface.  Removed during plan-15 phase 06 closeout
+covers the surface.  Removed during @PLAN15 phase 06 closeout
 (2026-05-12); see git history if you need the original analysis.
 
 ---

@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status: decommissioned 2026-05-13** — see Major finding
 below.  The cell + auto-Reference machinery from
-phase 02d-iii + phase 03 (P259) already handles Case D
+phase 02d-iii + phase 03 (@P259) already handles Case D
 correctly: the outer scope and the (possibly escaped)
 closure share the SAME cell, so the closure's writes are
 visible to outer reads AND the outer's writes are visible
@@ -73,7 +73,7 @@ backends.
   per its original status; revisit if a use case surfaces
   that the cell + auto-Reference can't handle.
 - Phase 06 (closeout) proceeds with purity audit +
-  TTT v6 / plan-36 retrofit + documentation, dropping the
+  TTT v6 / @PLAN36 retrofit + documentation, dropping the
   Case-D rejection mention.
 - README.md's "four cases" specification needs revision —
   the existing implementation collapses Case D into
@@ -125,7 +125,7 @@ Two emission paths, ship the cheapest first:
 ### Path (a): inline-position fallback (ship first)
 
 A single `diagnostic!` call with all four positions inlined into
-the message body.  Matches existing P213 / P215 / P227
+the message body.  Matches existing @P213 / @P215 / @P227
 diagnostic shape; no DiagEntry change.  Example:
 
 ```
@@ -153,7 +153,7 @@ the inline format proves hard to scan.
 ## Test surface
 
 `tests/parse_errors.rs` (case-D rejection cells follow the
-same pattern as P257's parse-time rejection):
+same pattern as @P257's parse-time rejection):
 
 ```
 d_int_capture_with_outer_read_after    // problematic() — log_info(count) after closure ctor
@@ -201,9 +201,9 @@ d_problematic_pattern_fixed_by_reorder // moving the outer read BEFORE closure c
 | Risk | Mitigation |
 |---|---|
 | Diagnostic text is locked in by the cells; future changes need cell updates | This is INTENTIONAL — the cells are the contract.  When the diagnostic format changes (e.g., Path (b) ships), update the cells in the same commit. |
-| False-positive Case D rejects valid Case B/C code | Phase 06 retrofit catches false-positives at the application layer (TTT v6, plan-36).  Phase 04 cells include the "fixed by reorder" cell as a specific guard against the dominant false-positive shape (where the analysis treats a not-actually-aliasing read as aliasing). |
+| False-positive Case D rejects valid Case B/C code | Phase 06 retrofit catches false-positives at the application layer (TTT v6, @PLAN36).  Phase 04 cells include the "fixed by reorder" cell as a specific guard against the dominant false-positive shape (where the analysis treats a not-actually-aliasing read as aliasing). |
 | Case-D diagnostic doesn't suggest `Mutable<T>` workaround until phase 05 ships | Phase 04 inline-position message says "wrap in `Mutable<T>` for explicit shared ownership (see lib/mutable; not yet shipped)" — the suggestion is conditional on phase 05.  When phase 05 ships, update the message to drop the "not yet shipped" qualifier. |
-| Path (a) inline format is unreadable for nested cases | Phase 04 ships path (a) as the regression contract; the cells lock in the format.  If the format proves bad in plan-36 retrofit (phase 06), file Path (b) as a follow-up.  Cells make the diagnostic-shape upgrade traceable. |
+| Path (a) inline format is unreadable for nested cases | Phase 04 ships path (a) as the regression contract; the cells lock in the format.  If the format proves bad in @PLAN36 retrofit (phase 06), file Path (b) as a follow-up.  Cells make the diagnostic-shape upgrade traceable. |
 
 ## Cross-references
 
@@ -211,4 +211,4 @@ d_problematic_pattern_fixed_by_reorder // moving the outer read BEFORE closure c
 - [README § Diagnostic shape](README.md#diagnostic-shape)
 - [DISCUSSION § Snippet 4](DISCUSSION.md) — paper-trace of case D rejection.
 - `src/diagnostics.rs::DiagEntry` — extension point for Path (b).
-- [P257 fix](../../PROBLEMS.md#257) — same parse-time-rejection pattern (vector capture into closure).
+- [@P257 fix](../../PROBLEMS.md#257) — same parse-time-rejection pattern (vector capture into closure).

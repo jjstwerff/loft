@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 All sub-steps closed or formally deferred with rationale.
 Closeout docs (acceptance criteria revision + A9 superseded
-marker) shipped earlier 2026-05-09.  P235 par half closed
+marker) shipped earlier 2026-05-09.  @P235 par half closed
 (`par_tuple_destructure_in_for` canary PASSING).  A8.b
 stitch_id retry shipped: 5 `n_parallel_queue*` native fns
 collapsed to thin wrappers around `parallel_queue_dispatch` —
@@ -29,10 +29,10 @@ Final scope tally:
   A4 (light path retired entirely; no `.loft` file uses
   `par_light`).
 - **A10** (browser parallel via wasm-bindgen-rayon): out-of-scope
-  for plan-06 closure per priority statement (S2 strategic
+  for @PLAN06 closure per priority statement (S2 strategic
   showcase).  Ships as its own multi-session arc.
 - **A11** (final cleanup + docs): DONE 2026-05-09 — closeout
-  docs (`f974770`) + P235 par half (`15a7aab`) + A8.b stitch_id
+  docs (`f974770`) + @P235 par half (`15a7aab`) + A8.b stitch_id
   retry (this commit).
 
 ## Why this exists
@@ -78,7 +78,7 @@ file-site changes.
 6. **Goldens regen lives in the step that shifted them.**  Not a
    trailing chore.
 
-## Acceptance state — what "plan-06 done" means
+## Acceptance state — what "@PLAN06 done" means
 
 Three concrete criteria, with the original targets and the
 2026-05-09 status:
@@ -109,11 +109,11 @@ Three concrete criteria, with the original targets and the
    `#[allow(dead_code)]` for future par-safety diagnostics.
 3. **Zero ignored par canaries.**  `grep -c "^#\[ignore"
    tests/threading_chars.rs`.  Original: 8.  Today: **1** (down
-   from 2 after P235 par half closure).  The remaining ignore is
+   from 2 after @P235 par half closure).  The remaining ignore is
    heterogeneous-vec-of-fn (D11a row 8) — different surface
    (vector construction rejects heterogeneous capturing-fn
-   captures), outside plan-06 scope; tracked in DESIGN.md D11a.
-   **MET** — plan-06 takes the canary count to its lowest
+   captures), outside @PLAN06 scope; tracked in DESIGN.md D11a.
+   **MET** — @PLAN06 takes the canary count to its lowest
    achievable value within scope.
 
 All three criteria met (with the A8 revision + A8.b stitch_id
@@ -162,10 +162,10 @@ Heavy `parallel_execute_and_collect` retired.  Light path
 | P-ID | Title | Relevant arc step |
 |---|---|---|
 | **P196** | ~~Tuple-of-fn-ref native codegen `(u32, DbRef).0 as i32`~~ | **CLOSED 2026-04-30** — fixed in `output_call_template` (project `.0` from fn-ref tuple → widen to i64 for the OpSetInt4 template), no longer requires 4d.C closure-storage redesign; A6.c can now proceed independently |
-| **P198** | ~~`tests/scripts/95-alias-copy.loft` leaks Database 3 — regression on `roadmap-lsp-eclipse`~~ | **CLOSED 2026-05-01** in commit `30b01ce` — `scan_set` + native deep-copy emit both now unwrap `Value::Span` before pattern matching; A1 gate passes |
-| **P199** | Native codegen E0499 double `&mut stores` borrow on `n_assert(..., n_add_pair(...), ...)` | A7 (gated on T1.8a tuple-return convention) |
-| **P200** | Native codegen E0308 width mismatch on `f += <integer>` against binary file | Out of scope for ARC; tracked separately |
-| **P201** | `tests/html_wasm.rs` Mutex-poison cascade | Out of scope for ARC; test infra |
+| **@P198** | ~~`tests/scripts/95-alias-copy.loft` leaks Database 3 — regression on `roadmap-lsp-eclipse`~~ | **CLOSED 2026-05-01** in commit `30b01ce` — `scan_set` + native deep-copy emit both now unwrap `Value::Span` before pattern matching; A1 gate passes |
+| **@P199** | Native codegen E0499 double `&mut stores` borrow on `n_assert(..., n_add_pair(...), ...)` | A7 (gated on T1.8a tuple-return convention) |
+| **@P200** | Native codegen E0308 width mismatch on `f += <integer>` against binary file | Out of scope for ARC; tracked separately |
+| **@P201** | `tests/html_wasm.rs` Mutex-poison cascade | Out of scope for ARC; test infra |
 
 ---
 
@@ -198,16 +198,16 @@ unexpected failures; bench 11 ±5 %.
   `25_runtime_panic_builtin.expect` and `28_runtime_unwrap_none.expect`
   re-blessed via `UPDATE_GOLDEN=1`; diffs are pure pc shifts
   (`303→285`, `279→261`).
-- P198 alias-copy-leak (commit `7153390`): test still fails at the
+- @P198 alias-copy-leak (commit `7153390`): test still fails at the
   new pc=4842 (was 4788 pre-A1).  Confirmed not A1-caused — the
   retired code paths are unreachable from non-par scripts.  Note
-  appended to PROBLEMS.md P198; remains a candidate for an
+  appended to PROBLEMS.md @P198; remains a candidate for an
   A2-prerequisite spot fix in `scopes.rs::scan_set` Span/ParFor
   passthrough.
 - Bench-11 ±5%: passed against host-relative `main` baseline
   (interp +3 % median: 98ms main → 101ms branch).  The 44ms
   THREADING.md absolute baseline was a different host; native
-  column blocked by P199 (re-opens under A7).  Recorded in
+  column blocked by @P199 (re-opens under A7).  Recorded in
   THREADING.md § "ARC.md A1 host-relative check".
 - Clippy debt swept (commit `afc9f70`): branch had accumulated 40
   pre-existing clippy errors from spine commits 87c2ce8 onwards
@@ -217,10 +217,10 @@ unexpected failures; bench 11 ±5 %.
   continuation indents.  No semantic changes.
 - `cargo nextest run --profile ci`: passes everywhere except
   `loft::html_wasm::moros_editor_html_smoke` — confirmed
-  pre-existing P199 manifestation (`OpCopyRecord(stores,
+  pre-existing @P199 manifestation (`OpCopyRecord(stores,
   n_build_chunk(stores, …), …)` E0499).  Same shape closes under
   A7's hoist-inner-`&mut stores` fix.  Documented at PROBLEMS.md
-  P199 § "A1 status".
+  @P199 § "A1 status".
 
 #### Why first
 
@@ -252,11 +252,11 @@ Three concerns in one commit (atomic — no split):
    `tests/error_messages.rs`'s `BLESS_BASELINES` env var).  Diff the
    updated `.expected` files; verify only line-number / pc shifts.
 
-3. **P198 investigation gate.**  Before committing, run
+3. **@P198 investigation gate.**  Before committing, run
    `cargo test --release p146_script_95_alias_copy_leak`.  If it
-   passes today on `roadmap-lsp-eclipse`, ignore (P198 may already
+   passes today on `roadmap-lsp-eclipse`, ignore (@P198 may already
    be moot).  If it fails, file a one-paragraph note on PROBLEMS.md
-   P198 with the current symptom — but **do not block A1 on it**.
+   @P198 with the current symptom — but **do not block A1 on it**.
    The leak existed before A1's diff and is independent.
 
 #### Risks
@@ -588,7 +588,7 @@ either width-parameterised reads or a separate buffer stack.
 **Decision: width parameter on the existing buffer + a new getter.**
 A second buffer stack would be cleaner but doubles the per-call
 clone-reset cost; the width parameter is uglier but cheaper at
-runtime, matching plan-06's "everything is a store" axiom (rows are
+runtime, matching @PLAN06's "everything is a store" axiom (rows are
 opaque bytes).
 
 ##### A3.1 — Buffer-stack changes
@@ -963,7 +963,7 @@ selection for Reduce workers — A9.
 
 #### Why sixth
 
-These are the type-coverage canaries plan-06 was chartered to close.
+These are the type-coverage canaries @PLAN06 was chartered to close.
 Each represents user-facing functionality that doesn't work today.
 They cluster because they share infrastructure (4e hidden-arg
 destination, 4d.C closure storage).
@@ -1253,7 +1253,7 @@ collection's underlying records).  4d.B's
 
 #### Out of scope
 
-Tuple returns — A7.  Tuple inputs — out of plan-06.
+Tuple returns — A7.  Tuple inputs — out of @PLAN06.
 
 ---
 
@@ -1268,8 +1268,8 @@ into a ~30-LoC fix in `src/generation/{mod.rs,emit.rs,dispatch.rs}`
 exists; the par dispatch wires through the same Variable-context
 tuple-element type-routing the general fn-return path uses.
 
-A7's per-arity expectation list grew from the plan-14 phase 02 /
-type-spectrum audit (2026-05-04, plan-06 type-spectrum commit
+A7's per-arity expectation list grew from the @PLAN14 phase 02 /
+type-spectrum audit (2026-05-04, @PLAN06 type-spectrum commit
 `9db18fd`).  The 4 originally-tracked canaries plus the 3 new
 broader-coverage canaries are now A7's full target set.
 
@@ -1288,8 +1288,8 @@ different scopes:
 | Surface | Canaries | Blocker | Sub-step | Effort |
 |---|---|---|---|---|
 | **A7.1** | `par_tuple_return_int_int`, `par_tuple_return_int_text`, `par_tuple_return_three_arity`, `par_tuple_return_nested` | Parser gate at `collections.rs:1539` rejects tuples > 8B.  Relaxing the gate exposes the next layer (`n_parallel_for unreachable!` — routing falls back to the materialised path A4 retired). | New tuple_queue family: `par_tuple_buffer_stack` field + `n_parallel_queue_tuple` + `n_parallel_buf_get_tuple` + `n_parallel_buf_drop_tuple` + stdlib decls + parser routing extension.  Comparable scope to A5b (closed 2026-05-07). | M (~1 session) |
-| **A7.2** | `par_tuple_destructure_in_for` | General parser feature gap — `for (a, b) in items { ... }` rejects with "Expect variable after for" **even without par**.  Filed as P235. | Extend the for-loop parser to accept `(name1, name2, …)` destructure; desugar to `for _t in items { name1 = _t.0; name2 = _t.1; … }`.  Closes both par and non-par destructure with one rewrite. | S-M (~0.5–1 session) |
-| **A7.3** | `par_tuple_return_struct_text` | Lexer bug — `tuple.0.field` syntax fails with "Problem parsing float" because `0.field` is tokenised as a malformed float literal.  Reproduces outside par.  Filed as P234.  Plus runtime gap: function-return tuples containing Reference / Text / etc. corrupt at the call boundary on `--native`. | Lexer fix (number-tokeniser when `.` is followed by a non-digit identifier start) + runtime fix routing lifetime-bearing tuple returns through synthetic `__tuple<…>` struct (Plan-14 phase 07).  Both DONE 2026-05-08; canary un-ignored. | M (~1 session) |
+| **A7.2** | `par_tuple_destructure_in_for` | General parser feature gap — `for (a, b) in items { ... }` rejects with "Expect variable after for" **even without par**.  Filed as @P235. | Extend the for-loop parser to accept `(name1, name2, …)` destructure; desugar to `for _t in items { name1 = _t.0; name2 = _t.1; … }`.  Closes both par and non-par destructure with one rewrite. | S-M (~0.5–1 session) |
+| **A7.3** | `par_tuple_return_struct_text` | Lexer bug — `tuple.0.field` syntax fails with "Problem parsing float" because `0.field` is tokenised as a malformed float literal.  Reproduces outside par.  Filed as @P234.  Plus runtime gap: function-return tuples containing Reference / Text / etc. corrupt at the call boundary on `--native`. | Lexer fix (number-tokeniser when `.` is followed by a non-digit identifier start) + runtime fix routing lifetime-bearing tuple returns through synthetic `__tuple<…>` struct (Plan-14 phase 07).  Both DONE 2026-05-08; canary un-ignored. | M (~1 session) |
 
 The original ARC.md "uniform across the 5 return-cases" risk-row
 claim was wrong: only A7.1's 4 canaries share a fix surface.  A7.2
@@ -1302,7 +1302,7 @@ exercise it.
 **Status (2026-05-08): DONE.**
 
 Closed by the size-based gate widen + work-ref unification stack
-that also closes [P236](../../PROBLEMS.md):
+that also closes [@P236](../../PROBLEMS.md):
 
 - `src/parser/definitions.rs::parse_function` rewrites the
   `returned` type from `Type::Tuple(elems)` to
@@ -1318,7 +1318,7 @@ that also closes [P236](../../PROBLEMS.md):
   fires only when at least one tuple leaf is reachable.
 - `src/parser/expressions.rs` destructure path accepts both
   `Type::Tuple([...])` and `Reference(__tuple<...>)` shapes.
-- The shared-work-ref pattern matches what P236's struct-case
+- The shared-work-ref pattern matches what @P236's struct-case
   unification (`unify_if_branches_work_refs`) does, so both
   paths converge on the same scope/native-codegen behaviour.
 
@@ -1363,7 +1363,7 @@ in `Stores` — that takes a slice and copies it; the alternative
 
 ##### A7.2 — For-loop tuple destructure (Surface 2)
 
-NOT a par-specific fix.  Tracked as P235.  The desugar is
+NOT a par-specific fix.  Tracked as @P235.  The desugar is
 mechanical:
 
 ```loft
@@ -1409,7 +1409,7 @@ regression tests (`p235_par_half_*`).
 
 ##### A7.3 — Tuple-of-struct member access (Surface 3)
 
-NOT a par-specific fix.  Tracked as P234.
+NOT a par-specific fix.  Tracked as @P234.
 
 **Lexer half DONE 2026-05-07** in `src/lexer.rs::number`: extended
 P195's `prev_was_field_dot` branch to fire regardless of what
@@ -1458,7 +1458,7 @@ miscount; correct sum is 12.
 Adjacent canary, NOT closed by A7 (different fix surface):
 - `par_vec_of_capturing_fns_t4` — heterogeneous capturing closures
   in `vector<fn(...)>`.  Failure is at vector-construction (lambda
-  → vector storage path), not at par dispatch.  Tracked in plan-15
+  → vector storage path), not at par dispatch.  Tracked in @PLAN15
   D4; cross-referenced by DESIGN.md D11a row 8.
 
 #### Why seventh
@@ -1517,13 +1517,13 @@ for _t in pairs par(r = work(_t.0, _t.1), 4) { use(r) }
 
 | Risk | Mitigation |
 |---|---|
-| ~~T1.8a slips beyond plan-06's window~~ | *Retired 2026-05-04* — T1.8a closed via commit `023ca15`. |
-| P199 (native E0499 double-borrow on tuple) lands as a blocker for native tuple compilation | Document in PROBLEMS.md P199 follow-up; A7 covers interpreter mode first; native-mode tuple par becomes A7.1.  Note: A1 confirmed P199 also fires in `tests/html_wasm.rs::moros_editor_html_smoke` (`OpCopyRecord(stores, n_build_chunk(stores, …), …)`) and in `bench/11_par/bench.loft` native column (`format_float(&mut s, t_5float_round(stores, …), …)`) — A7's hoist-inner-`&mut stores` fix closes all three simultaneously. |
+| ~~T1.8a slips beyond @PLAN06's window~~ | *Retired 2026-05-04* — T1.8a closed via commit `023ca15`. |
+| @P199 (native E0499 double-borrow on tuple) lands as a blocker for native tuple compilation | Document in PROBLEMS.md @P199 follow-up; A7 covers interpreter mode first; native-mode tuple par becomes A7.1.  Note: A1 confirmed @P199 also fires in `tests/html_wasm.rs::moros_editor_html_smoke` (`OpCopyRecord(stores, n_build_chunk(stores, …), …)`) and in `bench/11_par/bench.loft` native column (`format_float(&mut s, t_5float_round(stores, …), …)`) — A7's hoist-inner-`&mut stores` fix closes all three simultaneously. |
 | Native par dispatch rejects `Type::Tuple` worker returns at `Parallel worker return type 'tuple(...)' (size 16) is not supported` | A7.1 is exactly this fix — the per-canary failure mode is uniform across the 5 return-cases; one Wide-return route closes all of them.  Pre-flight verified the failure shape is independent of element type / arity. |
 
 #### Out of scope
 
-Tuple input through par (`vector<(T, U)>` input) — out of plan-06.
+Tuple input through par (`vector<(T, U)>` input) — out of @PLAN06.
 
 ---
 
@@ -1963,9 +1963,9 @@ Closeout actions shipped 2026-05-09 across three commits:
   closure state; acceptance criteria revised with the
   2026-05-09 verdict (A8 deferred + A9 superseded by A4); A8
   section gets the trait collapse audit; A9 section's
-  superseded-by-A4 marker; CHANGELOG_TECHNICAL.md plan-06
+  superseded-by-A4 marker; CHANGELOG_TECHNICAL.md @PLAN06
   progress entry.
-- `15a7aab` (P235 par half): synthesized wrapper-worker for
+- `15a7aab` (@P235 par half): synthesized wrapper-worker for
   `for (a, b) in pairs par(...) { ... }`; closes
   `par_tuple_destructure_in_for`; ignored canary count 2 → 1.
 - (A8.b commit, this session): collapse the 5
@@ -1979,7 +1979,7 @@ THREADING.md (commit `ada917d`) documents the dispatcher
 inventory + WHY the `src/parallel.rs` trait collapse was
 rejected, so future maintainers don't re-attempt it.
 
-Items intentionally out-of-scope of plan-06 closure (stay open
+Items intentionally out-of-scope of @PLAN06 closure (stay open
 permanently):
 - **A10** (browser parallel) — strategic showcase (S2), ships
   as its own multi-session arc when scheduled.
@@ -1989,7 +1989,7 @@ permanently):
   The one remaining `#[ignore]` in `tests/threading_chars.rs`
   is this canary; documented at the test site.
 
-Remaining items intentionally out-of-scope of plan-06 closure
+Remaining items intentionally out-of-scope of @PLAN06 closure
 (stay open after A11 fully completes):
 - **A10** (browser parallel) — strategic showcase (S2), ships
   as its own multi-session arc when scheduled.
@@ -1997,13 +1997,13 @@ Remaining items intentionally out-of-scope of plan-06 closure
   construction.  Different surface (vector construction
   rejection, not a par-side bug); tracked in DESIGN.md D11a.
   Will be the one remaining `#[ignore]` in
-  `tests/threading_chars.rs` after P235 par half lands.
+  `tests/threading_chars.rs` after @P235 par half lands.
 
 The original design is preserved below for context.
 
 #### Why last (original 2026-04-30 design)
 **Effort:** S (~0.5 session)
-**Acceptance test:** all 3 acceptance criteria from "what plan-06
+**Acceptance test:** all 3 acceptance criteria from "what @PLAN06
 done means" hit; `make ci` clean; D11 type-spectrum tracker shows
 every canary closed.
 
@@ -2095,7 +2095,7 @@ the **Actual today** row for what `grep` returns now.
 | A10 (projected) | 3 | 4 | 1 + browser | 0 | varies | + browser numbers |
 | A11 (projected) | 3 | 4 | 1 | 0 | **−1100** | unchanged |
 
-Three of plan-06's headline numbers — "1 dispatcher" (close: 3
+Three of @PLAN06's headline numbers — "1 dispatcher" (close: 3
 because Stitch policies stay distinct), "1 user surface" (yes),
 "~−1500 LOC" (close: −1100 net) — fall within hailing distance of
 the original projection.  The shortfall is honest: phase 2's rebase
@@ -2105,8 +2105,8 @@ plan didn't anticipate.
 
 ## What this arc explicitly does NOT cover
 
-These items appeared in plan-06's earlier framing but are
-**out of scope** for closing plan-06:
+These items appeared in @PLAN06's earlier framing but are
+**out of scope** for closing @PLAN06:
 
 - **`par_to_vec` opt-in materialiser** (was phase 11).  Re-add only
   when a real user needs it.  Phase 2's `StoreRebase` machinery
@@ -2118,7 +2118,7 @@ These items appeared in plan-06's earlier framing but are
 - **Phase 9 tuple input** (`vector<(T, U)>` input).  A7 covers
   tuple *return*; tuple *input* through par is a separate
   ergonomic feature, not a simplification target.
-- **P200, P201** — out of scope for ARC; tracked separately.
+- **@P200, @P201** — out of scope for ARC; tracked separately.
 
 ## Risk register (cross-step)
 
@@ -2134,7 +2134,7 @@ Honest list of what could derail the arc:
 | A9's 5e fixed-point analyser is more work than budgeted (cycle handling, mutual recursion) | The algorithm in [05-auto-light.md:372](05-auto-light.md) is concrete and bounded.  If implementation surfaces edge cases, document them, ship a conservative version (assume `false` for any cycle), file the optimistic version as follow-up. |
 | A10.a's `init_thread_pool` async semantics force broader async refactor in main entry | Wrap top-level entry in an async block; rayon init is the only new async surface.  No deep refactor. |
 | Bench 11 regresses by > 5 % at any step | Investigate before merging.  No "we'll fix it in the next step" — that's how complexity creeps in via the back door. |
-| P198 (alias-copy regression) turns out to be plan-06 par-safety series breakage | Investigate during A1; if confirmed, file the fix as a new arc step before A2.  Don't proceed with leaks. |
+| @P198 (alias-copy regression) turns out to be @PLAN06 par-safety series breakage | Investigate during A1; if confirmed, file the fix as a new arc step before A2.  Don't proceed with leaks. |
 
 ## Cross-references — where to find each design
 
@@ -2166,7 +2166,7 @@ Honest list of what could derail the arc:
 
 ## How to use this doc going forward
 
-When starting a session on plan-06:
+When starting a session on @PLAN06:
 
 1. Find the lowest-numbered OPEN arc step.
 2. Read its scope-locked bullet list and design.  Do not exceed
@@ -2416,7 +2416,7 @@ that advances a step.
 | A6.c | DONE 2026-05-01 | M | (this branch) |
 | A6.d | DONE 2026-05-01 | S | (this branch) |
 | A7.1 | OPEN (post-survey) | M | — |
-| A7.2 | non-par DONE 2026-05-07 (P235 lexer half + parser); par half OPEN | S-M | this commit |
+| A7.2 | non-par DONE 2026-05-07 (@P235 lexer half + parser); par half OPEN | S-M | this commit |
 | A7.3 | lexer DONE 2026-05-07; runtime DONE 2026-05-08 via Plan-14 phase 07 (synthetic-struct routing); canary un-ignored | M | this commit |
 | A8  | OPEN | M  | — |
 | A9  | OPEN | M  | — |
@@ -2427,7 +2427,7 @@ that advances a step.
 
 **Total budget: ~13–17 sessions** distributed across these steps
 (A6 split into 4 + A10 split into 3 → 16 sub-PRs).  At a session a
-day, plan-06 closes in 2-3 working weeks.  Stretch budget for
+day, @PLAN06 closes in 2-3 working weeks.  Stretch budget for
 unforeseen rework: + 30 %.
 
 ## Final note on scope discipline

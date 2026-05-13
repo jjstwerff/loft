@@ -33,7 +33,7 @@ What differs:
 - Result-storage idiom (`set_long` / `set_str` / `copy_record`)
 - Return-size dispatch (8 / 1 / i32 for scalar; fixed for text; struct-size for ref)
 
-Phase 06 (P202) adds queue variants: `n_parallel_queue_native`,
+Phase 06 (@P202) adds queue variants: `n_parallel_queue_native`,
 `n_parallel_queue_text_native`, `n_parallel_queue_ref_native`.
 Without this phase, that's **six** near-duplicate runtime fns
 totalling ~500 lines.

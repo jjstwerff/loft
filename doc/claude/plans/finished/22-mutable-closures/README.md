@@ -7,8 +7,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status:** **Shipped 2026-05-13**.  Moved to `plans/finished/22-mutable-closures/`.
 Drivers (see [§ Drivers](#drivers)): TTT v6 server retrofit
-([plan-32 § v6](../../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures))
-+ plan-36 audience-demo server (loft code projected to the
+([@PLAN32 § v6](../../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures))
++ @PLAN36 audience-demo server (loft code projected to the
 audience as part of the "loft snippet highlights" beats —
 visible code structure is part of the spectacle).  Companion
 discussion (options surveyed, alternatives considered,
@@ -41,10 +41,10 @@ concrete consumers with a soft deadline:
   code earns its keep at the spectacle, not only in the
   codebase.
 
-**Non-blocking constraint**: TTT v6 + plan-36 must remain
-shippable without this plan's implementation.  If plan-22 lands
-before the talk, plan-36 server uses writable closures.  If it
-doesn't, plan-36 server uses `Reference<T>` exactly like v5.
+**Non-blocking constraint**: TTT v6 + @PLAN36 must remain
+shippable without this plan's implementation.  If @PLAN22 lands
+before the talk, @PLAN36 server uses writable closures.  If it
+doesn't, @PLAN36 server uses `Reference<T>` exactly like v5.
 Either way the demo functions; only the on-screen code-snippet
 elegance differs.
 
@@ -371,7 +371,7 @@ error: closure mutates captured `count` and escapes, but the
 ```
 
 If multi-caret pretty-printing is too much work for v1, the
-fall-back inline format matches the existing P213 / P215 shape:
+fall-back inline format matches the existing @P213 / @P215 shape:
 
 ```
 closure mutates captured 'count' and escapes (returned at game/main.loft:44:5),
@@ -416,7 +416,7 @@ subsystems are required.  Pieces involved:
 - **Multi-position diagnostics** — extends `DiagEntry` in
   `src/diagnostics.rs` with optional secondary positions; ~75
   LOC of additive change.  Inline-position fallback matches
-  existing P213 / P215 shape and requires no infrastructure
+  existing @P213 / @P215 shape and requires no infrastructure
   change.
 
 The detailed analysis sketch (algorithm pseudocode, paper-trace
@@ -485,14 +485,14 @@ Each phase has its own design doc under `plans/finished/22-mutable-closures/`:
 | ~~[05 — `Mutable<T>` helper](05-mutable-helper.md)~~ | DEFER (cell + auto-Reference subsumes; revisit only if a concrete use case surfaces) | Phase 04 |
 | [06 — closeout](06-closeout.md) | Doc closeout — CHANGELOG_TECHNICAL, DESIGN_DECISIONS, CAVEATS, ROADMAP, move to finished/ | Phases 02-03 |
 
-**Acceptance for the whole plan**: every Case A regression cell stays green; phase 02-05 cells run cross-mode under `tests/mut_closure_matrix.rs`; phase 04 case-D rejections pinned in `tests/parse_errors.rs`; phase 06 retrofit ships TTT v6 + plan-36 servers using writable closures.
+**Acceptance for the whole plan**: every Case A regression cell stays green; phase 02-05 cells run cross-mode under `tests/mut_closure_matrix.rs`; phase 04 case-D rejections pinned in `tests/parse_errors.rs`; phase 06 retrofit ships TTT v6 + @PLAN36 servers using writable closures.
 
-P257's parse-time-rejection pattern (closed 2026-05-12) is the
+@P257's parse-time-rejection pattern (closed 2026-05-12) is the
 template phase 04 uses for case-D diagnostics.  Plan-15
 (closure validation, finished 2026-05-12) provides the
 regression net — its 22 cells in `tests/closure_matrix.rs`
 + 5 leak guards in `tests/leak.rs` confirm Case A semantics
-stay correct as plan-22 evolves the synthesis path.
+stay correct as @PLAN22 evolves the synthesis path.
 
 ### External dependency stack (first-game ship)
 
@@ -500,14 +500,14 @@ This spec sits on the dependency stack for first-game ship:
 
 | Phase | Ships | Dependency |
 |---|---|---|
-| 1 | [P213 v4](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix) — closures-in-struct-fields layout | None (separate plan) |
-| 2 | This spec — implicit-by-body classifier with cases A/B/C/D | P213 v4 |
+| 1 | [@P213 v4](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix) — closures-in-struct-fields layout | None (separate plan) |
+| 2 | This spec — implicit-by-body classifier with cases A/B/C/D | @P213 v4 |
 | 3 | EventLoop core ([EVENT_LOOP.md](../../future/23-event-loop/README.md)) | This spec |
 | 4 | First playable single-player game | Phase 2 |
 | 5 | First multiplayer game | Phase 3 |
 
-P213 v4 already shipped (closed 2026-05-04 via `Parts::ChildRec`
-layout-widening); plan-22 phase 2 dependency is met.
+@P213 v4 already shipped (closed 2026-05-04 via `Parts::ChildRec`
+layout-widening); @PLAN22 phase 2 dependency is met.
 
 ---
 
@@ -526,5 +526,5 @@ layout-widening); plan-22 phase 2 dependency is met.
 - [LIFETIME.md](../../../LIFETIME.md) — dep tracking, scope-based
   freeing, Reference<T> semantics.
 - [PROBLEMS.md § 213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
-  — P213 v4 layout for closures-in-struct-fields.
+  — @P213 v4 layout for closures-in-struct-fields.
 - [CAVEATS.md](CAVEATS.md) — current closure capture caveat.

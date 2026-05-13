@@ -25,18 +25,20 @@ make index                                    # rebuild index/tags.json (plan-37
 make view                                     # branch-aware doc + code viewer (plan-35; SSH port-forward 8765; /tag/<bare> for tracker refs)
 ```
 
-## Tracker tags (plan-37)
+<!-- noindex region: phase-06 sed pass shouldn't migrate the
+     bare-name examples that explain the convention. -->
+## Tracker tags (plan-37) <!--noindex-->
 
 Tracker references in docs use the `@`-prefixed form so that
-regex matches are unambiguous (the bare-name `P259` regex
-collides with `2P259`, `P2590`, prose like "the P259 fix
-forward"):
+regex matches are unambiguous (the bare-name `P259` regex <!--noindex-->
+collides with `2P259`, `P2590`, prose like "the P259 fix <!--noindex-->
+forward"): <!--noindex-->
 
 - **P-issues**: `@P259`, `@P229b`, `@P262`.
 - **Plans + phases**: `@PLAN22`, `@PLAN35-01`,
   `@PLAN22-2d-iii.a` (sub-phases via `-` and `.`).
 
-Adoption is incremental — bare-name forms (`P259`, `plan-22
+Adoption is incremental — bare-name forms (`P259`, `plan-22 <!--noindex-->
 phase 03`) still work in prose; the indexer (`make index`)
 tracks both under separate `legacy:` keys for transition
 metering.
@@ -357,7 +359,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [CAVEATS.md](doc/claude/CAVEATS.md) | Verifiable edge cases and limitations with reproducers and test references |
 | [COROUTINE.md](doc/claude/COROUTINE.md) | Coroutine design — stackful `yield`, `iterator<T>`, `yield from` (planned, 1.1+) |
 | [LIFETIME.md](doc/claude/LIFETIME.md) | Dependency tracking and scope-based freeing — dep field semantics, Text vs Reference, closures |
-| [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | Reference — `loft --html` pipeline: cdylib codegen, WebGL2 import bridge, frame-yield contract for browser game loops, `wasm-opt` integration, HTML assembly format.  Where each piece lives in the code today.  Closed plan-31 (build sequence + commits) at [`plans/finished/31-html-export/`](doc/claude/plans/finished/31-html-export/README.md). |
+| [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | Reference — `loft --html` pipeline: cdylib codegen, WebGL2 import bridge, frame-yield contract for browser game loops, `wasm-opt` integration, HTML assembly format.  Where each piece lives in the code today.  Closed @PLAN31 (build sequence + commits) at [`plans/finished/31-html-export/`](doc/claude/plans/finished/31-html-export/README.md). |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
 
 ---

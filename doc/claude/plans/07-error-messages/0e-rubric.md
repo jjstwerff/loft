@@ -59,7 +59,7 @@ quality gap, and most close in phase 4 or 6.
 | 33 ⭐ | struct_missing_field | (no error, prints `Bob` — missing field zero-filled) | **silent zero-fill** | n/a | 6 |
 | 34 | struct_extra_field | file+line+col ✓ | concrete first error; 5 cascade follow-ups | n/a | 6 (cascade suppression) |
 | 35 | interface_method_unimpl | file+line+col ✓ | concrete ("'Box' does not satisfy interface 'Drawable': missing draw") | n/a | already excellent |
-| 36 | par_worker_writes_parent | file+line+col ✓ | **cryptic** ("Expect token ;") — par-safety check not surfacing user-readable diagnostic | n/a | 6 (par-safety message; this is a known plan-06 path) |
+| 36 | par_worker_writes_parent | file+line+col ✓ | **cryptic** ("Expect token ;") — par-safety check not surfacing user-readable diagnostic | n/a | 6 (par-safety message; this is a known @PLAN06 path) |
 | 37 | par_thread_count_zero | file+line+col ✓ | **cryptic** — 8 cascading errors from one syntax decision | n/a | 6 (cascade) |
 | 38 | import_unknown_file | file+line+col ✓ | concrete ("not found — searched lib/, lib_dirs, sibling packages") | n/a | already excellent |
 | 39 ⭐ | import_circular | (no error, prints `from main`) | **silent — circular import not detected** | n/a | 6 |

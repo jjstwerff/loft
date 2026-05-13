@@ -14,7 +14,7 @@ c0_d1_non_cap_local).  No production change.
 (c0_d1_non_cap_local + c0_d2_non_cap_arg + c0_d2_non_cap_inline
 + c0_d3_non_cap_field + c0_d4_non_cap_vector).  All non-capturing
 shapes pass interp + native cross-mode.  No production change —
-the underlying support shipped earlier (P214 closed the
+the underlying support shipped earlier (@P214 closed the
 vector-of-non-capturing path 2026-05-05).
 
 **Phase 02 SHIPPED 2026-05-12** — C1 + C5 (basic-type captures)
@@ -24,7 +24,7 @@ c5_d1_multi_capture_local + c5_d2_multi_capture_arg +
 c5_d3_multi_capture_field).  Single integer capture and
 multi-basic capture (int + bool + int) both pass.  D4 stays
 CLOSED for capturing closures.  No production change —
-P213's `Parts::ChildRec` layout-widening (closed 2026-05-04)
+@P213's `Parts::ChildRec` layout-widening (closed 2026-05-04)
 already supports the struct-field capture surface; phase 02
 pins it as a regression guard.
 
@@ -40,14 +40,14 @@ assert `state.check_store_leaks()` passes after.
 **Phase 03 decision** (the active LIFETIME risk slice):
 the closure-DbRef leak feared in LIFETIME.md does NOT manifest
 in any C2/D1/D2/D3 shape.  D1 frees the closure record at
-stack-frame exit; D3 frees via P213's `Parts::ChildRec`
+stack-frame exit; D3 frees via @P213's `Parts::ChildRec`
 cascade when the host struct goes out of scope.  No P-issue
 filed — the LIFETIME.md "NOT YET HANDLED" annotation is
 overstated documentation drift, not a runtime bug.  Phase 06
 should update LIFETIME.md to reflect the actual freed-at-
 scope-exit behaviour.
 
-No production change — P227 closed text-returning fn-ref
+No production change — @P227 closed text-returning fn-ref
 calls (interp + native) 2026-05-05; phase 03 pins it as a
 regression guard plus adds the leak surface coverage.
 
@@ -64,7 +64,7 @@ tight loops, both clean.
 
 **Phase 04 finding**: no DbRef-in-closure-record leak or
 read-after-free.  The "move-vs-copy semantics gap analogous
-to plan-14 T1.8c" feared in the plan does NOT manifest for
+to @PLAN14 T1.8c" feared in the plan does NOT manifest for
 closures.  The dep mechanism in `vectors.rs:666-669`
 (Type::Function carries closure-record dep `[w]`) plus
 `Parts::ChildRec` cascade for D3 ensures the captured Point's
@@ -72,7 +72,7 @@ store record stays live until the closure record is freed.
 No P-issue filed.
 
 No production change — the underlying support shipped earlier
-(P213 closed struct-field captures 2026-05-04 with
+(@P213 closed struct-field captures 2026-05-04 with
 `Parts::ChildRec`; the dep-tracking for closure records was
 in place from the original closure surface).  Phase 04 pins
 it as a regression guard.
@@ -92,12 +92,12 @@ record ← inner fn-ref).  Clean — no leak accumulation.
 D3 was matrix-flagged as deferred ("depends on C3 dep
 propagation") but phase 04 confirmed C3 dep propagation works,
 so D3 is included.  Constraint: inner lambda must be
-non-capturing (P215's supported case); capturing-source-into-
+non-capturing (@P215's supported case); capturing-source-into-
 closure remains deferred (would need `synthesize_closure_record`
 to register the 8B split layout when the captured lambda itself
 captures).
 
-No production change — P215 closed nested-closure name
+No production change — @P215 closed nested-closure name
 resolution 2026-05-05; phase 05 pins it as a regression guard.
 
 **Phase 06 SHIPPED 2026-05-12** — closeout.  LIFETIME.md
@@ -108,23 +108,23 @@ cleanup already covers the surface); ROADMAP.md / USER_FACING.md
 plan moved to `plans/finished/15-closure-validation/`.
 
 **Phase 06 finding — 1 new bug filed**: probing during closeout
-surfaced **P257** — capturing a `vector<T>` into a closure body
+surfaced **@P257** — capturing a `vector<T>` into a closure body
 crashes both backends with no clean parse-time rejection (interp
 panics with `Write to locked store`, native rejects with rustc
 E0308 + E0605).  The matrix's C7 row was CLOSED:non-goal but the
 failure mode is unstable.  Filed as Low severity — no user code
 in lib/* depends on capturing vectors into closures.
 
-**Plan-15 final bug yield**: 1 new P-issue (P257) across 22 matrix
+**Plan-15 final bug yield**: 1 new P-issue (@P257) across 22 matrix
 cells + 5 leak guards.  Below the 2-3 yield predicted in the
-README ("plan-14 phase 01 found 2 P-issues in 15 cells; plan-15
+README ("@PLAN14 phase 01 found 2 P-issues in 15 cells; @PLAN15
 likely surfaces a comparable rate").  The lower yield reflects
-that P213/P214/P215/P216/P227 cleared the closure surface in the
-May 4-5 sprint BEFORE plan-15 ran, so the matrix mostly pinned
-regression guards rather than finding new bugs.  P257 was found
+that @P213/P214/P215/P216/P227 cleared the closure surface in the
+May 4-5 sprint BEFORE @PLAN15 ran, so the matrix mostly pinned
+regression guards rather than finding new bugs.  @P257 was found
 by deliberately probing CLOSED cells during phase 06 closeout —
 the matrix's PASS/FIX cells all worked because the support
-landed earlier.  Lesson for plan-16+: aggressive probing of the
+landed earlier.  Lesson for @PLAN16+: aggressive probing of the
 CLOSED-cell boundary during closeout is the highest-yield part
 of the validation arc when the underlying surface is already
 mostly clean.
@@ -134,7 +134,7 @@ mostly clean.
 Lock the closure-validation matrix and wire `tests/closure_matrix.rs`
 to the existing `cross_mode!` harness from
 `tests/common/cross_mode.rs`.  No new harness code is needed; the
-plan-14 phase-00 infrastructure is reused as-is.
+@PLAN14 phase-00 infrastructure is reused as-is.
 
 ## The frozen matrix
 
@@ -152,7 +152,7 @@ Cell legend: `PASS:test_name` / `FIX:phase` / `CLOSED:reason` /
 | **C7** vector capture | CLOSED:non-goal | CLOSED:non-goal | CLOSED:non-goal | CLOSED:non-goal |
 
 D5 (tuple element) is intentionally absent — it's covered by
-[plan-14 phase 03](../../finished/14-tuple-validation/03-closures.md).
+[@PLAN14 phase 03](../../finished/14-tuple-validation/03-closures.md).
 
 ## Harness reuse
 
@@ -188,7 +188,7 @@ cargo test --release --test closure_matrix -- --ignored c1_d1_int_capture_local
 ## Per-cell test inventory
 
 Cell names use the closure-specific prefix `c<C>_d<D>_<sub>` so
-they don't collide with plan-14's `e<E>_d<D>_<sub>` namespace.
+they don't collide with @PLAN14's `e<E>_d<D>_<sub>` namespace.
 
 ```
 c0_d1_non_cap_local            // f = |x| { x + 1 }; f(3)
@@ -236,7 +236,7 @@ graduates to a FIX cell in a follow-up commit.
 
 | Risk | Mitigation |
 |---|---|
-| `tests/closure_matrix.rs` adds cargo-test compile time on every binary build | Same mitigation as plan-14: cells `#[ignore]`d by default, default `cargo test` skips them. |
+| `tests/closure_matrix.rs` adds cargo-test compile time on every binary build | Same mitigation as @PLAN14: cells `#[ignore]`d by default, default `cargo test` skips them. |
 | Cell name namespace `c<C>_d<D>` collides with future axes if more capture shapes appear | Add a `c<C><suffix>_d<D>` rule when adding new shapes; current C0–C7 leaves room. |
 | The closure-leak gap (LIFETIME.md) is unpinned until phase 03 — phase 02 cells may produce false-pass results because the leak doesn't surface in those cell shapes | Phase 02 cells run under `tests/leak.rs`-style assertions in addition to `cross_mode!` cross-equivalence.  If the leak surfaces in a C1 capture, it gets filed as an open P-issue on phase 02 instead of waiting for phase 03. |
 
@@ -244,6 +244,6 @@ graduates to a FIX cell in a follow-up commit.
 
 - [README.md](README.md) — full matrix; this phase fixes its shape.
 - `tests/common/cross_mode.rs` — shared harness.
-- [plan-14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
+- [@PLAN14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
   template; same matrix style + cross-mode contract.
 - [LIFETIME.md § Function](../../LIFETIME.md) — closure leak gap.

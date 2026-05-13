@@ -165,7 +165,7 @@ Phase 0 has three commits, each landed independently:
 
 Phase 0a's characterisation suite covers what works **today**.
 DESIGN.md D11 lists the **full type spectrum** par must accept after
-plan-06.  Several shapes in D11 don't work today; some don't even
+@PLAN06.  Several shapes in D11 don't work today; some don't even
 have a canary test yet.
 
 Phase 0d adds a **single tracking table** in this file that lists

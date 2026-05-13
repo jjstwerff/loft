@@ -14,8 +14,8 @@ Three closeout tasks:
 1. **Audit `default/01_code.loft`** for purity annotations
    that cause false-positive Case B/C/D classifications.
    Tighten where the false-positive cost matters.
-2. **Retrofit the two drivers** that motivated plan-22's
-   promotion: TTT v6 server + plan-36 audience-demo server.
+2. **Retrofit the two drivers** that motivated @PLAN22's
+   promotion: TTT v6 server + @PLAN36 audience-demo server.
    Convert their `.inner` ceremony to writable closures.
 3. **Doc closeout** — LIFETIME.md updates, CHANGELOG_TECHNICAL.md
    entry, ROADMAP.md cleanup, plan moved to `finished/`.
@@ -62,8 +62,8 @@ writable closures from day one.  Loft snippets projected to the
 audience read `state.X` instead of `state.inner.X` — the
 on-stage code-elegance driver mentioned in README § Drivers.
 
-The plan-36 audience server is itself a smaller integration
-test: if writable closures hold up across that surface, plan-22
+The @PLAN36 audience server is itself a smaller integration
+test: if writable closures hold up across that surface, @PLAN22
 is production-ready for the lib/server use cases.
 
 ## Doc closeout (task 3)
@@ -72,20 +72,20 @@ is production-ready for the lib/server use cases.
   describing the four-case classifier, the lowering for case B
   (Reference + hidden cell), and the rejection for case D.
   Cross-link from the `Type::Function` section.
-- **CHANGELOG_TECHNICAL.md** — full plan-22 retrospective entry
-  per the plan-15 closeout pattern (per-phase summary + bug yield).
-- **ROADMAP.md** — remove the plan-22 row + active-plan index
+- **CHANGELOG_TECHNICAL.md** — full @PLAN22 retrospective entry
+  per the @PLAN15 closeout pattern (per-phase summary + bug yield).
+- **ROADMAP.md** — remove the @PLAN22 row + active-plan index
   entry; replace with a one-line note in the "Closed" section
   pointing at the finished plan.
-- **PLANNING.md** — if a plan-22 row exists, mark closed.
+- **PLANNING.md** — if a @PLAN22 row exists, mark closed.
 - **DESIGN_DECISIONS.md** — update C38 entry (closure capture
-  is copy-at-definition) with a note that plan-22 ships
+  is copy-at-definition) with a note that @PLAN22 ships
   implicit-by-body mutation classification on top of C38.
 - **CAVEATS.md** — remove the "closure capture is by-value /
-  no mutation" caveat row (now spec'd via plan-22).
+  no mutation" caveat row (now spec'd via @PLAN22).
 - **`git mv plans/22-mutable-closures plans/finished/22-mutable-closures`**.
-- Update incoming references (TESTING.md, ROADMAP.md, plan-23
-  EVENT_LOOP, plan-32 TTT v6 row, plan-36 audience-demo).
+- Update incoming references (TESTING.md, ROADMAP.md, @PLAN23
+  EVENT_LOOP, @PLAN32 TTT v6 row, @PLAN36 audience-demo).
 
 ## Test surface
 
@@ -107,7 +107,7 @@ green.
 | `plans/future/36-audience-generative-art/server.loft` (new) | Plan-36 server using writable closures |
 | `doc/claude/LIFETIME.md` | "Mutating closure capture" subsection |
 | `doc/claude/CHANGELOG_TECHNICAL.md` | Plan-22 retrospective entry |
-| `doc/claude/ROADMAP.md` | Remove plan-22 rows |
+| `doc/claude/ROADMAP.md` | Remove @PLAN22 rows |
 | `doc/claude/CAVEATS.md` | Remove closure-capture-by-value caveat |
 | `doc/claude/DESIGN_DECISIONS.md` | C38 update |
 
@@ -120,41 +120,41 @@ green.
 - `cargo test --release --test issues --test wrap --test
   closure_matrix --test mut_closure_matrix` all green.
 - `bash scripts/check_doc_drift.sh` reports `clean`.
-- `make problems` zero open from plan-22 work.
+- `make problems` zero open from @PLAN22 work.
 - `make ci` green.
 
 ## Bug yield retrospective
 
-Per the plan-15 phase 06 lesson recorded in
-[plan-15 § Phase 06 finding](../15-closure-validation/00-matrix.md):
+Per the @PLAN15 phase 06 lesson recorded in
+[@PLAN15 § Phase 06 finding](../15-closure-validation/00-matrix.md):
 "aggressive probing of the CLOSED-cell boundary during
 closeout is the highest-yield part of the validation arc when
 the underlying surface is already mostly clean."
 
 Plan-22 is DIFFERENT — it ships actual production change
 (case classifier + lowerings + diagnostic).  Bug yield is
-expected to be MUCH higher than plan-15's because the surface
+expected to be MUCH higher than @PLAN15's because the surface
 is being created, not validated.  Phase 06 retrospective
 should report:
 - New P-issues filed across phases 01-05
 - Specific cells that surfaced bugs
-- Whether phase 06 retrofit (TTT v6 + plan-36) surfaced
+- Whether phase 06 retrofit (TTT v6 + @PLAN36) surfaced
   additional bugs the matrix didn't catch — those are the
-  closeout-surfaced findings analogous to P257.
+  closeout-surfaced findings analogous to @P257.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| Audit task pulls in scope creep — annotating every default/ fn is hours of work | Time-box: tighten only fns called on captured args in plan-22's matrix cells.  Other defaults stay `Unknown` (still correct, just over-conservative).  Full audit deferred to a separate ROADMAP item if it surfaces as a real cost. |
-| TTT v6 retrofit surfaces multiplayer-protocol bugs unrelated to closures | File as separate P-issues; don't block phase 06 closeout.  TTT v6 ships when v5's tests pass against v6 + writable-closure semantics; the protocol-correctness work belongs to plan-32. |
-| Plan-36 retrofit competes with plan-36's own scoping work | Plan-36 hasn't shipped its server.  Phase 06 ships the FIRST server cut.  Plan-36's later work builds on it.  Coordinated via plans/future/36-audience-generative-art README. |
+| Audit task pulls in scope creep — annotating every default/ fn is hours of work | Time-box: tighten only fns called on captured args in @PLAN22's matrix cells.  Other defaults stay `Unknown` (still correct, just over-conservative).  Full audit deferred to a separate ROADMAP item if it surfaces as a real cost. |
+| TTT v6 retrofit surfaces multiplayer-protocol bugs unrelated to closures | File as separate P-issues; don't block phase 06 closeout.  TTT v6 ships when v5's tests pass against v6 + writable-closure semantics; the protocol-correctness work belongs to @PLAN32. |
+| Plan-36 retrofit competes with @PLAN36's own scoping work | Plan-36 hasn't shipped its server.  Phase 06 ships the FIRST server cut.  Plan-36's later work builds on it.  Coordinated via plans/future/36-audience-generative-art README. |
 | Doc closeout lands while ROADMAP cross-refs are stale | `scripts/check_doc_drift.sh` runs in CI; any stale refs surface immediately. |
 
 ## Cross-references
 
-- [README § Drivers](README.md#drivers) — TTT v6 + plan-36 motivation.
+- [README § Drivers](README.md#drivers) — TTT v6 + @PLAN36 motivation.
 - [README § Verification](README.md#verification) — original verification list (subset of phase 06's).
-- [plan-32 TTT § v6](../../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures) — driver.
-- [plan-36 audience demo](../../future/36-audience-generative-art/) — driver.
-- [plan-15 phase 06](../15-closure-validation/00-matrix.md) — closeout pattern.
+- [@PLAN32 TTT § v6](../../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures) — driver.
+- [@PLAN36 audience demo](../../future/36-audience-generative-art/) — driver.
+- [@PLAN15 phase 06](../15-closure-validation/00-matrix.md) — closeout pattern.

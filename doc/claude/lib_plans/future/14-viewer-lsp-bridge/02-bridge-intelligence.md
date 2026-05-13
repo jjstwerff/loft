@@ -12,7 +12,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Turn the bridge from "JSON proxy that happens to be in Rust"
 into the LAYER that justifies a Rust sidecar.  Seven
 capabilities, each independently load-bearing for the "done
-right" quality bar in the plan-14 README.
+right" quality bar in the @PLAN14 README.
 
 By the end of phase 02, killing rust-analyzer, restarting the
 viewer, opening four browser tabs, or typing 30 chars per

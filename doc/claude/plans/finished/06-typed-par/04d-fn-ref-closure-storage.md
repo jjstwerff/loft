@@ -297,7 +297,7 @@ digits to low hundreds of fn-ref fields per record max).
   risk.
 - **Lambda + par interaction** (closure in worker output → main):
   rebases via existing `StoreRebase` walk at par-stitch time
-  (plan-06 phase 2).  Phase 4d.C explicitly does NOT solve par +
+  (@PLAN06 phase 2).  Phase 4d.C explicitly does NOT solve par +
   capturing-lambda inputs (`par_vec_of_fns_input_t4`); that needs
   separate phase-9 work on closure transport.
 
