@@ -176,76 +176,252 @@ viewer's working branch).
 
 ## Stretches (post-v1, listed for traceability)
 
-### Newcomer mode — curated onboarding landing page
+These three stretches form a coherent arc: **curation engine**
+(phase 08) feeds both a **live newcomer landing** in the
+viewer and a **static dump** (phase 09) that can ship to
+GitHub Pages.  **Public hosting** (phase 10) is the deployment
+target.  Each can be picked up independently after v1 closes.
+
+### Phase 08 — Curation engine + newcomer landing
 
 The 250-file `doc/claude/` tree is overwhelming for someone
-arriving at loft for the first time.  A `?mode=onboarding`
-query param (or a `/welcome` route) flips the dashboard into a
-curated newcomer view that hides the dev-internal docs and
-exposes a small, guided path:
+arriving at loft for the first time.  Phase 08 builds the
+**curation engine** that classifies docs by status — and uses
+its output to drive a `/welcome` landing page that gives
+newcomers a guided path.
 
-1. **What is loft** — short paragraph + link to root README.
-2. **Try it in 5 minutes** — links to `examples/hello.loft`,
-   `examples/structs.loft`, `examples/match.loft` rendered with
-   a "click to copy + run instructions" pattern.
-3. **Learn the language** — link to `doc/learn-loft.md`.
-4. **The standard library** — link to `STDLIB.md`.
-5. **One real program** — link to a flagship example like
-   `lib/graphics/examples/25-brick-buster.loft` or the
-   audience-demo when it ships.
-6. **Where to get help** — link to GitHub issues + the
-   project's communication channel.
+#### Curation classifier
+
+A loft module that walks the project at startup and produces a
+classified index:
+
+| Bucket | Source | Status filter |
+|---|---|---|
+| **Open problems** | Rows in `PROBLEMS.md` table | Severity column does NOT contain "(closed)" |
+| **Recently closed problems** | Same, inverse | Closed in last 30 days; sorted by close date (parsed from row text) |
+| **Active plans** | `plans/[0-9]*-*/README.md` | Always considered active |
+| **Future plans** | `plans/future/[0-9]*-*/README.md` | Always considered planned |
+| **Deferred plans** | `plans/deferred/[0-9]*-*/README.md` | Distinct from future — won't do absent trigger |
+| **Recently finished plans** | `plans/finished/[0-9]*-*/README.md` | mtime within last 60 days; sorted by close date |
+| **Curated examples** | `examples/*.loft` | All listed |
+| **Library packages** | `lib/*/loft.toml` | Names + one-line descriptions |
+
+Each bucket produces a small JSON/loft-struct list the landing
+page renders.  The classifier is deliberately loose with row
+parsing — failures degrade to "show fewer items," not crash.
+
+#### `/welcome` landing page
+
+```
+[loft]                              [Branch dashboard ▸]
+
+What is loft
+   Two-paragraph elevator pitch.  Link to root README.
+
+Try it in 5 minutes
+   ▸ examples/hello.loft       (click → rendered + copy button)
+   ▸ examples/structs.loft
+   ▸ examples/match.loft
+
+Learn the language
+   ▸ doc/learn-loft.md
+
+The standard library
+   ▸ STDLIB.md  (124 functions, organised by topic)
+
+One real program
+   ▸ lib/graphics/examples/25-brick-buster.loft
+
+──────────── Project status ────────────
+
+Active plans (2)              Future plans (15)        Recently finished (3)
+  ▸ 07-error-messages           ▸ 23-event-loop          ▸ 22-mutable-closures (5/13)
+  ▸ 35-branch-review-viewer     ▸ 32-tic-tac-toe         ▸ 15-closure-validation (5/12)
+                                ▸ ... (12 more)          ▸ 31-html-export (5/12)
+
+Open problems (2)             Recently closed (4)
+  ▸ P229b — Windows multi…     ▸ P261 — vector-field assign… (5/13)
+  ▸ P261 — open               ▸ P260 — closures hold live… (5/13)
+                              ▸ P259 — multi-factory cell… (5/13)
+
+Where to get help
+   ▸ GitHub issues
+   ▸ <community channel>
+```
+
+The "Project status" block is the **history overview** —
+shows recent activity at a glance.  Friends grasp the shape
+of the project (what's active, what just shipped, what's
+broken) in one screen.
 
 The default dashboard (branch state + changed files + commits)
-remains the user's review tool; newcomer mode is a separate
-landing page friends arrive at.  No filtering of the actual doc
-tree — friends can navigate anywhere from there if curious;
-this just gives them a starting path.
+remains the user's personal review tool; `/welcome` is a
+separate landing page friends arrive at.  Both routes coexist;
+the navigation lets you flip between them.
 
 File as **phase 08** of this plan when v1 ships.
 
-### Public-instance hosting
+### Phase 09 — Static dump (`loft-view --static --out=site/`)
 
-The viewer binary is the same shape regardless of "for me in
-my VM" vs "for friends on the public web."  After phases 00-06
-ship, a small follow-up could deploy the viewer on a tiny VPS
-(or a free-tier serverless target) pointed at a public mirror
-of the loft repo.  Friends visit `https://loft-lang.example/`
-and land on the newcomer-mode page without any local setup.
+The viewer's HTML rendering is already deterministic — given
+the same input files, every route produces the same HTML.
+Phase 09 adds a `--static` mode that walks **a curated subset
+of routes**, dumps the rendered HTML to a directory, and emits
+an `index.html` linking everything.
+
+#### Subset selection — what's IN the dump
+
+Not every doc gets dumped.  The dump is the public face of the
+project for newcomers; deep-detail docs link OUT to GitHub's
+raw view rather than getting bundled.  Three buckets:
+
+| Bucket | What's dumped | Why included |
+|---|---|---|
+| **Newcomer surface** | `/welcome` landing, root `README.md`, `doc/learn-loft.md`, `STDLIB.md`, `LOFT.md` (or selected sections), `examples/*.loft` (rendered with syntax highlighting + line numbers) | Friend-onboarding is the dump's whole point |
+| **Top-level project docs** | `RELEASE.md`, `CHANGELOG.md`, `PLANNING.md` (current section only), the curation engine's status pages | The "what is loft / what just shipped / what's planned" view |
+| **Plan READMEs** | Each plan dir's top-level `README.md` (active + future + recently-finished — last 60 days) | Plan READMEs are the public-facing summary; phase docs go below |
+
+Everything else — full PROBLEMS.md catalogue, individual
+plan-phase docs, lib/ READMEs, internal architecture docs
+like INTERMEDIATE.md / NATIVE.md / WASM.md — does NOT get
+dumped.  The curated pages link to those via GitHub's
+raw-blob view:
+
+```html
+<a href="https://github.com/jjstwerff/loft/blob/main/doc/claude/PROBLEMS.md">
+   PROBLEMS.md (full catalogue on GitHub)
+</a>
+```
+
+This keeps the Pages site small (<10 MB target) + focused
+on what newcomers actually need, while still letting curious
+visitors drill into the deep tree via GitHub's familiar
+file viewer.
+
+#### Code-block syntax highlighting in the subset
+
+Pages that DO get dumped have code blocks rendered with
+syntax highlighting (rust, loft, toml, bash, json, diff).
+Pre-fix v1 of the viewer ships without highlighting (per
+phase 02's "forward-looking" note); the static dump phase is
+a natural time to add it because:
+
+- The cost of compute is paid once at dump time, not per
+  request.
+- The newcomer landing's "Try it in 5 minutes" examples
+  benefit visibly from highlighted loft snippets.
+- Adding a small per-language tokenizer in loft (~150 lines
+  per language for rust + loft minimum) doubles as a driver
+  for `lib/syntax/` — file as a separate sibling plan if
+  the cost is large.
+
+If syntax highlighting isn't ready, dump the code blocks as
+plain `<pre>` and add highlighting in a follow-up.  Phase 09
+does not block on it.
+
+#### Link rewriting for the dump
+
+The viewer's relative `.md` link rewriter (phase 03) needs a
+dump-mode variant:
+
+| Source link | Live viewer | Static dump (this phase) |
+|---|---|---|
+| `[X](other.md)` where `other.md` IS in the subset | `/file/dir/other.md` | `dir/other.html` |
+| `[X](other.md)` where `other.md` is NOT in the subset | `/file/dir/other.md` (lives) | `https://github.com/jjstwerff/loft/blob/main/dir/other.md` (GitHub raw) |
+| `[X](other.md#section)` not in subset | `/file/dir/other.md#section` | `https://github.com/jjstwerff/loft/blob/main/dir/other.md#section` (GitHub respects anchors) |
+| `[X](src/parser/foo.rs)` (code file) | `/file/src/parser/foo.rs` | `https://github.com/jjstwerff/loft/blob/main/src/parser/foo.rs` (GitHub renders Rust nicely) |
+
+The viewer's static-mode rewriter knows the in-subset set and
+applies the right rule per link.  GitHub's URL convention
+(`blob/main/path`) is stable; if it changes, the rewriter
+adjusts in one place.
+
+#### Build pipeline
+
+```bash
+$ loft-view --static --out=public/ --base-url=https://user.github.io/loft/ --github-blob=https://github.com/jjstwerff/loft/blob/main/
+   ✓ rendered /welcome → public/welcome.html
+   ✓ rendered /file/README.md → public/file/README.html
+   ✓ rendered /examples/hello.loft → public/examples/hello.html
+   ... (rendered 47 files — curated subset, not 247)
+   ✓ external links resolved against github-blob
+   ✓ wrote public/index.html → /welcome
+   ✓ wrote public/static/style.css
+```
+
+CI workflow:
+
+```yaml
+# .github/workflows/docs.yml (sketch)
+on:
+  push:
+    branches: [main]
+jobs:
+  build-docs:
+    steps:
+      - uses: actions/checkout@v4
+      - run: make view-build
+      - run: ./tools/viewer/bin/loft-view --static \
+               --out=public \
+               --base-url=https://jjstwerff.github.io/loft/ \
+               --github-blob=https://github.com/jjstwerff/loft/blob/main/
+      - uses: actions/deploy-pages@v3
+        with: { artifact_name: public }
+```
 
 Acceptance:
-- Public URL serves the curated newcomer landing.
-- Read-only (the dashboard's git-state shows the public mirror's
-  current branch — typically `main`).
-- No write paths exposed (already the case — viewer has no
-  write routes).
-- Bound to `127.0.0.1` behind a reverse proxy that adds TLS.
+- `loft-view --static --out=site/` produces ≲ 10 MB of HTML
+  covering the curated subset + working internal navigation.
+- Links to non-subset content go to GitHub's `blob/main/`
+  view; verified by clicking into the rendered site and
+  ensuring "deep detail" links land on GitHub correctly.
+- Code blocks in dumped pages have syntax highlighting (or
+  plain `<pre>` if highlighting deferred).
+- Snapshot timestamp visible on every page; "this is a
+  read-only snapshot of <main@sha>" footer.
+- Site loads correctly when served from
+  `https://user.github.io/loft/` (non-root path).
 
-File as **phase 09** of this plan when phase 08 ships.
+File as **phase 09** when phase 08 ships.
 
-### Why not just GitHub Pages with rendered HTML?
+### Phase 10 — Public-instance hosting
 
-A common alternative is to render `doc/claude/*.md` to HTML at
-CI time and host on GitHub Pages.  Considered and rejected for
-the friend-onboarding use case:
+Two deployment options unlocked by phases 08 + 09:
 
-- **Lag** — Pages rebuilds on push to `main`; in-flight branch
-  state never appears.  The user's review-this-week workflow is
-  invisible.
-- **Overwhelming default** — Pages would render every doc in
-  the tree at the same prominence.  Friends don't need to see
-  PROBLEMS.md first; they need a guided path.
-- **No git awareness** — diff/commit views (the personal-
-  review use case) aren't expressible in static HTML.
-- **No filtering** — the newcomer-mode landing requires
-  application logic that static rendering can't provide.
+**(a) GitHub Pages** — `.github/workflows/docs.yml` from
+phase 09 runs on every push to `main`; static dump goes
+straight to `https://jjstwerff.github.io/loft/`.  Lag is
+"push-to-main + 1 min" — much better than the original
+GitHub Pages worry because the dump is fast and the curation
+filters out the dev-internal noise.
 
-GitHub Pages **is** a viable secondary surface for "I want to
-read the loft docs without installing anything" — but it
-should not be confused with the viewer's role.  If a static
-mirror is wanted, pre-rendering can be added as a separate
-small task after phase 09 (effectively `loft-view --static
---out=site/`); not in plan-35's main scope.
+**(b) Live VPS** — same binary running on a tiny VPS pointed
+at a public mirror of the loft repo.  Live branch state for
+visitors who want to see in-flight work.  HTTPS via reverse
+proxy.
+
+Pick one or both.  Acceptance varies; key point is friends
+visit a URL and land on the curated `/welcome` page (live or
+static).
+
+File as **phase 10** when phase 09 ships.
+
+### Why phase 09 rehabilitates GitHub Pages
+
+The original "GitHub Pages will lag and overwhelm" critique
+applied to a naive static rendering of the entire doc tree.
+Phase 09's static dump is **the curation engine's output** —
+not the raw tree.  The newcomer landing, the bucketed status
+view, the recently-fixed history are all in the dump, with
+the dev-internal noise filtered out.  So the GitHub-Pages
+deployment of plan-35's static output is qualitatively
+different from "host doc/claude/*.md as raw HTML."
+
+The lag concern remains real — Pages reflects last push to
+`main`, not the user's working branch — but for friend-
+onboarding, where the value is "what is loft" + "what just
+shipped" + "what's planned," last-push-to-main is the right
+freshness target.
 
 ## Out of scope (deferred / separate plans)
 
