@@ -713,3 +713,81 @@ cross_mode!(
     }
     "#
 );
+
+// Plan-22 phase 04 (decommissioned 2026-05-13): the original
+// design specced rejecting "Case D" — closures whose captures
+// are read OR written by the outer scope after the closure's
+// construction site.  Investigation confirmed that the cell +
+// auto-Reference machinery from phases 02d-iii.* + 03 already
+// handles this correctly: the outer var IS the cell, the
+// closure's auto-Reference attribute holds a DbRef to the
+// SAME cell, so reads + writes from either side are
+// automatically aliased on the cell.  No rejection needed;
+// the semantics are correct.
+//
+// These cells lock the working behaviour into the regression
+// matrix so future plan-22 work can't silently regress it.
+// See plans/22-mutable-closures/04-case-d.md § Major finding.
+
+cross_mode!(
+    d_outer_reads_after_closure_writes,
+    r#"
+    fn run() -> integer {
+        count = 0;
+        cl = fn() { count = count + 1; };
+        cl();
+        cl();
+        cl();
+        count
+    }
+    fn test() {
+        r = run();
+        print("{r}\n");
+        assert(r == 3, "outer reads closure writes: {r}");
+    }
+    "#
+);
+
+cross_mode!(
+    d_outer_writes_seen_by_closure,
+    r#"
+    fn run() -> integer {
+        count = 0;
+        cl = fn() -> integer { count = count + 1; count };
+        a = cl();
+        count = count + 100;
+        b = cl();
+        assert(a == 1 && b == 102, "closure sees outer write: a={a} b={b}");
+        count
+    }
+    fn test() {
+        r = run();
+        print("{r}\n");
+        assert(r == 102, "outer reads closure writes after own write: {r}");
+    }
+    "#
+);
+
+cross_mode!(
+    d_escaped_factory_outer_mutate_then_return,
+    r#"
+    fn make_and_keep() -> fn() -> integer {
+        count = 0;
+        cl = fn() -> integer { count = count + 1; count };
+        a = cl();
+        count = 100;
+        b = cl();
+        assert(a == 1 && b == 101,
+               "inside make: a={a} b={b}");
+        cl
+    }
+    fn test() {
+        f = make_and_keep();
+        c = f();
+        d = f();
+        print("{c},{d}\n");
+        assert(c == 102 && d == 103,
+               "escaped closure continues from outer-mutated cell: c={c} d={d}");
+    }
+    "#
+);

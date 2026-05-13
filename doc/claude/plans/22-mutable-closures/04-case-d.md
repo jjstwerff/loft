@@ -5,7 +5,93 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 04 — Case D: aliased mutating (rejected)
 
-**Status: open**
+**Status: decommissioned 2026-05-13** — see Major finding
+below.  The cell + auto-Reference machinery from
+phase 02d-iii + phase 03 (P259) already handles Case D
+correctly: the outer scope and the (possibly escaped)
+closure share the SAME cell, so the closure's writes are
+visible to outer reads AND the outer's writes are visible
+to subsequent closure invocations.  Aliased state IS the
+correct semantics, not a bug to reject.
+
+## Major finding (2026-05-13)
+
+The original Case D rejection rationale assumed:
+1. Closure captures by-value at definition (copy semantics).
+2. Closure body's writes go to the closure's local copy.
+3. Outer's reads see stale data.
+4. → "aliased state across mismatched lifetimes" → reject.
+
+The actual implementation under phase 02d-iii.a's flip
+(outer scalar locals → `Reference(__cell_<T>, vec![])`) +
+phase 02c's auto-Reference attribute is fundamentally
+different:
+1. The "outer" var IS THE CELL after the flip.
+2. The closure's auto-Reference attribute holds a DbRef to
+   the SAME cell.
+3. Both outer and closure read/write through the cell.
+4. → Aliased state is the correct shared semantics.
+
+Verified 2026-05-13 with `/tmp/p22_case_d_probe2.loft`:
+```loft
+fn make_and_read() -> integer {
+    count = 0;
+    cl = fn() { count = count + 1; };
+    cl(); cl(); cl();          // count → 3
+    count = count + 100;        // outer write → 103
+    cl();                       // closure call → 104
+    count                       // returns 104
+}
+```
+And `/tmp/p22_case_d_escape.loft` (escaped factory + outer
+mutate then return — most aggressive Case D shape):
+```loft
+fn make_and_keep() -> fn() -> integer {
+    count = 0;
+    cl = fn() -> integer { count = count + 1; count };
+    cl();                       // 1
+    count = 100;                // outer write
+    cl();                       // 101 — closure sees outer's write
+    cl                          // escape
+}
+fn main() {
+    f = make_and_keep();
+    f();                        // 102 — escaped closure continues
+    f();                        // 103
+}
+```
+Both produce the correct, intuitive results on both
+backends.
+
+**Implication for the plan:**
+
+- Phase 04 ships nothing — the rejection was based on a
+  semantics worry that does not materialise.
+- Phase 05 (`Mutable<T>` helper) is also re-examined: the
+  cell IS the shared-ownership mechanism that `Mutable<T>`
+  was meant to provide.  Phase 05 stays DEFER-BY-DEFAULT
+  per its original status; revisit if a use case surfaces
+  that the cell + auto-Reference can't handle.
+- Phase 06 (closeout) proceeds with purity audit +
+  TTT v6 / plan-36 retrofit + documentation, dropping the
+  Case-D rejection mention.
+- README.md's "four cases" specification needs revision —
+  the existing implementation collapses Case D into
+  "Case B with cross-scope aliasing" and handles it
+  identically to Case B/C.
+
+**Why this wasn't predicted:**
+
+The README spec was written when capture semantics were
+"copy at definition" (per `[DESIGN_DECISIONS.md § C38]`).
+Phase 02d-iii.a's flip changed scalars from value-copy to
+heap-cell encoding — that flip retroactively dissolved the
+Case D problem.  The plan inherited the rejection design
+from the pre-flip world but the implementation never
+actually ran the rejection path because no test triggered
+it; the cells just worked.
+
+## Original design (kept for historical reference)
 
 ## Goal
 
