@@ -6,7 +6,7 @@ error: Unknown field text.lengt
 3 |   n = t.lengt();
   |               ^
 
-error: Unknown variable 'n' — did you mean 't'?
+error: Unknown variable 'n'
   --> <cases>/08_type_method_unknown.loft:4:13
   |
 4 |   print("{n}");
