@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 06 — Conservative-default audit + retrofit + closeout
 
-**Status: open**
+**Status: done** — 2026-05-13
 
 ## Goal
 
@@ -56,7 +56,7 @@ v6 — or new `tests/multiplayer_v6.rs`).
 
 ### Plan-36 audience-demo retrofit
 
-Plan-36 ([plans/future/36-audience-generative-art/](../future/36-audience-generative-art/))
+Plan-36 ([plans/future/36-audience-generative-art/](../../future/36-audience-generative-art/))
 hasn't shipped its server yet.  Phase 06 ships the server using
 writable closures from day one.  Loft snippets projected to the
 audience read `state.X` instead of `state.inner.X` — the
@@ -126,7 +126,7 @@ green.
 ## Bug yield retrospective
 
 Per the plan-15 phase 06 lesson recorded in
-[plan-15 § Phase 06 finding](../finished/15-closure-validation/00-matrix.md):
+[plan-15 § Phase 06 finding](../15-closure-validation/00-matrix.md):
 "aggressive probing of the CLOSED-cell boundary during
 closeout is the highest-yield part of the validation arc when
 the underlying surface is already mostly clean."
@@ -155,6 +155,6 @@ should report:
 
 - [README § Drivers](README.md#drivers) — TTT v6 + plan-36 motivation.
 - [README § Verification](README.md#verification) — original verification list (subset of phase 06's).
-- [plan-32 TTT § v6](../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures) — driver.
-- [plan-36 audience demo](../future/36-audience-generative-art/) — driver.
-- [plan-15 phase 06](../finished/15-closure-validation/00-matrix.md) — closeout pattern.
+- [plan-32 TTT § v6](../../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures) — driver.
+- [plan-36 audience demo](../../future/36-audience-generative-art/) — driver.
+- [plan-15 phase 06](../15-closure-validation/00-matrix.md) — closeout pattern.

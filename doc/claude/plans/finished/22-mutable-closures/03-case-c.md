@@ -197,4 +197,4 @@ fn p22_phase03_factory_no_leak() {
 - [DISCUSSION § Snippet 3](DISCUSSION.md) — paper-trace of case C classification.
 - `src/scopes.rs` — live-interval tracking.
 - `src/variables/mod.rs` — variable lookup.
-- [plan-15 phase 03 leak findings](../finished/15-closure-validation/00-matrix.md) — `Parts::ChildRec` cascade verified.
+- [plan-15 phase 03 leak findings](../15-closure-validation/00-matrix.md) — `Parts::ChildRec` cascade verified.

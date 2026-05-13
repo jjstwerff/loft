@@ -96,5 +96,5 @@ a_d4_read_only_return            // make() -> fn(integer); reads outer
 
 - [README.md](README.md) — full spec; this phase fixes the test surface.
 - [DISCUSSION.md § Analysis sketch](DISCUSSION.md) — algorithm-level walkthrough.
-- [plan-15 phase 00](../finished/15-closure-validation/00-matrix.md) — donor template.
+- [plan-15 phase 00](../15-closure-validation/00-matrix.md) — donor template.
 - `tests/common/cross_mode.rs` — shared harness.

@@ -91,20 +91,28 @@ Regression guard: `tests/scripts/56-closures.loft::test_capture_timing`.
 ergonomically with value capture AND the alternative has been
 prototyped to show it doesn't destabilise the store-based heap.
 
-**Future direction (recorded 2026-05-04, not a re-opening).**  The
-long-term ambition is to move closer to Rust's closure model —
-borrow-checked `&T` / `&mut T`, FnOnce / FnMut / Fn capability
-hierarchy, statically-enforced single-mutator-or-multiple-readers.
-The current copy-at-definition model with `Reference<T>` and a
-planned `Mutable<T>` stdlib helper covers the
-[EventLoop](plans/future/23-event-loop/README.md) and first-game use cases acceptably;
-the closure-model evolution should be designed against
-real-world friction observed once a real game ships, not
-pre-emptively.  Sequencing for the evolution lives in
-[plans/22-mutable-closures/README.md](plans/22-mutable-closures/README.md) (the design spec) and
-[plans/22-mutable-closures/DISCUSSION.md](plans/22-mutable-closures/DISCUSSION.md)
-(alternatives considered, including the full Rust borrow-checker
-option F).
+**Plan-22 addendum (shipped 2026-05-13).**  Plan-22 (mutable
+closures) ships implicit-by-body mutation classification on top
+of C38.  The "copy-at-definition" framing now applies only to
+truly-immutable scalar captures in pure read-only contexts:
+
+- Captures of `Type::Reference` (struct, nested struct) always
+  use 12B `Parts::DbRef` pointing at the live original (P260 fix,
+  `src/parser/vectors.rs::synthesize_closure_record`).  Mutations
+  from either side are visible immediately.
+- Captures of scalars whose bodies write to the capture are
+  promoted to heap-owned cells via the phase-02d-iii.a type flip
+  (`Type::Reference(__cell_<T>, vec![])` encoding).  The outer
+  scope and all closures share the same cell.
+- Pure read-only scalar captures remain value-copy (Case A
+  semantics — unchanged).
+
+Case D ("aliased mutating") was decommissioned 2026-05-13: the
+cell + auto-Reference machinery from phases 02-03 already gives
+shared-state semantics, so no rejection was needed.  See
+[plans/finished/22-mutable-closures/04-case-d.md](plans/finished/22-mutable-closures/04-case-d.md)
+for the major finding.  Design history and alternatives
+considered: [plans/finished/22-mutable-closures/DISCUSSION.md](plans/finished/22-mutable-closures/DISCUSSION.md).
 
 ---
 

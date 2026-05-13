@@ -5,9 +5,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # MUTABLE_CLOSURES — design: making closures novice-fit
 
-**Status:** locked-in spec; **promoted to current 2026-05-10**.
+**Status:** **Shipped 2026-05-13**.  Moved to `plans/finished/22-mutable-closures/`.
 Drivers (see [§ Drivers](#drivers)): TTT v6 server retrofit
-([plan-32 § v6](../32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures))
+([plan-32 § v6](../../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures))
 + plan-36 audience-demo server (loft code projected to the
 audience as part of the "loft snippet highlights" beats —
 visible code structure is part of the spectacle).  Companion
@@ -33,7 +33,7 @@ concrete consumers with a soft deadline:
   `tick_counter`).  Writable closures drop the `.inner`
   ceremony at every access — ~10% fewer characters and one
   fewer mental indirection.
-- **Plan-36 audience-generative-art demo** ([plans/future/36-audience-generative-art/](../future/36-audience-generative-art/))
+- **Plan-36 audience-generative-art demo** ([plans/future/36-audience-generative-art/](../../future/36-audience-generative-art/))
   is the more time-pressured driver.  The talk frames itself as
   an "art show with loft footnotes" — small loft snippets
   projected to the audience.  Server code with `state.inner.X`
@@ -473,7 +473,7 @@ End-to-end checks once implemented:
 
 ### Plan-22 internal phasing (added 2026-05-12)
 
-Each phase has its own design doc under `plans/22-mutable-closures/`:
+Each phase has its own design doc under `plans/finished/22-mutable-closures/`:
 
 | Phase | Ships | Dependencies |
 |---|---|---|
@@ -481,9 +481,9 @@ Each phase has its own design doc under `plans/22-mutable-closures/`:
 | [01 — mutated-captures detection](01-mutation-detection.md) | Walker that marks captures as `mutated: bool`; no behavior change | Phase 00 harness |
 | [02 — Case B (co-scoped)](02-case-b.md) | Reference / hidden-cell lowering for mutating co-scoped closures | Phase 01 |
 | [03 — Case C (moved)](03-case-c.md) | Liveness check + ownership transfer for factory pattern | Phase 02 |
-| [04 — Case D (rejection)](04-case-d.md) | Multi-position diagnostic for aliased mutating | Phase 03 |
-| [05 — `Mutable<T>` helper](05-mutable-helper.md) | Stdlib escape hatch for explicit shared ownership (DEFER-BY-DEFAULT) | Phase 04 |
-| [06 — closeout](06-closeout.md) | Purity audit + TTT v6 / plan-36 retrofit + docs | Phases 02-04 (05 optional) |
+| ~~[04 — Case D (rejection)](04-case-d.md)~~ | DECOMMISSIONED 2026-05-13 — cell + auto-Reference from phases 02-03 already give Case D correct shared-state semantics; no rejection needed | Phase 03 |
+| ~~[05 — `Mutable<T>` helper](05-mutable-helper.md)~~ | DEFER (cell + auto-Reference subsumes; revisit only if a concrete use case surfaces) | Phase 04 |
+| [06 — closeout](06-closeout.md) | Doc closeout — CHANGELOG_TECHNICAL, DESIGN_DECISIONS, CAVEATS, ROADMAP, move to finished/ | Phases 02-03 |
 
 **Acceptance for the whole plan**: every Case A regression cell stays green; phase 02-05 cells run cross-mode under `tests/mut_closure_matrix.rs`; phase 04 case-D rejections pinned in `tests/parse_errors.rs`; phase 06 retrofit ships TTT v6 + plan-36 servers using writable closures.
 
@@ -502,7 +502,7 @@ This spec sits on the dependency stack for first-game ship:
 |---|---|---|
 | 1 | [P213 v4](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix) — closures-in-struct-fields layout | None (separate plan) |
 | 2 | This spec — implicit-by-body classifier with cases A/B/C/D | P213 v4 |
-| 3 | EventLoop core ([EVENT_LOOP.md](../23-event-loop/README.md)) | This spec |
+| 3 | EventLoop core ([EVENT_LOOP.md](../../future/23-event-loop/README.md)) | This spec |
 | 4 | First playable single-player game | Phase 2 |
 | 5 | First multiplayer game | Phase 3 |
 
@@ -519,9 +519,9 @@ layout-widening); plan-22 phase 2 dependency is met.
 - [DESIGN_DECISIONS.md § C38](../../../DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)
   — the closed-by-decision entry this spec evolves; long-term
   direction note recorded 2026-05-04.
-- [EVENT_LOOP.md](../23-event-loop/README.md) — the spec waiting on
+- [EVENT_LOOP.md](../../future/23-event-loop/README.md) — the spec waiting on
   novice-fit closures.
-- [EVENT_LOOP_DISCUSSION.md § Novice-readiness](../23-event-loop/DISCUSSION.md#novice-readiness-evaluation-2026-05-05--pivot-trigger)
+- [EVENT_LOOP_DISCUSSION.md § Novice-readiness](../../future/23-event-loop/DISCUSSION.md#novice-readiness-evaluation-2026-05-05--pivot-trigger)
   — the evaluation that prompted this work.
 - [LIFETIME.md](../../../LIFETIME.md) — dep tracking, scope-based
   freeing, Reference<T> semantics.

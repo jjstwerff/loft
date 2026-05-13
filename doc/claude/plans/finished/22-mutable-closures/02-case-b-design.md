@@ -268,4 +268,4 @@ Primitive-capture mutability is a separate ergonomic win.
 - `src/parser/mod.rs::set_field_check` — the existing storage decision (line 3100-3114).
 - `default/01_code.loft::OpSetRef` / `OpSetDbRef` / `OpGetDbRef` — the opcodes phase 02b uses.
 - [LIFETIME.md § Function](../../LIFETIME.md) — closure-record dep semantics.
-- [plan-15 phase 03/04 leak guards](../finished/15-closure-validation/00-matrix.md) — pattern for verifying no leak under shared storage.
+- [plan-15 phase 03/04 leak guards](../15-closure-validation/00-matrix.md) — pattern for verifying no leak under shared storage.

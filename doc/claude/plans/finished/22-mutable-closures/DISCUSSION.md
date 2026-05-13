@@ -27,7 +27,7 @@ items move from here into the spec.
 ## Why this work — the novice cliff
 
 The
-[novice-readiness evaluation in EVENT_LOOP_DISCUSSION.md](../23-event-loop/DISCUSSION.md#novice-readiness-evaluation-2026-05-05--pivot-trigger)
+[novice-readiness evaluation in EVENT_LOOP_DISCUSSION.md](../../future/23-event-loop/DISCUSSION.md#novice-readiness-evaluation-2026-05-05--pivot-trigger)
 identified closure capture by value (loft's
 [C38](../../../DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition))
 as the dominant blocker for novice game programmers.  Every
@@ -613,8 +613,8 @@ Resulting structure:
   2026-05-04.
 - [DESIGN_DECISIONS.md § C3](../../../DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially)
   — `par(...)` internal-switch precedent.
-- [EVENT_LOOP.md](../23-event-loop/README.md) and
-  [EVENT_LOOP_DISCUSSION.md](../23-event-loop/DISCUSSION.md) — the
+- [EVENT_LOOP.md](../../future/23-event-loop/README.md) and
+  [EVENT_LOOP_DISCUSSION.md](../../future/23-event-loop/DISCUSSION.md) — the
   spec waiting on novice-fit closures.
 - [LIFETIME.md](../../../LIFETIME.md) — dep tracking, scope-based
   freeing, Reference<T> semantics.

@@ -9,6 +9,72 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Plan-22 (mutable closures) closed 2026-05-13
+
+Plan-22 ran 2026-05-10 → 2026-05-13.  Goal: make closures whose
+bodies mutate captures work intuitively without user-visible
+annotation — implicit-by-body classification into cases A/B/C.
+
+**Per-phase summary** (all SHIPPED 2026-05-13):
+
+- **00** Matrix freeze + harness wiring.  `tests/mut_closure_matrix.rs`
+  scaffolded (44 cells cross-mode); Case A baseline cells green.
+- **01** Mutated-captures detection.  `walk_for_mutations` walker marks
+  captures as `mutated: bool`; no behaviour change.  Known gap: first-
+  pass GetField in `src/parser/vectors.rs:2498-2512` is non-load-bearing
+  post-P260 (cells handle both sides).
+- **02** Case B (co-scoped mutating) + all sub-phases:
+  - 02b: auto-Reference attribute emission in `synthesize_closure_record`.
+  - 02c: Reference-type capture routing in `typedef.rs::fill_database`.
+  - 02d-iii.a: `scalars_to_box` type-flip helper (outer local → cell).
+  - 02d-iii.b: read auto-deref hook in `parse_var`.
+  - 02d-iii.c: boxed-scalar assign-rewrite helper + `change_var_type` guard.
+  - 02d-iii.d: `cell_alloc_prepend` helper for first-set rewrites.
+  - 02d-vii: text-return crash fix (cell encoding + return routing).
+- **03** Case C (factory / escaped closure).  Liveness check + P259 fix
+  (4 commits — OpIncRc + cascade-free cell ownership for multi-factory
+  pattern).
+- **04** DECOMMISSIONED 2026-05-13.  The cell + auto-Reference from
+  phases 02-03 already gives Case D correct shared-state semantics;
+  outer + closure share the same cell automatically.  No rejection code
+  shipped.  See `04-case-d.md § Major finding`.
+- **05** DEFER-BY-DEFAULT.  `Mutable<T>` helper unnecessary: the cell IS
+  the shared-ownership mechanism.  Revisit only if a concrete use case
+  surfaces that cells can't handle.
+- **06** Doc closeout (this entry).  DESIGN_DECISIONS.md C38 updated;
+  CAVEATS.md C38 cross-reference updated; ROADMAP.md plan-22 row
+  removed; plan moved to `finished/`.
+
+**Bug yield — P-issues filed during plan-22:**
+
+- **P256** — vector-capture into closure crashed both backends (no clean
+  rejection).  Closed 2026-05-12 with parse-time rejection in
+  `src/parser/objects.rs::resolve_name`.  Pinned by
+  `tests/parse_errors.rs::p257_vector_capture_in_closure_rejected`.
+  *(Filed as part of plan-15 closeout probing, attributed to plan-22's
+  scope — collection capture is a closure-record layout issue.)*
+- **P257** — same as P256 (duplicate tracking number; see PROBLEMS.md).
+- **P258** — native + interp layout divergence for cell-encoded scalars.
+  Closed in phase 02d-iii.b.
+- **P259** — multi-factory cell ownership crash (OpIncRc missing +
+  cascade-free teardown).  Closed 2026-05-13 via 4 commits
+  `9f00afec` / `29ee04fd` / `cfb65e8b` / `0711973b`.
+- **P260** — closures captured `Type::Reference` by deep-copy; mutations
+  silently no-opped.  Closed 2026-05-13 via `cfad6274` (one-line
+  architectural fix: drop `is_mutated` gate in `synthesize_closure_record`).
+  6 new cross-mode cells in `tests/mut_closure_matrix.rs`.
+- **P261** — vector-field literal-assign appended instead of replacing.
+  Closed 2026-05-13 via `a1cf258a` (prepend `OpClearVector` in
+  `towards_set`'s vector-literal path).  Pinned by
+  `e_d3_struct_vector_assign_in_closure`.
+
+**Final test surface**: 44 `mut_closure_matrix` cells + 22
+`closure_matrix` (plan-15 regression net) + 633 issues suite + 26
+leak guards — all green, interp/native byte-identical.
+
+Active plans remaining after close: 1 (07-error-messages).
+Plan moved to `plans/finished/22-mutable-closures/`.
+
 ### Plan-15 (closure validation matrix) closed 2026-05-12
 
 Plan-15 ran in one session 2026-05-12 — promoted to current,

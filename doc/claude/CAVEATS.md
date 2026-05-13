@@ -23,8 +23,13 @@ tables.
 
 - **C3** — WASM `par()` runs sequentially.
   See [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially).
-- **C38** — Closure capture is copy-at-definition.
+- **C38** — Closure capture was copy-at-definition.
   See [DESIGN_DECISIONS.md § C38](DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition).
+  Plan-22 (shipped 2026-05-13) supersedes the copy semantics: scalar captures use
+  heap-owned cells (auto-Reference encoding); `Type::Reference` captures use 12B
+  `Parts::DbRef` into the live original.  Pure read-only captures of non-Reference
+  scalars still behave as value copies.  See
+  [plans/finished/22-mutable-closures/](plans/finished/22-mutable-closures/).
   Regression guard: `tests/scripts/56-closures.loft::test_capture_timing`.
 
 ---
@@ -531,7 +536,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 |--------|-----------|----------|
 | C3     | 1.1+      | Accepted — WASM threading deferred (Web Worker pool cost > benefit today) |
 | ~~C7/P22~~ | — | **Done** — diagnostic now references 1.1+ timeline; regression guard added |
-| C38    | —         | Accepted — value-semantic capture by design (like Rust `move`) |
+| C38    | —         | Updated — plan-22 (2026-05-13) adds by-body mutation classification; Reference captures always via DbRef; scalars via heap cell.  Pure read-only scalar captures remain value-copy. |
 | ~~C54~~ | — | **Done** 2026-04-20 — `integer` is i64 end-to-end; `long` is a historical alias.  See CAVEATS.md § C54 long-form for post-migration footguns |
 | ~~C58/P135~~ | — | **Done** — canonical `(0, 0) = screen-top-left`; upload no longer pre-flips rows; convention locked in lib_plans/future/02-graphics/README.md.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~C60~~ | — | **Done** 2026-04-13 — `for kv in hash` yields a `HashEntry` with `.key` / `.value` in insertion/deletion-aware order via the internal ordered index.  See CAVEATS.md § C60 long-form |

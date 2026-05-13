@@ -5,7 +5,7 @@
 //!
 //! Each test exercises one cell of the (case × storage-destination)
 //! matrix described in
-//! `doc/claude/plans/22-mutable-closures/00-matrix.md`.  Every cell
+//! `doc/claude/plans/finished/22-mutable-closures/00-matrix.md`.  Every cell
 //! runs under both the interpreter and `--native`; the harness in
 //! `tests/common/cross_mode.rs` (shared with `tests/tuple_matrix.rs`,
 //! `tests/template_matrix.rs`, and `tests/closure_matrix.rs`) asserts
@@ -57,7 +57,7 @@
 //! when the closure is invoked outside the parent's frame).
 //! Deeper fix (defer the work-text lock or use a separate
 //! store) is an open follow-up — see
-//! `doc/claude/plans/22-mutable-closures/02d-iii-design.md`'s
+//! `doc/claude/plans/finished/22-mutable-closures/02d-iii-design.md`'s
 //! 02d-viii row.
 //!
 //! Each `body` must declare `fn test() { … }` and any helper fns
@@ -252,7 +252,7 @@ cross_mode!(
 // closure record holds an auto-Reference DbRef to the same cell
 // (12-byte share-by-DbRef), so closure mutations propagate back
 // to the outer scope through shared DbRef.  See
-// `doc/claude/plans/22-mutable-closures/02d-iii-design.md` for
+// `doc/claude/plans/finished/22-mutable-closures/02d-iii-design.md` for
 // the per-sub-step breakdown (a-e).
 //
 // Text is intentionally EXCLUDED from boxing today (text
@@ -727,7 +727,7 @@ cross_mode!(
 //
 // These cells lock the working behaviour into the regression
 // matrix so future plan-22 work can't silently regress it.
-// See plans/22-mutable-closures/04-case-d.md § Major finding.
+// See plans/finished/22-mutable-closures/04-case-d.md § Major finding.
 
 cross_mode!(
     d_outer_reads_after_closure_writes,

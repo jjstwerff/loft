@@ -346,7 +346,7 @@ extensions.
   content overlaps with quick-start `examples/` and the "Learn
   loft in 30 minutes" walkthrough.  Can write the talk inline OR
   land both at once.
-- `plans/22-mutable-closures` + the [TTT v6 retrofit](../32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures)
+- `plans/finished/22-mutable-closures` (shipped 2026-05-13) + the [TTT v6 retrofit](../32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures)
   — drops the `Reference<T>.inner` ceremony from the server's
   pump callback so the loft snippets shown on stage during the
   "loft snippet highlights" beats read at their best.  If

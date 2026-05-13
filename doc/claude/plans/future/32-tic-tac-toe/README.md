@@ -394,7 +394,7 @@ fn main() {
 
 `state` is allocated in a Store; `Reference<Board>` is captured
 by handler functions (today's workaround per
-[plans/22-mutable-closures/README.md](../../22-mutable-closures/README.md)).  The shipped
+[plans/finished/22-mutable-closures/README.md](../../finished/22-mutable-closures/README.md)).  The shipped
 text-only first cut omits `mouse_just_clicked` / `render_board`
 / `gl_swap_buffers` and walks through a hardcoded click sequence
 instead.
@@ -1252,9 +1252,8 @@ introduced a bug and gets reverted.
 ### Sequencing relative to broader loft work
 
 v6 depends on:
-- plan-22 (mutable closures) implementation — currently
-  promoted to `plans/22-mutable-closures/`, locked-in spec
-  ready to build.
+- plan-22 (mutable closures) — SHIPPED 2026-05-13.
+  See `plans/finished/22-mutable-closures/`.
 
 v6 unblocks:
 - plan-36 server gets the same retrofit applied automatically
@@ -1280,11 +1279,10 @@ v6 unblocks:
   game.
 - [EVENT_LOOP_DISCUSSION.md](../23-event-loop/DISCUSSION.md) — open
   questions on the wider design.
-- [plans/22-mutable-closures/README.md](../../22-mutable-closures/README.md) — closure-capture
-  spec; the dispatch workaround in this game's pump callback
-  rests on the documented `Reference<T>` capture pattern.
-  Promoted to current 2026-05-10; TTT v6 is the in-game
-  consumer of the implementation.
+- [plans/finished/22-mutable-closures/README.md](../../finished/22-mutable-closures/README.md) — closure-capture
+  spec (shipped 2026-05-13); the dispatch workaround in this
+  game's pump callback rests on the documented `Reference<T>`
+  capture pattern.  TTT v6 is the in-game consumer.
 - [PROBLEMS.md § 213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
   — closure-in-struct-field layout limit; lifts the workaround
   once landed.
