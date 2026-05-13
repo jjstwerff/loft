@@ -596,3 +596,8 @@ freshness target.
   section in phase 07.
 - [`CLAUDE.md`](../../../../CLAUDE.md) — gets the
   `make view` entry under § Key commands in phase 07.
+- [`lib_plans/future/14-viewer-lsp-bridge/README.md`](../../lib_plans/future/14-viewer-lsp-bridge/README.md)
+  — extends the viewer with multi-language LSP code intelligence
+  (rust-analyzer / loft-lsp / jdtls).  The viewer is the host;
+  plan-14 is the new capability.  Designed 2026-05-13 in response
+  to "tooling colleagues will judge by" framing.
