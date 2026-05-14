@@ -365,7 +365,16 @@ view: view-refresh
 	    echo "host loft binary missing; run: make view-build"; \
 	    exit 1; \
 	fi
-	./target/release/loft --interpret --lib lib/ tools/viewer/src/main.loft
+	# Default to --native (faster).  Switched 2026-05-14 once
+	# @P262/@P263 + the #rust + iface/T-stub elision fixes
+	# unblocked native compilation of the viewer end-to-end.
+	# Override with `LOFT_VIEW_INTERP=1 make view` to force the
+	# interpreter (useful when bisecting a native-only regression).
+	@if [ -n "$$LOFT_VIEW_INTERP" ]; then \
+	    ./target/release/loft --interpret --lib lib/ tools/viewer/src/main.loft; \
+	else \
+	    ./target/release/loft --lib lib/ tools/viewer/src/main.loft; \
+	fi
 
 # game: rebuild the efficient browser build of Brick Buster from any
 # state — clean rebuild of the wasm32-unknown-unknown rlibs + host
