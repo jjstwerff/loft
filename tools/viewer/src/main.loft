@@ -126,6 +126,11 @@ fn page_landing() -> text {
         body += "<p class=\"head\">HEAD: <code>{esc_sha}</code> {esc_msg}</p>";
         body += "</header>";
     }
+    // ── Quick navigation ───────────────────────────────────
+    // Six jump-off tiles for the most-used routes.  Sits
+    // ABOVE the changed-files list so the navigationally-
+    // useful surface is the first thing on screen.
+    body += quick_nav();
     // ── Changed files ──────────────────────────────────────
     // Grouped by top-level directory + live filter.  Each group
     // is a <details> so the user can collapse noise.
@@ -1001,6 +1006,37 @@ fn top_level_dir(path: text) -> text {
     path[0..slash]
 }
 
+// Quick-navigation tiles for the landing page.  Jump-off cards
+// for the most-used routes — sits above the changed-files list
+// so the navigationally-useful surface is the first thing on
+// screen.  Six tiles, auto-fit grid, big serif initial + small
+// mono description.
+fn quick_nav() -> text {
+    out = "<section class=\"quick-nav\">";
+    out += tile("D", "Docs", "Reference + design + plans", "/tree/doc/claude");
+    out += tile("P", "Plans", "Active + finished tracker plans", "/tree/doc/claude/plans");
+    out += tile("S", "Source", "Rust interpreter + compiler", "/tree/src");
+    out += tile("L", "Libraries", "Loft package sources (lib/)", "/tree/lib");
+    out += tile("T", "Tests", "Test suites + reproductions", "/tree/tests");
+    out += tile("·", "Stdlib", "Built-in loft (default/)", "/tree/default");
+    out += "</section>";
+    out
+}
+
+fn tile(initial: text, name: text, desc: text, href: text) -> text {
+    esc_init = escape(initial);
+    esc_name = escape(name);
+    esc_desc = escape(desc);
+    esc_href = escape(href);
+    out = "<a class=\"tile\" href=\"{esc_href}\">";
+    out += "<span class=\"tile-init\">{esc_init}</span>";
+    out += "<span class=\"tile-body\">";
+    out += "<span class=\"tile-name\">{esc_name}</span>";
+    out += "<span class=\"tile-desc\">{esc_desc}</span>";
+    out += "</span></a>";
+    out
+}
+
 // Render a status chip for the changed-files / uncommitted lists.
 // `git diff --name-status` returns codes like `M`, `A`, `D`,
 // `R090` (rename 90% similar), `C075` (copy 75%), `??`
@@ -1155,6 +1191,20 @@ header.dash h1{{margin:0 0 .35rem;font-size:1.7rem}}
 header.dash h1 code{{font-size:.55em}}
 header.dash .ahead-behind,header.dash .head{{font-family:'JetBrains Mono',monospace;font-size:.82rem;color:var(--ink-soft);margin:.15rem 0}}
 header.dash code{{background:none;color:var(--accent);padding:0;font-weight:500}}
+
+/* ── Quick-navigation tiles (dashboard) ── */
+.quick-nav{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.85rem;margin:0 0 2rem}}
+.tile{{display:flex;align-items:center;gap:.95rem;padding:.85rem 1rem;background:var(--paper-soft);border:1px solid var(--rule);border-radius:4px;text-decoration:none;color:var(--ink);transition:border-color .15s,background .15s,transform .15s,box-shadow .15s;position:relative;overflow:hidden}}
+.tile::before{{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent-soft-2);transition:background .15s,width .15s}}
+.tile:hover{{border-color:var(--accent);background:var(--paper);transform:translateY(-1px);box-shadow:0 2px 8px rgba(28,72,120,.08)}}
+.tile:hover::before{{background:var(--accent);width:4px}}
+.tile-init{{font-family:'Fraunces',serif;font-size:1.85rem;font-weight:480;font-variation-settings:"SOFT" 50,"opsz" 144;line-height:1;color:var(--accent);width:1.5em;text-align:center;flex-shrink:0;font-style:italic}}
+.tile-body{{display:flex;flex-direction:column;gap:.15rem;min-width:0}}
+.tile-name{{font-family:'IBM Plex Sans',sans-serif;font-size:.95rem;font-weight:500;color:var(--ink);letter-spacing:-.005em}}
+.tile-desc{{font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--ink-mute);letter-spacing:.02em;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+@media (prefers-color-scheme: dark){{
+  .tile:hover{{box-shadow:0 2px 12px rgba(0,0,0,.4)}}
+}}
 
 /* ── Filter input ── */
 .filter-bar{{margin:.5rem 0 1.25rem;display:flex;align-items:center;gap:.85rem;font-family:'JetBrains Mono',monospace;font-size:.85rem}}
