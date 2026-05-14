@@ -128,17 +128,76 @@ fn page_landing() -> text {
     }
     // ── Quick navigation ───────────────────────────────────
     // Six jump-off tiles for the most-used routes.  Sits
-    // ABOVE the changed-files list so the navigationally-
-    // useful surface is the first thing on screen.
+    // immediately under the branch header so the
+    // navigationally-useful surface is first on screen.
     body += quick_nav();
-    // ── Changed files ──────────────────────────────────────
-    // Grouped by top-level directory + live filter.  Each group
-    // is a <details> so the user can collapse noise.
+    // ── Recent activity (commits + per-commit file lists) ──
+    // Promoted above the all-changes list (2026-05-14):
+    // the activity feed is the real "what changed?" answer
+    // for someone reviewing a branch.  Each commit is a
+    // card with sha · date · subject + per-file numstat
+    // (+adds / −dels) for the files it touched.  Long file
+    // lists collapse to the first 4 entries with a "+ N more"
+    // toggle.
+    kf = file("tools/viewer/state/commits.json");
+    if kf.format != Format.NotExists {
+        kv = json_parse(kf.content());
+        n = kv.len();
+        body += "<section><h2>Recent activity <span class=\"ct\">{n}</span></h2>";
+        body += "<div class=\"activity\">";
+        i = 0;
+        while i < n {
+            e = kv.item(i);
+            sh = e.field("sha").as_text();
+            dt_v = e.field("date");
+            dt = "";
+            if dt_v.kind() == "JString" { dt = dt_v.as_text(); }
+            ms = e.field("msg").as_text();
+            esc_sh = escape(sh);
+            esc_dt = escape(dt);
+            esc_ms = escape(ms);
+            body += render_activity_card(sh, esc_sh, esc_dt, esc_ms);
+            i = i + 1;
+        }
+        body += "</div>";
+        body += "</section>";
+    }
+    // ── Uncommitted (only renders when the working tree
+    // has changes; otherwise the empty placeholder is
+    // suppressed entirely).
+    uf = file("tools/viewer/state/uncommitted.json");
+    if uf.format != Format.NotExists {
+        uv = json_parse(uf.content());
+        n = uv.len();
+        if n > 0 {
+            body += "<section><h2>Uncommitted <span class=\"ct\">{n}</span></h2>";
+            body += "<ul class=\"changed\">";
+            i = 0;
+            while i < n {
+                e = uv.item(i);
+                st = e.field("status").as_text();
+                pa = e.field("path").as_text();
+                chip = status_chip(st);
+                esc_pa = escape(pa);
+                body += "<li>{chip} <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
+                i = i + 1;
+            }
+            body += "</ul>";
+            body += "</section>";
+        }
+    }
+    // ── All changes vs main ────────────────────────────────
+    // Moved below the activity feed and collapsed by default
+    // (2026-05-14): with grouping, filtering, and the activity
+    // feed answering "what changed?" inline, the flat 392-row
+    // dump becomes a deep-dive surface for the rare audit case.
+    // Wrapped in <details class="changes-section"> instead of
+    // <section> so it stays one click away.
     cf = file("tools/viewer/state/changed.json");
     if cf.format != Format.NotExists {
         cv = json_parse(cf.content());
         n = cv.len();
-        body += "<section><h2>Changed files <small>vs main</small> <span class=\"ct\">{n}</span></h2>";
+        body += "<details class=\"changes-section\"><summary class=\"h2-summary\">All changes <small>vs main</small> <span class=\"ct\">{n}</span></summary>";
         if n == 0 {
             body += "<p class=\"empty\">No changed files vs <code>main</code>.</p>";
         } else {
@@ -185,51 +244,7 @@ fn page_landing() -> text {
                 body += "</ul></details>";
             }
         }
-        body += "</section>";
-    }
-    // ── Uncommitted ────────────────────────────────────────
-    uf = file("tools/viewer/state/uncommitted.json");
-    if uf.format != Format.NotExists {
-        uv = json_parse(uf.content());
-        n = uv.len();
-        body += "<section><h2>Uncommitted <span class=\"ct\">{n}</span></h2>";
-        if n == 0 {
-            body += "<p class=\"empty\">Working tree clean.</p>";
-        } else {
-            body += "<ul class=\"changed\">";
-            i = 0;
-            while i < n {
-                e = uv.item(i);
-                st = e.field("status").as_text();
-                pa = e.field("path").as_text();
-                chip = status_chip(st);
-                esc_pa = escape(pa);
-                body += "<li>{chip} <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
-                i = i + 1;
-            }
-            body += "</ul>";
-        }
-        body += "</section>";
-    }
-    // ── Recent commits ─────────────────────────────────────
-    kf = file("tools/viewer/state/commits.json");
-    if kf.format != Format.NotExists {
-        kv = json_parse(kf.content());
-        n = kv.len();
-        body += "<section><h2>Recent commits <span class=\"ct\">{n}</span></h2>";
-        body += "<ol class=\"commits\">";
-        i = 0;
-        while i < n {
-            e = kv.item(i);
-            sh = e.field("sha").as_text();
-            ms = e.field("msg").as_text();
-            esc_sh = escape(sh);
-            esc_ms = escape(ms);
-            body += "<li><a href=\"/commit/{esc_sh}\"><code>{esc_sh}</code></a> {esc_ms}</li>";
-            i = i + 1;
-        }
-        body += "</ol>";
-        body += "</section>";
+        body += "</details>";
     }
     // ── Browse the project ─────────────────────────────────
     body += "<section><h2>Browse</h2><ul class=\"browse\">";
@@ -1023,6 +1038,88 @@ fn quick_nav() -> text {
     out
 }
 
+// Render one activity card for the dashboard's Recent activity
+// feed.  Loads the commit's per-file numstat from
+// tools/viewer/state/commits/<sha>.files.json (built by
+// refresh.sh).  When the file list is longer than FILES_INLINE,
+// shows the first N rows + a `+ M more` <details> body.  When
+// the JSON is missing (refresh.sh hasn't been run since the
+// commit landed), the card still renders the header — just
+// without the file rail.
+fn render_activity_card(sha: text, esc_sha: text, esc_date: text, esc_msg: text) -> text {
+    out = "<article class=\"act-card\">";
+    out += "<header class=\"act-head\">";
+    out += "<a class=\"act-sha\" href=\"/commit/{esc_sha}\"><code>{esc_sha}</code></a>";
+    if esc_date != "" {
+        out += "<span class=\"act-date\">{esc_date}</span>";
+    }
+    out += "<span class=\"act-msg\">{esc_msg}</span>";
+
+    ff = file("tools/viewer/state/commits/{sha}.files.json");
+    if ff.format == Format.NotExists {
+        out += "</header></article>";
+        return out;
+    }
+    fjson = json_parse(ff.content());
+    if fjson.kind() != "JArray" {
+        out += "</header></article>";
+        return out;
+    }
+    nfiles = fjson.len();
+    out += "<span class=\"act-count\">{nfiles} file";
+    if nfiles != 1 { out += "s"; }
+    out += "</span>";
+    out += "</header>";
+
+    if nfiles == 0 {
+        out += "</article>";
+        return out;
+    }
+
+    inline = 4;
+    out += "<ul class=\"act-files\">";
+    j = 0;
+    while j < n_min(nfiles, inline) {
+        out += render_file_row(fjson.item(j));
+        j = j + 1;
+    }
+    out += "</ul>";
+
+    if nfiles > inline {
+        rest = nfiles - inline;
+        out += "<details class=\"act-more\"><summary>+ {rest} more</summary>";
+        out += "<ul class=\"act-files\">";
+        while j < nfiles {
+            out += render_file_row(fjson.item(j));
+            j = j + 1;
+        }
+        out += "</ul></details>";
+    }
+    out += "</article>";
+    out
+}
+
+fn render_file_row(f: JsonValue) -> text {
+    adds_v = f.field("adds");
+    dels_v = f.field("dels");
+    path_v = f.field("path");
+    adds = "0";
+    if adds_v.kind() == "JString" { adds = adds_v.as_text(); }
+    dels = "0";
+    if dels_v.kind() == "JString" { dels = dels_v.as_text(); }
+    pa = "";
+    if path_v.kind() == "JString" { pa = path_v.as_text(); }
+    esc_pa = escape(pa);
+    esc_a = escape(adds);
+    esc_d = escape(dels);
+    "<li><a href=\"/file/{esc_pa}\">{esc_pa}</a><span class=\"act-stats\"><span class=\"act-add\">+{esc_a}</span><span class=\"act-del\">−{esc_d}</span></span></li>"
+}
+
+fn n_min(a: integer, b: integer) -> integer {
+    if a < b { return a; }
+    b
+}
+
 fn tile(initial: text, name: text, desc: text, href: text) -> text {
     esc_init = escape(initial);
     esc_name = escape(name);
@@ -1206,6 +1303,15 @@ header.dash code{{background:none;color:var(--accent);padding:0;font-weight:500}
   .tile:hover{{box-shadow:0 2px 12px rgba(0,0,0,.4)}}
 }}
 
+/* ── Collapsible all-changes section ── */
+details.changes-section{{margin:2rem 0}}
+details.changes-section>summary{{cursor:pointer;font-family:'Fraunces',serif;font-weight:480;font-variation-settings:"SOFT" 50,"opsz" 36;font-size:1.2rem;letter-spacing:-.005em;color:var(--ink);list-style:none;display:inline-flex;align-items:baseline;gap:.45em;padding:.25em .5em .25em 0;border-radius:3px;transition:background .12s}}
+details.changes-section>summary::-webkit-details-marker{{display:none}}
+details.changes-section>summary::before{{content:"▸";font-family:'JetBrains Mono',monospace;font-size:.6em;color:var(--accent);transition:transform .18s;display:inline-block;width:.85em;text-align:center}}
+details.changes-section[open]>summary::before{{transform:rotate(90deg)}}
+details.changes-section>summary:hover{{background:var(--accent-soft)}}
+details.changes-section>summary small{{font-family:'IBM Plex Sans',sans-serif;font-weight:400;font-size:.7em;color:var(--ink-mute);font-style:italic;margin-left:.2em}}
+
 /* ── Filter input ── */
 .filter-bar{{margin:.5rem 0 1.25rem;display:flex;align-items:center;gap:.85rem;font-family:'JetBrains Mono',monospace;font-size:.85rem}}
 .filter-bar input{{flex:1;font:inherit;padding:.4rem .75rem;border:1px solid var(--rule);border-radius:3px;background:var(--paper-soft);color:var(--ink);transition:border-color .15s,background .15s}}
@@ -1246,8 +1352,33 @@ ul.changed li{{animation:rise .35s ease-out backwards;animation-delay:calc(var(-
 .st-?{{color:var(--ink-mute)}}
 .st-??{{color:var(--ink-mute)}}
 
-/* ── Commits ── */
+/* ── Commits (legacy ol.commits — kept for any future use) ── */
 ol.commits code{{font-size:.85em;background:none;color:var(--accent);padding:0;font-weight:500;margin-right:.4em;font-variant-numeric:tabular-nums}}
+
+/* ── Activity feed (commit cards with per-file numstat) ── */
+.activity{{display:flex;flex-direction:column;gap:.65rem;margin:0}}
+.act-card{{background:var(--paper-soft);border:1px solid var(--rule);border-radius:4px;padding:.7rem .9rem;transition:border-color .15s,background .15s}}
+.act-card:hover{{border-color:var(--accent-soft-2);background:var(--paper)}}
+.act-head{{display:flex;align-items:baseline;gap:.85rem;flex-wrap:wrap}}
+.act-sha{{border:none;flex-shrink:0}}
+.act-sha code{{background:none;color:var(--accent);font-weight:500;padding:0;font-size:.85em;font-variant-numeric:tabular-nums}}
+.act-date{{font-family:'JetBrains Mono',monospace;font-size:.75rem;color:var(--ink-mute);font-variant-numeric:tabular-nums;flex-shrink:0;letter-spacing:.02em}}
+.act-msg{{flex:1;min-width:0;color:var(--ink);font-size:.92rem;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.act-count{{font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--ink-mute);background:var(--paper);padding:.15em .55em;border-radius:2em;border:1px solid var(--rule);flex-shrink:0;letter-spacing:.02em}}
+.act-files{{list-style:none;padding:.55rem 0 0 0;margin:.55rem 0 0;border-top:1px dashed var(--rule);font-family:'JetBrains Mono',monospace;font-size:.78rem}}
+.act-files li{{display:flex;align-items:baseline;gap:.85rem;padding:.18rem 0;line-height:1.4}}
+.act-files a{{flex:1;min-width:0;color:var(--ink);border:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .12s}}
+.act-files a:hover{{color:var(--accent)}}
+.act-stats{{flex-shrink:0;font-variant-numeric:tabular-nums;letter-spacing:.02em;font-size:.92em}}
+.act-add{{color:var(--added);margin-right:.55em}}
+.act-del{{color:var(--deleted)}}
+.act-more{{margin-top:.35rem}}
+.act-more>summary{{cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute);padding:.25rem 0;list-style:none;letter-spacing:.04em;transition:color .12s;display:inline-block}}
+.act-more>summary::-webkit-details-marker{{display:none}}
+.act-more>summary::before{{content:"▸ ";color:var(--ink-mute);transition:transform .15s;display:inline-block}}
+.act-more[open]>summary::before{{transform:rotate(90deg)}}
+.act-more>summary:hover{{color:var(--accent)}}
+.act-more .act-files{{padding-top:.35rem;border-top:none;margin-top:.25rem}}
 
 /* ── Tree listing ── */
 ul.dir{{list-style:none;padding:0;font-family:'JetBrains Mono',monospace;font-size:.88rem}}

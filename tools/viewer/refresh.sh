@@ -72,8 +72,8 @@ else
 fi
 
 # 3. Recent commits (last 20)
-git log --oneline -20 --pretty='%h%x09%s' | jq -Rn '
-  [inputs | select(. != "") | split("\t") | {sha: .[0], msg: .[1]}]
+git log -20 --pretty='%h%x09%ad%x09%s' --date=short | jq -Rn '
+  [inputs | select(. != "") | split("\t") | {sha: .[0], date: .[1], msg: .[2]}]
 ' > "$STATE/commits.json"
 
 # 4. Uncommitted (porcelain v1).  Two-char status code stripped of
@@ -105,15 +105,31 @@ if git rev-parse --verify main >/dev/null 2>&1; then
   done
 fi
 
-# 6. Per-commit diffs for the recent-commits list.  Same SIGPIPE
-# guard via `mapfile` so a long history doesn't blow up under
-# `set -o pipefail`.
+# 6. Per-commit diffs + per-commit numstat JSON for the
+# recent-commits activity feed.  `commits/<sha>.diff` is the
+# raw `git show` output (used by /commit/<sha>); the parallel
+# `commits/<sha>.files.json` is a structured per-file list
+# `[{adds, dels, path}, ...]` consumed by the dashboard's
+# activity cards (each commit card lists the files it touched
+# with their +adds / -dels stats).  Same SIGPIPE guard via
+# mapfile.
 COMMITS_DIR="$STATE/commits"
 rm -rf "$COMMITS_DIR" && mkdir -p "$COMMITS_DIR"
 mapfile -t commit_shas < <(git log --pretty=%h -20)
 for sha in "${commit_shas[@]}"; do
   [ -z "$sha" ] && continue
   git show "$sha" > "$COMMITS_DIR/$sha.diff"
+  # Per-commit numstat → JSON.  `git show --numstat --pretty=format:`
+  # outputs lines of `<adds>\t<dels>\t<path>`; jq -Rn builds the
+  # array.  Renames emit a single line per renamed file with the
+  # NEW path (which is what we want).
+  git show "$sha" --numstat --pretty=format: 2>/dev/null \
+    | jq -Rn '
+        [inputs
+          | select(. != "" and (. | test("\t")))
+          | split("\t")
+          | { adds: .[0], dels: .[1], path: .[2] }]
+      ' > "$COMMITS_DIR/$sha.files.json"
 done
 
 echo "loft-view state refreshed: $(date)"
