@@ -44,6 +44,16 @@ fn route(req: server::Request) {
     if p == "/" {
         body = page_landing();
         req.respond_html(body);
+    } else if p == "/welcome" {
+        // @PLAN37 phase 04b — bucketed status view for visitors
+        // arriving at the project for the first time.  Reads the
+        // index/tags.json buckets (problems_open, problems_recent,
+        // plans_*) and renders a guided path: vision → recent
+        // wins → active work → interest areas.  Distinct from /
+        // (the branch dashboard, the working surface for the user
+        // reviewing their in-flight work).
+        body = page_welcome();
+        req.respond_html(body);
     } else if p == "/static/style.css" {
         // Bind to local — works around a native codegen quirk that
         // takes &<call-result> when a text constant is passed inline.
@@ -296,6 +306,156 @@ fn page_landing() -> text {
     body += " <a href=\"/tag/PLAN37\">/tag/PLAN37</a>.</p>";
     body += "</section>";
     page("loft-view", body)
+}
+
+// ── /welcome — bucketed status view (@PLAN37 phase 04b) ──
+//
+// Sourced from `index/tags.json` buckets that the indexer
+// produces alongside the tag references:
+//
+//   problems_open      — every PROBLEMS.md row whose severity
+//                        contains "open" or "(partial)"
+//   problems_recent    — closed in last 30 days, sorted newest
+//   plans_active       — plans/[NN-slug]/  (top-level)
+//   plans_recent       — plans/finished/[NN-slug]/ within 60 days
+//   plans_future       — plans/future/[NN-slug]/
+//   plans_deferred     — plans/deferred/[NN-slug]/
+//   lib_plans_future   — lib_plans/future/[NN-slug]/
+//
+// Each bucket renders as a section; sections suppress when
+// empty.  Visitors who land here without an index get a
+// banner pointing at `make index` — same degradation pattern
+// the dashboard uses.
+fn page_welcome() -> text {
+    body = "";
+    body += "<header class=\"dash welcome-hdr\">";
+    body += "<h1>loft</h1>";
+    body += "<p class=\"welcome-tag\">A statically typed, expression-oriented language with closures, native + WASM backends, and a store-based heap.  This page surfaces what's <em>active</em> right now — what's open, what shipped, where the project is going.</p>";
+    body += "<p><a class=\"welcome-link\" href=\"/\">Branch dashboard ▸</a> &nbsp; <a class=\"welcome-link\" href=\"/file/README.md\">README ▸</a> &nbsp; <a class=\"welcome-link\" href=\"/file/doc/claude/ROADMAP.md\">ROADMAP ▸</a></p>";
+    body += "</header>";
+    if file("index/tags.json").format == Format.NotExists {
+        body += "<p class=\"warn\">No <code>index/tags.json</code>.  Run <code>make index</code> to populate the welcome buckets.</p>";
+        return page("loft", body);
+    }
+    idx = json_parse(file("index/tags.json").content());
+
+    // Two-column grid for the four primary buckets.
+    body += "<div class=\"welcome-grid\">";
+
+    // Active plans (left column, top).
+    pa = idx.field("plans_active");
+    if pa.kind() == "JArray" && pa.len() > 0 {
+        body += render_plan_bucket("Active plans", "active right now — capped at 2-3", pa, "");
+    }
+
+    // Recently finished plans (right column, top).
+    pr = idx.field("plans_recent");
+    if pr.kind() == "JArray" && pr.len() > 0 {
+        body += render_plan_bucket("Recently finished", "shipped in the last 60 days", pr, "");
+    }
+
+    // Future plans (left column, bottom) — collapsed by default.
+    pf = idx.field("plans_future");
+    if pf.kind() == "JArray" && pf.len() > 0 {
+        body += render_plan_bucket("Future plans", "intent to finish — paused", pf, "fold");
+    }
+
+    // Deferred plans (right column, bottom) — collapsed.
+    pd = idx.field("plans_deferred");
+    if pd.kind() == "JArray" && pd.len() > 0 {
+        body += render_plan_bucket("Deferred plans", "won't do absent a trigger", pd, "fold");
+    }
+
+    body += "</div>"; // welcome-grid
+
+    // Open problems — full-width below the plan grid.
+    po = idx.field("problems_open");
+    if po.kind() == "JArray" && po.len() > 0 {
+        n = po.len();
+        body += "<section class=\"welcome-sec\"><h2>Open problems <span class=\"ct\">{n}</span></h2>";
+        body += "<p class=\"sec-sub\">P-issues whose severity column contains <code>open</code> or <code>(partial)</code>.  Click any row → its full PROBLEMS.md entry.</p>";
+        body += "<div class=\"problems\">";
+        i = 0;
+        while i < n {
+            line_n = po.item(i).field("line").as_long();
+            body += "<a class=\"prob-link\" href=\"/file/doc/claude/PROBLEMS.md#L{line_n}\">PROBLEMS.md:{line_n}</a>";
+            body += render_md_table_row("doc/claude/PROBLEMS.md", line_n);
+            i = i + 1;
+        }
+        body += "</div></section>";
+    }
+
+    // Recently closed problems — full-width, collapsed when long.
+    pc = idx.field("problems_recent");
+    if pc.kind() == "JArray" && pc.len() > 0 {
+        n = pc.len();
+        body += "<details class=\"welcome-sec\"><summary class=\"h2-summary\">Recently closed <small>last 30 days</small> <span class=\"ct\">{n}</span></summary>";
+        body += "<ul class=\"recent-fixes\">";
+        i = 0;
+        while i < n {
+            e = pc.item(i);
+            tag_v = e.field("tag");
+            tag = tag_v.as_text();
+            // Strip the leading `@` for the bare-name URL.
+            bare = tag;
+            if bare.starts_with("@") { bare = bare[1..bare.len()]; }
+            line_n = e.field("line").as_long();
+            closed = e.field("closed").as_text();
+            sum = e.field("summary").as_text();
+            esc_tag = escape(tag);
+            esc_bare = escape(bare);
+            esc_closed = escape(closed);
+            esc_sum = escape(sum);
+            body += "<li><span class=\"recent-date\">{esc_closed}</span> <a class=\"recent-tag\" href=\"/tag/{esc_bare}\">{esc_tag}</a> <span class=\"recent-sum\">{esc_sum}</span></li>";
+            i = i + 1;
+        }
+        body += "</ul></details>";
+    }
+
+    // Library plans (future) — typically the longest list.
+    lf = idx.field("lib_plans_future");
+    if lf.kind() == "JArray" && lf.len() > 0 {
+        body += render_plan_bucket("Library plans (future)", "lib_plans/future — scheduled, paused", lf, "fold");
+    }
+
+    page("loft", body)
+}
+
+// Render one plan bucket as a card.  `fold` non-empty wraps in
+// a <details> so long lists collapse by default; "" emits an
+// always-open <section>.
+fn render_plan_bucket(title: text, sub: text, arr: JsonValue, fold: text) -> text {
+    n = arr.len();
+    out = "";
+    if fold == "fold" {
+        out += "<details class=\"welcome-sec\"><summary class=\"h2-summary\">{title} <span class=\"ct\">{n}</span></summary>";
+    } else {
+        out += "<section class=\"welcome-sec\"><h2>{title} <span class=\"ct\">{n}</span></h2>";
+    }
+    if sub != "" {
+        esc_sub = escape(sub);
+        out += "<p class=\"sec-sub\">{esc_sub}</p>";
+    }
+    out += "<ul class=\"plan-list\">";
+    i = 0;
+    while i < n {
+        e = arr.item(i);
+        slug = e.field("slug").as_text();
+        path = e.field("path").as_text();
+        ttl = e.field("title").as_text();
+        esc_slug = escape(slug);
+        esc_path = escape(path);
+        esc_ttl = escape(ttl);
+        out += "<li><a class=\"plan-link\" href=\"/file/{esc_path}/README.md\"><span class=\"plan-slug\">{esc_slug}</span> <span class=\"plan-title\">{esc_ttl}</span></a></li>";
+        i = i + 1;
+    }
+    out += "</ul>";
+    if fold == "fold" {
+        out += "</details>";
+    } else {
+        out += "</section>";
+    }
+    out
 }
 
 fn page_tree(rel: text) -> text {
@@ -1314,12 +1474,12 @@ fn top_level_dir(path: text) -> text {
 // mono description.
 fn quick_nav() -> text {
     out = "<section class=\"quick-nav\">";
+    out += tile("W", "Welcome", "Project overview — open / closed / active", "/welcome");
     out += tile("D", "Docs", "Reference + design + plans", "/tree/doc/claude");
     out += tile("P", "Plans", "Active + finished tracker plans", "/tree/doc/claude/plans");
     out += tile("S", "Source", "Rust interpreter + compiler", "/tree/src");
     out += tile("L", "Libraries", "Loft package sources (lib/)", "/tree/lib");
     out += tile("T", "Tests", "Test suites + reproductions", "/tree/tests");
-    out += tile("·", "Stdlib", "Built-in loft (default/)", "/tree/default");
     out += "</section>";
     out
 }
@@ -1606,6 +1766,30 @@ header.dash code{{background:none;color:var(--accent);padding:0;font-weight:500}
 .problems .prob-link:hover{{color:var(--accent)}}
 .problems .row-card{{margin:.2rem 0 .25rem;border-left-color:var(--modified)}}
 .problems .row-card .row-label{{color:var(--modified)}}
+
+/* /welcome — @PLAN37 phase 04b.  Two-column grid for the four
+   plan buckets, full-width sections below for problems lists.
+   The grid degrades to single column at narrow widths so
+   nothing wraps awkwardly. */
+.welcome-hdr{{margin-bottom:1.5rem}}
+.welcome-tag{{font-size:.95rem;line-height:1.55;color:var(--ink-mute);max-width:62ch}}
+.welcome-link{{font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--accent);text-decoration:none}}
+.welcome-link:hover{{text-decoration:underline}}
+.welcome-grid{{display:grid;grid-template-columns:1fr 1fr;gap:1.4rem 1.6rem;margin:0 0 1.6rem}}
+@media (max-width: 920px){{.welcome-grid{{grid-template-columns:1fr}}}}
+.welcome-sec{{background:var(--paper-deep);border-left:3px solid var(--accent);padding:.65rem .85rem .85rem;margin:0}}
+.welcome-sec h2,.welcome-sec .h2-summary{{margin:0 0 .35rem;font-size:.95rem}}
+.welcome-sec .sec-sub{{margin:0 0 .5rem;color:var(--ink-mute);font-size:.78rem;line-height:1.45}}
+.plan-list{{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.3rem}}
+.plan-link{{display:flex;flex-direction:column;gap:.05rem;text-decoration:none;padding:.25rem .35rem;border-radius:2px}}
+.plan-link:hover{{background:var(--paper)}}
+.plan-slug{{font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute);letter-spacing:.02em}}
+.plan-title{{font-size:.85rem;color:var(--ink);line-height:1.35}}
+.recent-fixes{{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.25rem;font-size:.82rem;line-height:1.45}}
+.recent-date{{display:inline-block;width:5.5rem;font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute)}}
+.recent-tag{{font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--accent);text-decoration:none;margin-right:.4rem}}
+.recent-tag:hover{{text-decoration:underline}}
+.recent-sum{{color:var(--ink)}}
 
 /* Definition section + tag-page references list also use
    row-card for consistent table-row treatment.  Tighten the

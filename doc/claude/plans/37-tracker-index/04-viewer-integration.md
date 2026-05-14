@@ -12,10 +12,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
   the bottom of every `/file/<path>` page; both render to
   empty when the index is missing or the file has no
   associated entries, so the page degrades gracefully).
-- **04b — welcome landing** — Still open (depends on
-  @PLAN35 phase 08, which is itself unstarted).  This is
-  the @PLAN37 deliverable that pulls "open problems / recently
-  fixed / active plans" buckets from the index.
+- **04b — welcome landing** — Shipped 2026-05-14.  `/welcome`
+  route in `tools/viewer/src/main.loft` consumes seven new
+  `index/tags.json` buckets — `problems_open`,
+  `problems_recent` (closed in last 30 days),
+  `plans_active`, `plans_recent` (finished in last 60 days),
+  `plans_future`, `plans_deferred`, `lib_plans_future`.
+  Layout is a two-column grid (active + recently finished
+  plans on top, future + deferred below) with full-width
+  problem sections beneath.  Empty buckets suppress
+  entirely; long lists collapse via `<details>`.  The page
+  is independent of @PLAN35's never-shipped phase 08
+  stretches — `tools/indexer/scan.sh` produces the buckets
+  directly via bash + `awk` + `jq`, bypassing the loft-side
+  curation-engine design 35-08 had envisioned.  Linked from
+  the dashboard's quick-nav (`W` tile, replaced the `·
+  Stdlib` slot — Stdlib remains accessible via `/tree/default`).
 
 ## What 04a shipped
 

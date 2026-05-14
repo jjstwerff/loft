@@ -430,7 +430,132 @@ fi
 jq --slurpfile po "$PROBLEMS_OPEN_TMP" '. + {problems_open: $po[0]}' "$OUT" > "$OUT.tmp"
 mv "$OUT.tmp" "$OUT"
 
-META_KEYS='. != "broken" and . != "links" and . != "broken_links" and . != "problems_open"'
+# ── Recently-closed P-issues bucket (last 30 days) ───────────────
+# Same row format, inverse severity filter ("closed" without
+# "(open" / "(partial").  Each entry: {tag, line, summary, closed}
+# where `closed` is parsed from the body's `Closed (YYYY-MM-DD)`
+# marker; rows without a parseable date are skipped (the curation
+# is "what shipped recently," not "every closed bug ever").  The
+# 30-day window is computed in awk via `mktime` against today.
+PROBLEMS_RECENT_TMP=$(mktemp)
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP" "$PROBLEMS_OPEN_TMP" "$PROBLEMS_RECENT_TMP"' EXIT
+if [ -f "$PROBS_FILE" ]; then
+  TODAY_EPOCH=$(date -u +%s)
+  awk -F'|' -v today="$TODAY_EPOCH" '
+    BEGIN { window = 30 * 24 * 60 * 60 }
+    /^\| [0-9]+ \|/ {
+      n = $2; gsub(/ /, "", n);
+      body = $3;
+      sev = $4; gsub(/^ +| +$/, "", sev);
+      # Closed rows: severity contains "closed" but NOT "(open" or "(partial".
+      if (tolower(sev) !~ /[(]closed[)]|closed$/) next;
+      if (tolower(sev) ~ /[(]open|[(]partial/) next;
+      # Find the most recent Closed (YYYY-MM-DD) in the body.
+      tmp = body; close_date = "";
+      while (match(tmp, /Closed \(([0-9]{4})-([0-9]{2})-([0-9]{2})\)/)) {
+        d = substr(tmp, RSTART, RLENGTH);
+        # Capture groups via a second match on the matched substring.
+        if (match(d, /[0-9]{4}-[0-9]{2}-[0-9]{2}/)) {
+          close_date = substr(d, RSTART, RLENGTH);
+        }
+        tmp = substr(tmp, RSTART + RLENGTH);
+      }
+      if (close_date == "") next;
+      # Convert YYYY-MM-DD → epoch via mktime.
+      yr = substr(close_date, 1, 4); mo = substr(close_date, 6, 2); dy = substr(close_date, 9, 2);
+      ts = mktime(yr " " mo " " dy " 00 00 00");
+      if (ts < 0 || (today - ts) > window) next;
+      sub("^ *\\*\\*@P" n "\\*\\* — ", "", body);
+      sub(/^ +/, "", body);
+      pos = index(body, ". ");
+      if (pos > 0) body = substr(body, 1, pos);
+      if (length(body) > 280) body = substr(body, 1, 277) "...";
+      gsub(/\\/, "\\\\", body); gsub(/"/, "\\\"", body);
+      printf "{\"tag\":\"@P%s\",\"line\":%d,\"closed\":\"%s\",\"summary\":\"%s\"}\n", n, NR, close_date, body;
+    }
+  ' "$PROBS_FILE" \
+    | jq -s '. | sort_by(.closed) | reverse' > "$PROBLEMS_RECENT_TMP"
+else
+  echo '[]' > "$PROBLEMS_RECENT_TMP"
+fi
+jq --slurpfile pr "$PROBLEMS_RECENT_TMP" '. + {problems_recent: $pr[0]}' "$OUT" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
+
+# ── Plan buckets (active / future / deferred / recent-finished) ──
+# Walk plan directories and pick the first `# ` heading from each
+# README.md as the plan's display title.  README-less directories
+# are skipped (defensive — every plan has a README in practice).
+# `recent_finished` filters by directory mtime within last 60 days.
+PLANS_ACTIVE_TMP=$(mktemp)
+PLANS_FUTURE_TMP=$(mktemp)
+PLANS_DEFERRED_TMP=$(mktemp)
+PLANS_RECENT_TMP=$(mktemp)
+LIB_PLANS_FUTURE_TMP=$(mktemp)
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP" "$PROBLEMS_OPEN_TMP" "$PROBLEMS_RECENT_TMP" "$PLANS_ACTIVE_TMP" "$PLANS_FUTURE_TMP" "$PLANS_DEFERRED_TMP" "$PLANS_RECENT_TMP" "$LIB_PLANS_FUTURE_TMP"' EXIT
+
+# Helper — walk a directory of plan/[NN-slug] subdirs, emit JSON
+# entries `{slug, path, title}` for each that has a README.md.
+# Title comes from the first `# ` heading; tag-bracket prefix
+# (`@PLAN37 — `) is preserved if present, since it's part of the
+# canonical plan name.
+emit_plans() {
+  local plan_root="$1"  # e.g. doc/claude/plans
+  local sub="$2"        # "" for active (top-level), "future" / "deferred" / "finished"
+  local mtime_window="$3"  # seconds, 0 to skip filter
+  local search_dir
+  if [ -z "$sub" ]; then
+    search_dir="$plan_root"
+  else
+    search_dir="$plan_root/$sub"
+  fi
+  [ -d "$search_dir" ] || return 0
+  local now
+  now=$(date -u +%s)
+  for d in "$search_dir"/[0-9]*-*/; do
+    [ -d "$d" ] || continue
+    local readme="$d/README.md"
+    [ -f "$readme" ] || continue
+    if [ "$mtime_window" -gt 0 ]; then
+      local m
+      m=$(stat -c %Y "$d" 2>/dev/null || echo 0)
+      [ $((now - m)) -le "$mtime_window" ] || continue
+    fi
+    local slug
+    slug=$(basename "$d")
+    local rel
+    rel=${d#./}
+    rel=${rel%/}
+    local title
+    title=$(grep -m1 '^# ' "$readme" | sed 's/^# //; s/[[:space:]]*$//')
+    [ -n "$title" ] || title="$slug"
+    title=$(printf '%s' "$title" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    rel=$(printf '%s' "$rel" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    slug=$(printf '%s' "$slug" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '{"slug":"%s","path":"%s","title":"%s"}\n' "$slug" "$rel" "$title"
+  done
+}
+
+emit_plans "doc/claude/plans" "" 0 \
+  | jq -s '. | sort_by(.slug)' > "$PLANS_ACTIVE_TMP"
+emit_plans "doc/claude/plans" "future" 0 \
+  | jq -s '. | sort_by(.slug)' > "$PLANS_FUTURE_TMP"
+emit_plans "doc/claude/plans" "deferred" 0 \
+  | jq -s '. | sort_by(.slug)' > "$PLANS_DEFERRED_TMP"
+emit_plans "doc/claude/plans" "finished" $((60 * 24 * 60 * 60)) \
+  | jq -s '. | sort_by(.slug)' > "$PLANS_RECENT_TMP"
+emit_plans "doc/claude/lib_plans" "future" 0 \
+  | jq -s '. | sort_by(.slug)' > "$LIB_PLANS_FUTURE_TMP"
+
+jq --slurpfile pa "$PLANS_ACTIVE_TMP" \
+   --slurpfile pf "$PLANS_FUTURE_TMP" \
+   --slurpfile pd "$PLANS_DEFERRED_TMP" \
+   --slurpfile pr "$PLANS_RECENT_TMP" \
+   --slurpfile lf "$LIB_PLANS_FUTURE_TMP" \
+   '. + {plans_active: $pa[0], plans_future: $pf[0], plans_deferred: $pd[0], plans_recent: $pr[0], lib_plans_future: $lf[0]}' \
+   "$OUT" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
+
+META_KEYS='. != "broken" and . != "links" and . != "broken_links" and . != "problems_open" and . != "problems_recent" and . != "plans_active" and . != "plans_future" and . != "plans_deferred" and . != "plans_recent" and . != "lib_plans_future"'
 count=$(jq 'keys | length' "$OUT")
 new_count=$(jq "[keys[] | select(startswith(\"legacy:\") | not) | select($META_KEYS)] | length" "$OUT")
 legacy_count=$(jq '[keys[] | select(startswith("legacy:"))] | length' "$OUT")
@@ -440,12 +565,18 @@ links_count=$(jq '.links | length' "$OUT")
 links_total=$(jq '[.links | to_entries[] | .value | length] | add // 0' "$OUT")
 broken_links_count=$(jq '.broken_links | length' "$OUT")
 problems_open_count=$(jq '.problems_open | length' "$OUT")
+problems_recent_count=$(jq '.problems_recent | length' "$OUT")
+plans_active_count=$(jq '.plans_active | length' "$OUT")
+plans_future_count=$(jq '.plans_future | length' "$OUT")
+plans_deferred_count=$(jq '.plans_deferred | length' "$OUT")
+plans_recent_count=$(jq '.plans_recent | length' "$OUT")
 
 echo "tools/indexer/scan.sh: wrote $OUT"
 echo "  $count distinct tags ($new_count new-form, $legacy_count legacy-form)"
 echo "  $total_refs total references"
 echo "  $links_count link targets ($links_total inbound links)"
-echo "  $problems_open_count open P-issues"
+echo "  $problems_open_count open P-issues, $problems_recent_count closed in last 30 days"
+echo "  plans: $plans_active_count active, $plans_future_count future, $plans_deferred_count deferred, $plans_recent_count finished in last 60 days"
 if [ "$broken_count" -gt 0 ]; then
   echo "  $broken_count broken @-references — run: ./scripts/idx broken"
 fi
