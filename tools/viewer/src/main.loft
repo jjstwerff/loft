@@ -162,6 +162,37 @@ fn page_landing() -> text {
         body += "</div>";
         body += "</section>";
     }
+    // ── Open problems ─────────────────────────────────────
+    // P-issue rows whose severity column contains "open" or
+    // "(partial)".  Sourced from the indexer's `problems_open`
+    // bucket (built by tools/indexer/scan.sh post-2026-05-14)
+    // — that bucket holds per-issue {tag, line, ...} entries
+    // BUT the actual rendering goes through render_problems_row()
+    // so the layout stays identical to the Definition card on
+    // /tag/P* pages.  Single source of truth: parse + render
+    // PROBLEMS.md table rows the same way everywhere they
+    // appear in the viewer.
+    // Section is suppressed when there are zero open issues.
+    if file("index/tags.json").format != Format.NotExists {
+        idx_root = json_parse(file("index/tags.json").content());
+        po = idx_root.field("problems_open");
+        if po.kind() == "JArray" {
+            n = po.len();
+            if n > 0 {
+                body += "<section><h2>Open problems <span class=\"ct\">{n}</span></h2>";
+                body += "<div class=\"problems\">";
+                i = 0;
+                while i < n {
+                    line_n = po.item(i).field("line").as_long();
+                    body += "<a class=\"prob-link\" href=\"/file/doc/claude/PROBLEMS.md#L{line_n}\">PROBLEMS.md:{line_n}</a>";
+                    body += render_md_table_row("doc/claude/PROBLEMS.md", line_n);
+                    i = i + 1;
+                }
+                body += "</div>";
+                body += "</section>";
+            }
+        }
+    }
     // ── Uncommitted (only renders when the working tree
     // has changes; otherwise the empty placeholder is
     // suppressed entirely).
@@ -583,6 +614,201 @@ fn tag_home_pattern(tag: text) -> text {
     "doc/claude/PROBLEMS.md"
 }
 
+// Tiny helper: strip the `**@P<id>** — ` tag prefix from a
+// PROBLEMS.md row body and trim to the first sentence.
+// Lives in its own function because attempting the same
+// slicing inline in render_problems_row tripped a loft parser
+// quirk (P274) — multiple self-slice reassignments + method
+// calls in one scope confuse the parser.  Working around by
+// keeping the work in this small helper.
+fn problem_row_summary(body: text, id: text) -> text {
+    out = body;
+    full_pref = "**@P" + id + "** — ";
+    plen = full_pref.len();
+    olen = out.len();
+    if out.starts_with(full_pref) {
+        out = out[plen..olen];
+    }
+    period = out.find(". ");
+    if period >= 0 { out = out[0..period + 1]; }
+    out
+}
+
+// Generic markdown-table row → labeled-paragraph card.
+//
+// Used wherever the viewer surfaces a single row from a
+// markdown table (Definition section on /tag/P*, references
+// list, dashboard Open Problems).  Reads the file at line_n,
+// confirms the line is a `| col1 | col2 | … |` row, walks
+// upward to find the column-header line (the line directly
+// above a `|---|---|…|` separator), and emits one labeled
+// paragraph per cell with the header as the label.
+//
+// Returns "" when the line isn't a table row OR when no
+// header can be located within 8 lines above (callers fall
+// back to a plain `<code>` blockquote).
+fn render_md_table_row(file_path: text, line_n: integer) -> text {
+    f = file(file_path);
+    if f.format == Format.NotExists { return ""; }
+    src = f.content();
+    lines = src.split('\n');
+    if line_n < 1 || line_n > lines.len() { return ""; }
+    raw = lines[line_n - 1];
+    if !raw.starts_with("| ") { return ""; }
+
+    cells: vector<text> = parse_md_row(raw);
+    nc = cells.len();
+    if nc == 0 { return ""; }
+
+    headers: vector<text> = find_table_headers(lines, line_n);
+    nh = headers.len();
+
+    out = "<article class=\"row-card\">";
+    i = 0;
+    while i < nc {
+        label = "Col " + n_to_text(i + 1);
+        if i < nh { label = headers[i]; }
+        cell = cells[i];
+        if cell == "" {
+            i = i + 1;
+            continue;
+        }
+        // Truncate egregiously long cells to keep cards
+        // skimmable; full content is one click away via the
+        // PROBLEMS.md anchor in the header.
+        clen = cell.len();
+        if clen > 360 {
+            cell = cell[0..357] + "...";
+        }
+        esc_label = escape(label);
+        esc_cell = escape(cell);
+        out += "<p class=\"row-line\"><span class=\"row-label\">{esc_label}</span> {esc_cell}</p>";
+        i = i + 1;
+    }
+    out += "</article>";
+    out
+}
+
+// Parse `| a | b | c |` into ["a", "b", "c"], trimming each
+// cell.  Drops the empty leading/trailing segments produced
+// by split('|').  Strips a `**@P<n>** — ` self-tag prefix
+// from any cell so the SUMMARY column doesn't repeat the ID.
+fn parse_md_row(raw: text) -> vector<text> {
+    segs = raw.split('|');
+    out: vector<text> = [];
+    i = 1;
+    while i + 1 < segs.len() {
+        cell = segs[i].trim();
+        // Strip leading `**@P<id>** — ` if present (a body
+        // cell on a PROBLEMS.md row will start that way).
+        if cell.starts_with("**@P") {
+            sep = cell.find("** — ");
+            if sep >= 0 {
+                cell = cell[sep + 5..cell.len()];
+            }
+        }
+        out += [cell];
+        i = i + 1;
+    }
+    out
+}
+
+// Walk upward from the row at `line_n` looking for the table
+// header.  The header is the line immediately above a
+// markdown table-separator line (`|---|---|…|`).  Returns a
+// vector of column names, or empty when no header is found.
+//
+// Step cap is large (up to 1000 lines) because PROBLEMS.md
+// rows can sit hundreds of lines below their table header
+// (the Quick-Reference table runs 1000+ rows long).  The
+// walk also stops if it leaves the table (a non-`|` line
+// that's not the separator means the row isn't part of a
+// continuous table — bail with no headers).
+fn find_table_headers(lines: vector<text>, line_n: integer) -> vector<text> {
+    empty: vector<text> = [];
+    walk = line_n - 1;
+    steps = 0;
+    while walk > 0 && steps < 1000 {
+        candidate = lines[walk - 1];
+        trimmed = candidate.trim();
+        // Separator line: `|---|---|…|`.  Detect the `-` or
+        // `:-` start after the leading `|`.
+        is_sep = false;
+        if trimmed.starts_with("|") {
+            tlen = trimmed.len();
+            rest = trimmed[1..tlen].trim();
+            if rest.starts_with("-") || rest.starts_with(":-") {
+                is_sep = true;
+            }
+        }
+        if is_sep && walk > 1 {
+            return parse_md_row(lines[walk - 2]);
+        }
+        walk = walk - 1;
+        steps = steps + 1;
+    }
+    empty
+}
+
+fn n_to_text(n: integer) -> text { "{n}" }
+
+// Render one PROBLEMS.md row as a labeled-paragraph card.
+// Used in two places: the dashboard's Open Problems section
+// and the Definition section on /tag/P* pages.  Both call this
+// instead of duplicating the parse/render logic.
+//
+// PROBLEMS.md row shape (post-2026-05-14 self-tagging):
+//   | <id> | **@P<id>** — <body> | <severity> | <fix path> |
+//
+// Returns "" when the file or line isn't a real table row.
+fn render_problems_row(line_n: integer) -> text {
+    f = file("doc/claude/PROBLEMS.md");
+    if f.format == Format.NotExists { return ""; }
+    src = f.content();
+    lines = src.split('\n');
+    if line_n < 1 || line_n > len(lines) { return ""; }
+    raw = lines[line_n - 1];
+    if !raw.starts_with("| ") { return ""; }
+
+    // Split on `|`.  Markdown table rows are
+    // `| col1 | col2 | col3 | col4 |` so split('|') yields
+    // 6 segments: empty, col1, col2, col3, col4, empty.
+    segs = raw.split('|');
+    if len(segs) < 5 { return ""; }
+    id = trim_str(segs[1]);
+    rb = trim_str(segs[2]);
+    sev = trim_str(segs[3]);
+    fx = "";
+    if len(segs) >= 5 { fx = trim_str(segs[4]); }
+
+    // Strip the leading `**@P<id>** — ` tag-prefix and trim
+    // to the first sentence.  Computed via a dedicated helper
+    // (problem_row_summary) — keeping the slicing in its own
+    // function dodges a loft parser quirk that surfaces when
+    // self-slice-and-reassign locals interact with method
+    // calls in this scope.  Filed as P274.
+    summary = problem_row_summary(rb, id);
+
+    esc_id = escape(id);
+    esc_body = escape(summary);
+    esc_sev = escape(sev);
+    esc_fx = escape(fx);
+    out = "<article class=\"prob-card\">";
+    out += "<p class=\"prob-line\"><span class=\"prob-label\">Tag</span> <a href=\"/tag/P{esc_id}\"><code>@P{esc_id}</code></a> <a class=\"prob-row-link\" href=\"/file/doc/claude/PROBLEMS.md#L{line_n}\">PROBLEMS.md:{line_n}</a></p>";
+    out += "<p class=\"prob-line\"><span class=\"prob-label\">Severity</span> {esc_sev}</p>";
+    out += "<p class=\"prob-line\"><span class=\"prob-label\">Summary</span> {esc_body}</p>";
+    if fx != "" {
+        out += "<p class=\"prob-line\"><span class=\"prob-label\">Fix</span> {esc_fx}</p>";
+    }
+    out += "</article>";
+    out
+}
+
+// Trim leading/trailing spaces.  Loft's text doesn't have a
+// stdlib trim that takes only spaces (the existing trim()
+// trims all whitespace — fine for our use case).
+fn trim_str(s: text) -> text { s.trim() }
+
 fn render_definition(tag: text, arr: JsonValue) -> text {
     if arr.kind() != "JArray" { return ""; }
     n = arr.len();
@@ -629,12 +855,42 @@ fn render_definition(tag: text, arr: JsonValue) -> text {
             }
         } else if file_path == pattern {
             line_n = ref_v.field("line").as_long();
-            if line_n < best_line {
+            // For PROBLEMS.md, prefer refs whose context line
+            // begins with `| ` (the actual table row that
+            // DEFINES the issue) over the fast-index entries
+            // higher up that just MENTION the tag.  Without
+            // this filter the lowest-line ref always wins,
+            // which for any P-issue listed in `🔴 Currently
+            // Open` would land on the fast-index row instead
+            // of the real definition row in the Quick-Reference
+            // table.
+            ctx = ref_v.field("context").as_text();
+            is_table_row = ctx.starts_with("| ");
+            if is_table_row && (best_idx < 0 || line_n < best_line) {
                 best_line = line_n;
                 best_idx = i;
             }
         }
         i = i + 1;
+    }
+    // Fallback for @P-tags: if no table-row match, accept any
+    // PROBLEMS.md ref (preserves the lowest-line behavior for
+    // unusual cases — e.g., a P-issue that's only mentioned in
+    // narrative without its own table row).
+    if !is_plan && best_idx < 0 {
+        i = 0;
+        while i < n {
+            ref_v = arr.item(i);
+            file_path = ref_v.field("file").as_text();
+            if file_path == pattern {
+                line_n = ref_v.field("line").as_long();
+                if line_n < best_line {
+                    best_line = line_n;
+                    best_idx = i;
+                }
+            }
+            i = i + 1;
+        }
     }
     // Fallback for @PLAN: any file under the plan dir, lowest line.
     if is_plan && best_idx < 0 {
@@ -659,12 +915,24 @@ fn render_definition(tag: text, arr: JsonValue) -> text {
     file_path = ref_v.field("file").as_text();
     line_n = ref_v.field("line").as_long();
     ctx = ref_v.field("context").as_text();
-    esc_file = escape(file_path);
-    esc_ctx = escape(ctx);
 
+    // Whenever the definition source is a markdown table row,
+    // render it as a labeled-paragraph card (column header →
+    // label, cell → paragraph value).  Generic for any markdown
+    // table — column names are read from the file's actual
+    // header line above the row.  Falls back to the simple
+    // path-link + blockquote form for non-table sources (plan
+    // README headings, source-code lines, etc.).
     out = "<section class=\"definition\"><h2>Definition</h2>";
-    out += "<p><a href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a></p>";
-    out += "<blockquote><code>{esc_ctx}</code></blockquote>";
+    esc_file = escape(file_path);
+    out += "<p><a class=\"def-link\" href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a></p>";
+    table_card = render_md_table_row(file_path, line_n);
+    if table_card != "" {
+        out += table_card;
+    } else {
+        esc_ctx = escape(ctx);
+        out += "<blockquote><code>{esc_ctx}</code></blockquote>";
+    }
     out += "</section>";
     out
 }
@@ -772,8 +1040,26 @@ fn render_refs(arr: JsonValue) -> text {
         line_n = ref_v.field("line").as_long();
         ctx = ref_v.field("context").as_text();
         esc_file = escape(file_path);
-        esc_ctx = escape(ctx);
-        out += "<li><a href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a><br><code>{esc_ctx}</code></li>";
+        out += "<li><a href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a>";
+        // If the context line is a markdown table row, render
+        // it as a labeled-paragraph card (one paragraph per
+        // table column with the column header as label).
+        // Otherwise fall back to the previous one-line code
+        // preview.  Generic for any markdown table — the
+        // helper reads the column header from the file itself.
+        if ctx.starts_with("| ") {
+            table_card = render_md_table_row(file_path, line_n);
+            if table_card != "" {
+                out += table_card;
+            } else {
+                esc_ctx = escape(ctx);
+                out += "<br><code>{esc_ctx}</code>";
+            }
+        } else {
+            esc_ctx = escape(ctx);
+            out += "<br><code>{esc_ctx}</code>";
+        }
+        out += "</li>";
         i = i + 1;
     }
     out += "</ul>";
@@ -1302,6 +1588,31 @@ header.dash code{{background:none;color:var(--accent);padding:0;font-weight:500}
 @media (prefers-color-scheme: dark){{
   .tile:hover{{box-shadow:0 2px 12px rgba(0,0,0,.4)}}
 }}
+
+/* ── Generic markdown-table row card ────────────────────
+   Shared by the dashboard's Open Problems list, the
+   /tag/P* Definition section, and any reference whose
+   context line is a markdown table row. */
+.row-card{{padding:.75rem 1rem;background:var(--paper-soft);border:1px solid var(--rule);border-left:3px solid var(--accent);border-radius:0 4px 4px 0;margin:.45rem 0 .85rem;transition:border-color .12s,background .12s}}
+.row-card:hover{{background:var(--paper)}}
+.row-line{{margin:.2rem 0;font-size:.9rem;line-height:1.5;color:var(--ink)}}
+.row-line .row-label{{font-family:'JetBrains Mono',monospace;font-size:.68rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);min-width:5em;display:inline-block;margin-right:.55em;vertical-align:baseline}}
+.row-line code{{background:none;padding:0;color:var(--ink);font-size:.95em}}
+
+/* Open Problems list (dashboard) — wraps generic row cards
+   plus a small file:line link above each. */
+.problems{{display:flex;flex-direction:column;gap:.55rem;margin:0}}
+.problems .prob-link{{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute);border:none;letter-spacing:.03em;padding:0;margin:.65rem 0 0}}
+.problems .prob-link:hover{{color:var(--accent)}}
+.problems .row-card{{margin:.2rem 0 .25rem;border-left-color:var(--modified)}}
+.problems .row-card .row-label{{color:var(--modified)}}
+
+/* Definition section + tag-page references list also use
+   row-card for consistent table-row treatment.  Tighten the
+   spacing inside the references list so each card sits close
+   to its file:line anchor. */
+ul.refs li:has(.row-card){{padding:.85rem 0}}
+ul.refs .row-card{{margin-top:.3rem;margin-bottom:0}}
 
 /* ── Collapsible all-changes section ── */
 details.changes-section{{margin:2rem 0}}

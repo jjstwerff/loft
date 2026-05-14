@@ -385,19 +385,67 @@ printf '%s' "$BROKEN_LINKS_JSON" > "$BROKEN_LINKS_BUCKET_TMP"
 jq --slurpfile bl "$BROKEN_LINKS_BUCKET_TMP" '. + {broken_links: $bl[0]}' "$OUT" > "$OUT.tmp"
 mv "$OUT.tmp" "$OUT"
 
+# ── Open P-issues bucket (viewer dashboard surface) ─────────────
+# Pull every PROBLEMS.md row whose severity column contains the
+# word "open" or marks the issue `(partial)` — same regex as
+# `make problems`.  Each entry: {tag, line, severity, summary}
+# where summary is the first sentence of the body (post-2026-05-14
+# the body starts with `**@P<n>** — `, so we strip that prefix
+# and take up to the first period).  Renders on the viewer's
+# landing page between Recent activity and All changes.
+PROBS_FILE="doc/claude/PROBLEMS.md"
+PROBLEMS_OPEN_TMP=$(mktemp)
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP" "$PROBLEMS_OPEN_TMP"' EXIT
+if [ -f "$PROBS_FILE" ]; then
+  awk -F'|' '
+    /^\| [0-9]+ \|/ {
+      n = $2; gsub(/ /, "", n);
+      body = $3;
+      sev = $4; gsub(/^ +| +$/, "", sev);
+      fix = $5; gsub(/^ +| +$/, "", fix);
+      if (tolower(sev) !~ /(^| )open( |[)]|$)|[(]partial/) next;
+      # Strip the leading `**@P<n>** — ` tag-prefix added by the
+      # 2026-05-14 self-tagging migration.  Then trim and take
+      # up to the first period.
+      sub("^ *\\*\\*@P" n "\\*\\* — ", "", body);
+      sub(/^ +/, "", body);
+      # Cut at the first ". " (period + space) — a bare "."
+      # would split file extensions (`tests/multiplayer_v2.rs`)
+      # mid-token and produce useless summaries.
+      pos = index(body, ". ");
+      if (pos > 0) body = substr(body, 1, pos);
+      if (length(body) > 280) body = substr(body, 1, 277) "...";
+      if (length(fix) > 280)  fix  = substr(fix,  1, 277) "...";
+      # Escape for JSON.
+      gsub(/\\/, "\\\\", body); gsub(/"/, "\\\"", body);
+      gsub(/\\/, "\\\\", sev);  gsub(/"/, "\\\"", sev);
+      gsub(/\\/, "\\\\", fix);  gsub(/"/, "\\\"", fix);
+      printf "{\"tag\":\"@P%s\",\"line\":%d,\"severity\":\"%s\",\"summary\":\"%s\",\"fix\":\"%s\"}\n", n, NR, sev, body, fix;
+    }
+  ' "$PROBS_FILE" \
+    | jq -s '.' > "$PROBLEMS_OPEN_TMP"
+else
+  echo '[]' > "$PROBLEMS_OPEN_TMP"
+fi
+jq --slurpfile po "$PROBLEMS_OPEN_TMP" '. + {problems_open: $po[0]}' "$OUT" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
+
+META_KEYS='. != "broken" and . != "links" and . != "broken_links" and . != "problems_open"'
 count=$(jq 'keys | length' "$OUT")
-new_count=$(jq '[keys[] | select(startswith("legacy:") | not) | select(. != "broken" and . != "links" and . != "broken_links")] | length' "$OUT")
+new_count=$(jq "[keys[] | select(startswith(\"legacy:\") | not) | select($META_KEYS)] | length" "$OUT")
 legacy_count=$(jq '[keys[] | select(startswith("legacy:"))] | length' "$OUT")
-total_refs=$(jq '[to_entries[] | select(.key != "broken" and .key != "links" and .key != "broken_links") | .value | length] | add // 0' "$OUT")
+total_refs=$(jq "[to_entries[] | select(.key as \$k | $META_KEYS) | .value | length] | add // 0" "$OUT")
 broken_count=$(jq '.broken | length' "$OUT")
 links_count=$(jq '.links | length' "$OUT")
 links_total=$(jq '[.links | to_entries[] | .value | length] | add // 0' "$OUT")
 broken_links_count=$(jq '.broken_links | length' "$OUT")
+problems_open_count=$(jq '.problems_open | length' "$OUT")
 
 echo "tools/indexer/scan.sh: wrote $OUT"
 echo "  $count distinct tags ($new_count new-form, $legacy_count legacy-form)"
 echo "  $total_refs total references"
 echo "  $links_count link targets ($links_total inbound links)"
+echo "  $problems_open_count open P-issues"
 if [ "$broken_count" -gt 0 ]; then
   echo "  $broken_count broken @-references — run: ./scripts/idx broken"
 fi
