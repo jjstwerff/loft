@@ -112,20 +112,19 @@ mode covered).
 Only the welcome-landing half of phase 04b remains open;
 that one depends on @PLAN35 phase 08 which is unstarted.
 
-Verification: standalone loft script exercising the
-JsonValue API confirmed the walking logic — 59 inbound
-refs found for `doc/claude/PROBLEMS.md`, 6+ tags found on
-the same page.  Runtime testing through the full viewer
-binary is blocked by a pre-existing `--interpret` bug
-("native function not loaded — call extensions::load_all()
-first") that strikes any loft program using lib/server's
-`#native` declarations through `target/release/loft`; the
-custom-built `tools/viewer/bin/loft-view` from May 13
-predates the phase 04b code.  Visual verification waits on
-either rebuilding bin/loft-view or wiring the missing text
-natives (`t_4text_ends_with`, `t_4text_trim`, `t_4text_find`,
-`t_4text_rfind`, `t_4text_to_lowercase`) so `--native` mode
-compiles the viewer end-to-end.
+Verified end-to-end 2026-05-14:
+`target/release/loft --interpret --lib lib/ tools/viewer/src/main.loft`
+starts the viewer; `curl localhost:8765/file/doc/claude/PROBLEMS.md`
+returns 295 KB of HTML containing both sidebar sections
+("Referenced by 59" + "Tags on this page" with @P198…@P204
+chips, all populated from `index/tags.json`).  An earlier
+report of a `--interpret` extension-loading panic (filed as
+@P273) turned out to be a stale `target/release/loft`
+binary predating the cdylib's last build — once rebuilt
+fresh, the `apply_manifest_side_effects` path picks up the
+dep cdylibs correctly via `auto_build_native`.  @P273
+closed as no-bug; lesson recorded for the next "missing
+native" symptom.
 
 ---
 
