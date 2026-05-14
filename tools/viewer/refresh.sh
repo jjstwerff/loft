@@ -84,20 +84,34 @@ git status --short | jq -Rn '
 
 # 5. Per-file diffs vs main, capped at 100 files.  Each diff is
 # saved with `/` → `__` so the filename is filesystem-safe.
+#
+# Capture into an array first instead of `git ... | head | while
+# read`: when the file list is longer than the cap, `head` closes
+# its stdin and git gets SIGPIPE → `set -o pipefail` propagates
+# exit 141, killing the whole script (this branch's 392 changed
+# files vs main triggers that path).  `mapfile` reads everything
+# git outputs without a downstream pipe to close early.
 DIFFS_DIR="$STATE/diffs"
 rm -rf "$DIFFS_DIR" && mkdir -p "$DIFFS_DIR"
 if git rev-parse --verify main >/dev/null 2>&1; then
-  git diff --name-only main...HEAD | head -100 | while read -r f; do
+  mapfile -t diff_files < <(git diff --name-only main...HEAD)
+  count=0
+  for f in "${diff_files[@]}"; do
     [ -z "$f" ] && continue
+    if [ "$count" -ge 100 ]; then break; fi
     safe="${f//\//__}"
     git diff main...HEAD -- "$f" > "$DIFFS_DIR/$safe.diff"
+    count=$((count + 1))
   done
 fi
 
-# 6. Per-commit diffs for the recent-commits list.
+# 6. Per-commit diffs for the recent-commits list.  Same SIGPIPE
+# guard via `mapfile` so a long history doesn't blow up under
+# `set -o pipefail`.
 COMMITS_DIR="$STATE/commits"
 rm -rf "$COMMITS_DIR" && mkdir -p "$COMMITS_DIR"
-git log --pretty=%h -20 | while read -r sha; do
+mapfile -t commit_shas < <(git log --pretty=%h -20)
+for sha in "${commit_shas[@]}"; do
   [ -z "$sha" ] && continue
   git show "$sha" > "$COMMITS_DIR/$sha.diff"
 done
