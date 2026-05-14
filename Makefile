@@ -639,10 +639,19 @@ fill:
 
 # List all currently-open P-issues from PROBLEMS.md.  Source of
 # truth is the Quick-Reference table; this extracts rows whose
-# severity column contains `(open)`.  Mirror of the
-# `🔴 Currently Open (fast index)` section at the top of the
-# doc; `tests/doc_hygiene.rs::problems_open_index_matches_quickref`
-# asserts they stay in sync.
+# severity column contains the word "open" or marks the issue
+# `(partial)`.  Mirror of the `🔴 Currently Open (fast index)`
+# section at the top of the doc — that section uses
+# `(partial)` for half-closed issues like P229 (Linux fixed,
+# Windows still flaky), and the table writes that as
+# `(a) Closed; (b) Open (Windows)` in the severity cell.  The
+# regex matches "open" as a whole word so it catches both
+# styles without false-positive on `(closed)`.
+# `(observation-only)` rows (transient bugs filed once but
+# not reproducible) are intentionally omitted — they're a
+# watch list, not actionable items.
+# `tests/doc_hygiene.rs::problems_open_index_matches_quickref`
+# asserts the fast-index and table stay in sync.
 problems:
 	@awk -F'|' '\
 	  /^## Open Issues — Quick Reference/ {flag=1; next} \
@@ -650,7 +659,7 @@ problems:
 	  flag && /^\| [0-9]+ \|/ { \
 	    pid = $$2; gsub(/ /, "", pid); \
 	    sev = $$4; gsub(/^ +| +$$/, "", sev); \
-	    if (sev ~ /\(open\)/) { \
+	    if (tolower(sev) ~ /(^| )open( |[)]|$$)|[(]partial/) { \
 	      desc = $$3; gsub(/^ +/, "", desc); \
 	      pos = index(desc, "."); \
 	      if (pos > 0 && pos < 200) desc = substr(desc, 1, pos); \
