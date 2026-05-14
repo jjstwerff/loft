@@ -18,6 +18,72 @@ type PreEvalEntry = (String, String, String, u32, bool);
 
 /// Walk the Value IR tree and collect all function definition numbers
 /// referenced by `Value::Call(def_nr, _)` nodes.
+/// Detect a T-parameterized method stub: name shape
+/// `t_<digits><identifier>_<method>` where `<identifier>` is the
+/// generic type variable's name.  These stubs are synthesized by
+/// `parse_function`'s I7/I8.1 path for every interface method on a
+/// bound type parameter (`fn foo<T: Bound>(...)`).  At call sites
+/// they are substituted with the concrete impl via
+/// `re_resolve_call`, so the stub body is never entered at runtime.
+///
+/// The discriminator from a regular `t_<LEN><Type>_<method>` (e.g.
+/// `t_4text_starts_with`) is that `<Type>` here is a known concrete
+/// type defined in the program; for T-stubs it's a generic type
+/// variable name.  We can't distinguish those at this layer without
+/// access to the Data table, so we accept the false-positive
+/// possibility (a real builtin matching the same shape but missing
+/// from `codegen_runtime.rs`) — those would emit `todo!()` instead
+/// of `compile_error!()`, which still aborts at runtime if reached
+/// (just at the call site rather than at compile time).
+///
+/// Pragmatic bar: any `t_<digits><alpha-prefix>_*` whose body is
+/// empty + no `#rust` + no `#native` is treated as a T-stub.  The
+/// caller already checks the empty-body branch.
+fn is_t_param_stub(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("t_") else {
+        return false;
+    };
+    // Parse the leading length digits.
+    let len_end = rest.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(0);
+    if len_end == 0 {
+        return false;
+    }
+    let Ok(type_len) = rest[..len_end].parse::<usize>() else {
+        return false;
+    };
+    let after_len = &rest[len_end..];
+    if after_len.len() < type_len + 1 {
+        return false;
+    }
+    // The next `type_len` chars are the type name; then `_` then method.
+    let type_name = &after_len[..type_len];
+    let after_type = &after_len[type_len..];
+    if !after_type.starts_with('_') {
+        return false;
+    }
+    // Heuristic: a generic type variable is a single ASCII identifier
+    // (mostly UPPERCASE single letter or short PascalCase).  Concrete
+    // builtins use lowercase type names (`text`, `integer`, `single`,
+    // `float`, `boolean`, `character`, `enum`, `function`, plus narrow
+    // variants and user struct/enum names which are CamelCase).  Treat
+    // a type-name component starting with an uppercase letter as a
+    // potential generic-T stub.  This catches `T`, `T_p205`, `U`,
+    // `MyTrait` etc.
+    //
+    // The known concrete CamelCase types (`JsonValue`, `JsonField`,
+    // `RegexCapture`, etc.) are wired in `codegen_runtime.rs` already
+    // and never reach this branch (the `is_codegen_runtime_fn` check
+    // earlier returns true for them).  Any concrete CamelCase type
+    // that ISN'T wired AND has an empty body would be incorrectly
+    // labeled "T-stub" — but in that case the right behaviour is
+    // identical (emit `todo!()` instead of compile_error since the
+    // function is genuinely unimplemented).
+    type_name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase())
+}
+
 fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
     match val {
         Value::Call(d, args) => {
@@ -612,6 +678,40 @@ extern crate loft;"
         let main_nr = self.data.def_nr("n_main");
         if main_nr < self.data.definitions() {
             self.reachable = reachable_functions(self.data, &[main_nr]);
+        } else {
+            // No `n_main` (test-script style with `fn p203_*` as the
+            // top-level fn).  Walk reachability from EVERY user-source
+            // function so the compile_error check has accurate data.
+            // Without this, the `is_empty()` fallback in
+            // `output_function` treats every unimplemented stub as
+            // reachable and emits compile_error, breaking test
+            // scripts that don't define a main.
+            //
+            // "User source" = position.file outside `default/` and
+            // `lib/`.  Imprecise (it includes any user file, not just
+            // the entry script) but safe — the worst case is a few
+            // false-positive reachable defs that emit compile_error
+            // when they could've been todo!(), still better than the
+            // pre-fix behaviour where EVERYTHING was treated as
+            // reachable.
+            let mut entries: Vec<u32> = Vec::new();
+            for d in 0..self.data.definitions() {
+                let def = self.data.def(d);
+                if !matches!(def.def_type, DefType::Function) {
+                    continue;
+                }
+                let pos_file = &def.position.file;
+                if pos_file.is_empty()
+                    || pos_file.contains("/default/")
+                    || pos_file.contains("/lib/")
+                {
+                    continue;
+                }
+                entries.push(d);
+            }
+            if !entries.is_empty() {
+                self.reachable = reachable_functions(self.data, &entries);
+            }
         }
         Self::emit_file_header(w, self.data, self.wasm_browser)?;
         writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
@@ -1850,21 +1950,40 @@ extern crate loft;"
                     // annotation.  Unreachable internal stubs (e.g. unused
                     // `i_*` helpers) keep the `todo!()` shim.
                     //
-                    // Functions with a `#rust"…"` annotation (e.g. text
-                    // methods like `starts_with` / `ends_with` / `trim`
-                    // declared in `default/03_text.loft`) inline the Rust
-                    // expression at every call site via the dispatch in
-                    // `src/generation/calls.rs`, so the function body is
-                    // never actually called.  But the body is still
-                    // emitted (rustc needs to see something) and a bare
-                    // `compile_error!` would fire even though no caller
-                    // reaches it.  Treat `#rust`-annotated bodies as
-                    // unreachable for the compile_error decision —
-                    // emit a `todo!()` placeholder that costs nothing
-                    // unless someone takes the address of the fn.
+                    // Three categories of "abstract declarations never
+                    // called at runtime" must NOT trigger compile_error
+                    // even when the reachability walker counts them:
+                    //
+                    // 1. Functions with a `#rust"…"` annotation (e.g.
+                    //    text methods like `starts_with` / `ends_with`
+                    //    / `trim` in `default/03_text.loft`) inline the
+                    //    Rust expression at every call site via the
+                    //    dispatch in `src/generation/calls.rs`.
+                    // 2. Interface method stubs (`__iface_<N>_<method>`)
+                    //    are abstract declarations created by
+                    //    `parse_interface`; bound-generic dispatch
+                    //    substitutes the call with the concrete impl
+                    //    via `re_resolve_call`.
+                    // 3. T-parameterized stubs (`t_<LEN><Tname>_<method>`
+                    //    where `<Tname>` is a generic type variable)
+                    //    are synthesized at function-parse time
+                    //    (parse_function I7/I8.1); same re_resolve_call
+                    //    substitution applies.
+                    //
+                    // For all three, the function body is emitted but
+                    // never entered at runtime.  Use `todo!()` (the
+                    // safe placeholder that costs nothing unless
+                    // someone takes the address of the fn) instead
+                    // of `compile_error!()`.
+                    let is_iface_stub = def.name.starts_with("__iface_");
+                    let is_t_stub = is_t_param_stub(&def.name);
+                    let has_custom_op_emitter = ops::has_custom_emitter(&def.name);
                     let reachable = (self.reachable.is_empty()
                         || self.reachable.contains(&def_nr))
-                        && def.rust.is_empty();
+                        && def.rust.is_empty()
+                        && !is_iface_stub
+                        && !is_t_stub
+                        && !has_custom_op_emitter;
                     if reachable {
                         writeln!(
                             w,
