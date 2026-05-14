@@ -386,30 +386,34 @@ fn page_welcome() -> text {
     }
 
     // Recently closed problems — full-width, collapsed when long.
+    // Two-tier reveal: top 10 most recent are inline once the section
+    // is expanded; the remaining N-10 sit behind a second
+    // `<details>` so the wall of text (60+ entries during active
+    // bug-fix sessions) doesn't dominate the page.
     pc = idx.field("problems_recent");
     if pc.kind() == "JArray" && pc.len() > 0 {
         n = pc.len();
+        head_n = n;
+        if head_n > 10 { head_n = 10; }
         body += "<details class=\"welcome-sec\"><summary class=\"h2-summary\">Recently closed <small>last 30 days</small> <span class=\"ct\">{n}</span></summary>";
         body += "<ul class=\"recent-fixes\">";
         i = 0;
-        while i < n {
-            e = pc.item(i);
-            tag_v = e.field("tag");
-            tag = tag_v.as_text();
-            // Strip the leading `@` for the bare-name URL.
-            bare = tag;
-            if bare.starts_with("@") { bare = bare[1..bare.len()]; }
-            line_n = e.field("line").as_long();
-            closed = e.field("closed").as_text();
-            sum = e.field("summary").as_text();
-            esc_tag = escape(tag);
-            esc_bare = escape(bare);
-            esc_closed = escape(closed);
-            esc_sum = escape(sum);
-            body += "<li><span class=\"recent-date\">{esc_closed}</span> <a class=\"recent-tag\" href=\"/tag/{esc_bare}\">{esc_tag}</a> <span class=\"recent-sum\">{esc_sum}</span></li>";
+        while i < head_n {
+            body += render_recent_fix(pc.item(i));
             i = i + 1;
         }
-        body += "</ul></details>";
+        body += "</ul>";
+        if n > head_n {
+            tail_n = n - head_n;
+            body += "<details class=\"recent-more\"><summary>+ {tail_n} older closures</summary>";
+            body += "<ul class=\"recent-fixes\">";
+            while i < n {
+                body += render_recent_fix(pc.item(i));
+                i = i + 1;
+            }
+            body += "</ul></details>";
+        }
+        body += "</details>";
     }
 
     // Library plans (future) — typically the longest list.
@@ -419,6 +423,24 @@ fn page_welcome() -> text {
     }
 
     page("loft", body)
+}
+
+// One row in the Recently-closed list.  Date · @P-tag · summary.
+// Reused for both the head-10 inline list and the "+ N older"
+// nested toggle.
+fn render_recent_fix(e: JsonValue) -> text {
+    tag = e.field("tag").as_text();
+    // Strip the leading `@` for the bare-name URL (`/tag/<bare>`
+    // is the canonical viewer route shape).
+    bare = tag;
+    if bare.starts_with("@") { bare = bare[1..bare.len()]; }
+    closed = e.field("closed").as_text();
+    sum = e.field("summary").as_text();
+    esc_tag = escape(tag);
+    esc_bare = escape(bare);
+    esc_closed = escape(closed);
+    esc_sum = escape(sum);
+    "<li><span class=\"recent-date\">{esc_closed}</span> <a class=\"recent-tag\" href=\"/tag/{esc_bare}\">{esc_tag}</a> <span class=\"recent-sum\">{esc_sum}</span></li>"
 }
 
 // Render one plan bucket as a card.  `fold` non-empty wraps in
@@ -1786,6 +1808,10 @@ header.dash code{{background:none;color:var(--accent);padding:0;font-weight:500}
 .plan-slug{{font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute);letter-spacing:.02em}}
 .plan-title{{font-size:.85rem;color:var(--ink);line-height:1.35}}
 .recent-fixes{{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.25rem;font-size:.82rem;line-height:1.45}}
+.recent-more{{margin-top:.6rem}}
+.recent-more > summary{{cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:.75rem;color:var(--ink-mute);padding:.15rem 0;list-style:none}}
+.recent-more > summary:hover{{color:var(--accent)}}
+.recent-more[open] > summary{{margin-bottom:.4rem}}
 .recent-date{{display:inline-block;width:5.5rem;font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute)}}
 .recent-tag{{font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--accent);text-decoration:none;margin-right:.4rem}}
 .recent-tag:hover{{text-decoration:underline}}
