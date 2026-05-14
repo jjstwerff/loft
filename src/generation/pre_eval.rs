@@ -167,6 +167,20 @@ impl Output<'_> {
                 std::borrow::Cow::Owned(result)
             };
         }
+        // Helper: extract the variable freed by an OpFreeRef / OpFreeText op
+        // (the first arg, which is always a `Var(_)` for these builtins).
+        let freed_var = |op: &Value| -> Option<u16> {
+            if let Value::Call(d, args) = op.unspan() {
+                let name = &self.data.def(*d).name;
+                if (name == "OpFreeRef" || name == "OpFreeText")
+                    && let Some(first) = args.first()
+                    && let Value::Var(v) = first.unspan()
+                {
+                    return Some(*v);
+                }
+            }
+            None
+        };
         let mut search_from = 0;
         while let Some(ret_pos) = result[search_from..]
             .iter()
@@ -178,6 +192,34 @@ impl Output<'_> {
                 .iter()
                 .rposition(|op| !matches!(op.unspan(), Value::Line(_)) && !is_free_op(op.unspan()));
             if let Some(idx) = expr_pos {
+                // @P274 guard: refuse the hoist when any intervening free-op
+                // between `idx` and `ret_pos` frees a variable that `expr`
+                // references.  Hoisting `expr` into `Return(expr)` would
+                // place the use AFTER the free in the emitted Rust, since
+                // free-ops keep their original position while the expression
+                // moves into the tail return — classic use-after-free
+                // (`stores[var.store_nr]` panics with `index out of bounds:
+                // the len is N but the index is 65535` because OpFreeRef
+                // sets the freed var's store_nr to u16::MAX before the
+                // hoisted expr can use it).  Leaving the original
+                // `[expr, free, Return(Null)]` shape intact lets
+                // `detect_ref_tail_capture` (output_block) emit the
+                // `let __native_tail_ret = expr; free; return __native_tail_ret;`
+                // pattern, which orders the use BEFORE the free correctly.
+                let expr = &result[idx];
+                let mut conflict = false;
+                for between in &result[idx + 1..ret_pos] {
+                    if let Some(v) = freed_var(between)
+                        && Self::value_mentions_var(expr, v)
+                    {
+                        conflict = true;
+                        break;
+                    }
+                }
+                if conflict {
+                    search_from = ret_pos + 1;
+                    continue;
+                }
                 let expr = result.remove(idx);
                 // ret_pos shifted by -1 because we removed one element before it.
                 let actual_ret = ret_pos - 1;
@@ -842,10 +884,26 @@ impl Output<'_> {
         bl: &Block,
         operators: &[Value],
     ) -> Option<(usize, usize)> {
-        match &bl.result {
-            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {}
+        // The capture's purpose is to preserve a tail Call's heap-typed
+        // return value when intervening cleanup ops would otherwise force
+        // it through `[Call; cleanup; return null]` (which discards the
+        // value).  Both the block result type and — for `Type::Never`
+        // blocks (an unconditional `return ...;` arm of an if/match) —
+        // the enclosing function's return type qualify; the latter is
+        // the @P274 path where `parse_append_text` (in vectors.rs) keeps
+        // intervening OpFreeRef ops in place rather than allowing
+        // `patch_hoisted_returns` to inline the Call into the Return.
+        let target_type: &Type = match &bl.result {
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => &bl.result,
+            Type::Never => {
+                let fn_ret = &self.data.def(self.def_nr).returned;
+                match fn_ret {
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => fn_ret,
+                    _ => return None,
+                }
+            }
             _ => return None,
-        }
+        };
         // Plan-11 (P204) fix: operators may be wrapped in `Value::Span(b)`
         // (position-tagging wrapper).  Match against the unspanned value
         // so the walker doesn't bail on Span-wrapped Calls.
@@ -870,13 +928,13 @@ impl Output<'_> {
                         continue;
                     }
                     // Candidate tail Call — require its return type to match
-                    // the block's heap shape.  Only user-level functions
+                    // the target heap shape.  Only user-level functions
                     // (not raw `Op*` or loft-builtin calls) qualify.
                     if name.starts_with("Op") {
                         return None;
                     }
                     let callee_ret = &self.data.def(*d_nr).returned;
-                    if !Self::heap_shape_matches(callee_ret, &bl.result) {
+                    if !Self::heap_shape_matches(callee_ret, target_type) {
                         return None;
                     }
                     return Some((i, ret_idx));

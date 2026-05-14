@@ -9,6 +9,47 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @P274 closed 2026-05-14 — heap-typed tail return + text-concat type-dispatch
+
+Two coordinated codegen + parser fixes for native-only crashes
+that surfaced when @PLAN37 viewer added the
+`render_md_table_row` / `parse_md_row` / `find_table_headers`
+helper trio (commit 89fd2767).
+
+**Bug A — `OpFreeRef` hoisted before tail-call argument use**
+(`src/generation/pre_eval.rs`).  `patch_hoisted_returns` Pass 2
+collapsed `[Call(parse_row, …, var___ref_1), OpFreeRef(var___ref_1),
+Return(Null)]` (emitted by `scopes::free_vars`'s else-branch for
+heap-typed tails — Vector / Reference / Enum-ref bypass
+`is_value_return_type`'s primitive-only check) into
+`[OpFreeRef(var___ref_1), Return(Call(parse_row, …, var___ref_1))]`,
+giving native code `OpFreeRef(var); var.store_nr = u16::MAX;
+return n_parse_row(…, var)` — callee derefs `stores[65535]` and
+panics at `src/keys.rs:249`.  Two-part fix: (1) Pass 2 now
+detects when `expr` references any var that an intervening free
+op will free, and skips the hoist; (2) `detect_ref_tail_capture`
+now accepts `Type::Never` blocks and looks up the enclosing
+function's return type — so the original `[Call, free,
+Return(Null)]` pattern in early-return arms gets the
+`let __native_tail_ret = call(…); free; return __native_tail_ret;`
+wrap that orders the use BEFORE the free.
+
+**Bug B — `text + integer` concat misrouted** (`src/parser/vectors.rs`).
+`parse_append_text` only dispatched parts on Text / Character;
+integer / float / boolean / vector / enum etc. fell through to
+`OpAppendText` with the wrong operand type → SIGSEGV in interp,
+rustc E0614 "type i64 cannot be dereferenced" in native (the
+`+= &*(...)` deref).  Fix routes non-text/non-character parts
+through `append_data` (the same dispatch the `"…{x}…"` format-
+string interpolation path uses), unwrapping `RefVar(inner)` so
+`&text` parameters keep the existing OpAppendStackText / OpAppendText
+fast path.
+
+Pinned by `tests/scripts/100-p274-tail-return-with-cleanup.loft`
+(walked through both backends by `tests/native.rs::native_scripts`
+and `tests/wrap.rs`).  `make view` reverted to `--interpret`
+default in 5dae80cc, restored to `--native` once @P274 closed.
+
 ### Plan-35 (branch-review viewer) closed 2026-05-14
 
 Plan-35 ran 2026-05-13 → 2026-05-14.  Goal: a browser-accessible

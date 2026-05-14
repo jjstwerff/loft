@@ -105,16 +105,54 @@ impl Parser {
             orig_var
         };
         for (val, tp) in parts {
-            if matches!(self.vars.tp(var_nr), Type::RefVar(_)) {
-                if *tp == Type::Character {
-                    ls.push(self.cl("OpAppendStackCharacter", &[Value::Var(var_nr), val.clone()]));
-                } else {
-                    ls.push(self.cl("OpAppendStackText", &[Value::Var(var_nr), val.clone()]));
-                }
-            } else if *tp == Type::Character {
-                ls.push(self.cl("OpAppendCharacter", &[Value::Var(var_nr), val.clone()]));
+            // Unwrap `RefVar(inner)` for the type-dispatch check below.
+            // A `&text` argument (parameter passed by reference) appears
+            // as `Type::RefVar(Type::Text(_))` here but the OpAppend* ops
+            // accept it directly via the same code path as plain `Text`.
+            let dispatch_tp: &Type = if let Type::RefVar(inner) = tp {
+                inner.as_ref()
             } else {
+                tp
+            };
+            if matches!(self.vars.tp(var_nr), Type::RefVar(_)) {
+                if *dispatch_tp == Type::Character {
+                    ls.push(self.cl("OpAppendStackCharacter", &[Value::Var(var_nr), val.clone()]));
+                } else if matches!(dispatch_tp, Type::Text(_)) {
+                    ls.push(self.cl("OpAppendStackText", &[Value::Var(var_nr), val.clone()]));
+                } else {
+                    // @P274 — non-text/non-character parts (integer / float /
+                    // bool / vector / reference / enum / …) need a format-
+                    // dispatch step before append.  `OpAppendStackText`
+                    // assumes its argument already evaluates to text on the
+                    // stack; passing a raw `i64` from `headers.len()` is what
+                    // tripped native E0614 (`type i64 cannot be dereferenced`)
+                    // and SIGSEGV in interp.  Route through `append_data`,
+                    // which is the same dispatch path used by `"…{x}…"`
+                    // format-string interpolation and handles every formattable
+                    // type via the matching `OpFormat*` op.
+                    self.append_data(
+                        dispatch_tp.clone(),
+                        &mut ls,
+                        var_nr,
+                        u16::MAX,
+                        val,
+                        super::OUTPUT_DEFAULT,
+                    );
+                }
+            } else if *dispatch_tp == Type::Character {
+                ls.push(self.cl("OpAppendCharacter", &[Value::Var(var_nr), val.clone()]));
+            } else if matches!(dispatch_tp, Type::Text(_)) {
                 ls.push(self.cl("OpAppendText", &[Value::Var(var_nr), val.clone()]));
+            } else {
+                // @P274 — see RefVar branch above.
+                self.append_data(
+                    dispatch_tp.clone(),
+                    &mut ls,
+                    var_nr,
+                    u16::MAX,
+                    val,
+                    super::OUTPUT_DEFAULT,
+                );
             }
         }
         let tp = Type::Text(vec![var_nr]);

@@ -365,18 +365,15 @@ view: view-refresh
 	    echo "host loft binary missing; run: make view-build"; \
 	    exit 1; \
 	fi
-	# Reverted to --interpret default 2026-05-14 — the new
-	# render_md_table_row / parse_md_row / find_table_headers
-	# helpers (commit 89fd2767) trip native codegen @P274
-	# (OpFreeRef hoisted before tail-call argument use →
-	# `index out of bounds: the len is N but the index is 65535`
-	# at src/keys.rs:249).  Switch back to --native default once
-	# @P274 closes.  `LOFT_VIEW_NATIVE=1 make view` opts back in
-	# to the broken native build for codegen debugging.
-	@if [ -n "$$LOFT_VIEW_NATIVE" ]; then \
-	    ./target/release/loft --lib lib/ tools/viewer/src/main.loft; \
-	else \
+	# Default to --native (faster).  @P274 closed 2026-05-14
+	# (use-after-free in patch_hoisted_returns Pass 2 + text-
+	# concat type-dispatch in parse_append_text).
+	# `LOFT_VIEW_INTERP=1 make view` falls back to the
+	# interpreter (useful when bisecting a native-only regression).
+	@if [ -n "$$LOFT_VIEW_INTERP" ]; then \
 	    ./target/release/loft --interpret --lib lib/ tools/viewer/src/main.loft; \
+	else \
+	    ./target/release/loft --lib lib/ tools/viewer/src/main.loft; \
 	fi
 
 # game: rebuild the efficient browser build of Brick Buster from any
