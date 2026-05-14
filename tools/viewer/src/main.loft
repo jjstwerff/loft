@@ -127,6 +127,8 @@ fn page_landing() -> text {
         body += "</header>";
     }
     // ── Changed files ──────────────────────────────────────
+    // Grouped by top-level directory + live filter.  Each group
+    // is a <details> so the user can collapse noise.
     cf = file("tools/viewer/state/changed.json");
     if cf.format != Format.NotExists {
         cv = json_parse(cf.content());
@@ -135,18 +137,48 @@ fn page_landing() -> text {
         if n == 0 {
             body += "<p class=\"empty\">No changed files vs <code>main</code>.</p>";
         } else {
-            body += "<ul class=\"changed\">";
+            body += "<div class=\"filter-bar\">";
+            body += "<input id=\"filter\" type=\"text\" placeholder=\"filter by path…\" autocomplete=\"off\">";
+            body += "<span class=\"count\">{n} / {n}</span>";
+            body += "</div>";
+            // Two-pass grouping: first collect distinct top-level
+            // dir names in encounter order, then emit one <details>
+            // per group.
+            groups: vector<text> = [];
             i = 0;
             while i < n {
-                e = cv.item(i);
-                st = e.field("status").as_text();
-                pa = e.field("path").as_text();
-                esc_st = escape(st);
-                esc_pa = escape(pa);
-                body += "<li><span class=\"st st-{esc_st}\">{esc_st}</span> <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
+                pa = cv.item(i).field("path").as_text();
+                top = top_level_dir(pa);
+                if !contains_text(groups, top) { groups += [top]; }
                 i = i + 1;
             }
-            body += "</ul>";
+            for g in groups {
+                gcount = 0;
+                j = 0;
+                while j < n {
+                    pa = cv.item(j).field("path").as_text();
+                    if top_level_dir(pa) == g { gcount = gcount + 1; }
+                    j = j + 1;
+                }
+                esc_g = escape(g);
+                body += "<details class=\"group\" open><summary><span class=\"group-name\">{esc_g}</span><span class=\"group-count\">{gcount}</span></summary>";
+                body += "<ul class=\"changed\">";
+                k = 0;
+                idx = 0;
+                while k < n {
+                    e = cv.item(k);
+                    pa = e.field("path").as_text();
+                    if top_level_dir(pa) == g {
+                        st = e.field("status").as_text();
+                        esc_st = escape(st);
+                        esc_pa = escape(pa);
+                        body += "<li style=\"--i:{idx}\"><span class=\"st st-{esc_st}\">{esc_st}</span> <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
+                        idx = idx + 1;
+                    }
+                    k = k + 1;
+                }
+                body += "</ul></details>";
+            }
         }
         body += "</section>";
     }
@@ -330,42 +362,47 @@ fn is_binary_ext(rel: text) -> boolean {
 }
 
 fn page_file(rel: text, f: File) -> text {
-    body = breadcrumbs(rel, "file");
     esc_rel = escape(rel);
     sz = f.size;
-    body += "<h1>{esc_rel} <small>{sz} bytes</small></h1>";
-    body += view_toggle(rel, "file");
+
+    // The article holds breadcrumbs + heading + view-toggle +
+    // content; the rail holds Referenced by + Tags on this page.
+    // CSS `main:has(> aside.rail)` switches to the two-column
+    // grid layout; pages without sidebars stay single-column.
+    article = "<article>";
+    article += breadcrumbs(rel, "file");
+    article += "<h1>{esc_rel} <small>{sz} bytes</small></h1>";
+    article += view_toggle(rel, "file");
 
     if is_binary_ext(rel) {
-        esc2 = escape(rel);
-        body += "<p>Binary file ({sz} bytes).  ";
-        body += "<a href=\"/raw/{esc2}\">download raw</a></p>";
-        return page(rel, body);
+        article += "<p>Binary file ({sz} bytes).  ";
+        article += "<a href=\"/raw/{esc_rel}\">download raw</a></p>";
+        article += "</article>";
+        return page(rel, article);
     }
 
-    esc2 = escape(rel);
-    body += "<p><a href=\"/raw/{esc2}\">View raw</a></p>";
-
+    article += "<p><a href=\"/raw/{esc_rel}\">View raw</a></p>";
     src = f.content();
     if is_markdown(rel) {
-        // Pass the viewer's tag-route prefix (`/tag/`) so body-text
-        // `@P259` / `@PLAN35-01` become clickable links; and the
-        // raw-bytes prefix (`/raw/`) so relative image URLs route
-        // through the existing /raw/<path> handler (which serves
-        // any file type — png, jpg, etc. — as application bytes).
-        body += markdown::render(src, parent_of(rel), "/tag/", "/raw/");
+        article += markdown::render(src, parent_of(rel), "/tag/", "/raw/");
     } else {
-        body += render_code(src);
+        article += render_code(src);
     }
+    article += "</article>";
 
     // ── Sidebars (plan-37 phase 04b) — inbound links + tag list.
-    // Both render to "" when index/tags.json is missing or the
-    // file has no entries, so the page degrades gracefully on a
-    // fresh checkout that hasn't run `make index` yet.
-    body += sidebar_referenced_by(rel);
-    body += sidebar_tags_on_page(rel);
+    // Built into a separate <aside class="rail"> so they form a
+    // sticky right column at viewport widths >= 1100px.  Both
+    // render to "" when index/tags.json is missing, so an empty
+    // rail collapses to nothing.
+    rail_inner = sidebar_referenced_by(rel);
+    rail_inner += sidebar_tags_on_page(rel);
+    rail = "";
+    if rail_inner != "" {
+        rail = "<aside class=\"rail\">{rail_inner}</aside>";
+    }
 
-    page(rel, body)
+    page(rel, article + rail)
 }
 
 // ── Markdown renderer (plan-35 phase 03) ─────────────────────
@@ -868,16 +905,50 @@ fn page(title: text, body: text) -> text {
     out += "<html lang=\"en\"><head>";
     out += "<meta charset=\"utf-8\">";
     out += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
-    out += "<title>{esc_title} — loft-view</title>";
+    out += "<title>{esc_title} · loft·view</title>";
+    out += "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">";
+    out += "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>";
+    // Three faces: Fraunces (display, with SOFT axis), IBM Plex
+    // Sans (body), JetBrains Mono (code + UI labels).
+    out += "<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..700,0..100&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap\">";
     out += "<link rel=\"stylesheet\" href=\"/static/style.css\">";
     out += "</head><body>";
-    out += "<header><a href=\"/\" class=\"home\">loft-view</a></header>";
+    out += "<header class=\"site\"><div class=\"wrap\">";
+    out += "<a href=\"/\" class=\"brand\">";
+    out += "<span class=\"mark\">loft</span><span class=\"slash\">·</span><span class=\"view\">view</span>";
+    out += "</a>";
+    out += "<nav>";
+    out += "<a href=\"/\">dashboard</a>";
+    out += "<a href=\"/tree/\">tree</a>";
+    out += "<a href=\"/tree/doc/claude\">docs</a>";
+    out += "<a href=\"/tag/PLAN37\">tags</a>";
+    out += "</nav>";
+    out += "</div></header>";
     out += "<main>";
     out += body;
     out += "</main>";
-    out += "<footer>plan-35 phase 02 · "
-        + "<a href=\"/tree/doc/claude/plans/35-branch-review-viewer\">design</a>"
-        + "</footer>";
+    out += "<footer>";
+    out += "<span>loft·view · branch-aware code review</span>";
+    out += "<span><a href=\"/tree/doc/claude/plans/finished/35-branch-review-viewer\">design</a> · <a href=\"/tree/tools/viewer/src\">source</a></span>";
+    out += "</footer>";
+    // Inline JS: live filter for the dashboard's changed-files list.
+    // Pure progressive enhancement — pages without the filter input
+    // (every non-landing page) skip the bind silently.
+    // {{ and }} are loft format-string escapes for literal braces.
+    out += "<script>";
+    out += "(function(){{";
+    out += "var inp=document.getElementById('filter');if(!inp)return;";
+    out += "var ctr=document.querySelector('.filter-bar .count');";
+    out += "var total=document.querySelectorAll('ul.changed li').length;";
+    out += "function apply(){{var q=inp.value.trim().toLowerCase();var v=0;";
+    out += "document.querySelectorAll('details.group').forEach(function(g){{var any=false;";
+    out += "g.querySelectorAll('li').forEach(function(li){{var m=!q||li.textContent.toLowerCase().indexOf(q)>=0;li.classList.toggle('hidden',!m);if(m){{v++;any=true;}}}});";
+    out += "g.classList.toggle('hidden',!any);if(q&&any){{g.open=true;}}}});";
+    out += "if(ctr){{ctr.textContent=v+' / '+total;}}}}";
+    out += "inp.addEventListener('input',apply);";
+    out += "inp.addEventListener('keydown',function(e){{if(e.key==='Escape'){{inp.value='';apply();}}}});";
+    out += "}})();";
+    out += "</script>";
     out += "</body></html>";
     out
 }
@@ -915,6 +986,24 @@ fn breadcrumbs(rel: text, kind: text) -> text {
 
 // ── Path utilities ───────────────────────────────────────────
 
+// Top-level directory of a repo-relative path.  Used to group the
+// dashboard's changed-files list.  Returns the first path segment
+// for nested paths; returns "(root)" for files at the repo root
+// (CLAUDE.md, README.md, Makefile, etc.).
+fn top_level_dir(path: text) -> text {
+    slash = path.find("/");
+    if slash < 0 { return "(root)"; }
+    path[0..slash]
+}
+
+// vector<text>::contains — loft's stdlib doesn't expose a
+// contains() method on vector<text> yet; tiny linear scan here
+// while we wait for it.
+fn contains_text(vs: vector<text>, needle: text) -> boolean {
+    for v in vs { if v == needle { return true; } }
+    false
+}
+
 fn parent_of(rel: text) -> text {
     last_slash = rel.rfind("/");
     if last_slash < 0 { return ""; }
@@ -946,118 +1035,230 @@ fn skip(path: text) -> boolean {
 // ── CSS ──────────────────────────────────────────────────────
 
 const BASE_CSS: text = `
-body{{font-family:system-ui,-apple-system,sans-serif;max-width:980px;margin:0 auto;padding:1rem;line-height:1.5;color:#222}}
-header{{border-bottom:1px solid #ccc;padding-bottom:.5rem;margin-bottom:1rem}}
-header a.home{{font-weight:600;color:#333;text-decoration:none}}
-footer{{border-top:1px solid #ccc;margin-top:2rem;padding-top:.5rem;font-size:.85rem;color:#666}}
-footer a{{color:#666}}
-main{{min-height:60vh}}
-h1{{font-size:1.4rem;margin:0 0 .5rem 0}}
-h1 small{{color:#888;font-weight:400;font-size:.7em}}
-h2{{font-size:1.1rem;margin-top:1.5rem}}
-ul.dir{{list-style:none;padding:0;font-family:ui-monospace,Menlo,monospace}}
-ul.dir li{{padding:.15rem 0;display:flex;justify-content:space-between}}
-ul.dir a.d{{font-weight:600}}
-ul.dir a.f{{color:#225}}
-ul.dir .sz{{color:#999;font-size:.85em}}
-nav.crumbs{{font-family:ui-monospace,Menlo,monospace;color:#666;margin-bottom:.5rem;font-size:.9em}}
-nav.crumbs a{{color:#225;text-decoration:none}}
-nav.crumbs a:hover{{text-decoration:underline}}
-code{{font-family:ui-monospace,Menlo,monospace;background:#f3f3f3;padding:.1em .3em;border-radius:3px}}
-a{{color:#0066cc}}
-a:visited{{color:#553388}}
-pre.code-pre{{background:#f8f8f8;border:1px solid #ddd;border-radius:4px;overflow-x:auto;padding:.5rem;font-size:.85rem;line-height:1.4}}
-pre.code-pre code{{background:none;padding:0;border-radius:0;display:block}}
-a.line{{display:block;text-decoration:none;color:inherit;white-space:pre}}
-a.line:hover{{background:#eef}}
-a.line:target{{background:#ffd}}
-a.line .lineno{{display:inline-block;width:3.5em;text-align:right;padding-right:1em;color:#999;user-select:none}}
-a.line .src{{color:inherit}}
-ul.refs{{list-style:none;padding:0}}
-ul.refs li{{padding:.4rem 0;border-bottom:1px solid #eee}}
-ul.refs code{{font-size:.85em}}
-section.definition{{margin:1rem 0 1.5rem 0;padding:.6rem .9rem;background:#f5f7fa;border-left:4px solid #36c;border-radius:3px}}
-section.definition h2{{margin:0 0 .3rem 0;font-size:1rem;color:#225}}
-section.definition p{{margin:0 0 .3rem 0;font-size:.9em}}
-section.definition blockquote{{margin:.3rem 0 0 0;padding:0}}
-section.definition blockquote code{{display:block;background:none;padding:.2rem 0;font-size:.85em;white-space:pre-wrap;word-break:break-word}}
-section.sidebar{{margin-top:2rem;padding-top:1rem;border-top:1px solid #ccc}}
-section.sidebar h2{{font-size:1rem;color:#555;margin-top:0}}
-section.sidebar h2 .ct{{display:inline-block;background:#eef;color:#225;font-size:.7em;padding:.05em .4em;border-radius:8px;margin-left:.5em;font-weight:400}}
-ul.tag-list{{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.4rem;font-family:ui-monospace,Menlo,monospace}}
-ul.tag-list li{{margin:0}}
-ul.tag-list a{{display:inline-block;padding:.15rem .5rem;background:#f3f3f3;border-radius:3px;text-decoration:none}}
-ul.tag-list a:hover{{background:#e6e6f6}}
-ul.tag-list code{{background:none;padding:0}}
-.warn{{background:#ffe;border-left:3px solid #cc8;padding:.4rem .6rem;color:#553}}
-header.dash{{border-bottom:none;padding:0;margin:0 0 1rem 0}}
-header.dash h1{{margin:.2rem 0}}
-header.dash .ahead-behind{{margin:.1rem 0;color:#555}}
-header.dash .head{{margin:.1rem 0;color:#555;font-size:.95em}}
-section{{margin:1rem 0;padding:0;border:none}}
-section h2{{margin:.6rem 0 .3rem 0;font-size:1.05rem}}
-section h2 .ct{{display:inline-block;background:#eef;color:#225;font-size:.7rem;padding:.05em .4em;border-radius:8px;margin-left:.5em;font-weight:400}}
-ul.changed,ol.commits,ul.browse{{list-style:none;padding:0;font-family:ui-monospace,Menlo,monospace}}
-ul.changed li,ol.commits li,ul.browse li{{padding:.1rem 0}}
-.empty{{color:#888;font-style:italic;font-family:system-ui,sans-serif}}
-.st{{display:inline-block;width:1.6em;text-align:center;border-radius:3px;color:#fff;font-weight:600;font-size:.85em;margin-right:.3em}}
-.st-M{{background:#c80}}
-.st-A{{background:#393}}
-.st-D{{background:#c33}}
-.st-R{{background:#36c}}
-.st-?{{background:#888}}
-.st-??{{background:#888}}
-ol.commits code{{background:none;color:#225;padding:0;font-weight:600}}
-nav.view-toggle{{display:inline-flex;gap:0;margin:.3rem 0;border:1px solid #ccc;border-radius:4px;overflow:hidden;font-size:.85em}}
-nav.view-toggle a,nav.view-toggle span{{padding:.2rem .6rem;color:#225;text-decoration:none;background:#f5f5f5}}
-nav.view-toggle a:hover{{background:#eef}}
-nav.view-toggle .active{{background:#225;color:#fff;font-weight:600}}
-pre.diff{{background:#f8f8f8;border:1px solid #ddd;border-radius:4px;overflow-x:auto;padding:0;font-size:.85rem;line-height:1.4}}
-pre.diff code{{background:none;padding:0;border-radius:0;display:block;white-space:pre}}
-pre.diff span{{display:block;padding:0 .5rem;white-space:pre}}
-pre.diff .diff-add{{background:#e8ffe8;color:#063}}
-pre.diff .diff-del{{background:#ffe8e8;color:#603}}
-pre.diff .diff-hunk{{background:#eef;color:#225;font-weight:600}}
-pre.diff .diff-head{{background:#eee;color:#333;font-weight:600;padding-top:.4rem;padding-bottom:.4rem}}
-pre.diff .diff-meta{{color:#888}}
-pre.diff .diff-noeol{{color:#888;font-style:italic}}
-pre.diff .diff-ctx{{color:#222}}
-@media (prefers-color-scheme: dark){{
-  body{{background:#1a1a1a;color:#ddd}}
-  header,footer{{border-color:#444}}
-  header a.home{{color:#ddd}}
-  footer,footer a{{color:#999}}
-  ul.dir a.f{{color:#9bf}}
-  nav.crumbs{{color:#999}}
-  nav.crumbs a{{color:#9bf}}
-  code{{background:#2a2a2a}}
-  a{{color:#9bf}}
-  a:visited{{color:#caf}}
-  pre.code-pre{{background:#0e0e0e;border-color:#333}}
-  a.line:hover{{background:#22335a}}
-  a.line:target{{background:#604}}
-  a.line .lineno{{color:#666}}
-  ul.refs li{{border-color:#333}}
-  section.definition{{background:#1f2530;border-left-color:#9bf}}
-  section.definition h2{{color:#9bf}}
-  section.sidebar{{border-color:#444}}
-  section.sidebar h2{{color:#bbb}}
-  section.sidebar h2 .ct{{background:#223;color:#9bf}}
-  ul.tag-list a{{background:#222;color:#9bf}}
-  ul.tag-list a:hover{{background:#33486f}}
-  .warn{{background:#332;border-left-color:#aa5;color:#cc8}}
-  header.dash .ahead-behind,header.dash .head{{color:#bbb}}
-  section h2 .ct{{background:#223;color:#9bf}}
-  ol.commits code{{color:#9bf}}
-  nav.view-toggle{{border-color:#444}}
-  nav.view-toggle a,nav.view-toggle span{{background:#222;color:#9bf}}
-  nav.view-toggle a:hover{{background:#33486f}}
-  nav.view-toggle .active{{background:#9bf;color:#111}}
-  pre.diff{{background:#0e0e0e;border-color:#333}}
-  pre.diff .diff-add{{background:#0a2a0a;color:#9f9}}
-  pre.diff .diff-del{{background:#2a0a0a;color:#f99}}
-  pre.diff .diff-hunk{{background:#1a1a3a;color:#9bf}}
-  pre.diff .diff-head{{background:#222;color:#ddd}}
-  pre.diff .diff-ctx{{color:#bbb}}
+/* ── Engineering Notebook palette + typography ───────────────
+   Warm cream paper / ink-black / single deep ink-blue accent.
+   Three faces: Fraunces (serif display, Tufte-leaning), IBM
+   Plex Sans (body), JetBrains Mono (UI labels + code). */
+:root{{
+  --paper:#f8f4ea;
+  --paper-soft:#f1ebda;
+  --ink:#1d1a14;
+  --ink-soft:#4a4538;
+  --ink-mute:#8a8475;
+  --rule:#d8d2c0;
+  --accent:#1c4878;
+  --accent-soft:#e7eef5;
+  --accent-soft-2:#cfdcec;
+  --added:#5a7a3c;
+  --modified:#8b6510;
+  --deleted:#9c3a2a;
+  --renamed:#1c4878;
 }}
+@media (prefers-color-scheme: dark){{
+  :root{{
+    --paper:#16181b;
+    --paper-soft:#1c1f23;
+    --ink:#e8e4d8;
+    --ink-soft:#a8a594;
+    --ink-mute:#6c6a5e;
+    --rule:#2c2f33;
+    --accent:#88b3df;
+    --accent-soft:#1a2230;
+    --accent-soft-2:#243245;
+    --added:#8fc16a;
+    --modified:#d09b4a;
+    --deleted:#d97a6c;
+    --renamed:#88b3df;
+  }}
+}}
+*{{box-sizing:border-box}}
+html,body{{margin:0;padding:0}}
+body{{font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:16px;line-height:1.55;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}}
+/* Subtle paper warmth — two soft radial washes that hint at
+   atmosphere without becoming texture. */
+body::before{{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background-image:radial-gradient(ellipse 80% 60% at 15% 10%,rgba(28,72,120,.025) 0%,transparent 50%),radial-gradient(ellipse 70% 60% at 85% 90%,rgba(139,101,16,.018) 0%,transparent 60%)}}
+@media (prefers-color-scheme: dark){{
+  body::before{{background-image:radial-gradient(ellipse 80% 60% at 15% 10%,rgba(136,179,223,.04) 0%,transparent 50%),radial-gradient(ellipse 70% 60% at 85% 90%,rgba(208,155,74,.025) 0%,transparent 60%)}}
+}}
+
+/* ── Sticky header with brand mark ── */
+header.site{{position:sticky;top:0;z-index:50;background:rgba(248,244,234,.92);backdrop-filter:saturate(1.4) blur(6px);-webkit-backdrop-filter:saturate(1.4) blur(6px);border-bottom:1px solid var(--rule);padding:.7rem 1.5rem}}
+@media (prefers-color-scheme: dark){{header.site{{background:rgba(22,24,27,.92)}}}}
+header.site .wrap{{max-width:1280px;margin:0 auto;display:flex;align-items:baseline;gap:1.25rem}}
+header.site .brand{{font-family:'Fraunces',serif;font-weight:540;font-variation-settings:"SOFT" 50,"opsz" 144;font-size:1.45rem;letter-spacing:-.018em;color:var(--ink);text-decoration:none;border:none;display:inline-flex;align-items:baseline}}
+header.site .brand .mark{{font-style:italic}}
+header.site .brand .slash{{color:var(--accent);font-weight:380;margin:0 .15em;font-style:normal;font-variation-settings:"SOFT" 0}}
+header.site .brand .view{{font-family:'JetBrains Mono',monospace;font-size:.78em;font-weight:500;color:var(--accent);letter-spacing:0}}
+header.site nav{{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:.78rem;letter-spacing:.02em;text-transform:uppercase}}
+header.site nav a{{color:var(--ink-soft);text-decoration:none;border:none;margin-left:1.4rem;padding-bottom:2px;border-bottom:1px solid transparent;transition:border-color .18s,color .18s}}
+header.site nav a:hover{{color:var(--ink);border-color:var(--accent)}}
+
+/* ── Main + optional right rail ── */
+main{{max-width:1280px;margin:0 auto;padding:1.75rem 1.5rem 4rem;position:relative;z-index:1}}
+main:has(>aside.rail){{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:2.5rem;align-items:start}}
+@media (max-width:1100px){{
+  main:has(>aside.rail){{grid-template-columns:1fr;gap:1rem}}
+}}
+main>article{{min-width:0}}
+aside.rail{{position:sticky;top:5rem;font-size:.9rem;align-self:start}}
+@media (max-width:1100px){{aside.rail{{position:static;border-top:1px solid var(--rule);padding-top:1rem;margin-top:2rem}}}}
+
+/* ── Type scale ── */
+h1{{font-family:'Fraunces',serif;font-weight:460;font-variation-settings:"SOFT" 30,"opsz" 144;font-size:2rem;letter-spacing:-.022em;line-height:1.15;margin:.5rem 0 1rem;color:var(--ink)}}
+h1 small{{font-family:'JetBrains Mono',monospace;font-size:.4em;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-mute);margin-left:.85em;vertical-align:middle}}
+h1 code{{font-family:'JetBrains Mono',monospace;font-size:.6em;background:none;padding:0;color:var(--accent);font-weight:500}}
+h2{{font-family:'Fraunces',serif;font-weight:480;font-variation-settings:"SOFT" 50,"opsz" 36;font-size:1.2rem;letter-spacing:-.005em;margin:2.2rem 0 .85rem;color:var(--ink)}}
+h2 .ct{{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:.65rem;font-weight:500;letter-spacing:.04em;color:var(--accent);background:var(--accent-soft);padding:.2em .65em;border-radius:2em;margin-left:.65em;vertical-align:middle}}
+h2 small{{font-family:'IBM Plex Sans',sans-serif;font-weight:400;font-size:.7em;color:var(--ink-mute);font-style:italic;margin-left:.4em}}
+main h3,main h4,main h5{{font-family:'Fraunces',serif;font-weight:500;color:var(--ink);scroll-margin-top:5rem}}
+main h3{{font-size:1.05rem;margin:1.5rem 0 .5rem}}
+main h4{{font-size:.95rem;margin:1.25rem 0 .4rem;color:var(--ink-soft)}}
+main h5{{font-size:.88rem;margin:1rem 0 .35rem;color:var(--ink-soft)}}
+p{{margin:.5rem 0}}
+a{{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft-2);transition:border-color .15s,background .15s}}
+a:hover{{border-color:var(--accent)}}
+a:visited{{color:var(--accent)}}
+code{{font-family:'JetBrains Mono',monospace;font-size:.88em;background:var(--accent-soft);padding:.1em .38em;border-radius:2px;color:var(--ink)}}
+strong{{font-weight:600}}
+em{{font-style:italic;color:var(--ink-soft)}}
+hr{{border:none;border-top:1px solid var(--rule);margin:2rem 0}}
+
+/* ── Breadcrumbs ── */
+nav.crumbs{{font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--ink-mute);margin:0 0 .85rem;letter-spacing:.02em}}
+nav.crumbs a{{color:var(--ink-soft);border:none;padding:.15em .35em;border-radius:2px;transition:background .12s,color .12s}}
+nav.crumbs a:hover{{color:var(--ink);background:var(--accent-soft)}}
+
+/* ── Branch dashboard header ── */
+header.dash{{border-bottom:1px solid var(--rule);padding:0 0 1.25rem;margin:0 0 1.5rem}}
+header.dash h1{{margin:0 0 .35rem;font-size:1.7rem}}
+header.dash h1 code{{font-size:.55em}}
+header.dash .ahead-behind,header.dash .head{{font-family:'JetBrains Mono',monospace;font-size:.82rem;color:var(--ink-soft);margin:.15rem 0}}
+header.dash code{{background:none;color:var(--accent);padding:0;font-weight:500}}
+
+/* ── Filter input ── */
+.filter-bar{{margin:.5rem 0 1.25rem;display:flex;align-items:center;gap:.85rem;font-family:'JetBrains Mono',monospace;font-size:.85rem}}
+.filter-bar input{{flex:1;font:inherit;padding:.4rem .75rem;border:1px solid var(--rule);border-radius:3px;background:var(--paper-soft);color:var(--ink);transition:border-color .15s,background .15s}}
+.filter-bar input::placeholder{{color:var(--ink-mute)}}
+.filter-bar input:focus{{outline:none;border-color:var(--accent);background:var(--accent-soft)}}
+.filter-bar .count{{color:var(--ink-mute);font-size:.78rem;white-space:nowrap;letter-spacing:.04em}}
+
+/* ── Collapsible groups (top-level dirs in dashboard) ── */
+details.group{{margin:.4rem 0}}
+details.group.hidden{{display:none}}
+details.group>summary{{cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:.83rem;padding:.35rem .55rem;border-radius:3px;list-style:none;display:flex;align-items:center;gap:.55rem;color:var(--ink);transition:background .12s;border-left:2px solid transparent}}
+details.group>summary::-webkit-details-marker{{display:none}}
+details.group>summary::before{{content:"▸";font-size:.7em;color:var(--ink-mute);width:.9em;display:inline-block;transition:transform .18s}}
+details.group[open]>summary::before{{transform:rotate(90deg);color:var(--accent)}}
+details.group>summary:hover{{background:var(--accent-soft);border-left-color:var(--accent-soft-2)}}
+details.group[open]>summary{{border-left-color:var(--accent)}}
+details.group>summary .group-name{{font-weight:500;color:var(--ink)}}
+details.group>summary .group-count{{color:var(--ink-mute);font-size:.85em;margin-left:auto;font-variant-numeric:tabular-nums}}
+
+/* ── Lists: changed / commits / browse / dir ── */
+ul.changed,ol.commits,ul.browse{{list-style:none;padding:0;margin:0;font-family:'JetBrains Mono',monospace;font-size:.85rem}}
+ul.changed{{padding:.15rem 0 .25rem 1.4rem}}
+ul.changed li,ol.commits li,ul.browse li{{padding:.18rem .55rem;border-radius:2px;display:flex;align-items:center;gap:.55rem;transition:background .12s;line-height:1.5}}
+ul.changed li:hover,ol.commits li:hover,ul.browse li:hover{{background:var(--accent-soft)}}
+ul.changed a,ol.commits a,ul.browse a{{border:none;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .12s}}
+ul.changed a:hover,ol.commits a:hover,ul.browse a:hover{{color:var(--accent)}}
+ul.changed li.hidden{{display:none}}
+ul.changed li{{animation:rise .35s ease-out backwards;animation-delay:calc(var(--i,0) * 4ms)}}
+@keyframes rise{{from{{opacity:0;transform:translateY(3px)}}to{{opacity:1;transform:none}}}}
+@media (prefers-reduced-motion: reduce){{ul.changed li{{animation:none}}}}
+
+/* ── Status chips — outline-only, palette aligned to roles ── */
+.st{{display:inline-block;width:1.6em;text-align:center;font-family:'JetBrains Mono',monospace;font-size:.7em;font-weight:600;letter-spacing:.06em;padding:.2em 0;border-radius:2px;border:1px solid currentColor;background:transparent;flex-shrink:0;line-height:1}}
+.st-A{{color:var(--added)}}
+.st-M{{color:var(--modified)}}
+.st-D{{color:var(--deleted)}}
+.st-R{{color:var(--renamed)}}
+.st-?{{color:var(--ink-mute)}}
+.st-??{{color:var(--ink-mute)}}
+
+/* ── Commits ── */
+ol.commits code{{font-size:.85em;background:none;color:var(--accent);padding:0;font-weight:500;margin-right:.4em;font-variant-numeric:tabular-nums}}
+
+/* ── Tree listing ── */
+ul.dir{{list-style:none;padding:0;font-family:'JetBrains Mono',monospace;font-size:.88rem}}
+ul.dir li{{padding:.22rem .55rem;display:flex;justify-content:space-between;align-items:center;border-radius:2px;transition:background .12s}}
+ul.dir li:hover{{background:var(--accent-soft)}}
+ul.dir a{{border:none;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+ul.dir a.d{{color:var(--accent);font-weight:500}}
+ul.dir a:hover{{color:var(--accent)}}
+ul.dir .sz{{color:var(--ink-mute);font-size:.78em;margin-left:1rem;white-space:nowrap;font-variant-numeric:tabular-nums}}
+
+/* ── Code page ── */
+pre.code-pre{{background:var(--paper-soft);border:1px solid var(--rule);border-radius:4px;overflow-x:auto;padding:.75rem .25rem;font-size:.82rem;line-height:1.55;font-family:'JetBrains Mono',monospace}}
+pre.code-pre code{{background:none;padding:0;display:block}}
+a.line{{display:block;text-decoration:none;color:inherit;white-space:pre;border:none;padding:0 .5rem;border-left:2px solid transparent;transition:background .1s,border-color .1s}}
+a.line:hover{{background:var(--accent-soft);border-left-color:var(--accent-soft-2)}}
+a.line:target{{background:var(--accent-soft);border-left-color:var(--accent);animation:targetPulse 1.2s ease-out}}
+@keyframes targetPulse{{0%{{background:var(--accent);color:var(--paper)}}100%{{background:var(--accent-soft);color:inherit}}}}
+a.line .lineno{{display:inline-block;width:3.5em;text-align:right;padding-right:1em;color:var(--ink-mute);user-select:none;font-variant-numeric:tabular-nums}}
+
+/* ── References list ── */
+ul.refs{{list-style:none;padding:0;margin:0}}
+ul.refs li{{padding:.55rem 0;border-bottom:1px solid var(--rule);font-size:.85rem}}
+ul.refs li:last-child{{border-bottom:none}}
+ul.refs a{{font-family:'JetBrains Mono',monospace;font-size:.82rem;border:none;word-break:break-all;color:var(--accent)}}
+ul.refs code{{font-size:.78em;background:none;padding:0;display:block;color:var(--ink-mute);margin-top:.2rem;line-height:1.45;font-family:'IBM Plex Sans',sans-serif}}
+
+/* ── Definition card (tag pages) ── */
+section.definition{{margin:1rem 0 2rem;padding:1rem 1.2rem;background:var(--accent-soft);border-left:3px solid var(--accent);border-radius:0 4px 4px 0;position:relative}}
+section.definition h2{{margin:0 0 .45rem;font-size:.78rem;font-family:'JetBrains Mono',monospace;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}}
+section.definition p{{margin:0 0 .4rem;font-size:.85rem;font-family:'JetBrains Mono',monospace}}
+section.definition p a{{border-bottom-color:var(--accent-soft-2)}}
+section.definition blockquote{{margin:.45rem 0 0;padding:0;font-family:'IBM Plex Sans',sans-serif;font-size:.93rem;color:var(--ink);line-height:1.55}}
+section.definition blockquote code{{display:block;background:none;padding:0;font-size:1em;white-space:pre-wrap;word-break:break-word}}
+
+/* ── Sidebar (in right rail OR stacked) ── */
+section.sidebar{{margin:0 0 1.75rem;padding:.85rem 0 0;border-top:1px solid var(--rule)}}
+aside.rail section.sidebar:first-child{{border-top:none;padding-top:0}}
+section.sidebar h2{{margin:0 0 .65rem;font-size:.72rem;font-family:'JetBrains Mono',monospace;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-mute)}}
+section.sidebar h2 .ct{{font-size:.7rem;background:var(--accent-soft);color:var(--accent);margin-left:.5em;padding:.15em .55em;border-radius:2em;text-transform:none;letter-spacing:0;font-weight:500}}
+
+/* ── Tag chips ── */
+ul.tag-list{{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.4rem;font-family:'JetBrains Mono',monospace;font-size:.78rem;margin:0}}
+ul.tag-list li{{margin:0}}
+ul.tag-list a{{display:inline-block;padding:.22em .6em;background:var(--paper);border:1px solid var(--rule);border-radius:3px;color:var(--ink);transition:border-color .12s,background .12s,color .12s}}
+ul.tag-list a:hover{{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}}
+ul.tag-list code{{background:none;padding:0;color:inherit;font-size:1em}}
+
+/* ── View toggle ── */
+nav.view-toggle{{display:inline-flex;margin:0 0 1rem;border:1px solid var(--rule);border-radius:3px;overflow:hidden;font-family:'JetBrains Mono',monospace;font-size:.78rem;letter-spacing:.02em}}
+nav.view-toggle a,nav.view-toggle span{{padding:.4rem .9rem;color:var(--ink-soft);border:none;background:transparent;transition:background .12s,color .12s}}
+nav.view-toggle a:hover{{background:var(--accent-soft);color:var(--accent)}}
+nav.view-toggle .active{{background:var(--accent);color:var(--paper);font-weight:500}}
+nav.view-toggle a+a,nav.view-toggle a+span,nav.view-toggle span+a{{border-left:1px solid var(--rule)}}
+
+/* ── Diff renderer ── */
+pre.diff{{background:var(--paper-soft);border:1px solid var(--rule);border-radius:4px;overflow-x:auto;padding:0;font-size:.82rem;line-height:1.5;font-family:'JetBrains Mono',monospace}}
+pre.diff code{{background:none;padding:0;display:block;white-space:pre}}
+pre.diff span{{display:block;padding:0 .5rem;white-space:pre;border-left:2px solid transparent}}
+pre.diff .diff-add{{background:color-mix(in srgb,var(--added) 14%,transparent);color:var(--added);border-left-color:var(--added)}}
+pre.diff .diff-del{{background:color-mix(in srgb,var(--deleted) 14%,transparent);color:var(--deleted);border-left-color:var(--deleted)}}
+pre.diff .diff-hunk{{background:var(--accent-soft);color:var(--accent);font-weight:500;padding-top:.25rem;padding-bottom:.25rem}}
+pre.diff .diff-head{{background:var(--paper);color:var(--ink);font-weight:500;padding-top:.4rem;padding-bottom:.4rem;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}}
+pre.diff .diff-meta{{color:var(--ink-mute)}}
+pre.diff .diff-noeol{{color:var(--ink-mute);font-style:italic}}
+pre.diff .diff-ctx{{color:var(--ink-soft)}}
+
+/* ── Markdown body extras (lists, blockquote, tables) ── */
+main blockquote{{border-left:3px solid var(--rule);padding:0 0 0 1rem;margin:1rem 0;color:var(--ink-soft);font-style:italic}}
+main ul,main ol{{padding-left:1.5rem;margin:.5rem 0}}
+main li{{margin:.2rem 0}}
+main table{{border-collapse:collapse;margin:1.25rem 0;font-size:.92em;width:100%}}
+main th,main td{{border:1px solid var(--rule);padding:.4rem .7rem;text-align:left;vertical-align:top}}
+main th{{background:color-mix(in srgb,var(--accent-soft) 60%,var(--paper));font-weight:600;color:var(--ink);font-family:'IBM Plex Sans',sans-serif;letter-spacing:.01em}}
+main tr:nth-child(even) td{{background:var(--paper-soft)}}
+main img{{max-width:100%;height:auto;border-radius:3px}}
+
+/* ── Misc ── */
+.warn{{background:color-mix(in srgb,var(--modified) 12%,var(--paper));border-left:3px solid var(--modified);padding:.7rem .9rem;color:var(--ink);border-radius:0 3px 3px 0;margin:1rem 0}}
+.empty{{color:var(--ink-mute);font-style:italic;padding:.5rem 0;font-family:'IBM Plex Sans',sans-serif}}
+
+/* ── Footer ── */
+footer{{max-width:1280px;margin:3rem auto 1rem;padding:.85rem 1.5rem;border-top:1px solid var(--rule);font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute);display:flex;justify-content:space-between;align-items:baseline;letter-spacing:.03em}}
+footer a{{color:var(--ink-mute);border:none;transition:color .12s}}
+footer a:hover{{color:var(--accent)}}
 `;
