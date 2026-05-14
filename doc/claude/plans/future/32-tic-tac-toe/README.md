@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# TIC_TAC_TOE — protocol-validation vehicle (parked — blocked on infra)
+# @PLAN32 — TIC_TAC_TOE — protocol-validation vehicle (parked — blocked on infra)
 
 **Status (2026-05-11):** **parked back to `plans/future/`.**
 v1 / v2 / v3 (server + JS client) / v5 are shipped; the

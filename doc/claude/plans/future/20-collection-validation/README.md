@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 20 — Keyed collection validation (hash / sorted / index / spacial)
+# @PLAN20 — Keyed collection validation (hash / sorted / index / spacial)
 
 **Status: deferred — pre-flight panic does not currently reproduce.**
 

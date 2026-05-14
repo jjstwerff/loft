@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 34 — `lib/server` hardening (post-v5 polish + @PLAN36 prereqs)
+# @PLAN34 — `lib/server` hardening (post-v5 polish + @PLAN36 prereqs)
 
 Consolidates the gaps surfaced during TTT v5 ([@PLAN32](../32-tic-tac-toe/README.md))
 that the audience-server demo ([@PLAN36](../36-audience-generative-art/README.md))

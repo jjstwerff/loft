@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-# PEG-Style Match Patterns with Anchor-Revert Captures (L3)
+# @PLAN26 — PEG-Style Match Patterns with Anchor-Revert Captures (L3)
 
 > **Status: design draft.**  Extends the base match syntax
 > ([LOFT.md](../../../LOFT.md) § Match expressions) with sequence patterns,

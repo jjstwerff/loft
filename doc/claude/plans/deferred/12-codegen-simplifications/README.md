@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 12 — Codegen simplifications (post-09 follow-ups)
+# @PLAN12 — Codegen simplifications (post-09 follow-ups)
 
 ## Status
 

@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 04 — Slot assignment redesign (CLOSED)
+# @PLAN04 — Slot assignment redesign (CLOSED)
 
 **Reference for the SHIPPED slot assignment lives at
 [`doc/claude/SLOTS.md`](../../../SLOTS.md).**  That doc covers

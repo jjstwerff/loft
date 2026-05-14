@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# MULTIPLAYER_EDITOR — minimal multi-client hex editor (real-game milestone)
+# @PLAN24 — MULTIPLAYER_EDITOR — minimal multi-client hex editor (real-game milestone)
 
 **Status:** plan, not yet built.  This is the first **real,
 playable** loft program with multiplayer — the moros editor

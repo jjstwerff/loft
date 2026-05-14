@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-# Developer Experience
+# @PLAN27 — Developer Experience
 
 Designs for the DX items on the [ROADMAP](../../../ROADMAP.md).
 Originally drafted as "0.8.4 Designs"; several items slipped to

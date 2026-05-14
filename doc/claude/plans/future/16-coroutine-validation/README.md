@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 16 — Coroutine validation: yielded-type × drive-context matrix
+# @PLAN16 — Coroutine validation: yielded-type × drive-context matrix
 
 **Status: pre-flight 2026-05-04 surfaced 0/7 cells passing.  @P210
 closed 2026-05-04, @P211 closed 2026-05-05.**

@@ -1,7 +1,7 @@
 ---
 render_with_liquid: false
 ---
-# Retiring `stores.scratch`
+# @PLAN21 — Retiring `stores.scratch`
 
 Design note for retiring the `Vec<String>` lifetime-extension buffer that
 backs `Str` returns from native and code-generated text producers.

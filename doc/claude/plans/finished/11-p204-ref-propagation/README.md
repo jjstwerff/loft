@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 11 — @P204: tail-expression return discarded
+# @PLAN11 — @P204: tail-expression return discarded
 
 ## Status — DONE 2026-05-02 (PR #197)
 

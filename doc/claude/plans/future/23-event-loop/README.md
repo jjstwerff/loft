@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# EVENT_LOOP — Prioritised event-loop abstraction (client + server)
+# @PLAN23 — EVENT_LOOP — Prioritised event-loop abstraction (client + server)
 
 **Status:** Design spec.  Not yet implemented.  Depends on
 [@P213 v4](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)

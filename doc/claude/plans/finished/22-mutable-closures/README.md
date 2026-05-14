@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# MUTABLE_CLOSURES — design: making closures novice-fit
+# @PLAN22 — MUTABLE_CLOSURES — design: making closures novice-fit
 
 **Status:** **Shipped 2026-05-13**.  Moved to `plans/finished/22-mutable-closures/`.
 Drivers (see [§ Drivers](#drivers)): TTT v6 server retrofit

@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Constant Store — Phase B + Phase C deferred
+# @PLAN28 — Constant Store — Phase B + Phase C deferred
 
 ## Status
 

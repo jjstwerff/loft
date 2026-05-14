@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 15 — Closure validation: capture × storage matrix
+# @PLAN15 — Closure validation: capture × storage matrix
 
 **Status: SHIPPED 2026-05-12 — plan closed.**
 All 6 phases (00 + 01 + 02 + 03 + 04 + 05 + 06) landed in one

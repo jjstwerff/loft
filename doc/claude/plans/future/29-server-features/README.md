@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-# Language Features for Server and Game Client Libraries
+# @PLAN29 — Language Features for Server and Game Client Libraries
 
 Design for five language and API improvements identified by evaluating the
 `server` and `game_client` library designs.  Each item is motivated by a

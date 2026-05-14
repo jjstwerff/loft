@@ -1,4 +1,4 @@
-# Plan 13 — `#rust"..."` template migration
+# @PLAN13 — `#rust"..."` template migration
 
 **Status:** DEFERRED (opened as a stub 2026-05-02; deferred at the
 same date pending a driver).

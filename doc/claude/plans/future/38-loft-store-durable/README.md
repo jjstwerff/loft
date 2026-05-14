@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# LOFT_STORE_DURABLE — three-tier opt-in durability for mmap stores
+# @PLAN38 — LOFT_STORE_DURABLE — three-tier opt-in durability for mmap stores
 
 **Status:** Planned (in `future/`).  Promote to active when
 @PLAN37 phase 07 (loft-native indexer daemon) lands or when

@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# P184 — Narrow integer elements in collection types
+# @PLAN02 — P184 — Narrow integer elements in collection types
 
 ## Status — DONE 2026-04-22
 

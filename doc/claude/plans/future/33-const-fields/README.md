@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 33 — `const` struct fields (write-once-at-construction)
+# @PLAN33 — `const` struct fields (write-once-at-construction)
 
 Extend the existing `const` keyword from locals + parameters to
 **struct fields**, giving loft a "frozen after construction" field

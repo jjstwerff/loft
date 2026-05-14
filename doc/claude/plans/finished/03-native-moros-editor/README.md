@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 03 — Native Moros editor (OpenGL, windowed + fullscreen)
+# @PLAN03 — Native Moros editor (OpenGL, windowed + fullscreen)
 
 ## Status — DONE 2026-04-22
 

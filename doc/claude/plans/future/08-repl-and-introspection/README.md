@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 08 — REPL + interpreter-introspection tool
+# @PLAN08 — REPL + interpreter-introspection tool
 
 ## Goal
 

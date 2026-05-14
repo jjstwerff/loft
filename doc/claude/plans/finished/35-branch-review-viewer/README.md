@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# BRANCH_REVIEW_VIEWER — a frozen loft binary for VM-based code review
+# @PLAN35 — BRANCH_REVIEW_VIEWER — a frozen loft binary for VM-based code review
 
 **Status:** Active — promoted to current 2026-05-13.
 

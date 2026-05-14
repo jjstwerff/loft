@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 18 — Match expression validation
+# @PLAN18 — Match expression validation
 
 **Status: phase 01 closed (PR #207).  Phase 02 — @P209 (match guards
 saw pattern bindings as uninitialised) closed 2026-05-04 in

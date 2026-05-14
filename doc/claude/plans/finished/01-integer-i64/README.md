@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 01 — Integer → i64 + safe arithmetic (C54)
+# @PLAN01 — Integer → i64 + safe arithmetic (C54)
 
 ## Status — DONE 2026-04-21
 

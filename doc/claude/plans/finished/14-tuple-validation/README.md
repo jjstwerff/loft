@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 14 — Tuple validation: full element × destination matrix
+# @PLAN14 — Tuple validation: full element × destination matrix
 
 **Status: phases 00 + 01 + 02 + 03 + 04 + 05 + 07 shipped.
 Phase 02 — full matrix wiring done 2026-05-11; 5/5 e3 cells

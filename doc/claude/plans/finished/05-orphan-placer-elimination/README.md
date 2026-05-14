@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 05 — Orphan-placer elimination
+# @PLAN05 — Orphan-placer elimination
 
 ## Status — 2026-04-23: closed
 

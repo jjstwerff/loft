@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 07 — Better error messages
+# @PLAN07 — Better error messages
 
 **Friend-readiness gate (added 2026-05-13):** phases 5
 (suggestions polish) + 6 (per-site type-mismatch wording) + 7

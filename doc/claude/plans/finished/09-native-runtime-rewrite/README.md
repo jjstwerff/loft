@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 09 — Per-Op emitter dispatch
+# @PLAN09 — Per-Op emitter dispatch
 
 ## Status — DONE 2026-05-02
 

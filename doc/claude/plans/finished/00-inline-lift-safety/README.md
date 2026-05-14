@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Inline-lift safety — initiative
+# @PLAN00 — Inline-lift safety — initiative
 
 ## Status — DONE 2026-04-18
 

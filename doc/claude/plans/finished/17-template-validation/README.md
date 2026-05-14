@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 17 — Bounded-generic / interface validation
+# @PLAN17 — Bounded-generic / interface validation
 
 ## Status — DONE 2026-05-09
 

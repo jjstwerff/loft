@@ -1,4 +1,4 @@
-# Plan 10 — Scope-exit gate simplification (deferred)
+# @PLAN10 — Scope-exit gate simplification (deferred)
 
 > **Status: DEFERRED.**  Plan 10 was originally framed as a @P203
 > fix — that framing was wrong (@P203 turned out to be a template

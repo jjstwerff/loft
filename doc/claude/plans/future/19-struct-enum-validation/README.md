@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 19 — Struct-enum + variant field-capture validation
+# @PLAN19 — Struct-enum + variant field-capture validation
 
 **Status: phase 03 closed (2026-05-04)** — pre-flight C5 method-resolution
 gap fixed in `src/parser/fields.rs`; pinned by

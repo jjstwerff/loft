@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# TRACKER_INDEX — `@P-id` / `@PLAN-id` indexer + viewer integration
+# @PLAN37 — TRACKER_INDEX — `@P-id` / `@PLAN-id` indexer + viewer integration
 
 **Status:** Active — opened 2026-05-13.
 
