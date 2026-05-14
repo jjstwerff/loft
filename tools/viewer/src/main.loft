@@ -475,6 +475,16 @@ fn page_tag(tag: text) -> text {
         return page(title, body);
     }
 
+    // ── Definition (plan-37 phase 04b follow-up) ──────────────
+    // Surface the canonical source line at the top of the page.
+    // For @P-ids: the row in `doc/claude/PROBLEMS.md` whose body
+    //   starts with `**@P<n>**` (added by the migration).
+    // For @PLAN-ids: the README of the matching plan dir, where
+    //   the heading mentions @PLAN<n>.
+    // Detection: scan the canonical-home arr for the ref with the
+    // LOWEST line number whose file matches the home pattern.
+    body += render_definition(tag, at_arr);
+
     if at_count > 0 {
         body += "<h2><code>@{escape(tag)}</code> (canonical) — {at_count}</h2>";
         body += render_refs(at_arr);
@@ -487,6 +497,114 @@ fn page_tag(tag: text) -> text {
     body += "<p><a href=\"/\">back to landing</a></p>";
     title = "@{tag}";
     page(title, body)
+}
+
+// ── Tag definition surface (plan-37 phase 04b follow-up) ────
+//
+// Find the canonical "definition" line for a tag — the ref that
+// lives in the tag's HOME file:
+//   - `@P<n>` → `doc/claude/PROBLEMS.md` (the row whose body
+//     starts with `**@P<n>**` post-migration).
+//   - `@PLAN<n>` → any `…/plans/.../README.md` in the matching
+//     plan dir.
+//
+// Returns "" when no canonical home ref is present (rendering
+// degrades gracefully).  Otherwise emits a "Definition" section
+// at the top of the tag page, before the full references list.
+
+fn tag_home_pattern(tag: text) -> text {
+    if tag.starts_with("PLAN") {
+        // @PLAN22 → match `/plans/...22-` substring
+        return "/plans/";
+    }
+    // @P259 → match the global PROBLEMS.md
+    "doc/claude/PROBLEMS.md"
+}
+
+fn render_definition(tag: text, arr: JsonValue) -> text {
+    if arr.kind() != "JArray" { return ""; }
+    n = arr.len();
+    if n == 0 { return ""; }
+    pattern = tag_home_pattern(tag);
+
+    // Find the ref whose .file CONTAINS the pattern (and for
+    // @PLAN tags, also matches the plan number) AND has the
+    // lowest line number.  That's the canonical definition.
+    best_idx: integer = -1;
+    best_line: integer = 9999999;
+    is_plan = tag.starts_with("PLAN");
+    plan_num = "";
+    if is_plan {
+        plan_num = tag[4..len(tag)];
+        // Strip any sub-phase suffix (`-01`, `-2d-iii.a`) — the
+        // home dir is keyed on just the leading digits.
+        i = 0;
+        bare = "";
+        while i < len(plan_num) {
+            c = plan_num[i];
+            if c >= '0' && c <= '9' { bare += "{c}"; i = i + 1; }
+            else { break; }
+        }
+        plan_num = bare;
+    }
+
+    // For @PLAN tags, do TWO passes: first prefer the plan dir's
+    // own `README.md` (the canonical plan home).  Fall back to any
+    // file under `/plans/<num>-` if no README ref exists.
+    i = 0;
+    while i < n {
+        ref_v = arr.item(i);
+        file_path = ref_v.field("file").as_text();
+        if is_plan {
+            if file_path.find("/plans/") >= 0
+               && file_path.find("/{plan_num}-") >= 0
+               && file_path.ends_with("/README.md") {
+                line_n = ref_v.field("line").as_long();
+                if line_n < best_line {
+                    best_line = line_n;
+                    best_idx = i;
+                }
+            }
+        } else if file_path == pattern {
+            line_n = ref_v.field("line").as_long();
+            if line_n < best_line {
+                best_line = line_n;
+                best_idx = i;
+            }
+        }
+        i = i + 1;
+    }
+    // Fallback for @PLAN: any file under the plan dir, lowest line.
+    if is_plan && best_idx < 0 {
+        i = 0;
+        while i < n {
+            ref_v = arr.item(i);
+            file_path = ref_v.field("file").as_text();
+            if file_path.find("/plans/") >= 0
+               && file_path.find("/{plan_num}-") >= 0 {
+                line_n = ref_v.field("line").as_long();
+                if line_n < best_line {
+                    best_line = line_n;
+                    best_idx = i;
+                }
+            }
+            i = i + 1;
+        }
+    }
+
+    if best_idx < 0 { return ""; }
+    ref_v = arr.item(best_idx);
+    file_path = ref_v.field("file").as_text();
+    line_n = ref_v.field("line").as_long();
+    ctx = ref_v.field("context").as_text();
+    esc_file = escape(file_path);
+    esc_ctx = escape(ctx);
+
+    out = "<section class=\"definition\"><h2>Definition</h2>";
+    out += "<p><a href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a></p>";
+    out += "<blockquote><code>{esc_ctx}</code></blockquote>";
+    out += "</section>";
+    out
 }
 
 // ── Per-doc sidebars (plan-37 phase 04b) ────────────────────
@@ -858,6 +976,11 @@ a.line .src{{color:inherit}}
 ul.refs{{list-style:none;padding:0}}
 ul.refs li{{padding:.4rem 0;border-bottom:1px solid #eee}}
 ul.refs code{{font-size:.85em}}
+section.definition{{margin:1rem 0 1.5rem 0;padding:.6rem .9rem;background:#f5f7fa;border-left:4px solid #36c;border-radius:3px}}
+section.definition h2{{margin:0 0 .3rem 0;font-size:1rem;color:#225}}
+section.definition p{{margin:0 0 .3rem 0;font-size:.9em}}
+section.definition blockquote{{margin:.3rem 0 0 0;padding:0}}
+section.definition blockquote code{{display:block;background:none;padding:.2rem 0;font-size:.85em;white-space:pre-wrap;word-break:break-word}}
 section.sidebar{{margin-top:2rem;padding-top:1rem;border-top:1px solid #ccc}}
 section.sidebar h2{{font-size:1rem;color:#555;margin-top:0}}
 section.sidebar h2 .ct{{display:inline-block;background:#eef;color:#225;font-size:.7em;padding:.05em .4em;border-radius:8px;margin-left:.5em;font-weight:400}}
@@ -915,6 +1038,8 @@ pre.diff .diff-ctx{{color:#222}}
   a.line:target{{background:#604}}
   a.line .lineno{{color:#666}}
   ul.refs li{{border-color:#333}}
+  section.definition{{background:#1f2530;border-left-color:#9bf}}
+  section.definition h2{{color:#9bf}}
   section.sidebar{{border-color:#444}}
   section.sidebar h2{{color:#bbb}}
   section.sidebar h2 .ct{{background:#223;color:#9bf}}
