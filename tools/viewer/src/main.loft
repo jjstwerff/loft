@@ -170,9 +170,9 @@ fn page_landing() -> text {
                     pa = e.field("path").as_text();
                     if top_level_dir(pa) == g {
                         st = e.field("status").as_text();
-                        esc_st = escape(st);
+                        chip = status_chip(st);
                         esc_pa = escape(pa);
-                        body += "<li style=\"--i:{idx}\"><span class=\"st st-{esc_st}\">{esc_st}</span> <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
+                        body += "<li style=\"--i:{idx}\">{chip} <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
                         idx = idx + 1;
                     }
                     k = k + 1;
@@ -197,9 +197,9 @@ fn page_landing() -> text {
                 e = uv.item(i);
                 st = e.field("status").as_text();
                 pa = e.field("path").as_text();
-                esc_st = escape(st);
+                chip = status_chip(st);
                 esc_pa = escape(pa);
-                body += "<li><span class=\"st st-{esc_st}\">{esc_st}</span> <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
+                body += "<li>{chip} <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
                 i = i + 1;
             }
             body += "</ul>";
@@ -248,7 +248,12 @@ fn page_landing() -> text {
 }
 
 fn page_tree(rel: text) -> text {
-    f = file(rel);
+    // `/tree/` (and `/tree`) reach here with rel = "".  Resolve
+    // empty path to "." so the root tree listing renders instead
+    // of falling through to a 404.
+    lookup = rel;
+    if lookup == "" { lookup = "."; }
+    f = file(lookup);
     if f.format == Format.NotExists {
         // Caller (route()) wraps with respond_html which uses 200 OK;
         // /tree/<missing> is presented as a regular missing page.
@@ -994,6 +999,22 @@ fn top_level_dir(path: text) -> text {
     slash = path.find("/");
     if slash < 0 { return "(root)"; }
     path[0..slash]
+}
+
+// Render a status chip for the changed-files / uncommitted lists.
+// `git diff --name-status` returns codes like `M`, `A`, `D`,
+// `R090` (rename 90% similar), `C075` (copy 75%), `??`
+// (untracked).  The chip displays the LEADING character only
+// so the box stays a uniform 1.6em — the full code goes in the
+// `title` attribute so hovering reveals the similarity score.
+// The CSS class uses the leading character too (`.st-R` not
+// `.st-R090`), so the rule already in BASE_CSS applies.
+fn status_chip(st: text) -> text {
+    if len(st) == 0 { return ""; }
+    letter = st[0..1];
+    esc_letter = escape(letter);
+    esc_full = escape(st);
+    "<span class=\"st st-{esc_letter}\" title=\"{esc_full}\">{esc_letter}</span>"
 }
 
 // vector<text>::contains — loft's stdlib doesn't expose a
