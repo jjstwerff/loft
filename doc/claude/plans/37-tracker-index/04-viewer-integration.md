@@ -7,7 +7,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status:**
 - **04a (`/tag/<tag>` route + missing-index banner)** — Shipped 2026-05-13
-- **04b (welcome landing + per-doc sidebar)** — Open (still depends on @PLAN35 phase 03 + 08)
+- **04b — per-doc sidebar** — Shipped 2026-05-14 (the
+  "Referenced by" + "Tags on this page" sections appear at
+  the bottom of every `/file/<path>` page; both render to
+  empty when the index is missing or the file has no
+  associated entries, so the page degrades gracefully).
+- **04b — welcome landing** — Still open (depends on
+  @PLAN35 phase 08, which is itself unstarted).  This is
+  the @PLAN37 deliverable that pulls "open problems / recently
+  fixed / active plans" buckets from the index.
 
 ## What 04a shipped
 

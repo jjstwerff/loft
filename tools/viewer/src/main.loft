@@ -357,6 +357,14 @@ fn page_file(rel: text, f: File) -> text {
     } else {
         body += render_code(src);
     }
+
+    // ── Sidebars (plan-37 phase 04b) — inbound links + tag list.
+    // Both render to "" when index/tags.json is missing or the
+    // file has no entries, so the page degrades gracefully on a
+    // fresh checkout that hasn't run `make index` yet.
+    body += sidebar_referenced_by(rel);
+    body += sidebar_tags_on_page(rel);
+
     page(rel, body)
 }
 
@@ -479,6 +487,96 @@ fn page_tag(tag: text) -> text {
     body += "<p><a href=\"/\">back to landing</a></p>";
     title = "@{tag}";
     page(title, body)
+}
+
+// ── Per-doc sidebars (plan-37 phase 04b) ────────────────────
+//
+// Two surfaces injected at the bottom of `/file/<path>` pages:
+//
+// 1. Referenced by — read `index/tags.json`'s `links[<rel>]`
+//    bucket (phase 09 backlinks).  Lists every doc that links
+//    INBOUND to the current file.
+// 2. Tags on this page — walk the tag buckets, emit any tag
+//    whose ref list contains a file matching the current path.
+//    Click → `/tag/<bare>` (phase 04a's tag detail page).
+//
+// Both render to an empty string when index/tags.json is
+// missing or the file has no associated entries — the page
+// degrades gracefully.
+
+fn sidebar_referenced_by(rel: text) -> text {
+    f = file("index/tags.json");
+    if f.format == Format.NotExists { return ""; }
+    raw = f.content();
+    root = json_parse(raw);
+    links_obj = root.field("links");
+    if links_obj.kind() != "JObject" { return ""; }
+    inbound = links_obj.field(rel);
+    if inbound.kind() != "JArray" { return ""; }
+    n = inbound.len();
+    if n == 0 { return ""; }
+
+    out = "<section class=\"sidebar\"><h2>Referenced by <span class=\"ct\">{n}</span></h2>";
+    out += "<ul class=\"refs\">";
+    i = 0;
+    while i < n {
+        ref_v = inbound.item(i);
+        file_path = ref_v.field("file").as_text();
+        line_n = ref_v.field("line").as_long();
+        ctx = ref_v.field("context").as_text();
+        esc_file = escape(file_path);
+        esc_ctx = escape(ctx);
+        out += "<li><a href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a><br><code>{esc_ctx}</code></li>";
+        i = i + 1;
+    }
+    out += "</ul></section>";
+    out
+}
+
+fn sidebar_tags_on_page(rel: text) -> text {
+    f = file("index/tags.json");
+    if f.format == Format.NotExists { return ""; }
+    raw = f.content();
+    root = json_parse(raw);
+
+    // Walk every tag key, emit those whose ref list contains
+    // the current file.  Skip the meta keys (`links`, `broken`,
+    // `broken_links`) and the legacy-form bucket (we want the
+    // canonical `@`-tag for the /tag/<bare> route — duplicate
+    // entries would be confusing).
+    out = "";
+    count = 0;
+    for key in root.keys() {
+        if key == "links" || key == "broken" || key == "broken_links" { continue; }
+        if key.starts_with("legacy:") { continue; }
+        refs = root.field(key);
+        if refs.kind() != "JArray" { continue; }
+        nr = refs.len();
+        j = 0;
+        found = false;
+        while j < nr {
+            ref_v = refs.item(j);
+            if ref_v.field("file").as_text() == rel {
+                found = true;
+                break;
+            }
+            j = j + 1;
+        }
+        if found {
+            // Strip leading `@` for the /tag/<bare> route.
+            bare = key;
+            if bare.starts_with("@") { bare = bare[1..len(bare)]; }
+            esc_key = escape(key);
+            esc_bare = escape(bare);
+            if count == 0 {
+                out += "<section class=\"sidebar\"><h2>Tags on this page</h2><ul class=\"tag-list\">";
+            }
+            out += "<li><a href=\"/tag/{esc_bare}\"><code>{esc_key}</code></a></li>";
+            count = count + 1;
+        }
+    }
+    if count > 0 { out += "</ul></section>"; }
+    out
 }
 
 // Render a JArray of {file, line, context} entries as <ul>.  Each
@@ -760,6 +858,14 @@ a.line .src{{color:inherit}}
 ul.refs{{list-style:none;padding:0}}
 ul.refs li{{padding:.4rem 0;border-bottom:1px solid #eee}}
 ul.refs code{{font-size:.85em}}
+section.sidebar{{margin-top:2rem;padding-top:1rem;border-top:1px solid #ccc}}
+section.sidebar h2{{font-size:1rem;color:#555;margin-top:0}}
+section.sidebar h2 .ct{{display:inline-block;background:#eef;color:#225;font-size:.7em;padding:.05em .4em;border-radius:8px;margin-left:.5em;font-weight:400}}
+ul.tag-list{{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.4rem;font-family:ui-monospace,Menlo,monospace}}
+ul.tag-list li{{margin:0}}
+ul.tag-list a{{display:inline-block;padding:.15rem .5rem;background:#f3f3f3;border-radius:3px;text-decoration:none}}
+ul.tag-list a:hover{{background:#e6e6f6}}
+ul.tag-list code{{background:none;padding:0}}
 .warn{{background:#ffe;border-left:3px solid #cc8;padding:.4rem .6rem;color:#553}}
 header.dash{{border-bottom:none;padding:0;margin:0 0 1rem 0}}
 header.dash h1{{margin:.2rem 0}}
@@ -809,6 +915,11 @@ pre.diff .diff-ctx{{color:#222}}
   a.line:target{{background:#604}}
   a.line .lineno{{color:#666}}
   ul.refs li{{border-color:#333}}
+  section.sidebar{{border-color:#444}}
+  section.sidebar h2{{color:#bbb}}
+  section.sidebar h2 .ct{{background:#223;color:#9bf}}
+  ul.tag-list a{{background:#222;color:#9bf}}
+  ul.tag-list a:hover{{background:#33486f}}
   .warn{{background:#332;border-left-color:#aa5;color:#cc8}}
   header.dash .ahead-behind,header.dash .head{{color:#bbb}}
   section h2 .ct{{background:#223;color:#9bf}}

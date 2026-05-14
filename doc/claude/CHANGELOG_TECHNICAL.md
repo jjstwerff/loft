@@ -87,6 +87,48 @@ loft-script binary against the host loft binary as a frozen pair.
 
 ---
 
+### Plan-37 phase 04b — viewer per-doc sidebar shipped 2026-05-14
+
+`tools/viewer/src/main.loft` gains two sections at the
+bottom of every `/file/<path>` page:
+
+- **Referenced by** — reads `index/tags.json`'s `links`
+  bucket (phase 09 backlinks).  Lists every doc that links
+  inbound to the current file, with file:line + context.
+- **Tags on this page** — walks the tag buckets, surfaces
+  any tag whose ref list contains the current file.  Each
+  tag is a clickable chip → `/tag/<bare>` (phase 04a's tag
+  detail page).
+
+Both render to empty strings when `index/tags.json` is
+missing or the file has no associated entries — pages
+degrade gracefully on a fresh checkout that hasn't run
+`make index` yet.
+
+CSS additions: `section.sidebar` for the section wrapper,
+`ul.tag-list` for the chip-style tag pills (flex-wrap, dark
+mode covered).
+
+Only the welcome-landing half of phase 04b remains open;
+that one depends on @PLAN35 phase 08 which is unstarted.
+
+Verification: standalone loft script exercising the
+JsonValue API confirmed the walking logic — 59 inbound
+refs found for `doc/claude/PROBLEMS.md`, 6+ tags found on
+the same page.  Runtime testing through the full viewer
+binary is blocked by a pre-existing `--interpret` bug
+("native function not loaded — call extensions::load_all()
+first") that strikes any loft program using lib/server's
+`#native` declarations through `target/release/loft`; the
+custom-built `tools/viewer/bin/loft-view` from May 13
+predates the phase 04b code.  Visual verification waits on
+either rebuilding bin/loft-view or wiring the missing text
+natives (`t_4text_ends_with`, `t_4text_trim`, `t_4text_find`,
+`t_4text_rfind`, `t_4text_to_lowercase`) so `--native` mode
+compiles the viewer end-to-end.
+
+---
+
 ### Plan-37 phase 09 follow-up — broken-link cleanup shipped 2026-05-14
 
 The 61 broken markdown links surfaced by phase 09's
