@@ -49,9 +49,23 @@ cd "$ROOT"
 
 # 2. Files changed vs main (name-status).  Empty array on a fresh
 # repo where `main` doesn't exist yet.
+#
+# `git diff --name-status` emits renames as three tab-separated
+# fields: `R<n>\t<old_path>\t<new_path>` (e.g. `R099` for 99%
+# similarity).  Without rename-aware handling the dashboard would
+# link at the OLD (pre-rename) path, which 404s after the move —
+# e.g. `doc/claude/plans/06-typed-par/02-stitch-not-copy.md` shown
+# instead of the actual `…/finished/06-typed-par/02-…`.  For `R*`
+# / `C*` rows take `.[2]` (new path); for plain `M`/`A`/`D`/`?`
+# rows take `.[1]`.
 if git rev-parse --verify main >/dev/null 2>&1; then
   git diff --name-status main...HEAD | jq -Rn '
-    [inputs | select(. != "") | split("\t") | {status: .[0], path: .[1]}]
+    [inputs
+      | select(. != "")
+      | split("\t")
+      | { status: .[0],
+          path: (if (.[0] | startswith("R")) or (.[0] | startswith("C"))
+                 then .[2] else .[1] end) }]
   ' > "$STATE/changed.json"
 else
   echo "[]" > "$STATE/changed.json"
