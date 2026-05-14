@@ -500,7 +500,7 @@ This spec sits on the dependency stack for first-game ship:
 
 | Phase | Ships | Dependency |
 |---|---|---|
-| 1 | [@P213 v4](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix) — closures-in-struct-fields layout | None (separate plan) |
+| 1 | [@P213 v4](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix) — closures-in-struct-fields layout | None (separate plan) |
 | 2 | This spec — implicit-by-body classifier with cases A/B/C/D | @P213 v4 |
 | 3 | EventLoop core ([EVENT_LOOP.md](../../future/23-event-loop/README.md)) | This spec |
 | 4 | First playable single-player game | Phase 2 |
@@ -525,6 +525,6 @@ layout-widening); @PLAN22 phase 2 dependency is met.
   — the evaluation that prompted this work.
 - [LIFETIME.md](../../../LIFETIME.md) — dep tracking, scope-based
   freeing, Reference<T> semantics.
-- [PROBLEMS.md § 213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
+- [PROBLEMS.md § 213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
   — @P213 v4 layout for closures-in-struct-fields.
-- [CAVEATS.md](CAVEATS.md) — current closure capture caveat.
+- [CAVEATS.md](../../../CAVEATS.md) — current closure capture caveat.

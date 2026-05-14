@@ -371,5 +371,5 @@ These belong in a successor plan (or a sibling
 ## Cross-references
 
 - [Phase 07 — loft-native scanner + WebSocket daemon](07-loft-native-scanner.md) — the daemon this phase generalises
-- [Plan-35 — branch review viewer](../35-branch-review-viewer/README.md) — viewer that consumes the daemon
+- [Plan-35 — branch review viewer](../finished/35-branch-review-viewer/README.md) — viewer that consumes the daemon
 - [PACKAGES.md](../../PACKAGES.md) — loft package format (relevant for future "tracker package" registry distribution)

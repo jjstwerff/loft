@@ -618,6 +618,6 @@ Resulting structure:
   spec waiting on novice-fit closures.
 - [LIFETIME.md](../../../LIFETIME.md) — dep tracking, scope-based
   freeing, Reference<T> semantics.
-- [PROBLEMS.md § 213](PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
+- [PROBLEMS.md § 213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
   — @P213 v4 layout for closures-in-struct-fields.
-- [CAVEATS.md](CAVEATS.md) — current closure capture caveat.
+- [CAVEATS.md](../../../CAVEATS.md) — current closure capture caveat.

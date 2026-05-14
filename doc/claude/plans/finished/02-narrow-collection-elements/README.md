@@ -144,9 +144,9 @@ pattern site.  Scoped up to a named struct on 2026-04-21.
 - [`../../../DATABASE.md`](../../../DATABASE.md) §
   "Narrow vector elements" — `Parts::Short` vs `Parts::ShortRaw`
   divergence + `narrow_vector_content()` registration helper
-- [`../../CAVEATS.md`](../../CAVEATS.md) § C54 — post-migration
+- [`../../CAVEATS.md`](../../../CAVEATS.md) § C54 — post-migration
   caveats: binary writers, cdylib FFI layout, memory footprint
-- [`../../PROBLEMS.md`](../../PROBLEMS.md) § P184 — original
+- [`../../PROBLEMS.md`](../../../PROBLEMS.md) § P184 — original
   bug entry
 - `lib/graphics/src/glb.loft::glb_write_indices` — pre-fix
   workaround pattern (the `as i32` casts can now be removed)

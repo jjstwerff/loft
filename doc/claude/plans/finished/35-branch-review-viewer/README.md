@@ -34,7 +34,7 @@ like this" cannot do that by `grep`-ing 20+ files manually.
 The viewer becomes their **navigation surface**: open the
 dashboard, click into the relevant docs, follow cross-doc
 links naturally.  See [ROADMAP § Near-term focus —
-friend-readiness](../../ROADMAP.md#near-term-focus--friend-readiness-added-2026-05-13).
+friend-readiness](../../../ROADMAP.md#near-term-focus--friend-readiness-added-2026-05-13).
 
 Three concrete needs surfaced from the personal-review angle:
 
@@ -45,7 +45,7 @@ Three concrete needs surfaced from the personal-review angle:
    sentries.  Today this requires `git log --stat` /
    `git diff` / `git show` per file in the terminal.
 3. **Follow cross-doc references** — the plan tree is densely
-   linked (`[link](plans/finished/22-mutable-closures/03-case-c.md#major-finding)`),
+   linked (`[link](plans/finished/22-mutable-closures/03-case-c.md#major-finding)`), <!--noindex-->
    and `make serve` (which runs `python -m http.server` on
    `doc/`) serves `.md` files raw — clicks 404 or download.
 
@@ -588,15 +588,15 @@ freshness target.
 - [`plans/finished/22-mutable-closures/`](../22-mutable-closures/README.md)
   — closures are the natural shape for route handlers; viewer
   is the first non-test consumer.
-- [`lib_plans/future/08-server/README.md`](../../lib_plans/future/08-server/README.md)
+- [`lib_plans/future/08-server/README.md`](../../../lib_plans/future/08-server/README.md)
   — server-lib roadmap; viewer surfaces specific feature gaps.
-- [`lib_plans/future/01-regex/README.md`](../../lib_plans/future/01-regex/README.md)
+- [`lib_plans/future/01-regex/README.md`](../../../lib_plans/future/01-regex/README.md)
   — regex would simplify markdown parsing; not blocking.
-- [`DEBUG.md`](../../DEBUG.md) — gets the user-facing usage
+- [`DEBUG.md`](../../../DEBUG.md) — gets the user-facing usage
   section in phase 07.
-- [`CLAUDE.md`](../../../../CLAUDE.md) — gets the
+- [`CLAUDE.md`](../../../../../CLAUDE.md) — gets the
   `make view` entry under § Key commands in phase 07.
-- [`lib_plans/future/14-viewer-lsp-bridge/README.md`](../../lib_plans/future/14-viewer-lsp-bridge/README.md)
+- [`lib_plans/future/14-viewer-lsp-bridge/README.md`](../../../lib_plans/future/14-viewer-lsp-bridge/README.md)
   — extends the viewer with multi-language LSP code intelligence
   (rust-analyzer / loft-lsp / jdtls).  The viewer is the host;
   plan-14 is the new capability.  Designed 2026-05-13 in response

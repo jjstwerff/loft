@@ -352,8 +352,7 @@ fn parse_string(bytes: &[u8], start: usize) -> ParseResult {
                 let end = (i + n).min(bytes.len());
                 // Safety: parse_string is called with bytes from a `&str`,
                 // so &bytes[i..end] is a valid UTF-8 boundary slice.
-                let s = std::str::from_utf8(&bytes[i..end])
-                    .unwrap_or("\u{fffd}");
+                let s = std::str::from_utf8(&bytes[i..end]).unwrap_or("\u{fffd}");
                 out.push_str(s);
                 i = end;
             }
@@ -582,22 +581,30 @@ mod tests {
     fn p264_multibyte_utf8_passthrough() {
         // 3-byte codepoint: U+2192 RIGHTWARDS ARROW
         let got = parse(r#""before → after""#).unwrap();
-        let Parsed::Str(s) = got else { panic!("expected Str") };
+        let Parsed::Str(s) = got else {
+            panic!("expected Str")
+        };
         assert_eq!(s, "before → after");
         assert_eq!(s.len(), 16); // 7 + 3 + 6 = 16 UTF-8 bytes
         // 4-byte codepoint: U+1F600 GRINNING FACE
         let got = parse(r#""smile 😀""#).unwrap();
-        let Parsed::Str(s) = got else { panic!("expected Str") };
+        let Parsed::Str(s) = got else {
+            panic!("expected Str")
+        };
         assert_eq!(s, "smile 😀");
         assert_eq!(s.len(), 10); // 6 + 4 = 10 UTF-8 bytes
         // 2-byte codepoint: U+00E9 LATIN SMALL LETTER E WITH ACUTE
         let got = parse(r#""café""#).unwrap();
-        let Parsed::Str(s) = got else { panic!("expected Str") };
+        let Parsed::Str(s) = got else {
+            panic!("expected Str")
+        };
         assert_eq!(s, "café");
         assert_eq!(s.len(), 5); // 3 + 2 = 5 UTF-8 bytes
         // Mix of all three widths in one string
         let got = parse(r#""→ é 😀""#).unwrap();
-        let Parsed::Str(s) = got else { panic!("expected Str") };
+        let Parsed::Str(s) = got else {
+            panic!("expected Str")
+        };
         assert_eq!(s, "→ é 😀");
     }
 

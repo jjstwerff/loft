@@ -178,25 +178,18 @@ applied to the `links` bucket.
 
 ## Follow-ups filed
 
-- **Broken-link cleanup** — 61 markdown links across the
-  doc tree resolve to non-existent targets.  No CI gate
-  added to `tests/index_hygiene.rs` yet (would lock in the
-  cleanup as a release-blocker prematurely; per the user's
-  framing, ship detection first, gate after the backlog
-  is cleared).  Categories:
-  - ~48 in `doc/claude/plans/<dir>/README.md` citing
-    top-level reference docs (DESIGN.md, PROBLEMS.md, …)
-    with `../X.md` instead of `../../X.md`.
-  - 3 @PLAN22 references at the old `plans/22-` path
-    (move to `finished/` happened during the plan close).
-  - 3 @PLAN35 references at the old `plans/35-` path
-    (same closeout drift).
-  - 3 lib_plan typos (`doc/claude/lib_plans/plans/...`).
-  - 5 stale `.claude/skills/` references.
-  - 5 missing-doc citations (`DX.md`, `LSP.md`,
-    `WEB_SERVER_LIB.md`, `FOO.md`, `WASM.md`).
-  - Run `./scripts/idx broken-links | jq '.[] | .target'`
-    for the live list.
+- ~~**Broken-link cleanup** — 61 markdown links across the
+  doc tree resolve to non-existent targets.~~  **Closed
+  2026-05-14.**  All 61 broken refs cleaned up via
+  `tools/indexer/fix_broken_links.py` (auto-fixed the
+  off-by-one `..` cases) + manual fixes for the path-drift
+  edges (plan-22 / plan-35 closeout, lib_plan typos, stale
+  `.claude/skills/` references, missing-doc citations
+  redirected to existing plan dirs).  CI gate now enforced:
+  `tests/index_hygiene.rs::index_hygiene_clean` fails on
+  any `.broken_links` entry.  Scanner also tightened to
+  skip lines inside fenced code blocks (was treating
+  example links inside ```...``` as real broken refs).
 - **Viewer "Referenced by" sidebar** — wire `tools/viewer/src/main.loft`'s
   per-file route to read `.links[<path>]` and render a
   sidebar.  Data is ready; UI work is @PLAN35 phase 04

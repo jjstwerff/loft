@@ -242,6 +242,6 @@ viewer release):
   must expose `render_inline` for cell formatting
 - [Phase 07 — closeout](07-closeout.md) — markdown coverage
   audit happens here
-- [`doc/claude/PROBLEMS.md`](../../PROBLEMS.md) — the
+- [`doc/claude/PROBLEMS.md`](../../../PROBLEMS.md) — the
   table-heavy worst-case file this phase must handle
 - [GFM spec § Tables (extension)](https://github.github.com/gfm/#tables-extension-) — reference compliance target

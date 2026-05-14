@@ -87,6 +87,59 @@ loft-script binary against the host loft binary as a frozen pair.
 
 ---
 
+### Plan-37 phase 09 follow-up — broken-link cleanup shipped 2026-05-14
+
+The 61 broken markdown links surfaced by phase 09's
+`broken_links` bucket are all cleaned up.  CI gate enabled
+(`tests/index_hygiene.rs::index_hygiene_clean` checks both
+`.broken` and `.broken_links` are empty).
+
+**What landed:**
+
+- `tools/indexer/fix_broken_links.py` — auto-fix script:
+  for each broken target, tries the `try_extra_dotdot`
+  heuristic (pop intermediate path segments and check
+  whether the result exists).  Catches the dominant
+  off-by-one `../` case where a plan README in
+  `plans/<dir>/` cites a top-level doc as `../X.md` but
+  needs `../../X.md`.  Manual override map for the
+  plan-22 / plan-35 closeout drift.
+- Scanner tightened in `tools/indexer/scan.sh` — link
+  extraction now uses per-file awk that tracks fenced
+  code-block state; example links inside `\`\`\`markdown`
+  blocks no longer count as real refs.  Cost: ~1.5 sec
+  added to the scan (was 1.5s, now 3s; still under the
+  5-sec budget).  Without this fix, the auto-fixer
+  rewrote example links to bogus paths in several files
+  (caught + reverted via the validate-after-fix step).
+- 106 of the 61 distinct broken-target refs auto-fixed
+  (61 distinct targets, but 106 individual ref sites).
+  Remaining ~20 manually patched: missing-doc citations
+  (`DX.md`/`LSP.md`/`WEB_SERVER_LIB.md`) redirected to
+  the corresponding `lib_plans/future/` dirs;
+  `BYTECODE_CACHE.md` and similar not-yet-written sibling
+  docs converted to plain-text mentions; intentional
+  template / test-fixture / inline-backtick examples got
+  `<!--noindex-->` markers.
+- `tests/index_hygiene.rs` rewritten as a single
+  `index_hygiene_clean` test (was two parallel tests
+  racing on `make index`; corruption surfaced as
+  intermittent failures).
+
+**Numbers:**
+
+- Before: 61 broken markdown links, 309 link targets, 1297
+  inbound links.
+- After fence-aware scanner: 19 broken (42 false positives
+  from fenced examples removed), 264 targets, 1277 links.
+- After cleanup: 0 broken, 245 targets, 1267 links.
+
+The phase 09 follow-up section in
+`plans/37-tracker-index/09-backlinks.md` is updated to
+mark this closed.
+
+---
+
 ### Plan-37 phase 06 — retroactive `@`-tagging shipped 2026-05-14
 
 `tools/indexer/migrate.py` rewrites bare-name tracker

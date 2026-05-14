@@ -22,7 +22,7 @@ stand-alone tmLanguage→sublime-syntax tools on PyPI.
 ## Scope coverage
 
 The grammar implements the scope mapping documented in
-[`doc/claude/DX.md` § SH.1](../doc/claude/DX.md):
+[`plans/future/27-developer-experience/` § SH.1](../doc/claude/plans/future/27-developer-experience/README.md):
 
 | Loft construct | TextMate scope |
 |---|---|

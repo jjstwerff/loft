@@ -116,7 +116,7 @@ The default for TODOs that fit in a row of a reference-doc table.  Same lifecycl
 
 1. Pick the relevant `doc/claude/<NAME>.md` reference doc (or `lib/<name>/<NAME>.md` for library-scoped).  If it doesn't have an `## Open work` section, add one near the bottom (after `## See also` if present).  Canonical examples: NATIVE.md / PERFORMANCE.md / PACKAGES.md / QUALITY.md.
 2. Add a row to the `## Open work` table: `| Item | Section | Status |` (or whatever columns the doc uses).  Each row links back to the section it touches.
-3. Add a ROADMAP row tagged with value category (S / R / G / F / U / C / Q / N) + link directly at the section: `[NATIVE.md § Open work](NATIVE.md#open-work)`.  Don't create a tracker README row (`## Open work` rows are NOT plans).
+3. Add a ROADMAP row tagged with value category (S / R / G / F / U / C / Q / N) + link directly at the section: `[NATIVE.md § Open work](NATIVE.md#open-work)`.  Don't create a tracker README row (`## Open work` rows are NOT plans). <!--noindex-->
 4. **No CLAUDE.md entry, no plan directory, no DEFERRED.md row** — the work is discoverable via the reference doc + ROADMAP.
 
 **Work**: edit the reference doc's architecture content directly when implementing.  Same file holds the row + the design.

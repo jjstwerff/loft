@@ -133,7 +133,7 @@ playground, IDE integration).
 
 ## Ground rules
 
-Inherits from [doc/claude/plans/README.md](../README.md):
+Inherits from [doc/claude/plans/README.md](../../README.md):
 
 - Every phase preserves all currently-green tests.
 - No regression-now-fix-later trades.

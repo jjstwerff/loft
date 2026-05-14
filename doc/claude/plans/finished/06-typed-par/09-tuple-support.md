@@ -287,8 +287,8 @@ Adjacent canary (NOT closed by phase 9 — different fix surface):
   receives tuple records identically to struct records.
 - [02-stitch-not-copy.md](02-stitch-not-copy.md) — rebase walks
   tuple `owned_elements` like struct ones.
-- [TUPLES.md](../../TUPLES.md) — tuple feature design (T1).
-- [PLANNING.md § T1.8](../../PLANNING.md) — T1.8a / b / c
+- [TUPLES.md](../../../TUPLES.md) — tuple feature design (T1).
+- [PLANNING.md § T1.8](../../../PLANNING.md) — T1.8a / b / c
   remaining work; 9a closes T1.8a.
 - `src/data.rs` — `Type::Tuple`, `element_size`,
   `element_offsets`, `owned_elements` already exist (T1.1).

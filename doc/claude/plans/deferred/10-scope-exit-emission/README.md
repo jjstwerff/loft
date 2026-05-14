@@ -131,10 +131,10 @@ cargo test --release --test native -- --test-threads=1 2>&1 \
 
 ## Related
 
-- [@P203](../../PROBLEMS.md) — closed by template fix in
+- [@P203](../../../PROBLEMS.md) — closed by template fix in
   `default/01_code.loft`, NOT by this plan.
 - [Plan 09](../../finished/09-native-runtime-rewrite/README.md) —
   per-Op emitter rewrite (closed 2026-05-02); complementary
   structural work.
-- [LIFETIME.md](../../LIFETIME.md) — dep tracking and scope-based
+- [LIFETIME.md](../../../LIFETIME.md) — dep tracking and scope-based
   freeing design.

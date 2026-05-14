@@ -1834,9 +1834,7 @@ pub fn t_9JsonValue_item(
     }
     let array_tp = stores.name("JArray");
     let items_pos = u32::from(stores.position(array_tp, "items")) + self_ref.pos;
-    let items_rec = stores
-        .store(&self_ref)
-        .get_i32_raw(self_ref.rec, items_pos);
+    let items_rec = stores.store(&self_ref).get_i32_raw(self_ref.rec, items_pos);
     if items_rec <= 0 {
         return crate::native::jv_null_sentinel(stores);
     }
@@ -1974,11 +1972,7 @@ pub fn t_9JsonValue_as_bool(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> b
 /// JsonValue.has_field(name) — true iff the receiver is a JObject
 /// containing a field with the given name.  Mirrors interp `n_has_field`.
 #[allow(clippy::missing_panics_doc)] // try_from on a non-negative loop counter
-pub fn t_9JsonValue_has_field(
-    cell: &std::cell::UnsafeCell<Stores>,
-    v: DbRef,
-    name: &str,
-) -> bool {
+pub fn t_9JsonValue_has_field(cell: &std::cell::UnsafeCell<Stores>, v: DbRef, name: &str) -> bool {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
     if discr != crate::native::JV_DISCR_OBJECT {
@@ -2197,9 +2191,12 @@ pub fn n_json_array(cell: &std::cell::UnsafeCell<Stores>, items: DbRef) -> DbRef
     let length = crate::vector::length_vector(&items, &stores.allocations);
     let result = crate::native::jv_alloc(stores);
     if length == 0 {
-        stores
-            .store_mut(&result)
-            .set_byte(result.rec, result.pos, 0, crate::native::JV_DISCR_ARRAY);
+        stores.store_mut(&result).set_byte(
+            result.rec,
+            result.pos,
+            0,
+            crate::native::JV_DISCR_ARRAY,
+        );
         stores.last_json_errors.clear();
         return result;
     }
@@ -2216,7 +2213,11 @@ pub fn n_json_array(cell: &std::cell::UnsafeCell<Stores>, items: DbRef) -> DbRef
         };
         children.push(crate::native::dbref_to_parsed(stores, &src_elm));
     }
-    crate::native::materialise_primitive_into(stores, &result, &crate::json::Parsed::Array(children));
+    crate::native::materialise_primitive_into(
+        stores,
+        &result,
+        &crate::json::Parsed::Array(children),
+    );
     stores.last_json_errors.clear();
     result
 }
@@ -2229,9 +2230,12 @@ pub fn n_json_object(cell: &std::cell::UnsafeCell<Stores>, fields: DbRef) -> DbR
     let length = crate::vector::length_vector(&fields, &stores.allocations);
     let result = crate::native::jv_alloc(stores);
     if length == 0 {
-        stores
-            .store_mut(&result)
-            .set_byte(result.rec, result.pos, 0, crate::native::JV_DISCR_OBJECT);
+        stores.store_mut(&result).set_byte(
+            result.rec,
+            result.pos,
+            0,
+            crate::native::JV_DISCR_OBJECT,
+        );
         stores.last_json_errors.clear();
         return result;
     }
@@ -2240,7 +2244,8 @@ pub fn n_json_object(cell: &std::cell::UnsafeCell<Stores>, fields: DbRef) -> DbR
     let jf_size = u32::from(stores.size(jf_tp));
     let name_field_pos = u32::from(stores.position(jf_tp, "name"));
     let value_field_pos = u32::from(stores.position(jf_tp, "value"));
-    let mut entries: Vec<(String, usize, crate::json::Parsed)> = Vec::with_capacity(length as usize);
+    let mut entries: Vec<(String, usize, crate::json::Parsed)> =
+        Vec::with_capacity(length as usize);
     for i in 0..length {
         let elem_offset = 8u32 + i * jf_size;
         let name_rec = stores
@@ -2252,9 +2257,17 @@ pub fn n_json_object(cell: &std::cell::UnsafeCell<Stores>, fields: DbRef) -> DbR
             rec: input_inner_rec,
             pos: elem_offset + value_field_pos,
         };
-        entries.push((name, 0usize, crate::native::dbref_to_parsed(stores, &value_slot)));
+        entries.push((
+            name,
+            0usize,
+            crate::native::dbref_to_parsed(stores, &value_slot),
+        ));
     }
-    crate::native::materialise_primitive_into(stores, &result, &crate::json::Parsed::Object(entries));
+    crate::native::materialise_primitive_into(
+        stores,
+        &result,
+        &crate::json::Parsed::Object(entries),
+    );
     stores.last_json_errors.clear();
     result
 }

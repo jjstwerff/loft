@@ -123,8 +123,8 @@ more cells needed."
 
 ## Cross-references
 
-- [LOFT.md § Match](../../LOFT.md) — language reference.
-- [TUPLES.md § T1.9](../../TUPLES.md) — tuple match specification.
+- [LOFT.md § Match](../../../LOFT.md) — language reference.
+- [TUPLES.md § T1.9](../../../TUPLES.md) — tuple match specification.
 - `src/parser/control.rs` — `parse_match`, `parse_scalar_match`,
   `parse_tuple_match`, `parse_vector_match`.
 - [@PLAN14 phase 03](../../finished/14-tuple-validation/03-closures.md) — tuple

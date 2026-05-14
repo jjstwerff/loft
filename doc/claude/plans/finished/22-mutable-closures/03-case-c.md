@@ -35,7 +35,7 @@ f1(); f2(); f1();`) shipped 2026-05-13 via @P259** — the
 closure record now actually OWNS the cells it captures
 (`inc_rc` on capture + cascade-free on close-record free
 gated on `__closure_` type prefix).  See
-[PROBLEMS.md row 259](../../PROBLEMS.md#open-issues--quick-reference)
+[PROBLEMS.md row 259](../../../PROBLEMS.md#open-issues--quick-reference)
 for the full closing story (commits, files touched,
 regression pins).
 

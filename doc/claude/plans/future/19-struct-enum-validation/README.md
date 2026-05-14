@@ -103,7 +103,7 @@ matrix becomes documentation, not execution).
 
 ## Cross-references
 
-- [LOFT.md § Enums](../../LOFT.md) — language reference.
+- [LOFT.md § Enums](../../../LOFT.md) — language reference.
 - `src/parser/control.rs` — match dispatch.
 - [@PLAN14 phase 04](../../finished/14-tuple-validation/04-references.md) —
   Reference tuples cross-reference.

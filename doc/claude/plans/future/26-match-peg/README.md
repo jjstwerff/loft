@@ -585,7 +585,7 @@ memo buffer.  Worth revisiting once L3.6 is on the critical path.
 - [LAZY_STDLIB.md](../../../lib_plans/future/03-lazy-stdlib/README.md) — lazy-loading mechanism (regex is its
   first consumer).
 - [COMPILER.md](../../../COMPILER.md) § pattern lowering — where L3 compiles in.
-- [INTERMEDIATE.md](INTERMEDIATE.md) — `OpMatchAnchor` / `OpMatchRevert` addition.
+- [INTERMEDIATE.md](../../../INTERMEDIATE.md) — `OpMatchAnchor` / `OpMatchRevert` addition.
 - [INCONSISTENCIES.md](../../../INCONSISTENCIES.md) #26 — guarded-arm exhaustiveness precedent.
 - `src/lexer.rs` § `link` / `revert` — the primitive this design mirrors.
 - `lib/lexer.loft` § `anchor` / `revert` — loft-level lexer library that

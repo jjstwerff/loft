@@ -125,9 +125,9 @@ full closure narrative.
 - [`../../../NATIVE.md`](../../../NATIVE.md) § "Per-Op emitter
   dispatch (plan 09 phase 00)" line ~96 — architecture reference
   for the registry + DefaultEmitter / custom emitter dispatch
-- [`../../PROBLEMS.md`](../../PROBLEMS.md) — per-P-issue closure
+- [`../../PROBLEMS.md`](../../../PROBLEMS.md) — per-P-issue closure
   narratives (@P200 / @P202 / @P203 / @P205); @P204 in @PLAN11
-- [`../../CHANGELOG_TECHNICAL.md`](../../CHANGELOG_TECHNICAL.md) —
+- [`../../CHANGELOG_TECHNICAL.md`](../../../CHANGELOG_TECHNICAL.md) —
   per-phase shipped manifest under "@PLAN09 phase NN" entries
 - [`../11-p204-ref-propagation/`](../11-p204-ref-propagation/) —
   sibling plan that closed the parser-side @P204

@@ -198,8 +198,8 @@ The matrix in [00-matrix.md](00-matrix.md) marks every D3 cell as
 
 ## Cross-references
 
-- [PLANNING.md § T1.11a](../../PLANNING.md)
+- [PLANNING.md § T1.11a](../../../PLANNING.md)
 - `src/parser/definitions.rs::parse_field`
 - `tests/parse_errors.rs::tuple_in_struct_field_rejected`
-- [TUPLES.md § non-goals](../../TUPLES.md)
-- [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md)
+- [TUPLES.md § non-goals](../../../TUPLES.md)
+- [DESIGN_DECISIONS.md](../../../DESIGN_DECISIONS.md)

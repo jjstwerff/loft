@@ -50,5 +50,5 @@ simplify deployment + monitoring + backup-restart procedures.
 ## See also
 
 - [`README.md`](README.md) — parent plan
-- [`05-rehearsal-and-backup.md`](05-rehearsal-and-backup.md) —
+- `05-rehearsal-and-backup.md` (not yet written) —
   end-to-end smoke test

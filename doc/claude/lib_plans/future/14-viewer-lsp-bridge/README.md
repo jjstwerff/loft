@@ -246,18 +246,18 @@ phases 3-5 each light up one capability slice.
   — the loft-lsp SERVER side (LSP.1 / LSP.2 / LSP.3 / DAP);
   this plan is the CLIENT side and consumes it for `.loft`
   files in phase 03.
-- [`plans/finished/35-branch-review-viewer/README.md`](../../plans/finished/35-branch-review-viewer/README.md)
+- [`plans/finished/35-branch-review-viewer/README.md`](../../../plans/finished/35-branch-review-viewer/README.md)
   — the viewer this plan extends.  The viewer's layout
   (sidebar, breadcrumbs, code rendering) is the host for the
   new LSP-driven UI elements.
-- [`plans/37-tracker-index/README.md`](../../plans/37-tracker-index/README.md)
+- [`plans/37-tracker-index/README.md`](../../../plans/37-tracker-index/README.md)
   — the tracker-tag indexer.  Its `/tag/<bare>` route already
   shows the same kind of cross-reference UX the LSP "find
   references" sidebar will.
 - [`lib_plans/future/07-web-ide/README.md`](../07-web-ide/README.md)
   — future browser IDE; reuses `loft-lsp-bridge` as its
   language-intelligence layer.
-- [`plans/future/27-developer-experience/README.md`](../../plans/future/27-developer-experience/README.md)
+- [`plans/future/27-developer-experience/README.md`](../../../plans/future/27-developer-experience/README.md)
   — DX umbrella; the viewer + LSP is one of the largest DX
   wins on the roadmap.
 

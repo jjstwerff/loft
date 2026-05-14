@@ -28,9 +28,9 @@ Reference for the post-@PLAN01 surface lives in:
   Type::Long removal note, Integer Storage Size table including
   Parts::ShortRaw (line ~113), opcode-table state (line ~456,
   34 slots reclaimed by phase 5).
-- [`../../CAVEATS.md`](../../CAVEATS.md) § C54 — post-migration
+- [`../../CAVEATS.md`](../../../CAVEATS.md) § C54 — post-migration
   caveats (binary writers, cdylib FFI layout, memory footprint).
-- [`../../QUALITY.md`](../../QUALITY.md) § C54 — kept as design
+- [`../../QUALITY.md`](../../../QUALITY.md) § C54 — kept as design
   reference; status flipped to LANDED 2026-04-21 via @PLAN01.
 
 This file is the closure record; phase + execution-archaeology
@@ -102,7 +102,7 @@ Each opens its own sub-phase only when prioritised
   C54.A is the capped instance; wider type-level widening is a
   separate conversation.
 - **C54.D Rust-style literal suffixes** (`42i32`).  Closed-by-
-  decision in [`../../DESIGN_DECISIONS.md`](../../DESIGN_DECISIONS.md)
+  decision in [`../../DESIGN_DECISIONS.md`](../../../DESIGN_DECISIONS.md)
   § C54.D.
 
 ## Provenance
@@ -120,12 +120,12 @@ Each opens its own sub-phase only when prioritised
   @PLAN01 arithmetic semantics
 - [`../../../INTERMEDIATE.md`](../../../INTERMEDIATE.md) §
   Type Enum + § Integer Storage Size — IR and storage reference
-- [`../../CAVEATS.md`](../../CAVEATS.md) § C54 — post-migration
+- [`../../CAVEATS.md`](../../../CAVEATS.md) § C54 — post-migration
   caveats
-- [`../../QUALITY.md`](../../QUALITY.md) § C54 — design history
-- [`../../DESIGN_DECISIONS.md`](../../DESIGN_DECISIONS.md) §
+- [`../../QUALITY.md`](../../../QUALITY.md) § C54 — design history
+- [`../../DESIGN_DECISIONS.md`](../../../DESIGN_DECISIONS.md) §
   C54.D — closed-by-decision (no Rust-style literal suffixes)
-- [`../../CHANGELOG_TECHNICAL.md`](../../CHANGELOG_TECHNICAL.md)
+- [`../../CHANGELOG_TECHNICAL.md`](../../../CHANGELOG_TECHNICAL.md)
   — per-phase shipped manifest
 - [`../02-narrow-collection-elements/`](../02-narrow-collection-elements/)
   — sibling plan that addressed the narrow-vector storage gap

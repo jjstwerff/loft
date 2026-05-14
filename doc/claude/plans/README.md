@@ -377,7 +377,7 @@ comparing backends — sibling shapes, latent issues flagged in
 comments, symptoms unrelated to the active fix.
 
 **File those P-issues before the phase closes, not later.**  See
-[CLAUDE.md § Bug-filing policy](../../CLAUDE.md#bug-filing-policy--mandatory)
+[CLAUDE.md § Bug-filing policy](../../../CLAUDE.md#bug-filing-policy--mandatory)
 and [DEVELOPMENT.md § Bug-filing During a Hunt](../DEVELOPMENT.md#bug-filing-during-a-hunt--mandatory)
 for the full policy.  Plans-specific notes:
 

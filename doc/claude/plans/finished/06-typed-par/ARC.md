@@ -1302,7 +1302,7 @@ exercise it.
 **Status (2026-05-08): DONE.**
 
 Closed by the size-based gate widen + work-ref unification stack
-that also closes [@P236](../../PROBLEMS.md):
+that also closes [@P236](../../../PROBLEMS.md):
 
 - `src/parser/definitions.rs::parse_function` rewrites the
   `returned` type from `Type::Tuple(elems)` to

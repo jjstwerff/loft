@@ -788,9 +788,9 @@ Deferred to follow-ups (post-@PLAN06):
   end after the store-stitch runtime + auto-light land.
 - [00-baseline-and-bench.md](00-baseline-and-bench.md) — phase 0's
   bench harness gates phase 7's perf claim.
-- [../../THREADING.md](../../THREADING.md) — current par design;
+- [../../THREADING.md](../../../THREADING.md) — current par design;
   phase 7d rewrites the "variants" section.
-- [../../LOFT.md](../../LOFT.md) — phase 7d adds a "Parallel
+- [../../LOFT.md](../../../LOFT.md) — phase 7d adds a "Parallel
   for-loop" subsection.
-- [../../ROADMAP.md § 1.1+ I13](../../ROADMAP.md#11-backlog) —
+- [../../ROADMAP.md § 1.1+ I13](../../../ROADMAP.md#11-backlog) —
   iterator protocol; future-compatible with body `yield`.

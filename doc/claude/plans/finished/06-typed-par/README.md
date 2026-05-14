@@ -11,7 +11,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 (par(...) syntax, par_fold, dispatcher inventory) lives in
 [`../../../THREADING.md`](../../../THREADING.md).  The live
 closure record is [ARC.md](ARC.md).  User-facing summary:
-[`../../CHANGELOG_TECHNICAL.md`](../../CHANGELOG_TECHNICAL.md)
+[`../../CHANGELOG_TECHNICAL.md`](../../../CHANGELOG_TECHNICAL.md)
 under "Plan-06 (typed-par redesign) closed 2026-05-09".
 
 This file is the closure record for the plan as a whole; the
@@ -124,12 +124,12 @@ Cross-cutting design docs:
   for the post-@PLAN06 surface (par(...) syntax, par_fold,
   dispatcher inventory, @PLAN06 phase 0 baseline retained as
   reference benchmark)
-- [`../../CHANGELOG_TECHNICAL.md`](../../CHANGELOG_TECHNICAL.md) —
+- [`../../CHANGELOG_TECHNICAL.md`](../../../CHANGELOG_TECHNICAL.md) —
   per-A-step shipped manifest under "Plan-06 (typed-par
   redesign) closed 2026-05-09"
-- [`../../PROBLEMS.md`](../../PROBLEMS.md) — P188–@P236 family
+- [`../../PROBLEMS.md`](../../../PROBLEMS.md) — P188–@P236 family
   bug entries (most closed; see Realised value table above)
-- [`../../ROADMAP.md`](../../ROADMAP.md) — A14 / A15 (1.1+
+- [`../../ROADMAP.md`](../../../ROADMAP.md) — A14 / A15 (1.1+
   parallel work cooperators) + browser parallel arc (was A10)
 - `src/parallel.rs` / `src/native.rs` / `src/codegen_runtime.rs` —
   shipped runtime surface

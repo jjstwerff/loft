@@ -63,10 +63,10 @@ directory as a self-contained binary.
 
 ## Related
 
-- [`../../ROADMAP.md`](../../ROADMAP.md) — 0.8.5 Moros editor milestone
+- [`../../ROADMAP.md`](../../../ROADMAP.md) — 0.8.5 Moros editor milestone
   (browser path).  This initiative was additive: the browser editor
   stays; this plan added the native option.
-- [`../../USER_FACING.md`](../../USER_FACING.md) — Native OpenGL
+- [`../../USER_FACING.md`](../../../USER_FACING.md) — Native OpenGL
   world demo row references this plan as the OpenGL infrastructure
   that's already shipped.
 - `lib/moros_editor/` — the edit operations library.

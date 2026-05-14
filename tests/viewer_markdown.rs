@@ -81,9 +81,7 @@ impl Drop for ViewerGuard {
 
 fn http_get(path: &str, port: u16) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to viewer");
-    let req = format!(
-        "GET {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-    );
+    let req = format!("GET {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n",);
     use std::io::Write;
     stream.write_all(req.as_bytes()).expect("write request");
     let mut buf = String::new();
@@ -137,9 +135,7 @@ fn markdown_renderer_pins_high_impact_features() {
     // routed to /raw/<resolved> (so the existing /raw/<path>
     // handler serves the bytes as application/octet-stream).
     assert!(
-        body.contains(
-            r#"<img src="/raw/tests/fixtures/images/logo.png" alt="image">"#
-        ),
+        body.contains(r#"<img src="/raw/tests/fixtures/images/logo.png" alt="image">"#),
         "image (rewritten through /raw/): {body:.500}",
     );
     assert!(

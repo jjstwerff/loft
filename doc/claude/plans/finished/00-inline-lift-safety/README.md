@@ -99,7 +99,7 @@ After closing the initiative, four follow-up probes verified the
 - [`../../../LIFETIME.md`](../../../LIFETIME.md) — reference for
   the inline-lift invariant (gate, dep merging, lock-bracket,
   trade-offs, history)
-- [`../../PROBLEMS.md`](../../PROBLEMS.md) — P181 entry
+- [`../../PROBLEMS.md`](../../../PROBLEMS.md) — P181 entry
 - `src/state/codegen.rs::gen_set_first_ref_call_copy` /
   `generate_set` — the two gated emission sites
 - `src/parser/control.rs::text_return` /

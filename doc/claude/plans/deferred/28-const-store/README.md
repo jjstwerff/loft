@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 | Phase | What | State |
 |---|---|---|
-| **A** — P127 fix: heap-backed `CONST_STORE`, vector constants pre-built in `byte_code()`, `OpConstRef` opcode, long strings in `CONST_STORE`, `text_code` buffer retired | Closes P127 | **SHIPPED.**  Reference for the post-Phase-A surface lives in [DATABASE.md § Constant store (`CONST_STORE`)](../../DATABASE.md#constant-store-const_store) and [INTERMEDIATE.md § Bytecode State](../../INTERMEDIATE.md#bytecode-state--srcstate). |
+| **A** — P127 fix: heap-backed `CONST_STORE`, vector constants pre-built in `byte_code()`, `OpConstRef` opcode, long strings in `CONST_STORE`, `text_code` buffer retired | Closes P127 | **SHIPPED.**  Reference for the post-Phase-A surface lives in [DATABASE.md § Constant store (`CONST_STORE`)](../../../DATABASE.md#constant-store-const_store) and [INTERMEDIATE.md § Bytecode State](../../../INTERMEDIATE.md#bytecode-state--srcstate). |
 | **D** — `.loftc` bytecode cache: file format caches bytecode + stores + const_refs + function positions; SHA-256 cache key from source content + version; `byte_code_with_cache()` skips the `def_code()` loop on cache hit; `src/cache.rs` module | Skip stdlib re-parse | **SHIPPED then RETIRED.**  Removed in @PLAN01 (integer-i64 migration) — its cache key missed stdlib edits and there were no external users yet.  Revisit the full-bytecode-cache design if/when Phase C demands it. |
 | **B** — `mmap`-backed `CONST_STORE` cache file | Zero-copy load on subsequent runs | **DEFERRED.**  Cache files are 5-10 KB — mmap overhead (syscall + page-table setup) exceeds memcpy savings at this size.  Becomes worthwhile only when Phase C embeds a large stdlib cache. |
 | **C** — WASM pre-compiled stdlib (`Data` + bytecode + `CONST_STORE` as static `include_bytes!`) | Skip ~100 ms stdlib re-parse on every WASM page load | **DEFERRED.**  Requires `Data` struct serialisation across 130+ public members + recursive enums (`Value`, `Type`).  MH effort.  Trigger: contributor appetite for `Data` serialisation work, OR demonstrated need for sub-100 ms WASM cold-start past what `include_bytes!` + parse achieves. |
@@ -197,17 +197,17 @@ deallocating static memory.
 
 ## See also
 
-- [DATABASE.md § Constant store (`CONST_STORE`)](../../DATABASE.md#constant-store-const_store)
+- [DATABASE.md § Constant store (`CONST_STORE`)](../../../DATABASE.md#constant-store-const_store)
   — Phase A reference (allocation, what lives there, reference-site
   codegen, lifetime + safety)
-- [INTERMEDIATE.md § Bytecode State](../../INTERMEDIATE.md#bytecode-state--srcstate)
+- [INTERMEDIATE.md § Bytecode State](../../../INTERMEDIATE.md#bytecode-state--srcstate)
   — `State.const_refs` and `OpConstRef` dispatch
-- [PROBLEMS.md § P127](../../PROBLEMS.md) — the original bug Phase A
+- [PROBLEMS.md § P127](../../../PROBLEMS.md) — the original bug Phase A
   closed (file-scope vector constants crashed when referenced in
   functions because IR Var(0)/Var(1) collided with caller variables)
 - [DEFERRED.md](../../DEFERRED.md) row `28-const-store` — trigger
   for Phases B + C
-- [ROADMAP.md](../../ROADMAP.md) — CS.B / CS.C1-C3 rows that
+- [ROADMAP.md](../../../ROADMAP.md) — CS.B / CS.C1-C3 rows that
   schedule the deferred phases
 - `src/database/mod.rs::CONST_STORE` — the `pub const u16 = 1`
 - `src/state/mod.rs::State::const_refs` — the per-d_nr DbRef table

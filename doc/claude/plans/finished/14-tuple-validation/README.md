@@ -175,12 +175,12 @@ README is up to date.
 
 ## Cross-references
 
-- [TUPLES.md](../../TUPLES.md) — current design doc; will be updated in
+- [TUPLES.md](../../../TUPLES.md) — current design doc; will be updated in
   phase 06.
-- [PLANNING.md § T1](../../PLANNING.md) — T1.1–T1.11 entries; T1.8c
+- [PLANNING.md § T1](../../../PLANNING.md) — T1.1–T1.11 entries; T1.8c
   closes in phase 04, T1.11a status decided in phase 05.
-- [LIFETIME.md](../../LIFETIME.md) — closure / dep semantics for E4.
-- [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) — destination for
+- [LIFETIME.md](../../../LIFETIME.md) — closure / dep semantics for E4.
+- [DESIGN_DECISIONS.md](../../../DESIGN_DECISIONS.md) — destination for
   E7 and (possibly) D3 closed-by-decision entries.
 - [06-typed-par/09-tuple-support.md](../06-typed-par/09-tuple-support.md)
   — downstream consumer; inherits this plan's regression net.

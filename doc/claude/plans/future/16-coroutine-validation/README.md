@@ -173,9 +173,9 @@ Each cell `(Yi, Xj)` has one of:
 
 ## Cross-references
 
-- [COROUTINE.md](../../COROUTINE.md) — coroutine design,
+- [COROUTINE.md](../../../COROUTINE.md) — coroutine design,
   "Known Limitations" section.
-- [LIFETIME.md](../../LIFETIME.md) — yielded-value lifetime
+- [LIFETIME.md](../../../LIFETIME.md) — yielded-value lifetime
   rules for text and Reference.
 - [@PLAN14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
   template.

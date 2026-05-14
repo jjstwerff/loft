@@ -178,10 +178,10 @@ if it's a stale read after a destructure, copy + null may be needed.
 
 ## Cross-references
 
-- [PLANNING.md § T1.8c](../../PLANNING.md) — original bug
-- [TUPLES.md § known limitations](../../TUPLES.md)
+- [PLANNING.md § T1.8c](../../../PLANNING.md) — original bug
+- [TUPLES.md § known limitations](../../../TUPLES.md)
 - `tests/expressions.rs:993` — `tuple_struct_refs`
 - `src/scopes.rs:578-587` — tuple scope-exit stub
 - `src/parser/expressions.rs::parse_destructure`
-- [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) — destination for
+- [DESIGN_DECISIONS.md](../../../DESIGN_DECISIONS.md) — destination for
   the "no Type::StructValue" entry

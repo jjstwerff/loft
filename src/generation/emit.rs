@@ -573,8 +573,7 @@ impl Output<'_> {
             // sits at index `args.len() - 1` which is `>= param_types.len()`,
             // so the condition correctly excludes it (its type is
             // `Type::RefVar(Type::Text(_))`, emitted as `&mut String`).
-            let is_text_arg = i < param_types.len()
-                && matches!(param_types[i], Type::Text(_));
+            let is_text_arg = i < param_types.len() && matches!(param_types[i], Type::Text(_));
             if is_text_arg {
                 write!(
                     w,

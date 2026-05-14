@@ -277,5 +277,5 @@ no separate ignore tag.
 - `tests/wrap.rs` — interpreter runner; current pattern for snippet
   tests.
 - `tests/common/mod.rs` — re-export point for the new harness.
-- [TESTING.md](../../TESTING.md) — `LogConfig` + `LOFT_LOG` reference
+- [TESTING.md](../../../TESTING.md) — `LogConfig` + `LOFT_LOG` reference
   for harness debugging.

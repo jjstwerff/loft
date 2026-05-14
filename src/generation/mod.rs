@@ -1804,8 +1804,7 @@ extern crate loft;"
                     // per the "fail at startup, not runtime" principle.
                     // Unreachable defs keep the `todo!()` shim so unused
                     // declarations don't reject otherwise-valid programs.
-                    let reachable = self.reachable.is_empty()
-                        || self.reachable.contains(&def_nr);
+                    let reachable = self.reachable.is_empty() || self.reachable.contains(&def_nr);
                     writeln!(w, "{{")?;
                     if def.returned != Type::Void {
                         if reachable {
@@ -1850,8 +1849,7 @@ extern crate loft;"
                     // reachable unimplemented natives without a `#native`
                     // annotation.  Unreachable internal stubs (e.g. unused
                     // `i_*` helpers) keep the `todo!()` shim.
-                    let reachable = self.reachable.is_empty()
-                        || self.reachable.contains(&def_nr);
+                    let reachable = self.reachable.is_empty() || self.reachable.contains(&def_nr);
                     if reachable {
                         writeln!(
                             w,

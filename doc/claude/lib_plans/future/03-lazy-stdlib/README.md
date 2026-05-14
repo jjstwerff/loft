@@ -693,8 +693,8 @@ datetime, http, ...) reuses the mechanism.
   is a library, not a match-pattern kind).
 - [BROADENING.md](../../../BROADENING.md) — why cold-start matters for
   loft's non-game reach.
-- [BYTECODE_CACHE.md](BYTECODE_CACHE.md) — `.loftc` cache design
-  that must key on loaded-module set.
+- `BYTECODE_CACHE.md` (planned, not yet written) — `.loftc`
+  cache design that must key on loaded-module set.
 - [`plans/deferred/28-const-store/`](../../../plans/deferred/28-const-store/README.md) —
   separate but complementary cold-start work; Phase A shipped
   (CONST_STORE + OpConstRef), Phase D shipped-then-retired

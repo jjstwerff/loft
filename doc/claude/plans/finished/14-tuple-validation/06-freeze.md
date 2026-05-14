@@ -80,5 +80,5 @@ until reconciled.
 
 - [README.md](README.md) — plan goal + acceptance
 - [00-matrix.md](00-matrix.md) — the source of truth
-- [doc/claude/plans/README.md](../README.md) — finished-initiatives
+- [doc/claude/plans/README.md](../../README.md) — finished-initiatives
   table format

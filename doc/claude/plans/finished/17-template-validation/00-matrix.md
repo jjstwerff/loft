@@ -290,7 +290,7 @@ FAIL — u5_b1p_printable_vector        (satisfaction: integer vs Printable)
 - `tests/common/cross_mode.rs` — shared harness.
 - [@PLAN14 phase 00](../14-tuple-validation/00-matrix.md) — donor
   template.
-- [INTERFACES.md](../../INTERFACES.md) — bound design.
+- [INTERFACES.md](../../../INTERFACES.md) — bound design.
 - `default/01_code.loft` — stdlib interfaces and built-in
   satisfaction (currently Ordered / Equatable / Addable; Printable
   status disputed — see phase 03).

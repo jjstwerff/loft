@@ -246,4 +246,4 @@ graduates to a FIX cell in a follow-up commit.
 - `tests/common/cross_mode.rs` — shared harness.
 - [@PLAN14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
   template; same matrix style + cross-mode contract.
-- [LIFETIME.md § Function](../../LIFETIME.md) — closure leak gap.
+- [LIFETIME.md § Function](../../../LIFETIME.md) — closure leak gap.

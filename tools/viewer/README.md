@@ -8,7 +8,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 A frozen loft binary that serves a branch-aware doc + code review
 dashboard from this repo to a browser via SSH port-forward.
 
-See [doc/claude/plans/35-branch-review-viewer/](../../doc/claude/plans/35-branch-review-viewer/README.md)
+See [doc/claude/plans/35-branch-review-viewer/](../../doc/claude/plans/finished/35-branch-review-viewer/README.md)
 for the full design and per-phase plans.
 
 ## Build

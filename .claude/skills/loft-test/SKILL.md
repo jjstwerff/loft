@@ -13,7 +13,7 @@ either a slow CI cycle or a test that doesn't actually validate the
 change.
 
 For runtime debugging conventions (LOFT_LOG presets, dump files), see
-the parent project's [TESTING.md](../../doc/claude/TESTING.md).  This
+the parent project's [TESTING.md](../../../doc/claude/TESTING.md).  This
 skill covers the *authoring* side: where a test belongs, which macro
 to use, and how to keep the suite fast.
 
@@ -386,7 +386,7 @@ plans crossing parser+codegen+runtime), use the background full-run:
 `/tmp/loft_problems.txt` gets a structured summary (FAILED list,
 stdout blocks, SIGSEGV context, wrap-suite `--nocapture` re-run if
 a crash masks a `.loft` filename).  See
-[TESTING.md § Preferred shape](../../doc/claude/TESTING.md) for the
+[TESTING.md § Preferred shape](../../../doc/claude/TESTING.md) for the
 full rationale.
 
 ---
@@ -504,11 +504,11 @@ pre-emptively.  `src/trace.rs` documents the steps:
 
 ## Cross-references
 
-- [TESTING.md](../../doc/claude/TESTING.md) — runtime debugging knobs:
+- [TESTING.md](../../../doc/claude/TESTING.md) — runtime debugging knobs:
   `LogConfig`, `LOFT_LOG`, dump file format, `LOFT_DUMP_DEPTH`.
-- [PROBLEMS.md](../../doc/claude/PROBLEMS.md) — open P-ids; check
+- [PROBLEMS.md](../../../doc/claude/PROBLEMS.md) — open P-ids; check
   before filing a new one.
-- [DEVELOPMENT.md](../../doc/claude/DEVELOPMENT.md) — branch policy,
+- [DEVELOPMENT.md](../../../doc/claude/DEVELOPMENT.md) — branch policy,
   commit ordering, push gate.
 - [loft-write skill](../loft-write/SKILL.md) — for the loft-source
   side of test bodies (types, syntax, error→fix table).

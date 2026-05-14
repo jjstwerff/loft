@@ -15,7 +15,7 @@ Resume triggers:
   (the `compile_and_start` / `resume_frame` integration that lets
   a synchronous-ish loft program drive an async WebSocket).
 - **v4 hot WASM swap** → gated on v3.5.
-- **v6 closure retrofit** → unblocked by [@PLAN22 phase 2](../../22-mutable-closures/README.md#sequencing)
+- **v6 closure retrofit** → unblocked by [@PLAN22 phase 2](../../finished/22-mutable-closures/README.md#sequencing)
   (the implicit-by-body classifier).
 - **General lib/server polish that helps every TTT vN** →
   [@PLAN34](../34-server-hardening/README.md) items (a) + (b);
@@ -1206,7 +1206,7 @@ swap) is its own arc and can land in parallel or after.
 
 **Status:** scoped 2026-05-10.  Pure cleanup pass; no new
 protocol or runtime capability.  Depends on
-[@PLAN22 (mutable closures)](../../22-mutable-closures/README.md)
+[@PLAN22 (mutable closures)](../../finished/22-mutable-closures/README.md)
 landing in the language.  **Explicitly NOT on the audience-
 demo's critical path** — if @PLAN22 has not shipped by the
 meetup talk, @PLAN36 server uses `Reference<T>` exactly like

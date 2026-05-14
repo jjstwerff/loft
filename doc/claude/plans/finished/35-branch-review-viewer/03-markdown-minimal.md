@@ -61,7 +61,7 @@ filed in PROBLEMS.md per the bug-filing policy:
   many other places in the same file; minimal repro doesn't
   reproduce.
 
-Both filed per the [Dogfood discovery](../../../../.claude/projects/-home-ubuntu-loft/memory/feedback_dogfood_discovery.md)
+Both filed per the [Dogfood discovery](../../../../.claude/projects/-home-ubuntu-loft/memory/feedback_dogfood_discovery.md) <!--noindex-->
 principle: real loft tools surface bugs synthetic tests miss.
 
 ## Original plan

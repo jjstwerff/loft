@@ -154,5 +154,5 @@ confirmed or revised per cell before any fix lands.
 - `tests/expressions.rs` — existing tuple test surface (T1.10
   section)
 - `tests/parse_errors.rs` — T1.11 negative tests (do not regress)
-- [PLANNING.md § T1.8a](../../PLANNING.md) — return-convention
+- [PLANNING.md § T1.8a](../../../PLANNING.md) — return-convention
   prerequisite

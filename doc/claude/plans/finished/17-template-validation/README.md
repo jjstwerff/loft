@@ -86,15 +86,15 @@ byte-identical stdout** asserted by the `cross_mode!` harness.
 - [`../../../TESTING.md`](../../../TESTING.md) § "Validation
   matrices" — the matrix-binary pattern (cross_mode harness,
   ignored cells, PASS / FIX / CLOSED triage)
-- [`../../INTERFACES.md`](../../INTERFACES.md) — interface design
+- [`../../INTERFACES.md`](../../../INTERFACES.md) — interface design
   + I1–I9 status
-- [`../../PROBLEMS.md`](../../PROBLEMS.md) — @P237 / @P238 / @P239 /
+- [`../../PROBLEMS.md`](../../../PROBLEMS.md) — @P237 / @P238 / @P239 /
   @P240 / @P241 / @P242 + @P208 (the earlier closure)
-- [`../../USER_FACING.md`](../../USER_FACING.md) — implicit
+- [`../../USER_FACING.md`](../../../USER_FACING.md) — implicit
   generic-tuple type inference workaround row
-- [`../../DESIGN_DECISIONS.md`](../../DESIGN_DECISIONS.md) —
+- [`../../DESIGN_DECISIONS.md`](../../../DESIGN_DECISIONS.md) —
   destination for any future CLOSED rows from this matrix
-- [`../../14-tuple-validation/00-matrix.md`](../../14-tuple-validation/00-matrix.md)
+- [`../14-tuple-validation/00-matrix.md`](../14-tuple-validation/00-matrix.md)
   — peer matrix (donor template for cross_mode + matrix style)
 - [`../15-closure-validation/`](../15-closure-validation/)
   (SHIPPED 2026-05-12)

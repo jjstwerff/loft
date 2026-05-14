@@ -38,7 +38,7 @@ top of them, not library extension.
 | ~~2~~ | ~~02-generation-script.md~~ | DROPPED — closed by the 2026-05-10 growth-model decision (pure direct painting; no autonomous growth).  Renderer-side ridge / edge classification covers what would have been the "plant / crystal aesthetic" generator | — |
 | 3 | [03-projector-view.md](03-projector-view.md) | Native loft beamer client: subscribe to server, render full hex world (frost-style 3D crystal mesh + edge-detected plant/crystal aesthetic), auto-camera follows activity heat field, presenter hotkey overrides | M |
 | 4 | [04-hosting.md](04-hosting.md) | Public URL reachable from venue WiFi (VPS / hotspot / ngrok / cloudflared).  Operational, not code | XS |
-| 5 | [05-rehearsal-and-backup.md](05-rehearsal-and-backup.md) | One full dry run on demo hardware; record both demos as fallback for catastrophic failure | XS |
+| 5 | `05-rehearsal-and-backup.md` (not yet written) | One full dry run on demo hardware; record both demos as fallback for catastrophic failure | XS |
 
 Phases 0, 1, 2 land in parallel — they share only the seed-event
 schema (sketched on paper first).  Phase 3 depends on phase 1

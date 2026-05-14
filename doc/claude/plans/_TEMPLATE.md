@@ -52,8 +52,8 @@ change.  Examples:
 - "Mixed: JSON shipped (`Type.parse`); HTTP planned for 1.1+.
   Three-file split: README (overview), JSON.md (shipped
   reference), HTTP_CLIENT.md (planned design)."
-- "Pointer-plan: full design lives at
-  [`../../../FOO.md`](../../../FOO.md); this plan tracks
+- "Pointer-plan: full design lives at <!--noindex-->
+  [`../../../FOO.md`](../../../FOO.md); this plan tracks <!--noindex-->
   open work as actionable rows."
 - "Pure future plan; pre-flight 50% bug yield expected."
 

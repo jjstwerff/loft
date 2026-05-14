@@ -214,10 +214,40 @@ trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP"' EXIT
 # Step 1: collect all `<src>:<line>:[text](target)` matches across .md files.
 # Reuse $FILES_TMP filtered to .md — avoids a second `git ls-files`
 # call which is expensive on SSHFS / network mounts.
-grep -E '\.md$' "$FILES_TMP" \
-  | xargs -r grep -nHE '\][(]([^)#[:space:]]+)\.md(#[^)]*)?[)]' 2>/dev/null \
-  | grep -v '<!--noindex-->' \
-  > "$LINKS_TMP" || true
+#
+# Per-file awk processing tracks fenced code-block state so example
+# links inside ```...``` blocks (illustrating syntax, not real refs)
+# don't pollute the links bucket.  The cost over a single grep
+# pipe is ~100 ms on the loft tree; well under the 0.5 sec budget.
+grep -E '\.md$' "$FILES_TMP" | while read -r f; do
+  awk -v file="$f" '
+    BEGIN { in_fence = 0; fence_marker = "" }
+    {
+      stripped = $0
+      sub(/^[[:space:]]+/, "", stripped)
+      # Track fence state.
+      if (in_fence == 0) {
+        if (substr(stripped, 1, 3) == "```") {
+          in_fence = 1; fence_marker = "```"; next
+        }
+        if (substr(stripped, 1, 3) == "~~~") {
+          in_fence = 1; fence_marker = "~~~"; next
+        }
+      } else {
+        if (substr(stripped, 1, 3) == fence_marker) {
+          in_fence = 0; fence_marker = ""
+        }
+        next
+      }
+      # Skip noindex lines.
+      if (index($0, "<!--noindex-->") > 0) next
+      # Emit only lines containing a `](X.md...)` pattern.
+      if (match($0, /\][(][^)#[:space:]]+\.md(#[^)]*)?[)]/)) {
+        printf "%s:%d:%s\n", file, NR, $0
+      }
+    }
+  ' "$f"
+done > "$LINKS_TMP" || true
 
 # Step 2: extract + resolve.  Awk walks each line, finds every
 # link occurrence, computes the target path relative to repo root.
