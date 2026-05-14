@@ -1849,7 +1849,22 @@ extern crate loft;"
                     // reachable unimplemented natives without a `#native`
                     // annotation.  Unreachable internal stubs (e.g. unused
                     // `i_*` helpers) keep the `todo!()` shim.
-                    let reachable = self.reachable.is_empty() || self.reachable.contains(&def_nr);
+                    //
+                    // Functions with a `#rust"…"` annotation (e.g. text
+                    // methods like `starts_with` / `ends_with` / `trim`
+                    // declared in `default/03_text.loft`) inline the Rust
+                    // expression at every call site via the dispatch in
+                    // `src/generation/calls.rs`, so the function body is
+                    // never actually called.  But the body is still
+                    // emitted (rustc needs to see something) and a bare
+                    // `compile_error!` would fire even though no caller
+                    // reaches it.  Treat `#rust`-annotated bodies as
+                    // unreachable for the compile_error decision —
+                    // emit a `todo!()` placeholder that costs nothing
+                    // unless someone takes the address of the fn.
+                    let reachable = (self.reachable.is_empty()
+                        || self.reachable.contains(&def_nr))
+                        && def.rust.is_empty();
                     if reachable {
                         writeln!(
                             w,
