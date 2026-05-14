@@ -403,7 +403,7 @@ if [ -f "$PROBS_FILE" ]; then
       body = $3;
       sev = $4; gsub(/^ +| +$/, "", sev);
       fix = $5; gsub(/^ +| +$/, "", fix);
-      if (tolower(sev) !~ /(^| )open( |[)]|$)|[(]partial/) next;
+      if (tolower(sev) !~ /(^| |[(])open( |,|[)]|$)|[(]partial/) next;
       # Strip the leading `**@P<n>** — ` tag-prefix added by the
       # 2026-05-14 self-tagging migration.  Then trim and take
       # up to the first period.

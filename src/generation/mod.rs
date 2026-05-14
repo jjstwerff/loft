@@ -1978,8 +1978,7 @@ extern crate loft;"
                     let is_iface_stub = def.name.starts_with("__iface_");
                     let is_t_stub = is_t_param_stub(&def.name);
                     let has_custom_op_emitter = ops::has_custom_emitter(&def.name);
-                    let reachable = (self.reachable.is_empty()
-                        || self.reachable.contains(&def_nr))
+                    let reachable = (self.reachable.is_empty() || self.reachable.contains(&def_nr))
                         && def.rust.is_empty()
                         && !is_iface_stub
                         && !is_t_stub
