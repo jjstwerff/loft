@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN37 phase 10.3 — `arguments() -> vector<text>` works
+// in BOTH --interpret and --native.  Pre-fix native binaries
+// returned an empty vector because the generated `fn main()`
+// didn't thread `std::env::args()` into `Stores.user_args`.
+//
+// Test runs in two modes:
+//   - default (no args): validates the call doesn't crash and
+//     returns an empty vector cleanly.  The native_scripts
+//     test driver runs scripts with no args, so this is the
+//     codepath that locks in.
+//   - manual run with extra args: validates per-arg content
+//     when invoked as `loft 103-arguments.loft -- a b c`.
+
+fn main() {
+    args = arguments();
+    n = args.len();
+    println("arguments: {n} args");
+    if n == 0 {
+        // Native test driver runs with no args; this is the
+        // expected path under cargo test --test native.
+        println("arguments: ok (empty)");
+    } else {
+        // Manual invocation with extra args: print them.
+        for i in 0..n {
+            println("  [{i}] = {args[i]}");
+        }
+        println("arguments: ok (with args)");
+    }
+}

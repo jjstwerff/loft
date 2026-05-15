@@ -760,15 +760,23 @@ extern crate loft;"
         // Emit a Rust entry point that bootstraps the loft `main` function, if present.
         if (0..till).any(|d| self.data.def(d).name == "n_main") {
             if self.wasm_browser {
-                // exported cdylib entry point for browser WASM.
+                // exported cdylib entry point for browser WASM.  WASM
+                // doesn't have an argv, so user_args stays empty —
+                // arguments() returns [].
                 writeln!(
                     w,
                     "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
                 )?;
             } else {
+                // Native binary: thread std::env::args() into Stores.user_args
+                // so the loft `arguments()` builtin returns the program's
+                // CLI args.  Skip [0] (binary path).  Mirrors what
+                // src/main.rs does for the interpreter path
+                // (state.database.user_args.clone_from(&user_args)).
+                // @PLAN37 phase 10.3 fix.
                 writeln!(
                     w,
-                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
+                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n}}"
                 )?;
             }
         }
@@ -781,7 +789,7 @@ extern crate loft;"
         if main_nr < till {
             writeln!(
                 w,
-                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
+                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n}}"
             )?;
         }
         Ok(())
