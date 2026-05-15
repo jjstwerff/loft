@@ -147,6 +147,40 @@ pub fn split(self: text, separator: character) -> vector < text > {
   result
 }
 #pure
+// Split on a multi-character text separator.  `"a, b, c".split_text(", ")`
+// returns `["a", "b", "c"]`.  Edge cases:
+//   - empty self → empty result
+//   - empty separator → returns `[self]` unchanged (no infinite-split)
+//   - separator never matches → returns `[self]`
+//   - separator at start / end → produces empty boundary entries
+//
+// Added in @PLAN37 phase 10.4 — closes a stdlib gap surfaced by
+// scan.loft's link extractor having to walk char-by-char to find
+// the `](` token because only `split(char)` existed.  Distinct
+// name from `split(text, character)` because loft doesn't allow
+// fn overloading by non-self parameter type.
+
+pub fn split_text(self: text, separator: text) -> vector < text > {
+  out: vector<text> = [];
+  n = self.len();
+  if n == 0 { return out; }
+  sl = separator.len();
+  if sl == 0 { out += [self]; return out; }
+  p = 0;
+  i = 0;
+  while i + sl <= n {
+    if self[i..i + sl] == separator {
+      out += [self[p..i]];
+      p = i + sl;
+      i = p;
+    } else {
+      i = i + 1;
+    }
+  }
+  out += [self[p..n]];
+  out
+}
+#pure
 // Joins a vector of text values with a separator between each pair.
 // Inverse of split: "a,b,c".split(',').join(",") == "a,b,c".
 
