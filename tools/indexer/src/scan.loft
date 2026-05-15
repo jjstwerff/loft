@@ -43,7 +43,10 @@ fn source_roots() -> vector<text> {
 
 // ── Leaf helpers (declared first so the validators below can
 // resolve their return types without depending on loft's
-// two-pass forward-resolution).
+// two-pass forward-resolution — @P281 workaround).
+//
+// `basename_leaf` removed in @PLAN37 phase 10.16: the stdlib
+// `text.basename()` method (added in 10.9) replaces it.
 
 // True for ASCII digits.
 fn is_digit_leaf(c: character) -> boolean {
@@ -57,18 +60,6 @@ fn is_word_char_leaf(c: character) -> boolean {
     if c >= 'a' && c <= 'z' { return true; }
     if c >= 'A' && c <= 'Z' { return true; }
     c == '_'
-}
-
-// Last path segment.  Used by both walk_into (the recursive
-// file walker) and the broken-tag validator's plan-dir scan.
-fn basename_leaf(p: text) -> text {
-    n = p.len();
-    i = n;
-    while i > 0 {
-        if p[i - 1] == '/' { return p[i..n]; }
-        i = i - 1;
-    }
-    p
 }
 
 // Build the set of valid P-issue numbers from PROBLEMS.md.
@@ -135,7 +126,7 @@ fn walk_plan_dirs(root: text, out: vector<text>) {
         if child.format != Format.Directory { continue; }
         // Plan dir basenames start with digits, then `-`.
         cp = child.path;
-        base = basename_leaf(cp);
+        base = cp.basename();
         bl = base.len();
         if bl < 2 { continue; }
         first_c = base[0];
@@ -312,7 +303,7 @@ fn walk_into(path: text, out: vector<text>) {
     if f.format == Format.Directory {
         for child in f.files() {
             cp = child.path;
-            base = basename_of(cp);
+            base = cp.basename();
             if child.format == Format.Directory {
                 if is_skipped_dir(base) { continue; }
                 walk_into(cp, out);
@@ -325,11 +316,8 @@ fn walk_into(path: text, out: vector<text>) {
     }
 }
 
-// Alias to the leaf helper at the top of the file (older
-// callers below kept their original name when the leaf was
-// extracted to fix two-pass forward-resolution for the
-// validators).
-fn basename_of(p: text) -> text { basename_leaf(p) }
+// `basename_of` removed in @PLAN37 phase 10.16 — call sites
+// updated to `cp.basename()` (stdlib method shipped in 10.9).
 
 // True when a line carries the `<!--noindex-->` opt-out comment
 // the bash scanner uses to mute prose mentions of fake tags
@@ -539,47 +527,10 @@ fn link_target_exists(target: text) -> boolean {
     file(target).format != Format.NotExists
 }
 
-// Directory portion of a path.  `doc/claude/PROBLEMS.md` →
-// `doc/claude`; `CLAUDE.md` → "" (top-level).  Used by the
-// link resolver to anchor relative `../` paths against the
-// source file's directory.
-fn dir_of(p: text) -> text {
-    n = p.len();
-    i = n;
-    while i > 0 {
-        if p[i - 1] == '/' { return p[0..i - 1]; }
-        i = i - 1;
-    }
-    ""
-}
-
-// Resolve `target` relative to `base_dir` (the source file's
-// directory).  Strips leading `./` repeatedly, applies `../`
-// segments by trimming the last component of `base_dir`, then
-// joins.  Mirrors `scan.sh`'s `resolve()` awk function.
-fn resolve_link_path(base_dir: text, target: text) -> text {
-    base = base_dir;
-    t = target;
-    // Strip leading `./` repeatedly.
-    while t.len() >= 2 && t[0] == '.' && t[1] == '/' {
-        t = t[2..t.len()];
-    }
-    // Apply `../` segments — each one walks up the base dir.
-    while t.len() >= 3 && t[0] == '.' && t[1] == '.' && t[2] == '/' {
-        // Drop the last segment of base.
-        bn = base.len();
-        cut = bn;
-        while cut > 0 {
-            if base[cut - 1] == '/' { cut = cut - 1; break; }
-            cut = cut - 1;
-        }
-        if cut == bn { base = ""; }
-        else { base = base[0..cut]; }
-        t = t[3..t.len()];
-    }
-    if base == "" { return t; }
-    "{base}/{t}"
-}
+// `dir_of` and `resolve_link_path` removed in @PLAN37 phase 10.16.
+// Replaced by the stdlib `text.dir()` and `text.resolve()` methods
+// added in phase 10.9.  Call sites below use `file_path.dir()` and
+// `base_dir.resolve(target_raw)`.
 
 // Scan one line of a markdown source for `[text](target.md)` or
 // `[text](target.md#anchor)` patterns.  Skips http:// / https://
@@ -653,7 +604,7 @@ fn scan_link_line(file_path: text, line_no: integer, line: text, base_dir: text,
         if tlen > 0 && target_raw[0] == '/' {
             resolved = target_raw[1..tlen];
         } else {
-            resolved = resolve_link_path(base_dir, target_raw);
+            resolved = base_dir.resolve(target_raw);
         }
         if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
         // Inline the anchor escape — the previous `anchor_esc =
@@ -763,7 +714,7 @@ fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>) {
     // intentional indices.
     is_md = file_path.ends_with(".md");
     base_dir = "";
-    if is_md { base_dir = dir_of(file_path); }
+    if is_md { base_dir = file_path.dir(); }
     in_fence = false;
     fence_marker = "";
     line_no = 1;
