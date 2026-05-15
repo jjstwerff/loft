@@ -375,9 +375,13 @@ index-loft:
 	@if [ ! -x target/release/loft ]; then \
 	    echo "host loft binary missing; run: cargo build --release"; exit 1; \
 	fi
-	@./target/release/loft --lib lib/ tools/indexer/src/scan.loft 2>/dev/null \
-	    | grep -vE '^warning|^   *--|^   *\||^[0-9]+ \|' \
-	    | grep -v '^$$'
+	@# --no-warnings (added in @PLAN37 phase 10.2 / @P282) keeps stdout
+	@# free of the loft compiler's warning preamble so the scanner's
+	@# JSON Lines / bucketed output can be piped straight into jq /
+	@# downstream consumers.  The previous grep -vE filter wrapper
+	@# (six patterns to strip the warning + source-pointer block) is
+	@# now obsolete.
+	@./target/release/loft --no-warnings --lib lib/ tools/indexer/src/scan.loft
 
 view: view-refresh
 	@if [ ! -f tools/viewer/src/main.loft ]; then \
