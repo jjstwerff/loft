@@ -79,7 +79,9 @@ The MVP is the foundation; remaining work for the full phase:
   on Linux, kqueue on macOS, ReadDirectoryChangesW on
   Windows).
 - **WebSocket daemon** — wire `lib/server`'s WebSocket path
-  for live index subscription.
+  for live index subscription.  Wire-format + lifecycle
+  design doc shipped 2026-05-15:
+  [07a-websocket-protocol.md](07a-websocket-protocol.md).
 - **`tools/indexer/idx.loft`** — loft port of the bash
   `scripts/idx` CLI.  Talks to the daemon over the
   WebSocket.
