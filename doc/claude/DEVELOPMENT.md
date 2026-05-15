@@ -410,6 +410,128 @@ and statistically more likely to contain regressions.
 
 ---
 
+## Inserting Discovered Enhancements Into the Active Plan
+
+Building real loft consumers (libraries, tools, viewers, indexers)
+systematically surfaces gaps in the language and stdlib that toy
+programs and the test suite never hit.  A consumer that needs a
+missing feature has THREE choices at the moment of discovery:
+
+  1. **Work around it in the consumer** — write extra loft code
+     to dodge the gap, leave a `// loft gap: ...` comment.
+  2. **Defer it to a separate plan / catalog** — file the gap
+     somewhere central, keep building the consumer.
+  3. **Insert a step into the active plan that fixes the gap
+     itself, then resume the feature work** — language /
+     stdlib gets sturdier; the workaround never enters
+     shipped code.
+
+**Default to (3) when the fix is XS or S** (under half a day).
+For (3) the discovered enhancement becomes a sub-step of the
+plan's CURRENT phase — landed BEFORE the next feature phase
+opens.  The cost-of-context advantage is the whole reason:
+you already understand the workaround site; the loft-side
+fix is one or two file edits away in compiler / stdlib
+territory you haven't paged out yet.
+
+### When to default to (1) workaround + (2) defer instead of (3) inline-fix
+
+Use (1) + (2) when ANY of these hold:
+
+  - Fix needs design discussion (typer architecture,
+    multi-file refactor, breaks ABI).
+  - Fix is M+ effort (a day or more) and would push the
+    feature phase past its planned-budget.
+  - Workaround is genuinely cheap and the gap is
+    documented (`<!-- loft gap: needs vector.sort() -->`
+    inline + a row in the canonical home).
+
+Default to (3) when the fix is small, the consumer
+workaround is clearly inferior to having the feature, and
+the consumer code that uses the gap is fresh in working
+memory.
+
+### How items are documented (one canonical home each, no duplicates)
+
+When (3) doesn't apply, the gap goes to its CANONICAL home.
+**Never invent a parallel catalog** — that creates the
+"two places to keep in sync" problem and dilutes the action
+surface (`./scripts/idx broken`, the broken-tag validator,
+the open-issues fast index in PROBLEMS.md, etc.).
+
+| Item shape | Canonical home | Where to scan for them |
+|---|---|---|
+| **Bug** (observable wrong behavior — codegen quirk, parser quirk, lexer rejection, runtime panic) | P-issue row in [PROBLEMS.md](PROBLEMS.md) | `./scripts/idx tag:@P<n>` per ID; bash one-liner `./scripts/idx all \| jq '...'` for the open set |
+| **Stdlib gap** (missing fn / method / overload that fits the existing API surface) | `## Open work` row in [STDLIB.md](STDLIB.md) | grep / read STDLIB.md `## Open work` |
+| **Compiler / language gap** (lexer / parser / typer change with surface-area implications) | P-issue row OR `## Open work` row in [COMPILER.md](COMPILER.md) | same as above |
+| **Native codegen gap** | `## Open work` row in [NATIVE.md](NATIVE.md) | NATIVE.md |
+| **New library** (independent package — process, fs_watch, regex, cache, …) | `lib_plans/future/<NN>-<slug>/README.md` slot | `ls lib_plans/future/` |
+| **Big deferred feature** (M+ scale; needs its own design + multi-phase implementation; can't reasonably inline into the discovering plan's phase) | `plans/future/<NN>-<slug>/` (core-language) OR `lib_plans/future/<NN>-<slug>/` (library) plan slot — full README with goal, phases, acceptance | `ls plans/future/`, `ls lib_plans/future/` |
+
+The in-code workaround comment is MANDATORY regardless of
+which choice (1 / 2 / 3).  Reference the canonical home so
+the workaround stays self-explaining:
+
+```loft
+// @P276 — `s[i] ?? '<char>'` chain-compare trips rustc E0308 in
+// native; remove `??` and rely on the surrounding `i < n` guard.
+c = line[i];
+```
+
+```loft
+// stdlib gap (STDLIB.md § Open work, "vector.sort"): no
+// vector.sort() yet.  Use sorted<TagSlot[name]> as a sort
+// proxy for now.
+struct TagSlot { name: text not null }
+```
+
+When the canonical-home item ships, the workaround comment
+gets removed in the same commit (the comment IS the
+"unwound someday" handle).
+
+### Why this keeps memory + ROADMAP clean
+
+- **Memory** stays small because every consumer-side
+  workaround references its canonical home — there's nothing
+  to "remember" beyond the inline pointer.  Your future self
+  reads the workaround comment, sees `@P276` or "STDLIB.md §
+  Open work", and goes there.
+
+- **ROADMAP** doesn't grow a row per discovered gap.
+  Discovered enhancements either get inlined into the active
+  plan (option 3) or land in their canonical home (P-issue /
+  `## Open work` / lib_plans).  ROADMAP rows POINT at those
+  homes when scheduling — they don't duplicate the inventory.
+
+- **Canonical homes already have action infrastructure**:
+  `./scripts/idx broken` for tag refs, `make problems` for the
+  open-issue list, `./scripts/idx incoming:STDLIB.md` for
+  "what links here," the doc-hygiene gate for plan-link
+  freshness.  Inventing a parallel catalog re-builds that
+  infrastructure for one slice of the open work.
+
+### When NOT to insert the fix (architectural caveat)
+
+Inserting a stdlib / compiler fix into a feature plan's
+phase is fine for XS / S work that lifts a workaround the
+phase added.  It's NOT fine for:
+
+  - Fixes that change observable language semantics (those
+    need a feature plan of their own — design first, then
+    the migration).
+  - Fixes that touch unrelated subsystems (a fence-skip in
+    `lib/markdown` shouldn't grow into a full markdown-
+    extension arc).
+  - Fixes that demand new tests beyond the consumer's
+    smoke test (those want a focused commit + their own
+    regression suite).
+
+Use judgment.  The default is "fix it now if it's cheap and
+in scope"; the override is "this is bigger than I thought —
+defer to canonical home".
+
+---
+
 ## Structured Commit Sequence
 
 For each item (or each independent area of a single item) follow the commit order

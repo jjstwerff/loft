@@ -289,6 +289,26 @@ ship the original-report fix as a focused change.  File the follow-ups as
 *new* P-issue rows; do not bundle them into the same patch unless they share
 a single fix site.
 
+### Inserting fixes vs filing — see DEVELOPMENT.md
+
+The rule above covers **filing**.  When the discovered gap is XS or S
+(under half a day) AND the consumer code that uses the workaround is
+fresh in working memory, prefer **inserting a step into the active plan
+that fixes the gap directly**, then resuming the feature work — the
+language / stdlib gets sturdier and the workaround never enters
+shipped code.
+
+Routing the discovered item to its canonical home (P-issue / `## Open
+work` row in STDLIB.md / NATIVE.md / COMPILER.md / new lib_plans slot)
+is what to do when an inline fix isn't appropriate (M+ effort, needs
+design, touches unrelated subsystems).
+
+Big deferred features get their own plan slot (`plans/future/<NN>/` or
+`lib_plans/future/<NN>/`) — never a row in a parallel catalog.
+
+Full procedure + decision tree: see
+[DEVELOPMENT.md § Inserting Discovered Enhancements Into the Active Plan](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan).
+
 ---
 
 ## Git safety — MANDATORY

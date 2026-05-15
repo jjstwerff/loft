@@ -628,6 +628,28 @@ for i in 0..3 { println(items[order[i]]) }
 
 ---
 
+## Open work
+
+Stdlib gaps surfaced by dogfood usage (the @PLAN35 viewer,
+@PLAN37 tag indexer, lib/markdown extraction).  Each row
+names where it bit, the proposed shape, and rough effort.
+XS = single-line/single-fn change; S = focused half-day fix.
+
+| Item | Where it bit | Shape | Effort |
+|---|---|---|---|
+| `vector.sort()` + `vector.sort_by(fn)` | scan.loft (3 sites), viewer's plan-bucket sort, activity feed date sort | `pub fn sort(both: vector)` (default ordering for built-in element types) + `pub fn sort_by(both: vector, key_fn: fn(T) -> integer)` for user types.  Replaces the `sorted<T[K]>` set-as-sort-proxy pattern. | S |
+| JSON emission helpers | scan.loft has 80+ lines of manual `json_escape` + per-row format-string emission + comma management.  viewer reads via `value.field("x").as_text()` — no symmetric write API. | `to_json(value) -> text` for primitives + `JsonBuilder` for nested structures.  Mirror of the existing `json_parse` + `JsonValue` read API. | S–M |
+| Path helpers — stdlib `path` module | scan.loft, viewer, lib/markdown each rolled their own `dir_of` / `basename` / `resolve_relative` | `path::dir(p)`, `path::basename(p)`, `path::join(parts...)`, `path::resolve(base, target)`.  Bonus: `file().path` returns `./<name>` at root — either normalize in `file()` or provide `path::clean()`. | XS–S |
+| `text.split(text)` | scan.loft's link extractor walks char-by-char to find `](` (only `text.split(char)` exists today) | Add the `text` overload: `pub fn split(both: text, sep: text) -> vector<text>`. | XS |
+| `text.starts_with_at(pos, prefix)` | scan.loft's @PLAN matcher does `line[i+1]=='P' && line[i+2]=='L' && …` instead of `line.starts_with_at(i, "PLAN")` | Add the method.  Sugar over the existing slice + comparison. | XS |
+| `hash.contains(key) -> boolean` + key iteration | scan.loft uses `vector<text>` + linear `set_contains` for valid_pids/valid_plans because `hash<T[K]>` isn't ergonomic as a "set of text" | Add `contains` (sugar over current null-lookup) + idiomatic key iteration. | XS |
+| `text::escape_html(s)` | viewer's main.loft rolled its own `escape(s)` for HTML output | Add as a stdlib text method. | XS |
+| `args() -> vector<text>` builtin | scan.loft uses env var `LOFT_INDEX_BUCKETED` as a CLI-arg workaround; viewer doesn't support args at all | Add the builtin that returns the program's invocation args. | XS |
+
+Driver doc: see the "Loft gaps surfaced" section in
+[`plans/37-tracker-index/07-loft-native-scanner.md`](plans/37-tracker-index/07-loft-native-scanner.md)
+for the consumer-side narrative.
+
 ## See also
 - [LOFT.md](LOFT.md) — Loft language reference (syntax, types, operators, control flow)
 - [INTERNALS.md](INTERNALS.md) — Native function registry, `src/native.rs`, `src/ops.rs`

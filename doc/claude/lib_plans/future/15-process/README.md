@@ -1,0 +1,96 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# `lib/process/` — subprocess primitive
+
+**Status:** Future — opened 2026-05-15 from dogfood findings
+in @PLAN37 phase 07 + @PLAN35 viewer.
+
+## Why
+
+Loft has no subprocess primitive today.  Every loft tool that
+needs to call an external command works around it via a bash
+wrapper script:
+
+- `tools/viewer/refresh.sh` exists ONLY because the viewer
+  can't shell out to `git diff` / `git log`.  ~140 lines of
+  bash that loft could own directly.
+- `make index` runs `tools/indexer/scan.sh` BEFORE the loft
+  scanner because scan.loft can't call `git ls-files` to match
+  bash's tracked-file set.  The @PLAN37 phase 07 test gate has
+  a "filter loft to bash-tracked files" workaround for this
+  exact reason.
+- `make ci` is shell-only — couldn't be ported to a loft
+  driver script if anyone wanted to.
+
+The single largest architectural unlock for loft tools.
+
+## Surface
+
+```loft
+struct Process {
+  stdout: text,
+  stderr: text,
+  code:   integer,
+  signal: integer  // 0 if exited cleanly
+}
+
+pub fn run(cmd: text, args: vector<text>) -> Process;
+pub fn run_with_input(cmd: text, args: vector<text>, stdin: text) -> Process;
+```
+
+Streaming variant for large outputs (e.g. `git log -p`):
+
+```loft
+pub fn spawn(cmd: text, args: vector<text>) -> ProcessHandle;
+pub fn read_line(self: ProcessHandle) -> text;  // null at EOF
+pub fn wait(self: ProcessHandle) -> integer;    // exit code
+```
+
+## What ships
+
+- `lib/process/src/process.loft` — the API above, declared as
+  `#native` fns binding to a Rust host bridge.
+- Host bridge (Rust): `std::process::Command::new(cmd).args(args).output()` for
+  `run`; `Command::spawn()` + `BufReader` for `spawn`.
+- Tests: smoke (`echo hello`), arg-quoting (`echo "a b" "c"`),
+  stdin (`cat`), exit code (`false`), stderr (`grep` on
+  empty), signal (`kill -9`).
+
+## Security model
+
+- `run()` invokes `cmd` directly via `execve` — NOT a shell.
+  No shell injection by construction (args are a vector, not
+  a concatenated string).
+- No `run_shell()` variant.  If users need shell features
+  (pipes, glob, `&&`), they pass `["sh", "-c", "<one-liner>"]`
+  explicitly and own the escape.
+- File: `doc/claude/SECURITY.md` (new doc) lists the
+  process-execution attack surface and what's deliberately
+  out of scope (no setuid, no env clearing, no chroot).
+
+## Consumer changes once shipped
+
+- `tools/viewer/refresh.sh` deletes; `tools/viewer/src/main.loft`
+  reads git state directly via `process::run("git", [...])`.
+- `tools/indexer/src/scan.loft` adds a `git_tracked_files()` fn
+  that mirrors bash's `git ls-files` enumeration; the test
+  gate's "filter to bash-tracked files" workaround comes out.
+- `make ci`, `make ship`, etc. become writable in pure loft.
+
+## Effort
+
+M (1-3 days).  Native bridge is ~50 lines of Rust;
+streaming variant is the bulk.  Tests + docs another day.
+
+## Cross-references
+
+- [@PLAN37 phase 07](../../../plans/37-tracker-index/07-loft-native-scanner.md)
+  — driver use case (untracked-files parity).
+- [@PLAN35](../../../plans/finished/35-branch-review-viewer/README.md)
+  — `tools/viewer/refresh.sh` is the largest pre-existing
+  workaround this lib lifts.
+- [STDLIB.md § Open work](../../../STDLIB.md#open-work)
+  — sibling stdlib gaps surfaced by the same dogfood pass.
