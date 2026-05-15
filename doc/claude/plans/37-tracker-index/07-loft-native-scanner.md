@@ -22,9 +22,12 @@ JSON emission deferred to follow-up commits.
 - Indexable extensions: `.md`, `.rs`, `.loft`, `.toml`,
   `.sh`, `.py` — same set as `tools/indexer/scan.sh`.
 - Honors the `<!--noindex-->` opt-out marker.
-- Matches the bash regex's `\b` discipline: `@P229bing` and
-  `@PLAN37foo` both fail (no boundary), `@P259` and
-  `@PLAN35-04-iii.a` succeed.
+- Matches the bash regex's `\b` discipline (the four examples
+  on the next line are deliberately marked `noindex` because
+  two of them are designed-to-fail tokens that bash's
+  awk extractor greedily truncates):
+  `@P229bing` and `@PLAN37foo` both fail (no boundary), <!--noindex-->
+  `@P259` and `@PLAN35-04-iii.a` succeed. <!--noindex-->
 
 Build pipeline: `make index-loft` runs the scanner via
 `loft --native --lib lib/` and strips the loft compiler's

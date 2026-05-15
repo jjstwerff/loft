@@ -3,20 +3,28 @@
 //
 // @PLAN37 phase 07 — loft-native tracker-index scanner.
 //
-// Single-shot mode (this commit): walks a fixed set of source
-// roots, finds every `@P<n>` and `@PLAN<n>(-<seg>)*` reference
-// in indexable files, and prints one `<file>:<line>:<tag>`
-// row per match to stdout.
+// Single-shot mode: walks a fixed set of source roots, finds
+// every `@P<n>` and `@PLAN<n>(-<seg>)*` reference in indexable
+// files, and prints one JSON-Lines record per match to stdout.
+// Each line is a self-contained object:
 //
-// Subsequent commits add: JSON emission matching `tools/indexer/
-// scan.sh`'s `index/tags.json` shape, problems_open / plans_*
-// buckets, broken-tag validation, fs_watch continuous mode,
-// WebSocket daemon for `tools/indexer/bin/loft-idx`.
+//   {"tag":"@P259","file":"a.md","line":42,"context":"..."}
+//
+// Bucketing into the `index/tags.json` per-tag-array shape
+// happens downstream via jq (one liner; cheaper than building
+// the nested structure in loft and easier to test).  Matches
+// the bash scanner's tag set on committed code (asserted by
+// `tests/index_hygiene.rs::index_hygiene_clean`).
+//
+// Still-open follow-ups (each its own commit): full
+// `tags.json` emission (legacy buckets, broken validation,
+// markdown links, problems_*, plans_*), `lib/fs_watch/` for
+// `--watch` mode, WebSocket daemon, CLI client, standalone
+// binary build.
 //
 // The bash scanner remains the canonical bootstrap path —
 // `make index` still drives `scan.sh`.  This binary is the
-// loft-side equivalent that `make index-build` produces; future
-// `make index-watch` will keep it running.
+// loft-side equivalent that `make index-loft` runs.
 
 // Roots returned from a fn rather than a `const vector<text>`
 // because the native backend doesn't yet wire module-scope
@@ -140,6 +148,12 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
     if is_noindex_line(line) { return; }
     n = line.len();
     if n < 3 { return; }
+    // Compute the JSON-escaped context once per line that has any
+    // potential match — the inner loop emits one row per tag, and
+    // they share the same context string.  Building the JSON
+    // record is then literal concat (no per-row escape work).
+    ctx_esc = "";
+    ctx_escaped = false;
     i = 0;
     while i < n {
         c = line[i];
@@ -170,7 +184,8 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
             // boundary, no match.
             if j == n || !is_word_char(line[j]) {
                 tag = line[i..j];
-                out += ["{file_path}:{line_no}:{tag}"];
+                if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
+                out += [emit_row(tag, file_path, line_no, ctx_esc)];
                 i = j;
                 continue;
             }
@@ -201,7 +216,8 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
             }
             if matched {
                 tag = line[i..j];
-                out += ["{file_path}:{line_no}:{tag}"];
+                if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
+                out += [emit_row(tag, file_path, line_no, ctx_esc)];
                 i = j;
                 continue;
             }
@@ -211,6 +227,74 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
         }
         i = i + 1;
     }
+}
+
+// Build one JSON-Lines record.  `ctx_escaped` is already passed
+// through `json_escape`; tag and file_path can't contain JSON-
+// hostile chars (tags are alphanumeric + `.-`; paths in this
+// repo are ASCII without quotes/backslashes), so they go in
+// raw.  Kept inline-able by keeping the shape minimal.
+fn emit_row(tag: text, file_path: text, line_no: integer, ctx_escaped: text) -> text {
+    // `{{` and `}}` produce literal `{` and `}` in a loft format
+    // string (loft uses doubled braces for the brace escape).
+    "{{\"tag\":\"{tag}\",\"file\":\"{file_path}\",\"line\":{line_no},\"context\":\"{ctx_escaped}\"}}"
+}
+
+// JSON-escape a text: backslash, double-quote, control chars
+// → `\\`, `\"`, `\n`, `\t`, `\r`, or `\u00XX`.  Loft text is
+// UTF-8 so non-ASCII codepoints pass through verbatim — JSON
+// allows raw UTF-8 in strings.
+fn json_escape(s: text) -> text {
+    out = "";
+    n = s.len();
+    i = 0;
+    while i < n {
+        c = s[i];
+        if c == '\\' {
+            out += "\\\\";
+        } else if c == '"' {
+            out += "\\\"";
+        } else if c == '\n' {
+            out += "\\n";
+        } else if c == '\t' {
+            out += "\\t";
+        } else if c == '\r' {
+            out += "\\r";
+        } else {
+            // Control chars below 0x20 (excluding the three above)
+            // are rare in source text but JSON requires the `\u`
+            // escape if they appear.  All other chars (including
+            // multi-byte UTF-8) pass through verbatim.
+            cn = c as integer;
+            if cn < 32 {
+                out += "\\u00";
+                out += hex_byte(cn);
+            } else {
+                out += "{c}";
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Two-hex-digit string for `n` in [0, 255].  Used by json_escape's
+// `\u00XX` path; two-byte hex is enough because the only chars
+// hitting the escape are 0x00–0x1F (control characters).
+fn hex_byte(n: integer) -> text {
+    hi = n / 16;
+    lo = n - (hi * 16);
+    "{hex_digit(hi)}{hex_digit(lo)}"
+}
+
+fn hex_digit(n: integer) -> text {
+    if n < 10 { return "{n}"; }
+    if n == 10 { return "a"; }
+    if n == 11 { return "b"; }
+    if n == 12 { return "c"; }
+    if n == 13 { return "d"; }
+    if n == 14 { return "e"; }
+    "f"
 }
 
 // Segment-char class for `@PLAN-<segment>` continuations.  Bash

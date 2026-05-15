@@ -78,13 +78,13 @@ fn index_hygiene_clean() {
     );
 
     // 2.5 Phase 07 (MVP) — loft-native scanner finds the same
-    // set of `<file>:<line>:<tag>` rows as `scan.sh`.  Drift
-    // means either backend has gained or lost a pattern;
-    // investigate before suppressing.  Both views see the SAME
-    // tree state because step 1 just re-ran `make index` over
-    // the live filesystem (and bash's `git ls-files` only sees
-    // tracked files — so this test only catches drift on
-    // committed code, not in-flight edits).
+    // set of refs as `scan.sh`.  Both backends now emit JSON
+    // Lines (one `{"tag":..,"file":..,"line":..,"context":..}`
+    // record per match); we project both sides through `jq` to
+    // a `<file>:<line>:<tag>` key for the diff.  Bash's
+    // `git ls-files` only sees tracked files — so this test
+    // only catches drift on committed code, not in-flight edits
+    // (the file-set filter below handles that).
     let loft_scan = Command::new("make")
         .arg("index-loft")
         .output()
@@ -95,15 +95,39 @@ fn index_hygiene_clean() {
         loft_scan.status.code(),
         String::from_utf8_lossy(&loft_scan.stderr)
     );
-    let loft_rows: std::collections::BTreeSet<String> = String::from_utf8_lossy(&loft_scan.stdout)
+    // Project loft's JSON Lines into the same `<file>:<line>:<tag>`
+    // key shape as the bash projection below.  `jq -s` slurps
+    // the lines into an array.
+    let loft_jq = Command::new("jq")
+        .args(["-rs", ".[] | \"\\(.file):\\(.line):\\(.tag)\""])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn `jq` for loft projection");
+    {
+        use std::io::Write;
+        loft_jq
+            .stdin
+            .as_ref()
+            .expect("jq stdin")
+            .write_all(&loft_scan.stdout)
+            .expect("write loft scan to jq stdin");
+    }
+    let loft_proj = loft_jq.wait_with_output().expect("jq loft wait");
+    assert!(
+        loft_proj.status.success(),
+        "jq projection over loft scan exited {:?}",
+        loft_proj.status.code()
+    );
+    let loft_rows: std::collections::BTreeSet<String> = String::from_utf8_lossy(&loft_proj.stdout)
         .lines()
         .map(|s| s.trim_end_matches('\r').to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    // jq projection — same shape (`<file>:<line>:<tag>`) the
-    // loft scanner emits.  Pure-stdlib JSON parse isn't worth
-    // pulling serde into this binary just for one test; jq is
-    // already a CI dep (the bash scanner uses it).
+    // jq projection over bash output — same `<file>:<line>:<tag>`
+    // shape so the two sides are directly comparable.  Pure-stdlib
+    // JSON parse isn't worth pulling serde into this binary just
+    // for one test; jq is already a CI dep (both scanners use it).
     let bash_jq = Command::new("jq")
         .args([
             "-r",
