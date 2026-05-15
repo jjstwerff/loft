@@ -489,6 +489,45 @@ When the canonical-home item ships, the workaround comment
 gets removed in the same commit (the comment IS the
 "unwound someday" handle).
 
+### Schedule-to-fix lives in the active plan
+
+The canonical home (P-issue / `## Open work` / lib_plans
+slot) holds the **design / details / reproducer** — the
+"what's broken and how would we fix it" answer.  The active
+plan's sub-step list holds the **schedule** — the "we plan to
+land this in this phase" commitment.
+
+Two-part discipline:
+
+  1. File the issue in its canonical home (per the routing
+     table above).  That's where readers go to understand
+     the bug.
+  2. Add a sub-step row to the active plan's phase doc
+     that schedules the fix — `<step #>` + `<one-line
+     summary referencing the canonical home>` + `<files to
+     touch>` + `<test name>`.  That's where readers go to
+     see "is anyone going to actually fix this?"
+
+The sub-step row doesn't duplicate the design — it points
+at the canonical home and commits the active plan to
+landing the fix.  Without the sub-step row, the
+canonical-home entry can languish indefinitely; with it,
+the issue has a scheduled landing.
+
+This applies to NEWLY-discovered issues during a phase too:
+file in canonical home, then append a sub-step row to the
+SAME phase (10.<N+1>) before moving on.  The phase's
+sub-step table grows in flight as the work surfaces sibling
+issues; that's expected and right.
+
+Items too big to inline as a single sub-step (L effort,
+full design pass needed) get a `lib_plans/future/` slot
+created AND a tracking row in the active plan's sub-step
+list that says "track via [lib_plans/future/<NN>/](path)
+— close this sub-step when that plan ships its first
+phase."  Design lives elsewhere; schedule lives in the
+active plan.
+
 ### Why this keeps memory + ROADMAP clean
 
 - **Memory** stays small because every consumer-side
