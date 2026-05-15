@@ -343,6 +343,26 @@ impl Output<'_> {
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
+                // @P276 — same wrap for `Value::Block` whose result type is
+                // `Type::Character`.  Pre-eval lifts the block into a
+                // `let _pre_N = { … }` binding; the block body's last
+                // expression yields `i32` because the inner `_ncc_*: i32`
+                // var holds the character that way (see
+                // `Variable` context in `rust_type`).  Without this wrap
+                // the OpConvIntFromCharacter template emits
+                // `_v_v1 == char::from(0)` against an `i32` `_v_v1` and
+                // rustc rejects with E0308.  Reproducer: `(s[i] ?? '<c>')
+                // == '<c>'` lowers to `OpConvIntFromCharacter` over an
+                // `Block` (`#ncc(N):character`), and the block's emit
+                // produces `i32` even though loft types it `Character`.
+                if matches!(a.typedef, Type::Character)
+                    && let Value::Block(b) = vals[a_nr].unspan()
+                    && matches!(b.result, Type::Character)
+                {
+                    let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    res = res.replace(&name, &format!("(ops::to_char({inner}))"));
+                    continue;
+                }
                 // Text-typed parameters: all text-returning calls produce `Str` or `String`,
                 // but templates expect `&str`. Deref with `&*` to get `&str` in all cases.
                 if matches!(a.typedef, Type::Text(_))

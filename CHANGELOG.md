@@ -166,6 +166,12 @@ html = markdown::render(source, "/tag/", "/img/", "")
   no longer accumulate `stor` prefixes in their substituted form
   (a substring-of-its-own-output bug in the codegen template
   rewriter).
+- **`@P276`** — `(s[i] ?? '<c>') == '<c>'` now type-checks under
+  `--native` (was rustc E0308: the pre-evaluated block holding
+  the character lifted as `i32`, then the outer
+  `OpConvIntFromCharacter` template compared it against `char`).
+  Bind-then-compare (`c = s[i] ?? '*'; if c == 'b'`), else-if
+  chains, and ordering compares (`<`/`>`) all work too.
 - **`@P259`-`@P261`** — closure / store-allocation / vector-field
   fixes (the closure-cell trio).
 - **UTF-8** — `json_parse` now decodes 2/3/4-byte UTF-8 codepoints
