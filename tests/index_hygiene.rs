@@ -97,9 +97,16 @@ fn index_hygiene_clean() {
     );
     // Project loft's JSON Lines into the same `<file>:<line>:<tag>`
     // key shape as the bash projection below.  `jq -s` slurps
-    // the lines into an array.
+    // the lines into an array; `select(.tag)` keeps only the
+    // tag-ref rows (the loft scanner now ALSO emits `link`
+    // rows for the markdown-link bucket; those have no `.tag`
+    // field and would project to spurious `:null` entries
+    // without the filter).
     let loft_jq = Command::new("jq")
-        .args(["-rs", ".[] | \"\\(.file):\\(.line):\\(.tag)\""])
+        .args([
+            "-rs",
+            ".[] | select(.tag) | \"\\(.file):\\(.line):\\(.tag)\"",
+        ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()

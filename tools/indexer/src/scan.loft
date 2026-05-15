@@ -220,6 +220,22 @@ struct RawRef {
     ctx_escaped: text not null
 }
 
+// Markdown-link row collected during the scan.  Mirrors the
+// per-link entries scan.sh emits into the `links` bucket of
+// `index/tags.json` (`{target: [{file, line, anchor, context}, …]}`).
+// Emitted as a JSON Lines record with `link` (instead of `tag`)
+// so downstream filters (`jq 'select(.link)'`) can fan out
+// without parsing back to typed structs.  `target` is the
+// resolved repo-relative path; `anchor` is the optional
+// `#fragment` portion (empty when absent).
+struct LinkRef {
+    target: text not null,
+    file: text not null,
+    line: integer not null,
+    anchor: text not null,
+    ctx_escaped: text not null
+}
+
 // Directory names to skip during the recursive walk.  Any
 // match (basename equality) prunes the entire subtree.
 fn is_skipped_dir(name: text) -> boolean {
@@ -470,6 +486,144 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
 // (true = resolves to a real PROBLEMS row or plan dir; false
 // = `broken:` material).  Default-true for legacy refs (the
 // migration index doesn't gate them).
+// Build one JSON Lines record for a markdown link.  Same
+// shape as `emit_row` for tag refs, but keyed on `link`
+// (the resolved target path) instead of `tag`.  `anchor` is
+// emitted even when empty so the field is structurally
+// stable for downstream consumers.
+fn emit_link(target: text, file_path: text, line_no: integer, anchor: text, ctx_escaped: text) -> text {
+    "{{\"link\":\"{target}\",\"file\":\"{file_path}\",\"line\":{line_no},\"anchor\":\"{anchor}\",\"context\":\"{ctx_escaped}\"}}"
+}
+
+// Directory portion of a path.  `doc/claude/PROBLEMS.md` →
+// `doc/claude`; `CLAUDE.md` → "" (top-level).  Used by the
+// link resolver to anchor relative `../` paths against the
+// source file's directory.
+fn dir_of(p: text) -> text {
+    n = p.len();
+    i = n;
+    while i > 0 {
+        if p[i - 1] == '/' { return p[0..i - 1]; }
+        i = i - 1;
+    }
+    ""
+}
+
+// Resolve `target` relative to `base_dir` (the source file's
+// directory).  Strips leading `./` repeatedly, applies `../`
+// segments by trimming the last component of `base_dir`, then
+// joins.  Mirrors `scan.sh`'s `resolve()` awk function.
+fn resolve_link_path(base_dir: text, target: text) -> text {
+    base = base_dir;
+    t = target;
+    // Strip leading `./` repeatedly.
+    while t.len() >= 2 && t[0] == '.' && t[1] == '/' {
+        t = t[2..t.len()];
+    }
+    // Apply `../` segments — each one walks up the base dir.
+    while t.len() >= 3 && t[0] == '.' && t[1] == '.' && t[2] == '/' {
+        // Drop the last segment of base.
+        bn = base.len();
+        cut = bn;
+        while cut > 0 {
+            if base[cut - 1] == '/' { cut = cut - 1; break; }
+            cut = cut - 1;
+        }
+        if cut == bn { base = ""; }
+        else { base = base[0..cut]; }
+        t = t[3..t.len()];
+    }
+    if base == "" { return t; }
+    "{base}/{t}"
+}
+
+// Scan one line of a markdown source for `[text](target.md)` or
+// `[text](target.md#anchor)` patterns.  Skips http:// / https://
+// / mailto: / `#`-only / leading-slash absolute-from-root paths
+// (those last get a special treatment below).  Limitations of
+// this single-pass walker (deferred to a follow-up commit):
+//
+//   - No fenced-code-block state tracking.  Example links
+//     inside ```...``` blocks WILL pollute the output.  Bash
+//     scanner suppresses these by tracking ``` opens/closes
+//     per file; loft port stays single-line for now.
+//   - Only `.md` targets are matched (matches scan.sh's
+//     `\.md(#…)?` regex).
+fn scan_link_line(file_path: text, line_no: integer, line: text, base_dir: text, out: vector<LinkRef>) {
+    if is_noindex_line(line) { return; }
+    n = line.len();
+    if n < 6 { return; }
+    ctx_esc = "";
+    ctx_escaped = false;
+    i = 0;
+    while i + 5 < n {
+        // Match `](`
+        if line[i] != ']' || line[i + 1] != '(' {
+            i = i + 1;
+            continue;
+        }
+        // Find the closing `)` — bounded scan; bail at first
+        // whitespace, `(`, or end-of-line within the URL.
+        j = i + 2;
+        while j < n && line[j] != ')' && line[j] != ' ' && line[j] != '\t' { j = j + 1; }
+        if j == n || line[j] != ')' { i = i + 1; continue; }
+        inner = line[i + 2..j];
+        ilen = inner.len();
+        if ilen < 4 {
+            i = j + 1;
+            continue;
+        }
+        // Split on `#` for optional anchor.
+        anchor = "";
+        target_raw = inner;
+        h = 0;
+        found_hash = false;
+        while h < ilen {
+            if inner[h] == '#' {
+                target_raw = inner[0..h];
+                anchor = inner[h + 1..ilen];
+                found_hash = true;
+                break;
+            }
+            h = h + 1;
+        }
+        // Skip non-`.md` targets: scan.sh's regex is
+        // `\.md(#…)?`, so every link target must end `.md`
+        // before the optional `#`.  Avoids picking up `.png`
+        // / `.html` / arbitrary URL paths.
+        tlen = target_raw.len();
+        if tlen < 3 || !(target_raw[tlen - 3] == '.'
+            && target_raw[tlen - 2] == 'm' && target_raw[tlen - 1] == 'd') {
+            i = j + 1;
+            continue;
+        }
+        // Skip URL schemes.
+        if target_raw.starts_with("http://") || target_raw.starts_with("https://")
+            || target_raw.starts_with("mailto:") {
+            i = j + 1;
+            continue;
+        }
+        // Resolve.  Leading `/` means repo-rooted (strip slash);
+        // otherwise resolve against base_dir.
+        resolved = "";
+        if tlen > 0 && target_raw[0] == '/' {
+            resolved = target_raw[1..tlen];
+        } else {
+            resolved = resolve_link_path(base_dir, target_raw);
+        }
+        if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
+        // Inline the anchor escape — the previous `anchor_esc =
+        // json_escape(anchor); ...` form tripped a type-inference
+        // quirk where `anchor` ended up as `unknown(0)` from the
+        // `if`-arm reassignment, even though every assignment to
+        // `anchor` produced text.  Inline call works because the
+        // typer evaluates the call's return type independently.
+        a_esc: text = json_escape(anchor);
+        out += [LinkRef{target: resolved, file: file_path, line: line_no, anchor: a_esc, ctx_escaped: ctx_esc}];
+        i = j + 1;
+    }
+}
+
 fn emit_row(tag: text, file_path: text, line_no: integer, ctx_escaped: text, valid: boolean) -> text {
     // `{{` and `}}` produce literal `{` and `}` in a loft format
     // string (loft uses doubled braces for the brace escape).
@@ -545,11 +699,17 @@ fn is_segment_char(c: character) -> boolean {
 // Read a file's lines and scan each.  Files that fail to read
 // (binary, permissions, transient races) are silently skipped —
 // this matches scan.sh's `|| true` resilience.
-fn scan_file(file_path: text, out: vector<RawRef>) {
+fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>) {
     f = file(file_path);
     if f.format == Format.NotExists { return; }
     if f.format == Format.Directory { return; }
     src = f.content();
+    // Markdown link extraction is .md-only; computing base_dir
+    // once outside the loop avoids per-line allocation for the
+    // 99% of source files that aren't markdown.
+    is_md = file_path.ends_with(".md");
+    base_dir = "";
+    if is_md { base_dir = dir_of(file_path); }
     line_no = 1;
     start = 0;
     n = src.len();
@@ -558,6 +718,7 @@ fn scan_file(file_path: text, out: vector<RawRef>) {
         if src[i] == '\n' {
             ln = src[start..i];
             scan_line(file_path, line_no, ln, out);
+            if is_md { scan_link_line(file_path, line_no, ln, base_dir, links_out); }
             line_no = line_no + 1;
             start = i + 1;
         }
@@ -566,6 +727,7 @@ fn scan_file(file_path: text, out: vector<RawRef>) {
     if start < n {
         ln = src[start..n];
         scan_line(file_path, line_no, ln, out);
+        if is_md { scan_link_line(file_path, line_no, ln, base_dir, links_out); }
     }
 }
 
@@ -580,6 +742,7 @@ fn main() {
     valid_plans = read_valid_plans();
 
     rows: vector<RawRef> = [];
+    links: vector<LinkRef> = [];
     // Top-level indexable files (CLAUDE.md, README.md,
     // CHANGELOG.md, Cargo.toml, etc.) — iterate explicitly so
     // they don't require the recursive walker to descend from
@@ -593,14 +756,14 @@ fn main() {
             if entry.format != Format.Directory && is_indexable_ext(entry.path) {
                 p = entry.path;
                 if p.starts_with("./") { p = p[2..p.len()]; }
-                scan_file(p, rows);
+                scan_file(p, rows, links);
             }
         }
     }
     for src_root in source_roots() {
         files = walk_tree(src_root);
         for fp in files {
-            scan_file(fp, rows);
+            scan_file(fp, rows, links);
         }
     }
     // Second pass: emit JSON Lines with validity.  Validity is
@@ -610,5 +773,12 @@ fn main() {
     for r in rows {
         v = tag_is_valid(r.tag, valid_pids, valid_plans);
         println(emit_row(r.tag, r.file, r.line, r.ctx_escaped, v));
+    }
+    // Emit markdown link rows after the tag rows.  Downstream
+    // jq filters on the presence of the `link` field
+    // (`select(.link)` vs `select(.tag)`) to fan out — the
+    // mixed JSON-Lines stream stays compact enough for stdio.
+    for lr in links {
+        println(emit_link(lr.target, lr.file, lr.line, lr.anchor, lr.ctx_escaped));
     }
 }
