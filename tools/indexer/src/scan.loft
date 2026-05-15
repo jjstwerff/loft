@@ -41,6 +41,162 @@ fn source_roots() -> vector<text> {
     [".claude", ".config", "bench", "default", "doc", "lib", "scripts", "src", "tests", "tools", "examples"]
 }
 
+// ── Leaf helpers (declared first so the validators below can
+// resolve their return types without depending on loft's
+// two-pass forward-resolution).
+
+// True for ASCII digits.
+fn is_digit_leaf(c: character) -> boolean {
+    c >= '0' && c <= '9'
+}
+
+// True for `[a-zA-Z0-9_]` — the boundary class that the bash
+// scanner's `\B` / `\b` checks effectively gate against.
+fn is_word_char_leaf(c: character) -> boolean {
+    if c >= '0' && c <= '9' { return true; }
+    if c >= 'a' && c <= 'z' { return true; }
+    if c >= 'A' && c <= 'Z' { return true; }
+    c == '_'
+}
+
+// Last path segment.  Used by both walk_into (the recursive
+// file walker) and the broken-tag validator's plan-dir scan.
+fn basename_leaf(p: text) -> text {
+    n = p.len();
+    i = n;
+    while i > 0 {
+        if p[i - 1] == '/' { return p[i..n]; }
+        i = i - 1;
+    }
+    p
+}
+
+// Build the set of valid P-issue numbers from PROBLEMS.md.
+// Each row starts `| <num> | **@P<num>** — ...`; the leading
+// `^| <digits> |` is the source of truth for which P-ids
+// exist.  Returned as a `vector<text>` of bare numeric strings
+// (no `@P` prefix) — same shape scan.sh's `VALID_PIDS` uses.
+fn read_valid_pids() -> vector<text> {
+    out: vector<text> = [];
+    f = file("doc/claude/PROBLEMS.md");
+    if f.format == Format.NotExists { return out; }
+    src = f.content();
+    n = src.len();
+    line_start = 0;
+    i = 0;
+    while i <= n {
+        if i == n || src[i] == '\n' {
+            line = src[line_start..i];
+            // Match `^| <digits> |`.  Pull the digits between
+            // the two pipes.
+            ll = line.len();
+            if ll > 4 && line[0] == '|' && line[1] == ' '
+                && ll > 2 && is_digit_leaf(line[2]) {
+                j = 2;
+                while j < ll && is_digit_leaf(line[j]) { j = j + 1; }
+                if j + 2 <= ll && line[j] == ' ' && line[j + 1] == '|' {
+                    pid = line[2..j];
+                    out += [pid];
+                }
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Build the set of valid plan numbers by walking the plan
+// directories under `doc/claude/plans/` and `doc/claude/lib_plans/`.
+// Each plan's directory name starts with digits then `-` then
+// a slug (e.g., `37-tracker-index`).  Returned as bare numeric
+// strings — same shape scan.sh's `VALID_PLANS` uses.  Walks
+// the four sub-buckets (top-level / future / deferred /
+// finished) to match scan.sh.
+fn read_valid_plans() -> vector<text> {
+    out: vector<text> = [];
+    walk_plan_dirs("doc/claude/plans", out);
+    walk_plan_dirs("doc/claude/plans/future", out);
+    walk_plan_dirs("doc/claude/plans/deferred", out);
+    walk_plan_dirs("doc/claude/plans/finished", out);
+    walk_plan_dirs("doc/claude/lib_plans", out);
+    walk_plan_dirs("doc/claude/lib_plans/future", out);
+    walk_plan_dirs("doc/claude/lib_plans/deferred", out);
+    walk_plan_dirs("doc/claude/lib_plans/finished", out);
+    out
+}
+
+fn walk_plan_dirs(root: text, out: vector<text>) {
+    f = file(root);
+    if f.format == Format.NotExists { return; }
+    if f.format != Format.Directory { return; }
+    children = f.files();
+    for child in children {
+        if child.format != Format.Directory { continue; }
+        // Plan dir basenames start with digits, then `-`.
+        cp = child.path;
+        base = basename_leaf(cp);
+        bl = base.len();
+        if bl < 2 { continue; }
+        first_c = base[0];
+        if !is_digit_leaf(first_c) { continue; }
+        j = 0;
+        while j < bl && is_digit_leaf(base[j]) { j = j + 1; }
+        if j < bl {
+            sep_c = base[j];
+            if sep_c == '-' {
+                pid = base[0..j];
+                out += [pid];
+            }
+        }
+    }
+}
+
+// Linear "is in" check.  `valid_set` holds <300 entries; a
+// vector + linear scan is fine and avoids needing a hash type.
+fn set_contains(valid_set: vector<text>, needle: text) -> boolean {
+    for v in valid_set {
+        if v == needle { return true; }
+    }
+    false
+}
+
+// Classify a tag as valid (resolves to an existing PROBLEMS
+// row or plan dir) or broken.  Mirrors scan.sh's broken-tag
+// validator: `@P<n>[<letter>]` validates against PROBLEMS.md
+// row IDs (with optional letter stripped); `@PLAN<n>(-...)`
+// validates against the plan-dir number prefix (sub-phase
+// suffixes like `-04-iii.a` ignored — matches scan.sh's "v1
+// rule" of parent-plan-only validation).  Legacy bare-name
+// refs (`legacy:P<n>`, `legacy:plan-<n>`) are accepted as-is
+// (the migration index doesn't gate them — same as scan.sh).
+fn tag_is_valid(tag: text, valid_pids: vector<text>, valid_plans: vector<text>) -> boolean {
+    tlen = tag.len();
+    if tlen == 0 { return true; }
+    // Legacy refs are never marked broken.
+    if tag.starts_with("legacy:") { return true; }
+    if tag.starts_with("@PLAN") {
+        // Extract the digit prefix immediately after @PLAN.
+        i = 5;
+        if i >= tlen || !is_digit_leaf(tag[i]) { return true; }
+        j = i;
+        while j < tlen && is_digit_leaf(tag[j]) { j = j + 1; }
+        num = tag[i..j];
+        return set_contains(valid_plans, num);
+    }
+    if tag.starts_with("@P") {
+        // Extract the digit prefix; strip an optional trailing
+        // letter (`@P229b` → `229`).
+        i = 2;
+        if i >= tlen || !is_digit_leaf(tag[i]) { return true; }
+        j = i;
+        while j < tlen && is_digit_leaf(tag[j]) { j = j + 1; }
+        num = tag[i..j];
+        return set_contains(valid_pids, num);
+    }
+    true
+}
+
 // File extensions worth scanning.  Matches scan.sh's grep
 // surface (markdown + Rust + loft + manifest files + scripts).
 fn is_indexable_ext(name: text) -> boolean {
@@ -51,6 +207,17 @@ fn is_indexable_ext(name: text) -> boolean {
     if name.ends_with(".sh") { return true; }
     if name.ends_with(".py") { return true; }
     false
+}
+
+// Raw row collected during the scan.  emitted to stdout as a
+// JSON Lines record AFTER cross-referencing the tag against
+// the valid-IDs sets — at which point we can attach the
+// `valid` field directly without a re-parse round trip.
+struct RawRef {
+    tag: text not null,
+    file: text not null,
+    line: integer not null,
+    ctx_escaped: text not null
 }
 
 // Directory names to skip during the recursive walk.  Any
@@ -79,26 +246,12 @@ fn is_skipped_dir(name: text) -> boolean {
     false
 }
 
-// True for ASCII digits.
-fn is_digit(c: character) -> boolean {
-    c >= '0' && c <= '9'
-}
-
-// True for `[a-zA-Z0-9_]` — the boundary class that the bash
-// scanner's `\B` / `\b` checks effectively gate against.
-fn is_word_char(c: character) -> boolean {
-    if c >= '0' && c <= '9' { return true; }
-    if c >= 'a' && c <= 'z' { return true; }
-    if c >= 'A' && c <= 'Z' { return true; }
-    c == '_'
-}
-
-// True for `[a-zA-Z]` — used for the optional trailing letter
-// on `@P<n>[a-z]?` and the segment chars in `@PLAN-<seg>`.
-fn is_alpha(c: character) -> boolean {
-    if c >= 'a' && c <= 'z' { return true; }
-    c >= 'A' && c <= 'Z'
-}
+// Aliases that resolve to the leaf helpers near the top of
+// the file.  Kept distinct names so older callers below didn't
+// have to be renamed when the validators were added — both
+// names compile to the same body.
+fn is_digit(c: character) -> boolean { is_digit_leaf(c) }
+fn is_word_char(c: character) -> boolean { is_word_char_leaf(c) }
 
 // Walks the tree rooted at `path`, calling visit on every
 // indexable file.  Pruning happens at directory boundaries
@@ -129,17 +282,11 @@ fn walk_into(path: text, out: vector<text>) {
     }
 }
 
-// Last path segment.  Mirrors viewer's basename helper but
-// kept local so the scanner stays a single-file binary.
-fn basename_of(p: text) -> text {
-    n = p.len();
-    i = n;
-    while i > 0 {
-        if p[i - 1] == '/' { return p[i..n]; }
-        i = i - 1;
-    }
-    p
-}
+// Alias to the leaf helper at the top of the file (older
+// callers below kept their original name when the leaf was
+// extracted to fix two-pass forward-resolution for the
+// validators).
+fn basename_of(p: text) -> text { basename_leaf(p) }
 
 // True when a line carries the `<!--noindex-->` opt-out comment
 // the bash scanner uses to mute prose mentions of fake tags
@@ -161,7 +308,7 @@ fn is_noindex_line(line: text) -> boolean {
 // digit-prefix would fail).  Both patterns require a non-word
 // char (or string boundary) BEFORE the `@` to mirror the bash
 // regex's `\B` boundary check.
-fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
+fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>) {
     if is_noindex_line(line) { return; }
     n = line.len();
     if n < 3 { return; }
@@ -202,7 +349,7 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
             if j == n || !is_word_char(line[j]) {
                 tag = line[i..j];
                 if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-                out += [emit_row(tag, file_path, line_no, ctx_esc)];
+                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
                 i = j;
                 continue;
             }
@@ -234,7 +381,7 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
             if matched {
                 tag = line[i..j];
                 if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-                out += [emit_row(tag, file_path, line_no, ctx_esc)];
+                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
                 i = j;
                 continue;
             }
@@ -286,7 +433,7 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
                     bare = line[i..j];
                     tag = "legacy:{bare}";
                     if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-                    out += [emit_row(tag, file_path, line_no, ctx_esc)];
+                    out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
                     i = j;
                     continue;
                 }
@@ -306,7 +453,7 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
                 bare = line[i..j];
                 tag = "legacy:{bare}";
                 if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-                out += [emit_row(tag, file_path, line_no, ctx_esc)];
+                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
                 i = j;
                 continue;
             }
@@ -319,11 +466,16 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
 // through `json_escape`; tag and file_path can't contain JSON-
 // hostile chars (tags are alphanumeric + `.-`; paths in this
 // repo are ASCII without quotes/backslashes), so they go in
-// raw.  Kept inline-able by keeping the shape minimal.
-fn emit_row(tag: text, file_path: text, line_no: integer, ctx_escaped: text) -> text {
+// raw.  The `valid` field is the broken-tag validator's verdict
+// (true = resolves to a real PROBLEMS row or plan dir; false
+// = `broken:` material).  Default-true for legacy refs (the
+// migration index doesn't gate them).
+fn emit_row(tag: text, file_path: text, line_no: integer, ctx_escaped: text, valid: boolean) -> text {
     // `{{` and `}}` produce literal `{` and `}` in a loft format
     // string (loft uses doubled braces for the brace escape).
-    "{{\"tag\":\"{tag}\",\"file\":\"{file_path}\",\"line\":{line_no},\"context\":\"{ctx_escaped}\"}}"
+    valid_str = "true";
+    if !valid { valid_str = "false"; }
+    "{{\"tag\":\"{tag}\",\"file\":\"{file_path}\",\"line\":{line_no},\"context\":\"{ctx_escaped}\",\"valid\":{valid_str}}}"
 }
 
 // JSON-escape a text: backslash, double-quote, control chars
@@ -393,7 +545,7 @@ fn is_segment_char(c: character) -> boolean {
 // Read a file's lines and scan each.  Files that fail to read
 // (binary, permissions, transient races) are silently skipped —
 // this matches scan.sh's `|| true` resilience.
-fn scan_file(file_path: text, out: vector<text>) {
+fn scan_file(file_path: text, out: vector<RawRef>) {
     f = file(file_path);
     if f.format == Format.NotExists { return; }
     if f.format == Format.Directory { return; }
@@ -418,7 +570,16 @@ fn scan_file(file_path: text, out: vector<text>) {
 }
 
 fn main() {
-    rows: vector<text> = [];
+    // Phase 03 broken-tag validator: load valid PROBLEMS row IDs
+    // and plan-dir number prefixes upfront, then check each scanned
+    // ref against them.  Sets are passed to emit-time so each
+    // JSON-Lines record carries a `valid` boolean — downstream
+    // tooling (`./scripts/idx broken`, the viewer's red-banner
+    // surface) filters via `select(.valid == false)`.
+    valid_pids = read_valid_pids();
+    valid_plans = read_valid_plans();
+
+    rows: vector<RawRef> = [];
     // Top-level indexable files (CLAUDE.md, README.md,
     // CHANGELOG.md, Cargo.toml, etc.) — iterate explicitly so
     // they don't require the recursive walker to descend from
@@ -442,7 +603,12 @@ fn main() {
             scan_file(fp, rows);
         }
     }
+    // Second pass: emit JSON Lines with validity.  Validity is
+    // O(N × M) where N = rows (~4000) and M = valid set size
+    // (~270 pids + ~50 plans).  ~1.3M comparisons on the loft
+    // suite — well under a second on the warm-cache path.
     for r in rows {
-        println(r);
+        v = tag_is_valid(r.tag, valid_pids, valid_plans);
+        println(emit_row(r.tag, r.file, r.line, r.ctx_escaped, v));
     }
 }
