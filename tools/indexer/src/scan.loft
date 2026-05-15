@@ -197,6 +197,26 @@ fn tag_is_valid(tag: text, valid_pids: vector<text>, valid_plans: vector<text>) 
     true
 }
 
+// Scratch struct used by the bucketed emission path —
+// `sorted<TagSlot[name]>` gives us a distinct, alphabetically
+// sorted set of tag names that we can iterate to produce the
+// per-tag arrays in `index/tags.json`-shape JSON.  Same trick
+// for link targets.  Slot is a one-field wrapper because loft
+// `sorted<>` keys must come from a struct field.
+struct TagSlot { name: text not null }
+
+// Wrapper so the `sorted` collection can be a STRUCT FIELD —
+// loft's two-pass parser infers `sorted<TagSlot[name]>` more
+// reliably for struct fields than for plain locals (a local
+// `distinct_tags: sorted<TagSlot[name]> = [];` paired with a
+// later `+= [TagSlot{...}]` raised "cannot change type from
+// sorted<...> to vector<...>" because the literal append was
+// re-typed as vector mid-flight).
+struct DistinctSets {
+    tags: sorted<TagSlot[name]>,
+    links: sorted<TagSlot[name]>
+}
+
 // File extensions worth scanning.  Matches scan.sh's grep
 // surface (markdown + Rust + loft + manifest files + scripts).
 fn is_indexable_ext(name: text) -> boolean {
@@ -810,6 +830,95 @@ fn is_fence_marker(stripped: text) -> text {
     ""
 }
 
+// Emit the bucketed `index/tags.json`-shape JSON object on
+// stdout.  Sorts tag names + link targets alphabetically (jq's
+// `keys[]` always sorts so this matches scan.sh's output
+// order).  Uses sorted<TagSlot[name]> for cheap dedup +
+// alphabetical iteration.  O(N × M) per-bucket walk where
+// N = total rows (~5200) and M = distinct keys (~370 tags +
+// ~250 link targets) — sub-second on the warm-cache path.
+//
+// Schema: matches scan.sh's tags.json shape for the buckets
+// loft already produces — per-tag arrays for `@P*` / `@PLAN*` /
+// `legacy:*`, plus a `links` map of `{target: [...]}`.  Other
+// buckets (broken / broken_links / problems_open / plans_*)
+// stay in the bash post-processor for now and merge over
+// the loft output via `jq +` when the full pipeline is wired.
+fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
+                 valid_pids: vector<text>, valid_plans: vector<text>) {
+    sets = DistinctSets {};
+    for r in rows {
+        if sets.tags[r.tag] == null {
+            sets.tags += [TagSlot{name: r.tag}];
+        }
+    }
+    for lr in links {
+        if sets.links[lr.target] == null {
+            sets.links += [TagSlot{name: lr.target}];
+        }
+    }
+    println("{{");
+    // Per-tag buckets.  Comma management: emit the leading
+    // comma BEFORE each entry except the first.
+    first = true;
+    for slot in sets.tags {
+        if !first { println(","); }
+        first = false;
+        // The per-row `valid` field is intentionally omitted
+        // from the bucketed shape — every ref to a broken tag
+        // is itself broken (the validity is a property of the
+        // KEY, not the ref).  Same shape scan.sh's tags.json
+        // uses; downstream consumers (`./scripts/idx broken`,
+        // viewer's red-banner surface) reconstruct the broken
+        // set by intersecting bucket keys with valid_pids /
+        // valid_plans.
+        emit_tag_bucket(slot.name, rows);
+    }
+    // Links bucket — wrapped in `"links": { ... }`.  Mirrors
+    // scan.sh's `links` field.
+    if sets.links.len() > 0 {
+        if !first { println(","); }
+        first = false;
+        println("  \"links\": {{");
+        first_link = true;
+        for slot in sets.links {
+            if !first_link { println(","); }
+            first_link = false;
+            emit_link_bucket(slot.name, links);
+        }
+        println("");
+        println("  }}");
+    }
+    println("");
+    println("}}");
+}
+
+fn emit_tag_bucket(tag: text, rows: vector<RawRef>) {
+    print("  \"{tag}\": [");
+    inner_first = true;
+    for r in rows {
+        if r.tag == tag {
+            if !inner_first { print(","); }
+            inner_first = false;
+            print("{{\"file\":\"{r.file}\",\"line\":{r.line},\"context\":\"{r.ctx_escaped}\"}}");
+        }
+    }
+    print("]");
+}
+
+fn emit_link_bucket(target: text, links: vector<LinkRef>) {
+    print("    \"{target}\": [");
+    inner_first = true;
+    for lr in links {
+        if lr.target == target {
+            if !inner_first { print(","); }
+            inner_first = false;
+            print("{{\"file\":\"{lr.file}\",\"line\":{lr.line},\"anchor\":\"{lr.anchor}\",\"context\":\"{lr.ctx_escaped}\"}}");
+        }
+    }
+    print("]");
+}
+
 fn main() {
     // Phase 03 broken-tag validator: load valid PROBLEMS row IDs
     // and plan-dir number prefixes upfront, then check each scanned
@@ -844,6 +953,17 @@ fn main() {
         for fp in files {
             scan_file(fp, rows, links);
         }
+    }
+    // Output mode dispatch.  `LOFT_INDEX_BUCKETED=1` switches
+    // to the `index/tags.json`-shape JSON object emission
+    // (per-tag arrays + `links` map); the default stays JSON
+    // Lines (one record per match) so the existing test gate
+    // and downstream consumers (`./scripts/idx`, the viewer's
+    // disk fallback) keep working unchanged.
+    bucketed = env_variable("LOFT_INDEX_BUCKETED");
+    if bucketed == "1" {
+        emit_bucketed(rows, links, valid_pids, valid_plans);
+        return;
     }
     // Second pass: emit JSON Lines with validity.  Validity is
     // O(N × M) where N = rows (~4000) and M = valid set size
