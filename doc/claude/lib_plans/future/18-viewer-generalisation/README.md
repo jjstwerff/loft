@@ -121,6 +121,7 @@ Same engine renders Kestrel's branch-review dashboard.
 | 5 | **Consumer shim + docs** | S | Document the convention surface in `lib/viewer/README.md` — what shapes the viewer requires from a consumer, and the `.viewer.toml` schema.  Example minimal `tools/viewer/main.loft` that loads config + invokes the engine.  Loft's `tools/viewer/main.loft` becomes one of these shims. |
 | 6 | **Java project consumer** | S | Stand up the viewer in the user's active Java project.  Validates the convention surface against a real non-loft consumer.  Likely surfaces 1-2 small config gaps that get fed back into phases 1-5. |
 | 7 | **moros project consumer** | S | Stand up the viewer in the moros project.  Second validation; both consumers should converge on the same `lib/viewer/` API. |
+| 8 | **Extract `lib/viewer/` to its own GitHub repo** | M | Move `lib/viewer/` source out of the loft monorepo into a standalone repo (e.g. `loft-viewer` / `branch-viewer`).  Loft consumes it as a package dependency via `loft.toml`; the Java + moros consumers do the same.  Independent release cadence — the viewer can ship without waiting for a loft release.  Includes: history-preserving `git filter-repo` extraction, dedicated CI, README aimed at outside consumers (not loft developers), versioning policy, contribution-guide entry for "I want a feature my project needs."  Pre-requisite: phases 6 + 7 stable so the convention surface is validated by two real consumers BEFORE the repo split. |
 
 ## Acceptance
 
@@ -132,10 +133,14 @@ Same engine renders Kestrel's branch-review dashboard.
   branch dashboard with `~30 lines` of project-specific
   loft + a `.viewer.toml`.
 - moros project consumer ditto.
-- All three consumers exercise the same `lib/viewer/`
-  binary surface — no per-consumer forks of viewer code.
-- Documented convention surface in `lib/viewer/README.md`
-  matches what all three consumers depend on.
+- All three consumers exercise the same viewer binary
+  surface — no per-consumer forks of viewer code.
+- Documented convention surface in viewer README matches
+  what all three consumers depend on.
+- Phase 8 acceptance: viewer lives in its own GitHub repo
+  with history preserved, independent CI, and consumers
+  pull it via `loft.toml` dependency.  Outside contributors
+  can land features without commit access to the loft repo.
 
 ## Risks
 
@@ -146,6 +151,8 @@ Same engine renders Kestrel's branch-review dashboard.
 | Java project's issue tracker shape diverges from the convention | If divergence is small (e.g., 5 columns instead of 4), absorb via config.  If divergence is large (GitHub Issues integration), that's outside scope — Java project uses a different tool. |
 | Theme assumption (Engineering Notebook) doesn't fit Java project's brand | Phase 4 keeps theme baked.  If a consumer needs a different theme, follow-up phase ships theme presets (out of scope here). |
 | Two consumers in parallel surface contradictory config needs | Sequence: ship phase 6 (Java) first, refine config based on findings, THEN ship phase 7 (moros).  One-at-a-time validation. |
+| Java consumer (phase 6) lives on a different laptop | The user can drive Claude Code on that laptop directly — no remote debugging or cross-machine state shipping needed.  Phase 6 work happens IN the Java project's checkout via the same workflow loft uses. |
+| Phase 8 (own repo) breaks loft's dev loop if extracted too early | Sequence: phases 6 + 7 must ship and stabilise before phase 8 starts.  Once two consumers have validated the convention surface AND `lib/viewer/` is the only place the engine lives, the repo split is mechanical (`git filter-repo` preserving history). |
 
 ## Out of scope
 
@@ -169,18 +176,18 @@ fixes.  Phase 7 ships the moros consumer once the Java
 consumer is stable.
 
 The discoverability cleanups in
-[`plans/future/40-viewer-discoverability/`](../../plans/future/40-viewer-discoverability/README.md)
+[`plans/future/40-viewer-discoverability/`](../../../plans/future/40-viewer-discoverability/README.md)
 should land BEFORE this plan starts — the cleaner the
 existing viewer, the cleaner the extraction.
 
 ## Cross-references
 
-- [`@PLAN35`](../../plans/finished/35-branch-review-viewer/README.md)
+- [`@PLAN35`](../../../plans/finished/35-branch-review-viewer/README.md)
   — the original viewer plan (shipped).  This plan is the
   generalisation arc that extracts the engine.
-- [`plans/future/40-viewer-discoverability/`](../../plans/future/40-viewer-discoverability/README.md)
+- [`plans/future/40-viewer-discoverability/`](../../../plans/future/40-viewer-discoverability/README.md)
   — the small cleanup plan that lands first.
-- [`@PLAN37`](../../plans/37-tracker-index/README.md) — the
+- [`@PLAN37`](../../../plans/37-tracker-index/README.md) — the
   tracker indexer the viewer reads.  Indexer also gets
   config-parameterised in phase 3 so other consumers can
   run their own.
