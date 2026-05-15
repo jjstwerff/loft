@@ -193,6 +193,7 @@ First-time-user experience, daily ergonomics, IDE polish.
 | W-warn | Developer warnings (Clippy-inspired) | M | ✓ | lib_plans/future/05-game-infra/README.md |
 | L1 | Error recovery after token failures | M | ✓ | (needs plan promotion) |
 | (cross) | Branch-aware doc + code review viewer (loft binary) | M | ✓ | plans/35-branch-review-viewer/README.md |
+| DOG.0–11 | Dogfood-driven loft + stdlib enhancements (12 phases — codegen quirks, parser/lexer fixes, `vector.sort()`, JSON emit, path/text/hash gaps, `lib/process/`, `lib/fs_watch/`) | XS–L per phase | ✓ | plans/future/39-dogfood-enhancements/README.md |
 
 ### IDE editing surface
 
