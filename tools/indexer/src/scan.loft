@@ -259,6 +259,13 @@ fn is_skipped_dir(name: text) -> boolean {
     // them because they're untracked, but the loft walker would
     // descend into them and re-index every loft source twice.
     if name == "worktrees" { return true; }
+    // `pkg` directories hold WASM / package build output
+    // (`loft.js` / `loft_bg.wasm` / generated README).  The
+    // generated README contains relative links anchored to
+    // the wrong root and would surface as false-positive
+    // broken links — bash's `git ls-files` skips these
+    // (they're gitignored); loft mirrors via the dir name.
+    if name == "pkg" { return true; }
     false
 }
 
@@ -490,9 +497,26 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
 // shape as `emit_row` for tag refs, but keyed on `link`
 // (the resolved target path) instead of `tag`.  `anchor` is
 // emitted even when empty so the field is structurally
-// stable for downstream consumers.
-fn emit_link(target: text, file_path: text, line_no: integer, anchor: text, ctx_escaped: text) -> text {
-    "{{\"link\":\"{target}\",\"file\":\"{file_path}\",\"line\":{line_no},\"anchor\":\"{anchor}\",\"context\":\"{ctx_escaped}\"}}"
+// stable for downstream consumers.  `valid` is the broken-
+// link validator's verdict — true = target file exists,
+// false = `broken_links:` material.
+fn emit_link(target: text, file_path: text, line_no: integer, anchor: text, ctx_escaped: text, valid: boolean) -> text {
+    valid_str = "true";
+    if !valid { valid_str = "false"; }
+    "{{\"link\":\"{target}\",\"file\":\"{file_path}\",\"line\":{line_no},\"anchor\":\"{anchor}\",\"context\":\"{ctx_escaped}\",\"valid\":{valid_str}}}"
+}
+
+// True when the link's resolved target file exists on disk.
+// Anchor (`#fragment`) is ignored — only the path is checked
+// (matches scan.sh's broken_links behaviour, which validates
+// the file's presence but doesn't try to validate the
+// fragment against the target's heading slugs).  Empty
+// targets (intra-file `#anchor` links the scanner already
+// filters out) wouldn't reach here, but defaulting to true
+// keeps the function total.
+fn link_target_exists(target: text) -> boolean {
+    if target == "" { return true; }
+    file(target).format != Format.NotExists
 }
 
 // Directory portion of a path.  `doc/claude/PROBLEMS.md` →
@@ -706,10 +730,22 @@ fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>) {
     src = f.content();
     // Markdown link extraction is .md-only; computing base_dir
     // once outside the loop avoids per-line allocation for the
-    // 99% of source files that aren't markdown.
+    // 99% of source files that aren't markdown.  Fenced-code-
+    // block state (`in_fence`) is also .md-only; tracked here
+    // so example links inside ```...``` or ~~~ blocks (which
+    // illustrate syntax, not real refs) don't pollute the
+    // links bucket.  Mirrors scan.sh's `in_fence` awk variable
+    // — a fence opens on a stripped line starting with ``` or
+    // ~~~, closes on a matching marker, and absorbs every
+    // intermediate line.  Tag scanning (`scan_line`) is NOT
+    // gated on fence state — code-block tag refs like
+    // `// @P259 fix lands here` inside a Rust snippet ARE
+    // intentional indices.
     is_md = file_path.ends_with(".md");
     base_dir = "";
     if is_md { base_dir = dir_of(file_path); }
+    in_fence = false;
+    fence_marker = "";
     line_no = 1;
     start = 0;
     n = src.len();
@@ -718,7 +754,23 @@ fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>) {
         if src[i] == '\n' {
             ln = src[start..i];
             scan_line(file_path, line_no, ln, out);
-            if is_md { scan_link_line(file_path, line_no, ln, base_dir, links_out); }
+            if is_md {
+                stripped = lstrip_ws(ln);
+                fence_open_close = is_fence_marker(stripped);
+                if in_fence {
+                    if fence_open_close == fence_marker {
+                        in_fence = false;
+                        fence_marker = "";
+                    }
+                } else {
+                    if fence_open_close != "" {
+                        in_fence = true;
+                        fence_marker = fence_open_close;
+                    } else {
+                        scan_link_line(file_path, line_no, ln, base_dir, links_out);
+                    }
+                }
+            }
             line_no = line_no + 1;
             start = i + 1;
         }
@@ -727,8 +779,35 @@ fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>) {
     if start < n {
         ln = src[start..n];
         scan_line(file_path, line_no, ln, out);
-        if is_md { scan_link_line(file_path, line_no, ln, base_dir, links_out); }
+        if is_md && !in_fence {
+            stripped = lstrip_ws(ln);
+            if is_fence_marker(stripped) == "" {
+                scan_link_line(file_path, line_no, ln, base_dir, links_out);
+            }
+        }
     }
+}
+
+// Strip leading ASCII whitespace (spaces + tabs).  Cheap;
+// only used for fence-marker detection.
+fn lstrip_ws(s: text) -> text {
+    n = s.len();
+    i = 0;
+    while i < n && (s[i] == ' ' || s[i] == '\t') { i = i + 1; }
+    if i == 0 { return s; }
+    s[i..n]
+}
+
+// Returns "```" or "~~~" if `stripped` opens or closes a
+// fenced code block (line begins with three or more of
+// either character); "" otherwise.  Mirrors scan.sh's
+// `substr(stripped, 1, 3) == "\`\`\`"` check.
+fn is_fence_marker(stripped: text) -> text {
+    n = stripped.len();
+    if n < 3 { return ""; }
+    if stripped[0] == '`' && stripped[1] == '`' && stripped[2] == '`' { return "```"; }
+    if stripped[0] == '~' && stripped[1] == '~' && stripped[2] == '~' { return "~~~"; }
+    ""
 }
 
 fn main() {
@@ -778,7 +857,16 @@ fn main() {
     // jq filters on the presence of the `link` field
     // (`select(.link)` vs `select(.tag)`) to fan out — the
     // mixed JSON-Lines stream stays compact enough for stdio.
+    // Validity here is per-row file existence: the target was
+    // already resolved repo-relative by scan_link_line, so
+    // `file(target).format != NotExists` is the same check
+    // scan.sh's broken_links pass uses.  Cached lookups would
+    // help (~1300 links over ~250 distinct targets) but for an
+    // MVP the per-row file() call is fast enough — the loft
+    // file() primitive's stat path is sub-microsecond on a
+    // warm cache.
     for lr in links {
-        println(emit_link(lr.target, lr.file, lr.line, lr.anchor, lr.ctx_escaped));
+        v = link_target_exists(lr.target);
+        println(emit_link(lr.target, lr.file, lr.line, lr.anchor, lr.ctx_escaped, v));
     }
 }
