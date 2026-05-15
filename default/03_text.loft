@@ -8,6 +8,25 @@
 pub fn starts_with(self: text, value: text) -> boolean;
 #rust"@self.starts_with(@value)"
 #pure
+// Returns true if self contains `prefix` starting at byte position
+// `pos`.  Sugar over `self[pos..pos + prefix.len()] == prefix` for
+// the common "is this token at this offset?" pattern in scanners /
+// parsers.  Returns false (not an error) when pos + prefix.len()
+// exceeds self.len() — same shape as `starts_with` for the
+// "prefix too long for input" case.
+//
+// Added in @PLAN37 phase 10.5 — closes a stdlib gap surfaced by
+// scan.loft's @PLAN matcher doing `line[i+1] == 'P' && line[i+2]
+// == 'L' && line[i+3] == 'A' && line[i+4] == 'N'` per-char instead
+// of `line.starts_with_at(i, "PLAN")`.
+pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean {
+  pl = prefix.len();
+  sl = self.len();
+  if pos < 0 { return false; }
+  if pos + pl > sl { return false; }
+  self[pos..pos + pl] == prefix
+}
+#pure
 // Returns true if self ends with value. Use for suffix matching (e.g., file extension checks).
 pub fn ends_with(self: text, value: text) -> boolean;
 #rust"@self.ends_with(@value)"
