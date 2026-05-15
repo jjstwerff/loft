@@ -5,7 +5,88 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 07 — Loft-native scanner + CLI + file-event monitor
 
-**Status:** Open
+**Status:** MVP shipped 2026-05-15 (single-shot tag scanner).
+Continuous-mode `--watch` + WebSocket daemon + CLI client +
+JSON emission deferred to follow-up commits.
+
+## What the MVP shipped
+
+`tools/indexer/src/scan.loft` — a ~225-line loft program that:
+
+- Walks a fixed list of source roots (`doc`, `default`, `lib`,
+  `src`, `tests`, `tools`, `examples`) plus the top-level
+  indexable files (`CLAUDE.md`, `README.md`, `Cargo.toml`,
+  etc.).
+- Skips `target/` / `.git/` / `node_modules/` / `.loft/` /
+  `bin/` / `state/` subtrees.
+- Indexable extensions: `.md`, `.rs`, `.loft`, `.toml`,
+  `.sh`, `.py` — same set as `tools/indexer/scan.sh`.
+- Honors the `<!--noindex-->` opt-out marker.
+- Matches the bash regex's `\b` discipline: `@P229bing` and
+  `@PLAN37foo` both fail (no boundary), `@P259` and
+  `@PLAN35-04-iii.a` succeed.
+
+Build pipeline: `make index-loft` runs the scanner via
+`loft --native --lib lib/` and strips the loft compiler's
+warning preamble so stdout is just `<file>:<line>:<tag>` rows.
+
+Test gate: `tests/index_hygiene.rs::index_hygiene_clean`
+(extended) refreshes the bash index, runs `make index-loft`,
+diffs the two row sets after filtering loft to files bash
+also indexed (the bash scanner's `git ls-files` only sees
+tracked files, so the filter avoids false positives on
+in-flight untracked files).  Both scanners agree at commit
+time on the same set of references.
+
+## Loft gaps surfaced
+
+Three native-codegen / language gaps surfaced during the
+MVP exercise.  All had clean in-loft workarounds, so they're
+documented here as the trio phase 07 found rather than
+filed as P-issues:
+
+1. **`const vector<text>` at module scope crashes native** —
+   emit reads `stores.const_refs[565]` from a zero-length
+   slice.  Worked around by returning the literal from a
+   plain `fn source_roots() -> vector<text>`.
+2. **`s[i] ?? '<char>'` mis-types in chained comparison** —
+   emitted Rust has `_v_v1 == char::from(0)` where one side
+   is `i32` and the other is `char`, rustc E0308.  Worked
+   around by removing the `??` guards and accepting the
+   "may produce null" warnings — every index is preceded
+   by an explicit `i < n` guard so runtime is safe.
+3. **No `\0` character escape in loft lexer** — only `\n`,
+   `\t`, `\r`, `\"`, `\'`, `\\` are supported.  Not
+   blocking; would file as a small loft enhancement when
+   the bug-filing budget allows.
+
+These will be promoted to P-issues if a future phase trips
+the same edges.
+
+## What's still open
+
+The MVP is the foundation; remaining work for the full phase:
+
+- **JSON emission** — produce the same `index/tags.json`
+  shape (per-tag arrays + `legacy:` buckets + `broken` +
+  `links` + `problems_open` + `plans_*`), so `bin/loft-index`
+  becomes a drop-in replacement for `tools/indexer/scan.sh`.
+- **`lib/fs_watch/`** — file-event watcher API for `--watch`
+  continuous mode.  Needs host-bridge native lib (inotify
+  on Linux, kqueue on macOS, ReadDirectoryChangesW on
+  Windows).
+- **WebSocket daemon** — wire `lib/server`'s WebSocket path
+  for live index subscription.
+- **`tools/indexer/idx.loft`** — loft port of the bash
+  `scripts/idx` CLI.  Talks to the daemon over the
+  WebSocket.
+- **Standalone binary build** — `bin/loft-index` and
+  `bin/loft-idx` as standalone artifacts (currently the
+  scanner runs via `loft --native --lib lib/ scan.loft`).
+
+Each of the above can land as its own commit.
+
+---
 
 ## Goal
 

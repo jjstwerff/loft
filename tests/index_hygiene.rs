@@ -77,6 +77,98 @@ fn index_hygiene_clean() {
          See: doc/claude/plans/37-tracker-index/03-broken-validator.md"
     );
 
+    // 2.5 Phase 07 (MVP) — loft-native scanner finds the same
+    // set of `<file>:<line>:<tag>` rows as `scan.sh`.  Drift
+    // means either backend has gained or lost a pattern;
+    // investigate before suppressing.  Both views see the SAME
+    // tree state because step 1 just re-ran `make index` over
+    // the live filesystem (and bash's `git ls-files` only sees
+    // tracked files — so this test only catches drift on
+    // committed code, not in-flight edits).
+    let loft_scan = Command::new("make")
+        .arg("index-loft")
+        .output()
+        .expect("failed to spawn `make index-loft`");
+    assert!(
+        loft_scan.status.success(),
+        "make index-loft exited {:?}\nstderr:\n{}",
+        loft_scan.status.code(),
+        String::from_utf8_lossy(&loft_scan.stderr)
+    );
+    let loft_rows: std::collections::BTreeSet<String> = String::from_utf8_lossy(&loft_scan.stdout)
+        .lines()
+        .map(|s| s.trim_end_matches('\r').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    // jq projection — same shape (`<file>:<line>:<tag>`) the
+    // loft scanner emits.  Pure-stdlib JSON parse isn't worth
+    // pulling serde into this binary just for one test; jq is
+    // already a CI dep (the bash scanner uses it).
+    let bash_jq = Command::new("jq")
+        .args([
+            "-r",
+            "to_entries[] | select(.key | startswith(\"@\")) | .key as $k | .value[] | \"\\(.file):\\(.line):\\($k)\"",
+            "index/tags.json",
+        ])
+        .output()
+        .expect("failed to spawn `jq` — install jq, or skip this test in environments without it");
+    assert!(
+        bash_jq.status.success(),
+        "jq projection over index/tags.json exited {:?}",
+        bash_jq.status.code()
+    );
+    let bash_rows: std::collections::BTreeSet<String> = String::from_utf8_lossy(&bash_jq.stdout)
+        .lines()
+        .map(|s| s.trim_end_matches('\r').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    // Bash uses `git ls-files`; loft walks the filesystem.  The
+    // diff is dominated by untracked files during local dev —
+    // filter the loft set to files bash also indexed (i.e., the
+    // tracked set inferred from bash's own output).  This keeps
+    // the assertion meaningful for committed code without
+    // failing every time someone touches an untracked file.
+    let bash_files: std::collections::HashSet<String> = bash_rows
+        .iter()
+        .filter_map(|row| row.split(':').next().map(|s| s.to_string()))
+        .collect();
+    let loft_rows_tracked: std::collections::BTreeSet<String> = loft_rows
+        .iter()
+        .filter(|row| {
+            row.split(':')
+                .next()
+                .is_some_and(|f| bash_files.contains(f))
+        })
+        .cloned()
+        .collect();
+    let only_loft: Vec<&String> = loft_rows_tracked.difference(&bash_rows).collect();
+    let only_bash: Vec<&String> = bash_rows.difference(&loft_rows_tracked).collect();
+    assert!(
+        only_loft.is_empty() && only_bash.is_empty(),
+        "loft scanner ({}) and bash scanner ({}) disagree (after filtering loft to tracked files).\n\
+         only-in-loft ({}):\n{}\n\
+         only-in-bash ({}):\n{}\n\
+         Fix: either patch tools/indexer/src/scan.loft or tools/indexer/scan.sh\n\
+         so both find the same set.\n\
+         See: doc/claude/plans/37-tracker-index/07-loft-native-scanner.md",
+        loft_rows_tracked.len(),
+        bash_rows.len(),
+        only_loft.len(),
+        only_loft
+            .iter()
+            .take(10)
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        only_bash.len(),
+        only_bash
+            .iter()
+            .take(10)
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+
     // 3. Phase 09 — broken markdown-link refs.
     let broken_links = Command::new("./scripts/idx")
         .arg("broken-links")

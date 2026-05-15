@@ -356,6 +356,29 @@ index:
 index-install-hook:
 	@./tools/indexer/install-hook.sh
 
+# index-loft (@PLAN37 phase 07 MVP) — runs the loft-native
+# scanner via `loft --native --lib lib/`.  Single-shot mode:
+# walks the source roots, prints `<file>:<line>:<tag>` for
+# every @P / @PLAN reference.  Strips the loft compiler's
+# warning preamble (`warning:` / source-pointer block) so
+# stdout is just the scanner's output.
+#
+# This target is the proof-of-concept that loft can host the
+# tag scan; the canonical `make index` still drives `scan.sh`
+# until the loft scanner emits the full `tags.json` shape
+# (problems_open / plans_* / broken / links buckets).
+#
+# Test harness: `tests/index_hygiene.rs::loft_scanner_matches_bash`
+# diffs the loft output against scan.sh's `tags.json` content
+# to catch drift.
+index-loft:
+	@if [ ! -x target/release/loft ]; then \
+	    echo "host loft binary missing; run: cargo build --release"; exit 1; \
+	fi
+	@./target/release/loft --lib lib/ tools/indexer/src/scan.loft 2>/dev/null \
+	    | grep -vE '^warning|^   *--|^   *\||^[0-9]+ \|' \
+	    | grep -v '^$$'
+
 view: view-refresh
 	@if [ ! -f tools/viewer/src/main.loft ]; then \
 	    echo "loft-view source missing; expected tools/viewer/src/main.loft"; \

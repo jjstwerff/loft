@@ -1,0 +1,278 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN37 phase 07 — loft-native tracker-index scanner.
+//
+// Single-shot mode (this commit): walks a fixed set of source
+// roots, finds every `@P<n>` and `@PLAN<n>(-<seg>)*` reference
+// in indexable files, and prints one `<file>:<line>:<tag>`
+// row per match to stdout.
+//
+// Subsequent commits add: JSON emission matching `tools/indexer/
+// scan.sh`'s `index/tags.json` shape, problems_open / plans_*
+// buckets, broken-tag validation, fs_watch continuous mode,
+// WebSocket daemon for `tools/indexer/bin/loft-idx`.
+//
+// The bash scanner remains the canonical bootstrap path —
+// `make index` still drives `scan.sh`.  This binary is the
+// loft-side equivalent that `make index-build` produces; future
+// `make index-watch` will keep it running.
+
+// Roots returned from a fn rather than a `const vector<text>`
+// because the native backend doesn't yet wire module-scope
+// vector consts into `stores.const_refs` — emit reads index 565
+// from a zero-length slice and crashes.  Pre-existing native
+// gap; will file a P-issue separately.  The fn-local literal
+// works in both backends and the call cost is one allocation
+// per `main()` invocation, which is fine for a single-shot
+// scanner.
+fn source_roots() -> vector<text> {
+    ["doc", "default", "lib", "src", "tests", "tools", "examples"]
+}
+
+// File extensions worth scanning.  Matches scan.sh's grep
+// surface (markdown + Rust + loft + manifest files + scripts).
+fn is_indexable_ext(name: text) -> boolean {
+    if name.ends_with(".md") { return true; }
+    if name.ends_with(".rs") { return true; }
+    if name.ends_with(".loft") { return true; }
+    if name.ends_with(".toml") { return true; }
+    if name.ends_with(".sh") { return true; }
+    if name.ends_with(".py") { return true; }
+    false
+}
+
+// Directory names to skip during the recursive walk.  Any
+// match (basename equality) prunes the entire subtree.
+fn is_skipped_dir(name: text) -> boolean {
+    if name == "target" { return true; }
+    if name == ".git" { return true; }
+    if name == "node_modules" { return true; }
+    if name == ".loft" { return true; }
+    if name == "bin" { return true; }
+    if name == "state" { return true; }
+    false
+}
+
+// True for ASCII digits.
+fn is_digit(c: character) -> boolean {
+    c >= '0' && c <= '9'
+}
+
+// True for `[a-zA-Z0-9_]` — the boundary class that the bash
+// scanner's `\B` / `\b` checks effectively gate against.
+fn is_word_char(c: character) -> boolean {
+    if c >= '0' && c <= '9' { return true; }
+    if c >= 'a' && c <= 'z' { return true; }
+    if c >= 'A' && c <= 'Z' { return true; }
+    c == '_'
+}
+
+// True for `[a-zA-Z]` — used for the optional trailing letter
+// on `@P<n>[a-z]?` and the segment chars in `@PLAN-<seg>`.
+fn is_alpha(c: character) -> boolean {
+    if c >= 'a' && c <= 'z' { return true; }
+    c >= 'A' && c <= 'Z'
+}
+
+// Walks the tree rooted at `path`, calling visit on every
+// indexable file.  Pruning happens at directory boundaries
+// (is_skipped_dir).  visit receives the relative path so
+// downstream code can write it as-is into the index.
+fn walk_tree(root: text) -> vector<text> {
+    out: vector<text> = [];
+    walk_into(root, out);
+    out
+}
+
+fn walk_into(path: text, out: vector<text>) {
+    f = file(path);
+    if f.format == Format.NotExists { return; }
+    if f.format == Format.Directory {
+        for child in f.files() {
+            cp = child.path;
+            base = basename_of(cp);
+            if child.format == Format.Directory {
+                if is_skipped_dir(base) { continue; }
+                walk_into(cp, out);
+            } else if is_indexable_ext(cp) {
+                out += [cp];
+            }
+        }
+    } else if is_indexable_ext(path) {
+        out += [path];
+    }
+}
+
+// Last path segment.  Mirrors viewer's basename helper but
+// kept local so the scanner stays a single-file binary.
+fn basename_of(p: text) -> text {
+    n = p.len();
+    i = n;
+    while i > 0 {
+        if p[i - 1] == '/' { return p[i..n]; }
+        i = i - 1;
+    }
+    p
+}
+
+// True when a line carries the `<!--noindex-->` opt-out comment
+// the bash scanner uses to mute prose mentions of fake tags
+// (regex examples, doc explainers).  Lightweight contains-check;
+// formal HTML-comment parsing isn't required because the
+// convention is a single inline marker.
+fn is_noindex_line(line: text) -> boolean {
+    line.find("<!--noindex-->") >= 0
+}
+
+// Scan one line for tracker tags, append `<file>:<line>:<tag>`
+// rows to out.  Two pattern families:
+//
+//   @PLAN<digits>(-<segment>)*    where <segment> = [a-zA-Z0-9._]+
+//   @P<digits>[a-z]?              not preceded by [a-zA-Z0-9_]
+//
+// `@PLAN` is checked first so `@PLAN35` doesn't fall into the
+// `@P<digit>` branch (where `LAN35` would be left over as the
+// digit-prefix would fail).  Both patterns require a non-word
+// char (or string boundary) BEFORE the `@` to mirror the bash
+// regex's `\B` boundary check.
+fn scan_line(file_path: text, line_no: integer, line: text, out: vector<text>) {
+    if is_noindex_line(line) { return; }
+    n = line.len();
+    if n < 3 { return; }
+    i = 0;
+    while i < n {
+        c = line[i];
+        if c != '@' {
+            i = i + 1;
+            continue;
+        }
+        // Note: scan.sh's regex is `@P\d+...\b` — the trailing
+        // `\b` is enforced by our digit-then-non-alpha consume,
+        // but the LEADING `@` has no boundary constraint.  So
+        // `user@P259.com` matches by design — preserves whatever
+        // the bash scanner finds (a leading `\B` would reject
+        // those, but bash doesn't).
+        // Try @PLAN first.
+        if i + 6 <= n && (line[i + 1]) == 'P' && (line[i + 2]) == 'L'
+            && (line[i + 3]) == 'A' && (line[i + 4]) == 'N' && is_digit(line[i + 5]) {
+            // Consume @PLAN<digits>(-<segment>)*
+            j = i + 5;
+            while j < n && is_digit(line[j]) { j = j + 1; }
+            // Optional `-<segment>` repeats.
+            while j + 1 < n && (line[j]) == '-' && is_segment_char(line[j + 1]) {
+                j = j + 1;
+                while j < n && is_segment_char(line[j]) { j = j + 1; }
+            }
+            // Trailing `\b` check: the next char (if any) must
+            // be a non-word char.  `@PLAN37foo` has `f` (word)
+            // after the digits with no `-` separator → no
+            // boundary, no match.
+            if j == n || !is_word_char(line[j]) {
+                tag = line[i..j];
+                out += ["{file_path}:{line_no}:{tag}"];
+                i = j;
+                continue;
+            }
+            // Trailing boundary failed; skip past `@PLAN` and resume.
+            i = i + 5;
+            continue;
+        }
+        // Fall back to @P<digits>[a-z]?
+        if i + 3 <= n && (line[i + 1]) == 'P' && is_digit(line[i + 2]) {
+            j = i + 2;
+            while j < n && is_digit(line[j]) { j = j + 1; }
+            // Mirror bash regex `@P[0-9]+[a-z]?\b`.  After the
+            // digits there are three possibilities:
+            //   1. Next char is non-word → match `@P<digits>`.
+            //   2. Next char is `[a-z]` and the char AFTER that
+            //      is non-word → match `@P<digits><letter>`.
+            //   3. Otherwise → no match (`@P229bing` and `@P229_x`
+            //      both fail because `\b` can't be satisfied).
+            matched = false;
+            if j == n {
+                matched = true;
+            } else if !is_word_char(line[j]) {
+                matched = true;
+            } else if line[j] >= 'a' && line[j] <= 'z'
+                && (j + 1 == n || !is_word_char(line[j + 1])) {
+                j = j + 1;
+                matched = true;
+            }
+            if matched {
+                tag = line[i..j];
+                out += ["{file_path}:{line_no}:{tag}"];
+                i = j;
+                continue;
+            }
+            // Failed: skip past the `@P` and resume scanning.
+            i = i + 2;
+            continue;
+        }
+        i = i + 1;
+    }
+}
+
+// Segment-char class for `@PLAN-<segment>` continuations.  Bash
+// scanner uses `[a-zA-Z0-9._]+`.
+fn is_segment_char(c: character) -> boolean {
+    if is_word_char(c) { return true; }
+    c == '.'
+}
+
+// Read a file's lines and scan each.  Files that fail to read
+// (binary, permissions, transient races) are silently skipped —
+// this matches scan.sh's `|| true` resilience.
+fn scan_file(file_path: text, out: vector<text>) {
+    f = file(file_path);
+    if f.format == Format.NotExists { return; }
+    if f.format == Format.Directory { return; }
+    src = f.content();
+    line_no = 1;
+    start = 0;
+    n = src.len();
+    i = 0;
+    while i < n {
+        if src[i] == '\n' {
+            ln = src[start..i];
+            scan_line(file_path, line_no, ln, out);
+            line_no = line_no + 1;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if start < n {
+        ln = src[start..n];
+        scan_line(file_path, line_no, ln, out);
+    }
+}
+
+fn main() {
+    rows: vector<text> = [];
+    // Top-level indexable files (CLAUDE.md, README.md,
+    // CHANGELOG.md, Cargo.toml, etc.) — iterate explicitly so
+    // they don't require the recursive walker to descend from
+    // `.` (which would re-walk every source root and double-count).
+    // file(".").files() returns paths with a leading `./`; strip
+    // it so the output matches the bash scanner's bare-relative
+    // shape (`CLAUDE.md`, not `./CLAUDE.md`).
+    root = file(".");
+    if root.format == Format.Directory {
+        for entry in root.files() {
+            if entry.format != Format.Directory && is_indexable_ext(entry.path) {
+                p = entry.path;
+                if p.starts_with("./") { p = p[2..p.len()]; }
+                scan_file(p, rows);
+            }
+        }
+    }
+    for src_root in source_roots() {
+        files = walk_tree(src_root);
+        for fp in files {
+            scan_file(fp, rows);
+        }
+    }
+    for r in rows {
+        println(r);
+    }
+}
