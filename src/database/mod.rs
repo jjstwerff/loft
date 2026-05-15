@@ -197,10 +197,11 @@ pub struct Stores {
     /// that definition isn't a constant.  Populated by
     /// `compile::build_const_vectors` (interpreter path) or by the
     /// `init()` function emitted by `src/generation/` (native path).
-    /// Mirrors `State.const_refs` so the native codegen's substitution
-    /// `s.const_refs` → `stores.const_refs` works from any function
-    /// context that only has `&mut Stores` (which is every native
-    /// function — native code doesn't carry a State reference).
+    /// Mirrors `State.const_refs` so native code's
+    /// `stores.const_ref_at_runtime(d_nr)` accessor (called via the
+    /// substituted `OpConstRef` template — see
+    /// `src/generation/calls.rs`) resolves from any function context
+    /// that only has `&mut Stores`.
     pub const_refs: Vec<DbRef>,
     /// Errors from the last `Type.parse()` call, read via `s#errors`.
     pub last_parse_errors: Vec<String>,
@@ -1136,6 +1137,30 @@ impl Stores {
         let len = store.get_u32_raw(rec, 4);
         let ptr = unsafe { store.ptr.offset(rec as isize * 8 + 8) };
         crate::keys::Str { ptr, len }
+    }
+
+    /// `_runtime` peer of [`Self::string_from_const_store`] — the
+    /// native codegen substitution rewrites
+    /// `s.string_from_const_store(` to `stores.string_from_const_store_runtime(`
+    /// to break the substring chain (see `const_ref_at_runtime`).
+    /// @P275 fix.
+    #[must_use]
+    pub fn string_from_const_store_runtime(&self, rec: u32, pos: u32) -> crate::keys::Str {
+        self.string_from_const_store(rec, pos)
+    }
+
+    /// Native-side accessor for `const_refs[d_nr]` used via the
+    /// `#rust"s.const_ref_at(@d_nr as usize)"` template substitution
+    /// (see `src/generation/calls.rs` — pattern `s.const_ref_at(`
+    /// rewrites to `stores.const_ref_at_runtime(`).  The `_runtime`
+    /// suffix breaks the substring chain that would otherwise let the
+    /// substitution accumulate `stor` prefixes when `OpConstRef` is
+    /// nested inside another opcode template (e.g. `OpGetVector` →
+    /// `OpConstRef`).  Same trick used for `raise_runtime`,
+    /// `vec_get_or_raise_runtime`, etc.  @P275 fix.
+    #[must_use]
+    pub fn const_ref_at_runtime(&self, d_nr: usize) -> DbRef {
+        self.const_refs[d_nr]
     }
 
     #[must_use]

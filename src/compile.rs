@@ -44,8 +44,8 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
         .const_refs
         .resize(data.definitions() as usize, null_ref);
     // Mirror const_refs on Stores so native codegen (which has
-    // `&mut Stores` but no `&mut State`) can substitute
-    // `s.const_refs` → `stores.const_refs` and resolve.
+    // `&mut Stores` but no `&mut State`) can resolve
+    // `OpConstRef` via `stores.const_ref_at_runtime(d_nr)`.
     state
         .database
         .const_refs

@@ -1657,6 +1657,17 @@ impl State {
 
     /// Plan-07 phase 4 step 4.6 — bounds-checked vector index that raises
     /// `IndexOutOfBounds` / `NegativeIndex` instead of returning the null
+    /// Interpreter-side accessor mirrored by
+    /// `Stores::const_ref_at_runtime`.  The template
+    /// `#rust"s.const_ref_at(@d_nr as usize)"` resolves to this method
+    /// in the bytecode interpreter context (where `s: &mut State`).
+    /// Native codegen rewrites the call to `stores.const_ref_at_runtime`
+    /// (see `src/generation/calls.rs`).  @P275.
+    #[must_use]
+    pub fn const_ref_at(&self, d_nr: usize) -> crate::keys::DbRef {
+        self.const_refs[d_nr]
+    }
+
     /// DbRef sentinel that `vector::get_vector` produced on OOB today.
     /// Used by `OpGetVector`'s annotation; the dispatch loop's
     /// `runtime_error.is_some()` check halts execution after the op

@@ -159,6 +159,13 @@ html = markdown::render(source, "/tag/", "/img/", "")
 - **`@P274`** — `text + integer` concat now correctly converts the
   integer (was emitting `OpAppendText` with a raw i64; SIGSEGV in
   interp / E0614 in native).
+- **`@P275`** — module-scope `const vector<T>` works under the
+  default `--native` path (was only initialised under
+  `--native-release`; default emit panicked at
+  `stores.const_refs[NNN]`).  Side-fix: nested `OpConstRef` calls
+  no longer accumulate `stor` prefixes in their substituted form
+  (a substring-of-its-own-output bug in the codegen template
+  rewriter).
 - **`@P259`-`@P261`** — closure / store-allocation / vector-field
   fixes (the closure-cell trio).
 - **UTF-8** — `json_parse` now decodes 2/3/4-byte UTF-8 codepoints

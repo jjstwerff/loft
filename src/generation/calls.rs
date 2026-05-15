@@ -442,11 +442,19 @@ impl Output<'_> {
         // Initiative 03 Phase 3b: const_refs lives on both `State`
         // (interpreter path) and `Stores` (mirrored for native).
         // Translate template references so OpConstRef / OpConstStoreText
-        // resolve under `&mut Stores` in native code.
-        res = res.replace("s.const_refs", "stores.const_refs");
+        // resolve under `&mut Stores` in native code.  Both use the
+        // `_runtime` suffix on the destination name so the substitution
+        // can't re-match its own output when this op is nested inside
+        // another op's template — without the suffix, the substring
+        // `s.const_ref_at(` reappears at offset 5 in
+        // `stores.const_ref_at(...)` and accumulates `stor` prefixes
+        // (`storestores.const_ref_at`, `storestorestores...`).  Same
+        // trick used for `s.raise(` → `stores.raise_runtime(` below.
+        // @P275 fix.
+        res = res.replace("s.const_ref_at(", "stores.const_ref_at_runtime(");
         res = res.replace(
-            "s.string_from_const_store",
-            "stores.string_from_const_store",
+            "s.string_from_const_store(",
+            "stores.string_from_const_store_runtime(",
         );
         // Plan-07 phase 4c — Stores-side counterparts of the
         // State::raise / State::vec_get_or_raise / State::vec_ref_or_raise /

@@ -720,7 +720,13 @@ extern crate loft;"
             "    let db: &mut Stores = unsafe {{ &mut *cell.get() }};"
         )?;
         self.output_init(w, from, till)?;
-        writeln!(w, "    db.finish();\n}}\n")?;
+        writeln!(w, "    db.finish();")?;
+        // Mirror `compile::build_const_vectors` so module-scope `const`
+        // vectors (`const NUMS = [10, 20, 30]`) populate `db.const_refs`
+        // before `n_main` runs.  Without this, `OpConstRef(<d_nr>)`
+        // indexes into an empty Vec and panics.  @P275 fix.
+        self.emit_const_vectors(w, till)?;
+        writeln!(w, "}}\n")?;
         self.output_functions(w, from, till, None)?;
         self.emit_main_bootstrap(w, till)
     }
@@ -1151,8 +1157,8 @@ extern crate loft;"
     /// Constant definition with vector content and literal values,
     /// allocates a fresh store, writes the elements, and records
     /// the DbRef in `db.const_refs[d_nr]`.  The `#rust"…"` template
-    /// for `OpConstRef` is `s.const_refs[@d_nr as usize]`; native
-    /// codegen translates `s.const_refs` → `stores.const_refs`
+    /// for `OpConstRef` is `s.const_ref_at(@d_nr as usize)`; native
+    /// codegen translates `s.const_ref_at(` → `stores.const_ref_at_runtime(`
     /// (`src/generation/calls.rs`), so the emitted user functions
     /// find these DbRefs at call time.
     fn emit_const_vectors(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {

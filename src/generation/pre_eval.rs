@@ -431,8 +431,8 @@ impl Output<'_> {
                 // and avoid the rustc E0499 double-borrow.
                 let template_uses_stores = def_fn.rust.contains("stores")
                     || def_fn.rust.contains("s.database.")
-                    || def_fn.rust.contains("s.const_refs")
-                    || def_fn.rust.contains("s.string_from_const_store")
+                    || def_fn.rust.contains("s.const_ref_at(")
+                    || def_fn.rust.contains("s.string_from_const_store(")
                     || def_fn.rust.contains("s.raise(")
                     || def_fn.rust.contains("s.vec_get_or_raise(")
                     || def_fn.rust.contains("s.vec_ref_or_raise(")

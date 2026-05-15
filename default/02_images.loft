@@ -394,8 +394,13 @@ fn OpVarFnRef(pos: const u16) -> text;
 fn OpPutFnRef(pos: const u16, _fnref: text);
 #rust"{{ let v = *s.get_stack::<[u8; 20]>(); s.put_var(@pos, v); }}"
 // Push a pre-built constant's DbRef from the constant store.
+// `s.const_ref_at(...)` (vs raw `s.const_refs[...]` indexing) lets the
+// native-codegen substitution rename to `stores.const_ref_at_runtime(`,
+// which breaks the substring chain that would otherwise let nested
+// templates accumulate `stor` prefixes when this op is composed inside
+// another (e.g. OpGetVector wrapping OpConstRef).  @P275 fix.
 fn OpConstRef(d_nr: const integer) -> reference;
-#rust"s.const_refs[@d_nr as usize]"
+#rust"s.const_ref_at(@d_nr as usize)"
 // Push a Str pointing into the constant store for integer string literals.
 fn OpConstStoreText(rec: const integer, pos: const integer) -> text;
 #rust"s.string_from_const_store(@rec as u32, @pos as u32)"
