@@ -131,7 +131,7 @@ fn index_hygiene_clean() {
     let bash_jq = Command::new("jq")
         .args([
             "-r",
-            "to_entries[] | select(.key | startswith(\"@\")) | .key as $k | .value[] | \"\\(.file):\\(.line):\\($k)\"",
+            "to_entries[] | select(.key | startswith(\"@\") or startswith(\"legacy:\")) | .key as $k | .value[] | \"\\(.file):\\(.line):\\($k)\"",
             "index/tags.json",
         ])
         .output()

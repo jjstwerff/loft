@@ -91,10 +91,16 @@ awk -F: '
     print "legacy:" tok "\t" file "\t" line "\t" content
     s = substr(s, RSTART + RLENGTH)
   }
-  # Find legacy bare plan-NN
+  # Find legacy bare plan-NN.  Note: original used \\b which gawk
+  # silently never matched (POSIX awk lacks \\b), so for a long
+  # stretch the index had zero legacy:plan- buckets.  Discovered
+  # 2026-05-15 by the loft scanner port.  Use the same leading-
+  # boundary form the bare P-id pass uses above, then strip the
+  # captured leading char with sub.
   s = content
-  while (match(s, /\bplan-[0-9]+/)) {
+  while (match(s, /(^|[^a-zA-Z0-9_])plan-[0-9]+/)) {
     tok = substr(s, RSTART, RLENGTH)
+    sub(/^[^a-zA-Z0-9_]/, "", tok)
     print "legacy:" tok "\t" file "\t" line "\t" content
     s = substr(s, RSTART + RLENGTH)
   }
