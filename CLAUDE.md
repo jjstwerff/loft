@@ -9,6 +9,34 @@ store-based heap, and a standard library loaded from `default/*.loft`.
 
 ---
 
+## Development cadence — the dogfood loop
+
+The project's development model is:
+
+> **Build a real consumer → harvest the language lessons → fix the language → ship the lessons as a release.**
+
+Not toy programs.  Not abstract design.  Real tools that have to work.
+The branch-review viewer ([@PLAN35](doc/claude/plans/finished/35-branch-review-viewer/README.md)),
+the tracker indexer ([@PLAN37](doc/claude/plans/37-tracker-index/README.md)),
+and [`lib/markdown/`](lib/markdown/) are the canonical consumers — each one
+drove a wave of language enhancements (closures, bounded generics, native codegen
+maturity, `lib/process`/`lib/fs_watch`/`lib/cache` plan slots, eight P-issues from
+the dogfood pass) that landed BEFORE the next minor release.
+
+When picking work, prefer the path that exercises the language against a real
+consumer over the path that doesn't.  When a feature slice surfaces a language
+gap, the workflow at
+[DEVELOPMENT.md § Inserting Discovered Enhancements Into the Active Plan](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)
+applies — fix it on the spot when XS/S, route to canonical home (P-issue,
+`## Open work` section, `lib_plans/future/` slot) when bigger.
+
+Releases bundle the harvest.  See [CHANGELOG.md](CHANGELOG.md) for the
+"language lessons → release" cadence in practice — every minor release
+since 0.8.3 (WebAssembly), 0.8.4 (Awesome Brick Buster), and 0.8.5 (Language
+Maturity, drafted) has been organised around the consumer that drove it.
+
+---
+
 ## Key commands
 
 ```bash
