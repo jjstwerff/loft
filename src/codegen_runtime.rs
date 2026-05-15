@@ -469,10 +469,19 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
 }
 
 /// Sort a vector in-place using the element type's natural ordering.
+/// Dispatches on element type:
+///   - text → `sort_text_vector` (lexicographic; sorts offsets by
+///     the strings they point at)
+///   - integer / float / single → `sort_vector` (primitive in-place)
+///
 /// Bytecode equivalent: `sort_vector` in `src/fill.rs:1835`.
 pub fn OpSortVector(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, db_tp: i32) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let db_tp = db_tp as u16;
+    if stores.is_text_type(db_tp) {
+        vector::sort_text_vector(&data, &mut stores.allocations);
+        return;
+    }
     let elem_size = stores.size(db_tp);
     let is_float = db_tp == 2 || db_tp == 3;
     vector::sort_vector(&data, elem_size, is_float, &mut stores.allocations);

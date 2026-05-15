@@ -3326,11 +3326,14 @@ use #count instead"
             return Type::Void;
         }
         if let Type::Vector(elm, _) = &types[0] {
-            if !matches!(elm.as_ref(), Type::Integer(_) | Type::Float | Type::Single) {
+            if !matches!(
+                elm.as_ref(),
+                Type::Integer(_) | Type::Float | Type::Single | Type::Text(_)
+            ) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "sort is not supported for vector<{}>; use integer, long, float, or single",
+                    "sort is not supported for vector<{}>; use integer, long, float, single, or text",
                     elm.name(&self.data)
                 );
                 return Type::Void;

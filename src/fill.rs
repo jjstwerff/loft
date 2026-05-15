@@ -2008,12 +2008,14 @@ fn reverse_vector(s: &mut State) {
 fn sort_vector(s: &mut State) {
     let v_db_tp = *s.code::<u16>();
     let v_r = *s.get_stack::<DbRef>();
-    {
-        let t = v_db_tp;
-        let elem_size = s.database.size(t);
-        let is_float = t == 2 || t == 3;
-        vector::sort_vector(&v_r, elem_size, is_float, &mut s.database.allocations);
+    let t = v_db_tp;
+    if s.database.is_text_type(t) {
+        vector::sort_text_vector(&v_r, &mut s.database.allocations);
+        return;
     }
+    let elem_size = s.database.size(t);
+    let is_float = t == 2 || t == 3;
+    vector::sort_vector(&v_r, elem_size, is_float, &mut s.database.allocations);
 }
 
 fn coroutine_create(s: &mut State) {

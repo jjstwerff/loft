@@ -499,6 +499,48 @@ pub fn vector_step_rev(data: &DbRef, pos: &mut i32, stores: &[Store]) {
     }
 }
 
+/// Sort a vector of `text` elements in-place by lexicographic
+/// string comparison.  Storage layout: each element is a u32
+/// string-offset (size=4) pointing at the text payload elsewhere
+/// in the same store.  We sort the OFFSETS by what they point
+/// at — the string data stays in place; only the offset order
+/// changes.
+///
+/// Added in @PLAN37 phase 10.8 to extend `sort()` from
+/// numeric-only to also cover `vector<text>`.
+pub fn sort_text_vector(db: &DbRef, stores: &mut [Store]) {
+    let len = length_vector(db, stores) as usize;
+    if len < 2 {
+        return;
+    }
+    let store = keys::mut_store(db, stores);
+    let v_rec = store.get_u32_raw(db.rec, db.pos);
+    if v_rec == 0 {
+        return;
+    }
+    // Collect (offset, owned String) pairs.  The owned String
+    // copy lets us drop the immutable store borrow before
+    // writing the sorted offsets back.  Memory cost is one
+    // String per element, but vectors that hit sort_text are
+    // usually small (UI lists, validator outputs); the alloc is
+    // negligible vs the sort itself.
+    //
+    // `store.get_str(rec)` is the canonical accessor for a
+    // string record (interprets `rec` as a string-rec offset
+    // into the store's payload area, returning a `&str`).
+    let mut entries: Vec<(u32, String)> = (0..len)
+        .map(|i| {
+            let off = store.get_u32_raw(v_rec, 8 + (i as u32) * 4);
+            let s = store.get_str(off);
+            (off, s.to_string())
+        })
+        .collect();
+    entries.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+    for (i, (off, _)) in entries.iter().enumerate() {
+        store.set_u32_raw(v_rec, 8 + (i as u32) * 4, *off);
+    }
+}
+
 /// Sort a vector of primitive elements in-place (ascending).
 /// `elem_size` is the byte size of each element (1, 2, 4, or 8).
 /// `is_float` must be true for floating-point types (f32 at size=4, f64 at size=8).
