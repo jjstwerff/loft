@@ -28,7 +28,8 @@ tables.
   Plan-22 (shipped 2026-05-13) supersedes the copy semantics: scalar captures use
   heap-owned cells (auto-Reference encoding); `Type::Reference` captures use 12B
   `Parts::DbRef` into the live original.  Pure read-only captures of non-Reference
-  scalars still behave as value copies.  See
+  scalars still behave as value copies.
+  Design history (closed by @PLAN22):
   [plans/finished/22-mutable-closures/](plans/finished/22-mutable-closures/).
   Regression guard: `tests/scripts/56-closures.loft::test_capture_timing`.
 

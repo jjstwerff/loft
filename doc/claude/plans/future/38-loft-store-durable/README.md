@@ -197,7 +197,7 @@ bounded.
 | 5 | [First-consumer opt-in](05-consumer-optin.md) | S | Plan-37 indexer phase 08 selects Tier 1; TTT v5 design doc updated to declare Tier 2 dependency; @PLAN36 audience demo design doc references Tier 3 |
 | 6 | [Closeout — DESIGN_DECISIONS + STDLIB.md + finished/](06-closeout.md) | XS | "C-… durability tier choice" decision recorded; STDLIB.md `Store::open_durable` doc; plan moves to `finished/` |
 
-Total estimated effort: **2-3 weeks** of focused work.
+Total estimated effort: **H** (sum of per-phase letters above).
 Sequencing: phases 0-3 are foundation+impl (must ship in
 order); 4 is the cross-tier validation; 5+6 wire downstream.
 

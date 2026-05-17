@@ -109,10 +109,11 @@ truly-immutable scalar captures in pure read-only contexts:
 
 Case D ("aliased mutating") was decommissioned 2026-05-13: the
 cell + auto-Reference machinery from phases 02-03 already gives
-shared-state semantics, so no rejection was needed.  See
-[plans/finished/22-mutable-closures/04-case-d.md](plans/finished/22-mutable-closures/04-case-d.md)
-for the major finding.  Design history and alternatives
-considered: [plans/finished/22-mutable-closures/DISCUSSION.md](plans/finished/22-mutable-closures/DISCUSSION.md).
+shared-state semantics, so no rejection was needed.  Design lives
+in the closed plan README:
+[plans/finished/22-mutable-closures/](plans/finished/22-mutable-closures/)
+— Case D's major finding sits in its phase file, and the
+alternatives considered are in `DISCUSSION.md` alongside.
 
 ---
 

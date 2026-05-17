@@ -65,9 +65,8 @@ block here):
   tier-3 (real package consumption).
 - Plan-23 event loop — needed for games (tier 3).
 
-**Total tier-2 sprint estimate:** 2-3 weeks of focused work
-(items 1+2+3).  Item 4 (tables) extends another week but
-elevates polish.
+**Total tier-2 sprint estimate:** H (items 1+2+3 combined).
+Item 4 (tables) adds MH on top but elevates polish.
 
 ---
 
@@ -347,15 +346,19 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
 | [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | Foundational — REGEX is first downstream consumer |
 | [`plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/) | M | cooperates with **plans/37-tracker-index/07** + **plans/future/32-tic-tac-toe** + **plans/future/36-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
+| [`lib_plans/future/15-process/`](lib_plans/future/15-process/) | M | — | `lib/process/` subprocess primitive — closes the indexer / viewer bash-wrapper dependency (dogfood-driven by @PLAN37 + @PLAN35) |
+| [`lib_plans/future/16-fs-watch/`](lib_plans/future/16-fs-watch/) | M | — | `lib/fs_watch/` file-event watcher — prerequisite for @PLAN37 phase 07a WebSocket-push daemon (inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) |
+| [`lib_plans/future/17-cache/`](lib_plans/future/17-cache/) | S | — | `lib/cache/` mtime-invalidated read-through cache — viewer hot-path optimisation (re-reads `index/tags.json` per request today) |
 
 ### U — Ease of use
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/07-error-messages/`](plans/07-error-messages/) | M | — | `file:line:col` + caret + suggestions across parser / type / runtime / native |
-| [`plans/finished/35-branch-review-viewer/`](plans/finished/35-branch-review-viewer/) | M | **Closed 2026-05-14** | Frozen loft binary serves branch-aware doc + code review dashboard via SSH-forwarded HTTP.  Shipped: dashboard / file render (markdown via new `lib/markdown` lib + line-numbered code) / diff + commit views with hunk colouring / `[Rendered ¦ Diff vs main]` toggle / `/tag/<bare>` tracker-tag references / `@P-id` autolinks in body text / image refs through `/raw/`.  Drove the seven-bug native arc @P262→@P269 closure as collateral. |
+| [`plans/finished/35-branch-review-viewer/`](plans/finished/35-branch-review-viewer/) | M | (closed 2026-05-14) | Frozen loft binary serves branch-aware doc + code review dashboard via SSH-forwarded HTTP.  Shipped: dashboard / file render (markdown via new `lib/markdown` lib + line-numbered code) / diff + commit views with hunk colouring / `[Rendered ¦ Diff vs main]` toggle / `/tag/<bare>` tracker-tag references / `@P-id` autolinks in body text / image refs through `/raw/`.  Drove the seven-bug native arc @P262→@P269 closure as collateral. |
 | [`plans/37-tracker-index/`](plans/37-tracker-index/) | S | — | `@P-id` / `@PLAN-id` tag convention + scanner + CLI + viewer integration.  Tier-1 lookup tool for both Claude and humans |
 | [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) | XS-S per item | — | SH.* / DX.* / NT.* — DX grab-bag (some shipped) |
+| [`plans/future/40-viewer-discoverability/`](plans/future/40-viewer-discoverability/) | XS per item | — | Three XS viewer cleanups: site header, page_landing sections, route-graph drift sentry |
 | [`plans/future/08-repl-and-introspection/`](plans/future/08-repl-and-introspection/) | M | — | `loft>` interactive prompt + IR/Rust/slot-table CLI |
 
 ### C — Clean features
@@ -382,6 +385,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`plans/future/29-server-features/`](plans/future/29-server-features/) | S-H per item | — | C55/C56/A15/I13/C57 — language features for server / game-client |
 | [`lib_plans/future/04-asset-pipeline/`](lib_plans/future/04-asset-pipeline/) | M | — | Game asset workflow |
 | [`lib_plans/future/06-web-services/`](lib_plans/future/06-web-services/) | M-H per arc | — | JSON / HTTP client / auth / WebSocket / SSE clients |
+| [`lib_plans/future/18-viewer-generalisation/`](lib_plans/future/18-viewer-generalisation/) | M | — | `lib/viewer/` — extract the loft branch-review viewer as a project-agnostic library (Java + moros projects as initial customers) |
 
 ### Deferred plans
 
@@ -398,7 +402,6 @@ the plan moves back to `future/` and ROADMAP gains a row.
 - **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/future/32-tic-tac-toe v2 ground layer)
 - **(cross-mode harness shipped by closed @PLAN14) → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
 - **NATIVE.md § Open work N8c.x + PERFORMANCE.md § Open work N1 → plans/future/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
-- **plans/finished/22-mutable-closures spec → lib_plans/future/13-scriptable-scenes script API** (closure semantics inform user-script ergonomics; @PLAN22 shipped 2026-05-13)
 - **C57 / I13 (in plans/future/29-server-features) → lib_plans/future/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)
 
 ### Features still needing plan promotion

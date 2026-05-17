@@ -45,7 +45,7 @@ Three concrete needs surfaced from the personal-review angle:
    sentries.  Today this requires `git log --stat` /
    `git diff` / `git show` per file in the terminal.
 3. **Follow cross-doc references** — the plan tree is densely
-   linked (`[link](plans/finished/22-mutable-closures/03-case-c.md#major-finding)`), <!--noindex-->
+   linked (`[link](../22-mutable-closures/03-case-c.md#major-finding)`), <!--noindex-->
    and `make serve` (which runs `python -m http.server` on
    `doc/`) serves `.md` files raw — clicks 404 or download.
 

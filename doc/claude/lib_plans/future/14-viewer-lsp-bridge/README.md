@@ -201,9 +201,10 @@ These metrics drive acceptance for each phase.
 | 5 | [Browser editor R1 + R2](05-browser-editor.md) | M | Read-only nav + diagnostics layer in the browser.  No editor framework yet.  Completes the "review dashboard" framing.  E1 (CodeMirror inline edit) is a stretch follow-up. | Open |
 | 6 | [Closeout + colleague-onboarding doc](06-closeout.md) | S | DEBUG.md § "Multi-language code intelligence in `make view`"; install instructions for rust-analyzer/jdtls auto-discovery; CHANGELOG; move plan to finished/. | Open |
 
-Total estimated effort: **2 quarters of focused work** (each
-phase ~2-4 weeks).  Phases 0-2 are the architectural backbone;
-phases 3-5 each light up one capability slice.
+Total estimated effort: **VH** (per-phase letters MH-H each;
+sum is on the order of two quarters of focused work).  Phases
+0-2 are the architectural backbone; phases 3-5 each light up
+one capability slice.
 
 ## Acceptance — full plan
 

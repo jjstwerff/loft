@@ -118,7 +118,7 @@ adjust per current loft CLI.)
 A frozen loft binary that serves a branch-aware doc + code
 review dashboard from this repo to a browser via SSH
 port-forward.  See
-[doc/claude/plans/35-branch-review-viewer/README.md](../../doc/claude/plans/35-branch-review-viewer/README.md)
+[doc/claude/plans/finished/35-branch-review-viewer/README.md](./README.md)
 for the full spec.
 
 Build: `make view-build`.  Run: `make view`.

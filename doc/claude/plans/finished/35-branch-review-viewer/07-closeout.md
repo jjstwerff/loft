@@ -70,7 +70,7 @@ view-build`, not auto-rebuilt.  This means it keeps working
 even when loft itself is mid-refactor.  Update the binary by
 running `make view-build` against a known-good loft commit.
 
-See [plans/finished/35-branch-review-viewer/](../plans/finished/35-branch-review-viewer/README.md)
+See [plans/finished/35-branch-review-viewer/](./README.md)
 for the full design.
 ```
 
