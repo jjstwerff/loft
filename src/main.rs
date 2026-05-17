@@ -2389,6 +2389,17 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             // functionally harmless.  Tell the linker to merge them
             // (keep the first definition, skip the rest).  This matches
             // the GNU ld / lld semantics for `-z muldefs`.
+            //
+            // macOS ld64 rejects `--allow-multiple-definition` as an
+            // unknown option (the Apple linker has no equivalent
+            // surface — duplicate symbols are either silently
+            // permitted by symbol kind, or errors).  Skip the flag on
+            // macOS; if a future cross-package binary hits a real
+            // duplicate-symbol error on macOS, we'll narrow the fix
+            // (e.g. weak-link the symbol or dedup the macro emission)
+            // rather than re-add a flag the host linker doesn't
+            // support.
+            #[cfg(not(target_os = "macos"))]
             cmd.arg("-Clink-arg=-Wl,--allow-multiple-definition");
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
