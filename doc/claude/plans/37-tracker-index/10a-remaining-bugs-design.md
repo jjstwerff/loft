@@ -5,8 +5,30 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 10a — Remaining-bugs design (post-mid-pass review)
 
-**Status:** Design — opened 2026-05-18 after pausing mid-phase
-to step back and survey the remaining work.
+**Status:** Closed 2026-05-18.  All three M-shaped items the
+design survey identified (@P275 / @P276 / @P283) shipped on the
+same day after their fix sites turned out to be cheaper than the
+estimates (actual ~6 h combined vs the 11-22 h survey budget).
+Three findings during shipping:
+  - **@P275's** real bug was a missing `emit_const_vectors` call
+    in `output_native` (the design's "extract_literal_values
+    recognizer" theory was wrong); side-fix in
+    `src/generation/calls.rs` substring substitution.
+  - **@P276's** wrap path already existed for Var/TupleGet/Call
+    arg shapes; just needed the `Value::Block` case added.
+  - **@P283's** root cause was simpler AND more general — NOT
+    self-aliasing-specific.  ANY text-returning fn whose body
+    used `assign_text`'s work-text path on a RefVar(Text)
+    buffer hit it.  Fix mirrors the existing B7
+    OpAppendCharacter→OpAppendStackCharacter dispatch to the
+    full op cluster (`refvar_text_stack_variant` in
+    `src/generation/ops/mod.rs`).
+
+Phase 10.16 follow-up confirmed @P278 (parser bug, deferred to
+parser-typer cleanup plan) is the lingering reason
+`tools/viewer/src/main.loft::problem_row_summary` stays
+extracted — the closed @P283 was a sibling crash, not the
+underlying parser issue.
 
 ## Why this doc exists
 

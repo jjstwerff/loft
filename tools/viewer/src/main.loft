@@ -796,13 +796,14 @@ fn tag_home_pattern(tag: text) -> text {
     "doc/claude/PROBLEMS.md"
 }
 
-// Tiny helper: strip the `**@P<id>** — ` tag prefix from a
-// PROBLEMS.md row body and trim to the first sentence.
-// Lives in its own function because attempting the same
-// slicing inline in render_problems_row tripped a loft parser
-// quirk (P274) — multiple self-slice reassignments + method
-// calls in one scope confuse the parser.  Working around by
-// keeping the work in this small helper.
+// Strip the `**@P<id>** — ` tag prefix from a PROBLEMS.md row
+// body and trim to the first sentence.  Extracted here because
+// @P278 (parser rejects method call on a self-slice-reassigned
+// text in the same scope) is still open — inlining the body
+// into `render_problems_row` raises "Expect token ;" at the
+// first `.method()` after the self-slice.  Reproducer kept in
+// `tests/p278_*` (when filed).  Removal: re-attempt after @P278
+// closes.
 fn problem_row_summary(body: text, id: text) -> text {
     out = body;
     full_pref = "**@P" + id + "** — ";
@@ -964,11 +965,13 @@ fn render_problems_row(line_n: integer) -> text {
     if len(segs) >= 5 { fx = trim_str(segs[4]); }
 
     // Strip the leading `**@P<id>** — ` tag-prefix and trim
-    // to the first sentence.  Computed via a dedicated helper
-    // (problem_row_summary) — keeping the slicing in its own
-    // function dodges a loft parser quirk that surfaces when
-    // self-slice-and-reassign locals interact with method
-    // calls in this scope.  Filed as P274.
+    // to the first sentence.  Computed via the
+    // problem_row_summary helper — @P278 (parser rejects
+    // method call on a self-slice-reassigned text in the same
+    // scope) still open, so the slicing must live in its own
+    // function.  @P283 (codegen crash from the format-string
+    // return) closed 2026-05-18; the helper is no longer
+    // crashing, just structurally needed to dodge @P278.
     summary = problem_row_summary(rb, id);
 
     esc_id = escape(id);

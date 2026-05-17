@@ -5,7 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 10 — Language enhancements harvested from the dogfood pass
 
-**Status:** Open — staged for 0.8.5.
+**Status:** Closed 2026-05-18.  Phase 10 ships in 0.8.5.
+
+Shipped: 10.1-10.5, 10.7-10.9, 10.12, 10.13, 10.10b, 10.16
+(13 sub-steps).  Deferred to a follow-up parser-typer plan
+(`plans/future/<NN>-parser-typer-cleanup/` — opened separately):
+10.10 (@P278), 10.11 (@P279), 10.14 (@P277), 10.15 (@P281).
+10.6 reverted to "wontfix unless 2nd consumer demands" (the
+`hash.contains(key)` deferral, see STDLIB.md `## Open work`).
 
 ## Goal
 
@@ -116,7 +123,7 @@ when the small wins have warmed the muscle memory.
 | ~~10.10b~~ | @P283 — format-string + self-slice-reassigned text param crashes both backends — **shipped 2026-05-18**.  Root cause was simpler AND more general than the design hypothesised — NOT specifically the slice / self-aliasing.  The work-text buffer used by `assign_text`'s self-reference path (`src/parser/operators.rs:106-113`) gets promoted to a `RefVar(Text)` hidden arg by `text_return` in any text-returning function, but the codegen for the `OpAppendText` / `OpClearText` / `OpFormat{Text,Int,Float,Single,Database}` / `OpAppendCharacter` ops it emits did NOT dispatch to the matching `Stack` variants when the destination was `RefVar(Text)`.  Interp's `op_append_text` (op=116) called `string_mut` on what was actually a 12-byte refvar DbRef slot → SIGSEGV.  Native's `append_text` emitted `var += &*(…)` on `&mut String` → rustc E0368.  Fix mirrored the existing B7 OpAppendCharacter→OpAppendStackCharacter dispatch to cover the full op cluster: a `stack_variant` table in `src/state/codegen.rs::generate_call` (bytecode emit — interp) AND `src/generation/dispatch.rs::output_call_inner` (native emit), checking `parameters.first() == Var(v)` with `Type::RefVar(Type::Text)` and rewriting to the Stack variant.  Plus a `refvar_text_clone` arm in `output_set` for the `OpSet(local_String, Var(refvar_text_arg))` shape — `output_code_inner` for RefVar(Text) Var emits `&*var_X`, then the `.to_string()` wrap parses as `&*(var_X.to_string())` per Rust precedence → `&str` not `String` → E0308.  Emit `var_X.to_string()` directly instead.  Pinned by `tests/scripts/111-format-string-self-slice.loft`.  Actual effort: ~2 h (vs M 4-8 h estimate). |
 | ~~10.14~~ | Local `sorted<T[K]>` re-types to vector on `+= [T{}]` (@P277) — **deferred to follow-up plan** | No minimal reproducer found; touches typer reassignment paths.  Workaround (struct-wrapper) in scan.loft works.  See [10a-remaining-bugs-design.md § @P277](10a-remaining-bugs-design.md#p277--local-sorted-re-types-to-vector). | Moves to `plans/future/<NN>-parser-typer-cleanup/`. |
 | ~~10.15~~ | Two-pass forward-resolution of fn return types (@P281) — **deferred to follow-up plan** | Architectural change touching pass-1 symbol table; needs design pass.  Workaround (extract leaf helpers to top of file) works.  See [10a-remaining-bugs-design.md § @P281](10a-remaining-bugs-design.md#p281--two-pass-forward-fn-return-resolution). | Same target plan as 10.14. |
-| 10.16 | Workaround removal pass | `tools/indexer/src/scan.loft`, `tools/viewer/src/main.loft` | re-verify both binaries produce same output as before; existing `index_hygiene` gate covers it.  Removes every `// loft gap: ...` / `// @P27N` comment whose referenced gap is now closed |
+| ~~10.16~~ | Workaround removal pass — **shipped in two waves**.  Wave 1 (commit `e31bab27`, 2026-05-15): scan.loft hand-rolled `basename_leaf` / `basename_of` / `dir_of` / `resolve_link_path` deleted (use stdlib `text.basename()` / `dir()` / `resolve()` from 10.9); −63 +14 lines.  Wave 2 (2026-05-18, after @P283 closed): attempted to inline viewer's `problem_row_summary` back into `render_problems_row` since the @P283 codegen crash is gone — but the inline form re-triggers @P278 (parser rejects `.method()` chain after self-slice-style local reassignment in the same scope), which is still open.  Helper kept; its comment updated to attribute its existence to @P278 alone (no longer also @P283).  @P278's PROBLEMS.md row updated with the now-confirmed minimal reproducer (the inlining attempt).  scan.loft's @P281 workaround (forward-resolution leaf-helper hoisting) also stays — @P281 still open.  No further workarounds remain to remove. |
 
 Sub-step 10.16 is the cleanup that proves the harvest worked
 — removes the in-code workaround comments now that the
