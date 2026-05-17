@@ -172,6 +172,20 @@ html = markdown::render(source, "/tag/", "/img/", "")
   `OpConvIntFromCharacter` template compared it against `char`).
   Bind-then-compare (`c = s[i] ?? '*'; if c == 'b'`), else-if
   chains, and ordering compares (`<`/`>`) all work too.
+- **`@P283`** — format-string interpolation of a self-slice-
+  reassigned text PARAMETER no longer crashes either backend.
+  Pattern: `fn f(rb: text, id: text) -> text { …; rb = rb[a..b];
+  "[{id}] {rb}" }` was SIGSEGVing the interpreter and rejecting
+  with rustc E0368 in native.  The work-buffer parameter
+  promoted by `text_return` is `RefVar(Text)` (`&mut String`),
+  but the codegen for `OpAppendText` / `OpClearText` /
+  `OpFormatText` / `OpFormat{Int,Float,Single,Database}` /
+  `OpAppendCharacter` on these targets emitted the local-String
+  variants — interp treated the refvar slot as a `String` →
+  SIGSEGV; native emitted `var += &*(…)` on `&mut String` →
+  E0368.  Fix dispatches to the matching `Stack` variant for
+  RefVar(Text) targets on both backends (mirrors the existing
+  B7 OpAppendCharacter dispatch).
 - **`@P259`-`@P261`** — closure / store-allocation / vector-field
   fixes (the closure-cell trio).
 - **UTF-8** — `json_parse` now decodes 2/3/4-byte UTF-8 codepoints

@@ -9,7 +9,7 @@ mod calls;
 mod coroutine;
 mod dispatch;
 mod emit;
-mod ops;
+pub(crate) mod ops;
 mod pre_eval;
 mod text;
 

@@ -2181,14 +2181,26 @@ impl State {
             // OpAppendStackCharacter — same pattern as OpAppendText →
             // OpAppendStackText in set_var.  Without this, the append
             // writes to the raw RefVar slot instead of dereferencing it.
-            let actual_op = if name == "OpAppendCharacter"
-                && let Some(Value::Var(v)) = parameters.first()
-                && matches!(stack.function.tp(*v), Type::RefVar(_))
+            //
+            // @P283 — the same dispatch is needed for `OpAppendText`
+            // and `OpClearText` when they enter via the operator-call
+            // path (as opposed to `set_var`'s direct emit).  The parser's
+            // `assign_text` work-text path constructs `Value::Call(OpAppendText, …)`
+            // / `Value::Call(OpClearText, …)` IR; if the work-text was
+            // promoted to a `RefVar(Text)` hidden arg by `text_return`,
+            // these ops must dispatch to the stack variants so the
+            // refvar slot is dereferenced.  Without this, the interpreter
+            // treats the refvar's DbRef bytes as a `String` and SIGSEGVs;
+            // the native backend's `OpAppendStackText` arm (dispatch.rs:582)
+            // already emits the required `*` deref.
+            let stack_variant = if let Some(Value::Var(v)) = parameters.first()
+                && matches!(stack.function.tp(*v), Type::RefVar(inner) if matches!(**inner, Type::Text(_)))
             {
-                stack.data.def_nr("OpAppendStackCharacter")
+                crate::generation::ops::refvar_text_stack_variant(name.as_str())
             } else {
-                op
+                None
             };
+            let actual_op = stack_variant.map_or(op, |n| stack.data.def_nr(n));
             let before_stack = stack.position;
             self.remember_stack(stack.position);
             let code = self.code_pos;
