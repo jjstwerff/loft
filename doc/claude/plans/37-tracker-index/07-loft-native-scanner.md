@@ -74,6 +74,17 @@ The MVP is the foundation; remaining work for the full phase:
   shape (per-tag arrays + `legacy:` buckets + `broken` +
   `links` + `problems_open` + `plans_*`), so `bin/loft-index`
   becomes a drop-in replacement for `tools/indexer/scan.sh`.
+  - Per-tag + `legacy:*` + `links` buckets: **shipped
+    2026-05-15** (gated by `LOFT_INDEX_BUCKETED=1`).
+  - `broken` + `broken_links` buckets: **shipped 2026-05-18**.
+    Loft output is byte-identical to bash on these two keys
+    (asserted by `diff <(jq -S '{broken, broken_links}' loft.json)
+    <(jq -S '{broken, broken_links}' bash.json)`).
+  - Still open: `problems_open`, `problems_recent`,
+    `plans_active`, `plans_future`, `plans_deferred`,
+    `plans_recent`, `lib_plans_future` — each parses PROBLEMS.md
+    / plan directories to produce structured lists, orthogonal
+    to the scanning pipeline.  Each can land as its own commit.
 - **`lib/fs_watch/`** — file-event watcher API for `--watch`
   continuous mode.  Needs host-bridge native lib (inotify
   on Linux, kqueue on macOS, ReadDirectoryChangesW on

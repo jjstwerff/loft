@@ -37,9 +37,13 @@ fn test_without_prefix() {
     assert(out == "[300] plain body", "no slice, just format");
 }
 
+// IDs `1` and `22` in the next test are synthetic format-string
+// fodder, not tracker refs — the `<!--noindex-->` markers on each
+// call (and on this comment line) keep the scanner from surfacing
+// nonexistent tags as broken @-refs.   <!--noindex-->
 fn test_two_calls_same_buffer() {
-    a = render("**@P1** — first", "1");
-    b = render("**@P22** — second body", "22");
+    a = render("**@P1** — first", "1");   // <!--noindex-->
+    b = render("**@P22** — second body", "22");   // <!--noindex-->
     assert(a == "[1] first", "a survives second call");
     assert(b == "[22] second body", "b correct");
 }

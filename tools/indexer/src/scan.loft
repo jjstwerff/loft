@@ -840,6 +840,20 @@ fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
         println("");
         println("  }}");
     }
+    // Broken @-tag refs.  Always emit (matches scan.sh, which
+    // unconditionally merges `{broken: [...]}` even when empty).
+    if !first { println(","); }
+    first = false;
+    println("  \"broken\": [");
+    emit_broken_array(rows, valid_pids, valid_plans);
+    println("");
+    println("  ]");
+    // Broken markdown links.  Same always-emit discipline.
+    println(",");
+    println("  \"broken_links\": [");
+    emit_broken_links_array(links);
+    println("");
+    println("  ]");
     println("");
     println("}}");
 }
@@ -868,6 +882,110 @@ fn emit_link_bucket(target: text, links: vector<LinkRef>) {
         }
     }
     print("]");
+}
+
+// True when the tag's underlying P-issue / plan ID is not present
+// in the valid sets.  Handles both `@P*` / `@PLAN*` (the canonical
+// form) AND `legacy:P*` / `legacy:plan-*` (the transition-metering
+// bare-name form).  `tag_is_valid` above defaults legacy refs to
+// `true` because the per-row `valid` field in JSON Lines is for
+// the canonical `@`-tag form only; the `broken` bucket below
+// treats both symmetrically (mirrors scan.sh's REF_PIDS / REF_PLANS
+// extraction, which strips the optional `legacy:` prefix before
+// the set-diff against VALID_PIDS / VALID_PLANS).
+fn tag_is_broken(tag: text, valid_pids: vector<text>, valid_plans: vector<text>) -> boolean {
+    tlen = tag.len();
+    work = tag;
+    wlen = tlen;
+    if tag.starts_with("legacy:") {
+        work = tag[7..tlen];
+        wlen = tlen - 7;
+    }
+    is_plan = false;
+    digit_start = 0;
+    if work.starts_with("@PLAN") {
+        digit_start = 5;
+        is_plan = true;
+    } else if work.starts_with("plan-") {
+        digit_start = 5;
+        is_plan = true;
+    } else if work.starts_with("@P") {
+        digit_start = 2;
+    } else if wlen > 1 && work[0] == 'P' && is_digit_leaf(work[1]) {
+        digit_start = 1;
+    } else {
+        return false;
+    }
+    if digit_start >= wlen || !is_digit_leaf(work[digit_start]) { return false; }
+    j = digit_start;
+    while j < wlen && is_digit_leaf(work[j]) { j = j + 1; }
+    num = work[digit_start..j];
+    if is_plan { return !set_contains(valid_plans, num); }
+    return !set_contains(valid_pids, num);
+}
+
+// Emit the `broken` array contents: one `{tag, refs: ["file:line", ...]}`
+// object per distinct broken tag.  Caller writes the surrounding
+// `"broken": [ ... ]` brackets so this prints only the inner
+// objects, comma-separated.  Mirrors scan.sh's BROKEN_JSON shape.
+fn emit_broken_array(rows: vector<RawRef>, valid_pids: vector<text>,
+                     valid_plans: vector<text>) {
+    distinct = DistinctSets {};
+    for r in rows {
+        if !tag_is_broken(r.tag, valid_pids, valid_plans) { continue; }
+        // scan.sh's broken bucket lists only the canonical `@P*` /
+        // `@PLAN*` keys.  Legacy `legacy:P*` / `legacy:plan-*` refs
+        // are tracked in their own buckets and the migration metering
+        // (`make problems` summary) doesn't surface them as broken
+        // even when their underlying ID isn't in the valid set.
+        // Mirror that — filter out tags with the `legacy:` prefix.
+        if r.tag.starts_with("legacy:") { continue; }
+        if distinct.tags[r.tag] == null {
+            distinct.tags += [TagSlot{name: r.tag}];
+        }
+    }
+    first = true;
+    for slot in distinct.tags {
+        if !first { print(","); }
+        first = false;
+        print("    {{\"tag\":\"{slot.name}\",\"refs\":[");
+        ref_first = true;
+        for r in rows {
+            if r.tag != slot.name { continue; }
+            if !ref_first { print(","); }
+            ref_first = false;
+            print("\"{r.file}:{r.line}\"");
+        }
+        print("]}}");
+    }
+}
+
+// Emit the `broken_links` array contents: one `{target, refs: ["file:line", ...]}`
+// object per distinct missing-target.  Caller writes the surrounding
+// `"broken_links": [ ... ]` brackets.  Mirrors scan.sh's
+// BROKEN_LINKS_JSON shape.
+fn emit_broken_links_array(links: vector<LinkRef>) {
+    distinct = DistinctSets {};
+    for lr in links {
+        if link_target_exists(lr.target) { continue; }
+        if distinct.tags[lr.target] == null {
+            distinct.tags += [TagSlot{name: lr.target}];
+        }
+    }
+    first = true;
+    for slot in distinct.tags {
+        if !first { print(","); }
+        first = false;
+        print("    {{\"target\":\"{slot.name}\",\"refs\":[");
+        ref_first = true;
+        for lr in links {
+            if lr.target != slot.name { continue; }
+            if !ref_first { print(","); }
+            ref_first = false;
+            print("\"{lr.file}:{lr.line}\"");
+        }
+        print("]}}");
+    }
 }
 
 fn main() {
