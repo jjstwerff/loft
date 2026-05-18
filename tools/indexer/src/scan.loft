@@ -1425,10 +1425,34 @@ fn emit_problems_open_array() -> integer {
     count
 }
 
+// Per-distinct-target existence cache.  ~1300 inbound LinkRefs
+// share ~253 distinct targets; the naive per-LinkRef
+// `link_target_exists` walks ~1000 redundant `stat()` calls.
+// One-pass memo: build cache keyed by target, then read.
+struct TargetExists {
+    target: text not null,
+    exists: boolean not null,
+}
+struct TargetCache {
+    seen: hash<TargetExists[target]>,
+}
+
 fn emit_broken_links_array(links: vector<LinkRef>) -> integer {
+    // Build the per-distinct existence cache first (one stat per
+    // distinct target rather than per LinkRef).
+    cache = TargetCache {};
+    for lr in links {
+        if cache.seen[lr.target] == null {
+            cache.seen += [TargetExists{
+                target: lr.target,
+                exists: link_target_exists(lr.target),
+            }];
+        }
+    }
     distinct = DistinctSets {};
     for lr in links {
-        if link_target_exists(lr.target) { continue; }
+        hit = cache.seen[lr.target];
+        if hit != null && hit.exists { continue; }
         if distinct.tags[lr.target] == null {
             distinct.tags += [TagSlot{name: lr.target}];
         }
