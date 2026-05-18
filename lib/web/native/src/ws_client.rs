@@ -236,9 +236,17 @@ mod native_impl {
         if !status_ok {
             return false;
         }
-        // Verify accept = base64(sha1(nonce ++ GUID))
+        // Verify accept = base64(sha1(nonce ++ GUID)).
+        //
+        // The magic GUID is specified verbatim in RFC 6455 § 1.3.
+        // An earlier version of both this file AND its server-side
+        // peer (lib/server/native/src/websocket.rs) had `5AB5DC11D68B`
+        // for the final group instead of `C5AB0DC85B11` — both sides
+        // wrong but matching each other, so loft-client ↔ loft-server
+        // WebSocket worked.  Browsers + any spec-compliant peer
+        // correctly rejected.  Fixed in @P286 (2026-05-18).
         let mut input = nonce.clone();
-        input.push_str("258EAFA5-E914-47DA-95CA-5AB5DC11D68B");
+        input.push_str("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
         let expected = base64(&sha1(input.as_bytes()));
         match accept_seen {
             Some(seen) => seen == expected,
