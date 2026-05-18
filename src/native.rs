@@ -106,6 +106,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_4File_write", t_4File_write),
     ("n_env_variables", n_env_variables),
     ("n_env_variable", n_env_variable),
+    ("t_4text_byte_at", t_4text_byte_at),
     ("t_4text_starts_with", t_4text_starts_with),
     ("t_4text_ends_with", t_4text_ends_with),
     ("t_4text_trim", t_4text_trim),
@@ -583,6 +584,13 @@ fn n_env_variables(stores: &mut Stores, stack: &mut DbRef) {
 fn n_env_variable(stores: &mut Stores, stack: &mut DbRef) {
     let v_name = *stores.get::<Str>(stack);
     let new_value = { stores.os_variable(v_name.str()) };
+    stores.put(stack, new_value);
+}
+
+fn t_4text_byte_at(stores: &mut Stores, stack: &mut DbRef) {
+    let v_i = *stores.get::<i64>(stack);
+    let v_self = *stores.get::<Str>(stack);
+    let new_value = Stores::text_byte_at_native(v_self.str(), v_i);
     stores.put(stack, new_value);
 }
 
