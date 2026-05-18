@@ -222,6 +222,42 @@ runs identically on every platform — one-and-done.
   one-line declaration in `default/02_images.loft`.  Can ship
   alongside the `plans_recent` bucket.
 
+### Does regex (`lib/regex/`) help this arc?
+
+Audit triggered by 2026-05-18 chat — short answer: **not the
+bottleneck.**  Regex would save ~30% of the remaining loft line
+count but doesn't unblock anything.
+
+| Bucket | Without regex | With regex Phase 0 (cdylib bridge) | Saved |
+|---|---|---|---|
+| `problems_open` | ~80 lines: row-detect (`if line.starts_with("\| ")` + digits), split on `'\|'` (builtin), severity-filter as substring scan over a handful of patterns, summary-build (find-period, truncate).  All primitives present, verbose. | ~30 lines: one regex matches row + captures the four cells; severity-filter compiles to a single PCRE. | ~50 |
+| `problems_recent` | Same shape + a `Closed (YYYY-MM-DD)` extractor (~20 lines manual scan). | Same regex + one extra `Closed \((\d{4}-\d{2}-\d{2})\)` capture. | ~15 |
+| `plans_active` / `_future` / `_deferred` / `_recent` / `lib_plans_future` | Directory walk (`walk_tree`, already in place), README-title from first `# ` line, JSON emit.  **Zero regex needed** — filesystem walks. | n/a | 0 |
+| Summary stats | Pure `println` of counts. | n/a | 0 |
+| `file.mtime()` native | XS Rust fn. | n/a | 0 |
+
+Net: regex saves ~65 lines on the two PROBLEMS.md parsers (out
+of ~250 total for the remaining buckets).  Not gating.
+
+**Where regex IS a force multiplier** — the existing 230 lines of
+hand-rolled tag tokenizer (`scan_line`, ~150 lines) +
+`scan_link_line` (~80 lines).  Both already shipped + working;
+retroactive simplification with regex would drop ~220 lines
+without changing behaviour.  A nice clean-up after the scan.sh
+removal lands, not a prerequisite.
+
+The other big regex consumer is the `scripts/check_doc_drift.sh`
+port (separate plan, deferred) — that one DOES need regex to be
+worth doing in loft (~600 lines bash; ~200 lines loft with
+regex; ~600 lines loft without regex would be a wash).
+
+**Conclusion:** ship sub-commits B-H of this arc with the
+existing primitives.  Regex Phase 0 from
+[`lib_plans/01-regex/`](../../lib_plans/01-regex/) lands in
+parallel for the other consumers and enables a follow-up
+"scan.loft regex pass" that retroactively trims `scan_line` /
+`scan_link_line` once the binary is using the canonical engine.
+
 ### Sub-commit sequencing
 
 Each row lands as its own focused commit so the arc can pause
