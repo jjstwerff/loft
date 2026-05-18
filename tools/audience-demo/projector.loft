@@ -135,19 +135,20 @@ fn build_hex_vbo() -> integer {
 }
 
 // Convert offset (x, y) cell coords → centre pixel (cx, cy) on the
-// window, with hex (0, 0) at screen centre.  Matches the phone client's
-// offsetToPixel(x, y, size) function exactly.
-fn cell_centre_x(x: integer, y: integer) -> float {
-  // x_shift = (y & 1) ? SQRT3/2 * size : 0
-  parity = y - (y / 2) * 2;        // y % 2 with mathematical sign
-  // Adjust for negative y: parity must be 0 or 1, not 0/-1.
+// window, given a fractional camera position (cam_x, cam_y) in world
+// hex coords.  When cam is (0, 0) the hex at world (0, 0) lands at
+// screen centre; the camera shifts every hex by (-cam_x, -cam_y) in
+// world units before the pixel mapping.  Matches the phone client's
+// offsetToPixel(x, y, size) function for the static-camera case.
+fn cell_centre_x(x: integer, y: integer, cam_x: float) -> float {
+  parity = y - (y / 2) * 2;
   if parity < 0 { parity = parity + 2; }
   shift = 0.0;
   if parity == 1 { shift = SQRT3 / 2.0 * HEX_SIZE; }
-  WIN_W as float / 2.0 + x as float * SQRT3 * HEX_SIZE + shift
+  WIN_W as float / 2.0 + (x as float - cam_x) * SQRT3 * HEX_SIZE + shift
 }
-fn cell_centre_y(y: integer) -> float {
-  WIN_H as float / 2.0 + y as float * 1.5 * HEX_SIZE
+fn cell_centre_y(y: integer, cam_y: float) -> float {
+  WIN_H as float / 2.0 + (y as float - cam_y) * 1.5 * HEX_SIZE
 }
 
 // Build an MVP that places + scales the unit-hex VBO so its centre
@@ -180,11 +181,58 @@ fn draw_hex(painter: const graphics::Painter2D, vao: integer,
   graphics::gl_draw(vao, 18);
 }
 
+// Auto-camera state.  `pos_x`/`pos_y` are the CURRENT camera position
+// (the hex coord that should land at screen centre this frame);
+// fractional values smooth the lerp.  `target_x`/`target_y` is the
+// EMA-blended target — each `4:` delta pulls it `CAMERA_RECORD_ALPHA`
+// of the way toward the new paint, so a flurry of paints in one
+// region converges the target there while a single outlier nudges
+// it only partway.  `pos` then chases `target` at `CAMERA_LERP` per
+// frame.
+//
+// Heat-field with per-event decay is the design eventual goal (see
+// `03-projector-view.md` § Auto-camera), but loft today cannot
+// re-assign a struct's vector field cleanly — so the MVP uses two
+// scalar fields and a one-line EMA instead.  Behaviour-wise the
+// difference is small: the EMA is "average of recent activity"
+// just like a heat-field centroid, only without aging out points
+// after a few seconds (single old paints quickly get drowned by
+// any new activity).
+struct AutoCam {
+  pos_x:    float,
+  pos_y:    float,
+  target_x: float,
+  target_y: float,
+}
+
+// Tuning knobs — sluggish-by-design philosophy from the parent README:
+// overdamped, reads as "interested but unhurried".
+CAMERA_LERP         = 0.04;   // current chases target this fraction per frame (~80% in 1 s)
+CAMERA_RECORD_ALPHA = 0.35;   // each new paint pulls target this fraction toward it
+
+// Record a fresh paint event: blend its position into the target via
+// an exponential moving average.  A single isolated paint shifts the
+// target by alpha (e.g. 35 % of the way there); a cluster of paints
+// in one region converges the target there within ~5 events.
+fn cam_record(cam: AutoCam, x: integer, y: integer, tick: integer) {
+  cam.target_x = cam.target_x + (x as float - cam.target_x) * CAMERA_RECORD_ALPHA;
+  cam.target_y = cam.target_y + (y as float - cam.target_y) * CAMERA_RECORD_ALPHA;
+}
+
+// Lerp the current camera position one step toward the target.  Cheap;
+// runs every frame so motion stays smooth at 60 fps regardless of
+// paint cadence.  Tick is unused at this revision (kept in the
+// signature for the future heat-field upgrade).
+fn cam_step(cam: AutoCam, tick: integer) {
+  cam.pos_x = cam.pos_x + (cam.target_x - cam.pos_x) * CAMERA_LERP;
+  cam.pos_y = cam.pos_y + (cam.target_y - cam.pos_y) * CAMERA_LERP;
+}
+
 // Apply a single incoming text frame to the world.  Format inherited
 // from server.loft: `<msg_id>:<payload>`.  We only care about msg 4
 // (world delta).  msg 5 (active-player signal) is ignored in the MVP
 // — phase 0.8 (jump-to-active) is desktop UI, not projector spectacle.
-fn apply_frame(world: World, frame: text) {
+fn apply_frame(world: World, cam: AutoCam, tick: integer, frame: text) {
   colon = frame.find(":");
   if colon == null {
     println("projector: dropped malformed frame {frame}");
@@ -202,6 +250,9 @@ fn apply_frame(world: World, frame: text) {
     // erase
     world.cells[k] = null;
     println("projector: erase ({x},{y}) — total cells={len(world.cells)}");
+    // Erases count as activity too — the camera should swing to a
+    // newly-cleared area same as it does to a new paint.
+    cam_record(cam, x, y, tick);
   } else {
     existing = world.cells[k];
     if existing == null {
@@ -211,6 +262,7 @@ fn apply_frame(world: World, frame: text) {
       existing.color = c;
       println("projector: repaint ({x},{y}) c={c} — total cells={len(world.cells)}");
     }
+    cam_record(cam, x, y, tick);
   }
 }
 
@@ -239,6 +291,7 @@ fn main() {
   println("projector: ws session opened (auto-reconnects on drop)");
 
   world = World{cells: []};
+  auto_cam = AutoCam{pos_x: 0.0, pos_y: 0.0, target_x: 0.0, target_y: 0.0};
 
   // Ask the server for a full snapshot.  Catches the case where the
   // initial connect-time replay missed frames (lib/web buffer ramp-up,
@@ -258,17 +311,31 @@ fn main() {
     while true {
       msg = ws.try_recv();
       if msg == null { break; }
-      apply_frame(world, msg);
+      apply_frame(world, auto_cam, frames, msg);
       delta_count = delta_count + 1;
     }
 
-    // 2. Clear + redraw every non-empty cell.  Order doesn't matter at
-    //    flat-2D scope; once 3D heights land in phase 3, sort back-to-
-    //    front by y so foreground crystals occlude background ones.
+    // 2. Step the auto-camera: heat-field decay + lerp toward the
+    //    exp-weighted centroid of recent activity.  Cheap when
+    //    `recent` is small; bounded by CAMERA_MAX_HIST in the worst
+    //    case.  Runs every frame so the motion stays smooth at 60 fps.
+    cam_step(auto_cam, frames);
+    // Log camera position every ~2 seconds so an outside observer
+    // (tail -f the projector log) can see it swing without needing
+    // to read pixels off the screen.
+    if frames - (frames / 120) * 120 == 0 && frames > 0 {
+      println("projector: cam pos=({auto_cam.pos_x}, {auto_cam.pos_y}) target=({auto_cam.target_x}, {auto_cam.target_y})");
+    }
+
+    // 3. Clear + redraw every non-empty cell, world coords offset by
+    //    the camera so the activity centroid lands at screen centre.
+    //    Order doesn't matter at flat-2D scope; once 3D heights land
+    //    in phase 3, sort back-to-front by y so foreground crystals
+    //    occlude background ones.
     graphics::gl_clear(bg);
     for cell in world.cells {
-      cx = cell_centre_x(cell.x, cell.y);
-      cy = cell_centre_y(cell.y);
+      cx = cell_centre_x(cell.x, cell.y, auto_cam.pos_x);
+      cy = cell_centre_y(cell.y, auto_cam.pos_y);
       // 0.97 shrink matches the phone client's drawHex(size * 0.97) —
       // gives a thin dark gap between adjacent hexes so the lattice
       // reads even when neighbours share a colour.
