@@ -240,7 +240,7 @@ Phases are strictly additive.  R1 alone covers the 95% case.
 
 **Ship order relative to MATCH_PEG:** R1 ships **first**, before any
 MATCH_PEG phase.  It is the smaller, library-scoped change, validates
-the lazy-loading mechanism from [LAZY_STDLIB.md](../03-lazy-stdlib/README.md), and
+the lazy-loading mechanism from [LAZY_STDLIB.md](../future/03-lazy-stdlib/README.md), and
 delivers immediate value for CLI / server / log use cases.  See
 [MATCH_PEG.md](../../plans/future/26-match-peg/README.md) § "Ship order" for the combined timeline.
 
@@ -248,13 +248,13 @@ delivers immediate value for CLI / server / log use cases.  See
 
 ## See also
 
-- [LAZY_STDLIB.md](../03-lazy-stdlib/README.md) — lazy-loading mechanism; regex is
+- [LAZY_STDLIB.md](../future/03-lazy-stdlib/README.md) — lazy-loading mechanism; regex is
   the first new consumer.
-- [LOFT.md](../../../LOFT.md) § Match expressions — base match semantics.
+- [LOFT.md](../../LOFT.md) § Match expressions — base match semantics.
 - [MATCH_PEG.md](../../plans/future/26-match-peg/README.md) — PEG-style sequence patterns on
   vectors, enums, iterators, and (simple) text.  Regex is the tool
   for *complex* text; these two systems intentionally do not share a
   pattern language.
-- [STDLIB.md](../../../STDLIB.md) — where the library's public API will be
+- [STDLIB.md](../../STDLIB.md) — where the library's public API will be
   documented once shipped.
-- [PACKAGES.md](../../../PACKAGES.md) — stdlib module layout.
+- [PACKAGES.md](../../PACKAGES.md) — stdlib module layout.
