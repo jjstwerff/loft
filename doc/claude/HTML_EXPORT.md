@@ -160,23 +160,42 @@ returns cleanly (so `tests/html_wasm.rs` passes), the page loads
 without exceptions, but `compileShader` fails on every frame and
 the canvas stays blank.
 
-`tests/html_render.rs` closes the loop by spawning headless
-Chrome with SwiftShader WebGL2, navigating to
-`doc/brick-buster.html`, and asserting zero
-`Runtime.consoleAPICalled type=error` or
+`tests/html_render.rs` closes the loop with two layers:
+
+**Layer 1 — JS console gate.**  Spawns headless Chrome with
+SwiftShader WebGL2, navigates to `doc/brick-buster.html`, asserts
+zero `Runtime.consoleAPICalled type=error` or
 `Runtime.exceptionThrown` events across a 6-second startup
-window.  Wired into `cargo test --release` (so `make ship` /
-`make ci` pick it up); skips cleanly when prerequisites
-(google-chrome / node / wasm32 toolchain / target/release/loft)
-are missing.
+window.  Catches shader compile errors, missing WebGL2 contexts,
+init exceptions.
+
+**Layer 2 — canvas content gate.**  After Layer 1 passes, clip a
+screenshot to the canvas element's bounding rect, decode the PNG
+inline (via `node:zlib` — no extra deps), count distinct RGB
+triples.  Fail if below 20 distinct colors.  A blank canvas (only
+clearColor) has 1-2 colors; a working Brick Buster frame has 128.
+Catches "compiles clean, blank canvas" — a successful shader
+compile that never gets used to draw, a draw call that no-ops, a
+state-tracking regression that silently skips geometry.
+
+Wired into `cargo test --release` (so `make ship` / `make ci`
+pick it up); skips cleanly when prerequisites (google-chrome /
+node / wasm32 toolchain / target/release/loft) are missing.
+~32 s warm-cache; ~60 s cold (one-time `make game` rebuild).
 
 The CDP driver lives in `tools/html_render_check.mjs` — a
 single-file Node script with no extra deps (uses Chrome
-DevTools Protocol via a built-in WebSocket implementation).
-Reusable for any future browser-deployed example: pass
-`<url> --wait-ms N --screenshot path` and the harness reports
-JSON to stdout, JSON to stderr on failure.
+DevTools Protocol via a built-in WebSocket implementation, and
+a minimal RGBA8/RGB8 PNG decoder for Layer 2).  Reusable for
+any future browser-deployed example:
 
+```
+node tools/html_render_check.mjs <url> \
+  --wait-ms N --screenshot path \
+  --canvas SELECTOR --canvas-min-colors N
+```
+
+Reports JSON to stdout on success; JSON to stderr on failure.
 `make test-html-render` runs just this gate for ad-hoc
 invocation.
 

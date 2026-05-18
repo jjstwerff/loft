@@ -14,6 +14,16 @@
 // Usage:
 //   node tools/html_render_check.mjs <url> [--wait-ms N] [--screenshot path]
 //                                          [--port N]   [--allow PATTERN]
+//                                          [--canvas SELECTOR]
+//                                          [--canvas-min-colors N]
+//
+// `--canvas SELECTOR` enables Layer 2: capture a clipped screenshot of
+// the canvas element and count distinct RGB triples in the result.  If
+// fewer than `--canvas-min-colors` (default 20) distinct colors are
+// present, fail.  Catches the "compiles clean, blank canvas" pattern
+// that Layer 1 (console-error-only) can't see — a WebGL2 context that
+// never gets drawn into stays in clearColor and the screenshot is one
+// uniform color.
 //
 // Skip protocol — if google-chrome is not installed, exit 2 with a
 // `SKIP: …` line on stderr (callers turn this into a test skip).
@@ -21,6 +31,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import process from 'node:process';
@@ -28,16 +39,21 @@ import process from 'node:process';
 // ── CLI ────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 if (args.length < 1) {
-  console.error('usage: html_render_check.mjs <url> [--wait-ms N] [--screenshot PATH] [--port N] [--allow REGEX]');
+  console.error('usage: html_render_check.mjs <url> [--wait-ms N] [--screenshot PATH] [--port N] [--allow REGEX] [--canvas SELECTOR] [--canvas-min-colors N]');
   process.exit(64);
 }
 const URL_ARG = args[0];
-const opts = { waitMs: 8000, screenshot: null, port: 9222, allow: [] };
+const opts = {
+  waitMs: 8000, screenshot: null, port: 9222, allow: [],
+  canvasSelector: null, canvasMinColors: 20,
+};
 for (let i = 1; i < args.length; i++) {
   if (args[i] === '--wait-ms') opts.waitMs = parseInt(args[++i], 10);
   else if (args[i] === '--screenshot') opts.screenshot = args[++i];
   else if (args[i] === '--port') opts.port = parseInt(args[++i], 10);
   else if (args[i] === '--allow') opts.allow.push(new RegExp(args[++i]));
+  else if (args[i] === '--canvas') opts.canvasSelector = args[++i];
+  else if (args[i] === '--canvas-min-colors') opts.canvasMinColors = parseInt(args[++i], 10);
   else { console.error('unknown flag: ' + args[i]); process.exit(64); }
 }
 
@@ -151,6 +167,93 @@ function encodeFrame(text) {
   return Buffer.concat([header, mask, masked]);
 }
 
+// ── PNG decode (just enough to count distinct RGB triples) ────────
+// Layer 2 wants to know "is the canvas blank?".  We get a PNG
+// screenshot from CDP, decompress the IDAT chunks via node:zlib, undo
+// the per-row filters, and count distinct (R,G,B) tuples.  A canvas
+// that never got drawn into is one uniform color (Chrome's default
+// black, or the WebGL clearColor); a working frame has dozens to
+// thousands of distinct colors.
+//
+// We don't need a general PNG decoder — Chrome's captureScreenshot
+// always emits RGBA8 (`colorType=6`, `bitDepth=8`), no interlace.  A
+// dozen lines of code cover that.
+function decodePngRgb(pngBuf) {
+  if (pngBuf.readUInt32BE(0) !== 0x89504e47 || pngBuf.readUInt32BE(4) !== 0x0d0a1a0a) {
+    throw new Error('not a PNG');
+  }
+  let off = 8;
+  let width = 0, height = 0, bitDepth = 0, colorType = 0;
+  const idatChunks = [];
+  while (off < pngBuf.length) {
+    const len = pngBuf.readUInt32BE(off);
+    const type = pngBuf.slice(off + 4, off + 8).toString('ascii');
+    const data = pngBuf.slice(off + 8, off + 8 + len);
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      if (data[10] !== 0 || data[11] !== 0 || data[12] !== 0) {
+        throw new Error('unsupported PNG: compression/filter/interlace != 0');
+      }
+    } else if (type === 'IDAT') {
+      idatChunks.push(data);
+    } else if (type === 'IEND') {
+      break;
+    }
+    off += 12 + len;
+  }
+  if (bitDepth !== 8) throw new Error('unsupported PNG bit depth: ' + bitDepth);
+  // colorType 6 = RGBA, 2 = RGB, 0 = gray, 4 = gray+alpha
+  let bpp;
+  if (colorType === 6) bpp = 4;
+  else if (colorType === 2) bpp = 3;
+  else if (colorType === 4) bpp = 2;
+  else if (colorType === 0) bpp = 1;
+  else throw new Error('unsupported PNG color type: ' + colorType);
+  const raw = zlib.inflateSync(Buffer.concat(idatChunks));
+  const stride = width * bpp;
+  const out = Buffer.alloc(height * stride);
+  // Un-filter each scanline.  Filter byte precedes each row.
+  for (let y = 0; y < height; y++) {
+    const filt = raw[y * (stride + 1)];
+    const src = raw.slice(y * (stride + 1) + 1, y * (stride + 1) + 1 + stride);
+    const prev = y === 0 ? null : out.slice((y - 1) * stride, y * stride);
+    const dst = out.slice(y * stride, (y + 1) * stride);
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? dst[x - bpp] : 0;
+      const b = prev ? prev[x] : 0;
+      const c = (prev && x >= bpp) ? prev[x - bpp] : 0;
+      let val;
+      if (filt === 0) val = src[x];
+      else if (filt === 1) val = (src[x] + a) & 0xff;
+      else if (filt === 2) val = (src[x] + b) & 0xff;
+      else if (filt === 3) val = (src[x] + ((a + b) >> 1)) & 0xff;
+      else if (filt === 4) {
+        // Paeth
+        const p = a + b - c;
+        const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        const pr = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+        val = (src[x] + pr) & 0xff;
+      } else throw new Error('unknown PNG filter: ' + filt);
+      dst[x] = val;
+    }
+  }
+  // Walk the de-filtered RGBA/RGB buffer, count distinct RGB triples.
+  const seen = new Set();
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const off = y * stride + x * bpp;
+      const r = out[off];
+      const g = bpp >= 2 ? out[off + 1] : r;
+      const b = bpp >= 3 ? out[off + 2] : r;
+      seen.add((r << 16) | (g << 8) | b);
+    }
+  }
+  return { width, height, distinctColors: seen.size };
+}
+
 // ── Main ───────────────────────────────────────────────────────────
 (async () => {
   let exitCode = 0;
@@ -207,8 +310,57 @@ function encodeFrame(text) {
       }
     }
 
+    // Layer 2: canvas content check.  Capture a screenshot clipped to
+    // the canvas element's bounding rect, decode it, count distinct
+    // RGB triples, fail if below the threshold.  A canvas that was
+    // cleared to a single color but never drawn into has 1-2 distinct
+    // colors; a working game frame has hundreds-thousands.
+    let canvasReport = null;
+    if (opts.canvasSelector) {
+      try {
+        // dpr is needed to convert CSS px (returned by getBoundingClientRect)
+        // to device px (what Page.captureScreenshot operates in).
+        const rectEval = await send('Runtime.evaluate', {
+          expression: `
+            (function(){
+              const el = document.querySelector(${JSON.stringify(opts.canvasSelector)});
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              if (r.width < 1 || r.height < 1) return null;
+              return { x: r.x, y: r.y, width: r.width, height: r.height,
+                       dpr: window.devicePixelRatio || 1 };
+            })()
+          `,
+          returnByValue: true,
+        });
+        const rect = rectEval.result.value;
+        if (!rect) {
+          canvasReport = { error: 'canvas selector matched no visible element: ' + opts.canvasSelector };
+        } else {
+          const clip = {
+            x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+            scale: 1,
+          };
+          const shot = await send('Page.captureScreenshot', { format: 'png', clip });
+          const pngBuf = Buffer.from(shot.data, 'base64');
+          const info = decodePngRgb(pngBuf);
+          canvasReport = { ...info, threshold: opts.canvasMinColors };
+        }
+      } catch (e) {
+        canvasReport = { error: 'canvas content check failed: ' + e.message };
+      }
+    }
+
     // Collect failures
     const failures = [];
+    if (canvasReport && canvasReport.error) {
+      failures.push({ kind: 'canvas.error', text: canvasReport.error });
+    } else if (canvasReport && canvasReport.distinctColors < opts.canvasMinColors) {
+      failures.push({
+        kind: 'canvas.blank',
+        text: `canvas has only ${canvasReport.distinctColors} distinct colors (threshold ${opts.canvasMinColors})`,
+      });
+    }
     for (const e of events) {
       if (e.method === 'Runtime.consoleAPICalled' && e.params.type === 'error') {
         const text = e.params.args.map(a => a.value ?? a.description ?? '').join(' ');
@@ -236,10 +388,10 @@ function encodeFrame(text) {
     }
 
     if (failures.length > 0) {
-      console.error(JSON.stringify({ ok: false, url: URL_ARG, failures }, null, 2));
+      console.error(JSON.stringify({ ok: false, url: URL_ARG, failures, canvas: canvasReport }, null, 2));
       exitCode = 1;
     } else {
-      console.log(JSON.stringify({ ok: true, url: URL_ARG, eventCount: events.length }));
+      console.log(JSON.stringify({ ok: true, url: URL_ARG, eventCount: events.length, canvas: canvasReport }));
     }
   } catch (e) {
     console.error('harness error: ' + e.message);

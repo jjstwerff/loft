@@ -11,10 +11,19 @@
 // The HTML-instantiation test sees a clean exit, the canvas is blank,
 // and the regression ships.
 //
-// This gate closes that loop: builds `doc/brick-buster.html` (the only
-// browser-deployed graphics artefact today), loads it in headless
-// Chrome with SwiftShader WebGL2, and fails on any
-// `Runtime.consoleAPICalled type=error` or `Runtime.exceptionThrown`.
+// This gate closes that loop with two layers:
+//
+// - **Layer 1** — fail on any JS console.error / Runtime.exceptionThrown
+//   in the first 6 seconds of page load.  Catches shader compile
+//   errors, missing WebGL2 contexts, init exceptions.
+//
+// - **Layer 2** — clip a screenshot to the canvas element, decode the
+//   PNG, count distinct RGB triples.  Fail if below 20 distinct colors
+//   (a blank canvas has 1-2; a working Brick Buster frame has 128).
+//   Catches the "compiles clean, blank canvas" pattern that Layer 1
+//   can't see — e.g. a successful shader compile that never gets used
+//   to draw, or a draw call that no-ops because of a state-tracking
+//   regression.
 //
 // Skips cleanly when prerequisites (node, chrome, wasm32 toolchain,
 // host loft binary) are not available — same shape as
@@ -192,6 +201,14 @@ fn brick_buster_browser_renders_without_console_errors() {
         .args(["--port", &cdp_port.to_string()])
         .arg("--screenshot")
         .arg(&screenshot)
+        // Layer 2: capture a clipped screenshot of the canvas element,
+        // decode it, and assert at least 20 distinct RGB colors.  Catches
+        // the "compiles clean, blank canvas" pattern that Layer 1 (no
+        // console errors) can't see.  Empirical baseline: working Brick
+        // Buster frame yields 128 distinct colors; a blank canvas (only
+        // clearColor) has 1-2.
+        .args(["--canvas", "#c"])
+        .args(["--canvas-min-colors", "20"])
         // The page favicon 404 is benign; the harness filters generic
         // "Failed to load resource" automatically.  Swiftshader emits
         // a one-line GPU-stall performance warning at info level — we
