@@ -96,11 +96,66 @@ The MVP is the foundation; remaining work for the full phase:
 - **`tools/indexer/idx.loft`** — loft port of the bash
   `scripts/idx` CLI.  Talks to the daemon over the
   WebSocket.
+  - **MVP shipped 2026-05-18** (commit `a9a96f0f`).  Covers the
+    two queries the CI gate uses (`broken` + `broken-links`).
+    Wired into `tests/index_hygiene.rs::index_hygiene_clean` via
+    `cargo run --bin loft -- tools/indexer/src/idx.loft <query>`,
+    replacing the bash `scripts/idx` invocation that surfaced
+    PE-format + MSYS-path + native-jq compatibility gotchas on
+    Windows.  Driver: every cross-OS bash gotcha listed in
+    [§ Bash scripts evaluation — what else benefits from loft?](#bash-scripts-evaluation--what-else-benefits-from-loft).
+  - Still open: `tag:` / `prefix:` / `file:` / `incoming:` /
+    `all` / `help` queries, plus the `--before` / `--after` /
+    `--para` / `--max-bytes` excerpt flags.  Each can land as
+    its own commit; the bash `scripts/idx` stays as the
+    bootstrap fallback (per CLAUDE.md "Key commands") until
+    all queries have a loft equivalent.
 - **Standalone binary build** — `bin/loft-index` and
   `bin/loft-idx` as standalone artifacts (currently the
   scanner runs via `loft --native --lib lib/ scan.loft`).
 
 Each of the above can land as its own commit.
+
+## Bash scripts evaluation — what else benefits from loft?
+
+The cross-OS fight that PR-212 surfaced (six commits patching
+`scan.sh` for BSD-awk UTF-8 panics, MSYS argv limits, PE-format
+rejection, native-jq MSYS-path translation, GNU-only flags, etc.)
+prompted an audit of every bash / Python script in `tools/` and
+`scripts/`.  Ranked by **dogfood ROI × stability gain**:
+
+| Script | Lines | In CI? | Cross-OS today? | Recommendation |
+|---|---|---|---|---|
+| **`tools/indexer/scan.sh`** | 630 | Linux + macOS + Windows | No — just absorbed 6 portability patches | **STRONG YES — port next.**  Already half-done (`tools/indexer/src/scan.loft` exists as the loft-side scanner; remaining work: full bucketed tags.json + broken validation + JSON merge to replace bash's role in `make index`).  Highest dogfood ROI: exercises file walking, JSON emission, sorted/hash, format strings; largest stability win — drops the entire bash dependency from `make index`. |
+| **`scripts/check_doc_drift.sh`** | 460 | Linux only (non-blocking) | Probably broken on macOS/Windows (heavy `awk` + `find` + `realpath`) | **Yes, but second.**  Not on fire because CI only runs it on Linux, so portability gain is latent.  Good dogfood for `lib/markdown` + text scanning.  Revisit when the non-blocking status escalates OR when the bash version surfaces its first real regression. |
+| **`tools/viewer/refresh.sh`** | 135 | No (runs during `make view`) | Suspect — shells out to `git` + `jq` | **Wait for `lib/process`** (planned in [`lib_plans/future/15-process/`](../../lib_plans/future/15-process/)).  The viewer needs git state in JSON; loft can't spawn `git` until `lib/process` lands.  Once that ships, port `refresh.sh` so the viewer becomes a pure-loft tool. |
+| **`tools/indexer/install-hook.sh`** | 64 | No (one-shot install) | Maybe | **Skip.**  One-time setup; install-time OS quirks are acceptable. |
+| **`scripts/find_problems.sh`** | 361 | No (dev-only) | Linux primary | **Skip.**  Developer harness around `cargo test --no-fail-fast`; spawning cargo + parsing output is awkward without `lib/process`. |
+| **`scripts/p09_fast_gate.sh`** | 204 | No (dev-only) | Linux | **Skip.**  Used by devs for fast iteration; not user-visible. |
+| **`tools/indexer/fix_broken_links.py`** | 278 | No (manual repair) | Python is already portable | **Skip.**  No portability fire. |
+| **`tools/indexer/migrate.py`** | 312 | No (one-shot, already ran) | Python | **Skip** — done. |
+| **`scripts/browser/coop_server.py`** | 23 | Yes (browser tests) | Python | **Skip** — tiny + portable. |
+| **`scripts/browser/run_golden.sh`** | 123 | Yes (browser tests, Linux only) | Linux only by nature (headless Chrome orchestration) | **Skip** — bound to a Linux CI runner with Chrome installed. |
+| **`scripts/browser/run_caps.sh`** | 76 | Yes (browser tests, Linux only) | Linux only | **Skip** — same. |
+
+**Sequencing for follow-up commits:**
+
+1. **Next** — finish porting `scan.sh` → `tools/indexer/src/scan.loft`
+   (already exists for tag emission; remaining work: broken-tag
+   validation + full bucketed JSON merge + `problems_open` /
+   `plans_*` data sources).  Phase 7's stated goal.  Drops `make
+   index`'s bash dependency on all three platforms.
+2. **After `lib/process` lands** — port `refresh.sh` so the
+   viewer becomes pure-loft end-to-end.
+3. **Eventually** — port `check_doc_drift.sh` when its
+   non-blocking status changes OR when it surfaces a real bug.
+4. **Don't port** — the 8 scripts that are Python (portable),
+   Linux-only by nature (browser orchestration), or one-shot
+   installers/migrations.
+
+The driving principle: **port when the bash version costs more
+hours patching OS quirks than the loft port costs to write.**
+`scan.sh` already crossed that line; nothing else has yet.
 
 ---
 
