@@ -721,11 +721,34 @@ fn is_segment_char(c: character) -> boolean {
 // Read a file's lines and scan each.  Files that fail to read
 // (binary, permissions, transient races) are silently skipped —
 // this matches scan.sh's `|| true` resilience.
-fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>) {
+// Aggregated sub-phase timings for `walk + scan source roots`
+// — populated by scan_file / walk_tree when LOFT_INDEX_PROFILE=1.
+// Bracket overhead: ~3 ticks() calls per file (~1500 total on
+// the loft tree) ≈ 1ms — well within measurement noise.
+struct SubTimings {
+    io_us: integer,
+    walk_us: integer,
+    dir_us: integer,
+    file_count: integer,
+}
+
+// Shared instance for the profile path.  Loft has no module-
+// scope mutable state, so we hang it off a singleton-ish
+// pattern: main() creates one ScanTimings and passes it down.
+struct ScanTimings {
+    st: SubTimings,
+}
+
+fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>,
+             timings: ScanTimings) {
+    t0 = ticks();
     f = file(file_path);
     if f.format == Format.NotExists { return; }
     if f.format == Format.Directory { return; }
     src = f.content();
+    t1 = ticks();
+    timings.st.io_us = timings.st.io_us + (t1 - t0);
+    timings.st.file_count = timings.st.file_count + 1;
     // Markdown link extraction is .md-only; computing base_dir
     // once outside the loop avoids per-line allocation for the
     // 99% of source files that aren't markdown.  Fenced-code-
@@ -784,6 +807,8 @@ fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>) {
             }
         }
     }
+    t_end = ticks();
+    timings.st.walk_us = timings.st.walk_us + (t_end - t1);
 }
 
 // Strip leading ASCII whitespace (spaces + tabs).  Cheap;
@@ -1497,6 +1522,7 @@ fn main() {
 
     rows: vector<RawRef> = [];
     links: vector<LinkRef> = [];
+    timings = ScanTimings {};
     // Top-level indexable files (CLAUDE.md, README.md,
     // CHANGELOG.md, Cargo.toml, etc.) — iterate explicitly so
     // they don't require the recursive walker to descend from
@@ -1510,18 +1536,22 @@ fn main() {
             if entry.format != Format.Directory && is_indexable_ext(entry.path) {
                 p = entry.path;
                 if p.starts_with("./") { p = p[2..p.len()]; }
-                scan_file(p, rows, links);
+                scan_file(p, rows, links, timings);
             }
         }
     }
     if profile { t_now = ticks(); eprintln("  perf: scan top-level files {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
+    t_dir = ticks();
     for src_root in source_roots() {
         files = walk_tree(src_root);
         for fp in files {
-            scan_file(fp, rows, links);
+            scan_file(fp, rows, links, timings);
         }
     }
     if profile { t_now = ticks(); eprintln("  perf: walk + scan source roots {(t_now - t_prev) / 1000}ms (rows={rows.len()} links={links.len()})"); t_prev = t_now; }
+    if profile {
+        eprintln("    sub: file IO {timings.st.io_us / 1000}ms / scan loop {timings.st.walk_us / 1000}ms over {timings.st.file_count} files");
+    }
     // Output mode dispatch.  `LOFT_INDEX_BUCKETED=1` switches
     // to the `index/tags.json`-shape JSON object emission
     // (per-tag arrays + `links` map); the default stays JSON
