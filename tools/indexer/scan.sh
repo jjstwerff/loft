@@ -446,9 +446,17 @@ mv "$OUT.tmp" "$OUT"
 PROBLEMS_RECENT_TMP=$(mktemp)
 trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP" "$PROBLEMS_OPEN_TMP" "$PROBLEMS_RECENT_TMP"' EXIT
 if [ -f "$PROBS_FILE" ]; then
-  TODAY_EPOCH=$(date -u +%s)
-  awk -F'|' -v today="$TODAY_EPOCH" '
-    BEGIN { window = 30 * 24 * 60 * 60 }
+  # Compute the 30-day-ago cutoff in shell rather than awk — gawk's
+  # `mktime` isn't available in BSD awk (macOS default), so the prior
+  # version exited non-zero under `set -euo pipefail` and broke
+  # `make index` in CI on macOS.  YYYY-MM-DD strings sort
+  # lexicographically, so the awk side reduces to a plain `<` compare.
+  # Try GNU `date -d` first, then BSD `date -v`; both produce the
+  # same `YYYY-MM-DD` shape so downstream is unchanged.
+  CUTOFF_DATE=$(date -u -d '30 days ago' +%Y-%m-%d 2>/dev/null \
+                || date -u -v-30d +%Y-%m-%d 2>/dev/null \
+                || echo "0000-00-00")
+  awk -F'|' -v cutoff="$CUTOFF_DATE" '
     /^\| [0-9]+ \|/ {
       n = $2; gsub(/ /, "", n);
       body = $3;
@@ -467,10 +475,8 @@ if [ -f "$PROBS_FILE" ]; then
         tmp = substr(tmp, RSTART + RLENGTH);
       }
       if (close_date == "") next;
-      # Convert YYYY-MM-DD → epoch via mktime.
-      yr = substr(close_date, 1, 4); mo = substr(close_date, 6, 2); dy = substr(close_date, 9, 2);
-      ts = mktime(yr " " mo " " dy " 00 00 00");
-      if (ts < 0 || (today - ts) > window) next;
+      # YYYY-MM-DD sorts lexicographically.  Skip rows older than cutoff.
+      if (close_date < cutoff) next;
       sub("^ *\\*\\*@P" n "\\*\\* — ", "", body);
       sub(/^ +/, "", body);
       pos = index(body, ". ");
@@ -523,7 +529,10 @@ emit_plans() {
     [ -f "$readme" ] || continue
     if [ "$mtime_window" -gt 0 ]; then
       local m
-      m=$(stat -c %Y "$d" 2>/dev/null || echo 0)
+      # `stat -c %Y` is GNU syntax; macOS BSD stat uses `-f %m`.
+      # Try both so the mtime check works on either platform; fall
+      # through to `0` to make the rest of the script tolerant.
+      m=$(stat -c %Y "$d" 2>/dev/null || stat -f %m "$d" 2>/dev/null || echo 0)
       [ $((now - m)) -le "$mtime_window" ] || continue
     fi
     local slug
