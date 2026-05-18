@@ -387,15 +387,21 @@ view: view-refresh
 	    echo "host loft binary missing; run: make view-build"; \
 	    exit 1; \
 	fi
-	# Default to --native (faster).  @P274 closed 2026-05-14
-	# (use-after-free in patch_hoisted_returns Pass 2 + text-
-	# concat type-dispatch in parse_append_text).
-	# `LOFT_VIEW_INTERP=1 make view` falls back to the
-	# interpreter (useful when bisecting a native-only regression).
+	# Default to --native-release (rustc -O).  Bare --native runs
+	# unoptimised generated Rust — for an HTTP server that handles
+	# repeated requests, the per-request cost difference is large
+	# (10× on hot loops; see PERFORMANCE.md § Open work).  Cold
+	# compile is ~6s; cached binary survives across restarts via
+	# tools/viewer/src/.loft/cache/.
+	# @P274 closed 2026-05-14 (use-after-free in
+	# patch_hoisted_returns Pass 2 + text-concat type-dispatch in
+	# parse_append_text).
+	# `LOFT_VIEW_INTERP=1 make view` falls back to the interpreter
+	# (useful when bisecting a native-only regression).
 	@if [ -n "$$LOFT_VIEW_INTERP" ]; then \
 	    ./target/release/loft --interpret --lib lib/ tools/viewer/src/main.loft; \
 	else \
-	    ./target/release/loft --lib lib/ tools/viewer/src/main.loft; \
+	    ./target/release/loft --native-release --lib lib/ tools/viewer/src/main.loft; \
 	fi
 
 # game: rebuild the efficient browser build of Brick Buster from any
@@ -523,7 +529,12 @@ play:
 	@echo ""
 	@echo "    Controls: ←/→ or A/D to move, Space to launch, Esc to quit"
 	@echo ""
-	@./target/release/loft --native \
+	@# --native-release (rustc -O) for the game frame loop; bare
+	@# --native runs unoptimised generated Rust and burns frame
+	@# budget on call-ABI / null-sentinel bookkeeping the optimiser
+	@# normally elides.  Cold compile is ~6s; cached binary survives
+	@# across runs.
+	@./target/release/loft --native-release \
 	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
 	    lib/graphics/examples/25-brick-buster.loft
 
@@ -559,7 +570,10 @@ native-editor:
 	@echo "  [3/3] launching Moros editor ..."
 	@echo "    Controls: WASD move / Arrows camera / 1-6 tools / Ctrl-Z undo"
 	@echo "              Left-click paint / F5 save / F9 load / F11 fullscreen / Esc quit"
-	@./target/release/loft --native \
+	@# --native-release for the editor's UI / paint frame loop —
+	@# same rationale as `make play`.  Cached binary survives across
+	@# runs via lib/graphics/examples/.loft/cache/.
+	@./target/release/loft --native-release \
 	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
 	    lib/graphics/examples/moros_editor.loft
 
