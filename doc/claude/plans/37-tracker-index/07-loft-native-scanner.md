@@ -577,6 +577,181 @@ harness.
 5. CHANGELOG_TECHNICAL.md entry references the removal +
    credits the PR-212 dogfood loop that drove it.
 
+### Pre-flight problems to solve
+
+Five gaps surfaced from auditing the scan.sh-removal design.  Each
+either prevents an entire class of CI-cycle-burning bug, or
+materially accelerates the per-bucket implementation loop.  Order
+is impact-per-effort.
+
+#### P1 — Pre-capture a golden `tags.json` baseline (XS, high impact)
+
+The test strategy above assumes a `tests/golden/tags.json` exists
+for sub-commit H to diff against.  It doesn't today.  Without
+it, the implementer would have to capture the golden during
+sub-commit H — coupling the parity assertion to the cutover and
+making sub-commits B-G have no concrete regression target.
+
+**Fix:** capture the golden NOW as its own focused commit
+BEFORE sub-commit B.  Refresh in sub-commit G (after scan.loft
+is byte-identical).  Then every B-G commit can assert against
+the same target without re-capturing.
+
+  - File: `tests/golden/tags.json` (committed; ~330 KB).
+  - Refresh: `make index && cp index/tags.json tests/golden/tags.json`.
+  - Helper: a tiny `cargo test --test parity_check -- --baseline tests/golden/tags.json` invocation that diffs the current loft output against the golden using `jq -S`.
+
+Cost: 10 min.
+
+#### P2 — Cross-platform path-separator normalization (S, prevents Windows re-reset)
+
+Latent silent-failure risk.  On Windows MSYS, `file().path` and
+similar return paths with `\` separators.  If scan.loft emits
+those raw into JSON `path` / `file` fields, Windows `tags.json`
+differs from Linux / macOS — and the parity assertion fails for
+the EXACT class of issue that wasted 11 CI cycles on this PR.
+
+The bug is invisible from Linux: only surfaces when Windows CI
+runs the first new bucket emit (sub-commit B or later).
+Catching it at sub-commit B means another commit, another CI
+cycle, another 10 min.  Catching it pre-emptively means zero
+extra CI cycles.
+
+**Fix:** add `fn normalize_path(p: text) -> text` to scan.loft
+(replaces `\` with `/`) and use it at every `path` / `file`
+emit site.  ~10 lines.  Plus a Linux-side assertion that no
+JSON value in `tags.json` contains a `\` (smoke test catches
+the issue even on Linux runners).
+
+```loft
+fn normalize_path(p: text) -> text {
+    out = "";
+    i = 0;
+    n = p.len();
+    while i < n {
+        c = p[i];
+        if c == '\\' { out += "/"; } else { out += "{c}"; }
+        i = i + 1;
+    }
+    out
+}
+```
+
+Linux test:
+
+```rust
+// tests/index_hygiene.rs — extension to index_hygiene_clean
+let raw = std::fs::read_to_string(project_root().join("index/tags.json"))
+    .expect("read tags.json");
+assert!(
+    !raw.contains('\\') || raw.contains("\\\""),  // escaped quotes are fine
+    "tags.json must not contain literal backslashes outside JSON escapes; \
+     Windows path-separator drift would silently break cross-OS parity"
+);
+```
+
+Cost: 30 min.
+
+#### P3 — JSON emit boilerplate is verbose (M, dev velocity)
+
+Every new emitter ends up writing ~20 lines of
+`print("{{\"key\":\"")` / comma management / `json_escape` /
+`print("\"}}")`.  Across 7 new emitters that's ~140 lines of
+mechanical boilerplate.
+
+A small `JsonEmit` helper struct in scan.loft (or even just
+inline helpers) with `obj_start()`, `field_str(k, v)`,
+`field_int(k, v)`, `array_start()`, `obj_end()` etc. with
+internal comma tracking — per-bucket boilerplate drops from
+~20 lines to ~5.
+
+[STDLIB.md § Open work](../../STDLIB.md#open-work) already calls out
+"JSON emission helpers" as a planned `lib/json_emit/` library.
+Out of scope to ship the full lib here, but ~30 lines of inline
+helpers in scan.loft (alongside `json_escape`) would cut new-
+bucket boilerplate by ~75%.
+
+**Fix:** ship the helpers as their own sub-commit between A and
+B — they're independently useful + testable.
+
+Cost: 1-2 h.  Optional — skip if iteration feels fast enough.
+
+#### P4 — PROBLEMS.md row parser has an edge case scan.sh shares (XS doc, S fix)
+
+Both scan.sh's awk parser and the planned scan.loft port split
+PROBLEMS.md rows on `|`.  A row body containing a literal `|`
+(inside a regex example, code span, or escaped pipe) splits
+incorrectly — column boundaries shift, the severity cell ends
+up with body text in it, the row is silently mis-categorised.
+
+The tree has no such rows today.  But if one appears mid-arc,
+both scanners produce wrong output until someone notices —
+and the parity assertion still passes (both wrong in the same
+way).
+
+**Fix:** add a smoke assertion that every parsed row's
+`severity` cell starts with a known severity word
+(`Low|Medium|High|Critical|Closed|...`).  A mid-row `|` would
+land arbitrary text in the severity cell, failing the
+assertion.  Catches the silent corruption.
+
+```rust
+// tests/index_hygiene.rs — extension to index_hygiene_clean
+let problems_open: Vec<serde_json::Value> = ...; // jq path
+for row in &problems_open {
+    let sev = row["severity"].as_str().unwrap_or("");
+    assert!(
+        ["Low", "Medium", "High", "Critical", "(closed", "(partial"]
+            .iter()
+            .any(|prefix| sev.starts_with(prefix)),
+        "row severity '{sev}' doesn't start with a known prefix — \
+         PROBLEMS.md row may contain a literal '|' that breaks pipe-split"
+    );
+}
+```
+
+Cost: ~5 lines.  Land alongside sub-commit B.
+
+#### P5 — Manual compile+run loop is slow (M, dev velocity)
+
+`cargo run --release --bin loft -- tools/indexer/src/scan.loft`
+builds the loft binary (5-30s incremental) then runs the loft
+program (1-5s on the loft tree).  Each iteration during sub-
+commit B-G is at least 10s wall clock.  Across ~200 iterations
+during implementation = 30+ min spent waiting.
+
+**Fix:** add `make index-loft-fast` Makefile target using
+`--interpret` (skips native rustc), or `make index-loft-watch`
+using `inotifywait` to auto-rerun on save.  Either cuts
+iteration to <2s.
+
+```make
+index-loft-fast:
+	@./target/release/loft --interpret --lib lib/ tools/indexer/src/scan.loft
+
+index-loft-watch:
+	@while inotifywait -e modify tools/indexer/src/scan.loft 2>/dev/null; do \
+	    make -s index-loft-fast; \
+	done
+```
+
+Cost: 10 min.  Optional — skip unless implementation drags.
+
+#### Recommendation
+
+Land **P1 + P2 + P4** as their own focused commit BEFORE any of
+sub-commits B-J starts.  Combined effort ~45 min; the three
+together close the two highest-impact silent-failure risks
+(golden missing, Windows path drift) AND the one known-but-
+shared parser edge case.
+
+**P3 + P5** are dev-velocity optimisations — ship them when the
+implementation loop starts feeling grindy, not pre-emptively.
+
+This pre-flight commit becomes "**sub-commit A.5**" in the
+sequence below — a prerequisite for B that doesn't change
+scan.loft's behaviour but unlocks the rest.
+
 ### Sub-commit sequencing
 
 Each row lands as its own focused commit so the arc can pause
@@ -588,7 +763,8 @@ green throughout):
 | # | Sub-commit | Effort | Test signal |
 |---|---|---|---|
 | **A** | `ymd_days_ago(days)` native primitive | XS | **Shipped** (commit `9a163f55`) — `cargo test fill_rs_up_to_date` green |
-| B | `emit_problems_open` in scan.loft + emit when `LOFT_INDEX_BUCKETED=1` | S | spot-check JSON shape against bash output; bash side stays canonical |
+| A.5 | Pre-flight: golden `tests/golden/tags.json` baseline + `normalize_path` helper + parser-sanity smoke assertions (P1 + P2 + P4 from Pre-flight section above).  Required before B; ~45 min combined. | XS | new `parity_check` test passes against the captured golden; backslash assertion passes on Linux; severity-prefix assertion passes |
+| B | `emit_problems_open` in scan.loft + emit when `LOFT_INDEX_BUCKETED=1` | S | spot-check JSON shape against bash output; bash side stays canonical; `parity_check` for `.problems_open` slice |
 | C | `emit_problems_recent` in scan.loft using `ymd_days_ago(30)` | S | same |
 | D | `file.mtime() -> long` native (new helper) + declaration | XS | smoke test on any file |
 | E | `emit_plans_active` / `_future` / `_deferred` / `lib_plans_future` (the four no-date buckets) | S | shape check |
