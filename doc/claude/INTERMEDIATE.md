@@ -135,7 +135,7 @@ field versus a vector element.
 Nullable integers with range exactly 256 or 65536 also use 1 or 2
 bytes respectively.
 
-**Vector elements** (post-plan-02 narrowing): vectors of narrow
+**Vector elements** (post-@PLAN02 narrowing): vectors of narrow
 integer aliases honour `forced_size` via a divergent rule because
 `vector_add` raw-byte-copies element bytes — the `+1` offset of
 `Parts::Short` would cause read/write mismatch.
@@ -235,7 +235,7 @@ pub struct State {
 pub type Call = fn(&mut Stores, &mut DbRef);
 ```
 
-**`const_refs`** (plan-28 Phase A, 2026): one entry per definition;
+**`const_refs`** (@PLAN28 Phase A, 2026): one entry per definition;
 zero for non-constant defs, populated for vector constants whose
 records were pre-built into `CONST_STORE` (store 1) during
 `byte_code()`.  `OpConstRef(d_nr)` indexes into this vector.

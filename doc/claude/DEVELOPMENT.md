@@ -410,6 +410,167 @@ and statistically more likely to contain regressions.
 
 ---
 
+## Inserting Discovered Enhancements Into the Active Plan
+
+Building real loft consumers (libraries, tools, viewers, indexers)
+systematically surfaces gaps in the language and stdlib that toy
+programs and the test suite never hit.  A consumer that needs a
+missing feature has THREE choices at the moment of discovery:
+
+  1. **Work around it in the consumer** — write extra loft code
+     to dodge the gap, leave a `// loft gap: ...` comment.
+  2. **Defer it to a separate plan / catalog** — file the gap
+     somewhere central, keep building the consumer.
+  3. **Insert a step into the active plan that fixes the gap
+     itself, then resume the feature work** — language /
+     stdlib gets sturdier; the workaround never enters
+     shipped code.
+
+**Default to (3) when the fix is XS or S** (under half a day).
+For (3) the discovered enhancement becomes a sub-step of the
+plan's CURRENT phase — landed BEFORE the next feature phase
+opens.  The cost-of-context advantage is the whole reason:
+you already understand the workaround site; the loft-side
+fix is one or two file edits away in compiler / stdlib
+territory you haven't paged out yet.
+
+### When to default to (1) workaround + (2) defer instead of (3) inline-fix
+
+Use (1) + (2) when ANY of these hold:
+
+  - Fix needs design discussion (typer architecture,
+    multi-file refactor, breaks ABI).
+  - Fix is M+ effort (a day or more) and would push the
+    feature phase past its planned-budget.
+  - Workaround is genuinely cheap and the gap is
+    documented (`<!-- loft gap: needs vector.sort() -->`
+    inline + a row in the canonical home).
+
+Default to (3) when the fix is small, the consumer
+workaround is clearly inferior to having the feature, and
+the consumer code that uses the gap is fresh in working
+memory.
+
+### How items are documented (one canonical home each, no duplicates)
+
+When (3) doesn't apply, the gap goes to its CANONICAL home.
+**Never invent a parallel catalog** — that creates the
+"two places to keep in sync" problem and dilutes the action
+surface (`./scripts/idx broken`, the broken-tag validator,
+the open-issues fast index in PROBLEMS.md, etc.).
+
+| Item shape | Canonical home | Where to scan for them |
+|---|---|---|
+| **Bug** (observable wrong behavior — codegen quirk, parser quirk, lexer rejection, runtime panic) | P-issue row in [PROBLEMS.md](PROBLEMS.md) | `./scripts/idx tag:@P<n>` per ID; bash one-liner `./scripts/idx all \| jq '...'` for the open set |
+| **Stdlib gap** (missing fn / method / overload that fits the existing API surface) | `## Open work` row in [STDLIB.md](STDLIB.md) | grep / read STDLIB.md `## Open work` |
+| **Compiler / language gap** (lexer / parser / typer change with surface-area implications) | P-issue row OR `## Open work` row in [COMPILER.md](COMPILER.md) | same as above |
+| **Native codegen gap** | `## Open work` row in [NATIVE.md](NATIVE.md) | NATIVE.md |
+| **New library** (independent package — process, fs_watch, regex, cache, …) | `lib_plans/future/<NN>-<slug>/README.md` slot | `ls lib_plans/future/` |
+| **Big deferred feature** (M+ scale; needs its own design + multi-phase implementation; can't reasonably inline into the discovering plan's phase) | `plans/future/<NN>-<slug>/` (core-language) OR `lib_plans/future/<NN>-<slug>/` (library) plan slot — full README with goal, phases, acceptance | `ls plans/future/`, `ls lib_plans/future/` |
+
+The in-code workaround comment is MANDATORY regardless of
+which choice (1 / 2 / 3).  Reference the canonical home so
+the workaround stays self-explaining:
+
+```loft
+// @P276 — `s[i] ?? '<char>'` chain-compare trips rustc E0308 in
+// native; remove `??` and rely on the surrounding `i < n` guard.
+c = line[i];
+```
+
+```loft
+// stdlib gap (STDLIB.md § Open work, "vector.sort"): no
+// vector.sort() yet.  Use sorted<TagSlot[name]> as a sort
+// proxy for now.
+struct TagSlot { name: text not null }
+```
+
+When the canonical-home item ships, the workaround comment
+gets removed in the same commit (the comment IS the
+"unwound someday" handle).
+
+### Schedule-to-fix lives in the active plan
+
+The canonical home (P-issue / `## Open work` / lib_plans
+slot) holds the **design / details / reproducer** — the
+"what's broken and how would we fix it" answer.  The active
+plan's sub-step list holds the **schedule** — the "we plan to
+land this in this phase" commitment.
+
+Two-part discipline:
+
+  1. File the issue in its canonical home (per the routing
+     table above).  That's where readers go to understand
+     the bug.
+  2. Add a sub-step row to the active plan's phase doc
+     that schedules the fix — `<step #>` + `<one-line
+     summary referencing the canonical home>` + `<files to
+     touch>` + `<test name>`.  That's where readers go to
+     see "is anyone going to actually fix this?"
+
+The sub-step row doesn't duplicate the design — it points
+at the canonical home and commits the active plan to
+landing the fix.  Without the sub-step row, the
+canonical-home entry can languish indefinitely; with it,
+the issue has a scheduled landing.
+
+This applies to NEWLY-discovered issues during a phase too:
+file in canonical home, then append a sub-step row to the
+SAME phase (10.<N+1>) before moving on.  The phase's
+sub-step table grows in flight as the work surfaces sibling
+issues; that's expected and right.
+
+Items too big to inline as a single sub-step (L effort,
+full design pass needed) get a `lib_plans/future/` slot
+created AND a tracking row in the active plan's sub-step
+list that says "track via [lib_plans/future/<NN>/](path)
+— close this sub-step when that plan ships its first
+phase."  Design lives elsewhere; schedule lives in the
+active plan.
+
+### Why this keeps memory + ROADMAP clean
+
+- **Memory** stays small because every consumer-side
+  workaround references its canonical home — there's nothing
+  to "remember" beyond the inline pointer.  Your future self
+  reads the workaround comment, sees `@P276` or "STDLIB.md §
+  Open work", and goes there.
+
+- **ROADMAP** doesn't grow a row per discovered gap.
+  Discovered enhancements either get inlined into the active
+  plan (option 3) or land in their canonical home (P-issue /
+  `## Open work` / lib_plans).  ROADMAP rows POINT at those
+  homes when scheduling — they don't duplicate the inventory.
+
+- **Canonical homes already have action infrastructure**:
+  `./scripts/idx broken` for tag refs, `make problems` for the
+  open-issue list, `./scripts/idx incoming:STDLIB.md` for
+  "what links here," the doc-hygiene gate for plan-link
+  freshness.  Inventing a parallel catalog re-builds that
+  infrastructure for one slice of the open work.
+
+### When NOT to insert the fix (architectural caveat)
+
+Inserting a stdlib / compiler fix into a feature plan's
+phase is fine for XS / S work that lifts a workaround the
+phase added.  It's NOT fine for:
+
+  - Fixes that change observable language semantics (those
+    need a feature plan of their own — design first, then
+    the migration).
+  - Fixes that touch unrelated subsystems (a fence-skip in
+    `lib/markdown` shouldn't grow into a full markdown-
+    extension arc).
+  - Fixes that demand new tests beyond the consumer's
+    smoke test (those want a focused commit + their own
+    regression suite).
+
+Use judgment.  The default is "fix it now if it's cheap and
+in scope"; the override is "this is bigger than I thought —
+defer to canonical home".
+
+---
+
 ## Structured Commit Sequence
 
 For each item (or each independent area of a single item) follow the commit order
@@ -597,27 +758,16 @@ produces.
    declaration adjacent to the existing `Op*` family it extends
    (e.g. new `OpGetShortRaw` next to `OpGetInt4`) so regen output
    is readable.
-3. **Grow the `OPERATORS` array size in `src/fill.rs`** — change
-   `&[fn(&mut State); N]` to `&[fn(&mut State); N+k]` where `k`
-   is the number of new ops.  Without this, regen panics with
-   `Too many defined operators (N of N used)`.
-4. **Append placeholder identifiers at the bottom of the
-   `OPERATORS` array**, matching the snake_case form of the new
-   op names (`OpGetShortRaw` → `get_short_raw`).  Append in the
-   order declared in `default/01_code.loft` — array index becomes
-   the opcode number and must match what the parser emits via
-   `data.def_nr("OpGetShortRaw")`.
-5. **Add placeholder function definitions** with matching
-   signatures at the end of `src/fill.rs`.  Empty bodies are
-   fine — regen overwrites them.  Required so the array
-   references resolve and the crate compiles.
-6. **Build**: `cargo build --release`.  Must succeed before
-   regen runs.
-7. **Regenerate**: `cargo test --release --test issues
+3. **Regenerate**: `cargo test --release --test issues
    regen_fill_rs -- --ignored --nocapture`.  Overwrites
    `src/fill.rs` with canonical content derived from every
-   `#rust"…"` body in `default/*.loft`.
-8. **Rebuild dependents**:
+   `#rust"…"` body in `default/*.loft`.  No manual `fill.rs`
+   prep is needed — `OPERATORS` is slice-typed (`&[fn(&mut State)]`,
+   no fixed size) and the parse-time op-code assert was removed
+   (2026-05-13, Option A); regen handles the array grow + the
+   new function body in one pass from each new op's `#rust"…"`
+   annotation.
+4. **Rebuild dependents**:
    - `cargo build --release --lib` — refreshes the interpreter.
    - `cargo build --release --target wasm32-unknown-unknown --lib
      --no-default-features --features random` — refreshes the
@@ -626,18 +776,18 @@ produces.
    - `(cd tests/lib/native_pkg/native && cargo build --release)`
      — refreshes the fixture cdylib.  Same freshness check in
      `tests/native_loader.rs`.
-9. **Audit native codegen** (`src/codegen_runtime.rs`):
+5. **Audit native codegen** (`src/codegen_runtime.rs`):
    regen_fill_rs does NOT touch this file.  `match parts` arms
    that enumerate every `Parts::*` variant get a non-exhaustive
    warning when a new variant is added — add the new arm
    manually.  For opcodes that add new `stores.method()` calls,
    mirror them in codegen_runtime.rs (look for parallel
    `OpGetInt4` / `OpSetInt4` handling).
-10. **Run `native_dir` before committing**: `cargo test --release
-    --test native native_dir`.  Pure native-mode test compilation;
-    catches the silent-hang class of regression where every unit
-    test passes but a native-compiled script hangs.  Do NOT
-    commit based on unit-test success alone.
+6. **Run `native_dir` before committing**: `cargo test --release
+   --test native native_dir`.  Pure native-mode test compilation;
+   catches the silent-hang class of regression where every unit
+   test passes but a native-compiled script hangs.  Do NOT
+   commit based on unit-test success alone.
 
 **Ordering constraint**: opcode number is determined by entry
 order in `OPERATORS`, which `regen_fill_rs` derives from
@@ -646,6 +796,21 @@ opcode declarations invalidates every pre-compiled package that
 embeds the old numbers — **never reorder existing op
 declarations while adding new ones**.  Append at the end of the
 relevant family.
+
+### Friction history + remaining backlog
+
+**Surfaced 2026-05-13** during @P259's commit-1 work: hit the
+255-op limit when adding `OpIncRc`, had to manually patch
+`fill.rs` (array size + placeholder + stub fn body) before
+regen could run.  Position-sensitive too — the array entry had
+to match parse-order position (OpIncRc declared in
+`01_code.loft` → goes after `pre_alloc_vector`, NOT at the end
+of the array).
+
+| # | Improvement | Status | Notes |
+|---|---|---|---|
+| **A** | Slice-typed `OPERATORS: &[fn(&mut State)]` (no fixed size) + remove the parse-time op-code assert.  Regen now handles array grow + new fn body in one pass; staleness still caught by `n9_generated_fill_matches_src` and `fill_rs_up_to_date`. | **Shipped 2026-05-13** | Eliminates steps 3-5 of the old 10-step procedure (manual array grow, placeholder identifier, placeholder fn body). |
+| **B** | Auto-regen on `fill_rs_up_to_date` failure: have the test attempt regen + re-compare instead of just printing the command, OR convert `regen_fill_rs` from `#[ignore]` to a `build.rs` step that runs on every cargo build | Open (S effort) | Test-side variant is safer than `build.rs` (no build-time codegen risk); `build.rs` is cleanest long-term but more invasive.  After B: editing `default/*.loft` just causes a rebuild that automatically refreshes `fill.rs`. |
 
 ---
 

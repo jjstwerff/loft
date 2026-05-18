@@ -137,6 +137,66 @@ pub struct LogConfig {
     /// dispatch from `ptr::copy_nonoverlapping`.  Enabled with
     /// `LOFT_LOG=poison_free`.
     pub poison_free: bool,
+    /// Print every store-lock / store-unlock event to stderr with the
+    /// store_nr, record nr, and the runtime caller's location.  Use
+    /// `LOFT_LOG=locks` to activate.  Highest-leverage diagnostic for
+    /// "Write to locked store at rec=N fld=M" panics — the lock-event
+    /// trace immediately identifies which op acquired the lock.
+    /// This field is informational; `database/allocation.rs` reads
+    /// `LOFT_LOG` directly via `lock_trace_enabled()` so it works
+    /// even in test runs that don't construct a `LogConfig`.
+    pub trace_locks: bool,
+    /// Print every variable type-mutation event for a specific named
+    /// variable to stderr.  Set via `LOFT_LOG=type_timeline:<varname>`
+    /// — only mutations of variables whose name matches `<varname>`
+    /// are logged.  Each entry shows old type, new type, and the
+    /// mutation site (e.g. `add_variable`, `change_var_type`,
+    /// `set_type`, `subst_type`).
+    /// This field is informational; `variables/mod.rs` reads
+    /// `LOFT_LOG` directly via `type_timeline_target()`.
+    pub trace_type_timeline: Option<String>,
+}
+
+/// Plan-22 phase 02d-vii follow-up — central check for the
+/// `LOFT_LOG=locks` mode.  Inlined at every lock/unlock site.
+/// Reads the env var on each call; fast-fail (Err return) when
+/// the variable is unset or doesn't equal "locks".
+#[must_use]
+pub fn lock_trace_enabled() -> bool {
+    std::env::var("LOFT_LOG").as_deref() == Ok("locks")
+}
+
+/// Plan-22 02d-vii follow-up — `LOFT_LOG=type_timeline:<varname>`
+/// mode.  Returns `Some(varname)` when the env var has the
+/// `type_timeline:NAME` form; the caller then logs only var
+/// mutations matching `NAME`.  Returns `None` otherwise (fast
+/// path for the common case).
+#[must_use]
+pub fn type_timeline_target() -> Option<String> {
+    let raw = std::env::var("LOFT_LOG").ok()?;
+    raw.strip_prefix("type_timeline:").map(str::to_string)
+}
+
+/// Plan-22 02d-vii follow-up — `LOFT_LOG=slots:<fn_name>`
+/// mode.  Returns `Some(fn_name)` when the env var has the
+/// `slots:NAME` form.  Caller dumps slot-allocation decisions
+/// for fns matching `NAME` (substring match).
+#[must_use]
+pub fn slots_trace_target() -> Option<String> {
+    let raw = std::env::var("LOFT_LOG").ok()?;
+    raw.strip_prefix("slots:").map(str::to_string)
+}
+
+/// Plan-22 02d-vii follow-up — `LOFT_LOG=captures:<fn_name>`
+/// mode.  Returns `Some(fn_name)` when the env var has the
+/// `captures:NAME` form.  Caller dumps the capture-pipeline
+/// state for fns matching `NAME` (substring match): per-fn
+/// scalars_to_box, per-lambda mutated_captures + closure_record
+/// d_nr + per-attribute auto-Reference status.
+#[must_use]
+pub fn captures_trace_target() -> Option<String> {
+    let raw = std::env::var("LOFT_LOG").ok()?;
+    raw.strip_prefix("captures:").map(str::to_string)
 }
 
 impl LogConfig {
@@ -160,6 +220,8 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -181,6 +243,8 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -202,6 +266,8 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -224,6 +290,8 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -245,6 +313,8 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -266,6 +336,8 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -287,6 +359,8 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -311,6 +385,44 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
+        }
+    }
+
+    /// Plan-22 02d-vii follow-up — IR-only dump for ONE function.
+    /// `LOFT_LOG=ir:<fn_name>` builds this preset.
+    ///
+    /// Strips bytecode + execution trace down to just the parsed IR
+    /// tree for the named function.  Used to verify "did the parser
+    /// emit the IR shape I expected?" without the noise of bytecode
+    /// or runtime trace from `LOFT_LOG=full`.  The function name is
+    /// matched as a substring against fn names as parsed; e.g.
+    /// `LOFT_LOG=ir:test` matches `n_test` and any sibling fns
+    /// containing "test".  Use the full `n_<name>` form to disambiguate.
+    #[must_use]
+    pub fn ir_only(fn_name: &str) -> Self {
+        Self {
+            phases: LogPhase {
+                ir: true,
+                bytecode: false,
+                execution: false,
+            },
+            show_functions: Some(vec![fn_name.to_string()]),
+            trace_opcodes: None,
+            trace_tail: None,
+            annotate_slots: true,
+            snapshot_opcodes: None,
+            snapshot_window: 0,
+            check_bridging: false,
+            show_variables: false,
+            show_all_functions: false,
+            scope_debug: false,
+            dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -338,6 +450,8 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -364,6 +478,8 @@ impl LogConfig {
             dump_vars: false,
             trace_alloc_free: false,
             poison_free: false,
+            trace_locks: false,
+            trace_type_timeline: None,
         }
     }
 
@@ -405,6 +521,17 @@ impl LogConfig {
                 c.poison_free = true;
                 c
             }
+            Ok("locks") => {
+                let mut c = Self::full();
+                c.trace_locks = true;
+                c
+            }
+            Ok(s) if s.starts_with("type_timeline:") => {
+                let mut c = Self::full();
+                c.trace_type_timeline = Some(s.trim_start_matches("type_timeline:").to_string());
+                c
+            }
+            Ok(s) if s.starts_with("ir:") => Self::ir_only(&s[3..]),
             Ok(s) if s.starts_with("crash_tail") => {
                 let n = s
                     .trim_start_matches("crash_tail")

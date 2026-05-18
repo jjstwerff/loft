@@ -12,16 +12,201 @@ invariants, internal phase numbers)?  See
 
 ---
 
-## Unreleased — heading toward 0.8.5
+## Unreleased — heading toward 0.8.6
 
-0.8.5 adds **learnability**: syntax highlighting, a VS Code extension,
+0.8.6 adds **learnability**: syntax highlighting, a VS Code extension,
 and a "learn loft in 30 minutes" walkthrough so new users can get from
 zero to a running demo without reading the reference.
 
-Tuples are now cross-validated under interpreter and `--native`
-across 40 cells covering 5 element types (scalars, text, nested,
-closure, struct reference) and 3 storage destinations (local,
-direct stack, struct field).
+---
+
+## 0.8.5 — Language Maturity
+
+This release is about the language itself getting solid.  Closures finally
+work the way you'd expect, bounded generics carry types correctly through
+methods and tuples, the native backend ships as production, and a
+browser-based **branch review viewer** lets you read your in-flight code
+from any device with `make view` + an SSH port-forward.
+
+### Closures that capture what they should
+
+The biggest user-visible fix.  Closures now hold a **live reference** to
+captured variables, not a snapshot — they see the latest value, mutations
+through one closure are visible to another, and a closure that captures a
+struct field reads the field as it currently is.
+
+```loft
+counter = make_counter()  // returns a closure pair (inc, get)
+counter.inc(); counter.inc(); counter.inc()
+println(counter.get())    // 3 — was 1 before this release (snapshot bug)
+```
+
+- Closures returned from functions keep their captured environment alive.
+- Multiple closures sharing the same captured cell see each other's
+  writes.
+- Closure-captured vector / struct / nested-struct fields read live, not
+  stale.
+- Validation matrix in `tests/closure_matrix.rs` cross-checks 30+ shapes
+  on interpreter + `--native`.
+
+### Bounded generics + interfaces
+
+Write generic functions with type constraints; the compiler picks the
+right per-type implementation at the call site.
+
+```loft
+fn show_pair<T: Printable>(a: T, b: T) -> text {
+    "{a.to_text()} & {b.to_text()}"
+}
+println(show_pair(3, 7))           // 3 & 7   (built-in to_text)
+println(show_pair("hi", "ho"))     // hi & ho (text passes through)
+```
+
+- `<T: Bound>` constraints — `Ordered`, `Equatable`, `Addable`, `Numeric`,
+  `Scalable`, `Printable`, plus user-defined interfaces.
+- Bound-typed values round-trip through tuples, vectors, struct fields,
+  and `for` loops — the compiler now substitutes T's concrete type
+  everywhere it appears.
+- Generic functions returning `(T, T)` work with text, references, and
+  user types — not just primitives.
+- Format-string interpolation `"{x}"` where `x: T` routes through the
+  bound's `to_text` method automatically.
+
+### Tuples cross-validated end-to-end
+
+Tuples now ship as a fully validated value type.  40 cross-mode test cells
+cover 5 element types (scalars, text, nested tuples, closures, struct
+references) across 3 storage destinations (local, direct stack, struct
+field) — interpreter and `--native` produce byte-identical output.
+
+```loft
+fn split_message(s: text) -> (text, text) {
+    n = s.len() / 2
+    (s[0..n], s[n..s.len()])
+}
+left, right = split_message("hello world")
+```
+
+### Branch review viewer (`make view`)
+
+`make view` launches a browser-accessible doc + code review surface for
+the current loft branch.  Dashboard shows files changed vs `main`,
+recent commits, uncommitted state — all with status badges.  Click any
+file for a rendered view (`.md` rendered via the new `lib/markdown`
+library, others as line-numbered code), toggle between
+`Rendered ¦ Diff vs main`, click any commit for the per-file diff,
+click any tracker tag (`@P-id` / `@PLAN-id`) for cross-doc references.
+SSH-port-forward 8765 from the host.  Built entirely in loft (web
+server, markdown rendering, JSON parsing, file walking) + a small bash
+wrapper for `git` calls; no Python, no external markdown library, no
+syntax-highlighter dependency.  See
+[doc/claude/DEBUG.md § Branch review viewer](doc/claude/DEBUG.md#branch-review-viewer-make-view).
+
+A `/welcome` landing page surfaces project status at a glance: open
+problems, recently closed bugs (last 30 days), active and recently
+finished plans, future plans by category — all built from a live tracker
+index that updates on every commit.
+
+### Tracker index (`make index`)
+
+A small file-based index of every `@P<id>` / `@PLAN<id>(-segment)*`
+reference across the project, queryable from the command line.  The
+viewer surfaces the same data; CI uses it to catch broken tracker
+references at commit time.
+
+```bash
+make index                            # rebuild index/tags.json
+./scripts/idx tag:@P259               # all references to a P-issue
+./scripts/idx prefix:@PLAN37          # all PLAN37-* phase refs
+./scripts/idx incoming:doc/claude/PROBLEMS.md   # backlinks to a doc
+./scripts/idx broken                  # broken @-references
+./scripts/idx broken-links            # broken markdown links
+```
+
+A loft-native scanner port (`make index-loft`) reproduces the bash
+scanner's output via the loft language itself — exercises long-running
+file-walking + JSON emission shapes that no other loft program touches.
+
+### Native compilation goes production
+
+The `--native` backend (loft → Rust → rustc → standalone binary) is now
+the default.  108 / 108 native tests pass; closures, generics, tuples,
+JSON, and the viewer all compile + run identically under `--native` and
+`--interpret`.  Use `--interpret` only when bisecting a native-only
+regression.
+
+Eight previously-tracked native codegen bugs closed (use-after-free in
+heap-typed tail returns, text-concat type-dispatch, generic vector
+struct returns, closure-tuple-field layout, parallel-queue native
+runtime, and four more).
+
+### `lib/markdown` — markdown renderer in loft
+
+A standalone library: headings, bold, italic, inline code, fenced code,
+links with anchor support, tables (with alignment), lists (ordered +
+unordered + nested), images, autolinks for tracker tags, autolink
+prefix configuration, image-URL rewriting.  Pure loft — no external
+parser.  Used by the branch-review viewer and any future loft
+documentation tool.
+
+```loft
+use markdown
+html = markdown::render(source, "/tag/", "/img/", "")
+```
+
+### Smaller language wins
+
+- **`@P274`** — `text + integer` concat now correctly converts the
+  integer (was emitting `OpAppendText` with a raw i64; SIGSEGV in
+  interp / E0614 in native).
+- **`@P275`** — module-scope `const vector<T>` works under the
+  default `--native` path (was only initialised under
+  `--native-release`; default emit panicked at
+  `stores.const_refs[NNN]`).  Side-fix: nested `OpConstRef` calls
+  no longer accumulate `stor` prefixes in their substituted form
+  (a substring-of-its-own-output bug in the codegen template
+  rewriter).
+- **`@P276`** — `(s[i] ?? '<c>') == '<c>'` now type-checks under
+  `--native` (was rustc E0308: the pre-evaluated block holding
+  the character lifted as `i32`, then the outer
+  `OpConvIntFromCharacter` template compared it against `char`).
+  Bind-then-compare (`c = s[i] ?? '*'; if c == 'b'`), else-if
+  chains, and ordering compares (`<`/`>`) all work too.
+- **`@P283`** — format-string interpolation of a self-slice-
+  reassigned text PARAMETER no longer crashes either backend.
+  Pattern: `fn f(rb: text, id: text) -> text { …; rb = rb[a..b];
+  "[{id}] {rb}" }` was SIGSEGVing the interpreter and rejecting
+  with rustc E0368 in native.  The work-buffer parameter
+  promoted by `text_return` is `RefVar(Text)` (`&mut String`),
+  but the codegen for `OpAppendText` / `OpClearText` /
+  `OpFormatText` / `OpFormat{Int,Float,Single,Database}` /
+  `OpAppendCharacter` on these targets emitted the local-String
+  variants — interp treated the refvar slot as a `String` →
+  SIGSEGV; native emitted `var += &*(…)` on `&mut String` →
+  E0368.  Fix dispatches to the matching `Stack` variant for
+  RefVar(Text) targets on both backends (mirrors the existing
+  B7 OpAppendCharacter dispatch).
+- **`@P259`-`@P261`** — closure / store-allocation / vector-field
+  fixes (the closure-cell trio).
+- **UTF-8** — `json_parse` now decodes 2/3/4-byte UTF-8 codepoints
+  correctly (was widening byte-by-byte; `→` became `âââ`).
+- **WebSocket binary frames** — `lib/server` exercises the binary
+  path in production; multi-client games use it.
+- Eight new P-issues filed from dogfood discovery (native codegen +
+  parser quirks surfaced by writing real loft consumers); fixes
+  scheduled across the next few releases.
+
+### Workflow + project-management
+
+- New `## Open work` sections in reference docs catalog
+  enhancement opportunities discovered while building real consumers.
+- DEVELOPMENT.md documents the "fix-on-the-spot vs canonical-home"
+  workflow for handling discovered language gaps mid-feature work.
+- Plan documentation reorganized: `plans/` for core-language work
+  (capped at 2-3 active), `lib_plans/` for library work, `ROADMAP.md`
+  as the prioritization view.
+- Every PROBLEMS.md row now self-tags with `**@P<n>**` so the
+  index unambiguously links each row to its references.
 
 ## 0.8.4 — 2026-04-24 — Awesome Brick Buster
 

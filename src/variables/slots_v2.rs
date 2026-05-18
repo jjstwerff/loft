@@ -262,10 +262,56 @@ pub fn apply_v2_result(
     code: &mut crate::data::Value,
     result: &AllocatorResult,
 ) {
+    // Plan-22 02d-vii follow-up — `LOFT_LOG=slots:<fn>` trace.
+    // Logs each slot decision + WHY any var was skipped, BEFORE
+    // applying the result.  Helps diagnose "Incorrect var X[65535]"
+    // codegen panics where the allocator silently skipped X.
+    if let Some(target) = crate::log_config::slots_trace_target()
+        && function.name.contains(&target)
+    {
+        eprintln!("[slots] fn={} hwm={}", function.name, result.hwm);
+        let assigned: std::collections::HashSet<u16> =
+            result.slots.iter().map(|s| s.var_nr).collect();
+        for v_nr in 0..function.next_var() {
+            let name = function.name(v_nr);
+            let tp = function.tp(v_nr);
+            if let Some(s) = result.slots.iter().find(|s| s.var_nr == v_nr) {
+                eprintln!(
+                    "[slots]   ASSIGN  v_nr={v_nr:<3} name={name:<20} slot={slot:<4} type={tp:?}",
+                    slot = s.slot,
+                );
+            } else if !assigned.contains(&v_nr) {
+                let reason = slot_skip_reason(function, v_nr);
+                eprintln!(
+                    "[slots]   SKIP    v_nr={v_nr:<3} name={name:<20} type={tp:?}  reason={reason}",
+                );
+            }
+        }
+    }
     for s in &result.slots {
         function.set_stack_pos(s.var_nr, s.slot);
     }
     apply_var_size(code, &result.per_block_var_size);
+}
+
+/// Plan-22 02d-vii — explain why `assign_slots_v2` skipped a var.
+/// Mirrors the bail-out conditions in `walk_node`'s `Set` arm.
+fn slot_skip_reason(function: &Function, v_nr: u16) -> &'static str {
+    if (v_nr as usize) >= function.next_var() as usize {
+        return "v_nr out of range";
+    }
+    if function.is_argument(v_nr) {
+        return "is_argument (allocated externally by caller)";
+    }
+    let tp = function.tp(v_nr);
+    let sz = crate::variables::size(tp, &crate::variables::Context::Variable);
+    if sz == 0 {
+        return "size(type) == 0 (zero-byte var)";
+    }
+    if function.first_def(v_nr) == u32::MAX {
+        return "no first_def (no Set IR for this var — read-only or unused)";
+    }
+    "no Set IR walked (var referenced but never assigned via Value::Set)"
 }
 
 fn apply_var_size(val: &mut crate::data::Value, sizes: &HashMap<u16, u16>) {

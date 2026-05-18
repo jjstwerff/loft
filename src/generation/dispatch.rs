@@ -321,6 +321,20 @@ impl Output<'_> {
                         let vars = &self.data.def(self.def_nr).variables;
                         !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Text(_))
                     });
+                // @P283 — source is a `RefVar(Text)` argument (`&mut String`).
+                // `output_code_inner` for `Value::Var` in this case emits
+                // `&*var_X` (emit.rs:141); appending `.to_string()` then parses
+                // as `&*(var_X.to_string())` per Rust method-call precedence,
+                // which evaluates to `&str` and breaks the `String`-typed
+                // assignment with E0308.  Emit `var_X.to_string()` directly —
+                // auto-deref through `&mut String` produces a fresh owned
+                // `String` of the correct type.
+                let refvar_text_clone = needs_to_string
+                    && matches!(to.unspan(), Value::Var(v) if {
+                        let vars = &self.data.def(self.def_nr).variables;
+                        vars.is_argument(*v)
+                            && matches!(vars.tp(*v), Type::RefVar(inner) if matches!(**inner, Type::Text(_)))
+                    });
                 // T1.8a: same pattern when the source is a `TupleGet` of a
                 // text element from a Variable-context tuple — the tuple's
                 // text fields are `String`, and `output_code_inner` for
@@ -368,6 +382,11 @@ impl Output<'_> {
                         let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{src_name}.clone()")?;
                     }
+                } else if refvar_text_clone {
+                    if let Value::Var(v) = to.unspan() {
+                        let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        write!(w, "var_{src_name}.to_string()")?;
+                    }
                 } else if tuple_text_elem_clone {
                     // P228: read through the same unspan as the detection above.
                     if let Value::TupleGet(v, idx) = to.unspan() {
@@ -386,6 +405,7 @@ impl Output<'_> {
                 self.tuple_text_to_string = prev_tuple_text;
                 if needs_to_string
                     && !text_local_clone
+                    && !refvar_text_clone
                     && !tuple_text_elem_clone
                     && !nested_tuple_clone
                 {
@@ -567,7 +587,29 @@ impl Output<'_> {
             };
             return crate::generation::ops::emit_op(&mut ctx, &name_owned, vals);
         }
-        match name {
+        // @P283 — mirror the bytecode dispatch in `src/state/codegen.rs`:
+        // when the first argument is a `Var` whose type is `RefVar(Text)`
+        // (a `&mut String` work-buffer parameter promoted by
+        // `text_return`), rewrite the op name to its `Stack` variant so
+        // the native emitter takes the `*var += …` / `String::clear` /
+        // `format_text(&mut var, …)` deref path.  Without this rewrite the
+        // native side emits `var += &*(…)` on a `&mut String`, which rustc
+        // rejects with E0368.  The bytecode dispatch was added here first
+        // (interp also crashed in `append_text` op=116 on the refvar slot);
+        // the native rewrite must happen separately because the native
+        // pipeline reads from the IR `Value::Call(op_nr, …)` independently
+        // of the bytecode emit.  Rewrite table lives in
+        // `refvar_text_stack_variant` (out-of-band of `dispatch_op_arm_budget`).
+        let variables = &self.data.def(self.def_nr).variables;
+        let refvar_text_first = matches!(vals.first().map(Value::unspan), Some(Value::Var(v)) if {
+            matches!(variables.tp(*v), Type::RefVar(inner) if matches!(**inner, Type::Text(_)))
+        });
+        let dispatch_name: &str = if refvar_text_first {
+            super::ops::refvar_text_stack_variant(name).unwrap_or(name)
+        } else {
+            name
+        };
+        match dispatch_name {
             "OpFormatInt" | "OpFormatStackInt" => {
                 return self.format_long(w, vals, name == "OpFormatStackInt");
             }
@@ -660,6 +702,20 @@ impl Output<'_> {
                     )?;
                     return Ok(());
                 }
+            }
+            "OpIncRc" => {
+                // P259: emit `OpIncRc(cell, <db>)` — increments the
+                // referenced store's rc.  Used by emit_lambda_code after
+                // each SetDbRef capturing a heap-owned cell into a
+                // closure record's auto-Reference attribute.  No callers
+                // emitted yet (commit 1 is infra-only); commit 2 wires
+                // the call sites.
+                if let [ref db_val] = vals[..] {
+                    write!(w, "OpIncRc(cell,")?;
+                    self.output_code_inner(w, db_val)?;
+                    write!(w, ")")?;
+                }
+                return Ok(());
             }
             "OpFreeRef" => {
                 // Emit OpFreeRef(cell,var, "var_name") so LOFT_STORE_LOG shows the loft name.

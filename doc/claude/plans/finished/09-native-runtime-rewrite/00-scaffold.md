@@ -2,9 +2,9 @@
 
 **Status:** DONE (2026-05-02) — see § Findings (post-completion).
 Step 0.7b (let-bind-on-repeat in `DefaultTemplateEmitter`)
-closed P203 inline.
+closed @P203 inline.
 
-**Closes:** P203 (via step 0.7b's structural fix to repeated
+**Closes:** @P203 (via step 0.7b's structural fix to repeated
 `@<name>` placeholder substitution).
 
 ## Goal
@@ -179,7 +179,7 @@ for the dispatched fn can intercept.
 
 > **Status (2026-05-02): the structural fix already shipped** as a
 > direct edit to `src/generation/calls.rs::output_call_template`.
-> P203 closed.  This step is documentation that explains **why
+> @P203 closed.  This step is documentation that explains **why
 > the pattern matters**, **why the existing code resisted a
 > cleaner design**, and **what phase 00's extraction has to
 > preserve**.  Reading this section is the cheapest way for a
@@ -198,12 +198,12 @@ Five templates in `default/01_code.loft` hit this:
 | Line | Op | `@v1` count | `@v2` count |
 |---|---|---|---|
 | 690 | char→int (`OpConvIntFromChar`) | 2 | — |
-| 705 | enum→int (`OpConvIntFromEnum`) — P203's manifestation | 2 | — |
+| 705 | enum→int (`OpConvIntFromEnum`) — @P203's manifestation | 2 | — |
 | 707 | int→enum (`OpCastEnumFromInt`) | 2 | — |
 | 751 | ref equality (`OpEqRef`) | 4 | 4 |
 | 753 | ref inequality (`OpNeRef`) | 4 | 4 |
 
-P203's specific symptom: `delete(path) == FileResult.Ok` becomes
+@P203's specific symptom: `delete(path) == FileResult.Ok` becomes
 `if (n_delete(path) as u8) == 255 { i64::MIN } else { i64::from((n_delete(path) as u8)) }`.
 First call deletes the file; second sees nothing; comparison
 fails; assertion panics.
@@ -274,7 +274,7 @@ it once in a pre-pass that rewrites the template**.
 #### Why phase 02 (param adapter) wasn't required first
 
 The user originally hypothesised that the substitution code
-needed phase 02's simplification before P203 could land cleanly.
+needed phase 02's simplification before @P203 could land cleanly.
 That hypothesis was reasonable — the arms genuinely are tangled.
 But the pre-pass approach sidesteps the arms entirely by
 rewriting the TEMPLATE before substitution runs.  No arm-level
@@ -282,7 +282,7 @@ edits required.
 
 So: phase 02 still has independent value (phase 02's adapter
 extraction makes the arms readable for future maintainers), but
-it isn't a prerequisite for the let-bind-on-repeat fix.  P203
+it isn't a prerequisite for the let-bind-on-repeat fix.  @P203
 landed first; phase 02 is still on the simplification roadmap.
 
 #### What phase 00's extraction must preserve
@@ -490,7 +490,7 @@ _(future sessions: append per non-obvious decision)_
 ## Findings (post-completion, 2026-05-02)
 
 Phase 00 shipped in 6 commits across steps 0.2-0.9.  Honest
-evaluation against the broader plan-09 goals:
+evaluation against the broader @PLAN09 goals:
 
 ### What works (proven)
 
@@ -499,7 +499,7 @@ evaluation against the broader plan-09 goals:
   each step with zero drift.
 - Full `cargo test --test issues`: 540/540, no regressions.
 - Native suite: 87/93, unchanged from baseline.
-- P203 closure (let-bind-on-repeat) preserved through all hoists.
+- @P203 closure (let-bind-on-repeat) preserved through all hoists.
 - Every Op-emission call site (template, user-fn, dispatch.rs
   registry guard, fn-ref dispatch) demonstrably routes through
   `emit_op` and the registry is consulted before each call.
@@ -581,12 +581,12 @@ codebase drifts away from phase 00's structural commitments.
   either holds up or needs extension.  Probable extensions:
   helper trait methods on `EmitCtx` for closure-shape selection,
   return-type analysis, extra-arg binding emission.
-- **Phase 05 (file emitter, P200 write)**: needs `int_width_for(value)`
+- **Phase 05 (file emitter, @P200 write)**: needs `int_width_for(value)`
   and `int_signed_for(value)` accessors.  These don't exist yet.
   Either add them to `EmitCtx` (forward to `Output`) or expose via
   `ctx.output` directly.  Either way `EmitCtx`'s surface area
   grows.
-- **Phase 07 (generic text emitter, P205)**: needs resolved
+- **Phase 07 (generic text emitter, @P205)**: needs resolved
   generic-binding info.  Whether existing `Output` state surfaces
   enough info is unclear without trying.
 
@@ -656,7 +656,7 @@ including:
   `OpAppendText`, `OpStep`, `OpRemove` — all in dispatch.rs's
   special-case match.
 
-The fast gate flagged byte-identical breakage AND P203 regression
+The fast gate flagged byte-identical breakage AND @P203 regression
 on the first run.  Diff inspection showed:
 - `OpDatabase`: special case wraps with `var_X = OpDatabase(...)`
   assignment; forwarding emitted `OpDatabase(...)` standalone.

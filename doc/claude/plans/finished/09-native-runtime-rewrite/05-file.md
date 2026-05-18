@@ -9,28 +9,28 @@ closed the bug — both originally-anticipated read AND write
 scopes resolved by one fix.  See § Diagnosis findings + phase
 10 doc for the closure narrative.
 
-**Closes:** **P200** — closed via phase 10 step 10.3.
+**Closes:** **@P200** — closed via phase 10 step 10.3.
 
 **Reproducers:** `tests/docs/13-file.loft`,
 `tests/scripts/20-binary.loft`.
 
-**Note on P203:** earlier drafts of this phase claimed to close
-P203 via a file-flavour `OpFreeRef` emitter.  Plan 10's phase 00
-diagnostic refuted that framing — P203 is a template
+**Note on @P203:** earlier drafts of this phase claimed to close
+@P203 via a file-flavour `OpFreeRef` emitter.  Plan 10's phase 00
+diagnostic refuted that framing — @P203 is a template
 double-substitution bug, closed structurally by phase 00 step
 0.7b's let-bind-on-repeat in the `DefaultTemplateEmitter` (or by
 a direct edit to the 5 affected templates in `default/01_code.loft`,
-whichever lands first).  Phase 05 now ONLY covers P200's write
+whichever lands first).  Phase 05 now ONLY covers @P200's write
 side.  The original step 5.1b (verify OpFreeRef fires) is
 removed since OpFreeRef firing was never the bug.
 
 **Depends on:** Phase 00 (scaffold) + Phase 02 (param adapter — the
-prior direct fix for P200 failed because of dual-role
+prior direct fix for @P200 failed because of dual-role
 `narrow_int_cast`; phase 02's adapter split removes that blocker).
 
 ## Diagnosis
 
-### P200 (write side) — root cause beyond the symptom
+### @P200 (write side) — root cause beyond the symptom
 
 The template hard-codes `i32` for binary writes:
 ```
@@ -52,7 +52,7 @@ width-aware cast inline — bypassing both the template and
 
 ## Prior attempts
 
-- **P200 (write)**: skip-narrow-cast-for-reading-file-blocks fix
+- **@P200 (write)**: skip-narrow-cast-for-reading-file-blocks fix
   reverted because read-side roundtrip regressed.  Lesson: per-site
   fix is too narrow when the cast helper is shared.
 
@@ -77,7 +77,7 @@ conflict is structurally absent.
 
 ### Step 5.1 — Actual-error survey (per `feedback_actual_error_survey.md`)
 
-**Action**: capture the current state of all P200 failures in the
+**Action**: capture the current state of all @P200 failures in the
 generated Rust to confirm scope before writing any fix.
 
 ```bash
@@ -119,7 +119,7 @@ grep -rn '"==" =>' src/generation/ | head -10
 
 Document in "Diagnosis findings":
 - Which fn emits the LHS (block-tail) — likely
-  `src/generation/emit.rs::narrow_int_cast` based on prior P200
+  `src/generation/emit.rs::narrow_int_cast` based on prior @P200
   diagnosis.
 - Which fn emits the RHS literal — likely a separate path in
   `emit.rs` or the comparison Op template.
@@ -190,10 +190,10 @@ scripts/p09_fast_gate.sh   # byte-identical (or refresh with intentional change)
 
 ### Step 5.5 — Update PROBLEMS.md + plan README
 
-**Action**: mark P200 CLOSED (read side) with "fix path: phase
+**Action**: mark @P200 CLOSED (read side) with "fix path: phase
 05 of plan 09 (rewritten 2026-05-02 to address read-side
 comparison emission)".  Reference the regression test added.
-Update plan-09 README to mark phase 05 DONE.  P200's separate
+Update @PLAN09 README to mark phase 05 DONE.  @P200's separate
 "closure of all binary-write paths" remains in phase 08's scope.
 
 **Validation**: review.
@@ -213,7 +213,7 @@ than call `DefaultEmitter::emit` (or directly call back into
 it.  Re-run the byte-identical baseline gate.
 
 **Status (2026-05-02)**: this step ALREADY SHIPPED in commit
-`a078bac` ("plan-09 phase 05: forwarding-emitter smoke test as
+`a078bac` ("@PLAN09 phase 05: forwarding-emitter smoke test as
 step 5.0").  The forwarding emitter is registered but is a
 no-op since `OpWriteIntFile` isn't the actual fix site — the
 forwarding emitter remains as a dead-but-harmless smoke test.
@@ -293,7 +293,7 @@ cargo test --release --test issues 2>&1 | tail -3  # 540/540
 step 5.1 starts writing real code.  Cost: ~15 lines of code,
 ~2 minutes wall time including running the gate.
 
-### Step 5.1 — Pre-work: pin the prior P200 failure mode
+### Step 5.1 — Pre-work: pin the prior @P200 failure mode
 
 **Action**: write a regression test that fails under the prior
 reverted fix but passes under the planned emitter.  This pins the
@@ -414,9 +414,9 @@ done
 
 ### Step 5.4 — Update PROBLEMS.md
 
-**Action**: mark P200 (write side) CLOSED with "fix path: phase 05
+**Action**: mark @P200 (write side) CLOSED with "fix path: phase 05
 of plan 09".  Reference the regression tests added in this phase.
-Note that P200's read side closes in phase 08.  P203 is closed by
+Note that @P200's read side closes in phase 08.  @P203 is closed by
 phase 00 step 0.7b (let-bind-on-repeat) — not by this phase.
 
 **Validation**: review.
@@ -441,7 +441,7 @@ cargo test --release --test native -- --test-threads=1 2>&1 | grep "native resul
 | 5.3 | Replaces step 5.0's stub body with width-aware emission.  Baseline for binary-write tests changes (intentional — width cast inline now).  Refresh baseline if corpus baselines reference `OpWriteIntFile` sites. |
 | 5.4 | PROBLEMS.md update; no gate impact. |
 
-4-5 commits across the steps (down from 6-7 after P203 was
+4-5 commits across the steps (down from 6-7 after @P203 was
 removed; bumped to 4-5 by step 5.0's forwarding-emitter smoke test);
 ships as one PR.
 
@@ -450,18 +450,18 @@ Recommended commit order:
   1. **Step 5.0**: forwarding `OpEmitter` for `OpWriteIntFile`
      (no-op stub).  Byte-identical baseline must still pass.
      This is the runtime smoke test deferred from phase 00.
-  2. **Step 5.1**: pin prior P200 failure mode via regression test.
+  2. **Step 5.1**: pin prior @P200 failure mode via regression test.
   3. **Step 5.2**: add `EmitCtx::int_width_for` / `int_signed_for`
      helpers (or expose via `ctx.output`).
   4. **Step 5.3**: replace step 5.0's stub body with the
-     width-aware emission.  P200 round-trip test now passes.
+     width-aware emission.  @P200 round-trip test now passes.
   5. **Step 5.4**: update PROBLEMS.md.
 
 ## Diagnosis findings
 
 ### Scope misalignment surfaced 2026-05-02 — must rewrite plan before implementing
 
-`tests/scripts/20-binary.loft` was selected as the P200 reproducer
+`tests/scripts/20-binary.loft` was selected as the @P200 reproducer
 under the assumption that the failing emission was on the **write**
 side (the `f += val` template hard-coding `i32`).  Inspection of
 today's native-emit output for that test shows the failures are
@@ -510,7 +510,7 @@ not in `OpWriteIntFile`'s template.  Phase 05 needs:
   read-side narrow comes from the block-tail role of
   `narrow_int_cast`, not the param role.  Phase 02's split of
   the helper might still help (cleaner code), but is no longer
-  on the P200 critical path.
+  on the @P200 critical path.
 
 The original phase 05 design (write-side `OpWriteIntFile` emitter)
 might still be needed if a separate write-side error surfaces in

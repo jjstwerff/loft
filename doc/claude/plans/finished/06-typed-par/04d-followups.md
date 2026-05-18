@@ -332,7 +332,7 @@ no longer reach users.
 
 ## See also
 
-- [PROBLEMS.md](../../PROBLEMS.md) — the open-issue catalogue (193 / 194 / 195 / 196).
+- [PROBLEMS.md](../../../PROBLEMS.md) — the open-issue catalogue (193 / 194 / 195 / 196).
 - [04-typed-input-output.md](04-typed-input-output.md) — phase 4d
   parent plan.
 - `tests/issues.rs::p4d_*` — 10 regression tests covering the

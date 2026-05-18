@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 > **9a closed.**  Per the original design, 9a was the standalone
 > prerequisite that gated 9b–9e.  The actual-error survey
-> (plan-14 phase 01 follow-up) showed 9a's design was over-engineered
+> (@PLAN14 phase 01 follow-up) showed 9a's design was over-engineered
 > — the basic `-> (A, B)` return convention already worked end-to-end;
 > only tuple-of-text returns under `--native` had a real bug, fixed
 > by recursing `rust_type` with `Context::Variable` for tuple
@@ -43,13 +43,13 @@ After phase 9, the rule "anywhere you can write `fn process(x: T)
 -> U`, you can also write `par(xs, process, N)`" extends to tuples
 without a footnote.
 
-## Why this is plan-06 scope, not 1.1+
+## Why this is @PLAN06 scope, not 1.1+
 
 The previous PLANNING.md placement put T1.8a (function tuple
 return convention) in a 0.8.3 follow-up bucket and never connected
 it to par.  As a result D11b had to mark tuples as
 "✅ when tuples land" — a placeholder that quietly meant
-"par will not accept tuple returns even after plan-06 lands".
+"par will not accept tuple returns even after @PLAN06 lands".
 
 Plan-06's promise is **full type coverage of par**.  A redesigned
 runtime that still rejects `(integer, integer)` returns is a
@@ -121,7 +121,7 @@ the rebase pass (phase 2) translates the DbRef when stitching.
 **Closed by commit `023ca15` on branch `plan-14-tuple-validation`.**
 The original design (new IR variant + new opcode + caller-pre-
 allocated slot, ~200 LoC) was over-engineered.  Actual-error survey
-(plan-14 phase 01 follow-up) showed:
+(@PLAN14 phase 01 follow-up) showed:
 
 - `fn make_pair() -> (integer, integer) { (3, 7) }` already worked
   end-to-end on interp + native.
@@ -144,7 +144,7 @@ dispatch.rs}`) totalling ~30 LoC:
 Pinned by `e1_d2_return_int_int` and `e2_d2_return_text_text`
 un-ignored cells in `tests/tuple_matrix.rs` (running under both
 interp and `--native` with byte-identical stdout via the
-plan-14 cross-mode harness).  PLANNING.md § T1.8a is updated.
+@PLAN14 cross-mode harness).  PLANNING.md § T1.8a is updated.
 
 **No `OpReturnTuple` opcode was added** — the original design
 called for one but the actual fix needed only existing flags and
@@ -226,7 +226,7 @@ Phase 9 closes these `#[ignore]`d canaries from
 Adjacent canary (NOT closed by phase 9 — different fix surface):
 - `par_vec_of_capturing_fns_t4` — fails at vector construction
   (lambda → vector storage path), not at par dispatch.  See
-  DESIGN.md D11a row 8 (split row).  Tracked in plan-15 D4.
+  DESIGN.md D11a row 8 (split row).  Tracked in @PLAN15 D4.
 
 ## Loft-side prerequisites
 
@@ -263,7 +263,7 @@ Adjacent canary (NOT closed by phase 9 — different fix surface):
 | ~~T1.8a's caller-pre-allocated-slot convention conflicts with the worker dispatch trampoline~~ | *Retired 2026-05-04* — the actual T1.8a fix did not introduce a caller-pre-allocated-slot convention; it routes tuple-of-text returns through `(String, …)` Variable-context types instead.  No trampoline conflict to mitigate. |
 | Tuple-with-text return needs DbRef rebase across tuple element offsets | Phase 2's rebase already walks `owned_elements`; tuples expose the same accessor — no new rebase code.  D11c.1 covers the per-element category rules (worker-own / parent-shared / cross-worker) without tuple-specific runtime logic. |
 | Tuple element holds a `Reference<ParentSharedStruct>` (e.g. shared cache) | Per D11c.1: parent-shared references pass through the rebase unchanged.  Test `par_tuple_return_with_parent_shared_ref` (added in 9c) asserts this. |
-| Tuple elements with nested vectors / hashes | Out of scope for phase 9 — covered by D11a "nested vector input" canary which closes in phase 4; tuple elements are either primitive, text, or DbRef in plan-06 |
+| Tuple elements with nested vectors / hashes | Out of scope for phase 9 — covered by D11a "nested vector input" canary which closes in phase 4; tuple elements are either primitive, text, or DbRef in @PLAN06 |
 | Bench data shapes change between phases (struct → tuple) | Keep both shapes in `bench/11_par/`; mark which is the canonical apples-to-apples reference |
 
 ## Out of scope
@@ -272,7 +272,7 @@ Adjacent canary (NOT closed by phase 9 — different fix surface):
   returns the same tuple type (today's same-type-per-worker rule
   unchanged).
 - **Generic tuple types in worker fn signatures** — bounded
-  generics over tuples is a future feature; plan-06 accepts
+  generics over tuples is a future feature; @PLAN06 accepts
   monomorphised tuple types only.
 - **Tuple-of-tuples return** — workers returning `((A, B), (C,
   D))` deferred; nested-collection canaries cover the broader
@@ -280,15 +280,15 @@ Adjacent canary (NOT closed by phase 9 — different fix surface):
 
 ## Cross-references
 
-- [README.md](README.md) — plan-06 ladder, phase 9 added.
+- [README.md](README.md) — @PLAN06 ladder, phase 9 added.
 - [DESIGN.md § D11](DESIGN.md) — type spectrum; tuples promoted
   to first-class.
 - [01-output-store.md](01-output-store.md) — per-worker Store
   receives tuple records identically to struct records.
 - [02-stitch-not-copy.md](02-stitch-not-copy.md) — rebase walks
   tuple `owned_elements` like struct ones.
-- [TUPLES.md](../../TUPLES.md) — tuple feature design (T1).
-- [PLANNING.md § T1.8](../../PLANNING.md) — T1.8a / b / c
+- [TUPLES.md](../../../TUPLES.md) — tuple feature design (T1).
+- [PLANNING.md § T1.8](../../../PLANNING.md) — T1.8a / b / c
   remaining work; 9a closes T1.8a.
 - `src/data.rs` — `Type::Tuple`, `element_size`,
   `element_offsets`, `owned_elements` already exist (T1.1).

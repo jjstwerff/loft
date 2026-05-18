@@ -155,7 +155,7 @@ fn print_help() {
         "  --tests --native              like --tests but compile each file to native Rust and"
     );
     println!("                                run the binary (skips @EXPECT_FAIL tests)");
-    println!("  --no-warnings                 suppress warnings in --tests output");
+    println!("  --no-warnings                 suppress warnings (in run mode and --tests output)");
     println!(
         "  --check                       parse and compile only; report errors without running
                                 can be combined with --native to also verify rustc compilation"
@@ -1758,23 +1758,55 @@ fn main() {
     }
     p.parse(&abs_file, false);
     if !p.diagnostics.is_empty() {
-        let mode = crate::diagnostic_render::ErrorMode::from_cli_and_env(error_mode_arg.as_deref());
-        match mode {
-            crate::diagnostic_render::ErrorMode::Pretty => {
-                let loader = crate::diagnostic_render::FileSourceLoader::new();
-                let out = crate::diagnostic_render::render_pretty_all(
-                    &p.diagnostics,
-                    &loader,
-                    crate::diagnostic_render::ColorMode::Auto,
-                );
-                print!("{out}");
-            }
-            crate::diagnostic_render::ErrorMode::Compact => {
-                for entry in p.diagnostics.entries() {
-                    if entry.level == Level::Debug {
-                        continue;
+        // @P282 fix: when `--no-warnings` is set, suppress
+        // Warning-level diagnostics entirely so the program's
+        // stdout stays free of warning preambles for piped
+        // consumers (the loft-native scanner, viewer state
+        // emission, anything machine-readable).  Errors still
+        // print and still exit non-zero.
+        let print_warnings = !no_warnings;
+        let has_errors = p.diagnostics.level() >= Level::Error;
+        if print_warnings || has_errors {
+            let mode =
+                crate::diagnostic_render::ErrorMode::from_cli_and_env(error_mode_arg.as_deref());
+            match mode {
+                crate::diagnostic_render::ErrorMode::Pretty => {
+                    let loader = crate::diagnostic_render::FileSourceLoader::new();
+                    if print_warnings {
+                        let out = crate::diagnostic_render::render_pretty_all(
+                            &p.diagnostics,
+                            &loader,
+                            crate::diagnostic_render::ColorMode::Auto,
+                        );
+                        print!("{out}");
+                    } else {
+                        // Errors-only: re-render entry-by-entry so we
+                        // can skip Warning levels.  Mirrors render_pretty_all's
+                        // shape minus the warning-cascade dedup (which is
+                        // moot when no warnings are emitted).
+                        for entry in p.diagnostics.entries() {
+                            if entry.level >= Level::Error {
+                                let s = crate::diagnostic_render::render_entry_pretty(
+                                    entry,
+                                    &loader,
+                                    crate::diagnostic_render::ColorMode::Auto,
+                                );
+                                print!("{s}");
+                                println!();
+                            }
+                        }
                     }
-                    println!("{}", entry.to_string_compact());
+                }
+                crate::diagnostic_render::ErrorMode::Compact => {
+                    for entry in p.diagnostics.entries() {
+                        if entry.level == Level::Debug {
+                            continue;
+                        }
+                        if !print_warnings && entry.level == Level::Warning {
+                            continue;
+                        }
+                        println!("{}", entry.to_string_compact());
+                    }
                 }
             }
         }
@@ -2346,6 +2378,29 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             if native_debug {
                 cmd.arg("-Cdebuginfo=2");
             }
+            // P266 follow-up: each native package's rlib carries a copy
+            // of `loft_register_v1` (synthesized by the `loft_ffi::loft_register!`
+            // macro for the cdylib's dlopen registration path).  When two or
+            // more native packages are pulled into the SAME --native binary
+            // (e.g. the viewer pulls lib/web AND lib/server transitively),
+            // ld errors with `duplicate symbol: loft_register_v1`.  The
+            // binary never calls `loft_register_v1` (it inlines
+            // `loft_<crate>::n_…` directly), so the duplicates are
+            // functionally harmless.  Tell the linker to merge them
+            // (keep the first definition, skip the rest).  This matches
+            // the GNU ld / lld semantics for `-z muldefs`.
+            //
+            // macOS ld64 rejects `--allow-multiple-definition` as an
+            // unknown option (the Apple linker has no equivalent
+            // surface — duplicate symbols are either silently
+            // permitted by symbol kind, or errors).  Skip the flag on
+            // macOS; if a future cross-package binary hits a real
+            // duplicate-symbol error on macOS, we'll narrow the fix
+            // (e.g. weak-link the symbol or dedup the macro emission)
+            // rather than re-add a flag the host linker doesn't
+            // support.
+            #[cfg(not(target_os = "macos"))]
+            cmd.arg("-Clink-arg=-Wl,--allow-multiple-definition");
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));

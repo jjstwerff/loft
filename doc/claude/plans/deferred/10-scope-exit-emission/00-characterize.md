@@ -113,9 +113,9 @@ rg -n "\.depend\(\)|\.dep\b|dep\.is_empty|dep_has_var" \
     src/scopes.rs src/parser/ src/generation/ --type rust
 ```
 
-## Historical context — P203 diagnostic
+## Historical context — @P203 diagnostic
 
-Plan 10 was originally framed as a P203 fix.  The first phase 00
+Plan 10 was originally framed as a @P203 fix.  The first phase 00
 (2026-05-02) ran a strace-driven diagnostic that:
 
 1. **Confirmed** OpFreeRef runtime safety (early returns +
@@ -123,7 +123,7 @@ Plan 10 was originally framed as a P203 fix.  The first phase 00
 2. **Confirmed** file-handle Drop semantics
    (`Vec<Option<File>>` drops on slot replacement).
 3. **Refuted** the premise that OpFreeRef-doesn't-fire causes
-   P203.  Strace showed:
+   @P203.  Strace showed:
    ```
    openat("repro_p203.txt", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 3
    write(3, "x", 1) = 1
@@ -131,13 +131,13 @@ Plan 10 was originally framed as a P203 fix.  The first phase 00
    unlink("repro_p203.txt") = 0          ← n_delete() succeeded (1st call)
    write(2, "thread 'main' panicked …")  ← assertion panicked (2nd call returned NotFound)
    ```
-4. **Identified P203's actual root cause**: template double-
+4. **Identified @P203's actual root cause**: template double-
    substitution at `default/01_code.loft:705`.  The
    `OpConvIntFromEnum` template substitutes `@v1` twice; for
    `delete(…) == FileResult.Ok` this calls `n_delete()` twice
    (deletes file → file gone → returns NotFound).
 
-The discovery is recorded in PROBLEMS.md under P203's fix path.
+The discovery is recorded in PROBLEMS.md under @P203's fix path.
 The strace trace + runtime-safety confirmation remain useful
 evidence for whoever picks up plan 10 later — they prove the
 infrastructure phase 01 builds on is solid.

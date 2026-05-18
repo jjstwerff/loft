@@ -9,6 +9,428 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @P274 closed 2026-05-14 — heap-typed tail return + text-concat type-dispatch
+
+Two coordinated codegen + parser fixes for native-only crashes
+that surfaced when @PLAN37 viewer added the
+`render_md_table_row` / `parse_md_row` / `find_table_headers`
+helper trio (commit 89fd2767).
+
+**Bug A — `OpFreeRef` hoisted before tail-call argument use**
+(`src/generation/pre_eval.rs`).  `patch_hoisted_returns` Pass 2
+collapsed `[Call(parse_row, …, var___ref_1), OpFreeRef(var___ref_1),
+Return(Null)]` (emitted by `scopes::free_vars`'s else-branch for
+heap-typed tails — Vector / Reference / Enum-ref bypass
+`is_value_return_type`'s primitive-only check) into
+`[OpFreeRef(var___ref_1), Return(Call(parse_row, …, var___ref_1))]`,
+giving native code `OpFreeRef(var); var.store_nr = u16::MAX;
+return n_parse_row(…, var)` — callee derefs `stores[65535]` and
+panics at `src/keys.rs:249`.  Two-part fix: (1) Pass 2 now
+detects when `expr` references any var that an intervening free
+op will free, and skips the hoist; (2) `detect_ref_tail_capture`
+now accepts `Type::Never` blocks and looks up the enclosing
+function's return type — so the original `[Call, free,
+Return(Null)]` pattern in early-return arms gets the
+`let __native_tail_ret = call(…); free; return __native_tail_ret;`
+wrap that orders the use BEFORE the free.
+
+**Bug B — `text + integer` concat misrouted** (`src/parser/vectors.rs`).
+`parse_append_text` only dispatched parts on Text / Character;
+integer / float / boolean / vector / enum etc. fell through to
+`OpAppendText` with the wrong operand type → SIGSEGV in interp,
+rustc E0614 "type i64 cannot be dereferenced" in native (the
+`+= &*(...)` deref).  Fix routes non-text/non-character parts
+through `append_data` (the same dispatch the `"…{x}…"` format-
+string interpolation path uses), unwrapping `RefVar(inner)` so
+`&text` parameters keep the existing OpAppendStackText / OpAppendText
+fast path.
+
+Pinned by `tests/scripts/100-p274-tail-return-with-cleanup.loft`
+(walked through both backends by `tests/native.rs::native_scripts`
+and `tests/wrap.rs`).  `make view` reverted to `--interpret`
+default in 5dae80cc, restored to `--native` once @P274 closed.
+
+### Plan-35 (branch-review viewer) closed 2026-05-14
+
+Plan-35 ran 2026-05-13 → 2026-05-14.  Goal: a browser-accessible
+doc + code review surface for the current loft branch, served by a
+loft-script binary against the host loft binary as a frozen pair.
+
+**Per-phase summary** (all shipped 2026-05-13 unless noted):
+
+- **00** Skeleton + binary build.  `tools/viewer/` package layout,
+  `make view-build` + `make view` + `make view-refresh` Makefile
+  targets, `BUILD_NOTES.md` records the loft commit the viewer was
+  built against.
+- **01** HTTP routes.  Server skeleton via `lib/server`, `/`, `/tree/<path>`,
+  `/raw/<path>`, `/static/style.css`, 404 fallback.  Originally
+  blocked from `--native` by @P262 + @P263; fixed in the seven-bug arc.
+- **02** Code-file rendering.  `/file/<path>` renders any text file as
+  line-numbered HTML with `<a id="L42">` anchors for fragment scrolling.
+  HTML escape + tab-to-4-spaces + binary-extension skip-list.
+- **03** Markdown subset (later extracted to `lib/markdown`).  Headings
+  with GH-slug ids, paragraphs, fenced code blocks, inline formatting
+  (bold/italic/code/strikethrough), links with relative-path resolution,
+  images, autolinks, blockquotes, lists with continuation merging,
+  GFM tables with alignment, task lists, setext headings, hard line
+  breaks, backslash escapes, HTML escaping.  Extracted as standalone
+  `lib/markdown/` library + `lib/markdown/tests/01-render.loft` (~30
+  in-library assertions, one per construct).  Two follow-up extensions
+  shipped 2026-05-14: `extract_headings(source)` returning
+  `vector<Heading>` for TOC building; `tag_url_prefix` and
+  `image_url_prefix` parameters wiring `@P-id`/`@PLAN-id` autolinks
+  + relative image rewriting (caller chooses prefixes).
+- **04** Git state via wrapper script.  `tools/viewer/refresh.sh` dumps
+  branch + changed-files + recent-commits + uncommitted state to
+  `tools/viewer/state/*.json` (uses `git` + `jq`).  Viewer reads JSON
+  via the (now fully-wired) JSON natives from P54 sprint completed
+  the same day.
+- **05** Diff + commit views.  `/diff/<path>` and `/commit/<sha>` use a
+  shared `render_diff()` helper that classifies each line and wraps it
+  in `.diff-add` / `.diff-del` / `.diff-hunk` / `.diff-head` / `.diff-meta`
+  / `.diff-ctx` / `.diff-noeol` spans.  Top-right `[Rendered ¦ Diff vs main]`
+  toggle on every `/file/` page; the diff link hides when no per-file
+  diff exists.  `breadcrumbs()` fix: parent dirs always link to
+  `/tree/<dir>`; only the leaf segment uses the page's kind, so
+  `/diff/<path>` doesn't generate broken `/diff/<dir>` parent links.
+- **06** Full GFM tables — alignment + headers + body + nested formatting
+  in cells (via `render_inline`) shipped via the `lib/markdown` table
+  renderer.  Multi-line cells + escaped pipes deferred (rare in loft
+  docs; promote when a downstream consumer needs them).
+- **07** Closeout (this entry) — DEBUG.md § Branch review viewer +
+  CHANGELOG.md user entry + this technical retrospective + plan moved
+  to `plans/finished/35-branch-review-viewer/`.
+
+**Loft drivers — features matured by building this**:
+
+- `lib/server` proven well beyond test fixtures (lib's first big
+  consumer outside the test suite).
+- The seven-bug native arc @P262→@P269 (closed 2026-05-13) was
+  surfaced by trying to compile the viewer to `--native`.  Each bug
+  was a real loft-codegen issue that was invisible until a real
+  consumer walked the path — `lib/web` + `lib/server` integration,
+  text-returning fn inline calls, fn-ref dispatcher work-buffers,
+  cross-crate native fn routing, JSON parser UTF-8, JSON natives
+  todo-stubs.  Closed via DESIGN_DECISIONS.md § C67 ("fail at startup,
+  not at runtime — internal-bug runtime panics caught at compile time").
+- P54 (JsonValue ecosystem) native side completed via @P268 + the
+  16-fn follow-up wiring all 23 JSON natives in
+  `src/codegen_runtime.rs`.
+- New `lib/markdown` library spun out as a reusable single-file loft
+  module, ~720 lines, with comprehensive in-library tests; first
+  pure-loft library born from a real consumer.
+- Surfaced gaps not blocking the ship: subprocess primitive
+  (workaround: `refresh.sh`), regex (workaround: char-by-char
+  parsing), HTML escape lib (workaround: `html_escape` in `lib/markdown`
+  exposed publicly).
+
+**Plan moved to `plans/finished/35-branch-review-viewer/`.**
+
+---
+
+### Plan-37 phase 04b — viewer per-doc sidebar shipped 2026-05-14
+
+`tools/viewer/src/main.loft` gains two sections at the
+bottom of every `/file/<path>` page:
+
+- **Referenced by** — reads `index/tags.json`'s `links`
+  bucket (phase 09 backlinks).  Lists every doc that links
+  inbound to the current file, with file:line + context.
+- **Tags on this page** — walks the tag buckets, surfaces
+  any tag whose ref list contains the current file.  Each
+  tag is a clickable chip → `/tag/<bare>` (phase 04a's tag
+  detail page).
+
+Both render to empty strings when `index/tags.json` is
+missing or the file has no associated entries — pages
+degrade gracefully on a fresh checkout that hasn't run
+`make index` yet.
+
+CSS additions: `section.sidebar` for the section wrapper,
+`ul.tag-list` for the chip-style tag pills (flex-wrap, dark
+mode covered).
+
+Only the welcome-landing half of phase 04b remains open;
+that one depends on @PLAN35 phase 08 which is unstarted.
+
+Verified end-to-end 2026-05-14:
+`target/release/loft --interpret --lib lib/ tools/viewer/src/main.loft`
+starts the viewer; `curl localhost:8765/file/doc/claude/PROBLEMS.md`
+returns 295 KB of HTML containing both sidebar sections
+("Referenced by 59" + "Tags on this page" with @P198…@P204
+chips, all populated from `index/tags.json`).  An earlier
+report of a `--interpret` extension-loading panic (filed as
+@P273) turned out to be a stale `target/release/loft`
+binary predating the cdylib's last build — once rebuilt
+fresh, the `apply_manifest_side_effects` path picks up the
+dep cdylibs correctly via `auto_build_native`.  @P273
+closed as no-bug; lesson recorded for the next "missing
+native" symptom.
+
+---
+
+### Plan-37 phase 09 follow-up — broken-link cleanup shipped 2026-05-14
+
+The 61 broken markdown links surfaced by phase 09's
+`broken_links` bucket are all cleaned up.  CI gate enabled
+(`tests/index_hygiene.rs::index_hygiene_clean` checks both
+`.broken` and `.broken_links` are empty).
+
+**What landed:**
+
+- `tools/indexer/fix_broken_links.py` — auto-fix script:
+  for each broken target, tries the `try_extra_dotdot`
+  heuristic (pop intermediate path segments and check
+  whether the result exists).  Catches the dominant
+  off-by-one `../` case where a plan README in
+  `plans/<dir>/` cites a top-level doc as `../X.md` but
+  needs `../../X.md`.  Manual override map for the
+  plan-22 / plan-35 closeout drift.
+- Scanner tightened in `tools/indexer/scan.sh` — link
+  extraction now uses per-file awk that tracks fenced
+  code-block state; example links inside `\`\`\`markdown`
+  blocks no longer count as real refs.  Cost: ~1.5 sec
+  added to the scan (was 1.5s, now 3s; still under the
+  5-sec budget).  Without this fix, the auto-fixer
+  rewrote example links to bogus paths in several files
+  (caught + reverted via the validate-after-fix step).
+- 106 of the 61 distinct broken-target refs auto-fixed
+  (61 distinct targets, but 106 individual ref sites).
+  Remaining ~20 manually patched: missing-doc citations
+  (`DX.md`/`LSP.md`/`WEB_SERVER_LIB.md`) redirected to
+  the corresponding `lib_plans/future/` dirs;
+  `BYTECODE_CACHE.md` and similar not-yet-written sibling
+  docs converted to plain-text mentions; intentional
+  template / test-fixture / inline-backtick examples got
+  `<!--noindex-->` markers.
+- `tests/index_hygiene.rs` rewritten as a single
+  `index_hygiene_clean` test (was two parallel tests
+  racing on `make index`; corruption surfaced as
+  intermittent failures).
+
+**Numbers:**
+
+- Before: 61 broken markdown links, 309 link targets, 1297
+  inbound links.
+- After fence-aware scanner: 19 broken (42 false positives
+  from fenced examples removed), 264 targets, 1277 links.
+- After cleanup: 0 broken, 245 targets, 1267 links.
+
+The phase 09 follow-up section in
+`plans/37-tracker-index/09-backlinks.md` is updated to
+mark this closed.
+
+---
+
+### Plan-37 phase 06 — retroactive `@`-tagging shipped 2026-05-14
+
+`tools/indexer/migrate.py` rewrites bare-name tracker
+references to `@`-prefixed form across `doc/claude/**/*.md`:
+
+- `P259` → `@P259` when 259 is a valid PROBLEMS.md row ID.
+- `plan-22` → `@PLAN22` when 22 is a valid plan dir number.
+
+The migration is **conservative on purpose** — false
+positives in 154 files would be expensive to clean up by
+hand:
+
+- Skip `P\d+-R\d+` (phase-N risk-M notation in COROUTINE.md
+  / CHANGELOG_TECHNICAL.md / SAFE.md).
+- Skip single-digit `P[1-9]` — overloaded with PERFORMANCE.md
+  design IDs ("Design: P1") and plan-N phase-M shorthand
+  ("P5.2").  Two-digit `P54` and longer are unambiguous
+  enough.
+- Skip refs preceded by `/` (`/tag/P259` URL routes
+  shouldn't break).
+- Skip refs inside fenced code blocks.
+- Skip refs inside same-line backtick spans (so `` `P259` ``
+  examples explaining the convention survive).
+- Skip lines containing `<!--noindex-->`.
+
+Multi-line backtick spans (rare but present in CLAUDE.md's
+"## Tracker tags" section) need explicit `<!--noindex-->`
+markers per line.
+
+**Numbers**:
+
+- 1500+ refs migrated across ~150 `.md` files.
+- Legacy bucket dropped from 2643 → 1917 refs (the residue
+  is single-digit `P1`-`P9` skipped on purpose, refs to
+  closed P-issues no longer in PROBLEMS.md, and code-file
+  refs which don't migrate).
+- New form: 783 `@P-id` refs + 753 `@PLAN-id` refs.
+- `tests/index_hygiene.rs::no_broken_tracker_tags` still
+  green.
+
+Phase 06 was originally framed as "retroactive tagging +
+closeout" — the closeout half is DEFERRED to after phases
+7+8 (loft-native scanner + multi-project deploy).
+
+---
+
+### Plan-37 phase 09 — backlinks (links bucket) shipped 2026-05-14
+
+Indexer now extracts every `[text](path.md)` markdown link <!--noindex-->
+across the repo, resolves the target relative to the source
+file's directory, and groups inbound refs under a top-level
+`links: {target: [{file, line, anchor, context}]}` bucket
+in `index/tags.json`.  Path resolution handles `..`, `./`,
+repo-root `/...` paths, anchors, and skips http(s)/mailto
+schemes.
+
+Two new CLI surfaces on `./scripts/idx`:
+
+- `incoming:<path>` — inverse of `file:`; lists everything
+  that links TO the given path.  Trailing `/` resolves to
+  `/README.md`; bare basename matches against any key
+  ending in `/<name>` (returns `{ambiguous: [...]}` when
+  multiple paths match).  `incoming:@PLAN35` delegates to
+  the existing `tag:` lookup so the same query shape works
+  for both file paths and `@`-tags.
+- `broken-links` — sibling of `broken`; lists links
+  pointing at non-existent files.  Initial scan surfaced
+  62 stale references on the loft tree (mostly off-by-one
+  `..` counts in `doc/claude/plans/<dir>/README.md` after
+  files were moved to `finished/`).  No CI gate yet — the
+  cleanup is a follow-up before tightening
+  `tests/index_hygiene.rs` to fail on broken links.
+
+**Bug fixes during the work:**
+
+- **awk match() clobber** — the link-extraction inner
+  loop's `resolve(base, target)` helper called `match()`
+  internally, clobbering `RSTART`/`RLENGTH` for the outer
+  loop's substr-advance step.  Effect: every link emitted
+  twice (the second emit re-walked the same content from
+  a stale offset).  Fixed by capturing `RSTART`/`RLENGTH`
+  into local `rs`/`rl` before any helper call.
+- **awk single-quote in shell-quoted block** — a comment
+  containing `loop's` broke out of the bash single-quoted
+  awk script, surfacing as "syntax error near token `('"
+  at the apparent line of the next awk statement.  Comment
+  rephrased to drop the apostrophe.
+- **jq `--argjson` ARG_MAX overflow** — the assembled
+  `LINKS_JSON` (~150 KB on the loft tree) exceeded the OS
+  argv limit.  Switched the merge step to `--slurpfile`
+  reading from a temp file (no argv pressure).
+
+**Performance:** scanner runs in 1.5 sec on 953 files (was
+1.0 sec without the link pass).  No CI gate impact.
+
+`tests/index_hygiene.rs` continues to enforce zero broken
+`@`-tag refs (phase 03 contract).  The `broken_links`
+bucket is detection-only for now.
+
+---
+
+### Plan-22 (mutable closures) closed 2026-05-13
+
+Plan-22 ran 2026-05-10 → 2026-05-13.  Goal: make closures whose
+bodies mutate captures work intuitively without user-visible
+annotation — implicit-by-body classification into cases A/B/C.
+
+**Per-phase summary** (all SHIPPED 2026-05-13):
+
+- **00** Matrix freeze + harness wiring.  `tests/mut_closure_matrix.rs`
+  scaffolded (44 cells cross-mode); Case A baseline cells green.
+- **01** Mutated-captures detection.  `walk_for_mutations` walker marks
+  captures as `mutated: bool`; no behaviour change.  Known gap: first-
+  pass GetField in `src/parser/vectors.rs:2498-2512` is non-load-bearing
+  post-@P260 (cells handle both sides).
+- **02** Case B (co-scoped mutating) + all sub-phases:
+  - 02b: auto-Reference attribute emission in `synthesize_closure_record`.
+  - 02c: Reference-type capture routing in `typedef.rs::fill_database`.
+  - 02d-iii.a: `scalars_to_box` type-flip helper (outer local → cell).
+  - 02d-iii.b: read auto-deref hook in `parse_var`.
+  - 02d-iii.c: boxed-scalar assign-rewrite helper + `change_var_type` guard.
+  - 02d-iii.d: `cell_alloc_prepend` helper for first-set rewrites.
+  - 02d-vii: text-return crash fix (cell encoding + return routing).
+- **03** Case C (factory / escaped closure).  Liveness check + @P259 fix
+  (4 commits — OpIncRc + cascade-free cell ownership for multi-factory
+  pattern).
+- **04** DECOMMISSIONED 2026-05-13.  The cell + auto-Reference from
+  phases 02-03 already gives Case D correct shared-state semantics;
+  outer + closure share the same cell automatically.  No rejection code
+  shipped.  See `04-case-d.md § Major finding`.
+- **05** DEFER-BY-DEFAULT.  `Mutable<T>` helper unnecessary: the cell IS
+  the shared-ownership mechanism.  Revisit only if a concrete use case
+  surfaces that cells can't handle.
+- **06** Doc closeout (this entry).  DESIGN_DECISIONS.md C38 updated;
+  CAVEATS.md C38 cross-reference updated; ROADMAP.md @PLAN22 row
+  removed; plan moved to `finished/`.
+
+**Bug yield — P-issues filed during @PLAN22:**
+
+- **@P256** — vector-capture into closure crashed both backends (no clean
+  rejection).  Closed 2026-05-12 with parse-time rejection in
+  `src/parser/objects.rs::resolve_name`.  Pinned by
+  `tests/parse_errors.rs::p257_vector_capture_in_closure_rejected`.
+  *(Filed as part of @PLAN15 closeout probing, attributed to @PLAN22's
+  scope — collection capture is a closure-record layout issue.)*
+- **@P257** — same as @P256 (duplicate tracking number; see PROBLEMS.md).
+- **@P258** — native + interp layout divergence for cell-encoded scalars.
+  Closed in phase 02d-iii.b.
+- **@P259** — multi-factory cell ownership crash (OpIncRc missing +
+  cascade-free teardown).  Closed 2026-05-13 via 4 commits
+  `9f00afec` / `29ee04fd` / `cfb65e8b` / `0711973b`.
+- **@P260** — closures captured `Type::Reference` by deep-copy; mutations
+  silently no-opped.  Closed 2026-05-13 via `cfad6274` (one-line
+  architectural fix: drop `is_mutated` gate in `synthesize_closure_record`).
+  6 new cross-mode cells in `tests/mut_closure_matrix.rs`.
+- **@P261** — vector-field literal-assign appended instead of replacing.
+  Closed 2026-05-13 via `a1cf258a` (prepend `OpClearVector` in
+  `towards_set`'s vector-literal path).  Pinned by
+  `e_d3_struct_vector_assign_in_closure`.
+
+**Final test surface**: 44 `mut_closure_matrix` cells + 22
+`closure_matrix` (@PLAN15 regression net) + 633 issues suite + 26
+leak guards — all green, interp/native byte-identical.
+
+Active plans remaining after close: 1 (07-error-messages).
+Plan moved to `plans/finished/22-mutable-closures/`.
+
+### Plan-15 (closure validation matrix) closed 2026-05-12
+
+Plan-15 ran in one session 2026-05-12 — promoted to current,
+shipped all 6 phases, and closed.  Final matrix: 22 cells in
+`tests/closure_matrix.rs` across 6 capture shapes (C0
+non-capturing, C1 single-int, C2 text, C3 Reference, C5 multi-
+basic, C6 nested) and 4 destinations (D1 local, D2 direct
+stack, D3 struct field, D4 vector element — D4 only for C0).
+Plus 5 leak guards in `tests/leak.rs::p15_phase0[345]_*_no_leak`
+covering text / Reference / nested-closure capture surfaces
+under 100-iteration tight loops.
+
+**Bug yield: 0** new P-issues filed.  All gaps the plan was
+designed to surface (closure-DbRef leak, "move-vs-copy
+semantics gap analogous to T1.8c") turned out to be non-
+issues — the underlying support landed earlier through @P213
+(2026-05-04 — `Parts::ChildRec` layout-widening for struct-
+field captures), @P214 (2026-05-05 — vector-of-non-capturing
+closures), @P215 (2026-05-05 — nested closure name resolution),
+and @P227 (2026-05-05 — text-returning fn-ref calls).
+
+**Per-phase summary** (all SHIPPED 2026-05-12):
+
+- **00** Harness wiring + smoke (3 cells).
+- **01** C0 (non-capturing) × D1/D2/D3/D4 (5 cells, pins @P214).
+- **02** C1 + C5 (basic-type captures) × D1/D2/D3 (6 cells,
+  pins @P213 + @P215).
+- **03** C2 (text capture) × D1/D2/D3 (3 cells + 2 leak
+  guards) — disposed LIFETIME.md "Type::Function NOT YET
+  HANDLED" annotation as documentation drift.
+- **04** C3 (Reference capture) × D1/D2/D3 (3 cells + 2 leak
+  guards) — no read-after-free, no DbRef-in-closure-record
+  leak.
+- **05** C6 (nested closures) × D1/D2/D3 (3 cells + 1 leak
+  guard) — D3 included (matrix's "deferred" was conservative).
+- **06** Doc closeout — LIFETIME.md "Implementation path"
+  trimmed; ROADMAP.md / USER_FACING.md / plans/future/36-
+  audience-generative-art cross-refs updated; plan moved to
+  `plans/finished/15-closure-validation/`.
+
+Active plans now: 2 (07-error-messages + 22-mutable-closures).
+
 ### Plan-14 (tuple validation matrix) closed 2026-05-11
 
 Plan-14 ran 2026-04-30 → 2026-05-11.  Final matrix: 40 cells
@@ -27,34 +449,34 @@ tuples) closed-by-non-goal.
 - 01: 12 E1/E2 cells (D1 + D2: local, arg, return, inline,
   match-subj, if-arm).  T1.8a closed via the lighter "rust_type
   Context::Result recursion" fix instead of new opcodes.
-- 02: 5 E3 cells.  Closed P247 (nested-tuple text move in
-  format-string interpolation) + P248 (element-of-element
+- 02: 5 E3 cells.  Closed @P247 (nested-tuple text move in
+  format-string interpolation) + @P248 (element-of-element
   assignment `t.0.1 = 99`).
-- 03: 5 E4 cells (closure-typed tuple elements).  Closed P249
+- 03: 5 E4 cells (closure-typed tuple elements).  Closed @P249
   (20-byte fn-ref layout extended into 6 tuple codegen sites +
   `__fn_ref_tmp` postfix-call temp marked skip_free).
 - 04: 6 E5 cells (struct references).  Decision: MOVE
   semantics (recorded as C64).  Loop-iteration aliasing bug
-  parked as P250.
+  parked as @P250.
 - 05: 6 D3 cells (tuples in struct fields).  Decision: LIFT
   was already shipped by Plan-06 phase 4d; phase 05 was a
   verification pass.  E4_d3 (closure-element tuple as struct
-  field) parked behind P251.
-- 07: P234 runtime — lifetime-bearing tuple returns route
+  field) parked behind @P251.
+- 07: @P234 runtime — lifetime-bearing tuple returns route
   through `Reference(__tuple<…>)` synthetic struct.
 
 **Phase deferred:**
-- 08: P234 runtime extended to LOCAL tuple-with-lifetime-concern
+- 08: @P234 runtime extended to LOCAL tuple-with-lifetime-concern
   variables — friction with P189b's vector-of-tuple index access
   meant the rewrite needed broader changes than the original
   Phase 08 scope.  Phase is a uniformity refactor, not a bug
   fix; juice not worth the squeeze.
 
 **Bugs filed during validation:**
-- P247, P248 — closed in phase 02.
-- P249 — closed in phase 03.
-- P250 — open: ref-tuple loop-iteration aliasing.
-- P251 — open: native projection for fn-ref-tuple-in-struct-field.
+- @P247, @P248 — closed in phase 02.
+- @P249 — closed in phase 03.
+- @P250 — open: ref-tuple loop-iteration aliasing.
+- @P251 — open: native projection for fn-ref-tuple-in-struct-field.
 
 **Design decisions recorded in DESIGN_DECISIONS.md:**
 - C64: Tuple struct-ref elements use MOVE semantics.
@@ -89,9 +511,9 @@ shipped or formally deferred with rationale.
 - A7: closed the par-tuple canary surface — A7.1 (size-based
   gate widen + work-ref unification — closes
   `par_tuple_return_int_int` / `_three_arity` / `_nested`),
-  A7.2 (P235 par half — synthesized wrapper-worker — closes
-  `par_tuple_destructure_in_for`), A7.3 (P234 lexer + runtime
-  for tuple-of-struct member access).  Companion fix P236
+  A7.2 (@P235 par half — synthesized wrapper-worker — closes
+  `par_tuple_destructure_in_for`), A7.3 (@P234 lexer + runtime
+  for tuple-of-struct member access).  Companion fix @P236
   (heap-owned reference returns from if/else native data
   corruption — broader than tuples) landed alongside A7.1.
 - A8.b: stitch_id consolidation in `src/native.rs` — 5
@@ -119,7 +541,7 @@ shipped or formally deferred with rationale.
   intentional (perf).  Commit `ada917d`.  A8.b stitch_id retry
   delivered consolidation at a different layer (see Shipped).
 - A10 (browser parallel via wasm-bindgen-rayon): out-of-scope
-  for plan-06 closure.  S2 strategic showcase; ships as its own
+  for @PLAN06 closure.  S2 strategic showcase; ships as its own
   multi-session arc when scheduled.
 
 **Acceptance criteria — final tally:**
@@ -129,17 +551,17 @@ shipped or formally deferred with rationale.
 - #2 (par_light removed from user surface): MET by A4.
 - #3 (zero ignored par canaries): 8 → 1 over the arc.  Final
   remaining ignore is heterogeneous-vec-of-fn (D11a row 8),
-  outside plan-06 scope (different surface — vector
+  outside @PLAN06 scope (different surface — vector
   construction, not par).
 
 Three closure commits land 2026-05-09: `f974770` (closeout
-docs + A8 deferral marker + A9 superseded), `15a7aab` (P235
+docs + A8 deferral marker + A9 superseded), `15a7aab` (@P235
 par half via wrapper synthesis), and the A8.b commit (this
 change).
 
-### plan-09 phase 07: close P205 — bounded-generic text return scratch routing
+### @PLAN09 phase 07: close @P205 — bounded-generic text return scratch routing
 
-Closes P205 (1 of 4 native sub-failures retired).  The bug:
+Closes @P205 (1 of 4 native sub-failures retired).  The bug:
 bounded-generic dispatch `fn f<T: Trait>(x: T) -> text` produced
 native code that emitted `Str::new(&local_String)` whose pointer
 referenced a stack-local that dropped at function return,
@@ -207,9 +629,9 @@ Regression tests in `tests/codegen_emitter.rs`:
 
 Commit `6151231`.
 
-### plan-09 phase 06: close P202 — n_parallel_queue family in native
+### @PLAN09 phase 06: close @P202 — n_parallel_queue family in native
 
-Closes P202 (3 of 6 native sub-failures retired: 19_threading,
+Closes @P202 (3 of 6 native sub-failures retired: 19_threading,
 22_threading, 40_par_ref_return).  Native compilation of
 `for ... par(...)` for-loops now works.
 
@@ -279,7 +701,7 @@ Regression tests in `tests/codegen_emitter.rs`:
 
 Commit `8cf0676`.
 
-### plan-09 phase 00a: introspection findings + downstream updates
+### @PLAN09 phase 00a: introspection findings + downstream updates
 
 Fired late (after phases 00, 01, 03, 04, 09 all shipped) so the
 introspection retroactively covers the simplification cluster.
@@ -316,12 +738,12 @@ Findings populate `doc/claude/plans/finished/09-native-runtime-rewrite/00a-intro
 
 Hidden assumptions surfaced (drove downstream doc updates):
 
-1. **Phase 05's WRITE-side scope was wrong** — actual P200 bug is
+1. **Phase 05's WRITE-side scope was wrong** — actual @P200 bug is
    READ-side block-tail comparison-emission (`(_var as u8) ==
    (0_i64)` E0308), not the `f += val` template.  Plan rewrite
    required.  Documented in 05-file.md § Diagnosis findings;
-   PROBLEMS.md P200 entry updated with the surveyed shape.
-2. **Phase 02 demoted from "P200 prerequisite" to "optional
+   PROBLEMS.md @P200 entry updated with the surveyed shape.
+2. **Phase 02 demoted from "@P200 prerequisite" to "optional
    simplification"** — phase 02 splits `narrow_int_cast`'s
    param-narrowing role (role #2); phase 05's actual bug is the
    block-tail role (role #1).  02-param-adapter.md now carries a
@@ -338,7 +760,7 @@ Decision: **Continue with updated plans** (per the introspection's
 decision criteria table — "2-3 surprises that updated downstream
 phases").
 
-Memory entries saved (durable beyond plan-09):
+Memory entries saved (durable beyond @PLAN09):
 
 - `feedback_forwarding_first_recipe.md` — pre-flight pattern.
 - `feedback_phase_doc_trait_drafts.md` — trait sketches in plan
@@ -346,7 +768,7 @@ Memory entries saved (durable beyond plan-09):
 - `feedback_actual_error_survey.md` — bug-fix phases need
   `--native-emit` survey BEFORE writing implementation steps.
 
-### plan-09 CI cleanup: fmt + clippy + no-default-features green
+### @PLAN09 CI cleanup: fmt + clippy + no-default-features green
 
 Pre-existing breakage that accumulated across phases 00-04:
 
@@ -374,7 +796,7 @@ Verified: fmt + clippy + no-default-features all clean; behavioural
 baselines preserved (codegen_emitter 10/10, threading 43/43,
 threading_chars 35/35, issues 540/540).
 
-### plan-09 phase 09: parallel runtime consolidation
+### @PLAN09 phase 09: parallel runtime consolidation
 
 `src/codegen_runtime.rs`'s three `n_parallel_for_*_native` public
 fns (scalar / text / heap-ref) collapsed to thin wrappers around a
@@ -397,7 +819,7 @@ Mechanism:
   for each).  Pinned by `parallel_runtime_consolidated` test in
   `tests/codegen_emitter.rs` (≤ 15 body lines + must call
   `n_parallel_for_native_core`).
-- Phase 06 (P202 — adds `n_parallel_queue_*_native` queue variants)
+- Phase 06 (@P202 — adds `n_parallel_queue_*_native` queue variants)
   will add 3 thin wrappers (~10 lines) instead of 3 full ~80-line
   fns; cumulative saving ~240 lines.
 
@@ -726,7 +1148,7 @@ absence of a recurring heap-corruption class (P178 / P185).
   validator invoked via `LOFT_SLOT_V2=validate`; I1–I6 green on
   the corpus as a correctness gate for future V1 edits.
 
-**Retracted from the original plan-04 scope:**
+**Retracted from the original @PLAN04 scope:**
 
 - Single-pass V2 allocator driving codegen (both the
   codegen-is-allocator pivot and the direct V2-drive attempt hit
@@ -811,7 +1233,7 @@ a struct from a JsonValue. Type mismatches are reported via
 
 ### Plan-06 phases 4c + 4d.A — typed parallel-for dispatch
 
-Two coupled phases of plan-06 ("simple typed `par`: everything is a
+Two coupled phases of @PLAN06 ("simple typed `par`: everything is a
 store") landed.  User-visible only as one extra par canary closing
 (`tests/threading_chars.rs::par_tuple_input_int_int`); structurally
 this lays the foundation for the remaining phase 4 work (4d.B
@@ -854,7 +1276,7 @@ lookup misses, mirroring `fill_database`'s `database.sorted` /
 content+keys → same type id.  Regression test
 `tests/issues.rs::p190_local_var_sorted_iteration`.
 
-Note: this unblocked the iteration codepath; plan-06 phase
+Note: this unblocked the iteration codepath; @PLAN06 phase
 4d.B for sorted then closed by the parser-side desugar (see
 the next entry).
 
@@ -1014,7 +1436,7 @@ documenting V1/V2/V3 reduced cases).  `cargo clippy` clean.
 
 **Canary remains `#[ignore]`d** — full closure of the canary needs
 real storage support for `vector<fn-ref>`, which is its own
-plan-06 phase 4d.A.2 work (M effort, 2-3 days).  See
+@PLAN06 phase 4d.A.2 work (M effort, 2-3 days).  See
 `/home/jurjen/.claude/plans/serialized-churning-journal.md` for
 the full design (Steps A–E).
 
@@ -1175,7 +1597,7 @@ default (threading) build with two `not_unsafe_ptr_arg_deref`
 errors:
 
 - `state::execute_at_raw_to(dst: *mut u8)` (added by
-  plan-06 phase 1 G4 / 4d.A in commit 6973b182) was a public
+  @PLAN06 phase 1 G4 / 4d.A in commit 6973b182) was a public
   function that called `ptr::copy_nonoverlapping` without an
   `unsafe` signature.  Now `pub unsafe fn` with a `# Safety`
   doc-comment block; the single caller in

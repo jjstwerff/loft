@@ -56,6 +56,54 @@ pub fn assign_slots(function: &mut Function, code: &mut Value, local_start: u16)
     {
         function.logging = false;
     }
+    // Plan-22 02d-vii follow-up — `LOFT_LOG=slots:<fn>` trace.
+    // Post-allocation summary: log each var's final slot, OR
+    // explain why it was skipped.  Helps diagnose
+    // "Incorrect var X[65535]" codegen panics where the
+    // allocator silently left X unallocated.
+    if let Some(target) = crate::log_config::slots_trace_target()
+        && function.name.contains(&target)
+    {
+        eprintln!("[slots] fn={} local_start={local_start}", function.name);
+        for v_nr in 0..function.next_var() {
+            let name = function.name(v_nr);
+            let slot = function.stack(v_nr);
+            let tp = function.tp(v_nr);
+            let sz = size(tp, &Context::Variable);
+            if slot == u16::MAX {
+                let reason = explain_skipped_slot(function, v_nr);
+                eprintln!(
+                    "[slots]   SKIP    v_nr={v_nr:<3} name={name:<20} size={sz}  type={tp:?}  reason={reason}",
+                );
+            } else {
+                eprintln!(
+                    "[slots]   ASSIGN  v_nr={v_nr:<3} name={name:<20} slot={slot:<4} size={sz}  type={tp:?}",
+                );
+            }
+        }
+    }
+}
+
+/// Plan-22 02d-vii — explain why `assign_slots` skipped a var.
+/// Mirrors the conditions process_scope uses to decide which vars
+/// get a slot.
+fn explain_skipped_slot(function: &Function, v_nr: u16) -> &'static str {
+    if function.is_argument(v_nr) {
+        return "is_argument (slot lives in caller's frame)";
+    }
+    let tp = function.tp(v_nr);
+    let sz = size(tp, &Context::Variable);
+    if sz == 0 {
+        return "size(type) == 0 (zero-byte var — no slot needed)";
+    }
+    if function.first_def(v_nr) == u32::MAX {
+        return "no first_def (no Set IR for this var — read-only or unused — \
+                allocator never sees a write to allocate against)";
+    }
+    if !function.is_defined(v_nr) {
+        return "!is_defined (variable resolved but assignment IR never emitted)";
+    }
+    "unknown — slot stayed u16::MAX after process_scope (file a P-issue)"
 }
 
 /// Assign slots for all variables in the scope owned by `block_val` (a Block, Loop,

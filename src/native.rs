@@ -128,6 +128,9 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_9character_is_whitespace", t_9character_is_whitespace),
     ("t_9character_is_control", t_9character_is_control),
     ("n_arguments", n_arguments),
+    ("n_ymd_days_ago", n_ymd_days_ago),
+    ("n_mtime", n_mtime),
+    ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
     ("n_program_directory", n_program_directory),
@@ -744,6 +747,37 @@ fn t_9character_is_control(stores: &mut Stores, stack: &mut DbRef) {
 fn n_arguments(stores: &mut Stores, stack: &mut DbRef) {
     let new_value = { stores.os_arguments() };
     stores.put(stack, new_value);
+}
+
+/// Return `YYYY-MM-DD` of today minus `days` days, UTC.  Wraps the
+/// `days_to_ymd` algorithm in `src/logger.rs`.  Exposed to loft as
+/// `ymd_days_ago(days)` so cutoff-date computation for time-window
+/// filters (recent-closed P-issues / recently-finished plans) can
+/// happen without a bash `date -u -d '30 days ago'` invocation.
+/// Negative `days` clamps to today (no future dates).
+fn n_ymd_days_ago(stores: &mut Stores, stack: &mut DbRef) {
+    let v_days = *stores.get::<i64>(stack);
+    stores.scratch.push(Stores::ymd_days_ago_native(v_days));
+    let s = crate::keys::Str::new(stores.scratch.last().unwrap());
+    stores.put(stack, s);
+}
+
+fn n_mtime(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let result = Stores::os_mtime_native(v_path.str());
+    stores.put(stack, result);
+}
+
+/// Write `text` to stderr — companion to `print()` / `println()`
+/// which both go to stdout.  Use to separate machine-readable
+/// output (JSON, structured data) on stdout from human-readable
+/// status / summary / progress lines.  Driver: @PLAN37 phase 07's
+/// `scan.loft` cutover writes `index/tags.json` to stdout, summary
+/// stats to stderr — `make index > index/tags.json` then puts JSON
+/// in the file while still showing the summary on screen.
+fn n_eprint(stores: &mut Stores, stack: &mut DbRef) {
+    let v = *stores.get::<Str>(stack);
+    eprint!("{}", v.str());
 }
 
 fn n_directory(stores: &mut Stores, stack: &mut DbRef) {
@@ -2021,17 +2055,20 @@ fn n_base64url_encode(stores: &mut Stores, stack: &mut DbRef) {
 //   OpFreeRef on it frees the entire store — single ownership, no
 //   ref-count puzzles.
 
-const JV_DISCR_NULL: i32 = 1;
-const JV_DISCR_BOOL: i32 = 2;
-const JV_DISCR_NUMBER: i32 = 3;
-const JV_DISCR_STRING: i32 = 4;
-const JV_DISCR_ARRAY: i32 = 5;
-const JV_DISCR_OBJECT: i32 = 6;
+// JsonValue variant discriminants — exposed `pub(crate)` so the
+// `--native` runtime wrappers in `src/codegen_runtime.rs` can match
+// against the same byte values the interp uses.
+pub(crate) const JV_DISCR_NULL: i32 = 1;
+pub(crate) const JV_DISCR_BOOL: i32 = 2;
+pub(crate) const JV_DISCR_NUMBER: i32 = 3;
+pub(crate) const JV_DISCR_STRING: i32 = 4;
+pub(crate) const JV_DISCR_ARRAY: i32 = 5;
+pub(crate) const JV_DISCR_OBJECT: i32 = 6;
 
 /// Allocate a fresh `JsonValue` record in its own store and return
 /// the DbRef.  Caller writes the discriminant byte at pos+0 and any
 /// variant payload at pos + position(variant_tp, field_name).
-fn jv_alloc(stores: &mut Stores) -> DbRef {
+pub(crate) fn jv_alloc(stores: &mut Stores) -> DbRef {
     let jv_tp = stores.name("JsonValue");
     let size_bytes = u32::from(stores.size(jv_tp));
     // database(n) → claim(n) which expects 8-byte words; round up
@@ -2046,7 +2083,9 @@ fn jv_alloc(stores: &mut Stores) -> DbRef {
 /// Lazily allocated on first call; its store is `lock()`ed so future writes
 /// panic (guaranteeing the sentinel stays JNull) and `check_store_leaks`
 /// ignores it for the process lifetime.
-fn jv_null_sentinel(stores: &mut Stores) -> DbRef {
+/// `pub(crate)` so the `--native` JSON runtime wrappers in
+/// `src/codegen_runtime.rs` can return the same sentinel.
+pub(crate) fn jv_null_sentinel(stores: &mut Stores) -> DbRef {
     if let Some(r) = stores.jnull_sentinel {
         return r;
     }
@@ -2055,7 +2094,8 @@ fn jv_null_sentinel(stores: &mut Stores) -> DbRef {
         .store_mut(&r)
         .set_byte(r.rec, r.pos, 0, JV_DISCR_NULL);
     if (r.store_nr as usize) < stores.allocations.len() {
-        stores.allocations[r.store_nr as usize].lock();
+        stores.allocations[r.store_nr as usize]
+            .lock_with_origin("native.rs::ensure_jnull_sentinel");
     }
     stores.jnull_sentinel = Some(r);
     r
@@ -2075,7 +2115,7 @@ fn jv_null_sentinel(stores: &mut Stores) -> DbRef {
 /// read-paths used by `n_to_json` etc.  Recurses through
 /// containers; allocates `Vec` / `String` for the Parsed
 /// representation but never touches DbRef ownership.
-fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Parsed {
+pub(crate) fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Parsed {
     let discr = stores.store(src).get_byte(src.rec, src.pos, 0);
     match discr {
         JV_DISCR_NULL => crate::json::Parsed::Null,
@@ -2152,7 +2192,11 @@ fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Parsed {
     }
 }
 
-fn materialise_primitive_into(stores: &mut Stores, slot: &DbRef, child: &crate::json::Parsed) {
+pub(crate) fn materialise_primitive_into(
+    stores: &mut Stores,
+    slot: &DbRef,
+    child: &crate::json::Parsed,
+) {
     match child {
         crate::json::Parsed::Null => {
             stores
@@ -2250,7 +2294,18 @@ fn materialise_primitive_into(stores: &mut Stores, slot: &DbRef, child: &crate::
 
 fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
     let v_raw = *stores.get::<Str>(stack);
-    let parsed = crate::json::parse(v_raw.str());
+    let result = json_parse_into_stores(stores, v_raw.str());
+    stores.put(stack, result);
+}
+
+/// P268: shared materialisation helper extracted from the interp
+/// `n_json_parse` body so the native `--native` runtime stub
+/// (`codegen_runtime::n_json_parse`) can call the same logic without
+/// going through the bytecode VM's `(stores, stack)` calling
+/// convention.  Returns the allocated `JsonValue` `DbRef`; updates
+/// `stores.last_json_errors` exactly as the interp path does.
+pub fn json_parse_into_stores(stores: &mut Stores, raw: &str) -> DbRef {
+    let parsed = crate::json::parse(raw);
     let result = jv_alloc(stores);
     let pos = result.pos;
     match parsed {
@@ -2389,10 +2444,10 @@ fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
             stores.last_json_errors.clear();
             stores
                 .last_json_errors
-                .push(crate::json::format_error(v_raw.str(), &err, 2, 1));
+                .push(crate::json::format_error(raw, &err, 2, 1));
         }
     }
-    stores.put(stack, result);
+    result
 }
 
 fn n_json_errors(stores: &mut Stores, stack: &mut DbRef) {
@@ -2644,7 +2699,12 @@ fn n_struct_from_jsonvalue(stores: &mut Stores, stack: &mut DbRef) {
 /// name in `src` (which must be a `JObject` for any field lookup to
 /// succeed — wrong-kind sources leave every field at zero-init), and
 /// dispatches on the field's declared type.
-fn populate_struct_from_jsonvalue(stores: &mut Stores, dest: &DbRef, struct_kt: u16, src: &DbRef) {
+pub(crate) fn populate_struct_from_jsonvalue(
+    stores: &mut Stores,
+    dest: &DbRef,
+    struct_kt: u16,
+    src: &DbRef,
+) {
     use crate::database::Parts;
     // Cache the well-known type known_types so per-field dispatch is an
     // integer compare, not a name compare.
@@ -3413,7 +3473,7 @@ fn n_kind(stores: &mut Stores, stack: &mut DbRef) {
 /// element/field and dedent the closing bracket to the parent's
 /// depth.  Empty containers stay `[]` / `{}` regardless.
 /// Primitives are byte-identical in both modes.
-fn json_to_text(stores: &Stores, v: &DbRef, pretty: bool) -> String {
+pub(crate) fn json_to_text(stores: &Stores, v: &DbRef, pretty: bool) -> String {
     json_to_text_at(stores, v, pretty, 0)
 }
 

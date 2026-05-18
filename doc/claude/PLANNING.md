@@ -436,7 +436,7 @@ left at the last successful checkpoint.
 - **T1.8** — Tuple function return convention + struct-ref element lifetime tracking.
   Three sub-issues remain after T1.1–T1.7:
 
-  **T1.8a — Function return convention** *(closed 2026-05-04 by plan-14 phase 01 follow-up)*: actual-error survey showed the original design (new `ReturnTuple` IR variant + `OpReturnTuple(size)` opcode + caller-pre-allocated slot) was over-engineered.  Basic `-> (integer, integer)` returns already worked end-to-end on both backends; only **tuple-of-text returns under `--native`** failed, with three coupled type mismatches (signature `-> (Str, Str)` vs body `("alpha", "beta")` vs caller `(String, String)`).  Fix: `rust_type` for `Type::Tuple` in `Context::Result` now recurses with `Context::Variable` for elements (so signature is `(String, String)`); `Value::Return` sets the existing `tuple_text_to_string` flag when returning a tuple-of-text literal; `output_set` adds a `tuple_text_elem_clone` arm for destructure-from-tuple-text-element so `var_t.0.clone()` is emitted instead of `&var_t.0.to_string()` (which yields `&String`).  Pinned by `e1_d2_return_int_int` and `e2_d2_return_text_text` un-ignored cells in `tests/tuple_matrix.rs`.  Plan-06 phases 9b–9e remain in plan-06's scope; the par-specific dispatch (worker tuple returns, fused-for destructure) is independent of this fix.
+  **T1.8a — Function return convention** *(closed 2026-05-04 by @PLAN14 phase 01 follow-up)*: actual-error survey showed the original design (new `ReturnTuple` IR variant + `OpReturnTuple(size)` opcode + caller-pre-allocated slot) was over-engineered.  Basic `-> (integer, integer)` returns already worked end-to-end on both backends; only **tuple-of-text returns under `--native`** failed, with three coupled type mismatches (signature `-> (Str, Str)` vs body `("alpha", "beta")` vs caller `(String, String)`).  Fix: `rust_type` for `Type::Tuple` in `Context::Result` now recurses with `Context::Variable` for elements (so signature is `(String, String)`); `Value::Return` sets the existing `tuple_text_to_string` flag when returning a tuple-of-text literal; `output_set` adds a `tuple_text_elem_clone` arm for destructure-from-tuple-text-element so `var_t.0.clone()` is emitted instead of `&var_t.0.to_string()` (which yields `&String`).  Pinned by `e1_d2_return_int_int` and `e2_d2_return_text_text` un-ignored cells in `tests/tuple_matrix.rs`.  Plan-06 phases 9b–9e remain in @PLAN06's scope; the par-specific dispatch (worker tuple returns, fused-for destructure) is independent of this fix.
 
   **T1.8b — Text elements:** `Type::Text` inside a `Type::Tuple` needs lifetime tracking and `OpFreeRef`-style cleanup for the text slot on scope exit.  `owned_elements` in `data.rs` must enumerate text positions within a tuple so `get_free_vars` can emit the right cleanup sequence.
 
@@ -453,7 +453,7 @@ left at the last successful checkpoint.
   and is not observably different from move semantics).  6 cross-
   mode E5 cells lock the canonical shapes (swap, arg, return,
   mixed Ref+int, mixed Ref+text); the loop-iteration aliasing
-  shape is parked behind P250 as a separate dep-tracking bug.
+  shape is parked behind @P250 as a separate dep-tracking bug.
 
 - **T1.9** *(completed 0.8.3)* — Tuple destructuring in `match`.  See [TUPLES.md](TUPLES.md).
 
@@ -549,7 +549,7 @@ left at the last successful checkpoint.
   `parser/mod.rs::set_field_check`'s Tuple arm and `get_val`'s Tuple
   arm.  6/7 D3 cells green on both backends; the seventh
   (e4_d3_field_closure_local — closure-element tuple as struct
-  field) is parked behind P251.
+  field) is parked behind @P251.
 
   T1.11b: `parse_assign` in `expressions.rs` returns early (both passes) when a compound
   operator follows a tuple LHS; consumes the operator and RHS to keep parser state clean.

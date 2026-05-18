@@ -147,6 +147,40 @@ pub fn split(self: text, separator: character) -> vector < text > {
   result
 }
 #pure
+// Split on a multi-character text separator.  `"a, b, c".split_text(", ")`
+// returns `["a", "b", "c"]`.  Edge cases:
+//   - empty self → empty result
+//   - empty separator → returns `[self]` unchanged (no infinite-split)
+//   - separator never matches → returns `[self]`
+//   - separator at start / end → produces empty boundary entries
+//
+// Added in @PLAN37 phase 10.4 — closes a stdlib gap surfaced by
+// scan.loft's link extractor having to walk char-by-char to find
+// the `](` token because only `split(char)` existed.  Distinct
+// name from `split(text, character)` because loft doesn't allow
+// fn overloading by non-self parameter type.
+
+pub fn split_text(self: text, separator: text) -> vector < text > {
+  out: vector<text> = [];
+  n = self.len();
+  if n == 0 { return out; }
+  sl = separator.len();
+  if sl == 0 { out += [self]; return out; }
+  p = 0;
+  i = 0;
+  while i + sl <= n {
+    if self[i..i + sl] == separator {
+      out += [self[p..i]];
+      p = i + sl;
+      i = p;
+    } else {
+      i = i + 1;
+    }
+  }
+  out += [self[p..n]];
+  out
+}
+#pure
 // Joins a vector of text values with a separator between each pair.
 // Inverse of split: "a,b,c".split(',').join(",") == "a,b,c".
 
@@ -272,6 +306,20 @@ pub fn mkdir_all(path: text) -> FileResult {
 // Returns FileResult.NotFound if the file does not exist; FileResult.IsDirectory
 // if the path is a directory; FileResult.Other if size is negative.
 
+// Modification time of `path` as Unix epoch SECONDS (integer —
+// same i64 representation as file.size).  Returns 0 on missing
+// file / IO error / pre-epoch dates — caller treats 0 as
+// "unknown" (matches scan.sh's `stat -c %Y || echo 0` fallback).
+// Takes a path string rather than a File handle so the native +
+// interp dispatch both use the same `n_mtime` registration.
+// Use for date-window filters like @PLAN37 phase 07's
+// `plans_recent` 60-day cutoff: pass the path, convert the
+// returned seconds back to YYYY-MM-DD, and compare
+// lexicographically against `ymd_days_ago(60)`.
+pub fn mtime(path: text) -> integer;
+#rust"Stores::os_mtime_native(@path)"
+#impure(host_io)
+
 pub fn set_file_size(self: File, size: integer) -> FileResult {
   if self.format == Format.Directory { return FileResult.IsDirectory }
   if self.format == Format.NotExists { return FileResult.NotFound }
@@ -329,7 +377,7 @@ fn OpClearScratch();
 fn OpReverseVector(r: vector, size: const u16);
 #rust"vector::reverse_vector(&@r, u32::from(@size), &mut s.database.allocations);"
 fn OpSortVector(r: vector, db_tp: const u16);
-#rust"{{ let t = @db_tp; let elem_size = stores.size(t); let is_float = t == 2 || t == 3; vector::sort_vector(&@r, elem_size, is_float, &mut stores.allocations); }}"
+#rust"{{ let t = @db_tp; if stores.is_text_type(t) {{ vector::sort_text_vector(&@r, &mut stores.allocations); }} else {{ let elem_size = stores.size(t); let is_float = t == 2 || t == 3; vector::sort_vector(&@r, elem_size, is_float, &mut stores.allocations); }} }}"
 
 // CO1.2: Coroutine opcodes
 fn OpCoroutineCreate(d_nr: const integer, args_size: const u16, to: const integer);
@@ -360,8 +408,13 @@ fn OpVarFnRef(pos: const u16) -> text;
 fn OpPutFnRef(pos: const u16, _fnref: text);
 #rust"{{ let v = *s.get_stack::<[u8; 20]>(); s.put_var(@pos, v); }}"
 // Push a pre-built constant's DbRef from the constant store.
+// `s.const_ref_at(...)` (vs raw `s.const_refs[...]` indexing) lets the
+// native-codegen substitution rename to `stores.const_ref_at_runtime(`,
+// which breaks the substring chain that would otherwise let nested
+// templates accumulate `stor` prefixes when this op is composed inside
+// another (e.g. OpGetVector wrapping OpConstRef).  @P275 fix.
 fn OpConstRef(d_nr: const integer) -> reference;
-#rust"s.const_refs[@d_nr as usize]"
+#rust"s.const_ref_at(@d_nr as usize)"
 // Push a Str pointing into the constant store for integer string literals.
 fn OpConstStoreText(rec: const integer, pos: const integer) -> text;
 #rust"s.string_from_const_store(@rec as u32, @pos as u32)"

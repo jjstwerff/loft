@@ -64,6 +64,43 @@ fn test() {}"
     .error("Undefined type Conter — did you mean 'Counter'? at p07_suggest_undefined_type:2:23");
 }
 
+// ── Plan-07 phase 5 anti-suggestion tests ────────────────────────
+// Locks in the rule that suggestions DON'T fire when the candidate
+// would be misleading.  Pre-fix the variable-suggestion site used
+// the uncapped `suggest_similar` (distance ≤ 2) which over-matched
+// 1-char names ("did you mean 'x'?" for typo `y`).  Phase-5 fix:
+// skip suggestions for ≤1-char names where typos are too ambiguous
+// to be meaningful.  Distance/scope filters cover the other cases.
+
+/// Single-letter typo must NOT suggest the other 1-char name —
+/// `x` vs `y` is a coin flip; the suggestion would be noise.
+#[test]
+fn p07_no_suggest_single_letter_typo() {
+    code!("fn test() { x = 5; y == 1 }")
+        .error("Unknown variable 'y' at p07_no_suggest_single_letter_typo:1:26")
+        .warning("Variable x is never read at p07_no_suggest_single_letter_typo:1:16");
+}
+
+/// Distant name (`printbar` vs `foo`) must NOT suggest — Levenshtein
+/// distance > 2 falls outside `suggest_similar`'s ceiling.
+#[test]
+fn p07_no_suggest_distant_name() {
+    code!("fn test() { foo = 5; printbar == 1 }")
+        .error("Unknown variable 'printbar' at p07_no_suggest_distant_name:1:35")
+        .warning("Variable foo is never read at p07_no_suggest_distant_name:1:18");
+}
+
+/// Variable in a sibling fn must NOT be suggested — the candidate
+/// set is function-scoped (`self.vars.iter()` only sees the current
+/// fn's locals + arguments).  `cousin` defined in `other()` does not
+/// leak into `test()`'s suggestion candidates for typo `cousn`.
+#[test]
+fn p07_no_suggest_sibling_fn_scope() {
+    code!("fn other() { cousin = 99; }\nfn test() { cousn == 1 }")
+        .warning("Variable cousin is never read at p07_no_suggest_sibling_fn_scope:1:22")
+        .error("Unknown variable 'cousn' at p07_no_suggest_sibling_fn_scope:1:42");
+}
+
 // Field-suggestion paths (struct-literal + field-access) and the
 // 1-char cap behaviour are end-to-end-validated by
 // `quality_6c_unknown_field_without_free_fn_has_no_hint` in
@@ -270,6 +307,43 @@ fn area(self: Rect) -> float { }
 fn test() { r = Rect { w: 3.0, h: 4.0 }; r.area(); }"
     );
     // no .error() → compilation must succeed
+}
+
+// P257 (2026-05-12) — capturing a vector into a closure body used to
+// crash both backends with no clean diagnostic: interp panicked with
+// "Write to locked store at rec=N fld=M" (src/store.rs:963), native
+// rejected with rustc E0308 + E0605 in the generated code.  Now
+// rejected at parse with a clear message naming the variable and the
+// recommended workaround.  Surfaced by plan-15 phase 06 closeout
+// probing — the matrix's C7 row was CLOSED:non-goal but the failure
+// mode was unstable, not a stable parse-time diagnostic.
+#[test]
+fn p257_vector_capture_in_closure_rejected() {
+    code!(
+        "fn test() {
+    items = [10, 20, 30];
+    f = fn(idx: integer) -> integer { items[idx] };
+    print(\"{f(1)}\\n\");
+}"
+    )
+    .error(
+        "vector variable 'items' cannot be captured into a closure body; bind the element you need before the lambda (e.g. `x = items[i]; f = fn(...) { ... x ... }`) — collection capture is not supported because the closure record layout doesn't model the content type at p257_vector_capture_in_closure_rejected:3:45",
+    );
+}
+
+// P257 — the workaround the diagnostic recommends actually works:
+// bind the element you need before the lambda, capture the bound
+// value (a primitive or Reference) instead of the collection itself.
+#[test]
+fn p257_bind_before_lambda_workaround_works() {
+    code!(
+        "fn test() {
+    items = [10, 20, 30];
+    x = items[1];
+    f = fn(dx: integer) -> integer { x + dx };
+    print(\"{f(5)}\\n\");
+}"
+    );
 }
 
 // P213 — capturing closure stored in struct field used to panic at
@@ -789,7 +863,7 @@ fn par_worker_returns_generator() {
              for a in items par(b = gen_worker(a), 1) { assert(b > 0); }
          }"
     )
-    .error("parallel worker 'gen_worker' returns iterator(integer(-2147483647, 2147483647, false), null) — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
+    .error("parallel worker 'gen_worker' returns iterator<integer> — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
 }
 
 // ── T1.11 — Tuple type constraints ───────────────────────────────────────────

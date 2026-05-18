@@ -2,7 +2,7 @@
 
 **Status:** DONE (2026-05-02)
 
-**Closes:** **P202** (native missing `n_parallel_queue` family).
+**Closes:** **@P202** (native missing `n_parallel_queue` family).
 
 **Depends on:**
 - Phase 00 (scaffold) — `emit_op` dispatch
@@ -17,7 +17,7 @@
 
 ## Diagnosis
 
-P202 is the simplest of the open issues — no architectural blocker,
+@P202 is the simplest of the open issues — no architectural blocker,
 just missing code.  The `n_parallel_for_native` and
 `n_parallel_for_ref_native` fns exist in `src/codegen_runtime.rs`;
 their queue-shaped siblings (`n_parallel_queue`,
@@ -232,7 +232,7 @@ done
 
 ### Step 6.7 — Update PROBLEMS.md
 
-**Action**: mark P202 CLOSED with "fix path: phase 06 of plan 09".
+**Action**: mark @P202 CLOSED with "fix path: phase 06 of plan 09".
 List the regression tests added.
 
 **Validation**: review.

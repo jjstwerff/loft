@@ -1,0 +1,209 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Plan-37 phase 03 + 09 — CI gate for the tracker-tag indexer.
+//
+// Two tests, both gated against `index/tags.json`:
+//
+//   `no_broken_tracker_tags` (phase 03) — every `@P-id` /
+//   `@PLAN-id` reference resolves to an existing PROBLEMS.md
+//   row or plan directory.
+//
+//   `no_broken_markdown_links` (phase 09 follow-up, enabled
+//   2026-05-14 once the cleanup pass shipped) — every
+//   `[text](path.md)` markdown link resolves to an existing
+//   file.
+//
+// To pass with an INTENTIONAL fake reference (e.g., a design
+// doc explaining what a broken tag looks like, or a template
+// placeholder), put the literal `<!--noindex-->` marker on
+// the same line; the scanner skips those lines.
+//
+// To DEBUG a failing run:
+//   ./scripts/idx broken         # for phase-03 failures
+//   ./scripts/idx broken-links   # for phase-09 failures
+//
+// To FIX:
+//   - phase 03: rename the @P-id / @PLAN-id to a real one,
+//     add the missing PROBLEMS.md row / plan dir, or add
+//     `<!--noindex-->` to the line.
+//   - phase 09: fix the relative path (often an off-by-one
+//     `..` after a file moves to `finished/`), point at the
+//     correct doc, or add `<!--noindex-->` for intentional
+//     placeholder examples.  `tools/indexer/fix_broken_links.py`
+//     auto-fixes the common off-by-one cases.
+
+use std::process::Command;
+
+/// Run the loft-native `idx.loft` query binary instead of bash
+/// `scripts/idx`.  The bash script is the bootstrap path
+/// (documented in CLAUDE.md, used from machines without a built
+/// loft), but it has accumulated half a dozen cross-platform
+/// gotchas — BSD awk's UTF-8 panic on em-dashes, MSYS argv
+/// limits, Windows PE-format rejection of bash scripts,
+/// MSYS-vs-native-jq path translation, GNU-only `xargs -a` /
+/// `find -regex` / `stat -c %Y`, etc.  The loft port runs as a
+/// single native binary on every platform with consistent
+/// behaviour and short-circuits the entire portability surface.
+///
+/// `idx.loft`'s MVP covers the two queries the CI gate uses
+/// (`broken` and `broken-links`); the other queries (`tag:`,
+/// `prefix:`, `file:`, `incoming:`, `all`, `help`, excerpt
+/// flags) stay in the bash script until a consumer asks.
+fn idx_command(args: &[&str]) -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.args([
+        "run",
+        "--bin",
+        "loft",
+        "--release",
+        "--quiet",
+        "--",
+        "tools/indexer/src/idx.loft",
+    ]);
+    for a in args {
+        cmd.arg(a);
+    }
+    cmd
+}
+
+// Single test for both checks — running `make index` twice
+// concurrently (cargo test default parallelism) corrupts
+// `index/tags.json`.  Serialising into one test avoids the
+// race without needing a global mutex.
+#[test]
+fn index_hygiene_clean() {
+    // 1. Refresh the index.  `make index` must exit 0.
+    let make = Command::new("make")
+        .arg("index")
+        .output()
+        .expect("failed to spawn `make index`");
+    assert!(
+        make.status.success(),
+        "make index exited {:?}\nstdout:\n{}\nstderr:\n{}",
+        make.status.code(),
+        String::from_utf8_lossy(&make.stdout),
+        String::from_utf8_lossy(&make.stderr)
+    );
+
+    // 2. Phase 03 — broken @-tag refs.
+    let broken_tags = idx_command(&["broken"])
+        .output()
+        .expect("failed to spawn `bash ./scripts/idx broken`");
+    assert!(
+        broken_tags.status.success(),
+        "./scripts/idx broken exited {:?}\nstdout:\n{}\nstderr:\n{}",
+        broken_tags.status.code(),
+        String::from_utf8_lossy(&broken_tags.stdout),
+        String::from_utf8_lossy(&broken_tags.stderr)
+    );
+    let tags_out = String::from_utf8_lossy(&broken_tags.stdout);
+    assert_eq!(
+        tags_out.trim(),
+        "[]",
+        "broken tracker tags found:\n{tags_out}\n\
+         Fix options:\n  \
+         (a) rename the @P-id / @PLAN-id to a real one\n  \
+         (b) add the missing PROBLEMS.md row / plan dir\n  \
+         (c) add `<!--noindex-->` to the line if the ref is \
+         an intentional documentation example\n\
+         See: doc/claude/plans/37-tracker-index/03-broken-validator.md"
+    );
+
+    // 2.5 (retired in sub-commit H, 2026-05-18) — `make index`
+    // now invokes scan.loft as the canonical source; the prior
+    // bash-vs-loft jq-projection diff has no two sides to
+    // compare.  Per-bucket parity is enforced by the golden
+    // baseline assertion below (sub-commit A.5) AND the upcoming
+    // sub-commit-K parity gates against `tests/golden/tags.json`.
+
+    // 3. Phase 09 — broken markdown-link refs.
+    let broken_links = idx_command(&["broken-links"])
+        .output()
+        .expect("failed to spawn `bash ./scripts/idx broken-links`");
+    assert!(
+        broken_links.status.success(),
+        "./scripts/idx broken-links exited {:?}\nstdout:\n{}\nstderr:\n{}",
+        broken_links.status.code(),
+        String::from_utf8_lossy(&broken_links.stdout),
+        String::from_utf8_lossy(&broken_links.stderr)
+    );
+    let links_out = String::from_utf8_lossy(&broken_links.stdout);
+    assert_eq!(
+        links_out.trim(),
+        "[]",
+        "broken markdown links found:\n{links_out}\n\
+         Fix options:\n  \
+         (a) fix the relative path (often an off-by-one `..`\n      \
+             after the source moved to `finished/`)\n  \
+         (b) point at the correct doc\n  \
+         (c) add `<!--noindex-->` to the line if the link is\n      \
+             an intentional placeholder example\n  \
+         (d) try `tools/indexer/fix_broken_links.py --apply` for\n      \
+             the common off-by-one cases\n\
+         See: doc/claude/plans/37-tracker-index/09-backlinks.md"
+    );
+
+    // 4. Cross-OS portability sanity (@PLAN37 phase 07 pre-flight P2)
+    // — `index/tags.json` must not contain literal backslashes outside
+    // JSON `\"` escapes.  Catches the Windows-only "path separator
+    // drift" silent failure on every CI runner (not just Windows):
+    // when scan.loft runs on MSYS bash and emits `file().path` raw,
+    // the `path` / `file` / `target` fields contain `\` separators
+    // and the parity assertion breaks downstream.  Linux runners see
+    // the same assertion — fails early instead of waiting for a
+    // Windows CI cycle to surface the bug.
+    let tags_raw = std::fs::read_to_string("index/tags.json").expect("read index/tags.json");
+    // Allow `\\` (JSON-escaped backslash, e.g. inside a context string)
+    // and `\"` (escaped quote).  Anything else is a raw backslash that
+    // shouldn't be there.  Strip both, then count remaining backslashes.
+    let stripped = tags_raw.replace("\\\\", "").replace("\\\"", "");
+    let stray = stripped.matches('\\').count();
+    assert_eq!(
+        stray, 0,
+        "tags.json contains {stray} stray backslash(es) — Windows path-separator \
+         drift?  scan.loft should pass every path-shaped string through \
+         `normalize_path()` (see tools/indexer/src/scan.loft).  Sample: \
+         look for a `\\` outside `\\\\` / `\\\"` JSON escapes in tags.json."
+    );
+
+    // 5. PROBLEMS.md row-parser sanity (@PLAN37 phase 07 pre-flight P4)
+    // — every `problems_open` row's `severity` cell must start with a
+    // known severity prefix.  A literal `|` in a row body would shift
+    // column boundaries during pipe-split and put body text in the
+    // severity cell.  Both scan.sh and scan.loft share this edge case;
+    // this assertion catches the silent mis-categorisation.  bash side
+    // is canonical until sub-commit H; the assertion applies regardless.
+    // Use `jq -r` rather than pulling serde_json into this binary just
+    // for one assertion — jq is already a CI dep used elsewhere here.
+    let sev_jq = Command::new("jq")
+        .args(["-r", ".problems_open[] | .severity", "index/tags.json"])
+        .output()
+        .expect("spawn jq for severity check");
+    assert!(
+        sev_jq.status.success(),
+        "jq severity extraction failed: {}",
+        String::from_utf8_lossy(&sev_jq.stderr)
+    );
+    // Loose contains-check rather than starts_with — @P229's row has a
+    // legitimate custom severity (`(a) Closed; (b) Open (Windows)`) for
+    // its split-state windows-half-still-open situation, which doesn't
+    // start with any standard prefix but still contains a known severity
+    // word.  A literal `|` mid-body would produce garbage that contains
+    // NONE of these tokens.
+    let severity_tokens = [
+        "Low", "Medium", "High", "Critical", "Open", "open", "Closed", "closed", "partial",
+    ];
+    for sev in String::from_utf8_lossy(&sev_jq.stdout).lines() {
+        if sev.is_empty() {
+            continue;
+        }
+        let ok = severity_tokens.iter().any(|p| sev.contains(p));
+        assert!(
+            ok,
+            "problems_open row severity `{sev}` doesn't contain any known \
+             severity word — PROBLEMS.md row may contain a literal `|` that \
+             breaks pipe-split"
+        );
+    }
+}

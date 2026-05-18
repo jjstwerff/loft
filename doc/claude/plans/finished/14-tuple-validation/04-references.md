@@ -8,11 +8,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Status: shipped 2026-05-11.  6/6 single-iteration E5 cells green
 on both backends.  Decision: MOVE semantics — already implemented;
 this phase locks the behaviour with cross-mode regression cells.
-Loop-iteration aliasing bug filed as P250 (separate scope, parked).
+Loop-iteration aliasing bug filed as @P250 (separate scope, parked).
 T1.8a-blocked `e5_d2_struct_ref_return` works today and ships
 as a regular cell — the T1.8a deferral noted in earlier drafts
 turned out not to apply once `parse_function`'s synthetic-struct
-rewrite is in place (Plan-14 phase 07 / P234).  TUPLES.md and
+rewrite is in place (Plan-14 phase 07 / @P234).  TUPLES.md and
 DESIGN_DECISIONS.md updates pushed as a separate doc-only commit.**
 
 ## Goal
@@ -57,7 +57,7 @@ remaining E5 cells under the [phase-00 cross-mode harness](
 > destructured variable picked up the FIRST argument once the loop
 > body re-enters its scope.  This is a dep-tracking bug between the
 > destructured variable and the source argument's slot, not a
-> move-vs-copy semantics question; filed as P250 and parked behind
+> move-vs-copy semantics question; filed as @P250 and parked behind
 > a follow-up cell.  The single-call shapes (which the user-visible
 > language guide presents) work correctly today and ship as the
 > phase 04 cells.
@@ -178,10 +178,10 @@ if it's a stale read after a destructure, copy + null may be needed.
 
 ## Cross-references
 
-- [PLANNING.md § T1.8c](../../PLANNING.md) — original bug
-- [TUPLES.md § known limitations](../../TUPLES.md)
+- [PLANNING.md § T1.8c](../../../PLANNING.md) — original bug
+- [TUPLES.md § known limitations](../../../TUPLES.md)
 - `tests/expressions.rs:993` — `tuple_struct_refs`
 - `src/scopes.rs:578-587` — tuple scope-exit stub
 - `src/parser/expressions.rs::parse_destructure`
-- [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) — destination for
+- [DESIGN_DECISIONS.md](../../../DESIGN_DECISIONS.md) — destination for
   the "no Type::StructValue" entry

@@ -14,7 +14,7 @@ The fused for-loop syntax **already exists in the parser today** —
 `tests/threading_chars.rs` both exercise it.  Phase 7 is therefore
 NOT about introducing the construction; it's about:
 
-1. Making the fused form route through plan-06's typed pipeline
+1. Making the fused form route through @PLAN06's typed pipeline
    (phases 1–5's runtime work).
 2. Adding the desugar of the value-position call form
    `par(input, fn, threads)` so it produces the same `Value::ParFor`
@@ -26,7 +26,7 @@ NOT about introducing the construction; it's about:
    to `Stitch::Reduce` automatically.
 
 The "Goal" section below kept its original wording for context;
-read it as "the goal of plan-06 around this construction is..."
+read it as "the goal of @PLAN06 around this construction is..."
 not "the goal of phase 7 is to build this".
 
 ## Goal
@@ -51,7 +51,7 @@ explicitly in the body; users who don't pay nothing.
 
 ## Why one construction beats three variants
 
-The 4-variant approach (sketched in plan-06 README phase 7 placeholder)
+The 4-variant approach (sketched in @PLAN06 README phase 7 placeholder)
 exposes three named entry points: `par_for_each`, `par_fold`,
 `par_iter`.  Each is fine in isolation but they fail to compose for
 common patterns.  Specifically, all three lose the **(input, result)
@@ -73,7 +73,7 @@ in the loop header.
 
 The trade-off is parser work for the new syntax (modest) versus
 three new stdlib fns + their type signatures + their docs.  The
-runtime cost is identical — both shapes use plan-06's store-stitch
+runtime cost is identical — both shapes use @PLAN06's store-stitch
 pipeline with a bounded queue.
 
 ## Surface
@@ -224,7 +224,7 @@ sugar form gets `vector_with_capacity` pre-alloc for free
 **`par_light` is removed from the user-visible surface entirely.**
 The "light-path" execution strategy was a stopgap user-facing flag
 because the runtime had no way to detect when scratch memory could
-be skipped.  After plan-06 phase 5's auto-light heuristic, the
+be skipped.  After @PLAN06 phase 5's auto-light heuristic, the
 compiler picks the light path automatically — it's a property of
 the worker fn, not a user choice.
 
@@ -286,7 +286,7 @@ fn-ref dispatch.
 
 Lowered IR: a new `Value::ParFor` variant carrying `(input,
 worker_fn_d_nr, x_var, r_var, threads, body, src_span)`.  Codegen
-emits a runtime call that wraps plan-06's store-typed pipeline
+emits a runtime call that wraps @PLAN06's store-typed pipeline
 with a bounded-queue stitch policy.
 
 ### Codegen changes
@@ -337,7 +337,7 @@ freedom:
   is an unordered multiset.
 
 Users who need ordered iteration should use a regular `for` loop
-(no par); plan-06 is explicit that ordered parallel iteration is
+(no par); @PLAN06 is explicit that ordered parallel iteration is
 out of scope.
 
 ### Test fixtures
@@ -390,7 +390,7 @@ Plus four unit tests in `tests/issues.rs`:
 - Existing `tests/scripts/22-threading.loft` passes byte-for-byte
   after the desugar lands (call form is still expression-positioned
   and produces the same vector).
-- The plan-06 phase 0 baseline benchmarks rerun within ±5 % of
+- The @PLAN06 phase 0 baseline benchmarks rerun within ±5 % of
   baseline (no regression on existing `par(...) -> vector<U>`
   callers — the desugar path is the new hot path for them).
 - A new microbench `bench_par_for_no_collect` measures the fused
@@ -405,7 +405,7 @@ Plus four unit tests in `tests/issues.rs`:
 
 ## Sequencing
 
-Phase 7 lands AFTER plan-06 phases 1–5 (the store-typed pipeline +
+Phase 7 lands AFTER @PLAN06 phases 1–5 (the store-typed pipeline +
 auto-light).  Phase 6 (cleanup) and phase 7 are independent — they
 can land in either order.
 
@@ -609,7 +609,7 @@ workloads) or serialise stitch-time writes (defeats parallelism).
 **run-to-run order variation a direct parallelism proof** (see
 phase 8f.2 / DESIGN.md D8.2 for the test gate).
 
-Out of scope for plan-06 phase 7; flagged as future work in the
+Out of scope for @PLAN06 phase 7; flagged as future work in the
 CHANGELOG note.
 
 ### C5 — Worker panic mid-iteration
@@ -758,7 +758,7 @@ This is intentional surface reduction, not a deprecation cycle.
 The internal optimisation continues to fire automatically; users
 never need to know it exists.
 
-## What this replaces in the plan-06 README
+## What this replaces in the @PLAN06 README
 
 The README's phase-7 line currently reads:
 
@@ -770,7 +770,7 @@ Replace with:
 
 ## Out of scope
 
-Deferred to follow-ups (post-plan-06):
+Deferred to follow-ups (post-@PLAN06):
 
 - **Out-of-order delivery** (`par_unordered(...)` modifier).
 - **Worker pool reuse across calls** — today every fused for-loop
@@ -784,13 +784,13 @@ Deferred to follow-ups (post-plan-06):
 
 ## Cross-references
 
-- [README.md](README.md) — plan-06 ladder; phase 7 sits at the
+- [README.md](README.md) — @PLAN06 ladder; phase 7 sits at the
   end after the store-stitch runtime + auto-light land.
 - [00-baseline-and-bench.md](00-baseline-and-bench.md) — phase 0's
   bench harness gates phase 7's perf claim.
-- [../../THREADING.md](../../THREADING.md) — current par design;
+- [../../THREADING.md](../../../THREADING.md) — current par design;
   phase 7d rewrites the "variants" section.
-- [../../LOFT.md](../../LOFT.md) — phase 7d adds a "Parallel
+- [../../LOFT.md](../../../LOFT.md) — phase 7d adds a "Parallel
   for-loop" subsection.
-- [../../ROADMAP.md § 1.1+ I13](../../ROADMAP.md#11-backlog) —
+- [../../ROADMAP.md § 1.1+ I13](../../../ROADMAP.md#11-backlog) —
   iterator protocol; future-compatible with body `yield`.

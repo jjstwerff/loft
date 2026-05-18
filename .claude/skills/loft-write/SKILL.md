@@ -177,7 +177,7 @@ Field names may overlap across structs — lookups are type-scoped.
 
 Anonymous, fixed-arity, stack-allocated compound values.  Use them to
 return multiple values without naming a struct.  Shipped in 0.8.3
-(T1.1–T1.11); see [doc/claude/TUPLES.md](../../doc/claude/TUPLES.md).
+(T1.1–T1.11); see [doc/claude/TUPLES.md](../../../doc/claude/TUPLES.md).
 
 ```loft
 // Type notation — two or more element types (single-element tuples

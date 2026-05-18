@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs
+.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -311,6 +311,98 @@ serve:
 	@echo "Playground: http://localhost:8000/playground.html"
 	@echo "Gallery:    http://localhost:8000/gallery.html"
 	cd doc && python3 -m http.server 8000
+
+# ── Branch review viewer (plan-35) ─────────────────────────────
+# Serves a branch-aware doc + code review dashboard.
+# See doc/claude/plans/35-branch-review-viewer/.
+#
+# Phase 01 ships INTERPRETER MODE (target/release/loft --interpret).
+# Native mode is blocked by P262 (text-call inline-arg codegen quirk)
+# + a separate lib/web duplicate-native-fn issue when lib/server is
+# pulled transitively.  Phase 07 closeout revisits frozen-binary
+# packaging once those blockers close.
+#
+# view-build: ensure host loft is built; record build provenance.
+# view:       refresh state, then run script via loft --interpret.
+view-build:
+	@echo "  [1/2] building host loft binary ..."
+	@cargo build --release -q --lib --bin loft 2>/tmp/loft_view_host.log || { \
+	    echo "    FAIL: host cargo build — see /tmp/loft_view_host.log"; \
+	    tail -20 /tmp/loft_view_host.log; exit 1; }
+	@echo "  [2/2] recording build provenance ..."
+	@host_sha=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown"); \
+	{ echo "loft-view phase 01 — interp-mode build"; \
+	  echo "Built $$(date -u +%Y-%m-%dT%H:%M:%SZ) against loft commit $$host_sha"; \
+	  echo ""; \
+	  echo "Native compilation blocked by:"; \
+	  echo "  P262 — text-returning calls passed inline get extra & wrap"; \
+	  echo "  (lib/web duplicate native fn defs in --native compile)"; \
+	  echo ""; \
+	  echo "Runs via 'loft --interpret' until those blockers close."; \
+	} > tools/viewer/BUILD_NOTES.md
+	@echo "loft-view ready: tools/viewer/src/main.loft (interp-mode)"
+	@echo "  See tools/viewer/BUILD_NOTES.md for native-mode blockers."
+
+view-refresh:
+	@./tools/viewer/refresh.sh
+
+# ── Tracker-tag indexer (plan-37) ───────────────────────────────
+# Scans the repo for @P-id / @PLAN-id references, writes
+# index/tags.json.  See doc/claude/plans/37-tracker-index/.
+# CLI query wrapper (`scripts/idx`) lands in plan-37 phase 01.
+index:  ## Refresh index/tags.json via the loft scanner (@PLAN37 phase 07 H cutover)
+	@# Cutover landed 2026-05-18 in sub-commit H: the canonical
+	@# `make index` now runs scan.loft.  Bash scan.sh stays in
+	@# tree as `make index-bash` (the fallback path for the
+	@# transition window; deleted in sub-commit J once the loft
+	@# scanner has soaked on `main` for a few cycles).  scan.loft
+	@# writes the JSON-object form of tags.json to stdout (via
+	@# `LOFT_INDEX_BUCKETED=1`) and the summary stats line to
+	@# stderr — the shell redirect captures one, the terminal
+	@# shows the other.  The `--no-warnings` flag (@P282 close)
+	@# keeps stdout free of the loft compiler's warning preamble.
+	@if [ ! -x target/release/loft ]; then \
+	    echo "host loft binary missing; run: cargo build --release"; exit 1; \
+	fi
+	@mkdir -p index
+	@LOFT_INDEX_BUCKETED=1 ./target/release/loft --no-warnings --lib lib/ \
+	    tools/indexer/src/scan.loft > index/tags.json
+
+# Bash scanner fallback for the H→J transition window.  Same
+# tags.json output (modulo the latent total_refs bug — see phase
+# 07 doc).  Documented in CLAUDE.md as the bootstrap path; users
+# who don't have a built loft can still refresh the index.
+index-bash:  ## Refresh index/tags.json via the legacy bash scanner
+	@./tools/indexer/scan.sh
+
+index-install-hook:
+	@./tools/indexer/install-hook.sh
+
+# index-loft (@PLAN37 phase 07 MVP) — historical alias.  Kept
+# pointing at the same scanner as `make index` so any external
+# caller / CI script that still invokes `make index-loft`
+# keeps working.  Slated for removal alongside scan.sh.
+index-loft: index
+
+view: view-refresh
+	@if [ ! -f tools/viewer/src/main.loft ]; then \
+	    echo "loft-view source missing; expected tools/viewer/src/main.loft"; \
+	    exit 1; \
+	fi
+	@if [ ! -x target/release/loft ]; then \
+	    echo "host loft binary missing; run: make view-build"; \
+	    exit 1; \
+	fi
+	# Default to --native (faster).  @P274 closed 2026-05-14
+	# (use-after-free in patch_hoisted_returns Pass 2 + text-
+	# concat type-dispatch in parse_append_text).
+	# `LOFT_VIEW_INTERP=1 make view` falls back to the
+	# interpreter (useful when bisecting a native-only regression).
+	@if [ -n "$$LOFT_VIEW_INTERP" ]; then \
+	    ./target/release/loft --interpret --lib lib/ tools/viewer/src/main.loft; \
+	else \
+	    ./target/release/loft --lib lib/ tools/viewer/src/main.loft; \
+	fi
 
 # game: rebuild the efficient browser build of Brick Buster from any
 # state — clean rebuild of the wasm32-unknown-unknown rlibs + host
@@ -584,10 +676,19 @@ fill:
 
 # List all currently-open P-issues from PROBLEMS.md.  Source of
 # truth is the Quick-Reference table; this extracts rows whose
-# severity column contains `(open)`.  Mirror of the
-# `🔴 Currently Open (fast index)` section at the top of the
-# doc; `tests/doc_hygiene.rs::problems_open_index_matches_quickref`
-# asserts they stay in sync.
+# severity column contains the word "open" or marks the issue
+# `(partial)`.  Mirror of the `🔴 Currently Open (fast index)`
+# section at the top of the doc — that section uses
+# `(partial)` for half-closed issues like P229 (Linux fixed,
+# Windows still flaky), and the table writes that as
+# `(a) Closed; (b) Open (Windows)` in the severity cell.  The
+# regex matches "open" as a whole word so it catches both
+# styles without false-positive on `(closed)`.
+# `(observation-only)` rows (transient bugs filed once but
+# not reproducible) are intentionally omitted — they're a
+# watch list, not actionable items.
+# `tests/doc_hygiene.rs::problems_open_index_matches_quickref`
+# asserts the fast-index and table stay in sync.
 problems:
 	@awk -F'|' '\
 	  /^## Open Issues — Quick Reference/ {flag=1; next} \
@@ -595,7 +696,7 @@ problems:
 	  flag && /^\| [0-9]+ \|/ { \
 	    pid = $$2; gsub(/ /, "", pid); \
 	    sev = $$4; gsub(/^ +| +$$/, "", sev); \
-	    if (sev ~ /\(open\)/) { \
+	    if (tolower(sev) ~ /(^| )open( |[)]|$$)|[(]partial/) { \
 	      desc = $$3; gsub(/^ +/, "", desc); \
 	      pos = index(desc, "."); \
 	      if (pos > 0 && pos < 200) desc = substr(desc, 1, pos); \
@@ -801,7 +902,11 @@ ci: rebuild-native-cdylibs
 	#   2. Clippy     job → cargo clippy -- -D warnings    (no --release,
 	#                       no --tests, no --no-default-features — that
 	#                       matches the remote runner exactly)
-	#   3. Test       job → cargo build --all-targets,
+	#   3. Doc hygiene job → scripts/check_doc_drift.sh (blocking since
+	#                       2026-05-18 — promoted from non-blocking after
+	#                       repeated PR-212 cycles where ignored drift
+	#                       surfaced as downstream test failures)
+	#   4. Test       job → cargo build --all-targets,
 	#                       cargo build --no-default-features,
 	#                       cargo nextest run --profile ci
 	#
@@ -814,6 +919,7 @@ ci: rebuild-native-cdylibs
 	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
 	cargo fmt -- --check > result.txt 2>&1 && \
 	cargo clippy -- -D warnings >> result.txt 2>&1 && \
+	scripts/check_doc_drift.sh >> result.txt 2>&1 && \
 	cargo build --all-targets >> result.txt 2>&1 && \
 	cargo build --no-default-features >> result.txt 2>&1 && \
 	(cargo nextest --version >/dev/null 2>&1 || cargo install cargo-nextest --locked) >> result.txt 2>&1 && \

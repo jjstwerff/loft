@@ -76,6 +76,22 @@ pub struct Store {
     /// Reference count: number of live DbRefs pointing into this store.
     /// Starts at 1 on allocation; `dec_rc` only frees when it drops to 0.
     pub ref_count: u32,
+    /// Plan-22 02d-vii follow-up — identifier of the call site that
+    /// most recently locked this store.  Empty when the store is
+    /// unlocked or was locked without an origin (legacy callers).
+    /// Surfaced in panic messages from `addr_mut` / `claim` / `delete`
+    /// so a "Write to locked store" failure points directly at the
+    /// locker rather than requiring `LOFT_LOG=locks` to re-trace.
+    pub lock_origin: String,
+    /// P259 — type-id of the loft type whose root record lives at
+    /// `(rec=1, pos=8)` of this store.  `u16::MAX` when unknown
+    /// (raw stores not allocated through `database_named`).
+    /// Set by `Stores::set_known_type` after `database_named`
+    /// returns the freshly-claimed store_nr.  Read by
+    /// `Stores::free_named` to gate the cascade-free walk on
+    /// closure records (type name starts with `__closure_`) —
+    /// see commit 4 of the P259 fix.
+    pub known_type: u16,
 }
 
 impl Debug for Store {
@@ -148,6 +164,8 @@ impl Store {
             free_root: 0,
             generation: 0,
             ref_count: 0,
+            lock_origin: String::new(),
+            known_type: u16::MAX,
         };
         store.init(); // sets claims = {PRIMARY} and free_root = 0
         store
@@ -184,6 +202,8 @@ impl Store {
             created_at: 0,
             last_op_at: 0,
             ref_count: 0,
+            lock_origin: String::new(),
+            known_type: u16::MAX,
         };
         if init {
             store.init();
@@ -222,8 +242,16 @@ impl Store {
     /// # Arguments
     /// * `size` - The requested record size in 8 byte words
     pub fn claim(&mut self, size: u32) -> u32 {
-        debug_assert!(!self.locked, "Claim on locked store (size={size})");
-        assert!(!self.locked, "Claim on locked store (size={size})");
+        debug_assert!(
+            !self.locked,
+            "Claim on locked store (size={size}) (locked by: {})",
+            self.lock_origin
+        );
+        assert!(
+            !self.locked,
+            "Claim on locked store (size={size}) (locked by: {})",
+            self.lock_origin
+        );
         assert!(size >= 1, "Incomplete record");
         // CO1.9/S28: increment generation so coroutine_next can detect store mutations
         // that may invalidate DbRef locals held by suspended generators.
@@ -355,8 +383,16 @@ impl Store {
 
     /// Delete a record, this assumes that all links towards this record are already removed
     pub fn delete(&mut self, rec: u32) {
-        debug_assert!(!self.locked, "Delete on locked store (rec={rec})");
-        assert!(!self.locked, "Delete on locked store (rec={rec})");
+        debug_assert!(
+            !self.locked,
+            "Delete on locked store (rec={rec}) (locked by: {})",
+            self.lock_origin
+        );
+        assert!(
+            !self.locked,
+            "Delete on locked store (rec={rec}) (locked by: {})",
+            self.lock_origin
+        );
         // CO1.9/S28: increment generation so coroutine_next can detect deletions that
         // may free a record still referenced by a suspended generator.
         self.generation = self.generation.wrapping_add(1);
@@ -449,14 +485,38 @@ impl Store {
     }
 
     /// Lock this store against writes. Any subsequent call to `addr_mut` panics.
+    /// Sets `lock_origin` to a generic identifier — callers wanting richer
+    /// context should use `lock_with_origin`.
     pub fn lock(&mut self) {
+        self.lock_with_origin("Store::lock");
+    }
+
+    /// Lock this store + record an identifier of the lock-origin call site.
+    /// The origin string surfaces in panic messages from `addr_mut` / `claim`
+    /// / `delete` so a "Write to locked store" failure points directly at the
+    /// locker rather than requiring `LOFT_LOG=locks` to re-trace.
+    pub fn lock_with_origin(&mut self, origin: impl Into<String>) {
+        let origin = origin.into();
+        // Plan-22 02d-vii follow-up — `LOFT_LOG=locks` trace.
+        // Caught here (the lowest-level lock site) so direct
+        // callers bypassing `Stores::lock_store(&r)` (e.g.
+        // `compile.rs` const-store init, `native.rs` worker
+        // store init) are visible too.
+        if !self.locked && crate::log_config::lock_trace_enabled() {
+            eprintln!("[locks] LOCK   origin={origin:?}");
+        }
         self.locked = true;
+        self.lock_origin = origin;
     }
 
     /// Unlock this store (only callable from Rust; loft code cannot unlock via d#lock = false
     /// on a const variable).
     pub fn unlock(&mut self) {
+        if self.locked && crate::log_config::lock_trace_enabled() {
+            eprintln!("[locks] UNLOCK origin-was={:?}", self.lock_origin);
+        }
         self.locked = false;
+        self.lock_origin.clear();
     }
 
     /// Return the current lock state.
@@ -497,6 +557,8 @@ impl Store {
             created_at: 0,
             last_op_at: 0,
             ref_count: self.ref_count,
+            lock_origin: "clone_locked".to_string(),
+            known_type: self.known_type,
         }
     }
 
@@ -521,6 +583,8 @@ impl Store {
             created_at: 0,
             last_op_at: 0,
             ref_count: self.ref_count,
+            lock_origin: "clone_locked_for_worker".to_string(),
+            known_type: self.known_type,
         }
     }
 
@@ -546,6 +610,8 @@ impl Store {
             created_at: 0,
             last_op_at: 0,
             ref_count: self.ref_count,
+            lock_origin: "borrow_locked_for_light_worker".to_string(),
+            known_type: self.known_type,
         }
     }
 
@@ -937,7 +1003,11 @@ impl Store {
 
     #[inline]
     pub fn addr_mut<T>(&mut self, rec: u32, fld: u32) -> &mut T {
-        debug_assert!(!self.locked, "Write to locked store at rec={rec} fld={fld}");
+        debug_assert!(
+            !self.locked,
+            "Write to locked store at rec={rec} fld={fld} (locked by: {})",
+            self.lock_origin
+        );
         debug_assert!(
             Self::checked_offset(rec, fld) + std::mem::size_of::<T>() as isize
                 <= self.size as isize * 8,
@@ -960,7 +1030,11 @@ impl Store {
                 "Fld {fld} is outside of record {rec} size {rec_size}",
             );
         }
-        assert!(!self.locked, "Write to locked store at rec={rec} fld={fld}");
+        assert!(
+            !self.locked,
+            "Write to locked store at rec={rec} fld={fld} (locked by: {})",
+            self.lock_origin
+        );
         unsafe {
             let off = self.ptr.offset(Self::checked_offset(rec, fld)).cast::<T>();
             off.as_mut().expect("Reference")

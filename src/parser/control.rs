@@ -3740,10 +3740,28 @@ impl Parser {
                 for aid in 0..n_attrs {
                     let cap_name = self.data.attr_name(closure_rec_d, aid).clone();
                     let outer_v = self.vars.var(&cap_name);
-                    if outer_v != u16::MAX {
-                        let field_val = self.get_field(closure_rec_d, aid, Value::Var(closure_w));
-                        block.push(v_set(outer_v, field_val));
+                    if outer_v == u16::MAX {
+                        continue;
                     }
+                    // Plan-22 phase 02d-iii.e — skip write-back
+                    // for boxed-scalar captures.  The outer var
+                    // is now `Reference(__cell_<T>, _)` and
+                    // mutations propagate via the shared cell
+                    // DbRef (auto-Reference encoding from 02c +
+                    // closure-body writes via 02d-iii.b/d).  A
+                    // bare `v_set(outer, field_val)` here would
+                    // copy a 12B DbRef back over the same 12B
+                    // DbRef — usually a no-op, but the
+                    // accompanying scope-exit `OpFreeRef`
+                    // bookkeeping can double-free if the inner
+                    // and outer slots disagree on ownership.
+                    if let Type::Reference(d, _) = self.vars.tp(outer_v)
+                        && self.data.def(*d).name.starts_with("__cell_")
+                    {
+                        continue;
+                    }
+                    let field_val = self.get_field(closure_rec_d, aid, Value::Var(closure_w));
+                    block.push(v_set(outer_v, field_val));
                 }
                 if block.len() > 1 {
                     // Use Insert rather than Block: we must NOT create a new scope

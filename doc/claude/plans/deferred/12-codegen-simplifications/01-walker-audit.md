@@ -4,7 +4,7 @@
 
 **Closes:** latent Span-miss bugs in
 `src/generation/pre_eval.rs::patch_hoisted_returns` and its
-helpers.  Plan-11's P204 fix surfaced the pattern; this phase
+helpers.  Plan-11's @P204 fix surfaced the pattern; this phase
 generalises it.
 
 **Tier:** 1 (correctness + cheap)
@@ -27,12 +27,12 @@ This is **"code that compiled but never executed"** — the walker
 infrastructure is correct, but its enabling condition is never
 reached because the upstream wrap is invisible.
 
-Plan-11 closed P204 by fixing one such walker:
+Plan-11 closed @P204 by fixing one such walker:
 `detect_ref_tail_capture`.  Three lines changed; bug closed.
 
 ## Sites to audit
 
-Surveyed during plan-12 design (2026-05-02) in
+Surveyed during @PLAN12 design (2026-05-02) in
 `src/generation/pre_eval.rs::patch_hoisted_returns`:
 
 | Line | Walker site | Matches against | Risk severity |
@@ -88,7 +88,7 @@ This is the highest-priority fix per the severity table.
 
 ### Step 1.3 — Patch each walker `matches!` / `match` site to unspan
 
-Apply the plan-11 pattern to each remaining site:
+Apply the @PLAN11 pattern to each remaining site:
 
 ```rust
 // Before:
@@ -198,7 +198,7 @@ wrapped, and the unspan kicks in when it is.
 The HIGH-severity site in the original triage table —
 `value_mentions_var` — was patched defensively as the plan
 prescribed; no test failure was uncovered.  Pattern is now
-P204-style insurance, not bug fix.
+@P204-style insurance, not bug fix.
 
 Over-eager fixes (reverted before commit): patching `needs_pre_eval`,
 `create_stack_var`, the deeper `collect_pre_evals_inner` arg-handling
@@ -254,5 +254,5 @@ Span-wrapped IR (which the parser commonly produces).  Plan-11's
 P204 + plan-12's audit are the case studies.
 ```
 
-Otherwise plan-12 phase 01's findings + the structural test are
+Otherwise @PLAN12 phase 01's findings + the structural test are
 sufficient documentation.

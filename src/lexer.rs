@@ -544,13 +544,96 @@ impl Lexer {
     }
 
     fn escape_seq(&mut self, res: &mut String) -> bool {
-        // TODO allow numeric characters
+        // Convention: escape_seq processes ONE designator char (peeked
+        // by self.iter.peek()).  The caller's outer loop advances past
+        // that char via self.next_char() AFTER escape_seq returns.  So
+        // multi-char escapes (\xNN, \u{NNNN}) advance past every char
+        // EXCEPT the last one (which the caller will skip).
         if let Some(&c) = self.iter.peek() {
             match c {
                 '"' | '\'' | '\\' => res.push(c),
                 't' => res.push('\t'),
                 'r' => res.push('\r'),
                 'n' | '\n' => res.push('\n'),
+                '0' => res.push('\0'),
+                'x' => {
+                    // \xNN — two hex digits, ASCII range only (0x00-0x7F).
+                    // Higher codepoints must use \u{NNNN} (a single
+                    // \xFF byte isn't valid UTF-8 on its own).
+                    self.next_char(); // consume 'x', now at first hex digit
+                    let h1 = self.iter.peek().copied();
+                    let h2 = h1.and_then(|_| {
+                        self.next_char(); // consume first hex; now at second
+                        self.iter.peek().copied()
+                    });
+                    // Don't advance past second hex — caller does.
+                    if let (Some(d1), Some(d2)) = (h1, h2) {
+                        if let (Some(v1), Some(v2)) = (d1.to_digit(16), d2.to_digit(16)) {
+                            let byte = (v1 << 4) | v2;
+                            if byte < 0x80 {
+                                res.push(char::from(byte as u8));
+                            } else {
+                                self.err(
+                                    Level::Error,
+                                    "\\xNN escape only supports ASCII (00-7F); use \\u{NN} for higher codepoints",
+                                );
+                                res.push('?');
+                            }
+                        } else {
+                            self.err(Level::Error, "\\xNN escape requires two hex digits");
+                            res.push('?');
+                        }
+                    } else {
+                        self.err(Level::Error, "\\xNN escape requires two hex digits");
+                        res.push('?');
+                    }
+                }
+                'u' => {
+                    // \u{NNNN} — Unicode codepoint, 1-6 hex digits, must
+                    // be a valid Unicode scalar value (excludes surrogates).
+                    self.next_char(); // consume 'u', now at '{'
+                    if self.iter.peek() != Some(&'{') {
+                        self.err(Level::Error, "\\u escape requires \\u{NNNN} form");
+                        res.push('?');
+                        return true;
+                    }
+                    self.next_char(); // consume '{', now at first hex digit
+                    let mut hex = String::new();
+                    while let Some(&ch) = self.iter.peek() {
+                        if ch.is_ascii_hexdigit() {
+                            hex.push(ch);
+                            self.next_char();
+                        } else {
+                            break;
+                        }
+                    }
+                    // Iterator now at '}' (or some other char if malformed).
+                    // Don't advance past '}' — caller does.
+                    if self.iter.peek() != Some(&'}') {
+                        self.err(Level::Error, "\\u{NNNN} escape requires closing brace");
+                        res.push('?');
+                        return true;
+                    }
+                    if hex.is_empty() || hex.len() > 6 {
+                        self.err(Level::Error, "\\u{NNNN} escape requires 1-6 hex digits");
+                        res.push('?');
+                        return true;
+                    }
+                    if let Ok(cp) = u32::from_str_radix(&hex, 16) {
+                        if let Some(ch) = char::from_u32(cp) {
+                            res.push(ch);
+                        } else {
+                            self.err(
+                                Level::Error,
+                                "\\u{NNNN} escape is not a valid Unicode codepoint",
+                            );
+                            res.push('?');
+                        }
+                    } else {
+                        self.err(Level::Error, "\\u{NNNN} escape has invalid hex");
+                        res.push('?');
+                    }
+                }
                 _ => {
                     self.err(Level::Error, "Unknown escape sequence");
                     res.push('?');

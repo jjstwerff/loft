@@ -8695,7 +8695,7 @@ fn p140_vector_range_slice_reports_type_mismatch() {
 }"
     )
     .expr("run()")
-    .error("expected vector<integer>, got iterator(integer(-2147483647, 2147483647, false), null) on call to sum_of at p140_vector_range_slice_reports_type_mismatch:5:1");
+    .error("expected vector<integer>, got iterator<integer> on call to sum_of at p140_vector_range_slice_reports_type_mismatch:5:1");
 }
 
 // INC#2 — vector has comprehensions; sorted/index do not.  Documented
@@ -8777,7 +8777,7 @@ fn run() -> integer {
         "Indexing a non vector — keyed collections (hash/sorted/index/spacial) have no generic-constructor expression; declare them as a struct field and initialise via a vector literal: `struct Db { h: hash<Row[id]> }; db = Db { h: [Row { id: 1 }] }` at quality_6d_keyed_collection_constructor_hint:3:20",
     )
     .error(
-        "No matching operator '<' on 'unknown(0)' and 'boolean' at quality_6d_keyed_collection_constructor_hint:3:24",
+        "No matching operator '<' on 'unknown' and 'boolean' at quality_6d_keyed_collection_constructor_hint:3:24",
     );
 }
 

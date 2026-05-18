@@ -3,14 +3,14 @@
 **Status:** SUPERSEDED — DONE-AS-REDUNDANT (2026-05-02 via phase 10 step 10.3)
 
 **Original closure goal:** binary file read-side width mismatch
-(P200's read side, after phase 05 closed the write side).
+(@P200's read side, after phase 05 closed the write side).
 
 **Why superseded:** phase 00a's actual-error survey + phase 05's
-plan rewrite found that P200 was a SINGLE bug (read-side
+plan rewrite found that @P200 was a SINGLE bug (read-side
 comparison emission), not the read+write split this phase
 assumed.  Phase 10 step 10.3 added `IntCompareEmitter` that
 widens both operands of integer comparisons to i64 — closing
-ALL 5 P200 sub-failures (read AND any latent write sites) in
+ALL 5 @P200 sub-failures (read AND any latent write sites) in
 one fix.  Phase 08's separate read-side emitter is no longer
 needed.
 
@@ -21,7 +21,7 @@ such issue is known.
 
 **Closes (revised):** none — superseded.
 
-**Closes (original goal):** **P200 fully** (binary file read-side
+**Closes (original goal):** **@P200 fully** (binary file read-side
 width mismatch — the write side was originally to close in
 phase 05).
 
@@ -36,7 +36,7 @@ Phase 05 (write-side width fix).
 
 ## Diagnosis
 
-The read side of the round-trip is precisely where the *prior* P200
+The read side of the round-trip is precisely where the *prior* @P200
 fix attempt failed: a write-side fix changed cast behaviour that
 the read side relied on, regressing
 `20-binary.loft:82` "single LE roundtrip".
@@ -197,7 +197,7 @@ fn p200_read_emitter_does_not_use_narrow_int_cast() {
 
 ### Step 8.5 — Update PROBLEMS.md
 
-**Action**: mark P200 fully CLOSED with "fix path: phase 05
+**Action**: mark @P200 fully CLOSED with "fix path: phase 05
 (write) + phase 08 (read) of plan 09".  List all the regression
 tests that pin both sides.
 

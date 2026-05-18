@@ -1631,6 +1631,19 @@ pub(super) fn execute_log_impl(
     // every `free_named` overwrites the freed buffer with 0xDEADBEEF.
     state.database.poison_free = config.poison_free;
 
+    // Plan-22 02d-vii follow-up — when `LOFT_LOG=ir:<fn>` is
+    // active (or any preset with `phases.ir = true`), dump the
+    // IR before execution.  Otherwise `cargo run --interpret`
+    // never sees the IR (only `--dump` does).
+    if config.phases.ir {
+        let _ = crate::compile::show_ir_only(log, data, config);
+    }
+    // Plan-22 02d-vii follow-up — `LOFT_LOG=captures:<fn>`
+    // dump.  Self-gates on the env var (no LogConfig field
+    // needed); always called here, no-op when env var doesn't
+    // match.
+    let _ = crate::compile::show_captures_summary(log, data);
+
     // If logging is suppressed for this function, fall back to silent execution.
     if !config.phases.execution || !config.show_function(name) {
         state.execute(name, data);

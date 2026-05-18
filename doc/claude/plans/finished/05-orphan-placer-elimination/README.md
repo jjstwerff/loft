@@ -3,13 +3,13 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 05 — Orphan-placer elimination
+# @PLAN05 — Orphan-placer elimination
 
 ## Status — 2026-04-23: closed
 
 Reference for the SHIPPED slot-assignment behaviour lives in
 [`../../../SLOTS.md`](../../../SLOTS.md) (§ "Cross-scope `Set` +
-Insert-rooted bodies" line ~79, § "Plan-04 / plan-05 status (closed)"
+Insert-rooted bodies" line ~79, § "Plan-04 / @PLAN05 status (closed)"
 line ~141, § P185 entry line ~219, summary line ~242).  This file is
 a closure record only.
 
@@ -51,14 +51,14 @@ P178 + P185 closed in the same arc.  No regressions on the
 - [`../04-slot-assignment-redesign/`](../04-slot-assignment-redesign/) —
   parent plan that scoped V2 (retracted as replacement for V1) and
   produced the SPEC.md / walkthroughs.md / 00a-audit.md design
-  archive plan-05 leaned on.
+  archive @PLAN05 leaned on.
 - The invariant set I1–I6 from V2 survives in `src/variables/validate.rs`
   and runs against V1's output as a shadow validator.
 
 ## See also
 
 - [`../../../SLOTS.md`](../../../SLOTS.md) — slot-assignment reference
-  (algorithm, two-zone design, diagnostic tools, plan-04/05 closure
+  (algorithm, two-zone design, diagnostic tools, @PLAN04/05 closure
   notes, the per-fixture status table)
 - [`../../../PROBLEMS.md`](../../../PROBLEMS.md) — P185 row (closed
   by this plan)

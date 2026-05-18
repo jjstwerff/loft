@@ -3,17 +3,17 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 16 — Coroutine validation: yielded-type × drive-context matrix
+# @PLAN16 — Coroutine validation: yielded-type × drive-context matrix
 
-**Status: pre-flight 2026-05-04 surfaced 0/7 cells passing.  P210
-closed 2026-05-04, P211 closed 2026-05-05.**
+**Status: pre-flight 2026-05-04 surfaced 0/7 cells passing.  @P210
+closed 2026-05-04, @P211 closed 2026-05-05.**
 
-P210: `collect_segments` in `src/generation/coroutine.rs` now
+@P210: `collect_segments` in `src/generation/coroutine.rs` now
 recognises `Value::Loop` (while) alongside `Value::Block` (for),
 so `while …; yield …` generators no longer produce empty state
 machines.
 
-P211: native state machine now has a parallel `next_text` channel
+@P211: native state machine now has a parallel `next_text` channel
 (`LoftCoroutine::next_text` + `coroutine_next_text` runtime
 helper); text-yielding generators override `next_text` (selected
 on the function's `Iterator<T>` return type), and
@@ -23,7 +23,7 @@ falling through to the broken `as i32` arm.  Pinned by
 in `tests/issues.rs` and the extended
 `tests/scripts/51-coroutines.loft`.
 
-P218 closed 2026-05-05 — `__work_*` text-format buffers used across
+@P218 closed 2026-05-05 — `__work_*` text-format buffers used across
 multiple state arms (or in the eager-collect factory body for
 while/for-yields) are now pre-declared at function scope in both
 `emit_next_i64` and `emit_for_body_factory` so they're visible from
@@ -32,16 +32,16 @@ every per-state emission.  Pinned by
 `p218_coroutine_while_yield_format` in `tests/issues.rs` and the
 extended `tests/scripts/51-coroutines.loft`.
 
-P219 closed 2026-05-05 — `emit_for_body_factory` now strips
+@P219 closed 2026-05-05 — `emit_for_body_factory` now strips
 trailing `Return` ops from the body's operator list before emit,
 so `patch_hoisted_returns`' `[Loop, Return(Null)]` →
 `[Return(Loop)]` coalesce no longer reaches the factory's body.
 Pinned by `tests/issues.rs::p219_vector_for_yield_in_generator`
 + `p219_vector_for_yield_text`.
 
-P226 (mixed Simple + ForLoopBody yield segments — `__vdb_*`
-backing locals scoped to one arm) filed 2026-05-05 during P219
-fix-variant probing.  Same scoping family as P218 / P224.
+@P226 (mixed Simple + ForLoopBody yield segments — `__vdb_*`
+backing locals scoped to one arm) filed 2026-05-05 during @P219
+fix-variant probing.  Same scoping family as @P218 / @P224.
 
 Y3 (Reference) and Y4 (tuple) cells still need re-probe with the
 new yield-type infrastructure.  Phase 00 wiring not yet started.
@@ -52,7 +52,7 @@ Validate that coroutines (functions returning `iterator<T>` that
 suspend with `yield`) round-trip every meaningful **yielded value
 type** through every meaningful **drive context**, with
 **interp/native byte-identical stdout** asserted by the cross-mode
-harness already in place from plan-14 phase 00.
+harness already in place from @PLAN14 phase 00.
 
 The driving question: "given a generator yielding values of type T,
 consumed by drive context X, are the values observed in the consumer
@@ -60,7 +60,7 @@ the same under interp and native, in the same order, with the same
 side-effect timeline?"  A green matrix means: every cell has a test
 that runs in interp and native, and the cross-comparison passes.
 
-This plan inherits all infrastructure from plan-14: `cross_mode!`,
+This plan inherits all infrastructure from @PLAN14: `cross_mode!`,
 `tests/common/cross_mode.rs`, the `#[ignore]` discipline, P-id rules.
 The only new artefact is `tests/coroutine_matrix.rs` and the
 phase-specific cells.
@@ -84,7 +84,7 @@ Three known soft spots point at concrete bug-yield potential:
    the helper-frame serialisation, it surfaces as either a wrong
    value or a panic in the suspended-frame replay.
 3. **Yield-of-text** has the same lifetime risk as
-   tuple-element-text (plan-14 phase 01 found P207 there).  The
+   tuple-element-text (@PLAN14 phase 01 found @P207 there).  The
    yielded text's backing String must survive the yield boundary —
    `String` lives on the suspended frame, not the consumer's stack.
    A C2 cell pins the contract.
@@ -105,7 +105,7 @@ Two axes.  Every cell is `PASS:test_name`, `FIX:phase`, or
 | Y1 | **Basic scalar** — `iterator<integer>`, `iterator<float>`, `iterator<boolean>`, `iterator<character>` | Baseline; no heap dep. |
 | Y2 | **Text** — `iterator<text>` | Owned text element; the suspended frame holds the backing String.  Lifetime risk. |
 | Y3 | **Reference** — `iterator<Reference<S>>` | DbRef yielded; lifetime risk if the referenced record is owned by the generator. |
-| Y4 | **Tuple** — `iterator<(A, B)>` | Cross-references plan-14 phase 01–04 (the destructure-on-receive path). |
+| Y4 | **Tuple** — `iterator<(A, B)>` | Cross-references @PLAN14 phase 01–04 (the destructure-on-receive path). |
 | Y5 | **Closure** — `iterator<fn(integer) -> integer>` | Yielded fn-ref; the closure's own dep tracking must survive serialisation. |
 | Y6 | **Vector** — `iterator<vector<T>>` | Out of scope — yielding owned vectors has no current consumer; CLOSED. |
 
@@ -135,8 +135,8 @@ Each cell `(Yi, Xj)` has one of:
 | 01 — basic scalars (Y1) | Y1 | X1, X2, X3, X4 | Every Y1 cell green.  Establishes the cell shape against the simplest yielded type. |
 | 02 — text (Y2) | Y2 | X1, X2, X3, X4 | Active risk — yielded-text lifetime through the suspended frame.  Phase 02 either confirms via leak test + cross-mode green, or files a P-issue. |
 | 03 — references (Y3) | Y3 | X1, X2, X3, X4 | Yielded DbRef; verifies that the referenced record outlives the resume cycle. |
-| 04 — tuples (Y4) | Y4 | X1, X2, X3, X4 | Tuple yielded values; cross-references plan-14 destructure-after-yield.  Some cells may be gated on T1.8a (tuple return convention) for the manual-`next()` path. |
-| 05 — closures (Y5) | Y5 | X1, X2, X3 | Closure yielded; depends on plan-15's closure-validation result for capture-shape correctness through serialisation. |
+| 04 — tuples (Y4) | Y4 | X1, X2, X3, X4 | Tuple yielded values; cross-references @PLAN14 destructure-after-yield.  Some cells may be gated on T1.8a (tuple return convention) for the manual-`next()` path. |
+| 05 — closures (Y5) | Y5 | X1, X2, X3 | Closure yielded; depends on @PLAN15's closure-validation result for capture-shape correctness through serialisation. |
 | 06 — yield from CLOSED + freeze | (X5 only) | X5 | Confirm the deferred-feature error message stays stable; add a regression test in `tests/parse_errors.rs`.  Update COROUTINE.md, PLANNING.md, CHANGELOG_TECHNICAL.md.  Move plan to `finished/`. |
 
 ## Acceptance for the whole plan
@@ -167,20 +167,20 @@ Each cell `(Yi, Xj)` has one of:
 | Risk | Mitigation |
 |---|---|
 | Y2 (yielded text) surfaces a state-machine lowering bug that affects every X-column for that row | Phase 02 sub-divides: 02a single drive context (X1) to confirm shape, 02b extends to X2-X4.  If 02a fails, the plan pauses, the bug is filed, and a fix lands before continuing. |
-| Y4 (tuple yielded) is partially gated on T1.8a (tuple return convention) — manual `next()` may need T1.8a's caller-pre-allocated slot | Cells that depend on T1.8a get `#[ignore = "T1.8a — plan-06 phase 9a"]` and un-ignore in a one-line follow-up when 9a lands.  Same pattern as plan-14 phase 01. |
-| Y5 (yielded closures) depends on plan-15's closure-validation result | Phase 05 sequences AFTER plan-15 phases 01-04 land.  If plan-15 stalls, phase 05 stays open until it ships. |
+| Y4 (tuple yielded) is partially gated on T1.8a (tuple return convention) — manual `next()` may need T1.8a's caller-pre-allocated slot | Cells that depend on T1.8a get `#[ignore = "T1.8a — plan-06 phase 9a"]` and un-ignore in a one-line follow-up when 9a lands.  Same pattern as @PLAN14 phase 01. |
+| Y5 (yielded closures) depends on @PLAN15's closure-validation result | Phase 05 sequences AFTER @PLAN15 phases 01-04 land.  If @PLAN15 stalls, phase 05 stays open until it ships. |
 | Stackful semantics (yield inside helper) is harder to test cross-mode if the harness can't observe the suspended frame | Tests assert end-state values, not frame internals.  If a divergence appears, `LOFT_LOG=crash_tail:50` + a manual `--native-emit` inspection is the diagnostic path. |
 
 ## Cross-references
 
-- [COROUTINE.md](../../COROUTINE.md) — coroutine design,
+- [COROUTINE.md](../../../COROUTINE.md) — coroutine design,
   "Known Limitations" section.
-- [LIFETIME.md](../../LIFETIME.md) — yielded-value lifetime
+- [LIFETIME.md](../../../LIFETIME.md) — yielded-value lifetime
   rules for text and Reference.
-- [plan-14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
+- [@PLAN14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
   template.
-- [plan-15 closure validation](../15-closure-validation/README.md)
-  — phase 05 prerequisite.
+- [@PLAN15 closure validation](../../finished/15-closure-validation/README.md)
+  — phase 05 prerequisite (now SHIPPED 2026-05-12).
 - `src/state/codegen.rs` — coroutine state-machine lowering.
 - `src/data.rs::Type::Iterator` — iterator type.
 - `OpCoroutineNext` opcode — drives `for` and `next()` paths.

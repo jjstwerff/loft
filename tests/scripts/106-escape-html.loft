@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN37 phase 10.7 — text.escape_html() method.  The
+// @PLAN35 viewer rolled its own escape() helper; this
+// promotes it to the stdlib so every loft program rendering
+// HTML doesn't have to.
+
+fn test_basic_entities() {
+    assert("<".escape_html() == "&lt;",   "lt");
+    assert(">".escape_html() == "&gt;",   "gt");
+    assert("&".escape_html() == "&amp;",  "amp");
+    assert("\"".escape_html() == "&quot;", "quot");
+    assert("'".escape_html() == "&#x27;", "apos");
+}
+
+fn test_safe_chars_pass_through() {
+    s = "Hello, World! 123 _-./";
+    assert(s.escape_html() == s, "safe chars unchanged");
+}
+
+fn test_empty() {
+    assert("".escape_html() == "", "empty");
+}
+
+fn test_amp_first() {
+    // & must be escaped FIRST so the substituted entity strings
+    // don't get re-escaped.  `<` → `&lt;` already starts with `&`,
+    // and naive ordering would turn that into `&amp;lt;`.
+    assert("<".escape_html() == "&lt;", "lt not double-escaped");
+    // Existing entity strings DO get double-escaped (intentional —
+    // we treat input as raw text, not pre-escaped).
+    assert("&amp;".escape_html() == "&amp;amp;", "&amp; double-escaped");
+}
+
+fn test_attribute_safe() {
+    // The five entities make the output safe for both element
+    // bodies AND attribute values (with either quote style).
+    s = "<img src=\"x\" alt='y'>";
+    expected = "&lt;img src=&quot;x&quot; alt=&#x27;y&#x27;&gt;";
+    assert(s.escape_html() == expected, "attribute-style mixed quotes");
+}
+
+fn test_unicode_passes_through() {
+    // Non-ASCII characters don't need escaping in UTF-8 HTML.
+    s = "→ snowman ☃";
+    assert(s.escape_html() == s, "unicode passes through");
+}
+
+fn test_xss_payload() {
+    // The classic <script> payload — safe after escape.
+    payload = "<script>alert('x')</script>";
+    out = payload.escape_html();
+    assert(!out.starts_with("<"), "no leading <");
+    assert(out.find("<script") == null, "no live script tag");
+}
+
+fn main() {
+    test_basic_entities();
+    test_safe_chars_pass_through();
+    test_empty();
+    test_amp_first();
+    test_attribute_safe();
+    test_unicode_passes_through();
+    test_xss_payload();
+    println("escape-html: ok");
+}

@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 01 — Integer → i64 + safe arithmetic (C54)
+# @PLAN01 — Integer → i64 + safe arithmetic (C54)
 
 ## Status — DONE 2026-04-21
 
@@ -15,7 +15,7 @@ is the immediate LHS of `??`.  `Type::Long` + the `long` keyword
 + the `l` literal suffix have been removed; 34 duplicate `Op*Long`
 opcodes reclaimed.
 
-Reference for the post-plan-01 surface lives in:
+Reference for the post-@PLAN01 surface lives in:
 
 - [`../../../LOFT.md`](../../../LOFT.md) — `integer` description
   (line ~57), null sentinels per type (line ~72), arithmetic
@@ -28,10 +28,10 @@ Reference for the post-plan-01 surface lives in:
   Type::Long removal note, Integer Storage Size table including
   Parts::ShortRaw (line ~113), opcode-table state (line ~456,
   34 slots reclaimed by phase 5).
-- [`../../CAVEATS.md`](../../CAVEATS.md) § C54 — post-migration
+- [`../../CAVEATS.md`](../../../CAVEATS.md) § C54 — post-migration
   caveats (binary writers, cdylib FFI layout, memory footprint).
-- [`../../QUALITY.md`](../../QUALITY.md) § C54 — kept as design
-  reference; status flipped to LANDED 2026-04-21 via plan-01.
+- [`../../QUALITY.md`](../../../QUALITY.md) § C54 — kept as design
+  reference; status flipped to LANDED 2026-04-21 via @PLAN01.
 
 This file is the closure record; phase + execution-archaeology
 files in this directory remain as historical record (PHASE_2C_*,
@@ -102,7 +102,7 @@ Each opens its own sub-phase only when prioritised
   C54.A is the capped instance; wider type-level widening is a
   separate conversation.
 - **C54.D Rust-style literal suffixes** (`42i32`).  Closed-by-
-  decision in [`../../DESIGN_DECISIONS.md`](../../DESIGN_DECISIONS.md)
+  decision in [`../../DESIGN_DECISIONS.md`](../../../DESIGN_DECISIONS.md)
   § C54.D.
 
 ## Provenance
@@ -117,19 +117,19 @@ Each opens its own sub-phase only when prioritised
 
 - [`../../../LOFT.md`](../../../LOFT.md) § Primitive types +
   § Null representation — user-facing reference for the post-
-  plan-01 arithmetic semantics
+  @PLAN01 arithmetic semantics
 - [`../../../INTERMEDIATE.md`](../../../INTERMEDIATE.md) §
   Type Enum + § Integer Storage Size — IR and storage reference
-- [`../../CAVEATS.md`](../../CAVEATS.md) § C54 — post-migration
+- [`../../CAVEATS.md`](../../../CAVEATS.md) § C54 — post-migration
   caveats
-- [`../../QUALITY.md`](../../QUALITY.md) § C54 — design history
-- [`../../DESIGN_DECISIONS.md`](../../DESIGN_DECISIONS.md) §
+- [`../../QUALITY.md`](../../../QUALITY.md) § C54 — design history
+- [`../../DESIGN_DECISIONS.md`](../../../DESIGN_DECISIONS.md) §
   C54.D — closed-by-decision (no Rust-style literal suffixes)
-- [`../../CHANGELOG_TECHNICAL.md`](../../CHANGELOG_TECHNICAL.md)
+- [`../../CHANGELOG_TECHNICAL.md`](../../../CHANGELOG_TECHNICAL.md)
   — per-phase shipped manifest
 - [`../02-narrow-collection-elements/`](../02-narrow-collection-elements/)
   — sibling plan that addressed the narrow-vector storage gap
-  surfaced post-plan-01
+  surfaced post-@PLAN01
 - `src/data.rs::IntegerSpec` — the named-struct carrier replacing
   the old `Type::Integer(i32, u32)` 4-tuple
 - `src/database/types.rs::Parts::{Byte, Short, ShortRaw, Int, Long}`

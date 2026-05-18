@@ -115,37 +115,37 @@ pub struct WsHandler {
 
 // --- Internal natives (lifecycle primitives) ---
 
-fn ws_connect_native(url: text) -> integer;
+fn ws_client_connect_native(url: text) -> integer;
 #native "n_ws_connect"
 
-fn ws_send_native(handle: integer, msg: text) -> boolean;
+fn ws_client_send_native(handle: integer, msg: text) -> boolean;
 #native "n_ws_client_send"
 
 // Send the byte buffer as a binary WebSocket frame (opcode 2)
 // instead of a text frame (opcode 1).  Same payload encoding —
 // loft `text` is a byte buffer; this just changes the frame type
 // the peer sees.  Used by TTT v5 + plan-36 for binary world data.
-fn ws_send_binary_native(handle: integer, msg: text) -> boolean;
+fn ws_client_send_binary_native(handle: integer, msg: text) -> boolean;
 #native "n_ws_client_send_binary"
 
 // Returns true when a message has been delivered to the receive
 // buffer; false when the queue is empty or the connection is currently
-// down.  After true, call ws_message_native() to read the payload.
-fn ws_recv_native(handle: integer) -> boolean;
+// down.  After true, call ws_client_message_native() to read the payload.
+fn ws_client_recv_native(handle: integer) -> boolean;
 #native "n_ws_client_recv"
 
-fn ws_message_native() -> text;
+fn ws_client_message_native() -> text;
 #native "n_ws_client_message"
 
-// Opcode of the last frame surfaced by `ws_recv_native`.
+// Opcode of the last frame surfaced by `ws_client_recv_native`.
 // 1 = text, 2 = binary, 8 = close, 9 = ping, 10 = pong.
 // Loft programs that handle binary frames check this after a
 // successful recv to decide whether the message bytes are text
 // (utf-8) or a binary blob.
-fn ws_opcode_native() -> integer;
+fn ws_client_opcode_native() -> integer;
 #native "n_ws_client_opcode"
 
-fn ws_close_native(handle: integer);
+fn ws_client_close_native(handle: integer);
 #native "n_ws_client_close"
 
 // --- Public API ---
@@ -156,7 +156,7 @@ fn ws_close_native(handle: integer);
 // layer, so this call always returns a usable handle for any
 // well-formed `ws://...` URL.
 pub fn ws_handler(url: text) -> WsHandler {
-  id = ws_connect_native(url);
+  id = ws_client_connect_native(url);
   if id < 0 { return null; }
   WsHandler { id: id }
 }
@@ -165,7 +165,7 @@ pub fn ws_handler(url: text) -> WsHandler {
 // means the connection is currently in backoff / reconnecting and the
 // caller may retry after the next `pump()`.
 pub fn send(self: WsHandler, msg: text) -> boolean {
-  ws_send_native(self.id, msg)
+  ws_client_send_native(self.id, msg)
 }
 
 // Send `msg` as a binary WebSocket frame (opcode 2).  Loft `text`
@@ -173,14 +173,14 @@ pub fn send(self: WsHandler, msg: text) -> boolean {
 // style code, then ship it.  Returns true on success; false means
 // the connection is currently in backoff / reconnecting.
 pub fn send_binary(self: WsHandler, msg: text) -> boolean {
-  ws_send_binary_native(self.id, msg)
+  ws_client_send_binary_native(self.id, msg)
 }
 
 // Opcode of the last frame surfaced by `try_recv` / `pump` on this
 // handler.  Use after a successful read to decide whether to
 // interpret the payload as utf-8 text or as a binary blob.
 pub fn last_opcode(self: WsHandler) -> integer {
-  ws_opcode_native()
+  ws_client_opcode_native()
 }
 
 // Drain any pending received messages, firing `on_message` for each.
@@ -189,8 +189,8 @@ pub fn last_opcode(self: WsHandler) -> integer {
 // target) to drive event delivery without async.
 pub fn pump(self: WsHandler, on_message: fn(text)) -> integer {
   count = 0;
-  while ws_recv_native(self.id) {
-    on_message(ws_message_native());
+  while ws_client_recv_native(self.id) {
+    on_message(ws_client_message_native());
     count += 1;
   }
   count
@@ -202,13 +202,13 @@ pub fn pump(self: WsHandler, on_message: fn(text)) -> integer {
 // receiver wants to drive its own loop and accumulate messages
 // locally without capturing state inside a closure.
 pub fn try_recv(self: WsHandler) -> text {
-  if !ws_recv_native(self.id) { return null; }
-  ws_message_native()
+  if !ws_client_recv_native(self.id) { return null; }
+  ws_client_message_native()
 }
 
 // Permanently close the session (no further reconnect attempts).
 pub fn close(self: WsHandler) {
-  ws_close_native(self.id);
+  ws_client_close_native(self.id);
 }
 
 // Block the calling thread for `ms` milliseconds.  Convenience for

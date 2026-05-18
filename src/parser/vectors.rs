@@ -105,16 +105,54 @@ impl Parser {
             orig_var
         };
         for (val, tp) in parts {
-            if matches!(self.vars.tp(var_nr), Type::RefVar(_)) {
-                if *tp == Type::Character {
-                    ls.push(self.cl("OpAppendStackCharacter", &[Value::Var(var_nr), val.clone()]));
-                } else {
-                    ls.push(self.cl("OpAppendStackText", &[Value::Var(var_nr), val.clone()]));
-                }
-            } else if *tp == Type::Character {
-                ls.push(self.cl("OpAppendCharacter", &[Value::Var(var_nr), val.clone()]));
+            // Unwrap `RefVar(inner)` for the type-dispatch check below.
+            // A `&text` argument (parameter passed by reference) appears
+            // as `Type::RefVar(Type::Text(_))` here but the OpAppend* ops
+            // accept it directly via the same code path as plain `Text`.
+            let dispatch_tp: &Type = if let Type::RefVar(inner) = tp {
+                inner.as_ref()
             } else {
+                tp
+            };
+            if matches!(self.vars.tp(var_nr), Type::RefVar(_)) {
+                if *dispatch_tp == Type::Character {
+                    ls.push(self.cl("OpAppendStackCharacter", &[Value::Var(var_nr), val.clone()]));
+                } else if matches!(dispatch_tp, Type::Text(_)) {
+                    ls.push(self.cl("OpAppendStackText", &[Value::Var(var_nr), val.clone()]));
+                } else {
+                    // @P274 — non-text/non-character parts (integer / float /
+                    // bool / vector / reference / enum / …) need a format-
+                    // dispatch step before append.  `OpAppendStackText`
+                    // assumes its argument already evaluates to text on the
+                    // stack; passing a raw `i64` from `headers.len()` is what
+                    // tripped native E0614 (`type i64 cannot be dereferenced`)
+                    // and SIGSEGV in interp.  Route through `append_data`,
+                    // which is the same dispatch path used by `"…{x}…"`
+                    // format-string interpolation and handles every formattable
+                    // type via the matching `OpFormat*` op.
+                    self.append_data(
+                        dispatch_tp.clone(),
+                        &mut ls,
+                        var_nr,
+                        u16::MAX,
+                        val,
+                        super::OUTPUT_DEFAULT,
+                    );
+                }
+            } else if *dispatch_tp == Type::Character {
+                ls.push(self.cl("OpAppendCharacter", &[Value::Var(var_nr), val.clone()]));
+            } else if matches!(dispatch_tp, Type::Text(_)) {
                 ls.push(self.cl("OpAppendText", &[Value::Var(var_nr), val.clone()]));
+            } else {
+                // @P274 — see RefVar branch above.
+                self.append_data(
+                    dispatch_tp.clone(),
+                    &mut ls,
+                    var_nr,
+                    u16::MAX,
+                    val,
+                    super::OUTPUT_DEFAULT,
+                );
             }
         }
         let tp = Type::Text(vec![var_nr]);
@@ -429,7 +467,42 @@ impl Parser {
             .variables
             .append(&mut self.vars);
 
+        // Plan-22 phase 02c (2026-05-12): collect mutations BEFORE
+        // synthesize_closure_record so the synthesise step can
+        // consult `data.def(d_nr).mutated_captures` to pick the
+        // right attribute type (auto-Reference for mutated
+        // Reference captures vs inline-bytes for everything else).
+        // The collect helper accepts a missing closure_record and
+        // derives captured names from the lambda's variable table
+        // in that case.
         if !self.captured_names.is_empty() {
+            collect_mutated_captures(&mut self.data, d_nr);
+            // Plan-22 phase 02d-i (2026-05-12): accumulate scalar
+            // mutated-captures onto the parent function's
+            // `scalars_to_box` field.  Phase 02d-iii will use this
+            // to rewrite outer bindings to hidden cells.  Detection-
+            // only at this phase — no behavior change.
+            accumulate_scalars_to_box(&mut self.data, outer_context, d_nr, &self.captured_names);
+            // Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct
+            // exists for every scalar-typed mutated capture, so
+            // 02d-iii's outer-binding rewrite has a target type to
+            // allocate.  Idempotent across all lambdas in the
+            // compilation; gated on first_pass.
+            self.synthesize_cell_structs(d_nr);
+            // Plan-22 phase 02d-iii.e — pre-box `captured_names`
+            // entries for names in the parent's scalars_to_box
+            // BEFORE `synthesize_closure_record` builds the
+            // record's attributes.  Without this, pass 1 freezes
+            // the attribute as the un-flipped scalar (Integer)
+            // and the closure record's storage layout uses 8B
+            // inline instead of 12B share-by-DbRef — runtime
+            // then misroutes writes through `OpSetInt` and
+            // crashes on the locked store.
+            box_captured_names_for_outer_scalars(
+                &mut self.captured_names,
+                &self.data,
+                outer_context,
+            );
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
@@ -633,7 +706,42 @@ impl Parser {
             .append(&mut self.vars);
 
         // synthesize closure record if any captures were detected.
+        // Plan-22 phase 02c (2026-05-12): collect mutations BEFORE
+        // synthesize_closure_record so the synthesise step can
+        // consult `data.def(d_nr).mutated_captures` to pick the
+        // right attribute type (auto-Reference for mutated
+        // Reference captures vs inline-bytes for everything else).
+        // The collect helper accepts a missing closure_record and
+        // derives captured names from the lambda's variable table
+        // in that case.
         if !self.captured_names.is_empty() {
+            collect_mutated_captures(&mut self.data, d_nr);
+            // Plan-22 phase 02d-i (2026-05-12): accumulate scalar
+            // mutated-captures onto the parent function's
+            // `scalars_to_box` field.  Phase 02d-iii will use this
+            // to rewrite outer bindings to hidden cells.  Detection-
+            // only at this phase — no behavior change.
+            accumulate_scalars_to_box(&mut self.data, outer_context, d_nr, &self.captured_names);
+            // Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct
+            // exists for every scalar-typed mutated capture, so
+            // 02d-iii's outer-binding rewrite has a target type to
+            // allocate.  Idempotent across all lambdas in the
+            // compilation; gated on first_pass.
+            self.synthesize_cell_structs(d_nr);
+            // Plan-22 phase 02d-iii.e — pre-box `captured_names`
+            // entries for names in the parent's scalars_to_box
+            // BEFORE `synthesize_closure_record` builds the
+            // record's attributes.  Without this, pass 1 freezes
+            // the attribute as the un-flipped scalar (Integer)
+            // and the closure record's storage layout uses 8B
+            // inline instead of 12B share-by-DbRef — runtime
+            // then misroutes writes through `OpSetInt` and
+            // crashes on the locked store.
+            box_captured_names_for_outer_scalars(
+                &mut self.captured_names,
+                &self.data,
+                outer_context,
+            );
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
@@ -727,6 +835,24 @@ impl Parser {
                         Value::Var(w),
                         Value::Var(v_nr),
                     ));
+                    // P259: when the captured variable is a heap-owned cell
+                    // (Reference(__cell_*, _)), the closure record now holds
+                    // a DbRef into that cell's store via the auto-Reference
+                    // attribute.  Bump the cell's ref_count so the parent
+                    // fn's scope-exit OpFreeRef on the cell decrements
+                    // (rc 2→1) instead of actually freeing while the
+                    // closure record still references it.  Cascade-free
+                    // in `Stores::free_named` (commit 4) decrements when
+                    // the closure record itself is freed.
+                    let inc_rc_needed = matches!(
+                        self.vars.tp(v_nr),
+                        Type::Reference(cell_d, _)
+                        if self.data.def(*cell_d).name.starts_with("__cell_")
+                    );
+                    if inc_rc_needed {
+                        let inc_call = self.cl("OpIncRc", &[Value::Var(v_nr)]);
+                        alloc_steps.push(inc_call);
+                    }
                 }
             }
             self.last_closure_captured_vars = captured_var_nrs;
@@ -759,6 +885,191 @@ impl Parser {
 
     /// Synthesize an anonymous struct definition for the captured variables
     /// of a lambda. Emits a diagnostic with the record layout for test verification.
+    ///
+    /// Plan-22 phase 02c (2026-05-12): for each mutated Reference
+    /// capture (per phase 01's `mutated_captures` walker, populated
+    /// in pass 1 by phase 02a), the attribute type is
+    /// `Reference(d, [u16::MAX])` instead of `Reference(d, [])`.
+    /// The non-empty dep activates phase 02b's auto-Reference
+    /// storage encoding (12-byte DbRef + OpSetDbRef + OpGetDbRef
+    /// instead of inline-bytes + OpCopyRecord + OpGetField).
+    /// Mutations made inside the closure body propagate to the
+    /// outer scope through the shared store record.
+    ///
+    /// The dep value `u16::MAX` is a SENTINEL meaning
+    /// "auto-Reference share-marker" — it's not a real outer-var
+    /// nr (we're inside the lambda's scope at synthesis time, so
+    /// the outer var nr isn't directly accessible).  Phase 03
+    /// (Case C) refines the dep value to the actual outer-var nr
+    /// for proper liveness tracking.  For phase 02c's case-B
+    /// scope (closure stays within capture's scope), the sentinel
+    /// is sufficient — the closure record itself is freed at the
+    /// outer scope's exit, after which the captured value is no
+    /// longer reachable.
+    /// Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct exists
+    /// for every scalar-typed mutated capture in
+    /// `self.captured_names`.
+    ///
+    /// Idempotent: a cell struct created for one lambda is reused
+    /// by every subsequent lambda that captures the same scalar
+    /// type.  Gated on `self.first_pass` because struct definitions
+    /// must be created in pass 1; pass 2 looks them up via
+    /// `data.def_nr(name)` (no creation).
+    ///
+    /// Cells whose `cell_struct_name` returns `None` (exotic
+    /// integer widths, Reference / Function / Vector / etc.) are
+    /// silently skipped — phase 02d-iii's outer-binding rewrite
+    /// detects the missing cell at the use site and falls back to
+    /// today's stack-slot codegen.
+    fn synthesize_cell_structs(&mut self, lambda_d_nr: u32) {
+        if !self.first_pass {
+            return;
+        }
+        let captures = self.captured_names.clone();
+        let mutated: Vec<String> = self.data.def(lambda_d_nr).mutated_captures.clone();
+        for (name, tp) in &captures {
+            if !mutated.iter().any(|m| m == name) {
+                continue;
+            }
+            let Some(cell_name) = cell_struct_name(tp, &self.data) else {
+                continue;
+            };
+            // Idempotent: skip if the cell struct already exists.
+            if self.data.def_nr(&cell_name) != u32::MAX {
+                continue;
+            }
+            let cell_d_nr = self
+                .data
+                .add_def(&cell_name, self.lexer.pos(), DefType::Struct);
+            let value_tp = cell_value_type(tp);
+            self.data
+                .add_attribute(&mut self.lexer, cell_d_nr, "value", value_tp);
+        }
+    }
+
+    /// Plan-22 phase 02d-iii.a — at the start of pass 2 for the
+    /// parent function, replace each scalar local in
+    /// `Definition.scalars_to_box` with its boxed
+    /// `Reference(__cell_<T>, [])` type.  Runs AFTER the
+    /// pass-1 vars are restored via `Function::append`, so the
+    /// helper sees every local that pass 1 added (including the
+    /// names queued by phase 02d-i's accumulator).
+    ///
+    /// Foundation step: NO read or write rewriting yet.
+    /// Subsequent sub-phases (02d-iii.b read auto-deref, 02d-iii.c
+    /// first-set allocation, 02d-iii.d closure-body write rewrite,
+    /// 02d-iii.e type-check gate) build on this type-flip.
+    ///
+    /// Today's behavior with this commit alone: the variables
+    /// table reports the boxed type, but every emit site still
+    /// treats `n` as a stack-slot scalar.  Any function with
+    /// mutating scalar captures will hit a type-mismatch
+    /// diagnostic at the first `n = …` site (RHS scalar vs LHS
+    /// `Reference(__cell_<T>, _)`).  No existing test exercises
+    /// mutating-scalar-capture closures (they're broken pre-02d
+    /// and the matrix cells are still `#[ignore]`d), so the
+    /// regression net stays green.
+    ///
+    /// `change_var_type` (in `src/parser/expressions.rs`) is
+    /// taught to PRESERVE the flipped Reference type when the
+    /// new type is the cell's value type; without that guard,
+    /// `change_var(to, &s_type)` in `parse_assign_op` would
+    /// revert `n` back to Integer on every `n = …` line.
+    ///
+    /// Idempotent + scoped:
+    /// - No-op when `scalars_to_box` is empty (the common case
+    ///   for every function in the standard library and existing
+    ///   tests).
+    /// - Skips arguments — boxing a function parameter would
+    ///   change its call-site signature.  Argument boxing is a
+    ///   follow-up sub-step (matrix row M / Case-B-on-arg uses
+    ///   the explicit `Mutable<T>` path in phase 05).
+    /// - Skips names whose `cell_struct_name` returns `None`
+    ///   (exotic integer widths) — phase 02d-ii's silent gap.
+    /// - Skips names already flipped on a re-entry (defensive).
+    #[allow(
+        dead_code,
+        reason = "Helper exists for 02d-iii.e activation; only invoked from tests for now."
+    )]
+    pub(crate) fn flip_scalars_to_box_types(&mut self) {
+        if self.context == u32::MAX || (self.context as usize) >= self.data.definitions.len() {
+            return;
+        }
+        // Plan-22 phase 02d-vii — skip text-cell boxing when the
+        // parent function returns text.  In a text-returning fn,
+        // the work-text result-buffer machinery locks the
+        // closure record's store before `emit_lambda_code`'s
+        // SetDbRef can capture the boxed-text DbRef, panicking
+        // with "Write to locked store".  Reverting text vars to
+        // their pre-02d-vi behaviour (no flip → text mutation
+        // flows through the existing void-return write-back
+        // mechanism, which works for the b_d1 shape that
+        // text-returning fns are most likely to use).
+        let parent_returns_text = matches!(self.data.def(self.context).returned, Type::Text(_));
+        let names = self.data.def(self.context).scalars_to_box.clone();
+        for name in &names {
+            let v_nr = self.vars.var(name);
+            if v_nr == u16::MAX {
+                continue;
+            }
+            if self.vars.is_argument(v_nr) {
+                continue;
+            }
+            let original_tp = self.vars.tp(v_nr).clone();
+            // Skip if already flipped.
+            if matches!(&original_tp, Type::Reference(d, _)
+                if self.data.def(*d).name.starts_with("__cell_"))
+            {
+                continue;
+            }
+            // Plan-22 phase 02d-vii — text-skip when parent
+            // returns text (see above for rationale).  Skips
+            // both bare Text and RefVar(Text) (mutable stack
+            // text locals).
+            let is_text_or_reftext = matches!(&original_tp, Type::Text(_))
+                || matches!(&original_tp, Type::RefVar(inner)
+                    if matches!(inner.as_ref(), Type::Text(_)));
+            if parent_returns_text && is_text_or_reftext {
+                continue;
+            }
+            // Plan-22 phase 02d-iii.e / 02d-v / 02d-vi — all
+            // boxable scalar types now flip cleanly:
+            //
+            // - Direct shapes (Integer / Float / Single /
+            //   Character / Text / plain Enum): auto-deref
+            //   produces `Call(OpGet<T>, [Var, 0])`,
+            //   `maybe_prepend_cell_alloc`'s
+            //   `extract_boxed_var_from_lhs` recognises this
+            //   shape, `call_to_set_op` maps `OpGet<T>` →
+            //   `OpSet<T>` for the write side.
+            //
+            // - Boolean: auto-deref wraps in
+            //   `Call(OpEqInt, [Call(OpGetByte, [Var, 0, 0]),
+            //   Int(1)])`; phase 02d-v's `extract_boxed_var_from_lhs`
+            //   recognises this nested shape too; writes route
+            //   through towards_set's existing boolean branch
+            //   (collections.rs:493) which produces the right
+            //   OpSetByte IR with bool→byte conversion.
+            //
+            // - Text: phase 02d-vi added a bypass guard in
+            //   `parse_assign_op` that skips the text-special
+            //   branch when the LHS is auto-deref'd boxed text.
+            //   The general path then handles re-assignment
+            //   (`log = "after"`) and append (`log += s` lowered
+            //   to `log = log + s`) via `OpSetText` writes
+            //   through the cell DbRef.
+            let Some(cell_name) = cell_struct_name(&original_tp, &self.data) else {
+                continue;
+            };
+            let cell_d_nr = self.data.def_nr(&cell_name);
+            if cell_d_nr == u32::MAX {
+                continue;
+            }
+            self.vars
+                .set_type(v_nr, Type::Reference(cell_d_nr, Vec::new()));
+        }
+    }
+
     fn synthesize_closure_record(&mut self, lambda_d_nr: u32, lambda_name: &str) {
         let record_name = lambda_name.replace("__lambda_", "__closure_");
         let captures = self.captured_names.clone();
@@ -779,8 +1090,36 @@ impl Parser {
                 // panicking with "Incomplete record" at
                 // `src/store.rs:227`.
                 ensure_tuple_defs_for_capture(&mut self.data, &mut self.lexer, tp);
+                let attr_tp = match tp {
+                    Type::Reference(d, _) => {
+                        // P260 (2026-05-13): ALL Reference captures
+                        // store as 12B Parts::DbRef pointing at the
+                        // live original (typedef.rs:529 arm fires on
+                        // non-empty deps).  Inline-byte storage was
+                        // wrong even for read-only captures — the
+                        // closure read sees a stale snapshot when the
+                        // outer scope mutates a non-scalar field of
+                        // the source struct, AND closure-side writes
+                        // to compound fields (vector field, nested
+                        // struct, vector element) silently no-op
+                        // against the inline copy.  Originally this
+                        // arm was gated on `is_mutated(name)` (phase
+                        // 02c) but the gate is wrong: storage
+                        // encoding is an architectural decision
+                        // ("don't deep-copy a possibly-large struct
+                        // into a closure record"), not a property of
+                        // whether THIS closure mutates the capture.
+                        // The auto-Reference marker (vec![u16::MAX])
+                        // is only consumed by `typedef.rs::fill_database`
+                        // — closure records are the sole producer, so
+                        // this doesn't affect user-defined struct
+                        // fields.
+                        Type::Reference(*d, vec![u16::MAX])
+                    }
+                    _ => tp.clone(),
+                };
                 self.data
-                    .add_attribute(&mut self.lexer, record_d_nr, name, tp.clone());
+                    .add_attribute(&mut self.lexer, record_d_nr, name, attr_tp);
             }
             // Store the closure record def_nr on the lambda's definition.
             self.data.definitions[lambda_d_nr as usize].closure_record = record_d_nr;
@@ -1825,5 +2164,1825 @@ fn ensure_tuple_defs_for_capture(
             ensure_tuple_defs_for_capture(data, lexer, inner);
         }
         _ => {}
+    }
+}
+
+/// Plan-22 phase 02d-ii — canonical cell-struct name for a scalar
+/// type.
+///
+/// Returns the conventional name `__cell_<T>` used to box a scalar
+/// capture into a 1-field record so closure mutations propagate
+/// back through the auto-Reference path (phase 02b/02c encoding).
+///
+/// Returns `None` for any type the cell-synthesis pass doesn't yet
+/// support (exotic integer widths — u8/i8/u16/i16 — and any non-
+/// scalar type).  Phase 02d-i may have queued such names in
+/// `scalars_to_box` (the accumulator is intentionally inclusive);
+/// 02d-iii will detect a missing cell at the rewrite site and
+/// fall back to today's stack-slot codegen for those captures.
+/// Phase 02d-iv extends the supported set as the need surfaces.
+///
+/// Naming table (one cell per canonical type, deduped across all
+/// captures):
+///
+/// | Loft type | Cell name |
+/// |---|---|
+/// | `integer` (4-byte signed) | `__cell_integer` |
+/// | `long` / wide integer (8-byte) | `__cell_long` |
+/// | `float` | `__cell_float` |
+/// | `single` | `__cell_single` |
+/// | `boolean` | `__cell_boolean` |
+/// | `character` | `__cell_character` |
+/// | `text` | `__cell_text` |
+/// | plain enum `E` | `__cell_enum_<E>` |
+pub(crate) fn cell_struct_name(tp: &Type, data: &crate::data::Data) -> Option<String> {
+    match tp {
+        Type::Integer(spec) => {
+            // Default-nullable byte_width: matches the storage the
+            // cell's `value` field will take.  i32 → 8 today (the
+            // bounds-range heuristic returns 8 for the I32
+            // template; that's the canonical "integer" storage),
+            // i64 → 8.  For the foundation phase we only emit two
+            // canonical integer cells; exotic forced-size widths
+            // (u8/i8/u16/i16) defer to 02d-iv.
+            let bw = spec.byte_width(true);
+            match (bw, spec.forced_size.is_some()) {
+                (8, false) if spec.max == u32::MAX => Some("__cell_long".to_string()),
+                (8, false) => Some("__cell_integer".to_string()),
+                _ => None,
+            }
+        }
+        Type::Float => Some("__cell_float".to_string()),
+        Type::Single => Some("__cell_single".to_string()),
+        Type::Boolean => Some("__cell_boolean".to_string()),
+        Type::Character => Some("__cell_character".to_string()),
+        Type::Text(_) => Some("__cell_text".to_string()),
+        Type::Enum(d_nr, false, _) => {
+            let enum_name = &data.def(*d_nr).name;
+            Some(format!("__cell_enum_{enum_name}"))
+        }
+        _ => None,
+    }
+}
+
+/// Plan-22 phase 02d-ii — canonical type for the cell's `value`
+/// field.
+///
+/// Strips bound/dep details so multiple captures of "the same
+/// underlying type" with slightly different annotations
+/// (e.g. `text` with different lifetime deps, or
+/// `integer not null` vs `integer`) share a single cell struct.
+fn cell_value_type(tp: &Type) -> Type {
+    match tp {
+        Type::Integer(spec) => {
+            // Canonical wide vs narrow templates; bounds + null-flag
+            // are dropped to match the cell-name canonicalisation.
+            if spec.max == u32::MAX {
+                crate::data::I64.clone()
+            } else {
+                crate::data::I32.clone()
+            }
+        }
+        Type::Text(_) => Type::Text(Vec::new()),
+        Type::Enum(d_nr, _, _) => Type::Enum(*d_nr, false, Vec::new()),
+        other => other.clone(),
+    }
+}
+
+/// Plan-22 phase 02d-i — accumulate the names of scalar-typed
+/// captures that this lambda mutates onto the PARENT function's
+/// `scalars_to_box` field.
+///
+/// Per-call: one lambda's mutations contribute to the parent
+/// function's union.  Names are deduped; types decide
+/// scalar-vs-non-scalar.
+///
+/// "Scalar" set (per phase 02d design):
+///   - `Type::Integer(_)`
+///   - `Type::Float`
+///   - `Type::Single`
+///   - `Type::Boolean`
+///   - `Type::Character`
+///   - `Type::Text(_)`
+///   - `Type::Enum(_, false, _)` (plain enum)
+///
+/// Reference / Function / Vector / Hash / Sorted / Index /
+/// Spacial / Tuple captures are NOT scalars — they're handled by
+/// other paths (Reference: phase 02c; Function: phase 02c via
+/// existing fn-ref machinery; Vector + keyed: rejected by P257).
+///
+/// `parent_d_nr` is the enclosing function's def_nr; if the
+/// lambda is at top-level (no enclosing function — e.g. a lambda
+/// in a struct field default value), `parent_d_nr == u32::MAX`
+/// and the accumulator is a no-op (top-level binds aren't
+/// mutated-captured by their own scope).
+/// Plan-22 phase 02d-iii.e — replace `captured_names` entries
+/// for names in the parent function's `scalars_to_box` with
+/// their boxed `Reference(__cell_<T>, [])` form.
+///
+/// Called from the lambda parsing site BETWEEN
+/// `synthesize_cell_structs` (which needs the original scalar
+/// type to compute the cell name) and `synthesize_closure_record`
+/// (which uses `captured_names` types directly to set the
+/// closure record's attribute types).  In pass 1, this is what
+/// makes the closure record's attribute carry
+/// `Reference(__cell_int, _)` from creation, so phase 02c's
+/// auto-Reference encoding fires (12B share-by-DbRef storage)
+/// and the closure body's reads/writes route through the
+/// shared cell.
+///
+/// In pass 2, `captured_names` is typically empty (the lambda's
+/// resolve_name takes the closure-redirect arm before the
+/// capture arm fires), so this helper is a no-op there.
+fn box_captured_names_for_outer_scalars(
+    captured_names: &mut [(String, Type)],
+    data: &crate::data::Data,
+    outer_context: u32,
+) {
+    if outer_context == u32::MAX || (outer_context as usize) >= data.definitions.len() {
+        return;
+    }
+    let scalars = data.def(outer_context).scalars_to_box.clone();
+    // Plan-22 phase 02d-vii — symmetric guard with
+    // `flip_scalars_to_box_types`: skip text when the parent
+    // function returns text (avoid the "Write to locked
+    // store" panic at closure-record init in text-returning
+    // fns).
+    let parent_returns_text = matches!(data.def(outer_context).returned, Type::Text(_));
+    for (name, tp) in captured_names {
+        if !scalars.iter().any(|s| s == name) {
+            continue;
+        }
+        let is_text_or_reftext = matches!(tp, Type::Text(_))
+            || matches!(tp, Type::RefVar(inner)
+                if matches!(inner.as_ref(), Type::Text(_)));
+        if parent_returns_text && is_text_or_reftext {
+            continue;
+        }
+        if let Some(cell_name) = cell_struct_name(tp, data) {
+            let cell_d_nr = data.def_nr(&cell_name);
+            if cell_d_nr != u32::MAX {
+                *tp = Type::Reference(cell_d_nr, vec![]);
+            }
+        }
+    }
+}
+
+fn accumulate_scalars_to_box(
+    data: &mut crate::data::Data,
+    parent_d_nr: u32,
+    lambda_d_nr: u32,
+    captured_names: &[(String, Type)],
+) {
+    if parent_d_nr == u32::MAX || (parent_d_nr as usize) >= data.definitions.len() {
+        return;
+    }
+    let mutated = data.def(lambda_d_nr).mutated_captures.clone();
+    for name in &mutated {
+        let Some((_, tp)) = captured_names.iter().find(|(n, _)| n == name) else {
+            continue;
+        };
+        let is_scalar = matches!(
+            tp,
+            Type::Integer(_)
+                | Type::Float
+                | Type::Single
+                | Type::Boolean
+                | Type::Character
+                | Type::Text(_)
+                | Type::Enum(_, false, _)
+        );
+        if !is_scalar {
+            continue;
+        }
+        let parent = &mut data.definitions[parent_d_nr as usize];
+        if !parent.scalars_to_box.iter().any(|s| s == name) {
+            parent.scalars_to_box.push(name.clone());
+        }
+    }
+}
+
+/// Plan-22 phase 01 — walk the lambda body's IR and identify
+/// captured bindings whose value is mutated.
+///
+/// Detection rules:
+///   - `Value::Set(slot, _)` where slot's variable name appears
+///     in the closure record → whole-binding reassignment.
+///   - `Value::Call(d, args)` where `d`'s op name is in the
+///     mutating-op set (OpSet* / OpAppend* / OpClear* /
+///     OpInsertVector / OpRemoveVector) AND `args[0]` is a
+///     `Value::Var(slot)` whose name appears in the closure
+///     record → field write through the captured value.
+///
+/// The closure record's attribute names are the canonical list
+/// of captured bindings (populated by `synthesize_closure_record`
+/// from `captured_names`).  A name in `mutated_captures` means
+/// some write opcode targets that name's underlying slot.
+///
+/// Stores result on `data.def(lambda_d_nr).mutated_captures`.
+/// Phases 02-05 consume this for case classification.
+///
+/// Detection-only: no IR rewrite, no codegen change, no behavior
+/// difference between this commit and the prior state.  The
+/// stored result is consulted by later phases.
+fn collect_mutated_captures(data: &mut crate::data::Data, lambda_d_nr: u32) {
+    // Plan-22 phase 02c (2026-05-12): the captured-name list comes
+    // from EITHER the closure record's attributes (when synthesize
+    // ran first — the original phase 01 path) OR from the lambda's
+    // variables that match a synthesized `__closure_<N>` struct
+    // name pattern (not currently used).  The phase-02c flow runs
+    // collect_mutated_captures BEFORE synthesize, so we accept the
+    // closure_record == MAX case as "not yet built; no names from
+    // there" and fall through to using the variables table.
+    //
+    // Phase 01's existing API stays compatible: when synthesize has
+    // already run, this function uses the closure record's
+    // attributes (the original behaviour).
+    let closure_d_nr = data.def(lambda_d_nr).closure_record;
+    let variables = data.def(lambda_d_nr).variables.clone();
+    let captured_names: Vec<String> = if closure_d_nr == u32::MAX {
+        // Pre-synthesize call site — derive captured names from the
+        // lambda's variable table.  Captured names are local
+        // placeholder vars created in objects.rs:187 / control.rs:3614
+        // during body parsing.  Filter out `__closure` (the closure
+        // param), `__work*` (text work buffers), and any argument.
+        // The body walker then double-filters via the captured_names
+        // membership check in `mark()`, so over-inclusion here is
+        // safe (just spurious work).
+        (0..variables.count())
+            .filter_map(|v| {
+                let name = variables.name(v);
+                if name == "__closure" || name.starts_with("__work") || variables.is_argument(v) {
+                    None
+                } else {
+                    Some(name.to_string())
+                }
+            })
+            .collect()
+    } else {
+        data.def(closure_d_nr)
+            .attributes
+            .iter()
+            .map(|a| a.name.clone())
+            .collect()
+    };
+    if captured_names.is_empty() {
+        return;
+    }
+    let body = data.def(lambda_d_nr).code.clone();
+    // Resolve the closure-param's var slot — it's the `__closure`
+    // argument added at lambda parse time (vectors.rs:417-421).
+    // In the body's IR, captured-name reads are
+    // `Call(OpGet*, [Var(closure_param), Int(fld_idx)])` and
+    // writes are `Call(OpSet*, [Var(closure_param), Int(fld_idx),
+    // value])`.  Field indices map to attribute positions in the
+    // closure record (`captured_names[fld_idx]`).
+    let mut closure_param: Option<u16> = None;
+    for v in 0..variables.count() {
+        if variables.name(v) == "__closure" {
+            closure_param = Some(v);
+            break;
+        }
+    }
+    let mut mutated: Vec<String> = Vec::new();
+    walk_for_mutations(
+        &body,
+        &captured_names,
+        closure_param,
+        &variables,
+        data,
+        &mut mutated,
+    );
+    data.definitions[lambda_d_nr as usize].mutated_captures = mutated;
+}
+
+/// Op names whose first argument is the target of a mutation.
+/// All write through the closure record's field (when first arg
+/// is a captured-binding placeholder var).
+///
+/// `Definition::original_name()` strips the leading 2 chars
+/// (the `n_` / `Op` prefix) for functions — these names are
+/// the post-strip form, e.g. `OpSetInt` → `SetInt`,
+/// `n_my_fn` → `my_fn`.
+const MUTATING_OP_NAMES: &[&str] = &[
+    "SetInt",
+    "SetByte",
+    "SetShortRaw",
+    "SetInt4",
+    "SetFloat",
+    "SetSingle",
+    "SetText",
+    "SetCharacter",
+    "SetEnum",
+    "AppendVector",
+    "AppendText",
+    "AppendCharacter",
+    "AppendStackText",
+    "AppendStackCharacter",
+    "ClearVector",
+    "ClearText",
+    "ClearStackText",
+    "InsertVector",
+    "RemoveVector",
+];
+
+fn walk_for_mutations(
+    code: &Value,
+    captured_names: &[String],
+    closure_param: Option<u16>,
+    variables: &crate::variables::Function,
+    data: &crate::data::Data,
+    out: &mut Vec<String>,
+) {
+    let mark = |name: &str, out: &mut Vec<String>| {
+        if captured_names.iter().any(|c| c == name) && !out.iter().any(|s| s == name) {
+            out.push(name.to_string());
+        }
+    };
+    match code {
+        Value::Span(boxed) => walk_for_mutations(
+            &boxed.1,
+            captured_names,
+            closure_param,
+            variables,
+            data,
+            out,
+        ),
+        Value::Set(slot, expr) => {
+            if *slot < variables.count() {
+                mark(variables.name(*slot), out);
+            }
+            walk_for_mutations(expr, captured_names, closure_param, variables, data, out);
+        }
+        Value::Call(d, args) => {
+            if (*d as usize) < data.definitions.len() {
+                let op_name = data.def(*d).original_name();
+                if MUTATING_OP_NAMES.iter().any(|n| *n == op_name)
+                    && let Some(first) = args.first()
+                {
+                    // Three write shapes:
+                    //   (a) `OpSet*(Var(captured_local), …)` — pass-1
+                    //       form, before closure-param threading.
+                    //       Direct local-slot write to the captured
+                    //       binding's placeholder var.
+                    //   (b) `OpSet*(Var(closure_param), Int(fld_idx),
+                    //       …)` — pass-2 direct write to a captured
+                    //       primitive's slot in the closure record.
+                    //       Map fld_idx → captured_names[fld_idx].
+                    //   (c) `OpSet*(Call(GetField, [Var(closure_param),
+                    //       Int(fld_idx)]), …)` — pass-2 nested write
+                    //       through a captured Reference's loaded
+                    //       value.  E.g. `s.x = 7` for captured
+                    //       struct `s`.  The mutation targets `s`
+                    //       (via its content), so flag s as mutated.
+                    match first.unspan() {
+                        Value::Var(v) => {
+                            if Some(*v) == closure_param
+                                && let Some(Value::Int(fld)) = args.get(1).map(Value::unspan)
+                                && (*fld as usize) < captured_names.len()
+                            {
+                                mark(&captured_names[*fld as usize].clone(), out);
+                            } else if *v < variables.count() {
+                                mark(variables.name(*v), out);
+                            }
+                        }
+                        Value::Call(inner_d, inner_args)
+                            if (*inner_d as usize) < data.definitions.len() =>
+                        {
+                            // Detect nested `Call(GetField, [Var(closure_param), Int(fld)])`
+                            let inner_name = data.def(*inner_d).original_name();
+                            if (inner_name == "GetField" || inner_name.starts_with("Get"))
+                                && let Some(inner_first) = inner_args.first()
+                                && let Value::Var(v) = inner_first.unspan()
+                                && Some(*v) == closure_param
+                                && let Some(Value::Int(fld)) = inner_args.get(1).map(Value::unspan)
+                                && (*fld as usize) < captured_names.len()
+                            {
+                                mark(&captured_names[*fld as usize].clone(), out);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            for arg in args {
+                walk_for_mutations(arg, captured_names, closure_param, variables, data, out);
+            }
+        }
+        Value::CallRef(_, args) | Value::Insert(args) | Value::Tuple(args) => {
+            for arg in args {
+                walk_for_mutations(arg, captured_names, closure_param, variables, data, out);
+            }
+        }
+        Value::Block(b) | Value::Loop(b) => {
+            for child in &b.operators {
+                walk_for_mutations(child, captured_names, closure_param, variables, data, out);
+            }
+        }
+        Value::If(c, t, f) => {
+            walk_for_mutations(c, captured_names, closure_param, variables, data, out);
+            walk_for_mutations(t, captured_names, closure_param, variables, data, out);
+            walk_for_mutations(f, captured_names, closure_param, variables, data, out);
+        }
+        Value::Iter(_, init, step, body) => {
+            walk_for_mutations(init, captured_names, closure_param, variables, data, out);
+            walk_for_mutations(step, captured_names, closure_param, variables, data, out);
+            walk_for_mutations(body, captured_names, closure_param, variables, data, out);
+        }
+        Value::Return(expr)
+        | Value::Drop(expr)
+        | Value::Yield(expr)
+        | Value::TuplePut(_, _, expr)
+        | Value::BreakWith(_, expr) => {
+            walk_for_mutations(expr, captured_names, closure_param, variables, data, out);
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase01_mutation_detection_tests {
+    //! Plan-22 phase 01 — verify `collect_mutated_captures` populates
+    //! `data.def(d_nr).mutated_captures` correctly across the
+    //! representative shapes phase 02 will consume.
+
+    use crate::parser::Parser;
+
+    /// Helper: parse a snippet and find the first capturing lambda
+    /// definition.  Returns its `mutated_captures` clone.
+    fn first_capturing_lambda_mutations(source: &str) -> Vec<String> {
+        let mut p = Parser::new();
+        // Load defaults so primitive types and operators resolve.
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(source, "phase01_test", false);
+        for d_nr in 0..p.data.definitions() {
+            let def = p.data.def(d_nr);
+            if def.closure_record != u32::MAX && !def.mutated_captures.is_empty() {
+                return def.mutated_captures.clone();
+            }
+        }
+        // Fall back to the first capturing lambda even when nothing
+        // was detected — lets `assert_eq` show the actual empty vec.
+        for d_nr in 0..p.data.definitions() {
+            let def = p.data.def(d_nr);
+            if def.closure_record != u32::MAX {
+                return def.mutated_captures.clone();
+            }
+        }
+        Vec::new()
+    }
+
+    #[test]
+    fn read_only_capture_yields_empty_set() {
+        // Case A baseline — capture `n`, read it, never write.
+        // mutated_captures should stay empty (the regression-net
+        // signal that phases 02-05 must not flip).
+        let mutated = first_capturing_lambda_mutations(
+            r"
+            fn test() {
+                n = 5;
+                f = fn(x: integer) -> integer { x + n };
+                _ = f(10);
+            }
+            ",
+        );
+        assert!(
+            mutated.is_empty(),
+            "expected no mutations for read-only capture; got {mutated:?}"
+        );
+    }
+
+    #[test]
+    fn whole_binding_reassign_detected() {
+        // Case B (basic) — `n = n + 1` rewrites the captured slot.
+        // The Set arm of the walker catches this.
+        let mutated = first_capturing_lambda_mutations(
+            r"
+            fn test() {
+                n = 0;
+                f = fn() { n = n + 1; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            mutated.iter().any(|s| s == "n"),
+            "expected `n` mutation detected; got {mutated:?}"
+        );
+    }
+
+    #[test]
+    fn struct_field_write_detected() {
+        // Case B (Reference) — `s.x = ...` desugars to OpSetInt
+        // on the captured Reference.  The MUTATING_OP_NAMES arm
+        // catches it via `args[0] = Var(captured)`.
+        let mutated = first_capturing_lambda_mutations(
+            r"
+            struct S { x: integer, y: integer }
+            fn test() {
+                s = S { x: 0, y: 0 };
+                f = fn() { s.x = 7; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            mutated.iter().any(|s| s == "s"),
+            "expected `s` mutation detected; got {mutated:?}"
+        );
+    }
+
+    #[test]
+    fn text_append_detected() {
+        // Case B (text capture) — `s += "x"` desugars to
+        // OpAppendText on the captured text slot.
+        let mutated = first_capturing_lambda_mutations(
+            r#"
+            fn test() {
+                s = "";
+                f = fn() { s += "x"; };
+                f();
+            }
+            "#,
+        );
+        assert!(
+            mutated.iter().any(|s| s == "s"),
+            "expected `s` mutation detected; got {mutated:?}"
+        );
+    }
+
+    #[test]
+    fn multiple_captures_only_mutated_one_flagged() {
+        // Read `r`, write `w`.  Only `w` should appear in mutated.
+        let mutated = first_capturing_lambda_mutations(
+            r"
+            fn test() {
+                r = 100;
+                w = 0;
+                f = fn() { w = w + r; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            mutated.iter().any(|s| s == "w"),
+            "expected `w` mutation detected; got {mutated:?}"
+        );
+        assert!(
+            !mutated.iter().any(|s| s == "r"),
+            "did not expect `r` (read-only) in mutated set; got {mutated:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase02d_i_scalars_to_box_tests {
+    //! Plan-22 phase 02d-i — verify the parent-function
+    //! `scalars_to_box` field is populated correctly across the
+    //! representative shapes phase 02d-iii will consume.  No
+    //! behavior change at this phase: the field is detection-only.
+
+    use crate::parser::Parser;
+
+    /// Helper: parse a snippet with a `fn test() { … }` and return
+    /// `test`'s `scalars_to_box` field (sorted for stable assertion).
+    fn test_fn_scalars_to_box(source: &str) -> Vec<String> {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(source, "phase02d_i_test", false);
+        let test_d_nr = p.data.def_nr("n_test");
+        if test_d_nr == u32::MAX {
+            return Vec::new();
+        }
+        let mut names = p.data.def(test_d_nr).scalars_to_box.clone();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn read_only_capture_yields_empty_box_set() {
+        // Case A — capture `n`, read it, never write.
+        // No name should be queued for boxing.
+        let names = test_fn_scalars_to_box(
+            r"
+            fn test() {
+                n = 5;
+                f = fn(x: integer) -> integer { x + n };
+                _ = f(10);
+            }
+            ",
+        );
+        assert!(
+            names.is_empty(),
+            "expected empty scalars_to_box for read-only capture; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn integer_mutated_capture_pushed() {
+        // The canonical 02d-iii target: `n = 0; f = fn() { n = n + 1; }`.
+        let names = test_fn_scalars_to_box(
+            r"
+            fn test() {
+                n = 0;
+                f = fn() { n = n + 1; };
+                f();
+            }
+            ",
+        );
+        assert_eq!(
+            names,
+            vec!["n".to_string()],
+            "expected `n` queued for boxing; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn text_mutated_capture_pushed() {
+        // `s` is text — boxable per the 02d design (Text is in
+        // the scalar set even though it has internal heap storage).
+        let names = test_fn_scalars_to_box(
+            r#"
+            fn test() {
+                s = "";
+                f = fn() { s += "x"; };
+                f();
+            }
+            "#,
+        );
+        assert_eq!(
+            names,
+            vec!["s".to_string()],
+            "expected `s` queued for boxing; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn struct_capture_not_pushed() {
+        // `s` is a struct (Reference type) — handled by phase 02c
+        // (auto-Reference), NOT by 02d-iii's boxing.  The
+        // scalars_to_box field must EXCLUDE Reference captures.
+        let names = test_fn_scalars_to_box(
+            r"
+            struct S { x: integer }
+            fn test() {
+                s = S { x: 0 };
+                f = fn() { s.x = 7; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            names.is_empty(),
+            "Reference captures must NOT be queued for boxing; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn multiple_captures_only_mutated_scalars_pushed() {
+        // Read `r`, write `w`.  Only `w` (the mutated scalar) is
+        // queued.  `r` (read-only) is excluded by phase 01's
+        // mutated_captures filter.
+        let names = test_fn_scalars_to_box(
+            r"
+            fn test() {
+                r = 100;
+                w = 0;
+                f = fn() { w = w + r; };
+                f();
+            }
+            ",
+        );
+        assert_eq!(
+            names,
+            vec!["w".to_string()],
+            "expected `w` queued (not `r`); got {names:?}"
+        );
+    }
+
+    #[test]
+    fn multi_scalar_capture_all_pushed() {
+        // Two scalars, both mutated.  Both should be queued.
+        // (Sorted by the helper for stable assertion.)
+        let names = test_fn_scalars_to_box(
+            r"
+            fn test() {
+                a = 0;
+                b = 0;
+                f = fn() {
+                    a = a + 1;
+                    b = b + 2;
+                };
+                f();
+            }
+            ",
+        );
+        assert_eq!(
+            names,
+            vec!["a".to_string(), "b".to_string()],
+            "expected both `a` and `b` queued; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn dedup_when_two_lambdas_mutate_same_capture() {
+        // Two separate lambdas in `test` both mutate `n`.  The
+        // accumulator must dedup — `n` appears once, not twice.
+        let names = test_fn_scalars_to_box(
+            r"
+            fn test() {
+                n = 0;
+                f1 = fn() { n = n + 1; };
+                f2 = fn() { n = n + 2; };
+                f1();
+                f2();
+            }
+            ",
+        );
+        assert_eq!(
+            names,
+            vec!["n".to_string()],
+            "expected `n` queued exactly once (deduped); got {names:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase02d_ii_cell_struct_synthesis_tests {
+    //! Plan-22 phase 02d-ii — verify `synthesize_cell_structs`
+    //! creates the canonical `__cell_<T>` structs in `Data` after
+    //! parsing snippets that mutate scalar captures.  The structs
+    //! are foundation infrastructure for 02d-iii's outer-binding
+    //! rewrite; at this phase they exist but are never allocated
+    //! or referenced (no behavior change).
+
+    use crate::data::DefType;
+    use crate::parser::Parser;
+
+    /// Helper: parse a snippet and return the `(name, def_type)`
+    /// of every `__cell_*` definition that exists in `Data`.
+    fn cells_after(source: &str) -> Vec<(String, DefType)> {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(source, "phase02d_ii_test", false);
+        let mut cells = Vec::new();
+        for d_nr in 0..p.data.definitions() {
+            let def = p.data.def(d_nr);
+            if def.name.starts_with("__cell_") {
+                cells.push((def.name.clone(), def.def_type.clone()));
+            }
+        }
+        cells.sort_by(|a, b| a.0.cmp(&b.0));
+        cells
+    }
+
+    /// Helper: parse a snippet and return `value` field's type
+    /// signature for the named cell struct.  Panics if the cell or
+    /// its `value` attribute is missing — those failures should
+    /// surface as test failures, not silent `None`s.
+    fn cell_value_signature(source: &str, cell_name: &str) -> String {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(source, "phase02d_ii_test", false);
+        let d_nr = p.data.def_nr(cell_name);
+        assert_ne!(d_nr, u32::MAX, "cell `{cell_name}` not found");
+        let def = p.data.def(d_nr);
+        let attr = def
+            .attributes
+            .iter()
+            .find(|a| a.name == "value")
+            .unwrap_or_else(|| panic!("`value` attribute missing on `{cell_name}`"));
+        format!("{:?}", attr.typedef)
+    }
+
+    #[test]
+    fn integer_capture_creates_cell_integer() {
+        let cells = cells_after(
+            r"
+            fn test() {
+                n = 0;
+                f = fn() { n = n + 1; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            cells
+                .iter()
+                .any(|(n, t)| n == "__cell_integer" && *t == DefType::Struct),
+            "expected `__cell_integer` Struct in Data; got {cells:?}"
+        );
+    }
+
+    #[test]
+    fn text_capture_creates_cell_text() {
+        let cells = cells_after(
+            r#"
+            fn test() {
+                s = "";
+                f = fn() { s += "x"; };
+                f();
+            }
+            "#,
+        );
+        assert!(
+            cells
+                .iter()
+                .any(|(n, t)| n == "__cell_text" && *t == DefType::Struct),
+            "expected `__cell_text` Struct in Data; got {cells:?}"
+        );
+    }
+
+    #[test]
+    fn read_only_capture_creates_no_cell() {
+        let cells = cells_after(
+            r"
+            fn test() {
+                n = 5;
+                f = fn(x: integer) -> integer { x + n };
+                _ = f(10);
+            }
+            ",
+        );
+        assert!(
+            cells.is_empty(),
+            "no cell should be synthesised for read-only capture; got {cells:?}"
+        );
+    }
+
+    #[test]
+    fn struct_capture_creates_no_cell() {
+        // Struct (Reference) captures are handled by phase 02c's
+        // auto-Reference path, NOT by 02d's boxing.  No `__cell_*`
+        // should appear.
+        let cells = cells_after(
+            r"
+            struct S { x: integer }
+            fn test() {
+                s = S { x: 0 };
+                f = fn() { s.x = 7; };
+                f();
+            }
+            ",
+        );
+        assert!(
+            cells.is_empty(),
+            "no cell should be synthesised for struct capture; got {cells:?}"
+        );
+    }
+
+    #[test]
+    fn dedup_two_integer_captures_share_one_cell() {
+        // Two separate scalar bindings, both integer, both
+        // mutated.  Exactly one `__cell_integer` should appear.
+        let cells = cells_after(
+            r"
+            fn test() {
+                a = 0;
+                b = 0;
+                f = fn() {
+                    a = a + 1;
+                    b = b + 2;
+                };
+                f();
+            }
+            ",
+        );
+        let count = cells.iter().filter(|(n, _)| n == "__cell_integer").count();
+        assert_eq!(
+            count, 1,
+            "expected exactly one `__cell_integer`; got {count} (cells={cells:?})"
+        );
+    }
+
+    #[test]
+    fn distinct_types_create_distinct_cells() {
+        // Mix of scalar types — each should get its own cell.
+        let cells = cells_after(
+            r#"
+            fn test() {
+                n = 0;
+                s = "";
+                b = false;
+                f = fn() {
+                    n = n + 1;
+                    s += "x";
+                    b = !b;
+                };
+                f();
+            }
+            "#,
+        );
+        let names: Vec<String> = cells.iter().map(|(n, _)| n.clone()).collect();
+        assert!(
+            names.contains(&"__cell_integer".to_string()),
+            "expected __cell_integer; got {names:?}"
+        );
+        assert!(
+            names.contains(&"__cell_text".to_string()),
+            "expected __cell_text; got {names:?}"
+        );
+        assert!(
+            names.contains(&"__cell_boolean".to_string()),
+            "expected __cell_boolean; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn cell_value_field_carries_canonical_type() {
+        // Sanity check: the cell's `value` field exists and the
+        // type signature renders as `Integer(...)` (the canonical
+        // I32 template).  Phase 02d-iii will read/write through
+        // this field.
+        let sig = cell_value_signature(
+            r"
+            fn test() {
+                n = 0;
+                f = fn() { n = n + 1; };
+                f();
+            }
+            ",
+            "__cell_integer",
+        );
+        assert!(
+            sig.starts_with("Integer("),
+            "cell `value` field should be Integer-typed; got `{sig}`"
+        );
+    }
+
+    #[test]
+    fn dedup_across_two_lambdas() {
+        // Two lambdas, each mutating its own integer capture.
+        // Both reuse the single `__cell_integer` struct (the cell
+        // is keyed by type, not by binding).
+        let cells = cells_after(
+            r"
+            fn test() {
+                a = 0;
+                b = 0;
+                f1 = fn() { a = a + 1; };
+                f2 = fn() { b = b + 1; };
+                f1();
+                f2();
+            }
+            ",
+        );
+        let count = cells.iter().filter(|(n, _)| n == "__cell_integer").count();
+        assert_eq!(
+            count, 1,
+            "expected single shared `__cell_integer` across two lambdas; got {count} (cells={cells:?})"
+        );
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase02d_iii_a_type_flip_tests {
+    //! Plan-22 phase 02d-iii.a — verify
+    //! `flip_scalars_to_box_types` replaces each boxed scalar
+    //! local's type in the variables table with its
+    //! `Reference(__cell_<T>, [])` form when invoked.
+    //!
+    //! Foundation step: the helper is shipped but
+    //! INTENTIONALLY NOT WIRED into the parse_function pass-2
+    //! entry yet.  The existing void-return-closure write-back
+    //! mechanism in `parse_call_ref` (control.rs lines
+    //! 3729-3755) handles today's `p86_lambda_capture_*`
+    //! cases by copying the closure-record's scalar attribute
+    //! back to the outer slot after each call.  Activating the
+    //! flip in this commit would break that path
+    //! (the outer slot's shape changes from 8B Integer to 12B
+    //! DbRef, segfaulting the write-back's `v_set`).
+    //!
+    //! 02d-iii.e activates the flip from `parse_function`
+    //! AFTER 02d-iii.b-d have wired cell-based propagation
+    //! (auto-Reference closure-record attribute + shared-DbRef
+    //! reads/writes), at which point the write-back path can
+    //! be removed without a regression.
+    //!
+    //! These tests invoke the helper EXPLICITLY on a parsed
+    //! parser state — they verify the helper's logic in
+    //! isolation, independent of the integration path.
+
+    use crate::data::Type;
+    use crate::parser::Parser;
+
+    /// Helper: parse a snippet, restore pass-2 entry state for
+    /// `n_test` (set context, restore vars), invoke the flip
+    /// helper, and return the type of `var_name` after the
+    /// flip.  Panics if the function or variable is missing.
+    fn flipped_type_of_var(source: &str, var_name: &str) -> Type {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(source, "phase02d_iii_a_test", false);
+        let test_d_nr = p.data.def_nr("n_test");
+        assert_ne!(test_d_nr, u32::MAX, "function `n_test` not found");
+        // Restore parse_function pass-2 entry state for the
+        // test fn: set context + drain the def's saved vars
+        // back into self.vars (the inverse of the save at the
+        // end of parse_function).
+        p.context = test_d_nr;
+        // Reset p.vars to a fresh Function and drain the saved
+        // pass-2 variables back into it (mirrors parse_function's
+        // line-547 `Function::new` + line-853 `vars.append`).
+        p.vars = crate::variables::Function::new("phase02d_iii_a_test", "test.loft");
+        p.vars
+            .append(&mut p.data.definitions[test_d_nr as usize].variables);
+        // Invoke the flip helper under test.
+        p.flip_scalars_to_box_types();
+        let v_nr = p.vars.var(var_name);
+        assert_ne!(v_nr, u16::MAX, "variable `{var_name}` not found");
+        p.vars.tp(v_nr).clone()
+    }
+
+    #[test]
+    fn integer_mutated_capture_flipped_to_reference_cell_integer() {
+        // The canonical 02d-iii target.  After explicit flip,
+        // `n`'s type becomes `Reference(__cell_integer, [])`.
+        let tp = flipped_type_of_var(
+            r"
+            fn test() {
+                n = 0;
+                f = fn() { n = n + 1; };
+                f();
+            }
+            ",
+            "n",
+        );
+        match tp {
+            Type::Reference(_, ref deps) => {
+                assert!(
+                    deps.is_empty(),
+                    "boxed-scalar Reference should be heap-owned (empty deps); got {deps:?}"
+                );
+            }
+            other => panic!("expected Reference(__cell_integer, []); got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_only_capture_keeps_integer_type() {
+        // Case A — capture `n` for reading only.  Type stays as
+        // Integer; `flip_scalars_to_box_types` must NOT touch it.
+        let tp = flipped_type_of_var(
+            r"
+            fn test() {
+                n = 5;
+                f = fn(x: integer) -> integer { x + n };
+                _ = f(10);
+            }
+            ",
+            "n",
+        );
+        assert!(
+            matches!(tp, Type::Integer(_)),
+            "read-only capture must NOT be flipped; got {tp:?}"
+        );
+    }
+
+    #[test]
+    fn struct_capture_keeps_struct_reference_type() {
+        // Case B (Reference) — `s` is a struct; phase 02c handles
+        // the auto-Reference encoding, NOT 02d-iii's boxing.
+        let tp = flipped_type_of_var(
+            r"
+            struct S { x: integer }
+            fn test() {
+                s = S { x: 0 };
+                f = fn() { s.x = 7; };
+                f();
+            }
+            ",
+            "s",
+        );
+        match tp {
+            Type::Reference(_, _) => {
+                // d_nr should NOT be a __cell_* struct; it's S.
+                // (The flip helper doesn't touch struct
+                // captures because `cell_struct_name` returns
+                // `None` for `Type::Reference`.)
+            }
+            other => panic!("expected Reference(S, _); got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_mutation_no_flip() {
+        // Local `n` exists but is never captured by any closure —
+        // scalars_to_box is empty for `n_test`, so the helper
+        // is a no-op and `n` stays as Integer.
+        let tp = flipped_type_of_var(
+            r"
+            fn test() {
+                n = 5;
+                _ = n + 1;
+            }
+            ",
+            "n",
+        );
+        assert!(
+            matches!(tp, Type::Integer(_)),
+            "uncaptured local must NOT be flipped; got {tp:?}"
+        );
+    }
+
+    #[test]
+    fn multi_scalar_capture_flips_each() {
+        // Two distinct scalar captures, both mutated.  Both
+        // should be flipped to their respective cell References
+        // when the helper is invoked.
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(
+            r#"
+            fn test() {
+                n = 0;
+                s = "";
+                f = fn() {
+                    n = n + 1;
+                    s += "x";
+                };
+                f();
+            }
+            "#,
+            "phase02d_iii_a_test",
+            false,
+        );
+        let test_d_nr = p.data.def_nr("n_test");
+        let cell_int = p.data.def_nr("__cell_integer");
+        let cell_text = p.data.def_nr("__cell_text");
+        assert_ne!(cell_int, u32::MAX, "__cell_integer missing");
+        assert_ne!(cell_text, u32::MAX, "__cell_text missing");
+        // Restore pass-2 entry state and invoke the flip helper.
+        p.context = test_d_nr;
+        // Reset p.vars to a fresh Function and drain the saved
+        // pass-2 variables back into it (mirrors parse_function's
+        // line-547 `Function::new` + line-853 `vars.append`).
+        p.vars = crate::variables::Function::new("phase02d_iii_a_test", "test.loft");
+        p.vars
+            .append(&mut p.data.definitions[test_d_nr as usize].variables);
+        p.flip_scalars_to_box_types();
+        let n_nr = p.vars.var("n");
+        let s_nr = p.vars.var("s");
+        assert_ne!(n_nr, u16::MAX, "`n` not found in vars");
+        assert_ne!(s_nr, u16::MAX, "`s` not found in vars");
+        match p.vars.tp(n_nr) {
+            Type::Reference(d, deps) => {
+                assert_eq!(*d, cell_int, "`n` should point at __cell_integer");
+                assert!(deps.is_empty());
+            }
+            other => panic!("`n` not flipped: {other:?}"),
+        }
+        // Plan-22 phase 02d-vi — text is now flipped via the
+        // bypass guard added in `parse_assign_op` for boxed-text
+        // LHS shape.  `s` should be Reference(__cell_text, []).
+        match p.vars.tp(s_nr) {
+            Type::Reference(d, deps) => {
+                assert_eq!(*d, cell_text, "`s` should point at __cell_text");
+                assert!(deps.is_empty());
+            }
+            other => panic!("`s` not flipped to __cell_text: {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase02d_iii_b_read_auto_deref_tests {
+    //! Plan-22 phase 02d-iii.b — verify
+    //! `auto_deref_boxed_scalar` wraps reads of
+    //! `Reference(__cell_<T>, _)` variables in
+    //! `Call(OpGet<T>, [code, Int(0)])` and returns the
+    //! cell's value-field type.
+    //!
+    //! Foundation step: the helper IS hooked into `parse_var`'s
+    //! natural-return path, but it's a no-op in production
+    //! because no variable carries the trigger type yet (phase
+    //! 02d-iii.a's flip is dormant — see its test module).
+    //! Phase 02d-iii.e activates the flip + this hook fires for
+    //! real on every captured-scalar read in the parent body
+    //! and the closure body.
+    //!
+    //! These tests invoke the helper directly with constructed
+    //! inputs — they verify the wrapping logic in isolation,
+    //! independent of the integration path.
+
+    use crate::data::{Type, Value};
+    use crate::parser::Parser;
+
+    /// Helper: build a parser with defaults loaded so the OpGet*
+    /// definitions exist in `Data`, then synthesise the named
+    /// cell struct via the same machinery phase 02d-ii uses.
+    fn parser_with_cell(value_tp: &Type, cell_name: &str) -> (Parser, u32) {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        // Build the cell struct directly (mirrors
+        // `synthesize_cell_structs`).
+        let cell_d_nr = p
+            .data
+            .add_def(cell_name, p.lexer.pos(), crate::data::DefType::Struct);
+        p.data
+            .add_attribute(&mut p.lexer, cell_d_nr, "value", value_tp.clone());
+        (p, cell_d_nr)
+    }
+
+    #[test]
+    fn integer_cell_wraps_with_op_get_int() {
+        let (mut p, cell_d_nr) = parser_with_cell(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+        );
+        let mut code = Value::Var(7);
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        // Expect: Call(OpGetInt, [Var(7), Int(0)])
+        let op_d_nr = p.data.def_nr("OpGetInt");
+        match &code {
+            Value::Call(d, args) => {
+                assert_eq!(*d, op_d_nr, "expected OpGetInt; got d_nr={d}");
+                assert_eq!(args.len(), 2);
+                assert!(matches!(args[0], Value::Var(7)));
+                assert!(matches!(args[1], Value::Int(0)));
+            }
+            other => panic!("expected Call(OpGetInt, …); got {other:?}"),
+        }
+        assert!(
+            matches!(new_t, Type::Integer(_)),
+            "expected Integer return type; got {new_t:?}"
+        );
+    }
+
+    #[test]
+    fn text_cell_wraps_with_op_get_text() {
+        let (mut p, cell_d_nr) = parser_with_cell(&Type::Text(vec![]), "__cell_text");
+        let mut code = Value::Var(3);
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let op_d_nr = p.data.def_nr("OpGetText");
+        match &code {
+            Value::Call(d, args) => {
+                assert_eq!(*d, op_d_nr);
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected Call(OpGetText, …); got {other:?}"),
+        }
+        assert!(matches!(new_t, Type::Text(_)));
+    }
+
+    #[test]
+    fn boolean_cell_wraps_byte_then_eq() {
+        let (mut p, cell_d_nr) = parser_with_cell(&Type::Boolean, "__cell_boolean");
+        let mut code = Value::Var(5);
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        // Expect: Call(OpEqInt, [Call(OpGetByte, [Var(5), Int(0), Int(0)]), Int(1)])
+        let eq_d_nr = p.data.def_nr("OpEqInt");
+        let byte_d_nr = p.data.def_nr("OpGetByte");
+        match &code {
+            Value::Call(d, args) => {
+                assert_eq!(*d, eq_d_nr, "outer call should be OpEqInt");
+                assert_eq!(args.len(), 2);
+                match &args[0] {
+                    Value::Call(inner_d, inner_args) => {
+                        assert_eq!(*inner_d, byte_d_nr);
+                        assert_eq!(inner_args.len(), 3);
+                    }
+                    other => panic!("expected inner OpGetByte; got {other:?}"),
+                }
+                assert!(matches!(args[1], Value::Int(1)));
+            }
+            other => panic!("expected Call(OpEqInt, …); got {other:?}"),
+        }
+        assert_eq!(new_t, Type::Boolean);
+    }
+
+    #[test]
+    fn float_cell_wraps_with_op_get_float() {
+        let (mut p, cell_d_nr) = parser_with_cell(&Type::Float, "__cell_float");
+        let mut code = Value::Var(2);
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let op_d_nr = p.data.def_nr("OpGetFloat");
+        if let Value::Call(d, _) = &code {
+            assert_eq!(*d, op_d_nr);
+        } else {
+            panic!("expected Call(OpGetFloat, …); got {code:?}");
+        }
+        assert_eq!(new_t, Type::Float);
+    }
+
+    #[test]
+    fn character_cell_wraps_with_op_get_character() {
+        let (mut p, cell_d_nr) = parser_with_cell(&Type::Character, "__cell_character");
+        let mut code = Value::Var(4);
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let op_d_nr = p.data.def_nr("OpGetCharacter");
+        if let Value::Call(d, _) = &code {
+            assert_eq!(*d, op_d_nr);
+        } else {
+            panic!("expected Call(OpGetCharacter, …); got {code:?}");
+        }
+        assert_eq!(new_t, Type::Character);
+    }
+
+    #[test]
+    fn non_cell_reference_returns_unchanged() {
+        // A regular struct Reference (not a __cell_*) must NOT
+        // be auto-dereffed.  This is the dormancy guarantee for
+        // production code with no boxed scalars.
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        // Synthesise a non-cell struct directly so the test
+        // doesn't depend on which structs the defaults provide.
+        let s_d_nr = p
+            .data
+            .add_def("MyStruct", p.lexer.pos(), crate::data::DefType::Struct);
+        let mut code = Value::Var(1);
+        let original_code = code.clone();
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(s_d_nr, vec![]));
+        assert_eq!(
+            code, original_code,
+            "non-cell Reference must not be wrapped"
+        );
+        assert!(
+            matches!(new_t, Type::Reference(_, _)),
+            "non-cell Reference type must pass through unchanged; got {new_t:?}"
+        );
+    }
+
+    #[test]
+    fn non_reference_type_returns_unchanged() {
+        // Passing a bare Integer through the helper must be a
+        // no-op (no Reference, nothing to deref).
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let mut code = Value::Int(42);
+        let original_code = code.clone();
+        let new_t = p.auto_deref_boxed_scalar(
+            &mut code,
+            Type::Integer(crate::data::IntegerSpec::signed32()),
+        );
+        assert_eq!(code, original_code, "Integer input must not be wrapped");
+        assert!(matches!(new_t, Type::Integer(_)));
+    }
+
+    #[test]
+    fn parse_var_path_no_op_for_non_cell_locals() {
+        // Smoke test through the parse_var integration path: a
+        // normal local Integer goes through `parse_var` ->
+        // `auto_deref_boxed_scalar` -> returns unchanged.
+        // Verifies the production hook is dormant for non-boxed
+        // variables.
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        p.parse_str(
+            r"
+            fn test() {
+                n = 42;
+                _ = n + 1;
+            }
+            ",
+            "phase02d_iii_b_test",
+            false,
+        );
+        let test_d_nr = p.data.def_nr("n_test");
+        let vars = &p.data.def(test_d_nr).variables;
+        let mut found_n = false;
+        for v_nr in 0..vars.next_var() {
+            if vars.name(v_nr) == "n" {
+                assert!(
+                    matches!(vars.tp(v_nr), Type::Integer(_)),
+                    "non-boxed `n` must stay Integer; got {:?}",
+                    vars.tp(v_nr)
+                );
+                found_n = true;
+            }
+        }
+        assert!(found_n, "`n` not found in vars table");
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase02d_iii_c_assign_rewrite_tests {
+    //! Plan-22 phase 02d-iii.c — verify
+    //! `boxed_scalar_assign_rewrite` builds the correct IR for
+    //! first vs subsequent assignments to a boxed-scalar local,
+    //! plus `change_var_type` guard preserves the flipped type.
+    //!
+    //! Foundation step: helpers are shipped as infrastructure; a
+    //! `parse_assign_op` hook activates them with 02d-iii.e
+    //! (after 02d-iii.d wires the closure-body write rewrite).
+    //! With the flip dormant in production, no variable carries
+    //! the trigger type and the helpers return None / no-op for
+    //! every assignment in real code.
+
+    use crate::data::{Type, Value};
+    use crate::parser::Parser;
+
+    /// Helper: build a parser with defaults loaded, synthesise a
+    /// `__cell_<T>` struct with the given value-field type, and
+    /// add a fresh variable named `name` with type
+    /// `Reference(cell_d_nr, [])`.
+    fn parser_with_boxed_local(
+        value_tp: &Type,
+        cell_name: &str,
+        var_name: &str,
+    ) -> (Parser, u32, u16) {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let cell_d_nr = p
+            .data
+            .add_def(cell_name, p.lexer.pos(), crate::data::DefType::Struct);
+        p.data
+            .add_attribute(&mut p.lexer, cell_d_nr, "value", value_tp.clone());
+        let v_nr = p
+            .vars
+            .add_variable(var_name, &Type::Reference(cell_d_nr, vec![]), &mut p.lexer);
+        (p, cell_d_nr, v_nr)
+    }
+
+    #[test]
+    fn first_set_integer_emits_alloc_and_fill() {
+        let (p, cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        let ir = p
+            .boxed_scalar_assign_rewrite(v_nr, "=", Value::Int(42))
+            .expect("expected rewrite IR");
+        let op_db = p.data.def_nr("OpDatabase");
+        let op_set = p.data.def_nr("OpSetInt");
+        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type);
+        let Value::Insert(ops) = ir else {
+            panic!("expected Insert");
+        };
+        assert_eq!(ops.len(), 3);
+        match &ops[0] {
+            Value::Set(set_v, val) => {
+                assert_eq!(*set_v, v_nr);
+                assert!(matches!(**val, Value::Null));
+            }
+            other => panic!("op[0] should be Set(n, Null); got {other:?}"),
+        }
+        match &ops[1] {
+            Value::Call(d, args) => {
+                assert_eq!(*d, op_db);
+                assert_eq!(args.len(), 2);
+                assert!(matches!(args[0], Value::Var(x) if x == v_nr));
+                assert!(matches!(args[1], Value::Int(kt) if kt == cell_kt));
+            }
+            other => panic!("op[1] should be OpDatabase(n, kt); got {other:?}"),
+        }
+        match &ops[2] {
+            Value::Call(d, args) => {
+                assert_eq!(*d, op_set);
+                assert_eq!(args.len(), 3);
+                assert!(matches!(args[0], Value::Var(x) if x == v_nr));
+                assert!(matches!(args[1], Value::Int(0)));
+                assert!(matches!(args[2], Value::Int(42)));
+            }
+            other => panic!("op[2] should be OpSetInt(n, 0, 42); got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subsequent_set_integer_emits_field_write_only() {
+        let (mut p, _cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        p.vars.defined(v_nr);
+        let ir = p
+            .boxed_scalar_assign_rewrite(v_nr, "=", Value::Int(7))
+            .expect("expected rewrite IR");
+        let op_set = p.data.def_nr("OpSetInt");
+        match ir {
+            Value::Call(d, args) => {
+                assert_eq!(d, op_set);
+                assert_eq!(args.len(), 3);
+                assert!(matches!(args[0], Value::Var(x) if x == v_nr));
+                assert!(matches!(args[1], Value::Int(0)));
+                assert!(matches!(args[2], Value::Int(7)));
+            }
+            other => panic!("expected Call(OpSetInt, ...); got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_first_set_uses_op_set_text() {
+        let (p, _cell_d_nr, v_nr) =
+            parser_with_boxed_local(&Type::Text(vec![]), "__cell_text", "s");
+        let op_set = p.data.def_nr("OpSetText");
+        let ir = p
+            .boxed_scalar_assign_rewrite(v_nr, "=", Value::Text("hi".to_string()))
+            .expect("expected rewrite IR");
+        let Value::Insert(ops) = ir else {
+            panic!("expected Insert");
+        };
+        if let Value::Call(d, _) = &ops[2] {
+            assert_eq!(*d, op_set);
+        } else {
+            panic!("op[2] not a Call");
+        }
+    }
+
+    #[test]
+    fn float_first_set_uses_op_set_float() {
+        let (p, _cell_d_nr, v_nr) = parser_with_boxed_local(&Type::Float, "__cell_float", "f");
+        let op_set = p.data.def_nr("OpSetFloat");
+        let ir = p
+            .boxed_scalar_assign_rewrite(v_nr, "=", Value::Float(2.5))
+            .expect("expected rewrite IR");
+        if let Value::Insert(ops) = &ir
+            && let Value::Call(d, _) = &ops[2]
+        {
+            assert_eq!(*d, op_set);
+        } else {
+            panic!("expected Insert([_, _, Call(OpSetFloat, _)]); got {ir:?}");
+        }
+    }
+
+    #[test]
+    fn non_boxed_var_returns_none() {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let v_nr = p.vars.add_variable(
+            "n",
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            &mut p.lexer,
+        );
+        let result = p.boxed_scalar_assign_rewrite(v_nr, "=", Value::Int(0));
+        assert!(
+            result.is_none(),
+            "non-boxed Integer must not be rewritten; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn non_cell_reference_returns_none() {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let s_d_nr = p
+            .data
+            .add_def("MyStruct", p.lexer.pos(), crate::data::DefType::Struct);
+        let v_nr = p
+            .vars
+            .add_variable("s", &Type::Reference(s_d_nr, vec![]), &mut p.lexer);
+        let result = p.boxed_scalar_assign_rewrite(v_nr, "=", Value::Null);
+        assert!(
+            result.is_none(),
+            "non-cell Reference must not be rewritten; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn compound_op_returns_none() {
+        let (p, _cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        for op in &["+=", "-=", "*=", "/=", "%="] {
+            let result = p.boxed_scalar_assign_rewrite(v_nr, op, Value::Int(1));
+            assert!(
+                result.is_none(),
+                "op `{op}` must not be rewritten by 02d-iii.c; got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn boolean_falls_through() {
+        // OpSetByte takes (ref, fld, min, val); this helper
+        // doesn't yet handle the 4-arg shape.  Phase 02d-iii.e
+        // (or later) extends boolean.
+        let (p, _cell_d_nr, v_nr) = parser_with_boxed_local(&Type::Boolean, "__cell_boolean", "b");
+        let result = p.boxed_scalar_assign_rewrite(v_nr, "=", Value::Boolean(true));
+        assert!(
+            result.is_none(),
+            "boolean cell falls through in 02d-iii.c; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn change_var_type_guard_preserves_flipped_type() {
+        // The `change_var_type` guard added in 02d-iii.c: if the
+        // variable's current type is `Reference(__cell_integer, _)`,
+        // calling `change_var_type` with an Integer arg must NOT
+        // revert it.  Without this guard, parse_assign_op's
+        // `change_var(to, &s_type)` would undo the flip on every
+        // `n = expr`.
+        let (mut p, cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        // The guard only fires when !first_pass.
+        p.first_pass = false;
+        p.change_var_type(v_nr, &Type::Integer(crate::data::IntegerSpec::signed32()));
+        match p.vars.tp(v_nr) {
+            Type::Reference(d, _) => {
+                assert_eq!(*d, cell_d_nr, "type was reverted; flip not preserved");
+            }
+            other => panic!("type was reverted to {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod plan22_phase02d_iii_d_alloc_prepend_tests {
+    //! Plan-22 phase 02d-iii.d — verify
+    //! `maybe_prepend_cell_alloc` wraps a first-set
+    //! `Call(OpSet<T>, [Var(n), 0, rhs])` with the cell
+    //! allocation preamble, and is a no-op for subsequent sets,
+    //! closure-body writes (where LHS inner is non-Var), and
+    //! non-boxed locals.
+    //!
+    //! The closure-body write rewrite is delivered FOR FREE by
+    //! 02d-iii.b's auto-deref + `call_to_set_op` in
+    //! `parser/operators.rs:283` — the existing machinery
+    //! already maps `OpGetInt` → `OpSetInt` when the LHS shape
+    //! is `Call(OpGetInt, [<inner>, Int(pos)])`.  This helper
+    //! delivers the OUTER-binding alloc that the auto-deref +
+    //! `call_to_set_op` path doesn't provide.
+    //!
+    //! Foundation step: helper is shipped as infrastructure;
+    //! a `parse_assign_op` hook activates it with 02d-iii.e.
+
+    use crate::data::{Type, Value};
+    use crate::parser::Parser;
+
+    /// Helper: build a parser with defaults loaded, synthesise a
+    /// `__cell_<T>` struct, and add a fresh boxed-scalar local.
+    fn parser_with_boxed_local(
+        value_tp: &Type,
+        cell_name: &str,
+        var_name: &str,
+    ) -> (Parser, u32, u16) {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let cell_d_nr = p
+            .data
+            .add_def(cell_name, p.lexer.pos(), crate::data::DefType::Struct);
+        p.data
+            .add_attribute(&mut p.lexer, cell_d_nr, "value", value_tp.clone());
+        let v_nr = p
+            .vars
+            .add_variable(var_name, &Type::Reference(cell_d_nr, vec![]), &mut p.lexer);
+        (p, cell_d_nr, v_nr)
+    }
+
+    #[test]
+    fn first_set_wraps_with_alloc() {
+        let (mut p, cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        let op_get = p.data.def_nr("OpGetInt");
+        let op_set = p.data.def_nr("OpSetInt");
+        let op_db = p.data.def_nr("OpDatabase");
+        let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(0)]);
+        let result = Value::Call(
+            op_set,
+            vec![Value::Var(v_nr), Value::Int(0), Value::Int(42)],
+        );
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type);
+        let Value::Insert(ops) = wrapped else {
+            panic!("expected Insert wrap; got non-Insert");
+        };
+        assert_eq!(ops.len(), 3);
+        match &ops[0] {
+            Value::Set(set_v, val) => {
+                assert_eq!(*set_v, v_nr);
+                assert!(matches!(**val, Value::Null));
+            }
+            other => panic!("op[0] should be Set(n, Null); got {other:?}"),
+        }
+        match &ops[1] {
+            Value::Call(d, args) => {
+                assert_eq!(*d, op_db);
+                assert!(matches!(args[0], Value::Var(x) if x == v_nr));
+                assert!(matches!(args[1], Value::Int(kt) if kt == cell_kt));
+            }
+            other => panic!("op[1] should be OpDatabase(n, kt); got {other:?}"),
+        }
+        assert_eq!(ops[2], result, "op[2] should be the original OpSetInt call");
+        assert!(
+            p.vars.is_defined(v_nr),
+            "variable should be marked defined after first-set alloc"
+        );
+    }
+
+    #[test]
+    fn subsequent_set_unchanged() {
+        let (mut p, _cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        p.vars.defined(v_nr);
+        let op_get = p.data.def_nr("OpGetInt");
+        let op_set = p.data.def_nr("OpSetInt");
+        let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(0)]);
+        let result = Value::Call(op_set, vec![Value::Var(v_nr), Value::Int(0), Value::Int(7)]);
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        assert_eq!(wrapped, result, "subsequent set should not be wrapped");
+    }
+
+    #[test]
+    fn closure_body_lhs_is_no_op() {
+        // When the LHS auto-deref's inner is a Call (e.g.
+        // get_field(closure, n_field)) instead of Var(n), the
+        // helper is a no-op — the cell was already allocated by
+        // the parent.
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let op_get = p.data.def_nr("OpGetInt");
+        let op_set = p.data.def_nr("OpSetInt");
+        let fake_get_field = Value::Call(op_get, vec![Value::Var(99), Value::Int(8)]);
+        let lhs = Value::Call(op_get, vec![fake_get_field.clone(), Value::Int(0)]);
+        let result = Value::Call(op_set, vec![fake_get_field, Value::Int(0), Value::Int(11)]);
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        assert_eq!(
+            wrapped, result,
+            "closure-body LHS (non-Var inner) should not be wrapped"
+        );
+    }
+
+    #[test]
+    fn non_boxed_lhs_is_no_op() {
+        let mut p = Parser::new();
+        let _ = p.parse_dir("default", true, false);
+        let s_d_nr = p
+            .data
+            .add_def("MyStruct", p.lexer.pos(), crate::data::DefType::Struct);
+        let v_nr = p
+            .vars
+            .add_variable("s", &Type::Reference(s_d_nr, vec![]), &mut p.lexer);
+        let op_get = p.data.def_nr("OpGetInt");
+        let op_set = p.data.def_nr("OpSetInt");
+        let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(0)]);
+        let result = Value::Call(
+            op_set,
+            vec![Value::Var(v_nr), Value::Int(0), Value::Int(99)],
+        );
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        assert_eq!(
+            wrapped, result,
+            "non-cell Reference LHS should not be wrapped"
+        );
+    }
+
+    #[test]
+    fn non_call_lhs_is_no_op() {
+        let (mut p, _cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        let lhs = Value::Var(v_nr);
+        let result = Value::Set(v_nr, Box::new(Value::Int(5)));
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        assert_eq!(
+            wrapped, result,
+            "non-Call LHS (no auto-deref pattern) should not be wrapped"
+        );
+    }
+
+    #[test]
+    fn lhs_with_non_zero_offset_is_no_op() {
+        // Non-zero offset means struct field read, not cell
+        // value read.  Helper returns unchanged.
+        let (mut p, _cell_d_nr, v_nr) = parser_with_boxed_local(
+            &Type::Integer(crate::data::IntegerSpec::signed32()),
+            "__cell_integer",
+            "n",
+        );
+        let op_get = p.data.def_nr("OpGetInt");
+        let op_set = p.data.def_nr("OpSetInt");
+        let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(8)]);
+        let result = Value::Call(op_set, vec![Value::Var(v_nr), Value::Int(8), Value::Int(3)]);
+        let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
+        assert_eq!(wrapped, result, "non-zero-offset LHS should not be wrapped");
+    }
+
+    #[test]
+    fn text_cell_first_set_uses_correct_kt() {
+        let (mut p, cell_d_nr, v_nr) =
+            parser_with_boxed_local(&Type::Text(vec![]), "__cell_text", "s");
+        let op_get = p.data.def_nr("OpGetText");
+        let op_set = p.data.def_nr("OpSetText");
+        let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(0)]);
+        let result = Value::Call(
+            op_set,
+            vec![Value::Var(v_nr), Value::Int(0), Value::Text("hi".into())],
+        );
+        let wrapped = p.maybe_prepend_cell_alloc(result, &lhs);
+        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type);
+        if let Value::Insert(ops) = wrapped
+            && let Value::Call(_, args) = &ops[1]
+        {
+            assert!(matches!(args[1], Value::Int(kt) if kt == cell_kt));
+        } else {
+            panic!("expected Insert with OpDatabase op[1]");
+        }
     }
 }

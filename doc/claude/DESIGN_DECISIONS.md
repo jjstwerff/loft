@@ -91,20 +91,29 @@ Regression guard: `tests/scripts/56-closures.loft::test_capture_timing`.
 ergonomically with value capture AND the alternative has been
 prototyped to show it doesn't destabilise the store-based heap.
 
-**Future direction (recorded 2026-05-04, not a re-opening).**  The
-long-term ambition is to move closer to Rust's closure model —
-borrow-checked `&T` / `&mut T`, FnOnce / FnMut / Fn capability
-hierarchy, statically-enforced single-mutator-or-multiple-readers.
-The current copy-at-definition model with `Reference<T>` and a
-planned `Mutable<T>` stdlib helper covers the
-[EventLoop](plans/future/23-event-loop/README.md) and first-game use cases acceptably;
-the closure-model evolution should be designed against
-real-world friction observed once a real game ships, not
-pre-emptively.  Sequencing for the evolution lives in
-[plans/22-mutable-closures/README.md](plans/22-mutable-closures/README.md) (the design spec) and
-[plans/22-mutable-closures/DISCUSSION.md](plans/22-mutable-closures/DISCUSSION.md)
-(alternatives considered, including the full Rust borrow-checker
-option F).
+**Plan-22 addendum (shipped 2026-05-13).**  Plan-22 (mutable
+closures) ships implicit-by-body mutation classification on top
+of C38.  The "copy-at-definition" framing now applies only to
+truly-immutable scalar captures in pure read-only contexts:
+
+- Captures of `Type::Reference` (struct, nested struct) always
+  use 12B `Parts::DbRef` pointing at the live original (@P260 fix,
+  `src/parser/vectors.rs::synthesize_closure_record`).  Mutations
+  from either side are visible immediately.
+- Captures of scalars whose bodies write to the capture are
+  promoted to heap-owned cells via the phase-02d-iii.a type flip
+  (`Type::Reference(__cell_<T>, vec![])` encoding).  The outer
+  scope and all closures share the same cell.
+- Pure read-only scalar captures remain value-copy (Case A
+  semantics — unchanged).
+
+Case D ("aliased mutating") was decommissioned 2026-05-13: the
+cell + auto-Reference machinery from phases 02-03 already gives
+shared-state semantics, so no rejection was needed.  Design lives
+in the closed plan README:
+[plans/finished/22-mutable-closures/](plans/finished/22-mutable-closures/)
+— Case D's major finding sits in its phase file, and the
+alternatives considered are in `DISCUSSION.md` alongside.
 
 ---
 
@@ -276,7 +285,7 @@ difference to user code — only the runtime cleanup ordering
 changes.  No concrete program shape exists that move-semantics
 gets wrong but copy+null would get right.
 
-The loop-iteration aliasing bug (P250 — `for { (q1, q2) =
+The loop-iteration aliasing bug (@P250 — `for { (q1, q2) =
 make_pair(pa, pb); }` reads `null` for whichever destructured
 variable picked up the FIRST argument on iterations >0) is a
 SEPARATE dep-tracking issue, not a move-vs-copy semantics
@@ -293,7 +302,7 @@ Plan-14 phase 04 records the rationale.
 
 **Revisit when.** A concrete shape appears where move semantics
 is observably wrong but copy + null would be correct — none
-known as of 2026-05-11.  P250's fix lives in dep-tracking, not
+known as of 2026-05-11.  @P250's fix lives in dep-tracking, not
 in the move/copy axis.
 
 ---
@@ -502,7 +511,7 @@ behaviour has held for years without complaint.
 The 2026-05-11 evaluation of the C66 framework against the
 day-to-day loft-development workflow surfaced four corollaries
 that bind the abstract C66 rule to the developer experience.
-All four are tracked under plan-07 phase 4:
+All four are tracked under @PLAN07 phase 4:
 
 1. **Format strings are observability, never raise** — every
    `{...}` interpolation auto-swaps to its Nullable peer at
@@ -549,6 +558,132 @@ the *count* of sites where the warning could fire; 4e.2's
 skip list ensures the warning only fires where defending
 is actually needed; 4g.2 makes diagnosis fast when defence
 is needed and not yet in place.
+
+---
+
+## C67 — Fail at startup, not at runtime (no programmer-side try/catch for internal bugs)
+
+### Question
+
+When a loft program hits an internal-bug runtime panic (a
+`todo!()`-stubbed native, a codegen mistake, an unimplemented
+operator), should we add programmer-side error-recovery
+constructs (`try { … } catch err { … }`, `#panic_safe fn(T)`
+annotations, defensive `unwrap_or_else` boilerplate) so the
+program can continue?
+
+### Evaluation
+
+Three competing pressures:
+
+1. **Robustness perception** — users want loft programs to
+   "just work."  A panic mid-execution feels broken regardless
+   of whose fault it is.
+2. **Programmer burden** — every defensive-wrap mechanism
+   forces the user to remember a pattern.  Forgetting one
+   wrap means a production crash.  The pattern proliferates
+   ("everyone writes try/catch everywhere") until it's
+   indistinguishable from the language not having had error
+   recovery at all.
+3. **VM-route fail-fast** — production loft programs run
+   under a supervisor (systemd, kubernetes, containerd) that
+   already monitors process exits and decides restart /
+   escalate / page.  Hiding crashes from the supervisor
+   defeats its job.
+
+Three layers of failure exist:
+
+- **Internal bugs** (todo!() stubs, type mismatches, codegen
+  errors) — the LANGUAGE / RUNTIME made the mistake.  Should
+  never reach a running program.
+- **Startup-time external faults** (config invalid, port bind
+  failure, missing deps) — the PROGRAM can't sensibly continue.
+  The supervisor needs to know.
+- **Steady-state external faults** (network drop, disk full,
+  transient I/O error) — the LIBRARY handles them gracefully
+  (auto-reconnect, retry, fallback to default).  The user-code
+  in the loft program never sees them.
+
+### Decision
+
+**Closed (2026-05-13)** as a layered policy.  The user's framing:
+
+> *"I do not want to burden the programmer with… write try
+> catch or your program will fail.  So everything will need a
+> try catch to function, we should not go that path.  Things
+> have to function properly.  We can fail but that should be
+> on startup and not during the running of a program."*
+>
+> *"We can still allow for runtime exceptions in the future,
+> things can and will break.  Though the detection of it needs
+> to be in a start-up phase, we go the VM route of failing
+> fast so the VM manager is informed of a problem."*
+>
+> *"After initial startup we will do our utmost best to keep
+> running."*
+
+Three load-bearing rules:
+
+1. **Internal bugs are caught at compile time, not at
+   runtime.**  The codegen refuses to emit a binary that
+   contains a reachable `todo!()` stub or any other
+   would-panic-on-call construct.  If a loft program would
+   panic from an internal mistake when called, the build
+   fails with a clear message ("native fn `n_X` has no
+   implementation; wire it in src/codegen_runtime.rs or run
+   via --interpret").  This is the **compile-time** layer.
+   Sibling work: every codegen path that historically emitted
+   `todo!()` for an unimplemented native is now a hard
+   compile-error per @P269.
+2. **Startup faults exit the program with non-zero status.**
+   No catch_unwind, no logging-and-continuing.  The supervisor
+   sees the exit code and decides.  This is the **VM-route
+   fail-fast** layer.
+3. **Steady-state runtime faults are HANDLED BY LIBRARIES,
+   not by user code.**  lib/web's WebSocket auto-reconnects.
+   lib/server's eventual `serve(handler)` primitive owns its
+   own per-request `catch_unwind` (logs + 500 + continues
+   serving).  lib/io returns explicit error values rather than
+   panicking.  The USER's loft program never writes
+   `try { … } catch { … }` for these — the LIBRARY hides the
+   mechanism behind a clean API.  This is the **best-effort
+   keep-running** layer.
+
+**No `try { … } catch err { … }` language construct, no
+`#panic_safe` annotation, no programmer-side `?? null`
+boilerplate** for internal-bug recovery.  Loft's typed-error
+infrastructure (per CLAUDE.md) IS allowed — that's about
+EXPLICIT user-domain errors (parse failures, validation,
+business-logic invariants) where the user wrote code that
+returns `Result`-like values and consciously handles them.
+That's different from internal-bug recovery, which is what
+this decision rejects.
+
+### Revisit when
+
+- A class of internal bug surfaces that compile-time analysis
+  CAN'T statically prove safe (e.g. parser-generated dispatch
+  to runtime-discovered code paths).  Then the lib/server-style
+  catch boundary may need to extend deeper.
+- A real production loft program is run under a supervisor
+  that genuinely benefits from in-process recovery (e.g. a
+  long-running game server where restart cost is high), AND
+  the library-level `serve(handler)` primitives can't cover
+  the use case.  Then a narrow loft-side error-recovery
+  primitive may be evaluated.
+- User-code patterns emerge that NATURALLY want exception-style
+  flow (e.g. deeply-nested validation chains where the typed-
+  error mechanism becomes more boilerplate than the catch
+  would).  Then the typed-error infrastructure may evolve;
+  this decision specifically blocks try/catch for the
+  internal-bug-recovery use case.
+
+Pointer from the source: see PROBLEMS.md row @P269 for the
+specific incident this decision was crystallised in (server
+process died on todo!() panic during the @P268 fix work);
+the compile-time check shipped 2026-05-13 in
+`src/generation/mod.rs::output_function`.  Memory-system
+mirror: `feedback_fail_at_startup_not_runtime.md`.
 
 ---
 

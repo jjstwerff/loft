@@ -239,7 +239,7 @@ jobs:
       # catches the common failure mode of a source change that
       # breaks the browser pipeline without the contributor noticing.
 
-  # Doc hygiene — non-blocking visibility job.
+  # Doc hygiene — blocking CI gate (promoted 2026-05-18).
   #
   # Runs scripts/check_doc_drift.sh (paths / time / stale / roadmap /
   # refs / libs).  Fails on real drift (broken links, stale "is
@@ -247,18 +247,19 @@ jobs:
   # refs from normal docs); warns on time projections + missing lib
   # READMEs.
   #
-  # `continue-on-error: true` — surfaces the result on every PR
-  # without blocking merge.  Doc drift is soft failure: bad links
-  # don't break the binary.  Authors see the red X next to this job
-  # on the PR page and can choose to fix it (most should) or land
-  # the PR if the change is urgent.
-  #
-  # If you want to gate merges on this, remove `continue-on-error:
-  # true` and re-test that the false-positive rate stays at 0.
+  # Originally `continue-on-error: true` (non-blocking) — promoted to
+  # blocking because every PR-212 cycle that ignored the doc-drift
+  # signal eventually surfaced as a downstream test failure
+  # (broken-link assertion in index_hygiene_clean).  The checker
+  # produces zero false positives on the loft tree; if it fires, the
+  # author needs to fix the doc before merging.  The
+  # `tests/index_hygiene.rs::index_hygiene_clean` assertion already
+  # blocks merges on the same condition — making doc-check blocking
+  # surfaces the failure earlier (8s job) and explains it more
+  # clearly than the test panic.
   doc-check:
-    name: Doc hygiene (non-blocking)
+    name: Doc hygiene
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v5

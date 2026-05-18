@@ -4,8 +4,8 @@
 
 **Closes:** the dual-role complexity hub in
 `src/generation/mod.rs::narrow_int_cast`.  Originally this was
-plan-09 phase 02's scope; phase 00a demoted phase 02 because
-the actual P200 fix didn't need it, but the underlying
+@PLAN09 phase 02's scope; phase 00a demoted phase 02 because
+the actual @P200 fix didn't need it, but the underlying
 complexity remains and is worth splitting for future
 maintainability.
 
@@ -47,13 +47,13 @@ whose Type::Integer subtype is narrow.
 - Used during `#rust"..."` template substitution to decide
   whether to suffix-patch an argument with `as u8` / `as u16`
   etc.  ~125 lines of stacked `if matches!(...)` (the original
-  plan-09 phase 02 target).
+  @PLAN09 phase 02 target).
 
 ## Why split
 
-The dual role creates a "fix one, break the other" trap.  P200's
+The dual role creates a "fix one, break the other" trap.  @P200's
 original write-side fix attempt collided with this exact issue.
-Plan-09 phase 00a found the actual P200 bug was elsewhere (it
+Plan-09 phase 00a found the actual @P200 bug was elsewhere (it
 became phase 10 step 10.3's `IntCompareEmitter`), but the
 dual-role hub remained in place.
 
@@ -175,13 +175,13 @@ longer exists.
 
 ## Future evolution
 
-After plan-12 phase 05 lands, future P-issue fixes can change
+After @PLAN12 phase 05 lands, future P-issue fixes can change
 ONE role without affecting the other.  E.g. if a new P-issue
 needs the param-narrowing role to handle `i64` differently than
 the block-tail role does, only `param_narrow_for_int` changes.
 
-This was the original plan-09 phase 02 motivation.  Plan-09
-delivered without it; plan-12 cleans up the residual complexity.
+This was the original @PLAN09 phase 02 motivation.  Plan-09
+delivered without it; @PLAN12 cleans up the residual complexity.
 
 ## Findings
 

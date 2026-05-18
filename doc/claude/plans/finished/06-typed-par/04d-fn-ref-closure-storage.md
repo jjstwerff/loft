@@ -297,7 +297,7 @@ digits to low hundreds of fn-ref fields per record max).
   risk.
 - **Lambda + par interaction** (closure in worker output → main):
   rebases via existing `StoreRebase` walk at par-stitch time
-  (plan-06 phase 2).  Phase 4d.C explicitly does NOT solve par +
+  (@PLAN06 phase 2).  Phase 4d.C explicitly does NOT solve par +
   capturing-lambda inputs (`par_vec_of_fns_input_t4`); that needs
   separate phase-9 work on closure transport.
 
@@ -338,7 +338,7 @@ digits to low hundreds of fn-ref fields per record max).
   ambiguity, P196 tuple-of-fn-ref native).  P196 is **subsumed by
   this plan** — once 4d.C lands, the storage layout matches the
   native rep and the projection hack disappears.
-- [PROBLEMS.md § 196](../../PROBLEMS.md) — the open issue this
+- [PROBLEMS.md § 196](../../../PROBLEMS.md) — the open issue this
   plan closes.
 - `src/parser/vectors.rs::parse_fn_ref` / `parse_lambda` — the two
   fn-ref construction paths whose IR shape this plan reads.

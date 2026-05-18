@@ -3,10 +3,10 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# EVENT_LOOP — Prioritised event-loop abstraction (client + server)
+# @PLAN23 — EVENT_LOOP — Prioritised event-loop abstraction (client + server)
 
 **Status:** Design spec.  Not yet implemented.  Depends on
-[P213 v4](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
+[@P213 v4](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
 (capturing closures in struct fields).
 
 This document is the concrete design.  Open questions, alternatives
@@ -24,7 +24,7 @@ parallel mechanism are superseded:
 | Earlier design | Status | Replaced by |
 |---|---|---|
 | `Dispatcher` struct + `dispatch(env, &Dispatcher)` ([GAME_CLIENT_LIB.md § Dispatcher](../../../lib_plans/future/10-game-client/README.md#dispatcher-in-loft)) | Superseded paper, never implemented | EventLoop bidirectional handlers |
-| `run_game_loop(GameLoop, tick_fn)` ([WEB_SERVER_LIB.md § Server-side game loop](../08-server/README.md)) | Superseded paper, never implemented | `el::run` with a programmer-supplied `poll_sources` callback (kernel-multiplexed source polling is recorded as future work in [EVENT_LOOP_DISCUSSION.md](DISCUSSION.md), not as a separate API) |
+| `run_game_loop(GameLoop, tick_fn)` ([WEB_SERVER_LIB.md § Server-side game loop](../../../lib_plans/future/08-server/README.md)) | Superseded paper, never implemented | `el::run` with a programmer-supplied `poll_sources` callback (kernel-multiplexed source polling is recorded as future work in [EVENT_LOOP_DISCUSSION.md](DISCUSSION.md), not as a separate API) |
 | `GameEnvelope { sender, recipient, sequence, timestamp, message: WsMessage }` + `MsgType` enum (`lib/game_protocol/src/game_protocol.loft`, 104 lines, used only by its own tests) | Superseded shipped paper — the structs compile but nothing depends on them | EventLoop wire frame: `[handler_id][priority][seq][flags][length][payload]` |
 
 The shipped `lib/game_protocol` will be reshaped (or replaced) to
@@ -350,7 +350,7 @@ has to be ported four ways.
 |---|---|---|---|
 | **Interpreter** (`loft program.loft`) | `cargo run --bin loft -- program.loft` | OS thread blocks on syscalls (`thread::sleep`, `recv`); other threads run | OS scheduler |
 | **Native** (`loft --native program.loft`) | compiled-to-Rust binary | same as interpreter | OS scheduler |
-| **WASM-direct** (`loft --html program.loft`, plan-31) | per-program WASM with embedded interpreter-free generated code | nothing blocks; asyncify yields at instrumented points | `wasm-opt --asyncify --pass-arg=asyncify-imports@<fn>` instruments named host imports; the JS shell's `requestAnimationFrame` resumes |
+| **WASM-direct** (`loft --html program.loft`, @PLAN31) | per-program WASM with embedded interpreter-free generated code | nothing blocks; asyncify yields at instrumented points | `wasm-opt --asyncify --pass-arg=asyncify-imports@<fn>` instruments named host imports; the JS shell's `requestAnimationFrame` resumes |
 | **WASM-interpreter** (`compile_and_run` + browser, TTT v3.5) | `wasm-pack` build of the loft interpreter; runs loft source delivered by HTTP | nothing blocks; the only yield is *return-from-WASM-call* | `compile_and_start` + `resume_frame` re-enter from JS event loop |
 
 The differences cluster around one question: **what does the
@@ -458,7 +458,7 @@ The current native `n_sleep_ms` becomes the interp/native impl;
 the WASM impl is the spin-yield form.  Same loft surface in
 all four.
 
-### Sequencing (within plan-23)
+### Sequencing (within @PLAN23)
 
 Phase boundaries — each is independent and can ship piecemeal:
 
@@ -493,7 +493,7 @@ All four use the **same loft source** — the test pin is
 new target later (e.g., a server-WASM rewrite) gets a fifth
 runner and the same assertion.
 
-### Why this lives in plan-23
+### Why this lives in @PLAN23
 
 The EventLoop already declares "interpreter as baseline" as a
 design principle — the cross-target async story is the natural
@@ -501,10 +501,10 @@ generalisation: every target sees the same loft surface, the
 runtime hides the differences.  The `yield_to_host` primitive is
 EventLoop's lowest-level building block; the iterator-of-events
 abstraction is its user-facing API.  Splitting these into a
-separate plan would require duplicating most of plan-23's
+separate plan would require duplicating most of @PLAN23's
 "transport transparency" + "interpreter as baseline" sections.
 
-This section informs the YIELD.* sub-arc; the rest of plan-23
+This section informs the YIELD.* sub-arc; the rest of @PLAN23
 (handler registry, message envelope, transport-agnostic protocol)
 stays as designed.
 
@@ -531,7 +531,7 @@ serves both — game and server share the "high-priority real player
 actions vs lower-priority ambient work" pattern.  This document
 specifies that abstraction.
 
-P213 (capturing closures in struct fields) is the underlying
+@P213 (capturing closures in struct fields) is the underlying
 language change that makes this abstraction comfortable to express;
 it's a prerequisite, not part of this plan.
 
@@ -932,9 +932,9 @@ Each frame:
 
 This abstraction depends on:
 
-1. **P213 v4 (capturing closures in struct fields)** — the
+1. **@P213 v4 (capturing closures in struct fields)** — the
    `Handler.recv` field holds a fn-ref that captures the user's
-   typed closure.  Today's diagnostic blocks this.  P213 v4
+   typed closure.  Today's diagnostic blocks this.  @P213 v4
    unblocks it.  See [PROBLEMS.md § 213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix).
 
 2. **`OpFormatDatabase` + `database.parse`** — round-trip JSON.
@@ -970,7 +970,7 @@ This abstraction depends on:
 | `lib/game_protocol/src/game_protocol.loft` (extend) | Add priority field to envelope; add handler-id discriminator |
 | `lib/server/src/server.loft` (extend) | Native: accept binary WebSocket frames + handshake handler-id exchange |
 | `lib/mutable/src/mutable.loft` (new) | `Mutable<T>` stdlib helper + `cell / get / set / modify` |
-| `default/01_code.loft` (extend) | If new ops needed: `OpClaimChild` (per P213 v4 design) |
+| `default/01_code.loft` (extend) | If new ops needed: `OpClaimChild` (per @P213 v4 design) |
 | `src/native.rs` (extend) | Native side of `tcp_*` / `ws_*` for binary frames |
 | `doc/claude/EVENT_LOOP.md` (this file) | Update as implementation reveals real friction |
 
@@ -980,7 +980,7 @@ This abstraction depends on:
 
 End-to-end checks once implemented:
 
-1. **P213 v4 regression tests** — see PROBLEMS.md § 213.  Must all
+1. **@P213 v4 regression tests** — see PROBLEMS.md § 213.  Must all
    pass before EventLoop work begins.
 
 2. **EventLoop unit tests:**
@@ -1027,7 +1027,7 @@ game; phases 3-5 are multiplayer infrastructure layered on top.
 
 | Phase | Ships | Cost | Game capability |
 |---|---|---|---|
-| **1** | P213 v4 + minimal closure-using single-player game | 3-4 sessions | First playable single-player demo |
+| **1** | @P213 v4 + minimal closure-using single-player game | 3-4 sessions | First playable single-player demo |
 | **2** | EventLoop core (priority lanes, handler-ids, local OS sources, Mutable<T>) | 2-3 sessions | Single-player game with structured event flow |
 | **3** | Wire protocol + bidirectional handlers + handshake + JSON encoding | 2-3 sessions | Two-player networked game |
 | **4** | AsyncPoller + mio + server scaling | 2 sessions | Server handles many clients |
@@ -1120,7 +1120,7 @@ surfaces.
 **Status:** Design intent only.  No urgency.  Tracked here
 because the user's framing (chat 2026-05-11) ties recovery to
 the async/event-loop substrate rather than to the runtime-error
-plan-07 phase 4f.  Ship when the engine arrives — not before.
+@PLAN07 phase 4f.  Ship when the engine arrives — not before.
 
 ### The user constraint
 
@@ -1148,7 +1148,7 @@ Two implications:
    layer where the dispatch loop has no notion of "frames" vs
    "scheduled coroutines."
 
-### Why plan-07's stack-overflow typed error (4f.12) is the prerequisite, not the solution
+### Why @PLAN07's stack-overflow typed error (4f.12) is the prerequisite, not the solution
 
 Plan-07 phase 4f slice 2 (commit `ad468876`) converted
 `State::fn_call`'s recursion-depth panic into a typed
@@ -1231,7 +1231,7 @@ recent_fault_count)` and:
 
 ### Sequencing — when this design is ready to ship
 
-Prerequisites already shipped (plan-07 phase 4):
+Prerequisites already shipped (@PLAN07 phase 4):
 - ✅ Typed `RuntimeError` with kind + position + call_chain.
 - ✅ Production-mode log+continue at `State::raise`.
 - ✅ `--dev-soft-halt` (which proves the unwind shape works).
@@ -1242,7 +1242,7 @@ Prerequisites in flight (this plan):
 - 🔜 CANCEL.1 (recovery uses similar primitives — coroutine
   state transition, dep-tracking cleanup at unwind).
 
-When all three plan-23 prerequisites land, this slice becomes
+When all three @PLAN23 prerequisites land, this slice becomes
 straightforward: ~300 lines in `lib/web/src/event_loop.loft`
 plus ~50 lines of new primitive
 (`el_recover_to_handler_boundary`) in `src/state/mod.rs`
@@ -1256,7 +1256,7 @@ No code in this commit; this section is the design anchor.
 
 - **EVENT_LOOP_DISCUSSION.md** — open questions, alternatives
   considered, design history.
-- **PROBLEMS.md § 213** — P213 v4 design (closure-in-struct-fields,
+- **PROBLEMS.md § 213** — @P213 v4 design (closure-in-struct-fields,
   the load-bearing prerequisite).
 - **DESIGN_DECISIONS.md § C38** — closures are copy-at-definition;
   forward direction toward Rust-style references.
@@ -1267,5 +1267,5 @@ No code in this commit; this section is the design anchor.
   fixed-timestep updates with interpolated render.
 - **THREADING.md** — `par(...)` parallelism.
 - **COROUTINE.md** — `iterator<T>` + `yield`.
-- **plan-07 phase 4f slice 2** (`doc/claude/plans/07-error-messages/04-runtime-error-kinds.md`) — typed `StackOverflow` RuntimeError; the
+- **@PLAN07 phase 4f slice 2** (`doc/claude/plans/07-error-messages/04-runtime-error-kinds.md`) — typed `StackOverflow` RuntimeError; the
   prerequisite for the recovery design above.

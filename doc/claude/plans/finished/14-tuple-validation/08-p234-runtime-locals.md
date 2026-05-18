@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Phase 08 — P234 runtime: LOCAL tuple-with-lifetime-concern variables
+# Phase 08 — @P234 runtime: LOCAL tuple-with-lifetime-concern variables
 
 **Status: deferred 2026-05-08 — see "Why deferred" below.**
 
@@ -301,9 +301,9 @@ makes it unreachable for text-bearing tuples).
 
 - Function parameters of tuple type — separate phase if needed
 - Pure-value local tuples — keep Rust ABI
-- Tuple destructure binding gate (P235 par half — already
-  separate; P235 lexer + non-par destructure shipped 2026-05-07)
-- ARC.md A8/A11 plan-06 closeout — separate
+- Tuple destructure binding gate (@P235 par half — already
+  separate; @P235 lexer + non-par destructure shipped 2026-05-07)
+- ARC.md A8/A11 @PLAN06 closeout — separate
 
 ## Verification
 
@@ -337,7 +337,7 @@ cargo build --release --no-default-features
 
 ## Cross-references
 
-- [Phase 07 — P234 runtime: lifetime-bearing tuple returns](07-p234-runtime.md)
+- [Phase 07 — @P234 runtime: lifetime-bearing tuple returns](07-p234-runtime.md)
   — predecessor.  Established the routing pattern; this phase
   extends it to LOCAL vars.
 - [Phase 04 — struct references](04-references.md) — covers

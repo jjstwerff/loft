@@ -105,5 +105,5 @@ These get filed in `PROBLEMS.md` (or carried as ROADMAP items):
 
 ## See also
 
-- [README.md](README.md) — plan-08 index.
+- [README.md](README.md) — @PLAN08 index.
 - All prior phase docs (00–05).

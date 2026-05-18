@@ -12,7 +12,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Lock the coroutine-validation matrix and wire
 `tests/coroutine_matrix.rs` to the existing `cross_mode!` harness
 from `tests/common/cross_mode.rs`.  No new harness code is needed;
-the plan-14 phase-00 infrastructure is reused as-is.
+the @PLAN14 phase-00 infrastructure is reused as-is.
 
 ## The frozen matrix
 
@@ -25,7 +25,7 @@ Cell legend: `PASS:test_name` / `FIX:phase` / `CLOSED:reason` /
 | **Y2** text | FIX:02 (active risk: lifetime) | FIX:02 | FIX:02 | FIX:02 | CLOSED:CO1.4-deferred |
 | **Y3** Reference | FIX:03 | FIX:03 | FIX:03 | FIX:03 | CLOSED:CO1.4-deferred |
 | **Y4** tuple | FIX:04 | FIX:04 (gated on T1.8a) | FIX:04 | FIX:04 | CLOSED:CO1.4-deferred |
-| **Y5** closure | FIX:05 (depends on plan-15) | FIX:05 | FIX:05 | FIX:05 (depends on plan-15) | CLOSED:CO1.4-deferred |
+| **Y5** closure | FIX:05 (depends on @PLAN15) | FIX:05 | FIX:05 | FIX:05 (depends on @PLAN15) | CLOSED:CO1.4-deferred |
 | **Y6** vector | CLOSED:non-goal | CLOSED:non-goal | CLOSED:non-goal | CLOSED:non-goal | CLOSED:CO1.4-deferred |
 
 ## Harness reuse
@@ -54,8 +54,8 @@ cross_mode!(my_coroutine_cell, r#"
 "#);
 ```
 
-**No new harness code.**  Same cross-mode contract as plan-14 and
-plan-15.  Run with:
+**No new harness code.**  Same cross-mode contract as @PLAN14 and
+@PLAN15.  Run with:
 
 ```bash
 cargo test --release --test coroutine_matrix -- --ignored
@@ -66,7 +66,7 @@ cargo test --release --test coroutine_matrix -- --ignored y2_x1_text_for_loop
 ## Per-cell test inventory
 
 Cell names use the coroutine-specific prefix `y<Y>_x<X>_<sub>` so
-they don't collide with plan-14's `e<E>_d<D>` or plan-15's
+they don't collide with @PLAN14's `e<E>_d<D>` or @PLAN15's
 `c<C>_d<D>` namespaces.
 
 ```
@@ -121,15 +121,15 @@ in `tests/parse_errors.rs` rather than `cross_mode!`.
 |---|---|
 | Yielded text (Y2) surfaces a state-machine lowering bug | Phase 02 starts with X1 alone (smallest cell); if the bug surfaces, the plan pauses, the issue is filed, and a fix lands before extending to X2–X4. |
 | Y4 manual-next requires T1.8a | The cell carries `#[ignore = "T1.8a — plan-06 phase 9a"]` until T1.8a lands; un-ignore in a one-line follow-up.  Other Y4 cells (X1/X3/X4) don't need T1.8a because the for-loop / map / comprehension paths receive yielded values via the iterator protocol, not return-by-value. |
-| Y5 closure cells exercise both coroutine state-machine AND closure dep tracking; failures may mis-attribute | Phase 05 only opens after plan-15 phases 01-04 are green.  If a Y5 cell fails when plan-15 is green, the bug is in coroutine × closure interaction, not in either subsystem alone. |
-| Test runtime balloons (each cell shells out to interp + native) | Same mitigation as plan-14 / plan-15: cells `#[ignore]`d by default; on-demand run with `-- --ignored`. |
+| Y5 closure cells exercise both coroutine state-machine AND closure dep tracking; failures may mis-attribute | Phase 05 only opens after @PLAN15 phases 01-04 are green.  If a Y5 cell fails when @PLAN15 is green, the bug is in coroutine × closure interaction, not in either subsystem alone. |
+| Test runtime balloons (each cell shells out to interp + native) | Same mitigation as @PLAN14 / @PLAN15: cells `#[ignore]`d by default; on-demand run with `-- --ignored`. |
 
 ## Cross-references
 
 - [README.md](README.md) — full matrix; this phase fixes its shape.
 - `tests/common/cross_mode.rs` — shared harness.
-- [plan-14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
+- [@PLAN14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
   template.
-- [plan-15 README](../15-closure-validation/README.md) — phase 05
-  prerequisite.
-- [COROUTINE.md](../../COROUTINE.md) — coroutine design.
+- [@PLAN15 README](../../finished/15-closure-validation/README.md) — phase 05
+  prerequisite (now SHIPPED 2026-05-12).
+- [COROUTINE.md](../../../COROUTINE.md) — coroutine design.

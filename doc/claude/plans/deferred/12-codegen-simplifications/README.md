@@ -3,24 +3,24 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 12 — Codegen simplifications (post-09 follow-ups)
+# @PLAN12 — Codegen simplifications (post-09 follow-ups)
 
 ## Status
 
 | Tier | Phases | State |
 |---|---|---|
-| **1** — Correctness + cleanup | 01 (walker audit) + 02 (forwarding-smoke retire) | **SHIPPED 2026-05-02** on branch `plan-12-codegen-simplifications` (commits `c0c27e5` + `d446e5d`).  Reference for the walker-unspan convention lives in [NATIVE.md § Walker convention](../../NATIVE.md#walker-convention--always-unspan-before-matching-value).  The forwarding-smoke retirement is a one-time cleanup; the residual recipe stays in [NATIVE.md § Forwarding-first recipe](../../NATIVE.md#forwarding-first-recipe-verify-before-writing-real-emission). |
+| **1** — Correctness + cleanup | 01 (walker audit) + 02 (forwarding-smoke retire) | **SHIPPED 2026-05-02** on branch `plan-12-codegen-simplifications` (commits `c0c27e5` + `d446e5d`).  Reference for the walker-unspan convention lives in [NATIVE.md § Walker convention](../../../NATIVE.md#walker-convention--always-unspan-before-matching-value).  The forwarding-smoke retirement is a one-time cleanup; the residual recipe stays in [NATIVE.md § Forwarding-first recipe](../../../NATIVE.md#forwarding-first-recipe-verify-before-writing-real-emission). |
 | **2** — Structural cleanup | 03 (format/append dispatch arms) + 04 (free/record dispatch arms) + 05 (`narrow_int_cast` split) | **DEFERRED.**  Phase 6 file relocated to [`../13-rust-template-migration/`](../13-rust-template-migration/) (its parent). |
-| **3** — Deep refactor | (template migration) | **DEFERRED to plan-13** — see [`../13-rust-template-migration/`](../13-rust-template-migration/). |
+| **3** — Deep refactor | (template migration) | **DEFERRED to @PLAN13** — see [`../13-rust-template-migration/`](../13-rust-template-migration/). |
 
 This plan stays in `deferred/` because Tier 2 phases 03-05 remain.
 
 **Trigger to unpause Tier 2** (per
 [`../../DEFERRED.md`](../../DEFERRED.md)): same conditions as
-plan-13 — 3+ template-path bugs, major codegen evolution forcing
+@PLAN13 — 3+ template-path bugs, major codegen evolution forcing
 ≥50 Op-annotation touches, or contributor appetite for a large
-structural refactor.  Plan-12 Tier 2 is plan-13's preamble; if
-plan-13 stays parked, Tier 2 doesn't earn its keep.
+structural refactor.  Plan-12 Tier 2 is @PLAN13's preamble; if
+@PLAN13 stays parked, Tier 2 doesn't earn its keep.
 
 ## Tier 1 outcome
 
@@ -39,7 +39,7 @@ and kicks in correctly when it is.
 The HIGH-severity site (`value_mentions_var`'s recursive walker
 that propagates to `target_used_between`'s collapse-safety
 decision) was patched defensively as the plan prescribed.  Pattern
-is now P204-style insurance, not bug fix.
+is now @P204-style insurance, not bug fix.
 
 Over-eager fixes reverted before commit (`needs_pre_eval`,
 `create_stack_var`, `collect_pre_evals_inner` arg-handling sites,
@@ -52,7 +52,7 @@ change that must be validated against the byte-identical baseline.
 Structural guard `pre_eval_walkers_unspan` in
 `tests/codegen_emitter.rs:769` slices `patch_hoisted_returns` +
 `value_mentions_var` and asserts every `matches!(op, Value::*)`
-site is paired with `.unspan()`.  Prevents P204-style regressions.
+site is paired with `.unspan()`.  Prevents @P204-style regressions.
 
 ### Phase 02 — Retire `forwarding_smoke.rs` (closed 2026-05-02)
 
@@ -61,7 +61,7 @@ full implementation record retained as historical archaeology.
 
 Removed `src/generation/ops/forwarding_smoke.rs` and the 9
 forwarded Op-name registrations in `build_registry`.  Plan-09 +
-plan-11 shipped 5 production custom emitters
+@PLAN11 shipped 5 production custom emitters
 (`ParallelForEmitter`, `OpGetRecordEmitter`, `OpIterateEmitter`,
 `ParallelQueueEmitter`, `ParallelBufRenameEmitter`,
 `IntCompareEmitter`) which proved the dispatch path was exercised
@@ -70,11 +70,11 @@ end-to-end; the smoke-test forwarding entries became dead-weight.
 Zero behavioural change — forwarding emitters delegated verbatim
 to `DefaultEmitter`.  All gate suites stayed at their expected
 counts: 540/540 issues, 43/43 threading, 35/35 threading_chars,
-95/95 native, 18 codegen_emitter (the +1 is plan-12 phase 01's
+95/95 native, 18 codegen_emitter (the +1 is @PLAN12 phase 01's
 `pre_eval_walkers_unspan`).
 
 The forwarding-first recipe itself stays valid — see
-[NATIVE.md § Forwarding-first recipe](../../NATIVE.md#forwarding-first-recipe-verify-before-writing-real-emission)
+[NATIVE.md § Forwarding-first recipe](../../../NATIVE.md#forwarding-first-recipe-verify-before-writing-real-emission)
 for the residual one-shot pattern (write the forwarding emitter
 inline as a verification one-shot when adding a new Op, then
 swap in real logic).
@@ -112,7 +112,7 @@ Open.  Independent of phases 03 and 05.
 `src/generation/emit.rs::narrow_int_cast` serves two roles:
 block-tail-expression coercion AND parameter narrowing.  Plan-09's
 phase 02 was scoped to split it but DEMOTED via phase 00a's
-finding that the actual P200 bug was at the comparison level
+finding that the actual @P200 bug was at the comparison level
 (closed via `IntCompareEmitter`), so the split was no longer on
 the critical path.  Phase 05 holds the design for the eventual
 split when a future bug surfaces that genuinely needs the dual
@@ -120,7 +120,7 @@ role decoupled.
 
 Open.  Independent of phases 03 and 04.
 
-## Tier 3 — Relocated to plan-13
+## Tier 3 — Relocated to @PLAN13
 
 Phase 06's stub
 ([`06-rust-template-migration-stub.md`](06-rust-template-migration-stub.md))
@@ -151,7 +151,7 @@ scripts/p09_fast_gate.sh
 ```
 
 Per
-[`feedback_zero_regression_tolerance`](../../../../../home/ubuntu/.claude/projects/-home-ubuntu-loft/memory/feedback_zero_regression_tolerance.md):
+[`feedback_zero_regression_tolerance`](../../../../../home/ubuntu/.claude/projects/-home-ubuntu-loft/memory/feedback_zero_regression_tolerance.md): <!--noindex-->
 any regression aborts the commit.
 
 ## Risks
@@ -160,13 +160,13 @@ any regression aborts the commit.
 |---|---|
 | Dispatch arm migration breaks emission for one Op | Each arm migrates independently; per-arm regression test in `tests/codegen_emitter.rs` catches it.  The forwarding-first recipe applies. |
 | `narrow_int_cast` split surfaces a third role | Stop and document; phase 05 may need sub-phasing. |
-| Plan-12 Tier 2 ships in parallel with plan-13 (template migration) and they conflict | Plan-13 doesn't open until plan-12 Tier 2 merges; sequence enforced via plans/README convention. |
+| Plan-12 Tier 2 ships in parallel with @PLAN13 (template migration) and they conflict | Plan-13 doesn't open until @PLAN12 Tier 2 merges; sequence enforced via plans/README convention. |
 
 ## See also
 
-- [NATIVE.md § Walker convention](../../NATIVE.md#walker-convention--always-unspan-before-matching-value)
+- [NATIVE.md § Walker convention](../../../NATIVE.md#walker-convention--always-unspan-before-matching-value)
   — the Tier 1 phase-01 convention extracted as contributor reference
-- [NATIVE.md § Forwarding-first recipe](../../NATIVE.md#forwarding-first-recipe-verify-before-writing-real-emission)
+- [NATIVE.md § Forwarding-first recipe](../../../NATIVE.md#forwarding-first-recipe-verify-before-writing-real-emission)
   — the residual recipe after Tier 1 phase-02 retirement
 - [`../../finished/09-native-runtime-rewrite/`](../../finished/09-native-runtime-rewrite/)
   — parent plan whose audit surfaced these simplifications

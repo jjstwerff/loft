@@ -9,7 +9,7 @@ PROBLEMS.md and CAVEATS.md.
 Read order:
 1. § Open programmer-biting issues — the live work queue
 2. § Active sprint — P54 — current focus, with steps remaining
-3. § Active design — C54 — **LANDED** 2026-04-21 via plan-01; kept as design reference
+3. § Active design — C54 — **LANDED** 2026-04-21 via @PLAN01; kept as design reference
 4. § Compiler blockers — struct-enum bugs (B2…B7) gating P54 + future enums
 5. § Enhancement tiers — quality investments ranked by leverage
 
@@ -41,12 +41,12 @@ v_block wrap, fields.rs Sig.Idle wrap, calc.rs sub-struct size=1),
 B7 (2026-04-13 — `def_code` null-code path now sets `self.arguments`
 and `stack.position` from def attributes for native fns + native
 registry aliases `t_9JsonValue_<method>` → `n_<method>` impls),
-**C54** (2026-04-21, plan-01: `integer` widened to i64 end-to-end;
+**C54** (2026-04-21, @PLAN01: `integer` widened to i64 end-to-end;
 `long` keyword + `l` suffix removed; 34 duplicate `Op*Long` opcodes
-reclaimed), **P184** (2026-04-22, plan-02: narrow integer aliases
+reclaimed), **P184** (2026-04-22, @PLAN02: narrow integer aliases
 inside `vector` / `hash` / `sorted` / `index` now honour `size(N)`
 via the Option L-minimal `Parts::{Byte, Short, ShortRaw, Int}`
-variants), **P185** (2026-04-23, plan-05: slot-aliasing SIGSEGV
+variants), **P185** (2026-04-23, @PLAN05: slot-aliasing SIGSEGV
 closed by retiring `place_orphaned_vars` and extending the main
 IR walk), **B5** (all layers landed — Layer 1 + 2 on 2026-04-14,
 Layer 3 closed as a side-effect of the struct-enum return work
@@ -80,7 +80,7 @@ Items below are "what to BUILD" derived from the design content in this document
 
 | Item | Section | Status |
 |---|---|---|
-| **B2-B7** — struct-enum bugs gating P54 | [§ Compiler blockers](#compiler-blockers--struct-enum-bugs) | Audit needed; some may have closed via plan-17 / plan-19 sweeps |
+| **B2-B7** — struct-enum bugs gating P54 | [§ Compiler blockers](#compiler-blockers--struct-enum-bugs) | Audit needed; some may have closed via @PLAN17 / @PLAN19 sweeps |
 
 For the open programmer-biting issues list (running, not plan-shaped), see [§ Open programmer-biting issues](#open-programmer-biting-issues) above.  For ranked enhancement work, see [§ Enhancement tiers](#enhancement-tiers).  For ordering across all open items, see [§ Recommended landing order](#recommended-landing-order).
 
@@ -430,7 +430,7 @@ site in `default/`, `lib/`, or `tests/` uses `Struct.parse(text)`.
 
 ## ~~C54 — integer i64~~ — LANDED 2026-04-21
 
-Shipped via plan-01 (`doc/claude/plans/finished/01-integer-i64/`).
+Shipped via @PLAN01 (`doc/claude/plans/finished/01-integer-i64/`).
 `integer` is i64 end-to-end; `Type::Long` / `long` keyword / `l` literal
 suffix removed; 34 duplicate `Op*Long` opcodes reclaimed; binary-format
 lint in place; `.loftc` cache removed.  C54.D (Rust-style literal

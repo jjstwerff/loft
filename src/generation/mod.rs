@@ -9,7 +9,7 @@ mod calls;
 mod coroutine;
 mod dispatch;
 mod emit;
-mod ops;
+pub(crate) mod ops;
 mod pre_eval;
 mod text;
 
@@ -18,6 +18,72 @@ type PreEvalEntry = (String, String, String, u32, bool);
 
 /// Walk the Value IR tree and collect all function definition numbers
 /// referenced by `Value::Call(def_nr, _)` nodes.
+/// Detect a T-parameterized method stub: name shape
+/// `t_<digits><identifier>_<method>` where `<identifier>` is the
+/// generic type variable's name.  These stubs are synthesized by
+/// `parse_function`'s I7/I8.1 path for every interface method on a
+/// bound type parameter (`fn foo<T: Bound>(...)`).  At call sites
+/// they are substituted with the concrete impl via
+/// `re_resolve_call`, so the stub body is never entered at runtime.
+///
+/// The discriminator from a regular `t_<LEN><Type>_<method>` (e.g.
+/// `t_4text_starts_with`) is that `<Type>` here is a known concrete
+/// type defined in the program; for T-stubs it's a generic type
+/// variable name.  We can't distinguish those at this layer without
+/// access to the Data table, so we accept the false-positive
+/// possibility (a real builtin matching the same shape but missing
+/// from `codegen_runtime.rs`) — those would emit `todo!()` instead
+/// of `compile_error!()`, which still aborts at runtime if reached
+/// (just at the call site rather than at compile time).
+///
+/// Pragmatic bar: any `t_<digits><alpha-prefix>_*` whose body is
+/// empty + no `#rust` + no `#native` is treated as a T-stub.  The
+/// caller already checks the empty-body branch.
+fn is_t_param_stub(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("t_") else {
+        return false;
+    };
+    // Parse the leading length digits.
+    let len_end = rest.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(0);
+    if len_end == 0 {
+        return false;
+    }
+    let Ok(type_len) = rest[..len_end].parse::<usize>() else {
+        return false;
+    };
+    let after_len = &rest[len_end..];
+    if after_len.len() < type_len + 1 {
+        return false;
+    }
+    // The next `type_len` chars are the type name; then `_` then method.
+    let type_name = &after_len[..type_len];
+    let after_type = &after_len[type_len..];
+    if !after_type.starts_with('_') {
+        return false;
+    }
+    // Heuristic: a generic type variable is a single ASCII identifier
+    // (mostly UPPERCASE single letter or short PascalCase).  Concrete
+    // builtins use lowercase type names (`text`, `integer`, `single`,
+    // `float`, `boolean`, `character`, `enum`, `function`, plus narrow
+    // variants and user struct/enum names which are CamelCase).  Treat
+    // a type-name component starting with an uppercase letter as a
+    // potential generic-T stub.  This catches `T`, `T_p205`, `U`,
+    // `MyTrait` etc.
+    //
+    // The known concrete CamelCase types (`JsonValue`, `JsonField`,
+    // `RegexCapture`, etc.) are wired in `codegen_runtime.rs` already
+    // and never reach this branch (the `is_codegen_runtime_fn` check
+    // earlier returns true for them).  Any concrete CamelCase type
+    // that ISN'T wired AND has an empty body would be incorrectly
+    // labeled "T-stub" — but in that case the right behaviour is
+    // identical (emit `todo!()` instead of compile_error since the
+    // function is genuinely unimplemented).
+    type_name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase())
+}
+
 fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
     match val {
         Value::Call(d, args) => {
@@ -600,6 +666,67 @@ extern crate loft;"
         from: u32,
         till: u32,
     ) -> std::io::Result<()> {
+        // P269 — populate reachability from `n_main` so the unimplemented-
+        // native check (`output_function`'s `todo!()`-emit branches) can
+        // distinguish "reachable AND unimpl" (compile_error!, fail at
+        // build time per the "fail at startup, not runtime" principle)
+        // from "unreachable + unimpl" (harmless `todo!()` shim).  Without
+        // this, the reachability set was empty under `--native` (only
+        // populated by `output_native_reachable`), so EVERY unimpl native
+        // would have to compile-error or NONE could.  Now the two emit
+        // paths agree on what's actually live in the program.
+        let main_nr = self.data.def_nr("n_main");
+        if main_nr < self.data.definitions() {
+            self.reachable = reachable_functions(self.data, &[main_nr]);
+        } else {
+            // No `n_main` (test-script style with `fn p203_*` as the
+            // top-level fn).  Walk reachability from EVERY user-source
+            // function so the compile_error check has accurate data.
+            // Without this, the `is_empty()` fallback in
+            // `output_function` treats every unimplemented stub as
+            // reachable and emits compile_error, breaking test
+            // scripts that don't define a main.
+            //
+            // "User source" = position.file outside `default/` and
+            // `lib/`.  Imprecise (it includes any user file, not just
+            // the entry script) but safe — the worst case is a few
+            // false-positive reachable defs that emit compile_error
+            // when they could've been todo!(), still better than the
+            // pre-fix behaviour where EVERYTHING was treated as
+            // reachable.
+            let mut entries: Vec<u32> = Vec::new();
+            for d in 0..self.data.definitions() {
+                let def = self.data.def(d);
+                if !matches!(def.def_type, DefType::Function) {
+                    continue;
+                }
+                let pos_file = &def.position.file;
+                // Match `/default/` and `/lib/` segments under EITHER path
+                // separator — Windows uses `\` so a bare `/default/`
+                // substring check misses `default\01_code.loft` and
+                // misclassifies every stdlib fn as user source, which
+                // pulls the entire stdlib into the reachable set and
+                // raises P269 compile_error for unimplemented natives
+                // (n_parallel_queue_fn / n_parallel_buf_get_fn / ...).
+                // Linux/macOS only ever produce `/` separators so the
+                // original check happened to work; Windows surfaced
+                // the gap in PR #212 CI.
+                let normalised: String = pos_file
+                    .chars()
+                    .map(|c| if c == '\\' { '/' } else { c })
+                    .collect();
+                if pos_file.is_empty()
+                    || normalised.contains("/default/")
+                    || normalised.contains("/lib/")
+                {
+                    continue;
+                }
+                entries.push(d);
+            }
+            if !entries.is_empty() {
+                self.reachable = reachable_functions(self.data, &entries);
+            }
+        }
         Self::emit_file_header(w, self.data, self.wasm_browser)?;
         writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
         writeln!(
@@ -607,7 +734,13 @@ extern crate loft;"
             "    let db: &mut Stores = unsafe {{ &mut *cell.get() }};"
         )?;
         self.output_init(w, from, till)?;
-        writeln!(w, "    db.finish();\n}}\n")?;
+        writeln!(w, "    db.finish();")?;
+        // Mirror `compile::build_const_vectors` so module-scope `const`
+        // vectors (`const NUMS = [10, 20, 30]`) populate `db.const_refs`
+        // before `n_main` runs.  Without this, `OpConstRef(<d_nr>)`
+        // indexes into an empty Vec and panics.  @P275 fix.
+        self.emit_const_vectors(w, till)?;
+        writeln!(w, "}}\n")?;
         self.output_functions(w, from, till, None)?;
         self.emit_main_bootstrap(w, till)
     }
@@ -647,15 +780,23 @@ extern crate loft;"
         // Emit a Rust entry point that bootstraps the loft `main` function, if present.
         if (0..till).any(|d| self.data.def(d).name == "n_main") {
             if self.wasm_browser {
-                // exported cdylib entry point for browser WASM.
+                // exported cdylib entry point for browser WASM.  WASM
+                // doesn't have an argv, so user_args stays empty —
+                // arguments() returns [].
                 writeln!(
                     w,
                     "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
                 )?;
             } else {
+                // Native binary: thread std::env::args() into Stores.user_args
+                // so the loft `arguments()` builtin returns the program's
+                // CLI args.  Skip [0] (binary path).  Mirrors what
+                // src/main.rs does for the interpreter path
+                // (state.database.user_args.clone_from(&user_args)).
+                // @PLAN37 phase 10.3 fix.
                 writeln!(
                     w,
-                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
+                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n}}"
                 )?;
             }
         }
@@ -668,7 +809,7 @@ extern crate loft;"
         if main_nr < till {
             writeln!(
                 w,
-                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
+                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n}}"
             )?;
         }
         Ok(())
@@ -1030,8 +1171,8 @@ extern crate loft;"
     /// Constant definition with vector content and literal values,
     /// allocates a fresh store, writes the elements, and records
     /// the DbRef in `db.const_refs[d_nr]`.  The `#rust"…"` template
-    /// for `OpConstRef` is `s.const_refs[@d_nr as usize]`; native
-    /// codegen translates `s.const_refs` → `stores.const_refs`
+    /// for `OpConstRef` is `s.const_ref_at(@d_nr as usize)`; native
+    /// codegen translates `s.const_ref_at(` → `stores.const_ref_at_runtime(`
     /// (`src/generation/calls.rs`), so the emitted user functions
     /// find these DbRefs at call time.
     fn emit_const_vectors(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
@@ -1591,6 +1732,25 @@ extern crate loft;"
             emit_db_field(w, s_var, field_name, "int", "db.int(0, false)")?;
             return Ok(());
         }
+        // Plan-22 phase 02c (P258 native fix, 2026-05-12): auto-Reference
+        // attribute — when the dep list is non-empty, use the 12-byte
+        // Parts::DbRef storage shape (`db.dbref()`) instead of the
+        // inline-struct-bytes path below (which uses the inner struct's
+        // known_type).  Mirrors `src/typedef.rs::fill_database`'s
+        // `Type::Reference(_, ref deps) if !deps.is_empty()` branch so
+        // native + interp agree on layout.  Without this, native
+        // computes the closure record's auto-Reference field as
+        // inline-bytes (size = inner struct's size) but interp writes
+        // 12-byte DbRef bytes — the resulting size mismatch causes
+        // `claim_child_rec`'s byte-copy to truncate at native's
+        // smaller size and the lambda body reads garbage instead of
+        // the captured DbRef.
+        if let Type::Reference(_, deps) = typedef
+            && !deps.is_empty()
+        {
+            emit_db_field(w, s_var, field_name, "dbref", "db.dbref()")?;
+            return Ok(());
+        }
         if known_type != u16::MAX {
             let kt_ref = type_id_ref(known_type);
             writeln!(w, "    db.field({s_var}, \"{field_name}\", {kt_ref});")?;
@@ -1767,9 +1927,23 @@ extern crate loft;"
                     let qualified = format!("{}::{}", krate, def.native);
                     self.output_native_direct_call(w, def_nr, &qualified)?;
                 } else {
+                    // P269: refuse to emit a runtime panic for a reachable
+                    // unimplemented native — convert to a compile-time error
+                    // per the "fail at startup, not runtime" principle.
+                    // Unreachable defs keep the `todo!()` shim so unused
+                    // declarations don't reject otherwise-valid programs.
+                    let reachable = self.reachable.is_empty() || self.reachable.contains(&def_nr);
                     writeln!(w, "{{")?;
                     if def.returned != Type::Void {
-                        writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                        if reachable {
+                            writeln!(
+                                w,
+                                "  compile_error!(\"loft --native: native fn `{}` (#native \\\"{}\\\") has no implementation in any registered native crate; either run via --interpret or wire the symbol in a #native package or src/codegen_runtime.rs (P269)\")",
+                                def.name, def.native
+                            )?;
+                        } else {
+                            writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                        }
                     }
                     writeln!(w, "}}")?;
                 }
@@ -1799,7 +1973,53 @@ extern crate loft;"
                     )?;
                     writeln!(w, "  loft::codegen_runtime::i_json_errors(stores)")?;
                 } else if def.returned != Type::Void {
-                    writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                    // P269: same compile-time-error escalation as above for
+                    // reachable unimplemented natives without a `#native`
+                    // annotation.  Unreachable internal stubs (e.g. unused
+                    // `i_*` helpers) keep the `todo!()` shim.
+                    //
+                    // Three categories of "abstract declarations never
+                    // called at runtime" must NOT trigger compile_error
+                    // even when the reachability walker counts them:
+                    //
+                    // 1. Functions with a `#rust"…"` annotation (e.g.
+                    //    text methods like `starts_with` / `ends_with`
+                    //    / `trim` in `default/03_text.loft`) inline the
+                    //    Rust expression at every call site via the
+                    //    dispatch in `src/generation/calls.rs`.
+                    // 2. Interface method stubs (`__iface_<N>_<method>`)
+                    //    are abstract declarations created by
+                    //    `parse_interface`; bound-generic dispatch
+                    //    substitutes the call with the concrete impl
+                    //    via `re_resolve_call`.
+                    // 3. T-parameterized stubs (`t_<LEN><Tname>_<method>`
+                    //    where `<Tname>` is a generic type variable)
+                    //    are synthesized at function-parse time
+                    //    (parse_function I7/I8.1); same re_resolve_call
+                    //    substitution applies.
+                    //
+                    // For all three, the function body is emitted but
+                    // never entered at runtime.  Use `todo!()` (the
+                    // safe placeholder that costs nothing unless
+                    // someone takes the address of the fn) instead
+                    // of `compile_error!()`.
+                    let is_iface_stub = def.name.starts_with("__iface_");
+                    let is_t_stub = is_t_param_stub(&def.name);
+                    let has_custom_op_emitter = ops::has_custom_emitter(&def.name);
+                    let reachable = (self.reachable.is_empty() || self.reachable.contains(&def_nr))
+                        && def.rust.is_empty()
+                        && !is_iface_stub
+                        && !is_t_stub
+                        && !has_custom_op_emitter;
+                    if reachable {
+                        writeln!(
+                            w,
+                            "  compile_error!(\"loft --native: built-in fn `{}` has no native implementation; wire it in src/codegen_runtime.rs or run via --interpret (P269)\")",
+                            def.name
+                        )?;
+                    } else {
+                        writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                    }
                 }
                 writeln!(w, "}}")?;
             }

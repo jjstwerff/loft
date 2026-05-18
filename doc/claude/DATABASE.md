@@ -162,7 +162,7 @@ and before any runtime store.  Populated during `byte_code()` and
 | 1 | **Constant store** (read-only data) | `State::new()` |
 | 2+ | Runtime stores (structs, vectors) | `OpDatabase` at runtime |
 
-**What lives in `CONST_STORE`** (plan-28 Phase A, 2026):
+**What lives in `CONST_STORE`** (@PLAN28 Phase A, 2026):
 
 - **Vector constants** — file-scope `QUAD = [1, 2, 3];` is built as
   a vector record in `CONST_STORE` during `byte_code()`.  Each
@@ -407,7 +407,7 @@ The encoding for vector elements differs from struct fields:
 - **Struct field** `Parts::Short` encodes `raw = val - min + 1`,
   reserving raw 0 as the null sentinel.
 - **Vector element** `Parts::ShortRaw` (added 2026-04-22 alongside
-  the rest of plan-02) encodes `raw = val - min` directly.
+  the rest of @PLAN02) encodes `raw = val - min` directly.
 
 The divergence is required because `vector_add` raw-byte-copies
 element bytes from source to destination — the +1 offset of

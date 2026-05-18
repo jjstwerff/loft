@@ -484,3 +484,504 @@ fn brick_buster_yield_resume() {
         }
     }
 }
+
+/// Plan-15 phase 03 — closure-DbRef leak guard.
+///
+/// LIFETIME.md flags `Type::Function` as "NOT YET HANDLED" — the
+/// closure DbRef at offset+4 of the 16-byte fn-ref slot is "never
+/// explicitly freed."  For text captures this matters because the
+/// captured text lives in the closure record's heap allocation.
+/// If the closure record never gets freed, the captured text never
+/// gets freed either → store leak.
+///
+/// This test runs the c2_d3_text_capture_field shape in a tight
+/// loop (100 iterations) and asserts `state.check_store_leaks()`
+/// passes after.  Each iteration:
+///   1. Allocates a text capture (`label = "z"`).
+///   2. Constructs a struct holding the capturing closure.
+///   3. Calls the closure (which formats into a fresh text).
+///   4. Drops the struct.
+///
+/// If the closure record (16-byte fn-ref slot's tail half) doesn't
+/// free at struct-drop time, every iteration would accumulate one
+/// leaked closure record.  100 iterations would surface as 100
+/// leaked stores in `check_store_leaks`.
+///
+/// **Actual behaviour (2026-05-12)**: clean — no leak detected
+/// for either D1 (local var) or D3 (struct field).  P213's
+/// `Parts::ChildRec` cascade plus the struct-scope-exit cleanup
+/// path frees the closure record correctly when the struct it
+/// lives inside goes out of scope; D1 frees the closure record at
+/// stack-frame exit via the standard local-cleanup path.  The
+/// LIFETIME.md "NOT YET HANDLED" annotation overstates the gap
+/// for both destinations — phase 06 should update it to reflect
+/// this finding.
+#[test]
+fn p15_phase03_closure_text_capture_field_no_leak() {
+    run_leak_check_str(
+        r#"
+        struct G { fmt: fn(integer) -> text }
+        fn one_call() -> text {
+            label = "z";
+            g = G { fmt: fn(n: integer) -> text { "{label}: {n}" } };
+            g.fmt(7)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == "z: 7", "iter {i}: got '{r}'");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-15 phase 03 — D1 (local var) text-capture leak guard.
+///
+/// Same shape as the D3 leak guard above but the closure lives in
+/// a local variable instead of a struct field.  Different cleanup
+/// path: stack-frame exit via the standard local-binding free
+/// rather than `Parts::ChildRec` cascade through struct scope.
+///
+/// 100 iterations clean → no leak; the local-binding cleanup
+/// covers fn-ref locals correctly.
+#[test]
+fn p15_phase03_closure_text_capture_local_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_call() -> text {
+            label = "y";
+            f: fn(integer) -> text = fn(n: integer) -> text { "{label}: {n}" };
+            f(11)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == "y: 11", "iter {i}: got '{r}'");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-15 phase 04 — D3 (struct field) Reference-capture leak guard.
+///
+/// The captured value is a struct (DbRef-allocated) instead of a
+/// text.  The closure record holds the captured DbRef; the
+/// captured Point's store record must outlive the closure record,
+/// AND the closure record must be freed at host-struct scope exit
+/// for both records to release.
+///
+/// Risk: if the captured DbRef's dep-tracking lets the source
+/// scope's cleanup free Point while the closure still holds it,
+/// the closure body would read a freed store record.  100
+/// iterations × calling the closure each iteration would surface
+/// either as a leak (record never freed) or a panic (record freed
+/// while in use).
+///
+/// Actual behaviour (2026-05-12): clean.  No leak, no
+/// read-after-free.  The dep mechanism in `vectors.rs:666-669`
+/// keeps the closure-record alive long enough; `Parts::ChildRec`
+/// cascade frees both at host-struct scope exit.
+#[test]
+fn p15_phase04_closure_ref_capture_field_no_leak() {
+    run_leak_check_str(
+        r#"
+        struct Point { x: integer, y: integer }
+        struct Holder { cb: fn(integer) -> integer }
+        fn one_call() -> integer {
+            p = Point { x: 100, y: 0 };
+            h = Holder { cb: fn(dx: integer) -> integer { p.x + dx } };
+            h.cb(7)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == 107, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-15 phase 04 — D1 (local var) Reference-capture leak guard.
+///
+/// Same shape as the D3 guard above but the closure lives in a
+/// local variable instead of a struct field.  Cleanup path:
+/// stack-frame exit drops the fn-ref local, which transitively
+/// frees the closure record (holding the captured Point DbRef),
+/// which transitively frees Point's store record.
+///
+/// The dep chain `Point ← closure-record ← fn-ref local` must
+/// flow through the standard local-cleanup mechanism without
+/// leaving any record behind.
+#[test]
+fn p15_phase04_closure_ref_capture_local_no_leak() {
+    run_leak_check_str(
+        r#"
+        struct Point { x: integer, y: integer }
+        fn one_call() -> integer {
+            p = Point { x: 10, y: 20 };
+            f = fn(dx: integer) -> integer { p.x + dx };
+            f(5)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == 15, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-22 phase 02c — auto-Reference capture leak guard.
+///
+/// When a closure mutates a captured struct, the closure
+/// record's attribute holds a 12-byte DbRef pointing AT the
+/// outer struct's record (share-by-DbRef, not deep copy).
+/// If the cascade frees the pointed-to record when the closure
+/// drops, the outer's binding sees freed memory.  If it
+/// double-frees, leak detection trips.
+///
+/// 100-iteration tight loop: each iteration creates Counter,
+/// captures it into a closure that mutates n, calls bump 3
+/// times, returns.  The captured Counter, the closure record,
+/// and the closure's auto-Reference field all need to free
+/// cleanly at scope exit.
+///
+/// Actual behavior (2026-05-12): clean, no leak, no use-after-
+/// free.  The auto-Reference path's dep marker (`u16::MAX`
+/// sentinel) doesn't trip get_free_vars's normal free path
+/// for the closure record's attribute (Parts::DbRef has no
+/// special claim handling — bytes are copied/freed as part of
+/// the host record's lifecycle).
+#[test]
+fn p22_phase02c_auto_reference_capture_no_leak() {
+    run_leak_check_str(
+        r#"
+        struct Counter { n: integer }
+        fn one_iteration() -> integer {
+            c = Counter { n: 0 };
+            bump = fn() { c.n = c.n + 1; };
+            bump();
+            bump();
+            bump();
+            c.n
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == 3, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-22 phase 02d-iii.e — boxed-scalar capture leak guard.
+///
+/// 100-iteration tight loop: each iteration creates a boxed
+/// integer `n`, captures it into a closure that mutates n via
+/// shared cell DbRef, calls bump 3 times, asserts result.  The
+/// boxed `n`'s `__cell_integer` record, the closure record, and
+/// the closure's auto-Reference field all need to free cleanly
+/// at scope exit.
+///
+/// Actual behavior (2026-05-12): clean, no leak.  The cell's
+/// type is `Reference(__cell_integer, vec![])` — heap-owned per
+/// `is_heap_owned`, so `get_free_vars` emits the standard
+/// `OpFreeRef` at scope exit.  Closure record + auto-Reference
+/// attribute follow the same path established by phase 02c.
+#[test]
+fn p22_phase02d_iii_e_scalar_capture_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_iteration() -> integer {
+            n = 0;
+            bump = fn() { n = n + 1; };
+            bump();
+            bump();
+            bump();
+            n
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == 3, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-22 phase 02d-vi — text cell capture leak guard.
+///
+/// 100-iteration tight loop: each iteration boxes a text
+/// `acc`, captures it into a closure that re-assigns via
+/// shared cell DbRef, calls the closure twice, asserts result.
+/// The `__cell_text` record (16B Text value field) and the
+/// closure record's auto-Reference attribute (12B share-by-DbRef)
+/// all need to free cleanly at scope exit.
+///
+/// NOTE: this guard uses void-return + assert-inside-iteration
+/// rather than returning the text from `one_iteration`.
+/// Text-return from a fn with closure-mutated text uses the
+/// existing write-back mechanism (per 02d-vii's text-skip-in-
+/// text-return guard) — covered by
+/// `p22_phase02d_vii_text_return_with_closure_no_leak` below.
+#[test]
+fn p22_phase02d_vi_text_capture_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_iteration(seed: text) {
+            acc = seed;
+            f = fn() { acc = "after"; };
+            f();
+            assert(acc == "after", "got {acc}");
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                one_iteration("before");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-22 phase 03 — Case C (factory pattern) leak guard.
+///
+/// 100-iteration tight loop: each iteration constructs a
+/// fresh factory closure, calls it 3 times, drops it.  The
+/// `__cell_integer` allocated inside `make()` must outlive
+/// `make()`'s scope (because the returned closure carries a
+/// reference) and free at the closure's drop site.
+///
+/// MAJOR FINDING (2026-05-13): Case C ALREADY WORKS under the
+/// 02d-iii.e cell + auto-Reference machinery — no separate
+/// phase-03 implementation needed.  The closure record's
+/// auto-Reference attribute keeps the cell alive past
+/// `make()`'s scope exit; the cell frees when the closure
+/// goes out of scope in the caller.
+///
+/// Single-factory works.  Multi-factory shape was P259
+/// (fixed 2026-05-13) — see [`p22_phase03_multi_factory_no_leak`]
+/// below for the multi-factory regression guard.
+#[test]
+fn p22_phase03_factory_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn make() -> fn() -> integer {
+            n = 0;
+            fn() -> integer { n = n + 1; n }
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                f = make();
+                _ = f();
+                _ = f();
+                _ = f();
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// P259 (fixed 2026-05-13): multi-factory closure-record cells
+/// must each free independently when their owning closure dies.
+///
+/// 100-iteration loop with TWO factory instances per iteration,
+/// interleaved calls.  Without the cascade-free in
+/// `Stores::free_named` (commit 4 of the P259 fix), each
+/// iteration would leak two cells (one per factory) for a total
+/// of 200 leaked stores by exit.  With the fix: clean.
+#[test]
+fn p22_phase03_multi_factory_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn make() -> fn() -> integer {
+            n = 0;
+            fn() -> integer { n = n + 1; n }
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                f1 = make();
+                f2 = make();
+                _ = f1();
+                _ = f2();
+                _ = f1();
+                _ = f2();
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-22 phase 02d-vii — text-return-from-fn-with-closure
+/// leak guard.
+///
+/// 100-iteration tight loop: each iteration runs a function
+/// that returns text AND uses a closure that APPENDS to a
+/// text local.  Per 02d-vii, the parent-returns-text guard
+/// skips the text-cell flip — acc stays as `RefVar(Text)` and
+/// the existing void-return write-back mechanism propagates
+/// the closure's append mutation (this path predates 02d-vi).
+/// Verify no leak from the work-text buffer + closure record
+/// + closure-record's text attribute.
+///
+/// NOTE: the test uses APPEND (`+=`) not REASSIGN (`=`) —
+/// re-assign in closures inside text-returning fns is a
+/// pre-existing limitation tied to the same store-lock
+/// interaction that 02d-vii works around.
+#[test]
+fn p22_phase02d_vii_text_return_with_closure_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn build() -> text {
+            acc = "";
+            f = fn(s: text) { acc += s; };
+            f("a");
+            f("bb");
+            acc
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = build();
+                assert(r == "abb", "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-22 phase 02d-v — boolean cell capture leak guard.
+///
+/// 100-iteration tight loop: each iteration boxes a boolean
+/// `flag`, captures it into a closure that toggles via shared
+/// cell DbRef, calls toggle 5 times, asserts result.  The
+/// `__cell_boolean` record (1B value field, padded to 8B per
+/// the cell struct's record layout) and the closure record's
+/// auto-Reference attribute (12B share-by-DbRef) all need to
+/// free cleanly at scope exit.  Exercises the boolean-LHS
+/// detection in `maybe_prepend_cell_alloc` under load.
+#[test]
+fn p22_phase02d_v_boolean_capture_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_iteration() -> boolean {
+            flag = false;
+            toggle = fn() { flag = !flag; };
+            toggle();
+            toggle();
+            toggle();
+            toggle();
+            toggle();
+            flag
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == true, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-22 phase 02d-iv — multi-type capture leak guard.
+///
+/// 100-iteration tight loop: each iteration boxes THREE
+/// distinct primitive captures (integer + float + character)
+/// simultaneously, mutates each via a single closure, asserts
+/// results.  Three `__cell_<T>` records per iteration, each
+/// with an auto-Reference closure-record attribute, all need
+/// to free cleanly.  Exercises the dedup invariant in
+/// `synthesize_cell_structs` (one cell per canonical type, not
+/// one per binding) under load.
+#[test]
+fn p22_phase02d_iv_multi_type_capture_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_iteration() -> integer {
+            n = 0;
+            x = 0.0;
+            c = 'a';
+            bump = fn() {
+                n = n + 1;
+                x = x + 0.5;
+                c = 'z';
+            };
+            bump();
+            bump();
+            assert(n == 2, "n: {n}");
+            assert(x == 1.0, "x: {x}");
+            assert(c == 'z', "c: {c}");
+            n
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == 2, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}
+
+/// Plan-15 phase 05 — nested closure (C6) leak guard.
+///
+/// `inner` is a non-capturing fn-ref local; `outer` captures
+/// `inner` into its closure record.  Both fn-refs must free
+/// cleanly at scope exit:
+///   1. `outer` (fn-ref local) frees first.
+///   2. Outer's closure record (which holds inner's d_nr +
+///      closure DbRef in one slot) frees next.
+///   3. Inner's standalone fn-ref local frees last.
+///
+/// The dep chain is a stack: a leak at any link would
+/// accumulate over 100 iterations and surface in
+/// `state.check_store_leaks()`.  Confirmed clean.
+#[test]
+fn p15_phase05_nested_closure_no_leak() {
+    run_leak_check_str(
+        r#"
+        fn one_call() -> integer {
+            inner = fn(x: integer) -> integer { x + 5 };
+            outer = fn(y: integer) -> integer { inner(y) + 1 };
+            outer(10)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == 16, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        "#,
+    );
+}

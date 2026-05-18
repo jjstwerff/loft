@@ -43,7 +43,7 @@ From the [matrix](00-matrix.md#the-frozen-matrix):
 | E2×D2 inline | `e2_d2_inline_text` | `("a", "b").0` |
 | E2×D2 return | `e2_d2_return_text_text` | `#[ignore = "T1.8a"]` |
 
-15 cells total.  4 marked `#[ignore = "T1.8a"]` until plan-06 phase 9a
+15 cells total.  4 marked `#[ignore = "T1.8a"]` until @PLAN06 phase 9a
 ships; 11 must run green at phase close.
 
 ## Per-cell snippets (illustrative)
@@ -126,7 +126,7 @@ confirmed or revised per cell before any fix lands.
 - 11 unignored cells from the table above run green under
   `cargo test --release --test tuple_matrix` on Linux, macOS, Windows.
 - 4 ignored cells have the `#[ignore = "T1.8a — plan-06 phase 9a"]`
-  attribute and are listed in plan-06 phase 9a's reverse-link table
+  attribute and are listed in @PLAN06 phase 9a's reverse-link table
   (the cell appears in 9a's "un-ignore on close" list).
 - The matrix in [README.md](README.md) and [00-matrix.md](00-matrix.md)
   shows each cell as `PASS:test_name`.
@@ -145,7 +145,7 @@ confirmed or revised per cell before any fix lands.
 
 - D3 (struct field) cells — covered by phase 05.
 - E3, E4, E5 cells — covered by phases 02, 03, 04.
-- T1.8a itself — landed by plan-06 phase 9a, not here.
+- T1.8a itself — landed by @PLAN06 phase 9a, not here.
 
 ## Cross-references
 
@@ -154,5 +154,5 @@ confirmed or revised per cell before any fix lands.
 - `tests/expressions.rs` — existing tuple test surface (T1.10
   section)
 - `tests/parse_errors.rs` — T1.11 negative tests (do not regress)
-- [PLANNING.md § T1.8a](../../PLANNING.md) — return-convention
+- [PLANNING.md § T1.8a](../../../PLANNING.md) — return-convention
   prerequisite

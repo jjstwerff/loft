@@ -70,14 +70,14 @@ narrow shapes are gated behind P-issues:
 
 | Bug | Shape | Workaround |
 |---|---|---|
-| P250 | `for { (q1, q2) = make_pair(pa, pb); }` reads `null` for whichever destructured variable picked up the FIRST argument on iterations >0 | Hoist destructure out of loop, or use a struct field |
-| P251 | Storing `(fn-ref, …)` INTO a struct field rejects native compilation with rustc E0605 | Store the fn-ref in a separate field, not nested in a tuple struct field |
+| @P250 | `for { (q1, q2) = make_pair(pa, pb); }` reads `null` for whichever destructured variable picked up the FIRST argument on iterations >0 | Hoist destructure out of loop, or use a struct field |
+| @P251 | Storing `(fn-ref, …)` INTO a struct field rejects native compilation with rustc E0605 | Store the fn-ref in a separate field, not nested in a tuple struct field |
 
 E4 (closure element) calling — `t.0(args)` and `s.field.0(args)` —
 was the open phase-03 / phase-05 question; the layered fix (20-byte
 fn-ref tuple-element layout in six codegen sites + `__fn_ref_tmp`
-skip_free) closed it for D1 / D2 (P249).  The struct-field call
-shape is the residual P251.
+skip_free) closed it for D1 / D2 (@P249).  The struct-field call
+shape is the residual @P251.
 
 ---
 

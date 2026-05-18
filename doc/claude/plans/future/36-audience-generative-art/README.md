@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 36 — Audience-driven generative-art demo (development plan)
+# @PLAN36 — Audience-driven generative-art demo (development plan)
 
 ## Status
 
@@ -38,7 +38,7 @@ top of them, not library extension.
 | ~~2~~ | ~~02-generation-script.md~~ | DROPPED — closed by the 2026-05-10 growth-model decision (pure direct painting; no autonomous growth).  Renderer-side ridge / edge classification covers what would have been the "plant / crystal aesthetic" generator | — |
 | 3 | [03-projector-view.md](03-projector-view.md) | Native loft beamer client: subscribe to server, render full hex world (frost-style 3D crystal mesh + edge-detected plant/crystal aesthetic), auto-camera follows activity heat field, presenter hotkey overrides | M |
 | 4 | [04-hosting.md](04-hosting.md) | Public URL reachable from venue WiFi (VPS / hotspot / ngrok / cloudflared).  Operational, not code | XS |
-| 5 | [05-rehearsal-and-backup.md](05-rehearsal-and-backup.md) | One full dry run on demo hardware; record both demos as fallback for catastrophic failure | XS |
+| 5 | `05-rehearsal-and-backup.md` (not yet written) | One full dry run on demo hardware; record both demos as fallback for catastrophic failure | XS |
 
 Phases 0, 1, 2 land in parallel — they share only the seed-event
 schema (sketched on paper first).  Phase 3 depends on phase 1
@@ -313,11 +313,11 @@ extensions.
 
 **Hard prereqs (sibling plan):**
 
-- [plan-34 — `lib/server` hardening](../34-server-hardening/README.md)
+- [@PLAN34 — `lib/server` hardening](../34-server-hardening/README.md)
   items (a), (b), (e):
   - (a) `srv.broadcast_binary()` / `srv.send_binary_to()` — the
     projector's world-snapshot + delta broadcasts depend on this.
-    Without it, plan-36 has to inline `n_ws_send_binary` in loft
+    Without it, @PLAN36 has to inline `n_ws_send_binary` in loft
     (TTT v5 t4 already did this as a workaround; not the right
     long-term shape).
   - (b) Server-side binary recv via `from_utf8_unchecked` — the
@@ -329,7 +329,7 @@ extensions.
     broadcast scaffold.  Without it, the server can only emit
     on event arrival, which breaks the "audience always sees
     fresh activity" property.
-- Items (c), (d), (f) of plan-34 are post-launch hardening (the
+- Items (c), (d), (f) of @PLAN34 are post-launch hardening (the
   30-client soak, panic isolation, observability metrics).
   Useful for production rehearsal; not blocking phase 1.
 
@@ -346,19 +346,21 @@ extensions.
   content overlaps with quick-start `examples/` and the "Learn
   loft in 30 minutes" walkthrough.  Can write the talk inline OR
   land both at once.
-- `plans/22-mutable-closures` + the [TTT v6 retrofit](../32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures)
+- `plans/finished/22-mutable-closures` (shipped 2026-05-13) + the [TTT v6 retrofit](../32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures)
   — drops the `Reference<T>.inner` ceremony from the server's
   pump callback so the loft snippets shown on stage during the
   "loft snippet highlights" beats read at their best.  If
-  plan-22 lands before the talk, plan-36 server uses writable
+  @PLAN22 lands before the talk, @PLAN36 server uses writable
   closures; if not, it uses `Reference<T>` exactly like TTT v5.
   Demo functions either way; only on-screen elegance differs.
 
-**Latent risk:** `plans/15-closure-validation` phase 03 /
-closure-DbRef leak (LIFETIME.md "NOT YET HANDLED").  Generation
-script will use closures heavily.  Leak is bounded per closure-
-creation, not per tick — a 30-60 minute talk session is fine; an
-unattended installation running for hours could accumulate.
+**Risk dispositioned (2026-05-12)**: @PLAN15 phase 03 confirmed
+the closure-DbRef leak feared in LIFETIME.md does NOT manifest
+— closure records free at scope exit via standard local-cleanup
+(D1) or `Parts::ChildRec` cascade (D3).  Heavy closure usage in
+the generation script does not accumulate state across iterations.
+See `tests/leak.rs::p15_phase03_closure_text_capture_*_no_leak`
+for the 100-iteration tight-loop guards.
 
 **Upstream-feeds (this work sharpens scope for):**
 
@@ -378,7 +380,7 @@ the catch-up recovery handler, and the sluggish-tempo tick-loop
 behaviour — each validated with the smallest possible text-mode
 test program.  The TTT board uses the same `World` / `Chunk` /
 `Cell` data model this plan defines, so primitives proven there
-translate to plan-36 with zero protocol glue.
+translate to @PLAN36 with zero protocol glue.
 
 Build TTT v5 first; this plan's phase 1 (server) and phase 0
 (phone client binary decoder) become consumers of proven

@@ -1,4 +1,4 @@
-# Plan 13 — `#rust"..."` template migration
+# @PLAN13 — `#rust"..."` template migration
 
 **Status:** DEFERRED (opened as a stub 2026-05-02; deferred at the
 same date pending a driver).
@@ -22,17 +22,17 @@ Two emission paths coexist:
   `default/03_text.loft`.  Codegen substitutes placeholders at emit
   time.
 - **Emitter path:** ~5 Ops have hand-written Rust emitters
-  registered in the `OpEmitter` registry from plan-09 phase 00 +
-  plan-09 phases 03/04/06/10 + plan-11 P204.
+  registered in the `OpEmitter` registry from @PLAN09 phase 00 +
+  @PLAN09 phases 03/04/06/10 + @PLAN11 @P204.
 
-The dual path is functional today but has caused real bugs (P203
+The dual path is functional today but has caused real bugs (@P203
 was a template double-substitution; the let-bind-on-repeat fix is
 a hack the emitter path wouldn't need).
 
 ## Why deferred
 
 No active driver.  The most recent codegen-evolution work
-(plan-09, plan-11) shipped, and the template path is currently
+(@PLAN09, @PLAN11) shipped, and the template path is currently
 stable.  Plan 13's payoff is a future investment in codegen
 maintainability, not a fix for an open problem.
 
@@ -66,7 +66,7 @@ and runs longer.
 
 So if plan 13 ever opens, plan 12 Tier 2 must land first.
 
-## Sketch (for plan-13's eventual design)
+## Sketch (for @PLAN13's eventual design)
 
 ### Phase 13.1 — Catalog all `#rust` annotations
 
@@ -90,7 +90,7 @@ auto-migrate via a script:
 ### Phase 13.3 — Hand-port complex annotations
 
 Multi-line annotations and conditional-branch ones (e.g. the
-let-bind-on-repeat ones from plan-09 phase 00 step 0.7b) need
+let-bind-on-repeat ones from @PLAN09 phase 00 step 0.7b) need
 hand-ported emitters.
 
 ### Phase 13.4 — Remove `#rust` parsing path
@@ -113,7 +113,7 @@ floor is).  Per zero-regression rule.
 - Debuggable codegen: step through emitter functions in `gdb` /
   `rust-lldb`; today you debug template substitution by reading
   generated source + grep'ing `default/*.loft`.
-- Eliminates one verified bug class (P203-style template double-
+- Eliminates one verified bug class (@P203-style template double-
   substitution).
 
 ## What plan 13 would cost
@@ -129,7 +129,7 @@ floor is).  Per zero-regression rule.
 
 ## Memory candidate
 
-If plan-13 ever opens, save:
+If @PLAN13 ever opens, save:
 
 ```
 project_template_emitter_unification.md — Plan-13 unifies the

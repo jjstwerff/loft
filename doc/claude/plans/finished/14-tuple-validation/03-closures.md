@@ -107,7 +107,7 @@ first-class type — but the dep-tracker side may need an
 
 ## Cross-references
 
-- [LIFETIME.md](../../LIFETIME.md) — closure dep semantics
-- [LOFT.md § Closures](../../LOFT.md)
+- [LIFETIME.md](../../../LIFETIME.md) — closure dep semantics
+- [LOFT.md § Closures](../../../LOFT.md)
 - `src/data.rs::Type::Function`, `Type::owned_elements`
 - `src/scopes.rs:578` — tuple scope-exit gate

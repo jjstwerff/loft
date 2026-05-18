@@ -22,6 +22,7 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 - [Debugging a validate_slots Panic](#debugging-a-validate_slots-panic)
 - [Debugging a Scope Analysis Bug](#debugging-a-scope-analysis-bug)
 - [Using the Test Framework for Quick Iteration](#using-the-test-framework-for-quick-iteration)
+- [Open work](#open-work)
 
 ---
 
@@ -34,6 +35,11 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 | `full` | IR tree + bytecode + execution | Everything at once; output is very large |
 | `static` | IR tree and bytecode only (no execution) | Codegen bugs, wrong IR, wrong opcode selection |
 | `crash_tail:N` | Last N lines before panic | Crash triage when full output is too large |
+| `locks` | Every store-lock / store-unlock event with store_nr + rec | "Write to locked store at rec=N fld=M" panics — pinpoints which op acquired the lock |
+| `type_timeline:<varname>` | Every type-mutation event for a specific named variable (old → new + origin) | "Why is var X type T at this point?" — flip / change_var_type / depend / substitute_type traces |
+| `ir:<fn_name>` | IR tree dump for the named function only (no bytecode, no execution trace) | "What IR did the parser emit for fn X?" — focused codegen-bug diagnosis |
+| `slots:<fn_name>` | Slot-allocation summary for the named function — each var's final slot OR a reason why it was skipped | "Why is var X at slot 65535?" — `Incorrect var X[65535]` codegen panics |
+| `captures:<fn_name>` | Capture-pipeline summary for the named function + its lambdas — scalars_to_box, mutated_captures, closure_record attrs with auto-Reference status | "Why is closure-record attr X stored inline vs share-by-DbRef?" — closure-encoding diagnosis |
 
 ---
 
@@ -471,8 +477,201 @@ runner will pick it up automatically.
 
 ---
 
+## Tracker-tag indexer (`make index` + `./scripts/idx`)
+
+The tracker-tag indexer (@PLAN37) maintains
+`index/tags.json`, a structured map of every `@P-id` /
+`@PLAN-id` reference in the tree (plus the `legacy:`
+bare-name forms during the migration).  Replaces
+`grep -rn '@P259'` with O(1) JSON lookups.
+
+### Usage
+
+```bash
+make index                           # rebuild index/tags.json
+./scripts/idx tag:@P259              # exact tag → JSON refs
+./scripts/idx prefix:@PLAN22         # all PLAN22-* tags
+./scripts/idx file:doc/.../X.md      # tags in one file
+./scripts/idx all | jq '.[:10]'      # top-N by reference count
+./scripts/idx help                   # full usage block
+```
+
+### Auto-refresh on commit
+
+After fresh checkout, install the pre-commit hook so
+`index/tags.json` stays fresh whenever you commit doc or
+code changes:
+
+    make index-install-hook
+
+The hook is idempotent (re-running won't double-install)
+and safe with existing pre-commit content (it appends a
+marker-bracketed block).  The hook re-runs the scanner
+when any `*.md`, `*.rs`, `*.loft`, `*.toml`, `*.py`, or
+`*.sh` file is staged; commits that only touch other
+paths skip the scan.  Adds ~1 sec to commits that touch
+indexed files.
+
+If the scanner fails for any reason, the hook prints a
+warning but does NOT block the commit (broken hooks
+erode trust faster than stale index data does).
+
+### Where it lives
+
+| Path | Purpose |
+|---|---|
+| `tools/indexer/scan.sh` | The scanner |
+| `tools/indexer/install-hook.sh` | Hook installer (idempotent) |
+| `tools/indexer/ARCHITECTURE.md` | Design notes |
+| `scripts/idx` | CLI query wrapper |
+| `index/tags.json` | Output (gitignored) |
+| `doc/claude/plans/37-tracker-index/` | Plan + per-phase docs |
+
+---
+
+## Open work
+
+Diagnostic tooling enhancements surfaced by recurring debug
+sessions across @PLAN22's 02d sub-phases (Sept-Oct 2026).
+Each row is a focused, single-commit improvement; collectively
+they would have shaved 10-20 hours of `eprintln!`-and-rerun
+diagnosis time across @PLAN22 phases 02d-iii through 02d-vii.
+Listed in ROI order (highest leverage first).
+
+| Tool | Effort | Where it would have helped | Notes |
+|---|---|---|---|
+| ~~`LOFT_LOG=locks`~~ — log every `set_locked(true/false)` with store_nr + rec | ~~XS~~ Shipped 2026-05-12 | 02d-vii ("Write to locked store at rec=8 fld=2" with no provenance) | Instrumented at both `Stores::lock_store(&r)` (per-DbRef arm) and `Store::lock()` (low-level arm — catches direct callers like compile.rs const-store init).  Reads `LOFT_LOG` directly via `lock_trace_enabled()`.  Use alongside `LOFT_LOG=full` (set both, locks-trace interleaves with bytecode trace) — single-mode `LOFT_LOG=locks` also shows bytecode (the preset extends `full`). |
+| ~~Better always-on panic context~~ | ~~XS~~ Shipped 2026-05-12 | All store-related panics | Added a `lock_origin: String` field to `Store`; populated by every `Store::lock_with_origin()` caller (lock_store sets `lock_store(store_nr=N, rec=M)`, compile.rs sets `compile.rs::compile (CONST_STORE init)`, etc.).  Surfaced in `Write to locked store at rec=N fld=M (locked by: …)`, `Claim on locked store …`, and `Delete on locked store …` panic messages.  Always-on (no log mode needed). |
+| ~~`LOFT_LOG=type_timeline:<varname>`~~ | ~~S~~ Shipped 2026-05-13 | 02d-iii.a, 02d-v, 02d-vi, 02d-vii (each asked "what type does this var have right NOW?" 3+ times via ad-hoc `eprintln!`) | Instrumented at all 7 type-mutation sites in `src/variables/mod.rs` (`add_variable`, `add_temp_var`, `change_var_type` two arms, `set_type`, `depend`, `substitute_type`).  Each emits `[type_timeline] <name> (v_nr=N) <old> -> <new>  origin=<site>` to stderr.  Filtered to a single varname so output stays focused.  Reads `LOFT_LOG` directly via `type_timeline_target()`; no LogConfig needed. |
+| ~~`loft --dump-ir <fn>`~~ | ~~S-M~~ Shipped 2026-05-13 as `LOFT_LOG=ir:<fn_name>` | 02d-iii.e, 02d-vi (used `LOFT_LOG=full` to infer IR shape from bytecode; direct IR dump would be 5× faster to read) | Implemented as an `ir_only` LogConfig preset (phases.ir=true, phases.bytecode=false, phases.execution=false, show_functions filter).  New `compile::show_ir_only(&Data)` helper avoids the `&mut Data` requirement of `show_code`.  Wired into `execute_log_impl` so the IR dump fires before silent execution under `cargo run --interpret` (not just `--dump`).  Substring match on fn names. |
+| ~~`LOFT_LOG=slots:<fn>`~~ | ~~M~~ Shipped 2026-05-13 | 02d-v ("Incorrect var b[65535] versus 60" — slot was unallocated because no `Set/v_set` IR marked the var as defined; not visible in any current dump) | Post-allocation summary in `assign_slots` (src/variables/slots.rs:29).  For each var: ASSIGN with slot+size+type, or SKIP with explanation (is_argument, zero-size, no first_def, !is_defined, or unknown).  Substring fn-name match.  Shipped much faster than estimated — the M effort assumed deep instrumentation; a single post-allocation pass turned out to be sufficient. |
+| ~~`loft --dump-captures <fn>`~~ | ~~M~~ Shipped 2026-05-13 as `LOFT_LOG=captures:<fn_name>` | 02d-iii.e (5 separate `eprintln!` cycles to inspect closure-record attribute types across passes) | Implemented as a free function `compile::show_captures_summary(writer, &Data)` self-gated on `captures_trace_target()`.  Two-pass: parent fns matching the filter that have non-empty `scalars_to_box`, then ALL lambdas with `closure_record != MAX` (since `__lambda_N` synthetic names don't match user filters).  Per attribute, prints the storage encoding inferred from the type (12B share-by-DbRef auto-Reference, 12B owned Reference, inline Integer/Text/Float/etc.).  Wired into `execute_log_impl` so it fires under `cargo run --interpret`. |
+| Dep-graph / lifetime visualizer | L (~1 week) | Mostly leak-guard territory; would help when leaks DO surface | **Deferred** as of 2026-05-13.  The other 6 tools shipped this sprint each addressed a specific recurring pain point with measurable hours saved; the dep-graph addresses a category of bugs that `tests/leak.rs` (24 guards) already catches.  It would pay off only for the rare lifetime bug that doesn't leak (e.g., dep-chain ordering producing wrong output but balanced free counts).  Reactivate when such a bug concretely surfaces.  The `Vec<u16>` deps are overloaded (heap-owned / borrow / auto-Reference sentinel / mixed), parallel mechanisms (`work_text` / `inline_ref_vars` / closure_var_map) need to be merged, time-varying deps need snapshots, and graph rendering at scale needs DOT/graphviz — high complexity per debug-bug-saved. |
+
+**Why DEBUG.md and not a plan**: each row is independent
+(no cross-dependencies), each ships in a single commit, and
+the work doesn't have phases — it's classic light-flow
+infrastructure.  Per `loft-plan-workflow` skill, plans are
+for genuinely multi-phase initiatives with shared design.
+
+**Cross-cutting motivation**: the loft compiler has multiple
+passes (parse-1, parse-2, scope analysis, codegen) that each
+transform types, slots, and IR.  Mismatches between passes
+manifest as runtime panics with thin context.  The current
+debug story relies heavily on `LOFT_LOG=full` which is
+high-volume and requires reading bytecode + cross-referencing
+codegen.rs.  More targeted log modes that focus on specific
+subsystems (locks / types / slots / captures) reduce the
+cognitive load per debug session.
+
+## Branch review viewer (`make view`)
+
+A loft-script binary that serves a branch-aware doc + code review
+dashboard from a browser.  Useful for reviewing in-flight work
+without scrolling through chat snippets.  Built by @PLAN35 (closed
+2026-05-14); lives in `tools/viewer/` + `lib/markdown/`.
+
+### Usage
+
+In the VM:
+
+```bash
+make view-build          # one-time, when updating the host loft binary
+make view                # refreshes git state + starts server on 8765
+make view-refresh        # refreshes git state without restarting the server
+```
+
+From the host:
+
+```bash
+ssh -L 8765:localhost:8765 vm-user@vm-host
+```
+
+Open `http://localhost:8765/` in a browser.
+
+### Routes
+
+| Path | Renders |
+|---|---|
+| `/` | Branch dashboard — branch name + ahead/behind vs `main` + HEAD sha/msg, changed-files list, uncommitted-files list, last 20 commits.  Status badges (M/A/D/R) on every changed file. |
+| `/file/<path>` | File view.  `.md` files render via `lib/markdown` (full subset: ATX + setext headings with GH-slug ids, lists with continuation merging, GFM tables with alignment, fenced code, inline formatting, links with relative-path resolution + title attribute, images via `/raw/`, autolinks `<https://…>` / `<email>`, `@P-id` / `@PLAN-id` autolinks, blockquotes, task lists, strikethrough, backslash escapes).  Other files render line-numbered with `<a id="L42">` anchors. |
+| `/diff/<path>` | Per-file unified diff vs `main` with hunk colouring (green +, red −, blue hunk header). |
+| `/commit/<sha>` | Commit message + per-file diffs via the same hunk-coloured renderer.  Last 20 commits captured. |
+| `/tag/<bare>` | Every tracker-tag reference for a P-id or PLAN-id (e.g., `/tag/P259` lists all references to `@P259` and `legacy:P259`).  Reads `index/tags.json` built by `make index` (@PLAN37). |
+| `/tree/<path>` | Directory listing; sub-dirs are clickable. |
+| `/raw/<path>` | Raw file bytes (`text/plain`).  Used by markdown to serve relative image refs. |
+
+### File-page view toggle
+
+Every `/file/<path>` page shows a `[Rendered ¦ Diff vs main]`
+toggle in the top-right.  When the file is unchanged on the
+current branch (no per-file diff), the "Diff vs main" link
+hides — only "Rendered" stays.
+
+### Architecture
+
+| Layer | Where | Purpose |
+|---|---|---|
+| Server + routes + page templates | `tools/viewer/src/main.loft` | Loft script — HTTP server via `lib/server`, route dispatch, dashboard / tag-page / commit-page / diff-page / file-page rendering |
+| Markdown rendering | `lib/markdown/` | Standalone loft library — single-file `src/markdown.loft`, comprehensive `tests/01-render.loft` |
+| Git state | `tools/viewer/state/*.json` + `state/diffs/*.diff` + `state/commits/*.diff` | Filled by `tools/viewer/refresh.sh` (uses `git` + `jq`) |
+| Tracker-tag index | `index/tags.json` | Filled by `make index` (@PLAN37) |
+| Static CSS | embedded in `main.loft::BASE_CSS` | Light + dark via `prefers-color-scheme` |
+
+### Dependencies
+
+- **`git`** — used by `refresh.sh` to dump branch state
+- **`jq`** — used by `refresh.sh` to safely emit JSON
+- **The host loft binary** at `target/release/loft` — built via
+  `make view-build`; the viewer is a loft script interpreted
+  by it (or `--native`-compiled via the same binary)
+
+No Python, no markdown lib, no syntax-highlighter dep, no
+template engine.  All rendering is loft-native through `lib/markdown`
++ string concatenation in `main.loft`.
+
+### Frozen-binary contract
+
+The viewer source (`tools/viewer/src/main.loft`) and the host
+loft binary it runs against form a deliberately **frozen pair**.
+`make view-build` rebuilds the host binary; `make view` runs
+the existing one.  This means the viewer keeps working through
+loft refactors — refresh by running `make view-build` against
+a known-good loft commit.
+
+### Backends
+
+The viewer runs under **both `--interpret` and `--native`**
+(since the seven-bug native arc @P262→@P269 closed 2026-05-13).
+`make view` invokes `--interpret` by default for fast iteration;
+edit the Makefile target to swap in `--native` for the faster
+steady-state runtime.
+
+### Troubleshooting
+
+- **Dashboard shows "No git state. Run `make view-refresh`"** —
+  the refresh script hasn't built `tools/viewer/state/*.json`
+  yet.  Run `make view-refresh`.
+- **`/tag/<bare>` shows "No index found"** — `index/tags.json`
+  is missing.  Run `make index`.
+- **`/diff/<path>` shows "No diff captured"** — the file isn't
+  on the changed-files list (no diff vs `main`), OR refresh.sh
+  capped at 100 changed files.  Run `make view-refresh`.
+- **`/commit/<sha>` shows "No diff captured"** — refresh.sh
+  only keeps the last 20 commits.  For older commits, run
+  `git show <sha>` directly.
+
+### See also
+
+- [`plans/finished/35-branch-review-viewer/README.md`](plans/finished/35-branch-review-viewer/README.md) — the full design + per-phase build log
+- [`lib/markdown/loft.toml`](../../lib/markdown/loft.toml) — the rendering library
+
+---
+
 ## See also
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Developer guide: pipeline overview, quality requirements, feature proposals
 - [TESTING.md](TESTING.md) — Test framework, `code!` / `expr!` macros, LogConfig debug presets
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs with severity, workarounds, and fix paths
+- [SLOTS.md](SLOTS.md) — Slot assignment design (for the slots-dump enhancement)
+- [LIFETIME.md](LIFETIME.md) — Dep tracking and scope-based freeing (for the dep-graph enhancement)
 - [SLOTS.md](SLOTS.md) — Variable scoping and slot assignment details

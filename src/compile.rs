@@ -26,7 +26,8 @@ pub fn byte_code(state: &mut State, data: &mut Data) {
         state.def_code(d_nr, data);
     }
     build_const_vectors(state, data);
-    state.database.allocations[crate::database::CONST_STORE as usize].lock();
+    state.database.allocations[crate::database::CONST_STORE as usize]
+        .lock_with_origin("compile.rs::compile (CONST_STORE init)");
 }
 
 /// Extract literal values from vector constant Block IR and build
@@ -43,8 +44,8 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
         .const_refs
         .resize(data.definitions() as usize, null_ref);
     // Mirror const_refs on Stores so native codegen (which has
-    // `&mut Stores` but no `&mut State`) can substitute
-    // `s.const_refs` → `stores.const_refs` and resolve.
+    // `&mut Stores` but no `&mut State`) can resolve
+    // `OpConstRef` via `stores.const_ref_at_runtime(d_nr)`.
     state
         .database
         .const_refs
@@ -209,6 +210,138 @@ fn register_native_stubs(state: &mut State, data: &Data) {
     }
     // Store the set of stub symbols so wire_native_fns knows which to replace.
     crate::extensions::set_stub_symbols(stub_syms);
+}
+
+/// Plan-22 02d-vii follow-up — IR-only dump that doesn't
+/// require `&mut State` / `&mut Data`.  Used by
+/// `execute_log_impl` to print IR before execution starts when
+/// `LOFT_LOG=ir:<fn>` is active, so `cargo run` (not just
+/// `--dump`) shows the IR.
+///
+/// # Errors
+/// Returns an error if the writer fails or `data.show_code`
+/// fails to format an IR node.
+pub fn show_ir_only(writer: &mut dyn Write, data: &Data, config: &LogConfig) -> Result<(), Error> {
+    if !config.phases.ir {
+        return Ok(());
+    }
+    for d_nr in 0..data.definitions() {
+        if !matches!(
+            data.def(d_nr).def_type,
+            DefType::Function | DefType::Dynamic
+        ) {
+            continue;
+        }
+        let is_op = data.def(d_nr).is_operator();
+        if is_op && !config.show_all_functions {
+            continue;
+        }
+        let from_default = data.def(d_nr).position.file.starts_with("default/")
+            || data.def(d_nr).position.file.starts_with("default\\");
+        if from_default && !config.show_all_functions {
+            continue;
+        }
+        if !config.show_function(&data.def(d_nr).name) {
+            continue;
+        }
+        write!(writer, "{} ", data.def(d_nr).header(data, d_nr))?;
+        let mut vars = Function::copy(&data.def(d_nr).variables);
+        data.show_code(writer, &mut vars, &data.def(d_nr).code, 0, false)?;
+        writeln!(writer, "\n")?;
+    }
+    Ok(())
+}
+
+/// Plan-22 02d-vii follow-up — capture-pipeline summary for fns
+/// matching `LOFT_LOG=captures:<fn_name>`.  For each parent fn:
+/// scalars_to_box.  For each lambda inside it: mutated_captures,
+/// closure_record d_nr + name, per-attribute auto-Reference
+/// status (`[12B share-by-DbRef]` vs `[N B inline]`).
+///
+/// Replaces 5+ separate `eprintln!` cycles that 02d-iii.e
+/// needed to inspect closure-record attribute types across
+/// passes.
+///
+/// # Errors
+/// Returns an error if the writer fails.
+pub fn show_captures_summary(writer: &mut dyn Write, data: &Data) -> Result<(), Error> {
+    let Some(target) = crate::log_config::captures_trace_target() else {
+        return Ok(());
+    };
+    // Two-pass dump:
+    //   1. Parent fns matching the filter that have a non-empty
+    //      scalars_to_box (the only diagnostic info parents carry).
+    //   2. ALL lambdas with a closure_record (the name filter
+    //      doesn't apply to `__lambda_N` synthetic names; instead
+    //      we dump every lambda since the user filtered the parent
+    //      already).
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function | DefType::Dynamic) {
+            continue;
+        }
+        let is_lambda = def.closure_record != u32::MAX;
+        let direct_match = def.name.contains(&target);
+        if !direct_match && !is_lambda {
+            continue;
+        }
+        if def.scalars_to_box.is_empty() && !is_lambda {
+            continue;
+        }
+        writeln!(
+            writer,
+            "[captures] === {} (d_nr={d_nr}, {kind}) ===",
+            def.name,
+            kind = if is_lambda { "lambda" } else { "parent" }
+        )?;
+        if !def.scalars_to_box.is_empty() {
+            writeln!(
+                writer,
+                "[captures]   scalars_to_box = {:?}",
+                def.scalars_to_box
+            )?;
+        }
+        if is_lambda {
+            writeln!(
+                writer,
+                "[captures]   mutated_captures = {:?}",
+                def.mutated_captures
+            )?;
+            let cr_d = def.closure_record;
+            let cr = data.def(cr_d);
+            writeln!(
+                writer,
+                "[captures]   closure_record = #{cr_d} {cr_name} ({n_attrs} attrs)",
+                cr_name = cr.name,
+                n_attrs = cr.attributes.len()
+            )?;
+            for (idx, attr) in cr.attributes.iter().enumerate() {
+                let storage = match &attr.typedef {
+                    crate::data::Type::Reference(_, deps) if deps.first() == Some(&u16::MAX) => {
+                        "[12B share-by-DbRef (auto-Reference)]"
+                    }
+                    crate::data::Type::Reference(_, _) => "[12B owned Reference]",
+                    crate::data::Type::Text(_) => "[16B inline Text]",
+                    crate::data::Type::Integer(_) => "[8B inline Integer]",
+                    crate::data::Type::Float => "[8B inline Float]",
+                    crate::data::Type::Single => "[4B inline Single]",
+                    crate::data::Type::Boolean => "[1B inline Boolean]",
+                    crate::data::Type::Character => "[4B inline Character]",
+                    crate::data::Type::Function(_, _, _) => {
+                        "[20B inline Function (16B fn-ref + 4B pad)]"
+                    }
+                    _ => "[? inline / other]",
+                };
+                writeln!(
+                    writer,
+                    "[captures]     attr[{idx}] {name} : {tp:?}  {storage}",
+                    name = attr.name,
+                    tp = attr.typedef
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Dump byte code result to the given writer, filtered by `config`.

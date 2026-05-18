@@ -560,7 +560,28 @@ impl Output<'_> {
         write!(w, "{{ ")?;
         for (i, arg) in args.iter().enumerate() {
             let expr = self.generate_expr_buf(arg)?;
-            write!(w, "let _farg_{i} = {expr}; ")?;
+            // P265: when the fn-ref's parameter at this index is text,
+            // coerce the binding to `&str` at the bind site so every
+            // match arm can pass `_farg_{i}` to a `&str` parameter
+            // uniformly.  Without this, text-returning user fn calls
+            // produce `Str` (the codegen-runtime wrapper struct), and
+            // each match arm trips rustc E0308 on `n_println(cell,
+            // _farg_0)` etc.  Sibling to the direct-call fix shipped
+            // for P262 in `src/generation/calls.rs` — same Str→&str
+            // mismatch, different emit site.  The work-buffer arg
+            // (when `is_text_return` adds args.len() == param_types.len()+1)
+            // sits at index `args.len() - 1` which is `>= param_types.len()`,
+            // so the condition correctly excludes it (its type is
+            // `Type::RefVar(Type::Text(_))`, emitted as `&mut String`).
+            let is_text_arg = i < param_types.len() && matches!(param_types[i], Type::Text(_));
+            if is_text_arg {
+                write!(
+                    w,
+                    "let _farg_{i}_h = {expr}; let _farg_{i}: &str = &*_farg_{i}_h; "
+                )?;
+            } else {
+                write!(w, "let _farg_{i} = {expr}; ")?;
+            }
         }
         // Look up the closure work-var for this fn-ref variable (if any).
         let closure_var_nr = self.data.def(self.def_nr).variables.closure_var_of(v_nr);

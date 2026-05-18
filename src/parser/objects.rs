@@ -165,6 +165,45 @@ impl Parser {
             .find(|(n, _)| n == name)
             .cloned()
         {
+            // P257 (2026-05-12): reject collection-typed captures with a
+            // clean parse-time diagnostic.  The closure-record layout
+            // (16-byte fn-ref slot: 4B d_nr + 12B closure DbRef) holds
+            // the captured payload as a flat list of attributes; vectors
+            // and other keyed collections need an additional level of
+            // indirection (their content type) that the closure record
+            // doesn't currently model.  Without this rejection the
+            // failure mode is unstable: interp panics with `Write to
+            // locked store` (the closure record write trips the
+            // collection's internal lock), native rejects with rustc
+            // E0308 + E0605 (the generated code casts a tuple-shaped
+            // value as i32).  The bind-the-element-before-the-lambda
+            // workaround applies for any value the closure body
+            // actually needs.
+            if matches!(
+                ctype,
+                Type::Vector(_, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            ) {
+                let kind = match &ctype {
+                    Type::Vector(_, _) => "vector",
+                    Type::Hash(_, _, _) => "hash",
+                    Type::Sorted(_, _, _) => "sorted",
+                    Type::Index(_, _, _) => "index",
+                    Type::Spacial(_, _, _) => "spacial",
+                    _ => "collection",
+                };
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "{kind} variable '{name}' cannot be captured into a closure body; bind the element you need before the lambda (e.g. `x = {name}[i]; f = fn(...) {{ ... x ... }}`) — collection capture is not supported because the closure record layout doesn't model the content type"
+                );
+                t = ctype.clone();
+                *code = Value::Null;
+                return t;
+            }
             // record the capture for closure record synthesis.
             if !self.captured_names.iter().any(|(n, _)| n == name) {
                 self.captured_names.push((name.to_string(), ctype.clone()));
@@ -254,7 +293,83 @@ impl Parser {
                 t = Type::Unknown(0);
             }
         }
-        t
+        // Plan-22 phase 02d-iii.b — read auto-deref for boxed
+        // scalars.  When `t` is `Reference(__cell_<T>, _)`
+        // (set by phase 02d-iii.a's flip helper for mutated-
+        // scalar-capture locals), wrap the resolved IR in
+        // `Call(OpGet<T>, [code, Int(0)])` so reads load the
+        // cell's `value` field instead of yielding the bare
+        // DbRef.  Dormant in production until 02d-iii.e
+        // activates the flip — no production variable has the
+        // trigger type today, so the hook is a no-op for every
+        // read.
+        self.auto_deref_boxed_scalar(code, t)
+    }
+
+    /// Plan-22 phase 02d-iii.b — wrap a resolved variable read
+    /// in an `OpGet<T>(code, 0)` call when its type is
+    /// `Reference(__cell_<T>, _)` (a boxed scalar created by
+    /// phase 02d-iii.a's flip).
+    ///
+    /// Returns the underlying scalar type (the cell's `value`
+    /// field type).  No-op for any other input type.
+    ///
+    /// Mirrors `wrap_vector_get_val` in `parser/mod.rs:2409` —
+    /// the same opcode-per-type table, the same boolean
+    /// `OpGetByte` + `OpEqInt` shape.
+    ///
+    /// Limitations (acceptable for 02d-iii.b foundation):
+    /// - Doesn't fire from `parse_var`'s early-return paths
+    ///   (Reference-aliasing arm at lines 141-154, the special
+    ///   `$` ref at line 18, etc.).  Those paths handle other
+    ///   concerns and aren't on the critical path for
+    ///   boxed-scalar reads.
+    /// - Cells whose `value` field type isn't in the supported
+    ///   primitive set (Integer / Float / Single / Boolean /
+    ///   Character / Text / plain Enum) fall through with the
+    ///   bare DbRef — phase 02d-ii's silent gap for exotic
+    ///   shapes carries through here.
+    pub(crate) fn auto_deref_boxed_scalar(&mut self, code: &mut Value, t: Type) -> Type {
+        let Type::Reference(d_nr, _) = &t else {
+            return t;
+        };
+        if !self.data.def(*d_nr).name.starts_with("__cell_") {
+            return t;
+        }
+        let Some(value_attr) = self.data.def(*d_nr).attributes.first() else {
+            return t;
+        };
+        if value_attr.name != "value" {
+            return t;
+        }
+        let value_tp = value_attr.typedef.clone();
+        let pos = Value::Int(0);
+        let (op_name, is_bool) = match &value_tp {
+            Type::Integer(_) => ("OpGetInt", false),
+            Type::Float => ("OpGetFloat", false),
+            Type::Single => ("OpGetSingle", false),
+            Type::Text(_) => ("OpGetText", false),
+            Type::Character => ("OpGetCharacter", false),
+            Type::Enum(_, false, _) => ("OpGetEnum", false),
+            Type::Boolean => ("OpGetByte", true),
+            _ => return t,
+        };
+        let op_d_nr = self.data.def_nr(op_name);
+        if op_d_nr == u32::MAX {
+            return t;
+        }
+        if is_bool {
+            let byte_call = Value::Call(op_d_nr, vec![code.clone(), pos, Value::Int(0)]);
+            let eq_d_nr = self.data.def_nr("OpEqInt");
+            if eq_d_nr == u32::MAX {
+                *code = byte_call;
+            } else {
+                *code = Value::Call(eq_d_nr, vec![byte_call, Value::Int(1)]);
+            }
+        } else {
+            *code = Value::Call(op_d_nr, vec![code.clone(), pos]);
+        }
+        value_tp
     }
 
     pub(crate) fn is_file_var(&self, var_nr: u16) -> bool {
@@ -639,7 +754,19 @@ impl Parser {
                     })
                     .map(|v| self.vars.name(v))
                     .collect();
-                let suggestion = crate::diagnostics::suggest_similar(&name, &candidates);
+                // Plan-07 phase 5: skip suggestions for very short names
+                // (1 char) where typos are too ambiguous to be meaningful
+                // (`x` vs `y` is a coin flip).  Standard `suggest_similar`
+                // (distance ≤ 2) used here instead of the more aggressive
+                // `suggest_similar_capped` because variable typos like
+                // `result` vs `reuslt` (6-char transposition, distance 2)
+                // are common and worth suggesting; the capped version's
+                // `min(2, n/4)` formula is too strict for short names.
+                let suggestion = if name.chars().count() <= 1 {
+                    None
+                } else {
+                    crate::diagnostics::suggest_similar(&name, &candidates)
+                };
                 if let Some(s) = suggestion {
                     diagnostic!(
                         self.lexer,

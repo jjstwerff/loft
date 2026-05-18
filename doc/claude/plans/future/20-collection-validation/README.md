@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 20 — Keyed collection validation (hash / sorted / index / spacial)
+# @PLAN20 — Keyed collection validation (hash / sorted / index / spacial)
 
 **Status: deferred — pre-flight panic does not currently reproduce.**
 
@@ -18,7 +18,7 @@ intermediate session state I can't identify post-hoc.
 
 **Trigger to unpause:** any user-reported `index out of bounds`
 panic at `src/database/structures.rs:609`, or a deterministic
-reproducer that surfaces during plan-15/16/17/18/19 cell runs.
+reproducer that surfaces during @PLAN15/16/17/18/19 cell runs.
 The matrix in [00-matrix.md](00-matrix.md) is preserved as
 documentation; the phase ladder is correct if/when the bug
 re-surfaces.
@@ -83,7 +83,7 @@ that hash values must be struct fields).
 - E1: scalar key + scalar value (e.g. `Entry { id: integer, count: integer }`)
 - E2: text-field value
 - E3: Reference-field value
-- E4: tuple-field value (cross-cuts plan-14 phase 05)
+- E4: tuple-field value (cross-cuts @PLAN14 phase 05)
 
 ## Phase layout
 
@@ -94,7 +94,7 @@ that hash values must be struct fields).
 | 02 — hash basics (K1 × O1–O3, O5) | Insert / lookup / remove / cleanup for hash collections.  K1 has no O4 (hash can't iterate). |
 | 03 — sorted/index basics (K2/K3 × O1–O5) | Iterate cells must produce sorted output; cross-mode equivalence on iteration order. |
 | 04 — spacial (K4) | Spatial queries; less-tested surface. |
-| 05 — value-type sub-axis (E1–E4) | Specialise cells with text/Reference/tuple value types.  Cross-cuts plan-14 phase 05. |
+| 05 — value-type sub-axis (E1–E4) | Specialise cells with text/Reference/tuple value types.  Cross-cuts @PLAN14 phase 05. |
 | 06 — freeze + doc | Update STDLIB.md collection sections, loft-write skill restrictions table, PLANNING.md. |
 
 ## Pre-flight gate
@@ -126,9 +126,9 @@ of phases 02-04 pass mostly green, close phase 05 as deferred
 
 ## Cross-references
 
-- [STDLIB.md § Collections](../../STDLIB.md) — API reference.
-- [LOFT.md § Composite types](../../LOFT.md) — language reference.
+- [STDLIB.md § Collections](../../../STDLIB.md) — API reference.
+- [LOFT.md § Composite types](../../../LOFT.md) — language reference.
 - `src/database/structures.rs:609` — the panic site (active risk).
-- [DESIGN.md § keyed collections](../../DESIGN.md) — architecture.
-- [plan-14 phase 05](../../finished/14-tuple-validation/05-struct-field.md) —
+- [DESIGN.md § keyed collections](../../../DESIGN.md) — architecture.
+- [@PLAN14 phase 05](../../finished/14-tuple-validation/05-struct-field.md) —
   tuple-value-type cross-reference.

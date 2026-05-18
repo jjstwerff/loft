@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 Status: shipped (2026-05-03).  Core machinery (pc → Position table,
 publish-to-thread-local snapshot, panic-hook source-loc print) had
-already landed during plan-09 work.  Phase 3's missing piece — the
+already landed during @PLAN09 work.  Phase 3's missing piece — the
 SIGSEGV / SIGABRT / SIGBUS handler emitting the source location —
 landed in this session along with regression tests covering the
 lookup semantics.

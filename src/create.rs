@@ -142,12 +142,6 @@ pub fn generate_code_to(data: &Data, path: &str) -> std::io::Result<String> {
 /// # Errors
 /// When the writer reports an error.
 pub fn generate_code_into(data: &Data, into: &mut dyn Write) -> std::io::Result<()> {
-    let mut count = 0;
-    for d_nr in 0..data.definitions() {
-        if data.def(d_nr).is_operator() {
-            count += 1;
-        }
-    }
     writeln!(
         into,
         "#![allow(clippy::cast_possible_wrap)]
@@ -161,7 +155,7 @@ use crate::state::State;
 use crate::tree;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); {count}] = &["
+pub const OPERATORS: &[fn(&mut State)] = &["
     )?;
     for d_nr in 0..data.definitions() {
         let n = &data.def(d_nr).name;

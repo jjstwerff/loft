@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-# Language Features for Server and Game Client Libraries
+# @PLAN29 — Language Features for Server and Game Client Libraries
 
 Design for five language and API improvements identified by evaluating the
 `server` and `game_client` library designs.  Each item is motivated by a
@@ -525,7 +525,7 @@ the other four are stable.
 
 ## See also
 
-- [WEB_SERVER_LIB.md](../../../WEB_SERVER_LIB.md) — server library design + game server additions
+- [`lib_plans/future/08-server/`](../../../lib_plans/future/08-server/README.md) — server library design + game server additions
 - [GAME_CLIENT_LIB.md](../../../lib_plans/future/10-game-client/README.md) — game client library design
 - [PLANNING.md](../../../PLANNING.md) — items C55, C56, A15, I13, C57
 - [INTERFACES.md](../../../INTERFACES.md) — I5+ interface system (prerequisite for formal I13)

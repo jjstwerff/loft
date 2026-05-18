@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-# Slicing & Comprehension on `sorted` / `index` (A8)
+# @PLAN30 — Slicing & Comprehension on `sorted` / `index` (A8)
 
 Design for key-range slicing, open-ended bounds, partial-key match iteration, and
 vector comprehensions over `sorted<T>` and `index<T>` collections.

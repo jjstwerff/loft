@@ -134,9 +134,17 @@ impl Output<'_> {
                 } else {
                     // B7-native: text-returning user fn calls produce `Str`,
                     // but callees expect `&str`.  Wrap with `&*` to deref.
+                    // P262: must unspan() before matching — the parser
+                    // wraps inline call expressions in Value::Span (for
+                    // source-position tracking), and the bare matches!
+                    // pattern does not see through Span.  Without this,
+                    // the consuming-call argument site emitted the raw
+                    // `Str`-returning call expression with no deref,
+                    // tripping rustc E0308 ("expected `&str`, found `Str`").
+                    let v_unspanned = v.unspan();
                     let needs_deref = idx < def_fn.attributes.len()
                         && matches!(def_fn.attributes[idx].typedef, Type::Text(_))
-                        && matches!(v, Value::Call(d, _) if
+                        && matches!(v_unspanned, Value::Call(d, _) if
                             matches!(self.data.def(*d).returned, Type::Text(_))
                             && self.data.def(*d).rust.is_empty()
                             && !self.data.def(*d).name.starts_with("Op"));
@@ -335,6 +343,26 @@ impl Output<'_> {
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
+                // @P276 — same wrap for `Value::Block` whose result type is
+                // `Type::Character`.  Pre-eval lifts the block into a
+                // `let _pre_N = { … }` binding; the block body's last
+                // expression yields `i32` because the inner `_ncc_*: i32`
+                // var holds the character that way (see
+                // `Variable` context in `rust_type`).  Without this wrap
+                // the OpConvIntFromCharacter template emits
+                // `_v_v1 == char::from(0)` against an `i32` `_v_v1` and
+                // rustc rejects with E0308.  Reproducer: `(s[i] ?? '<c>')
+                // == '<c>'` lowers to `OpConvIntFromCharacter` over an
+                // `Block` (`#ncc(N):character`), and the block's emit
+                // produces `i32` even though loft types it `Character`.
+                if matches!(a.typedef, Type::Character)
+                    && let Value::Block(b) = vals[a_nr].unspan()
+                    && matches!(b.result, Type::Character)
+                {
+                    let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    res = res.replace(&name, &format!("(ops::to_char({inner}))"));
+                    continue;
+                }
                 // Text-typed parameters: all text-returning calls produce `Str` or `String`,
                 // but templates expect `&str`. Deref with `&*` to get `&str` in all cases.
                 if matches!(a.typedef, Type::Text(_))
@@ -434,11 +462,19 @@ impl Output<'_> {
         // Initiative 03 Phase 3b: const_refs lives on both `State`
         // (interpreter path) and `Stores` (mirrored for native).
         // Translate template references so OpConstRef / OpConstStoreText
-        // resolve under `&mut Stores` in native code.
-        res = res.replace("s.const_refs", "stores.const_refs");
+        // resolve under `&mut Stores` in native code.  Both use the
+        // `_runtime` suffix on the destination name so the substitution
+        // can't re-match its own output when this op is nested inside
+        // another op's template — without the suffix, the substring
+        // `s.const_ref_at(` reappears at offset 5 in
+        // `stores.const_ref_at(...)` and accumulates `stor` prefixes
+        // (`storestores.const_ref_at`, `storestorestores...`).  Same
+        // trick used for `s.raise(` → `stores.raise_runtime(` below.
+        // @P275 fix.
+        res = res.replace("s.const_ref_at(", "stores.const_ref_at_runtime(");
         res = res.replace(
-            "s.string_from_const_store",
-            "stores.string_from_const_store",
+            "s.string_from_const_store(",
+            "stores.string_from_const_store_runtime(",
         );
         // Plan-07 phase 4c — Stores-side counterparts of the
         // State::raise / State::vec_get_or_raise / State::vec_ref_or_raise /

@@ -186,7 +186,7 @@ Tests outside corpus that regressed without corpus catching:
 
 1. **Phase 05's WRITE-side scope was wrong.**  Phase 05's
    diagnosis described `f += val` template hard-coding `i32` as
-   the P200 bug.  The actual failing sites in 20-binary today are
+   the @P200 bug.  The actual failing sites in 20-binary today are
    READ-side comparison emission (E0308 between narrowed `as u8/u16/u32`
    block-tail and `_i64` literal RHS).  Discovery happened during
    phase 05 step 5.0's stub registration when probing `--native-emit`
@@ -197,10 +197,10 @@ Tests outside corpus that regressed without corpus catching:
    was authored based on the symptom description, not against
    today's `--native-emit` output.  Phase 05 needs scope rewrite.
 
-2. **Phase 02 is no longer a P200 prerequisite.**  Phase 02 splits
+2. **Phase 02 is no longer a @P200 prerequisite.**  Phase 02 splits
    `narrow_int_cast`'s param-narrowing role (role #2).  Phase 05's
    actual bug is the block-tail role (role #1).  Phase 02 doesn't
-   dissolve the P200 blocker anymore; it's a pure simplification
+   dissolve the @P200 blocker anymore; it's a pure simplification
    without bug-fix dependency.  **Decision**: demote phase 02 to
    optional, defer until phase 05 lands and we know whether the
    block-tail fix needs a phase 02b.
@@ -255,8 +255,8 @@ Three surprises that surface here update downstream phases:
    status block (commit `a2218be`); plan rewrite required before
    implementation.
 
-**Continue to phase 06** (P202 close — ready, doc updated for
-ParShape pattern in commit `a2218be`).  Phase 07 (P205, Outcome B
+**Continue to phase 06** (@P202 close — ready, doc updated for
+ParShape pattern in commit `a2218be`).  Phase 07 (@P205, Outcome B
 confirmed) can run in parallel.  Phase 05 needs rewrite before
 attempt.
 
@@ -264,13 +264,13 @@ attempt.
 
 - **`feedback_forwarding_first_recipe.md`** — the pre-flight
   pattern that caught two distinct trap classes.  Durable beyond
-  plan-09.
+  @PLAN09.
 - **`feedback_ci_gate_per_commit.md`** — extend the existing CI
   gate memory to explicitly call out per-commit checking for
   hot-path edits, since this branch accreted 1 fmt + 5 clippy
   errors over 5 phases.
 - **`project_plan_09_simplification_cluster.md`** — record what
   the simplification cluster delivered: 5 phases, 1 P-issue
-  closed (P203), wart-budget gates, byte-identical contract held.
+  closed (@P203), wart-budget gates, byte-identical contract held.
   Surfaces decisions for bug-fix phases (phase 02 demoted, phase
   05 needs rewrite, phase 06 ready).

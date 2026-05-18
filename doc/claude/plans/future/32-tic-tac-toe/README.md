@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# TIC_TAC_TOE — protocol-validation vehicle (parked — blocked on infra)
+# @PLAN32 — TIC_TAC_TOE — protocol-validation vehicle (parked — blocked on infra)
 
 **Status (2026-05-11):** **parked back to `plans/future/`.**
 v1 / v2 / v3 (server + JS client) / v5 are shipped; the
@@ -11,20 +11,20 @@ remaining milestones (v3.5, v4, v6) all gate on infrastructure
 that lives in other plans.  No un-gated work remains here.
 
 Resume triggers:
-- **v3.5 loft-WASM client** → unblocked by [plan-23 YIELD.2](../23-event-loop/README.md#yield--four-target-async-portability-parallel-sub-arc)
+- **v3.5 loft-WASM client** → unblocked by [@PLAN23 YIELD.2](../23-event-loop/README.md#yield--four-target-async-portability-parallel-sub-arc)
   (the `compile_and_start` / `resume_frame` integration that lets
   a synchronous-ish loft program drive an async WebSocket).
 - **v4 hot WASM swap** → gated on v3.5.
-- **v6 closure retrofit** → unblocked by [plan-22 phase 2](../../22-mutable-closures/README.md#sequencing)
+- **v6 closure retrofit** → unblocked by [@PLAN22 phase 2](../../finished/22-mutable-closures/README.md#sequencing)
   (the implicit-by-body classifier).
 - **General lib/server polish that helps every TTT vN** →
-  [plan-34](../34-server-hardening/README.md) items (a) + (b);
+  [@PLAN34](../34-server-hardening/README.md) items (a) + (b);
   XS each, can land independently.
 
 Was promoted to active 2026-05-11 with intent to finish soon;
 shipped v3 server-side + v3 JS-client browser game in that
 session, then re-parked when the v3.5 spike confirmed the
-remaining work all sits behind YIELD.2 / plan-22 phase 2.  The
+remaining work all sits behind YIELD.2 / @PLAN22 phase 2.  The
 architectural ceiling here is reached for now; pick this back
 up after the gating plans land.
 
@@ -37,7 +37,7 @@ up after the gating plans land.
 | **v3.5** loft-WASM client | designed, not started | Replace the JS client with a real loft client running in the browser via the loft interpreter WASM (already shipped on the GitHub Pages site).  Reuses `doc/pkg/loft.js` + `doc/pkg/loft_bg.wasm` + `doc/loft-rt.js` 100%; adds WS host imports + a small bootstrap HTML + a `client.loft`.  Design + sequencing in [`v3.5-loft-wasm-browser-client.md`](v3.5-loft-wasm-browser-client.md).  **Also the mechanism for distributing the laptop client** for any loft program |
 | v4 | after v3.5 | Client-uploaded scripts → server-side compile → hot WASM swap (the in-browser game-dev workflow) |
 | v5 | ✓ shipped | Binary world stream + N clients + catch-up + sluggish tempo (5/5 `multiplayer_v5` tests green) |
-| v6 | gated on plan-22 | Drop `Reference<T>` ceremony in the v5 server using writable closures.  Pure ergonomic cleanup; not on plan-36's critical path |
+| v6 | gated on @PLAN22 | Drop `Reference<T>` ceremony in the v5 server using writable closures.  Pure ergonomic cleanup; not on @PLAN36's critical path |
 
 The protocol mechanics for v3 / v4 are **planned and will be
 built**, but **the visual side of tic-tac-toe is deferred
@@ -289,7 +289,7 @@ unchanged.
 
 Library-level multiplexing across handlers requires storing one
 closure per handler in a struct field — currently blocked by
-[P213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix).
+[@P213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix).
 For this milestone, the program's loop drains messages with
 `web::try_recv()` and matches the parsed integer id against the
 handler ids learned from the MAP frame:
@@ -394,7 +394,7 @@ fn main() {
 
 `state` is allocated in a Store; `Reference<Board>` is captured
 by handler functions (today's workaround per
-[plans/22-mutable-closures/README.md](../../22-mutable-closures/README.md)).  The shipped
+[plans/finished/22-mutable-closures/README.md](../../finished/22-mutable-closures/README.md)).  The shipped
 text-only first cut omits `mouse_just_clicked` / `render_board`
 / `gl_swap_buffers` and walks through a hardcoded click sequence
 instead.
@@ -729,7 +729,7 @@ rematch handling.
   dispatch in `pump()` callback hard enough to demonstrate the
   pattern at meaningful scale.  If five handlers fit in the
   workaround pattern cleanly, the case for library-level
-  dispatch (post-P213) becomes purely about ergonomics, not
+  dispatch (post-@P213) becomes purely about ergonomics, not
   feasibility.
 
 ### Out of scope for v2
@@ -1035,17 +1035,17 @@ validation-only framing); the test program for v5 is a
 multi-client world-bytes streamer that proves the primitives
 work on the wire.
 
-### Shared world data model — TTT board mirrors plan-36
+### Shared world data model — TTT board mirrors @PLAN36
 
 The v5 test programs use the **same `World` / `Chunk` / `Cell`
-structures as plan-36's audience-generative-art demo**.  TTT's
+structures as @PLAN36's audience-generative-art demo**.  TTT's
 3×3 board sits at **origin (0, 0) of chunk (0, 0)** — cells
 (0, 0) through (2, 2) of the world; resolved 2026-05-10 for
 test-program simplicity.  Per-cell payload is the same 4 bytes
 (1 byte colour + 1 byte height + 2 bytes age).  Colour values
 are reinterpreted for TTT semantics:
 
-| Colour byte | TTT meaning | plan-36 meaning |
+| Colour byte | TTT meaning | @PLAN36 meaning |
 |---|---|---|
 | 0 | empty cell | empty hex |
 | 1 | X | red |
@@ -1056,7 +1056,7 @@ are reinterpreted for TTT semantics:
 leave them at default (0) — the binary serialiser still writes
 them, the binary deserialiser still reads them, the wire format
 is byte-identical.  This means primitives developed against the
-TTT test programs **translate to plan-36 with zero protocol
+TTT test programs **translate to @PLAN36 with zero protocol
 glue**: same struct definitions, same chunk addressing
 (`chunk_idx_32` / `hex_idx_32`), same blob-pack/unpack code,
 same session-tag header, same catch-up event shape.
@@ -1146,7 +1146,7 @@ protocol verification.
 
 ### What v5 validates
 
-- **The complete wire-protocol surface plan-36 needs.**  Plan-36
+- **The complete wire-protocol surface @PLAN36 needs.**  Plan-36
   (audience-generative-art demo) becomes a straightforward
   consumer of proven primitives.  No protocol research happens
   on the demo's critical path.
@@ -1163,12 +1163,12 @@ protocol verification.
 ### Out of scope for v5
 
 - Any 3D rendering.  v5 ships text-mode tests; the demo's
-  renderer is plan-36's phase 3 work, layered on top of v5's
+  renderer is @PLAN36's phase 3 work, layered on top of v5's
   wire primitives.
 - Edge / line classification, frost mesh, ridge-and-crevice
-  tops — all renderer-side, all in plan-36's scope.
+  tops — all renderer-side, all in @PLAN36's scope.
 - Visual UX (palette, movement zones, jump-to-active) —
-  plan-36's phase 0.
+  @PLAN36's phase 0.
 - HTTP asset serving — that stays v3's concern.
 - Hot WASM swap — that stays v4's concern.
 
@@ -1192,8 +1192,8 @@ v5 surfaced (and deferred to a sibling plan):
 - A handful of `lib/server` polish gaps that t1-t5 hit but
   worked around (most visibly t4's inline `n_ws_send_binary`
   declaration because `srv.send_to` is text-only).  Captured in
-  [plan-34](../34-server-hardening/README.md) — the natural
-  prereq layer for plan-36 phase 1.  Independent of v6's
+  [@PLAN34](../34-server-hardening/README.md) — the natural
+  prereq layer for @PLAN36 phase 1.  Independent of v6's
   closure-retrofit work; either plan can land first.
 
 ### Build order recommendation
@@ -1206,10 +1206,10 @@ swap) is its own arc and can land in parallel or after.
 
 **Status:** scoped 2026-05-10.  Pure cleanup pass; no new
 protocol or runtime capability.  Depends on
-[plan-22 (mutable closures)](../../22-mutable-closures/README.md)
+[@PLAN22 (mutable closures)](../../finished/22-mutable-closures/README.md)
 landing in the language.  **Explicitly NOT on the audience-
-demo's critical path** — if plan-22 has not shipped by the
-meetup talk, plan-36 server uses `Reference<T>` exactly like
+demo's critical path** — if @PLAN22 has not shipped by the
+meetup talk, @PLAN36 server uses `Reference<T>` exactly like
 v5 does today, and the demo functions identically.
 
 ### What v6 adds
@@ -1229,7 +1229,7 @@ coverage.  v6 is a **diff** against v5's server code:
 
 ### Why v6 (and not just "we'll clean up later")
 
-The audience-generative-art demo (plan-36) projects loft code
+The audience-generative-art demo (@PLAN36) projects loft code
 on screen during the "loft snippet highlights" beats.  Visible
 code structure is part of the talk's value proposition (art
 show with loft footnotes) — `state.inner.X` clutter on the
@@ -1252,24 +1252,23 @@ introduced a bug and gets reverted.
 ### Sequencing relative to broader loft work
 
 v6 depends on:
-- plan-22 (mutable closures) implementation — currently
-  promoted to `plans/22-mutable-closures/`, locked-in spec
-  ready to build.
+- @PLAN22 (mutable closures) — SHIPPED 2026-05-13.
+  See `plans/finished/22-mutable-closures/`.
 
 v6 unblocks:
-- plan-36 server gets the same retrofit applied automatically
+- @PLAN36 server gets the same retrofit applied automatically
   (the two servers share the captured-state pattern, so the v6
-  diff translates 1:1 to plan-36 phase 1).
+  diff translates 1:1 to @PLAN36 phase 1).
 
 ### Out of scope for v6
 
 - Any new protocol capability (those land in v5 or future vN).
-- Mutable-closure work in plan-36's *renderer* (the projector
+- Mutable-closure work in @PLAN36's *renderer* (the projector
   + desktop client renderers are stateless per frame; the
   capture pattern doesn't apply there).
 - Mutable-closure work in any earlier vN's reference code (v2's
   pump callback stays as-is in the design; only v5's server
-  pattern gets retrofitted, and only if plan-22 lands in time).
+  pattern gets retrofitted, and only if @PLAN22 lands in time).
 
 ---
 
@@ -1280,11 +1279,10 @@ v6 unblocks:
   game.
 - [EVENT_LOOP_DISCUSSION.md](../23-event-loop/DISCUSSION.md) — open
   questions on the wider design.
-- [plans/22-mutable-closures/README.md](../../22-mutable-closures/README.md) — closure-capture
-  spec; the dispatch workaround in this game's pump callback
-  rests on the documented `Reference<T>` capture pattern.
-  Promoted to current 2026-05-10; TTT v6 is the in-game
-  consumer of the implementation.
+- [plans/finished/22-mutable-closures/README.md](../../finished/22-mutable-closures/README.md) — closure-capture
+  spec (shipped 2026-05-13); the dispatch workaround in this
+  game's pump callback rests on the documented `Reference<T>`
+  capture pattern.  TTT v6 is the in-game consumer.
 - [PROBLEMS.md § 213](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix)
   — closure-in-struct-field layout limit; lifts the workaround
   once landed.

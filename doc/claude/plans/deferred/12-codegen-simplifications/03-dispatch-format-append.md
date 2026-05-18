@@ -35,7 +35,7 @@ Total: ~12 arms across closely-related Op families.
 
 The wart-budget gate
 (`tests/codegen_emitter.rs::dispatch_op_arm_budget_not_exceeded`)
-caps the count at 26.  Currently 24 (plan-09 retired
+caps the count at 26.  Currently 24 (@PLAN09 retired
 n_parallel_for + OpGetRecord + OpIterate).  Each remaining arm
 is a simplification candidate — moving it to a custom emitter
 reduces the special-case count and puts emission logic next to

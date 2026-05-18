@@ -40,7 +40,7 @@ others are one-offs.
 
 ## Why migrate
 
-Same rationale as plan-12 phase 03: drain dispatch.rs's special-
+Same rationale as @PLAN12 phase 03: drain dispatch.rs's special-
 case match toward zero.  These arms differ from the format/append
 cluster — they tend to have UNIQUE bodies (no shared helper),
 so the consolidation factor is lower.  Each arm becomes its own

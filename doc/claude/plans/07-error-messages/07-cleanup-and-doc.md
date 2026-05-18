@@ -160,7 +160,7 @@ and fix.
 
 ## New env-var additions to document in 7.4
 
-The plan-04 family ships several new env-var / CLI flag toggles
+The @PLAN04 family ships several new env-var / CLI flag toggles
 that 7.4 must add to `CLAUDE.md` and `LOFT_LOG`-adjacent tables:
 
 | Flag | Effect | Phase |

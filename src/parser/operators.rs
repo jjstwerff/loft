@@ -315,6 +315,16 @@ impl Parser {
             "OpGetInt4" => self.cl("OpSetInt4", &[args[0].clone(), args[1].clone(), code]),
             "OpGetFloat" => self.cl("OpSetFloat", &[args[0].clone(), args[1].clone(), code]),
             "OpGetSingle" => self.cl("OpSetSingle", &[args[0].clone(), args[1].clone(), code]),
+            // Plan-22 phase 02d-iv — character / text cell writes
+            // route through OpSetCharacter / OpSetText (3-arg
+            // shape: ref, fld, val).  Mirrors the existing
+            // OpGetInt → OpSetInt mapping above.  Required by
+            // 02d-iii's auto-deref'd LHS pattern for boxed-
+            // scalar locals + closure-body writes.
+            "OpGetCharacter" => {
+                self.cl("OpSetCharacter", &[args[0].clone(), args[1].clone(), code])
+            }
+            "OpGetText" => self.cl("OpSetText", &[args[0].clone(), args[1].clone(), code]),
             "OpGetField" => code,
             "n_get_store_lock" => {
                 // d#lock = val — validation enforced in parse_assign before this call.

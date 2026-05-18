@@ -153,7 +153,10 @@ select {
 .hl-ty { color: var(--yellow); }
 .hl-str { color: var(--green); }
 .hl-num { color: var(--peach); }
-.hl-cm { color: var(--subtext); font-style: italic; }
+/* Comments: Catppuccin Mocha Overlay2 (#9399b2) — clearly muted
+   vs code text (#cdd6f4) but ~5.5:1 contrast on the bg, where the
+   old `--subtext` (#6c7086) sat at only ~3:1 and was hard to read. */
+.hl-cm { color: #9399b2; font-style: italic; }
 .hl-fn { color: var(--blue); }
 .hl-op { color: var(--teal); }
 /* Assert results */

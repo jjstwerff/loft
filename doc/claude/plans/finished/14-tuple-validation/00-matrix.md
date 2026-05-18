@@ -35,7 +35,7 @@ Cell legend: `PASS:test_name` / `FIX:phase` / `CLOSED:reason` /
 | **E1n** `integer not null` | PASS:`e1n_d1_local` | PASS:`e1n_d2_arg` | PASS:`e1n_d3_field_intnotnull_bool` |
 | **E2** text / text not null | PASS:`e2_d1_text_text_local`, `e2_d1_text_int_local` | PASS:`e2_d2_arg_text_text`, `e2_d2_inline_text`, `e2_d2_return_text_text` | PASS:`e2_d3_field_text_text` |
 | **E3** nested tuple | PASS:`e3_d1_nested_local`, `e3_d1_nested_deep`, `e3_d1_text_inside`, `e3_d1_elem_elem_assign` | PASS:`e3_d2_nested_arg`, `e3_d2_nested_return` | PASS:`e3_d3_field_nested` |
-| **E4** closure (`Type::Function`) | PASS:`e4_d1_closure_local`, `e4_d1_closure_call`, `e4_d1_closure_swap`, `e4_d1_capture_survives` | PASS:`e4_d2_closure_arg` | CLOSED:P251 — native projection bug for fn-ref-tuple-in-struct-field write path; cell parks until P251 closes |
+| **E4** closure (`Type::Function`) | PASS:`e4_d1_closure_local`, `e4_d1_closure_call`, `e4_d1_closure_swap`, `e4_d1_capture_survives` | PASS:`e4_d2_closure_arg` | CLOSED:@P251 — native projection bug for fn-ref-tuple-in-struct-field write path; cell parks until @P251 closes |
 | **E5** struct reference (`Type::Reference`) | PASS:`e5_d1_struct_ref_local`, `e5_d1_struct_ref_swap`, `e5_d1_ref_int_local`, `e5_d1_ref_text_local` | PASS:`e5_d2_struct_ref_arg`, `e5_d2_struct_ref_return` | PASS:`e5_d3_field_struct_ref` |
 | **E6** "structure value" — see note below | CLOSED:folded into E5 (no inline value-struct type in loft) | CLOSED:folded into E5 | CLOSED:folded into E5 |
 | **E7** vector / hash / sorted / index | CLOSED:non-goal (TUPLES.md) | CLOSED:non-goal | CLOSED:non-goal |
@@ -44,11 +44,11 @@ Cell legend: `PASS:test_name` / `FIX:phase` / `CLOSED:reason` /
 
 Two bugs surfaced during validation are parked behind dedicated cells:
 
-- **P250** (loop-iteration ref-tuple aliasing) — `for { (q1, q2) =
+- **@P250** (loop-iteration ref-tuple aliasing) — `for { (q1, q2) =
   make_pair(pa, pb); }` reads `null` for the destructured variable
   that picked up the FIRST argument on iterations >0.  Single-call
   shapes work; the loop-iter cell waits for the dep-tracking fix.
-- **P251** (E4_d3) — native codegen rejects storing a tuple-with-fn-ref
+- **@P251** (E4_d3) — native codegen rejects storing a tuple-with-fn-ref
   element into a struct field with rustc E0605 `(u32, DbRef) as i32`;
   P196's `.0` projection didn't extend to this wrapping-tuple case.
 
@@ -186,7 +186,7 @@ cross_mode!(e1_d1_int_int_local, "
 Both modes print `3,7\n` then run the assert.  Cross-mode
 equivalence catches the case where the interpreter prints `3,7\n` but
 native prints `0,0\n` (silent corruption — the historical pattern
-behind P200 / P203 / P205).
+behind @P200 / @P203 / @P205).
 
 ## Per-cell test inventory drafted in 00
 
@@ -225,8 +225,8 @@ e5_d2_struct_ref_return            // requires-T1.8a + T1.8c
 e_all_d3_struct_field              // pivot test from phase 05
 ```
 
-A cell with `requires-T1.8a` lands `#[ignore = "T1.8a — plan-06
-phase 9a"]` until the plan-06 prerequisite ships, then the ignore is
+A cell with `requires-T1.8a` lands `#[ignore = "T1.8a — @PLAN06
+phase 9a"]` until the @PLAN06 prerequisite ships, then the ignore is
 removed in a one-line follow-up commit.
 
 A cell with `requires-T1.8c` is the active fix subject of phase 04;
@@ -277,5 +277,5 @@ no separate ignore tag.
 - `tests/wrap.rs` — interpreter runner; current pattern for snippet
   tests.
 - `tests/common/mod.rs` — re-export point for the new harness.
-- [TESTING.md](../../TESTING.md) — `LogConfig` + `LOFT_LOG` reference
+- [TESTING.md](../../../TESTING.md) — `LogConfig` + `LOFT_LOG` reference
   for harness debugging.

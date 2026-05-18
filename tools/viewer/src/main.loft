@@ -1,0 +1,1990 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft-view: branch-aware doc + code review viewer.
+//
+// Frozen binary built deliberately via `make view-build` from the
+// loft repo root.  See doc/claude/plans/35-branch-review-viewer/
+// for the full design + per-phase plans.
+//
+// Phase 01: HTTP server + project tree + raw file serving.
+// Routes:
+//   GET /                   landing page (entry-point links)
+//   GET /tree/<path>        directory listing
+//   GET /raw/<path>         raw file bytes (text/plain)
+//   GET /static/style.css   minimal stylesheet
+//   GET *                   404
+//
+// Project root = current working directory when the binary runs;
+// loft sandboxes file I/O via valid_path() so paths can't escape.
+
+use server;
+use markdown;
+
+const PORT: integer = 8765;
+
+fn main() {
+    // Future: read LOFT_VIEW_PORT once a stable env_variable + parse
+    // path is settled.  Today: hard-coded.
+
+    srv = server::listen(PORT);
+    // Note: println at startup triggers a native-codegen dispatch-table
+    // bug (see PROBLEMS § P262); silent for now.  Revisit when P262 is
+    // closed.
+
+    while true {
+        req = srv.next();
+        if req == null { continue; }
+        route(req);
+    }
+}
+
+fn route(req: server::Request) {
+    p = req.path;
+    if p == "/" {
+        body = page_landing();
+        req.respond_html(body);
+    } else if p == "/welcome" {
+        // @PLAN37 phase 04b — bucketed status view for visitors
+        // arriving at the project for the first time.  Reads the
+        // index/tags.json buckets (problems_open, problems_recent,
+        // plans_*) and renders a guided path: vision → recent
+        // wins → active work → interest areas.  Distinct from /
+        // (the branch dashboard, the working surface for the user
+        // reviewing their in-flight work).
+        body = page_welcome();
+        req.respond_html(body);
+    } else if p == "/static/style.css" {
+        // Bind to local — works around a native codegen quirk that
+        // takes &<call-result> when a text constant is passed inline.
+        css = BASE_CSS;
+        req.respond_css(css);
+    } else if p == "/favicon.ico" {
+        req.respond_404();
+    } else if p.starts_with("/tree/") {
+        rel = p[6..len(p)];
+        body = page_tree(rel);
+        req.respond_html(body);
+    } else if p == "/tree" {
+        body = page_tree("");
+        req.respond_html(body);
+    } else if p.starts_with("/raw/") {
+        rel = p[5..len(p)];
+        respond_raw(req, rel);
+    } else if p.starts_with("/file/") {
+        rel = p[6..len(p)];
+        respond_file(req, rel);
+    } else if p.starts_with("/tag/") {
+        tag = p[5..len(p)];
+        body = page_tag(tag);
+        req.respond_html(body);
+    } else if p.starts_with("/commit/") {
+        sha = p[8..len(p)];
+        body = page_commit(sha);
+        req.respond_html(body);
+    } else if p.starts_with("/diff/") {
+        rel = p[6..len(p)];
+        body = page_diff(rel);
+        req.respond_html(body);
+    } else {
+        serve_404_page(req, p);
+    }
+}
+
+// ── HTML escape ──────────────────────────────────────────────
+
+fn escape(s: text) -> text {
+    out = "";
+    for c in s {
+        if c == '&' {
+            out += "&amp;";
+        } else if c == '<' {
+            out += "&lt;";
+        } else if c == '>' {
+            out += "&gt;";
+        } else if c == '"' {
+            out += "&quot;";
+        } else {
+            out += "{c}";
+        }
+    }
+    out
+}
+
+// ── Page templates ───────────────────────────────────────────
+
+fn page_landing() -> text {
+    // ── Branch header (read tools/viewer/state/branch.json) ──
+    body = "";
+    bf = file("tools/viewer/state/branch.json");
+    if bf.format == Format.NotExists {
+        body += "<p class=\"warn\">No git state.  Run <code>make view-refresh</code> to build the dashboard.</p>";
+    } else {
+        braw = bf.content();
+        b = json_parse(braw);
+        branch = b.field("branch").as_text();
+        head_sha = b.field("head_sha").as_text();
+        head_msg = b.field("head_msg").as_text();
+        ahead = b.field("ahead").as_long();
+        behind = b.field("behind").as_long();
+        esc_branch = escape(branch);
+        esc_sha = escape(head_sha);
+        esc_msg = escape(head_msg);
+        body += "<header class=\"dash\">";
+        body += "<h1>loft-view — branch <code>{esc_branch}</code></h1>";
+        body += "<p class=\"ahead-behind\">{ahead} ahead, {behind} behind <code>main</code></p>";
+        body += "<p class=\"head\">HEAD: <code>{esc_sha}</code> {esc_msg}</p>";
+        body += "</header>";
+    }
+    // ── Quick navigation ───────────────────────────────────
+    // Six jump-off tiles for the most-used routes.  Sits
+    // immediately under the branch header so the
+    // navigationally-useful surface is first on screen.
+    body += quick_nav();
+    // ── Recent activity (commits + per-commit file lists) ──
+    // Promoted above the all-changes list (2026-05-14):
+    // the activity feed is the real "what changed?" answer
+    // for someone reviewing a branch.  Each commit is a
+    // card with sha · date · subject + per-file numstat
+    // (+adds / −dels) for the files it touched.  Long file
+    // lists collapse to the first 4 entries with a "+ N more"
+    // toggle.
+    kf = file("tools/viewer/state/commits.json");
+    if kf.format != Format.NotExists {
+        kv = json_parse(kf.content());
+        n = kv.len();
+        body += "<section><h2>Recent activity <span class=\"ct\">{n}</span></h2>";
+        body += "<div class=\"activity\">";
+        i = 0;
+        while i < n {
+            e = kv.item(i);
+            sh = e.field("sha").as_text();
+            dt_v = e.field("date");
+            dt = "";
+            if dt_v.kind() == "JString" { dt = dt_v.as_text(); }
+            ms = e.field("msg").as_text();
+            esc_sh = escape(sh);
+            esc_dt = escape(dt);
+            esc_ms = escape(ms);
+            body += render_activity_card(sh, esc_sh, esc_dt, esc_ms);
+            i = i + 1;
+        }
+        body += "</div>";
+        body += "</section>";
+    }
+    // ── Open problems ─────────────────────────────────────
+    // P-issue rows whose severity column contains "open" or
+    // "(partial)".  Sourced from the indexer's `problems_open`
+    // bucket (built by tools/indexer/scan.sh post-2026-05-14)
+    // — that bucket holds per-issue {tag, line, ...} entries
+    // BUT the actual rendering goes through render_problems_row()
+    // so the layout stays identical to the Definition card on
+    // /tag/P* pages.  Single source of truth: parse + render
+    // PROBLEMS.md table rows the same way everywhere they
+    // appear in the viewer.
+    // Section is suppressed when there are zero open issues.
+    if file("index/tags.json").format != Format.NotExists {
+        idx_root = json_parse(file("index/tags.json").content());
+        po = idx_root.field("problems_open");
+        if po.kind() == "JArray" {
+            n = po.len();
+            if n > 0 {
+                body += "<section><h2>Open problems <span class=\"ct\">{n}</span></h2>";
+                body += "<div class=\"problems\">";
+                i = 0;
+                while i < n {
+                    line_n = po.item(i).field("line").as_long();
+                    body += "<a class=\"prob-link\" href=\"/file/doc/claude/PROBLEMS.md#L{line_n}\">PROBLEMS.md:{line_n}</a>";
+                    body += render_md_table_row("doc/claude/PROBLEMS.md", line_n);
+                    i = i + 1;
+                }
+                body += "</div>";
+                body += "</section>";
+            }
+        }
+    }
+    // ── Uncommitted (only renders when the working tree
+    // has changes; otherwise the empty placeholder is
+    // suppressed entirely).
+    uf = file("tools/viewer/state/uncommitted.json");
+    if uf.format != Format.NotExists {
+        uv = json_parse(uf.content());
+        n = uv.len();
+        if n > 0 {
+            body += "<section><h2>Uncommitted <span class=\"ct\">{n}</span></h2>";
+            body += "<ul class=\"changed\">";
+            i = 0;
+            while i < n {
+                e = uv.item(i);
+                st = e.field("status").as_text();
+                pa = e.field("path").as_text();
+                chip = status_chip(st);
+                esc_pa = escape(pa);
+                body += "<li>{chip} <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
+                i = i + 1;
+            }
+            body += "</ul>";
+            body += "</section>";
+        }
+    }
+    // ── All changes vs main ────────────────────────────────
+    // Moved below the activity feed and collapsed by default
+    // (2026-05-14): with grouping, filtering, and the activity
+    // feed answering "what changed?" inline, the flat 392-row
+    // dump becomes a deep-dive surface for the rare audit case.
+    // Wrapped in <details class="changes-section"> instead of
+    // <section> so it stays one click away.
+    cf = file("tools/viewer/state/changed.json");
+    if cf.format != Format.NotExists {
+        cv = json_parse(cf.content());
+        n = cv.len();
+        body += "<details class=\"changes-section\"><summary class=\"h2-summary\">All changes <small>vs main</small> <span class=\"ct\">{n}</span></summary>";
+        if n == 0 {
+            body += "<p class=\"empty\">No changed files vs <code>main</code>.</p>";
+        } else {
+            body += "<div class=\"filter-bar\">";
+            body += "<input id=\"filter\" type=\"text\" placeholder=\"filter by path…\" autocomplete=\"off\">";
+            body += "<span class=\"count\">{n} / {n}</span>";
+            body += "</div>";
+            // Two-pass grouping: first collect distinct top-level
+            // dir names in encounter order, then emit one <details>
+            // per group.
+            groups: vector<text> = [];
+            i = 0;
+            while i < n {
+                pa = cv.item(i).field("path").as_text();
+                top = top_level_dir(pa);
+                if !contains_text(groups, top) { groups += [top]; }
+                i = i + 1;
+            }
+            for g in groups {
+                gcount = 0;
+                j = 0;
+                while j < n {
+                    pa = cv.item(j).field("path").as_text();
+                    if top_level_dir(pa) == g { gcount = gcount + 1; }
+                    j = j + 1;
+                }
+                esc_g = escape(g);
+                body += "<details class=\"group\" open><summary><span class=\"group-name\">{esc_g}</span><span class=\"group-count\">{gcount}</span></summary>";
+                body += "<ul class=\"changed\">";
+                k = 0;
+                idx = 0;
+                while k < n {
+                    e = cv.item(k);
+                    pa = e.field("path").as_text();
+                    if top_level_dir(pa) == g {
+                        st = e.field("status").as_text();
+                        chip = status_chip(st);
+                        esc_pa = escape(pa);
+                        body += "<li style=\"--i:{idx}\">{chip} <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
+                        idx = idx + 1;
+                    }
+                    k = k + 1;
+                }
+                body += "</ul></details>";
+            }
+        }
+        body += "</details>";
+    }
+    // ── Browse the project ─────────────────────────────────
+    body += "<section><h2>Browse</h2><ul class=\"browse\">";
+    body += "<li><a href=\"/tree/doc\">doc/</a></li>";
+    body += "<li><a href=\"/tree/lib\">lib/</a></li>";
+    body += "<li><a href=\"/tree/src\">src/</a></li>";
+    body += "<li><a href=\"/tree/tests\">tests/</a></li>";
+    body += "<li><a href=\"/tree/tools\">tools/</a></li>";
+    body += "<li><a href=\"/tree/default\">default/</a></li>";
+    body += "<li><a href=\"/file/README.md\">README.md</a></li>";
+    body += "</ul></section>";
+    // ── Tracker tags ───────────────────────────────────────
+    body += "<section><h2>Tracker tags</h2>";
+    body += "<p>Lookup form: <code>/tag/&lt;bare-name&gt;</code>.  Examples:";
+    body += " <a href=\"/tag/P259\">/tag/P259</a>,";
+    body += " <a href=\"/tag/P262\">/tag/P262</a>,";
+    body += " <a href=\"/tag/PLAN35\">/tag/PLAN35</a>,";
+    body += " <a href=\"/tag/PLAN37\">/tag/PLAN37</a>.</p>";
+    body += "</section>";
+    page("loft-view", body)
+}
+
+// ── /welcome — bucketed status view (@PLAN37 phase 04b) ──
+//
+// Sourced from `index/tags.json` buckets that the indexer
+// produces alongside the tag references:
+//
+//   problems_open      — every PROBLEMS.md row whose severity
+//                        contains "open" or "(partial)"
+//   problems_recent    — closed in last 30 days, sorted newest
+//   plans_active       — plans/[NN-slug]/  (top-level)
+//   plans_recent       — plans/finished/[NN-slug]/ within 60 days
+//   plans_future       — plans/future/[NN-slug]/
+//   plans_deferred     — plans/deferred/[NN-slug]/
+//   lib_plans_future   — lib_plans/future/[NN-slug]/
+//
+// Each bucket renders as a section; sections suppress when
+// empty.  Visitors who land here without an index get a
+// banner pointing at `make index` — same degradation pattern
+// the dashboard uses.
+fn page_welcome() -> text {
+    body = "";
+    body += "<header class=\"dash welcome-hdr\">";
+    body += "<h1>loft</h1>";
+    body += "<p class=\"welcome-tag\">A statically typed, expression-oriented language with closures, native + WASM backends, and a store-based heap.  This page surfaces what's <em>active</em> right now — what's open, what shipped, where the project is going.</p>";
+    body += "<p><a class=\"welcome-link\" href=\"/\">Branch dashboard ▸</a> &nbsp; <a class=\"welcome-link\" href=\"/file/README.md\">README ▸</a> &nbsp; <a class=\"welcome-link\" href=\"/file/doc/claude/ROADMAP.md\">ROADMAP ▸</a></p>";
+    body += "</header>";
+    if file("index/tags.json").format == Format.NotExists {
+        body += "<p class=\"warn\">No <code>index/tags.json</code>.  Run <code>make index</code> to populate the welcome buckets.</p>";
+        return page("loft", body);
+    }
+    idx = json_parse(file("index/tags.json").content());
+
+    // Two-column grid for the four primary buckets.
+    body += "<div class=\"welcome-grid\">";
+
+    // Active plans (left column, top).
+    pa = idx.field("plans_active");
+    if pa.kind() == "JArray" && pa.len() > 0 {
+        body += render_plan_bucket("Active plans", "active right now — capped at 2-3", pa, "");
+    }
+
+    // Recently finished plans (right column, top).
+    pr = idx.field("plans_recent");
+    if pr.kind() == "JArray" && pr.len() > 0 {
+        body += render_plan_bucket("Recently finished", "shipped in the last 60 days", pr, "");
+    }
+
+    // Future plans (left column, bottom) — collapsed by default.
+    pf = idx.field("plans_future");
+    if pf.kind() == "JArray" && pf.len() > 0 {
+        body += render_plan_bucket("Future plans", "intent to finish — paused", pf, "fold");
+    }
+
+    // Deferred plans (right column, bottom) — collapsed.
+    pd = idx.field("plans_deferred");
+    if pd.kind() == "JArray" && pd.len() > 0 {
+        body += render_plan_bucket("Deferred plans", "won't do absent a trigger", pd, "fold");
+    }
+
+    body += "</div>"; // welcome-grid
+
+    // Open problems — full-width below the plan grid.
+    po = idx.field("problems_open");
+    if po.kind() == "JArray" && po.len() > 0 {
+        n = po.len();
+        body += "<section class=\"welcome-sec\"><h2>Open problems <span class=\"ct\">{n}</span></h2>";
+        body += "<p class=\"sec-sub\">P-issues whose severity column contains <code>open</code> or <code>(partial)</code>.  Click any row → its full PROBLEMS.md entry.</p>";
+        body += "<div class=\"problems\">";
+        i = 0;
+        while i < n {
+            line_n = po.item(i).field("line").as_long();
+            body += "<a class=\"prob-link\" href=\"/file/doc/claude/PROBLEMS.md#L{line_n}\">PROBLEMS.md:{line_n}</a>";
+            body += render_md_table_row("doc/claude/PROBLEMS.md", line_n);
+            i = i + 1;
+        }
+        body += "</div></section>";
+    }
+
+    // Recently closed problems — full-width, collapsed when long.
+    // Two-tier reveal: top 10 most recent are inline once the section
+    // is expanded; the remaining N-10 sit behind a second
+    // `<details>` so the wall of text (60+ entries during active
+    // bug-fix sessions) doesn't dominate the page.
+    pc = idx.field("problems_recent");
+    if pc.kind() == "JArray" && pc.len() > 0 {
+        n = pc.len();
+        head_n = n;
+        if head_n > 10 { head_n = 10; }
+        body += "<details class=\"welcome-sec\"><summary class=\"h2-summary\">Recently closed <small>last 30 days</small> <span class=\"ct\">{n}</span></summary>";
+        body += "<ul class=\"recent-fixes\">";
+        i = 0;
+        while i < head_n {
+            body += render_recent_fix(pc.item(i));
+            i = i + 1;
+        }
+        body += "</ul>";
+        if n > head_n {
+            tail_n = n - head_n;
+            body += "<details class=\"recent-more\"><summary>+ {tail_n} older closures</summary>";
+            body += "<ul class=\"recent-fixes\">";
+            while i < n {
+                body += render_recent_fix(pc.item(i));
+                i = i + 1;
+            }
+            body += "</ul></details>";
+        }
+        body += "</details>";
+    }
+
+    // Library plans (future) — typically the longest list.
+    lf = idx.field("lib_plans_future");
+    if lf.kind() == "JArray" && lf.len() > 0 {
+        body += render_plan_bucket("Library plans (future)", "lib_plans/future — scheduled, paused", lf, "fold");
+    }
+
+    page("loft", body)
+}
+
+// One row in the Recently-closed list.  Date · @P-tag · summary.
+// Reused for both the head-10 inline list and the "+ N older"
+// nested toggle.
+fn render_recent_fix(e: JsonValue) -> text {
+    tag = e.field("tag").as_text();
+    // Strip the leading `@` for the bare-name URL (`/tag/<bare>`
+    // is the canonical viewer route shape).
+    bare = tag;
+    if bare.starts_with("@") { bare = bare[1..bare.len()]; }
+    closed = e.field("closed").as_text();
+    sum = e.field("summary").as_text();
+    esc_tag = escape(tag);
+    esc_bare = escape(bare);
+    esc_closed = escape(closed);
+    esc_sum = escape(sum);
+    "<li><span class=\"recent-date\">{esc_closed}</span> <a class=\"recent-tag\" href=\"/tag/{esc_bare}\">{esc_tag}</a> <span class=\"recent-sum\">{esc_sum}</span></li>"
+}
+
+// Render one plan bucket as a card.  `fold` non-empty wraps in
+// a <details> so long lists collapse by default; "" emits an
+// always-open <section>.
+fn render_plan_bucket(title: text, sub: text, arr: JsonValue, fold: text) -> text {
+    n = arr.len();
+    out = "";
+    if fold == "fold" {
+        out += "<details class=\"welcome-sec\"><summary class=\"h2-summary\">{title} <span class=\"ct\">{n}</span></summary>";
+    } else {
+        out += "<section class=\"welcome-sec\"><h2>{title} <span class=\"ct\">{n}</span></h2>";
+    }
+    if sub != "" {
+        esc_sub = escape(sub);
+        out += "<p class=\"sec-sub\">{esc_sub}</p>";
+    }
+    out += "<ul class=\"plan-list\">";
+    i = 0;
+    while i < n {
+        e = arr.item(i);
+        slug = e.field("slug").as_text();
+        path = e.field("path").as_text();
+        ttl = e.field("title").as_text();
+        esc_slug = escape(slug);
+        esc_path = escape(path);
+        esc_ttl = escape(ttl);
+        out += "<li><a class=\"plan-link\" href=\"/file/{esc_path}/README.md\"><span class=\"plan-slug\">{esc_slug}</span> <span class=\"plan-title\">{esc_ttl}</span></a></li>";
+        i = i + 1;
+    }
+    out += "</ul>";
+    if fold == "fold" {
+        out += "</details>";
+    } else {
+        out += "</section>";
+    }
+    out
+}
+
+fn page_tree(rel: text) -> text {
+    // `/tree/` (and `/tree`) reach here with rel = "".  Resolve
+    // empty path to "." so the root tree listing renders instead
+    // of falling through to a 404.
+    lookup = rel;
+    if lookup == "" { lookup = "."; }
+    f = file(lookup);
+    if f.format == Format.NotExists {
+        // Caller (route()) wraps with respond_html which uses 200 OK;
+        // /tree/<missing> is presented as a regular missing page.
+        // For the dedicated 404 status code, /raw/ uses serve_404_page.
+        return page_404("/tree/{rel}");
+    }
+    if f.format != Format.Directory {
+        // Not a dir — redirect-style: link to /raw/<path>.
+        esc_rel = escape(rel);
+        body = "<h1>{esc_rel}</h1>";
+        body += "<p>Not a directory.";
+        body += " <a href=\"/raw/{esc_rel}\">View raw</a>.</p>";
+        return page(rel, body);
+    }
+
+    // Bind nested text calls to locals — works around P262 (native
+    // codegen quirk: text-returning calls passed inline get an extra
+    // `&` wrap in the generated Rust, fail to compile).
+    body = breadcrumbs(rel, "tree");
+    esc_rel = escape(rel);
+    body += "<h1>{esc_rel}/</h1>";
+    body += "<ul class=\"dir\">";
+    if rel != "" {
+        parent = parent_of(rel);
+        esc_parent = escape(parent);
+        body += "<li><a href=\"/tree/{esc_parent}\">..</a></li>";
+    }
+
+    // Two passes: dirs then files; alphabetical within.
+    entries = f.files();
+    for e in entries {
+        if e.format == Format.Directory && !skip(e.path) {
+            name = basename(e.path);
+            joined = rel_join(rel, name);
+            esc_joined = escape(joined);
+            esc_name = escape(name);
+            body += "<li><a class=\"d\" href=\"/tree/{esc_joined}\">{esc_name}/</a></li>";
+        }
+    }
+    for e in entries {
+        if e.format != Format.Directory && !skip(e.path) {
+            name = basename(e.path);
+            joined = rel_join(rel, name);
+            esc_joined = escape(joined);
+            esc_name = escape(name);
+            sz = e.size;
+            // Link to /file/ for rendered view; /raw/ available from
+            // the file page itself for "give me the bytes."
+            body += "<li><a class=\"f\" href=\"/file/{esc_joined}\">{esc_name}</a> <span class=\"sz\">{sz}</span></li>";
+        }
+    }
+    body += "</ul>";
+    title = "{rel}/";
+    page(title, body)
+}
+
+fn respond_raw(req: server::Request, rel: text) {
+    f = file(rel);
+    if f.format == Format.NotExists {
+        serve_404_page(req, "/raw/{rel}");
+        return;
+    }
+    if f.format == Format.Directory {
+        body = page_tree(rel);
+        req.respond_html(body);
+        return;
+    }
+    body = f.content();
+    req.respond_typed(200, body, "text/plain; charset=utf-8");
+}
+
+// ── /file/<path> — phase 02: rendered code with line numbers ──
+
+fn respond_file(req: server::Request, rel: text) {
+    f = file(rel);
+    if f.format == Format.NotExists {
+        serve_404_page(req, "/file/{rel}");
+        return;
+    }
+    if f.format == Format.Directory {
+        // Directories: redirect-style — show the tree page.
+        body = page_tree(rel);
+        req.respond_html(body);
+        return;
+    }
+    // For now: every file is rendered as code (HTML-escaped + line
+    // numbers).  Markdown gets a stub link to phase 03's renderer
+    // when it lands; binary detection is a v1.5 polish.
+    body = page_file(rel, f);
+    req.respond_html(body);
+}
+
+// File-extension classifier.  Markdown gets a special path; .png /
+// .jpg / .gif fall into Binary so we don't try to render bytes as
+// text.  Everything else renders as code.
+fn is_markdown(rel: text) -> boolean {
+    rel.ends_with(".md")
+}
+fn is_binary_ext(rel: text) -> boolean {
+    rel.ends_with(".png")
+        || rel.ends_with(".jpg")
+        || rel.ends_with(".jpeg")
+        || rel.ends_with(".gif")
+        || rel.ends_with(".webp")
+        || rel.ends_with(".ico")
+        || rel.ends_with(".pdf")
+        || rel.ends_with(".zip")
+        || rel.ends_with(".gz")
+        || rel.ends_with(".tar")
+        || rel.ends_with(".wasm")
+}
+
+fn page_file(rel: text, f: File) -> text {
+    esc_rel = escape(rel);
+    sz = f.size;
+
+    // The article holds breadcrumbs + heading + view-toggle +
+    // content; the rail holds Referenced by + Tags on this page.
+    // CSS `main:has(> aside.rail)` switches to the two-column
+    // grid layout; pages without sidebars stay single-column.
+    article = "<article>";
+    article += breadcrumbs(rel, "file");
+    article += "<h1>{esc_rel} <small>{sz} bytes</small></h1>";
+    article += view_toggle(rel, "file");
+
+    if is_binary_ext(rel) {
+        article += "<p>Binary file ({sz} bytes).  ";
+        article += "<a href=\"/raw/{esc_rel}\">download raw</a></p>";
+        article += "</article>";
+        return page(rel, article);
+    }
+
+    article += "<p><a href=\"/raw/{esc_rel}\">View raw</a></p>";
+    src = f.content();
+    if is_markdown(rel) {
+        article += markdown::render(src, parent_of(rel), "/tag/", "/raw/");
+    } else {
+        article += render_code(src);
+    }
+    article += "</article>";
+
+    // ── Sidebars (plan-37 phase 04b) — inbound links + tag list.
+    // Built into a separate <aside class="rail"> so they form a
+    // sticky right column at viewport widths >= 1100px.  Both
+    // render to "" when index/tags.json is missing, so an empty
+    // rail collapses to nothing.
+    rail_inner = sidebar_referenced_by(rel);
+    rail_inner += sidebar_tags_on_page(rel);
+    rail = "";
+    if rail_inner != "" {
+        rail = "<aside class=\"rail\">{rail_inner}</aside>";
+    }
+
+    page(rel, article + rail)
+}
+
+// ── Markdown renderer (plan-35 phase 03) ─────────────────────
+//
+// Minimal subset: headings, paragraphs, fenced code blocks,
+// inline code, bold/italic, links with relative-path rewriting.
+// Lists / tables / block quotes deferred to a follow-up phase.
+//
+// Walks source line-by-line; tracks fenced-code context as the
+// only stateful block.  Inline rendering iterates per character
+// and accumulates output, slicing the source only at known-safe
+// boundaries (after a `\n` split) — avoids the "Invalid index
+// on string" failure mode the original attempt hit on
+// substring-position arithmetic.
+
+
+// Render a text blob as line-numbered, HTML-escaped <pre><code>.
+// Each line wrapped in <a id="L<n>"> so #L42 fragment scrolls.
+fn render_code(src: text) -> text {
+    out = "<pre class=\"code-pre\"><code>";
+    line_no = 1;
+    line_buf = "";
+    for c in src {
+        if c == '\n' {
+            esc = escape_with_tabs(line_buf);
+            out += "<a id=\"L{line_no}\" class=\"line\"><span class=\"lineno\">{line_no}</span><span class=\"src\">{esc}</span></a>";
+            line_buf = "";
+            line_no = line_no + 1;
+        } else if c == '\r' {
+            // Drop \r — handles CRLF line endings.
+        } else {
+            line_buf += "{c}";
+        }
+    }
+    if len(line_buf) > 0 {
+        esc = escape_with_tabs(line_buf);
+        out += "<a id=\"L{line_no}\" class=\"line\"><span class=\"lineno\">{line_no}</span><span class=\"src\">{esc}</span></a>";
+    }
+    out += "</code></pre>";
+    out
+}
+
+// Like escape() but expands tabs to 4 spaces so indentation
+// renders consistently regardless of browser default tab width.
+fn escape_with_tabs(s: text) -> text {
+    out = "";
+    for c in s {
+        if c == '&' {
+            out += "&amp;";
+        } else if c == '<' {
+            out += "&lt;";
+        } else if c == '>' {
+            out += "&gt;";
+        } else if c == '"' {
+            out += "&quot;";
+        } else if c == '\t' {
+            out += "    ";
+        } else {
+            out += "{c}";
+        }
+    }
+    out
+}
+
+// ── /tag/<bare_name> — phase 04a: tracker-tag references ──
+//
+// Reads index/tags.json (produced by `make index`) and lists every
+// reference to a tag.  URL form is `/tag/P259` or `/tag/PLAN35-01`
+// (bare name); the page surfaces BOTH the `@P259` and the legacy
+// `legacy:P259` buckets together so the user sees the full footprint
+// during the migration.
+
+fn page_tag(tag: text) -> text {
+    f = file("index/tags.json");
+    if f.format == Format.NotExists {
+        body = "<h1>Tracker tag <code>{escape(tag)}</code></h1>";
+        body += "<p class=\"warn\">No index found at <code>index/tags.json</code>.";
+        body += " Run <code>make index</code> from the repo root to build it.</p>";
+        body += "<p><a href=\"/\">back to landing</a></p>";
+        title = "@{tag}";
+        return page(title, body);
+    }
+
+    raw = f.content();
+    root = json_parse(raw);
+
+    // Two buckets: @-prefixed (canonical) + legacy (bare-name).  Both
+    // get rendered together so the page is the full reference list
+    // regardless of which form authors used in any given file.
+    at_key = "@{tag}";
+    legacy_key = "legacy:{tag}";
+    at_arr = root.field(at_key);
+    legacy_arr = root.field(legacy_key);
+
+    at_count = 0;
+    if at_arr.kind() == "JArray" { at_count = at_arr.len(); }
+    legacy_count = 0;
+    if legacy_arr.kind() == "JArray" { legacy_count = legacy_arr.len(); }
+    total = at_count + legacy_count;
+
+    body = "<h1>Tracker tag <code>{escape(tag)}</code> <small>{total} references</small></h1>";
+
+    if total == 0 {
+        body += "<p>No references found.</p>";
+        body += "<p><a href=\"/\">back to landing</a></p>";
+        title = "@{tag}";
+        return page(title, body);
+    }
+
+    // ── Definition (plan-37 phase 04b follow-up) ──────────────
+    // Surface the canonical source line at the top of the page.
+    // For @P-ids: the row in `doc/claude/PROBLEMS.md` whose body
+    //   starts with `**@P<n>**` (added by the migration).
+    // For @PLAN-ids: the README of the matching plan dir, where
+    //   the heading mentions @PLAN<n>.
+    // Detection: scan the canonical-home arr for the ref with the
+    // LOWEST line number whose file matches the home pattern.
+    body += render_definition(tag, at_arr);
+
+    if at_count > 0 {
+        body += "<h2><code>@{escape(tag)}</code> (canonical) — {at_count}</h2>";
+        body += render_refs(at_arr);
+    }
+    if legacy_count > 0 {
+        body += "<h2><code>{escape(tag)}</code> (legacy bare-name) — {legacy_count}</h2>";
+        body += render_refs(legacy_arr);
+    }
+
+    body += "<p><a href=\"/\">back to landing</a></p>";
+    title = "@{tag}";
+    page(title, body)
+}
+
+// ── Tag definition surface (plan-37 phase 04b follow-up) ────
+//
+// Find the canonical "definition" line for a tag — the ref that
+// lives in the tag's HOME file:
+//   - `@P<n>` → `doc/claude/PROBLEMS.md` (the row whose body
+//     starts with `**@P<n>**` post-migration).
+//   - `@PLAN<n>` → any `…/plans/.../README.md` in the matching
+//     plan dir.
+//
+// Returns "" when no canonical home ref is present (rendering
+// degrades gracefully).  Otherwise emits a "Definition" section
+// at the top of the tag page, before the full references list.
+
+fn tag_home_pattern(tag: text) -> text {
+    if tag.starts_with("PLAN") {
+        // @PLAN22 → match `/plans/...22-` substring
+        return "/plans/";
+    }
+    // @P259 → match the global PROBLEMS.md
+    "doc/claude/PROBLEMS.md"
+}
+
+// Strip the `**@P<id>** — ` tag prefix from a PROBLEMS.md row
+// body and trim to the first sentence.  Extracted here because
+// @P278 (parser rejects method call on a self-slice-reassigned
+// text in the same scope) is still open — inlining the body
+// into `render_problems_row` raises "Expect token ;" at the
+// first `.method()` after the self-slice.  Reproducer kept in
+// `tests/p278_*` (when filed).  Removal: re-attempt after @P278
+// closes.
+fn problem_row_summary(body: text, id: text) -> text {
+    out = body;
+    full_pref = "**@P" + id + "** — ";
+    plen = full_pref.len();
+    olen = out.len();
+    if out.starts_with(full_pref) {
+        out = out[plen..olen];
+    }
+    period = out.find(". ");
+    if period >= 0 { out = out[0..period + 1]; }
+    out
+}
+
+// Generic markdown-table row → labeled-paragraph card.
+//
+// Used wherever the viewer surfaces a single row from a
+// markdown table (Definition section on /tag/P*, references
+// list, dashboard Open Problems).  Reads the file at line_n,
+// confirms the line is a `| col1 | col2 | … |` row, walks
+// upward to find the column-header line (the line directly
+// above a `|---|---|…|` separator), and emits one labeled
+// paragraph per cell with the header as the label.
+//
+// Returns "" when the line isn't a table row OR when no
+// header can be located within 8 lines above (callers fall
+// back to a plain `<code>` blockquote).
+fn render_md_table_row(file_path: text, line_n: integer) -> text {
+    f = file(file_path);
+    if f.format == Format.NotExists { return ""; }
+    src = f.content();
+    lines = src.split('\n');
+    if line_n < 1 || line_n > lines.len() { return ""; }
+    raw = lines[line_n - 1];
+    if !raw.starts_with("| ") { return ""; }
+
+    cells: vector<text> = parse_md_row(raw);
+    nc = cells.len();
+    if nc == 0 { return ""; }
+
+    headers: vector<text> = find_table_headers(lines, line_n);
+    nh = headers.len();
+
+    out = "<article class=\"row-card\">";
+    i = 0;
+    while i < nc {
+        label = "Col " + n_to_text(i + 1);
+        if i < nh { label = headers[i]; }
+        cell = cells[i];
+        if cell == "" {
+            i = i + 1;
+            continue;
+        }
+        // Truncate egregiously long cells to keep cards
+        // skimmable; full content is one click away via the
+        // PROBLEMS.md anchor in the header.
+        clen = cell.len();
+        if clen > 360 {
+            cell = cell[0..357] + "...";
+        }
+        esc_label = escape(label);
+        esc_cell = escape(cell);
+        out += "<p class=\"row-line\"><span class=\"row-label\">{esc_label}</span> {esc_cell}</p>";
+        i = i + 1;
+    }
+    out += "</article>";
+    out
+}
+
+// Parse `| a | b | c |` into ["a", "b", "c"], trimming each
+// cell.  Drops the empty leading/trailing segments produced
+// by split('|').  Strips a `**@P<n>** — ` self-tag prefix
+// from any cell so the SUMMARY column doesn't repeat the ID.
+fn parse_md_row(raw: text) -> vector<text> {
+    segs = raw.split('|');
+    out: vector<text> = [];
+    i = 1;
+    while i + 1 < segs.len() {
+        cell = segs[i].trim();
+        // Strip leading `**@P<id>** — ` if present (a body
+        // cell on a PROBLEMS.md row will start that way).
+        if cell.starts_with("**@P") {
+            sep = cell.find("** — ");
+            if sep >= 0 {
+                cell = cell[sep + 5..cell.len()];
+            }
+        }
+        out += [cell];
+        i = i + 1;
+    }
+    out
+}
+
+// Walk upward from the row at `line_n` looking for the table
+// header.  The header is the line immediately above a
+// markdown table-separator line (`|---|---|…|`).  Returns a
+// vector of column names, or empty when no header is found.
+//
+// Step cap is large (up to 1000 lines) because PROBLEMS.md
+// rows can sit hundreds of lines below their table header
+// (the Quick-Reference table runs 1000+ rows long).  The
+// walk also stops if it leaves the table (a non-`|` line
+// that's not the separator means the row isn't part of a
+// continuous table — bail with no headers).
+fn find_table_headers(lines: vector<text>, line_n: integer) -> vector<text> {
+    empty: vector<text> = [];
+    walk = line_n - 1;
+    steps = 0;
+    while walk > 0 && steps < 1000 {
+        candidate = lines[walk - 1];
+        trimmed = candidate.trim();
+        // Separator line: `|---|---|…|`.  Detect the `-` or
+        // `:-` start after the leading `|`.
+        is_sep = false;
+        if trimmed.starts_with("|") {
+            tlen = trimmed.len();
+            rest = trimmed[1..tlen].trim();
+            if rest.starts_with("-") || rest.starts_with(":-") {
+                is_sep = true;
+            }
+        }
+        if is_sep && walk > 1 {
+            return parse_md_row(lines[walk - 2]);
+        }
+        walk = walk - 1;
+        steps = steps + 1;
+    }
+    empty
+}
+
+fn n_to_text(n: integer) -> text { "{n}" }
+
+// Render one PROBLEMS.md row as a labeled-paragraph card.
+// Used in two places: the dashboard's Open Problems section
+// and the Definition section on /tag/P* pages.  Both call this
+// instead of duplicating the parse/render logic.
+//
+// PROBLEMS.md row shape (post-2026-05-14 self-tagging):
+//   | <id> | **@P<id>** — <body> | <severity> | <fix path> |
+//
+// Returns "" when the file or line isn't a real table row.
+fn render_problems_row(line_n: integer) -> text {
+    f = file("doc/claude/PROBLEMS.md");
+    if f.format == Format.NotExists { return ""; }
+    src = f.content();
+    lines = src.split('\n');
+    if line_n < 1 || line_n > len(lines) { return ""; }
+    raw = lines[line_n - 1];
+    if !raw.starts_with("| ") { return ""; }
+
+    // Split on `|`.  Markdown table rows are
+    // `| col1 | col2 | col3 | col4 |` so split('|') yields
+    // 6 segments: empty, col1, col2, col3, col4, empty.
+    segs = raw.split('|');
+    if len(segs) < 5 { return ""; }
+    id = trim_str(segs[1]);
+    rb = trim_str(segs[2]);
+    sev = trim_str(segs[3]);
+    fx = "";
+    if len(segs) >= 5 { fx = trim_str(segs[4]); }
+
+    // Strip the leading `**@P<id>** — ` tag-prefix and trim
+    // to the first sentence.  Computed via the
+    // problem_row_summary helper — @P278 (parser rejects
+    // method call on a self-slice-reassigned text in the same
+    // scope) still open, so the slicing must live in its own
+    // function.  @P283 (codegen crash from the format-string
+    // return) closed 2026-05-18; the helper is no longer
+    // crashing, just structurally needed to dodge @P278.
+    summary = problem_row_summary(rb, id);
+
+    esc_id = escape(id);
+    esc_body = escape(summary);
+    esc_sev = escape(sev);
+    esc_fx = escape(fx);
+    out = "<article class=\"prob-card\">";
+    out += "<p class=\"prob-line\"><span class=\"prob-label\">Tag</span> <a href=\"/tag/P{esc_id}\"><code>@P{esc_id}</code></a> <a class=\"prob-row-link\" href=\"/file/doc/claude/PROBLEMS.md#L{line_n}\">PROBLEMS.md:{line_n}</a></p>";
+    out += "<p class=\"prob-line\"><span class=\"prob-label\">Severity</span> {esc_sev}</p>";
+    out += "<p class=\"prob-line\"><span class=\"prob-label\">Summary</span> {esc_body}</p>";
+    if fx != "" {
+        out += "<p class=\"prob-line\"><span class=\"prob-label\">Fix</span> {esc_fx}</p>";
+    }
+    out += "</article>";
+    out
+}
+
+// Trim leading/trailing spaces.  Loft's text doesn't have a
+// stdlib trim that takes only spaces (the existing trim()
+// trims all whitespace — fine for our use case).
+fn trim_str(s: text) -> text { s.trim() }
+
+fn render_definition(tag: text, arr: JsonValue) -> text {
+    if arr.kind() != "JArray" { return ""; }
+    n = arr.len();
+    if n == 0 { return ""; }
+    pattern = tag_home_pattern(tag);
+
+    // Find the ref whose .file CONTAINS the pattern (and for
+    // @PLAN tags, also matches the plan number) AND has the
+    // lowest line number.  That's the canonical definition.
+    best_idx: integer = -1;
+    best_line: integer = 9999999;
+    is_plan = tag.starts_with("PLAN");
+    plan_num = "";
+    if is_plan {
+        plan_num = tag[4..len(tag)];
+        // Strip any sub-phase suffix (`-01`, `-2d-iii.a`) — the
+        // home dir is keyed on just the leading digits.
+        i = 0;
+        bare = "";
+        while i < len(plan_num) {
+            c = plan_num[i];
+            if c >= '0' && c <= '9' { bare += "{c}"; i = i + 1; }
+            else { break; }
+        }
+        plan_num = bare;
+    }
+
+    // For @PLAN tags, do TWO passes: first prefer the plan dir's
+    // own `README.md` (the canonical plan home).  Fall back to any
+    // file under `/plans/<num>-` if no README ref exists.
+    i = 0;
+    while i < n {
+        ref_v = arr.item(i);
+        file_path = ref_v.field("file").as_text();
+        if is_plan {
+            if file_path.find("/plans/") >= 0
+               && file_path.find("/{plan_num}-") >= 0
+               && file_path.ends_with("/README.md") {
+                line_n = ref_v.field("line").as_long();
+                if line_n < best_line {
+                    best_line = line_n;
+                    best_idx = i;
+                }
+            }
+        } else if file_path == pattern {
+            line_n = ref_v.field("line").as_long();
+            // For PROBLEMS.md, prefer refs whose context line
+            // begins with `| ` (the actual table row that
+            // DEFINES the issue) over the fast-index entries
+            // higher up that just MENTION the tag.  Without
+            // this filter the lowest-line ref always wins,
+            // which for any P-issue listed in `🔴 Currently
+            // Open` would land on the fast-index row instead
+            // of the real definition row in the Quick-Reference
+            // table.
+            ctx = ref_v.field("context").as_text();
+            is_table_row = ctx.starts_with("| ");
+            if is_table_row && (best_idx < 0 || line_n < best_line) {
+                best_line = line_n;
+                best_idx = i;
+            }
+        }
+        i = i + 1;
+    }
+    // Fallback for @P-tags: if no table-row match, accept any
+    // PROBLEMS.md ref (preserves the lowest-line behavior for
+    // unusual cases — e.g., a P-issue that's only mentioned in
+    // narrative without its own table row).
+    if !is_plan && best_idx < 0 {
+        i = 0;
+        while i < n {
+            ref_v = arr.item(i);
+            file_path = ref_v.field("file").as_text();
+            if file_path == pattern {
+                line_n = ref_v.field("line").as_long();
+                if line_n < best_line {
+                    best_line = line_n;
+                    best_idx = i;
+                }
+            }
+            i = i + 1;
+        }
+    }
+    // Fallback for @PLAN: any file under the plan dir, lowest line.
+    if is_plan && best_idx < 0 {
+        i = 0;
+        while i < n {
+            ref_v = arr.item(i);
+            file_path = ref_v.field("file").as_text();
+            if file_path.find("/plans/") >= 0
+               && file_path.find("/{plan_num}-") >= 0 {
+                line_n = ref_v.field("line").as_long();
+                if line_n < best_line {
+                    best_line = line_n;
+                    best_idx = i;
+                }
+            }
+            i = i + 1;
+        }
+    }
+
+    if best_idx < 0 { return ""; }
+    ref_v = arr.item(best_idx);
+    file_path = ref_v.field("file").as_text();
+    line_n = ref_v.field("line").as_long();
+    ctx = ref_v.field("context").as_text();
+
+    // Whenever the definition source is a markdown table row,
+    // render it as a labeled-paragraph card (column header →
+    // label, cell → paragraph value).  Generic for any markdown
+    // table — column names are read from the file's actual
+    // header line above the row.  Falls back to the simple
+    // path-link + blockquote form for non-table sources (plan
+    // README headings, source-code lines, etc.).
+    out = "<section class=\"definition\"><h2>Definition</h2>";
+    esc_file = escape(file_path);
+    out += "<p><a class=\"def-link\" href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a></p>";
+    table_card = render_md_table_row(file_path, line_n);
+    if table_card != "" {
+        out += table_card;
+    } else {
+        esc_ctx = escape(ctx);
+        out += "<blockquote><code>{esc_ctx}</code></blockquote>";
+    }
+    out += "</section>";
+    out
+}
+
+// ── Per-doc sidebars (plan-37 phase 04b) ────────────────────
+//
+// Two surfaces injected at the bottom of `/file/<path>` pages:
+//
+// 1. Referenced by — read `index/tags.json`'s `links[<rel>]`
+//    bucket (phase 09 backlinks).  Lists every doc that links
+//    INBOUND to the current file.
+// 2. Tags on this page — walk the tag buckets, emit any tag
+//    whose ref list contains a file matching the current path.
+//    Click → `/tag/<bare>` (phase 04a's tag detail page).
+//
+// Both render to an empty string when index/tags.json is
+// missing or the file has no associated entries — the page
+// degrades gracefully.
+
+fn sidebar_referenced_by(rel: text) -> text {
+    f = file("index/tags.json");
+    if f.format == Format.NotExists { return ""; }
+    raw = f.content();
+    root = json_parse(raw);
+    links_obj = root.field("links");
+    if links_obj.kind() != "JObject" { return ""; }
+    inbound = links_obj.field(rel);
+    if inbound.kind() != "JArray" { return ""; }
+    n = inbound.len();
+    if n == 0 { return ""; }
+
+    out = "<section class=\"sidebar\"><h2>Referenced by <span class=\"ct\">{n}</span></h2>";
+    out += "<ul class=\"refs\">";
+    i = 0;
+    while i < n {
+        ref_v = inbound.item(i);
+        file_path = ref_v.field("file").as_text();
+        line_n = ref_v.field("line").as_long();
+        ctx = ref_v.field("context").as_text();
+        esc_file = escape(file_path);
+        esc_ctx = escape(ctx);
+        out += "<li><a href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a><br><code>{esc_ctx}</code></li>";
+        i = i + 1;
+    }
+    out += "</ul></section>";
+    out
+}
+
+fn sidebar_tags_on_page(rel: text) -> text {
+    f = file("index/tags.json");
+    if f.format == Format.NotExists { return ""; }
+    raw = f.content();
+    root = json_parse(raw);
+
+    // Walk every tag key, emit those whose ref list contains
+    // the current file.  Skip the meta keys (`links`, `broken`,
+    // `broken_links`) and the legacy-form bucket (we want the
+    // canonical `@`-tag for the /tag/<bare> route — duplicate
+    // entries would be confusing).
+    out = "";
+    count = 0;
+    for key in root.keys() {
+        if key == "links" || key == "broken" || key == "broken_links" { continue; }
+        if key.starts_with("legacy:") { continue; }
+        refs = root.field(key);
+        if refs.kind() != "JArray" { continue; }
+        nr = refs.len();
+        j = 0;
+        found = false;
+        while j < nr {
+            ref_v = refs.item(j);
+            if ref_v.field("file").as_text() == rel {
+                found = true;
+                break;
+            }
+            j = j + 1;
+        }
+        if found {
+            // Strip leading `@` for the /tag/<bare> route.
+            bare = key;
+            if bare.starts_with("@") { bare = bare[1..len(bare)]; }
+            esc_key = escape(key);
+            esc_bare = escape(bare);
+            if count == 0 {
+                out += "<section class=\"sidebar\"><h2>Tags on this page</h2><ul class=\"tag-list\">";
+            }
+            out += "<li><a href=\"/tag/{esc_bare}\"><code>{esc_key}</code></a></li>";
+            count = count + 1;
+        }
+    }
+    if count > 0 { out += "</ul></section>"; }
+    out
+}
+
+// Render a JArray of {file, line, context} entries as <ul>.  Each
+// entry links to /file/<path>#L<line> so the line viewer scrolls
+// directly to the cited line (phase 02 emits the L<n> anchors).
+fn render_refs(arr: JsonValue) -> text {
+    out = "<ul class=\"refs\">";
+    n = arr.len();
+    i = 0;
+    while i < n {
+        ref_v = arr.item(i);
+        file_path = ref_v.field("file").as_text();
+        line_n = ref_v.field("line").as_long();
+        ctx = ref_v.field("context").as_text();
+        esc_file = escape(file_path);
+        out += "<li><a href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a>";
+        // If the context line is a markdown table row, render
+        // it as a labeled-paragraph card (one paragraph per
+        // table column with the column header as label).
+        // Otherwise fall back to the previous one-line code
+        // preview.  Generic for any markdown table — the
+        // helper reads the column header from the file itself.
+        if ctx.starts_with("| ") {
+            table_card = render_md_table_row(file_path, line_n);
+            if table_card != "" {
+                out += table_card;
+            } else {
+                esc_ctx = escape(ctx);
+                out += "<br><code>{esc_ctx}</code>";
+            }
+        } else {
+            esc_ctx = escape(ctx);
+            out += "<br><code>{esc_ctx}</code>";
+        }
+        out += "</li>";
+        i = i + 1;
+    }
+    out += "</ul>";
+    out
+}
+
+// ── /commit/<sha> — phase 05: commit detail with hunk-coloured diff ──
+//
+// Reads tools/viewer/state/commits/<sha>.diff (built by
+// refresh.sh) and renders it via render_diff() so added /
+// removed lines + hunk headers + per-file headers are
+// styled.  The commit's own header (sha / Author / Date /
+// message) shows up as the leading non-diff lines in the
+// `git show` output and renders inline with the rest.
+fn page_commit(sha: text) -> text {
+    esc_sha = escape(sha);
+    body = "<h1>commit <code>{esc_sha}</code></h1>";
+    f = file("tools/viewer/state/commits/{sha}.diff");
+    if f.format == Format.NotExists {
+        body += "<p class=\"warn\">No diff captured for <code>{esc_sha}</code>. ";
+        body += "Run <code>make view-refresh</code> to (re)build.  Only the last 20 commits are kept.</p>";
+        body += "<p><a href=\"/\">back to dashboard</a></p>";
+        return page("commit {sha}", body);
+    }
+    src = f.content();
+    body += render_diff(src);
+    body += "<p><a href=\"/\">back to dashboard</a></p>";
+    page("commit {sha}", body)
+}
+
+// Map a repo-relative path to the safe filename refresh.sh
+// wrote the per-file diff under (`/` → `__`).
+fn diff_safe_name(rel: text) -> text {
+    out = "";
+    for c in rel {
+        if c == '/' { out += "__"; }
+        else { out += "{c}"; }
+    }
+    out
+}
+
+// True if a per-file diff exists for `rel` (the file is on
+// the changed-files list and refresh.sh dumped its diff).
+fn diff_exists_for(rel: text) -> boolean {
+    safe = diff_safe_name(rel);
+    f = file("tools/viewer/state/diffs/{safe}.diff");
+    f.format != Format.NotExists
+}
+
+// /diff/<path> — render the per-file unified diff.
+fn page_diff(rel: text) -> text {
+    safe = diff_safe_name(rel);
+    esc_rel = escape(rel);
+    body = breadcrumbs(rel, "diff");
+    body += "<h1>{esc_rel} <small>diff vs main</small></h1>";
+    body += view_toggle(rel, "diff");
+    f = file("tools/viewer/state/diffs/{safe}.diff");
+    if f.format == Format.NotExists {
+        body += "<p class=\"warn\">No diff captured for <code>{esc_rel}</code>. ";
+        body += "Run <code>make view-refresh</code>; if the file isn't changed vs <code>main</code>, no diff is generated.</p>";
+        return page(rel, body);
+    }
+    src = f.content();
+    if len(src) == 0 {
+        body += "<p class=\"empty\">Empty diff (file matches main).</p>";
+        return page(rel, body);
+    }
+    body += render_diff(src);
+    page(rel, body)
+}
+
+// Top-right toggle linking between Rendered + Diff for a path.
+// `current_view` is "file" or "diff" so the active button can
+// be highlighted.  When no diff exists, only the Rendered link
+// is shown (no broken-link Diff button).
+fn view_toggle(rel: text, current_view: text) -> text {
+    esc_rel = escape(rel);
+    has_diff = diff_exists_for(rel);
+    out = "<nav class=\"view-toggle\">";
+    if current_view == "file" {
+        out += "<span class=\"active\">Rendered</span>";
+    } else {
+        out += "<a href=\"/file/{esc_rel}\">Rendered</a>";
+    }
+    if has_diff {
+        if current_view == "diff" {
+            out += "<span class=\"active\">Diff vs main</span>";
+        } else {
+            out += "<a href=\"/diff/{esc_rel}\">Diff vs main</a>";
+        }
+    }
+    out += "</nav>";
+    out
+}
+
+// Render unified diff text into hunk-coloured HTML.  Each
+// line is classified by its leading character or known-prefix
+// substring.  Content is HTML-escaped + wrapped with the
+// matching `.diff-*` CSS class.  Lines preserve any leading
+// whitespace inside the wrapper (the prefix char for +/-/space
+// is stripped only when displayed; we render the whole line
+// with the marker visible so the user reads it as a real
+// patch).
+fn render_diff(src: text) -> text {
+    out = "<pre class=\"diff\"><code>";
+    lines = src.split('\n');
+    for line in lines {
+        cls = classify_diff_line(line);
+        esc = escape_with_tabs(line);
+        out += "<span class=\"diff-{cls}\">{esc}\n</span>";
+    }
+    out += "</code></pre>";
+    out
+}
+
+// Classify one line of unified-diff output.  Returns the
+// CSS-class suffix to use (`add` / `del` / `hunk` / `head`
+// / `meta` / `noeol` / `ctx`).
+fn classify_diff_line(line: text) -> text {
+    if line.starts_with("diff --git") { return "head"; }
+    if line.starts_with("index ") { return "meta"; }
+    if line.starts_with("---") || line.starts_with("+++") { return "meta"; }
+    if line.starts_with("@@") { return "hunk"; }
+    if line.starts_with("Binary files") { return "meta"; }
+    if line.starts_with("\\ No newline") { return "noeol"; }
+    if line.starts_with("commit ") { return "head"; }
+    if line.starts_with("Author:") || line.starts_with("Date:") { return "meta"; }
+    n = line.len();
+    if n == 0 { return "ctx"; }
+    c = line[0];
+    if c == '+' { return "add"; }
+    if c == '-' { return "del"; }
+    "ctx"
+}
+
+fn serve_404_page(req: server::Request, p: text) {
+    body = page_404(p);
+    req.respond_typed(404, body, "text/html; charset=utf-8");
+}
+
+fn page_404(p: text) -> text {
+    esc_p = escape(p);
+    body = "<h1>404 — not found</h1>";
+    body += "<p>No route matches <code>{esc_p}</code>.</p>";
+    body += "<p><a href=\"/\">back to landing</a></p>";
+    page("404", body)
+}
+
+// ── Layout shell ─────────────────────────────────────────────
+
+fn page(title: text, body: text) -> text {
+    esc_title = escape(title);
+    out = "<!doctype html>";
+    out += "<html lang=\"en\"><head>";
+    out += "<meta charset=\"utf-8\">";
+    out += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
+    out += "<title>{esc_title} · loft·view</title>";
+    out += "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">";
+    out += "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>";
+    // Three faces: Fraunces (display, with SOFT axis), IBM Plex
+    // Sans (body), JetBrains Mono (code + UI labels).
+    out += "<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..700,0..100&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap\">";
+    out += "<link rel=\"stylesheet\" href=\"/static/style.css\">";
+    out += "</head><body>";
+    out += "<header class=\"site\"><div class=\"wrap\">";
+    out += "<a href=\"/\" class=\"brand\">";
+    out += "<span class=\"mark\">loft</span><span class=\"slash\">·</span><span class=\"view\">view</span>";
+    out += "</a>";
+    out += "<nav>";
+    out += "<a href=\"/\">dashboard</a>";
+    out += "<a href=\"/tree/\">tree</a>";
+    out += "<a href=\"/tree/doc/claude\">docs</a>";
+    out += "<a href=\"/tag/PLAN37\">tags</a>";
+    out += "</nav>";
+    out += "</div></header>";
+    out += "<main>";
+    out += body;
+    out += "</main>";
+    out += "<footer>";
+    out += "<span>loft·view · branch-aware code review</span>";
+    out += "<span><a href=\"/tree/doc/claude/plans/finished/35-branch-review-viewer\">design</a> · <a href=\"/tree/tools/viewer/src\">source</a></span>";
+    out += "</footer>";
+    // Inline JS: live filter for the dashboard's changed-files list.
+    // Pure progressive enhancement — pages without the filter input
+    // (every non-landing page) skip the bind silently.
+    // {{ and }} are loft format-string escapes for literal braces.
+    out += "<script>";
+    out += "(function(){{";
+    out += "var inp=document.getElementById('filter');if(!inp)return;";
+    out += "var ctr=document.querySelector('.filter-bar .count');";
+    out += "var total=document.querySelectorAll('ul.changed li').length;";
+    out += "function apply(){{var q=inp.value.trim().toLowerCase();var v=0;";
+    out += "document.querySelectorAll('details.group').forEach(function(g){{var any=false;";
+    out += "g.querySelectorAll('li').forEach(function(li){{var m=!q||li.textContent.toLowerCase().indexOf(q)>=0;li.classList.toggle('hidden',!m);if(m){{v++;any=true;}}}});";
+    out += "g.classList.toggle('hidden',!any);if(q&&any){{g.open=true;}}}});";
+    out += "if(ctr){{ctr.textContent=v+' / '+total;}}}}";
+    out += "inp.addEventListener('input',apply);";
+    out += "inp.addEventListener('keydown',function(e){{if(e.key==='Escape'){{inp.value='';apply();}}}});";
+    out += "}})();";
+    out += "</script>";
+    out += "</body></html>";
+    out
+}
+
+// Breadcrumbs: parent dirs always link to /tree/<dir> (the
+// directory listing); only the LEAF segment uses the supplied
+// `kind` ("file", "tree", "diff", ...).  This avoids producing
+// /diff/<dir> links that 404 because diffs are file-scoped.
+fn breadcrumbs(rel: text, kind: text) -> text {
+    if rel == "" { return ""; }
+    out = "<nav class=\"crumbs\">";
+    out += "<a href=\"/\">/</a>";
+    parts = rel.split('/');
+    acc = "";
+    // First pass: count non-empty parts so we know the leaf index.
+    total = 0;
+    for p in parts {
+        if p != "" { total = total + 1; }
+    }
+    idx = 0;
+    for p in parts {
+        if p == "" { continue; }
+        if acc == "" { acc = p; } else { acc = "{acc}/{p}"; }
+        esc_acc = escape(acc);
+        esc_p = escape(p);
+        is_leaf = idx + 1 == total;
+        seg_kind = "tree";
+        if is_leaf { seg_kind = kind; }
+        out += " / <a href=\"/{seg_kind}/{esc_acc}\">{esc_p}</a>";
+        idx = idx + 1;
+    }
+    out += "</nav>";
+    out
+}
+
+// ── Path utilities ───────────────────────────────────────────
+
+// Top-level directory of a repo-relative path.  Used to group the
+// dashboard's changed-files list.  Returns the first path segment
+// for nested paths; returns "(root)" for files at the repo root
+// (CLAUDE.md, README.md, Makefile, etc.).
+fn top_level_dir(path: text) -> text {
+    slash = path.find("/");
+    if slash < 0 { return "(root)"; }
+    path[0..slash]
+}
+
+// Quick-navigation tiles for the landing page.  Jump-off cards
+// for the most-used routes — sits above the changed-files list
+// so the navigationally-useful surface is the first thing on
+// screen.  Six tiles, auto-fit grid, big serif initial + small
+// mono description.
+fn quick_nav() -> text {
+    out = "<section class=\"quick-nav\">";
+    out += tile("W", "Welcome", "Project overview — open / closed / active", "/welcome");
+    out += tile("D", "Docs", "Reference + design + plans", "/tree/doc/claude");
+    out += tile("P", "Plans", "Active + finished tracker plans", "/tree/doc/claude/plans");
+    out += tile("S", "Source", "Rust interpreter + compiler", "/tree/src");
+    out += tile("L", "Libraries", "Loft package sources (lib/)", "/tree/lib");
+    out += tile("T", "Tests", "Test suites + reproductions", "/tree/tests");
+    out += "</section>";
+    out
+}
+
+// Render one activity card for the dashboard's Recent activity
+// feed.  Loads the commit's per-file numstat from
+// tools/viewer/state/commits/<sha>.files.json (built by
+// refresh.sh).  When the file list is longer than FILES_INLINE,
+// shows the first N rows + a `+ M more` <details> body.  When
+// the JSON is missing (refresh.sh hasn't been run since the
+// commit landed), the card still renders the header — just
+// without the file rail.
+fn render_activity_card(sha: text, esc_sha: text, esc_date: text, esc_msg: text) -> text {
+    out = "<article class=\"act-card\">";
+    out += "<header class=\"act-head\">";
+    out += "<a class=\"act-sha\" href=\"/commit/{esc_sha}\"><code>{esc_sha}</code></a>";
+    if esc_date != "" {
+        out += "<span class=\"act-date\">{esc_date}</span>";
+    }
+    out += "<span class=\"act-msg\">{esc_msg}</span>";
+
+    ff = file("tools/viewer/state/commits/{sha}.files.json");
+    if ff.format == Format.NotExists {
+        out += "</header></article>";
+        return out;
+    }
+    fjson = json_parse(ff.content());
+    if fjson.kind() != "JArray" {
+        out += "</header></article>";
+        return out;
+    }
+    nfiles = fjson.len();
+    out += "<span class=\"act-count\">{nfiles} file";
+    if nfiles != 1 { out += "s"; }
+    out += "</span>";
+    out += "</header>";
+
+    if nfiles == 0 {
+        out += "</article>";
+        return out;
+    }
+
+    inline = 4;
+    out += "<ul class=\"act-files\">";
+    j = 0;
+    while j < n_min(nfiles, inline) {
+        out += render_file_row(fjson.item(j));
+        j = j + 1;
+    }
+    out += "</ul>";
+
+    if nfiles > inline {
+        rest = nfiles - inline;
+        out += "<details class=\"act-more\"><summary>+ {rest} more</summary>";
+        out += "<ul class=\"act-files\">";
+        while j < nfiles {
+            out += render_file_row(fjson.item(j));
+            j = j + 1;
+        }
+        out += "</ul></details>";
+    }
+    out += "</article>";
+    out
+}
+
+fn render_file_row(f: JsonValue) -> text {
+    adds_v = f.field("adds");
+    dels_v = f.field("dels");
+    path_v = f.field("path");
+    adds = "0";
+    if adds_v.kind() == "JString" { adds = adds_v.as_text(); }
+    dels = "0";
+    if dels_v.kind() == "JString" { dels = dels_v.as_text(); }
+    pa = "";
+    if path_v.kind() == "JString" { pa = path_v.as_text(); }
+    esc_pa = escape(pa);
+    esc_a = escape(adds);
+    esc_d = escape(dels);
+    "<li><a href=\"/file/{esc_pa}\">{esc_pa}</a><span class=\"act-stats\"><span class=\"act-add\">+{esc_a}</span><span class=\"act-del\">−{esc_d}</span></span></li>"
+}
+
+fn n_min(a: integer, b: integer) -> integer {
+    if a < b { return a; }
+    b
+}
+
+fn tile(initial: text, name: text, desc: text, href: text) -> text {
+    esc_init = escape(initial);
+    esc_name = escape(name);
+    esc_desc = escape(desc);
+    esc_href = escape(href);
+    out = "<a class=\"tile\" href=\"{esc_href}\">";
+    out += "<span class=\"tile-init\">{esc_init}</span>";
+    out += "<span class=\"tile-body\">";
+    out += "<span class=\"tile-name\">{esc_name}</span>";
+    out += "<span class=\"tile-desc\">{esc_desc}</span>";
+    out += "</span></a>";
+    out
+}
+
+// Render a status chip for the changed-files / uncommitted lists.
+// `git diff --name-status` returns codes like `M`, `A`, `D`,
+// `R090` (rename 90% similar), `C075` (copy 75%), `??`
+// (untracked).  The chip displays the LEADING character only
+// so the box stays a uniform 1.6em — the full code goes in the
+// `title` attribute so hovering reveals the similarity score.
+// The CSS class uses the leading character too (`.st-R` not
+// `.st-R090`), so the rule already in BASE_CSS applies.
+fn status_chip(st: text) -> text {
+    if len(st) == 0 { return ""; }
+    letter = st[0..1];
+    esc_letter = escape(letter);
+    esc_full = escape(st);
+    "<span class=\"st st-{esc_letter}\" title=\"{esc_full}\">{esc_letter}</span>"
+}
+
+// vector<text>::contains — loft's stdlib doesn't expose a
+// contains() method on vector<text> yet; tiny linear scan here
+// while we wait for it.
+fn contains_text(vs: vector<text>, needle: text) -> boolean {
+    for v in vs { if v == needle { return true; } }
+    false
+}
+
+fn parent_of(rel: text) -> text {
+    last_slash = rel.rfind("/");
+    if last_slash < 0 { return ""; }
+    rel[0..last_slash]
+}
+
+fn basename(path: text) -> text {
+    last_slash = path.rfind("/");
+    if last_slash < 0 { return path; }
+    path[last_slash + 1..len(path)]
+}
+
+fn rel_join(base: text, name: text) -> text {
+    if base == "" { return name; }
+    "{base}/{name}"
+}
+
+// Skip-list for tree walks.  Keeps the listing focused.
+fn skip(path: text) -> boolean {
+    name = basename(path);
+    name == ".git"
+        || name == "target"
+        || name == ".loft"
+        || name == "node_modules"
+        || name == ".cache"
+        || name.starts_with(".fuse_hidden")
+}
+
+// ── CSS ──────────────────────────────────────────────────────
+
+const BASE_CSS: text = `
+/* ── Engineering Notebook palette + typography ───────────────
+   Warm cream paper / ink-black / single deep ink-blue accent.
+   Three faces: Fraunces (serif display, Tufte-leaning), IBM
+   Plex Sans (body), JetBrains Mono (UI labels + code). */
+:root{{
+  --paper:#f8f4ea;
+  --paper-soft:#f1ebda;
+  --ink:#1d1a14;
+  --ink-soft:#4a4538;
+  --ink-mute:#8a8475;
+  --rule:#d8d2c0;
+  --accent:#1c4878;
+  --accent-soft:#e7eef5;
+  --accent-soft-2:#cfdcec;
+  --added:#5a7a3c;
+  --modified:#8b6510;
+  --deleted:#9c3a2a;
+  --renamed:#1c4878;
+}}
+@media (prefers-color-scheme: dark){{
+  :root{{
+    --paper:#16181b;
+    --paper-soft:#1c1f23;
+    --ink:#e8e4d8;
+    --ink-soft:#a8a594;
+    --ink-mute:#6c6a5e;
+    --rule:#2c2f33;
+    --accent:#88b3df;
+    --accent-soft:#1a2230;
+    --accent-soft-2:#243245;
+    --added:#8fc16a;
+    --modified:#d09b4a;
+    --deleted:#d97a6c;
+    --renamed:#88b3df;
+  }}
+}}
+*{{box-sizing:border-box}}
+html,body{{margin:0;padding:0}}
+body{{font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:16px;line-height:1.55;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}}
+/* Subtle paper warmth — two soft radial washes that hint at
+   atmosphere without becoming texture. */
+body::before{{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background-image:radial-gradient(ellipse 80% 60% at 15% 10%,rgba(28,72,120,.025) 0%,transparent 50%),radial-gradient(ellipse 70% 60% at 85% 90%,rgba(139,101,16,.018) 0%,transparent 60%)}}
+@media (prefers-color-scheme: dark){{
+  body::before{{background-image:radial-gradient(ellipse 80% 60% at 15% 10%,rgba(136,179,223,.04) 0%,transparent 50%),radial-gradient(ellipse 70% 60% at 85% 90%,rgba(208,155,74,.025) 0%,transparent 60%)}}
+}}
+
+/* ── Sticky header with brand mark ── */
+header.site{{position:sticky;top:0;z-index:50;background:rgba(248,244,234,.92);backdrop-filter:saturate(1.4) blur(6px);-webkit-backdrop-filter:saturate(1.4) blur(6px);border-bottom:1px solid var(--rule);padding:.7rem 1.5rem}}
+@media (prefers-color-scheme: dark){{header.site{{background:rgba(22,24,27,.92)}}}}
+header.site .wrap{{max-width:1280px;margin:0 auto;display:flex;align-items:baseline;gap:1.25rem}}
+header.site .brand{{font-family:'Fraunces',serif;font-weight:540;font-variation-settings:"SOFT" 50,"opsz" 144;font-size:1.45rem;letter-spacing:-.018em;color:var(--ink);text-decoration:none;border:none;display:inline-flex;align-items:baseline}}
+header.site .brand .mark{{font-style:italic}}
+header.site .brand .slash{{color:var(--accent);font-weight:380;margin:0 .15em;font-style:normal;font-variation-settings:"SOFT" 0}}
+header.site .brand .view{{font-family:'JetBrains Mono',monospace;font-size:.78em;font-weight:500;color:var(--accent);letter-spacing:0}}
+header.site nav{{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:.78rem;letter-spacing:.02em;text-transform:uppercase}}
+header.site nav a{{color:var(--ink-soft);text-decoration:none;border:none;margin-left:1.4rem;padding-bottom:2px;border-bottom:1px solid transparent;transition:border-color .18s,color .18s}}
+header.site nav a:hover{{color:var(--ink);border-color:var(--accent)}}
+
+/* ── Main + optional right rail ── */
+main{{max-width:1280px;margin:0 auto;padding:1.75rem 1.5rem 4rem;position:relative;z-index:1}}
+main:has(>aside.rail){{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:2.5rem;align-items:start}}
+@media (max-width:1100px){{
+  main:has(>aside.rail){{grid-template-columns:1fr;gap:1rem}}
+}}
+main>article{{min-width:0}}
+aside.rail{{position:sticky;top:5rem;font-size:.9rem;align-self:start}}
+@media (max-width:1100px){{aside.rail{{position:static;border-top:1px solid var(--rule);padding-top:1rem;margin-top:2rem}}}}
+
+/* ── Type scale ── */
+h1{{font-family:'Fraunces',serif;font-weight:460;font-variation-settings:"SOFT" 30,"opsz" 144;font-size:2rem;letter-spacing:-.022em;line-height:1.15;margin:.5rem 0 1rem;color:var(--ink)}}
+h1 small{{font-family:'JetBrains Mono',monospace;font-size:.4em;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-mute);margin-left:.85em;vertical-align:middle}}
+h1 code{{font-family:'JetBrains Mono',monospace;font-size:.6em;background:none;padding:0;color:var(--accent);font-weight:500}}
+h2{{font-family:'Fraunces',serif;font-weight:480;font-variation-settings:"SOFT" 50,"opsz" 36;font-size:1.2rem;letter-spacing:-.005em;margin:2.2rem 0 .85rem;color:var(--ink)}}
+h2 .ct{{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:.65rem;font-weight:500;letter-spacing:.04em;color:var(--accent);background:var(--accent-soft);padding:.2em .65em;border-radius:2em;margin-left:.65em;vertical-align:middle}}
+h2 small{{font-family:'IBM Plex Sans',sans-serif;font-weight:400;font-size:.7em;color:var(--ink-mute);font-style:italic;margin-left:.4em}}
+main h3,main h4,main h5{{font-family:'Fraunces',serif;font-weight:500;color:var(--ink);scroll-margin-top:5rem}}
+main h3{{font-size:1.05rem;margin:1.5rem 0 .5rem}}
+main h4{{font-size:.95rem;margin:1.25rem 0 .4rem;color:var(--ink-soft)}}
+main h5{{font-size:.88rem;margin:1rem 0 .35rem;color:var(--ink-soft)}}
+p{{margin:.5rem 0}}
+a{{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft-2);transition:border-color .15s,background .15s}}
+a:hover{{border-color:var(--accent)}}
+a:visited{{color:var(--accent)}}
+code{{font-family:'JetBrains Mono',monospace;font-size:.88em;background:var(--accent-soft);padding:.1em .38em;border-radius:2px;color:var(--ink)}}
+strong{{font-weight:600}}
+em{{font-style:italic;color:var(--ink-soft)}}
+hr{{border:none;border-top:1px solid var(--rule);margin:2rem 0}}
+
+/* ── Breadcrumbs ── */
+nav.crumbs{{font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--ink-mute);margin:0 0 .85rem;letter-spacing:.02em}}
+nav.crumbs a{{color:var(--ink-soft);border:none;padding:.15em .35em;border-radius:2px;transition:background .12s,color .12s}}
+nav.crumbs a:hover{{color:var(--ink);background:var(--accent-soft)}}
+
+/* ── Branch dashboard header ── */
+header.dash{{border-bottom:1px solid var(--rule);padding:0 0 1.25rem;margin:0 0 1.5rem}}
+header.dash h1{{margin:0 0 .35rem;font-size:1.7rem}}
+header.dash h1 code{{font-size:.55em}}
+header.dash .ahead-behind,header.dash .head{{font-family:'JetBrains Mono',monospace;font-size:.82rem;color:var(--ink-soft);margin:.15rem 0}}
+header.dash code{{background:none;color:var(--accent);padding:0;font-weight:500}}
+
+/* ── Quick-navigation tiles (dashboard) ── */
+.quick-nav{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.85rem;margin:0 0 2rem}}
+.tile{{display:flex;align-items:center;gap:.95rem;padding:.85rem 1rem;background:var(--paper-soft);border:1px solid var(--rule);border-radius:4px;text-decoration:none;color:var(--ink);transition:border-color .15s,background .15s,transform .15s,box-shadow .15s;position:relative;overflow:hidden}}
+.tile::before{{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent-soft-2);transition:background .15s,width .15s}}
+.tile:hover{{border-color:var(--accent);background:var(--paper);transform:translateY(-1px);box-shadow:0 2px 8px rgba(28,72,120,.08)}}
+.tile:hover::before{{background:var(--accent);width:4px}}
+.tile-init{{font-family:'Fraunces',serif;font-size:1.85rem;font-weight:480;font-variation-settings:"SOFT" 50,"opsz" 144;line-height:1;color:var(--accent);width:1.5em;text-align:center;flex-shrink:0;font-style:italic}}
+.tile-body{{display:flex;flex-direction:column;gap:.15rem;min-width:0}}
+.tile-name{{font-family:'IBM Plex Sans',sans-serif;font-size:.95rem;font-weight:500;color:var(--ink);letter-spacing:-.005em}}
+.tile-desc{{font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--ink-mute);letter-spacing:.02em;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+@media (prefers-color-scheme: dark){{
+  .tile:hover{{box-shadow:0 2px 12px rgba(0,0,0,.4)}}
+}}
+
+/* ── Generic markdown-table row card ────────────────────
+   Shared by the dashboard's Open Problems list, the
+   /tag/P* Definition section, and any reference whose
+   context line is a markdown table row. */
+.row-card{{padding:.75rem 1rem;background:var(--paper-soft);border:1px solid var(--rule);border-left:3px solid var(--accent);border-radius:0 4px 4px 0;margin:.45rem 0 .85rem;transition:border-color .12s,background .12s}}
+.row-card:hover{{background:var(--paper)}}
+.row-line{{margin:.2rem 0;font-size:.9rem;line-height:1.5;color:var(--ink)}}
+.row-line .row-label{{font-family:'JetBrains Mono',monospace;font-size:.68rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);min-width:5em;display:inline-block;margin-right:.55em;vertical-align:baseline}}
+.row-line code{{background:none;padding:0;color:var(--ink);font-size:.95em}}
+
+/* Open Problems list (dashboard) — wraps generic row cards
+   plus a small file:line link above each. */
+.problems{{display:flex;flex-direction:column;gap:.55rem;margin:0}}
+.problems .prob-link{{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute);border:none;letter-spacing:.03em;padding:0;margin:.65rem 0 0}}
+.problems .prob-link:hover{{color:var(--accent)}}
+.problems .row-card{{margin:.2rem 0 .25rem;border-left-color:var(--modified)}}
+.problems .row-card .row-label{{color:var(--modified)}}
+
+/* /welcome — @PLAN37 phase 04b.  Two-column grid for the four
+   plan buckets, full-width sections below for problems lists.
+   The grid degrades to single column at narrow widths so
+   nothing wraps awkwardly. */
+.welcome-hdr{{margin-bottom:1.5rem}}
+.welcome-tag{{font-size:.95rem;line-height:1.55;color:var(--ink-mute);max-width:62ch}}
+.welcome-link{{font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--accent);text-decoration:none}}
+.welcome-link:hover{{text-decoration:underline}}
+.welcome-grid{{display:grid;grid-template-columns:1fr 1fr;gap:1.4rem 1.6rem;margin:0 0 1.6rem}}
+@media (max-width: 920px){{.welcome-grid{{grid-template-columns:1fr}}}}
+.welcome-sec{{background:var(--paper-deep);border-left:3px solid var(--accent);padding:.65rem .85rem .85rem;margin:0}}
+.welcome-sec h2,.welcome-sec .h2-summary{{margin:0 0 .35rem;font-size:.95rem}}
+.welcome-sec .sec-sub{{margin:0 0 .5rem;color:var(--ink-mute);font-size:.78rem;line-height:1.45}}
+.plan-list{{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.3rem}}
+.plan-link{{display:flex;flex-direction:column;gap:.05rem;text-decoration:none;padding:.25rem .35rem;border-radius:2px}}
+.plan-link:hover{{background:var(--paper)}}
+.plan-slug{{font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute);letter-spacing:.02em}}
+.plan-title{{font-size:.85rem;color:var(--ink);line-height:1.35}}
+.recent-fixes{{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.25rem;font-size:.82rem;line-height:1.45}}
+.recent-more{{margin-top:.6rem}}
+.recent-more > summary{{cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:.75rem;color:var(--ink-mute);padding:.15rem 0;list-style:none}}
+.recent-more > summary:hover{{color:var(--accent)}}
+.recent-more[open] > summary{{margin-bottom:.4rem}}
+.recent-date{{display:inline-block;width:5.5rem;font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute)}}
+.recent-tag{{font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--accent);text-decoration:none;margin-right:.4rem}}
+.recent-tag:hover{{text-decoration:underline}}
+.recent-sum{{color:var(--ink)}}
+
+/* Definition section + tag-page references list also use
+   row-card for consistent table-row treatment.  Tighten the
+   spacing inside the references list so each card sits close
+   to its file:line anchor. */
+ul.refs li:has(.row-card){{padding:.85rem 0}}
+ul.refs .row-card{{margin-top:.3rem;margin-bottom:0}}
+
+/* ── Collapsible all-changes section ── */
+details.changes-section{{margin:2rem 0}}
+details.changes-section>summary{{cursor:pointer;font-family:'Fraunces',serif;font-weight:480;font-variation-settings:"SOFT" 50,"opsz" 36;font-size:1.2rem;letter-spacing:-.005em;color:var(--ink);list-style:none;display:inline-flex;align-items:baseline;gap:.45em;padding:.25em .5em .25em 0;border-radius:3px;transition:background .12s}}
+details.changes-section>summary::-webkit-details-marker{{display:none}}
+details.changes-section>summary::before{{content:"▸";font-family:'JetBrains Mono',monospace;font-size:.6em;color:var(--accent);transition:transform .18s;display:inline-block;width:.85em;text-align:center}}
+details.changes-section[open]>summary::before{{transform:rotate(90deg)}}
+details.changes-section>summary:hover{{background:var(--accent-soft)}}
+details.changes-section>summary small{{font-family:'IBM Plex Sans',sans-serif;font-weight:400;font-size:.7em;color:var(--ink-mute);font-style:italic;margin-left:.2em}}
+
+/* ── Filter input ── */
+.filter-bar{{margin:.5rem 0 1.25rem;display:flex;align-items:center;gap:.85rem;font-family:'JetBrains Mono',monospace;font-size:.85rem}}
+.filter-bar input{{flex:1;font:inherit;padding:.4rem .75rem;border:1px solid var(--rule);border-radius:3px;background:var(--paper-soft);color:var(--ink);transition:border-color .15s,background .15s}}
+.filter-bar input::placeholder{{color:var(--ink-mute)}}
+.filter-bar input:focus{{outline:none;border-color:var(--accent);background:var(--accent-soft)}}
+.filter-bar .count{{color:var(--ink-mute);font-size:.78rem;white-space:nowrap;letter-spacing:.04em}}
+
+/* ── Collapsible groups (top-level dirs in dashboard) ── */
+details.group{{margin:.4rem 0}}
+details.group.hidden{{display:none}}
+details.group>summary{{cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:.83rem;padding:.35rem .55rem;border-radius:3px;list-style:none;display:flex;align-items:center;gap:.55rem;color:var(--ink);transition:background .12s;border-left:2px solid transparent}}
+details.group>summary::-webkit-details-marker{{display:none}}
+details.group>summary::before{{content:"▸";font-size:.7em;color:var(--ink-mute);width:.9em;display:inline-block;transition:transform .18s}}
+details.group[open]>summary::before{{transform:rotate(90deg);color:var(--accent)}}
+details.group>summary:hover{{background:var(--accent-soft);border-left-color:var(--accent-soft-2)}}
+details.group[open]>summary{{border-left-color:var(--accent)}}
+details.group>summary .group-name{{font-weight:500;color:var(--ink)}}
+details.group>summary .group-count{{color:var(--ink-mute);font-size:.85em;margin-left:auto;font-variant-numeric:tabular-nums}}
+
+/* ── Lists: changed / commits / browse / dir ── */
+ul.changed,ol.commits,ul.browse{{list-style:none;padding:0;margin:0;font-family:'JetBrains Mono',monospace;font-size:.85rem}}
+ul.changed{{padding:.15rem 0 .25rem 1.4rem}}
+ul.changed li,ol.commits li,ul.browse li{{padding:.18rem .55rem;border-radius:2px;display:flex;align-items:center;gap:.55rem;transition:background .12s;line-height:1.5}}
+ul.changed li:hover,ol.commits li:hover,ul.browse li:hover{{background:var(--accent-soft)}}
+ul.changed a,ol.commits a,ul.browse a{{border:none;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .12s}}
+ul.changed a:hover,ol.commits a:hover,ul.browse a:hover{{color:var(--accent)}}
+ul.changed li.hidden{{display:none}}
+ul.changed li{{animation:rise .35s ease-out backwards;animation-delay:calc(var(--i,0) * 4ms)}}
+@keyframes rise{{from{{opacity:0;transform:translateY(3px)}}to{{opacity:1;transform:none}}}}
+@media (prefers-reduced-motion: reduce){{ul.changed li{{animation:none}}}}
+
+/* ── Status chips — outline-only, palette aligned to roles ── */
+.st{{display:inline-block;width:1.6em;text-align:center;font-family:'JetBrains Mono',monospace;font-size:.7em;font-weight:600;letter-spacing:.06em;padding:.2em 0;border-radius:2px;border:1px solid currentColor;background:transparent;flex-shrink:0;line-height:1}}
+.st-A{{color:var(--added)}}
+.st-M{{color:var(--modified)}}
+.st-D{{color:var(--deleted)}}
+.st-R{{color:var(--renamed)}}
+.st-?{{color:var(--ink-mute)}}
+.st-??{{color:var(--ink-mute)}}
+
+/* ── Commits (legacy ol.commits — kept for any future use) ── */
+ol.commits code{{font-size:.85em;background:none;color:var(--accent);padding:0;font-weight:500;margin-right:.4em;font-variant-numeric:tabular-nums}}
+
+/* ── Activity feed (commit cards with per-file numstat) ── */
+.activity{{display:flex;flex-direction:column;gap:.65rem;margin:0}}
+.act-card{{background:var(--paper-soft);border:1px solid var(--rule);border-radius:4px;padding:.7rem .9rem;transition:border-color .15s,background .15s}}
+.act-card:hover{{border-color:var(--accent-soft-2);background:var(--paper)}}
+.act-head{{display:flex;align-items:baseline;gap:.85rem;flex-wrap:wrap}}
+.act-sha{{border:none;flex-shrink:0}}
+.act-sha code{{background:none;color:var(--accent);font-weight:500;padding:0;font-size:.85em;font-variant-numeric:tabular-nums}}
+.act-date{{font-family:'JetBrains Mono',monospace;font-size:.75rem;color:var(--ink-mute);font-variant-numeric:tabular-nums;flex-shrink:0;letter-spacing:.02em}}
+.act-msg{{flex:1;min-width:0;color:var(--ink);font-size:.92rem;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.act-count{{font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--ink-mute);background:var(--paper);padding:.15em .55em;border-radius:2em;border:1px solid var(--rule);flex-shrink:0;letter-spacing:.02em}}
+.act-files{{list-style:none;padding:.55rem 0 0 0;margin:.55rem 0 0;border-top:1px dashed var(--rule);font-family:'JetBrains Mono',monospace;font-size:.78rem}}
+.act-files li{{display:flex;align-items:baseline;gap:.85rem;padding:.18rem 0;line-height:1.4}}
+.act-files a{{flex:1;min-width:0;color:var(--ink);border:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .12s}}
+.act-files a:hover{{color:var(--accent)}}
+.act-stats{{flex-shrink:0;font-variant-numeric:tabular-nums;letter-spacing:.02em;font-size:.92em}}
+.act-add{{color:var(--added);margin-right:.55em}}
+.act-del{{color:var(--deleted)}}
+.act-more{{margin-top:.35rem}}
+.act-more>summary{{cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute);padding:.25rem 0;list-style:none;letter-spacing:.04em;transition:color .12s;display:inline-block}}
+.act-more>summary::-webkit-details-marker{{display:none}}
+.act-more>summary::before{{content:"▸ ";color:var(--ink-mute);transition:transform .15s;display:inline-block}}
+.act-more[open]>summary::before{{transform:rotate(90deg)}}
+.act-more>summary:hover{{color:var(--accent)}}
+.act-more .act-files{{padding-top:.35rem;border-top:none;margin-top:.25rem}}
+
+/* ── Tree listing ── */
+ul.dir{{list-style:none;padding:0;font-family:'JetBrains Mono',monospace;font-size:.88rem}}
+ul.dir li{{padding:.22rem .55rem;display:flex;justify-content:space-between;align-items:center;border-radius:2px;transition:background .12s}}
+ul.dir li:hover{{background:var(--accent-soft)}}
+ul.dir a{{border:none;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+ul.dir a.d{{color:var(--accent);font-weight:500}}
+ul.dir a:hover{{color:var(--accent)}}
+ul.dir .sz{{color:var(--ink-mute);font-size:.78em;margin-left:1rem;white-space:nowrap;font-variant-numeric:tabular-nums}}
+
+/* ── Code page ── */
+pre.code-pre{{background:var(--paper-soft);border:1px solid var(--rule);border-radius:4px;overflow-x:auto;padding:.75rem .25rem;font-size:.82rem;line-height:1.55;font-family:'JetBrains Mono',monospace}}
+pre.code-pre code{{background:none;padding:0;display:block}}
+a.line{{display:block;text-decoration:none;color:inherit;white-space:pre;border:none;padding:0 .5rem;border-left:2px solid transparent;transition:background .1s,border-color .1s}}
+a.line:hover{{background:var(--accent-soft);border-left-color:var(--accent-soft-2)}}
+a.line:target{{background:var(--accent-soft);border-left-color:var(--accent);animation:targetPulse 1.2s ease-out}}
+@keyframes targetPulse{{0%{{background:var(--accent);color:var(--paper)}}100%{{background:var(--accent-soft);color:inherit}}}}
+a.line .lineno{{display:inline-block;width:3.5em;text-align:right;padding-right:1em;color:var(--ink-mute);user-select:none;font-variant-numeric:tabular-nums}}
+
+/* ── References list ── */
+ul.refs{{list-style:none;padding:0;margin:0}}
+ul.refs li{{padding:.55rem 0;border-bottom:1px solid var(--rule);font-size:.85rem}}
+ul.refs li:last-child{{border-bottom:none}}
+ul.refs a{{font-family:'JetBrains Mono',monospace;font-size:.82rem;border:none;word-break:break-all;color:var(--accent)}}
+ul.refs code{{font-size:.78em;background:none;padding:0;display:block;color:var(--ink-mute);margin-top:.2rem;line-height:1.45;font-family:'IBM Plex Sans',sans-serif}}
+
+/* ── Definition card (tag pages) ── */
+section.definition{{margin:1rem 0 2rem;padding:1rem 1.2rem;background:var(--accent-soft);border-left:3px solid var(--accent);border-radius:0 4px 4px 0;position:relative}}
+section.definition h2{{margin:0 0 .45rem;font-size:.78rem;font-family:'JetBrains Mono',monospace;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}}
+section.definition p{{margin:0 0 .4rem;font-size:.85rem;font-family:'JetBrains Mono',monospace}}
+section.definition p a{{border-bottom-color:var(--accent-soft-2)}}
+section.definition blockquote{{margin:.45rem 0 0;padding:0;font-family:'IBM Plex Sans',sans-serif;font-size:.93rem;color:var(--ink);line-height:1.55}}
+section.definition blockquote code{{display:block;background:none;padding:0;font-size:1em;white-space:pre-wrap;word-break:break-word}}
+
+/* ── Sidebar (in right rail OR stacked) ── */
+section.sidebar{{margin:0 0 1.75rem;padding:.85rem 0 0;border-top:1px solid var(--rule)}}
+aside.rail section.sidebar:first-child{{border-top:none;padding-top:0}}
+section.sidebar h2{{margin:0 0 .65rem;font-size:.72rem;font-family:'JetBrains Mono',monospace;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-mute)}}
+section.sidebar h2 .ct{{font-size:.7rem;background:var(--accent-soft);color:var(--accent);margin-left:.5em;padding:.15em .55em;border-radius:2em;text-transform:none;letter-spacing:0;font-weight:500}}
+
+/* ── Tag chips ── */
+ul.tag-list{{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.4rem;font-family:'JetBrains Mono',monospace;font-size:.78rem;margin:0}}
+ul.tag-list li{{margin:0}}
+ul.tag-list a{{display:inline-block;padding:.22em .6em;background:var(--paper);border:1px solid var(--rule);border-radius:3px;color:var(--ink);transition:border-color .12s,background .12s,color .12s}}
+ul.tag-list a:hover{{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}}
+ul.tag-list code{{background:none;padding:0;color:inherit;font-size:1em}}
+
+/* ── View toggle ── */
+nav.view-toggle{{display:inline-flex;margin:0 0 1rem;border:1px solid var(--rule);border-radius:3px;overflow:hidden;font-family:'JetBrains Mono',monospace;font-size:.78rem;letter-spacing:.02em}}
+nav.view-toggle a,nav.view-toggle span{{padding:.4rem .9rem;color:var(--ink-soft);border:none;background:transparent;transition:background .12s,color .12s}}
+nav.view-toggle a:hover{{background:var(--accent-soft);color:var(--accent)}}
+nav.view-toggle .active{{background:var(--accent);color:var(--paper);font-weight:500}}
+nav.view-toggle a+a,nav.view-toggle a+span,nav.view-toggle span+a{{border-left:1px solid var(--rule)}}
+
+/* ── Diff renderer ── */
+pre.diff{{background:var(--paper-soft);border:1px solid var(--rule);border-radius:4px;overflow-x:auto;padding:0;font-size:.82rem;line-height:1.5;font-family:'JetBrains Mono',monospace}}
+pre.diff code{{background:none;padding:0;display:block;white-space:pre}}
+pre.diff span{{display:block;padding:0 .5rem;white-space:pre;border-left:2px solid transparent}}
+pre.diff .diff-add{{background:color-mix(in srgb,var(--added) 14%,transparent);color:var(--added);border-left-color:var(--added)}}
+pre.diff .diff-del{{background:color-mix(in srgb,var(--deleted) 14%,transparent);color:var(--deleted);border-left-color:var(--deleted)}}
+pre.diff .diff-hunk{{background:var(--accent-soft);color:var(--accent);font-weight:500;padding-top:.25rem;padding-bottom:.25rem}}
+pre.diff .diff-head{{background:var(--paper);color:var(--ink);font-weight:500;padding-top:.4rem;padding-bottom:.4rem;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}}
+pre.diff .diff-meta{{color:var(--ink-mute)}}
+pre.diff .diff-noeol{{color:var(--ink-mute);font-style:italic}}
+pre.diff .diff-ctx{{color:var(--ink-soft)}}
+
+/* ── Markdown body extras (lists, blockquote, tables) ── */
+main blockquote{{border-left:3px solid var(--rule);padding:0 0 0 1rem;margin:1rem 0;color:var(--ink-soft);font-style:italic}}
+main ul,main ol{{padding-left:1.5rem;margin:.5rem 0}}
+main li{{margin:.2rem 0}}
+main table{{border-collapse:collapse;margin:1.25rem 0;font-size:.92em;width:100%}}
+main th,main td{{border:1px solid var(--rule);padding:.4rem .7rem;text-align:left;vertical-align:top}}
+main th{{background:color-mix(in srgb,var(--accent-soft) 60%,var(--paper));font-weight:600;color:var(--ink);font-family:'IBM Plex Sans',sans-serif;letter-spacing:.01em}}
+main tr:nth-child(even) td{{background:var(--paper-soft)}}
+main img{{max-width:100%;height:auto;border-radius:3px}}
+
+/* ── Misc ── */
+.warn{{background:color-mix(in srgb,var(--modified) 12%,var(--paper));border-left:3px solid var(--modified);padding:.7rem .9rem;color:var(--ink);border-radius:0 3px 3px 0;margin:1rem 0}}
+.empty{{color:var(--ink-mute);font-style:italic;padding:.5rem 0;font-family:'IBM Plex Sans',sans-serif}}
+
+/* ── Footer ── */
+footer{{max-width:1280px;margin:3rem auto 1rem;padding:.85rem 1.5rem;border-top:1px solid var(--rule);font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--ink-mute);display:flex;justify-content:space-between;align-items:baseline;letter-spacing:.03em}}
+footer a{{color:var(--ink-mute);border:none;transition:color .12s}}
+footer a:hover{{color:var(--accent)}}
+`;

@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Native debugging — GDB / LLDB integration for `--native` builds
+# @PLAN25 — Native debugging — GDB / LLDB integration for `--native` builds
 
 `loft --native` produces a real ELF / Mach-O / PE binary via rustc.
 This doc covers how to make that binary debuggable with stock

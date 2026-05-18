@@ -275,7 +275,7 @@ Drop the now-vacuous checks:
 - `validate_slots` retains I1 (overlap), I2 (arg isolation),
   I3 (no-op; not currently checked), I4 (every var placed).
   Rename the diagnostic comments so they no longer reference
-  "plan-04 I1–I6" verbatim.
+  "@PLAN04 I1–I6" verbatim.
 
 **Done when:** `cargo test --lib` green; the trimmed validator
 still catches overlap on hand-crafted bad Functions in
@@ -305,7 +305,7 @@ touches SLOTS.md and README more thoroughly):
 - walkthroughs.md: add a footer noting V2 was retired; the
   walk-throughs remain a useful archive of the patterns the old
   design would have handled.
-- plan-04 README: move status to "Phase 2h complete; Phase 4
+- @PLAN04 README: move status to "Phase 2h complete; Phase 4
   (cleanup) ready."
 
 Phase 4's deliverables (SLOTS.md rewrite, PROBLEMS.md P178/P185

@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# P184 — Narrow integer elements in collection types
+# @PLAN02 — P184 — Narrow integer elements in collection types
 
 ## Status — DONE 2026-04-22
 
@@ -11,7 +11,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 siblings) honour the `size(N)` annotation on the integer alias.
 Hash / sorted / index struct-key narrowing also covered.
 
-Reference for the post-plan-02 storage rules lives in:
+Reference for the post-@PLAN02 storage rules lives in:
 
 - [`../../../INTERMEDIATE.md`](../../../INTERMEDIATE.md) §
   "Integer Storage Size" — the struct-field-vs-vector-element
@@ -144,9 +144,9 @@ pattern site.  Scoped up to a named struct on 2026-04-21.
 - [`../../../DATABASE.md`](../../../DATABASE.md) §
   "Narrow vector elements" — `Parts::Short` vs `Parts::ShortRaw`
   divergence + `narrow_vector_content()` registration helper
-- [`../../CAVEATS.md`](../../CAVEATS.md) § C54 — post-migration
+- [`../../CAVEATS.md`](../../../CAVEATS.md) § C54 — post-migration
   caveats: binary writers, cdylib FFI layout, memory footprint
-- [`../../PROBLEMS.md`](../../PROBLEMS.md) § P184 — original
+- [`../../PROBLEMS.md`](../../../PROBLEMS.md) § P184 — original
   bug entry
 - `lib/graphics/src/glb.loft::glb_write_indices` — pre-fix
   workaround pattern (the `as i32` casts can now be removed)

@@ -3,9 +3,9 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 18 — Match expression validation
+# @PLAN18 — Match expression validation
 
-**Status: phase 01 closed (PR #207).  Phase 02 — P209 (match guards
+**Status: phase 01 closed (PR #207).  Phase 02 — @P209 (match guards
 saw pattern bindings as uninitialised) closed 2026-05-04 in
 `src/parser/control.rs::parse_scalar_match`.  Range patterns work.
 Phase 02 wiring (matrix tests for range / guard / null patterns)
@@ -27,7 +27,7 @@ Closed (2026-05-04):
 
 Open: deciding whether to support `x @ pattern` *inside*
 or-patterns (parser feature) or document it as an explicit
-non-goal — same shape as plan-17 phase 03 (`Printable`
+non-goal — same shape as @PLAN17 phase 03 (`Printable`
 satisfaction add-vs-retract decision).  Phase 02+ of this plan
 covers other cells but the hang fix removes the only known
 DoS-class issue.
@@ -37,7 +37,7 @@ DoS-class issue.
 Validate that `match` expressions dispatch correctly across every
 **subject type** through every **pattern shape**, with
 **interp/native byte-identical stdout** asserted by the cross-mode
-harness from plan-14 phase 00.
+harness from @PLAN14 phase 00.
 
 ## Why now — pre-flight survey
 
@@ -70,7 +70,7 @@ Two axes.
 | S2 | **Text** — `text` literals as patterns | `parse_scalar_match` (text branch) |
 | S3 | **Plain enum** — `enum E { A, B, C }` | `parse_match` enum branch |
 | S4 | **Struct enum** — `enum Shape { Circle { r }, Rect { w, h } }` | `parse_match` struct-enum branch |
-| S5 | **Tuple** — covered by plan-14 phase 03 | Cross-reference |
+| S5 | **Tuple** — covered by @PLAN14 phase 03 | Cross-reference |
 | S6 | **Vector** — `match v { [first, ..] => … }` | `parse_vector_match` |
 
 ### Axis 2 — pattern shape
@@ -123,9 +123,9 @@ more cells needed."
 
 ## Cross-references
 
-- [LOFT.md § Match](../../LOFT.md) — language reference.
-- [TUPLES.md § T1.9](../../TUPLES.md) — tuple match specification.
+- [LOFT.md § Match](../../../LOFT.md) — language reference.
+- [TUPLES.md § T1.9](../../../TUPLES.md) — tuple match specification.
 - `src/parser/control.rs` — `parse_match`, `parse_scalar_match`,
   `parse_tuple_match`, `parse_vector_match`.
-- [plan-14 phase 03](../../finished/14-tuple-validation/03-closures.md) — tuple
+- [@PLAN14 phase 03](../../finished/14-tuple-validation/03-closures.md) — tuple
   match cells (cross-reference).

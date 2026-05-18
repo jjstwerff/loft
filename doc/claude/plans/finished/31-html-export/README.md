@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# W1.1 — Single-file HTML Export (CLOSED)
+# @PLAN31 — W1.1 — Single-file HTML Export (CLOSED)
 
 **Reference for the shipped pipeline moved to
 [`doc/claude/HTML_EXPORT.md`](../../../HTML_EXPORT.md)**

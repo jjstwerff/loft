@@ -25,19 +25,62 @@ The methodology behind this file (categories, no-time-projections, features-need
 
 ---
 
+## Near-term focus — friend-readiness (added 2026-05-13)
+
+Loft has crossed the threshold where a developer friend with
+some Rust / ML experience can be invited to try it.  The
+following items are flagged as **gates for "tier-2
+friend-readiness"** — a friend who'd follow a tutorial and
+write something small.
+
+The user explicitly named this as a near-term goal: "I can
+start to really advise friends to try it out."  Items below
+are the residual gaps; see the per-item rows in the value
+categories below for full detail.
+
+| Pri | Gate | Status | Source |
+|---|---|---|---|
+| 1 | **Plan-07 phase 5/6/7** — error-message closeout (suggestions polish + per-site type-mismatch wording + closeout doc).  Friends' first WTF moment is a type error; tighter messages compound into trust. | Phases 5/6/7 open; phase 6.1 (Type::name exhaustive) shipped 2026-05-13 | [`plans/07-error-messages/`](plans/07-error-messages/) |
+| 2 | **Plan-37 — tracker-tag indexer** — `@P-id` / `@PLAN-id` convention + scanner + CLI + viewer integration.  Replaces grep-based tag lookups with O(1) JSON queries.  Shrinks Claude per-task token usage; feeds @PLAN35 phase 08 newcomer landing's status buckets. | Phases 0-6 + 9 shipped (0 closed 2026-05-14 as housekeeping); phases 7-8 open | [`plans/37-tracker-index/`](plans/37-tracker-index/) |
+| 3 | **DX.2 — CI: package + native tests** — last open item in @PLAN27 (DX); ship + close the plan. | Open | [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) |
+
+What ships ALREADY for friend-readiness (don't reblock on these):
+
+- ✅ TextMate grammar (`syntaxes/loft.tmLanguage.json`)
+- ✅ VS Code extension (`editors/vscode/`) + IntelliJ plugin
+- ✅ Examples directory (7 standalone programs at `examples/`)
+- ✅ "Learn loft in 30 minutes" tutorial (`doc/learn-loft.md`)
+- ✅ Closures (@PLAN22 trio @P259/P260/P261, shipped 2026-05-13)
+- ✅ Native backend CI-gated production
+- ✅ Coroutines (0.8.3)
+- ✅ Server lib + WebSocket (lib/server)
+
+What's deliberately deferred past the tier-2 gate (don't
+block here):
+
+- LSP server (LSP.1+) — months of work; tier-3 enabler.
+- Outbound HTTP client — in `lib_plans/future/06-web-services/`;
+  tier-3 (any friend writing a real network app).
+- Package registry (PKG.REG) — in `PACKAGES.md § Open work`;
+  tier-3 (real package consumption).
+- Plan-23 event loop — needed for games (tier 3).
+
+**Total tier-2 sprint estimate:** H (items 1+2+3 combined).
+Item 4 (tables) adds MH on top but elevates polish.
+
+---
+
 ## S — Silent failure / data-loss prevention
 
 Features that "appear to work" but don't, or that lose data without indication.  HIGHEST priority because invisible to users.  See [plans/README.md § Value categories](plans/README.md#value-categories--what-kind-of-value-not-just-how-much) for why S sits above R.
 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
-| (cross) | Closure validation — capture × storage matrix | M | ✓ | plans/15-closure-validation/README.md |
 | (cross) | Coroutine validation — yielded type × drive context matrix | M | ✓ | plans/future/16-coroutine-validation/README.md |
 | (cross) | Match validation — subject type × pattern shape matrix | M | ✓ | plans/future/18-match-validation/README.md |
 | (cross) | Struct-enum validation — variant payload × dispatch context matrix | M | ✓ | plans/future/19-struct-enum-validation/README.md |
 | (cross) | Keyed collection validation — collection × operation matrix | M | ✓ | plans/future/20-collection-validation/README.md |
 | Q* | JSON parse-error diagnostics (Q1) — parse currently fails silently in some shapes | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
-| (cross) | Closure-DbRef leak (LIFETIME.md "Type::Function — NOT YET HANDLED") | M | ~ | plans/15-closure-validation/ phase 03 (active risk) |
 
 ---
 
@@ -66,9 +109,9 @@ Directly enables loft's core use case: browser games anyone can play via shared 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
 | (cross) | Event-loop abstraction (client + server protocol) | MH | ✓ | plans/future/23-event-loop/README.md |
-| (cross) | Protocol-validation vehicle (TIC_TAC_TOE — v1/v2/v3/v5 shipped, v3.5/v4/v6 gated on plan-22 + plan-23 YIELD.2) | M | ✓ | plans/future/32-tic-tac-toe/README.md |
+| (cross) | Protocol-validation vehicle (TIC_TAC_TOE — v1/v2/v3/v5 shipped, v3.5/v4/v6 gated on @PLAN23 YIELD.2) | M | ✓ | plans/future/32-tic-tac-toe/README.md |
 | (cross) | First real-game milestone — multi-client hex editor | M | ✓ | plans/future/24-multiplayer-editor/README.md |
-| (cross) | `lib/server` hardening (binary broadcast / send_to, recv-bytes, observability) — prereq for plan-36 | M | ✓ | plans/future/34-server-hardening/README.md |
+| (cross) | `lib/server` hardening (binary broadcast / send_to, recv-bytes, observability) — prereq for @PLAN36 | M | ✓ | plans/future/34-server-hardening/README.md |
 | SRV.1 | Plain HTTP routing + middleware | M | ✓ | lib_plans/future/08-server/README.md |
 | SRV.2 | HTTPS with static PEM certificates | S | ✓ | lib_plans/future/08-server/README.md |
 | SRV.3 | WebSocket support | S | ✓ | lib_plans/future/08-server/README.md |
@@ -121,7 +164,9 @@ Unblocks 2+ downstream plans.  Lattice points in the dependency graph.
 | FFI.3 | Eliminate per-function glue in native.rs | M | ✓ | lib_plans/future/05-game-infra/README.md |
 | FFI.4 | Docs: zero-boilerplate native function guide | S | ✓ | lib_plans/future/05-game-infra/README.md |
 | LSP.1 | `loft-lsp` MVP — diagnostics + outline + hover | M | ✓ | lib_plans/future/09-lsp/README.md |
+| LSP-CLIENT | `loft-lsp-bridge` sidecar + viewer code intelligence — rust-analyzer / loft-lsp / jdtls | L | ✓ | lib_plans/future/14-viewer-lsp-bridge/README.md |
 | (cross) | Lazy stdlib loading — trigger-based pay-for-what-you-use | M | ✓ | lib_plans/future/03-lazy-stdlib/README.md |
+| **REGEX.0** | `lib/regex/` MVP — `#native` cdylib bridge to Rust `regex` crate (Active 2026-05-18, unblocks @PLAN37 phase 07 scan.loft consolidation + check_doc_drift.sh port) | S | ✓ | lib_plans/01-regex/README.md |
 
 ---
 
@@ -147,6 +192,7 @@ First-time-user experience, daily ergonomics, IDE polish.
 | P2 | REPL / interactive mode | M | ✓ | plans/future/08-repl-and-introspection/README.md |
 | W-warn | Developer warnings (Clippy-inspired) | M | ✓ | lib_plans/future/05-game-infra/README.md |
 | L1 | Error recovery after token failures | M | ✓ | (needs plan promotion) |
+| (cross) | Branch-aware doc + code review viewer (loft binary) | M | ✓ | plans/35-branch-review-viewer/README.md |
 
 ### IDE editing surface
 
@@ -167,14 +213,13 @@ Language correctness, removes special cases.  (Validation matrices that catch si
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
 | P54 | First-class `JsonValue` enum; old text-based JSON gone | MH | ✓ | QUALITY.md#open-work--actionable-summary |
-| (cross) | Mutable-closure capture — novice-fit four-case classification | M-MH | ✓ | plans/22-mutable-closures/README.md |
 | (cross) | L3 PEG-style match patterns (sequence / alternation / capture) | MH | ✓ | plans/future/26-match-peg/README.md |
 | A8 | Slicing, open-ended ranges, partial-key match on sorted/index | M | ✓ | plans/future/30-sorted-slice/README.md |
 | C52 | Stdlib name clash: warning + `std::` prefix | M | ✓ | (needs plan promotion) |
 | C53 | Match arms: library enums + bare variant names | M | ✓ | (needs plan promotion) |
 | (cross) | `const` struct fields (write-once-at-construction) — closes INCONSISTENCIES.md § 33 | M | ✓ | plans/future/33-const-fields/README.md |
 | I12 | Interfaces: factory methods (`fn zero() -> Self`) | S | ✓ | (needs plan promotion) |
-| (cross) | Standalone regex library (cleaner text-pattern story) | M | ✓ | lib_plans/future/01-regex/README.md |
+| (cross) | Standalone regex library Phase 1+ (pure-loft NFA + backtracking fallback engine — replaces the cdylib bridge transparently) | MH | ✓ | lib_plans/01-regex/README.md |
 
 ---
 
@@ -271,26 +316,25 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/15-closure-validation/`](plans/15-closure-validation/) | M | (cross-mode harness shipped by closed plan-14) | **Active** (promoted 2026-05-12).  Phase 03 also closes the closure-DbRef leak. |
-| [`plans/future/16-coroutine-validation/`](plans/future/16-coroutine-validation/) | M | (cross-mode harness shipped by closed plan-14) | Yielded type × drive context matrix |
-| [`plans/future/18-match-validation/`](plans/future/18-match-validation/) | M | (cross-mode harness shipped by closed plan-14) | Subject type × pattern shape matrix |
-| [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | (cross-mode harness shipped by closed plan-14) | Variant payload × dispatch context matrix |
-| [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | (cross-mode harness shipped by closed plan-14) | Hash / sorted / index / spacial × operation matrix |
+| [`plans/future/16-coroutine-validation/`](plans/future/16-coroutine-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Yielded type × drive context matrix |
+| [`plans/future/18-match-validation/`](plans/future/18-match-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Subject type × pattern shape matrix |
+| [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Variant payload × dispatch context matrix |
+| [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Hash / sorted / index / spacial × operation matrix |
 
 ### G — Goal-enabling
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/future/25-native-debug/`](plans/future/25-native-debug/) | XS-MH | — | NDB.0 / NDB.1 / NDB.2 — GDB / LLDB integration for `--native` |
-| [`plans/future/23-event-loop/`](plans/future/23-event-loop/) | MH | **P213 v4** (compiler bug) | Bidirectional event-loop abstraction (client + server) |
+| [`plans/future/23-event-loop/`](plans/future/23-event-loop/) | MH | **@P213 v4** (compiler bug) | Bidirectional event-loop abstraction (client + server) |
 | [`plans/future/24-multiplayer-editor/`](plans/future/24-multiplayer-editor/) | M | **plans/32 TIC_TAC_TOE v2 ground layer** (now active) | First real-game milestone |
-| [`plans/future/32-tic-tac-toe/`](plans/future/32-tic-tac-toe/) | M | **plan-23 YIELD.2** + **plan-22 phase 2** | Protocol-validation vehicle.  v1/v2/v3/v5 shipped; v3.5/v4/v6 parked (2026-05-11) waiting on infra |
+| [`plans/future/32-tic-tac-toe/`](plans/future/32-tic-tac-toe/) | M | **@PLAN23 YIELD.2** + **@PLAN22 phase 2** | Protocol-validation vehicle.  v1/v2/v3/v5 shipped; v3.5/v4/v6 parked (2026-05-11) waiting on infra |
 | [`lib_plans/future/02-graphics/`](lib_plans/future/02-graphics/) | H (multi-arc) | — | Low-level GL + renderer abstraction |
 | [`lib_plans/future/07-web-ide/`](lib_plans/future/07-web-ide/) | M per W item | **lib_plans/future/09-lsp LSP.1** + **PACKAGES.md § Open work R1 workspace split** | Browser IDE (W2-W6) |
 | [`lib_plans/future/08-server/`](lib_plans/future/08-server/) | M-MH per SRV | — | HTTP / WS / static-file server library |
 | [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/future/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
 | [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/future/07-web-ide W2** + moros editor MO.* + script-target build mode | User-authored scene scripts (SC.1-SC.6 + SC.P) |
-| [`plans/future/34-server-hardening/`](plans/future/34-server-hardening/) | M | — | `lib/server` polish: binary broadcast / send_to, recv-bytes, observability — prereq for plan-36 |
+| [`plans/future/34-server-hardening/`](plans/future/34-server-hardening/) | M | — | `lib/server` polish: binary broadcast / send_to, recv-bytes, observability — prereq for @PLAN36 |
 | [`plans/future/36-audience-generative-art/`](plans/future/36-audience-generative-art/) | M | **plans/future/34-server-hardening** | Audience-driven plant/crystal growth demo via shared URL |
 
 ### F — Foundation
@@ -301,25 +345,31 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/09-lsp/`](lib_plans/future/09-lsp/) | M (LSP.1) / MH (LSP.2/3) | — | LSP.1 unblocks 4 IDE plugins + browser IDE |
 | [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
 | [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
-| [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | Foundational — REGEX is first downstream consumer |
+| [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | Foundational — REGEX Phase 3 (lazy-load wire-up) is downstream consumer |
+| [`lib_plans/01-regex/`](lib_plans/01-regex/) | S (Phase 0) / MH (Phase 1+) | — | **Active 2026-05-18.**  Phase 0 = cdylib bridge MVP; Phase 1+ = pure-loft NFA.  Unblocks @PLAN37 phase 07 scan.loft + check_doc_drift.sh ports |
+| [`plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/) | M | cooperates with **plans/37-tracker-index/07** + **plans/future/32-tic-tac-toe** + **plans/future/36-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
+| [`lib_plans/future/15-process/`](lib_plans/future/15-process/) | M | — | `lib/process/` subprocess primitive — closes the indexer / viewer bash-wrapper dependency (dogfood-driven by @PLAN37 + @PLAN35) |
+| [`lib_plans/future/16-fs-watch/`](lib_plans/future/16-fs-watch/) | M | — | `lib/fs_watch/` file-event watcher — prerequisite for @PLAN37 phase 07a WebSocket-push daemon (inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) |
+| [`lib_plans/future/17-cache/`](lib_plans/future/17-cache/) | S | — | `lib/cache/` mtime-invalidated read-through cache — viewer hot-path optimisation (re-reads `index/tags.json` per request today) |
 
 ### U — Ease of use
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/07-error-messages/`](plans/07-error-messages/) | M | — | `file:line:col` + caret + suggestions across parser / type / runtime / native |
+| [`plans/finished/35-branch-review-viewer/`](plans/finished/35-branch-review-viewer/) | M | (closed 2026-05-14) | Frozen loft binary serves branch-aware doc + code review dashboard via SSH-forwarded HTTP.  Shipped: dashboard / file render (markdown via new `lib/markdown` lib + line-numbered code) / diff + commit views with hunk colouring / `[Rendered ¦ Diff vs main]` toggle / `/tag/<bare>` tracker-tag references / `@P-id` autolinks in body text / image refs through `/raw/`.  Drove the seven-bug native arc @P262→@P269 closure as collateral. |
+| [`plans/37-tracker-index/`](plans/37-tracker-index/) | S | — | `@P-id` / `@PLAN-id` tag convention + scanner + CLI + viewer integration.  Tier-1 lookup tool for both Claude and humans |
 | [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) | XS-S per item | — | SH.* / DX.* / NT.* — DX grab-bag (some shipped) |
+| [`plans/future/40-viewer-discoverability/`](plans/future/40-viewer-discoverability/) | XS per item | — | Three XS viewer cleanups: site header, page_landing sections, route-graph drift sentry |
 | [`plans/future/08-repl-and-introspection/`](plans/future/08-repl-and-introspection/) | M | — | `loft>` interactive prompt + IR/Rust/slot-table CLI |
 
 ### C — Clean features
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/22-mutable-closures/`](plans/22-mutable-closures/) | M-MH | — | Novice-fit closure capture (evolves C38).  Promoted to current 2026-05-10; drivers TTT v6 + plan-36 server retrofit |
 | [`plans/future/26-match-peg/`](plans/future/26-match-peg/) | MH | — | L3 PEG-style match patterns (cooperates with regex lib) |
 | [`plans/future/30-sorted-slice/`](plans/future/30-sorted-slice/) | M | — | A8 — slicing / open-ended ranges / partial-key match on sorted/index |
 | [`plans/future/33-const-fields/`](plans/future/33-const-fields/) | M | — | `const` struct fields — closes INCONSISTENCIES.md § 33 (locals/params already support it) |
-| [`lib_plans/future/01-regex/`](lib_plans/future/01-regex/) | M | **lib_plans/future/03-lazy-stdlib** | First lazy-loaded stdlib consumer |
 
 ### Q — Internal quality
 
@@ -328,6 +378,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`plans/future/21-retire-scratch/`](plans/future/21-retire-scratch/) | M | cooperates with NATIVE § Open work N8c.x + PERFORMANCE § Open work N1 | Eliminate `stores.scratch` lifetime hazard |
 | [NATIVE.md § Open work](NATIVE.md#open-work) | XS-M per item | — | N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
 | [PERFORMANCE.md § Open work](PERFORMANCE.md#open-work) | S-MH per item | P1 blocked on opcode-table capacity | 7 optimization designs (P1-P3 interpreter / N1-N3 native / W1 wasm) |
+| [`plans/future/41-doc-hygiene-autofix/`](plans/future/41-doc-hygiene-autofix/) | M | — | `make plan-move` + `make doc-fix` — atomic directory-move with link-rewriting; closes the PR-212-style cascade of 3-5 fix-up commits per move |
 
 ### N — Niche / opportunistic
 
@@ -336,6 +387,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`plans/future/29-server-features/`](plans/future/29-server-features/) | S-H per item | — | C55/C56/A15/I13/C57 — language features for server / game-client |
 | [`lib_plans/future/04-asset-pipeline/`](lib_plans/future/04-asset-pipeline/) | M | — | Game asset workflow |
 | [`lib_plans/future/06-web-services/`](lib_plans/future/06-web-services/) | M-H per arc | — | JSON / HTTP client / auth / WebSocket / SSE clients |
+| [`lib_plans/future/18-viewer-generalisation/`](lib_plans/future/18-viewer-generalisation/) | M | — | `lib/viewer/` — extract the loft branch-review viewer as a project-agnostic library (Java + moros projects as initial customers) |
 
 ### Deferred plans
 
@@ -345,14 +397,13 @@ the plan moves back to `future/` and ROADMAP gains a row.
 
 ### Cross-tracker dependency chains worth noting
 
-- **lib_plans/future/03-lazy-stdlib → lib_plans/future/01-regex** (registry mechanism → first consumer)
+- **lib_plans/future/03-lazy-stdlib → lib_plans/01-regex Phase 3** (lazy-loading wire-up; bridge MVP (Phase 0) ships independently)
 - **PACKAGES.md § Open work PKG.REG → lib_plans/future/12-library-extraction** (registry → execution of monorepo split)
 - **PACKAGES.md § Open work R1 + lib_plans/future/09-lsp LSP.1 → lib_plans/future/07-web-ide** (workspace split + LSP server → browser IDE)
 - **plans/future/23-event-loop → lib_plans/future/10-game-client** (protocol abstraction → client library)
 - **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/future/32-tic-tac-toe v2 ground layer)
-- **(cross-mode harness shipped by closed plan-14) → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
+- **(cross-mode harness shipped by closed @PLAN14) → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
 - **NATIVE.md § Open work N8c.x + PERFORMANCE.md § Open work N1 → plans/future/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
-- **plans/22-mutable-closures spec → lib_plans/future/13-scriptable-scenes script API** (closure semantics inform user-script ergonomics)
 - **C57 / I13 (in plans/future/29-server-features) → lib_plans/future/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)
 
 ### Features still needing plan promotion

@@ -855,7 +855,44 @@ impl Type {
                 format!("spacial<{},{key:?}>", data.def(*tp).name)
             }
             Type::Routine(tp) => format!("fn {}[{tp}]", data.def(*tp).name),
-            _ => self.to_string(),
+            // Plan-07 phase 6.1 — explicit user-facing rendering for the
+            // remaining variants.  Pre-fix these fell through to the
+            // Display impl which lower-cases the debug format
+            // (e.g. `tuple([integer(...), text([])])`); user-visible
+            // error messages now render proper loft-surface syntax.
+            Type::Unknown(_) => "unknown".to_string(),
+            Type::Null => "null".to_string(),
+            Type::Void => "void".to_string(),
+            Type::Never => "never".to_string(),
+            Type::Boolean => "boolean".to_string(),
+            Type::Float => "float".to_string(),
+            Type::Single => "single".to_string(),
+            Type::Character => "character".to_string(),
+            Type::Integer(spec) if spec.is_signed32_template() => "integer".to_string(),
+            Type::Integer(spec) if spec.min == 0 && spec.max == 256 => "byte".to_string(),
+            Type::Integer(spec) => format!("integer({}, {})", spec.min, spec.max),
+            Type::Keys => "keys".to_string(),
+            Type::Iterator(elem, _) => format!("iterator<{}>", elem.name(data)),
+            Type::Tuple(elems) => {
+                let inner = elems
+                    .iter()
+                    .map(|e| e.name(data))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({inner})")
+            }
+            Type::Function(params, ret, _) => {
+                let p = params
+                    .iter()
+                    .map(|t| t.name(data))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if matches!(ret.as_ref(), Type::Void) {
+                    format!("fn({p})")
+                } else {
+                    format!("fn({p}) -> {}", ret.name(data))
+                }
+            }
         }
     }
 
@@ -1632,6 +1669,33 @@ pub struct Definition {
     /// Definition number of the closure record struct for capturing lambdas.
     /// `u32::MAX` if this function does not capture.
     pub closure_record: u32,
+    /// Plan-22 phase 01 — names of captured bindings whose value is
+    /// mutated inside the lambda body.  Empty for non-capturing
+    /// lambdas, for read-only captures (case A), and for non-lambda
+    /// definitions.  Populated by `Parser::collect_mutated_captures`
+    /// after the lambda body is parsed.  Phases 02-05 consume this
+    /// to drive case B/C/D classification + lowering.
+    pub mutated_captures: Vec<String>,
+    /// Plan-22 phase 02d-i — names of LOCAL bindings in THIS
+    /// function's scope that are captured-and-mutated by some
+    /// inner lambda, where the local's type is a scalar
+    /// (Integer / Text / Float / Single / Boolean / Character /
+    /// plain Enum).  Populated by the accumulator pass when an
+    /// inner lambda's `mutated_captures` includes scalar-typed
+    /// names: we push those names onto the parent function's
+    /// `scalars_to_box` so a future 02d-iii pass can rewrite the
+    /// outer binding to a hidden cell.
+    ///
+    /// The accumulator runs in pass 1 (right after each lambda's
+    /// mutation walker), so by pass 2 the parent function knows
+    /// which of its locals need boxing — required because the
+    /// outer-binding decision happens at variable-init time
+    /// (BEFORE the lambda literal is parsed).
+    ///
+    /// Detection-only at phase 02d-i: the field is populated but
+    /// not yet consumed.  Phase 02d-iii does the actual
+    /// outer-binding rewrite.
+    pub scalars_to_box: Vec<String>,
     /// I2: for generic functions — the `def_nr`s of all required interface bounds.
     /// Empty for non-generic or unbounded generic functions.  Multiple bounds (`<T: A + B>`)
     /// are stored as multiple entries; checked for conflicting method signatures at I6.
@@ -2038,6 +2102,8 @@ impl Data {
             variables: Function::new(name, &position.file),
             pub_visible: false,
             closure_record: u32::MAX,
+            mutated_captures: Vec::new(),
+            scalars_to_box: Vec::new(),
             bounds: Vec::new(),
             const_ref: None,
             forced_size: None,
@@ -2057,26 +2123,23 @@ impl Data {
         self.definitions[d_nr as usize].synthetic = Some(reason);
     }
 
-    /**
-       Write the `op_code` on operators.
-       # Panics
-       When too many `op_codes` are written. The byte code can only handle values <256.
-    */
+    /// Assign a sequential op_code to an operator definition.
+    ///
+    /// Op_codes 0..N map to `fill::OPERATORS[0..N]`.  Bytecode encoding is
+    /// transparent via `fill::emit_op`: codes < 255 use 1 byte, codes >= 255
+    /// use 2 bytes (255 + offset).
+    ///
+    /// Op_code assignment runs at parse time and may legitimately exceed
+    /// `fill::OPERATORS.len()` when a new opcode has just been added to
+    /// `default/*.loft` and `src/fill.rs` has not yet been regenerated.  The
+    /// staleness checks (`n9_generated_fill_matches_src` and
+    /// `fill_rs_up_to_date` in `tests/issues.rs`) catch the drift; the
+    /// runtime would index-OOB on dispatch if a stale `fill.rs` were
+    /// actually executed.
     pub fn op_code(&mut self, def_nr: u32) {
         if !self.def(def_nr).is_operator() || self.def(def_nr).op_code != u16::MAX {
             return;
         }
-        // Flat table: op_codes 0..N map to OPERATORS[0..N].
-        // Bytecode encoding is transparent via fill::emit_op:
-        // codes < 255 → 1 byte; codes >= 255 → 2 bytes (255 + offset).
-        let max_ops = crate::fill::OPERATORS.len();
-        assert!(
-            (self.op_codes as usize) < max_ops,
-            "Too many defined operators ({} of {max_ops} used). \
-             To add more, grow the OPERATORS array in src/fill.rs and regenerate \
-             with `cargo test --test issues regen_fill_rs -- --ignored`.",
-            self.op_codes
-        );
         self.definitions[def_nr as usize].op_code = self.op_codes;
         self.operators.insert(self.op_codes, def_nr);
         self.op_codes += 1;
@@ -3642,5 +3705,172 @@ mod caller_graph_tests {
             Box::new(Value::Int(0)),
         );
         assert_eq!(d.callers_of(d_inner), vec![d_outer]);
+    }
+}
+
+#[cfg(test)]
+mod type_name_user_facing_tests {
+    //! Plan-07 phase 6.1 — `Type::name()` must produce loft-surface
+    //! syntax for every variant.  Pre-fix many variants fell through
+    //! to the Display impl which lower-cased the debug format
+    //! (e.g. `tuple([integer(...), text([])])`); user-visible error
+    //! messages now render proper loft syntax.
+
+    use super::{Data, DefType, IntegerSpec, Type};
+    use crate::lexer::Position;
+
+    fn make_data() -> Data {
+        let mut d = Data::new();
+        let pos = Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        };
+        d.add_def("Foo", &pos, DefType::Struct);
+        d
+    }
+
+    #[test]
+    fn unknown_renders_as_unknown() {
+        let d = Data::new();
+        assert_eq!(Type::Unknown(0).name(&d), "unknown");
+    }
+
+    #[test]
+    fn null_renders_as_null() {
+        let d = Data::new();
+        assert_eq!(Type::Null.name(&d), "null");
+    }
+
+    #[test]
+    fn void_renders_as_void() {
+        let d = Data::new();
+        assert_eq!(Type::Void.name(&d), "void");
+    }
+
+    #[test]
+    fn never_renders_as_never() {
+        let d = Data::new();
+        assert_eq!(Type::Never.name(&d), "never");
+    }
+
+    #[test]
+    fn boolean_renders_as_boolean() {
+        let d = Data::new();
+        assert_eq!(Type::Boolean.name(&d), "boolean");
+    }
+
+    #[test]
+    fn float_renders_as_float() {
+        let d = Data::new();
+        assert_eq!(Type::Float.name(&d), "float");
+    }
+
+    #[test]
+    fn single_renders_as_single() {
+        let d = Data::new();
+        assert_eq!(Type::Single.name(&d), "single");
+    }
+
+    #[test]
+    fn character_renders_as_character() {
+        let d = Data::new();
+        assert_eq!(Type::Character.name(&d), "character");
+    }
+
+    #[test]
+    fn integer_default_renders_as_integer() {
+        let d = Data::new();
+        assert_eq!(Type::Integer(IntegerSpec::signed32()).name(&d), "integer");
+    }
+
+    #[test]
+    fn integer_byte_renders_as_byte() {
+        let d = Data::new();
+        let spec = IntegerSpec {
+            min: 0,
+            max: 256,
+            not_null: false,
+            forced_size: None,
+        };
+        assert_eq!(Type::Integer(spec).name(&d), "byte");
+    }
+
+    #[test]
+    fn integer_bounded_renders_with_range() {
+        let d = Data::new();
+        let spec = IntegerSpec {
+            min: 1,
+            max: 99,
+            not_null: false,
+            forced_size: None,
+        };
+        assert_eq!(Type::Integer(spec).name(&d), "integer(1, 99)");
+    }
+
+    #[test]
+    fn keys_renders_as_keys() {
+        let d = Data::new();
+        assert_eq!(Type::Keys.name(&d), "keys");
+    }
+
+    #[test]
+    fn iterator_renders_with_inner_type() {
+        let d = Data::new();
+        let it = Type::Iterator(Box::new(Type::Boolean), Box::new(Type::Null));
+        assert_eq!(it.name(&d), "iterator<boolean>");
+    }
+
+    #[test]
+    fn tuple_renders_as_paren_csv() {
+        let d = Data::new();
+        let t = Type::Tuple(vec![Type::Boolean, Type::Text(Vec::new())]);
+        assert_eq!(t.name(&d), "(boolean, text)");
+    }
+
+    #[test]
+    fn function_void_return_omits_arrow() {
+        let d = Data::new();
+        let f = Type::Function(vec![Type::Boolean], Box::new(Type::Void), Vec::new());
+        assert_eq!(f.name(&d), "fn(boolean)");
+    }
+
+    #[test]
+    fn function_with_return_includes_arrow() {
+        let d = Data::new();
+        let f = Type::Function(
+            vec![Type::Boolean, Type::Float],
+            Box::new(Type::Text(Vec::new())),
+            Vec::new(),
+        );
+        assert_eq!(f.name(&d), "fn(boolean, float) -> text");
+    }
+
+    #[test]
+    fn reference_renders_struct_name() {
+        let d = make_data();
+        let foo_d_nr = d.def_nr("Foo");
+        assert_eq!(Type::Reference(foo_d_nr, Vec::new()).name(&d), "Foo");
+    }
+
+    #[test]
+    fn vector_of_text_renders_with_angle_brackets() {
+        let d = Data::new();
+        let v = Type::Vector(Box::new(Type::Text(Vec::new())), Vec::new());
+        assert_eq!(v.name(&d), "vector<text>");
+    }
+
+    #[test]
+    fn vector_of_unknown_renders_as_bare_vector() {
+        let d = Data::new();
+        let v = Type::Vector(Box::new(Type::Unknown(0)), Vec::new());
+        assert_eq!(v.name(&d), "vector");
+    }
+
+    #[test]
+    fn ref_var_renders_with_ampersand() {
+        let d = Data::new();
+        let r = Type::RefVar(Box::new(Type::Text(Vec::new())));
+        assert_eq!(r.name(&d), "&text");
     }
 }

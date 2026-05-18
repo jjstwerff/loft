@@ -1,14 +1,14 @@
 # Phase 02 — Parameter adaptation
 
 **Status:** SUPERSEDED (2026-05-02) — folded into
-[plan-12 phase 05](../../deferred/12-codegen-simplifications/05-narrow-int-cast-split.md).
+[@PLAN12 phase 05](../../deferred/12-codegen-simplifications/05-narrow-int-cast-split.md).
 
 Phase 02's main scope (split `narrow_int_cast`'s dual role) is
-preserved verbatim in plan-12 phase 05.  Phase 02 was demoted by
-plan-09 phase 00a as a P200 prerequisite (P200's actual fix
+preserved verbatim in @PLAN12 phase 05.  Phase 02 was demoted by
+@PLAN09 phase 00a as a @P200 prerequisite (@P200's actual fix
 landed via phase 10 step 10.3's `IntCompareEmitter`, which
 didn't need the split); the residual simplification value remains
-and moves to plan-12 to ship as a post-plan-09 follow-up.
+and moves to @PLAN12 to ship as a post-@PLAN09 follow-up.
 
 The "Status reassessment" block below + the original phase 02
 plan body are kept as historical context.  Plan-12 phase 05 is
@@ -16,7 +16,7 @@ the active home for this work.
 
 **Kind:** Simplification (formerly: "prerequisite for phase 05 +
 phase 08").  Phase 00a's introspection found that phase 05's
-actual P200 bug is `narrow_int_cast`'s **block-tail role**
+actual @P200 bug is `narrow_int_cast`'s **block-tail role**
 (comparison-emission RHS type), not the **param-narrowing role**
 that phase 02 splits.  Phase 02 is now a pure simplification
 without bug-fix dependency — its line-count and code-clarity
@@ -26,9 +26,9 @@ payoff still stands, but its priority drops.
 
 ## Status reassessment (2026-05-02)
 
-Phase 02 was sequenced as "prerequisite for phase 05 (P200 write
-side) and phase 08 (P200 read side)" on the assumption that the
-P200 fix would touch parameter narrowing.  Inspection of today's
+Phase 02 was sequenced as "prerequisite for phase 05 (@P200 write
+side) and phase 08 (@P200 read side)" on the assumption that the
+@P200 fix would touch parameter narrowing.  Inspection of today's
 `--native-emit` output for `tests/scripts/20-binary.loft` (during
 phase 05's pre-flight) showed the failing sites are read-side
 comparison emission:
@@ -44,7 +44,7 @@ The `as u8` is `narrow_int_cast`'s block-tail role.  Phase 02
 splits the **param-narrowing role** (role #2 — the
 `#rust"…@arg…"` substitution path).  Splitting role #2 doesn't
 change role #1's emission, so phase 02 is no longer load-bearing
-for P200.
+for @P200.
 
 **Decision** (phase 00a): defer phase 02 until phase 05 lands and
 we know whether the read-side fix exposes any phase-02-shaped
@@ -238,7 +238,7 @@ fn param_adaptation_does_not_route_through_narrow_int_cast() {
 }
 ```
 
-**Validation**: this test passes — proving the prerequisite for P200's fix is in place.
+**Validation**: this test passes — proving the prerequisite for @P200's fix is in place.
 
 ### Step 2.7 — Extract shared `narrow_for_int` helper
 

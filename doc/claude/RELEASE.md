@@ -327,6 +327,47 @@ manually after completing the validation checklist below.
 
 Run these steps before tagging a release.  They are manual; treat each as a gate item.
 
+### Deferred for pre-external-developer releases (2026-05-15)
+
+Until the project has regular external-developer interactions
+that exercise the user-facing examples, **steps 5, 6, 7, and
+the cross-platform smoke test below** are explicitly deferred.
+
+Rationale: those steps validate the user-facing surface
+(`.loft` examples, comparison pages, walkthrough topic flow,
+fresh-install smoke).  Without external users hitting them,
+the validation is closed-loop — the same author who wrote
+the example reads it, sees nothing wrong, ships.  The
+validation PAYS OFF once external users surface friction (a
+stale example, a confusing topic order, a Windows symlink
+issue); running it before that point is busywork that
+delays the release without strengthening it.
+
+**The author will do these manually** when they have the
+feedback signal that makes them meaningful.  Until then:
+
+  - Step 5 (user docs vs Unreleased changelog) — defer.
+  - Step 6 (DEVELOPERS.md + comparison pages) — defer.
+  - Step 7 (topic-flow ordering) — defer.
+  - Cross-platform smoke test (Linux + macOS + Windows
+    walkthrough run, VS Code extension install,
+    example-open) — defer.
+
+Steps 1-4 + 8 + 9 (internal-doc hygiene, broken-link
+audit, clippy-suppression review, gendoc + PDF) are NOT
+deferred — they protect the shipped artefact regardless of
+external-user presence and stay as release gates.
+
+The safety gate above (crashes / memory / leaks / test-suite
+integrity) is also NOT deferred — it blocks every release,
+external users or not.
+
+**Lift this deferral** when external developers start filing
+issues / opening PRs / asking documentation questions.  At
+that point the validation steps gain real signal and become
+worth running pre-tag.  Update this section when that
+happens.
+
 ### 1 — Audit doc/claude/ for stale problem documentation
 
 - Open PROBLEMS.md: every bug entry there should either be open or clearly crossed out / labelled FIXED with the fix date.  Remove entries that are fixed and already recorded in CHANGELOG.md.

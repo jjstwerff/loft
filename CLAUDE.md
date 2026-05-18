@@ -9,6 +9,34 @@ store-based heap, and a standard library loaded from `default/*.loft`.
 
 ---
 
+## Development cadence — the dogfood loop
+
+The project's development model is:
+
+> **Build a real consumer → harvest the language lessons → fix the language → ship the lessons as a release.**
+
+Not toy programs.  Not abstract design.  Real tools that have to work.
+The branch-review viewer ([@PLAN35](doc/claude/plans/finished/35-branch-review-viewer/README.md)),
+the tracker indexer ([@PLAN37](doc/claude/plans/37-tracker-index/README.md)),
+and [`lib/markdown/`](lib/markdown/) are the canonical consumers — each one
+drove a wave of language enhancements (closures, bounded generics, native codegen
+maturity, `lib/process`/`lib/fs_watch`/`lib/cache` plan slots, eight P-issues from
+the dogfood pass) that landed BEFORE the next minor release.
+
+When picking work, prefer the path that exercises the language against a real
+consumer over the path that doesn't.  When a feature slice surfaces a language
+gap, the workflow at
+[DEVELOPMENT.md § Inserting Discovered Enhancements Into the Active Plan](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)
+applies — fix it on the spot when XS/S, route to canonical home (P-issue,
+`## Open work` section, `lib_plans/future/` slot) when bigger.
+
+Releases bundle the harvest.  See [CHANGELOG.md](CHANGELOG.md) for the
+"language lessons → release" cadence in practice — every minor release
+since 0.8.3 (WebAssembly), 0.8.4 (Awesome Brick Buster), and 0.8.5 (Language
+Maturity, drafted) has been organised around the consumer that drove it.
+
+---
+
 ## Key commands
 
 ```bash
@@ -20,7 +48,67 @@ make test                                     # clippy + test; output in result.
 ./scripts/find_problems.sh --bg               # background full-suite run
 ./scripts/find_problems.sh --peek             #   inspect mid-run
 ./scripts/find_problems.sh --wait             #   block for summary
+make index                                    # rebuild index/tags.json (plan-37)
+./scripts/idx tag:@P259                       # tracker-ref lookup (plan-37; prefer over grep -rn; --before/--after/--para flags for context)
+make view                                     # branch-aware doc + code viewer (plan-35; SSH port-forward 8765; /tag/<bare> for tracker refs)
 ```
+
+<!-- noindex region: phase-06 sed pass shouldn't migrate the
+     bare-name examples that explain the convention. -->
+## Tracker tags (plan-37) <!--noindex-->
+
+Tracker references in docs use the `@`-prefixed form so that
+regex matches are unambiguous (the bare-name `P259` regex <!--noindex-->
+collides with `2P259`, `P2590`, prose like "the P259 fix <!--noindex-->
+forward"): <!--noindex-->
+
+- **P-issues**: `@P259`, `@P229b`, `@P262`.
+- **Plans + phases**: `@PLAN22`, `@PLAN35-01`,
+  `@PLAN22-2d-iii.a` (sub-phases via `-` and `.`).
+
+Adoption is incremental — bare-name forms (`P259`, `plan-22 <!--noindex-->
+phase 03`) still work in prose; the indexer (`make index`)
+tracks both under separate `legacy:` keys for transition
+metering.
+
+### Looking up tracker references — use `./scripts/idx`
+
+Default workflow for "where is X referenced?":
+
+```bash
+./scripts/idx tag:@P259               # exact @-prefixed tag
+./scripts/idx tag:legacy:P259         # bare-name (transition)
+./scripts/idx prefix:@PLAN22          # all PLAN22-* refs
+./scripts/idx file:doc/.../PROBLEMS.md  # tags in one file
+./scripts/idx incoming:doc/.../PROBLEMS.md  # backlinks (who links to me)
+./scripts/idx incoming:plans/finished/22-mutable-closures/  # trailing / → README.md
+./scripts/idx all | jq '.[:10]'       # top 10 by reference count
+./scripts/idx broken                  # broken @-refs
+./scripts/idx broken-links            # broken markdown links (phase 09)
+./scripts/idx help                    # usage block
+```
+
+For more than just one-line context, `tag:` queries accept
+excerpt flags:
+
+```bash
+./scripts/idx tag:legacy:P259 --before 2 --after 5
+./scripts/idx tag:legacy:P259 --before 1 --para 1
+./scripts/idx tag:legacy:P259 --max-bytes 1024
+```
+
+`--before` / `--after` are line counts; `--para N` extends
+forward until N consecutive empty lines (good for code
+comment blocks); `--max-bytes` caps each excerpt (default
+4096) so long PROBLEMS.md rows truncate gracefully instead
+of dumping kilobytes per ref.
+
+Prefer `./scripts/idx` over `grep -rn '@P259' …` — it's
+faster, returns structured JSON, and avoids pulling
+unnecessary file content into context.  Run `make index`
+first if `index/tags.json` is missing or stale (the
+pre-commit hook from phase 02 keeps it fresh on most
+workflows).
 
 For any refactor likely to surface multiple test failures, kick off
 `find_problems.sh --bg` before going back to editing.  It runs
@@ -229,6 +317,26 @@ ship the original-report fix as a focused change.  File the follow-ups as
 *new* P-issue rows; do not bundle them into the same patch unless they share
 a single fix site.
 
+### Inserting fixes vs filing — see DEVELOPMENT.md
+
+The rule above covers **filing**.  When the discovered gap is XS or S
+(under half a day) AND the consumer code that uses the workaround is
+fresh in working memory, prefer **inserting a step into the active plan
+that fixes the gap directly**, then resuming the feature work — the
+language / stdlib gets sturdier and the workaround never enters
+shipped code.
+
+Routing the discovered item to its canonical home (P-issue / `## Open
+work` row in STDLIB.md / NATIVE.md / COMPILER.md / new lib_plans slot)
+is what to do when an inline fix isn't appropriate (M+ effort, needs
+design, touches unrelated subsystems).
+
+Big deferred features get their own plan slot (`plans/future/<NN>/` or
+`lib_plans/future/<NN>/`) — never a row in a parallel catalog.
+
+Full procedure + decision tree: see
+[DEVELOPMENT.md § Inserting Discovered Enhancements Into the Active Plan](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan).
+
 ---
 
 ## Git safety — MANDATORY
@@ -299,7 +407,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [CAVEATS.md](doc/claude/CAVEATS.md) | Verifiable edge cases and limitations with reproducers and test references |
 | [COROUTINE.md](doc/claude/COROUTINE.md) | Coroutine design — stackful `yield`, `iterator<T>`, `yield from` (planned, 1.1+) |
 | [LIFETIME.md](doc/claude/LIFETIME.md) | Dependency tracking and scope-based freeing — dep field semantics, Text vs Reference, closures |
-| [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | Reference — `loft --html` pipeline: cdylib codegen, WebGL2 import bridge, frame-yield contract for browser game loops, `wasm-opt` integration, HTML assembly format.  Where each piece lives in the code today.  Closed plan-31 (build sequence + commits) at [`plans/finished/31-html-export/`](doc/claude/plans/finished/31-html-export/README.md). |
+| [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | Reference — `loft --html` pipeline: cdylib codegen, WebGL2 import bridge, frame-yield contract for browser game loops, `wasm-opt` integration, HTML assembly format.  Where each piece lives in the code today.  Closed @PLAN31 (build sequence + commits) at [`plans/finished/31-html-export/`](doc/claude/plans/finished/31-html-export/README.md). |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
 
 ---

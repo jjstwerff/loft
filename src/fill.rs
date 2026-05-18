@@ -9,7 +9,7 @@ use crate::state::State;
 use crate::tree;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 255] = &[
+pub const OPERATORS: &[fn(&mut State)] = &[
     goto,
     goto_word,
     goto_false,
@@ -240,6 +240,7 @@ pub const OPERATORS: &[fn(&mut State); 255] = &[
     parallel_arm,
     parallel_join,
     pre_alloc_vector,
+    inc_rc,
     get_file,
     get_dir,
     get_file_text,
@@ -1919,6 +1920,13 @@ fn pre_alloc_vector(s: &mut State) {
     );
 }
 
+fn inc_rc(s: &mut State) {
+    let v_v1 = *s.get_stack::<DbRef>();
+    if v_v1.store_nr != u16::MAX && (v_v1.store_nr as usize) < s.database.allocations.len() {
+        s.database.inc_rc(v_v1.store_nr);
+    }
+}
+
 fn get_file(s: &mut State) {
     let v_file = *s.get_stack::<DbRef>();
     let new_value = s.database.get_file(&v_file);
@@ -2002,9 +2010,13 @@ fn sort_vector(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     {
         let t = v_db_tp;
-        let elem_size = s.database.size(t);
-        let is_float = t == 2 || t == 3;
-        vector::sort_vector(&v_r, elem_size, is_float, &mut s.database.allocations);
+        if s.database.is_text_type(t) {
+            vector::sort_text_vector(&v_r, &mut s.database.allocations);
+        } else {
+            let elem_size = s.database.size(t);
+            let is_float = t == 2 || t == 3;
+            vector::sort_vector(&v_r, elem_size, is_float, &mut s.database.allocations);
+        }
     }
 }
 
@@ -2052,7 +2064,7 @@ fn put_fn_ref(s: &mut State) {
 
 fn const_ref(s: &mut State) {
     let v_d_nr = *s.code::<i64>();
-    let new_value = s.const_refs[v_d_nr as usize];
+    let new_value = s.const_ref_at(v_d_nr as usize);
     s.put_stack(new_value);
 }
 

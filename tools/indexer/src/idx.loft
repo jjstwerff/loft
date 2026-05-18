@@ -1,0 +1,109 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN37 phase 07 — loft port of `scripts/idx`.
+//
+// Reads `index/tags.json` (refresh via `make index`) and answers
+// query subcommands.  This MVP covers the `broken` and
+// `broken-links` queries — the two used by
+// `tests/index_hygiene.rs::index_hygiene_clean`.  The bash
+// `scripts/idx` stays as the bootstrap path; this binary is the
+// cross-platform replacement for the CI gate (bash's BSD-awk /
+// MSYS-argv / PE-format gotchas drove the rewrite — see the
+// six-commit portability sweep on commit history).
+//
+// Output shape — empty buckets print bare `[]` (matches `jq`'s
+// pretty-print of the empty array); non-empty buckets print one
+// JSON object per entry, comma-separated, surrounded by `[` `]`.
+// The CI gate only asserts `.trim() == "[]"` on the success
+// path, so the formatting choice on the non-empty path is for
+// developer eyeballing (not test-pinned).
+//
+// Queries deferred to follow-up commits (kept in `scripts/idx`):
+//   tag:X, prefix:X, file:X, incoming:X, all, help, plus the
+//   `--before` / `--after` / `--para` / `--max-bytes` excerpt
+//   flags.  The MVP only needs the CI-gate set; the rest port
+//   when a consumer asks.
+
+fn main() {
+    // `arguments()` returns only the script-level user args (no
+    // binary path, no loft CLI flags) — args[0] is the first user
+    // arg.  See `Stores::os_arguments` (`src/database/format.rs`).
+    args = arguments();
+    if args.len() < 1 {
+        println("idx.loft: missing query (try: broken | broken-links)");
+        return;
+    }
+    query = args[0];
+
+    f = file("index/tags.json");
+    if f.format == Format.NotExists {
+        println("idx.loft: index/tags.json missing — run: make index");
+        return;
+    }
+
+    root = json_parse(f.content());
+
+    if query == "broken" {
+        emit_array(root.field("broken"), "tag");
+    } else if query == "broken-links" {
+        emit_array(root.field("broken_links"), "target");
+    } else {
+        println("idx.loft: unknown query '{query}' (try: broken | broken-links)");
+    }
+}
+
+// Emit a JSON array bucket — either `.broken` or `.broken_links`.
+// Both share the shape `[{<key>: text, refs: vector<text>}]` where
+// `<key>` is `tag` for `broken` and `target` for `broken_links`.
+// JNull / non-array / empty all collapse to bare `[]` so the CI
+// gate's `.trim() == "[]"` assertion passes uniformly.
+fn emit_array(bucket: JsonValue, entry_key: text) {
+    match bucket {
+        JArray { items } => {
+            if items.len() == 0 {
+                println("[]");
+                return;
+            }
+            println("[");
+            row_first = true;
+            for entry in items {
+                if !row_first { println(","); }
+                row_first = false;
+                print("  ");
+                emit_entry(entry, entry_key);
+            }
+            println("");
+            println("]");
+        },
+        _ => println("[]"),
+    }
+}
+
+// Emit one `{<key>: "...", "refs": ["...", ...]}` object inline.
+// Always emits both fields even when refs is empty so the shape
+// is structurally stable.  `entry_key` is `"tag"` for broken
+// `@P*` refs and `"target"` for broken markdown links.
+fn emit_entry(entry: JsonValue, entry_key: text) {
+    label = entry.field(entry_key).as_text();
+    refs_val = entry.field("refs");
+    print("{{\"");
+    print(entry_key);
+    print("\":\"");
+    print(label);
+    print("\",\"refs\":[");
+    match refs_val {
+        JArray { items } => {
+            ref_first = true;
+            for r in items {
+                if !ref_first { print(","); }
+                ref_first = false;
+                print("\"");
+                print(r.as_text());
+                print("\"");
+            }
+        },
+        _ => {},
+    }
+    print("]}}");
+}

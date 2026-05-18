@@ -71,7 +71,7 @@ plan with baseline numbers:
 
 ### Spine reorder + the strategic shift (2026-04-29)
 
-The most consequential 24 hours in plan-06's history.  Realising
+The most consequential 24 hours in @PLAN06's history.  Realising
 the materialised result vector was the source of most remaining
 complexity, the topical phases got reordered into a single
 **complexity-reducing spine** ([PRIORITY.md](../../plans/finished/06-typed-par/PRIORITY.md)),
@@ -111,7 +111,7 @@ and the new phase 10 was added to retire materialisation entirely:
 | Commit | Step |
 |---|---|
 | `9db18fd` | Plan-06 type-spectrum: 3 new canaries (`par_tuple_return_three_arity`, `par_tuple_return_nested`, `par_vec_of_capturing_fns_t4`) + D11 corrections.  A7's target list grows from 4 to 7. |
-| `023ca15` *(plan-14 branch)* | T1.8a closed — function tuple-return convention.  ARC step A7 unblocked (the original ~200-LoC `OpReturnTuple` design collapsed to ~30 LoC of type-context routing). |
+| `023ca15` *(@PLAN14 branch)* | T1.8a closed — function tuple-return convention.  ARC step A7 unblocked (the original ~200-LoC `OpReturnTuple` design collapsed to ~30 LoC of type-context routing). |
 
 ---
 
@@ -208,13 +208,13 @@ doc landing.
 ### 7. Plan-06 as a structured fuzz/bug-hunt *(recognised 2026-05-02, doc commit `fdf312c`)*
 
 A surprising emergent value: the canary-driven type-spectrum probe
-surfaced **14+ P-issues (P188–P201)** at the type-system × native-codegen
-× parallel-runtime intersection.  Several (P191, P195, P196, P198,
-P199) are bugs that ordinary doc-tests do not surface — they
+surfaced **14+ P-issues (P188–@P201)** at the type-system × native-codegen
+× parallel-runtime intersection.  Several (P191, P195, P196, @P198,
+@P199) are bugs that ordinary doc-tests do not surface — they
 require the specific type-shape interactions the canaries force.
 The headline metric "~1100 LOC retired" undersells the work; the
 plan functions as a curated fuzz of the par × type system surface,
-and **as long as canaries keep firing, plan-06's per-day yield is
+and **as long as canaries keep firing, @PLAN06's per-day yield is
 high**.
 
 ---
@@ -249,7 +249,7 @@ From [ARC.md § Acceptance state](../../plans/finished/06-typed-par/ARC.md):
 | Single user surface — `par_light` removed from `default/01_code.loft` | `par_light` still resolves; A9 retires it after 5e fixed-point lands |
 | Zero ignored par canaries — `grep -c "^#\[ignore" tests/threading_chars.rs == 0` | 4 today (all par-tuple); A7 closes (now unblocked by T1.8a) |
 
-When all three hit, plan-06 closes.
+When all three hit, @PLAN06 closes.
 
 ---
 
@@ -268,7 +268,7 @@ ARC step status, in shipping order.  DONE steps (A1, A2, A6) elided.
 | **A10** browser parallel via `wasm-bindgen-rayon` | OPEN — strategic showcase track | XL (3 sub-PRs) | Web Worker pool + `crossOriginIsolated` + per-worker output Stores survive `postMessage`.  Phase 2's `StoreRebase` runs after transfer.  Acceptance: gallery `bricks_par.loft` ≥ 2× speedup at threads=4.  Does not displace validation work. |
 | **A11** final cleanup + doc rewrite | OPEN | S | Rewrite THREADING.md to the streaming-only model; mark all phases done; close the type-spectrum tracker. |
 
-Adjacent un-blocked work that does not block plan-06 closure:
+Adjacent un-blocked work that does not block @PLAN06 closure:
 - Phase 5c — `Arc`-wrap parent stores (filed as a PERFORMANCE.md
   item; out of scope for ARC).
 - Phase 11 — `par_to_vec(input, fn, threads) -> vector<S>` opt-in
@@ -427,4 +427,4 @@ site" ergonomics.
   record of how steps 1–7 were sequenced.
 - [bench/11_par/bench.loft](../../bench/11_par/bench.loft) — the
   100 K-element × 50-iter Newton's-sqrt workload that gates ±5 %
-  regression at every plan-06 step boundary.
+  regression at every @PLAN06 step boundary.

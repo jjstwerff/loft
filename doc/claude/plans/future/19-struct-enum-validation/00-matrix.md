@@ -19,7 +19,7 @@ Locks the (variant payload × dispatch context) matrix and wires
 | **V2** text field | FIX:02 | FIX:02 | FIX:02 | FIX:02 | FIX:03 | FIX:02 | FIX:02 |
 | **V3** Reference field | FIX:05 | FIX:05 | FIX:05 | FIX:05 | FIX:05 | FIX:05 | FIX:05 |
 | **V4** multi-field mixed | FIX:04 | FIX:04 | FIX:04 | FIX:04 | FIX:04 | FIX:04 | FIX:04 |
-| **V5** tuple field | FIX:04 (depends on plan-14 phase 05) | FIX:04 | FIX:04 | FIX:04 | FIX:04 | FIX:04 | FIX:04 |
+| **V5** tuple field | FIX:04 (depends on @PLAN14 phase 05) | FIX:04 | FIX:04 | FIX:04 | FIX:04 | FIX:04 | FIX:04 |
 | **V6** nested struct-enum | FIX:05 | FIX:05 | FIX:05 | FIX:05 | FIX:05 | FIX:05 | FIX:05 |
 
 ## Cell name convention
@@ -50,5 +50,5 @@ v5_c1_tuple_payload_is_check        // depends on plan-14 phase 05
 ## Cross-references
 
 - [README.md](README.md)
-- [plan-14 phase 04](../../finished/14-tuple-validation/04-references.md)
-- [plan-14 phase 05](../../finished/14-tuple-validation/05-struct-field.md)
+- [@PLAN14 phase 04](../../finished/14-tuple-validation/04-references.md)
+- [@PLAN14 phase 05](../../finished/14-tuple-validation/05-struct-field.md)

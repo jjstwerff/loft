@@ -429,3 +429,7 @@ Loft ships this in `doc/` as `nvim-loft.lua`.  No Vimscript.
   developer-experience predecessors.
 - [STACKTRACE.md](../../../STACKTRACE.md) — TR1.3 `vector<StackFrame>` API
   that LSP.3 reuses for `stackTrace`.
+- [Plan-14 viewer-LSP-bridge](../14-viewer-lsp-bridge/README.md)
+  — the CLIENT side that consumes `loft-lsp` (this plan)
+  alongside rust-analyzer + jdtls.  Plan-14 phase 03 lights
+  up `.loft` files in the viewer once LSP.1 here ships.

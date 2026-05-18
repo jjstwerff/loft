@@ -2,7 +2,7 @@
 
 **Status:** DONE (2026-05-02)
 
-**Closes:** **P205** (bounded-generic text return emits
+**Closes:** **@P205** (bounded-generic text return emits
 `Str::new(&local_String)` — dangling pointer).
 
 **Reproducer:** `tests/scripts/repro_p205.loft`.
@@ -91,11 +91,11 @@ emitter registration in step 7.5.
 
 ### Step 7.2b — Corpus-wide survey for sibling dangles
 
-**Action**: P205's reproducer surfaces ONE Op with the
+**Action**: @P205's reproducer surfaces ONE Op with the
 borrow-of-local pattern.  But the same defect may exist for
 sibling Ops (other generic-text-return paths, interface dispatch,
 fn-ref-of-text-return).  Survey the doc-test corpus to find them
-all before declaring P205 closed.
+all before declaring @P205 closed.
 
 ```bash
 # Compile every doc test under --native-emit, grep for the
@@ -117,7 +117,7 @@ grep -rn "Str::new(&_local_" /tmp/p205-survey/ | sort -u
 
 **Validation**: produces a list of all (test, function, Op)
 tuples where the dangling shape appears.  This list is the FULL
-scope of P205, not just the reproducer's scope.
+scope of @P205, not just the reproducer's scope.
 
 **Decision**:
 - If the list contains ONLY the reproducer's Op → phase 07 scope
@@ -126,7 +126,7 @@ scope of P205, not just the reproducer's scope.
   Each additional (function, Op) pair gets the same probe-or-
   emitter treatment.  Document in "Diagnosis findings" before
   proceeding.
-- If the list is empty → P205 doesn't surface in the doc corpus at
+- If the list is empty → @P205 doesn't surface in the doc corpus at
   all.  Either the reproducer is misleading or the corpus is too
   narrow.  Investigate before continuing.
 
@@ -274,7 +274,7 @@ cargo test --release --test codegen_emitter::p205_no_str_new_of_local_in_generic
 
 ### Step 7.7 — Update PROBLEMS.md
 
-**Action**: mark P205 CLOSED with "fix path: phase 07 of plan 09
+**Action**: mark @P205 CLOSED with "fix path: phase 07 of plan 09
 (outcome A: skip removal / outcome B: emitter)".  Reference the
 regression tests added.
 
@@ -332,7 +332,7 @@ return-handling code at TWO sites:
    block's return expression is a text value, same `Str::new(<value>)`
    wrapping.
 
-Both sites fired for the P205 case — the actual dangling depended
+Both sites fired for the @P205 case — the actual dangling depended
 on which path the IR took for a given test.  Fix had to go in
 both places.
 

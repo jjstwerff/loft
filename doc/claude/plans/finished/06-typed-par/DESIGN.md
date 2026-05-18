@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Cross-cutting design — plan-06 typed par
+# Cross-cutting design — @PLAN06 typed par
 
 Architectural decisions that span multiple phases.  The phase files
 (01–07) reference these by name; resolving them once here keeps the
@@ -118,7 +118,7 @@ runs **proves parallel execution** — see DESIGN.md D8.2 / phase
 **Optional ordered policy** (deferred to 1.1+): a
 `Stitch::ConcatOrdered` variant could be added if a use case
 emerges for ordered output without sort overhead.  Not in
-plan-06 scope; the typical workloads (compute → reduce, compute →
+@PLAN06 scope; the typical workloads (compute → reduce, compute →
 hash-by-key, compute → display) don't need it.
 
 **Choice rationale:** trait + vtable dispatch was considered but
@@ -131,7 +131,7 @@ parallel call, not per worker iteration).
 
 **Binary-format change.**  The `OpParallel` payload format changes
 between phases 3a and 4c (2-byte legacy fields drop).  Loft has no
-on-disk bytecode cache (`.loftc` was retired in plan-01), so the
+on-disk bytecode cache (`.loftc` was retired in @PLAN01), so the
 change is internal: every `make` rebuilds bytecode from source.
 No version pinning needed; the constraint is only "do not commit
 phase-3 bytecode dumps as test fixtures and expect phase-4 builds
@@ -140,7 +140,7 @@ per build by `LOFT_LOG=static`, so nothing to migrate.
 
 ## D2.0 — Language rule: parent stores are read-only to workers
 
-This is the foundational invariant the rest of plan-06 derives
+This is the foundational invariant the rest of @PLAN06 derives
 from.  By loft's data-parallel semantics, a worker fn invoked
 from `par(input, fn, threads)`:
 
@@ -215,7 +215,7 @@ under D2.0's read-only-parent rule — workers can't legitimately
 mutate parent state, so cloning the writable bytes serves no
 purpose.
 
-After plan-06 (phase 1 onwards): one execution mode, no
+After @PLAN06 (phase 1 onwards): one execution mode, no
 fallback.  The relationship has two parts cleanly separated by
 ownership:
 
@@ -295,7 +295,7 @@ The full-clone path retires entirely in phase 6:
 - `run_parallel_direct` and the 5 sibling full-clone variants in
   `src/parallel.rs` — deleted (was ~520 lines).
 
-Net retirement on top of plan-06's already-claimed ~1100 lines:
+Net retirement on top of @PLAN06's already-claimed ~1100 lines:
 another ~200 lines of clone/borrow plumbing.  See phase 6 for the
 exact accounting.
 
@@ -467,7 +467,7 @@ Plan-06 phase 4 cannot "reuse" what isn't there; it must either
   the same way `map` is (the **default** approach: cheaper, no
   new generics infrastructure, same code-gen path), OR
 - land bounded-generic substitution as a separate prerequisite
-  before phase 4 (estimated ~2 weeks; not in plan-06 scope).
+  before phase 4 (estimated ~2 weeks; not in @PLAN06 scope).
 
 Phase 4's design defaults to option 1 — see 04-typed-input-output.md
 § "Loft-side prerequisites".
@@ -484,9 +484,9 @@ the same `std::panic::catch_unwind` wraps each worker; on panic
 the queue / result store is left in whatever state it was, and
 the join propagates.
 
-**No new error model in plan-06.**  Future L1 (error recovery,
+**No new error model in @PLAN06.**  Future L1 (error recovery,
 roadmap 0.9.0) may introduce `Result<U, Error>` per worker
-result; plan-06 is forward-compatible — the `Stitch` policy can
+result; @PLAN06 is forward-compatible — the `Stitch` policy can
 gain a new `ConcatErr` variant when L1 lands.  Tracked as 1.0+
 work, not in scope.
 
@@ -516,7 +516,7 @@ target except no-threads minimal WASM builds.**  WASM is the only
 target permitted to run par sequentially — and even then only
 when the threading feature isn't compiled in.  Native and
 interpreter sequential are bugs (G4 closes the native one);
-plan-06 phase 1 makes both real-parallel.
+@PLAN06 phase 1 makes both real-parallel.
 
 WASM has two compilation modes:
 
@@ -530,7 +530,7 @@ The default browser deploy uses **wasm + threading** with a
 WASM path users encounter.  The minimal sequential fallback exists
 for the narrow case where Web Workers aren't available (no
 SharedArrayBuffer / no cross-origin isolation / pre-2022 browsers);
-its bench numbers are not load-bearing for plan-06's perf gate.
+its bench numbers are not load-bearing for @PLAN06's perf gate.
 
 ```rust
 #[cfg(all(feature = "wasm", feature = "wasm-threads"))]
@@ -718,7 +718,7 @@ in `src/state/mod.rs`).  Runtime errors and stack traces resolve
 through that table back to the user-written line.
 
 Format-string desugaring and `?? return` already use this
-mechanism; plan-06 reuses it.  No new infrastructure.
+mechanism; @PLAN06 reuses it.  No new infrastructure.
 
 ## D10 — Migration of existing par call sites
 
@@ -744,7 +744,7 @@ already has a typed alternative).
 
 ## D11 — Type spectrum on input and output
 
-After plan-06, par's accepted type surface equals the language's
+After @PLAN06, par's accepted type surface equals the language's
 ordinary fn-signature surface.  **Anywhere you can write
 `fn process(x: T) -> U`, you can also write `par(xs, process, N)`.**
 No size carve-outs, no primitive-vs-struct distinction, no "size > 8
@@ -755,7 +755,7 @@ removed by the store-typed pipeline.
 
 `par`'s input is anything that today's `for x in input` accepts:
 
-| Input type | Today | After plan-06 | Closes |
+| Input type | Today | After @PLAN06 | Closes |
 |---|---|---|---|
 | `vector<Struct>` | ✅ | ✅ | — |
 | `vector<integer>` / `<float>` / `<i32>` / `<u8>` | ❌ garbage (G2) | ✅ | phase 4 (typed input) |
@@ -778,7 +778,7 @@ gap canaries (`#[ignore]`d); the closing phase un-ignores each.
 
 `par`'s output is anything an ordinary fn can return:
 
-| Output type | Today | After plan-06 | Closes |
+| Output type | Today | After @PLAN06 | Closes |
 |---|---|---|---|
 | primitive scalars (sizes 1–8) | ✅ | ✅ | — |
 | text | ✅ | ✅ | (channel removed in phase 1b) |
@@ -848,7 +848,7 @@ Two cells one might naively expect:
 Plan-16 (coroutine validation) confirms that single-threaded
 iterator semantics cover every consumer pattern in the standard
 library, the bench suite, and the example apps.  Revisit only if a
-concrete consumer surfaces — open a follow-up in plan-06 with the
+concrete consumer surfaces — open a follow-up in @PLAN06 with the
 specific shape, don't pre-design around it.
 
 ### D11c.1 — Tuples and references
@@ -865,7 +865,7 @@ exactly like a struct field.
 
 ### D11d — Why this is "the full normal spectrum"
 
-Three architectural changes from plan-06 unify the type handling:
+Three architectural changes from @PLAN06 unify the type handling:
 
 1. **D2 relationship** — input is read-only Arc; element stride
    comes from the type system, not a parser-computed integer.
@@ -880,7 +880,7 @@ Three architectural changes from plan-06 unify the type handling:
 After all three land, par is **type-uniform with the rest of the
 language**.  The 7-name surface (par, par_light, parallel_for,
 parallel_for_int, parallel_for_light, parallel_get_*) and the
-size-class restrictions are both artefacts of pre-plan-06
+size-class restrictions are both artefacts of pre-@PLAN06
 implementation choices, not language design constraints.
 
 ## D12 — Caller-graph infrastructure (prerequisite for phase 5e)
@@ -1008,7 +1008,7 @@ silent wrong-answer; the user sees slower-but-correct execution.
 
 ## D14 — Scale considerations (huge parent + small output)
 
-The canonical workload plan-06 targets is **huge parent state +
+The canonical workload @PLAN06 targets is **huge parent state +
 small per-element output** — e.g., a 200 MB const store of asset
 data scanned by 1 M parallel workers each producing a few bytes
 of result.  Under D2.0's read-only-parent rule and D2's `Arc<Store>`
@@ -1078,7 +1078,7 @@ For 1 M input × 8-byte output = 8 MB total; per worker = 2 MB.
 Trivial.  No need for slot pooling, growth strategies, or
 adaptive sizing.
 
-### D14e — What this means for plan-06's perf gates
+### D14e — What this means for @PLAN06's perf gates
 
 Phase 0's bench harness asserts ±5% on `bench/11_par`.  Under
 D2.0, that gate is loose — the new path's cost is independent of
@@ -1096,7 +1096,7 @@ fell back to cloning), not a tuning miss.
 
 ## See also
 
-- [README.md](README.md) — plan-06 phase ladder.
+- [README.md](README.md) — @PLAN06 phase ladder.
 - [00-baseline-and-bench.md](00-baseline-and-bench.md) — phase 0
   detail; pins current behaviour before this design takes effect.
 - [07-fused-for-par.md](07-fused-for-par.md) — phase 7 detail; the
