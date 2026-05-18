@@ -22,6 +22,38 @@ export function initLoftGL(canvas) {
   let textures = [];
   let fbos = [];
 
+  // Defensive Number coercion — the loft side now passes integers as
+  // i64 (post phase-2c migration); wasm-bindgen converts i64 → BigInt
+  // by default, and BigInt silently mis-behaves under `>>>` / `&` /
+  // arithmetic the JS bridge uses to unpack RGBA / build GL args.
+  // `n()` accepts both Number and BigInt and returns Number; safe for
+  // any value that fits in f64 mantissa (every gl_* arg does — widths,
+  // colors, handle ids all <= 32 bits).
+  const n = (x) => (typeof x === 'bigint' ? Number(x) : x);
+
+  // On-page diagnostics — opt-in via `?debug=1` URL param.  Surfaces
+  // the first few calls into each gl_* method as an overlay so we can
+  // debug rendering issues on phones / TVs / anywhere we can't open
+  // devtools.  Pass-through when debug is off.
+  const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
+  let debugLog = null, debugSeen = {};
+  if (DEBUG) {
+    debugLog = document.createElement('pre');
+    debugLog.style.cssText = 'position:fixed;top:0;left:0;background:rgba(0,0,0,0.85);' +
+      'color:#0f0;font:11px monospace;padding:6px;margin:0;z-index:9999;max-width:90vw;' +
+      'max-height:50vh;overflow:auto;white-space:pre-wrap;border-bottom:1px solid #0f0;';
+    document.addEventListener('DOMContentLoaded', () => document.body.appendChild(debugLog));
+    if (document.body) document.body.appendChild(debugLog);
+  }
+  function dbg(name, info) {
+    if (!DEBUG) return;
+    // Show only the first 2 calls per method to avoid the overlay
+    // overflowing for per-frame calls (gl_clear runs 60+/s).
+    const k = name + ':' + (debugSeen[name] = (debugSeen[name] || 0) + 1);
+    if (debugSeen[name] > 2) return;
+    if (debugLog) debugLog.textContent += k + ' ' + info + '\n';
+  }
+
   // lib/graphics shaders target desktop GLSL (#version 330 core).  WebGL2
   // needs GLSL ES 3.00 — same grammar for the subset we use, but a
   // different version directive and explicit precision in fragment shaders.
@@ -106,8 +138,24 @@ export function initLoftGL(canvas) {
 
   // ── loftHost interface ──────────────────────────────────────────────────
 
+  // Wrap every gl_*/time_* method so every argument is BigInt-coerced
+  // to Number at the boundary.  Keeps the per-method bodies clean.
+  function coerceArgs(fns) {
+    const wrapped = {};
+    for (const [name, f] of Object.entries(fns)) {
+      wrapped[name] = function(...args) {
+        for (let i = 0; i < args.length; i++) args[i] = n(args[i]);
+        if (DEBUG && name.startsWith('gl_')) {
+          dbg(name, args.map(a => typeof a === 'string' ? `"${a.slice(0,16)}"` : `${a}(${typeof a})`).join(', '));
+        }
+        return f.apply(this, args);
+      };
+    }
+    return wrapped;
+  }
+
   window.loftHost = window.loftHost || {};
-  Object.assign(window.loftHost, {
+  Object.assign(window.loftHost, coerceArgs({
 
     // Time — milliseconds since epoch (used by loft ticks())
     time_now() { return Date.now(); },
@@ -501,7 +549,7 @@ export function initLoftGL(canvas) {
     gl_mouse_x() { return mouseX; },
     gl_mouse_y() { return mouseY; },
     gl_mouse_button() { return mouseBtn; },
-  });
+  }));   // ← close coerceArgs()'s argument + Object.assign
 
   return ctrl;
 }
