@@ -51,8 +51,12 @@ fi
 RAW_TMP=$(mktemp)
 trap 'rm -f "$FILES_TMP" "$RAW_TMP"' EXIT
 
-xargs -a "$FILES_TMP" grep -nHE \
+# `xargs -a FILE` is GNU-only — BSD xargs (macOS default) reads
+# from stdin only, so use shell redirection for cross-platform
+# compatibility.
+xargs grep -nHE \
   '@P[0-9]+[a-z]?\b|@PLAN[0-9]+(-[a-zA-Z0-9._]+)*\b|\bP[0-9]+[a-z]?\b|\bplan-[0-9]+\b' \
+  < "$FILES_TMP" \
   2>/dev/null \
   | grep -v '<!--noindex-->' \
   > "$RAW_TMP" || true
@@ -131,11 +135,18 @@ awk -F: '
 # 1. Sets of valid IDs.
 VALID_PIDS=$(grep -oE '^\| [0-9]+ \|' doc/claude/PROBLEMS.md \
   | grep -oE '[0-9]+' | sort -u)
-VALID_PLANS=$(find doc/claude/plans \
-  -maxdepth 2 -mindepth 1 -type d \
-  -regex 'doc/claude/plans/\(finished/\|future/\|deferred/\)?[0-9]+-.*' \
-  2>/dev/null \
-  | grep -oE '/[0-9]+-' | grep -oE '[0-9]+' | sort -u)
+# Use shell globs rather than `find -regex` — the GNU-style
+# alternation `\(finished/\|future/\|deferred/\)?` doesn't parse
+# under BSD find (macOS default), and `find` failing under
+# `set -euo pipefail` exits the script silently.
+VALID_PLANS=$(
+  {
+    ls -d doc/claude/plans/[0-9]*-*/ 2>/dev/null
+    ls -d doc/claude/plans/finished/[0-9]*-*/ 2>/dev/null
+    ls -d doc/claude/plans/future/[0-9]*-*/ 2>/dev/null
+    ls -d doc/claude/plans/deferred/[0-9]*-*/ 2>/dev/null
+  } | grep -oE '/[0-9]+-' | grep -oE '[0-9]+' | sort -u
+)
 
 # 2. Sets of referenced IDs.  Strip optional trailing letter
 # from @P-id (e.g., @P229b → 229).
