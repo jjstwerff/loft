@@ -258,6 +258,325 @@ parallel for the other consumers and enables a follow-up
 "scan.loft regex pass" that retroactively trims `scan_line` /
 `scan_link_line` once the binary is using the canonical engine.
 
+### Per-bucket implementation specs
+
+Each subsection: target fn signature, supporting struct, parse
+rules, output sample.  Aim is "next session types this in,
+doesn't design as they go."
+
+#### B. `emit_problems_open`
+
+```loft
+struct ProblemOpen {
+    tag: text not null,         // e.g. "@P277"
+    line: integer not null,     // 1-based line number in PROBLEMS.md
+    severity: text not null,    // raw severity-cell text, trimmed
+    summary: text not null,     // body, prefix-stripped, truncated at 280 bytes
+    fix: text not null,         // fix-cell text, truncated at 280 bytes
+}
+
+// Emit `"problems_open": [{tag, line, severity, summary, fix}, ...]`
+// as the contents of the bucket (caller writes `"problems_open": [` /
+// `]` surround, same shape as emit_broken_array).
+//
+// Source of truth: doc/claude/PROBLEMS.md.  Row detection:
+// line starts with `| ` then a digit sequence then ` |`.
+// Column split on `|` (5 cells: empty, `id`, `body`, `severity`, `fix`).
+// Filter: severity matches (case-insensitive) `(^| |\()open( |,|\)|$)|\(partial`.
+// Body summary:
+//   1. strip leading `**@P<id>** — ` if present
+//   2. trim leading whitespace
+//   3. take up to first `. ` (period+space) — bare `.` would
+//      split file extensions like `multiplayer_v2.rs`
+//   4. cap at 280 bytes (suffix `...` if truncated)
+fn emit_problems_open() { ... }
+```
+
+JSON sample (live from current tree):
+
+```json
+{
+  "tag": "@P277",
+  "line": 327,
+  "severity": "Medium (open, both backends)",
+  "summary": "Local `sorted<T[K]>` declared inline + `+= [T{...}]` later trips loft's \"cannot change type from sorted<...> to vector<...>\".",
+  "fix": "Wrap the sorted in a one-field struct (see scan.loft's `DistinctSets`).  ~5 lines of boilerplate per use site."
+}
+```
+
+#### C. `emit_problems_recent`
+
+```loft
+struct ProblemRecent {
+    tag: text not null,
+    line: integer not null,
+    closed: text not null,      // YYYY-MM-DD parsed from `Closed (YYYY-MM-DD)`
+    summary: text not null,     // same prefix-strip + truncate as ProblemOpen
+}
+
+// Same row scan as emit_problems_open but:
+// - Inverse severity filter: `(closed)` or `closed$` AND NOT `(open` / `(partial`
+// - For each matching row, find the LAST `Closed (YYYY-MM-DD)` in body
+//   (re-scan with `text.find` advancing past previous matches; capture the
+//   10-byte date substring)
+// - Skip rows with no parseable date
+// - cutoff = ymd_days_ago(30); skip if close_date < cutoff
+//   (YYYY-MM-DD sorts lexicographically — direct `<` compare)
+// - Sort output array by .closed descending before emit
+fn emit_problems_recent() { ... }
+```
+
+JSON sample:
+
+```json
+{
+  "tag": "@P276",
+  "line": 326,
+  "closed": "2026-05-18",
+  "summary": "Native codegen emitted a type-mismatched `??` lowering for character-typed slices."
+}
+```
+
+#### E. `emit_plans_active` / `_future` / `_deferred` / `lib_plans_future`
+
+```loft
+struct PlanEntry {
+    slug: text not null,        // basename, e.g. "07-error-messages"
+    path: text not null,        // repo-relative dir path, no trailing slash
+    title: text not null,       // first `# ` heading in README.md
+}
+
+// Walk a plan directory; emit `[{slug, path, title}, ...]`
+// alphabetically sorted by slug.  No date filter.
+//
+//   plans_active            → doc/claude/plans/[0-9]+-*/
+//   plans_future            → doc/claude/plans/future/[0-9]+-*/
+//   plans_deferred          → doc/claude/plans/deferred/[0-9]+-*/
+//   lib_plans_future        → doc/claude/lib_plans/future/[0-9]+-*/
+//
+// Per-dir:
+//   - skip if no README.md
+//   - slug = basename(dir)
+//   - path = dir with trailing slash stripped
+//   - title = first README.md line starting with `# ` (strip leading
+//     `# ` and trailing whitespace); fall back to slug if no heading
+//   - JSON-escape backslash + double-quote in title + path + slug
+fn emit_plans_directory(root: text, sub: text) { ... }
+```
+
+JSON sample:
+
+```json
+{
+  "slug": "07-error-messages",
+  "path": "doc/claude/plans/07-error-messages",
+  "title": "@PLAN07 — Better error messages"
+}
+```
+
+#### F. `emit_plans_recent`
+
+Same `PlanEntry` struct as above.  Adds the mtime filter:
+
+```loft
+// Walk doc/claude/plans/finished/[0-9]+-*/, emit entries whose
+// directory mtime is within the last 60 days.
+// Requires `file.mtime()` native (sub-commit D).  Cutoff date
+// computed via ymd_days_ago(60); compare lexicographically against
+// the YYYY-MM-DD form of file.mtime().
+fn emit_plans_recent() { ... }
+```
+
+JSON sample:
+
+```json
+{
+  "slug": "00-inline-lift-safety",
+  "path": "doc/claude/plans/finished/00-inline-lift-safety",
+  "title": "@PLAN00 — Inline-lift safety — initiative"
+}
+```
+
+#### D. `file.mtime() -> long` native primitive
+
+```rust
+// src/database/format.rs:
+impl Stores {
+    /// Modification time of `path` as Unix epoch SECONDS (i64).
+    /// Returns 0 on missing file / IO error / non-UTF-8 path.
+    /// SECONDS not milliseconds — matches scan.sh's `stat -c %Y` /
+    /// `stat -f %m` semantics.  Use ymd_days_ago(N) + the file's
+    /// mtime YYYY-MM-DD form for date-window comparisons.
+    pub fn os_mtime_native(path: &str) -> i64 {
+        std::fs::metadata(path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    }
+}
+```
+
+```loft
+// default/02_images.loft, alongside file primitives:
+pub fn mtime(self: File) -> long;
+#rust"Stores::os_mtime_native(&self.path)"
+#impure(host_io)
+```
+
+Sub-commit D ships these three additions; F consumes.
+
+#### G. Summary stats line
+
+scan.sh's tail produces 5 lines to stdout (or stderr, depending
+on caller).  Exact format (whitespace-significant):
+
+```
+tools/indexer/scan.sh: wrote index/tags.json
+  380 distinct tags (140 new-form, 230 legacy-form)
+  4425 total references
+  253 link targets (1318 inbound links)
+  7 open P-issues, 63 closed in last 30 days
+  plans: 2 active, 20 future, 4 deferred, 15 finished in last 60 days
+```
+
+Plus optional trailing lines (only if non-zero):
+
+```
+  1 broken @-references — run: ./scripts/idx broken
+  3 broken markdown links — run: ./scripts/idx broken-links
+```
+
+Loft port: emit the same shape but with `tools/indexer/scan.loft:`
+prefix.  The leading two-space indent on lines 2-5 is significant
+(grep-friendly).
+
+```loft
+fn emit_summary(rows: vector<RawRef>, links: vector<LinkRef>,
+                problems_open: integer, problems_recent: integer,
+                pa: integer, pf: integer, pd: integer, pr: integer,
+                broken: integer, broken_links: integer) {
+    // count helpers (filter rows / links / etc.)
+    println("tools/indexer/scan.loft: wrote index/tags.json");
+    println("  {distinct} distinct tags ({new_count} new-form, {legacy_count} legacy-form)");
+    println("  {total_refs} total references");
+    println("  {link_targets} link targets ({inbound_links} inbound links)");
+    println("  {problems_open} open P-issues, {problems_recent} closed in last 30 days");
+    println("  plans: {pa} active, {pf} future, {pd} deferred, {pr} finished in last 60 days");
+    if broken > 0 {
+        println("  {broken} broken @-references — run: ./scripts/idx broken");
+    }
+    if broken_links > 0 {
+        println("  {broken_links} broken markdown links — run: ./scripts/idx broken-links");
+    }
+}
+```
+
+### Migration semantics
+
+**Transition window** = sub-commits B through H.  During this
+window, BOTH scanners can produce `index/tags.json`:
+
+- `make index` continues to invoke `scan.sh` (canonical) until
+  sub-commit H.
+- `make index-loft` invokes `scan.loft` with
+  `LOFT_INDEX_BUCKETED=1` (already wired today).  Each sub-commit
+  B-G adds one more bucket; readers (CI tests, viewer) compare
+  scan.loft's output to scan.sh's via `jq` projection and assert
+  equivalence for already-ported buckets.
+
+At sub-commit H:
+
+- `make index` switches to invoke `scan.loft`.
+- `make index-bash` becomes the fallback path (renamed from the
+  default).  scan.sh stays in tree, just demoted.
+- One PR's worth of soak time on Linux + macOS + Windows
+  validates the cutover.
+
+At sub-commit J (only after I has shown all three platforms
+green for at least one CI run on demo_dev):
+
+- `tools/indexer/scan.sh` deleted.
+- `make index-bash` Makefile target deleted.
+- `tests/index_hygiene.rs` simplified — drops the bash-side
+  invocation + jq projection comparison; only checks the
+  loft-produced tags.json.
+- `CLAUDE.md` § Key commands updated — `make index` documented
+  as loft-only.
+
+**`index/tags.json` schema versioning** — not introduced.
+scan.loft targets byte-for-byte parity with scan.sh's output
+(modulo whitespace ordering inside arrays, which `jq -S` would
+normalize).  The viewer + idx.loft + CI all consume the same
+key set; no consumer-side migration.
+
+**Rollback procedure** — if a sub-commit B-G introduces a
+regression detected post-merge:
+
+1. The bash scan.sh stays canonical until H.  Revert is just
+   "stop reading the new bucket from scan.loft's output for
+   parity assertions."
+2. After H: `make index-bash` is the escape hatch; flip a single
+   line in the Makefile to restore.
+3. After J: the bash script is in git history (last seen at
+   commit J's parent).  Recovery is a single-file `git revert`
+   against J followed by a fix-forward in scan.loft.
+
+**Hard gate: do NOT run sub-commit J on a PR.**  J is a separate
+follow-up PR after the cutover (H) has shipped + survived a few
+days on `main`.  This ensures any unanticipated parity miss
+surfaces under the easy-rollback regime, not after deletion.
+
+### Test strategy
+
+Concrete `cargo test` invocations + new gate assertions per
+sub-commit.  The existing `tests/index_hygiene.rs::
+index_hygiene_clean` is the workhorse — extend, don't replace.
+
+| Sub-commit | New assertion |
+|---|---|
+| **A** (ymd_days_ago) | Unit test in `tests/issues.rs` — call with 0 / 30 / 60 + assert YYYY-MM-DD shape (10 chars, `[0-9]{4}-[0-9]{2}-[0-9]{2}` per a regex sanity check OR character-class check using existing helpers).  No existing test today; add `p_ymd_days_ago_shape`. |
+| **B** (problems_open) | Extend `index_hygiene_clean`: after `make index-loft`, assert `jq -S '.problems_open' loft.json == jq -S '.problems_open' index/tags.json`.  Bash side is canonical until H.  Add a counts smoke check (`problems_open | length > 0` — must be non-zero on this tree). |
+| **C** (problems_recent) | Same shape: `jq -S '.problems_recent' loft.json == jq -S '.problems_recent' index/tags.json`.  Adds the date-window edge cases — write a dedicated `tests/scripts/idx_problems_recent_*.loft` scenario that exercises rows just inside / outside the 30-day cutoff (small fixture file under `tests/data/`). |
+| **D** (file.mtime) | `tests/issues.rs::p_file_mtime` — create a temp file, read mtime, assert positive integer (or within a known recent epoch range).  Also assert mtime of a missing file is 0. |
+| **E** (plans_4_buckets) | `index_hygiene_clean` parity check for each of the 4 buckets via the same `jq -S` shape compare.  Counts must match exactly (`plans_active | length` etc.).  Order: alphabetical by slug (the sample shows `00-…` before `07-…`). |
+| **F** (plans_recent) | Same parity check.  Edge case: a `finished/` plan whose dir mtime is exactly 60 days ago (boundary).  Add a comment to the test noting the test asserts presence/absence based on `cargo test`'s wall-clock + a tolerance window. |
+| **G** (summary stats) | New test `tests/index_hygiene.rs::summary_matches_bash`: capture stdout of both `make index` and `make index-loft`, normalize whitespace, assert equality up to the leading "tools/indexer/…" line (which differs in script name). |
+| **H** (switch make index) | `index_hygiene_clean` runs ONLY the loft path; full schema diff against a captured baseline `tests/golden/tags.json` (committed; refresh via `make index && cp index/tags.json tests/golden/tags.json`). |
+| **I** (CI verification) | No new code — gate is "this commit's `Test (ubuntu-latest)` + `Test (macos-latest)` + `Test (windows-latest)` all pass."  Watch for one full CI cycle before proceeding to J. |
+| **J** (delete scan.sh) | `index_hygiene_clean` runs as in H (loft only).  Drop bash-side parity tests entirely.  CHANGELOG_TECHNICAL.md entry documenting the removal. |
+
+**Per-sub-commit CI gate procedure:**
+
+```bash
+# After each sub-commit:
+cargo fmt -- --check
+cargo clippy --release -- -D warnings
+scripts/check_doc_drift.sh
+cargo test --release --test index_hygiene  # the workhorse
+cargo test --release --test issues          # only when sub-commit touches loft compiler / native
+```
+
+`make ci` runs all of the above plus the full nextest pass.
+Sub-commits B-G can use the faster cargo-test invocations
+(they only modify scan.loft, no compiler change); D + H + J
+need `make ci` because they touch the loft binary or test
+harness.
+
+### Acceptance — full removal
+
+1. `make index` invokes `scan.loft`, produces `index/tags.json`
+   byte-for-byte equivalent to the pre-removal output (per
+   `jq -S` normalised compare).
+2. `tools/indexer/scan.sh` does not exist in tree.
+3. All three CI platforms green for at least three consecutive
+   commits on `demo_dev` after the deletion lands.
+4. `CLAUDE.md` § Key commands documents `make index` as the
+   single canonical path.
+5. CHANGELOG_TECHNICAL.md entry references the removal +
+   credits the PR-212 dogfood loop that drove it.
+
 ### Sub-commit sequencing
 
 Each row lands as its own focused commit so the arc can pause
