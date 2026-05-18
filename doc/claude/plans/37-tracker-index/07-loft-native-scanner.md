@@ -166,6 +166,119 @@ further by an order of magnitude.
 
 ---
 
+## scan.sh removal — design + sequencing
+
+**Status:** Helper landed (commit `9a163f55`), implementation
+sequenced.  Not gated on a single PR — work in this arc lands
+incrementally as each bucket is ported.
+
+**Driver:** every Windows CI failure on PR-212 (11 of 12 runs)
+traced back to `tools/indexer/scan.sh` accumulating BSD- /
+MSYS-incompatibility patches faster than they can be applied
+cleanly.  Audit:
+
+| Run window | Windows failure shape | scan.sh fix attempt |
+|---|---|---|
+| First run | codegen_emitter P269 (loft bug, fixed in `236d058a`) | n/a — real loft bug |
+| Runs 2-4 | `make index exited 2` | LC_ALL=C + `awk mktime` → shell cutoff + stat -c / stat -f fallback |
+| Runs 5-6 | `./scripts/idx broken exited 1` | bash wrapper + idx.loft MVP (a9a96f0f) |
+| Runs 7-12 | empty `VALID_PLANS` → every `@PLAN*` ref broken | (unfixed) `ls -d` on MSYS returns backslash paths; `grep '/[0-9]+-'` matches nothing |
+
+Each patch fixed one shape and revealed the next.  A loft binary
+runs identically on every platform — one-and-done.
+
+### Buckets to port (full `tags.json` parity)
+
+| Bucket | Already in scan.loft? | Needed for full parity |
+|---|---|---|
+| `@P*` / `@PLAN*` per-tag arrays | ✅ (commit `c8140729`, gated by `LOFT_INDEX_BUCKETED=1`) | — |
+| `legacy:*` per-bare-name arrays | ✅ (same commit) | — |
+| `links` map (markdown link target → inbound refs) | ✅ (same commit) | — |
+| `broken` (broken `@`-tag refs) | ✅ (commit `15103884`, today) | — |
+| `broken_links` (broken markdown links) | ✅ (commit `15103884`, today) | — |
+| `problems_open` | ❌ | parse PROBLEMS.md rows + severity filter `(^\| \|\()open( \|,\|\)\|$)\|\(partial`; per-row `{tag, line, severity, summary, fix}` |
+| `problems_recent` | ❌ | same parse, filter `(closed)` but not `(open` / `(partial`; find `Closed (YYYY-MM-DD)` in body; gate on `close_date >= ymd_days_ago(30)`; sort by `.closed` desc |
+| `plans_active` / `plans_future` / `plans_deferred` / `lib_plans_future` | ❌ | walk `doc/claude/{plans,lib_plans}/[active\|future\|deferred]/[0-9]+-*/`, emit `{slug, path, title}` per dir with a README, title from first `# ` heading |
+| `plans_recent` (finished < 60 days) | ❌ | same walk, filter by dir mtime; needs `file.mtime` accessor (currently scan.sh uses `stat -c %Y` / `stat -f %m`) |
+| Summary stats line | ❌ | tail print: counts of refs / link targets / open P-issues / recent / plans per category |
+
+### Helpers already shipped
+
+- `arguments() -> vector<text>` (10.3) — CLI args.
+- `text.split('|') -> vector<text>` (10.4 / existing) — row splitting.
+- `text.find` / `text.starts_with` / `text.trim` / `text.len` — body parsing.
+- `json_parse` + `JsonValue` — read-only JSON nav (already used by idx.loft).
+- **`ymd_days_ago(days) -> text`** (commit `9a163f55`, today) — cutoff-date
+  computation for the two date-window buckets.  Replaces bash's `date -d`
+  / `date -v` fork.
+
+### Helpers still missing
+
+- **`file.mtime() -> long`** — dir-mtime read for `plans_recent`'s
+  60-day filter.  scan.sh currently uses `stat -c %Y` / `stat -f %m` with
+  a `|| echo 0` fallback.  Loft has `file.size: long` but no mtime
+  accessor today.  Small native fn following the same shape as
+  `os_directory_native()` — ~10 lines in `src/database/format.rs` +
+  one-line declaration in `default/02_images.loft`.  Can ship
+  alongside the `plans_recent` bucket.
+
+### Sub-commit sequencing
+
+Each row lands as its own focused commit so the arc can pause
+between buckets without leaving the tree in a half-state.  Order
+chosen so each commit is independently testable on the existing
+test gate (the assertion `./scripts/idx broken == "[]"` stays
+green throughout):
+
+| # | Sub-commit | Effort | Test signal |
+|---|---|---|---|
+| **A** | `ymd_days_ago(days)` native primitive | XS | **Shipped** (commit `9a163f55`) — `cargo test fill_rs_up_to_date` green |
+| B | `emit_problems_open` in scan.loft + emit when `LOFT_INDEX_BUCKETED=1` | S | spot-check JSON shape against bash output; bash side stays canonical |
+| C | `emit_problems_recent` in scan.loft using `ymd_days_ago(30)` | S | same |
+| D | `file.mtime() -> long` native (new helper) + declaration | XS | smoke test on any file |
+| E | `emit_plans_active` / `_future` / `_deferred` / `lib_plans_future` (the four no-date buckets) | S | shape check |
+| F | `emit_plans_recent` using `file.mtime()` + `ymd_days_ago(60)` | S | shape check |
+| G | Summary stats line | XS | textual match against bash output |
+| H | Switch `make index` to invoke scan.loft (with the existing bash scanner becoming a fallback path: `make index-bash` for emergencies) | S | full diff test: `make index` → tags.json byte-for-byte identical (or jq-projection equivalent) on Linux |
+| I | Cross-platform CI verification — Linux green, macOS green, **Windows green** | n/a | `index_hygiene_clean` passes on all three CI runners |
+| J | Delete `tools/indexer/scan.sh` + `make index-bash` fallback; update `tests/index_hygiene.rs` to only invoke loft side | XS | clean removal |
+
+### Minimum to land PR-212
+
+PR-212's blocking failure is Windows-only.  Three paths to a green
+PR, ranked by directness:
+
+1. **Land the full arc above through commit I** before merging.
+   Highest investment; cleanest end state; no follow-up tech debt.
+2. **Land the arc through commit B (problems_open)**, then switch
+   `make index` once Linux's parity diff is byte-identical for at
+   least the broken / broken_links / per-tag arrays buckets (the
+   ones the test gate actually checks).  Skip `problems_recent` /
+   `plans_*` for this PR (viewer keeps reading them from a stale
+   tags.json until they're ported in a follow-up PR).  Medium
+   investment; closes Windows without bash-side regressions.
+3. **One-line scan.sh patch** for the specific MSYS path-separator
+   bug (pipe `ls -d` output through `tr '\\\\' '/'`).  Trivial; gets
+   Windows green; leaves the broader bash-portability surface in
+   place for the next moving target to find.  This is exactly the
+   pattern that produced 11 Windows failures on this PR — adding a
+   12th patch is the path of least short-term resistance and most
+   long-term cost.
+
+Recommendation: **option 1 or 2.**  Option 3 contradicts the
+"remove scan.sh completely" direction from the user's
+2026-05-18 chat and the empirical evidence above.  Whether to
+pause the arc at commit H or push through commit J depends on
+whether the user wants to absorb the larger arc inside this PR
+or follow up.
+
+### Cross-references
+
+- `doc/claude/lib_plans/01-regex/` — regex Phase 0 (cdylib bridge MVP) is the next force-multiplier for any future bash-script port; not blocking on this arc since scan.loft's text-matching is already hand-rolled and works.
+- `doc/claude/plans/future/41-doc-hygiene-autofix/` — the Phase 0 move-rewriter would close the OTHER PR-212-style cascade (directory moves vs OS-portability); orthogonal to this arc.
+
+---
+
 ## Goal
 
 Re-architect the indexer as a **daemon + clients** model in
