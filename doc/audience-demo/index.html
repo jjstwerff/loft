@@ -175,14 +175,18 @@ function pixelToOffset(px, py, size) {
 // below y.  Same scheme used by server chunks → no glue needed at
 // chunk boundaries.
 const VIEW_COLS = 9;
-const VIEW_ROWS = 7;
+const VIEW_ROWS = 13;
+// Half-extents — view-relative (vx, vy) ranges over [-HX..HX] × [-HY..HY].
+// Derived so VIEW_ROWS / VIEW_COLS are the single source of truth and the
+// pan-zone / paint-zone code below stays in sync automatically.
+const VIEW_HX = (VIEW_COLS - 1) / 2;
+const VIEW_HY = (VIEW_ROWS - 1) / 2;
 function viewHexes() {
   const out = [];
   for (let row = 0; row < VIEW_ROWS; row++) {
     for (let col = 0; col < VIEW_COLS; col++) {
-      // Relative (vx, vy) ∈ [-4..4] × [-3..3] for pixel placement.
-      const vx = col - 4;
-      const vy = row - 3;
+      const vx = col - VIEW_HX;
+      const vy = row - VIEW_HY;
       out.push({
         x: vx + viewOffsetX,     // world (cells-Map key)
         y: vy + viewOffsetY,
@@ -255,7 +259,7 @@ function draw() {
     const cx = originX + px;
     const cy = originY + py;
     const colourIdx = cells.get(cellKey(wx, wy)) || 0;
-    const isPan = (vx === -4 || vx === 4 || vy === -3 || vy === 3);
+    const isPan = (vx === -VIEW_HX || vx === VIEW_HX || vy === -VIEW_HY || vy === VIEW_HY);
     // Pan ring uses a subtly lighter empty colour so the user can tell
     // at a glance which cells move-on-tap and which paint-on-tap.
     const empty = isPan ? '#161624' : COLOR_EMPTY;
@@ -273,10 +277,10 @@ function draw() {
 function drawPanArrow(cx, cy, size, vx, vy) {
   // Direction vector: from centre outwards.  Corners get diagonal arrows.
   let dx = 0, dy = 0;
-  if (vx === -4) dx = -1;
-  if (vx ===  4) dx =  1;
-  if (vy === -3) dy = -1;
-  if (vy ===  3) dy =  1;
+  if (vx === -VIEW_HX) dx = -1;
+  if (vx ===  VIEW_HX) dx =  1;
+  if (vy === -VIEW_HY) dy = -1;
+  if (vy ===  VIEW_HY) dy =  1;
   // Normalise diagonal so the arrow length is consistent.
   const len = Math.hypot(dx, dy) || 1;
   dx /= len; dy /= len;
@@ -457,22 +461,23 @@ canvas.addEventListener('pointerdown', e => {
   const px = e.clientX - rect.left - originX;
   const py = e.clientY - rect.top - originY;
   const { x: vx, y: vy } = pixelToOffset(px, py, hexSize);
-  // 9x7 window: vx ∈ [-4..4], vy ∈ [-3..3].  Outer ring (vx == ±4 OR
-  // vy == ±3) is a PAN zone — tap there to shift the world view in
-  // that direction.  Inner 7x5 (vx ∈ [-3..3], vy ∈ [-2..2]) is the
-  // PAINT zone.  Corners count as pan in both axes.
-  const outOfView = (vx < -4 || vx > 4 || vy < -3 || vy > 3);
-  if (outOfView) return;                          // tap outside grid → ignore
-  const isPan = (vx === -4 || vx === 4 || vy === -3 || vy === 3);
+  // Outer-ring tap is a PAN; inside the ring is PAINT.  Outer ring =
+  // vx == ±VIEW_HX OR vy == ±VIEW_HY.  Corners count as pan in both
+  // axes.  Anything outside the grid is a silent no-op.
+  const outOfView = (vx < -VIEW_HX || vx > VIEW_HX || vy < -VIEW_HY || vy > VIEW_HY);
+  if (outOfView) return;
+  const isPan = (vx === -VIEW_HX || vx === VIEW_HX || vy === -VIEW_HY || vy === VIEW_HY);
   if (isPan) {
-    // Pan by the cell-distance the user tapped (so a corner-tap moves
-    // diagonally).  Each tap shifts by one cell; longer-distance pans
-    // need multiple taps — feels deliberate and matches the slug-tempo
-    // philosophy from the design doc.
-    if (vx === -4) viewOffsetX -= 1;
-    if (vx ===  4) viewOffsetX += 1;
-    if (vy === -3) viewOffsetY -= 1;
-    if (vy ===  3) viewOffsetY += 1;
+    // X-pan moves one hex column at a time.  Y-pan moves TWO rows at
+    // a time so the odd-y half-hex jog (built into the pointy-top
+    // offset coords) doesn't flip parity on every step and visually
+    // shear the whole grid sideways.  Even-step y pans preserve every
+    // existing shape's relative geometry — same convention used by the
+    // 32×32 chunk tiling: `y+2 vertical, y+1 jogs half-hex right`.
+    if (vx === -VIEW_HX) viewOffsetX -= 1;
+    if (vx ===  VIEW_HX) viewOffsetX += 1;
+    if (vy === -VIEW_HY) viewOffsetY -= 2;
+    if (vy ===  VIEW_HY) viewOffsetY += 2;
     draw();
     return;
   }

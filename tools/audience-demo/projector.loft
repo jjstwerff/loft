@@ -327,12 +327,34 @@ fn main() {
       println("projector: cam pos=({auto_cam.pos_x}, {auto_cam.pos_y}) target=({auto_cam.target_x}, {auto_cam.target_y})");
     }
 
-    // 3. Clear + redraw every non-empty cell, world coords offset by
-    //    the camera so the activity centroid lands at screen centre.
-    //    Order doesn't matter at flat-2D scope; once 3D heights land
-    //    in phase 3, sort back-to-front by y so foreground crystals
-    //    occlude background ones.
+    // 3. Clear + redraw.  Two passes:
+    //    (a) bounded grid of empty hexes around the camera, drawn in
+    //        the same dim near-black as the phone client's empty
+    //        cells, so the lattice reads on the projector at a glance
+    //        (otherwise empty space looks like a uniform black void
+    //        and the audience can't read distances between paints);
+    //    (b) every filled cell on top in its palette colour.
+    //    Bounds — render enough cells to cover the window
+    //    (1280 / (SQRT3 * 38) ≈ 19 cols, 800 / (1.5 * 38) ≈ 14 rows)
+    //    plus a one-cell halo for the camera lerp.
     graphics::gl_clear(bg);
+    cam_ix = auto_cam.pos_x as integer;
+    cam_iy = auto_cam.pos_y as integer;
+    gx = cam_ix - 11;
+    while gx <= cam_ix + 11 {
+      gy = cam_iy - 8;
+      while gy <= cam_iy + 8 {
+        // Skip cells that have a painted entry — pass (b) handles those.
+        gk = cell_key(gx, gy);
+        if world.cells[gk] == null {
+          ecx = cell_centre_x(gx, gy, auto_cam.pos_x);
+          ecy = cell_centre_y(gy, auto_cam.pos_y);
+          draw_hex(painter, hex_vao, ecx, ecy, HEX_SIZE * 0.97, 0);
+        }
+        gy = gy + 1;
+      }
+      gx = gx + 1;
+    }
     for cell in world.cells {
       cx = cell_centre_x(cell.x, cell.y, auto_cam.pos_x);
       cy = cell_centre_y(cell.y, auto_cam.pos_y);
