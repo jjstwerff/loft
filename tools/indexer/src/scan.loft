@@ -887,6 +887,13 @@ fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
     emit_problems_open_array();
     println("");
     println("  ]");
+    // problems_recent — closed P-issues from the last 30 days,
+    // sorted by close-date descending.
+    println(",");
+    println("  \"problems_recent\": [");
+    emit_problems_recent_array();
+    println("");
+    println("  ]");
     println("");
     println("}}");
 }
@@ -1073,6 +1080,100 @@ fn is_problems_row(line: text) -> boolean {
     if line[j] < '0' || line[j] > '9' { return false; }
     while j < n && line[j] >= '0' && line[j] <= '9' { j = j + 1; }
     j < n && line[j] == ' '
+}
+
+// True when severity matches the bash regex
+// `[(]closed[)]|closed$` (closed-state row) AND DOES NOT match
+// `[(]open|[(]partial` (excludes partial-state rows like @P229).
+// Same case-insensitive semantics as severity_is_open.
+fn severity_is_closed(sev: text) -> boolean {
+    lower = sev.to_lowercase();
+    // Exclude partial-state.
+    if lower.find("(open") >= 0 { return false; }
+    if lower.find("(partial") >= 0 { return false; }
+    // Match `(closed)` or `...closed$`.
+    if lower.find("(closed)") >= 0 { return true; }
+    n = lower.len();
+    if n >= 6 && lower[n - 6..n] == "closed" { return true; }
+    false
+}
+
+// Find the LAST `Closed (YYYY-MM-DD)` in body; return the
+// 10-byte date or "" if none.  Bash uses `while (match(...))`
+// advancing past each match to find the last.
+fn find_last_closed_date(body: text) -> text {
+    needle = "Closed (";
+    last = "";
+    n = body.len();
+    pos = 0;
+    while pos < n {
+        rel = body[pos..n].find(needle);
+        if rel < 0 { return last; }
+        at = pos + rel + needle.len();
+        // Expect YYYY-MM-DD at `at` (10 chars) followed by ')'.
+        if at + 11 <= n
+            && body[at] >= '0' && body[at] <= '9'
+            && body[at + 4] == '-'
+            && body[at + 7] == '-'
+            && body[at + 10] == ')'
+        {
+            last = body[at..at + 10];
+        }
+        pos = at;
+    }
+    last
+}
+
+// Slot struct + wrapper for `sorted<...[-closed]>` (descending
+// by date).  Loft sorted<> must be a struct field, not a local.
+struct ProblemRecent {
+    tag: text not null,
+    line_no: integer not null,
+    closed: text not null,
+    summary: text not null,
+}
+struct RecentSet {
+    items: sorted<ProblemRecent[-closed]>,
+}
+
+fn emit_problems_recent_array() {
+    f = file("doc/claude/PROBLEMS.md");
+    if f.format == Format.NotExists { return; }
+    cutoff = ymd_days_ago(30);
+    set = RecentSet {};
+    lines = f.lines();
+    nl = lines.len();
+    i = 0;
+    while i < nl {
+        line = lines[i];
+        if !is_problems_row(line) { i = i + 1; continue; }
+        cells = line.split('|');
+        if cells.len() < 5 { i = i + 1; continue; }
+        id_text = cells[1].trim();
+        body = cells[2];
+        severity = cells[3].trim();
+        if !severity_is_closed(severity) { i = i + 1; continue; }
+        close_date = find_last_closed_date(body);
+        if close_date == "" { i = i + 1; continue; }
+        // YYYY-MM-DD sorts lexicographically.  Skip older.
+        if close_date < cutoff { i = i + 1; continue; }
+        summary = strip_tag_prefix(body, id_text);
+        summary = truncate_summary(summary);
+        set.items += [ProblemRecent{
+            tag: "@P{id_text}",
+            line_no: i + 1,
+            closed: close_date,
+            summary: summary,
+        }];
+        i = i + 1;
+    }
+    first = true;
+    for e in set.items {
+        if !first { print(","); }
+        first = false;
+        esc_sum = json_escape(e.summary);
+        print("\n    {{\"tag\":\"{e.tag}\",\"line\":{e.line_no},\"closed\":\"{e.closed}\",\"summary\":\"{esc_sum}\"}}");
+    }
 }
 
 fn emit_problems_open_array() {
