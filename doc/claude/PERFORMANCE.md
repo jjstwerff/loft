@@ -808,6 +808,118 @@ its first use (guaranteed by the compiler's scope analysis).
 
 ---
 
+## Design: N4 — Suppress cr_call_push on `#pure` leaf functions
+
+**Affected workload:** Any hot loop with tiny `#pure` helper calls.
+The trigger was scan.loft's byte-scanner (`is_digit_b`,
+`is_word_char_b`, `is_segment_char_b` called per-byte over ~24 MB).
+**Expected gain:** Eliminates one `thread_local!` + `RefCell::borrow_mut`
++ `Vec::push` per leaf call.  Per call cost is ~10-20 ns; on the
+scan.loft hot loop that's a meaningful share of the ~165 ms
+`-O` baseline.
+**Cost:** Small — localised change in `src/generation/mod.rs` +
+purity-classifier extension.
+
+### Background
+
+`src/generation/mod.rs:1888` emits
+
+```rust
+cr_call_push("name", "file", 12);
+let _call_guard = codegen_runtime::CallGuard;
+```
+
+at the entry of every user function whose name starts with `n_`.
+The shadow stack exists so `stack_trace()` returns a meaningful trace
+at panic time.  For `#pure` leaf functions:
+
+- They cannot panic from internal logic — any panic is a compiler bug.
+- A user-visible stack trace formed by the *parent* of a `#pure`
+  leaf still gives the right context (the call site is the leaf
+  caller, not the leaf itself).
+- The push/pop pair costs more than the body it brackets when the
+  body is a single arithmetic comparison.
+
+### Design
+
+1. **Classify** each user fn as `is_leaf_pure(def_nr)`:
+   `def.purity == Purity::Pure` AND `def.code: Value::Block` contains
+   no `Call` / `Method` operator anywhere in its recursive tree.
+   Memoise on `def_nr` (same shape as N2's purity analysis).
+2. **In `src/generation/mod.rs:1888`**: when `instrument &&
+   is_leaf_pure(def_nr)`, skip the `cr_call_push` + `CallGuard`
+   emission (keep the `let stores: &mut Stores = …` derivation —
+   inner `ops::` templates may still reference it).
+3. **Optional**: emit `#[inline]` on the same set so rustc gets a
+   strong hint to inline now that the call-barrier bookkeeping is
+   gone.
+
+### Risk
+
+- `stack_trace()` invoked from inside a `#pure` leaf body would
+  miss its own frame.  This is hypothetical — `#pure` rules out
+  most reasons to introspect runtime state — but it is a behaviour
+  change, so document as a known limitation.
+- Conservative classifier (leaf-only) keeps the impact bounded and
+  preserves trace fidelity for any pure function that fans out.
+
+### Validation
+
+The single-file `--native-emit` + `rustc -O` harness used to discover
+the `-O` gap (see `## Open work` below) reproduces the per-call
+overhead directly: comment out the `cr_call_push`/`CallGuard` lines
+in the emitted `.rs` and re-time.  No build-system changes needed.
+
+---
+
+## Design: N5 — Inline `integer` arithmetic when operands are provably non-null
+
+**Affected workload:** Every loop with `i + 1` / `j + 1` index
+arithmetic (scanners, parsers, tokenisers).  N3 is the parallel
+for `long`.
+**Expected gain:** Replaces `ops::op_add_int(a, b)` (function call
+with null-sentinel guards) with a direct `a + b` expression.  Lets
+rustc -O fuse with surrounding arithmetic and (where applicable)
+vectorise.  Empirically tight loops emit several `op_add_int` calls
+per byte; even after `-O` inlines them, the null-sentinel branch
+prevents further fusion.
+**Cost:** Small if folded into N3's nullability analysis (same
+classifier, parallel application).  Standalone is also Small.
+
+### Background
+
+Loft's generated Rust for `j + 1` (where `j` is a local i64
+counter) is currently:
+
+```rust
+ops::op_add_int(var_j, 1_i64)
+```
+
+`ops::op_add_int`'s body is the null-sentinel guard
+`if v1 == i64::MIN || v2 == i64::MIN { i64::MIN } else { v1 + v2 }`.
+For locals that are definitely non-null at the point of use (assigned
+a literal then mutated only by arithmetic), the guards are dead code
+— but rustc can't always eliminate them across function-call
+boundaries when the caller is non-trivial.
+
+### Design
+
+1. Extend N3's nullability classifier to `integer` types (same
+   definite-assignment + flow analysis on local variables).
+2. When both operands of an `integer` binary op are provably
+   non-null, emit the bare expression (`a + b`, `a - b`, `a * b`,
+   `a == b`, etc.) instead of `ops::op_add_int(a, b)`.
+3. For mixed cases (one operand from a nullable store field), keep
+   the sentinel version.
+
+### Relationship to N3
+
+N3 + N5 share the classifier and the policy.  Ship them as one
+sequenced commit set (N3 first to validate the approach on `long`,
+N5 right after for `integer`) so the analysis lives in one place.
+
+---
+
 ## Design: W1 — wasm string representation
 
 **Affected benchmark:** 07 (2.06× wasm vs native)
@@ -857,8 +969,10 @@ modes.
 | 3 | P2 — Stack raw pointer cache | all interpreter | 20–50% across interpreter | High |
 | 4 | N2 — Pure function stores omit | 01, 06 native | 10–30% recursive native | High |
 | 5 | N3 — Long sentinel in codegen | 04 native | ~1.5× Collatz native | Low |
-| 6 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
-| 7 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
+| 6 | N5 — Integer sentinel in codegen | scanners, parsers, any indexed loop | parallel to N3 for `integer` | Low (folds into N3) |
+| 7 | N4 — Suppress cr_call_push on `#pure` leaves | hot loops with tiny `#pure` helpers (scan.loft) | measurable share of `-O` baseline on per-byte loops | Small |
+| 8 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
+| 9 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
 
 Items 1–3 should be scheduled after the 0.8.3 language-syntax milestone. P1 is the
 highest-impact single change because it benefits every tight loop in the interpreter
@@ -2563,8 +2677,8 @@ mutable store references.
 
 ## Open work
 
-The 7 design entries above (P1, P2, P3, N1, N2, N3, W1) are
-all open optimization items.  Tracking table for ROADMAP and
+The 9 design entries above (P1, P2, P3, N1, N2, N3, N4, N5, W1)
+are all open optimization items.  Tracking table for ROADMAP and
 plan-cleanup audits:
 
 | Item | Section | ROADMAP row | Tier | Status |
@@ -2575,6 +2689,8 @@ plan-cleanup audits:
 | **N1** — Direct-emit local collections in native codegen | § Design: N1 | **O4** | Native | Open — design ready.  Cooperates with `lib_plans/future/03-lazy-stdlib/` and `plans/future/21-retire-scratch/` (N1 narrows the scratch consumer set). |
 | **N2** — Omit `stores` parameter from pure native fns | § Design: N2 | **O5** | Native | Open — design ready. |
 | **N3** — Remove `long` null-sentinel from generated code | § Design: N3 | — | Native | Open — verification + cleanup; small. |
+| **N4** — Suppress `cr_call_push` on `#pure` leaf functions | § Design: N4 | — | Native | Open — discovered while optimising @PLAN37 scan.loft (2026-05-18).  Small change; reuses N2's purity classifier with a leaf check. |
+| **N5** — Inline `integer` arithmetic when operands are non-null | § Design: N5 | — | Native | Open — discovered alongside N4 (2026-05-18) while inspecting `--native-emit` output for scan.loft's byte loop.  Folds into N3 (same nullability classifier, parallel application to `integer`). |
 | **W1** — wasm string representation | § Design: W1 | — | WASM | Open — design ready, scheduled for wasm-priority workloads (game-client + browser-IDE consumers). |
 
 Other ROADMAP rows that conceptually belong here but lack
@@ -2584,8 +2700,10 @@ Each stays as a PLANNING.md-cited row until design content
 lands here.
 
 Suggested order when this work unpauses:
-1. **P3 + N3** — small verification/cleanup; clears the deck.
-2. **N2** — pure-fn `stores` omission; small native win, independent.
+1. **P3 + N3 + N5** — small verification/cleanup; clears the deck.
+   N3 + N5 ship together (shared nullability classifier).
+2. **N2 + N4** — both touch the purity classifier; N4 reuses it for
+   the leaf-pure check and is similarly small.  Ship in sequence.
 3. **N1** — direct-emit local collections; cooperates with plan 21.
 4. **P1** — biggest interpreter win.  BLOCKED on opcode-table decision.
 5. **P2** — store indirection reduction; smaller than P1, architecturally cleaner.
@@ -2593,3 +2711,22 @@ Suggested order when this work unpauses:
 
 Items are independent — order can shift based on which consumer
 (interpreter / native / wasm) needs the win first.
+
+### Validation methodology — single-file Rust-emit harness
+
+N4 and N5 were discovered by emitting `--native-emit` output to a
+standalone `.rs` file and compiling it with `rustc --edition=2024
+-O --extern loft=…/libloft.rlib -L target/release/deps`.  This
+isolates each codegen variant (commenting out `cr_call_push`,
+replacing `ops::op_add_int(a, b)` with `a + b`, etc.) and times
+the resulting binary directly.  No build-system or loft-compiler
+edit needed per variant.  Recommended for validating any future
+codegen-side change before landing it in `src/generation/`.
+
+The same harness surfaced the `--native` vs `--native-release` gap
+(`-O` missing from the default mode) — a 10× wall-clock difference
+that was not a codegen issue at all.  That fix shipped in commit
+`ae34bdb1` (Makefile: `make index` uses `--native-release`).
+Other consumers of bare `--native` for runtime-heavy work likely
+have similar headroom; this is a CLI-UX question, not a codegen
+follow-up, so it is not tracked here.
