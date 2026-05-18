@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0a0a14">
+<title>Audience Demo — phone client</title>
+<!--
+  @PLAN36 phase 0.1-0.4 (audience-driven generative-art demo, phone client).
+  Single static page; inline CSS + JS so the source reads on-stage.
+
+  This commit covers sub-tasks:
+    0.1 — static HTML scaffold + responsive three-zone layout
+    0.2 — hex grid renderer (canvas 2D, axial coordinates)
+    0.3 — color palette + active-color state (random pre-selection)
+    0.4 — tap handling: empty / own / other distinction
+  Still TODO (next session):
+    0.5 swipe + drag-erase  0.6 outer-ring pan zones  0.7 WebSocket
+    0.8 jump-to-active  0.9 onboarding-view-centring (depends on 0.7)
+
+  Until 0.7 lands, cell state is local-only (no server).  That keeps
+  the visual mechanic verifiable without depending on plan 34
+  (lib/server hardening) which is the hard blocker for phase 1.
+-->
+<style>
+  :root {
+    --bg: #0a0a14;
+    --grid-line: #20202c;
+    --empty-fill: #050510;
+    --text: #d6d6e0;
+    --active-ring: #fff;
+    --panel: #14141e;
+    --button: #1d1d2a;
+    --button-active: #2a2a3a;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); height: 100%; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { display: grid; grid-template-rows: 1fr 56px 48px; gap: 4px; padding: 4px; }
+  /* Zone 1 — world canvas */
+  #world { background: var(--bg); width: 100%; height: 100%; display: block; touch-action: none; }
+  /* Zone 2 — palette */
+  #palette { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; }
+  .pal {
+    border-radius: 6px; height: 100%;
+    border: 2px solid transparent;
+    transition: border-color 0.12s, transform 0.08s;
+    cursor: pointer;
+  }
+  .pal.active { border-color: var(--active-ring); transform: scale(1.04); }
+  /* Zone 3 — controls */
+  #controls { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .ctl {
+    background: var(--button); color: var(--text);
+    border-radius: 6px; border: none; cursor: pointer;
+    font-size: 14px; font-weight: 600; padding: 0 8px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s;
+  }
+  .ctl:active, .ctl:hover { background: var(--button-active); }
+  .ctl.flash { animation: pulse 0.6s ease-in-out 3; }
+  @keyframes pulse {
+    0%, 100% { background: var(--button); }
+    50% { background: #6a4f1d; }
+  }
+</style>
+</head>
+<body>
+  <canvas id="world"></canvas>
+  <div id="palette"></div>
+  <div id="controls">
+    <button class="ctl" id="clear-color">Clear color</button>
+    <button class="ctl" id="jump-active">Jump to active</button>
+  </div>
+
+<script>
+'use strict';
+
+// ── Palette (CI-locked: 0=empty reserved, 1..9 below) ────────────────────────
+const PALETTE = [
+  null,        // 0 — reserved "empty"; never a tile, never sent
+  '#d94646',   // 1 red
+  '#3fc858',   // 2 green
+  '#3a72e5',   // 3 blue
+  '#3fc8c8',   // 4 cyan (G+B)
+  '#d046d0',   // 5 magenta (R+B)
+  '#dfd840',   // 6 yellow (R+G)
+  '#e6e6ec',   // 7 white
+  '#7c7c8a',   // 8 grey
+  '#9c6a3c',   // 9 brown
+];
+
+// ── World state — axial (q, r) → palette index 0..9 ──────────────────────────
+// Stored as Map<"q,r", colour_index>.  Local-only until phase 0.7 lands
+// WebSocket; once it does, server world_snapshot / world_delta seed this
+// map and the tap handler ALSO sends a `seed` event.
+const cells = new Map();
+function cellKey(q, r) { return q + ',' + r; }
+
+// View pan offset — currently fixed to (0, 0) until phase 0.6 wires the
+// outer-ring zones to nudge it.  When that lands, this becomes the
+// authoritative offset between view centre and world (0, 0).
+let viewOffsetQ = 0;
+let viewOffsetR = 0;
+
+// ── Hex math ─────────────────────────────────────────────────────────────────
+// Pointy-top hex layout.  size = circumradius (centre to corner) in pixels.
+// Pixel position for axial (q, r):
+//   x = size * sqrt(3) * (q + r/2)
+//   y = size * 3/2 * r
+const SQRT3 = Math.sqrt(3);
+function axialToPixel(q, r, size) {
+  return { x: size * SQRT3 * (q + r / 2), y: size * 1.5 * r };
+}
+function pixelToAxial(x, y, size) {
+  // Inverse of axialToPixel; round to nearest hex via cube-coord rounding.
+  const qf = (x * SQRT3 / 3 - y / 3) / size;
+  const rf = (y * 2 / 3) / size;
+  // Cube-coord rounding for hex picking accuracy.
+  let xCube = qf;
+  let zCube = rf;
+  let yCube = -xCube - zCube;
+  let rx = Math.round(xCube);
+  let ry = Math.round(yCube);
+  let rz = Math.round(zCube);
+  const xDiff = Math.abs(rx - xCube);
+  const yDiff = Math.abs(ry - yCube);
+  const zDiff = Math.abs(rz - zCube);
+  if (xDiff > yDiff && xDiff > zDiff) rx = -ry - rz;
+  else if (yDiff > zDiff) ry = -rx - rz;
+  else rz = -rx - ry;
+  return { q: rx, r: rz };
+}
+
+// 9x7 viewable window of axial coords — odd row offset visually, but axial
+// math handles the column/row spacing naturally.  Centred on (0, 0); spans
+// q ∈ [-4..4] and r ∈ [-3..3] in axial terms.
+const VIEW_COLS = 9;
+const VIEW_ROWS = 7;
+function viewHexes() {
+  const out = [];
+  for (let r = -3; r <= 3; r++) {
+    for (let q = -4; q <= 4; q++) {
+      out.push({ q: q + viewOffsetQ, r: r + viewOffsetR, vq: q, vr: r });
+    }
+  }
+  return out;
+}
+
+// ── Canvas + render ──────────────────────────────────────────────────────────
+const canvas = document.getElementById('world');
+const ctx = canvas.getContext('2d');
+let hexSize = 0;    // recomputed per resize
+let originX = 0;    // canvas-pixel position of view-centre hex (0, 0)
+let originY = 0;
+
+function resize() {
+  // CSS pixels for the layout; multiply by devicePixelRatio for the
+  // backing store so hexes stay crisp on retina phones.
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth;
+  const cssH = canvas.clientHeight;
+  canvas.width = cssW * dpr;
+  canvas.height = cssH * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Choose hexSize so the 9-wide pointy-top grid fits comfortably with
+  // a little margin.  Pointy-top hex width = sqrt(3) * size; 9 hexes
+  // staggered → ~9.5 * sqrt(3) * size wide.
+  const fitByWidth = cssW / ((VIEW_COLS + 0.5) * SQRT3);
+  const fitByHeight = cssH / ((VIEW_ROWS + 0.5) * 1.5);
+  hexSize = Math.min(fitByWidth, fitByHeight);
+  originX = cssW / 2;
+  originY = cssH / 2;
+  draw();
+}
+
+function drawHex(cx, cy, size, fill, stroke) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 180 * (60 * i - 30);   // pointy-top
+    const px = cx + size * Math.cos(angle);
+    const py = cy + size * Math.sin(angle);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+}
+
+// Canvas fillStyle / strokeStyle does NOT resolve CSS vars — read them
+// once from the document element and cache as literals.
+const cssVar = (name) =>
+  getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+let COLOR_BG, COLOR_EMPTY, COLOR_GRID;
+function refreshThemeColors() {
+  COLOR_BG = cssVar('--bg') || '#0a0a14';
+  COLOR_EMPTY = cssVar('--empty-fill') || '#050510';
+  COLOR_GRID = cssVar('--grid-line') || '#20202c';
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (const { q, r, vq, vr } of viewHexes()) {
+    const { x, y } = axialToPixel(vq, vr, hexSize);
+    const cx = originX + x;
+    const cy = originY + y;
+    const colourIdx = cells.get(cellKey(q, r)) || 0;
+    const fill = colourIdx === 0 ? COLOR_EMPTY : PALETTE[colourIdx];
+    drawHex(cx, cy, hexSize * 0.97, fill, COLOR_GRID);
+  }
+}
+
+// ── Palette UI + active colour ───────────────────────────────────────────────
+let activeColour = 0;                 // 0 = no active colour (clear-color state)
+let playerColour = 0;                 // colour this player "owns" — = activeColour
+                                       // when set, persists across clears so
+                                       // tapping own-colour erases own cells
+
+const palEl = document.getElementById('palette');
+function renderPalette() {
+  palEl.innerHTML = '';
+  for (let i = 1; i <= 9; i++) {
+    const tile = document.createElement('div');
+    tile.className = 'pal' + (i === activeColour ? ' active' : '');
+    tile.style.background = PALETTE[i];
+    tile.dataset.colour = i;
+    tile.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      setActiveColour(i);
+    });
+    palEl.appendChild(tile);
+  }
+}
+function setActiveColour(idx) {
+  activeColour = idx;
+  if (idx > 0) playerColour = idx;
+  for (const tile of palEl.children) {
+    tile.classList.toggle('active', Number(tile.dataset.colour) === idx);
+  }
+}
+document.getElementById('clear-color').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  setActiveColour(0);
+});
+// jump-to-active is a placeholder until 0.7+0.8 land.
+document.getElementById('jump-active').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  // No-op until WebSocket events arrive with other players' positions.
+});
+
+// ── Tap handling — empty / own / other distinction (sub-task 0.4) ────────────
+// Empty hex   + colour active → paint
+// Own colour  + colour active → erase (set to 0)
+// Other       + colour active → no-op (cannot overpaint someone else's colour)
+// Any         + colour cleared → no-op
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (activeColour === 0) return;
+  const rect = canvas.getBoundingClientRect();
+  const px = e.clientX - rect.left - originX;
+  const py = e.clientY - rect.top - originY;
+  const { q: vq, r: vr } = pixelToAxial(px, py, hexSize);
+  // Only react to taps inside the visible 9x7 window.
+  if (vq < -4 || vq > 4 || vr < -3 || vr > 3) return;
+  const wq = vq + viewOffsetQ;
+  const wr = vr + viewOffsetR;
+  const k = cellKey(wq, wr);
+  const cur = cells.get(k) || 0;
+  if (cur === 0) {
+    cells.set(k, activeColour);
+  } else if (cur === playerColour) {
+    cells.delete(k);
+  }
+  // cur is some other player's colour → no-op.
+  draw();
+});
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+function init() {
+  refreshThemeColors();
+  renderPalette();
+  // Pre-select a random palette colour so the user can tap immediately
+  // without UI discovery.  (Sub-task 0.9 — partial: random colour today;
+  // view-centring on activity defers to 0.7 when WebSocket lands.)
+  setActiveColour(1 + Math.floor(Math.random() * 9));
+  window.addEventListener('resize', resize);
+  resize();
+}
+init();
+
+// ── Test hook — visible to headless harness ──────────────────────────────────
+// tests/html_render.rs can read window.__phase0 to verify wiring without
+// needing access to module internals.
+window.__phase0 = {
+  cells, PALETTE,
+  get activeColour() { return activeColour; },
+  paintAt(q, r, colour) { cells.set(cellKey(q, r), colour); draw(); },
+};
+</script>
+</body>
+</html>
