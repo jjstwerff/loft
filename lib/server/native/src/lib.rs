@@ -115,6 +115,52 @@ pub extern "C" fn n_tcp_listen(port: u32) -> i32 {
     }
 }
 
+/// Accept the next connection and parse the HTTP request, NON-BLOCKING.
+/// Returns true if a connection was accepted + parsed; false if nothing was
+/// pending OR an error occurred (callers cannot distinguish the two — by
+/// design, they just poll again on a tick).
+///
+/// This is the polling variant used by servers that interleave HTTP serving
+/// with multi-client WebSocket pumping (single-port HTTP + WS).  The legacy
+/// blocking `n_tcp_accept` below remains for single-client servers that
+/// only need to handle one request at a time.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_tcp_accept_nonblocking(handle: i32) -> bool {
+    let stream = LISTENERS.with(|l| {
+        let l = l.borrow();
+        let listener = match l.get(handle as usize).and_then(|opt| opt.as_ref()) {
+            Some(l) => l,
+            None => return None,
+        };
+        let _ = listener.set_nonblocking(true);
+        match listener.accept() {
+            Ok((s, _)) => Some(Some(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Some(None),
+            Err(_) => Some(None),
+        }
+    });
+    let mut stream = match stream {
+        Some(Some(s)) => s,
+        _ => return false,
+    };
+    // The accepted stream may inherit non-blocking from the listener on some
+    // platforms; force blocking so parse_request reads the (small) HTTP head
+    // synchronously without an EAGAIN dance.
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+    match parse_request(&mut stream) {
+        Some((method, path, headers, body)) => {
+            LAST_METHOD.with(|m| *m.borrow_mut() = method);
+            LAST_PATH.with(|p| *p.borrow_mut() = path);
+            LAST_HEADERS.with(|h| *h.borrow_mut() = headers);
+            LAST_BODY.with(|b| *b.borrow_mut() = body);
+            CURRENT_CONN.with(|c| *c.borrow_mut() = Some(stream));
+            true
+        }
+        None => false,
+    }
+}
+
 /// Accept the next connection and parse the HTTP request.
 /// Blocks until a connection arrives. Returns true on success, false on error.
 /// After success, call loft_tcp_method/path/body to read the request fields.
@@ -218,6 +264,9 @@ unsafe fn write_response(status: u16, content_type: &str, body_ptr: *const u8, b
         "HTTP/1.1 {status} {status_text}\r\n\
          Content-Length: {}\r\n\
          Content-Type: {content_type}\r\n\
+         Cache-Control: no-store, no-cache, must-revalidate, max-age=0\r\n\
+         Pragma: no-cache\r\n\
+         Expires: 0\r\n\
          Connection: close\r\n\r\n\
          {body}",
         body.len()
@@ -661,6 +710,7 @@ pub unsafe extern "C" fn n_ws_broadcast(
 loft_ffi::loft_register! {
     n_tcp_listen,
     n_tcp_accept,
+    n_tcp_accept_nonblocking,
     n_tcp_method,
     n_tcp_path,
     n_tcp_body,
