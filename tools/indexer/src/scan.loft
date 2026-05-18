@@ -1477,6 +1477,13 @@ fn emit_broken_links_array(links: vector<LinkRef>) -> integer {
 }
 
 fn main() {
+    // Optional per-phase timing.  Set LOFT_INDEX_PROFILE=1 to
+    // print microsecond deltas for each major phase to stderr.
+    // Default off — keeps `make index`'s stderr clean.
+    profile = env_variable("LOFT_INDEX_PROFILE") == "1";
+    t_start = ticks();
+    t_prev = t_start;
+
     // Phase 03 broken-tag validator: load valid PROBLEMS row IDs
     // and plan-dir number prefixes upfront, then check each scanned
     // ref against them.  Sets are passed to emit-time so each
@@ -1484,7 +1491,9 @@ fn main() {
     // tooling (`./scripts/idx broken`, the viewer's red-banner
     // surface) filters via `select(.valid == false)`.
     valid_pids = read_valid_pids();
+    if profile { t_now = ticks(); eprintln("  perf: read_valid_pids {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
     valid_plans = read_valid_plans();
+    if profile { t_now = ticks(); eprintln("  perf: read_valid_plans {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
 
     rows: vector<RawRef> = [];
     links: vector<LinkRef> = [];
@@ -1505,12 +1514,14 @@ fn main() {
             }
         }
     }
+    if profile { t_now = ticks(); eprintln("  perf: scan top-level files {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
     for src_root in source_roots() {
         files = walk_tree(src_root);
         for fp in files {
             scan_file(fp, rows, links);
         }
     }
+    if profile { t_now = ticks(); eprintln("  perf: walk + scan source roots {(t_now - t_prev) / 1000}ms (rows={rows.len()} links={links.len()})"); t_prev = t_now; }
     // Output mode dispatch.  `LOFT_INDEX_BUCKETED=1` switches
     // to the `index/tags.json`-shape JSON object emission
     // (per-tag arrays + `links` map); the default stays JSON
@@ -1521,7 +1532,9 @@ fn main() {
     if bucketed == "1" {
         s = Summary {};
         emit_bucketed(rows, links, valid_pids, valid_plans, s);
+        if profile { t_now = ticks(); eprintln("  perf: emit_bucketed {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
         emit_summary(s);
+        if profile { t_end = ticks(); eprintln("  perf: total {(t_end - t_start) / 1000}ms"); }
         return;
     }
     // Second pass: emit JSON Lines with validity.  Validity is
