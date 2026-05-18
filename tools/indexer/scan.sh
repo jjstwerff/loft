@@ -24,6 +24,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
 
+# Force byte-oriented locale so BSD awk (macOS default) doesn't try
+# multibyte conversion on UTF-8 input.  doc/claude/PROBLEMS.md and
+# friends use em-dashes (`—`), curly quotes, and other multibyte
+# codepoints inside body text; without LC_ALL=C, `tolower()` /
+# `gsub()` raise `towc: multibyte conversion failure` and exit
+# non-zero, breaking `make index` under `set -euo pipefail`.  Byte-
+# oriented operation is fine: every awk pattern here is ASCII (table
+# pipes, P-issue prefixes, dates), and `length` / `substr` / `index`
+# operate on bytes uniformly across gawk and BSD awk so output stays
+# stable across platforms.
+export LC_ALL=C
+
 if ! command -v jq >/dev/null 2>&1; then
   echo "tools/indexer/scan.sh: needs jq (apt install jq / dnf install jq)" >&2
   exit 1
