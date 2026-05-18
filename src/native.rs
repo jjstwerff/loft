@@ -130,6 +130,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_arguments", n_arguments),
     ("n_ymd_days_ago", n_ymd_days_ago),
     ("n_mtime", n_mtime),
+    ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
     ("n_program_directory", n_program_directory),
@@ -765,6 +766,18 @@ fn n_mtime(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let result = Stores::os_mtime_native(v_path.str());
     stores.put(stack, result);
+}
+
+/// Write `text` to stderr — companion to `print()` / `println()`
+/// which both go to stdout.  Use to separate machine-readable
+/// output (JSON, structured data) on stdout from human-readable
+/// status / summary / progress lines.  Driver: @PLAN37 phase 07's
+/// `scan.loft` cutover writes `index/tags.json` to stdout, summary
+/// stats to stderr — `make index > index/tags.json` then puts JSON
+/// in the file while still showing the summary on screen.
+fn n_eprint(stores: &mut Stores, stack: &mut DbRef) {
+    let v = *stores.get::<Str>(stack);
+    eprint!("{}", v.str());
 }
 
 fn n_directory(stores: &mut Stores, stack: &mut DbRef) {

@@ -1045,6 +1045,20 @@ pub fn println(v1: text) {
 }
 #impure(host_io)
 
+// Writes v to standard ERROR without a newline.
+// Companion to print() — use to separate human-readable status
+// / progress / summary lines from machine-readable stdout
+// (JSON, structured data piped to downstream consumers).
+pub fn eprint(v1: text);
+#rust"eprint!(\"{{}}\", @v1)"
+#impure(host_io)
+
+// Writes v followed by a newline to standard ERROR.
+pub fn eprintln(v1: text) {
+  eprint("{v1}\n");
+}
+#impure(host_io)
+
 type keys_definition;
 fn OpIterate(data: reference, on: const u8, arg: const u16, keys: const keys_definition, from_key: const u8, till_key: const u8) -> integer;
 fn OpStep(state_var: const u16, data: reference, on: const u8, arg: const u16) -> reference[data];

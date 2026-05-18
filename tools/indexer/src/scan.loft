@@ -808,6 +808,49 @@ fn is_fence_marker(stripped: text) -> text {
     ""
 }
 
+// Counter struct for the trailing summary stats line (sub-commit G).
+// Each `emit_*` function takes one and increments as it emits, so
+// the summary at end-of-main can report exact counts without a
+// separate re-walk pass.  Mirrors the count fields scan.sh's tail
+// `echo` block computes via `jq '.X | length'`.
+struct Summary {
+    distinct_tags: integer not null,
+    new_form: integer not null,
+    legacy_form: integer not null,
+    total_refs: integer not null,
+    link_targets: integer not null,
+    inbound_links: integer not null,
+    problems_open: integer not null,
+    problems_recent: integer not null,
+    plans_active: integer not null,
+    plans_future: integer not null,
+    plans_deferred: integer not null,
+    plans_recent: integer not null,
+    lib_plans_future: integer not null,
+    broken_refs: integer not null,
+    broken_links: integer not null,
+}
+
+// Print the summary stats line(s) to stderr — companion to the
+// JSON-on-stdout emit.  `make index` redirects stdout to
+// `index/tags.json`; the summary still shows on the terminal.
+// Format matches scan.sh's tail `echo` block (whitespace-
+// significant; the leading two-space indent is grep-friendly).
+fn emit_summary(s: Summary) {
+    eprintln("tools/indexer/scan.loft: wrote index/tags.json");
+    eprintln("  {s.distinct_tags} distinct tags ({s.new_form} new-form, {s.legacy_form} legacy-form)");
+    eprintln("  {s.total_refs} total references");
+    eprintln("  {s.link_targets} link targets ({s.inbound_links} inbound links)");
+    eprintln("  {s.problems_open} open P-issues, {s.problems_recent} closed in last 30 days");
+    eprintln("  plans: {s.plans_active} active, {s.plans_future} future, {s.plans_deferred} deferred, {s.plans_recent} finished in last 60 days");
+    if s.broken_refs > 0 {
+        eprintln("  {s.broken_refs} broken @-references — run: ./scripts/idx broken");
+    }
+    if s.broken_links > 0 {
+        eprintln("  {s.broken_links} broken markdown links — run: ./scripts/idx broken-links");
+    }
+}
+
 // Emit the bucketed `index/tags.json`-shape JSON object on
 // stdout.  Sorts tag names + link targets alphabetically (jq's
 // `keys[]` always sorts so this matches scan.sh's output
@@ -823,7 +866,8 @@ fn is_fence_marker(stripped: text) -> text {
 // stay in the bash post-processor for now and merge over
 // the loft output via `jq +` when the full pipeline is wired.
 fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
-                 valid_pids: vector<text>, valid_plans: vector<text>) {
+                 valid_pids: vector<text>, valid_plans: vector<text>,
+                 s: Summary) {
     sets = DistinctSets {};
     for r in rows {
         if sets.tags[r.tag] == null {
@@ -833,6 +877,18 @@ fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
     for lr in links {
         if sets.links[lr.target] == null {
             sets.links += [TagSlot{name: lr.target}];
+        }
+    }
+    // Populate summary counts that scan with the existing data.
+    s.total_refs = rows.len();
+    s.inbound_links = links.len();
+    s.link_targets = sets.links.len();
+    s.distinct_tags = sets.tags.len();
+    for slot in sets.tags {
+        if slot.name.starts_with("legacy:") {
+            s.legacy_form = s.legacy_form + 1;
+        } else {
+            s.new_form = s.new_form + 1;
         }
     }
     println("{{");
@@ -872,56 +928,55 @@ fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
     if !first { println(","); }
     first = false;
     println("  \"broken\": [");
-    emit_broken_array(rows, valid_pids, valid_plans);
+    s.broken_refs = emit_broken_array(rows, valid_pids, valid_plans);
     println("");
     println("  ]");
     // Broken markdown links.  Same always-emit discipline.
     println(",");
     println("  \"broken_links\": [");
-    emit_broken_links_array(links);
+    s.broken_links = emit_broken_links_array(links);
     println("");
     println("  ]");
     // problems_open — parsed from PROBLEMS.md severity column.
     println(",");
     println("  \"problems_open\": [");
-    emit_problems_open_array();
+    s.problems_open = emit_problems_open_array();
     println("");
     println("  ]");
     // problems_recent — closed P-issues from the last 30 days,
     // sorted by close-date descending.
     println(",");
     println("  \"problems_recent\": [");
-    emit_problems_recent_array();
+    s.problems_recent = emit_problems_recent_array();
     println("");
     println("  ]");
     // plans_active / plans_future / plans_deferred / lib_plans_future
-    // — alphabetical {slug, path, title} per plan dir.  plans_recent
-    // ships in sub-commit F (needs the mtime cutoff variant).
+    // — alphabetical {slug, path, title} per plan dir.
     println(",");
     println("  \"plans_active\": [");
-    emit_plans_bucket("doc/claude/plans");
+    s.plans_active = emit_plans_bucket("doc/claude/plans");
     println("");
     println("  ]");
     println(",");
     println("  \"plans_future\": [");
-    emit_plans_bucket("doc/claude/plans/future");
+    s.plans_future = emit_plans_bucket("doc/claude/plans/future");
     println("");
     println("  ]");
     println(",");
     println("  \"plans_deferred\": [");
-    emit_plans_bucket("doc/claude/plans/deferred");
+    s.plans_deferred = emit_plans_bucket("doc/claude/plans/deferred");
     println("");
     println("  ]");
     println(",");
     println("  \"lib_plans_future\": [");
-    emit_plans_bucket("doc/claude/lib_plans/future");
+    s.lib_plans_future = emit_plans_bucket("doc/claude/lib_plans/future");
     println("");
     println("  ]");
     // plans_recent — finished plans modified in last 60 days.
     // Uses mtime(path) + now() to compute the window.
     println(",");
     println("  \"plans_recent\": [");
-    emit_plans_recent_bucket("doc/claude/plans/finished", 60 * 86400);
+    s.plans_recent = emit_plans_recent_bucket("doc/claude/plans/finished", 60 * 86400);
     println("");
     println("  ]");
     println("");
@@ -999,7 +1054,7 @@ fn tag_is_broken(tag: text, valid_pids: vector<text>, valid_plans: vector<text>)
 // `"broken": [ ... ]` brackets so this prints only the inner
 // objects, comma-separated.  Mirrors scan.sh's BROKEN_JSON shape.
 fn emit_broken_array(rows: vector<RawRef>, valid_pids: vector<text>,
-                     valid_plans: vector<text>) {
+                     valid_plans: vector<text>) -> integer {
     distinct = DistinctSets {};
     for r in rows {
         if !tag_is_broken(r.tag, valid_pids, valid_plans) { continue; }
@@ -1015,9 +1070,11 @@ fn emit_broken_array(rows: vector<RawRef>, valid_pids: vector<text>,
         }
     }
     first = true;
+    count = 0;
     for slot in distinct.tags {
         if !first { print(","); }
         first = false;
+        count = count + 1;
         print("    {{\"tag\":\"{slot.name}\",\"refs\":[");
         ref_first = true;
         for r in rows {
@@ -1028,6 +1085,7 @@ fn emit_broken_array(rows: vector<RawRef>, valid_pids: vector<text>,
         }
         print("]}}");
     }
+    count
 }
 
 // Emit the `broken_links` array contents: one `{target, refs: ["file:line", ...]}`
@@ -1177,18 +1235,21 @@ fn collect_plans_dir(dir_path: text, set: PlanSet) {
 
 // Emit `[{slug, path, title}, ...]` for the given plan dir layer.
 // Caller writes the surrounding `"<key>": [` / `]`.
-fn emit_plans_bucket(dir_path: text) {
+fn emit_plans_bucket(dir_path: text) -> integer {
     set = PlanSet {};
     collect_plans_dir(dir_path, set);
     first = true;
+    count = 0;
     for e in set.entries {
         if !first { print(","); }
         first = false;
+        count = count + 1;
         esc_title = json_escape(e.title);
         esc_path = json_escape(e.path);
         esc_slug = json_escape(e.slug);
         print("\n    {{\"slug\":\"{esc_slug}\",\"path\":\"{esc_path}\",\"title\":\"{esc_title}\"}}");
     }
+    count
 }
 
 // Walk `dir_path`, include only subdirs whose mtime is within
@@ -1216,18 +1277,21 @@ fn collect_plans_dir_recent(dir_path: text, set: PlanSet, window_secs: integer) 
     }
 }
 
-fn emit_plans_recent_bucket(dir_path: text, window_secs: integer) {
+fn emit_plans_recent_bucket(dir_path: text, window_secs: integer) -> integer {
     set = PlanSet {};
     collect_plans_dir_recent(dir_path, set, window_secs);
     first = true;
+    count = 0;
     for e in set.entries {
         if !first { print(","); }
         first = false;
+        count = count + 1;
         esc_title = json_escape(e.title);
         esc_path = json_escape(e.path);
         esc_slug = json_escape(e.slug);
         print("\n    {{\"slug\":\"{esc_slug}\",\"path\":\"{esc_path}\",\"title\":\"{esc_title}\"}}");
     }
+    count
 }
 
 // True when severity matches the bash regex
@@ -1284,9 +1348,9 @@ struct RecentSet {
     items: sorted<ProblemRecent[-closed]>,
 }
 
-fn emit_problems_recent_array() {
+fn emit_problems_recent_array() -> integer {
     f = file("doc/claude/PROBLEMS.md");
-    if f.format == Format.NotExists { return; }
+    if f.format == Format.NotExists { return 0; }
     cutoff = ymd_days_ago(30);
     set = RecentSet {};
     lines = f.lines();
@@ -1316,20 +1380,24 @@ fn emit_problems_recent_array() {
         i = i + 1;
     }
     first = true;
+    count = 0;
     for e in set.items {
         if !first { print(","); }
         first = false;
+        count = count + 1;
         esc_sum = json_escape(e.summary);
         print("\n    {{\"tag\":\"{e.tag}\",\"line\":{e.line_no},\"closed\":\"{e.closed}\",\"summary\":\"{esc_sum}\"}}");
     }
+    count
 }
 
-fn emit_problems_open_array() {
+fn emit_problems_open_array() -> integer {
     f = file("doc/claude/PROBLEMS.md");
-    if f.format == Format.NotExists { return; }
+    if f.format == Format.NotExists { return 0; }
     lines = f.lines();
     nl = lines.len();
     first = true;
+    count = 0;
     i = 0;
     while i < nl {
         line = lines[i];
@@ -1346,6 +1414,7 @@ fn emit_problems_open_array() {
         if fix.len() > 280 { fix = fix[0..277] + "..."; }
         if !first { print(","); }
         first = false;
+        count = count + 1;
         line_no = i + 1;
         esc_sev = json_escape(severity);
         esc_sum = json_escape(summary);
@@ -1353,9 +1422,10 @@ fn emit_problems_open_array() {
         print("\n    {{\"tag\":\"@P{id_text}\",\"line\":{line_no},\"severity\":\"{esc_sev}\",\"summary\":\"{esc_sum}\",\"fix\":\"{esc_fix}\"}}");
         i = i + 1;
     }
+    count
 }
 
-fn emit_broken_links_array(links: vector<LinkRef>) {
+fn emit_broken_links_array(links: vector<LinkRef>) -> integer {
     distinct = DistinctSets {};
     for lr in links {
         if link_target_exists(lr.target) { continue; }
@@ -1364,9 +1434,11 @@ fn emit_broken_links_array(links: vector<LinkRef>) {
         }
     }
     first = true;
+    count = 0;
     for slot in distinct.tags {
         if !first { print(","); }
         first = false;
+        count = count + 1;
         print("    {{\"target\":\"{slot.name}\",\"refs\":[");
         ref_first = true;
         for lr in links {
@@ -1377,6 +1449,7 @@ fn emit_broken_links_array(links: vector<LinkRef>) {
         }
         print("]}}");
     }
+    count
 }
 
 fn main() {
@@ -1422,7 +1495,9 @@ fn main() {
     // disk fallback) keep working unchanged.
     bucketed = env_variable("LOFT_INDEX_BUCKETED");
     if bucketed == "1" {
-        emit_bucketed(rows, links, valid_pids, valid_plans);
+        s = Summary {};
+        emit_bucketed(rows, links, valid_pids, valid_plans, s);
+        emit_summary(s);
         return;
     }
     // Second pass: emit JSON Lines with validity.  Validity is
