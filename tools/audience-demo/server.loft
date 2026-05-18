@@ -1,57 +1,225 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLAN36 phase 0/1 bridge — minimal observability server.
+// @PLAN36 phase 1 MVP — minimal multi-client audience server.
 //
-// Listens on a single TCP port, accepts WebSocket clients, and prints
-// every connect + message it receives.  Does NOT maintain state, does
-// NOT broadcast, does NOT respond — its single job is to make
-// client-side WebSocket emission visible so we can validate the wire
-// before building the real phase-1 server.
+// Holds a world of painted hexes, accepts seed/clear/color_select events
+// from any number of clients, broadcasts every change to all clients
+// (including the sender as confirmation), and replays the current world
+// to each new connection.
 //
-// Wire format inherited from lib/server: text frames `<msg_id>:<payload>`
-// where msg_id is a small integer enum.  This server doesn't interpret
-// either; it just prints them.
+// Scope vs the full phase 1 spec (doc/claude/plans/36-audience-generative-art/
+// 01-server-state.md):
+//   ✅ 1.1 simplified — single-hash world; chunk model deferred
+//   ✅ 1.2 event dispatch by msg_id (not JSON yet — spec wants JSON
+//          in / binary out; MVP uses lib/server's native <msg_id>:<payload>
+//          text framing for both directions)
+//   ✅ 1.3 minimal player state (cid → color)
+//   ❌ 1.4 tick loop + decay — deferred to phase 1 step 2
+//   ✅ 1.5 deltas emitted per event (event-driven, not tick-driven yet)
+//   ✅ 1.6 broadcast helpers — lib/server provides
+//   ✅ 1.7 active-player signal — emitted on color_select for now
+//   ❌ 1.8 multi-client load test — deferred
+//   ❌ 1.9 crash-resistance — deferred (lib/server absorbs disconnects;
+//          malformed frames logged by lib/server's run() and dropped)
+//
+// Wire schema (lib/server's `<msg_id>:<payload>` text frames both ways):
+//
+//   client → server
+//     1 = seed         payload "q,r,color"          (color 1-9)
+//     2 = clear        payload "q,r"
+//     3 = color_select payload "color"              (color 0-9; 0 = cleared)
+//
+//   server → client
+//     4 = delta        payload "q,r,color"          (color 0 = cell empty)
+//     5 = active       payload "q,r"                (jump-to-active hint)
 //
 // Run:
 //   ./target/release/loft --no-warnings --lib lib/ tools/audience-demo/server.loft
 //
-// Then open tools/audience-demo/index.html in a browser (served from
-// any local HTTP — `python3 -m http.server 8765 -d tools` works).
-// Each tap on the phone client should print one line on the server.
+// Then open tools/audience-demo/index.html in multiple browser tabs.
+// Each tap on one client paints + broadcasts; every tab redraws.
 
 use server;
 
-// Pretty-print one event with a uniform prefix.  Leaf helpers go FIRST
-// so @P281 (pass-1 caller-before-callee return-type inference) doesn't
-// bite — declaring stamp() before its callers means consumers see the
-// concrete `text` return type instead of unknown(0).
-fn stamp(prefix: text, cid: integer, body: text) -> text {
-  "[{prefix} cid={cid}] {body}"
+// ── Leaf helpers — TOP of file per @P281 (pass-1 fn return type) ─────────────
+
+// Hex cell — stored under key "q,r" in a hash on the World struct.
+struct Cell {
+  ck:    text not null,         // "q,r" — primary key in World.cells
+  color: integer not null,      // 0 = empty (but empty cells are GC'd on clear),
+                                // 1-9 = palette index
+}
+
+// Track each connected client's last-known active color so we can
+// emit active-player signals when somebody picks a colour.  No cleanup
+// on disconnect — lib/server absorbs those silently and `cid` slots
+// are reused; an old entry's color gets overwritten by the next user
+// of that cid via color_select.
+struct Player {
+  pk:    integer not null,      // cid (primary key)
+  color: integer not null,      // 0 = cleared, 1-9 = palette
+  lq:    integer not null,      // last-painted q
+  lr:    integer not null,      // last-painted r
+}
+
+struct World {
+  cells:   hash<Cell[ck]>,
+  players: hash<Player[pk]>,
+}
+
+// Format a "q,r" key.  Parsing back is a single find(",") + slice.
+fn cell_key(q: integer, r: integer) -> text {
+  "{q},{r}"
+}
+
+// Split "q,r" into two integers.  Returns (q, r) — invariant:
+// payloads we generate ourselves always have the comma, so the
+// branch with no comma maps to (0, 0) as a safe default.  Early-
+// return with a tuple literal trips the typer (Internal: tuple
+// literal in return position synthesizes a different `__tuple<...>`
+// name than the function's declared tuple return type), so use
+// expression-returning if-else instead.
+fn parse_qr(payload: text) -> (integer, integer) {
+  i = payload.find(",");
+  if i == null {
+    (0, 0)
+  } else {
+    q = payload[..i] as integer;
+    r = payload[i + 1..] as integer;
+    (q, r)
+  }
+}
+
+// Split "q,r,color" into three integers.  Same defensive default +
+// same expression-shaped workaround for the tuple-early-return issue.
+fn parse_qrc(payload: text) -> (integer, integer, integer) {
+  i = payload.find(",");
+  if i == null {
+    (0, 0, 0)
+  } else {
+    q = payload[..i] as integer;
+    rest = payload[i + 1..];
+    j = rest.find(",");
+    if j == null {
+      (q, 0, 0)
+    } else {
+      r = rest[..j] as integer;
+      c = rest[j + 1..] as integer;
+      (q, r, c)
+    }
+  }
+}
+
+// Emit a delta over the wire — msg_id 4 with "q,r,color".  Color 0
+// means the cell became empty (server-side this happens on `clear`
+// or own-color self-erase).
+fn delta_frame(q: integer, r: integer, color: integer) -> text {
+  "4:{q},{r},{color}"
+}
+
+fn active_frame(q: integer, r: integer) -> text {
+  "5:{q},{r}"
+}
+
+// Reply to a new connect by sending the current world state to that
+// client only.  Each non-empty cell becomes one msg_id-4 frame.  Phase
+// 1 step 2 will batch these into a binary world_snapshot for scale.
+fn replay_world_to(srv: server::Server, cid: integer, world: World) {
+  for cell in world.cells {
+    (cq, cr) = parse_qr(cell.ck);
+    srv.send_to(cid, delta_frame(cq, cr, cell.color));
+  }
+}
+
+// Handle a `seed` event.  Returns the colour written (0 if no-op).
+// own-color tap → erase; empty tap → paint; other-color tap → ignore.
+fn handle_seed(world: World, cid: integer, q: integer, r: integer, color: integer) -> integer {
+  k = cell_key(q, r);
+  existing = world.cells[k];
+  if existing != null {
+    if existing.color == color {
+      // Own-color tap: erase.  Server semantics — once a cell is taken
+      // by a colour, the same colour clicker removes it.  Cross-player
+      // colour reuse is fine; we don't track who placed it.
+      world.cells[k] = null;
+      return 0;
+    }
+    // Other-color: ignore.
+    return -1;
+  }
+  // Empty: paint.
+  world.cells += [Cell{ck: k, color: color}];
+  // Update player's last-active location.
+  p = world.players[cid];
+  if p != null {
+    p.lq = q;
+    p.lr = r;
+  }
+  color
 }
 
 fn main() {
   port = 18083;
-  println("audience-demo server: listening on ws://localhost:{port}/");
-  println("audience-demo server: (press Ctrl-C to stop; lib/server absorbs disconnects silently)");
+  println("audience server: listening on ws://localhost:{port}/");
+  println("audience server: holds world state + broadcasts every change");
 
   srv = server::listen(port);
   if srv.handle < 0 {
-    println("audience-demo server: FAILED to listen on port {port}");
+    println("audience server: FAILED to listen on port {port}");
     return;
   }
 
+  world = World{cells: [], players: []};
+
   srv.run(fn(ev: server::WsEvent) {
     if ev.connected {
-      println(stamp("connect", ev.cid, ""));
+      // New client — record + replay current world state.
+      println("audience server: [connect cid={ev.cid}]");
+      if world.players[ev.cid] == null {
+        world.players += [Player{pk: ev.cid, color: 0, lq: 0, lr: 0}];
+      }
+      replay_world_to(srv, ev.cid, world);
     } else if ev.message {
-      // Print msg_id + payload.  No interpretation — the goal is to
-      // see exactly what arrives over the wire.
-      label = "msg_id={ev.msg_id} payload={ev.payload}";
-      println(stamp("msg", ev.cid, label));
+      if ev.msg_id == 1 {
+        // seed: "q,r,color"
+        (q, r, c) = parse_qrc(ev.payload);
+        if c >= 1 && c <= 9 {
+          result = handle_seed(world, ev.cid, q, r, c);
+          if result >= 0 {
+            // Successful paint OR own-color erase — broadcast the new
+            // cell state (result is the new colour: 0 for erase,
+            // colour for paint).
+            srv.broadcast(delta_frame(q, r, result));
+          }
+        }
+      } else if ev.msg_id == 2 {
+        // clear: "q,r" — unconditional remove (no colour-ownership check
+        // on the explicit clear path).
+        (q, r) = parse_qr(ev.payload);
+        k = cell_key(q, r);
+        if world.cells[k] != null {
+          world.cells[k] = null;
+          srv.broadcast(delta_frame(q, r, 0));
+        }
+      } else if ev.msg_id == 3 {
+        // color_select: "color"
+        c = ev.payload as integer;
+        p = world.players[ev.cid];
+        if p == null {
+          world.players += [Player{pk: ev.cid, color: c, lq: 0, lr: 0}];
+        } else {
+          p.color = c;
+        }
+        // Emit active-player signal so other clients' jump-to-active
+        // button can flash toward this player.  Use the player's
+        // last-active hex; if they haven't painted yet, use (0, 0).
+        if p != null {
+          srv.broadcast(active_frame(p.lq, p.lr));
+        } else {
+          srv.broadcast(active_frame(0, 0));
+        }
+      }
     }
-    // ev.connected=false AND ev.message=false → disconnected (lib/server
-    // absorbs the kind=2 frames silently; no observable event reaches
-    // here for them, but the branch is documented for completeness).
   });
 }

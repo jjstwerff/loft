@@ -324,11 +324,35 @@ function wsConnect() {
     // handle the reconnect schedule.
   });
   s.addEventListener('message', (e) => {
-    // Server→client frames (phase 1 will format these).  For now just
-    // count them in the status line — no parsing yet.
+    // Server → client frames inherit the same `<msg_id>:<payload>` shape:
+    //   4:q,r,color   — world delta (one cell changed); color 0 = empty
+    //   5:q,r          — active-player signal (jump-to-active hint)
+    // Phase 1 step 2 will swap deltas to binary blobs; the wire id 4 stays
+    // semantically the same so the client parser only needs to add a
+    // binary-frame branch when that ships.
+    if (typeof e.data !== 'string') return;   // binary frames not yet sent
+    const colon = e.data.indexOf(':');
+    if (colon < 0) return;
+    const id = e.data.slice(0, colon) | 0;
+    const payload = e.data.slice(colon + 1);
+    if (id === 4) {
+      const parts = payload.split(',');
+      if (parts.length !== 3) return;
+      const q = parts[0] | 0, r = parts[1] | 0, c = parts[2] | 0;
+      if (c === 0) cells.delete(cellKey(q, r));
+      else cells.set(cellKey(q, r), c);
+      draw();
+    } else if (id === 5) {
+      // Active-player hint — flash the jump-to-active button.  The
+      // button's `.flash` class triggers the 3-pulse keyframe.
+      const btn = document.getElementById('jump-active');
+      btn.classList.remove('flash');
+      void btn.offsetWidth;          // reflow → re-trigger animation
+      btn.classList.add('flash');
+    }
     if (!wsConnect._rxCount) wsConnect._rxCount = 0;
     wsConnect._rxCount++;
-    setStatus('connected — ' + wsConnect._rxCount + ' frames received', 'ok');
+    setStatus(`connected — ${cells.size} cells, ${wsConnect._rxCount} frames`, 'ok');
   });
 }
 
