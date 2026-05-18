@@ -35,15 +35,32 @@
 
 use std::process::Command;
 
-/// `scripts/idx` is a bash script with no shebang-driven Windows
-/// launcher.  Spawning it directly via `Command::new("./scripts/idx")`
-/// returns Win32 error 193 ("not a valid Win32 application") because
-/// the OS tries to execute the script as a PE binary.  Build the
-/// command through `bash` instead — `bash` is on PATH on all three
-/// CI platforms (CI's `make index` step has already proved it).
+/// Run the loft-native `idx.loft` query binary instead of bash
+/// `scripts/idx`.  The bash script is the bootstrap path
+/// (documented in CLAUDE.md, used from machines without a built
+/// loft), but it has accumulated half a dozen cross-platform
+/// gotchas — BSD awk's UTF-8 panic on em-dashes, MSYS argv
+/// limits, Windows PE-format rejection of bash scripts,
+/// MSYS-vs-native-jq path translation, GNU-only `xargs -a` /
+/// `find -regex` / `stat -c %Y`, etc.  The loft port runs as a
+/// single native binary on every platform with consistent
+/// behaviour and short-circuits the entire portability surface.
+///
+/// `idx.loft`'s MVP covers the two queries the CI gate uses
+/// (`broken` and `broken-links`); the other queries (`tag:`,
+/// `prefix:`, `file:`, `incoming:`, `all`, `help`, excerpt
+/// flags) stay in the bash script until a consumer asks.
 fn idx_command(args: &[&str]) -> Command {
-    let mut cmd = Command::new("bash");
-    cmd.arg("./scripts/idx");
+    let mut cmd = Command::new("cargo");
+    cmd.args([
+        "run",
+        "--bin",
+        "loft",
+        "--release",
+        "--quiet",
+        "--",
+        "tools/indexer/src/idx.loft",
+    ]);
     for a in args {
         cmd.arg(a);
     }
@@ -75,8 +92,10 @@ fn index_hygiene_clean() {
         .expect("failed to spawn `bash ./scripts/idx broken`");
     assert!(
         broken_tags.status.success(),
-        "./scripts/idx broken exited {:?}",
-        broken_tags.status.code()
+        "./scripts/idx broken exited {:?}\nstdout:\n{}\nstderr:\n{}",
+        broken_tags.status.code(),
+        String::from_utf8_lossy(&broken_tags.stdout),
+        String::from_utf8_lossy(&broken_tags.stderr)
     );
     let tags_out = String::from_utf8_lossy(&broken_tags.stdout);
     assert_eq!(
@@ -220,8 +239,10 @@ fn index_hygiene_clean() {
         .expect("failed to spawn `bash ./scripts/idx broken-links`");
     assert!(
         broken_links.status.success(),
-        "./scripts/idx broken-links exited {:?}",
-        broken_links.status.code()
+        "./scripts/idx broken-links exited {:?}\nstdout:\n{}\nstderr:\n{}",
+        broken_links.status.code(),
+        String::from_utf8_lossy(&broken_links.stdout),
+        String::from_utf8_lossy(&broken_links.stderr)
     );
     let links_out = String::from_utf8_lossy(&broken_links.stdout);
     assert_eq!(
