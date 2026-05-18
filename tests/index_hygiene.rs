@@ -259,4 +259,67 @@ fn index_hygiene_clean() {
              the common off-by-one cases\n\
          See: doc/claude/plans/37-tracker-index/09-backlinks.md"
     );
+
+    // 4. Cross-OS portability sanity (@PLAN37 phase 07 pre-flight P2)
+    // — `index/tags.json` must not contain literal backslashes outside
+    // JSON `\"` escapes.  Catches the Windows-only "path separator
+    // drift" silent failure on every CI runner (not just Windows):
+    // when scan.loft runs on MSYS bash and emits `file().path` raw,
+    // the `path` / `file` / `target` fields contain `\` separators
+    // and the parity assertion breaks downstream.  Linux runners see
+    // the same assertion — fails early instead of waiting for a
+    // Windows CI cycle to surface the bug.
+    let tags_raw = std::fs::read_to_string("index/tags.json").expect("read index/tags.json");
+    // Allow `\\` (JSON-escaped backslash, e.g. inside a context string)
+    // and `\"` (escaped quote).  Anything else is a raw backslash that
+    // shouldn't be there.  Strip both, then count remaining backslashes.
+    let stripped = tags_raw.replace("\\\\", "").replace("\\\"", "");
+    let stray = stripped.matches('\\').count();
+    assert_eq!(
+        stray, 0,
+        "tags.json contains {stray} stray backslash(es) — Windows path-separator \
+         drift?  scan.loft should pass every path-shaped string through \
+         `normalize_path()` (see tools/indexer/src/scan.loft).  Sample: \
+         look for a `\\` outside `\\\\` / `\\\"` JSON escapes in tags.json."
+    );
+
+    // 5. PROBLEMS.md row-parser sanity (@PLAN37 phase 07 pre-flight P4)
+    // — every `problems_open` row's `severity` cell must start with a
+    // known severity prefix.  A literal `|` in a row body would shift
+    // column boundaries during pipe-split and put body text in the
+    // severity cell.  Both scan.sh and scan.loft share this edge case;
+    // this assertion catches the silent mis-categorisation.  bash side
+    // is canonical until sub-commit H; the assertion applies regardless.
+    // Use `jq -r` rather than pulling serde_json into this binary just
+    // for one assertion — jq is already a CI dep used elsewhere here.
+    let sev_jq = Command::new("jq")
+        .args(["-r", ".problems_open[] | .severity", "index/tags.json"])
+        .output()
+        .expect("spawn jq for severity check");
+    assert!(
+        sev_jq.status.success(),
+        "jq severity extraction failed: {}",
+        String::from_utf8_lossy(&sev_jq.stderr)
+    );
+    // Loose contains-check rather than starts_with — @P229's row has a
+    // legitimate custom severity (`(a) Closed; (b) Open (Windows)`) for
+    // its split-state windows-half-still-open situation, which doesn't
+    // start with any standard prefix but still contains a known severity
+    // word.  A literal `|` mid-body would produce garbage that contains
+    // NONE of these tokens.
+    let severity_tokens = [
+        "Low", "Medium", "High", "Critical", "Open", "open", "Closed", "closed", "partial",
+    ];
+    for sev in String::from_utf8_lossy(&sev_jq.stdout).lines() {
+        if sev.is_empty() {
+            continue;
+        }
+        let ok = severity_tokens.iter().any(|p| sev.contains(p));
+        assert!(
+            ok,
+            "problems_open row severity `{sev}` doesn't contain any known \
+             severity word — PROBLEMS.md row may contain a literal `|` that \
+             breaks pipe-split"
+        );
+    }
 }

@@ -627,6 +627,26 @@ fn emit_row(tag: text, file_path: text, line_no: integer, ctx_escaped: text, val
     "{{\"tag\":\"{tag}\",\"file\":\"{file_path}\",\"line\":{line_no},\"context\":\"{ctx_escaped}\",\"valid\":{valid_str}}}"
 }
 
+// Replace `\` separators with `/` so JSON `path` / `file` /
+// `target` fields stay cross-platform.  On Windows MSYS bash,
+// `file().path` returns native paths with `\`; the resulting
+// tags.json would differ from Linux/macOS byte-for-byte and
+// break the parity assertion downstream.  Called at every
+// `path` / `file` / `target` emit site to keep loft output
+// identical on all three platforms.  See @PLAN37 phase 07's
+// "Pre-flight problems P2" for the analysis.
+fn normalize_path(p: text) -> text {
+    out = "";
+    i = 0;
+    n = p.len();
+    while i < n {
+        c = p[i];
+        if c == '\\' { out += "/"; } else { out += "{c}"; }
+        i = i + 1;
+    }
+    out
+}
+
 // JSON-escape a text: backslash, double-quote, control chars
 // → `\\`, `\"`, `\n`, `\t`, `\r`, or `\u00XX`.  Loft text is
 // UTF-8 so non-ASCII codepoints pass through verbatim — JSON
