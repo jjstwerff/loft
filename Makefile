@@ -305,6 +305,10 @@ gallery:
 	wait $$(cat /tmp/loft_gallery_server.pid) 2>/dev/null || true; \
 	rm -f /tmp/loft_gallery_server.pid /tmp/loft_gallery_server.log; \
 	if [ $$failed -gt 0 ]; then exit 1; fi
+	@# Inject no-cache meta + content-hash version on every local asset
+	@# reference so post-deploy browsers fetch fresh.  See
+	@# scripts/cache_bust_html.py for rationale.
+	@python3 scripts/cache_bust_html.py >/dev/null
 	@echo "  [7/7] gallery ready — run 'make serve' and open http://localhost:8000/gallery.html"
 
 serve:
@@ -460,6 +464,11 @@ game:
 	fi; \
 	grep -q "<!DOCTYPE html>" doc/brick-buster.html || { echo "    FAIL: missing DOCTYPE"; exit 1; }; \
 	grep -q "loft_start" doc/brick-buster.html || { echo "    FAIL: missing loft_start entry"; exit 1; }
+	@# Inject no-cache meta + content-hash version on every local
+	@# asset reference so post-deploy browsers fetch fresh.  See
+	@# scripts/cache_bust_html.py for rationale (GitHub Pages doesn't
+	@# let us set custom HTTP headers; the only lever is the HTML).
+	@python3 scripts/cache_bust_html.py >/dev/null
 	@echo "  [7/7] Brick Buster ready."
 	@echo ""
 	@echo "    Open in your browser:"
