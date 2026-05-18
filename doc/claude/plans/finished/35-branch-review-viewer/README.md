@@ -590,7 +590,7 @@ freshness target.
   is the first non-test consumer.
 - [`lib_plans/future/08-server/README.md`](../../../lib_plans/future/08-server/README.md)
   — server-lib roadmap; viewer surfaces specific feature gaps.
-- [`lib_plans/future/01-regex/README.md`](../../../lib_plans/future/01-regex/README.md)
+- [`lib_plans/01-regex/README.md`](../../../lib_plans/01-regex/README.md)
   — regex would simplify markdown parsing; not blocking.
 - [`DEBUG.md`](../../../DEBUG.md) — gets the user-facing usage
   section in phase 07.
