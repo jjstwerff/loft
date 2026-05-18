@@ -306,6 +306,20 @@ pub fn mkdir_all(path: text) -> FileResult {
 // Returns FileResult.NotFound if the file does not exist; FileResult.IsDirectory
 // if the path is a directory; FileResult.Other if size is negative.
 
+// Modification time of `path` as Unix epoch SECONDS (integer —
+// same i64 representation as file.size).  Returns 0 on missing
+// file / IO error / pre-epoch dates — caller treats 0 as
+// "unknown" (matches scan.sh's `stat -c %Y || echo 0` fallback).
+// Takes a path string rather than a File handle so the native +
+// interp dispatch both use the same `n_mtime` registration.
+// Use for date-window filters like @PLAN37 phase 07's
+// `plans_recent` 60-day cutoff: pass the path, convert the
+// returned seconds back to YYYY-MM-DD, and compare
+// lexicographically against `ymd_days_ago(60)`.
+pub fn mtime(path: text) -> integer;
+#rust"Stores::os_mtime_native(@path)"
+#impure(host_io)
+
 pub fn set_file_size(self: File, size: integer) -> FileResult {
   if self.format == Format.Directory { return FileResult.IsDirectory }
   if self.format == Format.NotExists { return FileResult.NotFound }

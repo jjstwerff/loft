@@ -421,6 +421,23 @@ impl Stores {
         crate::wasm::host_fs_cwd()
     }
 
+    /// Modification time of `path` as Unix epoch SECONDS (i64).
+    /// Returns 0 on missing file, IO error, or pre-epoch dates.
+    /// SECONDS not milliseconds — matches scan.sh's `stat -c %Y`
+    /// / `stat -f %m` semantics so date-window filters
+    /// (plans_recent's 60-day cutoff) get the same boundary
+    /// behaviour as the bash port.  Use `ymd_days_ago(N)` for
+    /// the cutoff and convert the seconds-since-epoch to
+    /// YYYY-MM-DD for the lexicographic compare.
+    #[must_use]
+    pub fn os_mtime_native(path: &str) -> i64 {
+        std::fs::metadata(path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs() as i64)
+    }
+
     /// `YYYY-MM-DD` of today minus `days`, UTC.  Wraps the
     /// `days_to_ymd` algorithm in `src/logger.rs`.  Reused by the
     /// loft `ymd_days_ago(days)` builtin (interp + native via the

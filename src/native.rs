@@ -129,6 +129,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_9character_is_control", t_9character_is_control),
     ("n_arguments", n_arguments),
     ("n_ymd_days_ago", n_ymd_days_ago),
+    ("n_mtime", n_mtime),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
     ("n_program_directory", n_program_directory),
@@ -758,6 +759,12 @@ fn n_ymd_days_ago(stores: &mut Stores, stack: &mut DbRef) {
     stores.scratch.push(Stores::ymd_days_ago_native(v_days));
     let s = crate::keys::Str::new(stores.scratch.last().unwrap());
     stores.put(stack, s);
+}
+
+fn n_mtime(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let result = Stores::os_mtime_native(v_path.str());
+    stores.put(stack, result);
 }
 
 fn n_directory(stores: &mut Stores, stack: &mut DbRef) {
