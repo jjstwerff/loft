@@ -217,7 +217,7 @@ The 61 broken markdown links surfaced by phase 09's
 - After cleanup: 0 broken, 245 targets, 1267 links.
 
 The phase 09 follow-up section in
-`plans/37-tracker-index/09-backlinks.md` is updated to
+`plans/future/37-tracker-index/09-backlinks.md` is updated to
 mark this closed.
 
 ---

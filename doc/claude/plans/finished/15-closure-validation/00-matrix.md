@@ -104,7 +104,7 @@ resolution 2026-05-05; phase 05 pins it as a regression guard.
 "Implementation path" trimmed (legacy 6-step contemplated work
 that never landed because `Parts::ChildRec` + standard local-
 cleanup already covers the surface); ROADMAP.md / USER_FACING.md
-/ plans/future/36-audience-generative-art cross-refs updated;
+/ plans/36-audience-generative-art cross-refs updated;
 plan moved to `plans/finished/15-closure-validation/`.
 
 **Phase 06 finding — 1 new bug filed**: probing during closeout

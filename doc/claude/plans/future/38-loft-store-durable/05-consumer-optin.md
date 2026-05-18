@@ -90,7 +90,7 @@ contract locked here.
 
 ### Plan-36 design doc update (Tier 3)
 
-`plans/future/36-audience-generative-art/README.md`
+`plans/36-audience-generative-art/README.md`
 gains a § "Persistence" subsection:
 
 ```markdown
@@ -134,7 +134,7 @@ This is fast (<1 sec); ships in `make ci`.
 |---|---|
 | `tools/indexer/scan.loft` (@PLAN37 phase 07/08) | EXTEND: open store via `IntegrityOnly` |
 | `plans/future/32-tic-tac-toe/README.md` | ADD § Persistence (Tier 2) |
-| `plans/future/36-audience-generative-art/README.md` | ADD § Persistence (Tier 3) |
+| `plans/36-audience-generative-art/README.md` | ADD § Persistence (Tier 3) |
 | `tests/store_durable_smoke.rs` | NEW: per-tier consumer-shaped end-to-end smoke |
 
 ## Existing functions / utilities to reuse
@@ -181,6 +181,6 @@ This is fast (<1 sec); ships in `make ci`.
 - [Phases 01-03 — the tier APIs](README.md#phases)
 - [Phase 04 — stress test](04-stress-test.md) — the empirical contract this phase wires consumers into
 - [Phase 06 — closeout](06-closeout.md)
-- [Plan-37 phase 08](../../37-tracker-index/08-multi-project-deploy.md) — Tier 1 consumer
+- [Plan-37 phase 08](../37-tracker-index/08-multi-project-deploy.md) — Tier 1 consumer
 - [Plan-32 TTT v5](../32-tic-tac-toe/) — Tier 2 consumer
 - [Plan-36 audience demo](../36-audience-generative-art/) — Tier 3 consumer

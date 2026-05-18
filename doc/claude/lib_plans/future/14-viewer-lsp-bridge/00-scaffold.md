@@ -304,7 +304,7 @@ unverified guesses.
 
 - [Plan-14 README — Architecture](README.md#architecture) —
   the three IPC layers; phase 00 covers Layer B end-to-end.
-- [Plan-37 phase 07 — loft-native scanner](../../../plans/37-tracker-index/07-loft-native-scanner.md)
+- [Plan-37 phase 07 — loft-native scanner](../../../plans/future/37-tracker-index/07-loft-native-scanner.md)
   — sibling daemon-binary precedent (`loft-index`), same
   install + lifecycle pattern.
 - [`interprocess` docs](https://docs.rs/interprocess/) —

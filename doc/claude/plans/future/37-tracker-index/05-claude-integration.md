@@ -118,4 +118,4 @@ nudges the right pattern.
 ## Cross-references
 
 - [Phase 01 — CLI query wrapper](01-cli-query.md) — the lookup tool this phase recommends
-- [CLAUDE.md § Tracker tags](../../../../CLAUDE.md) — destination for the lookup-pattern subsection
+- [CLAUDE.md § Tracker tags](../../../../../CLAUDE.md) — destination for the lookup-pattern subsection

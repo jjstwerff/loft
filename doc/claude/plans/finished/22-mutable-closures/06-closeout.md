@@ -56,7 +56,7 @@ v6 — or new `tests/multiplayer_v6.rs`).
 
 ### Plan-36 audience-demo retrofit
 
-Plan-36 ([plans/future/36-audience-generative-art/](../../future/36-audience-generative-art/))
+Plan-36 ([plans/36-audience-generative-art/](../../future/36-audience-generative-art/))
 hasn't shipped its server yet.  Phase 06 ships the server using
 writable closures from day one.  Loft snippets projected to the
 audience read `state.X` instead of `state.inner.X` — the
@@ -104,7 +104,7 @@ green.
 | `default/01_code.loft` | Purity annotations on every user-callable fn |
 | `lib/game_protocol/examples/v6_server.loft` (new) | TTT v6 server using writable closures |
 | `tests/multiplayer_v6.rs` (new) | TTT v6 multiplayer tests |
-| `plans/future/36-audience-generative-art/server.loft` (new) | Plan-36 server using writable closures |
+| `plans/36-audience-generative-art/server.loft` (new) | Plan-36 server using writable closures |
 | `doc/claude/LIFETIME.md` | "Mutating closure capture" subsection |
 | `doc/claude/CHANGELOG_TECHNICAL.md` | Plan-22 retrospective entry |
 | `doc/claude/ROADMAP.md` | Remove @PLAN22 rows |
@@ -148,7 +148,7 @@ should report:
 |---|---|
 | Audit task pulls in scope creep — annotating every default/ fn is hours of work | Time-box: tighten only fns called on captured args in @PLAN22's matrix cells.  Other defaults stay `Unknown` (still correct, just over-conservative).  Full audit deferred to a separate ROADMAP item if it surfaces as a real cost. |
 | TTT v6 retrofit surfaces multiplayer-protocol bugs unrelated to closures | File as separate P-issues; don't block phase 06 closeout.  TTT v6 ships when v5's tests pass against v6 + writable-closure semantics; the protocol-correctness work belongs to @PLAN32. |
-| Plan-36 retrofit competes with @PLAN36's own scoping work | Plan-36 hasn't shipped its server.  Phase 06 ships the FIRST server cut.  Plan-36's later work builds on it.  Coordinated via plans/future/36-audience-generative-art README. |
+| Plan-36 retrofit competes with @PLAN36's own scoping work | Plan-36 hasn't shipped its server.  Phase 06 ships the FIRST server cut.  Plan-36's later work builds on it.  Coordinated via plans/36-audience-generative-art README. |
 | Doc closeout lands while ROADMAP cross-refs are stale | `scripts/check_doc_drift.sh` runs in CI; any stale refs surface immediately. |
 
 ## Cross-references

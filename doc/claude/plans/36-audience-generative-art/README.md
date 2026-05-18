@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 Open.  Scoped 2026-05-09 to support an upcoming local-meetup talk
 to game creators + art enthusiasts.  Sibling presentation plan at
-[`../../../presentations/audience-generative-art/`](../../../presentations/audience-generative-art/)
+[`../../../presentations/audience-generative-art/`](../../presentations/audience-generative-art/)
 owns the talk shape, slides, and audience-participation flow.
 This plan owns the **development work** the demo needs.
 
@@ -273,7 +273,7 @@ information from the prior phase, not pre-committed.
 | **CI-3** | Phase 2 prototype (generation) | Simulated audience taps + generation algorithm produces visuals.  Both plant + crystal variants prototyped before this gate | Q1 (plant vs crystal — pick after SEEING both), Q3 (direction-bias: local vs global, picked from observed visual character) |
 | **CI-4** | Phase 3 (projector view + auto-camera) | End-to-end on demo machine: audience client → server → projector renders.  Auto-camera tuning observed in motion | Q6 (presenter special role: do the controls actually feel needed in practice?) |
 | **CI-5** | Phase 4 (hosting) | External machine reaches the server via the public URL; latency under acceptable threshold (~200ms round-trip) | (none — pure validation) |
-| **CI-6** | Phase 5 (talk content draft) | Slide deck + presenter script reviewed for narrative arc; presentation-side open questions resolved (see [`presentations/audience-generative-art/`](../../../presentations/audience-generative-art/)) | Decisions in sibling presentation plan |
+| **CI-6** | Phase 5 (talk content draft) | Slide deck + presenter script reviewed for narrative arc; presentation-side open questions resolved (see [`presentations/audience-generative-art/`](../../presentations/audience-generative-art/)) | Decisions in sibling presentation plan |
 | **CI-7** | Phase 6 (rehearsal) | Full dry run on demo hardware; backup recording tested as fallback path | **Ship or postpone** — explicit go/no-go with the user |
 
 ## Decision log
@@ -313,7 +313,7 @@ extensions.
 
 **Hard prereqs (sibling plan):**
 
-- [@PLAN34 — `lib/server` hardening](../34-server-hardening/README.md)
+- [@PLAN34 — `lib/server` hardening](../future/34-server-hardening/README.md)
   items (a), (b), (e):
   - (a) `srv.broadcast_binary()` / `srv.send_binary_to()` — the
     projector's world-snapshot + delta broadcasts depend on this.
@@ -339,14 +339,14 @@ extensions.
   generation script between rounds.  Without it, presenter
   restarts the script (acceptable; the talk script can frame
   "now let me change the rules and re-run").
-- `plans/07-error-messages` phases 4-7 — nicer errors if something
+- `plans/future/07-error-messages` phases 4-7 — nicer errors if something
   goes wrong on stage.  Not blocking; presenter has rehearsed
   fallback.
 - `plans/future/27-developer-experience` DX.1 / DX.3 — talk
   content overlaps with quick-start `examples/` and the "Learn
   loft in 30 minutes" walkthrough.  Can write the talk inline OR
   land both at once.
-- `plans/finished/22-mutable-closures` (shipped 2026-05-13) + the [TTT v6 retrofit](../32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures)
+- `plans/finished/22-mutable-closures` (shipped 2026-05-13) + the [TTT v6 retrofit](../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures)
   — drops the `Reference<T>.inner` ceremony from the server's
   pump callback so the loft snippets shown on stage during the
   "loft snippet highlights" beats read at their best.  If
@@ -373,7 +373,7 @@ for the 100-iteration tight-loop guards.
 
 **Wire-protocol primitives validated by TTT v5:**
 
-[`plans/future/32-tic-tac-toe`](../32-tic-tac-toe/README.md) § "Tic-tac-toe v5" carries the
+[`plans/future/32-tic-tac-toe`](../future/32-tic-tac-toe/README.md) § "Tic-tac-toe v5" carries the
 binary-frame extension to `lib/server` + `lib/web`, the
 session-tagged blob protocol, the N-client routing pattern,
 the catch-up recovery handler, and the sluggish-tempo tick-loop
@@ -392,7 +392,40 @@ infrastructure rather than co-developing it.
   dumb tap-emitter, not the full moros editor
 - `lib_plans/future/10-game-client` — not needed yet
 
-## Risks
+## Potential problem blockers — open P-issues that could bite
+
+Open P-issues in [PROBLEMS.md](../../PROBLEMS.md) that could surface
+while building / running the demo.  Each row carries the workaround
+and an assessment of demo-time impact.  If the demo hits one of
+these unexpectedly, fall back to the workaround first — fixing the
+underlying issue mid-build risks unrelated regressions.
+
+| P# | Subsystem | Demo impact | Workaround |
+|---|---|---|---|
+| **@P281** | parser (pass-1 fn return types) | **High** — any new demo file with a caller defined BEFORE its callee in the same file type-checks against `unknown(0)` and trips "Expect token ;".  Easy to hit when authoring fresh code under pressure. | Define call-graph leaves first; aliases bridge old names. Audit phase-1 server code with this rule before merging. |
+| **@P284** | both backends (for-loop float) | **Medium** — projector view's mesh iteration or world cell positions may use `vector<float>`; loop yields 3 values then garbage forever.  Triggers cleanly with `for f in v`; not always obvious. | Replace `for f in v` with `i = 0; while i < v.len() { ... v[i] ... i = i + 1; }`. |
+| **@P279** | typer (conditional reassign → unknown(0)) | **Medium** — typical text-building pattern in event handlers: `s = ""; if cond { s = ... }` consumed by something text-typed.  Easy to hit in phase 1 server code. | Add explicit `: text` to the binding consuming the reassigned variable. |
+| **@P277** | parser typer (sorted append type collision) | Low — only triggers on local `sorted<T[K]> = []; sorted += [T{...}]`.  Unlikely in demo code unless we add per-event sorted scratch. | Wrap the sorted in a one-field struct (see scan.loft's `DistinctSets`). |
+| **@P278** | parser (method chain after self-slice) | Low — only triggers on specific method-call shapes after self-slice rebind.  Unlikely in event-handler code. | Hoist the method chain into a helper fn taking the param by-value. |
+| **@P285** | typer (hash[key]==null warning misattribution) | Cosmetic only — typer mis-attributes "Redundant null check" warning to the inner key.  No runtime impact.  Will fire during dev when writing membership tests for the world / session hashes. | Ignore the warning. `if !hash[key]` sidesteps the shape; functionally equivalent. |
+| **@P282** | tooling (warnings to stdout under --native) | Low — only affects machine-readable consumers of the demo binary's stdout.  The projector view doesn't pipe stdout to anything machine-readable. | Run with `--no-warnings` for the on-stage projector binary. |
+
+### Recently fixed but worth knowing about
+
+- **wasm_gl integer-i64 arg widths** (closed 2026-05-18, commit
+  `3ecd13f8`) — `lib/graphics` gallery and any browser-side `gl_*`
+  consumer was bricked by misaligned argument reads since April.
+  Re-affects the demo ONLY if the projector view falls back to the
+  browser (which is the documented fallback if the native build
+  breaks on demo hardware).  The doc/pkg/loft_bg.wasm bundle is
+  fresh as of that commit.
+- **WebGL2 shader translation** (closed 2026-05-18, commit
+  `4cb19ae5`) — `lib/graphics/src/*.loft` ships shaders as
+  `#version 330 core` (desktop GLSL); WebGL2 needs GLSL ES 3.00.
+  Bridges in `doc/loft-gl.js` + `doc/loft-gl-wasm.js` translate
+  transparently.  Same browser-fallback caveat as above.
+
+### Risks (operational)
 
 | Risk | Mitigation |
 |---|---|
@@ -402,19 +435,20 @@ infrastructure rather than co-developing it.
 | Native projector view crashes mid-talk | Pre-recorded video backup of full demo; presenter narrates over it if needed |
 | Audience hesitates to participate ("am I supposed to tap?") | Presenter starts the demo by tapping their own phone; "look, my hex appeared.  Now everyone try." |
 | Generation script needs language features that don't exist yet | Lock the script's loft surface area early (phase 2 first cut); only use shipped features |
+| Open P-issue surfaces in fresh demo code unexpectedly | Follow workaround table above; defer fix to post-demo unless it blocks a rehearsed beat |
 
 ## See also
 
-- [`../../../presentations/audience-generative-art/`](../../../presentations/audience-generative-art/) —
+- [`../../../presentations/audience-generative-art/`](../../presentations/audience-generative-art/) —
   sibling presentation plan: talk shape, slides, audience flow
-- [`../../../presentations/par/`](../../../presentations/par/) —
+- [`../../../presentations/par/`](../../presentations/par/) —
   reference for slide-deck structure
 - [`../24-multiplayer-editor/`](../24-multiplayer-editor/) —
   adjacent plan (full multi-paint moros editor); this demo is a
   simpler subset
-- [`../../../lib_plans/future/08-server/`](../../../lib_plans/future/08-server/) —
+- [`../../../lib_plans/future/08-server/`](../../lib_plans/future/08-server/) —
   server library; this plan's phase 1 sharpens its scope
-- [`../../../lib_plans/future/13-scriptable-scenes/`](../../../lib_plans/future/13-scriptable-scenes/) —
+- [`../../../lib_plans/future/13-scriptable-scenes/`](../../lib_plans/future/13-scriptable-scenes/) —
   scriptable-scenes; this plan's phase 2 is its proof-of-concept
 - `lib/moros_editor/` — existing 3D hex editor (potential basis
   for phase 3 projector view)

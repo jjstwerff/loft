@@ -130,8 +130,8 @@ fn extract_f64_as_f32_vector(stores: &Stores, vref: &DbRef) -> js_sys::Float32Ar
 
 fn wgl_create_window(stores: &mut Stores, stack: &mut DbRef) {
     let _title = *stores.get::<Str>(stack);
-    let _height = *stores.get::<i32>(stack);
-    let _width = *stores.get::<i32>(stack);
+    let _height = *stores.get::<i64>(stack);
+    let _width = *stores.get::<i64>(stack);
     // WebGL context is created by JavaScript before WASM runs.
     // Just return true to indicate success.
     #[cfg(feature = "wasm")]
@@ -166,7 +166,7 @@ fn wgl_swap_buffers(_stores: &mut Stores, _stack: &mut DbRef) {
 }
 
 fn wgl_clear(_stores: &mut Stores, stack: &mut DbRef) {
-    let color = *_stores.get::<i32>(stack);
+    let color = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&color.into());
@@ -241,7 +241,7 @@ fn patch_shader(src: &str) -> String {
 }
 
 fn wgl_use_shader(_stores: &mut Stores, stack: &mut DbRef) {
-    let program = *_stores.get::<i32>(stack);
+    let program = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&program.into());
@@ -254,7 +254,7 @@ fn wgl_use_shader(_stores: &mut Stores, stack: &mut DbRef) {
 // ── Vertex upload + drawing ──────────────────────────────────────────────────
 
 fn wgl_upload_vertices(stores: &mut Stores, stack: &mut DbRef) {
-    let stride = *stores.get::<i32>(stack);
+    let stride = *stores.get::<i64>(stack);
     let data_ref = *stores.get::<DbRef>(stack);
     #[cfg(feature = "wasm")]
     {
@@ -271,8 +271,8 @@ fn wgl_upload_vertices(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_draw(_stores: &mut Stores, stack: &mut DbRef) {
-    let vertex_count = *_stores.get::<i32>(stack);
-    let vao = *_stores.get::<i32>(stack);
+    let vertex_count = *_stores.get::<i64>(stack);
+    let vao = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of2(&vao.into(), &vertex_count.into());
@@ -283,9 +283,9 @@ fn wgl_draw(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_draw_mode(_stores: &mut Stores, stack: &mut DbRef) {
-    let mode = *_stores.get::<i32>(stack);
-    let vertex_count = *_stores.get::<i32>(stack);
-    let vao = *_stores.get::<i32>(stack);
+    let mode = *_stores.get::<i64>(stack);
+    let vertex_count = *_stores.get::<i64>(stack);
+    let vao = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of3(&vao.into(), &vertex_count.into(), &mode.into());
@@ -296,9 +296,9 @@ fn wgl_draw_mode(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_draw_elements(_stores: &mut Stores, stack: &mut DbRef) {
-    let mode = *_stores.get::<i32>(stack);
-    let index_count = *_stores.get::<i32>(stack);
-    let vao = *_stores.get::<i32>(stack);
+    let mode = *_stores.get::<i64>(stack);
+    let index_count = *_stores.get::<i64>(stack);
+    let vao = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of3(&vao.into(), &index_count.into(), &mode.into());
@@ -321,7 +321,7 @@ fn wgl_draw_fullscreen_quad(_stores: &mut Stores, _stack: &mut DbRef) {
 fn wgl_set_uniform_mat4(stores: &mut Stores, stack: &mut DbRef) {
     let mat_ref = *stores.get::<DbRef>(stack);
     let name = *stores.get::<Str>(stack);
-    let program = *stores.get::<i32>(stack);
+    let program = *stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let mat = extract_f64_as_f32_vector(stores, &mat_ref);
@@ -335,7 +335,7 @@ fn wgl_set_uniform_mat4(stores: &mut Stores, stack: &mut DbRef) {
 fn wgl_set_uniform_float(stores: &mut Stores, stack: &mut DbRef) {
     let val = *stores.get::<f64>(stack);
     let name = *stores.get::<Str>(stack);
-    let program = *stores.get::<i32>(stack);
+    let program = *stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of3(&program.into(), &name.str().into(), &val.into());
@@ -346,9 +346,9 @@ fn wgl_set_uniform_float(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_set_uniform_int(stores: &mut Stores, stack: &mut DbRef) {
-    let val = *stores.get::<i32>(stack);
+    let val = *stores.get::<i64>(stack);
     let name = *stores.get::<Str>(stack);
-    let program = *stores.get::<i32>(stack);
+    let program = *stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of3(&program.into(), &name.str().into(), &val.into());
@@ -363,7 +363,7 @@ fn wgl_set_uniform_vec3(stores: &mut Stores, stack: &mut DbRef) {
     let y = *stores.get::<f64>(stack);
     let x = *stores.get::<f64>(stack);
     let name = *stores.get::<Str>(stack);
-    let program = *stores.get::<i32>(stack);
+    let program = *stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::new();
@@ -381,7 +381,7 @@ fn wgl_set_uniform_vec3(stores: &mut Stores, stack: &mut DbRef) {
 // ── GL state ─────────────────────────────────────────────────────────────────
 
 fn wgl_enable(_stores: &mut Stores, stack: &mut DbRef) {
-    let cap = *_stores.get::<i32>(stack);
+    let cap = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&cap.into());
@@ -392,7 +392,7 @@ fn wgl_enable(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_disable(_stores: &mut Stores, stack: &mut DbRef) {
-    let cap = *_stores.get::<i32>(stack);
+    let cap = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&cap.into());
@@ -403,8 +403,8 @@ fn wgl_disable(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_blend_func(_stores: &mut Stores, stack: &mut DbRef) {
-    let dst = *_stores.get::<i32>(stack);
-    let src = *_stores.get::<i32>(stack);
+    let dst = *_stores.get::<i64>(stack);
+    let src = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of2(&src.into(), &dst.into());
@@ -415,7 +415,7 @@ fn wgl_blend_func(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_cull_face(_stores: &mut Stores, stack: &mut DbRef) {
-    let face = *_stores.get::<i32>(stack);
+    let face = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&face.into());
@@ -437,10 +437,10 @@ fn wgl_depth_mask(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_viewport(_stores: &mut Stores, stack: &mut DbRef) {
-    let h = *_stores.get::<i32>(stack);
-    let w = *_stores.get::<i32>(stack);
-    let y = *_stores.get::<i32>(stack);
-    let x = *_stores.get::<i32>(stack);
+    let h = *_stores.get::<i64>(stack);
+    let w = *_stores.get::<i64>(stack);
+    let y = *_stores.get::<i64>(stack);
+    let x = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::new();
@@ -490,7 +490,7 @@ fn wgl_create_framebuffer(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_bind_framebuffer(_stores: &mut Stores, stack: &mut DbRef) {
-    let fbo = *_stores.get::<i32>(stack);
+    let fbo = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&fbo.into());
@@ -501,9 +501,9 @@ fn wgl_bind_framebuffer(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_framebuffer_texture(_stores: &mut Stores, stack: &mut DbRef) {
-    let tex = *_stores.get::<i32>(stack);
-    let attachment = *_stores.get::<i32>(stack);
-    let fbo = *_stores.get::<i32>(stack);
+    let tex = *_stores.get::<i64>(stack);
+    let attachment = *_stores.get::<i64>(stack);
+    let fbo = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of3(&fbo.into(), &attachment.into(), &tex.into());
@@ -514,8 +514,8 @@ fn wgl_framebuffer_texture(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_create_depth_texture(stores: &mut Stores, stack: &mut DbRef) {
-    let height = *stores.get::<i32>(stack);
-    let width = *stores.get::<i32>(stack);
+    let height = *stores.get::<i64>(stack);
+    let width = *stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of2(&width.into(), &height.into());
@@ -530,8 +530,8 @@ fn wgl_create_depth_texture(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_create_color_texture(stores: &mut Stores, stack: &mut DbRef) {
-    let height = *stores.get::<i32>(stack);
-    let width = *stores.get::<i32>(stack);
+    let height = *stores.get::<i64>(stack);
+    let width = *stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of2(&width.into(), &height.into());
@@ -565,8 +565,8 @@ fn wgl_load_texture(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_upload_canvas(stores: &mut Stores, stack: &mut DbRef) {
-    let height = *stores.get::<i32>(stack);
-    let width = *stores.get::<i32>(stack);
+    let height = *stores.get::<i64>(stack);
+    let width = *stores.get::<i64>(stack);
     let data_ref = *stores.get::<DbRef>(stack);
     #[cfg(feature = "wasm")]
     {
@@ -597,8 +597,8 @@ fn wgl_upload_canvas(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_bind_texture(_stores: &mut Stores, stack: &mut DbRef) {
-    let unit = *_stores.get::<i32>(stack);
-    let tex_id = *_stores.get::<i32>(stack);
+    let unit = *_stores.get::<i64>(stack);
+    let tex_id = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of2(&tex_id.into(), &unit.into());
@@ -609,7 +609,7 @@ fn wgl_bind_texture(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_delete_texture(_stores: &mut Stores, stack: &mut DbRef) {
-    let tex_id = *_stores.get::<i32>(stack);
+    let tex_id = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&tex_id.into());
@@ -622,7 +622,7 @@ fn wgl_delete_texture(_stores: &mut Stores, stack: &mut DbRef) {
 // ── Cleanup ──────────────────────────────────────────────────────────────────
 
 fn wgl_delete_shader(_stores: &mut Stores, stack: &mut DbRef) {
-    let program = *_stores.get::<i32>(stack);
+    let program = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&program.into());
@@ -633,7 +633,7 @@ fn wgl_delete_shader(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_delete_vao(_stores: &mut Stores, stack: &mut DbRef) {
-    let vao = *_stores.get::<i32>(stack);
+    let vao = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&vao.into());
@@ -644,7 +644,7 @@ fn wgl_delete_vao(_stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn wgl_delete_framebuffer(_stores: &mut Stores, stack: &mut DbRef) {
-    let fbo = *_stores.get::<i32>(stack);
+    let fbo = *_stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&fbo.into());
@@ -657,7 +657,7 @@ fn wgl_delete_framebuffer(_stores: &mut Stores, stack: &mut DbRef) {
 // ── Input ────────────────────────────────────────────────────────────────────
 
 fn wgl_key_pressed(stores: &mut Stores, stack: &mut DbRef) {
-    let key_code = *stores.get::<i32>(stack);
+    let key_code = *stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&key_code.into());
@@ -709,8 +709,8 @@ fn wgl_mouse_button(stores: &mut Stores, stack: &mut DbRef) {
 /// Save_png_raw(path, width, height, data) -> boolean
 fn wgl_save_png(stores: &mut Stores, stack: &mut DbRef) {
     let data_ref = *stores.get::<DbRef>(stack);
-    let height = *stores.get::<i32>(stack);
-    let width = *stores.get::<i32>(stack);
+    let height = *stores.get::<i64>(stack);
+    let width = *stores.get::<i64>(stack);
     let path = *stores.get::<Str>(stack);
     #[cfg(feature = "wasm")]
     {
@@ -801,7 +801,7 @@ fn wgl_load_font(stores: &mut Stores, stack: &mut DbRef) {
 fn wgl_measure_text(stores: &mut Stores, stack: &mut DbRef) {
     let size = *stores.get::<f64>(stack);
     let content = *stores.get::<Str>(stack);
-    let font_idx = *stores.get::<i32>(stack);
+    let font_idx = *stores.get::<i64>(stack);
     #[cfg(feature = "wasm")]
     {
         let width: f64 = FONTS.with(|fonts| {
@@ -830,7 +830,7 @@ fn wgl_measure_text(stores: &mut Stores, stack: &mut DbRef) {
 /// Gl_text_height(font, size) -> integer
 fn wgl_text_height(stores: &mut Stores, stack: &mut DbRef) {
     let size = *stores.get::<f64>(stack);
-    let _font_idx = *stores.get::<i32>(stack);
+    let _font_idx = *stores.get::<i64>(stack);
     stores.put(stack, (size * 1.2) as i64);
 }
 
@@ -840,7 +840,7 @@ fn wgl_rasterize_text_into(stores: &mut Stores, stack: &mut DbRef) {
     let buf_ref = *stores.get::<DbRef>(stack);
     let size = *stores.get::<f64>(stack);
     let content = *stores.get::<Str>(stack);
-    let font_idx = *stores.get::<i32>(stack);
+    let font_idx = *stores.get::<i64>(stack);
 
     #[cfg(not(feature = "wasm"))]
     {

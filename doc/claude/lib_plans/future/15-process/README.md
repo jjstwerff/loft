@@ -87,7 +87,7 @@ streaming variant is the bulk.  Tests + docs another day.
 
 ## Cross-references
 
-- [@PLAN37 phase 07](../../../plans/37-tracker-index/07-loft-native-scanner.md)
+- [@PLAN37 phase 07](../../../plans/future/37-tracker-index/07-loft-native-scanner.md)
   — driver use case (untracked-files parity).
 - [@PLAN35](../../../plans/finished/35-branch-review-viewer/README.md)
   — `tools/viewer/refresh.sh` is the largest pre-existing

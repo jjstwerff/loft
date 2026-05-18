@@ -105,9 +105,16 @@ fn base64_encode(data: &[u8]) -> String {
 }
 
 /// Compute the WebSocket accept key from the client's Sec-WebSocket-Key.
+///
+/// The magic GUID is specified verbatim in RFC 6455 § 1.3.  An earlier
+/// version of this file had `5AB5DC11D68B` for the final group instead
+/// of `C5AB0DC85B11` — Node and non-validating clients still worked
+/// (they don't check the accept token), but browsers correctly closed
+/// the WebSocket immediately after the handshake because the computed
+/// accept didn't match what the spec requires.
 pub fn ws_accept_key(client_key: &str) -> String {
     let mut input = client_key.trim().to_string();
-    input.push_str("258EAFA5-E914-47DA-95CA-5AB5DC11D68B");
+    input.push_str("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
     let hash = sha1(input.as_bytes());
     base64_encode(&hash)
 }

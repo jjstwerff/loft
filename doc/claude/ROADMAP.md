@@ -40,8 +40,8 @@ categories below for full detail.
 
 | Pri | Gate | Status | Source |
 |---|---|---|---|
-| 1 | **Plan-07 phase 5/6/7** — error-message closeout (suggestions polish + per-site type-mismatch wording + closeout doc).  Friends' first WTF moment is a type error; tighter messages compound into trust. | Phases 5/6/7 open; phase 6.1 (Type::name exhaustive) shipped 2026-05-13 | [`plans/07-error-messages/`](plans/07-error-messages/) |
-| 2 | **Plan-37 — tracker-tag indexer** — `@P-id` / `@PLAN-id` convention + scanner + CLI + viewer integration.  Replaces grep-based tag lookups with O(1) JSON queries.  Shrinks Claude per-task token usage; feeds @PLAN35 phase 08 newcomer landing's status buckets. | Phases 0-6 + 9 shipped (0 closed 2026-05-14 as housekeeping); phases 7-8 open | [`plans/37-tracker-index/`](plans/37-tracker-index/) |
+| 1 | **Plan-07 phase 5/6/7** — error-message closeout (suggestions polish + per-site type-mismatch wording + closeout doc).  Friends' first WTF moment is a type error; tighter messages compound into trust. | Phases 5/6/7 open; phase 6.1 (Type::name exhaustive) shipped 2026-05-13 | [`plans/future/07-error-messages/`](plans/future/07-error-messages/) |
+| 2 | **Plan-37 — tracker-tag indexer** — `@P-id` / `@PLAN-id` convention + scanner + CLI + viewer integration.  Replaces grep-based tag lookups with O(1) JSON queries.  Shrinks Claude per-task token usage; feeds @PLAN35 phase 08 newcomer landing's status buckets. | Phases 0-6 + 9 shipped (0 closed 2026-05-14 as housekeeping); phases 7-8 open | [`plans/future/37-tracker-index/`](plans/future/37-tracker-index/) |
 | 3 | **DX.2 — CI: package + native tests** — last open item in @PLAN27 (DX); ship + close the plan. | Open | [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) |
 
 What ships ALREADY for friend-readiness (don't reblock on these):
@@ -178,7 +178,7 @@ First-time-user experience, daily ergonomics, IDE polish.
 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
-| (cross) | Better error messages — `file:line:col` + caret + suggestion | M | ✓ | plans/07-error-messages/README.md |
+| (cross) | Better error messages — `file:line:col` + caret + suggestion | M | ✓ | plans/future/07-error-messages/README.md |
 | SH.1 | TextMate grammar for `.loft` | S | ✓ | plans/future/27-developer-experience/README.md |
 | SH.2 | VS Code extension (grammar + snippets + run task) | S | ✓ | plans/future/27-developer-experience/README.md |
 | DX.1 | Quick-start `examples/` directory at repo root | XS | ✓ | plans/future/27-developer-experience/README.md |
@@ -336,7 +336,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/10-game-client/`](lib_plans/future/10-game-client/) | M | **plans/future/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
 | [`lib_plans/future/13-scriptable-scenes/`](lib_plans/future/13-scriptable-scenes/) | M-S per SC | **lib_plans/future/07-web-ide W2** + moros editor MO.* + script-target build mode | User-authored scene scripts (SC.1-SC.6 + SC.P) |
 | [`plans/future/34-server-hardening/`](plans/future/34-server-hardening/) | M | — | `lib/server` polish: binary broadcast / send_to, recv-bytes, observability — prereq for @PLAN36 |
-| [`plans/future/36-audience-generative-art/`](plans/future/36-audience-generative-art/) | M | **plans/future/34-server-hardening** | Audience-driven plant/crystal growth demo via shared URL |
+| [`plans/36-audience-generative-art/`](plans/36-audience-generative-art/) | M | **plans/future/34-server-hardening** | Audience-driven plant/crystal growth demo via shared URL |
 
 ### F — Foundation
 
@@ -348,7 +348,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
 | [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | Foundational — REGEX Phase 3 (lazy-load wire-up) is downstream consumer |
 | [`lib_plans/01-regex/`](lib_plans/01-regex/) | S (Phase 0) / MH (Phase 1+) | — | **Active 2026-05-18.**  Phase 0 = cdylib bridge MVP; Phase 1+ = pure-loft NFA.  Unblocks @PLAN37 phase 07 scan.loft + check_doc_drift.sh ports |
-| [`plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/) | M | cooperates with **plans/37-tracker-index/07** + **plans/future/32-tic-tac-toe** + **plans/future/36-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
+| [`plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/) | M | cooperates with **plans/future/37-tracker-index/07** + **plans/future/32-tic-tac-toe** + **plans/36-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
 | [`lib_plans/future/15-process/`](lib_plans/future/15-process/) | M | — | `lib/process/` subprocess primitive — closes the indexer / viewer bash-wrapper dependency (dogfood-driven by @PLAN37 + @PLAN35) |
 | [`lib_plans/future/16-fs-watch/`](lib_plans/future/16-fs-watch/) | M | — | `lib/fs_watch/` file-event watcher — prerequisite for @PLAN37 phase 07a WebSocket-push daemon (inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) |
 | [`lib_plans/future/17-cache/`](lib_plans/future/17-cache/) | S | — | `lib/cache/` mtime-invalidated read-through cache — viewer hot-path optimisation (re-reads `index/tags.json` per request today) |
@@ -357,9 +357,9 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/07-error-messages/`](plans/07-error-messages/) | M | — | `file:line:col` + caret + suggestions across parser / type / runtime / native |
+| [`plans/future/07-error-messages/`](plans/future/07-error-messages/) | M | — | `file:line:col` + caret + suggestions across parser / type / runtime / native |
 | [`plans/finished/35-branch-review-viewer/`](plans/finished/35-branch-review-viewer/) | M | (closed 2026-05-14) | Frozen loft binary serves branch-aware doc + code review dashboard via SSH-forwarded HTTP.  Shipped: dashboard / file render (markdown via new `lib/markdown` lib + line-numbered code) / diff + commit views with hunk colouring / `[Rendered ¦ Diff vs main]` toggle / `/tag/<bare>` tracker-tag references / `@P-id` autolinks in body text / image refs through `/raw/`.  Drove the seven-bug native arc @P262→@P269 closure as collateral. |
-| [`plans/37-tracker-index/`](plans/37-tracker-index/) | S | — | `@P-id` / `@PLAN-id` tag convention + scanner + CLI + viewer integration.  Tier-1 lookup tool for both Claude and humans |
+| [`plans/future/37-tracker-index/`](plans/future/37-tracker-index/) | S | — | `@P-id` / `@PLAN-id` tag convention + scanner + CLI + viewer integration.  Tier-1 lookup tool for both Claude and humans |
 | [`plans/future/27-developer-experience/`](plans/future/27-developer-experience/) | XS-S per item | — | SH.* / DX.* / NT.* — DX grab-bag (some shipped) |
 | [`plans/future/40-viewer-discoverability/`](plans/future/40-viewer-discoverability/) | XS per item | — | Three XS viewer cleanups: site header, page_landing sections, route-graph drift sentry |
 | [`plans/future/08-repl-and-introspection/`](plans/future/08-repl-and-introspection/) | M | — | `loft>` interactive prompt + IR/Rust/slot-table CLI |

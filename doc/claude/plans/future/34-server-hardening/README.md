@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLAN34 — `lib/server` hardening (post-v5 polish + @PLAN36 prereqs)
 
 Consolidates the gaps surfaced during TTT v5 ([@PLAN32](../32-tic-tac-toe/README.md))
-that the audience-server demo ([@PLAN36](../36-audience-generative-art/README.md))
+that the audience-server demo ([@PLAN36](../../36-audience-generative-art/README.md))
 will hit on day one.  All items are **single-file**, **no language
 changes**, and **focused on `lib/server` + `lib/web` runtime quality**
 — this is library-quality work, not a feature arc.
@@ -240,7 +240,7 @@ wild.
 
 - **Builds on:** [@PLAN32 v5](../32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo)
   (the binary WS surface, blob format, multi-client routing).
-- **Unblocks:** [@PLAN36](../36-audience-generative-art/README.md)
+- **Unblocks:** [@PLAN36](../../36-audience-generative-art/README.md)
   phase 1 (server-state) — items (a), (b), (e) are prereqs;
   (c), (d), (f) are post-launch hardening.
 

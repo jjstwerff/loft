@@ -211,4 +211,4 @@ applied to the `links` bucket.
 - [Phase 01 — CLI](01-cli-query.md) — extended here with `incoming:` form
 - [Phase 03 — broken-tag validator](03-broken-validator.md) — extended here to also flag broken file links
 - [Phase 04 — viewer integration](04-viewer-integration.md) — first major consumer of the `links` bucket
-- [Plan-35 phase 03](../finished/35-branch-review-viewer/03-markdown-minimal.md) — markdown rendering uses the same link-resolution logic (link rewrite to `/file/<resolved>`)
+- [Plan-35 phase 03](../../finished/35-branch-review-viewer/03-markdown-minimal.md) — markdown rendering uses the same link-resolution logic (link rewrite to `/file/<resolved>`)

@@ -1267,5 +1267,5 @@ No code in this commit; this section is the design anchor.
   fixed-timestep updates with interpolated render.
 - **THREADING.md** — `par(...)` parallelism.
 - **COROUTINE.md** — `iterator<T>` + `yield`.
-- **@PLAN07 phase 4f slice 2** (`doc/claude/plans/07-error-messages/04-runtime-error-kinds.md`) — typed `StackOverflow` RuntimeError; the
+- **@PLAN07 phase 4f slice 2** (`doc/claude/plans/future/07-error-messages/04-runtime-error-kinds.md`) — typed `StackOverflow` RuntimeError; the
   prerequisite for the recovery design above.

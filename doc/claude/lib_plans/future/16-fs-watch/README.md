@@ -87,7 +87,7 @@ asynchronously.
 
 ## Cross-references
 
-- [@PLAN37 phase 07a](../../../plans/37-tracker-index/07a-websocket-protocol.md)
+- [@PLAN37 phase 07a](../../../plans/future/37-tracker-index/07a-websocket-protocol.md)
   — the design that depends on this lib.
 - [`lib/server/`](../../../../lib/server/src/server.loft)
   — pattern for a long-running loft program with a Rust host

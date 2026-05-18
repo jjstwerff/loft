@@ -133,7 +133,7 @@ properties this gives:
    (e.g., excerpts that need file reads).
 
 The "survives daemon restart" property + integrity guarantee
-are owned by **[@PLAN38 (loft-store-durable)](../future/38-loft-store-durable/README.md)**.
+are owned by **[@PLAN38 (loft-store-durable)](../38-loft-store-durable/README.md)**.
 The indexer opens its store via:
 
 ```loft
@@ -371,5 +371,5 @@ These belong in a successor plan (or a sibling
 ## Cross-references
 
 - [Phase 07 — loft-native scanner + WebSocket daemon](07-loft-native-scanner.md) — the daemon this phase generalises
-- [Plan-35 — branch review viewer](../finished/35-branch-review-viewer/README.md) — viewer that consumes the daemon
-- [PACKAGES.md](../../PACKAGES.md) — loft package format (relevant for future "tracker package" registry distribution)
+- [Plan-35 — branch review viewer](../../finished/35-branch-review-viewer/README.md) — viewer that consumes the daemon
+- [PACKAGES.md](../../../PACKAGES.md) — loft package format (relevant for future "tracker package" registry distribution)

@@ -382,8 +382,8 @@ with the rest.  No grinding.
 - [Phase 10 plan README](10-language-harvest.md) — the
   parent plan; this design doc is referenced as 10a in its
   closeout.
-- [PROBLEMS.md](../../PROBLEMS.md) — canonical home for
+- [PROBLEMS.md](../../../PROBLEMS.md) — canonical home for
   @P275-@P283.
 - [DEVELOPMENT.md § Schedule-to-fix lives in the active
-  plan](../../DEVELOPMENT.md#schedule-to-fix-lives-in-the-active-plan)
+  plan](../../../DEVELOPMENT.md#schedule-to-fix-lives-in-the-active-plan)
   — the workflow rule that this design doc embodies.

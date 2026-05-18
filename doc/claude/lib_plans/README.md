@@ -129,7 +129,7 @@ from `future/` into this section.
 
 | Dir | Initiative | Status |
 |---|---|---|
-| [`01-regex/`](01-regex/) | Standalone regex library — promoted 2026-05-18.  Phase 0 = MVP `#native` cdylib bridge to the Rust `regex` crate (small wrapper exposing `regex(...) -> Regex` / `match_at` / `find_all` / `replace`); Phase 1+ = pure-loft NFA + backtracking-fallback engine per the original design.  Driver: @PLAN37 phase 07's `scan.loft` consolidation and the eventual `check_doc_drift.sh` port both compress dramatically once regex is available — `scan_line()` alone drops from ~150 lines of hand-rolled character walking to a single pattern.  See [bash-scripts evaluation in phase 07 doc](../plans/37-tracker-index/07-loft-native-scanner.md#bash-scripts-evaluation--what-else-benefits-from-loft). | **Active** — opened 2026-05-18.  Phase 0 specced, scan.loft is the first scheduled consumer. |
+| [`01-regex/`](01-regex/) | Standalone regex library — promoted 2026-05-18.  Phase 0 = MVP `#native` cdylib bridge to the Rust `regex` crate (small wrapper exposing `regex(...) -> Regex` / `match_at` / `find_all` / `replace`); Phase 1+ = pure-loft NFA + backtracking-fallback engine per the original design.  Driver: @PLAN37 phase 07's `scan.loft` consolidation and the eventual `check_doc_drift.sh` port both compress dramatically once regex is available — `scan_line()` alone drops from ~150 lines of hand-rolled character walking to a single pattern.  See [bash-scripts evaluation in phase 07 doc](../plans/future/37-tracker-index/07-loft-native-scanner.md#bash-scripts-evaluation--what-else-benefits-from-loft). | **Active** — opened 2026-05-18.  Phase 0 specced, scan.loft is the first scheduled consumer. |
 
 ## Future library initiatives
 

@@ -23,7 +23,7 @@ stdlib gaps.  This phase harvests them — turns "we worked
 around X because the language doesn't have Y" into "the
 language has Y now."
 
-Per [CLAUDE.md § Development cadence](../../../../CLAUDE.md#development-cadence--the-dogfood-loop):
+Per [CLAUDE.md § Development cadence](../../../../../CLAUDE.md#development-cadence--the-dogfood-loop):
 
 > Build a real consumer → harvest the language lessons →
 > fix the language → ship the lessons as a release.
@@ -87,13 +87,13 @@ These belong in their own arcs (out of scope for the
     — S-M; deserves its own design doc + commit; tracked
     as a STDLIB.md `## Open work` row
   - **`lib/process/`** (subprocess primitive) — full library
-    plan in [`lib_plans/future/15-process/`](../../lib_plans/future/15-process/README.md).
+    plan in [`lib_plans/future/15-process/`](../../../lib_plans/future/15-process/README.md).
     Architectural unlock; ships in its own multi-commit arc.
   - **`lib/fs_watch/`** (file-event watcher) — full library
-    plan in [`lib_plans/future/16-fs-watch/`](../../lib_plans/future/16-fs-watch/README.md).
+    plan in [`lib_plans/future/16-fs-watch/`](../../../lib_plans/future/16-fs-watch/README.md).
     Needs Rust host-bridge work; ships in its own arc.
   - **`lib/cache/`** (mtime-invalidated read-through cache)
-    — full library plan in [`lib_plans/future/17-cache/`](../../lib_plans/future/17-cache/README.md).
+    — full library plan in [`lib_plans/future/17-cache/`](../../../lib_plans/future/17-cache/README.md).
     Could fold into 10.x as a stretch if the path module
     work pulls it in for free, but defaults out.
 
@@ -131,8 +131,8 @@ language has caught up.
 
 ### Sub-steps for newly discovered issues during this phase
 
-Per [CLAUDE.md § Development cadence](../../../../CLAUDE.md#development-cadence--the-dogfood-loop)
-and [DEVELOPMENT.md § Inserting Discovered Enhancements](../../DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan):
+Per [CLAUDE.md § Development cadence](../../../../../CLAUDE.md#development-cadence--the-dogfood-loop)
+and [DEVELOPMENT.md § Inserting Discovered Enhancements](../../../DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan):
 
 > **Always add the FIX SCHEDULING for newly-found issues to
 > the current plan's sub-step list before picking up the
@@ -233,19 +233,19 @@ Each item is small enough to ship alone.  Bundling matters because:
 
 ## Cross-references
 
-- [CLAUDE.md § Development cadence](../../../../CLAUDE.md#development-cadence--the-dogfood-loop)
+- [CLAUDE.md § Development cadence](../../../../../CLAUDE.md#development-cadence--the-dogfood-loop)
   — the project model that makes this phase the natural
   bookend of the dogfood cycle.
-- [DEVELOPMENT.md § Inserting Discovered Enhancements](../../DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)
+- [DEVELOPMENT.md § Inserting Discovered Enhancements](../../../DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)
   — the workflow rule that routed individual items to
   P-issues + STDLIB.md `## Open work` instead of a parallel
   catalog; this phase implements that catalog's XS/S items.
 - [Phase 07 — loft-native scanner](07-loft-native-scanner.md)
   — the dogfood exercise that surfaced these.  Its "Loft
   gaps surfaced" section is the seed.
-- [PROBLEMS.md @P280 + @P282](../../PROBLEMS.md) — the two
+- [PROBLEMS.md @P280 + @P282](../../../PROBLEMS.md) — the two
   P-issues this phase closes.
-- [STDLIB.md `## Open work`](../../STDLIB.md#open-work) —
+- [STDLIB.md `## Open work`](../../../STDLIB.md#open-work) —
   the stdlib gap rows this phase implements.
-- [CHANGELOG.md 0.8.5 draft](../../../../CHANGELOG.md) —
+- [CHANGELOG.md 0.8.5 draft](../../../../../CHANGELOG.md) —
   where the harvested items land in the release narrative.

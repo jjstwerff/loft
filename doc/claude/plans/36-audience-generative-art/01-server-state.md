@@ -121,7 +121,7 @@ on the same connection:
 | server → client | **Binary blob** | Bulk world data — `world_snapshot` (sent on connect, full chunk dump) and large `world_delta` payloads.  Naturally packs at 4 bytes per cell using the `Cell` payload (1 byte colour + 1 byte height + 2 bytes age) plus a small per-chunk header (cx, cz + cell-count).  Each blob carries a **session id** in its header — primarily useful for the **initial snapshot**, which the server splits across one blob per chunk so a new client's view does not block on serialising the entire world into a single frame |
 
 The binary frames use loft's existing typed-binary read/write
-pattern (see [`STDLIB.md` § File I/O](../../../STDLIB.md) — the same
+pattern (see [`STDLIB.md` § File I/O](../../STDLIB.md) — the same
 `f#read(n) as u8` / `as u16` shape works against any byte source,
 not just files).  Server-side serialisation is straight
 `vec<u8>` packing in chunk-major order; client-side deserialisation
@@ -129,7 +129,7 @@ is the inverse.  No JSON parsing on the hot path for world data.
 
 **Per-blob session id** (`u32` in the 5-byte blob header
 `[type:u8] [session:u32] [...payload...]` — see [TTT v5 wire
-spec](../32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo)
+spec](../future/32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo)
 for the validated format).  Mostly useful when starting a new
 client:
 the server splits the initial `world_snapshot` into one blob per
@@ -285,7 +285,7 @@ active player (excluding the recipient) and broadcasts an
 drives the **Jump to active** box's flash.
 
 The 1-second steady heartbeat is the validated cadence in
-[TTT v5](../32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo).
+[TTT v5](../future/32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo).
 Per-change signalling was rejected as overwhelming during busy
 periods; tick-rate signalling (10 Hz) was rejected as wasting
 bandwidth in quiet moments.  One every second feels like a
@@ -364,5 +364,5 @@ similar) that:
 - [`03-projector-view.md`](03-projector-view.md) — the second
   subscriber type
 - `lib/server/src/server.loft` — shipped multi-client WS API
-- [`../../../lib_plans/future/08-server/`](../../../lib_plans/future/08-server/) —
+- [`../../../lib_plans/future/08-server/`](../../lib_plans/future/08-server/) —
   upstream library work this phase sharpens

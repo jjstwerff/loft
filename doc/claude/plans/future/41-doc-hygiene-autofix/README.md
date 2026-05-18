@@ -181,7 +181,7 @@ rewrites), zero broken links, zero stale references.
 
 - [`scripts/check_doc_drift.sh`](../../../../scripts/check_doc_drift.sh) — the detector this plan's auto-fixers consume
 - [`tools/indexer/fix_broken_links.py`](../../../../tools/indexer/fix_broken_links.py) — existing partial auto-fix for the `broken_links` bucket; phase 1 extends it
-- [`plans/37-tracker-index/07-loft-native-scanner.md`](../../37-tracker-index/07-loft-native-scanner.md) — sibling effort (port bash scripts to loft); auto-fix would ideally live in loft once `lib/regex/` ships, but ships in Python initially to avoid blocking on that
+- [`plans/future/37-tracker-index/07-loft-native-scanner.md`](../37-tracker-index/07-loft-native-scanner.md) — sibling effort (port bash scripts to loft); auto-fix would ideally live in loft once `lib/regex/` ships, but ships in Python initially to avoid blocking on that
 - [`lib_plans/01-regex/`](../../../lib_plans/01-regex/) — once the regex MVP lands, the fixers can be re-implemented in loft (~50% size reduction expected)
 
 ## Value category
