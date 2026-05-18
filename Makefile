@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
+.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -658,6 +658,22 @@ wasm-html-test:
 	    echo "    FAIL: host binary + libloft.rlib build"; exit 1; }
 	@echo "  [3/3] running html_wasm safety gate ..."
 	@cargo test --release --test html_wasm
+
+# Browser-side WebGL rendering gate.  Builds doc/brick-buster.html
+# (only browser-deployed --html artefact today), loads it in headless
+# Chrome + SwiftShader, fails on any JS console.error / exception.
+#
+# Catches shader-compile regressions that `wasm-html-test` cannot
+# (compileShader errors are JS-side; the WASM `loft_start` returns
+# cleanly even when every frame fails to draw).  Skips cleanly when
+# google-chrome / node / wasm32 toolchain are not installed.
+#
+# Wired into `cargo test --release` automatically (so `make ship` /
+# `make ci` pick it up); this target is for ad-hoc invocation.
+test-html-render:
+	@cargo build --release -q --lib --bin loft || { \
+	    echo "    FAIL: host binary build"; exit 1; }
+	@cargo test --release --test html_render
 
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg

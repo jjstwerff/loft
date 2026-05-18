@@ -123,6 +123,63 @@ VAOs, shaders, buffers, and textures are GL handles in JS
 tables; loft programs pass around the integer ids returned by
 `gl_create_*` functions.
 
+### Shader translation: desktop GLSL → GLSL ES 3.00
+
+`lib/graphics/src/*.loft` writes shaders for desktop OpenGL
+(`#version 330 core`).  WebGL2 requires GLSL ES 3.00 —
+the directive `'core' : invalid version directive` is a
+hard error; explicit precision qualifiers are also mandatory
+in fragment shaders.
+
+Both JS bridges (`doc/loft-gl-wasm.js` for `--html`,
+`doc/loft-gl.js` for the gallery) rewrite the version header
+transparently in `gl_create_shader`:
+
+```javascript
+function translateShader(src, isFragment) {
+  const re = /^\s*#version\s+\d+(\s+\w+)?\s*\n?/;
+  const head = isFragment
+    ? '#version 300 es\nprecision highp float;\nprecision highp int;\n'
+    : '#version 300 es\n';
+  return re.test(src) ? src.replace(re, head) : head + src;
+}
+```
+
+The GLSL subset our shaders use (`in`/`out`/`layout(location)`/
+`texture()`/`discard`/`gl_Position`/`uniform`) is shared between
+the desktop and ES profiles, so the version + precision header is
+the only change needed.  Loft sources stay portable — same .loft
+runs on desktop OpenGL via lib/graphics native cdylib and on
+WebGL2 via the browser bridge.
+
+### Browser-side render gate — `tests/html_render.rs`
+
+The recurring failure mode for browser deployment is a JS-side
+console error after a bridge or shader change: WASM `loft_start`
+returns cleanly (so `tests/html_wasm.rs` passes), the page loads
+without exceptions, but `compileShader` fails on every frame and
+the canvas stays blank.
+
+`tests/html_render.rs` closes the loop by spawning headless
+Chrome with SwiftShader WebGL2, navigating to
+`doc/brick-buster.html`, and asserting zero
+`Runtime.consoleAPICalled type=error` or
+`Runtime.exceptionThrown` events across a 6-second startup
+window.  Wired into `cargo test --release` (so `make ship` /
+`make ci` pick it up); skips cleanly when prerequisites
+(google-chrome / node / wasm32 toolchain / target/release/loft)
+are missing.
+
+The CDP driver lives in `tools/html_render_check.mjs` — a
+single-file Node script with no extra deps (uses Chrome
+DevTools Protocol via a built-in WebSocket implementation).
+Reusable for any future browser-deployed example: pass
+`<url> --wait-ms N --screenshot path` and the harness reports
+JSON to stdout, JSON to stderr on failure.
+
+`make test-html-render` runs just this gate for ad-hoc
+invocation.
+
 ## Frame yield contract — browser game loop
 
 The interpreter / native code runs synchronously.  In the
