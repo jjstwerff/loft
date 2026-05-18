@@ -642,12 +642,10 @@ fn scan_link_line(file_path: text, line_no: integer, line: text, base_dir: text,
         anchor = "";
         target_raw = inner;
         lh = 0;
-        found_hash = false;
         while lh < ilen {
             if inner.byte_at(lh) == BYTE_HASH {
                 target_raw = inner[0..lh];
                 anchor = inner[lh + 1..ilen];
-                found_hash = true;
                 break;
             }
             lh = lh + 1;
@@ -1612,7 +1610,6 @@ fn main() {
         }
     }
     if profile { t_now = ticks(); eprintln("  perf: scan top-level files {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
-    t_dir = ticks();
     for src_root in source_roots() {
         files = walk_tree(src_root);
         for fp in files {

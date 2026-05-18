@@ -671,8 +671,13 @@ wasm-html-test:
 # Wired into `cargo test --release` automatically (so `make ship` /
 # `make ci` pick it up); this target is for ad-hoc invocation.
 test-html-render:
-	@cargo build --release -q --lib --bin loft || { \
-	    echo "    FAIL: host binary build"; exit 1; }
+	@# Build the HTML artefact BEFORE the cargo test invocation.
+	@# tests/html_render.rs intentionally does NOT auto-build via
+	@# `make game` — that would invoke `cargo build` mid-`cargo test`
+	@# and race the rustc invocations in tests/native.rs over
+	@# target/release/deps/.  Calling `make game` from this target
+	@# keeps the build outside the test process.
+	@$(MAKE) game >/dev/null
 	@cargo test --release --test html_render
 
 clean:
@@ -1005,6 +1010,7 @@ ship:
 	cargo fmt --all -- --check && \
 	cargo clippy --release --all-targets -- -D warnings && \
 	cargo clippy --no-default-features --all-targets -- -D warnings && \
+	scripts/check_doc_drift.sh && \
 	cargo test --release
 
 run-tests: rebuild-native-cdylibs

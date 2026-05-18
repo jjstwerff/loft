@@ -56,16 +56,6 @@ fn any_of(cmds: &[&str]) -> Option<PathBuf> {
     cmds.iter().find_map(|c| which(c))
 }
 
-fn wasm32_target_installed() -> bool {
-    let Ok(out) = Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-    else {
-        return false;
-    };
-    String::from_utf8_lossy(&out.stdout).contains("wasm32-unknown-unknown")
-}
-
 fn repo_root() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !p.join("Cargo.toml").exists() {
@@ -93,34 +83,40 @@ fn pick_free_port() -> Option<u16> {
     Some(port)
 }
 
-/// Ensure `doc/brick-buster.html` exists (build it via `make game` if
-/// missing or older than the source loft program).  Returns the
-/// absolute path on success, `None` if prerequisites are missing.
-fn ensure_brick_buster_built(root: &Path) -> Option<PathBuf> {
+/// Locate `doc/brick-buster.html` and skip the test if it's missing
+/// or older than the source loft program.
+///
+/// We deliberately do NOT auto-build via `make game`: that would invoke
+/// `cargo build --release` mid-`cargo test --release`, racing the
+/// parallel rustc invocations from `tests/native.rs::native_dir` etc.
+/// over `target/release/deps/`.  The user runs `make test-html-render`
+/// (which `make game`s explicitly) or refreshes the artefact manually
+/// when touching `--html` / `lib/graphics`.  Stale-artefact skip
+/// matches the rest of the wasm test family.
+fn locate_fresh_brick_buster(root: &Path) -> Option<PathBuf> {
     let html = root.join("doc/brick-buster.html");
+    if !html.exists() {
+        eprintln!(
+            "SKIP: doc/brick-buster.html not built — run `make game` first \
+             (or `make test-html-render` to build + test in one step)"
+        );
+        return None;
+    }
     let src = root.join("lib/graphics/examples/25-brick-buster.loft");
-    let needs_build = !html.exists()
-        || (html.metadata().ok()?.modified().ok()? < src.metadata().ok()?.modified().ok()?);
-    if !needs_build {
-        return Some(html);
-    }
-    if !wasm32_target_installed() {
-        eprintln!("SKIP: rustup target wasm32-unknown-unknown not installed");
+    let html_mtime = html.metadata().ok()?.modified().ok()?;
+    let src_mtime = src.metadata().ok()?.modified().ok()?;
+    if html_mtime < src_mtime {
+        eprintln!(
+            "SKIP: doc/brick-buster.html is older than the source loft \
+             program — rebuild with `make game` first"
+        );
         return None;
     }
-    let _guard = build_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    eprintln!("building doc/brick-buster.html via `make game` ...");
-    let status = Command::new("make")
-        .arg("game")
-        .current_dir(root)
-        .status()
-        .ok()?;
-    if !status.success() {
-        eprintln!("FAIL: `make game` exited {status:?}");
-        return None;
-    }
+    // Tag the build_lock as used so the helper doesn't get marked
+    // dead-code; it's reserved for any future test in this file that
+    // does need to serialise against itself (the current
+    // brick_buster_* test is single, so the lock is currently a no-op).
+    let _ = build_lock();
     Some(html)
 }
 
@@ -176,7 +172,7 @@ fn brick_buster_browser_renders_without_console_errors() {
         eprintln!("SKIP: target/release/loft not built (run `cargo build --release` first)");
         return;
     }
-    let Some(_html_path) = ensure_brick_buster_built(&root) else {
+    let Some(_html_path) = locate_fresh_brick_buster(&root) else {
         return;
     };
     let Some(port) = pick_free_port() else {

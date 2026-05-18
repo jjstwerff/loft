@@ -180,8 +180,16 @@ state-tracking regression that silently skips geometry.
 
 Wired into `cargo test --release` (so `make ship` / `make ci`
 pick it up); skips cleanly when prerequisites (google-chrome /
-node / wasm32 toolchain / target/release/loft) are missing.
-~32 s warm-cache; ~60 s cold (one-time `make game` rebuild).
+node / target/release/loft / `doc/brick-buster.html`) are missing
+OR when `doc/brick-buster.html` is older than its source loft
+program.  ~6 s end-to-end if the HTML is fresh.
+
+**Refresh the HTML before testing.**  The test does NOT auto-build
+via `make game` — invoking `cargo build` mid-`cargo test` races
+the parallel rustc invocations in `tests/native.rs` over
+`target/release/deps/`.  Run `make game` manually (or
+`make test-html-render` which does the build + test in one step)
+when touching `--html` / `lib/graphics`.
 
 The CDP driver lives in `tools/html_render_check.mjs` — a
 single-file Node script with no extra deps (uses Chrome

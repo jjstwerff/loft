@@ -191,6 +191,7 @@ First-time-user experience, daily ergonomics, IDE polish.
 |---|---|---|---|---|
 | P2 | REPL / interactive mode | M | ✓ | plans/future/08-repl-and-introspection/README.md |
 | W-warn | Developer warnings (Clippy-inspired) | M | ✓ | lib_plans/future/05-game-infra/README.md |
+| W-qual | Warning quality — stop nagging users about safe code (short-circuit guard recognition, `#null_safe` annotation, entry-guard inference, ASCII-peephole) | MH | ~ | plans/future/42-warning-quality/README.md |
 | L1 | Error recovery after token failures | M | ✓ | (needs plan promotion) |
 | (cross) | Branch-aware doc + code review viewer (loft binary) | M | ✓ | plans/35-branch-review-viewer/README.md |
 

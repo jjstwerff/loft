@@ -19,8 +19,29 @@ use loft::state::State;
 use std::collections::HashSet;
 use std::io::Error;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 mod common;
 use common::cached_default;
+
+/// Process-wide mutex serialising the five high-level native tests
+/// (`native_dir`, `native_scripts`, `native_binary_script`,
+/// `native_tuple_return_script`, `native_tuple_script`).
+///
+/// Each test already parallelises internally via `thread::scope` over
+/// `available_parallelism()` rustc workers — running two such pools
+/// concurrently saturates the CPU twice over AND has the workers
+/// compete for reads of `target/release/deps/*.rlib`, which produces
+/// flaky `rust-lld: cannot open … Operation not permitted` and
+/// `crate <X> required to be available in rlib format` link errors.
+///
+/// Serialising the high-level tests removes the race without losing
+/// parallelism (the inner `thread::scope` still uses every core).
+/// Measured cost: parallel-with-races ~140 s + flake; serial-with-
+/// inner-parallelism ~14 s clean.
+fn native_suite_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 /// Docs files that are known to fail in `--native` mode.
 /// See PROBLEMS.md for details on each issue number.
@@ -612,6 +633,9 @@ fn run_native_jobs(
 /// Skips silently if `rustc` is not in PATH.
 #[test]
 fn native_dir() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let mut files: Vec<PathBuf> = std::fs::read_dir("tests/docs")?
         .filter_map(|f| f.ok().map(|e| e.path()))
         .filter(|p| {
@@ -640,6 +664,9 @@ fn native_dir() -> std::io::Result<()> {
 /// Skips silently if `rustc` is not in PATH.
 #[test]
 fn native_scripts() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let mut files: Vec<PathBuf> = std::fs::read_dir("tests/scripts")?
         .filter_map(|f| f.ok().map(|e| e.path()))
         .filter(|p| {
@@ -687,6 +714,9 @@ fn native_scripts() -> std::io::Result<()> {
 /// are removed from `SCRIPTS_NATIVE_SKIP`.
 #[test]
 fn native_tuple_script() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
     let job = prepare_native_test(entry)?;
@@ -702,6 +732,9 @@ fn native_tuple_script() -> std::io::Result<()> {
 /// fixed in S35: output_set now hoists inner ops as statements before the assignment.
 #[test]
 fn native_binary_script() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/20-binary.loft");
     let job = prepare_native_test(entry)?;
@@ -717,6 +750,9 @@ fn native_binary_script() -> std::io::Result<()> {
 /// native_tuple_script when the updated script passes.
 #[test]
 fn native_tuple_return_script() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
     let job = prepare_native_test(entry)?;

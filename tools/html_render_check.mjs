@@ -70,9 +70,10 @@ if (!CHROME) {
 }
 
 // ── Spawn Chrome ───────────────────────────────────────────────────
-// Headless WebGL2 requires SwiftShader (no GPU in CI).  The Vulkan
-// feature flag silences a Chrome 121+ regression that disables WebGL2
-// when no GPU is present without the explicit opt-in.
+// Headless WebGL2 requires SwiftShader (no GPU in CI) — the three
+// `--*-angle*` / `--enable-unsafe-swiftshader` flags switch the GL
+// backend to the software path so the page gets a real WebGL2 context
+// regardless of GPU availability.
 const chrome = spawn(CHROME, [
   '--headless=new',
   '--no-sandbox',
@@ -81,7 +82,6 @@ const chrome = spawn(CHROME, [
   '--enable-unsafe-swiftshader',
   '--use-gl=angle',
   '--use-angle=swiftshader',
-  '--disable-features=Vulkan',
   '--mute-audio',
   '--hide-scrollbars',
   'about:blank',
