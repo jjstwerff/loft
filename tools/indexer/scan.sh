@@ -221,7 +221,14 @@ else
 fi
 
 # 6. Merge into output.
-jq --argjson broken "$BROKEN_JSON" '. + {broken: $broken}' "$OUT" > "$OUT.tmp"
+# Pass BROKEN_JSON via stdin/file rather than `--argjson` argv —
+# Windows MSYS bash has a much smaller argv limit than Linux/macOS,
+# so any non-trivial broken set raises `jq: Argument list too long`.
+# Same shape as the BROKEN_LINKS merge below (`--slurpfile`).
+BROKEN_BUCKET_TMP=$(mktemp)
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$BROKEN_BUCKET_TMP"' EXIT
+printf '%s' "$BROKEN_JSON" > "$BROKEN_BUCKET_TMP"
+jq --slurpfile broken "$BROKEN_BUCKET_TMP" '. + {broken: $broken[0]}' "$OUT" > "$OUT.tmp"
 mv "$OUT.tmp" "$OUT"
 
 # ── Markdown-link extraction (phase 09 — backlinks) ─────────────
@@ -238,7 +245,7 @@ mv "$OUT.tmp" "$OUT"
 #   - Bare anchors (`#section`) skipped (intra-file).
 
 LINKS_TMP=$(mktemp)
-trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP"' EXIT
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$BROKEN_BUCKET_TMP" "$LINKS_TMP"' EXIT
 
 # Step 1: collect all `<src>:<line>:[text](target)` matches across .md files.
 # Reuse $FILES_TMP filtered to .md — avoids a second `git ls-files`
@@ -354,7 +361,7 @@ function dirof(p,    m) {
 # the loft tree has ~3000 links and the JSON exceeds ARG_MAX
 # (~128 KB on Linux).  --slurpfile reads via fd, no argv limit.
 LINKS_BUCKET_TMP=$(mktemp)
-trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP"' EXIT
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$BROKEN_BUCKET_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP"' EXIT
 if [ -n "$LINKS_TSV" ]; then
     printf "%s" "$LINKS_TSV" | jq -Rn '
         [ inputs
@@ -387,7 +394,7 @@ mv "$OUT.tmp" "$OUT"
 # not exist, record it under `broken_links: [{target, refs: [...]}]`.
 # Mirrors the shape of `broken` (broken @-tag refs).
 BROKEN_LINKS_TMP=$(mktemp)
-trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP"' EXIT
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$BROKEN_BUCKET_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP"' EXIT
 jq -r '.links | keys[]' "$OUT" | while read -r target; do
   if [ ! -f "$target" ]; then
     echo "$target"
@@ -409,7 +416,7 @@ fi
 
 # Merge via stdin (argv could overflow on large outputs).
 BROKEN_LINKS_BUCKET_TMP=$(mktemp)
-trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP"' EXIT
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$BROKEN_BUCKET_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP"' EXIT
 printf '%s' "$BROKEN_LINKS_JSON" > "$BROKEN_LINKS_BUCKET_TMP"
 jq --slurpfile bl "$BROKEN_LINKS_BUCKET_TMP" '. + {broken_links: $bl[0]}' "$OUT" > "$OUT.tmp"
 mv "$OUT.tmp" "$OUT"
@@ -424,7 +431,7 @@ mv "$OUT.tmp" "$OUT"
 # landing page between Recent activity and All changes.
 PROBS_FILE="doc/claude/PROBLEMS.md"
 PROBLEMS_OPEN_TMP=$(mktemp)
-trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP" "$PROBLEMS_OPEN_TMP"' EXIT
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$BROKEN_BUCKET_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP" "$PROBLEMS_OPEN_TMP"' EXIT
 if [ -f "$PROBS_FILE" ]; then
   awk -F'|' '
     /^\| [0-9]+ \|/ {
@@ -467,7 +474,7 @@ mv "$OUT.tmp" "$OUT"
 # is "what shipped recently," not "every closed bug ever").  The
 # 30-day window is computed in awk via `mktime` against today.
 PROBLEMS_RECENT_TMP=$(mktemp)
-trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP" "$PROBLEMS_OPEN_TMP" "$PROBLEMS_RECENT_TMP"' EXIT
+trap 'rm -f "$FILES_TMP" "$RAW_TMP" "$BROKEN_TMP" "$BROKEN_BUCKET_TMP" "$LINKS_TMP" "$LINKS_BUCKET_TMP" "$BROKEN_LINKS_TMP" "$BROKEN_LINKS_BUCKET_TMP" "$PROBLEMS_OPEN_TMP" "$PROBLEMS_RECENT_TMP"' EXIT
 if [ -f "$PROBS_FILE" ]; then
   # Compute the 30-day-ago cutoff in shell rather than awk — gawk's
   # `mktime` isn't available in BSD awk (macOS default), so the prior
