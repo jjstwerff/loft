@@ -917,6 +917,13 @@ fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
     emit_plans_bucket("doc/claude/lib_plans/future");
     println("");
     println("  ]");
+    // plans_recent — finished plans modified in last 60 days.
+    // Uses mtime(path) + now() to compute the window.
+    println(",");
+    println("  \"plans_recent\": [");
+    emit_plans_recent_bucket("doc/claude/plans/finished", 60 * 86400);
+    println("");
+    println("  ]");
     println("");
     println("}}");
 }
@@ -1173,6 +1180,45 @@ fn collect_plans_dir(dir_path: text, set: PlanSet) {
 fn emit_plans_bucket(dir_path: text) {
     set = PlanSet {};
     collect_plans_dir(dir_path, set);
+    first = true;
+    for e in set.entries {
+        if !first { print(","); }
+        first = false;
+        esc_title = json_escape(e.title);
+        esc_path = json_escape(e.path);
+        esc_slug = json_escape(e.slug);
+        print("\n    {{\"slug\":\"{esc_slug}\",\"path\":\"{esc_path}\",\"title\":\"{esc_title}\"}}");
+    }
+}
+
+// Walk `dir_path`, include only subdirs whose mtime is within
+// `window_secs` of now.  Mirrors bash's `[ $((now - m)) -le
+// "$mtime_window" ]` check for `plans_recent` (60-day window).
+fn collect_plans_dir_recent(dir_path: text, set: PlanSet, window_secs: integer) {
+    d = file(dir_path);
+    if d.format != Format.Directory { return; }
+    now_secs = now() / 1000;
+    cutoff = now_secs - window_secs;
+    for entry in d.files() {
+        if entry.format != Format.Directory { continue; }
+        slug = entry.path.basename();
+        if !slug_starts_with_digit(slug) { continue; }
+        readme = "{entry.path}/README.md";
+        if file(readme).format == Format.NotExists { continue; }
+        m = mtime(entry.path);
+        if m <= 0 || m < cutoff { continue; }
+        title = read_plan_title(readme);
+        if title == "" { title = slug; }
+        path = normalize_path(entry.path);
+        n = path.len();
+        if n > 0 && path[n - 1] == '/' { path = path[0..n - 1]; }
+        set.entries += [PlanEntry{slug: slug, path: path, title: title}];
+    }
+}
+
+fn emit_plans_recent_bucket(dir_path: text, window_secs: integer) {
+    set = PlanSet {};
+    collect_plans_dir_recent(dir_path, set, window_secs);
     first = true;
     for e in set.entries {
         if !first { print(","); }
