@@ -187,7 +187,7 @@ existing viewer, the cleaner the extraction.
   generalisation arc that extracts the engine.
 - [`plans/future/40-viewer-discoverability/`](../../../plans/future/40-viewer-discoverability/README.md)
   — the small cleanup plan that lands first.
-- [`@PLAN37`](../../../plans/37-tracker-index/README.md) — the
+- [`@PLAN37`](../../../plans/future/37-tracker-index/README.md) — the
   tracker indexer the viewer reads.  Indexer also gets
   config-parameterised in phase 3 so other consumers can
   run their own.

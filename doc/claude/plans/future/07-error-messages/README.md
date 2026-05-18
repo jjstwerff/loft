@@ -182,7 +182,7 @@ These are not addressed by @PLAN07 even though they're tempting:
 - **Compile-time exhaustive type checking.**  Plan-07 improves the
   messages of the existing type checker; it does not add new checks.
 - **IDE / LSP diagnostics.**  Tracked under
-  [LSP.md](../../lib_plans/future/09-lsp/README.md).  The diagnostic types this plan introduces
+  [LSP.md](../../../lib_plans/future/09-lsp/README.md).  The diagnostic types this plan introduces
   will feed the LSP later; the wire format is not in scope here.
 - **Localisation.**  Messages stay English-only.
 

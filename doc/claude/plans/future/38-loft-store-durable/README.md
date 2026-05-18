@@ -249,13 +249,13 @@ order); 4 is the cross-tier validation; 5+6 wire downstream.
 
 - [`src/store.rs`](../../../../src/store.rs) — the existing
   Store primitive this plan extends.
-- [`plans/37-tracker-index/`](../../37-tracker-index/README.md)
+- [`plans/future/37-tracker-index/`](../../37-tracker-index/README.md)
   — the test-bed consumer (Tier 1).
-- [`plans/37-tracker-index/08-multi-project-deploy.md`](../../37-tracker-index/08-multi-project-deploy.md)
+- [`plans/future/37-tracker-index/08-multi-project-deploy.md`](../../37-tracker-index/08-multi-project-deploy.md)
   — phase that opts into Tier 1.
 - [`plans/future/32-tic-tac-toe/`](../32-tic-tac-toe/) — TTT v5
   multiplayer; Tier 2 consumer.
-- [`plans/future/36-audience-generative-art/`](../36-audience-generative-art/)
+- [`plans/36-audience-generative-art/`](../36-audience-generative-art/)
   — audience demo; Tier 3 consumer.
 - [`lib/server/src/server.loft`](../../../../lib/server/src/server.loft)
   — the server pattern these durability tiers complement.

@@ -529,7 +529,7 @@ All four are tracked under @PLAN07 phase 4:
    vector) BEFORE landing.  A noisy warning gets disabled
    within a session and the safety net evaporates; the skip
    list is a release blocker, not a follow-up.  See
-   `plans/07-error-messages/04-runtime-error-kinds.md
+   `plans/future/07-error-messages/04-runtime-error-kinds.md
    § Easy-proof skip list — REQUIRED for 4e.2`.
 
 3. **State snapshot at fault site is the next-highest-leverage

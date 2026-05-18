@@ -87,13 +87,13 @@ These belong in their own arcs (out of scope for the
     — S-M; deserves its own design doc + commit; tracked
     as a STDLIB.md `## Open work` row
   - **`lib/process/`** (subprocess primitive) — full library
-    plan in [`lib_plans/future/15-process/`](../../lib_plans/future/15-process/README.md).
+    plan in [`lib_plans/future/15-process/`](../../../lib_plans/future/15-process/README.md).
     Architectural unlock; ships in its own multi-commit arc.
   - **`lib/fs_watch/`** (file-event watcher) — full library
-    plan in [`lib_plans/future/16-fs-watch/`](../../lib_plans/future/16-fs-watch/README.md).
+    plan in [`lib_plans/future/16-fs-watch/`](../../../lib_plans/future/16-fs-watch/README.md).
     Needs Rust host-bridge work; ships in its own arc.
   - **`lib/cache/`** (mtime-invalidated read-through cache)
-    — full library plan in [`lib_plans/future/17-cache/`](../../lib_plans/future/17-cache/README.md).
+    — full library plan in [`lib_plans/future/17-cache/`](../../../lib_plans/future/17-cache/README.md).
     Could fold into 10.x as a stretch if the path module
     work pulls it in for free, but defaults out.
 

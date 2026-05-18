@@ -90,7 +90,7 @@ contract locked here.
 
 ### Plan-36 design doc update (Tier 3)
 
-`plans/future/36-audience-generative-art/README.md`
+`plans/36-audience-generative-art/README.md`
 gains a § "Persistence" subsection:
 
 ```markdown
@@ -134,7 +134,7 @@ This is fast (<1 sec); ships in `make ci`.
 |---|---|
 | `tools/indexer/scan.loft` (@PLAN37 phase 07/08) | EXTEND: open store via `IntegrityOnly` |
 | `plans/future/32-tic-tac-toe/README.md` | ADD § Persistence (Tier 2) |
-| `plans/future/36-audience-generative-art/README.md` | ADD § Persistence (Tier 3) |
+| `plans/36-audience-generative-art/README.md` | ADD § Persistence (Tier 3) |
 | `tests/store_durable_smoke.rs` | NEW: per-tier consumer-shaped end-to-end smoke |
 
 ## Existing functions / utilities to reuse

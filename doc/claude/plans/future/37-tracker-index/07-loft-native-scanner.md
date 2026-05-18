@@ -128,7 +128,7 @@ prompted an audit of every bash / Python script in `tools/` and
 |---|---|---|---|---|
 | **`tools/indexer/scan.sh`** | 630 | Linux + macOS + Windows | No — just absorbed 6 portability patches | **STRONG YES — port next.**  Already half-done (`tools/indexer/src/scan.loft` exists as the loft-side scanner; remaining work: full bucketed tags.json + broken validation + JSON merge to replace bash's role in `make index`).  Highest dogfood ROI: exercises file walking, JSON emission, sorted/hash, format strings; largest stability win — drops the entire bash dependency from `make index`. |
 | **`scripts/check_doc_drift.sh`** | 460 | Linux only (non-blocking) | Probably broken on macOS/Windows (heavy `awk` + `find` + `realpath`) | **Yes, but second.**  Not on fire because CI only runs it on Linux, so portability gain is latent.  Good dogfood for `lib/markdown` + text scanning.  Revisit when the non-blocking status escalates OR when the bash version surfaces its first real regression. |
-| **`tools/viewer/refresh.sh`** | 135 | No (runs during `make view`) | Suspect — shells out to `git` + `jq` | **Wait for `lib/process`** (planned in [`lib_plans/future/15-process/`](../../lib_plans/future/15-process/)).  The viewer needs git state in JSON; loft can't spawn `git` until `lib/process` lands.  Once that ships, port `refresh.sh` so the viewer becomes a pure-loft tool. |
+| **`tools/viewer/refresh.sh`** | 135 | No (runs during `make view`) | Suspect — shells out to `git` + `jq` | **Wait for `lib/process`** (planned in [`lib_plans/future/15-process/`](../../../lib_plans/future/15-process/)).  The viewer needs git state in JSON; loft can't spawn `git` until `lib/process` lands.  Once that ships, port `refresh.sh` so the viewer becomes a pure-loft tool. |
 | **`tools/indexer/install-hook.sh`** | 64 | No (one-shot install) | Maybe | **Skip.**  One-time setup; install-time OS quirks are acceptable. |
 | **`scripts/find_problems.sh`** | 361 | No (dev-only) | Linux primary | **Skip.**  Developer harness around `cargo test --no-fail-fast`; spawning cargo + parsing output is awkward without `lib/process`. |
 | **`scripts/p09_fast_gate.sh`** | 204 | No (dev-only) | Linux | **Skip.**  Used by devs for fast iteration; not user-visible. |
@@ -140,7 +140,7 @@ prompted an audit of every bash / Python script in `tools/` and
 
 **Sequencing for follow-up commits:**
 
-0. **Prerequisite** — [`lib_plans/01-regex/`](../../lib_plans/01-regex/) Phase 0 (cdylib bridge MVP).  Opened 2026-05-18.  Without regex, `scan.loft`'s `scan_line()` is 150 lines of hand-rolled character walking to recognise four tag forms; with regex it's 4 patterns and ~20 lines.  Same multiplier for `check_doc_drift.sh`.  Ship the MVP first so the port arcs below don't have to re-implement what the Rust `regex` crate already provides.
+0. **Prerequisite** — [`lib_plans/01-regex/`](../../../lib_plans/01-regex/) Phase 0 (cdylib bridge MVP).  Opened 2026-05-18.  Without regex, `scan.loft`'s `scan_line()` is 150 lines of hand-rolled character walking to recognise four tag forms; with regex it's 4 patterns and ~20 lines.  Same multiplier for `check_doc_drift.sh`.  Ship the MVP first so the port arcs below don't have to re-implement what the Rust `regex` crate already provides.
 1. **Next (gated on Phase 0 above)** — finish porting `scan.sh` →
    `tools/indexer/src/scan.loft` (already exists for tag emission;
    remaining work: broken-tag validation + full bucketed JSON
@@ -253,7 +253,7 @@ regex; ~600 lines loft without regex would be a wash).
 
 **Conclusion:** ship sub-commits B-H of this arc with the
 existing primitives.  Regex Phase 0 from
-[`lib_plans/01-regex/`](../../lib_plans/01-regex/) lands in
+[`lib_plans/01-regex/`](../../../lib_plans/01-regex/) lands in
 parallel for the other consumers and enables a follow-up
 "scan.loft regex pass" that retroactively trims `scan_line` /
 `scan_link_line` once the binary is using the canonical engine.
@@ -1119,5 +1119,5 @@ slots between phase 04 (viewer integration) and phase 05
 - [Phase 02 — pre-commit hook](02-auto-refresh.md) — covers the freshness case the watcher complements
 - [Phase 03 — broken-tag validator](03-broken-validator.md) — `tests/index_hygiene.rs` extended here for the schema-diff test
 - [`lib/server/src/server.loft`](../../../../lib/server/src/server.loft) — pattern for a long-running loft program with a host-bridge native lib
-- [`lib_plans/01-regex/`](../../lib_plans/01-regex/) — text-search primitive that would simplify the scanner
+- [`lib_plans/01-regex/`](../../../lib_plans/01-regex/) — text-search primitive that would simplify the scanner
 - [`plans/finished/35-branch-review-viewer/`](../finished/35-branch-review-viewer/) — the viewer that consumes the same JSON

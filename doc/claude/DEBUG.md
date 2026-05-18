@@ -525,7 +525,7 @@ erode trust faster than stale index data does).
 | `tools/indexer/ARCHITECTURE.md` | Design notes |
 | `scripts/idx` | CLI query wrapper |
 | `index/tags.json` | Output (gitignored) |
-| `doc/claude/plans/37-tracker-index/` | Plan + per-phase docs |
+| `doc/claude/plans/future/37-tracker-index/` | Plan + per-phase docs |
 
 ---
 

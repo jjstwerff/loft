@@ -647,7 +647,7 @@ XS = single-line/single-fn change; S = focused half-day fix.
 | `args() -> vector<text>` builtin | scan.loft uses env var `LOFT_INDEX_BUCKETED` as a CLI-arg workaround; viewer doesn't support args at all | Add the builtin that returns the program's invocation args. | XS |
 
 Driver doc: see the "Loft gaps surfaced" section in
-[`plans/37-tracker-index/07-loft-native-scanner.md`](plans/37-tracker-index/07-loft-native-scanner.md)
+[`plans/future/37-tracker-index/07-loft-native-scanner.md`](plans/future/37-tracker-index/07-loft-native-scanner.md)
 for the consumer-side narrative.
 
 ## See also

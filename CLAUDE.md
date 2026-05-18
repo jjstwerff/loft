@@ -17,7 +17,7 @@ The project's development model is:
 
 Not toy programs.  Not abstract design.  Real tools that have to work.
 The branch-review viewer ([@PLAN35](doc/claude/plans/finished/35-branch-review-viewer/README.md)),
-the tracker indexer ([@PLAN37](doc/claude/plans/37-tracker-index/README.md)),
+the tracker indexer ([@PLAN37](doc/claude/plans/future/37-tracker-index/README.md)),
 and [`lib/markdown/`](lib/markdown/) are the canonical consumers — each one
 drove a wave of language enhancements (closures, bounded generics, native codegen
 maturity, `lib/process`/`lib/fs_watch`/`lib/cache` plan slots, eight P-issues from

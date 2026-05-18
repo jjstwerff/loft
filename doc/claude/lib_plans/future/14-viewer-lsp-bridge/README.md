@@ -251,7 +251,7 @@ one capability slice.
   — the viewer this plan extends.  The viewer's layout
   (sidebar, breadcrumbs, code rendering) is the host for the
   new LSP-driven UI elements.
-- [`plans/37-tracker-index/README.md`](../../../plans/37-tracker-index/README.md)
+- [`plans/future/37-tracker-index/README.md`](../../../plans/future/37-tracker-index/README.md)
   — the tracker-tag indexer.  Its `/tag/<bare>` route already
   shows the same kind of cross-reference UX the LSP "find
   references" sidebar will.

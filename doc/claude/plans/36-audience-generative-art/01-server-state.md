@@ -121,7 +121,7 @@ on the same connection:
 | server → client | **Binary blob** | Bulk world data — `world_snapshot` (sent on connect, full chunk dump) and large `world_delta` payloads.  Naturally packs at 4 bytes per cell using the `Cell` payload (1 byte colour + 1 byte height + 2 bytes age) plus a small per-chunk header (cx, cz + cell-count).  Each blob carries a **session id** in its header — primarily useful for the **initial snapshot**, which the server splits across one blob per chunk so a new client's view does not block on serialising the entire world into a single frame |
 
 The binary frames use loft's existing typed-binary read/write
-pattern (see [`STDLIB.md` § File I/O](../../../STDLIB.md) — the same
+pattern (see [`STDLIB.md` § File I/O](../../STDLIB.md) — the same
 `f#read(n) as u8` / `as u16` shape works against any byte source,
 not just files).  Server-side serialisation is straight
 `vec<u8>` packing in chunk-major order; client-side deserialisation
@@ -364,5 +364,5 @@ similar) that:
 - [`03-projector-view.md`](03-projector-view.md) — the second
   subscriber type
 - `lib/server/src/server.loft` — shipped multi-client WS API
-- [`../../../lib_plans/future/08-server/`](../../../lib_plans/future/08-server/) —
+- [`../../../lib_plans/future/08-server/`](../../lib_plans/future/08-server/) —
   upstream library work this phase sharpens

@@ -271,7 +271,7 @@ Layout:
      ▸ doc/learn-loft.md (the syntax tour)
      ▸ DESIGN_DECISIONS.md (closed-by-decision register)
      ▸ INCONSISTENCIES.md (known asymmetries we live with)
-     ▸ plans/07-error-messages (UX of compiler errors)
+     ▸ plans/future/07-error-messages (UX of compiler errors)
 
      Compiler internals?
      ▸ COMPILER.md / INTERMEDIATE.md / NATIVE.md
