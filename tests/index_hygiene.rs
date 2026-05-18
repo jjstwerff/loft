@@ -35,6 +35,21 @@
 
 use std::process::Command;
 
+/// `scripts/idx` is a bash script with no shebang-driven Windows
+/// launcher.  Spawning it directly via `Command::new("./scripts/idx")`
+/// returns Win32 error 193 ("not a valid Win32 application") because
+/// the OS tries to execute the script as a PE binary.  Build the
+/// command through `bash` instead — `bash` is on PATH on all three
+/// CI platforms (CI's `make index` step has already proved it).
+fn idx_command(args: &[&str]) -> Command {
+    let mut cmd = Command::new("bash");
+    cmd.arg("./scripts/idx");
+    for a in args {
+        cmd.arg(a);
+    }
+    cmd
+}
+
 // Single test for both checks — running `make index` twice
 // concurrently (cargo test default parallelism) corrupts
 // `index/tags.json`.  Serialising into one test avoids the
@@ -55,10 +70,9 @@ fn index_hygiene_clean() {
     );
 
     // 2. Phase 03 — broken @-tag refs.
-    let broken_tags = Command::new("./scripts/idx")
-        .arg("broken")
+    let broken_tags = idx_command(&["broken"])
         .output()
-        .expect("failed to spawn `./scripts/idx broken`");
+        .expect("failed to spawn `bash ./scripts/idx broken`");
     assert!(
         broken_tags.status.success(),
         "./scripts/idx broken exited {:?}",
@@ -201,10 +215,9 @@ fn index_hygiene_clean() {
     );
 
     // 3. Phase 09 — broken markdown-link refs.
-    let broken_links = Command::new("./scripts/idx")
-        .arg("broken-links")
+    let broken_links = idx_command(&["broken-links"])
         .output()
-        .expect("failed to spawn `./scripts/idx broken-links`");
+        .expect("failed to spawn `bash ./scripts/idx broken-links`");
     assert!(
         broken_links.status.success(),
         "./scripts/idx broken-links exited {:?}",
