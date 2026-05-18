@@ -7,8 +7,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open.  Scoped 2026-05-09 to support an upcoming local-meetup talk
-to game creators + art enthusiasts.  Sibling presentation plan at
+**Active — phase 0 + phase 1 MVP shipped** (PR #214, 2026-05-18).
+Phone client + multi-client loft server roundtrip works end-to-end:
+tap on one connected device, every other device sees the paint
+appear within a tick.  Deployed at
+[`doc/audience-demo/`](../../audience-demo/) for static-client
+validation on GitHub Pages.  See [§ Sub-arcs](#sub-arcs) for which
+sub-tasks remain.
+
+Scoped 2026-05-09 to support an upcoming local-meetup talk to game
+creators + art enthusiasts.  Sibling presentation plan at
 [`../../../presentations/audience-generative-art/`](../../presentations/audience-generative-art/)
 owns the talk shape, slides, and audience-participation flow.
 This plan owns the **development work** the demo needs.
@@ -31,19 +39,20 @@ top of them, not library extension.
 
 ## Sub-arcs
 
-| # | File | Builds | Effort |
-|---|---|---|---|
-| 0 | [00-audience-browser-page.md](00-audience-browser-page.md) | Pure HTML/JS smartphone client — 9×7 hex world view (with movement-zone outer rings), 9-color palette, clear + jump-to-active controls, tap/swipe paint, WebSocket | S |
-| 1 | [01-server-state.md](01-server-state.md) | Loft server: hold world state, age cells, run automatic decay (older cells removed; filled-neighbour lease extends life so shrinking starts at the edges), broadcast world deltas + active-player signals.  No autonomous growth — placement is pure direct painting from audience taps | M |
-| ~~2~~ | ~~02-generation-script.md~~ | DROPPED — closed by the 2026-05-10 growth-model decision (pure direct painting; no autonomous growth).  Renderer-side ridge / edge classification covers what would have been the "plant / crystal aesthetic" generator | — |
-| 3 | [03-projector-view.md](03-projector-view.md) | Native loft beamer client: subscribe to server, render full hex world (frost-style 3D crystal mesh + edge-detected plant/crystal aesthetic), auto-camera follows activity heat field, presenter hotkey overrides | M |
-| 4 | [04-hosting.md](04-hosting.md) | Public URL reachable from venue WiFi (VPS / hotspot / ngrok / cloudflared).  Operational, not code | XS |
-| 5 | `05-rehearsal-and-backup.md` (not yet written) | One full dry run on demo hardware; record both demos as fallback for catastrophic failure | XS |
+| # | File | Builds | Effort | Status |
+|---|---|---|---|---|
+| 0 | [00-audience-browser-page.md](00-audience-browser-page.md) | Pure HTML/JS smartphone client — 9×7 hex world view (with movement-zone outer rings), 9-color palette, clear + jump-to-active controls, tap/swipe paint, WebSocket | S | **Partial** — MVP shipped (PR #214): hex grid, palette, tap, WebSocket all work; deployed at [`doc/audience-demo/`](../../audience-demo/).  Remaining: 0.5 swipe, 0.6 outer-ring pan zones, 0.8 jump-to-active flash, 0.9 view-centring on activity (last depends on phase 1 data) |
+| 1 | [01-server-state.md](01-server-state.md) | Loft server: hold world state, age cells, run automatic decay (older cells removed; filled-neighbour lease extends life so shrinking starts at the edges), broadcast world deltas + active-player signals.  No autonomous growth — placement is pure direct painting from audience taps | M | **Partial — MVP shipped** (PR #214): single-hash world state, multi-client connect/dispatch/broadcast, world-replay-on-connect, active-player signal on color_select.  Remaining: 1.4 tick loop + decay, 1.8 multi-client load test, 1.9 crash-resistance.  Wire is `<msg_id>:<payload>` (MVP); spec'd migration to JSON-in / binary-out is filed as phase 1 step 2 |
+| ~~2~~ | ~~02-generation-script.md~~ | DROPPED — closed by the 2026-05-10 growth-model decision (pure direct painting; no autonomous growth).  Renderer-side ridge / edge classification covers what would have been the "plant / crystal aesthetic" generator | — | Dropped |
+| 3 | [03-projector-view.md](03-projector-view.md) | Native loft beamer client: subscribe to server, render full hex world (frost-style 3D crystal mesh + edge-detected plant/crystal aesthetic), auto-camera follows activity heat field, presenter hotkey overrides | M | Open |
+| 4 | [04-hosting.md](04-hosting.md) | Public URL reachable from venue WiFi (VPS / hotspot / ngrok / cloudflared).  Operational, not code | XS | Open |
+| 5 | `05-rehearsal-and-backup.md` (not yet written) | One full dry run on demo hardware; record both demos as fallback for catastrophic failure | XS | Open |
 
-Phases 0, 1, 2 land in parallel — they share only the seed-event
-schema (sketched on paper first).  Phase 3 depends on phase 1
-(server-driven state).  Phase 4 unblocks public testing.  Phase 5
-depends on everything else working.
+Phase 2 was dropped (see above).  Phases 0 and 1 land in parallel —
+they share only the seed-event schema (sketched on paper first; the
+MVP wire format is the temporary `<msg_id>:<payload>` shape).  Phase 3
+depends on phase 1 (server-driven state).  Phase 4 unblocks public
+testing.  Phase 5 depends on everything else working.
 
 The seed-event schema is the only cross-phase contract.  Lock it
 in before anyone codes phase 0 or phase 1.  Suggested first cut:

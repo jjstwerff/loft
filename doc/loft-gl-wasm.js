@@ -98,11 +98,30 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
 
   let shouldClose = false, _fsQuad = null;
 
+  // Defensive Number coercion at the WASM-import boundary.  loft's
+  // `integer` is i64 since the phase-2c migration; wasm-bindgen's
+  // automatic i64 → JsValue path produces BigInt, which silently
+  // mis-behaves under the `>>>` / `&` bitwise ops the bridge uses
+  // (unpacking RGBA, dispatching enums).  Coerce to Number at entry
+  // so every method body can treat args as plain numbers.  Strings
+  // pass through (typeof 'foo' !== 'bigint').
+  const n = (x) => (typeof x === 'bigint' ? Number(x) : x);
+  function coerceArgs(fns) {
+    const wrapped = {};
+    for (const [name, f] of Object.entries(fns)) {
+      wrapped[name] = function(...args) {
+        for (let i = 0; i < args.length; i++) args[i] = n(args[i]);
+        return f.apply(this, args);
+      };
+    }
+    return wrapped;
+  }
+
   return {
-    loft_io: {
+    loft_io: coerceArgs({
       loft_host_print(ptr, len) { output.textContent += readStr(ptr, len); }
-    },
-    loft_gl: {
+    }),
+    loft_gl: coerceArgs({
       loft_gl_create_window(w, h, tp, tl) {
         canvas.width = w; canvas.height = h;
         canvas.style.display = 'block';
@@ -294,7 +313,7 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
           return 0;
         } catch(e) { return -1; }
       },
-    },
+    }),   // ← close coerceArgs() for loft_gl
     env: {}
   };
 }
