@@ -701,9 +701,23 @@ extern crate loft;"
                     continue;
                 }
                 let pos_file = &def.position.file;
+                // Match `/default/` and `/lib/` segments under EITHER path
+                // separator — Windows uses `\` so a bare `/default/`
+                // substring check misses `default\01_code.loft` and
+                // misclassifies every stdlib fn as user source, which
+                // pulls the entire stdlib into the reachable set and
+                // raises P269 compile_error for unimplemented natives
+                // (n_parallel_queue_fn / n_parallel_buf_get_fn / ...).
+                // Linux/macOS only ever produce `/` separators so the
+                // original check happened to work; Windows surfaced
+                // the gap in PR #212 CI.
+                let normalised: String = pos_file
+                    .chars()
+                    .map(|c| if c == '\\' { '/' } else { c })
+                    .collect();
                 if pos_file.is_empty()
-                    || pos_file.contains("/default/")
-                    || pos_file.contains("/lib/")
+                    || normalised.contains("/default/")
+                    || normalised.contains("/lib/")
                 {
                     continue;
                 }
