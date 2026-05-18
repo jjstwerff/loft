@@ -901,7 +901,11 @@ ci: rebuild-native-cdylibs
 	#   2. Clippy     job → cargo clippy -- -D warnings    (no --release,
 	#                       no --tests, no --no-default-features — that
 	#                       matches the remote runner exactly)
-	#   3. Test       job → cargo build --all-targets,
+	#   3. Doc hygiene job → scripts/check_doc_drift.sh (blocking since
+	#                       2026-05-18 — promoted from non-blocking after
+	#                       repeated PR-212 cycles where ignored drift
+	#                       surfaced as downstream test failures)
+	#   4. Test       job → cargo build --all-targets,
 	#                       cargo build --no-default-features,
 	#                       cargo nextest run --profile ci
 	#
@@ -914,6 +918,7 @@ ci: rebuild-native-cdylibs
 	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
 	cargo fmt -- --check > result.txt 2>&1 && \
 	cargo clippy -- -D warnings >> result.txt 2>&1 && \
+	scripts/check_doc_drift.sh >> result.txt 2>&1 && \
 	cargo build --all-targets >> result.txt 2>&1 && \
 	cargo build --no-default-features >> result.txt 2>&1 && \
 	(cargo nextest --version >/dev/null 2>&1 || cargo install cargo-nextest --locked) >> result.txt 2>&1 && \
