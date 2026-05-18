@@ -350,38 +350,39 @@ view-refresh:
 # Scans the repo for @P-id / @PLAN-id references, writes
 # index/tags.json.  See doc/claude/plans/37-tracker-index/.
 # CLI query wrapper (`scripts/idx`) lands in plan-37 phase 01.
-index:
+index:  ## Refresh index/tags.json via the loft scanner (@PLAN37 phase 07 H cutover)
+	@# Cutover landed 2026-05-18 in sub-commit H: the canonical
+	@# `make index` now runs scan.loft.  Bash scan.sh stays in
+	@# tree as `make index-bash` (the fallback path for the
+	@# transition window; deleted in sub-commit J once the loft
+	@# scanner has soaked on `main` for a few cycles).  scan.loft
+	@# writes the JSON-object form of tags.json to stdout (via
+	@# `LOFT_INDEX_BUCKETED=1`) and the summary stats line to
+	@# stderr — the shell redirect captures one, the terminal
+	@# shows the other.  The `--no-warnings` flag (@P282 close)
+	@# keeps stdout free of the loft compiler's warning preamble.
+	@if [ ! -x target/release/loft ]; then \
+	    echo "host loft binary missing; run: cargo build --release"; exit 1; \
+	fi
+	@mkdir -p index
+	@LOFT_INDEX_BUCKETED=1 ./target/release/loft --no-warnings --lib lib/ \
+	    tools/indexer/src/scan.loft > index/tags.json
+
+# Bash scanner fallback for the H→J transition window.  Same
+# tags.json output (modulo the latent total_refs bug — see phase
+# 07 doc).  Documented in CLAUDE.md as the bootstrap path; users
+# who don't have a built loft can still refresh the index.
+index-bash:  ## Refresh index/tags.json via the legacy bash scanner
 	@./tools/indexer/scan.sh
 
 index-install-hook:
 	@./tools/indexer/install-hook.sh
 
-# index-loft (@PLAN37 phase 07 MVP) — runs the loft-native
-# scanner via `loft --native --lib lib/`.  Single-shot mode:
-# walks the source roots, prints `<file>:<line>:<tag>` for
-# every @P / @PLAN reference.  Strips the loft compiler's
-# warning preamble (`warning:` / source-pointer block) so
-# stdout is just the scanner's output.
-#
-# This target is the proof-of-concept that loft can host the
-# tag scan; the canonical `make index` still drives `scan.sh`
-# until the loft scanner emits the full `tags.json` shape
-# (problems_open / plans_* / broken / links buckets).
-#
-# Test harness: `tests/index_hygiene.rs::loft_scanner_matches_bash`
-# diffs the loft output against scan.sh's `tags.json` content
-# to catch drift.
-index-loft:
-	@if [ ! -x target/release/loft ]; then \
-	    echo "host loft binary missing; run: cargo build --release"; exit 1; \
-	fi
-	@# --no-warnings (added in @PLAN37 phase 10.2 / @P282) keeps stdout
-	@# free of the loft compiler's warning preamble so the scanner's
-	@# JSON Lines / bucketed output can be piped straight into jq /
-	@# downstream consumers.  The previous grep -vE filter wrapper
-	@# (six patterns to strip the warning + source-pointer block) is
-	@# now obsolete.
-	@./target/release/loft --no-warnings --lib lib/ tools/indexer/src/scan.loft
+# index-loft (@PLAN37 phase 07 MVP) — historical alias.  Kept
+# pointing at the same scanner as `make index` so any external
+# caller / CI script that still invokes `make index-loft`
+# keeps working.  Slated for removal alongside scan.sh.
+index-loft: index
 
 view: view-refresh
 	@if [ ! -f tools/viewer/src/main.loft ]; then \
