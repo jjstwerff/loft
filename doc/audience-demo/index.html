@@ -255,9 +255,48 @@ function draw() {
     const cx = originX + px;
     const cy = originY + py;
     const colourIdx = cells.get(cellKey(wx, wy)) || 0;
-    const fill = colourIdx === 0 ? COLOR_EMPTY : PALETTE[colourIdx];
+    const isPan = (vx === -4 || vx === 4 || vy === -3 || vy === 3);
+    // Pan ring uses a subtly lighter empty colour so the user can tell
+    // at a glance which cells move-on-tap and which paint-on-tap.
+    const empty = isPan ? '#161624' : COLOR_EMPTY;
+    const fill = colourIdx === 0 ? empty : PALETTE[colourIdx];
     drawHex(cx, cy, hexSize * 0.97, fill, COLOR_GRID);
+    // Direction arrow on each pan cell so the affordance is clear.
+    if (isPan && colourIdx === 0) {
+      drawPanArrow(cx, cy, hexSize, vx, vy);
+    }
   }
+}
+
+// Small unicode-style arrow rendered with two line segments, pointing
+// outward.  Drawn dim so it never competes with a painted cell.
+function drawPanArrow(cx, cy, size, vx, vy) {
+  // Direction vector: from centre outwards.  Corners get diagonal arrows.
+  let dx = 0, dy = 0;
+  if (vx === -4) dx = -1;
+  if (vx ===  4) dx =  1;
+  if (vy === -3) dy = -1;
+  if (vy ===  3) dy =  1;
+  // Normalise diagonal so the arrow length is consistent.
+  const len = Math.hypot(dx, dy) || 1;
+  dx /= len; dy /= len;
+  const tip = size * 0.45;
+  const tail = size * 0.05;
+  ctx.strokeStyle = '#5a5a72';
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx + dx * tail, cy + dy * tail);
+  ctx.lineTo(cx + dx * tip,  cy + dy * tip);
+  // Two short whiskers at the tip — rotate ±150° from arrow direction.
+  const ang = Math.atan2(dy, dx);
+  const w = size * 0.18;
+  for (const sign of [+1, -1]) {
+    const a = ang + sign * (Math.PI * 5 / 6);
+    ctx.moveTo(cx + dx * tip, cy + dy * tip);
+    ctx.lineTo(cx + dx * tip + Math.cos(a) * w, cy + dy * tip + Math.sin(a) * w);
+  }
+  ctx.stroke();
 }
 
 // ── Palette UI + active colour ───────────────────────────────────────────────
@@ -414,13 +453,31 @@ function wsConnect() {
 // Any         + colour cleared → no-op
 canvas.addEventListener('pointerdown', e => {
   e.preventDefault();
-  if (activeColour === 0) return;
   const rect = canvas.getBoundingClientRect();
   const px = e.clientX - rect.left - originX;
   const py = e.clientY - rect.top - originY;
   const { x: vx, y: vy } = pixelToOffset(px, py, hexSize);
-  // Only react to taps inside the visible 9x7 window.
-  if (vx < -4 || vx > 4 || vy < -3 || vy > 3) return;
+  // 9x7 window: vx ∈ [-4..4], vy ∈ [-3..3].  Outer ring (vx == ±4 OR
+  // vy == ±3) is a PAN zone — tap there to shift the world view in
+  // that direction.  Inner 7x5 (vx ∈ [-3..3], vy ∈ [-2..2]) is the
+  // PAINT zone.  Corners count as pan in both axes.
+  const outOfView = (vx < -4 || vx > 4 || vy < -3 || vy > 3);
+  if (outOfView) return;                          // tap outside grid → ignore
+  const isPan = (vx === -4 || vx === 4 || vy === -3 || vy === 3);
+  if (isPan) {
+    // Pan by the cell-distance the user tapped (so a corner-tap moves
+    // diagonally).  Each tap shifts by one cell; longer-distance pans
+    // need multiple taps — feels deliberate and matches the slug-tempo
+    // philosophy from the design doc.
+    if (vx === -4) viewOffsetX -= 1;
+    if (vx ===  4) viewOffsetX += 1;
+    if (vy === -3) viewOffsetY -= 1;
+    if (vy ===  3) viewOffsetY += 1;
+    draw();
+    return;
+  }
+  // Paint zone — original empty/own/other behaviour.
+  if (activeColour === 0) return;
   const wx = vx + viewOffsetX;
   const wy = vy + viewOffsetY;
   const k = cellKey(wx, wy);
@@ -456,6 +513,11 @@ init();
 window.__phase0 = {
   cells, PALETTE,
   get activeColour() { return activeColour; },
+  get viewOffsetX() { return viewOffsetX; },
+  get viewOffsetY() { return viewOffsetY; },
+  get hexSize() { return hexSize; },
+  get originX() { return originX; },
+  get originY() { return originY; },
   get ws() { return ws; },
   get wsState() {
     if (!ws) return 'none';

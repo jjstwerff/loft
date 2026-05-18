@@ -1,0 +1,295 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN36 phase 3 MVP — pure-OpenGL projector view (basis for the beamer).
+//
+// Connects as a WebSocket client to the multi-client audience server
+// (tools/audience-demo/server.loft, ws://127.0.0.1:18083/), receives
+// every `4:x,y,color` delta the server broadcasts, and renders the
+// painted hexes live in a desktop GL window.
+//
+// MVP scope:
+//   - Single OpenGL window, 1280x800.
+//   - Flat 2D pointy-top hex grid (no 3D crystal mesh yet).
+//   - 9-colour palette matching doc/audience-demo/index.html.
+//   - No auto-camera, no input — pure passive viewer.
+//   - Hardcoded server URL.  Future projector adds CLI flags + auto-
+//     camera + 3D crystal mesh per `03-projector-view.md`.
+//
+// Run:
+//   # Terminal A — start the multi-client server.
+//   ./target/release/loft --no-warnings --lib lib/ tools/audience-demo/server.loft
+//
+//   # Terminal B — start the projector.
+//   ./target/release/loft --no-warnings --lib lib/ tools/audience-demo/projector.loft
+//
+//   # Now any seed/clear event hitting the server appears as a coloured
+//   # hex in the projector window within a frame.
+
+use graphics;
+use web;
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+WIN_W = 1280;
+WIN_H = 800;
+
+// Pointy-top hex layout — matches doc/audience-demo/index.html's
+// offsetToPixel().  HEX_SIZE is the circumradius (centre → vertex)
+// in pixels.  Width of one hex column = sqrt(3) * size.
+HEX_SIZE = 38.0;
+SQRT3 = 1.7320508075688772;
+
+// Server URL (hard-coded for the MVP — separate binary per the user's
+// scope decision).  Multi-client `server.loft` listens on 18083 and
+// broadcasts every paint event over text frames `4:x,y,color`.
+SERVER_URL = "ws://127.0.0.1:18083/ws";
+
+// ── Helpers — leaves first (per @P281: pass-1 fn return-type inference) ─────
+
+// One cell in the world.  Hash key is the formatted "x,y" — same key
+// scheme as the server side so a `4:x,y,c` delta updates the right
+// record by parsing back the integers.
+struct Cell {
+  ck:    text not null,    // "x,y" — primary key
+  x:     integer not null, // offset coord (matches phone client)
+  y:     integer not null,
+  color: integer not null, // 1..9 (palette index; 0 means deleted)
+}
+
+// Format a "x,y" key.  Inverse of parse_xy.
+fn cell_key(x: integer, y: integer) -> text {
+  "{x},{y}"
+}
+
+// Parse the "x,y,c" payload of a `4:` delta into three integers.
+// Returns a tuple via expression-form (early-returning a tuple trips
+// the typer — same workaround used in server.loft).
+fn parse_xyc(payload: text) -> (integer, integer, integer) {
+  i = payload.find(",");
+  if i == null {
+    (0, 0, 0)
+  } else {
+    x = payload[..i] as integer;
+    rest = payload[i + 1..];
+    j = rest.find(",");
+    if j == null {
+      (x, 0, 0)
+    } else {
+      y = rest[..j] as integer;
+      c = rest[j + 1..] as integer;
+      (x, y, c)
+    }
+  }
+}
+
+// Palette — three parallel vector<float>s indexed by palette id 0..9.
+// Matches doc/audience-demo/index.html PALETTE (#d94646, #3fc858, …).
+// Index 0 is the unused "empty" sentinel — never sent over the wire as
+// a colour, but kept here so `palette_*[idx]` is always in-range.
+fn palette_r(idx: integer) -> float {
+  rs: vector<float> = [
+    0.04,                              // 0 — unused (empty)
+    217.0/255.0, 63.0/255.0, 58.0/255.0,    // 1 red, 2 green, 3 blue
+    63.0/255.0, 208.0/255.0, 223.0/255.0,   // 4 cyan, 5 magenta, 6 yellow
+    230.0/255.0, 124.0/255.0, 156.0/255.0,  // 7 white, 8 grey, 9 brown
+  ];
+  rs[idx]
+}
+fn palette_g(idx: integer) -> float {
+  gs: vector<float> = [
+    0.04,
+    70.0/255.0, 200.0/255.0, 114.0/255.0,
+    200.0/255.0, 70.0/255.0, 216.0/255.0,
+    230.0/255.0, 124.0/255.0, 106.0/255.0,
+  ];
+  gs[idx]
+}
+fn palette_b(idx: integer) -> float {
+  bs: vector<float> = [
+    0.08,
+    70.0/255.0, 88.0/255.0, 229.0/255.0,
+    200.0/255.0, 208.0/255.0, 64.0/255.0,
+    236.0/255.0, 138.0/255.0, 60.0/255.0,
+  ];
+  bs[idx]
+}
+
+// Build a unit pointy-top hex VBO — 6 triangles fanned from centre.
+// 18 vertices, 3 floats each (x, y, z=0).  Radius 1; the per-cell MVP
+// scales by HEX_SIZE.  Vertex order matches doc/audience-demo/index.html
+// drawHex (angle = 60°i - 30° for i = 0..5).
+fn build_hex_vbo() -> integer {
+  verts: vector<single> = [];
+  for i in 0..6 {
+    a0 = (60.0 * i as float - 30.0) * 3.14159265358979 / 180.0;
+    a1 = (60.0 * (i + 1) as float - 30.0) * 3.14159265358979 / 180.0;
+    // centre
+    verts += [0.0f, 0.0f, 0.0f];
+    // outer vertex i
+    verts += [cos(a0) as single, sin(a0) as single, 0.0f];
+    // outer vertex i+1
+    verts += [cos(a1) as single, sin(a1) as single, 0.0f];
+  }
+  graphics::gl_upload_vertices(verts, 3)
+}
+
+// Convert offset (x, y) cell coords → centre pixel (cx, cy) on the
+// window, with hex (0, 0) at screen centre.  Matches the phone client's
+// offsetToPixel(x, y, size) function exactly.
+fn cell_centre_x(x: integer, y: integer) -> float {
+  // x_shift = (y & 1) ? SQRT3/2 * size : 0
+  parity = y - (y / 2) * 2;        // y % 2 with mathematical sign
+  // Adjust for negative y: parity must be 0 or 1, not 0/-1.
+  if parity < 0 { parity = parity + 2; }
+  shift = 0.0;
+  if parity == 1 { shift = SQRT3 / 2.0 * HEX_SIZE; }
+  WIN_W as float / 2.0 + x as float * SQRT3 * HEX_SIZE + shift
+}
+fn cell_centre_y(y: integer) -> float {
+  WIN_H as float / 2.0 + y as float * 1.5 * HEX_SIZE
+}
+
+// Build an MVP that places + scales the unit-hex VBO so its centre
+// lands at (cx, cy) with radius r.  Same trick as graphics::build_mvp_2d
+// but skips the translate-then-scale composition: the unit hex already
+// has its centre at the origin, so we just scale by r and translate by
+// (cx, cy).
+fn build_hex_mvp(proj: const vector<float>, cx: float, cy: float, r: float) -> vector<float> {
+  mvp: vector<float> = [
+    proj[0] * r,  proj[1] * r,  proj[2] * r,  proj[3] * r,
+    proj[4] * r,  proj[5] * r,  proj[6] * r,  proj[7] * r,
+    proj[8],      proj[9],      proj[10],     proj[11],
+    proj[0] * cx + proj[4] * cy + proj[12],
+    proj[1] * cx + proj[5] * cy + proj[13],
+    proj[2] * cx + proj[6] * cy + proj[14],
+    proj[3] * cx + proj[7] * cy + proj[15],
+  ];
+  mvp
+}
+
+// Draw one filled hex at (cx, cy) with radius r and palette colour `pi`.
+fn draw_hex(painter: const graphics::Painter2D, vao: integer,
+            cx: float, cy: float, r: float, pi: integer) {
+  mvp = build_hex_mvp(painter.p2_proj, cx, cy, r);
+  graphics::gl_use_shader(painter.p2_flat);
+  graphics::gl_set_uniform_mat4(painter.p2_flat, "uMVP", mvp);
+  graphics::gl_set_uniform_vec3(painter.p2_flat, "uColor",
+                                palette_r(pi), palette_g(pi), palette_b(pi));
+  graphics::gl_set_uniform_float(painter.p2_flat, "uAlpha", 1.0);
+  graphics::gl_draw(vao, 18);
+}
+
+// Apply a single incoming text frame to the world.  Format inherited
+// from server.loft: `<msg_id>:<payload>`.  We only care about msg 4
+// (world delta).  msg 5 (active-player signal) is ignored in the MVP
+// — phase 0.8 (jump-to-active) is desktop UI, not projector spectacle.
+fn apply_frame(world: World, frame: text) {
+  colon = frame.find(":");
+  if colon == null {
+    println("projector: dropped malformed frame {frame}");
+    return;
+  }
+  msg_id = frame[..colon] as integer;
+  payload = frame[colon + 1..];
+  if msg_id != 4 {
+    if msg_id != 5 { println("projector: ignoring msg_id={msg_id} payload={payload}"); }
+    return;
+  }
+  (x, y, c) = parse_xyc(payload);
+  k = cell_key(x, y);
+  if c == 0 {
+    // erase
+    world.cells[k] = null;
+    println("projector: erase ({x},{y}) — total cells={len(world.cells)}");
+  } else {
+    existing = world.cells[k];
+    if existing == null {
+      world.cells += [Cell{ck: k, x: x, y: y, color: c}];
+      println("projector: paint ({x},{y}) c={c} — total cells={len(world.cells)}");
+    } else {
+      existing.color = c;
+      println("projector: repaint ({x},{y}) c={c} — total cells={len(world.cells)}");
+    }
+  }
+}
+
+struct World {
+  cells: hash<Cell[ck]>,
+}
+
+fn main() {
+  if !graphics::gl_create_window(WIN_W, WIN_H, "Audience Projector — @PLAN36") {
+    println("projector: FAILED to create OpenGL window");
+    return;
+  }
+  println("projector: window {WIN_W}x{WIN_H} open");
+
+  painter = graphics::create_painter_2d(WIN_W as float, WIN_H as float);
+  hex_vao = build_hex_vbo();
+  println("projector: hex VBO + 2D painter ready");
+
+  println("projector: connecting to {SERVER_URL}");
+  ws = web::ws_handler(SERVER_URL);
+  if ws == null {
+    println("projector: FAILED ws_handler({SERVER_URL})");
+    graphics::gl_destroy_window();
+    return;
+  }
+  println("projector: ws session opened (auto-reconnects on drop)");
+
+  world = World{cells: []};
+
+  // Ask the server for a full snapshot.  Catches the case where the
+  // initial connect-time replay missed frames (lib/web buffer ramp-up,
+  // WS handshake race, mid-show reconnect, etc.).  Re-requested below
+  // every 2 seconds while world is still empty.
+  ws.send("6:");
+  snapshot_retry_at = 120;          // frame number; re-request if still empty
+  snapshot_retries  = 0;            // capped at 3 attempts; see watchdog below
+
+  // Dark-blue background — matches doc/audience-demo/index.html --bg.
+  bg = graphics::rgba(10, 10, 20, 255);
+
+  frames = 0;
+  delta_count = 0;
+  while graphics::gl_poll_events() {
+    // 1. Drain any pending server frames into world state.
+    while true {
+      msg = ws.try_recv();
+      if msg == null { break; }
+      apply_frame(world, msg);
+      delta_count = delta_count + 1;
+    }
+
+    // 2. Clear + redraw every non-empty cell.  Order doesn't matter at
+    //    flat-2D scope; once 3D heights land in phase 3, sort back-to-
+    //    front by y so foreground crystals occlude background ones.
+    graphics::gl_clear(bg);
+    for cell in world.cells {
+      cx = cell_centre_x(cell.x, cell.y);
+      cy = cell_centre_y(cell.y);
+      // 0.97 shrink matches the phone client's drawHex(size * 0.97) —
+      // gives a thin dark gap between adjacent hexes so the lattice
+      // reads even when neighbours share a colour.
+      draw_hex(painter, hex_vao, cx, cy, HEX_SIZE * 0.97, cell.color);
+    }
+    graphics::gl_swap_buffers();
+    frames = frames + 1;
+
+    // Watchdog: re-request snapshot a small number of times while the
+    // world is still empty (covers the case where the initial replay
+    // missed frames).  Capped at 3 attempts so a genuinely empty world
+    // doesn't spam the server / log forever.
+    if len(world.cells) == 0 && frames >= snapshot_retry_at && snapshot_retries < 3 {
+      println("projector: still empty after {frames} frames; re-requesting snapshot");
+      ws.send("6:");
+      snapshot_retry_at = frames + 120;
+      snapshot_retries = snapshot_retries + 1;
+    }
+  }
+
+  println("projector: window closed after {frames} frames, {delta_count} deltas applied");
+  ws.close();
+  graphics::gl_destroy_window();
+}

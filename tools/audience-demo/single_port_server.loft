@@ -1,0 +1,270 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN36 — combined HTTP + multi-client WebSocket server.
+//
+// One port, one process, serves both:
+//   GET /                → doc/audience-demo/index.html  (page)
+//   GET /index.html      → doc/audience-demo/index.html
+//   ws://.../ws          → multi-client WebSocket session
+//
+// Each new WS client gets:
+//   1. A full replay of the current world (one `4:x,y,c` per cell).
+//   2. Real-time broadcast of every paint / clear from every other
+//      client.
+// And handles:
+//   - msg 1 (seed)         from client  →  paint cell, broadcast 4:
+//   - msg 2 (clear)        from client  →  empty cell, broadcast 4: with c=0
+//   - msg 3 (color_select) from client  →  record + broadcast 5:
+//   - msg 6 (snapshot)     from client  →  re-replay world to that client
+//
+// Phone URL on the same WiFi (no `?ws=` override needed — the page
+// auto-derives WS from location.host):
+//   http://<lan-ip>:18083/
+//
+// Run:
+//   ./target/release/loft --interpret --no-warnings --lib lib/ \
+//       tools/audience-demo/single_port_server.loft
+//
+// Implementation note: lib/server's multi-client `srv.run(on_event)`
+// is a blocking event pump that doesn't expose HTTP requests, so this
+// program drives the loop manually using the non-blocking single-
+// client primitives (`srv.next()` + `WebSocket.next()`).  Each
+// connection is either an HTTP request (served + closed) or a WS
+// upgrade (registered into the pool).  The pool is polled every
+// loop iteration with a 2 ms idle sleep when there's no work.
+
+use server;
+use web;       // sleep_ms
+
+PORT = 18083;
+
+// ── World + client state ─────────────────────────────────────────────────────
+
+struct Cell {
+  ck:    text not null,
+  x:     integer not null,
+  y:     integer not null,
+  color: integer not null,
+}
+
+struct Client {
+  ws:     server::WebSocket,
+  active: boolean not null,         // false → drop on next sweep
+  color:  integer not null,         // last colour_select (1-9, 0 = cleared)
+  lx:     integer not null,         // last-painted x
+  ly:     integer not null,
+}
+
+struct World {
+  cells:   hash<Cell[ck]>,
+  clients: vector<Client>,
+}
+
+// ── Wire helpers — leaves first (@P281) ─────────────────────────────────────
+
+fn cell_key(x: integer, y: integer) -> text { "{x},{y}" }
+
+fn delta_frame(x: integer, y: integer, color: integer) -> text {
+  "4:{x},{y},{color}"
+}
+fn active_frame(x: integer, y: integer) -> text {
+  "5:{x},{y}"
+}
+
+// Parse "x,y,c"
+fn parse_xyc(payload: text) -> (integer, integer, integer) {
+  i = payload.find(",");
+  if i == null {
+    (0, 0, 0)
+  } else {
+    x = payload[..i] as integer;
+    rest = payload[i + 1..];
+    j = rest.find(",");
+    if j == null {
+      (x, 0, 0)
+    } else {
+      y = rest[..j] as integer;
+      c = rest[j + 1..] as integer;
+      (x, y, c)
+    }
+  }
+}
+
+// Parse "x,y"
+fn parse_xy(payload: text) -> (integer, integer) {
+  i = payload.find(",");
+  if i == null {
+    (0, 0)
+  } else {
+    x = payload[..i] as integer;
+    y = payload[i + 1..] as integer;
+    (x, y)
+  }
+}
+
+fn read_index() -> text {
+  // Re-read every request — edit + refresh works with no restart.
+  f = file("doc/audience-demo/index.html");
+  if f.format == Format.NotExists {
+    return "<!DOCTYPE html><html><body><h1>500 — doc/audience-demo/index.html missing</h1>"
+         + "<p>Run from the loft repo root.</p></body></html>";
+  }
+  body = f.content();
+  body
+}
+
+// Broadcast a frame to every client that's still marked active.  send()
+// returns false when the underlying socket is closed — flag the client
+// for removal on the next sweep.
+fn broadcast(world: World, msg: text) {
+  for c in world.clients {
+    if c.active {
+      if !c.ws.send(msg) {
+        c.active = false;
+      }
+    }
+  }
+}
+
+// Replay the current world to a single client.  One frame per non-empty
+// cell.  If any send fails, abort and mark the client inactive.
+fn replay_world_to(world: World, target: Client) {
+  for cell in world.cells {
+    if !target.ws.send(delta_frame(cell.x, cell.y, cell.color)) {
+      target.active = false;
+      return;
+    }
+  }
+}
+
+// Apply one parsed message from a client.  May mutate world.cells and
+// world.clients, may broadcast.
+fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) {
+  if msg_id == 1 {
+    // seed "x,y,color"
+    (x, y, c) = parse_xyc(payload);
+    if c < 1 || c > 9 { return; }
+    k = cell_key(x, y);
+    existing = world.cells[k];
+    if existing != null {
+      if existing.color == c {
+        // own-colour tap → erase
+        world.cells[k] = null;
+        broadcast(world, delta_frame(x, y, 0));
+        return;
+      }
+      // other-colour tap → ignore
+      return;
+    }
+    world.cells += [Cell{ck: k, x: x, y: y, color: c}];
+    sender.lx = x;
+    sender.ly = y;
+    broadcast(world, delta_frame(x, y, c));
+  } else if msg_id == 2 {
+    // clear "x,y" (unconditional)
+    (x, y) = parse_xy(payload);
+    k = cell_key(x, y);
+    if world.cells[k] != null {
+      world.cells[k] = null;
+      broadcast(world, delta_frame(x, y, 0));
+    }
+  } else if msg_id == 3 {
+    // color_select "color"
+    c = payload as integer;
+    sender.color = c;
+    broadcast(world, active_frame(sender.lx, sender.ly));
+  } else if msg_id == 6 {
+    // snapshot request — re-replay world to this sender only
+    println("single-port: [snapshot req] cells={len(world.cells)}");
+    replay_world_to(world, sender);
+  }
+}
+
+// Drain all pending messages on every active client.  Drops clients
+// whose send/recv suggests a closed socket.  Returns the number of
+// messages processed this sweep (caller uses it to decide whether to
+// idle-sleep).
+fn poll_clients(world: World) -> integer {
+  processed = 0;
+  for c in world.clients {
+    if !c.active { continue; }
+    while true {
+      msg = c.ws.next();
+      if msg == null { break; }
+      // Parse "<msg_id>:<payload>"
+      colon = msg.find(":");
+      if colon == null {
+        println("single-port: dropped malformed frame: {msg}");
+        continue;
+      }
+      msg_id  = msg[..colon] as integer;
+      payload = msg[colon + 1..];
+      handle_message(world, c, msg_id, payload);
+      processed = processed + 1;
+    }
+  }
+  processed
+}
+
+fn main() {
+  srv = server::listen(PORT);
+  if srv.handle < 0 {
+    println("single-port: FAILED to listen on port {PORT}");
+    return;
+  }
+  println("single-port server: listening on port {PORT}");
+  println("  GET /                → audience-demo page");
+  println("  GET /ws              → WebSocket (multi-client)");
+  println("");
+  println("  load on phone (same WiFi):");
+  println("    http://<lan-ip>:{PORT}/");
+  println("  the page auto-derives ws://<lan-ip>:{PORT}/ws from location.host,");
+  println("  so no `?ws=` override is needed.");
+
+  world = World{cells: [], clients: []};
+
+  while true {
+    work = 0;
+
+    // 1. Accept any new connection (non-blocking).
+    req = srv.next_nonblocking();
+    if req != null {
+      if req.path == "/ws" {
+        ws = server::ws_upgrade();
+        if ws == null {
+          println("single-port: ws_upgrade() failed");
+        } else {
+          world.clients += [Client{
+            ws:     ws,
+            active: true,
+            color:  0,
+            lx:     0,
+            ly:     0,
+          }];
+          println("single-port: ws client connected — total active={len(world.clients)}");
+          // Replay current world to the new client.
+          new_client = world.clients[len(world.clients) - 1];
+          replay_world_to(world, new_client);
+        }
+        work = work + 1;
+      } else if req.path == "/" || req.path == "/index.html" {
+        println("single-port: GET {req.path} → 200 (index.html)");
+        req.respond_html(read_index());
+        work = work + 1;
+      } else {
+        println("single-port: GET {req.path} → 404");
+        req.respond_404();
+        work = work + 1;
+      }
+    }
+
+    // 2. Poll each WS client for pending messages.
+    work = work + poll_clients(world);
+
+    // 3. Idle yield when no work — keeps CPU low.  2 ms keeps the
+    //    accept-loop latency under 5 ms which is well below the user-
+    //    perceptible threshold for paint roundtrips.
+    if work == 0 { web::sleep_ms(2); }
+  }
+}
