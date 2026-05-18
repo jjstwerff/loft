@@ -365,7 +365,14 @@ index:  ## Refresh index/tags.json via the loft scanner
 	    echo "host loft binary missing; run: cargo build --release"; exit 1; \
 	fi
 	@mkdir -p index
-	@LOFT_INDEX_BUCKETED=1 ./target/release/loft --no-warnings --lib lib/ \
+	@# `--native-release` (rather than bare `--native`) instructs rustc
+	@# to emit `-O` (opt-level=2) and the loft codegen to emit only
+	@# reachable functions.  For a hot loop like scan.loft the
+	@# difference is dramatic: scan loop 1.7s → 165ms, total 5s → 1.3s
+	@# warm-cache.  Cold compile costs ~6s but the per-source cache
+	@# (tools/indexer/src/.loft/cache/) survives across runs, so the
+	@# everyday `make index` invocation is the warm path.
+	@LOFT_INDEX_BUCKETED=1 ./target/release/loft --native-release --no-warnings --lib lib/ \
 	    tools/indexer/src/scan.loft > index/tags.json
 
 index-install-hook:
