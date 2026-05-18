@@ -11,9 +11,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Phone client + multi-client loft server roundtrip works end-to-end:
 tap on one connected device, every other device sees the paint
 appear within a tick.  Deployed at
-[`doc/audience-demo/`](../../audience-demo/) for static-client
-validation on GitHub Pages.  See [§ Sub-arcs](#sub-arcs) for which
-sub-tasks remain.
+[`doc/audience-demo/`](../../../audience-demo/) for static-client
+validation on GitHub Pages.  Local dev loop is a single-port
+HTTP+WS loft server ([`tools/audience-demo/dev_server.loft`](../../../../tools/audience-demo/dev_server.loft))
+that re-reads `index.html` per request — edit, refresh, see the
+change with no PR or Pages deploy in between.  See
+[§ Sub-arcs](#sub-arcs) for which sub-tasks remain and
+[§ Local dev tooling](#local-dev-tooling) for the iteration
+workflow.
 
 Scoped 2026-05-09 to support an upcoming local-meetup talk to game
 creators + art enthusiasts.  Sibling presentation plan at
@@ -41,7 +46,7 @@ top of them, not library extension.
 
 | # | File | Builds | Effort | Status |
 |---|---|---|---|---|
-| 0 | [00-audience-browser-page.md](00-audience-browser-page.md) | Pure HTML/JS smartphone client — 9×7 hex world view (with movement-zone outer rings), 9-color palette, clear + jump-to-active controls, tap/swipe paint, WebSocket | S | **Partial** — MVP shipped (PR #214): hex grid, palette, tap, WebSocket all work; deployed at [`doc/audience-demo/`](../../audience-demo/).  Remaining: 0.5 swipe, 0.6 outer-ring pan zones, 0.8 jump-to-active flash, 0.9 view-centring on activity (last depends on phase 1 data) |
+| 0 | [00-audience-browser-page.md](00-audience-browser-page.md) | Pure HTML/JS smartphone client — 9×7 hex world view (with movement-zone outer rings), 9-color palette, clear + jump-to-active controls, tap/swipe paint, WebSocket | S | **Partial** — MVP shipped (PR #214): hex grid, palette, tap, WebSocket all work; deployed at [`doc/audience-demo/`](../../../audience-demo/); coord system locked to pointy-top OFFSET `(x, y)` so 32×32 server chunks tile naturally (y+2 vertical, y+1 jogs half-hex right).  WS endpoint now auto-derived from `location.host` so the page reconnects to whatever host:port served it.  Remaining: 0.5 swipe, 0.6 outer-ring pan zones, 0.8 jump-to-active flash, 0.9 view-centring on activity (last depends on phase 1 data) |
 | 1 | [01-server-state.md](01-server-state.md) | Loft server: hold world state, age cells, run automatic decay (older cells removed; filled-neighbour lease extends life so shrinking starts at the edges), broadcast world deltas + active-player signals.  No autonomous growth — placement is pure direct painting from audience taps | M | **Partial — MVP shipped** (PR #214): single-hash world state, multi-client connect/dispatch/broadcast, world-replay-on-connect, active-player signal on color_select.  Remaining: 1.4 tick loop + decay, 1.8 multi-client load test, 1.9 crash-resistance.  Wire is `<msg_id>:<payload>` (MVP); spec'd migration to JSON-in / binary-out is filed as phase 1 step 2 |
 | ~~2~~ | ~~02-generation-script.md~~ | DROPPED — closed by the 2026-05-10 growth-model decision (pure direct painting; no autonomous growth).  Renderer-side ridge / edge classification covers what would have been the "plant / crystal aesthetic" generator | — | Dropped |
 | 3 | [03-projector-view.md](03-projector-view.md) | Native loft beamer client: subscribe to server, render full hex world (frost-style 3D crystal mesh + edge-detected plant/crystal aesthetic), auto-camera follows activity heat field, presenter hotkey overrides | M | Open |
@@ -302,6 +307,34 @@ survives the talk.
 | Q5 audience platform | 2026-05-10 (design review) | Both phone (touch) and desktop (pointer + keyboard) are first-class | Phone layout is the primary; desktop is a separate UI optimised for larger world view + mouse + keyboard.  Same WebSocket protocol, same world model — just two layouts.  Doubles input testing surface but lets non-phone audience members participate fully and gives the presenter a usable laptop fallback |
 | Q6 presenter special role | 2026-05-10 (design review) | No special role — presenter uses regular phone or desktop client | Operational actions (restart, clear canvas) handled out-of-band via SSH / local shell on the server box.  Avoids a third client surface to build + test; presenter blends in with the audience |
 | Q-three-view-roles | 2026-05-10 (design review) | Three distinct view roles — projector (3D, no base grid, auto-camera), desktop (3D + base grid, user camera, paints), phone (2D pure orthogonal grid, no 3D, paints) | Projector is the pure spectacle (no input, no lattice); desktop is the projector renderer + base-plane input; phone is the smallest possible flat paint surface.  Phone does not need the WASM renderer at all |
+
+## Local dev tooling
+
+The `tools/audience-demo/` directory holds two servers covering
+different iteration loops.  Both are loft programs that link
+against `lib/server`; neither requires a redeploy to iterate.
+
+| File | Loop | When to reach for it |
+|---|---|---|
+| [`tools/audience-demo/dev_server.loft`](../../../../tools/audience-demo/dev_server.loft) | Single-port HTTP + WebSocket, one client at a time, echoes events as deltas | Default for client-side iteration.  Edit `doc/audience-demo/index.html`, refresh the browser, see the change.  No PR, no Pages deploy. |
+| [`tools/audience-demo/server.loft`](../../../../tools/audience-demo/server.loft) | WS only, true multi-client, pair with `python3 -m http.server -d doc` on a separate port | Anything needing two or more tabs at once: multi-client world replay, audience-scale broadcast smoke tests, projector-view co-development. |
+
+`dev_server.loft` two design properties worth knowing about when
+extending it:
+
+1. **HTML re-read per request** — `read_index()` calls `file(...)`
+   inside the request handler so saving the HTML is enough to ship
+   the change to the next browser refresh.  Tiny per-request cost;
+   acceptable for single-client dev.
+2. **All-URL discovery at startup** — reads `/etc/hostname` and
+   walks `/proc/net/fib_trie` looking for `/32 host LOCAL` IPv4
+   entries (non-loopback), prints every reachable URL.  The client
+   derives its WebSocket URL from `location.host`, so opening
+   *any* of the printed URLs auto-routes WS back to the same
+   instance — phone testing on the LAN needs no client edit.
+
+Full workflow + the multi-client combo's `?ws=...` override are
+documented at [`tools/audience-demo/README.md`](../../../../tools/audience-demo/README.md).
 
 ## Cross-arc dependencies
 

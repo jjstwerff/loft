@@ -152,6 +152,41 @@ connect.
 { "type": "catch_up", "last_session": <session_id> }
 ```
 
+## WebSocket endpoint — auto-derived from `location.host`
+
+The client constructs the WebSocket URL from the page's own URL —
+**no hardcoded host or port**.  This invariant lets the same
+deployed `index.html` work in three contexts (production GitHub
+Pages with explicit `?ws=`; local `dev_server.loft` serving HTTP +
+WS on one port; `server.loft` + `python3 -m http.server` two-port
+combo with `?ws=` override) and re-route the WebSocket back to
+the same `host:port` that served the page in the dev-server case.
+
+```js
+const WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
+const WS_HOST  = location.host || 'localhost:18083';
+const WS_URL = WS_PARAM === 'off'
+  ? null
+  : (WS_PARAM || `${WS_PROTO}://${WS_HOST}/ws`);
+```
+
+- `location.host` already includes the port (`dev-box:18083`), so
+  switching the dev server to any other port needs no client edit.
+- `location.protocol` flips `http→ws` / `https→wss` automatically
+  for reverse-proxy deploys.
+- `?ws=ws://other:port/ws` URL-param override stays available for
+  cross-host pointing (production GitHub Pages, or the `server.loft`
+  + `python3 -m http.server` two-port combo).
+- `?ws=off` disables WebSocket entirely (local-only paint, useful
+  for offline testing of view + controls).
+- Path `/ws` distinguishes the WebSocket endpoint from HTTP file
+  serving in `dev_server.loft`'s routing; `server.loft` ignores
+  the path so `/ws` works in both modes.
+
+**Do not** re-introduce a hardcoded port literal in `WS_URL` — it
+breaks the dev_server's "serve everything on one port, all printed
+URLs work" property + the production reverse-proxy story.
+
 ## WebSocket events (client → server)
 
 Locked at CI-0 in the parent README.  First cut, all JSON text
