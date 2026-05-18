@@ -316,13 +316,23 @@ document.getElementById('jump-active').addEventListener('pointerdown', e => {
 //   ?ws=ws://localhost:18083/   — explicit endpoint
 //   ?ws=off                     — disable WebSocket entirely (local-only)
 const WS_PARAM = new URLSearchParams(location.search).get('ws');
-// Path `/ws` distinguishes the WebSocket endpoint from the HTTP file
-// serving — matches the dev_server.loft routing convention.  The
-// multi-client server.loft also accepts any path for now (no HTTP
-// serving there) so /ws works in both modes.
+// Default: derive the WebSocket endpoint from the URL THIS PAGE was
+// served from — `location.host` already includes the port (e.g.
+// `dev-box:18083`), and we flip http→ws / https→wss off the protocol.
+// That way the dev server can listen on any port (or be reached via
+// any hostname / VPN address) and the page reconnects to the same
+// instance with no edit.  Fallback `localhost:18083` is only used
+// when the page is opened from the filesystem (`file://...`), where
+// `location.host` is empty.
+// Path `/ws` distinguishes the WebSocket endpoint from HTTP file
+// serving — matches `dev_server.loft`'s routing convention.  The
+// multi-client `server.loft` accepts any path (no HTTP serving) so
+// `/ws` works in both modes.
+const WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
+const WS_HOST  = location.host || 'localhost:18083';
 const WS_URL = WS_PARAM === 'off'
   ? null
-  : (WS_PARAM || `ws://${location.hostname || 'localhost'}:18083/ws`);
+  : (WS_PARAM || `${WS_PROTO}://${WS_HOST}/ws`);
 
 const statusEl = document.getElementById('status');
 function setStatus(text, cls) {
