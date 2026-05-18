@@ -894,6 +894,29 @@ fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
     emit_problems_recent_array();
     println("");
     println("  ]");
+    // plans_active / plans_future / plans_deferred / lib_plans_future
+    // — alphabetical {slug, path, title} per plan dir.  plans_recent
+    // ships in sub-commit F (needs the mtime cutoff variant).
+    println(",");
+    println("  \"plans_active\": [");
+    emit_plans_bucket("doc/claude/plans");
+    println("");
+    println("  ]");
+    println(",");
+    println("  \"plans_future\": [");
+    emit_plans_bucket("doc/claude/plans/future");
+    println("");
+    println("  ]");
+    println(",");
+    println("  \"plans_deferred\": [");
+    emit_plans_bucket("doc/claude/plans/deferred");
+    println("");
+    println("  ]");
+    println(",");
+    println("  \"lib_plans_future\": [");
+    emit_plans_bucket("doc/claude/lib_plans/future");
+    println("");
+    println("  ]");
     println("");
     println("}}");
 }
@@ -1080,6 +1103,85 @@ fn is_problems_row(line: text) -> boolean {
     if line[j] < '0' || line[j] > '9' { return false; }
     while j < n && line[j] >= '0' && line[j] <= '9' { j = j + 1; }
     j < n && line[j] == ' '
+}
+
+// ── plans_* buckets ─────────────────────────────────────────────
+// Walk a plan-directory layer (active / future / deferred /
+// lib_plans/future / finished-with-mtime-filter) and emit
+// `[{slug, path, title}, ...]` sorted alphabetically by slug.
+// scan.sh's `emit_plans` shell helper produces the same shape.
+//
+// `slug` = basename of the dir (e.g. "07-error-messages")
+// `path` = repo-relative dir path, no trailing slash
+// `title` = first `# ` heading line in the dir's README.md
+//          (fallback to slug if no README or no heading)
+
+struct PlanEntry {
+    slug: text not null,
+    path: text not null,
+    title: text not null,
+}
+struct PlanSet {
+    entries: sorted<PlanEntry[slug]>,
+}
+
+// First `# ` heading line in `readme_path` (text after the `# `
+// prefix, trimmed).  Empty string if file missing or no heading.
+fn read_plan_title(readme_path: text) -> text {
+    f = file(readme_path);
+    if f.format == Format.NotExists { return ""; }
+    for line in f.lines() {
+        if line.starts_with("# ") {
+            n = line.len();
+            return line[2..n].trim();
+        }
+    }
+    ""
+}
+
+// True if `slug` begins with `<digit><digit-or-other>-` — the
+// `[0-9]+-` glob prefix that bash's `[0-9]*-*/` matches.
+fn slug_starts_with_digit(slug: text) -> boolean {
+    if slug.len() < 1 { return false; }
+    slug[0] >= '0' && slug[0] <= '9'
+}
+
+// Walk `dir_path` and add a PlanEntry for every numeric-prefixed
+// subdir with a README.md.  Sub-commit F extends with a
+// date-window variant (`collect_plans_dir_recent`); this one
+// has no date filter and is used by the four no-date buckets.
+fn collect_plans_dir(dir_path: text, set: PlanSet) {
+    d = file(dir_path);
+    if d.format != Format.Directory { return; }
+    for entry in d.files() {
+        if entry.format != Format.Directory { continue; }
+        slug = entry.path.basename();
+        if !slug_starts_with_digit(slug) { continue; }
+        readme = "{entry.path}/README.md";
+        if file(readme).format == Format.NotExists { continue; }
+        title = read_plan_title(readme);
+        if title == "" { title = slug; }
+        path = normalize_path(entry.path);
+        n = path.len();
+        if n > 0 && path[n - 1] == '/' { path = path[0..n - 1]; }
+        set.entries += [PlanEntry{slug: slug, path: path, title: title}];
+    }
+}
+
+// Emit `[{slug, path, title}, ...]` for the given plan dir layer.
+// Caller writes the surrounding `"<key>": [` / `]`.
+fn emit_plans_bucket(dir_path: text) {
+    set = PlanSet {};
+    collect_plans_dir(dir_path, set);
+    first = true;
+    for e in set.entries {
+        if !first { print(","); }
+        first = false;
+        esc_title = json_escape(e.title);
+        esc_path = json_escape(e.path);
+        esc_slug = json_escape(e.slug);
+        print("\n    {{\"slug\":\"{esc_slug}\",\"path\":\"{esc_path}\",\"title\":\"{esc_title}\"}}");
+    }
 }
 
 // True when severity matches the bash regex
