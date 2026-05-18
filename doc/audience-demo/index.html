@@ -110,54 +110,84 @@ const PALETTE = [
 // Stored as Map<"q,r", colour_index>.  Local-only until phase 0.7 lands
 // WebSocket; once it does, server world_snapshot / world_delta seed this
 // map and the tap handler ALSO sends a `seed` event.
+// Stored as Map<"x,y", colour_index>.  (x, y) are offset coords —
+// straight integers — so 32×32 server chunks tile naturally with no
+// per-chunk coordinate-system gymnastics.
 const cells = new Map();
-function cellKey(q, r) { return q + ',' + r; }
+function cellKey(x, y) { return x + ',' + y; }
 
 // View pan offset — currently fixed to (0, 0) until phase 0.6 wires the
 // outer-ring zones to nudge it.  When that lands, this becomes the
 // authoritative offset between view centre and world (0, 0).
-let viewOffsetQ = 0;
-let viewOffsetR = 0;
+let viewOffsetX = 0;
+let viewOffsetY = 0;
 
 // ── Hex math ─────────────────────────────────────────────────────────────────
-// Pointy-top hex layout.  size = circumradius (centre to corner) in pixels.
-// Pixel position for axial (q, r):
-//   x = size * sqrt(3) * (q + r/2)
-//   y = size * 3/2 * r
+// POINTY-TOP hex layout with "odd-r offset" coordinates: hexes have
+// points top+bottom, flat sides left+right.  The world model uses
+// integer (x, y) ofset coords (not axial):
+//
+//   y+2 is directly above/below y (same column, vertical line)
+//   y+1 is offset half a hex to the right of y
+//   y+3 sits directly above y+1
+//
+//   pixel_x(x, y) = x * sqrt(3) * size + (y odd ? sqrt(3)/2 * size : 0)
+//   pixel_y(x, y) = y * 1.5 * size
+//
+// A 32×32 grid forms a rectangle with slight jag on left/right edges
+// (alternating ½-hex offset per row) and points up/down on top/bottom.
+//
+// Axial conversion (for the cube-coord rounding used by the picker):
+//   axial_q = x - floor(y / 2)
+//   axial_r = y
 const SQRT3 = Math.sqrt(3);
-function axialToPixel(q, r, size) {
-  return { x: size * SQRT3 * (q + r / 2), y: size * 1.5 * r };
+function offsetToPixel(x, y, size) {
+  const xShift = (y & 1) ? SQRT3 / 2 * size : 0;
+  return { x: x * SQRT3 * size + xShift, y: y * 1.5 * size };
 }
-function pixelToAxial(x, y, size) {
-  // Inverse of axialToPixel; round to nearest hex via cube-coord rounding.
-  const qf = (x * SQRT3 / 3 - y / 3) / size;
-  const rf = (y * 2 / 3) / size;
-  // Cube-coord rounding for hex picking accuracy.
-  let xCube = qf;
-  let zCube = rf;
-  let yCube = -xCube - zCube;
-  let rx = Math.round(xCube);
-  let ry = Math.round(yCube);
-  let rz = Math.round(zCube);
-  const xDiff = Math.abs(rx - xCube);
-  const yDiff = Math.abs(ry - yCube);
-  const zDiff = Math.abs(rz - zCube);
+function pixelToOffset(px, py, size) {
+  // Pixel → axial via the standard pointy-top inverse, then axial → offset.
+  // Picker uses cube-coord rounding for accuracy.
+  const qf = (px * SQRT3 / 3 - py / 3) / size;
+  const rf = (py * 2 / 3) / size;
+  let xCube = qf, zCube = rf, yCube = -xCube - zCube;
+  let rx = Math.round(xCube), ry = Math.round(yCube), rz = Math.round(zCube);
+  const xDiff = Math.abs(rx - xCube),
+        yDiff = Math.abs(ry - yCube),
+        zDiff = Math.abs(rz - zCube);
   if (xDiff > yDiff && xDiff > zDiff) rx = -ry - rz;
   else if (yDiff > zDiff) ry = -rx - rz;
   else rz = -rx - ry;
-  return { q: rx, r: rz };
+  // axial (rx, rz) → offset (x, y): y = rz; x = rx + floor(rz/2)
+  return { x: rx + Math.floor(rz / 2), y: rz };
 }
 
-// 9x7 viewable window of axial coords — odd row offset visually, but axial
-// math handles the column/row spacing naturally.  Centred on (0, 0); spans
-// q ∈ [-4..4] and r ∈ [-3..3] in axial terms.
+// 9x7 viewable window — iterated in OFFSET coordinates (col, row) so
+// the visible pattern is a rectangle (each row offset half a hex from
+// its neighbours, but the overall outline is straight columns).  Pure
+// axial iteration would form a parallelogram instead.  We convert to
+// axial (q, r) only for the world-cell key — the world model uses
+// axial because its geometry is symmetric in all 6 directions.
+//
+// 9 cols × 7 rows of view in OFFSET coords centred on (0, 0).  Each
+// hex's x stays in its column; y+1 jogs half a hex to the right (or
+// left, depending on parity convention); y+2 lands directly above/
+// below y.  Same scheme used by server chunks → no glue needed at
+// chunk boundaries.
 const VIEW_COLS = 9;
 const VIEW_ROWS = 7;
 function viewHexes() {
   const out = [];
-  for (let r = -3; r <= 3; r++) {
-    for (let q = -4; q <= 4; q++) {
-      out.push({ q: q + viewOffsetQ, r: r + viewOffsetR, vq: q, vr: r });
+  for (let row = 0; row < VIEW_ROWS; row++) {
+    for (let col = 0; col < VIEW_COLS; col++) {
+      // Relative (vx, vy) ∈ [-4..4] × [-3..3] for pixel placement.
+      const vx = col - 4;
+      const vy = row - 3;
+      out.push({
+        x: vx + viewOffsetX,     // world (cells-Map key)
+        y: vy + viewOffsetY,
+        vx, vy,                  // view-relative (pixel placement)
+      });
     }
   }
   return out;
@@ -182,8 +212,12 @@ function resize() {
   // Choose hexSize so the 9-wide pointy-top grid fits comfortably with
   // a little margin.  Pointy-top hex width = sqrt(3) * size; 9 hexes
   // staggered → ~9.5 * sqrt(3) * size wide.
+  // Pointy-top hex: col-to-col spacing = sqrt(3) * size; row-to-row
+  // spacing = 1.5 * size; rows offset by sqrt(3)/2 * size horizontally
+  // (alternating).  Outline width = (N_cols + 0.5) * sqrt(3) * size,
+  // height = (1.5 * N_rows + 0.5) * size.
   const fitByWidth = cssW / ((VIEW_COLS + 0.5) * SQRT3);
-  const fitByHeight = cssH / ((VIEW_ROWS + 0.5) * 1.5);
+  const fitByHeight = cssH / (1.5 * VIEW_ROWS + 0.5);
   hexSize = Math.min(fitByWidth, fitByHeight);
   originX = cssW / 2;
   originY = cssH / 2;
@@ -216,11 +250,11 @@ function refreshThemeColors() {
 
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (const { q, r, vq, vr } of viewHexes()) {
-    const { x, y } = axialToPixel(vq, vr, hexSize);
-    const cx = originX + x;
-    const cy = originY + y;
-    const colourIdx = cells.get(cellKey(q, r)) || 0;
+  for (const { x: wx, y: wy, vx, vy } of viewHexes()) {
+    const { x: px, y: py } = offsetToPixel(vx, vy, hexSize);
+    const cx = originX + px;
+    const cy = originY + py;
+    const colourIdx = cells.get(cellKey(wx, wy)) || 0;
     const fill = colourIdx === 0 ? COLOR_EMPTY : PALETTE[colourIdx];
     drawHex(cx, cy, hexSize * 0.97, fill, COLOR_GRID);
   }
@@ -282,9 +316,13 @@ document.getElementById('jump-active').addEventListener('pointerdown', e => {
 //   ?ws=ws://localhost:18083/   — explicit endpoint
 //   ?ws=off                     — disable WebSocket entirely (local-only)
 const WS_PARAM = new URLSearchParams(location.search).get('ws');
+// Path `/ws` distinguishes the WebSocket endpoint from the HTTP file
+// serving — matches the dev_server.loft routing convention.  The
+// multi-client server.loft also accepts any path for now (no HTTP
+// serving there) so /ws works in both modes.
 const WS_URL = WS_PARAM === 'off'
   ? null
-  : (WS_PARAM || `ws://${location.hostname || 'localhost'}:18083/`);
+  : (WS_PARAM || `ws://${location.hostname || 'localhost'}:18083/ws`);
 
 const statusEl = document.getElementById('status');
 function setStatus(text, cls) {
@@ -341,9 +379,9 @@ function wsConnect() {
     if (id === 4) {
       const parts = payload.split(',');
       if (parts.length !== 3) return;
-      const q = parts[0] | 0, r = parts[1] | 0, c = parts[2] | 0;
-      if (c === 0) cells.delete(cellKey(q, r));
-      else cells.set(cellKey(q, r), c);
+      const wx = parts[0] | 0, wy = parts[1] | 0, c = parts[2] | 0;
+      if (c === 0) cells.delete(cellKey(wx, wy));
+      else cells.set(cellKey(wx, wy), c);
       draw();
     } else if (id === 5) {
       // Active-player hint — flash the jump-to-active button.  The
@@ -370,19 +408,19 @@ canvas.addEventListener('pointerdown', e => {
   const rect = canvas.getBoundingClientRect();
   const px = e.clientX - rect.left - originX;
   const py = e.clientY - rect.top - originY;
-  const { q: vq, r: vr } = pixelToAxial(px, py, hexSize);
+  const { x: vx, y: vy } = pixelToOffset(px, py, hexSize);
   // Only react to taps inside the visible 9x7 window.
-  if (vq < -4 || vq > 4 || vr < -3 || vr > 3) return;
-  const wq = vq + viewOffsetQ;
-  const wr = vr + viewOffsetR;
-  const k = cellKey(wq, wr);
+  if (vx < -4 || vx > 4 || vy < -3 || vy > 3) return;
+  const wx = vx + viewOffsetX;
+  const wy = vy + viewOffsetY;
+  const k = cellKey(wx, wy);
   const cur = cells.get(k) || 0;
   if (cur === 0) {
     cells.set(k, activeColour);
-    wsSend(`1:${wq},${wr},${activeColour}`);   // seed
+    wsSend(`1:${wx},${wy},${activeColour}`);   // seed
   } else if (cur === playerColour) {
     cells.delete(k);
-    wsSend(`2:${wq},${wr}`);                    // clear
+    wsSend(`2:${wx},${wy}`);                    // clear
   }
   // cur is some other player's colour → no-op (no send either).
   draw();
@@ -413,7 +451,7 @@ window.__phase0 = {
     if (!ws) return 'none';
     return ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][ws.readyState] || 'UNKNOWN';
   },
-  paintAt(q, r, colour) { cells.set(cellKey(q, r), colour); draw(); },
+  paintAt(x, y, colour) { cells.set(cellKey(x, y), colour); draw(); },
   wsSend,
 };
 </script>
