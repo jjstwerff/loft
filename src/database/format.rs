@@ -421,6 +421,27 @@ impl Stores {
         crate::wasm::host_fs_cwd()
     }
 
+    /// Return the byte at position `idx` (0..len) as i64 0-255.
+    /// Out-of-bounds (idx < 0 or idx >= len) returns 0 — same
+    /// neutral value `text_character` uses for OOB.  Unlike
+    /// `text_character` which walks back through UTF-8
+    /// continuation bytes and decodes a codepoint, this is a
+    /// pure O(1) byte read.  Use for ASCII-heavy scanning hot
+    /// paths (tokenisers, regex-like scanners) where the UTF-8
+    /// decode is wasted work — every non-ASCII byte still
+    /// returns a valid 0-255 number; the caller compares against
+    /// ASCII constants so it doesn't matter what the byte means.
+    #[must_use]
+    pub fn text_byte_at_native(s: &str, idx: i64) -> i64 {
+        let bytes = s.as_bytes();
+        let len = bytes.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return 0;
+        }
+        i64::from(bytes[i as usize])
+    }
+
     /// Modification time of `path` as Unix epoch SECONDS (i64).
     /// Returns 0 on missing file, IO error, or pre-epoch dates.
     /// SECONDS not milliseconds — matches scan.sh's `stat -c %Y`

@@ -123,6 +123,90 @@ VAOs, shaders, buffers, and textures are GL handles in JS
 tables; loft programs pass around the integer ids returned by
 `gl_create_*` functions.
 
+### Shader translation: desktop GLSL → GLSL ES 3.00
+
+`lib/graphics/src/*.loft` writes shaders for desktop OpenGL
+(`#version 330 core`).  WebGL2 requires GLSL ES 3.00 —
+the directive `'core' : invalid version directive` is a
+hard error; explicit precision qualifiers are also mandatory
+in fragment shaders.
+
+Both JS bridges (`doc/loft-gl-wasm.js` for `--html`,
+`doc/loft-gl.js` for the gallery) rewrite the version header
+transparently in `gl_create_shader`:
+
+```javascript
+function translateShader(src, isFragment) {
+  const re = /^\s*#version\s+\d+(\s+\w+)?\s*\n?/;
+  const head = isFragment
+    ? '#version 300 es\nprecision highp float;\nprecision highp int;\n'
+    : '#version 300 es\n';
+  return re.test(src) ? src.replace(re, head) : head + src;
+}
+```
+
+The GLSL subset our shaders use (`in`/`out`/`layout(location)`/
+`texture()`/`discard`/`gl_Position`/`uniform`) is shared between
+the desktop and ES profiles, so the version + precision header is
+the only change needed.  Loft sources stay portable — same .loft
+runs on desktop OpenGL via lib/graphics native cdylib and on
+WebGL2 via the browser bridge.
+
+### Browser-side render gate — `tests/html_render.rs`
+
+The recurring failure mode for browser deployment is a JS-side
+console error after a bridge or shader change: WASM `loft_start`
+returns cleanly (so `tests/html_wasm.rs` passes), the page loads
+without exceptions, but `compileShader` fails on every frame and
+the canvas stays blank.
+
+`tests/html_render.rs` closes the loop with two layers:
+
+**Layer 1 — JS console gate.**  Spawns headless Chrome with
+SwiftShader WebGL2, navigates to `doc/brick-buster.html`, asserts
+zero `Runtime.consoleAPICalled type=error` or
+`Runtime.exceptionThrown` events across a 6-second startup
+window.  Catches shader compile errors, missing WebGL2 contexts,
+init exceptions.
+
+**Layer 2 — canvas content gate.**  After Layer 1 passes, clip a
+screenshot to the canvas element's bounding rect, decode the PNG
+inline (via `node:zlib` — no extra deps), count distinct RGB
+triples.  Fail if below 20 distinct colors.  A blank canvas (only
+clearColor) has 1-2 colors; a working Brick Buster frame has 128.
+Catches "compiles clean, blank canvas" — a successful shader
+compile that never gets used to draw, a draw call that no-ops, a
+state-tracking regression that silently skips geometry.
+
+Wired into `cargo test --release` (so `make ship` / `make ci`
+pick it up); skips cleanly when prerequisites (google-chrome /
+node / target/release/loft / `doc/brick-buster.html`) are missing
+OR when `doc/brick-buster.html` is older than its source loft
+program.  ~6 s end-to-end if the HTML is fresh.
+
+**Refresh the HTML before testing.**  The test does NOT auto-build
+via `make game` — invoking `cargo build` mid-`cargo test` races
+the parallel rustc invocations in `tests/native.rs` over
+`target/release/deps/`.  Run `make game` manually (or
+`make test-html-render` which does the build + test in one step)
+when touching `--html` / `lib/graphics`.
+
+The CDP driver lives in `tools/html_render_check.mjs` — a
+single-file Node script with no extra deps (uses Chrome
+DevTools Protocol via a built-in WebSocket implementation, and
+a minimal RGBA8/RGB8 PNG decoder for Layer 2).  Reusable for
+any future browser-deployed example:
+
+```
+node tools/html_render_check.mjs <url> \
+  --wait-ms N --screenshot path \
+  --canvas SELECTOR --canvas-min-colors N
+```
+
+Reports JSON to stdout on success; JSON to stderr on failure.
+`make test-html-render` runs just this gate for ad-hoc
+invocation.
+
 ## Frame yield contract — browser game loop
 
 The interpreter / native code runs synchronously.  In the

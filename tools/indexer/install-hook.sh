@@ -20,10 +20,13 @@ read -r -d '' SNIPPET <<'EOF' || true
 # >>> plan-37 tracker-index >>>
 # Refresh index/tags.json on staged doc/code changes.  See
 # doc/claude/plans/37-tracker-index/02-auto-refresh.md.
+# Uses `make index` which invokes the loft-native scanner
+# (post-@PLAN37 phase 07 H cutover) — runs across Linux /
+# macOS / Windows MSYS bash identically.
 if git diff --cached --name-only | grep -qE '\.(md|rs|loft|toml|py|sh)$'; then
-  if [ -x ./tools/indexer/scan.sh ]; then
-    ./tools/indexer/scan.sh >/dev/null 2>&1 || \
-      echo "warning: tools/indexer/scan.sh failed; index/tags.json may be stale" >&2
+  if [ -x ./target/release/loft ]; then
+    make -s index >/dev/null 2>&1 || \
+      echo "warning: make index failed; index/tags.json may be stale" >&2
   fi
 fi
 # <<< plan-37 tracker-index <<<

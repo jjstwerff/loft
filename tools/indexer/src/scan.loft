@@ -62,6 +62,26 @@ fn is_word_char_leaf(c: character) -> boolean {
     c == '_'
 }
 
+// ── ASCII byte-class helpers — hot-loop fast path ────────────
+// scan_line / scan_link_line use these on integer bytes from
+// `text.byte_at(i)` instead of decoded characters.  Each compare
+// becomes a single i64 comparison in generated Rust (vs the
+// ~30-op char-with-null-sentinel chain `c == '@'` produces).
+// All ASCII; non-ASCII bytes (0x80+) compare false against
+// every literal here, which matches scan.sh's awk regex
+// semantics for ASCII-only tag tokens.
+fn is_digit_b(b: integer) -> boolean { b >= 48 && b <= 57 }
+fn is_word_char_b(b: integer) -> boolean {
+    if b >= 48 && b <= 57 { return true; }   // 0-9
+    if b >= 97 && b <= 122 { return true; }  // a-z
+    if b >= 65 && b <= 90 { return true; }   // A-Z
+    b == 95                                  // _
+}
+fn is_segment_char_b(b: integer) -> boolean {
+    if is_word_char_b(b) { return true; }
+    b == 46                                  // .
+}
+
 // Build the set of valid P-issue numbers from PROBLEMS.md.
 // Each row starts `| <num> | **@P<num>** — ...`; the leading
 // `^| <digits> |` is the source of truth for which P-ids
@@ -339,6 +359,22 @@ fn is_noindex_line(line: text) -> boolean {
 // digit-prefix would fail).  Both patterns require a non-word
 // char (or string boundary) BEFORE the `@` to mirror the bash
 // regex's `\B` boundary check.
+// ASCII byte constants used by scan_line (and scan_link_line
+// once converted).  Literal numbers in the loop are harder to
+// audit; named constants stay close to the regex semantics
+// scan.sh used to express.
+const BYTE_AT       = 64;   // '@'
+const BYTE_P_UPPER  = 80;   // 'P'
+const BYTE_P_LOWER  = 112;  // 'p'
+const BYTE_L        = 76;   // 'L'
+const BYTE_A        = 65;   // 'A'
+const BYTE_N        = 78;   // 'N'
+const BYTE_L_LOWER  = 108;  // 'l'
+const BYTE_A_LOWER  = 97;   // 'a'
+const BYTE_N_LOWER  = 110;  // 'n'
+const BYTE_Z_LOWER  = 122;  // 'z'
+const BYTE_HYPHEN   = 45;   // '-'
+
 fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>) {
     if is_noindex_line(line) { return; }
     n = line.len();
@@ -351,33 +387,41 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
     ctx_escaped = false;
     i = 0;
     while i < n {
-        c = line[i];
+        // Byte-level fast path (no UTF-8 decode per byte).  All
+        // tag tokens are ASCII so byte == codepoint here.  See
+        // doc/claude/plans/37-tracker-index/07-loft-native-scanner.md
+        // for the codegen analysis driving this conversion.
+        b = line.byte_at(i);
         // The pre-@-tag legacy bare-name forms (`P<n>`, `plan-<n>`)
-        // start with a different prefix character — the per-char
+        // start with a different prefix byte — the per-byte
         // dispatch below only enters the `@`-prefixed branches
-        // when c == '@', otherwise it falls through to the legacy
+        // when b == '@', otherwise it falls through to the legacy
         // checks at the bottom of the loop.  Note: scan.sh's
         // `@`-prefix regex is `@P\d+...\b` — the trailing `\b` is
         // enforced by our digit-then-non-alpha consume, but the
         // LEADING `@` has no boundary constraint.  So
         // `user@P259.com` matches by design.
-        if c == '@' {
+        if b == BYTE_AT {
         // Try @PLAN first.
-        if i + 6 <= n && (line[i + 1]) == 'P' && (line[i + 2]) == 'L'
-            && (line[i + 3]) == 'A' && (line[i + 4]) == 'N' && is_digit(line[i + 5]) {
+        if i + 6 <= n && line.byte_at(i + 1) == BYTE_P_UPPER
+            && line.byte_at(i + 2) == BYTE_L
+            && line.byte_at(i + 3) == BYTE_A
+            && line.byte_at(i + 4) == BYTE_N
+            && is_digit_b(line.byte_at(i + 5)) {
             // Consume @PLAN<digits>(-<segment>)*
             j = i + 5;
-            while j < n && is_digit(line[j]) { j = j + 1; }
+            while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
             // Optional `-<segment>` repeats.
-            while j + 1 < n && (line[j]) == '-' && is_segment_char(line[j + 1]) {
+            while j + 1 < n && line.byte_at(j) == BYTE_HYPHEN
+                && is_segment_char_b(line.byte_at(j + 1)) {
                 j = j + 1;
-                while j < n && is_segment_char(line[j]) { j = j + 1; }
+                while j < n && is_segment_char_b(line.byte_at(j)) { j = j + 1; }
             }
-            // Trailing `\b` check: the next char (if any) must
-            // be a non-word char.  `@PLAN37foo` has `f` (word)
+            // Trailing `\b` check: the next byte (if any) must
+            // be a non-word byte.  `@PLAN37foo` has `f` (word)
             // after the digits with no `-` separator → no
             // boundary, no match.
-            if j == n || !is_word_char(line[j]) {
+            if j == n || !is_word_char_b(line.byte_at(j)) {
                 tag = line[i..j];
                 if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
                 out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
@@ -389,23 +433,24 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
             continue;
         }
         // Fall back to @P<digits>[a-z]?
-        if i + 3 <= n && (line[i + 1]) == 'P' && is_digit(line[i + 2]) {
+        if i + 3 <= n && line.byte_at(i + 1) == BYTE_P_UPPER
+            && is_digit_b(line.byte_at(i + 2)) {
             j = i + 2;
-            while j < n && is_digit(line[j]) { j = j + 1; }
+            while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
             // Mirror bash regex `@P[0-9]+[a-z]?\b`.  After the
             // digits there are three possibilities:
-            //   1. Next char is non-word → match `@P<digits>`.
-            //   2. Next char is `[a-z]` and the char AFTER that
+            //   1. Next byte is non-word → match `@P<digits>`.
+            //   2. Next byte is `[a-z]` and the byte AFTER that
             //      is non-word → match `@P<digits><letter>`.
             //   3. Otherwise → no match (`@P229bing` and `@P229_x`
             //      both fail because `\b` can't be satisfied).
             matched = false;
             if j == n {
                 matched = true;
-            } else if !is_word_char(line[j]) {
+            } else if !is_word_char_b(line.byte_at(j)) {
                 matched = true;
-            } else if line[j] >= 'a' && line[j] <= 'z'
-                && (j + 1 == n || !is_word_char(line[j + 1])) {
+            } else if line.byte_at(j) >= BYTE_A_LOWER && line.byte_at(j) <= BYTE_Z_LOWER
+                && (j + 1 == n || !is_word_char_b(line.byte_at(j + 1))) {
                 j = j + 1;
                 matched = true;
             }
@@ -420,7 +465,7 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
             i = i + 2;
             continue;
         }
-        }  // end if c == '@'
+        }  // end if b == BYTE_AT
         // Legacy bare-name `P<digits>[a-z]?\b` — the pre-`@`-tag
         // form that scan.sh keeps indexing under `legacy:P<n>`.
         // Combined leading + trailing boundary check matches the
@@ -433,29 +478,30 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
         // `\b...\b` form).  Without the trailing boundary we'd
         // incorrectly emit `legacy:P204` for `P204_S` (struct
         // names follow that shape in the loft suite).
-        if c == 'P' && i + 1 < n && is_digit(line[i + 1]) {
-            // Leading boundary: position 0, or previous char is
+        if b == BYTE_P_UPPER && i + 1 < n && is_digit_b(line.byte_at(i + 1)) {
+            // Leading boundary: position 0, or previous byte is
             // not in `[@a-zA-Z0-9_]`.  Specifically reject `@`
             // (the @-form was already handled above).
             ok = i == 0;
             if !ok && i > 0 {
-                pc = line[i - 1];
-                ok = pc != '@' && !is_word_char(pc);
+                pb = line.byte_at(i - 1);
+                ok = pb != BYTE_AT && !is_word_char_b(pb);
             }
             if ok {
                 j = i + 1;
-                while j < n && is_digit(line[j]) { j = j + 1; }
+                while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
                 // Optional trailing letter, same as @P-form.
                 end_with_letter = false;
-                if j < n && line[j] >= 'a' && line[j] <= 'z'
-                    && (j + 1 == n || !is_word_char(line[j + 1])) {
+                if j < n && line.byte_at(j) >= BYTE_A_LOWER
+                    && line.byte_at(j) <= BYTE_Z_LOWER
+                    && (j + 1 == n || !is_word_char_b(line.byte_at(j + 1))) {
                     j = j + 1;
                     end_with_letter = true;
                 }
-                // Trailing `\b`: next char (if any) must be
+                // Trailing `\b`: next byte (if any) must be
                 // non-word.  Without this, `P204_S` slips
                 // through as `legacy:P204`.
-                trailing_ok = j == n || !is_word_char(line[j]);
+                trailing_ok = j == n || !is_word_char_b(line.byte_at(j));
                 // If the trailing-letter branch already moved j
                 // past a known non-word boundary, trailing_ok
                 // is automatic.
@@ -475,12 +521,16 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
         //     \bplan-[0-9]+
         // Word boundary on the leading `p`; no trailing
         // boundary (greedy digits to first non-digit).
-        if c == 'p' && i + 6 <= n && line[i + 1] == 'l' && line[i + 2] == 'a'
-            && line[i + 3] == 'n' && line[i + 4] == '-' && is_digit(line[i + 5]) {
-            ok = i == 0 || !is_word_char(line[i - 1]);
+        if b == BYTE_P_LOWER && i + 6 <= n
+            && line.byte_at(i + 1) == BYTE_L_LOWER
+            && line.byte_at(i + 2) == BYTE_A_LOWER
+            && line.byte_at(i + 3) == BYTE_N_LOWER
+            && line.byte_at(i + 4) == BYTE_HYPHEN
+            && is_digit_b(line.byte_at(i + 5)) {
+            ok = i == 0 || !is_word_char_b(line.byte_at(i - 1));
             if ok {
                 j = i + 5;
-                while j < n && is_digit(line[j]) { j = j + 1; }
+                while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
                 bare = line[i..j];
                 tag = "legacy:{bare}";
                 if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
@@ -544,64 +594,83 @@ fn link_target_exists(target: text) -> boolean {
 //     per file; loft port stays single-line for now.
 //   - Only `.md` targets are matched (matches scan.sh's
 //     `\.md(#…)?` regex).
+// ASCII byte constants for scan_link_line.  See scan_line for
+// the rationale on going byte-level instead of per-codepoint.
+const BYTE_RBRACKET = 93;   // ']'
+const BYTE_LPAREN   = 40;   // '('
+const BYTE_RPAREN   = 41;   // ')'
+const BYTE_SPACE    = 32;
+const BYTE_TAB      = 9;
+const BYTE_HASH     = 35;   // '#'
+const BYTE_DOT      = 46;   // '.'
+const BYTE_M_LOWER  = 109;  // 'm'
+const BYTE_D_LOWER  = 100;  // 'd'
+const BYTE_SLASH    = 47;   // '/'
+
 fn scan_link_line(file_path: text, line_no: integer, line: text, base_dir: text, out: vector<LinkRef>) {
     if is_noindex_line(line) { return; }
-    n = line.len();
-    if n < 6 { return; }
+    nl = line.len();
+    if nl < 6 { return; }
     ctx_esc = "";
     ctx_escaped = false;
-    i = 0;
-    while i + 5 < n {
-        // Match `](`
-        if line[i] != ']' || line[i + 1] != '(' {
-            i = i + 1;
+    li = 0;
+    while li + 5 < nl {
+        // Match `](` at byte level.
+        if line.byte_at(li) != BYTE_RBRACKET || line.byte_at(li + 1) != BYTE_LPAREN {
+            li = li + 1;
             continue;
         }
         // Find the closing `)` — bounded scan; bail at first
         // whitespace, `(`, or end-of-line within the URL.
-        j = i + 2;
-        while j < n && line[j] != ')' && line[j] != ' ' && line[j] != '\t' { j = j + 1; }
-        if j == n || line[j] != ')' { i = i + 1; continue; }
-        inner = line[i + 2..j];
+        lj = li + 2;
+        while lj < nl {
+            lb = line.byte_at(lj);
+            if lb == BYTE_RPAREN || lb == BYTE_SPACE || lb == BYTE_TAB { break; }
+            lj = lj + 1;
+        }
+        if lj == nl || line.byte_at(lj) != BYTE_RPAREN { li = li + 1; continue; }
+        inner = line[li + 2..lj];
         ilen = inner.len();
         if ilen < 4 {
-            i = j + 1;
+            li = lj + 1;
             continue;
         }
-        // Split on `#` for optional anchor.
+        // Split on `#` for optional anchor — byte-level scan,
+        // text slice (target/anchor may legitimately contain
+        // multi-byte chars elsewhere in the path, but `#` is
+        // a single ASCII byte).
         anchor = "";
         target_raw = inner;
-        h = 0;
-        found_hash = false;
-        while h < ilen {
-            if inner[h] == '#' {
-                target_raw = inner[0..h];
-                anchor = inner[h + 1..ilen];
-                found_hash = true;
+        lh = 0;
+        while lh < ilen {
+            if inner.byte_at(lh) == BYTE_HASH {
+                target_raw = inner[0..lh];
+                anchor = inner[lh + 1..ilen];
                 break;
             }
-            h = h + 1;
+            lh = lh + 1;
         }
         // Skip non-`.md` targets: scan.sh's regex is
         // `\.md(#…)?`, so every link target must end `.md`
         // before the optional `#`.  Avoids picking up `.png`
         // / `.html` / arbitrary URL paths.
         tlen = target_raw.len();
-        if tlen < 3 || !(target_raw[tlen - 3] == '.'
-            && target_raw[tlen - 2] == 'm' && target_raw[tlen - 1] == 'd') {
-            i = j + 1;
+        if tlen < 3 || !(target_raw.byte_at(tlen - 3) == BYTE_DOT
+            && target_raw.byte_at(tlen - 2) == BYTE_M_LOWER
+            && target_raw.byte_at(tlen - 1) == BYTE_D_LOWER) {
+            li = lj + 1;
             continue;
         }
         // Skip URL schemes.
         if target_raw.starts_with("http://") || target_raw.starts_with("https://")
             || target_raw.starts_with("mailto:") {
-            i = j + 1;
+            li = lj + 1;
             continue;
         }
         // Resolve.  Leading `/` means repo-rooted (strip slash);
         // otherwise resolve against base_dir.
         resolved = "";
-        if tlen > 0 && target_raw[0] == '/' {
+        if tlen > 0 && target_raw.byte_at(0) == BYTE_SLASH {
             resolved = target_raw[1..tlen];
         } else {
             resolved = base_dir.resolve(target_raw);
@@ -615,7 +684,7 @@ fn scan_link_line(file_path: text, line_no: integer, line: text, base_dir: text,
         // typer evaluates the call's return type independently.
         a_esc: text = json_escape(anchor);
         out += [LinkRef{target: resolved, file: file_path, line: line_no, anchor: a_esc, ctx_escaped: ctx_esc}];
-        i = j + 1;
+        li = lj + 1;
     }
 }
 
@@ -721,11 +790,34 @@ fn is_segment_char(c: character) -> boolean {
 // Read a file's lines and scan each.  Files that fail to read
 // (binary, permissions, transient races) are silently skipped —
 // this matches scan.sh's `|| true` resilience.
-fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>) {
+// Aggregated sub-phase timings for `walk + scan source roots`
+// — populated by scan_file / walk_tree when LOFT_INDEX_PROFILE=1.
+// Bracket overhead: ~3 ticks() calls per file (~1500 total on
+// the loft tree) ≈ 1ms — well within measurement noise.
+struct SubTimings {
+    io_us: integer,
+    walk_us: integer,
+    dir_us: integer,
+    file_count: integer,
+}
+
+// Shared instance for the profile path.  Loft has no module-
+// scope mutable state, so we hang it off a singleton-ish
+// pattern: main() creates one ScanTimings and passes it down.
+struct ScanTimings {
+    st: SubTimings,
+}
+
+fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>,
+             timings: ScanTimings) {
+    t0 = ticks();
     f = file(file_path);
     if f.format == Format.NotExists { return; }
     if f.format == Format.Directory { return; }
     src = f.content();
+    t1 = ticks();
+    timings.st.io_us = timings.st.io_us + (t1 - t0);
+    timings.st.file_count = timings.st.file_count + 1;
     // Markdown link extraction is .md-only; computing base_dir
     // once outside the loop avoids per-line allocation for the
     // 99% of source files that aren't markdown.  Fenced-code-
@@ -784,6 +876,8 @@ fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>) {
             }
         }
     }
+    t_end = ticks();
+    timings.st.walk_us = timings.st.walk_us + (t_end - t1);
 }
 
 // Strip leading ASCII whitespace (spaces + tabs).  Cheap;
@@ -1425,10 +1519,34 @@ fn emit_problems_open_array() -> integer {
     count
 }
 
+// Per-distinct-target existence cache.  ~1300 inbound LinkRefs
+// share ~253 distinct targets; the naive per-LinkRef
+// `link_target_exists` walks ~1000 redundant `stat()` calls.
+// One-pass memo: build cache keyed by target, then read.
+struct TargetExists {
+    target: text not null,
+    exists: boolean not null,
+}
+struct TargetCache {
+    seen: hash<TargetExists[target]>,
+}
+
 fn emit_broken_links_array(links: vector<LinkRef>) -> integer {
+    // Build the per-distinct existence cache first (one stat per
+    // distinct target rather than per LinkRef).
+    cache = TargetCache {};
+    for lr in links {
+        if cache.seen[lr.target] == null {
+            cache.seen += [TargetExists{
+                target: lr.target,
+                exists: link_target_exists(lr.target),
+            }];
+        }
+    }
     distinct = DistinctSets {};
     for lr in links {
-        if link_target_exists(lr.target) { continue; }
+        hit = cache.seen[lr.target];
+        if hit != null && hit.exists { continue; }
         if distinct.tags[lr.target] == null {
             distinct.tags += [TagSlot{name: lr.target}];
         }
@@ -1453,6 +1571,13 @@ fn emit_broken_links_array(links: vector<LinkRef>) -> integer {
 }
 
 fn main() {
+    // Optional per-phase timing.  Set LOFT_INDEX_PROFILE=1 to
+    // print microsecond deltas for each major phase to stderr.
+    // Default off — keeps `make index`'s stderr clean.
+    profile = env_variable("LOFT_INDEX_PROFILE") == "1";
+    t_start = ticks();
+    t_prev = t_start;
+
     // Phase 03 broken-tag validator: load valid PROBLEMS row IDs
     // and plan-dir number prefixes upfront, then check each scanned
     // ref against them.  Sets are passed to emit-time so each
@@ -1460,10 +1585,13 @@ fn main() {
     // tooling (`./scripts/idx broken`, the viewer's red-banner
     // surface) filters via `select(.valid == false)`.
     valid_pids = read_valid_pids();
+    if profile { t_now = ticks(); eprintln("  perf: read_valid_pids {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
     valid_plans = read_valid_plans();
+    if profile { t_now = ticks(); eprintln("  perf: read_valid_plans {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
 
     rows: vector<RawRef> = [];
     links: vector<LinkRef> = [];
+    timings = ScanTimings {};
     // Top-level indexable files (CLAUDE.md, README.md,
     // CHANGELOG.md, Cargo.toml, etc.) — iterate explicitly so
     // they don't require the recursive walker to descend from
@@ -1477,15 +1605,20 @@ fn main() {
             if entry.format != Format.Directory && is_indexable_ext(entry.path) {
                 p = entry.path;
                 if p.starts_with("./") { p = p[2..p.len()]; }
-                scan_file(p, rows, links);
+                scan_file(p, rows, links, timings);
             }
         }
     }
+    if profile { t_now = ticks(); eprintln("  perf: scan top-level files {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
     for src_root in source_roots() {
         files = walk_tree(src_root);
         for fp in files {
-            scan_file(fp, rows, links);
+            scan_file(fp, rows, links, timings);
         }
+    }
+    if profile { t_now = ticks(); eprintln("  perf: walk + scan source roots {(t_now - t_prev) / 1000}ms (rows={rows.len()} links={links.len()})"); t_prev = t_now; }
+    if profile {
+        eprintln("    sub: file IO {timings.st.io_us / 1000}ms / scan loop {timings.st.walk_us / 1000}ms over {timings.st.file_count} files");
     }
     // Output mode dispatch.  `LOFT_INDEX_BUCKETED=1` switches
     // to the `index/tags.json`-shape JSON object emission
@@ -1497,7 +1630,9 @@ fn main() {
     if bucketed == "1" {
         s = Summary {};
         emit_bucketed(rows, links, valid_pids, valid_plans, s);
+        if profile { t_now = ticks(); eprintln("  perf: emit_bucketed {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
         emit_summary(s);
+        if profile { t_end = ticks(); eprintln("  perf: total {(t_end - t_start) / 1000}ms"); }
         return;
     }
     // Second pass: emit JSON Lines with validity.  Validity is

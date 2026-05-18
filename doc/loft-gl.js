@@ -22,6 +22,19 @@ export function initLoftGL(canvas) {
   let textures = [];
   let fbos = [];
 
+  // lib/graphics shaders target desktop GLSL (#version 330 core).  WebGL2
+  // needs GLSL ES 3.00 — same grammar for the subset we use, but a
+  // different version directive and explicit precision in fragment shaders.
+  // Rewrite the header transparently so loft source stays portable.
+  function translateShader(src, isFragment) {
+    const re = /^\s*#version\s+\d+(\s+\w+)?\s*\n?/;
+    const head = isFragment
+      ? '#version 300 es\nprecision highp float;\nprecision highp int;\n'
+      : '#version 300 es\n';
+    if (re.test(src)) return src.replace(re, head);
+    return head + src;
+  }
+
   // ── GL capability / blend / draw mode maps ──────────────────────────────
 
   function glCap(cap) {
@@ -145,6 +158,8 @@ export function initLoftGL(canvas) {
 
     // Shaders
     gl_create_shader(vertSrc, fragSrc) {
+      vertSrc = translateShader(vertSrc, false);
+      fragSrc = translateShader(fragSrc, true);
       const vs = gl.createShader(gl.VERTEX_SHADER);
       gl.shaderSource(vs, vertSrc);
       gl.compileShader(vs);

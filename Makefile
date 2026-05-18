@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
+.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -350,39 +350,33 @@ view-refresh:
 # Scans the repo for @P-id / @PLAN-id references, writes
 # index/tags.json.  See doc/claude/plans/37-tracker-index/.
 # CLI query wrapper (`scripts/idx`) lands in plan-37 phase 01.
-index:  ## Refresh index/tags.json via the loft scanner (@PLAN37 phase 07 H cutover)
-	@# Cutover landed 2026-05-18 in sub-commit H: the canonical
-	@# `make index` now runs scan.loft.  Bash scan.sh stays in
-	@# tree as `make index-bash` (the fallback path for the
-	@# transition window; deleted in sub-commit J once the loft
-	@# scanner has soaked on `main` for a few cycles).  scan.loft
-	@# writes the JSON-object form of tags.json to stdout (via
-	@# `LOFT_INDEX_BUCKETED=1`) and the summary stats line to
-	@# stderr — the shell redirect captures one, the terminal
-	@# shows the other.  The `--no-warnings` flag (@P282 close)
-	@# keeps stdout free of the loft compiler's warning preamble.
+index:  ## Refresh index/tags.json via the loft scanner
+	@# @PLAN37 phase 07 sub-commits A.5→J: scan.loft is now the
+	@# sole canonical scanner; the legacy bash scan.sh + the
+	@# `index-bash` / `index-loft` fallback targets were removed
+	@# in sub-commit J after sub-commit H (cutover) soaked one
+	@# CI cycle on main.  scan.loft writes the JSON-object form
+	@# of tags.json to stdout (via `LOFT_INDEX_BUCKETED=1`) and
+	@# the summary stats line to stderr — the shell redirect
+	@# captures one, the terminal shows the other.  The
+	@# `--no-warnings` flag (@P282 close) keeps stdout free of
+	@# the loft compiler's warning preamble.
 	@if [ ! -x target/release/loft ]; then \
 	    echo "host loft binary missing; run: cargo build --release"; exit 1; \
 	fi
 	@mkdir -p index
-	@LOFT_INDEX_BUCKETED=1 ./target/release/loft --no-warnings --lib lib/ \
+	@# `--native-release` (rather than bare `--native`) instructs rustc
+	@# to emit `-O` (opt-level=2) and the loft codegen to emit only
+	@# reachable functions.  For a hot loop like scan.loft the
+	@# difference is dramatic: scan loop 1.7s → 165ms, total 5s → 1.3s
+	@# warm-cache.  Cold compile costs ~6s but the per-source cache
+	@# (tools/indexer/src/.loft/cache/) survives across runs, so the
+	@# everyday `make index` invocation is the warm path.
+	@LOFT_INDEX_BUCKETED=1 ./target/release/loft --native-release --no-warnings --lib lib/ \
 	    tools/indexer/src/scan.loft > index/tags.json
-
-# Bash scanner fallback for the H→J transition window.  Same
-# tags.json output (modulo the latent total_refs bug — see phase
-# 07 doc).  Documented in CLAUDE.md as the bootstrap path; users
-# who don't have a built loft can still refresh the index.
-index-bash:  ## Refresh index/tags.json via the legacy bash scanner
-	@./tools/indexer/scan.sh
 
 index-install-hook:
 	@./tools/indexer/install-hook.sh
-
-# index-loft (@PLAN37 phase 07 MVP) — historical alias.  Kept
-# pointing at the same scanner as `make index` so any external
-# caller / CI script that still invokes `make index-loft`
-# keeps working.  Slated for removal alongside scan.sh.
-index-loft: index
 
 view: view-refresh
 	@if [ ! -f tools/viewer/src/main.loft ]; then \
@@ -393,15 +387,21 @@ view: view-refresh
 	    echo "host loft binary missing; run: make view-build"; \
 	    exit 1; \
 	fi
-	# Default to --native (faster).  @P274 closed 2026-05-14
-	# (use-after-free in patch_hoisted_returns Pass 2 + text-
-	# concat type-dispatch in parse_append_text).
-	# `LOFT_VIEW_INTERP=1 make view` falls back to the
-	# interpreter (useful when bisecting a native-only regression).
+	# Default to --native-release (rustc -O).  Bare --native runs
+	# unoptimised generated Rust — for an HTTP server that handles
+	# repeated requests, the per-request cost difference is large
+	# (10× on hot loops; see PERFORMANCE.md § Open work).  Cold
+	# compile is ~6s; cached binary survives across restarts via
+	# tools/viewer/src/.loft/cache/.
+	# @P274 closed 2026-05-14 (use-after-free in
+	# patch_hoisted_returns Pass 2 + text-concat type-dispatch in
+	# parse_append_text).
+	# `LOFT_VIEW_INTERP=1 make view` falls back to the interpreter
+	# (useful when bisecting a native-only regression).
 	@if [ -n "$$LOFT_VIEW_INTERP" ]; then \
 	    ./target/release/loft --interpret --lib lib/ tools/viewer/src/main.loft; \
 	else \
-	    ./target/release/loft --lib lib/ tools/viewer/src/main.loft; \
+	    ./target/release/loft --native-release --lib lib/ tools/viewer/src/main.loft; \
 	fi
 
 # game: rebuild the efficient browser build of Brick Buster from any
@@ -529,7 +529,12 @@ play:
 	@echo ""
 	@echo "    Controls: ←/→ or A/D to move, Space to launch, Esc to quit"
 	@echo ""
-	@./target/release/loft --native \
+	@# --native-release (rustc -O) for the game frame loop; bare
+	@# --native runs unoptimised generated Rust and burns frame
+	@# budget on call-ABI / null-sentinel bookkeeping the optimiser
+	@# normally elides.  Cold compile is ~6s; cached binary survives
+	@# across runs.
+	@./target/release/loft --native-release \
 	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
 	    lib/graphics/examples/25-brick-buster.loft
 
@@ -565,7 +570,10 @@ native-editor:
 	@echo "  [3/3] launching Moros editor ..."
 	@echo "    Controls: WASD move / Arrows camera / 1-6 tools / Ctrl-Z undo"
 	@echo "              Left-click paint / F5 save / F9 load / F11 fullscreen / Esc quit"
-	@./target/release/loft --native \
+	@# --native-release for the editor's UI / paint frame loop —
+	@# same rationale as `make play`.  Cached binary survives across
+	@# runs via lib/graphics/examples/.loft/cache/.
+	@./target/release/loft --native-release \
 	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
 	    lib/graphics/examples/moros_editor.loft
 
@@ -650,6 +658,27 @@ wasm-html-test:
 	    echo "    FAIL: host binary + libloft.rlib build"; exit 1; }
 	@echo "  [3/3] running html_wasm safety gate ..."
 	@cargo test --release --test html_wasm
+
+# Browser-side WebGL rendering gate.  Builds doc/brick-buster.html
+# (only browser-deployed --html artefact today), loads it in headless
+# Chrome + SwiftShader, fails on any JS console.error / exception.
+#
+# Catches shader-compile regressions that `wasm-html-test` cannot
+# (compileShader errors are JS-side; the WASM `loft_start` returns
+# cleanly even when every frame fails to draw).  Skips cleanly when
+# google-chrome / node / wasm32 toolchain are not installed.
+#
+# Wired into `cargo test --release` automatically (so `make ship` /
+# `make ci` pick it up); this target is for ad-hoc invocation.
+test-html-render:
+	@# Build the HTML artefact BEFORE the cargo test invocation.
+	@# tests/html_render.rs intentionally does NOT auto-build via
+	@# `make game` — that would invoke `cargo build` mid-`cargo test`
+	@# and race the rustc invocations in tests/native.rs over
+	@# target/release/deps/.  Calling `make game` from this target
+	@# keeps the build outside the test process.
+	@$(MAKE) game >/dev/null
+	@cargo test --release --test html_render
 
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg
@@ -981,6 +1010,7 @@ ship:
 	cargo fmt --all -- --check && \
 	cargo clippy --release --all-targets -- -D warnings && \
 	cargo clippy --no-default-features --all-targets -- -D warnings && \
+	scripts/check_doc_drift.sh && \
 	cargo test --release
 
 run-tests: rebuild-native-cdylibs

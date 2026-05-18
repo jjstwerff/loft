@@ -125,24 +125,19 @@ fn baseline_emission_unchanged() {
 /// guards against regression.
 #[test]
 fn p203_reproducer_passes_under_native() {
-    // Use `cargo run --bin loft --release` rather than
-    // Command::new("target/release/loft") so the binary is auto-
-    // built if missing.  Robust to CI workflows that only build
-    // dev profile (`cargo build --all-targets`).  Same pattern as
-    // the p200/p204/p205 reproducer tests below.
-    let status = Command::new("cargo")
-        .args([
-            "run",
-            "--bin",
-            "loft",
-            "--release",
-            "--quiet",
-            "--",
-            "tests/scripts/repro_p203.loft",
-        ])
+    // Use the pre-built `target/release/loft` directly, not
+    // `cargo run --bin loft --release`.  Nested cargo invocations
+    // inside `cargo test --release` take the target-tree lock and
+    // can re-check the dep graph, racing against the parallel rustc
+    // workers in tests/native.rs::native_dir / native_scripts and
+    // producing `mold: Operation not permitted` linker failures.
+    // The other reproducer tests below (p204 / p200 / p244) use
+    // the same direct-invocation pattern.
+    let status = Command::new(loft_binary())
+        .arg("tests/scripts/repro_p203.loft")
         .current_dir(project_root())
         .status()
-        .expect("failed to spawn cargo run for loft binary");
+        .expect("failed to spawn loft binary — run `cargo build --release` first");
     assert!(
         status.success(),
         "P203 reproducer failed under native (exit {}) — \
@@ -467,16 +462,10 @@ fn native_suite_floor_holds() {
 /// bounds when `_src.store_nr == u16::MAX`.
 #[test]
 fn p204_tail_expression_return_passes_under_native() {
-    let status = std::process::Command::new("cargo")
-        .args([
-            "run",
-            "--bin",
-            "loft",
-            "--release",
-            "--quiet",
-            "--",
-            "tests/scripts/repro_p204.loft",
-        ])
+    // Direct binary invocation — see p203_reproducer_passes_under_native
+    // for the nested-cargo race rationale.
+    let status = std::process::Command::new(loft_binary())
+        .arg("tests/scripts/repro_p204.loft")
         .current_dir(project_root())
         .status()
         .expect("run repro_p204 under native");
@@ -497,16 +486,10 @@ fn p204_tail_expression_return_passes_under_native() {
 /// both operands in `(... as i64)` to normalise to a common width.
 #[test]
 fn p200_binary_compiles_under_native() {
-    let status = std::process::Command::new("cargo")
-        .args([
-            "run",
-            "--bin",
-            "loft",
-            "--release",
-            "--quiet",
-            "--",
-            "tests/scripts/20-binary.loft",
-        ])
+    // Direct binary invocation — see p203_reproducer_passes_under_native
+    // for the nested-cargo race rationale.
+    let status = std::process::Command::new(loft_binary())
+        .arg("tests/scripts/20-binary.loft")
         .current_dir(project_root())
         .status()
         .expect("run 20-binary under native");
@@ -552,16 +535,10 @@ fn p200_int_compare_emitter_registered() {
 /// sub-crate) doesn't surface as a sibling E0308.
 #[test]
 fn p244_text_native_wrapper_compiles_under_native() {
-    let status = std::process::Command::new("cargo")
-        .args([
-            "run",
-            "--bin",
-            "loft",
-            "--release",
-            "--quiet",
-            "--",
-            "lib/server/tests/server.loft",
-        ])
+    // Direct binary invocation — see p203_reproducer_passes_under_native
+    // for the nested-cargo race rationale.
+    let status = std::process::Command::new(loft_binary())
+        .arg("lib/server/tests/server.loft")
         .current_dir(project_root())
         .status()
         .expect("run lib/server smoke under native");
@@ -581,16 +558,10 @@ fn p244_text_native_wrapper_compiles_under_native() {
 /// `tests/scripts/repro_p205.loft:18` fails at runtime.
 #[test]
 fn p205_repro_passes_under_native() {
-    let status = std::process::Command::new("cargo")
-        .args([
-            "run",
-            "--bin",
-            "loft",
-            "--release",
-            "--quiet",
-            "--",
-            "tests/scripts/repro_p205.loft",
-        ])
+    // Direct binary invocation — see p203_reproducer_passes_under_native
+    // for the nested-cargo race rationale.
+    let status = std::process::Command::new(loft_binary())
+        .arg("tests/scripts/repro_p205.loft")
         .current_dir(project_root())
         .status()
         .expect("run repro_p205 under native");

@@ -55,6 +55,20 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   function readStr(ptr, len) {
     return decoder.decode(new Uint8Array(getMem().buffer, ptr, len));
   }
+  // lib/graphics shaders are written for desktop GLSL (#version 330 core);
+  // WebGL2 needs GLSL ES 3.00.  The grammar is otherwise compatible for the
+  // subset our shaders use (in/out/layout/texture()/discard/gl_Position),
+  // so rewrite the version directive + inject default precision and let
+  // WebGL2 take everything else as-is.  Fragment shaders need explicit
+  // precision for float/int; vertex shaders default to highp.
+  function translateShader(src, isFragment) {
+    const re = /^\s*#version\s+\d+(\s+\w+)?\s*\n?/;
+    const head = isFragment
+      ? '#version 300 es\nprecision highp float;\nprecision highp int;\n'
+      : '#version 300 es\n';
+    if (re.test(src)) return src.replace(re, head);
+    return head + src;
+  }
 
   let programs = [], vaos = [], textures = [], fbos = [];
   const keys = new Set();
@@ -118,7 +132,8 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         programs = []; vaos = []; textures = []; fbos = [];
       },
       loft_gl_create_shader(vp, vl, fp, fl) {
-        const vertSrc = readStr(vp, vl), fragSrc = readStr(fp, fl);
+        const vertSrc = translateShader(readStr(vp, vl), false);
+        const fragSrc = translateShader(readStr(fp, fl), true);
         const vs = gl.createShader(gl.VERTEX_SHADER);
         gl.shaderSource(vs, vertSrc); gl.compileShader(vs);
         if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS)) {
