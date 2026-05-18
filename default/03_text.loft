@@ -287,6 +287,13 @@ pub fn join(parts: vector < text >, sep: text) -> text {
 pub fn arguments() -> vector < text >;
 #rust"stores.os_arguments()"
 #impure(host_io)
+// Returns the UTC calendar date `days` days before today, formatted
+// as `YYYY-MM-DD`.  Reuses `src/logger.rs::days_to_ymd`.  Use for
+// cutoff-date computation in time-window filters (e.g. "P-issues
+// closed in the last 30 days").  Negative `days` clamps to today.
+pub fn ymd_days_ago(days: integer) -> text;
+#rust"Stores::ymd_days_ago_native(@days)"
+#impure(host_io)
 // Returns the current working directory, optionally with v appended as a subpath.
 // Use to construct absolute paths relative to where the program was launched.
 pub fn directory(v:  & text = "") -> text;

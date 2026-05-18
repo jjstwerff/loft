@@ -128,6 +128,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_9character_is_whitespace", t_9character_is_whitespace),
     ("t_9character_is_control", t_9character_is_control),
     ("n_arguments", n_arguments),
+    ("n_ymd_days_ago", n_ymd_days_ago),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
     ("n_program_directory", n_program_directory),
@@ -744,6 +745,19 @@ fn t_9character_is_control(stores: &mut Stores, stack: &mut DbRef) {
 fn n_arguments(stores: &mut Stores, stack: &mut DbRef) {
     let new_value = { stores.os_arguments() };
     stores.put(stack, new_value);
+}
+
+/// Return `YYYY-MM-DD` of today minus `days` days, UTC.  Wraps the
+/// `days_to_ymd` algorithm in `src/logger.rs`.  Exposed to loft as
+/// `ymd_days_ago(days)` so cutoff-date computation for time-window
+/// filters (recent-closed P-issues / recently-finished plans) can
+/// happen without a bash `date -u -d '30 days ago'` invocation.
+/// Negative `days` clamps to today (no future dates).
+fn n_ymd_days_ago(stores: &mut Stores, stack: &mut DbRef) {
+    let v_days = *stores.get::<i64>(stack);
+    stores.scratch.push(Stores::ymd_days_ago_native(v_days));
+    let s = crate::keys::Str::new(stores.scratch.last().unwrap());
+    stores.put(stack, s);
 }
 
 fn n_directory(stores: &mut Stores, stack: &mut DbRef) {

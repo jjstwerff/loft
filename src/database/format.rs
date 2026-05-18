@@ -421,6 +421,21 @@ impl Stores {
         crate::wasm::host_fs_cwd()
     }
 
+    /// `YYYY-MM-DD` of today minus `days`, UTC.  Wraps the
+    /// `days_to_ymd` algorithm in `src/logger.rs`.  Reused by the
+    /// loft `ymd_days_ago(days)` builtin (interp + native via the
+    /// `#rust` template).  Negative `days` clamps to today.
+    #[must_use]
+    pub fn ymd_days_ago_native(days: i64) -> String {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let today_days = now_secs / 86_400;
+        let target_days = today_days.saturating_sub(days.max(0) as u64);
+        let (y, m, d) = crate::logger::days_to_ymd(target_days);
+        format!("{y:04}-{m:02}-{d:02}")
+    }
+
     /// Native-codegen variant of `os_home` that returns an owned `String`.
     ///
     /// # Panics

@@ -616,10 +616,12 @@ fn today_ymd() -> (u32, u32, u32) {
 }
 
 /// Convert a count of days since the Unix epoch (1970-01-01) to `(year, month, day)`.
+/// Exposed `pub(crate)` so `src/native.rs::n_ymd_days_ago` can reuse it without
+/// duplicating the Howard Hinnant algorithm.
 ///
 /// Algorithm from Howard Hinnant: <https://howardhinnant.github.io/date_algorithms.html>
 #[allow(clippy::many_single_char_names)] // Standard mathematical variable names from the algorithm
-fn days_to_ymd(z: u64) -> (u32, u32, u32) {
+pub(crate) fn days_to_ymd(z: u64) -> (u32, u32, u32) {
     // Shift epoch from 1970-01-01 to 0000-03-01
     let z = z as i64 + 719_468;
     let era: i64 = if z >= 0 { z } else { z - 146_096 } / 146_097;
