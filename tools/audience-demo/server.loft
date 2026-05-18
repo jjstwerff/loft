@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN36 phase 0/1 bridge — minimal observability server.
+//
+// Listens on a single TCP port, accepts WebSocket clients, and prints
+// every connect + message it receives.  Does NOT maintain state, does
+// NOT broadcast, does NOT respond — its single job is to make
+// client-side WebSocket emission visible so we can validate the wire
+// before building the real phase-1 server.
+//
+// Wire format inherited from lib/server: text frames `<msg_id>:<payload>`
+// where msg_id is a small integer enum.  This server doesn't interpret
+// either; it just prints them.
+//
+// Run:
+//   ./target/release/loft --no-warnings --lib lib/ tools/audience-demo/server.loft
+//
+// Then open tools/audience-demo/index.html in a browser (served from
+// any local HTTP — `python3 -m http.server 8765 -d tools` works).
+// Each tap on the phone client should print one line on the server.
+
+use server;
+
+// Pretty-print one event with a uniform prefix.  Leaf helpers go FIRST
+// so @P281 (pass-1 caller-before-callee return-type inference) doesn't
+// bite — declaring stamp() before its callers means consumers see the
+// concrete `text` return type instead of unknown(0).
+fn stamp(prefix: text, cid: integer, body: text) -> text {
+  "[{prefix} cid={cid}] {body}"
+}
+
+fn main() {
+  port = 18083;
+  println("audience-demo server: listening on ws://localhost:{port}/");
+  println("audience-demo server: (press Ctrl-C to stop; lib/server absorbs disconnects silently)");
+
+  srv = server::listen(port);
+  if srv.handle < 0 {
+    println("audience-demo server: FAILED to listen on port {port}");
+    return;
+  }
+
+  srv.run(fn(ev: server::WsEvent) {
+    if ev.connected {
+      println(stamp("connect", ev.cid, ""));
+    } else if ev.message {
+      // Print msg_id + payload.  No interpretation — the goal is to
+      // see exactly what arrives over the wire.
+      label = "msg_id={ev.msg_id} payload={ev.payload}";
+      println(stamp("msg", ev.cid, label));
+    }
+    // ev.connected=false AND ev.message=false → disconnected (lib/server
+    // absorbs the kind=2 frames silently; no observable event reaches
+    // here for them, but the branch is documented for completeness).
+  });
+}

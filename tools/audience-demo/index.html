@@ -36,7 +36,14 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: var(--bg); color: var(--text); height: 100%; overflow: hidden;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  body { display: grid; grid-template-rows: 1fr 56px 48px; gap: 4px; padding: 4px; }
+  body { display: grid; grid-template-rows: 1fr 56px 48px 24px; gap: 4px; padding: 4px; }
+  #status {
+    font-size: 11px; color: var(--text); opacity: 0.65;
+    padding: 0 6px; display: flex; align-items: center;
+  }
+  #status.ok    { color: #6ad080; opacity: 0.9; }
+  #status.warn  { color: #d8c060; opacity: 0.9; }
+  #status.err   { color: #d86060; opacity: 0.9; }
   /* Zone 1 — world canvas */
   #world { background: var(--bg); width: 100%; height: 100%; display: block; touch-action: none; }
   /* Zone 2 — palette */
@@ -72,6 +79,12 @@
     <button class="ctl" id="clear-color">Clear color</button>
     <button class="ctl" id="jump-active">Jump to active</button>
   </div>
+  <!--
+    Status line — observability for the WebSocket wire.  Phase-0
+    placeholder; phase-1 hides this once the world-snapshot fade-in
+    serves as the connection-ready signal.
+  -->
+  <div id="status" aria-live="polite"></div>
 
 <script>
 'use strict';
@@ -237,6 +250,7 @@ function setActiveColour(idx) {
   for (const tile of palEl.children) {
     tile.classList.toggle('active', Number(tile.dataset.colour) === idx);
   }
+  if (idx > 0) wsSend(`3:${idx}`);              // color_select
 }
 document.getElementById('clear-color').addEventListener('pointerdown', e => {
   e.preventDefault();
@@ -247,6 +261,76 @@ document.getElementById('jump-active').addEventListener('pointerdown', e => {
   e.preventDefault();
   // No-op until WebSocket events arrive with other players' positions.
 });
+
+// ── WebSocket wire (sub-task 0.7 — observability MVP) ───────────────────────
+// Wire format inherited from lib/server: text frames `<msg_id>:<payload>`.
+// The msg_id enum locked in alongside the demo server skeleton:
+//   1 = seed         payload: "q,r,color"
+//   2 = clear        payload: "q,r"
+//   3 = color_select payload: "color"
+// (4+ are server→client; we don't send those.  Phase 1 wires the receive
+// path.)
+//
+// The MVP server (tools/audience-demo/server.loft) does NOT echo back; it
+// just prints every received frame.  This lets us validate the wire from
+// the client side without depending on phase-1 state machinery.
+//
+// URL parameter overrides:
+//   ?ws=ws://localhost:18083/   — explicit endpoint
+//   ?ws=off                     — disable WebSocket entirely (local-only)
+const WS_PARAM = new URLSearchParams(location.search).get('ws');
+const WS_URL = WS_PARAM === 'off'
+  ? null
+  : (WS_PARAM || `ws://${location.hostname || 'localhost'}:18083/`);
+
+const statusEl = document.getElementById('status');
+function setStatus(text, cls) {
+  statusEl.textContent = text;
+  statusEl.className = cls || '';
+}
+
+let ws = null;
+let wsReconnectMs = 1000;
+const RECONNECT_MAX_MS = 16000;
+
+function wsSend(frame) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  try { ws.send(frame); return true; } catch (e) { return false; }
+}
+
+function wsConnect() {
+  if (!WS_URL) { setStatus('local-only (ws=off)', 'warn'); return; }
+  setStatus('connecting to ' + WS_URL + ' ...', 'warn');
+  let s;
+  try { s = new WebSocket(WS_URL); }
+  catch (e) {
+    setStatus('failed to construct WebSocket: ' + e.message, 'err');
+    return;
+  }
+  ws = s;
+  s.binaryType = 'arraybuffer';
+  s.addEventListener('open', () => {
+    setStatus('connected to ' + WS_URL, 'ok');
+    wsReconnectMs = 1000;     // reset backoff on success
+  });
+  s.addEventListener('close', () => {
+    setStatus('disconnected — retrying in ' + (wsReconnectMs / 1000) + 's', 'err');
+    ws = null;
+    setTimeout(wsConnect, wsReconnectMs);
+    wsReconnectMs = Math.min(wsReconnectMs * 2, RECONNECT_MAX_MS);
+  });
+  s.addEventListener('error', () => {
+    // 'error' fires before 'close' on a failed handshake; let 'close'
+    // handle the reconnect schedule.
+  });
+  s.addEventListener('message', (e) => {
+    // Server→client frames (phase 1 will format these).  For now just
+    // count them in the status line — no parsing yet.
+    if (!wsConnect._rxCount) wsConnect._rxCount = 0;
+    wsConnect._rxCount++;
+    setStatus('connected — ' + wsConnect._rxCount + ' frames received', 'ok');
+  });
+}
 
 // ── Tap handling — empty / own / other distinction (sub-task 0.4) ────────────
 // Empty hex   + colour active → paint
@@ -268,10 +352,12 @@ canvas.addEventListener('pointerdown', e => {
   const cur = cells.get(k) || 0;
   if (cur === 0) {
     cells.set(k, activeColour);
+    wsSend(`1:${wq},${wr},${activeColour}`);   // seed
   } else if (cur === playerColour) {
     cells.delete(k);
+    wsSend(`2:${wq},${wr}`);                    // clear
   }
-  // cur is some other player's colour → no-op.
+  // cur is some other player's colour → no-op (no send either).
   draw();
 });
 
@@ -285,6 +371,7 @@ function init() {
   setActiveColour(1 + Math.floor(Math.random() * 9));
   window.addEventListener('resize', resize);
   resize();
+  wsConnect();
 }
 init();
 
@@ -294,7 +381,13 @@ init();
 window.__phase0 = {
   cells, PALETTE,
   get activeColour() { return activeColour; },
+  get ws() { return ws; },
+  get wsState() {
+    if (!ws) return 'none';
+    return ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][ws.readyState] || 'UNKNOWN';
+  },
   paintAt(q, r, colour) { cells.set(cellKey(q, r), colour); draw(); },
+  wsSend,
 };
 </script>
 </body>
