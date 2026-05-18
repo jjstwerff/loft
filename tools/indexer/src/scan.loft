@@ -651,12 +651,20 @@ fn normalize_path(p: text) -> text {
 // → `\\`, `\"`, `\n`, `\t`, `\r`, or `\u00XX`.  Loft text is
 // UTF-8 so non-ASCII codepoints pass through verbatim — JSON
 // allows raw UTF-8 in strings.
+//
+// MUST iterate by codepoint (`for c in s`), not by byte
+// position with `s[i]`: loft's byte-indexed `s[i]` returns the
+// codepoint of the multibyte sequence containing byte `i`, so
+// a byte loop sees the same codepoint N times for an N-byte
+// UTF-8 char and emits it N times.  The pre-fix code did that
+// — every em-dash / ellipsis in context strings appeared 3×
+// in tags.json.  The bug was latent (no test compared the
+// context field byte-for-byte against the bash scanner) until
+// `emit_problems_open` (sub-commit B) surfaced it via the
+// `jq -S` parity check.
 fn json_escape(s: text) -> text {
     out = "";
-    n = s.len();
-    i = 0;
-    while i < n {
-        c = s[i];
+    for c in s {
         if c == '\\' {
             out += "\\\\";
         } else if c == '"' {
@@ -680,7 +688,6 @@ fn json_escape(s: text) -> text {
                 out += "{c}";
             }
         }
-        i = i + 1;
     }
     out
 }
@@ -874,6 +881,12 @@ fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
     emit_broken_links_array(links);
     println("");
     println("  ]");
+    // problems_open — parsed from PROBLEMS.md severity column.
+    println(",");
+    println("  \"problems_open\": [");
+    emit_problems_open_array();
+    println("");
+    println("  ]");
     println("");
     println("}}");
 }
@@ -984,6 +997,115 @@ fn emit_broken_array(rows: vector<RawRef>, valid_pids: vector<text>,
 // object per distinct missing-target.  Caller writes the surrounding
 // `"broken_links": [ ... ]` brackets.  Mirrors scan.sh's
 // BROKEN_LINKS_JSON shape.
+// ── problems_open bucket ────────────────────────────────────────
+// Parse doc/claude/PROBLEMS.md, find rows whose severity column
+// matches the bash filter `(^| |\()open( |,|\)|$)|\(partial`
+// (case-insensitive), emit one JSON entry per row:
+//   {"tag":"@P<n>","line":<NR>,"severity":"...","summary":"...","fix":"..."}
+// Caller writes the surrounding `"problems_open": [` / `]`.
+//
+// Row format in PROBLEMS.md: `| <num> | <body> | <severity> | <fix> |`
+// — split on `|` yields 6 cells (empty, num, body, sev, fix, empty).
+// Body summary: strip `**@P<n>** — ` prefix, take up to first `. `,
+// cap at 280 bytes (suffix `...` if truncated).
+fn severity_is_open(sev: text) -> boolean {
+    lower = sev.to_lowercase();
+    if lower.find("(partial") >= 0 { return true; }
+    n = lower.len();
+    pos = 0;
+    while pos < n {
+        rel = lower[pos..n].find("open");
+        if rel < 0 { return false; }
+        at = pos + rel;
+        ok_lead = at == 0;
+        if !ok_lead {
+            pc = lower[at - 1];
+            ok_lead = pc == ' ' || pc == '(';
+        }
+        if ok_lead {
+            end_pos = at + 4;
+            ok_trail = end_pos == n;
+            if !ok_trail {
+                nc = lower[end_pos];
+                ok_trail = nc == ' ' || nc == ',' || nc == ')';
+            }
+            if ok_trail { return true; }
+        }
+        pos = at + 1;
+    }
+    false
+}
+
+// Strip leading whitespace and the literal `**@P<id>** — ` prefix
+// added by the 2026-05-14 self-tagging migration.  No-op if the
+// prefix isn't present (older rows).
+fn strip_tag_prefix(body: text, id: text) -> text {
+    s = body.trim();
+    prefix = "**@P{id}** — ";
+    plen = prefix.len();
+    slen = s.len();
+    if slen >= plen && s.starts_with(prefix) {
+        return s[plen..slen];
+    }
+    s
+}
+
+// Take body up to first `. ` (period + space — bare `.` would
+// split file extensions); cap at 280 bytes, suffix `...` if cut.
+fn truncate_summary(body: text) -> text {
+    summary = body;
+    pos = summary.find(". ");
+    if pos > 0 {
+        summary = summary[0..pos + 1];
+    }
+    if summary.len() > 280 {
+        summary = summary[0..277] + "...";
+    }
+    summary
+}
+
+// True for a PROBLEMS.md row prefix `| <digits> ` (the issue
+// number).  Cheap pre-filter before the more expensive split('|').
+fn is_problems_row(line: text) -> boolean {
+    n = line.len();
+    if n < 5 || !line.starts_with("| ") { return false; }
+    j = 2;
+    if line[j] < '0' || line[j] > '9' { return false; }
+    while j < n && line[j] >= '0' && line[j] <= '9' { j = j + 1; }
+    j < n && line[j] == ' '
+}
+
+fn emit_problems_open_array() {
+    f = file("doc/claude/PROBLEMS.md");
+    if f.format == Format.NotExists { return; }
+    lines = f.lines();
+    nl = lines.len();
+    first = true;
+    i = 0;
+    while i < nl {
+        line = lines[i];
+        if !is_problems_row(line) { i = i + 1; continue; }
+        cells = line.split('|');
+        if cells.len() < 5 { i = i + 1; continue; }
+        id_text = cells[1].trim();
+        body = cells[2];
+        severity = cells[3].trim();
+        fix = cells[4].trim();
+        if !severity_is_open(severity) { i = i + 1; continue; }
+        summary = strip_tag_prefix(body, id_text);
+        summary = truncate_summary(summary);
+        if fix.len() > 280 { fix = fix[0..277] + "..."; }
+        if !first { print(","); }
+        first = false;
+        line_no = i + 1;
+        esc_sev = json_escape(severity);
+        esc_sum = json_escape(summary);
+        esc_fix = json_escape(fix);
+        print("\n    {{\"tag\":\"@P{id_text}\",\"line\":{line_no},\"severity\":\"{esc_sev}\",\"summary\":\"{esc_sum}\",\"fix\":\"{esc_fix}\"}}");
+        i = i + 1;
+    }
+}
+
 fn emit_broken_links_array(links: vector<LinkRef>) {
     distinct = DistinctSets {};
     for lr in links {
