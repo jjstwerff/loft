@@ -13,9 +13,15 @@
 //
 // Usage:
 //   node tools/html_render_check.mjs <url> [--wait-ms N] [--screenshot path]
-//                                          [--port N]   [--allow PATTERN]
+//                                          [--port N]   [--allow SUBSTRING]
 //                                          [--canvas SELECTOR]
 //                                          [--canvas-min-colors N]
+//
+// `--allow SUBSTRING` suppresses a console error / exception when its
+// text contains the given substring (repeatable).  Plain substring
+// match — no regex — to avoid the regex-injection / ReDoS class flagged
+// by CodeQL (this tool runs against trusted local URLs but the API
+// stays defensible).
 //
 // `--canvas SELECTOR` enables Layer 2: capture a clipped screenshot of
 // the canvas element and count distinct RGB triples in the result.  If
@@ -39,7 +45,7 @@ import process from 'node:process';
 // ── CLI ────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 if (args.length < 1) {
-  console.error('usage: html_render_check.mjs <url> [--wait-ms N] [--screenshot PATH] [--port N] [--allow REGEX] [--canvas SELECTOR] [--canvas-min-colors N]');
+  console.error('usage: html_render_check.mjs <url> [--wait-ms N] [--screenshot PATH] [--port N] [--allow SUBSTRING] [--canvas SELECTOR] [--canvas-min-colors N]');
   process.exit(64);
 }
 const URL_ARG = args[0];
@@ -51,7 +57,7 @@ for (let i = 1; i < args.length; i++) {
   if (args[i] === '--wait-ms') opts.waitMs = parseInt(args[++i], 10);
   else if (args[i] === '--screenshot') opts.screenshot = args[++i];
   else if (args[i] === '--port') opts.port = parseInt(args[++i], 10);
-  else if (args[i] === '--allow') opts.allow.push(new RegExp(args[++i]));
+  else if (args[i] === '--allow') opts.allow.push(args[++i]);
   else if (args[i] === '--canvas') opts.canvasSelector = args[++i];
   else if (args[i] === '--canvas-min-colors') opts.canvasMinColors = parseInt(args[++i], 10);
   else { console.error('unknown flag: ' + args[i]); process.exit(64); }
@@ -364,13 +370,13 @@ function decodePngRgb(pngBuf) {
     for (const e of events) {
       if (e.method === 'Runtime.consoleAPICalled' && e.params.type === 'error') {
         const text = e.params.args.map(a => a.value ?? a.description ?? '').join(' ');
-        if (!opts.allow.some(r => r.test(text))) {
+        if (!opts.allow.some(s => text.includes(s))) {
           failures.push({ kind: 'console.error', text });
         }
       } else if (e.method === 'Runtime.exceptionThrown') {
         const text = e.params.exceptionDetails.exception?.description ||
                      e.params.exceptionDetails.text || 'unknown exception';
-        if (!opts.allow.some(r => r.test(text))) {
+        if (!opts.allow.some(s => text.includes(s))) {
           failures.push({ kind: 'exception', text });
         }
       } else if (e.method === 'Log.entryAdded' && e.params.entry.level === 'error') {
@@ -378,10 +384,10 @@ function decodePngRgb(pngBuf) {
         // Browser-side resource 404s (favicon, etc.) are noise unless
         // they hit a file we intentionally load.  Filter the generic
         // "Failed to load resource" pattern unless --allow excludes it.
-        if (/Failed to load resource/.test(text) && !opts.allow.some(r => r.test(text))) {
+        if (/Failed to load resource/.test(text) && !opts.allow.some(s => text.includes(s))) {
           continue;
         }
-        if (!opts.allow.some(r => r.test(text))) {
+        if (!opts.allow.some(s => text.includes(s))) {
           failures.push({ kind: 'log.error', text });
         }
       }
