@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # tracker-index architecture
 
-Phase 00 of [`plans/37-tracker-index/`](../../doc/claude/plans/37-tracker-index/README.md).
+Phase 00 of [`plans/37-tracker-index/`](../../doc/claude/plans/future/37-tracker-index/README.md).
 
 ## Why bash + grep + jq
 

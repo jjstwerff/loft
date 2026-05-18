@@ -134,4 +134,4 @@ per existing `tests/p254_cache_poisoning.rs`).
 
 - [Phase 00 — scanner](00-convention-and-scanner.md) — the scanner this phase extends
 - [Phase 02 — auto-refresh](02-auto-refresh.md) — same hook can fail-fast on broken refs
-- [PROBLEMS.md](../../PROBLEMS.md) — the source of truth for `@P-id` validity
+- [PROBLEMS.md](../../../PROBLEMS.md) — the source of truth for `@P-id` validity

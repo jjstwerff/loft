@@ -181,6 +181,6 @@ This is fast (<1 sec); ships in `make ci`.
 - [Phases 01-03 — the tier APIs](README.md#phases)
 - [Phase 04 — stress test](04-stress-test.md) — the empirical contract this phase wires consumers into
 - [Phase 06 — closeout](06-closeout.md)
-- [Plan-37 phase 08](../../37-tracker-index/08-multi-project-deploy.md) — Tier 1 consumer
+- [Plan-37 phase 08](../37-tracker-index/08-multi-project-deploy.md) — Tier 1 consumer
 - [Plan-32 TTT v5](../32-tic-tac-toe/) — Tier 2 consumer
 - [Plan-36 audience demo](../36-audience-generative-art/) — Tier 3 consumer

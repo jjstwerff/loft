@@ -129,7 +129,7 @@ is the inverse.  No JSON parsing on the hot path for world data.
 
 **Per-blob session id** (`u32` in the 5-byte blob header
 `[type:u8] [session:u32] [...payload...]` — see [TTT v5 wire
-spec](../32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo)
+spec](../future/32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo)
 for the validated format).  Mostly useful when starting a new
 client:
 the server splits the initial `world_snapshot` into one blob per
@@ -285,7 +285,7 @@ active player (excluding the recipient) and broadcasts an
 drives the **Jump to active** box's flash.
 
 The 1-second steady heartbeat is the validated cadence in
-[TTT v5](../32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo).
+[TTT v5](../future/32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo).
 Per-change signalling was rejected as overwhelming during busy
 periods; tick-rate signalling (10 Hz) was rejected as wasting
 bandwidth in quiet moments.  One every second feels like a

@@ -69,7 +69,7 @@ between phases — pick in any order.
 - [`@PLAN35`](../../finished/35-branch-review-viewer/README.md)
   — the original viewer plan (closed); this plan is
   maintenance work on the shipped viewer.
-- [`@PLAN37`](../../37-tracker-index/README.md) — the
+- [`@PLAN37`](../37-tracker-index/README.md) — the
   tracker-index plan that drives the `/tag/<bare>` route's
   data source.
 - [`lib_plans/future/18-viewer-generalisation/`](../../../lib_plans/future/18-viewer-generalisation/README.md)

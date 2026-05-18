@@ -313,7 +313,7 @@ extensions.
 
 **Hard prereqs (sibling plan):**
 
-- [@PLAN34 — `lib/server` hardening](../34-server-hardening/README.md)
+- [@PLAN34 — `lib/server` hardening](../future/34-server-hardening/README.md)
   items (a), (b), (e):
   - (a) `srv.broadcast_binary()` / `srv.send_binary_to()` — the
     projector's world-snapshot + delta broadcasts depend on this.
@@ -346,7 +346,7 @@ extensions.
   content overlaps with quick-start `examples/` and the "Learn
   loft in 30 minutes" walkthrough.  Can write the talk inline OR
   land both at once.
-- `plans/finished/22-mutable-closures` (shipped 2026-05-13) + the [TTT v6 retrofit](../32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures)
+- `plans/finished/22-mutable-closures` (shipped 2026-05-13) + the [TTT v6 retrofit](../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures)
   — drops the `Reference<T>.inner` ceremony from the server's
   pump callback so the loft snippets shown on stage during the
   "loft snippet highlights" beats read at their best.  If
@@ -373,7 +373,7 @@ for the 100-iteration tight-loop guards.
 
 **Wire-protocol primitives validated by TTT v5:**
 
-[`plans/future/32-tic-tac-toe`](../32-tic-tac-toe/README.md) § "Tic-tac-toe v5" carries the
+[`plans/future/32-tic-tac-toe`](../future/32-tic-tac-toe/README.md) § "Tic-tac-toe v5" carries the
 binary-frame extension to `lib/server` + `lib/web`, the
 session-tagged blob protocol, the N-client routing pattern,
 the catch-up recovery handler, and the sluggish-tempo tick-loop

@@ -168,5 +168,5 @@ subsequent restarts.
   format detection + integrity validation
 - [Phase 02 — Tier 2 snapshots](02-tier-2-snapshots.md) —
   next tier up; reuses the same DurabilityMode enum
-- [Plan-37 phase 08](../../37-tracker-index/08-multi-project-deploy.md)
+- [Plan-37 phase 08](../37-tracker-index/08-multi-project-deploy.md)
   — first Tier-1 consumer

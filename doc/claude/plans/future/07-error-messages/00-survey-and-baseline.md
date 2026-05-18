@@ -192,5 +192,5 @@ Each row is one commit, lands independently, runs `make ci` green.
 ## Cross-references
 
 - [README.md](README.md) — plan overview and phase index.
-- [doc/claude/TESTING.md](../../TESTING.md) § Snapshot / golden tests
+- [doc/claude/TESTING.md](../../../TESTING.md) § Snapshot / golden tests
   — pattern this phase reuses for `.expect` files.

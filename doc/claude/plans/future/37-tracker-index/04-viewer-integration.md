@@ -163,5 +163,5 @@ viewer.
 ## Cross-references
 
 - [Phase 00 — scanner](00-convention-and-scanner.md) — produces the data
-- [Plan-35 phase 03](../finished/35-branch-review-viewer/03-markdown-minimal.md)
-- [Plan-35 phase 08 — newcomer landing (stretch)](../finished/35-branch-review-viewer/README.md#stretches-post-v1-listed-for-traceability)
+- [Plan-35 phase 03](../../finished/35-branch-review-viewer/03-markdown-minimal.md)
+- [Plan-35 phase 08 — newcomer landing (stretch)](../../finished/35-branch-review-viewer/README.md#stretches-post-v1-listed-for-traceability)

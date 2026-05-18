@@ -49,7 +49,7 @@ The shared `Store` foundation makes a unified durability
 plan cheaper than per-consumer ad-hoc solutions.  Each
 consumer opts into the tier it needs.
 
-The user's [evaluation prompt](../../37-tracker-index/README.md)
+The user's [evaluation prompt](../37-tracker-index/README.md)
 that opened this plan: "the current task is cheap to recover,
 but the eventual game server will lose valuable data in the
 same event.  So this is lightly tied to the index."
@@ -249,9 +249,9 @@ order); 4 is the cross-tier validation; 5+6 wire downstream.
 
 - [`src/store.rs`](../../../../src/store.rs) — the existing
   Store primitive this plan extends.
-- [`plans/future/37-tracker-index/`](../../37-tracker-index/README.md)
+- [`plans/future/37-tracker-index/`](../37-tracker-index/README.md)
   — the test-bed consumer (Tier 1).
-- [`plans/future/37-tracker-index/08-multi-project-deploy.md`](../../37-tracker-index/08-multi-project-deploy.md)
+- [`plans/future/37-tracker-index/08-multi-project-deploy.md`](../37-tracker-index/08-multi-project-deploy.md)
   — phase that opts into Tier 1.
 - [`plans/future/32-tic-tac-toe/`](../32-tic-tac-toe/) — TTT v5
   multiplayer; Tier 2 consumer.

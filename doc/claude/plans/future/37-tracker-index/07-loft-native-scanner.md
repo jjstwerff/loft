@@ -665,7 +665,7 @@ inline helpers) with `obj_start()`, `field_str(k, v)`,
 internal comma tracking — per-bucket boilerplate drops from
 ~20 lines to ~5.
 
-[STDLIB.md § Open work](../../STDLIB.md#open-work) already calls out
+[STDLIB.md § Open work](../../../STDLIB.md#open-work) already calls out
 "JSON emission helpers" as a planned `lib/json_emit/` library.
 Out of scope to ship the full lib here, but ~30 lines of inline
 helpers in scan.loft (alongside `json_escape`) would cut new-
