@@ -8686,7 +8686,17 @@ fn inc18_labelled_break_exits_outer_loop() {
 // parser always emitted (type mismatch on sum_of) is now the
 // user-facing error, with a proper source location.
 #[test]
-fn p140_vector_range_slice_reports_type_mismatch() {
+fn p140_vector_range_slice_auto_materialises_to_vector() {
+    // Updated 2026-05-20 alongside @P287 — assigning a slice expression
+    // to a local now auto-materialises into a `vector<T>` instead of
+    // leaving the local typed as `iterator<T>`.  The slice's elements
+    // get copied into a fresh vector at the assignment site, and
+    // downstream uses (`sum_of(s)` here) see a normal `vector<integer>`.
+    // The old shape of this test asserted the reverse — that the
+    // slice-to-vector mismatch was rejected with a diagnostic — but a
+    // working materialisation is a strictly better user experience and
+    // closes @P287's "slice → struct field crashes scopes" panic on
+    // the same code path.
     code!(
         "fn run() -> integer {
     v = [10, 20, 30, 40, 50];
@@ -8695,7 +8705,44 @@ fn p140_vector_range_slice_reports_type_mismatch() {
 }"
     )
     .expr("run()")
-    .error("expected vector<integer>, got iterator<integer> on call to sum_of at p140_vector_range_slice_reports_type_mismatch:5:1");
+    .result(Value::Int(90));
+}
+
+#[test]
+fn p287_struct_field_slice_self_assign() {
+    // `s.v = s.v[1..]` used to crash `src/scopes.rs:298` with an index-
+    // out-of-bounds panic (the iterator's end-of-stream `Break(0)` had
+    // no enclosing loop to bind to).  Fix in `parse_assign_op` allocates
+    // a temp local, materialises the slice into it, then field-writes
+    // the temp into the destination via `OpClearVector` + `OpAppendVector`.
+    code!(
+        "struct S { v: vector<integer> }
+fn run() -> integer {
+    s = S{v: [1, 2, 3, 4]};
+    s.v = s.v[1..];
+    s.v.len()
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(3));
+}
+
+#[test]
+fn p287_struct_field_slice_other_source() {
+    // Sibling shape — slice taken from a DIFFERENT vector also crashed
+    // before the @P287 fix (proves the crash was about slice-RHS, not
+    // specifically self-reference).
+    code!(
+        "struct S { v: vector<integer> }
+fn run() -> integer {
+    s = S{v: [1, 2, 3, 4]};
+    src: vector<integer> = [10, 20, 30, 40];
+    s.v = src[1..];
+    s.v[0]
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(20));
 }
 
 // INC#2 — vector has comprehensions; sorted/index do not.  Documented

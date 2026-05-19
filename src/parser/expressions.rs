@@ -780,16 +780,77 @@ use a separate collection or add after the loop"
         if var_nr == u16::MAX {
             self.validate_write(to, &parent_tp);
         }
-        // materialise a collection iterator (e.g. v[a..b] slice) into a vector variable.
-        // CO1.3c: skip materialisation for coroutine iterators (second type is Null).
-        let is_coroutine_iter = matches!(&s_type, Type::Iterator(_, it) if **it == Type::Null);
-        if matches!(&s_type, Type::Iterator(_, _))
-            && !is_coroutine_iter
+        // materialise a collection iterator (e.g. v[a..b] slice) into a vector
+        // variable.  CO1.3c: the original "second type Null = coroutine, skip"
+        // heuristic was wrong — `parse_vector_index` also returns
+        // `Iterator<T, Null>` for slices, and slice → vector is exactly the
+        // case we want to materialise.  Instead detect coroutine iters
+        // structurally: a coroutine `yield`-driven iter does NOT carry a
+        // `Value::Iter(_, _, Block(_), _)` shape — its `next` is the
+        // resume-call.  Materialise only when the `next` is a Block (the
+        // slice / range / collection-iteration shape).  (@P287)
+        // Materialisable iter detection — by IR shape, NOT by s_type.  The
+        // `s_type` is the type the RHS *evaluates to*, but parse_operators
+        // may silently convert `Iterator<T>` to `Vector<T>` when the LHS
+        // expects a vector (`+=` case especially) — leaving `code` as the
+        // raw iter IR even though s_type now claims Vector.  We trust the
+        // IR shape: a `Value::Iter` with a `Block` next is the
+        // slice / range / collection-iter shape we can materialise into a
+        // vector via the per-element record-allocator loop.  Coroutine
+        // iters have a different `next` shape (resume-call) and don't
+        // match.  (@P287)
+        let materialisable_iter_shape = matches!(code,
+            Value::Iter(_, _, n, _) if matches!(n.as_ref(), Value::Block(_)));
+        // Recover the element type from either s_type or the iter's annotation.
+        let iter_elm_tp: Option<Type> = if let Type::Iterator(elm, _) = &s_type {
+            Some((**elm).clone())
+        } else if let Type::Vector(elm, _) = &s_type {
+            // s_type was silently converted; pull element type from there.
+            Some((**elm).clone())
+        } else {
+            None
+        };
+        if materialisable_iter_shape
+            && let Some(elm_tp) = iter_elm_tp.clone()
             && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
             && var_nr != u16::MAX
             && matches!(op, "=" | "+=")
         {
-            self.materialize_iterator(code, &s_type, to, &lhs_parent_tp, var_nr, op);
+            // Rebuild a real Iterator type so materialize_iterator's destructure works.
+            let iter_tp = Type::Iterator(Box::new(elm_tp), Box::new(Type::Null));
+            self.materialize_iterator(code, &iter_tp, to, &lhs_parent_tp, var_nr, op);
+            return Type::Void;
+        }
+        // @P287 — same materialisation, but the LHS is a struct field
+        // (`s.v = slice`) so var_nr is u16::MAX.  Three-step lower:
+        //  (1) allocate a temp local vector,
+        //  (2) materialise the iterator into the temp via the existing
+        //      `materialize_iterator` helper,
+        //  (3) emit `OpClearVector(field) + OpAppendVector(field, tmp)` —
+        //      the same shape that lines ~1020-1033 below build for
+        //      `s.v = fresh_vec` whole-vector field-replace.
+        if materialisable_iter_shape
+            && let Some(elm_tp) = iter_elm_tp
+            && matches!(f_type, Type::Vector(_, _))
+            && var_nr == u16::MAX
+            && op == "="
+            && !self.first_pass
+            && self.is_field(to)
+        {
+            let iter_tp = Type::Iterator(Box::new(elm_tp.clone()), Box::new(Type::Null));
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+            let tmp = self.create_unique("__p287_tmp", &vec_tp);
+            self.vars.defined(tmp);
+            // (2) materialise iter → tmp (mutates *code into the materialise IR).
+            //     Pass the rebuilt iter_tp so materialize_iterator's destructure
+            //     succeeds even when s_type was silently converted upstream.
+            self.materialize_iterator(code, &iter_tp, &Value::Var(tmp), &lhs_parent_tp, tmp, op);
+            // (3) emit clear + append on the destination field.
+            let dn = self.data.type_def_nr(&elm_tp);
+            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+            let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+            let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);
+            *code = Value::Insert(vec![code.clone(), clear, append]);
             return Type::Void;
         }
         // P188 — local-var collection `+= elem` for vector/sorted/hash/
