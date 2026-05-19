@@ -27,6 +27,7 @@
 //   # hex in the projector window within a frame.
 
 use graphics;
+use math;
 use web;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -115,124 +116,113 @@ fn palette_b(idx: integer) -> float {
   bs[idx]
 }
 
-// Build a unit pointy-top hex VBO — 6 triangles fanned from centre.
-// 18 vertices, 3 floats each (x, y, z=0).  Radius 1; the per-cell MVP
-// scales by HEX_SIZE.  Vertex order matches doc/audience-demo/index.html
-// drawHex (angle = 60°i - 30° for i = 0..5).
-fn build_hex_vbo() -> integer {
+// ── 3D rendering — step 1: hex ground in 3D space ──────────────────────────
+//
+// Phase 3 of @PLAN36 — the 3D crystal mesh.  Step 1 swaps the 2D ortho
+// painter for a real 3D perspective pipeline so the camera (pos +
+// rotation + tilt) becomes a literal FPS-style eye in world space.
+// Visuals stay close to the 2D version for now: flat hex tiles
+// sitting on the y=0 ground plane.  Crystal prisms with height,
+// bridges, ridges, and the colour mosaic land in subsequent steps.
+
+GROUND_VERT = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+out vec3 vNormal;
+void main() {{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vNormal = aNormal;
+}}
+`;
+
+GROUND_FRAG = `
+#version 330 core
+in vec3 vNormal;
+out vec4 FragColor;
+uniform vec3 uColor;
+uniform float uAlpha;
+void main() {{
+    vec3 ld = normalize(vec3(0.4, 1.0, 0.6));
+    float diff = max(dot(normalize(vNormal), ld), 0.0);
+    float light = 0.55 + 0.45 * diff;
+    FragColor = vec4(uColor * light, uAlpha);
+}}
+`;
+
+// Unit hex VBO for the GROUND layer — 18 vertices (6 triangles fanned
+// from centre), each carrying (pos.xyz, normal.xyz) = stride 6.  All
+// vertices at y=0 with normal (0, 1, 0) (top-facing).  Radius 1; the
+// per-cell model matrix scales to HEX_SIZE world units and translates
+// to the hex's world position.
+fn build_ground_hex_vbo() -> integer {
   verts: vector<single> = [];
   for i in 0..6 {
     a0 = (60.0 * i as float - 30.0) * 3.14159265358979 / 180.0;
     a1 = (60.0 * (i + 1) as float - 30.0) * 3.14159265358979 / 180.0;
-    // centre
-    verts += [0.0f, 0.0f, 0.0f];
-    // outer vertex i
-    verts += [cos(a0) as single, sin(a0) as single, 0.0f];
+    // centre (0, 0, 0), normal up
+    verts += [0.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f];
+    // outer vertex i — note world Z = cell's screen Y direction
+    verts += [cos(a0) as single, 0.0f, sin(a0) as single,  0.0f, 1.0f, 0.0f];
     // outer vertex i+1
-    verts += [cos(a1) as single, sin(a1) as single, 0.0f];
+    verts += [cos(a1) as single, 0.0f, sin(a1) as single,  0.0f, 1.0f, 0.0f];
   }
-  graphics::gl_upload_vertices(verts, 3)
+  graphics::gl_upload_vertices(verts, 6)
 }
 
-// Compute the screen position of hex (x, y) given:
-//   view_x, view_y — the WORLD hex coord that should land at screen
-//                    centre.  Normally = camera position, but the
-//                    caller pre-shifts it toward the destination
-//                    when tilt > 0 (the look-at offset:
-//                    view = pos + tilt * (end - pos)) so a distant
-//                    edit appears centred in the frame at full tilt.
-//   rotation       — camera rotation in radians (0 = north up,
-//                    world Y+ axis points down on screen)
-//   tilt           — vertical-axis compression (0 = top-down map view,
-//                    1 = fully foreshortened "looking forward" view)
-// Returns the post-rotation, post-tilt screen pixel coords (cx, cy)
-// so the caller can place the hex there.  Matches the phone client's
-// offsetToPixel(x, y, size) at view=pos, rotation=0, tilt=0.
-fn cell_centre(x: integer, y: integer,
-               view_x: float, view_y: float,
-               rotation: float, tilt: float) -> (float, float) {
-  // (1) Unrotated map-space pixel position, with the parity shift the
-  //     pointy-top offset coord system needs.
-  parity = y - (y / 2) * 2;
+// Hex world coordinates — convert offset (x, y) hex coords to world XZ
+// position on the ground plane.  HEX_SIZE = world units per hex
+// circumradius; identical layout to the 2D screen pos (just dropped
+// into the 3D world's XZ plane with Y up).  World X = hex column
+// direction, world Z = hex row direction.
+fn hex_world_x(hx: integer, hy: integer) -> float {
+  parity = hy - (hy / 2) * 2;
   if parity < 0 { parity = parity + 2; }
   shift = 0.0;
   if parity == 1 { shift = SQRT3 / 2.0 * HEX_SIZE; }
-  map_x = (x as float - view_x) * SQRT3 * HEX_SIZE + shift;
-  map_y = (y as float - view_y) * 1.5 * HEX_SIZE;
-  // (2) Apply rotation around the screen centre.  Must run BEFORE the
-  //     Y-squash below so the tilt foreshortening acts on the SCREEN
-  //     Y axis (= the camera's pitch direction in an FPS-style "look
-  //     forward" view) rather than on the WORLD Y axis, which would
-  //     wrongly squeeze X on rotated views.
-  cos_r = cos(rotation);
-  sin_r = sin(rotation);
-  rx = map_x * cos_r - map_y * sin_r;
-  ry = map_x * sin_r + map_y * cos_r;
-  // (3) Pitch foreshortening: tilt=0 is the FPS "looking straight
-  //     down" extremity (full Y scale, top-down map view); tilt=1
-  //     lifts the camera toward horizontal so the screen Y axis
-  //     compresses (distant ground reads as closer to centre).
-  y_scale = 1.0 - tilt * 0.70;
-  ry = ry * y_scale;
-  (WIN_W as float / 2.0 + rx, WIN_H as float / 2.0 + ry)
+  hx as float * SQRT3 * HEX_SIZE + shift
+}
+fn hex_world_z(hy: integer) -> float {
+  hy as float * 1.5 * HEX_SIZE
 }
 
-// Build an MVP that places + scales + rotates + Y-squashes the unit-hex
-// VBO so its centre lands at (cx, cy) with horizontal radius `r` and
-// vertical radius `r * (1 - tilt * 0.5)`, rotated by `rotation` radians
-// around the hex's own centre.  Equivalent to:
-//   M = T(cx, cy) * S_screen_y(y_scale) * R(rotation) * S(r, r, 1)
-// — uniform scale by r, rotate, THEN apply screen-Y squash (so
-// foreshortening rides on the camera's pitch axis instead of on the
-// world Y axis, which would wrongly squeeze X on rotated views).
-// proj * M is baked into one matrix; the painter's proj is structurally
-// diag(2/w, -2/h, -1) + translate(-1, 1, 0).
-fn build_hex_mvp(proj: const vector<float>,
-                 cx: float, cy: float,
-                 r: float, rotation: float, tilt: float) -> vector<float> {
-  cos_r = cos(rotation);
-  sin_r = sin(rotation);
-  y_scale = 1.0 - tilt * 0.70;      // screen-Y squash, post-rotation
-  rx_x =  r * cos_r;                // unit-X scaled+rotated, X component
-  rx_y =  r * sin_r * y_scale;      // unit-X scaled+rotated, Y component (squashed)
-  ry_x = 0.0 - r * sin_r;           // unit-Y scaled+rotated, X component
-  ry_y =  r * cos_r * y_scale;      // unit-Y scaled+rotated, Y component (squashed)
-  mvp: vector<float> = [
-    // Column 0 — proj * (rx_x, rx_y, 0, 0)
-    proj[0] * rx_x + proj[4] * rx_y,
-    proj[1] * rx_x + proj[5] * rx_y,
-    proj[2] * rx_x + proj[6] * rx_y,
-    proj[3] * rx_x + proj[7] * rx_y,
-    // Column 1 — proj * (ry_x, ry_y, 0, 0)
-    proj[0] * ry_x + proj[4] * ry_y,
-    proj[1] * ry_x + proj[5] * ry_y,
-    proj[2] * ry_x + proj[6] * ry_y,
-    proj[3] * ry_x + proj[7] * ry_y,
-    // Column 2 — unchanged (z stuff for the orthographic projection)
-    proj[8],      proj[9],      proj[10],     proj[11],
-    // Column 3 — proj * (cx, cy, 0, 1)
-    proj[0] * cx + proj[4] * cy + proj[12],
-    proj[1] * cx + proj[5] * cy + proj[13],
-    proj[2] * cx + proj[6] * cy + proj[14],
-    proj[3] * cx + proj[7] * cy + proj[15],
-  ];
-  mvp
+// build_view_matrix is defined LATER — must appear after the AutoCam
+// struct so loft's pass-1 type inference knows the field types.
+
+// Build the MVP for a single hex tile at (hx, hy) in the ground layer.
+// proj_view = perspective * view (cached once per frame); the per-hex
+// model = translate(world pos) * scale(radius).  Final mvp = proj_view
+// * model.  Returns the .m field for direct upload via
+// `gl_set_uniform_mat4`.
+fn build_ground_mvp(proj_view: const math::Mat4,
+                    hx: integer, hy: integer, r: float) -> vector<float> {
+  wx = hex_world_x(hx, hy);
+  wz = hex_world_z(hy);
+  model = math::mat4_mul(
+    math::mat4_translate(wx, 0.0, wz),
+    math::mat4_scale(r, 1.0, r)
+  );
+  mvp = math::mat4_mul(proj_view, model);
+  mvp.m
 }
 
-// Draw one filled hex at (cx, cy) with radius r, optionally rotated +
-// vertically squashed for the camera's tilt + rotation state.  Pass
-// `rotation = 0, tilt = 0` for the static-camera baseline.
-fn draw_hex(painter: const graphics::Painter2D, vao: integer,
-            cx: float, cy: float, r: float, rotation: float, tilt: float,
-            pi: integer) {
-  mvp = build_hex_mvp(painter.p2_proj, cx, cy, r, rotation, tilt);
-  graphics::gl_use_shader(painter.p2_flat);
-  graphics::gl_set_uniform_mat4(painter.p2_flat, "uMVP", mvp);
-  graphics::gl_set_uniform_vec3(painter.p2_flat, "uColor",
+// Draw one ground-layer hex tile.
+fn draw_ground_hex(shader: integer, vao: integer,
+                   proj_view: const math::Mat4,
+                   hx: integer, hy: integer, r: float, pi: integer,
+                   alpha: float) {
+  mvp = build_ground_mvp(proj_view, hx, hy, r);
+  graphics::gl_use_shader(shader);
+  graphics::gl_set_uniform_mat4(shader, "uMVP", mvp);
+  graphics::gl_set_uniform_vec3(shader, "uColor",
                                 palette_r(pi), palette_g(pi), palette_b(pi));
-  graphics::gl_set_uniform_float(painter.p2_flat, "uAlpha", 1.0);
+  graphics::gl_set_uniform_float(shader, "uAlpha", alpha);
   graphics::gl_draw(vao, 18);
 }
+
+
+
 
 // Auto-camera state — a single "end-pose" model.  On every paint
 // event we snapshot the destination pose the camera should land at
@@ -257,6 +247,44 @@ struct AutoCam {
   ready_tick: integer not null, // frame when rotation + tilt first reached "settled" after the latest edit;
                                 // -1 while not yet settled.  Position only lerps once
                                 // (tick - ready_tick) >= CAMERA_PAUSE_FRAMES.
+}
+
+// Build the view matrix from the AutoCam.  Lives below the struct so
+// pass-1 type inference knows the field types.  The cam.pos/end/
+// rotation/tilt fields drive an FPS-style eye:
+//   - focal point = look-at shift: pos + tilt * (end - pos)
+//   - eye = focal + tilt * back_offset (in -yaw direction) + height
+//     where height drops as tilt rises (camera drops from "directly
+//     above looking down" at tilt=0 to "lower behind looking forward
+//     at the focal" at tilt=1).
+fn build_view_matrix(cam: AutoCam) -> math::Mat4 {
+  bvm_dx: float = cam.end_x - cam.pos_x;
+  bvm_dy: float = cam.end_y - cam.pos_y;
+  bvm_view_hx: float = cam.pos_x + cam.tilt * bvm_dx;
+  bvm_view_hy: float = cam.pos_y + cam.tilt * bvm_dy;
+  bvm_iy = bvm_view_hy as integer;
+  bvm_parity = bvm_iy - (bvm_iy / 2) * 2;
+  if bvm_parity < 0 { bvm_parity = bvm_parity + 2; }
+  bvm_shift = 0.0;
+  if bvm_parity == 1 { bvm_shift = SQRT3 / 2.0 * HEX_SIZE; }
+  focal_wx = bvm_view_hx * SQRT3 * HEX_SIZE + bvm_shift;
+  focal_wz = bvm_view_hy * 1.5 * HEX_SIZE;
+  // Eye = focal + back_dir * tilt * BACK_OFFSET, at HEIGHT(tilt).
+  // back_dir = (sin(cam.rotation), 0, cos(cam.rotation)) — so at
+  // cam.rotation=0 the eye is at +Z from focal (camera looks toward
+  // -Z = "north" = the screen-up direction at rest).
+  back_x = sin(cam.rotation);
+  back_z = cos(cam.rotation);
+  back_offset = 22.0 * HEX_SIZE * cam.tilt;
+  height = (28.0 * (1.0 - cam.tilt) + 10.0 * cam.tilt) * HEX_SIZE;
+  eye_x = focal_wx + back_x * back_offset;
+  eye_z = focal_wz + back_z * back_offset;
+  eye_y = height;
+  math::mat4_look_at(
+    math::vec3(eye_x, eye_y, eye_z),
+    math::vec3(focal_wx, 0.0, focal_wz),
+    math::vec3(0.0, 1.0, 0.0)
+  )
 }
 
 // Tuning knobs — single common lerp factor for pos + rotation + tilt
@@ -440,9 +468,12 @@ fn main() {
   }
   println("projector: window {WIN_W}x{WIN_H} open");
 
-  painter = graphics::create_painter_2d(WIN_W as float, WIN_H as float);
-  hex_vao = build_hex_vbo();
-  println("projector: hex VBO + 2D painter ready");
+  // 3D pipeline — ground hex shader + flat hex VBO + perspective projection.
+  graphics::gl_enable(graphics::GL_DEPTH_TEST);
+  ground_shader = graphics::gl_create_shader(GROUND_VERT, GROUND_FRAG);
+  ground_vao    = build_ground_hex_vbo();
+  proj_matrix   = math::mat4_perspective(0.9, WIN_W as float / WIN_H as float, 1.0, 4000.0);
+  println("projector: 3D ground shader + VBO + perspective projection ready");
 
   println("projector: connecting to {SERVER_URL}");
   ws = web::ws_handler(SERVER_URL);
@@ -497,54 +528,42 @@ fn main() {
       println("projector: cam pos=({auto_cam.pos_x}, {auto_cam.pos_y}) end=({auto_cam.end_x}, {auto_cam.end_y}) rot={auto_cam.rotation}/{auto_cam.end_rot} tilt={auto_cam.tilt}");
     }
 
-    // 3. Clear + redraw.  Two passes:
-    //    (a) bounded grid of empty hexes around the camera, drawn in
-    //        the same dim near-black as the phone client's empty
-    //        cells, so the lattice reads on the projector at a glance
-    //        (otherwise empty space looks like a uniform black void
-    //        and the audience can't read distances between paints);
-    //    (b) every filled cell on top in its palette colour.
-    //    Bounds — render enough cells to cover the window
-    //    (1280 / (SQRT3 * 38) ≈ 19 cols, 800 / (1.5 * 38) ≈ 14 rows)
-    //    plus a one-cell halo for the camera lerp.
+    // 3. Clear + redraw — 3D pipeline (step 1: flat hex ground).
+    //    The world is rendered on the XZ ground plane (y=0); the
+    //    camera lives in 3D and renders via perspective.  Two passes
+    //    same as before:
+    //    (a) bounded grid of empty hexes around the camera view —
+    //        dim near-black so the lattice reads against the void;
+    //    (b) every filled cell on top at full palette colour.
+    //    Crystal prisms (height + ridges + bridges + mosaic) layer
+    //    onto this in subsequent steps.  Bounds widened to ±25 cols
+    //    × ±18 rows because the 3D perspective view shows more
+    //    cells than the 2D ortho at low tilt.
     graphics::gl_clear(bg);
-    // Look-at view shift: interpolate from camera position toward the
-    // edit by `tilt`.  At tilt=0 the screen centre is the camera; at
-    // tilt=1 the screen centre is the edit (look-at).  Computed once
-    // per frame so all hexes use the consistent same view origin.
-    view_x = auto_cam.pos_x + auto_cam.tilt * (auto_cam.end_x - auto_cam.pos_x);
-    view_y = auto_cam.pos_y + auto_cam.tilt * (auto_cam.end_y - auto_cam.pos_y);
-    cam_ix = view_x as integer;
-    cam_iy = view_y as integer;
-    // Bounds — render enough cells to cover the screen even when
-    // rotated 45° (diagonal ≈ √2× side) AND when tilt-squashed.  Widen
-    // the loop further on the rotation axis to compensate.
-    gx = cam_ix - 20;
-    while gx <= cam_ix + 20 {
-      gy = cam_iy - 14;
-      while gy <= cam_iy + 14 {
-        // Skip cells that have a painted entry — pass (b) handles those.
+    view_matrix = build_view_matrix(auto_cam);
+    proj_view = math::mat4_mul(proj_matrix, view_matrix);
+    // Integer rounding for the loop centre — same hex-cell centroid
+    // the old 2D version used, just in 3D world coords.
+    view_hx = auto_cam.pos_x + auto_cam.tilt * (auto_cam.end_x - auto_cam.pos_x);
+    view_hy = auto_cam.pos_y + auto_cam.tilt * (auto_cam.end_y - auto_cam.pos_y);
+    cam_ix = view_hx as integer;
+    cam_iy = view_hy as integer;
+    gx = cam_ix - 25;
+    while gx <= cam_ix + 25 {
+      gy = cam_iy - 18;
+      while gy <= cam_iy + 18 {
         gk = cell_key(gx, gy);
         if world.cells[gk] == null {
-          (ecx, ecy) = cell_centre(gx, gy,
-                                   view_x, view_y,
-                                   auto_cam.rotation, auto_cam.tilt);
-          draw_hex(painter, hex_vao, ecx, ecy, HEX_SIZE * 0.97,
-                   auto_cam.rotation, auto_cam.tilt, 0);
+          draw_ground_hex(ground_shader, ground_vao, proj_view,
+                          gx, gy, HEX_SIZE * 0.97, 0, 1.0);
         }
         gy = gy + 1;
       }
       gx = gx + 1;
     }
     for cell in world.cells {
-      (cx, cy) = cell_centre(cell.x, cell.y,
-                             view_x, view_y,
-                             auto_cam.rotation, auto_cam.tilt);
-      // 0.97 shrink matches the phone client's drawHex(size * 0.97) —
-      // gives a thin dark gap between adjacent hexes so the lattice
-      // reads even when neighbours share a colour.
-      draw_hex(painter, hex_vao, cx, cy, HEX_SIZE * 0.97,
-               auto_cam.rotation, auto_cam.tilt, cell.color);
+      draw_ground_hex(ground_shader, ground_vao, proj_view,
+                      cell.x, cell.y, HEX_SIZE * 0.97, cell.color, 1.0);
     }
     graphics::gl_swap_buffers();
     frames = frames + 1;
