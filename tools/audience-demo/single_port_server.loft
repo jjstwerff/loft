@@ -57,8 +57,13 @@ struct Client {
 }
 
 struct World {
-  cells:   hash<Cell[ck]>,
-  clients: vector<Client>,
+  cells:        hash<Cell[ck]>,
+  clients:      vector<Client>,
+  dirty:        boolean not null,    // mutated since last snapshot?
+  last_save_us: integer not null,    // ticks() (µs, i32) of last successful save
+                                     // — wraps every ~35 min, harmless for a 5 s
+                                     // window: a wrap during the window just skips
+                                     // one snapshot until the next dirty event
 }
 
 // ── Wire helpers — leaves first (@P281) ─────────────────────────────────────
@@ -114,6 +119,67 @@ fn read_index() -> text {
   body
 }
 
+// ── Periodic snapshot — minimum-viable fallback for the full design ────────
+//
+// Full design in `doc/claude/plans/36-audience-generative-art/01-server-state.md`
+// § Persistence — snapshot + change log.  This is the "fallback if blockers
+// don't unblock" subset: whole-world dump on a 5-second timer, no change
+// log, no CRC, no atomic rename.  Bounded loss = 5 s of paints if killed
+// mid-window.  Costs O(N) per snapshot, fires from the main loop only
+// when the timer elapses (NOT on every paint), so the per-event hot path
+// stays free of disk I/O.
+//
+// File layout (little-endian, matches the eventual full snapshot format
+// minus the signature + epoch header):
+//   [4B u32 count]
+//   count × { [4B i32 x] [4B i32 y] [1B u8 color] }
+WORLD_FILE = "tools/audience-demo/world.bin";
+SNAPSHOT_INTERVAL_US = 5000000;      // 5 s in µs (fits in i32; ticks() diff promoted to long at the compare site)
+
+fn world_save(world: World) {
+  n: integer = 0;
+  for _ in world.cells { n = n + 1; }
+  {
+    f = file(WORLD_FILE);
+    f#format = LittleEndian;
+    f += n;
+    for c in world.cells {
+      f += c.x;
+      f += c.y;
+      f += (c.color as u8);
+    }
+  }
+  world.dirty = false;
+  world.last_save_us = ticks();
+  println("single-port: [snapshot saved] {n} cells → {WORLD_FILE}");
+}
+
+fn world_load(world: World) {
+  f = file(WORLD_FILE);
+  if f.format == Format.NotExists {
+    println("single-port: no world snapshot at {WORLD_FILE} — starting empty");
+    return;
+  }
+  f#format = LittleEndian;
+  n = f#read(4) as integer;
+  loaded = 0;
+  i = 0;
+  while i < n {
+    x = f#read(4) as integer;
+    y = f#read(4) as integer;
+    c = f#read(1) as integer;
+    if c >= 1 && c <= 9 {
+      k = cell_key(x, y);
+      if world.cells[k] == null {
+        world.cells += [Cell{ck: k, x: x, y: y, color: c}];
+        loaded = loaded + 1;
+      }
+    }
+    i = i + 1;
+  }
+  println("single-port: loaded {loaded} cells from {WORLD_FILE}");
+}
+
 // Broadcast a frame to every client that's still marked active.  send()
 // returns false when the underlying socket is closed — flag the client
 // for removal on the next sweep.
@@ -152,6 +218,7 @@ fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) 
         // own-colour tap → erase
         world.cells[k] = null;
         broadcast(world, delta_frame(x, y, 0));
+        world.dirty = true;
         return;
       }
       // other-colour tap → ignore
@@ -161,6 +228,7 @@ fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) 
     sender.lx = x;
     sender.ly = y;
     broadcast(world, delta_frame(x, y, c));
+    world.dirty = true;
   } else if msg_id == 2 {
     // clear "x,y" (unconditional)
     (x, y) = parse_xy(payload);
@@ -168,6 +236,7 @@ fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) 
     if world.cells[k] != null {
       world.cells[k] = null;
       broadcast(world, delta_frame(x, y, 0));
+      world.dirty = true;
     }
   } else if msg_id == 3 {
     // color_select "color"
@@ -222,7 +291,13 @@ fn main() {
   println("  the page auto-derives ws://<lan-ip>:{PORT}/ws from location.host,");
   println("  so no `?ws=` override is needed.");
 
-  world = World{cells: [], clients: []};
+  world = World{
+    cells: [],
+    clients: [],
+    dirty: false,
+    last_save_us: ticks(),
+  };
+  world_load(world);
 
   while true {
     work = 0;
@@ -262,7 +337,18 @@ fn main() {
     // 2. Poll each WS client for pending messages.
     work = work + poll_clients(world);
 
-    // 3. Idle yield when no work — keeps CPU low.  2 ms keeps the
+    // 3. Persistence — periodic snapshot.  Fires from the main loop
+    //    only when (a) state changed since last save, AND (b) at least
+    //    SNAPSHOT_INTERVAL_US has elapsed.  The save runs synchronously
+    //    here for now — that's fine because (i) it only fires every 5 s
+    //    not per-event, and (ii) a few-hundred-cell snapshot writes in
+    //    under a millisecond.  Background-thread snapshot is the next
+    //    upgrade per the design doc.
+    if world.dirty && ticks() - world.last_save_us > SNAPSHOT_INTERVAL_US {
+      world_save(world);
+    }
+
+    // 4. Idle yield when no work — keeps CPU low.  2 ms keeps the
     //    accept-loop latency under 5 ms which is well below the user-
     //    perceptible threshold for paint roundtrips.
     if work == 0 { web::sleep_ms(2); }
