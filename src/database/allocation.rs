@@ -491,50 +491,39 @@ impl Stores {
                 "Locking a freed store (store_nr={}, rec={})",
                 r.store_nr, r.rec
             );
-            // Plan-22 02d-vii follow-up — `LOFT_LOG=locks` trace.
-            // Prints the lock event with the store_nr + rec so a
-            // later "Write to locked store" panic at the same
-            // store_nr can be traced back to the lock origin.
+            // @P290 — uses the SOFT free-protect flag (`free_protected`),
+            // not the hard read-only lock.  The call-bracket only needs
+            // to suppress `OpCopyRecord`'s `0x8000` source-free for
+            // borrowed-view returns; writes / claims from the callee
+            // stay legal.
             if crate::log_config::lock_trace_enabled() {
                 eprintln!(
-                    "[locks] LOCK   store_nr={} rec={} (was_locked={})",
+                    "[locks] FREE_PROTECT store_nr={} rec={} (was_protected={})",
                     r.store_nr,
                     r.rec,
-                    self.allocations[r.store_nr as usize].is_locked(),
+                    self.allocations[r.store_nr as usize].is_free_protected(),
                 );
             }
-            // Set a per-DbRef origin so "Write to locked store"
-            // panics include the lock site (rec context).  This
-            // is also a phase 02d-vii follow-up.
             let origin = format!("lock_store(store_nr={}, rec={})", r.store_nr, r.rec);
-            self.allocations[r.store_nr as usize].lock_with_origin(origin);
+            self.allocations[r.store_nr as usize].set_free_protected(origin);
         }
     }
 
-    /// Unlock the store that contains the record pointed to by `r`.
-    /// Borrowed stores (worker copies) are never unlocked — they must stay
-    /// locked for the entire parallel scope to prevent writes.
+    /// Clear the call-bracket free-protection from the store containing
+    /// `r`.  Worker borrows / CONST_STORE / sentinel stores carry the
+    /// HARD `read_only` lock instead, which this never touches.
     pub fn unlock_store(&mut self, r: &DbRef) {
         if r.rec != 0 && (r.store_nr as usize) < self.allocations.len() {
             let store = &mut self.allocations[r.store_nr as usize];
-            // Skip worker stores: they are locked at creation and must stay
-            // locked.  Worker stores have borrowed=true (light workers) or
-            // empty claims (full clone workers).  Only unlock stores that
-            // were explicitly locked by lock_store (const param lock).
-            let will_unlock = !store.is_borrowed() && !store.claims_empty();
             if crate::log_config::lock_trace_enabled() {
                 eprintln!(
-                    "[locks] UNLOCK store_nr={} rec={} (will_unlock={}, borrowed={}, claims_empty={})",
+                    "[locks] FREE_UNPROTECT store_nr={} rec={} (was_protected={})",
                     r.store_nr,
                     r.rec,
-                    will_unlock,
-                    store.is_borrowed(),
-                    store.claims_empty(),
+                    store.is_free_protected(),
                 );
             }
-            if will_unlock {
-                store.unlock();
-            }
+            store.clear_free_protected();
         }
     }
 
@@ -893,10 +882,22 @@ impl Stores {
             self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
             return;
         }
-        let length = self.store(rec).get_u32_raw(cur, 0);
-        let into = self.store_mut(to).claim(length);
+        // @P290 / sibling — the hash bucket record's layout, per
+        // `src/hash.rs::add`, is:
+        //   offset 0: room   (i32, in words — total record size)
+        //   offset 4: length (u32, current entry count)
+        //   offset 8..: elms = (room - 1) * 2 bucket slots (u32 rec-nrs)
+        // The previous code read `room` from offset 0 (calling it
+        // `length`), claimed `room` words correctly, but then iterated
+        // `1..room*2` — which both skipped the first bucket (offset 8,
+        // i=0) AND walked 2 indices PAST the claim (offsets 72 + 76 for
+        // a 72-byte allocation), corrupting heap metadata → SIGSEGV.
+        // The correct bound is `elms = (room - 1) * 2` starting at i=0.
+        let room = self.store(rec).get_u32_raw(cur, 0);
+        let elms = (room - 1) * 2;
+        let into = self.store_mut(to).claim(room);
         self.store_mut(to).set_u32_raw(to.rec, to.pos, into);
-        for i in 1..length * 2 {
+        for i in 0..elms {
             let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
             if elm == 0 {
                 self.store_mut(to).set_u32_raw(into, 8 + 4 * i, 0);

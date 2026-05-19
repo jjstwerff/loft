@@ -1119,7 +1119,7 @@ impl State {
                 .allocations
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| !s.free && !s.locked)
+                .filter(|(_, s)| !s.free && !s.read_only)
                 .map(|(i, s)| (i as u16, s.generation))
                 .collect();
             self.coroutine_frame_mut(idx).saved_store_generations = gens;

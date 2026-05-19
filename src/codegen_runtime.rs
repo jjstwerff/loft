@@ -462,7 +462,8 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
         && data.store_nr != to.store_nr
         && data.store_nr != 0
         && !stores.allocations[data.store_nr as usize].free
-        && !stores.allocations[data.store_nr as usize].locked
+        && !stores.allocations[data.store_nr as usize].read_only
+        && !stores.allocations[data.store_nr as usize].free_protected
     {
         stores.free(&data);
     }
