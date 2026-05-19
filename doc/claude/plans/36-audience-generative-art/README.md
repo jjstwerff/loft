@@ -7,16 +7,25 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Active — phase 0 + phase 1 MVP shipped** (PR #214, 2026-05-18).
-Phone client + multi-client loft server roundtrip works end-to-end:
-tap on one connected device, every other device sees the paint
-appear within a tick.  Deployed at
-[`doc/audience-demo/`](../../../audience-demo/) for static-client
-validation on GitHub Pages.  Local dev loop is a single-port
-HTTP+WS loft server ([`tools/audience-demo/dev_server.loft`](../../../../tools/audience-demo/dev_server.loft))
-that re-reads `index.html` per request — edit, refresh, see the
-change with no PR or Pages deploy in between.  See
-[§ Sub-arcs](#sub-arcs) for which sub-tasks remain and
+**Active — phases 0 + 1 + 3 (flat-2D MVP with auto-camera) shipped**
+(PR #214 + branch `audience` through 2026-05-20).  End-to-end:
+phone tap → multi-client loft server → desktop OpenGL projector
+view that rotates + tilts + look-at-shifts to the latest edit in
+one smooth motion.  Deployed at [`doc/audience-demo/`](../../../audience-demo/)
+for static-client validation on GitHub Pages.  Local dev loop:
+
+- [`tools/audience-demo/single_port_server.loft`](../../../../tools/audience-demo/single_port_server.loft)
+  — combined HTTP + multi-client WebSocket on one port; phone URL
+  is simply `http://<lan-ip>:18083/` (page auto-derives WS from
+  `location.host`).
+- [`tools/audience-demo/projector.loft`](../../../../tools/audience-demo/projector.loft)
+  — native OpenGL projector view.  Auto-camera with FPS-style pose
+  (tilt = pitch, rotation = yaw, look-at view shift); snapshot-
+  request handshake (`6:`) so the projector resyncs after any
+  reconnect; renders an empty-cell backdrop so audience can read
+  the grid layout.
+
+See [§ Sub-arcs](#sub-arcs) for what's left and
 [§ Local dev tooling](#local-dev-tooling) for the iteration
 workflow.
 
@@ -46,10 +55,10 @@ top of them, not library extension.
 
 | # | File | Builds | Effort | Status |
 |---|---|---|---|---|
-| 0 | [00-audience-browser-page.md](00-audience-browser-page.md) | Pure HTML/JS smartphone client — 9×7 hex world view (with movement-zone outer rings), 9-color palette, clear + jump-to-active controls, tap/swipe paint, WebSocket | S | **Partial** — MVP shipped (PR #214): hex grid, palette, tap, WebSocket all work; deployed at [`doc/audience-demo/`](../../../audience-demo/); coord system locked to pointy-top OFFSET `(x, y)` so 32×32 server chunks tile naturally (y+2 vertical, y+1 jogs half-hex right).  WS endpoint now auto-derived from `location.host` so the page reconnects to whatever host:port served it.  Remaining: 0.5 swipe, 0.6 outer-ring pan zones, 0.8 jump-to-active flash, 0.9 view-centring on activity (last depends on phase 1 data) |
-| 1 | [01-server-state.md](01-server-state.md) | Loft server: hold world state, age cells, run automatic decay (older cells removed; filled-neighbour lease extends life so shrinking starts at the edges), broadcast world deltas + active-player signals.  No autonomous growth — placement is pure direct painting from audience taps | M | **Partial — MVP shipped** (PR #214): single-hash world state, multi-client connect/dispatch/broadcast, world-replay-on-connect, active-player signal on color_select.  Remaining: 1.4 tick loop + decay, 1.8 multi-client load test, 1.9 crash-resistance.  Wire is `<msg_id>:<payload>` (MVP); spec'd migration to JSON-in / binary-out is filed as phase 1 step 2 |
+| 0 | [00-audience-browser-page.md](00-audience-browser-page.md) | Pure HTML/JS smartphone client — 9×13 hex world view (with movement-zone outer rings), 9-color palette, clear + jump-to-active controls, tap/swipe paint, WebSocket | S | **Partial** — MVP shipped (PR #214): hex grid, palette, tap, WebSocket all work; deployed at [`doc/audience-demo/`](../../../audience-demo/); coord system locked to pointy-top OFFSET `(x, y)` so 32×32 server chunks tile naturally (y+2 vertical, y+1 jogs half-hex right).  WS endpoint auto-derived from `location.host`.  **0.6 outer-ring pan zones shipped** (2026-05-19, commit `1af9d5ed`) with arrow indicators + parity-safe y-pan step of 2.  **Grid taller** (9×13) to use phone real estate.  Remaining: 0.5 swipe, 0.8 jump-to-active flash, 0.9 view-centring on activity (depends on phase 1 active-player data) |
+| 1 | [01-server-state.md](01-server-state.md) | Loft server: hold world state, age cells, run automatic decay (older cells removed; filled-neighbour lease extends life so shrinking starts at the edges), broadcast world deltas + active-player signals.  No autonomous growth — placement is pure direct painting from audience taps | M | **Partial — MVP shipped** (PR #214): single-hash world state, multi-client connect/dispatch/broadcast, world-replay-on-connect, active-player signal on color_select.  **Snapshot-request handshake added** (msg_id 6, 2026-05-19 commit `2d1fadfa`) so any client can re-request a full replay at any time — projector + browsers use this on connect + as a watchdog for missed deltas.  **Combined HTTP + multi-client WS on one port** ([`tools/audience-demo/single_port_server.loft`](../../../../tools/audience-demo/single_port_server.loft)) so the phone URL is `http://<ip>:18083/` with no `?ws=` override.  Remaining: 1.4 tick loop + decay, 1.8 multi-client load test, 1.9 crash-resistance.  Wire is `<msg_id>:<payload>` (MVP); spec'd migration to JSON-in / binary-out is filed as phase 1 step 2 |
 | ~~2~~ | ~~02-generation-script.md~~ | DROPPED — closed by the 2026-05-10 growth-model decision (pure direct painting; no autonomous growth).  Renderer-side ridge / edge classification covers what would have been the "plant / crystal aesthetic" generator | — | Dropped |
-| 3 | [03-projector-view.md](03-projector-view.md) | Native loft beamer client: subscribe to server, render full hex world (frost-style 3D crystal mesh + edge-detected plant/crystal aesthetic), auto-camera follows activity heat field, presenter hotkey overrides | M | Open |
+| 3 | [03-projector-view.md](03-projector-view.md) | Native loft beamer client: subscribe to server, render full hex world (flat-2D MVP shipped; frost-style 3D crystal mesh next), auto-camera follows activity, presenter hotkey overrides | M | **Partial — flat-2D MVP + auto-camera shipped** (2026-05-20, commits `2d1fadfa` → `a60f168c`): [`tools/audience-demo/projector.loft`](../../../../tools/audience-demo/projector.loft) opens a 1280×800 OpenGL window, renders the hex world flat-2D with the empty-grid backdrop, auto-camera with FPS-style pose (tilt = pitch, rotation = yaw, look-at view shift toward latest edit, snap-on-event tilt kick + ease-in over 0.2 s, orient → 0.1 s pause → translate sequence).  Catchup via the msg_id 6 handshake.  Remaining: 3D crystal mesh (frost ridges + bridges + hard-edge palette triangles per [`03-projector-view.md` § Visual model](03-projector-view.md#visual-model--3d-crystal-mesh)) — the auto-camera was the prerequisite, and is now ready for the mesh layer to drop in |
 | 4 | [04-hosting.md](04-hosting.md) | Public URL reachable from venue WiFi (VPS / hotspot / ngrok / cloudflared).  Operational, not code | XS | Open |
 | 5 | `05-rehearsal-and-backup.md` (not yet written) | One full dry run on demo hardware; record both demos as fallback for catastrophic failure | XS | Open |
 
