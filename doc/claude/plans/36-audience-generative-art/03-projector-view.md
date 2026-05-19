@@ -19,9 +19,20 @@ the projector (3D crystals only, auto-camera, no ground grid) AND
 the desktop client (3D crystals + 2D ground layer, user mouse paints
 into the ground layer).  The flat-2D rendering that already ships
 stays — it becomes the desktop client's GROUND LAYER, and the 3D
-crystal mesh layers on top.  Mode flags (planned, not yet wired):
-`--projector` hides the ground + locks the camera to auto-mode;
-default = desktop client with both layers visible + mouse-paintable.
+crystal mesh layers on top.
+
+**Mode is a runtime state, not a CLI flag.**  Two modes:
+
+| Mode | Trigger | Camera | Ground layer | Mouse paint |
+|---|---|---|---|---|
+| **Player-controlled** | Any mouse / scroll / keyboard input — also the initial state at startup | Free (mouse-drag rotate, scroll zoom, WASD pan) | Visible | Yes |
+| **Demo (= projector)** | No input for `CAMERA_IDLE_TIMEOUT_S` (initial guess: 60 s) | Auto-tracks latest edit (existing single-edit camera or the future heat-field overview) | Fades out over `CAMERA_GROUND_FADE_S` (initial: 3 s) | No |
+
+Demo mode reverts to player-controlled mode as soon as the user
+touches mouse or keyboard.  The ground layer fades back in over the
+same `CAMERA_GROUND_FADE_S`.  This is the natural projector mode
+for the talk — the presenter sets it up, leaves it alone, and after
+a minute it becomes the pure spectacle.
 
 Auto-camera shipped (matches the Auto-camera section below, just on
 2D first):
