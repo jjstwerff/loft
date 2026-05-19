@@ -751,6 +751,68 @@ use a separate collection or add after the loop"
         self.check_iter_safety(to, f_type, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
+        // @P277 — `local_keyed += [literal]`.  Without this branch, the
+        // RHS parse below descends into `parse_vector` (vectors.rs:1372)
+        // which at line ~1434 calls `change_var_type(vec, Vector<T>, …)`
+        // and fires "Variable 'x' cannot change type from sorted<…> to
+        // vector<…>" — the LHS's declared keyed-collection type is lost.
+        // The P188 scalar branch below (line ~870) runs AFTER the RHS
+        // parse, so by then the diagnostic has already fired.  Intercept
+        // here, manually tokenise the literal, parse each item against
+        // the element type, and dispatch via `new_record` (vectors.rs:1745)
+        // which already routes per-kind (sorted_finish / hash::add /
+        // tree::add / ordered_finish) via its P188-followup `lhs_known`
+        // lookup at lines 1783-1822.  The struct-field twin at lines
+        // ~1159-1194 handles the same shape for fields after-the-fact;
+        // we cannot do that here because the LHS-local path errors out
+        // before reaching it.
+        if op == "+="
+            && var_nr != u16::MAX
+            && matches!(
+                f_type,
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+            && self.lexer.peek_token("[")
+        {
+            let elm_tp = f_type.content();
+            self.lexer.token("[");
+            // Empty literal `+= []` — no-op append.
+            if self.lexer.has_token("]") {
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            let mut all_steps: Vec<Value> = Vec::new();
+            loop {
+                let elm = self.unique_elm_var(&lhs_parent_tp, &elm_tp, var_nr);
+                let mut item = Value::Var(elm);
+                let mut item_parent = Type::Null;
+                let _ = self.parse_operators(&elm_tp, &mut item, &mut item_parent, 0);
+                if !self.first_pass {
+                    let steps = self.new_record(
+                        &mut Value::Var(var_nr),
+                        f_type,
+                        elm,
+                        var_nr,
+                        &[item],
+                        &elm_tp,
+                    );
+                    all_steps.extend(steps);
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+                if self.lexer.peek_token("]") {
+                    // trailing comma
+                    break;
+                }
+            }
+            self.lexer.token("]");
+            *code = Value::Insert(all_steps);
+            return Type::Void;
+        }
         // Hint the RHS that the destination has this type — `f#read`
         // (no parens, no cast) picks it up so `s.field = f#read` matches
         // the symmetry of `f += s.field` (which already takes the field's

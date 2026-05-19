@@ -10498,6 +10498,121 @@ fn p284_vector_float_iteration_terminates() {
     .result(Value::Null);
 }
 
+/// P277 — local `sorted<T[K]> = []; += [T{…}]` panicked with
+/// "Variable 'x' cannot change type from sorted<…> to vector<…>" —
+/// `parse_vector` re-typed the LHS local to vector<T> before
+/// `parse_assign_op` could route through the keyed-collection element
+/// dispatch.  Same shape would have affected hash / index / spacial
+/// locals.  Fixed by an early intercept in `parse_assign_op` that
+/// detects `local_keyed += [literal]` BEFORE `parse_operators` runs,
+/// then per-element parses + dispatches via `new_record` (which
+/// already routes per-kind via the P188-followup `lhs_known` lookup).
+#[test]
+fn p277_local_sorted_pluseq_single_literal() {
+    code!(
+        "struct TagSlot { name: text not null, count: integer }
+fn test() {
+    s: sorted<TagSlot[name]> = [];
+    s += [TagSlot{name: \"alpha\", count: 1}];
+    assert(len(s) == 1, \"len == 1\");
+    assert(s[\"alpha\"].count == 1, \"alpha lookup\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p277_local_sorted_pluseq_multi_literal() {
+    code!(
+        "struct TagSlot { name: text not null, count: integer }
+fn test() {
+    s: sorted<TagSlot[name]> = [];
+    s += [TagSlot{name: \"zeta\", count: 1},
+          TagSlot{name: \"alpha\", count: 5},
+          TagSlot{name: \"mike\", count: 3}];
+    assert(len(s) == 3, \"three elements\");
+    // sorted by name ascending — iterate and collect in order.
+    out: vector<text> = [];
+    for t in s { out += [t.name]; }
+    assert(out[0] == \"alpha\", \"first = alpha\");
+    assert(out[1] == \"mike\",  \"middle = mike\");
+    assert(out[2] == \"zeta\",  \"last = zeta\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p277_local_hash_pluseq_multi_literal() {
+    code!(
+        "struct Row { id: integer not null, name: text }
+fn test() {
+    h: hash<Row[id]> = [];
+    h += [Row{id: 1, name: \"one\"},
+          Row{id: 7, name: \"seven\"},
+          Row{id: 42, name: \"forty-two\"}];
+    assert(len(h) == 3, \"three entries\");
+    assert(h[1].name  == \"one\",       \"h[1]\");
+    assert(h[7].name  == \"seven\",     \"h[7]\");
+    assert(h[42].name == \"forty-two\", \"h[42]\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p277_local_index_pluseq_multi_literal() {
+    code!(
+        "struct Score { player: text not null, value: integer }
+fn test() {
+    ix: index<Score[player]> = [];
+    ix += [Score{player: \"a\", value: 10},
+           Score{player: \"b\", value: 20},
+           Score{player: \"c\", value: 30}];
+    assert(len(ix) == 3, \"three entries\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p277_local_sorted_mixed_scalar_and_literal() {
+    code!(
+        "struct TagSlot { name: text not null, count: integer }
+fn test() {
+    s: sorted<TagSlot[name]> = [];
+    // Scalar `+= elem` (P188 path) — must still work.
+    s += TagSlot{name: \"alpha\", count: 1};
+    // Literal `+= [...]` (P277 path).
+    s += [TagSlot{name: \"beta\", count: 2}, TagSlot{name: \"gamma\", count: 3}];
+    // Another scalar — paths interleave.
+    s += TagSlot{name: \"delta\", count: 4};
+    assert(len(s) == 4, \"four entries from interleaved scalar + literal\");
+    assert(s[\"alpha\"].count == 1, \"alpha\");
+    assert(s[\"beta\"].count  == 2, \"beta\");
+    assert(s[\"gamma\"].count == 3, \"gamma\");
+    assert(s[\"delta\"].count == 4, \"delta\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p277_local_sorted_pluseq_empty_literal() {
+    // Defensive regression — `+= []` is a no-op append.
+    code!(
+        "struct TagSlot { name: text not null, count: integer }
+fn test() {
+    s: sorted<TagSlot[name]> = [];
+    s += [TagSlot{name: \"a\", count: 1}];
+    s += [];
+    s += [TagSlot{name: \"b\", count: 2}];
+    assert(len(s) == 2, \"empty append is no-op\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P292 — `v = new_v` where `new_v` is loop-scoped and `v` is outer-scoped
 /// used to corrupt `v`'s storage on the next iteration: subsequent reads
 /// of `v[j]` reported `index J out of bounds for length 0` (or SEGV when
