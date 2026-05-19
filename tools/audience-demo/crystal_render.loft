@@ -1,0 +1,312 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Crystal pattern test-render harness — invoked by
+// `tests/crystal_gold.rs` with two CLI args:
+//
+//   loft --interpret --lib lib/ crystal_render.loft <scenario> <out.png>
+//
+// `<scenario>` is one of:
+//   single   — 1 isolated cell
+//   growth   — 2 adjacent cells (1 center + 1 supporter)
+//   linked   — 3 cells in a line (2 centers + 1 supporter between)
+//   bridge   — 2 cells with 1-empty gap between (bridge-future case)
+//
+// Renders the cells + crystal cm top-down (XZ plane, Y ignored) onto
+// a 512×512 Canvas via lib/graphics' 2D rasterizer, save_png to
+// `<out.png>`.  Pure CPU, no GL — runs in any environment.
+
+use audience_crystal;
+use graphics;
+
+CANVAS_SIZE = 512;
+CANVAS_SCALE = 2.6;   // pixels per world unit — tuned so the linked /
+                      // bridge scenarios (longest extent) fit with
+                      // ~10% margin around the crystal tips.
+BG_COLOR_R = 10;      // matches the projector's dark-blue background.
+BG_COLOR_G = 10;
+BG_COLOR_B = 20;
+GROUND_INSET = 0.97;  // hex radius shrink so adjacent tiles show a thin
+                      // background line — matches the projector.
+GROUND_ALPHA = 128;   // 50% translucent hexes so the picked-from-
+                      // neighbour crystal colours behind them are
+                      // visible.  Adjust if the user wants more / less
+                      // see-through.
+MAIN_LINE_WIDTH_PX = 2;   // multi-pass AA-line draw to get a thicker spine
+SIDE_LINE_WIDTH_PX = 1;   // single AA line for branches
+
+// ── Scenarios ────────────────────────────────────────────────────────
+
+fn scenario_single() -> audience_crystal::CellSnap {
+  // 1 isolated painted cell at origin.
+  audience_crystal::CellSnap{xs: [0], ys: [0], colors: [3]}
+}
+
+fn scenario_growth() -> audience_crystal::CellSnap {
+  // 2 adjacent cells in a horizontal pair.  Greedy picks (0,0) as
+  // center, (1,0) as supporter.  Validates "main reaches into next
+  // hex" behaviour.
+  audience_crystal::CellSnap{xs: [0, 1], ys: [0, 0], colors: [3, 5]}
+}
+
+fn scenario_linked() -> audience_crystal::CellSnap {
+  // 3 cells in a horizontal line, painted LEFT → RIGHT (order = paint
+  // tick).  Placement-order pick:
+  //   (0,0) painted 1st → center (no neighbours yet)
+  //   (1,0) painted 2nd → supporter (neighbour (0,0) is a center)
+  //   (2,0) painted 3rd → center (only neighbour (1,0) is a supporter,
+  //                                 not a center)
+  // Result: TWO centers with one supporter between.  Each centre's
+  // mains shoot outward; the inner-facing mains meet centre-to-centre
+  // across the (1,0) supporter, locking in the east/west spine
+  // direction from the very first paint.
+  audience_crystal::CellSnap{xs: [0, 1, 2], ys: [0, 0, 0], colors: [3, 5, 7]}
+}
+
+fn scenario_linked_centre_first() -> audience_crystal::CellSnap {
+  // SAME 3 cells in a horizontal line, but painted MIDDLE → LEFT →
+  // RIGHT — the middle one is placed FIRST and "wins" the centre.
+  // Placement-order pick:
+  //   (1,0) painted 1st → center
+  //   (0,0) painted 2nd → supporter ((1,0) is a center neighbour)
+  //   (2,0) painted 3rd → supporter ((1,0) is a center neighbour)
+  // Result: ONE central centre + two supporters either side — the
+  // mirror image of `linked`.  Shows how placement order changes
+  // the crystal: same cells, same colours, different geometry.
+  audience_crystal::CellSnap{xs: [1, 0, 2], ys: [0, 0, 0], colors: [5, 3, 7]}
+}
+
+fn scenario_bridge() -> audience_crystal::CellSnap {
+  // 2 cells with a 1-cell gap.  Both are centers (not adjacent).
+  // Today their mains extend toward each other through the empty
+  // (1,0) but do NOT meet — the bridge logic per plan-36 §
+  // "Two filled hexes with exactly one empty hex between them"
+  // isn't implemented yet.  This golden captures the current
+  // (no-bridge) state; refresh when bridge logic ships.
+  audience_crystal::CellSnap{xs: [0, 2], ys: [0, 0], colors: [3, 7]}
+}
+
+// ── Rendering — pure 2D top-down (Y ignored) ─────────────────────────
+
+// World XZ → cv pixel coords, centred on cv mid.  centre_wx /
+// centre_wz are the world position that should land at cv centre.
+fn world_to_px_x(wx: float, centre_wx: float) -> integer {
+  (CANVAS_SIZE as float / 2.0 + (wx - centre_wx) * CANVAS_SCALE) as integer
+}
+fn world_to_px_y(wz: float, centre_wz: float) -> integer {
+  (CANVAS_SIZE as float / 2.0 + (wz - centre_wz) * CANVAS_SCALE) as integer
+}
+
+// Float→int 0..255 for a 0..1 channel value.
+fn ch255(v: float) -> integer {
+  iv = (v * 255.0) as integer;
+  if iv < 0 { iv = 0; }
+  if iv > 255 { iv = 255; }
+  iv
+}
+
+fn palette_color(idx: integer) -> integer {
+  cr = ch255(audience_crystal::palette_r(idx));
+  cg = ch255(audience_crystal::palette_g(idx));
+  cb = ch255(audience_crystal::palette_b(idx));
+  graphics::rgb(cr, cg, cb)
+}
+
+// Same but with alpha (0..255).  Used by the blended hex filler so the
+// hex colour shows through to whatever was rendered underneath
+// (the crystal mesh).
+fn palette_color_alpha(idx: integer, alpha: integer) -> integer {
+  cr = ch255(audience_crystal::palette_r(idx));
+  cg = ch255(audience_crystal::palette_g(idx));
+  cb = ch255(audience_crystal::palette_b(idx));
+  graphics::rgba(cr, cg, cb, alpha)
+}
+
+// Scanline triangle fill that BLENDS each pixel (via blend_pixel)
+// instead of overwriting.  Necessary because graphics::fill_triangle
+// uses non-blending hline (set_pixel).  Color must include alpha.
+fn fill_triangle_blend(cv: graphics::Canvas,
+                       tx0: integer, ty0: integer,
+                       tx1: integer, ty1: integer,
+                       tx2: integer, ty2: integer,
+                       color: integer) {
+  ta_x = tx0; ta_y = ty0;
+  tb_x = tx1; tb_y = ty1;
+  tc_x = tx2; tc_y = ty2;
+  if ta_y > tb_y { tt = ta_x; ta_x = tb_x; tb_x = tt; tt = ta_y; ta_y = tb_y; tb_y = tt; }
+  if tb_y > tc_y { tt = tb_x; tb_x = tc_x; tc_x = tt; tt = tb_y; tb_y = tc_y; tc_y = tt; }
+  if ta_y > tb_y { tt = ta_x; ta_x = tb_x; tb_x = tt; tt = ta_y; ta_y = tb_y; tb_y = tt; }
+  if ta_y == tc_y { return; }
+  for tr_y in ta_y..tc_y + 1 {
+    xac = ta_x + (tc_x - ta_x) * (tr_y - ta_y) / (tc_y - ta_y);
+    xother = xac;
+    if tr_y < tb_y && tb_y != ta_y {
+      xother = ta_x + (tb_x - ta_x) * (tr_y - ta_y) / (tb_y - ta_y);
+    }
+    if tr_y >= tb_y && tc_y != tb_y {
+      xother = tb_x + (tc_x - tb_x) * (tr_y - tb_y) / (tc_y - tb_y);
+    }
+    if tr_y >= tb_y && tc_y == tb_y {
+      xother = tb_x;
+    }
+    left  = if xac < xother { xac } else { xother };
+    right = if xac > xother { xac } else { xother };
+    for tx in left..(right + 1) {
+      cv.blend_pixel(tx, tr_y, color);
+    }
+  }
+}
+
+// Compute snapshot centroid in world XZ — used as cv centre.
+fn snap_centroid(snap: audience_crystal::CellSnap) -> (float, float) {
+  sx = 0.0;
+  sz = 0.0;
+  if len(snap.xs) == 0 {
+    (sx, sz)
+  } else {
+    for sc_i in 0..len(snap.xs) {
+      sx = sx + audience_crystal::cell_wx(snap.xs[sc_i], snap.ys[sc_i]);
+      sz = sz + audience_crystal::cell_wz(snap.ys[sc_i]);
+    }
+    n = len(snap.xs) as float;
+    (sx / n, sz / n)
+  }
+}
+
+// Draw one filled hex tile (6 triangles fanning from centre).  Uses
+// the BLEND variant so the hex sits at GROUND_ALPHA opacity over the
+// crystal mesh underneath — the picked-from-neighbour segment colours
+// stay visible through the hex.
+fn draw_filled_hex(cv: graphics::Canvas, snap_x: integer, snap_y: integer,
+                   col: integer, cx: float, cz: float) {
+  wx = audience_crystal::cell_wx(snap_x, snap_y);
+  wz = audience_crystal::cell_wz(snap_y);
+  r = audience_crystal::HEX_SIZE * GROUND_INSET;
+  px_cx = world_to_px_x(wx, cx);
+  px_cy = world_to_px_y(wz, cz);
+  for fh_i in 0..6 {
+    a0 = (60.0 * fh_i as float - 30.0) * PI / 180.0;
+    a1 = (60.0 * (fh_i + 1) as float - 30.0) * PI / 180.0;
+    p0x = world_to_px_x(wx + r * cos(a0), cx);
+    p0y = world_to_px_y(wz + r * sin(a0), cz);
+    p1x = world_to_px_x(wx + r * cos(a1), cx);
+    p1y = world_to_px_y(wz + r * sin(a1), cz);
+    fill_triangle_blend(cv, px_cx, px_cy, p0x, p0y, p1x, p1y, col);
+  }
+}
+
+// Draw a thick anti-aliased line via N parallel passes 1 px offset.
+fn draw_thick_aa(cv: graphics::Canvas, x0: integer, y0: integer,
+                 x1: integer, y1: integer, color: integer, width: integer) {
+  if width <= 1 {
+    cv.draw_aa_line(x0, y0, x1, y1, color);
+    return;
+  }
+  // perpendicular offset in pixel-space (1 px steps).
+  dx = (x1 - x0) as float;
+  dy = (y1 - y0) as float;
+  ln = sqrt(dx * dx + dy * dy);
+  if ln < 0.0001 {
+    cv.draw_aa_line(x0, y0, x1, y1, color);
+    return;
+  }
+  px = (0.0 - dy) / ln;
+  py = dx / ln;
+  half = (width - 1) / 2;
+  for k in (0 - half)..(half + 1) {
+    ox = (px * k as float) as integer;
+    oy = (py * k as float) as integer;
+    cv.draw_aa_line(x0 + ox, y0 + oy, x1 + ox, y1 + oy, color);
+  }
+}
+
+fn render_scenario(snap: audience_crystal::CellSnap, out_path: text,
+                   render_tick: integer, age_enabled: boolean) {
+  bg: integer = graphics::rgb(BG_COLOR_R, BG_COLOR_G, BG_COLOR_B);
+  cv: graphics::Canvas = graphics::canvas(CANVAS_SIZE, CANVAS_SIZE, bg);
+  (centre_wx, centre_wz) = snap_centroid(snap);
+  // Crystal layer FIRST — so the translucent hexes overlay on top
+  // and the picked-from-neighbour mosaic colours stay readable
+  // wherever they reach into a neighbour's hex footprint.
+  //
+  // For aging scenarios we initialise a fresh CrystalState with every
+  // main born at tick 0, then render at `render_tick`.  When aging is
+  // disabled we pass an empty state to the aged generator, which
+  // treats every main as fully grown (the default delegation path).
+  state = audience_crystal::CrystalState{
+    main_x: [], main_y: [], main_d: [], birth_tick: [],
+  };
+  cm = audience_crystal::CrystalMesh{
+    kinds: [], colors: [],
+    x0s: [], y0s: [], z0s: [],
+    x1s: [], y1s: [], z1s: [],
+  };
+  if age_enabled {
+    audience_crystal::update_state(state, snap, 0);
+    cm = audience_crystal::crystal_segments_aged(snap, state, render_tick);
+  } else {
+    cm = audience_crystal::crystal_segments(snap);
+  }
+  for ms_i in 0..len(cm.kinds) {
+    col = palette_color(cm.colors[ms_i]);
+    px0 = world_to_px_x(cm.x0s[ms_i], centre_wx);
+    py0 = world_to_px_y(cm.z0s[ms_i], centre_wz);
+    px1 = world_to_px_x(cm.x1s[ms_i], centre_wx);
+    py1 = world_to_px_y(cm.z1s[ms_i], centre_wz);
+    if cm.kinds[ms_i] == audience_crystal::KIND_MAIN {
+      draw_thick_aa(cv, px0, py0, px1, py1, col, MAIN_LINE_WIDTH_PX);
+    } else {
+      draw_thick_aa(cv, px0, py0, px1, py1, col, SIDE_LINE_WIDTH_PX);
+    }
+  }
+  // Ground layer — translucent hex per painted cell, overlaid on the
+  // crystal mesh.  At GROUND_ALPHA = 50% the segment colours behind
+  // stay clearly visible.
+  for rs_i in 0..len(snap.xs) {
+    col = palette_color_alpha(snap.colors[rs_i], GROUND_ALPHA);
+    draw_filled_hex(cv, snap.xs[rs_i], snap.ys[rs_i], col, centre_wx, centre_wz);
+  }
+  ok_saved: boolean = graphics::save_png(cv, out_path);
+  if !ok_saved {
+    println("crystal_render: FAILED to write {out_path}");
+    return;
+  }
+  println("crystal_render: wrote {out_path}");
+}
+
+fn main() {
+  argv = arguments();
+  if len(argv) < 2 {
+    println("usage: crystal_render <scenario> <out.png>");
+    println("       scenarios: single | growth | linked | bridge");
+    return;
+  }
+  scenario = argv[0];
+  out_path = argv[1];
+  // Aging scenarios pin a specific render tick against `update_state`
+  // at tick 0 so the side-branch growth is reproducible: 0 = newborn
+  // (no branches), GROWTH_TICKS/3 ≈ 33 %, GROWTH_TICKS = 100 % grown.
+  snap = scenario_single();
+  age_enabled = false;
+  render_tick = 0;
+  if scenario == "single"                       { snap = scenario_single(); }
+  else if scenario == "growth"                  { snap = scenario_growth(); }
+  else if scenario == "linked"                  { snap = scenario_linked(); }
+  else if scenario == "linked_centre_first"     { snap = scenario_linked_centre_first(); }
+  else if scenario == "bridge"                  { snap = scenario_bridge(); }
+  else if scenario == "growth_t0" {
+    snap = scenario_growth(); age_enabled = true; render_tick = 0;
+  }
+  else if scenario == "growth_t1200" {
+    snap = scenario_growth(); age_enabled = true; render_tick = 1200;
+  }
+  else if scenario == "growth_full" {
+    snap = scenario_growth(); age_enabled = true;
+    render_tick = audience_crystal::GROWTH_TICKS;
+  }
+  else {
+    println("unknown scenario: {scenario}");
+    return;
+  }
+  render_scenario(snap, out_path, render_tick, age_enabled);
+}
