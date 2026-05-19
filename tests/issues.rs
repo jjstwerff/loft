@@ -10613,6 +10613,64 @@ fn test() {
     .result(Value::Null);
 }
 
+/// P279 — caller defined BEFORE a text-returning callee in the
+/// same file: pass-1 types the call result as Unknown(0), the
+/// receiving local is Unknown, and using it as a struct-field
+/// value (`out += [Struct{field: unknown_local, …}]`) trips
+/// "Cannot assign unknown(0) to field …" in pass-1.  Pass-2
+/// re-runs the check with the fn registered and would have
+/// resolved correctly, but the pass-1 diagnostic surfaces.
+///
+/// Same architectural shape as P281/P278: pass-1 mustn't emit
+/// errors pass-2 would naturally resolve.  Fix in
+/// `src/parser/objects.rs::handle_field` gates the diagnostic
+/// on `!first_pass` when the value type is Unknown.
+#[test]
+fn p279_forward_text_fn_into_struct_field() {
+    code!(
+        "struct R { name: text not null }
+fn test() {
+    out: vector<R> = [];
+    s = forward_fn(\"hello\");
+    out += [R{name: s}];
+    assert(len(out) == 1, \"struct constructed\");
+    assert(out[0].name == \"hello\", \"forward-fn text reached struct field\");
+}
+fn forward_fn(s: text) -> text { s }"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p279_forward_fn_via_intermediate_local() {
+    // Real scan_link_line shape: while loop + if-arm reassign +
+    // forward call wrapped in an intermediate local before the
+    // struct-field init.
+    code!(
+        "struct R { name: text not null }
+fn test() {
+    out: vector<R> = [];
+    line = \"x#tag\";
+    nl = line.len();
+    name = \"\";
+    lh = 0;
+    while lh < nl {
+        if line.byte_at(lh) == 35 {
+            name = line[lh + 1..nl];
+            break;
+        }
+        lh = lh + 1;
+    }
+    a_esc = json_escape(name);
+    out += [R{name: a_esc}];
+    assert(len(out) == 1, \"loop + if-reassign + forward-fn + struct works\");
+    assert(out[0].name == \"tag\", \"correct slice + forward-fn\");
+}
+fn json_escape(s: text) -> text { s }"
+    )
+    .result(Value::Null);
+}
+
 /// P281 — caller defined BEFORE callee in the same file: the
 /// caller's body parses with the callee unregistered, the call
 /// returns `Type::Unknown(0)`, the receiving local stays Unknown,

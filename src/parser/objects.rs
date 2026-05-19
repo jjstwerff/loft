@@ -1762,7 +1762,20 @@ impl Parser {
                 list.push(o.clone());
             }
         } else {
-            if !self.convert(value, exp_tp, &td) {
+            // @P279 — when pass-1 sees an Unknown value being assigned
+            // to a typed field, suppress the diagnostic.  Unknown
+            // values in pass-1 almost always come from a forward fn
+            // ref whose return type hasn't been registered yet;
+            // pass-2 re-runs this check with all defs visible and
+            // fires the diagnostic for any GENUINE mismatch.  Mirrors
+            // the pass-1 tolerance in `field()` / `parse_index()`
+            // that closed @P281 / @P278 (same architectural fix:
+            // pass-1 mustn't emit errors pass-2 will naturally
+            // resolve).  `set_field_no_check` still runs so codegen
+            // stays consistent with pass-2.
+            if !(self.first_pass && exp_tp.is_unknown())
+                && !self.convert(value, exp_tp, &td)
+            {
                 // Plan-07 phase 6 (partial) — name the value side first
                 // ("cannot assign <got> to <expected>"), the field-type
                 // side last.  Old shape "Cannot write {field_type} on
