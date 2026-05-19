@@ -151,53 +151,81 @@ void main() {{
 }}
 `;
 
-// Unit hex PRISM VBO — flat-top hex prism with radius 1 and height 1.
-//   - top face: 6 triangles fanning from (0, 1, 0), normal (0, 1, 0)
-//   - 6 side quads (12 tris), each with an outward-pointing flat normal
-//   - bottom face: skipped (hidden behind the ground / never visible
-//     from the projector's overhead view)
-// Total: 18 + 36 = 54 vertices, stride 6 (pos.xyz + normal.xyz).
-// Per-cell model matrix scales Y by the cell's height + XZ by hex
-// radius, then translates into world position.  Winding is CCW from
-// each face's outward direction — back-face culling can be enabled
-// later without flipping the mesh.
-fn build_prism_hex_vbo() -> integer {
+// Unit FLAT hex VBO for the ground layer — 18 vertices (6 triangles
+// fanned from centre), all at y=0 with normal (0, 1, 0).  Renders the
+// empty hex lattice around the camera as a "what colour-able cells
+// exist here" backdrop so the audience reads the world's structure
+// even when nothing's painted nearby.  Crystals (the prism layer
+// below) stack on top of this same lattice for filled cells.
+fn build_ground_hex_vbo() -> integer {
   verts: vector<single> = [];
-  // -- TOP face: 6 triangles fanning from centre at y=1, normal +Y.
-  //    Winding (centre, c[i+1], c[i]) is CCW when viewed from +Y.
   for i in 0..6 {
     a0 = (60.0 * i as float - 30.0) * 3.14159265358979 / 180.0;
     a1 = (60.0 * (i + 1) as float - 30.0) * 3.14159265358979 / 180.0;
-    cx0 = cos(a0) as single;
-    cz0 = sin(a0) as single;
-    cx1 = cos(a1) as single;
-    cz1 = sin(a1) as single;
-    verts += [0.0f, 1.0f, 0.0f,   0.0f, 1.0f, 0.0f];   // centre top
-    verts += [cx1,  1.0f, cz1,    0.0f, 1.0f, 0.0f];   // corner i+1
-    verts += [cx0,  1.0f, cz0,    0.0f, 1.0f, 0.0f];   // corner i
+    verts += [0.0f, 0.0f, 0.0f,   0.0f, 1.0f, 0.0f];
+    verts += [cos(a0) as single, 0.0f, sin(a0) as single,  0.0f, 1.0f, 0.0f];
+    verts += [cos(a1) as single, 0.0f, sin(a1) as single,  0.0f, 1.0f, 0.0f];
   }
-  // -- SIDE faces: 6 quads (top edge → bottom edge), outward normal.
-  //    Edge between corner i and corner i+1 has midpoint angle 60°*i;
-  //    its outward normal is (cos(60°*i), 0, sin(60°*i)).
+  graphics::gl_upload_vertices(verts, 6)
+}
+
+// Build the MVP for a single flat ground hex (no height — radius only).
+fn build_ground_mvp(proj_view: const math::Mat4,
+                    hx: integer, hy: integer, r: float) -> vector<float> {
+  wx = hex_world_x(hx, hy);
+  wz = hex_world_z(hy);
+  model = math::mat4_mul(
+    math::mat4_translate(wx, 0.0, wz),
+    math::mat4_scale(r, 1.0, r)
+  );
+  mvp = math::mat4_mul(proj_view, model);
+  mvp.m
+}
+
+// Draw one ground-layer hex tile (18 vertices, flat-shaded).
+fn draw_ground_hex(shader: integer, vao: integer,
+                   proj_view: const math::Mat4,
+                   hx: integer, hy: integer, r: float, pi: integer,
+                   alpha: float) {
+  mvp = build_ground_mvp(proj_view, hx, hy, r);
+  graphics::gl_use_shader(shader);
+  graphics::gl_set_uniform_mat4(shader, "uMVP", mvp);
+  graphics::gl_set_uniform_vec3(shader, "uColor",
+                                palette_r(pi), palette_g(pi), palette_b(pi));
+  graphics::gl_set_uniform_float(shader, "uAlpha", alpha);
+  graphics::gl_draw(vao, 18);
+}
+
+// Unit OPEN-CRYSTAL VBO — line-drawn skeleton, radius 1 and height 1.
+// Per the design spec: "faceted / skeletal geometry with visible
+// negative space — the camera can look through a bridge to see
+// crystals behind it, and through the gaps of any single crystal".
+//
+// First-cut skeleton (steps 3-5 below add ridges, bridges, mosaic):
+//   - 6 vertical spines from each base corner to its top corner
+//   - 6 top-edge segments (the hex outline at the cell's height)
+// Total: 12 line segments = 24 vertices, stride 6.  Drawn with
+// `gl_draw_mode(vao, 24, DRAW_LINES)`.  Normals all point up — they
+// don't carry lighting info for lines but the shader needs SOMETHING
+// in that vertex attribute slot.
+fn build_crystal_lines_vbo() -> integer {
+  verts: vector<single> = [];
+  // -- 6 VERTICAL SPINES — each corner from y=0 to y=1.
+  for i in 0..6 {
+    a = (60.0 * i as float - 30.0) * 3.14159265358979 / 180.0;
+    cx = cos(a) as single;
+    cz = sin(a) as single;
+    verts += [cx, 0.0f, cz,   0.0f, 1.0f, 0.0f];     // base corner i
+    verts += [cx, 1.0f, cz,   0.0f, 1.0f, 0.0f];     // top corner i
+  }
+  // -- 6 TOP-EDGE segments — the hex outline at y=1.
   for i in 0..6 {
     a0 = (60.0 * i as float - 30.0) * 3.14159265358979 / 180.0;
     a1 = (60.0 * (i + 1) as float - 30.0) * 3.14159265358979 / 180.0;
-    am = (60.0 * i as float) * 3.14159265358979 / 180.0;
-    cx0 = cos(a0) as single;
-    cz0 = sin(a0) as single;
-    cx1 = cos(a1) as single;
-    cz1 = sin(a1) as single;
-    nx  = cos(am) as single;
-    nz  = sin(am) as single;
-    // Quad: top_i, top_(i+1), bot_(i+1), bot_i (CCW viewed from outside).
-    // Triangle 1: top_i, top_(i+1), bot_(i+1)
-    verts += [cx0, 1.0f, cz0,   nx, 0.0f, nz];
-    verts += [cx1, 1.0f, cz1,   nx, 0.0f, nz];
-    verts += [cx1, 0.0f, cz1,   nx, 0.0f, nz];
-    // Triangle 2: top_i, bot_(i+1), bot_i
-    verts += [cx0, 1.0f, cz0,   nx, 0.0f, nz];
-    verts += [cx1, 0.0f, cz1,   nx, 0.0f, nz];
-    verts += [cx0, 0.0f, cz0,   nx, 0.0f, nz];
+    cx0 = cos(a0) as single; cz0 = sin(a0) as single;
+    cx1 = cos(a1) as single; cz1 = sin(a1) as single;
+    verts += [cx0, 1.0f, cz0,   0.0f, 1.0f, 0.0f];   // top corner i
+    verts += [cx1, 1.0f, cz1,   0.0f, 1.0f, 0.0f];   // top corner i+1
   }
   graphics::gl_upload_vertices(verts, 6)
 }
@@ -238,19 +266,24 @@ fn build_prism_mvp(proj_view: const math::Mat4,
   mvp.m
 }
 
-// Draw one filled-cell hex prism (54 vertices: top + sides; bottom
-// skipped since it's hidden from the overhead view).
-fn draw_prism_hex(shader: integer, vao: integer,
-                  proj_view: const math::Mat4,
-                  hx: integer, hy: integer, r: float, h: float, pi: integer,
-                  alpha: float) {
+// Draw one open-skeleton crystal (24 vertices = 12 line segments:
+// 6 vertical spines + 6 top edges).  Drawn via DRAW_LINES so the
+// crystal reads as a hollow wire-frame, leaving full negative space
+// between filled cells — the audience can see through bridges and
+// through individual crystals to neighbours behind.  Subsequent steps
+// (ridges, bridges, mosaic, growth animation) add more line segments
+// + per-segment colour into this same skeleton.
+fn draw_crystal(shader: integer, vao: integer,
+                proj_view: const math::Mat4,
+                hx: integer, hy: integer, r: float, h: float, pi: integer,
+                alpha: float) {
   mvp = build_prism_mvp(proj_view, hx, hy, r, h);
   graphics::gl_use_shader(shader);
   graphics::gl_set_uniform_mat4(shader, "uMVP", mvp);
   graphics::gl_set_uniform_vec3(shader, "uColor",
                                 palette_r(pi), palette_g(pi), palette_b(pi));
   graphics::gl_set_uniform_float(shader, "uAlpha", alpha);
-  graphics::gl_draw(vao, 54);
+  graphics::gl_draw_mode(vao, 24, graphics::DRAW_LINES);
 }
 
 
@@ -541,7 +574,10 @@ fn main() {
   // 3D pipeline — ground hex shader + flat hex VBO + perspective projection.
   graphics::gl_enable(graphics::GL_DEPTH_TEST);
   crystal_shader = graphics::gl_create_shader(GROUND_VERT, GROUND_FRAG);
-  crystal_vao    = build_prism_hex_vbo();
+  ground_vao     = build_ground_hex_vbo();
+  crystal_vao    = build_crystal_lines_vbo();
+  graphics::gl_line_width(2.0);    // ~2 px wide crystal lines — readable
+                                   // at projector distance
   proj_matrix   = math::mat4_perspective(0.9, WIN_W as float / WIN_H as float, 1.0, 4000.0);
   println("projector: 3D ground shader + VBO + perspective projection ready");
 
@@ -610,10 +646,34 @@ fn main() {
     graphics::gl_clear(bg);
     view_matrix = build_view_matrix(auto_cam);
     proj_view = math::mat4_mul(proj_matrix, view_matrix);
+    // (a) Ground layer — empty hex lattice around the camera as a
+    //     "what cells exist" backdrop.  Bounded to a small window
+    //     (±10 cols × ±7 rows = ~315 cells) so per-frame mat4 alloc
+    //     stays under the loft store-allocator threshold that bit us
+    //     earlier with a ±25 / ±18 bound.
+    view_hx = auto_cam.pos_x + auto_cam.tilt * (auto_cam.end_x - auto_cam.pos_x);
+    view_hy = auto_cam.pos_y + auto_cam.tilt * (auto_cam.end_y - auto_cam.pos_y);
+    cam_ix = view_hx as integer;
+    cam_iy = view_hy as integer;
+    gx = cam_ix - 10;
+    while gx <= cam_ix + 10 {
+      gy = cam_iy - 7;
+      while gy <= cam_iy + 7 {
+        gk = cell_key(gx, gy);
+        if world.cells[gk] == null {
+          draw_ground_hex(crystal_shader, ground_vao, proj_view,
+                          gx, gy, HEX_SIZE * 0.97, 0, 1.0);
+        }
+        gy = gy + 1;
+      }
+      gx = gx + 1;
+    }
+    // (b) Crystal layer — open-skeleton line wireframe for each filled
+    //     cell, height proportional to filled-neighbour count.
     for cell in world.cells {
       h_world = cell_height(world, cell.x, cell.y) * HEX_SIZE;
-      draw_prism_hex(crystal_shader, crystal_vao, proj_view,
-                     cell.x, cell.y, HEX_SIZE * 0.97, h_world, cell.color, 1.0);
+      draw_crystal(crystal_shader, crystal_vao, proj_view,
+                   cell.x, cell.y, HEX_SIZE * 0.97, h_world, cell.color, 1.0);
     }
     graphics::gl_swap_buffers();
     frames = frames + 1;
