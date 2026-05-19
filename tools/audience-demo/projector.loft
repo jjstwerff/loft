@@ -151,22 +151,53 @@ void main() {{
 }}
 `;
 
-// Unit hex VBO for the GROUND layer — 18 vertices (6 triangles fanned
-// from centre), each carrying (pos.xyz, normal.xyz) = stride 6.  All
-// vertices at y=0 with normal (0, 1, 0) (top-facing).  Radius 1; the
-// per-cell model matrix scales to HEX_SIZE world units and translates
-// to the hex's world position.
-fn build_ground_hex_vbo() -> integer {
+// Unit hex PRISM VBO — flat-top hex prism with radius 1 and height 1.
+//   - top face: 6 triangles fanning from (0, 1, 0), normal (0, 1, 0)
+//   - 6 side quads (12 tris), each with an outward-pointing flat normal
+//   - bottom face: skipped (hidden behind the ground / never visible
+//     from the projector's overhead view)
+// Total: 18 + 36 = 54 vertices, stride 6 (pos.xyz + normal.xyz).
+// Per-cell model matrix scales Y by the cell's height + XZ by hex
+// radius, then translates into world position.  Winding is CCW from
+// each face's outward direction — back-face culling can be enabled
+// later without flipping the mesh.
+fn build_prism_hex_vbo() -> integer {
   verts: vector<single> = [];
+  // -- TOP face: 6 triangles fanning from centre at y=1, normal +Y.
+  //    Winding (centre, c[i+1], c[i]) is CCW when viewed from +Y.
   for i in 0..6 {
     a0 = (60.0 * i as float - 30.0) * 3.14159265358979 / 180.0;
     a1 = (60.0 * (i + 1) as float - 30.0) * 3.14159265358979 / 180.0;
-    // centre (0, 0, 0), normal up
-    verts += [0.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f];
-    // outer vertex i — note world Z = cell's screen Y direction
-    verts += [cos(a0) as single, 0.0f, sin(a0) as single,  0.0f, 1.0f, 0.0f];
-    // outer vertex i+1
-    verts += [cos(a1) as single, 0.0f, sin(a1) as single,  0.0f, 1.0f, 0.0f];
+    cx0 = cos(a0) as single;
+    cz0 = sin(a0) as single;
+    cx1 = cos(a1) as single;
+    cz1 = sin(a1) as single;
+    verts += [0.0f, 1.0f, 0.0f,   0.0f, 1.0f, 0.0f];   // centre top
+    verts += [cx1,  1.0f, cz1,    0.0f, 1.0f, 0.0f];   // corner i+1
+    verts += [cx0,  1.0f, cz0,    0.0f, 1.0f, 0.0f];   // corner i
+  }
+  // -- SIDE faces: 6 quads (top edge → bottom edge), outward normal.
+  //    Edge between corner i and corner i+1 has midpoint angle 60°*i;
+  //    its outward normal is (cos(60°*i), 0, sin(60°*i)).
+  for i in 0..6 {
+    a0 = (60.0 * i as float - 30.0) * 3.14159265358979 / 180.0;
+    a1 = (60.0 * (i + 1) as float - 30.0) * 3.14159265358979 / 180.0;
+    am = (60.0 * i as float) * 3.14159265358979 / 180.0;
+    cx0 = cos(a0) as single;
+    cz0 = sin(a0) as single;
+    cx1 = cos(a1) as single;
+    cz1 = sin(a1) as single;
+    nx  = cos(am) as single;
+    nz  = sin(am) as single;
+    // Quad: top_i, top_(i+1), bot_(i+1), bot_i (CCW viewed from outside).
+    // Triangle 1: top_i, top_(i+1), bot_(i+1)
+    verts += [cx0, 1.0f, cz0,   nx, 0.0f, nz];
+    verts += [cx1, 1.0f, cz1,   nx, 0.0f, nz];
+    verts += [cx1, 0.0f, cz1,   nx, 0.0f, nz];
+    // Triangle 2: top_i, bot_(i+1), bot_i
+    verts += [cx0, 1.0f, cz0,   nx, 0.0f, nz];
+    verts += [cx1, 0.0f, cz1,   nx, 0.0f, nz];
+    verts += [cx0, 0.0f, cz0,   nx, 0.0f, nz];
   }
   graphics::gl_upload_vertices(verts, 6)
 }
@@ -190,35 +221,36 @@ fn hex_world_z(hy: integer) -> float {
 // build_view_matrix is defined LATER — must appear after the AutoCam
 // struct so loft's pass-1 type inference knows the field types.
 
-// Build the MVP for a single hex tile at (hx, hy) in the ground layer.
-// proj_view = perspective * view (cached once per frame); the per-hex
-// model = translate(world pos) * scale(radius).  Final mvp = proj_view
-// * model.  Returns the .m field for direct upload via
+// Build the MVP for a single hex PRISM at (hx, hy).  proj_view is
+// perspective * view (cached once per frame); the per-hex model =
+// translate(world pos) * scale(radius, height, radius).  Final mvp =
+// proj_view * model.  Returns the .m field for direct upload via
 // `gl_set_uniform_mat4`.
-fn build_ground_mvp(proj_view: const math::Mat4,
-                    hx: integer, hy: integer, r: float) -> vector<float> {
+fn build_prism_mvp(proj_view: const math::Mat4,
+                   hx: integer, hy: integer, r: float, h: float) -> vector<float> {
   wx = hex_world_x(hx, hy);
   wz = hex_world_z(hy);
   model = math::mat4_mul(
     math::mat4_translate(wx, 0.0, wz),
-    math::mat4_scale(r, 1.0, r)
+    math::mat4_scale(r, h, r)
   );
   mvp = math::mat4_mul(proj_view, model);
   mvp.m
 }
 
-// Draw one ground-layer hex tile.
-fn draw_ground_hex(shader: integer, vao: integer,
-                   proj_view: const math::Mat4,
-                   hx: integer, hy: integer, r: float, pi: integer,
-                   alpha: float) {
-  mvp = build_ground_mvp(proj_view, hx, hy, r);
+// Draw one filled-cell hex prism (54 vertices: top + sides; bottom
+// skipped since it's hidden from the overhead view).
+fn draw_prism_hex(shader: integer, vao: integer,
+                  proj_view: const math::Mat4,
+                  hx: integer, hy: integer, r: float, h: float, pi: integer,
+                  alpha: float) {
+  mvp = build_prism_mvp(proj_view, hx, hy, r, h);
   graphics::gl_use_shader(shader);
   graphics::gl_set_uniform_mat4(shader, "uMVP", mvp);
   graphics::gl_set_uniform_vec3(shader, "uColor",
                                 palette_r(pi), palette_g(pi), palette_b(pi));
   graphics::gl_set_uniform_float(shader, "uAlpha", alpha);
-  graphics::gl_draw(vao, 18);
+  graphics::gl_draw(vao, 54);
 }
 
 
@@ -467,6 +499,38 @@ struct World {
   cells: hash<Cell[ck]>,
 }
 
+// Count how many of the 6 hex neighbours of (x, y) are filled.  Pointy-
+// top offset coords: odd rows shift right by half a hex, so the row-
+// above + row-below neighbours change x range based on `y`'s parity.
+fn neighbour_count(world: World, x: integer, y: integer) -> integer {
+  parity = y - (y / 2) * 2;
+  if parity < 0 { parity = parity + 2; }
+  count = 0;
+  if world.cells[cell_key(x - 1, y)] != null { count = count + 1; }
+  if world.cells[cell_key(x + 1, y)] != null { count = count + 1; }
+  if parity == 0 {
+    if world.cells[cell_key(x - 1, y - 1)] != null { count = count + 1; }
+    if world.cells[cell_key(x,     y - 1)] != null { count = count + 1; }
+    if world.cells[cell_key(x - 1, y + 1)] != null { count = count + 1; }
+    if world.cells[cell_key(x,     y + 1)] != null { count = count + 1; }
+  } else {
+    if world.cells[cell_key(x,     y - 1)] != null { count = count + 1; }
+    if world.cells[cell_key(x + 1, y - 1)] != null { count = count + 1; }
+    if world.cells[cell_key(x,     y + 1)] != null { count = count + 1; }
+    if world.cells[cell_key(x + 1, y + 1)] != null { count = count + 1; }
+  }
+  count
+}
+
+// Crystal height per filled cell — monotone with filled-neighbour
+// count per the design spec (0 neighbours = lowest crystal point;
+// 6 = highest plateau).  World units (multiplied by HEX_SIZE at the
+// render site so heights scale with the hex tile size).
+fn cell_height(world: World, x: integer, y: integer) -> float {
+  n = neighbour_count(world, x, y);
+  0.4 + n as float * 0.45
+}
+
 fn main() {
   if !graphics::gl_create_window(WIN_W, WIN_H, "Audience Projector — @PLAN36") {
     println("projector: FAILED to create OpenGL window");
@@ -476,8 +540,8 @@ fn main() {
 
   // 3D pipeline — ground hex shader + flat hex VBO + perspective projection.
   graphics::gl_enable(graphics::GL_DEPTH_TEST);
-  ground_shader = graphics::gl_create_shader(GROUND_VERT, GROUND_FRAG);
-  ground_vao    = build_ground_hex_vbo();
+  crystal_shader = graphics::gl_create_shader(GROUND_VERT, GROUND_FRAG);
+  crystal_vao    = build_prism_hex_vbo();
   proj_matrix   = math::mat4_perspective(0.9, WIN_W as float / WIN_H as float, 1.0, 4000.0);
   println("projector: 3D ground shader + VBO + perspective projection ready");
 
@@ -547,8 +611,9 @@ fn main() {
     view_matrix = build_view_matrix(auto_cam);
     proj_view = math::mat4_mul(proj_matrix, view_matrix);
     for cell in world.cells {
-      draw_ground_hex(ground_shader, ground_vao, proj_view,
-                      cell.x, cell.y, HEX_SIZE * 0.97, cell.color, 1.0);
+      h_world = cell_height(world, cell.x, cell.y) * HEX_SIZE;
+      draw_prism_hex(crystal_shader, crystal_vao, proj_view,
+                     cell.x, cell.y, HEX_SIZE * 0.97, h_world, cell.color, 1.0);
     }
     graphics::gl_swap_buffers();
     frames = frames + 1;
