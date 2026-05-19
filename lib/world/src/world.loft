@@ -305,6 +305,10 @@ pub fn world_save(self: World, path: text) {
   {
     f = file(path);
     f#format = LittleEndian;
+    // Snapshot semantics: each save replaces the previous file.  Make
+    // the truncation explicit so the sequence keeps working once `+=`
+    // is append-only (rather than truncating on first reopen).
+    f.set_file_size(0);
     // Explicit `as i32` casts force 4-byte writes — without them, a
     // bare `integer` value writes 8 bytes (loft stores integers as
     // i64 internally; the file API takes the storage width unless
@@ -330,6 +334,7 @@ pub fn world_save(self: World, path: text) {
         f += ws_cell.c_age;
       }
     }
+    f.sync();
   }
 }
 

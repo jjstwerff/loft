@@ -179,6 +179,10 @@ fn world_save(world: World) {
   {
     f = file(WORLD_FILE);
     f#format = LittleEndian;
+    // Snapshot semantics: each save replaces the previous file.  Make
+    // the truncation explicit so the sequence keeps working once `+=`
+    // is append-only (rather than truncating on first reopen).
+    f.set_file_size(0);
     f += (WORLD_FILE_MAGIC   as u32);
     f += (WORLD_FILE_VERSION as u32);
     f += (world.tick as u32);
@@ -189,6 +193,7 @@ fn world_save(world: World) {
       f += c.color;
       f += c.birth_tick;
     }
+    f.sync();
   }
   world.dirty = false;
   world.last_save_us = ticks();
