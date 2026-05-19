@@ -21,9 +21,12 @@
     0.7 — WebSocket client (auto-reconnect, send/recv)
     0.8 — jump-to-active button — centres view on the latest
           active_player_signal position; flash on receipt
+    0.9 — onboarding view-centring: after the initial WS snapshot
+          settles, jump the view to the freshest activity point seen
+          so far (prefers active_player_signal, falls back to the
+          last-painted snapshot cell, no-op if the world is blank)
   Still TODO (next session):
     0.5 swipe + drag-erase
-    0.9 onboarding-view-centring on first activity signal
 
   Until 0.7 lands, cell state is local-only (no server).  That keeps
   the visual mechanic verifiable without depending on plan 34
@@ -134,6 +137,29 @@ let viewOffsetY = 0;
 //   - Phase 0.9 onboarding (centre on first signal when the page loads
 //     into a world with existing activity).
 let lastActivePos = null;
+
+// Sub-task 0.9 — onboarding view-centring.  On first page load, after
+// the initial WS snapshot has plausibly finished replaying, jump the
+// view to a "current activity" point so the user's first sight shows
+// other people's recent crystals nearby instead of a blank centre.
+// Preference order:
+//   1. lastActivePos (an active_player_signal arrived during replay)
+//   2. lastSeenCell  (the most recent paint received during replay —
+//                     usually the most recently inserted snapshot cell)
+//   3. nothing — leave the view at (0, 0) if the world is fully blank.
+// Fires at most ONCE; subsequent paints don't move the camera.
+let initialCentringPending = true;
+let lastSeenCell = null;
+const INITIAL_CENTRING_DELAY_MS = 800;
+function applyInitialCentring() {
+  if (!initialCentringPending) return;
+  initialCentringPending = false;
+  const target = lastActivePos || lastSeenCell;
+  if (!target) return;
+  viewOffsetX = target.x;
+  viewOffsetY = target.y;
+  draw();
+}
 
 // ── Hex math ─────────────────────────────────────────────────────────────────
 // POINTY-TOP hex layout with "odd-r offset" coordinates: hexes have
@@ -428,6 +454,14 @@ function wsConnect() {
   s.addEventListener('open', () => {
     setStatus('connected to ' + WS_URL, 'ok');
     wsReconnectMs = 1000;     // reset backoff on success
+    // Sub-task 0.9 — arm the onboarding centring timer.  The server
+    // begins replaying the world the moment we connect; after a short
+    // settle window we centre the view on the freshest activity point
+    // we've seen so far.  The settle delay catches the snapshot in
+    // one go without making the user wait on an empty grid.
+    if (initialCentringPending) {
+      setTimeout(applyInitialCentring, INITIAL_CENTRING_DELAY_MS);
+    }
   });
   s.addEventListener('close', () => {
     setStatus('disconnected — retrying in ' + (wsReconnectMs / 1000) + 's', 'err');
@@ -456,7 +490,12 @@ function wsConnect() {
       if (parts.length !== 3) return;
       const wx = parts[0] | 0, wy = parts[1] | 0, c = parts[2] | 0;
       if (c === 0) cells.delete(cellKey(wx, wy));
-      else cells.set(cellKey(wx, wy), c);
+      else {
+        cells.set(cellKey(wx, wy), c);
+        // Remember the most recent paint so onboarding centring has a
+        // fallback target when no active_player_signal has arrived yet.
+        if (initialCentringPending) lastSeenCell = { x: wx, y: wy };
+      }
       draw();
     } else if (id === 5) {
       // Active-player hint — record the position so the jump-to-active
@@ -468,6 +507,11 @@ function wsConnect() {
       if (parts.length === 2) {
         const ax = parts[0] | 0, ay = parts[1] | 0;
         lastActivePos = { x: ax, y: ay };
+        // Sub-task 0.9 — an active_player_signal during the onboarding
+        // window is the strongest possible "where is the action right
+        // now" signal; fire the centring immediately instead of waiting
+        // out the settle delay.
+        if (initialCentringPending) applyInitialCentring();
       }
       const btn = document.getElementById('jump-active');
       btn.classList.remove('flash');
