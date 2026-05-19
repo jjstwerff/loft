@@ -280,10 +280,16 @@ fn build_view_matrix(cam: AutoCam) -> math::Mat4 {
   eye_x = focal_wx + back_x * back_offset;
   eye_z = focal_wz + back_z * back_offset;
   eye_y = height;
+  // Up vector = world -Z ("north") rather than +Y, so a top-down view
+  // (eye directly above focal) doesn't hit gimbal lock — at tilt=0
+  // forward=(0,-1,0) and up=(0,1,0) would be parallel and produce a
+  // degenerate view matrix (whole screen renders black).  (0,0,-1)
+  // also fixes "screen up" to always equal world-north — natural for
+  // a map / overhead view.
   math::mat4_look_at(
     math::vec3(eye_x, eye_y, eye_z),
     math::vec3(focal_wx, 0.0, focal_wz),
-    math::vec3(0.0, 1.0, 0.0)
+    math::vec3(0.0, 0.0, 0.0 - 1.0)
   )
 }
 
@@ -528,39 +534,18 @@ fn main() {
       println("projector: cam pos=({auto_cam.pos_x}, {auto_cam.pos_y}) end=({auto_cam.end_x}, {auto_cam.end_y}) rot={auto_cam.rotation}/{auto_cam.end_rot} tilt={auto_cam.tilt}");
     }
 
-    // 3. Clear + redraw — 3D pipeline (step 1: flat hex ground).
-    //    The world is rendered on the XZ ground plane (y=0); the
-    //    camera lives in 3D and renders via perspective.  Two passes
-    //    same as before:
-    //    (a) bounded grid of empty hexes around the camera view —
-    //        dim near-black so the lattice reads against the void;
-    //    (b) every filled cell on top at full palette colour.
-    //    Crystal prisms (height + ridges + bridges + mosaic) layer
-    //    onto this in subsequent steps.  Bounds widened to ±25 cols
-    //    × ±18 rows because the 3D perspective view shows more
-    //    cells than the 2D ortho at low tilt.
+    // 3. Clear + redraw — 3D pipeline (step 1: only filled cells).
+    //    Renders the painted cells as flat hex tiles on the y=0
+    //    ground plane.  The "empty-grid backdrop" the 2D version had
+    //    is dropped for now — re-adding it as a per-cell loop costs
+    //    1500+ mat4 allocations per frame, which overflows the loft
+    //    interpreter's store allocator (`Allocating a used store`
+    //    panic in src/database/allocation.rs:104).  Step 4 (chunked
+    //    mesh lifecycle) will bring it back as one textured ground
+    //    quad per chunk — bounded mat4 count regardless of view size.
     graphics::gl_clear(bg);
     view_matrix = build_view_matrix(auto_cam);
     proj_view = math::mat4_mul(proj_matrix, view_matrix);
-    // Integer rounding for the loop centre — same hex-cell centroid
-    // the old 2D version used, just in 3D world coords.
-    view_hx = auto_cam.pos_x + auto_cam.tilt * (auto_cam.end_x - auto_cam.pos_x);
-    view_hy = auto_cam.pos_y + auto_cam.tilt * (auto_cam.end_y - auto_cam.pos_y);
-    cam_ix = view_hx as integer;
-    cam_iy = view_hy as integer;
-    gx = cam_ix - 25;
-    while gx <= cam_ix + 25 {
-      gy = cam_iy - 18;
-      while gy <= cam_iy + 18 {
-        gk = cell_key(gx, gy);
-        if world.cells[gk] == null {
-          draw_ground_hex(ground_shader, ground_vao, proj_view,
-                          gx, gy, HEX_SIZE * 0.97, 0, 1.0);
-        }
-        gy = gy + 1;
-      }
-      gx = gx + 1;
-    }
     for cell in world.cells {
       draw_ground_hex(ground_shader, ground_vao, proj_view,
                       cell.x, cell.y, HEX_SIZE * 0.97, cell.color, 1.0);
