@@ -134,33 +134,83 @@ fn build_hex_vbo() -> integer {
   graphics::gl_upload_vertices(verts, 3)
 }
 
-// Convert offset (x, y) cell coords → centre pixel (cx, cy) on the
-// window, given a fractional camera position (cam_x, cam_y) in world
-// hex coords.  When cam is (0, 0) the hex at world (0, 0) lands at
-// screen centre; the camera shifts every hex by (-cam_x, -cam_y) in
-// world units before the pixel mapping.  Matches the phone client's
-// offsetToPixel(x, y, size) function for the static-camera case.
-fn cell_centre_x(x: integer, y: integer, cam_x: float) -> float {
+// Compute the screen position of hex (x, y) given:
+//   view_x, view_y — the WORLD hex coord that should land at screen
+//                    centre.  Normally = camera position, but the
+//                    caller pre-shifts it toward the destination
+//                    when tilt > 0 (the look-at offset:
+//                    view = pos + tilt * (end - pos)) so a distant
+//                    edit appears centred in the frame at full tilt.
+//   rotation       — camera rotation in radians (0 = north up,
+//                    world Y+ axis points down on screen)
+//   tilt           — vertical-axis compression (0 = top-down map view,
+//                    1 = fully foreshortened "looking forward" view)
+// Returns the post-rotation, post-tilt screen pixel coords (cx, cy)
+// so the caller can place the hex there.  Matches the phone client's
+// offsetToPixel(x, y, size) at view=pos, rotation=0, tilt=0.
+fn cell_centre(x: integer, y: integer,
+               view_x: float, view_y: float,
+               rotation: float, tilt: float) -> (float, float) {
+  // (1) Unrotated map-space pixel position, with the parity shift the
+  //     pointy-top offset coord system needs.
   parity = y - (y / 2) * 2;
   if parity < 0 { parity = parity + 2; }
   shift = 0.0;
   if parity == 1 { shift = SQRT3 / 2.0 * HEX_SIZE; }
-  WIN_W as float / 2.0 + (x as float - cam_x) * SQRT3 * HEX_SIZE + shift
-}
-fn cell_centre_y(y: integer, cam_y: float) -> float {
-  WIN_H as float / 2.0 + (y as float - cam_y) * 1.5 * HEX_SIZE
+  map_x = (x as float - view_x) * SQRT3 * HEX_SIZE + shift;
+  map_y = (y as float - view_y) * 1.5 * HEX_SIZE;
+  // (2) Apply rotation around the screen centre.  Must run BEFORE the
+  //     Y-squash below so the tilt foreshortening acts on the SCREEN
+  //     Y axis (= the camera's pitch direction in an FPS-style "look
+  //     forward" view) rather than on the WORLD Y axis, which would
+  //     wrongly squeeze X on rotated views.
+  cos_r = cos(rotation);
+  sin_r = sin(rotation);
+  rx = map_x * cos_r - map_y * sin_r;
+  ry = map_x * sin_r + map_y * cos_r;
+  // (3) Pitch foreshortening: tilt=0 is the FPS "looking straight
+  //     down" extremity (full Y scale, top-down map view); tilt=1
+  //     lifts the camera toward horizontal so the screen Y axis
+  //     compresses (distant ground reads as closer to centre).
+  y_scale = 1.0 - tilt * 0.70;
+  ry = ry * y_scale;
+  (WIN_W as float / 2.0 + rx, WIN_H as float / 2.0 + ry)
 }
 
-// Build an MVP that places + scales the unit-hex VBO so its centre
-// lands at (cx, cy) with radius r.  Same trick as graphics::build_mvp_2d
-// but skips the translate-then-scale composition: the unit hex already
-// has its centre at the origin, so we just scale by r and translate by
-// (cx, cy).
-fn build_hex_mvp(proj: const vector<float>, cx: float, cy: float, r: float) -> vector<float> {
+// Build an MVP that places + scales + rotates + Y-squashes the unit-hex
+// VBO so its centre lands at (cx, cy) with horizontal radius `r` and
+// vertical radius `r * (1 - tilt * 0.5)`, rotated by `rotation` radians
+// around the hex's own centre.  Equivalent to:
+//   M = T(cx, cy) * S_screen_y(y_scale) * R(rotation) * S(r, r, 1)
+// — uniform scale by r, rotate, THEN apply screen-Y squash (so
+// foreshortening rides on the camera's pitch axis instead of on the
+// world Y axis, which would wrongly squeeze X on rotated views).
+// proj * M is baked into one matrix; the painter's proj is structurally
+// diag(2/w, -2/h, -1) + translate(-1, 1, 0).
+fn build_hex_mvp(proj: const vector<float>,
+                 cx: float, cy: float,
+                 r: float, rotation: float, tilt: float) -> vector<float> {
+  cos_r = cos(rotation);
+  sin_r = sin(rotation);
+  y_scale = 1.0 - tilt * 0.70;      // screen-Y squash, post-rotation
+  rx_x =  r * cos_r;                // unit-X scaled+rotated, X component
+  rx_y =  r * sin_r * y_scale;      // unit-X scaled+rotated, Y component (squashed)
+  ry_x = 0.0 - r * sin_r;           // unit-Y scaled+rotated, X component
+  ry_y =  r * cos_r * y_scale;      // unit-Y scaled+rotated, Y component (squashed)
   mvp: vector<float> = [
-    proj[0] * r,  proj[1] * r,  proj[2] * r,  proj[3] * r,
-    proj[4] * r,  proj[5] * r,  proj[6] * r,  proj[7] * r,
+    // Column 0 — proj * (rx_x, rx_y, 0, 0)
+    proj[0] * rx_x + proj[4] * rx_y,
+    proj[1] * rx_x + proj[5] * rx_y,
+    proj[2] * rx_x + proj[6] * rx_y,
+    proj[3] * rx_x + proj[7] * rx_y,
+    // Column 1 — proj * (ry_x, ry_y, 0, 0)
+    proj[0] * ry_x + proj[4] * ry_y,
+    proj[1] * ry_x + proj[5] * ry_y,
+    proj[2] * ry_x + proj[6] * ry_y,
+    proj[3] * ry_x + proj[7] * ry_y,
+    // Column 2 — unchanged (z stuff for the orthographic projection)
     proj[8],      proj[9],      proj[10],     proj[11],
+    // Column 3 — proj * (cx, cy, 0, 1)
     proj[0] * cx + proj[4] * cy + proj[12],
     proj[1] * cx + proj[5] * cy + proj[13],
     proj[2] * cx + proj[6] * cy + proj[14],
@@ -169,10 +219,13 @@ fn build_hex_mvp(proj: const vector<float>, cx: float, cy: float, r: float) -> v
   mvp
 }
 
-// Draw one filled hex at (cx, cy) with radius r and palette colour `pi`.
+// Draw one filled hex at (cx, cy) with radius r, optionally rotated +
+// vertically squashed for the camera's tilt + rotation state.  Pass
+// `rotation = 0, tilt = 0` for the static-camera baseline.
 fn draw_hex(painter: const graphics::Painter2D, vao: integer,
-            cx: float, cy: float, r: float, pi: integer) {
-  mvp = build_hex_mvp(painter.p2_proj, cx, cy, r);
+            cx: float, cy: float, r: float, rotation: float, tilt: float,
+            pi: integer) {
+  mvp = build_hex_mvp(painter.p2_proj, cx, cy, r, rotation, tilt);
   graphics::gl_use_shader(painter.p2_flat);
   graphics::gl_set_uniform_mat4(painter.p2_flat, "uMVP", mvp);
   graphics::gl_set_uniform_vec3(painter.p2_flat, "uColor",
@@ -181,51 +234,161 @@ fn draw_hex(painter: const graphics::Painter2D, vao: integer,
   graphics::gl_draw(vao, 18);
 }
 
-// Auto-camera state.  `pos_x`/`pos_y` are the CURRENT camera position
-// (the hex coord that should land at screen centre this frame);
-// fractional values smooth the lerp.  `target_x`/`target_y` is the
-// EMA-blended target — each `4:` delta pulls it `CAMERA_RECORD_ALPHA`
-// of the way toward the new paint, so a flurry of paints in one
-// region converges the target there while a single outlier nudges
-// it only partway.  `pos` then chases `target` at `CAMERA_LERP` per
-// frame.
+// Auto-camera state — a single "end-pose" model.  On every paint
+// event we snapshot the destination pose the camera should land at
+// (position = edit, rotation = direction toward edit, tilt = 0 for
+// the resting top-down view).  Every frame, the current pose
+// lerps toward the end-pose at ONE common rate.  No phased gating,
+// no rotation-then-translation sequence — the simultaneous lerp
+// is the "smoothest transition" the user asked for.
 //
-// Heat-field with per-event decay is the design eventual goal (see
-// `03-projector-view.md` § Auto-camera), but loft today cannot
-// re-assign a struct's vector field cleanly — so the MVP uses two
-// scalar fields and a one-line EMA instead.  Behaviour-wise the
-// difference is small: the EMA is "average of recent activity"
-// just like a heat-field centroid, only without aging out points
-// after a few seconds (single old paints quickly get drowned by
-// any new activity).
+// Tilt receives an immediate kick on each new edit so the
+// anticipation lean reads as a clear gesture; from there it
+// decays back to 0 over the same lerp as the position.
 struct AutoCam {
   pos_x:    float,
   pos_y:    float,
-  target_x: float,
-  target_y: float,
+  end_x:    float,           // destination position (= latest edit)
+  end_y:    float,
+  rotation: float,           // current rotation, radians
+  end_rot:  float,           // destination rotation (= direction toward last edit, frozen at edit-time)
+  tilt:     float,           // current tilt, 0..1
+  edit_tick:  integer not null, // frame number when the latest edit was recorded (drives the fade-in)
+  ready_tick: integer not null, // frame when rotation + tilt first reached "settled" after the latest edit;
+                                // -1 while not yet settled.  Position only lerps once
+                                // (tick - ready_tick) >= CAMERA_PAUSE_FRAMES.
 }
 
-// Tuning knobs — sluggish-by-design philosophy from the parent README:
-// overdamped, reads as "interested but unhurried".
-CAMERA_LERP         = 0.04;   // current chases target this fraction per frame (~80% in 1 s)
-CAMERA_RECORD_ALPHA = 0.35;   // each new paint pulls target this fraction toward it
+// Tuning knobs — single common lerp factor for pos + rotation + tilt
+// so all three converge at the same rate.  ~0.07 takes ~30 frames
+// (~500 ms at 60 fps) to close 80 % of the gap.
+CAMERA_LERP        = 0.07;
+CAMERA_TILT_KICK   = 0.25;   // tilt jumps to this on every new edit so the
+                             // anticipation reads as a quick gesture before
+                             // the distance-based desired_tilt takes over
+CAMERA_LOOKAT_DIST = 8.0;    // distance (in hex coords) at which desired tilt
+                             // hits 1.0 — i.e. how close the edit can be before
+                             // the view stops shifting and you see the
+                             // top-down approach
+CAMERA_FADE_FRAMES = 12;     // ~0.2 s @ 60 fps: lerp speed eases in from
+                             // 0 over this many frames after each edit so
+                             // the camera doesn't jolt forward on a fresh
+                             // event — gives the eye time to register the
+                             // tilt kick + the new orientation before the
+                             // translation actually starts moving
+CAMERA_SETTLED_RAD = 0.10;   // rotation must be within this many radians of
+                             // its end value (≈ 5.7°) AND tilt must be
+                             // below this many units of 0 before position
+                             // is allowed to start lerping
+CAMERA_PAUSE_FRAMES = 6;     // ~0.1 s @ 60 fps: hold after rotation + tilt
+                             // settle before position begins moving — gives
+                             // a clean "orient — pause — translate" beat
+PI_2     = 1.5707963267948966;   // π/2
 
-// Record a fresh paint event: blend its position into the target via
-// an exponential moving average.  A single isolated paint shifts the
-// target by alpha (e.g. 35 % of the way there); a cluster of paints
-// in one region converges the target there within ~5 events.
+// Record a fresh paint event by computing the END POSE the camera
+// should land at, then storing it so cam_step can lerp toward it.
+// The end pose: position = edit, rotation = direction from current
+// position toward the edit (frozen at edit time, doesn't update as we
+// move so the rotation lerp is a single smooth arc), tilt = 0 (the
+// resting top-down view).  Tilt also receives an immediate kick to
+// CAMERA_TILT_KICK so the anticipation lean reads as one gesture
+// that decays during the trip.
 fn cam_record(cam: AutoCam, x: integer, y: integer, tick: integer) {
-  cam.target_x = cam.target_x + (x as float - cam.target_x) * CAMERA_RECORD_ALPHA;
-  cam.target_y = cam.target_y + (y as float - cam.target_y) * CAMERA_RECORD_ALPHA;
+  cam.end_x       = x as float;
+  cam.end_y       = y as float;
+  cam.tilt        = CAMERA_TILT_KICK;
+  cam.edit_tick   = tick;
+  cam.ready_tick  = 0 - 1;     // reset: must re-settle rotation+tilt before
+                               // position can lerp again toward the new end
+  // end_rot is NOT set here — `cam_step` recomputes it each frame from
+  // (end - current_pos) so the rotation tracks the target during motion
+  // too (user spec: "it is fine to rotate the camera during the actual
+  // move so the goals stays in view").
 }
 
-// Lerp the current camera position one step toward the target.  Cheap;
-// runs every frame so motion stays smooth at 60 fps regardless of
-// paint cadence.  Tick is unused at this revision (kept in the
-// signature for the future heat-field upgrade).
+// Wrap an angular difference into (-π, π] so a lerp from near +π to
+// near -π takes the SHORT route instead of spinning all the way
+// around the long way.  Returned `diff` has the same sign as the
+// direction the lerp should move.
+fn angle_diff(desired: float, current: float) -> float {
+  d = desired - current;
+  while d >  PI { d = d - 2.0 * PI; }
+  while d < 0.0 - PI { d = d + 2.0 * PI; }
+  d
+}
+
+fn lerp_angle(current: float, desired: float, factor: float) -> float {
+  current + angle_diff(desired, current) * factor
+}
+
+// Step the camera one frame.  Simple synchronised lerp: pos,
+// rotation, and tilt all chase their end values at one common rate
+// (CAMERA_LERP).  No phases, no gating.  The end values are set in
+// `cam_record` whenever a new paint event arrives:
+//   - end_x / end_y = the latest paint's position
+//   - end_rot       = rotation that puts the (frozen at edit-time)
+//                     travel direction at the top of the screen
+//   - tilt's end    = 0 (top-down at rest); tilt is kicked up to
+//                     CAMERA_TILT_KICK at edit-time and then lerps
+//                     back down through the trip
+// All three values converge together: by the time pos has settled
+// on the edit, rotation has landed at its target and tilt has
+// returned to 0.  Single smooth arc through (rotation, tilt) space,
+// concurrent with the translation through (x, y) space.
 fn cam_step(cam: AutoCam, tick: integer) {
-  cam.pos_x = cam.pos_x + (cam.target_x - cam.pos_x) * CAMERA_LERP;
-  cam.pos_y = cam.pos_y + (cam.target_y - cam.pos_y) * CAMERA_LERP;
+  // Refresh the desired rotation from CURRENT position toward the
+  // destination — so rotation tracks the target during the translation
+  // phase too.  Skip the update when distance is tiny (atan2 on a
+  // near-zero vector produces jitter) so the rotation holds steady at
+  // the arrival.
+  dx = cam.end_x - cam.pos_x;
+  dy = cam.end_y - cam.pos_y;
+  dist_sq = dx * dx + dy * dy;
+  if dist_sq > 0.25 {
+    travel_angle = atan2(dy, dx);
+    cam.end_rot  = 0.0 - PI_2 - travel_angle;
+  }
+
+  // Ease-in: lerp factor ramps from 0 to full over CAMERA_FADE_FRAMES
+  // after the latest edit.  Quadratic so the very first frames after
+  // an edit have ~zero motion; ramps up to full speed by the time the
+  // fade frames are done; stays at full speed thereafter.
+  elapsed = tick - cam.edit_tick;
+  if elapsed < 0 { elapsed = 0; }
+  t = elapsed as float / CAMERA_FADE_FRAMES as float;
+  if t > 1.0 { t = 1.0; }
+  k = CAMERA_LERP * t * t;
+
+  // Rotation lerps toward end_rot.
+  cam.rotation = lerp_angle(cam.rotation, cam.end_rot, k);
+
+  // Tilt is DISTANCE-driven so the look-at view-shift always brings
+  // the edit into the frame: full tilt for any edit ≥ CAMERA_LOOKAT_DIST
+  // hexes away, scaling linearly down as the camera approaches.  Both
+  // rotation + tilt lerp at the same `k` so they reach their settled
+  // values together — one combined gesture, ending when the goal is
+  // centred and the camera is oriented.
+  desired_tilt = sqrt((cam.end_x - cam.pos_x) * (cam.end_x - cam.pos_x)
+                    + (cam.end_y - cam.pos_y) * (cam.end_y - cam.pos_y))
+               / CAMERA_LOOKAT_DIST;
+  if desired_tilt > 1.0 { desired_tilt = 1.0; }
+  cam.tilt = cam.tilt + (desired_tilt - cam.tilt) * k;
+
+  // Position is GATED on rotation being settled, plus a brief
+  // CAMERA_PAUSE_FRAMES hold — gives a clean "orient + tilt — pause —
+  // translate" beat.  Tilt convergence isn't gated on; it tracks
+  // distance and naturally relaxes as the camera approaches.
+  rot_off = angle_diff(cam.end_rot, cam.rotation);
+  if rot_off < 0.0 { rot_off = 0.0 - rot_off; }
+  if rot_off >= CAMERA_SETTLED_RAD {
+    cam.ready_tick = 0 - 1;
+  } else {
+    if cam.ready_tick < 0 { cam.ready_tick = tick; }
+    if tick - cam.ready_tick >= CAMERA_PAUSE_FRAMES {
+      cam.pos_x = cam.pos_x + (cam.end_x - cam.pos_x) * k;
+      cam.pos_y = cam.pos_y + (cam.end_y - cam.pos_y) * k;
+    }
+  }
 }
 
 // Apply a single incoming text frame to the world.  Format inherited
@@ -291,7 +454,14 @@ fn main() {
   println("projector: ws session opened (auto-reconnects on drop)");
 
   world = World{cells: []};
-  auto_cam = AutoCam{pos_x: 0.0, pos_y: 0.0, target_x: 0.0, target_y: 0.0};
+  auto_cam = AutoCam{
+    pos_x: 0.0, pos_y: 0.0,
+    end_x: 0.0, end_y: 0.0,
+    rotation: 0.0, end_rot: 0.0,
+    tilt: 0.0,
+    edit_tick: 0,
+    ready_tick: 0 - 1,
+  };
 
   // Ask the server for a full snapshot.  Catches the case where the
   // initial connect-time replay missed frames (lib/web buffer ramp-up,
@@ -324,7 +494,7 @@ fn main() {
     // (tail -f the projector log) can see it swing without needing
     // to read pixels off the screen.
     if frames - (frames / 120) * 120 == 0 && frames > 0 {
-      println("projector: cam pos=({auto_cam.pos_x}, {auto_cam.pos_y}) target=({auto_cam.target_x}, {auto_cam.target_y})");
+      println("projector: cam pos=({auto_cam.pos_x}, {auto_cam.pos_y}) end=({auto_cam.end_x}, {auto_cam.end_y}) rot={auto_cam.rotation}/{auto_cam.end_rot} tilt={auto_cam.tilt}");
     }
 
     // 3. Clear + redraw.  Two passes:
@@ -338,30 +508,43 @@ fn main() {
     //    (1280 / (SQRT3 * 38) ≈ 19 cols, 800 / (1.5 * 38) ≈ 14 rows)
     //    plus a one-cell halo for the camera lerp.
     graphics::gl_clear(bg);
-    cam_ix = auto_cam.pos_x as integer;
-    cam_iy = auto_cam.pos_y as integer;
-    gx = cam_ix - 11;
-    while gx <= cam_ix + 11 {
-      gy = cam_iy - 8;
-      while gy <= cam_iy + 8 {
+    // Look-at view shift: interpolate from camera position toward the
+    // edit by `tilt`.  At tilt=0 the screen centre is the camera; at
+    // tilt=1 the screen centre is the edit (look-at).  Computed once
+    // per frame so all hexes use the consistent same view origin.
+    view_x = auto_cam.pos_x + auto_cam.tilt * (auto_cam.end_x - auto_cam.pos_x);
+    view_y = auto_cam.pos_y + auto_cam.tilt * (auto_cam.end_y - auto_cam.pos_y);
+    cam_ix = view_x as integer;
+    cam_iy = view_y as integer;
+    // Bounds — render enough cells to cover the screen even when
+    // rotated 45° (diagonal ≈ √2× side) AND when tilt-squashed.  Widen
+    // the loop further on the rotation axis to compensate.
+    gx = cam_ix - 20;
+    while gx <= cam_ix + 20 {
+      gy = cam_iy - 14;
+      while gy <= cam_iy + 14 {
         // Skip cells that have a painted entry — pass (b) handles those.
         gk = cell_key(gx, gy);
         if world.cells[gk] == null {
-          ecx = cell_centre_x(gx, gy, auto_cam.pos_x);
-          ecy = cell_centre_y(gy, auto_cam.pos_y);
-          draw_hex(painter, hex_vao, ecx, ecy, HEX_SIZE * 0.97, 0);
+          (ecx, ecy) = cell_centre(gx, gy,
+                                   view_x, view_y,
+                                   auto_cam.rotation, auto_cam.tilt);
+          draw_hex(painter, hex_vao, ecx, ecy, HEX_SIZE * 0.97,
+                   auto_cam.rotation, auto_cam.tilt, 0);
         }
         gy = gy + 1;
       }
       gx = gx + 1;
     }
     for cell in world.cells {
-      cx = cell_centre_x(cell.x, cell.y, auto_cam.pos_x);
-      cy = cell_centre_y(cell.y, auto_cam.pos_y);
+      (cx, cy) = cell_centre(cell.x, cell.y,
+                             view_x, view_y,
+                             auto_cam.rotation, auto_cam.tilt);
       // 0.97 shrink matches the phone client's drawHex(size * 0.97) —
       // gives a thin dark gap between adjacent hexes so the lattice
       // reads even when neighbours share a colour.
-      draw_hex(painter, hex_vao, cx, cy, HEX_SIZE * 0.97, cell.color);
+      draw_hex(painter, hex_vao, cx, cy, HEX_SIZE * 0.97,
+               auto_cam.rotation, auto_cam.tilt, cell.color);
     }
     graphics::gl_swap_buffers();
     frames = frames + 1;
