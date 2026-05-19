@@ -17,9 +17,13 @@
     0.2 — hex grid renderer (canvas 2D, axial coordinates)
     0.3 — color palette + active-color state (random pre-selection)
     0.4 — tap handling: empty / own / other distinction
+    0.6 — outer-ring pan zones (parity-safe y-pan step of 2)
+    0.7 — WebSocket client (auto-reconnect, send/recv)
+    0.8 — jump-to-active button — centres view on the latest
+          active_player_signal position; flash on receipt
   Still TODO (next session):
-    0.5 swipe + drag-erase  0.6 outer-ring pan zones  0.7 WebSocket
-    0.8 jump-to-active  0.9 onboarding-view-centring (depends on 0.7)
+    0.5 swipe + drag-erase
+    0.9 onboarding-view-centring on first activity signal
 
   Until 0.7 lands, cell state is local-only (no server).  That keeps
   the visual mechanic verifiable without depending on plan 34
@@ -121,6 +125,15 @@ function cellKey(x, y) { return x + ',' + y; }
 // authoritative offset between view centre and world (0, 0).
 let viewOffsetX = 0;
 let viewOffsetY = 0;
+
+// Most-recent (x, y) where ANOTHER player is currently active.  Updated
+// from msg_id 5 (active_player_signal) frames.  Null until the first
+// signal arrives — the Jump-to-active button is a no-op while null.
+// Used by:
+//   - The jump-active button (centre the view on this hex on click).
+//   - Phase 0.9 onboarding (centre on first signal when the page loads
+//     into a world with existing activity).
+let lastActivePos = null;
 
 // ── Hex math ─────────────────────────────────────────────────────────────────
 // POINTY-TOP hex layout with "odd-r offset" coordinates: hexes have
@@ -336,10 +349,19 @@ document.getElementById('clear-color').addEventListener('pointerdown', e => {
   e.preventDefault();
   setActiveColour(0);
 });
-// jump-to-active is a placeholder until 0.7+0.8 land.
+// Jump-to-active (sub-task 0.8): centre the view on the latest
+// active-player position broadcast by the server.  No-op if no
+// active-player signal has arrived yet.  Absolute set rather than
+// stepped pan — players don't need to follow the trajectory, they
+// just want to *see* what someone else is doing.
 document.getElementById('jump-active').addEventListener('pointerdown', e => {
   e.preventDefault();
-  // No-op until WebSocket events arrive with other players' positions.
+  if (!lastActivePos) return;
+  viewOffsetX = lastActivePos.x;
+  viewOffsetY = lastActivePos.y;
+  // Clear the flash — the user has acknowledged the prompt.
+  document.getElementById('jump-active').classList.remove('flash');
+  draw();
 });
 
 // ── WebSocket wire (sub-task 0.7 — observability MVP) ───────────────────────
@@ -437,8 +459,16 @@ function wsConnect() {
       else cells.set(cellKey(wx, wy), c);
       draw();
     } else if (id === 5) {
-      // Active-player hint — flash the jump-to-active button.  The
-      // button's `.flash` class triggers the 3-pulse keyframe.
+      // Active-player hint — record the position so the jump-to-active
+      // button can centre the view there on click, and flash the button
+      // so the user sees there is somewhere to jump to.  Payload is
+      // "x,y" in OFFSET coords (single-port server emits sender.lx,
+      // sender.ly which are integer offset coords matching cellKey).
+      const parts = payload.split(',');
+      if (parts.length === 2) {
+        const ax = parts[0] | 0, ay = parts[1] | 0;
+        lastActivePos = { x: ax, y: ay };
+      }
       const btn = document.getElementById('jump-active');
       btn.classList.remove('flash');
       void btn.offsetWidth;          // reflow → re-trigger animation
