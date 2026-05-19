@@ -1203,7 +1203,23 @@ impl State {
                 4 => key.push(Content::Long(i64::from(*self.get_stack::<bool>()))),
                 5 => key.push(Content::Str(self.string())),
                 6 => key.push(Content::Long(i64::from(*self.get_stack::<u32>()))),
-                _ => key.push(Content::Long(i64::from(*self.get_stack::<u8>()))),
+                _ => {
+                    // Narrow integer storage (Parts::Int / Short / ShortRaw /
+                    // Byte) — the lookup value is still an i64 on the stack
+                    // even when the field's storage is narrower.  Pop 8
+                    // bytes so subsequent stack reads stay aligned; the
+                    // catch-all 1-byte pop here was broken silently for
+                    // every narrow-key hash since Parts::Int was introduced.
+                    match &self.database.types[*k as usize].parts {
+                        crate::database::Parts::Int(_, _)
+                        | crate::database::Parts::Short(_, _)
+                        | crate::database::Parts::ShortRaw(_, _)
+                        | crate::database::Parts::Byte(_, _) => {
+                            key.push(Content::Long(*self.get_stack::<i64>()));
+                        }
+                        _ => key.push(Content::Long(i64::from(*self.get_stack::<u8>()))),
+                    }
+                }
             }
             // We assume that all none-base types are enumerate types.
         }

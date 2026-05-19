@@ -25,12 +25,16 @@ pub type u16 = integer limit(0, 65535) size(2);
 pub type i16 = integer limit(-32768, 32767) size(2);
 // Full 32-bit integer range, 4 bytes.
 pub type i32 = integer size(4);
-// 0 – 4_294_967_294, storage promotes to i64 (8 bytes) under Phase 2a's
-// "wide-limit → Long" rule so values up to u32::MAX round-trip.  One
-// sentinel (`i64::MIN`) reserved for null — `u32 not null` when the
-// full 2^32 range is needed.  RGBA pixel math, large file offsets,
-// and bitmasks wider than i32 all fit here.
-pub type u32 = integer limit(0, 4294967294);
+// 4-byte unsigned: 0 – 4_294_967_294.  size(4) forces 4-byte storage
+// and serialisation symmetric with `i32`.  Stored as Parts::Int so the
+// in-memory representation is signed i32; values in the upper half
+// (2^31..2^32-2) round-trip through file I/O via 4-byte raw bytes but
+// read back as negative i64s in expressions.  For full 0..2^32-1
+// values needed in expression-time arithmetic, declare the field /
+// variable as plain `integer` (8-byte) instead — `u32` is for the
+// file / wire-format use cases (magic numbers, counts, tick fields)
+// where the byte width is the load-bearing property.
+pub type u32 = integer limit(0, 4294967294) size(4);
 // --- Interfaces ---
 // Standard interfaces for bounded generic functions.
 // A type satisfies an interface by defining the required operator or method.
@@ -1127,6 +1131,16 @@ fn get_store_lock(r: reference) -> boolean;
 // store cannot affect parent state.  Compiler-generated `const`
 // wrappers call this around every `const` ref param.
 fn set_store_lock(r: reference, locked: boolean);
+#pure
+// @P290 — soft "don't free" marker for the fn-call deep-copy bracket.
+// Only suppresses `OpCopyRecord`'s `0x8000` source-free (and explicit
+// `delete`), so writes / claims from the callee stay legal — unlike
+// `set_store_lock`, which is the hard user-facing `d#lock` tripwire.
+// Compiler-emitted around every fn-call's ref-typed args; not written
+// directly from loft source.
+fn protect_store_frees(r: reference);
+#pure
+fn unprotect_store_frees(r: reference);
 #pure
 // Yield control back to the host frame loop.  Sets the interpreter's
 // `frame_yield` flag, which makes `state.execute_argv` return after

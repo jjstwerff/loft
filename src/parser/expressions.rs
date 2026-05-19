@@ -1066,6 +1066,45 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
         }
+        // @P292 — `local_v = other_var_v` where both sides are vector-typed
+        // LOCALS and the RHS is a Var read (not a fresh-storage Block / Call).
+        // Without this branch, the standard path emitted Set(v, Var(rhs))
+        // which made v alias rhs's storage; when rhs went out of scope its
+        // storage was freed → v dangled → next-iteration `len(v)` returned
+        // 0 or SEGV'd.  Mirror the field-replace path that already handled
+        // `s.v = fresh_vec`: clear v's existing storage, then append all
+        // elements from the RHS.  v's own storage stays alive across the
+        // assignment so subsequent reads are safe.
+        //
+        // RESTRICTED to Var-RHS — `scaled = map(...)` (Block RHS that creates
+        // fresh storage) goes through the standard Set path where scaled takes
+        // ownership of the freshly-created storage and there is no aliasing
+        // concern.  Var-RHS is the precise shape that aliases.  Also
+        // requires `uses(v) > 0` — at least one earlier read so v's storage
+        // has been initialised before this clear+append.
+        if !self.first_pass
+            && op == "="
+            && var_nr != u16::MAX
+            && self.vars.uses(var_nr) > 0
+            && matches!(f_type, Type::Vector(_, _))
+            && matches!(s_type, Type::Vector(_, _))
+            && matches!(code, Value::Var(_))
+            && let Type::Vector(elm_tp, _) = f_type
+        {
+            // `v = v` self-assign — emit nothing rather than clear+reappend
+            // off the same storage.
+            if matches!(code.unspan(), Value::Var(rhs_var) if *rhs_var == var_nr) {
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            let elm_tp_clone = (**elm_tp).clone();
+            let dn = self.data.type_def_nr(&elm_tp_clone);
+            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+            let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+            let append = self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]);
+            *code = Value::Insert(vec![clear, append]);
+            return Type::Void;
+        }
         // `lhs += other_vec` where both sides are vectors: append all elements
         // in-place via OpAppendVector.
         if !self.first_pass

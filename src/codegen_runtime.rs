@@ -70,6 +70,8 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_ticks",                    abi: Abi::Cell },
     RuntimeFn { name: "n_get_store_lock",           abi: Abi::Cell },
     RuntimeFn { name: "n_set_store_lock",           abi: Abi::Cell },
+    RuntimeFn { name: "n_protect_store_frees",      abi: Abi::Cell },
+    RuntimeFn { name: "n_unprotect_store_frees",    abi: Abi::Cell },
     RuntimeFn { name: "n_rand",                     abi: Abi::None },
     RuntimeFn { name: "n_rand_indices",             abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_native",        abi: Abi::Cell },
@@ -2346,6 +2348,24 @@ pub fn n_set_store_lock(cell: &std::cell::UnsafeCell<Stores>, r: DbRef, locked: 
         stores.lock_store(&r);
     } else {
         stores.unlock_store(&r);
+    }
+}
+
+/// @P290 — soft free-protect marker for the fn-call deep-copy bracket.
+/// Counterpart of `n_protect_store_frees` in `src/native.rs`.
+pub fn n_protect_store_frees(cell: &std::cell::UnsafeCell<Stores>, r: DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if r.rec != 0 && (r.store_nr as usize) < stores.allocations.len() {
+        let origin = format!("call_bracket(store_nr={}, rec={})", r.store_nr, r.rec);
+        stores.allocations[r.store_nr as usize].set_free_protected(origin);
+    }
+}
+
+/// @P290 — clear the soft free-protection.
+pub fn n_unprotect_store_frees(cell: &std::cell::UnsafeCell<Stores>, r: DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if r.rec != 0 && (r.store_nr as usize) < stores.allocations.len() {
+        stores.allocations[r.store_nr as usize].clear_free_protected();
     }
 }
 

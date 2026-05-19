@@ -9,6 +9,30 @@ use crate::keys::Content;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
+/// Compute the `Key::type_nr` discriminator for a struct field's `content`
+/// type.  Built-in base types (0..=5: integer/long/single/float/boolean/text)
+/// map to `1 + content` (1..=6) so the legacy 8-byte-int hash paths
+/// continue to work.  Narrow integer storage (`Parts::Int` / `Short` /
+/// `ShortRaw` / `Byte`) gets its own discriminator (8..=11) so the hash
+/// and compare callsites read the right byte width instead of the
+/// catch-all 1-byte fallback that silently broke `hash<Row[i32_field]>`
+/// and `hash<Row[u32_field]>` lookups.  Non-integer custom types
+/// (Struct, Hash, etc.) fall through to 7 (the historical catch-all,
+/// reads 1 byte — unchanged behaviour for nested-ref hash keys, which
+/// are unusual and unlikely to round-trip correctly anyway).
+fn key_type_nr_for_content(content: u16, types: &[Type]) -> i8 {
+    if content <= 5 {
+        return 1 + content as i8;
+    }
+    match &types[content as usize].parts {
+        Parts::Int(_, _) => 8,
+        Parts::Short(_, _) => 9,
+        Parts::Byte(_, _) => 10,
+        Parts::ShortRaw(_, _) => 11,
+        _ => 7,
+    }
+}
+
 impl Stores {
     /**
     To define the 7 base types of the language.
@@ -336,11 +360,7 @@ impl Stores {
                         self.types[t_nr].keys.clear();
                         for key_field in key_fields {
                             let fld = &fields[key_field as usize];
-                            let tp = if fld.content > 5 {
-                                7
-                            } else {
-                                1 + fld.content as i8
-                            };
+                            let tp = key_type_nr_for_content(fld.content, &self.types);
                             self.types[t_nr].keys.push(crate::keys::Key {
                                 type_nr: tp,
                                 position: fld.position,
@@ -357,11 +377,7 @@ impl Stores {
                         self.types[t_nr].keys.clear();
                         for (key_field, asc) in &key_fields {
                             let fld = &fields[*key_field as usize];
-                            let mut tp = if fld.content > 5 {
-                                7
-                            } else {
-                                1 + fld.content as i8
-                            };
+                            let mut tp = key_type_nr_for_content(fld.content, &self.types);
                             if !asc {
                                 tp = -tp;
                             }

@@ -96,7 +96,7 @@ pub struct Store {
     /// most recently locked this store.  Empty when the store is
     /// unlocked or was locked without an origin (legacy callers).
     /// Surfaced in panic messages from `addr_mut` / `claim` / `delete`
-    /// so a "Write to locked store" failure points directly at the
+    /// so a "Write to read-only store" failure points directly at the
     /// locker rather than requiring `LOFT_LOG=locks` to re-trace.
     pub lock_origin: String,
     /// P259 — type-id of the loft type whose root record lives at
@@ -515,7 +515,7 @@ impl Store {
 
     /// Lock this store + record an identifier of the lock-origin call site.
     /// The origin string surfaces in panic messages from `addr_mut` / `claim`
-    /// / `delete` so a "Write to locked store" failure points directly at the
+    /// / `delete` so a "Write to read-only store" failure points directly at the
     /// locker rather than requiring `LOFT_LOG=locks` to re-trace.
     pub fn lock_with_origin(&mut self, origin: impl Into<String>) {
         let origin = origin.into();
@@ -1524,7 +1524,14 @@ impl Store {
 
     #[inline]
     pub fn get_float(&self, rec: u32, fld: u32) -> f64 {
-        if self.valid(rec, fld) {
+        // @P284 — guard `rec != 0` like the integer getters do.  In release
+        // mode `valid()` is a no-op (all the inner checks are `debug_assert`)
+        // so without this guard a null DbRef (rec=0) reads `*self.addr(0, 0)`
+        // — the store's free-list header bytes interpreted as f64.  That
+        // garbage value (~2.8e-282 in practice) is finite, so for-loop
+        // iteration over `vector<float>` saw a non-null value past the end
+        // and looped forever.
+        if rec != 0 && self.valid(rec, fld) {
             *self.addr(rec, fld)
         } else {
             f64::NAN
@@ -1543,7 +1550,9 @@ impl Store {
 
     #[inline]
     pub fn get_single(&self, rec: u32, fld: u32) -> f32 {
-        if self.valid(rec, fld) {
+        // @P284 — sibling of `get_float`'s rec=0 guard; needed for
+        // `for s in vector<single>` to terminate.
+        if rec != 0 && self.valid(rec, fld) {
             *self.addr(rec, fld)
         } else {
             f32::NAN
@@ -1592,7 +1601,7 @@ mod tests {
 
     /// `addr_mut` on a locked store must panic (not silently discard the write).
     #[test]
-    #[should_panic(expected = "Write to locked store")]
+    #[should_panic(expected = "Write to read-only store")]
     fn write_to_locked_store_panics() {
         let mut store = Store::new(64);
         let rec = store.claim(8);
@@ -1622,7 +1631,7 @@ mod tests {
 
     /// Writing to a borrowed store panics.
     #[test]
-    #[should_panic(expected = "Write to locked store")]
+    #[should_panic(expected = "Write to read-only store")]
     fn borrow_locked_write_panics() {
         let mut store = Store::new(64);
         store.free = false;

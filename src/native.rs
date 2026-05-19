@@ -138,6 +138,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_source_dir", n_source_dir),
     ("n_get_store_lock", n_get_store_lock),
     ("n_set_store_lock", n_set_store_lock),
+    ("n_protect_store_frees", n_protect_store_frees),
+    ("n_unprotect_store_frees", n_unprotect_store_frees),
     ("n_yield_frame", n_yield_frame),
     #[cfg(feature = "threading")]
     ("n_parallel_for", n_parallel_for),
@@ -833,6 +835,27 @@ fn n_set_store_lock(stores: &mut Stores, stack: &mut DbRef) {
         stores.lock_store(&r);
     } else {
         stores.unlock_store(&r);
+    }
+}
+
+/// @P290 — soft "don't free" marker for the fn-call deep-copy bracket.
+/// Sets `free_protected = true` so `OpCopyRecord`'s `0x8000` source-free
+/// can't free a caller's arg if the callee returned a borrowed view —
+/// writes / claims from the callee stay legal (unlike `lock_store`,
+/// which is the hard user-facing `d#lock` tripwire that blocks writes).
+fn n_protect_store_frees(stores: &mut Stores, stack: &mut DbRef) {
+    let r = *stores.get::<DbRef>(stack);
+    if r.rec != 0 && (r.store_nr as usize) < stores.allocations.len() {
+        let origin = format!("call_bracket(store_nr={}, rec={})", r.store_nr, r.rec);
+        stores.allocations[r.store_nr as usize].set_free_protected(origin);
+    }
+}
+
+/// @P290 — clear the soft free-protection set by `n_protect_store_frees`.
+fn n_unprotect_store_frees(stores: &mut Stores, stack: &mut DbRef) {
+    let r = *stores.get::<DbRef>(stack);
+    if r.rec != 0 && (r.store_nr as usize) < stores.allocations.len() {
+        stores.allocations[r.store_nr as usize].clear_free_protected();
     }
 }
 

@@ -1771,6 +1771,10 @@ fn main() {
                 crate::diagnostic_render::ErrorMode::from_cli_and_env(error_mode_arg.as_deref());
             match mode {
                 crate::diagnostic_render::ErrorMode::Pretty => {
+                    // @P282 — diagnostics (warnings + errors) go to STDERR,
+                    // matching the rustc / clang convention.  This keeps the
+                    // program's STDOUT free for piped consumers (the loft
+                    // scanner, viewer state, any machine-readable output).
                     let loader = crate::diagnostic_render::FileSourceLoader::new();
                     if print_warnings {
                         let out = crate::diagnostic_render::render_pretty_all(
@@ -1778,7 +1782,7 @@ fn main() {
                             &loader,
                             crate::diagnostic_render::ColorMode::Auto,
                         );
-                        print!("{out}");
+                        eprint!("{out}");
                     } else {
                         // Errors-only: re-render entry-by-entry so we
                         // can skip Warning levels.  Mirrors render_pretty_all's
@@ -1791,8 +1795,8 @@ fn main() {
                                     &loader,
                                     crate::diagnostic_render::ColorMode::Auto,
                                 );
-                                print!("{s}");
-                                println!();
+                                eprint!("{s}");
+                                eprintln!();
                             }
                         }
                     }
@@ -1805,7 +1809,7 @@ fn main() {
                         if !print_warnings && entry.level == Level::Warning {
                             continue;
                         }
-                        println!("{}", entry.to_string_compact());
+                        eprintln!("{}", entry.to_string_compact());
                     }
                 }
             }

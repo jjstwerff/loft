@@ -411,17 +411,17 @@ fn p169_lambda_suggestion_mentions_omitting_return_type() {
         .expect("failed to invoke loft binary");
     let _ = std::fs::remove_file(&path);
     assert!(!out.status.success(), "expected parse error");
-    // Note: loft emits parse diagnostics to stdout (not stderr).
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    // @P282: loft emits parse diagnostics to STDERR (rustc / clang convention).
+    let stdout = String::from_utf8_lossy(&out.stderr);
     // The new suggestion shows `fn(x: <type>) { ... }` without mandatory
     // `-> <ret>`, and calls out `-> void` as invalid.
     assert!(
         stdout.contains("fn(x: <type>) { ... }"),
-        "suggestion should be `fn(x: <type>) {{ ... }}`; got stdout={stdout:?}"
+        "suggestion should be `fn(x: <type>) {{ ... }}`; got stderr={stdout:?}"
     );
     assert!(
         stdout.contains("`-> void` is not a valid type"),
-        "suggestion should warn about `-> void`; got stdout={stdout:?}"
+        "suggestion should warn about `-> void`; got stderr={stdout:?}"
     );
 }
 

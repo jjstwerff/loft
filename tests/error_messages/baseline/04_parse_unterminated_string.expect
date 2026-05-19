@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 fatal: String not correctly terminated
   --> <cases>/04_parse_unterminated_string.loft:2:14
   |
@@ -19,4 +20,3 @@ error: Expect token }
   |              ^
 
 error: aborting due to 3 previous errors
-==== stderr ====

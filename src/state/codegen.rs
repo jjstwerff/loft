@@ -1396,17 +1396,21 @@ impl State {
                     } else {
                         Vec::new()
                     };
-                    let lock_fn = stack.data.def_nr("n_set_store_lock");
+                    // @P290 — protect caller args from being freed by the
+                    // callee's source-free in OpCopyRecord, without blocking
+                    // writes / claims (which would crash a callee that
+                    // iterates a passed-in hash field — the original
+                    // P290 panic).
+                    let protect_fn = stack.data.def_nr("n_protect_store_frees");
+                    let unprotect_fn = stack.data.def_nr("n_unprotect_store_frees");
                     for av in &ref_args {
-                        let lock =
-                            Value::Call(lock_fn, vec![Value::Var(*av), Value::Boolean(true)]);
-                        self.generate(&lock, stack, false);
+                        let prot = Value::Call(protect_fn, vec![Value::Var(*av)]);
+                        self.generate(&prot, stack, false);
                     }
                     self.generate(&copy_val, stack, false);
                     for av in &ref_args {
-                        let unlock =
-                            Value::Call(lock_fn, vec![Value::Var(*av), Value::Boolean(false)]);
-                        self.generate(&unlock, stack, false);
+                        let unprot = Value::Call(unprotect_fn, vec![Value::Var(*av)]);
+                        self.generate(&unprot, stack, false);
                     }
                     return;
                 }
@@ -1858,10 +1862,15 @@ impl State {
         } else {
             Vec::new()
         };
-        let lock_fn = stack.data.def_nr("n_set_store_lock");
+        // @P290 — soft free-protect over the deep-copy; writes / claims
+        // from the callee remain legal.  Switched from `n_set_store_lock`
+        // (the hard user-facing `d#lock` tripwire) to dedicated
+        // `n_protect_store_frees` so the two semantics no longer collide.
+        let protect_fn = stack.data.def_nr("n_protect_store_frees");
+        let unprotect_fn = stack.data.def_nr("n_unprotect_store_frees");
         for av in &ref_args {
-            let lock = Value::Call(lock_fn, vec![Value::Var(*av), Value::Boolean(true)]);
-            self.generate(&lock, stack, false);
+            let prot = Value::Call(protect_fn, vec![Value::Var(*av)]);
+            self.generate(&prot, stack, false);
         }
         let copy_nr = stack.data.def_nr("OpCopyRecord");
         // High bit = free source store after deep copy.
@@ -1895,8 +1904,8 @@ impl State {
         );
         self.generate(&copy_val, stack, false);
         for av in &ref_args {
-            let unlock = Value::Call(lock_fn, vec![Value::Var(*av), Value::Boolean(false)]);
-            self.generate(&unlock, stack, false);
+            let unprot = Value::Call(unprotect_fn, vec![Value::Var(*av)]);
+            self.generate(&unprot, stack, false);
         }
     }
 

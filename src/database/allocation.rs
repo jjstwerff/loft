@@ -482,8 +482,12 @@ impl Stores {
         &mut self.allocations[r.store_nr as usize]
     }
 
-    /// Lock the store that contains the record pointed to by `r`.
-    /// The lock persists until explicitly cleared via `unlock_store`.
+    /// Lock the store that contains the record pointed to by `r` —
+    /// user-facing `d#lock = true` semantics.  Sets the HARD `read_only`
+    /// flag so subsequent writes / claims / deletes panic immediately;
+    /// reads remain legal.  Use `set_free_protected` directly when only
+    /// frees need blocking (e.g. the fn-call deep-copy bracket from
+    /// @P290 — currently unused but kept available).
     pub fn lock_store(&mut self, r: &DbRef) {
         if r.rec != 0 && (r.store_nr as usize) < self.allocations.len() {
             debug_assert!(
@@ -491,39 +495,17 @@ impl Stores {
                 "Locking a freed store (store_nr={}, rec={})",
                 r.store_nr, r.rec
             );
-            // @P290 — uses the SOFT free-protect flag (`free_protected`),
-            // not the hard read-only lock.  The call-bracket only needs
-            // to suppress `OpCopyRecord`'s `0x8000` source-free for
-            // borrowed-view returns; writes / claims from the callee
-            // stay legal.
-            if crate::log_config::lock_trace_enabled() {
-                eprintln!(
-                    "[locks] FREE_PROTECT store_nr={} rec={} (was_protected={})",
-                    r.store_nr,
-                    r.rec,
-                    self.allocations[r.store_nr as usize].is_free_protected(),
-                );
-            }
             let origin = format!("lock_store(store_nr={}, rec={})", r.store_nr, r.rec);
-            self.allocations[r.store_nr as usize].set_free_protected(origin);
+            self.allocations[r.store_nr as usize].lock_with_origin(origin);
         }
     }
 
-    /// Clear the call-bracket free-protection from the store containing
-    /// `r`.  Worker borrows / CONST_STORE / sentinel stores carry the
-    /// HARD `read_only` lock instead, which this never touches.
+    /// Unlock the store that contains the record pointed to by `r` —
+    /// counterpart of `lock_store`.  Clears the user-facing read_only
+    /// lock; leaves `free_protected` untouched.
     pub fn unlock_store(&mut self, r: &DbRef) {
         if r.rec != 0 && (r.store_nr as usize) < self.allocations.len() {
-            let store = &mut self.allocations[r.store_nr as usize];
-            if crate::log_config::lock_trace_enabled() {
-                eprintln!(
-                    "[locks] FREE_UNPROTECT store_nr={} rec={} (was_protected={})",
-                    r.store_nr,
-                    r.rec,
-                    store.is_free_protected(),
-                );
-            }
-            store.clear_free_protected();
+            self.allocations[r.store_nr as usize].unlock();
         }
     }
 

@@ -394,7 +394,15 @@ impl Parser {
                     ("filter", 1) => {
                         Some(Type::Function(vec![elem], Box::new(Type::Boolean), vec![]))
                     }
-                    ("reduce", 1) => Some(Type::Function(
+                    // @P288 — `v.reduce(init, |acc, x| {…})`: the lambda is
+                    // ARG 2 (init is arg 1), so the hint goes on m_arg_idx == 2.
+                    // Both lambda params take the vector's element type; the
+                    // accumulator inherits the init's type but the inference
+                    // here uses elm uniformly because every primitive case
+                    // (sum, max, min, count) keeps acc and elm in the same
+                    // numeric domain.  Heterogeneous reduce can still use the
+                    // free-function form which supplies explicit types.
+                    ("reduce", 2) => Some(Type::Function(
                         vec![elem.clone(), elem.clone()],
                         Box::new(elem),
                         vec![],

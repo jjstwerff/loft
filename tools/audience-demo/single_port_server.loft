@@ -179,10 +179,10 @@ fn world_save(world: World) {
   {
     f = file(WORLD_FILE);
     f#format = LittleEndian;
-    f += (WORLD_FILE_MAGIC   as i32);
-    f += (WORLD_FILE_VERSION as i32);
-    f += (world.tick as i32);
-    f += (n as i32);
+    f += (WORLD_FILE_MAGIC   as u32);
+    f += (WORLD_FILE_VERSION as u32);
+    f += (world.tick as u32);
+    f += (n as u32);
     for c in world.cells {
       f += c.x;
       f += c.y;
@@ -205,31 +205,22 @@ fn world_load(world: World) {
   // Auto-detect v1 vs v2 by peeking the first 4 bytes against the magic.
   // v1 puts a count there; counts < magic in practice so a magic match
   // unambiguously means v2.
-  // All header / count / tick fields are stored as i32.  i32 cleanly
-  // covers the magic (1145852503), the format version, the world tick
-  // (~6.8 years of 10 Hz ticks), and any plausible cell count.  Using
-  // i32 instead of u32 dodges a pass-1 inference quirk where bare
-  // `f#read as u32` was reading 8 bytes when the result later flowed
-  // into a plain `integer` local.  Per-cell birth_tick stays u32 in
-  // the struct (the field's declared type drives the write width),
-  // but on read we land it through an i32 trampoline for the same
-  // reason.
-  head = f#read as i32;
+  head = f#read as u32;
   loaded = 0;
   if head == WORLD_FILE_MAGIC {
-    version = f#read as i32;
+    version = f#read as u32;
     if version != WORLD_FILE_VERSION {
       println("single-port: snapshot version {version} not understood (expected {WORLD_FILE_VERSION}) — starting empty");
       return;
     }
-    world.tick = f#read as i32;
-    n = f#read as i32;
+    world.tick = f#read as u32;
+    n = f#read as u32;
     i = 0;
     while i < n {
       x          = f#read as i32;
       y          = f#read as i32;
       c          = f#read as u8;
-      birth_tick = f#read as i32;
+      birth_tick = f#read as u32;
       if c >= 1 && c <= 9 {
         k = cell_key(x, y);
         if world.cells[k] == null {

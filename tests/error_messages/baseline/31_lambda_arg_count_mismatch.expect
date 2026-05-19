@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 error: Function reference 'add' expects 2 argument(s), got 1
   --> <cases>/31_lambda_arg_count_mismatch.loft:3:19
   |
@@ -13,4 +14,3 @@ warning: Variable add is never read
   |        ^
 
 error: aborting due to 1 previous error
-==== stderr ====

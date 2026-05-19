@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 error: match on Color is not exhaustive — missing: Blue; add the missing variants or a '_ =>' wildcard
   --> <cases>/29_enum_match_non_exhaustive.loft:4:10
   |
@@ -7,4 +8,3 @@ error: match on Color is not exhaustive — missing: Blue; add the missing varia
   |          ^
 
 error: aborting due to 1 previous error
-==== stderr ====

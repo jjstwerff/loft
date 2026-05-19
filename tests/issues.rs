@@ -9383,12 +9383,12 @@ fn test() { }"
     )
     .error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:371:24 — pick a different name \
+         at default{s}01_code.loft:375:24 — pick a different name \
          at p156_vector_element_shadows_constant:1:11"
     ))
     .error(&format!(
         "'E' is a Constant, not a type — the element of vector<T> must be a \
-         struct or enum (defined at default{s}01_code.loft:371:24) \
+         struct or enum (defined at default{s}01_code.loft:375:24) \
          at p156_vector_element_shadows_constant:2:26"
     ));
 }
@@ -10421,6 +10421,110 @@ fn test() {
     assert(s.rows[1].name == \"one\", \"sorted[1]\");
     assert(s.rows[2].name == \"two\", \"sorted[2]\");
     assert(s.rows[3].name == \"three\", \"sorted[3]\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P293 regression — `hash<Row[i32_field]>` lookup silently returned
+/// null because (a) `determine_keys` mapped any non-built-in content
+/// type (including Parts::Int) to `type_nr = 7` (the byte fallback),
+/// (b) `read_key`'s catch-all popped 1 byte off the stack while the
+/// lookup value was pushed as a full i64, and (c) the `hash_ref` /
+/// `compare_key` / `get_key` paths in keys.rs only knew about the
+/// legacy 8-byte `integer` storage.  Fixed by extending all four
+/// paths to recognise Parts::Int / Short / ShortRaw / Byte.  Same
+/// bug surfaced from `f#read as u32` (the original P293 report) once
+/// `u32` was given `size(4)` to make file-I/O width predictable; the
+/// narrow-key hash fix landed alongside.
+#[test]
+fn p293_narrow_key_hash_lookup() {
+    code!(
+        "struct P293Row { rid: i32 not null, name: text }
+struct P293Db { rows: hash<P293Row[rid]> }
+fn test() {
+    h = P293Db { rows: [] };
+    h.rows += [P293Row { rid: 42, name: \"forty-two\" }];
+    h.rows += [P293Row { rid: 7, name: \"seven\" }];
+    h.rows += [P293Row { rid: 100, name: \"hundred\" }];
+    found42 = h.rows[42];
+    found7  = h.rows[7];
+    foundX  = h.rows[100];
+    miss    = h.rows[999];
+    assert(found42 != null, \"42 present\");
+    assert(found7  != null, \"7 present\");
+    assert(foundX  != null, \"100 present\");
+    assert(miss    == null, \"999 absent\");
+    assert(found42.name == \"forty-two\", \"hash[42] value\");
+    assert(found7.name  == \"seven\",     \"hash[7] value\");
+    assert(foundX.name  == \"hundred\",   \"hash[100] value\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P284 — `for f in vector<float>` looped forever past the end yielding
+/// a garbage subnormal (~2.8e-282).  Root cause: `Store::get_float` /
+/// `get_single` skipped the `rec != 0` guard that `get_int` already has,
+/// so a null DbRef (rec=0, returned by `OpGetVectorNullable` for OOB)
+/// read `*addr(0, 0)` (the store's free-list header) in release mode —
+/// the `valid()` asserts inside are debug-only.  Fixed by adding the
+/// `rec != 0` guard to both float getters; null DbRefs now return
+/// `f64::NAN` / `f32::NAN`, the for-loop's value-truthiness check then
+/// evaluates to false and breaks.
+#[test]
+fn p284_vector_float_iteration_terminates() {
+    code!(
+        "fn test() {
+    v: vector<float> = [1.0, 2.0, 3.0];
+    sum = 0.0;
+    count = 0;
+    for f in v {
+        sum = sum + f;
+        count = count + 1;
+        if count > 100 { return; }
+    }
+    assert(count == 3, \"loop terminates after 3 elements\");
+    assert(sum > 5.9 && sum < 6.1, \"sum approximately 6.0\");
+    sv: vector<single> = [1.0f, 2.0f, 3.0f];
+    sc = 0;
+    for _ in sv {
+        sc = sc + 1;
+        if sc > 100 { return; }
+    }
+    assert(sc == 3, \"single iteration terminates after 3 elements\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P292 — `v = new_v` where `new_v` is loop-scoped and `v` is outer-scoped
+/// used to corrupt `v`'s storage on the next iteration: subsequent reads
+/// of `v[j]` reported `index J out of bounds for length 0` (or SEGV when
+/// the next iter's `new_v: vector<integer> = []` allocation landed on the
+/// just-freed storage).  The accumulator pattern
+/// `v: vector<T> = []; for i { new_v: vector<T> = []; for j { new_v += [v[j]] }; new_v += [i]; v = new_v }`
+/// is the canonical reproducer.  Fixed by extending the field-replace
+/// `OpClearVector + OpAppendVector` path to cover local-var vector
+/// re-assignment when the RHS is a Var read (the only shape that aliases —
+/// fresh-storage calls / comprehensions go through the standard Set path).
+#[test]
+fn p292_vector_reassign_from_loop_local() {
+    code!(
+        "fn test() {
+    v: vector<integer> = [];
+    v += [10];
+    for i in 0..3 {
+        new_v: vector<integer> = [];
+        for j in 0..len(v) { new_v += [v[j]]; }
+        new_v += [i];
+        v = new_v;
+    }
+    assert(len(v) == 4, \"v has 4 elements after 3 iters of (copy + append)\");
+    assert(v[0] == 10, \"v[0] = 10 (initial)\");
+    assert(v[1] == 0,  \"v[1] = 0 (iter 0)\");
+    assert(v[2] == 1,  \"v[2] = 1 (iter 1)\");
+    assert(v[3] == 2,  \"v[3] = 2 (iter 2)\");
 }"
     )
     .result(Value::Null);

@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 error: Unknown variable 'x'
   --> <cases>/11_type_var_uninitialised.loft:2:13
   |
@@ -31,4 +32,3 @@ fatal: Nested string literal not correctly terminated
   |                ^
 
 error: aborting due to 5 previous errors
-==== stderr ====

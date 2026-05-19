@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 error: cannot iterate over integer; expected vector, sorted, index, hash, text, or range
   --> <cases>/32_iter_wrong_collection_type.loft:2:15
   |
@@ -19,4 +20,3 @@ error: Expect token ;
   |               ^
 
 error: aborting due to 3 previous errors
-==== stderr ====
