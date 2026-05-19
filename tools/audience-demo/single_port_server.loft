@@ -42,10 +42,15 @@ PORT = 18083;
 // ── World + client state ─────────────────────────────────────────────────────
 
 struct Cell {
-  ck:    text not null,
-  x:     i32 not null,    // typed at field declaration → `f += c.x` writes 4 bytes
-  y:     i32 not null,    // automatically, no `as i32` cast at the write site
-  color: u8 not null,
+  ck:         text not null,
+  x:          i32 not null,    // typed at field declaration → `f += c.x` writes 4 bytes
+  y:          i32 not null,    // automatically, no `as i32` cast at the write site
+  color:      u8 not null,
+  birth_tick: u32 not null,    // world.tick at creation — age = world.tick - birth_tick.
+                               // 10 Hz tick rate ⇒ u32 won't wrap for ~13 years of
+                               // continuous run.  Reset on a true re-paint (seed
+                               // that creates a brand-new Cell); preserved across
+                               // server restarts via the persisted snapshot.
 }
 
 struct Client {
@@ -64,6 +69,13 @@ struct World {
                                      // — wraps every ~35 min, harmless for a 5 s
                                      // window: a wrap during the window just skips
                                      // one snapshot until the next dirty event
+  tick:         integer not null,    // monotonic 10 Hz wall-clock counter (sub-task
+                                     // 1.4 partial — growth/age only; decay deferred).
+                                     // Each non-empty cell records its birth_tick so
+                                     // age = world.tick - birth_tick (in 100 ms units).
+  last_tick_us: integer not null,    // ticks() of the most recent tick-advance —
+                                     // same wrap caveat as last_save_us; a wrap
+                                     // simply delays the next tick by one window.
 }
 
 // ── Wire helpers — leaves first (@P281) ─────────────────────────────────────
@@ -129,12 +141,33 @@ fn read_index() -> text {
 // when the timer elapses (NOT on every paint), so the per-event hot path
 // stays free of disk I/O.
 //
-// File layout (little-endian, matches the eventual full snapshot format
-// minus the signature + epoch header):
-//   [4B u32 count]
-//   count × { [4B i32 x] [4B i32 y] [1B u8 color] }
+// File layout (little-endian, versioned).  v2 adds the world tick +
+// per-cell birth_tick so age survives a server restart (sub-task 1.4).
+//
+//   v1 (legacy — written by commits prior to the tick loop):
+//     [4B u32 count]
+//     count × { [4B i32 x] [4B i32 y] [1B u8 color] }
+//
+//   v2 (current):
+//     [4B u32 magic = 'WRLD' = 0x444C5257 little-endian]
+//     [4B u32 version = 2]
+//     [4B u32 world.tick]
+//     [4B u32 count]
+//     count × { [4B i32 x] [4B i32 y] [1B u8 color] [4B u32 birth_tick] }
+//
+// world_load auto-detects by peeking the first 4 bytes — if it matches
+// the magic we read v2; otherwise we fall back to v1 (no tick, all
+// cells get birth_tick = 0 so the loaded world reads as "fully grown"
+// to renderers that compute age via world.tick - birth_tick).
 WORLD_FILE = "tools/audience-demo/world.bin";
+WORLD_FILE_MAGIC   = 0x444C5257;    // 'WRLD' as little-endian u32
+WORLD_FILE_VERSION = 2;
 SNAPSHOT_INTERVAL_US = 5000000;      // 5 s in µs (fits in i32; ticks() diff promoted to long at the compare site)
+// Tick cadence — 10 Hz (resolved in 01-server-state.md § Tick loop).
+// The main loop advances world.tick by `(now - last_tick_us) / TICK_INTERVAL_US`
+// every iteration so a long sleep / GC pause catches up rather than
+// silently dropping ticks.
+TICK_INTERVAL_US = 100000;           // 100 ms in µs
 
 // Byte widths come from each field's declared type — `c.x: i32`
 // writes 4 bytes automatically, `c.color: u8` writes 1.  The only
@@ -146,16 +179,20 @@ fn world_save(world: World) {
   {
     f = file(WORLD_FILE);
     f#format = LittleEndian;
+    f += (WORLD_FILE_MAGIC   as i32);
+    f += (WORLD_FILE_VERSION as i32);
+    f += (world.tick as i32);
     f += (n as i32);
     for c in world.cells {
       f += c.x;
       f += c.y;
       f += c.color;
+      f += c.birth_tick;
     }
   }
   world.dirty = false;
   world.last_save_us = ticks();
-  println("single-port: [snapshot saved] {n} cells → {WORLD_FILE}");
+  println("single-port: [snapshot saved] tick={world.tick} cells={n} → {WORLD_FILE}");
 }
 
 fn world_load(world: World) {
@@ -165,23 +202,64 @@ fn world_load(world: World) {
   }
   f = file(WORLD_FILE);
   f#format = LittleEndian;
-  n = f#read as i32;
+  // Auto-detect v1 vs v2 by peeking the first 4 bytes against the magic.
+  // v1 puts a count there; counts < magic in practice so a magic match
+  // unambiguously means v2.
+  // All header / count / tick fields are stored as i32.  i32 cleanly
+  // covers the magic (1145852503), the format version, the world tick
+  // (~6.8 years of 10 Hz ticks), and any plausible cell count.  Using
+  // i32 instead of u32 dodges a pass-1 inference quirk where bare
+  // `f#read as u32` was reading 8 bytes when the result later flowed
+  // into a plain `integer` local.  Per-cell birth_tick stays u32 in
+  // the struct (the field's declared type drives the write width),
+  // but on read we land it through an i32 trampoline for the same
+  // reason.
+  head = f#read as i32;
   loaded = 0;
-  i = 0;
-  while i < n {
-    x = f#read as i32;
-    y = f#read as i32;
-    c = f#read as u8;
-    if c >= 1 && c <= 9 {
-      k = cell_key(x, y);
-      if world.cells[k] == null {
-        world.cells += [Cell{ck: k, x: x, y: y, color: c}];
-        loaded = loaded + 1;
-      }
+  if head == WORLD_FILE_MAGIC {
+    version = f#read as i32;
+    if version != WORLD_FILE_VERSION {
+      println("single-port: snapshot version {version} not understood (expected {WORLD_FILE_VERSION}) — starting empty");
+      return;
     }
-    i = i + 1;
+    world.tick = f#read as i32;
+    n = f#read as i32;
+    i = 0;
+    while i < n {
+      x          = f#read as i32;
+      y          = f#read as i32;
+      c          = f#read as u8;
+      birth_tick = f#read as i32;
+      if c >= 1 && c <= 9 {
+        k = cell_key(x, y);
+        if world.cells[k] == null {
+          world.cells += [Cell{ck: k, x: x, y: y, color: c, birth_tick: birth_tick}];
+          loaded = loaded + 1;
+        }
+      }
+      i = i + 1;
+    }
+    println("single-port: loaded {loaded} cells (v2) from {WORLD_FILE} — resuming at tick={world.tick}");
+  } else {
+    // v1 — head was the cell count.  No tick was persisted, so the
+    // restored world reads as "always existed" (every birth_tick = 0).
+    n = head;
+    i = 0;
+    while i < n {
+      x = f#read as i32;
+      y = f#read as i32;
+      c = f#read as u8;
+      if c >= 1 && c <= 9 {
+        k = cell_key(x, y);
+        if world.cells[k] == null {
+          world.cells += [Cell{ck: k, x: x, y: y, color: c, birth_tick: 0}];
+          loaded = loaded + 1;
+        }
+      }
+      i = i + 1;
+    }
+    println("single-port: loaded {loaded} cells (v1 legacy) from {WORLD_FILE} — birth_tick reset to 0");
   }
-  println("single-port: loaded {loaded} cells from {WORLD_FILE}");
 }
 
 // Broadcast a frame to every client that's still marked active.  send()
@@ -228,7 +306,8 @@ fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) 
       // other-colour tap → ignore
       return;
     }
-    world.cells += [Cell{ck: k, x: x, y: y, color: c}];
+    world.cells += [Cell{ck: k, x: x, y: y, color: c,
+                         birth_tick: world.tick}];
     sender.lx = x;
     sender.ly = y;
     broadcast(world, delta_frame(x, y, c));
@@ -300,8 +379,12 @@ fn main() {
     clients: [],
     dirty: false,
     last_save_us: ticks(),
+    tick:         0,         // overwritten by world_load if a v2 snapshot exists
+    last_tick_us: ticks(),
   };
   world_load(world);
+  world.last_tick_us = ticks();    // reset the cadence clock to "now" after
+                                   // load so a tick doesn't fire mid-init
 
   while true {
     work = 0;
@@ -341,7 +424,33 @@ fn main() {
     // 2. Poll each WS client for pending messages.
     work = work + poll_clients(world);
 
-    // 3. Persistence — periodic snapshot.  Fires from the main loop
+    // 3. Tick advance — fixed-rate wall clock @ 10 Hz (sub-task 1.4
+    //    partial: growth/age only, decay deferred).  Every iteration
+    //    we check `ticks() - world.last_tick_us` and advance as many
+    //    ticks as fit in the elapsed window — so a long pause catches
+    //    up rather than dropping ticks silently.  Renderers read
+    //    `world.tick - cell.birth_tick` (in 100 ms units) as the cell's
+    //    age and scale visual growth from that.  No autonomous mutation
+    //    of cells here yet; the loop just turns the clock.
+    now_us = ticks();
+    elapsed = now_us - world.last_tick_us;
+    if elapsed >= TICK_INTERVAL_US {
+      ticks_due = elapsed / TICK_INTERVAL_US;
+      world.tick = world.tick + ticks_due;
+      world.last_tick_us = world.last_tick_us + ticks_due * TICK_INTERVAL_US;
+      // Heartbeat log every 600 ticks (= ~1 min @ 10 Hz) so the loop's
+      // liveness is visible without spamming.  Modulo via subtract-
+      // and-divide because loft's `%` is integer-only and the wrap
+      // shape needs no edge-case handling for u32-bounded ticks.
+      cycle = world.tick - (world.tick / 600) * 600;
+      if cycle < ticks_due {
+        ncells: integer = 0;
+        for _ in world.cells { ncells = ncells + 1; }
+        println("single-port: [tick] world.tick={world.tick} cells={ncells}");
+      }
+    }
+
+    // 4. Persistence — periodic snapshot.  Fires from the main loop
     //    only when (a) state changed since last save, AND (b) at least
     //    SNAPSHOT_INTERVAL_US has elapsed.  The save runs synchronously
     //    here for now — that's fine because (i) it only fires every 5 s
@@ -352,9 +461,11 @@ fn main() {
       world_save(world);
     }
 
-    // 4. Idle yield when no work — keeps CPU low.  2 ms keeps the
+    // 5. Idle yield when no work — keeps CPU low.  2 ms keeps the
     //    accept-loop latency under 5 ms which is well below the user-
-    //    perceptible threshold for paint roundtrips.
+    //    perceptible threshold for paint roundtrips.  Also tight
+    //    enough that a 100 ms tick window can't drift more than a
+    //    couple of ms behind in practice.
     if work == 0 { web::sleep_ms(2); }
   }
 }
