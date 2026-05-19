@@ -14,6 +14,15 @@ opens a 1280×800 OpenGL window, subscribes to the multi-client server,
 and renders the hex world as a flat-2D pointy-top grid with the
 empty-cell backdrop visible for spatial reference.
 
+**Per the 2026-05-21 design clarification:** the OpenGL client is BOTH
+the projector (3D crystals only, auto-camera, no ground grid) AND
+the desktop client (3D crystals + 2D ground layer, user mouse paints
+into the ground layer).  The flat-2D rendering that already ships
+stays — it becomes the desktop client's GROUND LAYER, and the 3D
+crystal mesh layers on top.  Mode flags (planned, not yet wired):
+`--projector` hides the ground + locks the camera to auto-mode;
+default = desktop client with both layers visible + mouse-paintable.
+
 Auto-camera shipped (matches the Auto-camera section below, just on
 2D first):
 - **FPS pose**: tilt = pitch, rotation = yaw, position = ground
@@ -237,6 +246,49 @@ stages without touching server code.
 Rendering note: the fade applies to the crystal mesh only — the
 projector still does not render the base hex lattice at all, so
 the fade has nothing to mute on empty cells.
+
+### Chunked mesh lifecycle — bounded memory + render cost
+
+**Mesh lifetime tracks 32×32 chunks, not individual cells.**  This
+matches the server-side `lib/world` chunk layout (the same one the
+phone client + audience server already use) and bounds the projector's
+mesh count to "chunks within the camera's draw distance" rather than
+"every cell painted in the lifetime of the demo".
+
+Per chunk in the projector:
+
+| State | Meaning | Renders? |
+|---|---|---|
+| **Unloaded** | Chunk's cells exist in the server world map but no GPU meshes built | No |
+| **Loading** | Chunk just entered fade range; per-cell meshes being built (one per frame to spread cost) | Partial — only the cells already built |
+| **Loaded** | All cells' meshes built and uploaded | Yes (with distance fade alpha applied) |
+| **Fading** | Camera moving away; alpha decaying toward 0 over the fade band | Yes (decaying alpha) |
+| **Discarded** | Alpha reached 0; GPU meshes freed | No |
+
+Per frame, the projector computes each chunk's distance from the
+camera centre and transitions states accordingly:
+
+- Distance < `CAMERA_FADE_START_HEXES`: chunk loads (if not already)
+  and renders at full alpha.
+- `CAMERA_FADE_START_HEXES` < distance < `CAMERA_FADE_START_HEXES +
+  CAMERA_FADE_BAND_HEXES`: chunk renders with `alpha = 1 - (d - start)
+  / band`.  No new cell mesh built for this chunk in fading state —
+  only existing meshes fade out.
+- Distance > `CAMERA_FADE_START_HEXES + CAMERA_FADE_BAND_HEXES`:
+  chunk discarded.  GPU buffers freed.
+
+When a new audience paint lands in a chunk that's currently in
+`Fading` or `Discarded` state, the chunk stays in that state — the
+new paint waits until the camera approaches that chunk again before
+its mesh is built and shown.  This is intentional: the user explicitly
+wants the chunk system to be used as a **fade-out + don't-paint-next
+mechanism** so the projector never grows unbounded mesh storage and
+never tries to render activity in chunks the audience can't see.
+
+The natural consequence: chunks beyond fade distance accumulate
+server-side state but contribute zero GPU cost.  Memory + render time
+stay bounded by `(chunks_in_view) × (32 × 32)` cells, regardless of
+total demo runtime.
 
 ### Visible structure on an empty world
 
