@@ -320,12 +320,12 @@ heartbeat and matches the sluggish-by-design tempo.
   snapshot of all chunks first, then begins streaming deltas
   starting from that point.  Simplest invariant; new clients
   start consistent without bloating the steady-state stream.
-- ~~**Persistence**~~ — RESOLVED 2026-05-10: no persistence
-  needed.  The decay rule self-cleans the data structures over
-  time; a crash-recovery restart from blank produces the same
-  end-state the decay rule would have produced anyway given
-  enough time.  No `--persist` flag, no snapshot file, no
-  startup-restore path.
+- **Persistence** — REOPENED 2026-05-21.  Original 2026-05-10
+  resolution (no persistence; decay self-cleans) holds for
+  *crash* recovery, but development iteration and clean restart
+  of the server should NOT lose the audience's painting.  Full
+  design captured in [§ Persistence — snapshot + change log](#persistence--snapshot--change-log)
+  below; not yet implemented.
 - ~~**Bandwidth ceiling**~~ — RESOLVED 2026-05-10 as a
   measurement target, not a hard cap: phase 1's load-test
   deliverable (`--load-test 30` for 5 minutes) measures actual
@@ -341,6 +341,209 @@ heartbeat and matches the sluggish-by-design tempo.
   network RTT).  Simplest invariant; impossible to desync; one
   truth.  Re-evaluate only if rehearsal shows the input lag
   feels disconnected.
+
+## Persistence — snapshot + change log
+
+*(Designed 2026-05-21; not yet implemented.  Reopens the
+2026-05-10 "no persistence" decision for the clean-restart case
+— crash recovery is still considered acceptable to lose, per
+the original reasoning.)*
+
+### Goals
+
+- **Survive clean server restart** without losing the audience's
+  painting.  The dev iteration loop (edit the server, restart,
+  pick up where we left off) should be transparent — the
+  projector reconnects, the world is still there.
+- **Per-event hot path stays fast.**  Every paint / clear /
+  colour-select runs in the WebSocket-event loop; any
+  per-event disk I/O cost is paid for every audience tap.  Cap
+  it at "fixed-size append, < 50 µs" so the round-trip latency
+  stays below the user-perceptible threshold (~100 ms).
+- **Bounded restart-replay time.**  However big the log grows,
+  startup should take O(1) wrt total demo runtime — i.e., load
+  a snapshot in constant time + replay the small tail since the
+  snapshot.
+
+### Two-file architecture: snapshot + log
+
+```
+tools/audience-demo/world.snapshot     # full world dump
+tools/audience-demo/world.log          # change log since snapshot
+```
+
+The **snapshot file** is a full dump of `world.cells` at a point
+in time.  Layout (little-endian):
+
+```
+[8B sig "AUD-SNAP"] [4B u32 epoch_id] [4B u32 cell_count]
+[cell_count × { [4B i32 x] [4B i32 y] [1B u8 colour] }]
+[16B trailer "AUD-SNAP-END\0\0\0\0"]
+```
+
+- `epoch_id` increments every time a new snapshot is written.
+  Used to match the snapshot with the change log: the log
+  records its own `epoch_id` in its header, and a mismatch on
+  startup means the log is stale (refers to an older snapshot
+  that's been replaced) and should be discarded.
+- Trailer marker tells the loader that the write completed
+  cleanly.  If absent, the file was killed mid-write —
+  fall back to the previous snapshot file (kept as
+  `world.snapshot.prev` for one generation).
+
+The **change log file** is an append-only stream of paint /
+erase events since the latest snapshot.  Per-event record (9
+bytes):
+
+```
+[4B i32 x] [4B i32 y] [1B u8 colour]    # colour=0 = erase, 1-9 = paint
+```
+
+Log header (16 bytes, written once when the log is created):
+
+```
+[8B sig "AUD-LOG\0"] [4B u32 epoch_id] [4B u32 reserved]
+```
+
+The log file APPENDS for each event — no full rewrite, just
+one 9-byte tail-write.  Per-event cost is one syscall + 9 byte
+copy, well under the latency budget.
+
+### Background snapshot writer
+
+A separate worker (designed as a loft `parallel { … }` worker
+once loft exposes long-lived background workers — currently
+the practical fallback is "do it in the main loop on a timer")
+periodically:
+
+1. Increments the in-process `epoch_id`.
+2. Atomically renames `world.snapshot` → `world.snapshot.prev`
+   (if it exists).
+3. Writes a fresh `world.snapshot.tmp` from a consistent read
+   of `world.cells` at the start of the snapshot.
+4. fsync + rename `world.snapshot.tmp` → `world.snapshot`.
+5. Truncates `world.log` to the header only (epoch_id updated
+   to the new value).
+6. Logs a single line to stdout:
+   `single-port: [snapshot saved] epoch={N} cells={C} bytes={B}`
+   — outside watchers (and the dev iteration loop) can grep
+   for this to know the on-disk state is current.
+
+The snapshot interval is configurable (default ~5 s); each
+snapshot bounds the log size and bounds the replay time on
+restart.
+
+### Startup load sequence
+
+1. Open `world.snapshot`.  If trailer is missing OR file
+   doesn't exist, try `world.snapshot.prev`.  If neither
+   loads cleanly, start with an empty world.
+2. Read all cells from the snapshot into `world.cells`.
+3. Open `world.log`.  If its header `epoch_id` matches the
+   snapshot's, replay every 9-byte record in order.  Apply:
+   - colour ∈ [1..9]: insert or recolour the cell at (x, y).
+   - colour == 0: erase the cell at (x, y).
+4. If the log's `epoch_id` does NOT match (i.e., the log is
+   for an old snapshot that's been replaced), discard the
+   log and start with just the snapshot's contents.
+5. Print summary:
+   `single-port: loaded snapshot epoch={N} cells={C}, replayed {R} log records → {T} live cells`
+
+### Crash safety (not in tonight's scope)
+
+The current design tolerates "clean shutdown" (SIGTERM /
+Ctrl+C) and "OS-kill mid-snapshot" (the trailer + prev-file
+fallback covers it).  It does NOT yet tolerate "OS-kill
+mid-log-append" — a partial 9-byte record at the tail of
+`world.log` is detected (file size not a multiple of 9 + log
+header) and the partial record is discarded, but the previous
+records replay cleanly.
+
+What this design does NOT yet do, and that @PLAN38 picks up:
+
+- **Per-record CRC** — a torn write inside a 9-byte record
+  could write garbage that passes the size check.  CRC at the
+  byte level catches this.
+- **WAL fsync per record** — currently fsync is per-snapshot
+  only; a paint that arrived 1 second before an OS-kill may
+  not yet be on disk.  For the audience demo this is the
+  bounded-loss the user explicitly accepted ("not yet for
+  emergencies").
+- **mmap-backed storage** — true mmap would let the kernel
+  handle the snapshot writes in the background entirely; loft
+  doesn't expose this from the language side yet
+  (`src/store.rs::open` exists as a Rust API but no `n_store_*`
+  native binding maps it to loft programs).
+
+### Loft-side blockers
+
+**Blocker 1 — `file()` always truncates existing files.**  Loft's
+binary write path opens via `File::create(&file_name)`
+(`src/state/io.rs:200`), which truncates on every open.  The
+append-only `world.log` design cannot be implemented without a
+file-API change: every `file(path)` call destroys the file's
+existing content.
+
+**Designed fix — semantic change to `file()`:**
+
+- **New behaviour:** `file(path)` opens an existing file for
+  read+write (preserves content; cursor at start).  Creates an
+  empty file if missing.  Writes via `f += value` go at the
+  current cursor position; subsequent writes advance the cursor.
+  Use `f#next = f.size` to seek to the end before writing —
+  that gives true append-mode.
+- **Current behaviour to retire:** truncate-on-open.  Programs
+  that genuinely want to overwrite a file from scratch will
+  explicitly opt in with a new `f.truncate()` method called
+  before the first write, OR a separate `file_create(path)`
+  function (truncate semantics; current `file()` behaviour
+  preserved under a new name).
+- **Rust implementation:** swap `File::create(&file_name)` for
+  `OpenOptions::new().read(true).write(true).create(true).open(&file_name)`
+  in `src/state/io.rs`.  The `open()` variant preserves existing
+  content; `create(true)` ensures missing files are created as
+  empty.  `read(true)` lets the same handle service `f#read(n)`
+  calls.
+- **Migration cost:** every existing loft program that does
+  `f = file("out.txt"); f.write("hello")` must add an explicit
+  truncate or move to `file_create()`.  Affected sites grep'd
+  with `grep -rn "file(.*)\.write\|f += " --include='*.loft'`.
+  Audit before landing the change.
+- **Why the breaking change is worth it:** the current default
+  is a silent data-loss footgun — any program that opens a
+  file to read its size or seek inside it destroys the file
+  the moment `file()` returns.  A "preserve unless explicitly
+  truncated" default matches Rust's `OpenOptions` default and
+  every other language's file-open convention.  File this as a
+  P-issue under PROBLEMS.md (next free P#); the persistence
+  design here depends on its resolution.
+
+**Blocker 2 — long-lived `parallel { … }` worker.**  Loft's
+`parallel` blocks until all workers return, so a forever-running
+snapshot worker would never let the main thread exit.  Designs
+that need a background worker today have to either:
+
+- Run the snapshot synchronously on a timer in the main loop
+  (the periodic-snapshot fallback below), OR
+- Spawn a separate loft process and communicate via the
+  filesystem (heavy for a single demo binary).
+
+Long-running background workers are a language gap; not
+in @PLAN36's scope to fix.  Capture it as an open ask under
+THREADING.md when next prioritised.
+
+### Fallback if blockers don't unblock
+
+The practical fallback for "just persist the data" without the
+loft-side changes above is to skip the change-log entirely and
+write the full snapshot synchronously on a timer (every ~5 s,
+bounded loss = 5 s of paints).  Costs O(N) per snapshot but is
+non-blocking from the per-event perspective (only fires when the
+timer elapses, not on every paint).  This is the
+"minimum-viable persistence" subset of the full design — pick
+it up explicitly as a follow-up sub-task rather than freelance
+it, and once the file-API blocker clears, evolve it into the
+snapshot + log design above.
 
 ## Deliverable
 
