@@ -10613,6 +10613,105 @@ fn test() {
     .result(Value::Null);
 }
 
+/// P281 — caller defined BEFORE callee in the same file: the
+/// caller's body parses with the callee unregistered, the call
+/// returns `Type::Unknown(0)`, the receiving local stays Unknown,
+/// and any `.method(args)` chain on it trips "Expect token ;"
+/// in pass-1 (because pass-1's `field()` Unknown-receiver branch
+/// consumed the method name but not the trailing `(args)`).
+///
+/// The two-pass parser ALREADY has the right architecture — pass
+/// 2 sees every fn registered and re-parses bodies cleanly.  The
+/// fix in `src/parser/fields.rs::field` makes pass-1 also consume
+/// the `(args)` so no spurious pass-1 parse error escapes.
+#[test]
+fn p281_forward_text_returning_fn_method_chain() {
+    code!(
+        "fn test() {
+    s = helper(\"foo.loft\");
+    assert(s.len() == 3, \"forward text fn + .len() on receiver works\");
+}
+fn helper(s: text) -> text {
+    i = s.find(\".\");
+    if i == null { s } else { s[0..i] }
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p281_forward_text_returning_fn_method_with_args() {
+    code!(
+        "fn test() {
+    s = upper(\"abc\");
+    n = s.find(\"BC\");
+    assert(n == 1, \"forward fn + .find(arg) returns position 1\");
+}
+fn upper(s: text) -> text {
+    out = \"\";
+    for c in s { out = out + (c as integer - 32) as character; }
+    out
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p281_mutual_forward_text_fns() {
+    code!(
+        "fn test() {
+    s = first(\"hello\");
+    assert(s.len() == 5, \"first + second + len chain works\");
+}
+fn first(s: text) -> text {
+    second(s)
+}
+fn second(s: text) -> text {
+    s
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p281_forward_fn_slice_on_text_return() {
+    // P278/P281 sibling — slice expression on forward-text-fn result.
+    // Was the second cascade after my P281 fix; tolerance extended to
+    // parse_index for Unknown receivers covers `[a..b]` shapes too.
+    code!(
+        "fn test() {
+    s = forward(\"hello world\");
+    sp = s.find(\" \");
+    if sp != null {
+        first = s[0..sp];
+        assert(first == \"hello\", \"slice on forward-text-fn result works\");
+    }
+}
+fn forward(s: text) -> text {
+    s
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p281_forward_fn_in_println_format() {
+    // Forward fn used inside a format string interpolation —
+    // pass-1's body parse must also tolerate Unknown receivers
+    // inside the format-string expression position.
+    code!(
+        "fn test() {
+    out = \"len={shorten(\\\"hello world\\\").len()}\";
+    assert(out == \"len=5\", \"format interp with forward fn + .len() works\");
+}
+fn shorten(s: text) -> text {
+    sp = s.find(\" \");
+    if sp == null { s } else { s[0..sp] }
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P292 — `v = new_v` where `new_v` is loop-scoped and `v` is outer-scoped
 /// used to corrupt `v`'s storage on the next iteration: subsequent reads
 /// of `v[j]` reported `index J out of bounds for length 0` (or SEGV when

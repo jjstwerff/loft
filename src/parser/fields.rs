@@ -14,6 +14,29 @@ impl Parser {
             }
             // In the first pass, skip the field name token so parsing continues.
             self.lexer.has_identifier();
+            // @P281 — when the dot-access is followed by `(args)`
+            // (i.e., `s.method(arg1, arg2)`), the parser must
+            // consume the ENTIRE call expression so the surrounding
+            // statement parser doesn't trip on the unconsumed `(`
+            // and fire a spurious "Expect token ;".  Runs in BOTH
+            // passes: pass-1 needs it so the body parses cleanly
+            // and pass-2 can re-resolve; pass-2 needs it so the
+            // already-emitted "Field of unknown variable" doesn't
+            // cascade into "Expect token ;".  Each arg routes
+            // through `expression` so nested calls / format strings
+            // tokenise correctly.
+            if self.lexer.has_token("(") {
+                if !self.lexer.peek_token(")") {
+                    loop {
+                        let mut discard = Value::Null;
+                        self.expression(&mut discard);
+                        if !self.lexer.has_token(",") {
+                            break;
+                        }
+                    }
+                }
+                self.lexer.has_token(")");
+            }
             // wrap `code` in Value::Drop so an unresolved field access
             // (e.g. `x.v` where x's type is not yet known on pass 1) is no
             // longer treated as a plain `Value::Var(x)` by downstream
@@ -523,6 +546,27 @@ impl Parser {
                 key_types.push(self.data.attr_type(*el, self.data.attr(*el, k)).clone());
             }
             self.parse_key(code, &t, &key_types);
+        } else if t.is_unknown() {
+            // @P278/P281 — pass-1 Unknown receiver: consume the
+            // entire bracket content including range syntax
+            // (`a..b`, `a..=b`, `a..`, `..b`, `..`) so the outer
+            // caller's `]` consumption matches and no spurious
+            // "Expect token ]" / "Expect token ;" cascade fires.
+            // Pass-2 (with all defs registered) re-parses the body
+            // cleanly and dispatches correctly — or emits the real
+            // diagnostic if the receiver is genuinely unknown.
+            if !self.lexer.peek_token("]") {
+                if !self.lexer.peek_token("..") && !self.lexer.peek_token("..=") {
+                    let mut p = Value::Null;
+                    self.expression(&mut p);
+                }
+                if self.lexer.has_token("..") || self.lexer.has_token("..=") {
+                    if !self.lexer.peek_token("]") {
+                        let mut p2 = Value::Null;
+                        self.expression(&mut p2);
+                    }
+                }
+            }
         } else {
             // index_type() already emitted a diagnostic; consume the inner expression
             // so that the caller can still parse the closing `]` without cascading errors.
