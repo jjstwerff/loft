@@ -43,9 +43,9 @@ PORT = 18083;
 
 struct Cell {
   ck:    text not null,
-  x:     integer not null,
-  y:     integer not null,
-  color: integer not null,
+  x:     i32 not null,    // typed at field declaration → `f += c.x` writes 4 bytes
+  y:     i32 not null,    // automatically, no `as i32` cast at the write site
+  color: u8 not null,
 }
 
 struct Client {
@@ -136,17 +136,21 @@ fn read_index() -> text {
 WORLD_FILE = "tools/audience-demo/world.bin";
 SNAPSHOT_INTERVAL_US = 5000000;      // 5 s in µs (fits in i32; ticks() diff promoted to long at the compare site)
 
+// Byte widths come from each field's declared type — `c.x: i32`
+// writes 4 bytes automatically, `c.color: u8` writes 1.  The only
+// remaining explicit cast is on `n` because it's a loose local
+// integer (i64 storage).
 fn world_save(world: World) {
   n: integer = 0;
   for _ in world.cells { n = n + 1; }
   {
     f = file(WORLD_FILE);
     f#format = LittleEndian;
-    f += n;
+    f += (n as i32);
     for c in world.cells {
       f += c.x;
       f += c.y;
-      f += (c.color as u8);
+      f += c.color;
     }
   }
   world.dirty = false;
@@ -155,19 +159,19 @@ fn world_save(world: World) {
 }
 
 fn world_load(world: World) {
-  f = file(WORLD_FILE);
-  if f.format == Format.NotExists {
+  if !exists(WORLD_FILE) {
     println("single-port: no world snapshot at {WORLD_FILE} — starting empty");
     return;
   }
+  f = file(WORLD_FILE);
   f#format = LittleEndian;
-  n = f#read(4) as integer;
+  n = f#read as i32;
   loaded = 0;
   i = 0;
   while i < n {
-    x = f#read(4) as integer;
-    y = f#read(4) as integer;
-    c = f#read(1) as integer;
+    x = f#read as i32;
+    y = f#read as i32;
+    c = f#read as u8;
     if c >= 1 && c <= 9 {
       k = cell_key(x, y);
       if world.cells[k] == null {

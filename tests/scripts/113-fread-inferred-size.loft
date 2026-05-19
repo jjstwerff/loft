@@ -1,0 +1,90 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `f#read as T` (no explicit `(n)`): the read width is inferred from
+// the cast type — `as i32` = 4 bytes, `as u8` = 1, `as u16` = 2,
+// `as integer` = 8.  Eliminates the easy-to-mismatch `(n)` argument
+// that previously panicked at src/database/io.rs:276 when n didn't
+// equal the cast type's storage width.
+// LHS-driven inference target — `s.field = f#read` infers the byte
+// width from the field's declared type, symmetric with `f += s.field`.
+struct LhsTarget { a: i32 not null, b: u8 not null, c: u16 not null }
+
+fn cleanup() { delete("test_loft_inferred.bin"); }
+
+fn main() {
+  cleanup();
+
+  // Write a header of mixed-width values then read each back with
+  // the inferred-size form.
+  {
+    f = file("test_loft_inferred.bin");
+    f#format = LittleEndian;
+    f += (0x12345678 as i32);
+    f += (0xAB as u8);
+    f += (0xBEEF as u16);
+    f += (0x42 as u8);
+  }
+  {
+    f = file("test_loft_inferred.bin");
+    f#format = LittleEndian;
+    a = f#read as i32;     assert(a == 0x12345678, "i32 inferred");
+    b = f#read as u8;      assert(b == 0xAB,       "u8 inferred");
+    c = f#read as u16;     assert(c == 0xBEEF,     "u16 inferred");
+    d = f#read as u8;      assert(d == 0x42,       "u8 inferred again");
+  }
+
+  // The explicit (n) form must still work for back-compat.
+  {
+    f = file("test_loft_inferred.bin");
+    f#format = LittleEndian;
+    a = f#read(4) as i32;  assert(a == 0x12345678, "i32 explicit");
+    b = f#read(1) as u8;   assert(b == 0xAB,       "u8 explicit");
+  }
+
+  // The two forms must produce byte-identical reads — round-trip a
+  // u16 field via both and compare.
+  {
+    f = file("test_loft_inferred.bin");
+    f#format = LittleEndian;
+    f += (0xCAFE as u16);
+  }
+  {
+    f = file("test_loft_inferred.bin");
+    f#format = LittleEndian;
+    v1 = f#read    as u16;
+    assert(v1 == 0xCAFE, "u16 no-paren");
+  }
+  {
+    f = file("test_loft_inferred.bin");
+    f#format = LittleEndian;
+    v2 = f#read(2) as u16;
+    assert(v2 == 0xCAFE, "u16 with-paren same result");
+  }
+
+  // LHS-driven inference: `s.field = f#read` infers the byte width
+  // from the field's declared type (i32 → 4, u8 → 1, u16 → 2).
+  // Symmetric with `f += s.field`, which already takes the field's
+  // declared width on the write side.
+  s = LhsTarget{a: 0, b: 0, c: 0};
+  {
+    f = file("test_loft_inferred.bin");
+    f#format = LittleEndian;
+    f += (0x12345678 as i32);
+    f += (0x5A as u8);
+    f += (0xCAFE as u16);
+  }
+  {
+    f = file("test_loft_inferred.bin");
+    f#format = LittleEndian;
+    s.a = f#read;
+    s.b = f#read;
+    s.c = f#read;
+  }
+  assert(s.a == 0x12345678, "LHS-driven i32 width from field type");
+  assert(s.b == 0x5A,        "LHS-driven u8 width from field type");
+  assert(s.c == 0xCAFE,      "LHS-driven u16 width from field type");
+
+  cleanup();
+  println("fread-inferred ok");
+}

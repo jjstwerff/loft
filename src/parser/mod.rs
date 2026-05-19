@@ -135,6 +135,13 @@ pub struct Parser {
     /// lambdas (`|x| { … }`) can infer parameter types from the call-site context.
     /// Cleared to `Type::Unknown(0)` immediately after the argument is parsed.
     pub(crate) lambda_hint: Type,
+    /// Expected destination type for an `f#read` with no explicit `(n)` and
+    /// no `as T` cast.  Set by `parse_assign` from the LHS type before
+    /// parsing the RHS so that `s.field = f#read` infers the byte width
+    /// from `s.field`'s declared type — symmetric with the way `f += s.field`
+    /// already takes its width from the field's declared type.  Reset to
+    /// `Type::Unknown(0)` after the RHS is parsed.
+    pub(crate) read_target_type: Type,
     /// Set by `iter_op` when `#fields` is encountered. Holds the struct `def_nr`.
     /// Checked by `parse_for` to take the unrolling path. Reset after use.
     pub(crate) fields_of: u32,
@@ -363,6 +370,7 @@ impl Parser {
             expr_not_null_name: String::new(),
             lambda_counter: 0,
             lambda_hint: Type::Unknown(0),
+            read_target_type: Type::Unknown(0),
             fields_of: u32::MAX,
             capture_context: Vec::new(),
             captured_names: Vec::new(),

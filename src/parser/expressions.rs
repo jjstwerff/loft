@@ -751,7 +751,14 @@ use a separate collection or add after the loop"
         self.check_iter_safety(to, f_type, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
+        // Hint the RHS that the destination has this type — `f#read`
+        // (no parens, no cast) picks it up so `s.field = f#read` matches
+        // the symmetry of `f += s.field` (which already takes the field's
+        // declared width).  Restored to Unknown after the RHS parse so
+        // it doesn't leak into unrelated sub-expressions.
+        let prev_read_target = std::mem::replace(&mut self.read_target_type, f_type.clone());
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
+        self.read_target_type = prev_read_target;
         // check RHS of assignment for unresolved variables.
         self.known_var_or_type(code);
         if let Type::Rewritten(tp) = s_type {

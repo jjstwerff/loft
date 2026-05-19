@@ -321,23 +321,71 @@ Binary mode must be activated before reading or writing raw data. Use `f.format 
 
 | Syntax | Description |
 |--------|-------------|
-| `f += integer` | Writes 4 bytes (integer) in the current endian format. |
-| `f += long` | Writes 8 bytes (long) in the current endian format. |
-| `f += single` | Writes 4 bytes (single) in the current endian format. |
-| `f#read(n) as T` | Reads `n` bytes and interprets as type `T` (e.g. `i32`, `u8`, `long`). Returns null if fewer than `n` bytes are available (for non-text types). |
+| `f += value` | Writes `value` at the width of its declared type — `i32`/`u32` → 4B, `u8` → 1B, `u16` → 2B, range-constrained `integer limit(0,255)` → 1B, bare `integer` (i64 storage) → 8B, `single` → 4B, `float` → 8B, `text` → raw UTF-8 bytes, `vector<T>` → each element at its declared width. |
+| `f#read as T` | **Preferred** — reads `T`'s natural byte width and returns a value of type `T`. `as i32` reads 4B, `as u8` reads 1B, `as u16` reads 2B, `as integer` reads 8B. |
+| `s.field = f#read` | **LHS-inferred** — width comes from `s.field`'s declared type; symmetric with `f += s.field`. No `as T` needed. |
+| `f#read(n) as T` | Legacy explicit form — reads exactly `n` bytes and interprets as `T`. `n` MUST match `T`'s storage width or the runtime panics. |
+| `f#read(n) as text` | Reads exactly `n` bytes (or fewer at EOF) as a UTF-8 string. The `(n)` is REQUIRED for text — variable-width types have no inferable count. |
 | `f#size` | Returns the current file size in bytes as `long`. |
 | `f#index` | Returns the byte offset where the last read started (the `current` field). |
 | `f#next` | Returns the current byte position (after last read). |
 | `f#next = pos` | Seeks the file to `pos` (long). Only works after the file has been opened by a prior read or write. |
 | `f#exists` | Returns `true` if the file or directory exists (format ≠ `Format.NotExists`). |
-| `f#format` | Reads the `Format` enum value of `f`. |
+| `f#format` | Reads the `Format` enum value of `f`.  **Avoid on binary files** — accessing `.format` on a file with unrecognized magic panics in `src/database/io.rs:276`.  Use `exists(path)` instead for existence checks. |
 | `f#format = Format.X` | Sets the format of `f`. |
 
 **Notes:**
 - `f += "text"` writes raw UTF-8 bytes; supported for TextFile, LittleEndian, and BigEndian modes.
 - For new files (format=NotExists), `f += value` defaults to TextFile mode and creates the file.
-- `f#read(n) as text` reads exactly `n` bytes (or fewer at EOF) as a UTF-8 string.
 - `f#next = pos` is a no-op if called before the first read or write (the OS file handle does not exist until first I/O). Always perform a read or write before seeking.
+
+#### Canonical object serialization (planned — see @P289)
+
+The current binary API writes / reads one scalar at a time.  The
+end-state design is to let `f += my_struct` and `s = f#read as MyStruct`
+round-trip arbitrary loft objects with NO per-field wiring.  Vectors,
+text, and nested structs are part of that contract.
+
+**Write side — `f += <value>`** already does most of the work for
+scalars and typed fields; the planned extensions cover composites:
+
+| Value type | Wire format (planned) |
+|------------|-----------------------|
+| `vector<T>` (already today) | each element at its declared width, **no length prefix** — caller is responsible for tracking element count |
+| `vector<T>` (canonical) | `[4B u32: length]` + each element at its declared width |
+| `text` (already today) | raw UTF-8 bytes, **no length prefix** |
+| `text` (canonical) | `[4B u32: byte-length]` + UTF-8 bytes |
+| Plain struct (no out-of-line fields) | each field at its declared width, in declared order — packed, no padding |
+| Struct with `text` / `vector` fields | each field at its canonical wire format above, in declared order |
+
+**Read side — `f#read as MyStruct`** (planned) reverses the same
+layout, allocating any needed `text` / `vector` storage from the
+caller's store.  The read width is `sizeof(MyStruct)` for fixed-
+width plain structs, derived from the length prefix for composites.
+
+**Why the length prefix matters**: today's prefix-less `f += vec`
+forces every caller to write the length separately (`f += (len(vec)
+as i32); f += vec;`), which is easy to forget and produces
+unreadable files when the count and data drift apart.  The canonical
+form bakes the length into the value itself, making `f += vec` /
+`v = f#read as vector<single>` a true round-trip.
+
+**Migration**: the prefix-less form stays available (callers that
+manage their own length tracking, e.g. GLB chunks with chunk-size
+in the outer header, still need it).  The canonical form lives
+under a separate keyword/syntax — exact spelling TBD.  See
+@P289 for the open-issue tracker.
+
+**Status today**: `f += text` and `f += vector<T>` write raw bytes
+with no length prefix.  `f += plain_struct` is NOT a useful serializer
+today — it writes a few bytes of the internal storage handle
+(struct ref / store pos), not the user-visible field values.  Direct
+`f#read as MyStruct` is also NOT implemented.  Workaround: read /
+write each field individually (see
+[`lib/world/src/world.loft::world_save`](../../lib/world/src/world.loft)
+and [`tools/audience-demo/single_port_server.loft`](../../tools/audience-demo/single_port_server.loft)).
+The user-facing `for cell in world.cells { f += cell.x; f += cell.y;
+f += cell.color }` pattern is the current canonical idiom.
 
 ### Directories
 
