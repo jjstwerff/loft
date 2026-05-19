@@ -466,6 +466,36 @@ impl State {
         }
     }
 
+    pub fn sync_file(&mut self) {
+        let file = *self.get_stack::<DbRef>();
+        if file.rec == 0 {
+            self.put_stack(false);
+            return;
+        }
+        #[cfg(feature = "wasm")]
+        {
+            let _ = file;
+            self.put_stack(false);
+            return;
+        }
+        #[cfg(not(feature = "wasm"))]
+        {
+            let file_ref = self
+                .database
+                .store(&file)
+                .get_i32_raw(file.rec, file.pos + 28);
+            let ok = if file_ref != i32::MIN
+                && (file_ref as usize) < self.database.files.len()
+                && let Some(f) = &self.database.files[file_ref as usize]
+            {
+                f.sync_data().is_ok()
+            } else {
+                true
+            };
+            self.put_stack(ok);
+        }
+    }
+
     pub fn truncate_file(&mut self) {
         let size = *self.get_stack::<i64>();
         let file = *self.get_stack::<DbRef>();

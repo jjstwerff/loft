@@ -895,6 +895,33 @@ pub fn OpTruncateFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, _size
     false
 }
 
+/// Flush buffered bytes for the open handle backing `file` so that
+/// preceding writes are durable.  Returns `true` on success.  If the
+/// file is not currently open returns `true` — there is nothing to flush.
+/// Bytecode equivalent: `State::sync_file` in `src/state/io.rs`.
+#[cfg(not(feature = "wasm"))]
+pub fn OpSyncFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> bool {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if file.rec == 0 {
+        return false;
+    }
+    let file_ref = stores.store(&file).get_i32_raw(file.rec, file.pos + 28);
+    if file_ref != i32::MIN
+        && (file_ref as usize) < stores.files.len()
+        && let Some(f) = &stores.files[file_ref as usize]
+    {
+        f.sync_data().is_ok()
+    } else {
+        true
+    }
+}
+
+/// WASM stub: file sync not available.
+#[cfg(feature = "wasm")]
+pub fn OpSyncFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef) -> bool {
+    false
+}
+
 // ─── File I/O ─────────────────────────────────────────────────────────────────
 
 /// Open (or reuse) a file handle for writing.  Returns the index into

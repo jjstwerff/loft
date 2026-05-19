@@ -251,6 +251,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     delete,
     move_file,
     truncate_file,
+    sync_file,
     call_ref,
     mkdir,
     mkdir_all,
@@ -1975,6 +1976,10 @@ fn move_file(s: &mut State) {
 
 fn truncate_file(s: &mut State) {
     s.truncate_file();
+}
+
+fn sync_file(s: &mut State) {
+    s.sync_file();
 }
 
 fn call_ref(s: &mut State) {
