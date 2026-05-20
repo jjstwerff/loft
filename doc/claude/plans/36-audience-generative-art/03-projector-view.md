@@ -14,6 +14,17 @@ opens a 1280×800 OpenGL window, subscribes to the multi-client server,
 and renders the hex world as a flat-2D pointy-top grid with the
 empty-cell backdrop visible for spatial reference.
 
+**Removal fade-out shipped** (2026-05-20): the projector now matches the
+browser client's fade.  The cell shader was unified on **per-vertex
+RGBA** (stride-10 `gl_upload_vertices` layout — `pos.xyz` + unused normal
+pad + `rgba` at `location 2`) with `GL_BLEND` enabled, so any vertex can
+carry alpha.  Opaque cells bake `a = 1.0` (no visual change); an erased
+cell's ground footprint is re-emitted each frame at `a` ramping 1 → 0
+over `FADE_FRAMES` (~600 ms, matching the browser's `FADE_MS`), keyed in
+a `World.fades` hash so a re-paint cancels an in-flight fade.  No library
+change — the RGBA layout was already supported.  Also unlocks the
+"old paints recede into history" alpha effect noted under § Growth.
+
 **Per the 2026-05-21 design clarification:** the OpenGL client is BOTH
 the projector (3D crystals only, auto-camera, no ground grid) AND
 the desktop client (3D crystals + 2D ground layer, user mouse paints

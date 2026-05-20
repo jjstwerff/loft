@@ -104,12 +104,17 @@ fn parse_xyc(payload: text) -> (integer, integer, integer) {
 // the main loop checks the version and re-bakes only on change.
 // Per-frame cost = one draw call per VBO, zero mat4 alloc per cell.
 
+// Per-vertex RGBA throughout.  The native gl_upload_vertices layout puts
+// a vec4 colour at location 2 when stride == 10 (pos.xyz + normal.xyz +
+// rgba); we don't use the normal slot (location 1) here, just pad it with
+// zeros.  Carrying alpha on every vertex lets any cell fade — used now for
+// the removal fade-out, and ready for the "old paints recede" effect.
 CELL_VERT = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aColor;
+layout (location = 2) in vec4 aColor;
 uniform mat4 uMVP;
-out vec3 vColor;
+out vec4 vColor;
 void main() {{
     gl_Position = uMVP * vec4(aPos, 1.0);
     vColor = aColor;
@@ -118,10 +123,10 @@ void main() {{
 
 CELL_FRAG = `
 #version 330 core
-in vec3 vColor;
+in vec4 vColor;
 out vec4 FragColor;
 void main() {{
-    FragColor = vec4(vColor, 1.0);
+    FragColor = vColor;
 }}
 `;
 
@@ -131,10 +136,27 @@ void main() {{
 // so the main loop knows when to re-bake the VBOs.  `paint_tick_next`
 // is a monotonic counter stamped onto each new Cell at paint-time so
 // snapshot_cells can produce a placement-ordered CellSnap.
+// A cell that was just removed and is fading out.  Holds the colour it
+// had at removal + the frame the fade began, so the ground footprint can
+// be re-emitted at decreasing alpha for FADE_FRAMES.  Keyed by "x,y" (same
+// scheme as Cell) so a re-paint can cancel an in-flight fade by key.
+struct FadeCell {
+  ck:    text not null,
+  x:     integer not null,
+  y:     integer not null,
+  color: integer not null,
+  start: integer not null,    // frame number when the fade began
+}
+
+// Removal fade duration in frames (~600 ms at 60 fps — matches the
+// browser client's FADE_MS so both views fade at the same rate).
+FADE_FRAMES = 36;
+
 struct World {
   cells:           hash<Cell[ck]>,
   version:         integer not null,
   paint_tick_next: integer not null,
+  fades:           hash<FadeCell[ck]>,
 }
 
 // Scratch struct used by snapshot_cells — the four parallel arrays
@@ -191,33 +213,69 @@ fn snapshot_cells(world: World) -> CellSnap {
 // have the shader sample alpha so old paints fade out — gradual
 // "ground recedes into history while crystals stay foreground" effect.
 // Stays at stride 6 + full opacity for now per the v1 design.
+// Append one filled ground hex (18 verts, stride 10: pos.xyz + zero
+// normal pad + rgba) for cell (cell_x, cell_y) in palette colour cell_c
+// at the given alpha.  Shared by the opaque ground bake (alpha 1) and the
+// fade bake (alpha < 1).
+fn push_ground_hex(verts: &vector<single>, cell_x: integer, cell_y: integer,
+                   cell_c: integer, alpha: single) {
+  r = HEX_SIZE * 0.97;
+  bg_parity = cell_y - (cell_y / 2) * 2;
+  if bg_parity < 0 { bg_parity = bg_parity + 2; }
+  bg_shift = 0.0;
+  if bg_parity == 1 { bg_shift = SQRT3 / 2.0 * HEX_SIZE; }
+  wx = cell_x as float * SQRT3 * HEX_SIZE + bg_shift;
+  wz = cell_y as float * 1.5 * HEX_SIZE;
+  cr = palette_r(cell_c) as single;
+  cg = palette_g(cell_c) as single;
+  cb = palette_b(cell_c) as single;
+  for i in 0..6 {
+    a0 = (60.0 * i as float - 30.0) * PI / 180.0;
+    a1 = (60.0 * (i + 1) as float - 30.0) * PI / 180.0;
+    verts += [wx as single,                 0.0f, wz as single,                 0.0f, 0.0f, 0.0f, cr, cg, cb, alpha];
+    verts += [(wx + r * cos(a0)) as single, 0.0f, (wz + r * sin(a0)) as single, 0.0f, 0.0f, 0.0f, cr, cg, cb, alpha];
+    verts += [(wx + r * cos(a1)) as single, 0.0f, (wz + r * sin(a1)) as single, 0.0f, 0.0f, 0.0f, cr, cg, cb, alpha];
+  }
+}
+
 fn build_ground_vbo(snap: CellSnap) -> (integer, integer) {
   verts: vector<single> = [];
-  r = HEX_SIZE * 0.97;
   for ix in 0..len(snap.xs) {
-    cell_x = snap.xs[ix];
-    cell_y = snap.ys[ix];
-    cell_c = snap.colors[ix];
-    bg_parity = cell_y - (cell_y / 2) * 2;
-    if bg_parity < 0 { bg_parity = bg_parity + 2; }
-    bg_shift = 0.0;
-    if bg_parity == 1 { bg_shift = SQRT3 / 2.0 * HEX_SIZE; }
-    wx = cell_x as float * SQRT3 * HEX_SIZE + bg_shift;
-    wz = cell_y as float * 1.5 * HEX_SIZE;
-    cr = palette_r(cell_c) as single;
-    cg = palette_g(cell_c) as single;
-    cb = palette_b(cell_c) as single;
-    for i in 0..6 {
-      a0 = (60.0 * i as float - 30.0) * PI / 180.0;
-      a1 = (60.0 * (i + 1) as float - 30.0) * PI / 180.0;
-      verts += [wx as single,                              0.0f, wz as single,                              cr, cg, cb];
-      verts += [(wx + r * cos(a0)) as single,              0.0f, (wz + r * sin(a0)) as single,              cr, cg, cb];
-      verts += [(wx + r * cos(a1)) as single,              0.0f, (wz + r * sin(a1)) as single,              cr, cg, cb];
+    push_ground_hex(verts, snap.xs[ix], snap.ys[ix], snap.colors[ix], 1.0f);
+  }
+  ground_count = len(verts) / 10;
+  ground_vao = graphics::gl_upload_vertices(verts, 10);
+  (ground_vao, ground_count)
+}
+
+// Bake the translucent ground footprints of cells that are fading out.
+// Each fading cell's alpha ramps from 1 → 0 across FADE_FRAMES.  Returns
+// (0, 0) when nothing is fading (caller skips the draw).
+fn build_fading_vbo(world: World, tick: integer) -> (integer, integer) {
+  verts: vector<single> = [];
+  for f in world.fades {
+    elapsed = tick - f.start;
+    if elapsed < FADE_FRAMES {
+      a = 1.0 - elapsed as float / FADE_FRAMES as float;
+      push_ground_hex(verts, f.x, f.y, f.color, a as single);
     }
   }
-  ground_count = len(verts) / 6;
-  ground_vao = graphics::gl_upload_vertices(verts, 6);
-  (ground_vao, ground_count)
+  fading_count = len(verts) / 10;
+  fading_vao: integer = 0;
+  if fading_count > 0 { fading_vao = graphics::gl_upload_vertices(verts, 10); }
+  (fading_vao, fading_count)
+}
+
+// Drop fades that have run their course (collect-then-remove so the hash
+// is not mutated mid-iteration — same shape as the server's decay sweep).
+fn prune_fades(world: World, tick: integer) {
+  done: vector<text> = [];
+  for f in world.fades {
+    if tick - f.start >= FADE_FRAMES { done += [f.ck]; }
+  }
+  for k in done {
+    if world.fades[k] != null { world.fades[k] = null; }
+  }
 }
 
 // ── Frost crystal pattern (ice-on-window) ────────────────────────────
@@ -242,7 +300,7 @@ fn emit_ribbon(verts: &vector<single>,
                x0: float, z0: float, y0: float,
                x1: float, z1: float, y1: float,
                width: float,
-               cr: single, cg: single, cb: single) {
+               cr: single, cg: single, cb: single, ca: single) {
   dx = x1 - x0;
   dz = z1 - z0;
   ln = sqrt(dx * dx + dz * dz);
@@ -256,14 +314,15 @@ fn emit_ribbon(verts: &vector<single>,
   dx2 = (x1 - px) as single; dz2 = (z1 - pz) as single;
   y0s = y0 as single;
   y1s = y1 as single;
+  // Stride 10: pos.xyz + zero normal pad + rgba.
   // Triangle 1: A → B → C  (A,B at y0; C at y1)
-  verts += [ax, y0s, az,   cr, cg, cb];
-  verts += [bx, y0s, bz,   cr, cg, cb];
-  verts += [cx, y1s, cz,   cr, cg, cb];
+  verts += [ax,  y0s, az,  0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  verts += [bx,  y0s, bz,  0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  verts += [cx,  y1s, cz,  0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
   // Triangle 2: B → D → C  (B at y0; D,C at y1)
-  verts += [bx, y0s, bz,   cr, cg, cb];
-  verts += [dx2, y1s, dz2, cr, cg, cb];
-  verts += [cx, y1s, cz,   cr, cg, cb];
+  verts += [bx,  y0s, bz,  0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  verts += [dx2, y1s, dz2, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  verts += [cx,  y1s, cz,  0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
 }
 
 // Bake the crystal mesh — generate the segment list via the
@@ -286,10 +345,10 @@ fn build_crystal_vbo(snap: CellSnap, state: CrystalState,
     emit_ribbon(verts,
       cm.x0s[bcv_i], cm.z0s[bcv_i], cm.y0s[bcv_i],
       cm.x1s[bcv_i], cm.z1s[bcv_i], cm.y1s[bcv_i],
-      w, cr, cg, cb);
+      w, cr, cg, cb, 1.0f);
   }
-  crystal_count = len(verts) / 6;
-  crystal_vao = graphics::gl_upload_vertices(verts, 6);
+  crystal_count = len(verts) / 10;
+  crystal_vao = graphics::gl_upload_vertices(verts, 10);
   (crystal_vao, crystal_count)
 }
 
@@ -531,8 +590,13 @@ fn apply_frame(world: World, cam: AutoCam, tick: integer, frame: text) {
   (x, y, c) = parse_xyc(payload);
   k = cell_key(x, y);
   if c == 0 {
-    // erase
-    if world.cells[k] != null {
+    // erase — start a ground-footprint fade from the cell's current
+    // colour, then remove it from the live world (the crystal + opaque
+    // ground rebuild without it; the fade VBO carries the dwindling tile).
+    existing = world.cells[k];
+    if existing != null {
+      if world.fades[k] != null { world.fades[k] = null; }   // clear any stale fade
+      world.fades += [FadeCell{ck: k, x: x, y: y, color: existing.color, start: tick}];
       world.cells[k] = null;
       world.version = world.version + 1;
     }
@@ -541,6 +605,7 @@ fn apply_frame(world: World, cam: AutoCam, tick: integer, frame: text) {
     // newly-cleared area same as it does to a new paint.
     cam_record(cam, x, y, tick);
   } else {
+    if world.fades[k] != null { world.fades[k] = null; }   // a re-paint cancels an in-flight fade
     existing = world.cells[k];
     if existing == null {
       world.cells += [Cell{ck: k, x: x, y: y, color: c,
@@ -572,6 +637,10 @@ fn main() {
   // the steady-state render cost is one gl_draw_mode per VBO + one
   // set_uniform_mat4 per layer.
   graphics::gl_enable(graphics::GL_DEPTH_TEST);
+  // Alpha blending — opaque cells bake alpha 1.0 (no visual change), but
+  // fading cells ramp their ground footprint to transparent over the fade.
+  graphics::gl_enable(graphics::GL_BLEND);
+  graphics::gl_blend_func(graphics::BLEND_SRC_ALPHA, graphics::BLEND_ONE_MINUS_SRC_ALPHA);
   cell_shader = graphics::gl_create_shader(CELL_VERT, CELL_FRAG);
   graphics::gl_line_width(2.0);    // ~2 px wide crystal lines — readable
                                    // at projector distance
@@ -587,7 +656,7 @@ fn main() {
   }
   println("projector: ws session opened (auto-reconnects on drop)");
 
-  world = World{cells: [], version: 0, paint_tick_next: 0};
+  world = World{cells: [], version: 0, paint_tick_next: 0, fades: []};
   // Persistent crystal aging state — owned by main, updated whenever
   // world.version changes.  `lookup_main_birth(state, …)` is queried by
   // crystal_segments_aged to scale side-branch length by main age.
@@ -602,6 +671,7 @@ fn main() {
   ground_vert_count: integer = 0;
   crystal_vao: integer = 0;
   crystal_vert_count: integer = 0;
+  fading_vao: integer = 0;
   auto_cam = AutoCam{
     pos_x: 0.0, pos_y: 0.0,
     end_x: 0.0, end_y: 0.0,
@@ -698,6 +768,24 @@ fn main() {
     //     (each ribbon = 2 tris = 6 verts).
     if crystal_vert_count > 0 {
       graphics::gl_draw(crystal_vao, crystal_vert_count);
+    }
+    // (c) Fade layer — translucent ground footprints of recently-erased
+    //     cells, alpha-ramped to zero over FADE_FRAMES.  Rebuilt every
+    //     frame while any fade is active (few cells, cheap) and drawn last
+    //     so the blend sits correctly over the opaque layers.  Skipped —
+    //     and the VAO released — when nothing is fading.
+    if len(world.fades) > 0 {
+      if fading_vao != 0 { graphics::gl_delete_vao(fading_vao); }
+      fres = build_fading_vbo(world, frames);
+      fading_vao = fres.0;
+      fading_count = fres.1;
+      if fading_count > 0 {
+        graphics::gl_draw(fading_vao, fading_count);
+      }
+      prune_fades(world, frames);
+    } else if fading_vao != 0 {
+      graphics::gl_delete_vao(fading_vao);
+      fading_vao = 0;
     }
     graphics::gl_swap_buffers();
     frames = frames + 1;
