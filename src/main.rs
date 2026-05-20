@@ -1664,6 +1664,24 @@ fn main() {
         .canonicalize()
         .unwrap_or_else(|_| std::path::PathBuf::from(&file_name));
     let abs_file = abs_file.to_str().unwrap().to_string();
+    // @P296-sibling (Windows-only): `canonicalize()` returns an
+    // extended-length `\\?\D:\…` verbatim path, but library `use`
+    // resolution (`lib_path` / `probe_*`) builds plain paths.  When the
+    // entry file carries the verbatim prefix, a `lib::Name` reference in
+    // it registers the module under a source derived from the verbatim
+    // path while the same module loaded via `use` uses the plain form —
+    // the two sources don't dedup → "Dual definition of <lib>" on
+    // Windows (crystal_gold CI).  Strip the verbatim-disk prefix so every
+    // path shares one representation.  No-op on Linux/macOS (paths never
+    // begin with `\\?\`); only the `\\?\D:\…` disk form is stripped, not
+    // verbatim-UNC (`\\?\UNC\…`), which has no plain equivalent.
+    let abs_file = if let Some(rest) = abs_file.strip_prefix(r"\\?\")
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        rest.to_string()
+    } else {
+        abs_file
+    };
     // --project: change working directory so file I/O is sandboxed to the project root.
     if let Some(ref proj) = project {
         if let Err(e) = env::set_current_dir(proj) {
