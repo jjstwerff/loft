@@ -249,6 +249,23 @@ pub extern "C" fn loft_gl_set_fullscreen(on: bool) {
     });
 }
 
+/// Current window inner size in physical pixels.  Needed because a
+/// fullscreen window opens at the monitor's native resolution, so callers
+/// can't assume their windowed hint — query the real size to build the
+/// projection / 2D ortho / overlay placement correctly.  Returns 0 if no
+/// window exists.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_window_width() -> i32 {
+    gl_guard!(0);
+    with_gl(|s| s.window.inner_size().width as i32).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_window_height() -> i32 {
+    gl_guard!(0);
+    with_gl(|s| s.window.inner_size().height as i32).unwrap_or(0)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_poll_events() -> bool {
     with_gl_mut(|s| {
@@ -1157,6 +1174,8 @@ loft_ffi::loft_register! {
     loft_gl_create_window,
     loft_gl_create_fullscreen_window,
     loft_gl_set_fullscreen,
+    loft_gl_window_width,
+    loft_gl_window_height,
     loft_gl_mouse_wheel,
     loft_gl_poll_events,
     loft_gl_swap_buffers,

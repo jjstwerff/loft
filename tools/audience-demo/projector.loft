@@ -652,11 +652,25 @@ fn apply_frame(world: World, cam: AutoCam, tick: integer, frame: text) {
 }
 
 fn main() {
-  if !graphics::gl_create_window(WIN_W, WIN_H, "Audience Projector — @PLAN36") {
+  // LOFT_PROJ_FULLSCREEN=1 opens borderless fullscreen at the monitor's
+  // native resolution; otherwise a 1280x800 window.
+  fullscreen = env_variable("LOFT_PROJ_FULLSCREEN") != "";
+  ok = if fullscreen {
+    graphics::gl_create_fullscreen_window("Audience Projector — @PLAN36")
+  } else {
+    graphics::gl_create_window(WIN_W, WIN_H, "Audience Projector — @PLAN36")
+  };
+  if !ok {
     println("projector: FAILED to create OpenGL window");
     return;
   }
-  println("projector: window {WIN_W}x{WIN_H} open");
+  // Use the ACTUAL window size (fullscreen = native res) for projection,
+  // 2D ortho, and overlay placement — falling back to the windowed hint.
+  win_w = graphics::gl_window_width();
+  if win_w <= 0 { win_w = WIN_W; }
+  win_h = graphics::gl_window_height();
+  if win_h <= 0 { win_h = WIN_H; }
+  println("projector: window {win_w}x{win_h} open (fullscreen={fullscreen})");
 
   // 3D pipeline — two baked VBOs (ground triangles + crystal lines)
   // sharing one per-vertex-colour shader.  VBOs are rebuilt only when
@@ -671,8 +685,20 @@ fn main() {
   cell_shader = graphics::gl_create_shader(CELL_VERT, CELL_FRAG);
   graphics::gl_line_width(2.0);    // ~2 px wide crystal lines — readable
                                    // at projector distance
-  proj_matrix   = math::mat4_perspective(0.9, WIN_W as float / WIN_H as float, 1.0, 4000.0);
+  proj_matrix   = math::mat4_perspective(0.9, win_w as float / win_h as float, 1.0, 4000.0);
   println("projector: 3D cell shader + perspective projection ready");
+
+  // Optional "scan to join" QR overlay in the top-right corner.  Pass a
+  // pre-rendered QR PNG path via LOFT_PROJ_QR (e.g. of the audience page
+  // URL); it's loaded as a texture and drawn screen-space each frame.
+  qr_path = env_variable("LOFT_PROJ_QR");
+  qr_tex: integer = 0;
+  qr_painter = graphics::create_painter_2d(win_w as float, win_h as float);
+  if qr_path != "" {
+    qr_tex = graphics::gl_load_texture(qr_path);
+    if qr_tex == 0 { println("projector: QR load failed for {qr_path}"); }
+    else { println("projector: QR overlay from {qr_path}"); }
+  }
 
   // Server URL: LOFT_PROJ_SERVER overrides the local default, so the same
   // projector can point at a remote audience server (e.g. a public demo).
@@ -815,10 +841,26 @@ fn main() {
       graphics::gl_delete_vao(fading_vao);
       fading_vao = 0;
     }
+    // "Scan to join" QR overlay, top-right corner (screen-space, on top of
+    // the 3D scene).  Depth test off so it always draws over the crystals.
+    if qr_tex != 0 {
+      qr_size = win_h as float * 0.22;     // scales with the window
+      qr_margin = win_h as float * 0.03;
+      qr_pad = qr_size * 0.06;
+      qr_x = win_w as float - qr_size - qr_margin;
+      graphics::gl_disable(graphics::GL_DEPTH_TEST);
+      // white backing card (also the QR quiet-zone) then the QR on top
+      graphics::draw_rect_at(qr_painter, qr_x - qr_pad, qr_margin - qr_pad,
+                             qr_size + qr_pad * 2.0, qr_size + qr_pad * 2.0,
+                             1.0, 1.0, 1.0, 1.0);
+      graphics::draw_texture_at(qr_painter, qr_tex, qr_x, qr_margin, qr_size, qr_size);
+      graphics::gl_enable(graphics::GL_DEPTH_TEST);
+    }
+
     // One-shot capture (before swap → reads the freshly-drawn GL_BACK).
     // Fire after ~3 s so the world has replayed and the camera has settled.
     if shot_path != "" && !shot_done && frames > 180 {
-      graphics::gl_screenshot(WIN_W, WIN_H, shot_path);
+      graphics::gl_screenshot(win_w, win_h, shot_path);
       shot_done = true;
       println("projector: screenshot -> {shot_path}");
     }
