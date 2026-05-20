@@ -571,11 +571,11 @@ impl Parser {
                     let mut p = Value::Null;
                     self.expression(&mut p);
                 }
-                if self.lexer.has_token("..") || self.lexer.has_token("..=") {
-                    if !self.lexer.peek_token("]") {
-                        let mut p2 = Value::Null;
-                        self.expression(&mut p2);
-                    }
+                if (self.lexer.has_token("..") || self.lexer.has_token("..="))
+                    && !self.lexer.peek_token("]")
+                {
+                    let mut p2 = Value::Null;
+                    self.expression(&mut p2);
                 }
             }
         } else {

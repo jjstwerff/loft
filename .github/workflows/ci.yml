@@ -32,9 +32,12 @@ jobs:
       # x86_64-unknown-linux-gnu for a unified cache + slightly faster
       # link.  Mac / Windows runners use different target triples and
       # ignore that config — no install needed there.
-      - name: Install mold (Linux only)
+      # `libasound2-dev` provides the ALSA headers that `alsa-sys`
+      # (transitive dep of `rodio` in lib/graphics/native) builds against;
+      # without it the crystal_render gold tests fail to compile on Linux.
+      - name: Install mold + ALSA dev headers (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y mold
+        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev
 
       - name: Cache cargo registry and build
         uses: actions/cache@v4

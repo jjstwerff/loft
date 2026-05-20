@@ -506,10 +506,14 @@ impl Parser {
                         } else if matches!(tp, Type::Text(_)) {
                             None
                         } else {
-                            let db_sz = self.database.size(
-                                self.data.def(self.data.type_elm(&tp)).known_type,
-                            );
-                            if db_sz == 0 { None } else { Some(i64::from(db_sz)) }
+                            let db_sz = self
+                                .database
+                                .size(self.data.def(self.data.type_elm(&tp)).known_type);
+                            if db_sz == 0 {
+                                None
+                            } else {
+                                Some(i64::from(db_sz))
+                            }
                         }
                     };
                     (tp, id, nat_size)
@@ -541,10 +545,14 @@ impl Parser {
                     if packed > 0 {
                         Some(i64::from(packed))
                     } else {
-                        let db_sz = self.database.size(
-                            self.data.def(self.data.type_elm(&hint)).known_type,
-                        );
-                        if db_sz == 0 { None } else { Some(i64::from(db_sz)) }
+                        let db_sz = self
+                            .database
+                            .size(self.data.def(self.data.type_elm(&hint)).known_type);
+                        if db_sz == 0 {
+                            None
+                        } else {
+                            Some(i64::from(db_sz))
+                        }
                     }
                 };
                 let id = if self.first_pass {
@@ -1773,9 +1781,7 @@ impl Parser {
             // pass-1 mustn't emit errors pass-2 will naturally
             // resolve).  `set_field_no_check` still runs so codegen
             // stays consistent with pass-2.
-            if !(self.first_pass && exp_tp.is_unknown())
-                && !self.convert(value, exp_tp, &td)
-            {
+            if (!self.first_pass || !exp_tp.is_unknown()) && !self.convert(value, exp_tp, &td) {
                 // Plan-07 phase 6 (partial) — name the value side first
                 // ("cannot assign <got> to <expected>"), the field-type
                 // side last.  Old shape "Cannot write {field_type} on

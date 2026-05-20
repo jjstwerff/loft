@@ -191,7 +191,7 @@ impl State {
                         .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                         .to_owned()
                 };
-                std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0)
+                std::fs::metadata(&path).map_or(0, |m| m.len() as i64)
             }
         } else {
             raw_next

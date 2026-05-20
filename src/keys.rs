@@ -286,15 +286,9 @@ fn compare_key(k: &Content, record: &DbRef, stores: &[Store], key: &Key, pos: u3
             .str()
             .cmp(s.get_str(s.get_u32_raw(record.rec, record.pos + pos))),
         // Narrow integer keys — match hash_ref / get_key.
-        (Content::Long(v), 8) => {
-            v.cmp(&i64::from(s.get_i32_raw(record.rec, record.pos + pos)))
-        }
-        (Content::Long(v), 9) => {
-            v.cmp(&i64::from(s.get_short(record.rec, record.pos + pos, 0)))
-        }
-        (Content::Long(v), 10) => {
-            v.cmp(&i64::from(s.get_byte(record.rec, record.pos + pos, 0)))
-        }
+        (Content::Long(v), 8) => v.cmp(&i64::from(s.get_i32_raw(record.rec, record.pos + pos))),
+        (Content::Long(v), 9) => v.cmp(&i64::from(s.get_short(record.rec, record.pos + pos, 0))),
+        (Content::Long(v), 10) => v.cmp(&i64::from(s.get_byte(record.rec, record.pos + pos, 0))),
         (Content::Long(v), 11) => {
             let raw: u16 = *s.addr(record.rec, record.pos + pos);
             v.cmp(&i64::from(raw as i16))

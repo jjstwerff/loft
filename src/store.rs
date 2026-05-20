@@ -45,6 +45,10 @@ const FL_RIGHT: u32 = 8;
 /// Byte offset of LLRB color flag within a free block (1 = red, 0 = black).
 const FL_COLOR: u32 = 12;
 
+// A low-level heap store: the several flags (free / read_only /
+// free_protected / borrowed) are independent state bits on the same
+// allocation, not a bundle that should become an enum.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Store {
     // format 0 = SIGNATURE, 4 = free_space_index, 8 = record_size, 12 = content
     pub ptr: *mut u8,
@@ -568,10 +572,7 @@ impl Store {
     /// @P290 — clear the call-bracket free-protection.
     pub fn clear_free_protected(&mut self) {
         if self.free_protected && crate::log_config::lock_trace_enabled() {
-            eprintln!(
-                "[locks] FREE_UNPROTECT origin-was={:?}",
-                self.lock_origin
-            );
+            eprintln!("[locks] FREE_UNPROTECT origin-was={:?}", self.lock_origin);
         }
         self.free_protected = false;
         // Clear lock_origin only if the hard read_only lock isn't also

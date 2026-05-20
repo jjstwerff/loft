@@ -1878,7 +1878,7 @@ impl Parser {
                     // aliases that cannot yet be tracked.
                     #[cfg(not(feature = "wasm"))]
                     let free_source_bit: i32 =
-                        if !self.first_pass && self.is_struct_returning_call(&p) {
+                        if !self.first_pass && self.is_struct_returning_call(p) {
                             0x8000
                         } else {
                             0
@@ -1893,9 +1893,7 @@ impl Parser {
                         let elem_known = self.database.db_type(elem_tp, &self.data);
                         Value::Int(i32::from(self.database.vector(elem_known)) | free_source_bit)
                     } else {
-                        Value::Int(
-                            i32::from(self.data.def(inner_nr).known_type) | free_source_bit,
-                        )
+                        Value::Int(i32::from(self.data.def(inner_nr).known_type) | free_source_bit)
                     };
                     ls.push(self.cl("OpCopyRecord", &[p.clone(), Value::Var(elm), type_nr]));
                 }
