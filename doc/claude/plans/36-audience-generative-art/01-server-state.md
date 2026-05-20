@@ -435,15 +435,49 @@ broke `multiplayer_v3`:**
    first WS frame in the kernel buffer; v3 dies on its **first move**
    (server never reads it → client `recv-timeout`).
 
-**Conclusion: there is no safe Tier A native fix.**  The blocking
-`read_exact` framing in `lib/server` cannot do cheap idle polling without
-losing partial frames — making idle polls cheap *requires* a
-per-connection **buffered, non-blocking, partial-frame-tolerant frame
-reader**.  That reframing is precisely the Tier B work below.  The
-connect bottleneck is therefore a **Tier B** item, not a quick win.
-(`set_nodelay` is harmless and arguably worth keeping for real WAN /
-browser clients, but it does not help here, so it was reverted with the
-rest of the experiment.)
+…but then the real answer surfaced: **the problem was already solved on
+the *other* server path.**  `lib/server` has two paths — the manual one
+the audience server hand-rolled (`next_nonblocking` + `ws_upgrade` +
+per-client `next()`, the 500 ms streams above) and the **event pump**
+(`srv.run` / `n_ws_next_event`), which the code itself calls *"the single
+supported path for multi-client servers."*  The pump uses 20 ms streams
+**and** `ws_read_frame_detailed` — a `NoData`/`Frame`/`Closed` reader that
+returns cleanly on a no-data poll instead of the manual path's lossy
+`read_exact`→`None`.  It is validated by the TTT v5 many-clients tests.
+
+#### Tier A′ (SHIPPED 2026-05-20) — put the single-port server on the event pump
+
+The audience server only stayed on the manual path because it serves the
+HTML page *and* WebSockets on one port, and the pump's accept only handled
+WS upgrades.  A′ closes that gap:
+
+- **native:** `try_accept_inner` now surfaces a non-WS request as
+  `AcceptOutcome::Http` (stream parked in `CURRENT_CONN`, path in
+  `LAST_PATH`) instead of dropping it; `n_ws_next_event` delivers it as
+  event kind 3.  WS-upgrade behaviour unchanged.
+- **loft:** `WsEvent` gains `http` / `path`; new `Server::poll_event` (a
+  non-blocking single-event drain, so a server with its **own tick loop**
+  can still use the pump) plus `respond_html` / `respond_404` /
+  `respond_typed`.  `run()` is now built on `poll_event`.
+- **audience server** rewritten onto `poll_event`: clients are keyed by
+  `cid` in a `players` hash (replay cursor + last-paint position for the
+  heartbeat); fan-out via `srv.broadcast` / `send_to`; the manual client
+  vector + `poll_clients` + `ws_upgrade` are gone.  Tick / decay /
+  heartbeat / persistence unchanged.
+
+**Result (`load_test.loft`):** 30-client connect **220 s → ~10 s
+(21.6×)**, fan-out 100 %, 0 send failures, HTTP page still served — and
+`multiplayer_v2/v3/v5` stay green.  The same win as the unsafe experiment
+above, but on the supported, validated framing.
+
+`set_nodelay` was *not* part of the fix (it made no measurable difference)
+and was reverted; it remains a reasonable hygiene addition for real WAN /
+browser clients but is out of scope here.
+
+What A′ does **not** do: the pump is still O(clients × 20 ms) per drain
+(idle clients each cost a 20 ms poll), so connect stays O(N²) — just 25×
+cheaper.  ~10 s for 30 phones is fine for the meetup; true O(ready)
+scaling (idle clients cost *zero*) is still **Tier B** below.
 
 #### Tier B — background I/O reactor in `lib/server` (effort M)
 
