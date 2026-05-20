@@ -93,6 +93,24 @@ impl Output<'_> {
             }
             writeln!(w, "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);")?;
             self.indent(w)?;
+            // @P298 / @P297 (native half) — free the callee's return store
+            // after the deep copy by OR-ing the `0x8000` source-free bit into
+            // the OpCopyRecord type-nr (the runtime `OpCopyRecord` honours it).
+            // Without this, `_src` (the freshly-allocated struct the callee
+            // returned) is copied into `var_{name}` and then leaked — one
+            // store per call.  Mirrors the interpreter's
+            // `gen_set_first_ref_call_copy` (`src/state/codegen.rs`).
+            //
+            // Clear the bit when the callee returns a BORROWED view (its
+            // return type carries a `dep` chain naming one of its args): the
+            // "source" is then a slice of an arg's store, and freeing it would
+            // corrupt the caller.  Return-dep inference tags these correctly.
+            let is_borrowed_view = !self.data.def(*fn_nr).returned.depend().is_empty();
+            let tp_with_free: i32 = if is_borrowed_view {
+                i32::from(tp_nr)
+            } else {
+                i32::from(tp_nr) | 0x8000
+            };
             // Emit the call into a temporary, then deep-copy.
             // P198 — the inner user-fn call uses the new `cell` ABI; the
             // outer OpCopyRecord wraps `cell` to a fresh `&mut Stores`.
@@ -106,7 +124,10 @@ impl Output<'_> {
                     self.output_code_inner(w, arg)?;
                 }
             }
-            write!(w, "); OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }}")?;
+            write!(
+                w,
+                "); OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }}"
+            )?;
             return Ok(());
         }
         // When assigning a reference to a reference variable, a pointer copy is not
