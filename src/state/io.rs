@@ -165,7 +165,37 @@ impl State {
         }
         let little_endian = format == 2;
         let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
-        let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
+        // `+=` is append-only: when the user has not explicitly set
+        // `f#next = N`, the write position is the current end of file
+        // so successive `f += …` calls append (consistent with
+        // `vector += [elem]` / `text += "more"`).  An explicit
+        // `f#next = N` still overwrites at offset N.  Call
+        // `f.set_file_size(0)` before the first write to truncate.
+        let next_pos = if raw_next == i64::MIN {
+            #[cfg(feature = "wasm")]
+            {
+                let file_path = {
+                    let store = self.database.store(&file);
+                    store
+                        .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+                        .to_owned()
+                };
+                let sz = crate::wasm::host_fs_file_size(&file_path);
+                if sz < 0 { 0 } else { sz }
+            }
+            #[cfg(not(feature = "wasm"))]
+            {
+                let path = {
+                    let store = self.database.store(&file);
+                    store
+                        .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+                        .to_owned()
+                };
+                std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0)
+            }
+        } else {
+            raw_next
+        };
         self.database
             .store_mut(&file)
             .set_long(file.rec, file.pos + 8, next_pos);
@@ -197,12 +227,22 @@ impl State {
                         .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                         .to_owned()
                 };
-                match File::create(&file_name) {
+                // Open for read+write without truncating so that earlier
+                // bytes are preserved.  Create the file if it does not
+                // exist yet.  Explicit truncation happens via
+                // `f.set_file_size(0)` (or `f#size = 0`).
+                match OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(&file_name)
+                {
                     Ok(mut f) => {
-                        // apply stored seek position on first open.
-                        if next_pos != 0 {
-                            let _ = f.seek(SeekFrom::Start(next_pos as u64));
-                        }
+                        // Seek to the stored write position (end of file
+                        // for default appends, explicit offset for
+                        // `f#next = N`).
+                        let _ = f.seek(SeekFrom::Start(next_pos as u64));
                         self.database
                             .store_mut(&file)
                             .set_i32_raw(file.rec, file.pos + 28, f_nr);
@@ -215,7 +255,7 @@ impl State {
                         f_nr
                     }
                     Err(e) => {
-                        eprintln!("file create error for {file_name:?}: {e}");
+                        eprintln!("file open error for {file_name:?}: {e}");
                         return;
                     }
                 }

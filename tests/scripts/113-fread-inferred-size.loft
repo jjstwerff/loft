@@ -43,10 +43,12 @@ fn main() {
   }
 
   // The two forms must produce byte-identical reads — round-trip a
-  // u16 field via both and compare.
+  // u16 field via both and compare.  `+=` appends, so truncate first
+  // to replace the prior payload.
   {
     f = file("test_loft_inferred.bin");
     f#format = LittleEndian;
+    f.set_file_size(0);
     f += (0xCAFE as u16);
   }
   {
@@ -70,6 +72,7 @@ fn main() {
   {
     f = file("test_loft_inferred.bin");
     f#format = LittleEndian;
+    f.set_file_size(0);
     f += (0x12345678 as i32);
     f += (0x5A as u8);
     f += (0xCAFE as u16);

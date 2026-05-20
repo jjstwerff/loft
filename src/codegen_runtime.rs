@@ -926,6 +926,11 @@ pub fn OpSyncFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef) -> bool {
 
 /// Open (or reuse) a file handle for writing.  Returns the index into
 /// `stores.files`, or `i32::MIN` on error.
+///
+/// The handle is opened for read+write without truncating so that
+/// successive `f += …` appends preserve earlier bytes.  Explicit
+/// truncation goes through `OpTruncateFile` (`f.set_file_size(0)`
+/// / `f#size = 0`).
 #[cfg(not(feature = "wasm"))]
 fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
     let f_nr = stores.files.len() as i32;
@@ -942,7 +947,13 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
             store.get_byte(file.rec, file.pos + 32, 0),
         )
     };
-    match File::create(&file_name) {
+    match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&file_name)
+    {
         Ok(f) => {
             stores
                 .store_mut(file)
@@ -957,7 +968,7 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
             f_nr
         }
         Err(e) => {
-            eprintln!("file create error for {file_name:?}: {e}");
+            eprintln!("file open error for {file_name:?}: {e}");
             i32::MIN
         }
     }
@@ -1394,8 +1405,30 @@ pub fn OpWriteFile<T: FileVal>(
         return;
     }
     // Track write position: set #index = where this write starts.
+    // `+=` is append-only: when the user has not explicitly set
+    // `f#next = N`, the default position is the current end of file
+    // (consistent with `vector += [elem]` / `text += "more"`).
     let raw_next = stores.store(&file).get_long(file.rec, file.pos + 16);
-    let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
+    let next_pos = if raw_next == i64::MIN {
+        if let Some(f) = stores
+            .files
+            .get_mut(file_ref as usize)
+            .and_then(|x| x.as_mut())
+        {
+            f.seek(SeekFrom::End(0)).unwrap_or(0) as i64
+        } else {
+            0
+        }
+    } else {
+        if let Some(f) = stores
+            .files
+            .get_mut(file_ref as usize)
+            .and_then(|x| x.as_mut())
+        {
+            let _ = f.seek(SeekFrom::Start(raw_next as u64));
+        }
+        raw_next
+    };
     stores
         .store_mut(&file)
         .set_long(file.rec, file.pos + 8, next_pos);
