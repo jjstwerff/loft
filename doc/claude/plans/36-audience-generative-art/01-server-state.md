@@ -224,9 +224,10 @@ rather than punching holes through the middle.
   > original spec had the renderer animate the crystal mesh
   > shrinking down across the decay window, which would have
   > needed per-cell age on the wire.  Judged not worth it: a
-  > removed cell just disappears, with an optional client-side
-  > alpha fade-out on the removal delta as the cheap cosmetic
-  > substitute (no wire change).  The window therefore now just
+  > removed cell just disappears, with a client-side alpha
+  > fade-out on the removal delta (shipped — `index.html`,
+  > ~600 ms) as the cheap cosmetic substitute (no wire change).
+  > The window therefore now just
   > adds a flat tail to total lifetime rather than driving an
   > animation.
 
@@ -274,7 +275,7 @@ neighbours rule (the cell collapses toward where the youngest
 neighbour is — i.e., away from the most-recent painting
 direction).~~  **Superseded by the 2026-05-20 decision above** —
 no reverse-extrusion shrink; a removed cell just disappears (with
-an optional client-side fade-out).
+a client-side fade-out, shipped in `index.html`).
 
 Note: the **3D height field** the projector renders is computed
 **from the per-cell `c_height` byte the server ships** (so all

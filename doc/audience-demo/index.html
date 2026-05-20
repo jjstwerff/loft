@@ -123,6 +123,14 @@ const PALETTE = [
 const cells = new Map();
 function cellKey(x, y) { return x + ',' + y; }
 
+// Fade-out on removal.  When a `4:x,y,0` delta removes a cell we drop it
+// from `cells` immediately but keep its old colour here for a short
+// window so draw() can paint it at decreasing alpha — the lightweight
+// substitute for the (dropped) server-driven crystal-shrink animation.
+// Map<"x,y", { colour, start }>; `start` is a performance.now() stamp.
+const fading = new Map();
+const FADE_MS = 600;
+
 // View pan offset — currently fixed to (0, 0) until phase 0.6 wires the
 // outer-ring zones to nudge it.  When that lands, this becomes the
 // authoritative offset between view centre and world (0, 0).
@@ -304,11 +312,41 @@ function draw() {
     const empty = isPan ? '#161624' : COLOR_EMPTY;
     const fill = colourIdx === 0 ? empty : PALETTE[colourIdx];
     drawHex(cx, cy, hexSize * 0.97, fill, COLOR_GRID);
+    // Fade-out overlay: a recently-removed cell is painted in its old
+    // colour at decreasing alpha over FADE_MS, on top of the empty fill.
+    if (colourIdx === 0) {
+      const f = fading.get(cellKey(wx, wy));
+      if (f) {
+        const a = 1 - (performance.now() - f.start) / FADE_MS;
+        if (a > 0) {
+          ctx.globalAlpha = a;
+          drawHex(cx, cy, hexSize * 0.97, PALETTE[f.colour], null);
+          ctx.globalAlpha = 1;
+        }
+      }
+    }
     // Direction arrow on each pan cell so the affordance is clear.
     if (isPan && colourIdx === 0) {
       drawPanArrow(cx, cy, hexSize, vx, vy);
     }
   }
+}
+
+// Drive the fade animation.  A single rAF loop redraws while any cell is
+// fading, pruning entries once they pass FADE_MS, and stops itself when
+// none remain (no idle repaint when the canvas is static).
+let fadeRAF = 0;
+function startFadeLoop() {
+  if (fadeRAF) return;
+  const step = () => {
+    const now = performance.now();
+    for (const [k, f] of fading) {
+      if (now - f.start >= FADE_MS) fading.delete(k);
+    }
+    draw();
+    fadeRAF = fading.size > 0 ? requestAnimationFrame(step) : 0;
+  };
+  fadeRAF = requestAnimationFrame(step);
 }
 
 // Small unicode-style arrow rendered with two line segments, pointing
@@ -489,9 +527,15 @@ function wsConnect() {
       const parts = payload.split(',');
       if (parts.length !== 3) return;
       const wx = parts[0] | 0, wy = parts[1] | 0, c = parts[2] | 0;
-      if (c === 0) cells.delete(cellKey(wx, wy));
-      else {
-        cells.set(cellKey(wx, wy), c);
+      const key = cellKey(wx, wy);
+      if (c === 0) {
+        // Start a fade from the cell's current colour, then remove it.
+        const prev = cells.get(key);
+        if (prev) { fading.set(key, { colour: prev, start: performance.now() }); startFadeLoop(); }
+        cells.delete(key);
+      } else {
+        cells.set(key, c);
+        fading.delete(key);   // a re-paint cancels any in-flight fade
         // Remember the most recent paint so onboarding centring has a
         // fallback target when no active_player_signal has arrived yet.
         if (initialCentringPending) lastSeenCell = { x: wx, y: wy };
