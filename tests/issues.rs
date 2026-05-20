@@ -10809,8 +10809,9 @@ fn p292_vector_reassign_from_loop_local() {
 /// per-kind index rebuild) and stripping the `s["ns"]` lifetime dep so
 /// scope analysis frees both `s` (its own copy) and `ns` (its scope).
 /// The loop-rebuild shape (insertion-sort idiom) is the canonical case;
-/// it must not accumulate across iterations.  Interp-only: keyed
-/// LOCALS panic on `--native` (pre-existing, see @P296).
+/// it must not accumulate across iterations.  This `code!` harness runs
+/// interp; `tests/scripts/119-keyed-local-reassign.loft` covers both
+/// backends (native keyed locals were unblocked by the @P296 fix).
 #[test]
 fn p295_sorted_reassign_from_loop_local() {
     code!(
