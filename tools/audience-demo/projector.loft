@@ -674,10 +674,14 @@ fn main() {
   proj_matrix   = math::mat4_perspective(0.9, WIN_W as float / WIN_H as float, 1.0, 4000.0);
   println("projector: 3D cell shader + perspective projection ready");
 
-  println("projector: connecting to {SERVER_URL}");
-  ws = web::ws_handler(SERVER_URL);
+  // Server URL: LOFT_PROJ_SERVER overrides the local default, so the same
+  // projector can point at a remote audience server (e.g. a public demo).
+  server_url = env_variable("LOFT_PROJ_SERVER");
+  if server_url == "" { server_url = SERVER_URL; }
+  println("projector: connecting to {server_url}");
+  ws = web::ws_handler(server_url);
   if ws == null {
-    println("projector: FAILED ws_handler({SERVER_URL})");
+    println("projector: FAILED ws_handler({server_url})");
     graphics::gl_destroy_window();
     return;
   }
