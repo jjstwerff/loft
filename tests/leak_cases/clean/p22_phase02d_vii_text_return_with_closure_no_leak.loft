@@ -1,0 +1,16 @@
+        fn build() -> text {
+            acc = "";
+            f = fn(s: text) { acc += s; };
+            f("a");
+            f("bb");
+            acc
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = build();
+                assert(r == "abb", "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        

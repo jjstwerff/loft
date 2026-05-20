@@ -1,0 +1,24 @@
+struct Cell { ck: text not null, x: integer not null, y: integer not null }
+struct World { cells: hash<Cell[ck]> }
+struct ChunkRef { ck: text not null, cx: integer not null, cy: integer not null }
+struct ChunkSet { chunks: hash<ChunkRef[ck]> }
+fn collect(w: World) -> ChunkSet {
+  cs = ChunkSet{chunks: []};
+  for cell in w.cells {
+    ck = "{cell.x}";
+    if cs.chunks[ck] == null {
+      cs.chunks += [ChunkRef{ck: ck, cx: cell.x, cy: cell.y}];
+    }
+  }
+  cs
+}
+pub fn test() {
+  w = World{cells: []};
+  w.cells += [Cell{ck: "a", x: 1, y: 0}];
+  w.cells += [Cell{ck: "b", x: 2, y: 0}];
+  w.cells += [Cell{ck: "c", x: 3, y: 0}];
+  cs = collect(w);
+  count = 0;
+  for _ in cs.chunks { count = count + 1; }
+  assert(count == 3, "deep-copied hash has 3 entries");
+}

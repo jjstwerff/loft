@@ -16,6 +16,13 @@ mod text;
 /// Entry produced by `collect_pre_evals`: `(temp_var, type_str, expr_code, def_nr, stores_fn)`.
 type PreEvalEntry = (String, String, String, u32, bool);
 
+/// Rust source spliced into the native `main` bootstrap just before its
+/// closing brace.  Gated on `LOFT_NATIVE_LEAK_CHECK` so normal native
+/// runs stay silent, but tests (and a curious developer) can opt in to
+/// the same store-leak report the interpreter prints unconditionally —
+/// giving leak regressions a guard on `--native`, not just `--interpret`.
+const NATIVE_LEAK_CHECK_TAIL: &str = "    if std::env::var(\"LOFT_NATIVE_LEAK_CHECK\").is_ok() {\n        let stores: &Stores = unsafe { &*cell.get() };\n        let leaks = stores.collect_store_leaks();\n        if !leaks.is_empty() {\n            let count = leaks.len();\n            let preview = if count <= 5 { leaks.join(\", \") } else { format!(\"{} ... and {} more\", leaks[..5].join(\", \"), count - 5) };\n            eprintln!(\"Warning: {count} stores not freed at program exit: {preview}\");\n        }\n    }\n";
+
 /// Walk the Value IR tree and collect all function definition numbers
 /// referenced by `Value::Call(def_nr, _)` nodes.
 /// Detect a T-parameterized method stub: name shape
@@ -794,10 +801,12 @@ extern crate loft;"
                 // src/main.rs does for the interpreter path
                 // (state.database.user_args.clone_from(&user_args)).
                 // @PLAN37 phase 10.3 fix.
-                writeln!(
+                write!(
                     w,
-                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n}}"
+                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n"
                 )?;
+                w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+                writeln!(w, "}}")?;
             }
         }
         Ok(())
@@ -807,10 +816,12 @@ extern crate loft;"
     fn emit_main_bootstrap(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
         let main_nr = self.data.def_nr("n_main");
         if main_nr < till {
-            writeln!(
+            write!(
                 w,
-                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n}}"
+                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n"
             )?;
+            w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+            writeln!(w, "}}")?;
         }
         Ok(())
     }

@@ -1,0 +1,15 @@
+        struct Point { x: integer, y: integer }
+        fn one_call() -> integer {
+            p = Point { x: 10, y: 20 };
+            f = fn(dx: integer) -> integer { p.x + dx };
+            f(5)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == 15, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        

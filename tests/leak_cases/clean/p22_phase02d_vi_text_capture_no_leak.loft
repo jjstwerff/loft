@@ -1,0 +1,14 @@
+        fn one_iteration(seed: text) {
+            acc = seed;
+            f = fn() { acc = "after"; };
+            f();
+            assert(acc == "after", "got {acc}");
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                one_iteration("before");
+                i = i + 1;
+            }
+        }
+        

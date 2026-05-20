@@ -1,0 +1,19 @@
+struct Cell { c_color: u8 not null, c_height: u8 not null, c_age: u16 not null }
+struct Chunk { ck_cx: integer not null, ck_cz: integer not null, ck_cells: vector<Cell> }
+struct World { chunks: vector<Chunk>, tick: integer not null }
+fn cell_empty() -> Cell { Cell{c_color: 0, c_height: 0, c_age: 0} }
+fn build_chunk(cx: integer, cz: integer) -> Chunk {
+  cs: vector<Cell> = [];
+  for _ in 0..4 { cs += [cell_empty()]; }
+  Chunk{ck_cx: cx, ck_cz: cz, ck_cells: cs}
+}
+fn ensure_chunk(w: &World, cx: integer, cz: integer) {
+  w.chunks += [build_chunk(cx, cz)];
+}
+pub fn test() {
+  w = World{chunks: [], tick: 0};
+  ensure_chunk(w, 0, 0);
+  ensure_chunk(w, 1, 0);
+  ensure_chunk(w, -1, 0);
+  assert(len(w.chunks) == 3, "3 alive chunks");
+}

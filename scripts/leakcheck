@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# leakcheck — quick BOTH-backend store-leak check for a loft snippet.
+#
+# Runs a .loft program through the interpreter (`--interpret`, which prints a
+# leak warning unconditionally) and the native backend (`--native`, with
+# `LOFT_NATIVE_LEAK_CHECK=1` so the generated binary runs the same exit-time
+# store-leak report) and prints a compact per-backend verdict:
+#
+#     clean        no leak, ran fine
+#     leak (N)     N stores not freed at program exit
+#     compile-fail native rustc / codegen rejected the program
+#     run-fail     non-zero exit (panic, failed assert, …)
+#
+# Usage:
+#   scripts/leakcheck FILE.loft [MORE.loft ...]
+#   echo 'fn main(){ … }' | scripts/leakcheck -
+#
+# A file that defines `fn test()` but no `fn main` is auto-wrapped with
+# `fn main(){ test(); }` so leak-case snippets run as-is.
+#
+# Flags:
+#   -i   interpreter only (skip the slow native rustc compile)
+#   -B   skip the auto-rebuild of the loft binary + libloft.rlib
+#        (by default leakcheck refreshes them so results match current source —
+#         this is the trap that bites: native links a STALE libloft.rlib unless
+#         `cargo build --release --lib` runs after a source edit)
+#   -v   verbose — show the raw interp/native stderr on a non-clean verdict
+#
+# Examples:
+#   scripts/leakcheck /tmp/repro.loft
+#   scripts/leakcheck -i tests/leak_cases/clean/*.loft     # fast interp sweep
+#   printf 'fn main(){ for i in 0..9 { d = mk(); use(d); } }\n' | scripts/leakcheck -
+
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOFT="$ROOT/target/release/loft"
+
+interp_only=0
+no_build=0
+verbose=0
+while getopts "iBvh" opt; do
+  case "$opt" in
+    i) interp_only=1 ;;
+    B) no_build=1 ;;
+    v) verbose=1 ;;
+    h) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "see: scripts/leakcheck -h" >&2; exit 2 ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+if [ "$#" -eq 0 ]; then
+  echo "usage: scripts/leakcheck FILE.loft ...   (or '-' for stdin; -h for help)" >&2
+  exit 2
+fi
+
+# Refresh the binary + the native-link rlib so verdicts match current source.
+if [ "$no_build" -eq 0 ]; then
+  ( cd "$ROOT" && cargo build --release --lib --bin loft ) >/tmp/leakcheck_build.log 2>&1
+  if [ "$?" -ne 0 ]; then
+    echo "leakcheck: build failed — see /tmp/leakcheck_build.log" >&2
+    tail -5 /tmp/leakcheck_build.log >&2
+    exit 1
+  fi
+  # `--lib --bin loft` does not always re-link the top-level libloft.rlib that
+  # the native compile links; a bare `--lib` does.
+  ( cd "$ROOT" && cargo build --release --lib ) >>/tmp/leakcheck_build.log 2>&1
+fi
+
+if [ ! -x "$LOFT" ]; then
+  echo "leakcheck: $LOFT not found — build first (drop -B)" >&2
+  exit 1
+fi
+
+# Run one backend; sets OUT (combined stderr+stdout) and RC in the caller.
+OUT=""; RC=0
+run_loft() {  # $1 = mode flag, $2 = file, $3 = leak-env (0/1)
+  if [ "$3" -eq 1 ]; then
+    OUT="$(cd "$ROOT" && LOFT_NATIVE_LEAK_CHECK=1 "$LOFT" "$1" "$2" 2>&1)"
+  else
+    OUT="$(cd "$ROOT" && "$LOFT" "$1" "$2" 2>&1)"
+  fi
+  RC=$?
+}
+
+# Map a captured (output, exit-code) pair to a one-word verdict.
+verdict() {  # $1 = output, $2 = exit code
+  local out="$1" rc="$2" n
+  if grep -qiE "error\[|native compilation failed|invalid fn-ref|codegen bug" <<<"$out"; then
+    echo "compile-fail"; return
+  fi
+  n="$(grep -oE "[0-9]+ stores not freed" <<<"$out" | grep -oE '^[0-9]+' | head -1)"
+  if [ -n "$n" ]; then
+    echo "leak ($n)"; return
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "run-fail (exit $rc)"; return
+  fi
+  echo "clean"
+}
+
+run_one() {  # $1 = file
+  local src="$1" tmp="" name iv nv iout nout
+  if [ "$src" = "-" ]; then
+    tmp="$(mktemp /tmp/leakcheck_stdin_XXXX.loft)"; cat > "$tmp"; src="$tmp"; name="<stdin>"
+  else
+    name="$src"
+  fi
+  # Auto-wrap a `fn test()`-only snippet.
+  if ! grep -qE '\bfn[[:space:]]+main\b' "$src" && grep -qE '\bfn[[:space:]]+test\b' "$src"; then
+    local wrap; wrap="$(mktemp /tmp/leakcheck_wrap_XXXX.loft)"
+    cat "$src" > "$wrap"; printf '\nfn main() { test(); }\n' >> "$wrap"
+    [ -n "$tmp" ] && rm -f "$tmp"; tmp="$wrap"; src="$wrap"
+  fi
+
+  run_loft --interpret "$src" 0; iout="$OUT"; iv="$(verdict "$OUT" "$RC")"
+  printf '%-40s interp: %-16s' "$name" "$iv"
+  if [ "$interp_only" -eq 1 ]; then
+    printf '\n'
+  else
+    run_loft --native "$src" 1; nout="$OUT"; nv="$(verdict "$OUT" "$RC")"
+    printf 'native: %s\n' "$nv"
+    if [ "$verbose" -eq 1 ] && [ "$nv" != "clean" ]; then
+      printf '%s\n' "$nout" | sed 's/^/  native| /'
+    fi
+  fi
+  if [ "$verbose" -eq 1 ] && [ "$iv" != "clean" ]; then
+    printf '%s\n' "$iout" | sed 's/^/  interp| /'
+  fi
+  [ -n "$tmp" ] && rm -f "$tmp"
+}
+
+for f in "$@"; do
+  run_one "$f"
+done
+
+exit 0

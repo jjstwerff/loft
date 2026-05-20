@@ -1,0 +1,15 @@
+        fn make() -> fn() -> integer {
+            n = 0;
+            fn() -> integer { n = n + 1; n }
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                f = make();
+                _ = f();
+                _ = f();
+                _ = f();
+                i = i + 1;
+            }
+        }
+        

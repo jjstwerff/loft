@@ -344,6 +344,32 @@ impl Stores {
         }
     }
 
+    /// Collect a description for every leaked store at program exit.
+    ///
+    /// Mirrors `State::collect_store_leaks` (which operates on the
+    /// interpreter's `State`) but lives on `Stores` so the **native**
+    /// runtime can run the same check — the generated `main` bootstrap
+    /// calls this when `LOFT_NATIVE_LEAK_CHECK` is set so leak
+    /// regressions surface on `--native` as well as `--interpret`.
+    /// Same filtering: skip the stack store (#0), locked constants /
+    /// worker borrows, and `const_refs`.
+    #[must_use]
+    pub fn collect_store_leaks(&self) -> Vec<String> {
+        let mut leaked = Vec::new();
+        for (s_nr, s) in self.allocations.iter().enumerate() {
+            if s_nr == 0 {
+                continue; // stack store — always alive
+            }
+            if s.is_locked() || self.const_refs.iter().any(|cr| cr.store_nr == s_nr as u16) {
+                continue;
+            }
+            if !s.free {
+                leaked.push(format!("{}(bc:{})", s_nr, s.created_at));
+            }
+        }
+        leaked
+    }
+
     /**
     Validate if a reference is already freed before.
     # Panics

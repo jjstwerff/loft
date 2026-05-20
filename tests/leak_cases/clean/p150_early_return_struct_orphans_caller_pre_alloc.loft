@@ -1,0 +1,11 @@
+struct M { name: text }
+fn make_empty() -> M { M { name: "untitled" } }
+fn make_or_default(t: text) -> M {
+  if t == "" { return make_empty(); }
+  result = M.parse(t);
+  result
+}
+pub fn test() {
+  m = make_or_default("");
+  assert(m.name == "untitled", "name");
+}

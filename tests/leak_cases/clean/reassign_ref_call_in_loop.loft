@@ -1,0 +1,19 @@
+struct S { v: vector<float> }
+fn inner(a: const S, b: const S) -> S {
+  r = S { v: [a.v[0] * b.v[0]] };
+  r
+}
+fn wrap(proj: const S, bx: float) -> S {
+  model = S { v: [bx] };
+  inner(proj, model)
+}
+pub fn test() {
+  proj = S { v: [2.0] };
+  mvp = wrap(proj, 1.0);
+  assert(mvp.v[0] == 2.0, "first: {mvp.v[0]}");
+  mvp = wrap(proj, 3.0);
+  assert(mvp.v[0] == 6.0, "second: {mvp.v[0]}");
+  mvp = wrap(proj, 5.0);
+  assert(mvp.v[0] == 10.0, "third: {mvp.v[0]}");
+  assert(proj.v[0] == 2.0, "proj: {proj.v[0]}");
+}

@@ -1,0 +1,12 @@
+struct Item { k: integer not null }
+fn build(n: integer) -> sorted<Item[k]> {
+  r: sorted<Item[k]> = [];
+  for i in 0..n { r += [Item{k: n - i}]; }
+  r
+}
+fn test() {
+  s: sorted<Item[k]> = [];
+  s += [Item{k: 99}];
+  s = build(3);
+  assert(len(s) == 3, "s has 3 after call-RHS reassign");
+}

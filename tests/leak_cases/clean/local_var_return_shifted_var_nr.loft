@@ -1,0 +1,19 @@
+struct S { v: vector<float> }
+fn inner(a: const S, b: const S) -> S {
+  r = S { v: [a.v[0] + b.v[0]] };
+  r
+}
+fn wrap(x: const S) -> S {
+  dummy1 = 42;
+  dummy2 = 99;
+  y = S { v: [1.0] };
+  result = inner(x, y);
+  assert(dummy1 == 42, "dummy1");
+  assert(dummy2 == 99, "dummy2");
+  result
+}
+pub fn test() {
+  p = S { v: [2.0] };
+  q = wrap(p);
+  assert(q.v[0] == 3.0, "q.v[0]={q.v[0]}");
+}

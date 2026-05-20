@@ -1,0 +1,18 @@
+struct S { v: vector<float> }
+fn inner(a: const S, b: const S) -> S {
+  r = S { v: [a.v[0] + b.v[0]] };
+  r
+}
+fn middle(x: const S) -> S {
+  y = S { v: [10.0] };
+  inner(x, y)
+}
+fn outer(x: const S) -> S {
+  z = S { v: [x.v[0] + 100.0] };
+  middle(z)
+}
+pub fn test() {
+  p = S { v: [1.0] };
+  q = outer(p);
+  assert(q.v[0] == 111.0, "q.v[0]={q.v[0]}");
+}
