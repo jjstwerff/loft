@@ -1244,9 +1244,7 @@ impl Parser {
             // already dedups via `tp_nr` below, so this only affects the
             // qualified shape.)
             let existing = self.data.def_nr(type_name);
-            let u_nr = if existing != u32::MAX
-                && self.data.def_type(existing) == DefType::Unknown
-            {
+            let u_nr = if existing != u32::MAX && self.data.def_type(existing) == DefType::Unknown {
                 existing
             } else {
                 self.data
