@@ -313,7 +313,36 @@ heartbeat and matches the sluggish-by-design tempo.
 | 1.6 | Broadcast helpers (single-client send + all-subscribers send) | XS |
 | 1.7 | Active-player signal aggregation + emit | XS |
 | 1.8 | Multi-client load test (2-3 → 10-30 → upper bound) — **done** (see § Load-test findings) | S |
-| 1.9 | Crash-resistance — does a misbehaving client (malformed JSON, dropped mid-handshake) bring the server down? | S |
+| 1.9 | Crash-resistance — does a misbehaving client (malformed frames, oversized frame, dropped mid-handshake) bring the server down? — **done** (see § Crash-resistance findings) | S |
+
+## Crash-resistance findings (1.9)
+
+Audited the event-pump path (which the server now runs on) against
+hostile clients.  One real crash, now fixed; the rest already safe.
+
+- **FIXED — unbounded WS frame allocation (process abort).**
+  `websocket::ws_read_frame_detailed` did `vec![0u8; payload_len]` with
+  no cap, trusting the frame's 64-bit length field.  A client sending a
+  127-length header claiming ~u64::MAX bytes triggered a multi-exabyte
+  allocation → abort, taking *every* connected client down.  Capped at
+  16 MiB (real client→server frames are tiny control messages); an
+  oversized frame is now dropped as `Closed`.  Regression test:
+  `lib/server/native` `p_oversized_ws_frame_rejected_without_alloc`.
+  This hardens **all** `lib/server` consumers, not just the demo.
+- **Malformed text frames — already safe.**  Probed with a battery of
+  bad frames ([`tools/audience-demo/crash_probe.loft`](../../../../tools/audience-demo/crash_probe.loft):
+  non-numeric coords, unknown msg ids, no-colon frames, empty frames,
+  out-of-range / negative / huge values).  The pump logs+drops
+  unparseable `<id>:<payload>` frames; `handle_message` ignores unknown
+  ids and rejects out-of-range colours.  Server stayed up and a fresh
+  good client still painted + received its echo.
+- **Dropped mid-handshake / garbage TCP — already safe.**  `parse_request`
+  reads the head byte-by-byte (16 KiB cap) and returns `Error` on
+  EOF/timeout/garbage; the pump treats that as "nothing to deliver."
+- **Known non-crash DoS (out of 1.9 scope):** a slow-loris that connects
+  but sends no request stalls the accept in `parse_request` for its
+  500 ms read timeout — degrades latency under a flood but does not
+  crash.  A true fix is the Tier B reactor (non-blocking accept).
 
 ## Load-test findings (1.8)
 

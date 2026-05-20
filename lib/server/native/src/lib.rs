@@ -803,4 +803,40 @@ mod tests {
         drop(server_stream);
         let _ = client.join();
     }
+
+    /// @PLAN36-1.9: a hostile client can send a 127-length WS frame header
+    /// claiming a near-u64::MAX payload.  The reader must reject it as
+    /// `Closed` after reading the length field — NOT trust it and attempt a
+    /// multi-exabyte `vec![0u8; len]`, which aborts the whole process (and
+    /// every other client's session with it).
+    #[test]
+    fn p_oversized_ws_frame_rejected_without_alloc() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let client = thread::spawn(move || {
+            let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+            // FIN + binary opcode (0x82); masked + 127-length marker (0xFF);
+            // then a u64::MAX payload length.  No mask/payload follow — the
+            // reader must bail at the length check before reading them.
+            let mut frame = vec![0x82u8, 0xFFu8];
+            frame.extend_from_slice(&u64::MAX.to_be_bytes());
+            let _ = s.write_all(&frame);
+            let mut sink = [0u8; 4];
+            let _ = s.read(&mut sink); // keep open until the server reads
+        });
+
+        let (mut server_stream, _peer) = listener.accept().expect("accept");
+        server_stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        match websocket::ws_read_frame_detailed(&mut server_stream) {
+            websocket::ReadOutcome::Closed => {}
+            websocket::ReadOutcome::Frame(_) => panic!("oversized frame accepted as a Frame"),
+            websocket::ReadOutcome::NoData => panic!("oversized frame returned NoData"),
+        }
+
+        drop(server_stream);
+        let _ = client.join();
+    }
 }

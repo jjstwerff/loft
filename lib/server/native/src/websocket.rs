@@ -216,6 +216,18 @@ pub fn ws_read_frame_detailed(stream: &mut TcpStream) -> ReadOutcome {
         payload_len = u64::from_be_bytes(buf);
     }
 
+    // Crash-resistance (@PLAN36-1.9): a hostile / buggy peer can claim a
+    // 64-bit payload length up to ~16 EiB.  Allocating `vec![0u8;
+    // payload_len]` for that aborts the whole process on the failed
+    // allocation, taking every other client's session down with it.  Real
+    // client→server frames here are tiny control messages, so cap the
+    // accepted frame size and drop the offending peer instead of trusting
+    // its length field.
+    const MAX_FRAME_PAYLOAD: u64 = 16 * 1024 * 1024; // 16 MiB
+    if payload_len > MAX_FRAME_PAYLOAD {
+        return ReadOutcome::Closed;
+    }
+
     let mask = if masked {
         let mut buf = [0u8; 4];
         if stream.read_exact(&mut buf).is_err() {
