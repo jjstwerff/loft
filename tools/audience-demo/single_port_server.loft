@@ -59,6 +59,9 @@ struct Client {
   color:  integer not null,         // last colour_select (1-9, 0 = cleared)
   lx:     integer not null,         // last-painted x
   ly:     integer not null,
+  last_active_tick: integer not null,  // world.tick of this client's last
+                                       // paint — 0 = never painted.  Drives
+                                       // the active-player heartbeat (1.7)
 }
 
 struct World {
@@ -76,6 +79,8 @@ struct World {
   last_tick_us: integer not null,    // ticks() of the most recent tick-advance —
                                      // same wrap caveat as last_save_us; a wrap
                                      // simply delays the next tick by one window.
+  last_active_us: integer not null,  // ticks() of the last active-player
+                                     // heartbeat emit (sub-task 1.7, 1 Hz)
 }
 
 // ── Wire helpers — leaves first (@P281) ─────────────────────────────────────
@@ -168,6 +173,31 @@ SNAPSHOT_INTERVAL_US = 5000000;      // 5 s in µs (fits in i32; ticks() diff pr
 // every iteration so a long sleep / GC pause catches up rather than
 // silently dropping ticks.
 TICK_INTERVAL_US = 100000;           // 100 ms in µs
+
+// ── Decay (sub-task 1.4) ─────────────────────────────────────────────────────
+// Automatic erosion: a non-empty cell is fully removed once its age
+// (world.tick - birth_tick, in 100 ms units) passes its lease.  The lease
+// grows with filled-neighbour count, so cluster EDGES (fewest neighbours)
+// cross the threshold first and decay works inward — "inverse growth" back
+// toward empty with no audience effort.  Timing per 01-server-state.md §
+// Tick loop (base 5 min, +1 min per neighbour, 30 s window).  All three are
+// env-tunable (in ticks) so a load / visual test can speed erosion up:
+//   DECAY_BASE / DECAY_LEASE / DECAY_WINDOW.
+//
+// NOTE: the eligible-but-not-yet-removed shrink ANIMATION the design
+// describes needs per-cell age on the wire; the current text wire
+// (`4:x,y,color`) carries only colour, so this MVP does a hard removal at
+// full expiry and the client treats it like any other clear.  Wiring age
+// through is phase 1 step 2 (JSON-in / binary-out migration).
+DECAY_BASE_DEFAULT   = 3000;          // 5 min @ 10 Hz
+DECAY_LEASE_DEFAULT  = 600;           // +1 min per filled neighbour
+DECAY_WINDOW_DEFAULT = 300;           // 30 s eligible → removed
+ACTIVE_HEARTBEAT_US  = 1000000;       // 1 s — active-player signal cadence (1.7)
+
+fn env_int(name: text, dflt: integer) -> integer {
+  raw = env_variable(name);
+  if raw == "" { dflt } else { raw as integer }
+}
 
 // Byte widths come from each field's declared type — `c.x: i32`
 // writes 4 bytes automatically, `c.color: u8` writes 1.  The only
@@ -306,6 +336,7 @@ fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) 
                          birth_tick: world.tick}];
     sender.lx = x;
     sender.ly = y;
+    sender.last_active_tick = world.tick;
     broadcast(world, delta_frame(x, y, c));
     world.dirty = true;
   } else if msg_id == 2 {
@@ -318,10 +349,12 @@ fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) 
       world.dirty = true;
     }
   } else if msg_id == 3 {
-    // color_select "color"
+    // color_select "color" — record only.  The active-player signal is now
+    // emitted by the 1 Hz heartbeat in main() (sub-task 1.7), not per-change
+    // (per-change was rejected as overwhelming during busy periods — see
+    // 01-server-state.md § Active-player signal).
     c = payload as integer;
     sender.color = c;
-    broadcast(world, active_frame(sender.lx, sender.ly));
   } else if msg_id == 6 {
     // snapshot request — re-replay world to this sender only
     println("single-port: [snapshot req] cells={len(world.cells)}");
@@ -355,6 +388,55 @@ fn poll_clients(world: World) -> integer {
   processed
 }
 
+// Count filled hex neighbours of (x, y) by probing the cell hash for the 6
+// adjacent keys.  Mirrors audience_crystal::is_hex_nbr's odd-row offset rule
+// (same-row x±1; rows y±1 shift by parity) so server erosion matches the
+// renderer's adjacency.  O(6) per cell, not O(N).
+fn filled_nbr_count(world: World, x: integer, y: integer) -> integer {
+  parity = y - (y / 2) * 2;
+  if parity < 0 { parity = parity + 2; }
+  n = 0;
+  if world.cells[cell_key(x - 1, y)] != null { n = n + 1; }
+  if world.cells[cell_key(x + 1, y)] != null { n = n + 1; }
+  if parity == 0 {
+    if world.cells[cell_key(x - 1, y - 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x,     y - 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x - 1, y + 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x,     y + 1)] != null { n = n + 1; }
+  } else {
+    if world.cells[cell_key(x,     y - 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x + 1, y - 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x,     y + 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x + 1, y + 1)] != null { n = n + 1; }
+  }
+  n
+}
+
+// One decay pass.  Removes every cell whose age has passed its neighbour-
+// extended lease, broadcasting a removal delta for each.  Neighbour counts
+// are read from the pre-removal snapshot so a single sweep peels one edge
+// layer; the next sweep re-evaluates with the reduced counts, eroding
+// inward.  Expired coords are collected first, then removed, so the hash is
+// not mutated mid-iteration.
+fn decay_sweep(world: World, base: integer, lease: integer, window: integer) {
+  expired: vector<text> = [];
+  for cell in world.cells {
+    age = world.tick - (cell.birth_tick as integer);
+    eff = base + lease * filled_nbr_count(world, cell.x as integer, cell.y as integer);
+    if age >= eff + window {
+      expired += [cell.ck];
+    }
+  }
+  for k in expired {
+    if world.cells[k] != null {
+      world.cells[k] = null;
+      (rx, ry) = parse_xy(k);    // ck is "x,y" — re-derive for the delta
+      broadcast(world, delta_frame(rx, ry, 0));
+      world.dirty = true;
+    }
+  }
+}
+
 fn main() {
   srv = server::listen(PORT);
   if srv.handle < 0 {
@@ -377,7 +459,12 @@ fn main() {
     last_save_us: ticks(),
     tick:         0,         // overwritten by world_load if a v2 snapshot exists
     last_tick_us: ticks(),
+    last_active_us: ticks(),
   };
+  decay_base   = env_int("DECAY_BASE",   DECAY_BASE_DEFAULT);
+  decay_lease  = env_int("DECAY_LEASE",  DECAY_LEASE_DEFAULT);
+  decay_window = env_int("DECAY_WINDOW", DECAY_WINDOW_DEFAULT);
+  println("single-port: decay base={decay_base} lease/nbr={decay_lease} window={decay_window} (ticks @ 10 Hz)");
   world_load(world);
   world.last_tick_us = ticks();    // reset the cadence clock to "now" after
                                    // load so a tick doesn't fire mid-init
@@ -399,6 +486,7 @@ fn main() {
             color:  0,
             lx:     0,
             ly:     0,
+            last_active_tick: 0,
           }];
           println("single-port: ws client connected — total active={len(world.clients)}");
           // Replay current world to the new client.
@@ -420,14 +508,13 @@ fn main() {
     // 2. Poll each WS client for pending messages.
     work = work + poll_clients(world);
 
-    // 3. Tick advance — fixed-rate wall clock @ 10 Hz (sub-task 1.4
-    //    partial: growth/age only, decay deferred).  Every iteration
-    //    we check `ticks() - world.last_tick_us` and advance as many
-    //    ticks as fit in the elapsed window — so a long pause catches
-    //    up rather than dropping ticks silently.  Renderers read
-    //    `world.tick - cell.birth_tick` (in 100 ms units) as the cell's
-    //    age and scale visual growth from that.  No autonomous mutation
-    //    of cells here yet; the loop just turns the clock.
+    // 3. Tick advance — fixed-rate wall clock @ 10 Hz (sub-task 1.4).
+    //    Every iteration we check `ticks() - world.last_tick_us` and
+    //    advance as many ticks as fit in the elapsed window — so a long
+    //    pause catches up rather than dropping ticks silently.  Renderers
+    //    read `world.tick - cell.birth_tick` (in 100 ms units) as the
+    //    cell's age and scale visual growth from that.  After the clock
+    //    turns we run one decay sweep (automatic edge-first erosion).
     now_us = ticks();
     elapsed = now_us - world.last_tick_us;
     if elapsed >= TICK_INTERVAL_US {
@@ -443,6 +530,34 @@ fn main() {
         ncells: integer = 0;
         for _ in world.cells { ncells = ncells + 1; }
         println("single-port: [tick] world.tick={world.tick} cells={ncells}");
+      }
+      // Decay sweep — cheap (O(6N)) and only on a tick boundary.  Removals
+      // are rare and edge-first because lifetimes are minutes, so this does
+      // not burst the wire.
+      decay_sweep(world, decay_base, decay_lease, decay_window);
+    }
+
+    // 3b. Active-player heartbeat (sub-task 1.7) — once per second, re-pulse
+    //     the most-recently-active painter's cell to all clients so late
+    //     joiners / clients that missed the instant delta still get a
+    //     "where's the action" hint.  1 Hz was the validated cadence
+    //     (01-server-state.md § Active-player signal).
+    if ticks() - world.last_active_us >= ACTIVE_HEARTBEAT_US {
+      world.last_active_us = ticks();
+      best_tick = 0;
+      best_x = 0;
+      best_y = 0;
+      found = false;
+      for hb in world.clients {
+        if hb.active && hb.last_active_tick > best_tick {
+          best_tick = hb.last_active_tick;
+          best_x = hb.lx;
+          best_y = hb.ly;
+          found = true;
+        }
+      }
+      if found {
+        broadcast(world, active_frame(best_x, best_y));
       }
     }
 
