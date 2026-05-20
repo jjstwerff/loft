@@ -4270,12 +4270,29 @@ impl Parser {
     /// , which needs to enumerate files + package edges without
     /// spilling symbol-table side-effects before pass-1 parsing begins.
     fn lib_path_manifest_resolve(&mut self, dir: &str, id: &str) -> Option<ResolvedPkg> {
-        let pkg_dir = format!("{dir}/{id}");
-        if !std::path::Path::new(&pkg_dir).is_dir() {
+        // @P296-sibling (Windows) — build the package paths with
+        // `Path::join` rather than `format!("{dir}/{id}")`.  When `dir` is
+        // an absolute Windows path (`D:\a\loft\loft\lib`, e.g. a `--lib`
+        // argument built via `PathBuf::join`), interpolating a literal `/`
+        // produces a mixed-separator path; `Path::join` uses the platform
+        // separator consistently so nested `--lib` packages resolve on
+        // Windows (the crystal_gold CI failure: "Library 'audience_crystal'
+        // not found").  No behavioural change on Linux/macOS.
+        let pkg_dir_pb = std::path::Path::new(dir).join(id);
+        if !pkg_dir_pb.is_dir() {
             return None;
         }
-        let manifest_path = format!("{pkg_dir}/loft.toml");
-        let (entry, manifest) = if std::path::Path::new(&manifest_path).exists() {
+        let pkg_dir = pkg_dir_pb.to_string_lossy().into_owned();
+        let manifest_pb = pkg_dir_pb.join("loft.toml");
+        let nested_entry = || {
+            pkg_dir_pb
+                .join("src")
+                .join(format!("{id}.loft"))
+                .to_string_lossy()
+                .into_owned()
+        };
+        let (entry, manifest) = if manifest_pb.exists() {
+            let manifest_path = manifest_pb.to_string_lossy().into_owned();
             let m = manifest::read_manifest(&manifest_path)?;
             if let Some(ref req) = m.loft_version {
                 let current = env!("CARGO_PKG_VERSION");
@@ -4288,13 +4305,12 @@ impl Parser {
                     return None;
                 }
             }
-            let entry = m.entry.as_ref().map_or_else(
-                || format!("{pkg_dir}/src/{id}.loft"),
-                |e| format!("{pkg_dir}/{e}"),
-            );
+            let entry = m.entry.as_ref().map_or_else(nested_entry, |e| {
+                pkg_dir_pb.join(e).to_string_lossy().into_owned()
+            });
             (entry, Some(m))
         } else {
-            (format!("{pkg_dir}/src/{id}.loft"), None)
+            (nested_entry(), None)
         };
         if std::path::Path::new(&entry).exists() {
             Some(ResolvedPkg {
