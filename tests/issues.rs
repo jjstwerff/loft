@@ -10863,6 +10863,46 @@ fn test() {
     .result(Value::Null);
 }
 
+/// @P285 — a keyed-collection membership test (`hash[key] == null`) must
+/// NOT fire the "Redundant null check" warning when the KEY is a
+/// `not null` field.  The lookup RESULT is nullable (absent key → null);
+/// the bug attributed the key's not-null-ness to the comparison.  The
+/// test declares NO expected warnings, so the harness's
+/// `assert_diagnostics` fails if any spurious warning is emitted.
+#[test]
+fn p285_hash_lookup_null_no_spurious_warning() {
+    code!(
+        "struct P285Ent { name: text not null, v: integer not null }
+struct P285Box { items: hash<P285Ent[name]> }
+fn test() {
+    b = P285Box{items: []};
+    b.items += [P285Ent{name: \"x\", v: 9}];
+    key = P285Ent{name: \"x\", v: 0};
+    miss = P285Ent{name: \"y\", v: 0};
+    found = 0;
+    if b.items[key.name] == null { found = -1; } else { found = b.items[key.name].v; }
+    if b.items[miss.name] != null { found = found + 100; }
+    assert(found == 9, \"present + absent membership tests resolve correctly\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// @P285 control — a GENUINE redundant check (`not_null_field == null`,
+/// no lookup) must STILL warn.  Guards against the fix over-suppressing.
+#[test]
+fn p285_genuine_redundant_check_still_warns() {
+    code!(
+        "struct P285G { name: text not null }
+fn test() {
+    g = P285G{name: \"x\"};
+    if g.name == null { assert(false, \"unreachable\"); }
+}"
+    )
+    .warning("Redundant null check — 'name' is 'not null', comparison is always false at p285_genuine_redundant_check_still_warns:4:24")
+    .result(Value::Null);
+}
+
 /// P185 — slot-aliasing bug: a local (`key`) declared AFTER an inner
 /// `body += <format-string>` accumulator loop, inside an outer
 /// `for _ in file(...).files()` that uses an inline temporary as the

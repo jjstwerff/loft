@@ -540,12 +540,23 @@ impl Parser {
                 key_types.push(self.data.attr_type(*el, self.data.attr(*el, k)).clone());
             }
             self.parse_key(code, &t, &key_types);
+            // @P285 — a keyed-collection lookup RESULT is nullable (an absent
+            // key returns the null record).  `parse_key` parsed the KEY last,
+            // so `expr_not_null` still reflects the key (e.g. a `not null`
+            // field) — clear it so a following `lookup == null` membership
+            // test doesn't fire a bogus "Redundant null check" attributed to
+            // the key.
+            self.expr_not_null = false;
+            self.expr_not_null_name.clear();
         } else if let Type::Sorted(el, keys, _) | Type::Index(el, keys, _) = &t {
             let mut key_types = Vec::new();
             for (k, _) in keys {
                 key_types.push(self.data.attr_type(*el, self.data.attr(*el, k)).clone());
             }
             self.parse_key(code, &t, &key_types);
+            // @P285 — see the Hash/Spacial arm above; the lookup result is nullable.
+            self.expr_not_null = false;
+            self.expr_not_null_name.clear();
         } else if t.is_unknown() {
             // @P278/P281 — pass-1 Unknown receiver: consume the
             // entire bracket content including range syntax
