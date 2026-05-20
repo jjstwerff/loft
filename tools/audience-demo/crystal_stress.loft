@@ -1,0 +1,136 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// crystal_stress — CPU-side stress test for the audience-demo native
+// (OpenGL) projector client.  The projector rebuilds the crystal mesh
+// EVERY frame from a snapshot via `crystal_segments_aged(snap, state,
+// tick)` (projector.loft::build_crystal_vbo), then re-uploads the whole
+// VBO.  This harness exercises that per-frame CPU path with a GRADUALLY
+// growing filled-hex cluster (1 → 100 cells) across several FILL
+// PATTERNS, so the scaling of the mesh generator — and how it depends on
+// cluster shape — is visible.  Where it goes super-linear is where the
+// frame budget breaks at the meetup.
+//
+// Run:
+//   cargo run --release --bin loft -- --lib lib tools/audience-demo/crystal_stress.loft
+//   cargo run --release --bin loft -- --native --lib lib tools/audience-demo/crystal_stress.loft
+//
+// Leak validation (native exit-time check — expect no "stores not freed"):
+//   LOFT_NATIVE_LEAK_CHECK=1 cargo run --release --bin loft -- --native --lib lib \
+//       tools/audience-demo/crystal_stress.loft
+
+use audience_crystal::*;
+
+// ── Fill patterns ──────────────────────────────────────────────────
+// Each returns a CellSnap of exactly `n` filled cells in offset coords.
+
+// 0: dense square block — max centers + supporters, max neighbours.
+fn build_block(n: integer) -> CellSnap {
+  xs: vector<integer> = []; ys: vector<integer> = []; cs: vector<integer> = [];
+  side = 1;
+  while side * side < n { side = side + 1; }
+  count = 0;
+  for yy in 0..side {
+    for xx in 0..side {
+      if count < n { xs += [xx]; ys += [yy]; cs += [1 + count % 9]; count = count + 1; }
+    }
+  }
+  CellSnap{xs: xs, ys: ys, colors: cs}
+}
+
+// 1: single row — long on-axis chains (find_furthest_on_axis stress).
+fn build_line(n: integer) -> CellSnap {
+  xs: vector<integer> = []; ys: vector<integer> = []; cs: vector<integer> = [];
+  for i in 0..n { xs += [i]; ys += [0]; cs += [1 + i % 9]; }
+  CellSnap{xs: xs, ys: ys, colors: cs}
+}
+
+// 2: sparse grid (stride 2) — no neighbours, every main is a STUB.
+fn build_sparse(n: integer) -> CellSnap {
+  xs: vector<integer> = []; ys: vector<integer> = []; cs: vector<integer> = [];
+  side = 1;
+  while side * side < n { side = side + 1; }
+  for i in 0..n { xs += [2 * (i % side)]; ys += [2 * (i / side)]; cs += [1 + i % 9]; }
+  CellSnap{xs: xs, ys: ys, colors: cs}
+}
+
+// 3: hollow square ring — loop connectivity, fewer interior supporters.
+fn build_ring(n: integer) -> CellSnap {
+  xs: vector<integer> = []; ys: vector<integer> = []; cs: vector<integer> = [];
+  side = 2;
+  while 4 * side - 4 < n { side = side + 1; }
+  count = 0;
+  for yy in 0..side {
+    for xx in 0..side {
+      if count < n && (xx == 0 || xx == side - 1 || yy == 0 || yy == side - 1) {
+        xs += [xx]; ys += [yy]; cs += [1 + count % 9]; count = count + 1;
+      }
+    }
+  }
+  CellSnap{xs: xs, ys: ys, colors: cs}
+}
+
+fn build_pattern(pid: integer, n: integer) -> CellSnap {
+  if pid == 0 { return build_block(n); }
+  if pid == 1 { return build_line(n); }
+  if pid == 2 { return build_sparse(n); }
+  build_ring(n)
+}
+
+fn main() {
+  empty = CrystalState{main_x: [], main_y: [], main_d: [], birth_tick: []};
+  ns = [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+  labels = ["block ", "line  ", "sparse", "ring  "];
+  // Modest rep count: the ring pattern at 80+ hexes is ~300 ms/build
+  // (fork-explosion, see plan @PLAN36 perf notes), so a high rep count
+  // makes the full ramp take minutes.  12 reps still averages out jitter.
+  reps = 12;
+
+  for pid in 0..4 {
+    lbl = labels[pid];
+    print("\n=== crystal_segments_aged  pattern={lbl}  (us/build = per-frame CPU cost) ===\n");
+    print("hexes  segs   us/build   us/seg   us/hex^2*1000\n");
+    for ni in 0..len(ns) {
+      n = ns[ni];
+      snap = build_pattern(pid, n);
+      cm0 = crystal_segments_aged(snap, empty, 0);
+      segs = len(cm0.kinds);
+      t0 = ticks();
+      for r in 0..reps {
+        cm = crystal_segments_aged(snap, empty, 0);
+        if len(cm.kinds) < 0 { print("unreachable"); }
+      }
+      t1 = ticks();
+      per_build = (t1 - t0) / reps;
+      us_seg = 0;
+      if segs > 0 { us_seg = per_build / segs; }
+      quad = per_build * 1000 / (n * n);
+      print("{n}\t{segs}\t{per_build}\t{us_seg}\t{quad}\n");
+      // Stop this pattern's ramp once a single build blows ~10× the
+      // 60fps frame budget (16.7 ms).  Beyond this the mesh is useless
+      // for live rendering anyway, and the pathological ring/sparse
+      // sizes (10k+ segments) thrash the allocator if we keep ramping.
+      if per_build > 160000 {
+        print("  ^ >160ms/build — frame budget blown; stopping {lbl} ramp\n");
+        break;
+      }
+    }
+  }
+
+  print("\n=== assign_cells (block pattern — center/supporter clustering, 1/frame) ===\n");
+  print("hexes  us/call   us/hex^2*1000\n");
+  for ni in 0..len(ns) {
+    n = ns[ni];
+    snap = build_block(n);
+    t0 = ticks();
+    for r in 0..reps {
+      p = assign_cells(snap);
+      if len(p) < 0 { print("unreachable"); }
+    }
+    t1 = ticks();
+    per_call = (t1 - t0) / reps;
+    quad = per_call * 1000 / (n * n);
+    print("{n}\t{per_call}\t{quad}\n");
+  }
+  print("\ndone\n");
+}
