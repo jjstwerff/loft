@@ -346,18 +346,96 @@ compounded by the web client's connect-time backoff.
 
 ### Optimization follow-up (post-1.8, not a phase-1 blocker)
 
-Correctness is met, so this does not block the phase.  Ordered by
-expected payoff for the connect-storm case:
+Correctness is met, so neither tier blocks the phase.  Two tiers: **A**
+is a cheap app-level fix that stays inside the current single-threaded
+polled model and should be enough for the meetup; **B** is the durable,
+scalable fix and lives in `lib/server` (benefits every loft server
+consumer, not just this demo).  Do A first — the load harness
+(`load_test.loft`) proves the win immediately.
 
-1. **Async / chunked replay-on-connect** — don't serialise the whole
-   world to a new client inside the accept path; stream it across
-   subsequent loop iterations (the design's "one blob per chunk" idea,
-   not yet in the flat-cell server).
-2. **Background-thread accept + mpsc** (the `lib/server` upgrade noted in
-   TTT v5) — get socket accept/read off the single render-ish loop.
-3. **Move `world_save` off the main loop** (background-thread snapshot,
-   already flagged as "the next upgrade").
-4. **Binary wire** (phase 1 step 2) — cut per-message text parse/format.
+#### Tier A — stay single-threaded, unblock the accept path (effort S–M)
+
+The connect storm is slow because the one loop spends each iteration
+*replaying the whole world to one new client* and *polling every existing
+client* before it gets back to `accept()`.  Three changes, all in
+[`single_port_server.loft`](../../../../tools/audience-demo/single_port_server.loft)
+plus one thin native tweak — none need threads:
+
+- **A1 — chunked, non-blocking replay-on-connect.**  Today
+  `replay_world_to(world, new_client)` ships *all* cells inside the
+  accept branch, so a 400-cell world = 400 blocking sends before the loop
+  continues — repeated per connect.  Instead: register the new client
+  with a *replay cursor* (`{client, next_cell_index}`) and advance each
+  in-progress replay by a bounded budget (e.g. 64 cells) per loop
+  iteration.  The loop returns to `accept()` immediately after the WS
+  handshake.  This is the single biggest win.
+- **A2 — drain the accept queue in a small batch per iteration.**  The
+  loop calls `next_nonblocking()` once per pass, so 30 pending sockets
+  need 30 passes (each also doing O(N) polling).  Call it up to K times
+  (e.g. 8) per iteration so a burst is absorbed in a few passes.
+- **A3 — deepen the OS listen backlog.**  Ensure the native listener
+  uses a generous `listen(fd, backlog)` (≥128) so a burst of SYNs queues
+  in the kernel rather than being refused while the loop catches up.
+  (TCP handshake completes in-kernel regardless of `accept()`; the WS
+  *Upgrade* is still app-gated, so A3 is the safety net and A1/A2 are the
+  real latency fix.)  Lives in `lib/server` native `n_tcp_listen` — a
+  one-line `backlog` argument, shared by all consumers.
+- **A4 (optional) — move `world_save` off the hot path opportunistically:**
+  cap it to fire only when no accepts are pending, so a snapshot never
+  delays a connect.  (Full background-thread snapshot is Tier B.)
+
+*Acceptance:* re-run `load_test.loft` — 30-client connect drops from
+~220 s to single-digit seconds; fan-out stays 100 %.
+
+#### Tier B — background I/O reactor in `lib/server` (effort M)
+
+The durable fix: separate socket I/O from the simulation loop using OS
+readiness multiplexing.  This is the model `lib/server` already designs
+toward in [§ Multi-threading model](../../lib_plans/future/08-server/README.md#multi-threading-model)
+(tokio runtime + thread pool); the shipped server is the "polled-only"
+subset noted in [TTT v5](../future/32-tic-tac-toe/README.md).  What's
+needed:
+
+- **B1 — a dedicated reactor thread** in the native layer owns the listen
+  socket + every client socket and waits on **`epoll` (Linux) / `kqueue`
+  (macOS) / IOCP (Windows)** via the `mio` crate (one cross-platform
+  abstraction).  Readiness-driven ⇒ O(ready), not O(N): `accept()` fires
+  the instant a SYN lands; idle connections cost nothing.
+- **B2 — two mpsc channels** between reactor and loft loop: inbound
+  frames → loft drains each tick; loft deltas → reactor fans out.  The
+  loft-facing API (`next_nonblocking` / `broadcast` / `try_recv`) is
+  unchanged, just backed by channels — "single-threaded from loft's
+  view."
+- **B3 — reactor serves the connect snapshot itself.**  The loft loop
+  publishes the world as an atomically-swapped `Arc<blob>` (or an mmap'd
+  buffer — composes with [@PLAN38 durable loft-store](../future/38-loft-store-durable/README.md)).
+  On accept the reactor completes the WS handshake *and* ships the
+  snapshot with one buffered `writev` / large `SO_SNDBUF`, never touching
+  the sim loop.  Replay latency leaves the hot path entirely.
+- **B4 — per-socket backpressure in the reactor** (`EPOLLOUT` /
+  write-readiness): a slow client can't stall the sim loop or its peers.
+- **B5 (scaling knob, optional) — `SO_REUSEPORT` + multiple acceptor
+  threads** for hundreds+ of clients.  Overkill for a ~30-phone meetup.
+
+*Cross-platform note:* the reactor is the one piece that differs per OS;
+`mio` covers epoll/kqueue/IOCP, but the kqueue (macOS) path wants a real
+macOS run to validate — see [§ Validation](#validation) below.
+*Canonical home:* this is `lib/server` work — track the build under
+[lib_plans/future/08-server](../../lib_plans/future/08-server/README.md);
+this section is the **driver** (the concrete load-test finding that
+motivates it), not a second copy of the design.
+
+- **Also pending (independent of A/B): binary wire** (phase 1 step 2) —
+  cuts per-message text parse/format; reduces fan-out CPU but does not by
+  itself fix connect latency.
+
+#### Validation
+
+Both tiers are measured the same way: start the server, run
+`load_test.loft` at the 3 → 12 → 30 ramp, and compare connect time +
+fan-out against the [§ Load-test findings](#load-test-findings-18) table.
+Tier B additionally needs a **macOS run** (kqueue path) and ideally a
+Windows run (IOCP) since the reactor is the OS-specific component.
 
 ## Open design questions
 

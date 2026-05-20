@@ -732,6 +732,33 @@ This means:
 - The number of concurrent WebSocket connections is bounded by the thread pool
   size; long-lived connections should be considered when sizing `threads`.
 
+### Status vs the shipped server — and a concrete driver
+
+The model above is the **target**.  What ships today (`lib/server` +
+`lib/web`) is the **polled-only** subset: a non-blocking listen socket
+that the consumer's own loop drives via `next_nonblocking()` + per-client
+`try_recv()`, single-threaded from loft's view.  That is fine for
+turn-based games but does not scale to a connect storm.
+
+**Concrete driver — @PLAN36 audience-demo load test.**  The 1.8 load test
+([`plans/36-audience-generative-art/01-server-state.md` § Load-test
+findings](../../../plans/36-audience-generative-art/01-server-state.md#load-test-findings-18))
+measured the polled-only server at 3/12/30 concurrent clients: broadcast
+fan-out stayed **100 %**, but per-client **connect latency degraded
+super-linearly** (0.6 → 2.8 → 7.3 s/client; ~220 s for 30 clients)
+because the single loop is too busy to promptly `accept()` (O(N) polling
++ synchronous O(cells) replay-on-connect + periodic snapshot).  That doc
+specifies a **Tier A** app-level mitigation (chunked replay, batched
+accept, deeper listen backlog) and a **Tier B** that is exactly this
+section's reactor model.  Build Tier B here, under the SRV arc:
+
+- Use **`mio`** for the readiness loop so one implementation covers
+  `epoll` (Linux) / `kqueue` (macOS) / IOCP (Windows).
+- Reactor owns accept + per-socket R/W + the connect-time snapshot push;
+  loft handlers/loop talk to it over mpsc channels (API unchanged).
+- The **macOS (kqueue) path needs a real macOS validation run** — it is
+  the OS-specific component most likely to diverge from the Linux path.
+
 ### Thread safety in middleware state
 
 Rate-limit counters, session stores, and other shared middleware state are
