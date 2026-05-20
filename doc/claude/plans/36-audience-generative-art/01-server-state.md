@@ -215,13 +215,20 @@ rather than punching holes through the middle.
   becomes eligible exactly at 5 minutes.
 - **Decay window** (eligible → removed): even after a cell
   becomes eligible, removal is **slow**.  Suggested window:
-  ~30 seconds (300 ticks).  Across the window the renderer
-  animates the height + crystal mesh shrinking down rather than
-  the cell disappearing on a single tick.  Server keeps the
-  cell in the world during the decay window with `c_age`
-  continuing to increment past `effective_lifetime`; cell is
-  fully removed (set to `c_color = 0`) at `c_age >=
-  effective_lifetime + decay_window`.
+  ~30 seconds (300 ticks).  Server keeps the cell in the world
+  during the decay window with `c_age` continuing to increment
+  past `effective_lifetime`; cell is fully removed (set to
+  `c_color = 0`) at `c_age >= effective_lifetime + decay_window`.
+
+  > **Shrink animation dropped (decision 2026-05-20).**  The
+  > original spec had the renderer animate the crystal mesh
+  > shrinking down across the decay window, which would have
+  > needed per-cell age on the wire.  Judged not worth it: a
+  > removed cell just disappears, with an optional client-side
+  > alpha fade-out on the removal delta as the cheap cosmetic
+  > substitute (no wire change).  The window therefore now just
+  > adds a flat tail to total lifetime rather than driving an
+  > animation.
 
 The slow decay is part of the **sluggish-by-design** philosophy
 — see [`README.md` § Tempo philosophy](README.md#tempo-philosophy--sluggish-by-design).
@@ -259,13 +266,15 @@ Each tick:
 7. Broadcast delta to all subscribers (including chunk
    creations + chunk deletions).
 
-The renderer treats a cell-decay event symmetrically to a cell-
+~~The renderer treats a cell-decay event symmetrically to a cell-
 placement event: a decaying cell shrinks down over the same
 ~5-second window the growth animation uses.  Direction of the
 "reverse extrusion" derives from the same age-comparison-with-
 neighbours rule (the cell collapses toward where the youngest
 neighbour is — i.e., away from the most-recent painting
-direction).
+direction).~~  **Superseded by the 2026-05-20 decision above** —
+no reverse-extrusion shrink; a removed cell just disappears (with
+an optional client-side fade-out).
 
 Note: the **3D height field** the projector renders is computed
 **from the per-cell `c_height` byte the server ships** (so all
