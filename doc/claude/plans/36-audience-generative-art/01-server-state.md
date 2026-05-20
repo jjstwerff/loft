@@ -312,8 +312,52 @@ heartbeat and matches the sluggish-by-design tempo.
 | 1.5 | World-delta computation (diff against previous tick) | S |
 | 1.6 | Broadcast helpers (single-client send + all-subscribers send) | XS |
 | 1.7 | Active-player signal aggregation + emit | XS |
-| 1.8 | Multi-client load test (2-3 → 10-30 → upper bound) | S |
+| 1.8 | Multi-client load test (2-3 → 10-30 → upper bound) — **done** (see § Load-test findings) | S |
 | 1.9 | Crash-resistance — does a misbehaving client (malformed JSON, dropped mid-handshake) bring the server down? | S |
+
+## Load-test findings (1.8)
+
+Driver: [`tools/audience-demo/load_test.loft`](../../../../tools/audience-demo/load_test.loft)
+— a single process opens N real WebSocket connections, has each paint a
+disjoint column of cells, drains the broadcast fan-out, and reports
+per-tier metrics.  Run against a live server; ramps 3 → 12 → 30 clients
+by default (`LOFT_AUD_CLIENTS=<n>` for a single tier).
+
+Measured (3 / 12 / 30 clients × 10 paints, fresh world, interpreter):
+
+| Clients | Connect time | Fan-out | send_fail / drops |
+|---|---|---|---|
+| 3  | 1.9 s (~0.6 s/client) | 100 % | 0 |
+| 12 | 33.8 s (~2.8 s/client) | 100 % | 0 |
+| 30 | ~220 s (~7.3 s/client) | 100 % | 0 |
+
+**Broadcast correctness is solid** — every paint reached every client at
+all tiers, no dropped clients, no failed sends.
+
+**The bottleneck is connection establishment, not steady-state
+throughput.**  Per-client connect latency degrades super-linearly, so all
+30 clients took ~3.7 minutes to connect — a real concern for a meetup
+where ~30 phones connect at once.  Root cause is the
+[Polled-only single-threaded loop](../future/32-tic-tac-toe/README.md):
+the loop is too busy to promptly `accept()` new sockets because each
+iteration does O(N) per-client polling + a **synchronous O(cells)
+`replay_world_to` on every connect** + a periodic O(cells) `world_save`,
+compounded by the web client's connect-time backoff.
+
+### Optimization follow-up (post-1.8, not a phase-1 blocker)
+
+Correctness is met, so this does not block the phase.  Ordered by
+expected payoff for the connect-storm case:
+
+1. **Async / chunked replay-on-connect** — don't serialise the whole
+   world to a new client inside the accept path; stream it across
+   subsequent loop iterations (the design's "one blob per chunk" idea,
+   not yet in the flat-cell server).
+2. **Background-thread accept + mpsc** (the `lib/server` upgrade noted in
+   TTT v5) — get socket accept/read off the single render-ish loop.
+3. **Move `world_save` off the main loop** (background-thread snapshot,
+   already flagged as "the next upgrade").
+4. **Binary wire** (phase 1 step 2) — cut per-message text parse/format.
 
 ## Open design questions
 
