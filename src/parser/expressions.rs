@@ -1167,6 +1167,105 @@ use a separate collection or add after the loop"
             *code = Value::Insert(vec![clear, append]);
             return Type::Void;
         }
+        // @P295 — `local_s = keyed_expr` where the LHS is a KEYED-collection
+        // LOCAL (`sorted`/`hash`/`index`).  The standard Set path emits
+        // `Set(s, …)` which `gen_put_var` cannot lower (no `OpPut*` arm for
+        // keyed kinds → `Unknown var … type sorted<…>` panic), and a naive
+        // alias would dangle when a loop-local RHS is freed (the @P292 bug,
+        // for keyed kinds).  Fix: deep-copy via `OpReplaceKeyed`, which does
+        // `remove_claims(dest)` (frees s's prior collection + resets its
+        // store header) then `copy_claims(src, dest)` — the per-kind
+        // deep-copy that rebuilds the bucket/tree index from scratch
+        // (`copy_claims_seq_vector` / `_hash_body` / `_index_body`).  This is
+        // the same machinery that deep-copies a keyed FIELD when its owning
+        // struct is copied; here we route the local-assignment shape through
+        // it.  NOTE: unlike `OpCopyRecord` there is NO `copy_block` step —
+        // a keyed local's slot is a `DbRef` to a dedicated store, so the
+        // collection header lives at (store, 1, 8); copy_block'ing
+        // `size(tp)` bytes there corrupts the store (the failure mode of the
+        // first attempt).  `s = []` (empty literal) and first-declaration
+        // go through `create_keyed` above and are unaffected.
+        let keyed_kt = if !self.first_pass && op == "=" && var_nr != u16::MAX {
+            match &f_type {
+                Type::Sorted(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.sorted(c, key))
+                }
+                Type::Hash(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.hash(c, key))
+                }
+                Type::Index(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.index(c, key))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(kt) = keyed_kt
+            && matches!(
+                s_type,
+                Type::Sorted(_, _, _) | Type::Hash(_, _, _) | Type::Index(_, _, _)
+            )
+            && !matches!(code, Value::Insert(_) | Value::Null)
+        {
+            // `s = s` self-assign — emit nothing rather than clear+recopy
+            // off the same storage.
+            if matches!(code.unspan(), Value::Var(rhs) if *rhs == var_nr) {
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            // 0x8000 high bit frees the source store after the deep copy when
+            // the RHS is a fresh-storage call (`s = build()`), matching
+            // `copy_ref`'s leak guard.  Plain Var-RHS aliases a live local —
+            // no source-free (its own scope frees it).
+            #[cfg(not(feature = "wasm"))]
+            let tp_val = if self.is_struct_returning_call(code) {
+                i32::from(kt) | 0x8000
+            } else {
+                i32::from(kt)
+            };
+            #[cfg(feature = "wasm")]
+            let tp_val = i32::from(kt);
+            let replace = self.cl(
+                "OpReplaceKeyed",
+                &[code.clone(), to.clone(), Value::Int(tp_val)],
+            );
+            // The deep-copy gives `s` its OWN store, so it no longer borrows
+            // the RHS.  Strip the `s["ns"]` lifetime dep the assignment set
+            // up — otherwise scope analysis treats `s` as a borrow and
+            // suppresses its own `OpFreeRef` (store leak) while deferring the
+            // RHS's free (loop accumulation).  Mirrors the Reference var-to-
+            // var deep-copy dep-strip in `scopes.rs::scan_set`.
+            if let Value::Var(rhs) = code.unspan() {
+                self.vars.make_independent(var_nr, *rhs);
+            }
+            *code = Value::Insert(vec![replace]);
+            return Type::Void;
+        }
+        // @P295 — `spacial` reassignment is not yet supported (copy_claims
+        // and insert_record both `panic!("Not implemented")` for Spacial).
+        // Reject with an actionable error instead of crashing in codegen.
+        if !self.first_pass
+            && op == "="
+            && var_nr != u16::MAX
+            && matches!(f_type, Type::Spacial(_, _, _))
+            && matches!(s_type, Type::Spacial(_, _, _))
+            && !matches!(code, Value::Insert(_) | Value::Null)
+            && !matches!(code.unspan(), Value::Var(rhs) if *rhs == var_nr)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "reassigning a spacial collection local is not yet supported \
+                 (@P295) — build into a fresh local you return/pass, or mutate \
+                 in place"
+            );
+            *code = Value::Insert(Vec::new());
+            return Type::Void;
+        }
         // `lhs += other_vec` where both sides are vectors: append all elements
         // in-place via OpAppendVector.
         if !self.first_pass

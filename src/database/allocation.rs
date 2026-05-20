@@ -885,19 +885,32 @@ impl Stores {
                 self.store_mut(to).set_u32_raw(into, 8 + 4 * i, 0);
                 continue;
             }
-            let new = self.store_mut(to).claim(size.div_ceil(8));
+            // @P295 — element record layout (per `record_new`'s
+            // Hash arm): offset 0 = record header, offset 4 = back-pointer,
+            // offset 8 = struct payload (`size` bytes).  The OLD copy claimed
+            // `size.div_ceil(8)` words (missing the +1 header word) and
+            // `copy_block`'d `size - 4` bytes from offset 4 — reaching only
+            // offset `size`, UNDER-copying the struct (which ends at
+            // `8 + size`) and leaving the last field's bytes as whatever
+            // stale data the reclaimed-after-`remove_claims` memory held
+            // (nondeterministic garbage in the high bits of an i64 field).
+            // Match the proven `copy_claims_index_body`: claim with the
+            // header word, set the back-pointer, copy the full `size`-byte
+            // payload from offset 8.
+            let new = self.store_mut(to).claim(1 + size.div_ceil(8));
+            self.store_mut(to).set_u32_raw(new, 4, to.rec);
             self.copy_block(
                 &DbRef {
                     store_nr: rec.store_nr,
                     rec: elm,
-                    pos: 4,
+                    pos: 8,
                 },
                 &DbRef {
                     store_nr: to.store_nr,
                     rec: new,
-                    pos: 4,
+                    pos: 8,
                 },
-                size - 4,
+                size,
             );
             self.store_mut(to).set_u32_raw(into, 8 + 4 * i, new);
             self.copy_claims(
@@ -1233,7 +1246,16 @@ impl Stores {
                     // Do nothing if the structure was empty
                     return;
                 }
-                let length = self.store(rec).get_u32_raw(cur, 0) * 2;
+                // @P290 sibling — the hash bucket record (per `src/hash.rs::add`)
+                // is: offset 0 = room (words), offset 4 = entry count, offset
+                // 8.. = (room - 1) * 2 bucket slots.  The bound MUST be
+                // `(room - 1) * 2`; the old `room * 2` walked 2 slots past the
+                // allocation, reading the next record's header bytes as
+                // bucket rec-nrs and calling `delete()` on garbage → SIGSEGV.
+                // Matches `copy_claims_hash_body`'s @P290 fix; surfaced by
+                // @P295 (keyed-local reassignment calls `remove_claims` on a
+                // hash via `OpReplaceKeyed`).
+                let length = (self.store(rec).get_u32_raw(cur, 0) - 1) * 2;
                 for i in 0..length {
                     let elm = self.store(rec).get_u32_raw(cur, 8 + i * 4);
                     if elm == 0 {

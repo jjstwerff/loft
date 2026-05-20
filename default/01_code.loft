@@ -1070,6 +1070,7 @@ fn OpRemove(state_var: const u16, data: reference, on: const u8, tp: const u16);
 fn OpClear(data: reference, tp: const u16);
 fn OpAppendCopy(data: reference, count: integer, tp: const u16);
 fn OpCopyRecord(data: reference, to: reference, tp: const u16);
+fn OpReplaceKeyed(src: reference, dest: reference, tp: const u16);
 type iterator;
 // Call a predefined system function (but not an operator).
 fn OpStaticCall(call: const u16);

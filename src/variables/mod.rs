@@ -673,7 +673,19 @@ impl Function {
     /// Remove a lifetime dependency for this variable.
     pub fn make_independent(&mut self, var_nr: u16, remove: u16) {
         match &mut self.variables[var_nr as usize].type_def {
-            Type::Reference(_, to) | Type::Enum(_, _, to) | Type::Vector(_, to) => {
+            Type::Reference(_, to)
+            | Type::Enum(_, _, to)
+            | Type::Vector(_, to)
+            // @P295 — keyed collections carry a lifetime dep list too
+            // (`Sorted`/`Hash`/`Index`/`Spacial`'s last field).  Without
+            // these arms `s = ns` left `s` depending on `ns`, so scope
+            // analysis suppressed `s`'s own `OpFreeRef` (treating it as a
+            // borrow) and deferred `ns`'s free — leaking the deep-copied
+            // store and, in a loop, never re-clearing `ns` (accumulation).
+            | Type::Sorted(_, _, to)
+            | Type::Hash(_, _, to)
+            | Type::Index(_, _, to)
+            | Type::Spacial(_, _, to) => {
                 if let Some(pos) = to.iter().position(|x| x == &remove) {
                     to.remove(pos);
                 }

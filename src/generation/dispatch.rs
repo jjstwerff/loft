@@ -811,6 +811,20 @@ impl Output<'_> {
                 }
                 return Ok(());
             }
+            // @P295 — keyed-collection local reassignment: remove_claims +
+            // copy_claims (per-kind index rebuild), no copy_block.
+            "OpReplaceKeyed" => {
+                if let [ref src, ref dst, ref tp_val] = vals[..] {
+                    write!(w, "OpReplaceKeyed(cell,")?;
+                    self.output_code_inner(w, src)?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, dst)?;
+                    write!(w, ", ")?;
+                    self.emit_i32_slot(w, tp_val)?;
+                    write!(w, ")")?;
+                }
+                return Ok(());
+            }
             "OpConvTextFromNull" => {
                 write!(w, "loft::state::STRING_NULL")?;
                 return Ok(());

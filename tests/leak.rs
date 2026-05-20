@@ -1228,3 +1228,49 @@ fn p15_phase05_nested_closure_no_leak() {
         "#,
     );
 }
+
+/// @P295 — reassigning a keyed-collection LOCAL (`s = ns`) deep-copies
+/// (OpReplaceKeyed) and must NOT leak: `s`'s prior store is freed by
+/// `remove_claims`, `ns` is freed at its own scope.  Before the fix the
+/// assignment left `s` depending on `ns`, so scope analysis suppressed
+/// `s`'s own `OpFreeRef` (leak) and deferred `ns`'s free.
+#[test]
+fn p295_keyed_reassign_no_leak() {
+    run_leak_check_str(
+        r#"
+struct Item { k: integer not null }
+fn test() {
+  s: sorted<Item[k]> = [];
+  s += [Item{k: 100}];
+  ns: sorted<Item[k]> = [];
+  ns += [Item{k: 1}];
+  ns += [Item{k: 2}];
+  s = ns;
+  assert(len(s) == 3, "s has 3 after reassign");
+}
+"#,
+    );
+}
+
+/// @P295 — fresh-storage RHS (`s = build()`) frees the source store after
+/// the deep copy (0x8000 source-free bit), so the callee's return store
+/// does not leak.
+#[test]
+fn p295_keyed_reassign_call_rhs_no_leak() {
+    run_leak_check_str(
+        r#"
+struct Item { k: integer not null }
+fn build(n: integer) -> sorted<Item[k]> {
+  r: sorted<Item[k]> = [];
+  for i in 0..n { r += [Item{k: n - i}]; }
+  r
+}
+fn test() {
+  s: sorted<Item[k]> = [];
+  s += [Item{k: 99}];
+  s = build(3);
+  assert(len(s) == 3, "s has 3 after call-RHS reassign");
+}
+"#,
+    );
+}

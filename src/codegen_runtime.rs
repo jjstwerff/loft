@@ -471,6 +471,31 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
     }
 }
 
+/// @P295 — deep-copy a keyed collection (`sorted`/`hash`/`index`) into a
+/// keyed-collection LOCAL `dest`, replacing its prior contents.  Native
+/// twin of `State::replace_keyed`.  No `copy_block`: a keyed local is a
+/// `DbRef` to a dedicated store whose collection header is at `(store, 1,
+/// 8)`, so `remove_claims(dest)` + `copy_claims(src, dest, tp)` (per-kind
+/// index rebuild) is the complete copy.  `tp`'s `0x8000` high bit frees the
+/// source store after the copy (fresh-storage RHS like `s = build()`).
+pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: DbRef, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let raw_tp = tp as u16;
+    let free_source = raw_tp & 0x8000 != 0;
+    let tp = raw_tp & 0x7FFF;
+    stores.remove_claims(&dest, tp);
+    stores.copy_claims(&src, &dest, tp);
+    if free_source
+        && src.store_nr != dest.store_nr
+        && src.store_nr != 0
+        && !stores.allocations[src.store_nr as usize].free
+        && !stores.allocations[src.store_nr as usize].read_only
+        && !stores.allocations[src.store_nr as usize].free_protected
+    {
+        stores.free(&src);
+    }
+}
+
 /// Sort a vector in-place using the element type's natural ordering.
 /// Dispatches on element type:
 ///   - text → `sort_text_vector` (lexicographic; sorts offsets by

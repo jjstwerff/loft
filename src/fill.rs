@@ -227,6 +227,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     clear,
     append_copy,
     copy_record,
+    replace_keyed,
     static_call,
     create_stack,
     init_create_stack,
@@ -1859,6 +1860,10 @@ fn append_copy(s: &mut State) {
 
 fn copy_record(s: &mut State) {
     s.copy_record();
+}
+
+fn replace_keyed(s: &mut State) {
+    s.replace_keyed();
 }
 
 fn static_call(s: &mut State) {

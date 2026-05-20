@@ -1214,6 +1214,34 @@ impl State {
         }
     }
 
+    /// @P295 — deep-copy a keyed collection (`sorted`/`hash`/`index`) into a
+    /// keyed-collection LOCAL `dest`, replacing its prior contents.  Unlike
+    /// `copy_record` there is NO `copy_block`: a keyed local's slot is a
+    /// `DbRef` to a dedicated store whose collection header lives at
+    /// `(store, 1, 8)`, so `remove_claims(dest)` (free + reset) followed by
+    /// `copy_claims(src, dest, tp)` (per-kind rebuild of the bucket/tree
+    /// index) is the complete, correct copy.  `tp` is the SPECIFIC keyed
+    /// type id; its `0x8000` high bit frees the source store after the copy
+    /// (set by the parser for fresh-storage RHS like `s = build()`).
+    pub fn replace_keyed(&mut self) {
+        let raw_tp = *self.code::<u16>();
+        let free_source = raw_tp & 0x8000 != 0;
+        let tp = raw_tp & 0x7FFF;
+        let dest = *self.get_stack::<DbRef>();
+        let src = *self.get_stack::<DbRef>();
+        self.database.remove_claims(&dest, tp);
+        self.database.copy_claims(&src, &dest, tp);
+        if free_source
+            && src.store_nr != dest.store_nr
+            && src.store_nr != 0
+            && !self.database.allocations[src.store_nr as usize].free
+            && !self.database.allocations[src.store_nr as usize].read_only
+            && !self.database.allocations[src.store_nr as usize].free_protected
+        {
+            self.database.free(&src);
+        }
+    }
+
     pub fn hash_add(&mut self) {
         let tp = *self.code::<u16>();
         let rec = *self.get_stack::<DbRef>();

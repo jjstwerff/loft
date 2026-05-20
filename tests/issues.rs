@@ -10802,6 +10802,66 @@ fn p292_vector_reassign_from_loop_local() {
     .result(Value::Null);
 }
 
+/// @P295 — reassigning a keyed-collection LOCAL (`s = ns`) for
+/// sorted/hash/index.  Before the fix this panicked in codegen
+/// (`gen_put_var` has no `OpPut*` arm for keyed kinds).  Fixed by
+/// emitting a deep-copy `OpReplaceKeyed` (remove_claims + copy_claims,
+/// per-kind index rebuild) and stripping the `s["ns"]` lifetime dep so
+/// scope analysis frees both `s` (its own copy) and `ns` (its scope).
+/// The loop-rebuild shape (insertion-sort idiom) is the canonical case;
+/// it must not accumulate across iterations.  Interp-only: keyed
+/// LOCALS panic on `--native` (pre-existing, see @P296).
+#[test]
+fn p295_sorted_reassign_from_loop_local() {
+    code!(
+        "struct Item { k: integer not null }
+fn test() {
+    s: sorted<Item[k]> = [];
+    s += [Item{k: 100}];
+    for i in 1..5 {
+        ns: sorted<Item[k]> = [];
+        for it in s { ns += [Item{k: it.k}]; }
+        ns += [Item{k: i}];
+        s = ns;
+    }
+    out = \"\";
+    for it in s { out += \"{it.k} \"; }
+    assert(out == \"1 2 3 4 100 \", \"sorted rebuild: {out}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// @P295 — hash + index variants of the keyed-local reassignment, plus
+/// the fresh-storage call RHS (`s = build()`) that exercises the
+/// 0x8000 source-free path.
+#[test]
+fn p295_hash_index_reassign() {
+    code!(
+        "struct H { k: text not null, v: integer not null }
+struct I { n: integer not null }
+fn test() {
+    h: hash<H[k]> = [];
+    h += [H{k: \"a\", v: 1}];
+    nh: hash<H[k]> = [];
+    nh += [H{k: \"a\", v: 1}];
+    nh += [H{k: \"b\", v: 2}];
+    h = nh;
+    assert(len(h) == 2, \"hash reassign len\");
+    assert(h[\"b\"].v == 2, \"hash reassign lookup\");
+
+    ix: index<I[n]> = [];
+    ix += [I{n: 5}];
+    nx: index<I[n]> = [];
+    nx += [I{n: 3}];
+    nx += [I{n: 7}];
+    ix = nx;
+    assert(len(ix) == 2, \"index reassign len\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P185 — slot-aliasing bug: a local (`key`) declared AFTER an inner
 /// `body += <format-string>` accumulator loop, inside an outer
 /// `for _ in file(...).files()` that uses an inline temporary as the
