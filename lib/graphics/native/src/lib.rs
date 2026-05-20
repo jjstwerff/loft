@@ -37,6 +37,11 @@ struct GlState {
     context: glutin::context::PossiblyCurrentContext,
     event_loop: winit::event_loop::EventLoop<()>,
     should_close: bool,
+    // GL viewport size chosen at creation (selected-monitor size for
+    // fullscreen) — returned by the window-size getters so callers don't
+    // race the async inner_size update after a monitor move.
+    viewport_w: u32,
+    viewport_h: u32,
 }
 
 thread_local! {
@@ -257,13 +262,13 @@ pub extern "C" fn loft_gl_set_fullscreen(on: bool) {
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_window_width() -> i32 {
     gl_guard!(0);
-    with_gl(|s| s.window.inner_size().width as i32).unwrap_or(0)
+    with_gl(|s| s.viewport_w as i32).unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_window_height() -> i32 {
     gl_guard!(0);
-    with_gl(|s| s.window.inner_size().height as i32).unwrap_or(0)
+    with_gl(|s| s.viewport_h as i32).unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
