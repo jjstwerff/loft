@@ -408,6 +408,28 @@ pub fn find_furthest_supporter(snap: CellSnap, parent: vector<integer>,
   best_ix
 }
 
+// Furthest FILLED cell on axis `d` from `a_ix` — any cell, centre or
+// supporter, not just this centre's own supporters.  Used so a centre's
+// main spine reaches across to the next crystal and the structures connect
+// (the supporter-only finder above leaves adjacent centres disconnected).
+pub fn find_furthest_on_axis(snap: CellSnap, a_ix: integer, d: integer) -> integer {
+  ax = snap.xs[a_ix];
+  ay = snap.ys[a_ix];
+  best_ix = 0 - 1;
+  best_dist = 0;
+  for fa_b in 0..len(snap.xs) {
+    if fa_b == a_ix { continue; }
+    axis_d = hex_axis_dir(ax, ay, snap.xs[fa_b], snap.ys[fa_b]);
+    if axis_d != d { continue; }
+    dist = hex_distance(ax, ay, snap.xs[fa_b], snap.ys[fa_b]);
+    if dist > best_dist {
+      best_dist = dist;
+      best_ix = fa_b;
+    }
+  }
+  best_ix
+}
+
 // ── Per-segment palette mosaic (plan-36 § 3.4b) ─────────────────────
 //
 // Each segment picks a single solid colour from the set
@@ -509,12 +531,18 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
       // 240° (NW), 300° (NE).
       ray_ang = (60.0 * d as float) * PI / 180.0;
       // Per-direction ray length:
-      //   - Furthest SUPPORTER of THIS centre on this axis → main
-      //     extends past it by OVER_REACH centre-to-centre units.
-      //   - No supporter on this axis → main is a STUB into empty
-      //     space.  (Other centres on the same axis don't extend
-      //     this main; they form their own crystals.)
-      furthest_ix = find_furthest_supporter(snap, parent, cs_i, d);
+      //   - Furthest FILLED cell on this axis (centre OR supporter) → main
+      //     reaches across to it (past it by OVER_REACH), so adjacent
+      //     crystals connect instead of standing apart.
+      //   - No filled cell on this axis → main is a STUB into empty space.
+      furthest_ix = find_furthest_on_axis(snap, cs_i, d);
+      // When the target is another CENTRE, only the lower-index centre
+      // draws the connecting main — otherwise both ends draw the same line
+      // ("the next hex's line itself" the other way round).
+      if furthest_ix >= 0 && parent[furthest_ix] == furthest_ix
+         && furthest_ix < cs_i {
+        continue;
+      }
       ray_len_d = centre_to_centre * STUB_RAY_FRAC;
       tip_y = src_y;
       if furthest_ix >= 0 {
