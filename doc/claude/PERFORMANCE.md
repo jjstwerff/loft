@@ -546,6 +546,108 @@ This is a verification task that may yield no changes if the separation is alrea
 
 ---
 
+## Design: P4 — Block-copy slice materialisation for primitive vectors
+
+**Affected workloads:** any consumer that does `local = src_vec[a..b]`
+or `s.v = src_vec[a..b]` on a vector of primitive elements (i32, u8,
+single, float, long, character).  Discovered alongside @P287 on
+2026-05-20 when the audience-demo projector wanted a heat-field ring
+buffer trim.
+**Expected gain:** roughly 5–10× on primitive-typed slice copies of
+length ~1 000 elements.  Larger slices benefit proportionally more.
+**Cost:** Medium — one new opcode (`OpAppendVectorSlice`), one
+parser-side fast-path dispatch, one IR-shape detector.
+
+### Background
+
+@P287 made `local = src[a..b]` and `s.v = src[a..b]` auto-materialise
+(rather than crashing the scope analyser).  The materialisation IR is
+shape-correct but element-by-element through the generic record
+allocator:
+
+```
+loop "Slice materialise" {
+  _elm = OpGetInt(OpGetVectorNullable(src, 8, idx), 0)
+  _rec = OpNewRecord(tmp, kt, fld)
+  OpSetInt(_rec, 0, _elm)
+  OpFinishRecord(tmp, _rec, kt, fld)
+}
+```
+
+For 1 000 i32 elements that's ~5 000 bytecode dispatches + 1 000
+record allocations + 1 000 record finishes — every per-element copy
+goes through the same record-system path used by struct-typed
+vector inserts (where the per-element allocator overhead is
+unavoidable because each record has its own fields and deps).
+
+For PRIMITIVE element types (i32, u8, single, float, long, character)
+the record allocator is entirely unnecessary — the destination is
+just a contiguous byte buffer of `len * sizeof(elem)` bytes.  The
+existing `OpAppendVector` (whole-vector replace) already uses
+`copy_block` / `copy_block_between` from `src/database/structures.rs`
+for exactly this case; the slice path should too.
+
+### Proposed opcode
+
+```
+OpAppendVectorSlice(dst: vector<T>, src: vector<T>, start_idx: i32, end_idx: i32, known_type: u16)
+```
+
+Semantics:
+- Resolve `dst` and `src` to byte ranges in their respective stores.
+- Compute `len = end_idx - start_idx` (or `src.len() - start_idx` for
+  open-end `[a..]`); clamp to source length.
+- Call `vector_set_size(dst, len, sizeof(elem))` to allocate the
+  destination capacity.
+- Issue one `copy_block` (same-store) or `copy_block_between`
+  (cross-store) for `len * sizeof(elem)` bytes from
+  `src.bytes[start_idx * size .. end_idx * size]` to the destination
+  range.
+- Per-element type-specific fixup ONLY for linked element types
+  (text, sub-structs).  For primitive elements (the case this
+  optimisation targets) the byte copy is the whole job.
+
+This is the same shape as the existing `vector_add` block-copy fan-out,
+generalised over a `[start, end)` window instead of `[0, src.len())`.
+
+### Parser-side dispatch
+
+In `parse_assign_op` (the @P287 branch), when the iterator's source
+expression is a plain `OpGetVectorNullable(src_var, …)` over a
+primitive-typed vector AND the slice bounds are statically simple
+(`Value::Iter` whose `init` sets `_index = lo` and `next` increments
++ tests `idx < src.len()` or `idx <= hi`), emit a single
+`OpAppendVectorSlice(dst, src, lo, hi or src.len(), kt)` instead of
+the per-element loop.  Fall back to the generic per-element loop when:
+
+- The iter source is not a vector index (e.g. range iter, collection
+  iter, coroutine iter — those are the generic-only path).
+- The element type is linked (text, sub-struct, nested vector) — the
+  per-element path's `OpNewRecord` / `OpFinishRecord` allocates the
+  deps correctly; the byte copy alone would leave dangling dep slots.
+
+The fast-path check is a couple of `matches!` on the `Value::Iter`'s
+`init` / `next` shape; cheap, no escape analysis needed.
+
+### Validation
+
+Two micro-benchmarks: copy 1 000-element `vector<i32>` slice (a)
+to a local, (b) to a struct field.  Compare bytecode-dispatch count
++ wall-clock against the existing per-element loop.  Native codegen
+inherits the same op so the same speedup applies once the native
+emit path adds an `OpAppendVectorSlice` runtime helper that issues
+the same `copy_block`.
+
+### Prerequisites
+
+- @P287 already shipped — defines the IR shape this optimisation
+  recognises and replaces.
+- Opcode-table headroom: 254/256 used (per P1's blocked-by note).  P4
+  needs one new opcode slot; if P1's opcode-widening lands first,
+  trivially available.  Otherwise needs one retire-candidate.
+
+---
+
 ## Design: N1 — Direct-emit local collections in native codegen
 
 **Affected benchmarks:** 08 (16×), 09 (12×), 10 (7.25×)
@@ -2686,6 +2788,7 @@ plan-cleanup audits:
 | **P1** — Superinstruction merging | § Design: P1 | O1 | Interpreter | Open — **blocked by opcode-table capacity** (254/256 used).  Decide between retiring rare Op codes vs widening the opcode field before P1 itself starts. |
 | **P2** — Reduce store indirection on the stack | § Design: P2 | (cited in PLANNING.md) | Interpreter | Open — design ready, no scheduled slot. |
 | **P3** — Confirm integer paths carry no `long` sentinel | § Design: P3 | — | Interpreter | Open — small verification + audit task; verifies the Plan-01 `i32::MIN`-removal stuck. |
+| **P4** — Block-copy slice materialisation for primitive vectors | § Design: P4 | — | Interpreter + Native | Open — discovered alongside @P287 (2026-05-20).  Today's slice → vector materialisation is element-by-element through the record allocator (5 000+ dispatches for 1 000 i32 elements); a new `OpAppendVectorSlice` op + parser fast-path reduces this to one `copy_block`.  Affects both backends. |
 | **N1** — Direct-emit local collections in native codegen | § Design: N1 | **O4** | Native | Open — design ready.  Cooperates with `lib_plans/future/03-lazy-stdlib/` and `plans/future/21-retire-scratch/` (N1 narrows the scratch consumer set). |
 | **N2** — Omit `stores` parameter from pure native fns | § Design: N2 | **O5** | Native | Open — design ready. |
 | **N3** — Remove `long` null-sentinel from generated code | § Design: N3 | — | Native | Open — verification + cleanup; small. |

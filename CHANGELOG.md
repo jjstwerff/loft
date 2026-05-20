@@ -18,6 +18,44 @@ invariants, internal phase numbers)?  See
 and a "learn loft in 30 minutes" walkthrough so new users can get from
 zero to a running demo without reading the reference.
 
+### File `+=` is now append-only — and `file.sync()` lets you flush
+
+`f += value` now **appends** to the end of the file, matching how
+`vector += [elem]` and `text += "more"` work on the other collection
+types.  Earlier writes are preserved when you re-open the file:
+
+```loft
+{f = file("log.txt"); f += "first\n";  f.sync(); }
+{f = file("log.txt"); f += "second\n"; f.sync(); }
+{f = file("log.txt"); f += "third\n";  f.sync(); }
+// Result: 19 bytes — "first\nsecond\nthird\n", not just "third\n".
+```
+
+Use `f.sync()` between log records or block boundaries to guarantee
+the buffered bytes have landed on disk before the next write is
+issued.  Returns `true` on success; on `Directory` / `NotExists` the
+call short-circuits to `false`.
+
+**Breaking change** — code that relied on `f += …` truncating the file
+on first re-open now needs to call `f.set_file_size(0)` (or
+`f#size = 0`) explicitly before the first write.  Updated call sites
+in this release: `tools/audience-demo/single_port_server.loft`,
+`lib/world/src/world.loft`, `lib/graphics/src/glb.loft`,
+`scripts/build-playground-examples.loft`.  Explicit offsets via
+`f#next = N` still overwrite at offset `N`, so the snapshot idiom
+(fixed-slot headers, overwrite-in-place) keeps working.
+
+### Interpreter no longer corrupts memory on deep recursion
+
+The interpreter's value stack now grows on demand.  Previously it was
+a fixed 8 KB buffer that never expanded, so a program that nested
+function calls deeply enough (roughly 40+ frames carrying a handful of
+locals) would silently write past the buffer and corrupt the heap —
+usually surfacing as a confusing "double free or corruption" abort
+*after* the program had finished printing its output.  Deeply
+recursive interpreted programs now run correctly (the `--native`
+backend was never affected, as it uses the real machine stack).
+
 ---
 
 ## 0.8.5 — Language Maturity

@@ -582,7 +582,7 @@ binary file.  For non-text data, use the binary idiom below.
 
 ### Binary files (structured reads and writes)
 
-Set `f#format` to `LittleEndian` or `BigEndian`, then use `#read(n)`
+Set `f#format` to `LittleEndian` or `BigEndian`, then use `f#read`
 for reads and `f += value` for writes.  `#next` seeks to an
 absolute byte offset.  All file-handle operations should live
 inside a `{ ... }` scope block so the handle flushes/closes at
@@ -593,38 +593,57 @@ block exit:
 {
   f = file("model.glb");
   f#format = LittleEndian;
-  magic   = f#read(4) as i32;         // 0x46546C67 = 'glTF'
-  version = f#read(4) as i32;         // 2
-  total   = f#read(4) as i32;         // declared file length
+  magic   = f#read as i32;            // 0x46546C67 = 'glTF'
+  version = f#read as i32;
+  total   = f#read as i32;            // declared file length
   // Seek past the header + JSON data to a later chunk:
   f#next = (20 + json_len) as long;
-  bin_len = f#read(4) as i32;
+  bin_len = f#read as i32;
 }
 
 // --- Write a binary chunk-structured file ---
 {
   f = file("model.glb");
   f#format = LittleEndian;
-  f += 0x46546C67;          // 4 bytes: i32 magic
-  f += 2;                   // 4 bytes: i32 version
-  f += (32 as u8);          // single byte (ASCII space)
-  f += "chunk of text";     // raw UTF-8 bytes
-  f += my_float_vector;     // vector<single> → 4 bytes per element
+  f += (0x46546C67 as i32);   // 4 bytes: i32 magic
+  f += (2 as i32);            // 4 bytes: i32 version
+  f += (32 as u8);            // 1 byte (ASCII space)
+  f += "chunk of text";       // raw UTF-8 bytes
+  f += my_float_vector;       // vector<single> → 4 bytes per element
 }
 ```
 
 Notes:
-- `f#read(n)` reads `n` bytes and returns the value in the format's
-  byte order.  Cast to `i32` / `long` / `single` / `u8` as needed.
+- **Prefer `f#read as <type>` (no parens) for fixed-width reads.**
+  The byte count is inferred from the type — `as i32` reads 4
+  bytes, `as u8` reads 1, `as u16` reads 2, `as integer` reads 8.
+  The legacy `f#read(n) as T` form still works but the `(n)` must
+  match the type's storage width exactly or the runtime panics in
+  `src/database/io.rs:276`.  The inferred form makes that mismatch
+  impossible.  `as text` still needs `f#read(n) as text` because
+  text has no fixed width.
+- **`s.field = f#read` (no `as T`) infers width from the LHS field's
+  declared type** — symmetric with `f += s.field`.  For a struct
+  `S { a: i32, b: u8, c: u16 }`, both sides become:
+  `f += s.a; f += s.b; f += s.c` to write, `s.a = f#read; s.b = f#read;
+  s.c = f#read` to read.  Changing a field's declared type
+  (`i32` → `i64`) automatically updates both sites at the next compile —
+  no manual cast edits needed.
+- **Always cast scalar writes to the intended width.**  Bare
+  `f += int_var` writes 8 bytes (loft stores integers as i64).  To
+  write 4 bytes use `f += (int_var as i32)`; for 1 / 2 bytes use
+  `as u8` / `as u16`.  Strongly-typed struct fields (`u8`, `u16`,
+  `integer not null` with range) write at their declared width
+  automatically.
 - `f += expr` appends `expr` to the file, respecting the `#format`
-  endianness.  `integer` → 4 bytes, `long` → 8 bytes, `single` → 4,
-  `text` → raw bytes, `vector<T>` → each element in sequence.
+  endianness.  `text` → raw bytes, `vector<T>` → each element in
+  sequence at its declared width.
 - `f.size` returns a `long`; compare with `0l` not `0`.
 - `f#next = offset as long` seeks.  Reading position advances
-  automatically after each `#read(n)` — don't manually advance it
+  automatically after each `f#read` — don't manually advance it
   between sequential reads.
 - **No `f.bytes()` API** — there's no "read all N bytes into a
-  vector" helper.  If you need the whole buffer, call `#read(n)`
+  vector" helper.  If you need the whole buffer, call `f#read(n)`
   in a loop or read into a typed record via `OpReadFile`.
 
 Example binary reader/writer patterns live in

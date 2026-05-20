@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 error: Expect token ,
   --> <cases>/37_par_thread_count_zero.loft:3:25
   |
@@ -49,4 +50,3 @@ error: Syntax error: unexpected ')'
   |                               ^
 
 error: aborting due to 8 previous errors
-==== stderr ====

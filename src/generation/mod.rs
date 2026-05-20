@@ -865,6 +865,36 @@ extern crate loft;"
         // don't consume a slot.  Only Parts::{Byte, Short, Int} produce
         // standalone runtime types that need to be re-created here.
         let def_type_id_set: HashSet<u16> = type_defs.iter().map(|&(tid, _)| tid).collect();
+        // @P296 — keyed-collection types reachable only as a struct/enum FIELD
+        // are created inline during that container's field emission (so they
+        // must NOT also be emitted in the bare_io stream — see the
+        // Sorted/Hash/Index arm below).  But a keyed-collection LOCAL var
+        // (`s: sorted<Item[k]> = []`) mints a keyed type via
+        // `gen_set_first_keyed_null` that NO struct field references, so it
+        // never gets created inline → its runtime type id is missing and
+        // `content(tp)` returns u16::MAX → `set_default_value` panics on
+        // `--native`.  Collect the field-referenced keyed type ids here so
+        // the bare_io collection below can emit the local-only ones.
+        let field_keyed: HashSet<u16> = {
+            let mut set = HashSet::new();
+            for tp in &self.stores.types {
+                if let crate::database::Parts::Struct(fields)
+                | crate::database::Parts::EnumValue(_, fields) = &tp.parts
+                {
+                    for f in fields {
+                        if matches!(
+                            self.stores.types[f.content as usize].parts,
+                            crate::database::Parts::Sorted(_, _)
+                                | crate::database::Parts::Hash(_, _)
+                                | crate::database::Parts::Index(_, _, _)
+                        ) {
+                            set.insert(f.content);
+                        }
+                    }
+                }
+            }
+            set
+        };
         #[allow(dead_code)]
         enum BareIo {
             Byte(i32, bool),
@@ -898,17 +928,26 @@ extern crate loft;"
                 crate::database::Parts::Vector(c) => {
                     bare_io.push((tid, BareIo::Vector(*c)));
                 }
-                // Sorted / Hash / Index are created INLINE during struct
-                // field emission (via `emit_field` → `db.sorted / hash /
-                // index`).  The inline calls dedup by name, so the
-                // runtime id assigned at first-creation stays valid for
-                // every subsequent reference.  Emitting these in the
-                // bare_io stream would either duplicate the creation or
-                // require the content struct's fields to be populated
-                // before its container — which would swap the source-
-                // order of the container's fields and break opcode
-                // `OpNewRecord(parent_tp, field_index)` calls that were
-                // baked at parse time.
+                // Sorted / Hash / Index that are a struct/enum FIELD are
+                // created INLINE during that container's field emission
+                // (via `emit_field` → `db.sorted / hash / index`), so they
+                // must NOT be emitted here — doing so would swap the
+                // container's field source-order and break baked-in
+                // `OpNewRecord(parent_tp, field_index)` calls.  But a keyed
+                // type minted only for a LOCAL var (@P296) is referenced by
+                // no field, so it would otherwise leave a GAP in the runtime
+                // type-id sequence (→ `content(tp)` u16::MAX → panic).  Emit
+                // exactly those local-only keyed types here, at their tid
+                // position; the bare_io arms below already know how.
+                crate::database::Parts::Sorted(c, keys) if !field_keyed.contains(&tid) => {
+                    bare_io.push((tid, BareIo::Sorted(*c, keys.clone())));
+                }
+                crate::database::Parts::Hash(c, keys) if !field_keyed.contains(&tid) => {
+                    bare_io.push((tid, BareIo::Hash(*c, keys.clone())));
+                }
+                crate::database::Parts::Index(c, keys, _) if !field_keyed.contains(&tid) => {
+                    bare_io.push((tid, BareIo::Index(*c, keys.clone())));
+                }
                 crate::database::Parts::Sorted(_, _)
                 | crate::database::Parts::Hash(_, _)
                 | crate::database::Parts::Index(_, _, _) => {}

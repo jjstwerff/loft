@@ -1863,15 +1863,37 @@ impl Parser {
                 } else {
                     // Source is a variable, field access, or function call — the bytes
                     // must be explicitly copied into the new element slot.
+                    //
+                    // When the source is a STRUCT-RETURNING function call (or an
+                    // inline struct-literal Object block — same shape as
+                    // `copy_ref::is_struct_returning_call`), set the high
+                    // bit (0x8000) on the type parameter so OpCopyRecord
+                    // also frees the callee's temporary source store after
+                    // the deep copy.  Without this, `vec += [fn_call()]`
+                    // leaks one store per call (the `__ref_N` that the
+                    // callee's `OpDatabase` allocated to build the return
+                    // value).  Mirrors the existing fix in `copy_ref` for
+                    // the plain-variable assignment path.  Suppressed
+                    // under WASM where frame yield/resume creates store
+                    // aliases that cannot yet be tracked.
+                    #[cfg(not(feature = "wasm"))]
+                    let free_source_bit: i32 =
+                        if !self.first_pass && self.is_struct_returning_call(p) {
+                            0x8000
+                        } else {
+                            0
+                        };
+                    #[cfg(feature = "wasm")]
+                    let free_source_bit: i32 = 0;
                     let type_nr = if self.first_pass {
                         Value::Int(i32::from(u16::MAX))
                     } else if let Type::Vector(elem_tp, _) = in_t {
                         // For vector-typed elements, resolve via database.vector() to
                         // get the correct Parts::Vector type for deep copy.
                         let elem_known = self.database.db_type(elem_tp, &self.data);
-                        Value::Int(i32::from(self.database.vector(elem_known)))
+                        Value::Int(i32::from(self.database.vector(elem_known)) | free_source_bit)
                     } else {
-                        Value::Int(i32::from(self.data.def(inner_nr).known_type))
+                        Value::Int(i32::from(self.data.def(inner_nr).known_type) | free_source_bit)
                     };
                     ls.push(self.cl("OpCopyRecord", &[p.clone(), Value::Var(elm), type_nr]));
                 }

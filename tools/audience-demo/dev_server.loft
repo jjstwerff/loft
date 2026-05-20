@@ -1,0 +1,178 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN36 — single-port dev server for the audience demo.
+//
+// Serves both:
+//   GET /              → doc/audience-demo/index.html (the phone client)
+//   GET /favicon.ico   → 404 (no favicon yet)
+//   ws://.../ws        → single-client WebSocket session, echoes seed/clear
+//                        events back as world deltas so the page renders
+//                        roundtripped paint without needing a real server
+//
+// Designed for FAST DEV ITERATION — read the HTML from disk on every
+// request so editing `doc/audience-demo/index.html` and hitting browser
+// refresh reflects the change immediately.  No need to rebuild, no need
+// to push to a branch, no Pages deploy round-trip.
+//
+// Single-client only.  For multi-client demos use `server.loft` instead
+// (multi-client WS via `srv.run(on_event)`, no HTML serving — pair it
+// with `python3 -m http.server -d doc`).
+//
+// Run:
+//   ./target/release/loft --no-warnings --lib lib/ tools/audience-demo/dev_server.loft
+// Then open http://localhost:18083/ in a browser.
+//
+// The client's WebSocket auto-detects from its page URL, so the page
+// served from port 18083 connects ws://localhost:18083/ws back to this
+// same server.
+
+use server;
+
+// Leaf helpers FIRST so @P281 (pass-1 fn return-type inference) doesn't
+// trip the typer when callers are defined above them.
+
+// Hostname (or "" if /etc/hostname can't be read).  Used so the
+// startup banner can print http://<hostname>:<port>/ as a reachable
+// URL alongside localhost.
+fn hostname() -> text {
+  f = file("/etc/hostname");
+  if f.format == Format.NotExists { return ""; }
+  body = f.content();
+  body.trim()
+}
+
+// Non-loopback IPv4 addresses bound to this host, harvested from
+// /proc/net/fib_trie.  Walks lines pairwise looking for:
+//   |-- <ipv4>
+//      /32 host LOCAL
+// and skips 127.* / 0.* (loopback / unspecified).  Empty vector on
+// non-Linux or when the file isn't readable.
+fn lan_ips() -> vector<text> {
+  out: vector<text> = [];
+  f = file("/proc/net/fib_trie");
+  if f.format == Format.NotExists { return out; }
+  ls = f.lines();
+  n = len(ls);
+  i = 0;
+  while i < n - 1 {
+    line = ls[i].trim();
+    if line.starts_with("|-- ") {
+      ip = line[4..];
+      if ip.contains(".") && !ip.starts_with("127.") && !ip.starts_with("0.") {
+        nxt = ls[i + 1].trim();
+        if nxt.contains("/32 host LOCAL") {
+          // De-dup — the same IP can appear under multiple subtree
+          // headers in fib_trie's pretty-printed format.
+          seen = false;
+          for prev in out {
+            if prev == ip { seen = true; }
+          }
+          if !seen { out += [ip]; }
+        }
+      }
+    }
+    i = i + 1;
+  }
+  out
+}
+
+fn read_index() -> text {
+  // Read on every request — dev-ergonomic; "edit + refresh" works
+  // without restarting the server.  Tiny perf hit at request time is
+  // fine for single-client dev.  Assign through a local to dodge a
+  // native-codegen `Str::new(&Str)` wrap on a direct method-call
+  // return (workaround for a known native-codegen quirk).
+  f = file("doc/audience-demo/index.html");
+  if f.format == Format.NotExists {
+    return "<!DOCTYPE html><html><body><h1>500 — doc/audience-demo/index.html missing</h1>"
+         + "<p>Run from the loft repo root.</p></body></html>";
+  }
+  body = f.content();
+  body
+}
+
+fn handle_http(req: server::Request) {
+  if req.path == "/" || req.path == "/index.html" {
+    println("dev-server: GET {req.path} → 200 (index.html)");
+    req.respond_html(read_index());
+  } else if req.path == "/favicon.ico" {
+    req.respond_404();
+  } else {
+    println("dev-server: GET {req.path} → 404");
+    req.respond_404();
+  }
+}
+
+// Single-client WebSocket loop.  Mirrors the multi-client `server.loft`
+// dispatch but per-client state (just colour + last-active position).
+// Echoes back every seed/clear as a delta so the page sees its own taps
+// roundtrip even with one tab open.
+fn handle_ws(ws: server::WebSocket) {
+  println("dev-server: ws connected");
+  while true {
+    raw = ws.next();
+    if raw == null { break; }
+    // Parse <msg_id>:<payload>
+    i = raw.find(":");
+    if i == null { continue; }
+    msg_id = raw[..i] as integer;
+    payload = raw[i + 1..];
+    println("dev-server: msg_id={msg_id} payload={payload}");
+    if msg_id == 1 {
+      // seed "x,y,color" — echo as delta 4
+      ws.send("4:{payload}");
+    } else if msg_id == 2 {
+      // clear "x,y" — echo as delta 4 with color 0
+      ws.send("4:{payload},0");
+    } else if msg_id == 3 {
+      // color_select "color" — emit active-player signal centred on (0, 0)
+      ws.send("5:0,0");
+    }
+  }
+  println("dev-server: ws disconnected");
+}
+
+fn main() {
+  port = 18083;
+
+  srv = server::listen(port);
+  if srv.handle < 0 {
+    println("audience dev-server: FAILED to listen on port {port}");
+    return;
+  }
+
+  println("audience dev-server: listening on port {port}");
+  println("  reachable URLs (any of these should work in a browser):");
+  println("    http://localhost:{port}/");
+  hn = hostname();
+  if hn != "" {
+    println("    http://{hn}:{port}/");
+  }
+  for ip in lan_ips() {
+    println("    http://{ip}:{port}/");
+  }
+  println("  the page derives its WebSocket URL from `location.host`,");
+  println("  so whichever URL above you opened, /ws on the SAME host:port");
+  println("  is used automatically — no need to edit the client.");
+  println("  ws path = /ws  (single-client; for multi-client use server.loft)");
+
+  // TTT v3 pattern: each accepted connection is either an HTTP request
+  // or a WebSocket upgrade.  Path `/ws` selects WS; everything else is
+  // HTTP serving.  This convention matches the client's wsConnect URL
+  // (`ws://hostname:18083/ws`).
+  while true {
+    req = srv.next();
+    if req == null { continue; }
+    if req.path == "/ws" {
+      ws = server::ws_upgrade();
+      if ws == null {
+        println("dev-server: ws-upgrade failed");
+        continue;
+      }
+      handle_ws(ws);
+    } else {
+      handle_http(req);
+    }
+  }
+}

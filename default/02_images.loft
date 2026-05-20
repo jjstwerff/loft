@@ -71,6 +71,7 @@ fn OpDelete(path: text) -> boolean;
 fn OpMoveFile(from: text, to: text) -> boolean;
 #rust"codegen_runtime::fs_move(@from, @to)"
 fn OpTruncateFile(self: File, size: integer) -> boolean;
+fn OpSyncFile(self: File) -> boolean;
 // Dynamic dispatch through a runtime function reference (fn-ref variable).
 // Placed here — after all file-I/O operators — so that it receives op_code 252 without
 // renumbering the operators defined earlier in this file.  Logically it beintegers near
@@ -326,6 +327,17 @@ pub fn set_file_size(self: File, size: integer) -> FileResult {
   if size < 0 { return FileResult.Other }
   if OpTruncateFile(self, size) { return FileResult.Ok }
   FileResult.Other
+}
+#impure(io)
+// Flushes buffered bytes for self to the underlying storage so that the
+// preceding writes are durable. Use between log records or block
+// boundaries to guarantee that earlier appends have landed on disk
+// before later ones are issued.
+
+pub fn sync(self: File) -> boolean {
+  if self.format == Format.Directory { return false }
+  if self.format == Format.NotExists { return false }
+  OpSyncFile(self)
 }
 #impure(io)
 // Returns the entries inside a directory.

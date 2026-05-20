@@ -227,6 +227,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     clear,
     append_copy,
     copy_record,
+    replace_keyed,
     static_call,
     create_stack,
     init_create_stack,
@@ -251,6 +252,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     delete,
     move_file,
     truncate_file,
+    sync_file,
     call_ref,
     mkdir,
     mkdir_all,
@@ -1860,6 +1862,10 @@ fn copy_record(s: &mut State) {
     s.copy_record();
 }
 
+fn replace_keyed(s: &mut State) {
+    s.replace_keyed();
+}
+
 fn static_call(s: &mut State) {
     s.static_call();
 }
@@ -1975,6 +1981,10 @@ fn move_file(s: &mut State) {
 
 fn truncate_file(s: &mut State) {
     s.truncate_file();
+}
+
+fn sync_file(s: &mut State) {
+    s.sync_file();
 }
 
 fn call_ref(s: &mut State) {

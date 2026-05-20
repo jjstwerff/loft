@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 error: Expect token =
   --> <cases>/03_parse_unknown_keyword.loft:1:13
   |
@@ -25,4 +26,3 @@ error: Syntax error: unexpected '{'
   |                 ^
 
 error: aborting due to 4 previous errors
-==== stderr ====

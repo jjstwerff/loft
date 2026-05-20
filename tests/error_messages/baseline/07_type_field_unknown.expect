@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 error: Unknown field Player.naem
   --> <cases>/07_type_field_unknown.loft:4:18
   |
@@ -31,4 +32,3 @@ fatal: Nested string literal not correctly terminated
   |                     ^
 
 error: aborting due to 5 previous errors
-==== stderr ====

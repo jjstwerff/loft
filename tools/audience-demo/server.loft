@@ -30,6 +30,8 @@
 //     2 = clear        payload "q,r"
 //     3 = color_select payload "color"              (color 0-9; 0 = cleared)
 //
+//     6 = snapshot     payload ""                   (re-request full world)
+//
 //   server → client
 //     4 = delta        payload "q,r,color"          (color 0 = cell empty)
 //     5 = active       payload "q,r"                (jump-to-active hint)
@@ -202,6 +204,13 @@ fn main() {
           world.cells[k] = null;
           srv.broadcast(delta_frame(q, r, 0));
         }
+      } else if ev.msg_id == 6 {
+        // snapshot request: re-replay current world to this client.
+        // Lets a projector / phone catch up after missing the initial
+        // replay (slow lib/web receive ramp-up, lossy WS handshake,
+        // mid-show reconnect, etc.).
+        println("audience server: [snapshot req cid={ev.cid}] cells={len(world.cells)}");
+        replay_world_to(srv, ev.cid, world);
       } else if ev.msg_id == 3 {
         // color_select: "color"
         c = ev.payload as integer;

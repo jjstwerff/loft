@@ -751,7 +751,76 @@ use a separate collection or add after the loop"
         self.check_iter_safety(to, f_type, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
+        // @P277 — `local_keyed += [literal]`.  Without this branch, the
+        // RHS parse below descends into `parse_vector` (vectors.rs:1372)
+        // which at line ~1434 calls `change_var_type(vec, Vector<T>, …)`
+        // and fires "Variable 'x' cannot change type from sorted<…> to
+        // vector<…>" — the LHS's declared keyed-collection type is lost.
+        // The P188 scalar branch below (line ~870) runs AFTER the RHS
+        // parse, so by then the diagnostic has already fired.  Intercept
+        // here, manually tokenise the literal, parse each item against
+        // the element type, and dispatch via `new_record` (vectors.rs:1745)
+        // which already routes per-kind (sorted_finish / hash::add /
+        // tree::add / ordered_finish) via its P188-followup `lhs_known`
+        // lookup at lines 1783-1822.  The struct-field twin at lines
+        // ~1159-1194 handles the same shape for fields after-the-fact;
+        // we cannot do that here because the LHS-local path errors out
+        // before reaching it.
+        if op == "+="
+            && var_nr != u16::MAX
+            && matches!(
+                f_type,
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+            && self.lexer.peek_token("[")
+        {
+            let elm_tp = f_type.content();
+            self.lexer.token("[");
+            // Empty literal `+= []` — no-op append.
+            if self.lexer.has_token("]") {
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            let mut all_steps: Vec<Value> = Vec::new();
+            loop {
+                let elm = self.unique_elm_var(&lhs_parent_tp, &elm_tp, var_nr);
+                let mut item = Value::Var(elm);
+                let mut item_parent = Type::Null;
+                let _ = self.parse_operators(&elm_tp, &mut item, &mut item_parent, 0);
+                if !self.first_pass {
+                    let steps = self.new_record(
+                        &mut Value::Var(var_nr),
+                        f_type,
+                        elm,
+                        var_nr,
+                        &[item],
+                        &elm_tp,
+                    );
+                    all_steps.extend(steps);
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+                if self.lexer.peek_token("]") {
+                    // trailing comma
+                    break;
+                }
+            }
+            self.lexer.token("]");
+            *code = Value::Insert(all_steps);
+            return Type::Void;
+        }
+        // Hint the RHS that the destination has this type — `f#read`
+        // (no parens, no cast) picks it up so `s.field = f#read` matches
+        // the symmetry of `f += s.field` (which already takes the field's
+        // declared width).  Restored to Unknown after the RHS parse so
+        // it doesn't leak into unrelated sub-expressions.
+        let prev_read_target = std::mem::replace(&mut self.read_target_type, f_type.clone());
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
+        self.read_target_type = prev_read_target;
         // check RHS of assignment for unresolved variables.
         self.known_var_or_type(code);
         if let Type::Rewritten(tp) = s_type {
@@ -780,16 +849,77 @@ use a separate collection or add after the loop"
         if var_nr == u16::MAX {
             self.validate_write(to, &parent_tp);
         }
-        // materialise a collection iterator (e.g. v[a..b] slice) into a vector variable.
-        // CO1.3c: skip materialisation for coroutine iterators (second type is Null).
-        let is_coroutine_iter = matches!(&s_type, Type::Iterator(_, it) if **it == Type::Null);
-        if matches!(&s_type, Type::Iterator(_, _))
-            && !is_coroutine_iter
+        // materialise a collection iterator (e.g. v[a..b] slice) into a vector
+        // variable.  CO1.3c: the original "second type Null = coroutine, skip"
+        // heuristic was wrong — `parse_vector_index` also returns
+        // `Iterator<T, Null>` for slices, and slice → vector is exactly the
+        // case we want to materialise.  Instead detect coroutine iters
+        // structurally: a coroutine `yield`-driven iter does NOT carry a
+        // `Value::Iter(_, _, Block(_), _)` shape — its `next` is the
+        // resume-call.  Materialise only when the `next` is a Block (the
+        // slice / range / collection-iteration shape).  (@P287)
+        // Materialisable iter detection — by IR shape, NOT by s_type.  The
+        // `s_type` is the type the RHS *evaluates to*, but parse_operators
+        // may silently convert `Iterator<T>` to `Vector<T>` when the LHS
+        // expects a vector (`+=` case especially) — leaving `code` as the
+        // raw iter IR even though s_type now claims Vector.  We trust the
+        // IR shape: a `Value::Iter` with a `Block` next is the
+        // slice / range / collection-iter shape we can materialise into a
+        // vector via the per-element record-allocator loop.  Coroutine
+        // iters have a different `next` shape (resume-call) and don't
+        // match.  (@P287)
+        let materialisable_iter_shape = matches!(code,
+            Value::Iter(_, _, n, _) if matches!(n.as_ref(), Value::Block(_)));
+        // Recover the element type from either s_type or the iter's annotation.
+        let iter_elm_tp: Option<Type> = if let Type::Iterator(elm, _) = &s_type {
+            Some((**elm).clone())
+        } else if let Type::Vector(elm, _) = &s_type {
+            // s_type was silently converted; pull element type from there.
+            Some((**elm).clone())
+        } else {
+            None
+        };
+        if materialisable_iter_shape
+            && let Some(elm_tp) = iter_elm_tp.clone()
             && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
             && var_nr != u16::MAX
             && matches!(op, "=" | "+=")
         {
-            self.materialize_iterator(code, &s_type, to, &lhs_parent_tp, var_nr, op);
+            // Rebuild a real Iterator type so materialize_iterator's destructure works.
+            let iter_tp = Type::Iterator(Box::new(elm_tp), Box::new(Type::Null));
+            self.materialize_iterator(code, &iter_tp, to, &lhs_parent_tp, var_nr, op);
+            return Type::Void;
+        }
+        // @P287 — same materialisation, but the LHS is a struct field
+        // (`s.v = slice`) so var_nr is u16::MAX.  Three-step lower:
+        //  (1) allocate a temp local vector,
+        //  (2) materialise the iterator into the temp via the existing
+        //      `materialize_iterator` helper,
+        //  (3) emit `OpClearVector(field) + OpAppendVector(field, tmp)` —
+        //      the same shape that lines ~1020-1033 below build for
+        //      `s.v = fresh_vec` whole-vector field-replace.
+        if materialisable_iter_shape
+            && let Some(elm_tp) = iter_elm_tp
+            && matches!(f_type, Type::Vector(_, _))
+            && var_nr == u16::MAX
+            && op == "="
+            && !self.first_pass
+            && self.is_field(to)
+        {
+            let iter_tp = Type::Iterator(Box::new(elm_tp.clone()), Box::new(Type::Null));
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+            let tmp = self.create_unique("__p287_tmp", &vec_tp);
+            self.vars.defined(tmp);
+            // (2) materialise iter → tmp (mutates *code into the materialise IR).
+            //     Pass the rebuilt iter_tp so materialize_iterator's destructure
+            //     succeeds even when s_type was silently converted upstream.
+            self.materialize_iterator(code, &iter_tp, &Value::Var(tmp), &lhs_parent_tp, tmp, op);
+            // (3) emit clear + append on the destination field.
+            let dn = self.data.type_def_nr(&elm_tp);
+            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+            let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+            let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);
+            *code = Value::Insert(vec![code.clone(), clear, append]);
             return Type::Void;
         }
         // P188 — local-var collection `+= elem` for vector/sorted/hash/
@@ -997,6 +1127,144 @@ use a separate collection or add after the loop"
                 }
                 return Type::Void;
             }
+        }
+        // @P292 — `local_v = other_var_v` where both sides are vector-typed
+        // LOCALS and the RHS is a Var read (not a fresh-storage Block / Call).
+        // Without this branch, the standard path emitted Set(v, Var(rhs))
+        // which made v alias rhs's storage; when rhs went out of scope its
+        // storage was freed → v dangled → next-iteration `len(v)` returned
+        // 0 or SEGV'd.  Mirror the field-replace path that already handled
+        // `s.v = fresh_vec`: clear v's existing storage, then append all
+        // elements from the RHS.  v's own storage stays alive across the
+        // assignment so subsequent reads are safe.
+        //
+        // RESTRICTED to Var-RHS — `scaled = map(...)` (Block RHS that creates
+        // fresh storage) goes through the standard Set path where scaled takes
+        // ownership of the freshly-created storage and there is no aliasing
+        // concern.  Var-RHS is the precise shape that aliases.  Also
+        // requires `uses(v) > 0` — at least one earlier read so v's storage
+        // has been initialised before this clear+append.
+        if !self.first_pass
+            && op == "="
+            && var_nr != u16::MAX
+            && self.vars.uses(var_nr) > 0
+            && matches!(f_type, Type::Vector(_, _))
+            && matches!(s_type, Type::Vector(_, _))
+            && matches!(code, Value::Var(_))
+            && let Type::Vector(elm_tp, _) = f_type
+        {
+            // `v = v` self-assign — emit nothing rather than clear+reappend
+            // off the same storage.
+            if matches!(code.unspan(), Value::Var(rhs_var) if *rhs_var == var_nr) {
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            let elm_tp_clone = (**elm_tp).clone();
+            let dn = self.data.type_def_nr(&elm_tp_clone);
+            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+            let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+            let append = self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]);
+            *code = Value::Insert(vec![clear, append]);
+            return Type::Void;
+        }
+        // @P295 — `local_s = keyed_expr` where the LHS is a KEYED-collection
+        // LOCAL (`sorted`/`hash`/`index`).  The standard Set path emits
+        // `Set(s, …)` which `gen_put_var` cannot lower (no `OpPut*` arm for
+        // keyed kinds → `Unknown var … type sorted<…>` panic), and a naive
+        // alias would dangle when a loop-local RHS is freed (the @P292 bug,
+        // for keyed kinds).  Fix: deep-copy via `OpReplaceKeyed`, which does
+        // `remove_claims(dest)` (frees s's prior collection + resets its
+        // store header) then `copy_claims(src, dest)` — the per-kind
+        // deep-copy that rebuilds the bucket/tree index from scratch
+        // (`copy_claims_seq_vector` / `_hash_body` / `_index_body`).  This is
+        // the same machinery that deep-copies a keyed FIELD when its owning
+        // struct is copied; here we route the local-assignment shape through
+        // it.  NOTE: unlike `OpCopyRecord` there is NO `copy_block` step —
+        // a keyed local's slot is a `DbRef` to a dedicated store, so the
+        // collection header lives at (store, 1, 8); copy_block'ing
+        // `size(tp)` bytes there corrupts the store (the failure mode of the
+        // first attempt).  `s = []` (empty literal) and first-declaration
+        // go through `create_keyed` above and are unaffected.
+        let keyed_kt = if !self.first_pass && op == "=" && var_nr != u16::MAX {
+            match &f_type {
+                Type::Sorted(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.sorted(c, key))
+                }
+                Type::Hash(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.hash(c, key))
+                }
+                Type::Index(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.index(c, key))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(kt) = keyed_kt
+            && matches!(
+                s_type,
+                Type::Sorted(_, _, _) | Type::Hash(_, _, _) | Type::Index(_, _, _)
+            )
+            && !matches!(code, Value::Insert(_) | Value::Null)
+        {
+            // `s = s` self-assign — emit nothing rather than clear+recopy
+            // off the same storage.
+            if matches!(code.unspan(), Value::Var(rhs) if *rhs == var_nr) {
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            // 0x8000 high bit frees the source store after the deep copy when
+            // the RHS is a fresh-storage call (`s = build()`), matching
+            // `copy_ref`'s leak guard.  Plain Var-RHS aliases a live local —
+            // no source-free (its own scope frees it).
+            #[cfg(not(feature = "wasm"))]
+            let tp_val = if self.is_struct_returning_call(code) {
+                i32::from(kt) | 0x8000
+            } else {
+                i32::from(kt)
+            };
+            #[cfg(feature = "wasm")]
+            let tp_val = i32::from(kt);
+            let replace = self.cl(
+                "OpReplaceKeyed",
+                &[code.clone(), to.clone(), Value::Int(tp_val)],
+            );
+            // The deep-copy gives `s` its OWN store, so it no longer borrows
+            // the RHS.  Strip the `s["ns"]` lifetime dep the assignment set
+            // up — otherwise scope analysis treats `s` as a borrow and
+            // suppresses its own `OpFreeRef` (store leak) while deferring the
+            // RHS's free (loop accumulation).  Mirrors the Reference var-to-
+            // var deep-copy dep-strip in `scopes.rs::scan_set`.
+            if let Value::Var(rhs) = code.unspan() {
+                self.vars.make_independent(var_nr, *rhs);
+            }
+            *code = Value::Insert(vec![replace]);
+            return Type::Void;
+        }
+        // @P295 — `spacial` reassignment is not yet supported (copy_claims
+        // and insert_record both `panic!("Not implemented")` for Spacial).
+        // Reject with an actionable error instead of crashing in codegen.
+        if !self.first_pass
+            && op == "="
+            && var_nr != u16::MAX
+            && matches!(f_type, Type::Spacial(_, _, _))
+            && matches!(s_type, Type::Spacial(_, _, _))
+            && !matches!(code, Value::Insert(_) | Value::Null)
+            && !matches!(code.unspan(), Value::Var(rhs) if *rhs == var_nr)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "reassigning a spacial collection local is not yet supported \
+                 (@P295) — build into a fresh local you return/pass, or mutate \
+                 in place"
+            );
+            *code = Value::Insert(Vec::new());
+            return Type::Void;
         }
         // `lhs += other_vec` where both sides are vectors: append all elements
         // in-place via OpAppendVector.

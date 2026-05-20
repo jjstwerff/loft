@@ -45,6 +45,10 @@ const FL_RIGHT: u32 = 8;
 /// Byte offset of LLRB color flag within a free block (1 = red, 0 = black).
 const FL_COLOR: u32 = 12;
 
+// A low-level heap store: the several flags (free / read_only /
+// free_protected / borrowed) are independent state bits on the same
+// allocation, not a bundle that should become an enum.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Store {
     // format 0 = SIGNATURE, 4 = free_space_index, 8 = record_size, 12 = content
     pub ptr: *mut u8,
@@ -53,9 +57,25 @@ pub struct Store {
     #[cfg(feature = "mmap")]
     file: Option<MmapStorage>,
     pub(crate) free: bool,
-    /// When `true`, all writes to this store are illegal.
-    /// In debug builds this panics; in release builds writes are silently discarded.
-    pub locked: bool,
+    /// HARD lock: when `true`, the store is immutable.  All `addr_mut`,
+    /// `claim`, and `delete` calls panic.  Set by CONST_STORE init
+    /// (`compile.rs`), the JSON null sentinel (`native.rs`), and worker
+    /// store borrows (`clone_locked` / `clone_locked_for_worker` /
+    /// `borrow_locked_for_light_worker`).  Cleared via `unlock()`.
+    pub read_only: bool,
+    /// SOFT lock: when `true`, only `delete` is illegal — `addr_mut`
+    /// and `claim` are still allowed.  Set by the fn-call deep-copy
+    /// bracket (`Stores::lock_store(&r)` from
+    /// `n_set_store_lock(r, true)`) to mark a caller's arg as
+    /// PROTECTED-FROM-FREE for the duration of the call, so
+    /// `OpCopyRecord`'s `0x8000` free-source branch skips the free
+    /// when the callee returned a borrowed view of an arg.  Doesn't
+    /// block scratch allocations made by the callee (e.g.
+    /// `build_hash_sorted_vec` claiming sort scratch in the hash's
+    /// own store per C60).  Cleared via `Stores::unlock_store(&r)`
+    /// from `n_set_store_lock(r, false)`.  See @P290 for the
+    /// rationale; replaced the prior origin-string discriminator.
+    pub free_protected: bool,
     /// Root of the LLRB free-space tree (0 = empty).
     /// Populated lazily: `open()` calls `fl_rebuild()`; `new()` starts empty
     /// and the tree fills as blocks are freed.
@@ -80,7 +100,7 @@ pub struct Store {
     /// most recently locked this store.  Empty when the store is
     /// unlocked or was locked without an origin (legacy callers).
     /// Surfaced in panic messages from `addr_mut` / `claim` / `delete`
-    /// so a "Write to locked store" failure points directly at the
+    /// so a "Write to read-only store" failure points directly at the
     /// locker rather than requiring `LOFT_LOG=locks` to re-trace.
     pub lock_origin: String,
     /// P259 — type-id of the loft type whose root record lives at
@@ -135,6 +155,17 @@ impl Store {
         self.size
     }
 
+    /// @P294: grow this store's backing buffer to at least `words` words,
+    /// in place — no record relocation, so any `(store_nr, rec, pos)`
+    /// `DbRef` into this store stays valid (only the raw `ptr` moves, and
+    /// every access re-derives it).  No-op when already large enough.
+    /// Used by the interpreter to extend the value-stack store (#0) on
+    /// deep call nesting, where the stack writes bypass `claim` and so
+    /// never trigger the normal growth path.
+    pub fn grow_words(&mut self, words: u32) {
+        self.resize_store(words);
+    }
+
     /// Raw base pointer to the store's memory buffer.
     #[must_use]
     pub fn base_ptr(&self) -> *mut u8 {
@@ -157,7 +188,8 @@ impl Store {
             #[cfg(feature = "mmap")]
             file: None,
             free: true,
-            locked: false,
+            read_only: false,
+            free_protected: false,
             borrowed: false,
             created_at: 0,
             last_op_at: 0,
@@ -195,7 +227,8 @@ impl Store {
             claims: HashSet::new(),
             size,
             free: true,
-            locked: false,
+            read_only: false,
+            free_protected: false,
             free_root: 0,
             generation: 0,
             borrowed: false,
@@ -243,13 +276,13 @@ impl Store {
     /// * `size` - The requested record size in 8 byte words
     pub fn claim(&mut self, size: u32) -> u32 {
         debug_assert!(
-            !self.locked,
-            "Claim on locked store (size={size}) (locked by: {})",
+            !self.read_only,
+            "Claim on read-only store (size={size}) (locked by: {})",
             self.lock_origin
         );
         assert!(
-            !self.locked,
-            "Claim on locked store (size={size}) (locked by: {})",
+            !self.read_only,
+            "Claim on read-only store (size={size}) (locked by: {})",
             self.lock_origin
         );
         assert!(size >= 1, "Incomplete record");
@@ -383,13 +416,17 @@ impl Store {
 
     /// Delete a record, this assumes that all links towards this record are already removed
     pub fn delete(&mut self, rec: u32) {
+        // BOTH `read_only` and `free_protected` block deletes: the
+        // first is hard immutability (CONST_STORE / workers); the
+        // second is the call-bracket's "don't free me" marker.
+        let frozen = self.read_only || self.free_protected;
         debug_assert!(
-            !self.locked,
+            !frozen,
             "Delete on locked store (rec={rec}) (locked by: {})",
             self.lock_origin
         );
         assert!(
-            !self.locked,
+            !frozen,
             "Delete on locked store (rec={rec}) (locked by: {})",
             self.lock_origin
         );
@@ -493,7 +530,7 @@ impl Store {
 
     /// Lock this store + record an identifier of the lock-origin call site.
     /// The origin string surfaces in panic messages from `addr_mut` / `claim`
-    /// / `delete` so a "Write to locked store" failure points directly at the
+    /// / `delete` so a "Write to read-only store" failure points directly at the
     /// locker rather than requiring `LOFT_LOG=locks` to re-trace.
     pub fn lock_with_origin(&mut self, origin: impl Into<String>) {
         let origin = origin.into();
@@ -502,27 +539,62 @@ impl Store {
         // callers bypassing `Stores::lock_store(&r)` (e.g.
         // `compile.rs` const-store init, `native.rs` worker
         // store init) are visible too.
-        if !self.locked && crate::log_config::lock_trace_enabled() {
+        if !self.read_only && crate::log_config::lock_trace_enabled() {
             eprintln!("[locks] LOCK   origin={origin:?}");
         }
-        self.locked = true;
+        self.read_only = true;
         self.lock_origin = origin;
     }
 
     /// Unlock this store (only callable from Rust; loft code cannot unlock via d#lock = false
     /// on a const variable).
     pub fn unlock(&mut self) {
-        if self.locked && crate::log_config::lock_trace_enabled() {
+        if self.read_only && crate::log_config::lock_trace_enabled() {
             eprintln!("[locks] UNLOCK origin-was={:?}", self.lock_origin);
         }
-        self.locked = false;
+        self.read_only = false;
         self.lock_origin.clear();
     }
 
-    /// Return the current lock state.
+    /// @P290 — mark the store as PROTECTED-FROM-FREE for the duration
+    /// of a fn-call deep-copy bracket.  Writes / claims stay legal;
+    /// only `delete` (and `OpCopyRecord`'s `0x8000` source-free) is
+    /// blocked.  Cleared by `clear_free_protected()`.
+    pub fn set_free_protected(&mut self, origin: impl Into<String>) {
+        let origin = origin.into();
+        if !self.free_protected && crate::log_config::lock_trace_enabled() {
+            eprintln!("[locks] FREE_PROTECT origin={origin:?}");
+        }
+        self.free_protected = true;
+        self.lock_origin = origin;
+    }
+
+    /// @P290 — clear the call-bracket free-protection.
+    pub fn clear_free_protected(&mut self) {
+        if self.free_protected && crate::log_config::lock_trace_enabled() {
+            eprintln!("[locks] FREE_UNPROTECT origin-was={:?}", self.lock_origin);
+        }
+        self.free_protected = false;
+        // Clear lock_origin only if the hard read_only lock isn't also
+        // holding it (it shouldn't be — but be defensive).
+        if !self.read_only {
+            self.lock_origin.clear();
+        }
+    }
+
+    /// Return whether this store is HARD-locked (read-only).
+    /// CONST_STORE / worker borrow / JSON null sentinel.  Does NOT
+    /// include the call-bracket free-protection.
     #[must_use]
     pub fn is_locked(&self) -> bool {
-        self.locked
+        self.read_only
+    }
+
+    /// Return whether this store is currently protected from frees
+    /// by a fn-call deep-copy bracket.  @P290.
+    #[must_use]
+    pub fn is_free_protected(&self) -> bool {
+        self.free_protected
     }
 
     /// Return whether this store is a borrowed view of another store's buffer.
@@ -550,7 +622,8 @@ impl Store {
             #[cfg(feature = "mmap")]
             file: None,
             free: self.free,
-            locked: true,
+            read_only: true,
+            free_protected: false,
             free_root: 0, // workers never claim/delete; no free tree needed
             generation: self.generation,
             borrowed: false,
@@ -576,7 +649,8 @@ impl Store {
             #[cfg(feature = "mmap")]
             file: None,
             free: self.free,
-            locked: true,
+            read_only: true,
+            free_protected: false,
             free_root: 0,
             generation: self.generation,
             borrowed: false,
@@ -603,7 +677,8 @@ impl Store {
             #[cfg(feature = "mmap")]
             file: None,
             free: false,
-            locked: true,
+            read_only: true,
+            free_protected: false,
             free_root: self.free_root,
             generation: self.generation,
             borrowed: true,
@@ -1003,9 +1078,11 @@ impl Store {
 
     #[inline]
     pub fn addr_mut<T>(&mut self, rec: u32, fld: u32) -> &mut T {
+        // Only hard `read_only` blocks writes.  Call-bracket
+        // `free_protected` lets writes through (only frees are blocked).
         debug_assert!(
-            !self.locked,
-            "Write to locked store at rec={rec} fld={fld} (locked by: {})",
+            !self.read_only,
+            "Write to read-only store at rec={rec} fld={fld} (locked by: {})",
             self.lock_origin
         );
         debug_assert!(
@@ -1031,8 +1108,8 @@ impl Store {
             );
         }
         assert!(
-            !self.locked,
-            "Write to locked store at rec={rec} fld={fld} (locked by: {})",
+            !self.read_only,
+            "Write to read-only store at rec={rec} fld={fld} (locked by: {})",
             self.lock_origin
         );
         unsafe {
@@ -1066,7 +1143,7 @@ impl Store {
         // S29/P1-R3: locked (worker) stores have empty claims by design — skip the
         // claims check.  Records in worker stores are valid copies of the originals.
         debug_assert!(
-            self.locked || self.claims.contains(&rec),
+            self.read_only || self.claims.contains(&rec),
             "Unknown record {rec}"
         );
         // Read size before any multiplication to avoid overflow when fld 0 is negative
@@ -1459,7 +1536,14 @@ impl Store {
 
     #[inline]
     pub fn get_float(&self, rec: u32, fld: u32) -> f64 {
-        if self.valid(rec, fld) {
+        // @P284 — guard `rec != 0` like the integer getters do.  In release
+        // mode `valid()` is a no-op (all the inner checks are `debug_assert`)
+        // so without this guard a null DbRef (rec=0) reads `*self.addr(0, 0)`
+        // — the store's free-list header bytes interpreted as f64.  That
+        // garbage value (~2.8e-282 in practice) is finite, so for-loop
+        // iteration over `vector<float>` saw a non-null value past the end
+        // and looped forever.
+        if rec != 0 && self.valid(rec, fld) {
             *self.addr(rec, fld)
         } else {
             f64::NAN
@@ -1478,7 +1562,9 @@ impl Store {
 
     #[inline]
     pub fn get_single(&self, rec: u32, fld: u32) -> f32 {
-        if self.valid(rec, fld) {
+        // @P284 — sibling of `get_float`'s rec=0 guard; needed for
+        // `for s in vector<single>` to terminate.
+        if rec != 0 && self.valid(rec, fld) {
             *self.addr(rec, fld)
         } else {
             f32::NAN
@@ -1527,7 +1613,7 @@ mod tests {
 
     /// `addr_mut` on a locked store must panic (not silently discard the write).
     #[test]
-    #[should_panic(expected = "Write to locked store")]
+    #[should_panic(expected = "Write to read-only store")]
     fn write_to_locked_store_panics() {
         let mut store = Store::new(64);
         let rec = store.claim(8);
@@ -1544,7 +1630,7 @@ mod tests {
         *store.addr_mut::<i32>(rec, 0) = 42;
         let borrow = unsafe { store.borrow_locked_for_light_worker() };
         assert_eq!(*borrow.addr::<i32>(rec, 0), 42);
-        assert!(borrow.locked);
+        assert!(borrow.read_only);
         assert!(borrow.borrowed);
         // Drop of borrow must NOT free the original's buffer.
         drop(borrow);
@@ -1557,7 +1643,7 @@ mod tests {
 
     /// Writing to a borrowed store panics.
     #[test]
-    #[should_panic(expected = "Write to locked store")]
+    #[should_panic(expected = "Write to read-only store")]
     fn borrow_locked_write_panics() {
         let mut store = Store::new(64);
         store.free = false;

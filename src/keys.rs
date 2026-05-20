@@ -285,6 +285,14 @@ fn compare_key(k: &Content, record: &DbRef, stores: &[Store], key: &Key, pos: u3
         (Content::Str(v), 6) => v
             .str()
             .cmp(s.get_str(s.get_u32_raw(record.rec, record.pos + pos))),
+        // Narrow integer keys — match hash_ref / get_key.
+        (Content::Long(v), 8) => v.cmp(&i64::from(s.get_i32_raw(record.rec, record.pos + pos))),
+        (Content::Long(v), 9) => v.cmp(&i64::from(s.get_short(record.rec, record.pos + pos, 0))),
+        (Content::Long(v), 10) => v.cmp(&i64::from(s.get_byte(record.rec, record.pos + pos, 0))),
+        (Content::Long(v), 11) => {
+            let raw: u16 = *s.addr(record.rec, record.pos + pos);
+            v.cmp(&i64::from(raw as i16))
+        }
         (Content::Long(v), _) => v.cmp(&i64::from(s.get_byte(record.rec, record.pos + pos, 0))),
         _ => panic!("Undefined compare {k:?} vs {}", key.type_nr),
     };
@@ -301,6 +309,14 @@ fn compare_ref(r1: &DbRef, r2: &DbRef, stores: &[Store], key: &Key, p1: u32, p2:
         6 => s
             .get_str(s.get_u32_raw(r1.rec, p1))
             .cmp(s.get_str(s.get_u32_raw(r2.rec, p2))),
+        8 => s.get_i32_raw(r1.rec, p1).cmp(&s.get_i32_raw(r2.rec, p2)),
+        9 => s.get_short(r1.rec, p1, 0).cmp(&s.get_short(r2.rec, p2, 0)),
+        10 => s.get_byte(r1.rec, p1, 0).cmp(&s.get_byte(r2.rec, p2, 0)),
+        11 => {
+            let v1: u16 = *s.addr(r1.rec, p1);
+            let v2: u16 = *s.addr(r2.rec, p2);
+            (v1 as i16).cmp(&(v2 as i16))
+        }
         _ => s.get_byte(r1.rec, p1, 0).cmp(&s.get_byte(r2.rec, p2, 0)),
     };
     if key.type_nr < 0 { c.reverse() } else { c }
@@ -324,6 +340,22 @@ pub fn get_key(record: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<Content> {
                 let v =
                     store(record, stores).get_str(store(record, stores).get_u32_raw(record.rec, p));
                 result.push(Content::Str(Str::new(v)));
+            }
+            8 => {
+                let v = store(record, stores).get_i32_raw(record.rec, p);
+                result.push(Content::Long(i64::from(v)));
+            }
+            9 => {
+                let v = store(record, stores).get_short(record.rec, p, 0);
+                result.push(Content::Long(i64::from(v)));
+            }
+            10 => {
+                let v = store(record, stores).get_byte(record.rec, p, 0);
+                result.push(Content::Long(i64::from(v)));
+            }
+            11 => {
+                let raw: u16 = *store(record, stores).addr(record.rec, p);
+                result.push(Content::Long(i64::from(raw as i16)));
             }
             _ => {
                 let v = store(record, stores).get_byte(record.rec, p, 0);
@@ -378,6 +410,19 @@ fn hash_ref(r: &DbRef, stores: &[Store], key: &Key, p: u32, hasher: &mut Default
         2 => s.get_long(r.rec, p).hash(hasher),
         3 | 4 => (),
         6 => s.get_str(s.get_u32_raw(r.rec, p)).hash(hasher),
+        // Narrow-integer key storage (Parts::Int / Short / ShortRaw / Byte).
+        // Each yields an i64 view so the hash matches `get_key`'s
+        // Content::Long(i64) reconstruction at the lookup site.
+        8 => i64::from(s.get_i32_raw(r.rec, p)).hash(hasher),
+        9 => i64::from(s.get_short(r.rec, p, 0)).hash(hasher),
+        10 => i64::from(s.get_byte(r.rec, p, 0)).hash(hasher),
+        11 => {
+            // Parts::ShortRaw stores a raw u16; no min shift, no null
+            // sentinel.  Sign-extend through i16 → i64 to match
+            // compare_key / get_key's reconstruction.
+            let raw: u16 = *s.addr(r.rec, p);
+            i64::from(raw as i16).hash(hasher);
+        }
         _ => i64::from(s.get_byte(r.rec, p, 0)).hash(hasher),
     }
 }

@@ -1,0 +1,594 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// audience_crystal — shared crystal-pattern logic for the
+// @PLAN36 audience-generative-art demo.  Used by:
+//   - tools/audience-demo/projector.loft  — 3D OpenGL renderer
+//   - tools/audience-demo/crystal_render.loft — 2D PNG test harness
+//
+// The library is the SINGLE SOURCE OF TRUTH for:
+//   - Pointy-top hex layout + neighbour rules
+//   - Center selection (no two adjacent rule)
+//   - Per-cell height assignment
+//   - Main ray + side branch generation
+//
+// Both consumers call `crystal_segments(snap)` to get the same
+// segment list; each consumer then renders the segments in its own
+// way (3D ribbons vs 2D anti-aliased lines).
+
+// ── Geometry constants ───────────────────────────────────────────────
+
+// World units per hex (= 1 hex circumradius).  38 happens to be a
+// comfortable size for the projector's 1280×800 window; the canvas
+// test harness uses its own scale.
+pub HEX_SIZE = 38.0;
+pub SQRT3 = 1.7320508075688772;
+
+// ── Frost-pattern tunables ───────────────────────────────────────────
+
+// Two ray-length regimes, picked per direction at build time by
+// `crystal_segments`:
+// - If at least one FILLED cell sits on this centre's axis in
+//   direction d, the main extends PAST the furthest such cell's centre
+//   by `OVER_REACH` (in centre-to-centre units).  So `[(0,0), (2,0)]`
+//   → the east main from (0,0) reaches 2.30 hexes east — past (2,0)
+//   into the cell beyond.
+// - If NO cells sit on that axis, the main is a short STUB extending
+//   `STUB_RAY_FRAC` of a centre-to-centre span into empty space.  It
+//   doesn't reach where a non-existent neighbour's centre would be.
+pub OVER_REACH      = 0.30;
+pub STUB_RAY_FRAC   = 0.55;
+
+// Base side-branch length in HEX_SIZE units; tapers linearly to 0
+// toward the ray's tip.
+pub BRANCH_LEN_BASE = 0.95;
+
+// CONSTANT fork spacing (in HEX_SIZE units) — the gap between
+// consecutive forks along a main is the same everywhere, regardless
+// of whether the main is a short stub or a long axis-spanning spine.
+// Longer mains simply get more forks; shorter mains fewer.  The last
+// fork stays one full spacing-step short of the tip so the tip itself
+// stays a bare needle.
+pub BRANCH_SPACING = 0.30;
+
+// Ticks for a newborn main's side branches to grow from 0 % length to
+// 100 %.  Main lines themselves don't age — they extend immediately
+// when supporters arrive; only side branches grow over time.  At
+// `tick - birth >= GROWTH_TICKS` the main is "fully grown".  60 s
+// at ~60 fps (= 3600 ticks) gives the audience-demo timeline the
+// "slow growth" feel the design wants; tune via the `tick` unit the
+// caller chooses.
+pub GROWTH_TICKS = 3600;
+
+// Per-cell Y height — monotonic with filled-neighbour count + tiny
+// deterministic jitter.  Per the plan-36 § Visual model spec.
+pub HEIGHT_BASE = 0.18;
+pub HEIGHT_PER_NBR = 0.04;
+pub HEIGHT_JITTER = 0.10;
+
+
+// Segment kinds — the dominant SPINE (main) vs the DETAIL (side branch).
+pub KIND_MAIN = 0;
+pub KIND_SIDE = 1;
+
+// ── Palette ──────────────────────────────────────────────────────────
+//
+// Three parallel vector<float>s indexed by palette id 0..9.  Matches
+// doc/audience-demo/index.html PALETTE.  Index 0 is the unused
+// "empty" sentinel.
+
+pub fn palette_r(idx: integer) -> float {
+  rs: vector<float> = [
+    0.04,
+    217.0/255.0, 63.0/255.0,  58.0/255.0,
+     63.0/255.0, 208.0/255.0, 223.0/255.0,
+    230.0/255.0, 124.0/255.0, 156.0/255.0,
+  ];
+  rs[idx]
+}
+pub fn palette_g(idx: integer) -> float {
+  gs: vector<float> = [
+    0.04,
+     70.0/255.0, 200.0/255.0, 114.0/255.0,
+    200.0/255.0,  70.0/255.0, 216.0/255.0,
+    230.0/255.0, 124.0/255.0, 106.0/255.0,
+  ];
+  gs[idx]
+}
+pub fn palette_b(idx: integer) -> float {
+  bs: vector<float> = [
+    0.08,
+     70.0/255.0,  88.0/255.0, 229.0/255.0,
+    200.0/255.0, 208.0/255.0,  64.0/255.0,
+    236.0/255.0, 138.0/255.0,  60.0/255.0,
+  ];
+  bs[idx]
+}
+
+// ── Cell snapshot — input to all crystal generation ──────────────────
+//
+// Parallel arrays so the builder doesn't iterate a hash inside a fn
+// taking a struct parameter (sidesteps @P290).
+
+pub struct CellSnap {
+  xs:     vector<integer>,
+  ys:     vector<integer>,
+  colors: vector<integer>,
+}
+
+// ── Crystal mesh — output of the segment-list generator ─────────────
+//
+// Parallel arrays again: one entry per segment.  Each segment is a
+// straight line from (x0, y0, z0) to (x1, y1, z1) in the cell's
+// palette colour.  `kinds[i]` is KIND_MAIN or KIND_SIDE so consumers
+// can give the two classes different widths / styling.
+
+pub struct CrystalMesh {
+  kinds:  vector<integer>,
+  x0s:    vector<float>,
+  y0s:    vector<float>,
+  z0s:    vector<float>,
+  x1s:    vector<float>,
+  y1s:    vector<float>,
+  z1s:    vector<float>,
+  colors: vector<integer>,
+}
+
+// ── CrystalState — persistent age tracking across rebuilds ───────────
+//
+// A long-lived data structure owned by the consumer (projector,
+// test harness).  For every main line that has ever existed, records
+// its identity (centre cell coords + direction-index 0..5) and the
+// tick when it first appeared.  Used by `crystal_segments_aged` to
+// scale side-branch length by main age — young mains start with
+// short branches and grow to full length over `GROWTH_TICKS`.
+//
+// Today the only stored quantity is birth tick.  Future extensions
+// may record per-main growth speed, "last extended" tick (to age
+// new fork-points separately when a main grows), or per-supporter
+// timing — placeholders are deliberately omitted until needed.
+pub struct CrystalState {
+  main_x:     vector<integer>,
+  main_y:     vector<integer>,
+  main_d:     vector<integer>,
+  birth_tick: vector<integer>,
+}
+
+// Look up the recorded birth tick of (cx, cy, d) main.  Returns -1
+// if this main has never been recorded (caller treats as "newborn
+// this tick").
+pub fn lookup_main_birth(state: CrystalState,
+                         cx: integer, cy: integer, d: integer) -> integer {
+  for lb_i in 0..len(state.main_x) {
+    if state.main_x[lb_i] == cx
+       && state.main_y[lb_i] == cy
+       && state.main_d[lb_i] == d {
+      return state.birth_tick[lb_i];
+    }
+  }
+  0 - 1
+}
+
+// Append birth records for any (centre, direction) pair in `snap`
+// that hasn't been recorded yet.  Caller invokes this whenever the
+// world changes (paint added, paint cleared) with the current tick.
+// `parent` comes from `assign_cells(snap)`.
+pub fn update_state(state: &CrystalState, snap: CellSnap, tick: integer) {
+  parent = assign_cells(snap);
+  for us_i in 0..len(snap.xs) {
+    if parent[us_i] != us_i { continue; }   // skip supporters
+    cx = snap.xs[us_i];
+    cy = snap.ys[us_i];
+    for d in 0..6 {
+      existing = lookup_main_birth(state, cx, cy, d);
+      if existing >= 0 { continue; }
+      state.main_x     += [cx];
+      state.main_y     += [cy];
+      state.main_d     += [d];
+      state.birth_tick += [tick];
+    }
+  }
+}
+
+// 0.0 (just born) to 1.0 (fully grown over GROWTH_TICKS).
+pub fn age_factor(birth: integer, tick: integer) -> float {
+  age = tick - birth;
+  if age >= GROWTH_TICKS { return 1.0; }
+  if age <= 0 { return 0.0; }
+  age as float / GROWTH_TICKS as float
+}
+
+// ── Hex helpers ──────────────────────────────────────────────────────
+
+// Convert pointy-top offset (odd-row-shift) coords to axial (q, r).
+// Used by `hex_distance` to compute the standard 6-direction hex
+// metric and by the axis-alignment helpers below.
+fn axial_q(cx: integer, cy: integer) -> integer {
+  par = cy - (cy / 2) * 2;
+  if par < 0 { par = par + 2; }
+  cx - (cy - par) / 2
+}
+
+// True iff (x2, y2) lies on one of (x1, y1)'s six hex-direction axes
+// (excluding the source itself).  Used by `pick_centers` to decide
+// when a new paint sits on an existing centre's growth path — those
+// later paints become supporters, not new centres, no matter how
+// far down the line they fall.
+pub fn on_same_hex_axis(x1: integer, y1: integer,
+                        x2: integer, y2: integer) -> boolean {
+  if x1 == x2 && y1 == y2 { return false; }
+  q1 = axial_q(x1, y1);
+  q2 = axial_q(x2, y2);
+  r1 = y1;
+  r2 = y2;
+  dq = q2 - q1;
+  dr = r2 - r1;
+  ds = dq + dr;
+  dq == 0 || dr == 0 || ds == 0
+}
+
+// If (x2, y2) lies on one of (x1, y1)'s hex axes, return the
+// direction-index 0..5 (using the same convention as the main loop:
+// d=0 east, d=1 SE, d=2 SW, d=3 west, d=4 NW, d=5 NE).
+// Otherwise return -1.
+pub fn hex_axis_dir(x1: integer, y1: integer,
+                    x2: integer, y2: integer) -> integer {
+  q1 = axial_q(x1, y1);
+  q2 = axial_q(x2, y2);
+  r1 = y1;
+  r2 = y2;
+  dq = q2 - q1;
+  dr = r2 - r1;
+  if dq == 0 && dr == 0 { return 0 - 1; }
+  if dr == 0 {
+    if dq > 0 { return 0; }
+    return 3;
+  }
+  if dq == 0 {
+    if dr > 0 { return 1; }
+    return 4;
+  }
+  if dq + dr == 0 {
+    if dr > 0 { return 2; }
+    return 5;
+  }
+  0 - 1
+}
+
+// Number of hex steps between two cells.  Standard cube-coord
+// formula: |dq| + |dq+dr| + |dr| / 2 where (q, r) are axial.
+pub fn hex_distance(x1: integer, y1: integer, x2: integer, y2: integer) -> integer {
+  q1 = axial_q(x1, y1);
+  r1 = y1;
+  q2 = axial_q(x2, y2);
+  r2 = y2;
+  dq = q1 - q2;
+  dr = r1 - r2;
+  ds = dq + dr;
+  ad = if dq < 0 { 0 - dq } else { dq };
+  bd = if ds < 0 { 0 - ds } else { ds };
+  cd = if dr < 0 { 0 - dr } else { dr };
+  (ad + bd + cd) / 2
+}
+
+// Pointy-top hex neighbour adjacency in offset coords (odd-row shift).
+pub fn is_hex_nbr(x1: integer, y1: integer, x2: integer, y2: integer) -> boolean {
+  dy = y2 - y1;
+  dx = x2 - x1;
+  if dy == 0 { return dx == -1 || dx == 1; }
+  if dy != -1 && dy != 1 { return false; }
+  parity = y1 - (y1 / 2) * 2;
+  if parity < 0 { parity = parity + 2; }
+  if parity == 0 { dx == -1 || dx == 0 }
+  else            { dx == 0  || dx == 1 }
+}
+
+// Number of filled neighbours of cell (cx, cy) within the snapshot.
+pub fn snap_nbr_count(snap: CellSnap, cx: integer, cy: integer) -> integer {
+  count = 0;
+  for snc_j in 0..len(snap.xs) {
+    if is_hex_nbr(cx, cy, snap.xs[snc_j], snap.ys[snc_j]) { count = count + 1; }
+  }
+  count
+}
+
+// World-XZ position of a cell's centre.
+pub fn cell_wx(cx: integer, cy: integer) -> float {
+  par = cy - (cy / 2) * 2;
+  if par < 0 { par = par + 2; }
+  shift = 0.0;
+  if par == 1 { shift = SQRT3 / 2.0 * HEX_SIZE; }
+  cx as float * SQRT3 * HEX_SIZE + shift
+}
+pub fn cell_wz(cy: integer) -> float { cy as float * 1.5 * HEX_SIZE }
+
+// Per-cell Y height — rises with filled-neighbour count + deterministic
+// jitter (stable across frames).
+pub fn cell_h(snap: CellSnap, ix: integer) -> float {
+  cell_x = snap.xs[ix];
+  cell_y = snap.ys[ix];
+  nbr = snap_nbr_count(snap, cell_x, cell_y);
+  base = HEIGHT_BASE + nbr as float * HEIGHT_PER_NBR;
+  hh = (cell_x * 73856093) ^ (cell_y * 19349663);
+  if hh < 0 { hh = 0 - hh; }
+  jitter = (hh - (hh / 100) * 100) as float / 100.0;
+  (base + jitter * HEIGHT_JITTER) * HEX_SIZE
+}
+
+// How much "gap" a centre's main may bridge to capture a later paint
+// as a supporter rather than a new centre.  Measured in hexes between
+// the new paint and the furthest existing on-axis cell of that centre.
+// 2 = bridge ONE empty hex between (e.g., the `bridge` scenario:
+// (0,0) and (2,0) — gap of 1 empty cell at (1,0) — joins).  Anything
+// further forms a new crystal.
+pub MAX_AXIS_GAP = 2;
+
+// Assign every cell to its owning centre.  `parent[i] = i` means cell
+// i IS a centre; `parent[i] = j (j ≠ i)` means cell i is a SUPPORTER
+// of centre j.  Walks placement order; for each new paint, joins the
+// earliest existing centre whose axis can reach within MAX_AXIS_GAP
+// hexes of the chain's current furthest supporter.  Otherwise the new
+// paint becomes its own centre.
+//
+// Caller contract: cells must appear in placement order — snap.xs[0]
+// is the oldest paint, snap.xs[len-1] is the most recent.
+pub fn assign_cells(snap: CellSnap) -> vector<integer> {
+  n = len(snap.xs);
+  parent: vector<integer> = [];
+  for ac_m in 0..n { parent += [0 - 1]; }
+  for ac_s in 0..n {
+    cx = snap.xs[ac_s];
+    cy = snap.ys[ac_s];
+    joined = false;
+    for ac_a in 0..ac_s {
+      if parent[ac_a] != ac_a { continue; }   // skip non-centres
+      ax = snap.xs[ac_a];
+      ay = snap.ys[ac_a];
+      d = hex_axis_dir(ax, ay, cx, cy);
+      if d < 0 { continue; }
+      // Furthest A-axis-d distance among PRIOR cells in A's chain
+      // (= A itself at dist 0, plus any supporters whose parent is A).
+      furthest = 0;
+      for ac_b in 0..ac_s {
+        if ac_b == ac_a { continue; }
+        if parent[ac_b] != ac_a { continue; }
+        if hex_axis_dir(ax, ay, snap.xs[ac_b], snap.ys[ac_b]) != d { continue; }
+        dist_b = hex_distance(ax, ay, snap.xs[ac_b], snap.ys[ac_b]);
+        if dist_b > furthest { furthest = dist_b; }
+      }
+      this_dist = hex_distance(ax, ay, cx, cy);
+      if this_dist - furthest <= MAX_AXIS_GAP {
+        parent[ac_s] = ac_a;
+        joined = true;
+        break;
+      }
+    }
+    if !joined { parent[ac_s] = ac_s; }
+  }
+  parent
+}
+
+// Backwards-compat wrapper — derived from `assign_cells`.
+pub fn pick_centers(snap: CellSnap) -> vector<boolean> {
+  parent = assign_cells(snap);
+  out: vector<boolean> = [];
+  for pc_i in 0..len(parent) { out += [parent[pc_i] == pc_i]; }
+  out
+}
+
+// Find the snap-index of the FURTHEST cell in centre A's chain
+// (i.e., a supporter whose parent is A) that lies on A's axis in
+// direction `d`.  Returns -1 if no such supporter.  Used by
+// `crystal_segments` to extend A's main past the chain's tip.
+pub fn find_furthest_supporter(snap: CellSnap, parent: vector<integer>,
+                               a_ix: integer, d: integer) -> integer {
+  ax = snap.xs[a_ix];
+  ay = snap.ys[a_ix];
+  best_ix = 0 - 1;
+  best_dist = 0;
+  for ff_b in 0..len(snap.xs) {
+    if ff_b == a_ix { continue; }
+    if parent[ff_b] != a_ix { continue; }
+    bx = snap.xs[ff_b];
+    by = snap.ys[ff_b];
+    axis_d = hex_axis_dir(ax, ay, bx, by);
+    if axis_d != d { continue; }
+    dist = hex_distance(ax, ay, bx, by);
+    if dist > best_dist {
+      best_dist = dist;
+      best_ix = ff_b;
+    }
+  }
+  best_ix
+}
+
+// ── Per-segment palette mosaic (plan-36 § 3.4b) ─────────────────────
+//
+// Each segment picks a single solid colour from the set
+// {self, 1-away neighbours, 2-away tiles} with dominance
+// self ≫ 1-away ≫ 2-away.  Assignment is DETERMINISTIC per segment
+// (hash of cell coords + segment-id) so the mosaic is stable across
+// frame rebuilds — the texture reads as a fixed pattern, not noise.
+//
+// Distribution (per the spec's "most / some / a few"):
+//   ~70%: self colour
+//   ~25%: a 1-away neighbour's colour (if any exist)
+//    ~5%: a 2-away tile's colour (if any exist)
+// Falls back to self when the picked bucket is empty.
+
+// Collect filled-cell COLOUR indices within hex_distance = `dist`
+// from (cx, cy).  Self is excluded.
+fn nbr_colors_at(snap: CellSnap, cx: integer, cy: integer, dist: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  for nc_i in 0..len(snap.xs) {
+    nx = snap.xs[nc_i];
+    ny = snap.ys[nc_i];
+    if nx == cx && ny == cy { continue; }
+    if hex_distance(cx, cy, nx, ny) == dist { out += [snap.colors[nc_i]]; }
+  }
+  out
+}
+
+// Deterministic per-segment colour pick.  `seg_id` is a unique
+// integer per segment within a cell (we use direction * 100 + fork *
+// 10 + side where main = -1, side = 0/1, fork = 0..N-1).
+pub fn pick_segment_color(self_c: integer,
+                          one_away: vector<integer>,
+                          two_away: vector<integer>,
+                          cell_x: integer, cell_y: integer,
+                          seg_id: integer) -> integer {
+  hh = (cell_x * 73856093) ^ (cell_y * 19349663) ^ (seg_id * 83492791);
+  if hh < 0 { hh = 0 - hh; }
+  bucket = hh - (hh / 100) * 100;          // 0..99
+  pick_seed = hh / 100;                    // independent stream
+  if bucket < 70 { return self_c; }
+  // Hoist len() AND the modulo expression to locals — native codegen
+  // otherwise mutably borrows `stores` twice in a single subscript:
+  // once for `&one_away`, again for the divide-by-zero check on
+  // `pick_seed / len(one_away)`.  Computing the index outside the
+  // subscript dissolves the alias.  See @P293 for the broader pattern.
+  one_n = len(one_away);
+  two_n = len(two_away);
+  if bucket < 95 && one_n > 0 {
+    one_ix = pick_seed - (pick_seed / one_n) * one_n;
+    return one_away[one_ix];
+  }
+  if two_n > 0 {
+    two_ix = pick_seed - (pick_seed / two_n) * two_n;
+    return two_away[two_ix];
+  }
+  self_c
+}
+
+// ── Main entry: generate the crystal segment list ───────────────────
+//
+// For each CENTER cell, emit 6 main rays (each a single straight
+// segment from cell.centre to the matched-neighbour-centre or to a
+// fixed tip) + BRANCH_FORKS side branches per main at ±30°, lying
+// in the same tilted plane as the parent main.
+
+// Generate the segment mesh from `snap`, applying age-based side-
+// branch scaling from `state` evaluated at `tick`.  Side-branch length
+// = full_length * age_factor(main.birth, tick).  Mains snap to their
+// full length immediately.
+//
+// If `state` has no record for a main, that main is treated as
+// newborn at `tick` (branches at 0 %).  Pass a large `tick` (e.g.
+// `GROWTH_TICKS + len(state)`) and an empty state to get
+// "fully grown" output.
+pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
+                             tick: integer) -> CrystalMesh {
+  mesh = CrystalMesh{
+    kinds: [], colors: [],
+    x0s: [], y0s: [], z0s: [],
+    x1s: [], y1s: [], z1s: [],
+  };
+  parent = assign_cells(snap);
+  branch_base = HEX_SIZE * BRANCH_LEN_BASE;
+  branch_spacing_world = HEX_SIZE * BRANCH_SPACING;
+  deg30 = PI / 6.0;
+  centre_to_centre = SQRT3 * HEX_SIZE;
+  for cs_i in 0..len(snap.xs) {
+    if parent[cs_i] != cs_i { continue; }   // skip supporters
+    cell_c = snap.colors[cs_i];
+    cell_x = snap.xs[cs_i];
+    cell_y = snap.ys[cs_i];
+    one_away = nbr_colors_at(snap, cell_x, cell_y, 1);
+    two_away = nbr_colors_at(snap, cell_x, cell_y, 2);
+    wx = cell_wx(cell_x, cell_y);
+    wz = cell_wz(cell_y);
+    src_y = cell_h(snap, cs_i);
+    for d in 0..6 {
+      // Edge-midpoint angles — 0° (east), 60° (SE), 120° (SW), 180° (west),
+      // 240° (NW), 300° (NE).
+      ray_ang = (60.0 * d as float) * PI / 180.0;
+      // Per-direction ray length:
+      //   - Furthest SUPPORTER of THIS centre on this axis → main
+      //     extends past it by OVER_REACH centre-to-centre units.
+      //   - No supporter on this axis → main is a STUB into empty
+      //     space.  (Other centres on the same axis don't extend
+      //     this main; they form their own crystals.)
+      furthest_ix = find_furthest_supporter(snap, parent, cs_i, d);
+      ray_len_d = centre_to_centre * STUB_RAY_FRAC;
+      tip_y = src_y;
+      if furthest_ix >= 0 {
+        d_hexes = hex_distance(cell_x, cell_y,
+                               snap.xs[furthest_ix], snap.ys[furthest_ix]) as float;
+        ray_len_d = centre_to_centre * (d_hexes + OVER_REACH);
+        tip_y = cell_h(snap, furthest_ix);
+      }
+      rdx = ray_len_d * cos(ray_ang);
+      rdz = ray_len_d * sin(ray_ang);
+      tip_x = wx + rdx;
+      tip_z = wz + rdz;
+      dy = tip_y - src_y;
+      // Constant-spacing forks: n_forks = floor(ray_len / spacing) - 1
+      // so the last fork stays one full spacing-step short of the tip.
+      raw_forks = (ray_len_d / branch_spacing_world) as integer;
+      n_forks = raw_forks - 1;
+      if n_forks < 0 { n_forks = 0; }
+      branch_t_per_len = cos(deg30) / ray_len_d;
+      // Main ray colour — picked from {self, 1-away, 2-away}.
+      // seg_id encoding: d * 100 + (-1 → fork) + (-1 → side) →
+      // for mains we just use d * 100 + 99 to disambiguate from sides.
+      main_seg_id = d * 100 + 99;
+      main_col = pick_segment_color(cell_c, one_away, two_away,
+                                    cell_x, cell_y, main_seg_id);
+      mesh.kinds  += [KIND_MAIN];
+      mesh.x0s    += [wx];     mesh.y0s += [src_y]; mesh.z0s += [wz];
+      mesh.x1s    += [tip_x];  mesh.y1s += [tip_y]; mesh.z1s += [tip_z];
+      mesh.colors += [main_col];
+      // Per-main age factor (0 = newborn, 1 = fully grown).  Caller's
+      // CrystalState records the birth tick of each (centre, direction)
+      // pair; mains the state has never seen are treated as FULLY
+      // GROWN — aging is opt-in via update_state, so consumers that
+      // don't care about animation get static output by passing an
+      // empty CrystalState.
+      main_birth = lookup_main_birth(state, cell_x, cell_y, d);
+      age_f = 1.0;
+      if main_birth >= 0 { age_f = age_factor(main_birth, tick); }
+      // Side branches at CONSTANT spacing (BRANCH_SPACING * HEX_SIZE
+      // apart) — gaps between adjacent forks stay the same across
+      // every main, short or long.  Branch length tapers linearly
+      // toward the tip AND scales by `age_f` so the whole sideline
+      // pattern grows in from 0 % at birth to 100 % at GROWTH_TICKS.
+      for f in 1..(n_forks + 1) {
+        t = f as float * branch_spacing_world / ray_len_d;
+        fork_x = wx + rdx * t;
+        fork_z = wz + rdz * t;
+        fork_y = src_y + t * dy;
+        blen = branch_base * (1.0 - t) * age_f;
+        branch_end_y = src_y + (t + blen * branch_t_per_len) * dy;
+        // +30°
+        plus_ang = ray_ang + deg30;
+        plus_seg_id = d * 100 + f * 10 + 0;
+        plus_col = pick_segment_color(cell_c, one_away, two_away,
+                                      cell_x, cell_y, plus_seg_id);
+        mesh.kinds  += [KIND_SIDE];
+        mesh.x0s    += [fork_x];                                mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
+        mesh.x1s    += [fork_x + blen * cos(plus_ang)];         mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(plus_ang)];
+        mesh.colors += [plus_col];
+        // -30°
+        minus_ang = ray_ang - deg30;
+        minus_seg_id = d * 100 + f * 10 + 1;
+        minus_col = pick_segment_color(cell_c, one_away, two_away,
+                                       cell_x, cell_y, minus_seg_id);
+        mesh.kinds  += [KIND_SIDE];
+        mesh.x0s    += [fork_x];                                mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
+        mesh.x1s    += [fork_x + blen * cos(minus_ang)];        mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(minus_ang)];
+        mesh.colors += [minus_col];
+      }
+    }
+  }
+  mesh
+}
+
+// Convenience wrapper — generates the fully-grown segment mesh.
+// Equivalent to `crystal_segments_aged` with an empty state, which
+// the aged code treats as "no birth records ⇒ all mains fully grown".
+pub fn crystal_segments(snap: CellSnap) -> CrystalMesh {
+  empty_state = CrystalState{
+    main_x: [], main_y: [], main_d: [], birth_tick: [],
+  };
+  crystal_segments_aged(snap, empty_state, 0)
+}

@@ -18,6 +18,8 @@ lib/graphics/examples/*.png
 # tests/gold/10-canvas-demo.png; the working-directory copy is transient.
 /10-canvas-demo.png
 test_scene_debug.loft
+# Audience-demo server runtime snapshot (regenerated on each run).
+tools/audience-demo/world.bin
 # FUSE filesystem hidden files: created when a file is deleted while still
 # open by another process (e.g. an editor or watcher). They're stale OS
 # artefacts, never source code.

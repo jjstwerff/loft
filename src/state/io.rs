@@ -165,7 +165,37 @@ impl State {
         }
         let little_endian = format == 2;
         let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
-        let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
+        // `+=` is append-only: when the user has not explicitly set
+        // `f#next = N`, the write position is the current end of file
+        // so successive `f += …` calls append (consistent with
+        // `vector += [elem]` / `text += "more"`).  An explicit
+        // `f#next = N` still overwrites at offset N.  Call
+        // `f.set_file_size(0)` before the first write to truncate.
+        let next_pos = if raw_next == i64::MIN {
+            #[cfg(feature = "wasm")]
+            {
+                let file_path = {
+                    let store = self.database.store(&file);
+                    store
+                        .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+                        .to_owned()
+                };
+                let sz = crate::wasm::host_fs_file_size(&file_path);
+                if sz < 0 { 0 } else { sz }
+            }
+            #[cfg(not(feature = "wasm"))]
+            {
+                let path = {
+                    let store = self.database.store(&file);
+                    store
+                        .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+                        .to_owned()
+                };
+                std::fs::metadata(&path).map_or(0, |m| m.len() as i64)
+            }
+        } else {
+            raw_next
+        };
         self.database
             .store_mut(&file)
             .set_long(file.rec, file.pos + 8, next_pos);
@@ -197,12 +227,22 @@ impl State {
                         .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                         .to_owned()
                 };
-                match File::create(&file_name) {
+                // Open for read+write without truncating so that earlier
+                // bytes are preserved.  Create the file if it does not
+                // exist yet.  Explicit truncation happens via
+                // `f.set_file_size(0)` (or `f#size = 0`).
+                match OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(&file_name)
+                {
                     Ok(mut f) => {
-                        // apply stored seek position on first open.
-                        if next_pos != 0 {
-                            let _ = f.seek(SeekFrom::Start(next_pos as u64));
-                        }
+                        // Seek to the stored write position (end of file
+                        // for default appends, explicit offset for
+                        // `f#next = N`).
+                        let _ = f.seek(SeekFrom::Start(next_pos as u64));
                         self.database
                             .store_mut(&file)
                             .set_i32_raw(file.rec, file.pos + 28, f_nr);
@@ -215,7 +255,7 @@ impl State {
                         f_nr
                     }
                     Err(e) => {
-                        eprintln!("file create error for {file_name:?}: {e}");
+                        eprintln!("file open error for {file_name:?}: {e}");
                         return;
                     }
                 }
@@ -463,6 +503,36 @@ impl State {
                 i64::MIN
             };
             self.put_stack(size);
+        }
+    }
+
+    pub fn sync_file(&mut self) {
+        let file = *self.get_stack::<DbRef>();
+        if file.rec == 0 {
+            self.put_stack(false);
+            return;
+        }
+        #[cfg(feature = "wasm")]
+        {
+            let _ = file;
+            self.put_stack(false);
+            return;
+        }
+        #[cfg(not(feature = "wasm"))]
+        {
+            let file_ref = self
+                .database
+                .store(&file)
+                .get_i32_raw(file.rec, file.pos + 28);
+            let ok = if file_ref != i32::MIN
+                && (file_ref as usize) < self.database.files.len()
+                && let Some(f) = &self.database.files[file_ref as usize]
+            {
+                f.sync_data().is_ok()
+            } else {
+                true
+            };
+            self.put_stack(ok);
         }
     }
 
@@ -1137,9 +1207,38 @@ impl State {
             && data.store_nr != to.store_nr
             && data.store_nr != 0
             && !self.database.allocations[data.store_nr as usize].free
-            && !self.database.allocations[data.store_nr as usize].locked
+            && !self.database.allocations[data.store_nr as usize].read_only
+            && !self.database.allocations[data.store_nr as usize].free_protected
         {
             self.database.free(&data);
+        }
+    }
+
+    /// @P295 — deep-copy a keyed collection (`sorted`/`hash`/`index`) into a
+    /// keyed-collection LOCAL `dest`, replacing its prior contents.  Unlike
+    /// `copy_record` there is NO `copy_block`: a keyed local's slot is a
+    /// `DbRef` to a dedicated store whose collection header lives at
+    /// `(store, 1, 8)`, so `remove_claims(dest)` (free + reset) followed by
+    /// `copy_claims(src, dest, tp)` (per-kind rebuild of the bucket/tree
+    /// index) is the complete, correct copy.  `tp` is the SPECIFIC keyed
+    /// type id; its `0x8000` high bit frees the source store after the copy
+    /// (set by the parser for fresh-storage RHS like `s = build()`).
+    pub fn replace_keyed(&mut self) {
+        let raw_tp = *self.code::<u16>();
+        let free_source = raw_tp & 0x8000 != 0;
+        let tp = raw_tp & 0x7FFF;
+        let dest = *self.get_stack::<DbRef>();
+        let src = *self.get_stack::<DbRef>();
+        self.database.remove_claims(&dest, tp);
+        self.database.copy_claims(&src, &dest, tp);
+        if free_source
+            && src.store_nr != dest.store_nr
+            && src.store_nr != 0
+            && !self.database.allocations[src.store_nr as usize].free
+            && !self.database.allocations[src.store_nr as usize].read_only
+            && !self.database.allocations[src.store_nr as usize].free_protected
+        {
+            self.database.free(&src);
         }
     }
 
@@ -1202,7 +1301,23 @@ impl State {
                 4 => key.push(Content::Long(i64::from(*self.get_stack::<bool>()))),
                 5 => key.push(Content::Str(self.string())),
                 6 => key.push(Content::Long(i64::from(*self.get_stack::<u32>()))),
-                _ => key.push(Content::Long(i64::from(*self.get_stack::<u8>()))),
+                _ => {
+                    // Narrow integer storage (Parts::Int / Short / ShortRaw /
+                    // Byte) — the lookup value is still an i64 on the stack
+                    // even when the field's storage is narrower.  Pop 8
+                    // bytes so subsequent stack reads stay aligned; the
+                    // catch-all 1-byte pop here was broken silently for
+                    // every narrow-key hash since Parts::Int was introduced.
+                    match &self.database.types[*k as usize].parts {
+                        crate::database::Parts::Int(_, _)
+                        | crate::database::Parts::Short(_, _)
+                        | crate::database::Parts::ShortRaw(_, _)
+                        | crate::database::Parts::Byte(_, _) => {
+                            key.push(Content::Long(*self.get_stack::<i64>()));
+                        }
+                        _ => key.push(Content::Long(i64::from(*self.get_stack::<u8>()))),
+                    }
+                }
             }
             // We assume that all none-base types are enumerate types.
         }

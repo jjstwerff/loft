@@ -37,6 +37,9 @@ fn tcp_listen(port: integer) -> integer;
 fn tcp_accept(handle: integer) -> boolean;
 #native "n_tcp_accept"
 
+fn tcp_accept_nonblocking(handle: integer) -> boolean;
+#native "n_tcp_accept_nonblocking"
+
 fn tcp_method() -> text;
 #native "n_tcp_method"
 
@@ -96,6 +99,19 @@ fn ws_close_native(handle: integer);
 
 pub fn listen(port: integer) -> Server {
   Server { handle: tcp_listen(port) }
+}
+
+// Non-blocking variant of `next()`.  Returns null immediately if no
+// connection is pending.  Use this when the server interleaves HTTP
+// accept with multi-client WS polling on a single port (single_port
+// audience demo / future TTT-style multi-tab apps).
+pub fn next_nonblocking(self: Server) -> Request {
+  if !tcp_accept_nonblocking(self.handle) { return null; }
+  Request {
+    method: tcp_method(),
+    path: tcp_path(),
+    body: tcp_body()
+  }
 }
 
 pub fn next(self: Server) -> Request {

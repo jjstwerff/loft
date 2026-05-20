@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 error: Library 'nonexistent_module' not found — searched lib/, lib_dirs, and sibling packages
   --> <cases>/38_import_unknown_file.loft:1:27
   |
@@ -7,4 +8,3 @@ error: Library 'nonexistent_module' not found — searched lib/, lib_dirs, and s
   |                           ^
 
 error: aborting due to 1 previous error
-==== stderr ====

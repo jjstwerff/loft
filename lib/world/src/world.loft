@@ -252,3 +252,138 @@ pub fn tick_and_decay(self: &World, base_lifetime: integer,
     set_cell(self, rm_q[rm_i], rm_r[rm_i], cell_empty());
   }
 }
+
+// ── Persistence — binary snapshot save / load ──────────────────────
+//
+// Whole-world dump.  Single-shot full-state snapshot; the file is
+// truncated on each save.  Append-only change-log support is a future
+// extension that needs an "open without truncate" file primitive (see
+// `doc/claude/plans/36-audience-generative-art/01-server-state.md`
+// § Persistence — language-level blockers).
+//
+// File layout (little-endian, version 1):
+//   [4B u32  : magic 0x57524C44 'WRLD']
+//   [4B u32  : format version = 1]
+//   [4B i32  : tick]
+//   [4B u32  : chunk count N]
+//   N × {
+//     [4B i32: ck_cx]
+//     [4B i32: ck_cz]
+//     [4B u32: filled-cell count K in this chunk]
+//     K × {
+//       [2B u16: cell idx within chunk (0..1023)]
+//       [1B u8 : c_color]
+//       [1B u8 : c_height]
+//       [2B u16: c_age]
+//     }
+//   }
+//
+// Costs: O(total cells) per save, ~6 bytes per filled cell + 12 bytes
+// per non-empty chunk + 16 bytes header.  A 1000-cell world fits in
+// ~6 KB.
+
+WORLD_FILE_MAGIC   = 0x57524C44;       // 'WRLD'
+WORLD_FILE_VERSION = 1;
+
+// Count the filled (c_color != 0) cells in a single chunk.
+fn chunk_filled_count(c: Chunk) -> integer {
+  cfc_k = 0;
+  for cfc_cell in c.ck_cells {
+    if cfc_cell.c_color != 0 { cfc_k += 1; }
+  }
+  cfc_k
+}
+
+// Save the world to `path`, replacing whatever was there.
+pub fn world_save(self: World, path: text) {
+  // Pre-count non-empty chunks so the header is correct without a
+  // second pass over `chunks` after the file is open.
+  ws_n_chunks = 0;
+  for ws_pc in self.chunks {
+    if chunk_filled_count(ws_pc) > 0 { ws_n_chunks += 1; }
+  }
+  {
+    f = file(path);
+    f#format = LittleEndian;
+    // Snapshot semantics: each save replaces the previous file.  Make
+    // the truncation explicit so the sequence keeps working once `+=`
+    // is append-only (rather than truncating on first reopen).
+    f.set_file_size(0);
+    // Explicit `as i32` casts force 4-byte writes — without them, a
+    // bare `integer` value writes 8 bytes (loft stores integers as
+    // i64 internally; the file API takes the storage width unless
+    // overridden by a cast).  c_color/c_height/c_age are written at
+    // their declared u8/u16 widths automatically because they're
+    // strongly typed struct fields.
+    f += (WORLD_FILE_MAGIC   as i32);
+    f += (WORLD_FILE_VERSION as i32);
+    f += (self.tick          as i32);
+    f += (ws_n_chunks        as i32);
+    for ws_c in self.chunks {
+      ws_k = chunk_filled_count(ws_c);
+      if ws_k == 0 { continue; }
+      f += (ws_c.ck_cx as i32);
+      f += (ws_c.ck_cz as i32);
+      f += (ws_k       as i32);
+      for ws_i in 0..1024 {
+        ws_cell = ws_c.ck_cells[ws_i];
+        if ws_cell.c_color == 0 { continue; }
+        f += (ws_i as u16);
+        f += ws_cell.c_color;
+        f += ws_cell.c_height;
+        f += ws_cell.c_age;
+      }
+    }
+    f.sync();
+  }
+}
+
+// Load the world from `path`.  Mutates `self` in place; pre-existing
+// cells in `self` are left untouched unless the snapshot overwrites
+// the same (q, r).  Returns the number of cells loaded.  Returns 0 if
+// the file does not exist, has the wrong magic, or carries an
+// unsupported version — never panics.
+pub fn world_load(self: &World, path: text) -> integer {
+  // `f#read as T` reads exactly T's byte width — no size argument
+  // needed.  For the per-cell payload reads, the LHS-driven form
+  // is even shorter: the field's declared type (`u8` / `u16`) IS the
+  // width, so no `as T` at all.
+  if !exists(path) { return 0; }
+  f = file(path);
+  f#format = LittleEndian;
+  wl_magic = f#read as i32;
+  if wl_magic != (WORLD_FILE_MAGIC as i32) { return 0; }
+  wl_version = f#read as i32;
+  if wl_version != (WORLD_FILE_VERSION as i32) { return 0; }
+  self.tick = f#read as i32;
+  wl_n_chunks = f#read as i32;
+  wl_total = 0;
+  wl_i_chunk = 0;
+  while wl_i_chunk < wl_n_chunks {
+    wl_cx = f#read as i32;
+    wl_cz = f#read as i32;
+    wl_k  = f#read as i32;
+    // Ensure the target chunk exists, then locate it for direct
+    // index-into-ck_cells writes.  We pass a global (q, r) inside
+    // the chunk's footprint so chunk_idx_32 reproduces (wl_cx, wl_cz).
+    ensure_chunk(self, wl_cx * 32, wl_cz * 32);
+    for wl_target in self.chunks {
+      if wl_target.ck_cx != wl_cx { continue; }
+      if wl_target.ck_cz != wl_cz { continue; }
+      wl_j = 0;
+      while wl_j < wl_k {
+        wl_idx = f#read as u16;     // explicit — `wl_idx` is a local with no type hint
+        wl_cell = Cell{c_color: 0, c_height: 0, c_age: 0};
+        wl_cell.c_color  = f#read;   // LHS-driven: c_color is u8 → 1 byte
+        wl_cell.c_height = f#read;   //             c_height is u8 → 1 byte
+        wl_cell.c_age    = f#read;   //             c_age is u16 → 2 bytes
+        wl_target.ck_cells[wl_idx] = wl_cell;
+        wl_total += 1;
+        wl_j += 1;
+      }
+      break;
+    }
+    wl_i_chunk += 1;
+  }
+  wl_total
+}

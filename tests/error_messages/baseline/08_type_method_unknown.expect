@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 error: Unknown field text.lengt
   --> <cases>/08_type_method_unknown.loft:3:15
   |
@@ -43,4 +44,3 @@ error: Variable 'n' has unknown type — possible typo or missing definition
   |                ^
 
 error: aborting due to 7 previous errors
-==== stderr ====

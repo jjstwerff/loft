@@ -1231,9 +1231,25 @@ impl Parser {
             self.data.def_nr(type_name)
         };
         if self.first_pass && tp_nr == u32::MAX && type_name != "spacial" {
-            let u_nr = self
-                .data
-                .add_def(type_name, self.lexer.pos(), DefType::Unknown);
+            // @P296-sibling — for a qualified `lib::Type` reference, `tp_nr`
+            // was computed as `source_nr(source, name)` (the type, e.g.
+            // `CellSnap`), but the pass-1 placeholder is keyed on
+            // `type_name` (the lib prefix, e.g. `audience_crystal`).  When
+            // the lib isn't resolvable yet in pass-1 (e.g. Windows lib-path
+            // resolution lands the load after this reference), a SECOND
+            // unresolved `lib::Other` ref would re-`add_def(lib_prefix)` →
+            // "Dual definition" panic.  Reuse an existing same-named Unknown
+            // placeholder instead of re-adding it; pass-2 resolves the real
+            // type once the lib is fully parsed.  (The non-qualified path
+            // already dedups via `tp_nr` below, so this only affects the
+            // qualified shape.)
+            let existing = self.data.def_nr(type_name);
+            let u_nr = if existing != u32::MAX && self.data.def_type(existing) == DefType::Unknown {
+                existing
+            } else {
+                self.data
+                    .add_def(type_name, self.lexer.pos(), DefType::Unknown)
+            };
             return Some(Type::Unknown(u_nr));
         }
         if tp_nr != u32::MAX && self.data.def_type(tp_nr) == DefType::Unknown {

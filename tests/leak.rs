@@ -388,6 +388,249 @@ pub fn test() {
     );
 }
 
+/// P291 (vector-append of fn-call result): `vec += [build_chunk(x, y)]`
+/// where `build_chunk` returns a freshly-allocated struct used to leak
+/// the callee's source store on every iteration.  The IR pattern is
+/// `OpPreAllocVector + OpNewRecord(_elm) + OpCopyRecord(call, _elm, tp)
+/// + OpFinishRecord` — the `OpCopyRecord` source (the call result)
+/// was emitted without the `0x8000` free-source bit that the
+/// scalar-assignment path (`gen_set_first_ref_call_copy`) has had for
+/// a while.  Fixed by adding the same `is_struct_returning_call`
+/// check in `src/parser/vectors.rs`'s vector-append emitter.
+///
+/// Reproducer is intentionally tiny: two appends of a fn-returning-
+/// struct into a local `vector<Chunk>`.  Before the fix this leaked 2
+/// stores; after, zero.  The natural consumer is `lib/world`'s
+/// `ensure_chunk(w, q, r)` → `w.chunks += [build_chunk(cx, cz)]`
+/// pattern which surfaced this when running `lib/world/tests/world.loft`.
+#[test]
+fn p291_vector_append_fn_call_result_no_leak() {
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse_str(
+        r#"
+struct Cell { c_color: u8 not null, c_height: u8 not null, c_age: u16 not null }
+struct Chunk { ck_cx: integer not null, ck_cz: integer not null, ck_cells: vector<Cell> }
+fn build_chunk(cx: integer, cz: integer) -> Chunk {
+  Chunk{ck_cx: cx, ck_cz: cz, ck_cells: []}
+}
+pub fn test() {
+  chunks: vector<Chunk> = [];
+  chunks += [build_chunk(0, 0)];
+  chunks += [build_chunk(1, 0)];
+  assert(len(chunks) == 2, "appended 2 chunks");
+}
+"#,
+        "p291_minimal",
+        false,
+    );
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("test", &p.data);
+    let leaks = state.collect_store_leaks();
+    assert!(
+        leaks.is_empty(),
+        "P291 regression: {} store(s) leaked: {}",
+        leaks.len(),
+        leaks.join(", ")
+    );
+}
+
+/// P291 broader case: the actual lib/world `build_chunk` (1024 inner
+/// cells) plus three appends covering the negative-chunk path.
+/// Combines the leak fix with vector-of-struct construction inside
+/// the callee, validating that BOTH the outer `__ref_N` (chunk) and
+/// the inner per-cell `__lift_N` allocations are tracked correctly.
+#[test]
+fn p291_vector_append_with_inner_vector_no_leak() {
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse_str(
+        r#"
+struct Cell { c_color: u8 not null, c_height: u8 not null, c_age: u16 not null }
+struct Chunk { ck_cx: integer not null, ck_cz: integer not null, ck_cells: vector<Cell> }
+struct World { chunks: vector<Chunk>, tick: integer not null }
+fn cell_empty() -> Cell { Cell{c_color: 0, c_height: 0, c_age: 0} }
+fn build_chunk(cx: integer, cz: integer) -> Chunk {
+  cs: vector<Cell> = [];
+  for _ in 0..4 { cs += [cell_empty()]; }
+  Chunk{ck_cx: cx, ck_cz: cz, ck_cells: cs}
+}
+fn ensure_chunk(w: &World, cx: integer, cz: integer) {
+  w.chunks += [build_chunk(cx, cz)];
+}
+pub fn test() {
+  w = World{chunks: [], tick: 0};
+  ensure_chunk(w, 0, 0);
+  ensure_chunk(w, 1, 0);
+  ensure_chunk(w, -1, 0);
+  assert(len(w.chunks) == 3, "3 alive chunks");
+}
+"#,
+        "p291_with_inner",
+        false,
+    );
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("test", &p.data);
+    let leaks = state.collect_store_leaks();
+    assert!(
+        leaks.is_empty(),
+        "P291 regression: {} store(s) leaked: {}",
+        leaks.len(),
+        leaks.join(", ")
+    );
+}
+
+/// P290 (lock semantic too broad) — iterating a passed-in struct's
+/// `hash` field used to panic with `Claim on locked store (size=N)
+/// (locked by: lock_store(store_nr=…, rec=…))` because the fn-call
+/// deep-copy bracket emitted in `src/state/codegen.rs` locked every
+/// Ref-typed arg, and `build_hash_sorted_vec` (the hash iterator's
+/// scratch allocator) claims IN the hash's own store per C60.
+/// Fixed by gating `Store::claim` / `Store::addr_mut`'s assert on
+/// the lock origin: call-bracket locks (origin starts with
+/// `"lock_store("`) only block frees, never writes/claims.  Hard
+/// locks (CONST_STORE init, worker borrows) still block everything.
+#[test]
+fn p290_iter_struct_hash_field_no_panic() {
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse_str(
+        r#"
+struct Cell { ck: text not null, x: integer not null, y: integer not null }
+struct World { cells: hash<Cell[ck]> }
+fn snap_xs(w: World) -> integer {
+  count = 0;
+  for cell in w.cells {
+    count = count + cell.x;
+  }
+  count
+}
+pub fn test() {
+  w = World{cells: []};
+  w.cells += [Cell{ck: "a", x: 1, y: 0}];
+  w.cells += [Cell{ck: "b", x: 2, y: 0}];
+  w.cells += [Cell{ck: "c", x: 3, y: 0}];
+  total = snap_xs(w);
+  assert(total == 6, "summed cells inside passed-in hash");
+}
+"#,
+        "p290_iter",
+        false,
+    );
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("test", &p.data);
+    let leaks = state.collect_store_leaks();
+    assert!(
+        leaks.is_empty(),
+        "P290 regression: {} store(s) leaked: {}",
+        leaks.len(),
+        leaks.join(", ")
+    );
+}
+
+/// P290 sibling — off-by-one in `copy_claims_hash_body` SEGV.  After
+/// the lock-broadening fix above unblocked the callee, deep-copying
+/// the returned struct (which contains a populated `hash<T[key]>`
+/// field) crashed because `copy_claims_hash_body` looped
+/// `1..length*2` instead of `0..(room-1)*2`, both skipping the first
+/// bucket AND writing past the destination claim's end → adjacent
+/// heap metadata corruption → SIGSEGV on the next allocator op.
+/// Only triggers via SRet returns of struct-containing-hash, which
+/// is exactly the shape `fn collect(w: World) -> ChunkSet { … }`
+/// produces.
+#[test]
+fn p290_sret_struct_with_hash_field_deep_copy_no_crash() {
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse_str(
+        r#"
+struct Cell { ck: text not null, x: integer not null, y: integer not null }
+struct World { cells: hash<Cell[ck]> }
+struct ChunkRef { ck: text not null, cx: integer not null, cy: integer not null }
+struct ChunkSet { chunks: hash<ChunkRef[ck]> }
+fn collect(w: World) -> ChunkSet {
+  cs = ChunkSet{chunks: []};
+  for cell in w.cells {
+    ck = "{cell.x}";
+    if cs.chunks[ck] == null {
+      cs.chunks += [ChunkRef{ck: ck, cx: cell.x, cy: cell.y}];
+    }
+  }
+  cs
+}
+pub fn test() {
+  w = World{cells: []};
+  w.cells += [Cell{ck: "a", x: 1, y: 0}];
+  w.cells += [Cell{ck: "b", x: 2, y: 0}];
+  w.cells += [Cell{ck: "c", x: 3, y: 0}];
+  cs = collect(w);
+  count = 0;
+  for _ in cs.chunks { count = count + 1; }
+  assert(count == 3, "deep-copied hash has 3 entries");
+}
+"#,
+        "p290_sret",
+        false,
+    );
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("test", &p.data);
+    let leaks = state.collect_store_leaks();
+    assert!(
+        leaks.is_empty(),
+        "P290 SRet regression: {} store(s) leaked: {}",
+        leaks.len(),
+        leaks.join(", ")
+    );
+}
+
 /// P150 file-level regression guard: `lib/moros_map/tests/serial.loft`
 /// used to leak 1 store via interpreter (warning: `2(bc:0)`) when
 /// `test_from_json_empty_string` called `map_from_json("")`, which has
@@ -983,5 +1226,51 @@ fn p15_phase05_nested_closure_no_leak() {
             }
         }
         "#,
+    );
+}
+
+/// @P295 — reassigning a keyed-collection LOCAL (`s = ns`) deep-copies
+/// (OpReplaceKeyed) and must NOT leak: `s`'s prior store is freed by
+/// `remove_claims`, `ns` is freed at its own scope.  Before the fix the
+/// assignment left `s` depending on `ns`, so scope analysis suppressed
+/// `s`'s own `OpFreeRef` (leak) and deferred `ns`'s free.
+#[test]
+fn p295_keyed_reassign_no_leak() {
+    run_leak_check_str(
+        r#"
+struct Item { k: integer not null }
+fn test() {
+  s: sorted<Item[k]> = [];
+  s += [Item{k: 100}];
+  ns: sorted<Item[k]> = [];
+  ns += [Item{k: 1}];
+  ns += [Item{k: 2}];
+  s = ns;
+  assert(len(s) == 3, "s has 3 after reassign");
+}
+"#,
+    );
+}
+
+/// @P295 — fresh-storage RHS (`s = build()`) frees the source store after
+/// the deep copy (0x8000 source-free bit), so the callee's return store
+/// does not leak.
+#[test]
+fn p295_keyed_reassign_call_rhs_no_leak() {
+    run_leak_check_str(
+        r#"
+struct Item { k: integer not null }
+fn build(n: integer) -> sorted<Item[k]> {
+  r: sorted<Item[k]> = [];
+  for i in 0..n { r += [Item{k: n - i}]; }
+  r
+}
+fn test() {
+  s: sorted<Item[k]> = [];
+  s += [Item{k: 99}];
+  s = build(3);
+  assert(len(s) == 3, "s has 3 after call-RHS reassign");
+}
+"#,
     );
 }

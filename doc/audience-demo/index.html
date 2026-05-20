@@ -17,9 +17,16 @@
     0.2 — hex grid renderer (canvas 2D, axial coordinates)
     0.3 — color palette + active-color state (random pre-selection)
     0.4 — tap handling: empty / own / other distinction
+    0.6 — outer-ring pan zones (parity-safe y-pan step of 2)
+    0.7 — WebSocket client (auto-reconnect, send/recv)
+    0.8 — jump-to-active button — centres view on the latest
+          active_player_signal position; flash on receipt
+    0.9 — onboarding view-centring: after the initial WS snapshot
+          settles, jump the view to the freshest activity point seen
+          so far (prefers active_player_signal, falls back to the
+          last-painted snapshot cell, no-op if the world is blank)
   Still TODO (next session):
-    0.5 swipe + drag-erase  0.6 outer-ring pan zones  0.7 WebSocket
-    0.8 jump-to-active  0.9 onboarding-view-centring (depends on 0.7)
+    0.5 swipe + drag-erase
 
   Until 0.7 lands, cell state is local-only (no server).  That keeps
   the visual mechanic verifiable without depending on plan 34
@@ -110,54 +117,120 @@ const PALETTE = [
 // Stored as Map<"q,r", colour_index>.  Local-only until phase 0.7 lands
 // WebSocket; once it does, server world_snapshot / world_delta seed this
 // map and the tap handler ALSO sends a `seed` event.
+// Stored as Map<"x,y", colour_index>.  (x, y) are offset coords —
+// straight integers — so 32×32 server chunks tile naturally with no
+// per-chunk coordinate-system gymnastics.
 const cells = new Map();
-function cellKey(q, r) { return q + ',' + r; }
+function cellKey(x, y) { return x + ',' + y; }
 
 // View pan offset — currently fixed to (0, 0) until phase 0.6 wires the
 // outer-ring zones to nudge it.  When that lands, this becomes the
 // authoritative offset between view centre and world (0, 0).
-let viewOffsetQ = 0;
-let viewOffsetR = 0;
+let viewOffsetX = 0;
+let viewOffsetY = 0;
+
+// Most-recent (x, y) where ANOTHER player is currently active.  Updated
+// from msg_id 5 (active_player_signal) frames.  Null until the first
+// signal arrives — the Jump-to-active button is a no-op while null.
+// Used by:
+//   - The jump-active button (centre the view on this hex on click).
+//   - Phase 0.9 onboarding (centre on first signal when the page loads
+//     into a world with existing activity).
+let lastActivePos = null;
+
+// Sub-task 0.9 — onboarding view-centring.  On first page load, after
+// the initial WS snapshot has plausibly finished replaying, jump the
+// view to a "current activity" point so the user's first sight shows
+// other people's recent crystals nearby instead of a blank centre.
+// Preference order:
+//   1. lastActivePos (an active_player_signal arrived during replay)
+//   2. lastSeenCell  (the most recent paint received during replay —
+//                     usually the most recently inserted snapshot cell)
+//   3. nothing — leave the view at (0, 0) if the world is fully blank.
+// Fires at most ONCE; subsequent paints don't move the camera.
+let initialCentringPending = true;
+let lastSeenCell = null;
+const INITIAL_CENTRING_DELAY_MS = 800;
+function applyInitialCentring() {
+  if (!initialCentringPending) return;
+  initialCentringPending = false;
+  const target = lastActivePos || lastSeenCell;
+  if (!target) return;
+  viewOffsetX = target.x;
+  viewOffsetY = target.y;
+  draw();
+}
 
 // ── Hex math ─────────────────────────────────────────────────────────────────
-// Pointy-top hex layout.  size = circumradius (centre to corner) in pixels.
-// Pixel position for axial (q, r):
-//   x = size * sqrt(3) * (q + r/2)
-//   y = size * 3/2 * r
+// POINTY-TOP hex layout with "odd-r offset" coordinates: hexes have
+// points top+bottom, flat sides left+right.  The world model uses
+// integer (x, y) ofset coords (not axial):
+//
+//   y+2 is directly above/below y (same column, vertical line)
+//   y+1 is offset half a hex to the right of y
+//   y+3 sits directly above y+1
+//
+//   pixel_x(x, y) = x * sqrt(3) * size + (y odd ? sqrt(3)/2 * size : 0)
+//   pixel_y(x, y) = y * 1.5 * size
+//
+// A 32×32 grid forms a rectangle with slight jag on left/right edges
+// (alternating ½-hex offset per row) and points up/down on top/bottom.
+//
+// Axial conversion (for the cube-coord rounding used by the picker):
+//   axial_q = x - floor(y / 2)
+//   axial_r = y
 const SQRT3 = Math.sqrt(3);
-function axialToPixel(q, r, size) {
-  return { x: size * SQRT3 * (q + r / 2), y: size * 1.5 * r };
+function offsetToPixel(x, y, size) {
+  const xShift = (y & 1) ? SQRT3 / 2 * size : 0;
+  return { x: x * SQRT3 * size + xShift, y: y * 1.5 * size };
 }
-function pixelToAxial(x, y, size) {
-  // Inverse of axialToPixel; round to nearest hex via cube-coord rounding.
-  const qf = (x * SQRT3 / 3 - y / 3) / size;
-  const rf = (y * 2 / 3) / size;
-  // Cube-coord rounding for hex picking accuracy.
-  let xCube = qf;
-  let zCube = rf;
-  let yCube = -xCube - zCube;
-  let rx = Math.round(xCube);
-  let ry = Math.round(yCube);
-  let rz = Math.round(zCube);
-  const xDiff = Math.abs(rx - xCube);
-  const yDiff = Math.abs(ry - yCube);
-  const zDiff = Math.abs(rz - zCube);
+function pixelToOffset(px, py, size) {
+  // Pixel → axial via the standard pointy-top inverse, then axial → offset.
+  // Picker uses cube-coord rounding for accuracy.
+  const qf = (px * SQRT3 / 3 - py / 3) / size;
+  const rf = (py * 2 / 3) / size;
+  let xCube = qf, zCube = rf, yCube = -xCube - zCube;
+  let rx = Math.round(xCube), ry = Math.round(yCube), rz = Math.round(zCube);
+  const xDiff = Math.abs(rx - xCube),
+        yDiff = Math.abs(ry - yCube),
+        zDiff = Math.abs(rz - zCube);
   if (xDiff > yDiff && xDiff > zDiff) rx = -ry - rz;
   else if (yDiff > zDiff) ry = -rx - rz;
   else rz = -rx - ry;
-  return { q: rx, r: rz };
+  // axial (rx, rz) → offset (x, y): y = rz; x = rx + floor(rz/2)
+  return { x: rx + Math.floor(rz / 2), y: rz };
 }
 
-// 9x7 viewable window of axial coords — odd row offset visually, but axial
-// math handles the column/row spacing naturally.  Centred on (0, 0); spans
-// q ∈ [-4..4] and r ∈ [-3..3] in axial terms.
+// 9x7 viewable window — iterated in OFFSET coordinates (col, row) so
+// the visible pattern is a rectangle (each row offset half a hex from
+// its neighbours, but the overall outline is straight columns).  Pure
+// axial iteration would form a parallelogram instead.  We convert to
+// axial (q, r) only for the world-cell key — the world model uses
+// axial because its geometry is symmetric in all 6 directions.
+//
+// 9 cols × 7 rows of view in OFFSET coords centred on (0, 0).  Each
+// hex's x stays in its column; y+1 jogs half a hex to the right (or
+// left, depending on parity convention); y+2 lands directly above/
+// below y.  Same scheme used by server chunks → no glue needed at
+// chunk boundaries.
 const VIEW_COLS = 9;
-const VIEW_ROWS = 7;
+const VIEW_ROWS = 13;
+// Half-extents — view-relative (vx, vy) ranges over [-HX..HX] × [-HY..HY].
+// Derived so VIEW_ROWS / VIEW_COLS are the single source of truth and the
+// pan-zone / paint-zone code below stays in sync automatically.
+const VIEW_HX = (VIEW_COLS - 1) / 2;
+const VIEW_HY = (VIEW_ROWS - 1) / 2;
 function viewHexes() {
   const out = [];
-  for (let r = -3; r <= 3; r++) {
-    for (let q = -4; q <= 4; q++) {
-      out.push({ q: q + viewOffsetQ, r: r + viewOffsetR, vq: q, vr: r });
+  for (let row = 0; row < VIEW_ROWS; row++) {
+    for (let col = 0; col < VIEW_COLS; col++) {
+      const vx = col - VIEW_HX;
+      const vy = row - VIEW_HY;
+      out.push({
+        x: vx + viewOffsetX,     // world (cells-Map key)
+        y: vy + viewOffsetY,
+        vx, vy,                  // view-relative (pixel placement)
+      });
     }
   }
   return out;
@@ -182,8 +255,12 @@ function resize() {
   // Choose hexSize so the 9-wide pointy-top grid fits comfortably with
   // a little margin.  Pointy-top hex width = sqrt(3) * size; 9 hexes
   // staggered → ~9.5 * sqrt(3) * size wide.
+  // Pointy-top hex: col-to-col spacing = sqrt(3) * size; row-to-row
+  // spacing = 1.5 * size; rows offset by sqrt(3)/2 * size horizontally
+  // (alternating).  Outline width = (N_cols + 0.5) * sqrt(3) * size,
+  // height = (1.5 * N_rows + 0.5) * size.
   const fitByWidth = cssW / ((VIEW_COLS + 0.5) * SQRT3);
-  const fitByHeight = cssH / ((VIEW_ROWS + 0.5) * 1.5);
+  const fitByHeight = cssH / (1.5 * VIEW_ROWS + 0.5);
   hexSize = Math.min(fitByWidth, fitByHeight);
   originX = cssW / 2;
   originY = cssH / 2;
@@ -216,14 +293,53 @@ function refreshThemeColors() {
 
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (const { q, r, vq, vr } of viewHexes()) {
-    const { x, y } = axialToPixel(vq, vr, hexSize);
-    const cx = originX + x;
-    const cy = originY + y;
-    const colourIdx = cells.get(cellKey(q, r)) || 0;
-    const fill = colourIdx === 0 ? COLOR_EMPTY : PALETTE[colourIdx];
+  for (const { x: wx, y: wy, vx, vy } of viewHexes()) {
+    const { x: px, y: py } = offsetToPixel(vx, vy, hexSize);
+    const cx = originX + px;
+    const cy = originY + py;
+    const colourIdx = cells.get(cellKey(wx, wy)) || 0;
+    const isPan = (vx === -VIEW_HX || vx === VIEW_HX || vy === -VIEW_HY || vy === VIEW_HY);
+    // Pan ring uses a subtly lighter empty colour so the user can tell
+    // at a glance which cells move-on-tap and which paint-on-tap.
+    const empty = isPan ? '#161624' : COLOR_EMPTY;
+    const fill = colourIdx === 0 ? empty : PALETTE[colourIdx];
     drawHex(cx, cy, hexSize * 0.97, fill, COLOR_GRID);
+    // Direction arrow on each pan cell so the affordance is clear.
+    if (isPan && colourIdx === 0) {
+      drawPanArrow(cx, cy, hexSize, vx, vy);
+    }
   }
+}
+
+// Small unicode-style arrow rendered with two line segments, pointing
+// outward.  Drawn dim so it never competes with a painted cell.
+function drawPanArrow(cx, cy, size, vx, vy) {
+  // Direction vector: from centre outwards.  Corners get diagonal arrows.
+  let dx = 0, dy = 0;
+  if (vx === -VIEW_HX) dx = -1;
+  if (vx ===  VIEW_HX) dx =  1;
+  if (vy === -VIEW_HY) dy = -1;
+  if (vy ===  VIEW_HY) dy =  1;
+  // Normalise diagonal so the arrow length is consistent.
+  const len = Math.hypot(dx, dy) || 1;
+  dx /= len; dy /= len;
+  const tip = size * 0.45;
+  const tail = size * 0.05;
+  ctx.strokeStyle = '#5a5a72';
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx + dx * tail, cy + dy * tail);
+  ctx.lineTo(cx + dx * tip,  cy + dy * tip);
+  // Two short whiskers at the tip — rotate ±150° from arrow direction.
+  const ang = Math.atan2(dy, dx);
+  const w = size * 0.18;
+  for (const sign of [+1, -1]) {
+    const a = ang + sign * (Math.PI * 5 / 6);
+    ctx.moveTo(cx + dx * tip, cy + dy * tip);
+    ctx.lineTo(cx + dx * tip + Math.cos(a) * w, cy + dy * tip + Math.sin(a) * w);
+  }
+  ctx.stroke();
 }
 
 // ── Palette UI + active colour ───────────────────────────────────────────────
@@ -259,10 +375,19 @@ document.getElementById('clear-color').addEventListener('pointerdown', e => {
   e.preventDefault();
   setActiveColour(0);
 });
-// jump-to-active is a placeholder until 0.7+0.8 land.
+// Jump-to-active (sub-task 0.8): centre the view on the latest
+// active-player position broadcast by the server.  No-op if no
+// active-player signal has arrived yet.  Absolute set rather than
+// stepped pan — players don't need to follow the trajectory, they
+// just want to *see* what someone else is doing.
 document.getElementById('jump-active').addEventListener('pointerdown', e => {
   e.preventDefault();
-  // No-op until WebSocket events arrive with other players' positions.
+  if (!lastActivePos) return;
+  viewOffsetX = lastActivePos.x;
+  viewOffsetY = lastActivePos.y;
+  // Clear the flash — the user has acknowledged the prompt.
+  document.getElementById('jump-active').classList.remove('flash');
+  draw();
 });
 
 // ── WebSocket wire (sub-task 0.7 — observability MVP) ───────────────────────
@@ -282,9 +407,23 @@ document.getElementById('jump-active').addEventListener('pointerdown', e => {
 //   ?ws=ws://localhost:18083/   — explicit endpoint
 //   ?ws=off                     — disable WebSocket entirely (local-only)
 const WS_PARAM = new URLSearchParams(location.search).get('ws');
+// Default: derive the WebSocket endpoint from the URL THIS PAGE was
+// served from — `location.host` already includes the port (e.g.
+// `dev-box:18083`), and we flip http→ws / https→wss off the protocol.
+// That way the dev server can listen on any port (or be reached via
+// any hostname / VPN address) and the page reconnects to the same
+// instance with no edit.  Fallback `localhost:18083` is only used
+// when the page is opened from the filesystem (`file://...`), where
+// `location.host` is empty.
+// Path `/ws` distinguishes the WebSocket endpoint from HTTP file
+// serving — matches `dev_server.loft`'s routing convention.  The
+// multi-client `server.loft` accepts any path (no HTTP serving) so
+// `/ws` works in both modes.
+const WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
+const WS_HOST  = location.host || 'localhost:18083';
 const WS_URL = WS_PARAM === 'off'
   ? null
-  : (WS_PARAM || `ws://${location.hostname || 'localhost'}:18083/`);
+  : (WS_PARAM || `${WS_PROTO}://${WS_HOST}/ws`);
 
 const statusEl = document.getElementById('status');
 function setStatus(text, cls) {
@@ -315,6 +454,14 @@ function wsConnect() {
   s.addEventListener('open', () => {
     setStatus('connected to ' + WS_URL, 'ok');
     wsReconnectMs = 1000;     // reset backoff on success
+    // Sub-task 0.9 — arm the onboarding centring timer.  The server
+    // begins replaying the world the moment we connect; after a short
+    // settle window we centre the view on the freshest activity point
+    // we've seen so far.  The settle delay catches the snapshot in
+    // one go without making the user wait on an empty grid.
+    if (initialCentringPending) {
+      setTimeout(applyInitialCentring, INITIAL_CENTRING_DELAY_MS);
+    }
   });
   s.addEventListener('close', () => {
     setStatus('disconnected — retrying in ' + (wsReconnectMs / 1000) + 's', 'err');
@@ -341,13 +488,31 @@ function wsConnect() {
     if (id === 4) {
       const parts = payload.split(',');
       if (parts.length !== 3) return;
-      const q = parts[0] | 0, r = parts[1] | 0, c = parts[2] | 0;
-      if (c === 0) cells.delete(cellKey(q, r));
-      else cells.set(cellKey(q, r), c);
+      const wx = parts[0] | 0, wy = parts[1] | 0, c = parts[2] | 0;
+      if (c === 0) cells.delete(cellKey(wx, wy));
+      else {
+        cells.set(cellKey(wx, wy), c);
+        // Remember the most recent paint so onboarding centring has a
+        // fallback target when no active_player_signal has arrived yet.
+        if (initialCentringPending) lastSeenCell = { x: wx, y: wy };
+      }
       draw();
     } else if (id === 5) {
-      // Active-player hint — flash the jump-to-active button.  The
-      // button's `.flash` class triggers the 3-pulse keyframe.
+      // Active-player hint — record the position so the jump-to-active
+      // button can centre the view there on click, and flash the button
+      // so the user sees there is somewhere to jump to.  Payload is
+      // "x,y" in OFFSET coords (single-port server emits sender.lx,
+      // sender.ly which are integer offset coords matching cellKey).
+      const parts = payload.split(',');
+      if (parts.length === 2) {
+        const ax = parts[0] | 0, ay = parts[1] | 0;
+        lastActivePos = { x: ax, y: ay };
+        // Sub-task 0.9 — an active_player_signal during the onboarding
+        // window is the strongest possible "where is the action right
+        // now" signal; fire the centring immediately instead of waiting
+        // out the settle delay.
+        if (initialCentringPending) applyInitialCentring();
+      }
       const btn = document.getElementById('jump-active');
       btn.classList.remove('flash');
       void btn.offsetWidth;          // reflow → re-trigger animation
@@ -366,23 +531,42 @@ function wsConnect() {
 // Any         + colour cleared → no-op
 canvas.addEventListener('pointerdown', e => {
   e.preventDefault();
-  if (activeColour === 0) return;
   const rect = canvas.getBoundingClientRect();
   const px = e.clientX - rect.left - originX;
   const py = e.clientY - rect.top - originY;
-  const { q: vq, r: vr } = pixelToAxial(px, py, hexSize);
-  // Only react to taps inside the visible 9x7 window.
-  if (vq < -4 || vq > 4 || vr < -3 || vr > 3) return;
-  const wq = vq + viewOffsetQ;
-  const wr = vr + viewOffsetR;
-  const k = cellKey(wq, wr);
+  const { x: vx, y: vy } = pixelToOffset(px, py, hexSize);
+  // Outer-ring tap is a PAN; inside the ring is PAINT.  Outer ring =
+  // vx == ±VIEW_HX OR vy == ±VIEW_HY.  Corners count as pan in both
+  // axes.  Anything outside the grid is a silent no-op.
+  const outOfView = (vx < -VIEW_HX || vx > VIEW_HX || vy < -VIEW_HY || vy > VIEW_HY);
+  if (outOfView) return;
+  const isPan = (vx === -VIEW_HX || vx === VIEW_HX || vy === -VIEW_HY || vy === VIEW_HY);
+  if (isPan) {
+    // X-pan moves one hex column at a time.  Y-pan moves TWO rows at
+    // a time so the odd-y half-hex jog (built into the pointy-top
+    // offset coords) doesn't flip parity on every step and visually
+    // shear the whole grid sideways.  Even-step y pans preserve every
+    // existing shape's relative geometry — same convention used by the
+    // 32×32 chunk tiling: `y+2 vertical, y+1 jogs half-hex right`.
+    if (vx === -VIEW_HX) viewOffsetX -= 1;
+    if (vx ===  VIEW_HX) viewOffsetX += 1;
+    if (vy === -VIEW_HY) viewOffsetY -= 2;
+    if (vy ===  VIEW_HY) viewOffsetY += 2;
+    draw();
+    return;
+  }
+  // Paint zone — original empty/own/other behaviour.
+  if (activeColour === 0) return;
+  const wx = vx + viewOffsetX;
+  const wy = vy + viewOffsetY;
+  const k = cellKey(wx, wy);
   const cur = cells.get(k) || 0;
   if (cur === 0) {
     cells.set(k, activeColour);
-    wsSend(`1:${wq},${wr},${activeColour}`);   // seed
+    wsSend(`1:${wx},${wy},${activeColour}`);   // seed
   } else if (cur === playerColour) {
     cells.delete(k);
-    wsSend(`2:${wq},${wr}`);                    // clear
+    wsSend(`2:${wx},${wy}`);                    // clear
   }
   // cur is some other player's colour → no-op (no send either).
   draw();
@@ -408,12 +592,17 @@ init();
 window.__phase0 = {
   cells, PALETTE,
   get activeColour() { return activeColour; },
+  get viewOffsetX() { return viewOffsetX; },
+  get viewOffsetY() { return viewOffsetY; },
+  get hexSize() { return hexSize; },
+  get originX() { return originX; },
+  get originY() { return originY; },
   get ws() { return ws; },
   get wsState() {
     if (!ws) return 'none';
     return ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][ws.readyState] || 'UNKNOWN';
   },
-  paintAt(q, r, colour) { cells.set(cellKey(q, r), colour); draw(); },
+  paintAt(x, y, colour) { cells.set(cellKey(x, y), colour); draw(); },
   wsSend,
 };
 </script>

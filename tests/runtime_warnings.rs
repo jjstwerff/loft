@@ -62,7 +62,7 @@ fn main() {
   print(\"x={x}\\n\");
 }
 ";
-    let (diag, _stderr, _code) = run_with_warnings("undef_div", source);
+    let (_stdout, diag, _code) = run_with_warnings("undef_div", source);
     assert!(
         diag.contains("warning: integer division may produce null"),
         "expected div warning; got stdout={diag:?}"
@@ -78,7 +78,7 @@ fn main() {
   print(\"x={x}\\n\");
 }
 ";
-    let (diag, _stderr, _code) = run_with_warnings("undef_mod", source);
+    let (_stdout, diag, _code) = run_with_warnings("undef_mod", source);
     assert!(
         diag.contains("warning: integer modulus may produce null"),
         "expected mod warning; got stdout={diag:?}"
@@ -95,7 +95,7 @@ fn main() {
   print(\"x={x}\\n\");
 }
 ";
-    let (diag, _stderr, _code) = run_with_warnings("undef_vec", source);
+    let (_stdout, diag, _code) = run_with_warnings("undef_vec", source);
     assert!(
         diag.contains("warning: `v[i]` may produce null"),
         "expected vec OOB warning; got stdout={diag:?}"
@@ -112,7 +112,7 @@ fn main() {
   print(\"c={c}\\n\");
 }
 ";
-    let (diag, _stderr, _code) = run_with_warnings("undef_text", source);
+    let (_stdout, diag, _code) = run_with_warnings("undef_text", source);
     assert!(
         diag.contains("warning: `s[i]` may produce null"),
         "expected text OOB warning; got stdout={diag:?}"
@@ -130,7 +130,7 @@ fn main() {
   print(\"x={x} y={y}\\n\");
 }
 ";
-    let (diag, _stderr, _code) = run_with_warnings("skip_const_div", source);
+    let (_stdout, diag, _code) = run_with_warnings("skip_const_div", source);
     assert!(
         !diag.contains("warning: integer division may produce null"),
         "constant non-zero divisor must NOT warn; got stdout={diag:?}"
@@ -152,7 +152,7 @@ fn main() {
   print(\"v[1]={v[1]} s[0]={s[0]}\\n\");
 }
 ";
-    let (diag, _stderr, _code) = run_with_warnings("skip_const_idx", source);
+    let (_stdout, diag, _code) = run_with_warnings("skip_const_idx", source);
     assert!(
         !diag.contains("warning: `v[i]` may produce null"),
         "constant index must NOT warn; got stdout={diag:?}"
@@ -176,7 +176,7 @@ fn main() {
   }
 }
 ";
-    let (diag, _stderr, _code) = run_with_warnings("skip_for_iter", source);
+    let (_stdout, diag, _code) = run_with_warnings("skip_for_iter", source);
     assert!(
         !diag.contains("warning: `v[i]` may produce null"),
         "for-loop iter var index must NOT warn; got stdout={diag:?}"
@@ -197,7 +197,7 @@ fn main() {
   print(\"a={a} b={b}\\n\");
 }
 ";
-    let (diag, _stderr, _code) = run_with_warnings("def_nullable", source);
+    let (_stdout, diag, _code) = run_with_warnings("def_nullable", source);
     assert!(
         !diag.contains("warning: integer division"),
         "?? rescue must silence div warning; got stdout={diag:?}"
@@ -218,7 +218,7 @@ fn main() {
   if x != null { print(\"got\\n\"); }
 }
 ";
-    let (diag, _stderr, _code) = run_with_warnings("def_null_check", source);
+    let (_stdout, diag, _code) = run_with_warnings("def_null_check", source);
     assert!(
         !diag.contains("warning: `v[i]`"),
         "if x != null must silence vec warning; got stdout={diag:?}"
@@ -235,7 +235,7 @@ fn main() {
   print(\"div={10 / z} vec={v[i]}\\n\");
 }
 ";
-    let (diag, _stderr, _code) = run_with_warnings("def_fmt", source);
+    let (_stdout, diag, _code) = run_with_warnings("def_fmt", source);
     assert!(
         !diag.contains("warning: integer division"),
         "format-string div must silence warning (4e.1); got stdout={diag:?}"
@@ -609,7 +609,7 @@ fn main() {
             .env_remove("LOFT_NO_WARN_RUNTIME")
             .output()
             .expect("invoke loft")
-            .stdout,
+            .stderr,
     )
     .into_owned();
     assert_eq!(code, Some(0), "must not halt; got code={code:?}");

@@ -8686,7 +8686,17 @@ fn inc18_labelled_break_exits_outer_loop() {
 // parser always emitted (type mismatch on sum_of) is now the
 // user-facing error, with a proper source location.
 #[test]
-fn p140_vector_range_slice_reports_type_mismatch() {
+fn p140_vector_range_slice_auto_materialises_to_vector() {
+    // Updated 2026-05-20 alongside @P287 — assigning a slice expression
+    // to a local now auto-materialises into a `vector<T>` instead of
+    // leaving the local typed as `iterator<T>`.  The slice's elements
+    // get copied into a fresh vector at the assignment site, and
+    // downstream uses (`sum_of(s)` here) see a normal `vector<integer>`.
+    // The old shape of this test asserted the reverse — that the
+    // slice-to-vector mismatch was rejected with a diagnostic — but a
+    // working materialisation is a strictly better user experience and
+    // closes @P287's "slice → struct field crashes scopes" panic on
+    // the same code path.
     code!(
         "fn run() -> integer {
     v = [10, 20, 30, 40, 50];
@@ -8695,7 +8705,44 @@ fn p140_vector_range_slice_reports_type_mismatch() {
 }"
     )
     .expr("run()")
-    .error("expected vector<integer>, got iterator<integer> on call to sum_of at p140_vector_range_slice_reports_type_mismatch:5:1");
+    .result(Value::Int(90));
+}
+
+#[test]
+fn p287_struct_field_slice_self_assign() {
+    // `s.v = s.v[1..]` used to crash `src/scopes.rs:298` with an index-
+    // out-of-bounds panic (the iterator's end-of-stream `Break(0)` had
+    // no enclosing loop to bind to).  Fix in `parse_assign_op` allocates
+    // a temp local, materialises the slice into it, then field-writes
+    // the temp into the destination via `OpClearVector` + `OpAppendVector`.
+    code!(
+        "struct S { v: vector<integer> }
+fn run() -> integer {
+    s = S{v: [1, 2, 3, 4]};
+    s.v = s.v[1..];
+    s.v.len()
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(3));
+}
+
+#[test]
+fn p287_struct_field_slice_other_source() {
+    // Sibling shape — slice taken from a DIFFERENT vector also crashed
+    // before the @P287 fix (proves the crash was about slice-RHS, not
+    // specifically self-reference).
+    code!(
+        "struct S { v: vector<integer> }
+fn run() -> integer {
+    s = S{v: [1, 2, 3, 4]};
+    src: vector<integer> = [10, 20, 30, 40];
+    s.v = src[1..];
+    s.v[0]
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(20));
 }
 
 // INC#2 — vector has comprehensions; sorted/index do not.  Documented
@@ -9336,12 +9383,12 @@ fn test() { }"
     )
     .error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:371:24 — pick a different name \
+         at default{s}01_code.loft:375:24 — pick a different name \
          at p156_vector_element_shadows_constant:1:11"
     ))
     .error(&format!(
         "'E' is a Constant, not a type — the element of vector<T> must be a \
-         struct or enum (defined at default{s}01_code.loft:371:24) \
+         struct or enum (defined at default{s}01_code.loft:375:24) \
          at p156_vector_element_shadows_constant:2:26"
     ));
 }
@@ -10376,6 +10423,483 @@ fn test() {
     assert(s.rows[3].name == \"three\", \"sorted[3]\");
 }"
     )
+    .result(Value::Null);
+}
+
+/// P293 regression — `hash<Row[i32_field]>` lookup silently returned
+/// null because (a) `determine_keys` mapped any non-built-in content
+/// type (including Parts::Int) to `type_nr = 7` (the byte fallback),
+/// (b) `read_key`'s catch-all popped 1 byte off the stack while the
+/// lookup value was pushed as a full i64, and (c) the `hash_ref` /
+/// `compare_key` / `get_key` paths in keys.rs only knew about the
+/// legacy 8-byte `integer` storage.  Fixed by extending all four
+/// paths to recognise Parts::Int / Short / ShortRaw / Byte.  Same
+/// bug surfaced from `f#read as u32` (the original P293 report) once
+/// `u32` was given `size(4)` to make file-I/O width predictable; the
+/// narrow-key hash fix landed alongside.
+#[test]
+fn p293_narrow_key_hash_lookup() {
+    code!(
+        "struct P293Row { rid: i32 not null, name: text }
+struct P293Db { rows: hash<P293Row[rid]> }
+fn test() {
+    h = P293Db { rows: [] };
+    h.rows += [P293Row { rid: 42, name: \"forty-two\" }];
+    h.rows += [P293Row { rid: 7, name: \"seven\" }];
+    h.rows += [P293Row { rid: 100, name: \"hundred\" }];
+    found42 = h.rows[42];
+    found7  = h.rows[7];
+    foundX  = h.rows[100];
+    miss    = h.rows[999];
+    assert(found42 != null, \"42 present\");
+    assert(found7  != null, \"7 present\");
+    assert(foundX  != null, \"100 present\");
+    assert(miss    == null, \"999 absent\");
+    assert(found42.name == \"forty-two\", \"hash[42] value\");
+    assert(found7.name  == \"seven\",     \"hash[7] value\");
+    assert(foundX.name  == \"hundred\",   \"hash[100] value\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P284 — `for f in vector<float>` looped forever past the end yielding
+/// a garbage subnormal (~2.8e-282).  Root cause: `Store::get_float` /
+/// `get_single` skipped the `rec != 0` guard that `get_int` already has,
+/// so a null DbRef (rec=0, returned by `OpGetVectorNullable` for OOB)
+/// read `*addr(0, 0)` (the store's free-list header) in release mode —
+/// the `valid()` asserts inside are debug-only.  Fixed by adding the
+/// `rec != 0` guard to both float getters; null DbRefs now return
+/// `f64::NAN` / `f32::NAN`, the for-loop's value-truthiness check then
+/// evaluates to false and breaks.
+#[test]
+fn p284_vector_float_iteration_terminates() {
+    code!(
+        "fn test() {
+    v: vector<float> = [1.0, 2.0, 3.0];
+    sum = 0.0;
+    count = 0;
+    for f in v {
+        sum = sum + f;
+        count = count + 1;
+        if count > 100 { return; }
+    }
+    assert(count == 3, \"loop terminates after 3 elements\");
+    assert(sum > 5.9 && sum < 6.1, \"sum approximately 6.0\");
+    sv: vector<single> = [1.0f, 2.0f, 3.0f];
+    sc = 0;
+    for _ in sv {
+        sc = sc + 1;
+        if sc > 100 { return; }
+    }
+    assert(sc == 3, \"single iteration terminates after 3 elements\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P277 — local `sorted<T[K]> = []; += [T{…}]` panicked with
+/// "Variable 'x' cannot change type from sorted<…> to vector<…>" —
+/// `parse_vector` re-typed the LHS local to vector<T> before
+/// `parse_assign_op` could route through the keyed-collection element
+/// dispatch.  Same shape would have affected hash / index / spacial
+/// locals.  Fixed by an early intercept in `parse_assign_op` that
+/// detects `local_keyed += [literal]` BEFORE `parse_operators` runs,
+/// then per-element parses + dispatches via `new_record` (which
+/// already routes per-kind via the P188-followup `lhs_known` lookup).
+#[test]
+fn p277_local_sorted_pluseq_single_literal() {
+    code!(
+        "struct TagSlot { name: text not null, count: integer }
+fn test() {
+    s: sorted<TagSlot[name]> = [];
+    s += [TagSlot{name: \"alpha\", count: 1}];
+    assert(len(s) == 1, \"len == 1\");
+    assert(s[\"alpha\"].count == 1, \"alpha lookup\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p277_local_sorted_pluseq_multi_literal() {
+    code!(
+        "struct TagSlot { name: text not null, count: integer }
+fn test() {
+    s: sorted<TagSlot[name]> = [];
+    s += [TagSlot{name: \"zeta\", count: 1},
+          TagSlot{name: \"alpha\", count: 5},
+          TagSlot{name: \"mike\", count: 3}];
+    assert(len(s) == 3, \"three elements\");
+    // sorted by name ascending — iterate and collect in order.
+    out: vector<text> = [];
+    for t in s { out += [t.name]; }
+    assert(out[0] == \"alpha\", \"first = alpha\");
+    assert(out[1] == \"mike\",  \"middle = mike\");
+    assert(out[2] == \"zeta\",  \"last = zeta\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p277_local_hash_pluseq_multi_literal() {
+    code!(
+        "struct Row { id: integer not null, name: text }
+fn test() {
+    h: hash<Row[id]> = [];
+    h += [Row{id: 1, name: \"one\"},
+          Row{id: 7, name: \"seven\"},
+          Row{id: 42, name: \"forty-two\"}];
+    assert(len(h) == 3, \"three entries\");
+    assert(h[1].name  == \"one\",       \"h[1]\");
+    assert(h[7].name  == \"seven\",     \"h[7]\");
+    assert(h[42].name == \"forty-two\", \"h[42]\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p277_local_index_pluseq_multi_literal() {
+    code!(
+        "struct Score { player: text not null, value: integer }
+fn test() {
+    ix: index<Score[player]> = [];
+    ix += [Score{player: \"a\", value: 10},
+           Score{player: \"b\", value: 20},
+           Score{player: \"c\", value: 30}];
+    assert(len(ix) == 3, \"three entries\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p277_local_sorted_mixed_scalar_and_literal() {
+    code!(
+        "struct TagSlot { name: text not null, count: integer }
+fn test() {
+    s: sorted<TagSlot[name]> = [];
+    // Scalar `+= elem` (P188 path) — must still work.
+    s += TagSlot{name: \"alpha\", count: 1};
+    // Literal `+= [...]` (P277 path).
+    s += [TagSlot{name: \"beta\", count: 2}, TagSlot{name: \"gamma\", count: 3}];
+    // Another scalar — paths interleave.
+    s += TagSlot{name: \"delta\", count: 4};
+    assert(len(s) == 4, \"four entries from interleaved scalar + literal\");
+    assert(s[\"alpha\"].count == 1, \"alpha\");
+    assert(s[\"beta\"].count  == 2, \"beta\");
+    assert(s[\"gamma\"].count == 3, \"gamma\");
+    assert(s[\"delta\"].count == 4, \"delta\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p277_local_sorted_pluseq_empty_literal() {
+    // Defensive regression — `+= []` is a no-op append.
+    code!(
+        "struct TagSlot { name: text not null, count: integer }
+fn test() {
+    s: sorted<TagSlot[name]> = [];
+    s += [TagSlot{name: \"a\", count: 1}];
+    s += [];
+    s += [TagSlot{name: \"b\", count: 2}];
+    assert(len(s) == 2, \"empty append is no-op\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P279 — caller defined BEFORE a text-returning callee in the
+/// same file: pass-1 types the call result as Unknown(0), the
+/// receiving local is Unknown, and using it as a struct-field
+/// value (`out += [Struct{field: unknown_local, …}]`) trips
+/// "Cannot assign unknown(0) to field …" in pass-1.  Pass-2
+/// re-runs the check with the fn registered and would have
+/// resolved correctly, but the pass-1 diagnostic surfaces.
+///
+/// Same architectural shape as P281/P278: pass-1 mustn't emit
+/// errors pass-2 would naturally resolve.  Fix in
+/// `src/parser/objects.rs::handle_field` gates the diagnostic
+/// on `!first_pass` when the value type is Unknown.
+#[test]
+fn p279_forward_text_fn_into_struct_field() {
+    code!(
+        "struct R { name: text not null }
+fn test() {
+    out: vector<R> = [];
+    s = forward_fn(\"hello\");
+    out += [R{name: s}];
+    assert(len(out) == 1, \"struct constructed\");
+    assert(out[0].name == \"hello\", \"forward-fn text reached struct field\");
+}
+fn forward_fn(s: text) -> text { s }"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p279_forward_fn_via_intermediate_local() {
+    // Real scan_link_line shape: while loop + if-arm reassign +
+    // forward call wrapped in an intermediate local before the
+    // struct-field init.
+    code!(
+        "struct R { name: text not null }
+fn test() {
+    out: vector<R> = [];
+    line = \"x#tag\";
+    nl = line.len();
+    name = \"\";
+    lh = 0;
+    while lh < nl {
+        if line.byte_at(lh) == 35 {
+            name = line[lh + 1..nl];
+            break;
+        }
+        lh = lh + 1;
+    }
+    a_esc = json_escape(name);
+    out += [R{name: a_esc}];
+    assert(len(out) == 1, \"loop + if-reassign + forward-fn + struct works\");
+    assert(out[0].name == \"tag\", \"correct slice + forward-fn\");
+}
+fn json_escape(s: text) -> text { s }"
+    )
+    .result(Value::Null);
+}
+
+/// P281 — caller defined BEFORE callee in the same file: the
+/// caller's body parses with the callee unregistered, the call
+/// returns `Type::Unknown(0)`, the receiving local stays Unknown,
+/// and any `.method(args)` chain on it trips "Expect token ;"
+/// in pass-1 (because pass-1's `field()` Unknown-receiver branch
+/// consumed the method name but not the trailing `(args)`).
+///
+/// The two-pass parser ALREADY has the right architecture — pass
+/// 2 sees every fn registered and re-parses bodies cleanly.  The
+/// fix in `src/parser/fields.rs::field` makes pass-1 also consume
+/// the `(args)` so no spurious pass-1 parse error escapes.
+#[test]
+fn p281_forward_text_returning_fn_method_chain() {
+    code!(
+        "fn test() {
+    s = helper(\"foo.loft\");
+    assert(s.len() == 3, \"forward text fn + .len() on receiver works\");
+}
+fn helper(s: text) -> text {
+    i = s.find(\".\");
+    if i == null { s } else { s[0..i] }
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p281_forward_text_returning_fn_method_with_args() {
+    code!(
+        "fn test() {
+    s = upper(\"abc\");
+    n = s.find(\"BC\");
+    assert(n == 1, \"forward fn + .find(arg) returns position 1\");
+}
+fn upper(s: text) -> text {
+    out = \"\";
+    for c in s { out = out + (c as integer - 32) as character; }
+    out
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p281_mutual_forward_text_fns() {
+    code!(
+        "fn test() {
+    s = first(\"hello\");
+    assert(s.len() == 5, \"first + second + len chain works\");
+}
+fn first(s: text) -> text {
+    second(s)
+}
+fn second(s: text) -> text {
+    s
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p281_forward_fn_slice_on_text_return() {
+    // P278/P281 sibling — slice expression on forward-text-fn result.
+    // Was the second cascade after my P281 fix; tolerance extended to
+    // parse_index for Unknown receivers covers `[a..b]` shapes too.
+    code!(
+        "fn test() {
+    s = forward(\"hello world\");
+    sp = s.find(\" \");
+    if sp != null {
+        first = s[0..sp];
+        assert(first == \"hello\", \"slice on forward-text-fn result works\");
+    }
+}
+fn forward(s: text) -> text {
+    s
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p281_forward_fn_in_println_format() {
+    // Forward fn used inside a format string interpolation —
+    // pass-1's body parse must also tolerate Unknown receivers
+    // inside the format-string expression position.
+    code!(
+        "fn test() {
+    out = \"len={shorten(\\\"hello world\\\").len()}\";
+    assert(out == \"len=5\", \"format interp with forward fn + .len() works\");
+}
+fn shorten(s: text) -> text {
+    sp = s.find(\" \");
+    if sp == null { s } else { s[0..sp] }
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P292 — `v = new_v` where `new_v` is loop-scoped and `v` is outer-scoped
+/// used to corrupt `v`'s storage on the next iteration: subsequent reads
+/// of `v[j]` reported `index J out of bounds for length 0` (or SEGV when
+/// the next iter's `new_v: vector<integer> = []` allocation landed on the
+/// just-freed storage).  The accumulator pattern
+/// `v: vector<T> = []; for i { new_v: vector<T> = []; for j { new_v += [v[j]] }; new_v += [i]; v = new_v }`
+/// is the canonical reproducer.  Fixed by extending the field-replace
+/// `OpClearVector + OpAppendVector` path to cover local-var vector
+/// re-assignment when the RHS is a Var read (the only shape that aliases —
+/// fresh-storage calls / comprehensions go through the standard Set path).
+#[test]
+fn p292_vector_reassign_from_loop_local() {
+    code!(
+        "fn test() {
+    v: vector<integer> = [];
+    v += [10];
+    for i in 0..3 {
+        new_v: vector<integer> = [];
+        for j in 0..len(v) { new_v += [v[j]]; }
+        new_v += [i];
+        v = new_v;
+    }
+    assert(len(v) == 4, \"v has 4 elements after 3 iters of (copy + append)\");
+    assert(v[0] == 10, \"v[0] = 10 (initial)\");
+    assert(v[1] == 0,  \"v[1] = 0 (iter 0)\");
+    assert(v[2] == 1,  \"v[2] = 1 (iter 1)\");
+    assert(v[3] == 2,  \"v[3] = 2 (iter 2)\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// @P295 — reassigning a keyed-collection LOCAL (`s = ns`) for
+/// sorted/hash/index.  Before the fix this panicked in codegen
+/// (`gen_put_var` has no `OpPut*` arm for keyed kinds).  Fixed by
+/// emitting a deep-copy `OpReplaceKeyed` (remove_claims + copy_claims,
+/// per-kind index rebuild) and stripping the `s["ns"]` lifetime dep so
+/// scope analysis frees both `s` (its own copy) and `ns` (its scope).
+/// The loop-rebuild shape (insertion-sort idiom) is the canonical case;
+/// it must not accumulate across iterations.  This `code!` harness runs
+/// interp; `tests/scripts/119-keyed-local-reassign.loft` covers both
+/// backends (native keyed locals were unblocked by the @P296 fix).
+#[test]
+fn p295_sorted_reassign_from_loop_local() {
+    code!(
+        "struct Item { k: integer not null }
+fn test() {
+    s: sorted<Item[k]> = [];
+    s += [Item{k: 100}];
+    for i in 1..5 {
+        ns: sorted<Item[k]> = [];
+        for it in s { ns += [Item{k: it.k}]; }
+        ns += [Item{k: i}];
+        s = ns;
+    }
+    out = \"\";
+    for it in s { out += \"{it.k} \"; }
+    assert(out == \"1 2 3 4 100 \", \"sorted rebuild: {out}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// @P295 — hash + index variants of the keyed-local reassignment, plus
+/// the fresh-storage call RHS (`s = build()`) that exercises the
+/// 0x8000 source-free path.
+#[test]
+fn p295_hash_index_reassign() {
+    code!(
+        "struct H { k: text not null, v: integer not null }
+struct I { n: integer not null }
+fn test() {
+    h: hash<H[k]> = [];
+    h += [H{k: \"a\", v: 1}];
+    nh: hash<H[k]> = [];
+    nh += [H{k: \"a\", v: 1}];
+    nh += [H{k: \"b\", v: 2}];
+    h = nh;
+    assert(len(h) == 2, \"hash reassign len\");
+    assert(h[\"b\"].v == 2, \"hash reassign lookup\");
+
+    ix: index<I[n]> = [];
+    ix += [I{n: 5}];
+    nx: index<I[n]> = [];
+    nx += [I{n: 3}];
+    nx += [I{n: 7}];
+    ix = nx;
+    assert(len(ix) == 2, \"index reassign len\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// @P285 — a keyed-collection membership test (`hash[key] == null`) must
+/// NOT fire the "Redundant null check" warning when the KEY is a
+/// `not null` field.  The lookup RESULT is nullable (absent key → null);
+/// the bug attributed the key's not-null-ness to the comparison.  The
+/// test declares NO expected warnings, so the harness's
+/// `assert_diagnostics` fails if any spurious warning is emitted.
+#[test]
+fn p285_hash_lookup_null_no_spurious_warning() {
+    code!(
+        "struct P285Ent { name: text not null, v: integer not null }
+struct P285Box { items: hash<P285Ent[name]> }
+fn test() {
+    b = P285Box{items: []};
+    b.items += [P285Ent{name: \"x\", v: 9}];
+    key = P285Ent{name: \"x\", v: 0};
+    miss = P285Ent{name: \"y\", v: 0};
+    found = 0;
+    if b.items[key.name] == null { found = -1; } else { found = b.items[key.name].v; }
+    if b.items[miss.name] != null { found = found + 100; }
+    assert(found == 9, \"present + absent membership tests resolve correctly\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// @P285 control — a GENUINE redundant check (`not_null_field == null`,
+/// no lookup) must STILL warn.  Guards against the fix over-suppressing.
+#[test]
+fn p285_genuine_redundant_check_still_warns() {
+    code!(
+        "struct P285G { name: text not null }
+fn test() {
+    g = P285G{name: \"x\"};
+    if g.name == null { assert(false, \"unreachable\"); }
+}"
+    )
+    .warning("Redundant null check — 'name' is 'not null', comparison is always false at p285_genuine_redundant_check_still_warns:4:24")
     .result(Value::Null);
 }
 

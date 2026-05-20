@@ -37,6 +37,9 @@ fn pretty_example_name(base: text) -> text {
 
 fn main() {
   out = file("doc/examples.js");
+  // `+=` is append-only — truncate explicitly so re-runs do not pile
+  // up successive copies of the JSON map.
+  out.set_file_size(0);
   out += `
     // Auto-generated — regenerate with: loft scripts/build-playground-examples.loft
     export const EXAMPLES = {{

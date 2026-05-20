@@ -90,5 +90,40 @@ fn main() {
   cl_w.tick_and_decay(10, 10, 5);
   assert(cl_w.cell_count() == 0, "centre removed once neighbours gone");
 
+  // ── Persistence — save + load round-trip ─────────────────────────
+  // Build a small world spanning two chunks + a negative-coord chunk
+  // so save/load exercises both the file-format header counters and
+  // the chunk_idx_32 negative path.
+  sv_w = world::world_empty();
+  sv_w.tick = 17;
+  sv_w.set_cell(5, 7,    world::Cell { c_color: 3, c_height: 12, c_age: 100 });
+  sv_w.set_cell(6, 8,    world::Cell { c_color: 5, c_height: 0,  c_age: 0   });
+  sv_w.set_cell(100, 0,  world::Cell { c_color: 9, c_height: 4,  c_age: 42  });
+  sv_w.set_cell(-1, 0,   world::Cell { c_color: 7, c_height: 3,  c_age: 200 });
+
+  sv_path = "/tmp/loft_world_test.bin";
+  sv_w.world_save(sv_path);
+
+  // Load into a fresh world and round-trip every value.
+  ld_w = world::world_empty();
+  ld_n = ld_w.world_load(sv_path);
+  assert(ld_n == 4, "loaded 4 cells");
+  assert(ld_w.tick == 17, "loaded tick=17");
+
+  ld_a = ld_w.get_cell(5, 7);
+  assert(ld_a.c_color == 3 && ld_a.c_height == 12 && ld_a.c_age == 100, "round-trip (5,7)");
+  ld_b = ld_w.get_cell(6, 8);
+  assert(ld_b.c_color == 5, "round-trip (6,8) color");
+  ld_c = ld_w.get_cell(100, 0);
+  assert(ld_c.c_color == 9 && ld_c.c_height == 4 && ld_c.c_age == 42, "round-trip (100,0)");
+  ld_d = ld_w.get_cell(-1, 0);
+  assert(ld_d.c_color == 7 && ld_d.c_height == 3 && ld_d.c_age == 200, "negative-chunk round-trip");
+
+  // Missing file → 0 cells, no panic.
+  miss_w = world::world_empty();
+  miss_n = miss_w.world_load("/tmp/loft_world_does_not_exist.bin");
+  assert(miss_n == 0, "missing file loads 0 cells");
+  assert(miss_w.tick == 0, "missing file leaves tick unchanged");
+
   println("world smoke ok");
 }

@@ -70,6 +70,8 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_ticks",                    abi: Abi::Cell },
     RuntimeFn { name: "n_get_store_lock",           abi: Abi::Cell },
     RuntimeFn { name: "n_set_store_lock",           abi: Abi::Cell },
+    RuntimeFn { name: "n_protect_store_frees",      abi: Abi::Cell },
+    RuntimeFn { name: "n_unprotect_store_frees",    abi: Abi::Cell },
     RuntimeFn { name: "n_rand",                     abi: Abi::None },
     RuntimeFn { name: "n_rand_indices",             abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_native",        abi: Abi::Cell },
@@ -462,9 +464,35 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
         && data.store_nr != to.store_nr
         && data.store_nr != 0
         && !stores.allocations[data.store_nr as usize].free
-        && !stores.allocations[data.store_nr as usize].locked
+        && !stores.allocations[data.store_nr as usize].read_only
+        && !stores.allocations[data.store_nr as usize].free_protected
     {
         stores.free(&data);
+    }
+}
+
+/// @P295 — deep-copy a keyed collection (`sorted`/`hash`/`index`) into a
+/// keyed-collection LOCAL `dest`, replacing its prior contents.  Native
+/// twin of `State::replace_keyed`.  No `copy_block`: a keyed local is a
+/// `DbRef` to a dedicated store whose collection header is at `(store, 1,
+/// 8)`, so `remove_claims(dest)` + `copy_claims(src, dest, tp)` (per-kind
+/// index rebuild) is the complete copy.  `tp`'s `0x8000` high bit frees the
+/// source store after the copy (fresh-storage RHS like `s = build()`).
+pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: DbRef, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let raw_tp = tp as u16;
+    let free_source = raw_tp & 0x8000 != 0;
+    let tp = raw_tp & 0x7FFF;
+    stores.remove_claims(&dest, tp);
+    stores.copy_claims(&src, &dest, tp);
+    if free_source
+        && src.store_nr != dest.store_nr
+        && src.store_nr != 0
+        && !stores.allocations[src.store_nr as usize].free
+        && !stores.allocations[src.store_nr as usize].read_only
+        && !stores.allocations[src.store_nr as usize].free_protected
+    {
+        stores.free(&src);
     }
 }
 
@@ -892,10 +920,42 @@ pub fn OpTruncateFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, _size
     false
 }
 
+/// Flush buffered bytes for the open handle backing `file` so that
+/// preceding writes are durable.  Returns `true` on success.  If the
+/// file is not currently open returns `true` — there is nothing to flush.
+/// Bytecode equivalent: `State::sync_file` in `src/state/io.rs`.
+#[cfg(not(feature = "wasm"))]
+pub fn OpSyncFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> bool {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if file.rec == 0 {
+        return false;
+    }
+    let file_ref = stores.store(&file).get_i32_raw(file.rec, file.pos + 28);
+    if file_ref != i32::MIN
+        && (file_ref as usize) < stores.files.len()
+        && let Some(f) = &stores.files[file_ref as usize]
+    {
+        f.sync_data().is_ok()
+    } else {
+        true
+    }
+}
+
+/// WASM stub: file sync not available.
+#[cfg(feature = "wasm")]
+pub fn OpSyncFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef) -> bool {
+    false
+}
+
 // ─── File I/O ─────────────────────────────────────────────────────────────────
 
 /// Open (or reuse) a file handle for writing.  Returns the index into
 /// `stores.files`, or `i32::MIN` on error.
+///
+/// The handle is opened for read+write without truncating so that
+/// successive `f += …` appends preserve earlier bytes.  Explicit
+/// truncation goes through `OpTruncateFile` (`f.set_file_size(0)`
+/// / `f#size = 0`).
 #[cfg(not(feature = "wasm"))]
 fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
     let f_nr = stores.files.len() as i32;
@@ -912,7 +972,13 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
             store.get_byte(file.rec, file.pos + 32, 0),
         )
     };
-    match File::create(&file_name) {
+    match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&file_name)
+    {
         Ok(f) => {
             stores
                 .store_mut(file)
@@ -927,7 +993,7 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
             f_nr
         }
         Err(e) => {
-            eprintln!("file create error for {file_name:?}: {e}");
+            eprintln!("file open error for {file_name:?}: {e}");
             i32::MIN
         }
     }
@@ -1364,8 +1430,30 @@ pub fn OpWriteFile<T: FileVal>(
         return;
     }
     // Track write position: set #index = where this write starts.
+    // `+=` is append-only: when the user has not explicitly set
+    // `f#next = N`, the default position is the current end of file
+    // (consistent with `vector += [elem]` / `text += "more"`).
     let raw_next = stores.store(&file).get_long(file.rec, file.pos + 16);
-    let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
+    let next_pos = if raw_next == i64::MIN {
+        if let Some(f) = stores
+            .files
+            .get_mut(file_ref as usize)
+            .and_then(|x| x.as_mut())
+        {
+            f.seek(SeekFrom::End(0)).unwrap_or(0) as i64
+        } else {
+            0
+        }
+    } else {
+        if let Some(f) = stores
+            .files
+            .get_mut(file_ref as usize)
+            .and_then(|x| x.as_mut())
+        {
+            let _ = f.seek(SeekFrom::Start(raw_next as u64));
+        }
+        raw_next
+    };
     stores
         .store_mut(&file)
         .set_long(file.rec, file.pos + 8, next_pos);
@@ -2345,6 +2433,24 @@ pub fn n_set_store_lock(cell: &std::cell::UnsafeCell<Stores>, r: DbRef, locked: 
         stores.lock_store(&r);
     } else {
         stores.unlock_store(&r);
+    }
+}
+
+/// @P290 — soft free-protect marker for the fn-call deep-copy bracket.
+/// Counterpart of `n_protect_store_frees` in `src/native.rs`.
+pub fn n_protect_store_frees(cell: &std::cell::UnsafeCell<Stores>, r: DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if r.rec != 0 && (r.store_nr as usize) < stores.allocations.len() {
+        let origin = format!("call_bracket(store_nr={}, rec={})", r.store_nr, r.rec);
+        stores.allocations[r.store_nr as usize].set_free_protected(origin);
+    }
+}
+
+/// @P290 — clear the soft free-protection.
+pub fn n_unprotect_store_frees(cell: &std::cell::UnsafeCell<Stores>, r: DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if r.rec != 0 && (r.store_nr as usize) < stores.allocations.len() {
+        stores.allocations[r.store_nr as usize].clear_free_protected();
     }
 }
 

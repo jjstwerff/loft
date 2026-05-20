@@ -482,8 +482,12 @@ impl Stores {
         &mut self.allocations[r.store_nr as usize]
     }
 
-    /// Lock the store that contains the record pointed to by `r`.
-    /// The lock persists until explicitly cleared via `unlock_store`.
+    /// Lock the store that contains the record pointed to by `r` —
+    /// user-facing `d#lock = true` semantics.  Sets the HARD `read_only`
+    /// flag so subsequent writes / claims / deletes panic immediately;
+    /// reads remain legal.  Use `set_free_protected` directly when only
+    /// frees need blocking (e.g. the fn-call deep-copy bracket from
+    /// @P290 — currently unused but kept available).
     pub fn lock_store(&mut self, r: &DbRef) {
         if r.rec != 0 && (r.store_nr as usize) < self.allocations.len() {
             debug_assert!(
@@ -491,50 +495,17 @@ impl Stores {
                 "Locking a freed store (store_nr={}, rec={})",
                 r.store_nr, r.rec
             );
-            // Plan-22 02d-vii follow-up — `LOFT_LOG=locks` trace.
-            // Prints the lock event with the store_nr + rec so a
-            // later "Write to locked store" panic at the same
-            // store_nr can be traced back to the lock origin.
-            if crate::log_config::lock_trace_enabled() {
-                eprintln!(
-                    "[locks] LOCK   store_nr={} rec={} (was_locked={})",
-                    r.store_nr,
-                    r.rec,
-                    self.allocations[r.store_nr as usize].is_locked(),
-                );
-            }
-            // Set a per-DbRef origin so "Write to locked store"
-            // panics include the lock site (rec context).  This
-            // is also a phase 02d-vii follow-up.
             let origin = format!("lock_store(store_nr={}, rec={})", r.store_nr, r.rec);
             self.allocations[r.store_nr as usize].lock_with_origin(origin);
         }
     }
 
-    /// Unlock the store that contains the record pointed to by `r`.
-    /// Borrowed stores (worker copies) are never unlocked — they must stay
-    /// locked for the entire parallel scope to prevent writes.
+    /// Unlock the store that contains the record pointed to by `r` —
+    /// counterpart of `lock_store`.  Clears the user-facing read_only
+    /// lock; leaves `free_protected` untouched.
     pub fn unlock_store(&mut self, r: &DbRef) {
         if r.rec != 0 && (r.store_nr as usize) < self.allocations.len() {
-            let store = &mut self.allocations[r.store_nr as usize];
-            // Skip worker stores: they are locked at creation and must stay
-            // locked.  Worker stores have borrowed=true (light workers) or
-            // empty claims (full clone workers).  Only unlock stores that
-            // were explicitly locked by lock_store (const param lock).
-            let will_unlock = !store.is_borrowed() && !store.claims_empty();
-            if crate::log_config::lock_trace_enabled() {
-                eprintln!(
-                    "[locks] UNLOCK store_nr={} rec={} (will_unlock={}, borrowed={}, claims_empty={})",
-                    r.store_nr,
-                    r.rec,
-                    will_unlock,
-                    store.is_borrowed(),
-                    store.claims_empty(),
-                );
-            }
-            if will_unlock {
-                store.unlock();
-            }
+            self.allocations[r.store_nr as usize].unlock();
         }
     }
 
@@ -893,28 +864,53 @@ impl Stores {
             self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
             return;
         }
-        let length = self.store(rec).get_u32_raw(cur, 0);
-        let into = self.store_mut(to).claim(length);
+        // @P290 / sibling — the hash bucket record's layout, per
+        // `src/hash.rs::add`, is:
+        //   offset 0: room   (i32, in words — total record size)
+        //   offset 4: length (u32, current entry count)
+        //   offset 8..: elms = (room - 1) * 2 bucket slots (u32 rec-nrs)
+        // The previous code read `room` from offset 0 (calling it
+        // `length`), claimed `room` words correctly, but then iterated
+        // `1..room*2` — which both skipped the first bucket (offset 8,
+        // i=0) AND walked 2 indices PAST the claim (offsets 72 + 76 for
+        // a 72-byte allocation), corrupting heap metadata → SIGSEGV.
+        // The correct bound is `elms = (room - 1) * 2` starting at i=0.
+        let room = self.store(rec).get_u32_raw(cur, 0);
+        let elms = (room - 1) * 2;
+        let into = self.store_mut(to).claim(room);
         self.store_mut(to).set_u32_raw(to.rec, to.pos, into);
-        for i in 1..length * 2 {
+        for i in 0..elms {
             let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
             if elm == 0 {
                 self.store_mut(to).set_u32_raw(into, 8 + 4 * i, 0);
                 continue;
             }
-            let new = self.store_mut(to).claim(size.div_ceil(8));
+            // @P295 — element record layout (per `record_new`'s
+            // Hash arm): offset 0 = record header, offset 4 = back-pointer,
+            // offset 8 = struct payload (`size` bytes).  The OLD copy claimed
+            // `size.div_ceil(8)` words (missing the +1 header word) and
+            // `copy_block`'d `size - 4` bytes from offset 4 — reaching only
+            // offset `size`, UNDER-copying the struct (which ends at
+            // `8 + size`) and leaving the last field's bytes as whatever
+            // stale data the reclaimed-after-`remove_claims` memory held
+            // (nondeterministic garbage in the high bits of an i64 field).
+            // Match the proven `copy_claims_index_body`: claim with the
+            // header word, set the back-pointer, copy the full `size`-byte
+            // payload from offset 8.
+            let new = self.store_mut(to).claim(1 + size.div_ceil(8));
+            self.store_mut(to).set_u32_raw(new, 4, to.rec);
             self.copy_block(
                 &DbRef {
                     store_nr: rec.store_nr,
                     rec: elm,
-                    pos: 4,
+                    pos: 8,
                 },
                 &DbRef {
                     store_nr: to.store_nr,
                     rec: new,
-                    pos: 4,
+                    pos: 8,
                 },
-                size - 4,
+                size,
             );
             self.store_mut(to).set_u32_raw(into, 8 + 4 * i, new);
             self.copy_claims(
@@ -1250,7 +1246,16 @@ impl Stores {
                     // Do nothing if the structure was empty
                     return;
                 }
-                let length = self.store(rec).get_u32_raw(cur, 0) * 2;
+                // @P290 sibling — the hash bucket record (per `src/hash.rs::add`)
+                // is: offset 0 = room (words), offset 4 = entry count, offset
+                // 8.. = (room - 1) * 2 bucket slots.  The bound MUST be
+                // `(room - 1) * 2`; the old `room * 2` walked 2 slots past the
+                // allocation, reading the next record's header bytes as
+                // bucket rec-nrs and calling `delete()` on garbage → SIGSEGV.
+                // Matches `copy_claims_hash_body`'s @P290 fix; surfaced by
+                // @P295 (keyed-local reassignment calls `remove_claims` on a
+                // hash via `OpReplaceKeyed`).
+                let length = (self.store(rec).get_u32_raw(cur, 0) - 1) * 2;
                 for i in 0..length {
                     let elm = self.store(rec).get_u32_raw(cur, 8 + i * 4);
                     if elm == 0 {

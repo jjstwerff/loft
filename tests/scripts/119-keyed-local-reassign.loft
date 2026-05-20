@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @P295 + @P296 — keyed-collection LOCAL variables (sorted/hash/index
+// declared as a local var, not a struct field) on BOTH backends.
+//
+// @P296: keyed locals panicked on `--native` (`set_default_value`
+// indexed `content(tp) == u16::MAX` because the local keyed-type id
+// minted by `gen_set_first_keyed_null` was never registered in the
+// native runtime type table — `output_init` skipped keyed types,
+// assuming they were always created inline by a struct field).
+//
+// @P295: reassigning a keyed local from another (`s = ns`) panicked in
+// codegen, then (once that was fixed) leaked / accumulated until the
+// `s["ns"]` lifetime dep was stripped.  The deep-copy also surfaced two
+// latent hash-copy bugs (remove_claims off-by-one, copy_claims_hash_body
+// under-copy).
+
+struct Item { k: integer not null }
+struct HRec { name: text not null, v: integer not null }
+struct IRec { n: integer not null }
+
+fn main() {
+  // --- sorted local: build + reassign-from-loop-local (insertion-sort
+  //     rebuild idiom) + indexed read. ---
+  s: sorted<Item[k]> = [];
+  s += [Item{k: 100}];
+  for i in 1..5 {
+    ns: sorted<Item[k]> = [];
+    for it in s { ns += [Item{k: it.k}]; }
+    ns += [Item{k: i}];
+    s = ns;
+  }
+  s_out = "";
+  for it in s { s_out += "{it.k} "; }
+  assert(s_out == "1 2 3 4 100 ", "sorted local rebuild: {s_out}");
+
+  // --- hash local: build + reassign + key lookup (i64 field must
+  //     round-trip cleanly — the copy_claims_hash_body fix). ---
+  h: hash<HRec[name]> = [];
+  h += [HRec{name: "a", v: 1}];
+  nh: hash<HRec[name]> = [];
+  nh += [HRec{name: "a", v: 1}];
+  nh += [HRec{name: "b", v: 2}];
+  h = nh;
+  assert(len(h) == 2, "hash local reassign len");
+  assert(h["a"].v == 1 && h["b"].v == 2, "hash local lookup after reassign");
+
+  // --- index local: build + reassign. ---
+  ix: index<IRec[n]> = [];
+  ix += [IRec{n: 5}];
+  nx: index<IRec[n]> = [];
+  nx += [IRec{n: 3}];
+  nx += [IRec{n: 7}];
+  ix = nx;
+  ix_out = "";
+  for r in ix { ix_out += "{r.n} "; }
+  assert(ix_out == "3 7 ", "index local reassign: {ix_out}");
+
+  println("119-keyed-local-reassign ok");
+}

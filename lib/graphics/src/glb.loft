@@ -156,6 +156,9 @@ pub fn save_glb(m: mesh::Mesh, path: text) {
 
   f = file(path);
   f#format = LittleEndian;
+  // `+=` is append-only — truncate explicitly so successive saves of
+  // the same path replace the previous file instead of appending.
+  f.set_file_size(0);
 
   // GLB header (12 bytes — each u32 is 4 bytes).  Post-2c `integer`
   // is 8 bytes; cast each scalar header field to `i32` so the file
@@ -448,6 +451,9 @@ pub fn save_scene_glb(sc: scene::Scene, path: text) {
 
   f = file(path);
   f#format = LittleEndian;
+  // `+=` is append-only — truncate explicitly so successive saves of
+  // the same path replace the previous file instead of appending.
+  f.set_file_size(0);
 
   // GLB header — each u32 field is 4 bytes per spec.  Post-2c
   // `integer` is 8 bytes; cast each scalar to `i32` so writes land

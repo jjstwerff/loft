@@ -791,14 +791,16 @@ fn coroutine_stale_store_guard() {
 // ── S22 — claim/delete on a locked store panics in all build profiles ─────────
 
 #[test]
-#[should_panic(expected = "Claim on locked store")]
+#[should_panic(expected = "Claim on read-only store")]
 fn claim_on_locked_store_panics() {
-    // S22: store.claim() now panics when locked in all build profiles.
-    // Before the fix, release builds returned a silent dummy record 0 instead.
+    // S22: store.claim() panics when the store is HARD-locked (read_only)
+    // in all build profiles.  Pre-P290 a single `locked` flag covered
+    // both the hard read-only case AND the soft "don't-free" case; this
+    // test exercises the hard case only — Store::lock() sets read_only.
     let mut stores = loft::database::Stores::new();
     let db = stores.null();
     stores.store_mut(&db).lock();
-    stores.claim(&db, 4); // must panic — locked store may not be extended
+    stores.claim(&db, 4); // must panic — read-only store may not be extended
 }
 
 #[test]

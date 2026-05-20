@@ -7,8 +7,59 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open.  Native loft renderer subscribed to the server, projected
-onto the venue's main screen.  Effort: **M**.
+**Partial — flat-2D MVP with FPS-style auto-camera shipped**
+(2026-05-20).  The native loft renderer
+[`tools/audience-demo/projector.loft`](../../../../tools/audience-demo/projector.loft)
+opens a 1280×800 OpenGL window, subscribes to the multi-client server,
+and renders the hex world as a flat-2D pointy-top grid with the
+empty-cell backdrop visible for spatial reference.
+
+**Per the 2026-05-21 design clarification:** the OpenGL client is BOTH
+the projector (3D crystals only, auto-camera, no ground grid) AND
+the desktop client (3D crystals + 2D ground layer, user mouse paints
+into the ground layer).  The flat-2D rendering that already ships
+stays — it becomes the desktop client's GROUND LAYER, and the 3D
+crystal mesh layers on top.
+
+**Mode is a runtime state, not a CLI flag.**  Two modes:
+
+| Mode | Trigger | Camera | Ground layer | Mouse paint |
+|---|---|---|---|---|
+| **Player-controlled** | Any mouse / scroll / keyboard input — also the initial state at startup | Free (mouse-drag rotate, scroll zoom, WASD pan) | Visible | Yes |
+| **Demo (= projector)** | No input for `CAMERA_IDLE_TIMEOUT_S` (initial guess: 60 s) | Auto-tracks latest edit (existing single-edit camera or the future heat-field overview) | Fades out over `CAMERA_GROUND_FADE_S` (initial: 3 s) | No |
+
+Demo mode reverts to player-controlled mode as soon as the user
+touches mouse or keyboard.  The ground layer fades back in over the
+same `CAMERA_GROUND_FADE_S`.  This is the natural projector mode
+for the talk — the presenter sets it up, leaves it alone, and after
+a minute it becomes the pure spectacle.
+
+Auto-camera shipped (matches the Auto-camera section below, just on
+2D first):
+- **FPS pose**: tilt = pitch, rotation = yaw, position = ground
+  coordinate.  Looking down (tilt=0) is the at-rest extremity; tilting
+  forward (tilt>0) compresses screen-Y so distant ground reads closer
+  to centre.
+- **Look-at view shift**: `view = pos + tilt * (end - pos)` — at full
+  tilt the goal sits at screen centre, even before the camera has
+  translated.
+- **Edit sequence**: new paint → tilt kick + rotation to face it →
+  ease-in over 0.2 s → orient settles within ~6° → 0.1 s pause →
+  translate → rotation re-tracks if a follow-up paint arrives mid-trip.
+- **Catchup**: msg_id 6 snapshot-request handshake the projector
+  fires on connect + as a watchdog if the world stays empty.
+
+Matrix order is FPS-correct: `T × S_screen_y × R × S_uniform` (uniform
+scale → rotate → screen-Y squash → translate), so pitch foreshortening
+rides on the screen Y axis regardless of yaw.
+
+Remaining for full phase 3: 3D crystal mesh (see § Visual model below
+— frost ridges, bridges between cluster cells, hard-edge palette
+triangles per the design).  The auto-camera layer is ready to drive a
+3D mesh layer the moment the geometry generator lands.
+
+Effort remaining: **M** (the mesh generation is the bulk; the
+camera + WS wiring is done).
 
 ## Goal
 
@@ -207,6 +258,49 @@ Rendering note: the fade applies to the crystal mesh only — the
 projector still does not render the base hex lattice at all, so
 the fade has nothing to mute on empty cells.
 
+### Chunked mesh lifecycle — bounded memory + render cost
+
+**Mesh lifetime tracks 32×32 chunks, not individual cells.**  This
+matches the server-side `lib/world` chunk layout (the same one the
+phone client + audience server already use) and bounds the projector's
+mesh count to "chunks within the camera's draw distance" rather than
+"every cell painted in the lifetime of the demo".
+
+Per chunk in the projector:
+
+| State | Meaning | Renders? |
+|---|---|---|
+| **Unloaded** | Chunk's cells exist in the server world map but no GPU meshes built | No |
+| **Loading** | Chunk just entered fade range; per-cell meshes being built (one per frame to spread cost) | Partial — only the cells already built |
+| **Loaded** | All cells' meshes built and uploaded | Yes (with distance fade alpha applied) |
+| **Fading** | Camera moving away; alpha decaying toward 0 over the fade band | Yes (decaying alpha) |
+| **Discarded** | Alpha reached 0; GPU meshes freed | No |
+
+Per frame, the projector computes each chunk's distance from the
+camera centre and transitions states accordingly:
+
+- Distance < `CAMERA_FADE_START_HEXES`: chunk loads (if not already)
+  and renders at full alpha.
+- `CAMERA_FADE_START_HEXES` < distance < `CAMERA_FADE_START_HEXES +
+  CAMERA_FADE_BAND_HEXES`: chunk renders with `alpha = 1 - (d - start)
+  / band`.  No new cell mesh built for this chunk in fading state —
+  only existing meshes fade out.
+- Distance > `CAMERA_FADE_START_HEXES + CAMERA_FADE_BAND_HEXES`:
+  chunk discarded.  GPU buffers freed.
+
+When a new audience paint lands in a chunk that's currently in
+`Fading` or `Discarded` state, the chunk stays in that state — the
+new paint waits until the camera approaches that chunk again before
+its mesh is built and shown.  This is intentional: the user explicitly
+wants the chunk system to be used as a **fade-out + don't-paint-next
+mechanism** so the projector never grows unbounded mesh storage and
+never tries to render activity in chunks the audience can't see.
+
+The natural consequence: chunks beyond fade distance accumulate
+server-side state but contribute zero GPU cost.  Memory + render time
+stay bounded by `(chunks_in_view) × (32 × 32)` cells, regardless of
+total demo runtime.
+
 ### Visible structure on an empty world
 
 A blank world reads as a dark stage — no hex lattice on the
@@ -218,19 +312,103 @@ lattice).  The projector is reserved for crystals.
 
 ## Auto-camera
 
-The projector pans + zooms automatically based on a recent-
-activity heat field.
+**Shipped (2026-05-20):** single-edit "look-at" camera with FPS-style pose.
+On each new paint event the camera anticipates with a tilt kick, rotates
+to face the edit, pauses 0.1 s, then translates with the goal at screen
+centre via a look-at view shift.  See `tools/audience-demo/projector.loft`
+for the implementation.  Tuning knobs live in one block at the top of the
+camera section (CAMERA_LERP, CAMERA_LOOKAT_DIST, CAMERA_PAUSE_FRAMES, …).
+
+**Future — multi-edit move-up + zoom-out phase**
+*(design captured; not yet implemented.  Pickup signal: recent
+activity spans more than one region at the same time and the
+audience is actively painting in multiple far-apart spots.)*
+
+### Why the current camera is insufficient
+
+The shipped single-edit camera (look-at + tilt + pause + translate)
+takes the simple path: target = latest paint, view shifts to it,
+camera lands there.  When activity stays in one region, this reads
+as "the camera follows the action".  When activity is dispersed
+(two audience members painting in opposite corners), the camera
+ping-pongs between them — each new paint pulls it away from the
+previous one, and the OVERVIEW of the world the audience has built
+gets lost on every move.
+
+Live observation 2026-05-20: with edits spread across `(-9, 45)` →
+`(-32, 7)` → `(-22, -2)` → `(-4, -53)` in a few seconds, the
+camera chased each one, hiding the surrounding structure between
+moves.  Audience can no longer "read" the world as a whole.
+
+### Heat field — recent activity centroid + spread
+
+Replace the single-target model with a heat field of recent events.
+Each `4:` paint / `4:c=0` erase the projector receives gets recorded
+in a fixed-size ring of `(x, y, tick)` tuples (capped, e.g., last 32
+events).  Per frame, compute:
 
 | Quantity | Derivation |
 |---|---|
-| **Heat at hex H, time T** | Sum over recent events `e` (last few seconds) of `weight(e) * decay(T - t(e))` where `weight` is 1 per seed/clear and `decay` is exponential |
-| **Camera target position** | Centroid of the heat field (heat-weighted mean of hex centres) |
-| **Camera zoom** | Inverse function of activity spread — concentrated activity → zoom in, dispersed → zoom out.  Bounded between configured min/max |
-| **Camera motion** | Lerp toward target each frame; never snap.  Smoothing constant tuned in rehearsal |
+| **Per-event weight `w(e)`** | `exp(-(now - e.tick) / TAU_FRAMES)` — exponential decay, half-life ≈ 4 s |
+| **Effective count** | `Σ w(e)` — fractional "how many events are still relevant"; collapses to 0 when nothing recent |
+| **Centroid (cx, cy)** | `(Σ w·x / Σ w,  Σ w·y / Σ w)` — heat-weighted mean of recent positions |
+| **Spread radius `r`** | `√(Σ w·((x−cx)² + (y−cy)²) / Σ w)` — heat-weighted RMS distance from centroid |
+| **Latest edit (lx, ly, lt)** | The most recent ring entry by tick — fed into the existing single-edit anticipation gestures |
 
-When activity is zero (no recent events), camera **holds** rather
-than panning randomly — this avoids motion sickness during quiet
-moments.  CI-4 picks between hold-still and slow-orbit.
+When `r` is small (all activity in one region), the heat field
+behaves like the single-edit model — centroid ≈ latest paint,
+single-edit camera takes over.  When `r` grows large, the camera
+zooms out + moves up so the whole heat field is visible at once.
+
+### Two operating modes, with a smooth transition
+
+| Mode | Trigger | Camera behaviour |
+|---|---|---|
+| **Single-edit** | `r < SPREAD_NARROW` (e.g., 6 hexes) | Current shipped behaviour: target = latest paint, look-at shift, full tilt anticipation.  Zoom = 1.0. |
+| **Overview** | `r > SPREAD_WIDE` (e.g., 14 hexes) | Camera target = centroid.  Zoom OUT so the heat field's bounding circle fits comfortably in view.  Tilt drops toward 0 (top-down looking down on the whole region).  Move-UP feeling comes from the zoom-out combined with tilt → 0 — visually equivalent to the camera lifting to a higher altitude. |
+| **Blended** | `SPREAD_NARROW ≤ r ≤ SPREAD_WIDE` | Lerp every parameter (target between latest-edit and centroid, zoom between 1 and overview zoom, tilt between anticipation and 0) by the normalised `r` position in the band.  Continuous transition; no mode-flip jitter. |
+
+The "move up" of the user spec maps to the zoom-out + tilt-toward-0
+combination — there's no real Z axis in the flat-2D projector, but
+visually "smaller hexes spread further apart with top-down view"
+reads exactly as "the camera rose to a higher altitude".  When the
+3D crystal mesh ships, this can grow into a real Z translation; the
+heat-field math stays the same.
+
+### Tuning constants (initial guesses, rehearse to validate)
+
+```
+HEAT_BUFFER_SIZE  = 32      // ring buffer capacity (≈ 3 s of typical paint cadence)
+TAU_FRAMES        = 240     // ~4 s half-life at 60 fps
+SPREAD_NARROW     = 6.0     // hex distance below which single-edit mode is fully active
+SPREAD_WIDE       = 14.0    // hex distance above which overview mode is fully active
+OVERVIEW_FIT_PAD  = 1.5     // zoom-out factor; bounding circle * this = screen radius
+OVERVIEW_ZOOM_MIN = 0.20    // never zoom out below this (preserves readability of hex tiles)
+```
+
+### Caps
+
+- Zoom is hard-capped at `1.0` — never zooms IN above normal.  User
+  spec: "the camera should not zoom in on distant edits, that
+  hampers the immersion and the overview of the current structure".
+- Zoom is hard-capped at `OVERVIEW_ZOOM_MIN` — too far out and hex
+  tiles become unreadable; the world becomes abstract dots.
+- "Move up" is purely visual (zoom + tilt drop).  Phase-3 3D crystal
+  mesh might later introduce a real Z translation as an additional
+  channel of the same blend; not in scope here.
+
+### Implementation gates
+
+@P287 closed (2026-05-20) the struct-field slice-assignment crash that
+previously blocked the ring buffer's trim-oldest pattern.  With that
+fix shipped, the ring can be a fixed-size `vector<PaintEvent>` with
+the parser-side materialisation handling the trim — no special
+in-place mutation needed.
+
+When activity is zero (no recent events with non-negligible weight),
+camera **holds** rather than panning randomly — this avoids motion
+sickness during quiet moments.  CI-4 picks between hold-still and
+slow-orbit.
 
 ## Presenter overrides (keyboard hotkeys)
 

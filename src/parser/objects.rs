@@ -409,12 +409,35 @@ impl Parser {
             *code = self.cl("OpGetInt", &[Value::Var(var_nr), Value::Int(16)]);
             *t = crate::data::I64.clone();
         } else if self.lexer.has_keyword("read") {
-            self.lexer.token("(");
+            // Size argument is optional: `f#read(n) as T` reads n bytes,
+            // `f#read as T` derives n from T's fixed byte width.  Bare
+            // `f#read as text` is rejected — text has no fixed width and
+            // requires the explicit `(n)`.
+            let has_explicit_size = self.lexer.has_token("(");
             let mut n_code = Value::Null;
-            self.expression(&mut n_code);
-            self.lexer.token(")");
-            // Determine read type from optional "as T"
-            let (read_type, db_tp) = if self.lexer.has_token("as") {
+            if has_explicit_size {
+                self.expression(&mut n_code);
+                self.lexer.token(")");
+            }
+            // Determine read type from optional "as T", remembering the
+            // type's natural byte width so the size-less form can infer.
+            // If no `as T` is given but the surrounding assignment has a
+            // known destination type (`s.field = f#read`), use THAT — the
+            // destination field's declared type drives the byte width,
+            // symmetric with how `f += s.field` already takes its width
+            // from the field's type.
+            let has_cast = self.lexer.has_token("as");
+            let target_hint = if !has_cast && !has_explicit_size {
+                let hint = self.read_target_type.clone();
+                if matches!(hint, Type::Integer(_) | Type::Float | Type::Single) {
+                    Some(hint)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let (read_type, db_tp, inferred_size) = if has_cast {
                 if let Some(type_name) = self.lexer.has_identifier() {
                     // Capture the alias def_nr so size(N) can pick Parts::Int.
                     let alias_nr = self.data.def_nr(&type_name);
@@ -436,8 +459,9 @@ impl Parser {
                     self.ensure_io_type(&tp.clone());
                     // Post-2c: honor `as i32` by routing to Parts::Int (4B) when
                     // the alias has size(4).
+                    let forced = self.data.forced_size(alias_nr);
                     let id = if let Type::Integer(IntegerSpec { min, .. }) = &tp
-                        && self.data.forced_size(alias_nr) == Some(4)
+                        && forced == Some(4)
                     {
                         if self.first_pass {
                             u16::MAX
@@ -445,7 +469,7 @@ impl Parser {
                             self.database.int(*min, false)
                         }
                     } else if let Type::Integer(IntegerSpec { min, .. }) = &tp
-                        && self.data.forced_size(alias_nr) == Some(1)
+                        && forced == Some(1)
                     {
                         if self.first_pass {
                             u16::MAX
@@ -453,7 +477,7 @@ impl Parser {
                             self.database.byte(*min, false)
                         }
                     } else if let Type::Integer(IntegerSpec { min, .. }) = &tp
-                        && self.data.forced_size(alias_nr) == Some(2)
+                        && forced == Some(2)
                     {
                         if self.first_pass {
                             u16::MAX
@@ -463,17 +487,113 @@ impl Parser {
                     } else {
                         self.get_type(&tp)
                     };
-                    (tp, id)
+                    // Byte width inferred from the cast — reuses the
+                    // three-tier resolution that `sizeof(T)` already
+                    // uses (parse_size in control.rs): forced_size of
+                    // the alias > packed size of a range-constrained
+                    // integer > database-allocated size of the base
+                    // type.  Variable-width types (text, struct refs
+                    // with collection fields) fall back to None and
+                    // still require explicit `(n)`.
+                    let nat_size = if self.first_pass {
+                        Some(0_i64)
+                    } else if let Some(n) = forced {
+                        Some(i64::from(n))
+                    } else {
+                        let packed = tp.size(false);
+                        if packed > 0 {
+                            Some(i64::from(packed))
+                        } else if matches!(tp, Type::Text(_)) {
+                            None
+                        } else {
+                            let db_sz = self
+                                .database
+                                .size(self.data.def(self.data.type_elm(&tp)).known_type);
+                            if db_sz == 0 {
+                                None
+                            } else {
+                                Some(i64::from(db_sz))
+                            }
+                        }
+                    };
+                    (tp, id, nat_size)
                 } else {
                     let text_tp = Type::Text(vec![]);
                     let id = self.get_type(&text_tp);
-                    (text_tp, id)
+                    (text_tp, id, None)
                 }
+            } else if let Some(hint) = target_hint {
+                // No `as T` — use the assignment-LHS type as the cast.
+                // `IntegerSpec` carries TWO pieces of width info:
+                // (a) `forced_size` (set by `pub type i32 = …size(4)`
+                // typedefs — fixed-width regardless of range), and
+                // (b) the implicit packed size derived from `min`/`max`
+                // (`size(false)` returns 1/2/8 based on range).  The
+                // forced size wins: an `i32` field has range covering
+                // all 32-bit values which packs to 8, but its forced
+                // size is 4.  Falls back to packed when no forced, and
+                // to the database-allocated size otherwise.
+                let forced_width: Option<u8> = if let Type::Integer(spec) = &hint {
+                    spec.forced_size.map(std::num::NonZero::get)
+                } else {
+                    None
+                };
+                let nat = if let Some(n) = forced_width {
+                    Some(i64::from(n))
+                } else {
+                    let packed = hint.size(false);
+                    if packed > 0 {
+                        Some(i64::from(packed))
+                    } else {
+                        let db_sz = self
+                            .database
+                            .size(self.data.def(self.data.type_elm(&hint)).known_type);
+                        if db_sz == 0 {
+                            None
+                        } else {
+                            Some(i64::from(db_sz))
+                        }
+                    }
+                };
+                let id = if self.first_pass {
+                    u16::MAX
+                } else if let Type::Integer(IntegerSpec { min, .. }) = &hint
+                    && forced_width == Some(4)
+                {
+                    self.database.int(*min, false)
+                } else if let Type::Integer(IntegerSpec { min, .. }) = &hint
+                    && (forced_width == Some(1) || hint.size(false) == 1)
+                {
+                    self.database.byte(*min, false)
+                } else if let Type::Integer(IntegerSpec { min, .. }) = &hint
+                    && (forced_width == Some(2) || hint.size(false) == 2)
+                {
+                    self.database.short(*min, false)
+                } else {
+                    self.get_type(&hint)
+                };
+                (hint, id, nat)
             } else {
                 let text_tp = Type::Text(vec![]);
                 let id = self.get_type(&text_tp);
-                (text_tp, id)
+                (text_tp, id, None)
             };
+            // Resolve the final size expression: explicit `(n)` wins;
+            // otherwise inferred from the cast type.  Bare `f#read`
+            // with no `as T` or with a variable-width cast (`as text`)
+            // is a parse error.
+            if !has_explicit_size {
+                if let Some(n) = inferred_size {
+                    n_code = Value::Int(n as i32);
+                } else if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "f#read without (size) requires a fixed-width 'as <type>' cast (i32, u8, u16, integer, single, float, ...)"
+                    );
+                    n_code = Value::Int(0);
+                }
+            }
             let mut ls = Vec::new();
             let temp_var = if let Type::Text(_) = read_type {
                 self.vars.work_text(&mut self.lexer)
@@ -1650,7 +1770,18 @@ impl Parser {
                 list.push(o.clone());
             }
         } else {
-            if !self.convert(value, exp_tp, &td) {
+            // @P279 — when pass-1 sees an Unknown value being assigned
+            // to a typed field, suppress the diagnostic.  Unknown
+            // values in pass-1 almost always come from a forward fn
+            // ref whose return type hasn't been registered yet;
+            // pass-2 re-runs this check with all defs visible and
+            // fires the diagnostic for any GENUINE mismatch.  Mirrors
+            // the pass-1 tolerance in `field()` / `parse_index()`
+            // that closed @P281 / @P278 (same architectural fix:
+            // pass-1 mustn't emit errors pass-2 will naturally
+            // resolve).  `set_field_no_check` still runs so codegen
+            // stays consistent with pass-2.
+            if (!self.first_pass || !exp_tp.is_unknown()) && !self.convert(value, exp_tp, &td) {
                 // Plan-07 phase 6 (partial) — name the value side first
                 // ("cannot assign <got> to <expected>"), the field-type
                 // side last.  Old shape "Cannot write {field_type} on

@@ -1,5 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
+==== stderr ====
 error: Unknown field Player.level
   --> <cases>/34_struct_extra_field.loft:3:37
   |
@@ -37,4 +38,3 @@ error: Syntax error: unexpected '}'
   |  ^
 
 error: aborting due to 6 previous errors
-==== stderr ====
