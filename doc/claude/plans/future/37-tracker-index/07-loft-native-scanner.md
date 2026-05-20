@@ -140,7 +140,7 @@ prompted an audit of every bash / Python script in `tools/` and
 
 **Sequencing for follow-up commits:**
 
-0. **Prerequisite** — [`lib_plans/01-regex/`](../../../lib_plans/01-regex/) Phase 0 (cdylib bridge MVP).  Opened 2026-05-18.  Without regex, `scan.loft`'s `scan_line()` is 150 lines of hand-rolled character walking to recognise four tag forms; with regex it's 4 patterns and ~20 lines.  Same multiplier for `check_doc_drift.sh`.  Ship the MVP first so the port arcs below don't have to re-implement what the Rust `regex` crate already provides.
+0. **Prerequisite** — [`lib_plans/future/01-regex/`](../../../lib_plans/future/01-regex/) Phase 0 (cdylib bridge MVP).  Opened 2026-05-18.  Without regex, `scan.loft`'s `scan_line()` is 150 lines of hand-rolled character walking to recognise four tag forms; with regex it's 4 patterns and ~20 lines.  Same multiplier for `check_doc_drift.sh`.  Ship the MVP first so the port arcs below don't have to re-implement what the Rust `regex` crate already provides.
 1. **Next (gated on Phase 0 above)** — finish porting `scan.sh` →
    `tools/indexer/src/scan.loft` (already exists for tag emission;
    remaining work: broken-tag validation + full bucketed JSON
@@ -253,7 +253,7 @@ regex; ~600 lines loft without regex would be a wash).
 
 **Conclusion:** ship sub-commits B-H of this arc with the
 existing primitives.  Regex Phase 0 from
-[`lib_plans/01-regex/`](../../../lib_plans/01-regex/) lands in
+[`lib_plans/future/01-regex/`](../../../lib_plans/future/01-regex/) lands in
 parallel for the other consumers and enables a follow-up
 "scan.loft regex pass" that retroactively trims `scan_line` /
 `scan_link_line` once the binary is using the canonical engine.
@@ -805,7 +805,7 @@ or follow up.
 
 ### Cross-references
 
-- `doc/claude/lib_plans/01-regex/` — regex Phase 0 (cdylib bridge MVP) is the next force-multiplier for any future bash-script port; not blocking on this arc since scan.loft's text-matching is already hand-rolled and works.
+- `doc/claude/lib_plans/future/01-regex/` — regex Phase 0 (cdylib bridge MVP) is the next force-multiplier for any future bash-script port; not blocking on this arc since scan.loft's text-matching is already hand-rolled and works.
 - `doc/claude/plans/future/41-doc-hygiene-autofix/` — the Phase 0 move-rewriter would close the OTHER PR-212-style cascade (directory moves vs OS-portability); orthogonal to this arc.
 
 ---
@@ -979,7 +979,7 @@ drives.
 | **Subprocess primitive** (already noted in @PLAN35 as a gap) | Wrapper script approach | Out of scope for this phase; the loft scanner does NOT shell out to `git ls-files` — it walks the filesystem itself and applies an in-loft `.gitignore` matcher |
 | **JSON emission for nested structures** | Loft has `n_struct_from_jsonvalue`; emission less ergonomic | If pattern repeats: build a `lib/json_emit/` helper.  This phase contributes use cases. |
 | **Long-running program lifecycle** (graceful shutdown on SIGINT, log rotation) | None | Sibling enhancement — file once concrete pain shows up |
-| **Regex (or fast text-search)** | `text.find` / `text.rfind` / loops | `lib_plans/01-regex/` already planned; this phase contributes a real consumer |
+| **Regex (or fast text-search)** | `text.find` / `text.rfind` / loops | `lib_plans/future/01-regex/` already planned; this phase contributes a real consumer |
 
 The phase ships even if some of these gaps stay open — the
 loft scanner can use slower workarounds initially and switch
@@ -1119,5 +1119,5 @@ slots between phase 04 (viewer integration) and phase 05
 - [Phase 02 — pre-commit hook](02-auto-refresh.md) — covers the freshness case the watcher complements
 - [Phase 03 — broken-tag validator](03-broken-validator.md) — `tests/index_hygiene.rs` extended here for the schema-diff test
 - [`lib/server/src/server.loft`](../../../../lib/server/src/server.loft) — pattern for a long-running loft program with a host-bridge native lib
-- [`lib_plans/01-regex/`](../../../lib_plans/01-regex/) — text-search primitive that would simplify the scanner
+- [`lib_plans/future/01-regex/`](../../../lib_plans/future/01-regex/) — text-search primitive that would simplify the scanner
 - [`plans/finished/35-branch-review-viewer/`](../finished/35-branch-review-viewer/) — the viewer that consumes the same JSON

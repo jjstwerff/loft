@@ -4,12 +4,16 @@
 
 # `lib/regex/` — regex library
 
-> **Status: Active — opened 2026-05-18.**  Promoted from
-> `lib_plans/future/01-regex/` after PR-212's cross-OS portability
-> fight with `tools/indexer/scan.sh` made it the cheapest unblocker
-> for two pending loft-port arcs.  Phase 0 ships the MVP via a thin
-> `#native` cdylib bridge to the Rust `regex` crate; phases 1+
-> implement the pure-loft NFA engine per the original design below.
+> **Status: Future — paused 2026-05-20** (was Active 2026-05-18 →
+> 2026-05-20).  Demoted back to `future/` without any phase work
+> started — no current appetite to pick it up.  The driver is still
+> live (PR-212's cross-OS portability fight with `tools/indexer/scan.sh`
+> made it the cheapest unblocker for two pending loft-port arcs), so
+> this stays a real commitment to finish, not a deferral; promote it
+> back into "Current" when there's room and intent.  Phase 0 ships the
+> MVP via a thin `#native` cdylib bridge to the Rust `regex` crate;
+> phases 1+ implement the pure-loft NFA engine per the original design
+> below.
 >
 > Lives as a library, not a language-level literal or match-pattern
 > kind.  Replaces the earlier `r"..."` raw-regex-literal plan and
@@ -25,7 +29,7 @@
 | **0 — `#native` cdylib bridge MVP** | S | `lib/regex/native/` cdylib wrapping the Rust `regex` crate (`Regex::new` / `is_match` / `find` / `find_iter` / `captures` / `replace` / `replace_all`).  ~100 lines wrapper + the cdylib crate.  Same API surface as the pure-loft engine that follows (Phase 1) so consumers migrate transparently when the engine swaps under them.  Reuses the proven `lib/web` / `lib/server` cdylib + `loft_ffi::loft_register!` shape — no new infrastructure needed.  Drops the bash regex dependency for `scan.loft` consolidation and `check_doc_drift.sh` port. | Open |
 | **1 — Pure-loft linear-time NFA** | MH | Thompson / Pike VM in loft.  Handles almost all patterns.  No catastrophic backtracking.  Features requiring unbounded lookaround or backreferences fall through to phase 2.  Replaces the cdylib bridge under the same API.  Self-hosted loft. | Open — design captured below |
 | **2 — Backtracking-engine fallback** | M | Loft-side backtracker for features the linear engine doesn't cover (backrefs, variable-width lookaround).  Opt-in via `regex_bt("...")`.  Step limit configurable to prevent ReDoS. | Open |
-| **3 — Lazy loading integration** | XS | Wire `Regex` / `Match` / `regex(...)` triggers into `default/lazy/*.loft` per [`lib_plans/future/03-lazy-stdlib/`](../future/03-lazy-stdlib/) — programs that never touch regex pay zero cold-start cost. | Blocked on lib_plans/future/03-lazy-stdlib landing |
+| **3 — Lazy loading integration** | XS | Wire `Regex` / `Match` / `regex(...)` triggers into `default/lazy/*.loft` per [`lib_plans/future/03-lazy-stdlib/`](../../future/03-lazy-stdlib/) — programs that never touch regex pay zero cold-start cost. | Blocked on lib_plans/future/03-lazy-stdlib landing |
 
 **Why Phase 0 ships first** — `tools/indexer/scan.sh` (PR-212) accumulated six commits' worth of OS-portability patches that all stemmed from heavy `awk` / `grep` regex usage.  The bash version is a maintenance liability; the loft port needs regex to avoid hand-rolling the same patterns in another 150 lines of character-walking.  The cdylib bridge gives consumers the full Rust-`regex` engine immediately (production-grade, ReDoS-safe, PCRE-parity surface) while the self-hosted Phase 1 implementation proceeds in parallel.  Both phases share the same API — no consumer rewrite when the engine swaps.
 
@@ -49,12 +53,12 @@ Two earlier plans are cancelled:
 2. **"Regex arm" inside `match`**, sharing the pattern-matching
    compile pipeline.  Cost: a whole second pattern language embedded
    in the compiler, competing with the PEG-style sequence patterns in
-   [MATCH_PEG.md](../../plans/future/26-match-peg/README.md), with a closed character vocabulary
+   [MATCH_PEG.md](../../../plans/future/26-match-peg/README.md), with a closed character vocabulary
    that inevitably grows.  Benefit: a fused syntax for text arms.
    Not worth it — PEG patterns cover structural matching; regex
    covers text; keeping them separate is cleaner than fusing them.
 
-The PEG-style match extension ([MATCH_PEG.md](../../plans/future/26-match-peg/README.md)) stays as
+The PEG-style match extension ([MATCH_PEG.md](../../../plans/future/26-match-peg/README.md)) stays as
 designed, but its scope is **structural** — vectors, enum shapes, and
 iterators.  Text matching is this library's job.  One text-pattern
 language is easier to learn than two, so the originally-sketched
@@ -240,21 +244,21 @@ Phases are strictly additive.  R1 alone covers the 95% case.
 
 **Ship order relative to MATCH_PEG:** R1 ships **first**, before any
 MATCH_PEG phase.  It is the smaller, library-scoped change, validates
-the lazy-loading mechanism from [LAZY_STDLIB.md](../future/03-lazy-stdlib/README.md), and
+the lazy-loading mechanism from [LAZY_STDLIB.md](../../future/03-lazy-stdlib/README.md), and
 delivers immediate value for CLI / server / log use cases.  See
-[MATCH_PEG.md](../../plans/future/26-match-peg/README.md) § "Ship order" for the combined timeline.
+[MATCH_PEG.md](../../../plans/future/26-match-peg/README.md) § "Ship order" for the combined timeline.
 
 ---
 
 ## See also
 
-- [LAZY_STDLIB.md](../future/03-lazy-stdlib/README.md) — lazy-loading mechanism; regex is
+- [LAZY_STDLIB.md](../../future/03-lazy-stdlib/README.md) — lazy-loading mechanism; regex is
   the first new consumer.
-- [LOFT.md](../../LOFT.md) § Match expressions — base match semantics.
-- [MATCH_PEG.md](../../plans/future/26-match-peg/README.md) — PEG-style sequence patterns on
+- [LOFT.md](../../../LOFT.md) § Match expressions — base match semantics.
+- [MATCH_PEG.md](../../../plans/future/26-match-peg/README.md) — PEG-style sequence patterns on
   vectors, enums, iterators, and (simple) text.  Regex is the tool
   for *complex* text; these two systems intentionally do not share a
   pattern language.
-- [STDLIB.md](../../STDLIB.md) — where the library's public API will be
+- [STDLIB.md](../../../STDLIB.md) — where the library's public API will be
   documented once shipped.
-- [PACKAGES.md](../../PACKAGES.md) — stdlib module layout.
+- [PACKAGES.md](../../../PACKAGES.md) — stdlib module layout.
