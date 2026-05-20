@@ -443,6 +443,12 @@ pub extern "C" fn n_ws_close(handle: i32) {
 /// distinction by reading this directly.
 enum AcceptOutcome {
     Pending(i32),
+    /// A non-WebSocket HTTP request was accepted: the stream is parked in
+    /// CURRENT_CONN and LAST_METHOD/PATH/HEADERS/BODY are set, so the loft
+    /// event handler can read the path and reply via `tcp_respond_*` (which
+    /// writes to CURRENT_CONN and closes).  Lets a single-port server serve
+    /// its page AND drive WebSockets through the one event pump.
+    Http,
     NoneYet,
     Error,
 }
@@ -470,11 +476,21 @@ fn try_accept_inner(listener_handle: i32) -> AcceptOutcome {
     // force blocking for the HTTP read (small, finite), then switch to
     // a short read timeout for the post-upgrade WS read polling.
     let _ = stream.set_nonblocking(false);
-    let (headers_opt, _path_opt) = match parse_request(&mut stream) {
-        Some((_method, path, headers, _body)) => (Some(headers), Some(path)),
+    let (method, path, headers, body) = match parse_request(&mut stream) {
+        Some(t) => t,
         None => return AcceptOutcome::Error,
     };
-    let headers = headers_opt.unwrap_or_default();
+    // A request without a Sec-WebSocket-Key is a plain HTTP request, not a WS
+    // upgrade.  Park it for the loft handler to answer instead of dropping it
+    // (so the same event pump serves the page + the WebSockets on one port).
+    if !headers.to_ascii_lowercase().contains("sec-websocket-key") {
+        LAST_METHOD.with(|m| *m.borrow_mut() = method);
+        LAST_PATH.with(|p| *p.borrow_mut() = path);
+        LAST_HEADERS.with(|h| *h.borrow_mut() = headers);
+        LAST_BODY.with(|b| *b.borrow_mut() = body);
+        CURRENT_CONN.with(|c| *c.borrow_mut() = Some(stream));
+        return AcceptOutcome::Http;
+    }
     if !websocket::ws_upgrade(&mut stream, &headers) {
         return AcceptOutcome::Error;
     }
@@ -506,19 +522,13 @@ fn try_accept_inner(listener_handle: i32) -> AcceptOutcome {
 pub extern "C" fn n_ws_accept_nonblocking(listener_handle: i32) -> i32 {
     match try_accept_inner(listener_handle) {
         AcceptOutcome::Pending(id) => id,
+        // Legacy WS-only entry point: a plain HTTP request has no client id
+        // here, so report it as an error (the stream parked in CURRENT_CONN
+        // is dropped on the next accept).  Multi-client servers use the
+        // event pump (`n_ws_next_event`), which surfaces HTTP properly.
+        AcceptOutcome::Http => -2,
         AcceptOutcome::NoneYet => -1,
         AcceptOutcome::Error => -2,
-    }
-}
-
-/// Used by the event pump: collapses NoneYet and Error into None
-/// because both mean "nothing to deliver this poll".  Errors during
-/// the listener phase are not surfaced to the loft program — they
-/// would just be a noisy distraction during the normal idle path.
-fn try_accept_one(listener_handle: i32) -> Option<i32> {
-    match try_accept_inner(listener_handle) {
-        AcceptOutcome::Pending(id) => Some(id),
-        AcceptOutcome::NoneYet | AcceptOutcome::Error => None,
     }
 }
 
@@ -607,11 +617,24 @@ fn poll_one_client(id: i32) -> PollOutcome {
 /// false when nothing is pending.
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_next_event(listener_handle: i32) -> bool {
-    if let Some(cid) = try_accept_one(listener_handle) {
-        WS_EVENT_KIND.with(|k| k.set(0));
-        WS_EVENT_CLIENT_ID.with(|c| c.set(cid));
-        WS_EVENT_PAYLOAD.with(|p| p.borrow_mut().clear());
-        return true;
+    match try_accept_inner(listener_handle) {
+        AcceptOutcome::Pending(cid) => {
+            WS_EVENT_KIND.with(|k| k.set(0));
+            WS_EVENT_CLIENT_ID.with(|c| c.set(cid));
+            WS_EVENT_PAYLOAD.with(|p| p.borrow_mut().clear());
+            return true;
+        }
+        AcceptOutcome::Http => {
+            // Kind 3 = HTTP request.  No client id (-1); the request path is
+            // delivered as the payload, and the stream is parked in
+            // CURRENT_CONN for the handler's `respond_*` call.
+            let path = LAST_PATH.with(|p| p.borrow().clone());
+            WS_EVENT_KIND.with(|k| k.set(3));
+            WS_EVENT_CLIENT_ID.with(|c| c.set(-1));
+            WS_EVENT_PAYLOAD.with(|p| *p.borrow_mut() = path);
+            return true;
+        }
+        AcceptOutcome::NoneYet | AcceptOutcome::Error => {}
     }
     let len = WS_CONNS.with(|c| c.borrow().len()) as i32;
     for i in 0..len {

@@ -264,9 +264,11 @@ fn ws_idle_sleep_ms_native(ms: integer);
 pub struct WsEvent {
   connected: boolean,
   message:   boolean,
-  cid:       integer,
-  msg_id:    integer,    // 0 for connected events
-  payload:   text        // "" for connected events
+  http:      boolean,    // true for a plain HTTP request (serve a page etc.)
+  cid:       integer,    // WS client id; -1 for http events
+  msg_id:    integer,    // 0 for connected / http events
+  payload:   text,       // "" for connected / http events
+  path:      text        // request path for http events; "" otherwise
 }
 
 // Block forever, draining events and calling the handler.
@@ -275,39 +277,61 @@ pub struct WsEvent {
 pub fn run(self: Server, on_event: fn(WsEvent)) {
   while true {
     drained = 0;
-    while ws_next_event_native(self.handle) {
-      kind = ws_event_kind_native();
-      cid  = ws_event_client_id_native();
-      if kind == 0 {
-        on_event(WsEvent {
-          connected: true,
-          message:   false,
-          cid:       cid,
-          msg_id:    0,
-          payload:   ""
-        });
-      } else if kind == 1 {
-        raw = ws_event_payload_native();
-        i   = raw.find(":");
-        if i != null {
-          msg_id  = raw[..i] as integer;
-          payload = raw[i + 1..];
-          on_event(WsEvent {
-            connected: false,
-            message:   true,
-            cid:       cid,
-            msg_id:    msg_id,
-            payload:   payload
-          });
-        } else {
-          log_warn("server: dropped malformed frame from {cid}: {raw}");
-        }
-      }
-      // kind == 2 (Disconnected) absorbed silently.
+    while true {
+      ev = self.poll_event();
+      if ev == null { break; }
+      on_event(ev);
       drained = drained + 1;
     }
     if drained == 0 { ws_idle_sleep_ms_native(2); }
   }
+}
+
+// Non-blocking single-event drain — returns the next WsEvent, or null
+// when nothing is pending.  Lets a server that also needs a periodic
+// tick (timers, decay, snapshots) run its OWN loop while still using the
+// efficient Rust-side event pump: drain `poll_event` in a batch, do the
+// periodic work, idle-sleep when a pass produced nothing.  `run` above is
+// the convenience wrapper for servers that only react to events.
+//
+// Disconnect (kind 2) and malformed message frames are skipped internally
+// (the caller never sees them), so a null return always means "idle".
+pub fn poll_event(self: Server) -> WsEvent {
+  while ws_next_event_native(self.handle) {
+    kind = ws_event_kind_native();
+    cid  = ws_event_client_id_native();
+    if kind == 0 {
+      return WsEvent { connected: true, message: false, http: false,
+                       cid: cid, msg_id: 0, payload: "", path: "" };
+    } else if kind == 3 {
+      // HTTP request — payload carries the path; reply via respond_*.
+      return WsEvent { connected: false, message: false, http: true,
+                       cid: cid, msg_id: 0, payload: "", path: ws_event_payload_native() };
+    } else if kind == 1 {
+      raw = ws_event_payload_native();
+      i   = raw.find(":");
+      if i != null {
+        return WsEvent { connected: false, message: true, http: false,
+                         cid: cid, msg_id: raw[..i] as integer,
+                         payload: raw[i + 1..], path: "" };
+      }
+      log_warn("server: dropped malformed frame from {cid}: {raw}");
+    }
+    // kind == 2 (Disconnected) absorbed silently; keep draining.
+  }
+  null
+}
+
+// Reply to the HTTP request currently parked by a `http` WsEvent and
+// close it.  Call exactly once from the handler for an `ev.http` event.
+pub fn respond_html(self: Server, body: text) {
+  tcp_respond_typed(200, body, "text/html; charset=utf-8");
+}
+pub fn respond_typed(self: Server, status: integer, body: text, content_type: text) {
+  tcp_respond_typed(status, body, content_type);
+}
+pub fn respond_404(self: Server) {
+  tcp_respond_typed(404, "Not Found", "text/plain; charset=utf-8");
 }
 
 // Send a frame to a specific client.  Returns true on success.
