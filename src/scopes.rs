@@ -458,7 +458,30 @@ impl Scopes {
             Value::Yield(inner) => Value::Yield(Box::new(self.scan(inner, function, data))),
             Value::Span(b) => {
                 let scanned = self.scan(&b.1, function, data);
-                Value::with_span(b.0.clone(), scanned)
+                // When scanning lifted an inline struct-returning-call argument
+                // (@P297), the result is `Insert([Set(__lift_N, …), final])` — a
+                // statement sequence, not a positioned expression.  Re-wrapping
+                // it in a Span hides the lift preamble from the consumers that
+                // hoist it to statement level (`scan_set`'s flatten and
+                // `scan_args`'s `is_p135_hoisted` bubbling, both `if let
+                // Value::Insert`).  The interpreter tolerates the hidden Insert;
+                // the native backend would emit `Set(__lift_N, …)` inside an
+                // enclosing expression and fail to compile.  Inner ops keep
+                // their own positions, so dropping the outer span is safe.
+                //
+                // SURGICAL: only unwrap when the Insert's leading op is a lift
+                // `Set(__lift_N, …)`.  Other span-wrapped Inserts (closure-record
+                // construction, etc.) MUST keep their span — unwrapping them
+                // broadly regressed the closure-in-struct-field cases (`invalid
+                // fn-ref` in native codegen, @P258/@P259 territory).
+                let is_lift_preamble = matches!(&scanned, Value::Insert(ops)
+                    if ops.first().is_some_and(|op| matches!(op,
+                        Value::Set(v, _) if function.name(*v).starts_with("__lift_"))));
+                if is_lift_preamble {
+                    scanned
+                } else {
+                    Value::with_span(b.0.clone(), scanned)
+                }
             }
             Value::ParFor(b) => {
                 // Plan-06 spine step 3 — recurse into each child Value.
@@ -1359,7 +1382,13 @@ impl Scopes {
     /// (i.e. the result borrows from the argument's store).  Freeing the lifted
     /// temp at scope exit would be use-after-free in that case.
     fn inline_struct_return(val: &Value, data: &Data, _outer_call: u32) -> Option<Type> {
-        if let Value::Call(fn_nr, _) = val {
+        // @P297 — a USER struct-returning call (`n_*` with a body) passed
+        // directly as a call argument is wrapped in `Value::Span` by
+        // `parse_call` (and re-wrapped by `scan`), so the argument reaching
+        // here is `Span(Call(...))`.  Unspan before matching this branch or the
+        // lift never fires and the call-result temporary leaks — the same
+        // pitfall `scan_set` was patched for under @P198 (`value.unspan()`).
+        if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
             if def.name.starts_with("n_")
                 && def.code != Value::Null
@@ -1367,6 +1396,16 @@ impl Scopes {
             {
                 return Some(Type::Reference(*d_nr, Vec::new()));
             }
+        }
+        // The native-constructor branches below are intentionally matched on the
+        // BARE call only (no unspan).  Broadening them to span-wrapped calls
+        // lifts a native constructor used as a method receiver (e.g.
+        // `file(...).sync()`), which exposes native-codegen gaps for the lifted
+        // method-receiver shape (wrong ABI arg / type mismatch).  They keep
+        // their original reach: the chained-builtin case (`v.keys().len()`)
+        // where the receiver is already a bare `Value::Call`.
+        if let Value::Call(fn_nr, _) = val {
+            let def = data.def(*fn_nr);
             // Native struct-enum constructors: no body (code == Null), return type
             // is a struct-enum with empty dep (allocates a new store, doesn't borrow).
             // Accessors carry dep=[0] after parser dep-inference and are skipped here.

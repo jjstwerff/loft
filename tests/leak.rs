@@ -43,6 +43,31 @@ fn run_leak_check_str(code: &str) {
     state.check_store_leaks();
 }
 
+/// Parse + execute `fn test()` and return the list of leaked stores.
+/// Unlike `run_leak_check_str` (which only *warns*), callers assert on
+/// the returned vec, so a leak is a hard test failure.  This is the same
+/// in-process interpreter check the p291/p295 guards use, factored out.
+fn leaks_for(code: &str) -> Vec<String> {
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse_str(code, "leak_test", false);
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("test", &p.data);
+    state.collect_store_leaks()
+}
+
 /// Inner function assigns constructor to a local variable, then returns it.
 /// The wrapper leaks the inner's return store on fn_return.
 ///
@@ -1272,5 +1297,72 @@ fn test() {
   assert(len(s) == 3, "s has 3 after call-RHS reassign");
 }
 "#,
+    );
+}
+
+/// @P297 — a struct-returning call whose result is passed DIRECTLY as a
+/// function argument (an anonymous temporary, never bound to a local)
+/// leaks one store per call.  Sibling of @P291 (vector-append) and the
+/// scalar-assignment path: the callee allocates its return value in a
+/// fresh store via `OpDatabase`, but the argument-passing path never
+/// frees that temporary after the outer call consumes it.  Under
+/// sustained use (e.g. per-frame `mat4_look_at(normalize3(sub3(...)))`
+/// in the projector demo) the u16 store-id space is exhausted and the
+/// allocator panics ("Allocating a used store", allocation.rs:104).
+///
+/// **Closed 2026-05-21** — `scopes::inline_struct_return` now unspans the
+/// argument so the existing `__lift_N` machinery frees the temporary on
+/// both backends.  This is the in-process interpreter regression guard.
+#[test]
+fn p297_nested_call_arg_temp_no_leak() {
+    let leaks = leaks_for(
+        r#"
+struct V3 { x: float, y: float, z: float }
+fn mk(a: float, b: float, c: float) -> V3 { V3 { x: a, y: b, z: c } }
+fn add(p: const V3, q: const V3) -> V3 { V3 { x: p.x + q.x, y: p.y + q.y, z: p.z + q.z } }
+fn sx(p: const V3) -> float { p.x }
+pub fn test() {
+  a = mk(1.0, 2.0, 3.0);
+  b = mk(0.5, 0.5, 0.5);
+  total = 0.0;
+  for i in 0..50 { total += sx(add(a, b)); }
+  assert(total == 75.0, "total={total}");
+}
+"#,
+    );
+    assert!(
+        leaks.is_empty(),
+        "P297 regression: {} store(s) leaked (nested-call arg temp): {}",
+        leaks.len(),
+        leaks.join(", ")
+    );
+}
+
+/// @P297 control — binding the intermediate to a local first frees it
+/// correctly (scope analysis owns the local).  Proves the leak is
+/// specific to the anonymous-temporary-as-argument shape, not struct
+/// returns in general.  This passed before the @P297 fix too.
+#[test]
+fn p297_arg_temp_bound_local_control_no_leak() {
+    let leaks = leaks_for(
+        r#"
+struct V3 { x: float, y: float, z: float }
+fn mk(a: float, b: float, c: float) -> V3 { V3 { x: a, y: b, z: c } }
+fn add(p: const V3, q: const V3) -> V3 { V3 { x: p.x + q.x, y: p.y + q.y, z: p.z + q.z } }
+fn sx(p: const V3) -> float { p.x }
+pub fn test() {
+  a = mk(1.0, 2.0, 3.0);
+  b = mk(0.5, 0.5, 0.5);
+  total = 0.0;
+  for i in 0..50 { d = add(a, b); total += sx(d); }
+  assert(total == 75.0, "total={total}");
+}
+"#,
+    );
+    assert!(
+        leaks.is_empty(),
+        "P297 control leaked unexpectedly: {} store(s): {}",
+        leaks.len(),
+        leaks.join(", ")
     );
 }

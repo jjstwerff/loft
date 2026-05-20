@@ -638,9 +638,17 @@ impl Output<'_> {
                     }
                 }
                 // Structural emission: emit each argument with per-arg substitution.
+                // A user loft function (`rust` template empty, not an `Op*`
+                // builtin) takes the P198 `cell: &UnsafeCell<Stores>` ABI as its
+                // implicit first arg — same as `calls.rs::output_call_user_fn`'s
+                // `name(cell, …)`.  Emitting `stores` (the `&mut Stores` deref)
+                // here is a type error (`expected &UnsafeCell<Stores>, found
+                // &mut Stores`); it only surfaced once @P297's argument-lift
+                // routed a user-fn call such as `assert(!file(p).sync())` through
+                // this structural pre-eval path.
                 let fn_name = def_fn.name.clone();
                 let attrs = def_fn.attributes.clone();
-                write!(w, "{fn_name}(stores")?;
+                write!(w, "{fn_name}(cell")?;
                 for (idx, val) in vals.iter().enumerate() {
                     write!(w, ", ")?;
                     if let Some(vr) = self.create_stack_var(val) {
