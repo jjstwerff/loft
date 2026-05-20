@@ -218,6 +218,29 @@ fn collect_fn_ref_literals(
         }
         Value::Call(d, args) => {
             let callee = data.def(*d);
+            // @P299 — a fn-ref stored into a struct FIELD lowers to
+            // `OpSetInt4(target, pos, Int(<lambda d_nr>))`: the lambda's d_nr
+            // rides as a plain Int (capturing closures wrap this in a
+            // `fn_ref_field_set` block, non-capturing emit it bare — see
+            // `parser/mod.rs::set_field_check`).  The FnRef-literal walk below
+            // can't see it, so a closure called ONLY through a struct field is
+            // pruned as unreachable and dropped from the native fn-ref dispatch
+            // candidate set (`emit.rs::output_call_ref`) → `invalid fn-ref`
+            // panic.  Recover it: if `OpSetInt4` writes a literal that is a
+            // valid Function definition, mark it reachable.  This
+            // over-approximates (a plain int field equal to a fn d_nr would
+            // mark that fn reachable too) but reachability over-approximation
+            // is correctness-safe — it only ever emits an unused candidate.
+            if callee.name == "OpSetInt4"
+                && let Some(arg2) = args.get(2)
+                && let Value::Int(dn) = arg2.unspan()
+                && *dn >= 0
+                && (*dn as u32) < data.definitions()
+                && matches!(data.def(*dn as u32).def_type, DefType::Function)
+                && !data.def(*dn as u32).name.starts_with("Op")
+            {
+                calls.insert(*dn as u32);
+            }
             for (idx, a) in args.iter().enumerate() {
                 if idx < callee.attributes.len()
                     && matches!(

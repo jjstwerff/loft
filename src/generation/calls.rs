@@ -142,12 +142,43 @@ impl Output<'_> {
                     // `Str`-returning call expression with no deref,
                     // tripping rustc E0308 ("expected `&str`, found `Str`").
                     let v_unspanned = v.unspan();
+                    // @P299 — a text-returning fn-ref call (`CallRef`) lowers to
+                    // a `match` block whose arms yield owned `String` (the
+                    // candidate results are unified via `.to_string()`).  A
+                    // callee param of `&str` needs the same `&*` deref as a
+                    // direct text-returning `Call`.  Without this, a text
+                    // closure called through a struct field DIRECTLY as an
+                    // argument (`print(g.fmt(7))`) trips rustc E0308
+                    // (`expected &str, found String`) — binding the result to a
+                    // local first sidesteps it, which is why it surfaced late.
+                    // The CallRef is usually wrapped in a work-buffer `Block`
+                    // (P227's `cref_work_buf` materialisation), so walk Block
+                    // tails to find the text-returning fn-ref call.
+                    let arg_is_text_callref = {
+                        let mut probe = v_unspanned;
+                        loop {
+                            match probe {
+                                Value::CallRef(vr, _) => {
+                                    break matches!(
+                                        self.data.def(self.def_nr).variables.tp(*vr),
+                                        Type::Function(_, ret, _) if matches!(**ret, Type::Text(_))
+                                    );
+                                }
+                                Value::Block(b) => match b.operators.last() {
+                                    Some(op) => probe = op.unspan(),
+                                    None => break false,
+                                },
+                                _ => break false,
+                            }
+                        }
+                    };
                     let needs_deref = idx < def_fn.attributes.len()
                         && matches!(def_fn.attributes[idx].typedef, Type::Text(_))
-                        && matches!(v_unspanned, Value::Call(d, _) if
-                            matches!(self.data.def(*d).returned, Type::Text(_))
-                            && self.data.def(*d).rust.is_empty()
-                            && !self.data.def(*d).name.starts_with("Op"));
+                        && (arg_is_text_callref
+                            || matches!(v_unspanned, Value::Call(d, _) if
+                                matches!(self.data.def(*d).returned, Type::Text(_))
+                                && self.data.def(*d).rust.is_empty()
+                                && !self.data.def(*d).name.starts_with("Op")));
                     // Post-2c: Op* runtime helpers (defined in
                     // `src/codegen_runtime.rs`) keep hand-written i32 params
                     // for tp-numbers / field offsets / flag enums.  When the
