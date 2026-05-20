@@ -508,6 +508,52 @@ What A′ does **not** do: the pump is still O(clients × 20 ms) per drain
 cheaper.  ~10 s for 30 phones is fine for the meetup; true O(ready)
 scaling (idle clients cost *zero*) is still **Tier B** below.
 
+#### WsGroup — multiplexed non-blocking client receiver (SHIPPED 2026-05-20)
+
+The load test's **client-side** drain was as slow as the old server-side
+connect bottleneck: `try_recv()` on each of N sockets blocks 7 ms per
+empty socket, so draining 30 clients costs 30 × 7 ms = 210 ms per pass.
+With 25 rounds of 30 paints, the original load test took ~295 s total.
+
+**Fix:** `WsGroup` in `lib/web` — a multiplexed receiver that scans N
+WsHandler connections with `set_nonblocking(true)` during the scan,
+returning the first socket with data ready.  Empty sockets return in
+microseconds instead of 7 ms.  Timeout is restored after each scan.
+
+API (`lib/web/src/web.loft`):
+```loft
+group = web::ws_group()
+group.add(h1)
+group.add(h2)
+while true {
+  ev = group.poll()        // one non-blocking scan of all handles
+  if ev.handle < 0 { break }
+  process(ev.message)
+}
+```
+
+Round-robin fairness: each `poll()` starts scanning from the handle after
+the one that last returned data.
+
+**Measured result (load_test.loft, 30 clients × 25 paints):**
+
+| Metric | Before (per-client try_recv) | After (WsGroup) |
+|---|---|---|
+| Send phase | ~295 s | **9–19 ms** (~15,000×) |
+| Total (incl. server drain) | ~295 s | ~224 s |
+| Fan-out | 100 % | 99 % |
+
+The send phase is now instant — the remaining 224 s is the server's
+single-threaded O(N²) broadcast delivering 22,500 frames.  At real
+human painting speed (~1 paint/s/person), the server handles 30 phones
+comfortably: each paint triggers 30 broadcasts in one pump cycle (~2 ms),
+using ~6 % of loop capacity.
+
+**Live validation (2026-05-20):** the server ran unattended for ~4 hours
+(18:04–22:00 Amsterdam) with zero crashes, zero restarts, same PID
+throughout.  Keepalive script + caffeinate prevented sleep; automatic
+shutdown at 22:00.
+
 #### Tier B — background I/O reactor in `lib/server` (effort M)
 
 The durable fix: separate socket I/O from the simulation loop using OS
