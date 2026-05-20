@@ -447,6 +447,12 @@ pub fn save_png(self: const Canvas, path: text) -> boolean {
   save_png_raw(path, self.width, self.height, self.data)
 }
 
+// Capture the current GL back-buffer to an RGB PNG.  Call after a frame's
+// draw calls and BEFORE gl_swap_buffers (reads GL_BACK).  Works on a
+// headless / Wayland desktop where the window itself can't be grabbed.
+pub fn gl_screenshot(width: integer, height: integer, path: text) -> boolean;
+#native "loft_gl_screenshot"
+
 // --- OpenGL (GL5) ---
 // Native OpenGL functions for window management and rendering.
 // Names match the symbols registered via loft_register_v1 in the cdylib.

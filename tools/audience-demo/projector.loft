@@ -238,10 +238,14 @@ fn push_ground_hex(verts: &vector<single>, cell_x: integer, cell_y: integer,
   }
 }
 
+// Ground hexes render at 20% alpha (GROUND_ALPHA) so they read as a faint
+// backdrop and the 3D crystal beams above them stay the dominant feature.
+GROUND_ALPHA = 0.2;
+
 fn build_ground_vbo(snap: CellSnap) -> (integer, integer) {
   verts: vector<single> = [];
   for ix in 0..len(snap.xs) {
-    push_ground_hex(verts, snap.xs[ix], snap.ys[ix], snap.colors[ix], 1.0f);
+    push_ground_hex(verts, snap.xs[ix], snap.ys[ix], snap.colors[ix], GROUND_ALPHA as single);
   }
   ground_count = len(verts) / 10;
   ground_vao = graphics::gl_upload_vertices(verts, 10);
@@ -256,7 +260,7 @@ fn build_fading_vbo(world: World, tick: integer) -> (integer, integer) {
   for f in world.fades {
     elapsed = tick - f.start;
     if elapsed < FADE_FRAMES {
-      a = 1.0 - elapsed as float / FADE_FRAMES as float;
+      a = GROUND_ALPHA * (1.0 - elapsed as float / FADE_FRAMES as float);
       push_ground_hex(verts, f.x, f.y, f.color, a as single);
     }
   }
@@ -285,44 +289,65 @@ fn prune_fades(world: World, tick: integer) {
 // colour mosaic, aging).  This file only renders the resulting mesh
 // as 3D ribbons; widths below are renderer-specific.
 
-MAIN_WIDTH = 0.07;  // perpendicular thickness of MAIN ribbons (HEX_SIZE units).
-SIDE_WIDTH = 0.045; // perpendicular thickness of SIDE ribbons — thinner so the
-                    // spine reads as the dominant feature.
+MAIN_WIDTH = 0.18;  // cross-section of MAIN crystal beams (HEX_SIZE units).
+SIDE_WIDTH = 0.08;  // cross-section of SIDE beams — clearly thinner than the
+                    // main so the branches read as lacy feathering rather
+                    // than filling the cell solid.
 
-// Emit a flat horizontal RIBBON (quad lying in the XZ plane) at the
-// given y-elevation, with `width` perpendicular thickness around the
-// (x0,z0)→(x1,z1) line.  Two triangles, 6 vertices in stride-6 form.
-// Emit a ribbon with per-endpoint Y so the ribbon can tilt up or down
-// along its length.  All four corners share Y per endpoint (the
-// perpendicular thickness lies horizontally in the XZ plane regardless
-// of tilt — the ribbon stays "facing up" even when tilted).
-fn emit_ribbon(verts: &vector<single>,
-               x0: float, z0: float, y0: float,
-               x1: float, z1: float, y1: float,
-               width: float,
-               cr: single, cg: single, cb: single, ca: single) {
+// Emit one quad (a→b→c→d) as two triangles in stride-10 form
+// (pos.xyz + zero normal pad + rgba).  Used to build the faces of a beam.
+fn push_quad(verts: &vector<single>,
+             ax: float, ay: float, az: float,
+             bx: float, by: float, bz: float,
+             cx: float, cy: float, cz: float,
+             dx: float, dy: float, dz: float,
+             cr: single, cg: single, cb: single, ca: single) {
+  axs = ax as single; ays = ay as single; azs = az as single;
+  bxs = bx as single; bys = by as single; bzs = bz as single;
+  cxs = cx as single; cys = cy as single; czs = cz as single;
+  dxs = dx as single; dys = dy as single; dzs = dz as single;
+  verts += [axs, ays, azs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  verts += [bxs, bys, bzs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  verts += [cxs, cys, czs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  verts += [axs, ays, azs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  verts += [cxs, cys, czs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  verts += [dxs, dys, dzs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+}
+
+// Emit a solid 3D BEAM (rectangular box prism) following the segment
+// (x0,z0,y0)→(x1,z1,y1) with a square `width`×`width` cross-section.
+// Four long faces (24 verts), each tinted by a fixed brightness — the
+// shader has no lighting pass, so the per-face shade is what makes the
+// beam read as a chunky 3D strut rather than a flat ribbon.
+fn emit_beam(verts: &vector<single>,
+             x0: float, z0: float, y0: float,
+             x1: float, z1: float, y1: float,
+             width: float,
+             cr: float, cg: float, cb: float, ca: single) {
   dx = x1 - x0;
   dz = z1 - z0;
   ln = sqrt(dx * dx + dz * dz);
   if ln < 0.0001 { return; }
-  // Perpendicular in XZ plane (90° rotation): (dx, dz) → (-dz, dx).
-  px = (0.0 - dz) / ln * width * 0.5;
-  pz = dx / ln * width * 0.5;
-  ax = (x0 + px) as single; az = (z0 + pz) as single;
-  bx = (x0 - px) as single; bz = (z0 - pz) as single;
-  cx = (x1 + px) as single; cz = (z1 + pz) as single;
-  dx2 = (x1 - px) as single; dz2 = (z1 - pz) as single;
-  y0s = y0 as single;
-  y1s = y1 as single;
-  // Stride 10: pos.xyz + zero normal pad + rgba.
-  // Triangle 1: A → B → C  (A,B at y0; C at y1)
-  verts += [ax,  y0s, az,  0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
-  verts += [bx,  y0s, bz,  0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
-  verts += [cx,  y1s, cz,  0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
-  // Triangle 2: B → D → C  (B at y0; D,C at y1)
-  verts += [bx,  y0s, bz,  0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
-  verts += [dx2, y1s, dz2, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
-  verts += [cx,  y1s, cz,  0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  hw = width * 0.5;          // half perp-width (horizontal, in XZ)
+  th = width * 0.5;          // half vertical thickness → square section
+  px = (0.0 - dz) / ln * hw;
+  pz = dx / ln * hw;
+  // +perp (a) / -perp (b) edges at each endpoint; top (+th) / bottom (-th).
+  a0x = x0 + px; a0z = z0 + pz;  b0x = x0 - px; b0z = z0 - pz;
+  a1x = x1 + px; a1z = z1 + pz;  b1x = x1 - px; b1z = z1 - pz;
+  y0t = y0 + th; y0b = y0 - th;  y1t = y1 + th; y1b = y1 - th;
+  // brightness per face → fake directional light
+  tr = cr as single; tg = cg as single; tb = cb as single;            // top  1.0
+  sr = (cr * 0.7) as single; sg = (cg * 0.7) as single; sb = (cb * 0.7) as single;  // side 0.7
+  dr = (cr * 0.45) as single; dg = (cg * 0.45) as single; db = (cb * 0.45) as single; // bottom 0.45
+  // top
+  push_quad(verts, a0x, y0t, a0z, b0x, y0t, b0z, b1x, y1t, b1z, a1x, y1t, a1z, tr, tg, tb, ca);
+  // bottom
+  push_quad(verts, a0x, y0b, a0z, a1x, y1b, a1z, b1x, y1b, b1z, b0x, y0b, b0z, dr, dg, db, ca);
+  // +perp side
+  push_quad(verts, a0x, y0t, a0z, a1x, y1t, a1z, a1x, y1b, a1z, a0x, y0b, a0z, sr, sg, sb, ca);
+  // -perp side
+  push_quad(verts, b0x, y0t, b0z, b0x, y0b, b0z, b1x, y1b, b1z, b1x, y1t, b1z, sr, sg, sb, ca);
 }
 
 // Bake the crystal mesh — generate the segment list via the
@@ -337,12 +362,12 @@ fn build_crystal_vbo(snap: CellSnap, state: CrystalState,
   side_w = SIDE_WIDTH * HEX_SIZE;
   for bcv_i in 0..len(cm.kinds) {
     seg_c = cm.colors[bcv_i];
-    cr = palette_r(seg_c) as single;
-    cg = palette_g(seg_c) as single;
-    cb = palette_b(seg_c) as single;
+    cr = palette_r(seg_c);
+    cg = palette_g(seg_c);
+    cb = palette_b(seg_c);
     w = side_w;
     if cm.kinds[bcv_i] == KIND_MAIN { w = main_w; }
-    emit_ribbon(verts,
+    emit_beam(verts,
       cm.x0s[bcv_i], cm.z0s[bcv_i], cm.y0s[bcv_i],
       cm.x1s[bcv_i], cm.z1s[bcv_i], cm.y1s[bcv_i],
       w, cr, cg, cb, 1.0f);
@@ -657,6 +682,12 @@ fn main() {
   println("projector: ws session opened (auto-reconnects on drop)");
 
   world = World{cells: [], version: 0, paint_tick_next: 0, fades: []};
+
+  // Optional one-shot framebuffer capture (LOFT_PROJ_SHOT=<path>): grab the
+  // GL back-buffer once the world has replayed + the camera has settled, so
+  // the live 3D output can be inspected on a headless / Wayland desktop.
+  shot_path = env_variable("LOFT_PROJ_SHOT");
+  shot_done = false;
   // Persistent crystal aging state — owned by main, updated whenever
   // world.version changes.  `lookup_main_birth(state, …)` is queried by
   // crystal_segments_aged to scale side-branch length by main age.
@@ -725,10 +756,11 @@ fn main() {
       if ground_vao != 0  { graphics::gl_delete_vao(ground_vao);  }
       if crystal_vao != 0 { graphics::gl_delete_vao(crystal_vao); }
       snap = snapshot_cells(world);
-      // Record birth ticks for any newly-arrived (centre, direction)
-      // pair so subsequent crystal_segments_aged calls treat them as
-      // newborns.  Pre-existing entries are unaffected.
-      update_state(crystal_state, snap, frames);
+      // Aging is intentionally NOT driven here: crystal_state stays empty,
+      // so the crystal lib renders every main at its DEFAULT_AGE (~85% grown,
+      // static).  Full-ish side branches show immediately, no grow-in
+      // animation.  Re-enable the animation by calling update_state + the
+      // age-cadence rebuild below.
       gres = build_ground_vbo(snap);
       ground_vao        = gres.0;
       ground_vert_count = gres.1;
@@ -738,19 +770,9 @@ fn main() {
       last_built_version = world.version;
     }
 
-    // Crystal aging is animated even between paint events — rebuild
-    // the crystal VBO on a cadence so newborn mains grow their side
-    // branches over GROWTH_TICKS.  Every 30 frames (~0.5 s at 60 fps)
-    // keeps the cost modest while staying visually smooth.
-    age_rebuild_due = false;
-    if frames - (frames / 30) * 30 == 0 && frames > 0 { age_rebuild_due = true; }
-    if age_rebuild_due && len(world.cells) > 0 {
-      if crystal_vao != 0 { graphics::gl_delete_vao(crystal_vao); }
-      snap_age = snapshot_cells(world);
-      cres_age = build_crystal_vbo(snap_age, crystal_state, frames);
-      crystal_vao        = cres_age.0;
-      crystal_vert_count = cres_age.1;
-    }
+    // (Crystal growth animation disabled — crystals render statically at
+    // DEFAULT_AGE, so there's no per-cadence rebuild.  The VBO is rebuilt
+    // only on world.version change above.)
 
     // 4. Clear + draw — two passes, single draw call each.
     graphics::gl_clear(bg);
@@ -786,6 +808,13 @@ fn main() {
     } else if fading_vao != 0 {
       graphics::gl_delete_vao(fading_vao);
       fading_vao = 0;
+    }
+    // One-shot capture (before swap → reads the freshly-drawn GL_BACK).
+    // Fire after ~3 s so the world has replayed and the camera has settled.
+    if shot_path != "" && !shot_done && frames > 180 {
+      graphics::gl_screenshot(WIN_W, WIN_H, shot_path);
+      shot_done = true;
+      println("projector: screenshot -> {shot_path}");
     }
     graphics::gl_swap_buffers();
     frames = frames + 1;

@@ -60,6 +60,12 @@ pub BRANCH_SPACING = 0.30;
 // caller chooses.
 pub GROWTH_TICKS = 3600;
 
+// Age factor used for a main with no birth record in the CrystalState
+// (i.e. when the caller isn't driving the growth animation).  Renders
+// crystals at a fixed "mostly grown" state so the side branches are
+// clearly visible without waiting out GROWTH_TICKS.
+pub DEFAULT_AGE = 0.85;
+
 // Per-cell Y height — monotonic with filled-neighbour count + tiny
 // deterministic jitter.  Per the plan-36 § Visual model spec.
 pub HEIGHT_BASE = 0.18;
@@ -545,7 +551,7 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
       // don't care about animation get static output by passing an
       // empty CrystalState.
       main_birth = lookup_main_birth(state, cell_x, cell_y, d);
-      age_f = 1.0;
+      age_f = DEFAULT_AGE;
       if main_birth >= 0 { age_f = age_factor(main_birth, tick); }
       // Side branches at CONSTANT spacing (BRANCH_SPACING * HEX_SIZE
       // apart) — gaps between adjacent forks stay the same across
@@ -583,9 +589,10 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
   mesh
 }
 
-// Convenience wrapper — generates the fully-grown segment mesh.
-// Equivalent to `crystal_segments_aged` with an empty state, which
-// the aged code treats as "no birth records ⇒ all mains fully grown".
+// Convenience wrapper — generates a static segment mesh at DEFAULT_AGE
+// (no growth animation).  Equivalent to `crystal_segments_aged` with an
+// empty state, which the aged code treats as "no birth records ⇒ render
+// at DEFAULT_AGE".
 pub fn crystal_segments(snap: CellSnap) -> CrystalMesh {
   empty_state = CrystalState{
     main_x: [], main_y: [], main_d: [], birth_tick: [],

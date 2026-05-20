@@ -963,6 +963,63 @@ pub extern "C" fn loft_save_png(
     }
 }
 
+/// Capture the current GL back-buffer to an RGB PNG.  Reads `GL_BACK`
+/// (call before `gl_swap_buffers`, after the frame's draws) and flips the
+/// rows, since GL's origin is bottom-left while PNG is top-left.  Lets us
+/// inspect the live 3D output even on a headless / Wayland desktop where
+/// the window itself can't be grabbed by external tools.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_screenshot(
+    width: u32,
+    height: u32,
+    path_ptr: *const u8,
+    path_len: usize,
+) -> bool {
+    gl_guard!(false);
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let path = unsafe { loft_ffi::text(path_ptr, path_len) };
+    let w = width as usize;
+    let h = height as usize;
+    let mut buf = vec![0u8; w * h * 4];
+    unsafe {
+        gl::PixelStorei(gl::PACK_ALIGNMENT, 1);
+        gl::ReadBuffer(gl::BACK);
+        gl::ReadPixels(
+            0,
+            0,
+            width as i32,
+            height as i32,
+            gl::RGBA,
+            gl::UNSIGNED_BYTE,
+            buf.as_mut_ptr() as *mut std::ffi::c_void,
+        );
+    }
+    let file = match std::fs::File::create(&path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_color(png::ColorType::Rgb);
+    let mut writer = match encoder.write_header() {
+        Ok(wr) => wr,
+        Err(_) => return false,
+    };
+    let mut rgb = Vec::with_capacity(w * h * 3);
+    for row in (0..h).rev() {
+        let base = row * w * 4;
+        for col in 0..w {
+            let i = base + col * 4;
+            rgb.push(buf[i]);
+            rgb.push(buf[i + 1]);
+            rgb.push(buf[i + 2]);
+        }
+    }
+    writer.write_image_data(&rgb).is_ok()
+}
+
 /// Load an image file (PNG, JPG) and upload it as a GL texture. Returns texture ID (0 on failure).
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_load_texture(
@@ -1156,6 +1213,8 @@ loft_ffi::loft_register! {
     loft_gl_upload_canvas => n_gl_upload_canvas,
     // PNG export
     loft_save_png => n_save_png,
+    // GL framebuffer capture (headless-friendly screenshot)
+    loft_gl_screenshot,
     // G5: Audio
     loft_audio_load,
     loft_audio_play,
