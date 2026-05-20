@@ -405,25 +405,45 @@ bottleneck is socket configuration, below the loft loop —**
 No loft-level change can reach either — which is exactly why A1/A2/A4
 didn't move the metric.
 
-**Re-scoped Tier A = a surgical *native* socket fix** (still much smaller
-than the Tier B reactor):
+**TCP-layer experiment (2026-05-20) — root cause pinned exactly, and a
+"surgical" native fix proved NOT safe.**  Per-connect timing
+(`load_test.loft` instrumented) showed `connect[k] ≈ k × 505 ms` — each
+connect costs ~500 ms *per already-connected client*, i.e. O(N²) at
+500 ms/client.  Tracing the native layer:
 
-- `set_nodelay(true)` on the server's accepted WS streams and the client
-  connect stream.
-- Replace the 20 ms blocking poll read with a non-blocking read (or a
-  ~1 ms timeout), so an idle client costs ~0 per sweep — collapsing the
-  O(N²) coefficient.  Must verify the WS frame reader tolerates
-  non-blocking / partial reads.
+- **`set_nodelay(true)`** on both the server's accepted streams and the
+  client connect stream made **zero difference** — Nagle is not the
+  cause.
+- **Exact cause:** WS streams accepted via the HTTP-upgrade path
+  (`n_tcp_accept_nonblocking` → `n_ws_upgrade`) keep the **500 ms read
+  timeout** set for reading the request head (`lib.rs:153`) — `n_ws_upgrade`
+  pushes the stream into `WS_CONNS` without resetting it (the *other*
+  accept path, `n_ws_accept_nonblocking`, does reset to 20 ms at
+  `lib.rs:488`).  So every idle-client poll (`n_ws_recv` → `ws_read_frame`
+  → `read_exact`) blocks the full 500 ms → poll sweep is
+  O(clients × 500 ms) → connect is O(N²).
 
-This is directly **experiment-able at the TCP layer** (edit the two
-native crates, rebuild the cdylibs, re-run `load_test.loft`).  Because it
-touches shared `lib/server` + `lib/web` (used by the TTT / multiplayer
-servers and their CI tests), it needs a cdylib rebuild **plus a
-multiplayer-suite regression run** before it lands.
+Two "surgical" fixes were tried and **both gave a ~23× win for the
+audience server (30-client connect 220 s → ~9.5 s, fan-out 100 %) but
+broke `multiplayer_v3`:**
 
-*Acceptance (for the native fix):* 30-client connect drops from ~210 s to
-single-digit seconds; fan-out stays 100 %; `multiplayer_v2/v3/v5` stay
-green.
+1. **Lower the timeout to 20 ms** — `ws_read_frame` uses `read_exact`, so
+   a timeout that fires *mid-frame* consumes and discards the partial
+   bytes → frame desync.  v3's larger/slower frames truncate.
+2. **Non-blocking `peek`-gate before the blocking read** — corrupts the
+   read for the case where the byte-by-byte handshake left the client's
+   first WS frame in the kernel buffer; v3 dies on its **first move**
+   (server never reads it → client `recv-timeout`).
+
+**Conclusion: there is no safe Tier A native fix.**  The blocking
+`read_exact` framing in `lib/server` cannot do cheap idle polling without
+losing partial frames — making idle polls cheap *requires* a
+per-connection **buffered, non-blocking, partial-frame-tolerant frame
+reader**.  That reframing is precisely the Tier B work below.  The
+connect bottleneck is therefore a **Tier B** item, not a quick win.
+(`set_nodelay` is harmless and arguably worth keeping for real WAN /
+browser clients, but it does not help here, so it was reverted with the
+rest of the experiment.)
 
 #### Tier B — background I/O reactor in `lib/server` (effort M)
 
@@ -439,6 +459,13 @@ needed:
   (macOS) / IOCP (Windows)** via the `mio` crate (one cross-platform
   abstraction).  Readiness-driven ⇒ O(ready), not O(N): `accept()` fires
   the instant a SYN lands; idle connections cost nothing.
+- **B1a — buffered, partial-frame-tolerant WS framing (the specific
+  blocker the Tier-A experiment hit).**  Today `ws_read_frame` does
+  blocking `read_exact` per frame; under non-blocking readiness it must
+  instead accumulate bytes into a per-connection buffer and only surface a
+  frame once fully arrived — never consuming-then-discarding on a short
+  read.  This is what makes "cheap idle poll" safe (no v3-style
+  first-frame loss), and it is unavoidable for the reactor.
 - **B2 — two mpsc channels** between reactor and loft loop: inbound
   frames → loft drains each tick; loft deltas → reactor fans out.  The
   loft-facing API (`next_nonblocking` / `broadcast` / `try_recv`) is

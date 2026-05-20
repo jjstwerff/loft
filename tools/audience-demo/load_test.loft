@@ -47,12 +47,17 @@ fn run_tier(port: integer, n: integer, paints: integer, y_base: integer) {
   clients: vector<web::WsHandler> = [];
   t_connect0 = ticks();
   connected = 0;
-  for _ in 0..n {
+  for ci in 0..n {
+    t_one = ticks();
     wh = web::ws_handler(url);
+    one_ms = (ticks() - t_one) / 1000;
     if wh == null { println("load: ws_handler returned null (malformed url?)"); continue; }
     clients += [wh];
     connected = connected + 1;
+    println("load:   connect[{ci}] = {one_ms} ms");
   }
+  conn_loop_ms = (ticks() - t_connect0) / 1000;
+  println("load: connect-loop total {conn_loop_ms} ms for {connected} clients");
   // Let the server register all upgrades + send its connect-time replay.
   web::sleep_ms(300);
 
