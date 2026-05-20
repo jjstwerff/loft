@@ -353,39 +353,77 @@ scalable fix and lives in `lib/server` (benefits every loft server
 consumer, not just this demo).  Do A first — the load harness
 (`load_test.loft`) proves the win immediately.
 
-#### Tier A — stay single-threaded, unblock the accept path (effort S–M)
+#### Tier A — prototyped + measured 2026-05-20: loft hygiene helps a real burst, but does NOT fix the connect metric
 
-The connect storm is slow because the one loop spends each iteration
-*replaying the whole world to one new client* and *polling every existing
-client* before it gets back to `accept()`.  Three changes, all in
+The original hypothesis was that the single loop is slow to `accept()`
+because it spends each iteration replaying the whole world to a new
+client + polling every existing client.  Three loft-level changes were
+prototyped in
 [`single_port_server.loft`](../../../../tools/audience-demo/single_port_server.loft)
-plus one thin native tweak — none need threads:
+and **they work as improvements** (server runs, correctness 100 %, no
+crash) — they are the right concurrency hygiene and *do* help a genuine
+concurrent burst:
 
-- **A1 — chunked, non-blocking replay-on-connect.**  Today
-  `replay_world_to(world, new_client)` ships *all* cells inside the
-  accept branch, so a 400-cell world = 400 blocking sends before the loop
-  continues — repeated per connect.  Instead: register the new client
-  with a *replay cursor* (`{client, next_cell_index}`) and advance each
-  in-progress replay by a bounded budget (e.g. 64 cells) per loop
-  iteration.  The loop returns to `accept()` immediately after the WS
-  handshake.  This is the single biggest win.
-- **A2 — drain the accept queue in a small batch per iteration.**  The
-  loop calls `next_nonblocking()` once per pass, so 30 pending sockets
-  need 30 passes (each also doing O(N) polling).  Call it up to K times
-  (e.g. 8) per iteration so a burst is absorbed in a few passes.
-- **A3 — deepen the OS listen backlog.**  Ensure the native listener
-  uses a generous `listen(fd, backlog)` (≥128) so a burst of SYNs queues
-  in the kernel rather than being refused while the loop catches up.
-  (TCP handshake completes in-kernel regardless of `accept()`; the WS
-  *Upgrade* is still app-gated, so A3 is the safety net and A1/A2 are the
-  real latency fix.)  Lives in `lib/server` native `n_tcp_listen` — a
-  one-line `backlog` argument, shared by all consumers.
-- **A4 (optional) — move `world_save` off the hot path opportunistically:**
-  cap it to fire only when no accepts are pending, so a snapshot never
-  delays a connect.  (Full background-thread snapshot is Tier B.)
+- **A1 — chunked, non-blocking replay-on-connect (shipped).**
+  `replay_world_to`'s synchronous full-world dump in the accept branch is
+  replaced by a per-client *replay cursor* (`replay_keys` + `replay_pos`)
+  that the loop streams `REPLAY_BUDGET` (64) cells per iteration via
+  `advance_replays`, reading each cell's current value at send time.  The
+  accept path no longer blocks on an O(cells) dump.
+- **A2 — batched accept (shipped).**  The loop now drains up to
+  `ACCEPT_BUDGET` (8) connections per iteration instead of one.
+- **A4 — snapshot deferral (shipped).**  `world_save` is skipped on any
+  iteration that accepted a connection, so a synchronous O(cells) write
+  never delays a connect.
+- **A3 — OS listen backlog: no change needed.**  The native listener is
+  Rust std `TcpListener::bind`, which already uses a 128-deep backlog.
 
-*Acceptance:* re-run `load_test.loft` — 30-client connect drops from
-~220 s to single-digit seconds; fan-out stays 100 %.
+**Measured result (load_test.loft, 3/12/30 × 10 paints):** connect time
+was **unchanged** — 1.9 s / 33.8 s / ~210 s, vs the ~1.9 / 33.8 / 220 s
+baseline.  So the loft changes are *necessary-but-insufficient*: they
+remove real per-iteration work and protect against a true simultaneous
+burst, but they do not move the **sequential-connect** latency the load
+test measures.  (Measurement caveat: with incremental replay, replay
+frames now overlap the paint phase, so the load test's `fanout%` can read
+>100 % — replay deltas counted alongside paint echoes.  Correctness is
+unaffected.)
+
+**Corrected root cause (confirmed by reading the native layer): the
+bottleneck is socket configuration, below the loft loop —**
+
+1. **No `TCP_NODELAY`** on the client connect stream
+   (`lib/web/native/src/ws_client.rs`) or the server's accepted streams
+   (`lib/server/native/src/lib.rs`) → Nagle + delayed-ACK latency on the
+   multi-round-trip WS handshake (the per-connect floor).
+2. **The per-client poll read blocks on a 20 ms timeout**
+   (`lib/server/native/src/lib.rs:482`, `set_read_timeout(20 ms)`).  Each
+   idle client costs ~20 ms per loop sweep, so a sweep is O(N×20 ms) and
+   each sequential connect waits behind an ever-slower sweep → the O(N²)
+   curve.  (`parse_request` stops at the header `\r\n\r\n`, so the 500 ms
+   accept timeout is *not* the floor.)
+
+No loft-level change can reach either — which is exactly why A1/A2/A4
+didn't move the metric.
+
+**Re-scoped Tier A = a surgical *native* socket fix** (still much smaller
+than the Tier B reactor):
+
+- `set_nodelay(true)` on the server's accepted WS streams and the client
+  connect stream.
+- Replace the 20 ms blocking poll read with a non-blocking read (or a
+  ~1 ms timeout), so an idle client costs ~0 per sweep — collapsing the
+  O(N²) coefficient.  Must verify the WS frame reader tolerates
+  non-blocking / partial reads.
+
+This is directly **experiment-able at the TCP layer** (edit the two
+native crates, rebuild the cdylibs, re-run `load_test.loft`).  Because it
+touches shared `lib/server` + `lib/web` (used by the TTT / multiplayer
+servers and their CI tests), it needs a cdylib rebuild **plus a
+multiplayer-suite regression run** before it lands.
+
+*Acceptance (for the native fix):* 30-client connect drops from ~210 s to
+single-digit seconds; fan-out stays 100 %; `multiplayer_v2/v3/v5` stay
+green.
 
 #### Tier B — background I/O reactor in `lib/server` (effort M)
 

@@ -62,6 +62,11 @@ struct Client {
   last_active_tick: integer not null,  // world.tick of this client's last
                                        // paint — 0 = never painted.  Drives
                                        // the active-player heartbeat (1.7)
+  // Incremental replay (Tier A / @PLAN36-1.8): on connect we snapshot the
+  // current cell keys here and stream them a budget at a time from the main
+  // loop, so the accept path never blocks on a full O(cells) world dump.
+  replay_keys: vector<text>,
+  replay_pos:  integer not null,       // next index into replay_keys to send
 }
 
 struct World {
@@ -194,6 +199,17 @@ DECAY_LEASE_DEFAULT  = 600;           // +1 min per filled neighbour
 DECAY_WINDOW_DEFAULT = 300;           // 30 s eligible → removed
 ACTIVE_HEARTBEAT_US  = 1000000;       // 1 s — active-player signal cadence (1.7)
 
+// ── Connect-storm tuning (Tier A / @PLAN36-1.8) ──────────────────────────────
+// A1: cells streamed to one mid-replay client per loop iteration.  Bounds the
+//     per-connect cost so a big world doesn't stall the accept path.
+// A2: connections accepted per loop iteration, so a burst of phones is
+//     absorbed in a few passes instead of one-per-iteration.
+// A3 (OS backlog) needs no change: the native listener is Rust std
+//     `TcpListener::bind`, which already uses a 128-deep accept backlog —
+//     ample for a meetup; raise via socket2 only past that.
+REPLAY_BUDGET = 64;
+ACCEPT_BUDGET = 8;
+
 fn env_int(name: text, dflt: integer) -> integer {
   raw = env_variable(name);
   if raw == "" { dflt } else { raw as integer }
@@ -301,13 +317,33 @@ fn broadcast(world: World, msg: text) {
   }
 }
 
-// Replay the current world to a single client.  One frame per non-empty
-// cell.  If any send fails, abort and mark the client inactive.
-fn replay_world_to(world: World, target: Client) {
-  for cell in world.cells {
-    if !target.ws.send(delta_frame(cell.x, cell.y, cell.color)) {
-      target.active = false;
-      return;
+// Queue a full-world replay for `target` (Tier A): append the current cell
+// keys to its replay list; the main loop streams them via advance_replays.
+// Used for the snapshot-request (msg 6) re-replay; the connect path seeds
+// replay_keys at construction instead.  Append (not reassign) so a repeat
+// request just extends the list — advance_replays reads each cell's CURRENT
+// value at send time, so re-replaying is always consistent.
+fn queue_replay(world: World, target: Client) {
+  for cell in world.cells { target.replay_keys += [cell.ck]; }
+}
+
+// Stream up to REPLAY_BUDGET cells to every client that still has replay
+// pending.  Each cell's colour is read at send time (skipping any since
+// emptied), so replay never overwrites a fresher live delta with a stale
+// snapshot value.  Bounds the per-iteration cost so a connect storm keeps
+// the accept path responsive.
+fn advance_replays(world: World) {
+  for c in world.clients {
+    if !c.active { continue; }
+    budget = REPLAY_BUDGET;
+    while c.replay_pos < len(c.replay_keys) && budget > 0 {
+      rk = c.replay_keys[c.replay_pos];
+      c.replay_pos = c.replay_pos + 1;
+      cell = world.cells[rk];
+      if cell != null {
+        if !c.ws.send(delta_frame(cell.x, cell.y, cell.color)) { c.active = false; break; }
+        budget = budget - 1;
+      }
     }
   }
 }
@@ -356,9 +392,10 @@ fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) 
     c = payload as integer;
     sender.color = c;
   } else if msg_id == 6 {
-    // snapshot request — re-replay world to this sender only
+    // snapshot request — queue an incremental re-replay to this sender
+    // (streamed by advance_replays, same as the connect path).
     println("single-port: [snapshot req] cells={len(world.cells)}");
-    replay_world_to(world, sender);
+    queue_replay(world, sender);
   }
 }
 
@@ -472,14 +509,25 @@ fn main() {
   while true {
     work = 0;
 
-    // 1. Accept any new connection (non-blocking).
-    req = srv.next_nonblocking();
-    if req != null {
+    // 1. Accept new connections (non-blocking).  A2: drain up to
+    //    ACCEPT_BUDGET per iteration so a burst of phones is absorbed in a
+    //    few passes rather than one-per-iteration.
+    accepts = 0;
+    while accepts < ACCEPT_BUDGET {
+      req = srv.next_nonblocking();
+      if req == null { break; }
+      accepts = accepts + 1;
+      work = work + 1;
       if req.path == "/ws" {
         ws = server::ws_upgrade();
         if ws == null {
           println("single-port: ws_upgrade() failed");
         } else {
+          // A1: seed the new client's replay cursor with a snapshot of the
+          // current cell keys; the loop streams them via advance_replays
+          // instead of dumping the whole world here in the accept path.
+          ks: vector<text> = [];
+          for cell in world.cells { ks += [cell.ck]; }
           world.clients += [Client{
             ws:     ws,
             active: true,
@@ -487,26 +535,26 @@ fn main() {
             lx:     0,
             ly:     0,
             last_active_tick: 0,
+            replay_keys: ks,
+            replay_pos:  0,
           }];
-          println("single-port: ws client connected — total active={len(world.clients)}");
-          // Replay current world to the new client.
-          new_client = world.clients[len(world.clients) - 1];
-          replay_world_to(world, new_client);
+          println("single-port: ws client connected — total active={len(world.clients)}, replay={len(ks)} cells queued");
         }
-        work = work + 1;
       } else if req.path == "/" || req.path == "/index.html" {
         println("single-port: GET {req.path} → 200 (index.html)");
         req.respond_html(read_index());
-        work = work + 1;
       } else {
         println("single-port: GET {req.path} → 404");
         req.respond_404();
-        work = work + 1;
       }
     }
 
     // 2. Poll each WS client for pending messages.
     work = work + poll_clients(world);
+
+    // 2b. A1: stream queued world-replay to any client mid-replay, a
+    //     bounded budget at a time (keeps the accept path responsive).
+    advance_replays(world);
 
     // 3. Tick advance — fixed-rate wall clock @ 10 Hz (sub-task 1.4).
     //    Every iteration we check `ticks() - world.last_tick_us` and
@@ -563,12 +611,11 @@ fn main() {
 
     // 4. Persistence — periodic snapshot.  Fires from the main loop
     //    only when (a) state changed since last save, AND (b) at least
-    //    SNAPSHOT_INTERVAL_US has elapsed.  The save runs synchronously
-    //    here for now — that's fine because (i) it only fires every 5 s
-    //    not per-event, and (ii) a few-hundred-cell snapshot writes in
-    //    under a millisecond.  Background-thread snapshot is the next
-    //    upgrade per the design doc.
-    if world.dirty && ticks() - world.last_save_us > SNAPSHOT_INTERVAL_US {
+    //    SNAPSHOT_INTERVAL_US has elapsed.  A4: skip it on any iteration
+    //    that accepted a connection, so a synchronous O(cells) write never
+    //    delays a connect during a burst (it just waits for a quiet pass).
+    //    Background-thread snapshot is the fuller fix (Tier B).
+    if accepts == 0 && world.dirty && ticks() - world.last_save_us > SNAPSHOT_INTERVAL_US {
       world_save(world);
     }
 
