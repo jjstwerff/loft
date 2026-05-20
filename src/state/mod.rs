@@ -102,6 +102,11 @@ pub struct State {
     pub(crate) bytecode: Arc<Vec<u8>>,
     pub(crate) stack_cur: DbRef,
     pub stack_pos: u32,
+    /// @P294: cached byte-capacity of the value-stack store (`stack_cur`).
+    /// The stack store is allocated once and never re-`claim`s, so its
+    /// buffer only grows through `ensure_stack`; this cache lets the hot
+    /// push/reserve paths skip the store lookup when no growth is needed.
+    pub(crate) stack_cap_bytes: u32,
     pub code_pos: u32,
     pub(crate) def_pos: u32,
     pub(crate) source: u16,
@@ -185,6 +190,7 @@ impl State {
     #[must_use]
     pub fn new(mut db: Stores) -> State {
         let stack_cur = db.database(1000);
+        let stack_cap_bytes = db.store(&stack_cur).byte_capacity() as u32;
         // Allocate the constant store (CONST_STORE = 1). Starts empty,
         // populated during byte_code(), locked before execution.
         let _const_store = db.database(100);
@@ -198,6 +204,7 @@ impl State {
             bytecode: Arc::new(Vec::new()),
             stack_cur,
             stack_pos: 4,
+            stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,
             source: u16::MAX,
@@ -497,6 +504,12 @@ impl State {
                     .collect();
             }
         }
+        // @P294: native lib fns push their results through the stack store
+        // via the `stack` DbRef, bypassing `put_stack`'s growth check.
+        // Reserve generous headroom so a result-pushing native fn cannot
+        // run past the buffer.  Native fns push bounded results (scalars /
+        // Str / DbRef / small structs), so 1 KiB is ample.
+        self.ensure_stack(1024);
         let mut stack = self.stack_cur;
         stack.pos = 8 + self.stack_pos;
         // PKG.5: set library index for auto-marshal dispatch.
@@ -914,6 +927,12 @@ impl State {
                     }
                 }
 
+                // @P294: the frame-snapshot copy + the Created-status zone
+                // zeroing below both write above the current stack top; grow
+                // the stack store to fit before any direct write.
+                self.ensure_stack(
+                    bytes.len() as u32 + Self::generator_zone2_size(d_nr, self.data_ptr) as u32,
+                );
                 let dest = self
                     .database
                     .store_mut(&self.stack_cur)
@@ -1203,7 +1222,32 @@ impl State {
     }
 
     /// Advance the stack pointer by `size` bytes, reserving space for pre-claimed variables.
+    /// @P294: ensure the value-stack store (`stack_cur`) buffer can hold a
+    /// write reaching `extra` bytes above the current `stack_pos`.  The
+    /// stack store is allocated once in `new()` / `new_worker()` and never
+    /// re-`claim`s, so its buffer only grows here; without this, deep call
+    /// nesting silently wrote past the initial 1000-word buffer (the bounds
+    /// check in `Store::addr_mut` is a `debug_assert!`, compiled out in the
+    /// release library), corrupting the heap.  Cheap in the common case:
+    /// one comparison against the cached `stack_cap_bytes`.
+    #[inline]
+    pub(crate) fn ensure_stack(&mut self, extra: u32) {
+        // Highest byte offset a write at the current top may touch:
+        // addr_mut computes `rec * 8 + (pos + stack_pos)`.
+        let top = self.stack_cur.rec * 8 + self.stack_cur.pos + self.stack_pos + extra;
+        if top < self.stack_cap_bytes {
+            return;
+        }
+        // Grow with a word of slack so the exact-fit boundary still passes
+        // `addr_mut`'s `offset + size <= size * 8` check.
+        let needed_words = top.div_ceil(8) + 1;
+        let store = self.database.store_mut(&self.stack_cur);
+        store.grow_words(needed_words);
+        self.stack_cap_bytes = store.byte_capacity() as u32;
+    }
+
     pub fn reserve_frame(&mut self, size: u16) {
+        self.ensure_stack(u32::from(size));
         self.stack_pos += u32::from(size);
     }
 
@@ -1516,6 +1560,7 @@ impl State {
                 }
             }
         }
+        self.ensure_stack(size_of::<T>() as u32);
         let m = self
             .database
             .store_mut(&self.stack_cur)
@@ -1997,9 +2042,12 @@ impl State {
         library: Arc<Vec<Call>>,
     ) -> State {
         let mut db = worker.stores;
+        let stack_cur = db.database(1000);
+        let stack_cap_bytes = db.store(&stack_cur).byte_capacity() as u32;
         State {
-            stack_cur: db.database(1000),
+            stack_cur,
             stack_pos: 4,
+            stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,
             source: u16::MAX,

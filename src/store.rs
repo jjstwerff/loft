@@ -151,6 +151,17 @@ impl Store {
         self.size
     }
 
+    /// @P294: grow this store's backing buffer to at least `words` words,
+    /// in place — no record relocation, so any `(store_nr, rec, pos)`
+    /// `DbRef` into this store stays valid (only the raw `ptr` moves, and
+    /// every access re-derives it).  No-op when already large enough.
+    /// Used by the interpreter to extend the value-stack store (#0) on
+    /// deep call nesting, where the stack writes bypass `claim` and so
+    /// never trigger the normal growth path.
+    pub fn grow_words(&mut self, words: u32) {
+        self.resize_store(words);
+    }
+
     /// Raw base pointer to the store's memory buffer.
     #[must_use]
     pub fn base_ptr(&self) -> *mut u8 {

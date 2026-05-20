@@ -45,6 +45,17 @@ in this release: `tools/audience-demo/single_port_server.loft`,
 `f#next = N` still overwrite at offset `N`, so the snapshot idiom
 (fixed-slot headers, overwrite-in-place) keeps working.
 
+### Interpreter no longer corrupts memory on deep recursion
+
+The interpreter's value stack now grows on demand.  Previously it was
+a fixed 8 KB buffer that never expanded, so a program that nested
+function calls deeply enough (roughly 40+ frames carrying a handful of
+locals) would silently write past the buffer and corrupt the heap —
+usually surfacing as a confusing "double free or corruption" abort
+*after* the program had finished printing its output.  Deeply
+recursive interpreted programs now run correctly (the `--native`
+backend was never affected, as it uses the real machine stack).
+
 ---
 
 ## 0.8.5 — Language Maturity
