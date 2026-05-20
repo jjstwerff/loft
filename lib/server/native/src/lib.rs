@@ -390,11 +390,7 @@ pub unsafe extern "C" fn n_ws_send(handle: i32, msg_ptr: *const u8, msg_len: usi
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_ws_send_binary(
-    handle: i32,
-    msg_ptr: *const u8,
-    msg_len: usize,
-) -> bool {
+pub unsafe extern "C" fn n_ws_send_binary(handle: i32, msg_ptr: *const u8, msg_len: usize) -> bool {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
     WS_CONNS.with(|conns| {
         let mut conns = conns.borrow_mut();
@@ -596,11 +592,8 @@ fn poll_one_client(id: i32) -> PollOutcome {
                         return PollOutcome::Disconnected;
                     }
                     if frame.opcode == websocket::OP_PING {
-                        let _ = websocket::ws_write_frame(
-                            stream,
-                            websocket::OP_PONG,
-                            &frame.payload,
-                        );
+                        let _ =
+                            websocket::ws_write_frame(stream, websocket::OP_PONG, &frame.payload);
                         continue;
                     }
                     let payload = String::from_utf8_lossy(&frame.payload).to_string();
@@ -638,9 +631,7 @@ pub extern "C" fn n_ws_next_event(listener_handle: i32) -> bool {
     }
     let len = WS_CONNS.with(|c| c.borrow().len()) as i32;
     for i in 0..len {
-        let active = WS_CONNS.with(|c| {
-            c.borrow().get(i as usize).is_some_and(|o| o.is_some())
-        });
+        let active = WS_CONNS.with(|c| c.borrow().get(i as usize).is_some_and(|o| o.is_some()));
         if !active {
             continue;
         }
@@ -710,11 +701,7 @@ pub extern "C" fn n_ws_idle_sleep_ms(ms: i32) {
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_ws_broadcast(
-    _handle: i32,
-    msg_ptr: *const u8,
-    msg_len: usize,
-) -> i32 {
+pub unsafe extern "C" fn n_ws_broadcast(_handle: i32, msg_ptr: *const u8, msg_len: usize) -> i32 {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
     WS_CONNS.with(|conns| {
         let mut conns = conns.borrow_mut();
