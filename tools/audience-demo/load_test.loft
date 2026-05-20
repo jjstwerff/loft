@@ -74,6 +74,11 @@ fn run_tier(port: integer, n: integer, paints: integer, y_base: integer) {
   //    (client, round) is a distinct new cell — the server broadcasts one
   //    delta per paint to every active client.  Draining each round keeps
   //    the server's blocking per-socket sends from stalling on a full buf.
+  // Build a WsGroup so we can drain all clients with one round-robin
+  // scan instead of polling each socket individually.
+  group = web::ws_group();
+  for h in clients { group.add(h); }
+
   t_paint0 = ticks();
   sent = 0;
   send_fail = 0;
@@ -87,50 +92,38 @@ fn run_tier(port: integer, n: integer, paints: integer, y_base: integer) {
       if h.send("1:{x},{y},{c}") { sent = sent + 1; } else { send_fail = send_fail + 1; }
       ci = ci + 1;
     }
-    for h in clients {
-      while true {
-        m = h.try_recv();
-        if m == null { break; }
-        if m.starts_with("4:") { received = received + 1; }
-      }
+    // Drain via group poll — one non-blocking scan finds ready sockets
+    // instead of blocking on each empty one in turn.
+    while true {
+      ev = group.poll();
+      if ev.handle < 0 { break; }
+      if ev.message.starts_with("4:") { received = received + 1; }
     }
   }
+  send_ms = (ticks() - t_paint0) / 1000;
 
-  // 4. Final drain — collect stragglers until ~0.5 s of consecutive quiet
-  //    (hard-capped at ~15 s so a misbehaving server can't hang the test).
+  // 4. Final drain — keep collecting until we have at least `expected`
+  //    delta frames, or 3 s of silence (whichever comes first).
+  expected = sent * connected;
   quiet = 0;
   guard = 0;
-  while quiet < 100 && guard < 3000 {
+  while received < expected && quiet < 150 && guard < 10000 {
     got = 0;
-    for h in clients {
-      while true {
-        m = h.try_recv();
-        if m == null { break; }
-        if m.starts_with("4:") { received = received + 1; got = got + 1; }
-      }
+    while true {
+      ev = group.poll();
+      if ev.handle < 0 { break; }
+      if ev.message.starts_with("4:") { received = received + 1; got = got + 1; }
     }
     guard = guard + 1;
-    if got == 0 { quiet = quiet + 1; web::sleep_ms(5); } else { quiet = 0; }
+    if got == 0 { quiet = quiet + 1; web::sleep_ms(20); } else { quiet = 0; }
   }
   paint_ms = (ticks() - t_paint0) / 1000;
 
-  // 5. Report.  Each successful new-cell paint echoes to all `connected`
-  //    clients (sender included), so a healthy fan-out is ~100%.  A low
-  //    percentage means the server dropped clients or fell behind.
-  //
-  //    The two numbers that matter for "does the server keep up":
-  //      - fanout%  — correctness of the broadcast (should stay 100%).
-  //      - connect_ms (printed above) — the real scaling wall: it grows
-  //        super-linearly because the single-threaded loop is busy
-  //        polling + replaying and slow to accept new sockets.
-  //    `paints/s` is END-TO-END wall time including the ~0.5 s drain
-  //    settle below, NOT raw server capacity — read it as a coarse
-  //    "did the round trip finish promptly", not a throughput benchmark.
-  expected = sent * connected;
+  // 5. Report.
   pct = if expected > 0 { received * 100 / expected } else { 0 };
-  rate = if paint_ms > 0 { sent * 1000 / paint_ms } else { 0 };
+  rate = if send_ms > 0 { sent * 1000 / send_ms } else { 0 };
   println("load: sent={sent} send_fail={send_fail} received={received} expected~{expected} fanout={pct}%");
-  println("load: paint+drain wall {paint_ms} ms (~{rate} paints/s end-to-end, incl. settle)");
+  println("load: send phase {send_ms} ms (~{rate} paints/s), total+drain {paint_ms} ms");
 
   // 6. Tear down.
   for h in clients { h.close(); }

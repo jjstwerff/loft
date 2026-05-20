@@ -269,3 +269,60 @@ pub fn pack_take() -> text;
 // not (Text, I32) -> I32.
 pub fn byte_at(idx: integer, t: text) -> integer;
 #native "n_byte_at"
+
+// --- Multiplexed client receiver (WsGroup) ---
+//
+// Watch multiple WsHandler connections and receive from whichever has
+// data ready — one scan across all handles instead of polling each
+// individually.  The key difference: handles with no data are skipped
+// after one short timeout, so N idle sockets cost one timeout total
+// instead of N timeouts.
+//
+//   group = web::ws_group()
+//   group.add(h1)
+//   group.add(h2)
+//   while true {
+//     ev = group.poll()
+//     if ev.handle < 0 { break }
+//     // ev.message has the data
+//   }
+
+pub struct WsGroupEvent {
+  handle: integer not null,
+  message: text
+}
+
+pub struct WsGroup {
+  _dummy: integer not null   // no state on loft side; Rust owns the list
+}
+
+fn ws_group_clear_native();
+#native "n_ws_group_clear"
+
+fn ws_group_add_native(handle: integer);
+#native "n_ws_group_add"
+
+fn ws_group_poll_native() -> integer;
+#native "n_ws_group_poll"
+
+// Create a new (empty) group.
+pub fn ws_group() -> WsGroup {
+  ws_group_clear_native();
+  WsGroup { _dummy: 0 }
+}
+
+// Add a handler to the group.
+pub fn add(self: WsGroup, h: WsHandler) {
+  ws_group_add_native(h.id);
+}
+
+// Poll all handles round-robin.  Returns a WsGroupEvent with
+// handle >= 0 and the message if one is ready; handle == -1
+// means nothing is available right now.
+pub fn poll(self: WsGroup) -> WsGroupEvent {
+  h = ws_group_poll_native();
+  if h < 0 {
+    return WsGroupEvent { handle: -1, message: "" };
+  }
+  WsGroupEvent { handle: h, message: ws_client_message_native() }
+}

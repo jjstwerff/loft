@@ -279,6 +279,50 @@ pub unsafe extern "C" fn n_byte_at(idx: i32, text_ptr: *const u8, text_len: usiz
     unsafe { i32::from(*text_ptr.add(idx as usize)) }
 }
 
+// ── WsGroup: multiplexed client-side receiver ───────────────────────────
+//
+// A thread-local list of WsHandler ids.  `poll` scans them round-robin
+// and returns the first one with a message ready.  One timeout across
+// all handles instead of one per handle — the key win for multi-client
+// drain performance.
+
+thread_local! {
+    static WS_GROUP: std::cell::RefCell<Vec<i32>> = const { std::cell::RefCell::new(Vec::new()) };
+    static WS_GROUP_OFFSET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Clear the group handle list.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_group_clear() {
+    WS_GROUP.with(|g| g.borrow_mut().clear());
+    WS_GROUP_OFFSET.with(|o| o.set(0));
+}
+
+/// Add a handle to the group.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_group_add(handle: i32) {
+    WS_GROUP.with(|g| g.borrow_mut().push(handle));
+}
+
+/// Poll the group round-robin.  Returns the handle that has a message
+/// (read it with n_ws_client_message), or -1 if none are ready.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ws_group_poll() -> i32 {
+    let (handles, offset) = WS_GROUP.with(|g| {
+        let g = g.borrow();
+        (g.clone(), WS_GROUP_OFFSET.with(|o| o.get()))
+    });
+    let result = ws_client::poll_group(&handles, offset);
+    if result >= 0 {
+        // Advance offset past the handle that fired so the next poll
+        // starts from the one after it — round-robin fairness.
+        if let Some(pos) = handles.iter().position(|&h| h == result) {
+            WS_GROUP_OFFSET.with(|o| o.set((pos + 1) % handles.len()));
+        }
+    }
+    result
+}
+
 loft_ffi::loft_register! {
     n_http_do,
     n_http_body,
@@ -296,4 +340,7 @@ loft_ffi::loft_register! {
     n_pack_u32_le,
     n_pack_take,
     n_byte_at,
+    n_ws_group_clear,
+    n_ws_group_add,
+    n_ws_group_poll,
 }
