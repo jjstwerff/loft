@@ -621,6 +621,48 @@ is still ~36 ms — a large dense crystal exceeds the 60 fps budget per
   8 `+= [x]` reallocations per segment (smaller win now that the segment
   count is bounded).
 
+### Scaling to huge crystals — can it, and where does it crash?
+
+The revised algorithm makes the **segment count ~linear** in cell count
+(no more fork explosion), so a single large crystal builds fine:
+block-500 = 12738 segments, block-1000 = 25896 segments, each builds
+once with no crash.  But scaling the *live* demo to hundreds of cells
+hits three walls — and one is a real crash, found 2026-05-21:
+
+1. **O(N²) rebuild TIME** (slowdown, not crash).  block: 100 = 36 ms,
+   200 = 203 ms, 300 = 385 ms, ~1 s at 500.  The per-frame rebuild drops
+   below 60 fps at ~55 dense cells and becomes a slideshow at a few
+   hundred.  Fixed by PF1 (don't rebuild every frame) + PF2 (O(N)
+   rebuild).
+2. **Memory blowup under sustained rebuilding → OOM crash.**  The
+   `mesh.field += [x]` appends do **not** pre-reserve capacity, so a
+   large mesh churns the allocator arena hard: one 100 000-element
+   vector built by `+=` peaks at ~171 MB RSS (vs ~1.6 MB of data, ~100×
+   overhead).  Rebuilding a block-500 mesh 30× peaks at **7.6 GB RSS**;
+   a growing ramp to block-800 hit **11 GB and was OOM-killed** (single
+   builds at those sizes are fine — it is the *sustained* per-frame
+   re-allocation that accumulates).  No store-level leak (the stores are
+   freed; it is glibc arena retention of the append churn).  This is the
+   concrete "crash by scale".  Fixed by PF1 (no per-frame rebuild) +
+   **PF4, now upgraded from nice-to-have to crash-prevention**
+   (preallocate / reuse the mesh vectors instead of growing them from
+   empty each build).  A loft-level fix — `vector` capacity reservation
+   on `+=` / a `reserve(n)` builtin — would also help every consumer.
+3. **`CrystalState` unbounded growth** (only if the aging animation is
+   turned on).  `update_state` appends a birth record for every
+   (centre, direction) main ever seen and never prunes, and
+   `lookup_main_birth` is a linear scan — so with aging enabled the
+   state vector grows ~6 × cells and aging cost becomes O(N²).  The demo
+   currently runs static (empty state, `DEFAULT_AGE`) so this is latent;
+   it must be bounded (cap records to live cells, index by cell key)
+   before the growth animation is enabled at scale.
+
+**Bottom line:** yes, the demo can scale to large crystals — the segment
+explosion is solved — but only with PF1 (cache + dirty rebuild) and PF4
+(preallocate) in place; without them, sustained per-frame rebuilding of
+a several-hundred-cell crystal OOM-crashes.  With PF1 + PF2 + PF4 it
+scales to thousands of cells.
+
 **Leak validation (2026-05-21):** the per-frame path is leak-free on
 both backends, **on both the original and the revised algorithm** —
 `LOFT_NATIVE_LEAK_CHECK` clean over the full ramp (all 4 patterns × 12
