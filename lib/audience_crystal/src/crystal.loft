@@ -39,6 +39,15 @@ pub SQRT3 = 1.7320508075688772;
 pub OVER_REACH      = 0.30;
 pub STUB_RAY_FRAC   = 0.55;
 
+// Maximum main-line length in hex STEPS (2 steps = a line spanning 3
+// hex cells = "3 hexes long").  A main connects a cell back to the
+// NEAREST older filled cell on each of its 6 axes, but only if that
+// cell is within this many steps (= gap of at most MAX_MAIN_HEXES-1
+// empty hexes).  Cells separated by a larger gap form independent
+// crystals until a later paint narrows the gap.  See
+// `crystal_segments_aged`.
+pub MAX_MAIN_HEXES = 2;
+
 // Base side-branch length in HEX_SIZE units; tapers linearly to 0
 // toward the ray's tip.
 pub BRANCH_LEN_BASE = 0.95;
@@ -511,13 +520,21 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
     x0s: [], y0s: [], z0s: [],
     x1s: [], y1s: [], z1s: [],
   };
-  parent = assign_cells(snap);
   branch_base = HEX_SIZE * BRANCH_LEN_BASE;
   branch_spacing_world = HEX_SIZE * BRANCH_SPACING;
   deg30 = PI / 6.0;
   centre_to_centre = SQRT3 * HEX_SIZE;
-  for cs_i in 0..len(snap.xs) {
-    if parent[cs_i] != cs_i { continue; }   // skip supporters
+  n = len(snap.xs);
+  // Crystals grow from OLD cells to NEW: the snapshot is placement-ordered
+  // (index 0 = oldest paint), so for each cell we draw a short main back to
+  // the NEAREST OLDER filled cell on each of its six hex axes — but only if
+  // that cell is within MAX_MAIN_HEXES steps (gap ≤ 1 empty hex).  Cells
+  // separated by a wider gap have no connecting main and read as separate
+  // crystals; a later paint that narrows the gap draws the bridging main and
+  // merges them.  A cell with no older on-axis neighbour at all (a fresh
+  // seed / the oldest in its crystal) gets a small six-way starburst stub so
+  // it is visible while it waits for company.
+  for cs_i in 0..n {
     cell_c = snap.colors[cs_i];
     cell_x = snap.xs[cs_i];
     cell_y = snap.ys[cs_i];
@@ -525,91 +542,93 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
     two_away = nbr_colors_at(snap, cell_x, cell_y, 2);
     wx = cell_wx(cell_x, cell_y);
     wz = cell_wz(cell_y);
-    src_y = cell_h(snap, cs_i);
+    cell_yh = cell_h(snap, cs_i);
+    // Nearest OLDER on-axis cell within MAX_MAIN_HEXES, per axis 0..5.
+    // (A single O(older) scan; the spatial-index optimisation @PLAN36-PF2
+    // replaces this with O(1) per-axis lookups.)
+    best_ix:   vector<integer> = [0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1];
+    best_dist: vector<integer> = [99, 99, 99, 99, 99, 99];
+    for cs_j in 0..cs_i {
+      jd = hex_axis_dir(cell_x, cell_y, snap.xs[cs_j], snap.ys[cs_j]);
+      if jd < 0 { continue; }
+      jdist = hex_distance(cell_x, cell_y, snap.xs[cs_j], snap.ys[cs_j]);
+      if jdist > MAX_MAIN_HEXES { continue; }
+      if jdist < best_dist[jd] { best_dist[jd] = jdist; best_ix[jd] = cs_j; }
+    }
+    has_main = false;
+    for hd in 0..6 { if best_ix[hd] >= 0 { has_main = true; } }
     for d in 0..6 {
-      // Edge-midpoint angles — 0° (east), 60° (SE), 120° (SW), 180° (west),
-      // 240° (NW), 300° (NE).
-      ray_ang = (60.0 * d as float) * PI / 180.0;
-      // Per-direction ray length:
-      //   - Furthest FILLED cell on this axis (centre OR supporter) → main
-      //     reaches across to it (past it by OVER_REACH), so adjacent
-      //     crystals connect instead of standing apart.
-      //   - No filled cell on this axis → main is a STUB into empty space.
-      furthest_ix = find_furthest_on_axis(snap, cs_i, d);
-      // When the target is another CENTRE, only the lower-index centre
-      // draws the connecting main — otherwise both ends draw the same line
-      // ("the next hex's line itself" the other way round).
-      if furthest_ix >= 0 && parent[furthest_ix] == furthest_ix
-         && furthest_ix < cs_i {
-        continue;
+      j = best_ix[d];
+      is_stub = j < 0;
+      // Connected cell: draw mains only on axes that reach an older cell.
+      // Seed cell (no older neighbour anywhere): draw a stub on every axis.
+      if has_main && is_stub { continue; }
+      // Geometry.  On-axis hex cells are exactly `dist * centre_to_centre`
+      // apart in world space and lie at the axis angle 60°·d, so no sqrt /
+      // atan2 is needed.  A growth main runs OLD→NEW: source = older cell j,
+      // tip = this (newer) cell i, pointing from j back toward i (180°
+      // opposite the i→j axis d).  A stub points outward from i along d.
+      ray_ang = 0.0; ray_len_d = 0.0;
+      src_x = 0.0; src_y = 0.0; src_z = 0.0;
+      tip_x = 0.0; tip_y = 0.0; tip_z = 0.0;
+      if is_stub {
+        ray_ang = (60.0 * d as float) * PI / 180.0;
+        ray_len_d = centre_to_centre * STUB_RAY_FRAC;
+        src_x = wx; src_y = cell_yh; src_z = wz;
+        tip_x = wx + ray_len_d * cos(ray_ang);
+        tip_y = cell_yh;
+        tip_z = wz + ray_len_d * sin(ray_ang);
+      } else {
+        ray_ang = (60.0 * d as float + 180.0) * PI / 180.0;
+        ray_len_d = best_dist[d] as float * centre_to_centre;
+        src_x = cell_wx(snap.xs[j], snap.ys[j]);
+        src_y = cell_h(snap, j);
+        src_z = cell_wz(snap.ys[j]);
+        tip_x = wx; tip_y = cell_yh; tip_z = wz;
       }
-      ray_len_d = centre_to_centre * STUB_RAY_FRAC;
-      tip_y = src_y;
-      if furthest_ix >= 0 {
-        d_hexes = hex_distance(cell_x, cell_y,
-                               snap.xs[furthest_ix], snap.ys[furthest_ix]) as float;
-        ray_len_d = centre_to_centre * (d_hexes + OVER_REACH);
-        tip_y = cell_h(snap, furthest_ix);
-      }
-      rdx = ray_len_d * cos(ray_ang);
-      rdz = ray_len_d * sin(ray_ang);
-      tip_x = wx + rdx;
-      tip_z = wz + rdz;
+      if ray_len_d <= 0.0 { continue; }
+      rdx = tip_x - src_x;
+      rdz = tip_z - src_z;
       dy = tip_y - src_y;
-      // Constant-spacing forks: n_forks = floor(ray_len / spacing) - 1
-      // so the last fork stays one full spacing-step short of the tip.
-      raw_forks = (ray_len_d / branch_spacing_world) as integer;
-      n_forks = raw_forks - 1;
-      if n_forks < 0 { n_forks = 0; }
-      branch_t_per_len = cos(deg30) / ray_len_d;
-      // Main ray colour — picked from {self, 1-away, 2-away}.
-      // seg_id encoding: d * 100 + (-1 → fork) + (-1 → side) →
-      // for mains we just use d * 100 + 99 to disambiguate from sides.
       main_seg_id = d * 100 + 99;
       main_col = pick_segment_color(cell_c, one_away, two_away,
                                     cell_x, cell_y, main_seg_id);
       mesh.kinds  += [KIND_MAIN];
-      mesh.x0s    += [wx];     mesh.y0s += [src_y]; mesh.z0s += [wz];
-      mesh.x1s    += [tip_x];  mesh.y1s += [tip_y]; mesh.z1s += [tip_z];
+      mesh.x0s    += [src_x]; mesh.y0s += [src_y]; mesh.z0s += [src_z];
+      mesh.x1s    += [tip_x]; mesh.y1s += [tip_y]; mesh.z1s += [tip_z];
       mesh.colors += [main_col];
-      // Per-main age factor (0 = newborn, 1 = fully grown).  Caller's
-      // CrystalState records the birth tick of each (centre, direction)
-      // pair; mains the state has never seen are treated as FULLY
-      // GROWN — aging is opt-in via update_state, so consumers that
-      // don't care about animation get static output by passing an
-      // empty CrystalState.
+      // Per-main age factor (0 = newborn, 1 = fully grown), keyed on the
+      // NEWER cell + axis.  Empty CrystalState ⇒ DEFAULT_AGE (static).
       main_birth = lookup_main_birth(state, cell_x, cell_y, d);
       age_f = DEFAULT_AGE;
       if main_birth >= 0 { age_f = age_factor(main_birth, tick); }
-      // Side branches at CONSTANT spacing (BRANCH_SPACING * HEX_SIZE
-      // apart) — gaps between adjacent forks stay the same across
-      // every main, short or long.  Branch length tapers linearly
-      // toward the tip AND scales by `age_f` so the whole sideline
-      // pattern grows in from 0 % at birth to 100 % at GROWTH_TICKS.
+      // Constant-spacing ±30° side branches; short mains simply get fewer.
+      raw_forks = (ray_len_d / branch_spacing_world) as integer;
+      n_forks = raw_forks - 1;
+      if n_forks < 0 { n_forks = 0; }
+      branch_t_per_len = cos(deg30) / ray_len_d;
       for f in 1..(n_forks + 1) {
         t = f as float * branch_spacing_world / ray_len_d;
-        fork_x = wx + rdx * t;
-        fork_z = wz + rdz * t;
+        fork_x = src_x + rdx * t;
+        fork_z = src_z + rdz * t;
         fork_y = src_y + t * dy;
         blen = branch_base * (1.0 - t) * age_f;
         branch_end_y = src_y + (t + blen * branch_t_per_len) * dy;
-        // +30°
         plus_ang = ray_ang + deg30;
         plus_seg_id = d * 100 + f * 10 + 0;
         plus_col = pick_segment_color(cell_c, one_away, two_away,
                                       cell_x, cell_y, plus_seg_id);
         mesh.kinds  += [KIND_SIDE];
-        mesh.x0s    += [fork_x];                                mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
-        mesh.x1s    += [fork_x + blen * cos(plus_ang)];         mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(plus_ang)];
+        mesh.x0s    += [fork_x];                        mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
+        mesh.x1s    += [fork_x + blen * cos(plus_ang)]; mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(plus_ang)];
         mesh.colors += [plus_col];
-        // -30°
         minus_ang = ray_ang - deg30;
         minus_seg_id = d * 100 + f * 10 + 1;
         minus_col = pick_segment_color(cell_c, one_away, two_away,
                                        cell_x, cell_y, minus_seg_id);
         mesh.kinds  += [KIND_SIDE];
-        mesh.x0s    += [fork_x];                                mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
-        mesh.x1s    += [fork_x + blen * cos(minus_ang)];        mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(minus_ang)];
+        mesh.x0s    += [fork_x];                         mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
+        mesh.x1s    += [fork_x + blen * cos(minus_ang)]; mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(minus_ang)];
         mesh.colors += [minus_col];
       }
     }

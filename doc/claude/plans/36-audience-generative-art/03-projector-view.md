@@ -546,6 +546,90 @@ slow-orbit.
   distinct from the autonomous decay rule and prevents the
   screen from constantly twinkling as old cells die.
 
+## Performance — per-frame mesh cost (stress test 2026-05-21)
+
+The projector rebuilds the **entire** crystal mesh every frame
+(`build_crystal_vbo` → `audience_crystal::crystal_segments_aged`) and
+re-uploads the whole VBO.  [`tools/audience-demo/crystal_stress.loft`](../../../../tools/audience-demo/crystal_stress.loft)
+ramps a filled-hex cluster 1 → 100 across four fill PATTERNS (block /
+line / sparse / ring) and times that per-frame CPU path on `--native`.
+Run:
+
+```bash
+cargo run --release --bin loft -- --native --lib lib tools/audience-demo/crystal_stress.loft
+# leak check:  LOFT_NATIVE_LEAK_CHECK=1 ... (validated clean over the full ramp)
+```
+
+### Original algorithm (furthest-on-axis mains) — fork explosion
+
+The first measurement (mains reaching to the furthest filled cell on
+each axis, `find_furthest_on_axis` + `OVER_REACH`) showed a catastrophic
+shape-dependent blow-up because `n_forks = ray_len / spacing` grows with
+main *length*, and spread clusters produce very long mains:
+
+| hexes | block | line | sparse | ring |
+|---|---|---|---|---|
+| 50 | 13.8 ms (1364) | 4.1 ms (592) | 19.9 ms (1876) | **85 ms** (4433) |
+| 80 | 23.8 ms (2062) | 8.0 ms (938) | **51 ms** (3312) | **318 ms** (10130) |
+| 100 | **38 ms** (2830) | 11.5 ms (1170) | **68 ms** (4132) | budget blown |
+
+ring/80 = 10130 segments (vs block/80 = 2062); at ring ≥ 90 the segment
+vectors thrashed the allocator hard enough to OOM a sustained run.
+
+### Revised algorithm (3-hex mains, old→new) — fork explosion gone
+
+The algorithm was changed (2026-05-21, `crystal_segments_aged`): mains
+are now capped at `MAX_MAIN_HEXES` steps and a cell draws one short main
+back to the **nearest older filled cell on each of its six axes**
+(crystals grow old→new; cells separated by a gap > 1 form independent
+crystals that merge when a later paint narrows the gap).  Capping main
+length **bounds the fork count by construction**, so the shape-dependent
+blow-up is gone — every pattern now scales the same bounded way:
+
+| hexes | block | line | sparse | ring |
+|---|---|---|---|---|
+| 50 | 11.1 ms (1119) | 4.3 ms (471) | 10.6 ms (1113) | 4.7 ms (522) |
+| 80 | 24.3 ms (1875) | 9.5 ms (741) | 21.6 ms (1761) | **9.9 ms** (810) |
+| 100 | 35.6 ms (2379) | 14.0 ms (921) | 30.5 ms (2190) | **14.2 ms** (990) |
+
+**ring/80: 318 ms → 9.9 ms (32×), 10130 → 810 segments.**  Segment count
+is now ~linear in cell count for every shape, and the OOM is gone.
+
+**What's left:** the per-build time is still **O(N²)** (`us/hex²` flat at
+~3000–4500 for the dense cases) — the cost is now the per-cell work
+inside `crystal_segments_aged`, each O(N): the nearest-older-on-axis scan
+(`for cs_j in 0..cs_i`), `nbr_colors_at` (×2 / cell), and `cell_h` →
+`snap_nbr_count` (a full neighbour scan, called per endpoint).  block/100
+is still ~36 ms — a large dense crystal exceeds the 60 fps budget per
+*rebuild*.
+
+**Fixes (priority order — the algorithm change reshaped these):**
+
+- **PF1 — cache the crystal mesh + VBO; rebuild only on snapshot
+  change** (biggest, cheapest win, **unchanged by the algorithm**).
+  Dirty flag set on each delta/snapshot receipt; `build_crystal_vbo`
+  reuses the cached VAO otherwise.  Because the demo is static-age this
+  drops mesh-gen from 60 Hz to audience-tap rate (≈0 most frames).
+- **PF2 — spatial index** (`hash<cell_key → index>` built once per
+  rebuild) shared by the nearest-older-on-axis lookup, `nbr_colors_at`
+  and `snap_nbr_count`/`cell_h`, turning the remaining O(N²) → O(N).
+  **Now the key win** for the rebuilds that do happen (the per-axis
+  lookup is naturally O(1) against a coord→index hash).
+- **PF3 — ~~bound per-main fork count~~ DONE by the algorithm change**:
+  `MAX_MAIN_HEXES` caps main length, so forks are bounded structurally.
+- **PF4 — preallocate the `CrystalMesh` parallel vectors** to cut the
+  8 `+= [x]` reallocations per segment (smaller win now that the segment
+  count is bounded).
+
+**Leak validation (2026-05-21):** the per-frame path is leak-free on
+both backends, **on both the original and the revised algorithm** —
+`LOFT_NATIVE_LEAK_CHECK` clean over the full ramp (all 4 patterns × 12
+sizes), plus 3000 block-50 builds, ring/90 × 100 builds, 2000 snapshot
+builds, and 150 interp builds, all with no leaked stores.  (Relies on the
+@P297/@P298 struct-returning-call free fixes landed the same session —
+without them the per-frame `cm = crystal_segments_aged(…)` temporary
+would have leaked.)
+
 ## Deliverable
 
 A native loft binary (`lib_examples/audience_demo/projector.loft`
