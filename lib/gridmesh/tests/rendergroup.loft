@@ -1,0 +1,80 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// gridmesh G2 — render-group (tile) layer.  A group = group_dim × group_dim
+// chunks, the unit of VBO upload/draw/cull.  `group_of` maps chunk coords to
+// groups; `all_groups` partitions all non-empty chunks into groups;
+// `collect_dirty_groups` returns one GroupInput per dirty group listing ALL
+// its member chunks (so the consumer reassembles the group from cached chunk
+// meshes).  group_dim is a tunable dial: G=1 = per-chunk, G large = one VBO.
+
+use gridmesh;
+
+// Four chunks in a row (cx 0..3 at shift 3 = 8 cells/axis), one INTERIOR cell
+// each (chunk-local 4,4 → no halo border spill into neighbour chunks).
+fn mk_field4() -> ChunkField {
+  xs: vector<integer> = [4, 12, 20, 28];
+  ys: vector<integer> = [4, 4, 4, 4];
+  field_new(0, xs, ys, 3, 2)
+}
+
+fn has_ck(v: vector<integer>, ck: integer) -> boolean {
+  found = false;
+  for i in 0..len(v) { if (v[i] ?? -1) == ck { found = true; } }
+  found
+}
+
+// group_of divides CHUNK coords by group_dim.
+fn test_group_of() {
+  assert(group_of(0, 0, 2).gx == 0, "cx0 -> gx0");
+  assert(group_of(1, 0, 2).gx == 0, "cx1 -> gx0");
+  assert(group_of(2, 0, 2).gx == 1, "cx2 -> gx1");
+  assert(group_of(3, 0, 2).gx == 1, "cx3 -> gx1");
+  assert(group_of(0, 0, 2).gk != group_of(2, 0, 2).gk, "distinct groups, distinct keys");
+}
+
+// group_dim 2: four chunks -> two groups of two; chunk_cks partition the chunks.
+fn test_all_groups_g2() {
+  f = mk_field4();
+  groups = all_groups(f, 2);
+  assert(len(groups) == 2, "two groups at G=2");
+  total = 0;
+  for g in groups {
+    assert(len(g.chunk_cks) == 2, "each G=2 group holds 2 chunks");
+    total = total + len(g.chunk_cks);
+  }
+  assert(total == 4, "chunk_cks cover all 4 chunks");
+}
+
+// G=1: one group per chunk (max granularity).
+fn test_all_groups_g1() {
+  f = mk_field4();
+  groups = all_groups(f, 1);
+  assert(len(groups) == 4, "four groups at G=1");
+  for g in groups { assert(len(g.chunk_cks) == 1, "one chunk per G=1 group"); }
+}
+
+// G large: all chunks in one group (~ one big VBO).
+fn test_all_groups_g_large() {
+  f = mk_field4();
+  groups = all_groups(f, 8);
+  assert(len(groups) == 1, "one group at G=8");
+  for g in groups { assert(len(g.chunk_cks) == 4, "the single group holds all 4 chunks"); }
+}
+
+// dirty a single chunk -> exactly its group is dirty, listing ALL member
+// chunks (incl. the non-dirty sibling) so the consumer can reassemble it.
+fn test_collect_dirty_groups() {
+  f = mk_field4();
+  ck0 = chunk_of(4, 4, 3).ck;    // chunk (0,0)
+  ck1 = chunk_of(12, 4, 3).ck;   // chunk (1,0)
+  field_mark_dirty(f, 12, 4);    // mark only chunk (1,0) (interior, no spill)
+  dg = collect_dirty_groups(f, 2);
+  assert(len(dg) == 1, "one dirty group (gx0)");
+  for g in dg {
+    cks = g.chunk_cks;
+    assert(len(cks) == 2, "dirty group lists both member chunks");
+    assert(has_ck(cks, ck0), "includes the non-dirty sibling chunk 0");
+    assert(has_ck(cks, ck1), "includes the dirty chunk 1");
+  }
+}

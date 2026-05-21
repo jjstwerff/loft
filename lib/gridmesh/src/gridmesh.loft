@@ -344,3 +344,77 @@ pub fn collect_dirty_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput
   }
   out
 }
+
+// ── G2: render-group (tile) layer ─────────────────────────────────────
+//
+// A render GROUP is a `group_dim × group_dim` block of chunks — the unit of
+// VBO upload + draw + frustum cull, decoupled from the chunk (the unit of
+// dirty-tracking + per-chunk mesh reuse).  `group_dim` is a TUNABLE knob:
+// G=1 → one VBO per chunk (max incremental granularity, max draw calls);
+// G large → ~one big VBO (min draws, wholesale re-upload).  The consumer
+// caches a mesh per chunk and assembles a group's VBO from its chunks'
+// cached meshes, re-uploading only groups that contain a dirty chunk.
+
+pub struct GroupKey { gk: integer not null, gx: integer not null, gy: integer not null }
+
+// The chunk ck's a group contains that actually hold cells (the assemble
+// work-list).  No mesh here — gridmesh partitions; the consumer owns meshes.
+pub struct GroupInput { key: GroupKey, chunk_cks: vector<integer> }
+
+// Internal accumulator for all_groups (keyed so chunks dedup into their group).
+struct GroupAcc { gk: integer not null, gx: integer, gy: integer, chunk_cks: vector<integer> }
+
+// The group owning CHUNK coord (cx, cy): chunk-space divided by group_dim.
+// Uses chunk_div so any group_dim works (not just powers of two) — a free dial.
+pub fn group_of(cx: integer, cy: integer, group_dim: integer) -> GroupKey {
+  gx = chunk_div(cx, group_dim);
+  gy = chunk_div(cy, group_dim);
+  GroupKey{gk: enc_coord(gx, gy), gx: gx, gy: gy}
+}
+
+// One GroupInput per group that holds cells (the full-build work-list).
+// O(chunks): each non-empty chunk dedups into its group's chunk list.
+pub fn all_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput> {
+  acc: hash<GroupAcc[gk]> = [];
+  for b in f.buckets {
+    g = group_of(b.cx, b.cy, group_dim);
+    if !acc[g.gk] { acc += [GroupAcc{gk: g.gk, gx: g.gx, gy: g.gy, chunk_cks: []}]; }
+    a = acc[g.gk];
+    a.chunk_cks += [b.ck];
+  }
+  out: vector<GroupInput> = [];
+  for ga in acc {
+    out += [GroupInput{key: GroupKey{gk: ga.gk, gx: ga.gx, gy: ga.gy}, chunk_cks: ga.chunk_cks}];
+  }
+  out
+}
+
+// One GroupInput per DIRTY group (the incremental re-upload work-list).
+// A group is dirty if any of its chunks is dirty; its chunk_cks lists ALL its
+// member chunks that hold cells (so the consumer reassembles the group's VBO
+// from those chunks' CACHED meshes — unchanged chunks copied, not rebuilt).
+//
+// FLAT COST: derives the dirty groups from f.dirty (O(dirty)), then for each
+// enumerates its group_dim × group_dim member chunk coords analytically and
+// probes f.buckets — O(dirty groups × group_dim²), independent of total N.
+// (Never scans all chunks, which would make per-edit cost grow with N.)
+pub fn collect_dirty_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput> {
+  dirty_groups: hash<GroupKey[gk]> = [];
+  for dk in f.dirty {
+    dirty_groups += [group_of(dk.cx, dk.cy, group_dim)];   // dedup by gk
+  }
+  out: vector<GroupInput> = [];
+  for g in dirty_groups {
+    cks: vector<integer> = [];
+    base_cx = g.gx * group_dim;
+    base_cy = g.gy * group_dim;
+    for ix in 0..group_dim {
+      for iy in 0..group_dim {
+        ck = enc_coord(base_cx + ix, base_cy + iy);
+        if f.buckets[ck] { cks += [ck]; }
+      }
+    }
+    out += [GroupInput{key: g, chunk_cks: cks}];
+  }
+  out
+}
