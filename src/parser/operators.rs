@@ -241,17 +241,28 @@ impl Parser {
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {
         let d_nr = self.data.type_def_nr(f_type);
         let tp = self.data.def(d_nr).known_type;
-        // when the source is a struct-returning function call,
-        // set the high bit (0x8000) on the type parameter to signal
-        // copy_record to free the callee's temporary store after the
-        // deep copy.  Without this, the __ref_N work-ref store allocated
-        // by add_defaults leaks on every call in a loop.
+        // When the source is a struct-returning function CALL, set the high
+        // bit (0x8000) on the type parameter to signal copy_record to free the
+        // callee's temporary store after the deep copy.  Without this, the
+        // __ref_N work-ref store the callee allocated to build its return value
+        // leaks on every call in a loop.
+        //
+        // @P313: do NOT set 0x8000 for an inline struct-literal `Block "Object"`
+        // source.  Unlike a call's unowned return temporary, the literal's
+        // work-ref ALREADY carries its own scope `OpFreeRef`, so the free-source
+        // bit double-frees it: the store is released while still owned, then
+        // recycled by the next iteration's OpDatabase, corrupting the
+        // nested-vector backings of every element written before it (silent
+        // data loss on `vec[i] = Struct{…}`; use-after-free SIGSEGV under
+        // churn).  Same shape as the @P311 OpSetKeyed fix, here on the
+        // whole-value element-set path.
         #[cfg(not(feature = "wasm"))]
-        let tp_val = if self.is_struct_returning_call(code) {
-            i32::from(tp) | 0x8000
-        } else {
-            i32::from(tp)
-        };
+        let tp_val =
+            if matches!(code.unspan(), Value::Call(_, _)) && self.is_struct_returning_call(code) {
+                i32::from(tp) | 0x8000
+            } else {
+                i32::from(tp)
+            };
         #[cfg(feature = "wasm")]
         let tp_val = i32::from(tp);
         self.cl(
