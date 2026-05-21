@@ -211,6 +211,41 @@ that's the soonest the core design bet can be tested.
 5. **Lib vs game boundary** — which of {override layer, multi-level pathing}
    become shared libraries vs stay in dryopea.
 
+## Future expansion — planet-scale enemy economy + multiplayer (addons, post-core)
+
+**Out of scope for the initial game; recorded so the core design doesn't
+foreclose it.** The base-hopping run is the foundation; the long-horizon
+vision opens it onto a whole planet:
+
+- **The enemy is a faction with an ECONOMY** — robots and/or insects with
+  **supply lines, mines, and factories** that *produce* the waves. Instead of
+  only defending against waves, players push outward to **disrupt that
+  economy** (cut a supply line, take a mine, knock out a factory) to weaken
+  what spawns against them.
+- **Get a foothold on the planet.** A persistent **planet map** frames the run
+  as territorial: bases are positions on it. The early bases sit in **rural
+  parts of the planet (easier)**; missions get **much harder** as players push
+  toward the enemy's industrial heartland (the supply/mine/factory network).
+  So the run's escalating difficulty has an in-world cause — you're nearing
+  their production.
+- **Multiplayer.** **Multiple players** operate on the same planet,
+  coordinating to disrupt the enemy economy and establish footholds.
+
+**Architectural notes (so the core build leaves room):**
+- The per-base game already produced by D0-D5 is the **unit** the planet
+  campaign composes — a planet mission is "a base + an economy objective on
+  the planet map." Keep base state self-contained (it already is: terrain
+  content + structure/run state) so the campaign layer can place + sequence
+  bases without reaching inside them.
+- **Multiplayer reuses loft's shipped stack** — `lib/server` (multi-client
+  WebSocket) + `lib/web` (WS client), the same infrastructure validated by
+  @PLAN36 (audience) and the tic-tac-toe plans. The expansion is strategic
+  game logic + a planet meta-map on top of proven netcode, not new transport.
+- The **enemy economy as a wave SOURCE** generalises the D3 spawn model: waves
+  stop being authored set-pieces and become *output of* the economy state
+  (disrupt the factory → fewer/weaker waves). The flow field, terrain, and
+  scramble all carry over unchanged.
+
 ## See also
 - [lib-plan 20 terrain height-map](../../../lib_plans/future/20-terrain-heightmap/README.md)
   — the terrain primitive dryopea consumes (+ its § "Built structures are a
