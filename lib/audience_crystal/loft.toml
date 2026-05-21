@@ -5,3 +5,6 @@ loft    = ">=0.8"
 
 [library]
 entry = "src/crystal.loft"
+
+[dependencies]
+gridmesh = { path = "../gridmesh" }

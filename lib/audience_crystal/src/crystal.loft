@@ -15,6 +15,13 @@
 // Both consumers call `crystal_segments(snap)` to get the same
 // segment list; each consumer then renders the segments in its own
 // way (3D ribbons vs 2D anti-aliased lines).
+//
+// The reusable spatial-index + coordinate primitives (CellRef, enc_coord,
+// build_index, idx_at, step_x/step_y, axial_dq/dr, nbr_count_idx) live in
+// the shared `gridmesh` library; this consumer supplies only the crystal
+// RULE (height, mains, branches) on top of them.
+
+use gridmesh::*;
 
 // ── Geometry constants ───────────────────────────────────────────────
 
@@ -346,66 +353,10 @@ pub fn cell_h(snap: CellSnap, ix: integer) -> float {
 // order is reconstructed in ascending snap-index order, matching the old
 // `for i in 0..len` scan, so pick_segment_color's modulo is unchanged).
 
-pub struct CellRef { ck: integer not null, ix: integer not null }
-
-// Encode an offset coord into one integer key.  The hex world is small;
-// ±2^20 per axis covers it with room to spare and stays within i64.
-pub fn enc_coord(x: integer, y: integer) -> integer {
-  (x + 1048576) * 2097152 + (y + 1048576)
-}
-
-// Axial unit-direction components for hex axis d (0..5), matching the
-// hex_axis_dir convention (d=0 east … via 60°·d).  Branch form avoids
-// per-call vector-literal allocation.
-fn axial_dq(d: integer) -> integer {
-  if d == 0 { return 1; } if d == 1 { return 0; } if d == 2 { return 0 - 1; }
-  if d == 3 { return 0 - 1; } if d == 4 { return 0; } 1
-}
-fn axial_dr(d: integer) -> integer {
-  if d == 0 { return 0; } if d == 1 { return 1; } if d == 2 { return 1; }
-  if d == 3 { return 0; } if d == 4 { return 0 - 1; } 0 - 1
-}
-
-// Offset coord `k` steps from (x, y) along hex axis `d`.
-fn step_x(x: integer, y: integer, d: integer, k: integer) -> integer {
-  par = y - (y / 2) * 2; if par < 0 { par = par + 2; }
-  q2 = (x - (y - par) / 2) + k * axial_dq(d);
-  r2 = y + k * axial_dr(d);
-  p2 = r2 - (r2 / 2) * 2; if p2 < 0 { p2 = p2 + 2; }
-  q2 + (r2 - p2) / 2
-}
-fn step_y(x: integer, y: integer, d: integer, k: integer) -> integer {
-  y + k * axial_dr(d)
-}
-
-// NOTE: there is deliberately no `build_cell_index() -> hash<…>` helper.
-// Assigning a hash-RETURNING call's result to a local trips a loft codegen
-// bug (@P300), so callers build the index INLINE:
-//
-//     index: hash<CellRef[ck]> = [];
-//     for i in 0..len(snap.xs) {
-//       index += [CellRef{ck: enc_coord(snap.xs[i], snap.ys[i]), ix: i}];
-//     }
-//
-// then pass it to idx_at / cell_h_at / nbr_colors_idx (hash-as-PARAM works).
-// `enc_coord` and the index-aware helpers are pub for that purpose.
-
-// snap index of the cell at (x, y), or -1 if none.  (`cidx` not `index`
-// — `index` is a reserved keyed-collection-type keyword in loft.)
-pub fn idx_at(cidx: hash<CellRef[ck]>, x: integer, y: integer) -> integer {
-  r = cidx[enc_coord(x, y)];
-  if r == null { return 0 - 1; }
-  r.ix
-}
-
-// Index-backed filled-neighbour count (distance 1) — the 6 axis-1 cells.
-fn nbr_count_idx(cidx: hash<CellRef[ck]>, cx: integer, cy: integer) -> integer {
-  c = 0;
-  for d in 0..6 {
-    if idx_at(cidx, step_x(cx, cy, d, 1), step_y(cx, cy, d, 1)) >= 0 { c = c + 1; }
-  }
-  c
-}
+// The spatial-index + coord primitives (CellRef, enc_coord, build_index,
+// idx_at, step_x/step_y, axial_dq/dr, nbr_count_idx) now live in the
+// shared `gridmesh` library (imported via `use gridmesh::*` above).  The
+// crystal-specific neighbour helpers below build on them.
 
 // Index-backed cell height — identical formula to cell_h, O(1) neighbour
 // count.  Public so consumers (the projector) can precompute centres in
@@ -654,13 +605,11 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
   deg30 = PI / 6.0;
   centre_to_centre = SQRT3 * HEX_SIZE;
   n = len(snap.xs);
-  // PF2: coord→index hash, built once.  Built INLINE (not via a helper)
-  // because assigning a hash-returning call's result to a local trips a
-  // loft codegen bug — see @P300 / build_cell_index's note.
-  cidx: hash<CellRef[ck]> = [];
-  for bi_i in 0..n {
-    cidx += [CellRef{ck: enc_coord(snap.xs[bi_i], snap.ys[bi_i]), ix: bi_i}];
-  }
+  // PF2: coord→index spatial hash, built once (O(N)) so neighbour /
+  // on-axis queries are O(1).  Now via gridmesh::build_index — @P300
+  // (hash-returning call assigned to a local) was fixed, retiring the old
+  // inline-build workaround.
+  cidx = build_index(snap.xs, snap.ys);
   // Crystals grow from OLD cells to NEW: the snapshot is placement-ordered
   // (index 0 = oldest paint), so for each cell we draw a short main back to
   // the NEAREST OLDER filled cell on each of its six hex axes — but only if

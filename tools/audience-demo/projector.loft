@@ -29,6 +29,7 @@
 use graphics;
 use math;
 use web;
+use gridmesh;              // build_index (shared spatial-index primitive)
 use audience_crystal::*;   // CellSnap, CrystalMesh, CrystalState, crystal_segments_aged,
                            // update_state, pick_centers, palette_r/g/b, cell_wx/wz,
                            // HEX_SIZE, SQRT3, KIND_MAIN/SIDE, GROWTH_TICKS, …
@@ -426,14 +427,11 @@ fn build_crystal_vbo(snap: CellSnap, births: vector<integer>,
   // Per-cell bloom anchor (cell centre) + birth, computed ONCE; each
   // segment then looks these up by its owning cell index, so the GPU
   // growth shader blooms every cell's crystal out from its centre.
-  // PF2: build the coord→index hash inline (a helper that RETURNS the
-  // hash trips @P300) and use cell_h_at so the height precompute is O(N),
-  // not O(N²).
+  // PF2: build the coord→index spatial hash via gridmesh (O(N)) and use
+  // cell_h_at so the height precompute is O(N), not O(N²).  (@P300 fixed,
+  // so the hash-returning helper is fine now.)
   ncells = len(snap.xs);
-  pidx: hash<audience_crystal::CellRef[ck]> = [];
-  for pi in 0..ncells {
-    pidx += [audience_crystal::CellRef{ck: audience_crystal::enc_coord(snap.xs[pi], snap.ys[pi]), ix: pi}];
-  }
+  pidx = gridmesh::build_index(snap.xs, snap.ys);
   cxs: vector<single> = []; cys: vector<single> = []; czs: vector<single> = [];
   cbirth: vector<single> = [];
   for ci in 0..ncells {

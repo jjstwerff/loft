@@ -1,0 +1,82 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// gridmesh — shared primitives for chunk-local, bounded-extent grid→mesh
+// generation.  The crystal routine (lib/audience_crystal) is the prototype
+// for a CLASS of world-building algorithms (wall placement, edge rounding,
+// surface generation) that run as LOCAL routines over a limited set of
+// world chunks and produce meshes that don't extend much outside their
+// chunk.  This library houses the reusable pipeline — spatial-index
+// neighbour queries, neighbour gather, bounded mesh accumulation keyed by
+// owning cell, dirty-region / per-chunk rebuild — so `audience_crystal`
+// and `lib/moros_render` (the real world) share it.  It is a TOOLKIT of
+// primitives, not a framework: each consumer supplies its own per-cell
+// rule and calls these.
+//
+// Phase A: the coordinate + spatial-index primitives, extracted verbatim
+// from audience_crystal so its output is unchanged.  (Chunking + halo +
+// bounded extent + dirty rebuild, and a coordinate-layout adapter for
+// moros's axial flat-top grid, land in later phases.)
+
+// A coord→cell-index reference, stored in the spatial-index hash keyed on
+// the encoded coordinate `ck`.
+pub struct CellRef { ck: integer not null, ix: integer not null }
+
+// Encode an offset coord into one integer key.  The hex world is small;
+// ±2^20 per axis covers it with room to spare and stays within i64.
+pub fn enc_coord(x: integer, y: integer) -> integer {
+  (x + 1048576) * 2097152 + (y + 1048576)
+}
+
+// Build the coord→cell-index spatial index for a placement-ordered cell
+// list given as parallel (xs, ys).  O(N), built once and reusable across
+// neighbour/on-axis queries.  (@P300 — assigning a hash-returning call's
+// result to a local — was fixed 2026-05-21, so this helper replaces the
+// old inline-build workaround the consumers used.)
+pub fn build_index(xs: vector<integer>, ys: vector<integer>) -> hash<CellRef[ck]> {
+  cidx: hash<CellRef[ck]> = [];
+  for bi_i in 0..len(xs) {
+    cidx += [CellRef{ck: enc_coord(xs[bi_i], ys[bi_i]), ix: bi_i}];
+  }
+  cidx
+}
+
+// Axial unit-direction components for hex axis d (0..5), via 60°·d.
+// Branch form avoids per-call vector-literal allocation.
+pub fn axial_dq(d: integer) -> integer {
+  if d == 0 { return 1; } if d == 1 { return 0; } if d == 2 { return 0 - 1; }
+  if d == 3 { return 0 - 1; } if d == 4 { return 0; } 1
+}
+pub fn axial_dr(d: integer) -> integer {
+  if d == 0 { return 0; } if d == 1 { return 1; } if d == 2 { return 1; }
+  if d == 3 { return 0; } if d == 4 { return 0 - 1; } 0 - 1
+}
+
+// Offset coord `k` steps from (x, y) along hex axis `d`.
+pub fn step_x(x: integer, y: integer, d: integer, k: integer) -> integer {
+  par = y - (y / 2) * 2; if par < 0 { par = par + 2; }
+  q2 = (x - (y - par) / 2) + k * axial_dq(d);
+  r2 = y + k * axial_dr(d);
+  p2 = r2 - (r2 / 2) * 2; if p2 < 0 { p2 = p2 + 2; }
+  q2 + (r2 - p2) / 2
+}
+pub fn step_y(x: integer, y: integer, d: integer, k: integer) -> integer {
+  y + k * axial_dr(d)
+}
+
+// snap index of the cell at (x, y), or -1 if none.  (`cidx` not `index`
+// — `index` is a reserved keyed-collection-type keyword in loft.)
+pub fn idx_at(cidx: hash<CellRef[ck]>, x: integer, y: integer) -> integer {
+  r = cidx[enc_coord(x, y)];
+  if r == null { return 0 - 1; }
+  r.ix
+}
+
+// Index-backed filled-neighbour count (distance 1) — the 6 axis-1 cells.
+pub fn nbr_count_idx(cidx: hash<CellRef[ck]>, cx: integer, cy: integer) -> integer {
+  c = 0;
+  for d in 0..6 {
+    if idx_at(cidx, step_x(cx, cy, d, 1), step_y(cx, cy, d, 1)) >= 0 { c = c + 1; }
+  }
+  c
+}
