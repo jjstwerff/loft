@@ -251,6 +251,18 @@ vision opens it onto a whole planet:
   their production.
 - **Multiplayer.** **Multiple players** operate on the same planet,
   coordinating to disrupt the enemy economy and establish footholds.
+- **Players pick start spots — including persistent ABANDONED bases.** A run
+  doesn't start from nowhere: the player chooses a spot on the planet, and
+  those spots can be **bases abandoned earlier — by themselves OR a fellow
+  player.** When you scramble out, the base **persists** on the planet with
+  whatever you *didn't* evacuate (left-over resources + structures), and it's
+  **saved and revisitable**. But it doesn't sit frozen: **mobs encroach over
+  time**, so revisiting an abandoned base means inheriting its leftover
+  resources (a head start) *and* an enemy presence already gathered nearby (a
+  danger). This makes the scramble's "take vs leave" decision ripple across
+  the *whole persistent world*: what you leave seeds a future restart — for
+  you or an ally — but rots into a mob-infested spot the longer it's left.
+  The same risk/reward tension as the scramble, now at planet scale.
 
 **Architectural notes (so the core build leaves room):**
 - The per-base game already produced by D0-D5 is the **unit** the planet
@@ -266,6 +278,15 @@ vision opens it onto a whole planet:
   stop being authored set-pieces and become *output of* the economy state
   (disrupt the factory → fewer/weaker waves). The flow field, terrain, and
   scramble all carry over unchanged.
+- **Persistent abandoned bases = server-side world state.** An abandoned base
+  saves a small snapshot: the un-evacuated structure/run state (already
+  self-contained) + a timestamp / encroachment level. The "mobs gathered
+  nearby" needn't be a live simulation — it can be *derived on revisit* from
+  elapsed time + the base's exposure (cheap, deterministic), so the planet
+  doesn't have to tick abandoned bases continuously. Shared revisiting (a
+  fellow player's abandoned base) is server-authoritative persistent state on
+  the same `lib/server` stack + loft's store — no new persistence layer, just
+  per-base snapshots keyed by planet position.
 
 ## See also
 - [lib-plan 20 terrain height-map](../../../lib_plans/future/20-terrain-heightmap/README.md)
