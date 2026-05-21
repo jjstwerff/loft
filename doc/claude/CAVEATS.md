@@ -107,13 +107,16 @@ literal suffix is deprecated-warned and silently dropped.
   `moros_glb_cli_end_to_end` now gates this behaviour.  There is
   NO linter yet for the pattern; users writing custom binary
   protocols need to audit their writers.
-- **Cross-crate cdylib FFI stays on i32 vector&lt;integer&gt;
-  elements.**  `vector_elem_rust_type(Type::Integer) => "i32"`
-  preserves a 4-byte element layout for pre-compiled cdylib
-  packages (`lib/graphics/native`, `lib/moros_render`).
-  In-process loft integers remain i64; narrow↔wide conversion
-  happens at the FFI boundary.  Do not "clean this up" without
-  a coordinated cdylib rebuild.
+- **~~Cross-crate cdylib FFI stays on i32 vector&lt;integer&gt;
+  elements.~~ RESOLVED 2026-05-21 (@P310).**  This bullet (and the
+  "obsolete claim" follow-up below) described the bug @P310 finally
+  fixed: `vector_elem_rust_type(Type::Integer) => "i32"` emitted a
+  4-byte FFI pointer for `vector<integer>`, but post-2c the storage
+  stride is 8 bytes, so the pointer disagreed with both the storage
+  AND the (now `*const i64`) graphics wrappers — E0308 under
+  `--native`/`--check`.  Fixed by keying `vector_elem_rust_type` off
+  `IntegerSpec::vector_narrow_width()` (storage stride): plain
+  `vector<integer>` → `i64`, narrow aliases keep their forced width.
 - **26 duplicate `Op*Long` opcodes still in the bytecode
   surface.**  Phase 5 (opcode reclamation) deletes them; until
   then dispatch table size stays 268 instead of 242.  Affects
@@ -144,18 +147,17 @@ literal suffix is deprecated-warned and silently dropped.
   Rebuild commands are in `DEVELOPMENT.md § Common pitfalls`.
   This class of tripwire is a general post-migration risk, not a
   language bug.
-- **Cdylib FFI wrapper claim in this file was obsolete.**  The
-  previous bullet above ("`vector_elem_rust_type(Type::Integer) =>
-  "i32"` preserves a 4-byte element layout") describes what
-  codegen *emits* but does NOT match what `Type::size()` now
-  returns for `Type::Integer` (8 bytes, post-2c) — which is what
-  `vector_append` actually strides by.  The test fixture
-  (`tests/lib/native_pkg/native/src/lib.rs`) was updated to
-  `*const i64` in commit `864dafe` and passes; real production
-  cdylibs (`lib/graphics/native`, `lib/moros_render`) still
-  declare `*const i32` and need a coordinated rebuild + audit
-  before 0.9.0 to avoid silent half-stride reads.  Tracking
-  follow-up: verify every `vector_data_ptr` call site in `lib/*/native/`.
+- **~~Cdylib FFI wrapper claim in this file was obsolete.~~ RESOLVED
+  2026-05-21 (@P310).**  The half-stride discrepancy this bullet
+  flagged is fixed: `vector_elem_rust_type` now emits `*const i64`
+  for `vector<integer>` (matching `Type::size()` = 8 and the stride
+  `vector_append` uses).  The graphics wrappers already declared
+  `*const i64`; `lib/moros_render` takes no `vector<integer>` FFI
+  arg (only graphics does), so no production cdylib was on `*const
+  i32` for such an arg — verified by grep (no `*const i32` vector
+  externs).  The test fixture (`tests/lib/native_pkg/native`) and
+  graphics now agree with codegen.  Guards: `generation::p310_vector_elem_tests`
+  + `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean`.
 
 Regression guard for the overall migration:
 `tests/scripts/20-binary.loft`, `21-binary-ops.loft`,

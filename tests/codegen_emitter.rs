@@ -550,6 +550,38 @@ fn p244_text_native_wrapper_compiles_under_native() {
     );
 }
 
+/// @P310 regression: native codegen must emit `*const i64` (not `*const i32`)
+/// for a `vector<integer>` argument bound to a `vec<i64>` FFI wrapper.  The
+/// graphics `Canvas.data` (`vector<integer>`, 8-byte stride post-2c) is
+/// passed to `loft_save_png(data: vec<i64>)`; before the fix
+/// `vector_elem_rust_type` keyed off `is_wide()` (a value-range predicate)
+/// and emitted `*const i32`, so every graphics program failed `--check` /
+/// `--native` with E0308.  The fix keys off the storage stride
+/// (`vector_narrow_width()`); the unit test
+/// `generation::p310_vector_elem_tests` pins it at the function level, this
+/// pins it end-to-end (a real graphics program must `--check` clean).
+#[test]
+fn p310_graphics_vector_ffi_checks_clean() {
+    // Direct binary invocation — see p203_reproducer_passes_under_native
+    // for the nested-cargo race rationale.
+    let status = std::process::Command::new(loft_binary())
+        .args([
+            "--check",
+            "--lib",
+            "lib",
+            "tests/fixtures/p310_save_png.loft",
+        ])
+        .current_dir(project_root())
+        .status()
+        .expect("run --check on the @P310 graphics save_png fixture");
+    assert!(
+        status.success(),
+        "P310: graphics save_png fixture failed `--check` — the \
+         vector_elem_rust_type storage-stride fix (src/generation/mod.rs) \
+         regressed (vector<integer> lowered to *const i32 vs the vec<i64> wrapper)."
+    );
+}
+
 /// Phase 07 regression test: the P205 reproducer must compile +
 /// run cleanly under native.  Pins the dangling-Str fix —
 /// without phase 07's emit-time scratch routing, the generic-text-

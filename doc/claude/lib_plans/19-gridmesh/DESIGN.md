@@ -224,15 +224,18 @@ the global `build_hex_meshes`.  Axial `HexLayout` is implemented here.
    *dirty-tracking unit* (chunk) from the *upload/draw unit* (group).
    `collect_dirty_groups` is O(dirty groups × group_dim²) — flat in N (never
    scans all chunks).  Guard: `lib/gridmesh/tests/rendergroup.loft`.
-6. **crystal C3 — incremental, two-level reuse** ⚠️ **BLOCKED on @P311.**
-   `CrystalIncr` holds the field + per-chunk cached `SegMesh` (rebuild only
-   dirty chunks); per-group meshes assembled on demand from the cached chunk
-   meshes.  Cost = O(dirty chunks · density), flat in N under bounded density.
-   The code is written + annotated in `crystal.loft`, but caching nested
-   struct-of-vectors in `hash<ChunkMeshEntry[ck]>` trips @P311 (OOB crash once
-   the hash holds several entries — unresolved nested vector content type).
-   Validate (incremental == full, `tests/scripts/131`, removed for now) +
-   resume once @P311 lands.  Full-build perf already characterised by
+6. **crystal C3 — incremental, two-level reuse** ⚠️ **BLOCKED on @P311 + @P312;
+   code REMOVED.**  `CrystalIncr` holds the field + per-chunk cached `SegMesh`
+   (rebuild only dirty chunks); per-group meshes assembled on demand from the
+   cached chunk meshes.  Cost = O(dirty chunks · density), flat in N under
+   bounded density.  Two bugs block it: caching nested struct-of-vectors in
+   `hash<ChunkMeshEntry[ck]>` trips @P311 (runtime OOB crash), and the
+   `c: &CrystalIncr` nested-field mutation pattern trips @P312 (native E0503
+   borrow conflict — and since codegen compiles a package's pub fns even when
+   unreached, the dead code broke `--native` for every audience_crystal
+   consumer).  The code was therefore removed (preserved in git commit
+   439e2f74); re-add + revalidate (incremental == full, `tests/scripts/131`)
+   once @P311 + @P312 are fixed.  Full-build perf already characterised by
    `crystal_stress`: **O(N) flat (8 µs/seg) + SegMesh ~2.1× smaller**.
 7. **crystal C4 — projector per-group VBOs** (G tunable; crystal uses
    G=large → ~one VBO, low risk); per-group frustum cull is the moros payoff.

@@ -2291,18 +2291,27 @@ extern crate loft;"
         match tp {
             Type::Single => "f32",
             Type::Float => "f64",
-            // Post-2c round 10c: wide Type::Integer (former Type::Long) → i64.
-            Type::Integer(s) if s.is_wide() => "i64",
             Type::Boolean => "u8",
             Type::Character => "u32",
-            // Vector<integer> keeps 4-byte packed element storage — this is
-            // the raw-pointer calling convention shared with pre-compiled
-            // cdylib native packages (`lib/graphics/native`, `lib/moros_render`).
-            // Loft-side integer values are i64 on the stack post-2c; the
-            // narrow→wide conversion happens at read / write sites via
-            // `ops::read_int_at` / `set_i32_raw`, so the in-memory element
-            // layout can stay i32.
-            Type::Integer(_) => "i32",
+            // @P310: the FFI data-pointer element width must match the
+            // vector's STORAGE STRIDE, not its value range.  A plain
+            // `vector<integer>` carries no `forced_size`, so it is stored at
+            // the wide 8-byte stride (`byte_width() == 8`, `Type::size == 8`,
+            // `vector_append` strides 8) — even though its bounds are the
+            // signed-32 template (`is_wide() == false`).  Keying off
+            // `vector_narrow_width()` (the same predicate the vector storage +
+            // `OpGetVector`/`OpSetVector` use, `data.rs::vector_narrow_width`)
+            // gives the pointer the storage-matching width: plain integer →
+            // `i64` (matches the cdylib `vec<i64>` wrappers + `Canvas` pixel
+            // semantics), narrow aliases keep their forced width.  (i8/i16
+            // narrow vectors map to the unsigned same-width name — signedness
+            // is moot, no `#native` FFI takes a narrow-int vector today.)
+            Type::Integer(s) => match s.vector_narrow_width() {
+                Some(1) => "u8",
+                Some(2) => "i16",
+                Some(4) => "i32",
+                _ => "i64",
+            },
             // Fallback for struct/enum elements: opaque bytes.
             _ => "u8",
         }
@@ -2368,4 +2377,52 @@ fn output_enum_values(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod p310_vector_elem_tests {
+    use super::*;
+    use crate::data::IntegerSpec;
+
+    /// @P310 regression: the FFI element pointer width must track the vector's
+    /// storage stride.  `vector_elem_rust_type` takes the ELEMENT type.  Plain
+    /// `vector<integer>` (signed32 template, NOT `is_wide()`) is 8-byte-stride
+    /// storage → must emit `i64`, not `i32`.
+    #[test]
+    fn vector_elem_rust_type_matches_storage_stride() {
+        // Both plain-integer templates store at 8-byte stride → i64.
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::wide())),
+            "i64"
+        );
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::signed32())),
+            "i64",
+            "plain vector<integer> must emit *const i64 (storage is 8-byte stride) — @P310"
+        );
+        // Narrow aliases keep their forced storage width.
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::i32())),
+            "i32"
+        );
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::u16())),
+            "i16"
+        );
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::i16())),
+            "i16"
+        );
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::u8())),
+            "u8"
+        );
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::i8())),
+            "u8"
+        );
+        // Non-integer element types unchanged.
+        assert_eq!(Output::vector_elem_rust_type(&Type::Single), "f32");
+        assert_eq!(Output::vector_elem_rust_type(&Type::Float), "f64");
+    }
 }
