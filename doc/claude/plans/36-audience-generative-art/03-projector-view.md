@@ -647,8 +647,15 @@ P5/P6 removed the catastrophic fragmentation; a block-500 mesh is now
 ~2 MB.  To push it lower (useful for huge crystals / many cached
 meshes), in priority order:
 
-- **M1 — narrow the `CrystalMesh` element types (≈60 %, low effort, zero
-  downside).**  Per segment today: `kinds`/`colors`/`cell_ix` are
+- **M1 — narrow the mesh element types (≈60 %).  ✅ DONE (2026-05-21)** via
+  the gridmesh `SegMesh` (C1).  The chunk-driven `crystal_segments_aged` now
+  emits a `SegMesh` — `kinds`/`colors` as `u8`, the six coordinate arrays as
+  `single` (f32), `cell_ix` as `integer` — ≈34 B/seg vs the old `CrystalMesh`
+  ≈72 B/seg.  Coords are GPU-VBO-native (no f64→f32 conversion at upload).
+  The old i64/f64 build is kept as `crystal_segments_aged_legacy` purely as the
+  equivalence golden (`tests/scripts/130`).  Original analysis kept below for
+  context:
+  Per segment in the old `CrystalMesh`: `kinds`/`colors`/`cell_ix` are
   `integer` (i64, 8 B each) and the six coordinate arrays
   `x0s…z1s` are `float` (f64, 48 B) → **72 B/seg**.  loft stores narrow
   vector elements at their true width (measured: `vector<u8>` 5.5× /
@@ -714,7 +721,13 @@ remains, in priority order:
   This is the single biggest win at world scale and the structure every
   later pattern reuses.  Effort: M (the cell_ix attribution + persistent
   index are already in place; needs a dirty-set + per-cell segment-range
-  bookkeeping).
+  bookkeeping).  **Foundation shipped (gridmesh G1, 2026-05-21):**
+  `lib/gridmesh::ChunkField` now holds a PERSISTENT coord→cell index
+  (`cidx`) + a wired-in dirty-chunk set + per-chunk cell buckets, so
+  `collect_dirty_inputs` already returns O(dirty) work-lists.  The remaining
+  per-chunk mesh caching + per-group reassembly (rebuild only dirty chunks,
+  reuse the rest) is gridmesh **C3 (`CrystalIncr`, in progress)** — at which
+  point a single paint is O(dirty chunks · density), flat in N.
 - **I2 — cut the per-cell constant factor.**  Each cell does several
   independent hash gathers (`nbr_colors_idx` ×2, `cell_h_at`, 6 axes ×
   `MAX_MAIN_HEXES` probes) → ~15–20 hash lookups/cell.  A single combined
@@ -729,7 +742,15 @@ remains, in priority order:
   cell geometry emission keyed by `cell_ix`, (5) dirty-set incremental
   rebuild (I1).  Wall placement and edge rounding then become new
   classification+emission rules over the same 1–2 + 4–5.  Effort: M
-  (mostly refactor once I1/I2 land).
+  (mostly refactor once I1/I2 land).  **Shipped as `lib/gridmesh` (G1 + C1,
+  2026-05-21):** the primitive now exists as a standalone library (lib-plan
+  19).  (1) persistent coord→cell index = `ChunkField.cidx`; (2) per-chunk
+  neighbour gather = `gather_halo` / `ChunkInput.halo_ixs`; (4) per-cell
+  emission keyed by `cell_ix` = `emit_segment` into a narrow `SegMesh`; the
+  crystal's `build_crystal_chunk` runs (3) classification (its own per-cell
+  body, not yet pluggable) over a chunk's cells.  (5) incremental rebuild =
+  C3.  Wall-placement / edge-rounding consumers slot in by supplying a
+  different per-cell emission body over the same ChunkField/SegMesh spine.
 - **M1/M2** (above) — element-width + slack; orthogonal, compound with I1.
 
 Recommended order: **I1 → I2 → M1 → I3**, with M1 takeable any time as a
