@@ -45,6 +45,42 @@ greenfield.
 | **B** | Chunking + halo + bounded extent + dirty rebuild: `build_chunk(layout, field, cx,cz,cy, rule) -> Mesh` reading a ≤k-ring halo, emitting geometry owned by in-chunk cells bounded to the chunk; per-chunk/dirty-cell incremental rebuild (O(dirty) compute + O(N) copy). A `HexLayout` adapter (axial flat-top for moros, offset pointy-top for crystal). Carry M1 narrow types into the mesh accumulator. | Open |
 | **C** | moros consumer: `build_chunk_mesh(map, cx,cy,cz)` over `gridmesh` (replacing the global `build_hex_meshes` path incrementally) with a moros RULE — surface + wall placement + edge rounding from the `Hex` neighbour pattern (the crystal technique applied to real world geometry); per-chunk VBOs + dirty IDs + frustum culling. Own sub-plan; the payoff. | Open |
 
+## Parallelism — baked in from Phase B (chunks are embarrassingly parallel)
+
+Chunks are independent (bounded meshes, read-only halo), so building many
+chunk meshes is a parallel map.  loft's `par(...)` for-loop clause
+supports exactly this and is designed in from the start:
+
+```loft
+for ci in chunk_inputs par(cm = build_chunk_mesh(ci, rule), N) {
+  meshes += [cm];   // per-chunk Mesh, collected in order
+}
+```
+- **Struct returns work** — `par(...)` deep-copies a worker-built struct
+  (the chunk `Mesh`) inline into the result vector (THREADING.md
+  "Supported return types … `struct`/reference"); the rule may be passed
+  as a forwarded **context arg**.
+- **Workers get locked read-only store copies** (`clone_for_worker`), so
+  reading the shared field/halo in parallel is safe; the only rule is
+  *workers may not write shared state* — chunk-local generation never
+  does (each builds its OWN bounded mesh).
+
+**Design invariants that make parallelism cheap AND keep meshes bounded
+(the same discipline):**
+1. `build_chunk_mesh(input, rule) -> Mesh` is a PURE function — no shared
+   mutation — so wrapping the chunk loop in `par(...)` is trivial.
+2. The worker INPUT is a COMPACT, self-contained `ChunkInput` = the
+   chunk's cells + a ≤k-ring halo apron, extracted BEFORE the par loop —
+   NOT the whole map.  This keeps `clone_for_worker`'s per-worker store
+   copy small (it clones in-use stores per worker), and it structurally
+   guarantees a chunk's mesh can only depend on its chunk + halo → bounded
+   extent by construction.  Locality and parallelism reinforce each other.
+3. Dirty-region rebuild = a `par(...)` map over the dirty chunks' inputs.
+
+Caveats: `par(...)` input must be a `vector<T>` (chunk inputs are a vector
+— fine); tune `N` to cores (chunks ≫ cores → good balance); the @P229
+worker-stack-snapshot flake is Linux-clean (Windows half still open).
+
 ## Phase A notes
 - New: `lib/gridmesh/{loft.toml,src/gridmesh.loft}`.
 - `audience_crystal/loft.toml` depends on `gridmesh`; `crystal.loft`
