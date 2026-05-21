@@ -626,13 +626,64 @@ is still ~36 ms — a large dense crystal exceeds the 60 fps budget per
 - **PF2 — spatial index** (`hash<cell_key → index>` built once per
   rebuild) shared by the nearest-older-on-axis lookup, `nbr_colors_at`
   and `snap_nbr_count`/`cell_h`, turning the remaining O(N²) → O(N).
-  **Now the key win** for the rebuilds that do happen (the per-axis
-  lookup is naturally O(1) against a coord→index hash).
+  ✅ **DONE** (commit `8219a416`) — the per-axis lookup is O(1) against a
+  coord→index hash.
 - **PF3 — ~~bound per-main fork count~~ DONE by the algorithm change**:
   `MAX_MAIN_HEXES` caps main length, so forks are bounded structurally.
-- **PF4 — preallocate the `CrystalMesh` parallel vectors** to cut the
-  8 `+= [x]` reallocations per segment (smaller win now that the segment
-  count is bounded).
+- **PF4 — ~~preallocate the `CrystalMesh` parallel vectors~~ DONE at the
+  language level by P5 + P6** (2026-05-21).  The "crash by scale" OOM was
+  the allocator, not the mesh code: **P5** (amortised ×2 vector growth in
+  `vector_append`) stops the per-`+= [x]` realloc churn, and **P6** (lazy
+  free-block coalescing in `Store::claim`) lets repeated rebuilds reuse
+  freed space instead of growing.  Validated 2026-05-21: a block-500 mesh
+  (12 738 segments) that previously fragmented to ~250 MB / 101 815 free
+  blocks per build now uses **~1.5–2.8 MB / 8–9 free blocks**, and 300
+  consecutive rebuilds hold a **flat ~1.6–4.4 MB** steady state (was 7.6 GB
+  → OOM at block-800).  No CrystalMesh code change was needed.
+
+### Further memory reduction (post-P5/P6) — opportunities
+
+P5/P6 removed the catastrophic fragmentation; a block-500 mesh is now
+~2 MB.  To push it lower (useful for huge crystals / many cached
+meshes), in priority order:
+
+- **M1 — narrow the `CrystalMesh` element types (≈60 %, low effort, zero
+  downside).**  Per segment today: `kinds`/`colors`/`cell_ix` are
+  `integer` (i64, 8 B each) and the six coordinate arrays
+  `x0s…z1s` are `float` (f64, 48 B) → **72 B/seg**.  loft stores narrow
+  vector elements at their true width (measured: `vector<u8>` 5.5× /
+  `vector<u16>` 2.4× smaller than `vector<integer>`; f32 halves f64).
+  - coords `float`→`single` (f64→f32): the dominant 48 B → 24 B.  **The
+    GPU VBO is consumed as `*const f32`** (`loft_gl_upload_mesh`) and
+    `build_crystal_vbo` already casts every vertex `as single` — so this
+    halves the coord memory AND removes the f64→f32 conversion at
+    VBO-build time, with no precision change vs what is rendered.
+  - `kinds`,`colors` `integer`→`u8` (small enum / palette 0–9).
+  - `cell_ix` `integer`→`u16` (or `i32` if cells can exceed 65 535).
+  - Net **72 → 28 B/seg ≈ 60 %** → block-500 ~2 MB → **~0.8 MB**.  Effort
+    S: change the field types in `crystal.loft`, add `as single`/`as u8`/
+    `as u16` at the `+= [x]` sites in `crystal_segments_aged`, read the
+    now-`single` fields directly in `build_crystal_vbo`.
+- **M2 — reclaim the amortised-growth slack (≈30 % more; needs a small
+  language follow-up).**  P5's ×2 growth leaves builds at ~57–73 %
+  utilisation.  The deep-copy path already shrinks-to-fit (length-based
+  copy), so the slack only lives in the freshly-built arrays — build them
+  exactly-sized via a **`reserve(v, n)`** builtin (the deferred P5
+  follow-up wrapping the existing `OpPreAllocVector`) or a
+  **`shrink_to_fit(v)`** after building, using a counting pass or the
+  estimate `segments ≈ k·cells`.  Net ~0.8 MB → **~0.5 MB** (util → ~90 %).
+  Effort S–M (exposing `reserve`/`shrink_to_fit` is a language addition
+  that benefits every vector consumer, not just the crystal — see
+  PERFORMANCE.md P5 "reserve builtin" follow-up).
+- **M3 — indexed mesh / shared vertices (diminishing returns, higher
+  effort).**  Segments are line endpoints; if ridge junctions share
+  endpoints, a vertex-array + index-array layout dedupes them.  Uncertain
+  payoff (depends on sharing) and it complicates per-segment `cell_ix` /
+  GPU-growth keying.  Lowest priority.
+
+The parallel struct-of-arrays layout is already optimal (no per-element
+padding) and the per-rebuild spatial-index hash is transient (freed each
+build) — so element width (M1) and slack (M2) are the only real levers.
 
 ### Scaling to huge crystals — can it, and where does it crash?
 
