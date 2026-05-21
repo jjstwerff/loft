@@ -104,19 +104,21 @@ owning cell index.  It must:
 ## 5. Pipeline API (gridmesh)
 
 ```loft
-// Build/refresh the field's spatial index + chunk partition from coords.
-pub fn field_new(layout: integer, xs, ys, chunk_shift) -> ChunkField;
+// Build the field's spatial index (cidx) + per-chunk cell buckets from coords.
+// (G1) buckets are built once here and maintained incrementally thereafter.
+pub fn field_new(layout: integer, xs, ys, chunk_shift, halo_k) -> ChunkField;
 
-// Edits — maintain coords, index, and the wired-in dirty index.
-pub fn field_add_cell(f: &ChunkField, x, y);     // append; mark chunk(+halo border) dirty
+// Edits — maintain coords, index, the per-chunk bucket, and the dirty index.
+pub fn field_add_cell(f: &ChunkField, x, y);     // append + bucket; mark chunk(+halo border) dirty
 pub fn field_mark_dirty(f: &ChunkField, x, y);   // recolor/erase: mark chunk(+halo border) dirty
 
-// Collect the transient par work-list: one ChunkInput per dirty chunk
-// (extract cell_ixs + ≤k halo).  O(dirty).
+// Collect the transient par work-list: one ChunkInput per dirty chunk.
+// (G1) iterates f.dirty and looks up each dirty chunk's wired-in bucket —
+// O(dirty), no O(N) re-partition.
 pub fn collect_dirty_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput>;
 pub fn clear_dirty(f: &ChunkField);
 
-// Full (initial) build: one ChunkInput per chunk.
+// Full (initial) build: one ChunkInput per chunk (reads f.buckets directly).
 pub fn all_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput>;
 ```
 
@@ -146,13 +148,16 @@ demo concatenates chunk meshes for its single VBO.)
   crystal's own payload array (indexed by cell ix).  `chunk_shift` chosen so
   the demo's small fields are 1 chunk and the stress sizes (block-500 ≈
   23×23) are a handful of chunks (e.g. shift 3 → 8-cell chunks → ~9 chunks).
-- **Rule `build_crystal_chunk(ci: ChunkInput) -> CrystalMesh`:** the current
-  `crystal_segments_aged` per-cell body (mains + starbursts + branches),
-  but looping `ci.cell_ixs` instead of `0..n`, reading neighbours via
-  `ci.cidx` (already the Phase-A helpers) including `ci.halo_ixs` for
-  cross-chunk on-axis/colour lookups, and emitting into a `SegMesh` with
-  `owner = cell ix`.  Crystal's `cell_h_at` / `nbr_colors_idx` /
-  nearest-older probe stay — they already take `cidx`.
+- **Rule `build_crystal_chunk(snap, cidx, state, tick, ci: ChunkInput) -> SegMesh`
+  ✅ DONE (C1, 2026-05-21):** the `crystal_segments_aged` per-cell body
+  (mains + starbursts + branches) was extracted into
+  `crystal_cell_segments(snap, cidx, state, tick, cs_i, m: &SegMesh)` and the
+  chunk rule loops `ci.cell_ixs` calling it, emitting via `emit_segment` into
+  a narrow `SegMesh` (`owner = cell ix`).  Neighbour reads go through the
+  GLOBAL `cidx` + global snap index directly (crystal's `cell_h_at` /
+  `nbr_colors_idx` / nearest-older probes already take `cidx`), so
+  `ci.halo_ixs` is read-only context the crystal rule doesn't currently
+  consult — chunk processing order is immaterial to the output.
 - **Full build / backward compat:** `crystal_segments_aged(snap, state,
   tick)` becomes a thin wrapper — `field_new` over the snapshot, `all_inputs`,
   run the rule over every chunk (sequentially or `par`), concatenate into one
@@ -193,19 +198,47 @@ the global `build_hex_meshes`.  Axial `HexLayout` is implemented here.
 2. **gridmesh B2 — `ChunkField` + chunk partition + wired-in dirty index**
    (`field_new`, `field_add_cell`, `field_mark_dirty`, `clear_dirty`).
 3. **gridmesh B3 — `ChunkInput` + `collect_dirty_inputs` / `all_inputs`**
-   (cell_ixs + ≤k halo extraction, reusing `step_x/y`/`idx_at`).
-4. **crystal C1 — rule `build_crystal_chunk(ChunkInput) -> SegMesh`**: port
-   the per-cell body to loop `cell_ixs` + emit into `SegMesh`.  Keep
-   `crystal_segments_aged` as the full-build wrapper (`all_inputs` + run +
-   concat).  Validate output SET == today, cross-mode.
-5. **crystal C2 — parallel full build**: wrap the per-chunk run in `par(cm =
-   build_crystal_chunk(ci), N)`.  Validate identical SET + measure speedup
-   on the stress harness.
-6. **crystal C3 — incremental**: projector `apply_frame` marks dirty;
-   rebuild via `collect_dirty_inputs` + par; replace dirty chunk meshes.
-   Validate incremental result == full rebuild for the same final field;
-   measure per-edit cost O(dirty) vs O(N).
-7. **(later) moros Phase C** — own sub-plan.
+   (cell_ixs + ≤k halo extraction, reusing `step_x/y`/`idx_at`).  ✅ Done.
+3a. **gridmesh G1 — incremental per-chunk buckets** ✅ Done (2026-05-21).
+   Retired the per-call O(N) `partition_cells`; `ChunkField` carries
+   wired-in `buckets: hash<ChunkBucket[ck]>` built in `field_new`, appended
+   in `field_add_cell`, so `collect_dirty_inputs` is O(dirty).
+4. **crystal C1 — rule `build_crystal_chunk(...) -> SegMesh`** ✅ Done
+   (2026-05-21).  Per-cell body extracted to `crystal_cell_segments`; the
+   chunk-driven full build `crystal_segments_aged` = `field_new` →
+   `all_inputs` → run rule per chunk → concat, returning `SegMesh`.
+   `chunk_shift`/`halo_k` are PARAMETERS (the `_tuned` entry point), with
+   `CRYSTAL_*` pub-const defaults as one consumer's policy.  Old build kept
+   as `crystal_segments_aged_legacy` (the equivalence golden).  Validated SET
+   == legacy cross-mode (`tests/scripts/130-gridmesh-crystal-equiv.loft`).
+5. **gridmesh G2 — render-group (tile) layer** (new, this session).  A group
+   = G×G chunks (`group_dim`, tunable), the unit of VBO upload + draw + cull;
+   `group_of`/`GroupInput`/`collect_dirty_groups`/`all_groups`.  G dials the
+   spectrum: G=1 = per-chunk VBOs, G=large = ~one big VBO.  Decouples the
+   *dirty-tracking unit* (chunk) from the *upload/draw unit* (group).
+6. **crystal C3 — incremental, two-level reuse**: `CrystalIncr` holds the
+   field + per-chunk cached `SegMesh` (rebuild only dirty chunks) + per-group
+   assembled meshes (reassemble only dirty groups from cached chunk meshes).
+   Projector `apply_frame` marks dirty; rebuild via `collect_dirty_inputs` +
+   `collect_dirty_groups`.  Cost = O(dirty chunks · density) + O(dirty groups
+   · group size), flat in N under bounded chunk density.  Validate
+   incremental == full; flat-cost + dial-sweep bench (`crystal_stress`).
+   *(C2 "parallel full build" folded in: the per-chunk run is the `par`
+   site once correctness + the group layer are proven.)*
+7. **crystal C4 — projector per-group VBOs** (G tunable; crystal uses
+   G=large → ~one VBO, low risk); per-group frustum cull is the moros payoff.
+8. **(later) moros Phase C** — own sub-plan.
+
+### Tuning surface — mechanism vs policy (design rule, 2026-05-21)
+The engine provides the **mechanism**; each game supplies the **numbers**,
+tuned empirically (detail/density vary per game).  Nothing spatial is a
+hardcoded engine constant — `chunk_shift` (dirty granularity ↔ cache-unit
+size), `group_dim` (draw-call count ↔ per-edit upload size), `halo_k` (rule
+correctness ↔ gather cost), LOD near/far, spatial-index granularity are all
+consumer-supplied parameters with sensible defaults.  The crystal's
+`CRYSTAL_*` values are one consumer's policy.  The stress bench is the
+dial-sweeping tool that produces the tuning curves a game author reads to
+pick its point — not just a pass/fail gate.
 
 ## 9. Verification
 
