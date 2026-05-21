@@ -685,6 +685,56 @@ The parallel struct-of-arrays layout is already optimal (no per-element
 padding) and the per-rebuild spatial-index hash is transient (freed each
 build) — so element width (M1) and slack (M2) are the only real levers.
 
+### Efficiency for the world-building generalization (TOP priority)
+
+This routine is the prototype for a CLASS of grid→geometry algorithms —
+wall placement, edge/corner rounding, ridge/feature detection — that the
+world builder needs.  Those run on bigger grids (hundreds–thousands of
+cells) and add MORE per-cell work, so the pipeline must be efficient as a
+reusable primitive BEFORE the complex patterns land.  Measured state
+(interpreter, 2026-05-21): the build is **O(N)** — flat ~6–9 µs/segment
+across all sizes/patterns, segments ∝ cells, `µs/hex²` coefficient falls
+monotonically (PF2 removed the O(N²)).  Memory is bounded (P5/P6).  What
+remains, in priority order:
+
+- **I1 — incremental / dirty-region update (the decisive lever).**  A
+  full rebuild is O(N): ~90 ms at 500 cells, ~180 ms at 1000 (interp),
+  fine for the demo (≤100 cells, PF1 rebuilds only on paint) but wasteful
+  at world scale where a single edit (place one wall, flip one cell)
+  affects only a LOCAL neighbourhood — the changed cell plus cells within
+  the neighbour-query radius (≤2 rings here).  Make edits **O(affected
+  cells) ≈ O(1)** instead of O(N):
+  1. keep the spatial index (`cidx`) PERSISTENT across edits (today it is
+     rebuilt O(N) every call, lines 660-663);
+  2. on a cell change, re-emit only the segments OWNED by the dirty cell
+     and its ≤2-ring neighbours — the `cell_ix` field already attributes
+     each segment to its owning cell, so the data structure already
+     supports find-and-replace by cell;
+  3. maintain a dirty-set; rebuild only those cells' segment ranges.
+  This is the single biggest win at world scale and the structure every
+  later pattern reuses.  Effort: M (the cell_ix attribution + persistent
+  index are already in place; needs a dirty-set + per-cell segment-range
+  bookkeeping).
+- **I2 — cut the per-cell constant factor.**  Each cell does several
+  independent hash gathers (`nbr_colors_idx` ×2, `cell_h_at`, 6 axes ×
+  `MAX_MAIN_HEXES` probes) → ~15–20 hash lookups/cell.  A single combined
+  **1-ring/2-ring neighbour gather per cell** (read each neighbour once,
+  reuse for colours / height / nearest-older) removes the redundant
+  probes.  Also profile on **`--native`** (the deployment target; the
+  ~7 µs/seg above is the interpreter).  Effort: S–M.
+- **I3 — extract a reusable grid→mesh primitive.**  Generalise the
+  pipeline into: (1) persistent coord→cell spatial index, (2) per-cell
+  neighbour gather, (3) pluggable cell CLASSIFICATION (line/blob/edge/
+  corner — where wall-placement & edge-rounding rules slot in), (4) per-
+  cell geometry emission keyed by `cell_ix`, (5) dirty-set incremental
+  rebuild (I1).  Wall placement and edge rounding then become new
+  classification+emission rules over the same 1–2 + 4–5.  Effort: M
+  (mostly refactor once I1/I2 land).
+- **M1/M2** (above) — element-width + slack; orthogonal, compound with I1.
+
+Recommended order: **I1 → I2 → M1 → I3**, with M1 takeable any time as a
+quick standalone win.
+
 ### Scaling to huge crystals — can it, and where does it crash?
 
 The revised algorithm makes the **segment count ~linear** in cell count
