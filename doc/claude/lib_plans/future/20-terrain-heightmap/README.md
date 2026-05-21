@@ -214,7 +214,32 @@ colored terrain rise in the moros 3D view.
 - **Reuses** `lib/moros_map` (`MaterialDef`, `map_get_hex`/`map_set_height`,
   chunk addressing), `lib/moros_render` (`hex_to_world`, `emit_slope_face`,
   `neighbour_dq/dr`), `lib/moros_editor` (paint tools, undo).
-- **Independent of** buildings/walls/items — terrain only, by design.
+- **Independent of** buildings/items — this plan computes NATURAL terrain
+  only.
+
+### Built structures are a separate override layer (dryopea — out of scope here)
+
+dryopea's player-built **walls** and **bridges** are NOT this plan's concern,
+but they're built *entirely on top of* its machinery, so the boundary is
+worth pinning:
+
+| Layer | What | Mutable | Reuses |
+|---|---|---|---|
+| Natural terrain | slope-solved height field (this plan) | re-solved on edit | the solver |
+| Built walls | **hex-width walkable ramparts** = runtime height *overrides* on the same field (raised hexes, steep sides, flat top wide enough for the vehicle) | built / destroyed at runtime | terrain height + T4 slope-faces + gridmesh dirty re-mesh |
+| Bridges | walkable decks spanning a *low* gap toward another wall — a surface ABOVE preserved low ground | yes | moros's existing `hash<Chunk[cx,cy,cz]>` vertical-`cy`-layer model + multi-level pathing |
+
+Key points for whoever builds the dryopea build-system (its own plan):
+- A rampart is **raised terrain**, not moros's per-edge `h_wall_*` faces —
+  two distinct "wall" concepts; keep the naming separate.
+- **Boss-breaks-wall** = remove the height override → revert to natural
+  ground → dirty the chunk → gridmesh incremental re-mesh (the live runtime
+  driver for the C3 dirty-rebuild work) + traversal-graph re-route.
+- Walls/bridges must therefore be a **mutable override layer**, never baked
+  into the solved field.
+- The static `md_slope` (above) gates where ramparts/towers may be built and
+  costs the vehicle/NPC/enemy pathing across natural ground + wall tops +
+  bridge decks.
 
 ## See also
 - [lib-plan 19 gridmesh DESIGN](../../19-gridmesh/DESIGN.md) — § 7 moros
