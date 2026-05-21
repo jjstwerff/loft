@@ -181,6 +181,12 @@ just bounds the gather).
 
 ## 7. moros consumer (Phase C, sketch)
 
+The per-hex **height field** this meshing reads is computed upstream by
+[lib-plan 20 — terrain height-map](../future/20-terrain-heightmap/README.md)
+(slope-based generation from a drainage seed) — also the input for the
+**dryopea** tower-defence consumer.  gridmesh meshes whatever height field
+it's handed.
+
 `moros_render` adds `build_chunk_mesh(map, cx,cy,cz) -> TriMesh` as the
 rule: surface fans + walls + **edge rounding** from the `Hex` neighbour
 pattern (the crystal technique applied to real geometry), reading the halo
@@ -227,7 +233,9 @@ the global `build_hex_meshes`.  Axial `HexLayout` is implemented here.
    site once correctness + the group layer are proven.)*
 7. **crystal C4 — projector per-group VBOs** (G tunable; crystal uses
    G=large → ~one VBO, low risk); per-group frustum cull is the moros payoff.
-8. **(later) moros Phase C** — own sub-plan.
+8. **(later) moros Phase C** — own sub-plan.  Its height-field INPUT is
+   produced by [lib-plan 20 — terrain height-map](../future/20-terrain-heightmap/README.md)
+   (slope-based generation; gridmesh meshes the field it computes).
 
 ### Tuning surface — mechanism vs policy (design rule, 2026-05-21)
 The engine provides the **mechanism**; each game supplies the **numbers**,
