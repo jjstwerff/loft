@@ -32,21 +32,54 @@ primitive for two games that both need believable hill sides without
 hand-sculpting, which is exactly why it's a library plan, not game code:
 
 - **dryopea** — sci-fi free-build / tower-defence. **Likely the FIRST
-  consumer** (and so the first validation target), because it needs *far
-  less 3D sculpting* than the RPG: tower-defence terrain is mostly buildable
-  pads + a constrained creep path with modest elevation, so a small palette
-  (flat pad / gentle ramp / steep wall / a drainage channel) and a single
-  drain already give it everything. Design the solver against dryopea's
-  simpler needs first; it exercises the whole pipeline at low risk.
-- **moros** — RPG. The richer consumer: full rolling-hill / cliff / river /
-  waterfall terrain under the moros editor, feeding the gridmesh per-chunk
-  world mesh.
+  consumer** (and so the first validation target). The player rides in a
+  **semi-floating vehicle** (over-the-shoulder 3rd-person camera), issues
+  build ORDERS for towers/walls that **NPC workers** construct, repairs/buffs
+  towers reactively as enemies/a boss approach, and **travels the landscape**
+  for hidden treasures (faster upgrades). "Less 3D sculpting" means **less
+  hand-authored content** (paint broad terrain types → the solver generates
+  the hills; no bespoke set-pieces), NOT a simpler renderer — the
+  ground-level moving camera drives the **full** gridmesh Phase-C pipeline
+  (per-chunk meshing + frustum culling + LOD + slope faces). Validate against
+  dryopea first because its *authoring* is small (a handful of materials +
+  one drain), so it exercises the whole stack at low content cost.
+- **moros** — RPG. The richer *content* consumer: full rolling-hill / cliff /
+  river / waterfall terrain hand-painted in the moros editor, feeding the
+  same gridmesh per-chunk world mesh.
 
 Same algorithm, same `md_slope`/`md_drop` data; the games differ only in
 which terrain materials they stock and how dense their drainage networks
 are. Keep the solver game-agnostic (toolkit, not framework) — each game
 supplies its own palette + seeds, mirroring the gridmesh "consumer supplies
 the rule" discipline. Build/validate order: **dryopea first → moros next.**
+
+### The slope field is gameplay substrate, not just cosmetics (dryopea)
+
+`md_slope` is a **static per-material attribute** (an input), so it serves
+THREE jobs at once — and two of them don't even need the solver to have run:
+
+1. **Height** — the solver integrates `md_slope` outward into terrain
+   geometry (this plan's primary, *derived* output → `h_height`).
+2. **Build-validity** — towers/walls can't be placed on too-steep ground or
+   water; gate placement on `md_slope[h_material]` (+ material flags) read
+   straight off the palette. A static threshold; no solver involvement.
+3. **Path cost** — vehicle / NPC builders / enemies / boss move over the
+   terrain; steep = slow or impassable. `md_slope[h_material]` is the
+   movement-cost field for pathfinding. Also static.
+
+So painting one slope number per material drives terrain shape, what's
+buildable, AND how things move — the reason it belongs on the material, not
+as a separate hand-set layer.
+
+Two further dryopea-specific notes:
+- **Stepped/terraced terrain is fine — by design.** The semi-floating vehicle
+  hovers at `local terrain max + clearance`, so it never clips a cliff edge
+  ("prevent height crashes"). dryopea is therefore comfortable with the
+  **discrete-Dijkstra staircase** as a sci-fi terraced aesthetic — **FMM
+  smoothing (T5) is a moros nicety, not a dryopea blocker.**
+- **Vehicle hover query** — the only new terrain read dryopea needs is
+  "height under the vehicle footprint," i.e. `world→hex → h_height` (+ a
+  small max over the footprint hexes). Cheap; no new structure.
 
 ## The model — slope is gradient, height is accumulated climb
 
