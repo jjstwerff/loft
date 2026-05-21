@@ -10613,6 +10613,91 @@ fn test() {
     .result(Value::Null);
 }
 
+/// @P300 — assigning the result of a call that RETURNS a keyed
+/// collection to a local (`x = mk()`) used to panic in codegen
+/// (`Incorrect var x[65535]`): the @P295 reassignment lowering fired
+/// for the FIRST assignment too and emitted `Insert([OpReplaceKeyed])`
+/// with no `Set` node, so `compute_intervals` recorded no `first_def`
+/// and `x` got no stack slot.  Fixed by prepending `Set(x, Null)` in
+/// the keyed-assignment branch (`parser/expressions.rs`); `scan_set`
+/// keeps it on a first assignment (→ store init) and elides it on a
+/// reassignment (→ bare `OpReplaceKeyed`).
+#[test]
+fn p300_hash_return_assign_untyped() {
+    code!(
+        "struct R { ck: integer not null, v: integer }
+fn mk() -> hash<R[ck]> { h: hash<R[ck]> = []; h += [R{ck: 5, v: 9}]; h }
+fn test() {
+    x = mk();
+    assert(len(x) == 1, \"len 1\");
+    assert(x[5].v == 9, \"key 5 -> 9\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p300_hash_return_assign_typed() {
+    code!(
+        "struct R { ck: integer not null, v: integer }
+fn mk() -> hash<R[ck]> { h: hash<R[ck]> = []; h += [R{ck: 5, v: 9}]; h }
+fn test() {
+    x: hash<R[ck]> = mk();
+    assert(len(x) == 1, \"len 1\");
+    assert(x[5].v == 9, \"key 5 -> 9\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p300_sorted_return_assign() {
+    code!(
+        "struct Item { k: integer not null }
+fn build() -> sorted<Item[k]> { s: sorted<Item[k]> = []; s += [Item{k: 3}]; s += [Item{k: 1}]; s += [Item{k: 2}]; s }
+fn test() {
+    x = build();
+    assert(len(x) == 3, \"len 3\");
+    out = \"\";
+    for it in x { out += \"{it.k} \"; }
+    assert(out == \"1 2 3 \", \"ordered: {out}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p300_index_return_assign() {
+    code!(
+        "struct IRec { n: integer not null }
+fn build() -> index<IRec[n]> { ix: index<IRec[n]> = []; ix += [IRec{n: 7}]; ix += [IRec{n: 3}]; ix }
+fn test() {
+    x = build();
+    assert(len(x) == 2, \"len 2\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// @P300 sibling — first assignment from another keyed LOCAL (Var-RHS
+/// alias, no prior declaration of `x`).  Same no-slot panic shape; the
+/// deep-copy gives `x` its own store so `ns` stays usable.
+#[test]
+fn p300_var_rhs_alias_first() {
+    code!(
+        "struct R { ck: integer not null, v: integer }
+fn build() -> hash<R[ck]> { h: hash<R[ck]> = []; h += [R{ck: 1, v: 10}]; h += [R{ck: 2, v: 20}]; h }
+fn test() {
+    ns: hash<R[ck]> = build();
+    x = ns;
+    assert(len(x) == 2, \"x len 2\");
+    assert(len(ns) == 2, \"ns still readable\");
+    assert(x[1].v == 10 && ns[2].v == 20, \"both independent\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P279 — caller defined BEFORE a text-returning callee in the
 /// same file: pass-1 types the call result as Unknown(0), the
 /// receiving local is Unknown, and using it as a struct-field

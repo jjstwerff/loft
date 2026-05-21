@@ -1242,7 +1242,21 @@ use a separate collection or add after the loop"
             if let Value::Var(rhs) = code.unspan() {
                 self.vars.make_independent(var_nr, *rhs);
             }
-            *code = Value::Insert(vec![replace]);
+            // @P300 — prepend `Set(v, Null)` so the destination keeps a
+            // recordable `Value::Set` node.  `compute_intervals` only
+            // records `first_def` from a `Set`, so without it a FIRST
+            // assignment (`x = mk()`) leaves `x` slot-less → the
+            // `Incorrect var x[65535]` panic in `generate_var`.
+            // `scan_set` (`scopes.rs`) makes the prepend do the right
+            // thing for free: on a FIRST assignment `x` is not yet in
+            // scope so the `Set(x, Null)` survives → codegen's keyed-Null
+            // arm allocates an empty store (`gen_set_first_keyed_null`);
+            // on a REASSIGNMENT `v` is already in scope so `scan_set`
+            // elides the redundant `Set(v, Null)`, leaving just
+            // `OpReplaceKeyed` (whose `remove_claims` clears `v`'s
+            // existing store before `copy_claims`).  No parse-time
+            // first-vs-reassign discriminator needed.
+            *code = Value::Insert(vec![Value::Set(var_nr, Box::new(Value::Null)), replace]);
             return Type::Void;
         }
         // @P295 — `spacial` reassignment is not yet supported (copy_claims
