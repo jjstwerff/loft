@@ -1423,11 +1423,23 @@ impl Scopes {
         // pitfall `scan_set` was patched for under @P198 (`value.unspan()`).
         if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
-            if def.name.starts_with("n_")
-                && def.code != Value::Null
-                && let Type::Reference(d_nr, _) = &def.returned
-            {
-                return Some(Type::Reference(*d_nr, Vec::new()));
+            if def.name.starts_with("n_") && def.code != Value::Null {
+                if let Type::Reference(d_nr, _) = &def.returned {
+                    return Some(Type::Reference(*d_nr, Vec::new()));
+                }
+                // @P303 — a user fn returning a struct-enum by FRESH owned
+                // store (empty dep) leaks its result temp when used directly
+                // as a call argument; lift it like the Reference case above so
+                // `get_free_vars` emits its `OpFreeRef`.  A NON-empty dep means
+                // a hidden-param return (@P301 via-local: ownership handled by
+                // `add_defaults`'s `__ref_N` work-ref) or a borrowed view — must
+                // NOT be lifted here.  Matches the native-constructor Enum
+                // branch's `dep.is_empty()` guard below.
+                if let Type::Enum(d_nr, true, dep) = &def.returned
+                    && dep.is_empty()
+                {
+                    return Some(Type::Enum(*d_nr, true, Vec::new()));
+                }
             }
         }
         // The native-constructor branches below are intentionally matched on the
