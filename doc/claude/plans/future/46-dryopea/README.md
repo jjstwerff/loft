@@ -28,6 +28,46 @@ walkable**, so the vehicle can drive along them to reach the core under
 attack; **bosses can break walls**, severing those routes and re-opening the
 enemy path.
 
+What sets dryopea apart from every other tower-defence is the **scramble
+phase**: a base is never a simple win-or-lose. When it's about to be
+overrun, the player fires a rocket out of the core building, **evacuating key
+components** to start the *next* base with an advantage. The game is a
+**run** of bases, strung together by what you manage to carry out — see
+[§ The scramble phase](#the-scramble-phase--the-signature-mechanic).
+
+## The scramble phase — the signature mechanic
+
+dryopea's identity. A base is **not** win-or-lose-forever; it's one round of
+a longer **run**. When a base is about to be overrun, the player can
+**scramble** — fire a rocket out of the core building and evacuate to the
+next base.
+
+- **The core building is also the escape rocket.** Defending it gains a
+  second meaning: keep it alive long enough to launch. If the core is
+  destroyed *before* you scramble, the **run ends** (the true loss). A
+  successful scramble is a *tactical retreat*, not a defeat.
+- **Salvage is a live tradeoff.** Evacuating a key component takes it with
+  you but **disables the tower it came from** — so grabbing salvage weakens
+  your remaining defence and *hastens* the overrun. Hold longer for more
+  salvage, or launch now to keep what you already have: that tension is the
+  core decision of the whole game.
+- **Carry-over → the next base starts ahead.** Evacuated components give an
+  advantage at the next base (stronger / earlier towers). A run is a
+  **sequence of bases**, each a TD round, chained by what you carry out — a
+  roguelike structure rather than a single defended base.
+
+**Implications for the build:**
+- The game is **multi-level / run-based**: each base is an editor-authored
+  level (terrain + spawn points + item markers, per the editor/game split
+  below); a run chains them. The cross-base **meta-state is the
+  evacuated-component inventory** — the only thing that persists between
+  bases.
+- This is almost entirely **game logic** (run structure, the launch
+  trigger/animation, component inventory, the salvage UI) — it adds little to
+  the terrain / gridmesh / flow-field primitives. It's the meta layer on top,
+  and the reason the whole engine exists: to make the scramble decision feel
+  good.
+
 ## The editor / game split (architectural spine)
 
 **The editor authors only TERRAIN; the running game places everything else.**
@@ -64,11 +104,12 @@ This split is the load-bearing decision:
 
 ## Systems (game-specific scope)
 
-0. **Match setup — place the core.** At the start of a match the player
+0. **Match setup — place the core.** At the start of a base the player
    places the **core building** (the defend objective): it becomes the
-   **flow-field goal** all mobs path toward, it has health, and losing it
-   ends the match. It is the first runtime structure; everything else
-   (towers/walls/bridges) is built to defend it.
+   **flow-field goal** all mobs path toward, and it is **also the escape
+   rocket** (see § scramble). Keep it alive long enough to scramble; if it's
+   destroyed first, the **run** ends. It is the first runtime structure;
+   everything else (towers/walls/bridges) is built to defend it.
 1. **Floating vehicle + over-shoulder camera** — a hover controller that
    samples terrain height under the vehicle footprint (`world→hex →
    h_height`, max over the footprint, + clearance) so it rides above terraced
@@ -111,6 +152,12 @@ This split is the load-bearing decision:
    targeting; reactive player **repair/buff** of towers.
 6. **Exploration / economy** — free-roam the terrain for hidden treasures (at
    the **editor-authored item positions**) → faster upgrades.
+7. **Scramble + run meta** (the signature mechanic, see § above) — the launch
+   trigger when the base is failing; the salvage selection (which components
+   to evacuate, disabling their towers as you pull them); the
+   evacuated-component **inventory** carried between bases; loading the next
+   base with the carry-over advantage; the run win/lose bookkeeping
+   (scramble = continue; core destroyed first = run over).
 
 ## Phases (vertical-slice first)
 
@@ -121,11 +168,18 @@ This split is the load-bearing decision:
 | **D2** | Flow field + multi-level pathing — distance-from-core field guides mobs (funnels to wall gaps); vehicle + NPC point-to-point routes over ground + wall tops + bridge decks. | the flow field (recompute on wall change) + the traversal graph + bridge `cy`-layer. |
 | **D3** | Combat slice — one enemy wave (spawns at authored points, flows to the core) + towers + a boss that breaks a wall (re-mesh + flow-field re-route). | destruction as a runtime dirty-rebuild driver for BOTH mesh + field. |
 | **D4** | Economy / exploration — treasures + upgrades. | the loop closes. |
+| **D5** | **Scramble + run** (the signature mechanic) — launch trigger, salvage selection (pull components → disable towers), carry-over inventory, load next base with the advantage, run win/lose. | the design THESIS — that the scramble decision is the fun. Build as soon as the single-base loop (D0-D3) is playable. |
 
-Vertical slice = **D0 + minimal D1 + D2 + D3**: place the core, drive in,
-order a wall (mobs funnel to the gap), a wave spawns and flows to the core, a
-boss breaks the wall and re-opens the path. That slice exercises every shared
-primitive.
+Vertical slice (engine) = **D0 + minimal D1 + D2 + D3**: place the core, drive
+in, order a wall (mobs funnel to the gap), a wave spawns and flows to the
+core, a boss breaks the wall and re-opens the path. That slice exercises every
+shared primitive.
+
+**Fun slice = + D5 (minimal):** the single-base loop is only the *substrate*;
+the game isn't proven fun until you can scramble out of a failing base and
+arrive at the next one ahead. So although D5 builds last (it needs the base
+loop first), prototype a minimal scramble the moment D0-D3 is playable —
+that's the soonest the core design bet can be tested.
 
 ## Dependencies + shared primitives
 
