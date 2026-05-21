@@ -1,0 +1,15 @@
+// @P302 — `s = []` to clear a populated keyed-collection local must clear
+// in place (no-op + leak before the fix).  Asserts the clear takes effect
+// and re-population works; the `clean/` harness asserts no store leaks on
+// either backend.
+struct R { ck: integer not null, v: integer not null }
+fn test() {
+  s: hash<R[ck]> = [];
+  s += [R{ck: 1, v: 10}];
+  s += [R{ck: 2, v: 20}];
+  assert(len(s) == 2, "populated");
+  s = [];
+  assert(len(s) == 0, "cleared in place");
+  s += [R{ck: 5, v: 50}];
+  assert(len(s) == 1 && s[5].v == 50, "re-populated after clear");
+}

@@ -536,7 +536,23 @@ impl Scopes {
             }
         }
         let v = *self.var_mapping.get(&ov).unwrap_or(&ov);
-        if self.var_scope.contains_key(&v) && *value == Value::Null {
+        // A redundant re-init `Set(v, Null)` for an already-in-scope var is
+        // elided (Reference/Vector/Enum/Text locals don't need re-null-ing).
+        // EXCEPTION (@P302): keyed collections — `s = []` lowers to
+        // `Set(s, Null)`, which on a reassignment is a genuine CLEAR (codegen
+        // emits an in-place `OpDatabase`).  Eliding it left the old contents
+        // intact (silent no-op) and leaked `s`'s store.  Let keyed Set-Null
+        // through so codegen's keyed reassign arm clears in place.
+        if self.var_scope.contains_key(&v)
+            && *value == Value::Null
+            && !matches!(
+                function.tp(v),
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+        {
             return Value::Insert(Vec::new());
         }
         // remember the scope of the variable
@@ -1091,7 +1107,24 @@ impl Scopes {
                     let n = function.name(v);
                     n.starts_with("__ref_") || n.starts_with("__rref_")
                 };
-                let emit = (dep.is_empty() || is_work_ref) && !in_ret && !function.is_skip_free(v);
+                // @P302 — a keyed-collection local backed by its OWN store
+                // carries a self-dep `[v]` (added by the `s = []` clear path
+                // so a later `s += …` re-inits in place).  That self-dep is an
+                // ownership marker, not a borrow — treat it like `dep.is_empty()`
+                // so the store is freed at scope exit.  Mirrors the fn-ref
+                // ownership rule below.  Keyed-only + exact self-dep; `in_ret`
+                // still suppresses returned keyed locals.
+                let owns = dep.is_empty()
+                    || (dep.len() == 1
+                        && dep[0] == v
+                        && matches!(
+                            function.tp(v),
+                            Type::Sorted(_, _, _)
+                                | Type::Hash(_, _, _)
+                                | Type::Index(_, _, _)
+                                | Type::Spacial(_, _, _)
+                        ));
+                let emit = (owns || is_work_ref) && !in_ret && !function.is_skip_free(v);
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \

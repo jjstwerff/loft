@@ -265,6 +265,9 @@ impl Output<'_> {
             }
             return Ok(());
         }
+        // @P302 — capture first-vs-reassign BEFORE the `declared` insert below
+        // (the first-decl branch inserts `var`, so the flag must be read now).
+        let first_assign = !self.declared.contains(&var);
         if self.declared.contains(&var) {
             write!(w, "var_{name} = ")?;
         } else {
@@ -275,7 +278,7 @@ impl Output<'_> {
         }
         if matches!(to, Value::Null) && rust_type(variables.tp(var), &Context::Variable) == "DbRef"
         {
-            self.emit_null_dbref(w, var, &name)?;
+            self.emit_null_dbref(w, var, &name, first_assign)?;
         } else if to == &Value::Null {
             // Emit the null sentinel for the variable's type, not bare `()`.
             let null_val = default_native_value(variables.tp(var));
@@ -462,18 +465,32 @@ impl Output<'_> {
     }
 
     /// Emit a null-initialised `DbRef` variable, matching the interpreter's pre-init order.
-    fn emit_null_dbref(&mut self, w: &mut dyn Write, var: u16, name: &str) -> std::io::Result<()> {
+    ///
+    /// `first == false` is an @P302 keyed-collection reassignment (`s = []`
+    /// clear): the slot already holds a live `DbRef`, so emit `OpDatabase`
+    /// ALONE (in-place clear, reuses the store, no leak) — skip `null_named`,
+    /// which would reset to a sentinel and leak the old store.
+    fn emit_null_dbref(
+        &mut self,
+        w: &mut dyn Write,
+        var: u16,
+        name: &str,
+        first: bool,
+    ) -> std::io::Result<()> {
         let variables = &self.data.def(self.def_nr).variables;
         let var_raw_name = variables.name(var);
         let is_elm = var_raw_name.starts_with("_elm");
         let owns_store = match variables.tp(var) {
-            Type::Reference(_, dep)
-            | Type::Vector(_, dep)
-            | Type::Enum(_, true, dep)
-            | Type::Sorted(_, _, dep)
+            Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) => {
+                dep.is_empty()
+            }
+            // @P302 — a keyed local backed by its own store carries a self-dep
+            // `[var]` (added by the `s = []` clear path so a later `s += …`
+            // re-inits in place).  That is an ownership marker, not a borrow.
+            Type::Sorted(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Index(_, _, dep)
-            | Type::Spacial(_, _, dep) => dep.is_empty(),
+            | Type::Spacial(_, _, dep) => dep.is_empty() || (dep.len() == 1 && dep[0] == var),
             _ => false,
         };
         if is_elm || variables.is_inline_ref(var) || !owns_store {
@@ -543,13 +560,19 @@ impl Output<'_> {
             };
             if ref_buf_type_id == u16::MAX {
                 write!(w, "stores.null_named(\"var_{name}\")")?;
-            } else {
+            } else if first {
                 writeln!(w, "stores.null_named(\"var_{name}\");")?;
                 self.indent(w)?;
                 write!(
                     w,
                     "var_{name} = OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)"
                 )?;
+            } else {
+                // @P302 reassignment / `s = []` clear: the slot already holds a
+                // live DbRef → OpDatabase clears that store in place (no
+                // null_named, which would reset to a sentinel and leak the
+                // old store).  The caller already wrote the `var_{name} = `.
+                write!(w, "OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)")?;
             }
         }
         Ok(())

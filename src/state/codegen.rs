@@ -1170,9 +1170,21 @@ impl State {
     /// dispatch through `record_new`'s `Parts::Sorted/Hash/Index/Spacial`
     /// arms and grow the collection in-place.
     pub(super) fn gen_set_first_keyed_null(&mut self, stack: &mut Stack, v: u16) {
+        self.gen_keyed_null(stack, v, true);
+    }
+
+    /// Lower a `Set(v, Null)` whose `v` is a keyed-collection local.
+    ///
+    /// `first == true` (first assignment): allocate a fresh empty store at
+    /// `v`'s slot (`OpInitRef` + `OpDatabase`).  `first == false`
+    /// (reassignment — the @P302 `s = []` clear): the slot already holds a
+    /// live `DbRef`, so emit `OpDatabase` ALONE — `clear()` empties the store
+    /// in place (reuses `store_nr`, reclaims all space, no leak).  Emitting
+    /// `OpInitRef` on a reassignment would null the slot and leak the store.
+    pub(super) fn gen_keyed_null(&mut self, stack: &mut Stack, v: u16, first: bool) {
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
         let slot_end = stack.function.stack(v).saturating_add(ref_size);
-        if stack.position < slot_end {
+        if first && stack.position < slot_end {
             let bump = slot_end - stack.position;
             stack.add_op("OpReserveFrame", self);
             self.code_add(bump);
@@ -1180,8 +1192,14 @@ impl State {
         }
         let slot_offset = stack.position - stack.function.stack(v);
         if stack.function.is_skip_free(v) || stack.function.is_inline_ref(v) {
-            stack.add_op("OpInitRefSentinel", self);
-            self.code_add(slot_offset);
+            // Skip-free / inline-ref keyed locals share an outer-owned store.
+            // On first assignment, point the slot at it via the sentinel; on
+            // reassignment there is nothing to re-init (no current shape
+            // produces a keyed skip-free reassignment).
+            if first {
+                stack.add_op("OpInitRefSentinel", self);
+                self.code_add(slot_offset);
+            }
             return;
         }
         // Resolve the database type id for the specific keyed-collection
@@ -1207,7 +1225,7 @@ impl State {
                 let c = stack.data.def(*td).known_type;
                 self.database.spacial(c, key)
             }
-            _ => unreachable!("gen_set_first_keyed_null on non-keyed type"),
+            _ => unreachable!("gen_keyed_null on non-keyed type"),
         };
         debug_assert_ne!(
             tp_nr,
@@ -1216,8 +1234,13 @@ impl State {
             stack.function.name(v),
             stack.function.name,
         );
-        stack.add_op("OpInitRef", self);
-        self.code_add(slot_offset);
+        // First assignment: null the slot before allocating.  Reassignment /
+        // clear: the slot already holds a live DbRef → OpDatabase clears that
+        // store in place; OpInitRef would null the slot and leak the store.
+        if first {
+            stack.add_op("OpInitRef", self);
+            self.code_add(slot_offset);
+        }
         stack.add_op("OpDatabase", self);
         self.code_add(slot_offset);
         self.code_add(tp_nr);
@@ -1279,6 +1302,22 @@ impl State {
                 stack.function.name(v)
             );
             // Reassignment — variable already on the stack.
+            // @P302 — `s = []` on a populated keyed local clears it IN PLACE
+            // (OpDatabase reuses the store, no leak).  Reached now that
+            // `scan_set` no longer elides keyed `Set(v, Null)`.  Without this
+            // arm it would fall to `set_var` → `gen_put_var` → panic (no keyed
+            // OpPut* arm).
+            if matches!(
+                stack.function.tp(v),
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            ) && *value == Value::Null
+            {
+                self.gen_keyed_null(stack, v, false);
+                return;
+            }
             if matches!(stack.function.tp(v), Type::Text(_)) {
                 let var_pos = stack.position - pos;
                 stack.add_op("OpClearText", self);
