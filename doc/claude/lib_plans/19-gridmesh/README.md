@@ -1,6 +1,7 @@
 # lib-plan 19 — `gridmesh`: chunk-local, bounded-extent grid→mesh primitives
 
-**Status:** Phase A landed (2026-05-21). Phases B–C open.
+**Status:** ACTIVE (promoted from `future/` to a top-level `lib_plans/`
+slot 2026-05-21). Phase A landed; Phase B in progress, Phase C to follow.
 
 ## Why
 
