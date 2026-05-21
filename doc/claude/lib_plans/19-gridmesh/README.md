@@ -2,9 +2,15 @@
 
 **Status:** ACTIVE (promoted from `future/` to a top-level `lib_plans/`
 slot 2026-05-21). Phase A + B done; crystal **C1 done** (chunk-driven
-`SegMesh` build, SET-equivalent to the legacy build cross-mode).  In
-progress: a tunable render-group (tile) layer (G2) + crystal two-level
-incremental reuse (C3).  moros Phase C to follow.
+`SegMesh` build, SET-equivalent to the legacy build cross-mode) and **G2
+done** (render-group / tile layer, tunable `group_dim`; tests
+`lib/gridmesh/tests/rendergroup.loft`).  Full-build perf characterised:
+**O(N) flat (8 µs/seg at n=20 and n=100)** + **SegMesh ~2.1× smaller** than
+the legacy CrystalMesh (`crystal_stress` bench).  **C3 (incremental two-level
+reuse) is BLOCKED on [@P311](../../PROBLEMS.md)** — caching nested
+struct-of-vectors (`hash<ChunkMeshEntry[ck]>` of `SegMesh`) crashes once it
+holds several entries; the code is written + annotated, deferred until @P311
+is fixed.  moros Phase C to follow.
 
 **Full implementation design:** [DESIGN.md](DESIGN.md) — concrete types,
 the rule contract, the pipeline API, the crystal-consumer mapping, ordered

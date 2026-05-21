@@ -217,20 +217,23 @@ the global `build_hex_meshes`.  Axial `HexLayout` is implemented here.
    `CRYSTAL_*` pub-const defaults as one consumer's policy.  Old build kept
    as `crystal_segments_aged_legacy` (the equivalence golden).  Validated SET
    == legacy cross-mode (`tests/scripts/130-gridmesh-crystal-equiv.loft`).
-5. **gridmesh G2 — render-group (tile) layer** (new, this session).  A group
+5. **gridmesh G2 — render-group (tile) layer** ✅ DONE (2026-05-21).  A group
    = G×G chunks (`group_dim`, tunable), the unit of VBO upload + draw + cull;
    `group_of`/`GroupInput`/`collect_dirty_groups`/`all_groups`.  G dials the
    spectrum: G=1 = per-chunk VBOs, G=large = ~one big VBO.  Decouples the
    *dirty-tracking unit* (chunk) from the *upload/draw unit* (group).
-6. **crystal C3 — incremental, two-level reuse**: `CrystalIncr` holds the
-   field + per-chunk cached `SegMesh` (rebuild only dirty chunks) + per-group
-   assembled meshes (reassemble only dirty groups from cached chunk meshes).
-   Projector `apply_frame` marks dirty; rebuild via `collect_dirty_inputs` +
-   `collect_dirty_groups`.  Cost = O(dirty chunks · density) + O(dirty groups
-   · group size), flat in N under bounded chunk density.  Validate
-   incremental == full; flat-cost + dial-sweep bench (`crystal_stress`).
-   *(C2 "parallel full build" folded in: the per-chunk run is the `par`
-   site once correctness + the group layer are proven.)*
+   `collect_dirty_groups` is O(dirty groups × group_dim²) — flat in N (never
+   scans all chunks).  Guard: `lib/gridmesh/tests/rendergroup.loft`.
+6. **crystal C3 — incremental, two-level reuse** ⚠️ **BLOCKED on @P311.**
+   `CrystalIncr` holds the field + per-chunk cached `SegMesh` (rebuild only
+   dirty chunks); per-group meshes assembled on demand from the cached chunk
+   meshes.  Cost = O(dirty chunks · density), flat in N under bounded density.
+   The code is written + annotated in `crystal.loft`, but caching nested
+   struct-of-vectors in `hash<ChunkMeshEntry[ck]>` trips @P311 (OOB crash once
+   the hash holds several entries — unresolved nested vector content type).
+   Validate (incremental == full, `tests/scripts/131`, removed for now) +
+   resume once @P311 lands.  Full-build perf already characterised by
+   `crystal_stress`: **O(N) flat (8 µs/seg) + SegMesh ~2.1× smaller**.
 7. **crystal C4 — projector per-group VBOs** (G tunable; crystal uses
    G=large → ~one VBO, low risk); per-group frustum cull is the moros payoff.
 8. **(later) moros Phase C** — own sub-plan.  Its height-field INPUT is
