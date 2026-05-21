@@ -77,30 +77,37 @@ for ci in chunk_inputs par(cm = build_chunk_mesh(ci, rule), N) {
    extent by construction.  Locality and parallelism reinforce each other.
 3. Dirty-region rebuild = a `par(...)` map over the dirty chunks' inputs.
 
-### Dirty tracking — per-chunk flag + transient work-list (NOT a persistent dirty vector)
+### Dirty tracking — a wired-in dirty INDEX on the chunk container
 
-There is deliberately **no persistent "dirty chunks" vector** (that would
-need dedup and could accumulate stale/duplicate entries).  Instead:
+The chunk-holding structure carries a **first-class, wired-in index of
+dirty chunks** — a keyed SET of dirty chunk coords
+(`dirty: hash<ChunkCoord[ck]>`), maintained as part of the structure, NOT
+a per-chunk bool that has to be scanned for, and NOT a plain append
+vector that would accumulate duplicates.  This gives O(dirty) enumeration
+directly, with dedup by construction:
 
-- **Marker:** a per-chunk **dirty generation** (or bool) on the field's
-  chunk — moros `Chunk` has none today, so Phase C adds one.  Idempotent:
-  many edits to the same chunk mark it once.  The builder keeps the
-  last-built generation per chunk; a chunk needs rebuild iff
-  `dirty_gen != built_gen`.
-- **Edit → propagation:** an edit at cell `(q,r)` marks its containing
-  chunk dirty AND, when `(q,r)` is within the halo radius of a chunk
-  border, the adjacent chunk(s) too (their mesh reads `(q,r)` via the
-  halo).  This border coupling is the only cross-chunk dependency.
-- **The vector is TRANSIENT, per rebuild:** each rebuild *collects* the
-  chunks whose flag is set into a `vector<ChunkInput>` (extract cells +
-  halo), runs the `par(...)` map over it, replaces those chunks'
-  meshes/VBOs, and clears their flags.  The collect is O(dirty); the
-  vector is freed at rebuild scope (compact via P5/P6).
+- **Marker:** marking a chunk dirty is an idempotent **set-insert** into
+  the wired-in dirty index — many edits to the same chunk coalesce to one
+  entry.  (A per-chunk `built_gen` vs the field's edit generation can
+  still validate "is this chunk's mesh current?", but the dirty index is
+  the canonical "what to rebuild" — no scan of all chunks.)
+- **Edit → propagation:** an edit at cell `(q,r)` inserts its containing
+  chunk into the dirty index AND, when `(q,r)` is within the halo radius
+  of a chunk border, the adjacent chunk(s) too (their mesh reads `(q,r)`
+  via the halo).  This border coupling is the only cross-chunk dependency.
+- **Rebuild:** iterate the dirty index DIRECTLY (O(dirty)) to build the
+  `par(...)` work-list (a transient `vector<ChunkInput>` — extract cells +
+  halo per dirty chunk), run the parallel map, replace those chunks'
+  meshes/VBOs, then CLEAR the dirty index.
 
-So the only vector involved is the short-lived par work-list — built from
-the dirty flags, not maintained alongside them.  (This is also why the
-`par`-over-any-iterator extension is NOT a prerequisite: the work-list is
-already a `vector<ChunkInput>`, which vector-`par` handles today.)
+This belongs in `gridmesh`'s chunk-field abstraction so every consumer
+(moros, crystal) gets it; moros's `Map` (which has no dirty tracking
+today) gains it via the field.  The only vector is the short-lived par
+work-list, collected by iterating the dirty index — so the
+`par`-over-any-iterator extension is still not a prerequisite (vector-`par`
+handles the work-list today).  Once par-over-keyed lands (THREADING.md
+materialise path) you could `par` the dirty index directly and skip the
+collect — a convenience, not a requirement.
 
 Caveats: `par(...)` input must be a `vector<T>` (chunk inputs are a vector
 — fine); tune `N` to cores (chunks ≫ cores → good balance); the @P229
