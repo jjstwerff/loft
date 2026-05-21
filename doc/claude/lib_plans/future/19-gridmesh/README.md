@@ -77,6 +77,31 @@ for ci in chunk_inputs par(cm = build_chunk_mesh(ci, rule), N) {
    extent by construction.  Locality and parallelism reinforce each other.
 3. Dirty-region rebuild = a `par(...)` map over the dirty chunks' inputs.
 
+### Dirty tracking — per-chunk flag + transient work-list (NOT a persistent dirty vector)
+
+There is deliberately **no persistent "dirty chunks" vector** (that would
+need dedup and could accumulate stale/duplicate entries).  Instead:
+
+- **Marker:** a per-chunk **dirty generation** (or bool) on the field's
+  chunk — moros `Chunk` has none today, so Phase C adds one.  Idempotent:
+  many edits to the same chunk mark it once.  The builder keeps the
+  last-built generation per chunk; a chunk needs rebuild iff
+  `dirty_gen != built_gen`.
+- **Edit → propagation:** an edit at cell `(q,r)` marks its containing
+  chunk dirty AND, when `(q,r)` is within the halo radius of a chunk
+  border, the adjacent chunk(s) too (their mesh reads `(q,r)` via the
+  halo).  This border coupling is the only cross-chunk dependency.
+- **The vector is TRANSIENT, per rebuild:** each rebuild *collects* the
+  chunks whose flag is set into a `vector<ChunkInput>` (extract cells +
+  halo), runs the `par(...)` map over it, replaces those chunks'
+  meshes/VBOs, and clears their flags.  The collect is O(dirty); the
+  vector is freed at rebuild scope (compact via P5/P6).
+
+So the only vector involved is the short-lived par work-list — built from
+the dirty flags, not maintained alongside them.  (This is also why the
+`par`-over-any-iterator extension is NOT a prerequisite: the work-list is
+already a `vector<ChunkInput>`, which vector-`par` handles today.)
+
 Caveats: `par(...)` input must be a `vector<T>` (chunk inputs are a vector
 — fine); tune `N` to cores (chunks ≫ cores → good balance); the @P229
 worker-stack-snapshot flake is Linux-clean (Windows half still open).
