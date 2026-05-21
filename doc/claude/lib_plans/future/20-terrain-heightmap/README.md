@@ -31,8 +31,9 @@ The solver is **not a moros-only feature** — it is a shared height-field
 primitive for two games that both need believable hill sides without
 hand-sculpting, which is exactly why it's a library plan, not game code:
 
-- **dryopea** — sci-fi free-build / tower-defence. **Likely the FIRST
-  consumer** (and so the first validation target). The player rides in a
+- **dryopea** ([@PLAN46](../../../plans/future/46-dryopea/README.md)) —
+  sci-fi free-build / tower-defence. **Likely the FIRST consumer** (and so
+  the first validation target). The player rides in a
   **semi-floating vehicle** (over-the-shoulder 3rd-person camera), issues
   build ORDERS for towers/walls that **NPC workers** construct, repairs/buffs
   towers reactively as enemies/a boss approach, and **travels the landscape**
@@ -229,7 +230,8 @@ worth pinning:
 | Built walls | **hex-width walkable ramparts** = runtime height *overrides* on the same field (raised hexes, steep sides, flat top wide enough for the vehicle) | built / destroyed at runtime | terrain height + T4 slope-faces + gridmesh dirty re-mesh |
 | Bridges | walkable decks spanning a *low* gap toward another wall — a surface ABOVE preserved low ground | yes | moros's existing `hash<Chunk[cx,cy,cz]>` vertical-`cy`-layer model + multi-level pathing |
 
-Key points for whoever builds the dryopea build-system (its own plan):
+Key points for whoever builds the dryopea build-system (its own plan,
+[@PLAN46](../../../plans/future/46-dryopea/README.md)):
 - A rampart is **raised terrain**, not moros's per-edge `h_wall_*` faces —
   two distinct "wall" concepts; keep the naming separate.
 - **Boss-breaks-wall** = remove the height override → revert to natural
