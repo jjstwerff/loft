@@ -511,16 +511,18 @@ impl Parser {
                 }
                 return Value::Null;
             }
-            #[cfg(not(feature = "wasm"))]
-            let tp_val = if self.is_struct_returning_call(val) {
-                db_tp | 0x8000
-            } else {
-                db_tp
-            };
-            #[cfg(feature = "wasm")]
+            // @P311: do NOT set the 0x8000 "free source" bit here.  Unlike the
+            // field-assignment path (copy_ref → OpCopyRecord), `set_keyed`
+            // already takes a deep copy of the value into the freshly-claimed
+            // collection record, and the inline-literal/struct-call work-ref
+            // that produced `val` still carries its own scope `OpFreeRef`.
+            // Freeing it again from set_keyed is a double free: the work-ref's
+            // store is released while still owned, then reused by the next
+            // iteration's OpDatabase, corrupting the nested-vector backings of
+            // every entry inserted after the first (silent data loss on the
+            // interpreter, use-after-free SIGSEGV once the store is recycled).
             let tp_val = db_tp;
-            return self
-                .cl("OpSetKeyed", &[coll, val.clone(), Value::Int(tp_val)]);
+            return self.cl("OpSetKeyed", &[coll, val.clone(), Value::Int(tp_val)]);
         }
         if matches!(f_type, Type::Enum(_, true, _) | Type::Reference(_, _))
             && op == "="
