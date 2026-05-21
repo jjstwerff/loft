@@ -30,6 +30,41 @@ dirty-region / per-chunk rebuild. Each consumer supplies only its
 per-cell RULE. Mostly extraction + generalization of existing code, not
 greenfield.
 
+## The real goal — CACHE LOCALITY (data availability, not compute)
+
+The deep reason for chunking + bounded extent + narrow types is **memory
+locality, not parallelism or tidiness**.  A chunk's working set — its
+cell payload arrays, the spatial index, the ≤k halo apron, and the mesh
+accumulator it writes — should **fit in the CPU's primary caches (L1/L2)**
+so processing a chunk is bound by ALU throughput, not by waiting on RAM.
+For grid→mesh work the bottleneck is almost always **data availability**
+(cache/DRAM latency), not the arithmetic.  Every structural choice serves
+this:
+
+- **Bounded chunk working set** — size `chunk_shift` so one chunk's cells
+  + halo + index + mesh fit a target cache level (rule of thumb: keep the
+  hot per-chunk bytes well under L2; smaller is better for L1).  This is
+  the primary tuning knob, ahead of `par` worker count.
+- **Struct-of-arrays + narrow types (M1)** — `vector<single>` /
+  `vector<u8>` / `vector<u16>` pack far more cells per 64-byte cache line
+  than i64/f64; SoA means a pass that touches one attribute streams it
+  contiguously instead of striding over fat structs.  The ~60 % memory
+  cut from M1 is really a ~2.5× increase in cells-per-cache-line.
+- **Contiguous over pointer-chasing** — prefer dense indexable arrays
+  (cell payload, the par work-list) over scattered records.  The spatial
+  index is a `hash` (open-addressed: a contiguous bucket array + records
+  in one store), kept COMPACT so a chunk's index stays cache-resident —
+  hence the keyed-collection compactness work (plan-44: `coll[key]=value`
+  upsert dedups in place and reclaims, [C68](../../DESIGN_DECISIONS.md#c68--keyed--entry-appends-collkey--value-is-the-dedup-upsert);
+  duplicate keys would bloat the index out of cache).
+- **Halo bounded to ≤k rings** — the apron a rule reads is the only
+  cross-chunk data pulled in; keeping it minimal keeps the working set
+  (and `clone_for_worker`'s per-worker copy) small.
+
+So: chunk so the data fits cache → narrow + SoA so more fits per line →
+keep the index compact → process contiguously.  Parallelism (below) is a
+*second-order* win layered on top of locality, not the main event.
+
 ## Reused primitives (extraction sources)
 - `lib/moros_map`: `chunk_idx_32`/`hex_idx_32` (global↔chunk-local),
   `hex_distance`, `map_get_hex` (free cross-chunk halo reads), 32×32

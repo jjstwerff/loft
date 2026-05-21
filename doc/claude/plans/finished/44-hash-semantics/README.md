@@ -1,8 +1,9 @@
 # Plan 44 — Hash / keyed-collection semantics: complete the contract
 
-**Status:** ACTIVE (opened 2026-05-21). Driven by the `gridmesh` lib-plan
-(19) Phase B, which needs a deduplicating, clearable dirty-chunk index —
-and surfaced that the keyed-collection contract has three holes.
+**Status:** ✅ COMPLETE (2026-05-21). Opened to close the keyed-collection
+contract surfaced by `gridmesh` lib-plan 19 Phase B (a deduplicating,
+clearable dirty-chunk index). All three holes resolved: @P305 + @P307
+fixed in code, @P306 closed by decision C68.
 
 **Goal:** make `hash` / `sorted` / `index` (the keyed collections) behave
 the way a keyed map/set should — *every* operation, on *both* backends —
@@ -40,10 +41,12 @@ plan is done when every case is `PASS` on both backends. Run:
 | `h[key] = value` **update** an EXISTING key | replaces in place | ✅ |
 | struct return with hash field (`build_index`) | works | ✅ (@P300/@P301) |
 | **`h[key] = value` INSERT a NEW key** | inserts | ✅ **@P305 fixed** 2026-05-21 (`OpSetKeyed`) |
-| **`keyed += [dup-key]` dedup** | replace, `len` stays | ❌ **@P306** — appends dup; lookup returns first |
+| **`keyed += [dup-key]` dedup** | (design) | ✅ **@P306 decided** — `+=` appends; `[key]=` upserts ([C68](../../../DESIGN_DECISIONS.md#c68--keyed--entry-appends-collkey--value-is-the-dedup-upsert)) |
 | **clear struct-FIELD `s.h = []`** | empty, no leak | ✅ **@P307 fixed** 2026-05-21 (`OpClearKeyed`) |
 
-One hole remains (@P306, the `+=` dedup design question); @P305 + @P307 landed 2026-05-21.
+All three resolved 2026-05-21: @P305 + @P307 fixed in code; @P306 closed by
+decision C68 (`+=` append vs `coll[key]=value` upsert split — the upsert is
+the deduping, cache-locality-friendly write).  **Plan 44 complete.**
 
 ## The three bugs
 
