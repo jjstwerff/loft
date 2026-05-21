@@ -190,7 +190,9 @@ data inline into the result vector; field access on the loop variable works dire
 
 ### Limitations
 
-- Input must be a `vector<T>`; integer ranges (`1..10`) are not supported.
+- Input must be a `vector<T>`; integer ranges (`1..10`) and other
+  iterables are not yet accepted directly — **planned to be lifted; see
+  [§ Design — `par(...)` over any iterator](#design--par-over-any-for-iterable-planned)**.
 - Form 3 (`c.method(a)` — captured receiver) is not yet supported.
 - The worker function may not write to shared state.
 
@@ -240,6 +242,130 @@ worker.  Native and interpreter both back `par_fold` directly
 (A5 + A5b).  The fused `for ... in ... par(...) { sum += b }`
 form is the user-facing alternative; the parser auto-detects
 pure-fold bodies and routes them through the same runtime.
+
+### Design — `par(...)` over any `for`-iterable (planned)
+
+**Goal.** `par(...)` should accept anything a `for` statement accepts —
+integer ranges, keyed collections, text, `map`/`filter` chains, custom
+`.next()` iterators — not only `vector<T>`.  **Principle:** accept
+everything; **materialise a temporary vector only when it is absolutely
+needed** (the iterator cannot be partitioned natively).  Normally a
+`par(...)` should run without allocating an intermediate collection.
+
+**The constraint that makes it vector-only today.** The runtime
+(`parallel_for` → `run_parallel_raw`, `src/parallel.rs`) partitions work
+into **contiguous index ranges** (`[start,end)` per thread) and fetches
+element `i` via `vector::get_vector(input, elem_size, i)` — i.e. it needs
+**O(1) random access by index** over a known row count with a uniform
+element size.  The parser enforces this at
+`src/parser/collections.rs:1855` (`"par(...) requires a vector<T> input"`).
+A `for`-iterable is otherwise one of: an index-addressable vector; a
+counted range; or a **sequential cursor** (keyed B-tree/hash `OpStep`,
+text byte-cursor, coroutine `OpCoroutineNext`, custom `.next()`) that has
+no random access.
+
+**Approach — classify the input, pick the cheapest partition.**  Replace
+the vector-only gate with a classifier routing each iterable to one of
+these paths (the cheaper the better; materialise is the last resort):
+
+| Class | Iterables | Partition strategy | Temp vector? |
+|---|---|---|---|
+| **Index** | `vector<T>`, tuple-vectors, struct vector-fields | by index range (the current path) | no |
+| **Range** | integer ranges `lo..hi`, `..=`, reverse | split `[lo,hi)` into N sub-ranges | **no** (fast path) |
+| **Fusable map** | `map(src, g)` where `src` is Index/Range and `g` is pure | partition `src`; worker computes `f(g(a))` | **no** (fusion) |
+| **Materialise** | keyed (`sorted`/`hash`/`index`/`spacial`), `filter(...)`, comprehensions, finite custom iterators | drive the for-cursor ONCE into a temp `vector<T>`, then Index path | **yes** — the "absolutely needed" case |
+| **Reject / opt-in** | coroutine generators, infinite / side-effecting `.next()`; `#fields` (compile-time unroll) | not partitionable / no runtime iteration | diagnostic (or opt-in materialise) |
+
+1. **Range — no vector (the headline win).**  `for i in lo..hi par(b =
+   f(i), N)` lowers to a new runtime entry **`parallel_for_range(lo, hi,
+   return_size, threads, fn) -> reference`**: partition `[lo,hi)` into N
+   contiguous sub-ranges; each worker runs the counted body over its
+   sub-range, calling `f(i)` for each integer `i`; results are collected
+   by global index (`i - lo`).  The worker element is the loop integer —
+   no input vector is allocated.  Reverse / `..=` ranges adjust the
+   bounds.  Mirrors `run_parallel_raw` but advances a counter instead of
+   `get_vector`.  Reuses `clone_for_worker`, the result stitch
+   (`parallel_buf_get*`), and the order-by-index guarantee.
+
+2. **Index — unchanged.**  The current `parallel_for(vec, elem_size, …)`
+   path for vectors / struct-fields / tuple-vectors.
+
+3. **Materialise — the explicit fallback.**  For FINITE, re-readable
+   sequential iterables (keyed collections, `filter` chains,
+   comprehensions), generalise the existing `materialise_keyed_for_par`
+   (`collections.rs:1542`, already used for keyed-collection `par`) into
+   `materialise_for_par(iterable) -> vector<T>`: drive the for-iterator
+   once (the same `OpIterate`/`OpStep` / `filter` lowering the sequential
+   `for` uses), appending into a temp vector, then run the Index path.
+   Keyed collections and `map`/`filter` already do exactly this — this
+   only makes the fallback general.  The temp vector frees at loop-scope
+   exit and (post-P5/P6) is compact and reuses freed space.
+
+4. **Fusable map — avoid the vector.**  For `for x in src.map(g) par(b =
+   f(x), N)` where `src` is Index- or Range-partitionable and `g` is
+   pure, FUSE: partition `src` directly and have each worker compute
+   `f(g(a))` — no materialisation.  (`filter` cannot fuse — its variable
+   output count breaks the by-index result layout — so it materialises.)
+   This delivers the "function without a vector" ideal for the common
+   map-over-vector/range case.
+
+5. **Non-partitionable.**  Coroutine / `iterator<T>` generators and
+   side-effecting custom `.next()` are inherently sequential (poll-based,
+   stateful) and may be unsafe to replay.  `par` over them either
+   (a) opt-in materialises if the generator is finite and yields values
+   (drive to exhaustion into a temp vector — documented memory caveat),
+   or (b) emits a clear diagnostic ("par over a generator requires
+   materialisation; collect into a vector first").  `#fields` is a
+   compile-time unroll (no runtime iteration) — diagnose.
+
+**Runtime additions.**
+- `parallel_for_range(lo, hi, return_size, threads, fn)` in
+  `src/parallel.rs` (+ `n_parallel_for_range` in `src/native.rs` + the
+  `default/01_code.loft` declaration) — range partition + worker dispatch
+  + result buffer.
+- `parallel_get_*` / `parallel_buf_get*` result gathering and the
+  `return_size` logic are element-type-agnostic and **unchanged**.
+
+**Parser changes (`src/parser/collections.rs`).**
+- Replace the `Type::Vector`-only gate in `parse_parallel_for_loop`
+  (~1855) with the classifier; the keyed pre-materialisation at
+  1303-1326 becomes one branch of the general `materialise_for_par`.
+- Range branch emits `parallel_for_range` (worker element = the range's
+  integer loop var).
+- Fusion branch detects `map(partitionable_src, pure_g)` and rewrites the
+  worker to `f(g(a))` over `src`.
+- Reuse `for_type` (`control.rs:2853`) for the loop-var / element type in
+  every branch.
+
+**Invariants preserved.**
+- **Ordering:** results are delivered in iteration order (by global
+  index) on every path, so `par` stays a drop-in for the sequential
+  `for`.
+- **Read-only workers:** `clone_for_worker` keeps the worker view
+  read-only.  The Materialise pre-pass and any fused `map`/`filter`
+  transform run on the MAIN thread before the parallel region — so a
+  side-effecting transform is never silently parallelised (it
+  materialises sequentially or is rejected).
+- **Clamping:** empty / singleton inputs and `threads > rows` clamp as
+  today (`threads.min(n_rows.max(1))`); an empty range yields an empty
+  result.
+
+**Phasing (each independently shippable).**
+- **P1** — Range fast-path (`parallel_for_range`): the biggest, cleanest
+  win and the documented gap (`for i in 1..n par(…)`).
+- **P2** — Generalise `materialise_for_par` to all finite sequential
+  iterables (keyed already done; add `filter` / comprehension / finite
+  custom iterators).
+- **P3** — Map-fusion optimisation (no temp for `map`-over-partitionable).
+- **P4** — Diagnostics for non-partitionable generators + `#fields`
+  (opt-in materialise where safe).
+
+**Tests.**  Extend `tests/scripts/22-threading.loft`: `par` over a range
+(sum + transform), over a keyed collection, over `v.map(g)`, over
+`v.filter(p)`; assert results == the sequential `for` over the same
+iterable (order AND values), cross-mode (interp + native); a generator
+`par` diagnostic test; `store_memory()` to confirm the materialise
+fallback frees its temp.
 
 ### Post @PLAN06 surface (closed 2026-05-09)
 
