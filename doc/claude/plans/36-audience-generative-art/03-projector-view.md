@@ -546,14 +546,21 @@ slow-orbit.
   distinct from the autonomous decay rule and prevents the
   screen from constantly twinkling as old cells die.
 
-## Performance — per-frame mesh cost (stress test 2026-05-21)
+## Performance — crystal mesh rebuild cost (stress test 2026-05-21)
 
-The projector rebuilds the **entire** crystal mesh every frame
-(`build_crystal_vbo` → `audience_crystal::crystal_segments_aged`) and
-re-uploads the whole VBO.  [`tools/audience-demo/crystal_stress.loft`](../../../../tools/audience-demo/crystal_stress.loft)
+The projector rebuilds the crystal mesh + VBO via `build_crystal_vbo`
+(→ `audience_crystal::crystal_segments_aged`).  **It does NOT rebuild
+every frame** — PF1 caching is already in place: `main`'s render loop
+rebuilds the crystal + ground VBOs only when `world.version` changes
+(`projector.loft` ~787, the `last_built_version` gate), and `version`
+bumps only inside `apply_frame` on a paint / erase / repaint.  Because
+the message drain runs before the rebuild check, multiple paints landing
+in one frame coalesce into a single rebuild.  So **steady-state render is
+just the draw calls + the camera matrix**; the timings below are the cost
+**per paint event** (the rebuild that PF2 makes cheaper), not a per-frame
+cost.  [`tools/audience-demo/crystal_stress.loft`](../../../../tools/audience-demo/crystal_stress.loft)
 ramps a filled-hex cluster 1 → 100 across four fill PATTERNS (block /
-line / sparse / ring) and times that per-frame CPU path on `--native`.
-Run:
+line / sparse / ring) and times that rebuild path on `--native`.  Run:
 
 ```bash
 cargo run --release --bin loft -- --native --lib lib tools/audience-demo/crystal_stress.loft
@@ -606,10 +613,16 @@ is still ~36 ms — a large dense crystal exceeds the 60 fps budget per
 **Fixes (priority order — the algorithm change reshaped these):**
 
 - **PF1 — cache the crystal mesh + VBO; rebuild only on snapshot
-  change** (biggest, cheapest win, **unchanged by the algorithm**).
-  Dirty flag set on each delta/snapshot receipt; `build_crystal_vbo`
-  reuses the cached VAO otherwise.  Because the demo is static-age this
-  drops mesh-gen from 60 Hz to audience-tap rate (≈0 most frames).
+  change.  ✅ ALREADY IMPLEMENTED** (verified 2026-05-21).  `main`'s
+  render loop bakes the crystal + ground VBOs only when `world.version`
+  changes (the `last_built_version` gate, `projector.loft` ~787);
+  `version` bumps only in `apply_frame` on paint/erase/repaint, and
+  multiple paints in one frame coalesce to one rebuild (the message
+  drain precedes the gate).  Steady-state render is one `gl_draw` per
+  VBO.  So mesh-gen already runs at audience-tap rate, not 60 Hz — the
+  timings above are the per-paint rebuild cost, which is what PF2
+  addresses.  (The only genuinely per-frame VBO work is the fade layer,
+  which MUST rebuild each frame because its vertex alpha animates.)
 - **PF2 — spatial index** (`hash<cell_key → index>` built once per
   rebuild) shared by the nearest-older-on-axis lookup, `nbr_colors_at`
   and `snap_nbr_count`/`cell_h`, turning the remaining O(N²) → O(N).
@@ -630,24 +643,25 @@ once with no crash.  But scaling the *live* demo to hundreds of cells
 hits three walls — and one is a real crash, found 2026-05-21:
 
 1. **O(N²) rebuild TIME** (slowdown, not crash).  block: 100 = 36 ms,
-   200 = 203 ms, 300 = 385 ms, ~1 s at 500.  The per-frame rebuild drops
-   below 60 fps at ~55 dense cells and becomes a slideshow at a few
-   hundred.  Fixed by PF1 (don't rebuild every frame) + PF2 (O(N)
-   rebuild).
+   200 = 203 ms, 300 = 385 ms, ~1 s at 500.  Each *paint* on a
+   several-hundred-cell crystal is a multi-hundred-ms hitch (PF1 already
+   limits rebuilds to paints, but a busy tap stream still stutters).
+   Fixed by PF2 (O(N) rebuild).
 2. **Memory blowup under sustained rebuilding → OOM crash.**  The
    `mesh.field += [x]` appends do **not** pre-reserve capacity, so a
    large mesh churns the allocator arena hard: one 100 000-element
    vector built by `+=` peaks at ~171 MB RSS (vs ~1.6 MB of data, ~100×
    overhead).  Rebuilding a block-500 mesh 30× peaks at **7.6 GB RSS**;
    a growing ramp to block-800 hit **11 GB and was OOM-killed** (single
-   builds at those sizes are fine — it is the *sustained* per-frame
-   re-allocation that accumulates).  No store-level leak (the stores are
-   freed; it is glibc arena retention of the append churn).  This is the
-   concrete "crash by scale".  Fixed by PF1 (no per-frame rebuild) +
-   **PF4, now upgraded from nice-to-have to crash-prevention**
-   (preallocate / reuse the mesh vectors instead of growing them from
-   empty each build).  A loft-level fix — `vector` capacity reservation
-   on `+=` / a `reserve(n)` builtin — would also help every consumer.
+   builds at those sizes are fine — it is the *sustained* re-allocation
+   across many rebuilds that accumulates; PF1 limits rebuilds to paints,
+   so a busy edit stream on a large crystal is the trigger).  No
+   store-level leak (the stores are freed; it is glibc arena retention of
+   the append churn).  This is the concrete "crash by scale".  Fixed by
+   **PF4, upgraded from nice-to-have to crash-prevention** (preallocate /
+   reuse the mesh vectors instead of growing them from empty each build).
+   A loft-level fix — `vector` capacity reservation on `+=` / a
+   `reserve(n)` builtin — would also help every consumer.
 3. **`CrystalState` unbounded growth** (only if the aging animation is
    turned on).  `update_state` appends a birth record for every
    (centre, direction) main ever seen and never prunes, and
@@ -658,10 +672,11 @@ hits three walls — and one is a real crash, found 2026-05-21:
    before the growth animation is enabled at scale.
 
 **Bottom line:** yes, the demo can scale to large crystals — the segment
-explosion is solved — but only with PF1 (cache + dirty rebuild) and PF4
-(preallocate) in place; without them, sustained per-frame rebuilding of
-a several-hundred-cell crystal OOM-crashes.  With PF1 + PF2 + PF4 it
-scales to thousands of cells.
+explosion is solved and PF1 (rebuild only on paint) is already in place,
+so steady-state is cheap.  The remaining risks are at *edit time* on a
+large crystal: each paint is an O(N²) hitch (PF2) and, without PF4
+(preallocate), a busy edit stream churns the allocator into an OOM.  With
+PF2 + PF4 added, edits stay cheap and it scales to thousands of cells.
 
 **Leak validation (2026-05-21):** the per-frame path is leak-free on
 both backends, **on both the original and the revised algorithm** —
