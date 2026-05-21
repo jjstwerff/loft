@@ -172,12 +172,19 @@ impl Output<'_> {
                             }
                         }
                     };
+                    // @P304 — fire for ANY non-`Op` text-returning call, USER
+                    // or NATIVE.  A native (`#rust`) text fn returns owned
+                    // `String` (e.g. `store_memory()` → `stores.memory_report()`),
+                    // so it needs the `&*` deref into `&str` just like a user
+                    // fn's `Str` return — the old `rust.is_empty()` clause wrongly
+                    // excluded native fns (E0308 `expected &str, found String`).
+                    // `&*` is safe for all text shapes (`String`/`Str`/`&str` are
+                    // `Deref<Target=str>`).  `Op*` runtime helpers stay excluded.
                     let needs_deref = idx < def_fn.attributes.len()
                         && matches!(def_fn.attributes[idx].typedef, Type::Text(_))
                         && (arg_is_text_callref
                             || matches!(v_unspanned, Value::Call(d, _) if
                                 matches!(self.data.def(*d).returned, Type::Text(_))
-                                && self.data.def(*d).rust.is_empty()
                                 && !self.data.def(*d).name.starts_with("Op")));
                     // Post-2c: Op* runtime helpers (defined in
                     // `src/codegen_runtime.rs`) keep hand-written i32 params
