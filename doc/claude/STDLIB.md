@@ -653,6 +653,12 @@ Functions for interacting with the host operating system.
 | `user_directory(v: &text = "") -> text` | Returns the current user's home directory, optionally with `v` appended. |
 | `program_directory(v: &text = "") -> text` | Returns the directory containing the running executable, optionally with `v` appended. |
 
+### Memory diagnostics
+
+| Function | Description |
+|----------|-------------|
+| `store_memory() -> text` | Returns a multi-line snapshot of all LIVE heap stores' internal utilisation — total capacity vs actual claimed data vs free space, record + free-block counts, **mergeable adjacent-free pairs** (free neighbours that should have coalesced), and the largest stores by capacity with their type name and creation site (`bc:<pos>` — a bytecode position on the interpreter, mapping to source via `LOFT_LOG=static`; `0` on `--native`). Use to watch memory growth / fragmentation in a running program. See also `LOFT_STORES=log\|warn` (alloc/free trace). |
+
 ---
 
 ## Random

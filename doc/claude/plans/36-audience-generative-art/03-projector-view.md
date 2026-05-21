@@ -662,14 +662,14 @@ hits three walls — and one is a real crash, found 2026-05-21:
    reuse the mesh vectors instead of growing them from empty each build).
    A loft-level fix — `vector` capacity reservation on `+=` / a
    `reserve(n)` builtin — would also help every consumer.
-3. **`CrystalState` unbounded growth** (only if the aging animation is
-   turned on).  `update_state` appends a birth record for every
-   (centre, direction) main ever seen and never prunes, and
-   `lookup_main_birth` is a linear scan — so with aging enabled the
-   state vector grows ~6 × cells and aging cost becomes O(N²).  The demo
-   currently runs static (empty state, `DEFAULT_AGE`) so this is latent;
-   it must be bounded (cap records to live cells, index by cell key)
-   before the growth animation is enabled at scale.
+3. **`CrystalState` unbounded growth** (the CPU `update_state` aging
+   path — now AVOIDED by the demo, see § Growth animation).  If ever
+   re-enabled, `update_state` appends a birth record per (centre,
+   direction) main and never prunes, and `lookup_main_birth` is a linear
+   scan, so the state vector grows ~6 × cells and aging cost becomes
+   O(N²).  The demo no longer uses this path (growth is GPU-side), so it
+   is moot for the demo; bound it (cap records to live cells, index by
+   cell key) before any consumer turns CPU aging back on at scale.
 
 **Bottom line:** yes, the demo can scale to large crystals — the segment
 explosion is solved and PF1 (rebuild only on paint) is already in place,
@@ -686,6 +686,33 @@ builds, and 150 interp builds, all with no leaked stores.  (Relies on the
 @P297/@P298 struct-returning-call free fixes landed the same session —
 without them the per-frame `cm = crystal_segments_aged(…)` temporary
 would have leaked.)
+
+## Growth animation — GPU-side (shipped 2026-05-21)
+
+The crystal **grows in gradually** when a cell is painted, instead of
+popping in fully — but **without** any per-frame CPU rebuild, so PF1
+caching stays intact.  The growth runs entirely in the vertex shader:
+
+- `audience_crystal::CrystalMesh` carries `cell_ix` (the owning cell per
+  segment), so the projector can attribute each beam to the cell whose
+  paint produced it.
+- Each `Cell` records `birth_frame` (the render frame it was painted, in
+  the same clock as the loop's `frames`).  `snapshot_cells` returns a
+  `Snapshot{snap, births}` with a placement-ordered `births` array.
+- `build_crystal_vbo` emits **stride-14** vertices: pos + normal + rgba +
+  the owning cell's centre (bloom anchor, precomputed once) + birth.  The
+  graphics cdylib's `gl_upload_vertices` wires those as attribute
+  locations 3 (`vec3` anchor) and 4 (`float` birth) when `stride ≥ 14`.
+- `CRYSTAL_VERT`: `age = clamp((uNow − aBirth) / uGrowth, 0, 1)` with an
+  ease-out, then `pos = aCenter + age · (aPos − aCenter)`.  Each cell's
+  crystal blooms out from its centre over `GROWTH_FRAMES` (≈1.5 s).  Only
+  the `uNow` uniform advances per frame; the mesh is rebuilt only on
+  paint (PF1).  The fade layer switches back to `cell_shader` (stride 10).
+
+This sidesteps both the per-paint O(N²) rebuild AND the CPU-aging
+`CrystalState` growth (§ Scaling point 3) — the geometry the shader
+animates is the cached static mesh.  Tunables: `GROWTH_FRAMES` and the
+ease curve / anchor in `CRYSTAL_VERT` (`projector.loft`).
 
 ## Deliverable
 
