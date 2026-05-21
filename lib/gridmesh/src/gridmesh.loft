@@ -119,3 +119,126 @@ pub fn emit_segment(m: &SegMesh, kind: integer,
 
 // Number of segments in the mesh.
 pub fn seg_len(m: SegMesh) -> integer { len(m.kinds) }
+
+// ── B2: ChunkField + chunk partition + wired-in dirty index ───────────
+//
+// The FIELD tracks WHERE cells are: placement-ordered coords (index 0 =
+// oldest), the Phase-A spatial index, the chunk partition, and — wired in
+// as a first-class member — the dirty-chunk INDEX, a keyed SET deduped by
+// construction (`hash<ChunkKey[ck]>`).  It is payload- and mesh-agnostic:
+// the consumer keeps its own colours/heights/meshes and indexes them by
+// the cell indices the field hands out.  `halo_k` lives on the field so an
+// edit can mark the adjacent chunk(s) dirty when the edited cell is within
+// the halo radius of a chunk border (those chunks' meshes read it through
+// the halo).  The keyed-set ops it relies on all landed in plan-44:
+// `+=` dedup-insert (@P306), `if f.dirty[ck]` membership, `f.dirty = []`
+// clear (@P307 OpClearKeyed).
+
+// A chunk-space coordinate.  `ck = enc_coord(cx, cy)` is its identity for
+// dedup in the dirty index.
+pub struct ChunkKey { ck: integer not null, cx: integer not null, cy: integer not null }
+
+// floor(v / cs) for cs > 0, correct for negative coords (truncating `/`
+// would map cells across the origin to the wrong chunk).  Mirrors moros's
+// chunk_idx_32, generalized to an arbitrary chunk size.
+fn chunk_div(v: integer, cs: integer) -> integer {
+  vr = v % cs;
+  // `?? 0` only to satisfy the divide-by-zero lint — `cs = 1 << shift` is
+  // always ≥ 1, so the division never actually divides by zero.
+  if vr < 0 { (v - vr - cs) / cs ?? 0 } else { (v - vr) / cs ?? 0 }
+}
+// Position of `v` within its chunk, in [0, cs).
+fn chunk_loc(v: integer, cs: integer) -> integer {
+  vr = v % cs;
+  if vr < 0 { vr + cs } else { vr }
+}
+
+// The chunk owning offset coord (x, y) for a field with `shift`
+// (chunk = 1<<shift cells per axis; shift 5 = the moros 32×32 chunk).
+pub fn chunk_of(x: integer, y: integer, shift: integer) -> ChunkKey {
+  cs = 1 << shift;
+  cx = chunk_div(x, cs);
+  cy = chunk_div(y, cs);
+  ChunkKey{ck: enc_coord(cx, cy), cx: cx, cy: cy}
+}
+
+pub struct ChunkField {
+  layout:      integer,            // HexLayout tag (Phase A: OffsetPointy = 0)
+  xs:          vector<integer>,    // cell coords (index 0 = oldest)
+  ys:          vector<integer>,
+  cidx:        hash<CellRef[ck]>,  // coord -> cell index (Phase A)
+  chunk_shift: integer,            // chunk = coord >> chunk_shift (5 = 32×32)
+  halo_k:      integer,            // halo radius (border-dirty propagation)
+  dirty:       hash<ChunkKey[ck]>, // WIRED-IN dirty-chunk index (keyed set; dedup)
+}
+
+// Build a field from placement-ordered coords.  The dirty index starts
+// empty; the spatial index is built once (O(N)) by APPENDING into the
+// struct's own keyed field — NOT `cidx: build_index(xs, ys)` in the struct
+// literal, because a keyed-collection field initialised from a hash
+// expression in a struct constructor is currently dropped (the content is
+// not deep-copied into the field → empty) and a call source leaks its
+// return store (filed @P308).  Empty-init + `+=` is the working path.
+pub fn field_new(layout: integer, xs: vector<integer>, ys: vector<integer>,
+                 chunk_shift: integer, halo_k: integer) -> ChunkField {
+  f = ChunkField{
+    layout: layout, xs: xs, ys: ys,
+    cidx: [],
+    chunk_shift: chunk_shift, halo_k: halo_k,
+    dirty: [],
+  };
+  for fn_i in 0..len(xs) {
+    f.cidx += [CellRef{ck: enc_coord(xs[fn_i], ys[fn_i]), ix: fn_i}];
+  }
+  f
+}
+
+// Insert (x, y)'s chunk into the dirty index, plus any adjacent chunk whose
+// mesh reads (x, y) through its halo (i.e. (x, y) is within halo_k of that
+// border).  `+=` dedups by key (@P306), so many edits in one chunk and the
+// overlapping border marks all coalesce to one entry per chunk.
+fn mark_borders(f: &ChunkField, x: integer, y: integer) {
+  cs = 1 << f.chunk_shift;
+  cx = chunk_div(x, cs); cy = chunk_div(y, cs);
+  lx = chunk_loc(x, cs); ly = chunk_loc(y, cs);
+  k = f.halo_k;
+  dxlo = 0; if lx < k { dxlo = 0 - 1; }
+  dxhi = 0; if lx >= cs - k { dxhi = 1; }
+  dylo = 0; if ly < k { dylo = 0 - 1; }
+  dyhi = 0; if ly >= cs - k { dyhi = 1; }
+  for ddx in dxlo..(dxhi + 1) {
+    for ddy in dylo..(dyhi + 1) {
+      ncx = cx + ddx; ncy = cy + ddy;
+      f.dirty += [ChunkKey{ck: enc_coord(ncx, ncy), cx: ncx, cy: ncy}];
+    }
+  }
+}
+
+// Edit — append a new cell (its index = old len(xs)) and mark its chunk
+// (+ halo-border neighbours) dirty.
+pub fn field_add_cell(f: &ChunkField, x: integer, y: integer) {
+  ix = len(f.xs);
+  f.xs += [x]; f.ys += [y];
+  f.cidx += [CellRef{ck: enc_coord(x, y), ix: ix}];
+  mark_borders(f, x, y);
+}
+
+// Edit — recolour/erase an existing cell: mark its chunk (+ halo border)
+// dirty without touching the coord arrays or index.
+pub fn field_mark_dirty(f: &ChunkField, x: integer, y: integer) {
+  mark_borders(f, x, y);
+}
+
+// Clear the dirty index after a rebuild (@P307 OpClearKeyed: in-place free).
+pub fn clear_dirty(f: &ChunkField) {
+  f.dirty = [];
+}
+
+// Number of chunks currently dirty (verification / O(dirty) sizing).
+pub fn dirty_count(f: ChunkField) -> integer { len(f.dirty) }
+
+// Is the chunk owning (x, y) currently marked dirty?
+pub fn chunk_is_dirty(f: ChunkField, x: integer, y: integer) -> boolean {
+  k = chunk_of(x, y, f.chunk_shift);
+  if f.dirty[k.ck] { true } else { false }
+}
