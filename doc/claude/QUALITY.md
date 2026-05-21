@@ -80,7 +80,7 @@ Items below are "what to BUILD" derived from the design content in this document
 
 | Item | Section | Status |
 |---|---|---|
-| **B2-B7** — struct-enum bugs gating P54 | [§ Compiler blockers](#compiler-blockers--struct-enum-bugs) | **AUDITED 2026-05-21: all closed on the interpreter** (18 `p54_b*`/`b7_*` guards green, 0 ignored).  One native-only residual filed as @P301 (struct-enum value returned via an intermediate local fails native codegen). |
+| **B2-B7** — struct-enum bugs gating P54 | [§ Compiler blockers](#compiler-blockers--struct-enum-bugs) | **AUDITED + CLOSED 2026-05-21 on BOTH backends.**  18 `p54_b*`/`b7_*` interpreter guards green (0 ignored); the one native-only residual (@P301 — struct-enum returned via an intermediate local) was fixed the same day (added the `Type::Enum(_, true, _)` arm to `add_defaults`) and is guarded cross-mode by `tests/scripts/121-struct-enum-return-local.loft`. |
 
 For the open programmer-biting issues list (running, not plan-shaped), see [§ Open programmer-biting issues](#open-programmer-biting-issues) above.  For ranked enhancement work, see [§ Enhancement tiers](#enhancement-tiers).  For ordering across all open items, see [§ Recommended landing order](#recommended-landing-order).
 
@@ -1701,13 +1701,19 @@ reproducers each verified live:
   "4-layer surgery, open" design below is **stale for the interpreter**.
 - **B1/B5/B6/B7** — confirmed FIXED (as the notes already record).
 
-**One native-only residual → @P301.**  The B3 intermediate-local form
-(`fn mk() -> JV { n = A{..}; n }`, and the explicit `return n;` form)
-still fails *native* compilation — the call site emits `n_mk(cell, ())`
-for a callee whose local was hoisted into a hidden `DbRef` return-slot
-param.  The `p54_b3_*` guards are interpreter-only, so this went
-unnoticed.  Filed as @P301 (Low; inline direct-return works on native).
-Fix site: native caller-side arg emission in `src/generation/calls.rs`.
+**Native-only residual @P301 — FIXED 2026-05-21.**  The B3
+intermediate-local form (`fn mk() -> JV { n = A{..}; n }`, and the
+explicit `return n;` form) used to fail *native* compilation — the call
+site emitted `n_mk(cell, ())` for a callee whose local was hoisted into
+a hidden `DbRef` return-slot param (E0308).  The `p54_b3_*` guards are
+interpreter-only, so this went unnoticed.  Root cause was NOT the call
+site but `add_defaults` (`src/parser/mod.rs`): it had work-ref-allocating
+arms for `Type::Vector`/`Type::Reference` hidden params but none for
+`Type::Enum(_, true, _)`, so the hidden struct-enum arg stayed
+`Value::Null` → `()`.  Fixed by adding the mirror `Type::Enum(_, true, _)`
+arm; the call-site emitter then threads the work-ref automatically.  No
+interpreter regression.  Cross-mode guard:
+`tests/scripts/121-struct-enum-return-local.loft`.
 
 The historical fix-design notes below are preserved as the narrowing
 audit trail, not as current-state claims.

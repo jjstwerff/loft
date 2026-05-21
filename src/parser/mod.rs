@@ -3592,6 +3592,28 @@ impl Parser {
                     };
                     all_types[a_nr] = Type::Reference(content, vec![vr]);
                     actual[a_nr] = Value::Var(vr);
+                } else if let Type::Enum(content, true, _) = tp {
+                    // @P301 — struct-enums are heap records like
+                    // Reference/Vector, so a struct-enum return-slot
+                    // promoted to a hidden caller arg by `ref_return`
+                    // (parser/control.rs) needs a pre-allocated work-ref
+                    // passed in.  Without this arm the hidden param
+                    // stayed `Value::Null` → emitted as `()` natively
+                    // (E0308: expected DbRef, found ()).  Mirrors the
+                    // Reference arm above, keeping the struct-enum
+                    // discriminator in the result type.
+                    assert_eq!(
+                        default,
+                        Value::Null,
+                        "Expect a null default on database references"
+                    );
+                    let vr = if is_recursive_self {
+                        self.vars.work_refs_recursive(&tp, &mut self.lexer)
+                    } else {
+                        self.vars.work_refs(&tp, &mut self.lexer)
+                    };
+                    all_types[a_nr] = Type::Enum(content, true, vec![vr]);
+                    actual[a_nr] = Value::Var(vr);
                 } else if let Type::RefVar(vtp) = &tp {
                     let mut ls = Vec::new();
                     let vr = if matches!(**vtp, Type::Text(_)) {
