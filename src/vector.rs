@@ -201,8 +201,24 @@ pub fn sorted_finish(sorted: &DbRef, size: u32, keys: &[Key], stores: &mut [Stor
         pos: latest_pos,
     };
     let key = keys::get_key(&rec, stores, keys);
-    let (pos, _) = sorted_find(sorted, true, size as u16, stores, keys, &key);
+    let (pos, found) = sorted_find(sorted, true, size as u16, stores, keys, &key);
     let store = keys::mut_store(sorted, stores);
+    // @P306 — a record with this key already exists: replace it in place
+    // (latest insert wins) and do NOT grow.  The just-appended record at
+    // `latest_pos` overwrites the existing slot; length stays the same so
+    // the spare end slot is discarded.  (Any nested heap in the overwritten
+    // record orphans within the store — consistent with the other in-place
+    // keyed replaces; reclaimed when the collection is freed.)
+    if found {
+        store.copy_block(
+            sorted_rec,
+            latest_pos as isize,
+            sorted_rec,
+            checked_vec_pos(pos, size) as isize,
+            size as isize,
+        );
+        return;
+    }
     let end_pos = length;
     if pos < end_pos {
         // create space to write the new record to

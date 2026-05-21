@@ -687,7 +687,21 @@ mirror: `feedback_fail_at_startup_not_runtime.md`.
 
 ---
 
-## C68 — Keyed `+= [entry]` appends; `coll[key] = value` is the dedup upsert
+## C68 — Keyed collections dedup on insert (`+=` AND `coll[key]=value`)
+
+> **REVERSED & IMPLEMENTED (2026-05-21).**  The original decision below
+> (close @P306 as a `+=`-append-vs-`[key]=`-upsert split) was reversed the
+> same day on **new evidence**: the world-chunk index is `hash<Chunk[cx,cy,cz]>`
+> and inserting a chunk where one already exists at a coord MUST replace, not
+> stack a shadowed duplicate — so dedup-on-insert is a correctness requirement
+> of the architecture, not a preference.  The risk concern was retired by
+> doing it the safe way: hash/index dedup via `Stores::dedup_keyed`
+> (find + free + unlink + reclaim, then add) in `insert_record`; sorted via an
+> overwrite-on-`found` branch in `vector::sorted_finish`.  Full suite green
+> (no consumer relied on duplicate-key append).  **Both `coll += [entry]` and
+> `coll[key] = value` now dedup by key (latest insert wins).**  @P306 is
+> closed by CODE, not by this decision.  The historical decision is kept below
+> for the trade-off record.
 
 ### Question
 

@@ -41,12 +41,15 @@ plan is done when every case is `PASS` on both backends. Run:
 | `h[key] = value` **update** an EXISTING key | replaces in place | ✅ |
 | struct return with hash field (`build_index`) | works | ✅ (@P300/@P301) |
 | **`h[key] = value` INSERT a NEW key** | inserts | ✅ **@P305 fixed** 2026-05-21 (`OpSetKeyed`) |
-| **`keyed += [dup-key]` dedup** | (design) | ✅ **@P306 decided** — `+=` appends; `[key]=` upserts ([C68](../../../DESIGN_DECISIONS.md#c68--keyed--entry-appends-collkey--value-is-the-dedup-upsert)) |
+| **`keyed += [dup-key]` dedup** | replace, `len` stays | ✅ **@P306 fixed** 2026-05-21 (`dedup_keyed` + `sorted_finish`) |
 | **clear struct-FIELD `s.h = []`** | empty, no leak | ✅ **@P307 fixed** 2026-05-21 (`OpClearKeyed`) |
 
-All three resolved 2026-05-21: @P305 + @P307 fixed in code; @P306 closed by
-decision C68 (`+=` append vs `coll[key]=value` upsert split — the upsert is
-the deduping, cache-locality-friendly write).  **Plan 44 complete.**
+**All three fixed in code 2026-05-21** — @P305 (`OpSetKeyed` upsert), @P306
+(dedup in the shared insert path: `dedup_keyed` for hash/index, overwrite-on-
+found for sorted), @P307 (`OpClearKeyed`).  Both `coll += [entry]` and
+`coll[key] = value` now dedup by key (latest wins).  C68 records the @P306
+reverse (briefly closed-by-decision, then implemented once the world-chunk
+index made dedup-on-insert a correctness requirement).  **Plan 44 complete.**
 
 ## The three bugs
 

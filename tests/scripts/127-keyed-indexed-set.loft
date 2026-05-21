@@ -64,5 +64,29 @@ fn main() {
   // --- absent-key lookup after sets is still null ---
   assert(h[999] == null, "absent key still null");
 
-  print("p305 ok\n");
+  // --- @P306: `+= [entry]` dedups on key collision (latest wins) ---
+  dh: hash<Ent[ck]> = [];
+  dh += [Ent{ck: 1, v: 10}];
+  dh += [Ent{ck: 2, v: 20}];
+  dh += [Ent{ck: 1, v: 99}];          // same key 1 — replace, not append
+  assert(len(dh) == 2, "hash += dedup len");
+  assert(dh[1].v == 99, "hash += dedup latest wins");
+
+  ds: sorted<Ent[ck]> = [];
+  ds += [Ent{ck: 2, v: 1}];
+  ds += [Ent{ck: 1, v: 1}];
+  ds += [Ent{ck: 2, v: 9}];           // replace; order preserved
+  assert(len(ds) == 2, "sorted += dedup len");
+  assert(ds[2].v == 9, "sorted += dedup latest wins");
+  dfirst = 0; dn = 0;
+  for e in ds { if dn == 0 { dfirst = e.ck; } dn = dn + 1; }
+  assert(dfirst == 1, "sorted += dedup keeps order");
+
+  di: index<Ent[ck]> = [];
+  di += [Ent{ck: 5, v: 1}];
+  di += [Ent{ck: 5, v: 9}];           // replace
+  assert(len(di) == 1, "index += dedup len");
+  assert(di[5].v == 9, "index += dedup latest wins");
+
+  print("p305 + p306 ok\n");
 }

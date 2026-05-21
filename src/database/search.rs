@@ -506,6 +506,25 @@ impl Stores {
         }
     }
 
+    /// @P306 — before linking a new keyed record, drop any EXISTING record
+    /// that shares its key so the key stays unique (latest insert wins —
+    /// `coll += [entry]` on a keyed collection dedups instead of stacking a
+    /// shadowed duplicate).  For hash / index the records are SEPARATE store
+    /// claims, so free the old one's nested heap, unlink it, and reclaim its
+    /// slot.  (Sorted / ordered records are inline in the vector and the new
+    /// one is already appended at the end when their `*_finish` runs, so they
+    /// dedup by overwriting the found slot in place there, not here.)
+    pub(crate) fn dedup_keyed(&mut self, data: &DbRef, rec: &DbRef, db: u16, content_tp: u16) {
+        let keys = self.types[db as usize].keys.to_vec();
+        let key = keys::get_key(rec, &self.allocations, &keys);
+        let existing = self.find(data, db, &key);
+        if existing.rec != 0 && existing.rec != rec.rec {
+            self.remove_claims(&existing, content_tp);
+            self.remove(data, &existing, db);
+            self.store_mut(data).delete(existing.rec);
+        }
+    }
+
     /**
     Remove a specific record from a structure.
     # Panics

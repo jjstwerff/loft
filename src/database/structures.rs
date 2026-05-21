@@ -143,19 +143,20 @@ impl Stores {
                     .set_u32_raw(reference.rec, reference.pos, rec.rec);
                 vector::vector_finish(data, &mut self.allocations);
             }
-            Parts::Hash(_, _) => hash::add(
-                data,
-                rec,
-                &mut self.allocations,
-                &self.types[tp as usize].keys,
-            ),
-            Parts::Index(_, _, _) => tree::add(
-                data,
-                rec,
-                self.fields(tp),
-                &mut self.allocations,
-                &self.types[tp as usize].keys,
-            ),
+            Parts::Hash(c, _) => {
+                // @P306 — replace any existing record with this key (dedup).
+                self.dedup_keyed(data, rec, tp, c);
+                let keys = self.types[tp as usize].keys.clone();
+                hash::add(data, rec, &mut self.allocations, &keys);
+            }
+            Parts::Index(c, _, _) => {
+                // @P306 — replace any existing record with this key (dedup);
+                // tree::add otherwise rejects the duplicate and keeps the old.
+                self.dedup_keyed(data, rec, tp, c);
+                let left = self.fields(tp);
+                let keys = self.types[tp as usize].keys.clone();
+                tree::add(data, rec, left, &mut self.allocations, &keys);
+            }
             Parts::Ordered(_, _) => {
                 vector::ordered_finish(
                     data,
