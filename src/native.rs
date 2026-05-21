@@ -185,6 +185,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_buf_drop_fn", n_parallel_buf_drop_fn),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
+    ("n_store_memory", n_store_memory),
     ("n_stack_trace", n_stack_trace),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
@@ -768,6 +769,16 @@ fn n_arguments(stores: &mut Stores, stack: &mut DbRef) {
 fn n_ymd_days_ago(stores: &mut Stores, stack: &mut DbRef) {
     let v_days = *stores.get::<i64>(stack);
     stores.scratch.push(Stores::ymd_days_ago_native(v_days));
+    let s = crate::keys::Str::new(stores.scratch.last().unwrap());
+    stores.put(stack, s);
+}
+
+/// Return a multi-line memory-utilisation report over all live stores
+/// (see `Stores::memory_report`).  Loft: `store_memory() -> text`.
+/// Takes no arguments — pushes the report string as the return value.
+fn n_store_memory(stores: &mut Stores, stack: &mut DbRef) {
+    let report = stores.memory_report();
+    stores.scratch.push(report);
     let s = crate::keys::Str::new(stores.scratch.last().unwrap());
     stores.put(stack, s);
 }

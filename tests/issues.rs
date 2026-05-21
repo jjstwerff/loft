@@ -13746,3 +13746,13 @@ fn p252_count<T: V>(items: vector<T>) -> integer {
     .expr("p252_count([P{v:1}, P{v:0}, P{v:3}])")
     .result(Value::Int(2));
 }
+
+/// `store_memory()` returns a live store memory-utilisation report whose
+/// header starts with "stores:".  Guards the builtin wiring
+/// (`n_store_memory` interp impl + registration + the `#rust` body).
+#[test]
+fn store_memory_builtin_reports() {
+    code!("fn helper() -> integer { 0 }")
+        .expr("store_memory().starts_with(\"stores:\")")
+        .result(Value::Boolean(true));
+}

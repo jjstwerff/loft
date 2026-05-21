@@ -45,6 +45,51 @@ const FL_RIGHT: u32 = 8;
 /// Byte offset of LLRB color flag within a free block (1 = red, 0 = black).
 const FL_COLOR: u32 = 12;
 
+/// Internal space-utilisation snapshot of a single store — actual
+/// claimed data vs free space, and how fragmented the free space is.
+/// Produced by [`Store::usage`] by walking the block chain.
+#[derive(Default, Clone, Copy)]
+pub struct StoreUsage {
+    /// Total store size in 8-byte words (the allocated buffer).
+    pub capacity_words: u32,
+    /// Sum of CLAIMED record sizes (the actual live data).
+    pub claimed_words: u32,
+    /// Number of claimed records.
+    pub claimed_count: u32,
+    /// Sum of FREE block sizes (reclaimable / fragmentation).
+    pub free_words: u32,
+    /// Number of distinct free blocks (the "free structure" elements).
+    pub free_count: u32,
+    /// Largest single free block (words) — a low value with high
+    /// `free_words` means the free space is fragmented.
+    pub largest_free_words: u32,
+    /// Number of ADJACENT free-block pairs found during the walk — two
+    /// consecutive free blocks that are physical neighbours and could be
+    /// coalesced into one bigger gap.  `delete` is supposed to merge
+    /// adjacent free blocks, so a non-zero count flags a missed merge
+    /// (coalescing gap / fragmentation that better detection could
+    /// reclaim).
+    ///
+    /// NOTE: this is a FIRST-CUT detector — it only catches free blocks
+    /// that are immediately consecutive in the linear block walk.  Finer
+    /// coalescing analysis (merge opportunities the LLRB free tree could
+    /// realise, near-but-not-adjacent gaps, etc.) is expected to develop
+    /// here; the metric and its plumbing are deliberately kept simple so
+    /// they can be extended.
+    pub mergeable_free_pairs: u32,
+}
+
+impl StoreUsage {
+    /// Fraction of capacity holding live data, 0..100.
+    #[must_use]
+    pub fn used_pct(&self) -> f64 {
+        if self.capacity_words == 0 {
+            return 0.0;
+        }
+        100.0 * f64::from(self.claimed_words) / f64::from(self.capacity_words)
+    }
+}
+
 // A low-level heap store: the several flags (free / read_only /
 // free_protected / borrowed) are independent state bits on the same
 // allocation, not a bundle that should become an enum.
@@ -487,6 +532,51 @@ impl Store {
 
     pub fn len(&self) -> u32 {
         self.size
+    }
+
+    /// Walk the block chain and report internal space utilisation.
+    /// Same traversal as [`Self::validate`]: a negative size header
+    /// (`addr::<i32>(pos, 0)`) is a free block of `-size` words, a
+    /// positive header is a claimed record of `size` words.  Word 0 is
+    /// the store header and is excluded.  A freed store reports only its
+    /// capacity.
+    #[must_use]
+    pub fn usage(&self) -> StoreUsage {
+        let mut u = StoreUsage {
+            capacity_words: self.size,
+            ..StoreUsage::default()
+        };
+        if self.free || self.size <= PRIMARY {
+            return u;
+        }
+        let mut pos = PRIMARY;
+        let mut prev_was_free = false;
+        while pos < self.size {
+            let claim = *self.addr::<i32>(pos, 0);
+            if claim == 0 {
+                break; // malformed / uninitialised tail — stop rather than spin
+            }
+            let sz = claim.unsigned_abs();
+            if claim < 0 {
+                u.free_words += sz;
+                u.free_count += 1;
+                if sz > u.largest_free_words {
+                    u.largest_free_words = sz;
+                }
+                // Two consecutive free blocks are physical neighbours that
+                // `delete` should have coalesced — flag the missed merge.
+                if prev_was_free {
+                    u.mergeable_free_pairs += 1;
+                }
+                prev_was_free = true;
+            } else {
+                u.claimed_words += sz;
+                u.claimed_count += 1;
+                prev_was_free = false;
+            }
+            pos += sz;
+        }
+        u
     }
 
     /// Change the store size, do not mutate content

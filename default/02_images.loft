@@ -378,6 +378,17 @@ pub fn now() -> integer;
 // Unaffected by system clock adjustments. Use for benchmarks and frame timing.
 pub fn ticks() -> integer;
 #impure(host_io)
+// --- Memory diagnostics ---
+// Returns a multi-line snapshot of all LIVE stores' internal memory
+// utilisation: total capacity vs actual claimed data vs free space,
+// record + free-block counts, mergeable adjacent-free pairs (free
+// neighbours that should have coalesced), and the largest stores by
+// capacity with their creation site (`bc:<pos>` — a bytecode position on
+// the interpreter; 0 on --native) and type name.  Use to watch memory
+// growth in a running program.
+pub fn store_memory() -> text;
+#rust"stores.memory_report()"
+#impure(host_io)
 
 // Clears the scratch buffer used by text-returning native functions (A8).
 // Emitted at statement boundaries by the compiler; not callable from user code.
