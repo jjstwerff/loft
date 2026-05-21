@@ -68,6 +68,27 @@ next base.
   and the reason the whole engine exists: to make the scramble decision feel
   good.
 
+## Design principle — bounded sessions (the rogue-lite opt-out)
+
+A single base must be a **bounded, one-sitting mission**, and the boundaries
+between bases must be **clean save-and-quit points**. This is a first-class
+design constraint, not an afterthought — and a deliberate strength:
+
+- **Short sessions are the rogue-lite appeal.** Much of why people love
+  rogue-lites is the graceful opt-out: when you're short on time you reach a
+  natural stopping point without losing progress. dryopea's **scramble IS that
+  exit** — bail out of a failing base, keep your salvage, stop; resume the run
+  later. A time-pressured player is *rewarded* for leaving, not punished.
+- **Between-base = the save point.** The only cross-base meta-state is the
+  evacuated-component inventory (§ scramble), so persisting a run between bases
+  is tiny and clean. A base-in-progress need not be resumable mid-mission; the
+  run is resumable at **base boundaries**, which keeps save-state trivial.
+- **Pace a base to a target sitting.** Tune wave count / build time so a base
+  resolves (win, scramble, or loss) within a bounded window. Treat "how long
+  is a base" as a **tunable pacing parameter**, not an emergent accident —
+  echoing @PLAN36's "sluggish by design" pacing principle (bounded tempo as a
+  first-class lever).
+
 ## The editor / game split (architectural spine)
 
 **The editor authors only TERRAIN; the running game places everything else.**
