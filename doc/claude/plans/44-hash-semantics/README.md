@@ -39,11 +39,11 @@ plan is done when every case is `PASS` on both backends. Run:
 | struct-FIELD append `s.h += […]` + lookup | grows / found | ✅ |
 | `h[key] = value` **update** an EXISTING key | replaces in place | ✅ |
 | struct return with hash field (`build_index`) | works | ✅ (@P300/@P301) |
-| **`h[key] = value` INSERT a NEW key** | inserts | ❌ **@P305** — silent no-op |
+| **`h[key] = value` INSERT a NEW key** | inserts | ✅ **@P305 fixed** 2026-05-21 (`OpSetKeyed`) |
 | **`keyed += [dup-key]` dedup** | replace, `len` stays | ❌ **@P306** — appends dup; lookup returns first |
 | **clear struct-FIELD `s.h = []`** | empty, no leak | ✅ **@P307 fixed** 2026-05-21 (`OpClearKeyed`) |
 
-Two holes remain (@P305, @P306); @P307 landed 2026-05-21.
+One hole remains (@P306, the `+=` dedup design question); @P305 + @P307 landed 2026-05-21.
 
 ## The three bugs
 

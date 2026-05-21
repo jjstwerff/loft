@@ -1078,6 +1078,11 @@ fn OpReplaceKeyed(src: reference, dest: reference, tp: const u16);
 // claim INSIDE its struct's store, so it needs this in-place free instead.
 fn OpClearKeyed(dest: reference, tp: const u16);
 #rust"s.database.remove_claims(&@dest, @tp);"
+// @P305 — `coll[key] = value` insert-or-replace into a keyed collection
+// (hash/sorted/index), deduped by value's key.  Updates an existing key
+// in place OR inserts a new one (the plain `OpCopyRecord` lowering could
+// only update — it no-op'd into the null lookup when the key was absent).
+fn OpSetKeyed(coll: reference, value: reference, tp: const u16);
 type iterator;
 // Call a predefined system function (but not an operator).
 fn OpStaticCall(call: const u16);

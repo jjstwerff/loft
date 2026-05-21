@@ -5184,6 +5184,7 @@ fn find_written_vars(
                 || def.name == "OpAppendVector"
                 || def.name == "OpClearVector"
                 || def.name == "OpClearKeyed"
+                || def.name == "OpSetKeyed"
                 || def.name == "OpInsertVector"
                 || def.name == "OpRemoveVector";
             // OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
@@ -5305,6 +5306,7 @@ fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>
                 || def.name == "OpAppendVector"
                 || def.name == "OpClearVector"
                 || def.name == "OpClearKeyed"
+                || def.name == "OpSetKeyed"
                 || def.name == "OpInsertVector"
                 || def.name == "OpRemoveVector";
             let second_arg_write = def.name == "OpCopyRecord";

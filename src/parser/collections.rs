@@ -444,6 +444,84 @@ impl Parser {
         if let Some(result) = self.towards_set_hash_remove(to, val, op) {
             return result;
         }
+        // @P305 — `coll[key] = value` insert-or-replace for a KEYED
+        // collection.  The LHS parsed to `OpGetRecord(coll, db_tp, key…)`,
+        // which returns the existing slot or null; the default reference
+        // copy below (`OpCopyRecord(value, OpGetRecord(…))`) UPDATES an
+        // existing key but silently NO-OPs when the key is absent (copy into
+        // a null lookup), so it could never INSERT.  Route to `OpSetKeyed`,
+        // which finds-or-inserts at runtime (dedup by `value`'s key),
+        // uniformly for local / field / `&`-param collections.  (The
+        // `coll[key] = null` removal is intercepted earlier in this fn.)
+        if op == "="
+            && matches!(f_type, Type::Reference(_, _))
+            && let Value::Call(get_nr, get_args) = to.unspan()
+            && self.data.def(*get_nr).name == "OpGetRecord"
+            && let Some(Value::Int(db_tp)) = get_args.get(1)
+            && (*db_tp as usize) < self.database.types.len()
+            && matches!(
+                self.database.types[*db_tp as usize].parts,
+                Parts::Hash(_, _) | Parts::Sorted(_, _) | Parts::Index(_, _, _)
+            )
+        {
+            let db_tp = *db_tp;
+            let coll = get_args[0].clone();
+            // Multi-index guard: a keyed STRUCT FIELD cross-linked with a
+            // sibling index (two+ keyed fields sharing an element type,
+            // auto-linked in types.rs) can't be maintained by `OpSetKeyed`
+            // (it lacks the struct + field context to update the siblings).
+            // Detect it and fall through to the update-only `copy_ref` below
+            // (which keeps the shared record consistent — no insert, no
+            // corruption — matching the pre-@P305 behaviour for that case).
+            let mut multi_index = false;
+            if let Value::Call(gf_nr, gf_args) = coll.unspan()
+                && self.data.def(*gf_nr).name == "OpGetField"
+                && let Some(Value::Int(byte_off)) = gf_args.get(1)
+                && let Value::Var(sv) = gf_args[0].unspan()
+            {
+                let d_nr = match self.vars.tp(*sv) {
+                    Type::Reference(d, _) => *d,
+                    Type::RefVar(inner) => match &**inner {
+                        Type::Reference(d, _) => *d,
+                        _ => u32::MAX,
+                    },
+                    _ => u32::MAX,
+                };
+                if d_nr != u32::MAX {
+                    let struct_tp = self.data.def(d_nr).known_type;
+                    multi_index = self
+                        .database
+                        .keyed_field_is_linked(struct_tp, *byte_off as u16);
+                }
+            }
+            if multi_index {
+                // `coll[key] = value` on a multi-indexed field would desync
+                // the sibling indexes (OpSetKeyed) or `copy_block` into a
+                // null lookup on an insert-miss (copy_ref) — both corrupt.
+                // Direct the user to `+= [value]`, which maintains every
+                // sibling index via record_finish's `other_indexes` path.
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`coll[key] = value` is not supported on a multi-indexed \
+                         field (a struct with two-or-more keyed fields sharing an \
+                         element type); use `coll += [value]` instead"
+                    );
+                }
+                return Value::Null;
+            }
+            #[cfg(not(feature = "wasm"))]
+            let tp_val = if self.is_struct_returning_call(val) {
+                db_tp | 0x8000
+            } else {
+                db_tp
+            };
+            #[cfg(feature = "wasm")]
+            let tp_val = db_tp;
+            return self
+                .cl("OpSetKeyed", &[coll, val.clone(), Value::Int(tp_val)]);
+        }
         if matches!(f_type, Type::Enum(_, true, _) | Type::Reference(_, _))
             && op == "="
             && !matches!(to, Value::Var(_))

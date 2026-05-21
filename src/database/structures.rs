@@ -84,6 +84,29 @@ impl Stores {
         }
     }
 
+    /// @P305 — true when the keyed field at byte offset `byte_off` in
+    /// struct / enum-value type `struct_tp` is cross-linked with a sibling
+    /// index (the multi-index case: two-or-more keyed fields sharing an
+    /// element type are auto-linked in `types.rs`).  `OpSetKeyed` lacks the
+    /// struct + field context to maintain the sibling indexes, so the parser
+    /// falls back to the (non-corrupting) update-only path for these.
+    #[must_use]
+    pub fn keyed_field_is_linked(&self, struct_tp: u16, byte_off: u16) -> bool {
+        if (struct_tp as usize) >= self.types.len() {
+            return false;
+        }
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+            &self.types[struct_tp as usize].parts
+        {
+            for f in fields {
+                if f.position == byte_off {
+                    return !f.other_indexes.is_empty();
+                }
+            }
+        }
+        false
+    }
+
     pub(super) fn field_ref(&self, data: &DbRef, parent_tp: u16, field: u16) -> DbRef {
         if field == u16::MAX {
             *data

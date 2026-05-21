@@ -229,6 +229,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     copy_record,
     replace_keyed,
     clear_keyed,
+    set_keyed,
     static_call,
     create_stack,
     init_create_stack,
@@ -1871,6 +1872,10 @@ fn clear_keyed(s: &mut State) {
     let v_tp = *s.code::<u16>();
     let v_dest = *s.get_stack::<DbRef>();
     s.database.remove_claims(&v_dest, v_tp);
+}
+
+fn set_keyed(s: &mut State) {
+    s.set_keyed();
 }
 
 fn static_call(s: &mut State) {

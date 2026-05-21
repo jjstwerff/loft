@@ -869,6 +869,19 @@ impl Output<'_> {
                 }
                 return Ok(());
             }
+            // @P305 — keyed insert-or-replace: coll[key] = value.
+            "OpSetKeyed" => {
+                if let [ref coll, ref value, ref tp_val] = vals[..] {
+                    write!(w, "OpSetKeyed(cell,")?;
+                    self.output_code_inner(w, coll)?;
+                    write!(w, ", ")?;
+                    self.output_code_inner(w, value)?;
+                    write!(w, ", ")?;
+                    self.emit_i32_slot(w, tp_val)?;
+                    write!(w, ")")?;
+                }
+                return Ok(());
+            }
             // @P307 — clear a keyed-collection struct field: remove_claims
             // frees the contents + zeroes the field pointer.
             "OpClearKeyed" => {

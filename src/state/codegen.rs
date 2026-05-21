@@ -2594,7 +2594,16 @@ impl State {
                 Type::Float => stack.add_op("OpGetFloat", self),
                 Type::Enum(_, false, _) => stack.add_op("OpGetByte", self),
                 Type::Text(_) => stack.add_op("OpGetStackText", self),
-                Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _) => {
+                Type::Vector(_, _)
+                | Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                // @P305 — keyed collections passed by `&` are DbRef-backed
+                // just like vectors/references; referencing one (e.g. as the
+                // `coll` arg of `OpSetKeyed` for `h[k] = v` on a `&hash`
+                // param) needs the same stack-ref deref.
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _) => {
                     stack.add_op("OpGetStackRef", self);
                 }
                 _ => panic!("Unknown referenced variable type: {tp}"),

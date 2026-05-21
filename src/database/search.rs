@@ -455,6 +455,57 @@ impl Stores {
         }
     }
 
+    /// @P305 — insert-or-replace a value into a keyed collection
+    /// (`hash`/`sorted`/`index`), keyed by `value`'s own key field(s).  This
+    /// is the runtime of `coll[k] = value`: if a record with `value`'s key
+    /// already exists it is removed first (so the key stays unique — dedup),
+    /// then `value` is deep-copied into a fresh record and linked in.  Works
+    /// uniformly for a LOCAL, struct FIELD, or `&`-param collection because
+    /// `coll` is just the resolved collection ref at runtime.  Mirrors the
+    /// proven `OpNewRecord` + `OpCopyRecord` + `OpFinishRecord` append
+    /// sequence (so it shares its deep-copy + linking machinery) plus a
+    /// preceding remove.  `free_source` frees `value`'s store after the copy
+    /// when it is a caller temp (the `0x8000` bit, as in `copy_record`).
+    pub fn set_keyed(&mut self, coll: &DbRef, value: &DbRef, db: u16, free_source: bool) {
+        let content_tp = match self.types[db as usize].parts {
+            Parts::Hash(c, _) | Parts::Sorted(c, _) | Parts::Index(c, _, _) | Parts::Ordered(c, _) => {
+                c
+            }
+            _ => return,
+        };
+        let keys = self.types[db as usize].keys.to_vec();
+        let key = keys::get_key(value, &self.allocations, &keys);
+        let existing = self.find(coll, db, &key);
+        if existing.rec != 0 {
+            // dedup: free the old record's nested heap, then unlink it.
+            self.remove_claims(&existing, content_tp);
+            self.remove(coll, &existing, db);
+            // A hash record is a SEPARATE store claim, so the unlink above
+            // leaves it orphaned — reclaim it (otherwise repeated
+            // `coll[k] = v` replaces grow the store unboundedly).  Sorted /
+            // index records are inline in the vector / freed by their own
+            // `remove`, so no extra delete there.
+            if matches!(self.types[db as usize].parts, Parts::Hash(_, _)) {
+                self.store_mut(coll).delete(existing.rec);
+            }
+        }
+        // insert: claim a fresh record, deep-copy `value` into it, link by key.
+        let new = self.record_new(coll, db, u16::MAX);
+        let size = u32::from(self.size(content_tp));
+        self.copy_block(value, &new, size);
+        self.copy_claims(value, &new, content_tp);
+        self.record_finish(coll, &new, db, u16::MAX);
+        if free_source
+            && value.store_nr != coll.store_nr
+            && value.store_nr != 0
+            && !self.allocations[value.store_nr as usize].free
+            && !self.allocations[value.store_nr as usize].read_only
+            && !self.allocations[value.store_nr as usize].free_protected
+        {
+            self.free(value);
+        }
+    }
+
     /**
     Remove a specific record from a structure.
     # Panics

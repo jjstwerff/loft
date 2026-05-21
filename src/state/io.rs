@@ -1242,6 +1242,18 @@ impl State {
         }
     }
 
+    /// @P305 — `coll[key] = value` insert-or-replace into a keyed
+    /// collection.  `OpSetKeyed(coll, value, tp)`: `tp`'s `0x8000` bit frees
+    /// `value`'s store after the deep copy (caller temp).
+    pub fn set_keyed(&mut self) {
+        let raw_tp = *self.code::<u16>();
+        let free_source = raw_tp & 0x8000 != 0;
+        let db_tp = raw_tp & 0x7FFF;
+        let value = *self.get_stack::<DbRef>();
+        let coll = *self.get_stack::<DbRef>();
+        self.database.set_keyed(&coll, &value, db_tp, free_source);
+    }
+
     pub fn hash_add(&mut self) {
         let tp = *self.code::<u16>();
         let rec = *self.get_stack::<DbRef>();
