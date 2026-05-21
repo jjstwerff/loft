@@ -423,15 +423,22 @@ fn build_crystal_vbo(snap: CellSnap, births: vector<integer>,
   cm = crystal_segments_aged(snap, state, tick);
   main_w = MAIN_WIDTH * HEX_SIZE;
   side_w = SIDE_WIDTH * HEX_SIZE;
-  // Per-cell bloom anchor (cell centre) + birth, computed ONCE (cell_h is
-  // O(n)); each segment then looks these up by its owning cell index, so
-  // the GPU growth shader blooms every cell's crystal out from its centre.
+  // Per-cell bloom anchor (cell centre) + birth, computed ONCE; each
+  // segment then looks these up by its owning cell index, so the GPU
+  // growth shader blooms every cell's crystal out from its centre.
+  // PF2: build the coord→index hash inline (a helper that RETURNS the
+  // hash trips @P300) and use cell_h_at so the height precompute is O(N),
+  // not O(N²).
   ncells = len(snap.xs);
+  pidx: hash<audience_crystal::CellRef[ck]> = [];
+  for pi in 0..ncells {
+    pidx += [audience_crystal::CellRef{ck: audience_crystal::enc_coord(snap.xs[pi], snap.ys[pi]), ix: pi}];
+  }
   cxs: vector<single> = []; cys: vector<single> = []; czs: vector<single> = [];
   cbirth: vector<single> = [];
   for ci in 0..ncells {
     cxs += [cell_wx(snap.xs[ci], snap.ys[ci]) as single];
-    cys += [cell_h(snap, ci) as single];
+    cys += [cell_h_at(snap, pidx, ci) as single];
     czs += [cell_wz(snap.ys[ci]) as single];
     cbirth += [births[ci] as single];
   }
