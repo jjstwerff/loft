@@ -80,3 +80,42 @@ pub fn nbr_count_idx(cidx: hash<CellRef[ck]>, cx: integer, cy: integer) -> integ
   }
   c
 }
+
+// ── B1: SegMesh accumulator ──────────────────────────────────────────
+//
+// Struct-of-arrays line-segment mesh for segment/ribbon consumers (the
+// crystal rule).  Each segment is a 3D line (x0,y0,z0)→(x1,y1,z1) with a
+// kind, a colour, and the OWNING cell index (`cell_ix`) — the latter lets
+// a consumer attribute a segment back to its cell (e.g. GPU bloom-from-
+// centre keyed by cell age) and lets the dirty-rebuild find-and-replace a
+// cell's segments.  Coordinates are `single` (f32 — the GPU VBO format,
+// no precision loss vs what is rendered) and kind/colour are `u8`
+// (M1 narrowing: ~60 % less memory than the i64/f64 prototype).
+pub struct SegMesh {
+  kinds:   vector<u8>,
+  x0s:     vector<single>, y0s: vector<single>, z0s: vector<single>,
+  x1s:     vector<single>, y1s: vector<single>, z1s: vector<single>,
+  colors:  vector<u8>,
+  cell_ix: vector<integer>,
+}
+
+pub fn seg_mesh_new() -> SegMesh {
+  SegMesh{ kinds: [], x0s: [], y0s: [], z0s: [], x1s: [], y1s: [], z1s: [],
+           colors: [], cell_ix: [] }
+}
+
+// Append one segment owned by cell `owner`.  Callers pass `float` coords
+// and `integer` kind/colour; they are narrowed to the storage width here.
+pub fn emit_segment(m: &SegMesh, kind: integer,
+                    x0: float, y0: float, z0: float,
+                    x1: float, y1: float, z1: float,
+                    color: integer, owner: integer) {
+  m.kinds   += [kind as u8];
+  m.x0s += [x0 as single]; m.y0s += [y0 as single]; m.z0s += [z0 as single];
+  m.x1s += [x1 as single]; m.y1s += [y1 as single]; m.z1s += [z1 as single];
+  m.colors  += [color as u8];
+  m.cell_ix += [owner];
+}
+
+// Number of segments in the mesh.
+pub fn seg_len(m: SegMesh) -> integer { len(m.kinds) }
