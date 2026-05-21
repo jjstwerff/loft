@@ -32,9 +32,9 @@ walkable**, so the vehicle can drive along them to reach a base under attack;
 | | Authored in the editor (static) | Placed by the game at runtime (dynamic) |
 |---|---|---|
 | **Owns** | hex **terrain features** (ground types + slope, lib-plan 20) **+ a small set of static gameplay markers** — enemy **spawn points**, findable-**item positions** | **buildings, walls, bridges, towers** + spawned mobs |
-| **Tooling** | the moros editor (hex paint + slope solver + marker placement) | dryopea runtime build-order system |
+| **Tooling** | the moros editor (hex paint + slope solver + the **existing item-layer** placement tool) | dryopea runtime build-order system |
 | **Mutability** | baked content; re-saved with the level | mutable override layer; built + destroyed during play |
-| **Data** | the solved height field + material per hex + the marker list | a separate structure/override store keyed by hex |
+| **Data** | the solved height field + material per hex + markers via the **existing `h_item` item layer** | a separate structure/override store keyed by hex |
 
 This split is the load-bearing decision:
 - **Authored content vs runtime state.** The level file carries the terrain
@@ -45,8 +45,14 @@ This split is the load-bearing decision:
   static markers (enemy spawn points, findable-item positions, and probably
   about the most of it). It has **no building/wall tool**: structures are
   placed only at runtime, so the bulk of dryopea-specific systems live in the
-  game, not the editor. Markers are just authored *positions* — the editor
-  stamps them; the game decides what spawns/appears there.
+  game, not the editor.
+- **Markers reuse moros's EXISTING item layer — no new editor work.** Spawn
+  points and findable items are just entries in the moros item palette,
+  placed onto a hex's `h_item` field with the item-placement tool that's
+  already there. They're authored *positions*; the game decides what
+  spawns/appears at each. **The more complex stencil machinery
+  (`PlaceStencil` / `stencil_stamp`) is NOT needed yet** — single-hex item
+  placement covers all the markers dryopea wants for now.
 - **Structures are an OVERRIDE LAYER on top of solved terrain** (see lib-plan
   20 § "Built structures are a separate override layer"): a wall is
   raised-terrain (walkable top, steep sides), a bridge is a deck on a higher
