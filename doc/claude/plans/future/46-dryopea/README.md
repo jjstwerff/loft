@@ -15,15 +15,18 @@ acceptance test for those primitives.
 
 ## Goal
 
-A non-standard sci-fi tower-defence. The player rides a **semi-floating
-vehicle** (over-the-shoulder 3rd-person camera; it hovers above terrain to
-avoid clipping cliff edges), and rather than placing structures directly,
-**issues build ORDERS** — towers, walls, bridges — that **NPC workers** then
-construct over time. The player reacts in real time: repairing and buffing
-towers as enemy waves and a boss approach, and **travelling the landscape**
-to find hidden treasures that speed up upgrades. Walls are **≥1 hex wide and
-walkable**, so the vehicle can drive along them to reach a base under attack;
-**bosses can break walls**, severing those routes.
+A non-standard sci-fi tower-defence. At the **start of a match the player
+places their core building** — the thing the enemies attack and the player
+must defend (lose it = lose). The player rides a **semi-floating vehicle**
+(over-the-shoulder 3rd-person camera; it hovers above terrain to avoid
+clipping cliff edges), and rather than placing structures directly, **issues
+build ORDERS** — towers, walls, bridges — that **NPC workers** then construct
+over time. The player reacts in real time: repairing and buffing towers as
+enemy waves and a boss approach, and **travelling the landscape** to find
+hidden treasures that speed up upgrades. Walls are **≥1 hex wide and
+walkable**, so the vehicle can drive along them to reach the core under
+attack; **bosses can break walls**, severing those routes and re-opening the
+enemy path.
 
 ## The editor / game split (architectural spine)
 
@@ -61,6 +64,11 @@ This split is the load-bearing decision:
 
 ## Systems (game-specific scope)
 
+0. **Match setup — place the core.** At the start of a match the player
+   places the **core building** (the defend objective): it becomes the
+   **flow-field goal** all mobs path toward, it has health, and losing it
+   ends the match. It is the first runtime structure; everything else
+   (towers/walls/bridges) is built to defend it.
 1. **Floating vehicle + over-shoulder camera** — a hover controller that
    samples terrain height under the vehicle footprint (`world→hex →
    h_height`, max over the footprint, + clearance) so it rides above terraced
@@ -73,10 +81,31 @@ This split is the load-bearing decision:
    bridges (`cy`-layer decks toward other walls), towers; all mutable +
    destructible. Building/destroying = a height-override edit → dirty chunk →
    gridmesh incremental re-mesh.
-4. **Multi-level pathing** — a traversal graph over natural ground
-   (slope-gated, `md_slope` = cost) **+ wall tops + bridge decks**, connected
-   where adjacent at compatible heights. Used by the vehicle, NPC workers, and
-   enemies. Edits on build/destroy.
+4. **Multi-level pathing + enemy flow field** — a traversal graph over
+   natural ground (slope-gated, `md_slope` = cost) **+ wall tops + bridge
+   decks**, connected where adjacent at compatible heights.
+   - **Enemy guidance = a flow field ("direction markers"), defined at
+     runtime.** Compute a distance-from-goal field (BFS/Dijkstra from the
+     **player-placed core building** — the fixed defend goal) over the
+     *mob-walkable* graph; each cell's "direction marker" is the descent
+     toward the nearest-to-goal neighbour. Mobs just sample the marker at
+     their cell → O(1) per mob, scales to a horde with one field. This is the
+     canonical TD flow field. **The goal is the (static) core, not the roaming
+     vehicle — so the field recomputes only when WALLS change, never per
+     frame.**
+   - **Walls funnel mobs to gaps automatically.** A wall is a steep raised
+     hex → impassable to *ground* mobs by the same `md_slope` gate that blocks
+     cliffs (the floating vehicle ignores it — traversal is per-agent-type).
+     The distance field routes around the obstacle, so its markers point
+     through the **holes** in a wall line — no explicit gap-finding needed;
+     it's a property of the field. Building a wall reshapes the markers;
+     leaving a gap is how you choose where mobs come through.
+   - **Recompute shares the wall dirty-regions.** A wall built or
+     boss-broken dirties chunk(s) → the SAME dirty signal that triggers
+     gridmesh re-mesh also re-solves the affected region of the flow field +
+     re-routes. One dirty event, two consumers (mesh + field).
+   - **Vehicle + NPC workers** use point-to-point routes (A* over the same
+     graph), not the enemy flow field.
 5. **Combat** — enemy waves spawned at the **editor-authored spawn points** +
    a boss that **breaks walls** (→ dirty re-mesh + path re-route); tower
    targeting; reactive player **repair/buff** of towers.
@@ -87,14 +116,16 @@ This split is the load-bearing decision:
 
 | # | Scope | Proves |
 |---|---|---|
-| **D0** | Terrain consumer — load an editor-authored level, render it via gridmesh Phase C, drive the floating vehicle over it (hover + over-shoulder camera). | the lib-plan 20 + gridmesh stack end-to-end (the dryopea-first validation). |
+| **D0** | Terrain consumer — load an editor-authored level, render it via gridmesh Phase C, drive the floating vehicle over it (hover + over-shoulder camera); place the **core building** at a chosen hex. | the lib-plan 20 + gridmesh stack end-to-end (the dryopea-first validation). |
 | **D1** | Structure override layer + build orders — mark a wall/tower, NPC worker constructs it, chunk re-meshes; build-validity from `md_slope`. | the override layer + dirty re-mesh on a built structure. |
-| **D2** | Multi-level pathing — vehicle + NPC routes over ground + wall tops + bridge decks. | the traversal graph + bridge `cy`-layer. |
-| **D3** | Combat slice — one enemy wave + towers + a boss that breaks a wall (re-mesh + re-route). | destruction as a runtime dirty-rebuild driver. |
+| **D2** | Flow field + multi-level pathing — distance-from-core field guides mobs (funnels to wall gaps); vehicle + NPC point-to-point routes over ground + wall tops + bridge decks. | the flow field (recompute on wall change) + the traversal graph + bridge `cy`-layer. |
+| **D3** | Combat slice — one enemy wave (spawns at authored points, flows to the core) + towers + a boss that breaks a wall (re-mesh + flow-field re-route). | destruction as a runtime dirty-rebuild driver for BOTH mesh + field. |
 | **D4** | Economy / exploration — treasures + upgrades. | the loop closes. |
 
-Vertical slice = **D0 + minimal D1 + D3**: drive in, order a wall, NPC builds
-it, an enemy breaks it. That slice exercises every shared primitive.
+Vertical slice = **D0 + minimal D1 + D2 + D3**: place the core, drive in,
+order a wall (mobs funnel to the gap), a wave spawns and flows to the core, a
+boss breaks the wall and re-opens the path. That slice exercises every shared
+primitive.
 
 ## Dependencies + shared primitives
 
