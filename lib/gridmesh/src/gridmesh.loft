@@ -120,6 +120,18 @@ pub fn emit_segment(m: &SegMesh, kind: integer,
 // Number of segments in the mesh.
 pub fn seg_len(m: SegMesh) -> integer { len(m.kinds) }
 
+// Append all of `src`'s segments onto `dst` (concatenate the nine parallel
+// arrays).  Used to assemble a render-group mesh from its chunks' CACHED
+// meshes and to concatenate chunk meshes into a full build — order-preserving,
+// so the consumer can rely on a stable per-group draw order.
+pub fn seg_mesh_append(dst: &SegMesh, src: SegMesh) {
+  dst.kinds += src.kinds;
+  dst.x0s += src.x0s; dst.y0s += src.y0s; dst.z0s += src.z0s;
+  dst.x1s += src.x1s; dst.y1s += src.y1s; dst.z1s += src.z1s;
+  dst.colors += src.colors;
+  dst.cell_ix += src.cell_ix;
+}
+
 // ── B2: ChunkField + chunk partition + wired-in dirty index ───────────
 //
 // The FIELD tracks WHERE cells are: placement-ordered coords (index 0 =

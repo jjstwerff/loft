@@ -730,10 +730,107 @@ pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: in
   inputs = all_inputs(field, halo_k);
   for ci in inputs {
     cm = build_crystal_chunk(snap, field.cidx, state, tick, ci);
-    out.kinds += cm.kinds; out.colors += cm.colors; out.cell_ix += cm.cell_ix;
-    out.x0s += cm.x0s; out.y0s += cm.y0s; out.z0s += cm.z0s;
-    out.x1s += cm.x1s; out.y1s += cm.y1s; out.z1s += cm.z1s;
+    seg_mesh_append(out, cm);
   }
+  out
+}
+
+// ── C3: incremental rebuild with two-level reuse ──────────────────────
+//
+// ⚠️  BLOCKED ON @P311 (do not use yet).  Caching per-chunk `SegMesh`es in
+// `chunks: hash<ChunkMeshEntry[ck]>` hits a keyed-collection deep-copy /
+// type-resolution bug: once the hash holds several nested-struct-of-vectors
+// elements, iterating it panics OOB (`search.rs:366`, unresolved vector
+// content type 0xFFFF) — deterministically at ~25 painted cells.  The code
+// below is correct in shape and kept ready for when @P311 is fixed; the
+// projector (C4) still uses the full build `crystal_segments_aged` until then.
+//
+// `CrystalIncr` holds the field + a per-chunk cached SegMesh (the reuse
+// unit) + a per-group assembled mesh (the upload unit).  A paint marks the
+// cell's chunk (+ halo neighbours) dirty; `crystal_incr_rebuild` re-runs the
+// rule for ONLY the dirty chunks and re-assembles ONLY the dirty groups (from
+// member chunks' CACHED meshes) — so the per-edit cost is O(dirty chunks ·
+// density) + O(dirty groups · group size), flat in N under bounded density.
+
+struct ChunkMeshEntry { ck: integer not null, mesh: SegMesh }
+
+// Per-CHUNK cached meshes are the source of truth + the CPU-reuse unit:
+// crystal_incr_rebuild re-runs the rule for ONLY the dirty chunks and reuses
+// the rest.  Per-GROUP meshes are assembled ON DEMAND from the cached chunk
+// meshes (a cheap concat) rather than cached in a second keyed collection —
+// the consumer caches the GPU VBO per group and re-uploads only the groups
+// that contain a dirty chunk (which it learns from collect_dirty_groups).
+pub struct CrystalIncr {
+  snap:      CellSnap,                  // source of truth (xs, ys, colors)
+  field:     ChunkField,                // spatial index + buckets + dirty set
+  group_dim: integer,                   // tunable: G=1 per-chunk … G large ~one VBO
+  chunks:    hash<ChunkMeshEntry[ck]>,  // per-chunk cached mesh (reused if not dirty)
+}
+
+// Re-run the rule for the given chunk inputs, upserting each into the cache
+// (unchanged chunks are left untouched = reused).
+fn crystal_incr_rebuild_chunks(c: &CrystalIncr, inputs: vector<ChunkInput>,
+                               state: CrystalState, tick: integer) {
+  for ci in inputs {
+    cm = build_crystal_chunk(c.snap, c.field.cidx, state, tick, ci);
+    c.chunks[ci.key.ck] = ChunkMeshEntry{ck: ci.key.ck, mesh: cm};
+  }
+}
+
+// Build a CrystalIncr from an initial snapshot (may be empty), full-building
+// every chunk's mesh once.  chunk_shift / group_dim / halo_k are the dials.
+pub fn crystal_incr_new(snap: CellSnap, chunk_shift: integer, group_dim: integer,
+                        halo_k: integer, state: CrystalState, tick: integer) -> CrystalIncr {
+  c = CrystalIncr{
+    snap: snap,
+    field: field_new(0, snap.xs, snap.ys, chunk_shift, halo_k),
+    group_dim: group_dim,
+    chunks: [],
+  };
+  crystal_incr_rebuild_chunks(c, all_inputs(c.field, halo_k), state, tick);
+  c
+}
+
+// Paint one cell — appends to the snapshot AND the field (marks the cell's
+// chunk + halo-border neighbours dirty).  Rebuild applies the change.
+pub fn crystal_incr_paint(c: &CrystalIncr, x: integer, y: integer, color: integer) {
+  c.snap.xs += [x]; c.snap.ys += [y]; c.snap.colors += [color];
+  field_add_cell(c.field, x, y);
+}
+
+// Re-run ONLY the dirty chunks, then clear dirty.  O(dirty chunks · density),
+// flat in N under bounded density.
+pub fn crystal_incr_rebuild(c: &CrystalIncr, state: CrystalState, tick: integer) {
+  crystal_incr_rebuild_chunks(c, collect_dirty_inputs(c.field, c.field.halo_k), state, tick);
+  clear_dirty(c.field);
+}
+
+// Assemble ONE group's mesh from its member chunks' CACHED meshes (concat).
+// A separate function so the keyed read+append never shares a frame with a
+// keyed upsert (works around @P311).
+pub fn crystal_incr_assemble_group(c: CrystalIncr, gi: GroupInput) -> SegMesh {
+  gm = seg_mesh_new();
+  for j in 0..len(gi.chunk_cks) {
+    ce = c.chunks[gi.chunk_cks[j] ?? 0];
+    if ce { seg_mesh_append(gm, ce.mesh); }
+  }
+  gm
+}
+
+// The per-group assembled meshes (one VBO per group; the consumer reuses the
+// VBOs of groups that contain no dirty chunk).  G large ⇒ ~one mesh ⇒ one VBO.
+pub fn crystal_incr_group_meshes(c: CrystalIncr) -> vector<SegMesh> {
+  out: vector<SegMesh> = [];
+  gs = all_groups(c.field, c.group_dim);
+  for gi in gs { out += [crystal_incr_assemble_group(c, gi)]; }
+  out
+}
+
+// The whole crystal as one SegMesh — concat all cached chunk meshes directly
+// (for tests + single-VBO consumers).
+pub fn crystal_incr_full_mesh(c: CrystalIncr) -> SegMesh {
+  out = seg_mesh_new();
+  for ce in c.chunks { seg_mesh_append(out, ce.mesh); }
   out
 }
 
