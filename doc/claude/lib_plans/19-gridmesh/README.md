@@ -65,6 +65,44 @@ So: chunk so the data fits cache → narrow + SoA so more fits per line →
 keep the index compact → process contiguously.  Parallelism (below) is a
 *second-order* win layered on top of locality, not the main event.
 
+## moros world architecture (decided 2026-05-21)
+
+The world consumer (the Phase-C payoff) is now pinned:
+
+- **Chunks are fixed 32×32, always** — no other chunk size will exist.
+  So a chunk's cells are a **dense 1024-hex grid** and cell access is pure
+  arithmetic (`hex_idx_32`, `y*32 + x`) into flat **SoA** arrays — *no
+  per-chunk hash*.  With narrow types (~4 B/cell: `u16` height + `u8`
+  material + `u8` wall/flags) the cell core is ~4 KB → L1-resident.  This
+  is the cache unit.
+- **The world index is a SPARSE hash `hash<Chunk[cx,cy,cz]>`** — sparse not
+  because chunks are sparse internally (they're dense) but because the
+  world is **sparse in the vertical axis**: a few columns have many stacked
+  layers, most have a single layer with lots of empty space around them.  A
+  dense 3D array would allocate max-layer depth everywhere → huge waste; the
+  hash pays only per existing chunk.  This is loft's **indirection hash** —
+  the *chunk holds its own `(cx,cy,cz)`*, the hash slot holds a pointer to
+  the chunk record, lookup compares the chunk's stored coord.  No new
+  structure: the existing `hash<Chunk[cx,cy,cz]>` is the fit.  *(It replaces
+  `moros_map`'s current linear scan over `m_chunks`.)*  Inserting a chunk at
+  an already-occupied coord **replaces** it (dedup) — now correct via plan-44
+  (@P305/@P306).
+- **A `Chunk` holds**: its `(cx,cy,cz)` (the hash key) + the dense SoA cell
+  grid (source of truth) + a near **mesh** (full geometry, current) + later
+  a far **height profile** (below).
+- **LOD — near mesh, far height-map profile.**  Near chunks render their
+  full mesh.  For long-distance viewing a chunk carries a compact
+  **height map + deformation** that captures the building *silhouette /
+  skyline profile* with minimal detail (correct profile, not much else).
+  That height map is **stored in a GPU texture and rendered by a shader** —
+  so CPU-side it's just a small 2D array to upload (height → texture, the
+  same shape as SoA → VBO), and the shader does the profile/silhouette work.
+  Keep the profile tiny: the far pass streams *many* chunks, so per-chunk
+  profile bytes must stay cache-resident.
+
+Net: **`hash<Chunk[cx,cy,cz]>` (sparse, indirection) → each `Chunk` = dense
+32×32 SoA grid + near mesh + (later) a far height-texture profile.**
+
 ## Reused primitives (extraction sources)
 - `lib/moros_map`: `chunk_idx_32`/`hex_idx_32` (global↔chunk-local),
   `hex_distance`, `map_get_hex` (free cross-chunk halo reads), 32×32
@@ -83,7 +121,7 @@ keep the index compact → process contiguously.  Parallelism (below) is a
 |---|---|---|
 | **A** | Extract coord + spatial-index primitives (`CellRef`, `enc_coord`, `build_index`, `idx_at`, `step_x/step_y`, `axial_dq/dr`, `nbr_count_idx`) into `lib/gridmesh`; re-point `audience_crystal` + the projector onto them. `build_index` replaces the inline @P300 workaround (now fixed). | ✅ **Done** — crystal output + memory byte-identical on both backends (block/100 = 2379 segs; block-500 = 12 738 segs / 2.83 MB / 9 free-blocks). |
 | **B** | Chunking + halo + bounded extent + dirty rebuild: `build_chunk(layout, field, cx,cz,cy, rule) -> Mesh` reading a ≤k-ring halo, emitting geometry owned by in-chunk cells bounded to the chunk; per-chunk/dirty-cell incremental rebuild (O(dirty) compute + O(N) copy). A `HexLayout` adapter (axial flat-top for moros, offset pointy-top for crystal). Carry M1 narrow types into the mesh accumulator. | Open |
-| **C** | moros consumer: `build_chunk_mesh(map, cx,cy,cz)` over `gridmesh` (replacing the global `build_hex_meshes` path incrementally) with a moros RULE — surface + wall placement + edge rounding from the `Hex` neighbour pattern (the crystal technique applied to real world geometry); per-chunk VBOs + dirty IDs + frustum culling. Own sub-plan; the payoff. | Open |
+| **C** | moros consumer (see "moros world architecture" above): fixed **32×32 dense** chunks in a **sparse `hash<Chunk[cx,cy,cz]>`** world index (replaces `moros_map`'s linear `m_chunks` scan); `build_chunk_mesh(map, cx,cy,cz)` over `gridmesh` (replacing the global `build_hex_meshes` path incrementally) with a moros RULE — surface + wall placement + edge rounding from the `Hex` neighbour pattern (the crystal technique applied to real world geometry); per-chunk VBOs + dirty IDs + frustum culling; **LOD**: near = full mesh, far = compact height-map profile uploaded to a texture + rendered by a shader (building silhouette). Own sub-plan; the payoff. | Open |
 
 ## Parallelism — baked in from Phase B (chunks are embarrassingly parallel)
 
@@ -125,6 +163,14 @@ dirty chunks** — a keyed SET of dirty chunk coords
 a per-chunk bool that has to be scanned for, and NOT a plain append
 vector that would accumulate duplicates.  This gives O(dirty) enumeration
 directly, with dedup by construction:
+
+> **Primitives now exist (plan-44, 2026-05-21).**  The keyed-set
+> operations this design assumed are all implemented + cross-mode:
+> idempotent set-insert via `dirty[ck] = ChunkKey{…}` (@P305 `OpSetKeyed`)
+> or `dirty += [ChunkKey{…}]` (@P306 — both dedup by key, latest wins);
+> membership via `if dirty[ck]`; and the wired-in clear via `f.dirty = []`
+> (@P307 `OpClearKeyed`), with bounded memory under churn.  So
+> `dirty: hash<ChunkKey[ck]>` as a struct field is directly buildable now.
 
 - **Marker:** marking a chunk dirty is an idempotent **set-insert** into
   the wired-in dirty index — many edits to the same chunk coalesce to one
