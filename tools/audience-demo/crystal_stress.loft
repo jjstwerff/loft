@@ -20,6 +20,21 @@
 //       tools/audience-demo/crystal_stress.loft
 
 use audience_crystal::*;
+use gridmesh;
+
+// Average full-build CPU cost per segment (µs), over `reps` builds.
+fn us_per_seg(snap: CellSnap, st: CrystalState, reps: integer) -> integer {
+  s = crystal_segments_aged(snap, st, 0);
+  segs = seg_len(s);
+  if segs == 0 { return 0; }
+  t0 = ticks();
+  for r in 0..reps {
+    c = crystal_segments_aged(snap, st, 0);
+    if seg_len(c) < 0 { print("x"); }
+  }
+  t1 = ticks();
+  ((t1 - t0) / reps) / segs ?? 0
+}
 
 // ── Fill patterns ──────────────────────────────────────────────────
 // Each returns a CellSnap of exactly `n` filled cells in offset coords.
@@ -132,5 +147,29 @@ fn main() {
     quad = per_call * 1000 / (n * n);
     print("{n}\t{per_call}\t{quad}\n");
   }
+  // (A chunk_shift × group_dim partition-dial sweep — chunks vs draw-calls —
+  // belongs here too, but exercising gridmesh `all_groups` in a loop after the
+  // ramp trips the keyed-collection-of-vectors churn bug @P311; restore it
+  // once that's fixed.  The render-group counts are validated structurally in
+  // lib/gridmesh/tests/rendergroup.loft instead.)
+
+  // ── Memory: SegMesh (M1 narrow) vs the legacy CrystalMesh ──────────
+  // SegMesh/seg: kinds u8(1)+colors u8(1)+cell_ix i64(8)+6×single(4)=24 → 34 B.
+  // CrystalMesh/seg: 3×i64(24)+6×f64(48) → 72 B.  ~2.1× smaller.
+  print("\n=== memory: SegMesh vs legacy CrystalMesh (static bytes) ===\n");
+  print("hexes  segs   SegMesh(B)  CrystalMesh(B)\n");
+  for mi in [50, 100] {
+    snap = build_block(mi);
+    segs = seg_len(crystal_segments_aged(snap, empty, 0));
+    print("{mi}\t{segs}\t{segs * 34}\t{segs * 72}\n");
+  }
+
+  // ── Flat-cost check: full-build µs/seg ≈ constant in N (O(N) total) ──
+  u20 = us_per_seg(build_block(20), empty, reps);
+  u100 = us_per_seg(build_block(100), empty, reps);
+  print("\n=== flat-cost (block): us/seg n=20={u20}  n=100={u100} ===\n");
+  // PF2 made the build O(N) (us/seg flat); allow 3× + jitter margin.
+  assert(u100 <= u20 * 3 + 5, "full-build us/seg not flat in N (n=100={u100} vs n=20={u20})");
+
   print("\ndone\n");
 }
