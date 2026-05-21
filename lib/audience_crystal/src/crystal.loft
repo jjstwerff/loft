@@ -147,6 +147,12 @@ pub struct CrystalMesh {
   y1s:    vector<float>,
   z1s:    vector<float>,
   colors: vector<integer>,
+  // Owning cell index (into the source CellSnap) for each segment.  Lets
+  // a consumer attribute a segment back to the cell whose paint produced
+  // it — e.g. the projector keys per-cell GPU growth (bloom-from-centre
+  // by cell age) off this, so the mesh stays static/cached while the
+  // animation runs in the vertex shader.
+  cell_ix: vector<integer>,
 }
 
 // ── CrystalState — persistent age tracking across rebuilds ───────────
@@ -516,7 +522,7 @@ pub fn pick_segment_color(self_c: integer,
 pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
                              tick: integer) -> CrystalMesh {
   mesh = CrystalMesh{
-    kinds: [], colors: [],
+    kinds: [], colors: [], cell_ix: [],
     x0s: [], y0s: [], z0s: [],
     x1s: [], y1s: [], z1s: [],
   };
@@ -597,6 +603,7 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
       mesh.x0s    += [src_x]; mesh.y0s += [src_y]; mesh.z0s += [src_z];
       mesh.x1s    += [tip_x]; mesh.y1s += [tip_y]; mesh.z1s += [tip_z];
       mesh.colors += [main_col];
+      mesh.cell_ix += [cs_i];
       // Per-main age factor (0 = newborn, 1 = fully grown), keyed on the
       // NEWER cell + axis.  Empty CrystalState ⇒ DEFAULT_AGE (static).
       main_birth = lookup_main_birth(state, cell_x, cell_y, d);
@@ -622,6 +629,7 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
         mesh.x0s    += [fork_x];                        mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
         mesh.x1s    += [fork_x + blen * cos(plus_ang)]; mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(plus_ang)];
         mesh.colors += [plus_col];
+        mesh.cell_ix += [cs_i];
         minus_ang = ray_ang - deg30;
         minus_seg_id = d * 100 + f * 10 + 1;
         minus_col = pick_segment_color(cell_c, one_away, two_away,
@@ -630,6 +638,7 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
         mesh.x0s    += [fork_x];                         mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
         mesh.x1s    += [fork_x + blen * cos(minus_ang)]; mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(minus_ang)];
         mesh.colors += [minus_col];
+        mesh.cell_ix += [cs_i];
       }
     }
   }

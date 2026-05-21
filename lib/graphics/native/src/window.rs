@@ -167,10 +167,7 @@ fn create_gl_state_with_attrs(
     }
     let _ = surface.swap_buffers(&context);
 
-    let _ = surface.set_swap_interval(
-        &context,
-        SwapInterval::Wait(NonZeroU32::new(1).unwrap()),
-    );
+    let _ = surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
 
     Ok(GlState {
         window,

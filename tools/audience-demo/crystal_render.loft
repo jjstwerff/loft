@@ -237,7 +237,7 @@ fn render_scenario(snap: audience_crystal::CellSnap, out_path: text,
     main_x: [], main_y: [], main_d: [], birth_tick: [],
   };
   cm = audience_crystal::CrystalMesh{
-    kinds: [], colors: [],
+    kinds: [], colors: [], cell_ix: [],
     x0s: [], y0s: [], z0s: [],
     x1s: [], y1s: [], z1s: [],
   };

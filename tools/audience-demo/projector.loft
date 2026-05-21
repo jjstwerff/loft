@@ -49,14 +49,20 @@ SERVER_URL = "ws://127.0.0.1:18083/ws";
 // scheme as the server side so a `4:x,y,c` delta updates the right
 // record by parsing back the integers.
 struct Cell {
-  ck:         text not null,    // "x,y" — primary key
-  x:          integer not null, // offset coord (matches phone client)
-  y:          integer not null,
-  color:      integer not null, // 1..9 (palette index; 0 means deleted)
-  paint_tick: integer not null, // monotonic per-paint counter for ORDER —
-                                // used to build the CellSnap in placement
-                                // order so audience_crystal's centre-vs-
-                                // supporter rules see the right first-paint.
+  ck:          text not null,    // "x,y" — primary key
+  x:           integer not null, // offset coord (matches phone client)
+  y:           integer not null,
+  color:       integer not null, // 1..9 (palette index; 0 means deleted)
+  paint_tick:  integer not null, // monotonic per-paint counter for ORDER —
+                                 // used to build the CellSnap in placement
+                                 // order so audience_crystal's centre-vs-
+                                 // supporter rules see the right first-paint.
+  birth_frame: integer not null, // render-frame number when the cell was
+                                 // painted.  Drives the GPU growth shader
+                                 // (the crystal blooms from this cell's
+                                 // centre over GROWTH_FRAMES); set in
+                                 // apply_frame, in the same clock as the
+                                 // loop's `frames` / the uNow uniform.
 }
 
 // Format a "x,y" key.  Inverse of parse_xy.
@@ -130,6 +136,45 @@ void main() {{
 }}
 `;
 
+// Frames for a freshly-painted cell's crystal to fully bloom in
+// (~1.5 s at 60 fps).  The mesh carries each cell's birth_frame; the
+// crystal shader scales every vertex out from the cell centre by the
+// cell's age, so growth is GPU-side and the mesh stays cached (PF1).
+GROWTH_FRAMES = 90.0;
+
+// CRYSTAL_VERT/FRAG — stride 14: pos(0) + normal(1, pad) + rgba(2) +
+// bloom-anchor(3) + birth-frame(4).  Each vertex eases out from its
+// cell's centre to its full position over GROWTH_FRAMES, so a new paint
+// GROWS in instead of popping.  No per-frame CPU rebuild — only the
+// `uNow` uniform advances each frame.
+CRYSTAL_VERT = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 2) in vec4 aColor;
+layout (location = 3) in vec3 aCenter;
+layout (location = 4) in float aBirth;
+uniform mat4 uMVP;
+uniform float uNow;
+uniform float uGrowth;
+out vec4 vColor;
+void main() {{
+    float age = clamp((uNow - aBirth) / uGrowth, 0.0, 1.0);
+    age = age * (2.0 - age);                 // ease-out for a soft settle
+    vec3 p = aCenter + age * (aPos - aCenter);
+    gl_Position = uMVP * vec4(p, 1.0);
+    vColor = aColor;
+}}
+`;
+
+CRYSTAL_FRAG = `
+#version 330 core
+in vec4 vColor;
+out vec4 FragColor;
+void main() {{
+    FragColor = vColor;
+}}
+`;
+
 // World — declared up-front so the build_*_vbo functions below can
 // be type-checked in pass 1.  All mutation goes through `apply_frame`,
 // which bumps `version` on every cell add / remove / colour change
@@ -168,6 +213,16 @@ struct TickSnap {
   xs:     vector<integer>,
   ys:     vector<integer>,
   colors: vector<integer>,
+  births: vector<integer>,    // birth_frame per cell, carried through the sort
+}
+
+// snapshot_cells output: the lib CellSnap plus a parallel `births` array
+// (birth_frame per cell, in the same placement order as the CellSnap's
+// xs/ys/colors).  build_crystal_vbo uses births[cell_ix] to drive the
+// GPU growth shader.
+struct Snapshot {
+  snap:   CellSnap,
+  births: vector<integer>,
 }
 
 // Snapshot world.cells → audience_crystal::CellSnap sorted by
@@ -180,13 +235,14 @@ struct TickSnap {
 // struct fields sidesteps the loft type-inference issue where locally
 // `vector<integer>`-annotated variables sometimes lose their vector
 // nature after iterating a hash (`for cell in world.cells`).
-fn snapshot_cells(world: World) -> CellSnap {
-  buf = TickSnap{ticks: [], xs: [], ys: [], colors: []};
+fn snapshot_cells(world: World) -> Snapshot {
+  buf = TickSnap{ticks: [], xs: [], ys: [], colors: [], births: []};
   for cell in world.cells {
     buf.ticks  += [cell.paint_tick];
     buf.xs     += [cell.x];
     buf.ys     += [cell.y];
     buf.colors += [cell.color];
+    buf.births += [cell.birth_frame];
   }
   // In-place bubble sort by paint_tick ascending (n is small, and
   // see @P292 for why we avoid vector-reassign-from-loop-local).
@@ -198,10 +254,11 @@ fn snapshot_cells(world: World) -> CellSnap {
         xa = buf.xs[sc_j];     buf.xs[sc_j]     = buf.xs[sc_j + 1];     buf.xs[sc_j + 1]     = xa;
         ya = buf.ys[sc_j];     buf.ys[sc_j]     = buf.ys[sc_j + 1];     buf.ys[sc_j + 1]     = ya;
         ca = buf.colors[sc_j]; buf.colors[sc_j] = buf.colors[sc_j + 1]; buf.colors[sc_j + 1] = ca;
+        ba = buf.births[sc_j]; buf.births[sc_j] = buf.births[sc_j + 1]; buf.births[sc_j + 1] = ba;
       }
     }
   }
-  CellSnap{xs: buf.xs, ys: buf.ys, colors: buf.colors}
+  Snapshot{snap: CellSnap{xs: buf.xs, ys: buf.ys, colors: buf.colors}, births: buf.births}
 }
 
 // Bake the ground hex tiles — one filled hex per PAINTED cell, in
@@ -294,24 +351,29 @@ SIDE_WIDTH = 0.08;  // cross-section of SIDE beams — clearly thinner than the
                     // main so the branches read as lacy feathering rather
                     // than filling the cell solid.
 
-// Emit one quad (a→b→c→d) as two triangles in stride-10 form
-// (pos.xyz + zero normal pad + rgba).  Used to build the faces of a beam.
+// Emit one quad (a→b→c→d) as two triangles in stride-14 form:
+// pos.xyz + zero normal pad + rgba + bloom-anchor.xyz + birth-frame.
+// The crystal vertex shader blooms each vertex out from the anchor
+// (its cell's centre) by the cell's age, so the mesh stays static and
+// the growth animates on the GPU.  `bcx,bcy,bcz` = anchor (world XYZ),
+// `birth` = the cell's birth_frame.
 fn push_quad(verts: &vector<single>,
              ax: float, ay: float, az: float,
              bx: float, by: float, bz: float,
              cx: float, cy: float, cz: float,
              dx: float, dy: float, dz: float,
-             cr: single, cg: single, cb: single, ca: single) {
+             cr: single, cg: single, cb: single, ca: single,
+             bcx: single, bcy: single, bcz: single, birth: single) {
   axs = ax as single; ays = ay as single; azs = az as single;
   bxs = bx as single; bys = by as single; bzs = bz as single;
   cxs = cx as single; cys = cy as single; czs = cz as single;
   dxs = dx as single; dys = dy as single; dzs = dz as single;
-  verts += [axs, ays, azs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
-  verts += [bxs, bys, bzs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
-  verts += [cxs, cys, czs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
-  verts += [axs, ays, azs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
-  verts += [cxs, cys, czs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
-  verts += [dxs, dys, dzs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca];
+  verts += [axs, ays, azs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca, bcx, bcy, bcz, birth];
+  verts += [bxs, bys, bzs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca, bcx, bcy, bcz, birth];
+  verts += [cxs, cys, czs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca, bcx, bcy, bcz, birth];
+  verts += [axs, ays, azs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca, bcx, bcy, bcz, birth];
+  verts += [cxs, cys, czs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca, bcx, bcy, bcz, birth];
+  verts += [dxs, dys, dzs, 0.0f, 0.0f, 0.0f, cr, cg, cb, ca, bcx, bcy, bcz, birth];
 }
 
 // Emit a solid 3D BEAM (rectangular box prism) following the segment
@@ -323,7 +385,8 @@ fn emit_beam(verts: &vector<single>,
              x0: float, z0: float, y0: float,
              x1: float, z1: float, y1: float,
              width: float,
-             cr: float, cg: float, cb: float, ca: single) {
+             cr: float, cg: float, cb: float, ca: single,
+             bcx: single, bcy: single, bcz: single, birth: single) {
   dx = x1 - x0;
   dz = z1 - z0;
   ln = sqrt(dx * dx + dz * dz);
@@ -341,25 +404,37 @@ fn emit_beam(verts: &vector<single>,
   sr = (cr * 0.7) as single; sg = (cg * 0.7) as single; sb = (cb * 0.7) as single;  // side 0.7
   dr = (cr * 0.45) as single; dg = (cg * 0.45) as single; db = (cb * 0.45) as single; // bottom 0.45
   // top
-  push_quad(verts, a0x, y0t, a0z, b0x, y0t, b0z, b1x, y1t, b1z, a1x, y1t, a1z, tr, tg, tb, ca);
+  push_quad(verts, a0x, y0t, a0z, b0x, y0t, b0z, b1x, y1t, b1z, a1x, y1t, a1z, tr, tg, tb, ca, bcx, bcy, bcz, birth);
   // bottom
-  push_quad(verts, a0x, y0b, a0z, a1x, y1b, a1z, b1x, y1b, b1z, b0x, y0b, b0z, dr, dg, db, ca);
+  push_quad(verts, a0x, y0b, a0z, a1x, y1b, a1z, b1x, y1b, b1z, b0x, y0b, b0z, dr, dg, db, ca, bcx, bcy, bcz, birth);
   // +perp side
-  push_quad(verts, a0x, y0t, a0z, a1x, y1t, a1z, a1x, y1b, a1z, a0x, y0b, a0z, sr, sg, sb, ca);
+  push_quad(verts, a0x, y0t, a0z, a1x, y1t, a1z, a1x, y1b, a1z, a0x, y0b, a0z, sr, sg, sb, ca, bcx, bcy, bcz, birth);
   // -perp side
-  push_quad(verts, b0x, y0t, b0z, b0x, y0b, b0z, b1x, y1b, b1z, b1x, y1t, b1z, sr, sg, sb, ca);
+  push_quad(verts, b0x, y0t, b0z, b0x, y0b, b0z, b1x, y1b, b1z, b1x, y1t, b1z, sr, sg, sb, ca, bcx, bcy, bcz, birth);
 }
 
 // Bake the crystal mesh — generate the segment list via the
 // audience_crystal library, then emit a flat horizontal ribbon for
 // each segment.  Width is per-kind (MAIN ribbons thicker than SIDE)
 // so the spines read as the dominant structure.
-fn build_crystal_vbo(snap: CellSnap, state: CrystalState,
-                     tick: integer) -> (integer, integer) {
+fn build_crystal_vbo(snap: CellSnap, births: vector<integer>,
+                     state: CrystalState, tick: integer) -> (integer, integer) {
   verts: vector<single> = [];
   cm = crystal_segments_aged(snap, state, tick);
   main_w = MAIN_WIDTH * HEX_SIZE;
   side_w = SIDE_WIDTH * HEX_SIZE;
+  // Per-cell bloom anchor (cell centre) + birth, computed ONCE (cell_h is
+  // O(n)); each segment then looks these up by its owning cell index, so
+  // the GPU growth shader blooms every cell's crystal out from its centre.
+  ncells = len(snap.xs);
+  cxs: vector<single> = []; cys: vector<single> = []; czs: vector<single> = [];
+  cbirth: vector<single> = [];
+  for ci in 0..ncells {
+    cxs += [cell_wx(snap.xs[ci], snap.ys[ci]) as single];
+    cys += [cell_h(snap, ci) as single];
+    czs += [cell_wz(snap.ys[ci]) as single];
+    cbirth += [births[ci] as single];
+  }
   for bcv_i in 0..len(cm.kinds) {
     seg_c = cm.colors[bcv_i];
     cr = palette_r(seg_c);
@@ -367,13 +442,15 @@ fn build_crystal_vbo(snap: CellSnap, state: CrystalState,
     cb = palette_b(seg_c);
     w = side_w;
     if cm.kinds[bcv_i] == KIND_MAIN { w = main_w; }
+    own = cm.cell_ix[bcv_i];
     emit_beam(verts,
       cm.x0s[bcv_i], cm.z0s[bcv_i], cm.y0s[bcv_i],
       cm.x1s[bcv_i], cm.z1s[bcv_i], cm.y1s[bcv_i],
-      w, cr, cg, cb, 1.0f);
+      w, cr, cg, cb, 1.0f,
+      cxs[own], cys[own], czs[own], cbirth[own]);
   }
-  crystal_count = len(verts) / 10;
-  crystal_vao = graphics::gl_upload_vertices(verts, 10);
+  crystal_count = len(verts) / 14;
+  crystal_vao = graphics::gl_upload_vertices(verts, 14);
   (crystal_vao, crystal_count)
 }
 
@@ -636,7 +713,8 @@ fn apply_frame(world: World, cam: AutoCam, tick: integer, frame: text) {
     existing = world.cells[k];
     if existing == null {
       world.cells += [Cell{ck: k, x: x, y: y, color: c,
-                           paint_tick: world.paint_tick_next}];
+                           paint_tick: world.paint_tick_next,
+                           birth_frame: tick}];
       world.paint_tick_next = world.paint_tick_next + 1;
       world.version = world.version + 1;
       println("projector: paint ({x},{y}) c={c} — total cells={len(world.cells)}");
@@ -683,6 +761,7 @@ fn main() {
   graphics::gl_enable(graphics::GL_BLEND);
   graphics::gl_blend_func(graphics::BLEND_SRC_ALPHA, graphics::BLEND_ONE_MINUS_SRC_ALPHA);
   cell_shader = graphics::gl_create_shader(CELL_VERT, CELL_FRAG);
+  crystal_shader = graphics::gl_create_shader(CRYSTAL_VERT, CRYSTAL_FRAG);
   graphics::gl_line_width(2.0);    // ~2 px wide crystal lines — readable
                                    // at projector distance
   proj_matrix   = math::mat4_perspective(0.9, win_w as float / win_h as float, 1.0, 4000.0);
@@ -787,16 +866,18 @@ fn main() {
     if world.version != last_built_version {
       if ground_vao != 0  { graphics::gl_delete_vao(ground_vao);  }
       if crystal_vao != 0 { graphics::gl_delete_vao(crystal_vao); }
-      snap = snapshot_cells(world);
-      // Aging is intentionally NOT driven here: crystal_state stays empty,
-      // so the crystal lib renders every main at its DEFAULT_AGE (~85% grown,
-      // static).  Full-ish side branches show immediately, no grow-in
-      // animation.  Re-enable the animation by calling update_state + the
-      // age-cadence rebuild below.
+      ss = snapshot_cells(world);
+      snap = ss.snap;
+      // The crystal lib renders every main at DEFAULT_AGE (static geometry);
+      // the GROW-IN animation is GPU-side: build_crystal_vbo tags each vertex
+      // with its cell's centre + birth_frame, and the crystal shader blooms
+      // it out from the centre over GROWTH_FRAMES.  So the mesh stays cached
+      // (rebuilt only here on world change) while growth animates per frame
+      // via the uNow uniform — no per-frame CPU rebuild.
       gres = build_ground_vbo(snap);
       ground_vao        = gres.0;
       ground_vert_count = gres.1;
-      cres = build_crystal_vbo(snap, crystal_state, frames);
+      cres = build_crystal_vbo(snap, ss.births, crystal_state, frames);
       crystal_vao        = cres.0;
       crystal_vert_count = cres.1;
       last_built_version = world.version;
@@ -817,9 +898,13 @@ fn main() {
     if ground_vert_count > 0 {
       graphics::gl_draw(ground_vao, ground_vert_count);
     }
-    // (b) Crystal layer — flat horizontal ribbons floating above the
-    //     ground, in the cell's palette colour.  Drawn as triangles
-    //     (each ribbon = 2 tris = 6 verts).
+    // (b) Crystal layer — 3D beams, GROWN in by the crystal shader:
+    //     each vertex eases out from its cell's centre over GROWTH_FRAMES,
+    //     so a new paint blooms in.  Mesh is cached; only uNow advances.
+    graphics::gl_use_shader(crystal_shader);
+    graphics::gl_set_uniform_mat4(crystal_shader, "uMVP", proj_view.m);
+    graphics::gl_set_uniform_float(crystal_shader, "uNow", frames as float);
+    graphics::gl_set_uniform_float(crystal_shader, "uGrowth", GROWTH_FRAMES);
     if crystal_vert_count > 0 {
       graphics::gl_draw(crystal_vao, crystal_vert_count);
     }
@@ -827,8 +912,12 @@ fn main() {
     //     cells, alpha-ramped to zero over FADE_FRAMES.  Rebuilt every
     //     frame while any fade is active (few cells, cheap) and drawn last
     //     so the blend sits correctly over the opaque layers.  Skipped —
-    //     and the VAO released — when nothing is fading.
+    //     and the VAO released — when nothing is fading.  Stride-10 VBO →
+    //     switch back to cell_shader (the crystal layer left crystal_shader
+    //     bound, which expects the stride-14 growth attributes).
     if len(world.fades) > 0 {
+      graphics::gl_use_shader(cell_shader);
+      graphics::gl_set_uniform_mat4(cell_shader, "uMVP", proj_view.m);
       if fading_vao != 0 { graphics::gl_delete_vao(fading_vao); }
       fres = build_fading_vbo(world, frames);
       fading_vao = fres.0;
