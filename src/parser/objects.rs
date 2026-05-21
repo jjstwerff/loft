@@ -1707,23 +1707,27 @@ impl Parser {
     }
 
     /// @P308 — the specific keyed-collection db type id (the id
-    /// `OpReplaceKeyed` / `copy_claims` need) for a keyed-collection field
-    /// whose struct-field deep-copy is SAFE, else `None` (the caller then
-    /// keeps the bare-push — the field's pre-existing behaviour).
-    ///
-    /// **HASH only.**  `sorted`/`index` are deliberately excluded: when both
-    /// a `sorted<T[k]>` and an `index<T[k]>` over the same element type `T`
-    /// exist, `index()` (`database/types.rs`) appends RB-tree bookkeeping
-    /// fields to `T`, and `OpReplaceKeyed`'s `copy_claims_seq_vector` then
-    /// mis-traverses the sorted source → hang (filed @P309).  Hash has no
-    /// such content-struct mutation and deep-copies cleanly.  `spacial` is
-    /// also excluded (`copy_claims` unimplemented, per @P295).  Mirrors the
-    /// keyed-LOCAL `keyed_kt` logic in `expressions.rs::parse_assign_op`.
+    /// `OpReplaceKeyed` / `copy_claims` need) to deep-copy a `hash`/`sorted`/
+    /// `index` field from an expression, else `None` (the caller keeps the
+    /// bare-push).  `spacial` is excluded (`copy_claims` unimplemented, per
+    /// @P295).  Mirrors the keyed-LOCAL `keyed_kt` logic in
+    /// `expressions.rs::parse_assign_op`.  (Sorted/index were briefly
+    /// HASH-only while @P309 — a deep-copy data-loss/hang when `index<T>`
+    /// grew the shared element struct — was open; now fixed in
+    /// `copy_claims_array_body`.)
     pub(crate) fn keyed_field_kt(&mut self, td: &Type) -> Option<u16> {
         match td {
             Type::Hash(d, key, _) => {
                 let c = self.data.def(*d).known_type;
                 (c != u16::MAX).then(|| self.database.hash(c, key))
+            }
+            Type::Sorted(d, key, _) => {
+                let c = self.data.def(*d).known_type;
+                (c != u16::MAX).then(|| self.database.sorted(c, key))
+            }
+            Type::Index(d, key, _) => {
+                let c = self.data.def(*d).known_type;
+                (c != u16::MAX).then(|| self.database.index(c, key))
             }
             _ => None,
         }

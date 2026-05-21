@@ -848,8 +848,16 @@ impl Stores {
             self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
             return;
         }
-        let into = self.store_mut(to).claim(1 + cur.div_ceil(2));
+        // @P309 — claim by element COUNT (header word + one 4-byte rec-id
+        // slot per element, 2 slots/word), NOT by `cur` (the source
+        // structure's rec-id, which is meaningless as a size), and WRITE THE
+        // LENGTH HEADER (offset 4) — without it the copied `array`/`ordered`
+        // read back as length 0 (silent data loss; e.g. a `sorted<T>` field
+        // becomes an `ordered<T>` secondary index when an `index<T>` exists,
+        // and deep-copying the owning struct lost its elements).
+        let into = self.store_mut(to).claim(1 + length.div_ceil(2));
         self.store_mut(to).set_u32_raw(to.rec, to.pos, into);
+        self.store_mut(to).set_u32_raw(into, 4, length);
         for i in 0..length {
             let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
             let new = self.store_mut(to).claim(size.div_ceil(8));
