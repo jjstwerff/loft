@@ -1128,6 +1128,46 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
         }
+        // @P307 — keyed-collection STRUCT FIELD clear: `s.h = []` where
+        // `s.h: sorted`/`hash`/`index<T[K]>`.  The vector-field branch above
+        // handles `s.v = []`; the keyed analog used to fall through to the
+        // Insert bypass with no op emitted (silent no-op + leak) AND the
+        // keyed-field write was never recognised by `check_ref_mutations`
+        // (rejecting a `&` param as unmodified — see find_field_written_vars).
+        // Lower the empty-literal clear to `OpClearKeyed(field, kt)` which
+        // `remove_claims`-frees the contents and zeroes the field's claim
+        // pointer, leaving an empty collection a later `+= [..]` re-inits.
+        // Mirrors the keyed-LOCAL clear (@P302, via OpDatabase) but for the
+        // in-struct claim shape.  Non-empty / non-literal keyed-field
+        // reassignment is a separate (harder) case left to its current path.
+        if !self.first_pass
+            && op == "="
+            && var_nr == u16::MAX
+            && self.is_field(to)
+            && matches!(code, Value::Insert(ls) if ls.is_empty())
+        {
+            let kt = match &f_type {
+                Type::Sorted(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.sorted(c, key))
+                }
+                Type::Hash(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.hash(c, key))
+                }
+                Type::Index(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.index(c, key))
+                }
+                _ => None,
+            };
+            if let Some(kt) = kt {
+                *code = Value::Insert(vec![
+                    self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]),
+                ]);
+                return Type::Void;
+            }
+        }
         // @P292 — `local_v = other_var_v` where both sides are vector-typed
         // LOCALS and the RHS is a Var read (not a fresh-storage Block / Call).
         // Without this branch, the standard path emitted Set(v, Var(rhs))

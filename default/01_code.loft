@@ -1071,6 +1071,13 @@ fn OpClear(data: reference, tp: const u16);
 fn OpAppendCopy(data: reference, count: integer, tp: const u16);
 fn OpCopyRecord(data: reference, to: reference, tp: const u16);
 fn OpReplaceKeyed(src: reference, dest: reference, tp: const u16);
+// @P307 — clear a keyed-collection STRUCT FIELD (`s.h = []`).  `remove_claims`
+// frees the element records + bucket/tree array and zeroes the field's claim
+// pointer, leaving an empty collection a later `+= [..]` re-initialises.  The
+// keyed-LOCAL clear (`s = []`) goes through OpDatabase (@P302); a field is a
+// claim INSIDE its struct's store, so it needs this in-place free instead.
+fn OpClearKeyed(dest: reference, tp: const u16);
+#rust"s.database.remove_claims(&@dest, @tp);"
 type iterator;
 // Call a predefined system function (but not an operator).
 fn OpStaticCall(call: const u16);

@@ -41,9 +41,9 @@ plan is done when every case is `PASS` on both backends. Run:
 | struct return with hash field (`build_index`) | works | ✅ (@P300/@P301) |
 | **`h[key] = value` INSERT a NEW key** | inserts | ❌ **@P305** — silent no-op |
 | **`keyed += [dup-key]` dedup** | replace, `len` stays | ❌ **@P306** — appends dup; lookup returns first |
-| **clear struct-FIELD `s.h = []`** | empty, no leak | ❌ **@P307** — compile error + no-op + leak |
+| **clear struct-FIELD `s.h = []`** | empty, no leak | ✅ **@P307 fixed** 2026-05-21 (`OpClearKeyed`) |
 
-Everything green except the three holes below.
+Two holes remain (@P305, @P306); @P307 landed 2026-05-21.
 
 ## The three bugs
 

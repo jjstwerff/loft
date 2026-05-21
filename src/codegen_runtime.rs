@@ -496,6 +496,18 @@ pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: Db
     }
 }
 
+/// @P307 — clear a keyed collection (`sorted`/`hash`/`index`) held in a
+/// STRUCT FIELD: free its element records + bucket/tree array and zero the
+/// field's claim pointer, so a later `+= [..]` re-initialises it.  Native
+/// twin of the `OpClearKeyed` interp op (`#rust` body
+/// `s.database.remove_claims`).  Unlike the keyed-LOCAL clear (OpDatabase,
+/// which resets a dedicated store), a field's collection lives as a claim
+/// inside its struct's store, so `remove_claims` is the in-place free.
+pub fn OpClearKeyed(cell: &std::cell::UnsafeCell<Stores>, dest: DbRef, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores.remove_claims(&dest, tp as u16);
+}
+
 /// Sort a vector in-place using the element type's natural ordering.
 /// Dispatches on element type:
 ///   - text → `sort_text_vector` (lexicographic; sorts offsets by

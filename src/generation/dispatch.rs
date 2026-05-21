@@ -869,6 +869,18 @@ impl Output<'_> {
                 }
                 return Ok(());
             }
+            // @P307 — clear a keyed-collection struct field: remove_claims
+            // frees the contents + zeroes the field pointer.
+            "OpClearKeyed" => {
+                if let [ref dst, ref tp_val] = vals[..] {
+                    write!(w, "OpClearKeyed(cell,")?;
+                    self.output_code_inner(w, dst)?;
+                    write!(w, ", ")?;
+                    self.emit_i32_slot(w, tp_val)?;
+                    write!(w, ")")?;
+                }
+                return Ok(());
+            }
             "OpConvTextFromNull" => {
                 write!(w, "loft::state::STRING_NULL")?;
                 return Ok(());
