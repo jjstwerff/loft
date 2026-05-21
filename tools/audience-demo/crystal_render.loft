@@ -18,6 +18,7 @@
 
 use audience_crystal;
 use graphics;
+use gridmesh;
 
 CANVAS_SIZE = 512;
 CANVAS_SCALE = 2.6;   // pixels per world unit — tuned so the linked /
@@ -236,11 +237,7 @@ fn render_scenario(snap: audience_crystal::CellSnap, out_path: text,
   state = audience_crystal::CrystalState{
     main_x: [], main_y: [], main_d: [], birth_tick: [],
   };
-  cm = audience_crystal::CrystalMesh{
-    kinds: [], colors: [], cell_ix: [],
-    x0s: [], y0s: [], z0s: [],
-    x1s: [], y1s: [], z1s: [],
-  };
+  cm = gridmesh::seg_mesh_new();
   if age_enabled {
     audience_crystal::update_state(state, snap, 0);
     cm = audience_crystal::crystal_segments_aged(snap, state, render_tick);

@@ -593,7 +593,154 @@ pub fn pick_segment_color(self_c: integer,
 // newborn at `tick` (branches at 0 %).  Pass a large `tick` (e.g.
 // `GROWTH_TICKS + len(state)`) and an empty state to get
 // "fully grown" output.
+// ── gridmesh Phase C1: chunk rule + narrow SegMesh ───────────────────
+//
+// The crystal as a gridmesh CHUNK-PIPELINE consumer.  The per-cell rule
+// emits into a narrow `SegMesh` (M1: u8 kinds/colours, single coords —
+// ~2× denser than the old float `CrystalMesh`); the build is driven per
+// CHUNK (full = every chunk via `all_inputs`; incremental = dirty chunks,
+// see `CrystalIncr`).  `chunk_shift` / `halo_k` are TUNABLE PARAMETERS
+// (the engine is mechanism, the game is policy) — the consts are only this
+// consumer's defaults; the bench sweeps them.
+pub const CRYSTAL_CHUNK_SHIFT = 4;   // 1<<4 = 16 cells/axis per chunk
+pub const CRYSTAL_HALO_K      = 2;   // crystal reads neighbours ≤ dist 2
+
+// Emit ONE cell's crystal segments (mains + ±30° side branches) into `m`.
+// Neighbour reads go through the shared GLOBAL `cidx`, so a cell in any
+// chunk still sees its true cross-chunk older-neighbour mains; every
+// segment is tagged with the owning cell `cs_i` (cell_ix) so it stays
+// attributed to this cell's chunk (bounded extent).  `ChunkInput.halo_ixs`
+// is contextual-only for this rule — reads go through `cidx` directly.
+pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
+                             state: CrystalState, tick: integer,
+                             cs_i: integer, m: &SegMesh) {
+  branch_base = HEX_SIZE * BRANCH_LEN_BASE;
+  branch_spacing_world = HEX_SIZE * BRANCH_SPACING;
+  deg30 = PI / 6.0;
+  centre_to_centre = SQRT3 * HEX_SIZE;
+  cell_c = snap.colors[cs_i];
+  cell_x = snap.xs[cs_i];
+  cell_y = snap.ys[cs_i];
+  one_away = nbr_colors_idx(snap, cidx, cell_x, cell_y, 1);
+  two_away = nbr_colors_idx(snap, cidx, cell_x, cell_y, 2);
+  wx = cell_wx(cell_x, cell_y);
+  wz = cell_wz(cell_y);
+  cell_yh = cell_h_at(snap, cidx, cs_i);
+  best_ix:   vector<integer> = [0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1];
+  best_dist: vector<integer> = [99, 99, 99, 99, 99, 99];
+  for jd in 0..6 {
+    for jk in 1..(MAX_MAIN_HEXES + 1) {
+      jj = idx_at(cidx, step_x(cell_x, cell_y, jd, jk), step_y(cell_x, cell_y, jd, jk));
+      if jj >= 0 && jj < cs_i {
+        best_dist[jd] = jk; best_ix[jd] = jj;
+        break;   // nearest older on this axis
+      }
+    }
+  }
+  has_main = false;
+  for hd in 0..6 { if best_ix[hd] >= 0 { has_main = true; } }
+  for d in 0..6 {
+    j = best_ix[d];
+    is_stub = j < 0;
+    if has_main && is_stub { continue; }
+    ray_ang = 0.0; ray_len_d = 0.0;
+    src_x = 0.0; src_y = 0.0; src_z = 0.0;
+    tip_x = 0.0; tip_y = 0.0; tip_z = 0.0;
+    if is_stub {
+      ray_ang = (60.0 * d as float) * PI / 180.0;
+      ray_len_d = centre_to_centre * STUB_RAY_FRAC;
+      src_x = wx; src_y = cell_yh; src_z = wz;
+      tip_x = wx + ray_len_d * cos(ray_ang);
+      tip_y = cell_yh;
+      tip_z = wz + ray_len_d * sin(ray_ang);
+    } else {
+      ray_ang = (60.0 * d as float + 180.0) * PI / 180.0;
+      ray_len_d = best_dist[d] as float * centre_to_centre;
+      src_x = cell_wx(snap.xs[j], snap.ys[j]);
+      src_y = cell_h_at(snap, cidx, j);
+      src_z = cell_wz(snap.ys[j]);
+      tip_x = wx; tip_y = cell_yh; tip_z = wz;
+    }
+    if ray_len_d <= 0.0 { continue; }
+    rdx = tip_x - src_x;
+    rdz = tip_z - src_z;
+    dy = tip_y - src_y;
+    main_seg_id = d * 100 + 99;
+    main_col = pick_segment_color(cell_c, one_away, two_away,
+                                  cell_x, cell_y, main_seg_id);
+    emit_segment(m, KIND_MAIN, src_x, src_y, src_z, tip_x, tip_y, tip_z, main_col, cs_i);
+    main_birth = lookup_main_birth(state, cell_x, cell_y, d);
+    age_f = DEFAULT_AGE;
+    if main_birth >= 0 { age_f = age_factor(main_birth, tick); }
+    raw_forks = (ray_len_d / branch_spacing_world) as integer;
+    n_forks = raw_forks - 1;
+    if n_forks < 0 { n_forks = 0; }
+    branch_t_per_len = cos(deg30) / ray_len_d;
+    for f in 1..(n_forks + 1) {
+      t = f as float * branch_spacing_world / ray_len_d;
+      fork_x = src_x + rdx * t;
+      fork_z = src_z + rdz * t;
+      fork_y = src_y + t * dy;
+      blen = branch_base * (1.0 - t) * age_f;
+      branch_end_y = src_y + (t + blen * branch_t_per_len) * dy;
+      plus_ang = ray_ang + deg30;
+      plus_seg_id = d * 100 + f * 10 + 0;
+      plus_col = pick_segment_color(cell_c, one_away, two_away,
+                                    cell_x, cell_y, plus_seg_id);
+      emit_segment(m, KIND_SIDE, fork_x, fork_y, fork_z,
+                   fork_x + blen * cos(plus_ang), branch_end_y, fork_z + blen * sin(plus_ang),
+                   plus_col, cs_i);
+      minus_ang = ray_ang - deg30;
+      minus_seg_id = d * 100 + f * 10 + 1;
+      minus_col = pick_segment_color(cell_c, one_away, two_away,
+                                     cell_x, cell_y, minus_seg_id);
+      emit_segment(m, KIND_SIDE, fork_x, fork_y, fork_z,
+                   fork_x + blen * cos(minus_ang), branch_end_y, fork_z + blen * sin(minus_ang),
+                   minus_col, cs_i);
+    }
+  }
+}
+
+// The per-cell RULE for one chunk: emit every owned cell's segments into a
+// fresh SegMesh (cross-chunk neighbour reads via the shared `cidx`).
+pub fn build_crystal_chunk(snap: CellSnap, cidx: hash<CellRef[ck]>,
+                           state: CrystalState, tick: integer,
+                           ci: ChunkInput) -> SegMesh {
+  m = seg_mesh_new();
+  for bk in 0..len(ci.cell_ixs) {
+    crystal_cell_segments(snap, cidx, state, tick, ci.cell_ixs[bk] ?? 0, m);
+  }
+  m
+}
+
+// Full build at default tuning (the consumer API).
 pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
+                             tick: integer) -> SegMesh {
+  crystal_segments_aged_tuned(snap, state, tick, CRYSTAL_CHUNK_SHIFT, CRYSTAL_HALO_K)
+}
+
+// Full build, chunk-driven, with the chunk/halo dials exposed (the bench
+// sweeps these).  Builds the field once, runs the rule per chunk, concats
+// into one SegMesh.  Segment ORDER is grouped by chunk (vs the legacy
+// placement order) — immaterial to consumers, which key by `cell_ix`.
+pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: integer,
+                                   chunk_shift: integer, halo_k: integer) -> SegMesh {
+  field = field_new(0, snap.xs, snap.ys, chunk_shift, halo_k);
+  out = seg_mesh_new();
+  inputs = all_inputs(field, halo_k);
+  for ci in inputs {
+    cm = build_crystal_chunk(snap, field.cidx, state, tick, ci);
+    out.kinds += cm.kinds; out.colors += cm.colors; out.cell_ix += cm.cell_ix;
+    out.x0s += cm.x0s; out.y0s += cm.y0s; out.z0s += cm.z0s;
+    out.x1s += cm.x1s; out.y1s += cm.y1s; out.z1s += cm.z1s;
+  }
+  out
+}
+
+// Legacy float `CrystalMesh` full build — kept as the gridmesh-C1
+// SET-equivalence golden (tests/scripts/130).  Removable once the SegMesh
+// path is battle-tested in the projector.
+pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
                              tick: integer) -> CrystalMesh {
   mesh = CrystalMesh{
     kinds: [], colors: [], cell_ix: [],
@@ -731,7 +878,7 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
 // (no growth animation).  Equivalent to `crystal_segments_aged` with an
 // empty state, which the aged code treats as "no birth records ⇒ render
 // at DEFAULT_AGE".
-pub fn crystal_segments(snap: CellSnap) -> CrystalMesh {
+pub fn crystal_segments(snap: CellSnap) -> SegMesh {
   empty_state = CrystalState{
     main_x: [], main_y: [], main_d: [], birth_tick: [],
   };

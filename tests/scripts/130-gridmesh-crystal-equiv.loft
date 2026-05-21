@@ -1,0 +1,66 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib lib
+//
+// gridmesh C1 — the chunk-driven SegMesh `crystal_segments_aged` must
+// produce the SAME SET of segments as the legacy float `CrystalMesh` build
+// (`crystal_segments_aged_legacy`).  Chunking only REORDERS segments
+// (grouped by chunk vs placement order), and SegMesh narrows coords to
+// `single`, so the comparison is order-independent and at single precision:
+// equal segment count + equal commutative checksums (sum and sum-of-squares
+// of a per-segment mixed value with coords quantised at f32 resolution).
+
+use audience_crystal::*;
+use gridmesh;
+
+fn build_block(side: integer) -> CellSnap {
+  bxs: vector<integer> = []; bys: vector<integer> = []; bcs: vector<integer> = [];
+  for by in 0..side {
+    for bx in 0..side {
+      bxs += [bx]; bys += [by]; bcs += [(bx + by) % 6];
+    }
+  }
+  CellSnap{xs: bxs, ys: bys, colors: bcs}
+}
+
+// quantise a coord at f32 resolution (so legacy f64 and new f32 agree).
+fn qcoord(v: float) -> integer { ((v as single) as float * 1000.0) as integer }
+
+fn segvalue(kind: integer, color: integer, cell_ix: integer,
+            x0: float, y0: float, z0: float,
+            x1: float, y1: float, z1: float) -> integer {
+  cell_ix * 1000003 + kind * 7919 + color * 131
+    + qcoord(x0) * 3 + qcoord(y0) * 5 + qcoord(z0) * 7
+    + qcoord(x1) * 11 + qcoord(y1) * 13 + qcoord(z1) * 17
+}
+
+fn main() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  for side in [1, 3, 5, 8] {
+    snap = build_block(side);
+    leg = crystal_segments_aged_legacy(snap, empty, 0);
+    neu = crystal_segments_aged(snap, empty, 0);
+
+    assert(len(neu.kinds) == len(leg.kinds),
+           "side={side}: seg count new={len(neu.kinds)} legacy={len(leg.kinds)}");
+
+    lsum = 0; lsq = 0;
+    for li in 0..len(leg.kinds) {
+      v = segvalue(leg.kinds[li], leg.colors[li], leg.cell_ix[li],
+                   leg.x0s[li], leg.y0s[li], leg.z0s[li],
+                   leg.x1s[li], leg.y1s[li], leg.z1s[li]);
+      lsum = lsum + v; lsq = lsq + v * v;
+    }
+    nsum = 0; nsq = 0;
+    for ni in 0..len(neu.kinds) {
+      v = segvalue(neu.kinds[ni], neu.colors[ni], neu.cell_ix[ni],
+                   neu.x0s[ni], neu.y0s[ni], neu.z0s[ni],
+                   neu.x1s[ni], neu.y1s[ni], neu.z1s[ni]);
+      nsum = nsum + v; nsq = nsq + v * v;
+    }
+    assert(lsum == nsum, "side={side}: checksum sum new={nsum} legacy={lsum}");
+    assert(lsq == nsq, "side={side}: checksum sumsq mismatch");
+  }
+  print("p130 ok\n");
+}
