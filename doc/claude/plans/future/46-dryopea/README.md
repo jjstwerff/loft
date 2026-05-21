@@ -31,18 +31,22 @@ walkable**, so the vehicle can drive along them to reach a base under attack;
 
 | | Authored in the editor (static) | Placed by the game at runtime (dynamic) |
 |---|---|---|
-| **Owns** | hex **terrain features** — ground types + slope (lib-plan 20) | **buildings, walls, bridges, towers** |
-| **Tooling** | the moros editor (hex paint + slope solver) | dryopea runtime build-order system |
-| **Mutability** | baked content; re-solved only when the level is edited | mutable override layer; built + destroyed during play |
-| **Data** | the solved height field + material per hex | a separate structure/override store keyed by hex |
+| **Owns** | hex **terrain features** (ground types + slope, lib-plan 20) **+ a small set of static gameplay markers** — enemy **spawn points**, findable-**item positions** | **buildings, walls, bridges, towers** + spawned mobs |
+| **Tooling** | the moros editor (hex paint + slope solver + marker placement) | dryopea runtime build-order system |
+| **Mutability** | baked content; re-saved with the level | mutable override layer; built + destroyed during play |
+| **Data** | the solved height field + material per hex + the marker list | a separate structure/override store keyed by hex |
 
 This split is the load-bearing decision:
-- **Terrain is content, structures are state.** The level file carries the
-  authored terrain; a save game carries the runtime structures. They never
-  mix, so a level can be replayed and structures reset without touching
-  terrain.
-- **The editor never needs a building/wall tool** — it only paints terrain.
-  Everything dryopea-specific lives in the game runtime.
+- **Authored content vs runtime state.** The level file carries the terrain
+  AND the static markers (spawn points, item positions); a save game carries
+  the runtime structures + live mobs. They never mix, so a level can be
+  replayed and structures reset without touching terrain or markers.
+- **The editor's game-authoring is small and bounded** — terrain plus a few
+  static markers (enemy spawn points, findable-item positions, and probably
+  about the most of it). It has **no building/wall tool**: structures are
+  placed only at runtime, so the bulk of dryopea-specific systems live in the
+  game, not the editor. Markers are just authored *positions* — the editor
+  stamps them; the game decides what spawns/appears there.
 - **Structures are an OVERRIDE LAYER on top of solved terrain** (see lib-plan
   20 § "Built structures are a separate override layer"): a wall is
   raised-terrain (walkable top, steep sides), a bridge is a deck on a higher
@@ -67,10 +71,11 @@ This split is the load-bearing decision:
    (slope-gated, `md_slope` = cost) **+ wall tops + bridge decks**, connected
    where adjacent at compatible heights. Used by the vehicle, NPC workers, and
    enemies. Edits on build/destroy.
-5. **Combat** — enemy waves + a boss that **breaks walls** (→ dirty re-mesh +
-   path re-route); tower targeting; reactive player **repair/buff** of towers.
-6. **Exploration / economy** — free-roam the terrain for hidden treasures →
-   faster upgrades.
+5. **Combat** — enemy waves spawned at the **editor-authored spawn points** +
+   a boss that **breaks walls** (→ dirty re-mesh + path re-route); tower
+   targeting; reactive player **repair/buff** of towers.
+6. **Exploration / economy** — free-roam the terrain for hidden treasures (at
+   the **editor-authored item positions**) → faster upgrades.
 
 ## Phases (vertical-slice first)
 
