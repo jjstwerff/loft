@@ -1706,6 +1706,29 @@ impl Parser {
         }
     }
 
+    /// @P308 — the specific keyed-collection db type id (the id
+    /// `OpReplaceKeyed` / `copy_claims` need) for a keyed-collection field
+    /// whose struct-field deep-copy is SAFE, else `None` (the caller then
+    /// keeps the bare-push — the field's pre-existing behaviour).
+    ///
+    /// **HASH only.**  `sorted`/`index` are deliberately excluded: when both
+    /// a `sorted<T[k]>` and an `index<T[k]>` over the same element type `T`
+    /// exist, `index()` (`database/types.rs`) appends RB-tree bookkeeping
+    /// fields to `T`, and `OpReplaceKeyed`'s `copy_claims_seq_vector` then
+    /// mis-traverses the sorted source → hang (filed @P309).  Hash has no
+    /// such content-struct mutation and deep-copies cleanly.  `spacial` is
+    /// also excluded (`copy_claims` unimplemented, per @P295).  Mirrors the
+    /// keyed-LOCAL `keyed_kt` logic in `expressions.rs::parse_assign_op`.
+    pub(crate) fn keyed_field_kt(&mut self, td: &Type) -> Option<u16> {
+        match td {
+            Type::Hash(d, key, _) => {
+                let c = self.data.def(*d).known_type;
+                (c != u16::MAX).then(|| self.database.hash(c, key))
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn handle_field(
         &mut self,
         td_nr: u32,
@@ -1762,6 +1785,44 @@ impl Parser {
                 } else {
                     list.push(value.clone());
                 }
+            } else if let Some(kt) = self.keyed_field_kt(&td)
+                && !self.first_pass
+                && !matches!(value, Value::Insert(_) | Value::Null)
+            {
+                // @P308 — a keyed-collection field (hash/sorted/index)
+                // initialised from an EXPRESSION (`F{ h: build() }` /
+                // `F{ h: c }`) must be DEEP-COPIED into the field, exactly
+                // like the Vector branch above deep-copies via OpAppendVector.
+                // Before this it fell to the bare `list.push(value)` below,
+                // which left the field empty (the value's result was dropped)
+                // and leaked a call source's store.  `OpReplaceKeyed(src,
+                // field_ref, kt)` = remove_claims(field) (no-op on the
+                // zero-inited field) + copy_claims(src, field) — the same
+                // deep-copy that runs when a struct with a keyed field is
+                // copied.  The `0x8000` bit frees a fresh-storage call source.
+                // An empty/literal `[]` keeps the bare push (field stays
+                // empty — correct).  Spacial is excluded by `keyed_field_kt`
+                // (copy_claims panics for it, per @P295).
+                let pos = self
+                    .database
+                    .position(self.data.def(td_nr).known_type, field);
+                let field_ref = self.cl(
+                    "OpGetField",
+                    &[
+                        code.clone(),
+                        Value::Int(i32::from(pos)),
+                        Value::Int(i32::from(kt)),
+                    ],
+                );
+                let tp_val = if self.is_struct_returning_call(value) {
+                    i32::from(kt) | 0x8000
+                } else {
+                    i32::from(kt)
+                };
+                list.push(self.cl(
+                    "OpReplaceKeyed",
+                    &[value.clone(), field_ref, Value::Int(tp_val)],
+                ));
             } else {
                 list.push(value.clone());
             }

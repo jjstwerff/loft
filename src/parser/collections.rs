@@ -548,6 +548,35 @@ impl Parser {
                 }
                 return v_set(*nr, val.clone());
             }
+            // @P308 — a KEYED-collection FIELD whole-assignment `s.h = expr`
+            // (hash/sorted/index, RHS an expression) must be DEEP-COPIED into
+            // the field; before this it fell to the bare `return val.clone()`
+            // below → silent no-op (empty field).  `OpReplaceKeyed(val, to,
+            // kt)` against the field ref = remove_claims(field) +
+            // copy_claims(val, field); `0x8000` frees a fresh-storage call
+            // source.  (Empty `s.h = []` → OpClearKeyed and `s.h[k]=v` →
+            // OpSetKeyed are handled earlier; this is the remaining
+            // whole-value case.)  Vector/Spacial keep the bare return —
+            // vector field-replace lives in parse_assign_op, and Spacial's
+            // copy_claims is unimplemented (per @P295), so `keyed_field_kt`
+            // returns None for both.
+            if op == "="
+                && !matches!(val, Value::Insert(_) | Value::Null)
+                && let Some(kt) = self.keyed_field_kt(f_type)
+            {
+                #[cfg(not(feature = "wasm"))]
+                let tp_val = if self.is_struct_returning_call(val) {
+                    i32::from(kt) | 0x8000
+                } else {
+                    i32::from(kt)
+                };
+                #[cfg(feature = "wasm")]
+                let tp_val = i32::from(kt);
+                return self.cl(
+                    "OpReplaceKeyed",
+                    &[val.clone(), to.clone(), Value::Int(tp_val)],
+                );
+            }
             // LHS is a field access (e.g. `s.v = fresh`).  Pre-fix this
             // returned bare `val` and the assignment was silently discarded.
             // The full clear-then-append pair lives in parse_assign_op where

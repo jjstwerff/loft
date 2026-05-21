@@ -173,24 +173,17 @@ pub struct ChunkField {
 }
 
 // Build a field from placement-ordered coords.  The dirty index starts
-// empty; the spatial index is built once (O(N)) by APPENDING into the
-// struct's own keyed field — NOT `cidx: build_index(xs, ys)` in the struct
-// literal, because a keyed-collection field initialised from a hash
-// expression in a struct constructor is currently dropped (the content is
-// not deep-copied into the field → empty) and a call source leaks its
-// return store (filed @P308).  Empty-init + `+=` is the working path.
+// empty; the spatial index is built once (O(N)) via `build_index` — a
+// hash-returning call deep-copied into the `cidx` field (works since @P308
+// fixed the keyed-HASH struct-field initialiser).
 pub fn field_new(layout: integer, xs: vector<integer>, ys: vector<integer>,
                  chunk_shift: integer, halo_k: integer) -> ChunkField {
-  f = ChunkField{
+  ChunkField{
     layout: layout, xs: xs, ys: ys,
-    cidx: [],
+    cidx: build_index(xs, ys),
     chunk_shift: chunk_shift, halo_k: halo_k,
     dirty: [],
-  };
-  for fn_i in 0..len(xs) {
-    f.cidx += [CellRef{ck: enc_coord(xs[fn_i], ys[fn_i]), ix: fn_i}];
   }
-  f
 }
 
 // Insert (x, y)'s chunk into the dirty index, plus any adjacent chunk whose

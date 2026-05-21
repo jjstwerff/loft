@@ -17,9 +17,10 @@ fn test_chunk_partition() {
   d = chunk_of(7, 7, 3);    assert(d.cx == 0 && d.cy == 0, "(7,7)->chunk(0,0)");
 }
 
-// field_new builds the spatial index from the coords (the cidx field is
-// populated — guards against the empty-keyed-field-init @P308 regression
-// the field_new workaround dodges).
+// field_new builds the spatial index from the coords (the cidx hash field
+// is populated via `cidx: build_index(...)` — a hash-returning call deep-
+// copied into the field, working since @P308 fixed the keyed-HASH
+// struct-field initialiser).
 fn test_field_new_builds_index() {
   xs: vector<integer> = [0, 1, 8, 0 - 1];
   ys: vector<integer> = [0, 0, 0, 0];
