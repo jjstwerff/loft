@@ -112,7 +112,24 @@ pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
         0
     } else {
         let length = store.get_u32_raw(vec_rec, 4);
-        let new_vec = store.resize(vec_rec, checked_vec_cap(length + 1, size));
+        let needed = length + 1;
+        // P5 — amortised (~2x) growth.  Current capacity in elements:
+        // claimed words -> bytes -> minus the 8-byte header (claim:i32 +
+        // length:u32) -> / element size.  When out of room grow to ~2x so
+        // appends are O(1) amortised and the store doesn't fragment into
+        // O(N) freed records; when room remains, request <= the current
+        // claim so `store.resize` (grow-only) is a no-op.  Length lives in a
+        // separate field (word 1), so the trailing slack never affects
+        // `len()`, indexing, copy (length-based, shrinks to fit) or
+        // serialisation.
+        let cur_words = store.get_u32_raw(vec_rec, 0); // positive i32 claim as u32
+        let cur_cap = cur_words.saturating_mul(8).saturating_sub(8) / size;
+        let target = if needed <= cur_cap {
+            needed
+        } else {
+            needed.saturating_mul(2)
+        };
+        let new_vec = store.resize(vec_rec, checked_vec_cap(target, size));
         if new_vec != vec_rec {
             store.set_u32_raw(db.rec, db.pos, new_vec);
             vec_rec = new_vec;
