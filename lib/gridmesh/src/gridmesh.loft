@@ -162,28 +162,52 @@ pub fn chunk_of(x: integer, y: integer, shift: integer) -> ChunkKey {
   ChunkKey{ck: enc_coord(cx, cy), cx: cx, cy: cy}
 }
 
+// A ck-keyed bucket of the cell indices a chunk owns — a wired-in member of
+// ChunkField, maintained incrementally by field_new / field_add_cell.
+// Defined before ChunkField so the `buckets` keyed field type resolves
+// (a forward reference leaves its known_type unset → parse OOB).
+struct ChunkBucket {
+  ck:       integer not null,
+  cx:       integer,
+  cy:       integer,
+  cell_ixs: vector<integer>,
+}
+
 pub struct ChunkField {
-  layout:      integer,            // HexLayout tag (Phase A: OffsetPointy = 0)
-  xs:          vector<integer>,    // cell coords (index 0 = oldest)
+  layout:      integer,                // HexLayout tag (Phase A: OffsetPointy = 0)
+  xs:          vector<integer>,        // cell coords (index 0 = oldest)
   ys:          vector<integer>,
-  cidx:        hash<CellRef[ck]>,  // coord -> cell index (Phase A)
-  chunk_shift: integer,            // chunk = coord >> chunk_shift (5 = 32×32)
-  halo_k:      integer,            // halo radius (border-dirty propagation)
-  dirty:       hash<ChunkKey[ck]>, // WIRED-IN dirty-chunk index (keyed set; dedup)
+  cidx:        hash<CellRef[ck]>,      // coord -> cell index (Phase A)
+  chunk_shift: integer,                // chunk = coord >> chunk_shift (5 = 32×32)
+  halo_k:      integer,                // halo radius (border-dirty propagation)
+  dirty:       hash<ChunkKey[ck]>,     // WIRED-IN dirty-chunk index (keyed set; dedup)
+  buckets:     hash<ChunkBucket[ck]>,  // WIRED-IN chunk -> owned cell indices,
+                                       // maintained incrementally so dirty-chunk
+                                       // extraction is O(dirty), not a re-scan.
 }
 
 // Build a field from placement-ordered coords.  The dirty index starts
-// empty; the spatial index is built once (O(N)) via `build_index` — a
-// hash-returning call deep-copied into the `cidx` field (works since @P308
-// fixed the keyed-HASH struct-field initialiser).
+// empty; the spatial index (cidx) and the chunk->cell partition (buckets)
+// are built once (O(N)) and maintained incrementally thereafter
+// (field_add_cell), so a later collect_dirty_inputs is O(dirty), not O(N).
 pub fn field_new(layout: integer, xs: vector<integer>, ys: vector<integer>,
                  chunk_shift: integer, halo_k: integer) -> ChunkField {
-  ChunkField{
+  f = ChunkField{
     layout: layout, xs: xs, ys: ys,
     cidx: build_index(xs, ys),
     chunk_shift: chunk_shift, halo_k: halo_k,
     dirty: [],
+    buckets: [],
+  };
+  for fn_i in 0..len(xs) {
+    k = chunk_of(xs[fn_i] ?? 0, ys[fn_i] ?? 0, chunk_shift);
+    if !f.buckets[k.ck] {
+      f.buckets += [ChunkBucket{ck: k.ck, cx: k.cx, cy: k.cy, cell_ixs: []}];
+    }
+    b = f.buckets[k.ck];
+    b.cell_ixs += [fn_i];
   }
+  f
 }
 
 // Insert (x, y)'s chunk into the dirty index, plus any adjacent chunk whose
@@ -207,12 +231,20 @@ fn mark_borders(f: &ChunkField, x: integer, y: integer) {
   }
 }
 
-// Edit — append a new cell (its index = old len(xs)) and mark its chunk
-// (+ halo-border neighbours) dirty.
+// Edit — append a new cell (its index = old len(xs)), add it to its chunk's
+// bucket (O(1) amortised), and mark its chunk (+ halo-border neighbours)
+// dirty.  Keeping the bucket current here is what makes collect_dirty_inputs
+// O(dirty) rather than a full re-partition.
 pub fn field_add_cell(f: &ChunkField, x: integer, y: integer) {
   ix = len(f.xs);
   f.xs += [x]; f.ys += [y];
   f.cidx += [CellRef{ck: enc_coord(x, y), ix: ix}];
+  k = chunk_of(x, y, f.chunk_shift);
+  if !f.buckets[k.ck] {
+    f.buckets += [ChunkBucket{ck: k.ck, cx: k.cx, cy: k.cy, cell_ixs: []}];
+  }
+  b = f.buckets[k.ck];
+  b.cell_ixs += [ix];
   mark_borders(f, x, y);
 }
 
@@ -251,31 +283,8 @@ pub struct ChunkInput {
   halo_ixs: vector<integer>,   // ≤halo_k border-neighbour cells (read-only context)
 }
 
-// Internal: a ck-keyed bucket for the single-pass cell→chunk partition.
-struct ChunkBucket {
-  ck:       integer not null,
-  cx:       integer,
-  cy:       integer,
-  cell_ixs: vector<integer>,
-}
 // Internal: a cell-index set for halo dedup.
 struct SeenIx { ix: integer not null }
-
-// Single O(N) pass: group cell indices by their owning chunk.  Mutates each
-// bucket's `cell_ixs` in place through the keyed-element ref `b`.
-fn partition_cells(f: ChunkField) -> hash<ChunkBucket[ck]> {
-  buckets: hash<ChunkBucket[ck]> = [];
-  for pc_i in 0..len(f.xs) {
-    // `?? 0` only to satisfy the OOB lint — `pc_i` is loop-bounded by len.
-    k = chunk_of(f.xs[pc_i] ?? 0, f.ys[pc_i] ?? 0, f.chunk_shift);
-    if !buckets[k.ck] {
-      buckets += [ChunkBucket{ck: k.ck, cx: k.cx, cy: k.cy, cell_ixs: []}];
-    }
-    b = buckets[k.ck];
-    b.cell_ixs += [pc_i];
-  }
-  buckets
-}
 
 // Gather the ≤halo_k border-neighbour cells (in OTHER chunks) of a chunk's
 // owned cells.  Walks the 6 hex axes up to halo_k steps (the axis-neighbour
@@ -307,10 +316,10 @@ fn gather_halo(f: ChunkField, cell_ixs: vector<integer>, this_ck: integer,
 }
 
 // One ChunkInput per chunk that holds cells (the full-build work-list).
+// Reads the wired-in `f.buckets` (no re-partition).
 pub fn all_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput> {
-  buckets = partition_cells(f);
   out: vector<ChunkInput> = [];
-  for b in buckets {
+  for b in f.buckets {
     halo = gather_halo(f, b.cell_ixs, b.ck, halo_k);
     out += [ChunkInput{key: ChunkKey{ck: b.ck, cx: b.cx, cy: b.cy},
                        cell_ixs: b.cell_ixs, halo_ixs: halo}];
@@ -319,12 +328,15 @@ pub fn all_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput> {
 }
 
 // One ChunkInput per DIRTY chunk (the incremental-rebuild work-list).
-// O(dirty) outputs; clear the dirty index after rebuilding.
+// Iterates ONLY the dirty set and looks up each dirty chunk's bucket — so
+// the cost is O(dirty chunks × their cells), independent of total N.  A
+// dirty chunk with no owned cells (a halo-marked empty neighbour) is
+// skipped.  Clear the dirty index after rebuilding.
 pub fn collect_dirty_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput> {
-  buckets = partition_cells(f);
   out: vector<ChunkInput> = [];
-  for b in buckets {
-    if f.dirty[b.ck] {
+  for dk in f.dirty {
+    b = f.buckets[dk.ck];
+    if b {
       halo = gather_halo(f, b.cell_ixs, b.ck, halo_k);
       out += [ChunkInput{key: ChunkKey{ck: b.ck, cx: b.cx, cy: b.cy},
                          cell_ixs: b.cell_ixs, halo_ixs: halo}];
