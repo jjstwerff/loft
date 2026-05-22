@@ -468,12 +468,13 @@ impl Stores {
     /// when it is a caller temp (the `0x8000` bit, as in `copy_record`).
     pub fn set_keyed(&mut self, coll: &DbRef, value: &DbRef, db: u16, free_source: bool) {
         let content_tp = match self.types[db as usize].parts {
-            Parts::Hash(c, _) | Parts::Sorted(c, _) | Parts::Index(c, _, _) | Parts::Ordered(c, _) => {
-                c
-            }
+            Parts::Hash(c, _)
+            | Parts::Sorted(c, _)
+            | Parts::Index(c, _, _)
+            | Parts::Ordered(c, _) => c,
             _ => return,
         };
-        let keys = self.types[db as usize].keys.to_vec();
+        let keys = self.types[db as usize].keys.clone();
         let key = keys::get_key(value, &self.allocations, &keys);
         let existing = self.find(coll, db, &key);
         if existing.rec != 0 {
@@ -515,7 +516,7 @@ impl Stores {
     /// one is already appended at the end when their `*_finish` runs, so they
     /// dedup by overwriting the found slot in place there, not here.)
     pub(crate) fn dedup_keyed(&mut self, data: &DbRef, rec: &DbRef, db: u16, content_tp: u16) {
-        let keys = self.types[db as usize].keys.to_vec();
+        let keys = self.types[db as usize].keys.clone();
         let key = keys::get_key(rec, &self.allocations, &keys);
         let existing = self.find(data, db, &key);
         if existing.rec != 0 && existing.rec != rec.rec {
