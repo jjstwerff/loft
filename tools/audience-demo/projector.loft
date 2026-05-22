@@ -143,6 +143,11 @@ void main() {{
 // cell's age, so growth is GPU-side and the mesh stays cached (PF1).
 GROWTH_FRAMES = 90.0;
 
+// C4 render-group size (chunks per group VBO).  G=2 ⇒ 2×2 chunks per VBO — a
+// handful of VBOs for the projector's world so an edit re-uploads only the few
+// groups it touches; larger G ⇒ fewer, bigger uploads (the tunable dial).
+CRYSTAL_GROUP_DIM = 2;
+
 // CRYSTAL_VERT/FRAG — stride 14: pos(0) + normal(1, pad) + rgba(2) +
 // bloom-anchor(3) + birth-frame(4).  Each vertex eases out from its
 // cell's centre to its full position over GROWTH_FRAMES, so a new paint
@@ -418,55 +423,39 @@ fn emit_beam(verts: &vector<single>,
 // audience_crystal library, then emit a flat horizontal ribbon for
 // each segment.  Width is per-kind (MAIN ribbons thicker than SIDE)
 // so the spines read as the dominant structure.
-fn build_crystal_vbo(snap: CellSnap, births: vector<integer>,
-                     state: CrystalState, tick: integer) -> (integer, integer) {
+// Bake ONE crystal render-group's SegMesh (assembled by
+// `crystal_incr_assemble_group` from its chunks' cached meshes) into a stride-14
+// vertex buffer — the same flat-ribbon-per-segment emit as the old monolithic
+// build, now PER GROUP so a `GroupVboSet` re-uploads only the dirty groups (C4).
+// `births` is the GLOBAL per-cell birth frame (a `vector<single>` parallel to
+// the CrystalIncr's cells, indexed by the field's cell index); each segment
+// looks up its owner's birth so the GPU growth shader blooms it in.
+fn bake_crystal_group(cm: SegMesh, births: vector<single>) -> vector<single> {
   verts: vector<single> = [];
-  cm = crystal_segments_aged(snap, state, tick);
   main_w = MAIN_WIDTH * HEX_SIZE;
   side_w = SIDE_WIDTH * HEX_SIZE;
-  // Per-cell bloom anchor (cell centre) + birth, computed ONCE; each
-  // segment then looks these up by its owning cell index, so the GPU
-  // growth shader blooms every cell's crystal out from its centre.
-  // PF2: build the coord→index spatial hash via gridmesh (O(N)) and use
-  // cell_h_at so the height precompute is O(N), not O(N²).  (@P300 fixed,
-  // so the hash-returning helper is fine now.)
-  ncells = len(snap.xs);
-  // Per-cell birth frame.  The bloom ANCHOR is now each segment's OWN src
-  // endpoint (see the emit loop), so cell centres are no longer precomputed —
-  // a connecting main's src already IS the existing crystal's centre.
-  cbirth: vector<single> = [];
-  for ci in 0..ncells {
-    cbirth += [births[ci] as single];
-  }
-  for bcv_i in 0..len(cm.kinds) {
-    seg_c = cm.colors[bcv_i];
+  for bcg_i in 0..len(cm.kinds) {
+    seg_c = cm.colors[bcg_i];
     cr = palette_r(seg_c);
     cg = palette_g(seg_c);
     cb = palette_b(seg_c);
     w = side_w;
-    if cm.kinds[bcv_i] == KIND_MAIN { w = main_w; }
-    own = cm.cell_ix[bcv_i];
-    // @PLAN36 two-phase growth.  The bloom shader eases each segment from its
-    // ANCHOR toward its real position over GROWTH_FRAMES, starting at BIRTH:
-    //   PHASE 1 — a MAIN anchors at its SRC (= the EXISTING crystal's centre),
-    //   so the connection EXTENDS from the old crystal toward the new hex
-    //   instead of blooming out from the new hex.  Birth = the new cell's birth.
-    //   PHASE 2 — a SIDE branch anchors at its fork point and its birth is
-    //   delayed by GROWTH_FRAMES, so the hex only FILLS outward AFTER the
-    //   connection has landed.
-    seg_birth = cbirth[own];
-    if cm.kinds[bcv_i] != KIND_MAIN {
-      seg_birth = (cbirth[own] as float + GROWTH_FRAMES) as single;
+    if cm.kinds[bcg_i] == KIND_MAIN { w = main_w; }
+    own = cm.cell_ix[bcg_i];
+    // @PLAN36 two-phase growth: a MAIN anchors at its SRC (= the existing
+    // crystal's centre) and grows from BIRTH; a SIDE branch's birth is delayed
+    // by GROWTH_FRAMES so the hex only FILLS after the connection has landed.
+    seg_birth = births[own];
+    if cm.kinds[bcg_i] != KIND_MAIN {
+      seg_birth = (births[own] as float + GROWTH_FRAMES) as single;
     }
     emit_beam(verts,
-      cm.x0s[bcv_i], cm.z0s[bcv_i], cm.y0s[bcv_i],
-      cm.x1s[bcv_i], cm.z1s[bcv_i], cm.y1s[bcv_i],
+      cm.x0s[bcg_i], cm.z0s[bcg_i], cm.y0s[bcg_i],
+      cm.x1s[bcg_i], cm.z1s[bcg_i], cm.y1s[bcg_i],
       w, cr, cg, cb, 1.0f,
-      cm.x0s[bcv_i], cm.y0s[bcv_i], cm.z0s[bcv_i], seg_birth);
+      cm.x0s[bcg_i], cm.y0s[bcg_i], cm.z0s[bcg_i], seg_birth);
   }
-  crystal_count = len(verts) / 14;
-  crystal_vao = graphics::gl_upload_vertices(verts, 14);
-  (crystal_vao, crystal_count)
+  verts
 }
 
 // Hex world coordinates — convert offset (x, y) hex coords to world XZ
@@ -694,7 +683,8 @@ fn cam_step(cam: AutoCam, tick: integer) {
 // from server.loft: `<msg_id>:<payload>`.  We only care about msg 4
 // (world delta).  msg 5 (active-player signal) is ignored in the MVP
 // — phase 0.8 (jump-to-active) is desktop UI, not projector spectacle.
-fn apply_frame(world: World, cam: AutoCam, tick: integer, frame: text) {
+fn apply_frame(world: World, cryst: &CrystalIncr, crystal_births: &vector<single>,
+               cam: AutoCam, tick: integer, frame: text) {
   colon = frame.find(":");
   if colon == null {
     println("projector: dropped malformed frame {frame}");
@@ -718,6 +708,7 @@ fn apply_frame(world: World, cam: AutoCam, tick: integer, frame: text) {
       world.fades += [FadeCell{ck: k, x: x, y: y, color: existing.color, start: tick}];
       world.cells[k] = null;
       world.version = world.version + 1;
+      crystal_incr_erase(cryst, x, y);             // mirror into the incremental crystal
     }
     println("projector: erase ({x},{y}) — total cells={len(world.cells)}");
     // Erases count as activity too — the camera should swing to a
@@ -732,11 +723,14 @@ fn apply_frame(world: World, cam: AutoCam, tick: integer, frame: text) {
                            birth_frame: tick}];
       world.paint_tick_next = world.paint_tick_next + 1;
       world.version = world.version + 1;
+      crystal_incr_paint(cryst, x, y, c);          // mirror into the incremental crystal
+      crystal_births += [tick as single];          // per-cell bloom birth (parallel to cryst cells)
       println("projector: paint ({x},{y}) c={c} — total cells={len(world.cells)}");
     } else {
       if existing.color != c {
         existing.color = c;
         world.version = world.version + 1;
+        crystal_incr_recolor(cryst, x, y, c);      // mirror into the incremental crystal
       }
       println("projector: repaint ({x},{y}) c={c} — total cells={len(world.cells)}");
     }
@@ -826,8 +820,15 @@ fn main() {
   last_built_version: integer = 0 - 1;
   ground_vao: integer = 0;
   ground_vert_count: integer = 0;
-  crystal_vao: integer = 0;
-  crystal_vert_count: integer = 0;
+  // C4: the crystal is an INCREMENTAL field rendered as PER-GROUP VBOs.
+  // `crystal` mirrors every world edit (apply_frame); `crystal_births` is the
+  // per-cell bloom birth (parallel to its cells); `crystal_set` holds one VBO
+  // per render group so an edit re-uploads only the dirty groups (O(dirty)).
+  crystal = crystal_incr_new(CellSnap{xs: [], ys: [], colors: []},
+                             CRYSTAL_CHUNK_SHIFT, CRYSTAL_GROUP_DIM, CRYSTAL_HALO_K,
+                             crystal_state, 0);
+  crystal_births: vector<single> = [];
+  crystal_set = graphics::group_vbos_new(14, graphics::DRAW_TRIANGLES);
   fading_vao: integer = 0;
   auto_cam = AutoCam{
     pos_x: 0.0, pos_y: 0.0,
@@ -856,7 +857,7 @@ fn main() {
     while true {
       msg = ws.try_recv();
       if msg == null { break; }
-      apply_frame(world, auto_cam, frames, msg);
+      apply_frame(world, crystal, crystal_births, auto_cam, frames, msg);
       delta_count = delta_count + 1;
     }
 
@@ -879,22 +880,27 @@ fn main() {
     //    world has actually mutated since last frame — between
     //    edits, render is one draw call per VBO.
     if world.version != last_built_version {
-      if ground_vao != 0  { graphics::gl_delete_vao(ground_vao);  }
-      if crystal_vao != 0 { graphics::gl_delete_vao(crystal_vao); }
+      if ground_vao != 0 { graphics::gl_delete_vao(ground_vao); }
       ss = snapshot_cells(world);
       snap = ss.snap;
-      // The crystal lib renders every main at DEFAULT_AGE (static geometry);
-      // the GROW-IN animation is GPU-side: build_crystal_vbo tags each vertex
-      // with its cell's centre + birth_frame, and the crystal shader blooms
-      // it out from the centre over GROWTH_FRAMES.  So the mesh stays cached
-      // (rebuilt only here on world change) while growth animates per frame
-      // via the uNow uniform — no per-frame CPU rebuild.
+      // Ground stays ONE VBO (cheap flat hexes), rebuilt on change.
       gres = build_ground_vbo(snap);
       ground_vao        = gres.0;
       ground_vert_count = gres.1;
-      cres = build_crystal_vbo(snap, ss.births, crystal_state, frames);
-      crystal_vao        = cres.0;
-      crystal_vert_count = cres.1;
+      // Crystal (C4): re-upload only the DIRTY render groups.  `crystal` was kept
+      // in sync incrementally by apply_frame, so capture the dirty groups BEFORE
+      // the rebuild (which clears the dirty set), rebuild just those chunks, then
+      // bake + upload each dirty group; untouched groups keep their cached VBOs.
+      // On the first build every chunk is dirty ⇒ all groups upload.  The crystal
+      // shader still animates the GROW-IN per frame via uNow (no CPU rebuild
+      // between edits).
+      dirty_groups = collect_dirty_groups(crystal.field, crystal.group_dim);
+      crystal_incr_rebuild(crystal, crystal_state, frames);
+      for dg in dirty_groups {
+        gmesh = crystal_incr_assemble_group(crystal, dg);
+        gverts = bake_crystal_group(gmesh, crystal_births);
+        graphics::group_vbos_upsert(crystal_set, dg.key.gk, gverts, 0.0f, 0.0f, 0.0f, 0.0f);
+      }
       last_built_version = world.version;
     }
 
@@ -920,9 +926,8 @@ fn main() {
     graphics::gl_set_uniform_mat4(crystal_shader, "uMVP", proj_view.m);
     graphics::gl_set_uniform_float(crystal_shader, "uNow", frames as float);
     graphics::gl_set_uniform_float(crystal_shader, "uGrowth", GROWTH_FRAMES);
-    if crystal_vert_count > 0 {
-      graphics::gl_draw(crystal_vao, crystal_vert_count);
-    }
+    // One draw call per render group (C4) — untouched groups keep their cached VBOs.
+    graphics::group_vbos_draw_all(crystal_set);
     // (c) Fade layer — translucent ground footprints of recently-erased
     //     cells, alpha-ramped to zero over FADE_FRAMES.  Rebuilt every
     //     frame while any fade is active (few cells, cheap) and drawn last
