@@ -115,3 +115,68 @@ fn test_c3_incremental_equals_golden() {
   assert(gsum(im) == gsum(golden),
          "c3 incremental checksum={gsum(im)} golden={gsum(golden)}");
 }
+
+// Geometry-only checksum: kinds + colours + the six coords, but NO cell_ix.
+// After an ERASE the incremental field carries an orphaned cell-index GAP (the
+// erased slot is left in place so surviving indices stay stable for the
+// projector's per-cell bloom), so its cell_ix values differ from a contiguous
+// from-scratch build even when the GEOMETRY is identical — equivalence for the
+// erase/recolor path is therefore checked on geometry + colours, not cell_ix.
+// (`?? 0` on the u8 kinds/colours is safe since @P316 was fixed.)
+fn gsum_geom(m: SegMesh) -> integer {
+  s = 0;
+  for gg_i in 0..len(m.kinds) {
+    s = s + (m.kinds[gg_i] ?? 0) * 31 + (m.colors[gg_i] ?? 0) * 97
+      + qcoord(m.x0s[gg_i] ?? 0.0f) * 3 + qcoord(m.y0s[gg_i] ?? 0.0f) * 5 + qcoord(m.z0s[gg_i] ?? 0.0f) * 7
+      + qcoord(m.x1s[gg_i] ?? 0.0f) * 11 + qcoord(m.y1s[gg_i] ?? 0.0f) * 13 + qcoord(m.z1s[gg_i] ?? 0.0f) * 17;
+  }
+  s
+}
+
+// A snapshot of every cell of block(side) EXCEPT (ex,ey), with (rx,ry)
+// recoloured to `rc` — the FINAL surviving-cell state of the edit sequence below.
+fn survivors(side: integer, ex: integer, ey: integer, rx: integer, ry: integer, rc: integer) -> CellSnap {
+  xs: vector<integer> = []; ys: vector<integer> = []; cs: vector<integer> = [];
+  for sby in 0..side {
+    for sbx in 0..side {
+      if !(sbx == ex && sby == ey) {
+        xs += [sbx]; ys += [sby];
+        col = (sbx + sby) % 6;
+        if sbx == rx && sby == ry { col = rc; }
+        cs += [col];
+      }
+    }
+  }
+  CellSnap{xs: xs, ys: ys, colors: cs}
+}
+
+// C4 erase/recolor: both go through the SAME incremental rebuild path as paint.
+// Paint a multi-chunk block + rebuild, then RECOLOUR one cell and ERASE another
+// and rebuild again (only the affected chunks + halos re-run; the rest reuse
+// their cached meshes).  The result's GEOMETRY must SET-equal a from-scratch
+// full build of the surviving cells (cell_ix differs by the erase gap, so the
+// comparison is geometry + colours, not cell_ix).
+fn test_c3_incremental_erase_recolor_equals_full() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  side = 18;   // > 16 cells/axis ⇒ spans multiple chunks at shift 4 (cross-chunk erase + halo)
+  inc = crystal_incr_new(CellSnap{xs: [], ys: [], colors: []},
+                         CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0);
+  for ery in 0..side {
+    for erx in 0..side {
+      crystal_incr_paint(inc, erx, ery, (erx + ery) % 6);
+    }
+  }
+  crystal_incr_rebuild(inc, empty, 0);     // phase 1: full build, all chunks cached
+  crystal_incr_recolor(inc, 5, 5, 4);      // recolour one cell
+  crystal_incr_erase(inc, 3, 3);           // erase one cell
+  crystal_incr_rebuild(inc, empty, 0);     // phase 2: only dirty chunks re-run; rest reuse cache
+  im = crystal_incr_full_mesh(inc);
+
+  full = crystal_incr_full_mesh(
+    crystal_incr_new(survivors(side, 3, 3, 5, 5, 4),
+                     CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0));
+  assert(len(im.kinds) == len(full.kinds),
+         "erase/recolor incremental seg count={len(im.kinds)} full={len(full.kinds)}");
+  assert(gsum_geom(im) == gsum_geom(full),
+         "erase/recolor incremental geom={gsum_geom(im)} full={gsum_geom(full)}");
+}
