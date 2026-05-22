@@ -54,6 +54,24 @@ fn test_c3_full_build_equals_c1() {
          "c3 full-build checksum={gsum(fm)} golden={gsum(golden)}");
 }
 
+// @P317 symptom 1 regression — the all-at-once build at side=24 (the size that
+// exposed the bug; side=40 above never reproduced it).  crystal_incr_new built
+// its field by deep-copying field_new(snap) into the struct, which corrupted
+// the nested cidx hash → cells emitted as isolated stubs → an inflated,
+// non-deterministic mesh.  Fixed by building the field in place.  This asserts
+// the all-at-once build == the C1 golden at side=24 (count + commutative gsum).
+fn test_c3_all_at_once_side24_equals_golden() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  snap = block(24);
+  golden = crystal_segments_aged_tuned(snap, empty, 0, CRYSTAL_CHUNK_SHIFT, CRYSTAL_HALO_K);
+  c = crystal_incr_new(snap, CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0);
+  fm = crystal_incr_full_mesh(c);
+  assert(len(fm.kinds) == len(golden.kinds),
+         "c3 side24 all-at-once seg count={len(fm.kinds)} golden={len(golden.kinds)}");
+  assert(gsum(fm) == gsum(golden),
+         "c3 side24 all-at-once checksum={gsum(fm)} golden={gsum(golden)}");
+}
+
 // Per-group assembly is consistent: the group meshes partition the full mesh
 // (every cached chunk segment appears in exactly one group).
 fn test_c3_group_meshes_partition_full() {

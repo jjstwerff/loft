@@ -937,9 +937,15 @@ impl Stores {
         // a 72-byte allocation), corrupting heap metadata → SIGSEGV.
         // The correct bound is `elms = (room - 1) * 2` starting at i=0.
         let room = self.store(rec).get_u32_raw(cur, 0);
+        // @P317 — copy the LENGTH word (offset 4, the entry count) too.  `claim`
+        // writes only the size header (offset 0); without this, a deep-copied
+        // hash reads back `len() == 0` (visible via LOFT_LOG=copy_check as
+        // `dst_count=0`).  Mirrors the @P309 array-body length-header fix.
+        let length = self.store(rec).get_u32_raw(cur, 4);
         let elms = (room - 1) * 2;
         let into = self.store_mut(to).claim(room);
         self.store_mut(to).set_u32_raw(to.rec, to.pos, into);
+        self.store_mut(to).set_u32_raw(into, 4, length);
         for i in 0..elms {
             let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
             if elm == 0 {

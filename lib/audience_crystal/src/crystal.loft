@@ -799,12 +799,17 @@ pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: in
 // exactly (@P314 fixed the u8-concat stride; @P317 symptom 2 fixed a native
 // codegen store-leak that exhausted the store pool during the rebuild's keyed
 // churn — regression tests/scripts/133, native re-enabled).
-// ONE residual issue remains (@P317 symptom 1, under investigation):
-// crystal_incr_new(NON-EMPTY snap) — the all-at-once build — produces a
-// NON-deterministic inflated mesh at some sizes (e.g. side=24), on both
-// backends, in the full-CrystalIncr by-value deep-copy path.  WORKAROUND until
-// fixed: build incrementally FROM EMPTY (paint + rebuild), or use the full
-// build (crystal_segments_aged) — both correct on both backends.
+// @P317 FULLY FIXED 2026-05-22.  The all-at-once build (crystal_incr_new with a
+// NON-empty snap) used to produce a non-deterministic inflated mesh: building
+// the struct deep-copied a POPULATED field, which corrupted the nested `cidx`
+// spatial-index hash (layout-dependent — buckets copied fine, cidx entries did
+// not), so the rule found no neighbours and every cell emitted as an isolated
+// stub.  crystal_incr_new now builds its field IN PLACE via field_add_cell (the
+// same proven path the incremental build uses), so the cidx is never
+// deep-copied; deterministic == golden on both backends at all sizes
+// (regression tests/scripts/133::test_c3_all_at_once_side24_equals_golden).
+// The underlying CORE bug — deep-copying a struct whose hash field was
+// populated via build_index/OpReplaceKeyed corrupts the hash — is filed as @P318.
 
 struct ChunkMeshEntry { ck: integer not null, mesh: SegMesh }
 
@@ -835,12 +840,25 @@ fn crystal_incr_rebuild_chunks(c: &CrystalIncr, inputs: vector<ChunkInput>,
 // every chunk's mesh once.  chunk_shift / group_dim / halo_k are the dials.
 pub fn crystal_incr_new(snap: CellSnap, chunk_shift: integer, group_dim: integer,
                         halo_k: integer, state: CrystalState, tick: integer) -> CrystalIncr {
+  // @P317 — build the field IN PLACE via field_add_cell rather than
+  // deep-copying a POPULATED `field_new(snap)` into `c.field`.  Deep-copying a
+  // ChunkField whose `cidx` spatial-index hash is non-empty corrupts the cidx
+  // (layout-dependent — buckets copy fine, cidx entries do not), so the rule
+  // finds no neighbours and every cell emits as an isolated stub → an inflated,
+  // non-deterministic mesh (the @P317 symptom-1 bug).  The incremental
+  // paint+rebuild path already builds cidx in place, which is why it is
+  // correct; this constructor now does the same.  The underlying core deep-copy
+  // bug is filed separately.
   c = CrystalIncr{
     snap: snap,
-    field: field_new(0, snap.xs, snap.ys, chunk_shift, halo_k),
+    field: field_new(0, [], [], chunk_shift, halo_k),   // empty — built in place below
     group_dim: group_dim,
     chunks: [],
   };
+  for cn_i in 0..len(snap.xs) {
+    field_add_cell(c.field, snap.xs[cn_i] ?? 0, snap.ys[cn_i] ?? 0);
+  }
+  clear_dirty(c.field);   // the per-cell adds marked everything dirty; we full-build below
   // @P312: hoist the c.field read into a local — passing `c` (&-ref) AND a
   // `c.field`-derived argument to the same call makes native codegen emit
   // `f(&mut var_c, …var_c…)` which fails to borrow-check (E0503).
