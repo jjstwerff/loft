@@ -7,13 +7,14 @@ done** (render-group / tile layer, tunable `group_dim`; tests
 `lib/gridmesh/tests/rendergroup.loft`).  Full-build perf characterised:
 **O(N) flat (8 µs/seg at n=20 and n=100)** + **SegMesh ~2.1× smaller** than
 the legacy CrystalMesh (`crystal_stress` bench).  **C3 (incremental two-level
-reuse) is BLOCKED on [@P311](../../PROBLEMS.md) AND [@P312](../../PROBLEMS.md)** —
-caching nested struct-of-vectors (`hash<ChunkMeshEntry[ck]>` of `SegMesh`)
-crashes at runtime (@P311), and the `c: &CrystalIncr` nested-field mutation
-pattern fails `--native` borrow-check (@P312, E0503).  The C3 code was
-**removed** (it broke native compilation of every audience_crystal consumer);
-the design is preserved here + in DESIGN.md, the code in git history
-(commit 439e2f74).  moros Phase C to follow.
+reuse) is RE-ENABLED 2026-05-22** — both blockers are fixed: caching nested
+struct-of-vectors no longer crashes ([@P311](../../PROBLEMS.md) +
+[@P313](../../PROBLEMS.md)/[@P314](../../PROBLEMS.md)/[@P315](../../PROBLEMS.md)/[@P317](../../PROBLEMS.md)/[@P318](../../PROBLEMS.md)),
+and the `c: &CrystalIncr` call-arg borrow conflict ([@P312](../../PROBLEMS.md),
+native E0503) is fixed in codegen (the pre-eval pass now hoists a `c.field`
+read passed alongside `&mut c`).  `CrystalIncr` two-level reuse is back on;
+incremental == full build (regression `tests/scripts/133-crystal-incr.loft`,
+both backends).  moros Phase C to follow.
 
 **Full implementation design:** [DESIGN.md](DESIGN.md) — concrete types,
 the rule contract, the pipeline API, the crystal-consumer mapping, ordered

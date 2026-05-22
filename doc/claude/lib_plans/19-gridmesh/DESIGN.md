@@ -224,19 +224,19 @@ the global `build_hex_meshes`.  Axial `HexLayout` is implemented here.
    *dirty-tracking unit* (chunk) from the *upload/draw unit* (group).
    `collect_dirty_groups` is O(dirty groups × group_dim²) — flat in N (never
    scans all chunks).  Guard: `lib/gridmesh/tests/rendergroup.loft`.
-6. **crystal C3 — incremental, two-level reuse** ⚠️ **BLOCKED on @P311 + @P312;
-   code REMOVED.**  `CrystalIncr` holds the field + per-chunk cached `SegMesh`
-   (rebuild only dirty chunks); per-group meshes assembled on demand from the
-   cached chunk meshes.  Cost = O(dirty chunks · density), flat in N under
-   bounded density.  Two bugs block it: caching nested struct-of-vectors in
-   `hash<ChunkMeshEntry[ck]>` trips @P311 (runtime OOB crash), and the
-   `c: &CrystalIncr` nested-field mutation pattern trips @P312 (native E0503
-   borrow conflict — and since codegen compiles a package's pub fns even when
-   unreached, the dead code broke `--native` for every audience_crystal
-   consumer).  The code was therefore removed (preserved in git commit
-   439e2f74); re-add + revalidate (incremental == full, `tests/scripts/131`)
-   once @P311 + @P312 are fixed.  Full-build perf already characterised by
-   `crystal_stress`: **O(N) flat (8 µs/seg) + SegMesh ~2.1× smaller**.
+6. **crystal C3 — incremental, two-level reuse** ✅ **RE-ENABLED 2026-05-22.**
+   `CrystalIncr` holds the field + per-chunk cached `SegMesh` (rebuild only
+   dirty chunks); per-group meshes assembled on demand from the cached chunk
+   meshes.  Cost = O(dirty chunks · density), flat in N under bounded density.
+   Both original blockers are fixed: caching nested struct-of-vectors in
+   `hash<ChunkMeshEntry[ck]>` (@P311 runtime crash, plus the
+   @P313/@P314/@P315/@P317/@P318 keyed-copy / narrow-vector / deep-copy sweep),
+   and the `c: &CrystalIncr` call-arg borrow conflict (@P312 — native E0503 when
+   a call passes `c` AND a `c.field` read; fixed by hoisting the read into a
+   pre-eval temp before the `&mut` borrow).  Incremental == full build
+   (regression `tests/scripts/133`, both backends).  Full-build perf already
+   characterised by `crystal_stress`: **O(N) flat (8 µs/seg) + SegMesh ~2.1×
+   smaller**.
 7. **crystal C4 — projector per-group VBOs** (G tunable; crystal uses
    G=large → ~one VBO, low risk); per-group frustum cull is the moros payoff.
 8. **(later) moros Phase C** — own sub-plan.  Its height-field INPUT is

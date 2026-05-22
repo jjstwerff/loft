@@ -787,10 +787,11 @@ pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: in
 // Flat O(dirty) per-edit rebuild under bounded density.  Design in
 // lib_plans/19-gridmesh/DESIGN.md (step 6).
 //
-// Status 2026-05-22: structurally re-enabled — was blocked on @P311 (keyed
-// cache of nested struct-of-vectors crashed — fixed) + @P312 (native E0503 on
-// `&`-ref nested mutation — worked around by hoisting the c.field read into a
-// local before the rebuild_chunks call; see crystal_incr_new/_rebuild).
+// Status 2026-05-22: fully re-enabled — was blocked on @P311 (keyed cache of
+// nested struct-of-vectors crashed — fixed) + @P312 (native E0503 when a call
+// passed `c` (&-ref) AND a `c.field` read — fixed: native codegen now hoists the
+// aliasing read into a temp before the `&mut` borrow, so the inline
+// `rebuild_chunks(c, all_inputs(c.field, …), …)` calls compile cleanly).
 // FULL-BUILD path is correct: crystal_incr_full_mesh(crystal_incr_new(snap))
 // matches the C1 golden crystal_segments_aged exactly, and group_meshes
 // partitions it (regression: tests/scripts/133-crystal-incr.loft).
@@ -862,11 +863,10 @@ pub fn crystal_incr_new(snap: CellSnap, chunk_shift: integer, group_dim: integer
     field_add_cell(c.field, snap.xs[cn_i] ?? 0, snap.ys[cn_i] ?? 0);
   }
   clear_dirty(c.field);   // the per-cell adds marked everything dirty; we full-build below
-  // @P312: hoist the c.field read into a local — passing `c` (&-ref) AND a
-  // `c.field`-derived argument to the same call makes native codegen emit
-  // `f(&mut var_c, …var_c…)` which fails to borrow-check (E0503).
-  inputs = all_inputs(c.field, halo_k);
-  crystal_incr_rebuild_chunks(c, inputs, state, tick);
+  // @P312 fixed (2026-05-22): native codegen now hoists a `c.field`-derived argument
+  // into a temp before forming the `&mut c` borrow, so passing `c` (&-ref) AND a
+  // `c.field` read to the same call no longer trips E0503 — inline form is fine.
+  crystal_incr_rebuild_chunks(c, all_inputs(c.field, halo_k), state, tick);
   c
 }
 
@@ -880,9 +880,8 @@ pub fn crystal_incr_paint(c: &CrystalIncr, x: integer, y: integer, color: intege
 // Re-run ONLY the dirty chunks, then clear dirty.  O(dirty chunks · density),
 // flat in N under bounded density.
 pub fn crystal_incr_rebuild(c: &CrystalIncr, state: CrystalState, tick: integer) {
-  // @P312: hoist the c.field read into a local (see crystal_incr_new).
-  inputs = collect_dirty_inputs(c.field, c.field.halo_k);
-  crystal_incr_rebuild_chunks(c, inputs, state, tick);
+  // @P312 fixed (2026-05-22) — inline form is fine (see crystal_incr_new).
+  crystal_incr_rebuild_chunks(c, collect_dirty_inputs(c.field, c.field.halo_k), state, tick);
   clear_dirty(c.field);
 }
 

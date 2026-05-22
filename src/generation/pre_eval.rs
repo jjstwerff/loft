@@ -6,9 +6,45 @@
 //! generated Rust code where `stores` would be borrowed mutably twice.
 
 use crate::data::{Block, Type, Value};
+use std::collections::HashSet;
 use std::io::Write;
 
 use super::{Output, PreEvalEntry, narrow_int_cast, sanitize};
+
+/// True if `v` reads any variable in `vars`, at any depth.  Used by @P312 to
+/// detect a call argument that reads a variable which ANOTHER argument passes
+/// as a fresh `&mut var_X` borrow — that read must be hoisted before the call
+/// or native emits `f(&mut var_x, g(var_x))` and the Copy-read of `var_x` while
+/// it is mutably borrowed trips rustc E0503.  Mirrors `contains_op_database`'s
+/// traversal but also descends `Span`/`Drop`/`Return`/`Iter` and tests `Var` /
+/// `CallRef` leaves.
+fn value_refs_any(val: &Value, vars: &HashSet<u16>) -> bool {
+    match val {
+        Value::Var(nr) => vars.contains(nr),
+        Value::CallRef(nr, args) => {
+            vars.contains(nr) || args.iter().any(|arg| value_refs_any(arg, vars))
+        }
+        Value::Call(_, args) | Value::Insert(args) => {
+            args.iter().any(|arg| value_refs_any(arg, vars))
+        }
+        Value::Block(bl) => bl.operators.iter().any(|op| value_refs_any(op, vars)),
+        Value::Set(nr, to) => vars.contains(nr) || value_refs_any(to, vars),
+        Value::If(test, then_v, else_v) => {
+            value_refs_any(test, vars)
+                || value_refs_any(then_v, vars)
+                || value_refs_any(else_v, vars)
+        }
+        Value::Drop(inner) | Value::Return(inner) => value_refs_any(inner, vars),
+        Value::Iter(nr, start, end, body) => {
+            vars.contains(nr)
+                || value_refs_any(start, vars)
+                || value_refs_any(end, vars)
+                || value_refs_any(body, vars)
+        }
+        Value::Span(span) => value_refs_any(&span.1, vars),
+        _ => false,
+    }
+}
 
 impl Output<'_> {
     /// Use this instead of emitting an argument block when the block exists only to pass a
@@ -37,6 +73,24 @@ impl Output<'_> {
             return only_create_stack.then_some(*vr);
         }
         None
+    }
+
+    /// @P312 — the set of variables that some argument passes as a fresh
+    /// `&mut var_X` borrow (`create_stack_var`).  A by-value/Copy read of such a
+    /// var in another argument trips rustc E0503 ("cannot use `var_X` because it
+    /// was mutably borrowed"), so those reads are hoisted into `_pre_N` bindings
+    /// before the call.  The `&`-param FORWARDING case (passing an existing
+    /// `&mut` ref onward, emitted as bare `var_X`) is intentionally excluded:
+    /// Rust's two-phase reborrow tolerates a read alongside it, so hoisting it
+    /// would only bloat the generated code.
+    fn borrowed_arg_vars(&self, vals: &[Value]) -> HashSet<u16> {
+        let mut set = HashSet::new();
+        for arg in vals {
+            if let Some(vr) = self.create_stack_var(arg) {
+                set.insert(vr);
+            }
+        }
+        set
     }
 
     /// Fix the "hoisted return value" pattern inserted by `scopes::free_vars`.
@@ -353,6 +407,12 @@ impl Output<'_> {
         result: &mut Vec<PreEvalEntry>,
     ) -> std::io::Result<()> {
         // Recurse into wrapper nodes so nested Call nodes inside Set/Drop/If are found.
+        // @P312 — a bare user-fn call STATEMENT is wrapped in `Span` (source-position
+        // metadata); without unwrapping it here the call's args are never analysed, so
+        // the ref-alias hoist below never fires.  `Span` is transparent for codegen.
+        if let Value::Span(s) = v {
+            return self.collect_pre_evals_inner(&s.1, result);
+        }
         if let Value::Set(_, rhs) = v {
             return self.collect_pre_evals_inner(rhs, result);
         }
@@ -368,10 +428,13 @@ impl Output<'_> {
         // The closure arg appears once per candidate match arm (all arms receive the same
         // allocation block), so use replace_all=true to substitute every occurrence.
         if let Value::CallRef(_, args) = v {
+            // @P312 — same ref-alias hoist as the user-fn Call arm below.
+            let borrowed = self.borrowed_arg_vars(args);
             for arg in args {
                 let needs_pre = self.create_stack_var(arg).is_none()
                     && (matches!(arg, Value::Block(_) | Value::Insert(_))
-                        || self.needs_pre_eval(arg));
+                        || self.needs_pre_eval(arg)
+                        || (!borrowed.is_empty() && value_refs_any(arg, &borrowed)));
                 if needs_pre {
                     let name = format!("_pre_{}", self.counter);
                     self.counter += 1;
@@ -387,10 +450,16 @@ impl Output<'_> {
             if def_fn.rust.is_empty() {
                 // User-defined function: pre-eval any Block or nested user-fn arguments
                 // (both cause double-borrow of stores if left inline).
+                // @P312 — also pre-eval any arg that READS a variable which another
+                // arg passes as a fresh `&mut var_X` borrow; native otherwise emits
+                // `f(&mut var_x, g(var_x))` and the Copy-read of `var_x` while it is
+                // mutably borrowed trips rustc E0503.
+                let borrowed = self.borrowed_arg_vars(vals);
                 for arg in vals {
                     let needs_pre = self.create_stack_var(arg).is_none()
                         && (matches!(arg, Value::Block(_) | Value::Insert(_))
-                            || self.needs_pre_eval(arg));
+                            || self.needs_pre_eval(arg)
+                            || (!borrowed.is_empty() && value_refs_any(arg, &borrowed)));
                     if needs_pre {
                         let name = format!("_pre_{}", self.counter);
                         self.counter += 1;
