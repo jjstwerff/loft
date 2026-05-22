@@ -324,6 +324,34 @@ impl Store {
         self.claims.insert(PRIMARY);
     }
 
+    /// @P317 debug — `LOFT_LOG=zero_claim` (or `LOFT_ZERO_CLAIM=1`) zeroes
+    /// every freshly-claimed record's payload, so a read-before-write or a
+    /// stale-`DbRef` read picks up a deterministic `0` instead of arena slack
+    /// (old record data, or the freed block's LLRB free-list pointers, which
+    /// live at offset 4 — exactly where a vector's length word sits).  This
+    /// turns NON-deterministic uninitialised-arena bugs — which valgrind
+    /// cannot see, because the arena buffer is itself validly allocated — into
+    /// deterministic, reproducible failures.  Read once (cached); zero cost
+    /// when off.  See `doc/claude/DEBUG.md` § store-ownership debugging.
+    fn zero_claim_enabled() -> bool {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| {
+            std::env::var("LOFT_ZERO_CLAIM").is_ok()
+                || std::env::var("LOFT_LOG")
+                    .is_ok_and(|v| v.split([',', ':', ' ']).any(|p| p.trim() == "zero_claim"))
+        })
+    }
+
+    /// Common tail of every `claim` path: zero the claimed payload when
+    /// `zero_claim` is enabled (@P317 debugging lever).  No-op otherwise.
+    #[inline]
+    fn finish_claim(&mut self, pos: u32) -> u32 {
+        if Self::zero_claim_enabled() {
+            self.zero_fill(pos);
+        }
+        pos
+    }
+
     /// Claim the space of a record
     /// # Arguments
     /// * `size` - The requested record size in 8 byte words
@@ -349,7 +377,7 @@ impl Store {
             let result = self.claim_block(pos, size);
             #[cfg(debug_assertions)]
             self.fl_validate();
-            return result;
+            return self.finish_claim(result);
         }
         // P6: a fast-path miss means no single tracked free block fits.
         // `delete` only merges forward, so adjacent frees that each don't
@@ -370,7 +398,7 @@ impl Store {
         let result = self.claim_scan(size);
         #[cfg(debug_assertions)]
         self.fl_validate();
-        result
+        self.finish_claim(result)
     }
 
     /// Mark `pos` as claimed (splitting if the block is much larger than `size`).

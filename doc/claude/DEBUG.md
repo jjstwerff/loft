@@ -400,6 +400,35 @@ upward in the generated file from the error line to the nearest
 
 ---
 
+## Debugging store-ownership bugs (leaks, double-frees, non-determinism)
+
+The word-addressed `Store` arena (`Vec<u64>`) is **invisible to valgrind** —
+the buffer is validly allocated, so corruption *within* it (a stale `DbRef`
+read, a record reused while still referenced, a length read before it is
+written) shows up only as a wrong or **non-deterministic** result, never as a
+valgrind error.  `claim()` does NOT zero reclaimed slack, and a freed
+tree-tracked block stores its LLRB free-list pointers at **offset 4 — exactly
+where a vector's length word lives**.  This family (`@P311`, `@P313`, `@P314`,
+`@P317`) is the hardest to pin; these levers cut the time dramatically:
+
+| Lever | What it does | Use when |
+|---|---|---|
+| `LOFT_LOG=zero_claim` (or `LOFT_ZERO_CLAIM=1`) | Zeroes every freshly-claimed record's payload, so a read-before-write / stale read returns a deterministic `0` instead of arena garbage. | A result is **non-deterministic** run-to-run.  If `zero_claim` makes it deterministic-and-correct → a read-before-write (fix: zero that record at its claim site).  If it stays non-deterministic → NOT a claimed-slack read (rule it out; suspect a deep-copy logic bug or addresses-as-data). |
+| `LOFT_LOG=poison_free` | Overwrites a store's buffer with `0xDEADBEEF` on free. | Suspected use-after-free of a *whole store*.  No effect ⇒ not a freed-store UAF. |
+| `LOFT_STORES=log` | Per-alloc/free/`dec_rc` trace (`+ alloc #N`, `- free #N`, `dec_rc #N`). | Find a `free` then `alloc` of the same store while a `DbRef` is still live.  Note: a store is logged under the var name at *free* time, which may differ from its *alloc* name. |
+| `LOFT_STORES=warn` | Warns when >30 stores are active. | Catch a runaway leak early. |
+| `check_store_leaks` (interp, automatic at clean exit) / `LOFT_NATIVE_LEAK_CHECK=1` (native) | At-exit summary of unfreed stores, **aggregated by type** (`kt=68 ChunkKey×6026`). | Pin *which type* leaks.  Run the **same** repro on both backends — a leak on one and not the other means a backend-specific free/`inc_rc` emission bug (the @P317 symptom-2 shape). |
+| `--native-emit out.rs` | Writes the generated Rust and exits. | A native-only bug.  Read the generated function: look for a `null_named(...)` placeholder that is overwritten without a free, or a missing/extra `OpFreeRef`/`dec_rc`. |
+| `"Allocating a used store #N (rc=…, known_type=…, requested by=…)"` panic (`allocation.rs:104`) | The store-pool tripwire (free-bitmap vs `store.free` disagree), now with slot + rc + type + requester. | Fires at the *next* allocation after the real over-free/leak — a tripwire, not the bug site.  `rc=1` + the pool near `u16::MAX` ⇒ a leak exhausted the pool and `max` wrapped to 0; otherwise a double-free / rc under-count. |
+
+Workflow: reproduce minimally, run on **both** backends (divergence localises
+the backend), use `zero_claim` to classify the non-determinism, then `--native-emit`
++ `LOFT_STORES=log` to pin the site.  Mirror the @P311/@P313 fix shape (a
+missing/spurious `0x8000` free-source bit, `inc_rc`, or a `null_named`-vs-sentinel
+choice in `src/generation/dispatch.rs::emit_null_dbref`).
+
+---
+
 ## Debugging a validate_slots Panic
 
 `validate_slots` panics in debug builds when two variables with overlapping live

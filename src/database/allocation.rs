@@ -101,7 +101,18 @@ impl Stores {
         // Clear the bitmap bit for this slot (it is now active).
         self.clear_free_bit(slot);
         let store = &mut self.allocations[slot as usize];
-        assert!(store.free, "Allocating a used store");
+        // @P317 — enrich the tripwire: this fires when the free-bitmap and the
+        // per-store `free` flag disagree (a double-free, an rc under-count, or a
+        // store-pool overflow that wrapped `max` to 0 and re-selected slot 0).
+        // The slot + rc + type + name pinpoint the victim far faster than the
+        // bare message did during the @P311/@P313/@P317 store-ownership hunts.
+        assert!(
+            store.free,
+            "Allocating a used store #{slot} (rc={}, known_type={}, requested by={})",
+            store.ref_count,
+            store.known_type,
+            if name.is_empty() { "<anon>" } else { name },
+        );
         store.free = false;
         store.ref_count = 1;
         store.created_at = 0;
@@ -354,8 +365,15 @@ impl Stores {
     /// Same filtering: skip the stack store (#0), locked constants /
     /// worker borrows, and `const_refs`.
     #[must_use]
+    /// @P317 — leaked stores grouped BY TYPE, most-leaked first.  The previous
+    /// per-store `N(bc:created_at)` listing (truncated to 5 by the leak-check
+    /// preview) buried the signal in store numbers; aggregating by type names
+    /// the culprit directly (e.g. `kt=68 ChunkKey×6026`), which is what
+    /// pinpointed the @P317 native ref-local leak.  Used by
+    /// `LOFT_NATIVE_LEAK_CHECK` (native) and `LOFT_STORES=summary` (interp).
     pub fn collect_store_leaks(&self) -> Vec<String> {
-        let mut leaked = Vec::new();
+        let mut by_type: std::collections::BTreeMap<(u16, &str), usize> =
+            std::collections::BTreeMap::new();
         for (s_nr, s) in self.allocations.iter().enumerate() {
             if s_nr == 0 {
                 continue; // stack store — always alive
@@ -364,10 +382,19 @@ impl Stores {
                 continue;
             }
             if !s.free {
-                leaked.push(format!("{}(bc:{})", s_nr, s.created_at));
+                let tn = self
+                    .types
+                    .get(s.known_type as usize)
+                    .map_or("?", |t| t.name.as_str());
+                *by_type.entry((s.known_type, tn)).or_default() += 1;
             }
         }
+        let mut leaked: Vec<((u16, &str), usize)> = by_type.into_iter().collect();
+        leaked.sort_by_key(|&(_, n)| std::cmp::Reverse(n)); // most-leaked first
         leaked
+            .into_iter()
+            .map(|((kt, tn), n)| format!("kt={kt} {tn}×{n}"))
+            .collect()
     }
 
     /**

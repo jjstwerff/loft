@@ -1963,7 +1963,13 @@ impl State {
     /// on top of this helper.
     #[must_use]
     pub fn collect_store_leaks(&self) -> Vec<String> {
-        let mut leaked = Vec::new();
+        // @P317 — aggregate leaked stores BY TYPE, most-leaked first, so the
+        // exit warning names the culprit (`kt=68 ChunkKey×6026`) instead of a
+        // truncated list of store numbers.  Mirrors `Stores::collect_store_leaks`
+        // (uses State's own `const_refs` filter, which differs from the
+        // database's).
+        let mut by_type: std::collections::BTreeMap<(u16, &str), usize> =
+            std::collections::BTreeMap::new();
         for (s_nr, s) in self.database.allocations.iter().enumerate() {
             if s_nr == 0 {
                 continue; // stack store — always alive
@@ -1972,10 +1978,20 @@ impl State {
                 continue;
             }
             if !s.free {
-                leaked.push(format!("{}(bc:{})", s_nr, s.created_at));
+                let tn = self
+                    .database
+                    .types
+                    .get(s.known_type as usize)
+                    .map_or("?", |t| t.name.as_str());
+                *by_type.entry((s.known_type, tn)).or_default() += 1;
             }
         }
+        let mut leaked: Vec<((u16, &str), usize)> = by_type.into_iter().collect();
+        leaked.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
         leaked
+            .into_iter()
+            .map(|((kt, tn), n)| format!("kt={kt} {tn}×{n}"))
+            .collect()
     }
 
     /// FY.2: Resume execution after a frame yield.  Returns `true` while the
