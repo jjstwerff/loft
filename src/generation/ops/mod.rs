@@ -32,6 +32,7 @@ pub mod default;
 pub mod int_compare;
 pub mod key_ops;
 pub mod parallel;
+pub mod ref_ops;
 pub mod refcount;
 
 use super::Output;
@@ -191,6 +192,23 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     r.insert("OpClearKeyed", Box::new(key_ops::OpClearKeyedEmitter));
     r.insert("OpIncRc", Box::new(refcount::OpIncRcEmitter));
 
+    // Reference-lifetime family — the most context-aware arms (OpFreeRef /
+    // OpFreeRefIfDistinct read per-function variable metadata), migrated off
+    // the dispatch match (`dispatch_op_arm_budget` ratchet).
+    r.insert(
+        "OpNullRefSentinel",
+        Box::new(ref_ops::OpNullRefSentinelEmitter),
+    );
+    r.insert("OpEqRef", Box::new(ref_ops::OpEqRefEmitter));
+    r.insert("OpNeRef", Box::new(ref_ops::OpNeRefEmitter));
+    r.insert("OpFreeRef", Box::new(ref_ops::OpFreeRefEmitter));
+    r.insert(
+        "OpFreeRefIfDistinct",
+        Box::new(ref_ops::OpFreeRefIfDistinctEmitter),
+    );
+    r.insert("OpCopyRecord", Box::new(ref_ops::OpCopyRecordEmitter));
+    r.insert("OpSizeofRef", Box::new(ref_ops::OpSizeofRefEmitter));
+
     // Phase 06 — parallel-queue emitter family (P202 close).  Mirrors
     // phase 03's for-par emitter for the queue protocol: `n_parallel_queue`
     // / `_text` / `_ref` build a worker closure and call the
@@ -330,11 +348,13 @@ mod tests {
         // P203/P204/P205): 9 forwarding-smoke names + ParallelFor×2 +
         // key_ops×2 + ParallelQueue×3 + ParallelBufRename×6 +
         // IntCompare×4, with 2 overlaps (OpEqInt/OpLtInt overwritten
-        // by IntCompare) → ~24.  Plus the @PLAN36 dogfood keyed-WRITE
-        // family migrated off the dispatch match (OpReplaceKeyed /
-        // OpSetKeyed / OpClearKeyed / OpIncRc, +4) → ~28.  Cap at 30.
+        // by IntCompare) → ~24.  Plus the @PLAN36 dogfood arm-budget
+        // paydown — keyed-WRITE family + OpIncRc (+4), coroutine pair
+        // (+2), and the reference-lifetime family (OpNullRefSentinel /
+        // OpEqRef / OpNeRef / OpFreeRef / OpFreeRefIfDistinct /
+        // OpCopyRecord / OpSizeofRef, +7) → 36.  Cap at 45.
         assert!(
-            count <= 30,
+            count <= 45,
             "registry has {count} custom emitters — bump the cap if \
              this is intentional and document in plan 09 status table"
         );
