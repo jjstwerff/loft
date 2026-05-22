@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib lib
+//
+// gridmesh C3 — CrystalIncr two-level reuse.  Validates the FULL-BUILD path:
+//   1. crystal_incr_full_mesh(crystal_incr_new(snap)) produces the SAME SET of
+//      segments as the C1 golden crystal_segments_aged_tuned (same chunk dials).
+//   2. The per-group meshes (crystal_incr_group_meshes, assembled on demand from
+//      the cached chunk meshes) sum to the same segment count as the full mesh.
+//
+// NOTE: the INCREMENTAL path (crystal_incr_paint + crystal_incr_rebuild reusing
+// non-dirty cached chunks) is NOT yet asserted equal to a full rebuild — it
+// currently DIVERGES in geometry (a halo/dirty-propagation reuse bug, @P314).
+// The projector uses the full build meanwhile.
+
+use audience_crystal::*;
+use gridmesh;
+
+fn qcoord(v: float) -> integer { ((v as single) as float * 1000.0) as integer }
+
+// Order-independent (commutative) checksum over the segment set.
+fn gsum(m: SegMesh) -> integer {
+  s = 0;
+  for i in 0..len(m.kinds) {
+    s = s + (m.kinds[i] ?? 0) * 7919 + (m.colors[i] ?? 0) * 131
+      + qcoord(m.x0s[i] ?? 0.0) * 3 + qcoord(m.y0s[i] ?? 0.0) * 5 + qcoord(m.z0s[i] ?? 0.0) * 7
+      + qcoord(m.x1s[i] ?? 0.0) * 11 + qcoord(m.y1s[i] ?? 0.0) * 13 + qcoord(m.z1s[i] ?? 0.0) * 17;
+  }
+  s
+}
+
+fn block(side: integer) -> CellSnap {
+  xs: vector<integer> = []; ys: vector<integer> = []; cs: vector<integer> = [];
+  for by in 0..side { for bx in 0..side { xs += [bx]; ys += [by]; cs += [(bx + by) % 6]; } }
+  CellSnap{xs: xs, ys: ys, colors: cs}
+}
+
+// C3 full build == C1 golden (same SET of segments, at the same chunk dials).
+fn test_c3_full_build_equals_c1() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  snap = block(40);   // 40 > 16 cells/axis ⇒ spans multiple chunks at shift 4
+  golden = crystal_segments_aged_tuned(snap, empty, 0, CRYSTAL_CHUNK_SHIFT, CRYSTAL_HALO_K);
+  c = crystal_incr_new(snap, CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0);
+  fm = crystal_incr_full_mesh(c);
+  assert(len(fm.kinds) == len(golden.kinds),
+         "c3 full-build seg count={len(fm.kinds)} golden={len(golden.kinds)}");
+  assert(gsum(fm) == gsum(golden),
+         "c3 full-build checksum={gsum(fm)} golden={gsum(golden)}");
+}
+
+// Per-group assembly is consistent: the group meshes partition the full mesh
+// (every cached chunk segment appears in exactly one group).
+fn test_c3_group_meshes_partition_full() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  c = crystal_incr_new(block(40), CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0);
+  fm = crystal_incr_full_mesh(c);
+  groups = crystal_incr_group_meshes(c);
+  gtot = 0;
+  for g in groups { gtot = gtot + len(g.kinds); }
+  assert(gtot == len(fm.kinds),
+         "c3 group meshes total={gtot} != full mesh={len(fm.kinds)}");
+}
