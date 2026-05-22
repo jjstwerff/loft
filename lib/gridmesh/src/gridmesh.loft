@@ -260,10 +260,37 @@ pub fn field_add_cell(f: &ChunkField, x: integer, y: integer) {
   mark_borders(f, x, y);
 }
 
-// Edit — recolour/erase an existing cell: mark its chunk (+ halo border)
-// dirty without touching the coord arrays or index.
+// Edit — RECOLOUR an existing cell: mark its chunk (+ halo border) dirty
+// without touching the coord arrays or index (the cell stays; only its
+// consumer-side payload — colour/height — changed).  Erase uses
+// field_remove_cell instead (it must also drop the cell from the index).
 pub fn field_mark_dirty(f: &ChunkField, x: integer, y: integer) {
   mark_borders(f, x, y);
+}
+
+// Edit — REMOVE an existing cell: drop it from the spatial index (cidx) and
+// its chunk bucket, then mark its chunk (+ halo border) dirty.  The MIRROR of
+// field_add_cell, sharing mark_borders so a removal flows through the IDENTICAL
+// incremental rebuild path as a paint.  The coord slot in xs/ys is deliberately
+// LEFT in place (not compacted): cell indices the field already handed out stay
+// stable, so a consumer's parallel per-cell arrays (e.g. the projector's bloom
+// births, indexed by cell index) are not invalidated.  The orphaned slot is
+// never read again — its index is in no bucket and no longer in cidx — and
+// re-painting the same coord allocates a FRESH index (field_add_cell appends),
+// so identity is never reused.
+pub fn field_remove_cell(f: &ChunkField, x: integer, y: integer) {
+  cr = f.cidx[enc_coord(x, y)];
+  if cr == null { return; }          // not present — nothing to remove
+  ix = cr.ix;
+  f.cidx[enc_coord(x, y)] = null;    // drop from the spatial index
+  k = chunk_of(x, y, f.chunk_shift);
+  b = f.buckets[k.ck];
+  if b != null {
+    keep: vector<integer> = [];
+    for frc_cix in b.cell_ixs { if frc_cix != ix { keep += [frc_cix]; } }
+    b.cell_ixs = keep;
+  }
+  mark_borders(f, x, y);             // SAME dirty-marking as field_add_cell
 }
 
 // Clear the dirty index after a rebuild (@P307 OpClearKeyed: in-place free).

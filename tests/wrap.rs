@@ -307,6 +307,141 @@ fn ignored_scripts() -> HashSet<&'static str> {
     HashSet::from([])
 }
 
+/// Per-package library tests that BOTH the interpreter (`library_suite`) and
+/// native (`tests/native.rs::native_library_suite`) suites skip, keyed by
+/// `"<pkg>/<file>.loft"`, each with a one-line rationale.  Mirrors
+/// `tests/native.rs::SCRIPTS_NATIVE_SKIP`.  Reserved for tests that need a GL
+/// display or block forever — none today (no lib test creates a window or runs
+/// an unbounded poll/accept loop; the `server` test is listen+close).
+const LIB_TESTS_SKIP: &[&str] = &[
+    // Network-dependent: makes live HTTPS calls to httpbin.org, so it fails in
+    // offline CI (an empty response parses out-of-bounds).  Not a code bug — an
+    // external-service integration test that can't run headless/offline.
+    "web/http.loft",
+];
+
+/// Library packages skipped wholesale (chunk-level), with rationale.  The
+/// in-process suite aborts on the first SIGSEGV, so a chunk with multiple
+/// interpreter crashes can't be run file-by-file here.
+const LIB_PKGS_SKIP: &[&str] = &[
+    // @P319 — the moros_* chunk has MULTIPLE interpreter SIGSEGVs (a closure
+    // capturing a struct local + mutating its field at moros_render/adversarial
+    // :95; a moros_map/src/types.loft:32 crash from other moros tests).  Not
+    // projector-related (moros is the separate RPG).  The chunk is gated
+    // separately once @P319 is fixed; tracked in PROBLEMS.md.
+    "moros_map",
+    "moros_editor",
+    "moros_render",
+    "moros_sim",
+    "moros_ui",
+];
+
+/// Returns true if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is in the
+/// shared skip-list.  Public so `tests/native.rs` reuses the same keying.
+pub fn lib_test_skipped(entry: &std::path::Path) -> bool {
+    let file = entry
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let pkg = entry
+        .parent()
+        .and_then(|d| d.parent())
+        .and_then(|d| d.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if LIB_PKGS_SKIP.contains(&pkg.as_str()) {
+        return true;
+    }
+    let key = format!("{pkg}/{file}");
+    LIB_TESTS_SKIP.contains(&key.as_str())
+}
+
+/// Collect every `lib/<pkg>/tests/*.loft` path, sorted.  Shared discovery for
+/// the interp + native library suites so they cover an identical set.
+pub fn collect_library_tests() -> std::io::Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for pkg in std::fs::read_dir("lib")?.filter_map(|e| e.ok()) {
+        let tests_dir = pkg.path().join("tests");
+        if !tests_dir.is_dir() {
+            continue;
+        }
+        for f in std::fs::read_dir(&tests_dir)?.filter_map(|e| e.ok()) {
+            let p = f.path();
+            if p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+            {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// Gate every `lib/<pkg>/tests/*.loft` through the INTERPRETER.  Before this the
+/// libraries had no CI coverage of their own (`lib/*/tests/` was referenced by
+/// nothing).
+///
+/// Each test runs as a SUBPROCESS via the package-aware `loft test` subcommand
+/// (`cd lib/<pkg> && loft test <file>`), exactly as `make test-packages` does.
+/// Subprocessing is deliberate: it isolates a crashing lib test (a SIGSEGV
+/// reports as that file's failure instead of aborting the whole suite) and
+/// reuses `loft test`'s correct package resolution + native-extension loading
+/// (an in-process harness mis-resolves intra-package `use` and skips
+/// `extensions::load_all`).  The native counterpart is
+/// `tests/native.rs::native_library_suite`.
+#[test]
+fn library_suite() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    let mut failures: Vec<String> = Vec::new();
+    let mut ran = 0;
+    for entry in collect_library_tests()? {
+        if lib_test_skipped(&entry) {
+            println!("skip {entry:?} (LIB_TESTS_SKIP / LIB_PKGS_SKIP)");
+            continue;
+        }
+        let pkg_dir = entry.parent().and_then(|d| d.parent()).unwrap_or(&entry);
+        let stem = entry
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        println!("lib test {entry:?}");
+        let out = std::process::Command::new(loft_bin)
+            .current_dir(pkg_dir)
+            .args(["test", &stem])
+            .output()?;
+        ran += 1;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // `loft test` exits 0 even on a CAUGHT SIGSEGV (the crash handler prints
+        // and returns), so detect crashes by their printed marker too.
+        let failed = !out.status.success()
+            || combined.contains("SIGSEGV")
+            || combined.contains("panicked")
+            || combined.contains("test result: FAILED")
+            || !combined.contains("test result: ok");
+        if failed {
+            let tail: Vec<&str> = combined.lines().rev().take(4).collect();
+            failures.push(format!("{entry:?}: {}", tail.join(" | ")));
+        }
+    }
+    if !failures.is_empty() {
+        return Err(Error::other(format!(
+            "{} of {ran} library tests failed:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        )));
+    }
+    println!("library_suite: {ran} library tests passed");
+    Ok(())
+}
+
 macro_rules! script_test {
     ($name:ident, $path:literal) => {
         #[test]
