@@ -9,9 +9,10 @@
 // elements came out as zeros (corrupting, allocation-history-dependently, the
 // kinds/colors arrays of gridmesh's SegMesh in C3 incremental rebuild).
 //
-// INTERPRETER-ONLY: reading a u8 element with `?? <int>` mis-compiles under
-// `--native` (@P316), so this script is in SCRIPTS_NATIVE_SKIP; interp coverage
-// guards the @P314 fix.
+// Also guards @P316 — `isum` reads a `vector<u8>` element with `?? <int>`
+// (`v[i] ?? 0`).  Native used to emit `(if … {u8} else {0_i64}) as u8` → E0308;
+// the fix widens both `??` branches to `i64` so the element-coalesce typechecks.
+// This script therefore runs on BOTH backends (no longer in SCRIPTS_NATIVE_SKIP).
 
 struct V { a: vector<u8> }
 

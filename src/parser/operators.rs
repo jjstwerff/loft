@@ -1176,14 +1176,36 @@ impl Parser {
             return;
         }
 
-        if !self.convert(&mut rhs, &rhs_type, lhs_type) && !self.first_pass {
+        // @P316 — pick the coalesce result type.  When the value and default are
+        // integers of DIFFERENT specs (e.g. a narrow `u8` element + an
+        // `integer`/`i64` default), native can't unify the `if` branches — it emits
+        // `(if … {u8} else {0_i64}) as u8` → E0308 (`convert` leniently accepts any
+        // Integer→Integer without actually re-typing, so the branches keep their
+        // own native widths).  Widen BOTH branches to `i64` so they share a native
+        // type; the result is `i64` (matching the surrounding integer arithmetic).
+        // Matching-width integers and non-integer types keep the original
+        // behaviour (bring the default to the value's type; result = value's type).
+        let widen_ints = matches!(lhs_type, Type::Integer(_))
+            && matches!(rhs_type, Type::Integer(_))
+            && *lhs_type != rhs_type;
+        let result_type = if widen_ints {
+            crate::data::I64.clone()
+        } else {
+            lhs_type.clone()
+        };
+        // Bring the default to the result type (widen narrow→i64, or the original
+        // default→value-type convert); report a genuine mismatch (e.g. `text ?? 0`).
+        if !self.convert(&mut rhs, &rhs_type, &result_type) && !self.first_pass {
             self.can_convert(&rhs_type, lhs_type);
         }
+        // `convert(value → result_type)` widens the value branch when widen_ints,
+        // and is a no-op otherwise (result_type == lhs_type).
         if let Value::Var(_) = code {
             // Simple variable: reading twice is side-effect-free.
-            let lhs = code.clone();
+            let mut lhs = code.clone();
             let mut null_check = code.clone();
             self.convert(&mut null_check, lhs_type, &Type::Boolean);
+            self.convert(&mut lhs, lhs_type, &result_type);
             *code = v_if(null_check, lhs, rhs);
         } else {
             // Non-trivial expression: materialise into a temp to avoid double
@@ -1192,10 +1214,12 @@ impl Parser {
             let set_tmp = v_set(tmp, code.clone());
             let mut null_check = Value::Var(tmp);
             self.convert(&mut null_check, lhs_type, &Type::Boolean);
-            let if_expr = v_if(null_check, Value::Var(tmp), rhs);
-            *code = v_block(vec![set_tmp, if_expr], lhs_type.clone(), "ncc");
+            let mut true_branch = Value::Var(tmp);
+            self.convert(&mut true_branch, lhs_type, &result_type);
+            let if_expr = v_if(null_check, true_branch, rhs);
+            *code = v_block(vec![set_tmp, if_expr], result_type.clone(), "ncc");
         }
-        *ctp = lhs_type.clone();
+        *ctp = result_type;
     }
 
     #[allow(clippy::too_many_arguments)]
