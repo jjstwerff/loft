@@ -691,48 +691,6 @@ impl Output<'_> {
             "OpFreeText" | "OpCreateStack" => return Ok(()),
             // N8b.2: advance a native coroutine and return the yielded value.
             // parameters[0] = gen DbRef expression; parameters[1] = Int(value_size).
-            "OpCoroutineNext" => {
-                if let Some(gen_val) = vals.first() {
-                    let gen_code = self.generate_expr_buf(gen_val)?;
-                    let value_size = if let Some(Value::Int(n)) = vals.get(1) {
-                        *n
-                    } else {
-                        4 // fallback: i32
-                    };
-                    match value_size {
-                        8 => write!(
-                            w,
-                            "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores)"
-                        )?,
-                        1 => write!(
-                            w,
-                            "(loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) != 0)"
-                        )?,
-                        // size_of::<&str>() == 16 — text-yielding generator.
-                        16 => write!(
-                            w,
-                            "loft::codegen_runtime::coroutine_next_text({gen_code}, stores)"
-                        )?,
-                        _ => write!(
-                            w,
-                            "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) as i32"
-                        )?,
-                    }
-                }
-                return Ok(());
-            }
-            // N8b.2: test whether a native coroutine is exhausted.
-            // parameters[0] = gen DbRef expression.
-            "OpCoroutineExhausted" => {
-                if let Some(gen_val) = vals.first() {
-                    let gen_code = self.generate_expr_buf(gen_val)?;
-                    write!(
-                        w,
-                        "loft::codegen_runtime::coroutine_is_exhausted({gen_code})"
-                    )?;
-                }
-                return Ok(());
-            }
             "OpNullRefSentinel" => {
                 write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
                 return Ok(());

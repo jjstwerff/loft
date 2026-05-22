@@ -27,6 +27,7 @@
 // add more call sites and custom emitters.
 #![allow(dead_code)]
 
+pub mod coroutine;
 pub mod default;
 pub mod int_compare;
 pub mod key_ops;
@@ -161,6 +162,18 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     r.insert(
         "n_parallel_for_light",
         Box::new(parallel::ParallelForEmitter),
+    );
+
+    // Coroutine family (N8b native generators) — migrated out of the
+    // dispatch match (`dispatch_op_arm_budget` ratchet).  Both are
+    // pass-throughs to `loft::codegen_runtime::coroutine_*`.
+    r.insert(
+        "OpCoroutineNext",
+        Box::new(coroutine::OpCoroutineNextEmitter),
+    );
+    r.insert(
+        "OpCoroutineExhausted",
+        Box::new(coroutine::OpCoroutineExhaustedEmitter),
     );
 
     // Phase 04 — key-keyed Op emitters.  Replaces ~70 lines of two
