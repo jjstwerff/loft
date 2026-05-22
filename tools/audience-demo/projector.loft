@@ -431,13 +431,11 @@ fn build_crystal_vbo(snap: CellSnap, births: vector<integer>,
   // cell_h_at so the height precompute is O(N), not O(N²).  (@P300 fixed,
   // so the hash-returning helper is fine now.)
   ncells = len(snap.xs);
-  pidx = gridmesh::build_index(snap.xs, snap.ys);
-  cxs: vector<single> = []; cys: vector<single> = []; czs: vector<single> = [];
+  // Per-cell birth frame.  The bloom ANCHOR is now each segment's OWN src
+  // endpoint (see the emit loop), so cell centres are no longer precomputed —
+  // a connecting main's src already IS the existing crystal's centre.
   cbirth: vector<single> = [];
   for ci in 0..ncells {
-    cxs += [cell_wx(snap.xs[ci], snap.ys[ci]) as single];
-    cys += [cell_h_at(snap, pidx, ci) as single];
-    czs += [cell_wz(snap.ys[ci]) as single];
     cbirth += [births[ci] as single];
   }
   for bcv_i in 0..len(cm.kinds) {
@@ -448,11 +446,23 @@ fn build_crystal_vbo(snap: CellSnap, births: vector<integer>,
     w = side_w;
     if cm.kinds[bcv_i] == KIND_MAIN { w = main_w; }
     own = cm.cell_ix[bcv_i];
+    // @PLAN36 two-phase growth.  The bloom shader eases each segment from its
+    // ANCHOR toward its real position over GROWTH_FRAMES, starting at BIRTH:
+    //   PHASE 1 — a MAIN anchors at its SRC (= the EXISTING crystal's centre),
+    //   so the connection EXTENDS from the old crystal toward the new hex
+    //   instead of blooming out from the new hex.  Birth = the new cell's birth.
+    //   PHASE 2 — a SIDE branch anchors at its fork point and its birth is
+    //   delayed by GROWTH_FRAMES, so the hex only FILLS outward AFTER the
+    //   connection has landed.
+    seg_birth = cbirth[own];
+    if cm.kinds[bcv_i] != KIND_MAIN {
+      seg_birth = (cbirth[own] as float + GROWTH_FRAMES) as single;
+    }
     emit_beam(verts,
       cm.x0s[bcv_i], cm.z0s[bcv_i], cm.y0s[bcv_i],
       cm.x1s[bcv_i], cm.z1s[bcv_i], cm.y1s[bcv_i],
       w, cr, cg, cb, 1.0f,
-      cxs[own], cys[own], czs[own], cbirth[own]);
+      cm.x0s[bcv_i], cm.y0s[bcv_i], cm.z0s[bcv_i], seg_birth);
   }
   crystal_count = len(verts) / 14;
   crystal_vao = graphics::gl_upload_vertices(verts, 14);

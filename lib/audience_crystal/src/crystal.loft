@@ -67,14 +67,19 @@ pub BRANCH_LEN_BASE = 0.95;
 // stays a bare needle.
 pub BRANCH_SPACING = 0.30;
 
-// Ticks for a newborn main's side branches to grow from 0 % length to
-// 100 %.  Main lines themselves don't age — they extend immediately
-// when supporters arrive; only side branches grow over time.  At
-// `tick - birth >= GROWTH_TICKS` the main is "fully grown".  60 s
-// at ~60 fps (= 3600 ticks) gives the audience-demo timeline the
-// "slow growth" feel the design wants; tune via the `tick` unit the
-// caller chooses.
+// Ticks for a point's side branches to grow from 0 % to 100 % length,
+// during the FILL phase (after its connection has landed — see
+// CONNECT_TICKS).  60 s at ~60 fps (= 3600 ticks) gives the audience-demo
+// timeline the "slow growth" feel the design wants; tune via the `tick`
+// unit the caller chooses.
 pub GROWTH_TICKS = 3600;
+
+// @PLAN36 two-phase growth — ticks for a main to EXTEND from the existing
+// crystal toward a new point (the CONNECTION phase) before that point grows
+// its own side branches outward (the FILL phase).  Reverses the old "mains
+// snap to full length instantly" behaviour so growth reads as the existing
+// crystal reaching toward each newly-painted point, then the point blooming.
+pub CONNECT_TICKS = 600;
 
 // Age factor used for a main with no birth record in the CrystalState
 // (i.e. when the caller isn't driving the growth animation).  Renders
@@ -224,6 +229,29 @@ pub fn age_factor(birth: integer, tick: integer) -> float {
   if age >= GROWTH_TICKS { return 1.0; }
   if age <= 0 { return 0.0; }
   age as float / GROWTH_TICKS as float
+}
+
+// @PLAN36 two-phase growth — CONNECTION phase: 0.0 (just born) → 1.0 over
+// CONNECT_TICKS, used to extend a main from the existing crystal toward the
+// new point.  A missing birth record (caller not driving the animation)
+// renders as fully connected.
+pub fn connect_factor(birth: integer, tick: integer) -> float {
+  if birth < 0 { return 1.0; }
+  conn_age = tick - birth;
+  if conn_age <= 0 { return 0.0; }
+  if conn_age >= CONNECT_TICKS { return 1.0; }
+  conn_age as float / CONNECT_TICKS as float
+}
+
+// @PLAN36 two-phase growth — FILL phase: 0.0 until the connection has landed
+// (CONNECT_TICKS after birth), then 0.0 → 1.0 over GROWTH_TICKS as the point's
+// side branches grow outward.  A missing birth record renders at DEFAULT_AGE.
+pub fn fill_factor(birth: integer, tick: integer) -> float {
+  if birth < 0 { return DEFAULT_AGE; }
+  fill_age = tick - birth - CONNECT_TICKS;
+  if fill_age <= 0 { return 0.0; }
+  if fill_age >= GROWTH_TICKS { return 1.0; }
+  fill_age as float / GROWTH_TICKS as float
 }
 
 // ── Hex helpers ──────────────────────────────────────────────────────
@@ -631,9 +659,14 @@ pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
   for jd in 0..6 {
     for jk in 1..(MAX_MAIN_HEXES + 1) {
       jj = idx_at(cidx, step_x(cell_x, cell_y, jd, jk), step_y(cell_x, cell_y, jd, jk));
-      if jj >= 0 && jj < cs_i {
-        best_dist[jd] = jk; best_ix[jd] = jj;
-        break;   // nearest older on this axis
+      if jj >= 0 {
+        // Stop at the NEAREST filled cell on this axis.  Connect only if it is
+        // OLDER (jj < cs_i) — a newer neighbour draws the connection itself.
+        // Never span PAST a filled cell: a longer main reaching a 2-hex
+        // supporter would overlap the intermediate cell's own main and
+        // double-draw that segment (the on-screen artefact).
+        if jj < cs_i { best_dist[jd] = jk; best_ix[jd] = jj; }
+        break;
       }
     }
   }
@@ -665,23 +698,33 @@ pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
     rdx = tip_x - src_x;
     rdz = tip_z - src_z;
     dy = tip_y - src_y;
+    // @PLAN36 two-phase growth: the main first EXTENDS from the existing
+    // crystal (src) toward the new point (tip) over CONNECT_TICKS; the side
+    // branches (below) stay at zero length until that connection lands, so a
+    // point only blooms outward AFTER the crystal has reached it.
+    main_birth = lookup_main_birth(state, cell_x, cell_y, d);
+    connect_f = connect_factor(main_birth, tick);
+    fill_f = fill_factor(main_birth, tick);
+    if connect_f <= 0.0 { continue; }   // not yet growing toward this point
+    ext_tip_x = src_x + rdx * connect_f;
+    ext_tip_y = src_y + dy * connect_f;
+    ext_tip_z = src_z + rdz * connect_f;
     main_seg_id = d * 100 + 99;
     main_col = pick_segment_color(cell_c, one_away, two_away,
                                   cell_x, cell_y, main_seg_id);
-    emit_segment(m, KIND_MAIN, src_x, src_y, src_z, tip_x, tip_y, tip_z, main_col, cs_i);
-    main_birth = lookup_main_birth(state, cell_x, cell_y, d);
-    age_f = DEFAULT_AGE;
-    if main_birth >= 0 { age_f = age_factor(main_birth, tick); }
+    emit_segment(m, KIND_MAIN, src_x, src_y, src_z, ext_tip_x, ext_tip_y, ext_tip_z, main_col, cs_i);
     raw_forks = (ray_len_d / branch_spacing_world) as integer;
     n_forks = raw_forks - 1;
     if n_forks < 0 { n_forks = 0; }
     branch_t_per_len = cos(deg30) / ray_len_d;
     for f in 1..(n_forks + 1) {
       t = f as float * branch_spacing_world / ray_len_d;
+      if t > connect_f { break; }            // past where the connection has reached
+      blen = branch_base * (1.0 - t) * fill_f;
+      if blen <= 0.0 { continue; }           // branches grow only after the connection lands
       fork_x = src_x + rdx * t;
       fork_z = src_z + rdz * t;
       fork_y = src_y + t * dy;
-      blen = branch_base * (1.0 - t) * age_f;
       branch_end_y = src_y + (t + blen * branch_t_per_len) * dy;
       plus_ang = ray_ang + deg30;
       plus_seg_id = d * 100 + f * 10 + 0;
