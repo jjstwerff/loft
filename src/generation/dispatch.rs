@@ -559,7 +559,21 @@ impl Output<'_> {
                 }
             };
             if ref_buf_type_id == u16::MAX {
-                write!(w, "stores.null_named(\"var_{name}\")")?;
+                // @P317 — a struct `Reference` local with no resolvable
+                // backing-store type id: emit the NULL SENTINEL, not
+                // `null_named` (which allocates a real store slot).  Every
+                // use of such a local is preceded by either an `OpDatabase`
+                // (which allocates fresh from the sentinel — see
+                // codegen_runtime::OpDatabase's `store_nr == u16::MAX` arm)
+                // or a reassignment from a call return (which supplies its
+                // own store).  Allocating a `null_named` placeholder here
+                // LEAKS one store per reassignment-from-call: the placeholder
+                // slot is overwritten by the call's DbRef and never freed
+                // (e.g. `nk = chunk_of(...)` first-assigned inside an `if` in
+                // a loop — the C3-incremental store exhaustion that tripped
+                // `assert!(store.free)`).  Matches the interpreter, which
+                // null-inits ref locals to a sentinel, not an allocation.
+                write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
             } else if first {
                 writeln!(w, "stores.null_named(\"var_{name}\");")?;
                 self.indent(w)?;

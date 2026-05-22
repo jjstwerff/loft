@@ -752,16 +752,16 @@ pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: in
 // matches the C1 golden crystal_segments_aged exactly, and group_meshes
 // partitions it (regression: tests/scripts/133-crystal-incr.loft).
 // INCREMENTAL path (build from EMPTY, paint + rebuild reusing non-dirty cached
-// chunks) is now CORRECT on the interpreter — its mesh matches a full rebuild
-// exactly (@P314 fixed: SegMesh's u8 kinds/colors were concatenated with the
-// wide-integer stride, zeroing the appended elements; the append now uses the
-// narrow byte type — regression tests/scripts/133 + 135).
-// TWO residual store/keyed issues remain (@P317, the @P311 family — both
-// native-skipped): (1) crystal_incr_new(non-empty snap) all-at-once build is
-// non-deterministic at some sizes; (2) C3 incremental aborts under --native
-// (store-ownership assert).  So: build incrementally FROM EMPTY on the
-// interpreter; the projector uses the full build (crystal_segments_aged), which
-// is correct on both backends.
+// chunks) is now CORRECT on BOTH backends — its mesh matches a full rebuild
+// exactly (@P314 fixed the u8-concat stride; @P317 symptom 2 fixed a native
+// codegen store-leak that exhausted the store pool during the rebuild's keyed
+// churn — regression tests/scripts/133, native re-enabled).
+// ONE residual issue remains (@P317 symptom 1, under investigation):
+// crystal_incr_new(NON-EMPTY snap) — the all-at-once build — produces a
+// NON-deterministic inflated mesh at some sizes (e.g. side=24), on both
+// backends, in the full-CrystalIncr by-value deep-copy path.  WORKAROUND until
+// fixed: build incrementally FROM EMPTY (paint + rebuild), or use the full
+// build (crystal_segments_aged) — both correct on both backends.
 
 struct ChunkMeshEntry { ck: integer not null, mesh: SegMesh }
 
