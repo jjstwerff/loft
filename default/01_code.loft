@@ -655,6 +655,7 @@ fn OpArgText(pos: const u16) -> text;
 fn OpConstText(_value: const text) -> text;
 #rust"s.string_from_code();"
 fn OpConvTextFromNull() -> text;
+#rust"Str::new(crate::state::STRING_NULL)"
 fn OpLengthText(v1: text) -> integer;
 #rust"@v1.len() as i64"
 // Number of bytes in the text. Use for bounds checks and iteration limits.

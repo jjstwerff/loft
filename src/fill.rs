@@ -1038,7 +1038,8 @@ fn const_text(s: &mut State) {
 }
 
 fn conv_text_from_null(s: &mut State) {
-    s.conv_text_from_null();
+    let new_value = Str::new(crate::state::STRING_NULL);
+    s.put_stack(new_value);
 }
 
 fn length_text(s: &mut State) {

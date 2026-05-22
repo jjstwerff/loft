@@ -691,10 +691,6 @@ impl Output<'_> {
             "OpFreeText" | "OpCreateStack" => return Ok(()),
             // N8b.2: advance a native coroutine and return the yielded value.
             // parameters[0] = gen DbRef expression; parameters[1] = Int(value_size).
-            "OpConvTextFromNull" => {
-                write!(w, "loft::state::STRING_NULL")?;
-                return Ok(());
-            }
             "OpConvRefFromNull" => {
                 write!(w, "DbRef {{ store_nr: 0, rec: 0, pos: 0 }}")?;
                 return Ok(());
