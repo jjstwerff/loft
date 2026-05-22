@@ -1376,6 +1376,12 @@ impl Parser {
         parent_tp: &Type,
     ) -> Type {
         let assign_tp = var_tp.content();
+        // @P315 — `declared` is true when the element type comes from a typed
+        // target (typed local / struct field), false when it is inferred from
+        // an untyped literal.  A declared element type must NOT be silently
+        // promoted to a wider type by `parse_item` (that changes the element
+        // storage width and loses data); require an explicit `as` cast.
+        let declared = !assign_tp.is_unknown();
         let is_field = self.is_field(val);
         let is_var = matches!(val, Value::Var(_));
         if self.lexer.has_token("]") {
@@ -1421,7 +1427,7 @@ impl Parser {
             self.lexer.token("]");
             return tp;
         }
-        if let Some(early) = self.collect_vector_items(elm, &mut in_t, &mut res) {
+        if let Some(early) = self.collect_vector_items(elm, &mut in_t, declared, &mut res) {
             return early;
         }
         // convert parts to the common type
@@ -1451,10 +1457,11 @@ impl Parser {
         &mut self,
         elm: u16,
         in_t: &mut Type,
+        declared: bool,
         res: &mut Vec<Value>,
     ) -> Option<Type> {
         loop {
-            if let Some(value) = self.parse_item(elm, in_t, res) {
+            if let Some(value) = self.parse_item(elm, in_t, declared, res) {
                 return Some(value);
             }
             if self.lexer.has_token(";")
@@ -1637,6 +1644,7 @@ impl Parser {
         &mut self,
         elm: u16,
         in_t: &mut Type,
+        declared: bool,
         res: &mut Vec<Value>,
     ) -> Option<Type> {
         let mut p = Value::Var(elm);
@@ -1673,8 +1681,27 @@ impl Parser {
         {
             *in_t = Type::Enum(*t_e, true, Vec::new());
         } else if !self.convert(&mut p, &t, in_t) {
-            // double conversion check: can't become in_t or vice versa
-            if self.convert(&mut p, in_t, &t) {
+            if declared {
+                // @P315 — the element type is DECLARED (typed local / struct
+                // field).  A value that does not convert TO it must be cast
+                // EXPLICITLY: silently promoting the declared element type
+                // (e.g. Single→Float) would change the element storage WIDTH
+                // (a vector<single> packs 4-byte slots; an 8-byte OpSetFloat
+                // write overflows them → heap corruption) AND lose data
+                // (float→single).  Consistent with scalar / local-vector
+                // assignment, which already reject this.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot store {} elements in a vector<{}> (would lose precision); \
+                     cast each element explicitly with 'as {}'",
+                    t.name(&self.data),
+                    in_t.name(&self.data),
+                    in_t.name(&self.data)
+                );
+            } else if self.convert(&mut p, in_t, &t) {
+                // INFERRED element type: widen to the common type
+                // (e.g. [1, 2.0] → vector<float>).
                 *in_t = t.clone();
             } else {
                 diagnostic!(

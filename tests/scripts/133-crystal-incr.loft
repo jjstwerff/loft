@@ -19,13 +19,18 @@ use gridmesh;
 
 fn qcoord(v: float) -> integer { ((v as single) as float * 1000.0) as integer }
 
-// Order-independent (commutative) checksum over the segment set.
+// Order-independent (commutative) checksum over the segment set.  Uses
+// `cell_ix` (integer) rather than `kinds`/`colors` (u8): reading a u8 vector
+// element with `?? <int-default>` mis-compiles under `--native` (@P316), and
+// `cell_ix` + the six `single` coords already pin each segment uniquely.
+// `single` defaults use the `f`-suffix single literal (`0.0f`) so the `??`
+// branches match the element type (no float→single mismatch).
 fn gsum(m: SegMesh) -> integer {
   s = 0;
   for i in 0..len(m.kinds) {
-    s = s + (m.kinds[i] ?? 0) * 7919 + (m.colors[i] ?? 0) * 131
-      + qcoord(m.x0s[i] ?? 0.0) * 3 + qcoord(m.y0s[i] ?? 0.0) * 5 + qcoord(m.z0s[i] ?? 0.0) * 7
-      + qcoord(m.x1s[i] ?? 0.0) * 11 + qcoord(m.y1s[i] ?? 0.0) * 13 + qcoord(m.z1s[i] ?? 0.0) * 17;
+    s = s + (m.cell_ix[i] ?? 0) * 7919
+      + qcoord(m.x0s[i] ?? 0.0f) * 3 + qcoord(m.y0s[i] ?? 0.0f) * 5 + qcoord(m.z0s[i] ?? 0.0f) * 7
+      + qcoord(m.x1s[i] ?? 0.0f) * 11 + qcoord(m.y1s[i] ?? 0.0f) * 13 + qcoord(m.z1s[i] ?? 0.0f) * 17;
   }
   s
 }
