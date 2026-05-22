@@ -761,20 +761,6 @@ impl Output<'_> {
                     return Ok(());
                 }
             }
-            "OpIncRc" => {
-                // P259: emit `OpIncRc(cell, <db>)` — increments the
-                // referenced store's rc.  Used by emit_lambda_code after
-                // each SetDbRef capturing a heap-owned cell into a
-                // closure record's auto-Reference attribute.  No callers
-                // emitted yet (commit 1 is infra-only); commit 2 wires
-                // the call sites.
-                if let [ref db_val] = vals[..] {
-                    write!(w, "OpIncRc(cell,")?;
-                    self.output_code_inner(w, db_val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
             "OpFreeRef" => {
                 // Emit OpFreeRef(cell,var, "var_name") so LOFT_STORE_LOG shows the loft name.
                 // After freeing, reset the variable to null so a subsequent OpDatabase
@@ -871,43 +857,6 @@ impl Output<'_> {
             }
             // @P295 — keyed-collection local reassignment: remove_claims +
             // copy_claims (per-kind index rebuild), no copy_block.
-            "OpReplaceKeyed" => {
-                if let [ref src, ref dst, ref tp_val] = vals[..] {
-                    write!(w, "OpReplaceKeyed(cell,")?;
-                    self.output_code_inner(w, src)?;
-                    write!(w, ", ")?;
-                    self.output_code_inner(w, dst)?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, tp_val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
-            // @P305 — keyed insert-or-replace: coll[key] = value.
-            "OpSetKeyed" => {
-                if let [ref coll, ref value, ref tp_val] = vals[..] {
-                    write!(w, "OpSetKeyed(cell,")?;
-                    self.output_code_inner(w, coll)?;
-                    write!(w, ", ")?;
-                    self.output_code_inner(w, value)?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, tp_val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
-            // @P307 — clear a keyed-collection struct field: remove_claims
-            // frees the contents + zeroes the field pointer.
-            "OpClearKeyed" => {
-                if let [ref dst, ref tp_val] = vals[..] {
-                    write!(w, "OpClearKeyed(cell,")?;
-                    self.output_code_inner(w, dst)?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, tp_val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
             "OpConvTextFromNull" => {
                 write!(w, "loft::state::STRING_NULL")?;
                 return Ok(());

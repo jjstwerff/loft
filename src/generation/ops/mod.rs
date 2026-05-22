@@ -31,6 +31,7 @@ pub mod default;
 pub mod int_compare;
 pub mod key_ops;
 pub mod parallel;
+pub mod refcount;
 
 use super::Output;
 use crate::data::{Definition, Value};
@@ -166,6 +167,16 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     // arms in dispatch.rs (`"OpGetRecord" =>` + `"OpIterate" =>`).
     r.insert("OpGetRecord", Box::new(key_ops::OpGetRecordEmitter));
     r.insert("OpIterate", Box::new(key_ops::OpIterateEmitter));
+
+    // Keyed-WRITE family + store-refcount op — migrated out of
+    // dispatch.rs::output_call_inner to keep that match under the
+    // `dispatch_op_arm_budget` ratchet (these were added as arms during the
+    // @PLAN36 dogfood: @P305 OpSetKeyed, @P307 OpClearKeyed, OpReplaceKeyed,
+    // P259 OpIncRc).  Pure pass-throughs to their runtime helpers.
+    r.insert("OpReplaceKeyed", Box::new(key_ops::OpReplaceKeyedEmitter));
+    r.insert("OpSetKeyed", Box::new(key_ops::OpSetKeyedEmitter));
+    r.insert("OpClearKeyed", Box::new(key_ops::OpClearKeyedEmitter));
+    r.insert("OpIncRc", Box::new(refcount::OpIncRcEmitter));
 
     // Phase 06 — parallel-queue emitter family (P202 close).  Mirrors
     // phase 03's for-par emitter for the queue protocol: `n_parallel_queue`
@@ -306,7 +317,9 @@ mod tests {
         // P203/P204/P205): 9 forwarding-smoke names + ParallelFor×2 +
         // key_ops×2 + ParallelQueue×3 + ParallelBufRename×6 +
         // IntCompare×4, with 2 overlaps (OpEqInt/OpLtInt overwritten
-        // by IntCompare) → ~24.  Cap at 30 with headroom for plan-12.
+        // by IntCompare) → ~24.  Plus the @PLAN36 dogfood keyed-WRITE
+        // family migrated off the dispatch match (OpReplaceKeyed /
+        // OpSetKeyed / OpClearKeyed / OpIncRc, +4) → ~28.  Cap at 30.
         assert!(
             count <= 30,
             "registry has {count} custom emitters — bump the cap if \
