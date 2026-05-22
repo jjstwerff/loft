@@ -20,50 +20,6 @@ use super::{EmitCtx, OpEmitter};
 use crate::data::{Type, Value};
 use std::io;
 
-/// `OpNullRefSentinel` — the null-reference literal (`store_nr == u16::MAX`).
-pub struct OpNullRefSentinelEmitter;
-
-impl OpEmitter for OpNullRefSentinelEmitter {
-    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, _args: &[Value]) -> io::Result<()> {
-        write!(ctx.w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")
-    }
-}
-
-/// `OpEqRef` — null-aware reference equality (`rec == 0` is null regardless of
-/// `store_nr`, matching the bytecode `eq_ref`).  `args`: `[v1, v2]`.
-pub struct OpEqRefEmitter;
-
-impl OpEmitter for OpEqRefEmitter {
-    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
-        if let [v1, v2] = args {
-            let s1 = ctx.output.generate_expr_buf(v1)?;
-            let s2 = ctx.output.generate_expr_buf(v2)?;
-            write!(
-                ctx.w,
-                "{{let _a={s1};let _b={s2};if _a.rec==0||_b.rec==0{{_a.rec==0&&_b.rec==0}}else{{_a==_b}}}}"
-            )?;
-        }
-        Ok(())
-    }
-}
-
-/// `OpNeRef` — null-aware reference inequality.  `args`: `[v1, v2]`.
-pub struct OpNeRefEmitter;
-
-impl OpEmitter for OpNeRefEmitter {
-    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
-        if let [v1, v2] = args {
-            let s1 = ctx.output.generate_expr_buf(v1)?;
-            let s2 = ctx.output.generate_expr_buf(v2)?;
-            write!(
-                ctx.w,
-                "{{let _a={s1};let _b={s2};if _a.rec==0||_b.rec==0{{_a.rec!=0||_b.rec!=0}}else{{_a!=_b}}}}"
-            )?;
-        }
-        Ok(())
-    }
-}
-
 /// `OpFreeRef` — free a heap-owned reference and reset its variable to the null
 /// sentinel.  `args`: `[db]`.  Three cases, decided from variable metadata:
 ///   - a `skip_free` variable (shares a slot with an owner) → emit `()`;

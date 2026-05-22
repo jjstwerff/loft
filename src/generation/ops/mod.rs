@@ -192,15 +192,13 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     r.insert("OpClearKeyed", Box::new(key_ops::OpClearKeyedEmitter));
     r.insert("OpIncRc", Box::new(refcount::OpIncRcEmitter));
 
-    // Reference-lifetime family — the most context-aware arms (OpFreeRef /
-    // OpFreeRefIfDistinct read per-function variable metadata), migrated off
-    // the dispatch match (`dispatch_op_arm_budget` ratchet).
-    r.insert(
-        "OpNullRefSentinel",
-        Box::new(ref_ops::OpNullRefSentinelEmitter),
-    );
-    r.insert("OpEqRef", Box::new(ref_ops::OpEqRefEmitter));
-    r.insert("OpNeRef", Box::new(ref_ops::OpNeRefEmitter));
+    // Reference-lifetime family — the irreducible cases.  OpFreeRef /
+    // OpFreeRefIfDistinct read per-function variable metadata (conditional
+    // emission a template can't express).  OpCopyRecord / OpSizeofRef are
+    // cell-passthroughs kept here pending the Phase-D template move.
+    // OpEqRef / OpNeRef / OpNullRefSentinel were dropped — their `#rust`
+    // templates (pure-expr / literal, no non-rewritable `s.`) are native-valid
+    // via DefaultEmitter.
     r.insert("OpFreeRef", Box::new(ref_ops::OpFreeRefEmitter));
     r.insert(
         "OpFreeRefIfDistinct",
