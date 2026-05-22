@@ -2,11 +2,21 @@
 //!
 //! - [`generate_lib`] — writes `tests/generated/text.rs` with the native
 //!   function table from `#rust` annotations in `default/*.loft`.
-//! - [`generate_code_to`] — writes `src/fill.rs` (233-operator dispatch
-//!   table) from operator definitions in `default/*.loft`.
+//! - [`generate_code_to`] — writes `src/fill.rs` (the interpreter's
+//!   bytecode-operator dispatch table) from each operator's `#rust"..."`
+//!   annotation in `default/*.loft`.  It emits a `// @generated` header into the
+//!   file documenting this; see that header for the per-operator contract.
 //!
-//! Both are maintenance tools; see `make fill` and the `native_rs_functions_up_to_date`
-//! / `fill_rs_up_to_date` tests for staleness checks.
+//! Both are maintenance tools.  Regenerate `src/fill.rs` with `make fill` (the
+//! ignored [`regen_fill_rs`] test); its byte-for-byte freshness is enforced by
+//! `tests/issues.rs::fill_rs_up_to_date` and `::n9_generated_fill_matches_src`,
+//! and `tests/generated/text.rs` by `::native_rs_functions_up_to_date`.
+//!
+//! The same `#rust` templates are the single source for BOTH backends: this
+//! generator emits the interpreter bodies (`s: &mut State`), and native code
+//! generation (`src/generation/`) reuses the templates, rewriting `s.<method>`
+//! to `stores.*` / `*_runtime` via [`crate::generation`]'s
+//! `substitute_template_body`.
 
 use crate::data::{Context, Data, Type};
 use std::fs::File;
@@ -144,7 +154,24 @@ pub fn generate_code_to(data: &Data, path: &str) -> std::io::Result<String> {
 pub fn generate_code_into(data: &Data, into: &mut dyn Write) -> std::io::Result<()> {
     writeln!(
         into,
-        "#![allow(clippy::cast_possible_wrap)]
+        "// @generated — DO NOT EDIT BY HAND.
+//
+// The interpreter's bytecode-operator dispatch table, generated from the
+// `#rust\"...\"` operator annotations in default/*.loft by
+// `src/create.rs::generate_code_into` — each `fn op_*(s: &mut State)` body is
+// that operator's `#rust` template (written in `s: &mut State` vocabulary).
+//
+// Regenerate after changing ANY `#rust` operator template:
+//     make fill        (runs the ignored `regen_fill_rs` test, which calls
+//                       `create::generate_code_to(.., \"src/fill.rs\")`)
+// Byte-for-byte equality of this file with that regeneration is enforced by
+// `tests/issues.rs::fill_rs_up_to_date` and `::n9_generated_fill_matches_src`,
+// so hand-edits fail CI — edit the `#rust` template in default/*.loft instead.
+//
+// The SAME templates feed native code generation (`src/generation/`): there the
+// `s.<method>` calls below are rewritten to their `stores.*` / `*_runtime`
+// equivalents by `src/generation/calls.rs::substitute_template_body`.
+#![allow(clippy::cast_possible_wrap)]
 #![allow(unused_parens)]
 
 use crate::codegen_runtime;

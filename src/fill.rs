@@ -1,3 +1,20 @@
+// @generated — DO NOT EDIT BY HAND.
+//
+// The interpreter's bytecode-operator dispatch table, generated from the
+// `#rust"..."` operator annotations in default/*.loft by
+// `src/create.rs::generate_code_into` — each `fn op_*(s: &mut State)` body is
+// that operator's `#rust` template (written in `s: &mut State` vocabulary).
+//
+// Regenerate after changing ANY `#rust` operator template:
+//     make fill        (runs the ignored `regen_fill_rs` test, which calls
+//                       `create::generate_code_to(.., "src/fill.rs")`)
+// Byte-for-byte equality of this file with that regeneration is enforced by
+// `tests/issues.rs::fill_rs_up_to_date` and `::n9_generated_fill_matches_src`,
+// so hand-edits fail CI — edit the `#rust` template in default/*.loft instead.
+//
+// The SAME templates feed native code generation (`src/generation/`): there the
+// `s.<method>` calls below are rewritten to their `stores.*` / `*_runtime`
+// equivalents by `src/generation/calls.rs::substitute_template_body`.
 #![allow(clippy::cast_possible_wrap)]
 #![allow(unused_parens)]
 
