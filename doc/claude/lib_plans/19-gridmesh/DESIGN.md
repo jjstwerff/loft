@@ -237,8 +237,16 @@ the global `build_hex_meshes`.  Axial `HexLayout` is implemented here.
    (regression `tests/scripts/133`, both backends).  Full-build perf already
    characterised by `crystal_stress`: **O(N) flat (8 µs/seg) + SegMesh ~2.1×
    smaller**.
-7. **crystal C4 — projector per-group VBOs** (G tunable; crystal uses
-   G=large → ~one VBO, low risk); per-group frustum cull is the moros payoff.
+7. **crystal C4 — projector per-group VBOs** ✅ **DONE 2026-05-23.**  The
+   projector renders the crystal as one VBO per render group (`GroupVboSet`,
+   `lib/graphics`), re-uploading ONLY the dirty groups per edit (O(dirty)); a
+   persistent `CrystalIncr` mirrors every paint/erase/recolor (`crystal_incr_*`),
+   and `crystal_incr_erase`/`_recolor` (gridmesh `field_remove_cell` /
+   `field_mark_dirty`) make every edit incremental.  `group_dim` is the tunable
+   dial; per-group frustum cull (bounds are already stored on each group) is the
+   deferred moros payoff.  Validated: `--native --check` (compiled gate) + the
+   incremental crystal logic gated by `tests/scripts/133` (incremental==full,
+   both backends); the demo's visual render is the human smoke step.
 8. **(later) moros Phase C** — own sub-plan.  Its height-field INPUT is
    produced by [lib-plan 20 — terrain height-map](../future/20-terrain-heightmap/README.md)
    (slope-based generation; gridmesh meshes the field it computes).
