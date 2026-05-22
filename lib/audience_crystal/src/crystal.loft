@@ -752,9 +752,11 @@ pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: in
 // matches the C1 golden crystal_segments_aged exactly, and group_meshes
 // partitions it (regression: tests/scripts/133-crystal-incr.loft).
 // INCREMENTAL path (paint + rebuild reusing non-dirty cached chunks) is NOT yet
-// correct — its mesh DIVERGES from a full rebuild (@P314, a halo/dirty-
-// propagation reuse bug: chunks whose halo includes a newly-painted cell are
-// not all re-dirtied).  The projector uses the full build meanwhile.
+// correct — its mesh DIVERGES from a full rebuild (@P314).  The root is @P315:
+// heap corruption when crystal_incr_full_mesh iterates the chunk cache
+// (hash<ChunkMeshEntry[ck]>) and seg_mesh_appends each NESTED SegMesh.  (The
+// dirty-propagation was verified correct — DIRTY_COVERS_ALL — and is NOT the
+// cause.)  The projector uses the full build meanwhile.
 
 struct ChunkMeshEntry { ck: integer not null, mesh: SegMesh }
 
