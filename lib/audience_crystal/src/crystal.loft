@@ -808,8 +808,10 @@ pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: in
 // same proven path the incremental build uses), so the cidx is never
 // deep-copied; deterministic == golden on both backends at all sizes
 // (regression tests/scripts/133::test_c3_all_at_once_side24_equals_golden).
-// The underlying CORE bug — deep-copying a struct whose hash field was
-// populated via build_index/OpReplaceKeyed corrupts the hash — is filed as @P318.
+// The underlying CORE bug — deep-copying a populated hash corrupted its entries
+// when Store::claim over-sized the dest bucket record — is FIXED (@P318:
+// copy_claims_hash_body re-inserts via hash::add).  This in-place build stays
+// because it is also faster (no deep-copy of a populated field).
 
 struct ChunkMeshEntry { ck: integer not null, mesh: SegMesh }
 
@@ -848,7 +850,8 @@ pub fn crystal_incr_new(snap: CellSnap, chunk_shift: integer, group_dim: integer
   // non-deterministic mesh (the @P317 symptom-1 bug).  The incremental
   // paint+rebuild path already builds cidx in place, which is why it is
   // correct; this constructor now does the same.  The underlying core deep-copy
-  // bug is filed separately.
+  // bug (@P318) is now fixed too (copy_claims_hash_body re-inserts via hash::add);
+  // building in place is kept because it is also faster.
   c = CrystalIncr{
     snap: snap,
     field: field_new(0, [], [], chunk_shift, halo_k),   // empty — built in place below
