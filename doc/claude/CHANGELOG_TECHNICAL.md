@@ -9,6 +9,20 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Native codegen — eliminated the `output_call_inner` match (2026-05-22)
+
+`src/generation/dispatch.rs::output_call_inner` no longer contains a monolithic
+`match` of per-Op emission arms — it is now just a registry-first guard
+(`emit_op`) plus the template/user-fn fallback.  The 14 remaining arms were
+relocated VERBATIM into `OpEmitter`s: the text/format/buffer family into one
+`ops::text_ops::TextDispatchEmitter` (reproducing the @P283 refvar→`Stack`
+rewrite internally), and the pass-throughs (`OpConvRefFromNull` / `OpGetTextSub`
+/ `OpDatabase` / `OpStep` / `OpRemove`) into `ops::misc_ops`.  No `#rust`
+template changed, so `src/fill.rs` (the interpreter) is byte-identical and
+native emission matches the deleted arms byte-for-byte.  The
+`dispatch_op_arm_budget` test is repurposed as a 0-ratchet that fails if a
+`"Op…" =>` match arm is ever re-introduced.
+
 ### @P274 closed 2026-05-14 — heap-typed tail return + text-concat type-dispatch
 
 Two coordinated codegen + parser fixes for native-only crashes

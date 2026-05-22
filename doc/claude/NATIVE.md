@@ -114,24 +114,29 @@ fn-ref dispatch in emit.rs:387                  ← runtime polymorphism
        user_fn_call_body()    substitute_template_body()
 ```
 
-Custom emitters live in `src/generation/ops/<op>.rs` and
+Custom emitters live in `src/generation/ops/<group>.rs` and
 implement `OpEmitter::emit(&self, ctx, args)`.  Register them in
-`src/generation/ops/mod.rs::build_registry`.  Today the registry
-is empty — every Op falls through to `DefaultEmitter`.  Future
-phases (and external contributors) opt in per-Op as needs arise.
+`src/generation/ops/mod.rs::build_registry`.
 
 `EmitCtx<'a, 'b>` carries the writer, the Op definition, and a
 back-reference to `Output<'b>` (the codegen state).  Custom
 emitters call back into `Output` for helpers like
-`generate_expr_buf`, the field-width / signedness probes, and the
-template substitution itself.
+`generate_expr_buf`, `format_long`/`append_text`/…, the field-width /
+signedness probes, and the template substitution itself.
 
-The `dispatch.rs:output_call_inner` special-case match (Op-specific
-inline emission for OpFormatInt, OpFreeRef, OpCopyRecord, etc.) gets
-a registry-first guard at its top.  When a custom emitter is
-registered for one of those Op names, dispatch routes through
-`emit_op` instead of running the special case.  When no emitter is
-registered, the special-case match runs unchanged.
+**`dispatch.rs::output_call_inner` is now just two steps** — a
+registry-first guard (`emit_op` when a custom emitter is registered
+for the Op name) and a fallback (`output_call_user_fn` for a user fn,
+else `output_call_template` for the `#rust` template).  The monolithic
+special-case `match` that used to live between them was eliminated:
+every Op-specific native emission is now either a registered
+`OpEmitter` (`src/generation/ops/`: `parallel`, `key_ops`, `ref_ops`,
+`coroutine`, `int_compare`, `text_ops`, `misc_ops`, …) or a `#rust`
+template.  The `text_ops::TextDispatchEmitter` reproduces the @P283
+refvar→`Stack` rewrite internally and is registered for the whole
+text/format/buffer family.  A regression guard
+(`tests/codegen_emitter.rs::dispatch_op_arm_budget_not_exceeded`,
+ratchet at 0) fails if a `"Op…" =>` match arm is ever re-introduced.
 
 The fn-ref dispatch (`emit.rs::output_fn_ref_dispatch`) hoists
 arguments into `let _farg_N` Rust bindings before the runtime

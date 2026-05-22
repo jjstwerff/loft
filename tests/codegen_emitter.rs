@@ -671,19 +671,13 @@ fn abi_of_handles_all_runtime_fns() {
 // Wart-budget gates (plan 09 phase 00 evaluation findings)
 // ============================================================
 
-/// Gate A: caps the size of the special-case Op match in
-/// `dispatch.rs::output_call_inner`.
-///
-/// At phase 00 completion the match has 26 hardcoded inline-emission
-/// arms — a parallel dispatch system that lives alongside the
-/// `emit_op` registry.  Plan 09's broader goal is to drain this match
-/// to zero by migrating each Op into a custom emitter (phases 03/04
-/// chip away at this).  This gate enforces the migration direction:
-/// new emissions must be registered emitters, NOT new match arms.
-///
-/// Budget: shrink this number as phases land custom emitters.
-/// **Never raise it without justification** in NATIVE.md.
-const DISPATCH_OP_ARM_BUDGET: usize = 26;
+/// Gate A: the special-case Op `match` in `dispatch.rs::output_call_inner`
+/// has been ELIMINATED — every Op now dispatches through the `emit_op`
+/// registry (`src/generation/ops/`) or a `#rust` template.  This gate is now
+/// a ratchet at **zero**: it fails if anyone re-introduces a `"Op…" =>` match
+/// arm.  New Op-specific native emission must be a registered `OpEmitter` or a
+/// `#rust` template, never a match arm.
+const DISPATCH_OP_ARM_BUDGET: usize = 0;
 
 #[test]
 fn dispatch_op_arm_budget_not_exceeded() {
@@ -715,12 +709,11 @@ fn dispatch_op_arm_budget_not_exceeded() {
         .count();
 
     assert!(
-        arms <= DISPATCH_OP_ARM_BUDGET,
-        "dispatch.rs::output_call_inner has {arms} Op match arms — budget is \
-         {DISPATCH_OP_ARM_BUDGET}.  New Op-specific emissions must be registered as \
-         `OpEmitter` impls in `src/generation/ops/`, not added as match arms.  \
-         If you have a justification for raising the budget, document it in \
-         doc/claude/NATIVE.md and update DISPATCH_OP_ARM_BUDGET."
+        arms == DISPATCH_OP_ARM_BUDGET,
+        "dispatch.rs::output_call_inner has {arms} `\"Op…\" =>` match arm(s) — the \
+         match was eliminated and must stay at 0.  Add native Op emission as a \
+         registered `OpEmitter` impl in `src/generation/ops/` (or a `#rust` \
+         template in default/*.loft), not as a match arm."
     );
 }
 

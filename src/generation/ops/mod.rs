@@ -31,9 +31,11 @@ pub mod coroutine;
 pub mod default;
 pub mod int_compare;
 pub mod key_ops;
+pub mod misc_ops;
 pub mod parallel;
 pub mod ref_ops;
 pub mod refcount;
+pub mod text_ops;
 
 use super::Output;
 use crate::data::{Definition, Value};
@@ -207,6 +209,44 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     r.insert("OpCopyRecord", Box::new(ref_ops::OpCopyRecordEmitter));
     r.insert("OpSizeofRef", Box::new(ref_ops::OpSizeofRefEmitter));
 
+    // Match elimination — the text/format/buffer family relocated VERBATIM from
+    // the output_call_inner match into one self-contained emitter (it does the
+    // @P283 refvar->Stack rewrite + the sub-match internally).  Registered for
+    // every base + Stack name so the registry-first guard routes them here.
+    for name in [
+        "OpFormatInt",
+        "OpFormatStackInt",
+        "OpFormatFloat",
+        "OpFormatStackFloat",
+        "OpFormatSingle",
+        "OpFormatStackSingle",
+        "OpFormatText",
+        "OpFormatStackText",
+        "OpAppendText",
+        "OpAppendStackText",
+        "OpAppendCharacter",
+        "OpAppendStackCharacter",
+        "OpClearText",
+        "OpClearStackText",
+        "OpClearVector",
+        "OpFreeText",
+        "OpCreateStack",
+        "OpFormatDatabase",
+        "OpFormatStackDatabase",
+    ] {
+        r.insert(name, Box::new(text_ops::TextDispatchEmitter));
+    }
+
+    // Match elimination — misc pass-throughs relocated verbatim from the match.
+    r.insert(
+        "OpConvRefFromNull",
+        Box::new(misc_ops::OpConvRefFromNullEmitter),
+    );
+    r.insert("OpGetTextSub", Box::new(misc_ops::OpGetTextSubEmitter));
+    r.insert("OpDatabase", Box::new(misc_ops::OpDatabaseEmitter));
+    r.insert("OpStep", Box::new(misc_ops::OpStepEmitter));
+    r.insert("OpRemove", Box::new(misc_ops::OpRemoveEmitter));
+
     // Phase 06 — parallel-queue emitter family (P202 close).  Mirrors
     // phase 03's for-par emitter for the queue protocol: `n_parallel_queue`
     // / `_text` / `_ref` build a worker closure and call the
@@ -341,20 +381,19 @@ mod tests {
     #[test]
     fn registry_count_matches_sanctioned_set() {
         let count = registry().len();
-        // Phase 00 shipped an empty registry; subsequent phases
-        // populated it.  After plan-09 + plan-11 close (P200/P202/
-        // P203/P204/P205): 9 forwarding-smoke names + ParallelFor×2 +
-        // key_ops×2 + ParallelQueue×3 + ParallelBufRename×6 +
-        // IntCompare×4, with 2 overlaps (OpEqInt/OpLtInt overwritten
-        // by IntCompare) → ~24.  Plus the @PLAN36 dogfood arm-budget
-        // paydown — keyed-WRITE family + OpIncRc (+4), coroutine pair
-        // (+2), and the reference-lifetime family (OpNullRefSentinel /
-        // OpEqRef / OpNeRef / OpFreeRef / OpFreeRefIfDistinct /
-        // OpCopyRecord / OpSizeofRef, +7) → 36.  Cap at 45.
+        // The registry holds every Op whose native emission lives in code
+        // rather than a `#rust` template.  It grew substantially when the
+        // `output_call_inner` match was eliminated — the text/format/buffer
+        // family (one `TextDispatchEmitter` registered for ~19 base+Stack
+        // names) and the misc pass-throughs (OpConvRefFromNull / OpGetTextSub /
+        // OpDatabase / OpStep / OpRemove) moved into the registry, on top of
+        // the parallel family, key_ops, ref-lifetime, coroutine and IntCompare
+        // emitters.  This is the intended end state (the registry IS the
+        // dispatch mechanism); the cap just makes a surprising jump visible.
         assert!(
-            count <= 45,
+            count <= 80,
             "registry has {count} custom emitters — bump the cap if \
-             this is intentional and document in plan 09 status table"
+             this is intentional and document here"
         );
     }
 
