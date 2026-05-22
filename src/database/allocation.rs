@@ -1200,6 +1200,190 @@ impl Stores {
         }
     }
 
+    /// @P317 debug — `LOFT_LOG=copy_check` (or `LOFT_COPY_CHECK=1`): after a
+    /// deep-copy, walk SOURCE and DESTINATION in parallel and warn about every
+    /// nested vector/array/hash length that DIFFERS — the signature of a
+    /// `copy_claims` bug that silently inflates or truncates a nested
+    /// collection (the kind valgrind can't see and that surfaces only as a
+    /// wrong / non-deterministic result).  Read once, cached; zero cost off.
+    #[inline]
+    #[allow(clippy::unused_self)] // `&self` is for ergonomic call sites; the flag is a cached static
+    pub(crate) fn copy_check_enabled(&self) -> bool {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| {
+            std::env::var("LOFT_COPY_CHECK").is_ok()
+                || std::env::var("LOFT_LOG")
+                    .is_ok_and(|v| v.split([',', ':', ' ']).any(|p| p.trim() == "copy_check"))
+        })
+    }
+
+    /// Does `tp` own nested heap worth recursing into?  Primitive vector
+    /// elements (u8/integer/single/…) have none, so a length compare at the
+    /// vector level suffices — skipping them avoids walking every element of a
+    /// multi-thousand-element vector.
+    fn has_nested_heap(&self, tp: u16) -> bool {
+        matches!(
+            self.types[tp as usize].parts,
+            Parts::Struct(_)
+                | Parts::EnumValue(_, _)
+                | Parts::Vector(_)
+                | Parts::Sorted(_, _)
+                | Parts::Array(_)
+                | Parts::Ordered(_, _)
+                | Parts::Hash(_, _)
+                | Parts::Index(_, _, _)
+                | Parts::ChildRec(_)
+                | Parts::Enum(_)
+        ) || tp == 5 // text
+    }
+
+    /// @P317 — entry point for the `copy_check` validator.  Compares the
+    /// structure of a just-copied `src`/`dst` pair and prints `[copy_check]`
+    /// warnings (deduped by field path, so a vector doesn't spam per element).
+    /// Warn-and-continue: never panics, so one run gives a full census.
+    pub fn report_copy_mismatches(&self, src: &DbRef, dst: &DbRef, tp: u16, label: &str) {
+        if !self.copy_check_enabled() {
+            return;
+        }
+        let mut seen = std::collections::HashSet::new();
+        self.walk_copy_cmp(src, dst, tp, label.to_string(), &mut seen);
+    }
+
+    fn walk_copy_cmp(
+        &self,
+        src: &DbRef,
+        dst: &DbRef,
+        tp: u16,
+        path: String,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        match &self.types[tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                let fields = fields.clone();
+                for f in fields {
+                    let s = DbRef {
+                        store_nr: src.store_nr,
+                        rec: src.rec,
+                        pos: src.pos + u32::from(f.position),
+                    };
+                    let d = DbRef {
+                        store_nr: dst.store_nr,
+                        rec: dst.rec,
+                        pos: dst.pos + u32::from(f.position),
+                    };
+                    self.walk_copy_cmp(&s, &d, f.content, format!("{path}.{}", f.name), seen);
+                }
+            }
+            Parts::Vector(v) | Parts::Sorted(v, _) => {
+                let v = *v;
+                let sl = vector::length_vector(src, &self.allocations);
+                let dl = vector::length_vector(dst, &self.allocations);
+                if sl != dl && seen.insert(path.clone()) {
+                    eprintln!(
+                        "[copy_check] MISMATCH {path}: src_len={sl} dst_len={dl} (vector elem kt={v})"
+                    );
+                }
+                if self.has_nested_heap(v) {
+                    let s_cur = self.store(src).get_u32_raw(src.rec, src.pos);
+                    let d_cur = self.store(dst).get_u32_raw(dst.rec, dst.pos);
+                    if s_cur != 0 && d_cur != 0 {
+                        let size = u32::from(self.size(v));
+                        for i in 0..sl.min(dl) {
+                            let s = DbRef {
+                                store_nr: src.store_nr,
+                                rec: s_cur,
+                                pos: 8 + size * i,
+                            };
+                            let d = DbRef {
+                                store_nr: dst.store_nr,
+                                rec: d_cur,
+                                pos: 8 + size * i,
+                            };
+                            self.walk_copy_cmp(&s, &d, v, format!("{path}[]"), seen);
+                        }
+                    }
+                }
+            }
+            Parts::Array(v) | Parts::Ordered(v, _) => {
+                let v = *v;
+                let sl = vector::length_vector(src, &self.allocations);
+                let dl = vector::length_vector(dst, &self.allocations);
+                if sl != dl && seen.insert(path.clone()) {
+                    eprintln!(
+                        "[copy_check] MISMATCH {path}: src_len={sl} dst_len={dl} (array/ordered kt={v})"
+                    );
+                }
+            }
+            Parts::Hash(v, _) => {
+                let v = *v;
+                let s_cur = self.store(src).get_u32_raw(src.rec, src.pos);
+                let d_cur = self.store(dst).get_u32_raw(dst.rec, dst.pos);
+                if s_cur == 0 || d_cur == 0 {
+                    return;
+                }
+                let s_room = self.store(src).get_u32_raw(s_cur, 0);
+                let d_room = self.store(dst).get_u32_raw(d_cur, 0);
+                let s_len = self.store(src).get_u32_raw(s_cur, 4);
+                let d_len = self.store(dst).get_u32_raw(d_cur, 4);
+                if s_len != d_len && seen.insert(format!("{path}#count")) {
+                    eprintln!(
+                        "[copy_check] MISMATCH {path}: src_count={s_len} dst_count={d_len} (hash)"
+                    );
+                }
+                // copy_claims_hash_body copies bucket-by-bucket, so when the two
+                // tables have equal `room` the bucket index pairs src↔dst.
+                if s_room == d_room && self.has_nested_heap(v) {
+                    let elms = s_room.saturating_sub(1) * 2;
+                    for i in 0..elms {
+                        let se = self.store(src).get_u32_raw(s_cur, 8 + 4 * i);
+                        let de = self.store(dst).get_u32_raw(d_cur, 8 + 4 * i);
+                        if se != 0 && de != 0 {
+                            let s = DbRef {
+                                store_nr: src.store_nr,
+                                rec: se,
+                                pos: 8,
+                            };
+                            let d = DbRef {
+                                store_nr: dst.store_nr,
+                                rec: de,
+                                pos: 8,
+                            };
+                            self.walk_copy_cmp(&s, &d, v, format!("{path}[]"), seen);
+                        }
+                    }
+                }
+            }
+            Parts::ChildRec(content_kt) => {
+                let content_kt = *content_kt;
+                let sc = self.store(src).get_u32_raw(src.rec, src.pos);
+                let dc = self.store(dst).get_u32_raw(dst.rec, dst.pos);
+                if sc != 0 && dc != 0 {
+                    let s = DbRef {
+                        store_nr: src.store_nr,
+                        rec: sc,
+                        pos: 8,
+                    };
+                    let d = DbRef {
+                        store_nr: dst.store_nr,
+                        rec: dc,
+                        pos: 8,
+                    };
+                    self.walk_copy_cmp(&s, &d, content_kt, path, seen);
+                }
+            }
+            Parts::Enum(values) => {
+                let e_nr = self.store(src).get_byte(src.rec, src.pos, -1);
+                if let Some(&(vtp, _)) = values.get(e_nr as usize)
+                    && vtp != u16::MAX
+                {
+                    // Re-borrow-safe: `vtp` is copied out before recursing.
+                    self.walk_copy_cmp(src, dst, vtp, path, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /**
     Remove claimed data for a record. Both strings and substructures are freed.
     It will not free the record itself because that might be a part of a vector.

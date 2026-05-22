@@ -460,6 +460,10 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
     stores.remove_claims(&to, tp);
     stores.copy_block(&data, &to, size);
     stores.copy_claims(&data, &to, tp);
+    // @P317 — LOFT_LOG=copy_check (native): warn on nested-length divergence.
+    if stores.copy_check_enabled() {
+        stores.report_copy_mismatches(&data, &to, tp, "OpCopyRecord");
+    }
     if free_source
         && data.store_nr != to.store_nr
         && data.store_nr != 0
@@ -485,6 +489,10 @@ pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: Db
     let tp = raw_tp & 0x7FFF;
     stores.remove_claims(&dest, tp);
     stores.copy_claims(&src, &dest, tp);
+    // @P317 — LOFT_LOG=copy_check (native): warn on nested-length divergence.
+    if stores.copy_check_enabled() {
+        stores.report_copy_mismatches(&src, &dest, tp, "OpReplaceKeyed");
+    }
     if free_source
         && src.store_nr != dest.store_nr
         && src.store_nr != 0

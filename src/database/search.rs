@@ -496,6 +496,11 @@ impl Stores {
         self.copy_block(value, &new, size);
         self.copy_claims(value, &new, content_tp);
         self.record_finish(coll, &new, db, u16::MAX);
+        // @P317 — LOFT_LOG=copy_check: warn if the keyed deep copy changed any
+        // nested collection length (before the source-free below).
+        if self.copy_check_enabled() {
+            self.report_copy_mismatches(value, &new, content_tp, "set_keyed");
+        }
         if free_source
             && value.store_nr != coll.store_nr
             && value.store_nr != 0
