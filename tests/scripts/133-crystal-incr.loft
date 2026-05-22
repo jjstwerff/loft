@@ -66,3 +66,34 @@ fn test_c3_group_meshes_partition_full() {
   assert(gtot == len(fm.kinds),
          "c3 group meshes total={gtot} != full mesh={len(fm.kinds)}");
 }
+
+// @P314 — the INCREMENTAL two-level reuse must match a full build.  Build from
+// EMPTY, paint every cell in batches, rebuild only the dirty chunks each batch,
+// and assert the assembled mesh equals the C1 golden full build (equal seg
+// count + equal commutative checksum).  Before the @P314 fix, the u8
+// `kinds`/`colors` vectors were concatenated with the wide-`integer` stride
+// (`OpAppendVector` carried type 0 instead of the narrow byte type), zeroing
+// the appended elements — so the incremental mesh diverged (non-deterministically).
+fn test_c3_incremental_equals_golden() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  snap = block(40);
+  golden = crystal_segments_aged_tuned(snap, empty, 0, CRYSTAL_CHUNK_SHIFT, CRYSTAL_HALO_K);
+  inc = crystal_incr_new(CellSnap{xs: [], ys: [], colors: []},
+                         CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0);
+  n = 40 * 40;
+  i = 0;
+  while i < n {
+    for b in 0..50 {
+      if i < n {
+        crystal_incr_paint(inc, snap.xs[i] ?? 0, snap.ys[i] ?? 0, snap.colors[i] ?? 0);
+        i = i + 1;
+      }
+    }
+    crystal_incr_rebuild(inc, empty, 0);
+  }
+  im = crystal_incr_full_mesh(inc);
+  assert(len(im.kinds) == len(golden.kinds),
+         "c3 incremental seg count={len(im.kinds)} golden={len(golden.kinds)}");
+  assert(gsum(im) == gsum(golden),
+         "c3 incremental checksum={gsum(im)} golden={gsum(golden)}");
+}

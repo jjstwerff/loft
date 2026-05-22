@@ -768,6 +768,20 @@ impl Parser {
         self.database.vector(resolved)
     }
 
+    /// @P314 — the element STORAGE type id to pass as the `OpAppendVector` /
+    /// `vector_add` `tp` arg for a vector whose element type is `content`.
+    /// Routes through `vector_of` (which consults `narrow_vector_content`) so a
+    /// NARROW element (`u8`/`i16`/`i32`) resolves to its narrow storage type
+    /// rather than the wide `integer`.  Using `def(type_def_nr(content))
+    /// .known_type` instead loses the narrowness for integer aliases, so
+    /// `vector_add` strides by 8 over a 1-/2-/4-byte-packed vector and corrupts
+    /// (zeroes) the appended elements.  `single` (a distinct base type) is
+    /// unaffected either way; this only matters for narrow integer aliases.
+    pub(crate) fn append_elem_tp(&mut self, content: &Type) -> i32 {
+        let vec_tp = self.vector_of(content);
+        i32::from(self.database.content(vec_tp))
+    }
+
     /// Get an iterator.
     /// The iterable expression is in *code.
     /// Creating the iterator will be in *code afterward.

@@ -751,12 +751,17 @@ pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: in
 // FULL-BUILD path is correct: crystal_incr_full_mesh(crystal_incr_new(snap))
 // matches the C1 golden crystal_segments_aged exactly, and group_meshes
 // partitions it (regression: tests/scripts/133-crystal-incr.loft).
-// INCREMENTAL path (paint + rebuild reusing non-dirty cached chunks) is NOT yet
-// correct — its mesh DIVERGES from a full rebuild (@P314).  The root is @P315:
-// heap corruption when crystal_incr_full_mesh iterates the chunk cache
-// (hash<ChunkMeshEntry[ck]>) and seg_mesh_appends each NESTED SegMesh.  (The
-// dirty-propagation was verified correct — DIRTY_COVERS_ALL — and is NOT the
-// cause.)  The projector uses the full build meanwhile.
+// INCREMENTAL path (build from EMPTY, paint + rebuild reusing non-dirty cached
+// chunks) is now CORRECT on the interpreter — its mesh matches a full rebuild
+// exactly (@P314 fixed: SegMesh's u8 kinds/colors were concatenated with the
+// wide-integer stride, zeroing the appended elements; the append now uses the
+// narrow byte type — regression tests/scripts/133 + 135).
+// TWO residual store/keyed issues remain (@P317, the @P311 family — both
+// native-skipped): (1) crystal_incr_new(non-empty snap) all-at-once build is
+// non-deterministic at some sizes; (2) C3 incremental aborts under --native
+// (store-ownership assert).  So: build incrementally FROM EMPTY on the
+// interpreter; the projector uses the full build (crystal_segments_aged), which
+// is correct on both backends.
 
 struct ChunkMeshEntry { ck: integer not null, mesh: SegMesh }
 

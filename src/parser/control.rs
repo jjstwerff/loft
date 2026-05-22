@@ -3166,8 +3166,9 @@ impl Parser {
                         && self.vars.is_argument(ref1_var)
                         && !dep.contains(&ref1_var)
                     {
-                        let rec_tp =
-                            i32::from(self.data.def(self.data.type_def_nr(elm_tp)).known_type);
+                        // @P314 — narrow-aware element type (see `append_elem_tp`).
+                        let elm = (**elm_tp).clone();
+                        let rec_tp = self.append_elem_tp(&elm);
                         let append = self.cl(
                             "OpAppendVector",
                             &[Value::Var(ref1_var), v, Value::Int(rec_tp)],

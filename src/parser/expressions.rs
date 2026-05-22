@@ -1103,8 +1103,8 @@ use a separate collection or add after the loop"
                     return Type::Void;
                 }
                 let elm_tp_clone = (**elm_tp).clone();
-                let dn = self.data.type_def_nr(&elm_tp_clone);
-                let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+                // @P314 — narrow-aware element type (see `append_elem_tp`).
+                let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
                 // when the RHS is anything other than a plain Var read
                 // it may alias the destination (e.g.
                 // `s.v = pop_tail(s.v, 1)` where the helper reads the
@@ -1200,8 +1200,8 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
             let elm_tp_clone = (**elm_tp).clone();
-            let dn = self.data.type_def_nr(&elm_tp_clone);
-            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+            // @P314 — narrow-aware element type (see `append_elem_tp`).
+            let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
             let clear = self.cl("OpClearVector", std::slice::from_ref(to));
             let append = self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]);
             *code = Value::Insert(vec![clear, append]);
@@ -1328,7 +1328,9 @@ use a separate collection or add after the loop"
             && matches!(s_type, Type::Vector(_, _))
             && !matches!(code, Value::Insert(_))
         {
-            let rec_tp = i32::from(self.data.def(self.data.type_def_nr(elm_tp)).known_type);
+            // @P314 — narrow-aware element type (see `append_elem_tp`).
+            let elm = (**elm_tp).clone();
+            let rec_tp = self.append_elem_tp(&elm);
             *code = Value::Insert(vec![self.cl(
                 "OpAppendVector",
                 &[to.clone(), code.clone(), Value::Int(rec_tp)],
@@ -2161,7 +2163,9 @@ use a separate collection or add after the loop"
         if self.first_pass {
             return true;
         }
-        let rec_tp = i32::from(self.data.def(self.data.type_def_nr(elm_tp)).known_type);
+        // @P314 — narrow-aware element type (see `append_elem_tp`).
+        let elm = (**elm_tp).clone();
+        let rec_tp = self.append_elem_tp(&elm);
         *code = self.cl(
             "OpAppendVector",
             &[Value::Var(var_nr), code.clone(), Value::Int(rec_tp)],

@@ -18,7 +18,9 @@ impl Parser {
     ) -> Type {
         let mut ls = Vec::new();
         let rec_tp = if let Type::Vector(cont, _) = tp {
-            i32::from(self.data.def(self.data.type_def_nr(cont)).known_type)
+            // @P314 — narrow-aware element type (see `append_elem_tp`).
+            let cont = (**cont).clone();
+            self.append_elem_tp(&cont)
         } else {
             i32::MIN
         };
