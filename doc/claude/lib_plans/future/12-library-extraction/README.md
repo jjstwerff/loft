@@ -236,6 +236,23 @@ Phases 4-7 serialize (one chunk at a time — minimises
 downstream consumer churn and proves the per-chunk template
 on the smallest chunk before larger ones commit).
 
+**One chunk per release window — not a sprint.**  Standing
+up a new GitHub project costs real admin work: org
+permissions, branch protection, CI secrets, release
+tagging conventions, README + LICENSE + CONTRIBUTING,
+issue templates, the first round of registry-publish
+diagnostics.  Doing five at once is overload.  The plan
+deliberately splits this across **five separate phases**
+(4, 5, 6, 6w, 7b — one chunk extraction each), so each
+chunk gets its own release window with soak time before
+the next opens.
+
+Recommended soak between chunks: at least one minor
+release.  The point isn't a fixed calendar — it's that
+each new chunk repo gets a real consumer round-trip
+through `loft install <pkg>` before the next admin batch
+starts.
+
 ### Phase 1 — Drain `src/native.rs` of library symbols
 
 Owned by this plan, no external dependency.  Moves library
@@ -292,18 +309,41 @@ of one test package.
 inter-chunk deps.  Validates the per-chunk template before
 larger chunks commit.  Includes the Tier-C drain target
 (`crypto`) so phase 1's decoupling work gets immediate
-real-world validation.
+real-world validation.  Also the **template-author** chunk
+— produces the reusable artefacts that phases 5-7b copy.
 
 **Steps:** apply [§ Per-chunk extraction template](#per-chunk-extraction-template).
+
+**Additional Phase-4-only deliverables** (resolve Open
+Q #4 — "the reusable GitHub Actions workflow YAML, write
+once, copy per chunk"):
+
+- Author `.github/workflows/library-ci.yml` in
+  `loft-libs-core`.  Runs: build loft → `loft test` over
+  every package in the chunk → `loft --native test` → leak
+  gate.  Reads chunk-local skip-lists.
+- Define the skip-list format (likely `chunk-skips.toml`
+  at the chunk-repo root: keys
+  `interpreter_pkg_skip` / `native_pkg_skip` /
+  `leak_allow`).
+- Port `loft-libs-core`'s entries from the monorepo
+  `LIB_PKGS_SKIP` / `LIB_PKGS_NATIVE_SKIP` /
+  `SCRIPTS_LEAK_ALLOW` into that file.
 
 **Acceptance:**
 - `lib/{arguments,random,crypto,shapes}/` directories
   removed from the monorepo.
 - `make ci` passes using registry-installed versions.
+- `loft-libs-core` CI green on its own
+  (interpreter + native + leak gates).
+- `library-ci.yml` + `chunk-skips.toml` ship in
+  `loft-libs-core` as the template referenced by phases
+  5-7b.
 - User code with `use random;` (etc.) sees identical
   behaviour to the in-monorepo version.
 
-**Effort:** M.
+**Effort:** M (extraction itself) + S (workflow YAML
+authoring — one-shot, amortised across all later chunks).
 
 ### Phase 5 — Extract `loft-libs-graphics`
 
@@ -313,7 +353,13 @@ real-world validation.
 for API surface stability.  Mechanical once that plan's
 API reaches a stable point.
 
-**Acceptance:** as phase 4, plus moros-* consumers
+**CI:** copy `library-ci.yml` + `chunk-skips.toml`
+template from `loft-libs-core` (authored in Phase 4); port
+graphics / imaging / gridmesh entries from monorepo skip
+lists.
+
+**Acceptance:** as phase 4 (chunk repo green on its own
+interpreter + native + leak gates), plus moros-* consumers
 (still in-monorepo at this point) updated to use the
 external graphics chunk via their `loft.toml`.
 
@@ -328,7 +374,11 @@ EVENT_LOOP, and multiplayer-editor plans for API stability
 on `server` + `game_protocol`.  Includes the second
 Tier-C drain target (`web`).
 
-**Acceptance:** as phase 4.
+**CI:** copy `library-ci.yml` + `chunk-skips.toml` from
+Phase 4; port net entries from monorepo skip lists.
+
+**Acceptance:** as phase 4 (chunk repo green on its own
+interpreter + native + leak gates).
 
 **Effort:** M.
 
@@ -402,6 +452,42 @@ walkable battlements, terrain rock faces).
 
 **Effort:** M (mechanical move + refactor of moros consumers).
 
+### Phase 6w — Extract `loft-libs-world`
+
+**Packages:** `world` (post-7a, expanded with hex
+addressing, walls, groups, height, coupled geometry,
+and the folded-in `wall.loft` content).
+
+**Why after 7a:** `lib/world/` only has the full shared
+surface AFTER 7a moves moros's spatial primitives in.
+Extracting before 7a would publish an incomplete world
+library that moros + dryopea couldn't actually use.
+
+**Why before 7b:** the moros chunk depends on
+`loft-libs-world` from the registry; world must be
+published first.
+
+**Numbering:** "6w" reflects that this chunk extraction
+runs in parallel with phases 5 and 6 (chunk extractions
+are independent once their prerequisites are met) — it
+just additionally requires 7a (a monorepo-internal split).
+Sequencing: ship 7a, then 6w can interleave with 5 / 6 in
+any order.
+
+**CI:** copy `library-ci.yml` + `chunk-skips.toml` from
+Phase 4; port world's entries from monorepo skip lists
+(if any — `world` is currently a small pure-loft package
+with minimal native-codegen surface, so the skip list
+should be near-empty).
+
+**Acceptance:** as phase 4 (chunk repo green on its own
+interpreter + native + leak gates), plus all four
+consumers (moros monorepo, TTT v5 binary protocol,
+audience-generative-art demo, dryopea plan-46 starter
+code) successfully consume the registry-published version.
+
+**Effort:** M.
+
 ### Phase 7b — Extract `loft-moros` (moros-specific only)
 
 **Packages:** `moros_editor`, `moros_map` (game-only
@@ -417,8 +503,15 @@ dryopea can't reuse it.
 versions).  Extracts as a unit since the moros-specific
 packages co-evolve.
 
-**Acceptance:** as phase 4, plus the moros demo apps
-continue to build against the external moros chunk
+**CI:** copy `library-ci.yml` + `chunk-skips.toml` from
+Phase 4; port the moros entries from monorepo skip lists.
+This chunk has the heaviest skip list (the moros packages
+are still mid-development and surface the most native-codegen
+gaps — those entries follow the code into the moros repo).
+
+**Acceptance:** as phase 4 (chunk repo green on its own
+interpreter + native + leak gates), plus the moros demo
+apps continue to build against the external moros chunk
 (consuming `loft-libs-world` + `loft-libs-graphics` from
 the registry).
 
@@ -456,7 +549,7 @@ references the monorepo `Cargo.toml` workspace.
 | 4 | Extract `loft-libs-core` (arguments, random, crypto, shapes) | Phases 1-3 | M |
 | 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh) | Phase 4 + `../02-graphics/` | M |
 | 6 | Extract `loft-libs-net` (server, web, game_protocol) | Phase 4 + `../08-server/` | M |
-| 6w | Extract `loft-libs-world` (`world` expanded by 7a, optionally `wall`) | Phase 7a | M |
+| 6w | Extract `loft-libs-world` (`world` expanded by 7a, wall folded in) | Phase 7a | M |
 | 7a | **Split moros**: move shared world primitives (hex, walls, groups, height, geometry) into `lib/world/` | Phase 4 (monorepo-internal, no registry needed) | M |
 | 7b | Extract `loft-moros` (moros-specific only after 7a) | Phases 5 + 6w + 7a | MH |
 | 8 | Monorepo cleanup + audience_crystal hardening | Phase 7b | S |
@@ -467,6 +560,14 @@ user-visible change, only relocates files.  Phase 6w
 (world chunk extraction) then happens once 7a is stable
 and PKG.REG is live; it can interleave with 5 / 6 in
 either order.
+
+**Chunk-extraction phases (4 / 5 / 6 / 6w / 7b) are
+serialised, not batched.**  Each one stands up a new
+GitHub repo with its own CI, registry releases, and
+issue tracker — bundle them together and the admin
+work eclipses the actual code move.  Plan on at least
+one minor release of soak between consecutive chunks
+before opening the next.
 
 ## CI path for libraries (built 2026-05-23) — travels with each chunk
 
@@ -487,33 +588,56 @@ the code as the chunk's own `*_NATIVE_SKIP` / leak allowlist.  This is the
 "clear CI path for itself" the libraries needed before living outside the
 monorepo (Open question #4 below).
 
-## Per-library extraction template
+## Per-chunk extraction template
 
-Each extraction is its own focused commit (or small commit
-chain).  Template:
+Each chunk extracts as a focused commit chain (one chunk
+per extraction event).  Template:
 
-1. Verify the library has `loft.toml` and passes its own
-   tests in-tree (`cd lib/<X> && cargo test` or `loft
-   tests/...`).
-2. Create the external GitHub repo with the same name
-   (`loft-<X>` convention, or just `<X>` under the loft-lang
-   org).
-3. Push library content to the external repo, preserving
-   git history via `git filter-repo` or `git subtree split`.
-4. Tag a v0.1.0 release in the external repo.
-5. Publish to the package registry: `cd <external-repo> &&
-   loft publish`.
-6. Remove `lib/<X>/` from the monorepo in a single PR:
-   - Add `loft.toml` dependency on `<X> = "0.1.0"` in every
-     monorepo consumer.
+1. **Verify** every package in the chunk has `loft.toml`
+   and passes its own tests in-tree against both gates:
+   `tests/wrap.rs::library_suite` (interpreter) +
+   `tests/native.rs::native_library_suite` (native).  Note
+   the chunk's current `*_NATIVE_SKIP` and leak-allowlist
+   entries — they travel with the code.
+2. **Create the external GitHub repo** for the chunk
+   (`loft-libs-core` / `loft-libs-graphics` / etc.).
+3. **Drop in the CI workflow.**  Copy
+   `.github/workflows/library-ci.yml` from `loft-libs-core`
+   (the first chunk — Phase 4 authors it).  The workflow
+   builds loft, runs `loft test` over every package in the
+   chunk, then `loft --native test`, then the leak gate.
+   Skip-lists travel as the chunk's own
+   `chunk-skips.toml` (or whatever the workflow uses) —
+   ported from the monorepo `*_NATIVE_SKIP` / leak-allowlist
+   entries identified in step 1.
+4. **Push library content** to the external repo,
+   preserving git history via `git filter-repo` or
+   `git subtree split` of the chunk's `lib/*` directories.
+5. **Verify the chunk CI is green** on its own.  Same gates
+   as the monorepo, just running standalone.
+6. **Tag a v0.1.0 release** per package in the chunk
+   (independent semver per package; the chunk repo holds
+   them but they version independently).
+7. **Publish to the package registry**: `cd <external-repo>
+   && loft publish` (per-package).
+8. **Remove `lib/<X>/`** from the monorepo for every
+   package in the chunk, in a single PR:
+   - Add `loft.toml` dependencies on `<X> = "0.1.0"` in
+     every monorepo consumer (including other libraries
+     not yet extracted).
    - Update consumer `use` statements (typically no change
      if package name matches).
-   - Run full test suite to confirm `loft install <X>` +
-     existing import path produces identical behaviour.
-   - Delete `lib/<X>/`.
-7. Document the extraction in CHANGELOG.md.
-8. Subsequent updates land in the external repo; consumers
-   bump version in their `loft.toml`.
+   - Run full monorepo test suite (`make ci`) to confirm
+     `loft install <X>` + existing import path produces
+     identical behaviour.
+   - Remove the chunk's entries from monorepo
+     `LIB_PKGS_SKIP` / `LIB_PKGS_NATIVE_SKIP` /
+     `SCRIPTS_LEAK_ALLOW` — those gates now live in the
+     chunk repo.
+   - Delete the chunk's `lib/*` directories.
+9. **Document** the extraction in CHANGELOG.md.
+10. **Subsequent updates** land in the external repo;
+    consumers bump version in their `loft.toml`.
 
 ## Open questions
 
@@ -532,9 +656,12 @@ Listed here so future-you doesn't have to re-discover them.
    monorepo CI path (see [§ CI path for libraries](#ci-path-for-libraries-built-2026-05-23--travels-with-each-chunk))
    is the template: a chunk repo runs `loft test` (interp) +
    `loft --native test` (native) over its packages, carrying
-   its own `*_NATIVE_SKIP` / leak allowlist.  Still TODO: the
-   reusable GitHub Actions workflow YAML (build loft, then run
-   the two gates) — write once, copy per chunk.
+   its own `*_NATIVE_SKIP` / leak allowlist.  The reusable
+   GitHub Actions workflow YAML (`library-ci.yml`) + chunk-
+   local skip-list format (`chunk-skips.toml`) is owned by
+   [§ Phase 4](#phase-4--extract-loft-libs-core-first-chunk)
+   as the template-author chunk; phases 5 / 6 / 6w / 7b
+   copy it.
 5. **Backwards-compatibility window.** When `lib/<X>/`
    leaves the monorepo, existing `use lib_<X>` (or whatever
    the current import shape is) should KEEP WORKING via
