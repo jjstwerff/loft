@@ -1199,6 +1199,16 @@ impl Output<'_> {
             self.indent(w)?;
             if is_text_result {
                 writeln!(w, "Str::new(_ret)")?;
+            } else if matches!(bl.result, Type::Text(_)) {
+                // @P321e / @P323 — a TEXT value-block's `_ret` is typically a
+                // `&str` borrowing a block-local (the `??`/#ncc block's inner
+                // `_ncc` String; a format-string work buffer; etc.).  Yielding
+                // the borrow lets the consumer's `.to_string()` run AFTER the
+                // local drops at the block's `}` — rustc E0597 ("does not live
+                // long enough"), or a dangling raw ptr at runtime.  Materialise
+                // to an OWNED String inside the block (where the local is still
+                // alive); `.to_string()` accepts &str / String / Str alike.
+                writeln!(w, "_ret.to_string()")?;
             } else if let Some(cast) = narrow_int_cast(&bl.result) {
                 writeln!(w, "_ret as {cast}")?;
             } else {
