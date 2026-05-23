@@ -39,7 +39,7 @@ the command line.
 | # | Severity | One-liner |
 |---|---|---|
 | [@P229](#open-issues--quick-reference) (partial) | Low (Windows half open) | `parallel { … }` worker stack snapshot bug — Windows half still open after 2026-05-10 fix |
-| [@P321](#open-issues--quick-reference) | Low (native-only; all libs pass on interp) | **Split into 7 parts (a–g), 1/7 fixed.** Native library-gate gaps: ~~crypto (a — FIXED)~~, `arguments` (b, `()` `Display`), `imaging` (c, `#native` sig), `moros_map/serial` (d, E0499), `moros_editor` (e, Str lifetime), `random` (f, seed), `moros_ui` (g, let-in-RHS).  Each fixed + un-skipped independently; native gate covers 11/17 after (a). |
+| [@P321](#open-issues--quick-reference) | Low (native-only; all libs pass on interp) | **Split into 7 parts (a–g); crypto (a) FIXED, 6 open.** Native library-gate gaps: `arguments` (b, `()` `Display`), `imaging` (c, `#native` sig), `moros_map/serial` (d, E0499), `moros_editor` (e, Str lifetime), `random` (f, seed), `moros_ui` (g, let-in-RHS).  Each fixed + un-skipped independently; native gate covers 11/17 after (a). |
 | [@P322](#open-issues--quick-reference) | Low (benign program-end; audit) | 10 script/doc files leak top-level `main` locals (`main_vector<…>` / structs / a `File`/`Parser`/`Lexer`) at program exit — the interpreter doesn't scope-free top-level locals at the very end of `main`.  Benign for one-shot runs; grandfathered in the Part B leak gate (`tests/wrap.rs::SCRIPTS_LEAK_ALLOW`).  Audit whether any are real (fixable) vs. inherent program-end. |
 
 ---
