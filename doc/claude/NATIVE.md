@@ -1202,6 +1202,7 @@ shipped state.  Each row links to its design content above.
 
 | Item | Section | Status |
 |---|---|---|
+| **@P321c** — `imaging` native ABI gap | [PROBLEMS.md @P321c](PROBLEMS.md) | Open (diagnosed, needs design, M+).  Native direct-call ABI cannot pass a `LoftStore` to a store-mutating `#native` fn (`load_png` decodes + allocates into the Image struct).  `output_native_direct_call` (`src/generation/mod.rs:2181`) has no struct-ref marshalling.  Recommended fix: route through `codegen_runtime + Abi::Cell` (crypto pattern).  16/17 library packages native-green; only `imaging` remains in `LIB_PKGS_NATIVE_SKIP`. |
 | **N8b.3** — `yield from` delegation | [§ N8b](#n8b--coroutine-native-codegen) (line ~944, marked CO1.3d) | Open — design drafted, not implemented.  Native coroutines support `yield value` (N8b.1 + N8b.2 shipped) but NOT `yield from <inner_iterator>` delegation. |
 | **N8c.1** — Audit generic text-return | [§ N8c](#n8c--generic-function-instantiation) | **Probably overlaps shipped work.**  Plan-17 closure landed @P237 / @P238 / @P242 (`Value::Tuple` recursion in `substitute_type_in_value`; `tuple_text_to_string` flag).  Action: un-skip `tests/scripts/48-generics.loft`; if green, mark closed. |
 | **N8c.2** — Fix generic text-return | [§ N8c](#n8c--generic-function-instantiation) | Same overlap.  N8c.1 audit determines whether N8c.2 is needed. |
