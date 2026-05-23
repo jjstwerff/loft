@@ -1715,14 +1715,20 @@ fn get_vector(s: &mut State) {
     let v_size = *s.code::<u16>();
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = s.vec_get_or_raise(&v_r, u32::from(v_size), v_index);
+    let new_value = {
+        let __vr = v_r;
+        s.vec_get_or_raise(&__vr, u32::from(v_size), v_index)
+    };
     s.put_stack(new_value);
 }
 
 fn vector_ref(s: &mut State) {
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = s.vec_ref_or_raise(&v_r, v_index);
+    let new_value = {
+        let __vr = v_r;
+        s.vec_ref_or_raise(&__vr, v_index)
+    };
     s.put_stack(new_value);
 }
 

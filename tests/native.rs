@@ -806,8 +806,9 @@ const LIB_TESTS_NATIVE_SKIP: &[&str] = &[
     // Network: live HTTPS to httpbin.org — same reason as the interpreter skip
     // (wrap.rs::LIB_TESTS_SKIP).  Not a native gap.
     "web/http.loft",
-    // @P321: native JSON round-trip path diverges; moros_map's other 7 files compile.
-    "moros_map/serial.loft",
+    // @P321d FIXED 2026-05-23: nested vector index `m.a[0].b[2]` no longer
+    // emits two live `&mut stores` borrows (E0499) — the OpGetVector /
+    // OpVectorRef `#rust` templates bind `@r` to a local before the call.
 ];
 
 /// True if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is skipped under the

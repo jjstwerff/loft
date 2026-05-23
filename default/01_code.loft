@@ -907,10 +907,17 @@ pub fn clear(both: vector) {
 // end-of-iteration termination.  The parser dispatches between the
 // two based on whether the IR site is a `Value::Iter` step.
 fn OpGetVector(r: vector, size: const u16, index: integer) -> reference[r];
-#rust"s.vec_get_or_raise(&@r, u32::from(@size), @index)"
+// @P321d: bind `@r` to a local before the call.  `vec_get_or_raise` is a
+// `&mut self` method (it may `raise_runtime` on OOB), so a nested index
+// `m.a[0].b[2]` — where `@r` itself expands to another `vec_get_or_raise`
+// call — would hold two `&mut stores` borrows at once (E0499).  The `let`
+// fully evaluates the inner borrow (the result is an owned `DbRef`) before
+// the outer call takes its own `&mut stores`.
+#rust"{{let __vr = @r; s.vec_get_or_raise(&__vr, u32::from(@size), @index)}}"
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpVectorRef(r: vector, index: integer) -> reference[r];
-#rust"s.vec_ref_or_raise(&@r, @index)"
+// @P321d: same nested-`&mut stores` guard as OpGetVector above.
+#rust"{{let __vr = @r; s.vec_ref_or_raise(&__vr, @index)}}"
 // Plan-07 phase 4 step 4.6/4.7 — nullable peers of OpGetVector /
 // OpVectorRef.  Same body (return null DbRef on OOB), used by
 // for-loop iteration codegen which depends on the null result as
