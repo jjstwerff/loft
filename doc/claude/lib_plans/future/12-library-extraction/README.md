@@ -569,6 +569,17 @@ work eclipses the actual code move.  Plan on at least
 one minor release of soak between consecutive chunks
 before opening the next.
 
+**Each chunk phase has an internal sequencing too:**
+the external chunk must be **finished, tested, and
+published** (Stage A in the [per-chunk template](#per-chunk-extraction-template))
+BEFORE the monorepo PR opens (Stage B).  And Stage B
+itself is ordered: **link, validate the link, remove,
+re-validate** — four separate commits in one PR, each
+its own gate.  Never bundle "remove the old + link to
+the new + hope CI proves the swap" into a single
+operation — that hides regressions and makes rollback
+expensive.
+
 ## CI path for libraries (built 2026-05-23) — travels with each chunk
 
 The libraries now have a self-contained CI path in the monorepo that ports
@@ -590,8 +601,18 @@ monorepo (Open question #4 below).
 
 ## Per-chunk extraction template
 
-Each chunk extracts as a focused commit chain (one chunk
-per extraction event).  Template:
+Each chunk extracts in **two stages with an explicit gate
+between them**: the external chunk is built, tested, and
+published on its own (Stage A) BEFORE any monorepo
+linking begins (Stage B).  Then within Stage B the
+monorepo swap is itself ordered: **link, validate the link,
+remove, re-validate**.  Don't bundle these — each step is a
+gate.
+
+### Stage A — Build the external chunk
+
+The chunk must be **finished and tested in isolation**
+before we link to it.  No monorepo changes in this stage.
 
 1. **Verify** every package in the chunk has `loft.toml`
    and passes its own tests in-tree against both gates:
@@ -614,30 +635,84 @@ per extraction event).  Template:
    preserving git history via `git filter-repo` or
    `git subtree split` of the chunk's `lib/*` directories.
 5. **Verify the chunk CI is green** on its own.  Same gates
-   as the monorepo, just running standalone.
+   as the monorepo, just running standalone.  This is the
+   **"finished and tested" gate** — do not advance to
+   Stage B until this is true.
 6. **Tag a v0.1.0 release** per package in the chunk
    (independent semver per package; the chunk repo holds
    them but they version independently).
 7. **Publish to the package registry**: `cd <external-repo>
    && loft publish` (per-package).
-8. **Remove `lib/<X>/`** from the monorepo for every
-   package in the chunk, in a single PR:
-   - Add `loft.toml` dependencies on `<X> = "0.1.0"` in
-     every monorepo consumer (including other libraries
-     not yet extracted).
-   - Update consumer `use` statements (typically no change
-     if package name matches).
-   - Run full monorepo test suite (`make ci`) to confirm
-     `loft install <X>` + existing import path produces
-     identical behaviour.
-   - Remove the chunk's entries from monorepo
-     `LIB_PKGS_SKIP` / `LIB_PKGS_NATIVE_SKIP` /
-     `SCRIPTS_LEAK_ALLOW` — those gates now live in the
-     chunk repo.
-   - Delete the chunk's `lib/*` directories.
-9. **Document** the extraction in CHANGELOG.md.
-10. **Subsequent updates** land in the external repo;
-    consumers bump version in their `loft.toml`.
+8. **Smoke-test the published chunk from outside the
+   monorepo.**  In a scratch directory: `loft install
+   <pkg>` for each package in the chunk, then run a
+   minimal consumer (`use <pkg>;` + one call) against
+   each.  This confirms `loft install` works for a
+   stranger, not just for the monorepo.
+
+### Stage A → B gate
+
+Before opening any monorepo PR, all of the following must
+be true:
+
+- The chunk repo's CI is green on its own.
+- All packages in the chunk are published at v0.1.0.
+- The Stage-A8 smoke-test resolved each package from the
+  registry into a scratch directory without consulting
+  monorepo paths.
+
+If any of these is not true, do not start Stage B.
+
+### Stage B — Switch the monorepo over to the registry
+
+Open ONE monorepo PR with the steps below as **separate
+commits** so each gate is independently reviewable and
+revertable.  Do not collapse them.
+
+B1. **Link.**  In a single commit, add `<X> = "0.1.0"`
+    dependencies to every monorepo consumer's
+    `loft.toml` for every package in the chunk
+    (including other libraries not yet extracted).
+    Update consumer `use` statements if the package name
+    differs (typically no change).  Leave `lib/<X>/`
+    directories in place.
+
+B2. **Validate the link** (does NOT remove anything).
+    Temporarily rename each `lib/<X>/` to
+    `lib/_extracting_<X>/` (a name `probe_sibling_package`
+    won't match) so the resolver MUST fall through to the
+    registry-installed copy.  Run `make ci` against the
+    registry version while the old tree is still
+    physically present but path-invisible.  Green CI
+    here = the registry version is functionally
+    equivalent.  Commit the rename so the validating
+    state is part of the PR history.
+
+B3. **Remove.**  Delete the renamed
+    `lib/_extracting_<X>/` directories.  Remove the
+    chunk's entries from monorepo `LIB_PKGS_SKIP` /
+    `LIB_PKGS_NATIVE_SKIP` / `SCRIPTS_LEAK_ALLOW` — those
+    gates now live in the chunk repo.
+
+B4. **Re-validate.**  Run `make ci` again.  Green here =
+    nothing silently depended on the in-tree copy.  If a
+    test fails because the registry version is missing
+    behaviour the in-tree version had, **roll back B3**
+    (the directory is still in git history) and file
+    the gap as a chunk-repo issue.  Do not patch it in
+    the monorepo.
+
+B5. **Document** the extraction in
+    [CHANGELOG.md](../../../CHANGELOG.md) (user-facing)
+    and link the chunk repo from CLAUDE.md's doc index
+    if appropriate.
+
+### Stage C — Ongoing maintenance
+
+Subsequent updates land in the external repo; consumers
+bump version in their `loft.toml`.  The monorepo no
+longer carries the chunk's code — only its versioned
+dependency.
 
 ## Open questions
 
