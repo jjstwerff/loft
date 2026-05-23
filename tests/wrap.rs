@@ -307,6 +307,29 @@ fn ignored_scripts() -> HashSet<&'static str> {
     HashSet::from([])
 }
 
+/// Part B leak gate — script/doc files with KNOWN, pre-existing store leaks at
+/// program exit (matched by file name; covers both `tests/scripts/` via
+/// `loft_suite` and `tests/docs/` via the `dir`/`last` tests, which all run
+/// through `run_test`).  Each leaks only top-level `main` locals (structs /
+/// `main_vector<…>` / a `File`/`Parser` handle) that aren't scope-freed at the
+/// very end of the program — benign for a one-shot run (the process exits
+/// immediately after), but a real scope-free gap worth a later audit (@P322).
+/// Grandfathered here so `run_test`'s leak gate catches NEW leaks (regressions)
+/// without churning these.  A file is removed once its program-end frees are
+/// tightened.
+const SCRIPTS_LEAK_ALLOW: &[&str] = &[
+    "06-structs.loft",         // Point / Circle / Object / main_vector<Area> at exit
+    "11-vectors.loft",         // main_vector<integer> + transient temps at exit
+    "37-stress.loft",          // main_vector<integer> / main_vector<text> at exit
+    "51-coroutines.loft",      // main_vector<integer> at exit
+    "93-vector-advanced.loft", // main_vector<VElm> at exit
+    "96-slot-assign.loft",     // SAItem / SABag at exit
+    "07-vector.loft",          // tests/docs: main_vector<integer> + temps at exit
+    "16-parser.loft",          // tests/docs: File / Parser / main_vector<text> at exit
+    "15-lexer.loft",           // tests/docs: Lexer / main_vector<text> at exit
+    "23-safety.loft",          // tests/docs: program-end allocations at exit
+];
+
 /// Per-package library tests that BOTH the interpreter (`library_suite`) and
 /// native (`tests/native.rs::native_library_suite`) suites skip, keyed by
 /// `"<pkg>/<file>.loft"`, each with a one-line rationale.  Mirrors
@@ -1114,8 +1137,32 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
                 failures.join("; ")
             )));
         }
-        // Check for store leaks after all test functions have run.
+        // Part B — leak gate: a heap store left unfreed at program exit is a
+        // leak (a scope-free regression, hazardous for long-running consumers).
+        // `check_store_leaks` prints the by-type warning; then hard-FAIL unless
+        // the file is grandfathered in SCRIPTS_LEAK_ALLOW (pre-existing
+        // program-end allocations).  This turns the script corpus into a leak
+        // regression net — a NEW leak in any non-allowlisted script fails CI.
         state.check_store_leaks();
+        let leaks = state.collect_store_leaks();
+        if !leaks.is_empty() {
+            let fname = entry
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if SCRIPTS_LEAK_ALLOW.contains(&fname.as_str()) {
+                println!("  (grandfathered leak — SCRIPTS_LEAK_ALLOW) {path}");
+            } else {
+                return Err(Error::other(format!(
+                    "{path}: {} store(s) leaked at program exit: {} — fix the \
+                     scope-free, or add the file to SCRIPTS_LEAK_ALLOW if it is \
+                     an intentional program-end allocation",
+                    leaks.len(),
+                    leaks.join(", ")
+                )));
+            }
+        }
     }
     Ok(())
 }
