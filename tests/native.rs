@@ -790,10 +790,12 @@ const LIB_PKGS_NATIVE_SKIP: &[&str] = &[
     // arguments — FIXED (@P321b): OpSetText with a null value now stores the null
     // pointer instead of emitting `(()).to_string()`.  Regression:
     // tests/scripts/repro_p321b.loft.
+    // random — FIXED (@P321f): wired `n_rand_seed` into codegen_runtime (was a
+    // void empty-stub no-op) AND fixed `n_rand_indices` to store 8-byte (i64)
+    // elements matching how `vector<integer>` is read.
     "imaging",      // @P321c: `#native` load_png/save_png signature mismatch (E0061).
     "moros_editor", // @P321e: native codegen panic in the generated `.rs`.
     "moros_ui",     // @P321g: compiles but 8 tests fail at runtime under native.
-    "random",       // @P321f: native codegen panic in the generated `.rs`.
 ];
 
 /// Specific library test FILES skipped under `--native` (the rest of the

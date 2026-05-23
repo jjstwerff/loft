@@ -73,6 +73,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_protect_store_frees",      abi: Abi::Cell },
     RuntimeFn { name: "n_unprotect_store_frees",    abi: Abi::Cell },
     RuntimeFn { name: "n_rand",                     abi: Abi::None },
+    RuntimeFn { name: "n_rand_seed",                abi: Abi::None },
     RuntimeFn { name: "n_rand_indices",             abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_native",        abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_text_native",   abi: Abi::Cell },
@@ -2604,6 +2605,14 @@ pub fn n_rand(lo: i64, hi: i64) -> i64 {
     cr_rand_int(lo, hi)
 }
 
+/// `#native "n_rand_seed"` (@P321f) — seed the thread-local RNG so `rand`
+/// sequences are reproducible under `--native`.  Without this registry entry the
+/// void `#native` fn fell through to an EMPTY stub (P269 only errors for
+/// non-void), making `rand_seed` a silent no-op natively.
+pub fn n_rand_seed(seed: i64) {
+    cr_rand_seed(seed);
+}
+
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
 /// Returns an empty vector reference when `n <= 0`.
 /// Bytecode equivalent: `n_rand_indices` in `src/native.rs`.
@@ -2623,7 +2632,11 @@ pub fn n_rand_indices(cell: &std::cell::UnsafeCell<Stores>, n: i64) -> DbRef {
     crate::ops::shuffle_ints(&mut indices);
     // Allocate: vec_rec holds size + data, header_rec holds pointer to vec_rec.
     let base = stores.null();
-    let vec_words = ((count as u32 * 4 + 15) / 8).max(1);
+    // @P321f — `vector<integer>` stores 8-byte (i64) elements (loft `integer`
+    // is i64-backed in records), so the data is `count` words after the 8-byte
+    // header.  Storing i32 (4-byte) here made the 8-byte reader merge index
+    // pairs into one i64 ("missing value N" in the permutation check).
+    let vec_words = (count as u32 + 1).max(1);
     let vec_cr = stores.claim(&base, vec_words);
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&base, 1);
@@ -2632,7 +2645,7 @@ pub fn n_rand_indices(cell: &std::cell::UnsafeCell<Stores>, n: i64) -> DbRef {
         let store = stores.store_mut(&base);
         store.set_u32_raw(vec_rec, 4, count as u32);
         for (i, &val) in indices.iter().enumerate() {
-            store.set_i32_raw(vec_rec, 8 + i as u32 * 4, val);
+            store.set_int(vec_rec, 8 + i as u32 * 8, i64::from(val));
         }
         store.set_u32_raw(header_rec, 4, vec_rec);
     }
