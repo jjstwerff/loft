@@ -986,6 +986,56 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
+        } else if is_return
+            && let Type::Tuple(elems) = tp
+            && elems.iter().any(|e| matches!(e, Type::Text(_)))
+            && !expr_is_terminal
+            && let Value::Tuple(orig_elems) = expr.unspan()
+            && orig_elems.len() == elems.len()
+        {
+            // @P329: tuple-of-text return — when an element is a non-literal
+            // expression (typically a Call returning text that borrows from
+            // a local), hoist it to a `__ret_text_N` temp before running
+            // scope frees.  `Set(__ret_text_N, elem)` lowers to OpAppendText
+            // (line 526 / src/state/codegen.rs), which deep-copies bytes
+            // into the temp's owned String.  The frees then run safely; the
+            // returned tuple's text elements point to temp Strings that
+            // outlive the function's scope (skip_free marks them so the
+            // function epilogue leaves the allocation for the caller's
+            // AppendText to consume on return — same pattern as the
+            // single-text B5-L3 branch above, generalised across tuple
+            // elements).
+            //
+            // Without this, a function shape like
+            //   fn f<T: Printable>(x: T) -> (text, text) { (x.to_text(), "x") }
+            // returns a tuple whose element 0 Str points into the caller's
+            // (function-local) __work_1 buffer; the scope's OpFreeText runs
+            // BEFORE the Return, invalidating the Str — the caller reads
+            // empty / garbage bytes.  See PROBLEMS.md @P329.
+            let mut new_elems = Vec::with_capacity(orig_elems.len());
+            let mut pre_ops = Vec::new();
+            for (elem_expr, elem_type) in orig_elems.iter().zip(elems.iter()) {
+                let unspanned = elem_expr.unspan();
+                if matches!(elem_type, Type::Text(_))
+                    && !matches!(unspanned, Value::Text(_) | Value::Var(_) | Value::Null)
+                {
+                    self.ret_temp_counter += 1;
+                    let name = format!("__ret_text_{}", self.ret_temp_counter);
+                    let tmp = function.add_temp_var(&name, &Type::Text(vec![]));
+                    function.set_skip_free(tmp);
+                    self.var_scope.insert(tmp, self.scope);
+                    self.var_order.push(tmp);
+                    pre_ops.push(v_set(tmp, elem_expr.clone()));
+                    new_elems.push(Value::Var(tmp));
+                } else {
+                    new_elems.push(elem_expr.clone());
+                }
+            }
+            let mut result = Vec::with_capacity(pre_ops.len() + ls.len() + 1);
+            result.extend(pre_ops);
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Tuple(new_elems))));
+            return result;
         } else {
             ls.insert(0, expr.clone());
             if is_return {

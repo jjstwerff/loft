@@ -13468,7 +13468,6 @@ fn p240_bounded_generic_two_operator_tuple_return() {
 /// position wrappers — same shape as the Span-aware patches
 /// elsewhere in the codebase.
 #[test]
-#[ignore = "@P329 — interpreter regression of @P243; bounded-generic tuple-of-text method call returns empty under the `code!` harness (standalone runs work); un-ignore when @P329 closes"]
 fn p243_bounded_generic_tuple_with_text_method_call() {
     code!(
         "struct P243Item { p243_id: integer }
@@ -13479,6 +13478,68 @@ fn p243_show_pair<T: Printable>(p243x: T) -> (text, text) {
     )
     .expr("p243_show_pair(P243Item { p243_id: 7 }).0")
     .result(Value::str("item-7"));
+}
+
+/// @P329 — regression of @P243 (interpreter side).  A bounded-generic
+/// function returning a tuple containing one or more `text` elements
+/// where one element comes from a bound-supplied method call lost the
+/// element's bytes between the function's epilogue free and the caller's
+/// PutText.  Root cause: `scopes::free_vars` had a B5-L3 wrap for single
+/// `text` returns (deep-copy to `__ret_N: text` via OpAppendText) but no
+/// analogue for `(text, ...)` returns — the tuple's text element Str
+/// pointed into a function-local buffer that the scope's OpFreeText
+/// invalidated before Return.  Fix: hoist each non-literal text element
+/// to `__ret_text_N` via the same Set+AppendText pattern, then build a
+/// fresh tuple from those temps as the return value.  The three siblings
+/// below cover (text, integer), (text, text, text), and (text,) shapes
+/// using chained `.N` on the call result (which routes through the
+/// temp-tuple branch in `parser/operators.rs:597-615`).
+#[test]
+fn p329_bounded_generic_tuple_text_integer_chained() {
+    code!(
+        "struct P329Item { p329_id: integer }
+fn to_text(self: P329Item) -> text { return \"item-{self.p329_id}\"; }
+fn p329_show_pair<T: Printable>(p329x: T, n: integer) -> (text, integer) {
+    return (p329x.to_text(), n);
+}"
+    )
+    .expr("p329_show_pair(P329Item { p329_id: 3 }, 42).0")
+    .result(Value::str("item-3"))
+    .expr("p329_show_pair(P329Item { p329_id: 9 }, 7).1")
+    .result(Value::Int(7));
+}
+
+#[test]
+fn p329_bounded_generic_tuple_three_text_chained() {
+    code!(
+        "struct P329Tri { p329_tri_id: integer }
+fn to_text(self: P329Tri) -> text { return \"item-{self.p329_tri_id}\"; }
+fn p329_show_triple<T: Printable>(p329x: T) -> (text, text, text) {
+    return (p329x.to_text(), \"middle\", p329x.to_text());
+}"
+    )
+    .expr("p329_show_triple(P329Tri { p329_tri_id: 4 }).0")
+    .result(Value::str("item-4"))
+    .expr("p329_show_triple(P329Tri { p329_tri_id: 5 }).1")
+    .result(Value::str("middle"))
+    .expr("p329_show_triple(P329Tri { p329_tri_id: 6 }).2")
+    .result(Value::str("item-6"));
+}
+
+/// @P329 — element 1 (second slot) access via chained `.1` on the call
+/// result.  Verifies the deep-copy applies to NON-leading text elements
+/// too (the original p243 test only read `.0`).
+#[test]
+fn p329_bounded_generic_tuple_text_text_chained_second_elem() {
+    code!(
+        "struct P329Second { p329_second_id: integer }
+fn to_text(self: P329Second) -> text { return \"item-{self.p329_second_id}\"; }
+fn p329_pair_second<T: Printable>(p329x: T) -> (text, text) {
+    return (\"first\", p329x.to_text());
+}"
+    )
+    .expr("p329_pair_second(P329Second { p329_second_id: 8 }).1")
+    .result(Value::str("item-8"));
 }
 
 /// P239 — for-loop over `vector<T>` inside a generic fn crashed
