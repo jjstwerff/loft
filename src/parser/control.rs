@@ -3744,21 +3744,37 @@ impl Parser {
                     if outer_v == u16::MAX {
                         continue;
                     }
-                    // Plan-22 phase 02d-iii.e — skip write-back
-                    // for boxed-scalar captures.  The outer var
-                    // is now `Reference(__cell_<T>, _)` and
-                    // mutations propagate via the shared cell
-                    // DbRef (auto-Reference encoding from 02c +
-                    // closure-body writes via 02d-iii.b/d).  A
-                    // bare `v_set(outer, field_val)` here would
-                    // copy a 12B DbRef back over the same 12B
-                    // DbRef — usually a no-op, but the
-                    // accompanying scope-exit `OpFreeRef`
-                    // bookkeeping can double-free if the inner
-                    // and outer slots disagree on ownership.
-                    if let Type::Reference(d, _) = self.vars.tp(outer_v)
-                        && self.data.def(*d).name.starts_with("__cell_")
-                    {
+                    // Plan-22 phase 02d-iii.e + @P319 — skip the
+                    // write-back for ALL shared-reference captures,
+                    // i.e. those stored in the closure record via the
+                    // auto-Reference 12-byte DbRef encoding (the
+                    // closure attribute is `Reference(d, deps)` with
+                    // NON-EMPTY deps).  This covers boxed `__cell_<T>`
+                    // scalars (02d-iii.e, the original case) AND struct
+                    // / reference captures such as a captured `Mesh`
+                    // whose `.vertices` vector is appended to inside the
+                    // lambda (@P319).
+                    //
+                    // For these the closure holds a DbRef into the LIVE
+                    // outer value, so body mutations already propagate
+                    // through the shared store.  A bare
+                    // `v_set(outer, OpGetDbRef(rec, off))` copies that
+                    // 12-byte DbRef back over itself — a value no-op —
+                    // but the reassignment's free-old-ref step releases
+                    // the store the closure record still references.
+                    // That premature free lets the next call reuse the
+                    // store, clobbering the captured value: silent data
+                    // loss when the trampled field is at offset 0 (a
+                    // `len` reads back 0), or a SIGSEGV in `new_record`
+                    // when it is at a non-zero offset.  Native compiles
+                    // the same IR without the free, so this corrupted
+                    // only the interpreter.  Only genuine by-VALUE
+                    // captures (inline-bytes encoding, empty deps) need
+                    // the write-back to observe their mutations.
+                    if matches!(
+                        self.data.attr_type(closure_rec_d, aid),
+                        Type::Reference(_, ref deps) if !deps.is_empty()
+                    ) {
                         continue;
                     }
                     let field_val = self.get_field(closure_rec_d, aid, Value::Var(closure_w));

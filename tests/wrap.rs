@@ -324,16 +324,12 @@ const LIB_TESTS_SKIP: &[&str] = &[
 /// in-process suite aborts on the first SIGSEGV, so a chunk with multiple
 /// interpreter crashes can't be run file-by-file here.
 const LIB_PKGS_SKIP: &[&str] = &[
-    // @P319 — the moros_* chunk has MULTIPLE interpreter SIGSEGVs (a closure
-    // capturing a struct local + mutating its field at moros_render/adversarial
-    // :95; a moros_map/src/types.loft:32 crash from other moros tests).  Not
-    // projector-related (moros is the separate RPG).  The chunk is gated
-    // separately once @P319 is fixed; tracked in PROBLEMS.md.
-    "moros_map",
-    "moros_editor",
-    "moros_render",
-    "moros_sim",
-    "moros_ui",
+    // (empty) — the moros_* chunk was parked here for @P319 (a closure
+    // capturing a struct local and appending to its `vector<Struct>` field
+    // prematurely freed the captured struct, corrupting the interpreter).
+    // Fixed by control.rs's void-return write-back skip for shared-reference
+    // captures; the whole chunk is now gated.  Keep this list as the
+    // mechanism for parking a future crashing chunk.
 ];
 
 /// Returns true if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is in the
