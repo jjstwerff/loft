@@ -793,9 +793,11 @@ const LIB_PKGS_NATIVE_SKIP: &[&str] = &[
     // random — FIXED (@P321f): wired `n_rand_seed` into codegen_runtime (was a
     // void empty-stub no-op) AND fixed `n_rand_indices` to store 8-byte (i64)
     // elements matching how `vector<integer>` is read.
-    "imaging",      // @P321c: `#native` load_png/save_png signature mismatch (E0061).
-    "moros_editor", // @P321e: native codegen panic in the generated `.rs`.
-    "moros_ui",     // @P321g: compiles but 8 tests fail at runtime under native.
+    // moros_editor — FIXED (@P321e): a text-returning match fn `.to_string()`'d
+    // its result into a `__ret_N` local and returned `Str::new(&local)`
+    // (dangling); the return now routes a text-LOCAL value through `stores.scratch`.
+    "imaging",  // @P321c: `#native` load_png/save_png signature mismatch (E0061).
+    "moros_ui", // @P321g: compiles but 8 tests fail at runtime under native.
 ];
 
 /// Specific library test FILES skipped under `--native` (the rest of the

@@ -219,9 +219,22 @@ impl Output<'_> {
                     // ref_return does), so we don't filter on `a.hidden`.
                     let needs_p205_scratch = wrap_text && {
                         let def = self.data.def(self.def_nr);
-                        !def.attributes.iter().any(|a| {
+                        let no_work_buffer = !def.attributes.iter().any(|a| {
                             matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
-                        })
+                        });
+                        // @P321e — also route through scratch when the return
+                        // value is a text LOCAL var (an owned `String`, not the
+                        // RefVar work-buffer arg).  `Str::new(&var_local)`
+                        // borrows a fn-local that drops at return → dangling ptr.
+                        // Happens when a text fn's body is a match whose result
+                        // is `.to_string()`'d into a `__ret_N` local and returned
+                        // (`edit_kind_label`): a work-buffer arg exists but the
+                        // fn returns a DIFFERENT local, so the `no_work_buffer`
+                        // guard above doesn't catch it.
+                        let returns_local_text = matches!((**val).unspan(), Value::Var(v)
+                            if matches!(def.variables.tp(*v), Type::Text(_))
+                                && !def.variables.is_argument(*v));
+                        no_work_buffer || returns_local_text
                     };
                     write!(w, "return ")?;
                     if needs_p205_scratch {
