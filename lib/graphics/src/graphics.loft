@@ -564,11 +564,12 @@ pub fn group_vbos_upsert(set: &GroupVboSet, gk: integer, verts: vector<single>,
                           min_x: min_x, min_z: min_z, max_x: max_x, max_z: max_z }];
 }
 
-// (A `group_vbos_remove` that frees a single empty group's VAO is deferred on
-// @P320 — loft currently rejects a `&`-param whose only mutation is a keyed
-// REMOVE (`set.slots[gk] = null`) with a false "never modified" error.  Until
-// that's fixed, an emptied group is handled by `group_vbos_upsert` with zero
-// vertices: it stores a count-0 slot that `group_vbos_draw_all` skips.)
+// (An emptied group is handled by `group_vbos_upsert` with zero vertices: it
+// stores a count-0 slot that `group_vbos_draw_all` skips.  A dedicated
+// `group_vbos_remove` that frees a single empty group's VAO via a keyed remove
+// (`set.slots[gk] = null`) is now unblocked — the @P320 false "never modified"
+// rejection of a `&`-param whose only mutation is a keyed remove was fixed
+// 2026-05-23 — but is not yet needed, so it stays unwritten.)
 
 // Draw every group's cached VBO with the set's draw mode.  (Per-group frustum
 // culling — skip groups whose world bounds fall outside the view — is a future

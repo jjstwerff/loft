@@ -5199,6 +5199,12 @@ fn find_written_vars(
                 || def.name == "OpClearVector"
                 || def.name == "OpClearKeyed"
                 || def.name == "OpSetKeyed"
+                // @P320: keyed-remove `coll[key] = null` lowers to
+                // `OpHashRemove(coll, …)` (collections.rs::towards_set_hash_remove),
+                // so it mutates its first arg just like OpSetKeyed/OpClearKeyed.
+                // Without this a `&` param whose only mutation is a keyed remove
+                // was wrongly rejected as "never modified".
+                || def.name == "OpHashRemove"
                 || def.name == "OpInsertVector"
                 || def.name == "OpRemoveVector";
             // OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
@@ -5321,6 +5327,10 @@ fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>
                 || def.name == "OpClearVector"
                 || def.name == "OpClearKeyed"
                 || def.name == "OpSetKeyed"
+                // @P320: keyed-remove `coll[key] = null` → `OpHashRemove(coll, …)`;
+                // mirror the find_written_vars set so a keyed remove inside a
+                // `for … in &coll` loop also counts as a mutation.
+                || def.name == "OpHashRemove"
                 || def.name == "OpInsertVector"
                 || def.name == "OpRemoveVector";
             let second_arg_write = def.name == "OpCopyRecord";
