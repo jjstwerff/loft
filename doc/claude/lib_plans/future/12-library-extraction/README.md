@@ -85,6 +85,55 @@ format adopters yet.  Either keep as in-tree single-file
 modules (no extraction), or migrate them to package format
 first (own decision per file).
 
+## Chunk grouping — a few repos, not 17
+
+One GitHub repo per library = 17 repos to track, release, and CI separately.
+To avoid that sprawl the libraries extract in **chunks**: a small number of
+multi-package repos, each holding a related FAMILY that versions + releases
+together under one CI workflow.  Each chunk is a workspace of `loft.toml`
+packages (published to the registry per-package, maintained as one repo).
+
+Proposed chunks (refine before the first extraction):
+
+| Chunk repo | Packages | Rationale |
+|---|---|---|
+| `loft-libs-core` | `arguments`, `random`, `crypto`, `shapes` | Small, stable, no graphics deps — extract first |
+| `loft-libs-graphics` | `graphics`, `imaging`, `gridmesh` | Graphics stack + `#native` crates; coordinate with [`../02-graphics/`](../02-graphics/) |
+| `loft-libs-net` | `server`, `web`, `game_protocol` | HTTP / multiplayer; coordinate with [`../08-server/`](../08-server/) |
+| `loft-moros` | `moros_editor`, `moros_map`, `moros_render`, `moros_sim`, `moros_ui` | The moros RPG stack; depends on the graphics chunk; extract last (mid-development) |
+
+`lib/audience_crystal/` (the projector's crystal mesh-gen prototype that
+`gridmesh` was extracted from) is NOT an extraction candidate — it stays
+in-monorepo with the audience demo.  It also has no package `tests/` dir, so it
+is the one packaged lib NOT covered by the library gates below; its behaviour is
+gated via the core `tests/scripts/130|133|135` cross-mode equivalence tests.
+Adding package tests (so it joins the gate) is the small hardening follow-up.
+
+A chunk extracts as a unit (one `git filter-repo` / `subtree split` of its
+`lib/*` dirs), keeping intra-chunk deps as path deps and cross-chunk deps (e.g.
+moros → graphics) as registry deps.  The
+[extraction template](#per-library-extraction-template) applies per-chunk
+(step 6 deletes the whole chunk's `lib/*` dirs in one PR).
+
+## CI path for libraries (built 2026-05-23) — travels with each chunk
+
+The libraries now have a self-contained CI path in the monorepo that ports
+unchanged to each extracted chunk (it keys off `lib/<pkg>/tests/*.loft` +
+`loft.toml`, nothing monorepo-specific):
+
+| Gate | Where | Covers |
+|---|---|---|
+| Interpreter | `tests/wrap.rs::library_suite` | every `lib/*/tests/*.loft` via `loft test` (subprocess, package-resolved); skips via `lib_test_skipped` (`LIB_PKGS_SKIP` / `LIB_TESTS_SKIP`) |
+| Native | `tests/native.rs::native_library_suite` | the same via `loft --native test` (compiles each to native Rust, linking the package's `#native` crate); skips `LIB_PKGS_NATIVE_SKIP` / `LIB_TESTS_NATIVE_SKIP` (native-codegen gaps, [@P321](../../../PROBLEMS.md)) |
+| Leak | `tests/wrap.rs` `run_test` gate | unfreed stores at program exit fail; allowlist `SCRIPTS_LEAK_ALLOW` ([@P322](../../../PROBLEMS.md)) |
+| Quick dev loop | `make test-packages` | interpreter-only shell loop over every package test (dev-only, in `ci-full`; the cargo suites above are the gates) |
+
+When a chunk extracts, its repo CI runs the equivalent (`loft test` +
+`loft --native test` over the chunk's packages) and the skip-lists travel with
+the code as the chunk's own `*_NATIVE_SKIP` / leak allowlist.  This is the
+"clear CI path for itself" the libraries needed before living outside the
+monorepo (Open question #4 below).
+
 ## Per-library extraction template
 
 Each extraction is its own focused commit (or small commit
@@ -126,9 +175,13 @@ Listed here so future-you doesn't have to re-discover them.
 3. **Tagging.** Are external repo tags `v0.1.0` style or
    `0.1.0` (matching loft.toml syntax)?  Rust uses `v`
    prefix; npm uses bare.
-4. **Test infrastructure.** Each extracted library needs CI
-   on its own repo (basic `cargo test` or `loft test`).
-   Template GitHub Actions workflow lives where?
+4. **Test infrastructure.** RESOLVED (2026-05-23) — the
+   monorepo CI path (see [§ CI path for libraries](#ci-path-for-libraries-built-2026-05-23--travels-with-each-chunk))
+   is the template: a chunk repo runs `loft test` (interp) +
+   `loft --native test` (native) over its packages, carrying
+   its own `*_NATIVE_SKIP` / leak allowlist.  Still TODO: the
+   reusable GitHub Actions workflow YAML (build loft, then run
+   the two gates) — write once, copy per chunk.
 5. **Backwards-compatibility window.** When `lib/<X>/`
    leaves the monorepo, existing `use lib_<X>` (or whatever
    the current import shape is) should KEEP WORKING via
