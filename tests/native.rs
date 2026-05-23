@@ -796,8 +796,12 @@ const LIB_PKGS_NATIVE_SKIP: &[&str] = &[
     // moros_editor — FIXED (@P321e): a text-returning match fn `.to_string()`'d
     // its result into a `__ret_N` local and returned `Str::new(&local)`
     // (dangling); the return now routes a text-LOCAL value through `stores.scratch`.
-    "imaging",  // @P321c: `#native` load_png/save_png signature mismatch (E0061).
-    "moros_ui", // @P321g: compiles but 8 tests fail at runtime under native.
+    // moros_ui — FIXED (@P321g): a `&`-ref-param call on an assignment RHS
+    // (`x = route_click(p, st.es_tools, …)`) arrived as `Span(Insert([Set(__ref_N,
+    // …), Call]))`; output_set's S35 hoist matched only a bare `Insert`, so it
+    // fell through to the brace-less Insert arm → `let x = let __ref_N = …; call`
+    // (let in expression position).  output_set now unspans before the S35 check.
+    "imaging", // @P321c: `#native` load_png/save_png signature mismatch (E0061).
 ];
 
 /// Specific library test FILES skipped under `--native` (the rest of the

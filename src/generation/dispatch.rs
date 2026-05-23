@@ -181,7 +181,15 @@ impl Output<'_> {
         // statements before the declaration, then assign only from the final expression.
         // Without this, the inner Set ops are emitted inline inside an expression context,
         // producing malformed Rust like `let mut var_rv: DbRef = let mut var__read: DbRef = …`.
-        if let Value::Insert(ops) = to
+        //
+        // @P321g: unspan `to` first.  The parser wraps an assignment RHS in
+        // `Value::Span` for source-position tracking, so `x = route_click(p,
+        // st.es_tools, …)` — where the `&`-ref arg `st.es_tools` materialises a
+        // `Set(__ref_N, …)` statement ahead of the call — arrives here as
+        // `Span(Insert([Set(__ref_N, …), Call(…)]))`.  Matching the bare
+        // `Insert` missed it, falling through to the brace-less `Insert` arm in
+        // `output_code_inner` and re-emitting the exact malformed shape above.
+        if let Value::Insert(ops) = to_unspanned
             && !ops.is_empty()
         {
             for op in &ops[..ops.len() - 1] {
