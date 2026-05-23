@@ -1,4 +1,11 @@
 {
+  "sandbox": {
+    "enabled": true,
+    "filesystem": {
+      "allowWrite": ["/tmp"],
+      "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"]
+    }
+  },
   "hooks": {
     "PostToolUse": [
       {
