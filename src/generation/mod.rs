@@ -46,6 +46,22 @@ const NATIVE_LEAK_CHECK_TAIL: &str = "    if std::env::var(\"LOFT_NATIVE_LEAK_CH
 /// Pragmatic bar: any `t_<digits><alpha-prefix>_*` whose body is
 /// empty + no `#rust` + no `#native` is treated as a T-stub.  The
 /// caller already checks the empty-body branch.
+/// @P321a — `#native` symbols implemented in `src/codegen_runtime.rs` (reusing
+/// loft's zero-dep pure-Rust `crate::sha256` / `crate::base64`) rather than a
+/// package native crate.  Routed to `loft::codegen_runtime::<symbol>` so
+/// `--native` and WASM link them directly (and DCE drops them when unused).
+fn is_crypto_runtime_symbol(symbol: &str) -> bool {
+    matches!(
+        symbol,
+        "n_sha256"
+            | "n_hmac_sha256"
+            | "n_hmac_sha256_raw"
+            | "n_base64_encode"
+            | "n_base64_decode"
+            | "n_base64url_encode"
+    )
+}
+
 fn is_t_param_stub(name: &str) -> bool {
     let Some(rest) = name.strip_prefix("t_") else {
         return false;
@@ -1991,7 +2007,16 @@ extern crate loft;"
                 self.output_native_api_call(w, def_nr, rust_symbol)?;
             } else if !def.native.is_empty() {
                 // #native "symbol" — emit direct call with type marshalling.
-                if self.wasm_browser {
+                if is_crypto_runtime_symbol(&def.native) {
+                    // @P321a — crypto `#native` symbols (sha256 / hmac / base64,
+                    // from lib/crypto) are implemented in `codegen_runtime`
+                    // reusing the zero-dependency pure-Rust `crate::sha256` /
+                    // `crate::base64`, so `--native` AND WASM link them without a
+                    // package crate or external dep (and DCE drops them when
+                    // unused).  Same text ABI as a package `#native` fn.
+                    let qualified = format!("loft::codegen_runtime::{}", def.native);
+                    self.output_native_direct_call(w, def_nr, &qualified)?;
+                } else if self.wasm_browser {
                     // call the imported function directly (unqualified).
                     // The function is declared in the preamble via
                     // #[link(wasm_import_module = "loft_gl")].

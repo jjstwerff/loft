@@ -2484,6 +2484,117 @@ pub fn n_unprotect_store_frees(cell: &std::cell::UnsafeCell<Stores>, r: DbRef) {
     }
 }
 
+// ── Crypto (@P321a) ──────────────────────────────────────────────────────
+// `#native "n_sha256"` etc. (declared in `lib/crypto`) are routed here by the
+// native codegen (`src/generation/mod.rs`) so `--native` AND WASM link the
+// EXISTING zero-dependency pure-Rust impls (`crate::sha256` / `crate::base64`)
+// instead of a P269 stub or an external crate.  These are normal `pub fn`s (NOT
+// `#[no_mangle]`), so a program that never calls crypto leaves them
+// dead-code-eliminated — no WASM bloat.  They use the package `#native` text
+// ABI that `output_native_direct_call` emits: each `text` arg arrives as
+// `(ptr, len)` and the result returns as a `LoftStr` borrowed from a
+// thread-local buffer (the caller copies it into `stores.scratch` immediately).
+thread_local! {
+    static CRYPTO_BUF: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
+}
+
+#[inline]
+unsafe fn cr_in<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
+    if ptr.is_null() || len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    }
+}
+
+fn cr_hex(data: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(data.len() * 2);
+    for b in data {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Stash `out` in the thread-local buffer and hand back a `LoftStr` borrowing
+/// it.  Valid until the next crypto call; the codegen copies it immediately.
+fn cr_ret(out: String) -> loft_ffi::LoftStr {
+    CRYPTO_BUF.with(|b| {
+        *b.borrow_mut() = out;
+        let r = b.borrow();
+        loft_ffi::ret_ref(r.as_str())
+    })
+}
+
+/// `#native "n_sha256"` — hex-encoded SHA-256 of `data`.
+/// # Safety
+/// The `(ptr, len)` pairs must describe valid byte slices; the native codegen
+/// passes a live loft text's pointer + length (see `output_native_direct_call`).
+pub unsafe fn n_sha256(data_ptr: *const u8, data_len: usize) -> loft_ffi::LoftStr {
+    let data = unsafe { cr_in(data_ptr, data_len) };
+    cr_ret(cr_hex(&crate::sha256::sha256(data)))
+}
+
+/// `#native "n_hmac_sha256"` — hex-encoded HMAC-SHA-256(key, data).
+/// # Safety
+/// The `(ptr, len)` pairs must describe valid byte slices; the native codegen
+/// passes a live loft text's pointer + length (see `output_native_direct_call`).
+pub unsafe fn n_hmac_sha256(
+    key_ptr: *const u8,
+    key_len: usize,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> loft_ffi::LoftStr {
+    let key = unsafe { cr_in(key_ptr, key_len) };
+    let data = unsafe { cr_in(data_ptr, data_len) };
+    cr_ret(cr_hex(&crate::sha256::hmac_sha256(key, data)))
+}
+
+/// `#native "n_hmac_sha256_raw"` — raw (un-hexed) HMAC-SHA-256 bytes as text.
+/// # Safety
+/// The `(ptr, len)` pairs must describe valid byte slices; the native codegen
+/// passes a live loft text's pointer + length (see `output_native_direct_call`).
+pub unsafe fn n_hmac_sha256_raw(
+    key_ptr: *const u8,
+    key_len: usize,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> loft_ffi::LoftStr {
+    let key = unsafe { cr_in(key_ptr, key_len) };
+    let data = unsafe { cr_in(data_ptr, data_len) };
+    let mac = crate::sha256::hmac_sha256(key, data);
+    cr_ret(String::from_utf8_lossy(&mac).into_owned())
+}
+
+/// `#native "n_base64_encode"` — standard base64 of `data`.
+/// # Safety
+/// The `(ptr, len)` pairs must describe valid byte slices; the native codegen
+/// passes a live loft text's pointer + length (see `output_native_direct_call`).
+pub unsafe fn n_base64_encode(data_ptr: *const u8, data_len: usize) -> loft_ffi::LoftStr {
+    let data = unsafe { cr_in(data_ptr, data_len) };
+    cr_ret(crate::base64::encode(data))
+}
+
+/// `#native "n_base64_decode"` — decode standard base64 `data` (lossy UTF-8).
+/// # Safety
+/// The `(ptr, len)` pairs must describe valid byte slices; the native codegen
+/// passes a live loft text's pointer + length (see `output_native_direct_call`).
+pub unsafe fn n_base64_decode(data_ptr: *const u8, data_len: usize) -> loft_ffi::LoftStr {
+    let data = unsafe { cr_in(data_ptr, data_len) };
+    let s = std::str::from_utf8(data).unwrap_or("");
+    cr_ret(String::from_utf8_lossy(&crate::base64::decode(s)).into_owned())
+}
+
+/// `#native "n_base64url_encode"` — URL-safe base64 of `data`.
+/// # Safety
+/// The `(ptr, len)` pairs must describe valid byte slices; the native codegen
+/// passes a live loft text's pointer + length (see `output_native_direct_call`).
+pub unsafe fn n_base64url_encode(data_ptr: *const u8, data_len: usize) -> loft_ffi::LoftStr {
+    let data = unsafe { cr_in(data_ptr, data_len) };
+    cr_ret(crate::base64::encode_url(data))
+}
+
 /// Return a random integer in `[lo, hi]` (inclusive).
 /// Returns `i64::MIN` (null) when `lo > hi`.
 /// Bytecode equivalent: `n_rand` in `src/native.rs`.

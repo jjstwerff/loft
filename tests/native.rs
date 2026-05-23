@@ -786,13 +786,14 @@ fn native_tuple_return_script() -> std::io::Result<()> {
 /// `native_utils::add_native_extern_flags` in the test runner, which recovered
 /// graphics/shapes/server/web/moros_render/moros_sim).  Tracked under @P321.
 const LIB_PKGS_NATIVE_SKIP: &[&str] = &[
-    "arguments", // @P321: native codegen — `()` doesn't implement `Display`.
-    "crypto",    // @P321: sha256/base64/hmac are interp-only registry symbols
-    // (no native crate, no codegen_runtime.rs impl) → P269 "no implementation".
-    "imaging",      // @P321: `#native` load_png/save_png signature mismatch (E0061).
-    "moros_editor", // @P321: native codegen panic in the generated `.rs`.
-    "moros_ui",     // @P321: compiles but 8 tests fail at runtime under native.
-    "random",       // @P321: native codegen panic in the generated `.rs`.
+    // crypto — FIXED (@P321a): sha256/base64/hmac wired into codegen_runtime.rs
+    // (reusing the zero-dep crate::sha256 / crate::base64); native + interp +
+    // wasm green.
+    "arguments",    // @P321b: native codegen — `()` doesn't implement `Display`.
+    "imaging",      // @P321c: `#native` load_png/save_png signature mismatch (E0061).
+    "moros_editor", // @P321e: native codegen panic in the generated `.rs`.
+    "moros_ui",     // @P321g: compiles but 8 tests fail at runtime under native.
+    "random",       // @P321f: native codegen panic in the generated `.rs`.
 ];
 
 /// Specific library test FILES skipped under `--native` (the rest of the
