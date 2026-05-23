@@ -786,10 +786,10 @@ fn native_tuple_return_script() -> std::io::Result<()> {
 /// `native_utils::add_native_extern_flags` in the test runner, which recovered
 /// graphics/shapes/server/web/moros_render/moros_sim).  Tracked under @P321.
 const LIB_PKGS_NATIVE_SKIP: &[&str] = &[
-    // crypto — FIXED (@P321a): sha256/base64/hmac wired into codegen_runtime.rs
-    // (reusing the zero-dep crate::sha256 / crate::base64); native + interp +
-    // wasm green.
-    "arguments",    // @P321b: native codegen — `()` doesn't implement `Display`.
+    // crypto — FIXED (@P321a): sha256/base64/hmac wired into codegen_runtime.rs.
+    // arguments — FIXED (@P321b): OpSetText with a null value now stores the null
+    // pointer instead of emitting `(()).to_string()`.  Regression:
+    // tests/scripts/repro_p321b.loft.
     "imaging",      // @P321c: `#native` load_png/save_png signature mismatch (E0061).
     "moros_editor", // @P321e: native codegen panic in the generated `.rs`.
     "moros_ui",     // @P321g: compiles but 8 tests fail at runtime under native.

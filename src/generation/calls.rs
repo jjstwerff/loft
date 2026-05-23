@@ -270,6 +270,18 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         let mut res = def_fn.rust.clone();
+        // @P321b — `OpSetText` with a NULL value must store the null pointer
+        // (offset 0), matching the interpreter (which reads it back as null).
+        // The generic template does `@val.to_string()` + `set_str`, which
+        // renders `null` as `(()).to_string()` (E0599: `()` is not `Display`)
+        // and would store a real string regardless.  Triggered by e.g.
+        // `vec_of_text += null` (lib/arguments `flag()`: `self.results += null`).
+        if def_fn.name == "OpSetText"
+            && let Some(vi) = def_fn.attributes.iter().position(|a| a.name == "val")
+            && matches!(vals.get(vi), Some(Value::Null))
+        {
+            res = "{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), 0u32);}}".to_string();
+        }
         // Bytecode templates wrap text values in Str::new(...) for put_stack compatibility.
         // Native code uses &str directly — strip the wrapper by extracting its argument.
         // Must be done before @param substitution so argument expressions are not affected.
