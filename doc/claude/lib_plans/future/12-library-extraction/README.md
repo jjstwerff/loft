@@ -18,10 +18,19 @@ once the infrastructure ships.
 
 ## Status
 
-**Blocked** on PKG.REG (central registry MVP) landing in
-[PACKAGES.md § Open work](../../../PACKAGES.md#open-work).  Until `loft install
-<name>` works against a registry, there's no consumption
-path for an extracted library.
+**Blocked** on two prerequisites:
+
+1. **PKG.REG** (central registry MVP) landing in
+   [PACKAGES.md § Open work](../../../PACKAGES.md#open-work).
+   Until `loft install <name>` works against a registry, there's
+   no consumption path for an extracted library.
+2. **Compiler-crate decoupling** — see
+   [§ Prerequisite — decouple the compiler crate from library code](#prerequisite--decouple-the-compiler-crate-from-library-code)
+   below.  Today the loft compiler still carries library Rust
+   (`n_sha256` and 18 others in `src/native.rs`), and the package
+   manifest's `[native.functions]` table is consumed but the
+   native registry is still hand-maintained.  Until the compiler
+   crate carries zero library code, "extraction" is cosmetic.
 
 When unblocked: per-library extraction proceeds on its own
 validated schedule.  Some libraries may extract early
@@ -72,10 +81,11 @@ the registry exists):
 | `lib/server/` | HTTP server | Mid — coordinate with [`../08-server/`](../08-server/) plan; depends on game-loop additions |
 | `lib/web/` | Web utilities | Mid |
 | `lib/game_protocol/` | Multiplayer protocol | Mid — coordinate with EVENT_LOOP / multiplayer-editor / tic-tac-toe plans |
-| `lib/moros_editor/` | Moros editor | Late — large, mid-development |
-| `lib/moros_map/` | Moros map data | Late — paired with editor |
+| `lib/world/` | Shared world model (sparse Cell/Chunk/World; expanding — see [§ Phase 7a](#phase-7a--split-moros-into-shared-world--moros-specific)) | Mid — consumed by TTT v5, audience demo, moros (post-split), dryopea |
+| `lib/moros_editor/` | Moros editor (game-specific after world split) | Late — large, mid-development |
+| `lib/moros_map/` | Moros map data — splits per [§ Phase 7a](#phase-7a--split-moros-into-shared-world--moros-specific) (palette / spawn stay; hex addressing + types move to `lib/world/`) | Late — paired with editor |
 | `lib/moros_render/` | Moros rendering | Late — paired with editor |
-| `lib/moros_sim/` | Moros simulation | Late — paired with editor |
+| `lib/moros_sim/` | Moros simulation (collide.loft's geometry moves to `lib/world/` per Phase 7a) | Late — paired with editor |
 | `lib/moros_ui/` | Moros UI | Late — paired with editor |
 
 Single-file `.loft` modules at `lib/*.loft` (`code.loft`,
@@ -84,6 +94,100 @@ Single-file `.loft` modules at `lib/*.loft` (`code.loft`,
 format adopters yet.  Either keep as in-tree single-file
 modules (no extraction), or migrate them to package format
 first (own decision per file).
+
+## Prerequisite — decouple the compiler crate from library code
+
+Surveyed 2026-05-23.  The packages sort into three readiness
+tiers based on where their native code physically lives.  The
+goal of this prerequisite arc: **the loft compiler crate
+contains zero library code or library blueprints — only the
+language core (`default/*.loft` stays), runtime, codegen, and
+stdlib symbols**.
+
+### Tier A — pure-loft, ready today (12)
+
+`arguments`, `audience_crystal`, `game_protocol`, `gridmesh`,
+`markdown`, `moros_editor`, `moros_map`, `moros_render`,
+`moros_sim`, `moros_ui`, `shapes`, `world`.
+
+No `#native` declarations at all.  The compiler already
+resolves them via `probe_sibling_package` in
+`src/parser/mod.rs`.  Mechanically extractable now; only
+the registry consumption path (PKG.REG above) is missing.
+
+### Tier B — clean native, blocked only on registry plumbing (4)
+
+`graphics` (56 `#native` syms), `imaging` (2), `random` (3),
+`server` (25).
+
+Each owns a `native/` crate; the `n_*` implementations live
+in `lib/<X>/native/src/` and are NOT duplicated in
+`src/native.rs`.  The blueprint `pub fn ...; #native "n_xxx"`
+declarations sit in the package's own `.loft` file.  Today
+these are linked as workspace members; to leave the
+monorepo entirely they need the cdylib loader
+([PACKAGES.md `extensions.rs`](../../../PACKAGES.md), designed
+but not integrated).
+
+### Tier C — leaking native, must drain first (2)
+
+| Package | Leak | Action |
+|---|---|---|
+| `crypto` | 6/6 symbols (`n_sha256`, `n_hmac_sha256`, `n_base64_*`) live in `src/native.rs` | Create `lib/crypto/native/`, move the 6 fns out of the compiler crate |
+| `web` | 13/19 symbols live in `src/native.rs` (web has a native dir, but only carries 6 of its 19 symbols) | Move the remaining 13 fns into `lib/web/native/src/lib.rs` |
+
+Until these 19 hand-maintained `n_*` entries leave
+`src/native.rs`, the compiler binary contains library Rust
+code regardless of what happens elsewhere.  Independent of
+PKG.REG and the cdylib loader — pure mechanical move per
+package, no language change.
+
+### Single-file `lib/*.loft` modules (8) — convert or fold before extracting
+
+`code.loft`, `docs.loft`, `lexer.loft`, `logger.loft`,
+`overland.loft`, `parser.loft`, `testlib.loft`, `wall.loft`.
+
+No `loft.toml` → no extraction path.  Each needs a
+mini-conversion: create `lib/<name>/`, move content to
+`src/<name>.loft`, add `loft.toml`.  Decide per-file
+whether to extract or fold into a sibling package.
+
+**`wall.loft` is special-cased:** it folds into `lib/world/`
+in Phase 7a rather than becoming a standalone package.
+Wall geometry is mandatory for both moros and dryopea
+(dryopea uses the walls primitive for user-built walls AND
+for rock faces); a separate `wall` package would just be a
+fragment of `world` with extra import friction.  See
+[§ Phase 7a](#phase-7a--split-moros-into-shared-world--moros-specific).
+
+### Dynamic native-registry path
+
+Today `src/native.rs::NATIVE_TABLE` is a static
+`&[(&str, fn)]` slice — every library symbol must be
+hand-maintained there.  After the leak drain, the next
+step is replacing the static table with a registry
+populated by package manifests:
+
+- **Compile-time aggregator** (first step).  `build.rs`
+  walks `lib/*/loft.toml::[native.functions]` and emits
+  the registry as generated code that links each
+  package's `native/` crate.  Removes hand-maintenance;
+  packages still live in the monorepo.  This is the
+  smallest change that achieves "compiler crate carries
+  zero library code."
+- **`dlopen` loader** (follow-on).  Optional once
+  external registries land — uses the `extensions.rs`
+  design from PACKAGES.md to resolve native symbols at
+  install time from a downloaded `.rlib` / `.so`.  Not
+  required for the monorepo-internal goal.
+
+### Work order
+
+Phases 1-2 ([§ Phases](#phases--detailed-execution-plan)
+below) own the decoupling work; phase 3 waits on PKG.REG;
+phases 4-7 extract each chunk.  The decoupling phases
+land independently from PKG.REG — they don't change
+user-visible behaviour.
 
 ## Chunk grouping — a few repos, not 17
 
@@ -100,7 +204,8 @@ Proposed chunks (refine before the first extraction):
 | `loft-libs-core` | `arguments`, `random`, `crypto`, `shapes` | Small, stable, no graphics deps — extract first |
 | `loft-libs-graphics` | `graphics`, `imaging`, `gridmesh` | Graphics stack + `#native` crates; coordinate with [`../02-graphics/`](../02-graphics/) |
 | `loft-libs-net` | `server`, `web`, `game_protocol` | HTTP / multiplayer; coordinate with [`../08-server/`](../08-server/) |
-| `loft-moros` | `moros_editor`, `moros_map`, `moros_render`, `moros_sim`, `moros_ui` | The moros RPG stack; depends on the graphics chunk; extract last (mid-development) |
+| `loft-libs-world` | `world` (expanded by Phase 7a to absorb moros's shared spatial primitives: hex addressing, wall geometry, groups, height, coupled geometry).  Folds in `lib/wall.loft` content rather than carrying `wall` as a separate package. | Shared map / spatial primitives consumed by TTT v5, audience demo, moros, dryopea ([@PLAN46](../../../plans/future/46-dryopea/README.md)).  Lives in its own chunk because consumers span multiple games and the dryopea plan blocks on it. |
+| `loft-moros` | `moros_editor`, `moros_map` (game-only remnant after Phase 7a), `moros_render`, `moros_sim`, `moros_ui` | The moros RPG stack; depends on `loft-libs-graphics` AND `loft-libs-world`; extract last (mid-development) |
 
 `lib/audience_crystal/` (the projector's crystal mesh-gen prototype that
 `gridmesh` was extracted from) is NOT an extraction candidate — it stays
@@ -114,6 +219,254 @@ A chunk extracts as a unit (one `git filter-repo` / `subtree split` of its
 moros → graphics) as registry deps.  The
 [extraction template](#per-library-extraction-template) applies per-chunk
 (step 6 deletes the whole chunk's `lib/*` dirs in one PR).
+
+**Why few chunks, not 17 repos.**  17 `loft-<lib>` repos =
+17 CI workflows to maintain, 17 release cadences, 17
+README.md files for users to grep through when they want
+"where does `lib/graphics/` live now?"  A user who knows
+"graphics is a graphics chunk" can find it; a user staring
+at 17 repos can't.  Four chunks is the cap.  New libraries
+join an existing chunk by family fit, not a new repo.
+
+## Phases — detailed execution plan
+
+Each phase has a concrete acceptance criterion.  Phases 1-2
+can land in parallel with each other and with PKG.REG.
+Phases 4-7 serialize (one chunk at a time — minimises
+downstream consumer churn and proves the per-chunk template
+on the smallest chunk before larger ones commit).
+
+### Phase 1 — Drain `src/native.rs` of library symbols
+
+Owned by this plan, no external dependency.  Moves library
+Rust out of the compiler crate so later phases can extract
+cleanly.
+
+| Sub | Work | Effort |
+|---|---|---|
+| 1a | Move 6 fns (`n_sha256`, `n_hmac_sha256`, `n_base64_*`) from `src/native.rs` into new `lib/crypto/native/` crate | XS |
+| 1b | Move 13 fns from `src/native.rs` into `lib/web/native/` crate (the dir already exists with 6 symbols; this adds the remaining 13) | S |
+| 1c | Convert 7 single-file `lib/*.loft` modules (`code.loft`, `docs.loft`, `lexer.loft`, `logger.loft`, `overland.loft`, `parser.loft`, `testlib.loft`) to package format — one commit per file.  `wall.loft` is excluded: it folds into `lib/world/` in Phase 7a rather than becoming a standalone package. | M |
+
+**Acceptance:** `grep '^fn n_' src/native.rs` returns only
+symbols backing `default/*.loft` (the standard library)
+and runtime helpers — no library symbols.  All `lib/*/`
+directories have `loft.toml`.
+
+### Phase 2 — Compile-time native-registry aggregator
+
+Replace the hand-maintained static `NATIVE_TABLE` slice in
+`src/native.rs` with `build.rs`-generated registration that
+walks `lib/*/loft.toml::[native.functions]` and emits the
+table at compile time.
+
+**Acceptance:** adding or removing a library's
+`[native.functions]` entry is the ONLY change required to
+add/remove its symbols; `src/native.rs` contains zero
+library entries.  Compiler crate carries no library code.
+
+**Effort:** M.
+
+### Phase 3 — Coordinate with PKG.REG (waiting phase)
+
+Phases 4-7 cannot proceed until both:
+- **PKG.REG** — registry MVP from [PACKAGES.md § Open
+  work](../../../PACKAGES.md#open-work).
+- **cdylib loader** (`extensions.rs`) — also in PACKAGES.md
+  § Open work; required so registry-installed packages
+  contribute their `#native` symbols at install time.
+
+No work owned by this plan.  Phases 1-2 are not blocked
+on PKG.REG and should ship in parallel.
+
+**Acceptance:** `loft install <name>` resolves a published
+package; `#native` symbols dispatch through the cdylib
+loader; `make ci` passes against a registry-installed copy
+of one test package.
+
+### Phase 4 — Extract `loft-libs-core` (first chunk)
+
+**Packages:** `arguments`, `random`, `crypto`, `shapes`.
+
+**Why first:** small, stable, no graphics deps, no
+inter-chunk deps.  Validates the per-chunk template before
+larger chunks commit.  Includes the Tier-C drain target
+(`crypto`) so phase 1's decoupling work gets immediate
+real-world validation.
+
+**Steps:** apply [§ Per-chunk extraction template](#per-chunk-extraction-template).
+
+**Acceptance:**
+- `lib/{arguments,random,crypto,shapes}/` directories
+  removed from the monorepo.
+- `make ci` passes using registry-installed versions.
+- User code with `use random;` (etc.) sees identical
+  behaviour to the in-monorepo version.
+
+**Effort:** M.
+
+### Phase 5 — Extract `loft-libs-graphics`
+
+**Packages:** `graphics`, `imaging`, `gridmesh`.
+
+**Coordinates with** [`../02-graphics/`](../02-graphics/)
+for API surface stability.  Mechanical once that plan's
+API reaches a stable point.
+
+**Acceptance:** as phase 4, plus moros-* consumers
+(still in-monorepo at this point) updated to use the
+external graphics chunk via their `loft.toml`.
+
+**Effort:** M.
+
+### Phase 6 — Extract `loft-libs-net`
+
+**Packages:** `server`, `web`, `game_protocol`.
+
+**Coordinates with** [`../08-server/`](../08-server/),
+EVENT_LOOP, and multiplayer-editor plans for API stability
+on `server` + `game_protocol`.  Includes the second
+Tier-C drain target (`web`).
+
+**Acceptance:** as phase 4.
+
+**Effort:** M.
+
+### Phase 7a — Split moros into shared world + moros-specific
+
+Before moros extracts, the parts that aren't moros-specific
+move into `lib/world/`.  This unblocks dryopea
+([@PLAN46](../../../plans/future/46-dryopea/README.md)),
+keeps the existing TTT v5 + audience-generative-art
+consumers of `lib/world/` working, and makes the eventual
+`loft-moros` chunk genuinely moros-game-only.
+
+**Why this split exists:** `lib/world/` today is a sparse
+single-layer Cell/Chunk/World (TTT + audience).  The moros
+side has a similar shape (hex grid, 32-wide chunks, floor-
+division addressing — `lib/world/` already borrows the
+addressing pattern from `moros_map`) plus walls, groups,
+heights, and coupled geometry routines.  Dryopea uses the
+same hex-world model AND the wall primitive directly:
+dryopea lets the player issue build orders for walls (≥1
+hex wide, walkable) and uses the same wall geometry for
+rock faces in the terrain.  Three games sharing one library
+is cheaper than three games re-implementing the geometry —
+and the wall primitive in particular is load-bearing for
+dryopea's signature gameplay (boss-breakable walls,
+walkable battlements, terrain rock faces).
+
+**Moves into `lib/world/`:**
+
+| From | What | Notes |
+|---|---|---|
+| `lib/moros_map/types.loft` | Hex / Chunk types (the hex-grid layer addressing) | Palette + spawn types stay in `moros_map` (game-specific) |
+| `lib/moros_map/moros_map.loft` | Chunk addressing helpers, hex math | Game-specific accessors stay |
+| `lib/moros_sim/collide.loft` | Wall / hex geometry collision primitives | Game-specific tactical AI stays in `moros_sim` |
+| `lib/wall.loft` (entire file) | Wall geometry constants (`DX`, `DY`, `DZ`, `STEP`) and the wall placement / hex-edge helpers | Folds directly into `lib/world/src/` (e.g. as `wall.loft`) — does NOT extract as a standalone `wall` package.  Both dryopea (user-built walls + rock faces) and moros use this; it's a core primitive of the world library, not an optional addition. |
+| `lib/moros_*` | Group / height handling (per-hex layers, group adjacency) | Locate during execution; the consumer code is the ground truth for which pieces are game-agnostic |
+
+**Stays in `lib/moros_*/`:**
+- `palette.loft` (moros colour palette)
+- `spawn.loft` (moros spawn-point semantics)
+- Editor / UI / tools (`moros_editor`, `moros_ui`,
+  `moros_sim/{editor,player,tools}.loft`)
+- Renderer code that consumes the world model but is
+  visually moros-specific (`moros_render`)
+
+**Acceptance:**
+- `lib/world/` exposes hex addressing, wall geometry,
+  group / height handling — consumable by moros, dryopea,
+  TTT v5, audience demo without re-implementation.
+- `lib/world/` contains the folded-in wall primitives
+  (`DX`, `DY`, `DZ`, `STEP`, placement / edge helpers) as a
+  first-class API surface, not an internal detail.  Dryopea's
+  build-order walls and rock-face terrain both consume the
+  same primitive.
+- `lib/wall.loft` removed from `lib/` root; its content
+  lives under `lib/world/src/`.
+- `lib/moros_*/` contains only moros-game-specific code;
+  every `lib/moros_*/src/*.loft` `use world;` line resolves
+  cleanly.
+- Existing consumers (TTT v5 binary protocol, audience
+  demo) continue to work — the existing sparse Cell/Chunk
+  shape is preserved alongside the new hex-world additions
+  (two cell models coexist in one package; they share
+  addressing).
+- All moros demos render identically before and after the
+  split.
+- The dryopea plan ([@PLAN46](../../../plans/future/46-dryopea/README.md))
+  can begin its consumer code against `lib/world/`,
+  including user-built-wall placement and rock-face
+  geometry on top of the wall primitive.
+
+**Effort:** M (mechanical move + refactor of moros consumers).
+
+### Phase 7b — Extract `loft-moros` (moros-specific only)
+
+**Packages:** `moros_editor`, `moros_map` (game-only
+remnant after 7a), `moros_render`, `moros_sim`, `moros_ui`.
+
+**Why after 7a:** the shared world primitives must be in
+`lib/world/` and in `loft-libs-world` first; otherwise the
+moros chunk drags world handling into the moros repo and
+dryopea can't reuse it.
+
+**Why last overall:** mid-development; depends on
+`loft-libs-graphics` AND `loft-libs-world` (registry
+versions).  Extracts as a unit since the moros-specific
+packages co-evolve.
+
+**Acceptance:** as phase 4, plus the moros demo apps
+continue to build against the external moros chunk
+(consuming `loft-libs-world` + `loft-libs-graphics` from
+the registry).
+
+**Effort:** MH.
+
+### Phase 8 — Final monorepo cleanup
+
+After all chunks extracted:
+
+- `audience_crystal` stays in-monorepo (paired with the
+  audience demo).  Add a package `tests/` directory so it
+  joins the library CI gates (currently only covered by
+  cross-mode equivalence tests).
+- Decide fate of any unconverted single-file `lib/*.loft`
+  modules: keep in-monorepo or fold into a sibling chunk.
+- Update CLAUDE.md / lib_plans index entries that
+  reference moved libraries.
+- Update [`PACKAGES.md`](../../../PACKAGES.md) to reflect
+  monorepo-free state.
+
+**Acceptance:** `lib/` directory holds only
+`audience_crystal/` and any deliberately-retained
+single-file modules.  No `lib/*/native/` source-code crate
+references the monorepo `Cargo.toml` workspace.
+
+**Effort:** S.
+
+### Phase summary
+
+| Phase | Scope | Depends on | Effort |
+|---|---|---|---|
+| 1 | Drain library symbols from `src/native.rs`; convert single-file modules | — | M (3 subs) |
+| 2 | Compile-time native-registry aggregator | Phase 1 | M |
+| 3 | PKG.REG + cdylib loader land | PACKAGES.md § Open work | — (external) |
+| 4 | Extract `loft-libs-core` (arguments, random, crypto, shapes) | Phases 1-3 | M |
+| 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh) | Phase 4 + `../02-graphics/` | M |
+| 6 | Extract `loft-libs-net` (server, web, game_protocol) | Phase 4 + `../08-server/` | M |
+| 6w | Extract `loft-libs-world` (`world` expanded by 7a, optionally `wall`) | Phase 7a | M |
+| 7a | **Split moros**: move shared world primitives (hex, walls, groups, height, geometry) into `lib/world/` | Phase 4 (monorepo-internal, no registry needed) | M |
+| 7b | Extract `loft-moros` (moros-specific only after 7a) | Phases 5 + 6w + 7a | MH |
+| 8 | Monorepo cleanup + audience_crystal hardening | Phase 7b | S |
+
+The world split is monorepo-internal (Phase 7a) and can
+land before the registry is ready — it produces no
+user-visible change, only relocates files.  Phase 6w
+(world chunk extraction) then happens once 7a is stable
+and PKG.REG is live; it can interleave with 5 / 6 in
+either order.
 
 ## CI path for libraries (built 2026-05-23) — travels with each chunk
 
@@ -199,6 +552,23 @@ Listed here so future-you doesn't have to re-discover them.
 8. **Cross-library breaking changes.** When an extracted
    library evolves and an in-monorepo consumer needs
    updates, who tracks the migration?
+9. **World chunk vs graphics chunk.** `loft-libs-world` is
+   proposed as its own chunk because three games consume
+   it (moros, dryopea, audience demo) and dryopea blocks on
+   it.  Alternative: fold `world` into `loft-libs-graphics`
+   alongside `gridmesh` (also a geometry helper), keeping
+   the chunk count at 4.  Trade-off: a separate world chunk
+   is cleaner conceptually (no OpenGL coupling) but adds a
+   fifth repo for users to find.  Resolve before phase 6w.
+10. **Coexisting cell models in `lib/world/`.** Phase 7a
+    keeps the existing sparse Cell/Chunk shape (used by TTT
+    v5 + audience demo) alongside the new hex-world
+    additions (moros + dryopea).  Two cell shapes that share
+    addressing but differ in payload.  Decision: keep both
+    as separate types in one package, or generalise (one
+    parameterised cell type)?  Generalisation likely too
+    invasive for 0.8.x — default is "keep separate, share
+    addressing helpers".
 
 ## See also
 
