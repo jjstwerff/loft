@@ -372,6 +372,115 @@ pub(crate) fn tighten_cache_binary(path: &std::path::Path) {
     let _ = path;
 }
 
+/// Collect crate names → rlib paths from a deps directory
+/// (e.g. `libfoo-<hash>.rlib` → `("foo", "/path/to/libfoo-<hash>.rlib")`).
+pub(crate) fn rlibs_in_dir(
+    dir: &std::path::Path,
+) -> std::collections::HashMap<String, std::path::PathBuf> {
+    let mut map = std::collections::HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
+            {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if let Some(rest) = fname.strip_prefix("lib") {
+                    if let Some(dash_pos) = rest.rfind('-') {
+                        map.insert(rest[..dash_pos].to_string(), path);
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
+/// PKG.4/PKG.5: add `--extern` flags to a rustc command for native package rlibs.
+/// When `target` is `Some("wasm32-wasip2")`, looks for WASM rlibs in `prebuilt/wasm32-wasip2/`;
+/// otherwise looks for native rlibs in `native/target/release/`.
+///
+/// Uses `-L dependency=` for the native package's deps so deep transitive deps
+/// resolve. For any crate that also appears in loft's own deps, adds an explicit
+/// `--extern name=<loft's copy>` so rustc uses a single copy, avoiding
+/// StableCrateId collisions.
+///
+/// Shared by the standalone native compile (`main.rs`), the WASM compile, and
+/// the native test runner (`test_runner.rs`) so all three link a package's
+/// `#native` crate identically (LibCI native library gate).
+pub(crate) fn add_native_extern_flags(
+    cmd: &mut std::process::Command,
+    data: &crate::data::Data,
+    target: Option<&str>,
+    loft_deps_dir: Option<&std::path::Path>,
+) {
+    let loft_rlibs = loft_deps_dir.map(rlibs_in_dir).unwrap_or_default();
+
+    for (crate_name, pkg_dir) in &data.native_packages {
+        // Look for the compiled rlib in the package's native crate output.
+        let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
+        // P244-windows fix #2 (2026-05-12): use single-segment joins,
+        // not `.join("native/target/release")` with embedded slashes.
+        // When `pkg_dir` is a Windows extended-length path (`\\?\D:\…`),
+        // a multi-segment join string with `/` separators inside the
+        // verbatim namespace doesn't normalize and the resulting path
+        // doesn't match real on-disk files.  Each `.join("X")` with a
+        // single component is normalized correctly by `Path` semantics.
+        let rlib_path = if let Some(tgt) = target {
+            // WASM: check prebuilt first, then native/target/<target>/release/
+            let prebuilt = std::path::PathBuf::from(pkg_dir)
+                .join("prebuilt")
+                .join(tgt)
+                .join(&rlib_name);
+            if prebuilt.exists() {
+                prebuilt
+            } else {
+                std::path::PathBuf::from(pkg_dir)
+                    .join("native")
+                    .join("target")
+                    .join(tgt)
+                    .join("release")
+                    .join(&rlib_name)
+            }
+        } else {
+            // Native: check native/target/release/
+            std::path::PathBuf::from(pkg_dir)
+                .join("native")
+                .join("target")
+                .join("release")
+                .join(&rlib_name)
+        };
+        if rlib_path.exists() {
+            let extern_name = crate_name.replace('-', "_");
+            cmd.arg("--extern")
+                .arg(format!("{}={}", extern_name, rlib_path.display()));
+            // Add the native crate's deps directory so transitive deps (GL, glutin, etc.)
+            // resolve. Use `dependency` search scope so these crates are only found as
+            // transitive deps of the native crate, not as direct deps.
+            let deps_dir = rlib_path.parent().unwrap().join("deps");
+            if deps_dir.is_dir() {
+                cmd.arg("-L")
+                    .arg(format!("dependency={}", deps_dir.display()));
+                // Pin any crate that also exists in loft's deps to loft's copy,
+                // preventing StableCrateId collisions from duplicate rlibs.
+                if !loft_rlibs.is_empty() {
+                    let pkg_crates = rlibs_in_dir(&deps_dir);
+                    for (dep_name, loft_path) in &loft_rlibs {
+                        if pkg_crates.contains_key(dep_name) {
+                            cmd.arg("--extern").arg(format!(
+                                "{}={}",
+                                dep_name,
+                                loft_path.display()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod p254_cache_safety {
     use super::*;

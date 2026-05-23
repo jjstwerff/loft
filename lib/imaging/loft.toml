@@ -6,3 +6,10 @@ loft = ">=0.8"
 [library]
 entry = "src/imaging.loft"
 native = "loft_imaging"
+
+# Declares the COMPILE-time native crate so `--native` links the rlib
+# (`add_native_extern_flags`), not just the runtime dylib above.  Mirrors the
+# graphics package; without it `loft --native test` fails with P269
+# "no implementation in any registered native crate".
+[native]
+crate = "loft-imaging"

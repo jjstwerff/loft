@@ -1054,108 +1054,10 @@ fn registry_age_str(path: &std::path::Path) -> String {
     }
 }
 
-/// Collect crate names → rlib paths from a deps directory
-/// (e.g. `libfoo-<hash>.rlib` → `("foo", "/path/to/libfoo-<hash>.rlib")`).
-fn rlibs_in_dir(dir: &std::path::Path) -> std::collections::HashMap<String, std::path::PathBuf> {
-    let mut map = std::collections::HashMap::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
-            {
-                let fname = entry.file_name().to_string_lossy().to_string();
-                if let Some(rest) = fname.strip_prefix("lib") {
-                    if let Some(dash_pos) = rest.rfind('-') {
-                        map.insert(rest[..dash_pos].to_string(), path);
-                    }
-                }
-            }
-        }
-    }
-    map
-}
-
-/// PKG.4/PKG.5: add `--extern` flags to a rustc command for native package rlibs.
-/// When `target` is `Some("wasm32-wasip2")`, looks for WASM rlibs in `prebuilt/wasm32-wasip2/`;
-/// otherwise looks for native rlibs in `native/target/release/`.
-///
-/// Uses `-L dependency=` for the native package's deps so deep transitive deps
-/// resolve. For any crate that also appears in loft's own deps, adds an explicit
-/// `--extern name=<loft's copy>` so rustc uses a single copy, avoiding
-/// StableCrateId collisions.
-fn add_native_extern_flags(
-    cmd: &mut std::process::Command,
-    data: &data::Data,
-    target: Option<&str>,
-    loft_deps_dir: Option<&std::path::Path>,
-) {
-    let loft_rlibs = loft_deps_dir.map(|d| rlibs_in_dir(d)).unwrap_or_default();
-
-    for (crate_name, pkg_dir) in &data.native_packages {
-        // Look for the compiled rlib in the package's native crate output.
-        let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
-        // P244-windows fix #2 (2026-05-12): use single-segment joins,
-        // not `.join("native/target/release")` with embedded slashes.
-        // When `pkg_dir` is a Windows extended-length path (`\\?\D:\…`),
-        // a multi-segment join string with `/` separators inside the
-        // verbatim namespace doesn't normalize and the resulting path
-        // doesn't match real on-disk files.  Each `.join("X")` with a
-        // single component is normalized correctly by `Path` semantics.
-        let rlib_path = if let Some(tgt) = target {
-            // WASM: check prebuilt first, then native/target/<target>/release/
-            let prebuilt = std::path::PathBuf::from(pkg_dir)
-                .join("prebuilt")
-                .join(tgt)
-                .join(&rlib_name);
-            if prebuilt.exists() {
-                prebuilt
-            } else {
-                std::path::PathBuf::from(pkg_dir)
-                    .join("native")
-                    .join("target")
-                    .join(tgt)
-                    .join("release")
-                    .join(&rlib_name)
-            }
-        } else {
-            // Native: check native/target/release/
-            std::path::PathBuf::from(pkg_dir)
-                .join("native")
-                .join("target")
-                .join("release")
-                .join(&rlib_name)
-        };
-        if rlib_path.exists() {
-            let extern_name = crate_name.replace('-', "_");
-            cmd.arg("--extern")
-                .arg(format!("{}={}", extern_name, rlib_path.display()));
-            // Add the native crate's deps directory so transitive deps (GL, glutin, etc.)
-            // resolve. Use `dependency` search scope so these crates are only found as
-            // transitive deps of the native crate, not as direct deps.
-            let deps_dir = rlib_path.parent().unwrap().join("deps");
-            if deps_dir.is_dir() {
-                cmd.arg("-L")
-                    .arg(format!("dependency={}", deps_dir.display()));
-                // Pin any crate that also exists in loft's deps to loft's copy,
-                // preventing StableCrateId collisions from duplicate rlibs.
-                if !loft_rlibs.is_empty() {
-                    let pkg_crates = rlibs_in_dir(&deps_dir);
-                    for (dep_name, loft_path) in &loft_rlibs {
-                        if pkg_crates.contains_key(dep_name) {
-                            cmd.arg("--extern").arg(format!(
-                                "{}={}",
-                                dep_name,
-                                loft_path.display()
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+// `rlibs_in_dir` + `add_native_extern_flags` moved to `native_utils.rs` so the
+// native test runner (`test_runner.rs`, in the library crate) can link a
+// package's `#native` crate identically to the standalone + WASM native
+// compiles (LibCI native library gate).
 
 #[allow(clippy::too_many_lines)]
 fn main() {
@@ -1192,6 +1094,11 @@ fn main() {
     let mut generate_log_config: Option<Option<String>> = None;
     let mut format_mode: Option<(&'static str, String)> = None;
     let mut native_mode = true;
+    // LibCI: `loft test` / `--tests` default to the interpreter, but honour an
+    // EXPLICIT `--native` (matching the `--help` docs for `--tests --native`).
+    // Tracked separately because the `test`/`--tests` handlers force interpreter
+    // unless native was explicitly requested (regardless of arg order).
+    let mut native_requested = false;
     let mut native_release = false;
     // Plan-0.8.5 NDB.0 — `--native-debug` flag: pass `-Cdebuginfo=2`
     // to rustc, drop `-O` (unless `--native-release` is also set),
@@ -1355,13 +1262,16 @@ fn main() {
             introspect_all_fns = true;
         } else if a == "--native" {
             native_mode = true;
+            native_requested = true;
         } else if a == "--native-release" {
             native_mode = true;
+            native_requested = true;
             native_release = true;
         } else if a == "--native-debug" {
             // NDB.0 — emit DWARF; combine with --native-release if
             // optimised + debug-info is wanted.
             native_mode = true;
+            native_requested = true;
             native_debug = true;
         } else if a == "--dev-soft-halt" {
             // Plan-07 phase 4g.3 — demote dev-mode raises to
@@ -1414,7 +1324,8 @@ fn main() {
                 .is_some_and(|s| s == "--native" || s == "--no-warnings")
             {
                 if argv[i] == "--native" {
-                    // Note: --tests forces interpreter mode; this is a no-op.
+                    // LibCI: opt into native test compilation (matches --help).
+                    native_requested = true;
                 } else if argv[i] == "--no-warnings" {
                     no_warnings = true;
                 }
@@ -1425,7 +1336,11 @@ fn main() {
                 i += 1;
             }
             tests_dir = Some(path);
-            native_mode = false; // test runner uses interpreter
+            // The test runner defaults to the interpreter; an explicit --native
+            // (anywhere on the line) opts into native compilation per file.
+            if !native_requested {
+                native_mode = false;
+            }
         } else if a == "--no-warnings" {
             no_warnings = true;
         } else if a == "--check" || a == "check" {
@@ -1505,8 +1420,12 @@ fn main() {
                 lib_dirs.push(abs_src);
             }
             tests_dir = Some(test_target);
-            // Test runner uses the interpreter internally.
-            native_mode = false;
+            // `loft test` defaults to the interpreter; an explicit `--native`
+            // (e.g. `loft --native test draw`) compiles each test file to native
+            // Rust and runs it — the LibCI native library gate uses this.
+            if !native_requested {
+                native_mode = false;
+            }
         } else if a == "install" {
             let arg = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
                 i += 1;
@@ -1940,7 +1859,7 @@ fn main() {
             None
         };
         // PKG.5: add --extern flags for native packages (WASM target).
-        add_native_extern_flags(
+        native_utils::add_native_extern_flags(
             &mut cmd,
             &p.data,
             Some("wasm32-wasip2"),
@@ -2470,7 +2389,12 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 None
             };
             // PKG.4: add --extern flags for native packages.
-            add_native_extern_flags(&mut cmd, &p.data, None, native_deps_dir.as_deref());
+            native_utils::add_native_extern_flags(
+                &mut cmd,
+                &p.data,
+                None,
+                native_deps_dir.as_deref(),
+            );
             let output = cmd.output();
             let output = match output {
                 Ok(o) => o,

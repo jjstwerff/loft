@@ -779,3 +779,132 @@ fn native_tuple_return_script() -> std::io::Result<()> {
 // module resolution (`use render;` works only from inside the
 // graphics package's own src/ or examples/ dirs) — deferred to
 // Phase 5 polish; see doc/claude/plans/03-native-moros-editor/.
+
+/// Library packages whose tests do NOT yet compile/run under `--native`.
+/// These are pre-existing native-codegen / binding / runtime gaps (NOT linkage
+/// gaps — the `#native`-crate linkage was fixed via
+/// `native_utils::add_native_extern_flags` in the test runner, which recovered
+/// graphics/shapes/server/web/moros_render/moros_sim).  Tracked under @P321.
+const LIB_PKGS_NATIVE_SKIP: &[&str] = &[
+    "arguments", // @P321: native codegen — `()` doesn't implement `Display`.
+    "crypto",    // @P321: sha256/base64/hmac are interp-only registry symbols
+    // (no native crate, no codegen_runtime.rs impl) → P269 "no implementation".
+    "imaging",      // @P321: `#native` load_png/save_png signature mismatch (E0061).
+    "moros_editor", // @P321: native codegen panic in the generated `.rs`.
+    "moros_ui",     // @P321: compiles but 8 tests fail at runtime under native.
+    "random",       // @P321: native codegen panic in the generated `.rs`.
+];
+
+/// Specific library test FILES skipped under `--native` (the rest of the
+/// package DOES compile), keyed `"<pkg>/<file>.loft"`.
+const LIB_TESTS_NATIVE_SKIP: &[&str] = &[
+    // Network: live HTTPS to httpbin.org — same reason as the interpreter skip
+    // (wrap.rs::LIB_TESTS_SKIP).  Not a native gap.
+    "web/http.loft",
+    // @P321: native JSON round-trip path diverges; moros_map's other 7 files compile.
+    "moros_map/serial.loft",
+];
+
+/// True if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is skipped under the
+/// NATIVE library gate (its own codegen-gap list above; the interpreter gate's
+/// skips live in `wrap.rs::lib_test_skipped`).
+fn native_lib_test_skipped(entry: &Path) -> bool {
+    let file = entry
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let pkg = entry
+        .parent()
+        .and_then(|d| d.parent())
+        .and_then(|d| d.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if LIB_PKGS_NATIVE_SKIP.contains(&pkg.as_str()) {
+        return true;
+    }
+    let key = format!("{pkg}/{file}");
+    LIB_TESTS_NATIVE_SKIP.contains(&key.as_str())
+}
+
+/// Native counterpart of `wrap.rs::library_suite`: compile + run every
+/// `lib/<pkg>/tests/*.loft` under `--native`, skipping packages/files with known
+/// native-codegen gaps (`LIB_*_NATIVE_SKIP`, @P321).  Shells out
+/// `cd lib/<pkg> && loft --native test <stem>` so it reuses the CLI's package
+/// resolution AND the `#native`-crate linkage (`add_native_extern_flags`).
+///
+/// Holds `native_suite_lock` so it serialises with the other native suites
+/// (shared `/tmp` rlib + binary cache).  Skips silently when `rustc` / the loft
+/// rlib are unavailable, like `native_scripts`.
+#[test]
+fn native_library_suite() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if find_loft_rlib().is_none() {
+        println!("native_library_suite: skipped (no libloft.rlib / rustc unavailable)");
+        return Ok(());
+    }
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    let mut files: Vec<PathBuf> = Vec::new();
+    for pkg in std::fs::read_dir("lib")?.filter_map(|e| e.ok()) {
+        let tests_dir = pkg.path().join("tests");
+        if !tests_dir.is_dir() {
+            continue;
+        }
+        for f in std::fs::read_dir(&tests_dir)?.filter_map(|e| e.ok()) {
+            let p = f.path();
+            if p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+            {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    let mut failures: Vec<String> = Vec::new();
+    let mut ran = 0;
+    for entry in files {
+        if native_lib_test_skipped(&entry) {
+            println!("skip {entry:?} (LIB_*_NATIVE_SKIP — @P321)");
+            continue;
+        }
+        let pkg_dir = entry.parent().and_then(|d| d.parent()).unwrap_or(&entry);
+        let stem = entry
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        println!("native lib test {entry:?}");
+        let out = std::process::Command::new(loft_bin)
+            .current_dir(pkg_dir)
+            .args(["--native", "test", &stem])
+            .output()?;
+        ran += 1;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // `loft test` exits 0 even on a caught crash; detect failure by markers.
+        let failed = !out.status.success()
+            || combined.contains("SIGSEGV")
+            || combined.contains("panicked")
+            || combined.contains("native compile:")
+            || combined.contains("test result: FAILED")
+            || !combined.contains("test result: ok");
+        if failed {
+            let tail: Vec<&str> = combined.lines().rev().take(5).collect();
+            failures.push(format!("{entry:?}: {}", tail.join(" | ")));
+        }
+    }
+    if !failures.is_empty() {
+        return Err(Error::other(format!(
+            "{} of {ran} native library tests failed:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        )));
+    }
+    println!("native_library_suite: {ran} native library tests passed");
+    Ok(())
+}
