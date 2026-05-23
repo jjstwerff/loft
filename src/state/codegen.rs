@@ -538,10 +538,21 @@ impl State {
                 // add_op → operator() already advances stack.position; no manual +4/+12 needed.
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::from(*d_nr));
-                // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
-                let clos_pos = stack.position - stack.function.stack(*clos_var);
-                stack.add_op("OpVarRef", self);
-                self.code_add(clos_pos);
+                // @P328 — non-capturing closure has no closure variable;
+                // push a null DbRef sentinel instead.  Without this branch,
+                // `stack(u16::MAX)` panics with "index out of bounds".
+                // Triggered by the yield-rewrite at
+                // `parser/expressions.rs::yield` that wraps a bare
+                // `Value::Int(d_nr)` into `Value::FnRef(d_nr, u16::MAX, _)`
+                // so the yielded value is a full 20-byte fn-ref.
+                if *clos_var == u16::MAX {
+                    stack.add_op("OpNullRefSentinel", self);
+                } else {
+                    // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
+                    let clos_pos = stack.position - stack.function.stack(*clos_var);
+                    stack.add_op("OpVarRef", self);
+                    self.code_add(clos_pos);
+                }
                 *fn_type.clone()
             }
             Value::FnRefDnr(v_nr) => {
@@ -2146,20 +2157,33 @@ impl State {
         // Bypass the operator path and manually handle the stack adjustment.
         if name == "OpCoroutineNext" && parameters.len() >= 2 {
             // CO1.6a: parameters[0]=gen expr, parameters[1]=Int(value_size).
+            // @P327 — `value_size` packs two fields (encoding from
+            // `parser/collections.rs::iterator`):
+            //   * low byte  = byte size of the yielded value
+            //   * high byte = native channel tag (0 = legacy per-type,
+            //                                     1 = unified `next_into`)
+            // The interp dispatch only cares about the byte size; the
+            // native dispatch (`OpCoroutineNextEmitter`) reads both
+            // bytes.  Stack accounting uses ONLY the low byte — the high
+            // byte is a tag, not extra payload, so using the raw value
+            // here would push 0x0110 = 272 bytes of stack space for a
+            // 16-byte tuple yield and corrupt every subsequent var
+            // offset in the consumer frame.
             self.generate(&parameters[0], stack, false); // push DbRef (+12)
             let value_size = if let Value::Int(n) = &parameters[1] {
                 *n as u16
             } else {
                 4 // fallback: integer
             };
+            let byte_size = value_size & 0xFF;
             self.remember_stack(stack.position);
             super::emit_op(stack.data.def(op).op_code, self);
             self.code_add(value_size);
-            // Stack: -12 (DbRef consumed) + value_size (yielded value pushed).
+            // Stack: -12 (DbRef consumed) + byte_size (yielded value pushed).
             stack.position -= super::size_ref() as u16;
-            stack.position += value_size;
+            stack.position += byte_size;
             // Return type is the yield type — inferred from value_size for now.
-            return match value_size {
+            return match byte_size {
                 1 => Type::Boolean,
                 8 => crate::data::I64.clone(),
                 _ => I32.clone(),

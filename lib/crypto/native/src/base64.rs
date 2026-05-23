@@ -1,16 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Built-in base64 encoder kept in the compiler crate for one
-//! compiler-internal use: `main.rs::wasm_b64` base64-encodes the
-//! embedded WASM bytes in `--html` export.  The crypto LIBRARY's
-//! base64 lives in `lib/crypto/native/src/base64.rs` (its own copy
-//! of this file — pure-Rust, no external deps, kept in sync until
-//! the compiler stops needing base64 internally).  Decode + URL-safe
-//! encode are unused inside the compiler but stay here so the file
-//! mirrors the lib copy.
-
-#![allow(dead_code)]
+//! Built-in base64 encode/decode. Always available — no external deps.
 
 const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 

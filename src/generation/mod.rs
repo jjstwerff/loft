@@ -46,22 +46,12 @@ const NATIVE_LEAK_CHECK_TAIL: &str = "    if std::env::var(\"LOFT_NATIVE_LEAK_CH
 /// Pragmatic bar: any `t_<digits><alpha-prefix>_*` whose body is
 /// empty + no `#rust` + no `#native` is treated as a T-stub.  The
 /// caller already checks the empty-body branch.
-/// @P321a — `#native` symbols implemented in `src/codegen_runtime.rs` (reusing
-/// loft's zero-dep pure-Rust `crate::sha256` / `crate::base64`) rather than a
-/// package native crate.  Routed to `loft::codegen_runtime::<symbol>` so
-/// `--native` and WASM link them directly (and DCE drops them when unused).
-fn is_crypto_runtime_symbol(symbol: &str) -> bool {
-    matches!(
-        symbol,
-        "n_sha256"
-            | "n_hmac_sha256"
-            | "n_hmac_sha256_raw"
-            | "n_base64_encode"
-            | "n_base64_decode"
-            | "n_base64url_encode"
-    )
-}
-
+///
+/// Plan-12 phase 1a (2026-05-23) — `is_crypto_runtime_symbol` removed.
+/// Crypto symbols now live in `lib/crypto/native/` (declared via
+/// `lib/crypto/loft.toml::native = "loft_crypto"`); they route through
+/// the standard package native path instead of a hardcoded list in the
+/// compiler crate.
 fn is_t_param_stub(name: &str) -> bool {
     let Some(rest) = name.strip_prefix("t_") else {
         return false;
@@ -294,6 +284,15 @@ fn collect_fn_ref_literals(
         Value::FnRef(d_nr, _, _) if *d_nr >= 0 => {
             calls.insert((*d_nr).cast_unsigned());
         }
+        // @P328 — `yield <fn-ref>` for a non-capturing closure emits as
+        // `Value::Yield(Value::Int(d_nr))` (the parser drops the closure
+        // wrapper when there's nothing to capture).  Treat the inner Int
+        // as a fn-ref literal so the lambda stays reachable for native
+        // CallRef dispatch — without this the loop-body call `f(x)`
+        // panics at runtime with `invalid fn-ref: <d_nr>`.  Same shape
+        // as the @P299 fix for `OpSetInt4(field, pos, Int(d_nr))`;
+        // over-approximation is correctness-safe.
+        Value::Yield(inner) => collect_int_fn_refs(inner, calls),
         // Span wraps most operators for parser diagnostics — recurse so
         // Set / Call args that arrive as Span(...) still trigger the
         // fn-ref-literal walk.
@@ -2007,16 +2006,7 @@ extern crate loft;"
                 self.output_native_api_call(w, def_nr, rust_symbol)?;
             } else if !def.native.is_empty() {
                 // #native "symbol" — emit direct call with type marshalling.
-                if is_crypto_runtime_symbol(&def.native) {
-                    // @P321a — crypto `#native` symbols (sha256 / hmac / base64,
-                    // from lib/crypto) are implemented in `codegen_runtime`
-                    // reusing the zero-dependency pure-Rust `crate::sha256` /
-                    // `crate::base64`, so `--native` AND WASM link them without a
-                    // package crate or external dep (and DCE drops them when
-                    // unused).  Same text ABI as a package `#native` fn.
-                    let qualified = format!("loft::codegen_runtime::{}", def.native);
-                    self.output_native_direct_call(w, def_nr, &qualified)?;
-                } else if self.wasm_browser {
+                if self.wasm_browser {
                     // call the imported function directly (unqualified).
                     // The function is declared in the preamble via
                     // #[link(wasm_import_module = "loft_gl")].

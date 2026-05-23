@@ -10,27 +10,41 @@ repository out into per-family external GitHub repositories,
 each consumable via the package registry.
 
 This is the **execution arc** for **PKG.EXTRACT** in
-[ROADMAP.md](../../../ROADMAP.md).  The infrastructure work
+[ROADMAP.md](../../ROADMAP.md).  The infrastructure work
 (package registry MVP, lock file, format extensions) lives
 in the sibling plan
-[PACKAGES.md § Open work](../../../PACKAGES.md#open-work).  This plan picks up
+[PACKAGES.md § Open work](../../PACKAGES.md#open-work).  This plan picks up
 once the infrastructure ships.
 
 ## Status
 
-**Blocked** on two prerequisites:
+**ACTIVE 2026-05-23** — promoted from `future/`.  Trigger:
+@P321c diagnosis revealed the project keeps re-adding library
+code to the compiler crate (`src/codegen_runtime.rs` —
+`n_sha256` via @P321a, the half-finished `n_load_png` /
+`n_save_png` attempts during @P321c).  Activating this plan
+reframes the goal: instead of adding MORE library code to
+the compiler crate, **drain what's already there**.
+
+Two prerequisites still gate the external-repo move:
 
 1. **PKG.REG** (central registry MVP) landing in
-   [PACKAGES.md § Open work](../../../PACKAGES.md#open-work).
+   [PACKAGES.md § Open work](../../PACKAGES.md#open-work).
    Until `loft install <name>` works against a registry, there's
    no consumption path for an extracted library.
 2. **Compiler-crate decoupling** — see
    [§ Prerequisite — decouple the compiler crate from library code](#prerequisite--decouple-the-compiler-crate-from-library-code)
    below.  Today the loft compiler still carries library Rust
-   (`n_sha256` and 18 others in `src/native.rs`), and the package
-   manifest's `[native.functions]` table is consumed but the
-   native registry is still hand-maintained.  Until the compiler
-   crate carries zero library code, "extraction" is cosmetic.
+   (`n_sha256` and 18 others in `src/native.rs`, plus crypto in
+   `src/codegen_runtime.rs`), and the package manifest's
+   `[native.functions]` table is consumed but the native registry
+   is still hand-maintained.  Until the compiler crate carries
+   zero library code, "extraction" is cosmetic.
+
+The **prerequisite arc (Phase 1 — drain `src/native.rs` of
+library symbols)** is unblocked NOW and is the first
+actionable work under this plan.  PKG.REG is the gate on
+the EXTERNAL-REPO move; the internal drain doesn't need it.
 
 When unblocked: per-library extraction proceeds on its own
 validated schedule.  Some libraries may extract early
@@ -107,6 +121,31 @@ contains zero library code or library blueprints — only the
 language core (`default/*.loft` stays), runtime, codegen, and
 stdlib symbols**.
 
+### Stdlib vs library — the boundary (settled 2026-05-23)
+
+**stdlib STAYS in the loft compiler crate; libraries are
+extracted.**  This boundary is not subject to drain — it's the
+permanent boundary between the language and its ecosystem.
+
+| What's stdlib (stays in `src/`) | What's library (extracts to `lib/<X>/native/`) |
+|---|---|
+| `n_panic`, `n_assert` — fault primitives | `n_sha256` / `n_hmac_sha256` / `n_base64_*` — crypto |
+| `n_log_info` / `_warn` / `_error` / `_fatal` — logging | `n_http_do` / `n_http_body` / web bridges — web |
+| `n_json_parse` / `n_json_*` / JsonValue API — JSON (P54) | `n_rand` / `n_rand_seed` / `n_rand_indices` — random |
+| `n_parallel_*` (rayon-backed) — threading primitives | `n_load_png` / `n_save_png` — imaging |
+| `n_now`, `n_ticks` — clock | `n_sleep_ms` — sleep (web/time library) |
+| `n_path_sep`, `n_hash_sorted` — runtime utility | OpenGL bindings (`gl_*`) — graphics |
+| `n_stack_trace` — introspection | TCP / WebSocket / TLS — server / web |
+| `n_get_store_lock` / `n_protect_store_frees` — concurrency runtime | `n_arguments` — CLI parsing (`lib/arguments`) |
+
+Stdlib symbols are the ones every loft program could plausibly
+need; library symbols are opt-in via `use <lib>`.  The drain
+work below only targets the right column.  The `CODEGEN_RUNTIME_FNS`
+registry in `src/codegen_runtime.rs` already mostly lists the
+left column — the drain removes the right-column entries that
+crept in (crypto via @P321a, random via @P321f) and prevents
+new ones (@P321c was reverted along these lines 2026-05-23).
+
 ### Tier A — pure-loft, ready today (12)
 
 `arguments`, `audience_crystal`, `game_protocol`, `gridmesh`,
@@ -129,7 +168,7 @@ in `lib/<X>/native/src/` and are NOT duplicated in
 declarations sit in the package's own `.loft` file.  Today
 these are linked as workspace members; to leave the
 monorepo entirely they need the cdylib loader
-([PACKAGES.md `extensions.rs`](../../../PACKAGES.md), designed
+([PACKAGES.md `extensions.rs`](../../PACKAGES.md), designed
 but not integrated).
 
 ### Tier C — leaking native, must drain first (2)
@@ -218,7 +257,7 @@ Proposed chunks (refine before the first extraction):
 | `loft-libs-core` | `arguments`, `random`, `crypto`, `shapes` | Small, stable, no graphics deps — extract first |
 | `loft-libs-graphics` | `graphics`, `imaging`, `gridmesh` | Graphics stack + `#native` crates; coordinate with [`../02-graphics/`](../02-graphics/) |
 | `loft-libs-net` | `server`, `web`, `game_protocol` | HTTP / multiplayer; coordinate with [`../08-server/`](../08-server/) |
-| `loft-libs-world` | `world` (expanded by Phase 7a to absorb moros's shared spatial primitives: hex addressing, wall geometry, groups, height, coupled geometry).  Folds in `lib/wall.loft` content rather than carrying `wall` as a separate package. | Shared map / spatial primitives consumed by TTT v5, audience demo, moros, dryopea ([@PLAN46](../../../plans/future/46-dryopea/README.md)).  Lives in its own chunk because consumers span multiple games and the dryopea plan blocks on it. |
+| `loft-libs-world` | `world` (expanded by Phase 7a to absorb moros's shared spatial primitives: hex addressing, wall geometry, groups, height, coupled geometry).  Folds in `lib/wall.loft` content rather than carrying `wall` as a separate package. | Shared map / spatial primitives consumed by TTT v5, audience demo, moros, dryopea ([@PLAN46](../../plans/future/46-dryopea/README.md)).  Lives in its own chunk because consumers span multiple games and the dryopea plan blocks on it. |
 | `loft-moros` | `moros_editor`, `moros_map` (game-only remnant after Phase 7a), `moros_render`, `moros_sim`, `moros_ui` | The moros RPG stack; depends on `loft-libs-graphics` AND `loft-libs-world`; extract last (mid-development) |
 
 `lib/audience_crystal/` (the projector's crystal mesh-gen prototype that
@@ -323,16 +362,45 @@ Owned by this plan, no external dependency.  Moves library
 Rust out of the compiler crate so later phases can extract
 cleanly.
 
-| Sub | Work | Effort |
-|---|---|---|
-| 1a | Move 6 fns (`n_sha256`, `n_hmac_sha256`, `n_base64_*`) from `src/native.rs` into new `lib/crypto/native/` crate | XS |
-| 1b | Move 13 fns from `src/native.rs` into `lib/web/native/` crate (the dir already exists with 6 symbols; this adds the remaining 13) | S |
-| 1c | Resolve the 8 single-file `lib/*.loft` modules per [§ Single-file modules — destinations decided](#single-file-loftloft-modules-8--destinations-decided): convert at most 1 (`logger.loft`, pending Open Q #11) to package format; the other 7 either fold into `lib/world/` in Phase 7a (`wall.loft`, `overland.loft`) or stay as monorepo-internal tooling (`code.loft`, `lexer.loft`, `parser.loft`, `docs.loft`, `testlib.loft`). | XS-S |
+| Sub | Work | Effort | Status |
+|---|---|---|---|
+| 1a | Move 6 fns (`n_sha256`, `n_hmac_sha256`, `n_hmac_sha256_raw`, `n_base64_encode`, `n_base64_decode`, `n_base64url_encode`) from `src/native.rs` AND the @P321a duplicates in `src/codegen_runtime.rs` into new `lib/crypto/native/` cdylib.  Also moves `src/sha256.rs` out (only crypto used it); `src/base64.rs` stays (compiler-internal `main.rs::wasm_b64` use for `--html` export) but a copy ships with `lib/crypto/native`. | XS | **DONE 2026-05-23** — `lib/crypto/native/{Cargo.toml,src/{lib.rs,sha256.rs,base64.rs}}` ships the 6 fns via the standard `loft_ffi::loft_register!` ABI; `lib/crypto/loft.toml` declares `native = "loft_crypto"`; `is_crypto_runtime_symbol` removed from `src/generation/mod.rs`; both interp + `--native` crypto tests pass 6/6. |
+| 1b | Move 13 fns from `src/native.rs` into `lib/web/native/` crate (the dir already exists with 6 symbols; this adds the remaining 13) | S | pending |
+| 1c | Resolve the 8 single-file `lib/*.loft` modules per [§ Single-file modules — destinations decided](#single-file-loftloft-modules-8--destinations-decided): convert at most 1 (`logger.loft`, pending Open Q #11) to package format; the other 7 either fold into `lib/world/` in Phase 7a (`wall.loft`, `overland.loft`) or stay as monorepo-internal tooling (`code.loft`, `lexer.loft`, `parser.loft`, `docs.loft`, `testlib.loft`). | XS-S | pending |
 
-**Acceptance:** `grep '^fn n_' src/native.rs` returns only
-symbols backing `default/*.loft` (the standard library)
-and runtime helpers — no library symbols.  All `lib/*/`
-directories have `loft.toml`.
+**Acceptance gate — `tests/extraction_hygiene.rs`.**  Every Phase 1
+sub-task ends by adding its drained `n_*` symbol names to the
+`FORBIDDEN_LIBRARY_SYMBOLS` list in `tests/extraction_hygiene.rs`.
+The test:
+
+1. Walks `src/**/*.rs`, skips `//` comments, fails if any code
+   position contains a listed symbol name.  Word-boundary match
+   so `n_sha256` matches but not `not_n_sha256_oops` etc.
+2. Reads the main crate's `Cargo.toml`, fails if it lists any
+   library-only dep from `FORBIDDEN_MAIN_CRATE_DEPS` (currently
+   empty — filled in as cdylib loading lets libraries' deps move
+   to their own `native/Cargo.toml` instead of the main one).
+
+This is the **finisher**: each drain sub-task is "complete" when
+the symbol(s) appear in `FORBIDDEN_LIBRARY_SYMBOLS` AND the test
+passes.  The list itself is the audit trail — searching for a
+`n_*` name in the test file tells future contributors "this
+symbol used to live in the compiler crate and was drained in
+phase X".  A future @P321-style attempt to add `n_load_png` /
+`n_save_png` (or any other library symbol) to `src/codegen_runtime.rs`
+fails CI on this gate.
+
+Stdlib symbols (`n_panic`, `n_assert`, `n_log_*`, `n_json_*`,
+`n_parallel_*`, `n_now`, `n_ticks`, `n_path_sep`, `n_hash_sorted`,
+`n_stack_trace`, `n_get_store_lock`, `n_protect_store_frees`) are
+deliberately NOT in the list — they stay in the compiler crate by
+design (see [§ Stdlib vs library — the boundary](#stdlib-vs-library--the-boundary-settled-2026-05-23)).
+
+**Backstop acceptance for the whole phase:** `grep '^fn n_'
+src/native.rs` returns only symbols backing `default/*.loft` and
+runtime helpers (no library symbols); all `lib/*/` directories
+have `loft.toml`.  The automated gate above is the day-to-day
+check; this manual check is the audit form.
 
 ### Phase 2 — Compile-time native-registry aggregator
 
@@ -352,7 +420,7 @@ library entries.  Compiler crate carries no library code.
 
 Phases 4-7 cannot proceed until both:
 - **PKG.REG** — registry MVP from [PACKAGES.md § Open
-  work](../../../PACKAGES.md#open-work).
+  work](../../PACKAGES.md#open-work).
 - **cdylib loader** (`extensions.rs`) — also in PACKAGES.md
   § Open work; required so registry-installed packages
   contribute their `#native` symbols at install time.
@@ -450,7 +518,7 @@ interpreter + native + leak gates).
 
 Before moros extracts, the parts that aren't moros-specific
 move into `lib/world/`.  This unblocks dryopea
-([@PLAN46](../../../plans/future/46-dryopea/README.md)),
+([@PLAN46](../../plans/future/46-dryopea/README.md)),
 keeps the existing TTT v5 + audience-generative-art
 consumers of `lib/world/` working, and makes the eventual
 `loft-moros` chunk genuinely moros-game-only.
@@ -510,7 +578,7 @@ walkable battlements, terrain rock faces).
   addressing).
 - All moros demos render identically before and after the
   split.
-- The dryopea plan ([@PLAN46](../../../plans/future/46-dryopea/README.md))
+- The dryopea plan ([@PLAN46](../../plans/future/46-dryopea/README.md))
   can begin its consumer code against `lib/world/`,
   including user-built-wall placement and rock-face
   geometry on top of the wall primitive.
@@ -594,7 +662,7 @@ After all chunks extracted:
   modules: keep in-monorepo or fold into a sibling chunk.
 - Update CLAUDE.md / lib_plans index entries that
   reference moved libraries.
-- Update [`PACKAGES.md`](../../../PACKAGES.md) to reflect
+- Update [`PACKAGES.md`](../../PACKAGES.md) to reflect
   monorepo-free state.
 
 **Acceptance:** `lib/` directory holds only
@@ -654,8 +722,8 @@ unchanged to each extracted chunk (it keys off `lib/<pkg>/tests/*.loft` +
 | Gate | Where | Covers |
 |---|---|---|
 | Interpreter | `tests/wrap.rs::library_suite` | every `lib/*/tests/*.loft` via `loft test` (subprocess, package-resolved); skips via `lib_test_skipped` (`LIB_PKGS_SKIP` / `LIB_TESTS_SKIP`) |
-| Native | `tests/native.rs::native_library_suite` | the same via `loft --native test` (compiles each to native Rust, linking the package's `#native` crate); skips `LIB_PKGS_NATIVE_SKIP` / `LIB_TESTS_NATIVE_SKIP` (native-codegen gaps, [@P321](../../../PROBLEMS.md)) |
-| Leak | `tests/wrap.rs` `run_test` gate | unfreed stores at program exit fail; allowlist `SCRIPTS_LEAK_ALLOW` ([@P322](../../../PROBLEMS.md)) |
+| Native | `tests/native.rs::native_library_suite` | the same via `loft --native test` (compiles each to native Rust, linking the package's `#native` crate); skips `LIB_PKGS_NATIVE_SKIP` / `LIB_TESTS_NATIVE_SKIP` (native-codegen gaps, [@P321](../../PROBLEMS.md)) |
+| Leak | `tests/wrap.rs` `run_test` gate | unfreed stores at program exit fail; allowlist `SCRIPTS_LEAK_ALLOW` ([@P322](../../PROBLEMS.md)) |
 | WASM | **Not yet implemented** — known gap, see [§ WASM gate](#wasm-gate--known-gap-before-chunk-extraction-starts) below | Should run `loft --native-wasm test` per package once the infrastructure exists |
 | Quick dev loop | `make test-packages` | interpreter-only shell loop over every package test (dev-only, in `ci-full`; the cargo suites above are the gates) |
 
@@ -667,8 +735,8 @@ libraries needed before living outside the monorepo (Open question #4 below).
 
 ### WASM gate — known gap before chunk extraction starts
 
-`--native-wasm` is loft's third backend ([WASM.md](../../../WASM.md)) and
-PACKAGES.md's [target matrix](../../../PACKAGES.md#target-matrix) lists
+`--native-wasm` is loft's third backend ([WASM.md](../../WASM.md)) and
+PACKAGES.md's [target matrix](../../PACKAGES.md#target-matrix) lists
 `wasm32-wasip2` as a first-class output.  Today the library CI gate
 covers interpreter + native but NOT WASM — there is no `wasm_library_suite`
 equivalent of `native_library_suite`.
@@ -804,9 +872,21 @@ B4. **Re-validate.**  Run `make ci` again.  Green here =
     the monorepo.
 
 B5. **Document** the extraction in
-    [CHANGELOG.md](../../../../../CHANGELOG.md) (user-facing)
+    [CHANGELOG.md](../../../../CHANGELOG.md) (user-facing)
     and link the chunk repo from CLAUDE.md's doc index
     if appropriate.
+
+B6. **Finisher — update `tests/extraction_hygiene.rs`.**  Add
+    every `n_*` symbol the chunk's libraries owned to
+    `FORBIDDEN_LIBRARY_SYMBOLS` (with the owning
+    `lib/<X>/native` path).  If the extraction removed a
+    library-only dep from the main `Cargo.toml`, also add
+    it to `FORBIDDEN_MAIN_CRATE_DEPS`.  The CI gate then
+    locks the drain — a future PR that re-adds the symbol
+    or dep to the compiler crate fails before merge.
+    Same finisher applies to Phase 1 sub-tasks
+    (1a / 1b / 1c) even though they don't go through
+    Stage A/B (no external repo for an internal drain).
 
 ### Stage C — Ongoing maintenance
 
@@ -908,9 +988,9 @@ Listed here so future-you doesn't have to re-discover them.
 
 ## See also
 
-- [PACKAGES.md § Open work](../../../PACKAGES.md#open-work) — package registry +
+- [PACKAGES.md § Open work](../../PACKAGES.md#open-work) — package registry +
   format infrastructure (PREREQUISITE)
-- [`../../../PACKAGES.md`](../../../PACKAGES.md) — package
+- [`../../PACKAGES.md`](../../PACKAGES.md) — package
   format reference
 - Sibling library plans whose libraries appear in the
   inventory above:
@@ -918,5 +998,5 @@ Listed here so future-you doesn't have to re-discover them.
   - [`../05-game-infra/`](../05-game-infra/) — game infra
   - [`../08-server/`](../08-server/) — server library
   - [`../10-game-client/`](../10-game-client/) — game client
-- [`../../../ROADMAP.md`](../../../ROADMAP.md) — milestone
+- [`../../ROADMAP.md`](../../ROADMAP.md) — milestone
   placement (PKG.EXTRACT scheduled 1.1+)

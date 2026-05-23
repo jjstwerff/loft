@@ -3555,13 +3555,35 @@ impl Parser {
             "next" if types.len() == 1 => {
                 // CO1.6a: next(gen) — advance a coroutine iterator.
                 // Encode value_size as second parameter so codegen can emit it.
+                // @P327 — same encoding as the for-loop's `iterator()` path
+                // in `parser/collections.rs`: high byte = channel tag
+                // (1 = unified `next_into` for tuple yields).  Without this,
+                // manual `next()` on `iterator<(integer, integer)>` routes
+                // through the legacy text channel (size 16 ≡ `&str`) and
+                // returns a `String` where Rust expected a tuple.
                 if let Type::Iterator(inner, _) = &types[0] {
                     let yield_tp = (**inner).clone();
-                    let value_size =
-                        crate::variables::size(&yield_tp, &crate::data::Context::Argument);
+                    let byte_size = i32::from(crate::variables::size(
+                        &yield_tp,
+                        &crate::data::Context::Argument,
+                    ));
+                    // @P327 / @P328 — same packed encoding as the
+                    // for-loop's `iterator()` path; tag 1 = tuple-of-i64,
+                    // tag 2 = fn-ref.
+                    let channel_tag: i32 = if matches!(&yield_tp,
+                        Type::Tuple(elems) if !elems.is_empty()
+                        && elems.iter().all(|e| matches!(e, Type::Integer(_) | Type::Float)))
+                    {
+                        1
+                    } else if matches!(&yield_tp, Type::Function(_, _, _)) {
+                        2
+                    } else {
+                        0
+                    };
+                    let value_size: i32 = (channel_tag << 8) | byte_size;
                     let op = self.data.def_nr("OpCoroutineNext");
                     let mut args = list.to_vec();
-                    args.push(Value::Int(i32::from(value_size)));
+                    args.push(Value::Int(value_size));
                     *val = Value::Call(op, args);
                     return yield_tp;
                 }

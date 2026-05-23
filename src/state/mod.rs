@@ -882,11 +882,23 @@ impl State {
                     self.text_positions.extend(saved);
                 }
 
-                // S28 (debug-only): detect store mutations between yield and resume.
-                // CO1.9/S28: detect store mutations between yield and resume.
-                // Any live store whose generation changed since the last yield may have
-                // invalidated DbRef locals held by the suspended generator.  The guard
-                // is always-on (was debug-only before CO1.9) so it fires in release too.
+                // S28: detect store mutations between yield and resume.  Any
+                // live store whose generation changed since the last yield
+                // MAY have invalidated DbRef locals held by the suspended
+                // generator.  Because the guard snapshots EVERY live store
+                // at yield (not just stores the frame's DbRef locals point
+                // at), it false-positives on the most basic
+                // iterator-consumer idioms — e.g. `out += [v]` inside
+                // `for v in gen()` over an integer generator (the consumer
+                // mutates `out`'s store; the generator holds no DbRefs;
+                // there's no UAF hazard).  @P324 narrows this by demoting
+                // the assert to a debug-only warning until a precise
+                // narrowing (snapshot only stores reachable via the
+                // suspended frame's DbRef variables) lands.  Production
+                // code reads a stale DbRef as garbage rather than panicking,
+                // which matches the rest of the interpreter's UAF-class
+                // failure mode (Stores::valid only bounds-checks).
+                #[cfg(debug_assertions)]
                 {
                     let saved_gens: Vec<(u16, u32)> = self
                         .coroutine_frame_mut(idx)
@@ -898,13 +910,14 @@ impl State {
                             .allocations
                             .get(store_nr as usize)
                             .map_or(0, |s| s.generation);
-                        assert!(
-                            cur_gen == saved_gen,
-                            "stale DbRef: store {store_nr} was mutated between coroutine \
-                             yields (generation at yield: {saved_gen}, now: {cur_gen}). \
-                             DbRef locals held by the generator may point to freed or \
-                             reallocated records — see CAVEATS.md S28"
-                        );
+                        if cur_gen != saved_gen {
+                            eprintln!(
+                                "S28 warning: store {store_nr} was mutated between coroutine \
+                                 yields (generation at yield: {saved_gen}, now: {cur_gen}). \
+                                 If the suspended generator holds a DbRef into this store, \
+                                 it may read stale data on resume — see CAVEATS.md S28 / @P324."
+                            );
+                        }
                     }
                 }
 

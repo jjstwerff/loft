@@ -1298,6 +1298,24 @@ impl Parser {
         ));
         let fld = Value::Int(i32::from(u16::MAX));
         let comp_var = self.create_unique("comp", in_t);
+        // @P325 — coroutine comprehensions `[for v in gen() { … }]` had NO
+        // termination check in the loop body (the `!matches!(Iterator)`
+        // guard below skipped it entirely), so they ran forever appending
+        // to the result vector until the underlying store overflowed its
+        // 2 GiB word limit (`src/store.rs:643`).  Mirror the @P327 fix in
+        // `collections.rs::iter_for`: when iterating a coroutine, emit
+        // `OpCoroutineExhausted(__gen_N)` as the loop's break condition.
+        // The generator var is the first arg of `OpCoroutineNext` inside
+        // `for_next` (`Set(for_var, OpCoroutineNext(__gen_N, value_size))`).
+        let coroutine_gen_var = if matches!(in_type, Type::Iterator(_, _))
+            && let Value::Set(_, rhs) = &for_next
+            && let Value::Call(_, next_args) = rhs.as_ref()
+            && let Some(Value::Var(v)) = next_args.first()
+        {
+            *v
+        } else {
+            u16::MAX
+        };
         let mut lp = vec![for_next];
         if !matches!(in_type, Type::Iterator(_, _)) {
             let mut test_for = Value::Var(for_var);
@@ -1305,6 +1323,13 @@ impl Parser {
             test_for = self.cl("OpNot", &[test_for]);
             lp.push(v_if(
                 test_for,
+                v_block(vec![Value::Break(0)], Type::Void, "break"),
+                Value::Null,
+            ));
+        } else if coroutine_gen_var != u16::MAX {
+            let test_exhausted = self.cl("OpCoroutineExhausted", &[Value::Var(coroutine_gen_var)]);
+            lp.push(v_if(
+                test_exhausted,
                 v_block(vec![Value::Break(0)], Type::Void, "break"),
                 Value::Null,
             ));

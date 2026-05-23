@@ -1496,8 +1496,29 @@ fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {
                     ls.push(v);
                 }
             } else if block.result == Type::Void {
-                ls.push(o.clone());
-                ls.push(Value::Return(Box::new(Value::Null)));
+                // @P322 — when the function body ends with a nested
+                // Void-result block whose last op is `Return(...)` (the
+                // iterator-generator shape: `for n in […] { yield n; }
+                // return null;`), the OUTER-scope frees passed in via
+                // `free` must run BEFORE the return so function-scope
+                // owned locals (`__vdb_*` vector backings, etc.) get
+                // cleaned up.  Prior to this fix the void branch
+                // dropped `free` entirely and only emitted the inner
+                // `Return` + a redundant trailing `Return(Null)`, so
+                // function-scope vectors leaked at program exit.
+                let o_is_terminal = expr_ends_in_return(o);
+                if o_is_terminal {
+                    for v in free {
+                        ls.push(v.clone());
+                    }
+                    ls.push(o.clone());
+                } else {
+                    ls.push(o.clone());
+                    for v in free {
+                        ls.push(v.clone());
+                    }
+                    ls.push(Value::Return(Box::new(Value::Null)));
+                }
             } else {
                 for v in free {
                     ls.push(v.clone());

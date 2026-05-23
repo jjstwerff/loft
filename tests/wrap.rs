@@ -317,18 +317,20 @@ fn ignored_scripts() -> HashSet<&'static str> {
 /// Grandfathered here so `run_test`'s leak gate catches NEW leaks (regressions)
 /// without churning these.  A file is removed once its program-end frees are
 /// tightened.
-const SCRIPTS_LEAK_ALLOW: &[&str] = &[
-    "06-structs.loft",         // Point / Circle / Object / main_vector<Area> at exit
-    "11-vectors.loft",         // main_vector<integer> + transient temps at exit
-    "37-stress.loft",          // main_vector<integer> / main_vector<text> at exit
-    "51-coroutines.loft",      // main_vector<integer> at exit
-    "93-vector-advanced.loft", // main_vector<VElm> at exit
-    "96-slot-assign.loft",     // SAItem / SABag at exit
-    "07-vector.loft",          // tests/docs: main_vector<integer> + temps at exit
-    "16-parser.loft",          // tests/docs: File / Parser / main_vector<text> at exit
-    "15-lexer.loft",           // tests/docs: Lexer / main_vector<text> at exit
-    "23-safety.loft",          // tests/docs: program-end allocations at exit
-];
+///
+/// 2026-05-23 audit (@P322): nine of the original ten entries were
+/// false-positives — scripts that abort mid-main via `raise(OOB / DivByZero /
+/// AssertFailed)` so the dispatch loop short-circuits before scope-cleanup ops
+/// emit (06-structs / 11-vectors / 37-stress / 93-vector-advanced /
+/// 96-slot-assign / 07-vector / 16-parser / 15-lexer / 23-safety).  The new
+/// `runtime_error.is_none()` gate (below) skips the leak check for those, so
+/// they no longer need grandfathering.  The remaining real leak —
+/// `51-coroutines.loft` leaking the `[10, 20, 30]` literal from
+/// `nums_p219()`'s for-yield body — was FIXED 2026-05-23 by
+/// `scopes::insert_free` emitting outer-scope frees before a nested
+/// Void-block's terminal `Return`.  List is now empty; the leak gate
+/// fails on any NEW leak.
+const SCRIPTS_LEAK_ALLOW: &[&str] = &[];
 
 /// Per-package library tests that BOTH the interpreter (`library_suite`) and
 /// native (`tests/native.rs::native_library_suite`) suites skip, keyed by
@@ -1143,24 +1145,35 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
         // the file is grandfathered in SCRIPTS_LEAK_ALLOW (pre-existing
         // program-end allocations).  This turns the script corpus into a leak
         // regression net — a NEW leak in any non-allowlisted script fails CI.
-        state.check_store_leaks();
-        let leaks = state.collect_store_leaks();
-        if !leaks.is_empty() {
-            let fname = entry
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            if SCRIPTS_LEAK_ALLOW.contains(&fname.as_str()) {
-                println!("  (grandfathered leak — SCRIPTS_LEAK_ALLOW) {path}");
-            } else {
-                return Err(Error::other(format!(
-                    "{path}: {} store(s) leaked at program exit: {} — fix the \
-                     scope-free, or add the file to SCRIPTS_LEAK_ALLOW if it is \
-                     an intentional program-end allocation",
-                    leaks.len(),
-                    leaks.join(", ")
-                )));
+        //
+        // Skip the leak check when a runtime error halted execution mid-main:
+        // the dispatch loop short-circuits on `runtime_error`, so the
+        // remaining scope-cleanup ops (`OpFreeRef` / `OpFreeText`) never run
+        // and the residual stores are NOT a real leak — they are abort
+        // artifacts.  Mirrors CLI behaviour in `src/main.rs` (lines 2690-2693).
+        // Without this gate, scripts that intentionally probe OOB / div-by-zero
+        // mid-main (e.g. `assert(!v[OOB], "OOB is null")`) would always
+        // false-positive on the leak gate.
+        if state.database.runtime_error.is_none() {
+            state.check_store_leaks();
+            let leaks = state.collect_store_leaks();
+            if !leaks.is_empty() {
+                let fname = entry
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if SCRIPTS_LEAK_ALLOW.contains(&fname.as_str()) {
+                    println!("  (grandfathered leak — SCRIPTS_LEAK_ALLOW) {path}");
+                } else {
+                    return Err(Error::other(format!(
+                        "{path}: {} store(s) leaked at program exit: {} — fix the \
+                         scope-free, or add the file to SCRIPTS_LEAK_ALLOW if it is \
+                         an intentional program-end allocation",
+                        leaks.len(),
+                        leaks.join(", ")
+                    )));
+                }
             }
         }
     }

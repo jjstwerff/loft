@@ -5,8 +5,21 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLAN16 — Coroutine validation: yielded-type × drive-context matrix
 
-**Status: pre-flight 2026-05-04 surfaced 0/7 cells passing.  @P210
-closed 2026-05-04, @P211 closed 2026-05-05.**
+**Status: ACTIVE 2026-05-23 (moved from `plans/future/` per audience-demo
+session feedback).  Pre-flight 2026-05-04 surfaced 0/7 cells passing.
+@P210 closed 2026-05-04, @P211 closed 2026-05-05.**
+
+**Why active now:** coroutines remain too brittle between the
+interpreter and `--native` backend for confident library work
+(see @P322 — the surviving real leak is `51-coroutines.loft`'s
+for-loop-driven iterator over a vector literal, and a single
+small repro this session was enough to surface it).  Each new
+consumer of `iterator<T>` (generators in the audience-demo,
+moros_sim event-streams, future stream parsers) keeps tripping
+the same interp/native divergence in a slightly different cell
+of the matrix.  This plan IS the toolkit for nailing those
+divergences down at the cell level so the iterator library can
+then be built on a known-good surface.
 
 @P210: `collect_segments` in `src/generation/coroutine.rs` now
 recognises `Value::Loop` (while) alongside `Value::Block` (for),
@@ -132,7 +145,8 @@ Each cell `(Yi, Xj)` has one of:
 | Phase | Yield rows | Drive cols | Outcome |
 |---|---|---|---|
 | [00 — matrix freeze + harness wiring](00-matrix.md) | (table) | (table) | Frozen matrix; new `tests/coroutine_matrix.rs` binary; reuses `cross_mode!`.  No production change. |
-| 01 — basic scalars (Y1) | Y1 | X1, X2, X3, X4 | Every Y1 cell green.  Establishes the cell shape against the simplest yielded type. |
+| [01 — unified store-backed yield channel](01-unified-channel.md) | (cross-cutting) | (cross-cutting) | One `next_into(stores, &mut [i64])` trait method replaces the per-shape combinatorial expansion (`next_i64` / `next_text` / `next_dbref` / hypothetical `next_tuple_2i64` / `next_tuple_3i64` / …).  Unblocks Y4 native (@P327) and future arities without adding one trait method per shape.  Identified 2026-05-23 from the half-finished hardcoded `next_tuple_2i64` attempt that broke the interp's slot allocator. |
+| 01b — basic scalars (Y1) | Y1 | X1, X2, X3, X4 | Every Y1 cell green.  Establishes the cell shape against the simplest yielded type. |
 | 02 — text (Y2) | Y2 | X1, X2, X3, X4 | Active risk — yielded-text lifetime through the suspended frame.  Phase 02 either confirms via leak test + cross-mode green, or files a P-issue. |
 | 03 — references (Y3) | Y3 | X1, X2, X3, X4 | Yielded DbRef; verifies that the referenced record outlives the resume cycle. |
 | 04 — tuples (Y4) | Y4 | X1, X2, X3, X4 | Tuple yielded values; cross-references @PLAN14 destructure-after-yield.  Some cells may be gated on T1.8a (tuple return convention) for the manual-`next()` path. |
@@ -173,13 +187,13 @@ Each cell `(Yi, Xj)` has one of:
 
 ## Cross-references
 
-- [COROUTINE.md](../../../COROUTINE.md) — coroutine design,
+- [COROUTINE.md](../../COROUTINE.md) — coroutine design,
   "Known Limitations" section.
-- [LIFETIME.md](../../../LIFETIME.md) — yielded-value lifetime
+- [LIFETIME.md](../../LIFETIME.md) — yielded-value lifetime
   rules for text and Reference.
-- [@PLAN14 phase 00](../../finished/14-tuple-validation/00-matrix.md) — donor
+- [@PLAN14 phase 00](../finished/14-tuple-validation/00-matrix.md) — donor
   template.
-- [@PLAN15 closure validation](../../finished/15-closure-validation/README.md)
+- [@PLAN15 closure validation](../finished/15-closure-validation/README.md)
   — phase 05 prerequisite (now SHIPPED 2026-05-12).
 - `src/state/codegen.rs` — coroutine state-machine lowering.
 - `src/data.rs::Type::Iterator` — iterator type.

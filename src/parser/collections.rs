@@ -185,11 +185,32 @@ impl Parser {
             *code = v_set(gen_var, gen_expr);
             let op = self.data.def_nr("OpCoroutineNext");
             let yield_tp = (**inner).clone();
-            let value_size = crate::variables::size(&yield_tp, &crate::data::Context::Argument);
-            return Value::Call(
-                op,
-                vec![Value::Var(gen_var), Value::Int(i32::from(value_size))],
-            );
+            // @P327 / @P328 native — yield-channel dispatch via packed
+            // `value_size` (low byte = byte size, high byte = channel
+            // tag).  Tag 0 = legacy per-type channel (next_i64 /
+            // next_text / next_dbref dispatched by byte size).  Tag 1 =
+            // unified `next_into` with tuple-of-(integer|float) rebuild.
+            // Tag 2 = unified `next_into` with fn-ref rebuild
+            // (`(u32, DbRef)` from `[i64; 2]`).  Interp masks the high
+            // byte off in `fill.rs::coroutine_next` and `state/codegen.rs`'s
+            // `OpCoroutineNext` arm; only native inspects it.  See
+            // `plans/16-coroutine-validation/01-unified-channel.md`.
+            let byte_size = i32::from(crate::variables::size(
+                &yield_tp,
+                &crate::data::Context::Argument,
+            ));
+            let channel_tag: i32 = if matches!(&yield_tp,
+                Type::Tuple(elems) if !elems.is_empty()
+                && elems.iter().all(|e| matches!(e, Type::Integer(_) | Type::Float)))
+            {
+                1
+            } else if matches!(&yield_tp, Type::Function(_, _, _)) {
+                2
+            } else {
+                0
+            };
+            let value_size: i32 = (channel_tag << 8) | byte_size;
+            return Value::Call(op, vec![Value::Var(gen_var), Value::Int(value_size)]);
         }
         if is_type == should {
             // Non-coroutine pre-existing iterator (sorted/hash/index).
@@ -1573,6 +1594,16 @@ use #count instead"
             } else {
                 Vec::new()
             };
+            // Extract the generator var (first arg of OpCoroutineNext) before
+            // `iter_next` is consumed by `for_next` — @P327 needs it for the
+            // tuple-yield exhaustion check below.
+            let gen_var = if let Value::Call(_, args) = &iter_next
+                && let Some(Value::Var(v)) = args.first()
+            {
+                *v
+            } else {
+                u16::MAX
+            };
             let for_next = v_set(for_var, iter_next);
             self.vars.loop_var(for_var);
             let in_loop = self.in_loop;
@@ -1611,8 +1642,37 @@ use #count instead"
             }
             for_steps.push(create_iter);
             let mut lp = vec![for_next];
-            // CO1.5b: coroutine iterators also need the null-check termination.
-            if !matches!(in_type, Type::Iterator(_, _)) || is_coroutine_loop {
+            // CO1.5b: coroutine iterators also need a termination check.
+            //
+            // @P327 — for-yield types without a single-value null sentinel
+            // (Tuple today; the same shape would catch any future composite
+            // yielded type) MUST check the iterator's exhausted state, NOT
+            // the yielded value.  Without this branch, `convert(tuple,
+            // Boolean)` finds no OpConv* match → `test_for` stays as
+            // `Var(for_var)` → `OpNot(tuple)` reads one byte of the tuple's
+            // storage as boolean and inverts → silent wrong answer (loop
+            // iterates 0 or N times depending on which byte aligns to 0).
+            // OpCoroutineExhausted(gen) reads the coroutine status, which
+            // CoroutineNext sets to Exhausted on the post-last-yield call.
+            // `gen_var` is captured above from `iter_next`'s first arg
+            // (the coroutine path never assigns a slot to `_iter_var`).
+            //
+            // @PLAN16 phase 05 — closures (`Type::Function`) join tuples on
+            // this path: a yielded fn-ref has no null sentinel that
+            // `OpConv*FromX → OpNot` can drive — `OpNot(fnref)` reads bytes
+            // of the 20-byte fn-ref slot as boolean (SIGBUS on interp,
+            // E0600 on native).  Same fix: terminate via the coroutine's
+            // own exhausted state.
+            let yield_needs_exhausted_check =
+                matches!(&var_tp, Type::Tuple(_) | Type::Function(_, _, _));
+            if is_coroutine_loop && yield_needs_exhausted_check && gen_var != u16::MAX {
+                let test_exhausted = self.cl("OpCoroutineExhausted", &[Value::Var(gen_var)]);
+                lp.push(v_if(
+                    test_exhausted,
+                    v_block(vec![Value::Break(0)], Type::Void, "break"),
+                    Value::Null,
+                ));
+            } else if !matches!(in_type, Type::Iterator(_, _)) || is_coroutine_loop {
                 let mut test_for = Value::Var(for_var);
                 self.convert(&mut test_for, &var_tp, &Type::Boolean);
                 test_for = self.cl("OpNot", &[test_for]);

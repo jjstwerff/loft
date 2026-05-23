@@ -547,6 +547,30 @@ impl Parser {
             } else {
                 let mut v = Value::Null;
                 self.expression(&mut v);
+                // @P328 — when yielding a NON-CAPTURING closure into an
+                // `iterator<fn(...) -> ...>` generator, the expression
+                // parser leaves the lambda as a bare `Value::Int(d_nr)`
+                // (the closure DbRef would be the null sentinel anyway).
+                // But the generator's yielded type is `Function(...)`
+                // which the coroutine machinery treats as 20 bytes
+                // (8B d_nr + 12B closure DbRef).  Pushing only 4 bytes
+                // for the bare Int crashes the consumer's
+                // `OpCoroutineNext(gen, 20)` (interp SIGBUS) and
+                // mis-types the native channel.  Wrap the bare Int as
+                // a proper `Value::FnRef(d_nr, u16::MAX, _)` so the
+                // yielded value is a full 20-byte fn-ref.  Capturing
+                // closures already arrive as a Block ending in
+                // `FnRef(d_nr, closure_var, _)`, so no rewrite needed.
+                if let Type::Iterator(elem_tp, _) = &r_type
+                    && matches!(**elem_tp, Type::Function(_, _, _))
+                {
+                    let unspanned = v.unspan().clone();
+                    if let Value::Int(d_nr) = unspanned {
+                        v = Value::FnRef(d_nr, u16::MAX, Box::new((**elem_tp).clone()));
+                    } else if let Value::Long(d_nr) = unspanned {
+                        v = Value::FnRef(d_nr as i32, u16::MAX, Box::new((**elem_tp).clone()));
+                    }
+                }
                 *val = Value::Yield(Box::new(v));
                 Type::Void
             }

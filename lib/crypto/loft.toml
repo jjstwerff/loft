@@ -5,3 +5,7 @@ loft = ">=0.8"
 
 [library]
 entry = "src/crypto.loft"
+native = "loft_crypto"
+
+[native]
+crate = "loft-crypto"

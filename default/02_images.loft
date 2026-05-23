@@ -406,7 +406,7 @@ fn OpSortVector(r: vector, db_tp: const u16);
 fn OpCoroutineCreate(d_nr: const integer, args_size: const u16, to: const integer);
 #rust"s.coroutine_create(@d_nr as u32, u32::from(@args_size), @to as u32);"
 fn OpCoroutineNext(value_size: const u16);
-#rust"s.coroutine_next(u32::from(@value_size));"
+#rust"s.coroutine_next(u32::from(@value_size & 0xFF));"
 
 // CO1.3a: Coroutine return — exhaust frame, push null, return to consumer
 fn OpCoroutineReturn(value_size: const u16);

@@ -64,7 +64,6 @@ mod platform;
 mod png_store;
 mod runtime_error;
 mod scopes;
-mod sha256;
 mod stack;
 mod state;
 mod store;

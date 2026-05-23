@@ -191,12 +191,12 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("i_parse_error_push", i_parse_error_push),
     ("i_parse_errors", i_parse_errors),
     ("n_hash_sorted", n_hash_sorted),
-    ("n_sha256", n_sha256),
-    ("n_hmac_sha256", n_hmac_sha256),
-    ("n_base64_encode", n_base64_encode),
-    ("n_base64_decode", n_base64_decode),
-    ("n_base64url_encode", n_base64url_encode),
-    ("n_hmac_sha256_raw", n_hmac_sha256_raw),
+    // Plan-12 phase 1a (2026-05-23) — crypto `n_*` symbols
+    // (`n_sha256`, `n_hmac_sha256`, `n_hmac_sha256_raw`,
+    // `n_base64_encode`, `n_base64_decode`, `n_base64url_encode`)
+    // moved out to `lib/crypto/native/` cdylib.  Resolved at runtime
+    // via `extensions::wire_native_fns` from the loaded `loft_crypto`
+    // crate (lib/crypto/loft.toml declares `native = "loft_crypto"`).
     ("n_json_parse", n_json_parse),
     ("n_json_errors", n_json_errors),
     ("n_json_null", n_json_null),
@@ -1990,16 +1990,7 @@ fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
 // HTTP client glue removed — n_http_do and n_http_body are now auto-marshalled.
 // The cdylib stores the response body in a thread-local, returned via LoftStr.
 
-// ── Crypto built-ins (always available) ─────────────────────────────────
-
-fn hex_encode(data: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(data.len() * 2);
-    for b in data {
-        let _ = write!(out, "{b:02x}");
-    }
-    out
-}
+// ── Crypto built-ins moved to lib/crypto/native (plan-12 phase 1a) ──────
 
 /// C60 Step 3a-part2: iterate a hash in ascending key order.
 /// Wraps `Stores::build_hash_sorted_vec` (src/database/allocation.rs).
@@ -2023,61 +2014,11 @@ fn n_hash_sorted(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result);
 }
 
-fn n_sha256(stores: &mut Stores, stack: &mut DbRef) {
-    let v = *stores.get::<Str>(stack);
-    let hash = crate::sha256::sha256(v.str().as_bytes());
-    stores.scratch.clear();
-    stores.scratch.push(hex_encode(&hash));
-    stores.put(stack, Str::new(&stores.scratch[0]));
-}
-
-fn n_hmac_sha256(stores: &mut Stores, stack: &mut DbRef) {
-    let v_data = *stores.get::<Str>(stack);
-    let v_key = *stores.get::<Str>(stack);
-    let mac = crate::sha256::hmac_sha256(v_key.str().as_bytes(), v_data.str().as_bytes());
-    stores.scratch.clear();
-    stores.scratch.push(hex_encode(&mac));
-    stores.put(stack, Str::new(&stores.scratch[0]));
-}
-
-fn n_hmac_sha256_raw(stores: &mut Stores, stack: &mut DbRef) {
-    let v_data = *stores.get::<Str>(stack);
-    let v_key = *stores.get::<Str>(stack);
-    let mac = crate::sha256::hmac_sha256(v_key.str().as_bytes(), v_data.str().as_bytes());
-    stores.scratch.clear();
-    stores
-        .scratch
-        .push(std::str::from_utf8(&mac).unwrap_or("").to_string());
-    stores.put(stack, Str::new(&stores.scratch[0]));
-}
-
-fn n_base64_encode(stores: &mut Stores, stack: &mut DbRef) {
-    let v = *stores.get::<Str>(stack);
-    stores.scratch.clear();
-    stores
-        .scratch
-        .push(crate::base64::encode(v.str().as_bytes()));
-    stores.put(stack, Str::new(&stores.scratch[0]));
-}
-
-fn n_base64_decode(stores: &mut Stores, stack: &mut DbRef) {
-    let v = *stores.get::<Str>(stack);
-    let decoded = crate::base64::decode(v.str());
-    stores.scratch.clear();
-    stores
-        .scratch
-        .push(String::from_utf8_lossy(&decoded).to_string());
-    stores.put(stack, Str::new(&stores.scratch[0]));
-}
-
-fn n_base64url_encode(stores: &mut Stores, stack: &mut DbRef) {
-    let v = *stores.get::<Str>(stack);
-    stores.scratch.clear();
-    stores
-        .scratch
-        .push(crate::base64::encode_url(v.str().as_bytes()));
-    stores.put(stack, Str::new(&stores.scratch[0]));
-}
+// Plan-12 phase 1a (2026-05-23) — crypto `n_*` impls moved to
+// `lib/crypto/native/src/lib.rs` (cdylib).  See the registry section
+// above for the routing; the loft binary loads them via
+// `extensions::wire_native_fns` at runtime when a program does
+// `use crypto`.
 
 // ── WebSocket + TCP + OpenGL + random glue removed ─────────────────────
 // These functions are now auto-marshalled by extensions::wire_native_fns().

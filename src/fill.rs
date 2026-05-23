@@ -2075,7 +2075,7 @@ fn coroutine_create(s: &mut State) {
 
 fn coroutine_next(s: &mut State) {
     let v_value_size = *s.code::<u16>();
-    s.coroutine_next(u32::from(v_value_size));
+    s.coroutine_next(u32::from(v_value_size & 0xFF));
 }
 
 fn coroutine_return(s: &mut State) {

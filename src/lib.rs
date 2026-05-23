@@ -52,7 +52,6 @@ pub mod keys;
 mod lexer;
 pub mod native;
 pub mod scopes;
-pub mod sha256;
 mod variables;
 pub mod vector;
 

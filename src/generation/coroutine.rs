@@ -265,10 +265,11 @@ fn emit_struct_def(
         .iter()
         .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }))
     {
-        let elem_ty = if matches!(yield_tp, Type::Text(_)) {
-            "String"
-        } else {
-            "i64"
+        let elem_ty = match yield_tp {
+            Type::Text(_) => "String",
+            // @P326 — Reference / Vector / struct-enum yields are DbRef-shaped.
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => "DbRef",
+            _ => "i64",
         };
         writeln!(w, "    __values: Vec<{elem_ty}>,")?;
         writeln!(w, "    __idx: usize,")?;
@@ -376,6 +377,27 @@ impl Output<'_> {
         yield_tp: &Type,
     ) -> std::io::Result<()> {
         let is_text = matches!(yield_tp, Type::Text(_));
+        // @P326 — Reference-yielding generators override `next_dbref` (not
+        // `next_i64`), so a consumer's `coroutine_next_dbref(gen)` reads the
+        // yielded DbRef directly.  Mirrors the text branch's `next_text`
+        // selection; both keep the default `next_i64` to drain immediately
+        // on a wrong-channel call.
+        let is_dbref = matches!(
+            yield_tp,
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+        );
+        // @P327 / @P328 native — tuple-of-(integer|float) AND fn-ref yields
+        // use the unified `next_into(stores, dest: &mut [i64])` channel.
+        // Each yield arm writes the yielded value's slots into `dest` and
+        // returns `true`; the exhaust arm returns `false`.  The Simple
+        // yield arm in the match below knows which packing layout to emit
+        // based on the type-specific flags (`is_tuple_into` /
+        // `is_fnref_into`).
+        let is_tuple_into = matches!(yield_tp,
+            Type::Tuple(elems) if !elems.is_empty()
+            && elems.iter().all(|e| matches!(e, Type::Integer(_) | Type::Float)));
+        let is_fnref_into = matches!(yield_tp, Type::Function(_, _, _));
+        let uses_next_into = is_tuple_into || is_fnref_into;
         let (sig, exhaust, advance, wrap_open, wrap_close) = if is_text {
             (
                 "    fn next_text(&mut self, stores: &mut Stores) -> String {",
@@ -383,6 +405,26 @@ impl Output<'_> {
                 "next_text",
                 "(",
                 ").to_string()",
+            )
+        } else if is_dbref {
+            (
+                "    fn next_dbref(&mut self, stores: &mut Stores) -> DbRef {",
+                "DbRef { store_nr: u16::MAX, rec: 0, pos: 0 }",
+                "next_dbref",
+                "(",
+                ")",
+            )
+        } else if uses_next_into {
+            // `wrap_open` / `wrap_close` aren't used by the Simple yield
+            // arm below for this channel — that arm emits its own
+            // per-shape writes (see `is_tuple_into` / `is_fnref_into`
+            // branches in the match).
+            (
+                "    fn next_into(&mut self, stores: &mut Stores, dest: &mut [i64]) -> bool {",
+                "false",
+                "next_into",
+                "",
+                "",
             )
         } else {
             (
@@ -417,6 +459,8 @@ impl Output<'_> {
             if is_text {
                 writeln!(w, "            let v = self.__values[self.__idx].clone();")?;
             } else {
+                // i64 and DbRef are both `Copy`; the `[idx]` indexing
+                // returns by value.
                 writeln!(w, "            let v = self.__values[self.__idx];")?;
             }
             writeln!(w, "            self.__idx += 1;")?;
@@ -500,7 +544,13 @@ impl Output<'_> {
                     continue;
                 }
                 let name = var_table.name(v);
-                if !name.starts_with("__vdb") {
+                // @P326 — also pre-declare `__ref_*` work-vars used by
+                // inline struct construction (`yield SomeStruct { … }`).
+                // Same scoping family as `__vdb_*` and `__work_*` — declared
+                // inside one match arm's pre-statements, then referenced
+                // from another arm where they're out of scope.  Each
+                // Reference-typed yield arm allocates a `__ref_N` slot.
+                if !name.starts_with("__vdb") && !name.starts_with("__ref") {
                     continue;
                 }
                 to_predeclare_vdb.push(v);
@@ -540,11 +590,65 @@ impl Output<'_> {
                         writeln!(w, "                {stmt_code};")?;
                     }
                     writeln!(w, "                self.state = {};", state_idx + 1)?;
-                    let yield_code = self.generate_expr_buf(val)?;
-                    writeln!(
-                        w,
-                        "                return {wrap_open}{yield_code}{wrap_close};"
-                    )?;
+                    if is_tuple_into {
+                        // @P327 native — write each tuple slot into
+                        // `dest[i]` and return `true`.  `val` is a
+                        // `Value::Tuple([…])`; walk its elements.
+                        if let crate::data::Value::Tuple(elems) = val {
+                            for (i, elem) in elems.iter().enumerate() {
+                                let code = self.generate_expr_buf(elem)?;
+                                writeln!(w, "                dest[{i}] = ({code}) as i64;")?;
+                            }
+                        }
+                        writeln!(w, "                return true;")?;
+                    } else if is_fnref_into {
+                        // @P328 native — pack the fn-ref `(u32, DbRef)`
+                        // into 2 i64 slots and return `true`.  Layout
+                        // mirrors the OpCoroutineNextEmitter rebuild
+                        // (channel tag 2):
+                        //   dest[0] = (d_nr as i64) | ((store_nr as i64) << 32)
+                        //   dest[1] = (rec as i64) | ((pos as i64) << 32)
+                        //
+                        // Non-capturing fn-ref yields IR-emit as plain
+                        // `Value::Int(d_nr)` / `Value::Long(d_nr)` (the
+                        // parser drops the closure DbRef when there's
+                        // nothing to capture); capturing yields emit as
+                        // a Block ending in `Value::FnRef(d, closure_var, _)`
+                        // which `generate_expr_buf` materialises as
+                        // `(d_u32, var_closure)`.  Detect the
+                        // bare-integer non-capturing shape and wrap
+                        // with the null-DbRef sentinel so the consumer's
+                        // rebuild gets a valid `(u32, DbRef)` either way.
+                        let val_un = val.unspan();
+                        let is_bare_dnr = matches!(
+                            val_un,
+                            crate::data::Value::Int(_) | crate::data::Value::Long(_)
+                        );
+                        let yield_code = self.generate_expr_buf(val)?;
+                        if is_bare_dnr {
+                            writeln!(
+                                w,
+                                "                let _f: (u32, DbRef) = (({yield_code}) as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }});"
+                            )?;
+                        } else {
+                            writeln!(w, "                let _f: (u32, DbRef) = ({yield_code});")?;
+                        }
+                        writeln!(
+                            w,
+                            "                dest[0] = (_f.0 as i64) | (((_f.1.store_nr as u64) as i64) << 32);"
+                        )?;
+                        writeln!(
+                            w,
+                            "                dest[1] = (_f.1.rec as i64) | ((_f.1.pos as i64) << 32);"
+                        )?;
+                        writeln!(w, "                return true;")?;
+                    } else {
+                        let yield_code = self.generate_expr_buf(val)?;
+                        writeln!(
+                            w,
+                            "                return {wrap_open}{yield_code}{wrap_close};"
+                        )?;
+                    }
                 }
                 YieldSegment::YieldFrom { pre, init } => {
                     for stmt in pre {
@@ -730,6 +834,13 @@ impl Output<'_> {
         def_nr: u32,
     ) -> std::io::Result<()> {
         let is_text = matches!(yield_tp, Type::Text(_));
+        // @P326 — for-body factory must use the DbRef channel for
+        // Reference-yielding generators (the eager-collect buffer is
+        // `Vec<DbRef>`, the sub-generator advances via `next_dbref`).
+        let is_dbref = matches!(
+            yield_tp,
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+        );
         let (vec_ty, push_wrap_open, push_wrap_close, sub_advance, sub_exhaust) = if is_text {
             (
                 "String",
@@ -737,6 +848,14 @@ impl Output<'_> {
                 ").to_string()",
                 "next_text",
                 "loft::state::STRING_NULL",
+            )
+        } else if is_dbref {
+            (
+                "DbRef",
+                "(",
+                ")",
+                "next_dbref",
+                "DbRef { store_nr: u16::MAX, rec: 0, pos: 0 }",
             )
         } else {
             (

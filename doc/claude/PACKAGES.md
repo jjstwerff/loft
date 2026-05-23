@@ -2692,7 +2692,7 @@ etc.).  The items below are remaining infrastructure work.
 |---|---|---|---|
 | **PKG.REG** — central package registry MVP (`loft install <name>` / `loft publish`) | 0.8.6 | § Package Registry (line ~704) | Open — designed, scheduled.  Largest sub-arc.  Includes registry server, package signing / verification, `manifest.toml` index format. |
 | **PKG.7** — lock file (`loft.lock`) for reproducible builds | 0.8.6 | § Implementation phases | Open — small.  Implementation surface in `manifest.rs`. |
-| **PKG.EXTRACT** — move `lib/*/` out into per-family GitHub repos | 1.1+ | § Migration steps (line ~2570) | Open, BLOCKED on PKG.REG.  Execution arc tracked separately in [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) — per-library decisions, version-sync policy, per-library CI. |
+| **PKG.EXTRACT** — move `lib/*/` out into per-family GitHub repos | 1.1+ | § Migration steps (line ~2570) | Open, BLOCKED on PKG.REG.  Execution arc tracked separately in [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) — per-library decisions, version-sync policy, per-library CI. |
 
 Suggested order:
 1. **PKG.7 lock file** — smallest, contained in `manifest.rs`.
@@ -2703,4 +2703,4 @@ Suggested order:
    (c) `loft install <name>` CLI command
    (d) `loft publish` CLI command
    (e) package signing / verification
-3. **PKG.EXTRACT** — unblocked once PKG.REG ships; per-library extractions begin via `lib_plans/future/12-library-extraction/`.
+3. **PKG.EXTRACT** — unblocked once PKG.REG ships; per-library extractions begin via `lib_plans/12-library-extraction/`.
