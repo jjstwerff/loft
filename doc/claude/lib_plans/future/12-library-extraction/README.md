@@ -76,8 +76,10 @@ the registry exists):
 | `lib/crypto/` | Cryptographic primitives | Early — bounded scope |
 | `lib/random/` | RNG | Early — bounded scope |
 | `lib/shapes/` | Geometric primitives | Early |
+| `lib/markdown/` | Markdown parser / formatter | Early — pure-loft, no native deps |
 | `lib/imaging/` | Image manipulation | Mid — used by moros_*, validate dependency chain |
 | `lib/graphics/` | OpenGL / 2D drawing | Mid — large, used by demos; coordinate with [`../02-graphics/`](../02-graphics/) plan |
+| `lib/gridmesh/` | Hex / grid mesh generator | Mid — used by audience demo + dryopea; coordinate with [`../19-gridmesh/`](../19-gridmesh/) plan |
 | `lib/server/` | HTTP server | Mid — coordinate with [`../08-server/`](../08-server/) plan; depends on game-loop additions |
 | `lib/web/` | Web utilities | Mid |
 | `lib/game_protocol/` | Multiplayer protocol | Mid — coordinate with EVENT_LOOP / multiplayer-editor / tic-tac-toe plans |
@@ -87,6 +89,7 @@ the registry exists):
 | `lib/moros_render/` | Moros rendering | Late — paired with editor |
 | `lib/moros_sim/` | Moros simulation (collide.loft's geometry moves to `lib/world/` per Phase 7a) | Late — paired with editor |
 | `lib/moros_ui/` | Moros UI | Late — paired with editor |
+| `lib/audience_crystal/` | Audience-demo crystal mesh-gen prototype | **Stays in monorepo** (paired with the audience demo).  Phase 8 adds a `tests/` directory so it joins the library CI gates ([§ CI path](#ci-path-for-libraries-built-2026-05-23--travels-with-each-chunk)). |
 
 Single-file `.loft` modules at `lib/*.loft` (`code.loft`,
 `docs.loft`, `lexer.loft`, `logger.loft`, `overland.loft`,
@@ -142,23 +145,34 @@ code regardless of what happens elsewhere.  Independent of
 PKG.REG and the cdylib loader — pure mechanical move per
 package, no language change.
 
-### Single-file `lib/*.loft` modules (8) — convert or fold before extracting
+### Single-file `lib/*.loft` modules (8) — destinations decided
 
-`code.loft`, `docs.loft`, `lexer.loft`, `logger.loft`,
-`overland.loft`, `parser.loft`, `testlib.loft`, `wall.loft`.
+No `loft.toml` → no extraction path until converted or
+folded.  Surveyed 2026-05-23; destinations:
 
-No `loft.toml` → no extraction path.  Each needs a
-mini-conversion: create `lib/<name>/`, move content to
-`src/<name>.loft`, add `loft.toml`.  Decide per-file
-whether to extract or fold into a sibling package.
+| Module | Lines | Destination | Rationale |
+|---|---|---|---|
+| `wall.loft` | 60 | **Fold into `lib/world/`** (Phase 7a) | Mandatory for moros + dryopea (user-built walls + rock faces) — first-class part of the world surface, not a separate package |
+| `overland.loft` | 7 | **Fold into `lib/world/`** (Phase 7a) | `OverlandMap` enum (material / item / height / water) — terrain layer data, world-handling territory |
+| `logger.loft` | 34 | **Fold into `lib/world/` self-hosting cluster** OR convert to `lib/logger/` package and join **loft-libs-core** | 34 lines, used by `parser.loft`; decision pending consumer audit (see Open Q #11) |
+| `code.loft` | 263 | **Stays in monorepo as self-hosting tooling** | Loft type / field metadata (`Field`, `Type` structs) — used by the self-hosting parser; not a library consumers want |
+| `lexer.loft` | 477 | **Stays in monorepo as self-hosting tooling** | Loft source lexer — used by the self-hosting parser and `gendoc` |
+| `parser.loft` | 674 | **Stays in monorepo as self-hosting tooling** | Loft source parser — `use lexer; use logger; use code;` |
+| `docs.loft` | 21 | **Stays in monorepo as build tooling** | Used by `gendoc`; depends on `lexer` |
+| `testlib.loft` | 57 | **Stays in monorepo as test infrastructure** | Used by `tests/docs/17-libraries.loft`; monorepo-test-only consumer |
 
-**`wall.loft` is special-cased:** it folds into `lib/world/`
-in Phase 7a rather than becoming a standalone package.
-Wall geometry is mandatory for both moros and dryopea
-(dryopea uses the walls primitive for user-built walls AND
-for rock faces); a separate `wall` package would just be a
-fragment of `world` with extra import friction.  See
-[§ Phase 7a](#phase-7a--split-moros-into-shared-world--moros-specific).
+**Counts after Phase 1c:** 7 files originally listed as
+"convert" reduce to **1 standalone conversion candidate**
+(`logger.loft`, pending Open Q #11), **2 folds into
+`lib/world/`** (`wall.loft`, `overland.loft`), and **5 stay
+as monorepo-internal tooling** (`code.loft`, `lexer.loft`,
+`parser.loft`, `docs.loft`, `testlib.loft`).
+
+The self-hosting cluster (`code` + `lexer` + `parser` +
+`docs`) could form an optional 6th chunk `loft-libs-self` if
+external consumers ever want a programmatic loft parser, but
+the current call sites are all monorepo-internal — defer
+that decision until a real external consumer appears.
 
 ### Dynamic native-registry path
 
@@ -228,6 +242,56 @@ README.md files for users to grep through when they want
 at 17 repos can't.  Four chunks is the cap.  New libraries
 join an existing chunk by family fit, not a new repo.
 
+### Cross-chunk dependency graph
+
+Inter-chunk deps resolve via the registry (Stage A
+publishes; Stage B consumes).  Intra-chunk deps stay as
+path deps inside the chunk repo.  Surveyed 2026-05-23 from
+existing `loft.toml` files + `use` statements; treat as a
+TARGET state — must be re-verified at each chunk's
+Stage-A1 step before extracting.
+
+```
+loft-libs-core   (no chunk deps — leaves of the graph)
+  ↑
+  ├── loft-libs-graphics   (shapes / arguments from core)
+  │     ↑
+  │     └── loft-libs-world   (shapes from core; gridmesh from graphics IF
+  │           ↑                 world re-uses mesh primitives — verify in 7a)
+  │           │
+  ├── loft-libs-net        (crypto / arguments from core)
+  │
+  └── loft-moros           (depends on graphics + world; possibly net
+                            for the multiplayer demos)
+```
+
+**Rules this graph imposes on phase ordering:**
+
+- Phase 4 (`loft-libs-core`) must publish first — every
+  other chunk depends on it.
+- Phase 5 (`loft-libs-graphics`) and Phase 6 (`loft-libs-net`)
+  are independent of each other and can interleave.
+- Phase 6w (`loft-libs-world`) needs `loft-libs-core`
+  published, plus Phase 7a complete in the monorepo so the
+  hex / wall / overland surface is finished.  May also
+  need graphics published if the world library uses
+  gridmesh primitives — to be confirmed in Phase 7a.
+- Phase 7b (`loft-moros`) needs both `loft-libs-graphics`
+  and `loft-libs-world` published.
+
+**Open verification:** during Phase 1 (decoupling), each
+chunk's actual `use` statements get audited and the graph
+above gets confirmed or revised.  Notable unknowns:
+- Does `lib/world/` (post-7a) need `gridmesh` from
+  `loft-libs-graphics`, or are the geometries independent?
+- Does `loft-moros` need `loft-libs-net` for `game_protocol`
+  (multiplayer-editor / tic-tac-toe consumers), or do those
+  demos live elsewhere?
+
+These verifications block the relevant phase from
+starting Stage A; the answer determines whether a chunk
+needs another chunk's registry version in scope.
+
 ## Phases — detailed execution plan
 
 Each phase has a concrete acceptance criterion.  Phases 1-2
@@ -263,7 +327,7 @@ cleanly.
 |---|---|---|
 | 1a | Move 6 fns (`n_sha256`, `n_hmac_sha256`, `n_base64_*`) from `src/native.rs` into new `lib/crypto/native/` crate | XS |
 | 1b | Move 13 fns from `src/native.rs` into `lib/web/native/` crate (the dir already exists with 6 symbols; this adds the remaining 13) | S |
-| 1c | Convert 7 single-file `lib/*.loft` modules (`code.loft`, `docs.loft`, `lexer.loft`, `logger.loft`, `overland.loft`, `parser.loft`, `testlib.loft`) to package format — one commit per file.  `wall.loft` is excluded: it folds into `lib/world/` in Phase 7a rather than becoming a standalone package. | M |
+| 1c | Resolve the 8 single-file `lib/*.loft` modules per [§ Single-file modules — destinations decided](#single-file-loftloft-modules-8--destinations-decided): convert at most 1 (`logger.loft`, pending Open Q #11) to package format; the other 7 either fold into `lib/world/` in Phase 7a (`wall.loft`, `overland.loft`) or stay as monorepo-internal tooling (`code.loft`, `lexer.loft`, `parser.loft`, `docs.loft`, `testlib.loft`). | XS-S |
 
 **Acceptance:** `grep '^fn n_' src/native.rs` returns only
 symbols backing `default/*.loft` (the standard library)
@@ -414,6 +478,7 @@ walkable battlements, terrain rock faces).
 | `lib/moros_map/moros_map.loft` | Chunk addressing helpers, hex math | Game-specific accessors stay |
 | `lib/moros_sim/collide.loft` | Wall / hex geometry collision primitives | Game-specific tactical AI stays in `moros_sim` |
 | `lib/wall.loft` (entire file) | Wall geometry constants (`DX`, `DY`, `DZ`, `STEP`) and the wall placement / hex-edge helpers | Folds directly into `lib/world/src/` (e.g. as `wall.loft`) — does NOT extract as a standalone `wall` package.  Both dryopea (user-built walls + rock faces) and moros use this; it's a core primitive of the world library, not an optional addition. |
+| `lib/overland.loft` (entire file) | `OverlandMap` enum: per-hex material / item / height / water layers | Folds into `lib/world/src/` as a terrain-layer module.  Tiny (7 lines) but conceptually world-handling — moros + dryopea both want height + material per hex. |
 | `lib/moros_*` | Group / height handling (per-hex layers, group adjacency) | Locate during execution; the consumer code is the ground truth for which pieces are game-agnostic |
 
 **Stays in `lib/moros_*/`:**
@@ -591,13 +656,49 @@ unchanged to each extracted chunk (it keys off `lib/<pkg>/tests/*.loft` +
 | Interpreter | `tests/wrap.rs::library_suite` | every `lib/*/tests/*.loft` via `loft test` (subprocess, package-resolved); skips via `lib_test_skipped` (`LIB_PKGS_SKIP` / `LIB_TESTS_SKIP`) |
 | Native | `tests/native.rs::native_library_suite` | the same via `loft --native test` (compiles each to native Rust, linking the package's `#native` crate); skips `LIB_PKGS_NATIVE_SKIP` / `LIB_TESTS_NATIVE_SKIP` (native-codegen gaps, [@P321](../../../PROBLEMS.md)) |
 | Leak | `tests/wrap.rs` `run_test` gate | unfreed stores at program exit fail; allowlist `SCRIPTS_LEAK_ALLOW` ([@P322](../../../PROBLEMS.md)) |
+| WASM | **Not yet implemented** — known gap, see [§ WASM gate](#wasm-gate--known-gap-before-chunk-extraction-starts) below | Should run `loft --native-wasm test` per package once the infrastructure exists |
 | Quick dev loop | `make test-packages` | interpreter-only shell loop over every package test (dev-only, in `ci-full`; the cargo suites above are the gates) |
 
 When a chunk extracts, its repo CI runs the equivalent (`loft test` +
-`loft --native test` over the chunk's packages) and the skip-lists travel with
-the code as the chunk's own `*_NATIVE_SKIP` / leak allowlist.  This is the
-"clear CI path for itself" the libraries needed before living outside the
-monorepo (Open question #4 below).
+`loft --native test` over the chunk's packages, plus WASM once it lands) and
+the skip-lists travel with the code as the chunk's own `*_NATIVE_SKIP` /
+`*_WASM_SKIP` / leak allowlist.  This is the "clear CI path for itself" the
+libraries needed before living outside the monorepo (Open question #4 below).
+
+### WASM gate — known gap before chunk extraction starts
+
+`--native-wasm` is loft's third backend ([WASM.md](../../../WASM.md)) and
+PACKAGES.md's [target matrix](../../../PACKAGES.md#target-matrix) lists
+`wasm32-wasip2` as a first-class output.  Today the library CI gate
+covers interpreter + native but NOT WASM — there is no `wasm_library_suite`
+equivalent of `native_library_suite`.
+
+**Why it matters for extraction:**
+
+- A chunk repo that publishes a library used in browser-deployed loft
+  games (graphics, world, moros — every game-adjacent chunk) silently
+  ships a backend that nobody tested.
+- The cdylib loader / `extensions.rs` design covers native dispatch;
+  the WASM dispatch path uses prebuilt `.wasm` artifacts per
+  PACKAGES.md `prebuilt/wasm32-wasip2/`.  Without a CI gate, those
+  artifacts are unverified.
+
+**Status — owned outside this plan:** a parallel effort (separate
+Claude session, 2026-05-23+) is hardening the library CI infrastructure.
+Adding a `wasm_library_suite` is the natural next step there and should
+land BEFORE Phase 4 opens (the first chunk extraction).  Coordinate via:
+
+- This plan blocks Phase 4 Stage-A5 ("chunk CI green") on WASM
+  parity once the gate exists.
+- The chunk-repo workflow YAML authored in Phase 4 must include a
+  WASM job (or an explicit `skip-wasm` flag with rationale).
+- Skip-list format gains `LIB_PKGS_WASM_SKIP` / `LIB_TESTS_WASM_SKIP`
+  to travel with chunks.
+
+**Prebuilt artifacts** (PACKAGES.md `prebuilt/<target>/`): out of scope
+for the first extraction round.  Chunks build from source at install
+time initially; prebuilt distribution is a PKG.REG follow-on once a
+chunk has stable releases.
 
 ## Per-chunk extraction template
 
@@ -771,6 +872,39 @@ Listed here so future-you doesn't have to re-discover them.
     parameterised cell type)?  Generalisation likely too
     invasive for 0.8.x — default is "keep separate, share
     addressing helpers".
+11. **Destination for `logger.loft`.** 34-line module
+    (`Log` struct + `Warning`/`Error`/`Fatal` level enum)
+    currently used only by `lib/parser.loft` (which stays
+    in monorepo as self-hosting tooling).  Options: (a)
+    fold into `lib/world/` alongside wall/overland — wrong
+    family fit, but minimal friction; (b) convert to a
+    standalone `lib/logger/` package and join
+    `loft-libs-core` — clean home, but parser.loft is the
+    only known consumer; (c) leave as-is alongside the
+    self-hosting cluster.  Decision pending consumer audit
+    (does any other monorepo code or external consumer
+    want logger?).  Default if uncertain: (c) — keep next
+    to parser.loft until a second consumer emerges.
+12. **Cross-chunk dep verification.**  See [§ Cross-chunk
+    dependency graph](#cross-chunk-dependency-graph): two
+    unknowns to confirm during Phase 1 — does post-7a
+    `lib/world/` need `gridmesh` from
+    `loft-libs-graphics`, and does `loft-moros` need
+    `loft-libs-net` for multiplayer demos?  Answers
+    determine chunk-publish ordering.
+13. **WASM library CI gate.**  Owned by the parallel CI-
+    hardening effort (see [§ WASM gate](#wasm-gate--known-gap-before-chunk-extraction-starts)).
+    Must land before Phase 4 opens so the chunk-repo
+    workflow YAML can include a WASM job.  Without it,
+    extracted chunks ship an untested third backend.
+14. **Pre-built artifact distribution** (PACKAGES.md
+    `prebuilt/<target>/`).  Out of scope for first
+    extraction round (chunks build from source at install
+    time).  PKG.REG follow-on once chunks have stable
+    releases.  Decision: which targets to prebuild
+    (x86_64-linux, aarch64-macos, wasm32-wasip2 minimum),
+    and who runs the matrix build (chunk-repo CI on tag,
+    presumably).
 
 ## See also
 
