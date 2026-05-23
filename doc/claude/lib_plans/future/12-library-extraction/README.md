@@ -804,7 +804,7 @@ B4. **Re-validate.**  Run `make ci` again.  Green here =
     the monorepo.
 
 B5. **Document** the extraction in
-    [CHANGELOG.md](../../../CHANGELOG.md) (user-facing)
+    [CHANGELOG.md](../../../../../CHANGELOG.md) (user-facing)
     and link the chunk repo from CLAUDE.md's doc index
     if appropriate.
 
