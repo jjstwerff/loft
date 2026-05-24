@@ -149,8 +149,22 @@ impl Output<'_> {
                         write!(w, "var_{var_name}")?;
                     }
                 } else if matches!(variables.tp(*var), Type::Text(_)) {
-                    // Text locals are `String` — add `&` to coerce to `&str`.
-                    write!(w, "&var_{var_name}")?;
+                    if self.tuple_text_to_string {
+                        // @P330 — inside a `(String, …)` tuple-return literal,
+                        // emitting `&var_x` followed by the surrounding tuple
+                        // wrap's `.to_string()` yields `&var_x.to_string()`
+                        // which Rust parses as `&(var_x.to_string())` =
+                        // `&String`, breaking the declared `String` slot
+                        // (E0308).  Emit the bare local name and let the
+                        // wrap turn into `var_x.to_string()` — `String`'s
+                        // `to_string()` clones, producing the owned `String`
+                        // the tuple slot expects.  Same family as the
+                        // `text_local_clone` shape in dispatch.rs:412.
+                        write!(w, "var_{var_name}")?;
+                    } else {
+                        // Text locals are `String` — add `&` to coerce to `&str`.
+                        write!(w, "&var_{var_name}")?;
+                    }
                 } else {
                     write!(w, "var_{var_name}")?;
                 }

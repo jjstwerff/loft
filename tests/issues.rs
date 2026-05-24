@@ -13526,6 +13526,62 @@ fn p329_show_triple<T: Printable>(p329x: T) -> (text, text, text) {
     .result(Value::str("item-6"));
 }
 
+/// @P330 — generic fn returning `(text, text)` assigned to a local then
+/// element-accessed for the function's text return.  Pre-existing parser
+/// bug surfaced while writing @P329 regression coverage.  Root cause:
+/// `parser/control.rs::text_return` auto-hoisted a tuple-typed local to a
+/// tuple-typed *parameter* when the function's return text depended on
+/// that local (e.g. `r = pair(); r.0`).  The caller can only push a
+/// 12-byte null `DbRef` placeholder for the hoisted arg, but the
+/// parameter slot is 32 bytes for `(text, text)` (16 per `Str` element);
+/// the 20-byte size mismatch corrupted the callee's frame layout, so
+/// every subsequent argument read returned garbage (interpreter SIGBUS;
+/// native produced `&var_x.to_string()` = `&String` E0308).  Fix: when
+/// `text_return` would hoist a non-Text non-Reference local (specifically
+/// `Type::Tuple`), skip the hoist entirely — the function's return type
+/// loses the dep on that local, and `scopes::free_vars`'s B5-L3
+/// single-text branch (`src/scopes.rs:961-988`) deep-copies the
+/// `r.0` text into a `__ret_N: text` temp via `OpAppendText` before the
+/// tuple local is freed.  Sibling native-codegen tweak in
+/// `src/generation/emit.rs::Value::Var` for tuple-text-return context:
+/// emit bare `var_x` instead of `&var_x` so the surrounding
+/// `tuple_text_to_string` wrap produces `var_x.to_string()` (owned
+/// `String` clone) rather than the broken `&var_x.to_string()` =
+/// `&String`.  Two tests cover both routes.
+#[test]
+fn p330_generic_tuple_return_assign_then_chain_first() {
+    code!(
+        "struct P330Item { p330_id: integer }
+fn to_text(self: P330Item) -> text { return \"item-{self.p330_id}\"; }
+fn p330_pair<T: Printable>(p330x: T) -> (text, text) {
+    return (p330x.to_text(), \"sentinel\");
+}
+fn p330_take_first(p330a: P330Item) -> text {
+    p330r = p330_pair(p330a);
+    p330r.0
+}"
+    )
+    .expr("p330_take_first(P330Item { p330_id: 13 })")
+    .result(Value::str("item-13"));
+}
+
+#[test]
+fn p330_generic_tuple_return_assign_then_chain_second() {
+    code!(
+        "struct P330Item2 { p330_id2: integer }
+fn to_text(self: P330Item2) -> text { return \"item-{self.p330_id2}\"; }
+fn p330_pair2<T: Printable>(p330x2: T) -> (text, text) {
+    return (\"prefix\", p330x2.to_text());
+}
+fn p330_take_second(p330a2: P330Item2) -> text {
+    p330r2 = p330_pair2(p330a2);
+    p330r2.1
+}"
+    )
+    .expr("p330_take_second(P330Item2 { p330_id2: 27 })")
+    .result(Value::str("item-27"));
+}
+
 /// @P329 — element 1 (second slot) access via chained `.1` on the call
 /// result.  Verifies the deep-copy applies to NON-leading text elements
 /// too (the original p243 test only read `.0`).

@@ -2947,6 +2947,28 @@ impl Parser {
                     dep.push(a as u16);
                     self.vars
                         .set_type(*v, Type::RefVar(Box::new(Type::Text(Vec::new()))));
+                } else if matches!(tp, Type::Tuple(_)) {
+                    // @P330: a tuple local hoisted to a tuple parameter
+                    // doesn't have a well-defined caller-side null-init —
+                    // call sites would push a 12-byte null DbRef placeholder
+                    // where the parameter slot is 16+ bytes per text element,
+                    // corrupting the callee's frame layout.  Skip the hoist
+                    // entirely: do NOT add an attribute, do NOT promote the
+                    // local to an argument, and do NOT propagate the dep to
+                    // the return type.  The function's return type loses
+                    // the dep on this local, which lets `scopes::free_vars`
+                    // (B5-L3 single-text branch, src/scopes.rs:961-988) save
+                    // the body's tail expression to a `__ret_N: text` temp
+                    // via `Set` (lowers to `OpAppendText`, deep-copying the
+                    // text-element bytes into an owned String) before the
+                    // local is freed.  Same logical fix family as @P329,
+                    // applied one layer up: @P329 fixed tuple-of-text
+                    // RETURN values via deep-copy temps; @P330 fixes
+                    // single-text returns derived from tuple-element access
+                    // on a local tuple variable via the same B5-L3 pattern,
+                    // just by NOT hoisting the tuple local to a parameter
+                    // (which is the wrong escape hatch).  No-op body —
+                    // the local stays a local, the dep is dropped.
                 } else {
                     let a = self
                         .data
