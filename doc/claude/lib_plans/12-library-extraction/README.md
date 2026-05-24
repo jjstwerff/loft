@@ -542,12 +542,46 @@ small `build.rs` to each library's native crate that:
    `include!(concat!(env!("OUT_DIR"), "/loft_register_gen.rs"));`
    at module scope — the macro expands in the normal compilation pass.
 
-Added files:
+Added files (initial cut):
 
 * `lib/crypto/native/build.rs` (~60 lines)
-* `lib/web/native/build.rs` (~60 lines; near-duplicate of crypto's —
-  shared `loft-ffi-build` crate is a future option once a third
-  library adopts the pattern)
+* `lib/web/native/build.rs` (~60 lines; near-duplicate of crypto's)
+
+**Option A collapse — DONE 2026-05-24.**  The two duplicated build
+scripts were collapsed into a shared `loft-ffi-build` crate at the
+repo root (sibling of `loft-ffi`).  Each library's `build.rs` is now
+two lines:
+
+```rust
+fn main() {
+    loft_ffi_build::generate_register_invocation("../loft.toml");
+}
+```
+
+…plus a single `[build-dependencies]` row in the library's
+`native/Cargo.toml`:
+
+```toml
+[build-dependencies]
+loft-ffi-build = { path = "../../../loft-ffi-build" }
+```
+
+The TOML scanner + register-invocation emitter live in one place
+(`loft-ffi-build/src/lib.rs::generate_register_invocation` +
+`parse_native_functions`).  Three unit tests in the helper cover
+the section-scanner edge cases (parses the section / empty section /
+no section).
+
+Adding a new library that owns native symbols is now:
+
+1. `lib/<X>/loft.toml::[native.functions]` — declare the rows.
+2. `lib/<X>/native/src/lib.rs` — write the
+   `pub unsafe extern "C" fn n_*` bodies.
+3. `lib/<X>/native/build.rs` — the two-line delegation above.
+4. `lib/<X>/native/Cargo.toml` — `loft-ffi-build` build-dep row.
+
+Steps 3 + 4 are exact copy-paste between libraries; only step 1 +
+step 2 carry library-specific content.
 
 Removed lines:
 
@@ -599,9 +633,10 @@ What deferred future work remains (outside Phase 2's scope):
    drained libraries.
 3. **WASM bridge decoupling** — unblocks @P321c imaging and
    removes the WASM-cfg exemption.  Separate future phase.
-4. **Shared `loft-ffi-build` helper crate** — collapse the
-   two near-identical build scripts when a third library
-   adopts the pattern.
+4. ~~**Shared `loft-ffi-build` helper crate**~~ — DONE
+   2026-05-24 (Option A above); the two near-identical
+   build scripts collapsed into a 60-line library at
+   `loft-ffi-build/src/lib.rs`.
 
 ### Phase 3 — Coordinate with PKG.REG (waiting phase)
 
