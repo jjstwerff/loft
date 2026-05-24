@@ -18,38 +18,42 @@ once the infrastructure ships.
 
 ## Status
 
-**ACTIVE 2026-05-23** — promoted from `future/`.  Trigger:
-@P321c diagnosis revealed the project keeps re-adding library
-code to the compiler crate (`src/codegen_runtime.rs` —
-`n_sha256` via @P321a, the half-finished `n_load_png` /
-`n_save_png` attempts during @P321c).  Activating this plan
-reframes the goal: instead of adding MORE library code to
-the compiler crate, **drain what's already there**.
+**ACTIVE.**  Trigger (2026-05-23): @P321c diagnosis revealed
+the project keeps re-adding library code to the compiler crate
+(`src/codegen_runtime.rs` — `n_sha256` via @P321a, the
+half-finished `n_load_png` / `n_save_png` attempts during
+@P321c).  Activating this plan reframed the goal: instead of
+adding MORE library code to the compiler crate, **drain what's
+already there**.
 
-Two prerequisites still gate the external-repo move:
+**Progress to date (2026-05-24)**:
 
-1. **PKG.REG** (central registry MVP) landing in
-   [PACKAGES.md § Open work](../../PACKAGES.md#open-work).
-   Until `loft install <name>` works against a registry, there's
-   no consumption path for an extracted library.
-2. **Compiler-crate decoupling** — see
-   [§ Prerequisite — decouple the compiler crate from library code](#prerequisite--decouple-the-compiler-crate-from-library-code)
-   below.  Today the loft compiler still carries library Rust
-   (`n_sha256` and 18 others in `src/native.rs`, plus crypto in
-   `src/codegen_runtime.rs`), and the package manifest's
-   `[native.functions]` table is consumed but the native registry
-   is still hand-maintained.  Until the compiler crate carries
-   zero library code, "extraction" is cosmetic.
+- **Phases 1 + 2 DONE.**  All library code drained from
+  `src/native.rs` for crypto and web; `[native.functions]` is
+  the declarative source of truth; `loft-ffi-build` generates
+  `loft_register!` invocations from the manifest.
+- **PKG.REG code complete** (PKG_REGISTRY.md R1-R9): `loft
+  package`, `loft install`, `loft search`, `loft info`,
+  lockfile, signing, recovery runbook.  Trust-root keypair +
+  registry-repo bootstrap pending (waiting on YubiKey
+  hardware to set up secure key storage).
+- **Phase 3.5 (NEW) — path-based dry-run** is the next
+  actionable step.  Validates the extraction mechanic
+  end-to-end **without** needing the live registry, by using
+  `loft.toml`'s `path = ".."` dependency form.  Effort
+  S (~half day per library); recommended first target is
+  `crypto` (smallest, drained earliest).  When the live
+  registry comes online, the dry-run output flips to a real
+  publish with a one-line change per consumer (`path =`
+  → `version =`).
+- **Phase 4 (real publish)** sits behind the YubiKey-based
+  trust-root bootstrap.  Code is ready; ecosystem
+  infrastructure is the gate.
 
-The **prerequisite arc (Phase 1 — drain `src/native.rs` of
-library symbols)** is unblocked NOW and is the first
-actionable work under this plan.  PKG.REG is the gate on
-the EXTERNAL-REPO move; the internal drain doesn't need it.
-
-When unblocked: per-library extraction proceeds on its own
-validated schedule.  Some libraries may extract early
-(stable, low-churn); others stay in the monorepo until
-their API matures.
+When the bootstrap completes: per-library extraction proceeds
+on its own validated schedule.  Some libraries may extract
+early (stable, low-churn — crypto, random, shapes, arguments);
+others stay in the monorepo until their API matures.
 
 ## Why a separate plan from PACKAGES.md infrastructure work
 
@@ -640,20 +644,115 @@ What deferred future work remains (outside Phase 2's scope):
 
 ### Phase 3 — Coordinate with PKG.REG (waiting phase)
 
-Phases 4-7 cannot proceed until both:
-- **PKG.REG** — registry MVP from [PACKAGES.md § Open
-  work](../../PACKAGES.md#open-work).
-- **cdylib loader** (`extensions.rs`) — also in PACKAGES.md
-  § Open work; required so registry-installed packages
-  contribute their `#native` symbols at install time.
+The full registry-backed publish flow (Phase 4+ "Stage B")
+cannot proceed until both:
+- **PKG.REG MVP** ships AND a trust-root keypair is generated
+  + embedded in a loft release.  Code is DONE 2026-05-24
+  (PKG_REGISTRY.md R1-R9); ecosystem-side bootstrap is the
+  remaining gate.
+- **cdylib loader** (`extensions.rs`) — already shipped via
+  Phase 2.  This bullet was originally about external-
+  registry-installed packages contributing native symbols at
+  install time; Phase 2's `[native.functions]` + build.rs
+  pattern handles this cleanly.  No additional work.
 
-No work owned by this plan.  Phases 1-2 are not blocked
-on PKG.REG and should ship in parallel.
+**Acceptance** (when both above land): `loft install <name>`
+resolves a published package; `#native` symbols dispatch
+through the cdylib loader; `make ci` passes against a
+registry-installed copy of one test package.
 
-**Acceptance:** `loft install <name>` resolves a published
-package; `#native` symbols dispatch through the cdylib
-loader; `make ci` passes against a registry-installed copy
-of one test package.
+### Phase 3.5 — Path-based dry-run (unblocks NOW)
+
+**Goal**: validate the Stage-A extraction mechanics
+(move library out of monorepo, monorepo consumes via
+external path) **before** the live registry exists.
+Catches hidden assumptions ("oh, this file path was
+hardcoded somewhere"), exposes consumer-side bugs in
+`loft.toml` path-dep handling, and gives confidence the
+real publish (Phase 4+) is mechanical rather than a
+discovery exercise.
+
+**Why this is unblocked**: `loft.toml` already supports
+`[dependencies] <pkg> = { path = "../<external-repo>" }`.
+Path-deps don't go through the registry, don't need a
+trust root, don't need anything published.  When the
+registry ships, flipping `path = ".."` → `version = "0.1.0"`
+is a one-line per-consumer change in each `loft.toml`.
+
+**Steps for the first dry-run target (`crypto`)**:
+
+1. Pick a sibling location for the external copy.  Two
+   options: a real `loft-lang/loft-crypto` GitHub repo
+   (more realistic) OR a sibling directory
+   `../loft-crypto/` under your dev tree (faster to set
+   up; works fine).  Use the GitHub repo if you want to
+   exercise the per-library CI shape from Phase 4's
+   "Additional deliverables" early.
+2. Move `lib/crypto/` to the new location.  Preserve the
+   directory tree exactly — `loft.toml`, `src/`,
+   `native/`, `tests/`, `README.md` (if any).  The
+   already-shipped Phase 2 `[native.functions]` + build.rs
+   travel with the package.
+3. For each monorepo consumer that uses `use crypto;`,
+   update `loft.toml`:
+
+   ```toml
+   [dependencies]
+   crypto = { path = "../loft-crypto" }
+   ```
+
+4. Run `make ci`.  Validates:
+   - The path-dep resolves cleanly.
+   - `loft install` / dep-walk doesn't choke on a non-
+     `lib/`-prefixed source location.
+   - Native cdylib (`libloft_crypto.dylib`) builds from
+     the external location.
+   - Extraction-hygiene gate still passes (the 6
+     forbidden crypto `n_*` symbols are still absent from
+     `src/**/*.rs`).
+5. Run `loft package` in the external `loft-crypto/`
+   directory to confirm the tarball builds cleanly from
+   the external location — same SHA-256 as we saw during
+   R1 smoke (`43ebf109b0206bd00cab03209b1da081ba9f5caa416aa077ccb1dda65da67cfa`).
+
+**Acceptance**:
+- `lib/crypto/` removed from monorepo.
+- `loft.toml`s of consumers reference the external path.
+- Full local CI passes (`./scripts/find_problems.sh --wait`
+  modulo the recurring sandbox-only `index_hygiene_clean`).
+- `loft package` in the external location produces the
+  expected tarball + SHA-256.
+
+**What this does NOT do**:
+
+- Doesn't publish anything (no GitHub release, no
+  registry PR).  Output is just "we know the mechanic
+  works."
+- Doesn't ship a loft release.  This is all internal
+  dev-tree movement.
+- Doesn't decouple monorepo CI from the external repo —
+  during the dry-run, the monorepo + external dir must
+  travel together.  Real Phase 4 fixes this by going
+  through the registry instead of `path =`.
+
+**When to flip dry-run → real publish (later)**:
+
+After the trust root ships (post-YubiKey-bootstrap):
+
+1. Tag `v0.1.0` in the external `loft-crypto` repo.
+2. `gh release create v0.1.0 crypto-0.1.0.tar.gz`.
+3. Open the registry PR adding the version row.
+4. Sign + merge per PKG_REGISTRY.md.
+5. Update consumer `loft.toml`s: `path = ".."` →
+   `crypto = ">=0.1"`.  Net change to monorepo: one line
+   per consumer, every consumer is `crypto = ">=0.1"`.
+
+**Effort**: S (~half day) for crypto.  Subsequent
+dry-runs (random, shapes, arguments, web) follow the same
+template; each is faster as the muscle memory builds.
+Recommended order: crypto first (smallest, drained
+earliest), then random / shapes / arguments in a
+follow-up session.
 
 ### Phase 4 — Extract `loft-libs-core` (first chunk)
 
@@ -898,10 +997,11 @@ references the monorepo `Cargo.toml` workspace.
 
 | Phase | Scope | Depends on | Effort |
 |---|---|---|---|
-| 1 | Drain library symbols from `src/native.rs`; convert single-file modules | — | M (3 subs) |
-| 2 | Compile-time native-registry aggregator | Phase 1 | M |
-| 3 | PKG.REG + cdylib loader land | PACKAGES.md § Open work | — (external) |
-| 4 | Extract `loft-libs-core` (arguments, random, crypto, shapes) | Phases 1-3 | M |
+| 1 | Drain library symbols from `src/native.rs`; convert single-file modules | — | M (3 subs) — **DONE 2026-05-24** |
+| 2 | Compile-time native-registry aggregator | Phase 1 | M — **DONE 2026-05-24** |
+| 3 | PKG.REG + cdylib loader land | PACKAGES.md § Open work | — (external) — PKG.REG **code complete 2026-05-24**; ecosystem-bootstrap pending YubiKey arrival |
+| **3.5** | **Path-based dry-run** — extract one library (crypto first) to a sibling location, monorepo consumes via `path = ".."`.  Validates Stage-A mechanics before registry exists. | Phases 1-2 only | S (~half day per library) |
+| 4 | Extract `loft-libs-core` (arguments, random, crypto, shapes) — real publish through registry | Phases 1-3 + Phase 3.5 dry-run for the same package | M |
 | 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh) | Phase 4 + `../02-graphics/` | M |
 | 6 | Extract `loft-libs-net` (server, web, game_protocol) | Phase 4 + `../08-server/` | M |
 | 6w | Extract `loft-libs-world` (`world` expanded by 7a, wall folded in) | Phase 7a | M |
