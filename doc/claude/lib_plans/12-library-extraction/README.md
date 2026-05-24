@@ -365,7 +365,7 @@ cleanly.
 | Sub | Work | Effort | Status |
 |---|---|---|---|
 | 1a | Move 6 fns (`n_sha256`, `n_hmac_sha256`, `n_hmac_sha256_raw`, `n_base64_encode`, `n_base64_decode`, `n_base64url_encode`) from `src/native.rs` AND the @P321a duplicates in `src/codegen_runtime.rs` into new `lib/crypto/native/` cdylib.  Also moves `src/sha256.rs` out (only crypto used it); `src/base64.rs` stays (compiler-internal `main.rs::wasm_b64` use for `--html` export) but a copy ships with `lib/crypto/native`. | XS | **DONE 2026-05-23** — `lib/crypto/native/{Cargo.toml,src/{lib.rs,sha256.rs,base64.rs}}` ships the 6 fns via the standard `loft_ffi::loft_register!` ABI; `lib/crypto/loft.toml` declares `native = "loft_crypto"`; `is_crypto_runtime_symbol` removed from `src/generation/mod.rs`; both interp + `--native` crypto tests pass 6/6. |
-| 1b | Move 13 fns from `src/native.rs` into `lib/web/native/` crate (the dir already exists with 6 symbols; this adds the remaining 13) | S | pending |
+| 1b | Drain the 19 `lib/web` `n_*` symbols (`n_http_do`, `n_http_body`, `n_ws_connect`, `n_ws_client_send`, `n_ws_client_send_binary`, `n_ws_client_recv`, `n_ws_client_message`, `n_ws_client_opcode`, `n_ws_client_close`, `n_sleep_ms`, `n_pack_reset`, `n_pack_u8`, `n_pack_u16_le`, `n_pack_u32_le`, `n_pack_take`, `n_byte_at`, `n_ws_group_clear`, `n_ws_group_add`, `n_ws_group_poll`) from the compiler crate's regular dispatch path.  Lock in via `FORBIDDEN_LIBRARY_SYMBOLS`. | XS | **DONE 2026-05-24** — `lib/web/native/src/lib.rs` already ships all 19 via `loft_ffi::loft_register!`; `lib/web/loft.toml` declares `native = "loft_web"`.  Regular native path uses the cdylib at runtime via `extensions::wire_native_fns`.  The 13 WASM-bridge stubs in `src/native.rs::WEB_FUNCTIONS_WASM` (gated on `#[cfg(all(target_arch = "wasm32", feature = "wasm"))]`) stay — WASM has no `dlopen`, so the only way to register native symbols is statically.  `tests/extraction_hygiene.rs` was extended with `wasm32_cfg_gated_lines` to skip lines inside `#[cfg(...wasm32...)]` blocks; the 19 web symbols now appear in `FORBIDDEN_LIBRARY_SYMBOLS` and the test passes.  Decoupling the WASM bridge itself (so `lib/web/native/` can also compile a `wasm32-unknown-unknown` cdylib + the host bridge moves out of `src/wasm.rs`) is a separate future phase — not blocking the per-library external-repo extraction below. |
 | 1c | Resolve the 8 single-file `lib/*.loft` modules per [§ Single-file modules — destinations decided](#single-file-loftloft-modules-8--destinations-decided): convert at most 1 (`logger.loft`, pending Open Q #11) to package format; the other 7 either fold into `lib/world/` in Phase 7a (`wall.loft`, `overland.loft`) or stay as monorepo-internal tooling (`code.loft`, `lexer.loft`, `parser.loft`, `docs.loft`, `testlib.loft`). | XS-S | pending |
 
 **Acceptance gate — `tests/extraction_hygiene.rs`.**  Every Phase 1
@@ -375,7 +375,14 @@ The test:
 
 1. Walks `src/**/*.rs`, skips `//` comments, fails if any code
    position contains a listed symbol name.  Word-boundary match
-   so `n_sha256` matches but not `not_n_sha256_oops` etc.
+   so `n_sha256` matches but not `not_n_sha256_oops` etc.  Lines
+   inside `#[cfg(...wasm32...)]` gated blocks are exempted via
+   `wasm32_cfg_gated_lines` (Phase 1b, 2026-05-24): WASM has no
+   `dlopen`, so its host-bridge stubs (`src/wasm.rs::host_*` →
+   `src/native.rs::WEB_FUNCTIONS_WASM`) MUST live in the compiler
+   crate until the WASM bridge architecture is decoupled.  Regular
+   native dispatch uses the `lib/<X>/native/` cdylib via
+   `extensions::wire_native_fns`.
 2. Reads the main crate's `Cargo.toml`, fails if it lists any
    library-only dep from `FORBIDDEN_MAIN_CRATE_DEPS` (currently
    empty — filled in as cdylib loading lets libraries' deps move

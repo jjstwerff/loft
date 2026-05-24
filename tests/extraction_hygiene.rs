@@ -53,11 +53,41 @@ const FORBIDDEN_LIBRARY_SYMBOLS: &[(&str, &str)] = &[
     ("n_base64_encode", "lib/crypto/native"),
     ("n_base64_decode", "lib/crypto/native"),
     ("n_base64url_encode", "lib/crypto/native"),
+    // ── Phase 1b (web, 2026-05-24) ───────────────────────────────
+    //
+    // All 19 web symbols already ship via `lib/web/native/` cdylib
+    // (loaded at runtime by `extensions::wire_native_fns` per
+    // `lib/web/loft.toml::native = "loft_web"`).  The 13 listed below
+    // also retain WASM-only stubs in `src/native.rs::WEB_FUNCTIONS_WASM`
+    // — those bridge to `crate::wasm::host_*` because WASM has no
+    // dlopen, so static registration is the only option.  The
+    // `skip_line_in_cfg_block` helper below skips lines inside
+    // `#[cfg(...wasm32...)]` blocks so this list enforces the drain
+    // for the regular native path while leaving the WASM bridge
+    // intact.  Decoupling the WASM bridge itself (so lib/web/native
+    // can compile a wasm32 cdylib) is a separate future phase.
+    ("n_http_do", "lib/web/native"),
+    ("n_http_body", "lib/web/native"),
+    ("n_ws_connect", "lib/web/native"),
+    ("n_ws_client_send", "lib/web/native"),
+    ("n_ws_client_send_binary", "lib/web/native"),
+    ("n_ws_client_recv", "lib/web/native"),
+    ("n_ws_client_message", "lib/web/native"),
+    ("n_ws_client_opcode", "lib/web/native"),
+    ("n_ws_client_close", "lib/web/native"),
+    ("n_sleep_ms", "lib/web/native"),
+    ("n_pack_reset", "lib/web/native"),
+    ("n_pack_u8", "lib/web/native"),
+    ("n_pack_u16_le", "lib/web/native"),
+    ("n_pack_u32_le", "lib/web/native"),
+    ("n_pack_take", "lib/web/native"),
+    ("n_byte_at", "lib/web/native"),
+    ("n_ws_group_clear", "lib/web/native"),
+    ("n_ws_group_add", "lib/web/native"),
+    ("n_ws_group_poll", "lib/web/native"),
     // Add rows here as later phases drain more libraries:
-    //   ("n_load_png",  "lib/imaging/native"),   // phase TBD
-    //   ("n_save_png",  "lib/imaging/native"),   // phase TBD
-    //   ("n_http_do",   "lib/web/native"),       // phase 1b
-    //   ("n_http_body", "lib/web/native"),       // phase 1b
+    //   ("n_load_png",  "lib/imaging/native"),   // phase TBD (@P321c)
+    //   ("n_save_png",  "lib/imaging/native"),   // phase TBD (@P321c)
     //   ("n_rand",      "lib/random/native"),    // phase TBD
     //   ("n_rand_seed", "lib/random/native"),    // phase TBD
     //   ("n_rand_indices", "lib/random/native"), // phase TBD
@@ -95,6 +125,102 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Precompute, for one file's lines, the set of line indices that live
+/// inside (or directly above) a `#[cfg(...wasm32...)]` gate.  A line is
+/// gated when:
+///
+/// 1. It IS a `#[cfg(...wasm32...)]` attribute.
+/// 2. The previous non-empty non-comment line is one (covers per-row
+///    attribute on a const-slice entry or `fn …` definition).
+/// 3. It lives inside a top-level brace block (`fn`, `const ... = &[`,
+///    `mod`, `impl`) whose opening line was preceded by a wasm32 cfg
+///    attribute.
+///
+/// Heuristic — not a full Rust parser — but matches every wasm32-only
+/// shape currently in the loft codebase (per-fn cfg on WASM bridge
+/// helpers; per-array cfg on `WEB_FUNCTIONS_WASM`).  False positives
+/// (skipping non-wasm lines) only hide forbidden symbols; false
+/// negatives just surface them sooner.
+fn wasm32_cfg_gated_lines(lines: &[&str]) -> Vec<bool> {
+    let mut gated = vec![false; lines.len()];
+    // Walk forward, tracking whether the most recent non-empty
+    // non-comment line was a `#[cfg(...wasm32...)]` attribute.  When
+    // we see a brace-opening line, decide whether the resulting block
+    // is gated by checking the pending attribute.  Maintain a stack
+    // of (depth_at_open, gated_flag) so nested blocks inherit.
+    let mut stack: Vec<(i32, bool)> = vec![(0, false)];
+    let mut depth: i32 = 0;
+    let mut pending_wasm_attr = false;
+    for (i, raw) in lines.iter().enumerate() {
+        let trimmed = raw.trim();
+        let is_attr_line = is_wasm32_cfg_attr(trimmed);
+        // Gate the line itself if it IS the attribute or the
+        // enclosing block is gated.
+        if is_attr_line {
+            gated[i] = true;
+            pending_wasm_attr = true;
+            continue;
+        }
+        let inside_gated_block = stack.last().is_some_and(|&(_, g)| g);
+        // Determine effective gating BEFORE we update brace depth so
+        // open-brace lines are themselves marked gated when the
+        // pending attribute applied to them.
+        let gated_now = inside_gated_block || (pending_wasm_attr && !trimmed.is_empty());
+        if gated_now {
+            gated[i] = true;
+        }
+        // Strip comments / strings minimally before counting to avoid
+        // mis-counting delimiters inside `//` or `"…"`.  Cheap
+        // approximation: drop `//` and everything after.  Track `{`,
+        // `[`, AND `(` together — a const-slice declaration opens with
+        // `&[` not `{`, and we still want to mark its elements as gated.
+        let code = trimmed.split_once("//").map_or(trimmed, |(c, _)| c);
+        let opens = (code.matches('{').count()
+            + code.matches('[').count()
+            + code.matches('(').count()) as i32;
+        let closes = (code.matches('}').count()
+            + code.matches(']').count()
+            + code.matches(')').count()) as i32;
+        let net = opens - closes;
+        if opens > 0 {
+            // Opening at least one block on this line — push gating
+            // state derived from pending_wasm_attr OR inherited.
+            let block_gated = inside_gated_block || pending_wasm_attr;
+            for _ in 0..opens {
+                stack.push((depth, block_gated));
+                depth += 1;
+            }
+        }
+        if closes > 0 {
+            for _ in 0..closes {
+                depth = depth.saturating_sub(1);
+                if stack.len() > 1 {
+                    stack.pop();
+                }
+            }
+        }
+        // `pending_wasm_attr` clears once we've seen any non-empty
+        // non-comment, non-cfg-attr line OR after the opening brace
+        // of the gated block has been pushed.
+        if !trimmed.is_empty() && !trimmed.starts_with("#[") {
+            pending_wasm_attr = false;
+        }
+        // Also clear if pending was consumed by opening a block.
+        if net > 0 {
+            pending_wasm_attr = false;
+        }
+    }
+    gated
+}
+
+fn is_wasm32_cfg_attr(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if !(trimmed.starts_with("#[cfg(") || trimmed.starts_with("#![cfg(")) {
+        return false;
+    }
+    trimmed.contains("wasm32") || trimmed.contains("target_arch = \"wasm32\"")
+}
+
 #[test]
 fn forbidden_library_symbols_absent_from_src() {
     let root = workspace_root();
@@ -117,11 +243,21 @@ fn forbidden_library_symbols_absent_from_src() {
         // valid description of the drain location can mention the
         // symbol name — see the trailing comment in `src/native.rs`'s
         // NATIVE_TABLE).  Only CODE occurrences are violations.
-        for (line_idx, line) in content.lines().enumerate() {
+        let lines: Vec<&str> = content.lines().collect();
+        let gated = wasm32_cfg_gated_lines(&lines);
+        for (line_idx, line) in lines.iter().enumerate() {
             // Strip after `//`.  Doesn't handle `/* ... */` block
             // comments correctly, but those aren't used in this
             // codebase for symbol-name references.
-            let code_part = line.split_once("//").map_or(line, |(c, _)| c);
+            let code_part = line.split_once("//").map_or(*line, |(c, _)| c);
+            // Phase 1b (@PLAN12, 2026-05-24): skip lines living inside
+            // a `#[cfg(...wasm32...)]` gated block.  Those library
+            // `n_*` references stay in the compiler crate because WASM
+            // has no dlopen and must register symbols statically; the
+            // regular native path uses the cdylib in `lib/<X>/native/`.
+            if gated[line_idx] {
+                continue;
+            }
             for (sym, owner) in FORBIDDEN_LIBRARY_SYMBOLS {
                 for (idx, _) in code_part.match_indices(sym) {
                     let prev_ok = idx == 0
