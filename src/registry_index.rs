@@ -1,6 +1,13 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+// Included by BOTH the library crate (where install.rs + the search/info
+// CLI subcommands use the full API) AND the binary crate (where
+// parser/mod.rs::probe_registry_installed routes through lockfile only).
+// `allow(dead_code)` silences the binary's view; the lib uses every
+// symbol so the attribute is a no-op there.
+#![allow(dead_code)]
+
 //! Parsed `registry.json` (the JSON-format file-based registry index
 //! described in [PKG_REGISTRY.md](../doc/claude/PKG_REGISTRY.md)).
 //!
