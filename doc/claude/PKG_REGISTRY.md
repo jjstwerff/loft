@@ -14,6 +14,17 @@ This doc fleshes out the "(b) central registry server (GitHub Pages +
 static index acceptable for MVP)" sub-phase from
 [PACKAGES.md § Open work](PACKAGES.md#open-work).
 
+**Revision 2 (2026-05-24)** — Debian-comparison pass added.
+Promoted index signing from "Path 1 server feature" to "MVP R3.5"
+(real security gap closed).  Added schema slots for `conflicts` /
+`replaces` / `provides` / `binaries` / `prerelease` / `categories`
+(Debian-inspired, reserved fields, resolver-side support deferred
+to keep MVP scope tight).  Explicit "not adopted" table records
+items deliberately rejected (pre/postinst scripts, debconf,
+alternatives, triggers, epoch versioning, `main`/`contrib`/`non-free`)
+so future PRs aren't re-litigated.  See
+[§ Comparison to Debian](#comparison-to-debian--what-we-adopted-what-we-didnt).
+
 ---
 
 ## The invariant — end-user experience is identical to a real server
@@ -169,6 +180,7 @@ Everything else is repo-internal infrastructure for keeping
     "<pkg_name>": {
       "description": "Short one-line description (optional).",
       "homepage": "https://github.com/loft-lang/loft-<pkg> (optional)",
+      "categories": ["crypto", "stdlib-augment"],
       "yanked": ["0.1.2", …],
       "versions": {
         "<semver>": {
@@ -179,6 +191,11 @@ Everything else is repo-internal infrastructure for keeping
           "deps": {
             "<dep_pkg>": ">=0.1"
           },
+          "conflicts": [],
+          "replaces": [],
+          "provides": [],
+          "binaries": {},
+          "prerelease": false,
           "published": "2026-05-24T08:00:00Z"
         },
         …
@@ -197,12 +214,18 @@ Everything else is repo-internal infrastructure for keeping
 | `updated` | yes | ISO-8601 UTC timestamp of the last index modification.  Lets clients detect stale caches. |
 | `packages.<name>.description` | no | Display string for `loft search` output. |
 | `packages.<name>.homepage` | no | URL to the package's repo / docs. |
+| `packages.<name>.categories` | no | Array of category tags for discovery.  Free-form; `loft search --category crypto` filters on them.  Inspired by Debian's `Section:` field and cargo's `categories = […]`.  Empty by default; future curation can establish a canonical set. |
 | `packages.<name>.yanked` | no | Array of yanked versions.  Yanked versions stay listed so `loft.lock`-pinned consumers don't break, but new installs / version resolution skip them. |
 | `packages.<name>.versions.<semver>.url` | yes | Direct download URL for the tarball.  Convention: GitHub release asset. |
 | `…sha256` | yes | Lowercase hex of the SHA-256 hash of the tarball bytes.  Verified post-download. |
 | `…size` | yes | Byte length.  Bandwidth sanity check + early-abort on giant downloads. |
 | `…loft` | yes | Required loft interpreter version.  `>=0.8` syntax mirrors `loft.toml::[package] loft`. |
 | `…deps` | no | Inter-package dependencies.  Resolved during install; failures abort before any download. |
+| `…conflicts` | no | **(Schema slot — resolver support deferred.)** Array of package names + version constraints that cannot coexist with this version in the same dependency graph.  Inspired by Debian's `Conflicts:`.  Reserved field so the schema doesn't need a bump when the resolver gains support. |
+| `…replaces` | no | **(Schema slot — resolver support deferred.)** Array of packages this version takes over from (rename / fork takeover).  Inspired by Debian's `Replaces:`. |
+| `…provides` | no | **(Schema slot — resolver support deferred.)** Array of virtual capability names this version supplies.  Lets a different package satisfy the same `deps` constraint — e.g. `crypto-bcrypt` and `crypto-argon2` both provide `password-hash`.  Inspired by Debian's `Provides:`. |
+| `…binaries` | no | **(Schema slot — pre-built distribution deferred.)** Map of `<target-triple>` → `{url, sha256}` pointing at pre-built cdylibs.  When present and a triple matches, `loft install` skips the local `cargo build` step.  When absent, consumer builds from the `native/` source in the tarball.  Inspired by Debian's per-arch `.deb` files. |
+| `…prerelease` | no | Boolean.  `true` for beta / rc versions.  `loft install <pkg>` (no version) skips prereleases by default; `loft install <pkg>@<v>` honours an explicit pin; `loft install <pkg>@beta` resolves the latest prerelease.  Inspired by Debian's `testing` / `unstable` release pockets. |
 | `…published` | yes | ISO-8601 publish timestamp.  Audit trail. |
 
 ### Why JSON not TOML
@@ -482,6 +505,145 @@ don't break) but new installs / version resolution skip them.
 
 ---
 
+## Index signing — `index.json.sig`
+
+Closes a real security gap in the file-based design.  Without
+signing, the chain of trust is HTTPS → `index.json` → tarball
+sha256 — but **nothing protects the index itself**.  An attacker
+who compromises the registry repo or MITM's the HTTPS connection
+can serve a modified `index.json` pointing at malicious tarballs
+with matching (recomputed) sha256s.
+
+Borrowed from Debian's `Release.gpg` / `InRelease`.
+
+### How it works
+
+1. Loft maintainers hold a single trust-root signing key (Ed25519,
+   stored in `loft-lang/registry` org's secret manager / hardware
+   token, NOT in the registry repo itself).
+2. The loft binary embeds the **public key** at compile time
+   (`src/registry_keys.rs`, ~50 bytes).  Multiple keys can be
+   embedded for rotation; clients accept signatures from any
+   listed key.
+3. After every accepted PR against `loft-lang/registry`, a
+   `release-bot` workflow:
+   - Recomputes the `index.json` file.
+   - Signs it with the maintainer key.
+   - Commits `index.json.sig` (raw Ed25519 signature, base64) next
+     to `index.json`.
+4. Clients fetch both files.  Verify the signature over the bytes
+   of `index.json`.  Refuse to use an unsigned/invalid-sig index
+   unless `--allow-unsigned` is passed.
+
+### Key rotation
+
+Add the new public key to a freshly-tagged loft binary release.
+Sign the index with BOTH old + new keys for a transition window
+(say, 3 months).  Once enough of the ecosystem has upgraded, drop
+old-key signatures.  Compromised key: bump loft minor, embed only
+the new key, distrust the old key via `~/.loft/distrusted_keys`
+override.
+
+### Why Ed25519, not GPG
+
+GPG is a deep rabbit hole (web of trust, key servers, expiry,
+revocation).  Ed25519 is one signature, one public key, ~120
+lines of `ed25519-dalek` to verify.  Same security guarantee for
+the threat model loft cares about (integrity of the index from a
+single trusted root).
+
+### Implementation phases — slotted into the R-list
+
+* **R3.5** (between R3 bootstrap and R4 install) — add the signing
+  workflow to `loft-lang/registry` + embed the public key in the
+  loft binary.  Required for R4 to verify on install.
+* **R10.5** (after R10 first publish) — first real key rotation
+  drill to validate the rotation path before key compromise
+  happens for real.
+
+---
+
+## Reproducible-build verification at the registry
+
+Borrowed from Debian's reproducible-builds initiative.  R1's
+`loft package` already produces deterministic tarballs (same
+source dir → same sha256 across runs).  Promote this from
+"nice property" to "registry-side enforcement":
+
+* When a PR adds a new version entry to `index.json`:
+  1. The CI workflow checks out the package's tagged source
+     (`git clone --depth=1 --branch v<version> <homepage>`).
+  2. Runs `loft package` on the checkout.
+  3. Compares the produced sha256 to the PR's claimed sha256.
+  4. Rejects the PR on mismatch.
+
+This catches:
+- Honest mistakes (publisher manually edited the tarball,
+  forgot to repackage).
+- Malicious publishers (PR claims hash X but the published
+  GitHub-release tarball has hash Y — only the consumer
+  hash-check catches this today; the CI gate catches it at
+  PR time).
+
+Caveat: doesn't catch supply-chain attacks on the upstream
+source itself (compromised git tags, etc.).  That's a different
+trust problem (sigstore / cosign / `attestations.json`); out of
+MVP scope.  Reproducible-build verification is the cheap layer
+that handles the common honest-mistake / opportunistic-attack
+class.
+
+Lives in `R9` (registry-PR validator) — schema-wise no change;
+it's a CI workflow addition.
+
+---
+
+## Comparison to Debian — what we adopted, what we didn't
+
+Surveyed Debian/apt's ecosystem for prior art.  Decisions:
+
+### Adopted in the MVP (schema-level)
+
+| Debian concept | Loft equivalent | Where |
+|---|---|---|
+| `Release.gpg` / `InRelease` (signed index) | `index.json.sig` (Ed25519) | [§ Index signing](#index-signing--indexjsonsig) — phase R3.5 |
+| `Section:` field (categorisation) | `packages.<name>.categories` | Schema field, free-form tags |
+| Reproducible-build pledge | `loft package` deterministic sha256 + CI re-verify | R1 + R9 |
+| Source-build install (consumer compiles native) | Default behaviour; pre-built optional via `binaries` field | Schema slot |
+| `apt-get update` (separate index refresh) | Cached index with 1h TTL + `--refresh` flag | [§ Local cache layout](#local-cache-layout) |
+| Mirrors via `sources.list` | `LOFT_REGISTRY_URL` env var | [§ Decoupled lifecycle](#decoupled-lifecycle--debian-style-the-registry-is-a-repo) |
+
+### Adopted as schema slots — resolver support deferred
+
+These get reserved fields NOW so the schema doesn't need a bump
+when implementation lands.  No client-side resolver changes
+required for MVP.
+
+| Debian concept | Loft schema slot | When to implement |
+|---|---|---|
+| `Conflicts:` | `versions.<v>.conflicts: []` | When two real packages can't coexist. |
+| `Replaces:` | `versions.<v>.replaces: []` | When a package is renamed / forked. |
+| `Provides:` (virtual packages) | `versions.<v>.provides: []` | When alternative implementations of the same capability appear. |
+| Per-arch `.deb` files | `versions.<v>.binaries: {<triple>: …}` | When local `cargo build` becomes the install bottleneck. |
+| `testing` / `unstable` release pockets | `versions.<v>.prerelease: bool` | When a package author wants a beta channel. |
+
+### Not adopted — incompatible with loft's model
+
+| Debian concept | Why we don't want it |
+|---|---|
+| Pre/post install scripts (`preinst`, `postinst`) | Security disaster: arbitrary code execution at install time.  Loft packages stay as data + Rust source + loft source — no install scripts.  Compilation of the Rust crate is the *only* code path that runs (and it's `rustc`, not the package's own scripts). |
+| `debconf` (interactive config) | Wrong UX for a programming-language ecosystem; install must be scriptable + non-interactive. |
+| `dpkg-divert` / `update-alternatives` | Solves file-conflict resolution for system-wide installs.  Doesn't apply — each loft package lives in its own `~/.loft/registry/<pkg>-<version>/` directory; no global file conflicts possible. |
+| Triggers (one package reacts to another's install/remove) | Overkill for a programming-language ecosystem.  Real use case has yet to emerge. |
+| Epoch versioning (`1:2.3.4-5`) | Debian needed this because some upstreams reset their version numbers.  Semver covers loft's case; no epoch required. |
+| `main` / `contrib` / `non-free` section split (license tiers) | Becomes relevant when packages with restrictive licenses appear.  Current ecosystem is uniformly LGPL/MIT/Apache; a single tier is fine.  `categories` field above can carry a `non-free` tag if/when needed. |
+| Source vs binary package split (`.dsc` + tarball vs `.deb`) | Our tarball bundles both — source IS the install unit.  When pre-built distribution lands via the `binaries` schema slot, it'll be an OPTIONAL acceleration, not a separate package type. |
+
+This split is **load-bearing**: future PRs that propose any of the
+"not adopted" items should be redirected here.  The rationale is
+recorded so the decision doesn't get re-litigated.
+
+---
+
 ## Migration to a real server (later)
 
 **Hard constraint: the user-visible behaviour must NOT change.** See
@@ -500,10 +662,12 @@ endpoint, publish API, signing) layer on top:
 | Endpoint | Purpose |
 |---|---|
 | `GET /registry.json` | Existing.  All clients hit this. |
+| `GET /index.json.sig` | Existing.  Ed25519 signature; clients verify with embedded public key.  Server signs on every update with the same maintainer key the MVP used. |
 | `GET /v1/search?q=` | New.  Server-side index, faster than client-grep at scale. |
-| `POST /v1/publish` | New.  Replaces the manual PR; auth via token. |
+| `POST /v1/publish` | New.  Replaces the manual PR; auth via token.  Server still produces a signed `index.json` after each publish; signing key lives in the server's HSM. |
 | `POST /v1/yank` | New.  Replaces yank PRs. |
 | `GET /v1/packages/<name>` | New.  Single-package metadata (skip the full index). |
+| `GET /v1/attestations/<pkg>-<v>` | Future.  Per-tarball publisher attestations (sigstore-style) — finer-grained than the single trust-root signing the MVP ships. |
 
 ### Path 2 — Stay file-based, add tooling
 
@@ -525,16 +689,20 @@ by actual ecosystem growth.  The MVP commits to neither.
 | **R1** | `loft package` CLI — produce tarball + sha256 from a `loft.toml` package | S | **DONE 2026-05-24** — `src/package.rs` + `loft package` subcommand.  Outputs `<pkg>-<version>.tar.gz` with deterministic SHA-256 + the registry-index entry to paste into the publish PR.  Feature-gated on `registry`.  4 unit tests + smoke-tested on `lib/crypto` (5.6 kB, sha256 stable across two runs) and `lib/web` (21.5 kB).  Excludes `.git/`, `target/`, `.loft/`, `node_modules/`, `.vscode/`, `.idea/`, `*.tar.gz`. |
 | **R2** | `loft.lock` schema + writer (PKG.7 from PACKAGES.md) | S | none |
 | **R3** | Bootstrap empty `registry.json` in `loft-lang/registry` repo | XS | none |
-| **R4** | `loft install <name>[@<v>]` — index fetch, resolve, download, verify, extract | M | R1, R2, R3 |
+| **R3.5** | Index signing (`index.json.sig`) + public-key embed in loft binary.  Borrowed from Debian's `Release.gpg`.  See [§ Index signing](#index-signing--indexjsonsig). | S | R3 |
+| **R4** | `loft install <name>[@<v>]` — index fetch, **signature verify**, resolve, download, verify tarball sha256, extract | M | R1, R2, R3, R3.5 |
 | **R5** | `loft install` (no args) — read project loft.toml, install per lock | S | R4 |
 | **R6** | `loft update [<name>]` — re-resolve | S | R4 |
 | **R7** | Diamond / transitive resolution | S | R4 |
 | **R8** | `loft search`, `loft info` — client-side index queries | XS | R4 |
-| **R9** | CI validation script for `loft-lang/registry` PRs | XS | R3 |
+| **R9** | CI validation script for `loft-lang/registry` PRs — schema lint + sha256 verify + **reproducible-build re-check** (rebuild from source, compare sha256) | S | R1, R3 |
 | **R10** | First real publish: `lib_plans/12-library-extraction` Phase 4 (`loft-libs-core` chunk) extracts crypto + arguments + random + shapes | M | R1-R9 |
 
-Total MVP scope to "PKG.REG done": **R1 through R9**.  R10 is
-the first user of the registry, owned by plan-12.
+Total MVP scope to "PKG.REG done": **R1 through R9** (including
+the new R3.5 signing phase).  R10 is the first user of the
+registry, owned by plan-12.
+
+| **R10.5** | First real key-rotation drill — exercise the rotation path while no real compromise is happening. | XS | R3.5, R10 |
 
 ---
 
@@ -557,9 +725,14 @@ contributors don't redesign each on the spot.
 5. **Multi-registry support** (alternative registries / private
    mirrors).  Single registry URL hardcoded in the loft binary.
    Multi-registry is Path 1's job.
-6. **Signing (Ed25519 / sigstore).** SHA-256 hash + HTTPS download
+6. ~~**Signing (Ed25519 / sigstore).** SHA-256 hash + HTTPS download
    covers integrity for the MVP.  Cryptographic signing is a Path 1
-   feature.
+   feature.~~ **REVISED 2026-05-24** — index signing IS in the MVP
+   via R3.5 (Ed25519 over `index.json`, single trust-root key).
+   Per-tarball signing (sigstore / cosign / per-publisher keys) is
+   still a Path 1 feature; the file-based MVP's trust model is "the
+   index is signed by loft maintainers; that index attests to every
+   tarball's sha256."
 
 ---
 
