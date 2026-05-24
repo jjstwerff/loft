@@ -424,6 +424,54 @@ library entries.  Compiler crate carries no library code.
 
 **Effort:** M.
 
+#### Phase 2 step 1 — `[native.functions]` as the single source of truth (DONE 2026-05-24)
+
+The simpler half of Phase 2 — making `[native.functions]`
+in `lib/<X>/loft.toml` the declarative source of truth for
+which native `n_*` symbols a library owns — landed first.
+The `Manifest` reader at [`src/manifest.rs:64`](../../../src/manifest.rs)
+already parses the section (and `src/parser/mod.rs:4392`
+already populates `data.native_symbols` from it); the gap
+was that no library actually declared its functions.
+
+Populated 2026-05-24:
+
+* `lib/crypto/loft.toml::[native.functions]` — 6 entries
+  (the phase 1a drain).
+* `lib/web/loft.toml::[native.functions]` — 19 entries
+  (the phase 1b drain).
+
+`tests/extraction_hygiene.rs` reworked to derive its
+`FORBIDDEN_LIBRARY_SYMBOLS` list from these manifests at
+test time (via a new `forbidden_library_symbols()` walker
+that reads every `lib/*/loft.toml`).  The previous
+hand-maintained const shrank to the empty
+`FORBIDDEN_LIBRARY_SYMBOLS_MANUAL` slot, reserved for
+libraries whose manifest can't yet declare the symbol.
+Added `manifest_native_functions_cover_drained_libraries`
+test that asserts crypto's 6 + web's 19 symbols are visible
+through the manifest path — guards against silent loss of
+`[native.functions]` sections via manifest typos / accidental
+deletion.
+
+What this DOES NOT yet do (Phase 2 step 2, still pending):
+
+1. **`build.rs` codegen** — auto-generate
+   `lib/<X>/native/src/lib.rs`'s `loft_register!` invocation
+   from the manifest, eliminating that source of truth.
+2. **Eliminate `#native "symbol"` annotations** in
+   `lib/<X>/src/<name>.loft` — currently both the
+   `#native` annotation AND the `[native.functions]` entry
+   are present.  After step 2 lands, the annotation is
+   redundant and can be removed.
+3. **`src/native.rs::FUNCTIONS` (the stdlib NATIVE_TABLE)**
+   stays hand-maintained — `[native.functions]` is for
+   libraries, not stdlib.  See the stdlib-vs-library
+   boundary table.
+
+The metadata-driven groundwork is in place; the codegen
+half can land independently when there's bandwidth.
+
 ### Phase 3 — Coordinate with PKG.REG (waiting phase)
 
 Phases 4-7 cannot proceed until both:

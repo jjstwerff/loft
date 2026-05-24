@@ -36,62 +36,89 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Library `n_*` symbols that have been drained out of the compiler
-/// crate by plan-12.  An occurrence of any of these in `src/**/*.rs`
-/// is a regression — the symbol's native impl lives in
-/// `lib/<owner>/native/src/lib.rs`.
+/// Manual fallback list for library `n_*` symbols that need to be
+/// forbidden in `src/**/*.rs` but DON'T yet have a `[native.functions]`
+/// entry in their library's `loft.toml`.
+///
+/// @PLAN12 phase 2 (2026-05-24): the primary source of truth moved from
+/// this hand-maintained const to `lib/<X>/loft.toml::[native.functions]`.
+/// `forbidden_library_symbols()` below walks every `lib/*/loft.toml`,
+/// reads its `[native.functions]` table, and appends each `n_*` value to
+/// the effective forbidden list.  This const stays empty by default and
+/// is reserved for symbols whose owning library's loft.toml can't yet
+/// declare them (e.g. a Tier-B library being prepared for drain whose
+/// metadata isn't ready).  When you need to add a manual row, prefer
+/// populating the library's loft.toml instead.
 ///
 /// Stdlib symbols (`n_panic`, `n_assert`, `n_log_*`, `n_json_*`,
-/// `n_parallel_*`, `n_now`, `n_ticks`, …) are deliberately NOT in this
-/// list — they stay in the compiler crate by design.  See the
+/// `n_parallel_*`, `n_now`, `n_ticks`, …) are deliberately NOT forbidden
+/// — they stay in the compiler crate by design.  See the
 /// stdlib-vs-library table in the plan README.
-const FORBIDDEN_LIBRARY_SYMBOLS: &[(&str, &str)] = &[
-    // ── Phase 1a (crypto, 2026-05-23) ─────────────────────────────
-    ("n_sha256", "lib/crypto/native"),
-    ("n_hmac_sha256", "lib/crypto/native"),
-    ("n_hmac_sha256_raw", "lib/crypto/native"),
-    ("n_base64_encode", "lib/crypto/native"),
-    ("n_base64_decode", "lib/crypto/native"),
-    ("n_base64url_encode", "lib/crypto/native"),
-    // ── Phase 1b (web, 2026-05-24) ───────────────────────────────
-    //
-    // All 19 web symbols already ship via `lib/web/native/` cdylib
-    // (loaded at runtime by `extensions::wire_native_fns` per
-    // `lib/web/loft.toml::native = "loft_web"`).  The 13 listed below
-    // also retain WASM-only stubs in `src/native.rs::WEB_FUNCTIONS_WASM`
-    // — those bridge to `crate::wasm::host_*` because WASM has no
-    // dlopen, so static registration is the only option.  The
-    // `skip_line_in_cfg_block` helper below skips lines inside
-    // `#[cfg(...wasm32...)]` blocks so this list enforces the drain
-    // for the regular native path while leaving the WASM bridge
-    // intact.  Decoupling the WASM bridge itself (so lib/web/native
-    // can compile a wasm32 cdylib) is a separate future phase.
-    ("n_http_do", "lib/web/native"),
-    ("n_http_body", "lib/web/native"),
-    ("n_ws_connect", "lib/web/native"),
-    ("n_ws_client_send", "lib/web/native"),
-    ("n_ws_client_send_binary", "lib/web/native"),
-    ("n_ws_client_recv", "lib/web/native"),
-    ("n_ws_client_message", "lib/web/native"),
-    ("n_ws_client_opcode", "lib/web/native"),
-    ("n_ws_client_close", "lib/web/native"),
-    ("n_sleep_ms", "lib/web/native"),
-    ("n_pack_reset", "lib/web/native"),
-    ("n_pack_u8", "lib/web/native"),
-    ("n_pack_u16_le", "lib/web/native"),
-    ("n_pack_u32_le", "lib/web/native"),
-    ("n_pack_take", "lib/web/native"),
-    ("n_byte_at", "lib/web/native"),
-    ("n_ws_group_clear", "lib/web/native"),
-    ("n_ws_group_add", "lib/web/native"),
-    ("n_ws_group_poll", "lib/web/native"),
-    // Add rows here as later phases drain more libraries:
-    //   ("n_load_png",  "lib/imaging/native"),   // phase TBD (@P321c)
-    //   ("n_save_png",  "lib/imaging/native"),   // phase TBD (@P321c)
+const FORBIDDEN_LIBRARY_SYMBOLS_MANUAL: &[(&str, &str)] = &[
+    // Add rows here ONLY when the library's `loft.toml` can't yet
+    // declare the symbol via `[native.functions]`.  Prefer populating
+    // the manifest.  Future TBD rows for reference:
+    //   ("n_load_png",  "lib/imaging/native"),   // @P321c — needs ABI fix first
+    //   ("n_save_png",  "lib/imaging/native"),   // @P321c
     //   ("n_rand",      "lib/random/native"),    // phase TBD
     //   ("n_rand_seed", "lib/random/native"),    // phase TBD
     //   ("n_rand_indices", "lib/random/native"), // phase TBD
 ];
+
+/// Read every `lib/*/loft.toml` and walk its `[native.functions]` table
+/// (if present), appending each `(value, "lib/<name>/native")` pair to
+/// the result.  Augmented by the manual fallback list above for any
+/// symbol that doesn't yet live in a manifest.
+///
+/// Phase 2: this is the metadata-driven path.  Adding a new
+/// `[native.functions]` row in a library's `loft.toml` automatically
+/// extends the hygiene gate's coverage.
+fn forbidden_library_symbols() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = FORBIDDEN_LIBRARY_SYMBOLS_MANUAL
+        .iter()
+        .map(|(s, o)| ((*s).to_string(), (*o).to_string()))
+        .collect();
+    let lib_dir = workspace_root().join("lib");
+    let Ok(entries) = fs::read_dir(&lib_dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let manifest_path = path.join("loft.toml");
+        let Ok(content) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let pkg_name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let owner = format!("lib/{pkg_name}/native");
+        let mut in_section = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                in_section = trimmed == "[native.functions]";
+                continue;
+            }
+            if !in_section {
+                continue;
+            }
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some((_, value)) = trimmed.split_once('=') {
+                let sym = value.trim().trim_matches('"').to_string();
+                if !sym.is_empty() {
+                    out.push((sym, owner.clone()));
+                }
+            }
+        }
+    }
+    out
+}
 
 /// Cargo dependencies that belong to a library's `native/` crate, not
 /// the main loft crate.  Currently empty — the `png` / `ureq` / etc.
@@ -229,6 +256,18 @@ fn forbidden_library_symbols_absent_from_src() {
     collect_rs_files(&src_dir, &mut files);
     assert!(!files.is_empty(), "no .rs files found under src/");
 
+    // Phase 2 (@PLAN12, 2026-05-24): build the forbidden list from
+    // `lib/*/loft.toml::[native.functions]` plus the manual fallback
+    // const.  Loft.toml is now the source of truth.
+    let forbidden = forbidden_library_symbols();
+    assert!(
+        !forbidden.is_empty(),
+        "no forbidden library symbols loaded — \
+         `lib/*/loft.toml::[native.functions]` should contain at least \
+         the crypto + web entries from phases 1a / 1b.  \
+         If the libraries' manifests changed, re-populate them."
+    );
+
     let mut violations: Vec<String> = Vec::new();
     for path in &files {
         let content = match fs::read_to_string(path) {
@@ -258,8 +297,8 @@ fn forbidden_library_symbols_absent_from_src() {
             if gated[line_idx] {
                 continue;
             }
-            for (sym, owner) in FORBIDDEN_LIBRARY_SYMBOLS {
-                for (idx, _) in code_part.match_indices(sym) {
+            for (sym, owner) in &forbidden {
+                for (idx, _) in code_part.match_indices(sym.as_str()) {
                     let prev_ok = idx == 0
                         || !code_part.as_bytes()[idx - 1].is_ascii_alphanumeric()
                             && code_part.as_bytes()[idx - 1] != b'_';
@@ -284,9 +323,11 @@ fn forbidden_library_symbols_absent_from_src() {
          library `n_*` symbol(s) found in the compiler crate (src/):\n  {}\n\n\
          These symbols belong in their library's `native/src/lib.rs` (cdylib).  \
          If you intend to add a NEW library symbol, put it in the library's \
-         native crate, not src/.  If a symbol is genuinely stdlib (every \
-         loft program needs it), update FORBIDDEN_LIBRARY_SYMBOLS in this \
-         test AND the stdlib-vs-library table in `doc/claude/lib_plans/\
+         native crate and declare it in `lib/<X>/loft.toml::[native.functions]` \
+         (phase 2 source of truth).  If a symbol is genuinely stdlib (every \
+         loft program needs it), do NOT add it to `[native.functions]` — \
+         stdlib stays in the compiler crate by design.  See the \
+         stdlib-vs-library table in `doc/claude/lib_plans/\
          12-library-extraction/README.md`.\n",
         violations.join("\n  ")
     );
@@ -313,4 +354,63 @@ fn forbidden_library_deps_absent_from_main_cargo() {
          library-only dependencies that should live in `lib/<X>/native/Cargo.toml`: {:?}",
         violations
     );
+}
+
+/// Phase 2 audit: assert the manifest-driven path actually loads the
+/// known-drained symbols.  Catches regressions where a `loft.toml` is
+/// accidentally emptied or the `[native.functions]` section header is
+/// renamed/typo'd (the symbol-absent test would silently pass with an
+/// empty forbidden list — `forbidden_library_symbols_absent_from_src`'s
+/// assert above guards against the latter shape; this test gives a
+/// per-symbol audit trail).
+#[test]
+fn manifest_native_functions_cover_drained_libraries() {
+    let forbidden = forbidden_library_symbols();
+    // Phase 1a: crypto.  6 symbols.
+    let crypto_expected: &[&str] = &[
+        "n_sha256",
+        "n_hmac_sha256",
+        "n_hmac_sha256_raw",
+        "n_base64_encode",
+        "n_base64_decode",
+        "n_base64url_encode",
+    ];
+    for sym in crypto_expected {
+        assert!(
+            forbidden.iter().any(|(s, _)| s == sym),
+            "@PLAN12 phase 2 — crypto symbol `{sym}` missing from \
+             forbidden list.  `lib/crypto/loft.toml::[native.functions]` \
+             should declare it.  Restore the manifest entry."
+        );
+    }
+    // Phase 1b: web.  19 symbols.
+    let web_expected: &[&str] = &[
+        "n_http_do",
+        "n_http_body",
+        "n_ws_connect",
+        "n_ws_client_send",
+        "n_ws_client_send_binary",
+        "n_ws_client_recv",
+        "n_ws_client_message",
+        "n_ws_client_opcode",
+        "n_ws_client_close",
+        "n_sleep_ms",
+        "n_pack_reset",
+        "n_pack_u8",
+        "n_pack_u16_le",
+        "n_pack_u32_le",
+        "n_pack_take",
+        "n_byte_at",
+        "n_ws_group_clear",
+        "n_ws_group_add",
+        "n_ws_group_poll",
+    ];
+    for sym in web_expected {
+        assert!(
+            forbidden.iter().any(|(s, _)| s == sym),
+            "@PLAN12 phase 2 — web symbol `{sym}` missing from forbidden \
+             list.  `lib/web/loft.toml::[native.functions]` should \
+             declare it.  Restore the manifest entry."
+        );
+    }
 }
