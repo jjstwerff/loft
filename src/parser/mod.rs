@@ -4568,8 +4568,7 @@ impl Parser {
                 let dep_pkg_path = std::path::Path::new(pkg_dir).join(path);
                 dep_pkg_path
                     .parent()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| dir.to_string())
+                    .map_or_else(|| dir.to_string(), |p| p.to_string_lossy().into_owned())
             } else {
                 dir.to_string()
             };
