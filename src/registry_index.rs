@@ -537,7 +537,7 @@ pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> Result<(), String> {
 fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_mins(1))
         .build();
     let response = agent
         .get(url)

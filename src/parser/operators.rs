@@ -218,9 +218,10 @@ impl Parser {
     /// Check whether `val` is a call to a user-defined function that returns a struct
     /// via a temporary store.  Used by `copy_ref` and the vector-append
     /// emit path (`vectors.rs`) to decide whether to free the source
-    /// store after the deep copy.  The free bit is suppressed under WASM,
-    /// so this helper is too.
-    #[cfg(not(feature = "wasm"))]
+    /// store after the deep copy.  The free bit's behaviour differs
+    /// under WASM but the query is the same on every target — call
+    /// sites in expressions.rs / objects.rs / vectors.rs / collections.rs
+    /// are not feature-gated, so this helper must not be either.
     pub(crate) fn is_struct_returning_call(&self, val: &Value) -> bool {
         if self.first_pass {
             return false;
