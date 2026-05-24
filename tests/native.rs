@@ -901,8 +901,13 @@ fn native_library_suite() -> std::io::Result<()> {
         // doesn't survive the test-binary link step (LNK1181: cannot
         // open input file 'windows.0.NN.0.lib').  Environmental, not a
         // code regression — mirrors the toolchain-skip pattern in
-        // tests/exit_codes.rs.  Recognise + skip the entry.
-        if combined.contains("LNK1181") {
+        // tests/exit_codes.rs.  loft test wraps the rustc error as
+        // "native compile: error: linking with `link.exe` failed: exit
+        // code: 1181" — the raw "LNK1181" symbol from cc's separate
+        // stderr may not survive the capture.  Match both forms.
+        if combined.contains("LNK1181")
+            || combined.contains("link.exe` failed: exit code: 1181")
+        {
             println!("skip {entry:?} (Windows windows-targets LNK1181 — environmental)");
             ran -= 1;
             env_skipped += 1;

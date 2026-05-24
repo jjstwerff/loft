@@ -581,7 +581,12 @@ fn p310_graphics_vector_ffi_checks_clean() {
     // 'windows.0.NN.0.lib'`.  This is an environmental issue (mirror of
     // the `build_script_native_lib_dirs` workaround in src/native_utils.rs
     // for loft's own invocation), not a regression in the test code.
-    if stderr.contains("LNK1181") {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if stderr.contains("LNK1181")
+        || stderr.contains("link.exe` failed: exit code: 1181")
+        || stdout.contains("LNK1181")
+        || stdout.contains("link.exe` failed: exit code: 1181")
+    {
         eprintln!("SKIP: Windows windows-targets link search path issue — {stderr}");
         return;
     }
