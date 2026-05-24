@@ -193,19 +193,20 @@ folded.  Surveyed 2026-05-23; destinations:
 |---|---|---|---|
 | `wall.loft` | 60 | **Fold into `lib/world/`** (Phase 7a) | Mandatory for moros + dryopea (user-built walls + rock faces) — first-class part of the world surface, not a separate package |
 | `overland.loft` | 7 | **Fold into `lib/world/`** (Phase 7a) | `OverlandMap` enum (material / item / height / water) — terrain layer data, world-handling territory |
-| `logger.loft` | 34 | **Fold into `lib/world/` self-hosting cluster** OR convert to `lib/logger/` package and join **loft-libs-core** | 34 lines, used by `parser.loft`; decision pending consumer audit (see Open Q #11) |
+| `logger.loft` | 34 | **Stays as-is alongside self-hosting cluster** (Q #11 resolved 2026-05-24, option (c)) | Single consumer `lib/parser.loft` (also monorepo-internal); promotion to standalone `lib/logger/` package deferred until a non-parser consumer emerges |
 | `code.loft` | 263 | **Stays in monorepo as self-hosting tooling** | Loft type / field metadata (`Field`, `Type` structs) — used by the self-hosting parser; not a library consumers want |
 | `lexer.loft` | 477 | **Stays in monorepo as self-hosting tooling** | Loft source lexer — used by the self-hosting parser and `gendoc` |
 | `parser.loft` | 674 | **Stays in monorepo as self-hosting tooling** | Loft source parser — `use lexer; use logger; use code;` |
 | `docs.loft` | 21 | **Stays in monorepo as build tooling** | Used by `gendoc`; depends on `lexer` |
 | `testlib.loft` | 57 | **Stays in monorepo as test infrastructure** | Used by `tests/docs/17-libraries.loft`; monorepo-test-only consumer |
 
-**Counts after Phase 1c:** 7 files originally listed as
-"convert" reduce to **1 standalone conversion candidate**
-(`logger.loft`, pending Open Q #11), **2 folds into
-`lib/world/`** (`wall.loft`, `overland.loft`), and **5 stay
-as monorepo-internal tooling** (`code.loft`, `lexer.loft`,
-`parser.loft`, `docs.loft`, `testlib.loft`).
+**Counts after Phase 1c (final, audit-confirmed 2026-05-24):**
+**0 standalone conversions** (Q #11 closed to option (c) —
+`logger.loft` stays as-is, only consumer is `lib/parser.loft`
+which itself stays); **2 folds into `lib/world/`** (`wall.loft`,
+`overland.loft`) deferred to Phase 7a; **6 stay as
+monorepo-internal tooling** (`logger.loft`, `code.loft`,
+`lexer.loft`, `parser.loft`, `docs.loft`, `testlib.loft`).
 
 The self-hosting cluster (`code` + `lexer` + `parser` +
 `docs`) could form an optional 6th chunk `loft-libs-self` if
@@ -366,7 +367,7 @@ cleanly.
 |---|---|---|---|
 | 1a | Move 6 fns (`n_sha256`, `n_hmac_sha256`, `n_hmac_sha256_raw`, `n_base64_encode`, `n_base64_decode`, `n_base64url_encode`) from `src/native.rs` AND the @P321a duplicates in `src/codegen_runtime.rs` into new `lib/crypto/native/` cdylib.  Also moves `src/sha256.rs` out (only crypto used it); `src/base64.rs` stays (compiler-internal `main.rs::wasm_b64` use for `--html` export) but a copy ships with `lib/crypto/native`. | XS | **DONE 2026-05-23** — `lib/crypto/native/{Cargo.toml,src/{lib.rs,sha256.rs,base64.rs}}` ships the 6 fns via the standard `loft_ffi::loft_register!` ABI; `lib/crypto/loft.toml` declares `native = "loft_crypto"`; `is_crypto_runtime_symbol` removed from `src/generation/mod.rs`; both interp + `--native` crypto tests pass 6/6. |
 | 1b | Drain the 19 `lib/web` `n_*` symbols (`n_http_do`, `n_http_body`, `n_ws_connect`, `n_ws_client_send`, `n_ws_client_send_binary`, `n_ws_client_recv`, `n_ws_client_message`, `n_ws_client_opcode`, `n_ws_client_close`, `n_sleep_ms`, `n_pack_reset`, `n_pack_u8`, `n_pack_u16_le`, `n_pack_u32_le`, `n_pack_take`, `n_byte_at`, `n_ws_group_clear`, `n_ws_group_add`, `n_ws_group_poll`) from the compiler crate's regular dispatch path.  Lock in via `FORBIDDEN_LIBRARY_SYMBOLS`. | XS | **DONE 2026-05-24** — `lib/web/native/src/lib.rs` already ships all 19 via `loft_ffi::loft_register!`; `lib/web/loft.toml` declares `native = "loft_web"`.  Regular native path uses the cdylib at runtime via `extensions::wire_native_fns`.  The 13 WASM-bridge stubs in `src/native.rs::WEB_FUNCTIONS_WASM` (gated on `#[cfg(all(target_arch = "wasm32", feature = "wasm"))]`) stay — WASM has no `dlopen`, so the only way to register native symbols is statically.  `tests/extraction_hygiene.rs` was extended with `wasm32_cfg_gated_lines` to skip lines inside `#[cfg(...wasm32...)]` blocks; the 19 web symbols now appear in `FORBIDDEN_LIBRARY_SYMBOLS` and the test passes.  Decoupling the WASM bridge itself (so `lib/web/native/` can also compile a `wasm32-unknown-unknown` cdylib + the host bridge moves out of `src/wasm.rs`) is a separate future phase — not blocking the per-library external-repo extraction below. |
-| 1c | Resolve the 8 single-file `lib/*.loft` modules per [§ Single-file modules — destinations decided](#single-file-loftloft-modules-8--destinations-decided): convert at most 1 (`logger.loft`, pending Open Q #11) to package format; the other 7 either fold into `lib/world/` in Phase 7a (`wall.loft`, `overland.loft`) or stay as monorepo-internal tooling (`code.loft`, `lexer.loft`, `parser.loft`, `docs.loft`, `testlib.loft`). | XS-S | pending |
+| 1c | Resolve the 8 single-file `lib/*.loft` modules per [§ Single-file modules — destinations decided](#single-file-loftloft-modules-8--destinations-decided): convert at most 1 (`logger.loft`, pending Open Q #11) to package format; the other 7 either fold into `lib/world/` in Phase 7a (`wall.loft`, `overland.loft`) or stay as monorepo-internal tooling (`code.loft`, `lexer.loft`, `parser.loft`, `docs.loft`, `testlib.loft`). | XS-S | **DONE 2026-05-24** — consumer audit (`grep -rln 'use <module>'` across `lib/`, `tests/`, `tools/`, `default/`) confirmed each destination.  Per-module consumer counts: `logger` 1 (`lib/parser.loft`), `code` 1 (`lib/parser.loft`), `lexer` 3 (`lib/parser.loft`, `lib/docs.loft`, `tests/docs/15-lexer.loft`), `parser` 1 (`tests/docs/16-parser.loft`), `docs` 0 — standalone `fn main()` runnable, `testlib` 1 (`tests/docs/17-libraries.loft` — `lib/testlib.loft` references appear to be the file itself, not a consumer), `wall` 0, `overland` 0.  **Open Q #11 resolved to option (c)**: `logger.loft` stays as-is alongside `lib/parser.loft` — only known consumer is `parser.loft` which itself stays as monorepo self-hosting tooling; no second consumer emerged.  No code moves needed for 1c — the 5 self-hosting / build-tooling files (`code` + `lexer` + `parser` + `docs` + `testlib`) keep their `lib/` location with their non-extractable status documented in the destinations table; the 2 fold-into-`lib/world/` files (`wall`, `overland`) stay parked at `lib/*.loft` until Phase 7a's `lib/world/` reorganisation. |
 
 **Acceptance gate — `tests/extraction_hygiene.rs`.**  Every Phase 1
 sub-task ends by adding its drained `n_*` symbol names to the
@@ -959,19 +960,20 @@ Listed here so future-you doesn't have to re-discover them.
     parameterised cell type)?  Generalisation likely too
     invasive for 0.8.x — default is "keep separate, share
     addressing helpers".
-11. **Destination for `logger.loft`.** 34-line module
-    (`Log` struct + `Warning`/`Error`/`Fatal` level enum)
-    currently used only by `lib/parser.loft` (which stays
-    in monorepo as self-hosting tooling).  Options: (a)
-    fold into `lib/world/` alongside wall/overland — wrong
-    family fit, but minimal friction; (b) convert to a
-    standalone `lib/logger/` package and join
-    `loft-libs-core` — clean home, but parser.loft is the
-    only known consumer; (c) leave as-is alongside the
-    self-hosting cluster.  Decision pending consumer audit
-    (does any other monorepo code or external consumer
-    want logger?).  Default if uncertain: (c) — keep next
-    to parser.loft until a second consumer emerges.
+11. **Destination for `logger.loft`.** ~~Decision pending~~
+    **RESOLVED (2026-05-24) to option (c)** — leave as-is
+    alongside the self-hosting cluster.  Consumer audit
+    (`grep -rln 'use logger\b' --include='*.loft'`) returned
+    a single hit: `lib/parser.loft`.  Parser stays in monorepo
+    as self-hosting tooling, so promoting `logger.loft` to a
+    standalone package or folding it into `lib/world/` would
+    pay extraction cost (`loft.toml` authoring, registry slot,
+    cross-package dep wiring) for a one-consumer scope that
+    can move with parser if/when it grows a second consumer.
+    The default-if-uncertain answer was (c); the audit didn't
+    surface a reason to deviate.  Promotion remains an option
+    later — if a non-parser consumer emerges (external library,
+    `lib/world/` self-hosting cluster, etc.), revisit.
 12. **Cross-chunk dep verification.**  See [§ Cross-chunk
     dependency graph](#cross-chunk-dependency-graph): two
     unknowns to confirm during Phase 1 — does post-7a
