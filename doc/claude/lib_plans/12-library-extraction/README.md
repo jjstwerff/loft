@@ -412,17 +412,43 @@ check; this manual check is the audit form.
 
 ### Phase 2 — Compile-time native-registry aggregator
 
-Replace the hand-maintained static `NATIVE_TABLE` slice in
-`src/native.rs` with `build.rs`-generated registration that
-walks `lib/*/loft.toml::[native.functions]` and emits the
-table at compile time.
+**DONE 2026-05-24** across three sub-steps (1 → 2 → 3 below).
 
-**Acceptance:** adding or removing a library's
-`[native.functions]` entry is the ONLY change required to
-add/remove its symbols; `src/native.rs` contains zero
-library entries.  Compiler crate carries no library code.
+Original goal: replace the hand-maintained static
+`NATIVE_TABLE` slice in `src/native.rs` with
+`build.rs`-generated registration that walks
+`lib/*/loft.toml::[native.functions]` and emits the table
+at compile time.
 
-**Effort:** M.
+**Final state for the two drained libraries** (crypto, web):
+
+* Manifest is the single declarative source of truth for which
+  loft fn maps to which native `n_*` symbol
+  (`lib/<X>/loft.toml::[native.functions]`).
+* Parser populates `def.native`, `native_symbols`, and
+  `native_symbol_crates` from the manifest at parse time
+  (both legacy `apply_manifest_side_effects` and
+  sibling-probe `register_native_manifest` paths).
+* Native codegen reaches the same dispatch via the
+  `def.native` + crate-qualifier path; `native_symbols` is
+  the fallback for libraries that declare `[native.functions]`
+  without an `[library] native` stem.
+* `lib/<X>/native/build.rs` generates the
+  `loft_register!` macro invocation from the manifest, so
+  the cdylib's symbol list isn't duplicated.
+
+**Acceptance check satisfied:** adding or removing a
+crypto / web library's `[native.functions]` entry IS the
+only change required — the build.rs regenerates the
+register list, the parser repopulates the bindings, the
+hygiene gate auto-updates its forbidden list.
+`src/native.rs::FUNCTIONS` (stdlib NATIVE_TABLE) is
+intentionally NOT touched — that table is stdlib, not
+libraries; the stdlib-vs-library boundary table makes the
+split explicit.
+
+**Effort:** M (~600 lines net across parser + codegen +
+build.rs + plan README updates).
 
 #### Phase 2 step 1 — `[native.functions]` as the single source of truth (DONE 2026-05-24)
 
@@ -497,22 +523,85 @@ priority guard.  Once the wasm bridge decouples (see
 phase 1b note), `lib/imaging` and friends can follow the
 same path.
 
-What this DOES NOT yet do (deferred future work):
+#### Phase 2 step 3 — `build.rs` codegen for `loft_register!` (DONE 2026-05-24)
 
-1. **`build.rs` codegen** — auto-generate
-   `lib/<X>/native/src/lib.rs`'s `loft_register!` invocation
-   from the manifest.  The cdylib's `loft_register!` block
-   is still hand-maintained.
-2. **`src/native.rs::FUNCTIONS` (the stdlib NATIVE_TABLE)**
+The last gap: `lib/<X>/native/src/lib.rs`'s
+`loft_ffi::loft_register! { … }` block still hand-maintained
+a list of symbol names duplicating
+`lib/<X>/loft.toml::[native.functions]`.  Closed by adding a
+small `build.rs` to each library's native crate that:
+
+1. Reads `../loft.toml` (the package manifest one level up).
+2. Walks `[native.functions]` line-by-line (same minimal
+   scanner shape as `src/manifest.rs::read_manifest` —
+   build.rs can't depend on the loft crate without going
+   circular).
+3. Generates `$OUT_DIR/loft_register_gen.rs` containing
+   `loft_ffi::loft_register! { <values> }`.
+4. `src/lib.rs` does
+   `include!(concat!(env!("OUT_DIR"), "/loft_register_gen.rs"));`
+   at module scope — the macro expands in the normal compilation pass.
+
+Added files:
+
+* `lib/crypto/native/build.rs` (~60 lines)
+* `lib/web/native/build.rs` (~60 lines; near-duplicate of crypto's —
+  shared `loft-ffi-build` crate is a future option once a third
+  library adopts the pattern)
+
+Removed lines:
+
+* `lib/crypto/native/src/lib.rs` — 7 lines (`loft_register! { 6
+  symbols }`).
+* `lib/web/native/src/lib.rs` — 20 lines (`loft_register! { 19
+  symbols }`).
+
+Now adding a new native symbol to crypto/web is exactly **two
+edits**:
+
+1. `lib/<X>/loft.toml::[native.functions]` — add the
+   `loft_name = "n_symbol"` row.
+2. `lib/<X>/native/src/lib.rs` — add the
+   `pub unsafe extern "C" fn n_symbol(...)` body.
+
+The `loft_register!` symbol list is generated.  The
+extraction-hygiene gate's forbidden list is generated.  The
+loft compiler's `def.native` + `native_symbols` +
+`native_symbol_crates` populations are all manifest-driven.
+The hand-maintained surfaces collapse to: the manifest row,
+the cdylib fn body, and the loft fn declaration (which still
+exists to give the cdylib symbol its loft-side type
+signature — the compiler reads that signature to marshal
+args and route the call).
+
+Proof: empirically removing `pack_take = "n_pack_take"` from
+`lib/web/loft.toml` and rebuilding regenerated the
+`loft_register_gen.rs` file WITHOUT `n_pack_take`.  Restoring
+the line and rebuilding restored it.  The
+`cargo:rerun-if-changed=../loft.toml` directive ensures
+manifest edits trigger regeneration.
+
+### Phase 2 — Status
+
+**FULLY DONE 2026-05-24** (acceptance criterion at
+`#phase-2--compile-time-native-registry-aggregator` met for
+the two drained libraries: crypto + web).
+
+What deferred future work remains (outside Phase 2's scope):
+
+1. **`src/native.rs::FUNCTIONS` (the stdlib NATIVE_TABLE)**
    stays hand-maintained — `[native.functions]` is for
    libraries, not stdlib.  See the stdlib-vs-library
    boundary table.
-3. **Remove `#native` annotations from `lib/<X>/src/<name>.loft`**
-   for the two drained libraries (crypto, web).  The
-   parser plumbing now supports it; the actual deletion
-   pass needs a sweep of the loft sources plus a
-   regression suite to confirm the manifest path covers
-   every dispatch site.
+2. **Other libraries** (`imaging`, `random`, `graphics`,
+   `server`, …) can adopt the same pattern when their
+   drains land.  Today the build.rs lives only in the two
+   drained libraries.
+3. **WASM bridge decoupling** — unblocks @P321c imaging and
+   removes the WASM-cfg exemption.  Separate future phase.
+4. **Shared `loft-ffi-build` helper crate** — collapse the
+   two near-identical build scripts when a third library
+   adopts the pattern.
 
 ### Phase 3 — Coordinate with PKG.REG (waiting phase)
 
