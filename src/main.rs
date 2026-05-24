@@ -182,6 +182,9 @@ fn print_help() {
     println!("                                list --installed — show only installed packages");
     println!("  generate [path]               generate Rust stubs for #native declarations");
     println!("                                writes native/src/generated.rs in the package");
+    println!("  package [path]                build a publishable <pkg>-<version>.tar.gz");
+    println!("                                prints sha256 + size + the registry index entry");
+    println!("                                (PKG.REG R1 — see doc/claude/PKG_REGISTRY.md)");
     println!("  doc [path]                    generate HTML documentation for a package");
     println!("                                doc          — generate docs for package in cwd");
     println!("                                doc lib/pkg  — generate docs for lib/pkg");
@@ -1463,6 +1466,45 @@ fn main() {
             };
             generate_native_stubs(&pkg_path);
             return;
+        } else if a == "package" {
+            // PKG.REG R1 (PKG_REGISTRY.md): `loft package [path]` — build a
+            // gzipped tarball + print SHA-256 + size + the registry-index
+            // entry the publisher pastes into loft-lang/registry.
+            // Feature-gated on `registry` because tar / flate2 / sha2
+            // aren't worth carrying in a no-default-features build.
+            #[cfg(feature = "registry")]
+            {
+                let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                    // `i += 1` would be dead since we `return` below, but
+                    // the arg is consumed for clarity.
+                    std::path::PathBuf::from(&argv[i])
+                } else {
+                    std::env::current_dir().unwrap_or_default()
+                };
+                match loft::package::package_create(&pkg_path, None) {
+                    Ok(out) => {
+                        let stdout = std::io::stdout();
+                        let mut lock = stdout.lock();
+                        if let Err(e) = loft::package::print_summary(&out, &mut lock) {
+                            eprintln!("loft package: print summary failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("loft package: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!(
+                    "loft package: this binary was built without the `registry` feature; \
+                     rebuild with default features."
+                );
+                std::process::exit(1);
+            }
         } else if a == "doc" {
             // PKG.8: `loft doc [path]` — generate HTML docs for a package.
             let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {

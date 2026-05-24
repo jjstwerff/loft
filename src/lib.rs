@@ -81,6 +81,8 @@ pub mod introspect;
 pub mod log_config;
 pub mod logger;
 pub mod manifest;
+#[cfg(feature = "registry")]
+pub mod package;
 pub mod registry;
 pub mod runtime_error;
 mod stack;

@@ -522,7 +522,7 @@ by actual ecosystem growth.  The MVP commits to neither.
 
 | Phase | Item | Effort | Blocker |
 |---|---|---|---|
-| **R1** | `loft package` CLI — produce tarball + sha256 from a `loft.toml` package | S | none |
+| **R1** | `loft package` CLI — produce tarball + sha256 from a `loft.toml` package | S | **DONE 2026-05-24** — `src/package.rs` + `loft package` subcommand.  Outputs `<pkg>-<version>.tar.gz` with deterministic SHA-256 + the registry-index entry to paste into the publish PR.  Feature-gated on `registry`.  4 unit tests + smoke-tested on `lib/crypto` (5.6 kB, sha256 stable across two runs) and `lib/web` (21.5 kB).  Excludes `.git/`, `target/`, `.loft/`, `node_modules/`, `.vscode/`, `.idea/`, `*.tar.gz`. |
 | **R2** | `loft.lock` schema + writer (PKG.7 from PACKAGES.md) | S | none |
 | **R3** | Bootstrap empty `registry.json` in `loft-lang/registry` repo | XS | none |
 | **R4** | `loft install <name>[@<v>]` — index fetch, resolve, download, verify, extract | M | R1, R2, R3 |
