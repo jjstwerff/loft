@@ -388,9 +388,14 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/future/29-server-features/`](plans/future/29-server-features/) | S-H per item | — | C55/C56/A15/I13/C57 — language features for server / game-client |
+| [`plans/future/45-spacial-index/`](plans/future/45-spacial-index/) | M | — | `spacial<T[x,y]>` / `spacial<T[x,y,z]>` Morton/Z-order radix spatial index |
+| [`plans/future/46-dryopea/`](plans/future/46-dryopea/) | H | — | dryopea sci-fi free-build / tower-defence game (consumer project) |
+| [`plans/future/47-eagleviewer/`](plans/future/47-eagleviewer/) | M | — | Generic branch-aware code + docs review viewer (extracted from loft viewer) |
+| [`lib_plans/19-gridmesh/`](lib_plans/19-gridmesh/) | M | — | `gridmesh` — chunk-local, bounded-extent grid→mesh primitives (active) |
 | [`lib_plans/future/04-asset-pipeline/`](lib_plans/future/04-asset-pipeline/) | M | — | Game asset workflow |
 | [`lib_plans/future/06-web-services/`](lib_plans/future/06-web-services/) | M-H per arc | — | JSON / HTTP client / auth / WebSocket / SSE clients |
 | [`lib_plans/future/18-viewer-generalisation/`](lib_plans/future/18-viewer-generalisation/) | M | — | `lib/viewer/` — extract the loft branch-review viewer as a project-agnostic library (Java + moros projects as initial customers) |
+| [`lib_plans/future/20-terrain-heightmap/`](lib_plans/future/20-terrain-heightmap/) | M | — | `terrain` — slope-based height-map generation library |
 
 ### Deferred plans
 
