@@ -298,32 +298,94 @@ same family of error.
 
 ## Local cache layout
 
-`~/.loft/registry/` is the install root:
+`~/.loft/` holds everything `loft install` writes to disk on the
+consumer's machine.  Layout:
 
 ```
 ~/.loft/
+├── trust-root/
+│   └── registry-signing-key.bin       (private key — maintainer-only,
+│                                       absent on consumer machines)
 ├── registry/
-│   ├── index.json               (cached copy of registry.json)
-│   ├── index.json.fetched_at    (ISO-8601 — drives staleness check)
-│   ├── crypto-0.1.0/            (extracted tarball)
-│   │   ├── loft.toml
-│   │   ├── src/
-│   │   └── native/
-│   ├── crypto-0.1.1/            (multiple versions coexist)
-│   └── web-0.1.0/
-└── packages.json               (consumer-facing: which versions are linked to which projects — optional, future)
+│   └── <registry-url-hash>/
+│       ├── index.json                 (cached registry index)
+│       ├── index.json.sig             (signature, verified on every load)
+│       ├── index.json.fetched_at      (ISO-8601 — staleness clock)
+│       └── index.json.etag            (HTTP conditional-GET hint)
+├── packages/
+│   └── <package>/
+│       └── <version>/                 (extracted tarball, ready to compile)
+│           ├── loft.toml
+│           ├── src/
+│           └── native/
+└── cache/
+    └── <sha256>.tar.gz                (raw downloaded tarballs — CAS-keyed
+                                        so duplicate SHAs across packages /
+                                        registries de-duplicate naturally)
 ```
 
-**Index refresh policy**:
-- TTL: 1 hour by default.
-- Re-fetched if `index.json.fetched_at` is older than 1 hour OR if
-  `loft install --refresh` is passed OR if a requested package is
-  missing from the cached index.
-- Atomic write: download to `index.json.tmp`, then rename.  Avoids
-  half-written files corrupting future installs.
+**Why this shape**:
 
-**Cache GC**: never automatic.  `loft install --gc` (future) prunes
-versions no consumer references.  For the MVP, manual.
+- **One `<registry-url-hash>/` subdir per registry URL.**  Lets the
+  client run against `loft-lang/registry` (default) plus mirrors
+  (`LOFT_REGISTRY_URL=...`) without their indexes colliding.  Hash is
+  short (8 hex chars of SHA-256 of the URL).
+- **`packages/<name>/<version>/` is the install address.**  When loft
+  resolves `crypto = "0.1.0"`, it looks for
+  `~/.loft/packages/crypto/0.1.0/loft.toml`.  Multiple versions
+  coexist by design — project A pinned to 0.1.0 and project B pinned
+  to 0.2.0 both work without re-download.
+- **`cache/<sha256>.tar.gz` is content-addressable.**  The same
+  bytes are stored once even if multiple registry entries (or
+  mirrors) reference them.  Also gives the trust-root re-validation
+  chain a stable target — the SHA-256 in the lockfile points at the
+  same bytes years later.
+- **Atomic install**: download to `cache/<sha>.tar.gz.tmp`, hash-verify,
+  rename to final.  Extract to `packages/<name>/<version>.tmp/`,
+  rename to final.  No half-written state survives a crash.
+
+**Index refresh policy** (per registry URL):
+
+- TTL: 1 hour by default.
+- Re-fetched when `index.json.fetched_at` is older than 1 hour, OR
+  when `loft install --refresh` is passed, OR when a requested
+  package is missing from the cached index.
+- Conditional GET via the cached `index.json.etag` — if the
+  registry hasn't changed, the response is 304 and no bytes
+  transfer.
+- Signature verified on every load, even cache-hit paths.
+
+**Cache lifecycle — no automatic cleanup, conservative by design**:
+
+- **Old versions stay** when newer versions install.  Lockfile
+  reproducibility requires this: project A pins `crypto = 0.1.0`,
+  project B pins `crypto = 0.2.0`, both coexist forever in
+  `packages/crypto/`.  Auto-deleting on newer install would
+  silently break A's offline rebuild.
+- **Re-download is allowed**, not forced.  If `cache/<sha>.tar.gz`
+  is deleted but `packages/<name>/<version>/` survives, the
+  extracted tree is still usable; cache file is re-fetched only
+  when needed for verification.
+
+**Manual cleanup commands** (MVP scope marked):
+
+| Command | Effect | Status |
+|---|---|---|
+| `loft cache list` | Show what's in `~/.loft/{packages,cache}/` with sizes | MVP |
+| `loft cache clean` | Wipe `~/.loft/{registry,packages,cache}/` (nuclear) | MVP |
+| `loft cache prune` | Drop entries not referenced by any `loft.lock` in `$PWD` (recursive scan) | v0.2 |
+| `loft cache prune --scan <dir>` | Same with explicit roots | v0.2 |
+
+Why prune lands later: lockfile-aware GC is easy to get wrong (a
+lockfile in a stale clone shouldn't pin a tarball forever).  Ship
+the nuclear option first; iterate on the conservative one once
+real-world feedback is in.
+
+**Disk cost rough estimate**:
+
+A typical package = 30 kB tarball + ~150 kB extracted.  100
+packages with ~3 versions each = ~50 MB total.  Negligible on a
+modern machine; visible-but-fine on a constrained dev VM.
 
 ---
 

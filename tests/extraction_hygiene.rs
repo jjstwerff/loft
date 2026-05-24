@@ -55,26 +55,44 @@ use std::path::{Path, PathBuf};
 /// — they stay in the compiler crate by design.  See the
 /// stdlib-vs-library table in the plan README.
 const FORBIDDEN_LIBRARY_SYMBOLS_MANUAL: &[(&str, &str)] = &[
-    // @PLAN12 phase 3.5 (2026-05-24) — crypto was extracted out of
-    // the monorepo to `../loft-crypto/`.  Its `loft.toml::[native.functions]`
-    // is no longer scanned by `forbidden_library_symbols()` (which walks
-    // `lib/*` only), so the 6 symbols are pinned here to keep the
-    // hygiene gate detecting re-introduction in `src/**`.
-    ("n_sha256", "external loft-crypto/native"),
-    ("n_hmac_sha256", "external loft-crypto/native"),
-    ("n_hmac_sha256_raw", "external loft-crypto/native"),
-    ("n_base64_encode", "external loft-crypto/native"),
-    ("n_base64_decode", "external loft-crypto/native"),
-    ("n_base64url_encode", "external loft-crypto/native"),
+    // @PLAN12 phase 3.5 (2026-05-24) — extracted to the
+    // `loft-lang/loft-libs-core` chunk repo.  Their
+    // `loft.toml::[native.functions]` (or `#native` annotations in
+    // source) are no longer scanned by `forbidden_library_symbols()`
+    // (which walks `lib/*` only), so symbols are pinned here to keep
+    // the hygiene gate detecting re-introduction in `src/**`.
+    //
+    // crypto (6):
+    ("n_sha256", "loft-libs-core/crypto/native"),
+    ("n_hmac_sha256", "loft-libs-core/crypto/native"),
+    ("n_hmac_sha256_raw", "loft-libs-core/crypto/native"),
+    ("n_base64_encode", "loft-libs-core/crypto/native"),
+    ("n_base64_decode", "loft-libs-core/crypto/native"),
+    ("n_base64url_encode", "loft-libs-core/crypto/native"),
     // Add rows here ONLY when the library's `loft.toml` can't yet
     // declare the symbol via `[native.functions]`, OR when the
     // library has been extracted to an external path (path-dep scan
-    // is not yet implemented).  Future TBD rows for reference:
+    // is not yet implemented).  Known-pending drains:
+    //
+    //   ("n_rand",         "lib/random/native"),  // see note below
+    //   ("n_rand_seed",    "lib/random/native"),
+    //   ("n_rand_indices", "lib/random/native"),
+    //
+    //     random's drain is INCOMPLETE: src/codegen_runtime.rs
+    //     still carries the `n_rand` / `n_rand_seed` /
+    //     `n_rand_indices` impls (lines 2493+) because the native
+    //     codegen path resolves these via the RuntimeFn registry,
+    //     not via extension-cdylib dispatch.  Removing the registry
+    //     entries fires `compile_error!` in
+    //     src/generation/mod.rs:2041 — every native build that
+    //     calls `rand()` would fail.  Completing the drain needs
+    //     native codegen to learn cdylib dispatch (a phase 2.5/3
+    //     piece of work).  Until that lands, lib/random/ stays in
+    //     the monorepo and these symbols stay unguarded by the
+    //     hygiene gate.
+    //
     //   ("n_load_png",  "lib/imaging/native"),   // @P321c — needs ABI fix first
     //   ("n_save_png",  "lib/imaging/native"),   // @P321c
-    //   ("n_rand",      "lib/random/native"),    // phase TBD
-    //   ("n_rand_seed", "lib/random/native"),    // phase TBD
-    //   ("n_rand_indices", "lib/random/native"), // phase TBD
 ];
 
 /// Read every `lib/*/loft.toml` and walk its `[native.functions]` table
