@@ -62,14 +62,20 @@ already there**.
   - **3.5c TODO**: dry-run libraries that have monorepo
     consumers (`random`, `shapes`, `arguments`, `web`),
     blocked on 3.5b.
-- **Phase 4 (real publish)** is no longer blocked on YubiKey
-  arrival.  Bootstrap the registry with an interim `K_tmp`
-  signing key on the dev laptop; ship the first real publish
-  (crypto's GitHub repo + registry PR + signed index).  When
-  YubiKeys arrive, rotate to `K_real` per
+- **Phase 4 (real publish)** is substantively SHIPPED
+  2026-05-24.  `loft-lang/{registry, loft-libs-core,
+  loft-lang.github.io}` repos online, signed index has
+  crypto/arguments/random at v0.1.0, GitHub release
+  tarballs verified, `loft install` works end-to-end on a
+  fresh consumer (interpreter + native, cdylib + pure-loft,
+  multi-package install + lockfile merge).  Remaining 4a/4b/4c
+  are CI/docs hardening — green-by-default
+  `library-ci.yml`, `LIBRARY_BLUEPRINT.md`, and a
+  `loft-lang/library-template` repo; deferred to separate
+  sessions (tasks #61 / #62 / #63).  Constraint: do not ship
+  a public loft release with `K_tmp` embedded until after the
+  rotation to `K_real` per
   [REGISTRY_RECOVERY.md § Scenario C](../../REGISTRY_RECOVERY.md#scenario-c).
-  Constraint: do not ship a public loft release with `K_tmp`
-  embedded until after the rotation to `K_real`.
 
 When the bootstrap completes: per-library extraction proceeds
 on its own validated schedule.  Some libraries may extract
@@ -1085,17 +1091,77 @@ imaging, graphics, future libraries):
 Q #4 — "the reusable GitHub Actions workflow YAML, write
 once, copy per chunk"):
 
-- Author `.github/workflows/library-ci.yml` in
-  `loft-libs-core`.  Runs: build loft → `loft test` over
-  every package in the chunk → `loft --native test` → leak
-  gate.  Reads chunk-local skip-lists.
-- Define the skip-list format (likely `chunk-skips.toml`
-  at the chunk-repo root: keys
-  `interpreter_pkg_skip` / `native_pkg_skip` /
-  `leak_allow`).
-- Port `loft-libs-core`'s entries from the monorepo
+#### 4a — Working CI for `loft-libs-core` (the canonical template)
+
+A placeholder `.github/workflows/library-ci.yml` was committed
+to `loft-lang/loft-libs-core` at extraction time but is currently
+RED — the matrix lists only `crypto` (missing `arguments` /
+`random`), and the install-loft step hasn't been validated
+end-to-end on Ubuntu.  Make this workflow GREEN-BY-DEFAULT so
+every other chunk repo can copy it verbatim:
+
+- Matrix lists every package in the chunk
+  (`crypto`, `arguments`, `random`).
+- "Install loft" step: build from source (`git clone … &&
+  cargo build --release`) — validated on Ubuntu's
+  GitHub-hosted runner.  Later (PKG.REG R10) flip to
+  downloading the loft binary release.
+- Each matrix cell: `cd <pkg> && loft test` + `loft --native
+  test`.  Failures surface per-package.
+- Skip-list format (`chunk-skips.toml` at chunk-repo root):
+  keys `interpreter_pkg_skip` / `native_pkg_skip` /
+  `leak_allow`.  Ports the monorepo
   `LIB_PKGS_SKIP` / `LIB_PKGS_NATIVE_SKIP` /
-  `SCRIPTS_LEAK_ALLOW` into that file.
+  `SCRIPTS_LEAK_ALLOW` entries for each member package.
+- Optional leak gate (deferred — wire when leak.rs becomes
+  cross-package).
+
+Cited by phases 5 / 6 / 6w / 7b as the template to copy.
+Tracked as task #61 (separate work session).
+
+#### 4b — `doc/claude/LIBRARY_BLUEPRINT.md` — canonical reference
+
+Author-facing companion to SUBMITTING.md.  Covers what a
+LIBRARY PROJECT looks like (vs. what SUBMITTING.md covers,
+which is the publish handshake):
+
+- Directory layout (`src/`, `tests/`, optional `native/`,
+  `loft.toml`, `README.md`, `LICENSE`).
+- Manifest field reference (`[package]`, `[library]`,
+  `[native]`, `[native.functions]`).
+- Tag convention (per-package `<name>-v<version>` for
+  multi-package chunk repos; bare `v<version>` for the
+  degenerate single-package case).
+- CI shape — cites the working `loft-libs-core` workflow as
+  the reference implementation.
+- Release process (loft package → gh release → registry PR).
+- When to use a chunked repo vs a standalone repo.
+- `loft-ffi = "0.1"` convention (path-deps are dev-only).
+
+Linked from `PKG_REGISTRY.md` § Publishing flow,
+`REGISTRY_SUBMIT.md`, and this plan.  Tracked as task #62
+(separate work session; depends on 4a being green so the
+CI section can cite a working reference).
+
+#### 4c — `loft-lang/library-template` GitHub repo
+
+Optional polish.  A repo flagged as a GitHub TEMPLATE
+("Use this template" button visible on the repo page):
+
+- Minimal `loft.toml` stub.
+- `src/<name>.loft` stub.
+- `tests/01-<name>.loft` stub.
+- Optional `native/` scaffold with `Cargo.toml` using
+  `loft-ffi = "0.1"`.
+- `README.md` template.
+- `LICENSE`.
+- `.github/workflows/library-ci.yml` copied from the
+  proven `loft-libs-core` workflow.
+
+Tracked as task #63 (separate work session; depends on
+4a + 4b — the template must reference a green CI and a
+documented blueprint).  Defer until a real external author
+asks for one if neither prerequisite has shipped yet.
 
 **Acceptance:**
 - `lib/{arguments,random,crypto}/` directories removed
@@ -1103,15 +1169,20 @@ once, copy per chunk"):
   if that phase completed first).
 - `make ci` passes using registry-installed versions.
 - `loft-libs-core` CI green on its own
-  (interpreter + native + leak gates).
+  (interpreter + native + leak gates) — task 4a.
 - `library-ci.yml` + `chunk-skips.toml` ship in
   `loft-libs-core` as the template referenced by phases
   5-7b.
+- `LIBRARY_BLUEPRINT.md` lands in loft repo, linked from
+  the public-facing docs — task 4b.
+- `loft-lang/library-template` repo exists (or is
+  consciously deferred) — task 4c.
 - User code with `use random;` (etc.) sees identical
   behaviour to the in-monorepo version.
 
 **Effort:** M (extraction itself) + S (workflow YAML
-authoring — one-shot, amortised across all later chunks).
+authoring — one-shot, amortised across all later chunks)
++ S (4b doc) + XS (4c repo bootstrap, mostly mechanical).
 
 ### Phase 5 — Extract `loft-libs-graphics`
 
@@ -1363,7 +1434,10 @@ references the monorepo `Cargo.toml` workspace.
 | **3.5b** | **Implement real path-dep resolution** in `src/manifest.rs` + `src/parser/mod.rs` | 3.5a | S (~50 LoC + 1 unit test) |
 | **3.5c** | **Dry-run libraries WITH monorepo consumers** (random, web, shapes, arguments) | 3.5b | S per library |
 | **3.6** | **Stdlib drain** — Image types → `lib/imaging/`; `escape_html` → new `lib/html/`; path helpers `03_text.loft` → `02_files.loft`; rename `02_images.loft` → `02_files.loft` | Phase 1c | M (~1 day) |
-| 4 | Extract `loft-libs-core` (arguments, random, crypto; plus Phase-3.6 outputs `html` etc.) — real publish through registry | Phases 1-3 + Phase 3.5 dry-run for the same package | M |
+| 4 | Extract `loft-libs-core` (arguments, random, crypto; plus Phase-3.6 outputs `html` etc.) — real publish through registry | Phases 1-3 + Phase 3.5 dry-run for the same package | M — **substantively DONE 2026-05-24** (org + repos + tarballs + signed index + crypto/arguments/random all installable via `loft install` end-to-end); 4a/4b/4c hardening pending |
+| **4a** | **Green-by-default `library-ci.yml`** in loft-libs-core — proven template for all later chunks | Phase 4 substance | S (separate session — task #61) |
+| **4b** | **`doc/claude/LIBRARY_BLUEPRINT.md`** — author-facing reference | 4a (cites the working CI) | S (separate session — task #62) |
+| **4c** | **`loft-lang/library-template`** GitHub template repo | 4a + 4b | XS (separate session — task #63; defer until needed) |
 | 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, **shapes**) | Phase 4 + `../02-graphics/` | M |
 | 6 | Extract `loft-libs-net` (server, web, game_protocol) | Phase 4 + `../08-server/` | M |
 | 6w | Extract `loft-libs-world` (`world` expanded by 7a, wall folded in) | Phase 7a | M |
