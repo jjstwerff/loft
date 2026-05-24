@@ -109,14 +109,30 @@ pub fn install_one(
             .push((r.name.clone(), r.version.semver.clone()));
     }
 
-    // Write lockfile in the current working dir.  R5 (project-wide
-    // install from loft.toml) writes elsewhere; for a one-off
-    // `loft install foo` we still maintain a lockfile so the next
-    // invocation can reproduce the same graph.
+    // Write lockfile in the current working dir.  When a lockfile
+    // already exists (e.g. from a previous `loft install <other>`),
+    // MERGE this install's graph into it: new entries overwrite same-
+    // named entries, others survive.  This lets `loft install crypto`
+    // followed by `loft install random` produce a combined lockfile
+    // listing both packages — matches expectations from cargo / npm.
     let lock_path = std::env::current_dir()
         .map_err(|e| format!("cwd: {e}"))?
         .join("loft.lock");
-    let lock = build_lockfile(&graph);
+    let mut lock = match lockfile::read_lockfile(&lock_path) {
+        Ok(Some(existing)) => existing,
+        _ => lockfile::LockFile {
+            schema_version: 1,
+            packages: Vec::new(),
+        },
+    };
+    let new_lock = build_lockfile(&graph);
+    for new_pkg in new_lock.packages {
+        if let Some(existing) = lock.packages.iter_mut().find(|p| p.name == new_pkg.name) {
+            *existing = new_pkg;
+        } else {
+            lock.packages.push(new_pkg);
+        }
+    }
     lockfile::write_lockfile(&lock_path, &lock).map_err(|e| format!("write lockfile: {e}"))?;
 
     Ok(report)

@@ -327,26 +327,38 @@ fn install_package(pkg_path: &std::path::Path) {
 /// delegates to [`install_from_registry_legacy`] (the older
 /// text-format flow).
 #[cfg(feature = "registry")]
-fn install_from_registry_with_opts(arg: &str, opts: &loft::install::InstallOptions) {
+fn install_from_registry_with_opts(args: &[String], opts: &loft::install::InstallOptions) {
     use loft::install::{format_report, install_one};
 
     if std::env::var("LOFT_LEGACY_REGISTRY").is_ok() {
-        install_from_registry_legacy(arg);
+        for arg in args {
+            install_from_registry_legacy(arg);
+        }
         return;
     }
 
-    let (name, version) = if let Some((n, v)) = arg.split_once('@') {
-        (n, Some(v))
-    } else {
-        (arg, None)
-    };
-    match install_one(name, version, opts) {
-        Ok(report) => {
-            print!("{}", format_report(&report));
-        }
-        Err(e) => {
-            eprintln!("loft install: {e}");
-            std::process::exit(1);
+    if args.is_empty() {
+        eprintln!("loft install: no package name given");
+        std::process::exit(1);
+    }
+
+    // Process each arg sequentially.  Each `install_one` invocation
+    // merges its packages into the cwd's `loft.lock`, so the final
+    // lockfile lists every package the user asked for.
+    for arg in args {
+        let (name, version) = if let Some((n, v)) = arg.split_once('@') {
+            (n, Some(v))
+        } else {
+            (arg.as_str(), None)
+        };
+        match install_one(name, version, opts) {
+            Ok(report) => {
+                print!("{}", format_report(&report));
+            }
+            Err(e) => {
+                eprintln!("loft install: {e}");
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -1678,7 +1690,7 @@ fn main() {
                 offline: false,
                 allow_prerelease: false,
             };
-            let mut arg = String::new();
+            let mut positional: Vec<String> = Vec::new();
             while i < argv.len() {
                 let a2 = argv[i].as_str();
                 if a2 == "--refresh" {
@@ -1711,36 +1723,41 @@ fn main() {
                         install_opts.allow_unsigned = false;
                     }
                     i += 1;
-                } else if !a2.starts_with('-') && arg.is_empty() {
-                    arg = a2.to_string();
+                } else if !a2.starts_with('-') {
+                    positional.push(a2.to_string());
                     i += 1;
                 } else {
                     break;
                 }
             }
-            if arg.is_empty()
-                || arg.starts_with('/')
-                || arg.starts_with("./")
-                || arg.starts_with("../")
-                || arg == "."
-                || arg.contains('/')
-            {
-                // Local path install.
-                let pkg_path = if arg.is_empty() {
+            // The first positional arg decides path-vs-registry mode.
+            // Local-path install (`.`, `./`, `../`, `/`, contains `/`)
+            // takes exactly one arg.  Registry install accepts N names.
+            let first = positional.first().map(|s| s.as_str()).unwrap_or("");
+            let is_local_path = first.is_empty()
+                || first.starts_with('/')
+                || first.starts_with("./")
+                || first.starts_with("../")
+                || first == "."
+                || first.contains('/');
+            if is_local_path {
+                let pkg_path = if first.is_empty() {
                     std::env::current_dir().unwrap_or_default()
                 } else {
-                    std::path::PathBuf::from(&arg)
+                    std::path::PathBuf::from(first)
                 };
                 install_package(&pkg_path);
             } else {
-                // Registry install.
+                // Registry install — multiple names allowed.
                 #[cfg(feature = "registry")]
                 {
-                    install_from_registry_with_opts(&arg, &install_opts);
+                    install_from_registry_with_opts(&positional, &install_opts);
                 }
                 #[cfg(not(feature = "registry"))]
                 {
-                    install_from_registry(&arg);
+                    for name in &positional {
+                        install_from_registry(name);
+                    }
                 }
             }
             return;
