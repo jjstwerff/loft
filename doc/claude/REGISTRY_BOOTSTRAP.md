@@ -57,6 +57,42 @@ The same invocation prints to stdout (for copy/paste):
   `loft-lang/registry`'s `REGISTRY_SIGNING_KEY_BASE64` secret
   (Step 3.5).
 
+### Step 1.5 — Store the private key for the long haul
+
+Laptops fail every 2-5 years on average; the private key must
+outlive any single machine.  **Three independent copies, two
+physical locations, two media types** is the working rule
+(3-2-1 backup adapted for a 32-byte secret).
+
+Recommended layout:
+
+| Copy | Where | Purpose |
+|---|---|---|
+| **1. Daily working copy** | `~/.loft/trust-root/registry-signing-key.bin` on your trusted laptop, chmod 600, inside FileVault/LUKS-encrypted home | The one you'll actually use day-to-day. |
+| **2. Hardware token A** | YubiKey 5 PIV slot, stored at your home/office | Primary recovery — if the laptop dies, re-import to a fresh machine in 10 minutes. |
+| **3. Hardware token B** | Second YubiKey, stored at a different physical location (parent's house, bank safe-deposit box) | Insurance against fire / theft / flood at copy #2's site. |
+| **4. (Optional) Paper / sealed offline copy** | base64 (44 ASCII chars) printed on paper, sealed in tamper-evident envelope, stored in fire-resistant safe at a third location | "What if both YubiKeys die simultaneously" insurance.  Paper outlasts USB sticks (5-10 yr rot). |
+
+**Do NOT put the key in**:
+
+- Cloud storage (Dropbox, iCloud, Google Drive), even encrypted —
+  signals to a third party that a high-value secret exists.
+- Cloud-synced password managers (1Password / Bitwarden cloud
+  vault) — same reason.  Local-only vaults are fine.
+- A git repo (even private), an email to yourself, any chat app
+  (those backups end up cloud-synced too).
+
+**Do test the backup once a year.**  Pick a YubiKey or the paper
+copy at random, restore to a clean test VM, sign a dummy
+`index.json`, verify the signature with the public key.  See
+[REGISTRY_RECOVERY.md § Annual recovery drill](REGISTRY_RECOVERY.md#annual-recovery-drill)
+for the checklist.
+
+If something goes wrong later (laptop dies, key compromised, key
+silently corrupted), follow [REGISTRY_RECOVERY.md](REGISTRY_RECOVERY.md)
+— it has step-by-step runbooks for every scenario plus the
+multi-key rotation mechanism that keeps users from breaking.
+
 ---
 
 ## Step 2 — Embed the public key in the loft binary
@@ -194,19 +230,40 @@ Document any issues that emerged during the drill in this file under
 
 If the private key is lost or compromised:
 
-* **Lost (no compromise):** generate a new key.  Ship a loft
-  minor release embedding the new key AND keeping the old key
-  (to keep existing signed indexes valid).  Re-sign `index.json`
-  in the next CI run.  Schedule old-key removal in a subsequent
+See [REGISTRY_RECOVERY.md](REGISTRY_RECOVERY.md) for the full
+step-by-step runbook covering:
+
+- **Scenario A** — laptop died, backup recoverable.  ~30 min
+  drill; no user-visible impact.
+- **Scenario B** — laptop died, no recoverable backup (catastrophic
+  loss of all working copies).  Forces a multi-key rotation;
+  6-month transition window; still zero user-visible impact if
+  handled before users hit `loft update`.
+- **Scenario C** — key is COMPROMISED (exfiltrated / stolen).
+  Same-day distrust; emergency point release with the bad key
+  removed; communicate aggressively.
+
+Quick summary so the bootstrap doc reads complete on its own:
+
+* **Lost (no compromise):** generate a new key, embed alongside
+  the old one, ship a loft minor release.  Old key continues
+  signing indexes during the transition window so existing
+  installs keep working.  Drop the old key in a subsequent
   release.
-* **Compromised:** generate a new key.  Ship a loft minor with
-  ONLY the new key embedded — the compromised key is distrusted
-  immediately.  Re-sign `index.json` with the new key in CI.
-  Existing client installs that haven't upgraded continue to
-  function (`loft.lock` pins the tarball sha256 directly, which
-  the compromised key can't forge); new installs require the
+* **Compromised:** generate a new key.  Emergency loft point
+  release embedding ONLY the new key — the compromised key is
+  distrusted immediately.  Existing `loft.lock` pins keep working
+  (the lockfile records each tarball's sha256, which the
+  compromised key can't forge); only fresh installs need the
   binary upgrade.  Communicate via every loft user-facing channel
   + a CVE if appropriate.
+
+The architectural reason both scenarios are recoverable: the
+client verifies BOTH the index signature AND each tarball's
+sha256.  `loft.lock` records the sha256 — once a build is
+locked, no signing-key event can corrupt it.  Only NEW installs
+and `loft update` consult the index, and those are gated on the
+current signature.
 
 ---
 
