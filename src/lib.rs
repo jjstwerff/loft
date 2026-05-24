@@ -85,6 +85,9 @@ pub mod manifest;
 #[cfg(feature = "registry")]
 pub mod package;
 pub mod registry;
+pub mod registry_keys;
+#[cfg(feature = "registry")]
+pub mod registry_signing;
 pub mod runtime_error;
 mod stack;
 

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "updated": "2026-05-24T00:00:00Z",
+  "_comment": "Sample / template for loft-lang/registry/index.json.  Copy to the registry repo as `index.json` (drop the leading `_comment`).  Once R10 publishes the first real version (crypto v0.1.0 from lib_plans/12-library-extraction Phase 4), populate the example below with real values.  See doc/claude/PKG_REGISTRY.md for the schema reference.",
+  "packages": {
+    "crypto": {
+      "description": "SHA-256, HMAC, base64 — cryptographic primitives.",
+      "homepage": "https://github.com/loft-lang/loft-crypto",
+      "categories": ["crypto", "stdlib-augment"],
+      "yanked": [],
+      "versions": {
+        "0.1.0": {
+          "url": "https://github.com/loft-lang/loft-crypto/releases/download/v0.1.0/crypto-0.1.0.tar.gz",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "size": 5717,
+          "loft": ">=0.8",
+          "deps": {},
+          "conflicts": [],
+          "replaces": [],
+          "provides": [],
+          "binaries": {},
+          "prerelease": false,
+          "published": "2026-05-24T00:00:00Z"
+        }
+      }
+    }
+  }
+}
