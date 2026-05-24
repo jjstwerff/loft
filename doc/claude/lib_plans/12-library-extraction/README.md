@@ -26,7 +26,27 @@ half-finished `n_load_png` / `n_save_png` attempts during
 adding MORE library code to the compiler crate, **drain what's
 already there**.
 
-**Progress to date (2026-05-24)**:
+**Progress to date (2026-05-24, evening)**:
+
+- **Phase 5 (`loft-libs-graphics`)** — shapes 0.2.0 (pure
+  geometry; 0.1.0 yanked after the dep-on-graphics misstep)
+  + gridmesh 0.1.0 shipped.  Both available via
+  `loft install`.
+- **Phase 6 (`loft-libs-net`)** — web 0.1.0, server 0.1.0,
+  game_protocol 0.1.0 shipped.  Transitive dep chain works
+  via `loft install game_protocol` (pulls server, web).
+  Smoke-tested end-to-end interp + native (cdylib builds
+  per-consumer on first use).
+- **Blocker for graphics / imaging full extraction**:
+  native codegen forwards `LoftStore` for store-allocating
+  *returns* (random's drain pattern); it does NOT yet forward
+  store for `&ref`-passing *args*.  Tracked as task #67.
+  Until then `lib/graphics/` Canvas-using ops and
+  `lib/imaging/` PNG load/save can't extract cleanly.
+  `shapes` worked around this by going pure-geometry; full
+  graphics chunk needs the codegen feature.
+
+
 
 - **Phases 1 + 2 DONE.**  All library code drained from
   `src/native.rs` for crypto and web; `[native.functions]` is
@@ -1204,22 +1224,120 @@ external graphics chunk via their `loft.toml`.
 
 **Effort:** M.
 
-### Phase 6 — Extract `loft-libs-net`
+### Phase 6 — Extract `loft-libs-net` — **SHIPPED 2026-05-24**
 
-**Packages:** `server`, `web`, `game_protocol`.
+**Packages:** `web` 0.1.0, `server` 0.1.0, `game_protocol` 0.1.0.
 
-**Coordinates with** [`../08-server/`](../08-server/),
-EVENT_LOOP, and multiplayer-editor plans for API stability
-on `server` + `game_protocol`.  Includes the second
-Tier-C drain target (`web`).
+**Chunk repo:** [`loft-lang/loft-libs-net`](https://github.com/loft-lang/loft-libs-net).
+Internal deps switched to crates.io version-deps
+(`loft-ffi = "0.1"`, `loft-ffi-build = "0.1"`); intra-chunk
+loft deps use `>=0.1` version-deps so the same package layout
+works against either monorepo path-deps or registry-installed
+copies.
 
-**CI:** copy `library-ci.yml` + `chunk-skips.toml` from
-Phase 4; port net entries from monorepo skip lists.
+**Registry:** added to `loft-lang/registry/index.json`; signed
+with K_tmp; `loft install web server game_protocol` resolves
+the transitive dep chain and merges into a single
+`loft.lock`.  Smoke-tested end-to-end:
 
-**Acceptance:** as phase 4 (chunk repo green on its own
-interpreter + native + leak gates).
+```sh
+loft install web server game_protocol
+# game_protocol pulls server + web transitively;
+# loft.lock records all three with their SHA-256s
+loft my_program.loft   # use web; use server; use game_protocol; all work
+```
 
-**Effort:** M.
+**CI:** placeholder `library-ci.yml` shipped; canonical
+template lands with task #61.
+
+**Effort delivered:** M.  Pattern proven; reused for future
+chunks.
+
+### Phase 6.5 — Green CI across every chunk + registry repo
+
+**Trigger (2026-05-24, evening):** Phases 4/5/6 shipped working
+libraries but the CI workflows that travel with each chunk are
+red across the board.  Local smoke tests pass; no automated gate
+keeps a regression out of any chunk repo.
+
+**Current red CI matrix:**
+
+| Repo | Workflow | Symptom | Root cause |
+|---|---|---|---|
+| `loft-lang/loft-libs-core` | `library-ci.yml` | `cc` link fails: `cannot find 'ld'` | Workflow does `cargo build --release` of jjstwerff/loft on Ubuntu runner.  The loft repo's `.cargo/config.toml` forces `-fuse-ld=mold` but workflow doesn't `apt-get install mold`. |
+| `loft-lang/loft-libs-graphics` | `library-ci.yml` | same | same |
+| `loft-lang/loft-libs-net` | `library-ci.yml` | same | same |
+| `loft-lang/registry` | `pr-validate.yml` | `curl … loft-linux-x86_64 → 404`; the 9-byte "Not Found" HTML gets `chmod +x` and `loft --version` runs the HTML | No public loft binary release exists yet; the install step is speculative |
+| `loft-lang/loft-lang.github.io` | (none) | n/a | static page only — no CI needed |
+
+**What lands in this phase:**
+
+1. **Canonical `library-ci.yml`** (replaces the placeholder
+   shipped in each chunk):
+   - Job matrix over `packages: [<chunk's pkgs>]`.
+   - Steps: checkout → `apt-get install -y mold` (mirrors the
+     loft repo's link config so the source build succeeds) →
+     `git clone --depth=1 https://github.com/jjstwerff/loft
+     /tmp/loft` → `cargo build --release` in `/tmp/loft` →
+     PATH-prepend `/tmp/loft/target/release` → `loft test`
+     per-package → `loft --native test` per-package.
+   - Linux runner only initially (`ubuntu-latest`).  macOS +
+     Windows added as separate matrix axes once the Linux gate
+     is green for two consecutive weeks (avoids fan-out
+     debugging on day one).
+   - Cache the loft build: `actions/cache@v4` keyed on
+     `loft/Cargo.lock` SHA from `/tmp/loft`.  Cuts ~3 min off
+     subsequent runs.
+
+2. **Registry `pr-validate.yml` fix**: replace the broken
+   `curl … releases/latest/download/loft-linux-x86_64` block
+   with the same clone + build pattern.  The validator
+   reproducible-build gate (`loft package` SHA check) needs
+   a working loft binary on the runner; building from source
+   is the only honest option until a public binary ships.
+
+3. **Roll the canonical workflow into all 3 chunk repos.**
+   `git pull && cp library-ci.yml .github/workflows/ && git
+   commit && git push` for each of `loft-libs-core`,
+   `loft-libs-graphics`, `loft-libs-net`.  Watch the runs go
+   green.
+
+4. **Add the canonical workflow to the `library-template`
+   repo** (#63) so new chunks inherit it automatically.  This
+   closes the loop: every future chunk created via the
+   template starts green, by construction.
+
+5. **Document the CI baseline** in `LIBRARY_BLUEPRINT.md`
+   (#62) — what the canonical workflow covers, how to add a
+   package to the matrix, how to skip a package on a backend.
+
+**Acceptance (per repo):**
+
+- `library-ci.yml` job green on `push origin main` AND on
+  pull-request to main.
+- All packages in the chunk run through `loft test` AND
+  `loft --native test` in CI (so the gate matches what we
+  smoke-tested locally on 2026-05-24).
+- Registry's `pr-validate.yml` is green on a no-op PR (validate
+  unchanged index.json + signature).
+- A deliberate regression PR (e.g. break a single package's
+  test) lands red and the failure log names the right
+  package + test — verified once per chunk.
+
+**Acceptance (cross-cutting):**
+
+- Adding a new package to any chunk requires zero CI changes
+  beyond appending one line to the workflow's package matrix.
+- `library-template`'s CI is byte-identical to what's in the
+  chunks (or a documented superset for first-day green).
+
+**Effort:** S–M (an afternoon of YAML + one push + watch).
+The diagnostic work is done; the remaining work is mechanical.
+
+**Sequencing:** lands BEFORE Phase 6w (`loft-libs-world`) so
+the next chunk inherits green CI by construction, not as a
+follow-up.  This makes #61 / #62 / #63 (currently parked) no
+longer parked — they're this phase.
 
 ### Phase 7a — Split moros into shared world + moros-specific
 
@@ -1438,9 +1556,10 @@ references the monorepo `Cargo.toml` workspace.
 | **4a** | **Green-by-default `library-ci.yml`** in loft-libs-core — proven template for all later chunks | Phase 4 substance | S (separate session — task #61) |
 | **4b** | **`doc/claude/LIBRARY_BLUEPRINT.md`** — author-facing reference | 4a (cites the working CI) | S (separate session — task #62) |
 | **4c** | **`loft-lang/library-template`** GitHub template repo | 4a + 4b | XS (separate session — task #63; defer until needed) |
-| 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, **shapes**) | Phase 4 + `../02-graphics/` | M |
-| 6 | Extract `loft-libs-net` (server, web, game_protocol) | Phase 4 + `../08-server/` | M |
-| 6w | Extract `loft-libs-world` (`world` expanded by 7a, wall folded in) | Phase 7a | M |
+| 5 | Extract `loft-libs-graphics` (gridmesh, **shapes**) | Phase 4 + `../02-graphics/` | M — **partial 2026-05-24** (shapes 0.2.0 + gridmesh 0.1.0 shipped; graphics + imaging blocked on task #67) |
+| 6 | Extract `loft-libs-net` (server, web, game_protocol) | Phase 4 + `../08-server/` | M — **DONE 2026-05-24** |
+| **6.5** | **Green CI across every chunk + registry repo** — canonical `library-ci.yml` (mold install + clone-and-build pattern), fix registry `pr-validate.yml` (drop speculative binary URL), roll into all 3 chunks + library-template | Phases 4-6 substance | S–M (subsumes parked tasks #61 / #62 / #63) |
+| 6w | Extract `loft-libs-world` (`world` expanded by 7a, wall folded in) | Phase 7a + Phase 6.5 (green CI baseline) | M |
 | 7a | **Split moros**: move shared world primitives (hex, walls, groups, height, geometry) into `lib/world/` | Phase 4 (monorepo-internal, no registry needed) | M |
 | 7b | **Move moros libraries into the existing `moros` GitHub project** (game + libs colocated) | Phases 5 + 6w + 7a | MH |
 | 7c | **Bootstrap `dryopea` GitHub project** (greenfield game + dryopea-specific libs, same model as moros) | @PLAN46 starts execution | S (bootstrap only) |
