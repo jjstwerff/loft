@@ -34,21 +34,42 @@ already there**.
   `loft_register!` invocations from the manifest.
 - **PKG.REG code complete** (PKG_REGISTRY.md R1-R9): `loft
   package`, `loft install`, `loft search`, `loft info`,
-  lockfile, signing, recovery runbook.  Trust-root keypair +
-  registry-repo bootstrap pending (waiting on YubiKey
-  hardware to set up secure key storage).
-- **Phase 3.5 (NEW) — path-based dry-run** is the next
-  actionable step.  Validates the extraction mechanic
-  end-to-end **without** needing the live registry, by using
-  `loft.toml`'s `path = ".."` dependency form.  Effort
-  S (~half day per library); recommended first target is
-  `crypto` (smallest, drained earliest).  When the live
-  registry comes online, the dry-run output flips to a real
-  publish with a one-line change per consumer (`path =`
-  → `version =`).
-- **Phase 4 (real publish)** sits behind the YubiKey-based
-  trust-root bootstrap.  Code is ready; ecosystem
-  infrastructure is the gate.
+  lockfile, signing, recovery runbook.  Ecosystem bootstrap
+  now follows the two-stage pattern from
+  [PKG_REGISTRY.md § Two-stage bootstrap](../../PKG_REGISTRY.md#two-stage-bootstrap--interim-k_tmp--permanent-k_real):
+  interim `K_tmp` on the dev laptop unblocks Phase 4
+  immediately; YubiKey-backed `K_real` swap is a planned
+  Scenario C rotation later.
+- **Phase 3.5 — path-based dry-run** is in progress.
+  - **3.5a DONE** (2026-05-24): `crypto` extracted from
+    `lib/crypto/` to `../loft-crypto/`.  Full local CI
+    passes (1 sandbox-only `index_hygiene_clean` failure,
+    unrelated).  Hygiene gate keeps the 6 `n_crypto_*`
+    symbols pinned via `FORBIDDEN_LIBRARY_SYMBOLS_MANUAL`.
+    External `loft package` is reproducible (multiple runs
+    → identical SHA-256).  Canonical extracted SHA:
+    `1c68ce3624…` (5719 B).  **Finding logged**:
+    `native/Cargo.toml` path-deps must be rewritten when
+    a library moves (`../../../loft-ffi` → `../../loft/
+    loft-ffi`), so cross-location SHAs naturally differ.
+  - **3.5b TODO**: implement real path-dep resolution in
+    `src/manifest.rs` + `src/parser/mod.rs`.  Inline
+    `{ path = "X" }` is currently parsed as an opaque
+    "version" string; the resolver finds deps only via
+    sibling probe within `lib/`.  Required before
+    extracting libraries WITH monorepo consumers.
+    ~50 LoC + 1 unit test.
+  - **3.5c TODO**: dry-run libraries that have monorepo
+    consumers (`random`, `shapes`, `arguments`, `web`),
+    blocked on 3.5b.
+- **Phase 4 (real publish)** is no longer blocked on YubiKey
+  arrival.  Bootstrap the registry with an interim `K_tmp`
+  signing key on the dev laptop; ship the first real publish
+  (crypto's GitHub repo + registry PR + signed index).  When
+  YubiKeys arrive, rotate to `K_real` per
+  [REGISTRY_RECOVERY.md § Scenario C](../../REGISTRY_RECOVERY.md#scenario-c).
+  Constraint: do not ship a public loft release with `K_tmp`
+  embedded until after the rotation to `K_real`.
 
 When the bootstrap completes: per-library extraction proceeds
 on its own validated schedule.  Some libraries may extract
@@ -257,13 +278,23 @@ packages (published to the registry per-package, maintained as one repo).
 
 Proposed chunks (refine before the first extraction):
 
+**Library chunks** (libraries-only repos, registry-published):
+
 | Chunk repo | Packages | Rationale |
 |---|---|---|
-| `loft-libs-core` | `arguments`, `random`, `crypto`, `shapes` | Small, stable, no graphics deps — extract first |
-| `loft-libs-graphics` | `graphics`, `imaging`, `gridmesh` | Graphics stack + `#native` crates; coordinate with [`../02-graphics/`](../02-graphics/) |
+| `loft-libs-core` | `arguments`, `random`, `crypto` (plus future `json` / `html` / `fs` drains from stdlib — see [§ Phase 3.6 stdlib drain](#phase-36--stdlib-drain-into-libs)) | Small, stable, no graphics deps — extract first |
+| `loft-libs-graphics` | `graphics`, `imaging`, `gridmesh`, `shapes` | Graphics stack + `#native` crates; `shapes` is 2D shape drawing + collision (was in core, moved here 2026-05-24 — its loft.toml comment is "Shape drawing and 2D collision detection library"); coordinate with [`../02-graphics/`](../02-graphics/) |
 | `loft-libs-net` | `server`, `web`, `game_protocol` | HTTP / multiplayer; coordinate with [`../08-server/`](../08-server/) |
 | `loft-libs-world` | `world` (expanded by Phase 7a to absorb moros's shared spatial primitives: hex addressing, wall geometry, groups, height, coupled geometry).  Folds in `lib/wall.loft` content rather than carrying `wall` as a separate package. | Shared map / spatial primitives consumed by TTT v5, audience demo, moros, dryopea ([@PLAN46](../../plans/future/46-dryopea/README.md)).  Lives in its own chunk because consumers span multiple games and the dryopea plan blocks on it. |
-| `loft-moros` | `moros_editor`, `moros_map` (game-only remnant after Phase 7a), `moros_render`, `moros_sim`, `moros_ui` | The moros RPG stack; depends on `loft-libs-graphics` AND `loft-libs-world`; extract last (mid-development) |
+
+**Game / application repos** (host game-specific libraries
+AND the playable game; registry-publish OPTIONAL — these
+exist primarily as consumers of the library chunks above):
+
+| Repo | Hosts | Status |
+|---|---|---|
+| **`moros`** *(existing GitHub project — reuse)* | `moros_editor`, `moros_map` (game-only remnant after Phase 7a), `moros_render`, `moros_sim`, `moros_ui` + the playable game executable | Active development; depends on `loft-libs-graphics` + `loft-libs-world`.  Moros's chunk doesn't ship as a separate `loft-moros` repo — the libraries live alongside the game in the existing moros project, which keeps game + its specific libraries colocated for the maintainer.  Per-library tarballs can still publish to the registry (each `lib/moros_*/` has its own `loft.toml`), but the **homepage is the moros repo** rather than a chunk-libraries repo.  **Forthcoming arc (2026-05-24):** the existing moros project is mostly JavaScript today; the maintainer plans to migrate it to loft over time.  Phase 7b moves the EXISTING loft `lib/moros_*/` work into the moros repo; the JS-to-loft port of the game itself is a sibling track inside the moros repo (not part of plan-12). |
+| **`dryopea`** *(new project to create — [@PLAN46](../../plans/future/46-dryopea/README.md))* | Dryopea-specific libraries + the playable game executable | New project, same model as moros: game + its game-specific libraries colocated in one repo, with `loft-libs-world` as the shared dependency from the registry.  Created when @PLAN46 starts execution. |
 
 `lib/audience_crystal/` (the projector's crystal mesh-gen prototype that
 `gridmesh` was extracted from) is NOT an extraction candidate — it stays
@@ -298,15 +329,22 @@ Stage-A1 step before extracting.
 ```
 loft-libs-core   (no chunk deps — leaves of the graph)
   ↑
-  ├── loft-libs-graphics   (shapes / arguments from core)
+  ├── loft-libs-graphics   (arguments from core; shapes / gridmesh internal)
   │     ↑
-  │     └── loft-libs-world   (shapes from core; gridmesh from graphics IF
-  │           ↑                 world re-uses mesh primitives — verify in 7a)
+  │     └── loft-libs-world   (shapes / gridmesh from graphics IF
+  │           ↑                 world re-uses 2D collision or mesh primitives
+  │           │                 — verify in 7a)
   │           │
   ├── loft-libs-net        (crypto / arguments from core)
   │
-  └── loft-moros           (depends on graphics + world; possibly net
-                            for the multiplayer demos)
+  ├── moros (existing project, reused)
+  │       depends on graphics + world (and possibly net for
+  │       multiplayer demos); hosts moros_* libraries AND the
+  │       moros game.
+  │
+  └── dryopea (new project — @PLAN46)
+          depends on world (shared world primitives); hosts
+          dryopea-specific libraries AND the dryopea game.
 ```
 
 **Rules this graph imposes on phase ordering:**
@@ -320,7 +358,7 @@ loft-libs-core   (no chunk deps — leaves of the graph)
   hex / wall / overland surface is finished.  May also
   need graphics published if the world library uses
   gridmesh primitives — to be confirmed in Phase 7a.
-- Phase 7b (`loft-moros`) needs both `loft-libs-graphics`
+- Phase 7b (moros — existing project) needs both `loft-libs-graphics`
   and `loft-libs-world` published.
 
 **Open verification:** during Phase 1 (decoupling), each
@@ -328,7 +366,7 @@ chunk's actual `use` statements get audited and the graph
 above gets confirmed or revised.  Notable unknowns:
 - Does `lib/world/` (post-7a) need `gridmesh` from
   `loft-libs-graphics`, or are the geometries independent?
-- Does `loft-moros` need `loft-libs-net` for `game_protocol`
+- Does the `moros` project need `loft-libs-net` for `game_protocol`
   (multiplayer-editor / tic-tac-toe consumers), or do those
   demos live elsewhere?
 
@@ -642,14 +680,18 @@ What deferred future work remains (outside Phase 2's scope):
    build scripts collapsed into a 60-line library at
    `loft-ffi-build/src/lib.rs`.
 
-### Phase 3 — Coordinate with PKG.REG (waiting phase)
+### Phase 3 — Coordinate with PKG.REG
 
 The full registry-backed publish flow (Phase 4+ "Stage B")
-cannot proceed until both:
+needs:
 - **PKG.REG MVP** ships AND a trust-root keypair is generated
-  + embedded in a loft release.  Code is DONE 2026-05-24
-  (PKG_REGISTRY.md R1-R9); ecosystem-side bootstrap is the
-  remaining gate.
+  + embedded in the maintainer's local loft build.  Code is
+  DONE 2026-05-24 (PKG_REGISTRY.md R1-R9).  Two-stage
+  ecosystem bootstrap unblocks Phase 4 now: interim `K_tmp`
+  on the dev laptop is sufficient for `loft install` to
+  verify against the local build (do not ship a public loft
+  release with `K_tmp` embedded — see
+  [PKG_REGISTRY.md § Two-stage bootstrap](../../PKG_REGISTRY.md#two-stage-bootstrap--interim-k_tmp--permanent-k_real)).
 - **cdylib loader** (`extensions.rs`) — already shipped via
   Phase 2.  This bullet was originally about external-
   registry-installed packages contributing native symbols at
@@ -672,12 +714,34 @@ hardcoded somewhere"), exposes consumer-side bugs in
 real publish (Phase 4+) is mechanical rather than a
 discovery exercise.
 
-**Why this is unblocked**: `loft.toml` already supports
-`[dependencies] <pkg> = { path = "../<external-repo>" }`.
-Path-deps don't go through the registry, don't need a
-trust root, don't need anything published.  When the
-registry ships, flipping `path = ".."` → `version = "0.1.0"`
-is a one-line per-consumer change in each `loft.toml`.
+**Why this is unblocked (in stages)**:
+
+- **3.5a — libraries WITHOUT monorepo consumers** (crypto):
+  the dry-run is a pure "remove + verify" operation; nothing
+  in monorepo references the library so the `path = "..."`
+  resolution path is not exercised.  No parser changes
+  required.
+- **3.5b — implement real path-dep resolution**:
+  Discovered during the 3.5a dry-run for `crypto`
+  (2026-05-24): the inline `{ path = "X" }` syntax in
+  existing `lib/*/loft.toml` files is **decorative** — the
+  manifest parser stores the whole string as the dep
+  "version" and the resolver finds deps only via sibling
+  probe within `lib/` (registered as a `lib_dir` from the
+  `--lib lib` cmdline).  Real path-deps that point OUT of
+  `lib/` need parser support: extract the `path` field,
+  resolve it relative to the manifest's package dir, and
+  register the parent of that resolved path as a `lib_dir`.
+  ~50 LoC change in `src/manifest.rs` + `src/parser/mod.rs::
+  apply_manifest_side_effects` + 1 unit test.
+- **3.5c — libraries WITH monorepo consumers** (random,
+  web, shapes, …): blocked on 3.5b.  Each consumer's
+  `loft.toml` flips to `dep = { path = "..." }`; resolver
+  walks the new location.
+
+When the registry ships, flipping `path = ".."` →
+`version = "0.1.0"` is a one-line per-consumer change in
+each `loft.toml`.
 
 **Steps for the first dry-run target (`crypto`)**:
 
@@ -712,16 +776,37 @@ is a one-line per-consumer change in each `loft.toml`.
      `src/**/*.rs`).
 5. Run `loft package` in the external `loft-crypto/`
    directory to confirm the tarball builds cleanly from
-   the external location — same SHA-256 as we saw during
-   R1 smoke (`43ebf109b0206bd00cab03209b1da081ba9f5caa416aa077ccb1dda65da67cfa`).
+   the external location.
+
+   **3.5a finding (2026-05-24)**: the tarball's SHA-256
+   is location-dependent because `native/Cargo.toml`
+   path-deps must be rewritten when the library moves
+   (`../../../loft-ffi` → `../../loft/loft-ffi`).  Both
+   tarballs build, but the SHA-256 differs:
+
+   | Location | path-dep | SHA-256 | size |
+   |---|---|---|---|
+   | `lib/crypto/` (monorepo) | `../../../loft-ffi` | `43ebf109b020…` | 5717 B |
+   | `../loft-crypto/` (extracted) | `../../loft/loft-ffi` | `1c68ce3624…` | 5719 B |
+
+   **Implication for Phase 4 publish**: the canonical
+   distribution SHA is whatever the LIBRARY'S OWN REPO
+   produces — `lib/crypto/`'s SHA is not portable.
+   Publish-time, the external repo's `native/Cargo.toml`
+   should either (a) replace path-deps with version-deps
+   (`loft-ffi = "0.1"`) for the published manifest, or
+   (b) normalize path-deps to a canonical form before
+   hashing.  Recorded as **Phase 4 design item**.
 
 **Acceptance**:
 - `lib/crypto/` removed from monorepo.
-- `loft.toml`s of consumers reference the external path.
+- `loft.toml`s of consumers reference the external path
+  (none for crypto — no consumers in monorepo).
 - Full local CI passes (`./scripts/find_problems.sh --wait`
   modulo the recurring sandbox-only `index_hygiene_clean`).
-- `loft package` in the external location produces the
-  expected tarball + SHA-256.
+- `loft package` in the external location produces a
+  reproducible tarball (multiple runs → identical
+  SHA-256).
 
 **What this does NOT do**:
 
@@ -737,15 +822,32 @@ is a one-line per-consumer change in each `loft.toml`.
 
 **When to flip dry-run → real publish (later)**:
 
-After the trust root ships (post-YubiKey-bootstrap):
+The interim `K_tmp` bootstrap removes the YubiKey wait — Phase 4
+can start as soon as the dry-run for a library completes:
 
-1. Tag `v0.1.0` in the external `loft-crypto` repo.
-2. `gh release create v0.1.0 crypto-0.1.0.tar.gz`.
-3. Open the registry PR adding the version row.
-4. Sign + merge per PKG_REGISTRY.md.
+1. Generate `K_tmp` on the dev laptop (`loft-keygen generate`).
+   Embed its public key in `src/registry_keys.rs`.  Build a
+   local loft binary that trusts `K_tmp`; do NOT ship this
+   binary publicly.
+2. Create `loft-lang/loft-crypto` GitHub repo from the
+   extracted dry-run dir.  Bootstrap `loft-lang/registry` per
+   [REGISTRY_BOOTSTRAP.md](../../REGISTRY_BOOTSTRAP.md)
+   (signing with `K_tmp`).
+3. Tag `v0.1.0` in `loft-crypto`.  `gh release create v0.1.0
+   crypto-0.1.0.tar.gz`.
+4. Open the registry PR adding the version row.  Sign + merge
+   per PKG_REGISTRY.md.
 5. Update consumer `loft.toml`s: `path = ".."` →
-   `crypto = ">=0.1"`.  Net change to monorepo: one line
-   per consumer, every consumer is `crypto = ">=0.1"`.
+   `crypto = ">=0.1"`.  Test `loft install crypto` against the
+   live registry from the K_tmp-trusting local loft.
+
+After YubiKeys arrive:
+
+6. Generate `K_real` on the YubiKey-backed setup.
+7. Run [REGISTRY_RECOVERY.md § Scenario C](../../REGISTRY_RECOVERY.md#scenario-c)
+   as a planned rotation — re-sign every published
+   `index.json.sig` with `K_real`, embed `K_real` in
+   `TRUSTED_PUBLIC_KEYS`, ship the first public loft release.
 
 **Effort**: S (~half day) for crypto.  Subsequent
 dry-runs (random, shapes, arguments, web) follow the same
@@ -754,9 +856,124 @@ Recommended order: crypto first (smallest, drained
 earliest), then random / shapes / arguments in a
 follow-up session.
 
+### Phase 3.6 — Stdlib drain into libs
+
+**Goal**: shrink `default/*.loft` to genuine universal
+stdlib by moving domain-specific code into libraries.
+Surveyed 2026-05-24 — three drains worth doing alongside
+the chunking work; everything else in `default/` stays.
+
+**Stays in stdlib** (load order in `src/main.rs` after
+this phase):
+
+| File | What | Why it stays |
+|---|---|---|
+| `01_code.loft` | Operators, math, text basics, collections, panic/assert/log/print, parallel | Genuine stdlib — every program needs this |
+| `02_files.loft` *(renamed from `02_images.loft`)* | File I/O + path helpers | Universal-enough; raising the floor to `use fs;` for every file-reading program is not a win |
+| `03_text.loft` | Text utilities (`trim` / `replace` / `to_lowercase` / character class checks); minus `escape_html` + path helpers | Text manipulation is core |
+| `04_stacktrace.loft` | `stack_trace()` | Debug primitive |
+| `05_coroutine.loft` | `CoroutineStatus` + `exhausted()` | Language feature support |
+| `06_json.loft` | `JsonValue` + `json_parse` + manipulators | Backs the `{x:j}` format specifier + `text as Foo` cast — JSON shape is the **language's default debug serialization** ([already shipped](#why-json-stays-stdlib--struct-json-is-already-built-in)), can't be opt-in |
+
+**Drains** (each becomes a new lib / merges into existing):
+
+| Source | Drained content | Destination | Chunk |
+|---|---|---|---|
+| `02_images.loft` | `Image`, `Pixel`, `FileResult` typed for images, PNG load/save (`png_load`, `png_save`), Image-specific helpers | Merge into existing `lib/imaging/` | `loft-libs-graphics` |
+| `03_text.loft` | `escape_html` (sole HTML-domain helper) | New `lib/html/` | `loft-libs-net` |
+| `03_text.loft` | Path helpers (`dir`, `basename`, `join`, `resolve`, `path_sep`) | Move to `02_files.loft` (co-locate paths with file I/O) | (stays in stdlib, just relocated) |
+
+**File rename**: after the image-types drain, `02_images.loft`
+becomes the home for File I/O + path manipulation.  Rename
+to **`02_files.loft`** to match the new content.
+
+**Why JSON stays stdlib — struct ↔ JSON is already built in**:
+
+Verified 2026-05-24 by reading the parser + running a
+round-trip test.  The serialize direction is the `:j`
+format specifier (`src/parser/objects.rs:1155`,
+`src/parser/mod.rs:256`, `src/codegen_runtime.rs:303` —
+`OpFormatDatabase` walks the struct's type at runtime
+with `json: true`).  The deserialize direction is the
+`as <StructType>` cast on text (`src/parser/mod.rs:981-989`
+routes through `OpCastVectorFromText`).  Both directions
+are shipping behaviour:
+
+```loft
+struct Foo { a: integer, b: text }
+f = Foo { a: 12, b: "hello" };
+s = "{f:j}";          // serialize:   "{\"a\":12,\"b\":\"hello\"}"
+g = s as Foo;          // deserialize: Foo { a: 12, b: "hello" }
+// (and `{f:#j}` for pretty-printed output)
+```
+
+This makes JSON the language's default debug-print +
+serialization format — `06_json.loft`'s `JsonValue` API
+is the secondary tool for cases where the target type
+isn't statically known.  Pulling JSON out of stdlib
+would break the format specifier and the cast for every
+program.
+
+**Steps**:
+
+1. Move Image / Pixel / Format type declarations from
+   `02_images.loft` to `lib/imaging/src/imaging.loft`.
+   The native PNG ops (`n_load_png` / `n_save_png`) are
+   already declared in `lib/imaging/loft.toml::[native.functions]`
+   per Phase 2 — just the loft-side type defs migrate.
+2. Move `escape_html` from `03_text.loft` to a new
+   `lib/html/src/html.loft`.  Pure-loft library, no
+   `[native]` section.  Schedule for `loft-libs-net`
+   chunk extraction.
+3. Move path helpers (`dir` / `basename` / `join` /
+   `resolve` / `path_sep`) from `03_text.loft` into
+   `02_images.loft`'s leftover content.
+4. Rename `default/02_images.loft` → `default/02_files.loft`.
+5. Update `src/main.rs` stdlib load order (the filename
+   change is mechanical; the load sequence stays).
+6. Audit existing call sites — any internal use of the
+   drained Image types / `escape_html` needs a `use
+   imaging;` / `use html;` import.  Search:
+   `git grep -E 'Image\b|Pixel\b|escape_html'`.
+7. Update tests that exercise the drained surface —
+   they need the new `use` lines.
+8. Run `make ci`; expect failures rooted in missing
+   `use` statements, fix until green.
+9. Extraction-hygiene gate update:
+   `tests/extraction_hygiene.rs::FORBIDDEN_LIBRARY_SYMBOLS_MANUAL`
+   gains entries for any image-related native symbols
+   that move from compiler-crate to `lib/imaging/native/`
+   during the drain.
+
+**Acceptance**:
+
+- `default/02_files.loft` exists; `02_images.loft` does not.
+- `default/03_text.loft` is smaller (no `escape_html`,
+  no path helpers).
+- `lib/imaging/` carries the Image / Pixel / Format type
+  definitions.
+- `lib/html/` exists with `escape_html`.
+- `make ci` green.
+- Total `default/*.loft` line count drops from ~2,500 to
+  ~2,000 lines parsed at every startup.
+
+**Why now, in the same sweep as chunking**: the drained
+libraries (`lib/html/`, `lib/imaging/` post-merge) get
+extracted in the same Phase 4-5 cycle that ships the rest
+of the chunks.  Doing the drain afterwards would require
+another monorepo edit pass.  Doing it before chunking
+finalizes lets each chunk land with its final library
+membership in one motion.
+
+**Effort**: M (~1 day): the moves are mechanical but
+call-site updates ripple.  Sequential after Phase 1c, in
+parallel with Phase 3 / 3.5 / 4 prep.
+
 ### Phase 4 — Extract `loft-libs-core` (first chunk)
 
-**Packages:** `arguments`, `random`, `crypto`, `shapes`.
+**Packages:** `arguments`, `random`, `crypto` (plus any
+libraries produced by [Phase 3.6 stdlib drain](#phase-36--stdlib-drain-into-libs) —
+typically `html`, optionally `fs` / `json` if drained).
 
 **Why first:** small, stable, no graphics deps, no
 inter-chunk deps.  Validates the per-chunk template before
@@ -764,6 +981,11 @@ larger chunks commit.  Includes the Tier-C drain target
 (`crypto`) so phase 1's decoupling work gets immediate
 real-world validation.  Also the **template-author** chunk
 — produces the reusable artefacts that phases 5-7b copy.
+
+**Note (2026-05-24):** `shapes` moved from this chunk to
+`loft-libs-graphics`; its loft.toml comment is "Shape
+drawing and 2D collision detection library" — a graphics
+concern, not a core utility.
 
 **Steps:** apply [§ Per-chunk extraction template](#per-chunk-extraction-template).
 
@@ -784,8 +1006,9 @@ once, copy per chunk"):
   `SCRIPTS_LEAK_ALLOW` into that file.
 
 **Acceptance:**
-- `lib/{arguments,random,crypto,shapes}/` directories
-  removed from the monorepo.
+- `lib/{arguments,random,crypto}/` directories removed
+  from the monorepo (plus any Phase-3.6 drain outputs
+  if that phase completed first).
 - `make ci` passes using registry-installed versions.
 - `loft-libs-core` CI green on its own
   (interpreter + native + leak gates).
@@ -942,34 +1165,78 @@ code) successfully consume the registry-published version.
 
 **Effort:** M.
 
-### Phase 7b — Extract `loft-moros` (moros-specific only)
+### Phase 7b — Move moros packages into the existing `moros` project
 
 **Packages:** `moros_editor`, `moros_map` (game-only
 remnant after 7a), `moros_render`, `moros_sim`, `moros_ui`.
 
+**Destination repo:** the **existing `moros` GitHub project**
+(not a new `loft-moros` chunk repo).  Decision 2026-05-24:
+the moros libraries colocate with the moros game in one
+project — both for discoverability (users looking for "moros
+stuff" hit one repo) and because the libraries are
+moros-specific and co-evolve tightly with the game itself.
+
+Layout inside the moros repo after this phase:
+
+```
+moros/
+├── lib/
+│   ├── moros_editor/
+│   ├── moros_map/
+│   ├── moros_render/
+│   ├── moros_sim/
+│   └── moros_ui/
+├── src/                  # the moros game executable
+├── loft.toml             # references registry deps: loft-libs-graphics, loft-libs-world
+└── ...
+```
+
+Per-library registry tarballs publish independently — each
+`lib/moros_*/` has its own `loft.toml` with its own
+version.  `homepage` in each registry entry points at the
+moros repo's `tree/main/lib/moros_*/` URL.
+
 **Why after 7a:** the shared world primitives must be in
 `lib/world/` and in `loft-libs-world` first; otherwise the
-moros chunk drags world handling into the moros repo and
+moros libraries drag world handling along with them and
 dryopea can't reuse it.
 
 **Why last overall:** mid-development; depends on
 `loft-libs-graphics` AND `loft-libs-world` (registry
-versions).  Extracts as a unit since the moros-specific
-packages co-evolve.
+versions).
 
 **CI:** copy `library-ci.yml` + `chunk-skips.toml` from
-Phase 4; port the moros entries from monorepo skip lists.
-This chunk has the heaviest skip list (the moros packages
-are still mid-development and surface the most native-codegen
-gaps — those entries follow the code into the moros repo).
+Phase 4 to the moros repo's `.github/workflows/`; port the
+moros entries from monorepo skip lists.  This chunk has the
+heaviest skip list (the moros packages are still mid-development
+and surface the most native-codegen gaps — those entries follow
+the code into the moros repo).
 
-**Acceptance:** as phase 4 (chunk repo green on its own
-interpreter + native + leak gates), plus the moros demo
-apps continue to build against the external moros chunk
-(consuming `loft-libs-world` + `loft-libs-graphics` from
-the registry).
+**Acceptance:** the moros repo's CI is green on its own
+interpreter + native + leak gates; per-library tarballs
+publish to the registry; the moros game still builds + runs
+against the registry-installed libraries it depends on.
 
 **Effort:** MH.
+
+### Phase 7c — Dryopea project bootstrap (sibling to 7b)
+
+When [@PLAN46](../../plans/future/46-dryopea/README.md)
+starts execution, create a new **`dryopea` GitHub project**
+following the same layout as `moros`: dryopea-specific
+libraries colocated with the dryopea game in one repo, with
+`loft-libs-world` (and any other shared chunks) consumed
+from the registry.
+
+This is not a chunk extraction (no `lib/dryopea_*/`
+currently exists in the monorepo to extract).  It's a
+greenfield project setup whose template is `moros`
+post-Phase-7b.  Listed here for plan completeness; the
+actual work lives in [@PLAN46](../../plans/future/46-dryopea/README.md).
+
+**Effort:** S (bootstrap only; the dryopea-specific code
+volume is whatever @PLAN46 ends up scoping).
 
 ### Phase 8 — Final monorepo cleanup
 
@@ -999,14 +1266,18 @@ references the monorepo `Cargo.toml` workspace.
 |---|---|---|---|
 | 1 | Drain library symbols from `src/native.rs`; convert single-file modules | — | M (3 subs) — **DONE 2026-05-24** |
 | 2 | Compile-time native-registry aggregator | Phase 1 | M — **DONE 2026-05-24** |
-| 3 | PKG.REG + cdylib loader land | PACKAGES.md § Open work | — (external) — PKG.REG **code complete 2026-05-24**; ecosystem-bootstrap pending YubiKey arrival |
-| **3.5** | **Path-based dry-run** — extract one library (crypto first) to a sibling location, monorepo consumes via `path = ".."`.  Validates Stage-A mechanics before registry exists. | Phases 1-2 only | S (~half day per library) |
-| 4 | Extract `loft-libs-core` (arguments, random, crypto, shapes) — real publish through registry | Phases 1-3 + Phase 3.5 dry-run for the same package | M |
-| 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh) | Phase 4 + `../02-graphics/` | M |
+| 3 | PKG.REG + cdylib loader land | PACKAGES.md § Open work | — (external) — PKG.REG **code complete 2026-05-24**; ecosystem-bootstrap unblocked via interim `K_tmp` (no YubiKey needed for Phase 4 start) |
+| **3.5a** | **Dry-run libraries WITHOUT monorepo consumers** (crypto) — move out, verify CI + reproducible package | Phases 1-2 only | S — **DONE 2026-05-24** (crypto → `../loft-crypto/`) |
+| **3.5b** | **Implement real path-dep resolution** in `src/manifest.rs` + `src/parser/mod.rs` | 3.5a | S (~50 LoC + 1 unit test) |
+| **3.5c** | **Dry-run libraries WITH monorepo consumers** (random, web, shapes, arguments) | 3.5b | S per library |
+| **3.6** | **Stdlib drain** — Image types → `lib/imaging/`; `escape_html` → new `lib/html/`; path helpers `03_text.loft` → `02_files.loft`; rename `02_images.loft` → `02_files.loft` | Phase 1c | M (~1 day) |
+| 4 | Extract `loft-libs-core` (arguments, random, crypto; plus Phase-3.6 outputs `html` etc.) — real publish through registry | Phases 1-3 + Phase 3.5 dry-run for the same package | M |
+| 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, **shapes**) | Phase 4 + `../02-graphics/` | M |
 | 6 | Extract `loft-libs-net` (server, web, game_protocol) | Phase 4 + `../08-server/` | M |
 | 6w | Extract `loft-libs-world` (`world` expanded by 7a, wall folded in) | Phase 7a | M |
 | 7a | **Split moros**: move shared world primitives (hex, walls, groups, height, geometry) into `lib/world/` | Phase 4 (monorepo-internal, no registry needed) | M |
-| 7b | Extract `loft-moros` (moros-specific only after 7a) | Phases 5 + 6w + 7a | MH |
+| 7b | **Move moros libraries into the existing `moros` GitHub project** (game + libs colocated) | Phases 5 + 6w + 7a | MH |
+| 7c | **Bootstrap `dryopea` GitHub project** (greenfield game + dryopea-specific libs, same model as moros) | @PLAN46 starts execution | S (bootstrap only) |
 | 8 | Monorepo cleanup + audience_crystal hardening | Phase 7b | S |
 
 The world split is monorepo-internal (Phase 7a) and can
@@ -1099,6 +1370,58 @@ linking begins (Stage B).  Then within Stage B the
 monorepo swap is itself ordered: **link, validate the link,
 remove, re-validate**.  Don't bundle these — each step is a
 gate.
+
+### Multi-package repo conventions (chunks + game projects)
+
+When a single GitHub repo hosts multiple loft packages
+(every chunk above, plus `moros` and `dryopea`), the
+registry can't assume `loft package` runs at the repo
+root.  Two conventions handle this:
+
+**1. Per-package git tags** — `<package>-v<version>` (not
+just `v<version>`).  Tags are repo-global, so naked
+`v0.1.0` would collide when sibling libraries in the same
+chunk both want to ship "0.1.0".  Per-package prefix keeps
+the namespace clean and lets the registry's reproducible-
+build re-check find the right snapshot:
+
+| Chunk + package | Git tag |
+|---|---|
+| `loft-libs-core/crypto` v0.1.0 | `crypto-v0.1.0` |
+| `loft-libs-graphics/imaging` v0.2.0 | `imaging-v0.2.0` |
+| `moros/lib/moros_render` v0.3.1 | `moros_render-v0.3.1` |
+
+**2. `subpath` field on registry version rows** — optional
+JSON string pointing at the package directory inside the
+repo, relative to the repo root.  Default `""` (single-
+package repo) keeps existing single-library entries
+unchanged; chunks set it to the library's subdir:
+
+```json
+"crypto": {
+  "versions": {
+    "0.1.0": {
+      "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.1.0/crypto-0.1.0.tar.gz",
+      "subpath": "crypto",
+      "sha256": "1c68ce3624…",
+      "size": 5719,
+      "loft": ">=0.8",
+      "published": "2026-05-24T11:30:00Z"
+    }
+  }
+}
+```
+
+Both fields land in
+[PKG_REGISTRY.md § Schema](../../PKG_REGISTRY.md#schema)
+when this plan executes.  `validate.py` honours `subpath`
+when running the reproducible-build re-check: clones the
+homepage at `<package>-v<version>`, `cd <subpath>/`,
+`loft package`, compares the resulting sha256.
+
+`SUBMITTING.md` gains a "publishing from a chunked repo"
+sub-section showing the `cd subdir/` step + tag-prefix
+convention for authors maintaining one of the chunks.
 
 ### Stage A — Build the external chunk
 
@@ -1227,9 +1550,13 @@ Listed here so future-you doesn't have to re-discover them.
 2. **Version policy.** Per-library independent semver, or
    monorepo-style coordinated bumps?  Independent semver
    matches package-registry idiom.
-3. **Tagging.** Are external repo tags `v0.1.0` style or
-   `0.1.0` (matching loft.toml syntax)?  Rust uses `v`
-   prefix; npm uses bare.
+3. **Tagging.** RESOLVED (2026-05-24) —
+   `<package>-v<version>` for multi-package repos (every
+   chunk + moros + dryopea); `v<version>` only for the
+   degenerate single-package case.  See
+   [§ Multi-package repo conventions](#multi-package-repo-conventions-chunks--game-projects)
+   for rationale (tag-collision avoidance when sibling
+   libraries ship overlapping versions).
 4. **Test infrastructure.** RESOLVED (2026-05-23) — the
    monorepo CI path (see [§ CI path for libraries](#ci-path-for-libraries-built-2026-05-23--travels-with-each-chunk))
    is the template: a chunk repo runs `loft test` (interp) +

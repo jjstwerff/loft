@@ -55,9 +55,21 @@ use std::path::{Path, PathBuf};
 /// — they stay in the compiler crate by design.  See the
 /// stdlib-vs-library table in the plan README.
 const FORBIDDEN_LIBRARY_SYMBOLS_MANUAL: &[(&str, &str)] = &[
+    // @PLAN12 phase 3.5 (2026-05-24) — crypto was extracted out of
+    // the monorepo to `../loft-crypto/`.  Its `loft.toml::[native.functions]`
+    // is no longer scanned by `forbidden_library_symbols()` (which walks
+    // `lib/*` only), so the 6 symbols are pinned here to keep the
+    // hygiene gate detecting re-introduction in `src/**`.
+    ("n_sha256", "external loft-crypto/native"),
+    ("n_hmac_sha256", "external loft-crypto/native"),
+    ("n_hmac_sha256_raw", "external loft-crypto/native"),
+    ("n_base64_encode", "external loft-crypto/native"),
+    ("n_base64_decode", "external loft-crypto/native"),
+    ("n_base64url_encode", "external loft-crypto/native"),
     // Add rows here ONLY when the library's `loft.toml` can't yet
-    // declare the symbol via `[native.functions]`.  Prefer populating
-    // the manifest.  Future TBD rows for reference:
+    // declare the symbol via `[native.functions]`, OR when the
+    // library has been extracted to an external path (path-dep scan
+    // is not yet implemented).  Future TBD rows for reference:
     //   ("n_load_png",  "lib/imaging/native"),   // @P321c — needs ABI fix first
     //   ("n_save_png",  "lib/imaging/native"),   // @P321c
     //   ("n_rand",      "lib/random/native"),    // phase TBD
@@ -378,9 +390,11 @@ fn manifest_native_functions_cover_drained_libraries() {
     for sym in crypto_expected {
         assert!(
             forbidden.iter().any(|(s, _)| s == sym),
-            "@PLAN12 phase 2 — crypto symbol `{sym}` missing from \
-             forbidden list.  `lib/crypto/loft.toml::[native.functions]` \
-             should declare it.  Restore the manifest entry."
+            "@PLAN12 phase 3.5 — crypto symbol `{sym}` missing from \
+             forbidden list.  After Phase 3.5 dry-run, crypto was \
+             extracted to `../loft-crypto/`; symbols are pinned via \
+             `FORBIDDEN_LIBRARY_SYMBOLS_MANUAL` in this file.  Restore \
+             the entry there."
         );
     }
     // Phase 1b: web.  19 symbols.
