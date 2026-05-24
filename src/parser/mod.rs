@@ -4237,11 +4237,11 @@ impl Parser {
             Some(p) => p.to_string(),
             None => return,
         };
-        let versioned_name: String =
-            match install_dir.file_name().and_then(std::ffi::OsStr::to_str) {
-                Some(n) => n.to_string(),
-                None => return,
-            };
+        let versioned_name: String = match install_dir.file_name().and_then(std::ffi::OsStr::to_str)
+        {
+            Some(n) => n.to_string(),
+            None => return,
+        };
         if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
             *f = entry;
         }

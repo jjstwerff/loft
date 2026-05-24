@@ -60,11 +60,11 @@ mod native_utils;
 mod ops;
 mod parallel;
 mod parser;
-#[cfg(feature = "registry")]
-mod registry_index;
 mod platform;
 #[cfg(feature = "png")]
 mod png_store;
+#[cfg(feature = "registry")]
+mod registry_index;
 mod runtime_error;
 mod scopes;
 mod stack;

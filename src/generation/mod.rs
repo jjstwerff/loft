@@ -2241,22 +2241,13 @@ extern crate loft;"
         // identical fields, so the bit-copy is safe.  Same trick the
         // text-return path uses for LoftStr (see comment ~30 lines
         // below in this function).
-        let needs_loft_store = matches!(
-            &def.returned,
-            Type::Vector(_, _) | Type::Reference(_, _)
-        );
+        let needs_loft_store = matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
         if needs_loft_store {
             // Order matters: extract `store_nr` from the null store as
             // a SEPARATE statement so it doesn't dual-borrow `stores`
             // alongside the build_store call (rustc E0502).
-            writeln!(
-                w,
-                "  let _store_nr = stores.null().store_nr;"
-            )?;
-            writeln!(
-                w,
-                "  let _guard = loft::native_call::enter(stores);"
-            )?;
+            writeln!(w, "  let _store_nr = stores.null().store_nr;")?;
+            writeln!(w, "  let _guard = loft::native_call::enter(stores);")?;
             writeln!(
                 w,
                 "  let _ls_src = loft::native_call::build_store(stores, _store_nr);"

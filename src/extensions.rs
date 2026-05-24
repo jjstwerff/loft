@@ -1508,7 +1508,7 @@ pub fn platform_lib_name(stem: &str) -> String {
 /// ```
 #[cfg(feature = "native-extensions")]
 #[allow(dead_code)] // Consumed by generated native code (separate compilation unit),
-                    // not by the loft binary itself.  Clippy can't see those callers.
+// not by the loft binary itself.  Clippy can't see those callers.
 pub mod native_call {
     use crate::database::Stores;
 
@@ -1516,10 +1516,7 @@ pub mod native_call {
     /// against `loft_ffi::LoftStoreCtx` so the resulting
     /// `loft_ffi::LoftStore` can be passed to a generated-code
     /// callsite without `transmute`.
-    unsafe extern "C" fn ffi_claim_pub(
-        ctx: loft_ffi::LoftStoreCtx,
-        words: u32,
-    ) -> u32 {
+    unsafe extern "C" fn ffi_claim_pub(ctx: loft_ffi::LoftStoreCtx, words: u32) -> u32 {
         let store_nr = ctx._opaque as usize as u16;
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             super::CURRENT_STORES.with(|c| {
@@ -1531,11 +1528,7 @@ pub mod native_call {
         .unwrap_or(0)
     }
 
-    unsafe extern "C" fn ffi_resize_pub(
-        ctx: loft_ffi::LoftStoreCtx,
-        rec: u32,
-        words: u32,
-    ) -> u32 {
+    unsafe extern "C" fn ffi_resize_pub(ctx: loft_ffi::LoftStoreCtx, rec: u32, words: u32) -> u32 {
         let store_nr = ctx._opaque as usize as u16;
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             super::CURRENT_STORES.with(|c| {
