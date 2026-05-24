@@ -4011,6 +4011,7 @@ impl Parser {
         Self::probe_loft_lib_flat(id, &mut f);
         self.probe_loft_lib_manifest(id, &mut f);
         self.probe_user_installed(id, &mut f);
+        self.probe_registry_installed(id, &mut f);
         Self::probe_cur_dir_flat(id, cur_dir, &mut f);
         Self::probe_base_dir_flat(id, base_dir, &mut f);
 
@@ -4195,6 +4196,61 @@ impl Parser {
             *f = entry;
         }
     }
+
+    /// `~/.loft/registry/<id>-<version>/` — packages installed via `loft install`
+    /// against the package registry.  Resolves the version via the cwd's
+    /// `loft.lock` (written by `loft install`).  When loft.lock is absent or
+    /// doesn't list `id`, this probe is a no-op and resolution falls through
+    /// to the remaining strategies.
+    ///
+    /// @PLAN12 phase 3.5a wiring (2026-05-24): closes the "loft install →
+    /// use installed package" loop.  Before this, `loft install crypto`
+    /// downloaded + extracted correctly but `use crypto;` in a subsequent
+    /// run still required a manual `--lib` flag.
+    #[cfg(feature = "registry")]
+    fn probe_registry_installed(&mut self, id: &str, f: &mut String) {
+        // Use `loft::*` (not `crate::*`) because this module is compiled
+        // into BOTH the loft library AND the loft binary; the binary
+        // doesn't have `lockfile` / `registry_index` declared as `mod`,
+        // but accesses them as deps via the `loft::` library path.
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let cwd = match env::current_dir() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let lock_path = cwd.join("loft.lock");
+        if !lock_path.exists() {
+            return;
+        }
+        let lock = match crate::lockfile::read_lockfile(&lock_path) {
+            Ok(Some(l)) => l,
+            _ => return,
+        };
+        let version = match lock.packages.iter().find(|p| p.name == id) {
+            Some(p) => p.version.clone(),
+            None => return,
+        };
+        let install_dir = crate::registry_index::extract_dir(id, &version);
+        let parent = match install_dir.parent().and_then(std::path::Path::to_str) {
+            Some(p) => p.to_string(),
+            None => return,
+        };
+        let versioned_name: String =
+            match install_dir.file_name().and_then(std::ffi::OsStr::to_str) {
+                Some(n) => n.to_string(),
+                None => return,
+            };
+        if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
+            *f = entry;
+        }
+    }
+
+    /// No-op when registry feature is off — registry-installed packages
+    /// only resolve when the `loft install` machinery is compiled in.
+    #[cfg(not(feature = "registry"))]
+    fn probe_registry_installed(&mut self, _id: &str, _f: &mut String) {}
 
     /// Final fallback: beside the parsed file itself.
     fn probe_cur_dir_flat(id: &str, cur_dir: &str, f: &mut String) {

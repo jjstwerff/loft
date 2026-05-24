@@ -51,6 +51,7 @@ mod introspect;
 mod json;
 mod keys;
 mod lexer;
+mod lockfile;
 mod log_config;
 mod logger;
 mod manifest;
@@ -59,6 +60,8 @@ mod native_utils;
 mod ops;
 mod parallel;
 mod parser;
+#[cfg(feature = "registry")]
+mod registry_index;
 mod platform;
 #[cfg(feature = "png")]
 mod png_store;
