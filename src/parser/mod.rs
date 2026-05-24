@@ -4543,16 +4543,42 @@ impl Parser {
                     .insert(sym.clone(), rust_crate.clone());
             }
         }
-        // PKG.3: register the package's parent directory so that
-        // dependencies declared in [dependencies] can be found as sibling
-        // packages during normal `use` resolution.
-        if !m.dependencies.is_empty() && !self.lib_dirs.contains(&dir.to_string()) {
-            self.lib_dirs.push(dir.to_string());
-        }
-        for (dep_name, _dep_version) in &m.dependencies {
+        // PKG.3: register dirs for dependency resolution.
+        //
+        // For plain-version deps (`foo = "0.1"`) and the legacy
+        // sibling-probe shape (no path declared): register the
+        // package's parent dir `dir` so `<dir>/<dep_name>` resolves
+        // via sibling lookup.
+        //
+        // @PLAN12 phase 3.5b (2026-05-24) — for path-deps
+        // (`foo = { path = "../external/foo" }`), resolve the path
+        // relative to this package's directory (`pkg_dir`), then
+        // register the PARENT of the resolved location.  This lets
+        // the existing sibling-probe at
+        // `<resolved-parent>/<dep_name>/loft.toml` find the external
+        // package.  Without this, the inline-table path field was
+        // decorative — manifests like `lib/audience_crystal/loft.toml`
+        // worked by coincidence (their `path = "../gridmesh"`
+        // happened to point at a sibling in `lib/`, also covered by
+        // the `--lib lib` cmdline arg).  This change makes the path
+        // field actually do what it says, unlocking external library
+        // extractions.
+        for (dep_name, dep_value) in &m.dependencies {
+            let resolved_parent = if let Some(path) = manifest::extract_path_dep(dep_value) {
+                let dep_pkg_path = std::path::Path::new(pkg_dir).join(path);
+                dep_pkg_path
+                    .parent()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| dir.to_string())
+            } else {
+                dir.to_string()
+            };
+            if !self.lib_dirs.contains(&resolved_parent) {
+                self.lib_dirs.push(resolved_parent.clone());
+            }
             if !self.data.use_exists(dep_name) {
                 self.pending_pkg_deps
-                    .push((dep_name.clone(), dir.to_string()));
+                    .push((dep_name.clone(), resolved_parent));
             }
         }
     }
