@@ -987,6 +987,98 @@ real-world validation.  Also the **template-author** chunk
 drawing and 2D collision detection library" — a graphics
 concern, not a core utility.
 
+**`random` extraction SHIPPED 2026-05-24 — showcase template
+for store-allocating cdylib returns.**  Drained with the
+`loft::native_call` codegen feature added in the same
+session.  Single RNG state in the cdylib for both backends.
+
+The drain attempt initially surfaced a real ABI gap:
+random's `n_rand_indices` returns a **store-allocated
+vector**, and the cdylib's signature takes a `LoftStore`
+handle for that allocation.  Native codegen knew how to
+emit cdylib calls (per @P321a crypto's drain) but didn't
+have a way to construct a `LoftStore` from `&mut Stores` at
+the call site.  A partial-drain workaround (keep
+`n_rand_indices` in the compiler crate, drain the other 2)
+introduced a worse bug: `rand_seed(N)` then dispatched via
+the cdylib's PCG-64 while `rand_indices(M)` read the
+compiler-crate's PCG-64 — two RNG states, reproducibility
+broken.
+
+**The fix that landed** (`loft::native_call` module —
+`src/extensions.rs:1500+`):
+
+- `pub fn build_store(stores: &Stores, store_nr: u16) ->
+  loft_ffi::LoftStore` constructs the FFI handle, wiring
+  claim/reload/resize callbacks to the thread-local
+  CURRENT_STORES.
+- `pub fn enter(stores: &mut Stores) -> StoresGuard` is the
+  RAII guard that sets CURRENT_STORES; Drop clears it.
+  Generated code holds one per cdylib call.
+- `loft::codegen_runtime::from_loft_ref(stores, lr) ->
+  DbRef` converts the cdylib's returned `LoftRef` into a
+  DbRef in the indirect (header → data) layout loft uses.
+- `output_native_direct_call` in `src/generation/mod.rs`
+  detects "needs LoftStore" from the loft-side signature
+  (`def.returned` is `Type::Vector` or `Type::Reference`)
+  and emits the
+  `enter` + `build_store` + cdylib call + `from_loft_ref`
+  pattern.  Type-system identity issues from two `loft_ffi`
+  crate copies in the dependency graph are bridged via
+  `std::mem::transmute_copy` — safe because both sides are
+  `#[repr(C)]` with identical layouts.
+
+**Generated wrapper shape (random's n_rand_indices)**:
+
+```rust
+fn n_rand_indices(cell: &std::cell::UnsafeCell<Stores>, mut var_n: i64) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let _store_nr = stores.null().store_nr;
+    let _guard = loft::native_call::enter(stores);
+    let _ls_src = loft::native_call::build_store(stores, _store_nr);
+    let _ls = unsafe { std::mem::transmute_copy(&_ls_src) };
+    let _lr = unsafe { loft_random::n_rand_indices(_ls, var_n as _) };
+    loft::codegen_runtime::from_loft_ref(
+        stores,
+        unsafe { std::mem::transmute_copy(&_lr) },
+    )
+}
+```
+
+**Pattern for store-allocating cdylib returns** (template for
+imaging, graphics, future libraries):
+
+1. The cdylib (`lib/<X>/native/src/lib.rs`) declares each
+   store-allocating function with `LoftStore` as its first
+   `extern "C"` arg, returning `LoftRef` (or `bool` for
+   in-place writes).  Use `loft_ffi`'s native types.
+2. The library's `loft.toml` declares `[native.functions]`
+   per Phase 2 convention — no ABI hint needed, codegen
+   infers from the loft-side signature.
+3. The hygiene gate (`tests/extraction_hygiene.rs::
+   FORBIDDEN_LIBRARY_SYMBOLS_MANUAL`) gains a row per
+   drained symbol (or — preferred — the symbol gets
+   declared in `[native.functions]` and the gate's
+   manifest-scan picks it up automatically once the
+   library moves to a `lib/*/` path the gate scans).
+4. Verify the showcase property: the same loft program
+   produces byte-identical output under `loft` (interp)
+   and `loft --native` after the drain.  A
+   `rand_seed; rand_indices; rand_seed; rand_indices`
+   reproducibility check is sufficient.
+
+**Open follow-ups** (not blocking; covered in Phase 6.5+):
+
+- **Type::Reference args** (e.g. imaging's `n_load_png(path,
+  image)`).  Today the codegen only handles `LoftStore`
+  forwarding for the RETURN side.  Reference args need
+  `to_loft_ref(var)` insertion at the call site — that
+  helper already exists in `src/codegen_runtime.rs:153`,
+  the codegen just doesn't emit calls to it yet.
+- **Vector args** today extract `_vp_/_vc_` raw pointers
+  — alternative conventions in the cdylib (taking
+  `LoftRef` instead) need codegen support.
+
 **Steps:** apply [§ Per-chunk extraction template](#per-chunk-extraction-template).
 
 **Additional Phase-4-only deliverables** (resolve Open
