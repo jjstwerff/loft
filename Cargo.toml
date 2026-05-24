@@ -23,6 +23,11 @@ path = "src/main.rs"
 name = "gendoc"
 path = "src/gendoc.rs"
 
+[[bin]]
+name = "loft-keygen"
+path = "src/bin/loft-keygen.rs"
+required-features = ["registry"]
+
 [features]
 default      = ["mmap", "random", "threading", "registry", "native-extensions"]
 threading    = ["dep:rayon"]

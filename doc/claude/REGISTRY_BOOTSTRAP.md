@@ -26,28 +26,36 @@ doc is the runbook.
 
 ## Step 1 — Generate the trust-root keypair (offline)
 
-On an air-gapped or single-purpose machine:
+On an air-gapped or single-purpose machine (Linux or macOS — the
+keygen reads `/dev/urandom`):
 
 ```sh
-# Tiny one-off Rust binary; ~10 lines.  Generates the keypair, prints
-# the public key as hex, writes the private key to a file.
-cargo install --git https://github.com/loft-lang/loft-keygen-sketch \
-  loft-keygen
-loft-keygen generate \
-  --out-private  registry-signing-key.bin \
-  --out-public-hex registry-signing-key.pub
+# Build the keygen from the loft repo (ships with the binary as of
+# the PKG.REG MVP).  The `registry` feature is on by default.
+git clone https://github.com/jjstwerff/loft.git
+cd loft
+cargo build --release --bin loft-keygen
+./target/release/loft-keygen generate
 ```
 
-Outputs:
+Outputs in cwd:
 
-- `registry-signing-key.bin` — 32-byte raw private key.  **Never
-  uploaded to any service.**  Stored:
-  - On a hardware token (YubiKey OpenPGP or similar) — preferred.
+- `registry-signing-key.bin` — 32-byte raw private key, chmod 600.
+  **Never uploaded to any service.**  Stored:
+  - On a hardware token (YubiKey, etc.) — preferred.
   - In an offline password manager backup.
   - One additional offline copy on a fresh USB stick locked in a
     safe.
-- `registry-signing-key.pub` — 32-byte public key, hex-encoded (64
-  characters).  Public; goes into source.
+- `registry-signing-key.pub` — 64-char hex public key.  Public;
+  goes into source.
+
+The same invocation prints to stdout (for copy/paste):
+
+- The public key formatted as a Rust `[u8; 32]` literal — paste
+  into `src/registry_keys.rs::TRUSTED_PUBLIC_KEYS` (Step 2).
+- The private key base64-encoded — paste into
+  `loft-lang/registry`'s `REGISTRY_SIGNING_KEY_BASE64` secret
+  (Step 3.5).
 
 ---
 
@@ -65,7 +73,9 @@ pub const TRUSTED_PUBLIC_KEYS: &[[u8; 32]] = &[
 ];
 ```
 
-(The `loft-keygen` helper can emit the literal pre-formatted: `loft-keygen format --in registry-signing-key.pub`.)
+(The `generate` command already printed the literal in its
+stdout; if you only have `registry-signing-key.pub` and need to
+re-emit, run `loft-keygen format --in registry-signing-key.pub`.)
 
 Open a PR in the loft repo, get review, merge.  The next loft
 minor release ships with the embedded key.

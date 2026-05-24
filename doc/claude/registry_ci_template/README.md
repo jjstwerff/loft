@@ -9,29 +9,18 @@ Drop these files into the **`loft-lang/registry`** repo (per
 [REGISTRY_BOOTSTRAP.md](../REGISTRY_BOOTSTRAP.md) Step 3) — they're
 the PR-validation + post-merge-signing workflows.
 
-| File | Destination in `loft-lang/registry` | What it does |
+| File in this dir | Destination in `loft-lang/registry` | What it does |
 |---|---|---|
 | `validate.py` | `tools/validate.py` | R9 PR validator: schema lint + tarball sha256 verify + reproducible-build re-check. |
+| `sign-index.py` | `tools/sign-index.py` | Reads `REGISTRY_SIGNING_KEY_BASE64` secret, signs `index.json`, writes `index.json.sig`.  Called by `sign-and-commit.yml`. |
 | `pr-validate.yml` | `.github/workflows/pr-validate.yml` | Wires `validate.py` into every PR that touches `index.json`. |
-| `sign-and-commit.yml` | `.github/workflows/sign-and-commit.yml` | R3.5 post-merge signing: re-signs `index.json` with the maintainer Ed25519 key, commits `index.json.sig`. |
-| `index.json.example` | `index.json` (initial) | Empty starter index — derived from `doc/claude/registry_sample.json`. |
+| `sign-and-commit.yml` | `.github/workflows/sign-and-commit.yml` | R3.5 post-merge signing: calls `sign-index.py`, commits `index.json.sig`. |
+| `registry_README.md` | `README.md` (the registry's own) | Visible-on-GitHub landing page for ecosystem contributors. |
+| `../registry_sample.json` | `index.json` (initial seed) | Empty starter index — strip the `_comment` field; set `"packages": {}` if no real package is ready yet. |
 
-Also write a tiny `tools/sign-index.py`:
-
-```python
-#!/usr/bin/env python3
-import base64, sys, pathlib
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-key_bytes = base64.b64decode(sys.argv[1])
-private_key = Ed25519PrivateKey.from_private_bytes(key_bytes)
-content = pathlib.Path("index.json").read_bytes()
-sig = private_key.sign(content)
-pathlib.Path("index.json.sig").write_bytes(sig)
-```
-
-Plus the schema lint can be sharpened with a JSON Schema file at
-`schema/index-v1.json` — useful for editor tooling but not strictly
-required (validate.py's lint is sufficient for the gate).
+Optionally add a JSON Schema file at `schema/index-v1.json` for
+editor tooling — useful but not required (`validate.py`'s lint
+is sufficient for the gate).
 
 ## Local dry-run
 
