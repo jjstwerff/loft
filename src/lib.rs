@@ -77,6 +77,8 @@ pub mod state;
 
 pub mod compile;
 pub mod extensions;
+#[cfg(feature = "registry")]
+pub mod install;
 pub mod introspect;
 pub mod lockfile;
 pub mod log_config;
@@ -85,6 +87,8 @@ pub mod manifest;
 #[cfg(feature = "registry")]
 pub mod package;
 pub mod registry;
+#[cfg(feature = "registry")]
+pub mod registry_index;
 pub mod registry_keys;
 #[cfg(feature = "registry")]
 pub mod registry_signing;

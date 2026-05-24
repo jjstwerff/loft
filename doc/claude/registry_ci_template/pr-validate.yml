@@ -1,0 +1,47 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# PKG.REG R9 — `loft-lang/registry` PR validation workflow.
+#
+# Drop this file at `.github/workflows/pr-validate.yml` in the
+# `loft-lang/registry` repo.  Runs `validate.py` (in the same repo at
+# `tools/validate.py`) against every PR that touches `index.json`.
+#
+# Gates: schema lint, tarball sha256 + size, reproducible-build
+# re-check.  See `tools/validate.py` for the gate details.
+
+name: PR validate registry
+
+on:
+  pull_request:
+    paths:
+      - "index.json"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install loft (for reproducible-build gate)
+        run: |
+          # Pin to the latest tagged loft release.  Adjust the URL +
+          # tag once a stable release pipeline exists.  For the
+          # bootstrap phase, the loft binary can be built from
+          # source on the runner — replace this `wget` with the
+          # cargo install path then.
+          curl -L https://github.com/jjstwerff/loft/releases/latest/download/loft-linux-x86_64 -o /usr/local/bin/loft
+          chmod +x /usr/local/bin/loft
+          loft --version
+
+      - name: Run validator
+        run: python3 tools/validate.py

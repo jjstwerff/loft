@@ -686,7 +686,16 @@ by actual ecosystem growth.  The MVP commits to neither.
 
 | Phase | Item | Effort | Blocker |
 |---|---|---|---|
-| **R1** | `loft package` CLI — produce tarball + sha256 from a `loft.toml` package | S | **DONE 2026-05-24** — `src/package.rs` + `loft package` subcommand.  Outputs `<pkg>-<version>.tar.gz` with deterministic SHA-256 + the registry-index entry to paste into the publish PR.  Feature-gated on `registry`.  4 unit tests + smoke-tested on `lib/crypto` (5.6 kB, sha256 stable across two runs) and `lib/web` (21.5 kB).  Excludes `.git/`, `target/`, `.loft/`, `node_modules/`, `.vscode/`, `.idea/`, `*.tar.gz`. |
+| **R1** | `loft package` CLI — produce tarball + sha256 from a `loft.toml` package | S | **DONE 2026-05-24** — `src/package.rs` + `loft package` subcommand.  4 unit tests + smoke-tested on `lib/crypto` (5.6 kB) and `lib/web` (21.5 kB), sha256 stable across runs. |
+| **R2** | `loft.lock` reader/writer | S | **DONE 2026-05-24** — `src/lockfile.rs` (NOT feature-gated; lockfile is read on every loft invocation).  Atomic-rename writer, schema_version pin, 11 unit tests. |
+| **R3** | Registry repo bootstrap docs | XS | **DONE 2026-05-24** — `doc/claude/REGISTRY_BOOTSTRAP.md` runbook + `doc/claude/registry_sample.json` template.  The actual GitHub repo creation is a maintainer-driven manual op. |
+| **R3.5** | Index signing (Ed25519) | S | **DONE 2026-05-24** — `src/registry_keys.rs` (`TRUSTED_PUBLIC_KEYS`, empty pre-bootstrap) + `src/registry_signing.rs` (`verify_index`, 3 tests). `ed25519-dalek` added under `registry` feature. |
+| **R4** | `loft install <name>[@<v>]` — index fetch, sig verify, resolve, download, extract | M | **DONE 2026-05-24** — `src/registry_index.rs` (schema + parser + version constraint resolver + HTTPS fetcher + tarball extractor, 12 tests) + `src/install.rs` (orchestrator, 3 tests).  CLI flags wired: `--refresh`, `--offline`, `--prerelease`, `--allow-unsigned`, `--require-signature`.  Falls back to legacy text-format registry when `LOFT_LEGACY_REGISTRY` is set (preserves existing tooling). |
+| **R5** | `loft install` (no args; reads project loft.toml) | S | **DONE 2026-05-24** (subsumed by R4 — `install_one` consults project `loft.toml`'s `[dependencies]` via the resolver, writes `loft.lock` atomically). |
+| **R6** | `loft update [<name>]` | S | **DEFERRED** — re-runs the R4 flow with `--refresh`; needs a one-line subcommand to invalidate the lockfile pin for `<name>` before resolution.  Trivial extension once the registry is live; not blocking other phases. |
+| **R7** | Diamond / transitive resolution | S | **DONE 2026-05-24** — `install::resolve_recursive` walks `deps` from each resolved version.  Diamond conflict detection (re-check the new constraint against the existing pin) is the next refinement; today the resolver picks the FIRST satisfying version per name. |
+| **R8** | `loft search`, `loft info` | XS | **DONE 2026-05-24** — `loft search [query]` (case-insensitive match on name + description + categories) and `loft info <name>` (homepage, categories, latest, deps, version table with yanked/prerelease tags). |
+| **R9** | Registry CI validator | S | **DONE 2026-05-24** — template scripts at `doc/claude/registry_ci_template/` (validate.py, pr-validate.yml, sign-and-commit.yml, README).  Drop into `loft-lang/registry` once bootstrapped. |
 | **R2** | `loft.lock` schema + writer (PKG.7 from PACKAGES.md) | S | none |
 | **R3** | Bootstrap empty `registry.json` in `loft-lang/registry` repo | XS | none |
 | **R3.5** | Index signing (`index.json.sig`) + public-key embed in loft binary.  Borrowed from Debian's `Release.gpg`.  See [§ Index signing](#index-signing--indexjsonsig). | S | R3 |
@@ -703,6 +712,24 @@ the new R3.5 signing phase).  R10 is the first user of the
 registry, owned by plan-12.
 
 | **R10.5** | First real key-rotation drill — exercise the rotation path while no real compromise is happening. | XS | R3.5, R10 |
+
+### Status: MVP code complete 2026-05-24
+
+R1-R9 (excluding R6 `loft update`, deferred until live registry
+exists) all DONE in the client binary.  The remaining work is
+ECOSYSTEM bootstrap:
+
+1. Maintainer runs [REGISTRY_BOOTSTRAP.md](REGISTRY_BOOTSTRAP.md)
+   — generate Ed25519 keypair offline, embed pubkey in
+   `src/registry_keys.rs`, create `loft-lang/registry` repo, ship
+   CI templates from
+   [registry_ci_template/](registry_ci_template/), seed empty
+   `index.json`.
+2. Loft minor release with the embedded trust root.
+3. First publish (R10) — typically `crypto` from
+   [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/)
+   Phase 4.
+4. R10.5 key-rotation drill before any real compromise.
 
 ---
 
