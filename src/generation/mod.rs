@@ -690,15 +690,12 @@ extern crate loft;"
         writeln!(w, "use loft::tree;")?;
         writeln!(w, "use loft::codegen_runtime;")?;
         writeln!(w, "use loft::codegen_runtime::*;")?;
-        // The `external::` namespace is used by stdlib #rust templates for rand/random ops.
-        // Use codegen_runtime wrappers so no cfg(feature) is needed in generated files.
-        writeln!(
-            w,
-            "mod external {{
-    pub fn rand_seed(seed: i64) {{ loft::codegen_runtime::cr_rand_seed(seed); }}
-    pub fn rand_int(lo: i64, hi: i64) -> i64 {{ loft::codegen_runtime::cr_rand_int(lo, hi) }}
-}}\n"
-        )
+        Ok(())
+        // @PLAN12 phase 3.5a (2026-05-24) — removed the `mod external {…}`
+        // shim that wrapped cr_rand_int / cr_rand_seed.  No `#rust
+        // "external::rand_*"` consumers remain in default/ or lib/random/;
+        // random's #native annotations now route through the cdylib path
+        // (loft::native_call::build_store + cdylib call).
     }
 
     /// Use this as the main entry point for native Rust code generation.
@@ -2226,6 +2223,53 @@ extern crate loft;"
             }
         }
 
+        // @PLAN12 phase 3.5a (2026-05-24) — LoftStore forwarding for
+        // store-allocating cdylib returns (Type::Vector / Type::Reference).
+        // The cdylib needs a LoftStore handle to alloc the returned vector
+        // / struct.  Construct one via the new `loft::native_call::build_store`
+        // API and set up CURRENT_STORES for the cdylib's callbacks via the
+        // RAII `enter` guard.  When no Reference/Vector arg is present
+        // (random's n_rand_indices case), allocate against the null store
+        // (stores.null()).  Type::Reference args + their DbRef→LoftRef
+        // conversion (`to_loft_ref`) is a future extension for
+        // imaging/graphics drains — not required for random.
+        //
+        // Bind the LoftStore via `transmute_copy` so rustc accepts it
+        // at the cdylib call site even when there are TWO copies of
+        // loft_ffi in the dependency graph (cdylib brings its own;
+        // loft crate has its own).  Both are `#[repr(C)]` with
+        // identical fields, so the bit-copy is safe.  Same trick the
+        // text-return path uses for LoftStr (see comment ~30 lines
+        // below in this function).
+        let needs_loft_store = matches!(
+            &def.returned,
+            Type::Vector(_, _) | Type::Reference(_, _)
+        );
+        if needs_loft_store {
+            // Order matters: extract `store_nr` from the null store as
+            // a SEPARATE statement so it doesn't dual-borrow `stores`
+            // alongside the build_store call (rustc E0502).
+            writeln!(
+                w,
+                "  let _store_nr = stores.null().store_nr;"
+            )?;
+            writeln!(
+                w,
+                "  let _guard = loft::native_call::enter(stores);"
+            )?;
+            writeln!(
+                w,
+                "  let _ls_src = loft::native_call::build_store(stores, _store_nr);"
+            )?;
+            // Reinterpret as the cdylib's LoftStore (same layout,
+            // different crate identity).  Type of `_ls` inferred
+            // from the call site below.
+            writeln!(
+                w,
+                "  let _ls = unsafe {{ std::mem::transmute_copy(&_ls_src) }};"
+            )?;
+        }
+
         let needs_ret_cast = matches!(&def.returned, Type::Integer(_));
         // P244: `text`-returning natives return `loft_ffi::LoftStr` from the
         // extern, but the wrapper's declared return type (per `rust_type` with
@@ -2244,10 +2288,17 @@ extern crate loft;"
             // pub struct LoftStr { pub ptr: *const u8, pub len: usize }`),
             // so the field reads on the next lines work either way.
             write!(w, "  let _ls = unsafe {{ {qualified_symbol}(")?;
+        } else if needs_loft_store {
+            // Capture the LoftRef return; convert to DbRef after the call.
+            write!(w, "  let _lr = unsafe {{ {qualified_symbol}(")?;
         } else {
             write!(w, "  unsafe {{ {qualified_symbol}(")?;
         }
         let mut first = true;
+        if needs_loft_store {
+            write!(w, "_ls")?;
+            first = false;
+        }
         for attr in &def.attributes {
             if attr.name.starts_with("__") {
                 continue;
@@ -2312,6 +2363,21 @@ extern crate loft;"
                 "  stores.scratch.push(unsafe {{ String::from_utf8_unchecked(_bytes) }});"
             )?;
             write!(w, "  Str::new(stores.scratch.last().unwrap())")?;
+        } else if needs_loft_store {
+            // Convert cdylib's LoftRef return to a DbRef.  `_guard`
+            // (Drop) clears CURRENT_STORES at function exit.  Transmute
+            // is INLINED at the from_loft_ref call site — naming
+            // `loft_ffi::LoftRef` as a type annotation in the
+            // generated source triggers rustc's
+            // "colliding StableCrateId" error when both the loft crate
+            // and the cdylib pull loft_ffi.  Letting from_loft_ref's
+            // parameter type drive the transmute_copy inference keeps
+            // `loft_ffi` invisible to the generated code.
+            writeln!(w, ") }};")?;
+            write!(
+                w,
+                "  loft::codegen_runtime::from_loft_ref(stores, unsafe {{ std::mem::transmute_copy(&_lr) }})"
+            )?;
         } else {
             write!(w, ") }}")?;
         }

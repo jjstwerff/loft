@@ -72,9 +72,14 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_set_store_lock",           abi: Abi::Cell },
     RuntimeFn { name: "n_protect_store_frees",      abi: Abi::Cell },
     RuntimeFn { name: "n_unprotect_store_frees",    abi: Abi::Cell },
-    RuntimeFn { name: "n_rand",                     abi: Abi::None },
-    RuntimeFn { name: "n_rand_seed",                abi: Abi::None },
-    RuntimeFn { name: "n_rand_indices",             abi: Abi::Cell },
+    // @PLAN12 phase 3.5a (2026-05-24) — n_rand / n_rand_seed /
+    // n_rand_indices all drained to lib/random/native/.  The full
+    // drain became possible after the `loft::native_call` helpers
+    // shipped (LoftStore forwarding for store-allocating cdylib
+    // returns).  Native codegen routes these through
+    // `native_symbol_crates` from random's [native.functions] manifest;
+    // the interpreter routes via dlopen.  Single RNG state in the
+    // cdylib; no compiler-crate fallback.
     RuntimeFn { name: "n_parallel_for_native",        abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_text_native",   abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_ref_native",    abi: Abi::Cell },
@@ -155,6 +160,37 @@ pub fn to_loft_ref(db: DbRef) -> loft_ffi::LoftRef {
         store_nr: db.store_nr,
         rec: db.rec,
         pos: db.pos,
+    }
+}
+
+/// Convert a `loft_ffi::LoftRef` returned from a cdylib call into a
+/// `DbRef` in the indirect (header → data) layout that loft uses
+/// internally.  Mirrors `extensions::push_loft_ref` but takes
+/// `&mut Stores` directly instead of going through the dispatch
+/// state — used by generated native code that calls cdylib
+/// functions returning store-allocated vectors/structs.
+///
+/// @PLAN12 phase 3.5a (2026-05-24).
+#[must_use]
+pub fn from_loft_ref(stores: &mut Stores, r: loft_ffi::LoftRef) -> DbRef {
+    if r.is_null() {
+        return DbRef {
+            store_nr: 0,
+            rec: 0,
+            pos: 0,
+        };
+    }
+    let base = DbRef {
+        store_nr: r.store_nr,
+        rec: 0,
+        pos: 0,
+    };
+    let header = stores.claim(&base, 1);
+    stores.store_mut(&base).set_u32_raw(header.rec, 4, r.rec);
+    DbRef {
+        store_nr: r.store_nr,
+        rec: header.rec,
+        pos: 4,
     }
 }
 use crate::vector;
@@ -1776,26 +1812,12 @@ pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i6
     }
 }
 
-/// Wrappers for the `external` module emitted in generated native files.
-/// Using these avoids `cfg(feature = "random")` in the generated code.
-pub fn cr_rand_seed(seed: i64) {
-    #[cfg(feature = "random")]
-    crate::ops::rand_seed(seed);
-    #[cfg(not(feature = "random"))]
-    let _ = seed;
-}
-#[must_use]
-pub fn cr_rand_int(lo: i64, hi: i64) -> i64 {
-    #[cfg(feature = "random")]
-    {
-        crate::ops::rand_int(lo, hi)
-    }
-    #[cfg(not(feature = "random"))]
-    {
-        let _ = (lo, hi);
-        i64::MIN
-    }
-}
+// @PLAN12 phase 3.5a (2026-05-24) — cr_rand_seed / cr_rand_int /
+// the `external::` module that wrapped them all removed.  random's
+// drain to lib/random/native/ + the loft::native_call codegen
+// helpers mean the cdylib is the single source of RNG state for
+// both backends.  Nothing else in the loft crate referenced these
+// helpers (greps were empty), so they're safe to delete.
 
 /// Parse a `LOFT_FAKE_*` env var into an `i64`.  See the same-named
 /// helper in `src/native.rs` for the full contract; duplicated here so
@@ -2485,65 +2507,12 @@ pub fn n_unprotect_store_frees(cell: &std::cell::UnsafeCell<Stores>, r: DbRef) {
     }
 }
 
-/// Return a random integer in `[lo, hi]` (inclusive).
-/// Returns `i64::MIN` (null) when `lo > hi`.
-/// Bytecode equivalent: `n_rand` in `src/native.rs`.
-/// Plan 09 phase 01 step 1.5: migrated to the no-stores ABI — body
-/// uses thread-local RNG state, not `Stores`.
-pub fn n_rand(lo: i64, hi: i64) -> i64 {
-    cr_rand_int(lo, hi)
-}
-
-/// `#native "n_rand_seed"` (@P321f) — seed the thread-local RNG so `rand`
-/// sequences are reproducible under `--native`.  Without this registry entry the
-/// void `#native` fn fell through to an EMPTY stub (P269 only errors for
-/// non-void), making `rand_seed` a silent no-op natively.
-pub fn n_rand_seed(seed: i64) {
-    cr_rand_seed(seed);
-}
-
-/// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
-/// Returns an empty vector reference when `n <= 0`.
-/// Bytecode equivalent: `n_rand_indices` in `src/native.rs`.
-pub fn n_rand_indices(cell: &std::cell::UnsafeCell<Stores>, n: i64) -> DbRef {
-    let stores: &mut Stores = unsafe { &mut *cell.get() };
-    let count = if n == i64::MIN || n <= 0 {
-        0usize
-    } else {
-        n as usize
-    };
-    // Build shuffled index list.  shuffle_ints is available under feature="random"
-    // (PCG64 RNG) and feature="wasm" (host_random_int bridge); without either the
-    // indices are returned in ascending order.
-    #[allow(unused_mut)]
-    let mut indices: Vec<i32> = (0..count as i32).collect();
-    #[cfg(any(feature = "random", all(feature = "wasm", not(feature = "random"))))]
-    crate::ops::shuffle_ints(&mut indices);
-    // Allocate: vec_rec holds size + data, header_rec holds pointer to vec_rec.
-    let base = stores.null();
-    // @P321f — `vector<integer>` stores 8-byte (i64) elements (loft `integer`
-    // is i64-backed in records), so the data is `count` words after the 8-byte
-    // header.  Storing i32 (4-byte) here made the 8-byte reader merge index
-    // pairs into one i64 ("missing value N" in the permutation check).
-    let vec_words = (count as u32 + 1).max(1);
-    let vec_cr = stores.claim(&base, vec_words);
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&base, 1);
-    let header_rec = header_cr.rec;
-    {
-        let store = stores.store_mut(&base);
-        store.set_u32_raw(vec_rec, 4, count as u32);
-        for (i, &val) in indices.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 8, i64::from(val));
-        }
-        store.set_u32_raw(header_rec, 4, vec_rec);
-    }
-    DbRef {
-        store_nr: base.store_nr,
-        rec: header_rec,
-        pos: 4,
-    }
-}
+// @PLAN12 phase 3.5a (2026-05-24) — n_rand / n_rand_seed /
+// n_rand_indices removed.  All three live in lib/random/native/'s
+// cdylib now; native codegen reaches them via `extern crate
+// loft_random;` + `crate::n_*(...)` qualified calls, with LoftStore
+// forwarded by `loft::native_call::build_store` for the
+// store-allocating n_rand_indices.
 
 /// Allocate a result vector of `n` elements, each `elem_size` bytes, and run
 /// `worker(stores, element_dbref)` on every element, storing the result.
