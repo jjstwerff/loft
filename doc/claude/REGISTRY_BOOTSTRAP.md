@@ -5,12 +5,38 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Registry bootstrap — first-time setup for `loft-lang/registry`
 
-PKG.REG R3 + R3.5.  This is the **one-time** procedure to bring the
-file-based registry online.  Run by a loft maintainer when ready to
-publish the first package.
+PKG.REG R3 + R3.5.  This is the procedure to bring the file-based
+registry online.  Run by a loft maintainer when ready to publish
+the first package.
 
 Detailed design lives in [PKG_REGISTRY.md](PKG_REGISTRY.md); this
 doc is the runbook.
+
+---
+
+## Two bootstrap paths
+
+The registry needs a 32-byte Ed25519 secret signing key.  Where
+that key *lives* is a separate question from getting the registry
+running.  Two paths, deliberately:
+
+| Path | When to use | Key storage | Public release impact |
+|---|---|---|---|
+| **Interim (K_tmp)** | Early ecosystem — exercising publish + install + signature verification end-to-end before hardware backup is ready.  Maintainer is the only consumer of signed indexes. | `~/.loft/trust-root/registry-signing-key.bin` on the trusted laptop only.  No hardware backup, no off-site copy. | **Do NOT ship a public loft release with K_tmp embedded.**  Only the maintainer's local build trusts it; blast radius is one machine. |
+| **Final (K_real)** | First public release that ships an embedded trust-root key. | Full 3-2-1 backup (§ Step 1.5): laptop + 2 hardware tokens + sealed paper.  Off-site copies. | Loft releases embed `K_real` in `TRUSTED_PUBLIC_KEYS`; users worldwide trust signatures made by `K_real`. |
+
+**Going from interim → final** is a [REGISTRY_RECOVERY.md
+Scenario C](REGISTRY_RECOVERY.md#scenario-c) key-rotation event:
+generate `K_real`, embed in `TRUSTED_PUBLIC_KEYS` removing
+`K_tmp`, re-sign every signed index/asset with `K_real`, ship the
+public release.  That procedure is documented as "compromised key
+response" but it's the same mechanic — and running it deliberately
+as a planned rotation **dogfoods the recovery path** before you
+need it in anger.
+
+Steps 1, 2, 3, 4 below cover both paths identically.  Step 1.5
+(long-haul storage) is the divergence point — interim skips it,
+final mandates it.
 
 ---
 
@@ -19,12 +45,15 @@ doc is the runbook.
 - GitHub admin access to the `loft-lang` org.
 - `ed25519-dalek` 2.x via `cargo install` or a small standalone
   script — same crate the loft binary uses.
-- A clean, **offline-capable** machine for the key generation step
-  (the private key MUST NOT touch a networked development laptop).
+- **For the final path only**: a clean, **offline-capable** machine
+  for the key generation step (the private key MUST NOT touch a
+  networked development laptop).  For the interim path, generating
+  on the trusted dev laptop is acceptable — `K_tmp` is single-host
+  by design.
 
 ---
 
-## Step 1 — Generate the trust-root keypair (offline)
+## Step 1 — Generate the trust-root keypair
 
 On an air-gapped or single-purpose machine (Linux or macOS — the
 keygen reads `/dev/urandom`):
@@ -53,11 +82,12 @@ The same invocation prints to stdout (for copy/paste):
 
 - The public key formatted as a Rust `[u8; 32]` literal — paste
   into `src/registry_keys.rs::TRUSTED_PUBLIC_KEYS` (Step 2).
-- The private key base64-encoded — paste into
-  `loft-lang/registry`'s `REGISTRY_SIGNING_KEY_BASE64` secret
-  (Step 3.5).
 
 ### Step 1.5 — Store the private key for the long haul
+
+**Final path only.**  For the interim path (K_tmp single-laptop),
+skip to Step 2 — the daily working copy is the only copy by
+design, and the eventual rotation to K_real retires K_tmp anyway.
 
 Laptops fail every 2-5 years on average; the private key must
 outlive any single machine.  **Three independent copies, two

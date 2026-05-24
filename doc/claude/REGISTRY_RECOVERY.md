@@ -266,6 +266,17 @@ hands.  Sources of suspicion:
 - A backup copy was accidentally pushed to a public location
   (e.g. a paste, a screen-share recording, a cloud sync).
 
+**Also use this procedure for planned key rotations** —
+notably the **interim `K_tmp` → permanent `K_real`** transition
+documented in [REGISTRY_BOOTSTRAP.md § Two bootstrap paths](REGISTRY_BOOTSTRAP.md#two-bootstrap-paths)
+and [PKG_REGISTRY.md § Two-stage bootstrap](PKG_REGISTRY.md#two-stage-bootstrap--interim-k_tmp--permanent-k_real).
+Same mechanic (embed new key, remove old, re-sign artefacts,
+ship release), different urgency.  Running the procedure as a
+planned rotation dogfoods the recovery path before it's needed
+in anger — skip the "emergency loft patch release" + CVE
+communication steps below, treat the rotation as a normal
+minor release.
+
 **Impact**: an attacker can sign forged `index.json` files.
 They can NOT forge tarballs already in user `loft.lock`s
 (per-tarball sha256 is the firewall).  But they could redirect

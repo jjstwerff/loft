@@ -457,6 +457,12 @@ second time (cache hit, lock file unchanged).
 Manual PR-based.  Acceptable while loft maintainers are reviewing
 every publish.
 
+**Author-facing guide**: [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md)
+walks through the same flow step-by-step with troubleshooting
+for common failure modes (sha256 mismatch, reproducible-build
+mismatch).  The section below is the design/reference
+description; that doc is what you'd hand to a contributor.
+
 ### Author side
 
 1. Tag the release in the per-library repo (e.g.,
@@ -562,6 +568,43 @@ Cost: ~30 seconds per merge.  For an early-stage ecosystem with
 weekly publishes that's negligible.  When the ecosystem
 outgrows laptop signing, the architecture migrates to Path 1
 (real server) and signing follows.
+
+### Two-stage bootstrap — interim `K_tmp` → permanent `K_real`
+
+The registry MVP needs a single Ed25519 secret to sign
+`index.json`.  Where that secret *lives* is independent of the
+registry going live.  Running the full publish → install →
+verification flow against a throwaway key (`K_tmp`) before the
+permanent hardware-backed key (`K_real`) is ready is a deliberate
+pattern, not a shortcut:
+
+- **Interim (`K_tmp`)**: generate on the trusted dev laptop, no
+  hardware backup, no off-site copies.  Use it to validate the
+  full pipeline (loft-lang/registry online, first PR + sign +
+  merge cycle, `loft install` against the live URL).  **Do not
+  ship a public loft release with `K_tmp` embedded** — only the
+  maintainer's local loft trusts it; blast radius is one
+  machine.
+- **Final (`K_real`)**: full 3-2-1 storage per
+  [REGISTRY_BOOTSTRAP.md § Step 1.5](REGISTRY_BOOTSTRAP.md#step-15--store-the-private-key-for-the-long-haul).
+  First public loft release embeds `K_real` in
+  `TRUSTED_PUBLIC_KEYS`.
+
+**Going from interim → final** is mechanically identical to the
+"Compromised key" path: generate `K_real`, embed it in
+`TRUSTED_PUBLIC_KEYS` removing `K_tmp`, re-sign every signed
+index/asset with `K_real`, ship the public loft release.  The
+recovery runbook for this is
+[REGISTRY_RECOVERY.md § Scenario C](REGISTRY_RECOVERY.md#scenario-c).
+
+Running this transition as a *planned* rotation has two
+benefits:
+
+- The end-to-end registry mechanic gets validated against a
+  realistic load (real GitHub repo, real release assets, real
+  install) before the trust root is consequential.
+- The recovery procedure that's currently a runbook gets a real
+  dry-run before you need it in anger.
 
 ### Multi-maintainer support
 

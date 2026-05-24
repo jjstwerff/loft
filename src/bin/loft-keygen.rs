@@ -16,11 +16,12 @@
 //!
 //! `generate`:
 //! - Writes the 32-byte raw private key to `registry-signing-key.bin`
-//!   (chmod 600).  This file MUST NOT leave the offline machine
-//!   except as a base64-encoded GitHub Actions secret.
+//!   (chmod 600).  The private key signs locally on the
+//!   maintainer's trusted hardware; it MUST NOT leave that hardware.
 //! - Writes the 32-byte public key as hex to `registry-signing-key.pub`.
-//! - Prints the public hex and the GitHub-secret base64 of the
-//!   private key to stdout for copy/paste.
+//! - Prints the public hex and a Rust `[u8; 32]` literal of the
+//!   public key to stdout, ready to paste into
+//!   `src/registry_keys.rs::TRUSTED_PUBLIC_KEYS`.
 //!
 //! `format`:
 //! - Takes a hex-encoded public key (from `--in <file>` or stdin)

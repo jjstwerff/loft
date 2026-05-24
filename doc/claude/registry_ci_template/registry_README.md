@@ -24,7 +24,12 @@ registry works, read on.
 
 ## How packages get added
 
-Per the design in
+**Full guide for library authors**: [SUBMITTING.md](SUBMITTING.md)
+— prerequisites, the 5-step flow, troubleshooting, what NOT to
+include in your package, yanking, mirror policy.  Read that
+before opening a PR.
+
+**Short version**, per the design in
 [loft's PKG_REGISTRY.md](https://github.com/jjstwerff/loft/blob/main/doc/claude/PKG_REGISTRY.md):
 
 1. **Author tags a release** in their package repo (e.g.,

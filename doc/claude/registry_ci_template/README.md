@@ -14,7 +14,23 @@ the PR-validation + post-merge-signing workflows.
 | `validate.py` | `tools/validate.py` | R9 PR validator: schema lint + tarball sha256 verify + reproducible-build re-check. |
 | `pr-validate.yml` | `.github/workflows/pr-validate.yml` | Wires `validate.py` into every PR that touches `index.json`. |
 | `registry_README.md` | `README.md` (the registry's own) | Visible-on-GitHub landing page for ecosystem contributors. |
+| `SUBMITTING.md` | `SUBMITTING.md` | Author-facing submission guide.  Deploy alongside README so GitHub shows the "SUBMITTING" sidebar link on the repo overview. |
 | `../registry_sample.json` | `index.json` (initial seed) | Empty starter index — strip the `_comment` field; set `"packages": {}` if no real package is ready yet. |
+
+`SUBMITTING.md`'s canonical source is
+`doc/claude/REGISTRY_SUBMIT.md` (relative links).  This dir
+holds a deploy-ready copy with absolute GitHub URLs.  When you
+edit the canonical, regenerate this template:
+
+```sh
+cp doc/claude/REGISTRY_SUBMIT.md doc/claude/registry_ci_template/SUBMITTING.md
+sed -i.bak \
+  -e 's|](PKG_REGISTRY.md|](https://github.com/jjstwerff/loft/blob/main/doc/claude/PKG_REGISTRY.md|g' \
+  -e 's|](PACKAGES.md|](https://github.com/jjstwerff/loft/blob/main/doc/claude/PACKAGES.md|g' \
+  doc/claude/registry_ci_template/SUBMITTING.md
+# then re-add the deploy-copy header at the top by hand
+rm doc/claude/registry_ci_template/SUBMITTING.md.bak
+```
 
 Optionally add a JSON Schema file at `schema/index-v1.json` for
 editor tooling — useful but not required (`validate.py`'s lint
