@@ -343,6 +343,16 @@ const LIB_TESTS_SKIP: &[&str] = &[
     // offline CI (an empty response parses out-of-bounds).  Not a code bug — an
     // external-service integration test that can't run headless/offline.
     "web/http.loft",
+    // Windows-specific: these tests hardcode `/tmp/` paths.
+    // `lib/moros_render/tests/geometry.loft` opens
+    // `/tmp/moros_render_chunk_test.glb`; `lib/moros_sim/tests/persistence.loft`
+    // loads a save file from a similar path.  On Windows `/tmp/` doesn't
+    // exist → file-open OS error 3 / 0-length read → bounds panic.
+    // Tracked as @P333 — port fixture paths to `std::env::temp_dir()`.
+    #[cfg(windows)]
+    "moros_render/geometry.loft",
+    #[cfg(windows)]
+    "moros_sim/persistence.loft",
 ];
 
 /// Library packages skipped wholesale (chunk-level), with rationale.  The

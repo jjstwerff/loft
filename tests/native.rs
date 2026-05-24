@@ -813,6 +813,18 @@ const LIB_TESTS_NATIVE_SKIP: &[&str] = &[
     // @P321d FIXED 2026-05-23: nested vector index `m.a[0].b[2]` no longer
     // emits two live `&mut stores` borrows (E0499) — the OpGetVector /
     // OpVectorRef `#rust` templates bind `@r` to a local before the call.
+
+    // Windows-specific: these tests hardcode `/tmp/` paths.
+    // `lib/moros_render/tests/geometry.loft` opens
+    // `/tmp/moros_render_chunk_test.glb`; `lib/moros_sim/tests/persistence.loft`
+    // loads a save file from a similar path.  On Windows `/tmp/` doesn't
+    // exist → file-open OS error 3 / 0-length read → bounds panic.
+    // Tracked as @P333 — port fixture paths to `std::env::temp_dir()`.
+    // macOS + Linux pass these tests.
+    #[cfg(windows)]
+    "moros_render/geometry.loft",
+    #[cfg(windows)]
+    "moros_sim/persistence.loft",
 ];
 
 /// True if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is skipped under the
@@ -905,9 +917,7 @@ fn native_library_suite() -> std::io::Result<()> {
         // "native compile: error: linking with `link.exe` failed: exit
         // code: 1181" — the raw "LNK1181" symbol from cc's separate
         // stderr may not survive the capture.  Match both forms.
-        if combined.contains("LNK1181")
-            || combined.contains("link.exe` failed: exit code: 1181")
-        {
+        if combined.contains("LNK1181") || combined.contains("link.exe` failed: exit code: 1181") {
             println!("skip {entry:?} (Windows windows-targets LNK1181 — environmental)");
             ran -= 1;
             env_skipped += 1;
