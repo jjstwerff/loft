@@ -4256,6 +4256,38 @@ impl Parser {
                     .native_packages
                     .push((crate_name.clone(), pkg_dir.clone()));
             }
+            // @PLAN12 phase 2 step 2 (2026-05-24) — same manifest-driven
+            // `native_symbols` + `def.native` population as
+            // `apply_manifest_side_effects` (the legacy path).  The
+            // sibling-package probe (used when a script reaches a library
+            // via cwd ancestry rather than `--lib`) hits THIS function;
+            // without the same population, `[native.functions]` entries
+            // would be visible only to native codegen via the legacy
+            // path's `native_symbols` lookup — the sibling path would
+            // leave def.native empty and the interpreter dispatch path
+            // would silently fall through to OpCall with an empty body,
+            // returning null instead of dispatching to the cdylib.
+            for (loft_name, rust_symbol) in &m.native_functions {
+                self.data
+                    .native_symbols
+                    .insert(loft_name.clone(), rust_symbol.clone());
+            }
+            for (loft_name, rust_symbol) in &m.native_functions {
+                let candidates = [format!("n_{loft_name}"), loft_name.clone()];
+                for d_nr in 0..self.data.definitions() {
+                    let def = self.data.def(d_nr);
+                    if !def.native.is_empty() {
+                        continue;
+                    }
+                    if !candidates.contains(&def.name) {
+                        continue;
+                    }
+                    if !def.position.file.starts_with(&pkg_dir) {
+                        continue;
+                    }
+                    rust_symbol.clone_into(&mut self.data.definitions[d_nr as usize].native);
+                }
+            }
             // P266: same ownership-driven restriction as
             // `apply_manifest_side_effects` above — only map `#native`
             // symbols whose definition lives in THIS package's source
@@ -4393,6 +4425,38 @@ impl Parser {
                 self.data
                     .native_symbols
                     .insert(loft_name.clone(), rust_symbol.clone());
+            }
+            // @PLAN12 phase 2 step 2 (2026-05-24) — make
+            // `[native.functions]` entries fully equivalent to
+            // `#native "symbol"` annotations.  For each manifest
+            // entry whose loft fn name matches a definition owned by
+            // this package, populate `def.native` so the interpreter's
+            // `wire_native_fns` (which keys off `def.native`) and the
+            // bytecode dispatch (`state/codegen.rs:2207-2217`, which
+            // also reads `def.native`) see the binding without
+            // requiring the redundant `#native` annotation.  Native
+            // codegen already consulted `native_symbols` directly so
+            // this isn't strictly required for the native path, but
+            // unifying the two paths is the whole point of step 2.
+            //
+            // Ownership check (`def.position.file.starts_with(pkg_dir)`)
+            // mirrors the @P266-style guard below: only populate defs
+            // physically inside this package's source tree.
+            for (loft_name, rust_symbol) in &m.native_functions {
+                let candidates = [format!("n_{loft_name}"), loft_name.clone()];
+                for d_nr in 0..self.data.definitions() {
+                    let def = self.data.def(d_nr);
+                    if !def.native.is_empty() {
+                        continue;
+                    }
+                    if !candidates.contains(&def.name) {
+                        continue;
+                    }
+                    if !def.position.file.starts_with(pkg_dir) {
+                        continue;
+                    }
+                    rust_symbol.clone_into(&mut self.data.definitions[d_nr as usize].native);
+                }
             }
             // P266: map only `#native` symbols whose definition lives in
             // THIS package's source tree, not every unmapped symbol in

@@ -454,23 +454,65 @@ through the manifest path — guards against silent loss of
 `[native.functions]` sections via manifest typos / accidental
 deletion.
 
-What this DOES NOT yet do (Phase 2 step 2, still pending):
+#### Phase 2 step 2 — `[native.functions]` is now load-bearing (DONE 2026-05-24)
+
+The redundant `#native "symbol"` annotations in
+`lib/<X>/src/<name>.loft` are no longer required for the
+two drained libraries.  `src/parser/mod.rs` was extended to
+populate `def.native` from `[native.functions]` in BOTH
+the legacy `apply_manifest_side_effects` path AND the
+sibling-package `register_native_manifest` path (the
+latter is hit when a script reaches a library via the
+ancestor-walk probe — e.g., `lib/game_protocol/examples/`
+reaching `lib/web` without `--lib`).
+
+Both interpreter and `--native` paths now route through
+the manifest:
+
+* **Interpreter**: `wire_native_fns` / `register_native_stubs`
+  / the bytecode emitter at `src/state/codegen.rs:2207`
+  all read `def.native`.  Once populated from the manifest,
+  the dispatch is identical to the `#native`-annotated
+  version.
+* **Native codegen**: `src/generation/mod.rs:2004` consults
+  `data.native_symbols` directly (the manifest map) AS
+  WELL AS `def.native` — both paths reach the same Rust
+  symbol.
+
+Sibling probe regression caught + fixed: the multiplayer
+v2/v3/v5 test suites spawn TTT server + client subprocesses.
+The client uses `lib/web` reached via the sibling probe
+(no `--lib` flag).  The first cut populated
+`def.native` only in the legacy path; the client's web
+symbols stayed empty → "no MAP after 500 polls" failures.
+Adding the same population to `register_native_manifest`
+restored all multiplayer suites (v2/3/3 + v5/t1-t5 all
+green).
+
+`#native` annotations remain in the loft source for now —
+removing them is a one-line `sed -i '/^#native "n_/d'`
+per library plus a regression-test pass; not done in this
+commit because the user-facing test suites were the
+priority guard.  Once the wasm bridge decouples (see
+phase 1b note), `lib/imaging` and friends can follow the
+same path.
+
+What this DOES NOT yet do (deferred future work):
 
 1. **`build.rs` codegen** — auto-generate
    `lib/<X>/native/src/lib.rs`'s `loft_register!` invocation
-   from the manifest, eliminating that source of truth.
-2. **Eliminate `#native "symbol"` annotations** in
-   `lib/<X>/src/<name>.loft` — currently both the
-   `#native` annotation AND the `[native.functions]` entry
-   are present.  After step 2 lands, the annotation is
-   redundant and can be removed.
-3. **`src/native.rs::FUNCTIONS` (the stdlib NATIVE_TABLE)**
+   from the manifest.  The cdylib's `loft_register!` block
+   is still hand-maintained.
+2. **`src/native.rs::FUNCTIONS` (the stdlib NATIVE_TABLE)**
    stays hand-maintained — `[native.functions]` is for
    libraries, not stdlib.  See the stdlib-vs-library
    boundary table.
-
-The metadata-driven groundwork is in place; the codegen
-half can land independently when there's bandwidth.
+3. **Remove `#native` annotations from `lib/<X>/src/<name>.loft`**
+   for the two drained libraries (crypto, web).  The
+   parser plumbing now supports it; the actual deletion
+   pass needs a sweep of the loft sources plus a
+   regression suite to confirm the manifest path covers
+   every dispatch site.
 
 ### Phase 3 — Coordinate with PKG.REG (waiting phase)
 

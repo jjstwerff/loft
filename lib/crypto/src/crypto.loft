@@ -6,22 +6,16 @@
 // --- Internal natives ---
 
 fn sha256_native(data: text) -> text;
-#native "n_sha256"
 
 fn hmac_sha256_native(key: text, data: text) -> text;
-#native "n_hmac_sha256"
 
 fn base64_encode_native(data: text) -> text;
-#native "n_base64_encode"
 
 fn base64_decode_native(data: text) -> text;
-#native "n_base64_decode"
 
 fn base64url_encode_native(data: text) -> text;
-#native "n_base64url_encode"
 
 fn hmac_sha256_raw_native(key: text, data: text) -> text;
-#native "n_hmac_sha256_raw"
 
 // --- Public API ---
 

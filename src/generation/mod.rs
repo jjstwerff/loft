@@ -1999,12 +1999,24 @@ extern crate loft;"
             }
         } else if def.code == Value::Null {
             // Native-only function with no loft body.
-            // PKG.4: check if this function has a native symbol from a package manifest.
+            // @PLAN12 phase 2 step 2 (2026-05-24): check `def.native` FIRST.
+            // The manifest's `[native.functions]` table now populates
+            // `def.native` for matching defs (via parser/mod.rs's
+            // `register_native_manifest` and `apply_manifest_side_effects`),
+            // so the `def.native` path covers everything the `native_symbols`
+            // path used to.  The `native_symbols` branch is kept as a fallback
+            // for the legacy case where someone declares `[native.functions]`
+            // without an `[library] native = "..."` stem — that yields a
+            // populated `native_symbols` map but no crate name, so the
+            // `def.native`-driven call (which qualifies via
+            // `native_symbol_crates`) would emit an unqualified symbol.  The
+            // legacy path's `output_native_api_call` emits `{sym}(stores, …)`
+            // with no crate qualifier, so it only works when the symbol is
+            // either in the current crate or already imported.  Today the
+            // primary callers always have a crate, so the def.native path
+            // wins.
             let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
-            if let Some(rust_symbol) = self.data.native_symbols.get(user_name) {
-                // Emit a call to the native Rust function with type marshalling.
-                self.output_native_api_call(w, def_nr, rust_symbol)?;
-            } else if !def.native.is_empty() {
+            if !def.native.is_empty() {
                 // #native "symbol" — emit direct call with type marshalling.
                 if self.wasm_browser {
                     // call the imported function directly (unqualified).
@@ -2035,6 +2047,15 @@ extern crate loft;"
                     }
                     writeln!(w, "}}")?;
                 }
+            } else if let Some(rust_symbol) = self.data.native_symbols.get(user_name) {
+                // Fallback: `[native.functions]` declared the mapping but no
+                // `[library] native = "..."` stem populated `def.native`.
+                // Emits unqualified `{rust_symbol}(stores, …)` — caller must
+                // ensure the symbol is in scope (either same crate or
+                // explicitly imported).  Primary callers always have a crate
+                // (handled by the def.native path above); this is for
+                // future, less-conventional configurations.
+                self.output_native_api_call(w, def_nr, rust_symbol)?;
             } else {
                 // Internal i_ functions have implementations in codegen_runtime.rs;
                 // all others get a todo!() stub.
