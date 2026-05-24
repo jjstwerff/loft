@@ -38,7 +38,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -46,6 +46,8 @@ fn main() {
     match cmd {
         "generate" => cmd_generate(&args[2..]),
         "format" => cmd_format(&args[2..]),
+        "sign" => cmd_sign(&args[2..]),
+        "verify" => cmd_verify(&args[2..]),
         _ => {
             print_help();
             std::process::exit(if cmd.is_empty() { 0 } else { 1 });
@@ -66,10 +68,24 @@ fn print_help() {
     eprintln!("                            src/registry_keys.rs::TRUSTED_PUBLIC_KEYS.");
     eprintln!("                            (omit --in to read from stdin)");
     eprintln!();
-    eprintln!("Run `generate` on an offline machine.  The .bin file is the");
-    eprintln!("master private key — back it up to a hardware token and a sealed");
-    eprintln!("offline location, then add its base64 form as the");
-    eprintln!("REGISTRY_SIGNING_KEY_BASE64 secret in loft-lang/registry.");
+    eprintln!("  sign --in <data> --key <private.bin> --out <data>.sig");
+    eprintln!("                            Sign <data> with the private key.");
+    eprintln!("                            Writes a raw 64-byte Ed25519 signature.");
+    eprintln!("                            Maintainer workflow: sign `index.json`");
+    eprintln!("                            locally during PR review.");
+    eprintln!();
+    eprintln!("  verify --in <data> --sig <data>.sig --pub <hex>");
+    eprintln!("                            Verify a signature against a public key.");
+    eprintln!("                            --pub is a 64-char hex string (or");
+    eprintln!("                            --pub-file <path>).  Exits 0 on valid,");
+    eprintln!("                            1 on invalid.  Use during the annual");
+    eprintln!("                            recovery drill to confirm a restored key");
+    eprintln!("                            matches the embedded public.");
+    eprintln!();
+    eprintln!("Run `generate` on an offline machine.  Back up the .bin file to a");
+    eprintln!("hardware token and a sealed offline location.  The private key");
+    eprintln!("NEVER leaves your trusted hardware — daily signing happens locally");
+    eprintln!("via `loft-keygen sign`, not in CI.");
 }
 
 fn cmd_generate(_extra: &[String]) {
@@ -113,14 +129,21 @@ fn cmd_generate(_extra: &[String]) {
     println!("Public key (paste into src/registry_keys.rs::TRUSTED_PUBLIC_KEYS):");
     println!("    {}", format_rust_literal(&pub_bytes));
     println!();
-    println!("GitHub secret (paste into loft-lang/registry as REGISTRY_SIGNING_KEY_BASE64):");
-    println!("    {}", base64_encode(&priv_bytes));
-    println!();
-    println!("Now:");
+    println!("Next steps:");
     println!("  1. Back up registry-signing-key.bin to a hardware token + sealed offline copy.");
-    println!("  2. Delete registry-signing-key.bin from this machine once backed up.");
+    println!("     (See REGISTRY_BOOTSTRAP.md § Step 1.5 for the 3-2-1 backup layout.)");
+    println!("  2. Move registry-signing-key.bin to your daily signing location,");
+    println!("     e.g. ~/.loft/trust-root/registry-signing-key.bin (chmod 600,");
+    println!("     inside FileVault/LUKS-encrypted home).");
     println!("  3. Edit src/registry_keys.rs and add the public-key literal above.");
-    println!("  4. Add REGISTRY_SIGNING_KEY_BASE64 as a secret in loft-lang/registry.");
+    println!();
+    println!("Daily signing (run on your trusted laptop, NOT in CI):");
+    println!("  loft-keygen sign --in index.json \\");
+    println!("                   --key ~/.loft/trust-root/registry-signing-key.bin \\");
+    println!("                   --out index.json.sig");
+    println!("  git add index.json.sig && git commit -m 'sign index.json'");
+    println!();
+    println!("The private key never leaves your laptop; no GitHub Secret needed.");
 }
 
 fn cmd_format(extra: &[String]) {
@@ -182,47 +205,107 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn base64_encode(bytes: &[u8]) -> String {
-    crate::base64_local::encode(bytes)
+/// `loft-keygen sign --in <data> --key <private.bin> --out <data>.sig`
+///
+/// Reads `<data>` from disk, reads the 32-byte private key from
+/// `<private.bin>`, produces a raw 64-byte Ed25519 signature, writes
+/// it to `<out>` atomically (temp + rename).  No encoding wrapper —
+/// the loft client expects raw bytes.
+fn cmd_sign(extra: &[String]) {
+    let in_path = arg_value(extra, "--in").unwrap_or_else(|| die("sign: missing --in"));
+    let key_path = arg_value(extra, "--key").unwrap_or_else(|| die("sign: missing --key"));
+    let out_path = arg_value(extra, "--out").unwrap_or_else(|| die("sign: missing --out"));
+
+    let key_bytes =
+        fs::read(&key_path).unwrap_or_else(|e| die(&format!("read key {key_path}: {e}")));
+    if key_bytes.len() != 32 {
+        die(&format!(
+            "key file must be 32 bytes (raw Ed25519 private), got {}",
+            key_bytes.len()
+        ));
+    }
+    let mut key_arr = [0u8; 32];
+    key_arr.copy_from_slice(&key_bytes);
+    let signing_key = SigningKey::from_bytes(&key_arr);
+
+    let data = fs::read(&in_path).unwrap_or_else(|e| die(&format!("read {in_path}: {e}")));
+    let sig = signing_key.sign(&data);
+    let sig_bytes = sig.to_bytes();
+
+    // Atomic write so a half-written sig file can't briefly serve.
+    let tmp = format!("{out_path}.tmp");
+    fs::write(&tmp, sig_bytes).unwrap_or_else(|e| die(&format!("write {tmp}: {e}")));
+    fs::rename(&tmp, &out_path)
+        .unwrap_or_else(|e| die(&format!("rename {tmp} -> {out_path}: {e}")));
+    println!(
+        "signed {in_path} ({} bytes) -> {out_path} (64-byte Ed25519 signature)",
+        data.len()
+    );
 }
 
-mod base64_local {
-    //! Local base64 — duplicate of `src/base64.rs` so this binary can
-    //! emit the GitHub-secret format without depending on a feature
-    //! we haven't pulled in.  ~30 lines, no allocation hot paths.
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/// `loft-keygen verify --in <data> --sig <data>.sig --pub <hex>` (or `--pub-file`)
+///
+/// Verifies that `<data>.sig` is a valid Ed25519 signature for `<data>`
+/// under the public key in `--pub` (64 hex chars) or `--pub-file`
+/// (file containing 64 hex chars).  Exits 0 on valid, 1 on invalid /
+/// any failure.  Used during the annual recovery drill to confirm a
+/// restored key matches the embedded public key.
+fn cmd_verify(extra: &[String]) {
+    let in_path = arg_value(extra, "--in").unwrap_or_else(|| die("verify: missing --in"));
+    let sig_path = arg_value(extra, "--sig").unwrap_or_else(|| die("verify: missing --sig"));
+    let pub_hex = if let Some(h) = arg_value(extra, "--pub") {
+        h
+    } else if let Some(p) = arg_value(extra, "--pub-file") {
+        fs::read_to_string(&p)
+            .unwrap_or_else(|e| die(&format!("read {p}: {e}")))
+            .trim()
+            .to_string()
+    } else {
+        die("verify: missing --pub <hex> or --pub-file <path>");
+    };
 
-    #[must_use]
-    pub fn encode(data: &[u8]) -> String {
-        let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
-        for chunk in data.chunks(3) {
-            let b0 = u32::from(chunk[0]);
-            let b1 = if chunk.len() > 1 {
-                u32::from(chunk[1])
-            } else {
-                0
-            };
-            let b2 = if chunk.len() > 2 {
-                u32::from(chunk[2])
-            } else {
-                0
-            };
-            let n = (b0 << 16) | (b1 << 8) | b2;
-            result.push(CHARS[((n >> 18) & 63) as usize] as char);
-            result.push(CHARS[((n >> 12) & 63) as usize] as char);
-            if chunk.len() > 1 {
-                result.push(CHARS[((n >> 6) & 63) as usize] as char);
-            } else {
-                result.push('=');
-            }
-            if chunk.len() > 2 {
-                result.push(CHARS[(n & 63) as usize] as char);
-            } else {
-                result.push('=');
-            }
-        }
-        result
+    let pub_bytes = hex_decode(&pub_hex).unwrap_or_else(|e| die(&format!("--pub: {e}")));
+    if pub_bytes.len() != 32 {
+        die(&format!(
+            "public key must be 32 bytes (64 hex chars), got {}",
+            pub_bytes.len()
+        ));
     }
+    let mut pub_arr = [0u8; 32];
+    pub_arr.copy_from_slice(&pub_bytes);
+    let verifying_key = VerifyingKey::from_bytes(&pub_arr)
+        .unwrap_or_else(|e| die(&format!("invalid public key bytes: {e}")));
+
+    let data = fs::read(&in_path).unwrap_or_else(|e| die(&format!("read {in_path}: {e}")));
+    let sig_bytes = fs::read(&sig_path).unwrap_or_else(|e| die(&format!("read {sig_path}: {e}")));
+    if sig_bytes.len() != 64 {
+        die(&format!(
+            "signature file must be 64 bytes (raw Ed25519), got {}",
+            sig_bytes.len()
+        ));
+    }
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
+
+    match verifying_key.verify(&data, &sig) {
+        Ok(()) => {
+            println!("OK — signature valid");
+        }
+        Err(e) => {
+            eprintln!("FAIL — signature invalid: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Parse `--<name> <value>` argument pairs.  Returns `None` when the
+/// flag isn't present.
+fn arg_value(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|p| args.get(p + 1))
+        .cloned()
 }
 
 #[cfg(unix)]

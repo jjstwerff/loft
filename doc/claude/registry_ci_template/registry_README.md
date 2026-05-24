@@ -60,13 +60,21 @@ Per the design in
      resulting sha256 to the PR's claim.  Catches force-pushed
      tags, mis-uploaded tarballs, and opportunistic supply-chain
      swaps.
-6. **A maintainer reviews + merges** the PR.
-7. **`sign-and-commit.yml` re-signs** `index.json` with the
-   registry maintainer key, commits `index.json.sig` back to `main`.
+6. **A maintainer reviews the PR.**
+7. **The maintainer signs the new `index.json` locally on their
+   trusted laptop** with `loft-keygen sign`, commits the
+   resulting `index.json.sig` to the PR branch, then merges.
 
 `loft install` clients fetch both `index.json` and
 `index.json.sig`, verify the signature against the public key
 embedded in the loft binary, then proceed with the install.
+
+**Why local signing?**  The private key never lives in GitHub
+Secrets; it stays on hardware the maintainer controls.  Trade-off:
+maintainer has to be at a keyboard for each merge.  For an
+early-stage ecosystem with weekly publishes this is the right
+balance — it removes a third-party trust dependency in exchange
+for ~30 seconds of human work per merge.
 
 ---
 

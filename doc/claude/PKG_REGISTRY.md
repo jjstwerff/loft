@@ -14,6 +14,14 @@ This doc fleshes out the "(b) central registry server (GitHub Pages +
 static index acceptable for MVP)" sub-phase from
 [PACKAGES.md § Open work](PACKAGES.md#open-work).
 
+**Revision 3 (2026-05-24)** — switched index signing from CI-based
+(GitHub Actions + `REGISTRY_SIGNING_KEY_BASE64` secret) to
+**maintainer-laptop-based**.  Same crypto (Ed25519); private key
+now never leaves hardware the maintainer physically controls.
+`loft-keygen sign` / `loft-keygen verify` subcommands added.
+Removed `sign-and-commit.yml` + `sign-index.py` from the CI
+template directory.  Rationale in [§ Why laptop signing, not CI](#why-laptop-signing-not-ci).
+
 **Revision 2 (2026-05-24)** — Debian-comparison pass added.
 Promoted index signing from "Path 1 server feature" to "MVP R3.5"
 (real security gap closed).  Added schema slots for `conflicts` /
@@ -519,21 +527,54 @@ Borrowed from Debian's `Release.gpg` / `InRelease`.
 ### How it works
 
 1. Loft maintainers hold a single trust-root signing key (Ed25519,
-   stored in `loft-lang/registry` org's secret manager / hardware
-   token, NOT in the registry repo itself).
+   stored on a trusted laptop + hardware-token backups, NOT in any
+   service's secret manager).
 2. The loft binary embeds the **public key** at compile time
    (`src/registry_keys.rs`, ~50 bytes).  Multiple keys can be
-   embedded for rotation; clients accept signatures from any
-   listed key.
-3. After every accepted PR against `loft-lang/registry`, a
-   `release-bot` workflow:
-   - Recomputes the `index.json` file.
-   - Signs it with the maintainer key.
-   - Commits `index.json.sig` (raw Ed25519 signature, base64) next
-     to `index.json`.
+   embedded for rotation or for multi-maintainer setups; clients
+   accept signatures from any listed key.
+3. **Signing happens locally on the maintainer's laptop**, NOT in
+   CI.  Per accepted PR against `loft-lang/registry`:
+   - Maintainer reviews + checks out the PR branch.
+   - Maintainer runs `loft-keygen sign --in index.json --key
+     <private>.bin --out index.json.sig` to produce a raw
+     64-byte Ed25519 signature.
+   - Maintainer commits `index.json.sig` and merges the PR.
 4. Clients fetch both files.  Verify the signature over the bytes
    of `index.json`.  Refuse to use an unsigned/invalid-sig index
    unless `--allow-unsigned` is passed.
+
+### Why laptop signing, not CI
+
+Two reasons the maintainer signs locally instead of in GitHub
+Actions:
+
+- **No third-party trust dependency.**  CI signing would require
+  storing the private key as a `REGISTRY_SIGNING_KEY_BASE64`
+  GitHub secret — adding GitHub's secret-management to the trust
+  chain.  Local signing keeps the key on hardware the maintainer
+  physically controls.
+- **Human in the loop.**  A maintainer reviewing + signing the
+  merged commit IS the audit trail.  CI signing would sign
+  whatever lands in `main` — no human gate.
+
+Cost: ~30 seconds per merge.  For an early-stage ecosystem with
+weekly publishes that's negligible.  When the ecosystem
+outgrows laptop signing, the architecture migrates to Path 1
+(real server) and signing follows.
+
+### Multi-maintainer support
+
+`TRUSTED_PUBLIC_KEYS` is `&[[u8; 32]]` — a slice.  Adding a
+co-maintainer's public key alongside the primary key is a
+one-line edit + a loft minor release.  Each maintainer signs on
+their own laptop with their own private key.  Clients verify
+against any embedded key.  No shared secrets; no privileged
+"signing role" to compromise; bus-factor mitigated by having
+multiple keys live in parallel.
+
+For the bootstrap, one key is fine — the multi-key path is the
+extension point when a co-maintainer joins.
 
 ### Key rotation
 
@@ -554,9 +595,10 @@ single trusted root).
 
 ### Implementation phases — slotted into the R-list
 
-* **R3.5** (between R3 bootstrap and R4 install) — add the signing
-  workflow to `loft-lang/registry` + embed the public key in the
-  loft binary.  Required for R4 to verify on install.
+* **R3.5** (between R3 bootstrap and R4 install) — add the
+  `loft-keygen sign` + `loft-keygen verify` subcommands; embed
+  the public key in the loft binary's `TRUSTED_PUBLIC_KEYS`.
+  Required for R4 to verify on install.
 * **R10.5** (after R10 first publish) — first real key rotation
   drill to validate the rotation path before key compromise
   happens for real.
@@ -695,7 +737,7 @@ by actual ecosystem growth.  The MVP commits to neither.
 | **R6** | `loft update [<name>]` | S | **DEFERRED** — re-runs the R4 flow with `--refresh`; needs a one-line subcommand to invalidate the lockfile pin for `<name>` before resolution.  Trivial extension once the registry is live; not blocking other phases. |
 | **R7** | Diamond / transitive resolution | S | **DONE 2026-05-24** — `install::resolve_recursive` walks `deps` from each resolved version.  Diamond conflict detection (re-check the new constraint against the existing pin) is the next refinement; today the resolver picks the FIRST satisfying version per name. |
 | **R8** | `loft search`, `loft info` | XS | **DONE 2026-05-24** — `loft search [query]` (case-insensitive match on name + description + categories) and `loft info <name>` (homepage, categories, latest, deps, version table with yanked/prerelease tags). |
-| **R9** | Registry CI validator | S | **DONE 2026-05-24** — template scripts at `doc/claude/registry_ci_template/` (validate.py, pr-validate.yml, sign-and-commit.yml, README).  Drop into `loft-lang/registry` once bootstrapped. |
+| **R9** | Registry CI validator | S | **DONE 2026-05-24** — template scripts at `doc/claude/registry_ci_template/` (validate.py, pr-validate.yml, README, registry_README.md).  Drop into `loft-lang/registry` once bootstrapped.  Signing happens locally on the maintainer laptop via `loft-keygen sign`, NOT in CI — see [§ Why laptop signing, not CI](#why-laptop-signing-not-ci). |
 | **R2** | `loft.lock` schema + writer (PKG.7 from PACKAGES.md) | S | none |
 | **R3** | Bootstrap empty `registry.json` in `loft-lang/registry` repo | XS | none |
 | **R3.5** | Index signing (`index.json.sig`) + public-key embed in loft binary.  Borrowed from Debian's `Release.gpg`.  See [§ Index signing](#index-signing--indexjsonsig). | S | R3 |

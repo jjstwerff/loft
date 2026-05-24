@@ -129,13 +129,27 @@ upgrade) but at least one backup (YubiKey or paper) is intact.
        copies on the new machine — Scenario A's backup chain is
        now down a copy and you should restore the 3-2-1 rule
        before the next failure.
-8. [ ] Re-test the GitHub secret pipeline: push a no-op commit to
-       `loft-lang/registry`, watch `sign-and-commit.yml` succeed
-       (the secret is unchanged — you're confirming the
-       end-to-end signing flow still works from your new
-       machine's perspective).
+8. [ ] Re-test the end-to-end signing flow from the new machine:
+
+   ```sh
+   echo "drill payload" > /tmp/drill.bin
+   loft-keygen sign \
+       --in  /tmp/drill.bin \
+       --key ~/.loft/trust-root/registry-signing-key.bin \
+       --out /tmp/drill.bin.sig
+   loft-keygen verify \
+       --in     /tmp/drill.bin \
+       --sig    /tmp/drill.bin.sig \
+       --pub-file ~/.loft/trust-root/registry-signing-key.pub
+   ```
+
+   Expect "OK — signature valid".  Confirms the restored key
+   signs + the corresponding public still verifies.
+
 9. [ ] Done — no rotation needed.  The public key in client
-       binaries is unchanged.
+       binaries is unchanged.  Existing signed `index.json.sig`
+       files remain valid; future merges sign on this machine
+       instead of the previous one.
 
 ---
 
@@ -194,14 +208,24 @@ invalid" on fresh installs until they upgrade.
    > by either key during the transition.  See
    > REGISTRY_RECOVERY.md § Scenario B for context.
 
-5. [ ] **Update `loft-lang/registry`'s `REGISTRY_SIGNING_KEY_BASE64`
-       secret** to the new private key (base64 from
-       `loft-keygen generate`'s stdout).
-6. [ ] **Trigger a re-sign**: push a no-op commit to
-       `loft-lang/registry`'s `main` (e.g. a comment in
-       `README.md`) so `sign-and-commit.yml` regenerates
-       `index.json.sig` with the new key.  Confirm the
-       workflow run succeeds.
+5. [ ] **Re-sign `index.json` locally with the new key**, push:
+
+   ```sh
+   cd loft-lang/registry
+   git pull
+   loft-keygen sign \
+       --in  index.json \
+       --key <new-key>.bin \
+       --out index.json.sig
+   git add index.json.sig
+   git commit -m "sign: re-sign index.json with new trust root (Scenario B rotation)"
+   git push
+   ```
+
+   `loft-keygen sign` always overwrites the existing `.sig`
+   atomically.  Clients fetching the new `.sig` verify it
+   against either the old or the new key in
+   `TRUSTED_PUBLIC_KEYS` — both pass during the transition.
 7. [ ] **Wait for ecosystem adoption.**  Six months is a safe
        transition window.  Watch `loft --version` distribution
        via your own analytics if available; otherwise just
@@ -239,8 +263,8 @@ hands.  Sources of suspicion:
   held).
 - Forensic evidence of malware that could exfiltrate `~/.loft/`.
 - A backup copy went missing from a previously-secure location.
-- The `REGISTRY_SIGNING_KEY_BASE64` secret was exposed (e.g.
-  leaked in a logs).
+- A backup copy was accidentally pushed to a public location
+  (e.g. a paste, a screen-share recording, a cloud sync).
 
 **Impact**: an attacker can sign forged `index.json` files.
 They can NOT forge tarballs already in user `loft.lock`s
@@ -253,11 +277,10 @@ new installs to malicious tarballs.
 ### Checklist — immediate (within 1 hour of suspicion)
 
 1. [ ] **Stop using the compromised key for ANY signing.**
-       If you can revoke the GitHub Actions secret, do it now:
-       `loft-lang/registry` settings → Secrets → delete
-       `REGISTRY_SIGNING_KEY_BASE64`.  The `sign-and-commit.yml`
-       workflow will start failing on the next merge — that's
-       fine, it stops the compromised key from being used.
+       Move `~/.loft/trust-root/registry-signing-key.bin` to
+       `~/.loft/trust-root/COMPROMISED-<date>.bin` (don't
+       delete yet — you may need it for forensics).  Now the
+       key isn't on the daily path.
 2. [ ] **Triage**: how confident are you that the key is
        compromised?
    - HIGH confidence (key seen in logs, laptop stolen and FDE
@@ -304,10 +327,25 @@ new installs to malicious tarballs.
    > pinned builds remain safe — the lockfile records each
    > tarball's sha256, which the compromised key cannot forge.
 
-6. [ ] **Update `loft-lang/registry`'s secret** to the new
-       private key.
-7. [ ] **Re-sign `index.json`** with the new key (push a no-op
-       commit to trigger `sign-and-commit.yml`).
+6. [ ] **Re-sign `index.json` locally with the new key**, push:
+
+   ```sh
+   cd loft-lang/registry
+   git pull
+   loft-keygen sign \
+       --in  index.json \
+       --key <new-key>.bin \
+       --out index.json.sig
+   git add index.json.sig
+   git commit -m "sign: EMERGENCY re-sign with new trust root (CVE-YYYY-NNNN)"
+   git push
+   ```
+
+   The new `.sig` file invalidates anything signed by the
+   compromised key.  Clients on the emergency loft patch
+   release verify against ONLY the new key, so any forged
+   index from the attacker (signed by the compromised key)
+   is rejected.
 8. [ ] **Audit `index.json` history** in the registry repo:
 
    ```sh

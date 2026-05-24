@@ -122,42 +122,49 @@ minor release ships with the embedded key.
 
 1. Create `loft-lang/registry` on GitHub (public, MIT or CC0 — it's
    metadata).
-2. Initial layout (mirrors PKG_REGISTRY.md § Anatomy of the
-   `loft-lang/registry` repo):
+2. Initial layout:
 
    ```text
    loft-lang/registry/
-   ├── README.md
-   ├── index.json
-   ├── index.json.sig            (filled in by the CI workflow)
+   ├── README.md                 (from doc/claude/registry_ci_template/registry_README.md)
+   ├── index.json                (initial seed: {"schema_version": 1, "updated": "...", "packages": {}})
+   ├── index.json.sig            (added with each merged PR — see step 5)
    ├── schema/
-   │   └── index-v1.json         (JSON Schema; lints PRs)
+   │   └── index-v1.json         (JSON Schema; optional, for editor tooling)
    ├── tools/
-   │   ├── validate.py           (PR validation)
-   │   └── add_version.sh        (helper)
+   │   └── validate.py           (PR validation — schema lint + sha256 + reproducible-build)
    └── .github/
        └── workflows/
-           ├── pr-validate.yml   (lint + sha256 verify + reproducible-build re-check)
-           └── sign-and-commit.yml (post-merge: re-sign index.json)
+           └── pr-validate.yml   (runs validate.py on every PR)
    ```
 
 3. Seed `index.json` from `doc/claude/registry_sample.json` in the
-   loft repo (drop the `_comment` field; set `packages` to `{}` if
-   no real package is ready yet).
+   loft repo (drop the `_comment` field; set `packages` to `{}`
+   while no real package is ready yet).
 4. Configure branch protection on `main`: required PR review,
    required CI passing, signed commits.
-5. Add the private signing key as a GitHub Actions secret:
-   `REGISTRY_SIGNING_KEY_BASE64` = base64 of
-   `registry-signing-key.bin`.
-6. The `sign-and-commit.yml` workflow runs post-merge to `main`:
-   reads `index.json`, signs it with the secret, commits
-   `index.json.sig` alongside.
+5. **Signing happens locally — not in CI.**  When a package
+   author opens a PR adding a version row, the maintainer
+   reviews + merges as usual, then signs the new `index.json`
+   on their trusted laptop and commits the `.sig` file in a
+   follow-up commit (or as part of the merge — see Step 4).
+   No GitHub Secrets needed; the private key never leaves
+   maintainer-controlled hardware.
+
+   **Why no CI signing?**  CI signing would require storing
+   the private key as a GitHub Actions secret — a third-party
+   trust dependency we don't need.  Publishes are rare enough
+   (weekly at most for an early ecosystem) that one manual
+   command per merge is the right trade.  Detail in
+   [PKG_REGISTRY.md § Why laptop signing](PKG_REGISTRY.md#index-signing--indexjsonsig).
 
 ---
 
 ## Step 4 — First publish
 
-Per PKG_REGISTRY.md § Publishing flow, run by a package author:
+Per PKG_REGISTRY.md § Publishing flow.
+
+**Package author side**:
 
 1. `cd loft-crypto && git tag v0.1.0 && git push --tags`
 2. `loft package`  (produces `crypto-0.1.0.tar.gz` + sha256 + size).
@@ -195,10 +202,51 @@ Per PKG_REGISTRY.md § Publishing flow, run by a package author:
    (downloads the release tarball, hashes it, compares), and the
    reproducible-build re-check (clones the source, runs
    `loft package`, compares).
-6. Maintainer reviews + merges.
-7. `sign-and-commit.yml` regenerates `index.json.sig`.
+
+**Maintainer side** (after CI passes):
+
+6. Review the PR.  Confirm the tarball URL / sha256 / size match
+   the package's GitHub release.  Note that `pr-validate.yml`
+   already enforced these, but a human eyeball is the trust root.
+7. Check out the PR branch locally:
+
+   ```sh
+   gh pr checkout <PR-number>
+   ```
+
+8. Sign the new `index.json` with `loft-keygen sign`:
+
+   ```sh
+   loft-keygen sign \
+       --in  index.json \
+       --key ~/.loft/trust-root/registry-signing-key.bin \
+       --out index.json.sig
+   ```
+
+   Output: `signed index.json (N bytes) -> index.json.sig
+   (64-byte Ed25519 signature)`.
+
+9. Commit + push the signature, then merge:
+
+   ```sh
+   git add index.json.sig
+   git commit -m "sign: regenerate index.json.sig"
+   git push
+   gh pr merge --squash --auto
+   ```
 
 Now `loft install crypto` works for everyone.
+
+**Why is signing maintainer-local?**  Two reasons:
+
+- The private key never leaves your trusted laptop.  No GitHub
+  Secret to leak, no third-party trust dependency.
+- A human reviewing + signing the merged commit IS the audit
+  trail.  Versus CI signing, where "the key signs whatever's
+  in main" — no human gate.
+
+Cost: ~30 seconds per merge.  For an ecosystem with weekly
+publishes, that's negligible.
 
 ---
 
