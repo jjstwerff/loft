@@ -304,7 +304,162 @@ pub fn format_report(report: &InstallReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry_index::{Package, RegistryIndex};
     use std::collections::BTreeMap;
+
+    /// Build a minimal `Version` with placeholder URL/sha/size — the
+    /// resolver doesn't touch the network-side fields.
+    fn ver(semver: &str, deps: &[(&str, &str)]) -> Version {
+        let mut d = BTreeMap::new();
+        for (n, c) in deps {
+            d.insert((*n).to_string(), (*c).to_string());
+        }
+        Version {
+            semver: semver.to_string(),
+            url: format!("https://example.com/{semver}.tar.gz"),
+            sha256: "0".repeat(64),
+            size: 1,
+            loft: ">=0.8".to_string(),
+            deps: d,
+            conflicts: vec![],
+            replaces: vec![],
+            provides: vec![],
+            binaries: BTreeMap::new(),
+            prerelease: false,
+            published: "p".to_string(),
+        }
+    }
+
+    fn pkg(name: &str, versions: Vec<Version>) -> Package {
+        let mut vmap = BTreeMap::new();
+        for v in versions {
+            vmap.insert(v.semver.clone(), v);
+        }
+        Package {
+            name: name.to_string(),
+            description: None,
+            homepage: None,
+            categories: vec![],
+            yanked: vec![],
+            versions: vmap,
+        }
+    }
+
+    fn index(pkgs: Vec<Package>) -> RegistryIndex {
+        let mut pmap = BTreeMap::new();
+        for p in pkgs {
+            pmap.insert(p.name.clone(), p);
+        }
+        RegistryIndex {
+            schema_version: 1,
+            updated: "now".to_string(),
+            packages: pmap,
+        }
+    }
+
+    fn opts() -> InstallOptions {
+        InstallOptions {
+            allow_unsigned: true,
+            refresh: false,
+            offline: false,
+            allow_prerelease: false,
+        }
+    }
+
+    // ── resolve_recursive — linear / diamond / cycle / missing ──
+
+    #[test]
+    fn resolves_linear_deps_in_order() {
+        let idx = index(vec![
+            pkg("a", vec![ver("0.1.0", &[("b", "^0.1")])]),
+            pkg("b", vec![ver("0.1.0", &[("c", "^0.1")])]),
+            pkg("c", vec![ver("0.1.0", &[])]),
+        ]);
+        let mut graph = Vec::new();
+        resolve_recursive(&idx, "a", None, &opts(), &mut graph).unwrap();
+        let names: Vec<&str> = graph.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn resolves_diamond_dedups_shared_node() {
+        let idx = index(vec![
+            pkg("a", vec![ver("0.1.0", &[("b", "^0.1"), ("c", "^0.1")])]),
+            pkg("b", vec![ver("0.1.0", &[("d", "^0.1")])]),
+            pkg("c", vec![ver("0.1.0", &[("d", "^0.1")])]),
+            pkg("d", vec![ver("0.1.0", &[])]),
+        ]);
+        let mut graph = Vec::new();
+        resolve_recursive(&idx, "a", None, &opts(), &mut graph).unwrap();
+        let names: Vec<&str> = graph.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "d", "c"]);
+        // Each package appears exactly once.
+        let unique: std::collections::HashSet<&&str> = names.iter().collect();
+        assert_eq!(unique.len(), 4);
+    }
+
+    #[test]
+    fn handles_cycle_without_infinite_loop() {
+        // a → b → a — pathological but mustn't hang.
+        let idx = index(vec![
+            pkg("a", vec![ver("0.1.0", &[("b", "^0.1")])]),
+            pkg("b", vec![ver("0.1.0", &[("a", "^0.1")])]),
+        ]);
+        let mut graph = Vec::new();
+        resolve_recursive(&idx, "a", None, &opts(), &mut graph).unwrap();
+        let names: Vec<&str> = graph.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn rejects_missing_transitive_dep() {
+        let idx = index(vec![pkg("a", vec![ver("0.1.0", &[("b", "^0.1")])])]);
+        let mut graph = Vec::new();
+        let err = resolve_recursive(&idx, "a", None, &opts(), &mut graph)
+            .expect_err("should fail on missing transitive");
+        assert!(err.contains("`b` not found"), "msg: {err}");
+    }
+
+    #[test]
+    fn rejects_unsatisfiable_constraint() {
+        let idx = index(vec![pkg("a", vec![ver("0.1.0", &[])])]);
+        let mut graph = Vec::new();
+        let err = resolve_recursive(&idx, "a", Some("^0.2"), &opts(), &mut graph)
+            .expect_err("should fail on unsatisfiable constraint");
+        assert!(
+            err.contains("satisfies constraint") && err.contains("^0.2"),
+            "msg: {err}"
+        );
+        assert!(err.contains("0.1.0"), "msg: {err}");
+    }
+
+    #[test]
+    fn rejects_missing_root_package() {
+        let idx = index(vec![]);
+        let mut graph = Vec::new();
+        let err = resolve_recursive(&idx, "nope", None, &opts(), &mut graph)
+            .expect_err("should fail on unknown package");
+        assert!(err.contains("`nope` not found"), "msg: {err}");
+    }
+
+    #[test]
+    fn resolves_highest_version_by_default() {
+        let idx = index(vec![pkg(
+            "a",
+            vec![ver("0.1.0", &[]), ver("0.1.5", &[]), ver("0.1.2", &[])],
+        )]);
+        let mut graph = Vec::new();
+        resolve_recursive(&idx, "a", None, &opts(), &mut graph).unwrap();
+        assert_eq!(graph[0].version.semver, "0.1.5");
+    }
+
+    #[test]
+    fn resolves_specific_pinned_version() {
+        let idx = index(vec![pkg("a", vec![ver("0.1.0", &[]), ver("0.1.5", &[])])]);
+        let mut graph = Vec::new();
+        resolve_recursive(&idx, "a", Some("0.1.0"), &opts(), &mut graph).unwrap();
+        assert_eq!(graph[0].version.semver, "0.1.0");
+    }
 
     #[test]
     fn build_lockfile_preserves_order() {

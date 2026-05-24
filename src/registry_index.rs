@@ -716,4 +716,42 @@ mod tests {
             registry_url()
         );
     }
+
+    // ── verify_sha256 ────────────────────────────────────────────
+
+    /// `b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9`
+    /// is the SHA-256 of `b"hello world"` (well-known test vector).
+    const HELLO_WORLD_SHA: &str =
+        "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+
+    #[test]
+    fn verify_sha256_accepts_match() {
+        assert!(verify_sha256(b"hello world", HELLO_WORLD_SHA).is_ok());
+    }
+
+    #[test]
+    fn verify_sha256_rejects_mismatch() {
+        let result = verify_sha256(
+            b"hello world",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let err = result.expect_err("should reject");
+        assert!(err.contains("sha256 mismatch"), "msg: {err}");
+        assert!(err.contains(HELLO_WORLD_SHA), "msg: {err}");
+    }
+
+    #[test]
+    fn verify_sha256_case_insensitive() {
+        // Upper-case hex from a hand-written PR should still match.
+        let upper = HELLO_WORLD_SHA.to_ascii_uppercase();
+        assert!(verify_sha256(b"hello world", &upper).is_ok());
+    }
+
+    #[test]
+    fn verify_sha256_rejects_corruption() {
+        // Flip one byte → mismatch.
+        let mut bytes = b"hello world".to_vec();
+        bytes[0] ^= 0x01;
+        assert!(verify_sha256(&bytes, HELLO_WORLD_SHA).is_err());
+    }
 }
