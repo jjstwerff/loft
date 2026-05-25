@@ -187,20 +187,45 @@ pub(crate) fn fnv64(data: &[u8]) -> u64 {
 }
 
 /// Build a cache key from generated Rust source and the rlib identity.
-pub(crate) fn native_cache_key(rs_content: &[u8], lib_dir: Option<&std::path::Path>) -> u64 {
+pub(crate) fn native_cache_key(
+    rs_content: &[u8],
+    lib_dir: Option<&std::path::Path>,
+    data: Option<&crate::data::Data>,
+) -> u64 {
     let mut key = fnv64(rs_content);
     if let Some(ld) = lib_dir {
         let rlib = ld.join("libloft.rlib");
         key ^= fnv64(rlib.to_string_lossy().as_bytes());
-        if let Ok(mtime) = std::fs::metadata(&rlib).and_then(|m| m.modified()) {
-            let d = mtime
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default();
-            key ^= fnv64(&d.as_secs().to_le_bytes());
-            key ^= fnv64(&d.subsec_nanos().to_le_bytes());
+        fold_mtime(&mut key, &rlib);
+    }
+    // @P341: also fold each native PACKAGE rlib's path + mtime, so rebuilding a
+    // library's `#native` crate (`lib/<pkg>/native/...`) invalidates the cached
+    // test binary — which links those rlibs via `add_native_extern_flags`.
+    // Without this, a cdylib fix is silently masked by a stale cached binary.
+    if let Some(d) = data {
+        for (crate_name, pkg_dir) in &d.native_packages {
+            let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
+            let rlib = std::path::PathBuf::from(pkg_dir)
+                .join("native")
+                .join("target")
+                .join("release")
+                .join(&rlib_name);
+            key ^= fnv64(rlib.to_string_lossy().as_bytes());
+            fold_mtime(&mut key, &rlib);
         }
     }
     key
+}
+
+/// Fold a file's modification time into `key` (no-op if the file is missing).
+fn fold_mtime(key: &mut u64, path: &std::path::Path) {
+    if let Ok(mtime) = std::fs::metadata(path).and_then(|m| m.modified()) {
+        let d = mtime
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        *key ^= fnv64(&d.as_secs().to_le_bytes());
+        *key ^= fnv64(&d.subsec_nanos().to_le_bytes());
+    }
 }
 
 /// Return true if `s` looks like an explicit output path rather than a flag or loft source file.

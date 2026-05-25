@@ -867,7 +867,11 @@ pub(crate) fn run_tests(
                                 stored.trim()
                                     == format!(
                                         "{:016x}",
-                                        native_utils::native_cache_key(&buf, lib_dir.as_deref())
+                                        native_utils::native_cache_key(
+                                            &buf,
+                                            lib_dir.as_deref(),
+                                            Some(&native_data),
+                                        )
                                     )
                             });
 
@@ -907,7 +911,11 @@ pub(crate) fn run_tests(
                                 .unwrap_or(false);
                             if ok {
                                 // Write cache key sidecar.
-                                let key = native_utils::native_cache_key(&buf, lib_dir.as_deref());
+                                let key = native_utils::native_cache_key(
+                                    &buf,
+                                    lib_dir.as_deref(),
+                                    Some(&native_data),
+                                );
                                 let _ = std::fs::write(&key_file, format!("{key:016x}"));
                             } else {
                                 let stderr_msg = compile_result.as_ref().ok().map_or_else(

@@ -1347,6 +1347,28 @@ use #count instead"
             self.lexer.has_identifier()
         };
         if let Some(id) = id_opt {
+            // @P345: a loop variable's type is fully determined by the
+            // iterable's element type, so an annotation is always redundant
+            // (and unsupported).  Catch `for i: T in …` here and emit one
+            // clear message instead of the misleading `Expect token in` →
+            // `{` → `;` cascade the bare `token("in")` would produce.
+            if self.lexer.peek_token(":") {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "loop variable '{id}' is type-inferred from the iterable — remove the ': <type>' annotation (write `for {id} in …`)"
+                );
+                // Recover: skip the (possibly compound) annotation up to `in`
+                // so the loop body still parses and no spurious token cascade
+                // follows the clear message above.
+                self.lexer.has_token(":");
+                while !self.lexer.peek_token("in")
+                    && !self.lexer.peek_token("{")
+                    && !self.lexer.peek_token("")
+                {
+                    self.lexer.cont();
+                }
+            }
             self.lexer.token("in");
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
