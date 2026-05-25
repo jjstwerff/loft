@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
+.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -481,6 +481,47 @@ game:
 	@echo ""
 	@echo "    Or serve locally:"
 	@echo "      make serve  →  http://localhost:8000/brick-buster.html"
+
+# crystal-editor: build the stand-alone audience crystal editor
+# (tools/audience-demo/crystal_editor.loft) to a self-contained browser
+# page doc/crystal-editor.html — the GitHub Pages demo.  Mirrors `make
+# game`: host binary + wasm rlib, then `loft --html` (which bundles the
+# WebGL backend lib/graphics/js/loft-gl.js), then cache-bust.
+crystal-editor:
+	@echo "  [1/5] building host binary + libloft.rlib ..."
+	@cargo build --release -q --lib --bin loft || { echo "    FAIL: host cargo build"; exit 1; }
+	@echo "  [2/5] checking wasm32-unknown-unknown target ..."
+	@rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown || { \
+	    echo "    FAIL: rustup target not installed"; \
+	    echo "    install with: rustup target add wasm32-unknown-unknown"; \
+	    exit 1; }
+	@echo "  [3/5] rebuilding wasm32-unknown-unknown rlibs ..."
+	@cargo build --release -q --target wasm32-unknown-unknown --lib --no-default-features --features random \
+	    >/tmp/loft_crystal_wasm.log 2>&1 || { \
+	    echo "    FAIL: wasm rlib build — see /tmp/loft_crystal_wasm.log"; \
+	    tail -20 /tmp/loft_crystal_wasm.log; exit 1; }
+	@echo "  [4/5] compiling Crystal Editor to self-contained HTML ..."
+	@./target/release/loft --html doc/crystal-editor.html \
+	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
+	    tools/audience-demo/crystal_editor.loft \
+	    >/tmp/loft_crystal_html.log 2>&1 || { \
+	    echo "    FAIL: --html compilation — see /tmp/loft_crystal_html.log"; \
+	    tail -30 /tmp/loft_crystal_html.log; exit 1; }
+	@test -f doc/crystal-editor.html || { echo "    FAIL: doc/crystal-editor.html not created"; exit 1; }
+	@size=$$(stat -c %s doc/crystal-editor.html 2>/dev/null || stat -f %z doc/crystal-editor.html); \
+	if [ $$size -lt 5000 ]; then \
+	    echo "    FAIL: doc/crystal-editor.html is only $$size bytes (expected > 5000)"; exit 1; \
+	fi; \
+	grep -q "<!DOCTYPE html>" doc/crystal-editor.html || { echo "    FAIL: missing DOCTYPE"; exit 1; }; \
+	grep -q "loft_start" doc/crystal-editor.html || { echo "    FAIL: missing loft_start entry"; exit 1; }
+	@python3 scripts/cache_bust_html.py >/dev/null
+	@echo "  [5/5] Crystal Editor ready."
+	@echo ""
+	@echo "    Open in your browser:"
+	@echo "      file://$$(pwd)/doc/crystal-editor.html"
+	@echo ""
+	@echo "    Or serve locally:"
+	@echo "      make serve  →  http://localhost:8000/crystal-editor.html"
 
 # play: validate everything needed for a native OpenGL run of Brick
 # Buster, then launch the game.  Prerequisites checked in order so
