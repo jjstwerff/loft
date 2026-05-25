@@ -257,3 +257,18 @@ fn canvas_demo_matches_gold() {
         /* mean_abs */ 0.05,
     );
 }
+
+/// Per-part golden: the Canvas integer pixel buffer + `save_png` round-trip,
+/// in isolation (no lines/curves/AA — pure `canvas` / `fill_rect` /
+/// `set_pixel`).  Exact (`max_abs = 0`): every channel of every pixel must
+/// match, so an i32/i64 truncation, sign, or stride regression in the
+/// pixel-storage / PNG-encode path fails immediately and points only here.
+#[test]
+fn pixel_roundtrip_matches_gold() {
+    gold_compare(
+        "lib/graphics/examples/gold-pixels.loft",
+        "gold-pixels.png",
+        /* max_abs  */ 0,
+        /* mean_abs */ 0.0,
+    );
+}
