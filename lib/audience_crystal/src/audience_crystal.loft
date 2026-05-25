@@ -1080,3 +1080,63 @@ pub fn crystal_segments(snap: CellSnap) -> SegMesh {
   };
   crystal_segments_aged(snap, empty_state, 0)
 }
+
+// ── Picking + lightweight rendering — shared by any client that edits
+//    hexes from a pointer/touch and renders the crystal mesh.  The
+//    projector uses 3D beams + a growth shader; these are the thin
+//    reusable bits a stand-alone editor (or a future networked client)
+//    needs on top of the CrystalIncr engine. ──────────────────────────
+
+fn iround(v: float) -> integer {
+  if v >= 0.0 { (v + 0.5) as integer } else { (v - 0.5) as integer }
+}
+
+// World ground position (XZ) → hex (cx, cy).  Exact inverse of
+// `cell_wx`/`cell_wz`: estimate the row/column, then pick the nearest of
+// the 3×3 candidate centres so it is correct at hex boundaries regardless
+// of the odd-row offset.
+pub fn hex_at_world(wx: float, wz: float) -> (integer, integer) {
+  cy_f = wz / (1.5 * HEX_SIZE);
+  best_cx = 0;
+  best_cy = 0;
+  best_d2 = 1000000000.0;
+  for haw_dcy in -1..=1 {
+    cy = iround(cy_f) + haw_dcy;
+    par = cy - (cy / 2) * 2;
+    if par < 0 { par = par + 2; }
+    shift = 0.0;
+    if par == 1 { shift = SQRT3 / 2.0 * HEX_SIZE; }
+    cx_f = (wx - shift) / (SQRT3 * HEX_SIZE);
+    for haw_dcx in -1..=1 {
+      cx = iround(cx_f) + haw_dcx;
+      ccx = cell_wx(cx, cy);
+      ccz = cell_wz(cy);
+      dx = wx - ccx;
+      dz = wz - ccz;
+      d2 = dx * dx + dz * dz;
+      if d2 < best_d2 {
+        best_d2 = d2;
+        best_cx = cx;
+        best_cy = cy;
+      }
+    }
+  }
+  (best_cx, best_cy)
+}
+
+// SegMesh → GL line vertices, stride 10 (pos.xyz + normal pad + rgba),
+// two vertices per segment, palette-coloured.  Draw with
+// `gl_draw_mode(vao, len/10, DRAW_LINES)`.  A lightweight alternative to
+// the projector's 3D-beam baking for a quick top-down viewer/editor.
+pub fn crystal_mesh_to_lines(m: SegMesh) -> vector<single> {
+  out: vector<single> = [];
+  for cml_i in 0..seg_len(m) {
+    ci = m.colors[cml_i] as integer;
+    r = palette_r(ci) as single;
+    g = palette_g(ci) as single;
+    b = palette_b(ci) as single;
+    out += [m.x0s[cml_i], m.y0s[cml_i], m.z0s[cml_i], 0.0f, 0.0f, 0.0f, r, g, b, 1.0f];
+    out += [m.x1s[cml_i], m.y1s[cml_i], m.z1s[cml_i], 0.0f, 0.0f, 0.0f, r, g, b, 1.0f];
+  }
+  out
+}

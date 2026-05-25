@@ -1399,6 +1399,98 @@ backends share a single loft render function body.
 
 ---
 
+## Native mobile backends (Android / iOS) — evaluation (2026-05-25)
+
+Goal: run loft graphics scripts natively on Android/iOS.
+
+**The split lives at the `Renderer`/scene layer, NOT at `gl_*`.**  Three
+levels exist: (1) the high-level `Renderer` + `Scene`/`Camera`/`Mesh`/
+`Material` API (`render.loft`/`scene.loft`/`mesh.loft` — pure loft,
+backend-agnostic data + `create_renderer`/`upload_scene`/`render_frame`/
+`destroy`); (2) the ~49-primitive `gl_*` contract; (3) backend impls
+(desktop GL `native/`, WebGL `js/loft-gl.js`).  A new GPU backend plugs
+in at **level (1)** — implement the `Renderer` ops + window/input/present
+in the backend's own idiom.  This is decisive: scene-level ops map
+cleanly onto Vulkan/Metal (`upload_scene` → vertex/index buffers + a
+per-material pipeline; `render_frame` → record a command buffer, set the
+camera UBO, draw nodes, submit, present), whereas the `gl_*`
+state-machine contract does **not** — emulating `gl_bind_*`/
+`gl_set_uniform_*` on Vulkan/Metal is painful and is the wrong boundary.
+The existing GL/WebGL backends remain level-(1) implementations that
+happen to route through `gl_*` internally.
+
+**Recommendation: one `wgpu` backend at the Renderer layer — NOT
+hand-written Vulkan + Metal.**
+
+- `wgpu` (Rust) targets Vulkan (Android), Metal (iOS/macOS), D3D12
+  (Windows), GL (fallback), and WebGPU (browser) from ONE codebase.
+  With the split at the scene layer, a single wgpu `Renderer` impl
+  covers desktop + both mobile platforms + the future browser path —
+  versus writing AND maintaining separate Vulkan and Metal backends.
+- Shaders are the hidden cost: hand-written Vulkan needs SPIR-V, Metal
+  needs MSL, so you'd author/translate shaders per backend.  wgpu's
+  `naga` cross-compiles one shader source (WGSL) to every target,
+  eliminating that.
+
+**Cheaper near-term path (no GPU backend): WebGL-in-webview** —
+Loft→WASM→WebGL inside a webview + a headless native loft runtime for
+logic (the MIGRATION phone shape).  Already works (gallery, Brick
+Buster).  Sufficient for data / light-3D apps; use until native
+rendering is genuinely required.
+
+**Middle option: OpenGL ES (± ANGLE).**  Port the desktop-GL backend to
+GLES 3.0 (≈ WebGL2): shader `#version 300 es` + precision qualifiers,
+EGL/EAGL context.  Reuses the existing `gl_*` logic; native on Android,
+and on iOS via ANGLE→Metal (Apple deprecated GLES).  Cheaper than wgpu
+*if* the `gl_*` backend is kept, but doesn't modernise and Apple-GLES is
+on borrowed time.
+
+**Ranking by effort / coverage:**
+
+1. **Now:** WebGL-webview — no backend work (rendering exists; cost is
+   packaging).
+2. **Native, best coverage:** one **wgpu** Renderer backend (M–H) —
+   Vulkan+Metal+D3D+GL+WebGPU, one codebase, `naga` shaders.
+3. GLES (± ANGLE) (M) — only if keeping the `gl_*` backend and avoiding
+   a wgpu dependency.
+4. **Avoid:** separate hand-written Vulkan AND Metal backends (VH, ×2
+   maintenance, per-backend shader toolchains) — the wgpu route
+   dominates it.
+
+**Prerequisite design work (the real cost, any native route):** make the
+`Renderer`/`Scene` API the COMPLETE rendering contract.  Today examples
+reach into raw `gl_*` (custom shaders, `gl_bind_framebuffer`
+post-processing).  For a clean level-(1) split, those need scene-level
+equivalents — a material/shader abstraction, render targets, post
+passes — with a portable shader representation (WGSL/`naga` if wgpu),
+so scripts never bypass the backend boundary into raw GL.
+
+**Non-rendering blocker (dominant cost):** packaging the loft runtime as
+a static lib in an app bundle — NDK (Android); Xcode + Mac, static
+native-extension linking (no `dlopen` on iOS) (iOS).  Per MIGRATION.md.
+The GPU backend is necessary-but-not-sufficient — but the cost is
+*engineering*, not money.
+
+**Testing vs shipping — the money is a distribution fee, not a test
+fee:**
+
+- **Test (validate the native path): $0 on both platforms.**  Android —
+  free NDK/SDK + emulator or `adb install` to your own device.  iOS
+  (given a Mac) — free Xcode + the **iOS Simulator** (no Apple account
+  at all), or sideload to your own device with a free Apple ID (signing
+  re-deploys every 7 days).  On an Apple-Silicon Mac the Simulator runs
+  Metal on the host GPU, so even a future Metal-backend render test runs
+  free there.  All `rustup` targets (`aarch64-linux-android`,
+  `aarch64-apple-ios`, `aarch64-apple-ios-sim` / `x86_64-apple-ios`) are
+  free.
+- **Ship (to other people's devices):** Android — sideload APK / F-Droid
+  free, or **$25 one-time** for the Play Store.  iOS — **$99/yr** Apple
+  Developer Program (TestFlight / App Store; no free public tier).  This
+  $99/yr is the *only* recurring cost in the whole picture, and only for
+  iOS distribution.
+
+---
+
 ## Rust integration notes
 
 Rust provides only true FFI/codec operations.  There is no computational logic in Rust.

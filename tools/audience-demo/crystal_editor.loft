@@ -1,0 +1,165 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// crystal_editor — STAND-ALONE single-script audience crystal editor.
+//
+// Tap/click a hex to paint it (cycles palette colour); right-click to
+// erase.  The crystal mesh re-forms immediately on every edit via the
+// incremental O(dirty) rebuild (`crystal_incr_*` from `audience_crystal`
+// / `gridmesh`).  No server, no HTML — one native window.
+//
+// On a touchscreen the OS synthesises mouse events from touch, so
+// tap-to-paint works through `gl_mouse_*` today (single-finger only).
+//
+// REUSE / future networking: all editing goes through `apply_edit()`,
+// which mutates only the `CrystalIncr` engine.  A future client wires
+// the SAME `apply_edit` to (a) incoming server deltas (`"x,y,c"`, the
+// projector wire format) and (b) forwards local edits to the server —
+// the render loop below is unchanged.  The reusable pieces
+// (`hex_at_world` picking, `crystal_mesh_to_lines`, the `CrystalIncr`
+// engine) live in `lib/audience_crystal`; this file is only the window,
+// camera, input, and loop.
+//
+// Run:    ./target/release/loft --lib lib/ tools/audience-demo/crystal_editor.loft
+// Smoke:  add `--smoke` to paint a few hexes headlessly and exit (CI/Xvfb).
+use audience_crystal::*;
+use gridmesh;
+use graphics;
+
+WIN_W = 1000;
+WIN_H = 1000;
+// World half-extent (in world units) shown across the window.  ~10 hex
+// columns at HEX_SIZE=38.  Camera is a fixed top-down view on the origin.
+VIEW_HALF = 420.0;
+
+// Reuse the projector's stride-10 vertex layout + minimal shader:
+// position at location 0, rgba at location 2 (normal slot 1 padded).
+CE_VERT = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 2) in vec4 aColor;
+uniform mat4 uMVP;
+out vec4 vColor;
+void main() {{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vColor = aColor;
+}}
+`;
+
+CE_FRAG = `
+#version 330 core
+in vec4 vColor;
+out vec4 FragColor;
+void main() {{
+    FragColor = vColor;
+}}
+`;
+
+// Top-down orthographic MVP, hand-built (column-major) so screen<->world
+// is an exact linear map and picking is its trivial inverse:
+//   clipX =  wx / VIEW_HALF      (world +X → screen right)
+//   clipY = -wz / VIEW_HALF      (world +Z → screen down)
+//   clipZ =  0                   (flat; height ignored in this viewer)
+fn topdown_mvp() -> vector<float> {
+  inv = 1.0 / VIEW_HALF;
+  [inv, 0.0, 0.0, 0.0,
+   0.0, 0.0, 0.0, 0.0,
+   0.0, 0.0 - inv, 0.0, 0.0,
+   0.0, 0.0, 0.0, 1.0]
+}
+
+// Mouse pixel → world ground (XZ), the exact inverse of `topdown_mvp`.
+fn pick_world_x(mx: float) -> float {
+  (2.0 * mx / (WIN_W as float) - 1.0) * VIEW_HALF
+}
+fn pick_world_z(my: float) -> float {
+  (0.0 - (1.0 - 2.0 * my / (WIN_H as float))) * VIEW_HALF
+}
+
+// Palette colours 1..9 (index 0 is the near-black background tone).
+fn next_color(prev: integer) -> integer {
+  c = prev + 1;
+  if c > 9 { c = 1; }
+  c
+}
+
+// The single edit entry point — mutates only the CrystalIncr engine.
+// A networked client routes both local picks AND server deltas here.
+fn apply_edit(cryst: &CrystalIncr, x: integer, y: integer, color: integer, erase: boolean) {
+  if erase {
+    crystal_incr_erase(cryst, x, y);
+  } else {
+    crystal_incr_paint(cryst, x, y, color);
+  }
+}
+
+fn main() {
+  smoke = false;
+  for ce_arg in arguments() {
+    if ce_arg == "--smoke" { smoke = true; }
+  }
+
+  if !graphics::gl_create_window(WIN_W, WIN_H, "Crystal Editor — stand-alone") {
+    println("crystal_editor: could not create window");
+    return;
+  }
+  shader = graphics::gl_create_shader(CE_VERT, CE_FRAG);
+
+  state = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  cryst = crystal_incr_new(CellSnap{ xs: [], ys: [], colors: [] },
+                           CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, state, 0);
+
+  mvp = topdown_mvp();
+  tick = 0;
+  cur_color = 1;
+  prev_btn = 0;
+  edits = 0;
+
+  println("crystal_editor: left-click/tap paints, right-click erases.  Close the window to quit.");
+
+  while graphics::gl_poll_events() {
+    tick += 1;
+
+    // ── Input → edit ──────────────────────────────────────────────
+    if smoke {
+      // Headless: paint a small cluster over the first few frames, then quit.
+      if tick == 1 { apply_edit(cryst, 0, 0, 2, false); edits += 1; }
+      if tick == 2 { apply_edit(cryst, 1, 0, 3, false); edits += 1; }
+      if tick == 3 { apply_edit(cryst, 0, 1, 4, false); edits += 1; }
+    } else {
+      btn = graphics::gl_mouse_button();
+      if btn != 0 && prev_btn == 0 {                  // click DOWN edge
+        wx = pick_world_x(graphics::gl_mouse_x());
+        wz = pick_world_z(graphics::gl_mouse_y());
+        hx = hex_at_world(wx, wz);
+        erase = (btn & 4) != 0;                       // right button
+        if !erase { cur_color = next_color(cur_color); }
+        apply_edit(cryst, hx.0, hx.1, cur_color, erase);
+        edits += 1;
+      }
+      prev_btn = btn;
+    }
+
+    // ── Rebuild (O(dirty)) + render ───────────────────────────────
+    crystal_incr_rebuild(cryst, state, tick);
+    seg = crystal_incr_full_mesh(cryst);
+    verts = crystal_mesh_to_lines(seg);
+
+    graphics::gl_clear(0x101018);
+    if len(verts) > 0 {
+      vao = graphics::gl_upload_vertices(verts, 10);
+      graphics::gl_use_shader(shader);
+      graphics::gl_set_uniform_mat4(shader, "uMVP", mvp);
+      graphics::gl_line_width(2.0);
+      graphics::gl_draw_mode(vao, len(verts) / 10, graphics::DRAW_LINES);
+      graphics::gl_delete_vao(vao);
+    }
+
+    if smoke && tick >= 4 {
+      println("crystal_editor: smoke ok — {edits} edits, {len(verts) / 2} segments rendered");
+      break;
+    }
+  }
+
+  graphics::gl_destroy_window();
+}
