@@ -114,24 +114,29 @@ fn-ref dispatch in emit.rs:387                  ← runtime polymorphism
        user_fn_call_body()    substitute_template_body()
 ```
 
-Custom emitters live in `src/generation/ops/<op>.rs` and
+Custom emitters live in `src/generation/ops/<group>.rs` and
 implement `OpEmitter::emit(&self, ctx, args)`.  Register them in
-`src/generation/ops/mod.rs::build_registry`.  Today the registry
-is empty — every Op falls through to `DefaultEmitter`.  Future
-phases (and external contributors) opt in per-Op as needs arise.
+`src/generation/ops/mod.rs::build_registry`.
 
 `EmitCtx<'a, 'b>` carries the writer, the Op definition, and a
 back-reference to `Output<'b>` (the codegen state).  Custom
 emitters call back into `Output` for helpers like
-`generate_expr_buf`, the field-width / signedness probes, and the
-template substitution itself.
+`generate_expr_buf`, `format_long`/`append_text`/…, the field-width /
+signedness probes, and the template substitution itself.
 
-The `dispatch.rs:output_call_inner` special-case match (Op-specific
-inline emission for OpFormatInt, OpFreeRef, OpCopyRecord, etc.) gets
-a registry-first guard at its top.  When a custom emitter is
-registered for one of those Op names, dispatch routes through
-`emit_op` instead of running the special case.  When no emitter is
-registered, the special-case match runs unchanged.
+**`dispatch.rs::output_call_inner` is now just two steps** — a
+registry-first guard (`emit_op` when a custom emitter is registered
+for the Op name) and a fallback (`output_call_user_fn` for a user fn,
+else `output_call_template` for the `#rust` template).  The monolithic
+special-case `match` that used to live between them was eliminated:
+every Op-specific native emission is now either a registered
+`OpEmitter` (`src/generation/ops/`: `parallel`, `key_ops`, `ref_ops`,
+`coroutine`, `int_compare`, `text_ops`, `misc_ops`, …) or a `#rust`
+template.  The `text_ops::TextDispatchEmitter` reproduces the @P283
+refvar→`Stack` rewrite internally and is registered for the whole
+text/format/buffer family.  A regression guard
+(`tests/codegen_emitter.rs::dispatch_op_arm_budget_not_exceeded`,
+ratchet at 0) fails if a `"Op…" =>` match arm is ever re-introduced.
 
 The fn-ref dispatch (`emit.rs::output_fn_ref_dispatch`) hoists
 arguments into `let _farg_N` Rust bindings before the runtime
@@ -1197,6 +1202,7 @@ shipped state.  Each row links to its design content above.
 
 | Item | Section | Status |
 |---|---|---|
+| **@P321c** — `imaging` native ABI gap | [PROBLEMS.md @P321c](PROBLEMS.md) | Open (diagnosed, needs design, M+).  Native direct-call ABI cannot pass a `LoftStore` to a store-mutating `#native` fn (`load_png` decodes + allocates into the Image struct).  `output_native_direct_call` (`src/generation/mod.rs:2181`) has no struct-ref marshalling.  Recommended fix: route through `codegen_runtime + Abi::Cell` (crypto pattern).  16/17 library packages native-green; only `imaging` remains in `LIB_PKGS_NATIVE_SKIP`. |
 | **N8b.3** — `yield from` delegation | [§ N8b](#n8b--coroutine-native-codegen) (line ~944, marked CO1.3d) | Open — design drafted, not implemented.  Native coroutines support `yield value` (N8b.1 + N8b.2 shipped) but NOT `yield from <inner_iterator>` delegation. |
 | **N8c.1** — Audit generic text-return | [§ N8c](#n8c--generic-function-instantiation) | **Probably overlaps shipped work.**  Plan-17 closure landed @P237 / @P238 / @P242 (`Value::Tuple` recursion in `substitute_type_in_value`; `tuple_text_to_string` flag).  Action: un-skip `tests/scripts/48-generics.loft`; if green, mark closed. |
 | **N8c.2** — Fix generic text-return | [§ N8c](#n8c--generic-function-instantiation) | Same overlap.  N8c.1 audit determines whether N8c.2 is needed. |

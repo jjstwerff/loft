@@ -390,11 +390,7 @@ pub unsafe extern "C" fn n_ws_send(handle: i32, msg_ptr: *const u8, msg_len: usi
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_ws_send_binary(
-    handle: i32,
-    msg_ptr: *const u8,
-    msg_len: usize,
-) -> bool {
+pub unsafe extern "C" fn n_ws_send_binary(handle: i32, msg_ptr: *const u8, msg_len: usize) -> bool {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
     WS_CONNS.with(|conns| {
         let mut conns = conns.borrow_mut();
@@ -443,6 +439,12 @@ pub extern "C" fn n_ws_close(handle: i32) {
 /// distinction by reading this directly.
 enum AcceptOutcome {
     Pending(i32),
+    /// A non-WebSocket HTTP request was accepted: the stream is parked in
+    /// CURRENT_CONN and LAST_METHOD/PATH/HEADERS/BODY are set, so the loft
+    /// event handler can read the path and reply via `tcp_respond_*` (which
+    /// writes to CURRENT_CONN and closes).  Lets a single-port server serve
+    /// its page AND drive WebSockets through the one event pump.
+    Http,
     NoneYet,
     Error,
 }
@@ -470,11 +472,21 @@ fn try_accept_inner(listener_handle: i32) -> AcceptOutcome {
     // force blocking for the HTTP read (small, finite), then switch to
     // a short read timeout for the post-upgrade WS read polling.
     let _ = stream.set_nonblocking(false);
-    let (headers_opt, _path_opt) = match parse_request(&mut stream) {
-        Some((_method, path, headers, _body)) => (Some(headers), Some(path)),
+    let (method, path, headers, body) = match parse_request(&mut stream) {
+        Some(t) => t,
         None => return AcceptOutcome::Error,
     };
-    let headers = headers_opt.unwrap_or_default();
+    // A request without a Sec-WebSocket-Key is a plain HTTP request, not a WS
+    // upgrade.  Park it for the loft handler to answer instead of dropping it
+    // (so the same event pump serves the page + the WebSockets on one port).
+    if !headers.to_ascii_lowercase().contains("sec-websocket-key") {
+        LAST_METHOD.with(|m| *m.borrow_mut() = method);
+        LAST_PATH.with(|p| *p.borrow_mut() = path);
+        LAST_HEADERS.with(|h| *h.borrow_mut() = headers);
+        LAST_BODY.with(|b| *b.borrow_mut() = body);
+        CURRENT_CONN.with(|c| *c.borrow_mut() = Some(stream));
+        return AcceptOutcome::Http;
+    }
     if !websocket::ws_upgrade(&mut stream, &headers) {
         return AcceptOutcome::Error;
     }
@@ -506,19 +518,13 @@ fn try_accept_inner(listener_handle: i32) -> AcceptOutcome {
 pub extern "C" fn n_ws_accept_nonblocking(listener_handle: i32) -> i32 {
     match try_accept_inner(listener_handle) {
         AcceptOutcome::Pending(id) => id,
+        // Legacy WS-only entry point: a plain HTTP request has no client id
+        // here, so report it as an error (the stream parked in CURRENT_CONN
+        // is dropped on the next accept).  Multi-client servers use the
+        // event pump (`n_ws_next_event`), which surfaces HTTP properly.
+        AcceptOutcome::Http => -2,
         AcceptOutcome::NoneYet => -1,
         AcceptOutcome::Error => -2,
-    }
-}
-
-/// Used by the event pump: collapses NoneYet and Error into None
-/// because both mean "nothing to deliver this poll".  Errors during
-/// the listener phase are not surfaced to the loft program — they
-/// would just be a noisy distraction during the normal idle path.
-fn try_accept_one(listener_handle: i32) -> Option<i32> {
-    match try_accept_inner(listener_handle) {
-        AcceptOutcome::Pending(id) => Some(id),
-        AcceptOutcome::NoneYet | AcceptOutcome::Error => None,
     }
 }
 
@@ -586,11 +592,8 @@ fn poll_one_client(id: i32) -> PollOutcome {
                         return PollOutcome::Disconnected;
                     }
                     if frame.opcode == websocket::OP_PING {
-                        let _ = websocket::ws_write_frame(
-                            stream,
-                            websocket::OP_PONG,
-                            &frame.payload,
-                        );
+                        let _ =
+                            websocket::ws_write_frame(stream, websocket::OP_PONG, &frame.payload);
                         continue;
                     }
                     let payload = String::from_utf8_lossy(&frame.payload).to_string();
@@ -607,17 +610,28 @@ fn poll_one_client(id: i32) -> PollOutcome {
 /// false when nothing is pending.
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_next_event(listener_handle: i32) -> bool {
-    if let Some(cid) = try_accept_one(listener_handle) {
-        WS_EVENT_KIND.with(|k| k.set(0));
-        WS_EVENT_CLIENT_ID.with(|c| c.set(cid));
-        WS_EVENT_PAYLOAD.with(|p| p.borrow_mut().clear());
-        return true;
+    match try_accept_inner(listener_handle) {
+        AcceptOutcome::Pending(cid) => {
+            WS_EVENT_KIND.with(|k| k.set(0));
+            WS_EVENT_CLIENT_ID.with(|c| c.set(cid));
+            WS_EVENT_PAYLOAD.with(|p| p.borrow_mut().clear());
+            return true;
+        }
+        AcceptOutcome::Http => {
+            // Kind 3 = HTTP request.  No client id (-1); the request path is
+            // delivered as the payload, and the stream is parked in
+            // CURRENT_CONN for the handler's `respond_*` call.
+            let path = LAST_PATH.with(|p| p.borrow().clone());
+            WS_EVENT_KIND.with(|k| k.set(3));
+            WS_EVENT_CLIENT_ID.with(|c| c.set(-1));
+            WS_EVENT_PAYLOAD.with(|p| *p.borrow_mut() = path);
+            return true;
+        }
+        AcceptOutcome::NoneYet | AcceptOutcome::Error => {}
     }
     let len = WS_CONNS.with(|c| c.borrow().len()) as i32;
     for i in 0..len {
-        let active = WS_CONNS.with(|c| {
-            c.borrow().get(i as usize).is_some_and(|o| o.is_some())
-        });
+        let active = WS_CONNS.with(|c| c.borrow().get(i as usize).is_some_and(|o| o.is_some()));
         if !active {
             continue;
         }
@@ -687,11 +701,7 @@ pub extern "C" fn n_ws_idle_sleep_ms(ms: i32) {
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_ws_broadcast(
-    _handle: i32,
-    msg_ptr: *const u8,
-    msg_len: usize,
-) -> i32 {
+pub unsafe extern "C" fn n_ws_broadcast(_handle: i32, msg_ptr: *const u8, msg_len: usize) -> i32 {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
     WS_CONNS.with(|conns| {
         let mut conns = conns.borrow_mut();
@@ -789,6 +799,42 @@ mod tests {
         let mut buf = vec![0u8; trailing.len()];
         server_stream.read_exact(&mut buf).expect("read trailing");
         assert_eq!(&buf[..], trailing, "post-header bytes were swallowed");
+
+        drop(server_stream);
+        let _ = client.join();
+    }
+
+    /// @PLAN36-1.9: a hostile client can send a 127-length WS frame header
+    /// claiming a near-u64::MAX payload.  The reader must reject it as
+    /// `Closed` after reading the length field — NOT trust it and attempt a
+    /// multi-exabyte `vec![0u8; len]`, which aborts the whole process (and
+    /// every other client's session with it).
+    #[test]
+    fn p_oversized_ws_frame_rejected_without_alloc() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let client = thread::spawn(move || {
+            let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+            // FIN + binary opcode (0x82); masked + 127-length marker (0xFF);
+            // then a u64::MAX payload length.  No mask/payload follow — the
+            // reader must bail at the length check before reading them.
+            let mut frame = vec![0x82u8, 0xFFu8];
+            frame.extend_from_slice(&u64::MAX.to_be_bytes());
+            let _ = s.write_all(&frame);
+            let mut sink = [0u8; 4];
+            let _ = s.read(&mut sink); // keep open until the server reads
+        });
+
+        let (mut server_stream, _peer) = listener.accept().expect("accept");
+        server_stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        match websocket::ws_read_frame_detailed(&mut server_stream) {
+            websocket::ReadOutcome::Closed => {}
+            websocket::ReadOutcome::Frame(_) => panic!("oversized frame accepted as a Frame"),
+            websocket::ReadOutcome::NoData => panic!("oversized frame returned NoData"),
+        }
 
         drop(server_stream);
         let _ = client.join();

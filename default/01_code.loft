@@ -655,6 +655,7 @@ fn OpArgText(pos: const u16) -> text;
 fn OpConstText(_value: const text) -> text;
 #rust"s.string_from_code();"
 fn OpConvTextFromNull() -> text;
+#rust"Str::new(crate::state::STRING_NULL)"
 fn OpLengthText(v1: text) -> integer;
 #rust"@v1.len() as i64"
 // Number of bytes in the text. Use for bounds checks and iteration limits.
@@ -906,10 +907,17 @@ pub fn clear(both: vector) {
 // end-of-iteration termination.  The parser dispatches between the
 // two based on whether the IR site is a `Value::Iter` step.
 fn OpGetVector(r: vector, size: const u16, index: integer) -> reference[r];
-#rust"s.vec_get_or_raise(&@r, u32::from(@size), @index)"
+// @P321d: bind `@r` to a local before the call.  `vec_get_or_raise` is a
+// `&mut self` method (it may `raise_runtime` on OOB), so a nested index
+// `m.a[0].b[2]` — where `@r` itself expands to another `vec_get_or_raise`
+// call — would hold two `&mut stores` borrows at once (E0499).  The `let`
+// fully evaluates the inner borrow (the result is an owned `DbRef`) before
+// the outer call takes its own `&mut stores`.
+#rust"{{let __vr = @r; s.vec_get_or_raise(&__vr, u32::from(@size), @index)}}"
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpVectorRef(r: vector, index: integer) -> reference[r];
-#rust"s.vec_ref_or_raise(&@r, @index)"
+// @P321d: same nested-`&mut stores` guard as OpGetVector above.
+#rust"{{let __vr = @r; s.vec_ref_or_raise(&__vr, @index)}}"
 // Plan-07 phase 4 step 4.6/4.7 — nullable peers of OpGetVector /
 // OpVectorRef.  Same body (return null DbRef on OOB), used by
 // for-loop iteration codegen which depends on the null result as
@@ -1071,6 +1079,18 @@ fn OpClear(data: reference, tp: const u16);
 fn OpAppendCopy(data: reference, count: integer, tp: const u16);
 fn OpCopyRecord(data: reference, to: reference, tp: const u16);
 fn OpReplaceKeyed(src: reference, dest: reference, tp: const u16);
+// @P307 — clear a keyed-collection STRUCT FIELD (`s.h = []`).  `remove_claims`
+// frees the element records + bucket/tree array and zeroes the field's claim
+// pointer, leaving an empty collection a later `+= [..]` re-initialises.  The
+// keyed-LOCAL clear (`s = []`) goes through OpDatabase (@P302); a field is a
+// claim INSIDE its struct's store, so it needs this in-place free instead.
+fn OpClearKeyed(dest: reference, tp: const u16);
+#rust"s.database.remove_claims(&@dest, @tp);"
+// @P305 — `coll[key] = value` insert-or-replace into a keyed collection
+// (hash/sorted/index), deduped by value's key.  Updates an existing key
+// in place OR inserts a new one (the plain `OpCopyRecord` lowering could
+// only update — it no-op'd into the null lookup when the key was absent).
+fn OpSetKeyed(coll: reference, value: reference, tp: const u16);
 type iterator;
 // Call a predefined system function (but not an operator).
 fn OpStaticCall(call: const u16);

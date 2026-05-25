@@ -148,6 +148,21 @@ Each file is a Cargo integration test (auto-discovered because it lives directly
 
 Each file includes `mod testing;` which pulls in `tests/testing.rs` as a module.
 
+### Leak gate (`run_test` in `wrap.rs`)
+
+After running a `.loft` file's functions, `run_test` calls
+`state.collect_store_leaks()` and **hard-fails** if any heap store is unfreed at
+program exit — making the `tests/scripts/` + `tests/docs/` corpus a leak
+regression net (a new scope-free leak in any covered file breaks CI).  Files
+with known, pre-existing program-end leaks (top-level `main` locals that aren't
+scope-freed at the very end — see [@P322](PROBLEMS.md)) are grandfathered in
+`SCRIPTS_LEAK_ALLOW`.  When a new file legitimately leaks (an intentional
+program-end allocation), add its name there with a one-line rationale; otherwise
+fix the missing free.  The complementary **native** leak gate runs generated
+binaries with `LOFT_NATIVE_LEAK_CHECK=1` (`tests/leak_cases.rs`,
+`tests/common/cross_mode.rs`); the dedicated shape corpus lives in
+`tests/leak.rs`.
+
 ---
 
 ## The Testing Framework (`tests/testing.rs`)
@@ -250,9 +265,9 @@ Family today:
 | `tests/tuple_matrix.rs` | @PLAN14 | element type × destructure shape | tuple bug surface |
 | `tests/template_matrix.rs` | @PLAN17 | T-parameter usage × bound shape | bounded-generic / interface surface |
 
-Future matrices follow the same shape (coroutine validation,
-match validation — see `plans/future/16-coroutine-validation/`,
-`plans/future/18-match-validation/`).  Closure validation
+Future matrices follow the same shape (coroutine validation
+is active under `plans/16-coroutine-validation/`; match
+validation pending in `plans/future/18-match-validation/`).  Closure validation
 shipped as `plans/finished/15-closure-validation/` 2026-05-12;
 22 cells in `tests/closure_matrix.rs` plus 5 leak guards in
 `tests/leak.rs::p15_phase0[345]_*_no_leak`.

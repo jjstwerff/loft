@@ -1,0 +1,14 @@
+        fn one_call() -> text {
+            label = "y";
+            f: fn(integer) -> text = fn(n: integer) -> text { "{label}: {n}" };
+            f(11)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == "y: 11", "iter {i}: got '{r}'");
+                i = i + 1;
+            }
+        }
+        

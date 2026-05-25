@@ -10613,6 +10613,91 @@ fn test() {
     .result(Value::Null);
 }
 
+/// @P300 — assigning the result of a call that RETURNS a keyed
+/// collection to a local (`x = mk()`) used to panic in codegen
+/// (`Incorrect var x[65535]`): the @P295 reassignment lowering fired
+/// for the FIRST assignment too and emitted `Insert([OpReplaceKeyed])`
+/// with no `Set` node, so `compute_intervals` recorded no `first_def`
+/// and `x` got no stack slot.  Fixed by prepending `Set(x, Null)` in
+/// the keyed-assignment branch (`parser/expressions.rs`); `scan_set`
+/// keeps it on a first assignment (→ store init) and elides it on a
+/// reassignment (→ bare `OpReplaceKeyed`).
+#[test]
+fn p300_hash_return_assign_untyped() {
+    code!(
+        "struct R { ck: integer not null, v: integer }
+fn mk() -> hash<R[ck]> { h: hash<R[ck]> = []; h += [R{ck: 5, v: 9}]; h }
+fn test() {
+    x = mk();
+    assert(len(x) == 1, \"len 1\");
+    assert(x[5].v == 9, \"key 5 -> 9\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p300_hash_return_assign_typed() {
+    code!(
+        "struct R { ck: integer not null, v: integer }
+fn mk() -> hash<R[ck]> { h: hash<R[ck]> = []; h += [R{ck: 5, v: 9}]; h }
+fn test() {
+    x: hash<R[ck]> = mk();
+    assert(len(x) == 1, \"len 1\");
+    assert(x[5].v == 9, \"key 5 -> 9\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p300_sorted_return_assign() {
+    code!(
+        "struct Item { k: integer not null }
+fn build() -> sorted<Item[k]> { s: sorted<Item[k]> = []; s += [Item{k: 3}]; s += [Item{k: 1}]; s += [Item{k: 2}]; s }
+fn test() {
+    x = build();
+    assert(len(x) == 3, \"len 3\");
+    out = \"\";
+    for it in x { out += \"{it.k} \"; }
+    assert(out == \"1 2 3 \", \"ordered: {out}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p300_index_return_assign() {
+    code!(
+        "struct IRec { n: integer not null }
+fn build() -> index<IRec[n]> { ix: index<IRec[n]> = []; ix += [IRec{n: 7}]; ix += [IRec{n: 3}]; ix }
+fn test() {
+    x = build();
+    assert(len(x) == 2, \"len 2\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// @P300 sibling — first assignment from another keyed LOCAL (Var-RHS
+/// alias, no prior declaration of `x`).  Same no-slot panic shape; the
+/// deep-copy gives `x` its own store so `ns` stays usable.
+#[test]
+fn p300_var_rhs_alias_first() {
+    code!(
+        "struct R { ck: integer not null, v: integer }
+fn build() -> hash<R[ck]> { h: hash<R[ck]> = []; h += [R{ck: 1, v: 10}]; h += [R{ck: 2, v: 20}]; h }
+fn test() {
+    ns: hash<R[ck]> = build();
+    x = ns;
+    assert(len(x) == 2, \"x len 2\");
+    assert(len(ns) == 2, \"ns still readable\");
+    assert(x[1].v == 10 && ns[2].v == 20, \"both independent\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P279 — caller defined BEFORE a text-returning callee in the
 /// same file: pass-1 types the call result as Unknown(0), the
 /// receiving local is Unknown, and using it as a struct-field
@@ -13395,6 +13480,124 @@ fn p243_show_pair<T: Printable>(p243x: T) -> (text, text) {
     .result(Value::str("item-7"));
 }
 
+/// @P329 — regression of @P243 (interpreter side).  A bounded-generic
+/// function returning a tuple containing one or more `text` elements
+/// where one element comes from a bound-supplied method call lost the
+/// element's bytes between the function's epilogue free and the caller's
+/// PutText.  Root cause: `scopes::free_vars` had a B5-L3 wrap for single
+/// `text` returns (deep-copy to `__ret_N: text` via OpAppendText) but no
+/// analogue for `(text, ...)` returns — the tuple's text element Str
+/// pointed into a function-local buffer that the scope's OpFreeText
+/// invalidated before Return.  Fix: hoist each non-literal text element
+/// to `__ret_text_N` via the same Set+AppendText pattern, then build a
+/// fresh tuple from those temps as the return value.  The three siblings
+/// below cover (text, integer), (text, text, text), and (text,) shapes
+/// using chained `.N` on the call result (which routes through the
+/// temp-tuple branch in `parser/operators.rs:597-615`).
+#[test]
+fn p329_bounded_generic_tuple_text_integer_chained() {
+    code!(
+        "struct P329Item { p329_id: integer }
+fn to_text(self: P329Item) -> text { return \"item-{self.p329_id}\"; }
+fn p329_show_pair<T: Printable>(p329x: T, n: integer) -> (text, integer) {
+    return (p329x.to_text(), n);
+}"
+    )
+    .expr("p329_show_pair(P329Item { p329_id: 3 }, 42).0")
+    .result(Value::str("item-3"))
+    .expr("p329_show_pair(P329Item { p329_id: 9 }, 7).1")
+    .result(Value::Int(7));
+}
+
+#[test]
+fn p329_bounded_generic_tuple_three_text_chained() {
+    code!(
+        "struct P329Tri { p329_tri_id: integer }
+fn to_text(self: P329Tri) -> text { return \"item-{self.p329_tri_id}\"; }
+fn p329_show_triple<T: Printable>(p329x: T) -> (text, text, text) {
+    return (p329x.to_text(), \"middle\", p329x.to_text());
+}"
+    )
+    .expr("p329_show_triple(P329Tri { p329_tri_id: 4 }).0")
+    .result(Value::str("item-4"))
+    .expr("p329_show_triple(P329Tri { p329_tri_id: 5 }).1")
+    .result(Value::str("middle"))
+    .expr("p329_show_triple(P329Tri { p329_tri_id: 6 }).2")
+    .result(Value::str("item-6"));
+}
+
+/// @P330 — generic fn returning `(text, text)` assigned to a local then
+/// element-accessed for the function's text return.  Pre-existing parser
+/// bug surfaced while writing @P329 regression coverage.  Root cause:
+/// `parser/control.rs::text_return` auto-hoisted a tuple-typed local to a
+/// tuple-typed *parameter* when the function's return text depended on
+/// that local (e.g. `r = pair(); r.0`).  The caller can only push a
+/// 12-byte null `DbRef` placeholder for the hoisted arg, but the
+/// parameter slot is 32 bytes for `(text, text)` (16 per `Str` element);
+/// the 20-byte size mismatch corrupted the callee's frame layout, so
+/// every subsequent argument read returned garbage (interpreter SIGBUS;
+/// native produced `&var_x.to_string()` = `&String` E0308).  Fix: when
+/// `text_return` would hoist a non-Text non-Reference local (specifically
+/// `Type::Tuple`), skip the hoist entirely — the function's return type
+/// loses the dep on that local, and `scopes::free_vars`'s B5-L3
+/// single-text branch (`src/scopes.rs:961-988`) deep-copies the
+/// `r.0` text into a `__ret_N: text` temp via `OpAppendText` before the
+/// tuple local is freed.  Sibling native-codegen tweak in
+/// `src/generation/emit.rs::Value::Var` for tuple-text-return context:
+/// emit bare `var_x` instead of `&var_x` so the surrounding
+/// `tuple_text_to_string` wrap produces `var_x.to_string()` (owned
+/// `String` clone) rather than the broken `&var_x.to_string()` =
+/// `&String`.  Two tests cover both routes.
+#[test]
+fn p330_generic_tuple_return_assign_then_chain_first() {
+    code!(
+        "struct P330Item { p330_id: integer }
+fn to_text(self: P330Item) -> text { return \"item-{self.p330_id}\"; }
+fn p330_pair<T: Printable>(p330x: T) -> (text, text) {
+    return (p330x.to_text(), \"sentinel\");
+}
+fn p330_take_first(p330a: P330Item) -> text {
+    p330r = p330_pair(p330a);
+    p330r.0
+}"
+    )
+    .expr("p330_take_first(P330Item { p330_id: 13 })")
+    .result(Value::str("item-13"));
+}
+
+#[test]
+fn p330_generic_tuple_return_assign_then_chain_second() {
+    code!(
+        "struct P330Item2 { p330_id2: integer }
+fn to_text(self: P330Item2) -> text { return \"item-{self.p330_id2}\"; }
+fn p330_pair2<T: Printable>(p330x2: T) -> (text, text) {
+    return (\"prefix\", p330x2.to_text());
+}
+fn p330_take_second(p330a2: P330Item2) -> text {
+    p330r2 = p330_pair2(p330a2);
+    p330r2.1
+}"
+    )
+    .expr("p330_take_second(P330Item2 { p330_id2: 27 })")
+    .result(Value::str("item-27"));
+}
+
+/// @P329 — element 1 (second slot) access via chained `.1` on the call
+/// result.  Verifies the deep-copy applies to NON-leading text elements
+/// too (the original p243 test only read `.0`).
+#[test]
+fn p329_bounded_generic_tuple_text_text_chained_second_elem() {
+    code!(
+        "struct P329Second { p329_second_id: integer }
+fn to_text(self: P329Second) -> text { return \"item-{self.p329_second_id}\"; }
+fn p329_pair_second<T: Printable>(p329x: T) -> (text, text) {
+    return (\"first\", p329x.to_text());
+}"
+    )
+    .expr("p329_pair_second(P329Second { p329_second_id: 8 }).1")
+    .result(Value::str("item-8"));
+}
+
 /// P239 — for-loop over `vector<T>` inside a generic fn crashed
 /// both backends.  Interp SIGSEGV; native rustc E0610
 /// `i64.rec`.  The for-loop iter-termination check
@@ -13745,4 +13948,300 @@ fn p252_count<T: V>(items: vector<T>) -> integer {
     )
     .expr("p252_count([P{v:1}, P{v:0}, P{v:3}])")
     .result(Value::Int(2));
+}
+
+/// `store_memory()` returns a live store memory-utilisation report whose
+/// header starts with "stores:".  Guards the builtin wiring
+/// (`n_store_memory` interp impl + registration + the `#rust` body).
+#[test]
+fn store_memory_builtin_reports() {
+    code!("fn helper() -> integer { 0 }")
+        .expr("store_memory().starts_with(\"stores:\")")
+        .result(Value::Boolean(true));
+}
+
+/// @P327 — `for p in pairs()` over a tuple-yielding coroutine silently
+/// iterated 0 times on the interpreter because `convert(tuple, Boolean)`
+/// found no matching `OpConv*` and the for-loop's exhaustion check fell
+/// through to `OpNot(Var(tuple_p))` — which read the first byte of the
+/// tuple as a boolean (1 from `(1, 10)` → true → `!true` → break).
+/// Manual `next()` on the same generator worked.
+///
+/// Fix (`src/parser/collections.rs`): for tuple-yielded coroutines, use
+/// `OpCoroutineExhausted(__gen_N)` to terminate instead of the
+/// generic `OpNot(for_var)` check.  The gen var is captured from
+/// `iter_next`'s first argument before `for_next` consumes it.
+#[test]
+fn p327_for_loop_over_tuple_yield_iterates_body() {
+    code!(
+        "fn pairs() -> iterator<(integer, integer)> {
+    yield (1, 10);
+    yield (2, 20);
+    yield (3, 30);
+}
+fn run() -> integer {
+    sum = 0;
+    for p in pairs() { sum = sum + p.0 + p.1; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(66));
+}
+
+/// @P327 follow-up — the loop iterates EXACTLY the number of yields
+/// (not more, not fewer).  Pre-fix this was 0 (silent break-out); a
+/// regression that runs forever would also fail this test via the
+/// test harness timeout, but the count assertion catches anything in
+/// between.
+#[test]
+fn p327_for_loop_over_tuple_yield_count_matches_yields() {
+    code!(
+        "fn pairs() -> iterator<(integer, integer)> {
+    yield (10, 20);
+    yield (30, 40);
+}
+fn run() -> integer {
+    n = 0;
+    for _ in pairs() { n = n + 1; }
+    n
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
+}
+
+/// @P324 — the CO1.9/S28 stale-DbRef guard fired on ANY store mutation
+/// between coroutine yields, including the case where the generator
+/// held NO DbRefs and the consumer only mutated an unrelated vector
+/// (`out += [v]` inside `for v in gen()`).  Demoted to a debug-only
+/// warning in `src/state/mod.rs` so the for-loop+accumulate idiom
+/// works in production.
+#[test]
+fn p324_for_loop_accumulate_into_vector_works() {
+    code!(
+        "fn count() -> iterator<integer> {
+    yield 1;
+    yield 2;
+    yield 3;
+}
+fn run() -> integer {
+    out: vector<integer> = [];
+    for v in count() { out += [v]; }
+    out[0] + out[1] + out[2]
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(6));
+}
+
+/// @P325 — vector comprehension `[for v in gen() { … }]` over a
+/// coroutine ran forever (no termination check in
+/// `build_comprehension_code`'s loop body for `Iterator` source) until
+/// the store overflowed its 2 GiB word limit.  Fix: mirror the @P327
+/// pattern — emit `OpCoroutineExhausted(__gen_N)` as the break check.
+#[test]
+fn p325_comprehension_over_generator_terminates() {
+    code!(
+        "fn count() -> iterator<integer> {
+    yield 1;
+    yield 2;
+    yield 3;
+}
+fn run() -> integer {
+    out = [for v in count() { v * 100 }];
+    out[0] + out[1] + out[2]
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(600));
+}
+
+/// @P326 — native state machine had no DbRef channel.  Generators
+/// returning `iterator<Struct>` mis-cast `as i64` and read via the
+/// wrong channel.  Fix: added `LoftCoroutine::next_dbref` +
+/// `coroutine_next_dbref` runtime helper + size=12 dispatch arm in
+/// `src/generation/ops/coroutine.rs` + `__ref_*` work-var
+/// pre-declaration in the coroutine state machine.
+#[test]
+fn p326_iterator_of_struct_for_loop() {
+    code!(
+        "struct P326Pt { x: integer not null, y: integer not null }
+fn points() -> iterator<P326Pt> {
+    yield P326Pt { x: 1, y: 2 };
+    yield P326Pt { x: 3, y: 4 };
+    yield P326Pt { x: 5, y: 6 };
+}
+fn run() -> integer {
+    sum = 0;
+    for pt in points() { sum = sum + pt.x + pt.y; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(21));
+}
+
+/// @P326 follow-up — manual next() on a struct-yielding generator.
+#[test]
+fn p326_iterator_of_struct_manual_next() {
+    code!(
+        "struct P326Pt2 { x: integer not null, y: integer not null }
+fn points() -> iterator<P326Pt2> {
+    yield P326Pt2 { x: 10, y: 20 };
+    yield P326Pt2 { x: 30, y: 40 };
+}
+fn run() -> integer {
+    it = points();
+    a = next(it);
+    b = next(it);
+    a.x + a.y + b.x + b.y
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(100));
+}
+
+/// @P327 native — `iterator<(integer, integer)>` driven by `for p in gen()`
+/// failed to compile under `--native` because tuple yields (16 bytes)
+/// collided with text (`&str` = 16 bytes) in the `OpCoroutineNext`
+/// channel dispatch.  Fix: introduce a unified `next_into(stores,
+/// &mut [i64])` channel (plan-16 phase 01).  `value_size` now packs
+/// (byte_size, channel_tag) — high byte 1 routes through the new
+/// channel; the consumer allocates a stack `[i64; N]` buffer and
+/// rebuilds the tuple from buffer slots.  Same encoding applies to
+/// manual `next()` (control.rs) and the for-loop driver
+/// (collections.rs).
+#[test]
+fn p327_native_iterator_of_tuple_for_loop() {
+    code!(
+        "fn pairs() -> iterator<(integer, integer)> {
+    yield (1, 10);
+    yield (2, 20);
+    yield (3, 30);
+}
+fn run() -> integer {
+    sum = 0;
+    for p in pairs() { sum = sum + p.0 + p.1; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(66));
+}
+
+/// @P327 native follow-up — manual next() on a tuple-yielding generator.
+#[test]
+fn p327_native_iterator_of_tuple_manual_next() {
+    code!(
+        "fn pairs() -> iterator<(integer, integer)> {
+    yield (10, 20);
+    yield (30, 40);
+}
+fn run() -> integer {
+    it = pairs();
+    a = next(it);
+    b = next(it);
+    a.0 + a.1 + b.0 + b.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(100));
+}
+
+/// @P328 — closure-yielding generators (`iterator<fn(integer) -> integer>`)
+/// FIXED both backends 2026-05-23 via 4 coordinated fixes:
+///   1. For-loop break check extended `Type::Tuple → Type::Tuple |
+///      Type::Function` in `parser/collections.rs::iter_for` (closes
+///      the `OpNot(fnref)` SIGBUS / native E0600).
+///   2. Native unified `next_into` channel tag 2 (fn-ref rebuild) —
+///      packs `(d_nr, closure_dbref)` into 2 i64 slots; consumer
+///      rebuilds the `(u32, DbRef)` tuple from buffer slots.
+///   3. Interp parse-time rewrite: bare `Value::Int(d_nr)` yielded
+///      into `iterator<fn(...)>` is wrapped as `Value::FnRef(d_nr,
+///      u16::MAX, _)` so the full 20-byte fn-ref is pushed onto the
+///      coroutine stack; state-machine codegen emits
+///      `OpNullRefSentinel` for `clos_var == u16::MAX` (was panicking
+///      on `variables.stack(u16::MAX)`).
+///   4. Native fn-ref reachability: `Value::Yield(Value::Int(d_nr))`
+///      is now walked by `collect_fn_ref_literals` so the lambda
+///      stays reachable (was hitting `unreachable!("invalid fn-ref")`).
+///
+/// Regression below: empty generator (smoke), non-capturing for-loop,
+/// capturing manual next.  Matrix cells `y5_x1_*` and `y5_x2_*` in
+/// `tests/coroutine_matrix.rs` cover the cross-mode path.
+#[test]
+fn p328_closure_yielding_for_loop_empty_generator() {
+    code!(
+        "fn fns() -> iterator<fn(integer) -> integer> {
+    // empty generator — never yields
+}
+fn run() -> integer {
+    n = 0;
+    for _ in fns() { n = n + 1; }
+    n
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(0));
+}
+
+#[test]
+fn p328_iterator_of_closure_for_loop_noncapturing() {
+    code!(
+        "fn fns() -> iterator<fn(integer) -> integer> {
+    yield fn(x: integer) -> integer { x * 10 };
+    yield fn(x: integer) -> integer { x + 100 };
+}
+fn run() -> integer {
+    total = 0;
+    for f in fns() { total = total + f(7); }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(177));
+}
+
+#[test]
+fn p328_iterator_of_closure_manual_next_capturing() {
+    code!(
+        "fn fns(base: integer) -> iterator<fn(integer) -> integer> {
+    yield fn(x: integer) -> integer { x + base };
+}
+fn run() -> integer {
+    it = fns(100);
+    f = next(it);
+    f(5)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(105));
+}
+
+/// @P322 — `iterator<integer>` generator whose body is `for n in [literal] {
+/// yield n; }` leaked the literal vector at program exit.  Root cause: the
+/// function body block contained a nested Void-result block ending with the
+/// iterator-completion `return null;`.  `scopes::insert_free`'s void branch
+/// dropped the outer-scope frees, so `__vdb_*` (the literal vector backing)
+/// never got an `OpFreeRef`.  Fix: emit outer frees BEFORE the terminal
+/// `Return` inside the inner block.  This test sums correctly; the leak
+/// gate in `tests/wrap.rs::run_test` (Part B) catches the regression at
+/// the script-suite level.
+#[test]
+fn p322_iterator_for_literal_vector_no_leak() {
+    code!(
+        "fn nums() -> iterator<integer> {
+    for n in [10, 20, 30] {
+        yield n;
+    }
+}
+fn run() -> integer {
+    total = 0;
+    for n in nums() { total = total + n; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(60));
 }

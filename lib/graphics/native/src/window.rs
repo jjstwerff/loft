@@ -21,26 +21,34 @@ pub fn create_gl_state(width: u32, height: u32, title: &str) -> Result<GlState, 
         .with_title(title)
         .with_transparent(false)
         .with_inner_size(LogicalSize::new(width, height));
-    create_gl_state_with_attrs(attrs, Some((width, height)))
+    create_gl_state_with_attrs(attrs, Some((width, height)), false)
 }
 
-/// P184-era initiative 03: borderless-fullscreen window on the
-/// primary monitor.  The GL viewport is sized from the actual window
-/// size after creation (monitor native resolution), so callers don't
-/// need to query the resolution up front.
+/// P184-era initiative 03: borderless-fullscreen window.  Defaults to the
+/// primary monitor, but honours `LOFT_GL_MONITOR` (a substring matched
+/// against monitor connector names, e.g. "HDMI") to target a specific
+/// output — useful for putting the demo on a beamer.  The GL viewport is
+/// sized from the actual window size after creation.
 pub fn create_gl_state_fullscreen(title: &str) -> Result<GlState, String> {
     let attrs = WindowAttributes::default()
         .with_title(title)
-        .with_transparent(false)
-        .with_fullscreen(Some(Fullscreen::Borderless(None)));
-    create_gl_state_with_attrs(attrs, None)
+        .with_transparent(false);
+    create_gl_state_with_attrs(attrs, None, true)
 }
 
 fn create_gl_state_with_attrs(
-    window_attrs: WindowAttributes,
+    mut window_attrs: WindowAttributes,
     initial_viewport: Option<(u32, u32)>,
+    fullscreen: bool,
 ) -> Result<GlState, String> {
     let event_loop = EventLoop::new().map_err(|e| format!("EventLoop: {e}"))?;
+
+    // Open fullscreen on the default monitor first; a specific monitor is
+    // selected after creation (winit 0.30 exposes monitor enumeration on the
+    // Window, not the EventLoop).
+    if fullscreen {
+        window_attrs = window_attrs.with_fullscreen(Some(Fullscreen::Borderless(None)));
+    }
 
     let config_template = ConfigTemplateBuilder::new();
 
@@ -70,6 +78,26 @@ fn create_gl_state_with_attrs(
         .map_err(|e| format!("DisplayBuilder: {e}"))?;
 
     let window = window.ok_or("No window created")?;
+
+    // Move the fullscreen window to a named monitor (LOFT_GL_MONITOR
+    // substring, e.g. "HDMI") if requested — for putting the demo on a
+    // beamer.  Capture the target's size so the viewport / window-size
+    // getters use it directly (inner_size lags an async monitor move).
+    let mut monitor_size: Option<(u32, u32)> = None;
+    if fullscreen {
+        if let Ok(name) = std::env::var("LOFT_GL_MONITOR") {
+            if !name.is_empty() {
+                if let Some(mon) = window
+                    .available_monitors()
+                    .find(|m| m.name().map(|n| n.contains(&name)).unwrap_or(false))
+                {
+                    let sz = mon.size();
+                    monitor_size = Some((sz.width.max(1), sz.height.max(1)));
+                    window.set_fullscreen(Some(Fullscreen::Borderless(Some(mon))));
+                }
+            }
+        }
+    }
     let gl_display = gl_config.display();
 
     let raw_handle = window
@@ -101,12 +129,13 @@ fn create_gl_state_with_attrs(
             .cast()
     });
 
-    // Viewport size: caller's hint for windowed mode, or the actual
-    // post-creation window size for fullscreen (winit honours
-    // `Fullscreen::Borderless(None)` at native monitor resolution).
-    let (vw, vh) = match initial_viewport {
-        Some((w, h)) => (w, h),
-        None => {
+    // Viewport size: caller's windowed hint, else the selected monitor's
+    // size (a moved-to monitor's inner_size lags), else the post-creation
+    // inner_size (default-monitor fullscreen at native resolution).
+    let (vw, vh) = match (initial_viewport, monitor_size) {
+        (Some((w, h)), _) => (w, h),
+        (None, Some((w, h))) => (w, h),
+        (None, None) => {
             let sz = window.inner_size();
             (sz.width.max(1), sz.height.max(1))
         }
@@ -138,10 +167,7 @@ fn create_gl_state_with_attrs(
     }
     let _ = surface.swap_buffers(&context);
 
-    let _ = surface.set_swap_interval(
-        &context,
-        SwapInterval::Wait(NonZeroU32::new(1).unwrap()),
-    );
+    let _ = surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
 
     Ok(GlState {
         window,
@@ -149,5 +175,7 @@ fn create_gl_state_with_attrs(
         context,
         event_loop,
         should_close: false,
+        viewport_w: vw,
+        viewport_h: vh,
     })
 }

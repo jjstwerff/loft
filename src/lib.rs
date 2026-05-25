@@ -52,7 +52,6 @@ pub mod keys;
 mod lexer;
 pub mod native;
 pub mod scopes;
-pub mod sha256;
 mod variables;
 pub mod vector;
 
@@ -78,11 +77,26 @@ pub mod state;
 
 pub mod compile;
 pub mod extensions;
+// @PLAN12 phase 3.5a (2026-05-24) — re-export `extensions::native_call`
+// at the crate root so generated native code can write
+// `use loft::native_call;` without coupling to the extensions module.
+#[cfg(feature = "native-extensions")]
+pub use extensions::native_call;
+#[cfg(feature = "registry")]
+pub mod install;
 pub mod introspect;
+pub mod lockfile;
 pub mod log_config;
 pub mod logger;
 pub mod manifest;
+#[cfg(feature = "registry")]
+pub mod package;
 pub mod registry;
+#[cfg(feature = "registry")]
+pub mod registry_index;
+pub mod registry_keys;
+#[cfg(feature = "registry")]
+pub mod registry_signing;
 pub mod runtime_error;
 mod stack;
 

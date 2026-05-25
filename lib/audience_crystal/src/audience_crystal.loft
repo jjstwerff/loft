@@ -1,0 +1,1082 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// audience_crystal — shared crystal-pattern logic for the
+// @PLAN36 audience-generative-art demo.  Used by:
+//   - tools/audience-demo/projector.loft  — 3D OpenGL renderer
+//   - tools/audience-demo/crystal_render.loft — 2D PNG test harness
+//
+// The library is the SINGLE SOURCE OF TRUTH for:
+//   - Pointy-top hex layout + neighbour rules
+//   - Center selection (no two adjacent rule)
+//   - Per-cell height assignment
+//   - Main ray + side branch generation
+//
+// Both consumers call `crystal_segments(snap)` to get the same
+// segment list; each consumer then renders the segments in its own
+// way (3D ribbons vs 2D anti-aliased lines).
+//
+// The reusable spatial-index + coordinate primitives (CellRef, enc_coord,
+// build_index, idx_at, step_x/step_y, axial_dq/dr, nbr_count_idx) live in
+// the shared `gridmesh` library; this consumer supplies only the crystal
+// RULE (height, mains, branches) on top of them.
+
+use gridmesh::*;
+
+// ── Geometry constants ───────────────────────────────────────────────
+
+// World units per hex (= 1 hex circumradius).  38 happens to be a
+// comfortable size for the projector's 1280×800 window; the canvas
+// test harness uses its own scale.
+pub HEX_SIZE = 38.0;
+pub SQRT3 = 1.7320508075688772;
+
+// ── Frost-pattern tunables ───────────────────────────────────────────
+
+// Two ray-length regimes, picked per direction at build time by
+// `crystal_segments`:
+// - If at least one FILLED cell sits on this centre's axis in
+//   direction d, the main extends PAST the furthest such cell's centre
+//   by `OVER_REACH` (in centre-to-centre units).  So `[(0,0), (2,0)]`
+//   → the east main from (0,0) reaches 2.30 hexes east — past (2,0)
+//   into the cell beyond.
+// - If NO cells sit on that axis, the main is a short STUB extending
+//   `STUB_RAY_FRAC` of a centre-to-centre span into empty space.  It
+//   doesn't reach where a non-existent neighbour's centre would be.
+pub OVER_REACH      = 0.30;
+pub STUB_RAY_FRAC   = 0.55;
+
+// Maximum main-line length in hex STEPS (2 steps = a line spanning 3
+// hex cells = "3 hexes long").  A main connects a cell back to the
+// NEAREST older filled cell on each of its 6 axes, but only if that
+// cell is within this many steps (= gap of at most MAX_MAIN_HEXES-1
+// empty hexes).  Cells separated by a larger gap form independent
+// crystals until a later paint narrows the gap.  See
+// `crystal_segments_aged`.
+pub MAX_MAIN_HEXES = 2;
+
+// Base side-branch length in HEX_SIZE units; tapers linearly to 0
+// toward the ray's tip.
+pub BRANCH_LEN_BASE = 0.95;
+
+// CONSTANT fork spacing (in HEX_SIZE units) — the gap between
+// consecutive forks along a main is the same everywhere, regardless
+// of whether the main is a short stub or a long axis-spanning spine.
+// Longer mains simply get more forks; shorter mains fewer.  The last
+// fork stays one full spacing-step short of the tip so the tip itself
+// stays a bare needle.
+pub BRANCH_SPACING = 0.30;
+
+// Ticks for a point's side branches to grow from 0 % to 100 % length,
+// during the FILL phase (after its connection has landed — see
+// CONNECT_TICKS).  60 s at ~60 fps (= 3600 ticks) gives the audience-demo
+// timeline the "slow growth" feel the design wants; tune via the `tick`
+// unit the caller chooses.
+pub GROWTH_TICKS = 3600;
+
+// @PLAN36 two-phase growth — ticks for a main to EXTEND from the existing
+// crystal toward a new point (the CONNECTION phase) before that point grows
+// its own side branches outward (the FILL phase).  Reverses the old "mains
+// snap to full length instantly" behaviour so growth reads as the existing
+// crystal reaching toward each newly-painted point, then the point blooming.
+pub CONNECT_TICKS = 600;
+
+// Age factor used for a main with no birth record in the CrystalState
+// (i.e. when the caller isn't driving the growth animation).  Renders
+// crystals at a fixed "mostly grown" state so the side branches are
+// clearly visible without waiting out GROWTH_TICKS.
+pub DEFAULT_AGE = 0.85;
+
+// Per-cell Y height — monotonic with filled-neighbour count + tiny
+// deterministic jitter.  Per the plan-36 § Visual model spec.
+pub HEIGHT_BASE = 0.18;
+pub HEIGHT_PER_NBR = 0.04;
+pub HEIGHT_JITTER = 0.10;
+
+
+// Segment kinds — the dominant SPINE (main) vs the DETAIL (side branch).
+pub KIND_MAIN = 0;
+pub KIND_SIDE = 1;
+
+// ── Palette ──────────────────────────────────────────────────────────
+//
+// Three parallel vector<float>s indexed by palette id 0..9.  Matches
+// doc/audience-demo/index.html PALETTE.  Index 0 is the unused
+// "empty" sentinel.
+
+pub fn palette_r(idx: integer) -> float {
+  rs: vector<float> = [
+    0.04,
+    217.0/255.0, 63.0/255.0,  58.0/255.0,
+     63.0/255.0, 208.0/255.0, 223.0/255.0,
+    230.0/255.0, 124.0/255.0, 156.0/255.0,
+  ];
+  rs[idx]
+}
+pub fn palette_g(idx: integer) -> float {
+  gs: vector<float> = [
+    0.04,
+     70.0/255.0, 200.0/255.0, 114.0/255.0,
+    200.0/255.0,  70.0/255.0, 216.0/255.0,
+    230.0/255.0, 124.0/255.0, 106.0/255.0,
+  ];
+  gs[idx]
+}
+pub fn palette_b(idx: integer) -> float {
+  bs: vector<float> = [
+    0.08,
+     70.0/255.0,  88.0/255.0, 229.0/255.0,
+    200.0/255.0, 208.0/255.0,  64.0/255.0,
+    236.0/255.0, 138.0/255.0,  60.0/255.0,
+  ];
+  bs[idx]
+}
+
+// ── Cell snapshot — input to all crystal generation ──────────────────
+//
+// Parallel arrays so the builder doesn't iterate a hash inside a fn
+// taking a struct parameter (sidesteps @P290).
+
+pub struct CellSnap {
+  xs:     vector<integer>,
+  ys:     vector<integer>,
+  colors: vector<integer>,
+}
+
+// ── Crystal mesh — output of the segment-list generator ─────────────
+//
+// Parallel arrays again: one entry per segment.  Each segment is a
+// straight line from (x0, y0, z0) to (x1, y1, z1) in the cell's
+// palette colour.  `kinds[i]` is KIND_MAIN or KIND_SIDE so consumers
+// can give the two classes different widths / styling.
+
+pub struct CrystalMesh {
+  kinds:  vector<integer>,
+  x0s:    vector<float>,
+  y0s:    vector<float>,
+  z0s:    vector<float>,
+  x1s:    vector<float>,
+  y1s:    vector<float>,
+  z1s:    vector<float>,
+  colors: vector<integer>,
+  // Owning cell index (into the source CellSnap) for each segment.  Lets
+  // a consumer attribute a segment back to the cell whose paint produced
+  // it — e.g. the projector keys per-cell GPU growth (bloom-from-centre
+  // by cell age) off this, so the mesh stays static/cached while the
+  // animation runs in the vertex shader.
+  cell_ix: vector<integer>,
+}
+
+// ── CrystalState — persistent age tracking across rebuilds ───────────
+//
+// A long-lived data structure owned by the consumer (projector,
+// test harness).  For every main line that has ever existed, records
+// its identity (centre cell coords + direction-index 0..5) and the
+// tick when it first appeared.  Used by `crystal_segments_aged` to
+// scale side-branch length by main age — young mains start with
+// short branches and grow to full length over `GROWTH_TICKS`.
+//
+// Today the only stored quantity is birth tick.  Future extensions
+// may record per-main growth speed, "last extended" tick (to age
+// new fork-points separately when a main grows), or per-supporter
+// timing — placeholders are deliberately omitted until needed.
+pub struct CrystalState {
+  main_x:     vector<integer>,
+  main_y:     vector<integer>,
+  main_d:     vector<integer>,
+  birth_tick: vector<integer>,
+}
+
+// Look up the recorded birth tick of (cx, cy, d) main.  Returns -1
+// if this main has never been recorded (caller treats as "newborn
+// this tick").
+pub fn lookup_main_birth(state: CrystalState,
+                         cx: integer, cy: integer, d: integer) -> integer {
+  for lb_i in 0..len(state.main_x) {
+    if state.main_x[lb_i] == cx
+       && state.main_y[lb_i] == cy
+       && state.main_d[lb_i] == d {
+      return state.birth_tick[lb_i];
+    }
+  }
+  0 - 1
+}
+
+// Append birth records for any (centre, direction) pair in `snap`
+// that hasn't been recorded yet.  Caller invokes this whenever the
+// world changes (paint added, paint cleared) with the current tick.
+// `parent` comes from `assign_cells(snap)`.
+pub fn update_state(state: &CrystalState, snap: CellSnap, tick: integer) {
+  parent = assign_cells(snap);
+  for us_i in 0..len(snap.xs) {
+    if parent[us_i] != us_i { continue; }   // skip supporters
+    cx = snap.xs[us_i];
+    cy = snap.ys[us_i];
+    for d in 0..6 {
+      existing = lookup_main_birth(state, cx, cy, d);
+      if existing >= 0 { continue; }
+      state.main_x     += [cx];
+      state.main_y     += [cy];
+      state.main_d     += [d];
+      state.birth_tick += [tick];
+    }
+  }
+}
+
+// 0.0 (just born) to 1.0 (fully grown over GROWTH_TICKS).
+pub fn age_factor(birth: integer, tick: integer) -> float {
+  age = tick - birth;
+  if age >= GROWTH_TICKS { return 1.0; }
+  if age <= 0 { return 0.0; }
+  age as float / GROWTH_TICKS as float
+}
+
+// @PLAN36 two-phase growth — CONNECTION phase: 0.0 (just born) → 1.0 over
+// CONNECT_TICKS, used to extend a main from the existing crystal toward the
+// new point.  A missing birth record (caller not driving the animation)
+// renders as fully connected.
+pub fn connect_factor(birth: integer, tick: integer) -> float {
+  if birth < 0 { return 1.0; }
+  conn_age = tick - birth;
+  if conn_age <= 0 { return 0.0; }
+  if conn_age >= CONNECT_TICKS { return 1.0; }
+  conn_age as float / CONNECT_TICKS as float
+}
+
+// @PLAN36 two-phase growth — FILL phase: 0.0 until the connection has landed
+// (CONNECT_TICKS after birth), then 0.0 → 1.0 over GROWTH_TICKS as the point's
+// side branches grow outward.  A missing birth record renders at DEFAULT_AGE.
+pub fn fill_factor(birth: integer, tick: integer) -> float {
+  if birth < 0 { return DEFAULT_AGE; }
+  fill_age = tick - birth - CONNECT_TICKS;
+  if fill_age <= 0 { return 0.0; }
+  if fill_age >= GROWTH_TICKS { return 1.0; }
+  fill_age as float / GROWTH_TICKS as float
+}
+
+// ── Hex helpers ──────────────────────────────────────────────────────
+
+// Convert pointy-top offset (odd-row-shift) coords to axial (q, r).
+// Used by `hex_distance` to compute the standard 6-direction hex
+// metric and by the axis-alignment helpers below.
+fn axial_q(cx: integer, cy: integer) -> integer {
+  par = cy - (cy / 2) * 2;
+  if par < 0 { par = par + 2; }
+  cx - (cy - par) / 2
+}
+
+// True iff (x2, y2) lies on one of (x1, y1)'s six hex-direction axes
+// (excluding the source itself).  Used by `pick_centers` to decide
+// when a new paint sits on an existing centre's growth path — those
+// later paints become supporters, not new centres, no matter how
+// far down the line they fall.
+pub fn on_same_hex_axis(x1: integer, y1: integer,
+                        x2: integer, y2: integer) -> boolean {
+  if x1 == x2 && y1 == y2 { return false; }
+  q1 = axial_q(x1, y1);
+  q2 = axial_q(x2, y2);
+  r1 = y1;
+  r2 = y2;
+  dq = q2 - q1;
+  dr = r2 - r1;
+  ds = dq + dr;
+  dq == 0 || dr == 0 || ds == 0
+}
+
+// If (x2, y2) lies on one of (x1, y1)'s hex axes, return the
+// direction-index 0..5 (using the same convention as the main loop:
+// d=0 east, d=1 SE, d=2 SW, d=3 west, d=4 NW, d=5 NE).
+// Otherwise return -1.
+pub fn hex_axis_dir(x1: integer, y1: integer,
+                    x2: integer, y2: integer) -> integer {
+  q1 = axial_q(x1, y1);
+  q2 = axial_q(x2, y2);
+  r1 = y1;
+  r2 = y2;
+  dq = q2 - q1;
+  dr = r2 - r1;
+  if dq == 0 && dr == 0 { return 0 - 1; }
+  if dr == 0 {
+    if dq > 0 { return 0; }
+    return 3;
+  }
+  if dq == 0 {
+    if dr > 0 { return 1; }
+    return 4;
+  }
+  if dq + dr == 0 {
+    if dr > 0 { return 2; }
+    return 5;
+  }
+  0 - 1
+}
+
+// Number of hex steps between two cells.  Standard cube-coord
+// formula: |dq| + |dq+dr| + |dr| / 2 where (q, r) are axial.
+pub fn hex_distance(x1: integer, y1: integer, x2: integer, y2: integer) -> integer {
+  q1 = axial_q(x1, y1);
+  r1 = y1;
+  q2 = axial_q(x2, y2);
+  r2 = y2;
+  dq = q1 - q2;
+  dr = r1 - r2;
+  ds = dq + dr;
+  ad = if dq < 0 { 0 - dq } else { dq };
+  bd = if ds < 0 { 0 - ds } else { ds };
+  cd = if dr < 0 { 0 - dr } else { dr };
+  (ad + bd + cd) / 2
+}
+
+// Pointy-top hex neighbour adjacency in offset coords (odd-row shift).
+pub fn is_hex_nbr(x1: integer, y1: integer, x2: integer, y2: integer) -> boolean {
+  dy = y2 - y1;
+  dx = x2 - x1;
+  if dy == 0 { return dx == -1 || dx == 1; }
+  if dy != -1 && dy != 1 { return false; }
+  parity = y1 - (y1 / 2) * 2;
+  if parity < 0 { parity = parity + 2; }
+  if parity == 0 { dx == -1 || dx == 0 }
+  else            { dx == 0  || dx == 1 }
+}
+
+// Number of filled neighbours of cell (cx, cy) within the snapshot.
+pub fn snap_nbr_count(snap: CellSnap, cx: integer, cy: integer) -> integer {
+  count = 0;
+  for snc_j in 0..len(snap.xs) {
+    if is_hex_nbr(cx, cy, snap.xs[snc_j], snap.ys[snc_j]) { count = count + 1; }
+  }
+  count
+}
+
+// World-XZ position of a cell's centre.
+pub fn cell_wx(cx: integer, cy: integer) -> float {
+  par = cy - (cy / 2) * 2;
+  if par < 0 { par = par + 2; }
+  shift = 0.0;
+  if par == 1 { shift = SQRT3 / 2.0 * HEX_SIZE; }
+  cx as float * SQRT3 * HEX_SIZE + shift
+}
+pub fn cell_wz(cy: integer) -> float { cy as float * 1.5 * HEX_SIZE }
+
+// Per-cell Y height — rises with filled-neighbour count + deterministic
+// jitter (stable across frames).
+pub fn cell_h(snap: CellSnap, ix: integer) -> float {
+  cell_x = snap.xs[ix];
+  cell_y = snap.ys[ix];
+  nbr = snap_nbr_count(snap, cell_x, cell_y);
+  base = HEIGHT_BASE + nbr as float * HEIGHT_PER_NBR;
+  hh = (cell_x * 73856093) ^ (cell_y * 19349663);
+  if hh < 0 { hh = 0 - hh; }
+  jitter = (hh - (hh / 100) * 100) as float / 100.0;
+  (base + jitter * HEIGHT_JITTER) * HEX_SIZE
+}
+
+// ── Spatial index (PF2) ──────────────────────────────────────────────
+//
+// A coord→snap-index hash so neighbour / on-axis queries are O(1) instead
+// of scanning the whole snapshot.  Built ONCE per crystal_segments_aged
+// call (and reusable by consumers — e.g. the projector's per-cell height
+// precompute), turning the mesh build from O(N²) to O(N).  Produces
+// byte-identical output to the linear-scan helpers (neighbour-colour
+// order is reconstructed in ascending snap-index order, matching the old
+// `for i in 0..len` scan, so pick_segment_color's modulo is unchanged).
+
+// The spatial-index + coord primitives (CellRef, enc_coord, build_index,
+// idx_at, step_x/step_y, axial_dq/dr, nbr_count_idx) now live in the
+// shared `gridmesh` library (imported via `use gridmesh::*` above).  The
+// crystal-specific neighbour helpers below build on them.
+
+// Index-backed cell height — identical formula to cell_h, O(1) neighbour
+// count.  Public so consumers (the projector) can precompute centres in
+// O(N) instead of O(N²).
+pub fn cell_h_at(snap: CellSnap, cidx: hash<CellRef[ck]>, ix: integer) -> float {
+  cell_x = snap.xs[ix];
+  cell_y = snap.ys[ix];
+  nbr = nbr_count_idx(cidx, cell_x, cell_y);
+  base = HEIGHT_BASE + nbr as float * HEIGHT_PER_NBR;
+  hh = (cell_x * 73856093) ^ (cell_y * 19349663);
+  if hh < 0 { hh = 0 - hh; }
+  jitter = (hh - (hh / 100) * 100) as float / 100.0;
+  (base + jitter * HEIGHT_JITTER) * HEX_SIZE
+}
+
+// Index-backed neighbour-colour collector — colours of filled cells at
+// hex_distance == dist, in ascending snap-index order (matches the old
+// linear scan so pick_segment_color is unchanged).  Enumerates the
+// distance-`dist` axial ring (≤ 12 candidates for dist 2) instead of
+// scanning all cells.
+fn nbr_colors_idx(snap: CellSnap, cidx: hash<CellRef[ck]>,
+                  cx: integer, cy: integer, dist: integer) -> vector<integer> {
+  ixs:  vector<integer> = [];
+  cols: vector<integer> = [];
+  par = cy - (cy / 2) * 2; if par < 0 { par = par + 2; }
+  cq = cx - (cy - par) / 2;
+  for dq in (0 - dist)..(dist + 1) {
+    for dr in (0 - dist)..(dist + 1) {
+      adq = if dq < 0 { 0 - dq } else { dq };
+      adr = if dr < 0 { 0 - dr } else { dr };
+      sm = dq + dr; asm = if sm < 0 { 0 - sm } else { sm };
+      if (adq + adr + asm) / 2 != dist { continue; }
+      r2 = cy + dr;
+      p2 = r2 - (r2 / 2) * 2; if p2 < 0 { p2 = p2 + 2; }
+      x2 = (cq + dq) + (r2 - p2) / 2;
+      j = idx_at(cidx, x2, r2);
+      if j < 0 { continue; }
+      ixs += [j]; cols += [snap.colors[j]];
+    }
+  }
+  // sort colours by ascending snap index (insertion; ≤ 12 elements)
+  m = len(ixs);
+  for sa in 0..m {
+    for sb in 0..(m - 1) {
+      if ixs[sb] > ixs[sb + 1] {
+        ti = ixs[sb];  ixs[sb]  = ixs[sb + 1];  ixs[sb + 1]  = ti;
+        tc = cols[sb]; cols[sb] = cols[sb + 1]; cols[sb + 1] = tc;
+      }
+    }
+  }
+  cols
+}
+
+// How much "gap" a centre's main may bridge to capture a later paint
+// as a supporter rather than a new centre.  Measured in hexes between
+// the new paint and the furthest existing on-axis cell of that centre.
+// 2 = bridge ONE empty hex between (e.g., the `bridge` scenario:
+// (0,0) and (2,0) — gap of 1 empty cell at (1,0) — joins).  Anything
+// further forms a new crystal.
+pub MAX_AXIS_GAP = 2;
+
+// Assign every cell to its owning centre.  `parent[i] = i` means cell
+// i IS a centre; `parent[i] = j (j ≠ i)` means cell i is a SUPPORTER
+// of centre j.  Walks placement order; for each new paint, joins the
+// earliest existing centre whose axis can reach within MAX_AXIS_GAP
+// hexes of the chain's current furthest supporter.  Otherwise the new
+// paint becomes its own centre.
+//
+// Caller contract: cells must appear in placement order — snap.xs[0]
+// is the oldest paint, snap.xs[len-1] is the most recent.
+pub fn assign_cells(snap: CellSnap) -> vector<integer> {
+  n = len(snap.xs);
+  parent: vector<integer> = [];
+  for ac_m in 0..n { parent += [0 - 1]; }
+  for ac_s in 0..n {
+    cx = snap.xs[ac_s];
+    cy = snap.ys[ac_s];
+    joined = false;
+    for ac_a in 0..ac_s {
+      if parent[ac_a] != ac_a { continue; }   // skip non-centres
+      ax = snap.xs[ac_a];
+      ay = snap.ys[ac_a];
+      d = hex_axis_dir(ax, ay, cx, cy);
+      if d < 0 { continue; }
+      // Furthest A-axis-d distance among PRIOR cells in A's chain
+      // (= A itself at dist 0, plus any supporters whose parent is A).
+      furthest = 0;
+      for ac_b in 0..ac_s {
+        if ac_b == ac_a { continue; }
+        if parent[ac_b] != ac_a { continue; }
+        if hex_axis_dir(ax, ay, snap.xs[ac_b], snap.ys[ac_b]) != d { continue; }
+        dist_b = hex_distance(ax, ay, snap.xs[ac_b], snap.ys[ac_b]);
+        if dist_b > furthest { furthest = dist_b; }
+      }
+      this_dist = hex_distance(ax, ay, cx, cy);
+      if this_dist - furthest <= MAX_AXIS_GAP {
+        parent[ac_s] = ac_a;
+        joined = true;
+        break;
+      }
+    }
+    if !joined { parent[ac_s] = ac_s; }
+  }
+  parent
+}
+
+// Backwards-compat wrapper — derived from `assign_cells`.
+pub fn pick_centers(snap: CellSnap) -> vector<boolean> {
+  parent = assign_cells(snap);
+  out: vector<boolean> = [];
+  for pc_i in 0..len(parent) { out += [parent[pc_i] == pc_i]; }
+  out
+}
+
+// Find the snap-index of the FURTHEST cell in centre A's chain
+// (i.e., a supporter whose parent is A) that lies on A's axis in
+// direction `d`.  Returns -1 if no such supporter.  Used by
+// `crystal_segments` to extend A's main past the chain's tip.
+pub fn find_furthest_supporter(snap: CellSnap, parent: vector<integer>,
+                               a_ix: integer, d: integer) -> integer {
+  ax = snap.xs[a_ix];
+  ay = snap.ys[a_ix];
+  best_ix = 0 - 1;
+  best_dist = 0;
+  for ff_b in 0..len(snap.xs) {
+    if ff_b == a_ix { continue; }
+    if parent[ff_b] != a_ix { continue; }
+    bx = snap.xs[ff_b];
+    by = snap.ys[ff_b];
+    axis_d = hex_axis_dir(ax, ay, bx, by);
+    if axis_d != d { continue; }
+    dist = hex_distance(ax, ay, bx, by);
+    if dist > best_dist {
+      best_dist = dist;
+      best_ix = ff_b;
+    }
+  }
+  best_ix
+}
+
+// Furthest FILLED cell on axis `d` from `a_ix` — any cell, centre or
+// supporter, not just this centre's own supporters.  Used so a centre's
+// main spine reaches across to the next crystal and the structures connect
+// (the supporter-only finder above leaves adjacent centres disconnected).
+pub fn find_furthest_on_axis(snap: CellSnap, a_ix: integer, d: integer) -> integer {
+  ax = snap.xs[a_ix];
+  ay = snap.ys[a_ix];
+  best_ix = 0 - 1;
+  best_dist = 0;
+  for fa_b in 0..len(snap.xs) {
+    if fa_b == a_ix { continue; }
+    axis_d = hex_axis_dir(ax, ay, snap.xs[fa_b], snap.ys[fa_b]);
+    if axis_d != d { continue; }
+    dist = hex_distance(ax, ay, snap.xs[fa_b], snap.ys[fa_b]);
+    if dist > best_dist {
+      best_dist = dist;
+      best_ix = fa_b;
+    }
+  }
+  best_ix
+}
+
+// ── Per-segment palette mosaic (plan-36 § 3.4b) ─────────────────────
+//
+// Each segment picks a single solid colour from the set
+// {self, 1-away neighbours, 2-away tiles} with dominance
+// self ≫ 1-away ≫ 2-away.  Assignment is DETERMINISTIC per segment
+// (hash of cell coords + segment-id) so the mosaic is stable across
+// frame rebuilds — the texture reads as a fixed pattern, not noise.
+//
+// Distribution (per the spec's "most / some / a few"):
+//   ~70%: self colour
+//   ~25%: a 1-away neighbour's colour (if any exist)
+//    ~5%: a 2-away tile's colour (if any exist)
+// Falls back to self when the picked bucket is empty.
+
+// Collect filled-cell COLOUR indices within hex_distance = `dist`
+// from (cx, cy).  Self is excluded.
+fn nbr_colors_at(snap: CellSnap, cx: integer, cy: integer, dist: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  for nc_i in 0..len(snap.xs) {
+    nx = snap.xs[nc_i];
+    ny = snap.ys[nc_i];
+    if nx == cx && ny == cy { continue; }
+    if hex_distance(cx, cy, nx, ny) == dist { out += [snap.colors[nc_i]]; }
+  }
+  out
+}
+
+// Deterministic per-segment colour pick.  `seg_id` is a unique
+// integer per segment within a cell (we use direction * 100 + fork *
+// 10 + side where main = -1, side = 0/1, fork = 0..N-1).
+pub fn pick_segment_color(self_c: integer,
+                          one_away: vector<integer>,
+                          two_away: vector<integer>,
+                          cell_x: integer, cell_y: integer,
+                          seg_id: integer) -> integer {
+  hh = (cell_x * 73856093) ^ (cell_y * 19349663) ^ (seg_id * 83492791);
+  if hh < 0 { hh = 0 - hh; }
+  bucket = hh - (hh / 100) * 100;          // 0..99
+  pick_seed = hh / 100;                    // independent stream
+  if bucket < 70 { return self_c; }
+  // Hoist len() AND the modulo expression to locals — native codegen
+  // otherwise mutably borrows `stores` twice in a single subscript:
+  // once for `&one_away`, again for the divide-by-zero check on
+  // `pick_seed / len(one_away)`.  Computing the index outside the
+  // subscript dissolves the alias.  See @P293 for the broader pattern.
+  one_n = len(one_away);
+  two_n = len(two_away);
+  if bucket < 95 && one_n > 0 {
+    one_ix = pick_seed - (pick_seed / one_n) * one_n;
+    return one_away[one_ix];
+  }
+  if two_n > 0 {
+    two_ix = pick_seed - (pick_seed / two_n) * two_n;
+    return two_away[two_ix];
+  }
+  self_c
+}
+
+// ── Main entry: generate the crystal segment list ───────────────────
+//
+// For each CENTER cell, emit 6 main rays (each a single straight
+// segment from cell.centre to the matched-neighbour-centre or to a
+// fixed tip) + BRANCH_FORKS side branches per main at ±30°, lying
+// in the same tilted plane as the parent main.
+
+// Generate the segment mesh from `snap`, applying age-based side-
+// branch scaling from `state` evaluated at `tick`.  Side-branch length
+// = full_length * age_factor(main.birth, tick).  Mains snap to their
+// full length immediately.
+//
+// If `state` has no record for a main, that main is treated as
+// newborn at `tick` (branches at 0 %).  Pass a large `tick` (e.g.
+// `GROWTH_TICKS + len(state)`) and an empty state to get
+// "fully grown" output.
+// ── gridmesh Phase C1: chunk rule + narrow SegMesh ───────────────────
+//
+// The crystal as a gridmesh CHUNK-PIPELINE consumer.  The per-cell rule
+// emits into a narrow `SegMesh` (M1: u8 kinds/colours, single coords —
+// ~2× denser than the old float `CrystalMesh`); the build is driven per
+// CHUNK (full = every chunk via `all_inputs`; incremental = dirty chunks,
+// see `CrystalIncr`).  `chunk_shift` / `halo_k` are TUNABLE PARAMETERS
+// (the engine is mechanism, the game is policy) — the consts are only this
+// consumer's defaults; the bench sweeps them.
+pub const CRYSTAL_CHUNK_SHIFT = 4;   // 1<<4 = 16 cells/axis per chunk
+pub const CRYSTAL_HALO_K      = 2;   // crystal reads neighbours ≤ dist 2
+
+// Emit ONE cell's crystal segments (mains + ±30° side branches) into `m`.
+// Neighbour reads go through the shared GLOBAL `cidx`, so a cell in any
+// chunk still sees its true cross-chunk older-neighbour mains; every
+// segment is tagged with the owning cell `cs_i` (cell_ix) so it stays
+// attributed to this cell's chunk (bounded extent).  `ChunkInput.halo_ixs`
+// is contextual-only for this rule — reads go through `cidx` directly.
+pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
+                             state: CrystalState, tick: integer,
+                             cs_i: integer, m: &SegMesh) {
+  branch_base = HEX_SIZE * BRANCH_LEN_BASE;
+  branch_spacing_world = HEX_SIZE * BRANCH_SPACING;
+  deg30 = PI / 6.0;
+  centre_to_centre = SQRT3 * HEX_SIZE;
+  cell_c = snap.colors[cs_i];
+  cell_x = snap.xs[cs_i];
+  cell_y = snap.ys[cs_i];
+  one_away = nbr_colors_idx(snap, cidx, cell_x, cell_y, 1);
+  two_away = nbr_colors_idx(snap, cidx, cell_x, cell_y, 2);
+  wx = cell_wx(cell_x, cell_y);
+  wz = cell_wz(cell_y);
+  cell_yh = cell_h_at(snap, cidx, cs_i);
+  best_ix:   vector<integer> = [0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1];
+  best_dist: vector<integer> = [99, 99, 99, 99, 99, 99];
+  for jd in 0..6 {
+    for jk in 1..(MAX_MAIN_HEXES + 1) {
+      jj = idx_at(cidx, step_x(cell_x, cell_y, jd, jk), step_y(cell_x, cell_y, jd, jk));
+      if jj >= 0 {
+        // Stop at the NEAREST filled cell on this axis.  Connect only if it is
+        // OLDER (jj < cs_i) — a newer neighbour draws the connection itself.
+        // Never span PAST a filled cell: a longer main reaching a 2-hex
+        // supporter would overlap the intermediate cell's own main and
+        // double-draw that segment (the on-screen artefact).
+        if jj < cs_i { best_dist[jd] = jk; best_ix[jd] = jj; }
+        break;
+      }
+    }
+  }
+  has_main = false;
+  for hd in 0..6 { if best_ix[hd] >= 0 { has_main = true; } }
+  for d in 0..6 {
+    j = best_ix[d];
+    is_stub = j < 0;
+    if has_main && is_stub { continue; }
+    ray_ang = 0.0; ray_len_d = 0.0;
+    src_x = 0.0; src_y = 0.0; src_z = 0.0;
+    tip_x = 0.0; tip_y = 0.0; tip_z = 0.0;
+    if is_stub {
+      ray_ang = (60.0 * d as float) * PI / 180.0;
+      ray_len_d = centre_to_centre * STUB_RAY_FRAC;
+      src_x = wx; src_y = cell_yh; src_z = wz;
+      tip_x = wx + ray_len_d * cos(ray_ang);
+      tip_y = cell_yh;
+      tip_z = wz + ray_len_d * sin(ray_ang);
+    } else {
+      ray_ang = (60.0 * d as float + 180.0) * PI / 180.0;
+      ray_len_d = best_dist[d] as float * centre_to_centre;
+      src_x = cell_wx(snap.xs[j], snap.ys[j]);
+      src_y = cell_h_at(snap, cidx, j);
+      src_z = cell_wz(snap.ys[j]);
+      tip_x = wx; tip_y = cell_yh; tip_z = wz;
+    }
+    if ray_len_d <= 0.0 { continue; }
+    rdx = tip_x - src_x;
+    rdz = tip_z - src_z;
+    dy = tip_y - src_y;
+    // @PLAN36 two-phase growth: the main first EXTENDS from the existing
+    // crystal (src) toward the new point (tip) over CONNECT_TICKS; the side
+    // branches (below) stay at zero length until that connection lands, so a
+    // point only blooms outward AFTER the crystal has reached it.
+    main_birth = lookup_main_birth(state, cell_x, cell_y, d);
+    connect_f = connect_factor(main_birth, tick);
+    fill_f = fill_factor(main_birth, tick);
+    if connect_f <= 0.0 { continue; }   // not yet growing toward this point
+    ext_tip_x = src_x + rdx * connect_f;
+    ext_tip_y = src_y + dy * connect_f;
+    ext_tip_z = src_z + rdz * connect_f;
+    main_seg_id = d * 100 + 99;
+    main_col = pick_segment_color(cell_c, one_away, two_away,
+                                  cell_x, cell_y, main_seg_id);
+    emit_segment(m, KIND_MAIN, src_x, src_y, src_z, ext_tip_x, ext_tip_y, ext_tip_z, main_col, cs_i);
+    raw_forks = (ray_len_d / branch_spacing_world) as integer;
+    n_forks = raw_forks - 1;
+    if n_forks < 0 { n_forks = 0; }
+    branch_t_per_len = cos(deg30) / ray_len_d;
+    for f in 1..(n_forks + 1) {
+      t = f as float * branch_spacing_world / ray_len_d;
+      if t > connect_f { break; }            // past where the connection has reached
+      blen = branch_base * (1.0 - t) * fill_f;
+      if blen <= 0.0 { continue; }           // branches grow only after the connection lands
+      fork_x = src_x + rdx * t;
+      fork_z = src_z + rdz * t;
+      fork_y = src_y + t * dy;
+      branch_end_y = src_y + (t + blen * branch_t_per_len) * dy;
+      plus_ang = ray_ang + deg30;
+      plus_seg_id = d * 100 + f * 10 + 0;
+      plus_col = pick_segment_color(cell_c, one_away, two_away,
+                                    cell_x, cell_y, plus_seg_id);
+      emit_segment(m, KIND_SIDE, fork_x, fork_y, fork_z,
+                   fork_x + blen * cos(plus_ang), branch_end_y, fork_z + blen * sin(plus_ang),
+                   plus_col, cs_i);
+      minus_ang = ray_ang - deg30;
+      minus_seg_id = d * 100 + f * 10 + 1;
+      minus_col = pick_segment_color(cell_c, one_away, two_away,
+                                     cell_x, cell_y, minus_seg_id);
+      emit_segment(m, KIND_SIDE, fork_x, fork_y, fork_z,
+                   fork_x + blen * cos(minus_ang), branch_end_y, fork_z + blen * sin(minus_ang),
+                   minus_col, cs_i);
+    }
+  }
+}
+
+// The per-cell RULE for one chunk: emit every owned cell's segments into a
+// fresh SegMesh (cross-chunk neighbour reads via the shared `cidx`).
+pub fn build_crystal_chunk(snap: CellSnap, cidx: hash<CellRef[ck]>,
+                           state: CrystalState, tick: integer,
+                           ci: ChunkInput) -> SegMesh {
+  m = seg_mesh_new();
+  for bk in 0..len(ci.cell_ixs) {
+    crystal_cell_segments(snap, cidx, state, tick, ci.cell_ixs[bk] ?? 0, m);
+  }
+  m
+}
+
+// Full build at default tuning (the consumer API).
+pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
+                             tick: integer) -> SegMesh {
+  crystal_segments_aged_tuned(snap, state, tick, CRYSTAL_CHUNK_SHIFT, CRYSTAL_HALO_K)
+}
+
+// Full build, chunk-driven, with the chunk/halo dials exposed (the bench
+// sweeps these).  Builds the field once, runs the rule per chunk, concats
+// into one SegMesh.  Segment ORDER is grouped by chunk (vs the legacy
+// placement order) — immaterial to consumers, which key by `cell_ix`.
+pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: integer,
+                                   chunk_shift: integer, halo_k: integer) -> SegMesh {
+  field = field_new(0, snap.xs, snap.ys, chunk_shift, halo_k);
+  out = seg_mesh_new();
+  inputs = all_inputs(field, halo_k);
+  for ci in inputs {
+    cm = build_crystal_chunk(snap, field.cidx, state, tick, ci);
+    seg_mesh_append(out, cm);
+  }
+  out
+}
+
+// ── C3: incremental rebuild with two-level reuse ──────────────────────────
+//
+// Two-level reuse: per-CHUNK cached SegMesh meshes are the source of truth +
+// the CPU-reuse unit (rebuild re-runs the rule for ONLY the dirty chunks);
+// per-GROUP meshes are assembled on demand (a cheap concat) so the consumer
+// can cache one GPU VBO per group and re-upload only dirty groups.
+// Flat O(dirty) per-edit rebuild under bounded density.  Design in
+// lib_plans/19-gridmesh/DESIGN.md (step 6).
+//
+// Status 2026-05-22: fully re-enabled — was blocked on @P311 (keyed cache of
+// nested struct-of-vectors crashed — fixed) + @P312 (native E0503 when a call
+// passed `c` (&-ref) AND a `c.field` read — fixed: native codegen now hoists the
+// aliasing read into a temp before the `&mut` borrow, so the inline
+// `rebuild_chunks(c, all_inputs(c.field, …), …)` calls compile cleanly).
+// FULL-BUILD path is correct: crystal_incr_full_mesh(crystal_incr_new(snap))
+// matches the C1 golden crystal_segments_aged exactly, and group_meshes
+// partitions it (regression: tests/scripts/133-crystal-incr.loft).
+// INCREMENTAL path (build from EMPTY, paint + rebuild reusing non-dirty cached
+// chunks) is now CORRECT on BOTH backends — its mesh matches a full rebuild
+// exactly (@P314 fixed the u8-concat stride; @P317 symptom 2 fixed a native
+// codegen store-leak that exhausted the store pool during the rebuild's keyed
+// churn — regression tests/scripts/133, native re-enabled).
+// @P317 FULLY FIXED 2026-05-22.  The all-at-once build (crystal_incr_new with a
+// NON-empty snap) used to produce a non-deterministic inflated mesh: building
+// the struct deep-copied a POPULATED field, which corrupted the nested `cidx`
+// spatial-index hash (layout-dependent — buckets copied fine, cidx entries did
+// not), so the rule found no neighbours and every cell emitted as an isolated
+// stub.  crystal_incr_new now builds its field IN PLACE via field_add_cell (the
+// same proven path the incremental build uses), so the cidx is never
+// deep-copied; deterministic == golden on both backends at all sizes
+// (regression tests/scripts/133::test_c3_all_at_once_side24_equals_golden).
+// The underlying CORE bug — deep-copying a populated hash corrupted its entries
+// when Store::claim over-sized the dest bucket record — is FIXED (@P318:
+// copy_claims_hash_body re-inserts via hash::add).  This in-place build stays
+// because it is also faster (no deep-copy of a populated field).
+
+struct ChunkMeshEntry { ck: integer not null, mesh: SegMesh }
+
+// Per-CHUNK cached meshes are the source of truth + the CPU-reuse unit:
+// crystal_incr_rebuild re-runs the rule for ONLY the dirty chunks and reuses
+// the rest.  Per-GROUP meshes are assembled ON DEMAND from the cached chunk
+// meshes (a cheap concat) rather than cached in a second keyed collection —
+// the consumer caches the GPU VBO per group and re-uploads only the groups
+// that contain a dirty chunk (which it learns from collect_dirty_groups).
+pub struct CrystalIncr {
+  snap:      CellSnap,                  // source of truth (xs, ys, colors)
+  field:     ChunkField,                // spatial index + buckets + dirty set
+  group_dim: integer,                   // tunable: G=1 per-chunk … G large ~one VBO
+  chunks:    hash<ChunkMeshEntry[ck]>,  // per-chunk cached mesh (reused if not dirty)
+}
+
+// Re-run the rule for the given chunk inputs, upserting each into the cache
+// (unchanged chunks are left untouched = reused).
+fn crystal_incr_rebuild_chunks(c: &CrystalIncr, inputs: vector<ChunkInput>,
+                               state: CrystalState, tick: integer) {
+  for ci in inputs {
+    cm = build_crystal_chunk(c.snap, c.field.cidx, state, tick, ci);
+    c.chunks[ci.key.ck] = ChunkMeshEntry{ck: ci.key.ck, mesh: cm};
+  }
+}
+
+// Build a CrystalIncr from an initial snapshot (may be empty), full-building
+// every chunk's mesh once.  chunk_shift / group_dim / halo_k are the dials.
+pub fn crystal_incr_new(snap: CellSnap, chunk_shift: integer, group_dim: integer,
+                        halo_k: integer, state: CrystalState, tick: integer) -> CrystalIncr {
+  // @P317 — build the field IN PLACE via field_add_cell rather than
+  // deep-copying a POPULATED `field_new(snap)` into `c.field`.  Deep-copying a
+  // ChunkField whose `cidx` spatial-index hash is non-empty corrupts the cidx
+  // (layout-dependent — buckets copy fine, cidx entries do not), so the rule
+  // finds no neighbours and every cell emits as an isolated stub → an inflated,
+  // non-deterministic mesh (the @P317 symptom-1 bug).  The incremental
+  // paint+rebuild path already builds cidx in place, which is why it is
+  // correct; this constructor now does the same.  The underlying core deep-copy
+  // bug (@P318) is now fixed too (copy_claims_hash_body re-inserts via hash::add);
+  // building in place is kept because it is also faster.
+  c = CrystalIncr{
+    snap: snap,
+    field: field_new(0, [], [], chunk_shift, halo_k),   // empty — built in place below
+    group_dim: group_dim,
+    chunks: [],
+  };
+  for cn_i in 0..len(snap.xs) {
+    field_add_cell(c.field, snap.xs[cn_i] ?? 0, snap.ys[cn_i] ?? 0);
+  }
+  clear_dirty(c.field);   // the per-cell adds marked everything dirty; we full-build below
+  // @P312 fixed (2026-05-22): native codegen now hoists a `c.field`-derived argument
+  // into a temp before forming the `&mut c` borrow, so passing `c` (&-ref) AND a
+  // `c.field` read to the same call no longer trips E0503 — inline form is fine.
+  crystal_incr_rebuild_chunks(c, all_inputs(c.field, halo_k), state, tick);
+  c
+}
+
+// Paint one cell — appends to the snapshot AND the field (marks the cell's
+// chunk + halo-border neighbours dirty).  Rebuild applies the change.
+pub fn crystal_incr_paint(c: &CrystalIncr, x: integer, y: integer, color: integer) {
+  c.snap.xs += [x]; c.snap.ys += [y]; c.snap.colors += [color];
+  field_add_cell(c.field, x, y);
+}
+
+// Erase one cell — the MIRROR of crystal_incr_paint: drop it from the field
+// (spatial index + chunk bucket) and mark its chunk (+ halo) dirty so the next
+// rebuild re-emits the affected chunks WITHOUT it.  Flows through the SAME
+// crystal_incr_rebuild path as a paint.  The snap slot is left orphaned (cell
+// indices stay stable — the projector's per-cell bloom births key on them).
+pub fn crystal_incr_erase(c: &CrystalIncr, x: integer, y: integer) {
+  field_remove_cell(c.field, x, y);
+}
+
+// Recolour one cell — update the consumer-side payload (snap.colors, indexed by
+// the field's cell index) and mark the cell's chunk dirty so the next rebuild
+// re-emits it with the new colour.  The cell stays in place (no index change),
+// so this is cheaper than an erase+paint.  A miss (no cell at (x,y)) is a no-op.
+pub fn crystal_incr_recolor(c: &CrystalIncr, x: integer, y: integer, color: integer) {
+  ix = idx_at(c.field.cidx, x, y);
+  if ix >= 0 {
+    c.snap.colors[ix] = color;
+    field_mark_dirty(c.field, x, y);
+  }
+}
+
+// Re-run ONLY the dirty chunks, then clear dirty.  O(dirty chunks · density),
+// flat in N under bounded density.
+pub fn crystal_incr_rebuild(c: &CrystalIncr, state: CrystalState, tick: integer) {
+  // @P312 fixed (2026-05-22) — inline form is fine (see crystal_incr_new).
+  crystal_incr_rebuild_chunks(c, collect_dirty_inputs(c.field, c.field.halo_k), state, tick);
+  clear_dirty(c.field);
+}
+
+// Assemble ONE group's mesh from its member chunks' CACHED meshes (concat).
+pub fn crystal_incr_assemble_group(c: CrystalIncr, gi: GroupInput) -> SegMesh {
+  gm = seg_mesh_new();
+  for j in 0..len(gi.chunk_cks) {
+    ce = c.chunks[gi.chunk_cks[j] ?? 0];
+    if ce { seg_mesh_append(gm, ce.mesh); }
+  }
+  gm
+}
+
+// The per-group assembled meshes (one VBO per group; the consumer reuses the
+// VBOs of groups that contain no dirty chunk).  G large ⇒ ~one mesh ⇒ one VBO.
+pub fn crystal_incr_group_meshes(c: CrystalIncr) -> vector<SegMesh> {
+  out: vector<SegMesh> = [];
+  gs = all_groups(c.field, c.group_dim);
+  for gi in gs { out += [crystal_incr_assemble_group(c, gi)]; }
+  out
+}
+
+// The whole crystal as one SegMesh — concat all cached chunk meshes directly
+// (for tests + single-VBO consumers).
+pub fn crystal_incr_full_mesh(c: CrystalIncr) -> SegMesh {
+  out = seg_mesh_new();
+  for ce in c.chunks { seg_mesh_append(out, ce.mesh); }
+  out
+}
+
+// Legacy float `CrystalMesh` full build — kept as the gridmesh-C1
+// SET-equivalence golden (tests/scripts/130).  Removable once the SegMesh
+// path is battle-tested in the projector.
+pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
+                             tick: integer) -> CrystalMesh {
+  mesh = CrystalMesh{
+    kinds: [], colors: [], cell_ix: [],
+    x0s: [], y0s: [], z0s: [],
+    x1s: [], y1s: [], z1s: [],
+  };
+  branch_base = HEX_SIZE * BRANCH_LEN_BASE;
+  branch_spacing_world = HEX_SIZE * BRANCH_SPACING;
+  deg30 = PI / 6.0;
+  centre_to_centre = SQRT3 * HEX_SIZE;
+  n = len(snap.xs);
+  // PF2: coord→index spatial hash, built once (O(N)) so neighbour /
+  // on-axis queries are O(1).  Now via gridmesh::build_index — @P300
+  // (hash-returning call assigned to a local) was fixed, retiring the old
+  // inline-build workaround.
+  cidx = build_index(snap.xs, snap.ys);
+  // Crystals grow from OLD cells to NEW: the snapshot is placement-ordered
+  // (index 0 = oldest paint), so for each cell we draw a short main back to
+  // the NEAREST OLDER filled cell on each of its six hex axes — but only if
+  // that cell is within MAX_MAIN_HEXES steps (gap ≤ 1 empty hex).  Cells
+  // separated by a wider gap have no connecting main and read as separate
+  // crystals; a later paint that narrows the gap draws the bridging main and
+  // merges them.  A cell with no older on-axis neighbour at all (a fresh
+  // seed / the oldest in its crystal) gets a small six-way starburst stub so
+  // it is visible while it waits for company.
+  for cs_i in 0..n {
+    cell_c = snap.colors[cs_i];
+    cell_x = snap.xs[cs_i];
+    cell_y = snap.ys[cs_i];
+    one_away = nbr_colors_idx(snap, cidx, cell_x, cell_y, 1);
+    two_away = nbr_colors_idx(snap, cidx, cell_x, cell_y, 2);
+    wx = cell_wx(cell_x, cell_y);
+    wz = cell_wz(cell_y);
+    cell_yh = cell_h_at(snap, cidx, cs_i);
+    // Nearest OLDER on-axis cell within MAX_MAIN_HEXES, per axis 0..5.
+    // PF2: O(1) per-axis lookups against the coord→index hash — for each
+    // axis, probe the cells 1 then 2 steps along it and take the nearest
+    // OLDER (lower snap index) one.  Equivalent to the old O(older) scan.
+    best_ix:   vector<integer> = [0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1];
+    best_dist: vector<integer> = [99, 99, 99, 99, 99, 99];
+    for jd in 0..6 {
+      for jk in 1..(MAX_MAIN_HEXES + 1) {
+        jj = idx_at(cidx, step_x(cell_x, cell_y, jd, jk), step_y(cell_x, cell_y, jd, jk));
+        if jj >= 0 && jj < cs_i {
+          best_dist[jd] = jk; best_ix[jd] = jj;
+          break;   // nearest older on this axis
+        }
+      }
+    }
+    has_main = false;
+    for hd in 0..6 { if best_ix[hd] >= 0 { has_main = true; } }
+    for d in 0..6 {
+      j = best_ix[d];
+      is_stub = j < 0;
+      // Connected cell: draw mains only on axes that reach an older cell.
+      // Seed cell (no older neighbour anywhere): draw a stub on every axis.
+      if has_main && is_stub { continue; }
+      // Geometry.  On-axis hex cells are exactly `dist * centre_to_centre`
+      // apart in world space and lie at the axis angle 60°·d, so no sqrt /
+      // atan2 is needed.  A growth main runs OLD→NEW: source = older cell j,
+      // tip = this (newer) cell i, pointing from j back toward i (180°
+      // opposite the i→j axis d).  A stub points outward from i along d.
+      ray_ang = 0.0; ray_len_d = 0.0;
+      src_x = 0.0; src_y = 0.0; src_z = 0.0;
+      tip_x = 0.0; tip_y = 0.0; tip_z = 0.0;
+      if is_stub {
+        ray_ang = (60.0 * d as float) * PI / 180.0;
+        ray_len_d = centre_to_centre * STUB_RAY_FRAC;
+        src_x = wx; src_y = cell_yh; src_z = wz;
+        tip_x = wx + ray_len_d * cos(ray_ang);
+        tip_y = cell_yh;
+        tip_z = wz + ray_len_d * sin(ray_ang);
+      } else {
+        ray_ang = (60.0 * d as float + 180.0) * PI / 180.0;
+        ray_len_d = best_dist[d] as float * centre_to_centre;
+        src_x = cell_wx(snap.xs[j], snap.ys[j]);
+        src_y = cell_h_at(snap, cidx, j);
+        src_z = cell_wz(snap.ys[j]);
+        tip_x = wx; tip_y = cell_yh; tip_z = wz;
+      }
+      if ray_len_d <= 0.0 { continue; }
+      rdx = tip_x - src_x;
+      rdz = tip_z - src_z;
+      dy = tip_y - src_y;
+      main_seg_id = d * 100 + 99;
+      main_col = pick_segment_color(cell_c, one_away, two_away,
+                                    cell_x, cell_y, main_seg_id);
+      mesh.kinds  += [KIND_MAIN];
+      mesh.x0s    += [src_x]; mesh.y0s += [src_y]; mesh.z0s += [src_z];
+      mesh.x1s    += [tip_x]; mesh.y1s += [tip_y]; mesh.z1s += [tip_z];
+      mesh.colors += [main_col];
+      mesh.cell_ix += [cs_i];
+      // Per-main age factor (0 = newborn, 1 = fully grown), keyed on the
+      // NEWER cell + axis.  Empty CrystalState ⇒ DEFAULT_AGE (static).
+      main_birth = lookup_main_birth(state, cell_x, cell_y, d);
+      age_f = DEFAULT_AGE;
+      if main_birth >= 0 { age_f = age_factor(main_birth, tick); }
+      // Constant-spacing ±30° side branches; short mains simply get fewer.
+      raw_forks = (ray_len_d / branch_spacing_world) as integer;
+      n_forks = raw_forks - 1;
+      if n_forks < 0 { n_forks = 0; }
+      branch_t_per_len = cos(deg30) / ray_len_d;
+      for f in 1..(n_forks + 1) {
+        t = f as float * branch_spacing_world / ray_len_d;
+        fork_x = src_x + rdx * t;
+        fork_z = src_z + rdz * t;
+        fork_y = src_y + t * dy;
+        blen = branch_base * (1.0 - t) * age_f;
+        branch_end_y = src_y + (t + blen * branch_t_per_len) * dy;
+        plus_ang = ray_ang + deg30;
+        plus_seg_id = d * 100 + f * 10 + 0;
+        plus_col = pick_segment_color(cell_c, one_away, two_away,
+                                      cell_x, cell_y, plus_seg_id);
+        mesh.kinds  += [KIND_SIDE];
+        mesh.x0s    += [fork_x];                        mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
+        mesh.x1s    += [fork_x + blen * cos(plus_ang)]; mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(plus_ang)];
+        mesh.colors += [plus_col];
+        mesh.cell_ix += [cs_i];
+        minus_ang = ray_ang - deg30;
+        minus_seg_id = d * 100 + f * 10 + 1;
+        minus_col = pick_segment_color(cell_c, one_away, two_away,
+                                       cell_x, cell_y, minus_seg_id);
+        mesh.kinds  += [KIND_SIDE];
+        mesh.x0s    += [fork_x];                         mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
+        mesh.x1s    += [fork_x + blen * cos(minus_ang)]; mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(minus_ang)];
+        mesh.colors += [minus_col];
+        mesh.cell_ix += [cs_i];
+      }
+    }
+  }
+  mesh
+}
+
+// Convenience wrapper — generates a static segment mesh at DEFAULT_AGE
+// (no growth animation).  Equivalent to `crystal_segments_aged` with an
+// empty state, which the aged code treats as "no birth records ⇒ render
+// at DEFAULT_AGE".
+pub fn crystal_segments(snap: CellSnap) -> SegMesh {
+  empty_state = CrystalState{
+    main_x: [], main_y: [], main_d: [], birth_tick: [],
+  };
+  crystal_segments_aged(snap, empty_state, 0)
+}

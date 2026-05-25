@@ -1,0 +1,16 @@
+[package]
+name = "loft-ffi-build"
+version = "0.1.0"
+edition = "2024"
+authors = ["Jurjen Stellingwerff"]
+license = "LGPL-3.0-or-later"
+description = "Build-script helper for loft native extension cdylibs — generates the loft_register! invocation from a package's loft.toml manifest"
+homepage = "https://github.com/jjstwerff/loft"
+repository = "https://github.com/jjstwerff/loft"
+keywords = ["loft", "ffi", "extension", "build"]
+categories = ["development-tools::build-utils"]
+
+[lib]
+name = "loft_ffi_build"
+
+[dependencies]

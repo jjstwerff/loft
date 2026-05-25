@@ -474,6 +474,76 @@ impl Stores {
         format!("{y:04}-{m:02}-{d:02}")
     }
 
+    /// Human-readable snapshot of every LIVE store's internal memory
+    /// utilisation — total capacity vs actual claimed data vs free space,
+    /// record / free-block counts, and the largest stores by capacity
+    /// with their creation site and type.  Exposed to loft as
+    /// `store_memory()` for diagnosing memory growth in a running program.
+    ///
+    /// Each per-store line shows `bc:<created_at>` — the bytecode position
+    /// where the store was allocated.  On the interpreter that maps back
+    /// to source via the `LOFT_LOG=static` bytecode dump; on `--native`
+    /// there are no bytecode positions so it reads `bc:0` and only the
+    /// `type` name identifies the origin.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn memory_report(&self) -> String {
+        let mut live = 0u32;
+        let (mut cap, mut data, mut free, mut recs, mut free_blk, mut mergeable) =
+            (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+        // (store index, usage, created_at bytecode pos, known_type)
+        let mut rows: Vec<(usize, crate::store::StoreUsage, u32, u16)> = Vec::new();
+        for (i, s) in self.allocations.iter().enumerate() {
+            if s.free {
+                continue;
+            }
+            let u = s.usage();
+            live += 1;
+            cap += u64::from(u.capacity_words);
+            data += u64::from(u.claimed_words);
+            free += u64::from(u.free_words);
+            recs += u64::from(u.claimed_count);
+            free_blk += u64::from(u.free_count);
+            mergeable += u64::from(u.mergeable_free_pairs);
+            rows.push((i, u, s.created_at, s.known_type));
+        }
+        rows.sort_by_key(|r| std::cmp::Reverse(r.1.capacity_words));
+        let mb = |w: u64| (w as f64) * 8.0 / 1_048_576.0;
+        let pct = |a: u64, b: u64| {
+            if b == 0 {
+                0.0
+            } else {
+                100.0 * (a as f64) / (b as f64)
+            }
+        };
+        let mut out = format!(
+            "stores: {live} live | cap {:.2} MB | data {:.2} MB ({:.0}%) | free {:.2} MB | records {recs} | free-blocks {free_blk} | mergeable-pairs {mergeable}",
+            mb(cap),
+            mb(data),
+            pct(data, cap),
+            mb(free)
+        );
+        use std::fmt::Write as _;
+        for (i, u, created_at, kt) in rows.iter().take(8) {
+            let tname = if (*kt as usize) < self.types.len() {
+                self.types[*kt as usize].name.clone()
+            } else {
+                "?".to_string()
+            };
+            let _ = write!(
+                out,
+                "\n  #{i:<5} {:>8.3} MB  used {:>3.0}%  recs {:<5} free-blk {:<4} mergeable {:<4} largest-free {:<7}w  type {tname} bc:{created_at}",
+                mb(u64::from(u.capacity_words)),
+                u.used_pct(),
+                u.claimed_count,
+                u.free_count,
+                u.mergeable_free_pairs,
+                u.largest_free_words,
+            );
+        }
+        out
+    }
+
     /// Native-codegen variant of `os_home` that returns an owned `String`.
     ///
     /// # Panics

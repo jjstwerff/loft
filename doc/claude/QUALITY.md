@@ -80,7 +80,7 @@ Items below are "what to BUILD" derived from the design content in this document
 
 | Item | Section | Status |
 |---|---|---|
-| **B2-B7** — struct-enum bugs gating P54 | [§ Compiler blockers](#compiler-blockers--struct-enum-bugs) | Audit needed; some may have closed via @PLAN17 / @PLAN19 sweeps |
+| **B2-B7** — struct-enum bugs gating P54 | [§ Compiler blockers](#compiler-blockers--struct-enum-bugs) | **AUDITED + CLOSED 2026-05-21 on BOTH backends.**  18 `p54_b*`/`b7_*` interpreter guards green (0 ignored); the one native-only residual (@P301 — struct-enum returned via an intermediate local) was fixed the same day (added the `Type::Enum(_, true, _)` arm to `add_defaults`) and is guarded cross-mode by `tests/scripts/121-struct-enum-return-local.loft`. |
 
 For the open programmer-biting issues list (running, not plan-shaped), see [§ Open programmer-biting issues](#open-programmer-biting-issues) above.  For ranked enhancement work, see [§ Enhancement tiers](#enhancement-tiers).  For ordering across all open items, see [§ Recommended landing order](#recommended-landing-order).
 
@@ -1684,6 +1684,41 @@ tracks the implementation.
 ---
 
 ## Compiler blockers — struct-enum bugs
+
+**AUDIT 2026-05-21 — all B1-B7 closed on the interpreter.**  Ran the
+full B-family regression set (`cargo test --release --test issues
+p54_b` + `b7_`): **18 tests pass, 0 ignored**.  The `#[ignore]`
+markers the historical notes below reference are gone; the biting
+reproducers each verified live:
+
+- **B2-runtime** (`s = Idle;` bare unit-variant in a mixed enum) —
+  `p54_b2_unit_variant_literal_construction` + the qualified form pass
+  on both backends.  The "layer 3 interpreter codegen NOT landed" note
+  below is **stale** — it closed via the cross-PR struct-enum
+  return-slot work.
+- **B3** (struct-enum tail-expression / intermediate-local return) —
+  `p54_b3_float_via_intermediate` etc. pass on the interpreter.  The
+  "4-layer surgery, open" design below is **stale for the interpreter**.
+- **B1/B5/B6/B7** — confirmed FIXED (as the notes already record).
+
+**Native-only residual @P301 — FIXED 2026-05-21.**  The B3
+intermediate-local form (`fn mk() -> JV { n = A{..}; n }`, and the
+explicit `return n;` form) used to fail *native* compilation — the call
+site emitted `n_mk(cell, ())` for a callee whose local was hoisted into
+a hidden `DbRef` return-slot param (E0308).  The `p54_b3_*` guards are
+interpreter-only, so this went unnoticed.  Root cause was NOT the call
+site but `add_defaults` (`src/parser/mod.rs`): it had work-ref-allocating
+arms for `Type::Vector`/`Type::Reference` hidden params but none for
+`Type::Enum(_, true, _)`, so the hidden struct-enum arg stayed
+`Value::Null` → `()`.  Fixed by adding the mirror `Type::Enum(_, true, _)`
+arm; the call-site emitter then threads the work-ref automatically.  No
+interpreter regression.  Cross-mode guard:
+`tests/scripts/121-struct-enum-return-local.loft`.
+
+The historical fix-design notes below are preserved as the narrowing
+audit trail, not as current-state claims.
+
+---
 
 **Status (2026-04-13):** Concrete fix designs documented for all
 four open compiler bugs (B2-runtime, B3, B5, B7) following an

@@ -1486,3 +1486,122 @@ pub fn platform_lib_name(stem: &str) -> String {
         format!("lib{stem}.so")
     }
 }
+
+/// Public API for generated native code that needs to call a cdylib
+/// function with a `LoftStore` handle.
+///
+/// @PLAN12 phase 3.5a (2026-05-24) — added so the `--native` codegen
+/// can drive store-allocating cdylib calls (e.g. `n_rand_indices`,
+/// `n_load_png`).  The interpreter's `dispatch_call` does the same
+/// thing inline (`make_loft_store` + `CURRENT_STORES` setup at
+/// `src/extensions.rs:570` and `:632`); this module exposes the same
+/// machinery as a `pub` API constructing `loft_ffi::LoftStore`
+/// directly (the interpreter still uses the local `#[repr(C)]`
+/// mirrors at lines 155-192 for its internal dispatch).
+///
+/// Usage from generated code:
+/// ```ignore
+/// let _guard = loft::native_call::enter(stores);
+/// let ls = loft::native_call::build_store(stores, store_nr);
+/// let r = unsafe { external_crate::n_some_fn(ls, arg1, arg2) };
+/// // _guard's Drop clears CURRENT_STORES.
+/// ```
+#[cfg(feature = "native-extensions")]
+#[allow(dead_code)] // Consumed by generated native code (separate compilation unit),
+// not by the loft binary itself.  Clippy can't see those callers.
+pub mod native_call {
+    use crate::database::Stores;
+
+    /// C-ABI callback equivalent to `super::ffi_claim` but typed
+    /// against `loft_ffi::LoftStoreCtx` so the resulting
+    /// `loft_ffi::LoftStore` can be passed to a generated-code
+    /// callsite without `transmute`.
+    unsafe extern "C" fn ffi_claim_pub(ctx: loft_ffi::LoftStoreCtx, words: u32) -> u32 {
+        let store_nr = ctx._opaque as usize as u16;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::CURRENT_STORES.with(|c| {
+                let stores = unsafe { &mut *c.get() };
+                let store = &mut stores.allocations[store_nr as usize];
+                store.claim(words)
+            })
+        }))
+        .unwrap_or(0)
+    }
+
+    unsafe extern "C" fn ffi_resize_pub(ctx: loft_ffi::LoftStoreCtx, rec: u32, words: u32) -> u32 {
+        let store_nr = ctx._opaque as usize as u16;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::CURRENT_STORES.with(|c| {
+                let stores = unsafe { &mut *c.get() };
+                let store = &mut stores.allocations[store_nr as usize];
+                store.resize(rec, words)
+            })
+        }))
+        .unwrap_or(rec)
+    }
+
+    unsafe extern "C" fn ffi_reload_pub(
+        ctx: loft_ffi::LoftStoreCtx,
+        out_ptr: *mut *mut u8,
+        out_size: *mut u32,
+    ) {
+        let store_nr = ctx._opaque as usize as u16;
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::CURRENT_STORES.with(|c| {
+                let stores = unsafe { &*c.get() };
+                let store = &stores.allocations[store_nr as usize];
+                unsafe {
+                    *out_ptr = store.base_ptr();
+                    *out_size = store.capacity_words();
+                }
+            });
+        }));
+    }
+
+    /// Construct a `loft_ffi::LoftStore` handle pointing at the
+    /// store identified by `store_nr`.  Callbacks read from the
+    /// `CURRENT_STORES` thread-local — call `enter()` before this
+    /// to set it up.
+    #[must_use]
+    pub fn build_store(stores: &Stores, store_nr: u16) -> loft_ffi::LoftStore {
+        let store = stores.store(&crate::keys::DbRef {
+            store_nr,
+            rec: 0,
+            pos: 0,
+        });
+        loft_ffi::LoftStore {
+            ptr: store.base_ptr(),
+            size: store.capacity_words(),
+            ctx: loft_ffi::LoftStoreCtx {
+                _opaque: store_nr as usize as *mut (),
+            },
+            claim_fn: Some(ffi_claim_pub),
+            reload_fn: Some(ffi_reload_pub),
+            resize_fn: Some(ffi_resize_pub),
+        }
+    }
+
+    /// RAII guard: sets `CURRENT_STORES` on entry, clears on drop.
+    /// One per cdylib call; nested calls are NOT supported (would
+    /// stomp the thread-local).  Native codegen emits one per
+    /// call-site, scoped via `let _guard = native_call::enter(stores);`.
+    pub struct StoresGuard {
+        _priv: (),
+    }
+
+    /// Set the thread-local current stores pointer for the
+    /// duration of the returned guard.  Generated code:
+    /// `let _guard = native_call::enter(stores);` immediately
+    /// before a cdylib call.
+    pub fn enter(stores: &mut Stores) -> StoresGuard {
+        let ptr = std::ptr::from_mut::<Stores>(stores);
+        super::CURRENT_STORES.with(|c| c.set(ptr));
+        StoresGuard { _priv: () }
+    }
+
+    impl Drop for StoresGuard {
+        fn drop(&mut self) {
+            super::CURRENT_STORES.with(|c| c.set(std::ptr::null_mut()));
+        }
+    }
+}

@@ -53,29 +53,40 @@ struct Cell {
                                // server restarts via the persisted snapshot.
 }
 
-struct Client {
-  ws:     server::WebSocket,
-  active: boolean not null,         // false → drop on next sweep
-  color:  integer not null,         // last colour_select (1-9, 0 = cleared)
-  lx:     integer not null,         // last-painted x
-  ly:     integer not null,
+// Per-connected-client state, keyed by the event pump's client id (cid).
+// The pump owns the sockets + fan-out (srv.broadcast / send_to); this only
+// tracks what the application needs: the replay cursor and the last-painted
+// position for the active-player heartbeat.
+struct Player {
+  cid:              integer not null,   // event-pump client id (hash key)
+  lx:               integer not null,   // last-painted x (active-player signal)
+  ly:               integer not null,
+  last_active_tick: integer not null,   // world.tick of this player's last
+                                        // paint — 0 = never painted (1.7)
+  // Incremental replay (@PLAN36-1.8): on connect we snapshot the current cell
+  // keys here and stream them a budget at a time from the main loop, so a
+  // new client never blocks the pump on a full O(cells) world dump.
+  replay_keys:      vector<text>,
+  replay_pos:       integer not null,   // next index into replay_keys to send
 }
 
 struct World {
   cells:        hash<Cell[ck]>,
-  clients:      vector<Client>,
+  players:      hash<Player[cid]>,   // event-pump clients, keyed by cid
+  srv:          server::Server,      // for broadcast / send_to fan-out
   dirty:        boolean not null,    // mutated since last snapshot?
   last_save_us: integer not null,    // ticks() (µs, i32) of last successful save
                                      // — wraps every ~35 min, harmless for a 5 s
                                      // window: a wrap during the window just skips
                                      // one snapshot until the next dirty event
-  tick:         integer not null,    // monotonic 10 Hz wall-clock counter (sub-task
-                                     // 1.4 partial — growth/age only; decay deferred).
+  tick:         integer not null,    // monotonic 10 Hz wall-clock counter.
                                      // Each non-empty cell records its birth_tick so
                                      // age = world.tick - birth_tick (in 100 ms units).
   last_tick_us: integer not null,    // ticks() of the most recent tick-advance —
                                      // same wrap caveat as last_save_us; a wrap
                                      // simply delays the next tick by one window.
+  last_active_us: integer not null,  // ticks() of the last active-player
+                                     // heartbeat emit (sub-task 1.7, 1 Hz)
 }
 
 // ── Wire helpers — leaves first (@P281) ─────────────────────────────────────
@@ -169,6 +180,38 @@ SNAPSHOT_INTERVAL_US = 5000000;      // 5 s in µs (fits in i32; ticks() diff pr
 // silently dropping ticks.
 TICK_INTERVAL_US = 100000;           // 100 ms in µs
 
+// ── Decay (sub-task 1.4) ─────────────────────────────────────────────────────
+// Automatic erosion: a non-empty cell is fully removed once its age
+// (world.tick - birth_tick, in 100 ms units) passes its lease.  The lease
+// grows with filled-neighbour count, so cluster EDGES (fewest neighbours)
+// cross the threshold first and decay works inward — "inverse growth" back
+// toward empty with no audience effort.  Timing per 01-server-state.md §
+// Tick loop (base 5 min, +1 min per neighbour, 30 s window).  All three are
+// env-tunable (in ticks) so a load / visual test can speed erosion up:
+//   DECAY_BASE / DECAY_LEASE / DECAY_WINDOW.
+//
+// NOTE: the eligible-but-not-yet-removed shrink ANIMATION the design
+// describes needs per-cell age on the wire; the current text wire
+// (`4:x,y,color`) carries only colour, so this MVP does a hard removal at
+// full expiry and the client treats it like any other clear.  Wiring age
+// through is phase 1 step 2 (JSON-in / binary-out migration).
+DECAY_BASE_DEFAULT   = 3000;          // 5 min @ 10 Hz
+DECAY_LEASE_DEFAULT  = 600;           // +1 min per filled neighbour
+DECAY_WINDOW_DEFAULT = 300;           // 30 s eligible → removed
+ACTIVE_HEARTBEAT_US  = 1000000;       // 1 s — active-player signal cadence (1.7)
+
+// Cells streamed to each mid-replay player per loop iteration (@PLAN36-1.8):
+// bounds the per-connect cost so a big world is never dumped in one go.
+// Accept / per-client polling / fan-out are handled by the Rust event pump
+// (srv.poll_event / srv.broadcast), so there is no loft-side accept batching
+// to tune here.
+REPLAY_BUDGET = 64;
+
+fn env_int(name: text, dflt: integer) -> integer {
+  raw = env_variable(name);
+  if raw == "" { dflt } else { raw as integer }
+}
+
 // Byte widths come from each field's declared type — `c.x: i32`
 // writes 4 bytes automatically, `c.color: u8` writes 1.  The only
 // remaining explicit cast is on `n` because it's a loose local
@@ -258,33 +301,47 @@ fn world_load(world: World) {
   }
 }
 
-// Broadcast a frame to every client that's still marked active.  send()
-// returns false when the underlying socket is closed — flag the client
-// for removal on the next sweep.
+// Fan out a frame to every connected client.  The event pump iterates the
+// socket table in Rust (srv.broadcast) — O(clients) native, no per-client
+// loft work and no manual liveness bookkeeping (dead sockets are pruned by
+// the pump on their next failed send / poll).
 fn broadcast(world: World, msg: text) {
-  for c in world.clients {
-    if c.active {
-      if !c.ws.send(msg) {
-        c.active = false;
+  world.srv.broadcast(msg);
+}
+
+// Queue a full-world replay for player `cid`: append the current cell keys
+// to its replay list; the main loop streams them via advance_replays.  Used
+// both on connect and for the snapshot-request (msg 6) re-replay.  Append
+// (not reassign) so a repeat request just extends the list — advance_replays
+// reads each cell's CURRENT value at send time, so re-replay is consistent.
+fn queue_replay(world: World, cid: integer) {
+  p = world.players[cid];
+  if p == null { return; }
+  for cell in world.cells { p.replay_keys += [cell.ck]; }
+}
+
+// Stream up to REPLAY_BUDGET cells to every player that still has replay
+// pending, via srv.send_to(cid).  Each cell's colour is read at send time
+// (skipping any since emptied), so replay never overwrites a fresher live
+// delta with a stale snapshot value.  Bounds per-iteration cost.
+fn advance_replays(world: World) {
+  for p in world.players {
+    budget = REPLAY_BUDGET;
+    while p.replay_pos < len(p.replay_keys) && budget > 0 {
+      rk = p.replay_keys[p.replay_pos];
+      p.replay_pos = p.replay_pos + 1;
+      cell = world.cells[rk];
+      if cell != null {
+        world.srv.send_to(p.cid, delta_frame(cell.x, cell.y, cell.color));
+        budget = budget - 1;
       }
     }
   }
 }
 
-// Replay the current world to a single client.  One frame per non-empty
-// cell.  If any send fails, abort and mark the client inactive.
-fn replay_world_to(world: World, target: Client) {
-  for cell in world.cells {
-    if !target.ws.send(delta_frame(cell.x, cell.y, cell.color)) {
-      target.active = false;
-      return;
-    }
-  }
-}
-
-// Apply one parsed message from a client.  May mutate world.cells and
-// world.clients, may broadcast.
-fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) {
+// Apply one parsed message from player `cid`.  May mutate world.cells +
+// world.players and broadcast.
+fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
   if msg_id == 1 {
     // seed "x,y,color"
     (x, y, c) = parse_xyc(payload);
@@ -304,8 +361,12 @@ fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) 
     }
     world.cells += [Cell{ck: k, x: x, y: y, color: c,
                          birth_tick: world.tick}];
-    sender.lx = x;
-    sender.ly = y;
+    p = world.players[cid];
+    if p != null {
+      p.lx = x;
+      p.ly = y;
+      p.last_active_tick = world.tick;
+    }
     broadcast(world, delta_frame(x, y, c));
     world.dirty = true;
   } else if msg_id == 2 {
@@ -318,41 +379,63 @@ fn handle_message(world: World, sender: Client, msg_id: integer, payload: text) 
       world.dirty = true;
     }
   } else if msg_id == 3 {
-    // color_select "color"
-    c = payload as integer;
-    sender.color = c;
-    broadcast(world, active_frame(sender.lx, sender.ly));
+    // color_select — no-op server-side.  The active-player signal is emitted
+    // by the 1 Hz heartbeat (sub-task 1.7), not per-change; the paint frame
+    // already carries its own colour, so the server keeps no per-player one.
   } else if msg_id == 6 {
-    // snapshot request — re-replay world to this sender only
+    // snapshot request — queue an incremental re-replay to this player.
     println("single-port: [snapshot req] cells={len(world.cells)}");
-    replay_world_to(world, sender);
+    queue_replay(world, cid);
   }
 }
 
-// Drain all pending messages on every active client.  Drops clients
-// whose send/recv suggests a closed socket.  Returns the number of
-// messages processed this sweep (caller uses it to decide whether to
-// idle-sleep).
-fn poll_clients(world: World) -> integer {
-  processed = 0;
-  for c in world.clients {
-    if !c.active { continue; }
-    while true {
-      msg = c.ws.next();
-      if msg == null { break; }
-      // Parse "<msg_id>:<payload>"
-      colon = msg.find(":");
-      if colon == null {
-        println("single-port: dropped malformed frame: {msg}");
-        continue;
-      }
-      msg_id  = msg[..colon] as integer;
-      payload = msg[colon + 1..];
-      handle_message(world, c, msg_id, payload);
-      processed = processed + 1;
+// Count filled hex neighbours of (x, y) by probing the cell hash for the 6
+// adjacent keys.  Mirrors audience_crystal::is_hex_nbr's odd-row offset rule
+// (same-row x±1; rows y±1 shift by parity) so server erosion matches the
+// renderer's adjacency.  O(6) per cell, not O(N).
+fn filled_nbr_count(world: World, x: integer, y: integer) -> integer {
+  parity = y - (y / 2) * 2;
+  if parity < 0 { parity = parity + 2; }
+  n = 0;
+  if world.cells[cell_key(x - 1, y)] != null { n = n + 1; }
+  if world.cells[cell_key(x + 1, y)] != null { n = n + 1; }
+  if parity == 0 {
+    if world.cells[cell_key(x - 1, y - 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x,     y - 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x - 1, y + 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x,     y + 1)] != null { n = n + 1; }
+  } else {
+    if world.cells[cell_key(x,     y - 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x + 1, y - 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x,     y + 1)] != null { n = n + 1; }
+    if world.cells[cell_key(x + 1, y + 1)] != null { n = n + 1; }
+  }
+  n
+}
+
+// One decay pass.  Removes every cell whose age has passed its neighbour-
+// extended lease, broadcasting a removal delta for each.  Neighbour counts
+// are read from the pre-removal snapshot so a single sweep peels one edge
+// layer; the next sweep re-evaluates with the reduced counts, eroding
+// inward.  Expired coords are collected first, then removed, so the hash is
+// not mutated mid-iteration.
+fn decay_sweep(world: World, base: integer, lease: integer, window: integer) {
+  expired: vector<text> = [];
+  for cell in world.cells {
+    age = world.tick - (cell.birth_tick as integer);
+    eff = base + lease * filled_nbr_count(world, cell.x as integer, cell.y as integer);
+    if age >= eff + window {
+      expired += [cell.ck];
     }
   }
-  processed
+  for k in expired {
+    if world.cells[k] != null {
+      world.cells[k] = null;
+      (rx, ry) = parse_xy(k);    // ck is "x,y" — re-derive for the delta
+      broadcast(world, delta_frame(rx, ry, 0));
+      world.dirty = true;
+    }
+  }
 }
 
 fn main() {
@@ -372,12 +455,18 @@ fn main() {
 
   world = World{
     cells: [],
-    clients: [],
+    players: [],
+    srv: srv,
     dirty: false,
     last_save_us: ticks(),
     tick:         0,         // overwritten by world_load if a v2 snapshot exists
     last_tick_us: ticks(),
+    last_active_us: ticks(),
   };
+  decay_base   = env_int("DECAY_BASE",   DECAY_BASE_DEFAULT);
+  decay_lease  = env_int("DECAY_LEASE",  DECAY_LEASE_DEFAULT);
+  decay_window = env_int("DECAY_WINDOW", DECAY_WINDOW_DEFAULT);
+  println("single-port: decay base={decay_base} lease/nbr={decay_lease} window={decay_window} (ticks @ 10 Hz)");
   world_load(world);
   world.last_tick_us = ticks();    // reset the cadence clock to "now" after
                                    // load so a tick doesn't fire mid-init
@@ -385,49 +474,48 @@ fn main() {
   while true {
     work = 0;
 
-    // 1. Accept any new connection (non-blocking).
-    req = srv.next_nonblocking();
-    if req != null {
-      if req.path == "/ws" {
-        ws = server::ws_upgrade();
-        if ws == null {
-          println("single-port: ws_upgrade() failed");
+    // 1. Drain pump events (@PLAN36-1.8: the supported multi-client path —
+    //    Rust accepts, polls, and parses frames; idle clients cost ~nothing
+    //    so connect latency stays low even with many phones).  HTTP requests
+    //    arrive as `ev.http` (serve the page); WS clients as connect +
+    //    message events.
+    while true {
+      ev = srv.poll_event();
+      if ev == null { break; }
+      work = work + 1;
+      if ev.http {
+        if ev.path == "/" || ev.path == "/index.html" {
+          srv.respond_html(read_index());
         } else {
-          world.clients += [Client{
-            ws:     ws,
-            active: true,
-            color:  0,
-            lx:     0,
-            ly:     0,
-          }];
-          println("single-port: ws client connected — total active={len(world.clients)}");
-          // Replay current world to the new client.
-          new_client = world.clients[len(world.clients) - 1];
-          replay_world_to(world, new_client);
+          srv.respond_404();
         }
-        work = work + 1;
-      } else if req.path == "/" || req.path == "/index.html" {
-        println("single-port: GET {req.path} → 200 (index.html)");
-        req.respond_html(read_index());
-        work = work + 1;
-      } else {
-        println("single-port: GET {req.path} → 404");
-        req.respond_404();
-        work = work + 1;
+      } else if ev.connected {
+        // Register the player + seed its replay cursor with a snapshot of
+        // the current cell keys; advance_replays streams them a budget at a
+        // time so a connect never dumps the whole world in one go.
+        ks: vector<text> = [];
+        for cell in world.cells { ks += [cell.ck]; }
+        world.players += [Player{
+          cid: ev.cid, lx: 0, ly: 0, last_active_tick: 0,
+          replay_keys: ks, replay_pos: 0,
+        }];
+        println("single-port: ws client {ev.cid} connected — replay={len(ks)} cells queued");
+      } else if ev.message {
+        handle_message(world, ev.cid, ev.msg_id, ev.payload);
       }
     }
 
-    // 2. Poll each WS client for pending messages.
-    work = work + poll_clients(world);
+    // 2. Stream queued world-replay to any player mid-replay, a bounded
+    //    budget at a time.
+    advance_replays(world);
 
-    // 3. Tick advance — fixed-rate wall clock @ 10 Hz (sub-task 1.4
-    //    partial: growth/age only, decay deferred).  Every iteration
-    //    we check `ticks() - world.last_tick_us` and advance as many
-    //    ticks as fit in the elapsed window — so a long pause catches
-    //    up rather than dropping ticks silently.  Renderers read
-    //    `world.tick - cell.birth_tick` (in 100 ms units) as the cell's
-    //    age and scale visual growth from that.  No autonomous mutation
-    //    of cells here yet; the loop just turns the clock.
+    // 3. Tick advance — fixed-rate wall clock @ 10 Hz (sub-task 1.4).
+    //    Every iteration we check `ticks() - world.last_tick_us` and
+    //    advance as many ticks as fit in the elapsed window — so a long
+    //    pause catches up rather than dropping ticks silently.  Renderers
+    //    read `world.tick - cell.birth_tick` (in 100 ms units) as the
+    //    cell's age and scale visual growth from that.  After the clock
+    //    turns we run one decay sweep (automatic edge-first erosion).
     now_us = ticks();
     elapsed = now_us - world.last_tick_us;
     if elapsed >= TICK_INTERVAL_US {
@@ -444,15 +532,41 @@ fn main() {
         for _ in world.cells { ncells = ncells + 1; }
         println("single-port: [tick] world.tick={world.tick} cells={ncells}");
       }
+      // Decay sweep — cheap (O(6N)) and only on a tick boundary.  Removals
+      // are rare and edge-first because lifetimes are minutes, so this does
+      // not burst the wire.
+      decay_sweep(world, decay_base, decay_lease, decay_window);
+    }
+
+    // 3b. Active-player heartbeat (sub-task 1.7) — once per second, re-pulse
+    //     the most-recently-active painter's cell to all clients so late
+    //     joiners / clients that missed the instant delta still get a
+    //     "where's the action" hint.  1 Hz was the validated cadence
+    //     (01-server-state.md § Active-player signal).
+    if ticks() - world.last_active_us >= ACTIVE_HEARTBEAT_US {
+      world.last_active_us = ticks();
+      best_tick = 0;
+      best_x = 0;
+      best_y = 0;
+      found = false;
+      for hb in world.players {
+        if hb.last_active_tick > best_tick {
+          best_tick = hb.last_active_tick;
+          best_x = hb.lx;
+          best_y = hb.ly;
+          found = true;
+        }
+      }
+      if found {
+        broadcast(world, active_frame(best_x, best_y));
+      }
     }
 
     // 4. Persistence — periodic snapshot.  Fires from the main loop
     //    only when (a) state changed since last save, AND (b) at least
-    //    SNAPSHOT_INTERVAL_US has elapsed.  The save runs synchronously
-    //    here for now — that's fine because (i) it only fires every 5 s
-    //    not per-event, and (ii) a few-hundred-cell snapshot writes in
-    //    under a millisecond.  Background-thread snapshot is the next
-    //    upgrade per the design doc.
+    //    SNAPSHOT_INTERVAL_US has elapsed.  Background-thread snapshot is the
+    //    fuller fix (Tier B); for now the synchronous write is fine — it only
+    //    fires every 5 s and a few-hundred-cell dump takes well under a ms.
     if world.dirty && ticks() - world.last_save_us > SNAPSHOT_INTERVAL_US {
       world_save(world);
     }

@@ -1,0 +1,14 @@
+        fn one_call() -> integer {
+            inner = fn(x: integer) -> integer { x + 5 };
+            outer = fn(y: integer) -> integer { inner(y) + 1 };
+            outer(10)
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_call();
+                assert(r == 16, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        

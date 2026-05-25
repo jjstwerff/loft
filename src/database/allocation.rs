@@ -3,6 +3,7 @@
 //! Memory/store allocation helpers and claim management.
 
 use crate::database::{Parts, Stores, WorkerStores};
+use crate::hash;
 use crate::keys::DbRef;
 use crate::store::Store;
 use crate::tree;
@@ -101,7 +102,18 @@ impl Stores {
         // Clear the bitmap bit for this slot (it is now active).
         self.clear_free_bit(slot);
         let store = &mut self.allocations[slot as usize];
-        assert!(store.free, "Allocating a used store");
+        // @P317 — enrich the tripwire: this fires when the free-bitmap and the
+        // per-store `free` flag disagree (a double-free, an rc under-count, or a
+        // store-pool overflow that wrapped `max` to 0 and re-selected slot 0).
+        // The slot + rc + type + name pinpoint the victim far faster than the
+        // bare message did during the @P311/@P313/@P317 store-ownership hunts.
+        assert!(
+            store.free,
+            "Allocating a used store #{slot} (rc={}, known_type={}, requested by={})",
+            store.ref_count,
+            store.known_type,
+            if name.is_empty() { "<anon>" } else { name },
+        );
         store.free = false;
         store.ref_count = 1;
         store.created_at = 0;
@@ -342,6 +354,48 @@ impl Stores {
         if wi < self.free_bits.len() {
             self.free_bits[wi] &= !(1u64 << bi);
         }
+    }
+
+    /// Collect a description for every leaked store at program exit.
+    ///
+    /// Mirrors `State::collect_store_leaks` (which operates on the
+    /// interpreter's `State`) but lives on `Stores` so the **native**
+    /// runtime can run the same check — the generated `main` bootstrap
+    /// calls this when `LOFT_NATIVE_LEAK_CHECK` is set so leak
+    /// regressions surface on `--native` as well as `--interpret`.
+    /// Same filtering: skip the stack store (#0), locked constants /
+    /// worker borrows, and `const_refs`.
+    #[must_use]
+    /// @P317 — leaked stores grouped BY TYPE, most-leaked first.  The previous
+    /// per-store `N(bc:created_at)` listing (truncated to 5 by the leak-check
+    /// preview) buried the signal in store numbers; aggregating by type names
+    /// the culprit directly (e.g. `kt=68 ChunkKey×6026`), which is what
+    /// pinpointed the @P317 native ref-local leak.  Used by
+    /// `LOFT_NATIVE_LEAK_CHECK` (native) and `LOFT_STORES=summary` (interp).
+    pub fn collect_store_leaks(&self) -> Vec<String> {
+        let mut by_type: std::collections::BTreeMap<(u16, &str), usize> =
+            std::collections::BTreeMap::new();
+        for (s_nr, s) in self.allocations.iter().enumerate() {
+            if s_nr == 0 {
+                continue; // stack store — always alive
+            }
+            if s.is_locked() || self.const_refs.iter().any(|cr| cr.store_nr == s_nr as u16) {
+                continue;
+            }
+            if !s.free {
+                let tn = self
+                    .types
+                    .get(s.known_type as usize)
+                    .map_or("?", |t| t.name.as_str());
+                *by_type.entry((s.known_type, tn)).or_default() += 1;
+            }
+        }
+        let mut leaked: Vec<((u16, &str), usize)> = by_type.into_iter().collect();
+        leaked.sort_by_key(|&(_, n)| std::cmp::Reverse(n)); // most-leaked first
+        leaked
+            .into_iter()
+            .map(|((kt, tn), n)| format!("kt={kt} {tn}×{n}"))
+            .collect()
     }
 
     /**
@@ -822,8 +876,16 @@ impl Stores {
             self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
             return;
         }
-        let into = self.store_mut(to).claim(1 + cur.div_ceil(2));
+        // @P309 — claim by element COUNT (header word + one 4-byte rec-id
+        // slot per element, 2 slots/word), NOT by `cur` (the source
+        // structure's rec-id, which is meaningless as a size), and WRITE THE
+        // LENGTH HEADER (offset 4) — without it the copied `array`/`ordered`
+        // read back as length 0 (silent data loss; e.g. a `sorted<T>` field
+        // becomes an `ordered<T>` secondary index when an `index<T>` exists,
+        // and deep-copying the owning struct lost its elements).
+        let into = self.store_mut(to).claim(1 + length.div_ceil(2));
         self.store_mut(to).set_u32_raw(to.rec, to.pos, into);
+        self.store_mut(to).set_u32_raw(into, 4, length);
         for i in 0..length {
             let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
             let new = self.store_mut(to).claim(size.div_ceil(8));
@@ -857,75 +919,71 @@ impl Stores {
         }
     }
 
+    /// Deep-copy a `hash<T[key]>` field from `rec` into `to`.  `tp` is the
+    /// HASH type (not the content type).
+    ///
+    /// @P318 — re-INSERT each entry into an emptied destination via `hash::add`
+    /// rather than copying the bucket array slot-for-slot.  A hash's bucket
+    /// count is `elms = (room - 1) * 2`, where `room` is read from the record's
+    /// SIZE HEADER (offset 0) — and `Store::claim` may hand back a block LARGER
+    /// than requested (it only splits when the surplus exceeds 1/3; see
+    /// `Store::claim_block`).  The old slot-for-slot copy laid entries out for
+    /// the SOURCE's `room`, but the destination record's header (its own
+    /// `room`) could differ, so `hash::find` later probed `key % dest_elms` —
+    /// a DIFFERENT start slot — and missed entries.  That surfaced only as a
+    /// wrong / NON-deterministic result (whether `claim` over-sizes depends on
+    /// free-list state) and was immune to `zero_claim` (the probe START shifts,
+    /// not just the slack).  Re-inserting rebuilds the destination consistently
+    /// with its own `room`, exactly as the source was built — mirroring
+    /// `copy_claims_index_body`.  `hash::add` also maintains the length word and
+    /// rehash invariants, subsuming the earlier @P317 length-word and @P290
+    /// loop-bound fixes.
     pub(super) fn copy_claims_hash_body(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {
-        let size = u32::from(self.size(tp));
         let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+        // Start the destination as an empty hash; `hash::add` claims the bucket
+        // record on the first insert and rehashes (growing `room`) as it fills.
+        self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
         if cur == 0 {
-            self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
             return;
         }
-        // @P290 / sibling — the hash bucket record's layout, per
-        // `src/hash.rs::add`, is:
-        //   offset 0: room   (i32, in words — total record size)
-        //   offset 4: length (u32, current entry count)
-        //   offset 8..: elms = (room - 1) * 2 bucket slots (u32 rec-nrs)
-        // The previous code read `room` from offset 0 (calling it
-        // `length`), claimed `room` words correctly, but then iterated
-        // `1..room*2` — which both skipped the first bucket (offset 8,
-        // i=0) AND walked 2 indices PAST the claim (offsets 72 + 76 for
-        // a 72-byte allocation), corrupting heap metadata → SIGSEGV.
-        // The correct bound is `elms = (room - 1) * 2` starting at i=0.
+        let content_tp = match &self.types[tp as usize].parts {
+            Parts::Hash(c, _) => *c,
+            other => {
+                panic!("copy_claims_hash_body called with non-hash type {tp} (parts: {other:?})")
+            }
+        };
+        let size = u32::from(self.size(content_tp));
+        let keys = self.types[tp as usize].keys.clone();
+        // Bucket record layout (per `src/hash.rs::add`): offset 0 = room (record
+        // size in words), offset 4 = length, offset 8.. = (room - 1) * 2 bucket
+        // slots (u32 rec-nrs).  Walk every source slot and re-insert each entry.
         let room = self.store(rec).get_u32_raw(cur, 0);
         let elms = (room - 1) * 2;
-        let into = self.store_mut(to).claim(room);
-        self.store_mut(to).set_u32_raw(to.rec, to.pos, into);
         for i in 0..elms {
             let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
             if elm == 0 {
-                self.store_mut(to).set_u32_raw(into, 8 + 4 * i, 0);
                 continue;
             }
-            // @P295 — element record layout (per `record_new`'s
-            // Hash arm): offset 0 = record header, offset 4 = back-pointer,
-            // offset 8 = struct payload (`size` bytes).  The OLD copy claimed
-            // `size.div_ceil(8)` words (missing the +1 header word) and
-            // `copy_block`'d `size - 4` bytes from offset 4 — reaching only
-            // offset `size`, UNDER-copying the struct (which ends at
-            // `8 + size`) and leaving the last field's bytes as whatever
-            // stale data the reclaimed-after-`remove_claims` memory held
-            // (nondeterministic garbage in the high bits of an i64 field).
-            // Match the proven `copy_claims_index_body`: claim with the
-            // header word, set the back-pointer, copy the full `size`-byte
-            // payload from offset 8.
+            // @P295 — element record layout (per `record_new`'s Hash arm):
+            // offset 0 = header, offset 4 = back-pointer to the parent record,
+            // offset 8 = struct payload (`size` bytes).  Claim WITH the header
+            // word, set the back-pointer, copy the full `size`-byte payload from
+            // offset 8, deep-copy its nested claims, then re-insert by key.
             let new = self.store_mut(to).claim(1 + size.div_ceil(8));
             self.store_mut(to).set_u32_raw(new, 4, to.rec);
-            self.copy_block(
-                &DbRef {
-                    store_nr: rec.store_nr,
-                    rec: elm,
-                    pos: 8,
-                },
-                &DbRef {
-                    store_nr: to.store_nr,
-                    rec: new,
-                    pos: 8,
-                },
-                size,
-            );
-            self.store_mut(to).set_u32_raw(into, 8 + 4 * i, new);
-            self.copy_claims(
-                &DbRef {
-                    store_nr: rec.store_nr,
-                    rec: elm,
-                    pos: 8,
-                },
-                &DbRef {
-                    store_nr: to.store_nr,
-                    rec: new,
-                    pos: 8,
-                },
-                tp,
-            );
+            let src_db = DbRef {
+                store_nr: rec.store_nr,
+                rec: elm,
+                pos: 8,
+            };
+            let new_db = DbRef {
+                store_nr: to.store_nr,
+                rec: new,
+                pos: 8,
+            };
+            self.copy_block(&src_db, &new_db, size);
+            self.copy_claims(&src_db, &new_db, content_tp);
+            hash::add(to, &new_db, &mut self.allocations, &keys);
         }
     }
 
@@ -1122,8 +1180,8 @@ impl Stores {
             Parts::Array(v) | Parts::Ordered(v, _) => {
                 self.copy_claims_array_body(rec, to, *v);
             }
-            Parts::Hash(v, _) => {
-                self.copy_claims_hash_body(rec, to, *v);
+            Parts::Hash(_, _) => {
+                self.copy_claims_hash_body(rec, to, tp);
             }
             Parts::Spacial(_, _) => panic!("Not implemented"),
             Parts::Index(_, _, _) => self.copy_claims_index_body(rec, to, tp),
@@ -1133,6 +1191,190 @@ impl Stores {
                 // Do not copy claims on simple enumerate types.
                 if tp != u16::MAX {
                     self.copy_claims(rec, to, tp);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// @P317 debug — `LOFT_LOG=copy_check` (or `LOFT_COPY_CHECK=1`): after a
+    /// deep-copy, walk SOURCE and DESTINATION in parallel and warn about every
+    /// nested vector/array/hash length that DIFFERS — the signature of a
+    /// `copy_claims` bug that silently inflates or truncates a nested
+    /// collection (the kind valgrind can't see and that surfaces only as a
+    /// wrong / non-deterministic result).  Read once, cached; zero cost off.
+    #[inline]
+    #[allow(clippy::unused_self)] // `&self` is for ergonomic call sites; the flag is a cached static
+    pub(crate) fn copy_check_enabled(&self) -> bool {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| {
+            std::env::var("LOFT_COPY_CHECK").is_ok()
+                || std::env::var("LOFT_LOG")
+                    .is_ok_and(|v| v.split([',', ':', ' ']).any(|p| p.trim() == "copy_check"))
+        })
+    }
+
+    /// Does `tp` own nested heap worth recursing into?  Primitive vector
+    /// elements (u8/integer/single/…) have none, so a length compare at the
+    /// vector level suffices — skipping them avoids walking every element of a
+    /// multi-thousand-element vector.
+    fn has_nested_heap(&self, tp: u16) -> bool {
+        matches!(
+            self.types[tp as usize].parts,
+            Parts::Struct(_)
+                | Parts::EnumValue(_, _)
+                | Parts::Vector(_)
+                | Parts::Sorted(_, _)
+                | Parts::Array(_)
+                | Parts::Ordered(_, _)
+                | Parts::Hash(_, _)
+                | Parts::Index(_, _, _)
+                | Parts::ChildRec(_)
+                | Parts::Enum(_)
+        ) || tp == 5 // text
+    }
+
+    /// @P317 — entry point for the `copy_check` validator.  Compares the
+    /// structure of a just-copied `src`/`dst` pair and prints `[copy_check]`
+    /// warnings (deduped by field path, so a vector doesn't spam per element).
+    /// Warn-and-continue: never panics, so one run gives a full census.
+    pub fn report_copy_mismatches(&self, src: &DbRef, dst: &DbRef, tp: u16, label: &str) {
+        if !self.copy_check_enabled() {
+            return;
+        }
+        let mut seen = std::collections::HashSet::new();
+        self.walk_copy_cmp(src, dst, tp, label.to_string(), &mut seen);
+    }
+
+    fn walk_copy_cmp(
+        &self,
+        src: &DbRef,
+        dst: &DbRef,
+        tp: u16,
+        path: String,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        match &self.types[tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                let fields = fields.clone();
+                for f in fields {
+                    let s = DbRef {
+                        store_nr: src.store_nr,
+                        rec: src.rec,
+                        pos: src.pos + u32::from(f.position),
+                    };
+                    let d = DbRef {
+                        store_nr: dst.store_nr,
+                        rec: dst.rec,
+                        pos: dst.pos + u32::from(f.position),
+                    };
+                    self.walk_copy_cmp(&s, &d, f.content, format!("{path}.{}", f.name), seen);
+                }
+            }
+            Parts::Vector(v) | Parts::Sorted(v, _) => {
+                let v = *v;
+                let sl = vector::length_vector(src, &self.allocations);
+                let dl = vector::length_vector(dst, &self.allocations);
+                if sl != dl && seen.insert(path.clone()) {
+                    eprintln!(
+                        "[copy_check] MISMATCH {path}: src_len={sl} dst_len={dl} (vector elem kt={v})"
+                    );
+                }
+                if self.has_nested_heap(v) {
+                    let s_cur = self.store(src).get_u32_raw(src.rec, src.pos);
+                    let d_cur = self.store(dst).get_u32_raw(dst.rec, dst.pos);
+                    if s_cur != 0 && d_cur != 0 {
+                        let size = u32::from(self.size(v));
+                        for i in 0..sl.min(dl) {
+                            let s = DbRef {
+                                store_nr: src.store_nr,
+                                rec: s_cur,
+                                pos: 8 + size * i,
+                            };
+                            let d = DbRef {
+                                store_nr: dst.store_nr,
+                                rec: d_cur,
+                                pos: 8 + size * i,
+                            };
+                            self.walk_copy_cmp(&s, &d, v, format!("{path}[]"), seen);
+                        }
+                    }
+                }
+            }
+            Parts::Array(v) | Parts::Ordered(v, _) => {
+                let v = *v;
+                let sl = vector::length_vector(src, &self.allocations);
+                let dl = vector::length_vector(dst, &self.allocations);
+                if sl != dl && seen.insert(path.clone()) {
+                    eprintln!(
+                        "[copy_check] MISMATCH {path}: src_len={sl} dst_len={dl} (array/ordered kt={v})"
+                    );
+                }
+            }
+            Parts::Hash(v, _) => {
+                let v = *v;
+                let s_cur = self.store(src).get_u32_raw(src.rec, src.pos);
+                let d_cur = self.store(dst).get_u32_raw(dst.rec, dst.pos);
+                if s_cur == 0 || d_cur == 0 {
+                    return;
+                }
+                let s_room = self.store(src).get_u32_raw(s_cur, 0);
+                let d_room = self.store(dst).get_u32_raw(d_cur, 0);
+                let s_len = self.store(src).get_u32_raw(s_cur, 4);
+                let d_len = self.store(dst).get_u32_raw(d_cur, 4);
+                if s_len != d_len && seen.insert(format!("{path}#count")) {
+                    eprintln!(
+                        "[copy_check] MISMATCH {path}: src_count={s_len} dst_count={d_len} (hash)"
+                    );
+                }
+                // copy_claims_hash_body copies bucket-by-bucket, so when the two
+                // tables have equal `room` the bucket index pairs src↔dst.
+                if s_room == d_room && self.has_nested_heap(v) {
+                    let elms = s_room.saturating_sub(1) * 2;
+                    for i in 0..elms {
+                        let se = self.store(src).get_u32_raw(s_cur, 8 + 4 * i);
+                        let de = self.store(dst).get_u32_raw(d_cur, 8 + 4 * i);
+                        if se != 0 && de != 0 {
+                            let s = DbRef {
+                                store_nr: src.store_nr,
+                                rec: se,
+                                pos: 8,
+                            };
+                            let d = DbRef {
+                                store_nr: dst.store_nr,
+                                rec: de,
+                                pos: 8,
+                            };
+                            self.walk_copy_cmp(&s, &d, v, format!("{path}[]"), seen);
+                        }
+                    }
+                }
+            }
+            Parts::ChildRec(content_kt) => {
+                let content_kt = *content_kt;
+                let sc = self.store(src).get_u32_raw(src.rec, src.pos);
+                let dc = self.store(dst).get_u32_raw(dst.rec, dst.pos);
+                if sc != 0 && dc != 0 {
+                    let s = DbRef {
+                        store_nr: src.store_nr,
+                        rec: sc,
+                        pos: 8,
+                    };
+                    let d = DbRef {
+                        store_nr: dst.store_nr,
+                        rec: dc,
+                        pos: 8,
+                    };
+                    self.walk_copy_cmp(&s, &d, content_kt, path, seen);
+                }
+            }
+            Parts::Enum(values) => {
+                let e_nr = self.store(src).get_byte(src.rec, src.pos, -1);
+                if let Some(&(vtp, _)) = values.get(e_nr as usize)
+                    && vtp != u16::MAX
+                {
+                    // Re-borrow-safe: `vtp` is copied out before recursing.
+                    self.walk_copy_cmp(src, dst, vtp, path, seen);
                 }
             }
             _ => {}
@@ -1299,5 +1541,96 @@ impl Stores {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod p318_hash_deepcopy {
+    use crate::database::Stores;
+    use crate::keys::DbRef;
+
+    /// @P318 — deep-copying a struct whose `hash<T[k]>` field is populated must
+    /// keep the hash FIND-CONSISTENT even when the destination bucket record is
+    /// OVER-sized.  `Store::claim` returns a block up to 1/3 larger than
+    /// requested without splitting (`claim_block`), and a hash reads its `room`
+    /// (bucket count, `elms = (room-1)*2`) from that size header — so the old
+    /// slot-for-slot copy laid the dest buckets out for the SOURCE room while
+    /// `find` later probed `key % dest_elms` (a DIFFERENT start slot) and missed
+    /// entries.  The gap `(room, room*4/3]` is tiny for small rooms (e.g. (9,12],
+    /// (17,22]), so a freed record easily lands in it.  This test forces the
+    /// over-size deterministically — claim `big, gap=room+1, big` contiguously
+    /// then delete the middle, so `fl_take_ge(room)` returns the gap block — and
+    /// asserts every key survives the deep copy.
+    #[test]
+    fn hash_deepcopy_survives_oversized_dest_bucket() {
+        let mut stores = Stores::new();
+        let cell_tp = stores.structure("CellP318", -1);
+        stores.field(cell_tp, "ck", 0); // integer
+        stores.field(cell_tp, "payload", 0); // integer
+        stores.finish();
+        let hash_tp = stores.hash(cell_tp, &["ck".to_string()]);
+        let holder_tp = stores.structure("HolderP318", -1);
+        stores.field(holder_tp, "h", hash_tp);
+        stores.finish();
+
+        let words = |sz: u16| 1 + ((u32::from(sz) + 7) >> 3);
+        let cell_words = words(stores.size(cell_tp));
+        let holder_words = words(stores.size(holder_tp));
+
+        // --- source Holder with a populated hash (n=14 -> room 17) ---
+        let src = stores.database(holder_words);
+        let src_h = DbRef {
+            store_nr: src.store_nr,
+            rec: src.rec,
+            pos: src.pos, // field `h` is at struct-position 0
+        };
+        let n: i64 = 14;
+        for k in 0..n {
+            let v = stores.database(cell_words);
+            stores.store_mut(&v).set_int(v.rec, v.pos, k); // ck = k
+            stores.store_mut(&v).set_int(v.rec, v.pos + 8, k + 1000); // payload
+            stores.set_keyed(&src_h, &v, hash_tp, false);
+        }
+        let cur = stores.store(&src_h).get_u32_raw(src_h.rec, src_h.pos);
+        let room = stores.store(&src_h).get_u32_raw(cur, 0);
+        assert!(room >= 3, "source room {room} too small to over-size");
+
+        // --- destination Holder + an engineered over-size free block ---
+        let dst = stores.database(holder_words);
+        let dst_h = DbRef {
+            store_nr: dst.store_nr,
+            rec: dst.rec,
+            pos: dst.pos,
+        };
+        {
+            let s = &mut stores.allocations[dst.store_nr as usize];
+            let _p1 = s.claim(room * 8); // big
+            let gap = s.claim(room + 1); // gap-sized: room < room+1 <= room*4/3 (room>=3)
+            let _p3 = s.claim(room * 8); // big — pins the gap so delete can't merge it
+            s.delete(gap); // free block of size room+1; the smallest free >= room
+        }
+
+        // --- deep-copy the populated hash field into the dest ---
+        stores.copy_claims(&src_h, &dst_h, hash_tp);
+
+        // --- every key must still be found, with the right payload ---
+        let keys = stores.types[hash_tp as usize].keys.clone();
+        let mut missing = 0;
+        for k in 0..n {
+            let probe = stores.database(cell_words);
+            stores.store_mut(&probe).set_int(probe.rec, probe.pos, k);
+            let key = crate::keys::get_key(&probe, &stores.allocations, &keys);
+            let found = crate::hash::find(&dst_h, &stores.allocations, &keys, &key);
+            if found.rec == 0 {
+                missing += 1;
+            } else {
+                let pay = stores.store(&found).get_int(found.rec, found.pos + 8);
+                assert_eq!(pay, k + 1000, "wrong payload for key {k}");
+            }
+        }
+        assert_eq!(
+            missing, 0,
+            "deep-copied hash lost {missing}/{n} entries (source room {room})"
+        );
     }
 }

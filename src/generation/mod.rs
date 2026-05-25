@@ -16,6 +16,13 @@ mod text;
 /// Entry produced by `collect_pre_evals`: `(temp_var, type_str, expr_code, def_nr, stores_fn)`.
 type PreEvalEntry = (String, String, String, u32, bool);
 
+/// Rust source spliced into the native `main` bootstrap just before its
+/// closing brace.  Gated on `LOFT_NATIVE_LEAK_CHECK` so normal native
+/// runs stay silent, but tests (and a curious developer) can opt in to
+/// the same store-leak report the interpreter prints unconditionally —
+/// giving leak regressions a guard on `--native`, not just `--interpret`.
+const NATIVE_LEAK_CHECK_TAIL: &str = "    if std::env::var(\"LOFT_NATIVE_LEAK_CHECK\").is_ok() {\n        let stores: &Stores = unsafe { &*cell.get() };\n        let leaks = stores.collect_store_leaks();\n        if !leaks.is_empty() {\n            let count = leaks.len();\n            let preview = if count <= 5 { leaks.join(\", \") } else { format!(\"{} ... and {} more\", leaks[..5].join(\", \"), count - 5) };\n            eprintln!(\"Warning: {count} stores not freed at program exit: {preview}\");\n        }\n    }\n";
+
 /// Walk the Value IR tree and collect all function definition numbers
 /// referenced by `Value::Call(def_nr, _)` nodes.
 /// Detect a T-parameterized method stub: name shape
@@ -39,6 +46,12 @@ type PreEvalEntry = (String, String, String, u32, bool);
 /// Pragmatic bar: any `t_<digits><alpha-prefix>_*` whose body is
 /// empty + no `#rust` + no `#native` is treated as a T-stub.  The
 /// caller already checks the empty-body branch.
+///
+/// Plan-12 phase 1a (2026-05-23) — `is_crypto_runtime_symbol` removed.
+/// Crypto symbols now live in `lib/crypto/native/` (declared via
+/// `lib/crypto/loft.toml::native = "loft_crypto"`); they route through
+/// the standard package native path instead of a hardcoded list in the
+/// compiler crate.
 fn is_t_param_stub(name: &str) -> bool {
     let Some(rest) = name.strip_prefix("t_") else {
         return false;
@@ -211,6 +224,29 @@ fn collect_fn_ref_literals(
         }
         Value::Call(d, args) => {
             let callee = data.def(*d);
+            // @P299 — a fn-ref stored into a struct FIELD lowers to
+            // `OpSetInt4(target, pos, Int(<lambda d_nr>))`: the lambda's d_nr
+            // rides as a plain Int (capturing closures wrap this in a
+            // `fn_ref_field_set` block, non-capturing emit it bare — see
+            // `parser/mod.rs::set_field_check`).  The FnRef-literal walk below
+            // can't see it, so a closure called ONLY through a struct field is
+            // pruned as unreachable and dropped from the native fn-ref dispatch
+            // candidate set (`emit.rs::output_call_ref`) → `invalid fn-ref`
+            // panic.  Recover it: if `OpSetInt4` writes a literal that is a
+            // valid Function definition, mark it reachable.  This
+            // over-approximates (a plain int field equal to a fn d_nr would
+            // mark that fn reachable too) but reachability over-approximation
+            // is correctness-safe — it only ever emits an unused candidate.
+            if callee.name == "OpSetInt4"
+                && let Some(arg2) = args.get(2)
+                && let Value::Int(dn) = arg2.unspan()
+                && *dn >= 0
+                && (*dn as u32) < data.definitions()
+                && matches!(data.def(*dn as u32).def_type, DefType::Function)
+                && !data.def(*dn as u32).name.starts_with("Op")
+            {
+                calls.insert(*dn as u32);
+            }
             for (idx, a) in args.iter().enumerate() {
                 if idx < callee.attributes.len()
                     && matches!(
@@ -248,6 +284,15 @@ fn collect_fn_ref_literals(
         Value::FnRef(d_nr, _, _) if *d_nr >= 0 => {
             calls.insert((*d_nr).cast_unsigned());
         }
+        // @P328 — `yield <fn-ref>` for a non-capturing closure emits as
+        // `Value::Yield(Value::Int(d_nr))` (the parser drops the closure
+        // wrapper when there's nothing to capture).  Treat the inner Int
+        // as a fn-ref literal so the lambda stays reachable for native
+        // CallRef dispatch — without this the loop-body call `f(x)`
+        // panics at runtime with `invalid fn-ref: <d_nr>`.  Same shape
+        // as the @P299 fix for `OpSetInt4(field, pos, Int(d_nr))`;
+        // over-approximation is correctness-safe.
+        Value::Yield(inner) => collect_int_fn_refs(inner, calls),
         // Span wraps most operators for parser diagnostics — recurse so
         // Set / Call args that arrive as Span(...) still trigger the
         // fn-ref-literal walk.
@@ -645,15 +690,12 @@ extern crate loft;"
         writeln!(w, "use loft::tree;")?;
         writeln!(w, "use loft::codegen_runtime;")?;
         writeln!(w, "use loft::codegen_runtime::*;")?;
-        // The `external::` namespace is used by stdlib #rust templates for rand/random ops.
-        // Use codegen_runtime wrappers so no cfg(feature) is needed in generated files.
-        writeln!(
-            w,
-            "mod external {{
-    pub fn rand_seed(seed: i64) {{ loft::codegen_runtime::cr_rand_seed(seed); }}
-    pub fn rand_int(lo: i64, hi: i64) -> i64 {{ loft::codegen_runtime::cr_rand_int(lo, hi) }}
-}}\n"
-        )
+        Ok(())
+        // @PLAN12 phase 3.5a (2026-05-24) — removed the `mod external {…}`
+        // shim that wrapped cr_rand_int / cr_rand_seed.  No `#rust
+        // "external::rand_*"` consumers remain in default/ or lib/random/;
+        // random's #native annotations now route through the cdylib path
+        // (loft::native_call::build_store + cdylib call).
     }
 
     /// Use this as the main entry point for native Rust code generation.
@@ -794,10 +836,12 @@ extern crate loft;"
                 // src/main.rs does for the interpreter path
                 // (state.database.user_args.clone_from(&user_args)).
                 // @PLAN37 phase 10.3 fix.
-                writeln!(
+                write!(
                     w,
-                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n}}"
+                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n"
                 )?;
+                w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+                writeln!(w, "}}")?;
             }
         }
         Ok(())
@@ -807,10 +851,12 @@ extern crate loft;"
     fn emit_main_bootstrap(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
         let main_nr = self.data.def_nr("n_main");
         if main_nr < till {
-            writeln!(
+            write!(
                 w,
-                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n}}"
+                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n"
             )?;
+            w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+            writeln!(w, "}}")?;
         }
         Ok(())
     }
@@ -1950,12 +1996,24 @@ extern crate loft;"
             }
         } else if def.code == Value::Null {
             // Native-only function with no loft body.
-            // PKG.4: check if this function has a native symbol from a package manifest.
+            // @PLAN12 phase 2 step 2 (2026-05-24): check `def.native` FIRST.
+            // The manifest's `[native.functions]` table now populates
+            // `def.native` for matching defs (via parser/mod.rs's
+            // `register_native_manifest` and `apply_manifest_side_effects`),
+            // so the `def.native` path covers everything the `native_symbols`
+            // path used to.  The `native_symbols` branch is kept as a fallback
+            // for the legacy case where someone declares `[native.functions]`
+            // without an `[library] native = "..."` stem — that yields a
+            // populated `native_symbols` map but no crate name, so the
+            // `def.native`-driven call (which qualifies via
+            // `native_symbol_crates`) would emit an unqualified symbol.  The
+            // legacy path's `output_native_api_call` emits `{sym}(stores, …)`
+            // with no crate qualifier, so it only works when the symbol is
+            // either in the current crate or already imported.  Today the
+            // primary callers always have a crate, so the def.native path
+            // wins.
             let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
-            if let Some(rust_symbol) = self.data.native_symbols.get(user_name) {
-                // Emit a call to the native Rust function with type marshalling.
-                self.output_native_api_call(w, def_nr, rust_symbol)?;
-            } else if !def.native.is_empty() {
+            if !def.native.is_empty() {
                 // #native "symbol" — emit direct call with type marshalling.
                 if self.wasm_browser {
                     // call the imported function directly (unqualified).
@@ -1986,6 +2044,15 @@ extern crate loft;"
                     }
                     writeln!(w, "}}")?;
                 }
+            } else if let Some(rust_symbol) = self.data.native_symbols.get(user_name) {
+                // Fallback: `[native.functions]` declared the mapping but no
+                // `[library] native = "..."` stem populated `def.native`.
+                // Emits unqualified `{rust_symbol}(stores, …)` — caller must
+                // ensure the symbol is in scope (either same crate or
+                // explicitly imported).  Primary callers always have a crate
+                // (handled by the def.native path above); this is for
+                // future, less-conventional configurations.
+                self.output_native_api_call(w, def_nr, rust_symbol)?;
             } else {
                 // Internal i_ functions have implementations in codegen_runtime.rs;
                 // all others get a todo!() stub.
@@ -2156,6 +2223,44 @@ extern crate loft;"
             }
         }
 
+        // @PLAN12 phase 3.5a (2026-05-24) — LoftStore forwarding for
+        // store-allocating cdylib returns (Type::Vector / Type::Reference).
+        // The cdylib needs a LoftStore handle to alloc the returned vector
+        // / struct.  Construct one via the new `loft::native_call::build_store`
+        // API and set up CURRENT_STORES for the cdylib's callbacks via the
+        // RAII `enter` guard.  When no Reference/Vector arg is present
+        // (random's n_rand_indices case), allocate against the null store
+        // (stores.null()).  Type::Reference args + their DbRef→LoftRef
+        // conversion (`to_loft_ref`) is a future extension for
+        // imaging/graphics drains — not required for random.
+        //
+        // Bind the LoftStore via `transmute_copy` so rustc accepts it
+        // at the cdylib call site even when there are TWO copies of
+        // loft_ffi in the dependency graph (cdylib brings its own;
+        // loft crate has its own).  Both are `#[repr(C)]` with
+        // identical fields, so the bit-copy is safe.  Same trick the
+        // text-return path uses for LoftStr (see comment ~30 lines
+        // below in this function).
+        let needs_loft_store = matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
+        if needs_loft_store {
+            // Order matters: extract `store_nr` from the null store as
+            // a SEPARATE statement so it doesn't dual-borrow `stores`
+            // alongside the build_store call (rustc E0502).
+            writeln!(w, "  let _store_nr = stores.null().store_nr;")?;
+            writeln!(w, "  let _guard = loft::native_call::enter(stores);")?;
+            writeln!(
+                w,
+                "  let _ls_src = loft::native_call::build_store(stores, _store_nr);"
+            )?;
+            // Reinterpret as the cdylib's LoftStore (same layout,
+            // different crate identity).  Type of `_ls` inferred
+            // from the call site below.
+            writeln!(
+                w,
+                "  let _ls = unsafe {{ std::mem::transmute_copy(&_ls_src) }};"
+            )?;
+        }
+
         let needs_ret_cast = matches!(&def.returned, Type::Integer(_));
         // P244: `text`-returning natives return `loft_ffi::LoftStr` from the
         // extern, but the wrapper's declared return type (per `rust_type` with
@@ -2174,10 +2279,17 @@ extern crate loft;"
             // pub struct LoftStr { pub ptr: *const u8, pub len: usize }`),
             // so the field reads on the next lines work either way.
             write!(w, "  let _ls = unsafe {{ {qualified_symbol}(")?;
+        } else if needs_loft_store {
+            // Capture the LoftRef return; convert to DbRef after the call.
+            write!(w, "  let _lr = unsafe {{ {qualified_symbol}(")?;
         } else {
             write!(w, "  unsafe {{ {qualified_symbol}(")?;
         }
         let mut first = true;
+        if needs_loft_store {
+            write!(w, "_ls")?;
+            first = false;
+        }
         for attr in &def.attributes {
             if attr.name.starts_with("__") {
                 continue;
@@ -2242,6 +2354,21 @@ extern crate loft;"
                 "  stores.scratch.push(unsafe {{ String::from_utf8_unchecked(_bytes) }});"
             )?;
             write!(w, "  Str::new(stores.scratch.last().unwrap())")?;
+        } else if needs_loft_store {
+            // Convert cdylib's LoftRef return to a DbRef.  `_guard`
+            // (Drop) clears CURRENT_STORES at function exit.  Transmute
+            // is INLINED at the from_loft_ref call site — naming
+            // `loft_ffi::LoftRef` as a type annotation in the
+            // generated source triggers rustc's
+            // "colliding StableCrateId" error when both the loft crate
+            // and the cdylib pull loft_ffi.  Letting from_loft_ref's
+            // parameter type drive the transmute_copy inference keeps
+            // `loft_ffi` invisible to the generated code.
+            writeln!(w, ") }};")?;
+            write!(
+                w,
+                "  loft::codegen_runtime::from_loft_ref(stores, unsafe {{ std::mem::transmute_copy(&_lr) }})"
+            )?;
         } else {
             write!(w, ") }}")?;
         }
@@ -2257,18 +2384,27 @@ extern crate loft;"
         match tp {
             Type::Single => "f32",
             Type::Float => "f64",
-            // Post-2c round 10c: wide Type::Integer (former Type::Long) → i64.
-            Type::Integer(s) if s.is_wide() => "i64",
             Type::Boolean => "u8",
             Type::Character => "u32",
-            // Vector<integer> keeps 4-byte packed element storage — this is
-            // the raw-pointer calling convention shared with pre-compiled
-            // cdylib native packages (`lib/graphics/native`, `lib/moros_render`).
-            // Loft-side integer values are i64 on the stack post-2c; the
-            // narrow→wide conversion happens at read / write sites via
-            // `ops::read_int_at` / `set_i32_raw`, so the in-memory element
-            // layout can stay i32.
-            Type::Integer(_) => "i32",
+            // @P310: the FFI data-pointer element width must match the
+            // vector's STORAGE STRIDE, not its value range.  A plain
+            // `vector<integer>` carries no `forced_size`, so it is stored at
+            // the wide 8-byte stride (`byte_width() == 8`, `Type::size == 8`,
+            // `vector_append` strides 8) — even though its bounds are the
+            // signed-32 template (`is_wide() == false`).  Keying off
+            // `vector_narrow_width()` (the same predicate the vector storage +
+            // `OpGetVector`/`OpSetVector` use, `data.rs::vector_narrow_width`)
+            // gives the pointer the storage-matching width: plain integer →
+            // `i64` (matches the cdylib `vec<i64>` wrappers + `Canvas` pixel
+            // semantics), narrow aliases keep their forced width.  (i8/i16
+            // narrow vectors map to the unsigned same-width name — signedness
+            // is moot, no `#native` FFI takes a narrow-int vector today.)
+            Type::Integer(s) => match s.vector_narrow_width() {
+                Some(1) => "u8",
+                Some(2) => "i16",
+                Some(4) => "i32",
+                _ => "i64",
+            },
             // Fallback for struct/enum elements: opaque bytes.
             _ => "u8",
         }
@@ -2334,4 +2470,52 @@ fn output_enum_values(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod p310_vector_elem_tests {
+    use super::*;
+    use crate::data::IntegerSpec;
+
+    /// @P310 regression: the FFI element pointer width must track the vector's
+    /// storage stride.  `vector_elem_rust_type` takes the ELEMENT type.  Plain
+    /// `vector<integer>` (signed32 template, NOT `is_wide()`) is 8-byte-stride
+    /// storage → must emit `i64`, not `i32`.
+    #[test]
+    fn vector_elem_rust_type_matches_storage_stride() {
+        // Both plain-integer templates store at 8-byte stride → i64.
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::wide())),
+            "i64"
+        );
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::signed32())),
+            "i64",
+            "plain vector<integer> must emit *const i64 (storage is 8-byte stride) — @P310"
+        );
+        // Narrow aliases keep their forced storage width.
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::i32())),
+            "i32"
+        );
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::u16())),
+            "i16"
+        );
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::i16())),
+            "i16"
+        );
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::u8())),
+            "u8"
+        );
+        assert_eq!(
+            Output::vector_elem_rust_type(&Type::Integer(IntegerSpec::i8())),
+            "u8"
+        );
+        // Non-integer element types unchanged.
+        assert_eq!(Output::vector_elem_rust_type(&Type::Single), "f32");
+        assert_eq!(Output::vector_elem_rust_type(&Type::Float), "f64");
+    }
 }

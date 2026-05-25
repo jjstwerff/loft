@@ -1,0 +1,182 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib lib
+//
+// gridmesh C3 — CrystalIncr two-level reuse.  Validates the FULL-BUILD path:
+//   1. crystal_incr_full_mesh(crystal_incr_new(snap)) produces the SAME SET of
+//      segments as the C1 golden crystal_segments_aged_tuned (same chunk dials).
+//   2. The per-group meshes (crystal_incr_group_meshes, assembled on demand from
+//      the cached chunk meshes) sum to the same segment count as the full mesh.
+//
+// NOTE: the INCREMENTAL path (crystal_incr_paint + crystal_incr_rebuild reusing
+// non-dirty cached chunks) is NOT yet asserted equal to a full rebuild — it
+// currently DIVERGES in geometry (a halo/dirty-propagation reuse bug, @P314).
+// The projector uses the full build meanwhile.
+
+use audience_crystal::*;
+use gridmesh;
+
+fn qcoord(v: float) -> integer { ((v as single) as float * 1000.0) as integer }
+
+// Order-independent (commutative) checksum over the segment set.  Uses
+// `cell_ix` (integer) rather than `kinds`/`colors` (u8): reading a u8 vector
+// element with `?? <int-default>` mis-compiles under `--native` (@P316), and
+// `cell_ix` + the six `single` coords already pin each segment uniquely.
+// `single` defaults use the `f`-suffix single literal (`0.0f`) so the `??`
+// branches match the element type (no float→single mismatch).
+fn gsum(m: SegMesh) -> integer {
+  s = 0;
+  for i in 0..len(m.kinds) {
+    s = s + (m.cell_ix[i] ?? 0) * 7919
+      + qcoord(m.x0s[i] ?? 0.0f) * 3 + qcoord(m.y0s[i] ?? 0.0f) * 5 + qcoord(m.z0s[i] ?? 0.0f) * 7
+      + qcoord(m.x1s[i] ?? 0.0f) * 11 + qcoord(m.y1s[i] ?? 0.0f) * 13 + qcoord(m.z1s[i] ?? 0.0f) * 17;
+  }
+  s
+}
+
+fn block(side: integer) -> CellSnap {
+  xs: vector<integer> = []; ys: vector<integer> = []; cs: vector<integer> = [];
+  for by in 0..side { for bx in 0..side { xs += [bx]; ys += [by]; cs += [(bx + by) % 6]; } }
+  CellSnap{xs: xs, ys: ys, colors: cs}
+}
+
+// C3 full build == C1 golden (same SET of segments, at the same chunk dials).
+fn test_c3_full_build_equals_c1() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  snap = block(40);   // 40 > 16 cells/axis ⇒ spans multiple chunks at shift 4
+  golden = crystal_segments_aged_tuned(snap, empty, 0, CRYSTAL_CHUNK_SHIFT, CRYSTAL_HALO_K);
+  c = crystal_incr_new(snap, CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0);
+  fm = crystal_incr_full_mesh(c);
+  assert(len(fm.kinds) == len(golden.kinds),
+         "c3 full-build seg count={len(fm.kinds)} golden={len(golden.kinds)}");
+  assert(gsum(fm) == gsum(golden),
+         "c3 full-build checksum={gsum(fm)} golden={gsum(golden)}");
+}
+
+// @P317 symptom 1 regression — the all-at-once build at side=24 (the size that
+// exposed the bug; side=40 above never reproduced it).  crystal_incr_new built
+// its field by deep-copying field_new(snap) into the struct, which corrupted
+// the nested cidx hash → cells emitted as isolated stubs → an inflated,
+// non-deterministic mesh.  Fixed by building the field in place.  This asserts
+// the all-at-once build == the C1 golden at side=24 (count + commutative gsum).
+fn test_c3_all_at_once_side24_equals_golden() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  snap = block(24);
+  golden = crystal_segments_aged_tuned(snap, empty, 0, CRYSTAL_CHUNK_SHIFT, CRYSTAL_HALO_K);
+  c = crystal_incr_new(snap, CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0);
+  fm = crystal_incr_full_mesh(c);
+  assert(len(fm.kinds) == len(golden.kinds),
+         "c3 side24 all-at-once seg count={len(fm.kinds)} golden={len(golden.kinds)}");
+  assert(gsum(fm) == gsum(golden),
+         "c3 side24 all-at-once checksum={gsum(fm)} golden={gsum(golden)}");
+}
+
+// Per-group assembly is consistent: the group meshes partition the full mesh
+// (every cached chunk segment appears in exactly one group).
+fn test_c3_group_meshes_partition_full() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  c = crystal_incr_new(block(40), CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0);
+  fm = crystal_incr_full_mesh(c);
+  groups = crystal_incr_group_meshes(c);
+  gtot = 0;
+  for g in groups { gtot = gtot + len(g.kinds); }
+  assert(gtot == len(fm.kinds),
+         "c3 group meshes total={gtot} != full mesh={len(fm.kinds)}");
+}
+
+// @P314 — the INCREMENTAL two-level reuse must match a full build.  Build from
+// EMPTY, paint every cell in batches, rebuild only the dirty chunks each batch,
+// and assert the assembled mesh equals the C1 golden full build (equal seg
+// count + equal commutative checksum).  Before the @P314 fix, the u8
+// `kinds`/`colors` vectors were concatenated with the wide-`integer` stride
+// (`OpAppendVector` carried type 0 instead of the narrow byte type), zeroing
+// the appended elements — so the incremental mesh diverged (non-deterministically).
+fn test_c3_incremental_equals_golden() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  snap = block(40);
+  golden = crystal_segments_aged_tuned(snap, empty, 0, CRYSTAL_CHUNK_SHIFT, CRYSTAL_HALO_K);
+  inc = crystal_incr_new(CellSnap{xs: [], ys: [], colors: []},
+                         CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0);
+  n = 40 * 40;
+  i = 0;
+  while i < n {
+    for b in 0..50 {
+      if i < n {
+        crystal_incr_paint(inc, snap.xs[i] ?? 0, snap.ys[i] ?? 0, snap.colors[i] ?? 0);
+        i = i + 1;
+      }
+    }
+    crystal_incr_rebuild(inc, empty, 0);
+  }
+  im = crystal_incr_full_mesh(inc);
+  assert(len(im.kinds) == len(golden.kinds),
+         "c3 incremental seg count={len(im.kinds)} golden={len(golden.kinds)}");
+  assert(gsum(im) == gsum(golden),
+         "c3 incremental checksum={gsum(im)} golden={gsum(golden)}");
+}
+
+// Geometry-only checksum: kinds + colours + the six coords, but NO cell_ix.
+// After an ERASE the incremental field carries an orphaned cell-index GAP (the
+// erased slot is left in place so surviving indices stay stable for the
+// projector's per-cell bloom), so its cell_ix values differ from a contiguous
+// from-scratch build even when the GEOMETRY is identical — equivalence for the
+// erase/recolor path is therefore checked on geometry + colours, not cell_ix.
+// (`?? 0` on the u8 kinds/colours is safe since @P316 was fixed.)
+fn gsum_geom(m: SegMesh) -> integer {
+  s = 0;
+  for gg_i in 0..len(m.kinds) {
+    s = s + (m.kinds[gg_i] ?? 0) * 31 + (m.colors[gg_i] ?? 0) * 97
+      + qcoord(m.x0s[gg_i] ?? 0.0f) * 3 + qcoord(m.y0s[gg_i] ?? 0.0f) * 5 + qcoord(m.z0s[gg_i] ?? 0.0f) * 7
+      + qcoord(m.x1s[gg_i] ?? 0.0f) * 11 + qcoord(m.y1s[gg_i] ?? 0.0f) * 13 + qcoord(m.z1s[gg_i] ?? 0.0f) * 17;
+  }
+  s
+}
+
+// A snapshot of every cell of block(side) EXCEPT (ex,ey), with (rx,ry)
+// recoloured to `rc` — the FINAL surviving-cell state of the edit sequence below.
+fn survivors(side: integer, ex: integer, ey: integer, rx: integer, ry: integer, rc: integer) -> CellSnap {
+  xs: vector<integer> = []; ys: vector<integer> = []; cs: vector<integer> = [];
+  for sby in 0..side {
+    for sbx in 0..side {
+      if !(sbx == ex && sby == ey) {
+        xs += [sbx]; ys += [sby];
+        col = (sbx + sby) % 6;
+        if sbx == rx && sby == ry { col = rc; }
+        cs += [col];
+      }
+    }
+  }
+  CellSnap{xs: xs, ys: ys, colors: cs}
+}
+
+// C4 erase/recolor: both go through the SAME incremental rebuild path as paint.
+// Paint a multi-chunk block + rebuild, then RECOLOUR one cell and ERASE another
+// and rebuild again (only the affected chunks + halos re-run; the rest reuse
+// their cached meshes).  The result's GEOMETRY must SET-equal a from-scratch
+// full build of the surviving cells (cell_ix differs by the erase gap, so the
+// comparison is geometry + colours, not cell_ix).
+fn test_c3_incremental_erase_recolor_equals_full() {
+  empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  side = 18;   // > 16 cells/axis ⇒ spans multiple chunks at shift 4 (cross-chunk erase + halo)
+  inc = crystal_incr_new(CellSnap{xs: [], ys: [], colors: []},
+                         CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0);
+  for ery in 0..side {
+    for erx in 0..side {
+      crystal_incr_paint(inc, erx, ery, (erx + ery) % 6);
+    }
+  }
+  crystal_incr_rebuild(inc, empty, 0);     // phase 1: full build, all chunks cached
+  crystal_incr_recolor(inc, 5, 5, 4);      // recolour one cell
+  crystal_incr_erase(inc, 3, 3);           // erase one cell
+  crystal_incr_rebuild(inc, empty, 0);     // phase 2: only dirty chunks re-run; rest reuse cache
+  im = crystal_incr_full_mesh(inc);
+
+  full = crystal_incr_full_mesh(
+    crystal_incr_new(survivors(side, 3, 3, 5, 5, 4),
+                     CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, empty, 0));
+  assert(len(im.kinds) == len(full.kinds),
+         "erase/recolor incremental seg count={len(im.kinds)} full={len(full.kinds)}");
+  assert(gsum_geom(im) == gsum_geom(full),
+         "erase/recolor incremental geom={gsum_geom(im)} full={gsum_geom(full)}");
+}

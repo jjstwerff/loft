@@ -7,7 +7,7 @@
 Design note: load `default/*.loft` modules and their Rust backing
 **only when the user's code references them**, instead of always.
 
-Status: **design, not implemented.**  Regex (see [REGEX.md](../../01-regex/README.md))
+Status: **design, not implemented.**  Regex (see [REGEX.md](../01-regex/README.md))
 is the first concrete consumer that motivates the mechanism; the
 design stands on its own and generalises to many other features.
 
@@ -159,7 +159,7 @@ closes the loop on the mechanism without shipping a new feature.
   source — no `use x;` boilerplate, no tax when unused.
 - **Library upgrades become invisible.**  Swapping the regex engine
   (e.g. linear-time NFA → compile-generated DFA, see
-  [REGEX.md](../../01-regex/README.md)) does not change the user's source.
+  [REGEX.md](../01-regex/README.md)) does not change the user's source.
 - **Bytecode / `.loftc` size scales with usage.**  Matters for WASM
   ([HTML export pipeline](../../../HTML_EXPORT.md)) where payload size affects load time.
 - **Template for external packages** (PACKAGES.md).  The same
@@ -650,7 +650,7 @@ datetime, http, ...) reuses the mechanism.
    `#[cfg(feature = "wasm")]`.  Measure WASM artifact delta.
    Validates the **host-bridge layer** on an existing feature
    before any new modules ship.
-3. **Ship regex (see [REGEX.md](../../01-regex/README.md)) as the first new consumer.**
+3. **Ship regex (see [REGEX.md](../01-regex/README.md)) as the first new consumer.**
    Validates type-reference and function-call triggers, plus
    single-module payloads (code-only; no host bridge needed).
    Regex is a **standalone library** — no embedding into `match`
@@ -688,7 +688,7 @@ datetime, http, ...) reuses the mechanism.
 
 ## Related documents
 
-- [REGEX.md](../../01-regex/README.md) — regex library design; the first lazy consumer.
+- [REGEX.md](../01-regex/README.md) — regex library design; the first lazy consumer.
 - [LOFT.md](../../../LOFT.md) § Match expressions — base match semantics (regex
   is a library, not a match-pattern kind).
 - [BROADENING.md](../../../BROADENING.md) — why cold-start matters for

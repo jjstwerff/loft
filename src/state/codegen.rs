@@ -538,10 +538,21 @@ impl State {
                 // add_op → operator() already advances stack.position; no manual +4/+12 needed.
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::from(*d_nr));
-                // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
-                let clos_pos = stack.position - stack.function.stack(*clos_var);
-                stack.add_op("OpVarRef", self);
-                self.code_add(clos_pos);
+                // @P328 — non-capturing closure has no closure variable;
+                // push a null DbRef sentinel instead.  Without this branch,
+                // `stack(u16::MAX)` panics with "index out of bounds".
+                // Triggered by the yield-rewrite at
+                // `parser/expressions.rs::yield` that wraps a bare
+                // `Value::Int(d_nr)` into `Value::FnRef(d_nr, u16::MAX, _)`
+                // so the yielded value is a full 20-byte fn-ref.
+                if *clos_var == u16::MAX {
+                    stack.add_op("OpNullRefSentinel", self);
+                } else {
+                    // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
+                    let clos_pos = stack.position - stack.function.stack(*clos_var);
+                    stack.add_op("OpVarRef", self);
+                    self.code_add(clos_pos);
+                }
                 *fn_type.clone()
             }
             Value::FnRefDnr(v_nr) => {
@@ -1170,9 +1181,21 @@ impl State {
     /// dispatch through `record_new`'s `Parts::Sorted/Hash/Index/Spacial`
     /// arms and grow the collection in-place.
     pub(super) fn gen_set_first_keyed_null(&mut self, stack: &mut Stack, v: u16) {
+        self.gen_keyed_null(stack, v, true);
+    }
+
+    /// Lower a `Set(v, Null)` whose `v` is a keyed-collection local.
+    ///
+    /// `first == true` (first assignment): allocate a fresh empty store at
+    /// `v`'s slot (`OpInitRef` + `OpDatabase`).  `first == false`
+    /// (reassignment — the @P302 `s = []` clear): the slot already holds a
+    /// live `DbRef`, so emit `OpDatabase` ALONE — `clear()` empties the store
+    /// in place (reuses `store_nr`, reclaims all space, no leak).  Emitting
+    /// `OpInitRef` on a reassignment would null the slot and leak the store.
+    pub(super) fn gen_keyed_null(&mut self, stack: &mut Stack, v: u16, first: bool) {
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
         let slot_end = stack.function.stack(v).saturating_add(ref_size);
-        if stack.position < slot_end {
+        if first && stack.position < slot_end {
             let bump = slot_end - stack.position;
             stack.add_op("OpReserveFrame", self);
             self.code_add(bump);
@@ -1180,8 +1203,14 @@ impl State {
         }
         let slot_offset = stack.position - stack.function.stack(v);
         if stack.function.is_skip_free(v) || stack.function.is_inline_ref(v) {
-            stack.add_op("OpInitRefSentinel", self);
-            self.code_add(slot_offset);
+            // Skip-free / inline-ref keyed locals share an outer-owned store.
+            // On first assignment, point the slot at it via the sentinel; on
+            // reassignment there is nothing to re-init (no current shape
+            // produces a keyed skip-free reassignment).
+            if first {
+                stack.add_op("OpInitRefSentinel", self);
+                self.code_add(slot_offset);
+            }
             return;
         }
         // Resolve the database type id for the specific keyed-collection
@@ -1207,7 +1236,7 @@ impl State {
                 let c = stack.data.def(*td).known_type;
                 self.database.spacial(c, key)
             }
-            _ => unreachable!("gen_set_first_keyed_null on non-keyed type"),
+            _ => unreachable!("gen_keyed_null on non-keyed type"),
         };
         debug_assert_ne!(
             tp_nr,
@@ -1216,8 +1245,13 @@ impl State {
             stack.function.name(v),
             stack.function.name,
         );
-        stack.add_op("OpInitRef", self);
-        self.code_add(slot_offset);
+        // First assignment: null the slot before allocating.  Reassignment /
+        // clear: the slot already holds a live DbRef → OpDatabase clears that
+        // store in place; OpInitRef would null the slot and leak the store.
+        if first {
+            stack.add_op("OpInitRef", self);
+            self.code_add(slot_offset);
+        }
         stack.add_op("OpDatabase", self);
         self.code_add(slot_offset);
         self.code_add(tp_nr);
@@ -1279,6 +1313,22 @@ impl State {
                 stack.function.name(v)
             );
             // Reassignment — variable already on the stack.
+            // @P302 — `s = []` on a populated keyed local clears it IN PLACE
+            // (OpDatabase reuses the store, no leak).  Reached now that
+            // `scan_set` no longer elides keyed `Set(v, Null)`.  Without this
+            // arm it would fall to `set_var` → `gen_put_var` → panic (no keyed
+            // OpPut* arm).
+            if matches!(
+                stack.function.tp(v),
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            ) && *value == Value::Null
+            {
+                self.gen_keyed_null(stack, v, false);
+                return;
+            }
             if matches!(stack.function.tp(v), Type::Text(_)) {
                 let var_pos = stack.position - pos;
                 stack.add_op("OpClearText", self);
@@ -2107,20 +2157,33 @@ impl State {
         // Bypass the operator path and manually handle the stack adjustment.
         if name == "OpCoroutineNext" && parameters.len() >= 2 {
             // CO1.6a: parameters[0]=gen expr, parameters[1]=Int(value_size).
+            // @P327 — `value_size` packs two fields (encoding from
+            // `parser/collections.rs::iterator`):
+            //   * low byte  = byte size of the yielded value
+            //   * high byte = native channel tag (0 = legacy per-type,
+            //                                     1 = unified `next_into`)
+            // The interp dispatch only cares about the byte size; the
+            // native dispatch (`OpCoroutineNextEmitter`) reads both
+            // bytes.  Stack accounting uses ONLY the low byte — the high
+            // byte is a tag, not extra payload, so using the raw value
+            // here would push 0x0110 = 272 bytes of stack space for a
+            // 16-byte tuple yield and corrupt every subsequent var
+            // offset in the consumer frame.
             self.generate(&parameters[0], stack, false); // push DbRef (+12)
             let value_size = if let Value::Int(n) = &parameters[1] {
                 *n as u16
             } else {
                 4 // fallback: integer
             };
+            let byte_size = value_size & 0xFF;
             self.remember_stack(stack.position);
             super::emit_op(stack.data.def(op).op_code, self);
             self.code_add(value_size);
-            // Stack: -12 (DbRef consumed) + value_size (yielded value pushed).
+            // Stack: -12 (DbRef consumed) + byte_size (yielded value pushed).
             stack.position -= super::size_ref() as u16;
-            stack.position += value_size;
+            stack.position += byte_size;
             // Return type is the yield type — inferred from value_size for now.
-            return match value_size {
+            return match byte_size {
                 1 => Type::Boolean,
                 8 => crate::data::I64.clone(),
                 _ => I32.clone(),
@@ -2555,7 +2618,16 @@ impl State {
                 Type::Float => stack.add_op("OpGetFloat", self),
                 Type::Enum(_, false, _) => stack.add_op("OpGetByte", self),
                 Type::Text(_) => stack.add_op("OpGetStackText", self),
-                Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _) => {
+                Type::Vector(_, _)
+                | Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                // @P305 — keyed collections passed by `&` are DbRef-backed
+                // just like vectors/references; referencing one (e.g. as the
+                // `coll` arg of `OpSetKeyed` for `h[k] = v` on a `&hash`
+                // param) needs the same stack-ref deref.
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _) => {
                     stack.add_op("OpGetStackRef", self);
                 }
                 _ => panic!("Unknown referenced variable type: {tp}"),

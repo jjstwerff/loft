@@ -72,8 +72,14 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_set_store_lock",           abi: Abi::Cell },
     RuntimeFn { name: "n_protect_store_frees",      abi: Abi::Cell },
     RuntimeFn { name: "n_unprotect_store_frees",    abi: Abi::Cell },
-    RuntimeFn { name: "n_rand",                     abi: Abi::None },
-    RuntimeFn { name: "n_rand_indices",             abi: Abi::Cell },
+    // @PLAN12 phase 3.5a (2026-05-24) — n_rand / n_rand_seed /
+    // n_rand_indices all drained to lib/random/native/.  The full
+    // drain became possible after the `loft::native_call` helpers
+    // shipped (LoftStore forwarding for store-allocating cdylib
+    // returns).  Native codegen routes these through
+    // `native_symbol_crates` from random's [native.functions] manifest;
+    // the interpreter routes via dlopen.  Single RNG state in the
+    // cdylib; no compiler-crate fallback.
     RuntimeFn { name: "n_parallel_for_native",        abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_text_native",   abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_ref_native",    abi: Abi::Cell },
@@ -154,6 +160,37 @@ pub fn to_loft_ref(db: DbRef) -> loft_ffi::LoftRef {
         store_nr: db.store_nr,
         rec: db.rec,
         pos: db.pos,
+    }
+}
+
+/// Convert a `loft_ffi::LoftRef` returned from a cdylib call into a
+/// `DbRef` in the indirect (header → data) layout that loft uses
+/// internally.  Mirrors `extensions::push_loft_ref` but takes
+/// `&mut Stores` directly instead of going through the dispatch
+/// state — used by generated native code that calls cdylib
+/// functions returning store-allocated vectors/structs.
+///
+/// @PLAN12 phase 3.5a (2026-05-24).
+#[must_use]
+pub fn from_loft_ref(stores: &mut Stores, r: loft_ffi::LoftRef) -> DbRef {
+    if r.is_null() {
+        return DbRef {
+            store_nr: 0,
+            rec: 0,
+            pos: 0,
+        };
+    }
+    let base = DbRef {
+        store_nr: r.store_nr,
+        rec: 0,
+        pos: 0,
+    };
+    let header = stores.claim(&base, 1);
+    stores.store_mut(&base).set_u32_raw(header.rec, 4, r.rec);
+    DbRef {
+        store_nr: r.store_nr,
+        rec: header.rec,
+        pos: 4,
     }
 }
 use crate::vector;
@@ -460,6 +497,10 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
     stores.remove_claims(&to, tp);
     stores.copy_block(&data, &to, size);
     stores.copy_claims(&data, &to, tp);
+    // @P317 — LOFT_LOG=copy_check (native): warn on nested-length divergence.
+    if stores.copy_check_enabled() {
+        stores.report_copy_mismatches(&data, &to, tp, "OpCopyRecord");
+    }
     if free_source
         && data.store_nr != to.store_nr
         && data.store_nr != 0
@@ -485,6 +526,10 @@ pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: Db
     let tp = raw_tp & 0x7FFF;
     stores.remove_claims(&dest, tp);
     stores.copy_claims(&src, &dest, tp);
+    // @P317 — LOFT_LOG=copy_check (native): warn on nested-length divergence.
+    if stores.copy_check_enabled() {
+        stores.report_copy_mismatches(&src, &dest, tp, "OpReplaceKeyed");
+    }
     if free_source
         && src.store_nr != dest.store_nr
         && src.store_nr != 0
@@ -494,6 +539,28 @@ pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: Db
     {
         stores.free(&src);
     }
+}
+
+/// @P307 — clear a keyed collection (`sorted`/`hash`/`index`) held in a
+/// STRUCT FIELD: free its element records + bucket/tree array and zero the
+/// field's claim pointer, so a later `+= [..]` re-initialises it.  Native
+/// twin of the `OpClearKeyed` interp op (`#rust` body
+/// `s.database.remove_claims`).  Unlike the keyed-LOCAL clear (OpDatabase,
+/// which resets a dedicated store), a field's collection lives as a claim
+/// inside its struct's store, so `remove_claims` is the in-place free.
+pub fn OpClearKeyed(cell: &std::cell::UnsafeCell<Stores>, dest: DbRef, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores.remove_claims(&dest, tp as u16);
+}
+
+/// @P305 — `coll[key] = value` insert-or-replace into a keyed collection.
+/// Native twin of the `OpSetKeyed` interp op / `State::set_keyed`.  `tp`'s
+/// `0x8000` bit frees `value`'s store after the deep copy (caller temp).
+pub fn OpSetKeyed(cell: &std::cell::UnsafeCell<Stores>, collection: DbRef, value: DbRef, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let raw = tp as u16;
+    let free_source = raw & 0x8000 != 0;
+    stores.set_keyed(&collection, &value, raw & 0x7FFF, free_source);
 }
 
 /// Sort a vector in-place using the element type's natural ordering.
@@ -1745,26 +1812,12 @@ pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i6
     }
 }
 
-/// Wrappers for the `external` module emitted in generated native files.
-/// Using these avoids `cfg(feature = "random")` in the generated code.
-pub fn cr_rand_seed(seed: i64) {
-    #[cfg(feature = "random")]
-    crate::ops::rand_seed(seed);
-    #[cfg(not(feature = "random"))]
-    let _ = seed;
-}
-#[must_use]
-pub fn cr_rand_int(lo: i64, hi: i64) -> i64 {
-    #[cfg(feature = "random")]
-    {
-        crate::ops::rand_int(lo, hi)
-    }
-    #[cfg(not(feature = "random"))]
-    {
-        let _ = (lo, hi);
-        i64::MIN
-    }
-}
+// @PLAN12 phase 3.5a (2026-05-24) — cr_rand_seed / cr_rand_int /
+// the `external::` module that wrapped them all removed.  random's
+// drain to lib/random/native/ + the loft::native_call codegen
+// helpers mean the cdylib is the single source of RNG state for
+// both backends.  Nothing else in the loft crate referenced these
+// helpers (greps were empty), so they're safe to delete.
 
 /// Parse a `LOFT_FAKE_*` env var into an `i64`.  See the same-named
 /// helper in `src/native.rs` for the full contract; duplicated here so
@@ -2454,53 +2507,12 @@ pub fn n_unprotect_store_frees(cell: &std::cell::UnsafeCell<Stores>, r: DbRef) {
     }
 }
 
-/// Return a random integer in `[lo, hi]` (inclusive).
-/// Returns `i64::MIN` (null) when `lo > hi`.
-/// Bytecode equivalent: `n_rand` in `src/native.rs`.
-/// Plan 09 phase 01 step 1.5: migrated to the no-stores ABI — body
-/// uses thread-local RNG state, not `Stores`.
-pub fn n_rand(lo: i64, hi: i64) -> i64 {
-    cr_rand_int(lo, hi)
-}
-
-/// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
-/// Returns an empty vector reference when `n <= 0`.
-/// Bytecode equivalent: `n_rand_indices` in `src/native.rs`.
-pub fn n_rand_indices(cell: &std::cell::UnsafeCell<Stores>, n: i64) -> DbRef {
-    let stores: &mut Stores = unsafe { &mut *cell.get() };
-    let count = if n == i64::MIN || n <= 0 {
-        0usize
-    } else {
-        n as usize
-    };
-    // Build shuffled index list.  shuffle_ints is available under feature="random"
-    // (PCG64 RNG) and feature="wasm" (host_random_int bridge); without either the
-    // indices are returned in ascending order.
-    #[allow(unused_mut)]
-    let mut indices: Vec<i32> = (0..count as i32).collect();
-    #[cfg(any(feature = "random", all(feature = "wasm", not(feature = "random"))))]
-    crate::ops::shuffle_ints(&mut indices);
-    // Allocate: vec_rec holds size + data, header_rec holds pointer to vec_rec.
-    let base = stores.null();
-    let vec_words = ((count as u32 * 4 + 15) / 8).max(1);
-    let vec_cr = stores.claim(&base, vec_words);
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&base, 1);
-    let header_rec = header_cr.rec;
-    {
-        let store = stores.store_mut(&base);
-        store.set_u32_raw(vec_rec, 4, count as u32);
-        for (i, &val) in indices.iter().enumerate() {
-            store.set_i32_raw(vec_rec, 8 + i as u32 * 4, val);
-        }
-        store.set_u32_raw(header_rec, 4, vec_rec);
-    }
-    DbRef {
-        store_nr: base.store_nr,
-        rec: header_rec,
-        pos: 4,
-    }
-}
+// @PLAN12 phase 3.5a (2026-05-24) — n_rand / n_rand_seed /
+// n_rand_indices removed.  All three live in lib/random/native/'s
+// cdylib now; native codegen reaches them via `extern crate
+// loft_random;` + `crate::n_*(...)` qualified calls, with LoftStore
+// forwarded by `loft::native_call::build_store` for the
+// store-allocating n_rand_indices.
 
 /// Allocate a result vector of `n` elements, each `elem_size` bytes, and run
 /// `worker(stores, element_dbref)` on every element, storing the result.
@@ -3528,6 +3540,33 @@ pub trait LoftCoroutine {
     fn next_text(&mut self, _stores: &mut Stores) -> String {
         crate::state::STRING_NULL.to_string()
     }
+
+    /// Advance a Reference-yielding generator one step.  Returns the yielded
+    /// `DbRef`, or the null-DbRef sentinel (`store_nr == u16::MAX`, `rec == 0`)
+    /// when the generator is exhausted.  Used by `iterator<Struct>` /
+    /// `iterator<vector<T>>` / any DbRef-shaped yield (@P326).
+    fn next_dbref(&mut self, _stores: &mut Stores) -> DbRef {
+        DbRef {
+            store_nr: u16::MAX,
+            rec: 0,
+            pos: 0,
+        }
+    }
+
+    /// Unified store-backed yield channel (@P327 native; designed to absorb
+    /// future yield shapes without adding one trait method per shape — see
+    /// `plans/16-coroutine-validation/01-unified-channel.md`).  Advance the
+    /// generator one step and write the yielded value's bytes into `dest`
+    /// (a caller-provided `i64`-aligned buffer sized for the yielded type).
+    /// Returns true on yield, false on exhaustion.
+    ///
+    /// Each coroutine impl encodes its OWN yield-type layout in this single
+    /// method — no new trait method per shape.  This is the migration
+    /// target for `next_i64` / `next_dbref` / `next_text`; each can move
+    /// to `next_into` one shape at a time.
+    fn next_into(&mut self, _stores: &mut Stores, _dest: &mut [i64]) -> bool {
+        false
+    }
 }
 
 std::thread_local! {
@@ -3578,6 +3617,57 @@ pub fn coroutine_next_i64(gen_ref: DbRef, stores: &mut Stores) -> i64 {
             val
         } else {
             COROUTINE_EXHAUSTED
+        }
+    })
+}
+
+/// Advance a generator through the unified store-backed yield channel
+/// (@P327 native).  Writes the yielded value's bytes into `dest` and
+/// returns true; returns false and frees the slot on exhaustion.
+pub fn coroutine_next_into(gen_ref: DbRef, stores: &mut Stores, dest: &mut [i64]) -> bool {
+    NATIVE_COROUTINES.with(|c| {
+        let mut coroutines = c.borrow_mut();
+        let idx = gen_ref.rec as usize;
+        if let Some(slot) = coroutines.get_mut(idx)
+            && let Some(coro) = slot.as_mut()
+        {
+            let ok = coro.next_into(stores, dest);
+            if !ok {
+                coroutines[idx] = None;
+            }
+            ok
+        } else {
+            false
+        }
+    })
+}
+
+/// Advance a Reference-yielding native coroutine.  Returns the yielded
+/// `DbRef`, or the null-DbRef sentinel (store_nr=u16::MAX, rec=0) when
+/// exhausted.  Frees the coroutine slot automatically on exhaustion,
+/// mirroring `coroutine_next_i64` (@P326).
+pub fn coroutine_next_dbref(gen_ref: DbRef, stores: &mut Stores) -> DbRef {
+    NATIVE_COROUTINES.with(|c| {
+        let mut coroutines = c.borrow_mut();
+        let idx = gen_ref.rec as usize;
+        if let Some(slot) = coroutines.get_mut(idx)
+            && let Some(coro) = slot.as_mut()
+        {
+            let val = coro.next_dbref(stores);
+            // Null sentinel matches `vector::null_ref` and `OpNullRefSentinel`:
+            // store_nr == u16::MAX is the universal "no record" indicator.
+            // The for-loop's `OpCoroutineExhausted(gen)` check also flips to
+            // true here because exhaustion frees the slot.
+            if val.store_nr == u16::MAX {
+                coroutines[idx] = None;
+            }
+            val
+        } else {
+            DbRef {
+                store_nr: u16::MAX,
+                rec: 0,
+                pos: 0,
+            }
         }
     })
 }

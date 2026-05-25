@@ -550,6 +550,55 @@ fn p244_text_native_wrapper_compiles_under_native() {
     );
 }
 
+/// @P310 regression: native codegen must emit `*const i64` (not `*const i32`)
+/// for a `vector<integer>` argument bound to a `vec<i64>` FFI wrapper.  The
+/// graphics `Canvas.data` (`vector<integer>`, 8-byte stride post-2c) is
+/// passed to `loft_save_png(data: vec<i64>)`; before the fix
+/// `vector_elem_rust_type` keyed off `is_wide()` (a value-range predicate)
+/// and emitted `*const i32`, so every graphics program failed `--check` /
+/// `--native` with E0308.  The fix keys off the storage stride
+/// (`vector_narrow_width()`); the unit test
+/// `generation::p310_vector_elem_tests` pins it at the function level, this
+/// pins it end-to-end (a real graphics program must `--check` clean).
+#[test]
+fn p310_graphics_vector_ffi_checks_clean() {
+    // Direct binary invocation — see p203_reproducer_passes_under_native
+    // for the nested-cargo race rationale.
+    let out = std::process::Command::new(loft_binary())
+        .args([
+            "--check",
+            "--lib",
+            "lib",
+            "tests/fixtures/p310_save_png.loft",
+        ])
+        .current_dir(project_root())
+        .output()
+        .expect("run --check on the @P310 graphics save_png fixture");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Windows toolchain: the windows-targets crate emits a search path
+    // pointing into its registry source dir (not OUT_DIR), so the test
+    // binary's link step fails with `LNK1181: cannot open input file
+    // 'windows.0.NN.0.lib'`.  This is an environmental issue (mirror of
+    // the `build_script_native_lib_dirs` workaround in src/native_utils.rs
+    // for loft's own invocation), not a regression in the test code.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if stderr.contains("LNK1181")
+        || stderr.contains("link.exe` failed: exit code: 1181")
+        || stdout.contains("LNK1181")
+        || stdout.contains("link.exe` failed: exit code: 1181")
+    {
+        eprintln!("SKIP: Windows windows-targets link search path issue — {stderr}");
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "P310: graphics save_png fixture failed `--check` — the \
+         vector_elem_rust_type storage-stride fix (src/generation/mod.rs) \
+         regressed (vector<integer> lowered to *const i32 vs the vec<i64> wrapper).  \
+         stderr={stderr:?}"
+    );
+}
+
 /// Phase 07 regression test: the P205 reproducer must compile +
 /// run cleanly under native.  Pins the dangling-Str fix —
 /// without phase 07's emit-time scratch routing, the generic-text-
@@ -639,19 +688,13 @@ fn abi_of_handles_all_runtime_fns() {
 // Wart-budget gates (plan 09 phase 00 evaluation findings)
 // ============================================================
 
-/// Gate A: caps the size of the special-case Op match in
-/// `dispatch.rs::output_call_inner`.
-///
-/// At phase 00 completion the match has 26 hardcoded inline-emission
-/// arms — a parallel dispatch system that lives alongside the
-/// `emit_op` registry.  Plan 09's broader goal is to drain this match
-/// to zero by migrating each Op into a custom emitter (phases 03/04
-/// chip away at this).  This gate enforces the migration direction:
-/// new emissions must be registered emitters, NOT new match arms.
-///
-/// Budget: shrink this number as phases land custom emitters.
-/// **Never raise it without justification** in NATIVE.md.
-const DISPATCH_OP_ARM_BUDGET: usize = 26;
+/// Gate A: the special-case Op `match` in `dispatch.rs::output_call_inner`
+/// has been ELIMINATED — every Op now dispatches through the `emit_op`
+/// registry (`src/generation/ops/`) or a `#rust` template.  This gate is now
+/// a ratchet at **zero**: it fails if anyone re-introduces a `"Op…" =>` match
+/// arm.  New Op-specific native emission must be a registered `OpEmitter` or a
+/// `#rust` template, never a match arm.
+const DISPATCH_OP_ARM_BUDGET: usize = 0;
 
 #[test]
 fn dispatch_op_arm_budget_not_exceeded() {
@@ -683,12 +726,11 @@ fn dispatch_op_arm_budget_not_exceeded() {
         .count();
 
     assert!(
-        arms <= DISPATCH_OP_ARM_BUDGET,
-        "dispatch.rs::output_call_inner has {arms} Op match arms — budget is \
-         {DISPATCH_OP_ARM_BUDGET}.  New Op-specific emissions must be registered as \
-         `OpEmitter` impls in `src/generation/ops/`, not added as match arms.  \
-         If you have a justification for raising the budget, document it in \
-         doc/claude/NATIVE.md and update DISPATCH_OP_ARM_BUDGET."
+        arms == DISPATCH_OP_ARM_BUDGET,
+        "dispatch.rs::output_call_inner has {arms} `\"Op…\" =>` match arm(s) — the \
+         match was eliminated and must stay at 0.  Add native Op emission as a \
+         registered `OpEmitter` impl in `src/generation/ops/` (or a `#rust` \
+         template in default/*.loft), not as a match arm."
     );
 }
 

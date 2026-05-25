@@ -1,0 +1,17 @@
+        fn one_iteration() -> integer {
+            n = 0;
+            bump = fn() { n = n + 1; };
+            bump();
+            bump();
+            bump();
+            n
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == 3, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        

@@ -1,3 +1,20 @@
+// @generated — DO NOT EDIT BY HAND.
+//
+// The interpreter's bytecode-operator dispatch table, generated from the
+// `#rust"..."` operator annotations in default/*.loft by
+// `src/create.rs::generate_code_into` — each `fn op_*(s: &mut State)` body is
+// that operator's `#rust` template (written in `s: &mut State` vocabulary).
+//
+// Regenerate after changing ANY `#rust` operator template:
+//     make fill        (runs the ignored `regen_fill_rs` test, which calls
+//                       `create::generate_code_to(.., "src/fill.rs")`)
+// Byte-for-byte equality of this file with that regeneration is enforced by
+// `tests/issues.rs::fill_rs_up_to_date` and `::n9_generated_fill_matches_src`,
+// so hand-edits fail CI — edit the `#rust` template in default/*.loft instead.
+//
+// The SAME templates feed native code generation (`src/generation/`): there the
+// `s.<method>` calls below are rewritten to their `stores.*` / `*_runtime`
+// equivalents by `src/generation/calls.rs::substitute_template_body`.
 #![allow(clippy::cast_possible_wrap)]
 #![allow(unused_parens)]
 
@@ -228,6 +245,8 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     append_copy,
     copy_record,
     replace_keyed,
+    clear_keyed,
+    set_keyed,
     static_call,
     create_stack,
     init_create_stack,
@@ -1019,7 +1038,8 @@ fn const_text(s: &mut State) {
 }
 
 fn conv_text_from_null(s: &mut State) {
-    s.conv_text_from_null();
+    let new_value = Str::new(crate::state::STRING_NULL);
+    s.put_stack(new_value);
 }
 
 fn length_text(s: &mut State) {
@@ -1695,14 +1715,20 @@ fn get_vector(s: &mut State) {
     let v_size = *s.code::<u16>();
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = s.vec_get_or_raise(&v_r, u32::from(v_size), v_index);
+    let new_value = {
+        let __vr = v_r;
+        s.vec_get_or_raise(&__vr, u32::from(v_size), v_index)
+    };
     s.put_stack(new_value);
 }
 
 fn vector_ref(s: &mut State) {
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = s.vec_ref_or_raise(&v_r, v_index);
+    let new_value = {
+        let __vr = v_r;
+        s.vec_ref_or_raise(&__vr, v_index)
+    };
     s.put_stack(new_value);
 }
 
@@ -1864,6 +1890,16 @@ fn copy_record(s: &mut State) {
 
 fn replace_keyed(s: &mut State) {
     s.replace_keyed();
+}
+
+fn clear_keyed(s: &mut State) {
+    let v_tp = *s.code::<u16>();
+    let v_dest = *s.get_stack::<DbRef>();
+    s.database.remove_claims(&v_dest, v_tp);
+}
+
+fn set_keyed(s: &mut State) {
+    s.set_keyed();
 }
 
 fn static_call(s: &mut State) {
@@ -2039,7 +2075,7 @@ fn coroutine_create(s: &mut State) {
 
 fn coroutine_next(s: &mut State) {
     let v_value_size = *s.code::<u16>();
-    s.coroutine_next(u32::from(v_value_size));
+    s.coroutine_next(u32::from(v_value_size & 0xFF));
 }
 
 fn coroutine_return(s: &mut State) {

@@ -547,6 +547,30 @@ impl Parser {
             } else {
                 let mut v = Value::Null;
                 self.expression(&mut v);
+                // @P328 — when yielding a NON-CAPTURING closure into an
+                // `iterator<fn(...) -> ...>` generator, the expression
+                // parser leaves the lambda as a bare `Value::Int(d_nr)`
+                // (the closure DbRef would be the null sentinel anyway).
+                // But the generator's yielded type is `Function(...)`
+                // which the coroutine machinery treats as 20 bytes
+                // (8B d_nr + 12B closure DbRef).  Pushing only 4 bytes
+                // for the bare Int crashes the consumer's
+                // `OpCoroutineNext(gen, 20)` (interp SIGBUS) and
+                // mis-types the native channel.  Wrap the bare Int as
+                // a proper `Value::FnRef(d_nr, u16::MAX, _)` so the
+                // yielded value is a full 20-byte fn-ref.  Capturing
+                // closures already arrive as a Block ending in
+                // `FnRef(d_nr, closure_var, _)`, so no rewrite needed.
+                if let Type::Iterator(elem_tp, _) = &r_type
+                    && matches!(**elem_tp, Type::Function(_, _, _))
+                {
+                    let unspanned = v.unspan().clone();
+                    if let Value::Int(d_nr) = unspanned {
+                        v = Value::FnRef(d_nr, u16::MAX, Box::new((**elem_tp).clone()));
+                    } else if let Value::Long(d_nr) = unspanned {
+                        v = Value::FnRef(d_nr as i32, u16::MAX, Box::new((**elem_tp).clone()));
+                    }
+                }
                 *val = Value::Yield(Box::new(v));
                 Type::Void
             }
@@ -1103,8 +1127,8 @@ use a separate collection or add after the loop"
                     return Type::Void;
                 }
                 let elm_tp_clone = (**elm_tp).clone();
-                let dn = self.data.type_def_nr(&elm_tp_clone);
-                let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+                // @P314 — narrow-aware element type (see `append_elem_tp`).
+                let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
                 // when the RHS is anything other than a plain Var read
                 // it may alias the destination (e.g.
                 // `s.v = pop_tail(s.v, 1)` where the helper reads the
@@ -1125,6 +1149,46 @@ use a separate collection or add after the loop"
                     let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);
                     *code = Value::Insert(vec![set_tmp, clear, append]);
                 }
+                return Type::Void;
+            }
+        }
+        // @P307 — keyed-collection STRUCT FIELD clear: `s.h = []` where
+        // `s.h: sorted`/`hash`/`index<T[K]>`.  The vector-field branch above
+        // handles `s.v = []`; the keyed analog used to fall through to the
+        // Insert bypass with no op emitted (silent no-op + leak) AND the
+        // keyed-field write was never recognised by `check_ref_mutations`
+        // (rejecting a `&` param as unmodified — see find_field_written_vars).
+        // Lower the empty-literal clear to `OpClearKeyed(field, kt)` which
+        // `remove_claims`-frees the contents and zeroes the field's claim
+        // pointer, leaving an empty collection a later `+= [..]` re-inits.
+        // Mirrors the keyed-LOCAL clear (@P302, via OpDatabase) but for the
+        // in-struct claim shape.  Non-empty / non-literal keyed-field
+        // reassignment is a separate (harder) case left to its current path.
+        if !self.first_pass
+            && op == "="
+            && var_nr == u16::MAX
+            && self.is_field(to)
+            && matches!(code, Value::Insert(ls) if ls.is_empty())
+        {
+            let kt = match &f_type {
+                Type::Sorted(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.sorted(c, key))
+                }
+                Type::Hash(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.hash(c, key))
+                }
+                Type::Index(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    (c != u16::MAX).then(|| self.database.index(c, key))
+                }
+                _ => None,
+            };
+            if let Some(kt) = kt {
+                *code = Value::Insert(vec![
+                    self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]),
+                ]);
                 return Type::Void;
             }
         }
@@ -1160,8 +1224,8 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
             let elm_tp_clone = (**elm_tp).clone();
-            let dn = self.data.type_def_nr(&elm_tp_clone);
-            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+            // @P314 — narrow-aware element type (see `append_elem_tp`).
+            let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
             let clear = self.cl("OpClearVector", std::slice::from_ref(to));
             let append = self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]);
             *code = Value::Insert(vec![clear, append]);
@@ -1242,7 +1306,21 @@ use a separate collection or add after the loop"
             if let Value::Var(rhs) = code.unspan() {
                 self.vars.make_independent(var_nr, *rhs);
             }
-            *code = Value::Insert(vec![replace]);
+            // @P300 — prepend `Set(v, Null)` so the destination keeps a
+            // recordable `Value::Set` node.  `compute_intervals` only
+            // records `first_def` from a `Set`, so without it a FIRST
+            // assignment (`x = mk()`) leaves `x` slot-less → the
+            // `Incorrect var x[65535]` panic in `generate_var`.
+            // `scan_set` (`scopes.rs`) makes the prepend do the right
+            // thing for free: on a FIRST assignment `x` is not yet in
+            // scope so the `Set(x, Null)` survives → codegen's keyed-Null
+            // arm allocates an empty store (`gen_set_first_keyed_null`);
+            // on a REASSIGNMENT `v` is already in scope so `scan_set`
+            // elides the redundant `Set(v, Null)`, leaving just
+            // `OpReplaceKeyed` (whose `remove_claims` clears `v`'s
+            // existing store before `copy_claims`).  No parse-time
+            // first-vs-reassign discriminator needed.
+            *code = Value::Insert(vec![Value::Set(var_nr, Box::new(Value::Null)), replace]);
             return Type::Void;
         }
         // @P295 — `spacial` reassignment is not yet supported (copy_claims
@@ -1274,7 +1352,9 @@ use a separate collection or add after the loop"
             && matches!(s_type, Type::Vector(_, _))
             && !matches!(code, Value::Insert(_))
         {
-            let rec_tp = i32::from(self.data.def(self.data.type_def_nr(elm_tp)).known_type);
+            // @P314 — narrow-aware element type (see `append_elem_tp`).
+            let elm = (**elm_tp).clone();
+            let rec_tp = self.append_elem_tp(&elm);
             *code = Value::Insert(vec![self.cl(
                 "OpAppendVector",
                 &[to.clone(), code.clone(), Value::Int(rec_tp)],
@@ -2107,7 +2187,9 @@ use a separate collection or add after the loop"
         if self.first_pass {
             return true;
         }
-        let rec_tp = i32::from(self.data.def(self.data.type_def_nr(elm_tp)).known_type);
+        // @P314 — narrow-aware element type (see `append_elem_tp`).
+        let elm = (**elm_tp).clone();
+        let rec_tp = self.append_elem_tp(&elm);
         *code = self.cl(
             "OpAppendVector",
             &[Value::Var(var_nr), code.clone(), Value::Int(rec_tp)],

@@ -55,10 +55,15 @@ fn sha1(data: &[u8]) -> [u8; 20] {
     for chunk in msg.chunks(64) {
         let mut w = [0u32; 80];
         for i in 0..16 {
-            w[i] = u32::from_be_bytes([chunk[i*4], chunk[i*4+1], chunk[i*4+2], chunk[i*4+3]]);
+            w[i] = u32::from_be_bytes([
+                chunk[i * 4],
+                chunk[i * 4 + 1],
+                chunk[i * 4 + 2],
+                chunk[i * 4 + 3],
+            ]);
         }
         for i in 16..80 {
-            w[i] = (w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16]).rotate_left(1);
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
         }
         let (mut a, mut b, mut c, mut d, mut e) = (h0, h1, h2, h3, h4);
         for (i, &wi) in w.iter().enumerate() {
@@ -68,8 +73,17 @@ fn sha1(data: &[u8]) -> [u8; 20] {
                 40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDCu32),
                 _ => (b ^ c ^ d, 0xCA62C1D6u32),
             };
-            let temp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(wi);
-            e = d; d = c; c = b.rotate_left(30); b = a; a = temp;
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(wi);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
         }
         h0 = h0.wrapping_add(a);
         h1 = h1.wrapping_add(b);
@@ -98,8 +112,16 @@ fn base64_encode(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         result.push(CHARS[((n >> 18) & 63) as usize] as char);
         result.push(CHARS[((n >> 12) & 63) as usize] as char);
-        if chunk.len() > 1 { result.push(CHARS[((n >> 6) & 63) as usize] as char); } else { result.push('='); }
-        if chunk.len() > 2 { result.push(CHARS[(n & 63) as usize] as char); } else { result.push('='); }
+        if chunk.len() > 1 {
+            result.push(CHARS[((n >> 6) & 63) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(n & 63) as usize] as char);
+        } else {
+            result.push('=');
+        }
     }
     result
 }
@@ -172,9 +194,7 @@ pub fn ws_read_frame_detailed(stream: &mut TcpStream) -> ReadOutcome {
     let mut header = [0u8; 2];
     if let Err(e) = stream.read_exact(&mut header) {
         return match e.kind() {
-            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
-                ReadOutcome::NoData
-            }
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => ReadOutcome::NoData,
             _ => ReadOutcome::Closed,
         };
     }
@@ -194,6 +214,18 @@ pub fn ws_read_frame_detailed(stream: &mut TcpStream) -> ReadOutcome {
             return ReadOutcome::Closed;
         }
         payload_len = u64::from_be_bytes(buf);
+    }
+
+    // Crash-resistance (@PLAN36-1.9): a hostile / buggy peer can claim a
+    // 64-bit payload length up to ~16 EiB.  Allocating `vec![0u8;
+    // payload_len]` for that aborts the whole process on the failed
+    // allocation, taking every other client's session down with it.  Real
+    // client→server frames here are tiny control messages, so cap the
+    // accepted frame size and drop the offending peer instead of trusting
+    // its length field.
+    const MAX_FRAME_PAYLOAD: u64 = 16 * 1024 * 1024; // 16 MiB
+    if payload_len > MAX_FRAME_PAYLOAD {
+        return ReadOutcome::Closed;
     }
 
     let mask = if masked {

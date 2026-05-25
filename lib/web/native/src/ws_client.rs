@@ -346,7 +346,7 @@ mod native_impl {
                 Ok(s) => {
                     let mut stream = s;
                     if do_handshake(&mut stream, &host, port, &path) {
-                        let _ = stream.set_read_timeout(Some(Duration::from_millis(20)));
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(7)));
                         return Ok(stream);
                     }
                     last_err = Some("handshake");
@@ -533,6 +533,70 @@ mod native_impl {
         LAST_OP.with(|o| *o.borrow())
     }
 
+    /// Poll a slice of handles, starting at `offset` (for round-robin
+    /// fairness).  Returns the handle of the first connection that has a
+    /// message ready, or -1 if none do.  On success the message + opcode
+    /// are stored in LAST_MSG / LAST_OP just like a regular `recv`.
+    ///
+    /// Key difference from calling `recv` on each handle in turn: sockets
+    /// are set to non-blocking for the scan so an empty socket returns
+    /// immediately (microseconds, not milliseconds).  The normal timeout
+    /// is restored before returning.  Total scan cost for N idle sockets
+    /// is N × ~µs instead of N × 7 ms.
+    pub fn poll_group(handles: &[i32], offset: usize) -> i32 {
+        let n = handles.len();
+        if n == 0 {
+            return -1;
+        }
+        let timeout = Duration::from_millis(7);
+        CONNS.with(|c| {
+            let mut c = c.borrow_mut();
+            for i in 0..n {
+                let idx = (offset + i) % n;
+                let h = handles[idx];
+                let conn = match c.get_mut(h as usize).and_then(|s| s.as_mut()) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                // Buffered message — instant return, no syscall.
+                if let Some(msg) = conn.inbox.pop_front() {
+                    LAST_MSG.with(|m| *m.borrow_mut() = msg);
+                    return h;
+                }
+                if !ensure_connected(conn) {
+                    continue;
+                }
+                let stream = conn.stream.as_mut().expect("connected");
+                // Set non-blocking for the probe — an empty socket returns
+                // WouldBlock immediately instead of waiting 7 ms.
+                let _ = stream.set_nonblocking(true);
+                let result = read_unmasked_frame(stream);
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(timeout));
+                match result {
+                    Some((op, payload)) if op == OP_TEXT || op == OP_BINARY => {
+                        let s = if op == OP_TEXT {
+                            String::from_utf8_lossy(&payload).into_owned()
+                        } else {
+                            unsafe { String::from_utf8_unchecked(payload) }
+                        };
+                        LAST_MSG.with(|m| *m.borrow_mut() = s);
+                        LAST_OP.with(|o| *o.borrow_mut() = op);
+                        return h;
+                    }
+                    Some((op, payload)) if op == OP_PING => {
+                        let _ = write_masked_frame(stream, OP_PONG, &payload);
+                    }
+                    Some((op, _)) if op == OP_CLOSE => {
+                        mark_disconnected(conn);
+                    }
+                    _ => {}
+                }
+            }
+            -1
+        })
+    }
+
     pub fn close(handle: i32) {
         CONNS.with(|c| {
             let mut c = c.borrow_mut();
@@ -616,7 +680,7 @@ mod wasm_impl {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_impl::{close, connect, last_message, last_opcode, recv, send, send_binary};
+pub use native_impl::{close, connect, last_message, last_opcode, poll_group, recv, send, send_binary};
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_impl::{close, connect, last_message, last_opcode, recv, send, send_binary};

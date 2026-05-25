@@ -1,0 +1,18 @@
+        struct Counter { n: integer }
+        fn one_iteration() -> integer {
+            c = Counter { n: 0 };
+            bump = fn() { c.n = c.n + 1; };
+            bump();
+            bump();
+            bump();
+            c.n
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == 3, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        

@@ -46,3 +46,11 @@ dist/
 # Python __pycache__ from tools/indexer/migrate.py.
 __pycache__/
 *.pyc
+
+# Registry trust-root tooling — loft-keygen outputs.  The canonical
+# embedding is in src/registry_keys.rs.  These files (if generated
+# at repo root by `loft-keygen generate` for ad-hoc inspection) are
+# scratch artefacts, not source.  The real private key MUST live
+# at ~/.loft/trust-root/, never in the repo.
+registry-signing-key.pub
+registry-signing-key.bin

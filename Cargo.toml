@@ -23,6 +23,11 @@ path = "src/main.rs"
 name = "gendoc"
 path = "src/gendoc.rs"
 
+[[bin]]
+name = "loft-keygen"
+path = "src/bin/loft-keygen.rs"
+required-features = ["registry"]
+
 [features]
 default      = ["mmap", "random", "threading", "registry", "native-extensions"]
 threading    = ["dep:rayon"]
@@ -34,7 +39,7 @@ png          = ["dep:png"]
 mmap         = ["dep:mmap-storage"]
 random            = ["dep:rand_core", "dep:rand_pcg"]
 native-extensions = ["dep:libloading"]
-registry     = ["dep:ureq", "dep:zip"]
+registry     = ["dep:ureq", "dep:zip", "dep:tar", "dep:flate2", "dep:sha2", "dep:ed25519-dalek"]
 # Development aid — when set, `tests/testing.rs::Test::drop` writes each
 # test's assembled loft source to `/tmp/loft-repro/<test_name>.loft`
 # *before* running it, with a `fn main() { test(); }` tail appended so
@@ -63,6 +68,10 @@ loft-ffi           = { path = "loft-ffi" }
 console_error_panic_hook = { version = "0.1", optional = true }
 ureq               = { version = "2", optional = true }
 zip                = { version = "2", optional = true, default-features = false, features = ["deflate"] }
+tar                = { version = "0.4", optional = true }
+flate2             = { version = "1", optional = true }
+sha2               = { version = "0.10", optional = true }
+ed25519-dalek      = { version = "2", optional = true, default-features = false, features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]
 libc               = "0.2"

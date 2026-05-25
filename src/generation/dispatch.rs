@@ -93,6 +93,24 @@ impl Output<'_> {
             }
             writeln!(w, "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);")?;
             self.indent(w)?;
+            // @P298 / @P297 (native half) — free the callee's return store
+            // after the deep copy by OR-ing the `0x8000` source-free bit into
+            // the OpCopyRecord type-nr (the runtime `OpCopyRecord` honours it).
+            // Without this, `_src` (the freshly-allocated struct the callee
+            // returned) is copied into `var_{name}` and then leaked — one
+            // store per call.  Mirrors the interpreter's
+            // `gen_set_first_ref_call_copy` (`src/state/codegen.rs`).
+            //
+            // Clear the bit when the callee returns a BORROWED view (its
+            // return type carries a `dep` chain naming one of its args): the
+            // "source" is then a slice of an arg's store, and freeing it would
+            // corrupt the caller.  Return-dep inference tags these correctly.
+            let is_borrowed_view = !self.data.def(*fn_nr).returned.depend().is_empty();
+            let tp_with_free: i32 = if is_borrowed_view {
+                i32::from(tp_nr)
+            } else {
+                i32::from(tp_nr) | 0x8000
+            };
             // Emit the call into a temporary, then deep-copy.
             // P198 — the inner user-fn call uses the new `cell` ABI; the
             // outer OpCopyRecord wraps `cell` to a fresh `&mut Stores`.
@@ -106,7 +124,10 @@ impl Output<'_> {
                     self.output_code_inner(w, arg)?;
                 }
             }
-            write!(w, "); OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }}")?;
+            write!(
+                w,
+                "); OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }}"
+            )?;
             return Ok(());
         }
         // When assigning a reference to a reference variable, a pointer copy is not
@@ -160,7 +181,15 @@ impl Output<'_> {
         // statements before the declaration, then assign only from the final expression.
         // Without this, the inner Set ops are emitted inline inside an expression context,
         // producing malformed Rust like `let mut var_rv: DbRef = let mut var__read: DbRef = …`.
-        if let Value::Insert(ops) = to
+        //
+        // @P321g: unspan `to` first.  The parser wraps an assignment RHS in
+        // `Value::Span` for source-position tracking, so `x = route_click(p,
+        // st.es_tools, …)` — where the `&`-ref arg `st.es_tools` materialises a
+        // `Set(__ref_N, …)` statement ahead of the call — arrives here as
+        // `Span(Insert([Set(__ref_N, …), Call(…)]))`.  Matching the bare
+        // `Insert` missed it, falling through to the brace-less `Insert` arm in
+        // `output_code_inner` and re-emitting the exact malformed shape above.
+        if let Value::Insert(ops) = to_unspanned
             && !ops.is_empty()
         {
             for op in &ops[..ops.len() - 1] {
@@ -244,6 +273,9 @@ impl Output<'_> {
             }
             return Ok(());
         }
+        // @P302 — capture first-vs-reassign BEFORE the `declared` insert below
+        // (the first-decl branch inserts `var`, so the flag must be read now).
+        let first_assign = !self.declared.contains(&var);
         if self.declared.contains(&var) {
             write!(w, "var_{name} = ")?;
         } else {
@@ -254,7 +286,7 @@ impl Output<'_> {
         }
         if matches!(to, Value::Null) && rust_type(variables.tp(var), &Context::Variable) == "DbRef"
         {
-            self.emit_null_dbref(w, var, &name)?;
+            self.emit_null_dbref(w, var, &name, first_assign)?;
         } else if to == &Value::Null {
             // Emit the null sentinel for the variable's type, not bare `()`.
             let null_val = default_native_value(variables.tp(var));
@@ -441,18 +473,32 @@ impl Output<'_> {
     }
 
     /// Emit a null-initialised `DbRef` variable, matching the interpreter's pre-init order.
-    fn emit_null_dbref(&mut self, w: &mut dyn Write, var: u16, name: &str) -> std::io::Result<()> {
+    ///
+    /// `first == false` is an @P302 keyed-collection reassignment (`s = []`
+    /// clear): the slot already holds a live `DbRef`, so emit `OpDatabase`
+    /// ALONE (in-place clear, reuses the store, no leak) — skip `null_named`,
+    /// which would reset to a sentinel and leak the old store.
+    fn emit_null_dbref(
+        &mut self,
+        w: &mut dyn Write,
+        var: u16,
+        name: &str,
+        first: bool,
+    ) -> std::io::Result<()> {
         let variables = &self.data.def(self.def_nr).variables;
         let var_raw_name = variables.name(var);
         let is_elm = var_raw_name.starts_with("_elm");
         let owns_store = match variables.tp(var) {
-            Type::Reference(_, dep)
-            | Type::Vector(_, dep)
-            | Type::Enum(_, true, dep)
-            | Type::Sorted(_, _, dep)
+            Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) => {
+                dep.is_empty()
+            }
+            // @P302 — a keyed local backed by its own store carries a self-dep
+            // `[var]` (added by the `s = []` clear path so a later `s += …`
+            // re-inits in place).  That is an ownership marker, not a borrow.
+            Type::Sorted(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Index(_, _, dep)
-            | Type::Spacial(_, _, dep) => dep.is_empty(),
+            | Type::Spacial(_, _, dep) => dep.is_empty() || (dep.len() == 1 && dep[0] == var),
             _ => false,
         };
         if is_elm || variables.is_inline_ref(var) || !owns_store {
@@ -521,14 +567,34 @@ impl Output<'_> {
                 }
             };
             if ref_buf_type_id == u16::MAX {
-                write!(w, "stores.null_named(\"var_{name}\")")?;
-            } else {
+                // @P317 — a struct `Reference` local with no resolvable
+                // backing-store type id: emit the NULL SENTINEL, not
+                // `null_named` (which allocates a real store slot).  Every
+                // use of such a local is preceded by either an `OpDatabase`
+                // (which allocates fresh from the sentinel — see
+                // codegen_runtime::OpDatabase's `store_nr == u16::MAX` arm)
+                // or a reassignment from a call return (which supplies its
+                // own store).  Allocating a `null_named` placeholder here
+                // LEAKS one store per reassignment-from-call: the placeholder
+                // slot is overwritten by the call's DbRef and never freed
+                // (e.g. `nk = chunk_of(...)` first-assigned inside an `if` in
+                // a loop — the C3-incremental store exhaustion that tripped
+                // `assert!(store.free)`).  Matches the interpreter, which
+                // null-inits ref locals to a sentinel, not an allocation.
+                write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
+            } else if first {
                 writeln!(w, "stores.null_named(\"var_{name}\");")?;
                 self.indent(w)?;
                 write!(
                     w,
                     "var_{name} = OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)"
                 )?;
+            } else {
+                // @P302 reassignment / `s = []` clear: the slot already holds a
+                // live DbRef → OpDatabase clears that store in place (no
+                // null_named, which would reset to a sentinel and leak the
+                // old store).  The caller already wrote the `var_{name} = `.
+                write!(w, "OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)")?;
             }
         }
         Ok(())
@@ -586,362 +652,6 @@ impl Output<'_> {
                 output: self,
             };
             return crate::generation::ops::emit_op(&mut ctx, &name_owned, vals);
-        }
-        // @P283 — mirror the bytecode dispatch in `src/state/codegen.rs`:
-        // when the first argument is a `Var` whose type is `RefVar(Text)`
-        // (a `&mut String` work-buffer parameter promoted by
-        // `text_return`), rewrite the op name to its `Stack` variant so
-        // the native emitter takes the `*var += …` / `String::clear` /
-        // `format_text(&mut var, …)` deref path.  Without this rewrite the
-        // native side emits `var += &*(…)` on a `&mut String`, which rustc
-        // rejects with E0368.  The bytecode dispatch was added here first
-        // (interp also crashed in `append_text` op=116 on the refvar slot);
-        // the native rewrite must happen separately because the native
-        // pipeline reads from the IR `Value::Call(op_nr, …)` independently
-        // of the bytecode emit.  Rewrite table lives in
-        // `refvar_text_stack_variant` (out-of-band of `dispatch_op_arm_budget`).
-        let variables = &self.data.def(self.def_nr).variables;
-        let refvar_text_first = matches!(vals.first().map(Value::unspan), Some(Value::Var(v)) if {
-            matches!(variables.tp(*v), Type::RefVar(inner) if matches!(**inner, Type::Text(_)))
-        });
-        let dispatch_name: &str = if refvar_text_first {
-            super::ops::refvar_text_stack_variant(name).unwrap_or(name)
-        } else {
-            name
-        };
-        match dispatch_name {
-            "OpFormatInt" | "OpFormatStackInt" => {
-                return self.format_long(w, vals, name == "OpFormatStackInt");
-            }
-            "OpFormatFloat" | "OpFormatStackFloat" => {
-                return self.format_float(w, vals, name == "OpFormatStackFloat");
-            }
-            "OpFormatSingle" | "OpFormatStackSingle" => {
-                return self.format_single(w, vals, name == "OpFormatStackSingle");
-            }
-            "OpFormatText" | "OpFormatStackText" => return self.format_text(w, vals),
-            "OpAppendText" => return self.append_text(w, vals),
-            "OpAppendStackText" => {
-                write!(w, "*")?;
-                return self.append_text(w, vals);
-            }
-            "OpAppendCharacter" | "OpAppendStackCharacter" => {
-                return self.append_character(w, vals);
-            }
-            "OpClearStackText" | "OpClearText" => return self.clear_stack_text(w, vals),
-            "OpClearVector" => return self.clear_vector(w, vals),
-            "OpFreeText" | "OpCreateStack" => return Ok(()),
-            // N8b.2: advance a native coroutine and return the yielded value.
-            // parameters[0] = gen DbRef expression; parameters[1] = Int(value_size).
-            "OpCoroutineNext" => {
-                if let Some(gen_val) = vals.first() {
-                    let gen_code = self.generate_expr_buf(gen_val)?;
-                    let value_size = if let Some(Value::Int(n)) = vals.get(1) {
-                        *n
-                    } else {
-                        4 // fallback: i32
-                    };
-                    match value_size {
-                        8 => write!(
-                            w,
-                            "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores)"
-                        )?,
-                        1 => write!(
-                            w,
-                            "(loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) != 0)"
-                        )?,
-                        // size_of::<&str>() == 16 — text-yielding generator.
-                        16 => write!(
-                            w,
-                            "loft::codegen_runtime::coroutine_next_text({gen_code}, stores)"
-                        )?,
-                        _ => write!(
-                            w,
-                            "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) as i32"
-                        )?,
-                    }
-                }
-                return Ok(());
-            }
-            // N8b.2: test whether a native coroutine is exhausted.
-            // parameters[0] = gen DbRef expression.
-            "OpCoroutineExhausted" => {
-                if let Some(gen_val) = vals.first() {
-                    let gen_code = self.generate_expr_buf(gen_val)?;
-                    write!(
-                        w,
-                        "loft::codegen_runtime::coroutine_is_exhausted({gen_code})"
-                    )?;
-                }
-                return Ok(());
-            }
-            "OpNullRefSentinel" => {
-                write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
-                return Ok(());
-            }
-            // Null-aware reference equality: treat rec==0 as null regardless of store_nr,
-            // matching the bytecode eq_ref/ne_ref implementation.
-            "OpEqRef" => {
-                if let [v1, v2] = vals {
-                    let s1 = self.generate_expr_buf(v1)?;
-                    let s2 = self.generate_expr_buf(v2)?;
-                    write!(
-                        w,
-                        "{{let _a={s1};let _b={s2};if _a.rec==0||_b.rec==0{{_a.rec==0&&_b.rec==0}}else{{_a==_b}}}}"
-                    )?;
-                    return Ok(());
-                }
-            }
-            "OpNeRef" => {
-                if let [v1, v2] = vals {
-                    let s1 = self.generate_expr_buf(v1)?;
-                    let s2 = self.generate_expr_buf(v2)?;
-                    write!(
-                        w,
-                        "{{let _a={s1};let _b={s2};if _a.rec==0||_b.rec==0{{_a.rec!=0||_b.rec!=0}}else{{_a!=_b}}}}"
-                    )?;
-                    return Ok(());
-                }
-            }
-            "OpIncRc" => {
-                // P259: emit `OpIncRc(cell, <db>)` — increments the
-                // referenced store's rc.  Used by emit_lambda_code after
-                // each SetDbRef capturing a heap-owned cell into a
-                // closure record's auto-Reference attribute.  No callers
-                // emitted yet (commit 1 is infra-only); commit 2 wires
-                // the call sites.
-                if let [ref db_val] = vals[..] {
-                    write!(w, "OpIncRc(cell,")?;
-                    self.output_code_inner(w, db_val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
-            "OpFreeRef" => {
-                // Emit OpFreeRef(cell,var, "var_name") so LOFT_STORE_LOG shows the loft name.
-                // After freeing, reset the variable to null so a subsequent OpDatabase
-                // knows to allocate a fresh store rather than reusing the freed one.
-                if let [ref db_val] = vals[..] {
-                    // S34/S35: skip_free variables share a slot with an outer variable that
-                    // already owns the record; suppressing their OpFreeRef prevents a double-free.
-                    if let Value::Var(v) = db_val
-                        && self.data.def(self.def_nr).variables.is_skip_free(*v)
-                    {
-                        write!(w, "()")?;
-                        return Ok(());
-                    }
-                    // free the closure component of fn-ref (u32, DbRef) variables.
-                    // Non-capturing lambdas have store_nr = u16::MAX (null sentinel).
-                    if let Value::Var(v) = db_val
-                        && matches!(
-                            self.data.def(self.def_nr).variables.tp(*v),
-                            Type::Function(_, _, _)
-                        )
-                    {
-                        let vn = format!(
-                            "var_{}",
-                            sanitize(self.data.def(self.def_nr).variables.name(*v))
-                        );
-                        write!(
-                            w,
-                            "if {vn}.1.store_nr != u16::MAX {{ \
-                             OpFreeRef(cell,{vn}.1, \"{vn}.1\"); \
-                             {vn}.1.store_nr = u16::MAX }}"
-                        )?;
-                        return Ok(());
-                    }
-                    let var_name = if let Value::Var(v) = db_val {
-                        format!(
-                            "var_{}",
-                            sanitize(self.data.def(self.def_nr).variables.name(*v))
-                        )
-                    } else {
-                        String::new()
-                    };
-                    write!(w, "OpFreeRef(cell,")?;
-                    self.output_code_inner(w, db_val)?;
-                    write!(w, ", \"{var_name}\")")?;
-                    // Reset variable to null sentinel after free.
-                    if let Value::Var(_) = db_val {
-                        write!(w, "; {var_name}.store_nr = u16::MAX")?;
-                    }
-                }
-                return Ok(());
-            }
-            "OpFreeRefIfDistinct" => {
-                // free the placeholder only when its store_nr
-                // differs from the witness's.  Emit:
-                //   if ph.store_nr != wit.store_nr { OpFreeRef(cell,ph, "ph"); ph.store_nr = u16::MAX }
-                // so the fresh-store path still reclaims the orphan
-                // and the adoption path leaves both slots alone until
-                // the caller's OpFreeRef on the witness fires.
-                if let [ref ph_val, ref wit_val] = vals[..] {
-                    let ph_name = if let Value::Var(v) = ph_val {
-                        format!(
-                            "var_{}",
-                            sanitize(self.data.def(self.def_nr).variables.name(*v))
-                        )
-                    } else {
-                        String::new()
-                    };
-                    write!(w, "if ")?;
-                    self.output_code_inner(w, ph_val)?;
-                    write!(w, ".store_nr != ")?;
-                    self.output_code_inner(w, wit_val)?;
-                    write!(w, ".store_nr {{ OpFreeRef(cell,")?;
-                    self.output_code_inner(w, ph_val)?;
-                    write!(w, ", \"{ph_name}\")")?;
-                    if let Value::Var(_) = ph_val {
-                        write!(w, "; {ph_name}.store_nr = u16::MAX")?;
-                    }
-                    write!(w, " }}")?;
-                }
-                return Ok(());
-            }
-            "OpCopyRecord" => {
-                // Deep copy: copy_block + copy_claims
-                if let [ref src, ref dst, ref tp_val] = vals[..] {
-                    write!(w, "OpCopyRecord(cell,")?;
-                    self.output_code_inner(w, src)?;
-                    write!(w, ", ")?;
-                    self.output_code_inner(w, dst)?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, tp_val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
-            // @P295 — keyed-collection local reassignment: remove_claims +
-            // copy_claims (per-kind index rebuild), no copy_block.
-            "OpReplaceKeyed" => {
-                if let [ref src, ref dst, ref tp_val] = vals[..] {
-                    write!(w, "OpReplaceKeyed(cell,")?;
-                    self.output_code_inner(w, src)?;
-                    write!(w, ", ")?;
-                    self.output_code_inner(w, dst)?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, tp_val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
-            "OpConvTextFromNull" => {
-                write!(w, "loft::state::STRING_NULL")?;
-                return Ok(());
-            }
-            "OpConvRefFromNull" => {
-                write!(w, "DbRef {{ store_nr: 0, rec: 0, pos: 0 }}")?;
-                return Ok(());
-            }
-            "OpGetTextSub" => {
-                // text[from..till] → &str slice
-                if let [ref text_val, ref from_val, ref till_val] = vals[..] {
-                    write!(w, "OpGetTextSub(")?;
-                    self.output_code_inner(w, text_val)?;
-                    write!(w, ", ")?;
-                    self.output_code_inner(w, from_val)?;
-                    write!(w, ", ")?;
-                    self.output_code_inner(w, till_val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
-            "OpSizeofRef" => {
-                if let [ref val] = vals[..] {
-                    write!(w, "OpSizeofRef(cell,")?;
-                    self.output_code_inner(w, val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
-            "OpDatabase" => {
-                // OpDatabase modifies its DbRef argument in-place; emit as reassignment.
-                if let [ref var_val, ref tp_val] = vals[..] {
-                    self.output_code_inner(w, var_val)?;
-                    write!(w, " = OpDatabase(cell,")?;
-                    self.output_code_inner(w, var_val)?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, tp_val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
-            "OpFormatDatabase" | "OpFormatStackDatabase" => {
-                // OpFormatDatabase takes a &mut String as the output buffer.
-                if let [ref work_val, ref record_val, ref tp_val, ref fmt_val] = vals[..] {
-                    write!(w, "OpFormatDatabase(cell,&mut ")?;
-                    // work_val is Var(nr) — strip the leading & that output_code_inner adds
-                    if let Value::Var(nr) = work_val {
-                        let variables = &self.data.def(self.def_nr).variables;
-                        write!(w, "var_{}", sanitize(variables.name(*nr)))?;
-                    } else {
-                        self.output_code_inner(w, work_val)?;
-                    }
-                    write!(w, ", ")?;
-                    self.output_code_inner(w, record_val)?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, tp_val)?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, fmt_val)?;
-                    write!(w, ")")?;
-                }
-                return Ok(());
-            }
-            // Plan 09 phase 04 — `OpGetRecord` and `OpIterate` emission
-            // moved to `crate::generation::ops::key_ops::{OpGetRecordEmitter,
-            // OpIterateEmitter}` (registered in build_registry).  The
-            // phase 00 step 0.6 registry-first guard at the top of
-            // `output_call_inner` routes both names to the emitters
-            // before reaching this match.
-            "OpStep"
-                // vals: [iter_var, data, on, arg]
-                // Emit: OpStep(cell,&mut var_iter, data, on, arg)
-                if vals.len() == 4 => {
-                    write!(w, "OpStep(cell,&mut ")?;
-                    if let Value::Var(v) = &vals[0] {
-                        let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
-                        write!(w, "var_{name}")?;
-                    } else {
-                        self.output_code_inner(w, &vals[0])?;
-                    }
-                    write!(w, ", ")?;
-                    self.output_code_inner(w, &vals[1])?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, &vals[2])?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, &vals[3])?;
-                    write!(w, ")")?;
-                    return Ok(());
-                }
-            "OpRemove"
-                // vals: [state_var, data, on, tp/arg]
-                // Emit: OpRemove(cell,&mut var_state, data, on, arg)
-                // The state may be i32 (plain vector) or i64 (sorted/tree iterator).
-                if vals.len() == 4 => {
-                    write!(w, "OpRemove(cell,&mut ")?;
-                    if let Value::Var(v) = &vals[0] {
-                        let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
-                        write!(w, "var_{name}")?;
-                    } else {
-                        self.output_code_inner(w, &vals[0])?;
-                    }
-                    write!(w, ", ")?;
-                    self.output_code_inner(w, &vals[1])?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, &vals[2])?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, &vals[3])?;
-                    write!(w, ")")?;
-                    return Ok(());
-                }
-            // Plan 09 phase 03 — `n_parallel_for` / `n_parallel_for_light`
-            // emission moved to `crate::generation::ops::parallel::ParallelForEmitter`
-            // (registered in build_registry).  The phase 00 step 0.6
-            // registry-first guard at the top of `output_call_inner`
-            // routes both names to the emitter before reaching this
-            // match.  Phase 04 / phase 06 will retire more arms here
-            // following the same pattern.
-            _ => {}
         }
         if def_fn.rust.is_empty() {
             self.output_call_user_fn(w, def_fn, vals)

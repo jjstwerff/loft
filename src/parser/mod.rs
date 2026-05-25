@@ -768,6 +768,20 @@ impl Parser {
         self.database.vector(resolved)
     }
 
+    /// @P314 — the element STORAGE type id to pass as the `OpAppendVector` /
+    /// `vector_add` `tp` arg for a vector whose element type is `content`.
+    /// Routes through `vector_of` (which consults `narrow_vector_content`) so a
+    /// NARROW element (`u8`/`i16`/`i32`) resolves to its narrow storage type
+    /// rather than the wide `integer`.  Using `def(type_def_nr(content))
+    /// .known_type` instead loses the narrowness for integer aliases, so
+    /// `vector_add` strides by 8 over a 1-/2-/4-byte-packed vector and corrupts
+    /// (zeroes) the appended elements.  `single` (a distinct base type) is
+    /// unaffected either way; this only matters for narrow integer aliases.
+    pub(crate) fn append_elem_tp(&mut self, content: &Type) -> i32 {
+        let vec_tp = self.vector_of(content);
+        i32::from(self.database.content(vec_tp))
+    }
+
     /// Get an iterator.
     /// The iterable expression is in *code.
     /// Creating the iterator will be in *code afterward.
@@ -3592,6 +3606,28 @@ impl Parser {
                     };
                     all_types[a_nr] = Type::Reference(content, vec![vr]);
                     actual[a_nr] = Value::Var(vr);
+                } else if let Type::Enum(content, true, _) = tp {
+                    // @P301 — struct-enums are heap records like
+                    // Reference/Vector, so a struct-enum return-slot
+                    // promoted to a hidden caller arg by `ref_return`
+                    // (parser/control.rs) needs a pre-allocated work-ref
+                    // passed in.  Without this arm the hidden param
+                    // stayed `Value::Null` → emitted as `()` natively
+                    // (E0308: expected DbRef, found ()).  Mirrors the
+                    // Reference arm above, keeping the struct-enum
+                    // discriminator in the result type.
+                    assert_eq!(
+                        default,
+                        Value::Null,
+                        "Expect a null default on database references"
+                    );
+                    let vr = if is_recursive_self {
+                        self.vars.work_refs_recursive(&tp, &mut self.lexer)
+                    } else {
+                        self.vars.work_refs(&tp, &mut self.lexer)
+                    };
+                    all_types[a_nr] = Type::Enum(content, true, vec![vr]);
+                    actual[a_nr] = Value::Var(vr);
                 } else if let Type::RefVar(vtp) = &tp {
                     let mut ls = Vec::new();
                     let vr = if matches!(**vtp, Type::Text(_)) {
@@ -3975,6 +4011,7 @@ impl Parser {
         Self::probe_loft_lib_flat(id, &mut f);
         self.probe_loft_lib_manifest(id, &mut f);
         self.probe_user_installed(id, &mut f);
+        self.probe_registry_installed(id, &mut f);
         Self::probe_cur_dir_flat(id, cur_dir, &mut f);
         Self::probe_base_dir_flat(id, base_dir, &mut f);
 
@@ -4160,6 +4197,61 @@ impl Parser {
         }
     }
 
+    /// `~/.loft/registry/<id>-<version>/` — packages installed via `loft install`
+    /// against the package registry.  Resolves the version via the cwd's
+    /// `loft.lock` (written by `loft install`).  When loft.lock is absent or
+    /// doesn't list `id`, this probe is a no-op and resolution falls through
+    /// to the remaining strategies.
+    ///
+    /// @PLAN12 phase 3.5a wiring (2026-05-24): closes the "loft install →
+    /// use installed package" loop.  Before this, `loft install crypto`
+    /// downloaded + extracted correctly but `use crypto;` in a subsequent
+    /// run still required a manual `--lib` flag.
+    #[cfg(feature = "registry")]
+    fn probe_registry_installed(&mut self, id: &str, f: &mut String) {
+        // Use `loft::*` (not `crate::*`) because this module is compiled
+        // into BOTH the loft library AND the loft binary; the binary
+        // doesn't have `lockfile` / `registry_index` declared as `mod`,
+        // but accesses them as deps via the `loft::` library path.
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let cwd = match env::current_dir() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let lock_path = cwd.join("loft.lock");
+        if !lock_path.exists() {
+            return;
+        }
+        let lock = match crate::lockfile::read_lockfile(&lock_path) {
+            Ok(Some(l)) => l,
+            _ => return,
+        };
+        let version = match lock.packages.iter().find(|p| p.name == id) {
+            Some(p) => p.version.clone(),
+            None => return,
+        };
+        let install_dir = crate::registry_index::extract_dir(id, &version);
+        let parent = match install_dir.parent().and_then(std::path::Path::to_str) {
+            Some(p) => p.to_string(),
+            None => return,
+        };
+        let versioned_name: String = match install_dir.file_name().and_then(std::ffi::OsStr::to_str)
+        {
+            Some(n) => n.to_string(),
+            None => return,
+        };
+        if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
+            *f = entry;
+        }
+    }
+
+    /// No-op when registry feature is off — registry-installed packages
+    /// only resolve when the `loft install` machinery is compiled in.
+    #[cfg(not(feature = "registry"))]
+    fn probe_registry_installed(&mut self, _id: &str, _f: &mut String) {}
+
     /// Final fallback: beside the parsed file itself.
     fn probe_cur_dir_flat(id: &str, cur_dir: &str, f: &mut String) {
         if !cur_dir.is_empty() && !std::path::Path::new(f).exists() {
@@ -4219,6 +4311,38 @@ impl Parser {
                 self.data
                     .native_packages
                     .push((crate_name.clone(), pkg_dir.clone()));
+            }
+            // @PLAN12 phase 2 step 2 (2026-05-24) — same manifest-driven
+            // `native_symbols` + `def.native` population as
+            // `apply_manifest_side_effects` (the legacy path).  The
+            // sibling-package probe (used when a script reaches a library
+            // via cwd ancestry rather than `--lib`) hits THIS function;
+            // without the same population, `[native.functions]` entries
+            // would be visible only to native codegen via the legacy
+            // path's `native_symbols` lookup — the sibling path would
+            // leave def.native empty and the interpreter dispatch path
+            // would silently fall through to OpCall with an empty body,
+            // returning null instead of dispatching to the cdylib.
+            for (loft_name, rust_symbol) in &m.native_functions {
+                self.data
+                    .native_symbols
+                    .insert(loft_name.clone(), rust_symbol.clone());
+            }
+            for (loft_name, rust_symbol) in &m.native_functions {
+                let candidates = [format!("n_{loft_name}"), loft_name.clone()];
+                for d_nr in 0..self.data.definitions() {
+                    let def = self.data.def(d_nr);
+                    if !def.native.is_empty() {
+                        continue;
+                    }
+                    if !candidates.contains(&def.name) {
+                        continue;
+                    }
+                    if !def.position.file.starts_with(&pkg_dir) {
+                        continue;
+                    }
+                    rust_symbol.clone_into(&mut self.data.definitions[d_nr as usize].native);
+                }
             }
             // P266: same ownership-driven restriction as
             // `apply_manifest_side_effects` above — only map `#native`
@@ -4358,6 +4482,38 @@ impl Parser {
                     .native_symbols
                     .insert(loft_name.clone(), rust_symbol.clone());
             }
+            // @PLAN12 phase 2 step 2 (2026-05-24) — make
+            // `[native.functions]` entries fully equivalent to
+            // `#native "symbol"` annotations.  For each manifest
+            // entry whose loft fn name matches a definition owned by
+            // this package, populate `def.native` so the interpreter's
+            // `wire_native_fns` (which keys off `def.native`) and the
+            // bytecode dispatch (`state/codegen.rs:2207-2217`, which
+            // also reads `def.native`) see the binding without
+            // requiring the redundant `#native` annotation.  Native
+            // codegen already consulted `native_symbols` directly so
+            // this isn't strictly required for the native path, but
+            // unifying the two paths is the whole point of step 2.
+            //
+            // Ownership check (`def.position.file.starts_with(pkg_dir)`)
+            // mirrors the @P266-style guard below: only populate defs
+            // physically inside this package's source tree.
+            for (loft_name, rust_symbol) in &m.native_functions {
+                let candidates = [format!("n_{loft_name}"), loft_name.clone()];
+                for d_nr in 0..self.data.definitions() {
+                    let def = self.data.def(d_nr);
+                    if !def.native.is_empty() {
+                        continue;
+                    }
+                    if !candidates.contains(&def.name) {
+                        continue;
+                    }
+                    if !def.position.file.starts_with(pkg_dir) {
+                        continue;
+                    }
+                    rust_symbol.clone_into(&mut self.data.definitions[d_nr as usize].native);
+                }
+            }
             // P266: map only `#native` symbols whose definition lives in
             // THIS package's source tree, not every unmapped symbol in
             // the whole `data.definitions()` list.  The earlier
@@ -4387,16 +4543,41 @@ impl Parser {
                     .insert(sym.clone(), rust_crate.clone());
             }
         }
-        // PKG.3: register the package's parent directory so that
-        // dependencies declared in [dependencies] can be found as sibling
-        // packages during normal `use` resolution.
-        if !m.dependencies.is_empty() && !self.lib_dirs.contains(&dir.to_string()) {
-            self.lib_dirs.push(dir.to_string());
-        }
-        for (dep_name, _dep_version) in &m.dependencies {
+        // PKG.3: register dirs for dependency resolution.
+        //
+        // For plain-version deps (`foo = "0.1"`) and the legacy
+        // sibling-probe shape (no path declared): register the
+        // package's parent dir `dir` so `<dir>/<dep_name>` resolves
+        // via sibling lookup.
+        //
+        // @PLAN12 phase 3.5b (2026-05-24) — for path-deps
+        // (`foo = { path = "../external/foo" }`), resolve the path
+        // relative to this package's directory (`pkg_dir`), then
+        // register the PARENT of the resolved location.  This lets
+        // the existing sibling-probe at
+        // `<resolved-parent>/<dep_name>/loft.toml` find the external
+        // package.  Without this, the inline-table path field was
+        // decorative — manifests like `lib/audience_crystal/loft.toml`
+        // worked by coincidence (their `path = "../gridmesh"`
+        // happened to point at a sibling in `lib/`, also covered by
+        // the `--lib lib` cmdline arg).  This change makes the path
+        // field actually do what it says, unlocking external library
+        // extractions.
+        for (dep_name, dep_value) in &m.dependencies {
+            let resolved_parent = if let Some(path) = manifest::extract_path_dep(dep_value) {
+                let dep_pkg_path = std::path::Path::new(pkg_dir).join(path);
+                dep_pkg_path
+                    .parent()
+                    .map_or_else(|| dir.to_string(), |p| p.to_string_lossy().into_owned())
+            } else {
+                dir.to_string()
+            };
+            if !self.lib_dirs.contains(&resolved_parent) {
+                self.lib_dirs.push(resolved_parent.clone());
+            }
             if !self.data.use_exists(dep_name) {
                 self.pending_pkg_deps
-                    .push((dep_name.clone(), dir.to_string()));
+                    .push((dep_name.clone(), resolved_parent));
             }
         }
     }
@@ -5161,6 +5342,14 @@ fn find_written_vars(
                 || def.name == "OpAppendCopy"
                 || def.name == "OpAppendVector"
                 || def.name == "OpClearVector"
+                || def.name == "OpClearKeyed"
+                || def.name == "OpSetKeyed"
+                // @P320: keyed-remove `coll[key] = null` lowers to
+                // `OpHashRemove(coll, …)` (collections.rs::towards_set_hash_remove),
+                // so it mutates its first arg just like OpSetKeyed/OpClearKeyed.
+                // Without this a `&` param whose only mutation is a keyed remove
+                // was wrongly rejected as "never modified".
+                || def.name == "OpHashRemove"
                 || def.name == "OpInsertVector"
                 || def.name == "OpRemoveVector";
             // OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
@@ -5281,6 +5470,12 @@ fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>
                 || def.name == "OpAppendCopy"
                 || def.name == "OpAppendVector"
                 || def.name == "OpClearVector"
+                || def.name == "OpClearKeyed"
+                || def.name == "OpSetKeyed"
+                // @P320: keyed-remove `coll[key] = null` → `OpHashRemove(coll, …)`;
+                // mirror the find_written_vars set so a keyed remove inside a
+                // `for … in &coll` loop also counts as a mutation.
+                || def.name == "OpHashRemove"
                 || def.name == "OpInsertVector"
                 || def.name == "OpRemoveVector";
             let second_arg_write = def.name == "OpCopyRecord";

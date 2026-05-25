@@ -14,6 +14,17 @@ opens a 1280×800 OpenGL window, subscribes to the multi-client server,
 and renders the hex world as a flat-2D pointy-top grid with the
 empty-cell backdrop visible for spatial reference.
 
+**Removal fade-out shipped** (2026-05-20): the projector now matches the
+browser client's fade.  The cell shader was unified on **per-vertex
+RGBA** (stride-10 `gl_upload_vertices` layout — `pos.xyz` + unused normal
+pad + `rgba` at `location 2`) with `GL_BLEND` enabled, so any vertex can
+carry alpha.  Opaque cells bake `a = 1.0` (no visual change); an erased
+cell's ground footprint is re-emitted each frame at `a` ramping 1 → 0
+over `FADE_FRAMES` (~600 ms, matching the browser's `FADE_MS`), keyed in
+a `World.fades` hash so a re-paint cancels an in-flight fade.  No library
+change — the RGBA layout was already supported.  Also unlocks the
+"old paints recede into history" alpha effect noted under § Growth.
+
 **Per the 2026-05-21 design clarification:** the OpenGL client is BOTH
 the projector (3D crystals only, auto-camera, no ground grid) AND
 the desktop client (3D crystals + 2D ground layer, user mouse paints
@@ -534,6 +545,296 @@ slow-orbit.
   do **not** pulse.  Makes audience-driven activity visually
   distinct from the autonomous decay rule and prevents the
   screen from constantly twinkling as old cells die.
+
+## Performance — crystal mesh rebuild cost (stress test 2026-05-21)
+
+The projector rebuilds the crystal mesh + VBO via `build_crystal_vbo`
+(→ `audience_crystal::crystal_segments_aged`).  **It does NOT rebuild
+every frame** — PF1 caching is already in place: `main`'s render loop
+rebuilds the crystal + ground VBOs only when `world.version` changes
+(`projector.loft` ~787, the `last_built_version` gate), and `version`
+bumps only inside `apply_frame` on a paint / erase / repaint.  Because
+the message drain runs before the rebuild check, multiple paints landing
+in one frame coalesce into a single rebuild.  So **steady-state render is
+just the draw calls + the camera matrix**; the timings below are the cost
+**per paint event** (the rebuild that PF2 makes cheaper), not a per-frame
+cost.  [`tools/audience-demo/crystal_stress.loft`](../../../../tools/audience-demo/crystal_stress.loft)
+ramps a filled-hex cluster 1 → 100 across four fill PATTERNS (block /
+line / sparse / ring) and times that rebuild path on `--native`.  Run:
+
+```bash
+cargo run --release --bin loft -- --native --lib lib tools/audience-demo/crystal_stress.loft
+# leak check:  LOFT_NATIVE_LEAK_CHECK=1 ... (validated clean over the full ramp)
+```
+
+### Original algorithm (furthest-on-axis mains) — fork explosion
+
+The first measurement (mains reaching to the furthest filled cell on
+each axis, `find_furthest_on_axis` + `OVER_REACH`) showed a catastrophic
+shape-dependent blow-up because `n_forks = ray_len / spacing` grows with
+main *length*, and spread clusters produce very long mains:
+
+| hexes | block | line | sparse | ring |
+|---|---|---|---|---|
+| 50 | 13.8 ms (1364) | 4.1 ms (592) | 19.9 ms (1876) | **85 ms** (4433) |
+| 80 | 23.8 ms (2062) | 8.0 ms (938) | **51 ms** (3312) | **318 ms** (10130) |
+| 100 | **38 ms** (2830) | 11.5 ms (1170) | **68 ms** (4132) | budget blown |
+
+ring/80 = 10130 segments (vs block/80 = 2062); at ring ≥ 90 the segment
+vectors thrashed the allocator hard enough to OOM a sustained run.
+
+### Revised algorithm (3-hex mains, old→new) — fork explosion gone
+
+The algorithm was changed (2026-05-21, `crystal_segments_aged`): mains
+are now capped at `MAX_MAIN_HEXES` steps and a cell draws one short main
+back to the **nearest older filled cell on each of its six axes**
+(crystals grow old→new; cells separated by a gap > 1 form independent
+crystals that merge when a later paint narrows the gap).  Capping main
+length **bounds the fork count by construction**, so the shape-dependent
+blow-up is gone — every pattern now scales the same bounded way:
+
+| hexes | block | line | sparse | ring |
+|---|---|---|---|---|
+| 50 | 11.1 ms (1119) | 4.3 ms (471) | 10.6 ms (1113) | 4.7 ms (522) |
+| 80 | 24.3 ms (1875) | 9.5 ms (741) | 21.6 ms (1761) | **9.9 ms** (810) |
+| 100 | 35.6 ms (2379) | 14.0 ms (921) | 30.5 ms (2190) | **14.2 ms** (990) |
+
+**ring/80: 318 ms → 9.9 ms (32×), 10130 → 810 segments.**  Segment count
+is now ~linear in cell count for every shape, and the OOM is gone.
+
+**What's left:** the per-build time is still **O(N²)** (`us/hex²` flat at
+~3000–4500 for the dense cases) — the cost is now the per-cell work
+inside `crystal_segments_aged`, each O(N): the nearest-older-on-axis scan
+(`for cs_j in 0..cs_i`), `nbr_colors_at` (×2 / cell), and `cell_h` →
+`snap_nbr_count` (a full neighbour scan, called per endpoint).  block/100
+is still ~36 ms — a large dense crystal exceeds the 60 fps budget per
+*rebuild*.
+
+**Fixes (priority order — the algorithm change reshaped these):**
+
+- **PF1 — cache the crystal mesh + VBO; rebuild only on snapshot
+  change.  ✅ ALREADY IMPLEMENTED** (verified 2026-05-21).  `main`'s
+  render loop bakes the crystal + ground VBOs only when `world.version`
+  changes (the `last_built_version` gate, `projector.loft` ~787);
+  `version` bumps only in `apply_frame` on paint/erase/repaint, and
+  multiple paints in one frame coalesce to one rebuild (the message
+  drain precedes the gate).  Steady-state render is one `gl_draw` per
+  VBO.  So mesh-gen already runs at audience-tap rate, not 60 Hz — the
+  timings above are the per-paint rebuild cost, which is what PF2
+  addresses.  (The only genuinely per-frame VBO work is the fade layer,
+  which MUST rebuild each frame because its vertex alpha animates.)
+- **PF2 — spatial index** (`hash<cell_key → index>` built once per
+  rebuild) shared by the nearest-older-on-axis lookup, `nbr_colors_at`
+  and `snap_nbr_count`/`cell_h`, turning the remaining O(N²) → O(N).
+  ✅ **DONE** (commit `8219a416`) — the per-axis lookup is O(1) against a
+  coord→index hash.
+- **PF3 — ~~bound per-main fork count~~ DONE by the algorithm change**:
+  `MAX_MAIN_HEXES` caps main length, so forks are bounded structurally.
+- **PF4 — ~~preallocate the `CrystalMesh` parallel vectors~~ DONE at the
+  language level by P5 + P6** (2026-05-21).  The "crash by scale" OOM was
+  the allocator, not the mesh code: **P5** (amortised ×2 vector growth in
+  `vector_append`) stops the per-`+= [x]` realloc churn, and **P6** (lazy
+  free-block coalescing in `Store::claim`) lets repeated rebuilds reuse
+  freed space instead of growing.  Validated 2026-05-21: a block-500 mesh
+  (12 738 segments) that previously fragmented to ~250 MB / 101 815 free
+  blocks per build now uses **~1.5–2.8 MB / 8–9 free blocks**, and 300
+  consecutive rebuilds hold a **flat ~1.6–4.4 MB** steady state (was 7.6 GB
+  → OOM at block-800).  No CrystalMesh code change was needed.
+
+### Further memory reduction (post-P5/P6) — opportunities
+
+P5/P6 removed the catastrophic fragmentation; a block-500 mesh is now
+~2 MB.  To push it lower (useful for huge crystals / many cached
+meshes), in priority order:
+
+- **M1 — narrow the mesh element types (≈60 %).  ✅ DONE (2026-05-21)** via
+  the gridmesh `SegMesh` (C1).  The chunk-driven `crystal_segments_aged` now
+  emits a `SegMesh` — `kinds`/`colors` as `u8`, the six coordinate arrays as
+  `single` (f32), `cell_ix` as `integer` — ≈34 B/seg vs the old `CrystalMesh`
+  ≈72 B/seg.  Coords are GPU-VBO-native (no f64→f32 conversion at upload).
+  The old i64/f64 build is kept as `crystal_segments_aged_legacy` purely as the
+  equivalence golden (`tests/scripts/130`).  Original analysis kept below for
+  context:
+  Per segment in the old `CrystalMesh`: `kinds`/`colors`/`cell_ix` are
+  `integer` (i64, 8 B each) and the six coordinate arrays
+  `x0s…z1s` are `float` (f64, 48 B) → **72 B/seg**.  loft stores narrow
+  vector elements at their true width (measured: `vector<u8>` 5.5× /
+  `vector<u16>` 2.4× smaller than `vector<integer>`; f32 halves f64).
+  - coords `float`→`single` (f64→f32): the dominant 48 B → 24 B.  **The
+    GPU VBO is consumed as `*const f32`** (`loft_gl_upload_mesh`) and
+    `build_crystal_vbo` already casts every vertex `as single` — so this
+    halves the coord memory AND removes the f64→f32 conversion at
+    VBO-build time, with no precision change vs what is rendered.
+  - `kinds`,`colors` `integer`→`u8` (small enum / palette 0–9).
+  - `cell_ix` `integer`→`u16` (or `i32` if cells can exceed 65 535).
+  - Net **72 → 28 B/seg ≈ 60 %** → block-500 ~2 MB → **~0.8 MB**.  Effort
+    S: change the field types in `crystal.loft`, add `as single`/`as u8`/
+    `as u16` at the `+= [x]` sites in `crystal_segments_aged`, read the
+    now-`single` fields directly in `build_crystal_vbo`.
+- **M2 — reclaim the amortised-growth slack (≈30 % more; needs a small
+  language follow-up).**  P5's ×2 growth leaves builds at ~57–73 %
+  utilisation.  The deep-copy path already shrinks-to-fit (length-based
+  copy), so the slack only lives in the freshly-built arrays — build them
+  exactly-sized via a **`reserve(v, n)`** builtin (the deferred P5
+  follow-up wrapping the existing `OpPreAllocVector`) or a
+  **`shrink_to_fit(v)`** after building, using a counting pass or the
+  estimate `segments ≈ k·cells`.  Net ~0.8 MB → **~0.5 MB** (util → ~90 %).
+  Effort S–M (exposing `reserve`/`shrink_to_fit` is a language addition
+  that benefits every vector consumer, not just the crystal — see
+  PERFORMANCE.md P5 "reserve builtin" follow-up).
+- **M3 — indexed mesh / shared vertices (diminishing returns, higher
+  effort).**  Segments are line endpoints; if ridge junctions share
+  endpoints, a vertex-array + index-array layout dedupes them.  Uncertain
+  payoff (depends on sharing) and it complicates per-segment `cell_ix` /
+  GPU-growth keying.  Lowest priority.
+
+The parallel struct-of-arrays layout is already optimal (no per-element
+padding) and the per-rebuild spatial-index hash is transient (freed each
+build) — so element width (M1) and slack (M2) are the only real levers.
+
+### Efficiency for the world-building generalization (TOP priority)
+
+This routine is the prototype for a CLASS of grid→geometry algorithms —
+wall placement, edge/corner rounding, ridge/feature detection — that the
+world builder needs.  Those run on bigger grids (hundreds–thousands of
+cells) and add MORE per-cell work, so the pipeline must be efficient as a
+reusable primitive BEFORE the complex patterns land.  Measured state
+(interpreter, 2026-05-21): the build is **O(N)** — flat ~6–9 µs/segment
+across all sizes/patterns, segments ∝ cells, `µs/hex²` coefficient falls
+monotonically (PF2 removed the O(N²)).  Memory is bounded (P5/P6).  What
+remains, in priority order:
+
+- **I1 — incremental / dirty-region update (the decisive lever).**  A
+  full rebuild is O(N): ~90 ms at 500 cells, ~180 ms at 1000 (interp),
+  fine for the demo (≤100 cells, PF1 rebuilds only on paint) but wasteful
+  at world scale where a single edit (place one wall, flip one cell)
+  affects only a LOCAL neighbourhood — the changed cell plus cells within
+  the neighbour-query radius (≤2 rings here).  Make edits **O(affected
+  cells) ≈ O(1)** instead of O(N):
+  1. keep the spatial index (`cidx`) PERSISTENT across edits (today it is
+     rebuilt O(N) every call, lines 660-663);
+  2. on a cell change, re-emit only the segments OWNED by the dirty cell
+     and its ≤2-ring neighbours — the `cell_ix` field already attributes
+     each segment to its owning cell, so the data structure already
+     supports find-and-replace by cell;
+  3. maintain a dirty-set; rebuild only those cells' segment ranges.
+  This is the single biggest win at world scale and the structure every
+  later pattern reuses.  Effort: M (the cell_ix attribution + persistent
+  index are already in place; needs a dirty-set + per-cell segment-range
+  bookkeeping).  **Foundation shipped (gridmesh G1, 2026-05-21):**
+  `lib/gridmesh::ChunkField` now holds a PERSISTENT coord→cell index
+  (`cidx`) + a wired-in dirty-chunk set + per-chunk cell buckets, so
+  `collect_dirty_inputs` already returns O(dirty) work-lists.  The remaining
+  per-chunk mesh caching + per-group reassembly (rebuild only dirty chunks,
+  reuse the rest) is gridmesh **C3 (`CrystalIncr`, in progress)** — at which
+  point a single paint is O(dirty chunks · density), flat in N.
+- **I2 — cut the per-cell constant factor.**  Each cell does several
+  independent hash gathers (`nbr_colors_idx` ×2, `cell_h_at`, 6 axes ×
+  `MAX_MAIN_HEXES` probes) → ~15–20 hash lookups/cell.  A single combined
+  **1-ring/2-ring neighbour gather per cell** (read each neighbour once,
+  reuse for colours / height / nearest-older) removes the redundant
+  probes.  Also profile on **`--native`** (the deployment target; the
+  ~7 µs/seg above is the interpreter).  Effort: S–M.
+- **I3 — extract a reusable grid→mesh primitive.**  Generalise the
+  pipeline into: (1) persistent coord→cell spatial index, (2) per-cell
+  neighbour gather, (3) pluggable cell CLASSIFICATION (line/blob/edge/
+  corner — where wall-placement & edge-rounding rules slot in), (4) per-
+  cell geometry emission keyed by `cell_ix`, (5) dirty-set incremental
+  rebuild (I1).  Wall placement and edge rounding then become new
+  classification+emission rules over the same 1–2 + 4–5.  Effort: M
+  (mostly refactor once I1/I2 land).  **Shipped as `lib/gridmesh` (G1 + C1,
+  2026-05-21):** the primitive now exists as a standalone library (lib-plan
+  19).  (1) persistent coord→cell index = `ChunkField.cidx`; (2) per-chunk
+  neighbour gather = `gather_halo` / `ChunkInput.halo_ixs`; (4) per-cell
+  emission keyed by `cell_ix` = `emit_segment` into a narrow `SegMesh`; the
+  crystal's `build_crystal_chunk` runs (3) classification (its own per-cell
+  body, not yet pluggable) over a chunk's cells.  (5) incremental rebuild =
+  C3.  Wall-placement / edge-rounding consumers slot in by supplying a
+  different per-cell emission body over the same ChunkField/SegMesh spine.
+- **M1/M2** (above) — element-width + slack; orthogonal, compound with I1.
+
+Recommended order: **I1 → I2 → M1 → I3**, with M1 takeable any time as a
+quick standalone win.
+
+### Scaling to huge crystals — can it, and where does it crash?
+
+The revised algorithm makes the **segment count ~linear** in cell count
+(no more fork explosion), so a single large crystal builds fine:
+block-500 = 12738 segments, block-1000 = 25896 segments, each builds
+once with no crash.  But scaling the *live* demo to hundreds of cells
+hits three walls — and one is a real crash, found 2026-05-21:
+
+1. **O(N²) rebuild TIME** (slowdown, not crash).  block: 100 = 36 ms,
+   200 = 203 ms, 300 = 385 ms, ~1 s at 500.  Each *paint* on a
+   several-hundred-cell crystal is a multi-hundred-ms hitch (PF1 already
+   limits rebuilds to paints, but a busy tap stream still stutters).
+   Fixed by PF2 (O(N) rebuild).
+2. **Memory blowup under sustained rebuilding → OOM crash.**  The
+   `mesh.field += [x]` appends do **not** pre-reserve capacity, so a
+   large mesh churns the allocator arena hard: one 100 000-element
+   vector built by `+=` peaks at ~171 MB RSS (vs ~1.6 MB of data, ~100×
+   overhead).  Rebuilding a block-500 mesh 30× peaks at **7.6 GB RSS**;
+   a growing ramp to block-800 hit **11 GB and was OOM-killed** (single
+   builds at those sizes are fine — it is the *sustained* re-allocation
+   across many rebuilds that accumulates; PF1 limits rebuilds to paints,
+   so a busy edit stream on a large crystal is the trigger).  No
+   store-level leak (the stores are freed; it is glibc arena retention of
+   the append churn).  This is the concrete "crash by scale".  Fixed by
+   **PF4, upgraded from nice-to-have to crash-prevention** (preallocate /
+   reuse the mesh vectors instead of growing them from empty each build).
+   A loft-level fix — `vector` capacity reservation on `+=` / a
+   `reserve(n)` builtin — would also help every consumer.
+3. **`CrystalState` unbounded growth** (the CPU `update_state` aging
+   path — now AVOIDED by the demo, see § Growth animation).  If ever
+   re-enabled, `update_state` appends a birth record per (centre,
+   direction) main and never prunes, and `lookup_main_birth` is a linear
+   scan, so the state vector grows ~6 × cells and aging cost becomes
+   O(N²).  The demo no longer uses this path (growth is GPU-side), so it
+   is moot for the demo; bound it (cap records to live cells, index by
+   cell key) before any consumer turns CPU aging back on at scale.
+
+**Bottom line:** yes, the demo can scale to large crystals — the segment
+explosion is solved and PF1 (rebuild only on paint) is already in place,
+so steady-state is cheap.  The remaining risks are at *edit time* on a
+large crystal: each paint is an O(N²) hitch (PF2) and, without PF4
+(preallocate), a busy edit stream churns the allocator into an OOM.  With
+PF2 + PF4 added, edits stay cheap and it scales to thousands of cells.
+
+**Leak validation (2026-05-21):** the per-frame path is leak-free on
+both backends, **on both the original and the revised algorithm** —
+`LOFT_NATIVE_LEAK_CHECK` clean over the full ramp (all 4 patterns × 12
+sizes), plus 3000 block-50 builds, ring/90 × 100 builds, 2000 snapshot
+builds, and 150 interp builds, all with no leaked stores.  (Relies on the
+@P297/@P298 struct-returning-call free fixes landed the same session —
+without them the per-frame `cm = crystal_segments_aged(…)` temporary
+would have leaked.)
+
+## Growth animation — GPU-side (shipped 2026-05-21)
+
+The crystal **grows in gradually** when a cell is painted, instead of
+popping in fully — but **without** any per-frame CPU rebuild, so PF1
+caching stays intact.  The growth runs entirely in the vertex shader:
+
+- `audience_crystal::CrystalMesh` carries `cell_ix` (the owning cell per
+  segment), so the projector can attribute each beam to the cell whose
+  paint produced it.
+- Each `Cell` records `birth_frame` (the render frame it was painted, in
+  the same clock as the loop's `frames`).  `snapshot_cells` returns a
+  `Snapshot{snap, births}` with a placement-ordered `births` array.
+- `build_crystal_vbo` emits **stride-14** vertices: pos + normal + rgba +
+  the owning cell's centre (bloom anchor, precomputed once) + birth.  The
+  graphics cdylib's `gl_upload_vertices` wires those as attribute
+  locations 3 (`vec3` anchor) and 4 (`float` birth) when `stride ≥ 14`.
+- `CRYSTAL_VERT`: `age = clamp((uNow − aBirth) / uGrowth, 0, 1)` with an
+  ease-out, then `pos = aCenter + age · (aPos − aCenter)`.  Each cell's
+  crystal blooms out from its centre over `GROWTH_FRAMES` (≈1.5 s).  Only
+  the `uNow` uniform advances per frame; the mesh is rebuilt only on
+  paint (PF1).  The fade layer switches back to `cell_shader` (stride 10).
+
+This sidesteps both the per-paint O(N²) rebuild AND the CPU-aging
+`CrystalState` growth (§ Scaling point 3) — the geometry the shader
+animates is the cached static mesh.  Tunables: `GROWTH_FRAMES` and the
+ease curve / anchor in `CRYSTAL_VERT` (`projector.loft`).
 
 ## Deliverable
 

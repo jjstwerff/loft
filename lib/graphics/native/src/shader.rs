@@ -46,7 +46,9 @@ pub fn compile_program(vert_src: &str, frag_src: &str) -> Result<u32, String> {
         let mut len = 0i32;
         unsafe { gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len) };
         let mut buf = vec![0u8; len as usize];
-        unsafe { gl::GetProgramInfoLog(program, len, std::ptr::null_mut(), buf.as_mut_ptr().cast()) };
+        unsafe {
+            gl::GetProgramInfoLog(program, len, std::ptr::null_mut(), buf.as_mut_ptr().cast())
+        };
         let msg = String::from_utf8_lossy(&buf).to_string();
         unsafe { gl::DeleteProgram(program) };
         Err(format!("Program link error: {msg}"))

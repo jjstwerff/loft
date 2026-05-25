@@ -84,6 +84,29 @@ impl Stores {
         }
     }
 
+    /// @P305 — true when the keyed field at byte offset `byte_off` in
+    /// struct / enum-value type `struct_tp` is cross-linked with a sibling
+    /// index (the multi-index case: two-or-more keyed fields sharing an
+    /// element type are auto-linked in `types.rs`).  `OpSetKeyed` lacks the
+    /// struct + field context to maintain the sibling indexes, so the parser
+    /// falls back to the (non-corrupting) update-only path for these.
+    #[must_use]
+    pub fn keyed_field_is_linked(&self, struct_tp: u16, byte_off: u16) -> bool {
+        if (struct_tp as usize) >= self.types.len() {
+            return false;
+        }
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+            &self.types[struct_tp as usize].parts
+        {
+            for f in fields {
+                if f.position == byte_off {
+                    return !f.other_indexes.is_empty();
+                }
+            }
+        }
+        false
+    }
+
     pub(super) fn field_ref(&self, data: &DbRef, parent_tp: u16, field: u16) -> DbRef {
         if field == u16::MAX {
             *data
@@ -120,19 +143,20 @@ impl Stores {
                     .set_u32_raw(reference.rec, reference.pos, rec.rec);
                 vector::vector_finish(data, &mut self.allocations);
             }
-            Parts::Hash(_, _) => hash::add(
-                data,
-                rec,
-                &mut self.allocations,
-                &self.types[tp as usize].keys,
-            ),
-            Parts::Index(_, _, _) => tree::add(
-                data,
-                rec,
-                self.fields(tp),
-                &mut self.allocations,
-                &self.types[tp as usize].keys,
-            ),
+            Parts::Hash(c, _) => {
+                // @P306 — replace any existing record with this key (dedup).
+                self.dedup_keyed(data, rec, tp, c);
+                let keys = self.types[tp as usize].keys.clone();
+                hash::add(data, rec, &mut self.allocations, &keys);
+            }
+            Parts::Index(c, _, _) => {
+                // @P306 — replace any existing record with this key (dedup);
+                // tree::add otherwise rejects the duplicate and keeps the old.
+                self.dedup_keyed(data, rec, tp, c);
+                let left = self.fields(tp);
+                let keys = self.types[tp as usize].keys.clone();
+                tree::add(data, rec, left, &mut self.allocations, &keys);
+            }
             Parts::Ordered(_, _) => {
                 vector::ordered_finish(
                     data,

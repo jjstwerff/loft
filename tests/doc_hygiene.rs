@@ -797,6 +797,79 @@ fn problems_open_index_matches_quickref() {
     }
 }
 
+/// The `🔴 Currently Open (fast index)` is an at-a-glance list of
+/// CURRENTLY-OPEN issues only.  It must not accumulate closed-issue
+/// rows or historical narration — that history lives in the canonical
+/// Quick-Reference table below.  Without this guard the section
+/// silently re-grows: `problems_open_index_matches_quickref` only
+/// checks `| [P…]` link rows, so strikethrough rows and free prose
+/// slip past it (they did, to ~285 lines, before this test landed).
+///
+/// Allowed shapes inside the section: the heading, a short intro
+/// paragraph BEFORE the table, the table header + separator, table
+/// data rows that link to the quick-ref (`| [P…]` / `| [@P…]`), blank
+/// lines, and the trailing `---` thematic break.  Specifically banned:
+/// strikethrough (`~~…~~`, which only ever marks a closed issue) and
+/// any prose AFTER the table block starts.
+#[test]
+fn problems_fast_index_stays_clean() {
+    let src = read_problems();
+    let start = src
+        .find("## 🔴 Currently Open (fast index)")
+        .expect("`🔴 Currently Open (fast index)` section missing from PROBLEMS.md");
+    let end = src[start..]
+        .find("\n## Open Issues — Quick Reference")
+        .expect("`Open Issues — Quick Reference` heading must follow the fast index")
+        + start;
+    let section = &src[start..end];
+
+    // Strikethrough only ever marks a CLOSED issue → it belongs in the
+    // Quick-Reference table below, never in the open-index.
+    assert!(
+        !section.contains("~~"),
+        "`🔴 Currently Open (fast index)` contains `~~` (strikethrough) — closed issues must NOT be listed here.  Move the closed row to the Quick-Reference table below and delete it from the fast index."
+    );
+
+    let mut table_started = false;
+    let mut table_ended = false;
+    for line in section.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.starts_with('|') {
+            assert!(
+                !table_ended,
+                "`🔴 Currently Open (fast index)` has a table row AFTER the table block ended: {line:?} — keep all open rows in one contiguous table."
+            );
+            table_started = true;
+            // Header / separator rows are fine as-is.
+            if t.starts_with("| # ") || t.starts_with("|---") {
+                continue;
+            }
+            // Every data row must link to a real Quick-Reference entry.
+            assert!(
+                t.starts_with("| [P") || t.starts_with("| [@P"),
+                "`🔴 Currently Open (fast index)` table row is not a Quick-Reference link (`| [P…]` / `| [@P…]`): {line:?}"
+            );
+            continue;
+        }
+        // A non-table, non-blank line.  Before the table it is intro
+        // prose (allowed).  After the table starts, the only thing
+        // permitted is the trailing `---` thematic break — anything
+        // else is closed-issue narration creeping back in.
+        if table_started {
+            if t == "---" {
+                table_ended = true;
+                continue;
+            }
+            panic!(
+                "`🔴 Currently Open (fast index)` has prose after the table block (closed-issue narration?): {line:?} — closed-issue history belongs in the Quick-Reference table / CHANGELOG_TECHNICAL.md, not the open index."
+            );
+        }
+    }
+}
+
 /// Every caveat ID whose long-form heading is crossed out
 /// (`### ~~CX~~ … DONE` / `### ~~PX~~ … DONE`) must also appear
 /// crossed out in the Verification-log table at the bottom.  The

@@ -27,10 +27,15 @@
 // add more call sites and custom emitters.
 #![allow(dead_code)]
 
+pub mod coroutine;
 pub mod default;
 pub mod int_compare;
 pub mod key_ops;
+pub mod misc_ops;
 pub mod parallel;
+pub mod ref_ops;
+pub mod refcount;
+pub mod text_ops;
 
 use super::Output;
 use crate::data::{Definition, Value};
@@ -162,10 +167,85 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
         Box::new(parallel::ParallelForEmitter),
     );
 
+    // Coroutine family (N8b native generators) — migrated out of the
+    // dispatch match (`dispatch_op_arm_budget` ratchet).  Both are
+    // pass-throughs to `loft::codegen_runtime::coroutine_*`.
+    r.insert(
+        "OpCoroutineNext",
+        Box::new(coroutine::OpCoroutineNextEmitter),
+    );
+    r.insert(
+        "OpCoroutineExhausted",
+        Box::new(coroutine::OpCoroutineExhaustedEmitter),
+    );
+
     // Phase 04 — key-keyed Op emitters.  Replaces ~70 lines of two
     // arms in dispatch.rs (`"OpGetRecord" =>` + `"OpIterate" =>`).
     r.insert("OpGetRecord", Box::new(key_ops::OpGetRecordEmitter));
     r.insert("OpIterate", Box::new(key_ops::OpIterateEmitter));
+
+    // Keyed-WRITE family + store-refcount op — migrated out of
+    // dispatch.rs::output_call_inner to keep that match under the
+    // `dispatch_op_arm_budget` ratchet (these were added as arms during the
+    // @PLAN36 dogfood: @P305 OpSetKeyed, @P307 OpClearKeyed, OpReplaceKeyed,
+    // P259 OpIncRc).  Pure pass-throughs to their runtime helpers.
+    r.insert("OpReplaceKeyed", Box::new(key_ops::OpReplaceKeyedEmitter));
+    r.insert("OpSetKeyed", Box::new(key_ops::OpSetKeyedEmitter));
+    r.insert("OpClearKeyed", Box::new(key_ops::OpClearKeyedEmitter));
+    r.insert("OpIncRc", Box::new(refcount::OpIncRcEmitter));
+
+    // Reference-lifetime family — the irreducible cases.  OpFreeRef /
+    // OpFreeRefIfDistinct read per-function variable metadata (conditional
+    // emission a template can't express).  OpCopyRecord / OpSizeofRef are
+    // cell-passthroughs kept here pending the Phase-D template move.
+    // OpEqRef / OpNeRef / OpNullRefSentinel were dropped — their `#rust`
+    // templates (pure-expr / literal, no non-rewritable `s.`) are native-valid
+    // via DefaultEmitter.
+    r.insert("OpFreeRef", Box::new(ref_ops::OpFreeRefEmitter));
+    r.insert(
+        "OpFreeRefIfDistinct",
+        Box::new(ref_ops::OpFreeRefIfDistinctEmitter),
+    );
+    r.insert("OpCopyRecord", Box::new(ref_ops::OpCopyRecordEmitter));
+    r.insert("OpSizeofRef", Box::new(ref_ops::OpSizeofRefEmitter));
+
+    // Match elimination — the text/format/buffer family relocated VERBATIM from
+    // the output_call_inner match into one self-contained emitter (it does the
+    // @P283 refvar->Stack rewrite + the sub-match internally).  Registered for
+    // every base + Stack name so the registry-first guard routes them here.
+    for name in [
+        "OpFormatInt",
+        "OpFormatStackInt",
+        "OpFormatFloat",
+        "OpFormatStackFloat",
+        "OpFormatSingle",
+        "OpFormatStackSingle",
+        "OpFormatText",
+        "OpFormatStackText",
+        "OpAppendText",
+        "OpAppendStackText",
+        "OpAppendCharacter",
+        "OpAppendStackCharacter",
+        "OpClearText",
+        "OpClearStackText",
+        "OpClearVector",
+        "OpFreeText",
+        "OpCreateStack",
+        "OpFormatDatabase",
+        "OpFormatStackDatabase",
+    ] {
+        r.insert(name, Box::new(text_ops::TextDispatchEmitter));
+    }
+
+    // Match elimination — misc pass-throughs relocated verbatim from the match.
+    r.insert(
+        "OpConvRefFromNull",
+        Box::new(misc_ops::OpConvRefFromNullEmitter),
+    );
+    r.insert("OpGetTextSub", Box::new(misc_ops::OpGetTextSubEmitter));
+    r.insert("OpDatabase", Box::new(misc_ops::OpDatabaseEmitter));
+    r.insert("OpStep", Box::new(misc_ops::OpStepEmitter));
+    r.insert("OpRemove", Box::new(misc_ops::OpRemoveEmitter));
 
     // Phase 06 — parallel-queue emitter family (P202 close).  Mirrors
     // phase 03's for-par emitter for the queue protocol: `n_parallel_queue`
@@ -301,16 +381,19 @@ mod tests {
     #[test]
     fn registry_count_matches_sanctioned_set() {
         let count = registry().len();
-        // Phase 00 shipped an empty registry; subsequent phases
-        // populated it.  After plan-09 + plan-11 close (P200/P202/
-        // P203/P204/P205): 9 forwarding-smoke names + ParallelFor×2 +
-        // key_ops×2 + ParallelQueue×3 + ParallelBufRename×6 +
-        // IntCompare×4, with 2 overlaps (OpEqInt/OpLtInt overwritten
-        // by IntCompare) → ~24.  Cap at 30 with headroom for plan-12.
+        // The registry holds every Op whose native emission lives in code
+        // rather than a `#rust` template.  It grew substantially when the
+        // `output_call_inner` match was eliminated — the text/format/buffer
+        // family (one `TextDispatchEmitter` registered for ~19 base+Stack
+        // names) and the misc pass-throughs (OpConvRefFromNull / OpGetTextSub /
+        // OpDatabase / OpStep / OpRemove) moved into the registry, on top of
+        // the parallel family, key_ops, ref-lifetime, coroutine and IntCompare
+        // emitters.  This is the intended end state (the registry IS the
+        // dispatch mechanism); the cap just makes a surprising jump visible.
         assert!(
-            count <= 30,
+            count <= 80,
             "registry has {count} custom emitters — bump the cap if \
-             this is intentional and document in plan 09 status table"
+             this is intentional and document here"
         );
     }
 

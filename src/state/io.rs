@@ -1198,6 +1198,14 @@ impl State {
         self.database.remove_claims(&to, tp);
         self.database.copy_block(&data, &to, size);
         self.database.copy_claims(&data, &to, tp);
+        // @P317 — LOFT_LOG=copy_check: warn if the deep copy changed any nested
+        // collection length (before the source-free below, so src is intact).
+        // Call-site-gated so production pays only a branch-predicted cached
+        // read, not a function call, when the mode is off.
+        if self.database.copy_check_enabled() {
+            self.database
+                .report_copy_mismatches(&data, &to, tp, "copy_record");
+        }
         // Record which bytecode position performed this deep copy.
         self.database.allocations[to.store_nr as usize].last_op_at = code_pos;
         // Issue #120: free the source store after deep copy when the caller
@@ -1231,6 +1239,10 @@ impl State {
         let src = *self.get_stack::<DbRef>();
         self.database.remove_claims(&dest, tp);
         self.database.copy_claims(&src, &dest, tp);
+        if self.database.copy_check_enabled() {
+            self.database
+                .report_copy_mismatches(&src, &dest, tp, "replace_keyed");
+        }
         if free_source
             && src.store_nr != dest.store_nr
             && src.store_nr != 0
@@ -1240,6 +1252,18 @@ impl State {
         {
             self.database.free(&src);
         }
+    }
+
+    /// @P305 — `coll[key] = value` insert-or-replace into a keyed
+    /// collection.  `OpSetKeyed(coll, value, tp)`: `tp`'s `0x8000` bit frees
+    /// `value`'s store after the deep copy (caller temp).
+    pub fn set_keyed(&mut self) {
+        let raw_tp = *self.code::<u16>();
+        let free_source = raw_tp & 0x8000 != 0;
+        let db_tp = raw_tp & 0x7FFF;
+        let value = *self.get_stack::<DbRef>();
+        let coll = *self.get_stack::<DbRef>();
+        self.database.set_keyed(&coll, &value, db_tp, free_source);
     }
 
     pub fn hash_add(&mut self) {

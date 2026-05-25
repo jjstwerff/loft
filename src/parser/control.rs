@@ -2947,6 +2947,28 @@ impl Parser {
                     dep.push(a as u16);
                     self.vars
                         .set_type(*v, Type::RefVar(Box::new(Type::Text(Vec::new()))));
+                } else if matches!(tp, Type::Tuple(_)) {
+                    // @P330: a tuple local hoisted to a tuple parameter
+                    // doesn't have a well-defined caller-side null-init —
+                    // call sites would push a 12-byte null DbRef placeholder
+                    // where the parameter slot is 16+ bytes per text element,
+                    // corrupting the callee's frame layout.  Skip the hoist
+                    // entirely: do NOT add an attribute, do NOT promote the
+                    // local to an argument, and do NOT propagate the dep to
+                    // the return type.  The function's return type loses
+                    // the dep on this local, which lets `scopes::free_vars`
+                    // (B5-L3 single-text branch, src/scopes.rs:961-988) save
+                    // the body's tail expression to a `__ret_N: text` temp
+                    // via `Set` (lowers to `OpAppendText`, deep-copying the
+                    // text-element bytes into an owned String) before the
+                    // local is freed.  Same logical fix family as @P329,
+                    // applied one layer up: @P329 fixed tuple-of-text
+                    // RETURN values via deep-copy temps; @P330 fixes
+                    // single-text returns derived from tuple-element access
+                    // on a local tuple variable via the same B5-L3 pattern,
+                    // just by NOT hoisting the tuple local to a parameter
+                    // (which is the wrong escape hatch).  No-op body —
+                    // the local stays a local, the dep is dropped.
                 } else {
                     let a = self
                         .data
@@ -3166,8 +3188,9 @@ impl Parser {
                         && self.vars.is_argument(ref1_var)
                         && !dep.contains(&ref1_var)
                     {
-                        let rec_tp =
-                            i32::from(self.data.def(self.data.type_def_nr(elm_tp)).known_type);
+                        // @P314 — narrow-aware element type (see `append_elem_tp`).
+                        let elm = (**elm_tp).clone();
+                        let rec_tp = self.append_elem_tp(&elm);
                         let append = self.cl(
                             "OpAppendVector",
                             &[Value::Var(ref1_var), v, Value::Int(rec_tp)],
@@ -3554,13 +3577,35 @@ impl Parser {
             "next" if types.len() == 1 => {
                 // CO1.6a: next(gen) — advance a coroutine iterator.
                 // Encode value_size as second parameter so codegen can emit it.
+                // @P327 — same encoding as the for-loop's `iterator()` path
+                // in `parser/collections.rs`: high byte = channel tag
+                // (1 = unified `next_into` for tuple yields).  Without this,
+                // manual `next()` on `iterator<(integer, integer)>` routes
+                // through the legacy text channel (size 16 ≡ `&str`) and
+                // returns a `String` where Rust expected a tuple.
                 if let Type::Iterator(inner, _) = &types[0] {
                     let yield_tp = (**inner).clone();
-                    let value_size =
-                        crate::variables::size(&yield_tp, &crate::data::Context::Argument);
+                    let byte_size = i32::from(crate::variables::size(
+                        &yield_tp,
+                        &crate::data::Context::Argument,
+                    ));
+                    // @P327 / @P328 — same packed encoding as the
+                    // for-loop's `iterator()` path; tag 1 = tuple-of-i64,
+                    // tag 2 = fn-ref.
+                    let channel_tag: i32 = if matches!(&yield_tp,
+                        Type::Tuple(elems) if !elems.is_empty()
+                        && elems.iter().all(|e| matches!(e, Type::Integer(_) | Type::Float)))
+                    {
+                        1
+                    } else if matches!(&yield_tp, Type::Function(_, _, _)) {
+                        2
+                    } else {
+                        0
+                    };
+                    let value_size: i32 = (channel_tag << 8) | byte_size;
                     let op = self.data.def_nr("OpCoroutineNext");
                     let mut args = list.to_vec();
-                    args.push(Value::Int(i32::from(value_size)));
+                    args.push(Value::Int(value_size));
                     *val = Value::Call(op, args);
                     return yield_tp;
                 }
@@ -3743,21 +3788,37 @@ impl Parser {
                     if outer_v == u16::MAX {
                         continue;
                     }
-                    // Plan-22 phase 02d-iii.e — skip write-back
-                    // for boxed-scalar captures.  The outer var
-                    // is now `Reference(__cell_<T>, _)` and
-                    // mutations propagate via the shared cell
-                    // DbRef (auto-Reference encoding from 02c +
-                    // closure-body writes via 02d-iii.b/d).  A
-                    // bare `v_set(outer, field_val)` here would
-                    // copy a 12B DbRef back over the same 12B
-                    // DbRef — usually a no-op, but the
-                    // accompanying scope-exit `OpFreeRef`
-                    // bookkeeping can double-free if the inner
-                    // and outer slots disagree on ownership.
-                    if let Type::Reference(d, _) = self.vars.tp(outer_v)
-                        && self.data.def(*d).name.starts_with("__cell_")
-                    {
+                    // Plan-22 phase 02d-iii.e + @P319 — skip the
+                    // write-back for ALL shared-reference captures,
+                    // i.e. those stored in the closure record via the
+                    // auto-Reference 12-byte DbRef encoding (the
+                    // closure attribute is `Reference(d, deps)` with
+                    // NON-EMPTY deps).  This covers boxed `__cell_<T>`
+                    // scalars (02d-iii.e, the original case) AND struct
+                    // / reference captures such as a captured `Mesh`
+                    // whose `.vertices` vector is appended to inside the
+                    // lambda (@P319).
+                    //
+                    // For these the closure holds a DbRef into the LIVE
+                    // outer value, so body mutations already propagate
+                    // through the shared store.  A bare
+                    // `v_set(outer, OpGetDbRef(rec, off))` copies that
+                    // 12-byte DbRef back over itself — a value no-op —
+                    // but the reassignment's free-old-ref step releases
+                    // the store the closure record still references.
+                    // That premature free lets the next call reuse the
+                    // store, clobbering the captured value: silent data
+                    // loss when the trampled field is at offset 0 (a
+                    // `len` reads back 0), or a SIGSEGV in `new_record`
+                    // when it is at a non-zero offset.  Native compiles
+                    // the same IR without the free, so this corrupted
+                    // only the interpreter.  Only genuine by-VALUE
+                    // captures (inline-bytes encoding, empty deps) need
+                    // the write-back to observe their mutations.
+                    if matches!(
+                        self.data.attr_type(closure_rec_d, aid),
+                        Type::Reference(_, ref deps) if !deps.is_empty()
+                    ) {
                         continue;
                     }
                     let field_val = self.get_field(closure_rec_d, aid, Value::Var(closure_w));

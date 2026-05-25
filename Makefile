@@ -85,17 +85,22 @@ all:
 	RUSTFLAGS=-g cargo build --release
 
 check-targets:
-	@missing=""; \
-	for target in wasm32-wasip2; do \
-		if ! rustup target list --installed | grep -q "^$$target$$"; then \
-			missing="$$missing $$target"; \
-		fi; \
-	done; \
-	if [ -n "$$missing" ]; then \
-		echo "ERROR: missing rustup target(s):$$missing"; \
-		echo "Fix with:$$missing" | sed 's/ / rustup target add /g'; \
-		exit 1; \
+	@if ! command -v rustup >/dev/null 2>&1; then \
+		echo "WARNING: rustup not found; can't verify cross-compile targets."; \
+		echo "If the build fails with E0463, install wasm32-wasip2 and"; \
+		echo "wasm32-unknown-unknown manually for your toolchain."; \
+		exit 0; \
 	fi
+	@for target in wasm32-wasip2 wasm32-unknown-unknown; do \
+		if ! rustup target list --installed | grep -q "^$$target$$"; then \
+			echo "Installing missing rustup target: $$target"; \
+			rustup target add "$$target" || { \
+				echo "ERROR: failed to install $$target."; \
+				echo "Install manually:  rustup target add $$target"; \
+				exit 1; \
+			}; \
+		fi; \
+	done
 
 install: check-targets all
 	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random

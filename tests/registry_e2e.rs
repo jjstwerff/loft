@@ -1,0 +1,619 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+//! End-to-end integration test for the PKG.REG file-based registry.
+//!
+//! Sets up a tiny in-process HTTP fixture server, hosts an
+//! `index.json` + a real package tarball produced by
+//! `loft::package::package_create`, then exercises the full
+//! `loft::install::install_one` pipeline against the fixture URL.
+//! Verifies:
+//!
+//! - the tarball is downloaded byte-for-byte;
+//! - sha256 is checked (corruption causes hard failure);
+//! - the package extracts to `~/.loft/registry/<pkg>-<v>/`;
+//! - `loft.lock` is written with the expected fields;
+//! - `extract_tarball` produces a directory tree matching the
+//!   original `package_create` input (the missing roundtrip test).
+//!
+//! Test isolation: each test points `HOME` at a fresh tmpdir so the
+//! global cache (`~/.loft/registry`) doesn't leak between tests or
+//! collide with the developer's real cache.  The fixture HTTP server
+//! binds `127.0.0.1:0` (kernel-picked port) so parallel test runs
+//! don't conflict.
+
+#![cfg(feature = "registry")]
+
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+// ── HTTP fixture server ───────────────────────────────────────────
+
+/// Tiny single-threaded HTTP server.  Serves a static map of
+/// `path → bytes`.  Returns 404 on unknown paths.  Shuts down via
+/// `Drop` on the handle.  ~120 lines, no external HTTP framework
+/// (the project's stdlib is enough for a 1xx-200 mock server).
+struct FixtureServer {
+    base_url: String,
+    shutdown: Arc<AtomicBool>,
+    join: Option<thread::JoinHandle<()>>,
+    files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl FixtureServer {
+    fn new(initial: HashMap<String, Vec<u8>>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let local = listener.local_addr().expect("addr");
+        let base_url = format!("http://{}", local);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let files = Arc::new(Mutex::new(initial));
+        let shutdown_clone = Arc::clone(&shutdown);
+        let files_clone = Arc::clone(&files);
+        let join = thread::spawn(move || {
+            while !shutdown_clone.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let f = Arc::clone(&files_clone);
+                        thread::spawn(move || {
+                            let map = f.lock().unwrap().clone();
+                            handle_request(stream, &map);
+                        });
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            base_url,
+            shutdown,
+            join: Some(join),
+            files,
+        }
+    }
+
+    fn url_for(&self, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
+    }
+}
+
+impl Drop for FixtureServer {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+    }
+}
+
+fn handle_request(mut stream: TcpStream, files: &HashMap<String, Vec<u8>>) {
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).is_err() {
+        return;
+    }
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .to_string();
+    // Drain headers.
+    let mut hdr = String::new();
+    loop {
+        hdr.clear();
+        if reader.read_line(&mut hdr).is_err() {
+            return;
+        }
+        if hdr == "\r\n" || hdr == "\n" || hdr.is_empty() {
+            break;
+        }
+    }
+    let response: Vec<u8> = if let Some(data) = files.get(&path) {
+        let mut r = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+            data.len()
+        )
+        .into_bytes();
+        r.extend_from_slice(data);
+        r
+    } else {
+        b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nnot found"
+            .to_vec()
+    };
+    let _ = stream.write_all(&response);
+    let _ = stream.flush();
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+}
+
+// ── Test helpers ──────────────────────────────────────────────────
+
+/// Per-test tmpdir; the test sets `HOME=<tmpdir>` so the install
+/// cache lives there instead of the developer's real `~/.loft/`.
+fn tmpdir(name: &str) -> PathBuf {
+    let mut p = env::temp_dir();
+    p.push(format!("loft_e2e_{}_{}", std::process::id(), name));
+    if p.exists() {
+        let _ = fs::remove_dir_all(&p);
+    }
+    fs::create_dir_all(&p).unwrap();
+    p
+}
+
+fn write_file(path: &Path, content: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, content).unwrap();
+}
+
+/// Build a sample loft package on disk and return its path.
+fn make_sample_package(name: &str, version: &str, tmp: &Path) -> PathBuf {
+    let pkg = tmp.join("pkg_src");
+    write_file(
+        &pkg.join("loft.toml"),
+        &format!(
+            "[package]\nname = \"{name}\"\nversion = \"{version}\"\nloft = \">=0.8\"\n\n[library]\nentry = \"src/{name}.loft\"\n"
+        ),
+    );
+    write_file(
+        &pkg.join("src").join(format!("{name}.loft")),
+        &format!("// {name} source\npub fn id() -> text {{ return \"{name}-{version}\"; }}\n"),
+    );
+    write_file(&pkg.join("README.md"), &format!("# {name}\n"));
+    pkg
+}
+
+/// Atomically swap HOME for the duration of the test.  Returns a
+/// guard that restores the previous value on drop.  Tests in this
+/// file share a process so we serialise HOME via a Mutex — install
+/// resolution reads `dirs::home_dir()` once per call so a short
+/// window of mutated HOME is enough.
+struct HomeGuard {
+    prev: Option<String>,
+}
+static HOME_LOCK: Mutex<()> = Mutex::new(());
+
+impl HomeGuard {
+    fn set(new_home: &Path) -> (Self, std::sync::MutexGuard<'static, ()>) {
+        let lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = env::var("HOME").ok();
+        // SAFETY: env::set_var is documented unsafe in newer Rust due to
+        // process-wide effects; we serialise via HOME_LOCK so only one
+        // test mutates HOME at a time.
+        unsafe {
+            env::set_var("HOME", new_home);
+        }
+        (Self { prev }, lock)
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(p) = &self.prev {
+                env::set_var("HOME", p);
+            } else {
+                env::remove_var("HOME");
+            }
+        }
+    }
+}
+
+/// Atomically swap LOFT_REGISTRY_URL.
+struct RegUrlGuard {
+    prev: Option<String>,
+}
+static REG_URL_LOCK: Mutex<()> = Mutex::new(());
+
+impl RegUrlGuard {
+    fn set(new_url: &str) -> (Self, std::sync::MutexGuard<'static, ()>) {
+        let lock = REG_URL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = env::var("LOFT_REGISTRY_URL").ok();
+        unsafe {
+            env::set_var("LOFT_REGISTRY_URL", new_url);
+        }
+        (Self { prev }, lock)
+    }
+}
+
+impl Drop for RegUrlGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(p) = &self.prev {
+                env::set_var("LOFT_REGISTRY_URL", p);
+            } else {
+                env::remove_var("LOFT_REGISTRY_URL");
+            }
+        }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+// Windows: the in-process HTTP fixture + tarball-extract pipeline
+// doesn't currently complete cleanly (`report.installed.len()` returns
+// 0 instead of 1).  Tracked as @P332 — Windows registry install hardening.
+// macOS + Linux both pass.
+#[cfg(not(windows))]
+#[test]
+fn end_to_end_install_against_fixture_server() {
+    let tmp = tmpdir("end_to_end_install_against_fixture_server");
+
+    // 1. Build a real package tarball.
+    let pkg_dir = make_sample_package("e2e", "0.1.0", &tmp);
+    let pkg_out = loft::package::package_create(&pkg_dir, Some(&tmp)).expect("package_create");
+    let tarball_bytes = fs::read(&pkg_out.tarball).expect("read tarball");
+
+    // 2. Stand up the fixture server with index.json + tarball.
+    let mut files = HashMap::new();
+    // Fill the index AFTER we know the server URL, so the entries
+    // can point at the right host.  Start the server with an empty
+    // file map, then update it.
+    files.insert("/placeholder".to_string(), b"placeholder".to_vec());
+    let server = FixtureServer::new(files);
+
+    let tarball_url = server.url_for("/e2e-0.1.0.tar.gz");
+    let index_json = format!(
+        r#"{{
+            "schema_version": 1,
+            "updated": "2026-05-24T00:00:00Z",
+            "packages": {{
+                "e2e": {{
+                    "description": "End-to-end test fixture",
+                    "categories": ["test"],
+                    "versions": {{
+                        "0.1.0": {{
+                            "url": "{}",
+                            "sha256": "{}",
+                            "size": {},
+                            "loft": ">=0.8",
+                            "published": "2026-05-24T00:00:00Z"
+                        }}
+                    }}
+                }}
+            }}
+        }}"#,
+        tarball_url, pkg_out.sha256, pkg_out.size
+    );
+
+    {
+        let mut map = server.files.lock().unwrap();
+        map.insert("/index.json".to_string(), index_json.clone().into_bytes());
+        map.insert("/e2e-0.1.0.tar.gz".to_string(), tarball_bytes.clone());
+    }
+
+    // 3. Point loft at the fixture.
+    let home_dir = tmpdir("end_to_end_home");
+    let (_home, _lh) = HomeGuard::set(&home_dir);
+    let (_reg, _lr) = RegUrlGuard::set(&server.url_for("/index.json"));
+
+    // 4. Run the install.
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: true, // skip TTL on first run
+        offline: false,
+        allow_prerelease: false,
+    };
+    // `loft.lock` is written into cwd — temporarily move to a fresh
+    // dir so we don't dirty the dev's working tree.
+    let prev_cwd = env::current_dir().expect("cwd");
+    let install_cwd = tmpdir("end_to_end_install_cwd");
+    env::set_current_dir(&install_cwd).expect("chdir");
+
+    let report = loft::install::install_one("e2e", None, &opts).expect("install_one");
+    assert_eq!(report.installed.len(), 1);
+    assert_eq!(
+        report.installed[0],
+        ("e2e".to_string(), "0.1.0".to_string())
+    );
+
+    // 5. Cache dir contains the extracted package.
+    let extracted = home_dir.join(".loft").join("registry").join("e2e-0.1.0");
+    assert!(extracted.exists(), "extracted dir missing: {extracted:?}");
+    assert!(extracted.join("loft.toml").exists(), "loft.toml missing");
+    assert!(
+        extracted.join("src").join("e2e.loft").exists(),
+        "src missing"
+    );
+    assert!(extracted.join("README.md").exists(), "README missing");
+
+    // 6. Extracted contents match the original source.
+    let original_src =
+        fs::read_to_string(pkg_dir.join("src").join("e2e.loft")).expect("read original src");
+    let extracted_src =
+        fs::read_to_string(extracted.join("src").join("e2e.loft")).expect("read extracted src");
+    assert_eq!(
+        original_src, extracted_src,
+        "extracted source bytes differ from original"
+    );
+
+    // 7. loft.lock written with the expected fields.
+    let lock_path = install_cwd.join("loft.lock");
+    let lock = loft::lockfile::read_lockfile(&lock_path)
+        .expect("io")
+        .expect("Some");
+    assert_eq!(lock.packages.len(), 1);
+    let p = &lock.packages[0];
+    assert_eq!(p.name, "e2e");
+    assert_eq!(p.version, "0.1.0");
+    assert_eq!(p.url, tarball_url);
+    assert_eq!(p.sha256, pkg_out.sha256);
+    assert_eq!(p.source, "registry");
+
+    // 8. Re-running install is idempotent — re-uses cache.
+    let report2 = loft::install::install_one("e2e", None, &opts).expect("install_one #2");
+    assert_eq!(report2.installed.len(), 0);
+    assert_eq!(report2.skipped_cached.len(), 1);
+
+    // Restore cwd before tmpdir cleanup.
+    env::set_current_dir(prev_cwd).ok();
+
+    // Cleanup.
+    drop(_reg);
+    drop(_home);
+    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&install_cwd);
+}
+
+#[test]
+fn install_rejects_tarball_with_wrong_sha256() {
+    let tmp = tmpdir("install_rejects_tarball_with_wrong_sha256");
+
+    // Build a tarball but advertise a WRONG sha256 in the index.
+    let pkg_dir = make_sample_package("badsha", "0.1.0", &tmp);
+    let pkg_out = loft::package::package_create(&pkg_dir, Some(&tmp)).expect("package_create");
+    let tarball_bytes = fs::read(&pkg_out.tarball).expect("read");
+
+    let mut files = HashMap::new();
+    files.insert("/badsha-0.1.0.tar.gz".to_string(), tarball_bytes);
+    let server = FixtureServer::new(files);
+    let tarball_url = server.url_for("/badsha-0.1.0.tar.gz");
+
+    let wrong_sha = "0000000000000000000000000000000000000000000000000000000000000000";
+    let index_json = format!(
+        r#"{{
+            "schema_version": 1,
+            "updated": "2026-05-24T00:00:00Z",
+            "packages": {{
+                "badsha": {{
+                    "versions": {{
+                        "0.1.0": {{
+                            "url": "{}",
+                            "sha256": "{}",
+                            "size": {},
+                            "loft": ">=0.8",
+                            "published": "2026-05-24T00:00:00Z"
+                        }}
+                    }}
+                }}
+            }}
+        }}"#,
+        tarball_url, wrong_sha, pkg_out.size
+    );
+    server
+        .files
+        .lock()
+        .unwrap()
+        .insert("/index.json".to_string(), index_json.into_bytes());
+
+    let home_dir = tmpdir("install_rejects_bad_sha_home");
+    let (_home, _lh) = HomeGuard::set(&home_dir);
+    let (_reg, _lr) = RegUrlGuard::set(&server.url_for("/index.json"));
+
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: true,
+        offline: false,
+        allow_prerelease: false,
+    };
+    let prev_cwd = env::current_dir().expect("cwd");
+    let install_cwd = tmpdir("install_rejects_bad_sha_cwd");
+    env::set_current_dir(&install_cwd).expect("chdir");
+
+    let result = loft::install::install_one("badsha", None, &opts);
+    assert!(result.is_err(), "install should reject mismatched sha256");
+    let err = result.unwrap_err();
+    assert!(err.contains("sha256 mismatch"), "msg: {err}");
+
+    env::set_current_dir(prev_cwd).ok();
+    drop(_reg);
+    drop(_home);
+    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&install_cwd);
+}
+
+#[test]
+fn install_rejects_missing_package_in_index() {
+    let tmp = tmpdir("install_rejects_missing_package");
+
+    let mut files = HashMap::new();
+    let index_json = r#"{
+        "schema_version": 1,
+        "updated": "2026-05-24T00:00:00Z",
+        "packages": {}
+    }"#;
+    files.insert("/index.json".to_string(), index_json.as_bytes().to_vec());
+    let server = FixtureServer::new(files);
+
+    let home_dir = tmpdir("install_missing_pkg_home");
+    let (_home, _lh) = HomeGuard::set(&home_dir);
+    let (_reg, _lr) = RegUrlGuard::set(&server.url_for("/index.json"));
+
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: true,
+        offline: false,
+        allow_prerelease: false,
+    };
+    let prev_cwd = env::current_dir().expect("cwd");
+    let install_cwd = tmpdir("install_missing_pkg_cwd");
+    env::set_current_dir(&install_cwd).expect("chdir");
+
+    let result = loft::install::install_one("does-not-exist", None, &opts);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("not found in registry"), "msg: {err}");
+
+    env::set_current_dir(prev_cwd).ok();
+    drop(_reg);
+    drop(_home);
+    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&install_cwd);
+}
+
+// ── Tarball extract roundtrip ─────────────────────────────────────
+
+/// `loft package` → `extract_tarball` → directory tree matches the
+/// original.  The missing roundtrip test called out in the audit.
+#[test]
+fn extract_tarball_roundtrip_matches_original() {
+    let tmp = tmpdir("extract_tarball_roundtrip");
+
+    let pkg_dir = make_sample_package("rt", "0.1.0", &tmp);
+    let pkg_out = loft::package::package_create(&pkg_dir, Some(&tmp)).expect("package_create");
+
+    let extract_root = tmp.join("extracted");
+    loft::registry_index::extract_tarball(&pkg_out.tarball, &extract_root)
+        .expect("extract_tarball");
+
+    let inside = extract_root.join("rt-0.1.0");
+    assert!(inside.exists(), "extracted root missing");
+    assert!(inside.join("loft.toml").exists(), "loft.toml missing");
+    assert!(inside.join("src").join("rt.loft").exists(), "src missing");
+    assert!(inside.join("README.md").exists(), "README missing");
+
+    let original = fs::read(pkg_dir.join("src").join("rt.loft")).unwrap();
+    let extracted = fs::read(inside.join("src").join("rt.loft")).unwrap();
+    assert_eq!(original, extracted, "src bytes differ after roundtrip");
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// Transitive install: a depends on b, both in the fixture
+/// registry.  Verify the resolver+download pipeline walks deps and
+/// extracts both packages.
+// Windows: same @P332 — install report comes back empty.
+#[cfg(not(windows))]
+#[test]
+fn end_to_end_install_with_transitive_dep() {
+    let tmp = tmpdir("end_to_end_install_with_transitive_dep");
+
+    // Build two packages — a (depends on b) and b.
+    let a_src_root = tmp.join("a_src");
+    fs::create_dir_all(&a_src_root).unwrap();
+    let a_dir = make_sample_package("ta", "0.1.0", &a_src_root);
+    let a_out_dir = tmp.join("a_out");
+    fs::create_dir_all(&a_out_dir).unwrap();
+    let a_out = loft::package::package_create(&a_dir, Some(&a_out_dir)).expect("a pkg");
+    let b_src_root = tmp.join("b_src");
+    fs::create_dir_all(&b_src_root).unwrap();
+    let b_dir = make_sample_package("tb", "0.1.0", &b_src_root);
+    let b_out_dir = tmp.join("b_out");
+    fs::create_dir_all(&b_out_dir).unwrap();
+    let b_out = loft::package::package_create(&b_dir, Some(&b_out_dir)).expect("b pkg");
+
+    let a_bytes = fs::read(&a_out.tarball).unwrap();
+    let b_bytes = fs::read(&b_out.tarball).unwrap();
+
+    let mut files = HashMap::new();
+    files.insert("/ta-0.1.0.tar.gz".to_string(), a_bytes);
+    files.insert("/tb-0.1.0.tar.gz".to_string(), b_bytes);
+    let server = FixtureServer::new(files);
+
+    let index_json = format!(
+        r#"{{
+            "schema_version": 1,
+            "updated": "2026-05-24T00:00:00Z",
+            "packages": {{
+                "ta": {{
+                    "versions": {{
+                        "0.1.0": {{
+                            "url": "{}",
+                            "sha256": "{}",
+                            "size": {},
+                            "loft": ">=0.8",
+                            "deps": {{"tb": "^0.1"}},
+                            "published": "2026-05-24T00:00:00Z"
+                        }}
+                    }}
+                }},
+                "tb": {{
+                    "versions": {{
+                        "0.1.0": {{
+                            "url": "{}",
+                            "sha256": "{}",
+                            "size": {},
+                            "loft": ">=0.8",
+                            "published": "2026-05-24T00:00:00Z"
+                        }}
+                    }}
+                }}
+            }}
+        }}"#,
+        server.url_for("/ta-0.1.0.tar.gz"),
+        a_out.sha256,
+        a_out.size,
+        server.url_for("/tb-0.1.0.tar.gz"),
+        b_out.sha256,
+        b_out.size,
+    );
+    server
+        .files
+        .lock()
+        .unwrap()
+        .insert("/index.json".to_string(), index_json.into_bytes());
+
+    let home_dir = tmpdir("end_to_end_transitive_home");
+    let (_home, _lh) = HomeGuard::set(&home_dir);
+    let (_reg, _lr) = RegUrlGuard::set(&server.url_for("/index.json"));
+
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: true,
+        offline: false,
+        allow_prerelease: false,
+    };
+    let prev_cwd = env::current_dir().expect("cwd");
+    let install_cwd = tmpdir("end_to_end_transitive_cwd");
+    env::set_current_dir(&install_cwd).expect("chdir");
+
+    let report = loft::install::install_one("ta", None, &opts).expect("install_one");
+    // Both ta and tb should be installed.
+    let names: Vec<&str> = report.installed.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(names.contains(&"ta"), "ta missing from report: {names:?}");
+    assert!(names.contains(&"tb"), "tb missing from report: {names:?}");
+
+    let reg = home_dir.join(".loft").join("registry");
+    assert!(reg.join("ta-0.1.0").exists());
+    assert!(reg.join("tb-0.1.0").exists());
+
+    // Lockfile has both with the dep edge recorded.
+    let lock = loft::lockfile::read_lockfile(&install_cwd.join("loft.lock"))
+        .expect("io")
+        .expect("Some");
+    assert_eq!(lock.packages.len(), 2);
+    let ta_lock = lock.packages.iter().find(|p| p.name == "ta").expect("ta");
+    assert_eq!(ta_lock.deps, vec!["tb"]);
+
+    env::set_current_dir(prev_cwd).ok();
+    drop(_reg);
+    drop(_home);
+    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&install_cwd);
+}

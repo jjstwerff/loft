@@ -889,6 +889,17 @@ pub(crate) fn run_tests(
                                     .arg(format!("loft={}", ld.join("libloft.rlib").display()));
                                 cmd.arg("-L").arg(ld.join("deps"));
                             }
+                            // LibCI: link each package's `#native` crate so tests
+                            // for native-backed libraries (graphics, crypto, …)
+                            // compile under --native — mirrors the standalone +
+                            // WASM native compiles, which already call this.
+                            let loft_deps = lib_dir.as_ref().map(|d| d.join("deps"));
+                            native_utils::add_native_extern_flags(
+                                &mut cmd,
+                                &native_data,
+                                None,
+                                loft_deps.as_deref(),
+                            );
                             let compile_result = cmd.output();
                             let ok = compile_result
                                 .as_ref()

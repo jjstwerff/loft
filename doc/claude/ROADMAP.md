@@ -76,7 +76,7 @@ Features that "appear to work" but don't, or that lose data without indication. 
 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
-| (cross) | Coroutine validation — yielded type × drive context matrix | M | ✓ | plans/future/16-coroutine-validation/README.md |
+| (cross) | Coroutine validation — yielded type × drive context matrix | M | ✓ | plans/16-coroutine-validation/README.md |
 | (cross) | Match validation — subject type × pattern shape matrix | M | ✓ | plans/future/18-match-validation/README.md |
 | (cross) | Struct-enum validation — variant payload × dispatch context matrix | M | ✓ | plans/future/19-struct-enum-validation/README.md |
 | (cross) | Keyed collection validation — collection × operation matrix | M | ✓ | plans/future/20-collection-validation/README.md |
@@ -159,7 +159,7 @@ Unblocks 2+ downstream plans.  Lattice points in the dependency graph.
 |---|---|---|---|---|
 | PKG.REG | Central package registry MVP — `loft install <name>` | M | ✓ | PACKAGES.md § Open work |
 | PKG.7 | Lock file (`loft.lock`) for reproducible builds | S | ✓ | PACKAGES.md § Open work |
-| PKG.EXTRACT | Move `lib/*/` out into per-family GitHub repos | L | ✓ | lib_plans/future/12-library-extraction/README.md |
+| PKG.EXTRACT | Move `lib/*/` out into per-family GitHub repos | L | ✓ | lib_plans/12-library-extraction/README.md |
 | FFI.1 | Generic type marshaller from `#native` signature | MH | ✓ | lib_plans/future/05-game-infra/README.md |
 | FFI.2 | Generic cdylib loader — scan exports, HashMap | S | ✓ | lib_plans/future/05-game-infra/README.md |
 | FFI.3 | Eliminate per-function glue in native.rs | M | ✓ | lib_plans/future/05-game-infra/README.md |
@@ -167,7 +167,7 @@ Unblocks 2+ downstream plans.  Lattice points in the dependency graph.
 | LSP.1 | `loft-lsp` MVP — diagnostics + outline + hover | M | ✓ | lib_plans/future/09-lsp/README.md |
 | LSP-CLIENT | `loft-lsp-bridge` sidecar + viewer code intelligence — rust-analyzer / loft-lsp / jdtls | L | ✓ | lib_plans/future/14-viewer-lsp-bridge/README.md |
 | (cross) | Lazy stdlib loading — trigger-based pay-for-what-you-use | M | ✓ | lib_plans/future/03-lazy-stdlib/README.md |
-| **REGEX.0** | `lib/regex/` MVP — `#native` cdylib bridge to Rust `regex` crate (Active 2026-05-18, unblocks @PLAN37 phase 07 scan.loft consolidation + check_doc_drift.sh port) | S | ✓ | lib_plans/01-regex/README.md |
+| **REGEX.0** | `lib/regex/` MVP — `#native` cdylib bridge to Rust `regex` crate (future/paused 2026-05-20, unblocks @PLAN37 phase 07 scan.loft consolidation + check_doc_drift.sh port) | S | ✓ | lib_plans/future/01-regex/README.md |
 
 ---
 
@@ -221,7 +221,7 @@ Language correctness, removes special cases.  (Validation matrices that catch si
 | C53 | Match arms: library enums + bare variant names | M | ✓ | (needs plan promotion) |
 | (cross) | `const` struct fields (write-once-at-construction) — closes INCONSISTENCIES.md § 33 | M | ✓ | plans/future/33-const-fields/README.md |
 | I12 | Interfaces: factory methods (`fn zero() -> Self`) | S | ✓ | (needs plan promotion) |
-| (cross) | Standalone regex library Phase 1+ (pure-loft NFA + backtracking fallback engine — replaces the cdylib bridge transparently) | MH | ✓ | lib_plans/01-regex/README.md |
+| (cross) | Standalone regex library Phase 1+ (pure-loft NFA + backtracking fallback engine — replaces the cdylib bridge transparently) | MH | ✓ | lib_plans/future/01-regex/README.md |
 
 ---
 
@@ -318,7 +318,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/future/16-coroutine-validation/`](plans/future/16-coroutine-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Yielded type × drive context matrix |
+| [`plans/16-coroutine-validation/`](plans/16-coroutine-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Yielded type × drive context matrix (active) |
 | [`plans/future/18-match-validation/`](plans/future/18-match-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Subject type × pattern shape matrix |
 | [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Variant payload × dispatch context matrix |
 | [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Hash / sorted / index / spacial × operation matrix |
@@ -347,9 +347,9 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/05-game-infra/`](lib_plans/future/05-game-infra/) | M-MH per item | — | FFI.1-4 — third-party native extensions |
 | [`lib_plans/future/09-lsp/`](lib_plans/future/09-lsp/) | M (LSP.1) / MH (LSP.2/3) | — | LSP.1 unblocks 4 IDE plugins + browser IDE |
 | [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
-| [`lib_plans/future/12-library-extraction/`](lib_plans/future/12-library-extraction/) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
+| [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
 | [`lib_plans/future/03-lazy-stdlib/`](lib_plans/future/03-lazy-stdlib/) | M | — | Foundational — REGEX Phase 3 (lazy-load wire-up) is downstream consumer |
-| [`lib_plans/01-regex/`](lib_plans/01-regex/) | S (Phase 0) / MH (Phase 1+) | — | **Active 2026-05-18.**  Phase 0 = cdylib bridge MVP; Phase 1+ = pure-loft NFA.  Unblocks @PLAN37 phase 07 scan.loft + check_doc_drift.sh ports |
+| [`lib_plans/future/01-regex/`](lib_plans/future/01-regex/) | S (Phase 0) / MH (Phase 1+) | — | **Future/paused 2026-05-20** (was Active 2026-05-18, no phase work started).  Phase 0 = cdylib bridge MVP; Phase 1+ = pure-loft NFA.  Unblocks @PLAN37 phase 07 scan.loft + check_doc_drift.sh ports |
 | [`plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/) | M | cooperates with **plans/future/37-tracker-index/07** + **plans/future/32-tic-tac-toe** + **plans/36-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
 | [`lib_plans/future/15-process/`](lib_plans/future/15-process/) | M | — | `lib/process/` subprocess primitive — closes the indexer / viewer bash-wrapper dependency (dogfood-driven by @PLAN37 + @PLAN35) |
 | [`lib_plans/future/16-fs-watch/`](lib_plans/future/16-fs-watch/) | M | — | `lib/fs_watch/` file-event watcher — prerequisite for @PLAN37 phase 07a WebSocket-push daemon (inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) |
@@ -388,9 +388,14 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/future/29-server-features/`](plans/future/29-server-features/) | S-H per item | — | C55/C56/A15/I13/C57 — language features for server / game-client |
+| [`plans/future/45-spacial-index/`](plans/future/45-spacial-index/) | M | — | `spacial<T[x,y]>` / `spacial<T[x,y,z]>` Morton/Z-order radix spatial index |
+| [`plans/future/46-dryopea/`](plans/future/46-dryopea/) | H | — | dryopea sci-fi free-build / tower-defence game (consumer project) |
+| [`plans/future/47-eagleviewer/`](plans/future/47-eagleviewer/) | M | — | Generic branch-aware code + docs review viewer (extracted from loft viewer) |
+| [`lib_plans/19-gridmesh/`](lib_plans/19-gridmesh/) | M | — | `gridmesh` — chunk-local, bounded-extent grid→mesh primitives (active) |
 | [`lib_plans/future/04-asset-pipeline/`](lib_plans/future/04-asset-pipeline/) | M | — | Game asset workflow |
 | [`lib_plans/future/06-web-services/`](lib_plans/future/06-web-services/) | M-H per arc | — | JSON / HTTP client / auth / WebSocket / SSE clients |
 | [`lib_plans/future/18-viewer-generalisation/`](lib_plans/future/18-viewer-generalisation/) | M | — | `lib/viewer/` — extract the loft branch-review viewer as a project-agnostic library (Java + moros projects as initial customers) |
+| [`lib_plans/future/20-terrain-heightmap/`](lib_plans/future/20-terrain-heightmap/) | M | — | `terrain` — slope-based height-map generation library |
 
 ### Deferred plans
 
@@ -400,8 +405,8 @@ the plan moves back to `future/` and ROADMAP gains a row.
 
 ### Cross-tracker dependency chains worth noting
 
-- **lib_plans/future/03-lazy-stdlib → lib_plans/01-regex Phase 3** (lazy-loading wire-up; bridge MVP (Phase 0) ships independently)
-- **PACKAGES.md § Open work PKG.REG → lib_plans/future/12-library-extraction** (registry → execution of monorepo split)
+- **lib_plans/future/03-lazy-stdlib → lib_plans/future/01-regex Phase 3** (lazy-loading wire-up; bridge MVP (Phase 0) ships independently)
+- **PACKAGES.md § Open work PKG.REG → lib_plans/12-library-extraction** (registry → execution of monorepo split)
 - **PACKAGES.md § Open work R1 + lib_plans/future/09-lsp LSP.1 → lib_plans/future/07-web-ide** (workspace split + LSP server → browser IDE)
 - **plans/future/23-event-loop → lib_plans/future/10-game-client** (protocol abstraction → client library)
 - **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/future/32-tic-tac-toe v2 ground layer)

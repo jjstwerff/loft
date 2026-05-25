@@ -102,6 +102,39 @@ fn version_ge(a: &str, b: &str) -> bool {
     parse(a) >= parse(b)
 }
 
+/// Extract the `path` value from an inline-table dependency value
+/// of the form `{ path = "X" }` (with optional whitespace + other
+/// fields).  Returns `None` for plain version strings (`"0.1"`,
+/// `">=0.2"`) or other shapes.
+///
+/// @PLAN12 phase 3.5b (2026-05-24) — path-deps in `loft.toml`
+/// `[dependencies]` were decorative before this; the manifest
+/// parser stored the entire inline-table as an opaque "version"
+/// string.  This helper extracts the path so the caller in
+/// `src/parser/mod.rs::apply_manifest_side_effects` can resolve
+/// it relative to the package directory and register the parent
+/// in `lib_dirs`.
+#[must_use]
+pub fn extract_path_dep(value: &str) -> Option<&str> {
+    let v = value.trim();
+    let inner = v.strip_prefix('{')?.strip_suffix('}')?.trim();
+    // Support multi-field inline tables like
+    // `{ path = "X", version = "Y" }` by splitting on `,`.  Commas
+    // inside the quoted path value would break this — accept the
+    // limitation for now, paths typically don't contain commas.
+    for part in inner.split(',') {
+        let part = part.trim();
+        if let Some(rhs) = part.strip_prefix("path") {
+            let rhs = rhs.trim();
+            let rhs = rhs.strip_prefix('=')?.trim();
+            // Strip surrounding quotes.
+            let path = rhs.trim_start_matches('"').trim_end_matches('"');
+            return Some(path);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,5 +245,27 @@ gl_create = "graphics_native::webgl::create_canvas"
         assert!(!check_version(">=2.0", "1.9.9"));
         assert!(!check_version(">=1.1", "1.0.0"));
         assert!(!check_version(">=1.0.1", "1.0.0"));
+    }
+
+    #[test]
+    fn extract_path_dep_recognizes_inline_table() {
+        assert_eq!(
+            extract_path_dep(r#"{ path = "../gridmesh" }"#),
+            Some("../gridmesh")
+        );
+        assert_eq!(
+            extract_path_dep(r#"{path="../foo/bar"}"#),
+            Some("../foo/bar")
+        );
+        // Multi-field inline table.
+        assert_eq!(
+            extract_path_dep(r#"{ path = "../X", version = "0.1" }"#),
+            Some("../X")
+        );
+        // version-only entry.
+        assert_eq!(extract_path_dep(r#"{ version = "0.1" }"#), None);
+        // Plain version string (no inline table).
+        assert_eq!(extract_path_dep(">=0.2"), None);
+        assert_eq!(extract_path_dep("0.1"), None);
     }
 }

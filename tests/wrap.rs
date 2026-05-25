@@ -307,6 +307,172 @@ fn ignored_scripts() -> HashSet<&'static str> {
     HashSet::from([])
 }
 
+/// Part B leak gate — script/doc files with KNOWN, pre-existing store leaks at
+/// program exit (matched by file name; covers both `tests/scripts/` via
+/// `loft_suite` and `tests/docs/` via the `dir`/`last` tests, which all run
+/// through `run_test`).  Each leaks only top-level `main` locals (structs /
+/// `main_vector<…>` / a `File`/`Parser` handle) that aren't scope-freed at the
+/// very end of the program — benign for a one-shot run (the process exits
+/// immediately after), but a real scope-free gap worth a later audit (@P322).
+/// Grandfathered here so `run_test`'s leak gate catches NEW leaks (regressions)
+/// without churning these.  A file is removed once its program-end frees are
+/// tightened.
+///
+/// 2026-05-23 audit (@P322): nine of the original ten entries were
+/// false-positives — scripts that abort mid-main via `raise(OOB / DivByZero /
+/// AssertFailed)` so the dispatch loop short-circuits before scope-cleanup ops
+/// emit (06-structs / 11-vectors / 37-stress / 93-vector-advanced /
+/// 96-slot-assign / 07-vector / 16-parser / 15-lexer / 23-safety).  The new
+/// `runtime_error.is_none()` gate (below) skips the leak check for those, so
+/// they no longer need grandfathering.  The remaining real leak —
+/// `51-coroutines.loft` leaking the `[10, 20, 30]` literal from
+/// `nums_p219()`'s for-yield body — was FIXED 2026-05-23 by
+/// `scopes::insert_free` emitting outer-scope frees before a nested
+/// Void-block's terminal `Return`.  List is now empty; the leak gate
+/// fails on any NEW leak.
+const SCRIPTS_LEAK_ALLOW: &[&str] = &[];
+
+/// Per-package library tests that BOTH the interpreter (`library_suite`) and
+/// native (`tests/native.rs::native_library_suite`) suites skip, keyed by
+/// `"<pkg>/<file>.loft"`, each with a one-line rationale.  Mirrors
+/// `tests/native.rs::SCRIPTS_NATIVE_SKIP`.  Reserved for tests that need a GL
+/// display or block forever — none today (no lib test creates a window or runs
+/// an unbounded poll/accept loop; the `server` test is listen+close).
+const LIB_TESTS_SKIP: &[&str] = &[
+    // Network-dependent: makes live HTTPS calls to httpbin.org, so it fails in
+    // offline CI (an empty response parses out-of-bounds).  Not a code bug — an
+    // external-service integration test that can't run headless/offline.
+    "web/http.loft",
+    // Windows-specific: these tests hardcode `/tmp/` paths.
+    // `lib/moros_render/tests/geometry.loft` opens
+    // `/tmp/moros_render_chunk_test.glb`; `lib/moros_sim/tests/persistence.loft`
+    // loads a save file from a similar path.  On Windows `/tmp/` doesn't
+    // exist → file-open OS error 3 / 0-length read → bounds panic.
+    // Tracked as @P333 — port fixture paths to `std::env::temp_dir()`.
+    #[cfg(windows)]
+    "moros_render/geometry.loft",
+    #[cfg(windows)]
+    "moros_sim/persistence.loft",
+];
+
+/// Library packages skipped wholesale (chunk-level), with rationale.  The
+/// in-process suite aborts on the first SIGSEGV, so a chunk with multiple
+/// interpreter crashes can't be run file-by-file here.
+const LIB_PKGS_SKIP: &[&str] = &[
+    // (empty) — the moros_* chunk was parked here for @P319 (a closure
+    // capturing a struct local and appending to its `vector<Struct>` field
+    // prematurely freed the captured struct, corrupting the interpreter).
+    // Fixed by control.rs's void-return write-back skip for shared-reference
+    // captures; the whole chunk is now gated.  Keep this list as the
+    // mechanism for parking a future crashing chunk.
+];
+
+/// Returns true if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is in the
+/// shared skip-list.  Public so `tests/native.rs` reuses the same keying.
+pub fn lib_test_skipped(entry: &std::path::Path) -> bool {
+    let file = entry
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let pkg = entry
+        .parent()
+        .and_then(|d| d.parent())
+        .and_then(|d| d.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if LIB_PKGS_SKIP.contains(&pkg.as_str()) {
+        return true;
+    }
+    let key = format!("{pkg}/{file}");
+    LIB_TESTS_SKIP.contains(&key.as_str())
+}
+
+/// Collect every `lib/<pkg>/tests/*.loft` path, sorted.  Shared discovery for
+/// the interp + native library suites so they cover an identical set.
+pub fn collect_library_tests() -> std::io::Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for pkg in std::fs::read_dir("lib")?.filter_map(|e| e.ok()) {
+        let tests_dir = pkg.path().join("tests");
+        if !tests_dir.is_dir() {
+            continue;
+        }
+        for f in std::fs::read_dir(&tests_dir)?.filter_map(|e| e.ok()) {
+            let p = f.path();
+            if p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+            {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// Gate every `lib/<pkg>/tests/*.loft` through the INTERPRETER.  Before this the
+/// libraries had no CI coverage of their own (`lib/*/tests/` was referenced by
+/// nothing).
+///
+/// Each test runs as a SUBPROCESS via the package-aware `loft test` subcommand
+/// (`cd lib/<pkg> && loft test <file>`), exactly as `make test-packages` does.
+/// Subprocessing is deliberate: it isolates a crashing lib test (a SIGSEGV
+/// reports as that file's failure instead of aborting the whole suite) and
+/// reuses `loft test`'s correct package resolution + native-extension loading
+/// (an in-process harness mis-resolves intra-package `use` and skips
+/// `extensions::load_all`).  The native counterpart is
+/// `tests/native.rs::native_library_suite`.
+#[test]
+fn library_suite() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    let mut failures: Vec<String> = Vec::new();
+    let mut ran = 0;
+    for entry in collect_library_tests()? {
+        if lib_test_skipped(&entry) {
+            println!("skip {entry:?} (LIB_TESTS_SKIP / LIB_PKGS_SKIP)");
+            continue;
+        }
+        let pkg_dir = entry.parent().and_then(|d| d.parent()).unwrap_or(&entry);
+        let stem = entry
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        println!("lib test {entry:?}");
+        let out = std::process::Command::new(loft_bin)
+            .current_dir(pkg_dir)
+            .args(["test", &stem])
+            .output()?;
+        ran += 1;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // `loft test` exits 0 even on a CAUGHT SIGSEGV (the crash handler prints
+        // and returns), so detect crashes by their printed marker too.
+        let failed = !out.status.success()
+            || combined.contains("SIGSEGV")
+            || combined.contains("panicked")
+            || combined.contains("test result: FAILED")
+            || !combined.contains("test result: ok");
+        if failed {
+            let tail: Vec<&str> = combined.lines().rev().take(4).collect();
+            failures.push(format!("{entry:?}: {}", tail.join(" | ")));
+        }
+    }
+    if !failures.is_empty() {
+        return Err(Error::other(format!(
+            "{} of {ran} library tests failed:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        )));
+    }
+    println!("library_suite: {ran} library tests passed");
+    Ok(())
+}
+
 macro_rules! script_test {
     ($name:ident, $path:literal) => {
         #[test]
@@ -983,8 +1149,43 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
                 failures.join("; ")
             )));
         }
-        // Check for store leaks after all test functions have run.
-        state.check_store_leaks();
+        // Part B — leak gate: a heap store left unfreed at program exit is a
+        // leak (a scope-free regression, hazardous for long-running consumers).
+        // `check_store_leaks` prints the by-type warning; then hard-FAIL unless
+        // the file is grandfathered in SCRIPTS_LEAK_ALLOW (pre-existing
+        // program-end allocations).  This turns the script corpus into a leak
+        // regression net — a NEW leak in any non-allowlisted script fails CI.
+        //
+        // Skip the leak check when a runtime error halted execution mid-main:
+        // the dispatch loop short-circuits on `runtime_error`, so the
+        // remaining scope-cleanup ops (`OpFreeRef` / `OpFreeText`) never run
+        // and the residual stores are NOT a real leak — they are abort
+        // artifacts.  Mirrors CLI behaviour in `src/main.rs` (lines 2690-2693).
+        // Without this gate, scripts that intentionally probe OOB / div-by-zero
+        // mid-main (e.g. `assert(!v[OOB], "OOB is null")`) would always
+        // false-positive on the leak gate.
+        if state.database.runtime_error.is_none() {
+            state.check_store_leaks();
+            let leaks = state.collect_store_leaks();
+            if !leaks.is_empty() {
+                let fname = entry
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if SCRIPTS_LEAK_ALLOW.contains(&fname.as_str()) {
+                    println!("  (grandfathered leak — SCRIPTS_LEAK_ALLOW) {path}");
+                } else {
+                    return Err(Error::other(format!(
+                        "{path}: {} store(s) leaked at program exit: {} — fix the \
+                         scope-free, or add the file to SCRIPTS_LEAK_ALLOW if it is \
+                         an intentional program-end allocation",
+                        leaks.len(),
+                        leaks.join(", ")
+                    )));
+                }
+            }
+        }
     }
     Ok(())
 }

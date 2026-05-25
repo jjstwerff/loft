@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Open — opened 2026-05-18.**  Driver: PR-212 cycle.  Every move
 of a doc / plan directory (e.g. `lib_plans/future/01-regex/` →
-`lib_plans/01-regex/`) triggers a cascade of broken-link fixes
+`lib_plans/future/01-regex/`) triggers a cascade of broken-link fixes
 across the tree that take 3-5 grep + sed iterations to fully
 chase down.  Each iteration costs a CI round trip
 (~10 min) when caught remotely instead of locally.  Auto-fix
@@ -41,7 +41,7 @@ Empirical observation from PR-212 (the trigger for this plan):
 one followed the same pattern:
 
 ```
-git mv doc/claude/lib_plans/future/01-regex/ doc/claude/lib_plans/01-regex/
+git mv doc/claude/lib_plans/future/01-regex/ doc/claude/lib_plans/future/01-regex/
 git add -A && git commit
 git push
 # ... CI fails 10 min later, broken links surface ...
@@ -72,7 +72,7 @@ the long tail.
 
 The PR-212 cycle is the trigger.  Sequence of broken-link
 cascades from a single `lib_plans/future/01-regex/` →
-`lib_plans/01-regex/` move:
+`lib_plans/future/01-regex/` move:
 
 1. Initial move + commit (`3b6aab5c`) — hit broken links from
    8 sites in 26-match-peg + 1 in finished/35-branch-review-viewer
@@ -86,7 +86,7 @@ cascades from a single `lib_plans/future/01-regex/` →
    `../03-lazy-stdlib/` and reverse refs from
    `future/03-lazy-stdlib/README.md`).  Found by the SAME drift
    checker that already said "clean" — because the relative path
-   from `lib_plans/01-regex/` to `lib_plans/future/03-lazy-stdlib/`
+   from `lib_plans/future/01-regex/` to `lib_plans/future/03-lazy-stdlib/`
    isn't a string the grep could pre-flag without resolving each
    candidate.
 
@@ -155,7 +155,7 @@ Phase files (`00-*.md` through `06-*.md`) get created when each phase opens.  In
 4. **No new dependencies beyond what's already in tree.**  Python
    3 (existing — used by `fix_broken_links.py` and `migrate.py`);
    bash if needed (existing).  When `lib/regex/` ships per
-   [`lib_plans/01-regex/`](../../../lib_plans/01-regex/), the
+   [`lib_plans/future/01-regex/`](../../../lib_plans/future/01-regex/), the
    fixers MAY be re-implemented in loft; not a prerequisite.
 5. **Reuse drift-checker's classification.**  The auto-fix doesn't
    re-implement drift detection — it consumes
@@ -182,7 +182,7 @@ rewrites), zero broken links, zero stale references.
 - [`scripts/check_doc_drift.sh`](../../../../scripts/check_doc_drift.sh) — the detector this plan's auto-fixers consume
 - [`tools/indexer/fix_broken_links.py`](../../../../tools/indexer/fix_broken_links.py) — existing partial auto-fix for the `broken_links` bucket; phase 1 extends it
 - [`plans/future/37-tracker-index/07-loft-native-scanner.md`](../37-tracker-index/07-loft-native-scanner.md) — sibling effort (port bash scripts to loft); auto-fix would ideally live in loft once `lib/regex/` ships, but ships in Python initially to avoid blocking on that
-- [`lib_plans/01-regex/`](../../../lib_plans/01-regex/) — once the regex MVP lands, the fixers can be re-implemented in loft (~50% size reduction expected)
+- [`lib_plans/future/01-regex/`](../../../lib_plans/future/01-regex/) — once the regex MVP lands, the fixers can be re-implemented in loft (~50% size reduction expected)
 
 ## Value category
 

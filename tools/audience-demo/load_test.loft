@@ -1,0 +1,147 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN36 sub-task 1.8 — multi-client load test for the audience
+// single-port server.  A single driver process opens N real WebSocket
+// connections, has each paint a disjoint column of cells, drains the
+// broadcast fan-out so the server's per-socket send buffers keep
+// flowing, and reports the metrics that tell you whether the server
+// kept up: connect time, paints sent, deltas received vs the expected
+// fan-out, and throughput.
+//
+// Usage — start the server first, then run this against it:
+//   ./target/release/loft --interpret --no-warnings --lib lib/ \
+//       tools/audience-demo/single_port_server.loft &
+//   ./target/release/loft --interpret --no-warnings --lib lib/ \
+//       tools/audience-demo/load_test.loft
+//
+// Tip: `rm -f tools/audience-demo/world.bin` before starting the server
+// for a clean run (no saved-world replay noise; the load test drains and
+// discards any replay it does see, so this only affects connect time).
+//
+// Env:
+//   LOFT_AUD_PORT     — server port (default 18083)
+//   LOFT_AUD_PAINTS   — paints per client per tier (default 25)
+//   LOFT_AUD_CLIENTS  — if set > 0, run a SINGLE tier of this many
+//                       clients instead of the default 3 → 12 → 30 ramp.
+
+use web;
+
+fn env_int(name: text, dflt: integer) -> integer {
+  raw = env_variable(name);
+  if raw == "" { dflt } else { raw as integer }
+}
+
+// Drive one load tier: connect `n` clients, paint `paints` rounds, drain
+// the fan-out, print the metrics.  `y_base` separates tiers in world
+// space so every paint lands on a fresh (and thus broadcast-worthy) cell
+// even as cells accumulate across tiers.
+fn run_tier(port: integer, n: integer, paints: integer, y_base: integer) {
+  url = "ws://127.0.0.1:{port}/ws";
+  println("");
+  println("=== tier: {n} clients x {paints} paints ===");
+
+  // 1. Connect.  ws_handler only returns null on a malformed URL, so a
+  //    null here is a bug, not "server down" (a down server surfaces
+  //    later as send failures + zero deltas).
+  clients: vector<web::WsHandler> = [];
+  t_connect0 = ticks();
+  connected = 0;
+  for ci in 0..n {
+    t_one = ticks();
+    wh = web::ws_handler(url);
+    one_ms = (ticks() - t_one) / 1000;
+    if wh == null { println("load: ws_handler returned null (malformed url?)"); continue; }
+    clients += [wh];
+    connected = connected + 1;
+    println("load:   connect[{ci}] = {one_ms} ms");
+  }
+  conn_loop_ms = (ticks() - t_connect0) / 1000;
+  println("load: connect-loop total {conn_loop_ms} ms for {connected} clients");
+  // Let the server register all upgrades + send its connect-time replay.
+  web::sleep_ms(300);
+
+  // 2. Drain (and discard) the initial world replay so it does not count
+  //    toward the paint-phase fan-out.
+  replay = 0;
+  for h in clients {
+    while true { m = h.try_recv(); if m == null { break; } replay = replay + 1; }
+  }
+  connect_ms = (ticks() - t_connect0) / 1000;
+  println("load: connected={connected}/{n} in {connect_ms} ms; discarded {replay} replay frames");
+
+  // 3. Paint + drain in rounds.  Each client i paints column x=i so every
+  //    (client, round) is a distinct new cell — the server broadcasts one
+  //    delta per paint to every active client.  Draining each round keeps
+  //    the server's blocking per-socket sends from stalling on a full buf.
+  // Build a WsGroup so we can drain all clients with one round-robin
+  // scan instead of polling each socket individually.
+  group = web::ws_group();
+  for h in clients { group.add(h); }
+
+  t_paint0 = ticks();
+  sent = 0;
+  send_fail = 0;
+  received = 0;
+  for round in 0..paints {
+    ci = 0;
+    for h in clients {
+      x = ci;
+      y = y_base + round * 2;
+      c = (ci - (ci / 9) * 9) + 1;     // 1..9, integer-only modulo
+      if h.send("1:{x},{y},{c}") { sent = sent + 1; } else { send_fail = send_fail + 1; }
+      ci = ci + 1;
+    }
+    // Drain via group poll — one non-blocking scan finds ready sockets
+    // instead of blocking on each empty one in turn.
+    while true {
+      ev = group.poll();
+      if ev.handle < 0 { break; }
+      if ev.message.starts_with("4:") { received = received + 1; }
+    }
+  }
+  send_ms = (ticks() - t_paint0) / 1000;
+
+  // 4. Final drain — keep collecting until we have at least `expected`
+  //    delta frames, or 3 s of silence (whichever comes first).
+  expected = sent * connected;
+  quiet = 0;
+  guard = 0;
+  while received < expected && quiet < 150 && guard < 10000 {
+    got = 0;
+    while true {
+      ev = group.poll();
+      if ev.handle < 0 { break; }
+      if ev.message.starts_with("4:") { received = received + 1; got = got + 1; }
+    }
+    guard = guard + 1;
+    if got == 0 { quiet = quiet + 1; web::sleep_ms(20); } else { quiet = 0; }
+  }
+  paint_ms = (ticks() - t_paint0) / 1000;
+
+  // 5. Report.
+  pct = if expected > 0 { received * 100 / expected } else { 0 };
+  rate = if send_ms > 0 { sent * 1000 / send_ms } else { 0 };
+  println("load: sent={sent} send_fail={send_fail} received={received} expected~{expected} fanout={pct}%");
+  println("load: send phase {send_ms} ms (~{rate} paints/s), total+drain {paint_ms} ms");
+
+  // 6. Tear down.
+  for h in clients { h.close(); }
+  web::sleep_ms(200);
+}
+
+fn main() {
+  port = env_int("LOFT_AUD_PORT", 18083);
+  paints = env_int("LOFT_AUD_PAINTS", 25);
+  single = env_int("LOFT_AUD_CLIENTS", 0);
+  println("audience load test -> ws://127.0.0.1:{port}/ws  (paints/client={paints})");
+  if single > 0 {
+    run_tier(port, single, paints, 0);
+  } else {
+    run_tier(port, 3,  paints, 0);
+    run_tier(port, 12, paints, 1000);
+    run_tier(port, 30, paints, 2000);
+  }
+  println("");
+  println("load: done");
+}

@@ -149,8 +149,22 @@ impl Output<'_> {
                         write!(w, "var_{var_name}")?;
                     }
                 } else if matches!(variables.tp(*var), Type::Text(_)) {
-                    // Text locals are `String` — add `&` to coerce to `&str`.
-                    write!(w, "&var_{var_name}")?;
+                    if self.tuple_text_to_string {
+                        // @P330 — inside a `(String, …)` tuple-return literal,
+                        // emitting `&var_x` followed by the surrounding tuple
+                        // wrap's `.to_string()` yields `&var_x.to_string()`
+                        // which Rust parses as `&(var_x.to_string())` =
+                        // `&String`, breaking the declared `String` slot
+                        // (E0308).  Emit the bare local name and let the
+                        // wrap turn into `var_x.to_string()` — `String`'s
+                        // `to_string()` clones, producing the owned `String`
+                        // the tuple slot expects.  Same family as the
+                        // `text_local_clone` shape in dispatch.rs:412.
+                        write!(w, "var_{var_name}")?;
+                    } else {
+                        // Text locals are `String` — add `&` to coerce to `&str`.
+                        write!(w, "&var_{var_name}")?;
+                    }
                 } else {
                     write!(w, "var_{var_name}")?;
                 }
@@ -219,9 +233,22 @@ impl Output<'_> {
                     // ref_return does), so we don't filter on `a.hidden`.
                     let needs_p205_scratch = wrap_text && {
                         let def = self.data.def(self.def_nr);
-                        !def.attributes.iter().any(|a| {
+                        let no_work_buffer = !def.attributes.iter().any(|a| {
                             matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
-                        })
+                        });
+                        // @P321e — also route through scratch when the return
+                        // value is a text LOCAL var (an owned `String`, not the
+                        // RefVar work-buffer arg).  `Str::new(&var_local)`
+                        // borrows a fn-local that drops at return → dangling ptr.
+                        // Happens when a text fn's body is a match whose result
+                        // is `.to_string()`'d into a `__ret_N` local and returned
+                        // (`edit_kind_label`): a work-buffer arg exists but the
+                        // fn returns a DIFFERENT local, so the `no_work_buffer`
+                        // guard above doesn't catch it.
+                        let returns_local_text = matches!((**val).unspan(), Value::Var(v)
+                            if matches!(def.variables.tp(*v), Type::Text(_))
+                                && !def.variables.is_argument(*v));
+                        no_work_buffer || returns_local_text
                     };
                     write!(w, "return ")?;
                     if needs_p205_scratch {
@@ -1199,6 +1226,16 @@ impl Output<'_> {
             self.indent(w)?;
             if is_text_result {
                 writeln!(w, "Str::new(_ret)")?;
+            } else if matches!(bl.result, Type::Text(_)) {
+                // @P321e / @P323 — a TEXT value-block's `_ret` is typically a
+                // `&str` borrowing a block-local (the `??`/#ncc block's inner
+                // `_ncc` String; a format-string work buffer; etc.).  Yielding
+                // the borrow lets the consumer's `.to_string()` run AFTER the
+                // local drops at the block's `}` — rustc E0597 ("does not live
+                // long enough"), or a dangling raw ptr at runtime.  Materialise
+                // to an OWNED String inside the block (where the local is still
+                // alive); `.to_string()` accepts &str / String / Str alike.
+                writeln!(w, "_ret.to_string()")?;
             } else if let Some(cast) = narrow_int_cast(&bl.result) {
                 writeln!(w, "_ret as {cast}")?;
             } else {

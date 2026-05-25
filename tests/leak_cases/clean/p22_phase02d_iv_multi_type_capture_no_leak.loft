@@ -1,0 +1,25 @@
+        fn one_iteration() -> integer {
+            n = 0;
+            x = 0.0;
+            c = 'a';
+            bump = fn() {
+                n = n + 1;
+                x = x + 0.5;
+                c = 'z';
+            };
+            bump();
+            bump();
+            assert(n == 2, "n: {n}");
+            assert(x == 1.0, "x: {x}");
+            assert(c == 'z', "c: {c}");
+            n
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == 2, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        

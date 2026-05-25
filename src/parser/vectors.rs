@@ -18,7 +18,9 @@ impl Parser {
     ) -> Type {
         let mut ls = Vec::new();
         let rec_tp = if let Type::Vector(cont, _) = tp {
-            i32::from(self.data.def(self.data.type_def_nr(cont)).known_type)
+            // @P314 — narrow-aware element type (see `append_elem_tp`).
+            let cont = (**cont).clone();
+            self.append_elem_tp(&cont)
         } else {
             i32::MIN
         };
@@ -1296,6 +1298,24 @@ impl Parser {
         ));
         let fld = Value::Int(i32::from(u16::MAX));
         let comp_var = self.create_unique("comp", in_t);
+        // @P325 — coroutine comprehensions `[for v in gen() { … }]` had NO
+        // termination check in the loop body (the `!matches!(Iterator)`
+        // guard below skipped it entirely), so they ran forever appending
+        // to the result vector until the underlying store overflowed its
+        // 2 GiB word limit (`src/store.rs:643`).  Mirror the @P327 fix in
+        // `collections.rs::iter_for`: when iterating a coroutine, emit
+        // `OpCoroutineExhausted(__gen_N)` as the loop's break condition.
+        // The generator var is the first arg of `OpCoroutineNext` inside
+        // `for_next` (`Set(for_var, OpCoroutineNext(__gen_N, value_size))`).
+        let coroutine_gen_var = if matches!(in_type, Type::Iterator(_, _))
+            && let Value::Set(_, rhs) = &for_next
+            && let Value::Call(_, next_args) = rhs.as_ref()
+            && let Some(Value::Var(v)) = next_args.first()
+        {
+            *v
+        } else {
+            u16::MAX
+        };
         let mut lp = vec![for_next];
         if !matches!(in_type, Type::Iterator(_, _)) {
             let mut test_for = Value::Var(for_var);
@@ -1303,6 +1323,13 @@ impl Parser {
             test_for = self.cl("OpNot", &[test_for]);
             lp.push(v_if(
                 test_for,
+                v_block(vec![Value::Break(0)], Type::Void, "break"),
+                Value::Null,
+            ));
+        } else if coroutine_gen_var != u16::MAX {
+            let test_exhausted = self.cl("OpCoroutineExhausted", &[Value::Var(coroutine_gen_var)]);
+            lp.push(v_if(
+                test_exhausted,
                 v_block(vec![Value::Break(0)], Type::Void, "break"),
                 Value::Null,
             ));
@@ -1376,6 +1403,12 @@ impl Parser {
         parent_tp: &Type,
     ) -> Type {
         let assign_tp = var_tp.content();
+        // @P315 — `declared` is true when the element type comes from a typed
+        // target (typed local / struct field), false when it is inferred from
+        // an untyped literal.  A declared element type must NOT be silently
+        // promoted to a wider type by `parse_item` (that changes the element
+        // storage width and loses data); require an explicit `as` cast.
+        let declared = !assign_tp.is_unknown();
         let is_field = self.is_field(val);
         let is_var = matches!(val, Value::Var(_));
         if self.lexer.has_token("]") {
@@ -1421,7 +1454,7 @@ impl Parser {
             self.lexer.token("]");
             return tp;
         }
-        if let Some(early) = self.collect_vector_items(elm, &mut in_t, &mut res) {
+        if let Some(early) = self.collect_vector_items(elm, &mut in_t, declared, &mut res) {
             return early;
         }
         // convert parts to the common type
@@ -1451,10 +1484,11 @@ impl Parser {
         &mut self,
         elm: u16,
         in_t: &mut Type,
+        declared: bool,
         res: &mut Vec<Value>,
     ) -> Option<Type> {
         loop {
-            if let Some(value) = self.parse_item(elm, in_t, res) {
+            if let Some(value) = self.parse_item(elm, in_t, declared, res) {
                 return Some(value);
             }
             if self.lexer.has_token(";")
@@ -1637,6 +1671,7 @@ impl Parser {
         &mut self,
         elm: u16,
         in_t: &mut Type,
+        declared: bool,
         res: &mut Vec<Value>,
     ) -> Option<Type> {
         let mut p = Value::Var(elm);
@@ -1673,8 +1708,27 @@ impl Parser {
         {
             *in_t = Type::Enum(*t_e, true, Vec::new());
         } else if !self.convert(&mut p, &t, in_t) {
-            // double conversion check: can't become in_t or vice versa
-            if self.convert(&mut p, in_t, &t) {
+            if declared {
+                // @P315 — the element type is DECLARED (typed local / struct
+                // field).  A value that does not convert TO it must be cast
+                // EXPLICITLY: silently promoting the declared element type
+                // (e.g. Single→Float) would change the element storage WIDTH
+                // (a vector<single> packs 4-byte slots; an 8-byte OpSetFloat
+                // write overflows them → heap corruption) AND lose data
+                // (float→single).  Consistent with scalar / local-vector
+                // assignment, which already reject this.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot store {} elements in a vector<{}> (would lose precision); \
+                     cast each element explicitly with 'as {}'",
+                    t.name(&self.data),
+                    in_t.name(&self.data),
+                    in_t.name(&self.data)
+                );
+            } else if self.convert(&mut p, in_t, &t) {
+                // INFERRED element type: widen to the common type
+                // (e.g. [1, 2.0] → vector<float>).
                 *in_t = t.clone();
             } else {
                 diagnostic!(

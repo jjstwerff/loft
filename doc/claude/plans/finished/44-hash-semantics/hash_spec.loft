@@ -1,0 +1,107 @@
+// Hash / keyed-collection behavior spec.  Each case prints PASS or
+// FAIL want=<>/got=<>.  Runtime-evaluable cases only (compile-error
+// expectations live in /tmp/hash_probe_*.loft).  Run on BOTH backends.
+
+struct Ent { ck: integer not null, v: integer }
+struct Bag { d: hash<Ent[ck]> }
+
+fn ck(id: text, ok: boolean) {
+  if ok { print("{id}: PASS\n"); } else { print("{id}: FAIL\n"); }
+}
+fn cki(id: text, got: integer, want: integer) {
+  if got == want { print("{id}: PASS\n"); }
+  else { print("{id}: FAIL want={want} got={got}\n"); }
+}
+
+// mutating helpers through &ref (exercise the &-mutation check too)
+fn bag_append(b: &Bag, k: integer, val: integer) { b.d += [Ent{ck: k, v: val}]; }
+fn bag_idx_set(b: &Bag, k: integer, val: integer) { b.d[k] = Ent{ck: k, v: val}; }
+
+fn main() {
+  // ---- construction + basic insert/lookup (append form) ----
+  h: hash<Ent[ck]> = [];
+  cki("C01 empty-len", len(h), 0);
+
+  h += [Ent{ck: 10, v: 1}];
+  cki("C02 append-len", len(h), 1);
+
+  r = h[10];
+  ck("C03 lookup-present", r != null);
+  if r != null { cki("C04 lookup-value", r.v, 1); } else { print("C04: FAIL null\n"); }
+
+  miss = h[99];
+  ck("C05 lookup-absent-null", miss == null);
+
+  // membership via if (user: already works)
+  if h[10] { ck("C06 membership-present", true); } else { ck("C06 membership-present", false); }
+  if h[99] { ck("C07 membership-absent", false); } else { ck("C07 membership-absent", true); }
+
+  h += [Ent{ck: 20, v: 2}];
+  cki("C08 two-keys-len", len(h), 2);
+
+  // ---- dedup expectations ----
+  // append a DUPLICATE key.  DESIRED: dedup (len stays 2, lookup latest).
+  h += [Ent{ck: 10, v: 99}];
+  cki("C09 dup-append-len(want dedup=2)", len(h), 2);
+  d10 = h[10];
+  if d10 != null { cki("C10 dup-append-lookup(want latest=99)", d10.v, 99); } else { print("C10: FAIL null\n"); }
+
+  // ---- indexed-assignment insert / replace (the dedup primitive) ----
+  g: hash<Ent[ck]> = [];
+  g[5] = Ent{ck: 5, v: 50};
+  cki("C11 idxset-insert-len", len(g), 1);
+  g5 = g[5];
+  if g5 != null { cki("C12 idxset-insert-lookup", g5.v, 50); } else { print("C12: FAIL null\n"); }
+  g[5] = Ent{ck: 5, v: 51};   // replace
+  cki("C13 idxset-replace-len", len(g), 1);
+  g5b = g[5];
+  if g5b != null { cki("C14 idxset-replace-lookup", g5b.v, 51); } else { print("C14: FAIL null\n"); }
+
+  // ---- removal ----
+  g[5] = null;                 // remove
+  cki("C15 remove-len", len(g), 0);
+  ck("C16 remove-lookup-null", g[5] == null);
+  g[123] = null;               // remove absent -> no-op, no crash
+  cki("C17 remove-absent-noop", len(g), 0);
+
+  // ---- iteration ----
+  it: hash<Ent[ck]> = [];
+  it += [Ent{ck: 1, v: 10}]; it += [Ent{ck: 2, v: 20}]; it += [Ent{ck: 3, v: 30}];
+  cnt = 0; sm = 0;
+  for e in it { cnt = cnt + 1; sm = sm + e.v; }
+  cki("C18 iterate-count", cnt, 3);
+  cki("C19 iterate-sum", sm, 60);
+
+  // ---- clear (local) ----
+  it = [];
+  cki("C20 clear-local-len", len(it), 0);
+  it += [Ent{ck: 7, v: 70}];
+  cki("C21 reuse-after-clear", len(it), 1);
+
+  // ---- negative key ----
+  ng: hash<Ent[ck]> = [];
+  ng += [Ent{ck: 0 - 4, v: 4}];
+  nr = ng[0 - 4];
+  if nr != null { cki("C22 negative-key", nr.v, 4); } else { print("C22: FAIL null\n"); }
+
+  // ---- struct-field hash ----
+  b = Bag{ d: [] };
+  bag_append(b, 100, 1000);
+  cki("C23 field-append-len", len(b.d), 1);
+  fb = b.d[100];
+  if fb != null { cki("C24 field-lookup", fb.v, 1000); } else { print("C24: FAIL null\n"); }
+
+  // field indexed-set through &ref
+  bag_idx_set(b, 200, 2000);
+  cki("C25 field-idxset-len", len(b.d), 2);
+  fb2 = b.d[200];
+  if fb2 != null { cki("C26 field-idxset-lookup", fb2.v, 2000); } else { print("C26: FAIL null\n"); }
+
+  // field indexed-set dedup-replace
+  bag_idx_set(b, 100, 1111);
+  cki("C27 field-idxset-replace-len", len(b.d), 2);
+  fb3 = b.d[100];
+  if fb3 != null { cki("C28 field-idxset-replace-lookup", fb3.v, 1111); } else { print("C28: FAIL null\n"); }
+
+  print("spec-done\n");
+}

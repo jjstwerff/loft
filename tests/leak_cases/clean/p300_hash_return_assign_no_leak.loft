@@ -1,0 +1,16 @@
+// @P300 — first-assign of a local from a keyed-collection-returning
+// call.  `OpReplaceKeyed` deep-copies the callee's return store into
+// `x`'s freshly-allocated store and frees the source temp (0x8000 bit);
+// `x`'s own store is freed at scope exit.  No store may leak.
+struct R { ck: integer not null, v: integer }
+fn mk() -> hash<R[ck]> {
+  h: hash<R[ck]> = [];
+  h += [R{ck: 5, v: 9}];
+  h += [R{ck: 8, v: 12}];
+  h
+}
+fn test() {
+  x = mk();
+  assert(len(x) == 2, "x has 2 after return-assign");
+  assert(x[5].v == 9, "key 5 -> 9");
+}

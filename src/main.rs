@@ -51,6 +51,7 @@ mod introspect;
 mod json;
 mod keys;
 mod lexer;
+mod lockfile;
 mod log_config;
 mod logger;
 mod manifest;
@@ -62,9 +63,10 @@ mod parser;
 mod platform;
 #[cfg(feature = "png")]
 mod png_store;
+#[cfg(feature = "registry")]
+mod registry_index;
 mod runtime_error;
 mod scopes;
-mod sha256;
 mod stack;
 mod state;
 mod store;
@@ -183,6 +185,29 @@ fn print_help() {
     println!("                                list --installed — show only installed packages");
     println!("  generate [path]               generate Rust stubs for #native declarations");
     println!("                                writes native/src/generated.rs in the package");
+    println!("  package [path]                build a publishable <pkg>-<version>.tar.gz");
+    println!("                                prints sha256 + size + the registry index entry");
+    println!("                                (PKG.REG R1 — see doc/claude/PKG_REGISTRY.md)");
+    println!("  search [query]                client-side search of the package registry");
+    println!(
+        "                                matches name / description / categories (case-insensitive)"
+    );
+    println!("                                (PKG.REG R8)");
+    println!(
+        "  info <name>                   per-package details (versions, latest, deps, homepage)"
+    );
+    println!("                                (PKG.REG R8)");
+    println!();
+    println!("install flags (PKG.REG R4):");
+    println!("  --refresh                     force re-fetch the registry index");
+    println!("  --offline                     use cache only; fail if anything's missing");
+    println!("  --prerelease                  resolve prerelease versions too");
+    println!("  --allow-unsigned              proceed even if the index has no valid signature");
+    println!("                                (default while no trust root is embedded;");
+    println!("                                 flips after src/registry_keys.rs is populated)");
+    println!(
+        "  --require-signature           refuse to proceed unless the index signature verifies"
+    );
     println!("  doc [path]                    generate HTML documentation for a package");
     println!("                                doc          — generate docs for package in cwd");
     println!("                                doc lib/pkg  — generate docs for lib/pkg");
@@ -295,8 +320,238 @@ fn install_package(pkg_path: &std::path::Path) {
 }
 
 /// REG.2: Install a package from the registry by name (optionally with `@version`).
+///
+/// PKG.REG R4 (2026-05-24): the `loft install <name>` entry point in
+/// `main` calls [`install_from_registry_with_opts`] directly with the
+/// parsed flag bag.  When `LOFT_LEGACY_REGISTRY` is set, that helper
+/// delegates to [`install_from_registry_legacy`] (the older
+/// text-format flow).
 #[cfg(feature = "registry")]
-fn install_from_registry(arg: &str) {
+fn install_from_registry_with_opts(args: &[String], opts: &loft::install::InstallOptions) {
+    use loft::install::{format_report, install_one};
+
+    if std::env::var("LOFT_LEGACY_REGISTRY").is_ok() {
+        for arg in args {
+            install_from_registry_legacy(arg);
+        }
+        return;
+    }
+
+    if args.is_empty() {
+        eprintln!("loft install: no package name given");
+        std::process::exit(1);
+    }
+
+    // Process each arg sequentially.  Each `install_one` invocation
+    // merges its packages into the cwd's `loft.lock`, so the final
+    // lockfile lists every package the user asked for.
+    for arg in args {
+        let (name, version) = if let Some((n, v)) = arg.split_once('@') {
+            (n, Some(v))
+        } else {
+            (arg.as_str(), None)
+        };
+        match install_one(name, version, opts) {
+            Ok(report) => {
+                print!("{}", format_report(&report));
+            }
+            Err(e) => {
+                eprintln!("loft install: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+/// PKG.REG R8 — `loft search <query>`: client-side filter against
+/// the cached index.  Refreshes the index if the cache is stale (TTL
+/// reuses `loft install`'s code path).  Output: one line per matching
+/// `name X.Y.Z — description` row.
+#[cfg(feature = "registry")]
+fn search_registry(query: &str) {
+    use loft::install::InstallOptions;
+    use loft::registry_index;
+
+    let opts = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+    };
+    let index = match loft_install_load_index(&opts) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft search: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let q = query.to_ascii_lowercase();
+    let mut hits: Vec<&loft::registry_index::Package> = index
+        .packages
+        .values()
+        .filter(|p| {
+            let name_match = p.name.to_ascii_lowercase().contains(&q);
+            let desc_match = p
+                .description
+                .as_deref()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .contains(&q);
+            let cat_match = p
+                .categories
+                .iter()
+                .any(|c| c.to_ascii_lowercase().contains(&q));
+            q.is_empty() || name_match || desc_match || cat_match
+        })
+        .collect();
+    hits.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if hits.is_empty() {
+        println!("No packages match `{query}`.");
+        return;
+    }
+    for pkg in hits {
+        let latest = registry_index::find_best_version(pkg, "*", false)
+            .map(|v| v.semver.clone())
+            .unwrap_or_else(|| "(no stable version)".to_string());
+        let desc = pkg.description.as_deref().unwrap_or("(no description)");
+        println!("{} {latest} — {desc}", pkg.name);
+    }
+}
+
+/// PKG.REG R8 — `loft info <name>`: full info for one package.
+/// Prints homepage, categories, available versions (yanked /
+/// prerelease tags inline), deps for the latest.
+#[cfg(feature = "registry")]
+fn package_info(name: &str) {
+    use loft::install::InstallOptions;
+    use loft::registry_index;
+
+    let opts = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+    };
+    let index = match loft_install_load_index(&opts) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft info: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let Some(pkg) = index.packages.get(name) else {
+        eprintln!("loft info: package `{name}` not found in registry");
+        std::process::exit(1);
+    };
+    println!("{name}");
+    if let Some(d) = &pkg.description {
+        println!("  description: {d}");
+    }
+    if let Some(h) = &pkg.homepage {
+        println!("  homepage:    {h}");
+    }
+    if !pkg.categories.is_empty() {
+        println!("  categories:  {}", pkg.categories.join(", "));
+    }
+    let latest = registry_index::find_best_version(pkg, "*", false);
+    if let Some(v) = latest {
+        println!("  latest:      {}", v.semver);
+        if !v.deps.is_empty() {
+            println!("  deps:");
+            for (n, c) in &v.deps {
+                println!("    {n} {c}");
+            }
+        }
+    }
+    println!("  versions:");
+    for ver in pkg.versions.values() {
+        let mut tags = Vec::new();
+        if pkg.yanked.iter().any(|y| y == &ver.semver) {
+            tags.push("yanked");
+        }
+        if ver.prerelease {
+            tags.push("prerelease");
+        }
+        let tag_str = if tags.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", tags.join(", "))
+        };
+        println!("    {}{tag_str}", ver.semver);
+    }
+}
+
+/// Thin wrapper exposing `install::load_index`-equivalent for the
+/// `search` / `info` paths above without making `install::load_index`
+/// public (it's an internal helper of the install orchestrator).
+/// Re-fetches if cache stale, verifies signature per opts.
+#[cfg(feature = "registry")]
+fn loft_install_load_index(
+    opts: &loft::install::InstallOptions,
+) -> Result<loft::registry_index::RegistryIndex, String> {
+    use loft::registry_index;
+    use loft::registry_signing::{VerifyResult, verify_index};
+
+    let url = registry_index::registry_url();
+    let (idx_path, sig_path, _) = registry_index::index_paths();
+    let content_bytes: Vec<u8> = if opts.offline {
+        std::fs::read(&idx_path).map_err(|e| {
+            format!(
+                "offline mode: no cached index ({}): {e}",
+                idx_path.display()
+            )
+        })?
+    } else {
+        let stale = std::fs::metadata(&idx_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .is_none_or(|age| opts.refresh || age.as_secs() > 60 * 60);
+        if stale {
+            let fetched = registry_index::fetch_index(&url)?;
+            if let Some(parent) = idx_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&idx_path, &fetched.content).map_err(|e| format!("cache index: {e}"))?;
+            if !fetched.signature.is_empty() {
+                let _ = std::fs::write(&sig_path, &fetched.signature);
+            }
+            fetched.content
+        } else {
+            std::fs::read(&idx_path).map_err(|e| format!("read cached index: {e}"))?
+        }
+    };
+    let sig = std::fs::read(&sig_path).unwrap_or_default();
+    match verify_index(&content_bytes, &sig) {
+        VerifyResult::Valid => {}
+        VerifyResult::NoTrustRoot | VerifyResult::MalformedSignature if opts.allow_unsigned => {}
+        VerifyResult::Invalid => {
+            return Err("index signature INVALID — refusing to load (hard failure)".to_string());
+        }
+        VerifyResult::NoTrustRoot => {
+            return Err(
+                "registry index unsigned and this loft binary has no embedded trust root; \
+                 pass --allow-unsigned to proceed"
+                    .to_string(),
+            );
+        }
+        VerifyResult::MalformedSignature => {
+            return Err(
+                "registry index signature is malformed; pass --allow-unsigned to proceed"
+                    .to_string(),
+            );
+        }
+    }
+    let text = std::str::from_utf8(&content_bytes)
+        .map_err(|e| format!("index is not valid UTF-8: {e}"))?;
+    registry_index::parse_index(text)
+}
+
+#[cfg(feature = "registry")]
+fn install_from_registry_legacy(arg: &str) {
     use loft::registry;
 
     // Parse name[@version].
@@ -1054,108 +1309,10 @@ fn registry_age_str(path: &std::path::Path) -> String {
     }
 }
 
-/// Collect crate names → rlib paths from a deps directory
-/// (e.g. `libfoo-<hash>.rlib` → `("foo", "/path/to/libfoo-<hash>.rlib")`).
-fn rlibs_in_dir(dir: &std::path::Path) -> std::collections::HashMap<String, std::path::PathBuf> {
-    let mut map = std::collections::HashMap::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
-            {
-                let fname = entry.file_name().to_string_lossy().to_string();
-                if let Some(rest) = fname.strip_prefix("lib") {
-                    if let Some(dash_pos) = rest.rfind('-') {
-                        map.insert(rest[..dash_pos].to_string(), path);
-                    }
-                }
-            }
-        }
-    }
-    map
-}
-
-/// PKG.4/PKG.5: add `--extern` flags to a rustc command for native package rlibs.
-/// When `target` is `Some("wasm32-wasip2")`, looks for WASM rlibs in `prebuilt/wasm32-wasip2/`;
-/// otherwise looks for native rlibs in `native/target/release/`.
-///
-/// Uses `-L dependency=` for the native package's deps so deep transitive deps
-/// resolve. For any crate that also appears in loft's own deps, adds an explicit
-/// `--extern name=<loft's copy>` so rustc uses a single copy, avoiding
-/// StableCrateId collisions.
-fn add_native_extern_flags(
-    cmd: &mut std::process::Command,
-    data: &data::Data,
-    target: Option<&str>,
-    loft_deps_dir: Option<&std::path::Path>,
-) {
-    let loft_rlibs = loft_deps_dir.map(|d| rlibs_in_dir(d)).unwrap_or_default();
-
-    for (crate_name, pkg_dir) in &data.native_packages {
-        // Look for the compiled rlib in the package's native crate output.
-        let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
-        // P244-windows fix #2 (2026-05-12): use single-segment joins,
-        // not `.join("native/target/release")` with embedded slashes.
-        // When `pkg_dir` is a Windows extended-length path (`\\?\D:\…`),
-        // a multi-segment join string with `/` separators inside the
-        // verbatim namespace doesn't normalize and the resulting path
-        // doesn't match real on-disk files.  Each `.join("X")` with a
-        // single component is normalized correctly by `Path` semantics.
-        let rlib_path = if let Some(tgt) = target {
-            // WASM: check prebuilt first, then native/target/<target>/release/
-            let prebuilt = std::path::PathBuf::from(pkg_dir)
-                .join("prebuilt")
-                .join(tgt)
-                .join(&rlib_name);
-            if prebuilt.exists() {
-                prebuilt
-            } else {
-                std::path::PathBuf::from(pkg_dir)
-                    .join("native")
-                    .join("target")
-                    .join(tgt)
-                    .join("release")
-                    .join(&rlib_name)
-            }
-        } else {
-            // Native: check native/target/release/
-            std::path::PathBuf::from(pkg_dir)
-                .join("native")
-                .join("target")
-                .join("release")
-                .join(&rlib_name)
-        };
-        if rlib_path.exists() {
-            let extern_name = crate_name.replace('-', "_");
-            cmd.arg("--extern")
-                .arg(format!("{}={}", extern_name, rlib_path.display()));
-            // Add the native crate's deps directory so transitive deps (GL, glutin, etc.)
-            // resolve. Use `dependency` search scope so these crates are only found as
-            // transitive deps of the native crate, not as direct deps.
-            let deps_dir = rlib_path.parent().unwrap().join("deps");
-            if deps_dir.is_dir() {
-                cmd.arg("-L")
-                    .arg(format!("dependency={}", deps_dir.display()));
-                // Pin any crate that also exists in loft's deps to loft's copy,
-                // preventing StableCrateId collisions from duplicate rlibs.
-                if !loft_rlibs.is_empty() {
-                    let pkg_crates = rlibs_in_dir(&deps_dir);
-                    for (dep_name, loft_path) in &loft_rlibs {
-                        if pkg_crates.contains_key(dep_name) {
-                            cmd.arg("--extern").arg(format!(
-                                "{}={}",
-                                dep_name,
-                                loft_path.display()
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+// `rlibs_in_dir` + `add_native_extern_flags` moved to `native_utils.rs` so the
+// native test runner (`test_runner.rs`, in the library crate) can link a
+// package's `#native` crate identically to the standalone + WASM native
+// compiles (LibCI native library gate).
 
 #[allow(clippy::too_many_lines)]
 fn main() {
@@ -1192,6 +1349,11 @@ fn main() {
     let mut generate_log_config: Option<Option<String>> = None;
     let mut format_mode: Option<(&'static str, String)> = None;
     let mut native_mode = true;
+    // LibCI: `loft test` / `--tests` default to the interpreter, but honour an
+    // EXPLICIT `--native` (matching the `--help` docs for `--tests --native`).
+    // Tracked separately because the `test`/`--tests` handlers force interpreter
+    // unless native was explicitly requested (regardless of arg order).
+    let mut native_requested = false;
     let mut native_release = false;
     // Plan-0.8.5 NDB.0 — `--native-debug` flag: pass `-Cdebuginfo=2`
     // to rustc, drop `-O` (unless `--native-release` is also set),
@@ -1355,13 +1517,16 @@ fn main() {
             introspect_all_fns = true;
         } else if a == "--native" {
             native_mode = true;
+            native_requested = true;
         } else if a == "--native-release" {
             native_mode = true;
+            native_requested = true;
             native_release = true;
         } else if a == "--native-debug" {
             // NDB.0 — emit DWARF; combine with --native-release if
             // optimised + debug-info is wanted.
             native_mode = true;
+            native_requested = true;
             native_debug = true;
         } else if a == "--dev-soft-halt" {
             // Plan-07 phase 4g.3 — demote dev-mode raises to
@@ -1414,7 +1579,8 @@ fn main() {
                 .is_some_and(|s| s == "--native" || s == "--no-warnings")
             {
                 if argv[i] == "--native" {
-                    // Note: --tests forces interpreter mode; this is a no-op.
+                    // LibCI: opt into native test compilation (matches --help).
+                    native_requested = true;
                 } else if argv[i] == "--no-warnings" {
                     no_warnings = true;
                 }
@@ -1425,7 +1591,11 @@ fn main() {
                 i += 1;
             }
             tests_dir = Some(path);
-            native_mode = false; // test runner uses interpreter
+            // The test runner defaults to the interpreter; an explicit --native
+            // (anywhere on the line) opts into native compilation per file.
+            if !native_requested {
+                native_mode = false;
+            }
         } else if a == "--no-warnings" {
             no_warnings = true;
         } else if a == "--check" || a == "check" {
@@ -1505,34 +1675,121 @@ fn main() {
                 lib_dirs.push(abs_src);
             }
             tests_dir = Some(test_target);
-            // Test runner uses the interpreter internally.
-            native_mode = false;
+            // `loft test` defaults to the interpreter; an explicit `--native`
+            // (e.g. `loft --native test draw`) compiles each test file to native
+            // Rust and runs it — the LibCI native library gate uses this.
+            if !native_requested {
+                native_mode = false;
+            }
         } else if a == "install" {
-            let arg = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
-                i += 1;
-                argv[i - 1].clone()
-            } else {
-                String::new()
+            // Collect flags + positional in any order.
+            #[cfg(feature = "registry")]
+            let mut install_opts = loft::install::InstallOptions {
+                allow_unsigned: true,
+                refresh: false,
+                offline: false,
+                allow_prerelease: false,
             };
-            if arg.is_empty()
-                || arg.starts_with('/')
-                || arg.starts_with("./")
-                || arg.starts_with("../")
-                || arg == "."
-                || arg.contains('/')
-            {
-                // Local path install.
-                let pkg_path = if arg.is_empty() {
+            let mut positional: Vec<String> = Vec::new();
+            while i < argv.len() {
+                let a2 = argv[i].as_str();
+                if a2 == "--refresh" {
+                    #[cfg(feature = "registry")]
+                    {
+                        install_opts.refresh = true;
+                    }
+                    i += 1;
+                } else if a2 == "--offline" {
+                    #[cfg(feature = "registry")]
+                    {
+                        install_opts.offline = true;
+                    }
+                    i += 1;
+                } else if a2 == "--prerelease" {
+                    #[cfg(feature = "registry")]
+                    {
+                        install_opts.allow_prerelease = true;
+                    }
+                    i += 1;
+                } else if a2 == "--allow-unsigned" {
+                    #[cfg(feature = "registry")]
+                    {
+                        install_opts.allow_unsigned = true;
+                    }
+                    i += 1;
+                } else if a2 == "--require-signature" {
+                    #[cfg(feature = "registry")]
+                    {
+                        install_opts.allow_unsigned = false;
+                    }
+                    i += 1;
+                } else if !a2.starts_with('-') {
+                    positional.push(a2.to_string());
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            // The first positional arg decides path-vs-registry mode.
+            // Local-path install (`.`, `./`, `../`, `/`, contains `/`)
+            // takes exactly one arg.  Registry install accepts N names.
+            let first = positional.first().map(|s| s.as_str()).unwrap_or("");
+            let is_local_path = first.is_empty()
+                || first.starts_with('/')
+                || first.starts_with("./")
+                || first.starts_with("../")
+                || first == "."
+                || first.contains('/');
+            if is_local_path {
+                let pkg_path = if first.is_empty() {
                     std::env::current_dir().unwrap_or_default()
                 } else {
-                    std::path::PathBuf::from(&arg)
+                    std::path::PathBuf::from(first)
                 };
                 install_package(&pkg_path);
             } else {
-                // Registry install.
-                install_from_registry(&arg);
+                // Registry install — multiple names allowed.
+                #[cfg(feature = "registry")]
+                {
+                    install_from_registry_with_opts(&positional, &install_opts);
+                }
+                #[cfg(not(feature = "registry"))]
+                {
+                    for name in &positional {
+                        install_from_registry(name);
+                    }
+                }
             }
             return;
+        } else if a == "search" {
+            // PKG.REG R8: client-side registry search.
+            #[cfg(feature = "registry")]
+            {
+                let query = argv.get(i).cloned().unwrap_or_default();
+                search_registry(&query);
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft search: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "info" {
+            // PKG.REG R8: per-package info (versions, latest, deps).
+            #[cfg(feature = "registry")]
+            {
+                let Some(name) = argv.get(i) else {
+                    eprintln!("loft info: package name required");
+                    std::process::exit(1);
+                };
+                package_info(name);
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft info: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
         } else if a == "registry" {
             handle_registry(&argv, &mut i);
             return;
@@ -1545,6 +1802,45 @@ fn main() {
             };
             generate_native_stubs(&pkg_path);
             return;
+        } else if a == "package" {
+            // PKG.REG R1 (PKG_REGISTRY.md): `loft package [path]` — build a
+            // gzipped tarball + print SHA-256 + size + the registry-index
+            // entry the publisher pastes into loft-lang/registry.
+            // Feature-gated on `registry` because tar / flate2 / sha2
+            // aren't worth carrying in a no-default-features build.
+            #[cfg(feature = "registry")]
+            {
+                let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                    // `i += 1` would be dead since we `return` below, but
+                    // the arg is consumed for clarity.
+                    std::path::PathBuf::from(&argv[i])
+                } else {
+                    std::env::current_dir().unwrap_or_default()
+                };
+                match loft::package::package_create(&pkg_path, None) {
+                    Ok(out) => {
+                        let stdout = std::io::stdout();
+                        let mut lock = stdout.lock();
+                        if let Err(e) = loft::package::print_summary(&out, &mut lock) {
+                            eprintln!("loft package: print summary failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("loft package: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!(
+                    "loft package: this binary was built without the `registry` feature; \
+                     rebuild with default features."
+                );
+                std::process::exit(1);
+            }
         } else if a == "doc" {
             // PKG.8: `loft doc [path]` — generate HTML docs for a package.
             let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
@@ -1940,7 +2236,7 @@ fn main() {
             None
         };
         // PKG.5: add --extern flags for native packages (WASM target).
-        add_native_extern_flags(
+        native_utils::add_native_extern_flags(
             &mut cmd,
             &p.data,
             Some("wasm32-wasip2"),
@@ -2470,7 +2766,12 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 None
             };
             // PKG.4: add --extern flags for native packages.
-            add_native_extern_flags(&mut cmd, &p.data, None, native_deps_dir.as_deref());
+            native_utils::add_native_extern_flags(
+                &mut cmd,
+                &p.data,
+                None,
+                native_deps_dir.as_deref(),
+            );
             let output = cmd.output();
             let output = match output {
                 Ok(o) => o,

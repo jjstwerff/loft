@@ -218,9 +218,10 @@ impl Parser {
     /// Check whether `val` is a call to a user-defined function that returns a struct
     /// via a temporary store.  Used by `copy_ref` and the vector-append
     /// emit path (`vectors.rs`) to decide whether to free the source
-    /// store after the deep copy.  The free bit is suppressed under WASM,
-    /// so this helper is too.
-    #[cfg(not(feature = "wasm"))]
+    /// store after the deep copy.  The free bit's behaviour differs
+    /// under WASM but the query is the same on every target — call
+    /// sites in expressions.rs / objects.rs / vectors.rs / collections.rs
+    /// are not feature-gated, so this helper must not be either.
     pub(crate) fn is_struct_returning_call(&self, val: &Value) -> bool {
         if self.first_pass {
             return false;
@@ -241,17 +242,28 @@ impl Parser {
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {
         let d_nr = self.data.type_def_nr(f_type);
         let tp = self.data.def(d_nr).known_type;
-        // when the source is a struct-returning function call,
-        // set the high bit (0x8000) on the type parameter to signal
-        // copy_record to free the callee's temporary store after the
-        // deep copy.  Without this, the __ref_N work-ref store allocated
-        // by add_defaults leaks on every call in a loop.
+        // When the source is a struct-returning function CALL, set the high
+        // bit (0x8000) on the type parameter to signal copy_record to free the
+        // callee's temporary store after the deep copy.  Without this, the
+        // __ref_N work-ref store the callee allocated to build its return value
+        // leaks on every call in a loop.
+        //
+        // @P313: do NOT set 0x8000 for an inline struct-literal `Block "Object"`
+        // source.  Unlike a call's unowned return temporary, the literal's
+        // work-ref ALREADY carries its own scope `OpFreeRef`, so the free-source
+        // bit double-frees it: the store is released while still owned, then
+        // recycled by the next iteration's OpDatabase, corrupting the
+        // nested-vector backings of every element written before it (silent
+        // data loss on `vec[i] = Struct{…}`; use-after-free SIGSEGV under
+        // churn).  Same shape as the @P311 OpSetKeyed fix, here on the
+        // whole-value element-set path.
         #[cfg(not(feature = "wasm"))]
-        let tp_val = if self.is_struct_returning_call(code) {
-            i32::from(tp) | 0x8000
-        } else {
-            i32::from(tp)
-        };
+        let tp_val =
+            if matches!(code.unspan(), Value::Call(_, _)) && self.is_struct_returning_call(code) {
+                i32::from(tp) | 0x8000
+            } else {
+                i32::from(tp)
+            };
         #[cfg(feature = "wasm")]
         let tp_val = i32::from(tp);
         self.cl(
@@ -1165,14 +1177,36 @@ impl Parser {
             return;
         }
 
-        if !self.convert(&mut rhs, &rhs_type, lhs_type) && !self.first_pass {
+        // @P316 — pick the coalesce result type.  When the value and default are
+        // integers of DIFFERENT specs (e.g. a narrow `u8` element + an
+        // `integer`/`i64` default), native can't unify the `if` branches — it emits
+        // `(if … {u8} else {0_i64}) as u8` → E0308 (`convert` leniently accepts any
+        // Integer→Integer without actually re-typing, so the branches keep their
+        // own native widths).  Widen BOTH branches to `i64` so they share a native
+        // type; the result is `i64` (matching the surrounding integer arithmetic).
+        // Matching-width integers and non-integer types keep the original
+        // behaviour (bring the default to the value's type; result = value's type).
+        let widen_ints = matches!(lhs_type, Type::Integer(_))
+            && matches!(rhs_type, Type::Integer(_))
+            && *lhs_type != rhs_type;
+        let result_type = if widen_ints {
+            crate::data::I64.clone()
+        } else {
+            lhs_type.clone()
+        };
+        // Bring the default to the result type (widen narrow→i64, or the original
+        // default→value-type convert); report a genuine mismatch (e.g. `text ?? 0`).
+        if !self.convert(&mut rhs, &rhs_type, &result_type) && !self.first_pass {
             self.can_convert(&rhs_type, lhs_type);
         }
+        // `convert(value → result_type)` widens the value branch when widen_ints,
+        // and is a no-op otherwise (result_type == lhs_type).
         if let Value::Var(_) = code {
             // Simple variable: reading twice is side-effect-free.
-            let lhs = code.clone();
+            let mut lhs = code.clone();
             let mut null_check = code.clone();
             self.convert(&mut null_check, lhs_type, &Type::Boolean);
+            self.convert(&mut lhs, lhs_type, &result_type);
             *code = v_if(null_check, lhs, rhs);
         } else {
             // Non-trivial expression: materialise into a temp to avoid double
@@ -1181,10 +1215,12 @@ impl Parser {
             let set_tmp = v_set(tmp, code.clone());
             let mut null_check = Value::Var(tmp);
             self.convert(&mut null_check, lhs_type, &Type::Boolean);
-            let if_expr = v_if(null_check, Value::Var(tmp), rhs);
-            *code = v_block(vec![set_tmp, if_expr], lhs_type.clone(), "ncc");
+            let mut true_branch = Value::Var(tmp);
+            self.convert(&mut true_branch, lhs_type, &result_type);
+            let if_expr = v_if(null_check, true_branch, rhs);
+            *code = v_block(vec![set_tmp, if_expr], result_type.clone(), "ncc");
         }
-        *ctp = lhs_type.clone();
+        *ctp = result_type;
     }
 
     #[allow(clippy::too_many_arguments)]

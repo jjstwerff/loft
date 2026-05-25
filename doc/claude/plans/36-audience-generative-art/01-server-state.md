@@ -215,13 +215,21 @@ rather than punching holes through the middle.
   becomes eligible exactly at 5 minutes.
 - **Decay window** (eligible → removed): even after a cell
   becomes eligible, removal is **slow**.  Suggested window:
-  ~30 seconds (300 ticks).  Across the window the renderer
-  animates the height + crystal mesh shrinking down rather than
-  the cell disappearing on a single tick.  Server keeps the
-  cell in the world during the decay window with `c_age`
-  continuing to increment past `effective_lifetime`; cell is
-  fully removed (set to `c_color = 0`) at `c_age >=
-  effective_lifetime + decay_window`.
+  ~30 seconds (300 ticks).  Server keeps the cell in the world
+  during the decay window with `c_age` continuing to increment
+  past `effective_lifetime`; cell is fully removed (set to
+  `c_color = 0`) at `c_age >= effective_lifetime + decay_window`.
+
+  > **Shrink animation dropped (decision 2026-05-20).**  The
+  > original spec had the renderer animate the crystal mesh
+  > shrinking down across the decay window, which would have
+  > needed per-cell age on the wire.  Judged not worth it: a
+  > removed cell just disappears, with a client-side alpha
+  > fade-out on the removal delta (shipped — `index.html`,
+  > ~600 ms) as the cheap cosmetic substitute (no wire change).
+  > The window therefore now just
+  > adds a flat tail to total lifetime rather than driving an
+  > animation.
 
 The slow decay is part of the **sluggish-by-design** philosophy
 — see [`README.md` § Tempo philosophy](README.md#tempo-philosophy--sluggish-by-design).
@@ -259,13 +267,15 @@ Each tick:
 7. Broadcast delta to all subscribers (including chunk
    creations + chunk deletions).
 
-The renderer treats a cell-decay event symmetrically to a cell-
+~~The renderer treats a cell-decay event symmetrically to a cell-
 placement event: a decaying cell shrinks down over the same
 ~5-second window the growth animation uses.  Direction of the
 "reverse extrusion" derives from the same age-comparison-with-
 neighbours rule (the cell collapses toward where the youngest
 neighbour is — i.e., away from the most-recent painting
-direction).
+direction).~~  **Superseded by the 2026-05-20 decision above** —
+no reverse-extrusion shrink; a removed cell just disappears (with
+a client-side fade-out, shipped in `index.html`).
 
 Note: the **3D height field** the projector renders is computed
 **from the per-cell `c_height` byte the server ships** (so all
@@ -302,8 +312,304 @@ heartbeat and matches the sluggish-by-design tempo.
 | 1.5 | World-delta computation (diff against previous tick) | S |
 | 1.6 | Broadcast helpers (single-client send + all-subscribers send) | XS |
 | 1.7 | Active-player signal aggregation + emit | XS |
-| 1.8 | Multi-client load test (2-3 → 10-30 → upper bound) | S |
-| 1.9 | Crash-resistance — does a misbehaving client (malformed JSON, dropped mid-handshake) bring the server down? | S |
+| 1.8 | Multi-client load test (2-3 → 10-30 → upper bound) — **done** (see § Load-test findings) | S |
+| 1.9 | Crash-resistance — does a misbehaving client (malformed frames, oversized frame, dropped mid-handshake) bring the server down? — **done** (see § Crash-resistance findings) | S |
+
+## Crash-resistance findings (1.9)
+
+Audited the event-pump path (which the server now runs on) against
+hostile clients.  One real crash, now fixed; the rest already safe.
+
+- **FIXED — unbounded WS frame allocation (process abort).**
+  `websocket::ws_read_frame_detailed` did `vec![0u8; payload_len]` with
+  no cap, trusting the frame's 64-bit length field.  A client sending a
+  127-length header claiming ~u64::MAX bytes triggered a multi-exabyte
+  allocation → abort, taking *every* connected client down.  Capped at
+  16 MiB (real client→server frames are tiny control messages); an
+  oversized frame is now dropped as `Closed`.  Regression test:
+  `lib/server/native` `p_oversized_ws_frame_rejected_without_alloc`.
+  This hardens **all** `lib/server` consumers, not just the demo.
+- **Malformed text frames — already safe.**  Probed with a battery of
+  bad frames ([`tools/audience-demo/crash_probe.loft`](../../../../tools/audience-demo/crash_probe.loft):
+  non-numeric coords, unknown msg ids, no-colon frames, empty frames,
+  out-of-range / negative / huge values).  The pump logs+drops
+  unparseable `<id>:<payload>` frames; `handle_message` ignores unknown
+  ids and rejects out-of-range colours.  Server stayed up and a fresh
+  good client still painted + received its echo.
+- **Dropped mid-handshake / garbage TCP — already safe.**  `parse_request`
+  reads the head byte-by-byte (16 KiB cap) and returns `Error` on
+  EOF/timeout/garbage; the pump treats that as "nothing to deliver."
+- **Known non-crash DoS (out of 1.9 scope):** a slow-loris that connects
+  but sends no request stalls the accept in `parse_request` for its
+  500 ms read timeout — degrades latency under a flood but does not
+  crash.  A true fix is the Tier B reactor (non-blocking accept).
+
+## Load-test findings (1.8)
+
+Driver: [`tools/audience-demo/load_test.loft`](../../../../tools/audience-demo/load_test.loft)
+— a single process opens N real WebSocket connections, has each paint a
+disjoint column of cells, drains the broadcast fan-out, and reports
+per-tier metrics.  Run against a live server; ramps 3 → 12 → 30 clients
+by default (`LOFT_AUD_CLIENTS=<n>` for a single tier).
+
+Measured (3 / 12 / 30 clients × 10 paints, fresh world, interpreter):
+
+| Clients | Connect time | Fan-out | send_fail / drops |
+|---|---|---|---|
+| 3  | 1.9 s (~0.6 s/client) | 100 % | 0 |
+| 12 | 33.8 s (~2.8 s/client) | 100 % | 0 |
+| 30 | ~220 s (~7.3 s/client) | 100 % | 0 |
+
+**Broadcast correctness is solid** — every paint reached every client at
+all tiers, no dropped clients, no failed sends.
+
+**The bottleneck is connection establishment, not steady-state
+throughput.**  Per-client connect latency degrades super-linearly, so all
+30 clients took ~3.7 minutes to connect — a real concern for a meetup
+where ~30 phones connect at once.  Root cause is the
+[Polled-only single-threaded loop](../future/32-tic-tac-toe/README.md):
+the loop is too busy to promptly `accept()` new sockets because each
+iteration does O(N) per-client polling + a **synchronous O(cells)
+`replay_world_to` on every connect** + a periodic O(cells) `world_save`,
+compounded by the web client's connect-time backoff.
+
+### Optimization follow-up (post-1.8, not a phase-1 blocker)
+
+Correctness is met, so neither tier blocks the phase.  Two tiers: **A**
+is a cheap app-level fix that stays inside the current single-threaded
+polled model and should be enough for the meetup; **B** is the durable,
+scalable fix and lives in `lib/server` (benefits every loft server
+consumer, not just this demo).  Do A first — the load harness
+(`load_test.loft`) proves the win immediately.
+
+#### Tier A — prototyped + measured 2026-05-20: loft hygiene helps a real burst, but does NOT fix the connect metric
+
+The original hypothesis was that the single loop is slow to `accept()`
+because it spends each iteration replaying the whole world to a new
+client + polling every existing client.  Three loft-level changes were
+prototyped in
+[`single_port_server.loft`](../../../../tools/audience-demo/single_port_server.loft)
+and **they work as improvements** (server runs, correctness 100 %, no
+crash) — they are the right concurrency hygiene and *do* help a genuine
+concurrent burst:
+
+- **A1 — chunked, non-blocking replay-on-connect (shipped).**
+  `replay_world_to`'s synchronous full-world dump in the accept branch is
+  replaced by a per-client *replay cursor* (`replay_keys` + `replay_pos`)
+  that the loop streams `REPLAY_BUDGET` (64) cells per iteration via
+  `advance_replays`, reading each cell's current value at send time.  The
+  accept path no longer blocks on an O(cells) dump.
+- **A2 — batched accept (shipped).**  The loop now drains up to
+  `ACCEPT_BUDGET` (8) connections per iteration instead of one.
+- **A4 — snapshot deferral (shipped).**  `world_save` is skipped on any
+  iteration that accepted a connection, so a synchronous O(cells) write
+  never delays a connect.
+- **A3 — OS listen backlog: no change needed.**  The native listener is
+  Rust std `TcpListener::bind`, which already uses a 128-deep backlog.
+
+**Measured result (load_test.loft, 3/12/30 × 10 paints):** connect time
+was **unchanged** — 1.9 s / 33.8 s / ~210 s, vs the ~1.9 / 33.8 / 220 s
+baseline.  So the loft changes are *necessary-but-insufficient*: they
+remove real per-iteration work and protect against a true simultaneous
+burst, but they do not move the **sequential-connect** latency the load
+test measures.  (Measurement caveat: with incremental replay, replay
+frames now overlap the paint phase, so the load test's `fanout%` can read
+>100 % — replay deltas counted alongside paint echoes.  Correctness is
+unaffected.)
+
+**Corrected root cause (confirmed by reading the native layer): the
+bottleneck is socket configuration, below the loft loop —**
+
+1. **No `TCP_NODELAY`** on the client connect stream
+   (`lib/web/native/src/ws_client.rs`) or the server's accepted streams
+   (`lib/server/native/src/lib.rs`) → Nagle + delayed-ACK latency on the
+   multi-round-trip WS handshake (the per-connect floor).
+2. **The per-client poll read blocks on a 20 ms timeout**
+   (`lib/server/native/src/lib.rs:482`, `set_read_timeout(20 ms)`).  Each
+   idle client costs ~20 ms per loop sweep, so a sweep is O(N×20 ms) and
+   each sequential connect waits behind an ever-slower sweep → the O(N²)
+   curve.  (`parse_request` stops at the header `\r\n\r\n`, so the 500 ms
+   accept timeout is *not* the floor.)
+
+No loft-level change can reach either — which is exactly why A1/A2/A4
+didn't move the metric.
+
+**TCP-layer experiment (2026-05-20) — root cause pinned exactly, and a
+"surgical" native fix proved NOT safe.**  Per-connect timing
+(`load_test.loft` instrumented) showed `connect[k] ≈ k × 505 ms` — each
+connect costs ~500 ms *per already-connected client*, i.e. O(N²) at
+500 ms/client.  Tracing the native layer:
+
+- **`set_nodelay(true)`** on both the server's accepted streams and the
+  client connect stream made **zero difference** — Nagle is not the
+  cause.
+- **Exact cause:** WS streams accepted via the HTTP-upgrade path
+  (`n_tcp_accept_nonblocking` → `n_ws_upgrade`) keep the **500 ms read
+  timeout** set for reading the request head (`lib.rs:153`) — `n_ws_upgrade`
+  pushes the stream into `WS_CONNS` without resetting it (the *other*
+  accept path, `n_ws_accept_nonblocking`, does reset to 20 ms at
+  `lib.rs:488`).  So every idle-client poll (`n_ws_recv` → `ws_read_frame`
+  → `read_exact`) blocks the full 500 ms → poll sweep is
+  O(clients × 500 ms) → connect is O(N²).
+
+Two "surgical" fixes were tried and **both gave a ~23× win for the
+audience server (30-client connect 220 s → ~9.5 s, fan-out 100 %) but
+broke `multiplayer_v3`:**
+
+1. **Lower the timeout to 20 ms** — `ws_read_frame` uses `read_exact`, so
+   a timeout that fires *mid-frame* consumes and discards the partial
+   bytes → frame desync.  v3's larger/slower frames truncate.
+2. **Non-blocking `peek`-gate before the blocking read** — corrupts the
+   read for the case where the byte-by-byte handshake left the client's
+   first WS frame in the kernel buffer; v3 dies on its **first move**
+   (server never reads it → client `recv-timeout`).
+
+…but then the real answer surfaced: **the problem was already solved on
+the *other* server path.**  `lib/server` has two paths — the manual one
+the audience server hand-rolled (`next_nonblocking` + `ws_upgrade` +
+per-client `next()`, the 500 ms streams above) and the **event pump**
+(`srv.run` / `n_ws_next_event`), which the code itself calls *"the single
+supported path for multi-client servers."*  The pump uses 20 ms streams
+**and** `ws_read_frame_detailed` — a `NoData`/`Frame`/`Closed` reader that
+returns cleanly on a no-data poll instead of the manual path's lossy
+`read_exact`→`None`.  It is validated by the TTT v5 many-clients tests.
+
+#### Tier A′ (SHIPPED 2026-05-20) — put the single-port server on the event pump
+
+The audience server only stayed on the manual path because it serves the
+HTML page *and* WebSockets on one port, and the pump's accept only handled
+WS upgrades.  A′ closes that gap:
+
+- **native:** `try_accept_inner` now surfaces a non-WS request as
+  `AcceptOutcome::Http` (stream parked in `CURRENT_CONN`, path in
+  `LAST_PATH`) instead of dropping it; `n_ws_next_event` delivers it as
+  event kind 3.  WS-upgrade behaviour unchanged.
+- **loft:** `WsEvent` gains `http` / `path`; new `Server::poll_event` (a
+  non-blocking single-event drain, so a server with its **own tick loop**
+  can still use the pump) plus `respond_html` / `respond_404` /
+  `respond_typed`.  `run()` is now built on `poll_event`.
+- **audience server** rewritten onto `poll_event`: clients are keyed by
+  `cid` in a `players` hash (replay cursor + last-paint position for the
+  heartbeat); fan-out via `srv.broadcast` / `send_to`; the manual client
+  vector + `poll_clients` + `ws_upgrade` are gone.  Tick / decay /
+  heartbeat / persistence unchanged.
+
+**Result (`load_test.loft`):** 30-client connect **220 s → ~10 s
+(21.6×)**, fan-out 100 %, 0 send failures, HTTP page still served — and
+`multiplayer_v2/v3/v5` stay green.  The same win as the unsafe experiment
+above, but on the supported, validated framing.
+
+`set_nodelay` was *not* part of the fix (it made no measurable difference)
+and was reverted; it remains a reasonable hygiene addition for real WAN /
+browser clients but is out of scope here.
+
+What A′ does **not** do: the pump is still O(clients × 20 ms) per drain
+(idle clients each cost a 20 ms poll), so connect stays O(N²) — just 25×
+cheaper.  ~10 s for 30 phones is fine for the meetup; true O(ready)
+scaling (idle clients cost *zero*) is still **Tier B** below.
+
+#### WsGroup — multiplexed non-blocking client receiver (SHIPPED 2026-05-20)
+
+The load test's **client-side** drain was as slow as the old server-side
+connect bottleneck: `try_recv()` on each of N sockets blocks 7 ms per
+empty socket, so draining 30 clients costs 30 × 7 ms = 210 ms per pass.
+With 25 rounds of 30 paints, the original load test took ~295 s total.
+
+**Fix:** `WsGroup` in `lib/web` — a multiplexed receiver that scans N
+WsHandler connections with `set_nonblocking(true)` during the scan,
+returning the first socket with data ready.  Empty sockets return in
+microseconds instead of 7 ms.  Timeout is restored after each scan.
+
+API (`lib/web/src/web.loft`):
+```loft
+group = web::ws_group()
+group.add(h1)
+group.add(h2)
+while true {
+  ev = group.poll()        // one non-blocking scan of all handles
+  if ev.handle < 0 { break }
+  process(ev.message)
+}
+```
+
+Round-robin fairness: each `poll()` starts scanning from the handle after
+the one that last returned data.
+
+**Measured result (load_test.loft, 30 clients × 25 paints):**
+
+| Metric | Before (per-client try_recv) | After (WsGroup) |
+|---|---|---|
+| Send phase | ~295 s | **9–19 ms** (~15,000×) |
+| Total (incl. server drain) | ~295 s | ~224 s |
+| Fan-out | 100 % | 99 % |
+
+The send phase is now instant — the remaining 224 s is the server's
+single-threaded O(N²) broadcast delivering 22,500 frames.  At real
+human painting speed (~1 paint/s/person), the server handles 30 phones
+comfortably: each paint triggers 30 broadcasts in one pump cycle (~2 ms),
+using ~6 % of loop capacity.
+
+**Live validation (2026-05-20):** the server ran unattended for ~4 hours
+(18:04–22:00 Amsterdam) with zero crashes, zero restarts, same PID
+throughout.  Keepalive script + caffeinate prevented sleep; automatic
+shutdown at 22:00.
+
+#### Tier B — background I/O reactor in `lib/server` (effort M)
+
+The durable fix: separate socket I/O from the simulation loop using OS
+readiness multiplexing.  This is the model `lib/server` already designs
+toward in [§ Multi-threading model](../../lib_plans/future/08-server/README.md#multi-threading-model)
+(tokio runtime + thread pool); the shipped server is the "polled-only"
+subset noted in [TTT v5](../future/32-tic-tac-toe/README.md).  What's
+needed:
+
+- **B1 — a dedicated reactor thread** in the native layer owns the listen
+  socket + every client socket and waits on **`epoll` (Linux) / `kqueue`
+  (macOS) / IOCP (Windows)** via the `mio` crate (one cross-platform
+  abstraction).  Readiness-driven ⇒ O(ready), not O(N): `accept()` fires
+  the instant a SYN lands; idle connections cost nothing.
+- **B1a — buffered, partial-frame-tolerant WS framing (the specific
+  blocker the Tier-A experiment hit).**  Today `ws_read_frame` does
+  blocking `read_exact` per frame; under non-blocking readiness it must
+  instead accumulate bytes into a per-connection buffer and only surface a
+  frame once fully arrived — never consuming-then-discarding on a short
+  read.  This is what makes "cheap idle poll" safe (no v3-style
+  first-frame loss), and it is unavoidable for the reactor.
+- **B2 — two mpsc channels** between reactor and loft loop: inbound
+  frames → loft drains each tick; loft deltas → reactor fans out.  The
+  loft-facing API (`next_nonblocking` / `broadcast` / `try_recv`) is
+  unchanged, just backed by channels — "single-threaded from loft's
+  view."
+- **B3 — reactor serves the connect snapshot itself.**  The loft loop
+  publishes the world as an atomically-swapped `Arc<blob>` (or an mmap'd
+  buffer — composes with [@PLAN38 durable loft-store](../future/38-loft-store-durable/README.md)).
+  On accept the reactor completes the WS handshake *and* ships the
+  snapshot with one buffered `writev` / large `SO_SNDBUF`, never touching
+  the sim loop.  Replay latency leaves the hot path entirely.
+- **B4 — per-socket backpressure in the reactor** (`EPOLLOUT` /
+  write-readiness): a slow client can't stall the sim loop or its peers.
+- **B5 (scaling knob, optional) — `SO_REUSEPORT` + multiple acceptor
+  threads** for hundreds+ of clients.  Overkill for a ~30-phone meetup.
+
+*Cross-platform note:* the reactor is the one piece that differs per OS;
+`mio` covers epoll/kqueue/IOCP, but the kqueue (macOS) path wants a real
+macOS run to validate — see [§ Validation](#validation) below.
+*Canonical home:* this is `lib/server` work — track the build under
+[lib_plans/future/08-server](../../lib_plans/future/08-server/README.md);
+this section is the **driver** (the concrete load-test finding that
+motivates it), not a second copy of the design.
+
+- **Also pending (independent of A/B): binary wire** (phase 1 step 2) —
+  cuts per-message text parse/format; reduces fan-out CPU but does not by
+  itself fix connect latency.
+
+#### Validation
+
+Both tiers are measured the same way: start the server, run
+`load_test.loft` at the 3 → 12 → 30 ramp, and compare connect time +
+fan-out against the [§ Load-test findings](#load-test-findings-18) table.
+Tier B additionally needs a **macOS run** (kqueue path) and ideally a
+Windows run (IOCP) since the reactor is the OS-specific component.
 
 ## Open design questions
 

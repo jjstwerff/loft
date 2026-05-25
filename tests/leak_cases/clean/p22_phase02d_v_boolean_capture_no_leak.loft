@@ -1,0 +1,19 @@
+        fn one_iteration() -> boolean {
+            flag = false;
+            toggle = fn() { flag = !flag; };
+            toggle();
+            toggle();
+            toggle();
+            toggle();
+            toggle();
+            flag
+        }
+        fn test() {
+            i = 0;
+            while i < 100 {
+                r = one_iteration();
+                assert(r == true, "iter {i}: got {r}");
+                i = i + 1;
+            }
+        }
+        

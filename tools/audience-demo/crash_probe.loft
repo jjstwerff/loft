@@ -1,0 +1,80 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN36 sub-task 1.9 — crash-resistance probe for the audience server.
+// Fires a barrage of malformed text frames at the server (bad numbers,
+// unknown msg ids, no-colon frames, empty frames, out-of-range values),
+// then connects a fresh GOOD client and confirms a valid paint still
+// round-trips.  If any garbage frame crashed the server, the good client
+// never gets its echo → FAIL.
+//
+// Usage — start the server first, then:
+//   ./target/release/loft --interpret --no-warnings --lib lib/ \
+//       tools/audience-demo/crash_probe.loft
+//
+// Env: LOFT_AUD_PORT (default 18083).
+
+use web;
+
+fn env_int(name: text, dflt: integer) -> integer {
+  raw = env_variable(name);
+  if raw == "" { dflt } else { raw as integer }
+}
+
+fn main() {
+  port = env_int("LOFT_AUD_PORT", 18083);
+  url = "ws://127.0.0.1:{port}/ws";
+  println("crash-probe -> {url}");
+
+  // 1. Attacker client: connect, then throw malformed frames.
+  atk = web::ws_handler(url);
+  if atk == null { println("crash-probe: ws_handler null (bad url?)"); return; }
+  web::sleep_ms(200);
+  garbage: vector<text> = [
+    "1:abc,def,ghi",   // non-numeric coords
+    "1:",              // seed, empty body
+    "garbage-no-colon",// no msg_id separator
+    "999:whatever",    // unknown msg_id
+    "2:abc",           // clear, non-numeric
+    "",                // empty frame
+    "3:notanumber",    // color_select, non-numeric
+    "1:5",             // seed, missing y,c
+    "1:5,5",           // seed, missing c
+    "6:ignored",       // snapshot req with junk tail
+    ":::",             // colons only
+    "1:5,5,99",        // colour out of range (>9)
+    "1:5,5,0",         // colour 0 (erase-of-empty)
+    "1:-1,-1,3",       // negative coords
+    "1:99999999999999999999,0,3", // huge coord
+  ];
+  for g in garbage { atk.send(g); }
+  web::sleep_ms(300);
+  atk.close();
+
+  // 2. Good client: must still connect, paint, and receive its echo.
+  good = web::ws_handler(url);
+  if good == null { println("crash-probe: FAIL — good client ws_handler null"); return; }
+  web::sleep_ms(300);
+  // drain any connect-time replay
+  while true { m = good.try_recv(); if m == null { break; } }
+
+  good.send("1:7,7,4");
+  got = false;
+  guard = 0;
+  while !got && guard < 400 {     // ~2 s ceiling
+    m = good.try_recv();
+    if m != null && m.starts_with("4:7,7,4") {
+      got = true;
+    } else {
+      web::sleep_ms(5);
+      guard = guard + 1;
+    }
+  }
+  good.close();
+
+  if got {
+    println("crash-probe: PASS — server survived the garbage barrage and a good client still paints");
+  } else {
+    println("crash-probe: FAIL — no echo for a valid paint after the barrage (server may have crashed or wedged)");
+  }
+}

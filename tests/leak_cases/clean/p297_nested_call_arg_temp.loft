@@ -1,0 +1,15 @@
+// @P297 (OPEN) — a struct-returning call passed directly as a function
+// argument (anonymous temporary) leaks one store per call on BOTH
+// backends.  Expected to LEAK until @P297 is fixed; when fixed this file
+// moves to ../clean/ and the bug closes.
+struct V3 { x: float, y: float, z: float }
+fn mk(a: float, b: float, c: float) -> V3 { V3 { x: a, y: b, z: c } }
+fn add(p: const V3, q: const V3) -> V3 { V3 { x: p.x + q.x, y: p.y + q.y, z: p.z + q.z } }
+fn sx(p: const V3) -> float { p.x }
+fn test() {
+  a = mk(1.0, 2.0, 3.0);
+  b = mk(0.5, 0.5, 0.5);
+  total = 0.0;
+  for i in 0..20 { total += sx(add(a, b)); }
+  assert(total == 30.0, "total={total}");
+}

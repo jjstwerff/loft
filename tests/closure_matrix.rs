@@ -155,6 +155,44 @@ cross_mode!(
     "#
 );
 
+// @P299 — calling a CAPTURING closure stored in a struct field (the
+// call-through-field dispatch) panicked on native (`invalid fn-ref`)
+// because the lambda's d_nr, written as `OpSetInt4(field, pos, Int(d))`,
+// was invisible to the reachability walk and the lambda was dropped from
+// the fn-ref candidate set.  Closed 2026-05-21.  These cells pin the two
+// shapes the int/mutation D3 cases in mut_closure_matrix don't cover:
+// a struct-by-reference capture, and a text-RETURNING capture consumed
+// DIRECTLY as a call argument (which also needed the `&*` text-arg
+// coercion in calls.rs).
+cross_mode!(
+    p299_d3_capture_ref_field_call,
+    r#"
+    struct Point { x: integer, y: integer }
+    struct Holder { cb: fn(integer) -> integer }
+    fn test() {
+        p = Point { x: 100, y: 0 };
+        h = Holder { cb: fn(dx: integer) -> integer { p.x + dx } };
+        r = h.cb(7);
+        print("{r}\n");
+        assert(r == 107, "h.cb(7)={r}");
+    }
+    "#
+);
+
+cross_mode!(
+    p299_d3_capture_text_return_field_call,
+    r#"
+    struct G { fmt: fn(integer) -> text }
+    fn test() {
+        label = "z";
+        g = G { fmt: fn(n: integer) -> text { "{label}: {n}" } };
+        print(g.fmt(7));
+        print("\n");
+        assert(g.fmt(7) == "z: 7", "g.fmt(7)");
+    }
+    "#
+);
+
 cross_mode!(
     c0_d4_non_cap_vector,
     r#"

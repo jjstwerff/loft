@@ -1,0 +1,17 @@
+struct Cell { ck: text not null, x: integer not null, y: integer not null }
+struct World { cells: hash<Cell[ck]> }
+fn snap_xs(w: World) -> integer {
+  count = 0;
+  for cell in w.cells {
+    count = count + cell.x;
+  }
+  count
+}
+pub fn test() {
+  w = World{cells: []};
+  w.cells += [Cell{ck: "a", x: 1, y: 0}];
+  w.cells += [Cell{ck: "b", x: 2, y: 0}];
+  w.cells += [Cell{ck: "c", x: 3, y: 0}];
+  total = snap_xs(w);
+  assert(total == 6, "summed cells inside passed-in hash");
+}

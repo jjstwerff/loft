@@ -687,6 +687,83 @@ mirror: `feedback_fail_at_startup_not_runtime.md`.
 
 ---
 
+## C68 — Keyed collections dedup on insert (`+=` AND `coll[key]=value`)
+
+> **REVERSED & IMPLEMENTED (2026-05-21).**  The original decision below
+> (close @P306 as a `+=`-append-vs-`[key]=`-upsert split) was reversed the
+> same day on **new evidence**: the world-chunk index is `hash<Chunk[cx,cy,cz]>`
+> and inserting a chunk where one already exists at a coord MUST replace, not
+> stack a shadowed duplicate — so dedup-on-insert is a correctness requirement
+> of the architecture, not a preference.  The risk concern was retired by
+> doing it the safe way: hash/index dedup via `Stores::dedup_keyed`
+> (find + free + unlink + reclaim, then add) in `insert_record`; sorted via an
+> overwrite-on-`found` branch in `vector::sorted_finish`.  Full suite green
+> (no consumer relied on duplicate-key append).  **Both `coll += [entry]` and
+> `coll[key] = value` now dedup by key (latest insert wins).**  @P306 is
+> closed by CODE, not by this decision.  The historical decision is kept below
+> for the trade-off record.
+
+### Question
+
+For a keyed collection (`hash` / `sorted` / `index<T[K]>`), what
+should `coll += [entry]` do when an entry with the same key already
+exists?  Append a second record (current behaviour — `len` grows,
+lookup returns the first), or replace (dedup)?  Filed as @P306 during
+the plan-44 hash-semantics sweep.
+
+### Evaluation
+
+- A keyed collection implies key UNIQUENESS, so silently coexisting
+  duplicate keys are a footgun: `coll[key]` returns the first, the
+  duplicate is dead weight, and `len` over-counts.  This also wastes
+  space — bad for the cache-locality goal that the chunk work is built
+  around (a chunk's working set should fit L1/L2; bloat from duplicate
+  keys pushes it out).
+- BUT making `+=` dedup means modifying the hot insert path of THREE
+  data structures (`hash::add`, `vector::sorted_finish`, `tree::add`)
+  to find-and-replace on key collision — the @P295 minefield (the hash
+  deep-copy/off-by-one bugs all lived here).  High regression risk for
+  a change to a primitive every consumer uses.
+- `coll[key] = value` (the @P305 `OpSetKeyed` upsert) ALREADY provides
+  a correct, deduping, memory-bounded insert-or-replace for all keyed
+  kinds, uniformly across local / field / `&`-param.  It is the
+  compact, locality-friendly path the chunk work actually wants.
+
+### Decision
+
+**Closed (2026-05-21) as a two-operation split:**
+
+- **`coll += [entry]`** is APPEND — the low-level primitive.  On a
+  keyed collection a duplicate key is the caller's responsibility (it
+  appends; no dedup).  Cheapest when keys are known-unique (the common
+  bulk-build case — `build_index`, snapshot loads — never inserts a
+  duplicate, so it pays nothing for a dedup check).
+- **`coll[key] = value`** is UPSERT (insert-or-replace, deduped by the
+  value's key) — the idiomatic map/set write.  Use it whenever keys may
+  repeat or compactness matters.
+
+This keeps the hot append path untouched (no @P295-class risk) while
+giving a correct dedup path.  It mirrors the common library split
+(`push`/`append` vs `insert`/`[]=`).  @P306 is closed by this decision,
+not by a code change.
+
+### Revisit when
+
+- A consumer needs bulk dedup-append (many possibly-duplicate keys at
+  once) and the per-element `coll[key] = value` loop is measurably too
+  slow — then a dedup-aware bulk insert (or a `+=` dedup variant) can be
+  evaluated, implemented in the per-kind add with the @P295 lessons in
+  hand.
+- Duplicate keys are shown to corrupt a downstream operation
+  (iteration, deep-copy, removal) rather than merely waste space — then
+  `+=` dedup becomes a correctness fix, not a preference.
+
+Pointer from the source: PROBLEMS.md row @P306; spec + matrix in
+[plans/finished/44-hash-semantics/](plans/finished/44-hash-semantics/README.md) (cases
+C09/C10 document the append-no-dedup behaviour this decision blesses).
+
+---
+
 ## Adding a new entry
 
 When closing a question, append a new `##` section using the

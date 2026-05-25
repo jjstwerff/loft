@@ -1,0 +1,439 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+//! Plan-12 extraction-hygiene gate.
+//!
+//! The loft compiler crate (everything under `src/`) must contain
+//! **zero** library code — only language core, runtime, codegen, and
+//! stdlib symbols.  Libraries (`lib/crypto`, `lib/imaging`, `lib/web`,
+//! `lib/random`, …) live in their own per-package native crates
+//! (`lib/<X>/native/src/lib.rs`) and are loaded at runtime via the
+//! package format.  See
+//! [`doc/claude/lib_plans/12-library-extraction/README.md`](../doc/claude/lib_plans/12-library-extraction/README.md)
+//! for the stdlib-vs-library boundary table.
+//!
+//! Two gates here:
+//!
+//! 1. **Symbol drain** — `forbidden_library_symbols_absent_from_src`:
+//!    walks `src/**/*.rs`, fails if any known library `n_*` symbol
+//!    name appears.  The list MUST stay in sync with what each
+//!    library's `native/` crate exports.
+//!
+//! 2. **Dep drain** — `forbidden_library_deps_absent_from_main_cargo`:
+//!    reads the main crate's `Cargo.toml`, fails if it lists
+//!    library-only dependencies (`png`, `ureq`, `rustls`, `fontdue`)
+//!    once those libraries' native crates are the sole owners.  This
+//!    gate is **scoped**: currently it only enforces deps that have
+//!    actually been drained.  Add a row when a library's drain
+//!    completes; never add a row for an undrained library (the test
+//!    would be wrong, not the code).
+//!
+//! These gates are CHEAP — pure file reads, no compilation.  Run on
+//! every CI cycle.  When a future @P321-style attempt tries to add
+//! `n_load_png` to `src/codegen_runtime.rs`, this test fails before
+//! the PR can merge.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// Manual fallback list for library `n_*` symbols that need to be
+/// forbidden in `src/**/*.rs` but DON'T yet have a `[native.functions]`
+/// entry in their library's `loft.toml`.
+///
+/// @PLAN12 phase 2 (2026-05-24): the primary source of truth moved from
+/// this hand-maintained const to `lib/<X>/loft.toml::[native.functions]`.
+/// `forbidden_library_symbols()` below walks every `lib/*/loft.toml`,
+/// reads its `[native.functions]` table, and appends each `n_*` value to
+/// the effective forbidden list.  This const stays empty by default and
+/// is reserved for symbols whose owning library's loft.toml can't yet
+/// declare them (e.g. a Tier-B library being prepared for drain whose
+/// metadata isn't ready).  When you need to add a manual row, prefer
+/// populating the library's loft.toml instead.
+///
+/// Stdlib symbols (`n_panic`, `n_assert`, `n_log_*`, `n_json_*`,
+/// `n_parallel_*`, `n_now`, `n_ticks`, …) are deliberately NOT forbidden
+/// — they stay in the compiler crate by design.  See the
+/// stdlib-vs-library table in the plan README.
+const FORBIDDEN_LIBRARY_SYMBOLS_MANUAL: &[(&str, &str)] = &[
+    // @PLAN12 phase 3.5 (2026-05-24) — extracted to the
+    // `loft-lang/loft-libs-core` chunk repo.  Their
+    // `loft.toml::[native.functions]` (or `#native` annotations in
+    // source) are no longer scanned by `forbidden_library_symbols()`
+    // (which walks `lib/*` only), so symbols are pinned here to keep
+    // the hygiene gate detecting re-introduction in `src/**`.
+    //
+    // crypto (6):
+    ("n_sha256", "loft-libs-core/crypto/native"),
+    ("n_hmac_sha256", "loft-libs-core/crypto/native"),
+    ("n_hmac_sha256_raw", "loft-libs-core/crypto/native"),
+    ("n_base64_encode", "loft-libs-core/crypto/native"),
+    ("n_base64_decode", "loft-libs-core/crypto/native"),
+    ("n_base64url_encode", "loft-libs-core/crypto/native"),
+    // random (3) — drained in @PLAN12 phase 3.5a (2026-05-24).
+    // The drain became possible after the `loft::native_call`
+    // helpers shipped (LoftStore-forwarding codegen for
+    // store-allocating cdylib returns).  Random is now the
+    // canonical example pattern for libraries with
+    // `n_*_indices`-shaped functions.
+    ("n_rand", "loft-libs-core/random/native"),
+    ("n_rand_seed", "loft-libs-core/random/native"),
+    ("n_rand_indices", "loft-libs-core/random/native"),
+    // Add rows here ONLY when the library's `loft.toml` can't yet
+    // declare the symbol via `[native.functions]`, OR when the
+    // library has been extracted to an external path (path-dep scan
+    // is not yet implemented).  Future TBD rows for reference:
+    //   ("n_load_png",  "lib/imaging/native"),   // @P321c — needs ABI fix first
+    //   ("n_save_png",  "lib/imaging/native"),   // @P321c
+];
+
+/// Read every `lib/*/loft.toml` and walk its `[native.functions]` table
+/// (if present), appending each `(value, "lib/<name>/native")` pair to
+/// the result.  Augmented by the manual fallback list above for any
+/// symbol that doesn't yet live in a manifest.
+///
+/// Phase 2: this is the metadata-driven path.  Adding a new
+/// `[native.functions]` row in a library's `loft.toml` automatically
+/// extends the hygiene gate's coverage.
+fn forbidden_library_symbols() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = FORBIDDEN_LIBRARY_SYMBOLS_MANUAL
+        .iter()
+        .map(|(s, o)| ((*s).to_string(), (*o).to_string()))
+        .collect();
+    let lib_dir = workspace_root().join("lib");
+    let Ok(entries) = fs::read_dir(&lib_dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let manifest_path = path.join("loft.toml");
+        let Ok(content) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let pkg_name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let owner = format!("lib/{pkg_name}/native");
+        let mut in_section = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                in_section = trimmed == "[native.functions]";
+                continue;
+            }
+            if !in_section {
+                continue;
+            }
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some((_, value)) = trimmed.split_once('=') {
+                let sym = value.trim().trim_matches('"').to_string();
+                if !sym.is_empty() {
+                    out.push((sym, owner.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Cargo dependencies that belong to a library's `native/` crate, not
+/// the main loft crate.  Currently empty — the `png` / `ureq` / etc.
+/// deps still live in `Cargo.toml` because Tier-B libraries
+/// (graphics/imaging/random/server) are still linked as workspace
+/// members and the cdylib loader hasn't shipped yet.  Add a row when
+/// a dep moves out for real.
+const FORBIDDEN_MAIN_CRATE_DEPS: &[&str] = &[
+    // Add rows when a library's drain removes its dep from the main
+    // crate.  Until then this gate is intentionally lenient — the
+    // symbol gate above catches the more important regression
+    // (compiler-crate Rust code referencing library symbols).
+];
+
+fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Precompute, for one file's lines, the set of line indices that live
+/// inside (or directly above) a `#[cfg(...wasm32...)]` gate.  A line is
+/// gated when:
+///
+/// 1. It IS a `#[cfg(...wasm32...)]` attribute.
+/// 2. The previous non-empty non-comment line is one (covers per-row
+///    attribute on a const-slice entry or `fn …` definition).
+/// 3. It lives inside a top-level brace block (`fn`, `const ... = &[`,
+///    `mod`, `impl`) whose opening line was preceded by a wasm32 cfg
+///    attribute.
+///
+/// Heuristic — not a full Rust parser — but matches every wasm32-only
+/// shape currently in the loft codebase (per-fn cfg on WASM bridge
+/// helpers; per-array cfg on `WEB_FUNCTIONS_WASM`).  False positives
+/// (skipping non-wasm lines) only hide forbidden symbols; false
+/// negatives just surface them sooner.
+fn wasm32_cfg_gated_lines(lines: &[&str]) -> Vec<bool> {
+    let mut gated = vec![false; lines.len()];
+    // Walk forward, tracking whether the most recent non-empty
+    // non-comment line was a `#[cfg(...wasm32...)]` attribute.  When
+    // we see a brace-opening line, decide whether the resulting block
+    // is gated by checking the pending attribute.  Maintain a stack
+    // of (depth_at_open, gated_flag) so nested blocks inherit.
+    let mut stack: Vec<(i32, bool)> = vec![(0, false)];
+    let mut depth: i32 = 0;
+    let mut pending_wasm_attr = false;
+    for (i, raw) in lines.iter().enumerate() {
+        let trimmed = raw.trim();
+        let is_attr_line = is_wasm32_cfg_attr(trimmed);
+        // Gate the line itself if it IS the attribute or the
+        // enclosing block is gated.
+        if is_attr_line {
+            gated[i] = true;
+            pending_wasm_attr = true;
+            continue;
+        }
+        let inside_gated_block = stack.last().is_some_and(|&(_, g)| g);
+        // Determine effective gating BEFORE we update brace depth so
+        // open-brace lines are themselves marked gated when the
+        // pending attribute applied to them.
+        let gated_now = inside_gated_block || (pending_wasm_attr && !trimmed.is_empty());
+        if gated_now {
+            gated[i] = true;
+        }
+        // Strip comments / strings minimally before counting to avoid
+        // mis-counting delimiters inside `//` or `"…"`.  Cheap
+        // approximation: drop `//` and everything after.  Track `{`,
+        // `[`, AND `(` together — a const-slice declaration opens with
+        // `&[` not `{`, and we still want to mark its elements as gated.
+        let code = trimmed.split_once("//").map_or(trimmed, |(c, _)| c);
+        let opens = (code.matches('{').count()
+            + code.matches('[').count()
+            + code.matches('(').count()) as i32;
+        let closes = (code.matches('}').count()
+            + code.matches(']').count()
+            + code.matches(')').count()) as i32;
+        let net = opens - closes;
+        if opens > 0 {
+            // Opening at least one block on this line — push gating
+            // state derived from pending_wasm_attr OR inherited.
+            let block_gated = inside_gated_block || pending_wasm_attr;
+            for _ in 0..opens {
+                stack.push((depth, block_gated));
+                depth += 1;
+            }
+        }
+        if closes > 0 {
+            for _ in 0..closes {
+                depth = depth.saturating_sub(1);
+                if stack.len() > 1 {
+                    stack.pop();
+                }
+            }
+        }
+        // `pending_wasm_attr` clears once we've seen any non-empty
+        // non-comment, non-cfg-attr line OR after the opening brace
+        // of the gated block has been pushed.
+        if !trimmed.is_empty() && !trimmed.starts_with("#[") {
+            pending_wasm_attr = false;
+        }
+        // Also clear if pending was consumed by opening a block.
+        if net > 0 {
+            pending_wasm_attr = false;
+        }
+    }
+    gated
+}
+
+fn is_wasm32_cfg_attr(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if !(trimmed.starts_with("#[cfg(") || trimmed.starts_with("#![cfg(")) {
+        return false;
+    }
+    trimmed.contains("wasm32") || trimmed.contains("target_arch = \"wasm32\"")
+}
+
+#[test]
+fn forbidden_library_symbols_absent_from_src() {
+    let root = workspace_root();
+    let src_dir = root.join("src");
+    let mut files = Vec::new();
+    collect_rs_files(&src_dir, &mut files);
+    assert!(!files.is_empty(), "no .rs files found under src/");
+
+    // Phase 2 (@PLAN12, 2026-05-24): build the forbidden list from
+    // `lib/*/loft.toml::[native.functions]` plus the manual fallback
+    // const.  Loft.toml is now the source of truth.
+    let forbidden = forbidden_library_symbols();
+    assert!(
+        !forbidden.is_empty(),
+        "no forbidden library symbols loaded — \
+         `lib/*/loft.toml::[native.functions]` should contain at least \
+         the crypto + web entries from phases 1a / 1b.  \
+         If the libraries' manifests changed, re-populate them."
+    );
+
+    let mut violations: Vec<String> = Vec::new();
+    for path in &files {
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let rel = path
+            .strip_prefix(&root)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| path.display().to_string());
+        // Walk by line so we can skip `//`-comment occurrences (a
+        // valid description of the drain location can mention the
+        // symbol name — see the trailing comment in `src/native.rs`'s
+        // NATIVE_TABLE).  Only CODE occurrences are violations.
+        let lines: Vec<&str> = content.lines().collect();
+        let gated = wasm32_cfg_gated_lines(&lines);
+        for (line_idx, line) in lines.iter().enumerate() {
+            // Strip after `//`.  Doesn't handle `/* ... */` block
+            // comments correctly, but those aren't used in this
+            // codebase for symbol-name references.
+            let code_part = line.split_once("//").map_or(*line, |(c, _)| c);
+            // Phase 1b (@PLAN12, 2026-05-24): skip lines living inside
+            // a `#[cfg(...wasm32...)]` gated block.  Those library
+            // `n_*` references stay in the compiler crate because WASM
+            // has no dlopen and must register symbols statically; the
+            // regular native path uses the cdylib in `lib/<X>/native/`.
+            if gated[line_idx] {
+                continue;
+            }
+            for (sym, owner) in &forbidden {
+                for (idx, _) in code_part.match_indices(sym.as_str()) {
+                    let prev_ok = idx == 0
+                        || !code_part.as_bytes()[idx - 1].is_ascii_alphanumeric()
+                            && code_part.as_bytes()[idx - 1] != b'_';
+                    let end = idx + sym.len();
+                    let next_ok = end >= code_part.len()
+                        || (!code_part.as_bytes()[end].is_ascii_alphanumeric()
+                            && code_part.as_bytes()[end] != b'_');
+                    if !prev_ok || !next_ok {
+                        continue;
+                    }
+                    violations.push(format!(
+                        "{rel}:{}: `{sym}` (belongs in {owner})",
+                        line_idx + 1
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "\n@PLAN12 extraction-hygiene gate failed — \
+         library `n_*` symbol(s) found in the compiler crate (src/):\n  {}\n\n\
+         These symbols belong in their library's `native/src/lib.rs` (cdylib).  \
+         If you intend to add a NEW library symbol, put it in the library's \
+         native crate and declare it in `lib/<X>/loft.toml::[native.functions]` \
+         (phase 2 source of truth).  If a symbol is genuinely stdlib (every \
+         loft program needs it), do NOT add it to `[native.functions]` — \
+         stdlib stays in the compiler crate by design.  See the \
+         stdlib-vs-library table in `doc/claude/lib_plans/\
+         12-library-extraction/README.md`.\n",
+        violations.join("\n  ")
+    );
+}
+
+#[test]
+fn forbidden_library_deps_absent_from_main_cargo() {
+    let root = workspace_root();
+    let cargo = fs::read_to_string(root.join("Cargo.toml")).expect("read Cargo.toml");
+    // Match a top-level dep line like `png = "0.17"` or `png = {..}` —
+    // anchored at start-of-line so feature-gated lines `dep:png` are
+    // ignored (the `[features]` section is its own thing).
+    let mut violations: Vec<String> = Vec::new();
+    for dep in FORBIDDEN_MAIN_CRATE_DEPS {
+        let needle_eq = format!("\n{dep} ");
+        let needle_eq2 = format!("\n{dep}=");
+        if cargo.contains(&needle_eq) || cargo.contains(&needle_eq2) {
+            violations.push((*dep).to_string());
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "@PLAN12 extraction-hygiene gate failed — main `Cargo.toml` lists \
+         library-only dependencies that should live in `lib/<X>/native/Cargo.toml`: {:?}",
+        violations
+    );
+}
+
+/// Phase 2 audit: assert the manifest-driven path actually loads the
+/// known-drained symbols.  Catches regressions where a `loft.toml` is
+/// accidentally emptied or the `[native.functions]` section header is
+/// renamed/typo'd (the symbol-absent test would silently pass with an
+/// empty forbidden list — `forbidden_library_symbols_absent_from_src`'s
+/// assert above guards against the latter shape; this test gives a
+/// per-symbol audit trail).
+#[test]
+fn manifest_native_functions_cover_drained_libraries() {
+    let forbidden = forbidden_library_symbols();
+    // Phase 1a: crypto.  6 symbols.
+    let crypto_expected: &[&str] = &[
+        "n_sha256",
+        "n_hmac_sha256",
+        "n_hmac_sha256_raw",
+        "n_base64_encode",
+        "n_base64_decode",
+        "n_base64url_encode",
+    ];
+    for sym in crypto_expected {
+        assert!(
+            forbidden.iter().any(|(s, _)| s == sym),
+            "@PLAN12 phase 3.5 — crypto symbol `{sym}` missing from \
+             forbidden list.  After Phase 3.5 dry-run, crypto was \
+             extracted to `../loft-crypto/`; symbols are pinned via \
+             `FORBIDDEN_LIBRARY_SYMBOLS_MANUAL` in this file.  Restore \
+             the entry there."
+        );
+    }
+    // Phase 1b: web.  19 symbols.
+    let web_expected: &[&str] = &[
+        "n_http_do",
+        "n_http_body",
+        "n_ws_connect",
+        "n_ws_client_send",
+        "n_ws_client_send_binary",
+        "n_ws_client_recv",
+        "n_ws_client_message",
+        "n_ws_client_opcode",
+        "n_ws_client_close",
+        "n_sleep_ms",
+        "n_pack_reset",
+        "n_pack_u8",
+        "n_pack_u16_le",
+        "n_pack_u32_le",
+        "n_pack_take",
+        "n_byte_at",
+        "n_ws_group_clear",
+        "n_ws_group_add",
+        "n_ws_group_poll",
+    ];
+    for sym in web_expected {
+        assert!(
+            forbidden.iter().any(|(s, _)| s == sym),
+            "@PLAN12 phase 2 — web symbol `{sym}` missing from forbidden \
+             list.  `lib/web/loft.toml::[native.functions]` should \
+             declare it.  Restore the manifest entry."
+        );
+    }
+}

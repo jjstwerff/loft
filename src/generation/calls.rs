@@ -142,12 +142,50 @@ impl Output<'_> {
                     // `Str`-returning call expression with no deref,
                     // tripping rustc E0308 ("expected `&str`, found `Str`").
                     let v_unspanned = v.unspan();
+                    // @P299 — a text-returning fn-ref call (`CallRef`) lowers to
+                    // a `match` block whose arms yield owned `String` (the
+                    // candidate results are unified via `.to_string()`).  A
+                    // callee param of `&str` needs the same `&*` deref as a
+                    // direct text-returning `Call`.  Without this, a text
+                    // closure called through a struct field DIRECTLY as an
+                    // argument (`print(g.fmt(7))`) trips rustc E0308
+                    // (`expected &str, found String`) — binding the result to a
+                    // local first sidesteps it, which is why it surfaced late.
+                    // The CallRef is usually wrapped in a work-buffer `Block`
+                    // (P227's `cref_work_buf` materialisation), so walk Block
+                    // tails to find the text-returning fn-ref call.
+                    let arg_is_text_callref = {
+                        let mut probe = v_unspanned;
+                        loop {
+                            match probe {
+                                Value::CallRef(vr, _) => {
+                                    break matches!(
+                                        self.data.def(self.def_nr).variables.tp(*vr),
+                                        Type::Function(_, ret, _) if matches!(**ret, Type::Text(_))
+                                    );
+                                }
+                                Value::Block(b) => match b.operators.last() {
+                                    Some(op) => probe = op.unspan(),
+                                    None => break false,
+                                },
+                                _ => break false,
+                            }
+                        }
+                    };
+                    // @P304 — fire for ANY non-`Op` text-returning call, USER
+                    // or NATIVE.  A native (`#rust`) text fn returns owned
+                    // `String` (e.g. `store_memory()` → `stores.memory_report()`),
+                    // so it needs the `&*` deref into `&str` just like a user
+                    // fn's `Str` return — the old `rust.is_empty()` clause wrongly
+                    // excluded native fns (E0308 `expected &str, found String`).
+                    // `&*` is safe for all text shapes (`String`/`Str`/`&str` are
+                    // `Deref<Target=str>`).  `Op*` runtime helpers stay excluded.
                     let needs_deref = idx < def_fn.attributes.len()
                         && matches!(def_fn.attributes[idx].typedef, Type::Text(_))
-                        && matches!(v_unspanned, Value::Call(d, _) if
-                            matches!(self.data.def(*d).returned, Type::Text(_))
-                            && self.data.def(*d).rust.is_empty()
-                            && !self.data.def(*d).name.starts_with("Op"));
+                        && (arg_is_text_callref
+                            || matches!(v_unspanned, Value::Call(d, _) if
+                                matches!(self.data.def(*d).returned, Type::Text(_))
+                                && !self.data.def(*d).name.starts_with("Op")));
                     // Post-2c: Op* runtime helpers (defined in
                     // `src/codegen_runtime.rs`) keep hand-written i32 params
                     // for tp-numbers / field offsets / flag enums.  When the
@@ -232,6 +270,18 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         let mut res = def_fn.rust.clone();
+        // @P321b — `OpSetText` with a NULL value must store the null pointer
+        // (offset 0), matching the interpreter (which reads it back as null).
+        // The generic template does `@val.to_string()` + `set_str`, which
+        // renders `null` as `(()).to_string()` (E0599: `()` is not `Display`)
+        // and would store a real string regardless.  Triggered by e.g.
+        // `vec_of_text += null` (lib/arguments `flag()`: `self.results += null`).
+        if def_fn.name == "OpSetText"
+            && let Some(vi) = def_fn.attributes.iter().position(|a| a.name == "val")
+            && matches!(vals.get(vi), Some(Value::Null))
+        {
+            res = "{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), 0u32);}}".to_string();
+        }
         // Bytecode templates wrap text values in Str::new(...) for put_stack compatibility.
         // Native code uses &str directly — strip the wrapper by extracting its argument.
         // Must be done before @param substitution so argument expressions are not affected.

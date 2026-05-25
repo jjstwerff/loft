@@ -45,6 +45,51 @@ const FL_RIGHT: u32 = 8;
 /// Byte offset of LLRB color flag within a free block (1 = red, 0 = black).
 const FL_COLOR: u32 = 12;
 
+/// Internal space-utilisation snapshot of a single store — actual
+/// claimed data vs free space, and how fragmented the free space is.
+/// Produced by [`Store::usage`] by walking the block chain.
+#[derive(Default, Clone, Copy)]
+pub struct StoreUsage {
+    /// Total store size in 8-byte words (the allocated buffer).
+    pub capacity_words: u32,
+    /// Sum of CLAIMED record sizes (the actual live data).
+    pub claimed_words: u32,
+    /// Number of claimed records.
+    pub claimed_count: u32,
+    /// Sum of FREE block sizes (reclaimable / fragmentation).
+    pub free_words: u32,
+    /// Number of distinct free blocks (the "free structure" elements).
+    pub free_count: u32,
+    /// Largest single free block (words) — a low value with high
+    /// `free_words` means the free space is fragmented.
+    pub largest_free_words: u32,
+    /// Number of ADJACENT free-block pairs found during the walk — two
+    /// consecutive free blocks that are physical neighbours and could be
+    /// coalesced into one bigger gap.  `delete` is supposed to merge
+    /// adjacent free blocks, so a non-zero count flags a missed merge
+    /// (coalescing gap / fragmentation that better detection could
+    /// reclaim).
+    ///
+    /// NOTE: this is a FIRST-CUT detector — it only catches free blocks
+    /// that are immediately consecutive in the linear block walk.  Finer
+    /// coalescing analysis (merge opportunities the LLRB free tree could
+    /// realise, near-but-not-adjacent gaps, etc.) is expected to develop
+    /// here; the metric and its plumbing are deliberately kept simple so
+    /// they can be extended.
+    pub mergeable_free_pairs: u32,
+}
+
+impl StoreUsage {
+    /// Fraction of capacity holding live data, 0..100.
+    #[must_use]
+    pub fn used_pct(&self) -> f64 {
+        if self.capacity_words == 0 {
+            return 0.0;
+        }
+        100.0 * f64::from(self.claimed_words) / f64::from(self.capacity_words)
+    }
+}
+
 // A low-level heap store: the several flags (free / read_only /
 // free_protected / borrowed) are independent state bits on the same
 // allocation, not a bundle that should become an enum.
@@ -80,6 +125,12 @@ pub struct Store {
     /// Populated lazily: `open()` calls `fl_rebuild()`; `new()` starts empty
     /// and the tree fills as blocks are freed.
     free_root: u32,
+    /// P6: set by `delete` whenever a free block is produced; cleared by
+    /// `coalesce_free`.  `claim` runs the lazy coalescing sweep only when
+    /// this is set (something was freed since the last sweep), so an
+    /// alloc-only workload never pays for a fruitless O(n) pass.  A single
+    /// flag — NOT an index; it does not grow with the free-block count.
+    needs_coalesce: bool,
     /// CO1.9/S28: monotonic counter incremented on every `claim`, `resize`, and `delete`.
     /// Saved into `CoroutineFrame` at yield; compared at resume to detect store mutations
     /// that may have invalidated `DbRef` locals held by the generator.  Always compiled in
@@ -194,6 +245,7 @@ impl Store {
             created_at: 0,
             last_op_at: 0,
             free_root: 0,
+            needs_coalesce: false,
             generation: 0,
             ref_count: 0,
             lock_origin: String::new(),
@@ -230,6 +282,7 @@ impl Store {
             read_only: false,
             free_protected: false,
             free_root: 0,
+            needs_coalesce: false,
             generation: 0,
             borrowed: false,
             created_at: 0,
@@ -271,6 +324,34 @@ impl Store {
         self.claims.insert(PRIMARY);
     }
 
+    /// @P317 debug — `LOFT_LOG=zero_claim` (or `LOFT_ZERO_CLAIM=1`) zeroes
+    /// every freshly-claimed record's payload, so a read-before-write or a
+    /// stale-`DbRef` read picks up a deterministic `0` instead of arena slack
+    /// (old record data, or the freed block's LLRB free-list pointers, which
+    /// live at offset 4 — exactly where a vector's length word sits).  This
+    /// turns NON-deterministic uninitialised-arena bugs — which valgrind
+    /// cannot see, because the arena buffer is itself validly allocated — into
+    /// deterministic, reproducible failures.  Read once (cached); zero cost
+    /// when off.  See `doc/claude/DEBUG.md` § store-ownership debugging.
+    fn zero_claim_enabled() -> bool {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| {
+            std::env::var("LOFT_ZERO_CLAIM").is_ok()
+                || std::env::var("LOFT_LOG")
+                    .is_ok_and(|v| v.split([',', ':', ' ']).any(|p| p.trim() == "zero_claim"))
+        })
+    }
+
+    /// Common tail of every `claim` path: zero the claimed payload when
+    /// `zero_claim` is enabled (@P317 debugging lever).  No-op otherwise.
+    #[inline]
+    fn finish_claim(&mut self, pos: u32) -> u32 {
+        if Self::zero_claim_enabled() {
+            self.zero_fill(pos);
+        }
+        pos
+    }
+
     /// Claim the space of a record
     /// # Arguments
     /// * `size` - The requested record size in 8 byte words
@@ -296,13 +377,28 @@ impl Store {
             let result = self.claim_block(pos, size);
             #[cfg(debug_assertions)]
             self.fl_validate();
-            return result;
+            return self.finish_claim(result);
+        }
+        // P6: a fast-path miss means no single tracked free block fits.
+        // `delete` only merges forward, so adjacent frees that each don't
+        // fit (but together would) are left uncoalesced and `claim_scan`
+        // below would grow the store.  Coalesce the chain (reusing the one
+        // free tree — no new index) and retry once before growing.  Guarded
+        // by `needs_coalesce` so an alloc-only workload never sweeps.
+        if self.needs_coalesce {
+            self.coalesce_free();
+            if let Some(pos) = self.fl_take_ge(size as i32) {
+                let result = self.claim_block(pos, size);
+                #[cfg(debug_assertions)]
+                self.fl_validate();
+                return result;
+            }
         }
         // Slow path: linear scan (handles size-1 blocks and first-time allocation).
         let result = self.claim_scan(size);
         #[cfg(debug_assertions)]
         self.fl_validate();
-        result
+        self.finish_claim(result)
     }
 
     /// Mark `pos` as claimed (splitting if the block is much larger than `size`).
@@ -450,6 +546,11 @@ impl Store {
         self.claims.remove(&rec);
         // Register the (possibly coalesced) free block in the tree.
         self.fl_insert(rec);
+        // P6: a free block now exists.  `delete` only merged FORWARD, so an
+        // adjacent free PREDECESSOR (if any) is left uncoalesced; flag it so
+        // the next allocation that would otherwise grow the store runs the
+        // lazy coalescing sweep first.
+        self.needs_coalesce = true;
         #[cfg(debug_assertions)]
         self.fl_validate();
     }
@@ -487,6 +588,51 @@ impl Store {
 
     pub fn len(&self) -> u32 {
         self.size
+    }
+
+    /// Walk the block chain and report internal space utilisation.
+    /// Same traversal as [`Self::validate`]: a negative size header
+    /// (`addr::<i32>(pos, 0)`) is a free block of `-size` words, a
+    /// positive header is a claimed record of `size` words.  Word 0 is
+    /// the store header and is excluded.  A freed store reports only its
+    /// capacity.
+    #[must_use]
+    pub fn usage(&self) -> StoreUsage {
+        let mut u = StoreUsage {
+            capacity_words: self.size,
+            ..StoreUsage::default()
+        };
+        if self.free || self.size <= PRIMARY {
+            return u;
+        }
+        let mut pos = PRIMARY;
+        let mut prev_was_free = false;
+        while pos < self.size {
+            let claim = *self.addr::<i32>(pos, 0);
+            if claim == 0 {
+                break; // malformed / uninitialised tail — stop rather than spin
+            }
+            let sz = claim.unsigned_abs();
+            if claim < 0 {
+                u.free_words += sz;
+                u.free_count += 1;
+                if sz > u.largest_free_words {
+                    u.largest_free_words = sz;
+                }
+                // Two consecutive free blocks are physical neighbours that
+                // `delete` should have coalesced — flag the missed merge.
+                if prev_was_free {
+                    u.mergeable_free_pairs += 1;
+                }
+                prev_was_free = true;
+            } else {
+                u.claimed_words += sz;
+                u.claimed_count += 1;
+                prev_was_free = false;
+            }
+            pos += sz;
+        }
+        u
     }
 
     /// Change the store size, do not mutate content
@@ -625,6 +771,7 @@ impl Store {
             read_only: true,
             free_protected: false,
             free_root: 0, // workers never claim/delete; no free tree needed
+            needs_coalesce: false,
             generation: self.generation,
             borrowed: false,
             created_at: 0,
@@ -652,6 +799,7 @@ impl Store {
             read_only: true,
             free_protected: false,
             free_root: 0,
+            needs_coalesce: false,
             generation: self.generation,
             borrowed: false,
             created_at: 0,
@@ -680,6 +828,7 @@ impl Store {
             read_only: true,
             free_protected: false,
             free_root: self.free_root,
+            needs_coalesce: false,
             generation: self.generation,
             borrowed: true,
             created_at: 0,
@@ -1004,6 +1153,40 @@ impl Store {
             }
             pos += block_size as u32;
         }
+    }
+
+    /// P6: merge every run of adjacent free blocks in place, then rebuild
+    /// the free tree from the coalesced chain.  `delete` only coalesces
+    /// FORWARD (it cannot find a freed block's predecessor in the
+    /// header-only layout), so adjacent frees accumulate; this single
+    /// O(n) pass over the contiguous block chain (the same walk
+    /// `claim_scan` / `usage` / `fl_rebuild` already do) catches them all,
+    /// reusing the one existing free tree — no extra index, no footer.
+    /// Called lazily by `claim` only when an allocation would otherwise
+    /// grow the store, so freed space is reused instead.
+    fn coalesce_free(&mut self) {
+        let mut pos = PRIMARY;
+        while pos < self.size {
+            let header = *self.addr::<i32>(pos, 0);
+            let mut block_size = i32::abs(header);
+            debug_assert!(block_size > 0, "zero-size block at {pos}");
+            if header < 0 {
+                // Absorb following adjacent free blocks into this one.
+                let mut next = pos + block_size as u32;
+                while next < self.size {
+                    let nh = *self.addr::<i32>(next, 0);
+                    if nh >= 0 {
+                        break;
+                    }
+                    block_size += i32::abs(nh);
+                    next = pos + block_size as u32;
+                }
+                *self.addr_mut(pos, 0) = -block_size;
+            }
+            pos += block_size as u32;
+        }
+        self.fl_rebuild();
+        self.needs_coalesce = false;
     }
 
     /// Debug-only: walk the LLRB tree and verify its invariants.
@@ -1600,6 +1783,51 @@ mod tests {
         }
         // Store must have grown to hold 200 single-word claims (≥200 * 8 bytes).
         assert!(store.byte_capacity() >= 200 * 8);
+    }
+
+    /// P6: `delete` only coalesces forward, so freeing two blocks in
+    /// FORWARD order leaves them as an uncoalesced adjacent pair.  The lazy
+    /// `coalesce_free` sweep must merge them (mergeable-pairs → 0) and the
+    /// merged block must be reused by the next allocation instead of
+    /// growing the store.
+    #[test]
+    fn coalesce_free_merges_adjacent_and_reuses_space() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let _a = store.claim(5);
+        let b = store.claim(5);
+        let c = store.claim(5);
+        let d = store.claim(5);
+        assert!(b < c && c < d, "A,B,C,D are contiguous and ascending");
+        // Free B then C (forward order): delete only merges with the NEXT
+        // block, so freeing B (C still claimed) then C (D claimed) leaves
+        // B|C adjacent-but-unmerged.
+        store.delete(b);
+        store.delete(c);
+        assert!(
+            store.usage().mergeable_free_pairs >= 1,
+            "forward-order frees leave an uncoalesced adjacent pair"
+        );
+        // The lazy sweep merges them.
+        store.coalesce_free();
+        assert_eq!(
+            store.usage().mergeable_free_pairs,
+            0,
+            "coalesce_free merges every adjacent free pair"
+        );
+        // The merged B+C block (10 words) is reused for a request that
+        // neither B(5) nor C(5) could satisfy alone — no store growth.
+        let cap_before = store.byte_capacity();
+        let reclaimed = store.claim(9);
+        assert_eq!(
+            store.byte_capacity(),
+            cap_before,
+            "reused the merged free block instead of growing the store"
+        );
+        assert!(
+            reclaimed >= b && reclaimed < d,
+            "reclaimed from the old B/C region (got {reclaimed}, B={b}, D={d})"
+        );
     }
 
     /// `resize_store` must panic when the requested size exceeds `MAX_STORE_WORDS`.

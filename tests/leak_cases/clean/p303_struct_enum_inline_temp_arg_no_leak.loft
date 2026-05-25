@@ -1,0 +1,11 @@
+// @P303 — an inline-constructed struct-enum returned by a user fn and
+// passed directly as a call argument used to leak the temp store on the
+// interpreter (and silently on native).  The `clean/` harness asserts
+// no store leaks on either backend.
+enum Pick { A { v: integer }, B { w: integer } }
+fn mk() -> Pick { A { v: 21 } }
+fn use_pick(e: Pick) -> integer { match e { A { v } => v, B { w } => w } }
+fn test() {
+  r = use_pick(mk());
+  assert(r == 21, "struct-enum arg temp consumed");
+}

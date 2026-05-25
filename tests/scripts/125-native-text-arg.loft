@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @P304 — a NATIVE fn (code==Null, `#rust` body — e.g. store_memory())
+// returning `text` passed DIRECTLY as a `text` argument used to fail
+// native compilation (`E0308: expected &str, found String`): the native
+// `#rust` body returns owned `String`, but the `needs_deref` arg-wrap in
+// `src/generation/calls.rs` only fired for USER fns (it required
+// `rust.is_empty()`).  Fixed by dropping that clause so the `&*` deref
+// fires for any non-`Op` text-returning call.  Same family as @P262/@P265.
+
+fn count_chars(s: text) -> integer { len(s) }
+fn is_report(s: text) -> boolean { s.starts_with("stores:") }
+
+fn main() {
+  // store_memory() (native, returns text) passed DIRECTLY as a text arg
+  n = count_chars(store_memory());
+  assert(n > 0, "store_memory() report is non-empty: {n}");
+  assert(is_report(store_memory()), "report starts with 'stores:'");
+  println("125-native-text-arg ok");
+}

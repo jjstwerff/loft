@@ -458,7 +458,30 @@ impl Scopes {
             Value::Yield(inner) => Value::Yield(Box::new(self.scan(inner, function, data))),
             Value::Span(b) => {
                 let scanned = self.scan(&b.1, function, data);
-                Value::with_span(b.0.clone(), scanned)
+                // When scanning lifted an inline struct-returning-call argument
+                // (@P297), the result is `Insert([Set(__lift_N, …), final])` — a
+                // statement sequence, not a positioned expression.  Re-wrapping
+                // it in a Span hides the lift preamble from the consumers that
+                // hoist it to statement level (`scan_set`'s flatten and
+                // `scan_args`'s `is_p135_hoisted` bubbling, both `if let
+                // Value::Insert`).  The interpreter tolerates the hidden Insert;
+                // the native backend would emit `Set(__lift_N, …)` inside an
+                // enclosing expression and fail to compile.  Inner ops keep
+                // their own positions, so dropping the outer span is safe.
+                //
+                // SURGICAL: only unwrap when the Insert's leading op is a lift
+                // `Set(__lift_N, …)`.  Other span-wrapped Inserts (closure-record
+                // construction, etc.) MUST keep their span — unwrapping them
+                // broadly regressed the closure-in-struct-field cases (`invalid
+                // fn-ref` in native codegen, @P258/@P259 territory).
+                let is_lift_preamble = matches!(&scanned, Value::Insert(ops)
+                    if ops.first().is_some_and(|op| matches!(op,
+                        Value::Set(v, _) if function.name(*v).starts_with("__lift_"))));
+                if is_lift_preamble {
+                    scanned
+                } else {
+                    Value::with_span(b.0.clone(), scanned)
+                }
             }
             Value::ParFor(b) => {
                 // Plan-06 spine step 3 — recurse into each child Value.
@@ -513,7 +536,23 @@ impl Scopes {
             }
         }
         let v = *self.var_mapping.get(&ov).unwrap_or(&ov);
-        if self.var_scope.contains_key(&v) && *value == Value::Null {
+        // A redundant re-init `Set(v, Null)` for an already-in-scope var is
+        // elided (Reference/Vector/Enum/Text locals don't need re-null-ing).
+        // EXCEPTION (@P302): keyed collections — `s = []` lowers to
+        // `Set(s, Null)`, which on a reassignment is a genuine CLEAR (codegen
+        // emits an in-place `OpDatabase`).  Eliding it left the old contents
+        // intact (silent no-op) and leaked `s`'s store.  Let keyed Set-Null
+        // through so codegen's keyed reassign arm clears in place.
+        if self.var_scope.contains_key(&v)
+            && *value == Value::Null
+            && !matches!(
+                function.tp(v),
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+        {
             return Value::Insert(Vec::new());
         }
         // remember the scope of the variable
@@ -947,6 +986,56 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
+        } else if is_return
+            && let Type::Tuple(elems) = tp
+            && elems.iter().any(|e| matches!(e, Type::Text(_)))
+            && !expr_is_terminal
+            && let Value::Tuple(orig_elems) = expr.unspan()
+            && orig_elems.len() == elems.len()
+        {
+            // @P329: tuple-of-text return — when an element is a non-literal
+            // expression (typically a Call returning text that borrows from
+            // a local), hoist it to a `__ret_text_N` temp before running
+            // scope frees.  `Set(__ret_text_N, elem)` lowers to OpAppendText
+            // (line 526 / src/state/codegen.rs), which deep-copies bytes
+            // into the temp's owned String.  The frees then run safely; the
+            // returned tuple's text elements point to temp Strings that
+            // outlive the function's scope (skip_free marks them so the
+            // function epilogue leaves the allocation for the caller's
+            // AppendText to consume on return — same pattern as the
+            // single-text B5-L3 branch above, generalised across tuple
+            // elements).
+            //
+            // Without this, a function shape like
+            //   fn f<T: Printable>(x: T) -> (text, text) { (x.to_text(), "x") }
+            // returns a tuple whose element 0 Str points into the caller's
+            // (function-local) __work_1 buffer; the scope's OpFreeText runs
+            // BEFORE the Return, invalidating the Str — the caller reads
+            // empty / garbage bytes.  See PROBLEMS.md @P329.
+            let mut new_elems = Vec::with_capacity(orig_elems.len());
+            let mut pre_ops = Vec::new();
+            for (elem_expr, elem_type) in orig_elems.iter().zip(elems.iter()) {
+                let unspanned = elem_expr.unspan();
+                if matches!(elem_type, Type::Text(_))
+                    && !matches!(unspanned, Value::Text(_) | Value::Var(_) | Value::Null)
+                {
+                    self.ret_temp_counter += 1;
+                    let name = format!("__ret_text_{}", self.ret_temp_counter);
+                    let tmp = function.add_temp_var(&name, &Type::Text(vec![]));
+                    function.set_skip_free(tmp);
+                    self.var_scope.insert(tmp, self.scope);
+                    self.var_order.push(tmp);
+                    pre_ops.push(v_set(tmp, elem_expr.clone()));
+                    new_elems.push(Value::Var(tmp));
+                } else {
+                    new_elems.push(elem_expr.clone());
+                }
+            }
+            let mut result = Vec::with_capacity(pre_ops.len() + ls.len() + 1);
+            result.extend(pre_ops);
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Tuple(new_elems))));
+            return result;
         } else {
             ls.insert(0, expr.clone());
             if is_return {
@@ -1068,7 +1157,24 @@ impl Scopes {
                     let n = function.name(v);
                     n.starts_with("__ref_") || n.starts_with("__rref_")
                 };
-                let emit = (dep.is_empty() || is_work_ref) && !in_ret && !function.is_skip_free(v);
+                // @P302 — a keyed-collection local backed by its OWN store
+                // carries a self-dep `[v]` (added by the `s = []` clear path
+                // so a later `s += …` re-inits in place).  That self-dep is an
+                // ownership marker, not a borrow — treat it like `dep.is_empty()`
+                // so the store is freed at scope exit.  Mirrors the fn-ref
+                // ownership rule below.  Keyed-only + exact self-dep; `in_ret`
+                // still suppresses returned keyed locals.
+                let owns = dep.is_empty()
+                    || (dep.len() == 1
+                        && dep[0] == v
+                        && matches!(
+                            function.tp(v),
+                            Type::Sorted(_, _, _)
+                                | Type::Hash(_, _, _)
+                                | Type::Index(_, _, _)
+                                | Type::Spacial(_, _, _)
+                        ));
+                let emit = (owns || is_work_ref) && !in_ret && !function.is_skip_free(v);
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \
@@ -1359,14 +1465,42 @@ impl Scopes {
     /// (i.e. the result borrows from the argument's store).  Freeing the lifted
     /// temp at scope exit would be use-after-free in that case.
     fn inline_struct_return(val: &Value, data: &Data, _outer_call: u32) -> Option<Type> {
+        // @P297 — a USER struct-returning call (`n_*` with a body) passed
+        // directly as a call argument is wrapped in `Value::Span` by
+        // `parse_call` (and re-wrapped by `scan`), so the argument reaching
+        // here is `Span(Call(...))`.  Unspan before matching this branch or the
+        // lift never fires and the call-result temporary leaks — the same
+        // pitfall `scan_set` was patched for under @P198 (`value.unspan()`).
+        if let Value::Call(fn_nr, _) = val.unspan() {
+            let def = data.def(*fn_nr);
+            if def.name.starts_with("n_") && def.code != Value::Null {
+                if let Type::Reference(d_nr, _) = &def.returned {
+                    return Some(Type::Reference(*d_nr, Vec::new()));
+                }
+                // @P303 — a user fn returning a struct-enum by FRESH owned
+                // store (empty dep) leaks its result temp when used directly
+                // as a call argument; lift it like the Reference case above so
+                // `get_free_vars` emits its `OpFreeRef`.  A NON-empty dep means
+                // a hidden-param return (@P301 via-local: ownership handled by
+                // `add_defaults`'s `__ref_N` work-ref) or a borrowed view — must
+                // NOT be lifted here.  Matches the native-constructor Enum
+                // branch's `dep.is_empty()` guard below.
+                if let Type::Enum(d_nr, true, dep) = &def.returned
+                    && dep.is_empty()
+                {
+                    return Some(Type::Enum(*d_nr, true, Vec::new()));
+                }
+            }
+        }
+        // The native-constructor branches below are intentionally matched on the
+        // BARE call only (no unspan).  Broadening them to span-wrapped calls
+        // lifts a native constructor used as a method receiver (e.g.
+        // `file(...).sync()`), which exposes native-codegen gaps for the lifted
+        // method-receiver shape (wrong ABI arg / type mismatch).  They keep
+        // their original reach: the chained-builtin case (`v.keys().len()`)
+        // where the receiver is already a bare `Value::Call`.
         if let Value::Call(fn_nr, _) = val {
             let def = data.def(*fn_nr);
-            if def.name.starts_with("n_")
-                && def.code != Value::Null
-                && let Type::Reference(d_nr, _) = &def.returned
-            {
-                return Some(Type::Reference(*d_nr, Vec::new()));
-            }
             // Native struct-enum constructors: no body (code == Null), return type
             // is a struct-enum with empty dep (allocates a new store, doesn't borrow).
             // Accessors carry dep=[0] after parser dep-inference and are skipped here.
@@ -1412,8 +1546,29 @@ fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {
                     ls.push(v);
                 }
             } else if block.result == Type::Void {
-                ls.push(o.clone());
-                ls.push(Value::Return(Box::new(Value::Null)));
+                // @P322 — when the function body ends with a nested
+                // Void-result block whose last op is `Return(...)` (the
+                // iterator-generator shape: `for n in […] { yield n; }
+                // return null;`), the OUTER-scope frees passed in via
+                // `free` must run BEFORE the return so function-scope
+                // owned locals (`__vdb_*` vector backings, etc.) get
+                // cleaned up.  Prior to this fix the void branch
+                // dropped `free` entirely and only emitted the inner
+                // `Return` + a redundant trailing `Return(Null)`, so
+                // function-scope vectors leaked at program exit.
+                let o_is_terminal = expr_ends_in_return(o);
+                if o_is_terminal {
+                    for v in free {
+                        ls.push(v.clone());
+                    }
+                    ls.push(o.clone());
+                } else {
+                    ls.push(o.clone());
+                    for v in free {
+                        ls.push(v.clone());
+                    }
+                    ls.push(Value::Return(Box::new(Value::Null)));
+                }
             } else {
                 for v in free {
                     ls.push(v.clone());

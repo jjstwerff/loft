@@ -9,6 +9,80 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Native codegen — eliminated the `output_call_inner` match (2026-05-22)
+
+`src/generation/dispatch.rs::output_call_inner` no longer contains a monolithic
+`match` of per-Op emission arms — it is now just a registry-first guard
+(`emit_op`) plus the template/user-fn fallback.  The 14 remaining arms were
+relocated VERBATIM into `OpEmitter`s: the text/format/buffer family into one
+`ops::text_ops::TextDispatchEmitter` (reproducing the @P283 refvar→`Stack`
+rewrite internally), and the pass-throughs (`OpConvRefFromNull` / `OpGetTextSub`
+/ `OpDatabase` / `OpStep` / `OpRemove`) into `ops::misc_ops`.  No `#rust`
+template changed, so `src/fill.rs` (the interpreter) is byte-identical and
+native emission matches the deleted arms byte-for-byte.  The
+`dispatch_op_arm_budget` test is repurposed as a 0-ratchet that fails if a
+`"Op…" =>` match arm is ever re-introduced.
+
+### @P321 native library gate — 16/17 packages green (2026-05-23)
+
+Seven native-codegen root causes (@P321a–g) that blocked `tests/native.rs::native_library_suite` from reaching
+full green.  Splits were fixed and un-skipped independently; the gate now covers 16/17 packages.  Only `imaging`
+remains skipped (`LIB_PKGS_NATIVE_SKIP`) pending @P321c (design-level, M+).
+
+**@P321d `moros_map/serial` — FIXED 2026-05-23, commit `93a43051`**
+
+`default/01_code.loft` / `src/fill.rs`.
+Nested vector index `m.a[0].b[2]` emitted two live `&mut stores` borrows (E0499).
+`vec_get_or_raise_runtime` is `&mut self` (may call `raise_runtime` on OOB); the outer
+`stores.vec_get_or_raise_runtime(&<inner>, …)` held its receiver borrow across argument
+evaluation while `<inner>` expanded to a second such call — Rust E0499.
+Fix: the `OpGetVector` / `OpVectorRef` `#rust` templates in `default/01_code.loft` bind
+`@r` to a local first (`{{let __vr = @r; s.vec_get_or_raise(&__vr, …)}}`), so the inner
+borrow is fully evaluated (owned `DbRef`) before the outer call starts.  `src/fill.rs`
+regenerated via `make fill`; the interpreter gets the same harmless local binding — single
+source of truth for both backends.
+Regression: `tests/scripts/repro_p321d.loft` (both backends).
+
+**@P321e `moros_editor` — FIXED 2026-05-23, commit `da75dc67`**
+
+`src/generation/emit.rs`.
+A text-returning fn whose body is a `match` of format strings `.to_string()`'d the match
+result into a `__ret_N` LOCAL `String`, then returned `Str::new(&local)` — a borrow of a
+fn-local that drops at return → runtime `ptr::copy` panic in the caller's `.to_string()`.
+A `RefVar<Text>` work-buffer arg existed but `output_set`'s P205 scratch guard fires only
+when the returned value is a `RefVar` — the fn was returning a DIFFERENT local.
+Fix: the text-`Return` path in `output_block` also routes through `stores.scratch` when the
+returned value is a text LOCAL var (not already a `RefVar<Text>` work buffer).  moros_editor
+5/5 files native + interp.
+
+**@P321g `moros_ui` — FIXED 2026-05-23, commit `69f4ec3b`**
+
+`src/generation/dispatch.rs`.
+A `&`-ref-param call on an assignment RHS (`ec_hit = route_click(p, st.es_tools, …)`)
+emitted `let` in expression position — `error: expected expression, found 'let' statement`.
+The `&`-ref arg `st.es_tools` (an addressable field) materialises a
+`Set(__ref_N, OpGetField…)` statement ahead of the call, so the RHS is
+`Insert([Set(__ref_N, …), Call])` wrapped in `Value::Span` for source-position tracking.
+`output_set`'s S35 hoist — which lifts all-but-last Insert ops to statements — matched only
+a *bare* `Insert`, so `Span(Insert)` fell through to the brace-less `Insert` arm of
+`output_code_inner`, producing `let x = let __ref_N = …; call()`.
+Fix: S35 unspans `to` before the Insert check.  moros_ui 4/4 files native + interp.
+Regression: `tests/scripts/repro_p321g.loft`.
+
+**@P321c `imaging` — DIAGNOSED, needs design, NOT fixed**
+
+`output_native_direct_call` (`src/generation/mod.rs:2181`) cannot express a
+store-MUTATING `#native` fn: `load_png` decodes a PNG, allocates the pixel vector, and
+writes `name`/`width`/`height`/`data` into the `Image` struct.  The ABI only marshals
+text → `(ptr,len)`, vector → `(*const ELEM, count)`, and scalars; no `LoftStore` path
+and no struct-ref marshalling → emits a 3-arg call to a 4-arg fn (E0061).
+Recommended route: `codegen_runtime + Abi::Cell` (the crypto pattern, with store access)
+reusing `src/png_store.rs::read`, with new `(text, struct-ref)` call-marshalling, a dual
+interpreter(cdylib)/native(codegen_runtime) split, and `png`-feature gating.
+Full diagnosis in PROBLEMS.md @P321c.  `imaging` stays in `LIB_PKGS_NATIVE_SKIP`.
+
+---
+
 ### @P274 closed 2026-05-14 — heap-typed tail return + text-concat type-dispatch
 
 Two coordinated codegen + parser fixes for native-only crashes

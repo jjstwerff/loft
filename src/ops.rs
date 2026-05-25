@@ -15,18 +15,17 @@
 //! * `op_<verb>_X`       — binary arithmetic (`add`, `min`, `mul`, `div`, `rem`, …).
 #![allow(clippy::cast_precision_loss)]
 #![allow(dead_code)]
-#[cfg(feature = "random")]
-use rand_core::{RngCore, SeedableRng};
-#[cfg(feature = "random")]
-use rand_pcg::Pcg64;
-#[cfg(feature = "random")]
-use std::cell::RefCell;
 use std::cmp::Ordering;
-
-#[cfg(feature = "random")]
-thread_local! {
-    static RNG: RefCell<Pcg64> = RefCell::new(Pcg64::seed_from_u64(12345));
-}
+// @PLAN12 phase 3.5a (2026-05-24) — `RNG` thread-local + the
+// associated `rand_int` / `rand_seed` / `shuffle_ints` helpers
+// removed.  random's drain to lib/random/native/ makes the cdylib
+// the single source of RNG state for both backends (interpreter
+// dispatches via dlopen; native codegen via `loft::native_call`).
+// `rand_pcg` is now only depended on transitively through
+// lib/random/native/ — it stays in the loft crate's Cargo.toml
+// `[dependencies]` only because the workspace doesn't yet share
+// crate deps cleanly; safe to remove from src/Cargo.toml once the
+// `random` feature flag is also retired.
 
 /// C54.G — trap (panic) on overflow or sentinel-collision result.
 /// Uniform behaviour across debug and release builds: silent-sentinel
@@ -65,62 +64,6 @@ macro_rules! sentinel_long {
         );
         r
     }};
-}
-
-/// Return a random integer in `[lo, hi]` (inclusive).
-/// Returns `i64::MIN` (null) if `lo > hi` or if either bound is null.
-#[cfg(feature = "random")]
-#[must_use]
-pub fn rand_int(lo: i64, hi: i64) -> i64 {
-    if lo == i64::MIN || hi == i64::MIN || lo > hi {
-        return i64::MIN;
-    }
-    let range = (hi - lo + 1) as u64;
-    let r = RNG.with(|rng| rng.borrow_mut().next_u64());
-    lo + (r % range) as i64
-}
-
-/// WASM fallback: delegate to the JS host RNG when `random` crate is not available.
-#[cfg(all(feature = "wasm", not(feature = "random")))]
-#[must_use]
-pub fn rand_int(lo: i64, hi: i64) -> i64 {
-    if lo == i64::MIN || hi == i64::MIN || lo > hi {
-        return i64::MIN;
-    }
-    i64::from(crate::wasm::host_random_int(lo as i32, hi as i32))
-}
-
-/// Reseed the thread-local RNG.
-#[cfg(feature = "random")]
-pub fn rand_seed(seed: i64) {
-    RNG.with(|rng| *rng.borrow_mut() = Pcg64::seed_from_u64(seed as u64));
-}
-
-/// WASM fallback: delegate seed to the JS host RNG.
-#[cfg(all(feature = "wasm", not(feature = "random")))]
-pub fn rand_seed(seed: i64) {
-    crate::wasm::host_random_seed(seed);
-}
-
-/// Fisher-Yates shuffle of a mutable slice of `i32`.
-#[cfg(feature = "random")]
-pub fn shuffle_ints(v: &mut [i32]) {
-    let n = v.len();
-    for i in (1..n).rev() {
-        let j = RNG.with(|rng| rng.borrow_mut().next_u64()) as usize % (i + 1);
-        v.swap(i, j);
-    }
-}
-
-/// Fisher-Yates shuffle via the WASM host-bridge RNG.
-/// Used by `n_rand_indices` when `feature = "random"` is not available.
-#[cfg(all(feature = "wasm", not(feature = "random")))]
-pub fn shuffle_ints(v: &mut [i32]) {
-    let n = v.len();
-    for i in (1..n).rev() {
-        let j = crate::wasm::host_random_int(0, i as i32) as usize;
-        v.swap(i, j);
-    }
 }
 
 #[must_use]

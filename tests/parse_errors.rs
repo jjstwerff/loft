@@ -1362,3 +1362,24 @@ fn binary_write_integer_cast_silent() {
     // `as integer` documents an intentional 8-byte write → no warning.
     code!("fn test() {\n  f = file(\"/tmp/lint_c.bin\");\n  f += 42 as integer;\n}");
 }
+
+/// @P315 — a float literal in a `vector<single>` must be a COMPILE ERROR (no
+/// silent float→single truncation; the old behaviour silently promoted the
+/// declared element type and wrote 8-byte values into 4-byte slots → heap
+/// corruption).  The user writes a `single` literal (`1.0f`) or `as single`.
+#[test]
+fn p315_float_literal_into_single_vector() {
+    // One diagnostic per offending element (clean parse recovery, like the
+    // sibling "No common type" path) — both float literals are rejected.
+    code!("fn test() { v: vector<single> = [1.0, 2.0]; }")
+        .error(
+            "cannot store float elements in a vector<single> (would lose precision); \
+             cast each element explicitly with 'as single' at \
+             p315_float_literal_into_single_vector:1:38",
+        )
+        .error(
+            "cannot store float elements in a vector<single> (would lose precision); \
+             cast each element explicitly with 'as single' at \
+             p315_float_literal_into_single_vector:1:43",
+        );
+}

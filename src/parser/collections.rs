@@ -185,11 +185,32 @@ impl Parser {
             *code = v_set(gen_var, gen_expr);
             let op = self.data.def_nr("OpCoroutineNext");
             let yield_tp = (**inner).clone();
-            let value_size = crate::variables::size(&yield_tp, &crate::data::Context::Argument);
-            return Value::Call(
-                op,
-                vec![Value::Var(gen_var), Value::Int(i32::from(value_size))],
-            );
+            // @P327 / @P328 native — yield-channel dispatch via packed
+            // `value_size` (low byte = byte size, high byte = channel
+            // tag).  Tag 0 = legacy per-type channel (next_i64 /
+            // next_text / next_dbref dispatched by byte size).  Tag 1 =
+            // unified `next_into` with tuple-of-(integer|float) rebuild.
+            // Tag 2 = unified `next_into` with fn-ref rebuild
+            // (`(u32, DbRef)` from `[i64; 2]`).  Interp masks the high
+            // byte off in `fill.rs::coroutine_next` and `state/codegen.rs`'s
+            // `OpCoroutineNext` arm; only native inspects it.  See
+            // `plans/16-coroutine-validation/01-unified-channel.md`.
+            let byte_size = i32::from(crate::variables::size(
+                &yield_tp,
+                &crate::data::Context::Argument,
+            ));
+            let channel_tag: i32 = if matches!(&yield_tp,
+                Type::Tuple(elems) if !elems.is_empty()
+                && elems.iter().all(|e| matches!(e, Type::Integer(_) | Type::Float)))
+            {
+                1
+            } else if matches!(&yield_tp, Type::Function(_, _, _)) {
+                2
+            } else {
+                0
+            };
+            let value_size: i32 = (channel_tag << 8) | byte_size;
+            return Value::Call(op, vec![Value::Var(gen_var), Value::Int(value_size)]);
         }
         if is_type == should {
             // Non-coroutine pre-existing iterator (sorted/hash/index).
@@ -444,6 +465,86 @@ impl Parser {
         if let Some(result) = self.towards_set_hash_remove(to, val, op) {
             return result;
         }
+        // @P305 — `coll[key] = value` insert-or-replace for a KEYED
+        // collection.  The LHS parsed to `OpGetRecord(coll, db_tp, key…)`,
+        // which returns the existing slot or null; the default reference
+        // copy below (`OpCopyRecord(value, OpGetRecord(…))`) UPDATES an
+        // existing key but silently NO-OPs when the key is absent (copy into
+        // a null lookup), so it could never INSERT.  Route to `OpSetKeyed`,
+        // which finds-or-inserts at runtime (dedup by `value`'s key),
+        // uniformly for local / field / `&`-param collections.  (The
+        // `coll[key] = null` removal is intercepted earlier in this fn.)
+        if op == "="
+            && matches!(f_type, Type::Reference(_, _))
+            && let Value::Call(get_nr, get_args) = to.unspan()
+            && self.data.def(*get_nr).name == "OpGetRecord"
+            && let Some(Value::Int(db_tp)) = get_args.get(1)
+            && (*db_tp as usize) < self.database.types.len()
+            && matches!(
+                self.database.types[*db_tp as usize].parts,
+                Parts::Hash(_, _) | Parts::Sorted(_, _) | Parts::Index(_, _, _)
+            )
+        {
+            let db_tp = *db_tp;
+            let coll = get_args[0].clone();
+            // Multi-index guard: a keyed STRUCT FIELD cross-linked with a
+            // sibling index (two+ keyed fields sharing an element type,
+            // auto-linked in types.rs) can't be maintained by `OpSetKeyed`
+            // (it lacks the struct + field context to update the siblings).
+            // Detect it and fall through to the update-only `copy_ref` below
+            // (which keeps the shared record consistent — no insert, no
+            // corruption — matching the pre-@P305 behaviour for that case).
+            let mut multi_index = false;
+            if let Value::Call(gf_nr, gf_args) = coll.unspan()
+                && self.data.def(*gf_nr).name == "OpGetField"
+                && let Some(Value::Int(byte_off)) = gf_args.get(1)
+                && let Value::Var(sv) = gf_args[0].unspan()
+            {
+                let d_nr = match self.vars.tp(*sv) {
+                    Type::Reference(d, _) => *d,
+                    Type::RefVar(inner) => match &**inner {
+                        Type::Reference(d, _) => *d,
+                        _ => u32::MAX,
+                    },
+                    _ => u32::MAX,
+                };
+                if d_nr != u32::MAX {
+                    let struct_tp = self.data.def(d_nr).known_type;
+                    multi_index = self
+                        .database
+                        .keyed_field_is_linked(struct_tp, *byte_off as u16);
+                }
+            }
+            if multi_index {
+                // `coll[key] = value` on a multi-indexed field would desync
+                // the sibling indexes (OpSetKeyed) or `copy_block` into a
+                // null lookup on an insert-miss (copy_ref) — both corrupt.
+                // Direct the user to `+= [value]`, which maintains every
+                // sibling index via record_finish's `other_indexes` path.
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`coll[key] = value` is not supported on a multi-indexed \
+                         field (a struct with two-or-more keyed fields sharing an \
+                         element type); use `coll += [value]` instead"
+                    );
+                }
+                return Value::Null;
+            }
+            // @P311: do NOT set the 0x8000 "free source" bit here.  Unlike the
+            // field-assignment path (copy_ref → OpCopyRecord), `set_keyed`
+            // already takes a deep copy of the value into the freshly-claimed
+            // collection record, and the inline-literal/struct-call work-ref
+            // that produced `val` still carries its own scope `OpFreeRef`.
+            // Freeing it again from set_keyed is a double free: the work-ref's
+            // store is released while still owned, then reused by the next
+            // iteration's OpDatabase, corrupting the nested-vector backings of
+            // every entry inserted after the first (silent data loss on the
+            // interpreter, use-after-free SIGSEGV once the store is recycled).
+            let tp_val = db_tp;
+            return self.cl("OpSetKeyed", &[coll, val.clone(), Value::Int(tp_val)]);
+        }
         if matches!(f_type, Type::Enum(_, true, _) | Type::Reference(_, _))
             && op == "="
             && !matches!(to, Value::Var(_))
@@ -469,6 +570,35 @@ impl Parser {
                     );
                 }
                 return v_set(*nr, val.clone());
+            }
+            // @P308 — a KEYED-collection FIELD whole-assignment `s.h = expr`
+            // (hash/sorted/index, RHS an expression) must be DEEP-COPIED into
+            // the field; before this it fell to the bare `return val.clone()`
+            // below → silent no-op (empty field).  `OpReplaceKeyed(val, to,
+            // kt)` against the field ref = remove_claims(field) +
+            // copy_claims(val, field); `0x8000` frees a fresh-storage call
+            // source.  (Empty `s.h = []` → OpClearKeyed and `s.h[k]=v` →
+            // OpSetKeyed are handled earlier; this is the remaining
+            // whole-value case.)  Vector/Spacial keep the bare return —
+            // vector field-replace lives in parse_assign_op, and Spacial's
+            // copy_claims is unimplemented (per @P295), so `keyed_field_kt`
+            // returns None for both.
+            if op == "="
+                && !matches!(val, Value::Insert(_) | Value::Null)
+                && let Some(kt) = self.keyed_field_kt(f_type)
+            {
+                #[cfg(not(feature = "wasm"))]
+                let tp_val = if self.is_struct_returning_call(val) {
+                    i32::from(kt) | 0x8000
+                } else {
+                    i32::from(kt)
+                };
+                #[cfg(feature = "wasm")]
+                let tp_val = i32::from(kt);
+                return self.cl(
+                    "OpReplaceKeyed",
+                    &[val.clone(), to.clone(), Value::Int(tp_val)],
+                );
             }
             // LHS is a field access (e.g. `s.v = fresh`).  Pre-fix this
             // returned bare `val` and the assignment was silently discarded.
@@ -1464,6 +1594,16 @@ use #count instead"
             } else {
                 Vec::new()
             };
+            // Extract the generator var (first arg of OpCoroutineNext) before
+            // `iter_next` is consumed by `for_next` — @P327 needs it for the
+            // tuple-yield exhaustion check below.
+            let gen_var = if let Value::Call(_, args) = &iter_next
+                && let Some(Value::Var(v)) = args.first()
+            {
+                *v
+            } else {
+                u16::MAX
+            };
             let for_next = v_set(for_var, iter_next);
             self.vars.loop_var(for_var);
             let in_loop = self.in_loop;
@@ -1502,8 +1642,37 @@ use #count instead"
             }
             for_steps.push(create_iter);
             let mut lp = vec![for_next];
-            // CO1.5b: coroutine iterators also need the null-check termination.
-            if !matches!(in_type, Type::Iterator(_, _)) || is_coroutine_loop {
+            // CO1.5b: coroutine iterators also need a termination check.
+            //
+            // @P327 — for-yield types without a single-value null sentinel
+            // (Tuple today; the same shape would catch any future composite
+            // yielded type) MUST check the iterator's exhausted state, NOT
+            // the yielded value.  Without this branch, `convert(tuple,
+            // Boolean)` finds no OpConv* match → `test_for` stays as
+            // `Var(for_var)` → `OpNot(tuple)` reads one byte of the tuple's
+            // storage as boolean and inverts → silent wrong answer (loop
+            // iterates 0 or N times depending on which byte aligns to 0).
+            // OpCoroutineExhausted(gen) reads the coroutine status, which
+            // CoroutineNext sets to Exhausted on the post-last-yield call.
+            // `gen_var` is captured above from `iter_next`'s first arg
+            // (the coroutine path never assigns a slot to `_iter_var`).
+            //
+            // @PLAN16 phase 05 — closures (`Type::Function`) join tuples on
+            // this path: a yielded fn-ref has no null sentinel that
+            // `OpConv*FromX → OpNot` can drive — `OpNot(fnref)` reads bytes
+            // of the 20-byte fn-ref slot as boolean (SIGBUS on interp,
+            // E0600 on native).  Same fix: terminate via the coroutine's
+            // own exhausted state.
+            let yield_needs_exhausted_check =
+                matches!(&var_tp, Type::Tuple(_) | Type::Function(_, _, _));
+            if is_coroutine_loop && yield_needs_exhausted_check && gen_var != u16::MAX {
+                let test_exhausted = self.cl("OpCoroutineExhausted", &[Value::Var(gen_var)]);
+                lp.push(v_if(
+                    test_exhausted,
+                    v_block(vec![Value::Break(0)], Type::Void, "break"),
+                    Value::Null,
+                ));
+            } else if !matches!(in_type, Type::Iterator(_, _)) || is_coroutine_loop {
                 let mut test_for = Value::Var(for_var);
                 self.convert(&mut test_for, &var_tp, &Type::Boolean);
                 test_for = self.cl("OpNot", &[test_for]);
