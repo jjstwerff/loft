@@ -272,3 +272,35 @@ fn pixel_roundtrip_matches_gold() {
         /* mean_abs */ 0.0,
     );
 }
+
+/// Per-part golden: `fill_rect` (solid-fill bounds + colour), in isolation.
+/// Exact — integer rasterizer.
+#[test]
+fn fill_rect_matches_gold() {
+    gold_compare("lib/graphics/examples/gold-rect.loft", "gold-rect.png", 0, 0.0);
+}
+
+/// Per-part golden: `draw_line` (Bresenham), in isolation.  Exact.
+#[test]
+fn draw_line_matches_gold() {
+    gold_compare("lib/graphics/examples/gold-line.loft", "gold-line.png", 0, 0.0);
+}
+
+/// Per-part golden: `fill_triangle` (scanline — the crystal canvas fill), in
+/// isolation.  Exact.
+#[test]
+fn fill_triangle_matches_gold() {
+    gold_compare(
+        "lib/graphics/examples/gold-triangle.loft",
+        "gold-triangle.png",
+        0,
+        0.0,
+    );
+}
+
+/// Per-part golden: `blend_pixel` / `blend` (alpha-over compositing math), in
+/// isolation.  Exact — integer blend.
+#[test]
+fn blend_matches_gold() {
+    gold_compare("lib/graphics/examples/gold-blend.loft", "gold-blend.png", 0, 0.0);
+}
