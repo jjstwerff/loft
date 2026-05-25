@@ -2845,6 +2845,18 @@ impl State {
         if let Type::RefVar(tp) = stack.function.tp(var).clone() {
             if matches!(*tp, Type::Text(_)) {
                 if value == &Value::Text(String::new()) {
+                    // @P346: assigning "" to a RefVar(Text) is NOT a no-op — it
+                    // must CLEAR the dereferenced buffer.  When this RefVar is a
+                    // reused work-buffer (e.g. a format-string interpolation
+                    // promoted to the function's `&text` return slot, reset each
+                    // loop iteration), the buffer holds stale content from the
+                    // previous iteration; skipping the clear let the following
+                    // OpFormatStack* APPEND to it → text accumulated across
+                    // iterations (`[2.5][2.58][2.581]`).  Emit OpClearStackText
+                    // (deref) so the buffer is emptied, matching the native path.
+                    let var_pos = stack.position - stack.function.stack(var);
+                    stack.add_op("OpClearStackText", self);
+                    self.code_add(var_pos);
                     return;
                 }
                 // always clear RefVar(Text) before appending — prevents
