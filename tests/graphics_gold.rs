@@ -157,6 +157,20 @@ fn update_gold() -> bool {
 ///   `max_abs` — largest single-channel delta allowed (0-255)
 ///   `mean_abs` — mean across every channel of every pixel
 fn gold_compare(example: &str, gold_name: &str, max_abs: u32, mean_abs: f64) {
+    gold_compare_assets(example, gold_name, &[], max_abs, mean_abs);
+}
+
+/// Like `gold_compare`, but first copies each asset (path relative to the
+/// workspace root) into the run's tempdir under its basename — so a fixture
+/// that loads e.g. a font with a bare relative path resolves it against the
+/// tempdir cwd.
+fn gold_compare_assets(
+    example: &str,
+    gold_name: &str,
+    assets: &[&str],
+    max_abs: u32,
+    mean_abs: f64,
+) {
     if !graphics_native_built() {
         eprintln!(
             "skipping graphics gold test: \
@@ -170,6 +184,14 @@ fn gold_compare(example: &str, gold_name: &str, max_abs: u32, mean_abs: f64) {
     let gold = root.join("tests/gold").join(gold_name);
 
     let tmp = tempdir();
+    for asset in assets {
+        let src = root.join(asset);
+        let base = std::path::Path::new(asset)
+            .file_name()
+            .expect("asset path has a filename");
+        std::fs::copy(&src, tmp.join(base))
+            .unwrap_or_else(|e| panic!("copying asset {}: {e}", src.display()));
+    }
     run_loft(&script, &tmp);
     let produced = tmp.join(gold_name);
     assert!(
@@ -277,13 +299,23 @@ fn pixel_roundtrip_matches_gold() {
 /// Exact — integer rasterizer.
 #[test]
 fn fill_rect_matches_gold() {
-    gold_compare("lib/graphics/examples/gold-rect.loft", "gold-rect.png", 0, 0.0);
+    gold_compare(
+        "lib/graphics/examples/gold-rect.loft",
+        "gold-rect.png",
+        0,
+        0.0,
+    );
 }
 
 /// Per-part golden: `draw_line` (Bresenham), in isolation.  Exact.
 #[test]
 fn draw_line_matches_gold() {
-    gold_compare("lib/graphics/examples/gold-line.loft", "gold-line.png", 0, 0.0);
+    gold_compare(
+        "lib/graphics/examples/gold-line.loft",
+        "gold-line.png",
+        0,
+        0.0,
+    );
 }
 
 /// Per-part golden: `fill_triangle` (scanline — the crystal canvas fill), in
@@ -302,5 +334,26 @@ fn fill_triangle_matches_gold() {
 /// isolation.  Exact — integer blend.
 #[test]
 fn blend_matches_gold() {
-    gold_compare("lib/graphics/examples/gold-blend.loft", "gold-blend.png", 0, 0.0);
+    gold_compare(
+        "lib/graphics/examples/gold-blend.loft",
+        "gold-blend.png",
+        0,
+        0.0,
+    );
+}
+
+/// Per-part golden: the text path (`gl_load_font` + `draw_text` → Canvas →
+/// save_png), in isolation.  Copies the font into the run dir.  Modest
+/// tolerance — glyph rasterization is antialiased and can drift a hair across
+/// font-rasterizer versions; still catches text gone / mispositioned /
+/// garbled (the WebGL "no text" class of regression on the native side).
+#[test]
+fn text_matches_gold() {
+    gold_compare_assets(
+        "lib/graphics/examples/gold-text.loft",
+        "gold-text.png",
+        &["lib/graphics/examples/DejaVuSans-Bold.ttf"],
+        /* max_abs  */ 4,
+        /* mean_abs */ 0.5,
+    );
 }
