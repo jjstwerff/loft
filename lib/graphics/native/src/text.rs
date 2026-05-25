@@ -32,12 +32,21 @@ pub fn measure_text(font_idx: i32, text: &str, size: f32) -> f32 {
             Some(f) => f,
             None => return 0.0,
         };
-        text.chars()
-            .map(|c| {
-                let (metrics, _) = font.rasterize(c, size);
-                metrics.advance_width
-            })
-            .sum()
+        // @P339: include kerning pairs (e.g. A–V, T–o) so the measured width
+        // matches the rasterized layout — otherwise `measure("AV")` ==
+        // `measure("A")+measure("V")` exactly and kerned text overflows /
+        // mis-centres.  Must mirror the same kern walk in `rasterize_text`.
+        let mut width = 0.0f32;
+        let mut prev: Option<char> = None;
+        for c in text.chars() {
+            if let Some(p) = prev {
+                width += font.horizontal_kern(p, c, size).unwrap_or(0.0);
+            }
+            let (metrics, _) = font.rasterize(c, size);
+            width += metrics.advance_width;
+            prev = Some(c);
+        }
+        width
     })
 }
 
@@ -51,29 +60,41 @@ pub fn rasterize_text(font_idx: i32, text: &str, size: f32) -> (u32, u32, Vec<u8
             None => return (0, 0, Vec::new()),
         };
 
-        // First pass: measure total width and max height
-        let mut glyphs: Vec<(fontdue::Metrics, Vec<u8>)> = Vec::new();
-        let mut total_width = 0u32;
+        // First pass: measure total width and max height.  @P339: each glyph
+        // carries the kern adjustment (in px) to apply BEFORE it, vs the
+        // previous char — mirrors the kern walk in `measure_text`.  A float
+        // pen accumulates advances + kerns; the bitmap width is its ceiling.
+        let mut glyphs: Vec<(fontdue::Metrics, Vec<u8>, f32)> = Vec::new();
+        let mut pen = 0.0f32;
         let mut max_height = 0u32;
         let mut max_y_offset = 0i32;
+        let mut prev: Option<char> = None;
 
         for c in text.chars() {
+            let kern = prev
+                .and_then(|p| font.horizontal_kern(p, c, size))
+                .unwrap_or(0.0);
+            pen += kern;
             let (metrics, bitmap) = font.rasterize(c, size);
-            total_width += metrics.advance_width as u32;
+            pen += metrics.advance_width;
             max_height = max_height.max(metrics.height as u32);
             max_y_offset = max_y_offset.max(metrics.ymin);
-            glyphs.push((metrics, bitmap));
+            glyphs.push((metrics, bitmap, kern));
+            prev = Some(c);
         }
 
+        let total_width = pen.ceil().max(0.0) as u32;
         if total_width == 0 || max_height == 0 {
             return (0, 0, Vec::new());
         }
 
         let line_height = (size * 1.2) as u32;
         let mut pixels = vec![0u8; (total_width * line_height) as usize];
-        let mut x_cursor = 0u32;
+        let mut x_pen = 0.0f32;
 
-        for (metrics, bitmap) in &glyphs {
+        for (metrics, bitmap, kern) in &glyphs {
+            x_pen += *kern;
+            let x_cursor = x_pen.max(0.0) as u32;
             let gw = metrics.width as u32;
             let gh = metrics.height as u32;
             let baseline = (size * 0.8) as i32;
@@ -92,7 +113,7 @@ pub fn rasterize_text(font_idx: i32, text: &str, size: f32) -> (u32, u32, Vec<u8
                     }
                 }
             }
-            x_cursor += metrics.advance_width as u32;
+            x_pen += metrics.advance_width;
         }
 
         (total_width, line_height, pixels)

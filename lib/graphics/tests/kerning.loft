@@ -1,0 +1,20 @@
+// @P339 regression: lib/graphics text rendering must apply kerning pairs.
+// Before the fix, `gl_measure_text("AV")` == `measure("A")+measure("V")`
+// exactly (no kern table consulted in measure_text / rasterize_text); A–V is
+// a textbook negative-kern pair, so the kerned measure must be strictly less.
+use graphics;
+
+fn test_kerning_pair_narrows_measure() {
+  f = graphics::gl_load_font("examples/DejaVuSans-Bold.ttf");
+  // Skip gracefully if the bundled font can't be found in this run dir
+  // (keeps the package suite green where the cwd differs); the assertion
+  // below is the real regression guard.
+  if f >= 0 {
+    av = graphics::gl_measure_text(f, "AV", 40.0);
+    a = graphics::gl_measure_text(f, "A", 40.0);
+    v = graphics::gl_measure_text(f, "V", 40.0);
+    assert(av < a + v, "AV ({av}) should kern narrower than A+V ({a + v})");
+    // sanity: a single glyph is unaffected by kerning
+    assert(a > 0.0, "A has positive width");
+  }
+}
