@@ -295,6 +295,14 @@ pub extern "C" fn loft_gl_poll_events() -> bool {
                 unsafe {
                     gl::Viewport(0, 0, w as i32, h as i32);
                 }
+                // Keep the window-size getters in sync with the actual
+                // surface — otherwise `loft_gl_window_width/height` keep
+                // returning the stale creation-time hint after the window
+                // manager resizes the window to fit the screen, and any
+                // screen-space UI hit-testing built on them is vertically
+                // offset from where it draws.
+                s.viewport_w = w;
+                s.viewport_h = h;
             }
         }
         !s.should_close

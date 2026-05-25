@@ -3,37 +3,46 @@
 //
 // crystal_editor — STAND-ALONE single-script audience crystal editor.
 //
-// Tap/click a hex to paint it (cycles palette colour); right-click to
-// erase.  The crystal mesh re-forms immediately on every edit via the
-// incremental O(dirty) rebuild (`crystal_incr_*` from `audience_crystal`
-// / `gridmesh`).  No server, no HTML — one native window.
+// Pick a colour from the on-screen palette (bottom-left), then click/tap a
+// hex to paint it; right-click erases.  Painted cells show as faint "ground"
+// hexes under the crystal lines, and the camera smoothly follows the latest
+// click so the last-painted hex becomes the focus — pan through the world by
+// clicking.  The crystal mesh re-forms immediately via the incremental
+// O(dirty) rebuild (`crystal_incr_*`).  No server, no HTML — one native
+// window.
 //
-// On a touchscreen the OS synthesises mouse events from touch, so
-// tap-to-paint works through `gl_mouse_*` today (single-finger only).
+// All screen<->world math uses the LIVE window size (`gl_window_width/height`,
+// the same physical-pixel space as `gl_mouse_*`), so the palette stays
+// anchored to the real bottom edge and stays clickable even when the window
+// manager resizes the window (title bar, DPI, partial fit).
 //
-// REUSE / future networking: all editing goes through `apply_edit()`,
-// which mutates only the `CrystalIncr` engine.  A future client wires
-// the SAME `apply_edit` to (a) incoming server deltas (`"x,y,c"`, the
-// projector wire format) and (b) forwards local edits to the server —
-// the render loop below is unchanged.  The reusable pieces
-// (`hex_at_world` picking, `crystal_mesh_to_lines`, the `CrystalIncr`
-// engine) live in `lib/audience_crystal`; this file is only the window,
-// camera, input, and loop.
+// REUSE / future networking: crystal edits go through `apply_edit()`, which
+// mutates only the `CrystalIncr` engine.  The reusable pieces (`hex_at_world`
+// picking, `crystal_mesh_to_beams`, `ground_hexes_to_verts`, the
+// `CrystalIncr` engine) live in `lib/audience_crystal`.
 //
 // Run:    ./target/release/loft --lib lib/ tools/audience-demo/crystal_editor.loft
-// Smoke:  add `--smoke` to paint a few hexes headlessly and exit (CI/Xvfb).
+// Smoke:  add `--smoke` to paint a cluster headlessly and screenshot.
 use audience_crystal::*;
 use gridmesh;
 use graphics;
 
-WIN_W = 1000;
+WIN_W = 1000;            // requested window size (logical)
 WIN_H = 1000;
-// World half-extent (in world units) shown across the window.  ~10 hex
-// columns at HEX_SIZE=38.  Camera is a fixed top-down view on the origin.
+// World half-extent (world units) shown across the SHORTER window axis.
 VIEW_HALF = 420.0;
+// Faint ground-hex alpha + camera follow-rate (per frame).
+GROUND_ALPHA = 0.10;
+CAM_LERP = 0.18;
 
-// Reuse the projector's stride-10 vertex layout + minimal shader:
-// position at location 0, rgba at location 2 (normal slot 1 padded).
+// Palette swatch UI (compact, bottom-left — not full width).  PICK_Y0 is
+// computed per frame from the live window height (see main).
+PICK_SW = 44.0;          // swatch size (px)
+PICK_GAP = 6.0;
+PICK_X0 = 16.0;
+PICK_MARGIN = 16.0;      // gap from the bottom edge
+
+// Stride-10 vertex layout (pos at loc 0, rgba at loc 2; normal slot padded).
 CE_VERT = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -55,36 +64,78 @@ void main() {{
 }}
 `;
 
-// Top-down orthographic MVP, hand-built (column-major) so screen<->world
-// is an exact linear map and picking is its trivial inverse:
-//   clipX =  wx / VIEW_HALF      (world +X → screen right)
-//   clipY = -wz / VIEW_HALF      (world +Z → screen down)
-//   clipZ =  0                   (flat; height ignored in this viewer)
-fn topdown_mvp() -> vector<float> {
-  inv = 1.0 / VIEW_HALF;
-  [inv, 0.0, 0.0, 0.0,
+// Top-down orthographic MVP centred on (cam_x, cam_z), `aspect` = w/h so the
+// hexes stay round on a non-square window.  Hand-built (column-major) so
+// screen<->world is exact and picking is its inverse:
+//   clipX = (wx - cam_x) / (VIEW_HALF*aspect)   clipY = (cam_z - wz)/VIEW_HALF
+fn topdown_mvp(cam_x: float, cam_z: float, aspect: float) -> vector<float> {
+  ix = 1.0 / (VIEW_HALF * aspect);
+  iy = 1.0 / VIEW_HALF;
+  [ix, 0.0, 0.0, 0.0,
    0.0, 0.0, 0.0, 0.0,
-   0.0, 0.0 - inv, 0.0, 0.0,
-   0.0, 0.0, 0.0, 1.0]
+   0.0, 0.0 - iy, 0.0, 0.0,
+   0.0 - cam_x * ix, cam_z * iy, 0.0, 1.0]
 }
 
-// Mouse pixel → world ground (XZ), the exact inverse of `topdown_mvp`.
-fn pick_world_x(mx: float) -> float {
-  (2.0 * mx / (WIN_W as float) - 1.0) * VIEW_HALF
-}
-fn pick_world_z(my: float) -> float {
-  (0.0 - (1.0 - 2.0 * my / (WIN_H as float))) * VIEW_HALF
-}
-
-// Palette colours 1..9 (index 0 is the near-black background tone).
-fn next_color(prev: integer) -> integer {
-  c = prev + 1;
-  if c > 9 { c = 1; }
-  c
+// Screen-space MVP: pixel (top-left origin) → NDC, for the palette overlay.
+fn screen_mvp(sw: float, sh: float) -> vector<float> {
+  sx = 2.0 / sw;
+  sy = 2.0 / sh;
+  [sx, 0.0, 0.0, 0.0,
+   0.0, 0.0 - sy, 0.0, 0.0,
+   0.0, 0.0, 0.0, 0.0,
+   0.0 - 1.0, 1.0, 0.0, 1.0]
 }
 
-// The single edit entry point — mutates only the CrystalIncr engine.
-// A networked client routes both local picks AND server deltas here.
+// Mouse pixel → world ground (XZ) — the exact inverse of `topdown_mvp`.
+fn pick_world_x(mx: float, cam_x: float, sw: float, aspect: float) -> float {
+  (2.0 * mx / sw - 1.0) * VIEW_HALF * aspect + cam_x
+}
+fn pick_world_z(my: float, cam_z: float, sh: float) -> float {
+  (0.0 - (1.0 - 2.0 * my / sh)) * VIEW_HALF + cam_z
+}
+
+// Which palette swatch (1..9) is under the pointer, or 0 if not on the UI.
+fn picker_hit(mx: float, my: float, pick_y0: float) -> integer {
+  if my < pick_y0 || my > pick_y0 + PICK_SW { return 0; }
+  for ph_i in 0..9 {
+    x0 = PICK_X0 + (ph_i as float) * (PICK_SW + PICK_GAP);
+    if mx >= x0 && mx <= x0 + PICK_SW { return ph_i + 1; }
+  }
+  0
+}
+
+// A screen-space filled quad as stride-10 verts (2 triangles).
+fn quad_verts(qx: float, qy: float, qw: float, qh: float, qr: single, qg: single, qb: single) -> vector<single> {
+  x0 = qx as single;
+  y0 = qy as single;
+  x1 = (qx + qw) as single;
+  y1 = (qy + qh) as single;
+  [x0, y0, 0.0f, 0.0f, 0.0f, 0.0f, qr, qg, qb, 1.0f,
+   x1, y0, 0.0f, 0.0f, 0.0f, 0.0f, qr, qg, qb, 1.0f,
+   x1, y1, 0.0f, 0.0f, 0.0f, 0.0f, qr, qg, qb, 1.0f,
+   x0, y0, 0.0f, 0.0f, 0.0f, 0.0f, qr, qg, qb, 1.0f,
+   x1, y1, 0.0f, 0.0f, 0.0f, 0.0f, qr, qg, qb, 1.0f,
+   x0, y1, 0.0f, 0.0f, 0.0f, 0.0f, qr, qg, qb, 1.0f]
+}
+
+// Screen-space palette geometry (stride 10) anchored at `pick_y0`.  The
+// active swatch gets a white backing quad (like the web `.pal.active`).
+fn build_picker_verts(active: integer, pick_y0: float) -> vector<single> {
+  pv: vector<single> = [];
+  for pk_i in 0..9 {
+    color = pk_i + 1;
+    x0 = PICK_X0 + (pk_i as float) * (PICK_SW + PICK_GAP);
+    if color == active {
+      pv += quad_verts(x0 - 4.0, pick_y0 - 4.0, PICK_SW + 8.0, PICK_SW + 8.0, 0.95f, 0.95f, 1.0f);
+    }
+    pv += quad_verts(x0, pick_y0, PICK_SW, PICK_SW,
+                     palette_r(color) as single, palette_g(color) as single, palette_b(color) as single);
+  }
+  pv
+}
+
+// The single crystal-edit entry point — mutates only the CrystalIncr engine.
 fn apply_edit(cryst: &CrystalIncr, x: integer, y: integer, color: integer, erase: boolean) {
   if erase {
     crystal_incr_erase(cryst, x, y);
@@ -104,90 +155,141 @@ fn main() {
     return;
   }
   shader = graphics::gl_create_shader(CE_VERT, CE_FRAG);
+  // Flat 2D painter's-order view: blend on, depth OFF so each layer paints
+  // over the previous (everything is at z=0).
+  graphics::gl_disable(graphics::GL_DEPTH_TEST);
+  graphics::gl_enable(graphics::GL_BLEND);
+  graphics::gl_blend_func(graphics::BLEND_SRC_ALPHA, graphics::BLEND_ONE_MINUS_SRC_ALPHA);
 
   state = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
   cryst = crystal_incr_new(CellSnap{ xs: [], ys: [], colors: [] },
                            CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, state, 0);
 
-  mvp = topdown_mvp();
+  // Clean painted-cell set for the ground layer (cryst.snap is append-only,
+  // not pruned on erase, so the editor tracks its own).
+  gx: vector<integer> = [];
+  gy: vector<integer> = [];
+  gc: vector<integer> = [];
+
   tick = 0;
   cur_color = 1;
   prev_btn = 0;
   edits = 0;
-  // Cached GPU mesh — rebuilt + re-uploaded ONLY on an edit (the O(dirty)
-  // the incremental engine is for); every other frame just re-draws the
-  // cached VAO.  Without this the full mesh was re-baked + re-uploaded
-  // every frame.
-  vao = -1;
-  vcount = 0;
-  dirty = false;
+  cam_x = 0.0; cam_z = 0.0;
+  tgt_x = 0.0; tgt_z = 0.0;
 
-  println("crystal_editor: left-click/tap paints, right-click erases.  Close the window to quit.");
+  crystal_vao = -1; crystal_n = 0;
+  ground_vao = -1; ground_n = 0;
+  picker_vao = -1; picker_n = 0;
+  dirty = false;
+  picker_dirty = true;
+  last_picker_y0 = 0.0 - 1.0;     // rebuild the palette VAO if the anchor moves
+
+  println("crystal_editor: pick a colour (bottom-left palette), click/tap to paint, right-click erases.  Close to quit.");
 
   while graphics::gl_poll_events() {
     tick += 1;
-
-    // ── Input → edit (marks the mesh dirty only when something changed) ──
     edited = false;
+
+    // ── Live window metrics (physical px, same space as gl_mouse_*) ──
+    fb_w = graphics::gl_window_width();
+    fb_h = graphics::gl_window_height();
+    if fb_w <= 0 { fb_w = WIN_W; }
+    if fb_h <= 0 { fb_h = WIN_H; }
+    sw = fb_w as float;
+    sh = fb_h as float;
+    aspect = sw / sh;
+    pick_y0 = sh - PICK_SW - PICK_MARGIN;
+    if pick_y0 != last_picker_y0 { picker_dirty = true; last_picker_y0 = pick_y0; }
+
+    // ── Input ─────────────────────────────────────────────────────
     if smoke {
-      // Headless: paint a small connected cluster over the first frames,
-      // then screenshot + quit.  A centre hex plus its ring, varied colours.
-      if tick == 1 { apply_edit(cryst, 0, 0, 2, false); edited = true; }
-      if tick == 2 { apply_edit(cryst, 1, 0, 3, false); edited = true; }
-      if tick == 3 { apply_edit(cryst, -1, 0, 4, false); edited = true; }
-      if tick == 4 { apply_edit(cryst, 0, 1, 5, false); edited = true; }
-      if tick == 5 { apply_edit(cryst, 0, -1, 6, false); edited = true; }
-      if tick == 6 { apply_edit(cryst, 1, 1, 7, false); edited = true; }
-      if tick == 7 { apply_edit(cryst, -1, -1, 8, false); edited = true; }
+      if tick == 1 { cur_color = 2; apply_edit(cryst, 1, 0, cur_color, false); gx += [1]; gy += [0]; gc += [cur_color]; tgt_x = cell_wx(1, 0); tgt_z = cell_wz(0); edited = true; }
+      if tick == 2 { cur_color = 3; apply_edit(cryst, -1, 0, cur_color, false); gx += [-1]; gy += [0]; gc += [cur_color]; tgt_x = cell_wx(-1, 0); tgt_z = cell_wz(0); edited = true; }
+      if tick == 3 { cur_color = 4; apply_edit(cryst, 0, 1, cur_color, false); gx += [0]; gy += [1]; gc += [cur_color]; tgt_x = cell_wx(0, 1); tgt_z = cell_wz(1); edited = true; }
+      if tick == 4 { cur_color = 5; apply_edit(cryst, 0, -1, cur_color, false); gx += [0]; gy += [-1]; gc += [cur_color]; tgt_x = cell_wx(0, -1); tgt_z = cell_wz(-1); edited = true; }
+      if tick == 5 { cur_color = 6; apply_edit(cryst, 1, 1, cur_color, false); gx += [1]; gy += [1]; gc += [cur_color]; tgt_x = cell_wx(1, 1); tgt_z = cell_wz(1); edited = true; }
+      if tick == 6 { cur_color = 7; apply_edit(cryst, -1, -1, cur_color, false); gx += [-1]; gy += [-1]; gc += [cur_color]; tgt_x = cell_wx(-1, -1); tgt_z = cell_wz(-1); edited = true; }
+      if tick == 7 { cur_color = 8; apply_edit(cryst, 0, 0, cur_color, false); gx += [0]; gy += [0]; gc += [cur_color]; tgt_x = cell_wx(0, 0); tgt_z = cell_wz(0); edited = true; picker_dirty = true; }
     } else {
       btn = graphics::gl_mouse_button();
       if btn != 0 && prev_btn == 0 {                  // click DOWN edge
-        wx = pick_world_x(graphics::gl_mouse_x());
-        wz = pick_world_z(graphics::gl_mouse_y());
-        hx = hex_at_world(wx, wz);
-        erase = (btn & 4) != 0;                       // right button
-        if !erase { cur_color = next_color(cur_color); }
-        apply_edit(cryst, hx.0, hx.1, cur_color, erase);
-        edited = true;
+        mxp = graphics::gl_mouse_x();
+        myp = graphics::gl_mouse_y();
+        pc = picker_hit(mxp, myp, pick_y0);
+        if pc != 0 {
+          cur_color = pc;                              // selected a colour — never paints
+          picker_dirty = true;
+        } else {
+          hx = hex_at_world(pick_world_x(mxp, cam_x, sw, aspect), pick_world_z(myp, cam_z, sh));
+          erase = (btn & 2) != 0;                      // right button (native: L=1, R=2, M=4)
+          apply_edit(cryst, hx.0, hx.1, cur_color, erase);
+          if erase {
+            ngx: vector<integer> = []; ngy: vector<integer> = []; ngc: vector<integer> = [];
+            for ge_i in 0..len(gx) {
+              if !((gx[ge_i] ?? 0) == hx.0 && (gy[ge_i] ?? 0) == hx.1) {
+                ngx += [gx[ge_i] ?? 0]; ngy += [gy[ge_i] ?? 0]; ngc += [gc[ge_i] ?? 0];
+              }
+            }
+            gx = ngx; gy = ngy; gc = ngc;
+          } else {
+            found = false;
+            for gu_i in 0..len(gx) {
+              if (gx[gu_i] ?? 0) == hx.0 && (gy[gu_i] ?? 0) == hx.1 { gc[gu_i] = cur_color; found = true; }
+            }
+            if !found { gx += [hx.0]; gy += [hx.1]; gc += [cur_color]; }
+          }
+          tgt_x = cell_wx(hx.0, hx.1);
+          tgt_z = cell_wz(hx.1);
+          edited = true;
+        }
       }
       prev_btn = btn;
     }
     if edited { edits += 1; dirty = true; }
 
-    // ── Rebuild + re-upload ONLY on an edit; otherwise reuse the VAO ──
+    // ── Camera follow ─────────────────────────────────────────────
+    cam_x += (tgt_x - cam_x) * CAM_LERP;
+    cam_z += (tgt_z - cam_z) * CAM_LERP;
+    world_mvp = topdown_mvp(cam_x, cam_z, aspect);
+
+    // ── Rebuild caches only when their inputs changed ─────────────
     if dirty {
       crystal_incr_rebuild(cryst, state, tick);
-      seg = crystal_incr_full_mesh(cryst);
-      verts = crystal_mesh_to_lines(seg);
-      if vao >= 0 { graphics::gl_delete_vao(vao); vao = -1; }
-      vcount = 0;
-      if len(verts) > 0 {
-        vao = graphics::gl_upload_vertices(verts, 10);
-        vcount = len(verts) / 10;
-      }
+      cverts = crystal_mesh_to_beams(crystal_incr_full_mesh(cryst), 3.0);
+      if crystal_vao >= 0 { graphics::gl_delete_vao(crystal_vao); crystal_vao = -1; }
+      crystal_n = 0;
+      if len(cverts) > 0 { crystal_vao = graphics::gl_upload_vertices(cverts, 10); crystal_n = len(cverts) / 10; }
+
+      gverts = ground_hexes_to_verts(CellSnap{ xs: gx, ys: gy, colors: gc }, GROUND_ALPHA as single);
+      if ground_vao >= 0 { graphics::gl_delete_vao(ground_vao); ground_vao = -1; }
+      ground_n = 0;
+      if len(gverts) > 0 { ground_vao = graphics::gl_upload_vertices(gverts, 10); ground_n = len(gverts) / 10; }
       dirty = false;
     }
-
-    // ── Render the cached mesh ────────────────────────────────────
-    graphics::gl_clear(0x101018);
-    if vao >= 0 {
-      graphics::gl_use_shader(shader);
-      graphics::gl_set_uniform_mat4(shader, "uMVP", mvp);
-      graphics::gl_line_width(2.0);
-      graphics::gl_draw_mode(vao, vcount, graphics::DRAW_LINES);
+    if dirty == false && picker_dirty {
+      pverts = build_picker_verts(cur_color, pick_y0);
+      if picker_vao >= 0 { graphics::gl_delete_vao(picker_vao); picker_vao = -1; }
+      picker_n = 0;
+      if len(pverts) > 0 { picker_vao = graphics::gl_upload_vertices(pverts, 10); picker_n = len(pverts) / 10; }
+      picker_dirty = false;
     }
 
-    if smoke && tick >= 8 {
-      // Screenshot reads GL_BACK — capture BEFORE the swap.
-      graphics::gl_screenshot(WIN_W, WIN_H, "/tmp/crystal_editor.png");
-      println("crystal_editor: smoke ok — {edits} edits, {vcount / 2} segments; wrote /tmp/crystal_editor.png");
+    // ── Render: ground (faint) → crystals → palette overlay ───────
+    graphics::gl_clear(0x0a0a14);
+    graphics::gl_use_shader(shader);
+    graphics::gl_set_uniform_mat4(shader, "uMVP", world_mvp);
+    if ground_vao >= 0 { graphics::gl_draw_mode(ground_vao, ground_n, graphics::DRAW_TRIANGLES); }
+    if crystal_vao >= 0 { graphics::gl_draw_mode(crystal_vao, crystal_n, graphics::DRAW_TRIANGLES); }
+    graphics::gl_set_uniform_mat4(shader, "uMVP", screen_mvp(sw, sh));
+    if picker_vao >= 0 { graphics::gl_draw_mode(picker_vao, picker_n, graphics::DRAW_TRIANGLES); }
+
+    if smoke && tick >= 40 {
+      graphics::gl_screenshot(fb_w, fb_h, "/tmp/crystal_editor.png");
+      println("crystal_editor: smoke ok — {edits} edits, {len(gx)} ground hexes, window {fb_w}x{fb_h}; wrote /tmp/crystal_editor.png");
       break;
     }
 
-    // Present the freshly-drawn back buffer to the window.  Without this
-    // the window only ever shows the (black) front buffer — the draws land
-    // in GL_BACK (which is why the screenshot had content but the screen
-    // stayed black).
     graphics::gl_swap_buffers();
   }
 

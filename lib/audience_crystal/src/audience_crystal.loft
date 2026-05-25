@@ -1140,3 +1140,107 @@ pub fn crystal_mesh_to_lines(m: SegMesh) -> vector<single> {
   }
   out
 }
+
+// Faint filled-hex "ground" geometry for a snapshot — one pointy-top hex
+// (triangle fan, circumradius HEX_SIZE) per painted cell in its palette
+// colour at `alpha`, stride 10 (pos + normal pad + rgba).  Draw UNDER the
+// crystal lines with blending on so painted cells read as a faint footprint
+// (the projector / web "semi-visible hexes").  y = 0 (ground plane).
+pub fn ground_hexes_to_verts(snap: CellSnap, alpha: single) -> vector<single> {
+  out: vector<single> = [];
+  hh = SQRT3 / 2.0 * HEX_SIZE;
+  half = HEX_SIZE / 2.0;
+  // pointy-top corner offsets (dx, dz), clockwise from -30 degrees.
+  cdx: vector<float> = [hh, hh, 0.0, 0.0 - hh, 0.0 - hh, 0.0];
+  cdz: vector<float> = [0.0 - half, half, HEX_SIZE, half, 0.0 - half, 0.0 - HEX_SIZE];
+  for gh_i in 0..len(snap.xs) {
+    ci = snap.colors[gh_i] ?? 0;
+    r = palette_r(ci) as single;
+    g = palette_g(ci) as single;
+    b = palette_b(ci) as single;
+    wx = cell_wx(snap.xs[gh_i] ?? 0, snap.ys[gh_i] ?? 0);
+    wz = cell_wz(snap.ys[gh_i] ?? 0);
+    cxs = wx as single;
+    czs = wz as single;
+    for gh_k in 0..6 {
+      kk = gh_k + 1;
+      if kk > 5 { kk = 0; }
+      // triangle: centre, corner k, corner k+1
+      out += [cxs, 0.0f, czs, 0.0f, 0.0f, 0.0f, r, g, b, alpha];
+      out += [(wx + cdx[gh_k]) as single, 0.0f, (wz + cdz[gh_k]) as single,
+              0.0f, 0.0f, 0.0f, r, g, b, alpha];
+      out += [(wx + cdx[kk]) as single, 0.0f, (wz + cdz[kk]) as single,
+              0.0f, 0.0f, 0.0f, r, g, b, alpha];
+    }
+  }
+  out
+}
+
+// One flat (y=0) triangle as stride-10 verts (pos + normal pad + rgba).
+fn beam_tri(tax: float, taz: float, tbx: float, tbz: float, tcx: float, tcz: float,
+            tr: single, tg: single, tb: single) -> vector<single> {
+  [tax as single, 0.0f, taz as single, 0.0f, 0.0f, 0.0f, tr, tg, tb, 1.0f,
+   tbx as single, 0.0f, tbz as single, 0.0f, 0.0f, 0.0f, tr, tg, tb, 1.0f,
+   tcx as single, 0.0f, tcz as single, 0.0f, 0.0f, 0.0f, tr, tg, tb, 1.0f]
+}
+
+// One flat (y=0) quad a→b→c→d as two stride-10 triangles.
+fn beam_quad(qax: float, qaz: float, qbx: float, qbz: float,
+             qcx: float, qcz: float, qdx: float, qdz: float,
+             qr: single, qg: single, qb2: single) -> vector<single> {
+  o: vector<single> = [];
+  o += beam_tri(qax, qaz, qbx, qbz, qcx, qcz, qr, qg, qb2);
+  o += beam_tri(qax, qaz, qcx, qcz, qdx, qdz, qr, qg, qb2);
+  o
+}
+
+// SegMesh → flat triangle BEAMS of the given world-space `width`, stride 10.
+// Each KIND_MAIN segment (the 6 arms that converge at a cell centre, x0 =
+// centre) tapers to a POINT at its centre end over a 30°-half-angle wedge, so
+// the arms meet flush instead of overlapping square line-caps (which, drawn
+// as wide GL lines, fight for "top" as the camera moves).  KIND_SIDE branches
+// render as plain beams.  Draw with DRAW_TRIANGLES.  y is flattened to 0 (the
+// top-down viewer ignores height).
+pub fn crystal_mesh_to_beams(m: SegMesh, width: float) -> vector<single> {
+  out: vector<single> = [];
+  hw = width / 2.0;
+  // wedge length so the taper half-angle is exactly 30° (tan 30° = 1/√3).
+  tlen = hw * SQRT3;
+  for cb_i in 0..seg_len(m) {
+    ci = m.colors[cb_i] as integer;
+    r = palette_r(ci) as single;
+    g = palette_g(ci) as single;
+    b = palette_b(ci) as single;
+    x0 = m.x0s[cb_i] as float;
+    z0 = m.z0s[cb_i] as float;
+    x1 = m.x1s[cb_i] as float;
+    z1 = m.z1s[cb_i] as float;
+    sdx = x1 - x0;
+    sdz = z1 - z0;
+    len2 = sdx * sdx + sdz * sdz;
+    if len2 < 0.0001 { continue; }
+    seglen = sqrt(len2);
+    ux = sdx / seglen;
+    uz = sdz / seglen;
+    ox = (0.0 - uz) * hw;   // perpendicular offset (× half-width)
+    oz = ux * hw;
+    if (m.kinds[cb_i] as integer) == KIND_MAIN {
+      if seglen > tlen {
+        wx2 = x0 + ux * tlen;
+        wz2 = z0 + uz * tlen;
+        // 30° wedge from the centre point to the full-width cross-section …
+        out += beam_tri(x0, z0, wx2 + ox, wz2 + oz, wx2 - ox, wz2 - oz, r, g, b);
+        // … then the constant-width body to the tip.
+        out += beam_quad(wx2 + ox, wz2 + oz, wx2 - ox, wz2 - oz,
+                         x1 - ox, z1 - oz, x1 + ox, z1 + oz, r, g, b);
+      } else {
+        // main shorter than the taper: a single point→tip triangle.
+        out += beam_tri(x0, z0, x1 + ox, z1 + oz, x1 - ox, z1 - oz, r, g, b);
+      }
+    } else {
+      out += beam_quad(x0 + ox, z0 + oz, x0 - ox, z0 - oz,
+                       x1 - ox, z1 - oz, x1 + ox, z1 + oz, r, g, b);
+    }
+  }
+  out
+}
