@@ -114,18 +114,31 @@ fn main() {
   cur_color = 1;
   prev_btn = 0;
   edits = 0;
+  // Cached GPU mesh — rebuilt + re-uploaded ONLY on an edit (the O(dirty)
+  // the incremental engine is for); every other frame just re-draws the
+  // cached VAO.  Without this the full mesh was re-baked + re-uploaded
+  // every frame.
+  vao = -1;
+  vcount = 0;
+  dirty = false;
 
   println("crystal_editor: left-click/tap paints, right-click erases.  Close the window to quit.");
 
   while graphics::gl_poll_events() {
     tick += 1;
 
-    // ── Input → edit ──────────────────────────────────────────────
+    // ── Input → edit (marks the mesh dirty only when something changed) ──
+    edited = false;
     if smoke {
-      // Headless: paint a small cluster over the first few frames, then quit.
-      if tick == 1 { apply_edit(cryst, 0, 0, 2, false); edits += 1; }
-      if tick == 2 { apply_edit(cryst, 1, 0, 3, false); edits += 1; }
-      if tick == 3 { apply_edit(cryst, 0, 1, 4, false); edits += 1; }
+      // Headless: paint a small connected cluster over the first frames,
+      // then screenshot + quit.  A centre hex plus its ring, varied colours.
+      if tick == 1 { apply_edit(cryst, 0, 0, 2, false); edited = true; }
+      if tick == 2 { apply_edit(cryst, 1, 0, 3, false); edited = true; }
+      if tick == 3 { apply_edit(cryst, -1, 0, 4, false); edited = true; }
+      if tick == 4 { apply_edit(cryst, 0, 1, 5, false); edited = true; }
+      if tick == 5 { apply_edit(cryst, 0, -1, 6, false); edited = true; }
+      if tick == 6 { apply_edit(cryst, 1, 1, 7, false); edited = true; }
+      if tick == 7 { apply_edit(cryst, -1, -1, 8, false); edited = true; }
     } else {
       btn = graphics::gl_mouse_button();
       if btn != 0 && prev_btn == 0 {                  // click DOWN edge
@@ -135,28 +148,38 @@ fn main() {
         erase = (btn & 4) != 0;                       // right button
         if !erase { cur_color = next_color(cur_color); }
         apply_edit(cryst, hx.0, hx.1, cur_color, erase);
-        edits += 1;
+        edited = true;
       }
       prev_btn = btn;
     }
+    if edited { edits += 1; dirty = true; }
 
-    // ── Rebuild (O(dirty)) + render ───────────────────────────────
-    crystal_incr_rebuild(cryst, state, tick);
-    seg = crystal_incr_full_mesh(cryst);
-    verts = crystal_mesh_to_lines(seg);
+    // ── Rebuild + re-upload ONLY on an edit; otherwise reuse the VAO ──
+    if dirty {
+      crystal_incr_rebuild(cryst, state, tick);
+      seg = crystal_incr_full_mesh(cryst);
+      verts = crystal_mesh_to_lines(seg);
+      if vao >= 0 { graphics::gl_delete_vao(vao); vao = -1; }
+      vcount = 0;
+      if len(verts) > 0 {
+        vao = graphics::gl_upload_vertices(verts, 10);
+        vcount = len(verts) / 10;
+      }
+      dirty = false;
+    }
 
+    // ── Render the cached mesh ────────────────────────────────────
     graphics::gl_clear(0x101018);
-    if len(verts) > 0 {
-      vao = graphics::gl_upload_vertices(verts, 10);
+    if vao >= 0 {
       graphics::gl_use_shader(shader);
       graphics::gl_set_uniform_mat4(shader, "uMVP", mvp);
       graphics::gl_line_width(2.0);
-      graphics::gl_draw_mode(vao, len(verts) / 10, graphics::DRAW_LINES);
-      graphics::gl_delete_vao(vao);
+      graphics::gl_draw_mode(vao, vcount, graphics::DRAW_LINES);
     }
 
-    if smoke && tick >= 4 {
-      println("crystal_editor: smoke ok — {edits} edits, {len(verts) / 2} segments rendered");
+    if smoke && tick >= 8 {
+      graphics::gl_screenshot(WIN_W, WIN_H, "/tmp/crystal_editor.png");
+      println("crystal_editor: smoke ok — {edits} edits, {vcount / 2} segments; wrote /tmp/crystal_editor.png");
       break;
     }
   }
