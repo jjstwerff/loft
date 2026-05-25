@@ -11,11 +11,19 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 
 /// Field offsets for the Image struct in the loft store.
+// loft reorders struct fields to place 8-byte members first for alignment, so
+// the source order (name, width, height, data) lays out in the store as:
+//   width  @ 0  (integer → i64, 8 bytes)
+//   height @ 8  (integer → i64, 8 bytes)
+//   name   @ 16 (text    → u32 record ref, 4 bytes)
+//   data   @ 20 (vector  → u32 record ref, 4 bytes)
+// Verified against the interpreter/native read offsets (`OpGetInt(img,0)`,
+// `OpGetInt(img,8)`, `OpGetText(img,16)`, `OpGetField(img,20)`).  @P321c.
 mod image_fields {
-    pub const NAME: u16 = 0;  // text (record ref)
-    pub const WIDTH: u16 = 4; // integer
-    pub const HEIGHT: u16 = 8; // integer
-    pub const DATA: u16 = 12; // vector ref (Pixel elements, 3 bytes each)
+    pub const WIDTH: u16 = 0; // integer (i64)
+    pub const HEIGHT: u16 = 8; // integer (i64)
+    pub const NAME: u16 = 16; // text (record ref)
+    pub const DATA: u16 = 20; // vector ref (Pixel elements, 3 bytes each)
 }
 
 fn decode_png(path: &str) -> Option<(u32, u32, Vec<u8>)> {
@@ -48,10 +56,11 @@ pub unsafe extern "C" fn n_load_png(
         .and_then(|n| n.to_str())
         .unwrap_or("");
     unsafe {
-        // Write Image struct fields.
+        // Write Image struct fields.  width/height are plain `integer` →
+        // 8-byte i64 (set_long); name/data are 4-byte record refs (set_int).
         store.set_text(image.rec, image.pos, image_fields::NAME, name);
-        store.set_int(image.rec, image.pos, image_fields::WIDTH, w as i32);
-        store.set_int(image.rec, image.pos, image_fields::HEIGHT, h as i32);
+        store.set_long(image.rec, image.pos, image_fields::WIDTH, i64::from(w));
+        store.set_long(image.rec, image.pos, image_fields::HEIGHT, i64::from(h));
         // Create pixel vector and bulk-copy RGB data (3 bytes per Pixel).
         let vec = store.alloc_vector_from_bytes(3, pixels.len() as u32 / 3, pixels.as_ptr(), pixels.len());
         store.set_int(image.rec, image.pos, image_fields::DATA, vec.rec as i32);
@@ -84,8 +93,10 @@ pub unsafe extern "C" fn n_save_png(
     path_len: usize,
 ) -> bool {
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
-    let w = unsafe { store.get_int(image.rec, image.pos, image_fields::WIDTH) } as u32;
-    let h = unsafe { store.get_int(image.rec, image.pos, image_fields::HEIGHT) } as u32;
+    // width/height are plain `integer` → 8-byte i64 (get_long); data is a
+    // 4-byte record ref (get_int).
+    let w = unsafe { store.get_long(image.rec, image.pos, image_fields::WIDTH) } as u32;
+    let h = unsafe { store.get_long(image.rec, image.pos, image_fields::HEIGHT) } as u32;
     let data_rec = unsafe { store.get_int(image.rec, image.pos, image_fields::DATA) } as u32;
     if w == 0 || h == 0 || data_rec == 0 {
         return false;

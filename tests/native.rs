@@ -801,7 +801,13 @@ const LIB_PKGS_NATIVE_SKIP: &[&str] = &[
     // …), Call]))`; output_set's S35 hoist matched only a bare `Insert`, so it
     // fell through to the brace-less Insert arm → `let x = let __ref_N = …; call`
     // (let in expression position).  output_set now unspans before the S35 check.
-    "imaging", // @P321c: `#native` load_png/save_png signature mismatch (E0061).
+    // imaging — FIXED (@P321c): the native direct-call codegen now forwards a
+    // LoftStore + converts struct `Reference` ARGS to LoftRef
+    // (`output_native_direct_call`), so a store-mutating package `#native` fn
+    // (`load_png(path, image)`) gets the full 4-arg ABI.  The cdylib's
+    // hardcoded field offsets were also wrong; `loft generate` now emits
+    // offsets from the canonical struct schema (`Stores::position`/`size`)
+    // instead of a separate layout calc, and lib/imaging/native matches them.
 ];
 
 /// Specific library test FILES skipped under `--native` (the rest of the

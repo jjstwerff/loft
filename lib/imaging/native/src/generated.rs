@@ -7,13 +7,13 @@
 // Add to Cargo.toml: loft-ffi = { path = "../../../loft-ffi" }
 
 /// Field offsets for struct `image`.
-/// Record size: 16 bytes (2 words).
+/// Record size: 24 bytes (3 words).
 #[allow(dead_code)]
 pub mod image_fields {
-    pub const NAME: u16 = 0; // text (record ref)
-    pub const WIDTH: u16 = 4; // integer
+    pub const NAME: u16 = 16; // text (record ref)
+    pub const WIDTH: u16 = 0; // integer
     pub const HEIGHT: u16 = 8; // integer
-    pub const DATA: u16 = 12; // vector ref
+    pub const DATA: u16 = 20; // vector ref
 }
 
 #[unsafe(no_mangle)]
@@ -24,4 +24,14 @@ pub unsafe extern "C" fn n_load_png(
 ) -> bool {
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
     todo!("implement n_load_png(path, image)")
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_save_png(
+    store: loft_ffi::LoftStore,
+    image: loft_ffi::LoftRef /* Image */,
+    path_ptr: *const u8, path_len: usize,
+) -> bool {
+    let path = unsafe { loft_ffi::text(path_ptr, path_len) };
+    todo!("implement n_save_png(image, path)")
 }

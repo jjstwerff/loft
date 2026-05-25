@@ -2241,12 +2241,38 @@ extern crate loft;"
         // identical fields, so the bit-copy is safe.  Same trick the
         // text-return path uses for LoftStr (see comment ~30 lines
         // below in this function).
-        let needs_loft_store = matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
+        // @P321c (2026-05-25) — a struct `Reference` ARG (not just a
+        // Vector/Reference return) also needs a `LoftStore`: the cdylib reads
+        // and/or writes the struct's fields through it (imaging's
+        // `n_load_png(store, path, len, image)` decodes a PNG and writes
+        // name/width/height + an allocated pixel vector into `image`).  The
+        // store handle must point at the store the struct lives in — NOT the
+        // null store — so the vector the cdylib allocates lands in the same
+        // store as its owner (mirrors the interpreter's
+        // `make_loft_store(stores, first_ref_store(args))` at
+        // `src/extensions.rs:981`).
+        let first_ref_arg = def
+            .attributes
+            .iter()
+            .find(|a| !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _)));
+        // `returns_loft_ref` drives the RETURN conversion (`from_loft_ref`);
+        // `needs_loft_store` drives the store-handle + guard + `_ls` first arg.
+        // They diverge for a Reference-arg fn with a scalar return (imaging's
+        // `load_png` returns `boolean`): store handle yes, return conversion no.
+        let returns_loft_ref = matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
+        let needs_loft_store = returns_loft_ref || first_ref_arg.is_some();
         if needs_loft_store {
-            // Order matters: extract `store_nr` from the null store as
-            // a SEPARATE statement so it doesn't dual-borrow `stores`
-            // alongside the build_store call (rustc E0502).
-            writeln!(w, "  let _store_nr = stores.null().store_nr;")?;
+            // Order matters: extract `store_nr` as a SEPARATE statement so it
+            // doesn't dual-borrow `stores` alongside the build_store call
+            // (rustc E0502).  A Reference arg pins the store to that arg's
+            // store_nr; otherwise (vector-return only, e.g. random) the null
+            // store hosts the freshly allocated return vector.
+            if let Some(a) = first_ref_arg {
+                let var = sanitize(&a.name);
+                writeln!(w, "  let _store_nr = var_{var}.store_nr;")?;
+            } else {
+                writeln!(w, "  let _store_nr = stores.null().store_nr;")?;
+            }
             writeln!(w, "  let _guard = loft::native_call::enter(stores);")?;
             writeln!(
                 w,
@@ -2278,8 +2304,11 @@ extern crate loft;"
             // E0308.  Both copies are structurally identical (`#[repr(C)]
             // pub struct LoftStr { pub ptr: *const u8, pub len: usize }`),
             // so the field reads on the next lines work either way.
-            write!(w, "  let _ls = unsafe {{ {qualified_symbol}(")?;
-        } else if needs_loft_store {
+            // Named `_ret_str` (not `_ls`) so it never collides with the
+            // `_ls` LoftStore handle when a text-returning native also takes
+            // a Reference arg (@P321c made that combination reachable).
+            write!(w, "  let _ret_str = unsafe {{ {qualified_symbol}(")?;
+        } else if returns_loft_ref {
             // Capture the LoftRef return; convert to DbRef after the call.
             write!(w, "  let _lr = unsafe {{ {qualified_symbol}(")?;
         } else {
@@ -2310,6 +2339,25 @@ extern crate loft;"
                     }
                     first = false;
                     write!(w, "_vp_{var}, _vc_{var}")?;
+                }
+                Type::Reference(_, _) => {
+                    // @P321c — pass the struct as a `LoftRef`.  `var_{var}` is a
+                    // DbRef pointing directly at the struct record (matching the
+                    // interpreter's `ArgVal::Ref(r.store_nr, r.rec, r.pos)` at
+                    // `src/extensions.rs:464`).  `to_loft_ref` returns the loft
+                    // crate's `loft_ffi::LoftRef`; `transmute_copy` reinterprets
+                    // it as the cdylib's identically-`#[repr(C)]` copy without
+                    // naming the type (avoids the "colliding StableCrateId"
+                    // error when two `loft_ffi` copies are in the dep graph —
+                    // same trick the `_ls` store handle uses above).
+                    if !first {
+                        write!(w, ", ")?;
+                    }
+                    first = false;
+                    write!(
+                        w,
+                        "unsafe {{ std::mem::transmute_copy(&loft::codegen_runtime::to_loft_ref(var_{var})) }}"
+                    )?;
                 }
                 Type::Integer(_) | Type::Character => {
                     if !first {
@@ -2347,14 +2395,14 @@ extern crate loft;"
             writeln!(w, ") }};")?;
             writeln!(
                 w,
-                "  let _bytes: Vec<u8> = if _ls.ptr.is_null() {{ Vec::new() }} else {{ unsafe {{ std::slice::from_raw_parts(_ls.ptr, _ls.len) }}.to_vec() }};"
+                "  let _bytes: Vec<u8> = if _ret_str.ptr.is_null() {{ Vec::new() }} else {{ unsafe {{ std::slice::from_raw_parts(_ret_str.ptr, _ret_str.len) }}.to_vec() }};"
             )?;
             writeln!(
                 w,
                 "  stores.scratch.push(unsafe {{ String::from_utf8_unchecked(_bytes) }});"
             )?;
             write!(w, "  Str::new(stores.scratch.last().unwrap())")?;
-        } else if needs_loft_store {
+        } else if returns_loft_ref {
             // Convert cdylib's LoftRef return to a DbRef.  `_guard`
             // (Drop) clears CURRENT_STORES at function exit.  Transmute
             // is INLINED at the from_loft_ref call site — naming

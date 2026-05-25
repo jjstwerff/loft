@@ -547,9 +547,17 @@ annotations collapses the distinction between the two forms.
 **All variable names across every function in a file share one global namespace.** This is an interpreter limitation.
 
 Rules to avoid codegen panics:
-- Use **unique loop variable names** across all functions (e.g. `fib_i`, `mb_x`)
-- Never reuse the same loop variable name in a different function
+- Use **unique loop variable names** across all functions (e.g. `fib_i`, `mb_x`) — defensive default that sidesteps every collision class below
 - Descriptive parameter names help avoid collisions
+
+**Precise rule for *reusing* a loop-var name (@P344):** reuse is allowed as long
+as the type stays consistent — `for i in [1,2,3] {…}` then `for i in [4,5,6] {…}`
+works, and the same name is fine in different functions.  It FAILS only when the
+element type differs: `for i in [1,2,3]` then `for i in ["a","b"]` →
+`loop variable 'i' has type text but was previously used as integer` (one slot +
+type per name in the per-function flat table).  When two loops iterate different
+types, give them distinct names.  (Loop variables are also inference-only —
+`for i: integer in …` does not parse, @P345.)
 
 **Unused loop variable = exit 1.** Use `_` when the value is not needed.
 
