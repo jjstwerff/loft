@@ -178,10 +178,17 @@ fn main() {
     }
 
     if smoke && tick >= 8 {
+      // Screenshot reads GL_BACK — capture BEFORE the swap.
       graphics::gl_screenshot(WIN_W, WIN_H, "/tmp/crystal_editor.png");
       println("crystal_editor: smoke ok — {edits} edits, {vcount / 2} segments; wrote /tmp/crystal_editor.png");
       break;
     }
+
+    // Present the freshly-drawn back buffer to the window.  Without this
+    // the window only ever shows the (black) front buffer — the draws land
+    // in GL_BACK (which is why the screenshot had content but the screen
+    // stayed black).
+    graphics::gl_swap_buffers();
   }
 
   graphics::gl_destroy_window();
