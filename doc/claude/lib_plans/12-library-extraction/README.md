@@ -138,6 +138,7 @@ the registry exists):
 | Library | Notes | Likely extraction priority |
 |---|---|---|
 | `lib/arguments/` | CLI argument parsing | Early — small, stable, low-churn |
+| `lib/time/` | Date/time over epoch-ms ([`../21-datetime/`](../21-datetime/)) | Early — pure-loft, no native deps; `loft-libs-core` |
 | `lib/crypto/` | Cryptographic primitives | Early — bounded scope |
 | `lib/random/` | RNG | Early — bounded scope |
 | `lib/shapes/` | Geometric primitives | Early |
@@ -197,11 +198,11 @@ left column — the drain removes the right-column entries that
 crept in (crypto via @P321a, random via @P321f) and prevents
 new ones (@P321c was reverted along these lines 2026-05-23).
 
-### Tier A — pure-loft, ready today (12)
+### Tier A — pure-loft, ready today (13)
 
 `arguments`, `audience_crystal`, `game_protocol`, `gridmesh`,
 `markdown`, `moros_editor`, `moros_map`, `moros_render`,
-`moros_sim`, `moros_ui`, `shapes`, `world`.
+`moros_sim`, `moros_ui`, `shapes`, `time`, `world`.
 
 No `#native` declarations at all.  The compiler already
 resolves them via `probe_sibling_package` in
@@ -308,7 +309,7 @@ Proposed chunks (refine before the first extraction):
 
 | Chunk repo | Packages | Rationale |
 |---|---|---|
-| `loft-libs-core` | `arguments`, `random`, `crypto` (plus future `json` / `html` / `fs` drains from stdlib — see [§ Phase 3.6 stdlib drain](#phase-36--stdlib-drain-into-libs)) | Small, stable, no graphics deps — extract first |
+| `loft-libs-core` | `arguments`, `random`, `crypto`, `time` (plus future `json` / `html` / `fs` drains from stdlib — see [§ Phase 3.6 stdlib drain](#phase-36--stdlib-drain-into-libs)) | Small, stable, no graphics deps — extract first.  `time` ([`../21-datetime/`](../21-datetime/)) is pure-loft; its companion built-in `DateTime` type (plan-21 arc A) is a language PRIMITIVE in the compiler crate, NOT library code — it does not count against the drain goal, exactly as `integer`/`text` don't. |
 | `loft-libs-graphics` | `graphics`, `imaging`, `gridmesh`, `shapes` | Graphics stack + `#native` crates; `shapes` is 2D shape drawing + collision (was in core, moved here 2026-05-24 — its loft.toml comment is "Shape drawing and 2D collision detection library"); coordinate with [`../02-graphics/`](../02-graphics/) |
 | `loft-libs-net` | `server`, `web`, `game_protocol` | HTTP / multiplayer; coordinate with [`../08-server/`](../08-server/) |
 | `loft-libs-world` | `world` (expanded by Phase 7a to absorb moros's shared spatial primitives: hex addressing, wall geometry, groups, height, coupled geometry).  Folds in `lib/wall.loft` content rather than carrying `wall` as a separate package. | Shared map / spatial primitives consumed by TTT v5, audience demo, moros, dryopea ([@PLAN46](../../plans/future/46-dryopea/README.md)).  Lives in its own chunk because consumers span multiple games and the dryopea plan blocks on it. |
@@ -1602,7 +1603,7 @@ unchanged to each extracted chunk (it keys off `lib/<pkg>/tests/*.loft` +
 | Interpreter | `tests/wrap.rs::library_suite` | every `lib/*/tests/*.loft` via `loft test` (subprocess, package-resolved); skips via `lib_test_skipped` (`LIB_PKGS_SKIP` / `LIB_TESTS_SKIP`) |
 | Native | `tests/native.rs::native_library_suite` | the same via `loft --native test` (compiles each to native Rust, linking the package's `#native` crate); skips `LIB_PKGS_NATIVE_SKIP` / `LIB_TESTS_NATIVE_SKIP` (native-codegen gaps, [@P321](../../PROBLEMS.md)) |
 | Leak | `tests/wrap.rs` `run_test` gate | unfreed stores at program exit fail; allowlist `SCRIPTS_LEAK_ALLOW` ([@P322](../../PROBLEMS.md)) |
-| WASM | **Not yet implemented** — known gap, see [§ WASM gate](#wasm-gate--known-gap-before-chunk-extraction-starts) below | Should run `loft --native-wasm test` per package once the infrastructure exists |
+| WASM | `tests/html_wasm.rs::wasm_library_suite` (added 2026-05-25) | every main()-bearing `lib/*/tests/*.loft`, run under **Node** (browser `feature="wasm"` via `--html` + `tools/wasm_repro.mjs`) and **wasmtime** (`wasm32-wasip2`) when available; skips `LIB_PKGS_WASM_SKIP` / `LIB_TESTS_WASM_SKIP` (`server` platform-N/A, `imaging` [@P321c](../../PROBLEMS.md), `world` [@P334](../../PROBLEMS.md)) |
 | Quick dev loop | `make test-packages` | interpreter-only shell loop over every package test (dev-only, in `ci-full`; the cargo suites above are the gates) |
 
 When a chunk extracts, its repo CI runs the equivalent (`loft test` +
@@ -1611,13 +1612,17 @@ the skip-lists travel with the code as the chunk's own `*_NATIVE_SKIP` /
 `*_WASM_SKIP` / leak allowlist.  This is the "clear CI path for itself" the
 libraries needed before living outside the monorepo (Open question #4 below).
 
-### WASM gate — known gap before chunk extraction starts
+### WASM gate — IMPLEMENTED 2026-05-25 (`tests/html_wasm.rs::wasm_library_suite`)
 
 `--native-wasm` is loft's third backend ([WASM.md](../../WASM.md)) and
 PACKAGES.md's [target matrix](../../PACKAGES.md#target-matrix) lists
-`wasm32-wasip2` as a first-class output.  Today the library CI gate
-covers interpreter + native but NOT WASM — there is no `wasm_library_suite`
-equivalent of `native_library_suite`.
+`wasm32-wasip2` as a first-class output.  The library CI gate now covers
+WASM as well: `wasm_library_suite` runs every main()-bearing
+`lib/*/tests/*.loft` under Node (browser `feature="wasm"`) and wasmtime
+(`wasm32-wasip2`) when those runtimes are present, self-skipping
+otherwise.  First green coverage: `markdown` + `time` on both runtimes.
+First catches: `world` traps on both ([@P334](../../PROBLEMS.md));
+`imaging` browser-wasm codegen is broken ([@P321c](../../PROBLEMS.md)).
 
 **Why it matters for extraction:**
 

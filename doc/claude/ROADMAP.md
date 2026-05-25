@@ -168,6 +168,7 @@ Unblocks 2+ downstream plans.  Lattice points in the dependency graph.
 | LSP-CLIENT | `loft-lsp-bridge` sidecar + viewer code intelligence — rust-analyzer / loft-lsp / jdtls | L | ✓ | lib_plans/future/14-viewer-lsp-bridge/README.md |
 | (cross) | Lazy stdlib loading — trigger-based pay-for-what-you-use | M | ✓ | lib_plans/future/03-lazy-stdlib/README.md |
 | **REGEX.0** | `lib/regex/` MVP — `#native` cdylib bridge to Rust `regex` crate (future/paused 2026-05-20, unblocks @PLAN37 phase 07 scan.loft consolidation + check_doc_drift.sh port) | S | ✓ | lib_plans/future/01-regex/README.md |
+| **TIME.1** | `DateTime` value type (i64 epoch-ms, JS-`Date`-aligned) + built-in `{dt:…}` formatting + pure-loft `lib/time` operations — unblocks the `training` app's date-indexed B8–B10 routines; broadly useful Data/ETL gap | H | ~ | lib_plans/future/21-datetime/README.md |
 
 ---
 

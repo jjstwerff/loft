@@ -27,15 +27,30 @@ The parser **rejects** code that violates these rules.
 
 | Type | Description | Null sentinel |
 |------|-------------|--------------|
-| `integer` | 32-bit signed int | `i32::MIN` (-2 147 483 648) |
-| `long` | 64-bit signed int; literal suffix `l`: `10l` | `i64::MIN` |
+| `integer` | **64-bit** signed int (the base integer type; i64 at rest) | `i64::MIN` |
 | `float` | 64-bit float; literal must contain `.`: `1.0` | `NaN` |
 | `single` | 32-bit float; literal suffix `f`: `1.0f` | `NaN` (32-bit) |
 | `boolean` | `true` / `false` | `false` (so `!b` is true for both `null` and `false`) |
-| `character` | Single Unicode char; literal: `'a'`, `'😊'` | `'\0'` |
+| `character` | Single Unicode char; literal: `'a'`, `'😊'`; `c as integer` → codepoint | `'\0'` |
 | `text` | UTF-8 string (primary string type) | internal null pointer |
 
-**Integer sentinel warning:** Any arithmetic that produces exactly `i32::MIN` becomes `null`. Division by zero also returns `null`. Use `long` or `not null` fields for the full 32-bit range.
+**There is no `long` type and no `l` literal suffix** — both were
+removed.  `integer` is already 64-bit (i64), so integer literals are
+plain (`86400000`, not `86400000l`), and `now()` / `File.size` return a
+full-range `integer`.  Writing `long` or `10l` is a parse error
+(*"Undefined type long"* / *"Expect token ;"*).
+
+**Narrow / sized integers are aliases of `integer`** (defined in
+`default/01_code.loft`), for byte-width-sensitive file / wire formats:
+`i8` `size(1)`, `i16`/`u16` `size(2)`, `i32`/`u32` `size(4)`.  Cast with
+`x as i32` etc.  Use plain `integer` for ordinary arithmetic — it has
+the full 64-bit range.
+
+**Integer sentinel warning:** Any arithmetic that produces exactly
+`i64::MIN` becomes `null`. Division by zero also returns `null`. A
+function returning `integer` may `return null` (it yields `i64::MIN`,
+detectable with `!result`).  Use `not null` fields when a slot must
+reject null.
 
 **`text` vs `string`:** The canonical string type is `text`. Using `string` in struct fields causes errors.
 
@@ -349,7 +364,7 @@ Assignment: `=`, `+=`, `-=`, `*=`, `/=`, `%=`
 
 ```loft
 name = record.field ?? "default"   // null-coalescing
-x as long                          // cast integer to long
+x as i32                           // cast to a 4-byte sized integer
 flags & ~32                        // bitwise NOT — clears bit 5
 ```
 
@@ -574,7 +589,7 @@ for ef in dir.files() {
 }
 
 if f.exists() { }
-size_bytes = f.size;            // long — works for any file
+size_bytes = f.size;            // integer (i64) — works for any file
 ```
 
 **`f.content()` is UTF-8-only.**  It silently returns `""` on a
@@ -597,7 +612,7 @@ block exit:
   version = f#read as i32;
   total   = f#read as i32;            // declared file length
   // Seek past the header + JSON data to a later chunk:
-  f#next = (20 + json_len) as long;
+  f#next = (20 + json_len) as integer;
   bin_len = f#read as i32;
 }
 
@@ -638,8 +653,8 @@ Notes:
 - `f += expr` appends `expr` to the file, respecting the `#format`
   endianness.  `text` → raw bytes, `vector<T>` → each element in
   sequence at its declared width.
-- `f.size` returns a `long`; compare with `0l` not `0`.
-- `f#next = offset as long` seeks.  Reading position advances
+- `f.size` returns an `integer` (i64); compare with `0`.
+- `f#next = offset as integer` seeks.  Reading position advances
   automatically after each `f#read` — don't manually advance it
   between sequential reads.
 - **No `f.bytes()` API** — there's no "read all N bytes into a
@@ -693,7 +708,7 @@ loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 - [ ] No `arr[lo..hi]` passed as `vector<T>` argument
 - [ ] `len`, `sorted`, `ticks`, `round`, `map`, `filter`, `reduce` not used as variable names
 - [ ] All `use` imports appear before any other declarations
-- [ ] Long literals use `l` suffix where needed (`0l`, `1000l`)
+- [ ] No `long` type / no `l` literal suffix — `integer` is i64; literals are plain (`86400000`), `f.size` compares with `0`
 - [ ] `--path` ends with `/` in CLI calls
 - [ ] String type in struct fields is `text`, not `string`
 - [ ] No `character == text` comparisons — use `"{c}" == t`
