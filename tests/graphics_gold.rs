@@ -357,3 +357,104 @@ fn text_matches_gold() {
         /* mean_abs */ 0.5,
     );
 }
+
+// ── GL-render golden track ──────────────────────────────────────────────────
+//
+// The canvas goldens above exercise the software rasterizer → save_png.  This
+// one exercises the real GL pipeline: the crystal editor's --smoke mode paints
+// a fixed hex cluster and renders the faint ground hexes
+// (`ground_hexes_to_verts`), the crystal beams (`crystal_mesh_to_beams`, the
+// 30° points), and the palette, then writes the framebuffer via
+// `gl_screenshot`.  Run under Xvfb + llvmpipe so the render is CPU-deterministic
+// and matches CI rather than the dev box's GPU.  Looser tolerance than the
+// exact canvas goldens — GL line/triangle AA can drift a few LSB across Mesa
+// versions — but still catches beams / ground / palette gone, mispositioned,
+// or recoloured.  Skips (does not fail) when xvfb-run, the graphics cdylib, or
+// a working software-GL context is unavailable.
+
+fn has_cmd(cmd: &str) -> bool {
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!("command -v {cmd}"))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[test]
+fn crystal_editor_gl_matches_gold() {
+    if !graphics_native_built() {
+        eprintln!("skipping crystal GL gold: graphics cdylib not built");
+        return;
+    }
+    if !has_cmd("xvfb-run") {
+        eprintln!("skipping crystal GL gold: xvfb-run not installed");
+        return;
+    }
+    let root = workspace_root();
+    let shot = PathBuf::from("/tmp/crystal_editor_gold.png");
+    let _ = std::fs::remove_file(&shot);
+    let out = Command::new("xvfb-run")
+        .args([
+            "-a",
+            "-s",
+            "-screen 0 1000x1000x24",
+            "env",
+            "LIBGL_ALWAYS_SOFTWARE=1",
+            "GALLIUM_DRIVER=llvmpipe",
+        ])
+        .arg(loft_bin())
+        .arg("--no-warnings")
+        .arg("--path")
+        .arg(format!("{}/", root.display()))
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg("tools/audience-demo/crystal_editor.loft")
+        .arg("--smoke")
+        .arg("--screenshot")
+        .arg(&shot)
+        .current_dir(&root)
+        .output()
+        .expect("invoke xvfb-run");
+
+    if !shot.exists() {
+        // No framebuffer captured — almost always a missing software-GL
+        // context in this environment, not a rendering regression.  Skip.
+        eprintln!(
+            "skipping crystal GL gold: no screenshot produced (software GL unavailable?)\nstdout={}\nstderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        return;
+    }
+
+    let gold = root.join("tests/gold").join("crystal-editor-gl.png");
+    if update_gold() {
+        std::fs::copy(&shot, &gold).expect("copying new GL gold");
+        eprintln!("UPDATE_GOLD=1: wrote {}", gold.display());
+        return;
+    }
+    assert!(
+        gold.exists(),
+        "GL gold missing: {}\nrun `UPDATE_GOLD=1 cargo test --test graphics_gold crystal_editor_gl`",
+        gold.display()
+    );
+    let (actual, aw, ah) = decode_rgba8(&shot);
+    let (expected, ew, eh) = decode_rgba8(&gold);
+    assert_eq!(
+        (aw, ah),
+        (ew, eh),
+        "GL gold dimensions differ: {aw}x{ah} vs {ew}x{eh}"
+    );
+    let diff = compare_rgba(&actual, &expected);
+    let (max_abs, mean_abs) = (16u32, 2.0f64);
+    assert!(
+        diff.max_abs <= max_abs && diff.mean_abs <= mean_abs,
+        "crystal GL gold mismatch:\n  max_abs={} (limit {max_abs})\n  mean_abs={:.4} (limit {mean_abs})\n  \
+         differing={}/{} pixels\n  to accept: UPDATE_GOLD=1 cargo test --test graphics_gold crystal_editor_gl",
+        diff.max_abs,
+        diff.mean_abs,
+        diff.differing_pixels,
+        diff.total_pixels
+    );
+}

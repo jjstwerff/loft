@@ -146,8 +146,12 @@ fn apply_edit(cryst: &CrystalIncr, x: integer, y: integer, color: integer, erase
 
 fn main() {
   smoke = false;
+  shot_path = "/tmp/crystal_editor.png";   // --smoke screenshot target
+  want_shot = false;
   for ce_arg in arguments() {
-    if ce_arg == "--smoke" { smoke = true; }
+    if want_shot { shot_path = "{ce_arg}"; want_shot = false; }
+    else if ce_arg == "--smoke" { smoke = true; }
+    else if ce_arg == "--screenshot" { want_shot = true; }
   }
 
   if !graphics::gl_create_window(WIN_W, WIN_H, "Crystal Editor — stand-alone") {
@@ -285,8 +289,8 @@ fn main() {
     if picker_vao >= 0 { graphics::gl_draw_mode(picker_vao, picker_n, graphics::DRAW_TRIANGLES); }
 
     if smoke && tick >= 40 {
-      graphics::gl_screenshot(fb_w, fb_h, "/tmp/crystal_editor.png");
-      println("crystal_editor: smoke ok — {edits} edits, {len(gx)} ground hexes, window {fb_w}x{fb_h}; wrote /tmp/crystal_editor.png");
+      graphics::gl_screenshot(fb_w, fb_h, shot_path);
+      println("crystal_editor: smoke ok — {edits} edits, {len(gx)} ground hexes, window {fb_w}x{fb_h}; wrote {shot_path}");
       break;
     }
 

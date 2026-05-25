@@ -35,9 +35,13 @@ jobs:
       # `libasound2-dev` provides the ALSA headers that `alsa-sys`
       # (transitive dep of `rodio` in lib/graphics/native) builds against;
       # without it the crystal_render gold tests fail to compile on Linux.
-      - name: Install mold + ALSA dev headers (Linux only)
+      # `xvfb` + `libgl1-mesa-dri` give a headless software-GL (llvmpipe)
+      # display so the GL-render golden
+      # (graphics_gold::crystal_editor_gl_matches_gold) can run; the canvas
+      # goldens need no display.
+      - name: Install mold + ALSA + headless GL (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri
 
       - name: Cache cargo registry and build
         uses: actions/cache@v4
@@ -87,6 +91,13 @@ jobs:
       - name: Build wasm rlib (for html_wasm tests)
         if: runner.os == 'Linux'
         run: cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
+
+      # Build the graphics native cdylib so the graphics_gold tests (canvas
+      # + GL-render goldens) run instead of skipping — graphics_gold checks
+      # for libloft_graphics_native.so before comparing.
+      - name: Build graphics native cdylib (Linux only)
+        if: runner.os == 'Linux'
+        run: cargo build --release --manifest-path lib/graphics/native/Cargo.toml
 
       # cargo-nextest runs each test in its own process with better
       # scheduling than cargo test — typically 30-50 % faster on this
