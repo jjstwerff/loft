@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ureq = { version = "2", features = ["cookies"] }
+base64 = "0.22"
 loft-ffi = { path = "../../../loft-ffi" }
 
 [build-dependencies]

@@ -181,6 +181,18 @@ pub fn delete(self: HttpSession, url: text, headers: vector<text>) -> HttpRespon
   HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
+// --- Encoding helpers ---
+//
+// Standard base64 (RFC 4648).  Handy for Basic-auth / OAuth2 / SSO header
+// construction.  `base64_decode` interprets the decoded bytes as UTF-8; invalid
+// input decodes to "".
+
+pub fn base64_encode(s: text) -> text;
+#native
+
+pub fn base64_decode(s: text) -> text;
+#native
+
 // --- WebSocket client ---
 //
 // Handler-style API: the programmer opens a session with `ws_handler`,

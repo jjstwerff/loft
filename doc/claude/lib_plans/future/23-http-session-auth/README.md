@@ -12,8 +12,10 @@ field + `header`/`headers_for`, case-insensitive).  P2 = cookie-jar
 `HttpSession` (`http_session(follow_redirects)` + `get`/`post`/`put`/`delete`,
 `ureq` `cookies` feature).  10/10 `tests/http.loft` pass on `--interpret`; a
 minimal session program (cookie round-trip + header read) verified on
-`--native`.  Filed **@P365** along the way (early `return []` miscompiles on
-both backends — worked around in `split_headers`).  P3 (base64) open, optional.
+`--native`.  Filed + **fixed @P365** along the way (early `return []`
+miscompiled on both backends — parser fix in `control.rs`/`vectors.rs`).
+**P3 shipped** (`base64_encode`/`decode`, RFC-vector test passing on both
+backends).  This plan is now **complete** — ready to close to `finished/`.
 Surfaced by the **training port**
 (consume-only; their hand-off is
 `~/workspace/personal/training/loft/requests/E2-lib-web-http-session.md`) as the
@@ -52,7 +54,7 @@ because every native signature already has an `src/extensions.rs` auto-marshal a
 |---|---|---|---|
 | **P1** — expose response headers (`header` / `headers_for`) | [P1.1](IMPL.md#step-p11--capture-response-headers-natively-rust-only-no-loft-surface-yet) + [P1.2](IMPL.md#step-p12--expose-headers-to-loft-headers-field--header--headers_for) | E2 spec part 1 | **Shipped 2026-05-27** — the minimum A2 unblock |
 | **P2** — cookie-jar `HttpSession` (get/post/put/delete, redirect control) | [P2.1](IMPL.md#step-p21--agent-registry--session-natives-rust-only) + [P2.2](IMPL.md#step-p22--httpsession-loft-api-struct--verbs) | E2 spec part 2 | **Shipped 2026-05-27** — cookie round-trip verified both backends |
-| **P3** — `base64_encode`/`decode` (+ `sha256`) | [P3.1](IMPL.md#step-p31--base64_encode--base64_decode-in-libweb) | training nice-to-have #7 | Open — XS, optional, helps OAuth/SSO headers |
+| **P3** — `base64_encode`/`decode` | [P3.1](IMPL.md#step-p31--base64_encode--base64_decode-in-libweb) | training nice-to-have #7 | **Shipped 2026-05-27** — RFC vector passes both backends (`sha256` not built; add on demand) |
 | _(related)_ `exec()` subprocess primitive | — | training gap #3 | **Likely moot** — superseded by this workstream |
 | _(related)_ TLS/JA3 impersonation (E1) | — | training request #6 | **Deferred** — conditional; "don't build yet" |
 

@@ -163,6 +163,27 @@ pub unsafe extern "C" fn n_ascii_lower(ptr: *const u8, len: usize) -> LoftStr {
     loft_ffi::ret(s.to_ascii_lowercase())
 }
 
+/// Standard base64-encode the input bytes (helps OAuth2 / SSO header building).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_base64_encode(ptr: *const u8, len: usize) -> LoftStr {
+    use base64::Engine;
+    let s = unsafe { loft_ffi::text(ptr, len) };
+    loft_ffi::ret(base64::engine::general_purpose::STANDARD.encode(s.as_bytes()))
+}
+
+/// Standard base64-decode; invalid input decodes to an empty string.  The
+/// decoded bytes are interpreted as UTF-8 (lossily) since loft `text` is a
+/// UTF-8 buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_base64_decode(ptr: *const u8, len: usize) -> LoftStr {
+    use base64::Engine;
+    let s = unsafe { loft_ffi::text(ptr, len) };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(s.as_bytes())
+        .unwrap_or_default();
+    loft_ffi::ret(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 use std::cell::{Cell, RefCell};
 
 thread_local! {

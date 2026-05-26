@@ -70,3 +70,10 @@ fn test_session_redirect_location() {
   assert(r.status >= 300 && r.status < 400, "3xx, got {r.status}");
   assert(r.header("location") != "", "Location header readable");
 }
+
+fn test_base64() {
+  assert(web::base64_encode("hello") == "aGVsbG8=", "rfc vector encode: {web::base64_encode("hello")}");
+  assert(web::base64_decode("aGVsbG8=") == "hello", "rfc vector decode: {web::base64_decode("aGVsbG8=")}");
+  // round-trip a string needing padding
+  assert(web::base64_decode(web::base64_encode("Aladdin:open sesame")) == "Aladdin:open sesame", "basic-auth round-trip");
+}
