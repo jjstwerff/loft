@@ -223,7 +223,7 @@ order); 4 is the cross-tier validation; 5+6 wire downstream.
 
 Phases 00 and 01 ship together on branch
 **`store-durable-phase1`** (the substantial-plan exception to
-[CLAUDE.md § Branch policy rule 4](../../../../CLAUDE.md)
+[CLAUDE.md § Branch policy rule 4](../../../../../CLAUDE.md)
 default of "one general working branch") and merge as a single
 focused PR.
 
