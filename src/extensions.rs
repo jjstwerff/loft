@@ -931,7 +931,16 @@ fn dispatch_call(
             let (p1, l1) = text_arg!(1);
             let (p2, l2) = text_arg!(2);
             let (p3, l3) = text_arg!(3);
-            stores.put(stack, f(p0, l0, p1, l1, p2, l2, p3, l3));
+            // @P362: widen the i32 C return to the 8-byte loft `integer`
+            // slot (put::<i64> + widen_int), exactly like every other
+            // I32-return arm.  A bare `stores.put` infers `i32` and pushes
+            // only 4 bytes, leaving `stack.pos` 4 short — the frame then
+            // misaligns and the caller's next ref slot reads garbage
+            // (n_http_do("GET",url,"","") → HttpResponse store panic).
+            stores.put::<i64>(
+                stack,
+                widen_int(f(p0, l0, p1, l1, p2, l2, p3, l3)),
+            );
         }
         // (text, text) -> bool
         (&[ArgT::Text, ArgT::Text], Some(ArgT::Bool)) => {
