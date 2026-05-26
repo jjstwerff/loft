@@ -773,6 +773,17 @@ impl Type {
 
     #[must_use]
     pub fn is_same(&self, other: &Type) -> bool {
+        // @P352: two `Type::Function`s compare by SHAPE (params + return),
+        // ignoring the dep list — a fn-ref's dep list records which closure
+        // vars it captured, which differs per binding site, so a raw `==`
+        // wrongly reports two structurally-identical fn-refs as different
+        // (e.g. the @P344 loop-var reuse check fired on `for f in a {…}` then
+        // `for f in b {…}` even though both are `fn(integer)->integer`).
+        if let (Type::Function(sp, sr, _), Type::Function(op, or, _)) = (self, other) {
+            return sp.len() == op.len()
+                && sp.iter().zip(op.iter()).all(|(a, b)| a.is_equal(b))
+                && sr.is_equal(or);
+        }
         self == other
             || (matches!(self, Type::Enum(_, _, _)) && matches!(other, Type::Enum(_, _, _)))
             || (matches!(self, Type::Reference(_, _)) && matches!(other, Type::Reference(_, _)))

@@ -1,0 +1,41 @@
+// @P343 regression: iterating a `vector<fn(...)>` of named fn-refs with a
+// `for` loop must dispatch each element (was: interp returned 0 because the
+// loop broke on iteration 0; --native failed E0600 / called an invalid d_nr).
+// Three coordinated fixes in src/parser/collections.rs::iterator + the
+// for-loop termination: (1) element stride 4 for Function content, (2) read
+// the fn-ref as OpGetInt4(d_nr) + OpNullRefSentinel (mirroring the working
+// index-apply path in parser/fields.rs, NOT the struct-field __closure_rec
+// path), (3) terminate on `d_nr > 0` (i64::MIN on interp / 0u32 on native at
+// out-of-bounds — both <= 0; every real fn d_nr is > 0).  Index access
+// (`fs[i]`) already worked via @P214; this pins the iteration path on both
+// backends.
+fn dbl(x: integer) -> integer { return x * 2; }
+fn inc(x: integer) -> integer { return x + 1; }
+fn neg(x: integer) -> integer { return 0 - x; }
+fn apply(f: fn(integer) -> integer) -> integer { return f(10); }
+
+fn main() {
+  // single element
+  one: vector<fn(integer) -> integer> = [dbl];
+  s = 0;
+  for g in one { s += apply(g); }
+  assert(s == 20, "single for-loop: {s}");
+
+  // multiple, distinct functions — sum = 20 + 11 + (-10) = 21
+  // (distinct loop-var name `f` avoids the @P344 same-name reuse check,
+  //  which currently mis-fires even for identical fn(...) types)
+  fs: vector<fn(integer) -> integer> = [dbl, inc, neg];
+  total = 0;
+  n = 0;
+  for f in fs { total += apply(f); n += 1; }
+  assert(total == 21, "multi for-loop total: {total}");
+  assert(n == 3, "multi for-loop count: {n}");
+
+  // for-loop result must match index-apply (the @P214 path)
+  idx_total = 0;
+  i = 0;
+  while i < len(fs) { idx_total += apply(fs[i]); i += 1; }
+  assert(idx_total == total, "for-loop vs index disagree: {total} vs {idx_total}");
+
+  print("p343 ok\n");
+}

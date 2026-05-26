@@ -240,6 +240,15 @@ impl Parser {
                         && let Some(n) = spec.vector_narrow_width()
                     {
                         u16::from(n)
+                    } else if matches!(&**vtp, Type::Function(_, _, _)) {
+                        // @P343: a `vector<fn(...)>` element stores only the
+                        // 4-byte i32 d_nr (non-capturing fn-ref — the same
+                        // layout the index-apply path reads via
+                        // `OpGetVector(fs, 4, i)` in parser/fields.rs:725).
+                        // `database.size(db_tp)` returns 0 for the function
+                        // content type, which would make every element read
+                        // alias element 0 (or read across boundaries).
+                        4
                     } else {
                         self.database.size(db_tp)
                     };
@@ -266,6 +275,26 @@ impl Parser {
                         // `get_val(Tuple, …)` falls through the field-
                         // type dispatch and errors with "Field access
                         // not supported on type tuple([…])".
+                    } else if matches!(*vtp.clone(), Type::Function(_, _, _)) {
+                        // @P343: vector-of-fn-ref element read.  Mirror the
+                        // working index-apply path (parser/fields.rs:730-752)
+                        // — vector elements store only the 4-byte d_nr, so
+                        // assemble the stack fn-ref tuple from `OpGetInt4`
+                        // (the d_nr) + `OpNullRefSentinel` (the closure half;
+                        // vector fn-refs are non-capturing).  Routing through
+                        // `get_val(Function, …)` instead (the struct-field
+                        // path) reads a non-existent `__closure_rec` child via
+                        // `OpRefFromChildRec(OpGetField(elem, 4, 0))` →
+                        // garbage closure.  The block name `fn_ref_field_read`
+                        // is reused so native codegen's tuple-emit shortcut
+                        // (`((d_nr) as u32, closure_DbRef)`) fires here too.
+                        let read_dnr = self.cl("OpGetInt4", &[ref_expr, Value::Int(0)]);
+                        let read_clos = self.cl("OpNullRefSentinel", &[]);
+                        ref_expr = crate::data::v_block(
+                            vec![read_dnr, read_clos],
+                            *vtp.clone(),
+                            "fn_ref_field_read",
+                        );
                     } else {
                         // route through `get_val` with the full
                         // element Type — preserves `IntegerSpec.forced_size`
@@ -1691,6 +1720,34 @@ use #count instead"
                 let test_exhausted = self.cl("OpCoroutineExhausted", &[Value::Var(gen_var)]);
                 lp.push(v_if(
                     test_exhausted,
+                    v_block(vec![Value::Break(0)], Type::Void, "break"),
+                    Value::Null,
+                ));
+            } else if matches!(in_type, Type::Vector(_, _))
+                && matches!(&var_tp, Type::Function(_, _, _))
+            {
+                // @P343: a `vector<fn(...)>` loop terminates by testing the
+                // d_nr half of the loop's fn-ref (see the
+                // `fn_ref_field_read` branch in `iterator()`): break once it
+                // is no longer a valid (callable, > 0) function reference.
+                // At out-of-bounds the element read sets the d_nr to the
+                // backend's invalid sentinel — i64::MIN on the interpreter
+                // (`OpGetInt4` on the `OpGetVectorNullable` null sentinel)
+                // and 0 on `--native` (that i64::MIN truncates to `0u32` in
+                // the `(u32, DbRef)` fn-ref tuple, which is also native's
+                // "invalid fn-ref" marker).  Both are `<= 0`, and every
+                // real fn d_nr is `> 0`, so `d_nr > 0` (encoded as
+                // `OpLtInt(0, d_nr)`) is the one test that terminates
+                // correctly on both backends.  `convert(Function, Boolean)`
+                // has no rule, so the generic branch below would leave the
+                // raw 20-byte fn-ref for `OpNot` to misread — testing the
+                // always-null closure half, which broke the loop on
+                // iteration 0.
+                let dnr = Value::FnRefDnr(for_var);
+                let in_bounds = self.cl("OpLtInt", &[Value::Int(0), dnr]);
+                let test_for = self.cl("OpNot", &[in_bounds]);
+                lp.push(v_if(
+                    test_for,
                     v_block(vec![Value::Break(0)], Type::Void, "break"),
                     Value::Null,
                 ));

@@ -11638,7 +11638,6 @@ fn test() {
 /// If this test passes: storage works; check V2 (for-loop iteration)
 /// and V3 (par with single element) next.
 #[test]
-#[ignore = "p4dA2 — parse fails with 'Expect token ;' at the vector<fn(...)> declaration when the body uses index access (`f = fs[0]`) instead of `for f in fs par(...)`.  Keeping ignored while diagnosing."]
 fn p4d_a2_vector_fn_ref_index_access() {
     code!(
         "fn dbl(x: integer) -> integer { x * 2 }
@@ -11660,7 +11659,10 @@ fn run() -> integer {
 /// culprit.  If this hangs too: the bug is in for-loop iteration codegen
 /// for vector<fn-ref>.  If this returns 20: the bug is par-specific.
 #[test]
-#[ignore = "p4dA2 — parse fails identically to V1 (`Expect token ; at line 4:18` — the `(` in `fn(integer)`).  Suggests the parser only accepts vector<fn(...)> declaration syntax in specific contexts (canary's `for f in fs par(...)` clause).  Keeping ignored while investigating the parser path."]
+// @P343 FIXED 2026-05-26: `for f in fs` over a `vector<fn-ref>` now
+// dispatches each element (was: returned 0 because the loop broke on
+// iteration 0).  The parse-failure ignore reason was stale.  Native is
+// covered by `tests/scripts/repro_p343.loft` (runs under both backends).
 fn p4d_a2_vector_fn_ref_for_loop() {
     code!(
         "fn dbl(x: integer) -> integer { x * 2 }
