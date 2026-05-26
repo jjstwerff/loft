@@ -132,8 +132,49 @@ fn forbidden_library_symbols() -> Vec<(String, String)> {
             }
             if let Some((_, value)) = trimmed.split_once('=') {
                 let sym = value.trim().trim_matches('"').to_string();
-                if !sym.is_empty() {
+                if !sym.is_empty() && !out.iter().any(|(s, _)| *s == sym) {
                     out.push((sym, owner.clone()));
+                }
+            }
+        }
+        // Also derive symbols from the co-located `#native "n_*"`
+        // annotations in the package's `.loft` source.  This is the
+        // single, co-located source of truth: a library can declare its
+        // native bindings purely via annotations (no separate
+        // `[native.functions]` manifest table) and still be guarded here.
+        let mut loft_files = Vec::new();
+        collect_loft_files(&path, &mut loft_files);
+        for lf in &loft_files {
+            let Ok(src) = fs::read_to_string(lf) else {
+                continue;
+            };
+            // Track the most recent `fn <name>` so a BARE `#native`
+            // (symbol defaulted to `n_<name>`) is guarded as well as an
+            // explicit `#native "n_custom"` override.
+            let mut last_fn: Option<String> = None;
+            for line in src.lines() {
+                let t = line.trim();
+                let decl = t.strip_prefix("pub ").unwrap_or(t);
+                if let Some(after) = decl.strip_prefix("fn ") {
+                    let name: String = after
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !name.is_empty() {
+                        last_fn = Some(name);
+                    }
+                } else if let Some(rest) = t.strip_prefix("#native") {
+                    let rest = rest.trim();
+                    let sym = if rest.is_empty() {
+                        last_fn.as_ref().map(|n| format!("n_{n}"))
+                    } else {
+                        Some(rest.trim_matches('"').to_string())
+                    };
+                    if let Some(sym) = sym {
+                        if sym.starts_with("n_") && !out.iter().any(|(s, _)| *s == sym) {
+                            out.push((sym, owner.clone()));
+                        }
+                    }
                 }
             }
         }
@@ -164,6 +205,26 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
         if path.is_dir() {
             collect_rs_files(&path, out);
         } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// Recursively collect every `*.loft` file under `dir` (skipping any
+/// `native/` subtree — those hold Rust, not loft source).
+fn collect_loft_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|n| n == "native") {
+                continue;
+            }
+            collect_loft_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "loft") {
             out.push(path);
         }
     }

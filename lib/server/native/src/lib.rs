@@ -717,33 +717,12 @@ pub unsafe extern "C" fn n_ws_broadcast(_handle: i32, msg_ptr: *const u8, msg_le
     })
 }
 
-loft_ffi::loft_register! {
-    n_tcp_listen,
-    n_tcp_accept,
-    n_tcp_accept_nonblocking,
-    n_tcp_method,
-    n_tcp_path,
-    n_tcp_body,
-    n_tcp_respond,
-    n_tcp_respond_typed,
-    n_tcp_close,
-    n_ws_upgrade,
-    n_ws_recv,
-    n_ws_message,
-    n_ws_opcode,
-    n_ws_send,
-    n_ws_send_binary,
-    n_ws_close,
-    n_ws_accept_nonblocking,
-    n_ws_clients_len,
-    n_ws_client_active,
-    n_ws_next_event,
-    n_ws_event_kind,
-    n_ws_event_client_id,
-    n_ws_event_payload,
-    n_ws_broadcast,
-    n_ws_idle_sleep_ms,
-}
+// @PLAN12 — the `loft_ffi::loft_register! { … }` list is generated from
+// this crate's own `extern "C" fn n_*` definitions by `build.rs` (via
+// `loft-ffi-build::generate_register_from_sources`) and `include!`d here,
+// so adding a function automatically registers it — no hand-maintained
+// list, no manifest table.
+include!(concat!(env!("OUT_DIR"), "/loft_register_gen.rs"));
 
 #[cfg(test)]
 mod tests {
