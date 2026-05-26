@@ -74,12 +74,30 @@ extraction-hygiene gate and identical behaviour across interp / native
 
 Ordered by readiness.  Each is independently verifiable.
 
-1. **Migrate `server` (25 syms) + `graphics` (57) to the
-   `[native.functions]` manifest pattern** — the same move `imaging`
-   got (manifest + `build.rs` + generated register list; drop the
-   `#native` annotations).  *Verify:* `native_library_suite` +
-   `extraction_hygiene` green per library.  Largest mechanical risk is
-   getting all 25/57 manifest rows right — do one library per commit.
+1. ~~Migrate `server`/`graphics` to the `[native.functions]` manifest
+   pattern.~~  **DONE + superseded** — the manifest was a transitional
+   step; the libraries now use the **clean source-scan pattern**
+   (bare `#native` in `.loft` → `loft-ffi-build::generate_register_from_loft`
+   scans the sources → register list; no manifest).  See
+   [REFERENCE.md § Clean libraries](REFERENCE.md#clean-libraries--the-principle).
+   `server`/`imaging`/`web` are clean; `graphics` is the documented
+   register exception (`CLEAN_REGISTER_EXCEPTIONS`); a parser error
+   forbids redundant `#native "n_<fn>"`.  Enforced by the
+   `native_libraries_follow_clean_binding_pattern` hygiene gate.
+1r. **Phase 6r — re-clean the already-extracted external repos**
+   (`loft-libs-core`: crypto/random; `loft-libs-net`: web/server).  They
+   were extracted *before* the clean pattern landed, so they still carry
+   the old manifest / hand-written `loft_register!` and stripped
+   `#native` annotations.  Re-clean = **re-sync the now-clean monorepo
+   `lib/<name>/` into each external repo** (clean `.loft` + source-scan
+   `build.rs` + drop manifest) and bump their `loft-ffi-build` dep to
+   `0.2`.  **Blocked on a prerequisite publish:** the source-scan
+   `generate_register_from_loft` only exists in `loft-ffi-build ≥ 0.2`,
+   which must be on crates.io first (`cargo publish`, needs the crates.io
+   token — a permanent/irreversible release, so a deliberate maintainer
+   step).  `loft-ffi-build 0.2.0` is version-bumped + `cargo publish
+   --dry-run` green in the monorepo, ready to publish.  *Verify:* each
+   external repo's CI green after the re-sync push.
 2. **Phase 6.5 — green the chunk-repo CI** (`loft-libs-core/graphics/net`
    + registry `pr-validate.yml`): canonical `library-ci.yml` does
    `apt-get install mold` → clone+build loft from source → `loft test`
