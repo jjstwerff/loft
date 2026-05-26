@@ -630,6 +630,10 @@ const DEFAULT_FILES: &[(&str, &str)] = &[
         "default/05_coroutine.loft",
         include_str!("../default/05_coroutine.loft"),
     ),
+    (
+        "default/06_json.loft",
+        include_str!("../default/06_json.loft"),
+    ),
 ];
 
 /// Library files embedded in the WASM build so `use <name>;` resolves in the
