@@ -91,7 +91,10 @@ fn detect_format_valid_sidecar_is_durable_tier_1() {
         None,
     );
     fs::write(dir.join("data.store.dmeta"), sidecar).unwrap();
-    assert_eq!(Store::detect_format(&main).unwrap(), StoreFormat::Durable(1));
+    assert_eq!(
+        Store::detect_format(&main).unwrap(),
+        StoreFormat::Durable(1)
+    );
 }
 
 // ── validate_integrity ───────────────────────────────────────────────────────
@@ -185,15 +188,7 @@ fn validate_truncated_file_when_main_shorter_than_sidecar_claims() {
     write_main_file(&main, content);
     // Sidecar claims the main file is 9999 bytes long.  CRC field is
     // arbitrary — the length check fires first.
-    let sidecar = build_sidecar(
-        b"DStoreV1",
-        1,
-        0,
-        0,
-        9999,
-        0,
-        None,
-    );
+    let sidecar = build_sidecar(b"DStoreV1", 1, 0, 0, 9999, 0, None);
     fs::write(dir.join("data.store.dmeta"), sidecar).unwrap();
     assert_eq!(
         Store::validate_integrity(&main).unwrap(),

@@ -12,8 +12,8 @@
 use loft::store::{DurabilityMode, Store};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 type CorruptionCb = Box<dyn Fn(&Path) -> std::io::Result<()>>;
 
@@ -42,12 +42,9 @@ fn dmeta_path(main: &Path) -> PathBuf {
 fn init_callback(counter: Arc<AtomicUsize>) -> CorruptionCb {
     Box::new(move |path: &Path| {
         counter.fetch_add(1, Ordering::SeqCst);
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "path not utf-8",
-            ))?;
+        let path_str = path.to_str().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "path not utf-8")
+        })?;
         // Open creates the file if missing and writes the legacy signature.
         // Drop the store immediately — that's all the callback needs to do
         // to initialise from-scratch state.  open_durable's
@@ -78,7 +75,10 @@ fn fresh_path_triggers_callback_and_subsequent_open_is_clean() {
     drop(store);
 
     // Sidecar must now exist.
-    assert!(dmeta_path(&main).exists(), "sidecar should exist after clean drop");
+    assert!(
+        dmeta_path(&main).exists(),
+        "sidecar should exist after clean drop"
+    );
 
     // Second open: clean state → callback does NOT fire.
     let store2 = Store::open_durable(
@@ -323,5 +323,8 @@ fn legacy_file_opened_via_open_durable_migrates_via_callback() {
         1,
         "callback fires once to materialise the sidecar"
     );
-    assert!(dmeta_path(&main).exists(), "sidecar created during migration");
+    assert!(
+        dmeta_path(&main).exists(),
+        "sidecar created during migration"
+    );
 }

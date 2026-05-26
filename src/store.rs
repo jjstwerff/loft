@@ -1990,8 +1990,7 @@ fn parse_sidecar(bytes: &[u8]) -> Result<SidecarHeader, CorruptReason> {
     }
     let tier_id = u16::from_le_bytes([bytes[8], bytes[9]]);
     let flags = u16::from_le_bytes([bytes[10], bytes[11]]);
-    let stored_header_crc =
-        u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+    let stored_header_crc = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
     if stored_header_crc != compute_header_crc(bytes) {
         return Err(CorruptReason::HeaderCrcMismatch);
     }
@@ -2001,10 +2000,15 @@ fn parse_sidecar(bytes: &[u8]) -> Result<SidecarHeader, CorruptReason> {
     let payload_len = u64::from_le_bytes([
         bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30], bytes[31],
     ]);
-    let payload_crc =
-        u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]);
+    let payload_crc = u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]);
     // bytes[36..40] is reserved; not validated.
-    Ok(SidecarHeader { tier_id, flags, last_clean_ns, payload_len, payload_crc })
+    Ok(SidecarHeader {
+        tier_id,
+        flags,
+        last_clean_ns,
+        payload_len,
+        payload_crc,
+    })
 }
 
 /// Build a fresh sidecar buffer for a clean-close write.  `payload_len` is
@@ -2243,10 +2247,7 @@ impl Store {
     /// authoritative sources; phases 02 (snapshots) and 03 (WAL) cover
     /// stronger guarantees.
     #[cfg(feature = "mmap")]
-    pub fn open_durable(
-        path: &std::path::Path,
-        mode: DurabilityMode,
-    ) -> std::io::Result<Store> {
+    pub fn open_durable(path: &std::path::Path, mode: DurabilityMode) -> std::io::Result<Store> {
         Self::open_durable_inner(path, mode, 0)
     }
 
@@ -2282,9 +2283,7 @@ impl Store {
             }
             StoreIntegrity::Corrupt(_reason) => {
                 if depth >= 1 {
-                    dur_trace(
-                        "[open_durable_inner] recursion cap hit; returning InvalidData",
-                    );
+                    dur_trace("[open_durable_inner] recursion cap hit; returning InvalidData");
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "store_durable: rebuild callback ran but store still fails integrity",
