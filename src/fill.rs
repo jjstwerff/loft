@@ -1125,14 +1125,14 @@ fn ne_text(s: &mut State) {
 fn lt_text(s: &mut State) {
     let v_v2 = s.string();
     let v_v1 = s.string();
-    let new_value = v_v1.str() < v_v2.str();
+    let new_value = ops::op_lt_text(v_v1.str(), v_v2.str());
     s.put_stack(new_value);
 }
 
 fn le_text(s: &mut State) {
     let v_v2 = s.string();
     let v_v1 = s.string();
-    let new_value = v_v1.str() <= v_v2.str();
+    let new_value = ops::op_le_text(v_v1.str(), v_v2.str());
     s.put_stack(new_value);
 }
 
@@ -1717,7 +1717,8 @@ fn get_vector(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = {
         let __vr = v_r;
-        s.vec_get_or_raise(&__vr, u32::from(v_size), v_index)
+        let __vi = v_index;
+        s.vec_get_or_raise(&__vr, u32::from(v_size), __vi)
     };
     s.put_stack(new_value);
 }
@@ -1727,7 +1728,8 @@ fn vector_ref(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = {
         let __vr = v_r;
-        s.vec_ref_or_raise(&__vr, v_index)
+        let __vi = v_index;
+        s.vec_ref_or_raise(&__vr, __vi)
     };
     s.put_stack(new_value);
 }

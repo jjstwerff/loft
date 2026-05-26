@@ -793,6 +793,13 @@ pub fn gl_measure_text(font: integer, content: text, size: float) -> float;
 pub fn gl_text_height(font: integer, size: float) -> integer;
 #native "loft_text_height"
 
+// @P340: return the font ASCENT in pixels (baseline -> top of glyphs) from the
+// font's real metrics.  gl_draw_text(x, y) anchors by the TOP, placing the
+// baseline at y + gl_font_ascent(font, size); to baseline-align mixed sizes,
+// draw each at y = baseline - gl_font_ascent(font, size_i).
+pub fn gl_font_ascent(font: integer, size: float) -> float;
+#native "loft_gl_font_ascent"
+
 // Rasterize text into a pre-allocated integer buffer of alpha values (0-255).
 fn rasterize_text_into(font: integer, content: text, size: float, buf: vector<integer>) -> integer;
 #native "loft_rasterize_text_into"

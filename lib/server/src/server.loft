@@ -32,25 +32,25 @@ pub struct Request {
 // --- Internal natives ---
 
 fn tcp_listen(port: integer) -> integer;
-#native "n_tcp_listen"
+#native
 
 fn tcp_accept(handle: integer) -> boolean;
-#native "n_tcp_accept"
+#native
 
 fn tcp_accept_nonblocking(handle: integer) -> boolean;
-#native "n_tcp_accept_nonblocking"
+#native
 
 fn tcp_method() -> text;
-#native "n_tcp_method"
+#native
 
 fn tcp_path() -> text;
-#native "n_tcp_path"
+#native
 
 fn tcp_body() -> text;
-#native "n_tcp_body"
+#native
 
 fn tcp_respond(status: integer, body: text);
-#native "n_tcp_respond"
+#native
 
 // Same as `n_tcp_respond` but the caller picks the Content-Type
 // header (e.g. `"text/html; charset=utf-8"`).  Empty string falls
@@ -59,10 +59,10 @@ fn tcp_respond(status: integer, body: text);
 // payload from the same loft program that hosts the WebSocket
 // game protocol.
 fn tcp_respond_typed(status: integer, body: text, content_type: text);
-#native "n_tcp_respond_typed"
+#native
 
 fn tcp_close(handle: integer);
-#native "n_tcp_close"
+#native
 
 fn ws_upgrade_native() -> integer;
 #native "n_ws_upgrade"

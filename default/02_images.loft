@@ -321,6 +321,26 @@ pub fn mtime(path: text) -> integer;
 #rust"Stores::os_mtime_native(@path)"
 #impure(host_io)
 
+// @PLAN38 phase 01b — durable-store integrity check.  Returns true
+// iff the `.dmeta` sidecar at `<path>.dmeta` validates against the
+// main file at `<path>` (signature, header CRC, payload length,
+// payload CRC, tier_id all OK).  Returns false on any failure or
+// missing file.  Pair with `store_durable_seal` after a clean
+// write session to record the new state.
+pub fn store_durable_check(path: text) -> boolean;
+#rust"crate::store::Store::durable_check(std::path::Path::new(@path))"
+#impure(io)
+
+// @PLAN38 phase 01b — write a fresh `.dmeta` sidecar capturing the
+// current main-file's byte length + CRC32 + a clean-close timestamp.
+// Returns true on success, false on any I/O error.  Call this after
+// finishing a write session; if the program crashes between the
+// last write and the seal, the sidecar stays stale and the next
+// `store_durable_check` returns false → caller rebuilds.
+pub fn store_durable_seal(path: text) -> boolean;
+#rust"crate::store::Store::durable_seal(std::path::Path::new(@path))"
+#impure(io)
+
 pub fn set_file_size(self: File, size: integer) -> FileResult {
   if self.format == Format.Directory { return FileResult.IsDirectory }
   if self.format == Format.NotExists { return FileResult.NotFound }

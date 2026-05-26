@@ -175,37 +175,53 @@ fn make_sample_package(name: &str, version: &str, tmp: &Path) -> PathBuf {
     pkg
 }
 
-/// Atomically swap HOME for the duration of the test.  Returns a
-/// guard that restores the previous value on drop.  Tests in this
-/// file share a process so we serialise HOME via a Mutex — install
-/// resolution reads `dirs::home_dir()` once per call so a short
-/// window of mutated HOME is enough.
+/// Atomically swap HOME + LOFT_HOME for the duration of the test.  Returns a
+/// guard that restores the previous values on drop.  Tests in this
+/// file share a process so we serialise via a Mutex — install
+/// resolution reads `registry_index::cache_dir()` once per call so a short
+/// window of mutated env is enough.
+///
+/// @P332: we set `LOFT_HOME` (not just `HOME`), because `cache_dir()` reads
+/// `LOFT_HOME` first and `dirs::home_dir()` ignores `$HOME` on Windows.
+/// Setting both keeps the isolation cross-platform.
 struct HomeGuard {
-    prev: Option<String>,
+    prev_home: Option<String>,
+    prev_loft_home: Option<String>,
 }
 static HOME_LOCK: Mutex<()> = Mutex::new(());
 
 impl HomeGuard {
     fn set(new_home: &Path) -> (Self, std::sync::MutexGuard<'static, ()>) {
         let lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = env::var("HOME").ok();
+        let prev_home = env::var("HOME").ok();
+        let prev_loft_home = env::var("LOFT_HOME").ok();
         // SAFETY: env::set_var is documented unsafe in newer Rust due to
         // process-wide effects; we serialise via HOME_LOCK so only one
-        // test mutates HOME at a time.
+        // test mutates the env at a time.
         unsafe {
             env::set_var("HOME", new_home);
+            env::set_var("LOFT_HOME", new_home);
         }
-        (Self { prev }, lock)
+        (
+            Self {
+                prev_home,
+                prev_loft_home,
+            },
+            lock,
+        )
     }
 }
 
 impl Drop for HomeGuard {
     fn drop(&mut self) {
         unsafe {
-            if let Some(p) = &self.prev {
-                env::set_var("HOME", p);
-            } else {
-                env::remove_var("HOME");
+            match &self.prev_home {
+                Some(p) => env::set_var("HOME", p),
+                None => env::remove_var("HOME"),
+            }
+            match &self.prev_loft_home {
+                Some(p) => env::set_var("LOFT_HOME", p),
+                None => env::remove_var("LOFT_HOME"),
             }
         }
     }
@@ -242,11 +258,12 @@ impl Drop for RegUrlGuard {
 
 // ── Tests ─────────────────────────────────────────────────────────
 
-// Windows: the in-process HTTP fixture + tarball-extract pipeline
-// doesn't currently complete cleanly (`report.installed.len()` returns
-// 0 instead of 1).  Tracked as @P332 — Windows registry install hardening.
-// macOS + Linux both pass.
-#[cfg(not(windows))]
+// @P332 FIXED 2026-05-26: previously `report.installed.len()` returned 0 on
+// Windows because the test isolated the registry via `HOME`, which
+// `dirs::home_dir()` ignores on Windows — installs leaked into the real
+// profile and cross-run caching skipped them.  `cache_dir()` now honours
+// `LOFT_HOME` (set by `HomeGuard` alongside `HOME`), so isolation is
+// cross-platform and the Windows gate is removed.
 #[test]
 fn end_to_end_install_against_fixture_server() {
     let tmp = tmpdir("end_to_end_install_against_fixture_server");
@@ -507,8 +524,8 @@ fn extract_tarball_roundtrip_matches_original() {
 /// Transitive install: a depends on b, both in the fixture
 /// registry.  Verify the resolver+download pipeline walks deps and
 /// extracts both packages.
-// Windows: same @P332 — install report comes back empty.
-#[cfg(not(windows))]
+// @P332 FIXED 2026-05-26 — see `end_to_end_install_against_fixture_server`
+// (the `LOFT_HOME` cross-platform isolation fix); Windows gate removed.
 #[test]
 fn end_to_end_install_with_transitive_dep() {
     let tmp = tmpdir("end_to_end_install_with_transitive_dep");

@@ -62,7 +62,20 @@ impl Str {
 
     #[must_use]
     pub fn str<'a>(&self) -> &'a str {
-        if self.ptr.is_null() || (self.ptr as usize) < (1 << 16) || self.len > 10_000_000 {
+        // @P355: the cheap pointer guards stay (a null or low/dangling ptr —
+        // e.g. an empty Rust `String`'s `NonNull::dangling()` ≈ 0x1 — reads
+        // back as ""), but there is deliberately NO `len` cap here.  A prior
+        // `self.len > 10_000_000` clause (added in #140 for the stack_trace
+        // introspection path) silently truncated any text over 10 MB to "" on
+        // the UNIVERSAL correctness accessor — so `file(big).content()` and any
+        // >10 MB string read back empty (silent data loss; bit the training
+        // port on a 38 MB JSON export).  The garbage-tolerance that motivated
+        // the cap belongs to `try_str()` (the fallible variant the introspection
+        // / trace dump in `src/state/debug.rs` actually uses), not here: `str()`
+        // is on the value-read hot path and must return the real bytes.  If a
+        // genuinely corrupt `Str` ever reaches here, a loud fault surfaces the
+        // producing bug — strictly better than silent corruption of valid data.
+        if self.ptr.is_null() || (self.ptr as usize) < (1 << 16) {
             return "";
         }
         unsafe {
@@ -424,5 +437,44 @@ fn hash_ref(r: &DbRef, stores: &[Store], key: &Key, p: u32, hasher: &mut Default
             i64::from(raw as i16).hash(hasher);
         }
         _ => i64::from(s.get_byte(r.rec, p, 0)).hash(hasher),
+    }
+}
+
+#[cfg(test)]
+mod p355_large_str {
+    use super::Str;
+
+    /// @P355: `Str::str()` must NOT silently truncate a legitimately-large
+    /// text.  A prior `self.len > 10_000_000` guard returned "" for any text
+    /// over 10 MB on the universal correctness accessor — so `file(big)
+    /// .content()` (and any >10 MB string) read back empty.  Verify a 12 MB
+    /// backing buffer round-trips its full length.
+    #[test]
+    fn str_does_not_cap_large_text() {
+        let big = "x".repeat(12_000_000);
+        let s = Str::new(&big);
+        assert_eq!(
+            s.str().len(),
+            12_000_000,
+            "str() must return the full length, not cap at 10M"
+        );
+        assert_eq!(s.len, 12_000_000);
+        // Just below and just above the old 10 MB cap both read fully.
+        let at_cap = "y".repeat(10_485_760);
+        assert_eq!(Str::new(&at_cap).str().len(), 10_485_760);
+    }
+
+    /// The cheap pointer guards are preserved: a null/dangling ptr (e.g. an
+    /// empty Rust String's NonNull::dangling()) still reads back as "".
+    #[test]
+    fn str_empty_and_null_guard_preserved() {
+        let empty = String::new(); // ptr = dangling (small, < 1<<16)
+        let s = Str::new(&empty);
+        assert_eq!(s.str(), "");
+        let nullish = Str {
+            ptr: std::ptr::null(),
+            len: 5,
+        };
+        assert_eq!(nullish.str(), "");
     }
 }

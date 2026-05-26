@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// GOLDEN FIXTURE — pins `blend_pixel` / `blend` (alpha-over compositing math)
+// in isolation: a 50%-alpha red block + two single overlay pixels at
+// different alphas over a grey background.  Exact (max_abs=0; blend is
+// integer math).  Headless.
+use graphics;
+fn main() {
+  cv = graphics::canvas(32, 32, 0xFF303030);
+  for gb_y in 8..24 {
+    for gb_x in 8..24 {
+      cv.blend_pixel(gb_x, gb_y, 0x80FF0000);
+    }
+  }
+  cv.blend_pixel(4, 4, 0xC000FF00);
+  cv.blend_pixel(28, 28, 0x4000A0FF);
+  if !graphics::save_png(cv, "gold-blend.png") { println("gold-blend: save FAILED"); }
+}

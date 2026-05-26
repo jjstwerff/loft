@@ -9,3 +9,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 loft-ffi = { path = "../../../loft-ffi" }
+
+[build-dependencies]
+loft-ffi-build = { path = "../../../loft-ffi-build" }

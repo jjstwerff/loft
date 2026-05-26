@@ -405,6 +405,270 @@ fn p201_poisoned_lock_recovery_pattern() {
     drop(_guard);
 }
 
+// ── WASM library CI gate ─────────────────────────────────────────────────────
+//
+// `tests/wrap.rs::library_suite` (interpreter) and
+// `tests/native.rs::native_library_suite` (native) gate every
+// `lib/<pkg>/tests/*.loft`.  This is the missing third backend: run those
+// package tests through WebAssembly under whatever runtime is available —
+// Node (the browser `feature="wasm"` flavour, via `--html` +
+// `tools/wasm_repro.mjs`) and/or wasmtime (the `wasm32-wasip2` flavour).
+//
+// Opt-in by entry point: a lib test joins the WASM gate iff it declares a
+// `fn main()` (the wasm builds use `main` as the entry; the `loft test`
+// subcommand's multi-`test_*` discovery has no wasm equivalent).  Tests
+// without a `main` are reported as skipped, not failed.  Both runners
+// self-skip when their toolchain is absent, so the suite is a no-op on a
+// machine with neither Node nor wasmtime.
+
+/// Library packages skipped wholesale for the WASM gate — those whose tests
+/// depend on native-only host facilities the browser/WASI stub can't provide.
+/// Travels with each chunk on extraction, mirroring `LIB_PKGS_WASM_SKIP` in
+/// the plan-12 design.
+const LIB_PKGS_WASM_SKIP: &[&str] = &[
+    // @P321c (OPEN): imaging's store-MUTATING `#native` load_png/save_png has
+    // no working codegen marshalling — the `--html` build emits broken Rust
+    // (`n_load_png` defined multiple times + E0308).  The native gate skips it
+    // for the same @P321c; this WASM gate confirms the browser path is broken
+    // too.  NOTE: imaging SHOULD run in a browser — but the right fix is to
+    // route load_png/save_png to a JS host bridge over the browser's own image
+    // codec (`createImageBitmap` / Canvas `getImageData` / `toBlob`), NOT to
+    // bundle a Rust PNG stack into wasm (same "borrow the platform" design as
+    // the time lib's `js_sys::Date`).  Un-skip when @P321c lands that route.
+    "imaging",
+    // server is a native HTTP/socket listener — a browser/WASI guest has no
+    // listen/accept, so it cannot run there by construction (a genuine
+    // platform limit, not a bug — unlike imaging).
+    "server",
+    // @P334 (open): world's test traps (`wasm unreachable`, exit 134) on BOTH
+    // wasm runtimes though it passes on interp + native — a wasm-backend
+    // divergence, not yet root-caused.  Un-skip when @P334 is fixed.
+    "world",
+];
+
+/// Individual `<pkg>/<file>.loft` lib tests skipped for the WASM gate.
+const LIB_TESTS_WASM_SKIP: &[&str] = &[];
+
+/// Collect every `lib/<pkg>/tests/*.loft`, sorted.
+fn collect_lib_wasm_tests() -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let Ok(pkgs) = std::fs::read_dir(repo_root().join("lib")) else {
+        return files;
+    };
+    for pkg in pkgs.filter_map(|e| e.ok()) {
+        let tests_dir = pkg.path().join("tests");
+        let Ok(entries) = std::fs::read_dir(&tests_dir) else {
+            continue;
+        };
+        for f in entries.filter_map(|e| e.ok()) {
+            let p = f.path();
+            if p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+            {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+/// `(pkg, file)` key for an entry, e.g. `("time", "01-basics.loft")`.
+fn lib_test_key(entry: &std::path::Path) -> (String, String) {
+    let file = entry
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let pkg = entry
+        .parent()
+        .and_then(|d| d.parent())
+        .and_then(|d| d.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    (pkg, file)
+}
+
+/// Locate `wasmtime` on `PATH` or in the default `~/.wasmtime/bin` install dir.
+fn find_wasmtime() -> Option<PathBuf> {
+    if let Some(p) = which("wasmtime") {
+        return Some(p);
+    }
+    let home = std::env::var_os("HOME")?;
+    let p = PathBuf::from(home).join(".wasmtime/bin/wasmtime");
+    p.exists().then_some(p)
+}
+
+/// Run `source` on `wasm32-wasip2` under wasmtime.  Emits native Rust via the
+/// loft binary, injects a WASI-stdout `loft_host_print` shim (the codegen calls
+/// `crate::loft_host_print` on wasm32 without the `wasm` feature, but only the
+/// browser path declares that import), compiles against the prebuilt loft
+/// `wasm32-wasip2` rlib, and runs it.  Returns `(output, ok)`, or `None` when a
+/// prerequisite (wasmtime, rustc, the rlib) is missing.
+fn run_wasip2_wasm(name: &str, source: &str, lib_dirs: &[&str]) -> Option<(String, bool)> {
+    let wasmtime = find_wasmtime()?;
+    which("rustc")?;
+    let root = repo_root();
+    let loft_bin = root.join("target/release/loft");
+    if !loft_bin.exists() {
+        return None;
+    }
+    // Prefer the release rlib (the Makefile-built one); fall back to debug.
+    let (rlib, deps) = ["release", "debug"].iter().find_map(|prof| {
+        let r = root.join(format!("target/wasm32-wasip2/{prof}/libloft.rlib"));
+        r.exists()
+            .then(|| (r, root.join(format!("target/wasm32-wasip2/{prof}/deps"))))
+    })?;
+
+    let tmp = std::env::temp_dir();
+    let src = tmp.join(format!("{name}.loft"));
+    let rs = tmp.join(format!("{name}_wasip2.rs"));
+    let wasm = tmp.join(format!("{name}_wasip2.wasm"));
+    std::fs::write(&src, source).ok()?;
+
+    let mut emit = Command::new(&loft_bin);
+    emit.args([
+        "--native-emit",
+        rs.to_str()?,
+        "--path",
+        &format!("{}/", root.display()),
+    ]);
+    for d in lib_dirs {
+        emit.arg("--lib").arg(root.join(d));
+    }
+    emit.arg(src.to_str()?);
+    if !emit.output().ok()?.status.success() {
+        return Some(("loft --native-emit failed".to_string(), false));
+    }
+
+    // Inject the WASI-stdout print bridge that the wasip2 codegen expects.
+    let code = std::fs::read_to_string(&rs).ok()?;
+    let shim = "#[unsafe(no_mangle)] pub extern \"C\" fn loft_host_print(ptr: *const u8, len: usize) \
+        { let s = unsafe { std::slice::from_raw_parts(ptr, len) }; use std::io::Write; \
+        let _ = std::io::stdout().write_all(s); }\n";
+    let patched = code.replacen(
+        "extern crate loft;",
+        &format!("extern crate loft;\n{shim}"),
+        1,
+    );
+    std::fs::write(&rs, &patched).ok()?;
+
+    let compile = Command::new("rustc")
+        .args([
+            "--edition=2024",
+            "--target",
+            "wasm32-wasip2",
+            "--crate-type",
+            "bin",
+            "-O",
+            "--extern",
+        ])
+        .arg(format!("loft={}", rlib.display()))
+        .arg("-L")
+        .arg(format!("dependency={}", deps.display()))
+        .arg("-o")
+        .arg(&wasm)
+        .arg(&rs)
+        .output()
+        .ok()?;
+    if !compile.status.success() {
+        return Some((String::from_utf8_lossy(&compile.stderr).into_owned(), false));
+    }
+    let run = Command::new(&wasmtime).arg(&wasm).output().ok()?;
+    Some((
+        String::from_utf8_lossy(&run.stdout).into_owned(),
+        run.status.success(),
+    ))
+}
+
+/// WASM gate over `lib/<pkg>/tests/*.loft` — runs each main()-bearing lib test
+/// under Node (browser flavour) and wasmtime (wasip2) when available.  No-op
+/// when neither runtime is present.
+#[test]
+fn wasm_library_suite() {
+    let have_node = which("node").is_some();
+    let have_wasmtime = find_wasmtime().is_some();
+    if !have_node && !have_wasmtime {
+        eprintln!("SKIP wasm_library_suite: neither node nor wasmtime available");
+        return;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut ran = 0usize;
+    for entry in collect_lib_wasm_tests() {
+        let (pkg, file) = lib_test_key(&entry);
+        if LIB_PKGS_WASM_SKIP.contains(&pkg.as_str())
+            || LIB_TESTS_WASM_SKIP.contains(&format!("{pkg}/{file}").as_str())
+        {
+            println!("skip {pkg}/{file} (LIB_*_WASM_SKIP)");
+            continue;
+        }
+        let source = match std::fs::read_to_string(&entry) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        // Opt-in: only main()-bearing lib tests have a wasm entry point.
+        if !source.contains("fn main(") {
+            println!("skip {pkg}/{file} (no fn main — no wasm entry)");
+            continue;
+        }
+        let stem = entry
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .replace(['-', '.'], "_");
+        let name = format!("libwasm_{pkg}_{stem}");
+
+        if have_node {
+            // `run_html_wasm_with_libs` asserts on a `--html` build failure;
+            // catch it so one un-buildable lib is recorded, not fatal to the
+            // whole suite (and can't mask later libs' results).
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_html_wasm_with_libs(&name, &source, &["lib"])
+            }));
+            match res {
+                Ok(Some((stdout, stderr, ok))) => {
+                    ran += 1;
+                    println!(
+                        "wasm[node] {pkg}/{file}: {}",
+                        if ok { "ok" } else { "FAIL" }
+                    );
+                    let _ = stdout;
+                    if !ok {
+                        let tail: Vec<&str> = stderr.lines().rev().take(3).collect();
+                        failures.push(format!("{pkg}/{file} [node]: {}", tail.join(" | ")));
+                    }
+                }
+                Ok(None) => {} // prerequisites missing — self-skipped
+                Err(_) => {
+                    ran += 1;
+                    println!("wasm[node] {pkg}/{file}: FAIL (build panicked)");
+                    failures.push(format!("{pkg}/{file} [node]: --html build failed"));
+                }
+            }
+        }
+        if have_wasmtime && let Some((out, ok)) = run_wasip2_wasm(&name, &source, &["lib"]) {
+            ran += 1;
+            println!(
+                "wasm[wasmtime] {pkg}/{file}: {}",
+                if ok { "ok" } else { "FAIL" }
+            );
+            if !ok {
+                let tail: Vec<&str> = out.lines().rev().take(3).collect();
+                failures.push(format!("{pkg}/{file} [wasmtime]: {}", tail.join(" | ")));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} wasm library run(s) failed:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+    println!("wasm_library_suite: {ran} wasm run(s) passed");
+}
+
 // Minimal base64 decoder — avoids adding a dev-dependency for one
 // test.  Handles the standard alphabet (no URL-safe variant needed;
 // the loft HTML writer uses `+`/`/`/`=`).

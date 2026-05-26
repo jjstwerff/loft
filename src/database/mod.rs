@@ -997,6 +997,24 @@ impl Stores {
         self.had_fatal = true;
     }
 
+    /// @P356 — Stores-side counterpart of `State::raise_recoverable`.  Logs a
+    /// `Warn` and returns WITHOUT halting, so the native backend continues
+    /// with the null sentinel — identical to the interpreter.
+    /// `LOFT_DEV_SOFT_HALT` opts into fail-fast (delegates to `raise_runtime`).
+    pub fn raise_recoverable_runtime(&mut self, kind: crate::runtime_error::RuntimeErrorKind) {
+        let dev_soft_halt =
+            std::env::var("LOFT_DEV_SOFT_HALT").is_ok_and(|v| v == "1" || v == "true");
+        if dev_soft_halt {
+            self.raise_runtime(kind);
+            return;
+        }
+        if let Some(logger) = &self.logger
+            && let Ok(mut lg) = logger.lock()
+        {
+            lg.log_runtime_kind(&kind, None);
+        }
+    }
+
     /// Plan-07 phase 4e.3 — set the next-format-render fault tag.
     /// Called by `OpTagFault(kind_id)` which 4e.1 emits IMMEDIATELY
     /// before each fault-prone Nullable peer in format-string
@@ -1059,7 +1077,7 @@ impl Stores {
             index
         };
         if normalized < 0 {
-            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
+            self.raise_recoverable_runtime(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
                 idx: index,
             });
             // Sentinel matches `vector::get_vector` legacy OOB shape
@@ -1072,10 +1090,9 @@ impl Stores {
             };
         }
         if normalized >= i64::from(len) {
-            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
-                idx: index,
-                len,
-            });
+            self.raise_recoverable_runtime(
+                crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds { idx: index, len },
+            );
             return crate::keys::DbRef {
                 store_nr: db.store_nr,
                 rec: 0,
@@ -1110,16 +1127,18 @@ impl Stores {
         let len = val.len() as i64;
         let normalized = if index < 0 { index + len } else { index };
         if normalized < 0 {
-            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
+            self.raise_recoverable_runtime(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
                 idx: index,
             });
             return char::from(0);
         }
         if normalized >= len {
-            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
-                idx: index,
-                len: len as u32,
-            });
+            self.raise_recoverable_runtime(
+                crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+                    idx: index,
+                    len: len as u32,
+                },
+            );
             return char::from(0);
         }
         crate::ops::text_character(val, index)

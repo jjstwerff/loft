@@ -13,10 +13,11 @@ use loft::data::Value;
 /// Byte-indexed `text[i]` returns the character that contains the
 /// byte at position `i`.  `"♥😃"` has 7 bytes (3 for ♥, 4 for 😃),
 /// so `a[0..2]` returns `♥` (each byte of ♥) and `a[3..6]` returns
-/// `😃` (each byte of 😃).  Out-of-range indices (`a[7]` and up)
-/// raise `IndexOutOfBounds` as of plan-07 phase 4 step 4.8 (commit
-/// 6016655e); covered separately in
-/// `tests/runtime_errors.rs::kind_index_out_of_bounds_text_prints_pretty_error`.
+/// `😃` (each byte of 😃).  Out-of-range indices (`a[7]` and up) are a
+/// RECOVERABLE fault (@P356): they return the null char and execution
+/// continues; the opt-in `LOFT_DEV_SOFT_HALT` mode surfaces the
+/// `IndexOutOfBounds` for debugging — covered in
+/// `tests/runtime_errors.rs::kind_index_out_of_bounds_text_returns_null_and_continues`.
 #[test]
 fn utf8_index() {
     expr!("a=\"♥😃\"; a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6]")

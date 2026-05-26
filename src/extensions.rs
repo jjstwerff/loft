@@ -798,6 +798,11 @@ fn dispatch_call(
             let f: extern "C" fn(i32, f64) -> i32 = unsafe { std::mem::transmute(fp) };
             stores.put::<i64>(stack, widen_int(f(i32_arg!(0), f64_arg!(1))));
         }
+        // (i32, f64) -> f64  (e.g. gl_font_ascent: i32, f32→f32 widened to f64)
+        (&[ArgT::I32, ArgT::F64], Some(ArgT::F64)) => {
+            let f: extern "C" fn(i32, f64) -> f64 = unsafe { std::mem::transmute(fp) };
+            stores.put(stack, f(i32_arg!(0), f64_arg!(1)));
+        }
         // (i32, i32) -> void
         (&[ArgT::I32, ArgT::I32], None) => {
             let f: extern "C" fn(i32, i32) = unsafe { std::mem::transmute(fp) };

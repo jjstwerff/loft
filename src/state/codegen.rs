@@ -643,7 +643,19 @@ impl State {
         let stack_pos = stack.position;
         let tp = self.generate(t_val, stack, false);
         let true_stack = stack.position;
-        if *f_val == Value::Null {
+        // @P356: an EXPRESSION if whose true branch produces a value but whose
+        // else is a bare `Value::Null` (e.g. the `expr ?? null` ncc lowering
+        // `if bool(tmp) { tmp } else null`) must push a TYPED NULL on the false
+        // path — otherwise the goto-false skips straight to the join leaving the
+        // value-sized slot unwritten, so when the null branch runs at runtime the
+        // stack is short by `size(tp)` and every later slot offset (e.g. the ncc
+        // temp's `OpFreeText`) is wrong → frees an uninitialised slot → SIGSEGV.
+        // The statement-style fast-path below (no value, or divergent true arm)
+        // keeps the original skip-to-join behaviour.
+        let null_else_value = *f_val == Value::Null
+            && !is_divergent(t_val)
+            && !matches!(tp, Type::Void | Type::Never);
+        if *f_val == Value::Null && !null_else_value {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
             // when the true branch diverges (return/break/continue, possibly
             // wrapped by scopes.rs in Insert/Block), execution only reaches the
@@ -654,6 +666,19 @@ impl State {
             if is_divergent(t_val) {
                 stack.position = stack_pos;
             }
+        } else if null_else_value {
+            // Emit a real false arm that pushes the type's null sentinel, so
+            // both arms reach the join with the same stack delta (= true_stack).
+            stack.add_op("OpGotoWord", self);
+            let end = self.code_pos;
+            self.code_add(0i16); // temp end
+            let false_pos = self.code_pos;
+            self.code_put(code_step, (self.code_pos - true_pos) as i16); // goto-false → false arm
+            stack.position = stack_pos;
+            self.emit_typed_null(stack, &tp);
+            self.code_put(end, (self.code_pos - false_pos) as i16);
+            // emit_typed_null pushes exactly size(tp); both arms now balanced.
+            stack.position = true_stack;
         } else {
             stack.add_op("OpGotoWord", self);
             let end = self.code_pos;
@@ -2845,6 +2870,18 @@ impl State {
         if let Type::RefVar(tp) = stack.function.tp(var).clone() {
             if matches!(*tp, Type::Text(_)) {
                 if value == &Value::Text(String::new()) {
+                    // @P346: assigning "" to a RefVar(Text) is NOT a no-op — it
+                    // must CLEAR the dereferenced buffer.  When this RefVar is a
+                    // reused work-buffer (e.g. a format-string interpolation
+                    // promoted to the function's `&text` return slot, reset each
+                    // loop iteration), the buffer holds stale content from the
+                    // previous iteration; skipping the clear let the following
+                    // OpFormatStack* APPEND to it → text accumulated across
+                    // iterations (`[2.5][2.58][2.581]`).  Emit OpClearStackText
+                    // (deref) so the buffer is emptied, matching the native path.
+                    let var_pos = stack.position - stack.function.stack(var);
+                    stack.add_op("OpClearStackText", self);
+                    self.code_add(var_pos);
                     return;
                 }
                 // always clear RefVar(Text) before appending — prevents

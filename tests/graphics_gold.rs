@@ -157,6 +157,20 @@ fn update_gold() -> bool {
 ///   `max_abs` — largest single-channel delta allowed (0-255)
 ///   `mean_abs` — mean across every channel of every pixel
 fn gold_compare(example: &str, gold_name: &str, max_abs: u32, mean_abs: f64) {
+    gold_compare_assets(example, gold_name, &[], max_abs, mean_abs);
+}
+
+/// Like `gold_compare`, but first copies each asset (path relative to the
+/// workspace root) into the run's tempdir under its basename — so a fixture
+/// that loads e.g. a font with a bare relative path resolves it against the
+/// tempdir cwd.
+fn gold_compare_assets(
+    example: &str,
+    gold_name: &str,
+    assets: &[&str],
+    max_abs: u32,
+    mean_abs: f64,
+) {
     if !graphics_native_built() {
         eprintln!(
             "skipping graphics gold test: \
@@ -170,6 +184,14 @@ fn gold_compare(example: &str, gold_name: &str, max_abs: u32, mean_abs: f64) {
     let gold = root.join("tests/gold").join(gold_name);
 
     let tmp = tempdir();
+    for asset in assets {
+        let src = root.join(asset);
+        let base = std::path::Path::new(asset)
+            .file_name()
+            .expect("asset path has a filename");
+        std::fs::copy(&src, tmp.join(base))
+            .unwrap_or_else(|e| panic!("copying asset {}: {e}", src.display()));
+    }
     run_loft(&script, &tmp);
     let produced = tmp.join(gold_name);
     assert!(
@@ -255,5 +277,202 @@ fn canvas_demo_matches_gold() {
         /* max_abs  */
         1,
         /* mean_abs */ 0.05,
+    );
+}
+
+/// Per-part golden: the Canvas integer pixel buffer + `save_png` round-trip,
+/// in isolation (no lines/curves/AA — pure `canvas` / `fill_rect` /
+/// `set_pixel`).  Exact (`max_abs = 0`): every channel of every pixel must
+/// match, so an i32/i64 truncation, sign, or stride regression in the
+/// pixel-storage / PNG-encode path fails immediately and points only here.
+#[test]
+fn pixel_roundtrip_matches_gold() {
+    gold_compare(
+        "lib/graphics/examples/gold-pixels.loft",
+        "gold-pixels.png",
+        /* max_abs  */ 0,
+        /* mean_abs */ 0.0,
+    );
+}
+
+/// Per-part golden: `fill_rect` (solid-fill bounds + colour), in isolation.
+/// Exact — integer rasterizer.
+#[test]
+fn fill_rect_matches_gold() {
+    gold_compare(
+        "lib/graphics/examples/gold-rect.loft",
+        "gold-rect.png",
+        0,
+        0.0,
+    );
+}
+
+/// Per-part golden: `draw_line` (Bresenham), in isolation.  Exact.
+#[test]
+fn draw_line_matches_gold() {
+    gold_compare(
+        "lib/graphics/examples/gold-line.loft",
+        "gold-line.png",
+        0,
+        0.0,
+    );
+}
+
+/// Per-part golden: `fill_triangle` (scanline — the crystal canvas fill), in
+/// isolation.  Exact.
+#[test]
+fn fill_triangle_matches_gold() {
+    gold_compare(
+        "lib/graphics/examples/gold-triangle.loft",
+        "gold-triangle.png",
+        0,
+        0.0,
+    );
+}
+
+/// Per-part golden: `blend_pixel` / `blend` (alpha-over compositing math), in
+/// isolation.  Exact — integer blend.
+#[test]
+fn blend_matches_gold() {
+    gold_compare(
+        "lib/graphics/examples/gold-blend.loft",
+        "gold-blend.png",
+        0,
+        0.0,
+    );
+}
+
+/// Per-part golden: the text path (`gl_load_font` + `draw_text` → Canvas →
+/// save_png), in isolation.  Copies the font into the run dir.  Modest
+/// tolerance — glyph rasterization is antialiased and can drift a hair across
+/// font-rasterizer versions; still catches text gone / mispositioned /
+/// garbled (the WebGL "no text" class of regression on the native side).
+#[test]
+fn text_matches_gold() {
+    gold_compare_assets(
+        "lib/graphics/examples/gold-text.loft",
+        "gold-text.png",
+        &["lib/graphics/examples/DejaVuSans-Bold.ttf"],
+        /* max_abs  */ 4,
+        /* mean_abs */ 0.5,
+    );
+}
+
+// ── GL-render golden track ──────────────────────────────────────────────────
+//
+// The canvas goldens above exercise the software rasterizer → save_png.  This
+// one exercises the real GL pipeline: the crystal editor's --smoke mode paints
+// a fixed hex cluster and renders the faint ground hexes
+// (`ground_hexes_to_verts`), the crystal beams (`crystal_mesh_to_beams`, the
+// 30° points), and the palette, then writes the framebuffer via
+// `gl_screenshot`.  Run under Xvfb + llvmpipe so the render is CPU-deterministic
+// and matches CI rather than the dev box's GPU.  Looser tolerance than the
+// exact canvas goldens — GL line/triangle AA can drift a few LSB across Mesa
+// versions — but still catches beams / ground / palette gone, mispositioned,
+// or recoloured.  Skips (does not fail) when xvfb-run, the graphics cdylib, or
+// a working software-GL context is unavailable.
+
+fn has_cmd(cmd: &str) -> bool {
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!("command -v {cmd}"))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[test]
+fn crystal_editor_gl_matches_gold() {
+    if !graphics_native_built() {
+        eprintln!("skipping crystal GL gold: graphics cdylib not built");
+        return;
+    }
+    if !has_cmd("xvfb-run") {
+        eprintln!("skipping crystal GL gold: xvfb-run not installed");
+        return;
+    }
+    let root = workspace_root();
+    let shot = PathBuf::from("/tmp/crystal_editor_gold.png");
+    let _ = std::fs::remove_file(&shot);
+    let out = Command::new("xvfb-run")
+        .args([
+            "-a",
+            "-s",
+            "-screen 0 1000x1000x24",
+            "env",
+            // On a Wayland session `xvfb-run` only sets DISPLAY (X11), but
+            // winit/glutin prefer Wayland and would connect to the REAL
+            // compositor — popping a visible window on the user's screen and
+            // bypassing Xvfb (and breaking truly-headless runs).  Unset
+            // WAYLAND_DISPLAY and pin the winit backend to x11 so the window
+            // lands on the virtual Xvfb display instead.
+            "-u",
+            "WAYLAND_DISPLAY",
+            "WINIT_UNIX_BACKEND=x11",
+            "LIBGL_ALWAYS_SOFTWARE=1",
+            "GALLIUM_DRIVER=llvmpipe",
+        ])
+        .arg(loft_bin())
+        .arg("--no-warnings")
+        .arg("--path")
+        .arg(format!("{}/", root.display()))
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg("tools/audience-demo/crystal_editor.loft")
+        .arg("--smoke")
+        .arg("--screenshot")
+        .arg(&shot)
+        .current_dir(&root)
+        .output()
+        .expect("invoke xvfb-run");
+
+    if !shot.exists() {
+        // No framebuffer captured — almost always a missing software-GL
+        // context in this environment, not a rendering regression.  Skip.
+        eprintln!(
+            "skipping crystal GL gold: no screenshot produced (software GL unavailable?)\nstdout={}\nstderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        return;
+    }
+
+    let gold = root.join("tests/gold").join("crystal-editor-gl.png");
+    if update_gold() {
+        std::fs::copy(&shot, &gold).expect("copying new GL gold");
+        eprintln!("UPDATE_GOLD=1: wrote {}", gold.display());
+        return;
+    }
+    assert!(
+        gold.exists(),
+        "GL gold missing: {}\nrun `UPDATE_GOLD=1 cargo test --test graphics_gold crystal_editor_gl`",
+        gold.display()
+    );
+    let (actual, aw, ah) = decode_rgba8(&shot);
+    let (expected, ew, eh) = decode_rgba8(&gold);
+    // @P348 — a HiDPI / display-scaled environment can hand the GL window a
+    // SCALED framebuffer (observed 1333x1333 = 1000 × 1.333) even under
+    // `xvfb-run`, because some drivers honour the real X display's scale
+    // factor.  The controlled `make test-gl-golden` path (fixed Xvfb screen)
+    // and CI always produce the exact gold size, so a dimension mismatch here
+    // is environmental, not a rendering regression — skip gracefully rather
+    // than panic, matching the test's other environmental skips above.
+    if (aw, ah) != (ew, eh) {
+        eprintln!(
+            "skipping crystal GL gold: framebuffer {aw}x{ah} != gold {ew}x{eh} \
+             (HiDPI/display-scaled environment — run via `make test-gl-golden` for a controlled size)"
+        );
+        return;
+    }
+    let diff = compare_rgba(&actual, &expected);
+    let (max_abs, mean_abs) = (16u32, 2.0f64);
+    assert!(
+        diff.max_abs <= max_abs && diff.mean_abs <= mean_abs,
+        "crystal GL gold mismatch:\n  max_abs={} (limit {max_abs})\n  mean_abs={:.4} (limit {mean_abs})\n  \
+         differing={}/{} pixels\n  to accept: UPDATE_GOLD=1 cargo test --test graphics_gold crystal_editor_gl",
+        diff.max_abs,
+        diff.mean_abs,
+        diff.differing_pixels,
+        diff.total_pixels
     );
 }

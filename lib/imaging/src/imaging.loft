@@ -27,10 +27,13 @@ pub struct Image {
 }
 
 // Native function: decode a PNG file into an Image struct.
+// Bare `#native` → symbol `n_load_png` by convention (the fn name).
 fn load_png(path: text, image: Image) -> boolean;
-#native "n_load_png"
+#native
 
 // Native function: encode an Image struct as a PNG file.
+// Explicit override: the loft wrapper is `save_png_native` but the
+// native symbol is `n_save_png` (a pure-loft `save_png` wraps it).
 fn save_png_native(image: const Image, path: text) -> boolean;
 #native "n_save_png"
 

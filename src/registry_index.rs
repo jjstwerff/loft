@@ -446,7 +446,19 @@ pub fn registry_url() -> String {
 /// Local cache root (`~/.loft/registry/`).
 #[must_use]
 pub fn cache_dir() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    // @P332: resolve the home base from `LOFT_HOME` FIRST, falling back to
+    // `dirs::home_dir()`.  `dirs::home_dir()` reads `$HOME` on Unix but
+    // `USERPROFILE` / the FOLDERID_Profile known folder on Windows — it does
+    // NOT honour `$HOME` there — so tests that isolate the registry by setting
+    // `HOME=<tmpdir>` leaked into the REAL user profile on Windows, and
+    // cross-run caching then routed every install to `skipped_cached`
+    // (`install_one` saw a stale `loft.toml`), yielding `installed.len()==0`.
+    // `LOFT_HOME` is honoured identically on every platform; production leaves
+    // it unset, so behaviour there is unchanged.
+    let home = std::env::var_os("LOFT_HOME")
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
     home.join(".loft").join("registry")
 }
 

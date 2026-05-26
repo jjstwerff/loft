@@ -417,6 +417,19 @@ impl Stores {
                 let crate::json::Parsed::Array(items) = parsed else {
                     return Err(mismatch());
                 };
+                // @P357: an EMPTY JSON array must still zero the collection
+                // header.  The per-item loop below is the ONLY thing that
+                // initialises the vector/array field (the first `record_new`
+                // writes its header) — so with zero items the field keeps
+                // whatever bytes the recycled store record held, reading back
+                // as a phantom non-zero length (e.g. `json_parse("[]").item(0)`
+                // returning a garbage object, and `len` reporting 8 after a
+                // run of earlier parses populated then freed that block).  The
+                // `Parts::Null` arm above already calls `set_default_value` for
+                // exactly this reason; do the same when the array is empty.
+                if items.is_empty() {
+                    self.set_default_value(tp, to);
+                }
                 for (idx, item) in items.iter().enumerate() {
                     path.push(format!("[{idx}]"));
                     let res = self.record_new(to, rec_tp, field);

@@ -566,6 +566,26 @@ pub fn op_exclusive_or_int(v1: i64, v2: i64) -> i64 {
     op_exclusive_or_long(v1, v2)
 }
 
+/// Text ordering compare `<`.  Coerces both operands to `&str` so the
+/// comparison works whether native codegen hands us a `&String` (a text
+/// local) or a `&str` (an indexed `vector<text>` element via `get_str`).
+/// A bare `&String < &str` fails to compile — `String: PartialOrd<str>`
+/// doesn't exist — even though `==` works via the cross-type `PartialEq`.
+/// Routing `OpLtText` / `OpLeText` through these helpers unifies both
+/// provenances.  @P347.
+#[inline]
+#[must_use]
+pub fn op_lt_text<A: AsRef<str>, B: AsRef<str>>(a: A, b: B) -> bool {
+    a.as_ref() < b.as_ref()
+}
+
+/// Text ordering compare `<=` — see [`op_lt_text`].  @P347.
+#[inline]
+#[must_use]
+pub fn op_le_text<A: AsRef<str>, B: AsRef<str>>(a: A, b: B) -> bool {
+    a.as_ref() <= b.as_ref()
+}
+
 #[inline]
 #[must_use]
 pub fn op_shift_left_int(v1: i64, v2: i64) -> i64 {

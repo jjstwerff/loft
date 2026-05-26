@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression tests for the reusable editor helpers used by the
+// stand-alone crystal editor (tools/audience-demo/crystal_editor.loft):
+//   - hex_at_world  — pointer/touch world position → hex (picking inverse)
+//   - crystal_mesh_to_lines — SegMesh → stride-10 GL line vertices
+// plus the incremental paint→rebuild→mesh loop the editor drives.
+use audience_crystal::*;
+use gridmesh;
+
+fn test_pick_roundtrip() {
+  // Every hex centre picks back to itself, and a small offset near the
+  // centre still resolves to the same hex — exact across the odd-row shift.
+  for ty in -3..=3 {
+    for tx in -3..=3 {
+      wx = cell_wx(tx, ty);
+      wz = cell_wz(ty);
+      p = hex_at_world(wx, wz);
+      assert(p.0 == tx && p.1 == ty, "centre ({tx},{ty}) -> ({p.0},{p.1})");
+      j = hex_at_world(wx + 4.0, wz - 4.0);
+      assert(j.0 == tx && j.1 == ty, "jitter ({tx},{ty}) -> ({j.0},{j.1})");
+    }
+  }
+}
+
+fn test_mesh_to_lines() {
+  state = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  c = crystal_incr_new(CellSnap{ xs: [], ys: [], colors: [] },
+                       CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, state, 0);
+  // Paint two adjacent hexes, rebuild the dirty chunk, read the mesh back.
+  crystal_incr_paint(c, 0, 0, 2);
+  crystal_incr_paint(c, 1, 0, 3);
+  crystal_incr_rebuild(c, state, 10);
+  sm = crystal_incr_full_mesh(c);
+  v = crystal_mesh_to_lines(sm);
+  assert(len(v) > 0, "mesh produced no line vertices");
+  // 2 vertices per segment × 10 floats (pos3 + normal-pad3 + rgba4).
+  assert(len(v) % 20 == 0, "stride-10 line pairs expected, got {len(v)}");
+}
+
+fn test_erase_shrinks() {
+  state = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
+  c = crystal_incr_new(CellSnap{ xs: [], ys: [], colors: [] },
+                       CRYSTAL_CHUNK_SHIFT, 2, CRYSTAL_HALO_K, state, 0);
+  crystal_incr_paint(c, 0, 0, 2);
+  crystal_incr_paint(c, 1, 0, 3);
+  crystal_incr_rebuild(c, state, 5);
+  before = seg_len(crystal_incr_full_mesh(c));
+  crystal_incr_erase(c, 1, 0);
+  crystal_incr_rebuild(c, state, 6);
+  after = seg_len(crystal_incr_full_mesh(c));
+  assert(after < before, "erase did not shrink the mesh: {before} -> {after}");
+}
+
+fn main() {
+  test_pick_roundtrip();
+  test_mesh_to_lines();
+  test_erase_shrinks();
+  println("audience_crystal editor helpers: all passed");
+}

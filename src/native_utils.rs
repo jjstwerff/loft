@@ -132,6 +132,18 @@ pub(crate) fn build_script_native_lib_dirs(lib_dir: &std::path::Path) -> Vec<std
 /// Ensure `libloft.rlib` is at least as fresh as the newest `src/*.rs` file.
 /// If any source is newer, run `cargo build --lib` to rebuild it.
 pub(crate) fn ensure_rlib_fresh() {
+    // @P360: this is a dev convenience — rebuild loft's OWN runtime rlib when
+    // loft's Rust sources change, for `cargo run`-style use inside the loft
+    // repo.  It compares the RELATIVE `src/`/`default/` mtimes, so when loft
+    // runs against an external project that merely *has* a `src/` (e.g. a
+    // library package's `src/*.loft`), it wrongly fires `cargo build --lib`
+    // from a dir with no `Cargo.toml`, printing a confusing
+    // "could not find Cargo.toml" error.  Gate the whole thing on a
+    // `Cargo.toml` in cwd: `cargo build --lib` needs one there anyway, so if
+    // absent we are not in the loft source root — use the shipped rlib as-is.
+    if !std::path::Path::new("Cargo.toml").exists() {
+        return;
+    }
     let Some(lib_dir) = loft_lib_dir() else {
         // No rlib found at all — try building from scratch.
         let _ = std::process::Command::new("cargo")
@@ -187,20 +199,45 @@ pub(crate) fn fnv64(data: &[u8]) -> u64 {
 }
 
 /// Build a cache key from generated Rust source and the rlib identity.
-pub(crate) fn native_cache_key(rs_content: &[u8], lib_dir: Option<&std::path::Path>) -> u64 {
+pub(crate) fn native_cache_key(
+    rs_content: &[u8],
+    lib_dir: Option<&std::path::Path>,
+    data: Option<&crate::data::Data>,
+) -> u64 {
     let mut key = fnv64(rs_content);
     if let Some(ld) = lib_dir {
         let rlib = ld.join("libloft.rlib");
         key ^= fnv64(rlib.to_string_lossy().as_bytes());
-        if let Ok(mtime) = std::fs::metadata(&rlib).and_then(|m| m.modified()) {
-            let d = mtime
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default();
-            key ^= fnv64(&d.as_secs().to_le_bytes());
-            key ^= fnv64(&d.subsec_nanos().to_le_bytes());
+        fold_mtime(&mut key, &rlib);
+    }
+    // @P341: also fold each native PACKAGE rlib's path + mtime, so rebuilding a
+    // library's `#native` crate (`lib/<pkg>/native/...`) invalidates the cached
+    // test binary — which links those rlibs via `add_native_extern_flags`.
+    // Without this, a cdylib fix is silently masked by a stale cached binary.
+    if let Some(d) = data {
+        for (crate_name, pkg_dir) in &d.native_packages {
+            let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
+            let rlib = std::path::PathBuf::from(pkg_dir)
+                .join("native")
+                .join("target")
+                .join("release")
+                .join(&rlib_name);
+            key ^= fnv64(rlib.to_string_lossy().as_bytes());
+            fold_mtime(&mut key, &rlib);
         }
     }
     key
+}
+
+/// Fold a file's modification time into `key` (no-op if the file is missing).
+fn fold_mtime(key: &mut u64, path: &std::path::Path) {
+    if let Ok(mtime) = std::fs::metadata(path).and_then(|m| m.modified()) {
+        let d = mtime
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        *key ^= fnv64(&d.as_secs().to_le_bytes());
+        *key ^= fnv64(&d.subsec_nanos().to_le_bytes());
+    }
 }
 
 /// Return true if `s` looks like an explicit output path rather than a flag or loft source file.
@@ -230,6 +267,129 @@ pub(crate) fn default_artifact_path(script_path: &str, ext: &str) -> std::path::
         .and_then(|s| s.to_str())
         .unwrap_or("out");
     loft_artifact_dir(script_path).join(format!("{stem}.{ext}"))
+}
+
+/// @P350: parse the import section of a `loft --html` wasm and verify every
+/// import module is one of the raw extern bridges the embedded HTML glue
+/// provides (`loft_gl` / `loft_io`).  A wasm-bindgen-feature rlib — the
+/// "rlib stomp" `make wasm` leaves at
+/// `target/wasm32-unknown-unknown/release/libloft.rlib` — imports
+/// `__wbindgen_placeholder__` (35+), which the glue cannot satisfy, so the
+/// page never instantiates.  Returns `Ok(())` when every import module is
+/// acceptable (a wasm with no imports included), or `Err(sorted distinct bad
+/// module names)` otherwise.  Mirrors the import check in
+/// `tools/check_html_bundle.mjs`, inline so it guards a bare `loft --html`
+/// and not only the `make game` path.
+///
+/// The parser is deliberately conservative: on ANY shape it doesn't
+/// understand (bad magic, truncated section, unknown import-descriptor kind)
+/// it returns `Ok(())` rather than risk a false abort on a valid bundle — the
+/// only path that errors is one where it successfully read import module
+/// names and found one that is not `loft_gl`/`loft_io`.
+pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>> {
+    fn read_uleb(b: &[u8], p: &mut usize) -> Option<u64> {
+        let mut result: u64 = 0;
+        let mut shift = 0u32;
+        loop {
+            let byte = *b.get(*p)?;
+            *p += 1;
+            result |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(result);
+            }
+            shift += 7;
+            if shift >= 64 {
+                return None;
+            }
+        }
+    }
+    fn read_name<'a>(b: &'a [u8], p: &mut usize) -> Option<&'a [u8]> {
+        let len = usize::try_from(read_uleb(b, p)?).ok()?;
+        let s = b.get(*p..p.checked_add(len)?)?;
+        *p += len;
+        Some(s)
+    }
+    fn skip_limits(b: &[u8], p: &mut usize) -> Option<()> {
+        let flag = *b.get(*p)?;
+        *p += 1;
+        read_uleb(b, p)?; // min
+        if flag & 1 == 1 {
+            read_uleb(b, p)?; // max
+        }
+        Some(())
+    }
+    // Header: magic "\0asm" + version.  Malformed → don't block (the browser
+    // would surface a genuinely corrupt module); this parser only judges the
+    // import modules of a wasm it can walk.
+    if wasm.len() < 8 || &wasm[0..4] != b"\0asm" {
+        return Ok(());
+    }
+    let mut p = 8;
+    let mut bad: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    while p < wasm.len() {
+        let Some(id) = wasm.get(p).copied() else {
+            break;
+        };
+        p += 1;
+        let Some(size) = read_uleb(wasm, &mut p) else {
+            return Ok(());
+        };
+        let Ok(size) = usize::try_from(size) else {
+            return Ok(());
+        };
+        let section_start = p;
+        let section_end = match section_start.checked_add(size) {
+            Some(e) if e <= wasm.len() => e,
+            _ => return Ok(()),
+        };
+        if id == 2 {
+            // Import section: u32 count, then `count` (module, field, desc).
+            let mut ip = section_start;
+            let Some(count) = read_uleb(wasm, &mut ip) else {
+                return Ok(());
+            };
+            for _ in 0..count {
+                let Some(module) = read_name(wasm, &mut ip) else {
+                    return Ok(());
+                };
+                let Some(_field) = read_name(wasm, &mut ip) else {
+                    return Ok(());
+                };
+                let Some(kind) = wasm.get(ip).copied() else {
+                    return Ok(());
+                };
+                ip += 1;
+                let ok = match kind {
+                    0 => read_uleb(wasm, &mut ip).map(|_| ()), // func: typeidx
+                    1 => {
+                        // table: reftype byte + limits
+                        ip += 1;
+                        skip_limits(wasm, &mut ip)
+                    }
+                    2 => skip_limits(wasm, &mut ip), // mem: limits
+                    3 => {
+                        // global: valtype byte + mut byte
+                        ip += 2;
+                        Some(())
+                    }
+                    _ => None, // unknown kind — bail safe
+                };
+                if ok.is_none() {
+                    return Ok(());
+                }
+                let m = String::from_utf8_lossy(module).into_owned();
+                if m != "loft_gl" && m != "loft_io" {
+                    bad.insert(m);
+                }
+            }
+        }
+        p = section_end;
+    }
+    if bad.is_empty() {
+        Ok(())
+    } else {
+        Err(bad.into_iter().collect())
+    }
 }
 
 pub(crate) fn project_dir() -> String {
@@ -451,6 +611,17 @@ pub(crate) fn add_native_extern_flags(
                 .join("release")
                 .join(&rlib_name)
         };
+        // @P359: on a clean checkout the package-under-test's rlib may not
+        // exist yet at link time — parse-time `auto_build_native` only fires
+        // for *dependency* packages (resolved via `use`), not for the package
+        // being tested directly.  CI runs a single fresh `loft --native test`,
+        // so without this the first (only) run links nothing and rustc errors
+        // E0463 "can't find crate".  Build it on demand here.  Native target
+        // only; WASM relies on prebuilt rlibs (no host cargo build).
+        if target.is_none() && !rlib_path.exists() {
+            let stem = crate_name.replace('-', "_");
+            let _ = crate::extensions::auto_build_native(pkg_dir, &stem);
+        }
         if rlib_path.exists() {
             let extern_name = crate_name.replace('-', "_");
             cmd.arg("--extern")
@@ -572,5 +743,64 @@ mod p254_cache_safety {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos())
+    }
+}
+
+#[cfg(test)]
+mod p350_html_wasm_import_check {
+    use super::*;
+
+    /// Build a minimal valid wasm (header + one import section) whose single
+    /// import has the given module name and is a function import (kind 0).
+    fn wasm_with_import_module(module: &str) -> Vec<u8> {
+        // import entry: <ulen module><module><ulen field><field><kind=0><typeidx=0>
+        let field = "f";
+        let mut entry = Vec::new();
+        entry.push(module.len() as u8);
+        entry.extend_from_slice(module.as_bytes());
+        entry.push(field.len() as u8);
+        entry.extend_from_slice(field.as_bytes());
+        entry.push(0x00); // kind: func
+        entry.push(0x00); // typeidx 0
+        // import section body: <count=1><entry>
+        let mut body = vec![0x01u8];
+        body.extend_from_slice(&entry);
+        // section: <id=2><usize len><body>
+        let mut wasm = b"\0asm".to_vec();
+        wasm.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // version 1
+        wasm.push(0x02); // import section id
+        wasm.push(body.len() as u8); // section size (small enough for one byte uleb)
+        wasm.extend_from_slice(&body);
+        wasm
+    }
+
+    #[test]
+    fn accepts_loft_gl_and_loft_io() {
+        assert!(html_wasm_import_modules_ok(&wasm_with_import_module("loft_gl")).is_ok());
+        assert!(html_wasm_import_modules_ok(&wasm_with_import_module("loft_io")).is_ok());
+    }
+
+    #[test]
+    fn rejects_wbindgen_stomp() {
+        let bad = html_wasm_import_modules_ok(&wasm_with_import_module("__wbindgen_placeholder__"))
+            .expect_err("wbindgen import module must be rejected");
+        assert_eq!(bad, vec!["__wbindgen_placeholder__".to_string()]);
+    }
+
+    #[test]
+    fn no_imports_is_ok() {
+        // Bare header, no sections — a wasm with zero imports is acceptable.
+        let mut wasm = b"\0asm".to_vec();
+        wasm.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+        assert!(html_wasm_import_modules_ok(&wasm).is_ok());
+    }
+
+    #[test]
+    fn malformed_does_not_false_abort() {
+        // Bad magic / truncated input must be conservatively accepted (Ok),
+        // never a false rejection of a bundle this parser can't read.
+        assert!(html_wasm_import_modules_ok(b"not a wasm").is_ok());
+        assert!(html_wasm_import_modules_ok(&[]).is_ok());
+        assert!(html_wasm_import_modules_ok(b"\0asm\x01\x00\x00\x00\x02\xff").is_ok());
     }
 }

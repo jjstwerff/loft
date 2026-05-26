@@ -990,9 +990,34 @@ impl Parser {
             let id = self.lexer.has_identifier();
             if id == Some("native".to_string()) {
                 if let Some(sym) = self.lexer.has_cstring() {
+                    // Explicit override — for the rare case where the native
+                    // symbol differs from the loft fn name (e.g. a
+                    // `foo_native` loft wrapper backing the `n_foo` symbol).
+                    // @PLAN12 — if the explicit string EQUALS the canonical
+                    // default (the fn's own stored name, `n_<fn>` for a free
+                    // fn), it's redundant: a bare `#native` derives the same
+                    // symbol.  Reject it so the redundant form can't drift
+                    // back in — bare `#native` is the only spelling for the
+                    // common case; an explicit string is reserved for a
+                    // symbol that genuinely DIFFERS from the fn name.
+                    let canonical = self.data.def(self.context).name.clone();
+                    if sym == canonical {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "redundant `#native \"{sym}\"` — the symbol equals the \
+                             function name; write a bare `#native` instead (an \
+                             explicit string is only for a symbol that differs)"
+                        );
+                    }
                     self.data.definitions[self.context as usize].native = sym;
                 } else {
-                    diagnostic!(self.lexer, Level::Error, "Expect native symbol string");
+                    // @PLAN12 — bare `#native` defaults the symbol to the
+                    // function's own name.  A free `fn foo(...)` is stored as
+                    // `n_foo` (see `Data::add_fn`), which IS the conventional
+                    // native symbol, so the binding needs no separate string.
+                    let default_sym = self.data.def(self.context).name.clone();
+                    self.data.definitions[self.context as usize].native = default_sym;
                 }
             } else if self.default && id == Some("rust".to_string()) {
                 if let Some(c) = self.lexer.has_cstring() {

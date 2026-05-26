@@ -1,0 +1,14 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// GOLDEN FIXTURE — pins `draw_line` (Bresenham) in isolation: horizontal,
+// vertical, and both diagonals.  Exact (max_abs=0).  Headless.
+use graphics;
+fn main() {
+  cv = graphics::canvas(32, 32, 0xFF101018);
+  cv.draw_line(2, 2, 29, 2, 0xFFFFFFFF);
+  cv.draw_line(2, 2, 2, 29, 0xFFFF8000);
+  cv.draw_line(2, 2, 29, 29, 0xFF00FFFF);
+  cv.draw_line(29, 2, 2, 29, 0xFFFF00FF);
+  if !graphics::save_png(cv, "gold-line.png") { println("gold-line: save FAILED"); }
+}

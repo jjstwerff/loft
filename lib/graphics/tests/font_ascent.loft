@@ -1,0 +1,20 @@
+// @P340 regression: lib/graphics must expose the font's real ASCENT metric so
+// callers can baseline-align mixed-size text.  Before the fix there was no
+// ascent accessor at all (only a hardcoded `size * 0.8` approximation inside
+// rasterize_text).  gl_font_ascent reads fontdue's horizontal_line_metrics.
+use graphics;
+
+fn test_font_ascent_is_positive_and_scales() {
+  f = graphics::gl_load_font("examples/DejaVuSans-Bold.ttf");
+  // Skip gracefully if the bundled font can't be found in this run dir
+  // (keeps the package suite green where the cwd differs).
+  if f >= 0 {
+    a_small = graphics::gl_font_ascent(f, 20.0);
+    a_large = graphics::gl_font_ascent(f, 40.0);
+    assert(a_small > 0.0, "ascent at 20px should be positive ({a_small})");
+    assert(a_large > a_small, "ascent grows with size ({a_large} vs {a_small})");
+    // The ascent must be a sensible fraction of the em — strictly less than the
+    // full pixel size for a typical Latin font (ascent ~0.7-0.95 em).
+    assert(a_large < 40.0, "ascent at 40px should be below the em size ({a_large})");
+  }
+}

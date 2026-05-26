@@ -170,7 +170,10 @@ fn main() {
 }
 ";
     let (stdout, _stderr, code, log) = run_prod("index_out_of_bounds_vector", source);
-    assert_eq!(code, Some(1), "had_fatal should still exit 1");
+    // @P356: OOB index is a RECOVERABLE fault — logs a Warn and continues
+    // without failing the program (exit 0).  Fail-fast is opt-in via
+    // `LOFT_DEV_SOFT_HALT` only.
+    assert_eq!(code, Some(0), "recoverable OOB should exit 0");
     assert!(stdout.contains("before"));
     assert!(
         stdout.contains("after"),
@@ -197,7 +200,8 @@ fn main() {
 }
 ";
     let (stdout, _stderr, code, log) = run_prod("index_out_of_bounds_text", source);
-    assert_eq!(code, Some(1), "had_fatal should still exit 1");
+    // @P356: recoverable text OOB logs Warn + continues; exit 0.
+    assert_eq!(code, Some(0), "recoverable text OOB should exit 0");
     assert!(stdout.contains("before"));
     assert!(
         stdout.contains("after"),

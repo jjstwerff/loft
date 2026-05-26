@@ -235,7 +235,17 @@ impl Parser {
             }
         } else if self.data.def_nr(name) != u32::MAX
             && (!self.lexer.peek_token("=") || self.lexer.peek_token("=="))
+            && !matches!(
+                self.data.def_type(self.data.def_nr(name)),
+                DefType::Function
+            )
         {
+            // @P335: functions are stored mangled as `n_<name>` and are reached
+            // ONLY via the `n_`+ident lookup below — never by matching the RAW
+            // identifier here.  Without this guard a user variable spelled
+            // `n_day` raw-matches function `day` (stored `n_day`) and the
+            // declaration mis-parses ("Expect token ;").  Enums / types stored
+            // under their plain name still resolve here.
             let dnr = self.data.def_nr(name);
             if self.data.def_type(dnr) == DefType::Enum {
                 t = self.data.def(dnr).returned.clone();
@@ -264,7 +274,16 @@ impl Parser {
                 let prefixed = format!("n_{nm}");
                 let nr = self.data.def_nr(&prefixed);
                 if nr == u32::MAX {
-                    self.data.def_nr(&nm)
+                    // @P335: the RAW fallback resolves names stored un-prefixed,
+                    // but must NOT match a FUNCTION — otherwise a user identifier
+                    // spelled `n_<x>` aliases function `<x>` (stored `n_<x>`).
+                    // Functions are only reachable via the `n_`+ident form above.
+                    let raw = self.data.def_nr(&nm);
+                    if raw != u32::MAX && !matches!(self.data.def_type(raw), DefType::Function) {
+                        raw
+                    } else {
+                        u32::MAX
+                    }
                 } else {
                     nr
                 }

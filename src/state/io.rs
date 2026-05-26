@@ -32,7 +32,17 @@ impl State {
                     .to_owned()
             };
             let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
-            if let Some(text) = crate::wasm::host_fs_read_text(&file_path) {
+            // @P349: consult VIRT_FS first — `compile_and_run` populates it with
+            // every file passed to the playground/gallery (the program's bundled
+            // data).  Without this, runtime `file("x").content()` only hit the JS
+            // `fs_read_text` host bridge, which the browser playground does not
+            // provide → empty string (the lexer already reads source/lib files
+            // from VIRT_FS via `virt_fs_get`, but the runtime read did not).  A
+            // real host with no VIRT_FS entry for the path still falls through to
+            // its `host_fs_read_text` bridge, so live-FS hosts are unaffected.
+            if let Some(text) = crate::wasm::virt_fs_get(&file_path) {
+                *buf = text;
+            } else if let Some(text) = crate::wasm::host_fs_read_text(&file_path) {
                 *buf = text;
             }
             return;

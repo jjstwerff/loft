@@ -1695,3 +1695,9 @@ stack, and the panic site appears.
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs, limitations, workarounds, and fix plans
 - [CLAUDE.md](../../CLAUDE.md) — Project orientation: execution path, key data structures, branch policy, documentation index
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Debugging strategy (LOFT_LOG presets, scope bugs, slot conflicts), working with Claude
+
+## Open work
+
+| Item | Section | Status |
+|---|---|---|
+| **@P229b — Windows `pick_free_port` rebind race** — `tests/multiplayer_v2.rs::pick_free_port` binds `127.0.0.1:0`, drops the listener, and hands the freed port to the spawned `v2` server to re-bind.  On Windows a just-closed port is frequently not immediately re-bindable (no `SO_REUSEADDR` default + TIME_WAIT / exclusive-use), so the child's bind fails → it dies at startup → `wait_listening` times out at 60 s (the three `#[cfg_attr(target_os = "windows", ignore = "P229b…")]` scenarios).  **Fix:** have the SERVER bind `:0` itself and report the chosen port on stdout (the test reads it back), removing the close-then-rebind race. | `tests/multiplayer_v2.rs` (`pick_free_port`, the v2 `ServerGuard`) | **Blocked on: a Windows CI runner.**  Do NOT apply blind — it churns a green-on-Linux test on an unverifiable hypothesis.  When a runner is available: un-ignore the `P229b` scenarios, read the real failure (`ServerGuard::diagnose_listen_failure` now surfaces it), confirm the bind failure, then swap the port-handshake.  Bug record: [PROBLEMS.md @P229](PROBLEMS.md). |

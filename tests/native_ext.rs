@@ -29,12 +29,15 @@ fn n_add_two(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 /// A7.1: basic integer native function registered and called from loft.
-/// Symbol name matches the auto-generated loft function name (`n_` prefix).
+/// Uses a BARE `#native` — the symbol defaults to the fn name (`n_double_it`).
+/// (@PLAN12: an explicit `#native "n_double_it"` here is now a parse error
+/// because the string equals the default; the override path — a symbol that
+/// DIFFERS from the fn name — is covered separately below.)
 #[test]
 fn native_integer_function() {
     let native_decl = r#"
 pub fn double_it(x: integer) -> integer not null;
-#native "n_double_it"
+#native
 "#;
     let source = r#"
 fn main() {

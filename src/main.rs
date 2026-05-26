@@ -80,8 +80,8 @@ mod wasm;
 
 use crate::diagnostics::Level;
 use crate::native_utils::{
-    build_script_native_lib_dirs, default_artifact_path, is_output_path, loft_lib_dir,
-    loft_lib_dir_for, project_dir,
+    build_script_native_lib_dirs, default_artifact_path, html_wasm_import_modules_ok,
+    is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
 };
 use crate::state::State;
 use crate::test_runner::run_tests;
@@ -925,33 +925,18 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
     }
 
     // Generate field offset modules for referenced struct types.
+    //
+    // Offsets and record size come from the SAME canonical struct schema the
+    // interpreter and native codegen consult (`Stores::position` /
+    // `Stores::size`) — never a layout re-derived here.  A separate
+    // size/offset calculation drifts from the real runtime layout (e.g. a
+    // plain `integer` field is an 8-byte i64, not 4 bytes, and loft reorders
+    // 8-byte fields ahead of 4-byte record refs for alignment), which
+    // silently corrupts every native struct read/write.  @P321c.
     let mut field_modules = String::new();
-    for (sname, (_d_nr, fields)) in &struct_field_mods {
-        // Compute store-side sizes: in the store, text/ref/vector are 4-byte record refs.
-        let sizes: Vec<(u16, u8)> = fields
-            .iter()
-            .map(|(_, _, tp)| match tp {
-                // Post-2c round 10c: wide Type::Integer (former Type::Long) → 8 bytes.
-                Type::Integer(s) if s.is_wide() => (8u16, 8u8),
-                Type::Float => (8u16, 8u8),
-                Type::Integer(_) | Type::Character | Type::Single => (4, 4),
-                Type::Boolean | Type::Enum(_, false, _) => (1, 1),
-                // In the store, text/ref/vector/collections are stored as 4-byte record refs.
-                Type::Text(_)
-                | Type::Reference(_, _)
-                | Type::Vector(_, _)
-                | Type::Enum(_, true, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Spacial(_, _, _) => (4, 4),
-                _ => (4, 4), // fallback
-            })
-            .collect();
-        let mut total_size = 0u16;
-        let mut alignment = 0u8;
-        let positions =
-            crate::calc::calculate_positions(&sizes, false, &mut total_size, &mut alignment);
+    for (sname, (d_nr, fields)) in &struct_field_mods {
+        let struct_tp = p.data.def(*d_nr).known_type;
+        let total_size = p.database.size(struct_tp);
 
         field_modules.push_str(&format!("/// Field offsets for struct `{sname}`.\n"));
         field_modules.push_str(&format!(
@@ -960,8 +945,14 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
         ));
         field_modules.push_str("#[allow(dead_code)]\n");
         field_modules.push_str(&format!("pub mod {sname}_fields {{\n"));
-        for (i, (fname, _, tp)) in fields.iter().enumerate() {
-            let offset = positions[i];
+        for (fname, _, tp) in fields {
+            let offset = p.database.position(struct_tp, fname);
+            // Skip names that aren't real record fields (e.g. methods that
+            // leak into the collected attribute list) — `position` returns
+            // u16::MAX for them; emitting a `= 65535` const would be bogus.
+            if offset == u16::MAX {
+                continue;
+            }
             let type_comment = match tp {
                 Type::Integer(_) => "integer",
                 Type::Float => "float",
@@ -2391,12 +2382,54 @@ fn main() {
             let _ = std::fs::remove_file(&wasm_path);
             opt_path
         } else {
-            eprintln!("note: install wasm-opt (binaryen) for smaller output");
+            // @P337: a missing wasm-opt is NOT a cosmetic "larger output"
+            // problem — without the `--asyncify` pass the bundle cannot
+            // frame-yield, so the HTML driver runs loft_start() synchronously
+            // and any render loop (`for _ in 0..N`) blocks the browser main
+            // thread forever ("page times out").  Warn loudly so a hung
+            // bundle is never shipped unknowingly.
+            eprintln!(
+                "WARNING: a required tool ('wasm-opt', from the 'binaryen' \
+                 package) is not installed.\n  \
+                 Without it this game page will FREEZE the browser tab \
+                 (it locks up and never draws).\n  \
+                 Install it and rebuild before publishing — e.g. `apt \
+                 install binaryen`, or run `make doctor` for the command \
+                 for your system."
+            );
             wasm_path
         };
         // Assemble HTML
         let wasm_bytes = std::fs::read(&final_wasm).unwrap_or_default();
         let _ = std::fs::remove_file(&final_wasm);
+        // @P350: self-validate the emitted wasm BEFORE writing the HTML so a
+        // bare `loft --html` never ships the silently-broken "rlib stomp"
+        // bundle.  `make wasm` (wasm-pack, feature=wasm) and `--html` write
+        // the SAME target/wasm32-unknown-unknown/release/libloft.rlib with
+        // incompatible feature sets; if --html links the wasm-bindgen variant
+        // the wasm imports `__wbindgen_placeholder__` (35+), which the
+        // embedded loft-gl-wasm.js glue (raw loft_gl/loft_io externs only)
+        // can't provide → the page fails to instantiate.  A correct --html
+        // bundle imports ONLY `loft_gl` + `loft_io`.  Same check as
+        // tools/check_html_bundle.mjs, but inline so it guards the bare
+        // command, not just `make game`.  (The asyncify/wasm-opt footgun is
+        // handled by the loud warning above — it's conditional on whether the
+        // program frame-yields, so it must not hard-abort compute-only bundles.)
+        if let Err(bad_mods) = html_wasm_import_modules_ok(&wasm_bytes) {
+            eprintln!(
+                "loft: --html produced a BROKEN bundle — the wasm imports \
+                 unexpected module(s) {bad_mods:?}.\n  \
+                 The wasm32-unknown-unknown libloft.rlib was built with the \
+                 `wasm` (wasm-bindgen) feature — most likely a prior `make \
+                 wasm` stomped it (see WASM.md § The rlib-stomp hazard).\n  \
+                 Rebuild the rlib in the --html shape, then re-run --html:\n    \
+                 cargo build --release --target wasm32-unknown-unknown --lib \
+                 --no-default-features --features random\n  \
+                 (No HTML was written — a stomped bundle does not instantiate \
+                 in the browser.)"
+            );
+            std::process::exit(1);
+        }
         let wasm_b64 = crate::base64::encode(&wasm_bytes);
         let title = std::path::Path::new(&file_name)
             .file_stem()

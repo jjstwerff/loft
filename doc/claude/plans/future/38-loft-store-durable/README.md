@@ -5,11 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLAN38 — LOFT_STORE_DURABLE — three-tier opt-in durability for mmap stores
 
-**Status:** Phases 00 + 01 actionable now (bundled PR — see
-[§ First slice — Phases 00 + 01 as one PR](#first-slice--phases-00--01-as-one-pr)).
-Phases 02-06 stay in `future/` until their driver consumers
-(TTT v5 / @PLAN36 audience demo) need them.  Full promotion
-to active (`plans/38-…`) deferred until phase 02 begins.
+**Status:** Phases 00 + 01 **shipped** (merged to `main` via
+[PR #219](https://github.com/jjstwerff/loft/pull/219), commit
+`d494edc`).  Phase 01b (loft-callable binding) is actionable
+now on branch `store-durable-phase1b` to unblock the
+training-port consumer.  Phases 02-06 stay in `future/` until
+their driver consumers (TTT v5 / @PLAN36 audience demo) need
+them.  Full promotion to active (`plans/38-…`) deferred until
+phase 02 begins.
 
 A `Store::open_durable` API + three opt-in durability tiers
 on top of loft's existing mmap-backed `Store` primitive
@@ -209,6 +212,7 @@ bounded.
 |---|---|---|---|
 | 0 | [Foundation: integrity + tail marker on existing Store](00-foundation.md) | XS | `src/store.rs` gains `DStoreV1` signature variant + per-record CRC scaffolding (no behavior change for non-durable stores) |
 | 1 | [Tier 1: IntegrityOnly + auto-rescan hook](01-tier-1-integrity.md) | S | `Store::open_durable(.., IntegrityOnly { on_corruption })` API; integrity validation on open; corruption → callback fires; first consumer = @PLAN37 indexer |
+| 1b | [Loft-callable binding for `open_durable`](01b-loft-binding.md) | XS-S | Native fns `store_durable_check(path)` + `store_durable_seal(path)` exposed in stdlib so loft consumers (training port first) can use the Phase 01 API without a Rust callback wrapper |
 | 2 | [Tier 2: double-buffered snapshots](02-tier-2-snapshots.md) | M | `lib/store_durable/` package; `SnapshotEvery(interval)` mode with two-file atomic rotation + `msync` discipline |
 | 3 | [Tier 3: WAL + grouped commit](03-tier-3-wal.md) | M-MH | WAL append + fsync + checkpoint + truncate; `group_commit_window` to amortise fsync cost across batches |
 | 4 | [Stress test — `kill -9` × 1000 across all tiers](04-stress-test.md) | S | `tests/store_durable_kill.rs` runs an injection harness that spawns a daemon, kills it mid-write, validates recovery semantics per tier |

@@ -3,6 +3,7 @@
 
 ## Contents
 - [Overview](#overview)
+- [Build Toolchain Dependencies](#build-toolchain-dependencies)
 - [JSON Virtual Filesystem](#json-virtual-filesystem)
 - [Layered Filesystem — Base Tree + Delta Overlay](#layered-filesystem--base-tree--delta-overlay)
 - [Host Bridge API](#host-bridge-api)
@@ -30,6 +31,73 @@ the JavaScript host through `wasm-bindgen` externs grouped under a
 Three layers: a **JSON virtual filesystem** for file/directory behaviour
 without disk, the **host bridge API** for random/time/env/storage, and a
 **Node.js test harness** tying them together for automated testing.
+
+---
+
+## Build Toolchain Dependencies
+
+loft targets four backends and they do **not** share a toolchain.  A machine
+that compiles the interpreter fine can still silently ship a broken browser
+bundle if the WASM tools are missing.  Run **`make doctor`** for a live status
+report; the table below is the reference.
+
+| Tool | Needed for | If missing |
+|---|---|---|
+| `rustc` / `cargo` | everything | nothing builds |
+| `node` (≥18) | WASM Node tests + `--html` bundle integrity check | tests skip; `make game` can't gate the bundle |
+| **`wasm-opt`** (binaryen) | **`--html`** — the `--asyncify` pass that enables frame-yield | **bundle has no frame-yield → render loop HANGS the browser tab** ("page times out", @P337) |
+| `wasmtime` | `wasm32-wasip2` (`--native-wasm`), @P334 | can't run/test the wasip2 backend locally |
+| `wasm-pack` | `make wasm` (doc/pkg gallery + browser playground) | gallery/playground can't rebuild |
+| `wasm-bindgen` CLI | *bundled by wasm-pack* | **not** needed for `--html` (it uses a raw `extern "C"` bridge, not wasm-bindgen) |
+| a browser (Chromium/Firefox) | real `--html` verification | can only stub-instantiate, not render |
+| rustup targets `wasm32-unknown-unknown` + `wasm32-wasip2` | `--html` / `--native-wasm` | cross-compile fails (E0463) |
+
+Install on Debian/Ubuntu: `apt install binaryen wasmtime` (or download
+releases); `cargo install wasm-pack`; `rustup target add
+wasm32-unknown-unknown wasm32-wasip2`.
+
+### The rlib-stomp hazard — build order matters (@P337)
+
+`make wasm` (wasm-pack, **`feature=wasm`**) and `loft --html` both write
+**the same** `target/wasm32-unknown-unknown/release/libloft.rlib`, but with
+**incompatible feature sets**:
+
+- The **wasm-pack** rlib has `feature=wasm` → pulls in `wasm-bindgen`/`js_sys`,
+  so the wasm imports `__wbindgen_placeholder__` (35+ entries) that must be
+  resolved by the `wasm-bindgen` CLI + generated JS glue.
+- The **`--html`** rlib is built `--no-default-features --features random`
+  (**no** `wasm`).  Its host bridge is the raw `extern "C"` `loft_gl` / `loft_io`
+  modules that the embedded `doc/loft-gl-wasm.js` provides — **zero** wbindgen
+  imports.
+
+If `loft --html` links the wasm-pack variant (i.e. you ran `make wasm` last),
+the bundle imports `__wbindgen_placeholder__`, which the HTML glue does not
+provide, and the page fails to instantiate
+(`Import … __wbindgen_placeholder__: module is not an object`).
+
+**Rule:** after `make wasm`, rebuild the rlib in the `--html` shape before
+`loft --html`:
+
+```bash
+cargo build --release --target wasm32-unknown-unknown --lib \
+    --no-default-features --features random
+```
+
+`make game` does this automatically (step 3); a *manual* `loft --html` does
+not.  `make wasm-html-test` rebuilds it for the test gate.  The integrity
+gate `node tools/check_html_bundle.mjs <bundle.html>` (run by `make game`
+step 6) catches both this stomp and a missing-`wasm-opt` (no-asyncify) bundle
+before either ships.
+
+**@P350 — `loft --html` self-guards the stomp inline.**  As of 2026-05-26 a
+bare `loft --html` no longer needs the external gate to catch the stomp: it
+parses the emitted wasm's import section
+(`native_utils::html_wasm_import_modules_ok`) and **hard-aborts** (exit 1, no
+HTML written) if any import module is not `loft_gl`/`loft_io`, printing the
+rebuild command above.  So a stomped rlib produces a clear error, never a
+silently-broken bundle.  The companion `wasm-opt`/asyncify check stays a *loud
+warning* (not an abort): whether a bundle needs asyncify depends on whether the
+program frame-yields, so a compute-only `--html` program is valid without it.
 
 ---
 

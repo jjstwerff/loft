@@ -708,9 +708,9 @@ fn OpEqText(v1: text, v2: text) -> boolean;
 fn OpNeText(v1: text, v2: text) -> boolean;
 #rust"@v1 != @v2"
 fn OpLtText(v1: text, v2: text) -> boolean;
-#rust"@v1 < @v2"
+#rust"ops::op_lt_text(@v1, @v2)"
 fn OpLeText(v1: text, v2: text) -> boolean;
-#rust"@v1 <= @v2"
+#rust"ops::op_le_text(@v1, @v2)"
 fn OpFormatText(pos: const u16, val: text, width: integer, dir: const i8, token: const u8);
 fn OpFormatStackText(pos: const u16, val: text, width: integer, dir: const i8, token: const u8);
 fn OpAppendCharacter(pos: const u16, v1: character);
@@ -913,11 +913,18 @@ fn OpGetVector(r: vector, size: const u16, index: integer) -> reference[r];
 // call — would hold two `&mut stores` borrows at once (E0499).  The `let`
 // fully evaluates the inner borrow (the result is an owned `DbRef`) before
 // the outer call takes its own `&mut stores`.
-#rust"{{let __vr = @r; s.vec_get_or_raise(&__vr, u32::from(@size), @index)}}"
+// @P338: also bind `@index` to a local before the call.  A checked
+// index expression — e.g. `v[n / 2]`, whose div-by-zero guard calls
+// `raise_runtime` (&mut stores) — would otherwise be evaluated as an
+// argument while `vec_get_or_raise`'s own `&mut self` receiver borrow is
+// live → E0499.  Binding it first (after `@r`, preserving left-to-right
+// eval order) ends that borrow before the outer call.
+#rust"{{let __vr = @r; let __vi = @index; s.vec_get_or_raise(&__vr, u32::from(@size), __vi)}}"
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpVectorRef(r: vector, index: integer) -> reference[r];
-// @P321d: same nested-`&mut stores` guard as OpGetVector above.
-#rust"{{let __vr = @r; s.vec_ref_or_raise(&__vr, @index)}}"
+// @P321d + @P338: bind both the receiver and the index to locals before
+// the call (see OpGetVector above).
+#rust"{{let __vr = @r; let __vi = @index; s.vec_ref_or_raise(&__vr, __vi)}}"
 // Plan-07 phase 4 step 4.6/4.7 — nullable peers of OpGetVector /
 // OpVectorRef.  Same body (return null DbRef on OOB), used by
 // for-loop iteration codegen which depends on the null result as

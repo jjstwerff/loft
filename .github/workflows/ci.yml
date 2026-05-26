@@ -35,9 +35,13 @@ jobs:
       # `libasound2-dev` provides the ALSA headers that `alsa-sys`
       # (transitive dep of `rodio` in lib/graphics/native) builds against;
       # without it the crystal_render gold tests fail to compile on Linux.
-      - name: Install mold + ALSA dev headers (Linux only)
+      # `xvfb` + `libgl1-mesa-dri` give a headless software-GL (llvmpipe)
+      # display so the GL-render golden
+      # (graphics_gold::crystal_editor_gl_matches_gold) can run; the canvas
+      # goldens need no display.
+      - name: Install mold + ALSA + headless GL (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri
 
       - name: Cache cargo registry and build
         uses: actions/cache@v4
@@ -68,10 +72,18 @@ jobs:
         run: cargo build --release --lib --bin loft
 
       # no-default-features check only needs to run on one OS — ubuntu
-      # covers it at a fraction of the Windows job's time.
-      - name: Build (no default features)
+      # covers it at a fraction of the Windows job's time.  Use `cargo
+      # check`, NOT `cargo build`: a `build --no-default-features` rewrites
+      # the canonical `target/debug/libloft.rlib` WITHOUT the
+      # `native-extensions` feature, dropping `loft::native_call`.  The
+      # native-library suite then spawns the debug `loft`, whose
+      # `--native` codegen links that clobbered rlib and fails
+      # `error[E0433]: cannot find native_call in loft` (Linux-only,
+      # because this step is Linux-only).  `cargo check` validates the
+      # no-default-features compile without producing the polluting rlib.
+      - name: Check (no default features)
         if: runner.os == 'Linux'
-        run: cargo build --no-default-features
+        run: cargo check --no-default-features
 
       # The `html_wasm` test suite asserts the
       # `wasm32-unknown-unknown` rlib is fresh against
@@ -87,6 +99,13 @@ jobs:
       - name: Build wasm rlib (for html_wasm tests)
         if: runner.os == 'Linux'
         run: cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
+
+      # Build the graphics native cdylib so the graphics_gold tests (canvas
+      # + GL-render goldens) run instead of skipping — graphics_gold checks
+      # for libloft_graphics_native.so before comparing.
+      - name: Build graphics native cdylib (Linux only)
+        if: runner.os == 'Linux'
+        run: cargo build --release --manifest-path lib/graphics/native/Cargo.toml
 
       # cargo-nextest runs each test in its own process with better
       # scheduling than cargo test — typically 30-50 % faster on this
@@ -165,8 +184,11 @@ jobs:
       # `.cargo/config.toml` activates mold for native x86_64 builds
       # (the wasm target is unaffected, but the gallery job also
       # builds loft-native for the Brick Buster HTML pipeline).
-      - name: Install mold
-        run: sudo apt-get update && sudo apt-get install -y mold
+      # binaryen provides `wasm-opt`, which `make game` / `loft --html`
+      # require to inject asyncify (frame-yield) — without it the bundle's
+      # self-validation gate (@P350) fails "no asyncify exports".
+      - name: Install mold + binaryen (wasm-opt)
+        run: sudo apt-get update && sudo apt-get install -y mold binaryen
 
       - name: Install wasm-pack
         run: |

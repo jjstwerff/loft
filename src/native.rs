@@ -131,6 +131,10 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_arguments", n_arguments),
     ("n_ymd_days_ago", n_ymd_days_ago),
     ("n_mtime", n_mtime),
+    #[cfg(feature = "mmap")]
+    ("n_store_durable_check", n_store_durable_check),
+    #[cfg(feature = "mmap")]
+    ("n_store_durable_seal", n_store_durable_seal),
     ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
@@ -789,6 +793,24 @@ fn n_mtime(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result);
 }
 
+/// @PLAN38 phase 01b — interpreter handler for `store_durable_check`.
+/// Mirrors the `#rust` template in `default/02_images.loft`.
+#[cfg(feature = "mmap")]
+fn n_store_durable_check(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let result = crate::store::Store::durable_check(std::path::Path::new(v_path.str()));
+    stores.put(stack, result);
+}
+
+/// @PLAN38 phase 01b — interpreter handler for `store_durable_seal`.
+/// Mirrors the `#rust` template in `default/02_images.loft`.
+#[cfg(feature = "mmap")]
+fn n_store_durable_seal(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let result = crate::store::Store::durable_seal(std::path::Path::new(v_path.str()));
+    stores.put(stack, result);
+}
+
 /// Write `text` to stderr — companion to `print()` / `println()`
 /// which both go to stdout.  Use to separate machine-readable
 /// output (JSON, structured data) on stdout from human-readable
@@ -824,9 +846,10 @@ fn n_program_directory(stores: &mut Stores, stack: &mut DbRef) {
 
 /// Return the directory of the main source file being executed.
 fn n_source_dir(stores: &mut Stores, stack: &mut DbRef) {
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.  Clearing frees
+    // live `Str` views of sibling call args; push + `last()` instead.
     stores.scratch.push(stores.source_dir.clone());
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.
@@ -1982,9 +2005,9 @@ fn i_parse_error_push(stores: &mut Stores, stack: &mut DbRef) {
 fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
     let msg = stores.last_parse_errors.join("\n");
     stores.last_parse_errors.clear();
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(msg);
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
 // HTTP client glue removed — n_http_do and n_http_body are now auto-marshalled.
@@ -2329,24 +2352,32 @@ pub fn json_parse_into_stores(stores: &mut Stores, raw: &str) -> DbRef {
             stores.last_json_errors.clear();
         }
         Ok(crate::json::Parsed::Array(v)) if v.is_empty() => {
-            // Step 4 first slice (2026-04-14): empty arrays don't need
-            // arena recursion — set the JArray discriminant and leave
-            // the items field zero-initialised.  `n_len` on JArray
-            // returns 0 today (every JArray is empty until the full
-            // arena materialiser ships), so this reads as the empty
-            // array callers expect.
-            stores
-                .store_mut(&result)
-                .set_byte(result.rec, pos, 0, JV_DISCR_ARRAY);
+            // Empty array: set the JArray discriminant AND explicitly zero
+            // the items-vector handle.  @P357 — `jv_alloc` claims a RECYCLED
+            // store record whose bytes are stale, so the items handle is NOT
+            // zero-initialised by allocation (the original comment here wrongly
+            // assumed it was).  Left stale, `item(i)`/`len` read a phantom
+            // non-empty vector (e.g. `json_parse("[]").item(0)` returning a
+            // garbage object and `len` reporting 8 after earlier parses
+            // populated then freed that block — surfaced in the training port's
+            // store engine on a real export with an empty `ghost_sessions.json`).
+            // The non-empty arm below already zeros this handle (so
+            // `vector_append` claims a fresh record); the empty arm must too.
+            let array_tp = stores.name("JArray");
+            let items_abs_pos = pos + u32::from(stores.position(array_tp, "items"));
+            let store_mut = stores.store_mut(&result);
+            store_mut.set_byte(result.rec, pos, 0, JV_DISCR_ARRAY);
+            store_mut.set_u32_raw(result.rec, items_abs_pos, 0);
             stores.last_json_errors.clear();
         }
         Ok(crate::json::Parsed::Object(v)) if v.is_empty() => {
-            // Step 4 first slice (2026-04-14): empty objects mirror
-            // empty arrays — discriminant only; no field-vector to
-            // materialise; `n_len` returns 0 for every JObject today.
-            stores
-                .store_mut(&result)
-                .set_byte(result.rec, pos, 0, JV_DISCR_OBJECT);
+            // Empty object: same @P357 fix as the empty-array arm — zero the
+            // stale fields-vector handle, not just the discriminant.
+            let obj_tp = stores.name("JObject");
+            let fields_abs_pos = pos + u32::from(stores.position(obj_tp, "fields"));
+            let store_mut = stores.store_mut(&result);
+            store_mut.set_byte(result.rec, pos, 0, JV_DISCR_OBJECT);
+            store_mut.set_u32_raw(result.rec, fields_abs_pos, 0);
             stores.last_json_errors.clear();
         }
         Ok(crate::json::Parsed::Array(ref v)) => {
@@ -2435,9 +2466,9 @@ pub fn json_parse_into_stores(stores: &mut Stores, raw: &str) -> DbRef {
 
 fn n_json_errors(stores: &mut Stores, stack: &mut DbRef) {
     let msg = stores.last_json_errors.join("|");
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(msg);
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
 fn n_as_text(stores: &mut Stores, stack: &mut DbRef) {
@@ -2448,9 +2479,17 @@ fn n_as_text(stores: &mut Stores, stack: &mut DbRef) {
         let value_pos = u32::from(stores.position(str_tp, "value")) + v.pos;
         let s_rec = stores.store(&v).get_u32_raw(v.rec, value_pos);
         let s = stores.store(&v).get_str(s_rec).to_string();
-        stores.scratch.clear();
+        // @P354: must NOT clear scratch — earlier scratch Strings may
+        // still be referenced by live `Str` views sitting on the stack
+        // as pending sibling call arguments (e.g.
+        // `f(o.as_text(), g.as_text())`).  Clearing here drops those
+        // Strings; the freed heap buffers get reused by the next push,
+        // so all sibling args collapse to the last value.  Push + return
+        // `last()` is the canonical pattern (matches `to_lowercase`,
+        // `t_9JsonValue_as_text` native, etc.); `OpClearScratch` reclaims
+        // the buffer at the next source-line boundary.
         stores.scratch.push(s);
-        stores.put(stack, Str::new(&stores.scratch[0]));
+        stores.put(stack, Str::new(stores.scratch.last().unwrap()));
     } else {
         stores.put(stack, Str::new(crate::state::STRING_NULL));
     }
@@ -3445,9 +3484,9 @@ fn n_kind(stores: &mut Stores, stack: &mut DbRef) {
         JV_DISCR_OBJECT => "JObject",
         _ => "JUnknown",
     };
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(name.to_string());
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
 /// Render a JsonValue to RFC 8259 JSON text.  The `pretty` flag
@@ -3626,9 +3665,9 @@ fn json_to_text_at(stores: &Stores, v: &DbRef, pretty: bool, depth: usize) -> St
 fn n_to_json(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let out = json_to_text(stores, &v, false);
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(out);
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
 /// Q3 primitive-slice — `to_json_pretty(self: JsonValue) -> text`
@@ -3641,7 +3680,7 @@ fn n_to_json(stores: &mut Stores, stack: &mut DbRef) {
 fn n_to_json_pretty(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let out = json_to_text(stores, &v, true);
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(out);
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }

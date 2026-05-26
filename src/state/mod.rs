@@ -1713,6 +1713,30 @@ impl State {
         self.database.had_fatal = true;
     }
 
+    /// @P356 — record a RECOVERABLE fault (out-of-bounds / negative vector
+    /// or text index) WITHOUT halting.  Project policy: runtime aborts for
+    /// reversible faults belong only in opt-in debugging, not release runs.
+    /// The fault returns the type's null sentinel and logs a `Warn`-level
+    /// entry, then execution CONTINUES — matching `--native` and the
+    /// documented `v[i] ?? <fallback>` idiom.  `LOFT_DEV_SOFT_HALT` opts into
+    /// fail-fast surfacing for debugging (delegates to `raise`: stderr
+    /// `soft-halt:` + `had_fatal` so the run exits non-zero, still continuing
+    /// so one run surfaces every fault site).  The compile-time
+    /// undefended-`v[i]` warning already nudges toward `??`; this is the
+    /// runtime mirror.
+    pub fn raise_recoverable(&mut self, kind: crate::runtime_error::RuntimeErrorKind) {
+        if dev_soft_halt_enabled() {
+            self.raise(kind);
+            return;
+        }
+        let position = self.source_loc_for(self.code_pos).cloned();
+        if let Some(logger) = &self.database.logger
+            && let Ok(mut lg) = logger.lock()
+        {
+            lg.log_runtime_kind(&kind, position.as_ref());
+        }
+    }
+
     /// Plan-07 phase 4 step 4.6 — bounds-checked vector index that raises
     /// `IndexOutOfBounds` / `NegativeIndex` instead of returning the null
     /// Interpreter-side accessor mirrored by
@@ -1746,7 +1770,9 @@ impl State {
             index
         };
         if normalized < 0 {
-            self.raise(crate::runtime_error::RuntimeErrorKind::NegativeIndex { idx: index });
+            self.raise_recoverable(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
+                idx: index,
+            });
             // Sentinel matches the legacy `vector::get_vector` OOB
             // shape (preserve `db.store_nr`, set `rec=0`) so wrapping
             // ops like `OpGetText` / `OpGetByte` that call
@@ -1760,7 +1786,7 @@ impl State {
             };
         }
         if normalized >= i64::from(len) {
-            self.raise(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+            self.raise_recoverable(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
                 idx: index,
                 len,
             });
@@ -1796,11 +1822,13 @@ impl State {
         let len = val.len() as i64;
         let normalized = if index < 0 { index + len } else { index };
         if normalized < 0 {
-            self.raise(crate::runtime_error::RuntimeErrorKind::NegativeIndex { idx: index });
+            self.raise_recoverable(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
+                idx: index,
+            });
             return char::from(0);
         }
         if normalized >= len {
-            self.raise(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
+            self.raise_recoverable(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
                 idx: index,
                 len: len as u32,
             });

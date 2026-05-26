@@ -4,8 +4,9 @@
 // when the native library is not loaded.
 
 // Declare a function with #native — no implementation loaded.
+// Bare `#native` → symbol defaults to `n_my_native_add` (the fn name).
 fn my_native_add(a: integer, b: integer) -> integer;
-#native "n_my_native_add"
+#native
 
 // @EXPECT_FAIL: native function not loaded
 fn test_native_stub_panics() {

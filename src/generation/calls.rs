@@ -270,6 +270,17 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         let mut res = def_fn.rust.clone();
+        // @P361 — a `#rust` body that names a loft-internal *pub module* must
+        // qualify it `loft::…` in generated code (native + wasm both `use
+        // loft::…` and link loft as an extern crate), NOT `crate::…` — the
+        // latter resolves to loft itself only in the interpreter's native
+        // registry (`create.rs`, where crate == loft).  `crate::store::Store`
+        // (store_durable_check / _seal) is the one such body that reaches
+        // native emission verbatim — without the rewrite rustc errors E0463
+        // "can't find `store` in the crate root".  Host-import intrinsics
+        // (`crate::loft_host_print`, `crate::wasm`) are the generated cdylib's
+        // OWN items, so they correctly stay `crate::` and are left untouched.
+        res = res.replace("crate::store::", "loft::store::");
         // @P321b — `OpSetText` with a NULL value must store the null pointer
         // (offset 0), matching the interpreter (which reads it back as null).
         // The generic template does `@val.to_string()` + `set_str`, which

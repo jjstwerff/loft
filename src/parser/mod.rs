@@ -4249,7 +4249,10 @@ impl Parser {
 
     /// No-op when registry feature is off — registry-installed packages
     /// only resolve when the `loft install` machinery is compiled in.
+    /// `self` is kept to match the `#[cfg(feature = "registry")]` method
+    /// signature (it is a genuine method on the registry-enabled build).
     #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
     fn probe_registry_installed(&mut self, _id: &str, _f: &mut String) {}
 
     /// Final fallback: beside the parsed file itself.

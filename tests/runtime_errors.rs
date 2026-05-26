@@ -45,6 +45,29 @@ fn run_loft_snippet(name: &str, source: &str) -> (String, String, Option<i32>) {
     )
 }
 
+/// @P356 — run a snippet under `--interpret` with `LOFT_DEV_SOFT_HALT=1`,
+/// the opt-in fail-fast mode that surfaces RECOVERABLE faults (OOB /
+/// negative index) loudly (stderr `soft-halt:` + non-zero exit) for
+/// debugging.  Verifies the structured-fault rendering still works for the
+/// index kinds, which now log-and-continue by default.
+fn run_loft_snippet_soft_halt(name: &str, source: &str) -> (String, String, Option<i32>) {
+    let script_path = std::env::temp_dir().join(format!("loft_{name}.loft"));
+    std::fs::write(&script_path, source).expect("write temp script");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&script_path)
+        .env("LOFT_DEV_SOFT_HALT", "1")
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code(),
+    )
+}
+
 /// Phase 4 step 4.11 — `panic("msg")` builtin produces a typed runtime
 /// error rendered through the phase-2 pretty renderer.  The rendered
 /// stderr includes the kind label (`panic:`), the user message, the
@@ -202,12 +225,14 @@ fn main() {
     );
 }
 
-/// Phase 4 step 4.6 — vector positive-index OOB raises
-/// `IndexOutOfBounds`.  The numbers in the message (`idx`, `len`)
-/// come from the structured kind variant; the renderer formats them
-/// inline so users see exactly which index hit the wall.
+/// @P356 — vector positive-index OOB is a RECOVERABLE fault: by default
+/// `v[5]` on a length-3 vector returns `null` and execution CONTINUES
+/// (exit 0).  Runtime aborts for reversible faults belong only in opt-in
+/// debugging; the value is the type's null sentinel and the compile-time
+/// warning already nudged toward `v[i] ?? <fallback>`.  Both backends
+/// behave identically.
 #[test]
-fn kind_index_out_of_bounds_vector_prints_pretty_error() {
+fn kind_index_out_of_bounds_vector_returns_null_and_continues() {
     let source = "\
 fn main() {
   v = [10, 20, 30];
@@ -215,19 +240,31 @@ fn main() {
   print(\"x={x}\\n\");
 }
 ";
-    let (stdout, stderr, code) = run_loft_snippet("rt_oob_vec", source);
-    assert_eq!(code, Some(1), "OOB should exit 1");
+    let (stdout, _stderr, code) = run_loft_snippet("rt_oob_vec", source);
+    assert_eq!(code, Some(0), "recoverable OOB should exit 0");
     assert!(
-        !stdout.contains("x="),
-        "post-fault stdout should NOT print; got: {stdout:?}"
+        stdout.contains("x=null"),
+        "OOB index should yield null and continue; got: {stdout:?}"
     );
+}
+
+/// @P356 — `LOFT_DEV_SOFT_HALT` fail-fast still surfaces the structured OOB
+/// fault (idx / len rendered inline) for debugging, so the diagnostic path
+/// is preserved even though the default is now log-and-continue.
+#[test]
+fn kind_index_out_of_bounds_vector_soft_halt_surfaces() {
+    let source = "\
+fn main() {
+  v = [10, 20, 30];
+  x = v[5];
+  print(\"x={x}\\n\");
+}
+";
+    let (_stdout, stderr, code) = run_loft_snippet_soft_halt("rt_oob_vec_sh", source);
+    assert_eq!(code, Some(1), "soft-halt OOB should exit non-zero");
     assert!(
-        stderr.contains("error:") && stderr.contains("index 5 out of bounds for length 3"),
-        "stderr missing structured OOB message; got: {stderr:?}"
-    );
-    assert!(
-        stderr.contains("--> ") && stderr.contains(":3:"),
-        "stderr missing source location at line 3; got: {stderr:?}"
+        stderr.contains("index 5 out of bounds for length 3"),
+        "soft-halt stderr missing structured OOB message; got: {stderr:?}"
     );
     assert!(
         !stderr.contains("panicked at"),
@@ -235,74 +272,86 @@ fn main() {
     );
 }
 
-/// Phase 4 step 4.7 — vector negative index that resolves below 0
-/// after Python-style addressing raises `NegativeIndex`.  `v[-1]`
-/// (one before the end) still works; only `v[-N]` where `N > len`
-/// raises.
+/// @P356 — vector negative index out of range after Python-style addressing
+/// is RECOVERABLE: `v[-1]` (one before the end) still works; `v[-N]` with
+/// `N > len` returns `null` and continues (exit 0).  Soft-halt surfaces the
+/// `NegativeIndex` fault.
 #[test]
-fn kind_negative_index_vector_prints_pretty_error() {
+fn kind_negative_index_vector_returns_null_and_continues() {
     let source = "\
 fn main() {
   v = [10, 20, 30];
   print(\"v[-1]={v[-1]}\\n\");
   x = v[-10];
+  print(\"x={x}\\n\");
 }
 ";
-    let (stdout, stderr, code) = run_loft_snippet("rt_neg_idx_vec", source);
-    assert_eq!(code, Some(1), "negative index past start should exit 1");
+    let (stdout, _stderr, code) = run_loft_snippet("rt_neg_idx_vec", source);
+    assert_eq!(code, Some(0), "recoverable negative index should exit 0");
     assert!(
         stdout.contains("v[-1]=30"),
         "negative-index Python-style addressing should still work; got: {stdout:?}"
     );
     assert!(
-        stderr.contains("error:") && stderr.contains("negative index -10"),
-        "stderr missing structured NegativeIndex message; got: {stderr:?}"
+        stdout.contains("x=null"),
+        "out-of-range negative index should yield null and continue; got: {stdout:?}"
+    );
+
+    let (_so, stderr, sh) = run_loft_snippet_soft_halt("rt_neg_idx_vec_sh", source);
+    assert_eq!(sh, Some(1), "soft-halt negative index should exit non-zero");
+    assert!(
+        stderr.contains("negative index -10"),
+        "soft-halt stderr missing structured NegativeIndex message; got: {stderr:?}"
     );
 }
 
-/// Phase 4 step 4.6 — vector-of-struct-ref OOB goes through
-/// `OpVectorRef` (separate dispatch from primitive `OpGetVector`);
-/// regression guard covering the struct-ref path so a future change
-/// doesn't silently break it.
+/// @P356 — vector-of-struct-ref OOB goes through `OpVectorRef` (separate
+/// dispatch from primitive `OpGetVector`); regression guard that the
+/// struct-ref path is ALSO recoverable + surfaced under soft-halt.
 #[test]
-fn kind_index_out_of_bounds_vector_of_struct_prints_pretty_error() {
+fn kind_index_out_of_bounds_vector_of_struct_soft_halt_surfaces() {
     let source = "\
 struct P { v: integer }
 fn main() {
   v = [P{v:1}, P{v:2}, P{v:3}];
   x = v[5];
-  print(\"x.v={x.v}\\n\");
 }
 ";
-    let (stdout, stderr, code) = run_loft_snippet("rt_oob_struct_vec", source);
-    assert_eq!(code, Some(1), "struct-ref OOB should exit 1");
+    let (_stdout, _stderr, code) = run_loft_snippet("rt_oob_struct_vec", source);
+    assert_eq!(code, Some(0), "recoverable struct-ref OOB should exit 0");
+
+    let (_so, stderr, sh) = run_loft_snippet_soft_halt("rt_oob_struct_vec_sh", source);
+    assert_eq!(sh, Some(1), "soft-halt struct-ref OOB should exit non-zero");
     assert!(
-        !stdout.contains("x.v"),
-        "post-fault stdout should NOT print; got: {stdout:?}"
-    );
-    assert!(
-        stderr.contains("error:") && stderr.contains("index 5 out of bounds for length 3"),
-        "stderr missing struct-ref OOB; got: {stderr:?}"
+        stderr.contains("index 5 out of bounds for length 3"),
+        "soft-halt stderr missing struct-ref OOB; got: {stderr:?}"
     );
 }
 
-/// Phase 4 step 4.8 — text positive-index OOB raises
-/// `IndexOutOfBounds`.  `text[i]` returned char(0) silently before
-/// this conversion.
+/// @P356 — text positive-index OOB is RECOVERABLE: `s[100]` on a length-5
+/// string returns the null char and continues (exit 0); soft-halt surfaces
+/// the structured `IndexOutOfBounds`.
 #[test]
-fn kind_index_out_of_bounds_text_prints_pretty_error() {
+fn kind_index_out_of_bounds_text_returns_null_and_continues() {
     let source = "\
 fn main() {
   s = \"hello\";
   c = s[100];
-  print(\"c={c}\\n\");
+  print(\"after={s}\\n\");
 }
 ";
-    let (_stdout, stderr, code) = run_loft_snippet("rt_oob_text", source);
-    assert_eq!(code, Some(1), "text OOB should exit 1");
+    let (stdout, _stderr, code) = run_loft_snippet("rt_oob_text", source);
+    assert_eq!(code, Some(0), "recoverable text OOB should exit 0");
     assert!(
-        stderr.contains("error:") && stderr.contains("index 100 out of bounds for length 5"),
-        "stderr missing text-OOB; got: {stderr:?}"
+        stdout.contains("after=hello"),
+        "text OOB should continue past the fault; got: {stdout:?}"
+    );
+
+    let (_so, stderr, sh) = run_loft_snippet_soft_halt("rt_oob_text_sh", source);
+    assert_eq!(sh, Some(1), "soft-halt text OOB should exit non-zero");
+    assert!(
+        stderr.contains("index 100 out of bounds for length 5"),
+        "soft-halt stderr missing text-OOB; got: {stderr:?}"
     );
 }
 
