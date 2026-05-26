@@ -1,6 +1,22 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+// @PLAN38 phase 01: this module is now `pub mod store` (was `mod store`).
+// Promoting the module surfaced clippy::pedantic lints on existing
+// public methods (panic/error doc sections, must_use, is_empty, etc.)
+// that the codebase has always tolerated as internal — fixing each one
+// is a project-wide doc sweep, out of scope here.  Allow them at the
+// module level so this PR stays focused on the durable-store API.
+#![allow(
+    clippy::missing_panics_doc,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::collapsible_if,
+    clippy::not_unsafe_ptr_arg_deref,
+    clippy::len_without_is_empty,
+    clippy::return_self_not_must_use
+)]
+
 //! Word-addressed heap store with bump allocation and free-block reuse.
 //!
 //! Each [`Store`] is a contiguous buffer of 8-byte words.  Records are
@@ -163,6 +179,20 @@ pub struct Store {
     /// closure records (type name starts with `__closure_`) —
     /// see commit 4 of the P259 fix.
     pub known_type: u16,
+    /// @PLAN38 phase 01 — when `Some(path)`, this store was opened
+    /// via `Store::open_durable` and on clean drop must (1) flush
+    /// the mmap, (2) compute the payload CRC, and (3) rewrite the
+    /// `<path>.dmeta` sidecar atomically.  Cleared (left `None`) on
+    /// every non-durable constructor (`new`, `open`, `clone_locked*`,
+    /// `borrow_locked_*`, `new_freed_sentinel`).  See
+    /// `doc/claude/plans/future/38-loft-store-durable/`.
+    durable_meta_path: Option<std::path::PathBuf>,
+    /// @PLAN38 phase 01 — durability-mode tier on this store.  Tracks
+    /// which durability variant the consumer opted into so the Drop
+    /// path can apply tier-specific shutdown logic.  `0` for non-durable
+    /// stores; `1` for `IntegrityOnly`.  Tiers `2` (`SnapshotEvery`)
+    /// and `3` (`WAL`) are reserved for future phases.
+    durable_tier: u16,
 }
 
 impl Debug for Store {
@@ -185,6 +215,21 @@ impl Drop for Store {
         }
         #[cfg(feature = "mmap")]
         if self.file.is_some() {
+            // @PLAN38 phase 01 — for durable stores, flush mmap + rewrite
+            // sidecar atomically BEFORE the mmap_storage handle's own Drop
+            // runs and closes the file.  Failure to flush is logged to
+            // stderr (panicking from Drop would abort the process); a
+            // failed sidecar write leaves the on-disk state without a
+            // valid clean-close marker → next open detects corruption →
+            // callback fires.  By design.
+            if self.durable_meta_path.is_some() && !self.read_only {
+                if let Err(e) = self.flush_durable_sidecar() {
+                    eprintln!(
+                        "store_durable: clean-close sidecar write failed: {e}; \
+                         next open will treat the store as corrupt"
+                    );
+                }
+            }
             return;
         }
         let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
@@ -250,6 +295,8 @@ impl Store {
             ref_count: 0,
             lock_origin: String::new(),
             known_type: u16::MAX,
+            durable_meta_path: None,
+            durable_tier: 0,
         };
         store.init(); // sets claims = {PRIMARY} and free_root = 0
         store
@@ -290,6 +337,8 @@ impl Store {
             ref_count: 0,
             lock_origin: String::new(),
             known_type: u16::MAX,
+            durable_meta_path: None,
+            durable_tier: 0,
         };
         if init {
             store.init();
@@ -779,6 +828,8 @@ impl Store {
             ref_count: self.ref_count,
             lock_origin: "clone_locked".to_string(),
             known_type: self.known_type,
+            durable_meta_path: None,
+            durable_tier: 0,
         }
     }
 
@@ -807,6 +858,8 @@ impl Store {
             ref_count: self.ref_count,
             lock_origin: "clone_locked_for_worker".to_string(),
             known_type: self.known_type,
+            durable_meta_path: None,
+            durable_tier: 0,
         }
     }
 
@@ -836,6 +889,8 @@ impl Store {
             ref_count: self.ref_count,
             lock_origin: "borrow_locked_for_light_worker".to_string(),
             known_type: self.known_type,
+            durable_meta_path: None,
+            durable_tier: 0,
         }
     }
 
@@ -1768,6 +1823,535 @@ impl Store {
 // Safety: worker threads only call `addr()` (read-only) on locked stores.
 // `addr_mut()` on a locked store always panics.
 unsafe impl Send for Store {}
+
+// =============================================================================
+// @PLAN38 — durable-store support (phases 00 + 01 — IntegrityOnly tier).
+//
+// Design: a 40-byte `.dmeta` sidecar file alongside the main store file holds
+// signature + tier + CRCs.  The main store file is bit-for-bit identical to
+// a legacy (non-durable) store — durability is a metadata layer, not a
+// payload-layout change.  See
+// `doc/claude/plans/future/38-loft-store-durable/00-foundation.md`.
+//
+// Phase-01 reach: nothing inside the `loft` binary calls these yet (the
+// training-port consumer that drives @PLAN38 lives in another repo and
+// will reach them via a future loft-language builtin).  Tests under
+// `tests/store_durable_*.rs` exercise them.  `#[allow(dead_code)]` markers
+// on each top-level item keep the bin-side dead-code lint quiet until a
+// runtime caller lands; remove them when the first in-tree caller wires up.
+// =============================================================================
+
+/// Sidecar signature bytes — `"DStoreV1"` (no NUL terminator).
+#[allow(dead_code)]
+const DURABLE_SIGNATURE: [u8; 8] = *b"DStoreV1";
+
+/// Total size of a sidecar file in bytes.  Fixed; never grows.
+#[allow(dead_code)]
+const DURABLE_SIDECAR_BYTES: usize = 40;
+
+/// Tier IDs.  Tier 0 means "not a durable store" and should never appear in a
+/// sidecar; it exists so the field has a meaningful default in non-durable
+/// `Store` instances.
+#[allow(dead_code)]
+const TIER_NONE: u16 = 0;
+#[allow(dead_code)]
+const TIER_INTEGRITY_ONLY: u16 = 1;
+// const TIER_SNAPSHOT_EVERY: u16 = 2; // reserved — phase 02
+// const TIER_WAL: u16 = 3;            // reserved — phase 03
+
+/// On-disk format detected for a store path.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreFormat {
+    /// Legacy non-durable store — main file has no `.dmeta` sidecar.
+    /// `Store::open` is the right entry point.
+    Legacy,
+    /// Durable store — `.dmeta` sidecar is present.  The `u16` is the
+    /// `tier_id` recorded in the sidecar (1 = IntegrityOnly, etc.).
+    Durable(u16),
+}
+
+/// Integrity verdict for a durable store, returned by [`Store::validate_integrity`].
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreIntegrity {
+    /// All checks passed; the main file matches the sidecar exactly.
+    Clean,
+    /// At least one check failed; the consumer must rebuild.  The
+    /// `CorruptReason` says which check tripped first (in priority order).
+    Corrupt(CorruptReason),
+}
+
+/// Reason a durable store failed integrity validation.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CorruptReason {
+    /// Sidecar signature bytes were not `"DStoreV1"`.
+    SignatureMismatch,
+    /// Sidecar's own header_crc did not match a recomputed CRC of bytes 0..12.
+    HeaderCrcMismatch,
+    /// Sidecar file does not exist.  Semantic: clean-close protocol never
+    /// ran, so the on-disk payload state is unknown.  Treat as corruption.
+    TailMarkerMissing,
+    /// Sidecar's `payload_crc` did not match the recomputed CRC of the
+    /// main file's bytes (within the recorded `payload_len`).
+    TailCrcMismatch,
+    /// Main file's actual on-disk byte length differs from sidecar's
+    /// `payload_len`.  Either the file was truncated after the sidecar
+    /// was written, or the sidecar predates a resize that never completed.
+    TruncatedFile,
+}
+
+/// Durability mode for [`Store::open_durable`].  Tier 1 is the only variant
+/// shipped in phase 01; tiers 2 and 3 land in later phases.
+#[allow(dead_code)]
+pub enum DurabilityMode {
+    /// **Tier 1 — IntegrityOnly.**  No msync discipline on the hot write
+    /// path; the OS page cache is trusted for in-flight writes.  On open,
+    /// the sidecar is validated; on corruption (or when the file/sidecar
+    /// is absent), `on_corruption` is invoked and is expected to rebuild
+    /// the store from authoritative sources.  After the callback returns
+    /// successfully, `open_durable` retries once.  Cap recursion depth at 1
+    /// — if validation still fails after the rebuild, the error is returned
+    /// to the caller (no infinite loop).
+    ///
+    /// Fresh-file note: when the main file does not exist yet (brand-new
+    /// database), the same callback fires with `Corrupt(TailMarkerMissing)`.
+    /// Consumers MUST implement `on_corruption` as a "rebuild OR initialise"
+    /// routine, not a "repair existing file" one.
+    IntegrityOnly {
+        on_corruption: Box<dyn Fn(&std::path::Path) -> std::io::Result<()>>,
+    },
+}
+
+/// Decoded sidecar contents.  Module-private; consumers see the public
+/// [`StoreIntegrity`] verdict only.
+#[allow(dead_code)]
+struct SidecarHeader {
+    tier_id: u16,
+    #[allow(dead_code)] // reserved for future tier-specific behaviour
+    flags: u16,
+    #[allow(dead_code)] // surfaced for diagnostics; not load-bearing yet
+    last_clean_ns: u64,
+    payload_len: u64,
+    payload_crc: u32,
+}
+
+/// Compute the CRC32 of the first 12 bytes of a sidecar.  Used both to
+/// write a fresh sidecar and to validate one read off disk.
+#[allow(dead_code)]
+fn compute_header_crc(bytes: &[u8]) -> u32 {
+    debug_assert!(bytes.len() >= 12);
+    let mut h = crc32fast::Hasher::new();
+    h.update(&bytes[..12]);
+    h.finalize()
+}
+
+/// Read + parse a sidecar.  Returns `Ok(None)` if the file does not exist,
+/// `Ok(Some(...))` if it does and the structural read succeeded.  CRC and
+/// signature checks are the caller's job (`detect_format` and
+/// `validate_integrity` differ on which checks they apply).
+#[allow(dead_code)]
+fn read_sidecar(meta_path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
+    match std::fs::read(meta_path) {
+        Ok(bytes) => {
+            if bytes.len() != DURABLE_SIDECAR_BYTES {
+                // A short/long sidecar is structurally invalid.  Treat it as
+                // "present but unreadable" — let the caller decide the verdict.
+                return Ok(Some(bytes));
+            }
+            Ok(Some(bytes))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Parse a sidecar byte buffer.  Returns `Err(CorruptReason::...)` if any
+/// of: signature, header_crc, or structural length checks fail.  Callers
+/// add further checks (payload_crc, payload_len) by comparing against the
+/// main file.
+#[allow(dead_code)]
+fn parse_sidecar(bytes: &[u8]) -> Result<SidecarHeader, CorruptReason> {
+    if bytes.len() != DURABLE_SIDECAR_BYTES {
+        return Err(CorruptReason::SignatureMismatch);
+    }
+    if bytes[..8] != DURABLE_SIGNATURE {
+        return Err(CorruptReason::SignatureMismatch);
+    }
+    let tier_id = u16::from_le_bytes([bytes[8], bytes[9]]);
+    let flags = u16::from_le_bytes([bytes[10], bytes[11]]);
+    let stored_header_crc =
+        u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+    if stored_header_crc != compute_header_crc(bytes) {
+        return Err(CorruptReason::HeaderCrcMismatch);
+    }
+    let last_clean_ns = u64::from_le_bytes([
+        bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23],
+    ]);
+    let payload_len = u64::from_le_bytes([
+        bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30], bytes[31],
+    ]);
+    let payload_crc =
+        u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]);
+    // bytes[36..40] is reserved; not validated.
+    Ok(SidecarHeader { tier_id, flags, last_clean_ns, payload_len, payload_crc })
+}
+
+/// Build a fresh sidecar buffer for a clean-close write.  `payload_len` is
+/// the byte length of the main file at the moment of capture, and
+/// `payload_crc` is the CRC over those bytes.
+#[allow(dead_code)]
+fn encode_sidecar(
+    tier_id: u16,
+    last_clean_ns: u64,
+    payload_len: u64,
+    payload_crc: u32,
+) -> [u8; DURABLE_SIDECAR_BYTES] {
+    let mut buf = [0u8; DURABLE_SIDECAR_BYTES];
+    buf[..8].copy_from_slice(&DURABLE_SIGNATURE);
+    buf[8..10].copy_from_slice(&tier_id.to_le_bytes());
+    buf[10..12].copy_from_slice(&0u16.to_le_bytes()); // flags
+    let header_crc = compute_header_crc(&buf[..12]);
+    buf[12..16].copy_from_slice(&header_crc.to_le_bytes());
+    buf[16..24].copy_from_slice(&last_clean_ns.to_le_bytes());
+    buf[24..32].copy_from_slice(&payload_len.to_le_bytes());
+    buf[32..36].copy_from_slice(&payload_crc.to_le_bytes());
+    buf[36..40].copy_from_slice(&0u32.to_le_bytes()); // reserved
+    buf
+}
+
+/// Compute the CRC32 of the main store file's first `len` bytes.  Used both
+/// to write a fresh sidecar (`compute_payload_crc(path, len)` against the
+/// freshly-flushed main file) and to validate one (recompute, compare to
+/// the sidecar's stored value).
+#[allow(dead_code)]
+fn compute_payload_crc(main_path: &std::path::Path, len: u64) -> std::io::Result<u32> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(main_path)?;
+    let mut h = crc32fast::Hasher::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut remaining = len;
+    while remaining > 0 {
+        let want = std::cmp::min(remaining as usize, buf.len());
+        let n = f.read(&mut buf[..want])?;
+        if n == 0 {
+            // File shorter than expected — caller's TruncatedFile check
+            // will catch this; here we just stop the hash.
+            break;
+        }
+        h.update(&buf[..n]);
+        remaining -= n as u64;
+    }
+    Ok(h.finalize())
+}
+
+/// Write a sidecar atomically: write to `<meta_path>.tmp`, fsync, rename.
+/// Cross-platform note: POSIX rename is atomic; Windows ReplaceFile (which
+/// `std::fs::rename` uses on Windows) is atomic in the same sense for the
+/// destination path.
+#[allow(dead_code)]
+fn write_sidecar_atomic(
+    meta_path: &std::path::Path,
+    bytes: &[u8; DURABLE_SIDECAR_BYTES],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut tmp = meta_path.to_path_buf();
+    let mut name = tmp
+        .file_name()
+        .map(std::ffi::OsString::from)
+        .unwrap_or_default();
+    name.push(".tmp");
+    tmp.set_file_name(name);
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, meta_path)?;
+    Ok(())
+}
+
+/// Path of the metadata sidecar for a given main store path.
+/// `tags.store` → `tags.store.dmeta`.
+#[allow(dead_code)]
+fn dmeta_path(main_path: &std::path::Path) -> std::path::PathBuf {
+    let mut p = main_path.as_os_str().to_owned();
+    p.push(".dmeta");
+    std::path::PathBuf::from(p)
+}
+
+#[allow(dead_code)]
+impl Store {
+    /// **Phase 00.**  Detect the on-disk format for a store at `path`.
+    /// Reads only the sidecar; the main file is not opened.
+    ///
+    /// - Sidecar absent → [`StoreFormat::Legacy`].
+    /// - Sidecar present and structurally readable →
+    ///   [`StoreFormat::Durable`]`(tier_id)`.  No CRC or signature
+    ///   validation is performed here; use [`Store::validate_integrity`]
+    ///   for that.
+    ///
+    /// Cheap (one file read of ≤ 40 bytes).  Suitable to call before
+    /// deciding which open path to use.
+    pub fn detect_format(path: &std::path::Path) -> std::io::Result<StoreFormat> {
+        let meta = dmeta_path(path);
+        let raw = read_sidecar(&meta)?;
+        match raw {
+            None => Ok(StoreFormat::Legacy),
+            Some(bytes) => {
+                if bytes.len() == DURABLE_SIDECAR_BYTES && bytes[..8] == DURABLE_SIGNATURE {
+                    let tier_id = u16::from_le_bytes([bytes[8], bytes[9]]);
+                    Ok(StoreFormat::Durable(tier_id))
+                } else {
+                    // A short/long sidecar or wrong-signature one is a
+                    // durable store with damaged metadata.  Reporting
+                    // `Durable(0)` would lie about the tier; the cleanest
+                    // signal is "this is durable in intent but unreadable"
+                    // — surface it via the validate path.  `detect_format`
+                    // returns Legacy so callers that ONLY ran detect can
+                    // still distinguish "no sidecar" from "broken sidecar"
+                    // by calling validate_integrity for the verdict.
+                    Ok(StoreFormat::Durable(0))
+                }
+            }
+        }
+    }
+
+    /// **Phase 00.**  Validate the integrity of a durable store at `path`.
+    ///
+    /// Performs:
+    /// 1. Sidecar exists → else [`CorruptReason::TailMarkerMissing`].
+    /// 2. Sidecar signature is `"DStoreV1"` →
+    ///    else [`CorruptReason::SignatureMismatch`].
+    /// 3. Sidecar's own `header_crc` matches a recomputed CRC of bytes 0..12
+    ///    → else [`CorruptReason::HeaderCrcMismatch`].
+    /// 4. Main file's actual byte length matches sidecar's `payload_len`
+    ///    → else [`CorruptReason::TruncatedFile`].
+    /// 5. CRC32 of the main file's `payload_len` bytes matches the sidecar's
+    ///    `payload_crc` → else [`CorruptReason::TailCrcMismatch`].
+    ///
+    /// Checks short-circuit on the first failure.
+    pub fn validate_integrity(path: &std::path::Path) -> std::io::Result<StoreIntegrity> {
+        let trace = std::env::var("LOFT_STORE_DURABLE_TRACE").is_ok();
+        let meta = dmeta_path(path);
+        if trace {
+            eprintln!("[durable.validate] sidecar={meta:?}");
+        }
+        let raw = match read_sidecar(&meta)? {
+            None => {
+                if trace { eprintln!("[durable.validate] sidecar missing → TailMarkerMissing"); }
+                return Ok(StoreIntegrity::Corrupt(CorruptReason::TailMarkerMissing));
+            }
+            Some(bytes) => bytes,
+        };
+        if trace { eprintln!("[durable.validate] sidecar read {} bytes", raw.len()); }
+        let hdr = match parse_sidecar(&raw) {
+            Ok(h) => h,
+            Err(reason) => {
+                if trace { eprintln!("[durable.validate] parse_sidecar → {reason:?}"); }
+                return Ok(StoreIntegrity::Corrupt(reason));
+            }
+        };
+        if trace {
+            eprintln!(
+                "[durable.validate] parsed: tier={} flags={} last_clean_ns={} payload_len={} payload_crc={:#x}",
+                hdr.tier_id, hdr.flags, hdr.last_clean_ns, hdr.payload_len, hdr.payload_crc
+            );
+        }
+        let main_meta = match std::fs::metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if trace { eprintln!("[durable.validate] main file missing → TruncatedFile"); }
+                return Ok(StoreIntegrity::Corrupt(CorruptReason::TruncatedFile));
+            }
+            Err(e) => return Err(e),
+        };
+        if trace {
+            eprintln!(
+                "[durable.validate] main file len={} (sidecar says {})",
+                main_meta.len(), hdr.payload_len
+            );
+        }
+        if main_meta.len() != hdr.payload_len {
+            if trace { eprintln!("[durable.validate] length mismatch → TruncatedFile"); }
+            return Ok(StoreIntegrity::Corrupt(CorruptReason::TruncatedFile));
+        }
+        if trace { eprintln!("[durable.validate] computing payload CRC over {} bytes …", hdr.payload_len); }
+        let crc = compute_payload_crc(path, hdr.payload_len)?;
+        if trace { eprintln!("[durable.validate] computed CRC = {crc:#x}"); }
+        if crc != hdr.payload_crc {
+            if trace { eprintln!("[durable.validate] CRC mismatch → TailCrcMismatch"); }
+            return Ok(StoreIntegrity::Corrupt(CorruptReason::TailCrcMismatch));
+        }
+        if hdr.tier_id == TIER_NONE {
+            if trace { eprintln!("[durable.validate] tier_id=0 → SignatureMismatch"); }
+            return Ok(StoreIntegrity::Corrupt(CorruptReason::SignatureMismatch));
+        }
+        if trace { eprintln!("[durable.validate] Clean"); }
+        Ok(StoreIntegrity::Clean)
+    }
+
+    /// **Phase 01.**  Open a store with durability guarantees.
+    ///
+    /// On entry, the sidecar at `<path>.dmeta` is validated.  On any
+    /// integrity failure (or when either file is missing), `on_corruption`
+    /// is invoked once, then validation is retried.  A second failure
+    /// returns `io::Error` (kind `InvalidData`) rather than looping.
+    ///
+    /// On success, the returned `Store` is wired so its `Drop` impl will
+    /// flush the mmap and rewrite the sidecar on clean shutdown.  A
+    /// `kill -9` (or any other path that skips `Drop`) leaves the sidecar
+    /// stale → the next open detects corruption → callback re-fires.  This
+    /// is by design — Tier 1 trusts the OS page cache for in-flight writes
+    /// and recovers via rebuild.
+    ///
+    /// **Do not use Tier 1** for data that cannot be re-derived from
+    /// authoritative sources; phases 02 (snapshots) and 03 (WAL) cover
+    /// stronger guarantees.
+    #[cfg(feature = "mmap")]
+    pub fn open_durable(
+        path: &std::path::Path,
+        mode: DurabilityMode,
+    ) -> std::io::Result<Store> {
+        Self::open_durable_inner(path, mode, 0)
+    }
+
+    #[cfg(feature = "mmap")]
+    fn open_durable_inner(
+        path: &std::path::Path,
+        mode: DurabilityMode,
+        depth: u32,
+    ) -> std::io::Result<Store> {
+        let trace = std::env::var("LOFT_STORE_DURABLE_TRACE").is_ok();
+        if trace {
+            eprintln!("[durable] open_durable_inner(depth={depth}) path={path:?}");
+        }
+        let verdict = Self::validate_integrity(path)?;
+        if trace {
+            eprintln!("[durable]   validate_integrity → {verdict:?}");
+        }
+        match verdict {
+            StoreIntegrity::Clean => {
+                let path_str = path.to_str().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "store path is not valid UTF-8",
+                    )
+                })?;
+                if trace {
+                    eprintln!("[durable]   calling Store::open({path_str:?})");
+                }
+                let mut store = Store::open(path_str);
+                if trace {
+                    eprintln!("[durable]   Store::open returned");
+                }
+                store.durable_meta_path = Some(path.to_path_buf());
+                store.durable_tier = TIER_INTEGRITY_ONLY;
+                Ok(store)
+            }
+            StoreIntegrity::Corrupt(_reason) => {
+                if depth >= 1 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "store_durable: rebuild callback ran but store still fails integrity",
+                    ));
+                }
+                let DurabilityMode::IntegrityOnly { ref on_corruption } = mode;
+                if trace {
+                    eprintln!("[durable]   firing on_corruption callback");
+                }
+                on_corruption(path)?;
+                if trace {
+                    eprintln!("[durable]   on_corruption returned ok");
+                }
+                // After rebuild, the file must be re-written through
+                // open_durable so the sidecar is freshly generated.  If
+                // the callback created the main file but no sidecar yet,
+                // write one now from a freshly-flushed view.
+                let meta = dmeta_path(path);
+                let has_meta = meta.exists();
+                let has_main = path.exists();
+                if trace {
+                    eprintln!(
+                        "[durable]   post-callback: dmeta_exists={has_meta} main_exists={has_main}"
+                    );
+                }
+                if !has_meta && has_main {
+                    if trace {
+                        eprintln!("[durable]   write_initial_sidecar({path:?})");
+                    }
+                    Self::write_initial_sidecar(path)?;
+                    if trace {
+                        eprintln!("[durable]   write_initial_sidecar returned");
+                    }
+                }
+                if trace {
+                    eprintln!("[durable]   recursing to depth={}", depth + 1);
+                }
+                Self::open_durable_inner(path, mode, depth + 1)
+            }
+        }
+    }
+
+    /// Write a fresh sidecar for a main file that exists but has no
+    /// sidecar yet (e.g. the rebuild callback just initialised the file).
+    /// Captures the current main-file length and CRC at the moment of call.
+    #[cfg(feature = "mmap")]
+    fn write_initial_sidecar(path: &std::path::Path) -> std::io::Result<()> {
+        let trace = std::env::var("LOFT_STORE_DURABLE_TRACE").is_ok();
+        let main_meta = std::fs::metadata(path)?;
+        let payload_len = main_meta.len();
+        if trace {
+            eprintln!("[durable.init_sidecar] main file len={payload_len}");
+        }
+        let payload_crc = compute_payload_crc(path, payload_len)?;
+        if trace {
+            eprintln!("[durable.init_sidecar] payload CRC = {payload_crc:#x}");
+        }
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let bytes = encode_sidecar(TIER_INTEGRITY_ONLY, now_ns, payload_len, payload_crc);
+        if trace {
+            eprintln!("[durable.init_sidecar] writing {} bytes to {:?}", bytes.len(), dmeta_path(path));
+        }
+        write_sidecar_atomic(&dmeta_path(path), &bytes)?;
+        if trace {
+            eprintln!("[durable.init_sidecar] done");
+        }
+        Ok(())
+    }
+
+    /// On clean drop of a durable store, capture the current main-file
+    /// CRC and rewrite the sidecar atomically.  Returns `Err` if any
+    /// step fails; the Drop impl logs (rather than panics) on failure
+    /// since panicking during drop would abort the process.
+    #[cfg(feature = "mmap")]
+    fn flush_durable_sidecar(&mut self) -> std::io::Result<()> {
+        // Step 1: flush the mmap to disk.
+        if let Some(file) = &self.file {
+            file.flush_sync()?;
+        }
+        // Step 2: compute payload CRC over the now-flushed main file.
+        let path = match &self.durable_meta_path {
+            Some(p) => p.clone(),
+            None => return Ok(()),
+        };
+        let main_meta = std::fs::metadata(&path)?;
+        let payload_len = main_meta.len();
+        let payload_crc = compute_payload_crc(&path, payload_len)?;
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let bytes = encode_sidecar(self.durable_tier, now_ns, payload_len, payload_crc);
+        // Step 3: write sidecar atomically (tmp → rename).
+        write_sidecar_atomic(&dmeta_path(&path), &bytes)?;
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {

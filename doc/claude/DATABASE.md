@@ -42,6 +42,55 @@ See `src/store.rs` module docs for memory layout, signed size headers, and
 free-block allocation.  See `src/keys.rs` module docs for `DbRef`, `Str`,
 `Key`, and `Content` types.
 
+### Durable stores (`Store::open_durable`) — @PLAN38
+
+A durable store is a normal mmap-backed `Store` plus a 40-byte `.dmeta`
+sidecar file alongside the main store file.  The sidecar holds a signature
+(`"DStoreV1"`), tier id, CRC32 over the main file, and a `last_clean_ns`
+timestamp.  On clean drop the sidecar is rewritten atomically (`write tmp
+→ fsync → rename`); on `kill -9` the sidecar stays stale, and the next
+open detects corruption and invokes the consumer's rebuild callback.
+
+The main store file is bit-for-bit identical to a non-durable store —
+durability is a metadata layer, not a payload-layout change.  Existing
+record/claim/resize code paths are untouched.
+
+Three tiers are planned; phase 01 (the first PR slice on the
+`store-durable-phase1` branch) ships **Tier 1 — `IntegrityOnly`** only:
+
+| Tier | Mode | Hot-path cost | Loss bound | Consumer |
+|---|---|---|---|---|
+| 1 | `IntegrityOnly` | None (only msync on clean drop) | Everything since last clean drop | `personal/training` port (initial), `@PLAN37` indexer (when phase 08 lands) |
+| 2 | `SnapshotEvery(interval)` (planned, phase 02) | One msync per interval | One interval | TTT v5 multiplayer (`plans/future/32-…`) |
+| 3 | `WAL` (planned, phase 03) | fsync per record, amortised by group-commit window | Zero for committed writes | @PLAN36 audience demo |
+
+API surface:
+
+```rust
+use loft::store::{Store, DurabilityMode};
+
+let store = Store::open_durable(
+    path,
+    DurabilityMode::IntegrityOnly {
+        on_corruption: Box::new(|p| rebuild_from_source(p)),
+    },
+)?;
+```
+
+**Fresh-file semantics.**  When the main file doesn't exist yet,
+`on_corruption` fires with `TailMarkerMissing` and is expected to
+"create empty + populate from authoritative sources" — not "repair
+existing file."  After the callback returns successfully, `open_durable`
+captures a fresh sidecar and retries once.
+
+**Drop-on-panic is by design.**  A panic between open and clean drop
+skips the sidecar write → next open detects corruption → callback fires.
+This is what makes Tier 1 cheap.  Do not use Tier 1 for data that cannot
+be re-derived from authoritative sources; use Tier 2 or Tier 3 instead.
+
+Full design + implementation history:
+[`doc/claude/plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/README.md).
+
 ---
 
 ## Stores — Type Schema + Multi-Store Manager (`src/database/`)
