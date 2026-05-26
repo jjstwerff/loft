@@ -50,6 +50,24 @@ pub fn measure_text(font_idx: i32, text: &str, size: f32) -> f32 {
     })
 }
 
+/// Return the font's ASCENT in pixels at the given size — the distance from
+/// the baseline up to the top of the glyphs, taken from fontdue's real
+/// horizontal line metrics (`font.horizontal_line_metrics`).  @P340: callers
+/// align mixed-size text on a common baseline by offsetting their draw-y by
+/// the ascent (the top-anchored `draw_text` puts the baseline at
+/// `y + ascent`).  Falls back to the legacy `size * 0.8` approximation when a
+/// font exposes no horizontal metrics (rare; bitmap-only fonts).
+pub fn font_ascent(font_idx: i32, size: f32) -> f32 {
+    FONTS.with(|fonts| {
+        let fonts = fonts.borrow();
+        let Some(font) = fonts.get(font_idx as usize) else {
+            return 0.0;
+        };
+        font.horizontal_line_metrics(size)
+            .map_or(size * 0.8, |lm| lm.ascent)
+    })
+}
+
 /// Rasterize a string into an alpha bitmap. Returns (width, height, pixels).
 /// Each pixel is a single u8 alpha value.
 pub fn rasterize_text(font_idx: i32, text: &str, size: f32) -> (u32, u32, Vec<u8>) {

@@ -7,9 +7,10 @@ use moros_map;
 use graphics;
 
 fn temp_path(name: text) -> text {
-  // Cheap, test-local scratch path — no scheduling concerns here
-  // since each test uses a unique file name.
-  "/tmp/loft_moros_sim_{name}.json"
+  // @P333: a cwd-relative name (not `/tmp/`) so the fixture runs on Windows
+  // too, where `/tmp/` does not exist.  Each test uses a unique name so there
+  // is no cross-test clash; the package test runner's cwd is writable.
+  "loft_moros_sim_{name}.json"
 }
 
 fn build() -> EditorState {
@@ -31,6 +32,7 @@ fn test_save_writes_file() {
   assert(f.exists(), "file exists after save");
   content = f.content();
   assert(len(content) > 0, "json body non-empty, len={len(content)}");
+  delete(sp);  // @P333: don't leave artifacts in the package dir
 }
 
 fn test_round_trip_preserves_heights() {
@@ -47,6 +49,7 @@ fn test_round_trip_preserves_heights() {
          "(0,0,0) height restored; got {map_get_hex(rt2.es_map, 0, 0, 0).h_height}");
   assert(map_get_hex(rt2.es_map, 1, 2, 0).h_height == 3,
          "(1,2,0) height restored; got {map_get_hex(rt2.es_map, 1, 2, 0).h_height}");
+  delete(rtp);  // @P333: don't leave artifacts in the package dir
 }
 
 fn test_round_trip_preserves_walls() {
@@ -57,12 +60,13 @@ fn test_round_trip_preserves_walls() {
   editor_load_from_file(rw2, rwp);
   assert(map_get_hex(rw2.es_map, 0, 0, 0).h_wall_n == 1,
          "wall N preserved; got {map_get_hex(rw2.es_map, 0, 0, 0).h_wall_n}");
+  delete(rwp);  // @P333: don't leave artifacts in the package dir
 }
 
 fn test_load_missing_file_returns_false() {
   lm = editor_default();
   // Pick a path that can't exist (embedded null-ish nonsense).
-  ok = editor_load_from_file(lm, "/tmp/does_not_exist_moros_sim_p15.json");
+  ok = editor_load_from_file(lm, "does_not_exist_moros_sim_p15.json");
   assert(!ok, "missing file: load returns false");
 }
 
@@ -83,4 +87,5 @@ fn test_load_clears_undo_stack() {
   assert(undo_depth(lc2.es_undo) == 1, "pre-load: seeded undo entry");
   editor_load_from_file(lc2, lcp);
   assert(undo_depth(lc2.es_undo) == 0, "post-load: undo cleared");
+  delete(lcp);  // @P333: don't leave artifacts in the package dir
 }

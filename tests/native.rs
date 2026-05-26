@@ -820,17 +820,10 @@ const LIB_TESTS_NATIVE_SKIP: &[&str] = &[
     // emits two live `&mut stores` borrows (E0499) — the OpGetVector /
     // OpVectorRef `#rust` templates bind `@r` to a local before the call.
 
-    // Windows-specific: these tests hardcode `/tmp/` paths.
-    // `lib/moros_render/tests/geometry.loft` opens
-    // `/tmp/moros_render_chunk_test.glb`; `lib/moros_sim/tests/persistence.loft`
-    // loads a save file from a similar path.  On Windows `/tmp/` doesn't
-    // exist → file-open OS error 3 / 0-length read → bounds panic.
-    // Tracked as @P333 — port fixture paths to `std::env::temp_dir()`.
-    // macOS + Linux pass these tests.
-    #[cfg(windows)]
-    "moros_render/geometry.loft",
-    #[cfg(windows)]
-    "moros_sim/persistence.loft",
+    // @P333 FIXED 2026-05-26: `moros_render/geometry.loft` +
+    // `moros_sim/persistence.loft` no longer hardcode `/tmp/` — they use
+    // CWD-relative filenames + `delete()`, so they run on Windows too.  The
+    // Windows skips are removed (macOS + Linux already passed).
 ];
 
 /// True if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is skipped under the

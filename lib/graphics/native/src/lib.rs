@@ -1303,6 +1303,16 @@ pub extern "C" fn loft_text_height(_font_idx: i32, size: f64) -> i32 {
     (size as f32 * 1.2) as i32
 }
 
+/// @P340 — return the font's ASCENT in pixels (baseline → top of glyphs) from
+/// fontdue's real horizontal line metrics.  Lets callers baseline-align
+/// mixed-size text: the top-anchored `gl_draw_text(x, y)` places the baseline
+/// at `y + gl_font_ascent(font, size)`, so two sizes sharing a baseline are
+/// drawn at `y_i = baseline - gl_font_ascent(font, size_i)`.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_font_ascent(font_idx: i32, size: f64) -> f64 {
+    f64::from(text::font_ascent(font_idx, size as f32))
+}
+
 /// Rasterize text and write alpha values (0-255) into a pre-allocated
 /// `vector<integer>` buffer.  Post-2c, `integer` storage is i64 stride
 /// — write at i64 stride to match.  Pre-2c i32-stride writes left every
@@ -1375,6 +1385,7 @@ loft_ffi::loft_register! {
     loft_gl_delete_texture,
     loft_gl_load_font,
     loft_text_height,
+    loft_gl_font_ascent,
     loft_rasterize_text_into => n_rasterize_text_into,
     loft_gl_measure_text,
     // Interpreter-aware versions (store + ref args instead of raw pointers)

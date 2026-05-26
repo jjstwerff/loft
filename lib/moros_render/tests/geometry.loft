@@ -700,7 +700,7 @@ fn test_map_build_scene_default_sun_light() {
 fn test_map_export_glb_creates_file() {
   xm = map_empty();
   map_paint_material(xm, 0, 0, 0, 1);
-  xpath = "/tmp/moros_render_test.glb";
+  xpath = "moros_render_test.glb";  // @P333: cwd-relative (Windows has no /tmp/)
   map_export_glb(xm, xpath);
   // Binary content can't be read via `file().content()` (UTF-8
   // decode); use the `#format = LittleEndian` + `#read(n)` binary
@@ -709,13 +709,14 @@ fn test_map_export_glb_creates_file() {
   assert(xf.exists(), "GLB file written at {xpath}");
   xsz = xf.size;
   assert(xsz > 0, "GLB file non-empty, got {xsz} bytes");
+  delete(xpath);  // @P333: don't leave artifacts in the package dir
 }
 
 // Verify the 12-byte GLB header: magic 'glTF', version 2, total length.
 fn test_map_export_glb_header() {
   hm = map_empty();
   map_paint_material(hm, 0, 0, 0, 1);
-  hpath = "/tmp/moros_render_hdr_test.glb";
+  hpath = "moros_render_hdr_test.glb";  // @P333: cwd-relative (Windows has no /tmp/)
   map_export_glb(hm, hpath);
   hsz = file(hpath).size;
   {
@@ -726,6 +727,7 @@ fn test_map_export_glb_header() {
     htotal = hf#read(4) as i32;
     assert(htotal as integer == hsz, "total_len matches file size = {hsz}");
   }
+  delete(hpath);  // @P333: don't leave artifacts in the package dir
 }
 
 // Verify the JSON chunk type tag — confirms the first chunk past
@@ -733,7 +735,7 @@ fn test_map_export_glb_header() {
 fn test_map_export_glb_json_chunk() {
   cm = map_empty();
   map_paint_material(cm, 0, 0, 0, 1);
-  cpath = "/tmp/moros_render_chunk_test.glb";
+  cpath = "moros_render_chunk_test.glb";  // @P333: cwd-relative (Windows has no /tmp/)
   map_export_glb(cm, cpath);
   {
     cf = file(cpath);
@@ -744,6 +746,7 @@ fn test_map_export_glb_json_chunk() {
     cf#read(4) as i32;   // JSON chunk length
     assert(cf#read(4) as i32 == 0x4E4F534A, "JSON chunk type 'JSON'");
   }
+  delete(cpath);  // @P333: don't leave artifacts in the package dir
 }
 
 // ── Material swatch tests (Phase 6a.17) ───────────────────────────
