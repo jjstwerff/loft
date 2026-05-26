@@ -5,7 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 00 — Foundation: integrity + tail marker on existing Store
 
-**Status:** Open
+**Status:** Open — bundled into the `store-durable-phase1`
+branch with [Phase 01](01-tier-1-integrity.md); ships as one
+PR.  See
+[README § First slice — Phases 00 + 01 as one PR](README.md#first-slice--phases-00--01-as-one-pr).
 
 ## Goal
 
@@ -16,29 +19,85 @@ later tiers build on.
 
 ## What ships
 
+### Implementation design — sidecar `.dmeta` file
+
+**Locked in implementation:** the original plan described an
+*inline* header (32 B prefix, payload starting at offset 32,
+16 B tail) embedded into the main store file.  Implementation
+review (2026-05-26, during phase 00 + 01 build-out) found this
+required offsetting `Store::ptr` and threading a `header_offset`
+through every record-claim / resize / mmap-grow path —
+non-trivial for the "zero behaviour change for non-durable
+stores" guarantee.
+
+The shipped design uses a **sidecar metadata file** instead:
+
+```
+<path>          ← main store file (legacy "Sto1" format, unchanged)
+<path>.dmeta    ← 40-byte durable-metadata sidecar
+```
+
+- The main store file is bit-for-bit identical to a non-durable
+  Store.  All existing record/claim/resize code paths are
+  untouched.  A durable store's main file *is* a legacy store
+  in every respect except for the presence of `.dmeta`.
+- The sidecar holds signature + tier + CRC + timestamps.  It
+  is rewritten atomically on every clean drop and read on every
+  open.
+- Crash semantics: a partial main-file write leaves the
+  sidecar's `payload_crc` stale relative to the on-disk
+  bytes → corruption detected → `on_corruption` fires.  A
+  process killed before the sidecar is rewritten loses the
+  fresh `last_clean_ns` marker → also detected.
+
+Rationale for the sidecar over inline:
+
+1. **Zero impact on Store's hot paths.**  Every record offset
+   computation in `src/store.rs` stays unchanged.  No
+   header-offset threading through `addr_mut`, `claim`,
+   `fl_take_ge`, `resize_store`.
+2. **Phase 2 (snapshots) already uses multiple files** per
+   the README design (`world.A.store`, `world.B.store`,
+   `.checkpoint` pointer).  Sidecar is consistent with that.
+3. **Crash window is the same.**  Inline tail-write + sidecar
+   write both have a brief vulnerability window between writing
+   the CRC and the file becoming durable on disk.  Tier 1
+   doesn't claim to close that window — it claims to *detect*
+   any close that happens inside it.
+4. **Simpler to write atomically.**  The sidecar is small (40
+   bytes), so writing it via `write-tmp + rename` is one
+   syscall pair.  An inline tail-write into a multi-MB mmap
+   region is not naturally atomic.
+
 ### Format additions
 
-The existing `src/store.rs` Store layout starts with `SIGNATURE
-= "StoreV01"` (4 bytes at offset 0).  The durable variant
-extends this:
+Existing non-durable stores keep `SIGNATURE = "Sto1"` and no
+durability machinery — they're untouched by this phase.
+
+Durable stores have a 40-byte sidecar at `<path>.dmeta`:
 
 ```
 Offset  Size  Field
 ------  ----  -----
-0       8     signature: "DStoreV1\0"
-8       2     tier_id (0 = none, 1 = IntegrityOnly, 2 = SnapshotEvery, 3 = WAL)
-10      2     flags (bitfield: little-endian, currently reserved)
-12      4     header_crc (CRC32 of bytes 0..12)
-16      8     last_clean_ns (set on graceful close, zero otherwise)
-24      8     reserved
-32      ...   payload (existing Store records)
-...
-end-16  8     tail_signature: "DStoreCommit"
-end-8   8     tail_crc (CRC32 of the entire payload region)
+0       8     signature: "DStoreV1" (ASCII, no NUL)
+8       2     tier_id (u16 LE: 0 = none, 1 = IntegrityOnly,
+                              2 = SnapshotEvery, 3 = WAL)
+10      2     flags (u16 LE, reserved bitfield, currently 0)
+12      4     header_crc (u32 LE: CRC32 of bytes 0..12)
+16      8     last_clean_ns (u64 LE: nanoseconds since UNIX_EPOCH
+                            at last graceful close, 0 if never)
+24      8     payload_len (u64 LE: byte length of main file at
+                          clean-close time)
+32      4     payload_crc (u32 LE: CRC32 of main file's first
+                          payload_len bytes)
+36      4     reserved (u32 LE, must be 0)
 ```
 
-Existing non-durable stores keep `signature = "StoreV01"` and
-no header/tail framing — they're untouched by this phase.
+The `payload_crc` is the equivalent of the original plan's
+"tail CRC", and `last_clean_ns` is the equivalent of the
+original plan's "tail marker present".  Both checks are now
+done by reading + validating the sidecar, not by walking to
+the end of the main file.
 
 ### `src/store.rs` additions
 
@@ -78,23 +137,32 @@ tail CRC — for the indexer's ~MB-scale store that's <10ms.
 
 ### CRC32 utility
 
-Cross-platform; pick a vetted implementation.  `crc32c` crate
-(hardware-accelerated where supported) is the lowest-friction
-choice; matches the format used by ext4 / btrfs metadata.
+Use `crc32fast = "1"` — already transitively available via
+`flate2`/`zip` in loft's dep graph (and used by them in
+production paths), so promoting it to a direct dep adds zero
+binary weight and zero new transitive deps.  Hardware-
+accelerated (`pclmulqdq` on x86, `crc32` on ARM).
 
 Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-crc32c = "0.6"
+crc32fast = "1"
 ```
+
+(The original plan suggested `crc32c = "0.6"`.  Switched to
+`crc32fast` during implementation since it was already in the
+dep graph; the polynomial difference is irrelevant for this
+"detect bitrot / torn writes" use case — both are 32-bit CRCs
+with very similar collision properties.)
 
 ### What does NOT ship in phase 00
 
 - No `Store::open_durable` API yet (phase 01).
 - No tier 2 / tier 3 mechanics (phases 02 / 03).
-- No `tail_signature` writing — phase 01 does that on
-  clean close.
+- No sidecar writing — phase 01 writes the `.dmeta` file on
+  clean close.  Phase 00's `detect_format` and
+  `validate_integrity` only *read* sidecars.
 - No callbacks, no rebuild paths, no snapshots.
 
 The bar for phase 00: `cargo test` passes with the new
@@ -106,8 +174,8 @@ test fixtures.
 
 | Path | Action |
 |---|---|
-| `src/store.rs` | EXTEND: add `StoreFormat`, `StoreIntegrity`, `CorruptReason`, `detect_format`, `validate_integrity` |
-| `Cargo.toml` | ADD `crc32c = "0.6"` to `[dependencies]` |
+| `src/store.rs` | EXTEND: add `StoreFormat`, `StoreIntegrity`, `CorruptReason`, `detect_format`, `validate_integrity` (read sidecar) |
+| `Cargo.toml` | ADD `crc32fast = "1"` to `[dependencies]` |
 | `tests/store_durable_format.rs` | NEW: synthetic-fixture tests for format detection + integrity validation |
 
 ## Existing functions / utilities to reuse
@@ -120,21 +188,40 @@ test fixtures.
 - The `Stores::allocations` machinery — durable stores
   live alongside non-durable in the same `Vec<Store>`.
 
+### Open-path refactor — not needed under the sidecar design
+
+The original phase-00 spec proposed an `open_with_format(path,
+expected)` helper to bypass `Store::open`'s hard-coded
+signature assertion (`src/store.rs:297-301`).  With the
+sidecar design that refactor is **unnecessary**: the main
+store file's on-disk signature stays `"Sto1"` for both legacy
+and durable stores, so `Store::open`'s existing assertion is
+never hit by `open_durable`.  The signature distinction lives
+entirely in the sidecar.
+
+Phase 01 calls the existing `Store::open(path)` directly after
+validating the sidecar — no signature-check refactor required.
+
 ## Test surface
 
 `tests/store_durable_format.rs`:
 
-- Fresh non-durable Store → `detect_format` returns
-  `StoreFormat::Legacy`.
-- Synthetic durable store with valid header + tail →
+- Fresh non-durable Store path (no `.dmeta` sidecar present)
+  → `detect_format` returns `StoreFormat::Legacy`.
+- Synthetic main file + valid sidecar →
   `detect_format` returns `Durable(1)`,
   `validate_integrity` returns `Clean`.
-- Same with corrupted header CRC →
+- Sidecar with corrupted `header_crc` →
   `Corrupt(HeaderCrcMismatch)`.
-- Same with absent tail marker → `Corrupt(TailMarkerMissing)`.
-- Same with payload byte flipped → `Corrupt(TailCrcMismatch)`.
-- Truncated file (last N bytes removed) →
-  `Corrupt(TruncatedFile)`.
+- Sidecar missing (main file exists but `.dmeta` absent) →
+  `Corrupt(TailMarkerMissing)` (semantic: clean-close never
+  ran).
+- Sidecar's `payload_crc` mismatches the recomputed CRC of
+  the main file's bytes → `Corrupt(TailCrcMismatch)`.
+- Main file's on-disk byte length differs from sidecar's
+  `payload_len` → `Corrupt(TruncatedFile)`.
+- Sidecar's `signature` field is not `"DStoreV1"` →
+  `Corrupt(SignatureMismatch)`.
 
 ## Acceptance
 
