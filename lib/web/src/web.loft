@@ -18,8 +18,10 @@ pub fn ok(self: HttpResponse) -> boolean {
 // --- Internal native functions returning primitives ---
 
 fn http_do(method: text, url: text, body: text, headers: text) -> integer;
+#native
 
 fn http_body() -> text;
+#native
 
 // Internal: serialize headers vector to newline-separated "Key: Value" text.
 fn join_headers(headers: vector<text>) -> text {
@@ -114,21 +116,26 @@ pub struct WsHandler {
 // --- Internal natives (lifecycle primitives) ---
 
 fn ws_client_connect_native(url: text) -> integer;
+#native "n_ws_connect"
 
 fn ws_client_send_native(handle: integer, msg: text) -> boolean;
+#native "n_ws_client_send"
 
 // Send the byte buffer as a binary WebSocket frame (opcode 2)
 // instead of a text frame (opcode 1).  Same payload encoding —
 // loft `text` is a byte buffer; this just changes the frame type
 // the peer sees.  Used by TTT v5 + plan-36 for binary world data.
 fn ws_client_send_binary_native(handle: integer, msg: text) -> boolean;
+#native "n_ws_client_send_binary"
 
 // Returns true when a message has been delivered to the receive
 // buffer; false when the queue is empty or the connection is currently
 // down.  After true, call ws_client_message_native() to read the payload.
 fn ws_client_recv_native(handle: integer) -> boolean;
+#native "n_ws_client_recv"
 
 fn ws_client_message_native() -> text;
+#native "n_ws_client_message"
 
 // Opcode of the last frame surfaced by `ws_client_recv_native`.
 // 1 = text, 2 = binary, 8 = close, 9 = ping, 10 = pong.
@@ -136,8 +143,10 @@ fn ws_client_message_native() -> text;
 // successful recv to decide whether the message bytes are text
 // (utf-8) or a binary blob.
 fn ws_client_opcode_native() -> integer;
+#native "n_ws_client_opcode"
 
 fn ws_client_close_native(handle: integer);
+#native "n_ws_client_close"
 
 // --- Public API ---
 
@@ -207,6 +216,7 @@ pub fn close(self: WsHandler) {
 // available on the WASM target — the host event loop is the
 // equivalent.
 pub fn sleep_ms(ms: integer);
+#native
 
 // --- Binary buffer construction (TTT v5 + plan-36) ---
 //
@@ -231,21 +241,26 @@ pub fn sleep_ms(ms: integer);
 
 // Empty the per-thread pack buffer.  Call before each blob.
 pub fn pack_reset();
+#native
 
 // Append a single byte to the pack buffer.  `b` is masked to 8 bits.
 pub fn pack_u8(b: integer);
+#native
 
 // Append a 2-byte little-endian unsigned value.
 pub fn pack_u16_le(v: integer);
+#native
 
 // Append a 4-byte little-endian unsigned value.  Loft `integer` is
 // i32 — bit-cast to u32 to preserve the LE byte pattern across the
 // sign boundary.
 pub fn pack_u32_le(v: integer);
+#native
 
 // Take the contents of the pack buffer and return them as a `text`
 // whose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer.
 pub fn pack_take() -> text;
+#native
 
 // Read the byte at `idx` of the text payload.  Out-of-range (negative
 // or past the end) returns -1.  Use to decode binary frames received
@@ -253,6 +268,7 @@ pub fn pack_take() -> text;
 // auto-marshal in src/extensions.rs supports (I32, Text) -> I32 but
 // not (Text, I32) -> I32.
 pub fn byte_at(idx: integer, t: text) -> integer;
+#native
 
 // --- Multiplexed client receiver (WsGroup) ---
 //
@@ -281,10 +297,13 @@ pub struct WsGroup {
 }
 
 fn ws_group_clear_native();
+#native "n_ws_group_clear"
 
 fn ws_group_add_native(handle: integer);
+#native "n_ws_group_add"
 
 fn ws_group_poll_native() -> integer;
+#native "n_ws_group_poll"
 
 // Create a new (empty) group.
 pub fn ws_group() -> WsGroup {
