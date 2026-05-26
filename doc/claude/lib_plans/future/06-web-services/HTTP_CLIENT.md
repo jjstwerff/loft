@@ -148,6 +148,19 @@ longer needed**.  `Type.parse()` replaces all of them.
 
 ---
 
+## Open work
+
+> **Note:** the design body above predates the shipped library.  HTTP client
+> shipped as **`lib/web`** (cdylib + `ureq 2.12`, body via a `LAST_BODY`
+> thread-local; see `lib/web/src/web.loft` + `lib/web/native/src/lib.rs`), not
+> `default/06_web.loft` / `src/native_http.rs`.
+
+The next consumer-driven enhancement — **response headers + a cookie-jar
+session** (to unblock native Garmin login A2 in the training port) — has its own
+phased plan: **[`../23-http-session-auth/`](../23-http-session-auth/)**.  Related
+items (base64 stdlib helper, the moot `exec()` gap, the deferred TLS/JA3
+impersonation E1) are tracked there too.
+
 ## See also
 
 - [README.md](README.md) — overview of the web-services library plan
