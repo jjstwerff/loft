@@ -3114,7 +3114,29 @@ impl Parser {
             // T1.7: save the position of the first token in the return expression,
             // used to report `not null` violations at the tuple literal site.
             let expr_start = self.lexer.peek();
-            let t = self.expression(&mut v);
+            // @P365: a `return [ … ]` vector literal needs the function's return
+            // type threaded in as the element-type hint — exactly as an assignment
+            // threads its declared LHS type (parse_assign_op → parse_operators).
+            // Without it an EMPTY `return []` types as Unknown, skips the
+            // Vector-construction lowering below, and emits `return ()` (native,
+            // E0308) / a garbage DbRef (interpret).  Gated to a `[`-led literal
+            // returned from a vector-typed fn so every other return keeps the
+            // existing `expression` path verbatim (for a literal, `expression`
+            // already reduces to `parse_operators(Unknown)` — only the hint differs).
+            let t = if let Type::Vector(elm, _) = &r_type
+                && self.lexer.peek_token("[")
+            {
+                // Thread the element type but NOT the return type's dep: a
+                // vector-returning fn carries `[__ref_1]` as its dep, and
+                // inheriting that on the literal would fool the `Type::Vector`
+                // arm below (`!dep.contains(ref1_var)`) into skipping the
+                // OpAppendVector copy into __ref_1.  Element type only.
+                let hint = Type::Vector(elm.clone(), Vec::new());
+                let mut parent_tp = Type::Null;
+                self.parse_operators(&hint, &mut v, &mut parent_tp, 0)
+            } else {
+                self.expression(&mut v)
+            };
             if r_type == Type::Void {
                 diagnostic!(
                     self.lexer,

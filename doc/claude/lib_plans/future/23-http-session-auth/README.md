@@ -164,4 +164,4 @@ lands.  P3 stays optional (they have a pure-loft base64).
 - `~/workspace/personal/training/loft/requests/E2-lib-web-http-session.md` — the
   consumer's implementation-ready spec + acceptance criteria (consume-only; do not
   edit the training repo).
-- [`../../ROADMAP.md`](../../ROADMAP.md) — schedules this plan's items.
+- [`../../../ROADMAP.md`](../../../ROADMAP.md) — schedules this plan's items.

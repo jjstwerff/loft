@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @P365 regression: an early `return [];` (an EMPTY vector literal in a
+// `return`) from a `vector<T>` function was miscompiled on BOTH backends —
+// native emitted `return ()` (E0308, a hard compile error); the interpreter
+// produced a garbage vector handle → OOB panic (src/keys.rs).  Root cause:
+// `parse_return` did not thread the function's return type into the return
+// expression, so the empty `[]` typed as Unknown and skipped vector
+// construction; the standalone-empty `[]` then lowered to the `Insert([Null])`
+// placeholder instead of a real empty vector store.
+//
+// Fix: parse_return threads the return element-type (dep stripped) into a
+// `return [ … ]` literal, and parse_vector materialises a real empty vector
+// store for a typed standalone `[]`.  Interpreter + native must agree.
+
+// Empty return + non-empty tail (the function HAS an `__ref_1` output buffer —
+// inherited from `split`).
+fn from_split(raw: text) -> vector<text> {
+  if raw.len() == 0 { return []; }
+  raw.split('\n')
+}
+
+// Empty return with NO output buffer (a standalone vector-returning fn).
+fn always_empty() -> vector<text> { return []; }
+
+// Non-empty literal return (must not regress).
+fn nonempty() -> vector<text> { return ["a", "b"]; }
+
+// Empty return via a pre-bound empty local (the path that always worked).
+fn via_local(n: integer) -> vector<integer> {
+  e: vector<integer> = [];
+  if n == 0 { return e; }
+  return [1, 2, 3];
+}
+
+// Nested vector: empty `return []` for vector<vector<integer>>.
+fn nested(n: integer) -> vector<vector<integer>> {
+  if n == 0 { return []; }
+  return [[1], [2, 3]];
+}
+
+// An empty vector returned from `return []` must be a usable vector (appendable).
+fn appendable() -> integer {
+  v = always_empty();
+  v += ["x"];
+  v += ["y"];
+  len(v)
+}
+
+fn main() {
+  assert(len(from_split("")) == 0, "from_split empty: {len(from_split(""))}");
+  assert(len(from_split("x\ny")) == 2, "from_split two: {len(from_split("x\ny"))}");
+  assert(len(always_empty()) == 0, "always_empty: {len(always_empty())}");
+  assert(len(nonempty()) == 2, "nonempty: {len(nonempty())}");
+  assert(len(via_local(0)) == 0, "via_local empty: {len(via_local(0))}");
+  assert(len(via_local(1)) == 3, "via_local three: {len(via_local(1))}");
+  assert(len(nested(0)) == 0, "nested empty: {len(nested(0))}");
+  assert(len(nested(1)) == 2, "nested two: {len(nested(1))}");
+  assert(appendable() == 2, "appendable after two adds: {appendable()}");
+  print("ok");
+}

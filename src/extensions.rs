@@ -937,10 +937,7 @@ fn dispatch_call(
             // only 4 bytes, leaving `stack.pos` 4 short — the frame then
             // misaligns and the caller's next ref slot reads garbage
             // (n_http_do("GET",url,"","") → HttpResponse store panic).
-            stores.put::<i64>(
-                stack,
-                widen_int(f(p0, l0, p1, l1, p2, l2, p3, l3)),
-            );
+            stores.put::<i64>(stack, widen_int(f(p0, l0, p1, l1, p2, l2, p3, l3)));
         }
         // (text, text) -> bool
         (&[ArgT::Text, ArgT::Text], Some(ArgT::Bool)) => {
