@@ -5,14 +5,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 01 — Tier 1: IntegrityOnly + auto-rescan hook
 
-**Status:** Open
+**Status:** Open — bundled into the `store-durable-phase1`
+branch with [Phase 00](00-foundation.md); ships as one PR.
+See
+[README § First slice — Phases 00 + 01 as one PR](README.md#first-slice--phases-00--01-as-one-pr).
 
 ## Goal
 
 Ship the cheapest tier — `Store::open_durable(path,
 DurabilityMode::IntegrityOnly { on_corruption })` — and prove
-it end-to-end with the indexer (@PLAN37) as the first
-consumer.
+it end-to-end with the **training port** (`personal/training`,
+`loft-migration` branch) as the first real consumer.  The
+indexer (@PLAN37 phase 08) becomes the second opt-in when that
+plan reaches its consumer phase.
 
 Tier 1 is "trust the OS for in-flight writes; on restart,
 detect corruption and let the caller rebuild from
@@ -108,6 +113,37 @@ from `Store::open` to `Store::open_durable`, ship one
 rebuild-time cost on first run, and gain integrity on
 subsequent restarts.
 
+### Fresh-file path
+
+When `path` does not exist yet (brand-new database), the same
+"corruption" code path fires: `detect_format` returns an
+error, `open_durable` invokes `on_corruption(path)`, and the
+callback is expected to **create an empty store and populate
+it from authoritative sources**.
+
+Consumers MUST therefore implement `on_corruption` as a
+"rebuild OR initialise" routine — not a "repair existing
+file" one.  This is the natural shape for both the training
+port ("re-run sync→store from cached JSON, writing a fresh
+file if none exists") and the indexer ("full filesystem
+rescan, writing a fresh `tags.store` if none exists").
+
+The `STDLIB.md` doc entry for `Store::open_durable` must
+spell this out so first-time consumers aren't surprised by
+the callback firing on day 1.
+
+### Drop-on-panic — by design
+
+A panic anywhere between `open_durable` and a clean drop will
+skip the tail-marker write.  Next open detects the missing
+marker and fires `on_corruption`.  This is the **whole point**
+of Tier 1 — no msync on the hot path, recover by rebuild.
+
+`STDLIB.md` must include a "when not to use Tier 1" callout:
+do not use it for data that can't be re-derived from another
+source.  For irreplaceable data, use Tier 2 (snapshots) or
+Tier 3 (WAL), shipped in phases 02 / 03.
+
 ## Critical files
 
 | Path | Action |
@@ -142,16 +178,23 @@ subsequent restarts.
 
 - `cargo test --test store_durable_tier1` passes.
 - `cargo test` overall (legacy + tier 1) green.
-- Tier 1 consumer integration: indexer phase 08
-  (@PLAN37) opens its `tags.store` via `IntegrityOnly`;
-  `on_corruption` is the indexer's full-rescan path.
-  Verified: `kill -9` mid-write + restart → detected
-  corruption → full rescan → clean state in < 2 sec on
-  the loft tree.
+- Tier 1 consumer integration: the **training port**
+  (`personal/training`, `loft-migration` branch) opens its
+  store via `IntegrityOnly`; `on_corruption` re-runs the
+  sync→store pipeline from cached JSON.  Verified: `kill -9`
+  mid-write + restart → detected corruption → rebuild → clean
+  state.  (Training-port wiring lives on its own branch and
+  is not part of this PR's diff; only the loft-side API
+  surface and tests land here.)
+- The indexer (@PLAN37 phase 08) opt-in is deferred to phase
+  05 of this plan (when @PLAN37 reaches its consumer phase).
 - Non-durable `Store::open` and `Store::new` paths
   unchanged.
 - No msync calls outside the clean-close path (perf
   parity with non-durable for the hot write loop).
+- `STDLIB.md` § "Durable stores" documents `Store::open_durable`
+  with the **fresh-file path** and **drop-on-panic** callouts
+  spelled out so consumers aren't surprised on day 1.
 
 ## Risks
 
@@ -165,8 +208,13 @@ subsequent restarts.
 ## Cross-references
 
 - [Phase 00 — foundation](00-foundation.md) — provides the
-  format detection + integrity validation
+  format detection + integrity validation; bundled with this
+  phase in the same PR
 - [Phase 02 — Tier 2 snapshots](02-tier-2-snapshots.md) —
   next tier up; reuses the same DurabilityMode enum
+- `personal/training` repo (`loft-migration` branch),
+  `MIGRATION.md` § "Loft capability gaps" #2 — first
+  Tier-1 consumer (external to this repo)
 - [Plan-37 phase 08](../37-tracker-index/08-multi-project-deploy.md)
-  — first Tier-1 consumer
+  — second Tier-1 consumer, opts in when @PLAN37 reaches its
+  consumer phase

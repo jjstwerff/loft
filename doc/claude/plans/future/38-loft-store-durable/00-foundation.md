@@ -5,7 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 00 — Foundation: integrity + tail marker on existing Store
 
-**Status:** Open
+**Status:** Open — bundled into the `store-durable-phase1`
+branch with [Phase 01](01-tier-1-integrity.md); ships as one
+PR.  See
+[README § First slice — Phases 00 + 01 as one PR](README.md#first-slice--phases-00--01-as-one-pr).
 
 ## Goal
 
@@ -119,6 +122,31 @@ test fixtures.
   `validate_integrity` for the CRC pass.
 - The `Stores::allocations` machinery — durable stores
   live alongside non-durable in the same `Vec<Store>`.
+
+### Open-path refactor (preparatory)
+
+`Store::open` (`src/store.rs:265-307`) currently panics on any
+signature other than `"StoreV01"`
+(`assert_eq!(... SIGNATURE, "Unknown file format")`).  Phase 01
+needs to open `DStoreV1` files via the same mmap setup without
+hitting that assertion.
+
+The cleanest seam, introduced here in phase 00, is a private
+helper:
+
+```rust
+fn open_with_format(path: &Path, expected: StoreFormat) -> io::Result<Store>;
+```
+
+`open` becomes a thin wrapper calling
+`open_with_format(path, StoreFormat::Legacy)`, and phase 01's
+`open_durable` calls it with the durable variant.  The
+assertion moves inside `open_with_format` and compares against
+the expected format rather than a hard-coded constant.
+
+This refactor lands in phase 00 (no behavior change for legacy
+stores; the assertion still fires on truly unknown formats) so
+phase 01's diff stays focused on the durable code path.
 
 ## Test surface
 

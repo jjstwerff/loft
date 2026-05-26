@@ -5,10 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLAN38 — LOFT_STORE_DURABLE — three-tier opt-in durability for mmap stores
 
-**Status:** Planned (in `future/`).  Promote to active when
-@PLAN37 phase 07 (loft-native indexer daemon) lands or when
-the first game-server plan needs persistent state — whichever
-comes first.
+**Status:** Phases 00 + 01 actionable now (bundled PR — see
+[§ First slice — Phases 00 + 01 as one PR](#first-slice--phases-00--01-as-one-pr)).
+Phases 02-06 stay in `future/` until their driver consumers
+(TTT v5 / @PLAN36 audience demo) need them.  Full promotion
+to active (`plans/38-…`) deferred until phase 02 begins.
 
 A `Store::open_durable` API + three opt-in durability tiers
 on top of loft's existing mmap-backed `Store` primitive
@@ -28,16 +29,29 @@ its data's value:
 
 ## Drivers
 
-The plan exists because two consumers face an "OS hard kill"
+The plan exists because three consumers face an "OS hard kill"
 failure mode with very different stakes:
 
-1. **Plan-37's loft-native indexer daemon** (test bed) — can
+1. **Training-port (Python→loft) store** (`personal/training`,
+   `loft-migration` branch) — the migration's Phase 2 store
+   engine currently persists via a file-snapshot write→reload
+   round-trip because `Store::open_durable` doesn't exist yet
+   (see that branch's `MIGRATION.md` § "Loft capability gaps"
+   #2).  Underlying data (Strava streams, Garmin activities,
+   OSM features) is re-derivable from cached JSON, so Tier 1
+   with a "re-run sync→store" rebuild callback is the right
+   tier.  **This is the first real consumer; it unblocks the
+   training port's persistence story and replaces today's
+   file-snapshot scaffolding.**
+
+2. **Plan-37's loft-native indexer daemon** (test bed) — can
    lose its entire `tags.store`, recover via 0.85 sec full
    rescan from the filesystem.  Gets Tier 1 essentially for
    free; just needs an integrity check so a half-written
-   file doesn't crash the daemon.
+   file doesn't crash the daemon.  Opts in when phase 08 of
+   @PLAN37 lands.
 
-2. **Future game servers** (TTT v5 in `plans/future/32-…`,
+3. **Future game servers** (TTT v5 in `plans/future/32-…`,
    @PLAN36 audience-generative-art) — hold session state,
    world state, decay timers, audience contributions that
    ARE the source of truth.  An OS-kill mid-game means
@@ -52,7 +66,11 @@ consumer opts into the tier it needs.
 The user's [evaluation prompt](../37-tracker-index/README.md)
 that opened this plan: "the current task is cheap to recover,
 but the eventual game server will lose valuable data in the
-same event.  So this is lightly tied to the index."
+same event.  So this is lightly tied to the index."  The
+2026-05-26 training-port re-evaluation extended the rationale:
+the Python→loft port is the *immediate* driver for Tier 1 (the
+indexer is still planned), so phases 00 + 01 ship first to
+unblock it.
 
 ## Architecture
 
@@ -201,6 +219,70 @@ Total estimated effort: **H** (sum of per-phase letters above).
 Sequencing: phases 0-3 are foundation+impl (must ship in
 order); 4 is the cross-tier validation; 5+6 wire downstream.
 
+## First slice — Phases 00 + 01 as one PR
+
+Phases 00 and 01 ship together on branch
+**`store-durable-phase1`** (the substantial-plan exception to
+[CLAUDE.md § Branch policy rule 4](../../../../CLAUDE.md)
+default of "one general working branch") and merge as a single
+focused PR.
+
+**Why bundled:** Phase 01's `Store::open_durable` API depends
+directly on Phase 00's `detect_format` + `validate_integrity`
+primitives — landing 00 alone exposes types nothing uses, and
+landing 01 needs 00 underneath.  Combined effort is ~S+
+(XS + S), which fits one PR cleanly.
+
+**Scope (concrete deliverables):**
+
+| Lands | File |
+|---|---|
+| `StoreFormat` / `StoreIntegrity` / `CorruptReason` enums | `src/store.rs` |
+| `Store::detect_format`, `Store::validate_integrity` | `src/store.rs` |
+| `crc32c = "0.6"` dep (fallback: ~50-line hand-rolled poly if dep conflicts) | `Cargo.toml` |
+| `DurabilityMode::IntegrityOnly { on_corruption }` | `src/store.rs` |
+| `Store::open_durable(path, mode)` | `src/store.rs` |
+| Drop impl writes tail marker + single `msync` on clean close | `src/store.rs:180` |
+| `tests/store_durable_format.rs` + `tests/store_durable_tier1.rs` | new |
+| `DATABASE.md` § "Durable stores" subsection | doc |
+
+**Out of scope for this PR** (deferred to later slices):
+
+- Tier 2 (snapshots) — phase 02, waits for TTT v5.
+- Tier 3 (WAL) — phase 03, waits for @PLAN36 audience demo.
+- `kill -9` stress harness — phase 04, runs across all tiers.
+- Indexer phase-08 opt-in — phase 05, waits for @PLAN37 to
+  reach its consumer phase.  (The training port, on its own
+  `loft-migration` branch, is the first opt-in instead.)
+- DESIGN_DECISIONS + plan closeout — phase 06.
+
+**Implementation gotchas the plan glosses over:**
+
+1. **`Store::open` panics on unknown signature** today
+   (`src/store.rs:297-301`).  `open_durable` must NOT route
+   through that assertion for the `DStoreV1` signature.
+   Cleanest fix: extract a private
+   `open_with_format(path, expected_format)` helper, and have
+   both `open` and `open_durable` call it with the right
+   expectation.  Phase 00's `detect_format` provides the
+   signature dispatch.
+2. **Fresh-file path**: when the target file doesn't exist,
+   Phase 01's pseudo-code fires `on_corruption(path)`.  For
+   brand-new databases the callback must accept "rebuild" as
+   "create empty + populate from authoritative sources."
+   `STDLIB.md` doc note must make this explicit so consumers
+   aren't surprised by callback semantics on first run.
+3. **Drop on panic isn't guaranteed** — that's the whole point
+   of Tier 1's "tail marker absent → rebuild" path, but
+   `STDLIB.md` must spell out: don't use Tier 1 for data you
+   can't re-derive.
+
+**Active-plan-cap impact:** The plan stays in `plans/future/`.
+Phases 00 + 01 land with `**Status:** Landed in <PR#>`; the
+directory promotes to `plans/38-loft-store-durable/` only when
+phase 02 (Tier 2 snapshots) starts.  Active-plan cap stays at
+2 (16-coroutine-validation, 36-audience-generative-art).
+
 ## Acceptance — full plan
 
 - `Store::open_durable(path, DurabilityMode::IntegrityOnly{..})`
@@ -213,8 +295,12 @@ order); 4 is the cross-tier validation; 5+6 wire downstream.
 - `DurabilityMode::WAL{..}` recovery: every write that
   returned successfully to the caller is present after
   `kill -9 + restart` (verified by `tests/store_durable_kill.rs`).
-- The indexer (@PLAN37 phase 08) opts into Tier 1; full-
-  rescan-on-corruption succeeds in ≤ 2 sec.
+- The training port (`personal/training`'s `loft-migration`
+  branch) opts into Tier 1 as the first real consumer;
+  rebuild-on-corruption successfully re-derives the store
+  from cached Strava/Garmin/OSM JSON.  (Phase 01 acceptance.)
+- The indexer (@PLAN37 phase 08), when landed, opts into Tier 1;
+  full-rescan-on-corruption succeeds in ≤ 2 sec.
 - TTT v5 design doc + @PLAN36 audience demo design doc cite
   Tier 2 / Tier 3 as their persistence layer.
 - All 7 phases close → plan moves to
@@ -249,8 +335,11 @@ order); 4 is the cross-tier validation; 5+6 wire downstream.
 
 - [`src/store.rs`](../../../../src/store.rs) — the existing
   Store primitive this plan extends.
+- `personal/training` repo (`loft-migration` branch),
+  `MIGRATION.md` § "Loft capability gaps" #2 — the immediate
+  Tier 1 consumer.  External to this repo; not linked.
 - [`plans/future/37-tracker-index/`](../37-tracker-index/README.md)
-  — the test-bed consumer (Tier 1).
+  — the test-bed consumer (Tier 1, second opt-in).
 - [`plans/future/37-tracker-index/08-multi-project-deploy.md`](../37-tracker-index/08-multi-project-deploy.md)
   — phase that opts into Tier 1.
 - [`plans/future/32-tic-tac-toe/`](../32-tic-tac-toe/) — TTT v5
