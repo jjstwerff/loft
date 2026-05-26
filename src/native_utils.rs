@@ -132,6 +132,18 @@ pub(crate) fn build_script_native_lib_dirs(lib_dir: &std::path::Path) -> Vec<std
 /// Ensure `libloft.rlib` is at least as fresh as the newest `src/*.rs` file.
 /// If any source is newer, run `cargo build --lib` to rebuild it.
 pub(crate) fn ensure_rlib_fresh() {
+    // @P360: this is a dev convenience — rebuild loft's OWN runtime rlib when
+    // loft's Rust sources change, for `cargo run`-style use inside the loft
+    // repo.  It compares the RELATIVE `src/`/`default/` mtimes, so when loft
+    // runs against an external project that merely *has* a `src/` (e.g. a
+    // library package's `src/*.loft`), it wrongly fires `cargo build --lib`
+    // from a dir with no `Cargo.toml`, printing a confusing
+    // "could not find Cargo.toml" error.  Gate the whole thing on a
+    // `Cargo.toml` in cwd: `cargo build --lib` needs one there anyway, so if
+    // absent we are not in the loft source root — use the shipped rlib as-is.
+    if !std::path::Path::new("Cargo.toml").exists() {
+        return;
+    }
     let Some(lib_dir) = loft_lib_dir() else {
         // No rlib found at all — try building from scratch.
         let _ = std::process::Command::new("cargo")
@@ -599,6 +611,17 @@ pub(crate) fn add_native_extern_flags(
                 .join("release")
                 .join(&rlib_name)
         };
+        // @P359: on a clean checkout the package-under-test's rlib may not
+        // exist yet at link time — parse-time `auto_build_native` only fires
+        // for *dependency* packages (resolved via `use`), not for the package
+        // being tested directly.  CI runs a single fresh `loft --native test`,
+        // so without this the first (only) run links nothing and rustc errors
+        // E0463 "can't find crate".  Build it on demand here.  Native target
+        // only; WASM relies on prebuilt rlibs (no host cargo build).
+        if target.is_none() && !rlib_path.exists() {
+            let stem = crate_name.replace('-', "_");
+            let _ = crate::extensions::auto_build_native(pkg_dir, &stem);
+        }
         if rlib_path.exists() {
             let extern_name = crate_name.replace('-', "_");
             cmd.arg("--extern")
