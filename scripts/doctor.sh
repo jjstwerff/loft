@@ -78,7 +78,7 @@ echo "==========================="
 [ -n "$PM" ] && echo "  (detected package manager: $PM)" || echo "  (no known package manager detected — generic hints below)"
 echo ""
 
-row() { printf "  %-16s %s\n" "$1:" "$2"; }
+row() { printf "  %-22s %s\n" "$1:" "$2"; }
 
 # required core
 if v=$(rustc  --version 2>/dev/null); then row rustc "$v"; else row rustc "MISSING (required) — install the Rust toolchain (https://rustup.rs)"; fi
@@ -97,8 +97,8 @@ M_TARGET="MISSING — building anything for the web browser will fail until this
 if v=$(node --version 2>/dev/null); then row node "$v"; else
   row node "$M_NODE"; add_fix "node:      $(hint node)"; fi
 
-if v=$(wasm-opt --version 2>/dev/null | head -1); then row wasm-opt "$v"; else
-  row wasm-opt "$M_WASMOPT"; add_fix "wasm-opt:  $(hint binaryen)"; fi
+if v=$(wasm-opt --version 2>/dev/null | head -1); then row "wasm-opt (binaryen)" "$v"; else
+  row "wasm-opt (binaryen)" "$M_WASMOPT"; add_fix "wasm-opt:  $(hint binaryen)"; fi
 
 if v=$(wasmtime --version 2>/dev/null); then row wasmtime "$v"; else
   row wasmtime "$M_WASMTIME"; add_fix "wasmtime:  $(hint wasmtime)"; fi
