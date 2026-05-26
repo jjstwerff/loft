@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
+.PHONY: all check-targets doctor install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -101,6 +101,14 @@ check-targets:
 			}; \
 		fi; \
 	done
+
+# doctor: report the status of every external tool the wasm / --html / native
+# pipelines depend on, and print environment-specific install commands for
+# whatever is missing, so a fresh environment can be set up to actually work.
+# Diagnostic only — never installs or fails the build.  See
+# doc/claude/WASM.md § Build Toolchain Dependencies for what each tool is for.
+doctor:
+	@bash scripts/doctor.sh
 
 install: check-targets all
 	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
@@ -469,6 +477,18 @@ game:
 	fi; \
 	grep -q "<!DOCTYPE html>" doc/brick-buster.html || { echo "    FAIL: missing DOCTYPE"; exit 1; }; \
 	grep -q "loft_start" doc/brick-buster.html || { echo "    FAIL: missing loft_start entry"; exit 1; }
+	@# Integrity gate (@P337): a size/DOCTYPE check is NOT enough — the two
+	@# ways this bundle silently breaks are (a) a STOMPED rlib (wasm-bindgen
+	@# placeholder imports → won't instantiate) and (b) MISSING wasm-opt
+	@# (no asyncify → render loop hangs the tab).  Both pass the size check.
+	@# This instantiates the embedded wasm with stub imports and asserts the
+	@# import/export shape, so a broken bundle fails the build loudly instead
+	@# of shipping.  Requires node (already a dev dependency for wasm tests).
+	@if command -v node >/dev/null 2>&1; then \
+	    node tools/check_html_bundle.mjs doc/brick-buster.html || exit 1; \
+	else \
+	    echo "    WARN: node not found — skipping bundle integrity check (install node to enable)"; \
+	fi
 	@# Inject no-cache meta + content-hash version on every local
 	@# asset reference so post-deploy browsers fetch fresh.  See
 	@# scripts/cache_bust_html.py for rationale (GitHub Pages doesn't

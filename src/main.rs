@@ -2382,7 +2382,21 @@ fn main() {
             let _ = std::fs::remove_file(&wasm_path);
             opt_path
         } else {
-            eprintln!("note: install wasm-opt (binaryen) for smaller output");
+            // @P337: a missing wasm-opt is NOT a cosmetic "larger output"
+            // problem — without the `--asyncify` pass the bundle cannot
+            // frame-yield, so the HTML driver runs loft_start() synchronously
+            // and any render loop (`for _ in 0..N`) blocks the browser main
+            // thread forever ("page times out").  Warn loudly so a hung
+            // bundle is never shipped unknowingly.
+            eprintln!(
+                "WARNING: a required tool ('wasm-opt', from the 'binaryen' \
+                 package) is not installed.\n  \
+                 Without it this game page will FREEZE the browser tab \
+                 (it locks up and never draws).\n  \
+                 Install it and rebuild before publishing — e.g. `apt \
+                 install binaryen`, or run `make doctor` for the command \
+                 for your system."
+            );
             wasm_path
         };
         // Assemble HTML
