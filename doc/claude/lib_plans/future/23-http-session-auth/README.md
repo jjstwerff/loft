@@ -7,7 +7,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design ready, no implementation.  Surfaced by the **training port**
+**P1 shipped 2026-05-27** (`lib/web` response headers — `headers` field +
+`header`/`headers_for`, case-insensitive; 8/8 `tests/http.loft` pass).  P2
+(cookie-jar session) + P3 (base64) open.  Surfaced by the **training port**
 (consume-only; their hand-off is
 `~/workspace/personal/training/loft/requests/E2-lib-web-http-session.md`) as the
 one remaining blocker for **native Garmin login** (their workstream A2,
@@ -33,7 +35,7 @@ across requests, read `Location` on redirects) — unblocking native Garmin logi
 - **Effort:** P1 (headers) XS–S; P2 (session) M; overall **M**.
 - **Design:** ✓ (the E2 spec is implementation-ready; grounded against the actual
   `ureq`-based code, not the `reqwest` the spec assumed).
-- **Last touched:** 2026-05-26
+- **Last touched:** 2026-05-27
 
 ## Sub-arcs
 
@@ -43,7 +45,7 @@ because every native signature already has an `src/extensions.rs` auto-marshal a
 
 | Item | Steps | Source | Status |
 |---|---|---|---|
-| **P1** — expose response headers (`header` / `headers_for`) | [P1.1](IMPL.md#step-p11--capture-response-headers-natively-rust-only-no-loft-surface-yet) + [P1.2](IMPL.md#step-p12--expose-headers-to-loft-headers-field--header--headers_for) | E2 spec part 1 | Open — **minimum unblock for A2** |
+| **P1** — expose response headers (`header` / `headers_for`) | [P1.1](IMPL.md#step-p11--capture-response-headers-natively-rust-only-no-loft-surface-yet) + [P1.2](IMPL.md#step-p12--expose-headers-to-loft-headers-field--header--headers_for) | E2 spec part 1 | **Shipped 2026-05-27** — the minimum A2 unblock |
 | **P2** — cookie-jar `HttpSession` (get/post/put/delete, redirect control) | [P2.1](IMPL.md#step-p21--agent-registry--session-natives-rust-only) + [P2.2](IMPL.md#step-p22--httpsession-loft-api-struct--verbs) | E2 spec part 2 | Open — clean version |
 | **P3** — `base64_encode`/`decode` (+ `sha256`) | [P3.1](IMPL.md#step-p31--base64_encode--base64_decode-in-libweb) | training nice-to-have #7 | Open — XS, optional, helps OAuth/SSO headers |
 | _(related)_ `exec()` subprocess primitive | — | training gap #3 | **Likely moot** — superseded by this workstream |
@@ -118,18 +120,25 @@ Full per-step designs + verify commands: [IMPL.md](IMPL.md).
 Each step is independently verifiable (its own build + loft test); P1 and P2 each
 land as one commit per [IMPL.md § Landing order](IMPL.md#landing-order--commits).
 
-## Open design questions
+## Open design questions — RESOLVED (consumer review 2026-05-26)
 
-1. **Case-insensitive header lookup** — `header(name)` matches case-insensitively
-   (HTTP header names are case-insensitive); confirm `ureq` preserves original casing
-   in `headers_names()` so we round-trip duplicates faithfully.
-2. **Session lifetime / cleanup** — `HttpSession` handles live in a Rust-side
-   registry like `WsHandler`.  Does the consumer need an explicit `close()`, or is a
-   process-lifetime jar acceptable for the login flow?  (Login is short-lived; lean
-   toward no explicit close unless a leak shows up.)
-3. **WASM target** — `lib/web` has a WASM build (host bridges).  Sessions/cookies on
-   WASM are out of scope for this plan (login runs native); P1 headers may be feasible
-   via the host fetch bridge but are not required.
+The training port reviewed this plan and confirmed it meets request E2 in full;
+all three questions are answered (E2 spec § "Consumer review of @PLAN23-lib"):
+
+1. **Case-insensitive header lookup** — ✅ required; the consumer reads
+   `set-cookie` / `location` by name.  Lowercased names in the stored blob are
+   fine (values keep their casing).  *(Resolved: keep the `ascii_lower` +
+   lowercased-name design.)*
+2. **Session lifetime / cleanup** — ✅ **process-lifetime jar, no `close()`.**
+   Login is short-lived (a few requests, one process).  Add `close()` later only
+   if a leak shows up — do **not** block P2 on it.
+3. **WASM target** — ✅ **out of scope is correct.**  Login runs native (the
+   browser can't call Garmin directly — CORS — so the backend does the HTTP); P1
+   headers on WASM are not required.
+
+**Phasing confirmed by the consumer: ship P1 first** — they wire native login
+with manual `Cookie:` handling and verify end-to-end, then adopt P2 when it
+lands.  P3 stays optional (they have a pure-loft base64).
 
 ## Cross-arc dependencies
 

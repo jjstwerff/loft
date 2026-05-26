@@ -7,12 +7,36 @@
 // The result of an HTTP request.
 pub struct HttpResponse {
   status: integer,
-  body: text
+  body: text,
+  headers: vector<text>      // each entry "name: value" (name lowercased);
+                             // repeated headers (e.g. multiple Set-Cookie)
+                             // are separate entries
 }
 
 // Returns true when the status code is in the 200-299 range.
 pub fn ok(self: HttpResponse) -> boolean {
   self.status >= 200 && self.status < 300
+}
+
+// First value of a header (case-insensitive name); "" when absent.
+pub fn header(self: HttpResponse, name: text) -> text {
+  q = ascii_lower(name);
+  for h in self.headers {
+    i = h.find(": ");
+    if i >= 0 && h[0..i] == q { return h[i + 2..h.len()]; }
+  }
+  ""
+}
+
+// All values for a header (e.g. every Set-Cookie); empty vector when absent.
+pub fn headers_for(self: HttpResponse, name: text) -> vector<text> {
+  q = ascii_lower(name);
+  out: vector<text> = [];
+  for h in self.headers {
+    i = h.find(": ");
+    if i >= 0 && h[0..i] == q { out += [h[i + 2..h.len()]]; }
+  }
+  out
 }
 
 // --- Internal native functions returning primitives ---
@@ -21,6 +45,14 @@ fn http_do(method: text, url: text, body: text, headers: text) -> integer;
 #native
 
 fn http_body() -> text;
+#native
+
+// Internal: last response's headers, newline-joined "name: value".
+fn http_headers_raw() -> text;
+#native
+
+// Internal: ASCII-lowercase (loft has no text.lower()).
+fn ascii_lower(s: text) -> text;
 #native
 
 // Internal: serialize headers vector to newline-separated "Key: Value" text.
@@ -33,30 +65,36 @@ fn join_headers(headers: vector<text>) -> text {
   result
 }
 
+// Internal: split the newline-joined header blob into one "name: value" per line.
+fn split_headers(raw: text) -> vector<text> {
+  if raw.len() == 0 { return []; }
+  raw.split('\n')
+}
+
 // --- Simple HTTP functions (no custom headers) ---
 
 // Send a GET request.
 pub fn http_get(url: text) -> HttpResponse {
   status = http_do("GET", url, "", "");
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // Send a POST request with a body.
 pub fn http_post(url: text, body: text) -> HttpResponse {
   status = http_do("POST", url, body, "");
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // Send a PUT request with a body.
 pub fn http_put(url: text, body: text) -> HttpResponse {
   status = http_do("PUT", url, body, "");
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // Send a DELETE request.
 pub fn http_delete(url: text) -> HttpResponse {
   status = http_do("DELETE", url, "", "");
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // --- HTTP functions with custom headers ---
@@ -65,25 +103,25 @@ pub fn http_delete(url: text) -> HttpResponse {
 // GET with custom headers.
 pub fn http_get_h(url: text, headers: vector<text>) -> HttpResponse {
   status = http_do("GET", url, "", join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // POST with custom headers.
 pub fn http_post_h(url: text, body: text, headers: vector<text>) -> HttpResponse {
   status = http_do("POST", url, body, join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // PUT with custom headers.
 pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse {
   status = http_do("PUT", url, body, join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // DELETE with custom headers.
 pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse {
   status = http_do("DELETE", url, "", join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // --- WebSocket client ---

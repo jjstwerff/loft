@@ -173,7 +173,7 @@ fn http_headers_raw() -> text;
 #native
 
 fn ascii_lower(s: text) -> text;
-#native "n_ascii_lower"
+#native     // bare → symbol defaults to n_ascii_lower
 
 // Split the newline-joined header blob into one "name: value" entry per line.
 fn split_headers(raw: text) -> vector<text> {

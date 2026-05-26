@@ -11,17 +11,20 @@ use loft_ffi::LoftStr;
 mod ws_client;
 
 fn do_request(
+    agent: Option<&ureq::Agent>,
     method: &str,
     url: &str,
     body: Option<&str>,
     headers: &[(&str, &str)],
-) -> (i32, String) {
-    let mut req = match method {
-        "GET" => ureq::get(url),
-        "POST" => ureq::post(url),
-        "PUT" => ureq::put(url),
-        "DELETE" => ureq::delete(url),
-        _ => return (0, String::new()),
+) -> (i32, String, String) {
+    // `ureq` only knows GET/POST/PUT/DELETE for the simple verbs we expose; an
+    // unknown method is a no-op (status 0) just like a network failure.
+    if !matches!(method, "GET" | "POST" | "PUT" | "DELETE") {
+        return (0, String::new(), String::new());
+    }
+    let mut req = match agent {
+        Some(a) => a.request(method, url),
+        None => ureq::request(method, url),
     };
     for (k, v) in headers {
         req = req.set(k, v);
@@ -34,15 +37,36 @@ fn do_request(
     match response {
         Ok(resp) => {
             let status = resp.status() as i32;
-            let body = resp.into_string().unwrap_or_default();
-            (status, body)
+            let hdrs = capture_headers(&resp);
+            (status, resp.into_string().unwrap_or_default(), hdrs)
         }
         Err(ureq::Error::Status(code, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            (code as i32, body)
+            let hdrs = capture_headers(&resp); // 4xx/5xx still carry headers
+            (code as i32, resp.into_string().unwrap_or_default(), hdrs)
         }
-        Err(_) => (0, String::new()),
+        Err(_) => (0, String::new(), String::new()),
     }
+}
+
+/// Format a response's headers as newline-joined `"name: value"` lines.  Names
+/// are lowercased (HTTP header names are case-insensitive) so the loft side can
+/// match with `==` and needs no `lower()`.  Repeated headers (e.g. multiple
+/// `Set-Cookie`) appear as separate lines, in header order.  Must be called
+/// before `into_string()`, which consumes the response.
+fn capture_headers(resp: &ureq::Response) -> String {
+    let mut out = String::new();
+    for name in resp.headers_names() {
+        let lname = name.to_ascii_lowercase();
+        for val in resp.all(&name) {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&lname);
+            out.push_str(": ");
+            out.push_str(val);
+        }
+    }
+    out
 }
 
 fn parse_headers(header_text: &str) -> Vec<(&str, &str)> {
@@ -78,9 +102,10 @@ pub unsafe extern "C" fn n_http_do(
     let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) };
     let headers_text = unsafe { loft_ffi::text_opt(headers_ptr, headers_len) }.unwrap_or("");
     let headers = parse_headers(headers_text);
-    let (status, response_body) = do_request(method, url, body, &headers);
-    // Store body for n_http_body to return.
+    let (status, response_body, response_headers) = do_request(None, method, url, body, &headers);
+    // Store body + headers for n_http_body / n_http_headers_raw to return.
     LAST_BODY.with(|b| *b.borrow_mut() = response_body);
+    LAST_HEADERS.with(|h| *h.borrow_mut() = response_headers);
     status
 }
 
@@ -90,10 +115,28 @@ pub extern "C" fn n_http_body() -> LoftStr {
     LAST_BODY.with(|b| loft_ffi::ret_ref(&b.borrow()))
 }
 
+/// Return the last response's headers, newline-joined `"name: value"` (names
+/// lowercased, duplicates preserved).  The loft side splits this into the
+/// `HttpResponse.headers` vector.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_http_headers_raw() -> LoftStr {
+    LAST_HEADERS.with(|h| loft_ffi::ret_ref(&h.borrow()))
+}
+
+/// ASCII-lowercase a string.  Generic helper — loft has no `lower()`; lets the
+/// header accessors normalise a caller-supplied name.  (Cleaner long-term home
+/// is a core `text.lower()`; kept local to avoid core scope-creep.)
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ascii_lower(ptr: *const u8, len: usize) -> LoftStr {
+    let s = unsafe { loft_ffi::text(ptr, len) };
+    loft_ffi::ret(s.to_ascii_lowercase())
+}
+
 use std::cell::RefCell;
 
 thread_local! {
     static LAST_BODY: RefCell<String> = const { RefCell::new(String::new()) };
+    static LAST_HEADERS: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 // ── WebSocket client C-ABI exports ───────────────────────────────────────

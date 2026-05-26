@@ -46,3 +46,12 @@ fn test_post_with_headers() {
   r = web::http_post_h("https://httpbin.org/post", "test-data", headers);
   assert(r.ok(), "POST+headers status={r.status}");
 }
+
+fn test_response_headers() {
+  r = web::http_get("https://httpbin.org/response-headers?X-Test=hi");
+  assert(r.status == 200, "status 200, got {r.status}");
+  assert(len(r.headers) > 0, "headers populated");
+  assert(r.header("x-test") == "hi", "x-test header = hi, got '{r.header("x-test")}'");
+  assert(r.header("X-Test") == "hi", "case-insensitive name lookup");
+  assert(r.header("absent") == "", "absent header is empty");
+}
