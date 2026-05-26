@@ -9,6 +9,68 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @P321c native dimension closed + 8 harvested fixes (2026-05-26)
+
+Dogfood pass against the `../personal/training` Loft port surfaced and fixed a
+batch of native-codegen, interpreter, tooling, and library bugs.
+
+**@P321c `imaging` native direct-call ABI — FIXED, commit `8095f4ba`.**
+`src/generation/mod.rs::output_native_direct_call` now forwards a `LoftStore`
+(built from the struct `Reference` arg's own `store_nr`, not the null store) and
+marshals each `Reference` arg as a `LoftRef` (`to_loft_ref` + `transmute_copy`,
+no `loft_ffi` type named → no dual-crate StableCrateId collision), so a
+store-MUTATING package `#native` fn like `load_png(path, image)` gets its full
+4-arg ABI.  Return-conversion (`from_loft_ref`) split from the store-handle need
+(`returns_loft_ref` vs `needs_loft_store`).  `loft generate` (`src/main.rs`) now
+reads field offsets from the canonical schema (`Stores::position`/`size`) instead
+of a separate layout calc that treated plain `integer` as 4 bytes (real layout:
+`width@0`/`height@8`/`name@16`/`data@20`); `lib/imaging/native` corrected to those
+offsets + `set_long`/`get_long`.  imaging un-skipped from `LIB_PKGS_NATIVE_SKIP`;
+`native_library_suite` 53/53.  Only the browser-WASM half of @P321c remains.
+
+**@P347 text ordering compare — FIXED, commit `a3e2e269`.**
+`< <= > >=` between a `vector<text>` element (`&str`) and another text (`&String`)
+failed `--native` compile (`PartialOrd` has no cross-type impl; `==` worked via
+`PartialEq`).  `OpLtText`/`OpLeText` (`default/01_code.loft`) now route through
+`ops::op_lt_text`/`op_le_text` (`AsRef<str>`), coercing both to `&str`.  `make
+fill` regenerated.  Regression `tests/scripts/repro_p347.loft`.
+
+**@P338 vector-index `&mut stores` double-borrow — FIXED, commit `a3e2e269`.**
+`v[n / 2]` (checked-div guard `raise_runtime` + vec-get receiver) → E0499.  The
+`OpGetVector`/`OpVectorRef` templates now bind `@index` to a local after `@r`.
+Regression `tests/scripts/repro_p338.loft`.
+
+**@P346 empty-text `Set` to a `RefVar(Text)` — FIXED, commit `ed47892c`.**
+A string interpolation used as an if-branch result over a vector-indexed value
+in a loop accumulated text on the interpreter (`[2.5][2.58][2.581]`).
+`State::set_var` (`src/state/codegen.rs`) treated `Set(refvar_text, "")` as a
+no-op; the buffer kept the prior iteration's content and `OpFormatStack*`
+appended.  Now emits `OpClearStackText` (deref-clear), matching native.
+Regression `tests/scripts/repro_p346.loft`.
+
+**@P339 `lib/graphics` text kerning — FIXED, commit `29315f20`.**
+`measure_text`/`rasterize_text` (`lib/graphics/native/src/text.rs`) summed bare
+advance widths.  Both now apply fontdue `horizontal_kern` (rasterize via a float
+pen).  `gl_measure_text("AV",40)` = 59.20 < `A+V` 61.91.  Regression
+`lib/graphics/tests/kerning.loft`.
+
+**@P341 native-test cache key — FIXED, commit `a3e2e269`.**
+`native_cache_key` (`src/native_utils.rs`) now folds each native-package rlib's
+mtime, so rebuilding a lib cdylib invalidates the cached `_bin`.
+
+**@P345 typed loop-var diagnostic — FIXED, commit `a3e2e269`.**
+`for i: T in …` now emits one clear "loop variable is type-inferred — remove the
+annotation" message + recovery (`src/parser/collections.rs::parse_for`), not a
+3-error cascade.  (Syntax intentionally unsupported.)
+
+**@P342 `loft generate` method-as-field — FIXED, commit `a3e2e269`.**
+The `u16::MAX` schema-position skip is the correct field/method discriminator;
+generated `*_fields` no longer emit bogus constants for methods.
+
+Also filed (open): @P340 (text baseline/ascent API), @P343 (vector<fn-ref>
+for-loop mis-dispatch — partial diagnosis recorded, P214-class), @P348 (GL
+golden window-dimension env sensitivity).
+
 ### Native codegen — eliminated the `output_call_inner` match (2026-05-22)
 
 `src/generation/dispatch.rs::output_call_inner` no longer contains a monolithic
