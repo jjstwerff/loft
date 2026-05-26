@@ -104,8 +104,7 @@ text; additive, so the text golden is untouched.  Needed a new
 deliberately unchanged (switching them needs a `gold-text.png` regen).
 
 **Designs recorded, implementation deferred (blocker noted in each PROBLEMS.md row):**
-@P337 (wasm `vector<float>` length — needs the wasm repro to localize; shared
-runtime length code proven width-portable), @P334 (`lib/world` wasm trap —
+@P334 (`lib/world` wasm trap —
 needs `wasmtime`, not installed here), @P343 (all three interp layers now
 precisely located incl. the termination-test third layer; native E0600 half
 separate), @P344 (doc-fix recommended; skill-checklist edit permission-blocked;
@@ -142,8 +141,64 @@ row): `run_pipeline` picks `main` as the alphabetically-first user file
 (`.min()`), so a data file sorting before the program is mis-compiled as main.
 
 `doc/brick-buster.html` is a self-contained `--html` bundle (base64-embedded
-wasm) — independent of `doc/pkg`; its embedded wasm runs `loft_start: OK` under
-`tools/wasm_repro.mjs` (no @P337 trap in the working-tree rebuild).
+wasm) — independent of `doc/pkg`.  (Earlier note here said its embedded wasm
+"runs `loft_start: OK` under `tools/wasm_repro.mjs`, no @P337 trap" — that was
+a FALSE NEGATIVE: the stub harness's `loft_gl_create_window` returns 0, so the
+program bails before drawing and never reaches the render path.  See the @P337
+correction below and @P351.)
+
+### @P337 — Brick Buster browser bundle: corrected diagnosis + pipeline hardening (2026-05-26)
+
+@P337 ("Brick Buster broken on the site / page times out") had been recorded as
+a `vector<float>` length divergence on wasm32 (`panic_bounds_check` in
+`build_mvp_2d`).  **That diagnosis is DISPROVEN.**  A minimal repro (16-elem
+`vector<float>` literal in a struct field, index `[15]`) AND a faithful copy of
+`build_mvp_2d` (computed-expression projection passed as `const vector<float>`,
+indexing `proj[0..15]` + building a new 16-float vector) BOTH read back
+`len==16` and `[15]` correctly on the wasm32-unknown-unknown `--html` build —
+identical to interpreter + `--native` — even after `wasm-opt -O1 --asyncify`.
+The committed `doc/brick-buster.html` renders cleanly in real headless Chromium
+(WebGL via SwiftShader), rAF ~60fps.
+
+**Actual root cause — a build-pipeline / toolchain hazard, not a runtime bug.**
+`make wasm` (wasm-pack, `feature=wasm`) and `loft --html` write the SAME
+`target/wasm32-unknown-unknown/release/libloft.rlib` with incompatible feature
+sets (the Makefile has long warned of this).  Two independent break modes, both
+passing the old size/DOCTYPE sanity check:
+
+1. **rlib STOMP** — after `make wasm` the rlib carries `feature=wasm` →
+   `wasm-bindgen`/`js_sys`, so `--html` emits a wasm importing
+   `__wbindgen_placeholder__` (35+) that the embedded `loft-gl-wasm.js` glue
+   (raw `loft_gl`/`loft_io` externs only) does not provide → the page fails to
+   instantiate.  A correct `--html` bundle imports ONLY `loft_gl` + `loft_io`.
+2. **MISSING `wasm-opt`** — without binaryen the `--asyncify` pass never runs,
+   so there is no frame-yield; the HTML driver runs `loft_start()`
+   synchronously and brick-buster's `for _ in 0..10000000` render loop blocks
+   the browser main thread forever ("page times out").
+
+Today's doc/pkg `make wasm` stomped the rlib; the working-tree
+`doc/brick-buster.html` had separately been rebuilt without `wasm-opt`.
+
+**Landed (toolchain + hardening — diagnosis-only on the runtime, no codegen
+change):**
+- `tools/check_html_bundle.mjs` — static gate: fails on non-`loft_gl`/`loft_io`
+  imports (stomp) or a missing `asyncify_start_unwind` export (no frame-yield).
+  Wired into `make game` step 6 so a broken bundle fails the build.
+- `loft --html` (`src/main.rs`) — now warns LOUDLY, in plain language, when
+  `wasm-opt` is absent (the page will hang, not merely be larger).
+- `scripts/doctor.sh` + `make doctor` — full wasm/native toolchain report with
+  plain-language consequences and package-manager-specific install commands;
+  finds cargo/wasmtime-installed tools regardless of shell PATH.
+- `doc/claude/WASM.md` — new "Build Toolchain Dependencies" section + the
+  rlib-stomp build-order rule.
+- `doc/brick-buster.html` regenerated via `make game` (correct rlib + asyncify),
+  verified in headless Chromium.
+
+**Follow-ups filed:** @P350 (a DIRECT `loft --html` after `make wasm` still
+ships a broken bundle silently — the gate is only in `make game`; needs an
+isolated rlib `--target-dir` or `--html` self-validation), @P351 (the
+`tests/html_wasm.rs` Node gate cannot exercise the GL/render path — the exact
+coverage gap that let this ship + be misdiagnosed).
 
 ### Native codegen — eliminated the `output_call_inner` match (2026-05-22)
 
