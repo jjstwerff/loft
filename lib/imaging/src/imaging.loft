@@ -27,12 +27,12 @@ pub struct Image {
 }
 
 // Native function: decode a PNG file into an Image struct.
+// (native `n_load_png` mapping lives in loft.toml::[native.functions])
 fn load_png(path: text, image: Image) -> boolean;
-#native "n_load_png"
 
 // Native function: encode an Image struct as a PNG file.
+// (native `n_save_png` mapping lives in loft.toml::[native.functions])
 fn save_png_native(image: const Image, path: text) -> boolean;
-#native "n_save_png"
 
 // Write this image to a PNG file. Returns true on success.
 pub fn save_png(self: const Image, path: text) -> boolean {

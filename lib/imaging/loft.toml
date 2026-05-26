@@ -13,3 +13,12 @@ native = "loft_imaging"
 # "no implementation in any registered native crate".
 [native]
 crate = "loft-imaging"
+
+# @PLAN12 phase 2 pattern — the manifest is the single declarative source of
+# truth mapping each loft fn to its native `n_*` symbol.  Drives `def.native`
+# population at parse time (so the `#native "..."` annotations in the `.loft`
+# source are no longer required), the `loft_register!` symbol list (via
+# `native/build.rs` → `loft-ffi-build`), and the extraction-hygiene gate.
+[native.functions]
+load_png = "n_load_png"
+save_png_native = "n_save_png"

@@ -113,7 +113,8 @@ pub unsafe extern "C" fn n_save_png(
     encode_png(path, w, h, rgb_data)
 }
 
-loft_ffi::loft_register! {
-    n_load_png,
-    n_save_png,
-}
+// @PLAN12 phase 2 — the `loft_ffi::loft_register! { … }` symbol list is
+// generated from `../loft.toml::[native.functions]` by `build.rs` (via
+// `loft-ffi-build`) and `include!`d here, so the cdylib's exported symbol
+// set is never hand-maintained.
+include!(concat!(env!("OUT_DIR"), "/loft_register_gen.rs"));
