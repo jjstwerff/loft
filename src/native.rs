@@ -846,9 +846,10 @@ fn n_program_directory(stores: &mut Stores, stack: &mut DbRef) {
 
 /// Return the directory of the main source file being executed.
 fn n_source_dir(stores: &mut Stores, stack: &mut DbRef) {
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.  Clearing frees
+    // live `Str` views of sibling call args; push + `last()` instead.
     stores.scratch.push(stores.source_dir.clone());
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.
@@ -2004,9 +2005,9 @@ fn i_parse_error_push(stores: &mut Stores, stack: &mut DbRef) {
 fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
     let msg = stores.last_parse_errors.join("\n");
     stores.last_parse_errors.clear();
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(msg);
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
 // HTTP client glue removed — n_http_do and n_http_body are now auto-marshalled.
@@ -2465,9 +2466,9 @@ pub fn json_parse_into_stores(stores: &mut Stores, raw: &str) -> DbRef {
 
 fn n_json_errors(stores: &mut Stores, stack: &mut DbRef) {
     let msg = stores.last_json_errors.join("|");
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(msg);
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
 fn n_as_text(stores: &mut Stores, stack: &mut DbRef) {
@@ -2478,9 +2479,17 @@ fn n_as_text(stores: &mut Stores, stack: &mut DbRef) {
         let value_pos = u32::from(stores.position(str_tp, "value")) + v.pos;
         let s_rec = stores.store(&v).get_u32_raw(v.rec, value_pos);
         let s = stores.store(&v).get_str(s_rec).to_string();
-        stores.scratch.clear();
+        // @P354: must NOT clear scratch — earlier scratch Strings may
+        // still be referenced by live `Str` views sitting on the stack
+        // as pending sibling call arguments (e.g.
+        // `f(o.as_text(), g.as_text())`).  Clearing here drops those
+        // Strings; the freed heap buffers get reused by the next push,
+        // so all sibling args collapse to the last value.  Push + return
+        // `last()` is the canonical pattern (matches `to_lowercase`,
+        // `t_9JsonValue_as_text` native, etc.); `OpClearScratch` reclaims
+        // the buffer at the next source-line boundary.
         stores.scratch.push(s);
-        stores.put(stack, Str::new(&stores.scratch[0]));
+        stores.put(stack, Str::new(stores.scratch.last().unwrap()));
     } else {
         stores.put(stack, Str::new(crate::state::STRING_NULL));
     }
@@ -3475,9 +3484,9 @@ fn n_kind(stores: &mut Stores, stack: &mut DbRef) {
         JV_DISCR_OBJECT => "JObject",
         _ => "JUnknown",
     };
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(name.to_string());
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
 /// Render a JsonValue to RFC 8259 JSON text.  The `pretty` flag
@@ -3656,9 +3665,9 @@ fn json_to_text_at(stores: &Stores, v: &DbRef, pretty: bool, depth: usize) -> St
 fn n_to_json(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let out = json_to_text(stores, &v, false);
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(out);
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
 /// Q3 primitive-slice — `to_json_pretty(self: JsonValue) -> text`
@@ -3671,7 +3680,7 @@ fn n_to_json(stores: &mut Stores, stack: &mut DbRef) {
 fn n_to_json_pretty(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let out = json_to_text(stores, &v, true);
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(out);
-    stores.put(stack, Str::new(&stores.scratch[0]));
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }

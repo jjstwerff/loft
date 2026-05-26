@@ -564,6 +564,23 @@ fn is_collection_field(tp: &Type) -> bool {
     )
 }
 
+/// A "bare" runtime type (no loft definition) that `output_init` must
+/// re-create so its runtime type id matches its compile-time
+/// `known_type`.  Collected from `Stores::types` and emitted in id
+/// order, interleaved with the struct/enum definitions.  See
+/// `Output::flush_bare_through` for the emission contract.
+#[allow(dead_code)]
+enum BareIo {
+    Byte(i32, bool),
+    Short(i32, bool),
+    ShortRaw(i32, bool),
+    Int(i32, bool),
+    Vector(u16),
+    Sorted(u16, Vec<(u16, bool)>),
+    Hash(u16, Vec<u16>),
+    Index(u16, Vec<(u16, bool)>),
+}
+
 impl Output<'_> {
     /// Use this before emitting indented output lines.
     /// # Errors
@@ -941,17 +958,6 @@ extern crate loft;"
             }
             set
         };
-        #[allow(dead_code)]
-        enum BareIo {
-            Byte(i32, bool),
-            Short(i32, bool),
-            ShortRaw(i32, bool),
-            Int(i32, bool),
-            Vector(u16),
-            Sorted(u16, Vec<(u16, bool)>),
-            Hash(u16, Vec<u16>),
-            Index(u16, Vec<(u16, bool)>),
-        }
         let mut bare_io: Vec<(u16, BareIo)> = Vec::new();
         for (idx, tp) in self.stores.types.iter().enumerate() {
             let tid = idx as u16;
@@ -1001,19 +1007,6 @@ extern crate loft;"
             }
         }
         bare_io.sort_by_key(|&(tid, _)| tid);
-        let mut bare_idx = 0;
-        // Resolve a struct's field name by field_nr — needed for
-        // Sorted/Hash/Index key-string emission at bare-type level.
-        let resolve_field_name = |c: u16, k: u16| -> String {
-            if let crate::database::Parts::Struct(ref fields)
-            | crate::database::Parts::EnumValue(_, ref fields) =
-                self.stores.types[c as usize].parts
-            {
-                fields[k as usize].name.clone()
-            } else {
-                "?".to_string()
-            }
-        };
 
         // Build a map from known_type → dnr for dependency resolution.
         let type_id_to_dnr: HashMap<u16, u32> =
@@ -1119,62 +1112,17 @@ extern crate loft;"
         // `items: vector<JsonValue>`).
         let mut emitted: HashSet<u16> = HashSet::new();
         let type_id_to_dnr_local = type_id_to_dnr;
+        // `bare_emitted[tid]` tracks which bare types have had their
+        // `db.*` creation emitted, so `flush_bare_through` never emits
+        // one twice.  Sized to the full type table — bare type ids are
+        // a subset of `0..stores.types.len()`.
+        let mut bare_emitted = vec![false; self.stores.types.len()];
 
         for &(type_id, dnr) in &type_defs {
-            while bare_idx < bare_io.len() && bare_io[bare_idx].0 < type_id {
-                let (tid, ref bio) = bare_io[bare_idx];
-                match bio {
-                    BareIo::Byte(min, nullable) => {
-                        writeln!(w, "    let t{tid} = db.byte({min}, {nullable});")?;
-                    }
-                    BareIo::Short(min, nullable) => {
-                        writeln!(w, "    let t{tid} = db.short({min}, {nullable});")?;
-                    }
-                    BareIo::ShortRaw(min, nullable) => {
-                        writeln!(w, "    let t{tid} = db.short_raw({min}, {nullable});")?;
-                    }
-                    BareIo::Int(min, nullable) => {
-                        writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
-                    }
-                    BareIo::Vector(c) => {
-                        let c_ref = type_id_ref(*c);
-                        writeln!(w, "    let t{tid} = db.vector({c_ref});")?;
-                    }
-                    BareIo::Sorted(c, keys) => {
-                        let c_ref = type_id_ref(*c);
-                        let keys_str = keys
-                            .iter()
-                            .map(|&(k, asc)| {
-                                format!("(\"{}\".to_string(), {asc})", resolve_field_name(*c, k))
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        writeln!(w, "    let t{tid} = db.sorted({c_ref}, &[{keys_str}]);")?;
-                    }
-                    BareIo::Hash(c, keys) => {
-                        let c_ref = type_id_ref(*c);
-                        let keys_str = keys
-                            .iter()
-                            .map(|&k| format!("\"{}\".to_string()", resolve_field_name(*c, k)))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        writeln!(w, "    let t{tid} = db.hash({c_ref}, &[{keys_str}]);")?;
-                    }
-                    BareIo::Index(c, keys) => {
-                        let c_ref = type_id_ref(*c);
-                        let keys_str = keys
-                            .iter()
-                            .map(|&(k, asc)| {
-                                format!("(\"{}\".to_string(), {asc})", resolve_field_name(*c, k))
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        writeln!(w, "    let t{tid} = db.index({c_ref}, &[{keys_str}]);")?;
-                    }
-                }
-                writeln!(w, "    let _ = t{tid}; // may be unused")?;
-                bare_idx += 1;
-            }
+            // Emit every bare type that precedes this struct/enum in id
+            // order (limit = type_id; no bare type shares a definition
+            // type's id, so this is exactly `tid < type_id`).
+            self.flush_bare_through(w, &bare_io, &mut bare_emitted, type_id)?;
             self.emit_def_create_recurse_fields(
                 w,
                 type_id,
@@ -1182,69 +1130,27 @@ extern crate loft;"
                 &deps,
                 &type_id_to_dnr_local,
                 &mut emitted,
+                &bare_io,
+                &mut bare_emitted,
             )?;
         }
-        while bare_idx < bare_io.len() {
-            let (tid, ref bio) = bare_io[bare_idx];
-            match bio {
-                BareIo::Byte(min, nullable) => {
-                    writeln!(w, "    let t{tid} = db.byte({min}, {nullable});")?;
-                }
-                BareIo::Short(min, nullable) => {
-                    writeln!(w, "    let t{tid} = db.short({min}, {nullable});")?;
-                }
-                BareIo::ShortRaw(min, nullable) => {
-                    writeln!(w, "    let t{tid} = db.short_raw({min}, {nullable});")?;
-                }
-                BareIo::Int(min, nullable) => {
-                    writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
-                }
-                BareIo::Vector(c) => {
-                    let c_ref = type_id_ref(*c);
-                    writeln!(w, "    let t{tid} = db.vector({c_ref});")?;
-                }
-                BareIo::Sorted(c, keys) => {
-                    let c_ref = type_id_ref(*c);
-                    let keys_str = keys
-                        .iter()
-                        .map(|&(k, asc)| {
-                            format!("(\"{}\".to_string(), {asc})", resolve_field_name(*c, k))
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    writeln!(w, "    let t{tid} = db.sorted({c_ref}, &[{keys_str}]);")?;
-                }
-                BareIo::Hash(c, keys) => {
-                    let c_ref = type_id_ref(*c);
-                    let keys_str = keys
-                        .iter()
-                        .map(|&k| format!("\"{}\".to_string()", resolve_field_name(*c, k)))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    writeln!(w, "    let t{tid} = db.hash({c_ref}, &[{keys_str}]);")?;
-                }
-                BareIo::Index(c, keys) => {
-                    let c_ref = type_id_ref(*c);
-                    let keys_str = keys
-                        .iter()
-                        .map(|&(k, asc)| {
-                            format!("(\"{}\".to_string(), {asc})", resolve_field_name(*c, k))
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    writeln!(w, "    let t{tid} = db.index({c_ref}, &[{keys_str}]);")?;
-                }
-            }
-            writeln!(w, "    let _ = t{tid}; // may be unused")?;
-            bare_idx += 1;
-        }
+        // Flush any bare types that follow the last definition (or that a
+        // field's per-content flush has not already created).
+        self.flush_bare_through(w, &bare_io, &mut bare_emitted, u16::MAX)?;
 
         // Phase 2 — enum value add-backs (db.value) emitted after all
         // typed variant structs have been created, so the enum ↔
         // variant mutual-recursion cycle resolves without forward refs.
         for &(type_id, dnr) in &type_defs {
             if self.data.def(dnr).def_type == DefType::Enum {
-                self.emit_type_fields_mode(w, type_id, dnr, FieldPhase::EnumValues)?;
+                self.emit_type_fields_mode(
+                    w,
+                    type_id,
+                    dnr,
+                    FieldPhase::EnumValues,
+                    &bare_io,
+                    &mut bare_emitted,
+                )?;
             }
         }
         Ok(())
@@ -1375,7 +1281,108 @@ extern crate loft;"
     /// where `JsonField` has a higher `known_type` than `JObject`.
     /// Finally, emit fields in source order — inline collection creates
     /// dedup on name and land at the correct runtime id.
-    #[allow(clippy::only_used_in_recursion)]
+    /// Resolve a struct's field name by field_nr — needed for
+    /// Sorted/Hash/Index key-string emission at bare-type level.
+    fn bare_field_name(&self, c: u16, k: u16) -> String {
+        if let crate::database::Parts::Struct(ref fields)
+        | crate::database::Parts::EnumValue(_, ref fields) = self.stores.types[c as usize].parts
+        {
+            fields[k as usize].name.clone()
+        } else {
+            "?".to_string()
+        }
+    }
+
+    /// Emit the `let t{tid} = db.xxx(…)` creation call for one bare
+    /// (definition-less) runtime type, plus a `let _ = t{tid}` to
+    /// suppress unused-binding warnings.  All `db.*` constructors are
+    /// interned (return the existing id when the type already exists),
+    /// so re-emitting a bare type is a harmless no-op — only the FIRST
+    /// emission position determines its runtime id.
+    fn write_bare_io(&self, w: &mut dyn Write, tid: u16, bio: &BareIo) -> std::io::Result<()> {
+        match bio {
+            BareIo::Byte(min, nullable) => {
+                writeln!(w, "    let t{tid} = db.byte({min}, {nullable});")?;
+            }
+            BareIo::Short(min, nullable) => {
+                writeln!(w, "    let t{tid} = db.short({min}, {nullable});")?;
+            }
+            BareIo::ShortRaw(min, nullable) => {
+                writeln!(w, "    let t{tid} = db.short_raw({min}, {nullable});")?;
+            }
+            BareIo::Int(min, nullable) => {
+                writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
+            }
+            BareIo::Vector(c) => {
+                let c_ref = type_id_ref(*c);
+                writeln!(w, "    let t{tid} = db.vector({c_ref});")?;
+            }
+            BareIo::Sorted(c, keys) => {
+                let c_ref = type_id_ref(*c);
+                let keys_str = keys
+                    .iter()
+                    .map(|&(k, asc)| {
+                        format!("(\"{}\".to_string(), {asc})", self.bare_field_name(*c, k))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writeln!(w, "    let t{tid} = db.sorted({c_ref}, &[{keys_str}]);")?;
+            }
+            BareIo::Hash(c, keys) => {
+                let c_ref = type_id_ref(*c);
+                let keys_str = keys
+                    .iter()
+                    .map(|&k| format!("\"{}\".to_string()", self.bare_field_name(*c, k)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writeln!(w, "    let t{tid} = db.hash({c_ref}, &[{keys_str}]);")?;
+            }
+            BareIo::Index(c, keys) => {
+                let c_ref = type_id_ref(*c);
+                let keys_str = keys
+                    .iter()
+                    .map(|&(k, asc)| {
+                        format!("(\"{}\".to_string(), {asc})", self.bare_field_name(*c, k))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writeln!(w, "    let t{tid} = db.index({c_ref}, &[{keys_str}]);")?;
+            }
+        }
+        writeln!(w, "    let _ = t{tid}; // may be unused")?;
+        Ok(())
+    }
+
+    /// Emit every not-yet-emitted bare type with `tid <= limit`, in
+    /// ascending id order, marking each in `bare_emitted`.  Because
+    /// `db.*` is interned, the runtime id a bare type receives is fixed
+    /// at its FIRST creation, so this MUST be called in id order: the
+    /// pre-struct flush (`limit = struct_id`) creates all bares that
+    /// precede a struct, and the per-field flush (`limit = content_id`)
+    /// creates a bare content type that a struct's field references but
+    /// whose own id falls AFTER the struct (the @P353 inversion: an
+    /// empty `vector<fn(…)>` wrapper struct is registered before its
+    /// synthetic narrow-int element type).
+    fn flush_bare_through(
+        &self,
+        w: &mut dyn Write,
+        bare_io: &[(u16, BareIo)],
+        bare_emitted: &mut [bool],
+        limit: u16,
+    ) -> std::io::Result<()> {
+        for (tid, bio) in bare_io {
+            if *tid > limit {
+                break;
+            }
+            if !bare_emitted[*tid as usize] {
+                self.write_bare_io(w, *tid, bio)?;
+                bare_emitted[*tid as usize] = true;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::only_used_in_recursion, clippy::too_many_arguments)]
     fn emit_def_create_recurse_fields(
         &mut self,
         w: &mut dyn Write,
@@ -1384,6 +1391,8 @@ extern crate loft;"
         deps: &HashMap<u16, Vec<u16>>,
         type_id_to_dnr: &HashMap<u16, u32>,
         emitted: &mut HashSet<u16>,
+        bare_io: &[(u16, BareIo)],
+        bare_emitted: &mut [bool],
     ) -> std::io::Result<()> {
         if !emitted.insert(type_id) {
             return Ok(());
@@ -1470,6 +1479,8 @@ extern crate loft;"
                         deps,
                         type_id_to_dnr,
                         emitted,
+                        bare_io,
+                        bare_emitted,
                     )?;
                 }
                 let td_nr = self.data.type_def_nr(&a.typedef);
@@ -1483,6 +1494,8 @@ extern crate loft;"
                     a.nullable,
                     field_type_id,
                     forced,
+                    bare_io,
+                    bare_emitted,
                 )?;
             }
         }
@@ -1571,6 +1584,8 @@ extern crate loft;"
         type_id: u16,
         dnr: u32,
         mode: FieldPhase,
+        bare_io: &[(u16, BareIo)],
+        bare_emitted: &mut [bool],
     ) -> std::io::Result<()> {
         if dnr == u32::MAX {
             return Ok(());
@@ -1594,7 +1609,15 @@ extern crate loft;"
                 } else {
                     0
                 };
-                self.output_struct_fields_filtered(w, dnr, enum_value, type_id, mode)?;
+                self.output_struct_fields_filtered(
+                    w,
+                    dnr,
+                    enum_value,
+                    type_id,
+                    mode,
+                    bare_io,
+                    bare_emitted,
+                )?;
             }
         } else if def.def_type == DefType::Enum && matches!(mode, FieldPhase::EnumValues) {
             output_enum_values(w, dnr, self.data, type_id)?;
@@ -1639,6 +1662,8 @@ extern crate loft;"
         nullable: bool,
         known_type: u16,
         forced_size: Option<u8>,
+        bare_io: &[(u16, BareIo)],
+        bare_emitted: &mut [bool],
     ) -> std::io::Result<()> {
         if let Type::Vector(c, _) = typedef {
             // when the element `Type::Integer` carries a
@@ -1669,6 +1694,11 @@ extern crate loft;"
                 if !name.is_empty() {
                     let narrow = self.stores.name(&name);
                     if narrow != u16::MAX {
+                        // @P353: the narrow element type may have a higher
+                        // runtime id than the wrapper struct (created as a
+                        // side-effect of this field's registration), so flush
+                        // its `db.*` creation before referencing it.
+                        self.flush_bare_through(w, bare_io, bare_emitted, narrow)?;
                         let content_ref = type_id_ref(narrow);
                         emit_db_field(
                             w,
@@ -1692,6 +1722,11 @@ extern crate loft;"
             if matches!(**c, Type::Function(_, _, _)) {
                 let narrow = self.stores.name("int<0,false>");
                 if narrow != u16::MAX {
+                    // @P353: an empty `vector<fn(…)>` literal registers its
+                    // wrapper struct before this synthetic narrow-int element
+                    // type, so `int<0,false>`'s runtime id is HIGHER than the
+                    // struct's — flush its creation before the `db.vector`.
+                    self.flush_bare_through(w, bare_io, bare_emitted, narrow)?;
                     let content_ref = type_id_ref(narrow);
                     emit_db_field(
                         w,
@@ -1706,6 +1741,9 @@ extern crate loft;"
             let c_def = self.data.type_def_nr(c);
             if c_def != u32::MAX {
                 let content = self.data.def(c_def).known_type;
+                // @P353: flush the content bare type if it is registered
+                // after this wrapper struct (forward reference in id order).
+                self.flush_bare_through(w, bare_io, bare_emitted, content)?;
                 let content_ref = type_id_ref(content);
                 emit_db_field(
                     w,
@@ -1846,6 +1884,7 @@ extern crate loft;"
     /// Populate struct / enum-value fields, restricted to the given
     /// `phase`.  Runs once per struct per phase (Simple before any bare
     /// Sorted/Hash/Index types register, Collection after they do).
+    #[allow(clippy::too_many_arguments)]
     fn output_struct_fields_filtered(
         &self,
         w: &mut dyn Write,
@@ -1853,6 +1892,8 @@ extern crate loft;"
         enum_value: i32,
         type_id: u16,
         phase: FieldPhase,
+        bare_io: &[(u16, BareIo)],
+        bare_emitted: &mut [bool],
     ) -> std::io::Result<()> {
         let def = self.data.def(def_nr);
         let s_var = format!("t{type_id}");
@@ -1892,6 +1933,8 @@ extern crate loft;"
                 a.nullable,
                 field_type_id,
                 forced,
+                bare_io,
+                bare_emitted,
             )?;
         }
         Ok(())

@@ -449,12 +449,14 @@ pub fn db_from_text(stores: &mut Stores, val: &str, db_tp: u16) -> DbRef {
 
 /// Return the parse errors from the last `Type.parse()` call as a single
 /// newline-separated string.  Called by the `#errors` accessor.
+#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
 pub fn i_parse_errors(stores: &mut Stores) -> Str {
     let msg = stores.last_parse_errors.join("\n");
     stores.last_parse_errors.clear();
-    stores.scratch.clear();
+    // @P354: do not clear scratch — earlier scratch Strings may still be
+    // referenced by live `Str` views (sibling call args).  Push + last().
     stores.scratch.push(msg);
-    Str::new(&stores.scratch[0])
+    Str::new(stores.scratch.last().unwrap())
 }
 
 /// Push a constraint-check error to the parse error list.
@@ -467,11 +469,12 @@ pub fn i_parse_error_push(stores: &mut Stores, msg: &str) {
 /// Mirrors the interpreter's `n_json_errors` (`src/native.rs`) which does
 /// NOT clear the buffer — errors persist across `json_errors()` reads
 /// until the next successful parse implicitly clears them.
+#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
 pub fn i_json_errors(stores: &mut Stores) -> Str {
     let msg = stores.last_json_errors.join("|");
-    stores.scratch.clear();
+    // @P354: do not clear scratch — see `i_parse_errors` above.
     stores.scratch.push(msg);
-    Str::new(&stores.scratch[0])
+    Str::new(stores.scratch.last().unwrap())
 }
 
 /// Deep-copy a database record: copies the raw bytes and duplicates
