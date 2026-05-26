@@ -400,6 +400,15 @@ fn crystal_editor_gl_matches_gold() {
             "-s",
             "-screen 0 1000x1000x24",
             "env",
+            // On a Wayland session `xvfb-run` only sets DISPLAY (X11), but
+            // winit/glutin prefer Wayland and would connect to the REAL
+            // compositor — popping a visible window on the user's screen and
+            // bypassing Xvfb (and breaking truly-headless runs).  Unset
+            // WAYLAND_DISPLAY and pin the winit backend to x11 so the window
+            // lands on the virtual Xvfb display instead.
+            "-u",
+            "WAYLAND_DISPLAY",
+            "WINIT_UNIX_BACKEND=x11",
             "LIBGL_ALWAYS_SOFTWARE=1",
             "GALLIUM_DRIVER=llvmpipe",
         ])

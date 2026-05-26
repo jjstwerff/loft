@@ -2351,24 +2351,32 @@ pub fn json_parse_into_stores(stores: &mut Stores, raw: &str) -> DbRef {
             stores.last_json_errors.clear();
         }
         Ok(crate::json::Parsed::Array(v)) if v.is_empty() => {
-            // Step 4 first slice (2026-04-14): empty arrays don't need
-            // arena recursion — set the JArray discriminant and leave
-            // the items field zero-initialised.  `n_len` on JArray
-            // returns 0 today (every JArray is empty until the full
-            // arena materialiser ships), so this reads as the empty
-            // array callers expect.
-            stores
-                .store_mut(&result)
-                .set_byte(result.rec, pos, 0, JV_DISCR_ARRAY);
+            // Empty array: set the JArray discriminant AND explicitly zero
+            // the items-vector handle.  @P357 — `jv_alloc` claims a RECYCLED
+            // store record whose bytes are stale, so the items handle is NOT
+            // zero-initialised by allocation (the original comment here wrongly
+            // assumed it was).  Left stale, `item(i)`/`len` read a phantom
+            // non-empty vector (e.g. `json_parse("[]").item(0)` returning a
+            // garbage object and `len` reporting 8 after earlier parses
+            // populated then freed that block — surfaced in the training port's
+            // store engine on a real export with an empty `ghost_sessions.json`).
+            // The non-empty arm below already zeros this handle (so
+            // `vector_append` claims a fresh record); the empty arm must too.
+            let array_tp = stores.name("JArray");
+            let items_abs_pos = pos + u32::from(stores.position(array_tp, "items"));
+            let store_mut = stores.store_mut(&result);
+            store_mut.set_byte(result.rec, pos, 0, JV_DISCR_ARRAY);
+            store_mut.set_u32_raw(result.rec, items_abs_pos, 0);
             stores.last_json_errors.clear();
         }
         Ok(crate::json::Parsed::Object(v)) if v.is_empty() => {
-            // Step 4 first slice (2026-04-14): empty objects mirror
-            // empty arrays — discriminant only; no field-vector to
-            // materialise; `n_len` returns 0 for every JObject today.
-            stores
-                .store_mut(&result)
-                .set_byte(result.rec, pos, 0, JV_DISCR_OBJECT);
+            // Empty object: same @P357 fix as the empty-array arm — zero the
+            // stale fields-vector handle, not just the discriminant.
+            let obj_tp = stores.name("JObject");
+            let fields_abs_pos = pos + u32::from(stores.position(obj_tp, "fields"));
+            let store_mut = stores.store_mut(&result);
+            store_mut.set_byte(result.rec, pos, 0, JV_DISCR_OBJECT);
+            store_mut.set_u32_raw(result.rec, fields_abs_pos, 0);
             stores.last_json_errors.clear();
         }
         Ok(crate::json::Parsed::Array(ref v)) => {
