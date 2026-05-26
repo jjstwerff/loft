@@ -885,22 +885,45 @@ impl Parser {
         if try_swap(def_nr, data) {
             return;
         }
-        // Wrapped case: integer-vector indexing emits
-        // `OpGetInt(OpGetVector(v, size, idx), 0)` (and narrow
-        // variants — `OpGetByte` / `OpGetShortRaw` / `OpGetInt4`).
-        // The outer getter is null-tolerant (returns `i64::MIN` on
-        // null DbRef per its annotation guard); the inner
-        // `OpGetVector` is the one that raises.  Recurse into the
-        // first arg to swap the inner op when the outer is one of
-        // these wrappers.  Without this, `x = v[i] ?? null` over
-        // an integer vector would still log + halt because the
-        // direct `def_nr` lookup wouldn't see `OpGetVector`.
+        // Wrapped case: typed-vector indexing emits a type-specific
+        // element getter wrapping the inner `OpGetVector` —
+        // `OpGetInt(OpGetVector(v, size, idx), 0)` for `vector<integer>`
+        // and analogues for every other base element type.  The outer
+        // getter is null-tolerant (returns the type's null sentinel on a
+        // `rec == 0` DbRef per the Store-accessor guards); the inner
+        // `OpGetVector` is the one that raises.  Recurse into the first arg
+        // to swap the inner op.  @P356: this list previously covered only
+        // the integer wrappers, so `tv[i] ?? fb` over a non-integer vector
+        // (text / float / single / enum / char / nested collection / ref)
+        // kept the RAISING `OpGetVector` and still halted on OOB.
         let outer_name = data.def(*def_nr).original_name();
         if matches!(
             outer_name.as_str(),
-            "GetInt" | "GetInt4" | "GetByte" | "GetShortRaw"
+            "GetInt"
+                | "GetInt4"
+                | "GetByte"
+                | "GetShortRaw"
+                | "GetShort"
+                | "GetText"
+                | "GetSingle"
+                | "GetFloat"
+                | "GetEnum"
+                | "GetCharacter"
+                | "GetField"
+                | "GetDbRef"
         ) && let Some(first_arg) = args.first_mut()
             && let Value::Call(inner_nr, _) = first_arg.unspan_mut()
+        {
+            try_swap(inner_nr, data);
+        } else if outer_name == "EqInt"
+            // `vector<boolean>` is `OpEqInt(OpGetByte(OpGetVector(...)), 1)`
+            // — a TWO-level wrap, so descend through the `OpGetByte` to reach
+            // the inner `OpGetVector`.
+            && let Some(first_arg) = args.first_mut()
+            && let Value::Call(byte_nr, byte_args) = first_arg.unspan_mut()
+            && data.def(*byte_nr).original_name() == "GetByte"
+            && let Some(gv) = byte_args.first_mut()
+            && let Value::Call(inner_nr, _) = gv.unspan_mut()
         {
             try_swap(inner_nr, data);
         }

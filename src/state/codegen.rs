@@ -643,7 +643,19 @@ impl State {
         let stack_pos = stack.position;
         let tp = self.generate(t_val, stack, false);
         let true_stack = stack.position;
-        if *f_val == Value::Null {
+        // @P356: an EXPRESSION if whose true branch produces a value but whose
+        // else is a bare `Value::Null` (e.g. the `expr ?? null` ncc lowering
+        // `if bool(tmp) { tmp } else null`) must push a TYPED NULL on the false
+        // path — otherwise the goto-false skips straight to the join leaving the
+        // value-sized slot unwritten, so when the null branch runs at runtime the
+        // stack is short by `size(tp)` and every later slot offset (e.g. the ncc
+        // temp's `OpFreeText`) is wrong → frees an uninitialised slot → SIGSEGV.
+        // The statement-style fast-path below (no value, or divergent true arm)
+        // keeps the original skip-to-join behaviour.
+        let null_else_value = *f_val == Value::Null
+            && !is_divergent(t_val)
+            && !matches!(tp, Type::Void | Type::Never);
+        if *f_val == Value::Null && !null_else_value {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
             // when the true branch diverges (return/break/continue, possibly
             // wrapped by scopes.rs in Insert/Block), execution only reaches the
@@ -654,6 +666,19 @@ impl State {
             if is_divergent(t_val) {
                 stack.position = stack_pos;
             }
+        } else if null_else_value {
+            // Emit a real false arm that pushes the type's null sentinel, so
+            // both arms reach the join with the same stack delta (= true_stack).
+            stack.add_op("OpGotoWord", self);
+            let end = self.code_pos;
+            self.code_add(0i16); // temp end
+            let false_pos = self.code_pos;
+            self.code_put(code_step, (self.code_pos - true_pos) as i16); // goto-false → false arm
+            stack.position = stack_pos;
+            self.emit_typed_null(stack, &tp);
+            self.code_put(end, (self.code_pos - false_pos) as i16);
+            // emit_typed_null pushes exactly size(tp); both arms now balanced.
+            stack.position = true_stack;
         } else {
             stack.add_op("OpGotoWord", self);
             let end = self.code_pos;
