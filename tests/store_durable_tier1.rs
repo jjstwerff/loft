@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+type CorruptionCb = Box<dyn Fn(&Path) -> std::io::Result<()>>;
+
 /// Per-test scratch directory.  Cleared on entry so a previous failed run
 /// doesn't leave stale `.dmeta` sidecars behind.
 fn scratch(test_name: &str) -> PathBuf {
@@ -37,7 +39,7 @@ fn dmeta_path(main: &Path) -> PathBuf {
 /// `Store::open` creates the file if it doesn't exist and writes the legacy
 /// signature.  Counts invocations into a shared atomic so tests can assert
 /// "callback fired exactly N times."
-fn init_callback(counter: Arc<AtomicUsize>) -> Box<dyn Fn(&Path) -> std::io::Result<()>> {
+fn init_callback(counter: Arc<AtomicUsize>) -> CorruptionCb {
     Box::new(move |path: &Path| {
         counter.fetch_add(1, Ordering::SeqCst);
         let path_str = path
@@ -236,45 +238,60 @@ fn callback_returning_error_propagates_to_caller() {
 }
 
 #[test]
-fn callback_that_doesnt_fix_corruption_hits_recursion_cap() {
-    let dir = scratch("callback_that_doesnt_fix_corruption_hits_cap");
+fn callback_that_leaves_main_file_unrecoverable_hits_recursion_cap() {
+    // The recursion cap exists so a buggy callback can't infinite-loop
+    // open_durable.  Verify it fires when the callback returns Ok but
+    // leaves the main file in a state that still fails validation.
+    //
+    // After @PLAN38 phase 01's auto-rewrite-sidecar behaviour, a no-op
+    // callback against a sidecar-only-corruption is NOT a recursion-cap
+    // case anymore — the framework rewrites the sidecar from the main
+    // file's current state and the next validate returns Clean.  To
+    // actually trip the cap we need the main file to be missing or
+    // corrupt after the callback runs.
+    let dir = scratch("callback_leaves_main_unrecoverable");
     let main = dir.join("data.store");
 
-    // First populate the store with a clean sidecar.
-    let counter = Arc::new(AtomicUsize::new(0));
+    // Step 1: initial open creates a valid store.
     {
+        let setup_counter = Arc::new(AtomicUsize::new(0));
         let _store = Store::open_durable(
             &main,
             DurabilityMode::IntegrityOnly {
-                on_corruption: init_callback(counter.clone()),
+                on_corruption: init_callback(setup_counter),
             },
         )
         .expect("initial open");
     }
 
-    // Now corrupt the sidecar AND register a callback that doesn't fix it.
+    // Step 2: corrupt the sidecar.
     let meta = dmeta_path(&main);
     let mut bytes = fs::read(&meta).expect("read sidecar");
     bytes[32] ^= 0xFF; // corrupt payload_crc
     fs::write(&meta, bytes).expect("write corrupted sidecar");
 
-    let noop_counter = Arc::new(AtomicUsize::new(0));
-    let cb_counter = noop_counter.clone();
+    // Step 3: open with a callback that DELETES the main file rather
+    // than rebuilding it.  The post-callback `has_main` check skips
+    // sidecar rewrite; recurse; validate still Corrupt; recursion cap.
+    let cb_count = Arc::new(AtomicUsize::new(0));
+    let cb_count_clone = cb_count.clone();
+    let main_clone = main.clone();
     let err = Store::open_durable(
         &main,
         DurabilityMode::IntegrityOnly {
             on_corruption: Box::new(move |_path: &Path| {
-                cb_counter.fetch_add(1, Ordering::SeqCst);
-                Ok(()) // Pretend success, but don't actually fix anything.
+                cb_count_clone.fetch_add(1, Ordering::SeqCst);
+                let _ = fs::remove_file(&main_clone);
+                Ok(())
             }),
         },
     )
-    .expect_err("callback that doesn't fix the issue must NOT loop");
+    .expect_err("destructive callback must NOT cause an infinite loop");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert_eq!(
-        noop_counter.load(Ordering::SeqCst),
+        cb_count.load(Ordering::SeqCst),
         1,
-        "callback must be called exactly once before the recursion cap kicks in"
+        "callback must run exactly once before the recursion cap kicks in"
     );
 }
 

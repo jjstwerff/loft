@@ -14,7 +14,8 @@
     clippy::collapsible_if,
     clippy::not_unsafe_ptr_arg_deref,
     clippy::len_without_is_empty,
-    clippy::return_self_not_must_use
+    clippy::return_self_not_must_use,
+    clippy::unnecessary_debug_formatting
 )]
 
 //! Word-addressed heap store with bump allocation and free-block reuse.
@@ -312,13 +313,21 @@ impl Store {
     #[cfg(feature = "mmap")]
     pub fn open(path: &str) -> Store {
         let mut file = MmapStorage::open(path).expect("Opening file");
-        let size = (file.capacity() / 8) as u32;
-        let init = if size < 1024 {
+        let init = if (file.capacity() / 8) < 1024 {
             file.resize(8192).unwrap();
             true
         } else {
             false
         };
+        // @PLAN38 phase 01 — `size` MUST be read AFTER the resize.  The
+        // previous code captured it from pre-resize capacity, so for a
+        // freshly-created file (`MmapStorage::open` initialises at 1 byte
+        // → resized to 8192) the Store struct received `size = 0` while
+        // the buffer was 8192 bytes.  `init()` then wrote the record-1
+        // header using the bad size → on re-open, `fl_rebuild()` walked
+        // garbage block headers and hit `block_size = 0` → infinite loop
+        // in release builds.
+        let size = (file.capacity() / 8) as u32;
         let ptr = std::ptr::addr_of!(file.as_slice()[0]).cast_mut();
         let mut store = Store {
             file: Some(file),
@@ -2072,6 +2081,33 @@ fn write_sidecar_atomic(
     Ok(())
 }
 
+/// Trace helper for @PLAN38 debugging.  Writes a line to
+/// `/tmp/loft-store-durable.trace` with explicit flush — bypasses Rust
+/// stderr's pipe-full-buffering behaviour that swallowed eprintln output
+/// during the phase-01 verification session.  Gated on env var
+/// `LOFT_STORE_DURABLE_TRACE=1`; zero cost when unset (no file open).
+#[allow(dead_code)]
+fn dur_trace(line: &str) {
+    if std::env::var("LOFT_STORE_DURABLE_TRACE").is_err() {
+        return;
+    }
+    // Honour LOFT_STORE_DURABLE_TRACE_FILE if set (helps when /tmp is
+    // sandbox-restricted); otherwise use TMPDIR or /tmp.
+    let path = std::env::var("LOFT_STORE_DURABLE_TRACE_FILE").unwrap_or_else(|_| {
+        let base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{base}/loft-store-durable.trace")
+    });
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{line}");
+        let _ = f.flush();
+    }
+}
+
 /// Path of the metadata sidecar for a given main store path.
 /// `tags.store` → `tags.store.dmeta`.
 #[allow(dead_code)]
@@ -2133,62 +2169,59 @@ impl Store {
     ///
     /// Checks short-circuit on the first failure.
     pub fn validate_integrity(path: &std::path::Path) -> std::io::Result<StoreIntegrity> {
-        let trace = std::env::var("LOFT_STORE_DURABLE_TRACE").is_ok();
         let meta = dmeta_path(path);
-        if trace {
-            eprintln!("[durable.validate] sidecar={meta:?}");
-        }
+        dur_trace(&format!("[validate] entry path={path:?} sidecar={meta:?}"));
         let raw = match read_sidecar(&meta)? {
             None => {
-                if trace { eprintln!("[durable.validate] sidecar missing → TailMarkerMissing"); }
+                dur_trace("[validate] sidecar missing → TailMarkerMissing");
                 return Ok(StoreIntegrity::Corrupt(CorruptReason::TailMarkerMissing));
             }
             Some(bytes) => bytes,
         };
-        if trace { eprintln!("[durable.validate] sidecar read {} bytes", raw.len()); }
+        dur_trace(&format!("[validate] sidecar read {} bytes", raw.len()));
         let hdr = match parse_sidecar(&raw) {
             Ok(h) => h,
             Err(reason) => {
-                if trace { eprintln!("[durable.validate] parse_sidecar → {reason:?}"); }
+                dur_trace(&format!("[validate] parse_sidecar → {reason:?}"));
                 return Ok(StoreIntegrity::Corrupt(reason));
             }
         };
-        if trace {
-            eprintln!(
-                "[durable.validate] parsed: tier={} flags={} last_clean_ns={} payload_len={} payload_crc={:#x}",
-                hdr.tier_id, hdr.flags, hdr.last_clean_ns, hdr.payload_len, hdr.payload_crc
-            );
-        }
+        dur_trace(&format!(
+            "[validate] parsed: tier={} flags={} last_clean_ns={} payload_len={} payload_crc={:#x}",
+            hdr.tier_id, hdr.flags, hdr.last_clean_ns, hdr.payload_len, hdr.payload_crc
+        ));
         let main_meta = match std::fs::metadata(path) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                if trace { eprintln!("[durable.validate] main file missing → TruncatedFile"); }
+                dur_trace("[validate] main file missing → TruncatedFile");
                 return Ok(StoreIntegrity::Corrupt(CorruptReason::TruncatedFile));
             }
             Err(e) => return Err(e),
         };
-        if trace {
-            eprintln!(
-                "[durable.validate] main file len={} (sidecar says {})",
-                main_meta.len(), hdr.payload_len
-            );
-        }
+        dur_trace(&format!(
+            "[validate] main file len={} (sidecar says {})",
+            main_meta.len(),
+            hdr.payload_len
+        ));
         if main_meta.len() != hdr.payload_len {
-            if trace { eprintln!("[durable.validate] length mismatch → TruncatedFile"); }
+            dur_trace("[validate] length mismatch → TruncatedFile");
             return Ok(StoreIntegrity::Corrupt(CorruptReason::TruncatedFile));
         }
-        if trace { eprintln!("[durable.validate] computing payload CRC over {} bytes …", hdr.payload_len); }
+        dur_trace(&format!(
+            "[validate] computing payload CRC over {} bytes …",
+            hdr.payload_len
+        ));
         let crc = compute_payload_crc(path, hdr.payload_len)?;
-        if trace { eprintln!("[durable.validate] computed CRC = {crc:#x}"); }
+        dur_trace(&format!("[validate] computed CRC = {crc:#x}"));
         if crc != hdr.payload_crc {
-            if trace { eprintln!("[durable.validate] CRC mismatch → TailCrcMismatch"); }
+            dur_trace("[validate] CRC mismatch → TailCrcMismatch");
             return Ok(StoreIntegrity::Corrupt(CorruptReason::TailCrcMismatch));
         }
         if hdr.tier_id == TIER_NONE {
-            if trace { eprintln!("[durable.validate] tier_id=0 → SignatureMismatch"); }
+            dur_trace("[validate] tier_id=0 → SignatureMismatch");
             return Ok(StoreIntegrity::Corrupt(CorruptReason::SignatureMismatch));
         }
-        if trace { eprintln!("[durable.validate] Clean"); }
+        dur_trace("[validate] Clean");
         Ok(StoreIntegrity::Clean)
     }
 
@@ -2223,14 +2256,13 @@ impl Store {
         mode: DurabilityMode,
         depth: u32,
     ) -> std::io::Result<Store> {
-        let trace = std::env::var("LOFT_STORE_DURABLE_TRACE").is_ok();
-        if trace {
-            eprintln!("[durable] open_durable_inner(depth={depth}) path={path:?}");
-        }
+        dur_trace(&format!(
+            "[open_durable_inner] entry depth={depth} path={path:?}"
+        ));
         let verdict = Self::validate_integrity(path)?;
-        if trace {
-            eprintln!("[durable]   validate_integrity → {verdict:?}");
-        }
+        dur_trace(&format!(
+            "[open_durable_inner] validate_integrity → {verdict:?}"
+        ));
         match verdict {
             StoreIntegrity::Clean => {
                 let path_str = path.to_str().ok_or_else(|| {
@@ -2239,56 +2271,61 @@ impl Store {
                         "store path is not valid UTF-8",
                     )
                 })?;
-                if trace {
-                    eprintln!("[durable]   calling Store::open({path_str:?})");
-                }
+                dur_trace(&format!(
+                    "[open_durable_inner] calling Store::open({path_str:?})"
+                ));
                 let mut store = Store::open(path_str);
-                if trace {
-                    eprintln!("[durable]   Store::open returned");
-                }
+                dur_trace("[open_durable_inner] Store::open returned");
                 store.durable_meta_path = Some(path.to_path_buf());
                 store.durable_tier = TIER_INTEGRITY_ONLY;
                 Ok(store)
             }
             StoreIntegrity::Corrupt(_reason) => {
                 if depth >= 1 {
+                    dur_trace(
+                        "[open_durable_inner] recursion cap hit; returning InvalidData",
+                    );
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "store_durable: rebuild callback ran but store still fails integrity",
                     ));
                 }
                 let DurabilityMode::IntegrityOnly { ref on_corruption } = mode;
-                if trace {
-                    eprintln!("[durable]   firing on_corruption callback");
-                }
+                dur_trace("[open_durable_inner] firing on_corruption callback");
                 on_corruption(path)?;
-                if trace {
-                    eprintln!("[durable]   on_corruption returned ok");
-                }
-                // After rebuild, the file must be re-written through
-                // open_durable so the sidecar is freshly generated.  If
-                // the callback created the main file but no sidecar yet,
-                // write one now from a freshly-flushed view.
-                let meta = dmeta_path(path);
-                let has_meta = meta.exists();
+                dur_trace("[open_durable_inner] on_corruption returned ok");
                 let has_main = path.exists();
-                if trace {
-                    eprintln!(
-                        "[durable]   post-callback: dmeta_exists={has_meta} main_exists={has_main}"
-                    );
-                }
-                if !has_meta && has_main {
-                    if trace {
-                        eprintln!("[durable]   write_initial_sidecar({path:?})");
+                dur_trace(&format!(
+                    "[open_durable_inner] post-callback: main_exists={has_main}"
+                ));
+                if has_main {
+                    // After the callback returns Ok, treat the main file as
+                    // the new authoritative state and rewrite the sidecar to
+                    // match.  Without this, a corruption that affected ONLY
+                    // the sidecar (signature flip, payload_crc tear) would
+                    // never reach a Clean state: the callback can't repair a
+                    // sidecar from the main file's POV, and the stale
+                    // sidecar would survive into the depth-1 recursion and
+                    // trigger the recursion cap.  Rewriting unconditionally
+                    // covers both "main file rebuilt" and "main file fine,
+                    // sidecar damaged" cases with one code path.
+                    let meta = dmeta_path(path);
+                    if meta.exists() {
+                        dur_trace(&format!(
+                            "[open_durable_inner] removing stale sidecar {meta:?}"
+                        ));
+                        std::fs::remove_file(&meta)?;
                     }
+                    dur_trace(&format!(
+                        "[open_durable_inner] write_initial_sidecar({path:?})"
+                    ));
                     Self::write_initial_sidecar(path)?;
-                    if trace {
-                        eprintln!("[durable]   write_initial_sidecar returned");
-                    }
+                    dur_trace("[open_durable_inner] write_initial_sidecar returned");
                 }
-                if trace {
-                    eprintln!("[durable]   recursing to depth={}", depth + 1);
-                }
+                dur_trace(&format!(
+                    "[open_durable_inner] recursing to depth={}",
+                    depth + 1
+                ));
                 Self::open_durable_inner(path, mode, depth + 1)
             }
         }
@@ -2299,28 +2336,24 @@ impl Store {
     /// Captures the current main-file length and CRC at the moment of call.
     #[cfg(feature = "mmap")]
     fn write_initial_sidecar(path: &std::path::Path) -> std::io::Result<()> {
-        let trace = std::env::var("LOFT_STORE_DURABLE_TRACE").is_ok();
+        dur_trace(&format!("[init_sidecar] entry path={path:?}"));
         let main_meta = std::fs::metadata(path)?;
         let payload_len = main_meta.len();
-        if trace {
-            eprintln!("[durable.init_sidecar] main file len={payload_len}");
-        }
+        dur_trace(&format!("[init_sidecar] main file len={payload_len}"));
         let payload_crc = compute_payload_crc(path, payload_len)?;
-        if trace {
-            eprintln!("[durable.init_sidecar] payload CRC = {payload_crc:#x}");
-        }
+        dur_trace(&format!("[init_sidecar] payload CRC = {payload_crc:#x}"));
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
         let bytes = encode_sidecar(TIER_INTEGRITY_ONLY, now_ns, payload_len, payload_crc);
-        if trace {
-            eprintln!("[durable.init_sidecar] writing {} bytes to {:?}", bytes.len(), dmeta_path(path));
-        }
+        dur_trace(&format!(
+            "[init_sidecar] writing {} bytes to {:?}",
+            bytes.len(),
+            dmeta_path(path)
+        ));
         write_sidecar_atomic(&dmeta_path(path), &bytes)?;
-        if trace {
-            eprintln!("[durable.init_sidecar] done");
-        }
+        dur_trace("[init_sidecar] done");
         Ok(())
     }
 
