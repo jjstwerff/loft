@@ -417,6 +417,49 @@ Mutating filesystem operations return a `FileResult` enum:
 | `mkdir_all(path: text) -> FileResult` | Creates a directory and all missing parents. |
 | `set_file_size(self: File, size: long) -> FileResult` | Truncates or extends a file to exactly `size` bytes. |
 
+### Durable stores (`@PLAN38`)
+
+A "durable store" is a regular on-disk file plus a 40-byte `.dmeta`
+sidecar holding signature + tier + CRC32 over the main file + a
+clean-close timestamp.  After a successful write session, call
+`store_durable_seal(path)` to record the current state; on next
+startup, call `store_durable_check(path)` to verify integrity.  A
+failing check means the file is missing, corrupt, or the sidecar is
+stale — the caller is expected to rebuild from authoritative sources.
+
+| Function | Description |
+|----------|-------------|
+| `store_durable_check(path: text) -> boolean` | Returns `true` iff the `.dmeta` sidecar at `<path>.dmeta` validates against the main file at `path` (signature, header CRC, payload length, payload CRC, tier_id all OK).  Returns `false` on any failure or missing file.  Phase-01b Tier-1 only (no msync discipline). |
+| `store_durable_seal(path: text) -> boolean` | Writes a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp.  Returns `false` on any I/O error.  Pair with `store_durable_check` to bracket each write session. |
+
+Usage pattern:
+
+```loft
+fn main() {
+  path = "data.bin";
+  if !store_durable_check(path) {
+    rebuild_from_source(path);  // consumer-defined
+  }
+  // ... use the database that lives in `path` ...
+
+  // graceful shutdown
+  flush_database();
+  store_durable_seal(path);
+}
+```
+
+If the program crashes between the last write and the seal, the
+sidecar stays stale relative to the file → next start's
+`store_durable_check` returns `false` → caller rebuilds.  This is
+**by design** — Tier 1 trades durability for cheap writes (no
+`msync` on the hot path) and recovers via rebuild from a
+re-derivable source.  **Do not use** for data that cannot be
+re-derived; Tiers 2 (snapshots) and 3 (WAL) are planned for that
+case but not yet shipped.
+
+Full design + format spec:
+[`doc/claude/plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/README.md).
+
 ### Images
 
 | Function | Description |

@@ -2332,6 +2332,42 @@ impl Store {
 
     /// Write a fresh sidecar for a main file that exists but has no
     /// sidecar yet (e.g. the rebuild callback just initialised the file).
+    /// **Phase 01b.**  Verdict-bool form of [`Store::validate_integrity`]
+    /// for the loft-callable binding.  Returns `true` iff the sidecar
+    /// validates cleanly against the main file at `path` (signature,
+    /// header CRC, payload length, payload CRC, tier_id all OK).
+    ///
+    /// Any I/O error or `Corrupt(_)` verdict collapses to `false` —
+    /// the loft caller can't act on the distinct `CorruptReason`
+    /// variants distinctly (every non-Clean case routes to the same
+    /// "rebuild from source" response on their side), so the binding
+    /// surfaces a flat bool.
+    #[cfg(feature = "mmap")]
+    #[must_use]
+    pub fn durable_check(path: &std::path::Path) -> bool {
+        matches!(Self::validate_integrity(path), Ok(StoreIntegrity::Clean))
+    }
+
+    /// **Phase 01b.**  Write a fresh `.dmeta` sidecar capturing the
+    /// current main-file's byte length + CRC32 + a clean-close
+    /// timestamp.  Returns `true` on success, `false` on any I/O
+    /// error (out-of-space, permission denied, parent dir missing,
+    /// main file absent).
+    ///
+    /// This is the loft equivalent of the Rust API's Drop-driven
+    /// sidecar write.  The loft caller invokes it explicitly after
+    /// finishing a write session; if the program crashes between
+    /// the last write and the seal, the sidecar stays stale and the
+    /// next `durable_check` returns `false` → rebuild fires.
+    ///
+    /// Implementation note: this is `write_initial_sidecar` lifted
+    /// into a pub function with the result mapped to bool.
+    #[cfg(feature = "mmap")]
+    #[must_use]
+    pub fn durable_seal(path: &std::path::Path) -> bool {
+        Self::write_initial_sidecar(path).is_ok()
+    }
+
     /// Captures the current main-file length and CRC at the moment of call.
     #[cfg(feature = "mmap")]
     fn write_initial_sidecar(path: &std::path::Path) -> std::io::Result<()> {

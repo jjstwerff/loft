@@ -131,6 +131,10 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_arguments", n_arguments),
     ("n_ymd_days_ago", n_ymd_days_ago),
     ("n_mtime", n_mtime),
+    #[cfg(feature = "mmap")]
+    ("n_store_durable_check", n_store_durable_check),
+    #[cfg(feature = "mmap")]
+    ("n_store_durable_seal", n_store_durable_seal),
     ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
@@ -786,6 +790,24 @@ fn n_store_memory(stores: &mut Stores, stack: &mut DbRef) {
 fn n_mtime(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let result = Stores::os_mtime_native(v_path.str());
+    stores.put(stack, result);
+}
+
+/// @PLAN38 phase 01b — interpreter handler for `store_durable_check`.
+/// Mirrors the `#rust` template in `default/02_images.loft`.
+#[cfg(feature = "mmap")]
+fn n_store_durable_check(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let result = crate::store::Store::durable_check(std::path::Path::new(v_path.str()));
+    stores.put(stack, result);
+}
+
+/// @PLAN38 phase 01b — interpreter handler for `store_durable_seal`.
+/// Mirrors the `#rust` template in `default/02_images.loft`.
+#[cfg(feature = "mmap")]
+fn n_store_durable_seal(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let result = crate::store::Store::durable_seal(std::path::Path::new(v_path.str()));
     stores.put(stack, result);
 }
 
