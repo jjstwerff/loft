@@ -89,6 +89,16 @@ gate `node tools/check_html_bundle.mjs <bundle.html>` (run by `make game`
 step 6) catches both this stomp and a missing-`wasm-opt` (no-asyncify) bundle
 before either ships.
 
+**@P350 — `loft --html` self-guards the stomp inline.**  As of 2026-05-26 a
+bare `loft --html` no longer needs the external gate to catch the stomp: it
+parses the emitted wasm's import section
+(`native_utils::html_wasm_import_modules_ok`) and **hard-aborts** (exit 1, no
+HTML written) if any import module is not `loft_gl`/`loft_io`, printing the
+rebuild command above.  So a stomped rlib produces a clear error, never a
+silently-broken bundle.  The companion `wasm-opt`/asyncify check stays a *loud
+warning* (not an abort): whether a bundle needs asyncify depends on whether the
+program frame-yields, so a compute-only `--html` program is valid without it.
+
 ---
 
 ## JSON Virtual Filesystem

@@ -80,8 +80,8 @@ mod wasm;
 
 use crate::diagnostics::Level;
 use crate::native_utils::{
-    build_script_native_lib_dirs, default_artifact_path, is_output_path, loft_lib_dir,
-    loft_lib_dir_for, project_dir,
+    build_script_native_lib_dirs, default_artifact_path, html_wasm_import_modules_ok,
+    is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
 };
 use crate::state::State;
 use crate::test_runner::run_tests;
@@ -2402,6 +2402,34 @@ fn main() {
         // Assemble HTML
         let wasm_bytes = std::fs::read(&final_wasm).unwrap_or_default();
         let _ = std::fs::remove_file(&final_wasm);
+        // @P350: self-validate the emitted wasm BEFORE writing the HTML so a
+        // bare `loft --html` never ships the silently-broken "rlib stomp"
+        // bundle.  `make wasm` (wasm-pack, feature=wasm) and `--html` write
+        // the SAME target/wasm32-unknown-unknown/release/libloft.rlib with
+        // incompatible feature sets; if --html links the wasm-bindgen variant
+        // the wasm imports `__wbindgen_placeholder__` (35+), which the
+        // embedded loft-gl-wasm.js glue (raw loft_gl/loft_io externs only)
+        // can't provide → the page fails to instantiate.  A correct --html
+        // bundle imports ONLY `loft_gl` + `loft_io`.  Same check as
+        // tools/check_html_bundle.mjs, but inline so it guards the bare
+        // command, not just `make game`.  (The asyncify/wasm-opt footgun is
+        // handled by the loud warning above — it's conditional on whether the
+        // program frame-yields, so it must not hard-abort compute-only bundles.)
+        if let Err(bad_mods) = html_wasm_import_modules_ok(&wasm_bytes) {
+            eprintln!(
+                "loft: --html produced a BROKEN bundle — the wasm imports \
+                 unexpected module(s) {bad_mods:?}.\n  \
+                 The wasm32-unknown-unknown libloft.rlib was built with the \
+                 `wasm` (wasm-bindgen) feature — most likely a prior `make \
+                 wasm` stomped it (see WASM.md § The rlib-stomp hazard).\n  \
+                 Rebuild the rlib in the --html shape, then re-run --html:\n    \
+                 cargo build --release --target wasm32-unknown-unknown --lib \
+                 --no-default-features --features random\n  \
+                 (No HTML was written — a stomped bundle does not instantiate \
+                 in the browser.)"
+            );
+            std::process::exit(1);
+        }
         let wasm_b64 = crate::base64::encode(&wasm_bytes);
         let title = std::path::Path::new(&file_name)
             .file_stem()
