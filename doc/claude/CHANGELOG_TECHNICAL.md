@@ -113,6 +113,38 @@ per-loop-scoping rejected as a core-model change for a Low bug), @P331 (cdylib
 i64→i32 truncation site found; fix is an M-effort ABI-width alignment touching
 the 53-cdylib gate — not blind-patched).
 
+### @P349 — browser WASM playground: refresh bundle + JSON + file I/O (2026-05-26)
+
+Refreshing the `doc/pkg` browser bundle (stale since 2026-05-18) against the
+`../personal/training` port's `.field()` routine syntax surfaced a chain of
+three gaps that left the gallery/playground unable to run file-reading or JSON
+programs.  All fixed:
+
+1. **Stale bundle.** `make wasm` rebuilt `doc/pkg/{loft.js,loft_bg.wasm}` from
+   current source (`loft_bg.wasm` 2211894→2260122→2262xxx bytes across the
+   three rebuilds).  The in-browser parser now accepts the JsonValue method
+   syntax it rejected before (`Expect token ;`).
+2. **`06_json.loft` not bundled.** `DEFAULT_FILES` (`src/wasm.rs`) embedded
+   `01_code`..`05_coroutine` but not `06_json.loft`, so `json_parse` was an
+   `Unknown function` in-browser (native JSON fns were already compiled in —
+   no wasm cfg-gate).  Added the embed.
+3. **Runtime `file()` ignored VIRT_FS.** `State::get_file_text`'s
+   `#[cfg(feature="wasm")]` branch (`src/state/io.rs`) read only via the JS
+   `host_fs_read_text` bridge (absent in the playground) → `file().content()`
+   returned `""`, so `json_parse(file(...).content())` → `JNull` → `NaN`.  Now
+   consults `wasm::virt_fs_get` first (where `compile_and_run` puts passed
+   files), falling back to the host bridge — live-FS hosts unaffected.
+
+Verified under Node (`initSync`+`compile_and_run`): `file().content()` →
+`HELLO123`; `json_parse(file).field("activities").item(0).field("duration_s").as_number()`
+→ `3600`, matching native.  Remaining minor caveat (in the @P349 PROBLEMS.md
+row): `run_pipeline` picks `main` as the alphabetically-first user file
+(`.min()`), so a data file sorting before the program is mis-compiled as main.
+
+`doc/brick-buster.html` is a self-contained `--html` bundle (base64-embedded
+wasm) — independent of `doc/pkg`; its embedded wasm runs `loft_start: OK` under
+`tools/wasm_repro.mjs` (no @P337 trap in the working-tree rebuild).
+
 ### Native codegen — eliminated the `output_call_inner` match (2026-05-22)
 
 `src/generation/dispatch.rs::output_call_inner` no longer contains a monolithic
