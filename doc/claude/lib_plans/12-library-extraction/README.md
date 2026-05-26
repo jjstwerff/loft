@@ -91,13 +91,29 @@ Ordered by readiness.  Each is independently verifiable.
    `#native` annotations.  Re-clean = **re-sync the now-clean monorepo
    `lib/<name>/` into each external repo** (clean `.loft` + source-scan
    `build.rs` + drop manifest) and bump their `loft-ffi-build` dep to
-   `0.2`.  **Blocked on a prerequisite publish:** the source-scan
-   `generate_register_from_loft` only exists in `loft-ffi-build ≥ 0.2`,
-   which must be on crates.io first (`cargo publish`, needs the crates.io
-   token — a permanent/irreversible release, so a deliberate maintainer
-   step).  `loft-ffi-build 0.2.0` is version-bumped + `cargo publish
-   --dry-run` green in the monorepo, ready to publish.  *Verify:* each
-   external repo's CI green after the re-sync push.
+   `0.2`.  Two prerequisites: (a) `loft-ffi-build 0.2.0` on crates.io —
+   **published** (the source-scan `generate_register_from_loft` ships in
+   0.2); (b) **the bare-`#native` parser support must reach `main`** —
+   the external CI clones `jjstwerff/loft` *main* to build loft, and bare
+   `#native` only parses on the `libraries` branch (commits `909bc9f9` +
+   `c1ec5a03`), so the interpreter step errors `Expect native symbol
+   string` until `libraries → main` merges.  **Status:** both external
+   PRs open + locally verified (`loft-libs-net#1`, `loft-libs-core#1`) —
+   cdylibs build against published 0.2, symbol sets byte-identical to the
+   old registers, and `scripts/verify_external_libs.sh` (below) greens
+   all interpreter tests with a `libraries`-built loft.  Gated on the
+   `libraries → main` merge, after which re-running each PR's CI greens
+   the interpreter step.  *(The native step is a separate Phase-6.5 gap,
+   not fixed by this merge — see below.)*
+
+   **Pre-PR validation — `scripts/verify_external_libs.sh`:** mirrors each
+   chunk's `library-ci.yml` (`loft --interpret test` + `loft --native
+   test` per package) but builds loft from the **current working tree**
+   instead of cloning `main`.  So a loft change the external repos depend
+   on (a parser feature, a codegen fix) can be confirmed green *before*
+   opening the unblocking `libraries → main` PR.  `--src net=/path`
+   validates a local clone (a PR branch) instead of the published repo;
+   `--interpret` / `--native` select one step.
 2. **Phase 6.5 — green the chunk-repo CI** (`loft-libs-core/graphics/net`
    + registry `pr-validate.yml`): canonical `library-ci.yml` does
    `apt-get install mold` → clone+build loft from source → `loft test`
