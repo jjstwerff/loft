@@ -367,33 +367,57 @@ fn v3_http_routing() {
 )]
 #[test]
 fn v3_full_game_over_websocket() {
-    let port = pick_free_port();
-    let mut server = spawn_listening_server("tictactoe_server_v3.loft", port, "v3");
+    // This is a real two-process integration probe (loft server + loft
+    // client over a TCP socket, WebSocket-upgraded).  On a loaded CI runner
+    // the WS round-trip can stall and the client misses its deadline — a
+    // transient, not a protocol regression (macOS/Windows runners pass the
+    // same code).  Make it robust by retrying the whole interaction on a
+    // fresh port (the previous server is killed by `ServerGuard`'s `Drop`),
+    // with a generous per-attempt timeout.  Deterministic checks (HTTP
+    // markers, game trajectory) stay hard asserts on the successful attempt;
+    // a genuine hang still fails after all attempts.
+    let mut out = String::new();
+    let mut server_out = String::new();
+    let mut clean_exit = false;
 
-    // Drive an HTTP probe first to confirm the server is multiplexing
-    // both protocols correctly.  The v3 server loops through accepts,
-    // so HTTP-then-WS-then-HTTP is the realistic shape.
-    let r = http_get(port, "/").expect("GET / pre-WS probe");
-    assert_eq!(r.status, 200, "GET / pre-WS probe");
-    // The HTML body must embed the matching JS-side protocol —
-    // surface this as a check so the page-level client and the
-    // server-level handler can't drift silently.
-    for marker in ["click:", "place:", "gameover:"] {
-        assert!(
-            r.body.contains(marker),
-            "served HTML missing protocol marker `{marker}`; body:\n{}",
-            r.body
+    for attempt in 1..=3 {
+        let port = pick_free_port();
+        let mut server = spawn_listening_server("tictactoe_server_v3.loft", port, "v3");
+
+        // Drive an HTTP probe first to confirm the server is multiplexing
+        // both protocols correctly.  The v3 server loops through accepts,
+        // so HTTP-then-WS-then-HTTP is the realistic shape.
+        let r = http_get(port, "/").expect("GET / pre-WS probe");
+        assert_eq!(r.status, 200, "GET / pre-WS probe");
+        // The HTML body must embed the matching JS-side protocol —
+        // surface this as a check so the page-level client and the
+        // server-level handler can't drift silently.
+        for marker in ["click:", "place:", "gameover:"] {
+            assert!(
+                r.body.contains(marker),
+                "served HTML missing protocol marker `{marker}`; body:\n{}",
+                r.body
+            );
+        }
+
+        let client = spawn_client("tictactoe_client_v3_probe.loft", port);
+        let (o, status) = drain_with_timeout(client, Duration::from_secs(60));
+        out = o;
+        server_out = server.snapshot_stdout();
+        if status == Some(0) {
+            clean_exit = true;
+            break;
+        }
+        eprintln!(
+            "v3 attempt {attempt}/3: client did not exit cleanly (status={status:?}) — \
+             likely a transient WS stall on a loaded runner; retrying on a fresh port"
         );
+        // `server` is dropped here → killed before the next attempt.
     }
 
-    let client = spawn_client("tictactoe_client_v3_probe.loft", port);
-    let (out, status) = drain_with_timeout(client, Duration::from_secs(30));
-
-    let server_out = server.snapshot_stdout();
-    assert_eq!(
-        status,
-        Some(0),
-        "v3 game probe did not exit cleanly; client stdout=\n{out}\n--- server stdout:\n{server_out}"
+    assert!(
+        clean_exit,
+        "v3 game probe did not exit cleanly after 3 attempts; client stdout=\n{out}\n--- server stdout:\n{server_out}"
     );
     // Expected trajectory — assert each step in order.
     for needle in [

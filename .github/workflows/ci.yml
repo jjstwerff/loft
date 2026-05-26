@@ -176,8 +176,11 @@ jobs:
       # `.cargo/config.toml` activates mold for native x86_64 builds
       # (the wasm target is unaffected, but the gallery job also
       # builds loft-native for the Brick Buster HTML pipeline).
-      - name: Install mold
-        run: sudo apt-get update && sudo apt-get install -y mold
+      # binaryen provides `wasm-opt`, which `make game` / `loft --html`
+      # require to inject asyncify (frame-yield) — without it the bundle's
+      # self-validation gate (@P350) fails "no asyncify exports".
+      - name: Install mold + binaryen (wasm-opt)
+        run: sudo apt-get update && sudo apt-get install -y mold binaryen
 
       - name: Install wasm-pack
         run: |
