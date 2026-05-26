@@ -2343,8 +2343,7 @@ impl Store {
         dur_trace(&format!("[init_sidecar] payload CRC = {payload_crc:#x}"));
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos() as u64);
         let bytes = encode_sidecar(TIER_INTEGRITY_ONLY, now_ns, payload_len, payload_crc);
         dur_trace(&format!(
             "[init_sidecar] writing {} bytes to {:?}",
@@ -2376,8 +2375,7 @@ impl Store {
         let payload_crc = compute_payload_crc(&path, payload_len)?;
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos() as u64);
         let bytes = encode_sidecar(self.durable_tier, now_ns, payload_len, payload_crc);
         // Step 3: write sidecar atomically (tmp → rename).
         write_sidecar_atomic(&dmeta_path(&path), &bytes)?;
