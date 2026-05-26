@@ -102,11 +102,42 @@ pub unsafe extern "C" fn n_http_do(
     let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) };
     let headers_text = unsafe { loft_ffi::text_opt(headers_ptr, headers_len) }.unwrap_or("");
     let headers = parse_headers(headers_text);
-    let (status, response_body, response_headers) = do_request(None, method, url, body, &headers);
+    // Take-and-reset the one-shot session selection, then clone the agent out so
+    // we don't hold the registry borrow across the blocking request.  -1 = the
+    // stateless path (a stray stateless call never inherits a session).
+    let active = ACTIVE_AGENT.with(|c| c.replace(-1));
+    let agent = if active >= 0 {
+        AGENTS.with(|a| a.borrow().get(active as usize).and_then(|o| o.clone()))
+    } else {
+        None
+    };
+    let (status, response_body, response_headers) =
+        do_request(agent.as_ref(), method, url, body, &headers);
     // Store body + headers for n_http_body / n_http_headers_raw to return.
     LAST_BODY.with(|b| *b.borrow_mut() = response_body);
     LAST_HEADERS.with(|h| *h.borrow_mut() = response_headers);
     status
+}
+
+/// Create a cookie-jar session.  `redirects` = max redirects to follow
+/// (0 = don't follow, so the caller can read the `Location` header).  With the
+/// `cookies` feature an `AgentBuilder` carries a default jar.  Returns the handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_http_session_new(redirects: i32) -> i32 {
+    let agent = ureq::AgentBuilder::new()
+        .redirects(redirects.max(0) as u32)
+        .build();
+    AGENTS.with(|a| {
+        let mut v = a.borrow_mut();
+        v.push(Some(agent));
+        (v.len() - 1) as i32
+    })
+}
+
+/// Select the session whose agent the next `n_http_do` call routes through.
+#[unsafe(no_mangle)]
+pub extern "C" fn n_http_session_use(handle: i32) {
+    ACTIVE_AGENT.with(|c| c.set(handle));
 }
 
 /// Return the body from the last HTTP request.
@@ -132,11 +163,17 @@ pub unsafe extern "C" fn n_ascii_lower(ptr: *const u8, len: usize) -> LoftStr {
     loft_ffi::ret(s.to_ascii_lowercase())
 }
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 thread_local! {
     static LAST_BODY: RefCell<String> = const { RefCell::new(String::new()) };
     static LAST_HEADERS: RefCell<String> = const { RefCell::new(String::new()) };
+    // Session handle -> Agent; index is the handle.  Agents are Arc-backed, so a
+    // clone shares the cookie jar + connection pool.
+    static AGENTS: RefCell<Vec<Option<ureq::Agent>>> = const { RefCell::new(Vec::new()) };
+    // Agent selected for the NEXT http_do (-1 = stateless).  One-shot: http_do
+    // resets it after reading.
+    static ACTIVE_AGENT: Cell<i32> = const { Cell::new(-1) };
 }
 
 // ── WebSocket client C-ABI exports ───────────────────────────────────────

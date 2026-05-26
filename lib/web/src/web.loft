@@ -66,8 +66,10 @@ fn join_headers(headers: vector<text>) -> text {
 }
 
 // Internal: split the newline-joined header blob into one "name: value" per line.
+// `"".split('\n')` already yields [] (empty input → no segments), so no empty
+// guard is needed — and an early `return []` here would hit a codegen/interpreter
+// bug for empty-vector-literal returns (loft @P365).
 fn split_headers(raw: text) -> vector<text> {
-  if raw.len() == 0 { return []; }
   raw.split('\n')
 }
 
@@ -120,6 +122,61 @@ pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse 
 
 // DELETE with custom headers.
 pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse {
+  status = http_do("DELETE", url, "", join_headers(headers));
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
+}
+
+// --- Cookie-jar HTTP session ---
+//
+// An HTTP client that persists cookies across calls on this handle: each
+// response's Set-Cookie is stored and sent back on subsequent same-host calls,
+// so a credential POST followed by an MFA POST on the same session "just works"
+// (the native Garmin login flow).  `follow_redirects=false` lets the caller read
+// the `Location` header on a 3xx and drive the redirect itself while keeping the
+// jar; `true` follows them (carrying cookies).  The stateless `http_*` functions
+// above are unaffected.  Sessions live for the process (no explicit close) —
+// login is short-lived; see lib_plans/23-http-session-auth.
+
+pub struct HttpSession {
+  id: integer not null
+}
+
+fn http_session_new_native(redirects: integer) -> integer;
+#native "n_http_session_new"
+
+fn http_session_use_native(handle: integer);
+#native "n_http_session_use"
+
+// Open a cookie-jar session.
+pub fn http_session(follow_redirects: boolean) -> HttpSession {
+  r = if follow_redirects { 10 } else { 0 };
+  HttpSession { id: http_session_new_native(r) }
+}
+
+// GET on this session (cookies carried).
+pub fn get(self: HttpSession, url: text, headers: vector<text>) -> HttpResponse {
+  http_session_use_native(self.id);
+  status = http_do("GET", url, "", join_headers(headers));
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
+}
+
+// POST on this session (cookies carried).
+pub fn post(self: HttpSession, url: text, body: text, headers: vector<text>) -> HttpResponse {
+  http_session_use_native(self.id);
+  status = http_do("POST", url, body, join_headers(headers));
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
+}
+
+// PUT on this session (cookies carried).
+pub fn put(self: HttpSession, url: text, body: text, headers: vector<text>) -> HttpResponse {
+  http_session_use_native(self.id);
+  status = http_do("PUT", url, body, join_headers(headers));
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
+}
+
+// DELETE on this session (cookies carried).
+pub fn delete(self: HttpSession, url: text, headers: vector<text>) -> HttpResponse {
+  http_session_use_native(self.id);
   status = http_do("DELETE", url, "", join_headers(headers));
   HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }

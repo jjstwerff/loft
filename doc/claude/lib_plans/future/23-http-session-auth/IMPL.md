@@ -176,8 +176,11 @@ fn ascii_lower(s: text) -> text;
 #native     // bare → symbol defaults to n_ascii_lower
 
 // Split the newline-joined header blob into one "name: value" entry per line.
+// `"".split('\n')` already yields [] (empty input → no segments), so no guard
+// is needed.  NB: an early `return []` here miscompiles on both backends
+// (@P365 — native emits `return ()`; interpret garbage handle); the fall-through
+// split avoids it.
 fn split_headers(raw: text) -> vector<text> {
-  if raw.len() == 0 { return []; }
   raw.split('\n')
 }
 

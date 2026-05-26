@@ -8,7 +8,7 @@ license = "LGPL-3.0-or-later"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-ureq = "2"
+ureq = { version = "2", features = ["cookies"] }
 loft-ffi = { path = "../../../loft-ffi" }
 
 [build-dependencies]

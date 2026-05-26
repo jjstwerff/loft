@@ -55,3 +55,18 @@ fn test_response_headers() {
   assert(r.header("X-Test") == "hi", "case-insensitive name lookup");
   assert(r.header("absent") == "", "absent header is empty");
 }
+
+fn test_session_cookie_roundtrip() {
+  s = web::http_session(true);                            // follow redirects
+  s.get("https://httpbin.org/cookies/set?foo=bar", []);   // sets cookie, 302 -> /cookies
+  r = s.get("https://httpbin.org/cookies", []);           // jar carried
+  assert(r.status == 200, "cookies status 200, got {r.status}");
+  assert(r.body.contains("foo"), "cookie 'foo' echoed back: {r.body}");
+}
+
+fn test_session_redirect_location() {
+  s = web::http_session(false);                           // do NOT follow
+  r = s.get("https://httpbin.org/redirect-to?url=/get", []);
+  assert(r.status >= 300 && r.status < 400, "3xx, got {r.status}");
+  assert(r.header("location") != "", "Location header readable");
+}
