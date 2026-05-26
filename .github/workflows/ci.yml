@@ -72,10 +72,18 @@ jobs:
         run: cargo build --release --lib --bin loft
 
       # no-default-features check only needs to run on one OS — ubuntu
-      # covers it at a fraction of the Windows job's time.
-      - name: Build (no default features)
+      # covers it at a fraction of the Windows job's time.  Use `cargo
+      # check`, NOT `cargo build`: a `build --no-default-features` rewrites
+      # the canonical `target/debug/libloft.rlib` WITHOUT the
+      # `native-extensions` feature, dropping `loft::native_call`.  The
+      # native-library suite then spawns the debug `loft`, whose
+      # `--native` codegen links that clobbered rlib and fails
+      # `error[E0433]: cannot find native_call in loft` (Linux-only,
+      # because this step is Linux-only).  `cargo check` validates the
+      # no-default-features compile without producing the polluting rlib.
+      - name: Check (no default features)
         if: runner.os == 'Linux'
-        run: cargo build --no-default-features
+        run: cargo check --no-default-features
 
       # The `html_wasm` test suite asserts the
       # `wasm32-unknown-unknown` rlib is fresh against
