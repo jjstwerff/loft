@@ -194,25 +194,41 @@ audience can see who's where without needing to read labels.
   | **OK** (default) | 50–150 ms | < 5 % | 1.0× | 1.0× | 1.0× | 3 |
   | **Limited** | > 150 ms or > 5 % loss | (caps activate) | 0.6× | 1.5× (smaller full-rate ring) | 1.5× | 4 (deeper buffer to ride out jitter) |
 
-  Measurement is **passive** — no extra protocol round-trips:
+  **The server is the sole authority — no client-side
+  cooperation required.**  Each input frame the phone already
+  sends carries the phone's local `ticks()` timestamp (a
+  handful of bytes within the existing input-frame budget).
+  The server already records its own receive-time per frame.
+  From these two streams alone, the server passively computes:
 
-  - RTT estimated from server-emitted heartbeats and phone-side
-    echo timestamps the phone already sends with each input
-    frame (1–2 byte budget on the wire).
-  - Loss rate estimated from sequence-number gaps in the input
-    stream as the server sees them.
-  - Tier classification updates every few seconds with
-    hysteresis (must hold tier-up condition for ~5 sec before
-    upgrading; tier-down kicks in on a single bad window to
-    protect the user from a stuttering experience).
+  - **One-way uplink latency** = `(server_recv_t) - (phone_send_t)`
+    — clock-skew is removed by the standard "minimum recent
+    one-way" estimator (the smallest delta in a window is
+    treated as the offset; everything above it is RTT
+    contribution).
+  - **Loss rate** = gaps in the per-client sequence number as
+    the server sees them.
+  - **Jitter** = standard deviation of recent one-way latencies.
+
+  No ping/pong protocol.  No client-side measurement code.  No
+  extra round-trip messages.  The phone keeps doing exactly
+  what it was doing in v1; the server quietly classifies it
+  from data already flowing.
+
+  Tier classification updates every few seconds with hysteresis
+  (must hold tier-up condition for ~5 sec before upgrading;
+  tier-down kicks in on a single bad window to protect the user
+  from a stuttering experience).
 
   Effect at a real audience demo: phones with strong WiFi see
   the largest neighbourhood at the highest fidelity (good play
   is rewarded with rich situational awareness); phones with
   marginal connections still get a playable experience scaled
   to what their link can carry, instead of dropping out
-  entirely.  Players don't see their tier explicitly; it just
-  feels right.
+  entirely.  Players don't see their tier explicitly — they
+  don't know it exists; it just feels right.  Server-side log
+  shows tier transitions for diagnostics; player-side shows
+  nothing.
 
   Captured as a post-v1 sub-arc — see [§ Sub-arcs](#sub-arcs-sketch--phase-the-work-like-plan36)
   phase 7.  Static defaults from NUMBERS.md ship in v1; the
