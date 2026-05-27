@@ -1,0 +1,242 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN50 — pose-interpolation correctness test.
+//
+// Validates the v1 client-side smoothing pipeline (linear and
+// hermite cubic interp between received pose-frames) against
+// representative ground-truth trajectories.  Standalone — no
+// network, no server, runs in-process.  Outputs a comparison
+// table; the test PASSES iff all rows are within tolerance.
+//
+// The central design claim being tested: "phone-side
+// interpolation makes 7.5 Hz outer-band updates visually
+// indistinguishable from 30 Hz inner-band updates for the
+// trajectory shapes the demo actually produces."
+//
+// Run:
+//   ./target/release/loft --no-warnings --lib lib/ \
+//       tools/audience-demo-50/interp_test.loft
+
+const TRAJ_LINE:   integer = 0;
+const TRAJ_CIRCLE: integer = 1;
+const TRAJ_BOUNCE: integer = 2;
+
+const METHOD_LINEAR:  integer = 0;
+const METHOD_HERMITE: integer = 1;
+
+const DURATION:   float = 3.0;     // sec of trajectory to test
+const DENSE_HZ:   float = 60.0;    // reconstruct at 60 fps (typical render rate)
+const PASS_THRESHOLD_M: float = 0.10;  // max position error to PASS (≈ 10 cm)
+
+struct Pose {
+  t:  float not null,
+  x:  float not null, y:  float not null, z:  float not null,
+  vx: float not null, vy: float not null, vz: float not null,
+}
+
+struct ErrorReport {
+  max_m:  float not null,
+  mean_m: float not null,
+  count:  integer not null,
+}
+
+// ── Trajectory generators (ground truth, analytical) ─────────────────────
+
+fn gen_line(t: float) -> Pose {
+  // 20 m/s along +x, straight.
+  Pose { t: t, x: 20.0 * t, y: 0.0, z: 0.0,
+         vx: 20.0, vy: 0.0, vz: 0.0 }
+}
+
+fn gen_circle(t: float) -> Pose {
+  // Radius 30 m, angular velocity 1 rad/s, centred at origin in z=0.
+  // Position: (30 cos t, 30 sin t).  Velocity: (-30 sin t, 30 cos t).
+  c = cos(t);
+  s = sin(t);
+  Pose { t: t, x: 30.0 * c, y: 30.0 * s, z: 0.0,
+         vx: -30.0 * s, vy: 30.0 * c, vz: 0.0 }
+}
+
+fn gen_bounce(t: float) -> Pose {
+  // Straight +x at 20 m/s until t=1.5, then reflect vx → -20 m/s.
+  // This is the "sudden swing" case — abrupt direction change a
+  // received-frame schedule will typically MISS (the bounce instant
+  // falls between samples at any of the design's rate-LOD bands).
+  if t < 1.5 {
+    Pose { t: t, x: 20.0 * t, y: 0.0, z: 0.0,
+           vx: 20.0, vy: 0.0, vz: 0.0 }
+  } else {
+    dt = t - 1.5;
+    Pose { t: t, x: 30.0 - 20.0 * dt, y: 0.0, z: 0.0,
+           vx: -20.0, vy: 0.0, vz: 0.0 }
+  }
+}
+
+fn ground_truth(traj: integer, t: float) -> Pose {
+  if traj == TRAJ_LINE   { return gen_line(t); }
+  if traj == TRAJ_CIRCLE { return gen_circle(t); }
+  gen_bounce(t)
+}
+
+// ── Sparse sampling at a fixed Hz ─────────────────────────────────────────
+
+fn sample_traj(traj: integer, hz: float, duration: float) -> vector<Pose> {
+  out: vector<Pose> = [];
+  step = 1.0 / hz;
+  t = 0.0;
+  while t <= duration + 0.0001 {
+    out += [ground_truth(traj, t)];
+    t = t + step;
+  }
+  out
+}
+
+// ── Interpolation ─────────────────────────────────────────────────────────
+
+fn interp_linear(a: Pose, b: Pose, t: float) -> Pose {
+  if t <= a.t { return a; }
+  if t >= b.t { return b; }
+  u = (t - a.t) / (b.t - a.t);
+  Pose {
+    t: t,
+    x: a.x + u * (b.x - a.x),
+    y: a.y + u * (b.y - a.y),
+    z: a.z + u * (b.z - a.z),
+    vx: 0.0, vy: 0.0, vz: 0.0,
+  }
+}
+
+// Cubic Hermite — uses the velocity field in each endpoint pose, so a
+// "sudden swing" at the bounce can be approximated by the cubic
+// even when the bounce instant is missed by the sparse samples.
+fn interp_hermite(a: Pose, b: Pose, t: float) -> Pose {
+  if t <= a.t { return a; }
+  if t >= b.t { return b; }
+  dt = b.t - a.t;
+  u  = (t - a.t) / dt;
+  u2 = u * u;
+  u3 = u2 * u;
+  h00 = 2.0 * u3 - 3.0 * u2 + 1.0;
+  h10 = u3 - 2.0 * u2 + u;
+  h01 = -2.0 * u3 + 3.0 * u2;
+  h11 = u3 - u2;
+  Pose {
+    t: t,
+    x: h00 * a.x + h10 * a.vx * dt + h01 * b.x + h11 * b.vx * dt,
+    y: h00 * a.y + h10 * a.vy * dt + h01 * b.y + h11 * b.vy * dt,
+    z: h00 * a.z + h10 * a.vz * dt + h01 * b.z + h11 * b.vz * dt,
+    vx: 0.0, vy: 0.0, vz: 0.0,
+  }
+}
+
+// ── Reconstruct a dense (60 Hz) path from sparse samples ──────────────────
+
+fn locate_segment(samples: vector<Pose>, t: float) -> integer {
+  // Return the index `i` such that samples[i].t <= t < samples[i+1].t.
+  // Linear scan; small vectors, fine.  Returns -1 if t out of range.
+  for ls_p in samples {
+    if ls_p.t > t {
+      // ls_p is the segment END; we want the previous index.
+      i = ls_p#index - 1;
+      if i < 0 { return 0; }
+      return i;
+    }
+  }
+  samples.len() - 2   // past end → use the last pair
+}
+
+fn reconstruct(samples: vector<Pose>, method: integer, dense_hz: float, duration: float) -> vector<Pose> {
+  out: vector<Pose> = [];
+  step = 1.0 / dense_hz;
+  t = 0.0;
+  while t <= duration + 0.0001 {
+    idx = locate_segment(samples, t);
+    if idx < 0 || idx + 1 >= samples.len() {
+      t = t + step;
+      continue;
+    }
+    a = samples[idx];
+    b = samples[idx + 1];
+    if method == METHOD_LINEAR {
+      out += [interp_linear(a, b, t)];
+    } else {
+      out += [interp_hermite(a, b, t)];
+    }
+    t = t + step;
+  }
+  out
+}
+
+// ── Error measurement ─────────────────────────────────────────────────────
+
+fn measure_error(traj: integer, reconstructed: vector<Pose>) -> ErrorReport {
+  max_e = 0.0;
+  sum_e = 0.0;
+  n = 0;
+  for me_p in reconstructed {
+    truth = ground_truth(traj, me_p.t);
+    dx = me_p.x - truth.x;
+    dy = me_p.y - truth.y;
+    dz = me_p.z - truth.z;
+    err = sqrt(dx * dx + dy * dy + dz * dz);
+    if err > max_e { max_e = err; }
+    sum_e = sum_e + err;
+    n = n + 1;
+  }
+  mean_e = if n > 0 { sum_e / (n as float) } else { 0.0 };
+  ErrorReport { max_m: max_e, mean_m: mean_e, count: n }
+}
+
+// ── Test driver ───────────────────────────────────────────────────────────
+
+fn traj_name(traj: integer) -> text {
+  if traj == TRAJ_LINE   { return "line"; }
+  if traj == TRAJ_CIRCLE { return "circle"; }
+  "bounce"
+}
+
+fn method_name(method: integer) -> text {
+  if method == METHOD_LINEAR { return "linear"; }
+  "hermite"
+}
+
+fn run_case(traj: integer, source_hz: float, method: integer) -> boolean {
+  samples = sample_traj(traj, source_hz, DURATION);
+  recon   = reconstruct(samples, method, DENSE_HZ, DURATION);
+  err     = measure_error(traj, recon);
+  passed  = err.max_m < PASS_THRESHOLD_M;
+  verdict = if passed { "PASS" } else { "FAIL" };
+  // Format: trajectory | method  | src Hz | max err | mean err | verdict
+  println("  {traj_name(traj):8} | {method_name(method):7} | {source_hz:6.1} | {err.max_m:8.4} m | {err.mean_m:8.4} m | {verdict}");
+  passed
+}
+
+fn main() {
+  println("");
+  println("@PLAN50 interpolation correctness test");
+  println("  duration:    {DURATION} sec");
+  println("  reconstruct: {DENSE_HZ} Hz (60 fps render rate)");
+  println("  threshold:   {PASS_THRESHOLD_M} m max position error");
+  println("");
+  println("  trajectory | method  | src Hz |  max err   |  mean err  | verdict");
+  println("  -----------+---------+--------+------------+------------+--------");
+
+  all_pass = true;
+  // For each trajectory × each source rate × each method.
+  for ti in 0..3 {
+    for hz in [30.0, 15.0, 7.5] {
+      for mi in 0..2 {
+        if !run_case(ti, hz, mi) { all_pass = false; }
+      }
+    }
+    println("  -----------+---------+--------+------------+------------+--------");
+  }
+
+  println("");
+  if all_pass {
+    println("RESULT: all cases within {PASS_THRESHOLD_M} m max error — PASS");
+  } else {
+    println("RESULT: at least one case exceeded {PASS_THRESHOLD_M} m max error — FAIL");
+  }
+}

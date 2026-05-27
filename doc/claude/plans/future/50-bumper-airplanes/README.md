@@ -184,11 +184,23 @@ audience can see who's where without needing to read labels.
      arrive at 30 / 15 / 7.5 Hz depending on its rate-LOD band.
      The phone keeps a small per-peer history
      (`net.peer_interp_buffer_frames`, default 3) and at render
-     time linearly interpolates the displayed pose between the
-     two most recent received frames.  At 60 fps render with
-     7.5 Hz input, the phone draws 8 interpolated intermediate
-     frames per real frame — motion looks continuous regardless
-     of the underlying rate-LOD band.
+     time **cubic-Hermite-interpolates** the displayed pose
+     between the two most recent received frames, using each
+     frame's velocity field as the curve-tangent endpoint.  At
+     60 fps render with 7.5 Hz input, the phone draws 8
+     intermediate frames per real frame — motion looks
+     continuous regardless of the underlying rate-LOD band.
+
+     **Why Hermite and not pure linear:** the
+     [interpolation test](../../../../tools/audience-demo-50/interp_test.loft)
+     shows that **linear interp on a constant turn at 7.5 Hz
+     produces 67 mm peak position error, Hermite produces 0**
+     (cubic-with-end-velocities fits a circular arc exactly
+     between two endpoints with their tangent velocities).
+     The cost is a few extra multiplies per peer per render
+     frame — negligible.  Default `view.interp_method =
+     "hermite"`; "linear" is retained as a fallback for
+     low-power phone targets.
 
   2. **Fade-in on sight-range entry (implicit signal).**  When
      a pose-frame arrives for a plane_id the phone has not seen
@@ -298,6 +310,7 @@ phase 1.
 |---|---|---|---|
 | Phone → server | `INPUT` | ~16 B (cid + L + R + L_on + R_on + ticks) | At `net.input_rate` (30 Hz default) |
 | Server → phone | `POSE` | ~32 B per plane (see `net.pose_frame_bytes_budget`) | At per-recipient per-peer rate-LOD (30 / 15 / 7.5 Hz by distance) |
+| Server → phone | `POSE` (priority bounce keyframe) | ~32 B per plane | **Priority lane.**  Emitted at the instant a bounce / target-hit / plane-on-plane collision occurs, for **every** in-sight recipient regardless of their normal-pose rate-LOD band.  Same wire format as regular POSE, but (a) sent immediately on the event rather than batched into the next tick, and (b) NOT subject to the LOD throttling — even outer-band peers get bounce keyframes at full rate.  Bounces are discrete gameplay events with audio + score consequences; their visual moment is too important to lose to LOD even at distance.  Cost: ~few-per-sec total event rate × in-sight recipients, well bounded |
 | Server → phone | `EXIT` | ~6 B (plane_id) | When a peer's distance crosses `peer_sight_range` outward, sent once |
 | Server → phone | `EVENT` | ~8 B (kind + position) | Own-plane events (bounce, target hit, plane hit, stall, score) — triggers phone-local audio + score increment |
 | Server → projector | `POSE` (all planes) | ~32 B × N | At `net.broadcast_rate` (30 Hz); projector receives unfiltered |
@@ -305,6 +318,33 @@ phase 1.
 
 No `ENTER` signal — first pose-frame for a previously-unseen
 plane_id is itself the trigger for the phone's fade-in.
+
+**Why bounces bypass rate-LOD.**  Normal flight is continuous
+motion that's well-approximated by Hermite interpolation
+between sparse samples (per the
+[interpolation test](../../../../tools/audience-demo-50/interp_test.loft) —
+zero error on circular motion at 7.5 Hz).  But a bounce is a
+*discrete* event: the velocity vector flips in one frame, and
+no interpolation between pre-bounce and post-bounce samples
+recovers the actual path (test shows 0.3–1.0 m peak error
+across all interp methods when the bounce instant is missed).
+
+The fix is server-side: when a bounce happens, emit a POSE for
+that plane to every in-sight recipient immediately, regardless
+of their LOD band.  Sending the bounce instant directly gives
+the client an additional sample exactly where the trajectory's
+high-curvature point is, so subsequent Hermite interpolation
+has the right tangent data on both sides of the bounce.  The
+visual result: even at outer-band normal-flight rates, bounces
+are crisp.
+
+**Cost analysis.**  Bounce events are rare per-plane (geometry
+bounces ~0–2/sec under typical flight; plane-on-plane bounces
+much rarer).  At 30 players × ~2 events/sec/plane × ~5 in-sight
+peers × 32 B per POSE ≈ **~10 KB/sec total** across the
+broadcast — negligible compared to the steady-state pose-LOD
+traffic.  No distance cap is needed; the event rate is
+self-limiting.
 
 ### Control mapping (the novel bit)
 

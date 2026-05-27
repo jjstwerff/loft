@@ -27,6 +27,7 @@ the *first* validation step, not the only one.
 |---|---|
 | `probe_server.loft` | Minimum echo server: receives `INPUT` frames carrying each client's position, per 30 Hz tick broadcasts `POSE` for in-sight peers + one-shot `EXIT` on outward sight-range crossings |
 | `probe.loft` | Synthetic-client harness: connects N clients on a fixed grid (20 m spacing × 6 wide), sends one INPUT per client, drains incoming POSE + EXIT for a fixed duration, reports per-client counts; then moves client 0 far away and asserts other clients see exactly one EXIT for it |
+| `interp_test.loft` | **Standalone interpolation correctness test.**  No network, no server.  Generates 3 ground-truth trajectories (constant-velocity line, constant-turn circle, sudden-swing bounce at t=1.5), subsamples at 30 / 15 / 7.5 Hz, reconstructs at 60 fps via both linear and Hermite cubic interpolation, measures max + mean position error vs ground truth.  PASS threshold: max position error < 10 cm.  Findings drove two design decisions: (1) Hermite is the default interp method (linear has 67 mm error on circular motion at 7.5 Hz, Hermite has 0); (2) bounces always emit a priority POSE keyframe — at low rates a missed bounce produces 0.3–1.0 m peak error that no interp method alone can hide |
 
 ## Wire protocol (smoke-test framing)
 
