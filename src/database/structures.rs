@@ -428,7 +428,19 @@ impl Stores {
                 // `Parts::Null` arm above already calls `set_default_value` for
                 // exactly this reason; do the same when the array is empty.
                 if items.is_empty() {
-                    self.set_default_value(tp, to);
+                    // @P373: write the default to the COLLECTION FIELD's slot,
+                    // not to `to` — which for a struct field is the struct base
+                    // (field 0), so `set_default_value(tp, to)` zeroed the FIRST
+                    // field's bytes and corrupted it (e.g. `{"name":"b","items":[]}`
+                    // read `name` back as "").  A collection field reaches here
+                    // via walk_parsed_struct's `else` branch with `to` = base +
+                    // `field` = its index, exactly as the non-empty path below
+                    // feeds `record_new(to, rec_tp, field)`.  `field_ref` maps
+                    // (to, rec_tp, field) → the field slot, and returns `*to`
+                    // unchanged when `field == u16::MAX` (top-level `json_parse("[]")`,
+                    // the @P357 case), so that path is preserved.
+                    let slot = self.field_ref(to, rec_tp, field);
+                    self.set_default_value(tp, &slot);
                 }
                 for (idx, item) in items.iter().enumerate() {
                     path.push(format!("[{idx}]"));
