@@ -15,6 +15,10 @@ the design narrative below is illustrative; canonical values +
 playtest ranges + rationale are in [`NUMBERS.md`](NUMBERS.md).
 Pattern mirrors dryopea's `docs/NUMBERS.md` + runtime JSON split.
 
+**Current state of the work** — what's been done, what's in flight,
+what to pick up next: [`STATUS.md`](STATUS.md).  Start there if
+resuming after a context gap.
+
 ## Pitch
 
 A static 3D world built from a **dryopea-style hex editor map** with
