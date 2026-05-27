@@ -82,6 +82,7 @@ Features that "appear to work" but don't, or that lose data without indication. 
 | (cross) | Keyed collection validation — collection × operation matrix | M | ✓ | plans/future/20-collection-validation/README.md |
 | (cross) | Binary file I/O matrix — value type × format × access pattern; absorbs @P289 canonical serialization | M | ✓ | plans/future/43-binary-io-validation/README.md |
 | Q* | JSON parse-error diagnostics (Q1) — parse currently fails silently in some shapes | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
+| (cross) | Integer width discipline — `integer` is i64, explicit `i32` only 4-byte, no implicit `integer`→`i32` (data loss); FFI marshal + compiler enforcement + lib i32 end-to-end.  Absorbs @P370 | M | ✓ | plans/future/48-integer-width-discipline/README.md |
 
 ---
 
