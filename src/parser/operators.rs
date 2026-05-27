@@ -1407,6 +1407,16 @@ impl Parser {
                 let inner = std::mem::replace(code, Value::Null);
                 *code = Value::with_span(op_pos.clone(), inner);
             }
+            // The result of a binary arithmetic op is a *computed value*, not
+            // a `not null` field read — `/` and `%` can yield null on
+            // divide-by-zero, and parsing the RHS just above re-set
+            // `expr_not_null` to reflect the RHS operand's field-nullness
+            // (e.g. `len(v) / set.stride` where `stride` is `not null`).
+            // Clear it so `a / b ?? default` is NOT flagged "Redundant null
+            // coalescing" — companion to the vector-index clear in
+            // `fields.rs` (a `??` after a fault-prone op is a real defense).
+            self.expr_not_null = false;
+            self.expr_not_null_name.clear();
         }
         None
     }
@@ -1700,7 +1710,53 @@ fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx, data: &Data) ->
             {
                 return true;
             }
-            false
+            // Skip pattern 4 — index is *loop-bounded arithmetic*: an
+            // expression built only from active loop-iteration variables
+            // and integer literals (e.g. `mul_k * 4 + mul_row`, `i / 4`,
+            // `row * width + col` where every variable is a loop counter).
+            // This generalises pattern 3 (a bare loop var) to the integer
+            // arithmetic the counters participate in — the developer is
+            // iterating within the loop's bounds, so the computed index is
+            // as trustworthy as the bare counter.  An index that mixes in a
+            // struct field, a parameter, or a call result is NOT bounded
+            // here and still warns (the genuine "could be OOB from data"
+            // case).
+            index_loop_bounded(idx, ctx, data)
         }
+    }
+}
+
+/// True when `v` is an index expression composed solely of active
+/// loop-iteration variables (`ctx.iter_vars`), integer literals, and
+/// integer arithmetic over them — i.e. the index is bounded by the same
+/// loops that produce it.  See `is_easy_proof` skip-pattern 4.
+fn index_loop_bounded(v: &Value, ctx: &WarnCtx, data: &Data) -> bool {
+    match v.unspan() {
+        Value::Int(_) | Value::Long(_) => true,
+        Value::Var(n) => ctx.iter_vars.contains(n),
+        Value::Call(def_nr, call_args) => {
+            // `original_name()` strips the "Op" prefix; arithmetic also
+            // appears in `*Nullable` form when an operand is nullable.
+            let raw = data.def(*def_nr).original_name();
+            let name = raw.strip_suffix("Nullable").unwrap_or(raw.as_str());
+            // Integer arithmetic / bitwise ops ("MinInt" is subtraction —
+            // loft spells minus "Min").  A result built from bounded
+            // operands stays bounded.
+            const ARITH: &[&str] = &[
+                "AddInt",
+                "MinInt",
+                "MulInt",
+                "DivInt",
+                "RemInt",
+                "AbsInt",
+                "EorInt",
+                "LandInt",
+                "LorInt",
+                "SLeftInt",
+                "SRightInt",
+            ];
+            ARITH.contains(&name) && call_args.iter().all(|a| index_loop_bounded(a, ctx, data))
+        }
+        _ => false,
     }
 }

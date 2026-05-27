@@ -760,3 +760,73 @@ fn main() {
         "LOFT_FORMAT_BARE_NULL=1 must silence the suffix; got stdout={stdout:?}"
     );
 }
+
+// ── Skip pattern 4 — loop-bounded arithmetic index ──────────────────────────
+//
+// Generalises skip-pattern 3 (a bare loop var) to integer arithmetic over
+// loop counters — `m[i * 4 + j]` where i, j are active for-loop vars is as
+// trustworthy as a bare `m[i]`.  Surfaced by the graphics matrix kernels
+// (lib/graphics/src/math.loft::mat4_mul).
+#[test]
+fn skip_loop_bounded_arithmetic_index() {
+    let source = "\
+fn main() {
+  m = [for k in 0..16 { k * 1.0 }];
+  sum = 0.0;
+  for i in 0..4 {
+    for j in 0..4 {
+      sum += m[i * 4 + j];
+    }
+  }
+  print(\"sum={sum}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("skip_loop_arith", source);
+    assert!(
+        !diag.contains("warning: `v[i]` may produce null"),
+        "loop-bounded arithmetic index must NOT warn; got stderr={diag:?}"
+    );
+    // An index mixing in a non-loop value (a parameter / field) still warns.
+    let source2 = "\
+fn at(v: vector<integer>, base: integer) -> integer {
+  total = 0;
+  for k in 0..3 { total += v[base + k]; }
+  total
+}
+fn main() { print(\"{at([1,2,3,4], 1)}\\n\"); }
+";
+    let (_o2, diag2, _c2) = run_with_warnings("skip_loop_arith_neg", source2);
+    assert!(
+        diag2.contains("warning: `v[i]` may produce null"),
+        "index mixing a non-loop value (base) must still warn; got stderr={diag2:?}"
+    );
+}
+
+// ── `??` after a fault-prone op is a real defense, not "redundant" ──────────
+//
+// Indexing a `not null` vector, or dividing by a `not null` field, can still
+// yield null (out-of-bounds / divide-by-zero).  So `v[i] ?? d` and
+// `a / s.field ?? d` must NOT be flagged "Redundant null coalescing" even
+// though the vector / field operand carries `not null`.  Without the fix the
+// vector-index case and the division case hit contradictory checks (the OOB /
+// div warning said "defend me", the redundant check said "the `??` is
+// useless").  Surfaced by lib/graphics/src/math.loft + graphics.loft.
+#[test]
+fn coalesce_after_fault_op_not_redundant() {
+    let source = "\
+struct M { m: vector<float> not null }
+struct S { stride: integer not null }
+fn pick(x: const M, i: integer) -> float { x.m[i] ?? 0.0 }
+fn cnt(s: const S, n: integer) -> integer { (n / s.stride) ?? 0 }
+fn main() {
+  a = pick(M { m: [1.0, 2.0] }, 0);
+  b = cnt(S { stride: 2 }, 10);
+  print(\"a={a} b={b}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("coalesce_fault_op", source);
+    assert!(
+        !diag.contains("Redundant null coalescing"),
+        "`??` after an index / division must NOT be flagged redundant; got stderr={diag:?}"
+    );
+}
