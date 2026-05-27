@@ -120,6 +120,28 @@ canonical.
 | `net.peer_rate_outer_factor` | 4 | 2 – 8 | (every N ticks) | Outer rate-LOD ring (between `_half_radius` and `peer_sight_range`): planes at this distance get a pose-frame every Nth broadcast tick.  Default 4 = quarter-rate (7.5 Hz at base `broadcast_rate=30`).  Visible motion is small at sight-range edge, interpolation hides the gap |
 | `net.peer_interp_buffer_frames` | 3 | 2 – 8 | (count) | Per-peer pose-history buffer on the phone for interpolation.  Phone keeps the last N received pose-frames and interpolates linearly between them at render time; older frames are evicted.  Larger = smoother but more frame-delay; smaller = snappier but vulnerable to dropped frames |
 
+## Adaptive QoS (post-v1 — phase 7)
+
+Static `net.peer_*` defaults from § Networking ship in v1.  Phase 7
+classifies each phone into a quality tier passively and scales its
+peer-rendering envelope.  These parameters are inert in v1 (no
+classification runs, scaling stays at 1.0×); they activate when
+phase 7 lands.
+
+| Parameter | Default | Range | Unit | Why |
+|---|---|---|---|---|
+| `qos.classify_window_secs` | 3.0 | 1.0 – 10.0 | s | Sliding window over which RTT + loss are sampled.  Shorter = more reactive but jitter-sensitive; longer = stable tier but slow to react when a connection actually changes |
+| `qos.tier_upgrade_hold_secs` | 5.0 | 2.0 – 15.0 | s | A phone must stay in upgrade-conditions for this long before tier-up fires.  Hysteresis: avoids flapping between OK and Good on a connection that's marginal between them |
+| `qos.tier_downgrade_hold_secs` | 1.0 | 0.5 – 5.0 | s | Faster than upgrade-hold.  Dropping a tier is protective; better to over-react and stabilise than under-react and let the player stutter |
+| `qos.good_rtt_max_ms` | 50 | 20 – 100 | ms | RTT below this (with low loss) classifies as Good |
+| `qos.good_loss_max_pct` | 1.0 | 0.1 – 3.0 | % | Loss-rate below this (with low RTT) classifies as Good |
+| `qos.limited_rtt_min_ms` | 150 | 80 – 400 | ms | RTT above this classifies as Limited regardless of loss |
+| `qos.limited_loss_min_pct` | 5.0 | 2.0 – 15.0 | % | Loss-rate above this classifies as Limited regardless of RTT |
+| `qos.good_sight_scale` | 1.5 | 1.0 – 2.5 | × | Multiplier on `net.peer_sight_range` for Good-tier phones.  Good connections see further |
+| `qos.limited_sight_scale` | 0.6 | 0.3 – 0.9 | × | Multiplier on `net.peer_sight_range` for Limited-tier phones.  Smaller envelope = less bandwidth needed |
+| `qos.limited_full_radius_scale` | 1.5 | 1.0 – 2.5 | × | Multiplier on `net.peer_rate_full_radius` for Limited-tier.  Bigger full-rate ring (relative to sight range) so close peers still get full updates even when the phone can't afford much |
+| `qos.limited_interp_buffer_frames` | 4 | 2 – 8 | (count) | Per-peer pose-history buffer for Limited-tier phones.  Deeper than the default 3 so phone-side interpolation can ride out jitter without visible stutter |
+
 ## Round structure + spawn
 
 | Parameter | Default | Range | Unit | Why |

@@ -180,6 +180,45 @@ audience can see who's where without needing to read labels.
     intentional: the room knows where everyone is, the
     individual pilot knows where their neighbourhood is.
 
+- **Per-phone adaptive QoS (post-v1).**  The static sight + LOD
+  defaults above assume every phone has a comparable connection.
+  In practice, audience phones at the same venue can span a 10×
+  range of WS round-trip time (someone on the venue WiFi vs.
+  someone tethering to a slow 4G).  A v2 refinement classifies
+  each phone into a quality tier from passive WS measurements
+  and **scales its peer-rendering envelope per tier**:
+
+  | Tier | RTT | Loss | sight_range × | full_radius × | half_radius × | interp_buffer |
+  |---|---|---|---|---|---|---|
+  | **Good** | < 50 ms | < 1 % | 1.5× | 1.0× | 1.0× | 3 |
+  | **OK** (default) | 50–150 ms | < 5 % | 1.0× | 1.0× | 1.0× | 3 |
+  | **Limited** | > 150 ms or > 5 % loss | (caps activate) | 0.6× | 1.5× (smaller full-rate ring) | 1.5× | 4 (deeper buffer to ride out jitter) |
+
+  Measurement is **passive** — no extra protocol round-trips:
+
+  - RTT estimated from server-emitted heartbeats and phone-side
+    echo timestamps the phone already sends with each input
+    frame (1–2 byte budget on the wire).
+  - Loss rate estimated from sequence-number gaps in the input
+    stream as the server sees them.
+  - Tier classification updates every few seconds with
+    hysteresis (must hold tier-up condition for ~5 sec before
+    upgrading; tier-down kicks in on a single bad window to
+    protect the user from a stuttering experience).
+
+  Effect at a real audience demo: phones with strong WiFi see
+  the largest neighbourhood at the highest fidelity (good play
+  is rewarded with rich situational awareness); phones with
+  marginal connections still get a playable experience scaled
+  to what their link can carry, instead of dropping out
+  entirely.  Players don't see their tier explicitly; it just
+  feels right.
+
+  Captured as a post-v1 sub-arc — see [§ Sub-arcs](#sub-arcs-sketch--phase-the-work-like-plan36)
+  phase 7.  Static defaults from NUMBERS.md ship in v1; the
+  multipliers and tier thresholds become tunables when phase 7
+  starts.
+
 ### Control mapping (the novel bit)
 
 Let `L_on`, `R_on` be whether each thumb is in contact with the
@@ -556,6 +595,7 @@ This demo:
 | 4  | Physics — plane integrator + bounce + stall | M | new `lib/physics_2body` |
 | 5  | Scoring + ambience — targets file + off-axis collision rule + leaderboard + "the storm" difficulty ramp | S | none |
 | 6  | Live playtest + tuning (controls, audio mix, palette) | S | all above |
+| 7  | **Per-phone adaptive QoS** (post-v1) — passive RTT/loss estimation, three-tier classification (Good / OK / Limited), per-phone scaling of `peer_sight_range` and rate-LOD radii.  Phones with strong connections see more peers at higher fidelity; weak connections degrade gracefully instead of dropping | S | phase 1 (server pose state) + phase 0a verdict + real venue playtest data |
 
 Each phase ships standalone (incremental playable state); the
 cadence is the same flat-2D-MVP-first sequence that worked for
