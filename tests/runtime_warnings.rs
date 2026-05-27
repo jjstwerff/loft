@@ -64,7 +64,7 @@ fn main() {
 ";
     let (_stdout, diag, _code) = run_with_warnings("undef_div", source);
     assert!(
-        diag.contains("warning: integer division may produce null"),
+        diag.contains("warning: division may produce null"),
         "expected div warning; got stdout={diag:?}"
     );
 }
@@ -80,7 +80,7 @@ fn main() {
 ";
     let (_stdout, diag, _code) = run_with_warnings("undef_mod", source);
     assert!(
-        diag.contains("warning: integer modulus may produce null"),
+        diag.contains("warning: modulus may produce null"),
         "expected mod warning; got stdout={diag:?}"
     );
 }
@@ -132,11 +132,11 @@ fn main() {
 ";
     let (_stdout, diag, _code) = run_with_warnings("skip_const_div", source);
     assert!(
-        !diag.contains("warning: integer division may produce null"),
+        !diag.contains("warning: division may produce null"),
         "constant non-zero divisor must NOT warn; got stdout={diag:?}"
     );
     assert!(
-        !diag.contains("warning: integer modulus may produce null"),
+        !diag.contains("warning: modulus may produce null"),
         "constant non-zero modulus must NOT warn; got stdout={diag:?}"
     );
 }

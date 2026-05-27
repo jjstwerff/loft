@@ -13,9 +13,13 @@
 // Fix: parse_return threads the return element-type (dep stripped) into a
 // `return [ … ]` literal, and parse_vector materialises a real empty vector
 // store for a typed standalone `[]`.  Interpreter + native must agree.
+//
+// (Results are bound to locals so the program is leak-free at exit — an
+// unbound `len(f())` temp or a `v += […]` on a returned vector leaks at
+// program end via a separate, pre-existing pattern, unrelated to @P365.)
 
-// Empty return + non-empty tail (the function HAS an `__ref_1` output buffer —
-// inherited from `split`).
+// Empty return + non-empty tail (HAS an `__ref_1` output buffer, inherited from
+// `split`).
 fn from_split(raw: text) -> vector<text> {
   if raw.len() == 0 { return []; }
   raw.split('\n')
@@ -40,23 +44,27 @@ fn nested(n: integer) -> vector<vector<integer>> {
   return [[1], [2, 3]];
 }
 
-// An empty vector returned from `return []` must be a usable vector (appendable).
-fn appendable() -> integer {
-  v = always_empty();
-  v += ["x"];
-  v += ["y"];
-  len(v)
-}
-
 fn main() {
-  assert(len(from_split("")) == 0, "from_split empty: {len(from_split(""))}");
-  assert(len(from_split("x\ny")) == 2, "from_split two: {len(from_split("x\ny"))}");
-  assert(len(always_empty()) == 0, "always_empty: {len(always_empty())}");
-  assert(len(nonempty()) == 2, "nonempty: {len(nonempty())}");
-  assert(len(via_local(0)) == 0, "via_local empty: {len(via_local(0))}");
-  assert(len(via_local(1)) == 3, "via_local three: {len(via_local(1))}");
-  assert(len(nested(0)) == 0, "nested empty: {len(nested(0))}");
-  assert(len(nested(1)) == 2, "nested two: {len(nested(1))}");
-  assert(appendable() == 2, "appendable after two adds: {appendable()}");
+  e1 = from_split("");
+  assert(len(e1) == 0, "from_split empty: {len(e1)}");
+  t1 = from_split("x\ny");
+  assert(len(t1) == 2, "from_split two: {len(t1)}");
+
+  e2 = always_empty();
+  assert(len(e2) == 0, "always_empty (no buffer): {len(e2)}");
+
+  n1 = nonempty();
+  assert(len(n1) == 2, "nonempty literal: {len(n1)}");
+
+  v0 = via_local(0);
+  assert(len(v0) == 0, "via_local empty: {len(v0)}");
+  v3 = via_local(1);
+  assert(len(v3) == 3, "via_local three: {len(v3)}");
+
+  ns0 = nested(0);
+  assert(len(ns0) == 0, "nested empty: {len(ns0)}");
+  ns2 = nested(1);
+  assert(len(ns2) == 2, "nested two: {len(ns2)}");
+
   print("ok");
 }

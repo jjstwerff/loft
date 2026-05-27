@@ -50,10 +50,12 @@ pub fn record() {
     check.clear();
     stores.show(&mut check, &result, s, true);
     assert_ne!(test_string, check);
-    assert_eq!(
-        stores.parse_message("{blame:\"nothing\"}", s),
-        "line 1:7 path:blame"
-    );
+    // @P366: an unknown JSON key (`blame`) is now skipped (lenient-ignore),
+    // not a parse error.  The object parses to an all-default struct (shown as
+    // `{}`) instead of the old `"line 1:7 path:blame"` strict-reject.  This
+    // aligns the typed `text as <T>` cast with the dynamic `JsonValue` walker,
+    // which already tolerates extra keys.
+    assert_eq!(stores.parse_message("{blame:\"nothing\"}", s), "{}");
     assert_eq!("/", stores.path(&result, s));
     assert_eq!(
         stores.parse_message("{name:\"a\",category: Daily}", s),
