@@ -310,7 +310,7 @@ phase 1.
 |---|---|---|---|
 | Phone → server | `INPUT` | ~16 B (cid + L + R + L_on + R_on + ticks) | At `net.input_rate` (30 Hz default) |
 | Server → phone | `POSE` | ~32 B per plane (see `net.pose_frame_bytes_budget`) | At per-recipient per-peer rate-LOD (30 / 15 / 7.5 Hz by distance) |
-| Server → phone | `POSE` (priority bounce keyframe) | ~32 B per plane | **Priority lane.**  Emitted at the instant a bounce / target-hit / plane-on-plane collision occurs, for **every** in-sight recipient regardless of their normal-pose rate-LOD band.  Same wire format as regular POSE, but (a) sent immediately on the event rather than batched into the next tick, and (b) NOT subject to the LOD throttling — even outer-band peers get bounce keyframes at full rate.  Bounces are discrete gameplay events with audio + score consequences; their visual moment is too important to lose to LOD even at distance.  Cost: ~few-per-sec total event rate × in-sight recipients, well bounded |
+| Server → phone | `FORECAST` (bounce prediction) | ~40 B per plane | **Look-ahead.**  Emitted as soon as the server detects an imminent bounce (plane's ballistic projection intersects geometry within `net.bounce_lookahead_ms`, default 100 ms).  Payload: `(plane_id, t_bounce, pos_at_bounce, vel_after_bounce)` — i.e., the *future* state the plane will be in, time-stamped with the server-clock moment it becomes valid.  Sent to every in-sight recipient regardless of their normal-pose LOD band.  Client receives the forecast ahead of the actual bounce instant; uses it to plan a local visual animation that completes synchronised to `t_bounce` on its own clock.  Bounces happen at the same wall-clock moment on every viewer's phone (and the projector), regardless of network-latency variance |
 | Server → phone | `EXIT` | ~6 B (plane_id) | When a peer's distance crosses `peer_sight_range` outward, sent once |
 | Server → phone | `EVENT` | ~8 B (kind + position) | Own-plane events (bounce, target hit, plane hit, stall, score) — triggers phone-local audio + score increment |
 | Server → projector | `POSE` (all planes) | ~32 B × N | At `net.broadcast_rate` (30 Hz); projector receives unfiltered |
@@ -319,32 +319,66 @@ phase 1.
 No `ENTER` signal — first pose-frame for a previously-unseen
 plane_id is itself the trigger for the phone's fade-in.
 
-**Why bounces bypass rate-LOD.**  Normal flight is continuous
-motion that's well-approximated by Hermite interpolation
-between sparse samples (per the
-[interpolation test](../../../../tools/audience-demo-50/interp_test.loft) —
-zero error on circular motion at 7.5 Hz).  But a bounce is a
-*discrete* event: the velocity vector flips in one frame, and
-no interpolation between pre-bounce and post-bounce samples
-recovers the actual path (test shows 0.3–1.0 m peak error
-across all interp methods when the bounce instant is missed).
+**Bounces as forecast, not as report.**  Normal flight is
+continuous motion well-approximated by linear or Hermite
+interpolation between sparse samples (per the
+[interpolation test](../../../../tools/audience-demo-50/interp_test.loft)).
+But a bounce is a *discrete* event: the velocity vector flips
+in one frame; no interpolation between pre-bounce and
+post-bounce *samples* recovers the actual path (test shows
+0.3–1.0 m peak error across all interp methods when the bounce
+instant is missed).
 
-The fix is server-side: when a bounce happens, emit a POSE for
-that plane to every in-sight recipient immediately, regardless
-of their LOD band.  Sending the bounce instant directly gives
-the client an additional sample exactly where the trajectory's
-high-curvature point is, so subsequent Hermite interpolation
-has the right tangent data on both sides of the bounce.  The
-visual result: even at outer-band normal-flight rates, bounces
-are crisp.
+The fix isn't to send another sample — it's to send the
+*future*.  When the server detects an imminent bounce (the
+plane's ballistic projection will intersect geometry within
+`net.bounce_lookahead_ms`, default 100 ms), it broadcasts a
+`FORECAST` message immediately, containing:
+
+- `t_bounce`: the server-clock moment the bounce will happen
+- `pos_at_bounce`: where the plane will be at that moment
+- `vel_after_bounce`: the post-bounce velocity (already
+  reflected by the server's bounce math)
+
+Each in-sight recipient receives the forecast *ahead* of
+`t_bounce`.  The client uses it on its own schedule: continue
+the plane's current trajectory until `t_bounce`, then transition
+to `pos_at_bounce` and continue along `vel_after_bounce`.  The
+visual bounce happens at exactly `t_bounce` on the client's
+wall clock — **synchronised across every phone in the room and
+the projector**, regardless of variable network latency to each
+device.
+
+**Acted on at the client's leisure.**  Between forecast-receipt
+and `t_bounce`, the client animates locally at its render rate
+(60 fps).  The forecast is a *plan*, not a snapshot — the
+client owns the visual presentation.  Normal POSE updates
+continue to flow at LOD rate; they serve as **gentle
+correction** for any divergence from the forecast (e.g., if the
+player twitched the controls during the lookahead window and
+the trajectory changed slightly, the next regular POSE absorbs
+the drift).
 
 **Cost analysis.**  Bounce events are rare per-plane (geometry
 bounces ~0–2/sec under typical flight; plane-on-plane bounces
 much rarer).  At 30 players × ~2 events/sec/plane × ~5 in-sight
-peers × 32 B per POSE ≈ **~10 KB/sec total** across the
+peers × 40 B per FORECAST ≈ **~12 KB/sec total** across the
 broadcast — negligible compared to the steady-state pose-LOD
 traffic.  No distance cap is needed; the event rate is
 self-limiting.
+
+**Edge cases.**
+- *Prediction wrong (player twitched mid-lookahead).*  Forecast
+  is invalidated; client snaps via the next POSE update.  Brief
+  visual glitch, very rare in practice.
+- *Plane-on-plane bounces.*  Harder to forecast (both planes'
+  trajectories matter, both have inputs).  Forecast lookahead
+  shrinks to one tick (~33 ms) for these; visual quality is
+  slightly less smooth than geometry bounces but still better
+  than reactive keyframes.
+- *Bounce + bounce (chain).*  Forecast a single bounce; the
+  second bounce gets its own forecast at the appropriate time.
+  No multi-bounce forecasting in v1.
 
 ### Control mapping (the novel bit)
 

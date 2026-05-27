@@ -92,6 +92,31 @@ fn sample_traj(traj: integer, hz: float, duration: float) -> vector<Pose> {
   out
 }
 
+// ── Sparse sampling WITH a server-injected bounce keyframe ────────────────
+// Same as sample_traj, but when the trajectory is a bounce and the sample
+// schedule would step OVER the bounce instant (t=1.5), inject an extra
+// sample at t=1.5 carrying the POST-BOUNCE velocity.  This is exactly the
+// "priority bounce keyframe" the design ships: the cheat that lets Hermite
+// interpolate smoothly through the bounce instead of producing a chord.
+fn sample_traj_with_bounce_kf(traj: integer, hz: float, duration: float) -> vector<Pose> {
+  out: vector<Pose> = [];
+  step = 1.0 / hz;
+  t = 0.0;
+  bounce_inserted = false;
+  while t <= duration + 0.0001 {
+    // If we crossed the bounce instant since the last sample and haven't
+    // yet inserted the keyframe, splice it in BEFORE the post-bounce
+    // regular sample.
+    if traj == TRAJ_BOUNCE && !bounce_inserted && t >= 1.5 {
+      out += [ground_truth(traj, 1.5)];   // gen_bounce(1.5) is post-bounce by definition (vx=-20)
+      bounce_inserted = true;
+    }
+    out += [ground_truth(traj, t)];
+    t = t + step;
+  }
+  out
+}
+
 // ── Interpolation ─────────────────────────────────────────────────────────
 
 fn interp_linear(a: Pose, b: Pose, t: float) -> Pose {
@@ -201,14 +226,19 @@ fn method_name(method: integer) -> text {
   "hermite"
 }
 
-fn run_case(traj: integer, source_hz: float, method: integer) -> boolean {
-  samples = sample_traj(traj, source_hz, DURATION);
+fn run_case(traj: integer, source_hz: float, method: integer, bounce_kf: boolean) -> boolean {
+  samples = if bounce_kf {
+    sample_traj_with_bounce_kf(traj, source_hz, DURATION)
+  } else {
+    sample_traj(traj, source_hz, DURATION)
+  };
   recon   = reconstruct(samples, method, DENSE_HZ, DURATION);
   err     = measure_error(traj, recon);
   passed  = err.max_m < PASS_THRESHOLD_M;
   verdict = if passed { "PASS" } else { "FAIL" };
-  // Format: trajectory | method  | src Hz | max err | mean err | verdict
-  println("  {traj_name(traj):8} | {method_name(method):7} | {source_hz:6.1} | {err.max_m:8.4} m | {err.mean_m:8.4} m | {verdict}");
+  kf_tag  = if bounce_kf { "+kf" } else { "   " };
+  // Format: trajectory | method  | src Hz | kf?| max err | mean err | verdict
+  println("  {traj_name(traj):8} | {method_name(method):7} {kf_tag} | {source_hz:6.1} | {err.max_m:8.4} m | {err.mean_m:8.4} m | {verdict}");
   passed
 }
 
@@ -219,18 +249,27 @@ fn main() {
   println("  reconstruct: {DENSE_HZ} Hz (60 fps render rate)");
   println("  threshold:   {PASS_THRESHOLD_M} m max position error");
   println("");
-  println("  trajectory | method  | src Hz |  max err   |  mean err  | verdict");
-  println("  -----------+---------+--------+------------+------------+--------");
+  println("  trajectory | method      | src Hz |  max err   |  mean err  | verdict");
+  println("  -----------+-------------+--------+------------+------------+--------");
 
   all_pass = true;
-  // For each trajectory × each source rate × each method.
+  // For each trajectory × each source rate × each method.  The bounce
+  // trajectory is ALSO run with a server-injected keyframe at the
+  // bounce instant (+kf rows) to demonstrate the design's "cheat":
+  // sending the post-bounce velocity at the bounce instant gives
+  // Hermite the tangent data it needs to draw a smooth curve through
+  // the bounce, eliminating the missed-swing error.
   for ti in 0..3 {
     for hz in [30.0, 15.0, 7.5] {
       for mi in 0..2 {
-        if !run_case(ti, hz, mi) { all_pass = false; }
+        if !run_case(ti, hz, mi, false) { all_pass = false; }
+        if ti == TRAJ_BOUNCE {
+          // +kf rows probe the design improvement; expected to PASS.
+          if !run_case(ti, hz, mi, true) { all_pass = false; }
+        }
       }
     }
-    println("  -----------+---------+--------+------------+------------+--------");
+    println("  -----------+-------------+--------+------------+------------+--------");
   }
 
   println("");
