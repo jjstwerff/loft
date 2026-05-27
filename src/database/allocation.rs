@@ -1599,9 +1599,7 @@ impl Stores {
         // file is always ≥ 8 bytes (SIGNATURE + free-space index).  A
         // smaller or missing file is "fresh" and triggers the
         // snapshot-then-mmap path.
-        let exists = std::fs::metadata(path)
-            .map(|m| m.len() >= 8)
-            .unwrap_or(false);
+        let exists = std::fs::metadata(path).is_ok_and(|m| m.len() >= 8);
 
         // Preserve the slot's bookkeeping across the swap.
         let preserved = {
