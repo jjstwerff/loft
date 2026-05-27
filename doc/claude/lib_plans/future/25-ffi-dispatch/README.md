@@ -18,13 +18,22 @@ earlier note).
 
 ## Status
 
-**F1 + F2 + F3 SHIPPED 2026-05-27.**  F3 = one-library proof: `lib/imaging`'s
-`n_load_png`/`n_save_png` carry `#[loft_native]`; `loft-ffi-build` emits the
-`loft_register_bridges!` list; the interpreter (`extensions.rs`
-`BRIDGE_REGISTRY` + `dispatch_via_bridge`) routes imaging through the
-generated bridges (verified: PNG round-trip green, dispatch confirmed via
-probe), while every other library still takes the legacy raw-ptr arms
-(additive — non-bridge symbols + `--native` untouched).  F4–F5 open.
+**F1 + F2 + F3 SHIPPED; F4 ROLLOUT SHIPPED 2026-05-27.**  All four monorepo
+native libs — **imaging, web, server, graphics** — now dispatch through
+generated `#[loft_native]` bridges (`extensions.rs` `BRIDGE_REGISTRY` +
+`dispatch_via_bridge`), each runtime-verified via the env-gated probe.
+graphics was selective (hand-written register + dual-ABI: only the registered
+interpret fns annotated; the raw-ptr `loft_gl_*` direct-native + `vec_wrapper!`
+fns keep the legacy arms).  **The arm DELETION is deferred** (the remaining F4
+step): `tests/lib/*/native` fixtures and the already-published external libs
+(`loft-libs-core`/`-net`) still register raw pointers with no bridges, so the
+legacy `dispatch_call` is retained as their fallback until they migrate
+(Phase 6r / [`../../12-library-extraction/`](../../12-library-extraction/README.md)).
+F5 (the PACKAGES.md author guide) open.
+
+F3 = one-library proof: `lib/imaging`'s `n_load_png`/`n_save_png`;
+`loft-ffi-build` emits the `loft_register_bridges!` list; additive —
+non-bridge symbols + `--native` untouched.
 
 **F1 + F2 detail:**  F1 = `loft-ffi` transport (`LoftValue` +
 `LoftBridgeFn` + `loft_register_bridges!`).  F2 = new `loft-ffi-macros` crate
@@ -141,7 +150,7 @@ return-type-specific arm selection.
 | **F1** ✅ | `loft-ffi`: define `LoftValue` + the bridge calling convention + the `n_*__loft_bridge` registration hook. No behaviour change yet (old arms still used). | **DONE 2026-05-27** — `LoftValue`/`LoftPayload`/`LoftTag` + `LoftBridgeFn` + `loft_register_bridges!`; 4 unit tests; full suite green. |
 | **F2** ✅ | New `loft-ffi-macros` crate: `#[loft_native]` proc-macro generating bridges for the primitive set (i64/i32/f64/f32/bool/text/ref/vec). | **DONE 2026-05-27** — 8 integration tests drive the generated bridges (scalar width from impl sig, sentinel widen, bool/float, text ptr+len, LoftStr/LoftRef returns, LoftStore-first, void); clippy+fmt clean. Tested standalone (aux-crate convention, same as `loft-ffi-build`); enters root CI at F3 when a library deps it. |
 | **F3** ✅ | **One-library proof** — apply `#[loft_native]` to one small native lib (candidate: `lib/imaging` or a crypto fn), register its bridges, and route `--interpret` through the bridge for that lib (fallback to old arms for the rest). | **DONE 2026-05-27** — `lib/imaging` (load/save PNG) via `#[loft_native]`; `generate_register_from_loft_with_bridges` emits the bridge list; `BRIDGE_REGISTRY` + `dispatch_via_bridge` in `extensions.rs`; imaging PNG round-trip green on `--interpret` (bridge path confirmed) + `--native` unaffected. `loft-ffi-macros` now enters root CI (imaging deps it). |
-| **F4** | Roll out to `web`/`server`/`imaging`/`graphics`; once all monorepo libs use bridges, **delete `dispatch_call` + `ArgT`/`ArgVal` arms**.  Bump `loft-ffi`/`loft-ffi-build`/`loft-ffi-macros` versions for external libs (`loft-libs-core`/`-net`/`-graphics`). | full suite green; `extensions.rs` arm-count → 0. |
+| **F4** (rollout ✅) | Roll out to `web`/`server`/`imaging`/`graphics`; once all monorepo libs use bridges, **delete `dispatch_call` + `ArgT`/`ArgVal` arms**.  Bump `loft-ffi`/`loft-ffi-build`/`loft-ffi-macros` versions for external libs (`loft-libs-core`/`-net`/`-graphics`). | **ROLLOUT DONE 2026-05-27** — all 4 monorepo libs on bridges, probe-verified, full suite green.  **Deletion deferred**: `tests/lib/*/native` fixtures + published external libs still register raw ptrs (no bridges) → legacy arms retained as fallback until they migrate (Phase 6r). |
 | **F5** | FFI.4 doc — zero-boilerplate native-fn guide in [PACKAGES.md](../../../PACKAGES.md). | doc lands; example library builds. |
 
 External libs (already published) keep working during F1–F4 via the
