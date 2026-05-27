@@ -936,12 +936,12 @@ Aim for:
 ## See also
 
 - [`README.md`](README.md) — status + forward path
-- [`../12-library-extraction/`](../12-library-extraction/README.md) —
+- [`../../12-library-extraction/`](../../12-library-extraction/README.md) —
   monorepo-to-external extraction process (sibling arc)
-- [`../../ROADMAP.md`](../../ROADMAP.md) — loft master
+- [`../../../ROADMAP.md`](../../../ROADMAP.md) — loft master
   roadmap
-- [`../../PACKAGES.md`](../../PACKAGES.md) — package format
-- [`../../PKG_REGISTRY.md`](../../PKG_REGISTRY.md) — registry
+- [`../../../PACKAGES.md`](../../../PACKAGES.md) — package format
+- [`../../../PKG_REGISTRY.md`](../../../PKG_REGISTRY.md) — registry
 - Dryopea's plan 06 README — second-consumer pull
   motivating this extraction
 - Dryopea's

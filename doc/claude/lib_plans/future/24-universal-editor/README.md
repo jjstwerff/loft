@@ -108,12 +108,12 @@ at the README level:
 - [`REFERENCE.md`](REFERENCE.md) — architecture, slice plan,
   per-package API outlines, design principles, audience
   breakdown
-- [`../12-library-extraction/`](../12-library-extraction/README.md) —
+- [`../../12-library-extraction/`](../../12-library-extraction/README.md) —
   monorepo-to-external-repo extraction process (sibling
   arc; coordinate)
-- [`../../PACKAGES.md`](../../PACKAGES.md) — loft package
+- [`../../../PACKAGES.md`](../../../PACKAGES.md) — loft package
   format
-- [`../../PKG_REGISTRY.md`](../../PKG_REGISTRY.md) — the
+- [`../../../PKG_REGISTRY.md`](../../../PKG_REGISTRY.md) — the
   package registry
 - Dryopea's plan 06 — the second-consumer pull that motivates
   this plan starting
