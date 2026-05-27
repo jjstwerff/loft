@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename, v_block, v_if,
-    v_set,
+    Data, Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename, v_block,
+    v_if, v_set,
 };
 
 /// Check if a Value tree contains a reference to the given variable.
@@ -1498,7 +1498,7 @@ impl Parser {
                     _ => None,
                 };
                 if let Some(kind) = kind
-                    && !is_easy_proof(kind, args, ctx)
+                    && !is_easy_proof(kind, args, ctx, &self.data)
                 {
                     self.emit_undefended_warning(kind, ctx);
                 }
@@ -1635,7 +1635,7 @@ impl Parser {
 /// Evaluate the easy-proof skip list against a fault-prone call's args.
 /// Returns `true` when a skip pattern matches and the warning should
 /// NOT fire.
-fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx) -> bool {
+fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx, data: &Data) -> bool {
     fn lit_int(v: &Value) -> Option<i64> {
         match v.unspan() {
             Value::Int(n) => Some(i64::from(*n)),
@@ -1647,19 +1647,42 @@ fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx) -> bool {
     // makes divide-by-zero impossible.  Covers float / single literals too
     // (`x / 2.0`, `x / 0.75`), which `lit_int` missed — so the divide-by-zero
     // warning no longer fires on a statically-safe float division.
-    fn lit_nonzero(v: &Value) -> Option<bool> {
+    //
+    // @P368 follow-up — when the dividend is float / single and the divisor
+    // is an integer literal (`x / 3` with `x: float`), the parser wraps the
+    // literal in an `OpConvFloatFromInt` / `OpConvSingleFromInt` cast so the
+    // types match.  Without seeing through that cast, `lit_nonzero` on the
+    // outer Call returns None and the warning fires spuriously.  Add a
+    // recursive look-through for the two widening casts that wrap integer
+    // literals on the divisor path; OpConvFloatFromSingle (single→float)
+    // doesn't apply because no single literal can wrap an integer literal.
+    fn lit_nonzero(v: &Value, data: &Data) -> Option<bool> {
         match v.unspan() {
             Value::Int(n) => Some(*n != 0),
             Value::Long(n) => Some(*n != 0),
             Value::Float(f) => Some(*f != 0.0),
             Value::Single(f) => Some(*f != 0.0),
+            Value::Call(def_nr, call_args) => {
+                // `original_name()` strips the "Op" prefix, so the
+                // names here are without it.
+                let name = data.def(*def_nr).original_name();
+                if (name == "ConvFloatFromInt" || name == "ConvSingleFromInt")
+                    && call_args.len() == 1
+                {
+                    lit_nonzero(&call_args[0], data)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
     match kind {
         FaultKind::Div | FaultKind::Rem => {
             // Skip pattern 1 — divisor is a non-zero literal (int or float).
-            args.get(1).and_then(lit_nonzero).unwrap_or(false)
+            args.get(1)
+                .and_then(|v| lit_nonzero(v, data))
+                .unwrap_or(false)
         }
         FaultKind::VectorIndex | FaultKind::TextIndex => {
             // Index is the LAST arg in both `OpGetVector(coll, size, idx)`

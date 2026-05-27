@@ -868,6 +868,13 @@ fn tests_runner_expect_fail_still_passes() {
 /// @P368 regression: the divide-by-zero warning must NOT fire when the divisor
 /// is a non-zero literal constant (int OR float), but MUST still fire for a
 /// variable divisor.  Also: the message must not say "integer division".
+///
+/// @P368 follow-up (dryopea-surfaced): the warning must ALSO not fire when
+/// the dividend is float / single and the divisor is an integer literal
+/// (`x / 3` with `x: float`).  The parser wraps the literal in an
+/// `OpConvFloatFromInt` cast for type matching; without seeing through that
+/// cast, `lit_nonzero` returns None and the warning fires spuriously.  The
+/// `e = x / 3` case in this test exercises that arm.
 #[test]
 fn div_by_literal_constant_no_warning() {
     let dir = std::env::temp_dir();
@@ -875,7 +882,9 @@ fn div_by_literal_constant_no_warning() {
     std::fs::write(
         &safe,
         "fn calc(x: float, c: integer) -> float {\n  \
-           a = x / 2.0;\n  b = x / 0.75;\n  d = c / 2;\n  x + a + b + (d as float)\n}\n\
+           a = x / 2.0;\n  b = x / 0.75;\n  d = c / 2;\n  \
+           e = x / 3;\n  \
+           x + a + b + (d as float) + e\n}\n\
          fn main() { println(\"{calc(10.0, 10)}\"); }\n",
     )
     .expect("write temp file");
