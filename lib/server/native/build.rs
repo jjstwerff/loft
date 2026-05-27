@@ -9,5 +9,8 @@
 //! by `src/lib.rs`.
 
 fn main() {
-    loft_ffi_build::generate_register_from_loft("../src");
+    // Plan-25 F4: server's `n_*` impls carry `#[loft_native]`, so also emit the
+    // `loft_register_bridges!` list — the interpreter dispatches server through
+    // the generated marshal bridges.
+    loft_ffi_build::generate_register_from_loft_with_bridges("../src");
 }
