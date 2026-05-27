@@ -1234,28 +1234,13 @@ impl Scopes {
                 }
             }
         }
-        // unlock const reference/vector parameters at function exit.
-        // The lock was set in parse_code (expressions.rs:163-178) at function entry.
-        // Arguments live at scope 0 which `variables()` intentionally skips, so
-        // we handle them here as a separate pass.  Only emit when exiting to
-        // the function's top scope (to_scope <= 1).
-        if to_scope <= 1 {
-            let lock_fn = data.def_nr("n_set_store_lock");
-            if lock_fn != u32::MAX {
-                let n_vars = function.next_var();
-                for v_nr in 0..n_vars {
-                    if function.is_argument(v_nr)
-                        && function.is_const_param(v_nr)
-                        && function.tp(v_nr).heap_dep().is_some()
-                    {
-                        ls.push(Value::Call(
-                            lock_fn,
-                            vec![Value::Var(v_nr), Value::Boolean(false)],
-                        ));
-                    }
-                }
-            }
-        }
+        // @P376 follow-up — no const-param unlock emitted anymore (matching
+        // the dropped function-entry lock in `parser/expressions.rs`).  See
+        // there for the rationale: compile-time const checks already cover
+        // every mutation path, and the function-entry lock was a
+        // false-positive trigger on iteration over a const-param's hash
+        // field.  Par-worker `read_only` clones still enforce immutability
+        // independently.
         // scope_debug: also report Reference vars in var_order whose scope is NOT in
         // the current chain — these are "orphaned" vars that should never happen after
         // the A5.6 block-pre-registration fix.

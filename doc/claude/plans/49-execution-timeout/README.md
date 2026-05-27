@@ -77,7 +77,7 @@ as the strictly-later backstop.**
 | Item | What | Status |
 |---|---|---|
 | **T1** — watchdog hard-kill (THE GUARANTEE) | watchdog thread; fires at **`T + grace`** (always later than T2), dumps the shared breadcrumb, then `process::abort()`/`_exit` — terminates even when stuck in Rust/native/syscall | Open |
-| **T2** — cooperative rich diagnostic (PREFERRED, fires first at `T`) | interpreter dispatch-loop deadline check (+ native fn-entry / loop back-edge checks) that raises a typed `Timeout` fault at `T` and dumps the full stack + (interpret) `crash_tail`, exiting cleanly *before* T1's `T + grace` | Open |
+| **T2** — cooperative rich diagnostic (PREFERRED, fires first at `T`) | deadline check at every loft "checkpoint" — runtime AND parse-time — raises a typed `Timeout` and dumps the rich context: (a) interpreter dispatch-loop entry; (b) native fn-entry / loop back-edge; (c) **parse-time entry points** — `Lexer::next`, `Lexer::cont`, `Lexer::recover_to` (the recovery loop in particular: 2026-05-27 we hit a 7-min infinite recovery loop on a malformed script).  Each checkpoint updates the shared breadcrumb (phase=parse/run, file, line) so T1's hard-kill has actionable context even if T2 misses. | Open |
 | **T3** — CLI / env + `--tests` default | `--timeout <secs>` + `LOFT_TIMEOUT`; **default ON under `--tests`/`loft test`**; the two-phase grace (graceful → hard) | Open |
 | **T4** — subprocess isolation for the harness | `tests/wrap.rs` / `tests/native.rs` run each script in a child process (or shell to `loft`) so a hard-kill localizes to one test, not the whole suite | Open |
 
@@ -87,7 +87,8 @@ as the strictly-later backstop.**
 |---|---|
 | **Cooperative (T2), interpreter** | fn + `file:line`, `pc`, full **call stack** (`stack_trace`/`StackFrame`, `src/native.rs:1786`), and the **last N execution steps** (`crash_tail:N`, `src/log_config.rs:346`) |
 | **Cooperative (T2), native** | fn + `file:line` + full **call stack** — native already maintains a runtime stack (`CALL_STACK`: thread-local `Vec<(name,file,line)>` via `cr_call_push`/`CallGuard`, `src/codegen_runtime.rs:3796`).  The check runs on the executing thread, so it can read it.  No per-op trace (`crash_tail` is interpreter-only). |
-| **Watchdog hard-kill (T1)** | a **shared breadcrumb** only — the watchdog runs on another thread and can't read the thread-local `CALL_STACK`.  Codegen/interpreter store the current `(fn, file, line)` into **shared atomics** at fn-entry/line boundaries; the watchdog prints "last at fn X (file:line) before hard-kill".  If the hang is *inside* a native fn, the breadcrumb is its loft call site — which is exactly the useful fact ("hung in/after `ws_recv` at file:line"). |
+| **Cooperative (T2), parse-time** | current source `file:line` + the parser's current expectation token (the "Expect …" message that recovery is trying to satisfy).  The lexer is the active stack frame; no call stack to dump, but the breadcrumb has enough to localize the recovery loop. |
+| **Watchdog hard-kill (T1)** | a **shared breadcrumb** only — the watchdog runs on another thread and can't read the thread-local `CALL_STACK`.  Codegen/interpreter/lexer store the current `(phase, file, line)` into **shared atomics** at every checkpoint; the watchdog prints "last at phase=X file:line before hard-kill".  `phase ∈ {parse, run-interpret, run-native}`.  If the hang is *inside* a native fn, the breadcrumb is its loft call site — which is exactly the useful fact ("hung in/after `ws_recv` at file:line"). |
 
 The shared-breadcrumb store (two atomics, updated at fn-entry + line boundaries)
 is cheap and is what makes the *guaranteed* path still informative.  `SIGALRM`/
@@ -110,13 +111,19 @@ signal-handler dumping is rejected: a signal interrupting the `RefCell` borrow o
 
 ## Phase ordering
 
-1. **T1** — the guarantee first (watchdog thread + `abort` + shared breadcrumb).
-   Even before rich diagnostics exist, this stops the bleeding: no run can hang
-   forever.  Wire it for both backends (interpreter run + generated-binary main).
-2. **T2** — layer the cooperative rich diagnostic on top (interpreter dispatch
-   loop; then native fn-entry/back-edge checks).
-3. **T3** — `--timeout`/`LOFT_TIMEOUT` + `--tests` default + the two-phase grace.
-4. **T4** — subprocess isolation for the cargo harness (pairs with @P369; lets a
+1. **T1 + T3 + breadcrumb skeleton** — the guarantee first (watchdog thread +
+   `abort` + shared breadcrumb), wired via `--timeout` / `LOFT_TIMEOUT`.
+   Breadcrumb is set at three coarse points: parse entry (`<file>` + line
+   updates as lexer advances), interpreter dispatch (current fn + file:line),
+   native fn-entry (current fn + file:line via `cr_call_push`).  Even before
+   rich diagnostics exist, this stops the bleeding: no run can hang forever,
+   and the breadcrumb localises parse-time vs runtime hangs.  Wire it for both
+   backends (interpreter run + generated-binary main).
+2. **T2** — layer the cooperative rich diagnostic on top.  Runtime
+   (interpreter dispatch loop, native fn-entry/back-edge checks) AND
+   parse-time (`Lexer::next`/`recover_to` deadline check raising a typed
+   `Timeout` instead of looping forever).
+3. **T4** — subprocess isolation for the cargo harness (pairs with @P369; lets a
    hard-kill localize to one test instead of the suite).
 
 ## Open questions

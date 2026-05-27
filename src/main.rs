@@ -112,6 +112,15 @@ fn print_help() {
     println!("                                repeated for multiple directories");
     println!("  --log-conf <path>             use this log config file instead of the default");
     println!(
+        "  --timeout <secs>              hard-kill the process after <secs>+grace seconds (PLAN49)"
+    );
+    println!(
+        "                                LOFT_TIMEOUT=<secs> as env equivalent; grace defaults to"
+    );
+    println!(
+        "                                2s, override via LOFT_TIMEOUT_GRACE=<secs>"
+    );
+    println!(
         "  --production                  enable production mode (panic/assert log instead of abort)"
     );
     println!(
@@ -1310,6 +1319,11 @@ fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
     // last-executed opcode before the default handler fires.
     crate::crash_report::install("loft");
+    // @PLAN49 T1+T3 — arm the execution-timeout watchdog from the env
+    // (`LOFT_TIMEOUT=<secs>`) BEFORE we parse argv.  An explicit
+    // `--timeout` later in argv re-arms (no-op — `arm` is idempotent)
+    // but the env value is the floor.
+    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());
     // Plan-07 phase 1 step 1.20 / phase 3 — chain a Rust panic hook
     // that surfaces the loft source position of the offending pc
     // before the default panic message.  Reads the per-thread snapshot
@@ -1589,6 +1603,20 @@ fn main() {
             }
         } else if a == "--no-warnings" {
             no_warnings = true;
+        } else if a == "--timeout" {
+            // @PLAN49 T3 — `--timeout <secs>` arms the watchdog.  The
+            // graceful T2 fault (when shipped) fires at `<secs>`; the
+            // hard T1 kill at `<secs> + grace` (default 2s, overridable
+            // via `LOFT_TIMEOUT_GRACE`).  `0` disables.
+            let secs: u64 = argv
+                .get(i)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| {
+                    eprintln!("--timeout requires a non-negative integer (seconds)");
+                    std::process::exit(2);
+                });
+            i += 1;
+            loft::timeout::arm(secs, loft::timeout::env_grace_secs());
         } else if a == "--check" || a == "check" {
             check_only = true;
         } else if a == "--help" || a == "-h" || a == "-?" {

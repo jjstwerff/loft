@@ -3809,6 +3809,12 @@ thread_local! {
 #[inline]
 pub fn cr_call_push(name: &'static str, file: &'static str, line: u32) {
     CALL_STACK.with(|s| s.borrow_mut().push((name, file, line)));
+    // @PLAN49 T1 — refresh the shared breadcrumb at every native fn
+    // entry so a watchdog-fired hard-kill identifies the most recent
+    // loft fn we entered.  Single combined call.  When the timeout
+    // is not armed, the body is just one relaxed atomic load + branch
+    // (no allocation, no mutex) — ~1-2 ns per fn entry.
+    crate::timeout::checkpoint_fn("run-native", name, file, line);
 }
 
 /// Pop a frame from the shadow call stack.  Called at the end of every

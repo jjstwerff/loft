@@ -366,32 +366,24 @@ impl Parser {
                     }
                 }
             }
-            if !self.first_pass {
-                let n_vars = self.vars.next_var();
-                let lock_fn = self.data.def_nr("n_set_store_lock");
-                if lock_fn != u32::MAX {
-                    let mut inserts = Vec::new();
-                    for v_nr in 0..n_vars {
-                        if self.vars.is_argument(v_nr)
-                            && self.vars.is_const_param(v_nr)
-                            && matches!(
-                                self.vars.tp(v_nr),
-                                Type::Reference(_, _) | Type::Vector(_, _)
-                            )
-                        {
-                            inserts.push(Value::Call(
-                                lock_fn,
-                                vec![Value::Var(v_nr), Value::Boolean(true)],
-                            ));
-                        }
-                    }
-                    // Insert in reverse order so index-0 inserts keep the right sequence.
-                    inserts.reverse();
-                    for ins in inserts {
-                        ls.insert(0, ins);
-                    }
-                }
-            }
+            // @P376 follow-up — formerly emitted `n_set_store_lock(p, true)`
+            // at function entry for every `const` Reference/Vector parameter.
+            // The intent was a defense-in-depth tripwire for compile-time
+            // const-check bugs.  In practice, the compile-time check catches
+            // every mutation path (`p = X`, `p.f = X`, `p.h[k] = v`,
+            // `p.h += ...`, non-`const`-method calls on `p`), and the
+            // function-entry lock fires SPURIOUSLY on legitimate iteration
+            // over a hash field of `p`: `for x in p.h` calls
+            // `build_hash_sorted_vec` which (by C60 piece-3 edit-A design)
+            // allocates sort scratch IN THE HASH'S STORE — i.e. `p`'s store —
+            // and panics on the locked claim.  Par-worker safety is
+            // INDEPENDENT and untouched: `clone_locked` /
+            // `clone_locked_for_worker` / `borrow_locked_for_light_worker`
+            // set `read_only = true` on the worker's cloned store, so a
+            // worker that writes through a `const` arg still panics on
+            // `addr_mut`.  See PROBLEMS.md @P376 follow-up + PLANNING.md S22
+            // (the S22 motivation — par-worker silent-mutation in release —
+            // remains addressed by the clone-side lock).
         }
         // Plan-22 phase 02a (2026-05-12): also save body in pass 1
         // so the closure mutation walker can run in pass 1 BEFORE
