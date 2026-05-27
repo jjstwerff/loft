@@ -101,11 +101,23 @@ when phase 0a lands) that adapts `load_test.loft`'s harness:
 positioning themselves spread across a virtual 100 × 100 m world
 (uniform grid: `client_i` at position `((i%6) × 20, (i/6) × 20)`).
 At `peer_sight_range = 80 m`, each client typically has ~9 peers
-in range (cells within Manhattan distance 4 in the grid).  This
-is the **representative case**; the probe should also test a
-**worst case** (all clients clustered within sight range of each
-other → broadcast goes to everyone) and a **best case** (clients
-spread beyond sight range → broadcast filtered to near-zero).
+in range; of those, ~1–2 are within `peer_rate_full_radius = 25
+m` (full rate), ~3–4 in the half-rate ring, and ~3–4 in the
+quarter-rate outer ring.  This is the **representative case**;
+the probe should also test:
+
+- **Worst case** (all clients clustered within `peer_rate_full_radius`
+  of each other → every peer gets every tick at full rate);
+- **Best case** (clients spread beyond `peer_sight_range` → no
+  peer pose-frames broadcast, only own-pose echoes);
+- **LOD-stress case** (clients at controlled distance bands to
+  verify the server is correctly applying the three-tier rate
+  filter, not just sending everything to everyone).
+
+The LOD-stress case is the one the probe specifically validates
+that wasn't measured under PLAN36 — make sure to assert the
+**fraction of frames each band receives** matches the design
+(full ≈ 100 %, half ≈ 50 %, outer ≈ 25 %) within tolerance.
 
 Tiers ramp `3 → 12 → 20 → 30` (PLAN36's load_test pattern with
 the extra 20-client tier added) so the failure-mode degradation

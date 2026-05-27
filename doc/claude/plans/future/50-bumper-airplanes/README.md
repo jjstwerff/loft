@@ -145,27 +145,40 @@ audience can see who's where without needing to read labels.
   intimate phone view and the spatial projector view, and the
   shared screen earns its place in the room.
 
-- **Sight-filtered peer rendering.**  Each phone receives pose
-  updates for OTHER planes only when those planes are within
-  `net.peer_sight_range` (see [NUMBERS.md](NUMBERS.md), default
-  80 m).  Out-of-range peers are filtered server-side and never
-  enter the phone's wire stream at all.  Two compounding wins:
+- **Sight-filtered peer rendering with distance-LOD update rate.**
+  The server applies two compounding filters when deciding which
+  peer pose-frames to send to a given phone:
 
-  - **Throughput.**  Per-phone bandwidth scales with the typical
-    *visible-peer count*, not N − 1.  On a map sized for the
-    sight range, most planes are out of view → most pose-frames
-    are filtered → the broadcast pump runs comfortably below its
-    PLAN36-validated load.
-  - **Cockpit clarity.**  The first-person view doesn't fill up
-    with distant dots the player can't usefully interact with.
-    Trails fade naturally as planes leave range; planes appear
-    only when they're close enough to matter.
+  1. **Hard sight cutoff** (`net.peer_sight_range`, default
+     80 m).  Beyond this radius the peer's pose is not sent at
+     all — out-of-range planes never enter the phone's wire
+     stream.
+  2. **Three-tier rate-LOD** within the sight range, by
+     distance to the recipient's own plane:
 
-  The **projector** is never sight-filtered — it receives all
-  planes unconditionally, because the projector IS the overview
-  by design.  The asymmetry is intentional: the room knows where
-  everyone is, the individual pilot knows where their
-  neighbourhood is.
+     | Distance band | Update rate | Why this rate suffices |
+     |---|---|---|
+     | 0 to `peer_rate_full_radius` (default 25 m) | Every broadcast tick (~30 Hz) | Knife-fight range; every twitch matters; interpolation can't hide latency |
+     | `peer_rate_full_radius` to `peer_rate_half_radius` (default 25–60 m) | Every 2nd tick (~15 Hz) | Visible motion per-frame is half as fast in pixels; client interpolation makes 15 Hz indistinguishable from 30 Hz |
+     | `peer_rate_half_radius` to `peer_sight_range` (default 60–80 m) | Every `peer_rate_outer_factor`-th tick (default 4, so ~7.5 Hz) | Near sight-range edge; visible motion per-frame is small; interpolation smooths the gap |
+
+  - **Throughput.**  Compounding the sight cutoff with rate-LOD
+    drops per-phone outbound bandwidth substantially.  Worst case
+    (all N peers in the inner ring) is the same as before; typical
+    case (peers spread across all three bands plus many beyond
+    sight) sees roughly **3–4 × less** outbound traffic than the
+    uniform-30 Hz design — which itself was already light because
+    of the sight filter.
+  - **Cockpit clarity.**  Visible motion of distant planes is
+    naturally smoothed by phone-side interpolation between
+    received pose-frames.  Phone keeps a small per-peer history
+    (`net.peer_interp_buffer_frames`, default 3 frames) and
+    interpolates linearly at render time.
+  - **The projector is never filtered.**  Full N planes at full
+    30 Hz, unconditionally.  The projector IS the overview by
+    design — every plane, all the time.  The asymmetry is
+    intentional: the room knows where everyone is, the
+    individual pilot knows where their neighbourhood is.
 
 ### Control mapping (the novel bit)
 
