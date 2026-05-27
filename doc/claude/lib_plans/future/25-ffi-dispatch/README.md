@@ -29,7 +29,9 @@ step): `tests/lib/*/native` fixtures and the already-published external libs
 (`loft-libs-core`/`-net`) still register raw pointers with no bridges, so the
 legacy `dispatch_call` is retained as their fallback until they migrate
 (Phase 6r / [`../../12-library-extraction/`](../../12-library-extraction/README.md)).
-F5 (the PACKAGES.md author guide) open.
+**F5 SHIPPED** — PACKAGES.md `## Function binding model` rewritten to the
+`#[loft_native]` + source-scan + bridge pattern with a complete 3-fn example.
+The plan's only remaining work is the trigger-gated arm deletion (Phase 6r).
 
 F3 = one-library proof: `lib/imaging`'s `n_load_png`/`n_save_png`;
 `loft-ffi-build` emits the `loft_register_bridges!` list; additive —
@@ -151,7 +153,7 @@ return-type-specific arm selection.
 | **F2** ✅ | New `loft-ffi-macros` crate: `#[loft_native]` proc-macro generating bridges for the primitive set (i64/i32/f64/f32/bool/text/ref/vec). | **DONE 2026-05-27** — 8 integration tests drive the generated bridges (scalar width from impl sig, sentinel widen, bool/float, text ptr+len, LoftStr/LoftRef returns, LoftStore-first, void); clippy+fmt clean. Tested standalone (aux-crate convention, same as `loft-ffi-build`); enters root CI at F3 when a library deps it. |
 | **F3** ✅ | **One-library proof** — apply `#[loft_native]` to one small native lib (candidate: `lib/imaging` or a crypto fn), register its bridges, and route `--interpret` through the bridge for that lib (fallback to old arms for the rest). | **DONE 2026-05-27** — `lib/imaging` (load/save PNG) via `#[loft_native]`; `generate_register_from_loft_with_bridges` emits the bridge list; `BRIDGE_REGISTRY` + `dispatch_via_bridge` in `extensions.rs`; imaging PNG round-trip green on `--interpret` (bridge path confirmed) + `--native` unaffected. `loft-ffi-macros` now enters root CI (imaging deps it). |
 | **F4** (rollout ✅) | Roll out to `web`/`server`/`imaging`/`graphics`; once all monorepo libs use bridges, **delete `dispatch_call` + `ArgT`/`ArgVal` arms**.  Bump `loft-ffi`/`loft-ffi-build`/`loft-ffi-macros` versions for external libs (`loft-libs-core`/`-net`/`-graphics`). | **ROLLOUT DONE 2026-05-27** — all 4 monorepo libs on bridges, probe-verified, full suite green.  **Deletion deferred**: `tests/lib/*/native` fixtures + published external libs still register raw ptrs (no bridges) → legacy arms retained as fallback until they migrate (Phase 6r). |
-| **F5** | FFI.4 doc — zero-boilerplate native-fn guide in [PACKAGES.md](../../../PACKAGES.md). | doc lands; example library builds. |
+| **F5** ✅ | FFI.4 doc — zero-boilerplate native-fn guide in [PACKAGES.md](../../../PACKAGES.md). | **DONE 2026-05-27** — rewrote the stale `## Function binding model` (was `#[loft_fn]`/`&Stores`/`loft.toml [native.functions]`) to the real `#[loft_native]` + source-scan + bridge pattern: type-mapping table, zero-boilerplate registration (`build.rs` + `Cargo.toml`), 3-execution-paths, and a complete 3-function example.  doc-drift + broken-link gates green. |
 
 External libs (already published) keep working during F1–F4 via the
 **legacy raw-ptr path retained as a fallback** until they re-publish
