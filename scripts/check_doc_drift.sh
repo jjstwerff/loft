@@ -69,6 +69,12 @@ check_paths() {
       clean="${target%%#*}"
       clean="${clean%%\?*}"
       [ -z "$clean" ] && continue
+      # Skip external URLs — a cross-repo link like
+      # https://github.com/.../plans/future/06-foo is NOT a local path
+      # (e.g. dryopea's plans linked from a loft lib_plan).
+      case "$clean" in
+        http://*|https://*|mailto:*) continue ;;
+      esac
       # Skip non-plan targets in the same line.
       case "$clean" in
         *plans/*[0-9]-*) ;;

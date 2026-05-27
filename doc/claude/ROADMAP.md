@@ -401,6 +401,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/06-web-services/`](lib_plans/future/06-web-services/) | M-H per arc | — | JSON / HTTP client / auth / WebSocket / SSE clients |
 | [`lib_plans/future/18-viewer-generalisation/`](lib_plans/future/18-viewer-generalisation/) | M | — | `lib/viewer/` — extract the loft branch-review viewer as a project-agnostic library (Java + moros projects as initial customers) |
 | [`lib_plans/future/20-terrain-heightmap/`](lib_plans/future/20-terrain-heightmap/) | M | — | `terrain` — slope-based height-map generation library |
+| [`lib_plans/future/24-universal-editor/`](lib_plans/future/24-universal-editor/) | H | — | `hex_*` universal hex-world editor libraries (moros extraction; dryopea + indie consumers) |
 
 ### Deferred plans
 
