@@ -39,9 +39,12 @@ fn path_ident(ty: &Type) -> Option<String> {
     }
 }
 
-/// `*const u8` (any const-ness/elem `u8`) — the first half of a text param.
+/// `*const u8` — the first half of a text param.  Requires const-ness: a
+/// `*mut u8` is a mutable buffer (e.g. a free target), NOT text, and must
+/// surface as an unsupported parameter rather than a wrong text bridge.
 fn is_ptr_const_u8(ty: &Type) -> bool {
-    matches!(ty, Type::Ptr(p) if path_ident(&p.elem).as_deref() == Some("u8"))
+    matches!(ty, Type::Ptr(p)
+        if p.mutability.is_none() && path_ident(&p.elem).as_deref() == Some("u8"))
 }
 
 fn is_int_name(name: &str) -> bool {

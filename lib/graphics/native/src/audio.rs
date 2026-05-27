@@ -4,6 +4,7 @@
 //! G5: Audio playback via rodio.
 //! Thread-local state: one OutputStream + a list of loaded clips.
 
+use loft_ffi_macros::loft_native;
 use std::cell::RefCell;
 use std::io::Cursor;
 use std::time::Duration;
@@ -51,6 +52,7 @@ fn ensure_audio() -> bool {
 
 /// Load an audio file (WAV or OGG).  Returns clip index (>= 0) or
 /// `i32::MIN` (loft null sentinel) on failure.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_audio_load(path_ptr: *const u8, path_len: usize) -> i64 {
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
@@ -72,6 +74,7 @@ pub extern "C" fn loft_audio_load(path_ptr: *const u8, path_len: usize) -> i64 {
 
 /// Play a loaded clip at the given volume (0.0–1.0).
 /// Returns sink index (for stopping) or -1 on failure.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_audio_play(clip: i64, volume: f64) -> i64 {
     if clip < 0 {
@@ -110,6 +113,7 @@ pub extern "C" fn loft_audio_play(clip: i64, volume: f64) -> i64 {
 }
 
 /// Stop a playing clip by sink index.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_audio_stop(sink_idx: i64) {
     if sink_idx < 0 {
@@ -126,6 +130,7 @@ pub extern "C" fn loft_audio_stop(sink_idx: i64) {
 }
 
 /// Set volume of a playing clip (0.0–1.0).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_audio_set_volume(sink_idx: i64, volume: f64) {
     if sink_idx < 0 {
@@ -222,6 +227,7 @@ pub extern "C" fn loft_audio_play_raw(
 }
 
 /// Interpreter wrapper: extracts vector<single> via LoftStore + LoftRef.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_audio_play_raw(
     store: loft_ffi::LoftStore,

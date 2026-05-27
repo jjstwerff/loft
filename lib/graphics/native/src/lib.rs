@@ -6,6 +6,8 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+use loft_ffi_macros::loft_native;
+
 use glutin::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::time::Duration;
@@ -24,6 +26,13 @@ pub use audio::{
 };
 mod audio;
 use audio::n_audio_play_raw;
+// Plan-25 F4: the audio bridges live in the `audio` module; bring them into
+// scope so `loft_register_bridges!` (which takes bare idents) can see them.
+use audio::{
+    loft_audio_load__loft_bridge, loft_audio_play__loft_bridge,
+    loft_audio_set_volume__loft_bridge, loft_audio_stop__loft_bridge,
+    n_audio_play_raw__loft_bridge,
+};
 mod shader;
 mod text;
 mod window;
@@ -199,6 +208,7 @@ impl ApplicationHandler for JsonApp {
 
 // ── C-ABI exports ───────────────────────────────────────────────────────
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_create_window(
     width: u32,
@@ -223,6 +233,7 @@ pub extern "C" fn loft_gl_create_window(
 /// Initiative 03 Phase 0: borderless fullscreen companion to
 /// `loft_gl_create_window`.  Opens on the primary monitor at its
 /// native resolution.  Returns `true` on success.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_create_fullscreen_window(title_ptr: *const u8, title_len: usize) -> bool {
     let title = unsafe { loft_ffi::text(title_ptr, title_len) };
@@ -245,6 +256,7 @@ pub extern "C" fn loft_gl_create_fullscreen_window(title_ptr: *const u8, title_l
 /// shaders, FBOs) survive.  Pass `true` for borderless fullscreen on
 /// the current monitor, `false` to return to the windowed size
 /// `gl_create_window` originally opened.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_set_fullscreen(on: bool) {
     use winit::window::Fullscreen;
@@ -262,18 +274,21 @@ pub extern "C" fn loft_gl_set_fullscreen(on: bool) {
 /// can't assume their windowed hint — query the real size to build the
 /// projection / 2D ortho / overlay placement correctly.  Returns 0 if no
 /// window exists.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_window_width() -> i64 {
     gl_guard!(0);
     with_gl(|s| s.viewport_w as i64).unwrap_or(0)
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_window_height() -> i64 {
     gl_guard!(0);
     with_gl(|s| s.viewport_h as i64).unwrap_or(0)
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_poll_events() -> bool {
     with_gl_mut(|s| {
@@ -310,6 +325,7 @@ pub extern "C" fn loft_gl_poll_events() -> bool {
     .unwrap_or(false)
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_swap_buffers() {
     gl_guard!();
@@ -327,6 +343,7 @@ pub extern "C" fn loft_gl_swap_buffers() {
     });
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_clear(color: u32) {
     gl_guard!();
@@ -341,12 +358,14 @@ pub extern "C" fn loft_gl_clear(color: u32) {
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_destroy_window() {
     GL_READY.with(|c| c.set(false));
     GL.with(|cell| *cell.borrow_mut() = None);
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_create_shader(
     vert_ptr: *const u8,
@@ -360,6 +379,7 @@ pub extern "C" fn loft_gl_create_shader(
     i64::from(shader::compile_program(vert, frag).unwrap_or(0))
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_use_shader(program: i64) {
     gl_guard!();
@@ -468,6 +488,7 @@ pub unsafe extern "C" fn loft_gl_upload_mesh(
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_draw(vao: i64, n_vertices: i64) {
     gl_guard!();
@@ -487,6 +508,7 @@ pub extern "C" fn loft_gl_draw(vao: i64, n_vertices: i64) {
 /// Upload a vector<single> as a vertex buffer. Returns VAO handle.
 /// stride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color).
 /// Interpreter path: receives LoftStore + LoftRef for the data vector.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_gl_upload_vertices(
     store: loft_ffi::LoftStore,
@@ -505,6 +527,7 @@ pub unsafe extern "C" fn n_gl_upload_vertices(
 
 /// Set a mat4 uniform from a vector<float> (16 elements, column-major).
 /// Interpreter path: receives LoftStore + LoftRef for the mat vector.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_gl_set_mat4(
     store: loft_ffi::LoftStore,
@@ -591,6 +614,7 @@ pub unsafe extern "C" fn loft_gl_set_mat4(
 
 // ── Uniform helpers ────────────────────────────────────────────────────
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_set_uniform_float(
     program: i64,
@@ -609,6 +633,7 @@ pub extern "C" fn loft_gl_set_uniform_float(
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_set_uniform_int(
     program: i64,
@@ -627,6 +652,7 @@ pub extern "C" fn loft_gl_set_uniform_int(
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_set_uniform_vec3(
     program: i64,
@@ -649,6 +675,7 @@ pub extern "C" fn loft_gl_set_uniform_vec3(
 
 // ── GL state management ───────────────────────────────────────────────
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_enable(cap: i64) {
     gl_guard!();
@@ -663,6 +690,7 @@ pub extern "C" fn loft_gl_enable(cap: i64) {
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_disable(cap: i64) {
     gl_guard!();
@@ -677,6 +705,7 @@ pub extern "C" fn loft_gl_disable(cap: i64) {
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_blend_func(src: i64, dst: i64) {
     gl_guard!();
@@ -696,6 +725,7 @@ pub extern "C" fn loft_gl_blend_func(src: i64, dst: i64) {
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_cull_face(face: i64) {
     gl_guard!();
@@ -705,6 +735,7 @@ pub extern "C" fn loft_gl_cull_face(face: i64) {
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_depth_mask(write: bool) {
     gl_guard!();
@@ -713,6 +744,7 @@ pub extern "C" fn loft_gl_depth_mask(write: bool) {
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_viewport(x: i64, y: i64, w: i64, h: i64) {
     gl_guard!();
@@ -723,6 +755,7 @@ pub extern "C" fn loft_gl_viewport(x: i64, y: i64, w: i64, h: i64) {
 
 // ── Framebuffer objects ───────────────────────────────────────────────
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_create_framebuffer() -> i64 {
     gl_guard!(0);
@@ -733,6 +766,7 @@ pub extern "C" fn loft_gl_create_framebuffer() -> i64 {
     fbo as i64
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_bind_framebuffer(fbo: i64) {
     gl_guard!();
@@ -742,6 +776,7 @@ pub extern "C" fn loft_gl_bind_framebuffer(fbo: i64) {
 }
 
 /// Attach a texture as the color (attachment=0) or depth (attachment=1) target.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_framebuffer_texture(fbo: i64, attachment: i64, tex: i64) {
     gl_guard!();
@@ -771,6 +806,7 @@ pub extern "C" fn loft_gl_framebuffer_texture(fbo: i64, attachment: i64, tex: i6
 }
 
 /// Create a depth-only texture (for shadow mapping).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_create_depth_texture(width: i64, height: i64) -> i64 {
     gl_guard!(0);
@@ -799,6 +835,7 @@ pub extern "C" fn loft_gl_create_depth_texture(width: i64, height: i64) -> i64 {
 }
 
 /// Create an empty RGBA texture (for render-to-texture / post-processing).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_create_color_texture(width: i64, height: i64) -> i64 {
     gl_guard!(0);
@@ -825,6 +862,7 @@ pub extern "C" fn loft_gl_create_color_texture(width: i64, height: i64) -> i64 {
 }
 
 /// Draw a fullscreen quad (for post-processing passes). Uses a built-in VAO.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_draw_fullscreen_quad() {
     gl_guard!();
@@ -865,6 +903,7 @@ pub extern "C" fn loft_gl_draw_fullscreen_quad() {
 // ── Input queries ─────────────────────────────────────────────────────
 
 /// Returns true if the key (ASCII code or special code) is currently pressed.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_key_pressed(key_code: i64) -> bool {
     if key_code < 0 || key_code > 255 {
@@ -873,17 +912,20 @@ pub extern "C" fn loft_gl_key_pressed(key_code: i64) -> bool {
     KEYS.with(|k| k.borrow()[key_code as usize])
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_mouse_x() -> f64 {
     MOUSE_X.with(|c| c.get())
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_mouse_y() -> f64 {
     MOUSE_Y.with(|c| c.get())
 }
 
 /// Returns bitmask: 1=left, 2=right, 4=middle.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_mouse_button() -> i64 {
     MOUSE_BTN.with(|c| c.get() as i64)
@@ -893,6 +935,7 @@ pub extern "C" fn loft_gl_mouse_button() -> i64 {
 /// last call (positive = scroll up).  Reset on read so each call
 /// returns only the delta since the previous one — suitable for the
 /// editor's per-frame `InputState.in_wheel` field.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_mouse_wheel() -> i64 {
     WHEEL_ACCUM.with(|c| {
@@ -987,6 +1030,7 @@ pub unsafe extern "C" fn loft_gl_upload_indexed_mesh(
 }
 
 /// Draw using index buffer (EBO). mode: 0=triangles, 1=lines, 2=points.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_draw_elements(vao: i64, n_indices: i64, mode: i64) {
     gl_guard!();
@@ -1003,6 +1047,7 @@ pub extern "C" fn loft_gl_draw_elements(vao: i64, n_indices: i64, mode: i64) {
 }
 
 /// Draw with explicit mode: 0=triangles, 1=lines, 2=points.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_draw_mode(vao: i64, n_vertices: i64, mode: i64) {
     gl_guard!();
@@ -1020,6 +1065,7 @@ pub extern "C" fn loft_gl_draw_mode(vao: i64, n_vertices: i64, mode: i64) {
 
 // ── GPU resource cleanup ──────────────────────────────────────────────
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_delete_shader(program: i64) {
     gl_guard!();
@@ -1028,6 +1074,7 @@ pub extern "C" fn loft_gl_delete_shader(program: i64) {
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_delete_vao(vao: i64) {
     gl_guard!();
@@ -1037,6 +1084,7 @@ pub extern "C" fn loft_gl_delete_vao(vao: i64) {
     }
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_delete_framebuffer(fbo: i64) {
     gl_guard!();
@@ -1171,6 +1219,7 @@ pub extern "C" fn loft_save_png(
 /// rows, since GL's origin is bottom-left while PNG is top-left.  Lets us
 /// inspect the live 3D output even on a headless / Wayland desktop where
 /// the window itself can't be grabbed by external tools.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_screenshot(
     width: i64,
@@ -1224,6 +1273,7 @@ pub extern "C" fn loft_gl_screenshot(
 }
 
 /// Load an image file (PNG, JPG) and upload it as a GL texture. Returns texture ID (0 on failure).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_load_texture(path_ptr: *const u8, path_len: usize) -> i64 {
     gl_guard!(0);
@@ -1282,6 +1332,7 @@ pub extern "C" fn loft_gl_upload_canvas(
 // Interpreter wrapper — extracts vector data via LoftStore + LoftRef.
 // Cannot use vec_wrapper! because the auto-marshaller's store snapshot
 // may be stale for canvas data (issue #120 store lifecycle).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_gl_upload_canvas(
     store: loft_ffi::LoftStore,
@@ -1298,6 +1349,7 @@ loft_ffi::vec_wrapper!(n_save_png, loft_save_png(path_ptr: *const u8, path_len: 
 loft_ffi::vec_wrapper!(n_rasterize_text_into, loft_rasterize_text_into(font_idx: i64, text_ptr: *const u8, text_len: usize, size: f64, buf: vec<i64>) -> i64);
 
 /// Return the line height in pixels for a font at the given size.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_text_height(_font_idx: i64, size: f64) -> i64 {
     (size as f32 * 1.2) as i64
@@ -1308,6 +1360,7 @@ pub extern "C" fn loft_text_height(_font_idx: i64, size: f64) -> i64 {
 /// mixed-size text: the top-anchored `gl_draw_text(x, y)` places the baseline
 /// at `y + gl_font_ascent(font, size)`, so two sizes sharing a baseline are
 /// drawn at `y_i = baseline - gl_font_ascent(font, size_i)`.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_font_ascent(font_idx: i64, size: f64) -> f64 {
     f64::from(text::font_ascent(font_idx as i32, size as f32))
@@ -1348,6 +1401,7 @@ pub extern "C" fn loft_rasterize_text_into(
 }
 
 /// Set line width for GL_LINES rendering.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_line_width(width: f64) {
     gl_guard!();
@@ -1357,6 +1411,7 @@ pub extern "C" fn loft_gl_line_width(width: f64) {
 }
 
 /// Set point size for GL_POINTS rendering.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_point_size(size: f64) {
     gl_guard!();
@@ -1440,6 +1495,71 @@ loft_ffi::loft_register! {
     loft_audio_play_raw => n_audio_play_raw,
 }
 
+// Plan-25 F4: generated marshal bridges (the `#[loft_native]` siblings),
+// registered under the same loft symbols.  Remap entries map the symbol to
+// the interpreter-aware `n_*` rust fn's bridge.  The interpreter dispatches
+// graphics through these; any symbol omitted here harmlessly falls back to
+// the legacy raw-ptr arms (still present during the F4 transition).
+loft_ffi::loft_register_bridges! {
+    "loft_gl_create_window" => loft_gl_create_window__loft_bridge,
+    "loft_gl_create_fullscreen_window" => loft_gl_create_fullscreen_window__loft_bridge,
+    "loft_gl_set_fullscreen" => loft_gl_set_fullscreen__loft_bridge,
+    "loft_gl_window_width" => loft_gl_window_width__loft_bridge,
+    "loft_gl_window_height" => loft_gl_window_height__loft_bridge,
+    "loft_gl_mouse_wheel" => loft_gl_mouse_wheel__loft_bridge,
+    "loft_gl_poll_events" => loft_gl_poll_events__loft_bridge,
+    "loft_gl_swap_buffers" => loft_gl_swap_buffers__loft_bridge,
+    "loft_gl_clear" => loft_gl_clear__loft_bridge,
+    "loft_gl_destroy_window" => loft_gl_destroy_window__loft_bridge,
+    "loft_gl_create_shader" => loft_gl_create_shader__loft_bridge,
+    "loft_gl_use_shader" => loft_gl_use_shader__loft_bridge,
+    "loft_gl_draw" => loft_gl_draw__loft_bridge,
+    "loft_gl_bind_texture" => loft_gl_bind_texture__loft_bridge,
+    "loft_gl_delete_texture" => loft_gl_delete_texture__loft_bridge,
+    "loft_gl_load_font" => loft_gl_load_font__loft_bridge,
+    "loft_text_height" => loft_text_height__loft_bridge,
+    "loft_gl_font_ascent" => loft_gl_font_ascent__loft_bridge,
+    // loft_rasterize_text_into / loft_save_png use vec_wrapper! (no
+    // #[loft_native] bridge) — they fall back to the legacy arms.
+    "loft_gl_measure_text" => loft_gl_measure_text__loft_bridge,
+    "loft_gl_upload_vertices" => n_gl_upload_vertices__loft_bridge,
+    "loft_gl_set_mat4" => n_gl_set_mat4__loft_bridge,
+    "loft_gl_set_uniform_float" => loft_gl_set_uniform_float__loft_bridge,
+    "loft_gl_set_uniform_int" => loft_gl_set_uniform_int__loft_bridge,
+    "loft_gl_set_uniform_vec3" => loft_gl_set_uniform_vec3__loft_bridge,
+    "loft_gl_enable" => loft_gl_enable__loft_bridge,
+    "loft_gl_disable" => loft_gl_disable__loft_bridge,
+    "loft_gl_blend_func" => loft_gl_blend_func__loft_bridge,
+    "loft_gl_cull_face" => loft_gl_cull_face__loft_bridge,
+    "loft_gl_depth_mask" => loft_gl_depth_mask__loft_bridge,
+    "loft_gl_viewport" => loft_gl_viewport__loft_bridge,
+    "loft_gl_create_framebuffer" => loft_gl_create_framebuffer__loft_bridge,
+    "loft_gl_bind_framebuffer" => loft_gl_bind_framebuffer__loft_bridge,
+    "loft_gl_framebuffer_texture" => loft_gl_framebuffer_texture__loft_bridge,
+    "loft_gl_create_depth_texture" => loft_gl_create_depth_texture__loft_bridge,
+    "loft_gl_create_color_texture" => loft_gl_create_color_texture__loft_bridge,
+    "loft_gl_draw_fullscreen_quad" => loft_gl_draw_fullscreen_quad__loft_bridge,
+    "loft_gl_key_pressed" => loft_gl_key_pressed__loft_bridge,
+    "loft_gl_mouse_x" => loft_gl_mouse_x__loft_bridge,
+    "loft_gl_mouse_y" => loft_gl_mouse_y__loft_bridge,
+    "loft_gl_mouse_button" => loft_gl_mouse_button__loft_bridge,
+    "loft_gl_draw_elements" => loft_gl_draw_elements__loft_bridge,
+    "loft_gl_draw_mode" => loft_gl_draw_mode__loft_bridge,
+    "loft_gl_delete_shader" => loft_gl_delete_shader__loft_bridge,
+    "loft_gl_delete_vao" => loft_gl_delete_vao__loft_bridge,
+    "loft_gl_delete_framebuffer" => loft_gl_delete_framebuffer__loft_bridge,
+    "loft_gl_line_width" => loft_gl_line_width__loft_bridge,
+    "loft_gl_point_size" => loft_gl_point_size__loft_bridge,
+    "loft_gl_load_texture" => loft_gl_load_texture__loft_bridge,
+    "loft_gl_upload_canvas" => n_gl_upload_canvas__loft_bridge,
+    "loft_gl_screenshot" => loft_gl_screenshot__loft_bridge,
+    "loft_audio_load" => loft_audio_load__loft_bridge,
+    "loft_audio_play" => loft_audio_play__loft_bridge,
+    "loft_audio_stop" => loft_audio_stop__loft_bridge,
+    "loft_audio_set_volume" => loft_audio_set_volume__loft_bridge,
+    "loft_audio_play_raw" => n_audio_play_raw__loft_bridge,
+}
+
 // ── Text / Font C-ABI exports (GL3) ─────────────────────────────────────
 
 /// Load a font from a file path. Returns font index (>= 0) on success, or
@@ -1451,6 +1571,7 @@ loft_ffi::loft_register! {
 /// fallback path skipped, font_idx=-1 cast to usize=MAX in measure_text,
 /// `fonts.get()` returns None, width returned as 0, canvas allocated as
 /// 5×25, no glyphs fit.)
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_load_font(path_ptr: *const u8, path_len: usize) -> i64 {
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
@@ -1469,6 +1590,7 @@ pub extern "C" fn loft_gl_load_font(path_ptr: *const u8, path_len: usize) -> i64
 
 /// Measure text width in pixels at the given font size.
 /// Takes and returns f64 to match loft's `float` type.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_measure_text(
     font_idx: i64,
@@ -1547,6 +1669,7 @@ pub unsafe extern "C" fn loft_gl_upload_texture(
 }
 
 /// Bind a texture to a texture unit for rendering.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_bind_texture(texture_id: i64, unit: i64) {
     gl_guard!();
@@ -1557,6 +1680,7 @@ pub extern "C" fn loft_gl_bind_texture(texture_id: i64, unit: i64) {
 }
 
 /// Delete a texture.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_delete_texture(texture_id: i64) {
     gl_guard!();
