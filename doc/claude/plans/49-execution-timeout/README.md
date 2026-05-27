@@ -7,7 +7,26 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design ready, no code.  Motivated by repeated hang-debugging pain: this
+**T1 + T2 + T3 IMPLEMENTED 2026-05-27** (`src/timeout.rs` + checkpoint call
+sites + `main.rs` arming).  The watchdog hard-kills a hung process at
+`T + grace` with a breadcrumb (verified: a hung `--interpret` program exits
+124/SIGABRT at `T+grace` reporting `phase=run-interpret`; a hung *compile*
+reports `phase=parse` — the lexer-recovery case below).  T2 cooperative
+graceful-exit fires at any parse/fn checkpoint past `T`.  T3 reads
+`LOFT_TIMEOUT` + `--timeout <secs>` and **defaults ON (300s) under `loft test`
+/ `--tests`** — the auto-mode case.  Key fix during completion: `main.rs` was
+arming `loft::timeout` (the *lib* crate's static instance) while the running
+binary uses its own `crate::timeout` modules — corrected to `crate::timeout`
+so the watchdog + breadcrumb share the instance the checkpoints write.
+
+**Remaining:** T4 (script-suite subprocess isolation — lib-test suites already
+subprocess via `loft test`, but `tests/wrap.rs::script_suite` runs in-process)
+and the **`--native` subprocess runtime** gap: `loft prog.loft` defaults to
+native, so loft's watchdog covers loft's *compile* (the motivating lexer loop)
+but a hang in the spawned native *child* needs the generated program to arm its
+own watchdog (the "Native specifics" section) — not yet wired.
+
+Motivated by repeated hang-debugging pain: this
 project has hit several hangs (@P356/#9 — OOB index → astronomical loop; the
 `rand` OOB hang; `native_oob_null`), and the only recourse was an external
 `timeout N ./loft …` which `SIGKILL`s with **zero** context.  Worse, the
@@ -76,9 +95,9 @@ as the strictly-later backstop.**
 
 | Item | What | Status |
 |---|---|---|
-| **T1** — watchdog hard-kill (THE GUARANTEE) | watchdog thread; fires at **`T + grace`** (always later than T2), dumps the shared breadcrumb, then `process::abort()`/`_exit` — terminates even when stuck in Rust/native/syscall | Open |
-| **T2** — cooperative rich diagnostic (PREFERRED, fires first at `T`) | deadline check at every loft "checkpoint" — runtime AND parse-time — raises a typed `Timeout` and dumps the rich context: (a) interpreter dispatch-loop entry; (b) native fn-entry / loop back-edge; (c) **parse-time entry points** — `Lexer::next`, `Lexer::cont`, `Lexer::recover_to` (the recovery loop in particular: 2026-05-27 we hit a 7-min infinite recovery loop on a malformed script).  Each checkpoint updates the shared breadcrumb (phase=parse/run, file, line) so T1's hard-kill has actionable context even if T2 misses. | Open |
-| **T3** — CLI / env + `--tests` default | `--timeout <secs>` + `LOFT_TIMEOUT`; **default ON under `--tests`/`loft test`**; the two-phase grace (graceful → hard) | Open |
+| **T1** — watchdog hard-kill (THE GUARANTEE) | watchdog thread; fires at **`T + grace`** (always later than T2), dumps the shared breadcrumb, then `process::abort()`/`_exit` — terminates even when stuck in Rust/native/syscall | **DONE 2026-05-27** — `timeout::arm` spawns the watchdog; verified firing at `T+grace`. |
+| **T2** — cooperative rich diagnostic (PREFERRED, fires first at `T`) | deadline check at every loft "checkpoint" — runtime AND parse-time — raises a typed `Timeout` and dumps the rich context: (a) interpreter dispatch-loop entry; (b) native fn-entry / loop back-edge; (c) **parse-time entry points** — `Lexer::next`, `Lexer::cont`, `Lexer::recover_to` (the recovery loop in particular: 2026-05-27 we hit a 7-min infinite recovery loop on a malformed script).  Each checkpoint updates the shared breadcrumb (phase=parse/run, file, line) so T1's hard-kill has actionable context even if T2 misses. | **DONE 2026-05-27** — `deadline_reached()` → `graceful_exit()` (exit 124) wired at the parse-entry, lexer-recovery, run-interpret + native fn-entry checkpoints.  NOT per-opcode: a tight *runtime* loop with no fn call has no checkpoint and falls to T1. |
+| **T3** — CLI / env + `--tests` default | `--timeout <secs>` + `LOFT_TIMEOUT`; **default ON under `--tests`/`loft test`**; the two-phase grace (graceful → hard) | **DONE 2026-05-27** — `LOFT_TIMEOUT` + `--timeout <secs>` arm in `main`; `loft test`/`--tests` default-arms 300s (idempotent — explicit values override). |
 | **T4** — subprocess isolation for the harness | `tests/wrap.rs` / `tests/native.rs` run each script in a child process (or shell to `loft`) so a hard-kill localizes to one test, not the whole suite | Open |
 
 ## Diagnostics: what each path can report

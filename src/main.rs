@@ -71,6 +71,7 @@ mod stack;
 mod state;
 mod store;
 mod test_runner;
+mod timeout;
 mod tree;
 mod typedef;
 mod variables;
@@ -1322,8 +1323,17 @@ fn main() {
     // @PLAN49 T1+T3 — arm the execution-timeout watchdog from the env
     // (`LOFT_TIMEOUT=<secs>`) BEFORE we parse argv.  An explicit
     // `--timeout` later in argv re-arms (no-op — `arm` is idempotent)
-    // but the env value is the floor.
-    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());
+    // but the env value is the floor.  MUST be `crate::timeout` (this
+    // binary's module instance), not `loft::timeout` (the lib crate's
+    // separate copy) — the binary runs its own `crate::` modules
+    // (`crate::state::State` etc.), and the `checkpoint_*` call sites in
+    // them resolve to `crate::timeout`, so the watchdog + breadcrumb must
+    // share that same instance.  Arming `loft::timeout` set a different
+    // set of statics the running code never reads.
+    crate::timeout::arm(
+        crate::timeout::env_timeout_secs(),
+        crate::timeout::env_grace_secs(),
+    );
     // Plan-07 phase 1 step 1.20 / phase 3 — chain a Rust panic hook
     // that surfaces the loft source position of the offending pc
     // before the default panic message.  Reads the per-thread snapshot
@@ -1616,7 +1626,7 @@ fn main() {
                     std::process::exit(2);
                 });
             i += 1;
-            loft::timeout::arm(secs, loft::timeout::env_grace_secs());
+            crate::timeout::arm(secs, crate::timeout::env_grace_secs());
         } else if a == "--check" || a == "check" {
             check_only = true;
         } else if a == "--help" || a == "-h" || a == "-?" {
@@ -1957,6 +1967,15 @@ fn main() {
 
     // Handle --tests before requiring an input file
     if let Some(ref test_dir) = tests_dir {
+        // @PLAN49 T3 — default the timeout ON under `loft test` / `--tests`.
+        // This is the auto-mode case the watchdog exists for: a hung test or a
+        // looping compile in the suite can't be killed interactively, so a
+        // generous deadline self-kills it with a breadcrumb.  `arm` is
+        // idempotent, so an explicit positive `--timeout <secs>` or
+        // `LOFT_TIMEOUT=<secs>` (armed earlier in `main`) overrides this
+        // default.  300s is far longer than any single test's compile+run,
+        // short enough to catch a true infinite loop.
+        crate::timeout::arm(300, crate::timeout::env_grace_secs());
         let exit_code = run_tests(
             &dir,
             test_dir,

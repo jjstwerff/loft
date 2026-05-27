@@ -36,7 +36,7 @@
 
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Master "is the timeout active?" flag.  Every checkpoint's first
@@ -48,6 +48,10 @@ static ARMED: AtomicBool = AtomicBool::new(false);
 /// `deadline_reached` always returns `false`, the watchdog never
 /// fires.  Set once via `arm`.
 static DEADLINE: OnceLock<Instant> = OnceLock::new();
+
+/// The configured timeout in seconds, stored at `arm` so the cooperative
+/// (T2) exit can report it.  `0` while disarmed.
+static TIMEOUT_SECS: AtomicU64 = AtomicU64::new(0);
 
 /// Shared breadcrumb — read by the watchdog before it aborts, written
 /// by parse-time / runtime / codegen checkpoints.  Held under a
@@ -90,6 +94,7 @@ pub fn arm(timeout_secs: u64, grace_secs: u64) {
     if ARMED.swap(true, Ordering::SeqCst) {
         return;
     }
+    TIMEOUT_SECS.store(timeout_secs, Ordering::SeqCst);
     let now = Instant::now();
     let deadline = now + Duration::from_secs(timeout_secs);
     let hard = deadline + Duration::from_secs(grace_secs);
@@ -120,6 +125,30 @@ pub fn deadline_reached() -> bool {
     DEADLINE.get().is_some_and(|d| Instant::now() >= *d)
 }
 
+/// @PLAN49 T2 — cooperative graceful exit.  A `checkpoint_*` on the
+/// executing thread observed the deadline has passed: print the (current,
+/// thread-local-accurate) breadcrumb and exit cleanly with `124` (the GNU
+/// `timeout` convention) — *before* the watchdog's `T + grace` hard-kill, so
+/// in the common case the watchdog is a no-op and the user gets a clean,
+/// localised timeout report.  When execution is genuinely wedged in Rust
+/// (no checkpoint runs past `T`), only the watchdog fires — the guarantee.
+#[cold]
+fn graceful_exit() -> ! {
+    let (phase, fn_name, file, line) = match BREADCRUMB.try_lock() {
+        Ok(bc) => (bc.phase, bc.fn_name, bc.file.clone(), bc.line),
+        Err(_) => ("", "", String::new(), 0),
+    };
+    eprintln!(
+        "[timeout] deadline reached after {}s (graceful): phase={} fn={} file={}:{}",
+        TIMEOUT_SECS.load(Ordering::Relaxed),
+        if phase.is_empty() { "?" } else { phase },
+        if fn_name.is_empty() { "?" } else { fn_name },
+        if file.is_empty() { "?" } else { &file },
+        line
+    );
+    std::process::exit(124);
+}
+
 /// Native / interpret function-entry checkpoint — combines phase +
 /// fn name + (file, line) into ONE mutex acquisition.  All inputs are
 /// `&'static str` (string literals from generated code or library
@@ -139,6 +168,9 @@ pub fn checkpoint_fn(phase: &'static str, name: &'static str, file: &'static str
             bc.file.push_str(file);
         }
         bc.line = line;
+    }
+    if deadline_reached() {
+        graceful_exit();
     }
 }
 
@@ -161,6 +193,9 @@ pub fn checkpoint_parse(file: &str, line: u32) {
             bc.file.push_str(file);
         }
         bc.line = line;
+    }
+    if deadline_reached() {
+        graceful_exit();
     }
 }
 
