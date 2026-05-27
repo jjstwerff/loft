@@ -1518,8 +1518,14 @@ extern crate loft;"
             return Ok(());
         }
         let def = self.data.def(dnr);
+        // @P379 — emit the REGISTERED database name (library-qualified on a
+        // cross-library bare-name collision, e.g. `moros_map::Chunk`), not
+        // the bare def name, so the generated `db.structure(...)` matches the
+        // interpreter's table and two same-named library structs don't
+        // collide in generated code either.
+        let reg_name = &self.stores.types[type_id as usize].name;
         if matches!(def.def_type, DefType::Struct) {
-            writeln!(w, "    let t{type_id} = db.structure(\"{}\", 0);", def.name)?;
+            writeln!(w, "    let t{type_id} = db.structure(\"{reg_name}\", 0);")?;
         } else if def.def_type == DefType::EnumValue && !def.attributes.is_empty() {
             let parent_nr = def.parent;
             if parent_nr == u32::MAX {
@@ -1534,8 +1540,7 @@ extern crate loft;"
                 .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
             writeln!(
                 w,
-                "    let t{type_id} = db.structure(\"{}\", {enum_value});",
-                def.name
+                "    let t{type_id} = db.structure(\"{reg_name}\", {enum_value});"
             )?;
         } else if def.def_type == DefType::Enum {
             writeln!(w, "    let t{type_id} = db.enumerate(\"{}\");", def.name)?;

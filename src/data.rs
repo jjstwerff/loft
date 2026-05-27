@@ -2016,6 +2016,24 @@ impl Data {
         }
     }
 
+    /// @P379 — a library-qualified database name for a struct/enum-value
+    /// definition, e.g. `"moros_map::Chunk"`.  Used by database type
+    /// registration to disambiguate two libraries that each define a
+    /// struct of the same bare name (function access is already namespaced
+    /// per library; this gives the flat database type table the same
+    /// namespacing).  Falls back to `"src<N>::<name>"` if the source id
+    /// has no recorded library short-name (keeps the key unique either way).
+    #[must_use]
+    pub fn qualified_type_name(&self, d_nr: u32) -> String {
+        let def = self.def(d_nr);
+        for (lib, &id) in &self.use_names {
+            if id == def.source && !lib.is_empty() && lib != "std" {
+                return format!("{lib}::{}", def.name);
+            }
+        }
+        format!("src{}::{}", def.source, def.name)
+    }
+
     #[must_use]
     pub fn use_exists(&self, file: &str) -> bool {
         self.use_names.contains_key(file)
