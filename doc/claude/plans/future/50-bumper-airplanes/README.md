@@ -190,28 +190,36 @@ audience can see who's where without needing to read labels.
      frames per real frame — motion looks continuous regardless
      of the underlying rate-LOD band.
 
-  2. **Fade-in on sight-range entry.**  When a peer first
-     crosses into sight range from outside, the first
-     pose-frame arrives "cold" — the phone has no prior history
-     for that peer.  Rendering it at full alpha would produce
-     a jarring "pop into existence" effect.  The phone instead
-     ramps the peer's alpha from 0 → 1 over
-     `view.peer_fade_in_secs` (default 0.4 sec) and starts
-     building the interp history during the ramp.
+  2. **Fade-in on sight-range entry (implicit signal).**  When
+     a pose-frame arrives for a plane_id the phone has not seen
+     recently, the renderer treats it as a fresh entry: ramps
+     the peer's alpha from 0 → 1 over `view.peer_fade_in_secs`
+     (default 0.4 sec) and starts building the interp history
+     during the ramp.  No explicit ENTER signal is needed — the
+     first pose-frame for a previously-unseen plane_id is
+     itself the trigger.
 
-  3. **Fade-out on sight-range exit.**  When a peer crosses
-     out of sight range, the server simply stops sending its
-     pose-frames — there is no explicit "this peer left"
-     message.  The phone detects this passively: if no frame
-     has arrived for a peer in
-     `view.peer_silence_timeout_secs` (default 0.4 sec — wide
-     enough to cover the outer-ring 7.5 Hz interval × 3), the
-     phone starts a fade-out at the peer's last-known pose,
-     ramping alpha from 1 → 0 over `view.peer_fade_out_secs`
-     (default 0.5 sec).  After the fade completes, the peer is
-     removed from the active set.  If a frame for that peer
-     arrives mid-fade (transient packet loss, not a real
-     departure), the fade reverses and resumes normal rendering.
+  3. **Fade-out on sight-range exit (explicit `EXIT` signal +
+     silence backstop).**  The server sends an explicit `EXIT:plane_id`
+     event the instant a peer's distance crosses
+     `net.peer_sight_range` outward.  On receipt the phone
+     starts a fade-out at the peer's last-known pose, ramping
+     alpha from 1 → 0 over `view.peer_fade_out_secs` (default
+     0.5 sec).  Backstop: if the EXIT message is somehow lost
+     (rare on LAN, more relevant on poor connections), the
+     phone falls back to silence-timeout detection — if no
+     pose-frame OR EXIT for a peer has arrived in
+     `view.peer_silence_timeout_secs` (default 0.25 sec; sized
+     as a packet-loss backstop, not a primary detector), the
+     phone starts the same fade-out independently.  Self-healing
+     via the backstop also covers the case where the server
+     crashes — all peers go silent and fade out gracefully
+     rather than freezing at their last position.
+
+     If a pose-frame for a peer arrives **mid-fade** (server
+     re-included them: transient packet-loss recovery, a peer
+     re-entering sight range, or a stale state-sync), the fade
+     reverses and normal rendering resumes.
 
   These three behaviours are not QoS — they're how the phone's
   first-person renderer turns whatever pose-frame schedule it
@@ -278,6 +286,25 @@ audience can see who's where without needing to read labels.
   phase 7.  Static defaults from NUMBERS.md ship in v1; the
   multipliers and tier thresholds become tunables when phase 7
   starts.
+
+### Wire protocol — message kinds (v1)
+
+The phone ⇄ server WS protocol carries a small set of message
+kinds.  Fixed-format (not JSON) to keep per-frame size under
+budget.  Indicative shape — final framing decided in phase 0a /
+phase 1.
+
+| Direction | Kind | Approx. wire size | When |
+|---|---|---|---|
+| Phone → server | `INPUT` | ~16 B (cid + L + R + L_on + R_on + ticks) | At `net.input_rate` (30 Hz default) |
+| Server → phone | `POSE` | ~32 B per plane (see `net.pose_frame_bytes_budget`) | At per-recipient per-peer rate-LOD (30 / 15 / 7.5 Hz by distance) |
+| Server → phone | `EXIT` | ~6 B (plane_id) | When a peer's distance crosses `peer_sight_range` outward, sent once |
+| Server → phone | `EVENT` | ~8 B (kind + position) | Own-plane events (bounce, target hit, plane hit, stall, score) — triggers phone-local audio + score increment |
+| Server → projector | `POSE` (all planes) | ~32 B × N | At `net.broadcast_rate` (30 Hz); projector receives unfiltered |
+| Server → projector | `EVENT` (all events) | as above | Triggers projector confetti + countdown ticks + leaderboard splash |
+
+No `ENTER` signal — first pose-frame for a previously-unseen
+plane_id is itself the trigger for the phone's fade-in.
 
 ### Control mapping (the novel bit)
 
