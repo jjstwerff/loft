@@ -1032,6 +1032,22 @@ pub(crate) fn run_tests(
                         } else {
                             state.execute_argv(&fn_name_owned, &data_copy, &user_args);
                         }
+                        // @P367: assert(false) / panic / divide-by-zero / OOB /
+                        // null-deref set a *typed* runtime fault and halt WITHOUT
+                        // a Rust panic (the C66 path), so catch_unwind sees Ok and
+                        // the test would otherwise be scored PASSED.  Surface the
+                        // fault so the runner can FAIL the test — and so an
+                        // intentional fault still satisfies @EXPECT_FAIL.
+                        // `had_fatal` is set in both dev and production modes;
+                        // `runtime_error` carries the message (dev mode).
+                        let fault = state.database.had_fatal;
+                        let fault_msg = state
+                            .database
+                            .runtime_error
+                            .as_ref()
+                            .map(|e| e.message.clone())
+                            .unwrap_or_else(|| "runtime error".to_string());
+                        (fault, fault_msg)
                     }));
 
                     // Evaluate pass/fail, respecting @EXPECT_FAIL annotations.
@@ -1042,12 +1058,27 @@ pub(crate) fn run_tests(
                         || (!ann.expect_fail_file.is_empty()
                             && !ann.expect_fail_fn.contains_key(fn_name.as_str()));
                     let (passed, fail_msg) = match result {
-                        Ok(()) => {
-                            if should_fail {
+                        Ok((fault, fault_msg)) => {
+                            if fault {
+                                // @P367: a typed runtime fault fired (no Rust panic).
+                                if should_fail && matches_expect_fail(&ann, fn_name, &fault_msg) {
+                                    (true, None) // expected fault — pass
+                                } else if should_fail {
+                                    (
+                                        false,
+                                        Some(format!(
+                                            "failed, but the error did not match @EXPECT_FAIL: {fault_msg}"
+                                        )),
+                                    )
+                                } else {
+                                    (false, Some(fault_msg)) // fault now FAILS the test
+                                }
+                            } else if should_fail {
                                 (
                                     false,
                                     Some(
-                                        "expected panic but function returned cleanly".to_string(),
+                                        "expected failure but function returned cleanly"
+                                            .to_string(),
                                     ),
                                 )
                             } else {

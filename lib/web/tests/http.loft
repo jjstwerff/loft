@@ -46,3 +46,34 @@ fn test_post_with_headers() {
   r = web::http_post_h("https://httpbin.org/post", "test-data", headers);
   assert(r.ok(), "POST+headers status={r.status}");
 }
+
+fn test_response_headers() {
+  r = web::http_get("https://httpbin.org/response-headers?X-Test=hi");
+  assert(r.status == 200, "status 200, got {r.status}");
+  assert(len(r.headers) > 0, "headers populated");
+  assert(r.header("x-test") == "hi", "x-test header = hi, got '{r.header("x-test")}'");
+  assert(r.header("X-Test") == "hi", "case-insensitive name lookup");
+  assert(r.header("absent") == "", "absent header is empty");
+}
+
+fn test_session_cookie_roundtrip() {
+  s = web::http_session(true);                            // follow redirects
+  s.get("https://httpbin.org/cookies/set?foo=bar", []);   // sets cookie, 302 -> /cookies
+  r = s.get("https://httpbin.org/cookies", []);           // jar carried
+  assert(r.status == 200, "cookies status 200, got {r.status}");
+  assert(r.body.contains("foo"), "cookie 'foo' echoed back: {r.body}");
+}
+
+fn test_session_redirect_location() {
+  s = web::http_session(false);                           // do NOT follow
+  r = s.get("https://httpbin.org/redirect-to?url=/get", []);
+  assert(r.status >= 300 && r.status < 400, "3xx, got {r.status}");
+  assert(r.header("location") != "", "Location header readable");
+}
+
+fn test_base64() {
+  assert(web::base64_encode("hello") == "aGVsbG8=", "rfc vector encode: {web::base64_encode("hello")}");
+  assert(web::base64_decode("aGVsbG8=") == "hello", "rfc vector decode: {web::base64_decode("aGVsbG8=")}");
+  // round-trip a string needing padding
+  assert(web::base64_decode(web::base64_encode("Aladdin:open sesame")) == "Aladdin:open sesame", "basic-auth round-trip");
+}

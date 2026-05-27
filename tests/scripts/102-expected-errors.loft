@@ -134,3 +134,20 @@ fn test_const_local_ref_reassigned() {
   const c = North;
   c = South;
 }
+
+// ── @PLAN48 P2 / @P370 — implicit integer→i32 narrowing is an error ──
+
+// @EXPECT_ERROR: cannot implicitly narrow
+fn test_integer_to_i32_assign() {
+  n: integer = 5;
+  x: i32 = n;   // narrowing (non-literal) — requires `as i32`
+  assert(x == 5, "unreachable");
+}
+
+fn p370_takes_i32(x: i32) -> i32 { x }
+
+// @EXPECT_ERROR: cannot implicitly narrow
+fn test_integer_to_i32_arg() {
+  n: integer = 5;
+  assert(p370_takes_i32(n) == 5, "unreachable");   // narrowing arg — requires `as i32`
+}

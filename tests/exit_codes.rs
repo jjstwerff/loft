@@ -800,3 +800,119 @@ fn introspect_show_types_renders_deps() {
         "expected `n_first -> text[\"a\"]` (P197 dep propagation); got {stdout}"
     );
 }
+
+/// @P367 regression: `loft --tests` must report a test FAILED (and exit
+/// non-zero) when an `assert(false)` / `panic` / divide-by-zero fired inside it
+/// — these set a typed runtime fault and halt WITHOUT a Rust panic (the C66
+/// path), so the runner previously scored them PASSED.
+#[test]
+fn tests_runner_fails_on_assert_and_fault() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("loft_p367_fault.loft");
+    std::fs::write(
+        &path,
+        "fn test_bad_assert() { assert(false, \"boom\"); }\n\
+         fn test_panic() { panic(\"kapow\"); }\n\
+         fn test_ok() { assert(1 == 1, \"fine\"); }\n",
+    )
+    .expect("write temp file");
+    let out = Command::new(loft_bin())
+        .arg("--tests")
+        .arg(&path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit when a test asserts/panics; stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("FAILED") && stdout.contains("2 failed") && stdout.contains("1 passed"),
+        "expected 2 failed / 1 passed; got {stdout}"
+    );
+    assert!(
+        stdout.contains("assertion failed: boom") && stdout.contains("panic: kapow"),
+        "expected the fault messages in the FAIL lines; got {stdout}"
+    );
+}
+
+/// @P367 companion: a `@EXPECT_FAIL` test whose intentional fault fires must
+/// still PASS (and the file exit 0) — the fix must not break expected-fail.
+#[test]
+fn tests_runner_expect_fail_still_passes() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("loft_p367_expectfail.loft");
+    std::fs::write(
+        &path,
+        "// @EXPECT_FAIL: boom\nfn test_intentional() { assert(false, \"boom\"); }\n",
+    )
+    .expect("write temp file");
+    let out = Command::new(loft_bin())
+        .arg("--tests")
+        .arg(&path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "expected exit 0 for an @EXPECT_FAIL intentional fault; stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "expected the @EXPECT_FAIL test to pass; got {stdout}"
+    );
+}
+
+/// @P368 regression: the divide-by-zero warning must NOT fire when the divisor
+/// is a non-zero literal constant (int OR float), but MUST still fire for a
+/// variable divisor.  Also: the message must not say "integer division".
+#[test]
+fn div_by_literal_constant_no_warning() {
+    let dir = std::env::temp_dir();
+    let safe = dir.join("loft_p368_safe.loft");
+    std::fs::write(
+        &safe,
+        "fn calc(x: float, c: integer) -> float {\n  \
+           a = x / 2.0;\n  b = x / 0.75;\n  d = c / 2;\n  x + a + b + (d as float)\n}\n\
+         fn main() { println(\"{calc(10.0, 10)}\"); }\n",
+    )
+    .expect("write temp file");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&safe)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("may produce null on divide-by-zero"),
+        "literal-constant divisors must not warn; got stderr={stderr}"
+    );
+
+    // A variable divisor is genuinely unchecked — the warning MUST still fire,
+    // and must read "division" (not "integer division").
+    let unsafe_ = dir.join("loft_p368_unsafe.loft");
+    std::fs::write(
+        &unsafe_,
+        "fn calc(c: integer, y: integer) -> integer { c / y }\n\
+         fn main() { println(\"{calc(10, 2)}\"); }\n",
+    )
+    .expect("write temp file");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&unsafe_)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("division may produce null on divide-by-zero"),
+        "variable divisor must still warn; got stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("integer division may produce null"),
+        "warning must not say 'integer division'; got stderr={stderr}"
+    );
+}

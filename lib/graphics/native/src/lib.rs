@@ -263,15 +263,15 @@ pub extern "C" fn loft_gl_set_fullscreen(on: bool) {
 /// projection / 2D ortho / overlay placement correctly.  Returns 0 if no
 /// window exists.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_window_width() -> i32 {
+pub extern "C" fn loft_gl_window_width() -> i64 {
     gl_guard!(0);
-    with_gl(|s| s.viewport_w as i32).unwrap_or(0)
+    with_gl(|s| s.viewport_w as i64).unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_window_height() -> i32 {
+pub extern "C" fn loft_gl_window_height() -> i64 {
     gl_guard!(0);
-    with_gl(|s| s.viewport_h as i32).unwrap_or(0)
+    with_gl(|s| s.viewport_h as i64).unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
@@ -353,18 +353,18 @@ pub extern "C" fn loft_gl_create_shader(
     vert_len: usize,
     frag_ptr: *const u8,
     frag_len: usize,
-) -> u32 {
+) -> i64 {
     gl_guard!(0);
     let vert = unsafe { loft_ffi::text(vert_ptr, vert_len) };
     let frag = unsafe { loft_ffi::text(frag_ptr, frag_len) };
-    shader::compile_program(vert, frag).unwrap_or(0)
+    i64::from(shader::compile_program(vert, frag).unwrap_or(0))
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_use_shader(program: u32) {
+pub extern "C" fn loft_gl_use_shader(program: i64) {
     gl_guard!();
     unsafe {
-        gl::UseProgram(program);
+        gl::UseProgram(program as u32);
     }
 }
 
@@ -469,10 +469,10 @@ pub unsafe extern "C" fn loft_gl_upload_mesh(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_draw(vao: u32, n_vertices: u32) {
+pub extern "C" fn loft_gl_draw(vao: i64, n_vertices: i64) {
     gl_guard!();
     unsafe {
-        gl::BindVertexArray(vao);
+        gl::BindVertexArray(vao as u32);
         gl::DrawArrays(gl::TRIANGLES, 0, n_vertices as i32);
         gl::BindVertexArray(0);
     }
@@ -491,8 +491,8 @@ pub extern "C" fn loft_gl_draw(vao: u32, n_vertices: u32) {
 pub unsafe extern "C" fn n_gl_upload_vertices(
     store: loft_ffi::LoftStore,
     data: loft_ffi::LoftRef,
-    stride: i32,
-) -> i32 {
+    stride: i64,
+) -> i64 {
     gl_guard!(0);
     let count = unsafe { store.vector_len(&data) } as u32;
     let n_vertices = count / stride as u32;
@@ -500,7 +500,7 @@ pub unsafe extern "C" fn n_gl_upload_vertices(
     let mut vao = 0u32;
     let mut vbo = 0u32;
     unsafe { loft_gl_upload_mesh(data_ptr, n_vertices, stride as u32, &mut vao, &mut vbo) };
-    vao as i32
+    vao as i64
 }
 
 /// Set a mat4 uniform from a vector<float> (16 elements, column-major).
@@ -508,7 +508,7 @@ pub unsafe extern "C" fn n_gl_upload_vertices(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_gl_set_mat4(
     store: loft_ffi::LoftStore,
-    program: i32,
+    program: i64,
     name_ptr: *const u8,
     name_len: usize,
     mat: loft_ffi::LoftRef,
@@ -547,8 +547,8 @@ pub unsafe extern "C" fn n_gl_set_mat4(
 pub unsafe extern "C" fn loft_gl_upload_vertices(
     data_ptr: *const f32,
     count: u32,
-    stride: i32,
-) -> i32 {
+    stride: i64,
+) -> i64 {
     gl_guard!(0);
     let n_vertices = if stride == 0 {
         0
@@ -558,14 +558,14 @@ pub unsafe extern "C" fn loft_gl_upload_vertices(
     let mut vao = 0u32;
     let mut vbo = 0u32;
     unsafe { loft_gl_upload_mesh(data_ptr, n_vertices, stride as u32, &mut vao, &mut vbo) };
-    vao as i32
+    vao as i64
 }
 
 /// Set a mat4 uniform from a raw f64 pointer (vector<float> element type).
 /// Converts the 16 f64 values to f32 before passing to OpenGL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn loft_gl_set_mat4(
-    program: i32,
+    program: i64,
     name_ptr: *const u8,
     name_len: usize,
     mat_ptr: *const f64,
@@ -593,7 +593,7 @@ pub unsafe extern "C" fn loft_gl_set_mat4(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_set_uniform_float(
-    program: u32,
+    program: i64,
     name_ptr: *const u8,
     name_len: usize,
     val: f64,
@@ -602,7 +602,7 @@ pub extern "C" fn loft_gl_set_uniform_float(
     let name = unsafe { loft_ffi::text(name_ptr, name_len) };
     let c_name = std::ffi::CString::new(name).unwrap_or_default();
     unsafe {
-        let loc = gl::GetUniformLocation(program, c_name.as_ptr());
+        let loc = gl::GetUniformLocation(program as u32, c_name.as_ptr());
         if loc >= 0 {
             gl::Uniform1f(loc, val as f32);
         }
@@ -611,25 +611,25 @@ pub extern "C" fn loft_gl_set_uniform_float(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_set_uniform_int(
-    program: u32,
+    program: i64,
     name_ptr: *const u8,
     name_len: usize,
-    val: i32,
+    val: i64,
 ) {
     gl_guard!();
     let name = unsafe { loft_ffi::text(name_ptr, name_len) };
     let c_name = std::ffi::CString::new(name).unwrap_or_default();
     unsafe {
-        let loc = gl::GetUniformLocation(program, c_name.as_ptr());
+        let loc = gl::GetUniformLocation(program as u32, c_name.as_ptr());
         if loc >= 0 {
-            gl::Uniform1i(loc, val);
+            gl::Uniform1i(loc, val as i32);
         }
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_set_uniform_vec3(
-    program: u32,
+    program: i64,
     name_ptr: *const u8,
     name_len: usize,
     x: f64,
@@ -640,7 +640,7 @@ pub extern "C" fn loft_gl_set_uniform_vec3(
     let name = unsafe { loft_ffi::text(name_ptr, name_len) };
     let c_name = std::ffi::CString::new(name).unwrap_or_default();
     unsafe {
-        let loc = gl::GetUniformLocation(program, c_name.as_ptr());
+        let loc = gl::GetUniformLocation(program as u32, c_name.as_ptr());
         if loc >= 0 {
             gl::Uniform3f(loc, x as f32, y as f32, z as f32);
         }
@@ -650,7 +650,7 @@ pub extern "C" fn loft_gl_set_uniform_vec3(
 // ── GL state management ───────────────────────────────────────────────
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_enable(cap: i32) {
+pub extern "C" fn loft_gl_enable(cap: i64) {
     gl_guard!();
     let gl_cap = match cap {
         1 => gl::DEPTH_TEST,
@@ -664,7 +664,7 @@ pub extern "C" fn loft_gl_enable(cap: i32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_disable(cap: i32) {
+pub extern "C" fn loft_gl_disable(cap: i64) {
     gl_guard!();
     let gl_cap = match cap {
         1 => gl::DEPTH_TEST,
@@ -678,9 +678,9 @@ pub extern "C" fn loft_gl_disable(cap: i32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_blend_func(src: i32, dst: i32) {
+pub extern "C" fn loft_gl_blend_func(src: i64, dst: i64) {
     gl_guard!();
-    let map = |v: i32| -> u32 {
+    let map = |v: i64| -> u32 {
         match v {
             0 => gl::ZERO,
             1 => gl::ONE,
@@ -697,7 +697,7 @@ pub extern "C" fn loft_gl_blend_func(src: i32, dst: i32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_cull_face(face: i32) {
+pub extern "C" fn loft_gl_cull_face(face: i64) {
     gl_guard!();
     let f = if face == 0 { gl::BACK } else { gl::FRONT };
     unsafe {
@@ -714,27 +714,27 @@ pub extern "C" fn loft_gl_depth_mask(write: bool) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_viewport(x: i32, y: i32, w: i32, h: i32) {
+pub extern "C" fn loft_gl_viewport(x: i64, y: i64, w: i64, h: i64) {
     gl_guard!();
     unsafe {
-        gl::Viewport(x, y, w, h);
+        gl::Viewport(x as i32, y as i32, w as i32, h as i32);
     }
 }
 
 // ── Framebuffer objects ───────────────────────────────────────────────
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_create_framebuffer() -> i32 {
+pub extern "C" fn loft_gl_create_framebuffer() -> i64 {
     gl_guard!(0);
     let mut fbo = 0u32;
     unsafe {
         gl::GenFramebuffers(1, &mut fbo);
     }
-    fbo as i32
+    fbo as i64
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_bind_framebuffer(fbo: i32) {
+pub extern "C" fn loft_gl_bind_framebuffer(fbo: i64) {
     gl_guard!();
     unsafe {
         gl::BindFramebuffer(gl::FRAMEBUFFER, fbo as u32);
@@ -743,7 +743,7 @@ pub extern "C" fn loft_gl_bind_framebuffer(fbo: i32) {
 
 /// Attach a texture as the color (attachment=0) or depth (attachment=1) target.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_framebuffer_texture(fbo: i32, attachment: i32, tex: i32) {
+pub extern "C" fn loft_gl_framebuffer_texture(fbo: i64, attachment: i64, tex: i64) {
     gl_guard!();
     let att = if attachment == 0 {
         gl::COLOR_ATTACHMENT0
@@ -772,7 +772,7 @@ pub extern "C" fn loft_gl_framebuffer_texture(fbo: i32, attachment: i32, tex: i3
 
 /// Create a depth-only texture (for shadow mapping).
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_create_depth_texture(width: i32, height: i32) -> i32 {
+pub extern "C" fn loft_gl_create_depth_texture(width: i64, height: i64) -> i64 {
     gl_guard!(0);
     let mut tex = 0u32;
     unsafe {
@@ -782,8 +782,8 @@ pub extern "C" fn loft_gl_create_depth_texture(width: i32, height: i32) -> i32 {
             gl::TEXTURE_2D,
             0,
             gl::DEPTH_COMPONENT as i32,
-            width,
-            height,
+            width as i32,
+            height as i32,
             0,
             gl::DEPTH_COMPONENT,
             gl::FLOAT,
@@ -795,12 +795,12 @@ pub extern "C" fn loft_gl_create_depth_texture(width: i32, height: i32) -> i32 {
         gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
         gl::BindTexture(gl::TEXTURE_2D, 0);
     }
-    tex as i32
+    tex as i64
 }
 
 /// Create an empty RGBA texture (for render-to-texture / post-processing).
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_create_color_texture(width: i32, height: i32) -> i32 {
+pub extern "C" fn loft_gl_create_color_texture(width: i64, height: i64) -> i64 {
     gl_guard!(0);
     let mut tex = 0u32;
     unsafe {
@@ -810,8 +810,8 @@ pub extern "C" fn loft_gl_create_color_texture(width: i32, height: i32) -> i32 {
             gl::TEXTURE_2D,
             0,
             gl::RGBA as i32,
-            width,
-            height,
+            width as i32,
+            height as i32,
             0,
             gl::RGBA,
             gl::UNSIGNED_BYTE,
@@ -821,7 +821,7 @@ pub extern "C" fn loft_gl_create_color_texture(width: i32, height: i32) -> i32 {
         gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
         gl::BindTexture(gl::TEXTURE_2D, 0);
     }
-    tex as i32
+    tex as i64
 }
 
 /// Draw a fullscreen quad (for post-processing passes). Uses a built-in VAO.
@@ -866,7 +866,7 @@ pub extern "C" fn loft_gl_draw_fullscreen_quad() {
 
 /// Returns true if the key (ASCII code or special code) is currently pressed.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_key_pressed(key_code: i32) -> bool {
+pub extern "C" fn loft_gl_key_pressed(key_code: i64) -> bool {
     if key_code < 0 || key_code > 255 {
         return false;
     }
@@ -885,8 +885,8 @@ pub extern "C" fn loft_gl_mouse_y() -> f64 {
 
 /// Returns bitmask: 1=left, 2=right, 4=middle.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_mouse_button() -> i32 {
-    MOUSE_BTN.with(|c| c.get() as i32)
+pub extern "C" fn loft_gl_mouse_button() -> i64 {
+    MOUSE_BTN.with(|c| c.get() as i64)
 }
 
 /// Initiative 03 Phase 1: accumulated scroll-wheel ticks since the
@@ -988,7 +988,7 @@ pub unsafe extern "C" fn loft_gl_upload_indexed_mesh(
 
 /// Draw using index buffer (EBO). mode: 0=triangles, 1=lines, 2=points.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_draw_elements(vao: i32, n_indices: i32, mode: i32) {
+pub extern "C" fn loft_gl_draw_elements(vao: i64, n_indices: i64, mode: i64) {
     gl_guard!();
     let gl_mode = match mode {
         1 => gl::LINES,
@@ -997,14 +997,14 @@ pub extern "C" fn loft_gl_draw_elements(vao: i32, n_indices: i32, mode: i32) {
     };
     unsafe {
         gl::BindVertexArray(vao as u32);
-        gl::DrawElements(gl_mode, n_indices, gl::UNSIGNED_INT, std::ptr::null());
+        gl::DrawElements(gl_mode, n_indices as i32, gl::UNSIGNED_INT, std::ptr::null());
         gl::BindVertexArray(0);
     }
 }
 
 /// Draw with explicit mode: 0=triangles, 1=lines, 2=points.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_draw_mode(vao: i32, n_vertices: i32, mode: i32) {
+pub extern "C" fn loft_gl_draw_mode(vao: i64, n_vertices: i64, mode: i64) {
     gl_guard!();
     let gl_mode = match mode {
         1 => gl::LINES,
@@ -1013,7 +1013,7 @@ pub extern "C" fn loft_gl_draw_mode(vao: i32, n_vertices: i32, mode: i32) {
     };
     unsafe {
         gl::BindVertexArray(vao as u32);
-        gl::DrawArrays(gl_mode, 0, n_vertices);
+        gl::DrawArrays(gl_mode, 0, n_vertices as i32);
         gl::BindVertexArray(0);
     }
 }
@@ -1021,7 +1021,7 @@ pub extern "C" fn loft_gl_draw_mode(vao: i32, n_vertices: i32, mode: i32) {
 // ── GPU resource cleanup ──────────────────────────────────────────────
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_delete_shader(program: i32) {
+pub extern "C" fn loft_gl_delete_shader(program: i64) {
     gl_guard!();
     unsafe {
         gl::DeleteProgram(program as u32);
@@ -1029,7 +1029,7 @@ pub extern "C" fn loft_gl_delete_shader(program: i32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_delete_vao(vao: i32) {
+pub extern "C" fn loft_gl_delete_vao(vao: i64) {
     gl_guard!();
     let v = vao as u32;
     unsafe {
@@ -1038,7 +1038,7 @@ pub extern "C" fn loft_gl_delete_vao(vao: i32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_delete_framebuffer(fbo: i32) {
+pub extern "C" fn loft_gl_delete_framebuffer(fbo: i64) {
     gl_guard!();
     let f = fbo as u32;
     unsafe {
@@ -1112,8 +1112,8 @@ pub extern "C" fn loft_gl_text_texture(
 pub extern "C" fn loft_save_png(
     path_ptr: *const u8,
     path_len: usize,
-    width: i32,
-    height: i32,
+    width: i64,
+    height: i64,
     data_ptr: *const i64,
     data_count: u32,
 ) -> bool {
@@ -1173,13 +1173,13 @@ pub extern "C" fn loft_save_png(
 /// the window itself can't be grabbed by external tools.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_screenshot(
-    width: u32,
-    height: u32,
+    width: i64,
+    height: i64,
     path_ptr: *const u8,
     path_len: usize,
 ) -> bool {
     gl_guard!(false);
-    if width == 0 || height == 0 {
+    if width <= 0 || height <= 0 {
         return false;
     }
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
@@ -1225,7 +1225,7 @@ pub extern "C" fn loft_gl_screenshot(
 
 /// Load an image file (PNG, JPG) and upload it as a GL texture. Returns texture ID (0 on failure).
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_load_texture(path_ptr: *const u8, path_len: usize) -> i32 {
+pub extern "C" fn loft_gl_load_texture(path_ptr: *const u8, path_len: usize) -> i64 {
     gl_guard!(0);
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
     let img = match image::open(path) {
@@ -1233,7 +1233,7 @@ pub extern "C" fn loft_gl_load_texture(path_ptr: *const u8, path_len: usize) -> 
         Err(_) => return 0,
     };
     let (w, h) = img.dimensions();
-    unsafe { loft_gl_upload_texture(img.as_raw().as_ptr(), w, h) as i32 }
+    unsafe { loft_gl_upload_texture(img.as_raw().as_ptr(), w, h) as i64 }
 }
 
 /// Upload Canvas pixel data (0xAARRGGBB packed integers) as a GL RGBA
@@ -1258,9 +1258,9 @@ pub extern "C" fn loft_gl_load_texture(path_ptr: *const u8, path_len: usize) -> 
 pub extern "C" fn loft_gl_upload_canvas(
     data_ptr: *const i64,
     data_count: u32,
-    width: i32,
-    height: i32,
-) -> i32 {
+    width: i64,
+    height: i64,
+) -> i64 {
     gl_guard!(0);
     let w = width as u32;
     let h = height as u32;
@@ -1276,7 +1276,7 @@ pub extern "C" fn loft_gl_upload_canvas(
         rgba.push((px & 0xFF) as u8); // B
         rgba.push(((px >> 24) & 0xFF) as u8); // A
     }
-    unsafe { loft_gl_upload_texture(rgba.as_ptr(), w, h) as i32 }
+    unsafe { loft_gl_upload_texture(rgba.as_ptr(), w, h) as i64 }
 }
 
 // Interpreter wrapper — extracts vector data via LoftStore + LoftRef.
@@ -1286,21 +1286,21 @@ pub extern "C" fn loft_gl_upload_canvas(
 pub unsafe extern "C" fn n_gl_upload_canvas(
     store: loft_ffi::LoftStore,
     data: loft_ffi::LoftRef,
-    width: i32,
-    height: i32,
-) -> i32 {
+    width: i64,
+    height: i64,
+) -> i64 {
     gl_guard!(0);
     let count = unsafe { store.vector_len(&data) } as u32;
     let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const i64;
     loft_gl_upload_canvas(data_ptr, count, width, height)
 }
-loft_ffi::vec_wrapper!(n_save_png, loft_save_png(path_ptr: *const u8, path_len: usize, width: i32, height: i32, data: vec<i64>) -> bool);
-loft_ffi::vec_wrapper!(n_rasterize_text_into, loft_rasterize_text_into(font_idx: i32, text_ptr: *const u8, text_len: usize, size: f64, buf: vec<i64>) -> i32);
+loft_ffi::vec_wrapper!(n_save_png, loft_save_png(path_ptr: *const u8, path_len: usize, width: i64, height: i64, data: vec<i64>) -> bool);
+loft_ffi::vec_wrapper!(n_rasterize_text_into, loft_rasterize_text_into(font_idx: i64, text_ptr: *const u8, text_len: usize, size: f64, buf: vec<i64>) -> i64);
 
 /// Return the line height in pixels for a font at the given size.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_text_height(_font_idx: i32, size: f64) -> i32 {
-    (size as f32 * 1.2) as i32
+pub extern "C" fn loft_text_height(_font_idx: i64, size: f64) -> i64 {
+    (size as f32 * 1.2) as i64
 }
 
 /// @P340 — return the font's ASCENT in pixels (baseline → top of glyphs) from
@@ -1309,8 +1309,8 @@ pub extern "C" fn loft_text_height(_font_idx: i32, size: f64) -> i32 {
 /// at `y + gl_font_ascent(font, size)`, so two sizes sharing a baseline are
 /// drawn at `y_i = baseline - gl_font_ascent(font, size_i)`.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_font_ascent(font_idx: i32, size: f64) -> f64 {
-    f64::from(text::font_ascent(font_idx, size as f32))
+pub extern "C" fn loft_gl_font_ascent(font_idx: i64, size: f64) -> f64 {
+    f64::from(text::font_ascent(font_idx as i32, size as f32))
 }
 
 /// Rasterize text and write alpha values (0-255) into a pre-allocated
@@ -1324,15 +1324,15 @@ pub extern "C" fn loft_gl_font_ascent(font_idx: i32, size: f64) -> f64 {
 /// visible on Brick Buster's title.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_rasterize_text_into(
-    font_idx: i32,
+    font_idx: i64,
     text_ptr: *const u8,
     text_len: usize,
     size: f64,
     buf_ptr: *const i64,
     buf_count: u32,
-) -> i32 {
+) -> i64 {
     let s = unsafe { loft_ffi::text(text_ptr, text_len) };
-    let (bw, bh, bitmap) = text::rasterize_text(font_idx, s, size as f32);
+    let (bw, bh, bitmap) = text::rasterize_text(font_idx as i32, s, size as f32);
     let count = (bw * bh) as usize;
     if count == 0 || buf_ptr.is_null() {
         return 0;
@@ -1344,7 +1344,7 @@ pub extern "C" fn loft_rasterize_text_into(
         }
         buf[i] = i64::from(a);
     }
-    bw as i32
+    bw as i64
 }
 
 /// Set line width for GL_LINES rendering.
@@ -1452,11 +1452,18 @@ loft_ffi::loft_register! {
 /// `fonts.get()` returns None, width returned as 0, canvas allocated as
 /// 5×25, no glyphs fit.)
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_load_font(path_ptr: *const u8, path_len: usize) -> i32 {
+pub extern "C" fn loft_gl_load_font(path_ptr: *const u8, path_len: usize) -> i64 {
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
     match std::fs::read(path) {
-        Ok(data) => text::load_font_bytes(&data),
-        Err(_) => i32::MIN,
+        // load_font_bytes returns a small font index, or -1 on parse failure.
+        // Map -1 to loft's null sentinel (i64::MIN under the i64 ABI) so the
+        // loft-side `if !font { … }` check fires — see the doc-comment above
+        // for why a bare -1 would slip through as a valid-looking handle.
+        Ok(data) => {
+            let idx = text::load_font_bytes(&data);
+            if idx < 0 { i64::MIN } else { i64::from(idx) }
+        }
+        Err(_) => i64::MIN,
     }
 }
 
@@ -1464,13 +1471,13 @@ pub extern "C" fn loft_gl_load_font(path_ptr: *const u8, path_len: usize) -> i32
 /// Takes and returns f64 to match loft's `float` type.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_measure_text(
-    font_idx: i32,
+    font_idx: i64,
     text_ptr: *const u8,
     text_len: usize,
     size: f64,
 ) -> f64 {
     let s = unsafe { loft_ffi::text(text_ptr, text_len) };
-    text::measure_text(font_idx, s, size as f32) as f64
+    text::measure_text(font_idx as i32, s, size as f32) as f64
 }
 
 /// Rasterize text into an alpha bitmap.
@@ -1541,18 +1548,19 @@ pub unsafe extern "C" fn loft_gl_upload_texture(
 
 /// Bind a texture to a texture unit for rendering.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_bind_texture(texture_id: u32, unit: u32) {
+pub extern "C" fn loft_gl_bind_texture(texture_id: i64, unit: i64) {
     gl_guard!();
     unsafe {
-        gl::ActiveTexture(gl::TEXTURE0 + unit);
-        gl::BindTexture(gl::TEXTURE_2D, texture_id);
+        gl::ActiveTexture(gl::TEXTURE0 + unit as u32);
+        gl::BindTexture(gl::TEXTURE_2D, texture_id as u32);
     }
 }
 
 /// Delete a texture.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_delete_texture(texture_id: u32) {
+pub extern "C" fn loft_gl_delete_texture(texture_id: i64) {
     gl_guard!();
+    let texture_id = texture_id as u32;
     unsafe {
         gl::DeleteTextures(1, &texture_id);
     }

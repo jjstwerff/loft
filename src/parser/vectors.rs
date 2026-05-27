@@ -1411,20 +1411,35 @@ impl Parser {
         let declared = !assign_tp.is_unknown();
         let is_field = self.is_field(val);
         let is_var = matches!(val, Value::Var(_));
-        if self.lexer.has_token("]") {
-            return if is_var {
+        // Empty `[]`.  A new variable / struct field keeps the lightweight
+        // placeholder (its store is zero-initialised elsewhere), as does an
+        // UNTYPED standalone `[]` (no element-type hint to size a store).  But a
+        // TYPED standalone `[]` — e.g. `return []` with the function's return
+        // type threaded in (@P365) — falls through to the normal construction
+        // path so it materialises a REAL empty vector store; the placeholder
+        // (`Insert([Null])`) otherwise lowers to `()` → native E0308 / interpret
+        // garbage-handle crash.
+        if self.lexer.peek_token("]") {
+            if is_var {
+                self.lexer.has_token("]");
                 *val = Value::Insert(vec![]);
-                Type::Rewritten(Box::new(var_tp.clone()))
-            } else if is_field {
-                // Empty `[]` on a struct field: the field is already zero-initialized by
-                // OpDatabase; there is nothing to emit.  Wrapping the OpGetField result in
-                // Value::Insert would leave a dangling 12-byte DbRef on the expression stack.
+                return Type::Rewritten(Box::new(var_tp.clone()));
+            }
+            if is_field {
+                // The field is already zero-initialized by OpDatabase; nothing to
+                // emit.  Wrapping the OpGetField result in Value::Insert would
+                // leave a dangling 12-byte DbRef on the expression stack.
+                self.lexer.has_token("]");
                 *val = Value::Insert(vec![]);
-                var_tp.clone()
-            } else {
+                return var_tp.clone();
+            }
+            if assign_tp.is_unknown() {
+                self.lexer.has_token("]");
                 *val = Value::Insert(vec![val.clone()]);
-                var_tp.clone()
-            };
+                return var_tp.clone();
+            }
+            // Typed standalone empty — fall through; `]` is consumed by the
+            // `self.lexer.token("]")` at the end of the construction path.
         }
         let block = !is_field && !matches!(val, Value::Var(_));
         let vec = if is_field {
@@ -1446,16 +1461,20 @@ impl Parser {
             // to prevent a double-free.
             self.vars.set_skip_free(elm);
         }
-        // Handle [for n in range [if cond] { body }] vector comprehension
-        if self.lexer.peek_token("for") {
-            self.lexer.has_token("for");
-            let tp =
-                self.parse_vector_for(vec, elm, &mut in_t, val, is_var, is_field, block, parent_tp);
-            self.lexer.token("]");
-            return tp;
-        }
-        if let Some(early) = self.collect_vector_items(elm, &mut in_t, declared, &mut res) {
-            return early;
+        // A typed standalone empty `[]` (the @P365 fall-through above) has no
+        // items and no `for` comprehension — skip straight to the empty build.
+        if !self.lexer.peek_token("]") {
+            // Handle [for n in range [if cond] { body }] vector comprehension
+            if self.lexer.peek_token("for") {
+                self.lexer.has_token("for");
+                let tp = self
+                    .parse_vector_for(vec, elm, &mut in_t, val, is_var, is_field, block, parent_tp);
+                self.lexer.token("]");
+                return tp;
+            }
+            if let Some(early) = self.collect_vector_items(elm, &mut in_t, declared, &mut res) {
+                return early;
+            }
         }
         // convert parts to the common type
         if in_t == Type::Null {

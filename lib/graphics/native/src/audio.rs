@@ -52,28 +52,28 @@ fn ensure_audio() -> bool {
 /// Load an audio file (WAV or OGG).  Returns clip index (>= 0) or
 /// `i32::MIN` (loft null sentinel) on failure.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_audio_load(path_ptr: *const u8, path_len: usize) -> i32 {
+pub extern "C" fn loft_audio_load(path_ptr: *const u8, path_len: usize) -> i64 {
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
     if !ensure_audio() {
-        return i32::MIN;
+        return i64::MIN;
     }
     let data = match std::fs::read(path) {
         Ok(d) => d,
-        Err(_) => return i32::MIN,
+        Err(_) => return i64::MIN,
     };
     AUDIO.with(|cell| {
         let mut st = cell.borrow_mut();
         let st = st.as_mut().unwrap();
         let idx = st.clips.len();
         st.clips.push(Clip { data });
-        idx as i32
+        idx as i64
     })
 }
 
 /// Play a loaded clip at the given volume (0.0–1.0).
 /// Returns sink index (for stopping) or -1 on failure.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_audio_play(clip: i32, volume: f64) -> i32 {
+pub extern "C" fn loft_audio_play(clip: i64, volume: f64) -> i64 {
     if clip < 0 {
         return -1;
     }
@@ -100,18 +100,18 @@ pub extern "C" fn loft_audio_play(clip: i32, volume: f64) -> i32 {
         for (i, s) in st.sinks.iter().enumerate() {
             if s.empty() {
                 st.sinks[i] = sink;
-                return i as i32;
+                return i as i64;
             }
         }
         let si = st.sinks.len();
         st.sinks.push(sink);
-        si as i32
+        si as i64
     })
 }
 
 /// Stop a playing clip by sink index.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_audio_stop(sink_idx: i32) {
+pub extern "C" fn loft_audio_stop(sink_idx: i64) {
     if sink_idx < 0 {
         return;
     }
@@ -127,7 +127,7 @@ pub extern "C" fn loft_audio_stop(sink_idx: i32) {
 
 /// Set volume of a playing clip (0.0–1.0).
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_audio_set_volume(sink_idx: i32, volume: f64) {
+pub extern "C" fn loft_audio_set_volume(sink_idx: i64, volume: f64) {
     if sink_idx < 0 {
         return;
     }
@@ -185,9 +185,9 @@ impl rodio::Source for RawPcmSource {
 pub extern "C" fn loft_audio_play_raw(
     data_ptr: *const f32,
     data_count: u32,
-    sample_rate: i32,
+    sample_rate: i64,
     volume: f64,
-) -> i32 {
+) -> i64 {
     if data_ptr.is_null() || data_count == 0 || sample_rate <= 0 {
         return -1;
     }
@@ -212,12 +212,12 @@ pub extern "C" fn loft_audio_play_raw(
         for (i, s) in st.sinks.iter().enumerate() {
             if s.empty() {
                 st.sinks[i] = sink;
-                return i as i32;
+                return i as i64;
             }
         }
         let si = st.sinks.len();
         st.sinks.push(sink);
-        si as i32
+        si as i64
     })
 }
 
@@ -226,9 +226,9 @@ pub extern "C" fn loft_audio_play_raw(
 pub unsafe extern "C" fn n_audio_play_raw(
     store: loft_ffi::LoftStore,
     data: loft_ffi::LoftRef,
-    sample_rate: i32,
+    sample_rate: i64,
     volume: f64,
-) -> i32 {
+) -> i64 {
     let count = unsafe { store.vector_len(&data) } as u32;
     let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const f32;
     loft_audio_play_raw(data_ptr, count, sample_rate, volume)

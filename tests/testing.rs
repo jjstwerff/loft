@@ -503,8 +503,8 @@ impl Test {
             // explicitly expected.  End-to-end coverage lives in
             // `tests/runtime_warnings.rs` (binary-level via
             // Command::new).
-            let is_runtime_warning = l.starts_with("Warning: integer division may produce null")
-                || l.starts_with("Warning: integer modulus may produce null")
+            let is_runtime_warning = l.starts_with("Warning: division may produce null")
+                || l.starts_with("Warning: modulus may produce null")
                 || l.starts_with("Warning: `v[i]` may produce null")
                 || l.starts_with("Warning: `s[i]` may produce null")
                 || l.starts_with("Warning: field ");

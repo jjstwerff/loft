@@ -192,6 +192,33 @@ impl Output<'_> {
             if target_used_between {
                 continue;
             }
+            // @P364: the collapse HOISTS the Set's Call from `set_idx` (which
+            // is BEFORE the intervening free-ops) to `ret_pos` (AFTER them).
+            // If that Call borrows a local that one of those free-ops frees,
+            // the hoist is a use-after-free.  Concretely:
+            //   __ret = jv.field(v).as_text();  OpFreeRef(v);  return __ret
+            // must NOT become  OpFreeRef(v);  return field(v)…  — the field
+            // call would then read `v` after it was freed + nulled
+            // (store_nr = u16::MAX → `allocation.rs` index-out-of-bounds).
+            // The comment above assumes the inner Call borrows only a
+            // program-lifetime Store; when it borrows a scope-freed local
+            // that assumption breaks, so skip the collapse and keep the
+            // Set+Return form (Call stays before the free, copy is returned).
+            let set_call_borrows_freed_var = {
+                let call_val = match result[set_idx].unspan() {
+                    Value::Set(_, inner) => Some(inner.as_ref()),
+                    _ => None,
+                };
+                call_val.is_some_and(|cv| {
+                    result[set_idx + 1..ret_pos].iter().any(|op| {
+                        Self::free_op_var(op, self.data)
+                            .is_some_and(|fv| Self::value_mentions_var(cv, fv))
+                    })
+                })
+            };
+            if set_call_borrows_freed_var {
+                continue;
+            }
             // Perform the collapse: extract the Call from the Set,
             // remove the Set, and rewrite Return(Var) → Return(Call).
             // Use unspan_mut so a Span-wrapped Set still yields the
@@ -315,6 +342,23 @@ impl Output<'_> {
             }
             _ => false,
         }
+    }
+
+    /// @P364: if `op` is a scope-exit free (`OpFreeRef` / `OpFreeText` /
+    /// `OpFreeRefIfDistinct`), return the var it frees (its first `Var`
+    /// argument); otherwise `None`.  Used by the B5-L3 text-temp collapse
+    /// to avoid hoisting a Call past a free of one of the Call's operands.
+    fn free_op_var(op: &Value, data: &crate::data::Data) -> Option<u16> {
+        if let Value::Call(d, args) = op.unspan() {
+            let name = data.def(*d).name.as_str();
+            if matches!(name, "OpFreeRef" | "OpFreeText" | "OpFreeRefIfDistinct")
+                && let Some(arg0) = args.first()
+                && let Value::Var(v) = arg0.unspan()
+            {
+                return Some(*v);
+            }
+        }
+        None
     }
 
     /// Use this to detect sub-expressions that would cause a double-borrow of `stores`

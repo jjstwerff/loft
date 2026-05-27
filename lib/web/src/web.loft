@@ -7,12 +7,36 @@
 // The result of an HTTP request.
 pub struct HttpResponse {
   status: integer,
-  body: text
+  body: text,
+  headers: vector<text>      // each entry "name: value" (name lowercased);
+                             // repeated headers (e.g. multiple Set-Cookie)
+                             // are separate entries
 }
 
 // Returns true when the status code is in the 200-299 range.
 pub fn ok(self: HttpResponse) -> boolean {
   self.status >= 200 && self.status < 300
+}
+
+// First value of a header (case-insensitive name); "" when absent.
+pub fn header(self: HttpResponse, name: text) -> text {
+  q = ascii_lower(name);
+  for h in self.headers {
+    i = h.find(": ");
+    if i >= 0 && h[0..i] == q { return h[i + 2..h.len()]; }
+  }
+  ""
+}
+
+// All values for a header (e.g. every Set-Cookie); empty vector when absent.
+pub fn headers_for(self: HttpResponse, name: text) -> vector<text> {
+  q = ascii_lower(name);
+  out: vector<text> = [];
+  for h in self.headers {
+    i = h.find(": ");
+    if i >= 0 && h[0..i] == q { out += [h[i + 2..h.len()]]; }
+  }
+  out
 }
 
 // --- Internal native functions returning primitives ---
@@ -21,6 +45,14 @@ fn http_do(method: text, url: text, body: text, headers: text) -> integer;
 #native
 
 fn http_body() -> text;
+#native
+
+// Internal: last response's headers, newline-joined "name: value".
+fn http_headers_raw() -> text;
+#native
+
+// Internal: ASCII-lowercase (loft has no text.lower()).
+fn ascii_lower(s: text) -> text;
 #native
 
 // Internal: serialize headers vector to newline-separated "Key: Value" text.
@@ -33,30 +65,38 @@ fn join_headers(headers: vector<text>) -> text {
   result
 }
 
+// Internal: split the newline-joined header blob into one "name: value" per line.
+// `"".split('\n')` already yields [] (empty input → no segments), so no empty
+// guard is needed — and an early `return []` here would hit a codegen/interpreter
+// bug for empty-vector-literal returns (loft @P365).
+fn split_headers(raw: text) -> vector<text> {
+  raw.split('\n')
+}
+
 // --- Simple HTTP functions (no custom headers) ---
 
 // Send a GET request.
 pub fn http_get(url: text) -> HttpResponse {
   status = http_do("GET", url, "", "");
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // Send a POST request with a body.
 pub fn http_post(url: text, body: text) -> HttpResponse {
   status = http_do("POST", url, body, "");
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // Send a PUT request with a body.
 pub fn http_put(url: text, body: text) -> HttpResponse {
   status = http_do("PUT", url, body, "");
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // Send a DELETE request.
 pub fn http_delete(url: text) -> HttpResponse {
   status = http_do("DELETE", url, "", "");
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // --- HTTP functions with custom headers ---
@@ -65,26 +105,93 @@ pub fn http_delete(url: text) -> HttpResponse {
 // GET with custom headers.
 pub fn http_get_h(url: text, headers: vector<text>) -> HttpResponse {
   status = http_do("GET", url, "", join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // POST with custom headers.
 pub fn http_post_h(url: text, body: text, headers: vector<text>) -> HttpResponse {
   status = http_do("POST", url, body, join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // PUT with custom headers.
 pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse {
   status = http_do("PUT", url, body, join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
 
 // DELETE with custom headers.
 pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse {
   status = http_do("DELETE", url, "", join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
 }
+
+// --- Cookie-jar HTTP session ---
+//
+// An HTTP client that persists cookies across calls on this handle: each
+// response's Set-Cookie is stored and sent back on subsequent same-host calls,
+// so a credential POST followed by an MFA POST on the same session "just works"
+// (the native Garmin login flow).  `follow_redirects=false` lets the caller read
+// the `Location` header on a 3xx and drive the redirect itself while keeping the
+// jar; `true` follows them (carrying cookies).  The stateless `http_*` functions
+// above are unaffected.  Sessions live for the process (no explicit close) —
+// login is short-lived; see lib_plans/23-http-session-auth.
+
+pub struct HttpSession {
+  id: integer not null
+}
+
+fn http_session_new_native(redirects: integer) -> integer;
+#native "n_http_session_new"
+
+fn http_session_use_native(handle: integer);
+#native "n_http_session_use"
+
+// Open a cookie-jar session.
+pub fn http_session(follow_redirects: boolean) -> HttpSession {
+  r = if follow_redirects { 10 } else { 0 };
+  HttpSession { id: http_session_new_native(r) }
+}
+
+// GET on this session (cookies carried).
+pub fn get(self: HttpSession, url: text, headers: vector<text>) -> HttpResponse {
+  http_session_use_native(self.id);
+  status = http_do("GET", url, "", join_headers(headers));
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
+}
+
+// POST on this session (cookies carried).
+pub fn post(self: HttpSession, url: text, body: text, headers: vector<text>) -> HttpResponse {
+  http_session_use_native(self.id);
+  status = http_do("POST", url, body, join_headers(headers));
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
+}
+
+// PUT on this session (cookies carried).
+pub fn put(self: HttpSession, url: text, body: text, headers: vector<text>) -> HttpResponse {
+  http_session_use_native(self.id);
+  status = http_do("PUT", url, body, join_headers(headers));
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
+}
+
+// DELETE on this session (cookies carried).
+pub fn delete(self: HttpSession, url: text, headers: vector<text>) -> HttpResponse {
+  http_session_use_native(self.id);
+  status = http_do("DELETE", url, "", join_headers(headers));
+  HttpResponse { status: status, body: http_body(), headers: split_headers(http_headers_raw()) }
+}
+
+// --- Encoding helpers ---
+//
+// Standard base64 (RFC 4648).  Handy for Basic-auth / OAuth2 / SSO header
+// construction.  `base64_decode` interprets the decoded bytes as UTF-8; invalid
+// input decodes to "".
+
+pub fn base64_encode(s: text) -> text;
+#native
+
+pub fn base64_decode(s: text) -> text;
+#native
 
 // --- WebSocket client ---
 //
@@ -252,8 +359,8 @@ pub fn pack_u16_le(v: integer);
 #native
 
 // Append a 4-byte little-endian unsigned value.  Loft `integer` is
-// i32 — bit-cast to u32 to preserve the LE byte pattern across the
-// sign boundary.
+// 64-bit — the low 32 bits are taken (bit-cast to u32) to preserve the
+// LE byte pattern across the sign boundary.
 pub fn pack_u32_le(v: integer);
 #native
 
@@ -265,8 +372,8 @@ pub fn pack_take() -> text;
 // Read the byte at `idx` of the text payload.  Out-of-range (negative
 // or past the end) returns -1.  Use to decode binary frames received
 // via `try_recv` / `pump`.  Argument order is (idx, t) — the C-ABI
-// auto-marshal in src/extensions.rs supports (I32, Text) -> I32 but
-// not (Text, I32) -> I32.
+// auto-marshal in src/extensions.rs supports (I64, Text) -> I64 but
+// not (Text, I64) -> I64.
 pub fn byte_at(idx: integer, t: text) -> integer;
 #native
 

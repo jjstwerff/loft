@@ -214,8 +214,13 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
     let mut params = Vec::new();
     for attr in &def.attributes {
         let t = match &attr.typedef {
-            // Post-2c round 10c: wide Type::Integer (former Type::Long) → I64.
-            Type::Integer(s) if s.is_wide() => ArgT::I64,
+            // @P370: a plain loft `integer` is 64-bit (8-byte slot) — it must
+            // marshal as I64.  Only an EXPLICIT narrow integer (`u8/i8/u16/i16/
+            // i32`, which carry `forced_size`) or a `Character` (4-byte
+            // codepoint) is ≤4 bytes → I32.  Auto-converting `integer` to i32
+            // truncated i64 values (e.g. an `i64::MIN` null sentinel → 0) and
+            // diverged from `--native` (which uses the lib's real i64 ABI).
+            Type::Integer(s) if s.forced_size.is_none() => ArgT::I64,
             Type::Integer(_) | Type::Character => ArgT::I32,
             Type::Float => ArgT::F64,
             Type::Single => ArgT::F32,
@@ -235,8 +240,9 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
     }
     let ret = match &def.returned {
         Type::Void | Type::Null => None,
-        // Post-2c round 10c: wide Type::Integer (former Type::Long) → I64.
-        Type::Integer(s) if s.is_wide() => Some(ArgT::I64),
+        // @P370: plain loft `integer` is 64-bit → I64; only explicit narrow
+        // ints (`forced_size`) and `Character` are ≤4 bytes → I32.
+        Type::Integer(s) if s.forced_size.is_none() => Some(ArgT::I64),
         Type::Integer(_) | Type::Character => Some(ArgT::I32),
         Type::Float => Some(ArgT::F64),
         Type::Single => Some(ArgT::F32),
@@ -931,7 +937,13 @@ fn dispatch_call(
             let (p1, l1) = text_arg!(1);
             let (p2, l2) = text_arg!(2);
             let (p3, l3) = text_arg!(3);
-            stores.put(stack, f(p0, l0, p1, l1, p2, l2, p3, l3));
+            // @P362: widen the i32 C return to the 8-byte loft `integer`
+            // slot (put::<i64> + widen_int), exactly like every other
+            // I32-return arm.  A bare `stores.put` infers `i32` and pushes
+            // only 4 bytes, leaving `stack.pos` 4 short — the frame then
+            // misaligns and the caller's next ref slot reads garbage
+            // (n_http_do("GET",url,"","") → HttpResponse store panic).
+            stores.put::<i64>(stack, widen_int(f(p0, l0, p1, l1, p2, l2, p3, l3)));
         }
         // (text, text) -> bool
         (&[ArgT::Text, ArgT::Text], Some(ArgT::Bool)) => {
@@ -1381,6 +1393,221 @@ fn dispatch_call(
                 stack,
                 widen_int(f(ls, ref_arg!(0), i32_arg!(1), f64_arg!(2))),
             );
+        }
+        // ── @PLAN48 P1b: I64 arms — a plain loft `integer` now marshals as I64
+        // (was I32).  These mirror the I32 twins above; an I64 return uses
+        // `put::<i64>` directly (no `widen_int` — the value is already i64 and
+        // a native i64 fn returns the i64::MIN null sentinel verbatim).  Until
+        // FFI.1/FFI.3 generate these per-library (lib_plans/05-game-infra), they
+        // are hand-written.  Shapes from the graphics impls + external `rand`.
+        // (i64) -> bool
+        (&[ArgT::I64], Some(ArgT::Bool)) => {
+            let f: extern "C" fn(i64) -> bool = unsafe { std::mem::transmute(fp) };
+            stores.put(stack, f(i64_arg!(0)));
+        }
+        // (i64, i64) -> void
+        (&[ArgT::I64, ArgT::I64], None) => {
+            let f: extern "C" fn(i64, i64) = unsafe { std::mem::transmute(fp) };
+            f(i64_arg!(0), i64_arg!(1));
+        }
+        // (i64, i64) -> i64
+        (&[ArgT::I64, ArgT::I64], Some(ArgT::I64)) => {
+            let f: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(fp) };
+            stores.put::<i64>(stack, f(i64_arg!(0), i64_arg!(1)));
+        }
+        // (i64, i64, i64) -> void
+        (&[ArgT::I64, ArgT::I64, ArgT::I64], None) => {
+            let f: extern "C" fn(i64, i64, i64) = unsafe { std::mem::transmute(fp) };
+            f(i64_arg!(0), i64_arg!(1), i64_arg!(2));
+        }
+        // (i64, i64, i64) -> i64
+        (&[ArgT::I64, ArgT::I64, ArgT::I64], Some(ArgT::I64)) => {
+            let f: extern "C" fn(i64, i64, i64) -> i64 = unsafe { std::mem::transmute(fp) };
+            stores.put::<i64>(stack, f(i64_arg!(0), i64_arg!(1), i64_arg!(2)));
+        }
+        // (i64, i64, i64, i64) -> void
+        (&[ArgT::I64, ArgT::I64, ArgT::I64, ArgT::I64], None) => {
+            let f: extern "C" fn(i64, i64, i64, i64) = unsafe { std::mem::transmute(fp) };
+            f(i64_arg!(0), i64_arg!(1), i64_arg!(2), i64_arg!(3));
+        }
+        // (text) -> i64
+        (&[ArgT::Text], Some(ArgT::I64)) => {
+            let f: extern "C" fn(*const u8, usize) -> i64 = unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(0);
+            stores.put::<i64>(stack, f(p, l));
+        }
+        // (text, text) -> i64
+        (&[ArgT::Text, ArgT::Text], Some(ArgT::I64)) => {
+            let f: extern "C" fn(*const u8, usize, *const u8, usize) -> i64 =
+                unsafe { std::mem::transmute(fp) };
+            let (p0, l0) = text_arg!(0);
+            let (p1, l1) = text_arg!(1);
+            stores.put::<i64>(stack, f(p0, l0, p1, l1));
+        }
+        // (i64, f64) -> i64
+        (&[ArgT::I64, ArgT::F64], Some(ArgT::I64)) => {
+            let f: extern "C" fn(i64, f64) -> i64 = unsafe { std::mem::transmute(fp) };
+            stores.put::<i64>(stack, f(i64_arg!(0), f64_arg!(1)));
+        }
+        // (i64, f64) -> void
+        (&[ArgT::I64, ArgT::F64], None) => {
+            let f: extern "C" fn(i64, f64) = unsafe { std::mem::transmute(fp) };
+            f(i64_arg!(0), f64_arg!(1));
+        }
+        // (i64, f64) -> f64
+        (&[ArgT::I64, ArgT::F64], Some(ArgT::F64)) => {
+            let f: extern "C" fn(i64, f64) -> f64 = unsafe { std::mem::transmute(fp) };
+            stores.put(stack, f(i64_arg!(0), f64_arg!(1)));
+        }
+        // (i64, text, f64) -> void
+        (&[ArgT::I64, ArgT::Text, ArgT::F64], None) => {
+            let f: extern "C" fn(i64, *const u8, usize, f64) = unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            f(i64_arg!(0), p, l, f64_arg!(2));
+        }
+        // (i64, text, i64) -> void
+        (&[ArgT::I64, ArgT::Text, ArgT::I64], None) => {
+            let f: extern "C" fn(i64, *const u8, usize, i64) = unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            f(i64_arg!(0), p, l, i64_arg!(2));
+        }
+        // (i64, text, f64) -> f64
+        (&[ArgT::I64, ArgT::Text, ArgT::F64], Some(ArgT::F64)) => {
+            let f: extern "C" fn(i64, *const u8, usize, f64) -> f64 =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            stores.put(stack, f(i64_arg!(0), p, l, f64_arg!(2)));
+        }
+        // (i64, text, f64, f64, f64) -> void
+        (&[ArgT::I64, ArgT::Text, ArgT::F64, ArgT::F64, ArgT::F64], None) => {
+            let f: extern "C" fn(i64, *const u8, usize, f64, f64, f64) =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            f(i64_arg!(0), p, l, f64_arg!(2), f64_arg!(3), f64_arg!(4));
+        }
+        // (i64, text, ref) -> void  (e.g. gl_set_mat4)
+        (&[ArgT::I64, ArgT::Text, ArgT::Ref], None) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, i64, *const u8, usize, LoftRef) =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            f(ls, i64_arg!(0), p, l, ref_arg!(2));
+        }
+        // (ref, i64) -> i64  (e.g. gl_upload_vertices)
+        (&[ArgT::Ref, ArgT::I64], Some(ArgT::I64)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i64) -> i64 =
+                unsafe { std::mem::transmute(fp) };
+            stores.put::<i64>(stack, f(ls, ref_arg!(0), i64_arg!(1)));
+        }
+        // (ref, i64, i64) -> i64  (e.g. gl_upload_canvas)
+        (&[ArgT::Ref, ArgT::I64, ArgT::I64], Some(ArgT::I64)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i64, i64) -> i64 =
+                unsafe { std::mem::transmute(fp) };
+            stores.put::<i64>(stack, f(ls, ref_arg!(0), i64_arg!(1), i64_arg!(2)));
+        }
+        // (ref, i64, f64) -> i64  (e.g. audio_play_raw)
+        (&[ArgT::Ref, ArgT::I64, ArgT::F64], Some(ArgT::I64)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i64, f64) -> i64 =
+                unsafe { std::mem::transmute(fp) };
+            stores.put::<i64>(stack, f(ls, ref_arg!(0), i64_arg!(1), f64_arg!(2)));
+        }
+        // (text, i64, i64, ref) -> bool  (e.g. save_png)
+        (&[ArgT::Text, ArgT::I64, ArgT::I64, ArgT::Ref], Some(ArgT::Bool)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, *const u8, usize, i64, i64, LoftRef) -> bool =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(0);
+            stores.put(stack, f(ls, p, l, i64_arg!(1), i64_arg!(2), ref_arg!(3)));
+        }
+        // (i64, text, f64, ref) -> i64  (e.g. rasterize_text_into)
+        (&[ArgT::I64, ArgT::Text, ArgT::F64, ArgT::Ref], Some(ArgT::I64)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, i64, *const u8, usize, f64, LoftRef) -> i64 =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            stores.put::<i64>(stack, f(ls, i64_arg!(0), p, l, f64_arg!(2), ref_arg!(3)));
+        }
+        // (i64) -> ref  (e.g. rand_indices)
+        (&[ArgT::I64], Some(ArgT::Ref)) => {
+            let result_db = stores.null();
+            let ls = make_loft_store(stores, result_db.store_nr);
+            let f: extern "C" fn(LoftStore, i64) -> LoftRef = unsafe { std::mem::transmute(fp) };
+            push_loft_ref(stores, stack, f(ls, i64_arg!(0)));
+        }
+        // (ref) -> i64  (e.g. ext_vec_sum: vector<integer> -> integer)
+        (&[ArgT::Ref], Some(ArgT::I64)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef) -> i64 = unsafe { std::mem::transmute(fp) };
+            stores.put::<i64>(stack, f(ls, ref_arg!(0)));
+        }
+        // (i64, ref) -> i64  (e.g. ext_offset_sum: offset, vector<integer>)
+        (&[ArgT::I64, ArgT::Ref], Some(ArgT::I64)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, i64, LoftRef) -> i64 =
+                unsafe { std::mem::transmute(fp) };
+            stores.put::<i64>(stack, f(ls, i64_arg!(0), ref_arg!(1)));
+        }
+        // (i64, ref, i64) -> i64  (e.g. ext_sandwich_sum: a, vector<integer>, b)
+        (&[ArgT::I64, ArgT::Ref, ArgT::I64], Some(ArgT::I64)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, i64, LoftRef, i64) -> i64 =
+                unsafe { std::mem::transmute(fp) };
+            stores.put::<i64>(stack, f(ls, i64_arg!(0), ref_arg!(1), i64_arg!(2)));
+        }
+        // ── @PLAN48 P3: I64 twins of the text-bearing I32 arms above.  After
+        // @P370 a plain loft `integer` marshals as I64, so lib/web + lib/server
+        // handle/status/index params that sit next to a `text` argument now
+        // surface here instead of the I32 twins.  Same bodies, i64 ABI.
+        // (i64, text) -> bool  (e.g. ws_client_send / ws_send: handle, msg)
+        (&[ArgT::I64, ArgT::Text], Some(ArgT::Bool)) => {
+            let f: extern "C" fn(i64, *const u8, usize) -> bool =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            stores.put(stack, f(i64_arg!(0), p, l));
+        }
+        // (i64, text) -> i64  (e.g. byte_at: idx, text; ws_broadcast: handle, msg)
+        (&[ArgT::I64, ArgT::Text], Some(ArgT::I64)) => {
+            let f: extern "C" fn(i64, *const u8, usize) -> i64 = unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            stores.put::<i64>(stack, f(i64_arg!(0), p, l));
+        }
+        // (i64, text) -> void  (e.g. tcp_respond: status, body — cdylib casts
+        // the i64 status to u16 itself, so the loft `integer` decl stays clean)
+        (&[ArgT::I64, ArgT::Text], None) => {
+            let f: extern "C" fn(i64, *const u8, usize) = unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            f(i64_arg!(0), p, l);
+        }
+        // (i64, text, text) -> void  (e.g. tcp_respond_typed: status, body,
+        // content_type — TTT v3's HTML/CSS/JS/loft-mime server responses)
+        (&[ArgT::I64, ArgT::Text, ArgT::Text], None) => {
+            let f: extern "C" fn(i64, *const u8, usize, *const u8, usize) =
+                unsafe { std::mem::transmute(fp) };
+            let (p0, l0) = text_arg!(1);
+            let (p1, l1) = text_arg!(2);
+            f(i64_arg!(0), p0, l0, p1, l1);
+        }
+        // (text, text, text, text) -> i64  (e.g. http_do: method, url, body,
+        // headers -> status; the loft `integer` return marshals as I64 now)
+        (&[ArgT::Text, ArgT::Text, ArgT::Text, ArgT::Text], Some(ArgT::I64)) => {
+            let f: extern "C" fn(
+                *const u8,
+                usize,
+                *const u8,
+                usize,
+                *const u8,
+                usize,
+                *const u8,
+                usize,
+            ) -> i64 = unsafe { std::mem::transmute(fp) };
+            let (p0, l0) = text_arg!(0);
+            let (p1, l1) = text_arg!(1);
+            let (p2, l2) = text_arg!(2);
+            let (p3, l3) = text_arg!(3);
+            stores.put::<i64>(stack, f(p0, l0, p1, l1, p2, l2, p3, l3));
         }
         _ => {
             let sig_str: Vec<String> = params.iter().map(|t| format!("{t:?}")).collect();

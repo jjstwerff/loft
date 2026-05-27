@@ -2053,7 +2053,28 @@ fn main() {
         .collect();
     let mut p = parser::Parser::new();
     p.lib_dirs = lib_dirs;
-    p.parse_dir(&(dir + "default"), true, false).unwrap();
+    // @P363: join with a path separator (Path::join) instead of string
+    // concat.  `project_dir()` returns a trailing-separator path, but
+    // `--path <dir>` sets `dir` to the raw CLI argument with no trailing
+    // separator — `dir + "default"` then yielded `<dir>default` and the
+    // stdlib `default/` dir was never found.  A missing stdlib is a
+    // recoverable CLI fault (wrong `--path`, not a corrupt install), so
+    // emit a clean actionable diagnostic and exit non-zero rather than
+    // unwrapping the NotFound into a panic.
+    let default_dir = std::path::Path::new(&dir).join("default");
+    if let Err(e) = p.parse_dir(&default_dir.to_string_lossy(), true, false) {
+        eprintln!(
+            "loft: cannot load standard library from `{}`: {e}",
+            default_dir.display()
+        );
+        eprintln!(
+            "  the `default/` library directory was not found under the \
+             compiler path.\n  Pass `--path <dir>` pointing at the directory \
+             that contains `default/`,\n  or run `loft` from an installed \
+             location where the stdlib is bundled."
+        );
+        std::process::exit(1);
+    }
     let start_def = p.data.definitions();
     // `--show-types --trace`: enable per-expression type recording
     // BEFORE parsing the user file (parse_dir on default/* already

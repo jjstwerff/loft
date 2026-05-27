@@ -591,19 +591,16 @@ impl Stores {
                 }
             }
             if !matched {
-                // An unknown field name in the source is a parse
-                // error.  Position the caret at the byte just past
-                // the key (the `:` after the name) — matches the
-                // legacy `parse_key`/`show_key` shape that
-                // `tests/data_structures.rs::record` asserts as
-                // `"line 1:7 path:blame"` for input
-                // `{blame:"nothing"}`.
-                let mut err_path = path.clone();
-                err_path.push(name.clone());
-                return Err(WalkErr {
-                    at: key_at + name.len(),
-                    path: err_path,
-                });
+                // @P366: an unknown JSON key has no matching struct field.
+                // Skip it (lenient-ignore) rather than aborting the element /
+                // the whole array.  This matches the dynamic `JsonValue` walker
+                // (`populate_struct_from_jsonvalue`), which only visits declared
+                // fields and silently tolerates extra keys.  Previously this
+                // returned a `WalkErr`, and the array loop's `?` aborted the
+                // entire parse → `text as vector<Struct>` returned a silently
+                // empty vector (`len == 0`) whenever the JSON carried any field
+                // the struct did not declare.
+                continue;
             }
             found_fields.insert(name.as_str());
         }

@@ -1266,7 +1266,15 @@ impl Parser {
                     diagnostic!(self.lexer, Level::Error, "Expect type");
                     return Some(Type::Null);
                 };
-                if !self.convert(code, ctp, &tp) && !self.cast(code, ctp, &tp) {
+                // @PLAN48 P2: an explicit `as <narrow-int>` is the sanctioned way to
+                // narrow `integer` → `i32`/`u8`/… — accept it here so the
+                // implicit-narrowing diagnostic in `convert` does NOT fire on an
+                // explicit cast.  The value stays in the 8-byte slot (a width-tag);
+                // the narrow target type is returned below (`rt = tp`).
+                if !Self::is_narrowing_int(ctp, &tp)
+                    && !self.convert(code, ctp, &tp)
+                    && !self.cast(code, ctp, &tp)
+                {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
@@ -1595,12 +1603,14 @@ impl Parser {
 
     fn emit_undefended_warning(&mut self, kind: FaultKind, ctx: &WarnCtx) {
         let msg = match kind {
+            // @P368 — wording: not "integer" (the same `/` warning covers float
+            // and single division too).
             FaultKind::Div => {
-                "integer division may produce null on divide-by-zero with no defensive check; \
+                "division may produce null on divide-by-zero with no defensive check; \
                  consider `a / b ?? 0` or wrap in `if b != 0 { ... }`"
             }
             FaultKind::Rem => {
-                "integer modulus may produce null on divide-by-zero with no defensive check; \
+                "modulus may produce null on divide-by-zero with no defensive check; \
                  consider `a % b ?? 0` or wrap in `if b != 0 { ... }`"
             }
             FaultKind::VectorIndex => {
@@ -1633,10 +1643,23 @@ fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx) -> bool {
             _ => None,
         }
     }
+    // @P368 — a literal divisor is statically known; only a *non-zero* literal
+    // makes divide-by-zero impossible.  Covers float / single literals too
+    // (`x / 2.0`, `x / 0.75`), which `lit_int` missed — so the divide-by-zero
+    // warning no longer fires on a statically-safe float division.
+    fn lit_nonzero(v: &Value) -> Option<bool> {
+        match v.unspan() {
+            Value::Int(n) => Some(*n != 0),
+            Value::Long(n) => Some(*n != 0),
+            Value::Float(f) => Some(*f != 0.0),
+            Value::Single(f) => Some(*f != 0.0),
+            _ => None,
+        }
+    }
     match kind {
         FaultKind::Div | FaultKind::Rem => {
-            // Skip pattern 1 — divisor is a non-zero literal.
-            args.get(1).and_then(lit_int).is_some_and(|n| n != 0)
+            // Skip pattern 1 — divisor is a non-zero literal (int or float).
+            args.get(1).and_then(lit_nonzero).unwrap_or(false)
         }
         FaultKind::VectorIndex | FaultKind::TextIndex => {
             // Index is the LAST arg in both `OpGetVector(coll, size, idx)`
