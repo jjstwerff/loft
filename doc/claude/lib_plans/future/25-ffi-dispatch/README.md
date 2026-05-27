@@ -18,10 +18,14 @@ earlier note).
 
 ## Status
 
-**F1 SHIPPED 2026-05-27** (`loft-ffi`: `LoftValue` transport + `LoftBridgeFn`
-+ `loft_register_bridges!`, additive — no interpreter wiring yet).  F2–F5
-open.  Inspected 2026-05-27; the two load-bearing facts below are confirmed
-against the tree.
+**F1 + F2 SHIPPED 2026-05-27.**  F1 = `loft-ffi` transport (`LoftValue` +
+`LoftBridgeFn` + `loft_register_bridges!`).  F2 = new `loft-ffi-macros` crate
+with the `#[loft_native]` proc-macro generating `<fn>__loft_bridge` from each
+fn's real Rust signature (scalars with impl-width casts, `i32::MIN` sentinel
+widen, bool/float, text→`(*const u8, usize)`, `LoftRef`, `LoftStore`-first,
+`LoftStr`/`LoftRef`/void returns).  Both additive — no interpreter wiring yet
+(legacy raw-ptr arms still run).  F3–F5 open.  Inspected 2026-05-27; the two
+load-bearing facts below are confirmed against the tree.
 
 ## Goal
 
@@ -127,7 +131,7 @@ return-type-specific arm selection.
 | Phase | Scope | Verify |
 |---|---|---|
 | **F1** ✅ | `loft-ffi`: define `LoftValue` + the bridge calling convention + the `n_*__loft_bridge` registration hook. No behaviour change yet (old arms still used). | **DONE 2026-05-27** — `LoftValue`/`LoftPayload`/`LoftTag` + `LoftBridgeFn` + `loft_register_bridges!`; 4 unit tests; full suite green. |
-| **F2** | New `loft-ffi-macros` crate: `#[loft_native]` proc-macro generating bridges for the primitive set (i64/i32/f64/f32/bool/text/ref/vec). | `trybuild`/expansion unit tests over each signature shape. |
+| **F2** ✅ | New `loft-ffi-macros` crate: `#[loft_native]` proc-macro generating bridges for the primitive set (i64/i32/f64/f32/bool/text/ref/vec). | **DONE 2026-05-27** — 8 integration tests drive the generated bridges (scalar width from impl sig, sentinel widen, bool/float, text ptr+len, LoftStr/LoftRef returns, LoftStore-first, void); clippy+fmt clean. Tested standalone (aux-crate convention, same as `loft-ffi-build`); enters root CI at F3 when a library deps it. |
 | **F3** | **One-library proof** — apply `#[loft_native]` to one small native lib (candidate: `lib/imaging` or a crypto fn), register its bridges, and route `--interpret` through the bridge for that lib (fallback to old arms for the rest). | that lib's `library_suite` + `native_library_suite` green; behaviour identical. |
 | **F4** | Roll out to `web`/`server`/`imaging`/`graphics`; once all monorepo libs use bridges, **delete `dispatch_call` + `ArgT`/`ArgVal` arms**.  Bump `loft-ffi`/`loft-ffi-build`/`loft-ffi-macros` versions for external libs (`loft-libs-core`/`-net`/`-graphics`). | full suite green; `extensions.rs` arm-count → 0. |
 | **F5** | FFI.4 doc — zero-boilerplate native-fn guide in [PACKAGES.md](../../../PACKAGES.md). | doc lands; example library builds. |

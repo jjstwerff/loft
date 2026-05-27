@@ -712,6 +712,22 @@ impl core::fmt::Debug for LoftValue {
     }
 }
 
+/// Widen a narrow-int (`i32`) native return to the i64 loft cell, preserving
+/// the null sentinel: cdylibs return `i32::MIN` to mean "null", and a naive
+/// `i64::from(i32::MIN)` would become a regular negative number, so the
+/// loft-side `if !x { … }` null check would miss the failure.  Map
+/// `i32::MIN → i64::MIN` so the sentinel survives.  Mirrors the interpreter's
+/// `widen_int` in `src/extensions.rs`; the generated bridge calls this for
+/// every `i32` return.
+#[must_use]
+pub fn widen_i32(v: i32) -> i64 {
+    if v == i32::MIN {
+        i64::MIN
+    } else {
+        i64::from(v)
+    }
+}
+
 /// The uniform calling convention every plan-25 bridge exposes.  The
 /// interpreter calls only this shape, so it never reconstructs a concrete C
 /// signature again.  `store` is for allocating ref/text returns; `args`/`n`
