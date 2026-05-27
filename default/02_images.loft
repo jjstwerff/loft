@@ -341,6 +341,32 @@ pub fn store_durable_seal(path: text) -> boolean;
 #rust"crate::store::Store::durable_seal(std::path::Path::new(@path))"
 #impure(io)
 
+// @PLAN38 — "the hash IS the file."  Re-root the Store backing the
+// given reference at a file path so mutations are durable via mmap
+// without any explicit save/load loop.
+//
+// First call on a path that does NOT yet exist: serialises the
+// current in-memory Store at the reference's slot to disk (padded to
+// a valid ≥1024-word image with a tail free block), then mmaps it
+// back.  Caller's existing DbRefs into that slot remain valid.
+//
+// Call on a path that DOES exist: opens the file via mmap; the
+// caller's prior in-memory contents at that slot are dropped in
+// favour of the on-disk image.  This is the load-on-startup path,
+// assumes the on-disk layout matches the declared type.
+//
+// Both modes return `true` on success, `false` on any I/O / format
+// error (no panic — the binding is fail-soft, callers fall back to
+// JSON or rebuild-from-source).
+//
+// Typical dryopea-style pattern:
+//   pw = PaintedWorld { painted: hash<PaintedHex[q, r]>::new() }
+//   store_persist_bind(pw.painted, "dryopea_world.store")
+//   // …mutations to pw.painted now hit mmap'd bytes…
+pub fn store_persist_bind(r: hash, path: text) -> boolean;
+#rust"stores.bind_path((@r).store_nr, std::path::Path::new(@path))"
+#impure(io)
+
 pub fn set_file_size(self: File, size: integer) -> FileResult {
   if self.format == Format.Directory { return FileResult.IsDirectory }
   if self.format == Format.NotExists { return FileResult.NotFound }

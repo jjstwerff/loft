@@ -135,6 +135,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_durable_check", n_store_durable_check),
     #[cfg(feature = "mmap")]
     ("n_store_durable_seal", n_store_durable_seal),
+    #[cfg(feature = "mmap")]
+    ("n_store_persist_bind", n_store_persist_bind),
     ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
@@ -809,6 +811,20 @@ fn n_store_durable_seal(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let result = crate::store::Store::durable_seal(std::path::Path::new(v_path.str()));
     stores.put(stack, result);
+}
+
+/// @PLAN38 — interpreter handler for `store_persist_bind`.  Pops a
+/// path (text) + a reference (DbRef) and re-roots the slot containing
+/// the reference at the file path via mmap.  Returns `true` on success.
+/// See `Stores::bind_path` for the full semantics (fresh-file vs.
+/// existing-file modes) and `default/02_images.loft` for the loft
+/// surface.
+#[cfg(feature = "mmap")]
+fn n_store_persist_bind(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.bind_path(v_ref.store_nr, std::path::Path::new(v_path.str()));
+    stores.put(stack, ok);
 }
 
 /// Write `text` to stderr — companion to `print()` / `println()`

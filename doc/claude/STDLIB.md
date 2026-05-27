@@ -460,6 +460,68 @@ case but not yet shipped.
 Full design + format spec:
 [`doc/claude/plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/README.md).
 
+### Path-backed hash storage (`@PLAN38`)
+
+`store_persist_bind(h, path)` re-roots the Store backing a hash at a
+file path so mutations are durable via mmap without an explicit save
+loop — "the hash IS the file."  Dryopea's persistence destination ask
+([`QUESTIONS_FOR_LOFT.md` § Path-backed user-data Store binding](https://github.com/jjstwerff/dryopea)),
+also the canonical pattern for any single-collection on-disk state.
+
+| Function | Description |
+|----------|-------------|
+| `store_persist_bind(h: hash, path: text) -> boolean` | Re-roots the Store backing `h` at a file at `path`.  Fresh-path branch: snapshots the current bytes (padded to ≥1024 words with a valid tail-free block), writes them, and mmaps the file.  Existing-path branch: opens the file via mmap and adopts its contents (discarding the in-memory state at that slot).  Returns `false` on any I/O / format error — no panic; callers fall back to JSON or rebuild. |
+
+Usage pattern:
+
+```loft
+fn main() {
+  h: hash<Entry[key]> = [];
+
+  // Bind first — on fresh path the empty hash is serialised; on
+  // existing path the on-disk contents are loaded into this slot.
+  store_persist_bind(h, "world.store");
+
+  // Subsequent mutations hit the mmap'd buffer.  No explicit save.
+  h += Entry { key: 7, value: 700 };
+  // ... OS msyncs on idle / clean exit ...
+}
+```
+
+**Semantics in detail:**
+
+- When `path` does not exist at call time, `store_persist_bind`
+  captures the current in-memory bytes of the hash's Store, pads
+  them out to a valid ≥8192-byte image, writes them to disk, and
+  swaps the slot's allocator over to the mmap'd file.  The caller's
+  `h` is unchanged from a record-layout perspective — the DbRef
+  shape `(store_nr, rec, pos)` stays valid, only the underlying
+  buffer moves from anonymous heap to mmap.
+- When `path` exists, the call invokes `Store::open(path)` which
+  validates the loft Store signature and rebuilds the free-list.
+  The caller's prior in-memory state at that slot is discarded.
+  The caller's existing `DbRef`s into the hash remain valid IFF the
+  on-disk layout describes the same type — the standard pattern is
+  to allocate an empty hash and immediately bind, so the empty
+  in-memory state is harmlessly discarded in favour of the on-disk
+  view.
+- Pair with `store_durable_check` / `store_durable_seal` (above)
+  when you also want Tier-1 integrity assurance — the bracket
+  pattern is unchanged, only "what's between check and seal"
+  becomes "nothing — the hash mutations ARE the writes."
+
+**Failure modes (returns `false`):**
+
+- Path is empty or not valid UTF-8.
+- Existing file's signature doesn't match the loft Store format
+  (caught via `catch_unwind`; no panic propagates).
+- I/O error writing the fresh-path snapshot.
+- `mmap` feature disabled in this build.
+
+Off when the `mmap` Cargo feature is disabled at build time:
+returns `false` so consumers branch into a JSON fallback (or
+rebuild-from-source).
+
 ### Images
 
 | Function | Description |

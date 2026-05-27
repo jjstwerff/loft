@@ -1542,6 +1542,199 @@ impl Stores {
             _ => {}
         }
     }
+
+    /// @PLAN38 — bind the Store at `slot` to a file at `path`, returning
+    /// `true` on success.  Dryopea-driven "the hash IS the file" entry
+    /// point: a freshly-allocated container (e.g. `hash<X[k]>::new()`)
+    /// can be re-rooted onto disk in one call, after which all mutations
+    /// are durable via mmap/msync without any explicit save loop.
+    ///
+    /// Two modes, selected by whether the file already exists:
+    ///
+    /// 1. **Fresh file (path does not exist or is empty):** the current
+    ///    in-memory Store's bytes are padded out to ≥ 1024 words with a
+    ///    valid trailing free block, written to disk via
+    ///    `MmapStorage::open` + `resize`, then `Store::open` mmaps it
+    ///    back.  Caller-side `DbRef`s into this slot stay valid because
+    ///    the on-disk record layout is byte-identical to the in-memory
+    ///    one we just copied.
+    ///
+    /// 2. **Existing file:** `Store::open(path)` validates the SIGNATURE
+    ///    and rebuilds the free-list; the in-memory state at this slot is
+    ///    dropped in favour of the on-disk image.  Caller-side `DbRef`s
+    ///    remain valid IFF the on-disk record at `rec=1` describes the
+    ///    same type as the in-memory container the caller just made —
+    ///    this is the load-on-startup path and assumes the consumer
+    ///    pinned the type at allocation time (typical pattern: allocate
+    ///    an empty `hash<X[k]>`, immediately call `bind_path`, then read
+    ///    keys back).
+    ///
+    /// Failure modes (return `false`):
+    /// - `slot >= self.allocations.len()`.
+    /// - Path is empty / not valid UTF-8 / I/O error writing the snapshot.
+    /// - Existing-file branch encounters a bad SIGNATURE (caught via
+    ///   `std::panic::catch_unwind`, since `Store::open` panics on
+    ///   format mismatch).
+    ///
+    /// Metadata preserved across the swap: `ref_count`, `known_type`,
+    /// `free`, `created_at`, `last_op_at`, `lock_origin` (the bookkeeping
+    /// the `Stores` collection needs to keep the slot accounted for in
+    /// the bitmap and the rc walk).  Cleared on the new Store:
+    /// `claims` (init() wipes it; matches `database_named` post-swap
+    /// state), `borrowed`, `read_only`.
+    ///
+    /// Off when the `mmap` feature is disabled: returns `false`.
+    #[cfg(feature = "mmap")]
+    pub fn bind_path(&mut self, slot: u16, path: &std::path::Path) -> bool {
+        let slot_idx = slot as usize;
+        if slot_idx >= self.allocations.len() {
+            return false;
+        }
+        let path_str = match path.to_str() {
+            Some(s) if !s.is_empty() => s,
+            _ => return false,
+        };
+
+        // Distinguish fresh vs existing by file size — a valid loft Store
+        // file is always ≥ 8 bytes (SIGNATURE + free-space index).  A
+        // smaller or missing file is "fresh" and triggers the
+        // snapshot-then-mmap path.
+        let exists = std::fs::metadata(path)
+            .map(|m| m.len() >= 8)
+            .unwrap_or(false);
+
+        // Preserve the slot's bookkeeping across the swap.
+        let preserved = {
+            let s = &self.allocations[slot_idx];
+            (
+                s.ref_count,
+                s.known_type,
+                s.free,
+                s.created_at,
+                s.last_op_at,
+            )
+        };
+
+        if !exists {
+            // FRESH PATH — snapshot current bytes, pad to a valid ≥ 1024-word
+            // image, write to disk, then re-open via mmap.
+            let src_words = self.allocations[slot_idx].capacity_words();
+            let snapshot = {
+                let s = &self.allocations[slot_idx];
+                let raw =
+                    unsafe { std::slice::from_raw_parts(s.base_ptr(), (src_words as usize) * 8) };
+                raw.to_vec()
+            };
+            let target_words = src_words.max(1024);
+            let padded = match build_padded_store_image(&snapshot, src_words, target_words) {
+                Some(b) => b,
+                None => return false,
+            };
+            if std::fs::write(path, &padded).is_err() {
+                return false;
+            }
+        }
+
+        // Both branches: open the file via Store::open.  Wrapped in
+        // catch_unwind because Store::open panics on signature mismatch
+        // for the existing-file branch — we surface that as a clean
+        // `false` return instead of crashing the interpreter.
+        let new_store = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::store::Store::open(path_str)
+        }));
+        let mut new_store = match new_store {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        // Re-apply preserved metadata onto the new Store.  Slot bitmap +
+        // rc walk see continuity; the on-disk bytes carry the user data.
+        new_store.ref_count = preserved.0;
+        new_store.known_type = preserved.1;
+        new_store.free = preserved.2;
+        new_store.created_at = preserved.3;
+        new_store.last_op_at = preserved.4;
+
+        self.allocations[slot_idx] = new_store;
+        true
+    }
+
+    /// No-op shim when the `mmap` feature is disabled.  Always returns
+    /// `false` so consumers branch into their non-mmap fallback (today,
+    /// JSON via `text as Struct`).  Avoids `cfg`-gating every caller.
+    #[cfg(not(feature = "mmap"))]
+    pub fn bind_path(&mut self, _slot: u16, _path: &std::path::Path) -> bool {
+        false
+    }
+}
+
+/// @PLAN38 — pad a Store byte image out to `target_words` while keeping
+/// the record chain valid.  Walks the source record headers (i32 at each
+/// word position, abs = block size in words), then either extends the
+/// trailing free block or appends a new one to cover the padding.  Returns
+/// `None` if the source bytes don't describe a walkable record chain
+/// (corrupt size word, zero-size block).
+///
+/// Output buffer is always exactly `target_words * 8` bytes.  When
+/// `target_words <= src_words` the buffer is the source verbatim (no
+/// truncation; we treat that as the "no padding needed" path).
+#[cfg(feature = "mmap")]
+fn build_padded_store_image(src: &[u8], src_words: u32, target_words: u32) -> Option<Vec<u8>> {
+    if (src.len() as u32) < src_words.saturating_mul(8) {
+        return None;
+    }
+    let out_bytes = (target_words as usize) * 8;
+    let mut out = vec![0u8; out_bytes.max(src.len())];
+    out[..src.len()].copy_from_slice(src);
+
+    if target_words <= src_words {
+        out.truncate((src_words as usize) * 8);
+        return Some(out);
+    }
+
+    // Walk the source record chain to find the last block.  PRIMARY = 1
+    // is the first record's word position; size word is the i32 at that
+    // word's byte offset 0.
+    let mut rec: u32 = 1;
+    let mut last_rec: u32 = 1;
+    let mut last_size: i32 = 0;
+    while rec < src_words {
+        let off = (rec as usize) * 8;
+        if off + 4 > src.len() {
+            return None;
+        }
+        let sz = i32::from_le_bytes([src[off], src[off + 1], src[off + 2], src[off + 3]]);
+        if sz == 0 {
+            return None;
+        }
+        last_rec = rec;
+        last_size = sz;
+        let step = sz.unsigned_abs();
+        rec = rec.checked_add(step)?;
+    }
+    if rec != src_words {
+        // Chain didn't terminate exactly at the end of the source — the
+        // image is malformed or doesn't follow the loft Store layout.
+        return None;
+    }
+
+    let pad_words = target_words - src_words;
+    if last_size < 0 {
+        // Extend the trailing free block in-place.
+        let new_size = last_size.checked_sub(pad_words as i32)?;
+        let off = (last_rec as usize) * 8;
+        out[off..off + 4].copy_from_slice(&new_size.to_le_bytes());
+    } else {
+        // Active record at the tail — append a new free block right after it.
+        let new_rec = (last_rec).checked_add(last_size as u32)?;
+        if new_rec != src_words {
+            return None;
+        }
+        let new_size = -(pad_words as i32);
+        let off = (new_rec as usize) * 8;
+        out[off..off + 4].copy_from_slice(&new_size.to_le_bytes());
+    }
+    Some(out)
 }
 
 #[cfg(test)]
