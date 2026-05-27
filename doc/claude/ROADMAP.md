@@ -82,7 +82,7 @@ Features that "appear to work" but don't, or that lose data without indication. 
 | (cross) | Keyed collection validation — collection × operation matrix | M | ✓ | plans/future/20-collection-validation/README.md |
 | (cross) | Binary file I/O matrix — value type × format × access pattern; absorbs @P289 canonical serialization | M | ✓ | plans/future/43-binary-io-validation/README.md |
 | Q* | JSON parse-error diagnostics (Q1) — parse currently fails silently in some shapes | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
-| (cross) | Integer width discipline — `integer` is i64, explicit `i32` only 4-byte, no implicit `integer`→`i32` (data loss); FFI marshal + compiler enforcement + lib i32 end-to-end.  Absorbs @P370 | M | ✓ | plans/future/48-integer-width-discipline/README.md |
+| (cross) | Integer width discipline — `integer` is i64, explicit `i32` only 4-byte, no implicit `integer`→`i32` (data loss); FFI marshal + compiler enforcement + lib i32 end-to-end.  Absorbs @P370 | M | ✓ | plans/48-integer-width-discipline/README.md |
 
 ---
 
@@ -183,6 +183,7 @@ First-time-user experience, daily ergonomics, IDE polish.
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
 | (cross) | Better error messages — `file:line:col` + caret + suggestion | M | ✓ | plans/future/07-error-messages/README.md |
+| (cross) | Execution timeout + on-timeout diagnostics — `--timeout`/`LOFT_TIMEOUT`, default under `--tests`; dumps spinning fn:line + call stack (+ crash_tail on interpret), both backends | M | ✓ | plans/49-execution-timeout/README.md |
 | SH.1 | TextMate grammar for `.loft` | S | ✓ | plans/future/27-developer-experience/README.md |
 | SH.2 | VS Code extension (grammar + snippets + run task) | S | ✓ | plans/future/27-developer-experience/README.md |
 | DX.1 | Quick-start `examples/` directory at repo root | XS | ✓ | plans/future/27-developer-experience/README.md |
