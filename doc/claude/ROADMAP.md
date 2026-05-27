@@ -402,6 +402,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/18-viewer-generalisation/`](lib_plans/future/18-viewer-generalisation/) | M | — | `lib/viewer/` — extract the loft branch-review viewer as a project-agnostic library (Java + moros projects as initial customers) |
 | [`lib_plans/future/20-terrain-heightmap/`](lib_plans/future/20-terrain-heightmap/) | M | — | `terrain` — slope-based height-map generation library |
 | [`lib_plans/future/24-universal-editor/`](lib_plans/future/24-universal-editor/) | H | — | `hex_*` universal hex-world editor libraries (moros extraction; dryopea + indie consumers) |
+| [`lib_plans/future/25-ffi-dispatch/`](lib_plans/future/25-ffi-dispatch/) | MH | F | FFI generated-dispatch — `#[loft_native]` proc-macro generates per-fn marshal bridges, deletes the ~98-arm `dispatch_call`; libraries own their FFI typing (supersedes 05-game-infra FFI.1/FFI.3) |
 
 ### Deferred plans
 
