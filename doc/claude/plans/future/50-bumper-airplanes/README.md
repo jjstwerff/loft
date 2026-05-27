@@ -169,16 +169,55 @@ audience can see who's where without needing to read labels.
     sight) sees roughly **3–4 × less** outbound traffic than the
     uniform-30 Hz design — which itself was already light because
     of the sight filter.
-  - **Cockpit clarity.**  Visible motion of distant planes is
-    naturally smoothed by phone-side interpolation between
-    received pose-frames.  Phone keeps a small per-peer history
-    (`net.peer_interp_buffer_frames`, default 3 frames) and
-    interpolates linearly at render time.
   - **The projector is never filtered.**  Full N planes at full
     30 Hz, unconditionally.  The projector IS the overview by
     design — every plane, all the time.  The asymmetry is
     intentional: the room knows where everyone is, the
     individual pilot knows where their neighbourhood is.
+
+- **Phone-side smooth rendering (v1, intrinsic to the renderer).**
+  The bandwidth shaping above is only invisible to the player if
+  the phone hides the discrete-frame nature of what it receives.
+  Three client-side responsibilities:
+
+  1. **Inter-frame interpolation.**  Each peer's pose updates
+     arrive at 30 / 15 / 7.5 Hz depending on its rate-LOD band.
+     The phone keeps a small per-peer history
+     (`net.peer_interp_buffer_frames`, default 3) and at render
+     time linearly interpolates the displayed pose between the
+     two most recent received frames.  At 60 fps render with
+     7.5 Hz input, the phone draws 8 interpolated intermediate
+     frames per real frame — motion looks continuous regardless
+     of the underlying rate-LOD band.
+
+  2. **Fade-in on sight-range entry.**  When a peer first
+     crosses into sight range from outside, the first
+     pose-frame arrives "cold" — the phone has no prior history
+     for that peer.  Rendering it at full alpha would produce
+     a jarring "pop into existence" effect.  The phone instead
+     ramps the peer's alpha from 0 → 1 over
+     `view.peer_fade_in_secs` (default 0.4 sec) and starts
+     building the interp history during the ramp.
+
+  3. **Fade-out on sight-range exit.**  When a peer crosses
+     out of sight range, the server simply stops sending its
+     pose-frames — there is no explicit "this peer left"
+     message.  The phone detects this passively: if no frame
+     has arrived for a peer in
+     `view.peer_silence_timeout_secs` (default 0.4 sec — wide
+     enough to cover the outer-ring 7.5 Hz interval × 3), the
+     phone starts a fade-out at the peer's last-known pose,
+     ramping alpha from 1 → 0 over `view.peer_fade_out_secs`
+     (default 0.5 sec).  After the fade completes, the peer is
+     removed from the active set.  If a frame for that peer
+     arrives mid-fade (transient packet loss, not a real
+     departure), the fade reverses and resumes normal rendering.
+
+  These three behaviours are not QoS — they're how the phone's
+  first-person renderer turns whatever pose-frame schedule it
+  receives into smooth visual motion.  Same code path runs
+  whether the v1 static defaults or the v2 adaptive scaling is
+  shaping the stream.
 
 - **Per-phone adaptive QoS (post-v1).**  The static sight + LOD
   defaults above assume every phone has a comparable connection.
@@ -194,10 +233,15 @@ audience can see who's where without needing to read labels.
   | **OK** (default) | 50–150 ms | < 5 % | 1.0× | 1.0× | 1.0× | 3 |
   | **Limited** | > 150 ms or > 5 % loss | (caps activate) | 0.6× | 1.5× (smaller full-rate ring) | 1.5× | 4 (deeper buffer to ride out jitter) |
 
-  **The server is the sole authority — no client-side
-  cooperation required.**  Each input frame the phone already
-  sends carries the phone's local `ticks()` timestamp (a
-  handful of bytes within the existing input-frame budget).
+  **The server is the sole authority for QoS *classification*
+  — no client-side measurement code, no extra protocol
+  round-trips.**  (The phone still does the v1 smooth-rendering
+  work — interpolation + fade in/out — but that's renderer
+  work, not QoS work; same code path runs regardless of which
+  tier the server has placed the phone in.)  Each input frame
+  the phone already sends carries the phone's local `ticks()`
+  timestamp (a handful of bytes within the existing input-frame
+  budget).
   The server already records its own receive-time per frame.
   From these two streams alone, the server passively computes:
 
@@ -604,7 +648,7 @@ This demo:
 | # | What ships | Effort | Builds on |
 |---|---|---|---|
 | 0a | [Network throughput probe](00a-network-probe.md) — synthetic 30 Hz × N WS load against the existing @PLAN36 server; resolves the dominant unknown (does the broadcast pump hold at 12 / 20 / 30 clients?) before phase 0 commits substantial code | XS | @PLAN36 phase 1.9 (Tier A′ pump + WsGroup) |
-| 0  | Phone client — twin-strip + first-person canvas + WS skeleton + Web Audio samples | S | phase 0a verdict + @PLAN36 phase 0 |
+| 0  | Phone client — twin-strip + first-person canvas + WS skeleton + Web Audio samples + **per-peer smooth-rendering (linear interp between received frames + fade in/out on sight-range crossings)** | S-M | phase 0a verdict + @PLAN36 phase 0 |
 | 1  | Loft server — per-client pose state, 30 Hz broadcast loop, event dispatch (collisions, scores, stalls) | S | @PLAN36 phase 1 (Tier A′) |
 | 2  | Static world loader — dryopea MapFile → extruded mesh | XS | @PLAN46 plan 01 E4 |
 | 3  | Projector renderer — world + planes + trails + centroid camera + score-pop overlays + countdown | M | @PLAN36 phase 3 |

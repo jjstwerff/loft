@@ -120,6 +120,20 @@ canonical.
 | `net.peer_rate_outer_factor` | 4 | 2 – 8 | (every N ticks) | Outer rate-LOD ring (between `_half_radius` and `peer_sight_range`): planes at this distance get a pose-frame every Nth broadcast tick.  Default 4 = quarter-rate (7.5 Hz at base `broadcast_rate=30`).  Visible motion is small at sight-range edge, interpolation hides the gap |
 | `net.peer_interp_buffer_frames` | 3 | 2 – 8 | (count) | Per-peer pose-history buffer on the phone for interpolation.  Phone keeps the last N received pose-frames and interpolates linearly between them at render time; older frames are evicted.  Larger = smoother but more frame-delay; smaller = snappier but vulnerable to dropped frames |
 
+## Phone-side smooth rendering (v1)
+
+Client-side smoothness behaviours that hide the rate-LOD and
+sight-boundary mechanics from the player.  Not QoS — these run
+unconditionally in v1, same code path regardless of adaptive
+scaling state.
+
+| Parameter | Default | Range | Unit | Why |
+|---|---|---|---|---|
+| `view.peer_fade_in_secs` | 0.4 | 0.1 – 1.5 | s | Duration of the alpha-ramp 0 → 1 when a peer first enters sight range.  Short = peer appears decisively; long = soft introduction.  0.4 sec is roughly the time a player's eye takes to focus on a new visual element |
+| `view.peer_fade_out_secs` | 0.5 | 0.1 – 1.5 | s | Duration of the alpha-ramp 1 → 0 when a peer's pose-frame stream goes silent (sight-range exit).  Slightly longer than fade-in because exits are usually less salient than entries and a slower fade is less likely to be jarring |
+| `view.peer_silence_timeout_secs` | 0.4 | 0.15 – 1.0 | s | Time since the last pose-frame from a peer before fade-out kicks in.  Must be wider than 3 × the slowest expected pose interval (7.5 Hz outer-band ≈ 0.13 sec × 3 = ~0.4 sec) so a single transient delay doesn't trigger a phantom exit.  Smaller = faster fade response on real exits; larger = more tolerant to packet jitter |
+| `view.interp_method` | "linear" | linear / cubic / cubic_hermite | enum | Pose-frame interpolation method.  Linear is the cheapest and looks fine for short interp intervals (< 70 ms).  Cubic-hermite (with velocity from the pose frame) is smoother across longer intervals (outer-band 130-ish ms) but costs more per render frame.  Playtest decides; the design can ship with linear and upgrade if needed |
+
 ## Adaptive QoS (post-v1 — phase 7)
 
 Static `net.peer_*` defaults from § Networking ship in v1.  Phase 7
