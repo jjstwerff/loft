@@ -1893,6 +1893,37 @@ impl State {
     ///   touch program-lifetime locked stores (rc >= u32::MAX/2).
     fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
         let tp_nr = stack.data.def(d_nr).known_type;
+        // @P377/@P378 — adopt-path: when the called function returns a FRESH
+        // store whose return-type deps are ALL HIDDEN return-buffer attributes
+        // (the locals `ref_return` promoted, e.g. `cv = canvas(...); cv`), take
+        // ownership of that store directly (OpPutRef) instead of allocating a
+        // new record + deep-copy + source-free.  The deep-copy path's
+        // `is_borrowed_view` misread (a hidden-buffer dep looks like a borrow)
+        // suppressed the `0x8000` free → the fresh store leaked one per call
+        // (@P377); and enabling that free instead orphaned a slot still aliased
+        // by the returned DbRef → silent corruption / a keyed-source-free
+        // SIGSEGV (@P378).  Adoption emits no copy and no free, so none of
+        // those races exist — and the callee's return-buffer free is already
+        // suppressed (scopes.rs is_ret_work_ref), so ownership transfers
+        // cleanly with no double-free.  A genuine borrowed-view return has a
+        // dep on a NON-hidden (caller-visible) param and still deep-copies.
+        if let Value::Call(fn_nr, _) = value.unspan() {
+            let def = stack.data.def(*fn_nr);
+            if matches!(def.returned, Type::Reference(_, _) | Type::Enum(_, true, _)) {
+                let deps = def.returned.depend();
+                let fresh_return = !deps.is_empty()
+                    && deps
+                        .iter()
+                        .all(|&a| def.attributes.get(a as usize).is_some_and(|at| at.hidden));
+                if fresh_return {
+                    self.generate(value, stack, false);
+                    let var_pos = stack.position - stack.function.stack(v);
+                    stack.add_op("OpPutRef", self);
+                    self.code_add(var_pos);
+                    return;
+                }
+            }
+        }
         // Plan-04 Phase B.3.e: slot-aware init + allocate.  The
         // subsequent `n_set_store_lock(…)` calls between the
         // allocator and the `OpCopyRecord` are void

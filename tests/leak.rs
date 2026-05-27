@@ -14,9 +14,11 @@
 extern crate loft;
 
 use loft::compile::byte_code;
+use loft::logger::{Logger, RuntimeLogConfig};
 use loft::parser::Parser;
 use loft::scopes;
 use loft::state::State;
+use std::sync::{Arc, Mutex};
 mod common;
 use common::cached_default;
 
@@ -1364,5 +1366,62 @@ pub fn test() {
         "P297 control leaked unexpectedly: {} store(s): {}",
         leaks.len(),
         leaks.join(", ")
+    );
+}
+
+/// @P377 — a function with a struct VALUE parameter that returns a fresh
+/// store-backed struct via an intermediate local (`c = alloc(p.a); c`) leaked
+/// one store per call: `ref_return` promoted `c` to a HIDDEN return-buffer dep
+/// and the deep-copy free gate misread that hidden dep as a borrowed view,
+/// suppressing the `0x8000` source-free.  Fixed by the adopt-path — a fresh
+/// (all-hidden-dep) return is taken over directly (OpPutRef), no copy + no
+/// free.  TWO such functions in one program is exactly the case the naive
+/// "just free the source" fix CORRUPTED (null reads from freed-slot reuse),
+/// so this locks BOTH no Box-store leak AND correct values.
+#[test]
+fn p377_struct_param_fresh_return_adopt() {
+    let code = r#"
+struct P { a: integer not null }
+struct Box { v: vector<integer> not null }
+fn alloc_box(n: integer) -> Box { Box { v: [n, n, n] } }
+fn fa(p: P) -> Box { ca = alloc_box(p.a); ca }
+fn fb(p: P) -> Box { cbb = alloc_box(p.a); cbb }
+pub fn test() {
+  pp = P { a: 5 };
+  ta = 0; for ia in 0..4 { ba = fa(pp); ta += ba.v[0]; }
+  tb = 0; for ib in 0..4 { bb = fb(pp); tb += bb.v[0]; }
+  assert(ta == 20, "fa corrupted: ta={ta}");
+  assert(tb == 20, "fb corrupted: tb={tb}");
+}
+"#;
+    // No Box return-store leak (the @P377 metric).  The harness separately
+    // reports the by-value param local `P` — unrelated to the return store.
+    let leaks = leaks_for(code);
+    assert!(
+        !leaks.iter().any(|l| l.contains("Box")),
+        "P377: Box return store leaked: {}",
+        leaks.join(", ")
+    );
+    // No value corruption: run in production mode so a failed in-loft assert
+    // sets had_fatal (instead of aborting the test binary) and check it stayed
+    // clear — the multi-fn adopt path must produce correct values.
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse_str(code, "p377", false);
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let cfg = RuntimeLogConfig {
+        log_path: std::path::PathBuf::from("/dev/null"),
+        production: true,
+        ..Default::default()
+    };
+    state.database.logger = Some(Arc::new(Mutex::new(Logger::new(cfg, None))));
+    state.execute("test", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "P377: multi-fn fresh-return values corrupted (an in-loft assert failed)"
     );
 }
