@@ -65,6 +65,27 @@ use std::path::Path;
 /// - If the generated file cannot be written — a build configuration
 ///   error.
 pub fn generate_register_from_loft(loft_src_dir: &str) {
+    generate(loft_src_dir, false);
+}
+
+/// Like [`generate_register_from_loft`], but ALSO emits a
+/// `loft_ffi::loft_register_bridges!` invocation registering each symbol's
+/// generated marshal bridge (`<symbol>__loft_bridge`) — the plan-25 FFI
+/// generated-dispatch path.  Use this from a `build.rs` whose `native/src`
+/// applies `#[loft_native]` to every exported fn.
+///
+/// Assumes the **clean binding** (bare `#native`, so the loft symbol equals
+/// the Rust fn name, and the bridge is `<symbol>__loft_bridge`).  A remapped
+/// `#native "sym"` would generate a bridge ident that does not exist — a
+/// compile error that names the missing symbol.
+///
+/// # Panics
+/// Same as [`generate_register_from_loft`].
+pub fn generate_register_from_loft_with_bridges(loft_src_dir: &str) {
+    generate(loft_src_dir, true);
+}
+
+fn generate(loft_src_dir: &str, bridges: bool) {
     let mut files = Vec::new();
     collect_loft_files(Path::new(loft_src_dir), &mut files);
     files.sort();
@@ -88,6 +109,17 @@ pub fn generate_register_from_loft(loft_src_dir: &str) {
         out.push_str(",\n");
     }
     out.push_str("}\n");
+    if bridges {
+        out.push_str("loft_ffi::loft_register_bridges! {\n");
+        for sym in &symbols {
+            out.push_str("    \"");
+            out.push_str(sym);
+            out.push_str("\" => ");
+            out.push_str(sym);
+            out.push_str("__loft_bridge,\n");
+        }
+        out.push_str("}\n");
+    }
     let out_dir = env::var_os("OUT_DIR")
         .expect("OUT_DIR not set — `generate_register_from_loft` must run from a build.rs");
     let dest = Path::new(&out_dir).join("loft_register_gen.rs");
