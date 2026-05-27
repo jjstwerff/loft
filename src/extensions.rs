@@ -26,6 +26,25 @@ unsafe impl Send for FnPtr {}
 #[cfg(feature = "native-extensions")]
 static NATIVE_REGISTRY: Mutex<Option<HashMap<String, FnPtr>>> = Mutex::new(None);
 
+/// Plan-25: registry of generated marshal bridges (`loft_ffi::LoftBridgeFn`),
+/// keyed by loft symbol.  Populated from a cdylib's `loft_register_bridges_v1`
+/// if it exports one.  A symbol present here is dispatched through its bridge
+/// (`dispatch_via_bridge`); a symbol absent here falls back to the legacy
+/// raw-ptr `dispatch_call` arms.  Both coexist during the F3→F4 transition.
+#[cfg(feature = "native-extensions")]
+static BRIDGE_REGISTRY: Mutex<Option<HashMap<String, FnPtr>>> = Mutex::new(None);
+
+/// Look up a generated bridge for `sym`, if the owning cdylib registered one.
+#[cfg(feature = "native-extensions")]
+fn get_bridge(sym: &str) -> Option<*const ()> {
+    BRIDGE_REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .and_then(|m| m.get(sym))
+        .map(|p| p.0)
+}
+
 /// The C-ABI registration callback type.
 #[cfg(feature = "native-extensions")]
 type RegisterFn =
@@ -104,6 +123,24 @@ fn load_one(path: &str) {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let registry = reg_guard.get_or_insert_with(HashMap::new);
+        for (name, ptr) in collected {
+            registry.insert(name, FnPtr(ptr));
+        }
+    }
+    // Plan-25: collect generated marshal bridges, if the cdylib exports them.
+    // Symbols with a bridge dispatch through `dispatch_via_bridge`; the rest
+    // keep using the legacy raw-ptr arms (a library may export both during the
+    // transition, or only `loft_register_v1`).
+    if let Ok(reg_sym) = unsafe { lib.get::<RegisterFn>(b"loft_register_bridges_v1\0") } {
+        let reg_sym = *reg_sym;
+        let mut collected: Vec<(String, *const ())> = Vec::new();
+        unsafe {
+            reg_sym(collect, std::ptr::addr_of_mut!(collected).cast::<()>());
+        }
+        let mut bridge_guard = BRIDGE_REGISTRY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let registry = bridge_guard.get_or_insert_with(HashMap::new);
         for (name, ptr) in collected {
             registry.insert(name, FnPtr(ptr));
         }
@@ -442,6 +479,14 @@ fn native_auto_dispatch(stores: &mut crate::database::Stores, stack: &mut crate:
         }
     };
 
+    // Plan-25 F3: dispatch through the generated bridge if the owning cdylib
+    // registered one for this symbol; otherwise fall through to the legacy
+    // raw-ptr arms below.
+    if let Some(bridge_ptr) = get_bridge(&sym) {
+        dispatch_via_bridge(stores, stack, bridge_ptr, &sig);
+        return;
+    }
+
     let fp = unsafe { get_native_fn_raw(&sym) }.unwrap_or_else(|| {
         panic!("native symbol '{sym}' not loaded");
     });
@@ -489,6 +534,149 @@ fn native_auto_dispatch(stores: &mut crate::database::Stores, stack: &mut crate:
 
     // Dispatch based on exact signature pattern.
     dispatch_call(stores, stack, fp, &args, &sig.params, sig.ret);
+}
+
+/// Plan-25 F3: dispatch a native call through its generated `LoftBridgeFn`.
+///
+/// Marshals the stack args into `[LoftValue]` at FULL width (the bridge casts
+/// each to the impl's real param type), builds the `LoftStore` from the first
+/// ref arg's store (or store 0), calls the bridge, and writes the tagged
+/// return back to the stack.  Replaces the ~98-arm `dispatch_call` for any
+/// symbol whose cdylib was built with `#[loft_native]`.
+#[cfg(feature = "native-extensions")]
+fn dispatch_via_bridge(
+    stores: &mut crate::database::Stores,
+    stack: &mut crate::keys::DbRef,
+    bridge_ptr: *const (),
+    sig: &NativeSig,
+) {
+    use crate::keys::Str;
+    use loft_ffi::{LoftRef as FfiRef, LoftStr as FfiStr, LoftTag, LoftValue};
+
+    // Build args at full width (pop in reverse — LIFO — then restore order).
+    let mut args: Vec<LoftValue> = Vec::with_capacity(sig.params.len());
+    for &t in sig.params.iter().rev() {
+        let v = match t {
+            // No pre-narrowing: pass the whole i64 cell; the bridge casts to
+            // the impl's real width (i32/u16/…) per its Rust signature.
+            ArgT::I32 | ArgT::I64 => LoftValue::int(*stores.get::<i64>(stack)),
+            ArgT::F32 | ArgT::F64 => LoftValue::float(*stores.get::<f64>(stack)),
+            ArgT::Bool => LoftValue::boolean(*stores.get::<bool>(stack)),
+            ArgT::Text => {
+                let s = *stores.get::<Str>(stack);
+                LoftValue::text(FfiStr {
+                    ptr: s.str().as_ptr(),
+                    len: s.str().len(),
+                })
+            }
+            ArgT::Ref => {
+                let r = *stores.get::<crate::keys::DbRef>(stack);
+                LoftValue::reference(FfiRef {
+                    store_nr: r.store_nr,
+                    rec: r.rec,
+                    pos: r.pos,
+                })
+            }
+            ArgT::Vec => {
+                // Same indirect-vector deref as the legacy marshal.
+                let r = *stores.get::<crate::keys::DbRef>(stack);
+                let rec = if r.rec == 0 || r.pos == 0 {
+                    0
+                } else {
+                    stores.store(&r).get_u32_raw(r.rec, r.pos)
+                };
+                LoftValue::reference(FfiRef {
+                    store_nr: r.store_nr,
+                    rec,
+                    pos: 0,
+                })
+            }
+        };
+        args.push(v);
+    }
+    args.reverse();
+
+    // The store the bridge sees: the first ref arg's store (so ref/vector
+    // params and allocating returns resolve correctly), else store 0.
+    let store_nr = args
+        .iter()
+        .find_map(|v| (v.tag == LoftTag::Ref).then(|| v.as_ref().store_nr))
+        .unwrap_or(0);
+    let ls = make_loft_store(stores, store_nr);
+
+    // CURRENT_STORES must be live for the bridge's ffi_claim/resize callbacks.
+    struct StoresGuard;
+    impl Drop for StoresGuard {
+        fn drop(&mut self) {
+            CURRENT_STORES.with(|c| c.set(std::ptr::null_mut()));
+        }
+    }
+    let stores_ptr: *mut crate::database::Stores = stores;
+    CURRENT_STORES.with(|c| c.set(stores_ptr));
+    let _guard = StoresGuard;
+
+    let mut ret = LoftValue::VOID;
+    // SAFETY: `bridge_ptr` is a `loft_ffi::LoftBridgeFn` registered by the
+    // cdylib; the local `LoftStore` mirror is `#[repr(C)]`-identical to
+    // `loft_ffi::LoftStore`, so the ABI matches.
+    let bridge: unsafe extern "C" fn(LoftStore, *const LoftValue, usize, *mut LoftValue) =
+        unsafe { std::mem::transmute(bridge_ptr) };
+    unsafe { bridge(ls, args.as_ptr(), args.len(), std::ptr::from_mut(&mut ret)) };
+
+    // Write the tagged return to the stack (mirrors dispatch_call's returns).
+    match ret.tag {
+        LoftTag::Void => {}
+        // The bridge already widened i32 returns (i32::MIN → i64::MIN).
+        LoftTag::I64 => stores.put::<i64>(stack, ret.as_i64()),
+        LoftTag::Bool => stores.put(stack, ret.as_bool()),
+        LoftTag::F64 => stores.put(stack, ret.as_f64()),
+        LoftTag::Text => bridge_push_str(stores, stack, ret.as_text()),
+        LoftTag::Ref => bridge_push_ref(stores, stack, ret.as_ref()),
+    }
+}
+
+/// Copy a returned `loft_ffi::LoftStr` into the stack (mirror of
+/// `dispatch_call`'s nested `push_loft_str`, for the bridge path).
+#[cfg(feature = "native-extensions")]
+fn bridge_push_str(
+    stores: &mut crate::database::Stores,
+    stack: &mut crate::keys::DbRef,
+    s: loft_ffi::LoftStr,
+) {
+    use crate::keys::Str;
+    if !s.ptr.is_null() && s.len > 0 {
+        let text =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(s.ptr, s.len)) };
+        stores.scratch.clear();
+        stores.scratch.push(text.to_string());
+        stores.put(stack, Str::new(&stores.scratch[0]));
+    } else {
+        stores.put(stack, Str::new(""));
+    }
+}
+
+/// Wrap a returned `loft_ffi::LoftRef` (direct vector record) in the indirect
+/// header layout the interpreter expects, and push it (mirror of
+/// `dispatch_call`'s nested `push_loft_ref`, for the bridge path).
+#[cfg(feature = "native-extensions")]
+fn bridge_push_ref(
+    stores: &mut crate::database::Stores,
+    stack: &mut crate::keys::DbRef,
+    r: loft_ffi::LoftRef,
+) {
+    let base = crate::keys::DbRef {
+        store_nr: r.store_nr,
+        rec: 0,
+        pos: 0,
+    };
+    let header = stores.claim(&base, 1);
+    stores.store_mut(&base).set_u32_raw(header.rec, 4, r.rec);
+    let dbref = crate::keys::DbRef {
+        store_nr: r.store_nr,
+        rec: header.rec,
+        pos: 4,
+    };
+    stores.put(stack, dbref);
 }
 
 // Thread-local: current library index being dispatched.

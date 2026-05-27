@@ -7,7 +7,11 @@
 //! annotations the compiler binds against, so the register list can't drift.
 //! Bare `#native` → `n_<fn>`; `#native "sym"` → the override.  `include!`d
 //! by `src/lib.rs`.
+//!
+//! Plan-25 F3: imaging's `n_*` impls carry `#[loft_native]`, so this also
+//! emits the `loft_register_bridges!` list — the interpreter dispatches
+//! imaging through the generated marshal bridges, not the legacy arms.
 
 fn main() {
-    loft_ffi_build::generate_register_from_loft("../src");
+    loft_ffi_build::generate_register_from_loft_with_bridges("../src");
 }

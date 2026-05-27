@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 ureq = { version = "2", features = ["cookies"] }
 base64 = "0.22"
 loft-ffi = { path = "../../../loft-ffi" }
+loft-ffi-macros = { path = "../../../loft-ffi-macros" }
 
 [build-dependencies]
 loft-ffi-build = { path = "../../../loft-ffi-build" }

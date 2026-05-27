@@ -1401,8 +1401,11 @@ impl Stores {
                 3 => store.get_float(rec, pos).is_nan(),
                 4 => store.get_byte(rec, pos, 0) > 1,
                 5 => {
-                    let text_nr = store.get_u32_raw(rec, pos);
-                    text_nr == 0 || store.get_str(text_nr).is_empty()
+                    // @P375: only an UNSET text (str_rec 0) is null; an allocated
+                    // empty string "" is a present value and must serialise as ""
+                    // (was: `|| is_empty()`, which dropped "" from `{x:j}` output
+                    // and broke the save→load round-trip).
+                    store.get_u32_raw(rec, pos) == 0
                 }
                 _ => false,
             }
@@ -1413,7 +1416,12 @@ impl Stores {
         {
             rec == 0
         } else if let Parts::Vector(_) = &self.types[known_type as usize].parts {
-            store.get_u32_raw(rec, pos) == 0
+            // @P375: a vector field carries no nullable flag — it is always at
+            // least the empty list, never null.  An unset handle (0) must
+            // serialise as `[]` (write_list emits `[]` for a 0 handle), not be
+            // dropped from `{x:j}` output.  (Was `handle == 0`, which omitted
+            // empty vectors and broke the save→load round-trip.)
+            false
         } else if let Parts::Byte(from, nullable) = &self.types[known_type as usize].parts {
             let v = store.get_byte(rec, pos, *from);
             *nullable && v == 255

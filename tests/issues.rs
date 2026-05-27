@@ -13078,15 +13078,16 @@ fn run() -> text {
     ));
 }
 
-/// Q3.b — null text fields are omitted from the output (matching
-/// the legacy `dump`/`show` `is_null` filter in
-/// `ShowDb::has_visible_field`).  A text field that was never
-/// assigned has `s_rec == 0` (loft's text-null sentinel) and
-/// `is_null` returns true.  The resulting JSON omits the field
-/// entirely rather than emitting `"name": null` — matching loft's
-/// "absence is not failure" stance from the P54 design.
+/// Q3.b / @P375 — an omitted nullable text field is stored by loft as an
+/// allocated EMPTY string (`s_rec != 0`, `u.name == null` is `false`), not
+/// the `s_rec == 0` null sentinel.  So it is a present value and `to_json`
+/// now emits `"name":""` (dryopea-surfaced: `{x:j}` must emit every declared
+/// field for a faithful save→load round-trip; the old `|| is_empty()` filter
+/// dropped present empty strings, producing partial JSON).  GENUINELY-null
+/// scalars (text with `s_rec == 0`, nullable int = `i64::MIN`) are still
+/// omitted — only present-but-empty values changed.
 #[test]
-fn q3b_struct_to_json_skips_null_text_fields() {
+fn q3b_struct_to_json_emits_present_empty_text() {
     code!(
         "struct U { name: text, age: integer }
 fn run() -> text {
@@ -13095,7 +13096,7 @@ fn run() -> text {
 }"
     )
     .expr("run()")
-    .result(Value::Text(r#"{"age":7}"#.to_string()));
+    .result(Value::Text(r#"{"name":"","age":7}"#.to_string()));
 }
 
 /// P234 — `r.0.x` lexer fix: the inner `0.x` previously parsed as

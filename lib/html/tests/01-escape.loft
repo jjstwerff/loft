@@ -1,10 +1,11 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLAN37 phase 10.7 — text.escape_html() method.  The
-// @PLAN35 viewer rolled its own escape() helper; this
-// promotes it to the stdlib so every loft program rendering
-// HTML doesn't have to.
+// lib/html escape_html() — migrated from tests/scripts/106-escape-html.loft
+// when escape_html moved out of the default stdlib into lib/html
+// (lib_plans/12 Phase 3.6).  Now imported explicitly via `use html;`.
+
+use html;
 
 fn test_basic_entities() {
     assert("<".escape_html() == "&lt;",   "lt");

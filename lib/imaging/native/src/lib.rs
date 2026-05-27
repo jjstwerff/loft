@@ -6,6 +6,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 use loft_ffi::{LoftRef, LoftStore};
+use loft_ffi_macros::loft_native;
 use png::Decoder;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
@@ -39,6 +40,7 @@ fn decode_png(path: &str) -> Option<(u32, u32, Vec<u8>)> {
 
 /// Decode a PNG file and write the result directly into an Image struct.
 /// The Image fields (name, width, height, data) are written via LoftStore.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_load_png(
     mut store: LoftStore,
@@ -85,6 +87,7 @@ fn encode_png(path: &str, width: u32, height: u32, rgb_data: &[u8]) -> bool {
 
 /// Encode an Image struct as a PNG file.
 /// Reads width, height, and pixel data (3 bytes per Pixel: r, g, b) from the store.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_save_png(
     store: LoftStore,

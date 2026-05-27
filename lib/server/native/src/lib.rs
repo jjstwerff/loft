@@ -7,6 +7,7 @@
 mod websocket;
 
 use loft_ffi::LoftStr;
+use loft_ffi_macros::loft_native;
 use std::cell::{Cell, RefCell};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -95,6 +96,7 @@ fn parse_request(stream: &mut TcpStream) -> Option<(String, String, String, Stri
 // ── C-ABI exports ───────────────────────────────────────────────────────
 
 /// Bind a TCP listener on the given port. Returns handle (>= 0) or -1.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_tcp_listen(port: i64) -> i64 {
     let addr = format!("0.0.0.0:{}", port as u16);
@@ -124,6 +126,7 @@ pub extern "C" fn n_tcp_listen(port: i64) -> i64 {
 /// with multi-client WebSocket pumping (single-port HTTP + WS).  The legacy
 /// blocking `n_tcp_accept` below remains for single-client servers that
 /// only need to handle one request at a time.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_tcp_accept_nonblocking(handle: i64) -> bool {
     let stream = LISTENERS.with(|l| {
@@ -164,6 +167,7 @@ pub extern "C" fn n_tcp_accept_nonblocking(handle: i64) -> bool {
 /// Accept the next connection and parse the HTTP request.
 /// Blocks until a connection arrives. Returns true on success, false on error.
 /// After success, call loft_tcp_method/path/body to read the request fields.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_tcp_accept(handle: i64) -> bool {
     let stream = LISTENERS.with(|l| {
@@ -190,18 +194,21 @@ pub extern "C" fn n_tcp_accept(handle: i64) -> bool {
 }
 
 /// Get the method of the last accepted request.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_tcp_method() -> LoftStr {
     LAST_METHOD.with(|m| loft_ffi::ret_ref(&m.borrow()))
 }
 
 /// Get the path of the last accepted request.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_tcp_path() -> LoftStr {
     LAST_PATH.with(|p| loft_ffi::ret_ref(&p.borrow()))
 }
 
 /// Get the body of the last accepted request.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_tcp_body() -> LoftStr {
     LAST_BODY.with(|b| loft_ffi::ret_ref(&b.borrow()))
@@ -215,6 +222,7 @@ pub extern "C" fn n_tcp_body() -> LoftStr {
 /// # Safety
 ///
 /// `body_ptr` / `body_len` must describe a valid byte slice or be `(NULL, 0)`.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_tcp_respond(status: i64, body_ptr: *const u8, body_len: usize) {
     unsafe { write_response(status as u16, "text/plain; charset=utf-8", body_ptr, body_len) }
@@ -234,6 +242,7 @@ pub unsafe extern "C" fn n_tcp_respond(status: i64, body_ptr: *const u8, body_le
 /// `body_ptr` / `body_len` must describe a valid byte slice or be
 /// `(NULL, 0)`.  `ct_ptr` / `ct_len` must describe a valid UTF-8
 /// slice or be `(NULL, 0)`.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_tcp_respond_typed(
     status: i64,
@@ -282,6 +291,7 @@ unsafe fn write_response(status: u16, content_type: &str, body_ptr: *const u8, b
 }
 
 /// Close a listener.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_tcp_close(handle: i64) {
     LISTENERS.with(|l| {
@@ -301,6 +311,7 @@ thread_local! {
 }
 
 /// Upgrade the current HTTP connection to WebSocket. Returns handle (>= 0) or -1.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_upgrade() -> i64 {
     let hdrs = LAST_HEADERS.with(|h| h.borrow().clone());
@@ -323,6 +334,7 @@ pub extern "C" fn n_ws_upgrade() -> i64 {
 
 /// Read the next WebSocket message. Returns true on success, false on close/error.
 /// After success, call loft_ws_message/loft_ws_opcode to get the data.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_recv(handle: i64) -> bool {
     WS_CONNS.with(|conns| {
@@ -353,12 +365,14 @@ pub extern "C" fn n_ws_recv(handle: i64) -> bool {
 }
 
 /// Get the last received WebSocket message text.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_message() -> LoftStr {
     WS_LAST_MSG.with(|m| loft_ffi::ret_ref(&m.borrow()))
 }
 
 /// Get the last received WebSocket opcode (1=text, 2=binary, 8=close, 9=ping, 10=pong).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_opcode() -> i64 {
     WS_LAST_OPCODE.with(|o| i64::from(*o.borrow()))
@@ -369,6 +383,7 @@ pub extern "C" fn n_ws_opcode() -> i64 {
 /// # Safety
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_send(handle: i64, msg_ptr: *const u8, msg_len: usize) -> bool {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
@@ -389,6 +404,7 @@ pub unsafe extern "C" fn n_ws_send(handle: i64, msg_ptr: *const u8, msg_len: usi
 /// # Safety
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_send_binary(handle: i64, msg_ptr: *const u8, msg_len: usize) -> bool {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
@@ -402,6 +418,7 @@ pub unsafe extern "C" fn n_ws_send_binary(handle: i64, msg_ptr: *const u8, msg_l
 }
 
 /// Close a WebSocket connection.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_close(handle: i64) {
     WS_CONNS.with(|conns| {
@@ -514,6 +531,7 @@ fn try_accept_inner(listener_handle: i32) -> AcceptOutcome {
 /// upgrade, register the stream as a client, and return its id (>= 0).
 /// If no connection is pending, returns -1.  Returns -2 on a listener
 /// or upgrade error so loft can distinguish "not yet" from "broken".
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_accept_nonblocking(listener_handle: i64) -> i64 {
     match try_accept_inner(listener_handle as i32) {
@@ -529,12 +547,14 @@ pub extern "C" fn n_ws_accept_nonblocking(listener_handle: i64) -> i64 {
 }
 
 /// Total length of the WS_CONNS table (active + closed slots).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_clients_len() -> i64 {
     WS_CONNS.with(|conns| conns.borrow().len() as i64)
 }
 
 /// True iff the WS_CONNS slot at `id` is currently occupied.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_client_active(id: i64) -> bool {
     WS_CONNS.with(|conns| {
@@ -608,6 +628,7 @@ fn poll_one_client(id: i32) -> PollOutcome {
 /// Returns true if an event was found (call n_ws_event_kind /
 /// n_ws_event_client_id / n_ws_event_payload to read it).  Returns
 /// false when nothing is pending.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_next_event(listener_handle: i64) -> bool {
     match try_accept_inner(listener_handle as i32) {
@@ -661,12 +682,14 @@ pub extern "C" fn n_ws_next_event(listener_handle: i64) -> bool {
 
 /// Read the kind of the last event surfaced by n_ws_next_event.
 /// 0 = Connected, 1 = Message, 2 = Disconnected.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_event_kind() -> i64 {
     WS_EVENT_KIND.with(|k| i64::from(k.get()))
 }
 
 /// Read the client id of the last event surfaced by n_ws_next_event.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_event_client_id() -> i64 {
     WS_EVENT_CLIENT_ID.with(|c| i64::from(c.get()))
@@ -674,6 +697,7 @@ pub extern "C" fn n_ws_event_client_id() -> i64 {
 
 /// Read the payload of the last event surfaced by n_ws_next_event.
 /// Empty string for Connected and Disconnected events.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_event_payload() -> LoftStr {
     WS_EVENT_PAYLOAD.with(|p| loft_ffi::ret_ref(&p.borrow()))
@@ -684,6 +708,7 @@ pub extern "C" fn n_ws_event_payload() -> LoftStr {
 /// the no-clients-yet phase.  Doing the sleep in Rust keeps the
 /// loft side oblivious to timing primitives — there is no general
 /// `sleep` in the loft stdlib today.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_idle_sleep_ms(ms: i64) {
     if ms > 0 {
@@ -700,6 +725,7 @@ pub extern "C" fn n_ws_idle_sleep_ms(ms: i64) {
 /// # Safety
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_broadcast(_handle: i64, msg_ptr: *const u8, msg_len: usize) -> i64 {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };

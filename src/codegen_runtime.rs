@@ -433,7 +433,14 @@ pub fn OpSizeofRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef) -> i64 {
 /// Bytecode equivalent: `State::db_from_text` in `src/state/io.rs:780`.
 #[must_use]
 pub fn db_from_text(stores: &mut Stores, val: &str, db_tp: u16) -> DbRef {
-    let db = stores.database(8);
+    // @P372: size the target record to the struct, not a fixed 8 words — see
+    // the mirror in `State::db_from_text` (`src/state/io.rs`) for the full
+    // rationale.  A fixed `database(8)` (64 bytes) left only 56 bytes for the
+    // struct (written at `pos: 8`), so a struct > 56 bytes overflowed its tail
+    // field into the adjacent block header, and a later `claim` spun forever in
+    // `claim_scan`.  Keep a floor of 8 words.
+    let words = std::cmp::max(8, 1 + u32::from(stores.size(db_tp)).div_ceil(8));
+    let db = stores.database(words);
     let into = DbRef {
         store_nr: db.store_nr,
         rec: db.rec,

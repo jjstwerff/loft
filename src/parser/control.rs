@@ -3163,9 +3163,30 @@ impl Parser {
                     }
                 }
             }
+            // @P374: mirror block_result's tuple→synthetic-struct rewrite for an
+            // explicit `return (a, b);` whose declared return type is a
+            // `Reference(__tuple<…>)` (a tuple of types with lifetime concerns —
+            // e.g. structs — which `parse_function` rewrites that way).  Without
+            // it, `convert(Tuple, Reference(__tuple<…>))` fails and the user sees
+            // "expected __tuple<…>, got (…)" even though the SAME tuple as a
+            // function's final expression compiles.  parse_return is the statement
+            // path; block_result is the tail path — they must agree.
+            let tuple_rewritten = !self.first_pass
+                && matches!(t, Type::Tuple(_))
+                && tail_has_tuple_leaf(v.unspan())
+                && matches!(&r_type, Type::Reference(d, _) if self.data.def(*d).name.starts_with("__tuple<"))
+                && {
+                    let synthetic_d_nr = if let Type::Reference(d, _) = &r_type {
+                        *d
+                    } else {
+                        unreachable!()
+                    };
+                    self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut v);
+                    true
+                };
             if t == Type::Null {
                 v = self.null(&r_type);
-            } else if !self.convert(&mut v, &t, &r_type) {
+            } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {
                 self.validate_convert("return", &t, &r_type);
             }
             // Phase 1b (inline-lift-safety): mirror block_result's ref/enum

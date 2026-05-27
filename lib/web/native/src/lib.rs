@@ -7,6 +7,7 @@
 //! backoff capped at 10 seconds — see `ws_client::ensure_connected`.
 
 use loft_ffi::LoftStr;
+use loft_ffi_macros::loft_native;
 
 mod ws_client;
 
@@ -86,6 +87,7 @@ fn parse_headers(header_text: &str) -> Vec<(&str, &str)> {
 
 /// HTTP request. Returns status code; response body available via n_http_body.
 /// This function stores the body in a thread-local for the interpreter to retrieve.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_http_do(
     method_ptr: *const u8,
@@ -122,6 +124,7 @@ pub unsafe extern "C" fn n_http_do(
 /// Create a cookie-jar session.  `redirects` = max redirects to follow
 /// (0 = don't follow, so the caller can read the `Location` header).  With the
 /// `cookies` feature an `AgentBuilder` carries a default jar.  Returns the handle.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_http_session_new(redirects: i64) -> i64 {
     let agent = ureq::AgentBuilder::new()
@@ -135,12 +138,14 @@ pub extern "C" fn n_http_session_new(redirects: i64) -> i64 {
 }
 
 /// Select the session whose agent the next `n_http_do` call routes through.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_http_session_use(handle: i64) {
     ACTIVE_AGENT.with(|c| c.set(handle as i32));
 }
 
 /// Return the body from the last HTTP request.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_http_body() -> LoftStr {
     LAST_BODY.with(|b| loft_ffi::ret_ref(&b.borrow()))
@@ -149,6 +154,7 @@ pub extern "C" fn n_http_body() -> LoftStr {
 /// Return the last response's headers, newline-joined `"name: value"` (names
 /// lowercased, duplicates preserved).  The loft side splits this into the
 /// `HttpResponse.headers` vector.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_http_headers_raw() -> LoftStr {
     LAST_HEADERS.with(|h| loft_ffi::ret_ref(&h.borrow()))
@@ -157,6 +163,7 @@ pub extern "C" fn n_http_headers_raw() -> LoftStr {
 /// ASCII-lowercase a string.  Generic helper — loft has no `lower()`; lets the
 /// header accessors normalise a caller-supplied name.  (Cleaner long-term home
 /// is a core `text.lower()`; kept local to avoid core scope-creep.)
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ascii_lower(ptr: *const u8, len: usize) -> LoftStr {
     let s = unsafe { loft_ffi::text(ptr, len) };
@@ -164,6 +171,7 @@ pub unsafe extern "C" fn n_ascii_lower(ptr: *const u8, len: usize) -> LoftStr {
 }
 
 /// Standard base64-encode the input bytes (helps OAuth2 / SSO header building).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_base64_encode(ptr: *const u8, len: usize) -> LoftStr {
     use base64::Engine;
@@ -174,6 +182,7 @@ pub unsafe extern "C" fn n_base64_encode(ptr: *const u8, len: usize) -> LoftStr 
 /// Standard base64-decode; invalid input decodes to an empty string.  The
 /// decoded bytes are interpreted as UTF-8 (lossily) since loft `text` is a
 /// UTF-8 buffer.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_base64_decode(ptr: *const u8, len: usize) -> LoftStr {
     use base64::Engine;
@@ -203,6 +212,7 @@ thread_local! {
 /// non-negative handle unless the URL is malformed.  If the initial
 /// handshake fails, the slot is created in disconnected state and the
 /// next send/recv will trigger a reconnect attempt subject to backoff.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_connect(url_ptr: *const u8, url_len: usize) -> i64 {
     let url = unsafe { loft_ffi::text(url_ptr, url_len) };
@@ -212,6 +222,7 @@ pub unsafe extern "C" fn n_ws_connect(url_ptr: *const u8, url_len: usize) -> i64
 /// Send a text message on a WebSocket.  Returns true on success, false if
 /// the connection is not currently live (caller may retry on the next
 /// poll — reconnect is automatic with backoff).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_client_send(
     handle: i64,
@@ -232,6 +243,7 @@ pub unsafe extern "C" fn n_ws_client_send(
 /// # Safety
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_client_send_binary(
     handle: i64,
@@ -245,12 +257,14 @@ pub unsafe extern "C" fn n_ws_client_send_binary(
 /// Poll for the next received message.  Returns true if a message was
 /// delivered (then call n_ws_client_message), false if the queue is
 /// empty or the connection is currently down.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_client_recv(handle: i64) -> bool {
     ws_client::recv(handle as i32)
 }
 
 /// Get the last message returned by `n_ws_client_recv`.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_client_message() -> LoftStr {
     LAST_WS_MSG.with(|m| {
@@ -265,12 +279,14 @@ pub extern "C" fn n_ws_client_message() -> LoftStr {
 /// programs that handle binary frames check this after a successful
 /// recv to decide whether the message bytes are utf-8 text or a
 /// binary blob.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_client_opcode() -> i64 {
     i64::from(ws_client::last_opcode())
 }
 
 /// Close a WebSocket session permanently (no reconnect).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_client_close(handle: i64) {
     ws_client::close(handle as i32);
@@ -281,6 +297,7 @@ pub extern "C" fn n_ws_client_close(handle: i64) {
 /// races would otherwise dominate (P229a — macOS scheduler is fast
 /// enough that two clients complete their move sequence with no
 /// observable overlap).  Negative / zero values are no-ops.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_sleep_ms(ms: i64) {
     if ms <= 0 {
@@ -311,18 +328,21 @@ thread_local! {
 }
 
 /// Empty the per-thread pack buffer.  Call before each blob.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_pack_reset() {
     PACK_BUF.with(|b| b.borrow_mut().clear());
 }
 
 /// Append a single byte to the pack buffer.  `b` is masked to 8 bits.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_pack_u8(b: i64) {
     PACK_BUF.with(|buf| buf.borrow_mut().push((b & 0xff) as u8));
 }
 
 /// Append a 2-byte little-endian unsigned value to the pack buffer.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_pack_u16_le(v: i64) {
     PACK_BUF.with(|buf| {
@@ -335,6 +355,7 @@ pub extern "C" fn n_pack_u16_le(v: i64) {
 /// Append a 4-byte little-endian unsigned value to the pack buffer.
 /// Loft `integer` is 64-bit — take the low 32 bits (cast to u32) to
 /// preserve the LE byte pattern across the sign boundary.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_pack_u32_le(v: i64) {
     PACK_BUF.with(|buf| {
@@ -348,6 +369,7 @@ pub extern "C" fn n_pack_u32_le(v: i64) {
 /// whose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer.
 /// The resulting `text` lives in `LAST_PACKED` until the next
 /// `n_pack_take` call — copy / send before reusing.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_pack_take() -> LoftStr {
     PACK_BUF.with(|buf| {
@@ -372,6 +394,7 @@ pub extern "C" fn n_pack_take() -> LoftStr {
 /// # Safety
 ///
 /// `text_ptr` / `text_len` must describe a valid byte slice.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_byte_at(idx: i64, text_ptr: *const u8, text_len: usize) -> i64 {
     if idx < 0 || (idx as usize) >= text_len {
@@ -393,6 +416,7 @@ thread_local! {
 }
 
 /// Clear the group handle list.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_group_clear() {
     WS_GROUP.with(|g| g.borrow_mut().clear());
@@ -400,6 +424,7 @@ pub extern "C" fn n_ws_group_clear() {
 }
 
 /// Add a handle to the group.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_group_add(handle: i64) {
     WS_GROUP.with(|g| g.borrow_mut().push(handle as i32));
@@ -407,6 +432,7 @@ pub extern "C" fn n_ws_group_add(handle: i64) {
 
 /// Poll the group round-robin.  Returns the handle that has a message
 /// (read it with n_ws_client_message), or -1 if none are ready.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_group_poll() -> i64 {
     let (handles, offset) = WS_GROUP.with(|g| {

@@ -316,53 +316,140 @@ pub fn load_font(path: text) -> integer;
 
 ### Implementation in Rust
 
+A native function is a plain `extern "C"` fn using the `loft-ffi` ABI types,
+annotated with **`#[loft_native]`**.  The macro reads the fn's *real Rust
+signature* and generates a uniform marshal bridge (`<fn>__loft_bridge`) — you
+write **no** marshalling code (plan-25 FFI generated-dispatch):
+
 ```rust
 // native/src/lib.rs
+use loft_ffi::{LoftRef, LoftStore};
+use loft_ffi_macros::loft_native;
 
-use loft::codegen_runtime::{Stores, DbRef};
-
-/// Save the Canvas pixel buffer as a PNG file.
-///
-/// Signature must match the loft declaration:
-///   fn save_png(self: const Canvas, path: text)
-///
-/// Arguments are passed as store references; the runtime marshals
-/// loft types to Rust types via the Stores API.
-#[loft_fn]
-pub fn save_png(stores: &Stores, canvas: &DbRef, path: &str) {
-    let width = stores.get_int(canvas, "width");
-    let height = stores.get_int(canvas, "height");
-    let data_ref = stores.get_field(canvas, "data");
-    // ... encode PNG using the `png` crate
-}
-
-#[loft_fn]
-pub fn load_font(stores: &mut Stores, path: &str) -> i32 {
-    // ... load font via fontdue, return font ID
+/// .loft decl:  fn save_png(self: const Image, path: text) -> boolean;
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_save_png(
+    store: LoftStore,                      // present when any arg is a ref/vector
+    image: LoftRef,                        // a struct / vector arg
+    path_ptr: *const u8, path_len: usize,  // a `text` arg → ptr + len
+) -> bool {
+    let path = unsafe { loft_ffi::text(path_ptr, path_len) };
+    let w = unsafe { store.get_long(image.rec, image.pos, WIDTH) };
+    // … encode the PNG; return success
+    true
 }
 ```
+
+**Type mapping** — loft declaration → the impl's real Rust parameter:
+
+| Loft type | Rust parameter | Notes |
+|---|---|---|
+| `integer` | `i64` | 64-bit; the bridge casts the cell to the impl width |
+| `i32` / `u16` / `u8` / … | the same narrow Rust int | the **impl** picks the width — the bridge casts `as <type>` |
+| `float` / `single` | `f64` / `f32` | |
+| `boolean` | `bool` | |
+| `text` | `*const u8, usize` | one loft arg → **two** Rust params (`loft_ffi::text(ptr,len)` → `&str`) |
+| `vector<T>` / a struct | `LoftRef` | read via `store.vector_*` / field offsets; needs `store: LoftStore` first |
+
+Returns map the same way: `text` → `LoftStr` (build with `loft_ffi::ret(s)`),
+`vector`/struct → `LoftRef`, scalars by value.  A nullable `integer` return
+uses the `i64::MIN` sentinel — the bridge preserves `i32::MIN → i64::MIN` for
+narrow-int returns automatically.
+
+`LoftStore` is the first parameter **only** when the fn touches a ref/vector
+(the interpreter passes the store of the first ref arg, with allocation
+callbacks for ref/vector returns).
+
+### Registration — zero boilerplate
+
+You do **not** hand-maintain a register list.  A `build.rs` source-scans the
+package's `.loft` for `#native` annotations and generates both the function
+register and the bridge register:
+
+```rust
+// native/build.rs
+fn main() {
+    loft_ffi_build::generate_register_from_loft_with_bridges("../src");
+}
+```
+
+```toml
+# native/Cargo.toml
+[lib]
+crate-type = ["cdylib", "rlib"]   # cdylib → --interpret dlopen; rlib → --native link
+
+[dependencies]
+loft-ffi        = "0.1"
+loft-ffi-macros = "0.1"           # the #[loft_native] proc-macro
+
+[build-dependencies]
+loft-ffi-build  = "0.2"           # the #native source-scanner
+```
+
+Adding a function is then a single edit: write the `.loft` declaration with a
+bare `#native`, write the `#[loft_native]` Rust impl — the register + bridge
+lists regenerate automatically.  No manifest, no drift.  (The legacy
+`loft.toml [native.functions]` table and `generate_register_from_loft` — the
+no-bridge variant — predate this and are retained only for un-migrated libs.)
 
 ### Three execution paths
 
 | Path | How native functions run |
 |---|---|
-| **Interpreter** | `#native` triggers `extensions::load_one()` → dlopen rlib → call registered function pointer |
-| **`--native`** | Generated Rust calls the function directly (linked at compile time via `--extern graphics_native=...`) |
-| **`--native-wasm`** | Generated Rust calls the WASM variant (linked from `prebuilt/wasm32-wasip2/` or compiled in-situ) |
+| **Interpreter** | dlopen the cdylib → call the generated `<fn>__loft_bridge` (the uniform `LoftBridgeFn`) via the interpreter's bridge registry.  Libraries not yet built with `#[loft_native]` fall back to the legacy raw-ptr `dispatch_call` arms. |
+| **`--native`** | Generated Rust calls the real typed fn directly (rlib linked via `--extern …`), **zero marshal** — the perf path; unaffected by the bridge layer |
+| **WASM** | Generated Rust calls the WASM variant (`prebuilt/wasm32-wasip2/` or compiled in-situ) |
 
 ### Signature verification
 
-At `byte_code()` time, the compiler checks:
-1. Every `#native "symbol"` function in `.loft` has a matching entry in
-   `loft.toml [native.functions]`
-2. The Rust function's parameter count matches the loft declaration
-3. Return type is compatible (integer↔i32, text↔&str, reference↔&DbRef)
+The loft compiler checks the `.loft` declaration's parameter count + types are
+compatible with the bound symbol.  The Rust impl's signature is **authoritative
+for widths** — `#[loft_native]` reads it directly — so a loft `integer`
+declared in `.loft` but impl'd as `i32` marshals correctly with no loft-core
+change (this is the @P370 lesson the macro encodes).
 
-Mismatch → compile-time error with clear message:
+### Complete example — a 3-function library
+
+```loft
+// src/mathx.loft
+pub fn gcd(a: integer, b: integer) -> integer;   #native
+pub fn hex(self: integer) -> text;               #native
+pub fn rgb_lum(pixels: vector<integer>) -> integer;  #native
 ```
-Error: native function 'save_png' expects 2 parameters (Canvas, text)
-       but Rust symbol 'graphics_native::save_png' has 3 parameters
+
+```rust
+// native/src/lib.rs
+use loft_ffi::{LoftRef, LoftStore, LoftStr};
+use loft_ffi_macros::loft_native;
+
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn n_gcd(mut a: i64, mut b: i64) -> i64 {
+    while b != 0 { (a, b) = (b, a % b); }
+    a.abs()
+}
+
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn n_hex(v: i64) -> LoftStr {
+    loft_ffi::ret(format!("{v:#x}"))
+}
+
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_rgb_lum(store: LoftStore, pixels: LoftRef) -> i64 {
+    let len = unsafe { store.vector_len(&pixels) };
+    let p = unsafe { store.vector_data_ptr(&pixels) } as *const i64;
+    let mut sum = 0i64;
+    for i in 0..len { sum += unsafe { *p.add(i as usize) }; }
+    if len == 0 { 0 } else { sum / len as i64 }
+}
 ```
+
+With the `build.rs` + `Cargo.toml` above, `loft --interpret prog.loft` (dlopen
++ bridge) and `loft --native prog.loft` (direct link) both just work — no
+register list, no marshal glue.
 
 ---
 
