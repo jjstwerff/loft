@@ -113,6 +113,8 @@ canonical.
 | `net.input_rate` | 30 | 20 – 60 | Hz | How often a phone sends its `(L, R, L_on, R_on)` snapshot to the server |
 | `net.broadcast_rate` | 30 | 15 – 60 | Hz | How often the server sends per-plane poses to all clients |
 | `net.player_cap` | 30 | 6 – 30 | (count) | Hard cap on simultaneous players.  Beyond this, joiners spectate |
+| `net.peer_sight_range` | 80 | 30 – 200 | m | World-space radius around each phone's own plane within which OTHER planes' poses are broadcast to that phone.  Drives the dominant throughput term: when range ≪ map diagonal, most planes are filtered out per-recipient, so per-phone outbound bandwidth scales with **typical visible-peer count** rather than (N − 1).  Smaller = lighter network + tighter cockpit-view focus; larger = more situational awareness but more bandwidth and more first-person clutter.  Projector receives ALL planes unconditionally (the projector is the overview by design — never sight-filtered) |
+| `net.pose_frame_bytes_budget` | 32 | 16 – 96 | bytes | Per-plane pose-frame size budget on the wire.  Position (3 × i16 fixed-point ≈ 6 B), orientation (1 × u16 yaw + 1 × u16 pitch + 1 × u16 roll ≈ 6 B), velocity (3 × i16 ≈ 6 B), stall+cooldown flags (2 B), seq + plane_id (4 B), padding ≈ 32 B.  Floats blow this up; fixed-point keeps the pump under typical pose-traffic budgets |
 
 ## Round structure + spawn
 

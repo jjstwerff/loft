@@ -145,6 +145,28 @@ audience can see who's where without needing to read labels.
   intimate phone view and the spatial projector view, and the
   shared screen earns its place in the room.
 
+- **Sight-filtered peer rendering.**  Each phone receives pose
+  updates for OTHER planes only when those planes are within
+  `net.peer_sight_range` (see [NUMBERS.md](NUMBERS.md), default
+  80 m).  Out-of-range peers are filtered server-side and never
+  enter the phone's wire stream at all.  Two compounding wins:
+
+  - **Throughput.**  Per-phone bandwidth scales with the typical
+    *visible-peer count*, not N − 1.  On a map sized for the
+    sight range, most planes are out of view → most pose-frames
+    are filtered → the broadcast pump runs comfortably below its
+    PLAN36-validated load.
+  - **Cockpit clarity.**  The first-person view doesn't fill up
+    with distant dots the player can't usefully interact with.
+    Trails fade naturally as planes leave range; planes appear
+    only when they're close enough to matter.
+
+  The **projector** is never sight-filtered — it receives all
+  planes unconditionally, because the projector IS the overview
+  by design.  The asymmetry is intentional: the room knows where
+  everyone is, the individual pilot knows where their
+  neighbourhood is.
+
 ### Control mapping (the novel bit)
 
 Let `L_on`, `R_on` be whether each thumb is in contact with the
@@ -413,7 +435,7 @@ projector — are already proven.  What this demo would surface as
 | Surface | What's needed | Status |
 |---|---|---|
 | Twin-strip touch input | Phone-side: capture two simultaneous touches by x-coordinate band, report `{L, R}` ∈ `[0, 1]²` over WS at ~30 Hz | New on the HTML/JS side; pure client work |
-| Per-frame WS broadcast | 30 Hz pose updates from each client (vs @PLAN36's sparse paints); per-frame world snapshot from server | Throughput-test on existing `lib/server` — likely fine after @PLAN36's WsGroup work; needs validation |
+| Per-frame WS pose sync | 30 Hz `(L, R, L_on, R_on)` input per phone → server; 30 Hz per-plane pose broadcast back, **sight-filtered per recipient** (`net.peer_sight_range`) so each phone only receives poses for OTHER planes within visual range.  Total throughput scales with typical visible-peer count, not N − 1 — substantially under naïve worst-case.  Pose frames are ~32 bytes fixed-point (see `net.pose_frame_bytes_budget`), not JSON | Throughput-test on existing `lib/server` — see [phase 0a probe](00a-network-probe.md); likely fine after @PLAN36's WsGroup work, needs validation |
 | Phone-side first-person 3D | WebGL view from the cockpit: extruded world geometry + other planes' positions + their smoke trails.  Own plane mostly invisible (nose section + frame overlay only) — no chase-camera tuning since the camera IS the cockpit | New on the HTML/JS side; same world payload as projector, simpler camera |
 | Static world load | Read a dryopea MapFile JSON OR a `store_persist_bind`'d hash, extrude per palette; serve as a single download to phone + projector at session start | Possible today; trivial after @PLAN46 plan 06 stencil pipeline lands |
 | 3D continuous physics | Plane integrator (pose + velocity + angular vel); sphere-vs-geometry + sphere-vs-sphere collision; reflection with damping | New loft-native code — probably a `lib/physics_2body` skeleton |

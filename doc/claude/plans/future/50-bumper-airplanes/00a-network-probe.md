@@ -34,8 +34,24 @@ already validated:
 But the **paint** protocol PLAN36 measured is *sparse* — clients
 emit one frame per user tap (typically < 1 Hz per client).  PLAN50
 needs each client to emit 30 frames/sec.  That's a **~30 × higher
-inbound rate** the pump has never been measured under.  Outbound
-broadcast rate similarly jumps from sparse to 30 Hz × pose-snapshot.
+inbound rate** the pump has never been measured under.
+
+**Outbound broadcast is substantially lighter than worst-case**
+because of `net.peer_sight_range` filtering (see [NUMBERS.md](NUMBERS.md)
+§ Networking).  Each phone only receives pose-frames for OTHER
+planes within visual range of its own plane — typical visible-peer
+count is much smaller than N − 1.  Concretely: with `peer_sight_range
+= 80 m` and a ~100 × 100 m map carrying 30 players spread out, a
+typical phone sees ~5–10 peers (not 29), so its outbound stream is
+~5–10 × 30 Hz × 32 B ≈ 5–10 KB/s, not 27 × 30 Hz × 32 B ≈ 26 KB/s.
+Inbound (input frames) is fixed at 1 × 30 Hz × ~16 B ≈ 0.5 KB/s
+per client.
+
+The **projector** is never sight-filtered — it consumes all N
+planes' poses at 30 Hz, so its receive rate is `N × 30 Hz × 32 B`
+(roughly 30 KB/s at N=30).  The projector matters separately from
+phones because it's one client with high inbound, not N clients
+with moderate inbound.
 
 ## What the probe measures
 
@@ -62,18 +78,34 @@ when phase 0a lands) that adapts `load_test.loft`'s harness:
 
 1. **Connect N synthetic clients** to a running PLAN36-pattern
    single-port server (real WebSocket, `lib/web`'s `ws_handler`).
+   Plus one synthetic *projector* client that doesn't get
+   sight-filtered.
 2. **Each client emits** a synthetic `(L, R, L_on, R_on, t)` pose
-   frame at 30 Hz.  Wire format draft: `INPUT:cid,lx,rx,lo,ro,t_us`
-   (text, < 50 bytes per frame — same `lib/server`-Tier-A′ pattern
-   as PLAN36).
-3. **Server's only job** during the probe: receive each input
-   frame and immediately broadcast a synthetic per-client pose to
-   all clients (the pose can be a no-op echo with sequence
-   numbers for measurement purposes — physics is not in scope).
-4. **Each client drains** its incoming snapshots at 30 Hz, counts
-   them, records per-frame arrival timestamps.
-5. **Per-tier summary** at the end: connect time, inbound rate,
-   outbound rate, drop count, latency histogram (p50 / p95 / p99).
+   frame at 30 Hz.  Wire format draft: 16-byte fixed-point frame
+   (`INPUT:cid,lx,rx,lo,ro,t_us` text is also acceptable for the
+   probe; tighter framing is for the real client).
+3. **Server's job** during the probe: receive each input
+   frame, integrate a *minimal* synthetic pose (just a moving
+   point — physics is out of scope), and broadcast to recipients
+   per the sight-range filter (`net.peer_sight_range`).  Each
+   "phone" client receives pose-frames for peers within range +
+   its own pose-echo; the projector client receives all poses.
+4. **Each client drains** its incoming snapshots, counts them,
+   records per-frame arrival timestamps for latency histograms.
+5. **Per-tier summary** at the end: connect time, per-phone
+   inbound rate (out-of-range filter validation), per-phone
+   outbound rate (input echo), projector receive rate, drop
+   counts, latency histograms (p50 / p95 / p99).
+
+**Synthetic position distribution.**  Clients emit pose-frames
+positioning themselves spread across a virtual 100 × 100 m world
+(uniform grid: `client_i` at position `((i%6) × 20, (i/6) × 20)`).
+At `peer_sight_range = 80 m`, each client typically has ~9 peers
+in range (cells within Manhattan distance 4 in the grid).  This
+is the **representative case**; the probe should also test a
+**worst case** (all clients clustered within sight range of each
+other → broadcast goes to everyone) and a **best case** (clients
+spread beyond sight range → broadcast filtered to near-zero).
 
 Tiers ramp `3 → 12 → 20 → 30` (PLAN36's load_test pattern with
 the extra 20-client tier added) so the failure-mode degradation
