@@ -84,19 +84,16 @@ fn create_gl_state_with_attrs(
     // beamer.  Capture the target's size so the viewport / window-size
     // getters use it directly (inner_size lags an async monitor move).
     let mut monitor_size: Option<(u32, u32)> = None;
-    if fullscreen {
-        if let Ok(name) = std::env::var("LOFT_GL_MONITOR") {
-            if !name.is_empty() {
-                if let Some(mon) = window
-                    .available_monitors()
-                    .find(|m| m.name().map(|n| n.contains(&name)).unwrap_or(false))
-                {
-                    let sz = mon.size();
-                    monitor_size = Some((sz.width.max(1), sz.height.max(1)));
-                    window.set_fullscreen(Some(Fullscreen::Borderless(Some(mon))));
-                }
-            }
-        }
+    if fullscreen
+        && let Ok(name) = std::env::var("LOFT_GL_MONITOR")
+        && !name.is_empty()
+        && let Some(mon) = window
+            .available_monitors()
+            .find(|m| m.name().map(|n| n.contains(&name)).unwrap_or(false))
+    {
+        let sz = mon.size();
+        monitor_size = Some((sz.width.max(1), sz.height.max(1)));
+        window.set_fullscreen(Some(Fullscreen::Borderless(Some(mon))));
     }
     let gl_display = gl_config.display();
 

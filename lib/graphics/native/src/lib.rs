@@ -5,6 +5,14 @@
 //! Uses glutin for window/context and gl for OpenGL bindings.
 
 #![allow(clippy::missing_safety_doc)]
+// The `loft_gl_*` / `loft_audio_*` entry points are the C-ABI FFI
+// surface the loft runtime (and `--native` codegen) calls by symbol.
+// They take raw `*const u8` / `*const f32` pointers handed over by the
+// runtime and deref them via `loft_ffi::text` / `*ptr.add(i)`.  Marking
+// them `unsafe fn` would change the signature `#[loft_native]` + the
+// generated callers expect; the raw-pointer contract is upheld by the
+// runtime caller, same rationale as the `missing_safety_doc` allow above.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use loft_ffi_macros::loft_native;
 
@@ -302,23 +310,22 @@ pub extern "C" fn loft_gl_poll_events() -> bool {
             s.should_close = true;
         }
         // Apply any pending resize — the handler can't borrow GlState directly.
-        if let Some((w, h)) = PENDING_RESIZE.with(|c| c.take()) {
-            if let (Some(nw), Some(nh)) =
+        if let Some((w, h)) = PENDING_RESIZE.with(|c| c.take())
+            && let (Some(nw), Some(nh)) =
                 (std::num::NonZeroU32::new(w), std::num::NonZeroU32::new(h))
-            {
-                s.surface.resize(&s.context, nw, nh);
-                unsafe {
-                    gl::Viewport(0, 0, w as i32, h as i32);
-                }
-                // Keep the window-size getters in sync with the actual
-                // surface — otherwise `loft_gl_window_width/height` keep
-                // returning the stale creation-time hint after the window
-                // manager resizes the window to fit the screen, and any
-                // screen-space UI hit-testing built on them is vertically
-                // offset from where it draws.
-                s.viewport_w = w;
-                s.viewport_h = h;
+        {
+            s.surface.resize(&s.context, nw, nh);
+            unsafe {
+                gl::Viewport(0, 0, w as i32, h as i32);
             }
+            // Keep the window-size getters in sync with the actual
+            // surface — otherwise `loft_gl_window_width/height` keep
+            // returning the stale creation-time hint after the window
+            // manager resizes the window to fit the screen, and any
+            // screen-space UI hit-testing built on them is vertically
+            // offset from where it draws.
+            s.viewport_w = w;
+            s.viewport_h = h;
         }
         !s.should_close
     })
@@ -516,7 +523,7 @@ pub unsafe extern "C" fn n_gl_upload_vertices(
     stride: i64,
 ) -> i64 {
     gl_guard!(0);
-    let count = unsafe { store.vector_len(&data) } as u32;
+    let count = unsafe { store.vector_len(&data) };
     let n_vertices = count / stride as u32;
     let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const f32;
     let mut vao = 0u32;
@@ -545,9 +552,9 @@ pub unsafe extern "C" fn n_gl_set_mat4(
         return;
     }
     let mut buf = [0.0f32; 16];
-    for i in 0..16 {
+    for (i, slot) in buf.iter_mut().enumerate() {
         let val = unsafe { store.get_float(mat.rec, 8 + i as u32 * 8, 0) };
-        buf[i] = val as f32;
+        *slot = val as f32;
     }
     let c_name = std::ffi::CString::new(name).unwrap_or_default();
     unsafe {
@@ -599,8 +606,8 @@ pub unsafe extern "C" fn loft_gl_set_mat4(
         return;
     }
     let mut buf = [0.0f32; 16];
-    for i in 0..16usize {
-        buf[i] = unsafe { *mat_ptr.add(i) } as f32;
+    for (i, slot) in buf.iter_mut().enumerate() {
+        *slot = unsafe { *mat_ptr.add(i) } as f32;
     }
     let name = unsafe { loft_ffi::text(name_ptr, name_len) };
     let c_name = std::ffi::CString::new(name).unwrap_or_default();
@@ -906,7 +913,7 @@ pub extern "C" fn loft_gl_draw_fullscreen_quad() {
 #[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_key_pressed(key_code: i64) -> bool {
-    if key_code < 0 || key_code > 255 {
+    if !(0..=255).contains(&key_code) {
         return false;
     }
     KEYS.with(|k| k.borrow()[key_code as usize])
@@ -1248,7 +1255,7 @@ pub extern "C" fn loft_gl_screenshot(
             buf.as_mut_ptr() as *mut std::ffi::c_void,
         );
     }
-    let file = match std::fs::File::create(&path) {
+    let file = match std::fs::File::create(path) {
         Ok(f) => f,
         Err(_) => return false,
     };
@@ -1341,7 +1348,7 @@ pub unsafe extern "C" fn n_gl_upload_canvas(
     height: i64,
 ) -> i64 {
     gl_guard!(0);
-    let count = unsafe { store.vector_len(&data) } as u32;
+    let count = unsafe { store.vector_len(&data) };
     let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const i64;
     loft_gl_upload_canvas(data_ptr, count, width, height)
 }

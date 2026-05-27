@@ -26,10 +26,10 @@ fn p130_gl_functions_noop_without_context() {
 
     // Shaders
     let shader = loft_gl_create_shader(
-        b"#version 330\nvoid main(){}\0".as_ptr(),
-        27,
-        b"#version 330\nvoid main(){}\0".as_ptr(),
-        27,
+        c"#version 330\nvoid main(){}".as_ptr().cast(),
+        26,
+        c"#version 330\nvoid main(){}".as_ptr().cast(),
+        26,
     );
     assert_eq!(shader, 0);
     loft_gl_use_shader(0);
@@ -59,9 +59,9 @@ fn p130_gl_functions_noop_without_context() {
     assert_eq!(loft_gl_upload_alpha_texture(std::ptr::null(), 0, 0), 0);
 
     // Uniform setters
-    loft_gl_set_uniform_float(0, b"u\0".as_ptr(), 1, 1.0);
-    loft_gl_set_uniform_int(0, b"u\0".as_ptr(), 1, 1);
-    loft_gl_set_uniform_vec3(0, b"u\0".as_ptr(), 1, 0.0, 0.0, 0.0);
+    loft_gl_set_uniform_float(0, c"u".as_ptr().cast(), 1, 1.0);
+    loft_gl_set_uniform_int(0, c"u".as_ptr().cast(), 1, 1);
+    loft_gl_set_uniform_vec3(0, c"u".as_ptr().cast(), 1, 0.0, 0.0, 0.0);
 
     // Cleanup
     loft_gl_delete_vao(0);

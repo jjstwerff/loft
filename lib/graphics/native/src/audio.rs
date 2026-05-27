@@ -235,7 +235,7 @@ pub unsafe extern "C" fn n_audio_play_raw(
     sample_rate: i64,
     volume: f64,
 ) -> i64 {
-    let count = unsafe { store.vector_len(&data) } as u32;
+    let count = unsafe { store.vector_len(&data) };
     let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const f32;
     loft_audio_play_raw(data_ptr, count, sample_rate, volume)
 }
