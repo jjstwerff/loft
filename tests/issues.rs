@@ -14261,7 +14261,7 @@ fn p379_two_libs_same_struct_name() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
     p.lib_dirs.push("lib".to_string());
-    p.parse("tests/scripts/p379_lib_namespace.loft", false);
+    p.parse("tests/multilib/p379_lib_namespace.loft", false);
     let errors: Vec<String> = p
         .diagnostics
         .entries()

@@ -2240,6 +2240,10 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            // @P379 — qualify native symbols for functions whose name
+            // collides across libraries (no-op without a collision; calls
+            // resolve by d_nr so the renamed def stays consistent).
+            p.data.namespace_colliding_native_fns();
             let mut out = generation::Output {
                 data: &p.data,
                 stores: &state.database,
@@ -2338,6 +2342,10 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            // @P379 — qualify native symbols for functions whose name
+            // collides across libraries (no-op without a collision; calls
+            // resolve by d_nr so the renamed def stays consistent).
+            p.data.namespace_colliding_native_fns();
             let mut out = generation::Output {
                 data: &p.data,
                 stores: &state.database,
@@ -2584,6 +2592,10 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                     std::process::exit(1);
                 }
             };
+            // @P379 — qualify native symbols for functions whose name
+            // collides across libraries (no-op without a collision; calls
+            // resolve by d_nr so the renamed def stays consistent).
+            p.data.namespace_colliding_native_fns();
             let mut out = generation::Output {
                 data: &p.data,
                 stores: &state.database,
