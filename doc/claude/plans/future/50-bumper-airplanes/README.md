@@ -513,13 +513,14 @@ This demo:
 
 | # | What ships | Effort | Builds on |
 |---|---|---|---|
-| 0 | Phone client — twin-strip + first-person canvas + WS skeleton + Web Audio samples | S | @PLAN36 phase 0 |
-| 1 | Loft server — per-client pose state, 30 Hz broadcast loop, event dispatch (collisions, scores, stalls) | S | @PLAN36 phase 1 (Tier A′) |
-| 2 | Static world loader — dryopea MapFile → extruded mesh | XS | @PLAN46 plan 01 E4 |
-| 3 | Projector renderer — world + planes + trails + centroid camera + score-pop overlays + countdown | M | @PLAN36 phase 3 |
-| 4 | Physics — plane integrator + bounce + stall | M | new `lib/physics_2body` |
-| 5 | Scoring + ambience — targets file + off-axis collision rule + leaderboard + "the storm" difficulty ramp | S | none |
-| 6 | Live playtest + tuning (controls, audio mix, palette) | S | all above |
+| 0a | [Network throughput probe](00a-network-probe.md) — synthetic 30 Hz × N WS load against the existing @PLAN36 server; resolves the dominant unknown (does the broadcast pump hold at 12 / 20 / 30 clients?) before phase 0 commits substantial code | XS | @PLAN36 phase 1.9 (Tier A′ pump + WsGroup) |
+| 0  | Phone client — twin-strip + first-person canvas + WS skeleton + Web Audio samples | S | phase 0a verdict + @PLAN36 phase 0 |
+| 1  | Loft server — per-client pose state, 30 Hz broadcast loop, event dispatch (collisions, scores, stalls) | S | @PLAN36 phase 1 (Tier A′) |
+| 2  | Static world loader — dryopea MapFile → extruded mesh | XS | @PLAN46 plan 01 E4 |
+| 3  | Projector renderer — world + planes + trails + centroid camera + score-pop overlays + countdown | M | @PLAN36 phase 3 |
+| 4  | Physics — plane integrator + bounce + stall | M | new `lib/physics_2body` |
+| 5  | Scoring + ambience — targets file + off-axis collision rule + leaderboard + "the storm" difficulty ramp | S | none |
+| 6  | Live playtest + tuning (controls, audio mix, palette) | S | all above |
 
 Each phase ships standalone (incremental playable state); the
 cadence is the same flat-2D-MVP-first sequence that worked for
