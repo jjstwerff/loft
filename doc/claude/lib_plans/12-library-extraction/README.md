@@ -159,7 +159,7 @@ with ≥1 minor release of soak between consecutive chunks.
 | 3.5a | Dry-run lib without monorepo consumers (crypto) | 1–2 | **DONE** 2026-05-24 |
 | 3.5b | Real path-dep resolution (`extract_path_dep` wired) | 3.5a | **DONE** (`src/parser/mod.rs:4570`) |
 | 3.5c | Dry-run libs with consumers | 3.5b | superseded — core/net extracted for real |
-| 3.6 | Stdlib drain (Image→imaging, `escape_html`→`html`, path helpers→`02_files`) | 1c | **OPEN** — M (~1 day) |
+| 3.6 | Stdlib drain (Image→imaging, `escape_html`→`html`, path helpers→`02_files`) | 1c | **partial** — `escape_html`→`lib/html/` DONE 2026-05-27 (Image/Pixel already in `lib/imaging`); `02_images.loft`→`02_files.loft` rename + path-helper consolidation remain |
 | 4 | Extract `loft-libs-core` (arguments, random, crypto) | 1–3 + 3.5 | **SHIPPED** 2026-05-24 |
 | 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, shapes) | 4 + [`../02-graphics/`](../02-graphics/) | **partial** — shapes/gridmesh shipped; graphics+imaging **now unblocked** |
 | 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **SHIPPED** 2026-05-24 |
@@ -194,13 +194,17 @@ same clone+build pattern, roll into all three chunk repos + the
 
 ### Phase 3.6 — stdlib drain
 
-Shrink `default/*.loft` to genuine universal stdlib.  Moves: Image /
-Pixel / Format types → `lib/imaging/src/`; `escape_html` → new
-`lib/html/`; path helpers (`dir`/`basename`/`join`/`resolve`/
-`path_sep`) → `02_files.loft`; rename `02_images.loft` → `02_files.loft`.
-JSON STAYS (the `{x:j}` format specifier + `text as Foo` cast are
-shipped language behaviour — pulling JSON out breaks both).  Audit
-call sites for new `use imaging;` / `use html;` lines.
+Shrink `default/*.loft` to genuine universal stdlib.  Moves:
+**`escape_html` → new `lib/html/` — DONE 2026-05-27** (with its test
+migrated from `tests/scripts/106` to `lib/html/tests/01-escape.loft`,
+now `use html;`); Image / Pixel already live in `lib/imaging/src/`
+(Format stays in default — it's file-related and `lib/imaging` depends
+on it at load time); **remaining:** path helpers
+(`dir`/`basename`/`join`/`resolve`/`path_sep`) → `02_files.loft` +
+rename `02_images.loft` → `02_files.loft` (updates `src/wasm.rs`
+`DEFAULT_FILES` + `src/gendoc.rs`).  JSON STAYS (the `{x:j}` format
+specifier + `text as Foo` cast are shipped language behaviour — pulling
+JSON out breaks both).  Audit call sites for new `use html;` lines.
 
 ### Phase 7a — moros world split (monorepo-internal)
 

@@ -27,43 +27,6 @@ pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean {
   self[pos..pos + pl] == prefix
 }
 #pure
-// HTML-escape the standard five entities for safe interpolation
-// into HTML output:
-//
-//   &  →  &amp;
-//   <  →  &lt;
-//   >  →  &gt;
-//   "  →  &quot;
-//   '  →  &#x27;
-//
-// Use whenever user-supplied text gets dropped into an HTML
-// element body or attribute value.  Order matters — `&` is
-// escaped first so the substituted entity strings don't
-// double-escape.
-//
-// Added in @PLAN37 phase 10.7 — closes a stdlib gap that
-// every loft program rendering HTML had to roll its own
-// escape for (the @PLAN35 viewer's `escape(s)` helper).
-pub fn escape_html(self: text) -> text {
-  out = "";
-  for c in self {
-    if c == '&' {
-      out += "&amp;";
-    } else if c == '<' {
-      out += "&lt;";
-    } else if c == '>' {
-      out += "&gt;";
-    } else if c == '"' {
-      out += "&quot;";
-    } else if c == '\'' {
-      out += "&#x27;";
-    } else {
-      out += "{c}";
-    }
-  }
-  out
-}
-#pure
 // ── Path helpers (@PLAN37 phase 10.9) ─────────────────────────
 //
 // loft treats paths as plain text; this group adds the four
