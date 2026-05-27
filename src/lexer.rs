@@ -1276,10 +1276,7 @@ impl Lexer {
             // `checkpoint_parse` isn't on every token.
             bc_throttle = bc_throttle.wrapping_add(1);
             if bc_throttle % 256 == 0 {
-                crate::timeout::checkpoint_parse(
-                    &self.peek.position.file,
-                    self.peek.position.line,
-                );
+                crate::timeout::checkpoint_parse(&self.peek.position.file, self.peek.position.line);
             }
             if matches!(self.peek.has, LexItem::None) {
                 return false;

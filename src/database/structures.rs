@@ -381,8 +381,7 @@ impl Stores {
         // arm — 1 header word + ceil(content_size / 8) data words.
         let elem_words = 1 + elem_size.div_ceil(8);
         for i in 0..o_length {
-            let src_rec = keys::store(o_db, &self.allocations)
-                .get_u32_raw(o_rec, 8 + 4 * i);
+            let src_rec = keys::store(o_db, &self.allocations).get_u32_raw(o_rec, 8 + 4 * i);
             // Append a slot to the destination array (4-byte rec-id stride);
             // `vector_append` allocates / resizes the dest vec_rec as needed.
             let slot = vector::vector_append(db, 4, &mut self.allocations);
@@ -394,23 +393,16 @@ impl Stores {
                 // copy the source record's data + nested heap into it.
                 let new_rec = self.allocations[db.store_nr as usize].claim(elem_words);
                 if db.store_nr == o_db.store_nr {
-                    self.store_mut(db).copy_block(
-                        src_rec,
-                        8,
-                        new_rec,
-                        8,
-                        elem_size as isize,
-                    );
+                    self.store_mut(db)
+                        .copy_block(src_rec, 8, new_rec, 8, elem_size as isize);
                 } else {
                     let o_store: &Store;
                     let db_store: &mut Store;
                     // Same trick as the inline path: two disjoint mut borrows
                     // for cross-store copy.
                     unsafe {
-                        o_store = keys::store(
-                            o_db,
-                            &*std::ptr::from_ref::<[Store]>(&self.allocations),
-                        );
+                        o_store =
+                            keys::store(o_db, &*std::ptr::from_ref::<[Store]>(&self.allocations));
                         db_store = keys::mut_store(
                             db,
                             &mut *std::ptr::from_mut::<[Store]>(&mut self.allocations),

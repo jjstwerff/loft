@@ -118,9 +118,7 @@ fn print_help() {
     println!(
         "                                LOFT_TIMEOUT=<secs> as env equivalent; grace defaults to"
     );
-    println!(
-        "                                2s, override via LOFT_TIMEOUT_GRACE=<secs>"
-    );
+    println!("                                2s, override via LOFT_TIMEOUT_GRACE=<secs>");
     println!(
         "  --production                  enable production mode (panic/assert log instead of abort)"
     );
@@ -1618,13 +1616,10 @@ fn main() {
             // graceful T2 fault (when shipped) fires at `<secs>`; the
             // hard T1 kill at `<secs> + grace` (default 2s, overridable
             // via `LOFT_TIMEOUT_GRACE`).  `0` disables.
-            let secs: u64 = argv
-                .get(i)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(|| {
-                    eprintln!("--timeout requires a non-negative integer (seconds)");
-                    std::process::exit(2);
-                });
+            let secs: u64 = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or_else(|| {
+                eprintln!("--timeout requires a non-negative integer (seconds)");
+                std::process::exit(2);
+            });
             i += 1;
             crate::timeout::arm(secs, crate::timeout::env_grace_secs());
         } else if a == "--check" || a == "check" {
