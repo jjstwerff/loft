@@ -399,6 +399,8 @@ do by looking up the pair in this table:
 | Integer / `single` → `float`       | Implicit      | widening; `single` (32-bit) widens to `float` (64-bit) with no loss |
 | Integer → `single`                 | Implicit      | `[1, 2]` is a valid `vector<single>` |
 | `float` → `single`                 | Explicit `as` | NARROWING (64→32-bit loses precision).  A bare decimal literal is `float`; write a **`single` literal** with the `f` suffix (`1.0f`) or cast (`x as single`).  This is enforced element-wise: a `vector<single>` literal must be `[1.0f, 2.0f]` or `[a as single, …]` — `[1.0, 2.0]` (float literals) is a compile error ("would lose precision"), never a silent truncation |
+| `i32` / narrow int → `integer`     | Implicit      | widening; a 4-byte `i32` (or `u8`/`u16`/`i8`/`i16`) widens into the 8-byte `integer` with no loss |
+| `integer` → `i32` / `u8`/`u16`/`i8`/`i16` | Explicit `as` | NARROWING — a plain `integer` is 64-bit; casting to a smaller explicit width drops the high bits, so `x = n as i32` is required.  A **constant that provably fits** the target is exempt (`x: i32 = 5`, `f(200)`).  (@PLAN48 / @P370) |
 | `float` → integer                  | Explicit `as` | `pi as integer` truncates toward zero; preserves the current sentinel semantics |
 | `text` → integer / float           | Explicit `as` | `"42" as integer`; returns null on parse failure |
 | Integer / float / boolean → `text` | **Format-only** | `"n={m}"` renders the value inline; `t = m` with `t: text` is a compile error.  If you want the rendered form as a standalone text value, assign through interpolation: `t = "{m}"` |

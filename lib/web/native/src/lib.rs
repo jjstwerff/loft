@@ -96,7 +96,7 @@ pub unsafe extern "C" fn n_http_do(
     body_len: usize,
     headers_ptr: *const u8,
     headers_len: usize,
-) -> i32 {
+) -> i64 {
     let method = unsafe { loft_ffi::text(method_ptr, method_len) };
     let url = unsafe { loft_ffi::text(url_ptr, url_len) };
     let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) };
@@ -116,28 +116,28 @@ pub unsafe extern "C" fn n_http_do(
     // Store body + headers for n_http_body / n_http_headers_raw to return.
     LAST_BODY.with(|b| *b.borrow_mut() = response_body);
     LAST_HEADERS.with(|h| *h.borrow_mut() = response_headers);
-    status
+    i64::from(status)
 }
 
 /// Create a cookie-jar session.  `redirects` = max redirects to follow
 /// (0 = don't follow, so the caller can read the `Location` header).  With the
 /// `cookies` feature an `AgentBuilder` carries a default jar.  Returns the handle.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_http_session_new(redirects: i32) -> i32 {
+pub extern "C" fn n_http_session_new(redirects: i64) -> i64 {
     let agent = ureq::AgentBuilder::new()
         .redirects(redirects.max(0) as u32)
         .build();
     AGENTS.with(|a| {
         let mut v = a.borrow_mut();
         v.push(Some(agent));
-        (v.len() - 1) as i32
+        (v.len() - 1) as i64
     })
 }
 
 /// Select the session whose agent the next `n_http_do` call routes through.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_http_session_use(handle: i32) {
-    ACTIVE_AGENT.with(|c| c.set(handle));
+pub extern "C" fn n_http_session_use(handle: i64) {
+    ACTIVE_AGENT.with(|c| c.set(handle as i32));
 }
 
 /// Return the body from the last HTTP request.
@@ -204,9 +204,9 @@ thread_local! {
 /// handshake fails, the slot is created in disconnected state and the
 /// next send/recv will trigger a reconnect attempt subject to backoff.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_ws_connect(url_ptr: *const u8, url_len: usize) -> i32 {
+pub unsafe extern "C" fn n_ws_connect(url_ptr: *const u8, url_len: usize) -> i64 {
     let url = unsafe { loft_ffi::text(url_ptr, url_len) };
-    ws_client::connect(url)
+    i64::from(ws_client::connect(url))
 }
 
 /// Send a text message on a WebSocket.  Returns true on success, false if
@@ -214,12 +214,12 @@ pub unsafe extern "C" fn n_ws_connect(url_ptr: *const u8, url_len: usize) -> i32
 /// poll — reconnect is automatic with backoff).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_client_send(
-    handle: i32,
+    handle: i64,
     msg_ptr: *const u8,
     msg_len: usize,
 ) -> bool {
     let msg = unsafe { loft_ffi::text(msg_ptr, msg_len) };
-    ws_client::send(handle, msg)
+    ws_client::send(handle as i32, msg)
 }
 
 /// Send a binary message on a WebSocket.  Same byte buffer as
@@ -234,20 +234,20 @@ pub unsafe extern "C" fn n_ws_client_send(
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_client_send_binary(
-    handle: i32,
+    handle: i64,
     msg_ptr: *const u8,
     msg_len: usize,
 ) -> bool {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
-    ws_client::send_binary(handle, msg)
+    ws_client::send_binary(handle as i32, msg)
 }
 
 /// Poll for the next received message.  Returns true if a message was
 /// delivered (then call n_ws_client_message), false if the queue is
 /// empty or the connection is currently down.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_client_recv(handle: i32) -> bool {
-    ws_client::recv(handle)
+pub extern "C" fn n_ws_client_recv(handle: i64) -> bool {
+    ws_client::recv(handle as i32)
 }
 
 /// Get the last message returned by `n_ws_client_recv`.
@@ -266,14 +266,14 @@ pub extern "C" fn n_ws_client_message() -> LoftStr {
 /// recv to decide whether the message bytes are utf-8 text or a
 /// binary blob.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_client_opcode() -> u8 {
-    ws_client::last_opcode()
+pub extern "C" fn n_ws_client_opcode() -> i64 {
+    i64::from(ws_client::last_opcode())
 }
 
 /// Close a WebSocket session permanently (no reconnect).
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_client_close(handle: i32) {
-    ws_client::close(handle);
+pub extern "C" fn n_ws_client_close(handle: i64) {
+    ws_client::close(handle as i32);
 }
 
 /// Block the calling thread for `ms` milliseconds.  Used by tests to
@@ -282,7 +282,7 @@ pub extern "C" fn n_ws_client_close(handle: i32) {
 /// enough that two clients complete their move sequence with no
 /// observable overlap).  Negative / zero values are no-ops.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_sleep_ms(ms: i32) {
+pub extern "C" fn n_sleep_ms(ms: i64) {
     if ms <= 0 {
         return;
     }
@@ -318,13 +318,13 @@ pub extern "C" fn n_pack_reset() {
 
 /// Append a single byte to the pack buffer.  `b` is masked to 8 bits.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_pack_u8(b: i32) {
+pub extern "C" fn n_pack_u8(b: i64) {
     PACK_BUF.with(|buf| buf.borrow_mut().push((b & 0xff) as u8));
 }
 
 /// Append a 2-byte little-endian unsigned value to the pack buffer.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_pack_u16_le(v: i32) {
+pub extern "C" fn n_pack_u16_le(v: i64) {
     PACK_BUF.with(|buf| {
         let mut buf = buf.borrow_mut();
         let v = (v & 0xffff) as u16;
@@ -333,10 +333,10 @@ pub extern "C" fn n_pack_u16_le(v: i32) {
 }
 
 /// Append a 4-byte little-endian unsigned value to the pack buffer.
-/// Loft `integer` is i32 — bit-cast to u32 to preserve the LE byte
-/// pattern across the sign boundary.
+/// Loft `integer` is 64-bit — take the low 32 bits (cast to u32) to
+/// preserve the LE byte pattern across the sign boundary.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_pack_u32_le(v: i32) {
+pub extern "C" fn n_pack_u32_le(v: i64) {
     PACK_BUF.with(|buf| {
         let mut buf = buf.borrow_mut();
         let v = v as u32;
@@ -364,20 +364,20 @@ pub extern "C" fn n_pack_take() -> LoftStr {
 /// frames received via `try_recv` / `pump`.
 ///
 /// Argument order is `(idx, text_ptr, text_len)` so the auto-marshal
-/// recognises the `(I32, Text) -> I32` signature in
+/// recognises the `(I64, Text) -> I64` signature in
 /// `src/extensions.rs::auto_marshal_dispatcher`.  The natural
-/// `(text, idx)` order would have demanded a `(Text, I32) -> I32`
+/// `(text, idx)` order would have demanded a `(Text, I64) -> I64`
 /// branch we'd otherwise need to add.
 ///
 /// # Safety
 ///
 /// `text_ptr` / `text_len` must describe a valid byte slice.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_byte_at(idx: i32, text_ptr: *const u8, text_len: usize) -> i32 {
+pub unsafe extern "C" fn n_byte_at(idx: i64, text_ptr: *const u8, text_len: usize) -> i64 {
     if idx < 0 || (idx as usize) >= text_len {
         return -1;
     }
-    unsafe { i32::from(*text_ptr.add(idx as usize)) }
+    unsafe { i64::from(*text_ptr.add(idx as usize)) }
 }
 
 // ── WsGroup: multiplexed client-side receiver ───────────────────────────
@@ -401,14 +401,14 @@ pub extern "C" fn n_ws_group_clear() {
 
 /// Add a handle to the group.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_group_add(handle: i32) {
-    WS_GROUP.with(|g| g.borrow_mut().push(handle));
+pub extern "C" fn n_ws_group_add(handle: i64) {
+    WS_GROUP.with(|g| g.borrow_mut().push(handle as i32));
 }
 
 /// Poll the group round-robin.  Returns the handle that has a message
 /// (read it with n_ws_client_message), or -1 if none are ready.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_group_poll() -> i32 {
+pub extern "C" fn n_ws_group_poll() -> i64 {
     let (handles, offset) = WS_GROUP.with(|g| {
         let g = g.borrow();
         (g.clone(), WS_GROUP_OFFSET.with(|o| o.get()))
@@ -421,7 +421,7 @@ pub extern "C" fn n_ws_group_poll() -> i32 {
             WS_GROUP_OFFSET.with(|o| o.set((pos + 1) % handles.len()));
         }
     }
-    result
+    i64::from(result)
 }
 
 // @PLAN12 phase 2 final step (2026-05-24): the `loft_ffi::loft_register!`

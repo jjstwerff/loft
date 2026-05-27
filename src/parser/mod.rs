@@ -786,7 +786,73 @@ impl Parser {
     /// The iterable expression is in *code.
     /// Creating the iterator will be in *code afterward.
     /// Return the next expression; with `Value::None` the iterator creation was impossible.
+    /// @PLAN48 P2: true when converting `src` → `dst` narrows a loft integer to a
+    /// smaller explicit width (e.g. `integer` → `i32`, or `i32` → `u8`), which
+    /// loses data.  Widening (`i32` → `integer`) and same-width are not narrowing.
+    /// A plain `integer`/`wide`/`u32` has no `forced_size` and is treated as 8 bytes.
+    fn is_narrowing_int(src: &Type, dst: &Type) -> bool {
+        let (Type::Integer(s), Type::Integer(d)) = (src, dst) else {
+            return false;
+        };
+        let Some(dw) = d.forced_size else {
+            return false; // widening / plain-integer target — never narrowing
+        };
+        let sw = s.forced_size.map_or(8u8, std::num::NonZeroU8::get);
+        sw > dw.get()
+    }
+
+    /// @PLAN48 P2: render an integer type with its explicit narrow alias
+    /// (`i32`/`u8`/`u16`/`i8`/`i16`) so a narrowing diagnostic doesn't print
+    /// the bare `integer` for both sides (they share bounds).
+    fn int_type_name(&self, t: &Type) -> String {
+        if let Type::Integer(s) = t {
+            match s.forced_size.map(std::num::NonZeroU8::get) {
+                Some(4) => return "i32".to_string(),
+                Some(2) => return if s.min < 0 { "i16" } else { "u16" }.to_string(),
+                Some(1) => return if s.min < 0 { "i8" } else { "u8" }.to_string(),
+                _ => {}
+            }
+        }
+        t.name(&self.data)
+    }
+
+    /// @PLAN48 P2: literal exemption — true when `code` is a constant integer that
+    /// provably fits `dst`'s range, so `x: i32 = 5` / `f(5)` stay legal without `as`.
+    fn int_value_fits(&self, code: &Value, dst: &Type) -> bool {
+        let Type::Integer(spec) = dst else {
+            return false;
+        };
+        let n = match code.unspan() {
+            Value::Int(n) => i64::from(*n),
+            Value::Long(n) => *n,
+            other => match crate::const_eval::const_eval(other, &self.data) {
+                Some(Value::Int(n)) => i64::from(n),
+                Some(Value::Long(n)) => n,
+                _ => return false,
+            },
+        };
+        n >= i64::from(spec.min) && n <= i64::from(spec.max)
+    }
+
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
+        // @PLAN48 P2: implicitly narrowing a loft `integer` to a smaller explicit
+        // width (e.g. `integer` → `i32`) loses data and must be an explicit `as`.
+        // A constant that provably fits is exempt.  Emit here, then fall through to
+        // the `is_equal` accept — the Error fails compilation, and returning via
+        // `is_equal` avoids a second (generic) diagnostic from the caller's
+        // `validate_convert` (which still sees integer/i32 as can_convert-compatible).
+        if !self.first_pass
+            && Self::is_narrowing_int(is_type, should)
+            && !self.int_value_fits(code, should)
+        {
+            let src = self.int_type_name(is_type);
+            let dst = self.int_type_name(should);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "cannot implicitly narrow {src} to {dst} (may lose data) — cast explicitly with `as {dst}`"
+            );
+        }
         if is_type.is_equal(should) {
             return true;
         }

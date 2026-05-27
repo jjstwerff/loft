@@ -96,8 +96,8 @@ fn parse_request(stream: &mut TcpStream) -> Option<(String, String, String, Stri
 
 /// Bind a TCP listener on the given port. Returns handle (>= 0) or -1.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_tcp_listen(port: u32) -> i32 {
-    let addr = format!("0.0.0.0:{port}");
+pub extern "C" fn n_tcp_listen(port: i64) -> i64 {
+    let addr = format!("0.0.0.0:{}", port as u16);
     match TcpListener::bind(&addr) {
         Ok(listener) => {
             eprintln!("loft server listening on {addr}");
@@ -105,7 +105,7 @@ pub extern "C" fn n_tcp_listen(port: u32) -> i32 {
                 let mut l = l.borrow_mut();
                 let idx = l.len();
                 l.push(Some(listener));
-                idx as i32
+                idx as i64
             })
         }
         Err(e) => {
@@ -125,7 +125,7 @@ pub extern "C" fn n_tcp_listen(port: u32) -> i32 {
 /// blocking `n_tcp_accept` below remains for single-client servers that
 /// only need to handle one request at a time.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_tcp_accept_nonblocking(handle: i32) -> bool {
+pub extern "C" fn n_tcp_accept_nonblocking(handle: i64) -> bool {
     let stream = LISTENERS.with(|l| {
         let l = l.borrow();
         let listener = match l.get(handle as usize).and_then(|opt| opt.as_ref()) {
@@ -165,7 +165,7 @@ pub extern "C" fn n_tcp_accept_nonblocking(handle: i32) -> bool {
 /// Blocks until a connection arrives. Returns true on success, false on error.
 /// After success, call loft_tcp_method/path/body to read the request fields.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_tcp_accept(handle: i32) -> bool {
+pub extern "C" fn n_tcp_accept(handle: i64) -> bool {
     let stream = LISTENERS.with(|l| {
         let l = l.borrow();
         l.get(handle as usize)
@@ -216,8 +216,8 @@ pub extern "C" fn n_tcp_body() -> LoftStr {
 ///
 /// `body_ptr` / `body_len` must describe a valid byte slice or be `(NULL, 0)`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_tcp_respond(status: u16, body_ptr: *const u8, body_len: usize) {
-    unsafe { write_response(status, "text/plain; charset=utf-8", body_ptr, body_len) }
+pub unsafe extern "C" fn n_tcp_respond(status: i64, body_ptr: *const u8, body_len: usize) {
+    unsafe { write_response(status as u16, "text/plain; charset=utf-8", body_ptr, body_len) }
 }
 
 /// Send an HTTP response with a caller-specified Content-Type and
@@ -236,7 +236,7 @@ pub unsafe extern "C" fn n_tcp_respond(status: u16, body_ptr: *const u8, body_le
 /// slice or be `(NULL, 0)`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_tcp_respond_typed(
-    status: u16,
+    status: i64,
     body_ptr: *const u8,
     body_len: usize,
     ct_ptr: *const u8,
@@ -245,7 +245,7 @@ pub unsafe extern "C" fn n_tcp_respond_typed(
     let ct = unsafe { loft_ffi::text_opt(ct_ptr, ct_len) }
         .filter(|s| !s.is_empty())
         .unwrap_or("text/plain; charset=utf-8");
-    unsafe { write_response(status, ct, body_ptr, body_len) }
+    unsafe { write_response(status as u16, ct, body_ptr, body_len) }
 }
 
 unsafe fn write_response(status: u16, content_type: &str, body_ptr: *const u8, body_len: usize) {
@@ -283,7 +283,7 @@ unsafe fn write_response(status: u16, content_type: &str, body_ptr: *const u8, b
 
 /// Close a listener.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_tcp_close(handle: i32) {
+pub extern "C" fn n_tcp_close(handle: i64) {
     LISTENERS.with(|l| {
         let mut l = l.borrow_mut();
         if let Some(slot) = l.get_mut(handle as usize) {
@@ -302,7 +302,7 @@ thread_local! {
 
 /// Upgrade the current HTTP connection to WebSocket. Returns handle (>= 0) or -1.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_upgrade() -> i32 {
+pub extern "C" fn n_ws_upgrade() -> i64 {
     let hdrs = LAST_HEADERS.with(|h| h.borrow().clone());
     let stream = CURRENT_CONN.with(|c| c.borrow_mut().take());
     match stream {
@@ -314,7 +314,7 @@ pub extern "C" fn n_ws_upgrade() -> i32 {
                 let mut conns = conns.borrow_mut();
                 let idx = conns.len();
                 conns.push(Some(s));
-                idx as i32
+                idx as i64
             })
         }
         None => -1,
@@ -324,7 +324,7 @@ pub extern "C" fn n_ws_upgrade() -> i32 {
 /// Read the next WebSocket message. Returns true on success, false on close/error.
 /// After success, call loft_ws_message/loft_ws_opcode to get the data.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_recv(handle: i32) -> bool {
+pub extern "C" fn n_ws_recv(handle: i64) -> bool {
     WS_CONNS.with(|conns| {
         let mut conns = conns.borrow_mut();
         let stream = match conns.get_mut(handle as usize).and_then(|o| o.as_mut()) {
@@ -360,8 +360,8 @@ pub extern "C" fn n_ws_message() -> LoftStr {
 
 /// Get the last received WebSocket opcode (1=text, 2=binary, 8=close, 9=ping, 10=pong).
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_opcode() -> u8 {
-    WS_LAST_OPCODE.with(|o| *o.borrow())
+pub extern "C" fn n_ws_opcode() -> i64 {
+    WS_LAST_OPCODE.with(|o| i64::from(*o.borrow()))
 }
 
 /// Send a text WebSocket message.
@@ -370,7 +370,7 @@ pub extern "C" fn n_ws_opcode() -> u8 {
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_ws_send(handle: i32, msg_ptr: *const u8, msg_len: usize) -> bool {
+pub unsafe extern "C" fn n_ws_send(handle: i64, msg_ptr: *const u8, msg_len: usize) -> bool {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
     WS_CONNS.with(|conns| {
         let mut conns = conns.borrow_mut();
@@ -390,7 +390,7 @@ pub unsafe extern "C" fn n_ws_send(handle: i32, msg_ptr: *const u8, msg_len: usi
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_ws_send_binary(handle: i32, msg_ptr: *const u8, msg_len: usize) -> bool {
+pub unsafe extern "C" fn n_ws_send_binary(handle: i64, msg_ptr: *const u8, msg_len: usize) -> bool {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
     WS_CONNS.with(|conns| {
         let mut conns = conns.borrow_mut();
@@ -403,7 +403,7 @@ pub unsafe extern "C" fn n_ws_send_binary(handle: i32, msg_ptr: *const u8, msg_l
 
 /// Close a WebSocket connection.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_close(handle: i32) {
+pub extern "C" fn n_ws_close(handle: i64) {
     WS_CONNS.with(|conns| {
         let mut conns = conns.borrow_mut();
         if let Some(slot) = conns.get_mut(handle as usize) {
@@ -515,9 +515,9 @@ fn try_accept_inner(listener_handle: i32) -> AcceptOutcome {
 /// If no connection is pending, returns -1.  Returns -2 on a listener
 /// or upgrade error so loft can distinguish "not yet" from "broken".
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_accept_nonblocking(listener_handle: i32) -> i32 {
-    match try_accept_inner(listener_handle) {
-        AcceptOutcome::Pending(id) => id,
+pub extern "C" fn n_ws_accept_nonblocking(listener_handle: i64) -> i64 {
+    match try_accept_inner(listener_handle as i32) {
+        AcceptOutcome::Pending(id) => i64::from(id),
         // Legacy WS-only entry point: a plain HTTP request has no client id
         // here, so report it as an error (the stream parked in CURRENT_CONN
         // is dropped on the next accept).  Multi-client servers use the
@@ -530,13 +530,13 @@ pub extern "C" fn n_ws_accept_nonblocking(listener_handle: i32) -> i32 {
 
 /// Total length of the WS_CONNS table (active + closed slots).
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_clients_len() -> i32 {
-    WS_CONNS.with(|conns| conns.borrow().len() as i32)
+pub extern "C" fn n_ws_clients_len() -> i64 {
+    WS_CONNS.with(|conns| conns.borrow().len() as i64)
 }
 
 /// True iff the WS_CONNS slot at `id` is currently occupied.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_client_active(id: i32) -> bool {
+pub extern "C" fn n_ws_client_active(id: i64) -> bool {
     WS_CONNS.with(|conns| {
         conns
             .borrow()
@@ -609,8 +609,8 @@ fn poll_one_client(id: i32) -> PollOutcome {
 /// n_ws_event_client_id / n_ws_event_payload to read it).  Returns
 /// false when nothing is pending.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_next_event(listener_handle: i32) -> bool {
-    match try_accept_inner(listener_handle) {
+pub extern "C" fn n_ws_next_event(listener_handle: i64) -> bool {
+    match try_accept_inner(listener_handle as i32) {
         AcceptOutcome::Pending(cid) => {
             WS_EVENT_KIND.with(|k| k.set(0));
             WS_EVENT_CLIENT_ID.with(|c| c.set(cid));
@@ -662,14 +662,14 @@ pub extern "C" fn n_ws_next_event(listener_handle: i32) -> bool {
 /// Read the kind of the last event surfaced by n_ws_next_event.
 /// 0 = Connected, 1 = Message, 2 = Disconnected.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_event_kind() -> i32 {
-    WS_EVENT_KIND.with(|k| k.get())
+pub extern "C" fn n_ws_event_kind() -> i64 {
+    WS_EVENT_KIND.with(|k| i64::from(k.get()))
 }
 
 /// Read the client id of the last event surfaced by n_ws_next_event.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_event_client_id() -> i32 {
-    WS_EVENT_CLIENT_ID.with(|c| c.get())
+pub extern "C" fn n_ws_event_client_id() -> i64 {
+    WS_EVENT_CLIENT_ID.with(|c| i64::from(c.get()))
 }
 
 /// Read the payload of the last event surfaced by n_ws_next_event.
@@ -685,7 +685,7 @@ pub extern "C" fn n_ws_event_payload() -> LoftStr {
 /// loft side oblivious to timing primitives — there is no general
 /// `sleep` in the loft stdlib today.
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_idle_sleep_ms(ms: i32) {
+pub extern "C" fn n_ws_idle_sleep_ms(ms: i64) {
     if ms > 0 {
         std::thread::sleep(std::time::Duration::from_millis(ms as u64));
     }
@@ -701,11 +701,11 @@ pub extern "C" fn n_ws_idle_sleep_ms(ms: i32) {
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_ws_broadcast(_handle: i32, msg_ptr: *const u8, msg_len: usize) -> i32 {
+pub unsafe extern "C" fn n_ws_broadcast(_handle: i64, msg_ptr: *const u8, msg_len: usize) -> i64 {
     let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
     WS_CONNS.with(|conns| {
         let mut conns = conns.borrow_mut();
-        let mut count: i32 = 0;
+        let mut count: i64 = 0;
         for slot in conns.iter_mut() {
             if let Some(stream) = slot.as_mut()
                 && websocket::ws_write_frame(stream, websocket::OP_TEXT, msg)

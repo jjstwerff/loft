@@ -1482,6 +1482,22 @@ use a separate collection or add after the loop"
                 f_type.name(&self.data),
             );
         }
+        // @PLAN48 P2: `x: i32 = some_integer` narrows (loses data) but integer and
+        // i32 are `is_equal`, so it bypasses the convert-based check above.  Require
+        // an explicit `as` unless the RHS is a constant that provably fits.
+        if op == "="
+            && !self.first_pass
+            && Self::is_narrowing_int(&s_type, f_type)
+            && !self.int_value_fits(code, f_type)
+        {
+            let src = self.int_type_name(&s_type);
+            let dst = self.int_type_name(f_type);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "cannot implicitly narrow {src} to {dst} (may lose data) — cast explicitly with `as {dst}`"
+            );
+        }
         if self.validate_lock_assign(code, to) {
             return Type::Void;
         }

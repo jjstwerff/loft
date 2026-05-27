@@ -1266,7 +1266,15 @@ impl Parser {
                     diagnostic!(self.lexer, Level::Error, "Expect type");
                     return Some(Type::Null);
                 };
-                if !self.convert(code, ctp, &tp) && !self.cast(code, ctp, &tp) {
+                // @PLAN48 P2: an explicit `as <narrow-int>` is the sanctioned way to
+                // narrow `integer` → `i32`/`u8`/… — accept it here so the
+                // implicit-narrowing diagnostic in `convert` does NOT fire on an
+                // explicit cast.  The value stays in the 8-byte slot (a width-tag);
+                // the narrow target type is returned below (`rt = tp`).
+                if !Self::is_narrowing_int(ctp, &tp)
+                    && !self.convert(code, ctp, &tp)
+                    && !self.cast(code, ctp, &tp)
+                {
                     diagnostic!(
                         self.lexer,
                         Level::Error,

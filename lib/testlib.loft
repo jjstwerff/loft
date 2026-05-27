@@ -25,7 +25,7 @@ pub struct Bag {
 // --- Free functions ---
 
 pub fn add(a: i32, b: i32) -> i32 {
-  a + b
+  (a + b) as i32
 }
 
 pub fn status_text(s: Status) -> text {
@@ -53,5 +53,5 @@ pub fn bump(self: Bag) {
 INTERNAL_LIMIT = 42;
 
 fn internal_add(a: i32, b: i32) -> i32 {
-  a + b
+  (a + b) as i32
 }

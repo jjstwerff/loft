@@ -434,6 +434,37 @@ extern "C" fn bridge_my_func(state: &mut State) {
 table with a generated one.  The generator reads the `#native` declaration's
 parameter types and emits the bridge function.
 
+### Design decision (2026-05-27 — perf framing + @PLAN48 integer width)
+
+Refines the above after the @PLAN48 integer-width work hit the hand-written
+arm-explosion in `src/extensions.rs::dispatch_call` (72 `(&[ArgT], ret)` arms,
+each `transmute`-ing the fn pointer; every new signature/width needs a loft-core
+edit).
+
+- **Integer width:** the table above is outdated — there is no `long`, and a
+  plain loft `integer` is **64-bit → `i64`** (per @PLAN48 / @P370), not `i32`.
+  Only an explicit narrow alias (`i32`/`u8`/…) maps to a smaller width.  The
+  generated marshaller must cast loft's 8-byte cell to the impl's **real**
+  param/return width at the boundary (`args[i].as_i64() as i32` for an i32 impl),
+  derived from the impl signature — so any width works with no loft-core arm.
+- **Perf framing (why generate, not abstract at runtime):** `--native` already
+  links the library C-style — direct typed calls, args in registers, **zero
+  marshal** — and is the perf path; this work does **not** touch it.  The marshal
+  exists only on `--interpret`, which `dlopen`s `.so`s at runtime (cannot link)
+  and is the non-perf, tree-walking path.  So optimise the generated marshaller
+  for **maintenance**, while keeping calls **direct-typed** (no slower than the
+  current hand-arms).
+- **Chosen mechanism:** a `#[loft_native]` proc-macro reads each native fn's
+  **real Rust signature** and generates a **direct-call** dispatch entry;
+  `loft-ffi-build` (already source-scans `#native` → `loft_register!`) wires them
+  per-library.  This deletes the 72-arm match (this is FFI.3) and lets libraries
+  own their own FFI typing — new signatures never touch loft-core.
+- **Rejected:** a uniform `LoftCell` arg-array shim (adds per-call indirection
+  for no benefit on the non-perf path) and `libffi` (C dependency + per-call
+  prep) — both strictly slower than generated direct calls.
+- **Sequencing:** @PLAN48 P1b adds the ~20 `(I64, …)` arms by hand as a one-time
+  unblock; this work generates them and removes the recurrence.
+
 ---
 
 ## FFI.2 — Generic cdylib loader
