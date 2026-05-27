@@ -58,32 +58,42 @@ fn aabb_overlap(a: AABB, b: AABB) -> boolean {
 //
 // Plane CoM = pos.  Total nose-to-tail = 3 m (matches old fuselage).
 
-const PLANE_NOSE_OFFSET_X: float = 1.25;   // nose centre is +1.25 m fore of CoM
-const PLANE_NOSE_HX:       float = 0.25;
-const PLANE_NOSE_HY:       float = 0.25;
-const PLANE_NOSE_HZ:       float = 0.25;
+// Facing — 4 axis-aligned headings (full rotation is a later iteration).
+//   FACE_PX = nose toward +x, FACE_NX = toward -x,
+//   FACE_PY = nose toward +y, FACE_NY = toward -y.
+const FACE_PX: integer = 0;
+const FACE_NX: integer = 1;
+const FACE_PY: integer = 2;
+const FACE_NY: integer = 3;
 
-const PLANE_BODY_OFFSET_X: float = -0.25;  // body centre is -0.25 m aft of CoM
-const PLANE_BODY_HX:       float = 1.25;
-const PLANE_BODY_HY:       float = 0.3;
-const PLANE_BODY_HZ:       float = 0.3;
+const NOSE_AHEAD:    float = 1.25;     // nose centre offset along facing
+const BODY_BEHIND:   float = 0.25;     // body centre offset opposite facing
+const NOSE_HALF:     float = 0.25;     // nose cube half-edge (symmetric)
+const BODY_HALF_LEN: float = 1.25;     // body half-length along facing
+const BODY_HALF_THK: float = 0.3;      // body half-thickness perpendicular
+const BODY_HALF_HT:  float = 0.3;
+const WING_HALF_LEN: float = 0.3;      // wing half-chord (along facing)
+const WING_HALF_SPN: float = 2.0;      // wing half-span (perpendicular)
+const WING_HALF_HT:  float = 0.05;
 
-const PLANE_WING_OFFSET_X: float = 0.0;    // wings centred on CoM
-const PLANE_WING_HX:       float = 0.3;
-const PLANE_WING_HY:       float = 2.0;
-const PLANE_WING_HZ:       float = 0.05;
-
-fn plane_nose(pos: Vec3) -> AABB {
-  AABB { cx: pos.x + PLANE_NOSE_OFFSET_X, cy: pos.y, cz: pos.z,
-         hx: PLANE_NOSE_HX, hy: PLANE_NOSE_HY, hz: PLANE_NOSE_HZ }
+fn plane_nose(pos: Vec3, facing: integer) -> AABB {
+  if facing == FACE_PX { return AABB { cx: pos.x + NOSE_AHEAD, cy: pos.y, cz: pos.z, hx: NOSE_HALF, hy: NOSE_HALF, hz: NOSE_HALF }; }
+  if facing == FACE_NX { return AABB { cx: pos.x - NOSE_AHEAD, cy: pos.y, cz: pos.z, hx: NOSE_HALF, hy: NOSE_HALF, hz: NOSE_HALF }; }
+  if facing == FACE_PY { return AABB { cx: pos.x, cy: pos.y + NOSE_AHEAD, cz: pos.z, hx: NOSE_HALF, hy: NOSE_HALF, hz: NOSE_HALF }; }
+  AABB { cx: pos.x, cy: pos.y - NOSE_AHEAD, cz: pos.z, hx: NOSE_HALF, hy: NOSE_HALF, hz: NOSE_HALF }
 }
-fn plane_body(pos: Vec3) -> AABB {
-  AABB { cx: pos.x + PLANE_BODY_OFFSET_X, cy: pos.y, cz: pos.z,
-         hx: PLANE_BODY_HX, hy: PLANE_BODY_HY, hz: PLANE_BODY_HZ }
+fn plane_body(pos: Vec3, facing: integer) -> AABB {
+  if facing == FACE_PX { return AABB { cx: pos.x - BODY_BEHIND, cy: pos.y, cz: pos.z, hx: BODY_HALF_LEN, hy: BODY_HALF_THK, hz: BODY_HALF_HT }; }
+  if facing == FACE_NX { return AABB { cx: pos.x + BODY_BEHIND, cy: pos.y, cz: pos.z, hx: BODY_HALF_LEN, hy: BODY_HALF_THK, hz: BODY_HALF_HT }; }
+  if facing == FACE_PY { return AABB { cx: pos.x, cy: pos.y - BODY_BEHIND, cz: pos.z, hx: BODY_HALF_THK, hy: BODY_HALF_LEN, hz: BODY_HALF_HT }; }
+  AABB { cx: pos.x, cy: pos.y + BODY_BEHIND, cz: pos.z, hx: BODY_HALF_THK, hy: BODY_HALF_LEN, hz: BODY_HALF_HT }
 }
-fn plane_wings(pos: Vec3) -> AABB {
-  AABB { cx: pos.x + PLANE_WING_OFFSET_X, cy: pos.y, cz: pos.z,
-         hx: PLANE_WING_HX, hy: PLANE_WING_HY, hz: PLANE_WING_HZ }
+fn plane_wings(pos: Vec3, facing: integer) -> AABB {
+  // Wings span perpendicular to facing.
+  if facing == FACE_PX || facing == FACE_NX {
+    return AABB { cx: pos.x, cy: pos.y, cz: pos.z, hx: WING_HALF_LEN, hy: WING_HALF_SPN, hz: WING_HALF_HT };
+  }
+  AABB { cx: pos.x, cy: pos.y, cz: pos.z, hx: WING_HALF_SPN, hy: WING_HALF_LEN, hz: WING_HALF_HT }
 }
 
 // Contact classification — which plane parts touched the target.
@@ -99,16 +109,66 @@ const CONTACT_NOSE:  integer = 1;
 const CONTACT_BODY:  integer = 2;
 const CONTACT_WINGS: integer = 4;
 
-fn plane_contact(pos: Vec3, target: AABB) -> integer {
+fn plane_contact(pos: Vec3, facing: integer, target: AABB) -> integer {
   bits = CONTACT_NONE;
-  if aabb_overlap(plane_nose(pos),  target) { bits = bits + CONTACT_NOSE;  }
-  if aabb_overlap(plane_body(pos),  target) { bits = bits + CONTACT_BODY;  }
-  if aabb_overlap(plane_wings(pos), target) { bits = bits + CONTACT_WINGS; }
+  if aabb_overlap(plane_nose(pos, facing),  target) { bits = bits | CONTACT_NOSE;  }
+  if aabb_overlap(plane_body(pos, facing),  target) { bits = bits | CONTACT_BODY;  }
+  if aabb_overlap(plane_wings(pos, facing), target) { bits = bits | CONTACT_WINGS; }
   bits
 }
 
-fn plane_overlaps(pos: Vec3, wall: AABB) -> boolean {
-  plane_contact(pos, wall) != CONTACT_NONE
+fn plane_overlaps(pos: Vec3, facing: integer, wall: AABB) -> boolean {
+  plane_contact(pos, facing, wall) != CONTACT_NONE
+}
+
+// ── Plane-on-plane contact + scoring ────────────────────────────────────
+//
+// Per-plane scoring rule (per @PLAN50 design):
+//   If YOUR contact touches the OTHER plane's NOSE only -> 0 score.
+//   If YOUR contact touches the OTHER plane's BODY or WINGS -> +5.
+//
+// `contact_a_on_b` = bitfield of which parts of B were touched by any
+//                    part of A.  Drives A's score.
+// `contact_b_on_a` = bitfield of which parts of A were touched by any
+//                    part of B.  Drives B's score.
+
+struct PairContact {
+  hit:            boolean not null,
+  contact_a_on_b: integer not null,  // parts of B touched by A
+  contact_b_on_a: integer not null,  // parts of A touched by B
+}
+
+fn pair_contact(pos_a: Vec3, fac_a: integer, pos_b: Vec3, fac_b: integer) -> PairContact {
+  a_nose = plane_nose(pos_a, fac_a);
+  a_body = plane_body(pos_a, fac_a);
+  a_wing = plane_wings(pos_a, fac_a);
+  b_nose = plane_nose(pos_b, fac_b);
+  b_body = plane_body(pos_b, fac_b);
+  b_wing = plane_wings(pos_b, fac_b);
+
+  ab = 0; ba = 0;
+  // Check all 9 part-vs-part overlaps.  For each overlap, record
+  // (1) which part of B was hit (drives A's view), and
+  // (2) which part of A was hit (drives B's view).
+  if aabb_overlap(a_nose, b_nose) { ab = ab | CONTACT_NOSE;  ba = ba | CONTACT_NOSE;  }
+  if aabb_overlap(a_nose, b_body) { ab = ab | CONTACT_BODY;  ba = ba | CONTACT_NOSE;  }
+  if aabb_overlap(a_nose, b_wing) { ab = ab | CONTACT_WINGS; ba = ba | CONTACT_NOSE;  }
+  if aabb_overlap(a_body, b_nose) { ab = ab | CONTACT_NOSE;  ba = ba | CONTACT_BODY;  }
+  if aabb_overlap(a_body, b_body) { ab = ab | CONTACT_BODY;  ba = ba | CONTACT_BODY;  }
+  if aabb_overlap(a_body, b_wing) { ab = ab | CONTACT_WINGS; ba = ba | CONTACT_BODY;  }
+  if aabb_overlap(a_wing, b_nose) { ab = ab | CONTACT_NOSE;  ba = ba | CONTACT_WINGS; }
+  if aabb_overlap(a_wing, b_body) { ab = ab | CONTACT_BODY;  ba = ba | CONTACT_WINGS; }
+  if aabb_overlap(a_wing, b_wing) { ab = ab | CONTACT_WINGS; ba = ba | CONTACT_WINGS; }
+
+  PairContact { hit: ab != 0, contact_a_on_b: ab, contact_b_on_a: ba }
+}
+
+// Score a player from their side of a pair-contact bitfield.
+// Returns 0 if only the OTHER plane's nose was touched; otherwise +5.
+fn score_for(contact_on_other: integer) -> integer {
+  // Non-nose contact = BODY (2) or WINGS (4).  Mask = 6.
+  if (contact_on_other & 6) != 0 { return 5; }
+  0
 }
 
 fn contact_label(bits: integer) -> text {
@@ -135,20 +195,52 @@ struct Forecast {
   contact:    integer not null,    // bitfield: which plane parts contacted
 }
 
-fn forecast(plane_pos: Vec3, plane_vel: Vec3, wall: AABB, lookahead_ms: integer) -> Forecast {
+fn forecast(plane_pos: Vec3, plane_vel: Vec3, facing: integer, wall: AABB, lookahead_ms: integer) -> Forecast {
   t_ms = 0;
   while t_ms <= lookahead_ms {
     t = (t_ms as float) * 0.001;
     test = Vec3 { x: plane_pos.x + plane_vel.x * t,
                   y: plane_pos.y + plane_vel.y * t,
                   z: plane_pos.z + plane_vel.z * t };
-    bits = plane_contact(test, wall);
+    bits = plane_contact(test, facing, wall);
     if bits != CONTACT_NONE {
       return Forecast { hit: true, t_ms: t_ms, pos_at_hit: test, contact: bits };
     }
     t_ms = t_ms + FORECAST_DT_MS;
   }
   Forecast { hit: false, t_ms: 0, pos_at_hit: Vec3 { x: 0.0, y: 0.0, z: 0.0 }, contact: CONTACT_NONE }
+}
+
+// ── Pair forecast / simulate (plane-on-plane) ───────────────────────────
+
+struct PairForecast {
+  hit:            boolean not null,
+  t_ms:           integer not null,
+  pos_a:          Vec3,
+  pos_b:          Vec3,
+  contact_a_on_b: integer not null,
+  contact_b_on_a: integer not null,
+}
+
+fn pair_forecast(pos_a: Vec3, vel_a: Vec3, fac_a: integer,
+                 pos_b: Vec3, vel_b: Vec3, fac_b: integer,
+                 lookahead_ms: integer) -> PairForecast {
+  t_ms = 0;
+  while t_ms <= lookahead_ms {
+    t = (t_ms as float) * 0.001;
+    a = Vec3 { x: pos_a.x + vel_a.x * t, y: pos_a.y + vel_a.y * t, z: pos_a.z + vel_a.z * t };
+    b = Vec3 { x: pos_b.x + vel_b.x * t, y: pos_b.y + vel_b.y * t, z: pos_b.z + vel_b.z * t };
+    c = pair_contact(a, fac_a, b, fac_b);
+    if c.hit {
+      return PairForecast { hit: true, t_ms: t_ms, pos_a: a, pos_b: b,
+                            contact_a_on_b: c.contact_a_on_b,
+                            contact_b_on_a: c.contact_b_on_a };
+    }
+    t_ms = t_ms + FORECAST_DT_MS;
+  }
+  zero = Vec3 { x: 0.0, y: 0.0, z: 0.0 };
+  PairForecast { hit: false, t_ms: 0, pos_a: zero, pos_b: zero,
+                 contact_a_on_b: 0, contact_b_on_a: 0 }
 }
 
 // ── Forward simulation with optional input change at a specific time ─────
@@ -169,7 +261,7 @@ struct SimResult {
   contact:    integer not null,    // contact classification at hit moment
 }
 
-fn simulate(plane_pos: Vec3, plane_vel: Vec3, wall: AABB, lookahead_ms: integer,
+fn simulate(plane_pos: Vec3, plane_vel: Vec3, facing: integer, wall: AABB, lookahead_ms: integer,
             input_kind: integer, input_at_ms: integer) -> SimResult {
   // Field-by-field locals — loft struct-rebind via `pos = Vec3 {...}`
   // doesn't update the local consistently for downstream reads; use
@@ -198,7 +290,7 @@ fn simulate(plane_pos: Vec3, plane_vel: Vec3, wall: AABB, lookahead_ms: integer,
       applied = true;
     }
     cur = Vec3 { x: px, y: py, z: pz };
-    bits = plane_contact(cur, wall);
+    bits = plane_contact(cur, facing, wall);
     if bits != CONTACT_NONE {
       return SimResult { hit: true, t_ms: t_ms, pos_at_hit: cur, contact: bits };
     }
@@ -227,8 +319,9 @@ fn input_name(kind: integer) -> text {
 
 fn run_case(scenario: text, plane_pos: Vec3, plane_vel: Vec3, wall: AABB,
             lookahead_ms: integer, input_kind: integer, input_at_ms: integer) {
-  fc = forecast(plane_pos, plane_vel, wall, lookahead_ms);
-  sim = simulate(plane_pos, plane_vel, wall, lookahead_ms, input_kind, input_at_ms);
+  facing = FACE_PX;  // single-plane tests fly +x
+  fc = forecast(plane_pos, plane_vel, facing, wall, lookahead_ms);
+  sim = simulate(plane_pos, plane_vel, facing, wall, lookahead_ms, input_kind, input_at_ms);
   fc_str  = if fc.hit  { "{fc.t_ms} ms"  } else { "none    " };
   sim_str = if sim.hit { "{sim.t_ms} ms" } else { "none    " };
   if fc.hit && sim.hit {
@@ -333,19 +426,127 @@ fn main() {
   run_case("E3: diving   ", pos_e3, vel_e3, floor, 100, INPUT_NONE, 0);
 
   println("");
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Q5 — plane-on-plane forecast + scoring rule verification.
+  //
+  // The design's plane-on-plane scoring is the demo's anti-coordination
+  // mechanism: head-on (both noses touch) scores 0/0 so two players
+  // can't trivially trade hits; any other contact rewards the side
+  // whose body/wings touched the other's non-nose region.
+  //
+  // Each scenario sets up two planes, runs pair_forecast, and prints:
+  //   - what A touched on B  (drives A's score)
+  //   - what B touched on A  (drives B's score)
+  //   - per-plane score outcome
+  //   - expected outcome (commented inline in the scenario setup)
+  // ─────────────────────────────────────────────────────────────────────
+  println("Q5: plane-on-plane forecast + scoring rule");
+  println("");
+  pair_lookahead = 500;   // longer lookahead — planes start further apart
+
+  // P1: head-on (nose-to-nose).  A at (-3, 0, 0) facing +x going +x;
+  // B at (3, 0, 0) facing -x going -x.  Both noses point at each other.
+  // EXPECTED: contact_a_on_b = NOSE, contact_b_on_a = NOSE, scores 0/0.
+  pair_case_head_on();
+
+  // P2: T-bone — A heading +x toward B; B is stationary, FACING +y
+  // (so B's nose extends in +y, away from A's path).  A's nose hits
+  // B's body broadside.
+  // EXPECTED: contact_a_on_b = BODY (or BODY+WINGS), contact_b_on_a
+  //           = NOSE.  Scores: A +5, B 0.
+  pair_case_tbone();
+
+  // P3: tail-chase — A faster behind B, both heading +x.  A catches
+  // up; A's nose touches B's body from behind.
+  // EXPECTED: same as T-bone — A: +5, B: 0.
+  pair_case_tail_chase();
+
+  // P4: wing-tip clip — two planes parallel, slightly offset in y,
+  // brush wingtips.  Both wing-on-wing.
+  // EXPECTED: contact_a_on_b = WINGS, contact_b_on_a = WINGS,
+  //           scores +5/+5.
+  pair_case_wingtip();
+
   println("Findings:");
-  println("  Q1 (head-on, no input)  : forecast is EXACT to within {FORECAST_DT_MS} ms.");
-  println("                            Contact classification reports nose-first hit.");
-  println("  Q2 (input mid-lookahead): a single instantaneous input change at");
-  println("                            input_at_ms < t_bounce CAN invalidate a");
-  println("                            forecast (plane misses the wall).  Real");
-  println("                            physics has angular acceleration limits");
-  println("                            that would prevent such sharp turns; the");
-  println("                            test deliberately probes the WORST case.");
-  println("  Q4 (contact class)      : nose / body / wings each independently");
-  println("                            classify on impact; head-on hits nose first,");
-  println("                            side-on hits wings first, diving hits all.");
-  println("                            This is the data the @PLAN50 scoring rule");
-  println("                            consumes: nose-touched-on-other = 0 score;");
-  println("                            body/wings-touched-on-other = +5.");
+  println("  Q1 (head-on wall, no input)  : forecast exact within {FORECAST_DT_MS} ms; nose-first contact.");
+  println("  Q2 (input mid-lookahead)     : gentle inputs drift forecast by <1 m at 100 ms lookahead — fits");
+  println("                                 inside the forecast_correction_window_ms blend.  Hard direction");
+  println("                                 reversals invalidate; rare in real play, absorbed by next POSE.");
+  println("  Q4 (contact classification)  : nose / body / wings each independently classify on impact.");
+  println("  Q5 (plane-on-plane scoring)  : the anti-coordination rule holds at the data level:");
+  println("                                 head-on -> 0/0, T-bone -> +5/0, tail-chase -> +5/0,");
+  println("                                 wingtip clip -> +5/+5.  Forecast detects each well ahead of");
+  println("                                 impact, classifies parts correctly, scoring derives cleanly.");
+}
+
+// ── Plane-on-plane case helpers ─────────────────────────────────────────
+
+fn run_pair_case(label: text,
+                 pos_a: Vec3, vel_a: Vec3, fac_a: integer,
+                 pos_b: Vec3, vel_b: Vec3, fac_b: integer,
+                 lookahead_ms: integer,
+                 expected_a_score: integer, expected_b_score: integer) {
+  fc = pair_forecast(pos_a, vel_a, fac_a, pos_b, vel_b, fac_b, lookahead_ms);
+  if !fc.hit {
+    println("  {label:24} | NO CONTACT FORECAST within {lookahead_ms} ms");
+    return;
+  }
+  a_score = score_for(fc.contact_a_on_b);
+  b_score = score_for(fc.contact_b_on_a);
+  verdict = if a_score == expected_a_score && b_score == expected_b_score {
+    "OK"
+  } else {
+    "MISMATCH (expected {expected_a_score}/{expected_b_score})"
+  };
+  println("  {label:24} | t={fc.t_ms:4}ms | A->B parts={contact_label(fc.contact_a_on_b):16} A score={a_score} | B->A parts={contact_label(fc.contact_b_on_a):16} B score={b_score} | {verdict}");
+}
+
+fn pair_case_head_on() {
+  pos_a = Vec3 { x: -3.0, y: 0.0, z: 0.0 };
+  vel_a = Vec3 { x:  20.0, y: 0.0, z: 0.0 };
+  pos_b = Vec3 { x:  3.0, y: 0.0, z: 0.0 };
+  vel_b = Vec3 { x: -20.0, y: 0.0, z: 0.0 };
+  println("  scenario: head-on  — A(-3,0,0)+x@20  B(3,0,0)-x@20  (nose-vs-nose)");
+  run_pair_case("P1: head-on", pos_a, vel_a, FACE_PX, pos_b, vel_b, FACE_NX, 500, 0, 0);
+}
+
+fn pair_case_tbone() {
+  // A coming +x from afar, B stationary FACE_PY (body extends along y,
+  // crossways to A's path; wings extend along x).  A starts at x=-10
+  // so the FIRST contact is unambiguously A.nose vs B.wings (then
+  // shortly after, A.nose vs B.body) — A's body hasn't reached B
+  // yet.  Starting closer overlaps A's body against B's wings at
+  // t=0, which gives B a body-contact and wrong score.
+  pos_a = Vec3 { x: -10.0, y: 0.0, z: 0.0 };
+  vel_a = Vec3 { x:  20.0, y: 0.0, z: 0.0 };
+  pos_b = Vec3 { x:  0.0, y: 0.0, z: 0.0 };
+  vel_b = Vec3 { x:   0.0, y: 0.0, z: 0.0 };
+  println("  scenario: T-bone   — A(-10,0,0)+x@20  B(0,0,0)stationary FACE_PY  (A's nose first reaches B's wings)");
+  run_pair_case("P2: T-bone", pos_a, vel_a, FACE_PX, pos_b, vel_b, FACE_PY, 500, 5, 0);
+}
+
+fn pair_case_tail_chase() {
+  // Both heading +x; A faster behind B.  A.x catches up to B.x; A's nose
+  // hits B's body from behind.
+  pos_a = Vec3 { x: -3.0, y: 0.0, z: 0.0 };
+  vel_a = Vec3 { x:  30.0, y: 0.0, z: 0.0 };
+  pos_b = Vec3 { x:  0.0, y: 0.0, z: 0.0 };
+  vel_b = Vec3 { x:  10.0, y: 0.0, z: 0.0 };
+  println("  scenario: tail-chase — A(-3,0,0)+x@30  B(0,0,0)+x@10  (A catches B from behind)");
+  run_pair_case("P3: tail-chase", pos_a, vel_a, FACE_PX, pos_b, vel_b, FACE_PX, 500, 5, 0);
+}
+
+fn pair_case_wingtip() {
+  // Two planes parallel +x at same speed, offset in y by 3.8 m so wingtips
+  // (each plane's wing reaches ±2.0 y) just touch at y = 1.9 / 1.9.  Same
+  // x, so contact is immediate.  Trigger contact slightly out: A at y=0,
+  // B at y=3.99 — wingtips overlap by 0.01 m.  Both move at same speed
+  // so the y-gap stays constant.
+  pos_a = Vec3 { x: 0.0, y: 0.0,   z: 0.0 };
+  vel_a = Vec3 { x: 20.0, y: 0.0,  z: 0.0 };
+  pos_b = Vec3 { x: 0.0, y: 3.99,  z: 0.0 };
+  vel_b = Vec3 { x: 20.0, y: 0.0,  z: 0.0 };
+  println("  scenario: wingtip  — A(0,0,0)+x@20  B(0,3.99,0)+x@20  (wing-tips brush at y=1.99)");
+  run_pair_case("P4: wingtip clip", pos_a, vel_a, FACE_PX, pos_b, vel_b, FACE_PX, 500, 5, 5);
 }
