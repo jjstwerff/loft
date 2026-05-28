@@ -489,6 +489,15 @@ pub fn i_json_errors(stores: &mut Stores) -> Str {
 /// Bytecode equivalent: `State::copy_record` in `src/state/io.rs:697`.
 pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef, tp: i32) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
+    // @PLAN51 Cluster II — true alias copy is a no-op.  Same rationale
+    // as `src/state/io.rs::copy_record`: when data and to refer to the
+    // SAME slot, remove_claims would free nested vector / text records
+    // that copy_block / copy_claims then need to read, corrupting the
+    // shared data.  Short-circuit before any destructive op.
+    if data == to {
+        let _ = tp;
+        return;
+    }
     // mirror `state/io.rs::copy_record`'s tag handling and
     // cleanup.  The bytecode form masks the high bit of `tp` before
     // indexing into `stores.types` (0x8000 marks "free source after

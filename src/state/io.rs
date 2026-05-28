@@ -1200,6 +1200,24 @@ impl State {
         let tp = raw_tp & 0x7FFF;
         let to = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
+        // @PLAN51 Cluster II — true alias copy is a no-op.  When data
+        // and to refer to the SAME slot (full DbRef equality), the
+        // remove_claims + copy_block + copy_claims sequence would
+        // destroy and rebuild the same nested vectors / texts (because
+        // remove_claims's prelude frees nested heap records BEFORE
+        // copy_block can read them — corrupting same-store callers
+        // like extended-S1 inner Sets).  Short-circuit before any
+        // destructive op so callers that pass aliased src/dst (e.g.
+        // ref_return-promoted callees whose return aliases their
+        // hidden buffer arg) get safe semantics.  Mirrors the safety
+        // gate the native runtime needs at codegen_runtime.rs:OpCopyRecord.
+        if data == to {
+            // free_source is suppressed (data.store_nr == to.store_nr
+            // is already the existing skip-free condition at line 1225);
+            // nothing more to do.
+            let _ = free_source;
+            return;
+        }
         let code_pos = self.code_pos;
         let size = u32::from(self.database.size(tp));
         // free any nested vectors/strings already owned by the destination
