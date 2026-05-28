@@ -87,3 +87,14 @@ jobs:
         working-directory: ${{ matrix.package }}/native
         if: hashFiles(format('{0}/native/tests/*.rs', matrix.package)) != ''
         run: cargo test --release
+
+      # Phase 6t Tier 4 — exercise the library's transitive deps.
+      # `loft test --deps` walks every dep declared in the package's
+      # loft.toml (path-form deps first; registry-version deps require
+      # a loft.lock and become a no-op until that's in place) and runs
+      # its tests against the just-built loft.  Catches "we shipped a
+      # graphics version that broke gridmesh's tests in our
+      # environment" before downstream consumers do.
+      - name: Transitive dep tests
+        working-directory: ${{ matrix.package }}
+        run: loft test --deps

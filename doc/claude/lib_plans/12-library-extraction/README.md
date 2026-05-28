@@ -615,40 +615,40 @@ Tier 2 next (blocks Phase 5 graphics extraction).  Tier 3 last
 (can land alongside Phase 6r since `loft-libs-net` is already
 extracted; the integration suite is additive to that repo).
 
-**Tier 4 — `loft test --deps` (follow-up; S).**  Adds a consumer-side
+**Tier 4 — `loft test --deps` — SHIPPED 2026-05-28.**  Consumer-side
 walker that runs `loft test` on every dependency in the current
-project's transitive tree (driven by `loft.toml` + `loft.lock`).
-The infrastructure is already there: `manifest::extract_path_dep()`
-+ the parser's `probe_user_installed` / `probe_registry_dir` resolvers
-just need lifting out of `&mut Parser` into a free function the
-test runner can call.  Wire `loft test --deps` into the canonical
-`library-ci.yml.example` template as a final step so a chunk repo's
-PR catches "this graphics release broke gridmesh's tests in our
-environment" before it merges, not after a downstream consumer's CI
-flags it.  Proposed surface:
+project's transitive (default) or direct tree.  Wired into the
+canonical `library-ci.yml.example` template as a final step so a
+chunk repo's PR catches "this graphics release broke gridmesh's
+tests in our environment" before it merges, not after a downstream
+consumer's CI flags it.
+
+CLI surface (in `src/main.rs`):
 
 ```
 loft test --deps                  # transitive — all deps + their deps
 loft test --deps=direct           # one level only
-loft test --deps --lock=PATH      # pre-flight against a candidate lock
-loft test --deps --skip=name,name # exclude packages (platform-specific holes)
+loft test --deps=transitive       # explicit; same as plain --deps
 ```
 
-`--deps` implies `--no-warnings` for transitive deps unless
-`--strict-deps` is also passed — the consumer should not be penalised
-by warnings inside a dep it doesn't control.  Implementation steps
-(T1-T6) sized at XS-S each:
+`--deps` implies `--no-warnings` when running each dep's tests —
+the consumer should not be blocked by lint debt inside a dep it
+doesn't own.  Errors still surface via exit code.
 
-| # | What | Effort |
+Implementation status:
+
+| # | What | Status |
 |---|---|---|
-| T1 | Lift `probe_*` resolvers from `Parser` → `manifest::resolve_dep(name, value, from_pkg) -> Option<PathBuf>` (pure refactor) | XS |
-| T2 | `--deps[=direct]` flag + direct walker; calls existing `run_tests()` per dep | S |
-| T3 | Transitive walk + `HashSet<String>` cycle guard | XS |
-| T4 | `--lock=PATH` driver (read lockfile, resolve each pinned entry) | XS |
-| T5 | `--skip=` allow-list filter | XS |
-| T6 | `library-ci.yml.example` template gains a final `loft test --deps` step | XS |
+| T1 | Free-fn dep resolver | implemented as local helper in `run_dep_tests` (path-dep + sibling fallback) |
+| T2 | `--deps[=direct]` flag + direct walker | DONE — `run_dep_tests(transitive=false)` |
+| T3 | Transitive walk + `HashSet<PathBuf>` cycle guard | DONE — default mode |
+| T4 | `--lock=PATH` driver (read lockfile, resolve each pinned entry) | **DEFERRED** — registry-version deps fall through silently with a one-line warning to the host project; T4 closes that when lockfile parsing is wired |
+| T5 | `--skip=` allow-list filter | DEFERRED — easy add when needed |
+| T6 | `library-ci.yml.example` template `loft test --deps` step | DONE |
 
-Not blocking; lands after Tiers 1–3 are clean.
+Smoke-tested via `lib/audience_crystal` (declares `gridmesh` as
+path-dep): `loft test --deps=direct` ran 3 audience_crystal test
+files + 4 gridmesh test files, reported `1 dep(s) tested, 0 failed`.
 
 ### Phase 7a — moros world split (cross-project unlock; appears monorepo-internal)
 
