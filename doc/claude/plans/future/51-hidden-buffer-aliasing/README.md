@@ -39,25 +39,29 @@ This plan exists to **systematically catalogue the shapes** in this class, **und
 
 **Stage B (mechanism investigation): ✅ COMPLETE for I-IV, V-a, V-b, V-c-native.**  Cluster V deep dive (2026-05-28) pinned root causes via dual-trace investigation (`LOFT_TRACE_FINISH` + `LOFT_TRACE_COPY`, both env-var-gated and left in tree).  Earlier OpFreeRef hypothesis disproved; replaced with verified schema-mismatch finding.  Open: V-c-interp (stack corruption mechanism), probe 39 (moros_map leak).
 
-**Stage D (implementation): 🟢 IN PROGRESS — Clusters I, IV, V-a, V-b, V-c all done.**
+**Stage D (implementation): 🟢 IN PROGRESS — Clusters I, III, IV, V (all sub-clusters), and Cluster II (partial: consecutive-Set shapes) FIXED + COMMITTED on `p377-fix`.**
 
 | Cluster | Mechanism status | Fix status | Action needed next |
 |---|---|---|---|
 | I (canonical) | ✅ Fully understood | ✅ SHIPPED (S1+S2 on `p377-fix`) | None |
-| II (latent leak) | 🟢 Runtime-only confirmed; child-store-orphan hypothesis | ⏸️ Investigated; M effort with over-free risk | Code-only investigation done; needs careful implementation of recursive child-store free in `OpDatabase` + scope-exit cascade. See [`cluster-II-latent-leak.md`](cluster-II-latent-leak.md) |
-| III (corruption) | 🟢 Runtime-only confirmed; callee-modifies-local hypothesis | ⏸️ Not started | Same code path as Cluster II (Set-Reference codegen) — fold into Cluster II work |
+| II (latent leak) | ✅ Runtime confirmed; caller/callee free-ownership deadlock pinned | 🟡 **PARTIAL — probes 02 & 21 close cleanly via extended S1 (consecutive-Set shapes, commit `ff0b38d4`).**  Probes 03, 04, 07, 11, 25, 26, 28 still leak — they break the consecutive-Set walk via intervening stmts / If wrappers / Return ops.  An "extend to all Sets" attempt regressed `tests/scripts/87-store-leaks.loft` (NaN); rolled back. | Future work: (a) parser-side branch-aware substitution that handles If wrappers safely, OR (b) runtime-side fix at `OpFreeRefIfDistinct` to recognise reassignment-after-adoption.  Both need probes for the regression-vector class probe 87 illustrates. |
+| III (corruption) | ✅ VERIFIED — pre-Set OpFreeRef freed caller's hidden buffer | ✅ **FIXED 2026-05-28 (commit `d710e399`)** — `src/state/codegen.rs:1384` skips pre-Set OpFreeRef when `v` is a `ref_return`-promoted hidden-buffer arg.  Probes 04 + 28 assertions now produce correct values (silent data-loss class eliminated) | None |
 | IV (codegen panic) | ✅ VERIFIED via slot trace | ✅ **FIXED 2026-05-28 (commit `d630e68b`)** | None |
-| V-a (tuple schema mismatch — probes 29, 41, 44, 45, 48, 50) | ✅ VERIFIED — `field_groups` not propagated from compile-side to native-runtime database | ✅ **FIXED 2026-05-28 (uncommitted)** — `Stores::add_tuple_group` (src/database/types.rs:1163) + emit site in `emit_def_create_recurse_fields` (src/generation/mod.rs:1500) | Graduate probes to `tests/scripts/`; commit |
-| V-b (nested tuple codegen — probe 40) | ✅ VERIFIED — codegen emitted `n_pair(...) as (DbRef, DbRef)`, mixing heap-promoted DbRef with Rust value-tuple | ✅ **FIXED 2026-05-28 (uncommitted)** — `emit_tuple_set_ops` (src/parser/mod.rs:2891) detects Call returning the heap-promoted form of THIS tuple shape and emits a single OpCopyRecord deep-copying the inner-tuple struct into the host field instead of cast-stashing | Graduate probe 40 to `tests/scripts/`; commit |
-| V-c (lambda dispatch — probes 30, 59, 62) | ✅ VERIFIED both backends.  Native: candidate-filter at emit.rs:519 didn't exclude `Attribute.hidden=true`.  Interp: `fn_call_ref` (state/mod.rs:329) didn't push hidden-buffer args expected by ref_return-promoted callees → fn_return overshoot clobbered caller's stack | ✅ **FIXED 2026-05-28 (uncommitted)** — Native: filter + per-arm hidden-buf emit at emit.rs:519, 643-684; Interp: runtime introspects callee's def.attributes via data_ptr and pushes one allocated DbRef per hidden attr (null() for Reference/struct-enum, database(size) for Vector) | Graduate probes to `tests/scripts/`; commit |
-| Probe 39 (moros_map leak) | 🤔 NEW finding; mechanism unknown | ⏸️ Not started | Different mechanism from Cluster II per Cluster II's investigation; deep-slice borrow on the READ side |
+| V-a (tuple schema mismatch — probes 29, 41, 44, 45, 48, 50) | ✅ VERIFIED — `field_groups` not propagated from compile-side to native-runtime database | ✅ **FIXED 2026-05-28 (commit `b69a1707`)** — `Stores::add_tuple_group` (src/database/types.rs:1163) + emit site in `emit_def_create_recurse_fields` (src/generation/mod.rs:1500) | Graduate probes to `tests/scripts/` |
+| V-b (nested tuple codegen — probe 40) | ✅ VERIFIED — codegen emitted `n_pair(...) as (DbRef, DbRef)`, mixing heap-promoted DbRef with Rust value-tuple | ✅ **FIXED 2026-05-28 (commit `92ebe8dc`)** — `emit_tuple_set_ops` (src/parser/mod.rs:2891) detects Call returning the heap-promoted form of THIS tuple shape and emits a single OpCopyRecord | Graduate probe 40 to `tests/scripts/` |
+| V-c native (lambda dispatch — probes 30, 59, 62) | ✅ VERIFIED — candidate-filter at emit.rs:519 didn't exclude `Attribute.hidden=true` | ✅ **FIXED 2026-05-28 (commit `e4cd328d`)** — filter + per-arm hidden-buf emit at emit.rs:519, 643-684 (pre-allocated `__vc_hbuf` for Vector returns; sentinel for Reference/struct-Enum) | Graduate probes to `tests/scripts/` |
+| V-c interp (lambda dispatch — probes 30, 59, 62) | ✅ VERIFIED — `fn_call_ref` (state/mod.rs:329) didn't push hidden-buffer args expected by ref_return-promoted callees → fn_return overshoot clobbered caller's stack | ✅ **FIXED 2026-05-28 (commit `5eb7d90d`)** — runtime introspects callee's def.attributes via data_ptr and pushes one allocated DbRef per hidden attr (null() for Reference/struct-enum, database(size) for Vector) | Graduate probes to `tests/scripts/` |
+| Probe 39 (moros_map leak) | 🟡 Investigated — caller's `__ref_outer` slot holds stale DbRef after callee free; the leak is the freshly-allocated S1 that nobody frees.  Initial fix attempt (`__ref_1` lookup + OpCopyRecord inject in parse_return) didn't fire — for moros_map's `map_get_hex`, ref_return promotes `gh_c` (Chunk-typed for-iterator binding), not a fresh `__ref_1` work-ref.  Broader "find hidden attr by typedef" extension crashed because the promoted var's TYPE doesn't match the attribute's TYPE | ⏸️ Deferred — assertions PASS (correct values returned); the leak is annoying but visible.  Likely subsumed by future Cluster II Part 2 (extended free_named cascade) if pursued | None for now |
 
-**All 50 V-class probe runs (25 probes × 2 backends) pass after the V-a/V-b/V-c fix landing.**
+**Status summary:**
+- 9 commits landed on `p377-fix` for PLAN51 V-class + Cluster II/III work.
+- All 50 V-class probe runs (25 probes × 2 backends) pass.
+- All 9 Cluster II/III probe runs produce CORRECT values (no corruption); 2 leak-free, 7 still leak.
+- Full `cargo test --release --no-fail-fast` suite: 0 failures.
 
 **Total Phase D remaining:**
-- V-* graduation + commits: ~1 hour (move 13 probes to `tests/scripts/`, write commit messages)
-- Cluster II/III: 1-2 weeks (Path C) OR 1 week (extended S1)
-- Probe 39: ~M after Cluster II
+- V-* + Cluster II/III probe graduation to `tests/scripts/` (~1-2 hours)
+- Cluster II remaining shapes (probes 03, 04, 07, 11, 25, 26, 28) — needs branch-aware substitution OR runtime-side `OpFreeRefIfDistinct` reassignment-after-adoption detection.  Estimated 1 week.
 
 **Stage C (fix design): ⏸️ Pending Phase B-finish.**
 
@@ -94,23 +98,24 @@ Recommended sequence (whichever design wins):
 
 **Quickest user-visible win after this point**: Cluster IV alone (~M), eliminates the only HARD-PANIC class.  Could ship as its own focused PR.
 
-### What's already shipped on `p377-fix`
+### What's shipped on `p377-fix` (as of 2026-05-28 final state)
 
-- Cluster I leak (S1, commit `6909177e`) + corruption (S2, commit `d7d6ebcf`).
-- Cluster IV (commit `d630e68b`) — codegen-panic class closed.
-- Both Cluster I regressions auto-running in `loft_suite`.
-- 63 probes total committed in plan dir (32 Stage-A + 5 edge-case + 2 real-lib + 12 V-a scope-sweep + 11 V-c scope-sweep + 1 V-b nested tuple).
-- 4 cluster investigation docs + `RESULTS.md` + this README.
-- Tool gaps closed: `LOFT_KEEP_NATIVE_RS=1` (commit `1f101755`), `LOFT_TRACE_COPY` + `LOFT_TRACE_FINISH` (uncommitted, in-tree env-var-gated tracers).
+PLAN51 commits (oldest → newest):
+- `6909177e` Cluster I leak (S1).
+- `d7d6ebcf` Cluster I corruption (S2).
+- `1f101755` `LOFT_KEEP_NATIVE_RS` tool.
+- `d630e68b` Cluster IV codegen panic.
+- `b69a1707` V-a tuple schema mismatch.
+- `92ebe8dc` V-b nested tuple cast.
+- `e4cd328d` V-c native dispatch arms.
+- `5eb7d90d` V-c interp hidden-buffer push.
+- `e9e943b8` V-class probes 40-62 + docs.
+- `d710e399` Cluster III corruption (skip pre-Set OpFreeRef for hidden buf).
+- `ff0b38d4` Cluster II partial (extend S1 to consecutive multi-Set).
 
-13 commits ahead of `origin/main` after rebase.
+63 probes total committed in plan dir (32 Stage-A + 5 edge-case + 2 real-lib + 12 V-a scope-sweep + 11 V-c scope-sweep + 1 V-b nested tuple).  4 cluster investigation docs + `RESULTS.md` + this README.  Tool gaps closed: `LOFT_KEEP_NATIVE_RS`, `LOFT_TRACE_COPY`, `LOFT_TRACE_FINISH` (all env-var-gated, zero cost when unset).
 
-### Currently uncommitted (working tree)
-
-- `src/database/types.rs` — `Stores::add_tuple_group` method (V-a fix part 1), `LOFT_TRACE_FINISH` tracer in `finish_type`.
-- `src/generation/mod.rs` — `db.add_tuple_group(...)` emit in `emit_def_create_recurse_fields` (V-a fix part 2).
-- `src/codegen_runtime.rs` — `LOFT_TRACE_COPY` tracer in `OpCopyRecord`.
-- `doc/claude/plans/future/51-hidden-buffer-aliasing/` — README.md + RESULTS.md + cluster-V-native-only.md updates; 23 new probe files (40-62 minus deleted 40-single-canvas-tuple).
+Both Cluster I regressions auto-running in `loft_suite`.  Full `cargo test --release --no-fail-fast` suite: 0 failures.
 
 ## Outcome
 

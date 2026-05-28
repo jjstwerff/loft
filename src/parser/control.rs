@@ -923,7 +923,7 @@ impl Parser {
     /// `OpCopyRecord` as a no-op, so the IR shape stays uniform with the
     /// direct-return path.
     pub(crate) fn nrvo_collapse_tail_set(&mut self, l: &mut [Value], ls: &[u16]) {
-        if self.first_pass || l.len() < 2 || ls.is_empty() {
+        if self.first_pass || l.is_empty() || ls.is_empty() {
             return;
         }
         let last = l.len() - 1;
@@ -933,6 +933,11 @@ impl Parser {
             return;
         };
         if !ls.contains(&cv) {
+            return;
+        }
+
+        if last == 0 {
+            // No prior op to substitute — only the tail Var(cv).
             return;
         }
 
@@ -984,37 +989,26 @@ impl Parser {
             return;
         }
 
-        // (5) Substitute work_ref → cv everywhere inside the inner Call's
-        //     args (including any dep arrays via the existing helper).
+        // (5) Substitute work_ref → cv inside the call's args.
         for a in args.iter_mut() {
             Self::substitute_work_ref(a, work_ref, cv);
         }
 
         // (6) @PLAN51 Cluster II — extend the substitution backwards to
-        //     EARLIER consecutive `Set(cv, Call(fn, args))` operations in
-        //     the same body.  Without this, the first call's alloc_canvas
-        //     writes into `__ref_1` (a fresh work-ref), the Set leaves
-        //     `__ref_1` aliased with `cv`, and at scope exit the
-        //     paired-witness `OpFreeRefIfDistinct(__ref_1, cv)` skips
-        //     (both share the same store) — yet the caller's
-        //     OpCopyRecord wrap doesn't free the source either (because
-        //     `has_hidden_ref` is true for any ref_return-promoted
-        //     callee).  The store leaks one per non-S1 Set per iter
-        //     (probes 02, 03, 07, 11, 21, 25, 26).
-        //
-        //     Substituting earlier Sets too makes EVERY call write into
-        //     cv (= caller's hidden buffer) directly via in-place
-        //     OpDatabase reuse — no fresh work-ref store, no leak.
-        //
-        //     Walk backwards through `l`, stopping at the first op that
-        //     isn't a `Set(cv, Call(_, _))` with a hidden-buffer arg
-        //     matching shape (4).  Intervening non-Set ops (probe 03)
-        //     terminate the walk — they may have side effects we can't
-        //     swap through.
+        //     EARLIER consecutive `Set(cv, Call(_))` ops (probes 02, 21).
+        //     Stops at any non-Set/non-Line op (intervening stmt, If,
+        //     etc.) — those are unsafe to swap through (the discard's
+        //     RHS may read cv; conditional Sets need branch-aware
+        //     reasoning).  Probes 03, 04, 07, 11, 25, 26, 28 remain
+        //     leaky; their substitution requires extending into IR
+        //     wrappers which is parser-invasive (an earlier attempt
+        //     broke tests/scripts/87-store-leaks.loft because
+        //     conditional Sets to cv interact with paired_witness in
+        //     ways that a blanket "substitute every Set(cv, Call)"
+        //     doesn't handle correctly).
         let mut idx = last - 1;
         while idx > 0 {
             idx -= 1;
-            // Skip Line(N) markers (debug source-line annotations).
             if matches!(l[idx], Value::Line(_)) {
                 continue;
             }

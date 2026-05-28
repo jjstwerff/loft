@@ -74,15 +74,18 @@ Insights for Stage B:
 - Cluster II's leak is **per-iter (per outer call), not per intermediate Set** (probe 36).  The "orphan" is the FIRST intermediate record's child store; subsequent intermediates reuse / overwrite in place.
 - Match's lowering is fundamentally different from if's (probes 18, 35 pass; 08, 22, 27, 33, 34, 37 panic).  Match takes a non-unification path that handles N arms with N hidden buffers cleanly.
 
-## Cluster summary
+## Cluster summary (post-fix state, 2026-05-28)
 
-| Cluster | Count | Severity | Affected backends |
-|---|---|---|---|
-| **OK** | 16 | — | — |
-| **II — latent leak** | 7 | Per-iter Canvas leak; linear scaling confirmed at 100 iters | `--interpret` only |
-| **III — corruption** | 2 | Silent wrong-value reads (probe 04: iter-1 data; probe 28: default-init bypassing cond Set) | `--interpret` only |
-| **IV — codegen panic** | 5 | Hard panic at `src/state/codegen.rs:2529:9`; halts compilation | **BOTH** backends |
-| **V — native-only failure** | 2 | Native produces invalid Rust (`/tmp/loft_native_*.rs:775`) or runtime panic in generated Rust | `--native` (interpret may also corrupt) |
+| Cluster | Count | Severity | Affected backends | Status |
+|---|---|---|---|---|
+| **OK** | 16 | — | — | — |
+| **II — latent leak** | 7 | Per-iter Canvas leak; linear scaling confirmed at 100 iters | `--interpret` only | 🟡 PARTIAL (probes 02, 21 closed via extended S1 in commit `ff0b38d4`; probes 03, 04, 07, 11, 25, 26, 28 still leak — assertions PASS, only the warning remains) |
+| **III — corruption** | 2 | Silent wrong-value reads (probe 04: iter-1 data; probe 28: default-init bypassing cond Set) | `--interpret` only | ✅ **FIXED** (commit `d710e399` — skip pre-Set OpFreeRef for hidden-buffer args).  Both probes produce correct values |
+| **IV — codegen panic** | 5 | Hard panic at `src/state/codegen.rs:2529:9`; halts compilation | **BOTH** backends | ✅ **FIXED** (commit `d630e68b`) |
+| **V-a — tuple schema mismatch** | 6 (29, 41, 44, 45, 48, 50) | Native runtime / compile-side layout divergence → truncation / field-reorder | `--native` (silent on some shapes) | ✅ **FIXED** (commit `b69a1707`) |
+| **V-b — nested tuple codegen** | 1 (40) | rustc E0605 (compile error) | `--native` | ✅ **FIXED** (commit `92ebe8dc`) |
+| **V-c — lambda dispatch** | 3 (30, 59, 62) | Native: invalid fn-ref panic; interp: stack-frame clobber | both | ✅ **FIXED** (commits `e4cd328d` native + `5eb7d90d` interp) |
+| **Probe 39 (moros_map)** | 1 | Hex leak (12/iter); assertions pass | `--interpret` only | ⏸️ Investigated; deferred — likely subsumed by future Cluster II Part 2 |
 
 ## Detailed cluster analysis
 

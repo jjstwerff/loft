@@ -1,5 +1,22 @@
 # Cluster II — Latent leak (interpret-only)
 
+**Status (2026-05-28): 🟡 PARTIAL — probes 02 + 21 closed, 5 still leak.**
+
+Commits:
+- `d710e399` (Cluster III fix) — incidental: also closes the corruption variants in probes 04 / 28; their assertions now produce correct values, only the leak warning remains.
+- `ff0b38d4` (Cluster II partial) — extends `nrvo_collapse_tail_set` backwards through consecutive `Set(cv, Call(_))` ops.  Closes probes 02 and 21 (the canonical double-Set shapes) AND eliminates the per-iter leak entirely for those.
+
+**Still leaking (all `--interpret`, assertions PASS, only the warning):**
+- Probe 03 (intervening stmt) — non-Set op breaks the consecutive walk.
+- Probe 04 (struct-lit + call) — first op is a struct literal, not a Call.
+- Probe 07 (explicit return) — `parse_return` doesn't invoke `nrvo_collapse_tail_set`.
+- Probes 11, 25, 26 (conditional Set in If branch) — If wrapper breaks the walk.
+- Probe 28 (default-init + conditional Set) — same If issue.
+
+An attempt to extend the substitution to ALL `Set(cv, Call(_))` in the body (including descent into If/Block/Return wrappers) regressed `tests/scripts/87-store-leaks.loft` (NaN result).  Rolled back to the consecutive-Set-only version.  Future work: branch-aware substitution that respects probe 87's invariants, OR a runtime-side fix at `OpFreeRefIfDistinct` to detect reassignment-after-adoption.
+
+---
+
 **Severity:** Slow leak under repeated calls; linear scaling (1 Canvas per iter, confirmed at 100 iters).  Not silent corruption — `LOFT_STORES=warn` catches it.  But cumulative cost in production loops (dryopea editor: one full-screen Canvas per frame).
 **Affected probes:** 02, 03, 07, 11, 21, 25, 26 (7 probes)
 **Backend asymmetry:** `--interpret` leaks; `--native` is clean.
