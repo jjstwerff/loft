@@ -1382,33 +1382,29 @@ impl State {
                 false
             };
             // @PLAN51 Cluster II/III — also skip the pre-Set OpFreeRef
-            // when `v` is a hidden-buffer parameter (`ref_return`-promoted
-            // argument).  Hidden-buffer params are OWNED BY THE CALLER;
-            // freeing them mid-call kills the caller's still-live store
-            // and leaves a stale DbRef in the caller's `__ref_outer` slot.
-            // That stale DbRef breaks the scope-exit `OpFreeRefIfDistinct`
-            // comparison — the new store the callee allocated to replace
-            // the freed one is never freed by the caller, leaking one
-            // store per non-S1 Set into a hidden buffer (probes 02, 03,
-            // 07, 11, 21, 25, 26 = Cluster II; probes 04, 28 =
-            // Cluster III's corruption variant).
+            // when `v` is a hidden-buffer parameter AND the call IS S1-
+            // substituted (the call's args contain `v` itself).  In that
+            // case the callee's OpDatabase routes through
+            // `state/io.rs::database` which does `clear(cv); claim(cv,
+            // size)` — an in-place reuse of the caller's buffer store.
+            // No leak, no corruption: store_nr is preserved.
             //
-            // The callee's OpDatabase that follows in the Call body
-            // routes through `state/io.rs::database` which does
-            // `clear(cv); claim(cv, size)` — an IN-PLACE reuse of the
-            // caller's buffer store.  No leak, no corruption: the
-            // store_nr is preserved, only its content changes.
-            //
-            // Detection: `is_argument(v) && is_hidden_buf_param(v)`.
-            // We use the attribute-side `hidden` flag (set by
-            // `ref_return` at parser/control.rs:3203) reached through
-            // the function's attributes table.
-            let is_hidden_buf_arg = stack.function.is_argument(v) && {
-                let attrs = &stack.data.def(stack.def_nr).attributes;
-                attrs
-                    .iter()
-                    .any(|a| a.hidden && stack.function.var(&a.name) == v)
-            };
+            // When the call is NOT S1-substituted (probes 04 + 28: the
+            // call's hidden buf is a fresh `__ref_N` distinct from `v`),
+            // the in-place-reuse assumption breaks — `v`'s current store
+            // (e.g. from a preceding struct-literal init) becomes
+            // orphan when the reassignment writes the deep-copied
+            // result.  We must fall through to the reassignment path so
+            // the pre-Set free runs on `v`.  `s1_substituted` is the
+            // already-computed check we need.
+            let is_hidden_buf_arg = s1_substituted
+                && stack.function.is_argument(v)
+                && {
+                    let attrs = &stack.data.def(stack.def_nr).attributes;
+                    attrs
+                        .iter()
+                        .any(|a| a.hidden && stack.function.var(&a.name) == v)
+                };
             if matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)

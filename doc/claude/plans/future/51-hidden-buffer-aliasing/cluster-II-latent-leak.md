@@ -1,6 +1,16 @@
 # Cluster II — Latent leak (interpret-only)
 
-**Status (2026-05-29): 🟢 LARGELY CLOSED — Step 2 + post-call free+reset landed.  Probes 02, 03, 07, 11, 21, 25, 26 are leak-free.  Probes 04 + 28 still leak Canvas×5 (struct-literal-first / default-init-first patterns — caller_hidden_args reset doesn't apply).**
+**Status (2026-05-29): 🟢 CLOSED — all 9 Cluster II probes (02, 03, 04, 07, 11, 21, 25, 26, 28) pass leak-free on `--interpret`.**
+
+### `is_hidden_buf_arg` narrowed to require S1 substitution (2026-05-29)
+
+Closes probes 04 + 28 (the struct-literal-first / default-init-first shapes that the Step 2 caller_hidden_args reset alone couldn't reach).
+
+Fix site: `src/state/codegen.rs:1406`.  Added `s1_substituted` as a required conjunct of `is_hidden_buf_arg`.  Rationale: the pre-Set OpFreeRef skip was justified by "the callee's OpDatabase will reuse cv's store in-place via `clear+claim`" — but that's only true when the callee's hidden buf arg IS `cv` (S1-substituted call).  When the call's hidden buf is a distinct `__ref_N` (non-S1 — probes 04 + 28 second Sets), the in-place-reuse assumption breaks; `cv`'s current store (from a preceding struct-literal init or default-init) becomes orphan when the reassignment writes the deep-copied result.  The narrowed guard falls through to the reassignment path, which now correctly emits the pre-Set free on `cv`.
+
+Single-line logic change with expanded comment.  All other Cluster II probes (02, 03, 07, 11, 21, 25, 26) remain green; leak_cases_interp passes; V-class 50/50.
+
+### Step 2 + post-call free + reset (2026-05-29)
 
 ### Step 2 + post-call free + reset (2026-05-29)
 
