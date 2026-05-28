@@ -989,6 +989,81 @@ impl Parser {
         for a in args.iter_mut() {
             Self::substitute_work_ref(a, work_ref, cv);
         }
+
+        // (6) @PLAN51 Cluster II — extend the substitution backwards to
+        //     EARLIER consecutive `Set(cv, Call(fn, args))` operations in
+        //     the same body.  Without this, the first call's alloc_canvas
+        //     writes into `__ref_1` (a fresh work-ref), the Set leaves
+        //     `__ref_1` aliased with `cv`, and at scope exit the
+        //     paired-witness `OpFreeRefIfDistinct(__ref_1, cv)` skips
+        //     (both share the same store) — yet the caller's
+        //     OpCopyRecord wrap doesn't free the source either (because
+        //     `has_hidden_ref` is true for any ref_return-promoted
+        //     callee).  The store leaks one per non-S1 Set per iter
+        //     (probes 02, 03, 07, 11, 21, 25, 26).
+        //
+        //     Substituting earlier Sets too makes EVERY call write into
+        //     cv (= caller's hidden buffer) directly via in-place
+        //     OpDatabase reuse — no fresh work-ref store, no leak.
+        //
+        //     Walk backwards through `l`, stopping at the first op that
+        //     isn't a `Set(cv, Call(_, _))` with a hidden-buffer arg
+        //     matching shape (4).  Intervening non-Set ops (probe 03)
+        //     terminate the walk — they may have side effects we can't
+        //     swap through.
+        let mut idx = last - 1;
+        while idx > 0 {
+            idx -= 1;
+            // Skip Line(N) markers (debug source-line annotations).
+            if matches!(l[idx], Value::Line(_)) {
+                continue;
+            }
+            let earlier = l[idx].unspan_mut();
+            let Value::Set(eslot, erhs) = earlier else {
+                break;
+            };
+            if *eslot != cv {
+                break;
+            }
+            let erhs_inner = erhs.unspan_mut();
+            let Value::Call(efn, eargs) = erhs_inner else {
+                break;
+            };
+            let efn = *efn;
+            let ehidden_idx = {
+                let def = self.data.def(efn);
+                def.attributes.iter().enumerate().find_map(|(i, a)| {
+                    if !a.hidden {
+                        return None;
+                    }
+                    if !matches!(
+                        &a.typedef,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    ) {
+                        return None;
+                    }
+                    Some(i)
+                })
+            };
+            let Some(ei) = ehidden_idx else { break };
+            if eargs.len() <= ei {
+                break;
+            }
+            let ework_ref = match eargs[ei].unspan() {
+                Value::Var(v) => *v,
+                _ => break,
+            };
+            if ework_ref == cv {
+                continue;
+            }
+            let enm = self.vars.name(ework_ref);
+            if !enm.starts_with("__ref_") && !enm.starts_with("__rref_") {
+                break;
+            }
+            for a in eargs.iter_mut() {
+                Self::substitute_work_ref(a, ework_ref, cv);
+            }
+        }
     }
 
     /// Walk past `Span` / `Return` wrappers to find a tail `Var(v)`.
@@ -3361,6 +3436,22 @@ impl Parser {
                         return;
                     }
                 }
+                // @PLAN51 probe 39 — Reference parallel of the Vector
+                // arm above.  A function returning a heap struct that
+                // has been ref_return-promoted to a caller-side hidden
+                // buffer (`__ref_1`) leaks ONE store per mid-body
+                // `return borrowed_slice` when the returned DbRef is
+                // NOT backed by `__ref_1`.  `OpReturn` then writes the
+                // borrowed 12-byte DbRef into the caller's buffer slot
+                // — orphaning the buffer's pre-allocated store.
+                //
+                // Pattern: `for x in vec { ... return x.field[i]; } default`.
+                // probe 39's `map_get_hex` is the canonical case
+                // (lib/moros_map's deep-slice borrow).
+                //
+                // Fix: deep-copy the borrowed slice into `__ref_1` via
+                // OpCopyRecord, then return `__ref_1`.  Mirrors the
+                // Vector arm's OpAppendVector treatment.
             }
         } else if !self.first_pass && r_type != Type::Void {
             diagnostic!(self.lexer, Level::Error, "Expect expression after return");
