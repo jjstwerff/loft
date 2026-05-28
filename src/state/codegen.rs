@@ -1381,11 +1381,40 @@ impl State {
             } else {
                 false
             };
+            // @PLAN51 Cluster II/III — also skip the pre-Set OpFreeRef
+            // when `v` is a hidden-buffer parameter (`ref_return`-promoted
+            // argument).  Hidden-buffer params are OWNED BY THE CALLER;
+            // freeing them mid-call kills the caller's still-live store
+            // and leaves a stale DbRef in the caller's `__ref_outer` slot.
+            // That stale DbRef breaks the scope-exit `OpFreeRefIfDistinct`
+            // comparison — the new store the callee allocated to replace
+            // the freed one is never freed by the caller, leaking one
+            // store per non-S1 Set into a hidden buffer (probes 02, 03,
+            // 07, 11, 21, 25, 26 = Cluster II; probes 04, 28 =
+            // Cluster III's corruption variant).
+            //
+            // The callee's OpDatabase that follows in the Call body
+            // routes through `state/io.rs::database` which does
+            // `clear(cv); claim(cv, size)` — an IN-PLACE reuse of the
+            // caller's buffer store.  No leak, no corruption: the
+            // store_nr is preserved, only its content changes.
+            //
+            // Detection: `is_argument(v) && is_hidden_buf_param(v)`.
+            // We use the attribute-side `hidden` flag (set by
+            // `ref_return` at parser/control.rs:3203) reached through
+            // the function's attributes table.
+            let is_hidden_buf_arg = stack.function.is_argument(v) && {
+                let attrs = &stack.data.def(stack.def_nr).attributes;
+                attrs
+                    .iter()
+                    .any(|a| a.hidden && stack.function.var(&a.name) == v)
+            };
             if matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             ) && stack.function.tp(v).depend().is_empty()
                 && !s1_substituted
+                && !is_hidden_buf_arg
             {
                 let free_pos = stack.position - stack.function.stack(v);
                 stack.add_op("OpVarRef", self);
