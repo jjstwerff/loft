@@ -68,7 +68,7 @@ investigation doc.
 
 | ID | Cluster | Severity | Backend asymmetry | Probes | Doc |
 |---|---|---|---|---|---|
-| I | <one-line shape> | <severity> | <both / interp / native> | <count> | [`cluster-I-<slug>.md`](cluster-I-<slug>.md) |
+| I | one-line shape | severity | both / interp / native | count | `cluster-I-<slug>.md` (link when created) |
 | II | … | … | … | … | … |
 
 ## Probe suite (REQUIRED)

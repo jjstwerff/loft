@@ -152,6 +152,18 @@ pub struct Variable {
     /// `parse_for_iter_setup` distinguish a safe sequential reuse from
     /// an outer-local shadow.
     pub was_loop_var: bool,
+    /// @PLAN51 Cluster IV: set by `add_defaults` when it synthesises a
+    /// caller-side work-ref for a callee's hidden return-buffer arg.
+    /// These work-refs are allocated by the parser as call-site placeholders
+    /// (the caller pre-allocates the buffer, the callee writes into it),
+    /// so they need a leading `Set(r, Null)` IR so the slot allocator sees
+    /// a `first_def` and assigns a stack slot.  Without the null-init, vars
+    /// whose typedef has a non-empty dep list (e.g. `Reference(td, [arg_idx])`
+    /// for if-tail / recursion shapes) skip the dep-empty guard in
+    /// `parse_code` and end up SKIP'd by `assign_slots` ("no first_def") —
+    /// codegen then panics with "Incorrect var __ref_N[65535]" when it tries
+    /// to emit the call's arg.
+    pub caller_hidden_buf: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -892,6 +904,7 @@ impl Function {
             pre_assigned_pos: u16::MAX,
             promoted_from: u16::MAX,
             was_loop_var: false,
+            caller_hidden_buf: false,
         });
         v
     }
@@ -919,6 +932,7 @@ impl Function {
             pre_assigned_pos: u16::MAX,
             promoted_from: u16::MAX,
             was_loop_var: false,
+            caller_hidden_buf: false,
         });
         v
     }
@@ -948,6 +962,7 @@ impl Function {
             pre_assigned_pos: u16::MAX,
             promoted_from: u16::MAX,
             was_loop_var: false,
+            caller_hidden_buf: false,
         });
         v
     }
@@ -975,6 +990,7 @@ impl Function {
             pre_assigned_pos: u16::MAX,
             promoted_from: u16::MAX,
             was_loop_var: false,
+            caller_hidden_buf: false,
         });
         v
     }
@@ -1073,6 +1089,23 @@ impl Function {
 
     pub fn is_captured(&self, var_nr: u16) -> bool {
         (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].captured
+    }
+
+    /// @PLAN51 Cluster IV: mark this variable as a caller-side work-ref
+    /// synthesised by `add_defaults` for a callee's hidden return-buffer.
+    /// Used by `parse_code`'s preamble null-init loop to ensure these
+    /// work-refs receive a `Set(r, Null)` IR regardless of their typedef's
+    /// dep list — without it, the slot allocator skips them ("no first_def")
+    /// and codegen panics with "Incorrect var __ref_N[65535]".
+    pub fn mark_caller_hidden_buf(&mut self, var_nr: u16) {
+        if (var_nr as usize) < self.variables.len() {
+            self.variables[var_nr as usize].caller_hidden_buf = true;
+        }
+    }
+
+    pub fn is_caller_hidden_buf(&self, var_nr: u16) -> bool {
+        (var_nr as usize) < self.variables.len()
+            && self.variables[var_nr as usize].caller_hidden_buf
     }
 
     /// Returns the appropriate error noun for a const-modification diagnostic.

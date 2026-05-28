@@ -3659,6 +3659,12 @@ impl Parser {
                     } else {
                         self.vars.work_refs(&tp, &mut self.lexer)
                     };
+                    // @PLAN51 Cluster IV: tag this work-ref so parse_code's
+                    // preamble emits Set(vr, Null) regardless of vr's
+                    // typedef dep list.  Without it, if-tail / recursion
+                    // shapes leave vr without a first_def → slot allocator
+                    // skips → codegen panics.
+                    self.vars.mark_caller_hidden_buf(vr);
                     self.data.vector_def(&mut self.lexer, content);
                     all_types[a_nr] = Type::Vector(content.clone(), vec![vr]);
                     actual[a_nr] = Value::Var(vr);
@@ -3673,6 +3679,7 @@ impl Parser {
                     } else {
                         self.vars.work_refs(&tp, &mut self.lexer)
                     };
+                    self.vars.mark_caller_hidden_buf(vr);
                     all_types[a_nr] = Type::Reference(content, vec![vr]);
                     actual[a_nr] = Value::Var(vr);
                 } else if let Type::Enum(content, true, _) = tp {
@@ -3695,6 +3702,7 @@ impl Parser {
                     } else {
                         self.vars.work_refs(&tp, &mut self.lexer)
                     };
+                    self.vars.mark_caller_hidden_buf(vr);
                     all_types[a_nr] = Type::Enum(content, true, vec![vr]);
                     actual[a_nr] = Value::Var(vr);
                 } else if let Type::RefVar(vtp) = &tp {
