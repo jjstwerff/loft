@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 /// Run all zero-parameter functions in `.loft` files under `root_dir` as tests.
 /// Supports `@ARGS`, `@EXPECT_ERROR`, and `@EXPECT_FAIL` file annotations.
 /// Returns 0 if all pass, 1 if any fail.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(crate) fn run_tests(
     default_dir: &str,
     root_dir: &str,

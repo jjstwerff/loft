@@ -333,7 +333,7 @@ fn run_dep_tests(transitive: bool, native_mode: bool) -> i32 {
                 let label = dep_dir
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| dep_name.to_string());
+                    .unwrap_or_else(|| dep_name.clone());
                 println!("  --deps: testing {label}");
                 let status = cmd.status();
                 let ok = status.as_ref().map(|s| s.success()).unwrap_or(false);
@@ -349,11 +349,11 @@ fn run_dep_tests(transitive: bool, native_mode: bool) -> i32 {
     }
 
     if tested > 0 {
-        println!("  --deps: {tested} dep(s) tested, {} failed", total_fail);
+        println!("  --deps: {tested} dep(s) tested, {total_fail} failed");
     } else {
         println!("  --deps: no deps with tests/ directory found");
     }
-    if total_fail > 0 { 1 } else { 0 }
+    i32::from(total_fail > 0)
 }
 
 fn install_package(pkg_path: &std::path::Path) {
@@ -2128,11 +2128,7 @@ fn main() {
         let final_code = if let Some(mode) = test_deps {
             let transitive = mode == "transitive";
             let dep_fail = run_dep_tests(transitive, native_mode);
-            if exit_code != 0 || dep_fail != 0 {
-                1
-            } else {
-                0
-            }
+            i32::from(exit_code != 0 || dep_fail != 0)
         } else {
             exit_code
         };

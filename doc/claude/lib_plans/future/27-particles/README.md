@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 cross-project consumer audit in
 [lib-plan 12 § Cross-project consumers](../../12-library-extraction/README.md#cross-project-consumers--moros--dryopea--bumper-airplanes):
 two games ([@PLAN46 dryopea](../../../plans/future/46-dryopea/README.md),
-[@PLAN50 bumper-airplanes](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes))
+[@PLAN50<!--noindex--> bumper-airplanes](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes))
 both need ribbon trails and point-burst particles; without a shared
 package, PLAN50 ships bespoke smoke trails + confetti and dryopea
 copies-and-modifies for explosions + scramble exhaust.
@@ -146,7 +146,7 @@ pub fn burst_geometry(self: Burst, now_ms: integer) -> PointCloud
   — Phase 7p of that plan blocks on this slot existing.
 - [@PLAN46 dryopea](../../../plans/future/46-dryopea/README.md) —
   consumer for explosions + exhaust.
-- [@PLAN50 bumper-airplanes](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes)
+- [@PLAN50<!--noindex--> bumper-airplanes](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes)
   — consumer for smoke trails + score confetti.
 - [`lib/graphics`](../../../../../lib/graphics/) — the renderer the
   consumer draws the generated geometry with.

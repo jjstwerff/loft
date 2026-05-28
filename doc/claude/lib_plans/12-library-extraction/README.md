@@ -173,7 +173,7 @@ player RPG, `lib/moros_*` packages), **dryopea**
 defence / free-build; depends on `lib_plans/20-terrain-heightmap` +
 `lib_plans/19-gridmesh` Phase C; reuses `lib/server` + `lib/web`),
 and **bumper-airplanes**
-([@PLAN50](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes),
+([@PLAN50<!--noindex-->](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes),
 audience demo on `origin/bumper_plane`; loads dryopea-authored
 MapFiles; proposes `lib/physics_2body`).
 
@@ -425,7 +425,7 @@ ratchet.
 | `server` | 0 | **removed 2026-05-28** | DONE — 13× `_ = self;` (method-call surface) |
 | `web` | 0 | **removed 2026-05-28** | DONE — 1× `not null` + 3× `_ = self;` |
 | `world` | 0 | **removed 2026-05-28** | DONE — needed both src/parser/operators.rs skip-pattern 5 (recognise `if i < len(v)` guards for indexed-assign positions) + world.loft idiom rewrites (`cells = X; if i < len(cells) { ... cells[i] }`) + `as u8`/`as u16` width casts on binary writes + `chunks not null` |
-| `moros_editor` | 31 | yes | Tier B; cross-references `moros_map` — pair with Phase 7p (consumer migration) per [memory: project_consumer_stall](../../../memory/project_consumer_stall.md) |
+| `moros_editor` | 31 | yes | Tier B; cross-references `moros_map` — pair with Phase 7p (consumer migration) per memory: project_consumer_stall (user-side) |
 | `moros_map` | 34 | yes | Same — Tier B; paired with 7p |
 | `markdown` | 50 | yes | Tier B; 50× `s[i]` needs sweep — non-consumer lib so unblocked but bulk |
 | `shapes` | 118 | yes | Tier C; 72× `v[i]` + 44× div-by-zero + 2× mod-by-zero |
@@ -662,7 +662,7 @@ spawn, editor/UI/render stay in `moros_*`.  Preserve the existing
 sparse Cell/Chunk shape (TTT v5 + audience demo) alongside the hex
 additions (they share addressing — Open Q #10).  Unblocks dryopea
 ([@PLAN46](../../plans/future/46-dryopea/README.md)) AND
-bumper-airplanes ([@PLAN50](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes))
+bumper-airplanes ([@PLAN50<!--noindex-->](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes))
 — see [§ Cross-project consumers](#cross-project-consumers--moros--dryopea--bumper-airplanes)
 for the shared-substrate argument.  Phase 7a is described as
 "monorepo-internal" because no user-visible behaviour changes, but
@@ -699,7 +699,7 @@ moros syntax in those files uses `enum` for what current loft calls
 field list, no variants), and the parser rejects it as
 `Expect enum values to be in camel case style`.  Translating the
 files to current loft syntax requires touching consumer logic
-([memory: project_consumer_stall](../../../memory/project_consumer_stall.md)),
+(memory: project_consumer_stall (user-side)),
 so this is genuinely blocked — not just deferred.
 
 **Remaining (resumes when consumer-stall lifts):**
