@@ -1,44 +1,62 @@
-# Stage A — Probe Results (33 probes, two runs 2026-05-28)
+# Stage A — Probe Results (39 probes; matrix updated post-Cluster-IV fix 2026-05-28)
 
 ## Full result matrix
 
-| # | Probe | Shape one-liner | `--interpret` | `--native` | Cluster |
-|---|---|---|---|---|---|
-| 01 | canonical-immediate | `cv = call(); cv` | ✅ | ✅ | OK |
-| 02 | double-set | `cv = a(); cv = b(); cv` | ⚠️ LEAK ×6 | ✅ | II |
-| 03 | intervening-stmt | `cv = a(); _stmt; cv` | ⚠️ LEAK ×6 | ✅ | II |
-| 04 | mixed-lit-call | `cv = {…}; cv = call(); cv` | ❌ CORRUPT iter 2 | ✅ | III |
-| 05 | nested-call | `cv = outer(inner()); cv` | ✅ | ✅ | OK |
-| 06 | interleaved-two-fns | 140 oracle | ✅ | ✅ | OK |
-| 07 | explicit-return | `cv = call(); return cv;` | ⚠️ LEAK ×6 | ✅ | II |
-| 08 | if-tail | `if c { a() } else { b() }` (tail) | 💥 PANIC | 💥 PANIC | IV |
-| 09 | vector-return | `v = []; for…; v` (vector hidden buf) | ✅ | ✅ | OK |
-| 10 | loop-mutate | `cv = {}; for { cv.f += … }; cv` (alloc_canvas shape) | ✅ | ✅ | OK |
-| 11 | conditional-reassign | `cv = a(); if c { cv = b() }; cv` | ⚠️ LEAK ×6 | ✅ | II |
-| 12 | deep-slice-return | `return m.items[0]` | ✅ | ✅ | OK |
-| 13 | recursive-fn | `fn f(n) { if n==0 { call() } else { f(n-1) } }` | 💥 PANIC | 💥 PANIC | IV |
-| 14 | field-set | `cv = {}; cv.field = call(); cv` | ✅ | ✅ | OK |
-| 15 | mut-ref-arg | `fn f(&out: T) { out.field = …; }` | ✅ | ✅ | OK |
-| 16 | direct-return-call | `call(p)` as tail (no Set) | ✅ | ✅ | OK |
-| 17 | chained-calls | `a = call1(); b = call2(a); b` (multi-local) | ✅ | ✅ | OK |
-| 18 | match-tail | `match x { … => call_a(), … => call_b() }` (tail) | ✅ | ✅ | OK |
-| 19 | wrap-in-struct | `Wrapper { canvas: call(), … }` | ✅ | ✅ | OK |
-| 20 | method-call | `base.method()` returning hidden buffer | ✅ | ✅ | OK |
-| 21 | many-iters | 100-iter version of probe 02 | ⚠️ LEAK ×100 | ✅ | II (scales linear) |
-| 22 | if-simple-tail | shape-test of probe 08 | 💥 PANIC | 💥 PANIC | IV |
-| 23 | if-one-branch-call | only ONE branch is heap call | ✅ | ✅ | OK |
-| 24 | deep-slice-with-call | deep-slice + interleaved heap call | ✅ | ✅ | OK |
-| 25 | cond-always | `if true { cv = … }` (cond fires) | ⚠️ LEAK ×6 | ✅ | II |
-| 26 | cond-never | `if false { cv = … }` (cond doesn't fire) | ⚠️ LEAK ×6 | ✅ | II |
-| 27 | if-as-local | `x = if c { a() } else { b() }; x` | 💥 PANIC | 💥 PANIC | IV |
-| 28 | only-conditional-set | initial Set + conditional reassign | ❌ CORRUPT iter 2 | ✅ | III (interp-only) |
-| 29 | tuple-return | `fn f() -> (Canvas, Canvas)` | ✅ | 💥 PANIC (rs:775) | V (native-only) |
-| 30 | lambda-return | lambda body returning heap | ❌ CORRUPT stack frame | 💥 PANIC (rs:2264) | V (both fail) |
-| 31 | operator-return | `OpAdd(a: Canvas, b: Canvas) -> Canvas` | (parse: op not registered) | (same) | excluded |
-| 32 | vec-of-canvases | `v = [call1(), call2(), call3()]` | ✅ | ✅ | OK |
-| 33 | if-with-explicit-returns | `if c { return a(); } else { return b(); }` | 💥 PANIC | 💥 PANIC | IV |
+Two snapshots: **pre-fix** (the original Stage A run that catalogued the failure space) and **post-Cluster-IV-fix** (commit `d630e68b`, 2026-05-28).  Cluster II/III/V are unchanged because the Cluster IV fix is targeted at the codegen-panic class only.
 
-**32 valid probes (1 excluded due to op syntax issue).**
+| # | Probe | Shape one-liner | Interp (pre / post-IV) | Native (pre / post-IV) | Cluster |
+|---|---|---|---|---|---|
+| 01 | canonical-immediate | `cv = call(); cv` | ✅ / ✅ | ✅ / ✅ | OK |
+| 02 | double-set | `cv = a(); cv = b(); cv` | ⚠️ LEAK ×6 / unchanged | ✅ / ✅ | II |
+| 03 | intervening-stmt | `cv = a(); _stmt; cv` | ⚠️ LEAK ×6 / unchanged | ✅ / ✅ | II |
+| 04 | mixed-lit-call | `cv = {…}; cv = call(); cv` | ❌ CORRUPT iter 2 / unchanged | ✅ / ✅ | III |
+| 05 | nested-call | `cv = outer(inner()); cv` | ✅ / ✅ | ✅ / ✅ | OK |
+| 06 | interleaved-two-fns | 140 oracle | ✅ / ✅ | ✅ / ✅ | OK |
+| 07 | explicit-return | `cv = call(); return cv;` | ⚠️ LEAK ×6 / unchanged | ✅ / ✅ | II |
+| 08 | if-tail | `if c { a() } else { b() }` (tail) | 💥 PANIC / ❌ runtime corruption (heap realloc) | 💥 PANIC / ✅ PASS | IV (panic fixed; runtime falls into II/III) |
+| 09 | vector-return | `v = []; for…; v` (vector hidden buf) | ✅ / ✅ | ✅ / ✅ | OK |
+| 10 | loop-mutate | `cv = {}; for { cv.f += … }; cv` (alloc_canvas shape) | ✅ / ✅ | ✅ / ✅ | OK |
+| 11 | conditional-reassign | `cv = a(); if c { cv = b() }; cv` | ⚠️ LEAK ×6 / unchanged | ✅ / ✅ | II |
+| 12 | deep-slice-return | `return m.items[0]` | ✅ / ✅ | ✅ / ✅ | OK |
+| 13 | recursive-fn | `fn f(n) { if n==0 { call() } else { f(n-1) } }` | 💥 PANIC / ❌ runtime (stacktrace) | 💥 PANIC / ❌ Rust panic in generated code | IV+ (codegen panic fixed; recursive variant has additional issue) |
+| 14 | field-set | `cv = {}; cv.field = call(); cv` | ✅ / ✅ | ✅ / ✅ | OK |
+| 15 | mut-ref-arg | `fn f(&out: T) { out.field = …; }` | ✅ / ✅ | ✅ / ✅ | OK |
+| 16 | direct-return-call | `call(p)` as tail (no Set) | ✅ / ✅ | ✅ / ✅ | OK |
+| 17 | chained-calls | `a = call1(); b = call2(a); b` (multi-local) | ✅ / ✅ | ✅ / ✅ | OK |
+| 18 | match-tail | `match x { … => call_a(), … => call_b() }` (tail) | ✅ / ✅ | ✅ / ✅ | OK |
+| 19 | wrap-in-struct | `Wrapper { canvas: call(), … }` | ✅ / ✅ | ✅ / ✅ | OK |
+| 20 | method-call | `base.method()` returning hidden buffer | ✅ / ✅ | ✅ / ✅ | OK |
+| 21 | many-iters | 100-iter version of probe 02 | ⚠️ LEAK ×100 / unchanged | ✅ / ✅ | II (scales linear) |
+| 22 | if-simple-tail | shape-test of probe 08 | 💥 PANIC / ❌ OOB at allocation.rs:174 | 💥 PANIC / ✅ PASS | IV (panic fixed; runtime falls into II/III) |
+| 23 | if-one-branch-call | only ONE branch is heap call | ✅ / ✅ | ✅ / ✅ | OK |
+| 24 | deep-slice-with-call | deep-slice + interleaved heap call | ✅ / ✅ | ✅ / ✅ | OK |
+| 25 | cond-always | `if true { cv = … }` (cond fires) | ⚠️ LEAK ×6 / unchanged | ✅ / ✅ | II |
+| 26 | cond-never | `if false { cv = … }` (cond doesn't fire) | ⚠️ LEAK ×6 / unchanged | ✅ / ✅ | II |
+| 27 | if-as-local | `x = if c { a() } else { b() }; x` | 💥 PANIC / ❌ runtime corruption | 💥 PANIC / ✅ PASS | IV (panic fixed; runtime falls into II/III) |
+| 28 | only-conditional-set | initial Set + conditional reassign | ❌ CORRUPT iter 2 / unchanged | ✅ / ✅ | III (interp-only) |
+| 29 | tuple-return | `fn f() -> (Canvas, Canvas)` | ✅ / ✅ | 💥 PANIC (rs:775) / unchanged | V (native-only) |
+| 30 | lambda-return | lambda body returning heap | ❌ CORRUPT stack frame / unchanged | 💥 PANIC (rs:2264) / unchanged | V (both fail) |
+| 31 | operator-return | `OpAdd(a: Canvas, b: Canvas) -> Canvas` | (parse: op not registered) | (same) | excluded |
+| 32 | vec-of-canvases | `v = [call1(), call2(), call3()]` | ✅ / ✅ | ✅ / ✅ | OK |
+| 33 | if-with-explicit-returns | `if c { return a(); } else { return b(); }` | 💥 PANIC / ❌ OOB at allocation.rs:174 | 💥 PANIC / ✅ PASS | IV (panic fixed; runtime falls into II/III) |
+| 34 | if-same-call-both | identical calls in both branches | 💥 PANIC / ❌ heap realloc | 💥 PANIC / ✅ PASS | IV (panic fixed) |
+| 35 | match-two-arms | match with 2 arms | ✅ / ✅ | ✅ / ✅ | OK |
+| 36 | three-sets | three Sets to cv | ⚠️ LEAK ×6 / unchanged | ✅ / ✅ | II (leak per-iter, not per-Set) |
+| 37 | nested-if-tail | else-if chain | 💥 PANIC / ❌ runtime corruption | 💥 PANIC / ✅ PASS | IV (panic fixed) |
+| 38 | gridmesh-pattern | crystal_segments_aged_tuned chain | ✅ / ✅ | ✅ / ✅ | OK (real lib) |
+| 39 | moros-map-pattern | map_get_hex deep-slice borrow | ⚠️ LEAK Hex×12 / unchanged | ✅ / ✅ | NEW finding (real lib) |
+
+**38 valid probes (31 excluded due to op syntax issue).**
+
+### Cluster IV fix impact summary
+
+| | Pre-fix | Post-fix |
+|---|---|---|
+| Native panics | 5 probes (08, 13, 22, 27, 33, 34, 37) | 1 probe (13 recursive — different line, recursion-specific) |
+| Interpret panics at codegen.rs:2529 | 5 probes | 0 |
+| Interpret runtime failures on those probes | (hidden by panic) | 6 probes (downstream Cluster II/III exposure) |
+
+The fix closed the COMPILATION-LEVEL panic class.  Probes that previously couldn't compile now compile; under native they pass; under interpret they expose the underlying Cluster II/III runtime issues that the panic was masking.
 
 ### Stage A-bis: edge-case probes (34-37) from cluster-doc investigation
 

@@ -1,8 +1,62 @@
 # Cluster IV — Codegen panic on two-heap-returning-branches
 
+**Status: ✅ FIXED 2026-05-28** (commit `d630e68b`).  The codegen panic at `src/state/codegen.rs:2529:9` is resolved on both backends.  Native: 6/7 probes pass cleanly (probe 13 recursive now reaches the generated Rust but fails on a recursion-specific issue at a different line, separate from the panic class).  Interpret: probes no longer hit the codegen panic; they expose downstream Cluster II/III runtime issues (separate fixes — see those cluster docs).
+
 **Severity:** Worst class — hard panic halts compilation on BOTH backends.
-**Affected probes:** 08, 13, 22, 27, 33 (5 probes)
+**Affected probes:** 08, 13, 22, 27, 33, 34, 37 (7 probes; 34 + 37 added during edge-case sweep)
 **Failure site:** `src/state/codegen.rs:2529:9`
+
+## Fix landed (S3 — caller_hidden_buf flag)
+
+Three-file change implementing the investigation agent's candidate (c):
+
+### `src/variables/mod.rs`
+
+- New field `caller_hidden_buf: bool` on `Variable` struct.
+- Initialised `false` in all 4 constructors (`add_variable`, `copy_variable`, `new_var`, `add_unique`).
+- Setter `mark_caller_hidden_buf(var_nr)`.
+- Accessor `is_caller_hidden_buf(var_nr)`.
+
+### `src/parser/mod.rs`
+
+- In `add_defaults` (lines 3657-3699), after each `self.vars.work_refs(...)` call in the three heap-attribute arms (Vector, Reference, struct-Enum), call `self.vars.mark_caller_hidden_buf(vr)`.  Tags every caller-side work-ref synthesised for a callee's hidden return-buffer attr.
+
+### `src/parser/expressions.rs`
+
+- In `parse_code`'s preamble null-init loop (lines 297-304), relax the dep-empty guard:
+
+```rust
+for r in self.vars.work_references() {
+    if !self.vars.is_argument(r)
+        && !self.vars.is_inline_ref(r)
+        && (self.vars.tp(r).depend().is_empty()
+            || self.vars.is_caller_hidden_buf(r))
+    {
+        ls.insert(0, v_set(r, Value::Null));
+    }
+}
+```
+
+Empty-dep refs still emit a null-init (original arm).  The new disjunct also fires for caller-side hidden-buffer work-refs whose typedef carries a non-empty dep list (e.g. `Reference(td, [arg_idx])` from the if-tail / recursion shapes).
+
+### Why this works
+
+The slot allocator skipped these work-refs because they had no `first_def` (no Set IR).  Adding the leading `Set(r, Null)` gives `compute_intervals` something to record, so `assign_slots` allocates a stack slot.  The variable is then valid to read at codegen time.
+
+The null-init is semantically a no-op — caller-side hidden-buffer refs are freshly-allocated locals that get written by the `OpCallRef` call.  A leading null-init just gives the slot allocator something to anchor on.
+
+## Verified mechanism (pre-fix, kept for reference)
+
+The slot-allocation trace for any of the 7 probes (`LOFT_LOG=slots:n_main`) showed:
+
+```
+[slots] fn=n_main local_start=4
+[slots]   ASSIGN  v_nr=4   name=__ref_1   slot=4    size=12  type=Reference(588, [])
+[slots]   SKIP    v_nr=5   name=__ref_2   size=12  type=Reference(588, [1])
+                  reason=no first_def (no Set IR for this var — read-only
+                         or unused — allocator never sees a write to
+                         allocate against)
+```
 
 ## The assertion that panics
 

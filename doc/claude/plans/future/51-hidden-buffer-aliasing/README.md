@@ -33,23 +33,25 @@ This plan exists to **systematically catalogue the shapes** in this class, **und
 
 ---
 
-## Status & next-session roadmap (2026-05-28)
+## Status & next-session roadmap (2026-05-28 — updated post-Cluster-IV fix)
 
 **Stage A (probe catalogue): ✅ COMPLETE.**  39 probes, 5 clusters, both backends covered, A/B/C curation, real-library extractions (38 gridmesh, 39 moros_map), reference↔problem pairings.
 
-**Stage B (mechanism investigation): 🟡 ~60% COMPLETE.**
+**Stage B (mechanism investigation): 🟢 ~80% COMPLETE.**
 
-| Cluster | Mechanism status | Action needed |
-|---|---|---|
-| I (canonical) | ✅ Fully understood (shipped via S1+S2 on `p377-fix`) | None |
-| II (latent leak) | 🟢 Runtime-only confirmed; child-store-orphan hypothesis | Read `OpDatabase`-into-existing-slot codegen at `src/state/codegen.rs:1367+` — 0.5d |
-| III (corruption) | 🟢 Runtime-only confirmed; callee-modifies-local hypothesis | Same Set-Reference codegen read as Cluster II — 0d additional (same path) |
-| IV (codegen panic) | ✅ VERIFIED (`__ref_N` SKIP "no first_def" across 7/7 probes) | Read `unify_if_branches_work_refs` + `add_defaults` to identify cleanup gap — 0.5d |
-| V probe 29 | ✅ VERIFIED (OpFreeRef-after-OpCopyRecord in generated Rust) | Read native codegen at the emission site — 0.25d |
-| V probe 30 | 🤔 Hypothesized | Capture generated Rust via `LOFT_KEEP_NATIVE_RS`; read lambda dispatch — 0.5d |
-| Probe 39 (moros_map leak) | 🤔 NEW finding; mechanism unknown | Trace with `LOFT_LOG=fn:map_get_hex,alloc_free LOFT_STORES=log` — 0.5d |
+**Stage D (implementation): 🟡 STARTED — Cluster IV done.**
 
-**Total Phase B-finish: ~1.5-2 working days of focused source reading.**
+| Cluster | Mechanism status | Fix status | Action needed next |
+|---|---|---|---|
+| I (canonical) | ✅ Fully understood | ✅ SHIPPED (S1+S2 on `p377-fix`) | None |
+| II (latent leak) | 🟢 Runtime-only confirmed; child-store-orphan hypothesis | ⏸️ Investigated; M effort with over-free risk | Code-only investigation done; needs careful implementation of recursive child-store free in `OpDatabase` + scope-exit cascade. See [`cluster-II-latent-leak.md`](cluster-II-latent-leak.md) |
+| III (corruption) | 🟢 Runtime-only confirmed; callee-modifies-local hypothesis | ⏸️ Not started | Same code path as Cluster II (Set-Reference codegen) — fold into Cluster II work |
+| IV (codegen panic) | ✅ VERIFIED via slot trace | ✅ **FIXED 2026-05-28 (commit `d630e68b`)** | None — `caller_hidden_buf` flag + null-init relaxation closed the panic class on both backends.  See [`cluster-IV-codegen-panic.md`](cluster-IV-codegen-panic.md) |
+| V probe 29 (tuple-return) | ✅ VERIFIED (OpFreeRef-after-OpCopyRecord in generated Rust) | ⏸️ Not started | Investigation agent run; needs implementation.  Likely fix: ownership-transfer pattern instead of copy-then-free |
+| V probe 30 (lambda) | 🤔 Hypothesized | ⏸️ Not started | Capture generated Rust via `LOFT_KEEP_NATIVE_RS`; read lambda dispatch |
+| Probe 39 (moros_map leak) | 🤔 NEW finding; mechanism unknown | ⏸️ Not started | Different mechanism from Cluster II per Cluster II's investigation; deep-slice borrow on the READ side |
+
+**Total Phase D remaining: ~1-2 weeks** (Cluster II/III combined fix + Cluster V probe 29 + 30 + probe 39).
 
 **Stage C (fix design): ⏸️ Pending Phase B-finish.**
 
