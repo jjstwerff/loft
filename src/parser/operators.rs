@@ -1454,6 +1454,15 @@ struct WarnCtx {
     /// When a fault op uses `Var(v)` as its index AND `v` ∈ this set, we
     /// skip the warning (skip pattern 3).
     iter_vars: std::collections::HashSet<u16>,
+    /// `(idx_var, vec_var)` pairs proven safe by an enclosing
+    /// `if idx_var < len(vec_var) { ... }` guard.  Pushed on entry to
+    /// the `then` block, popped on exit.  Skip pattern 5.
+    guarded_pairs: Vec<(u16, u16)>,
+    /// Map from local-var slot → vec-var slot when the local was bound
+    /// via `n = len(vec)`.  Skip pattern 5 with `if i < n { v[i] }` then
+    /// becomes equivalent to `if i < len(v) { v[i] }` via the lookup.
+    /// Populated when walking `Value::Set(local, Call(len, [Var(vec)]))`.
+    len_captures: std::collections::HashMap<u16, u16>,
     /// Position of the innermost enclosing `Value::Span` — used as the
     /// fault site's source location when we emit a warning.
     last_pos: Option<Position>,
@@ -1589,11 +1598,30 @@ impl Parser {
             }
             Value::If(cond, then_b, else_b) => {
                 self.walk_for_warnings(cond, ctx);
+                // Skip pattern 5 — recognise `if idx < len(vec) { ... }` and
+                // `if idx < n { ... }` (where `n` is a captured `len(vec)`),
+                // and push (idx_var, vec_var) onto the guarded-pairs stack so
+                // indexing inside `then_b` is treated as safe.
+                let pushed =
+                    guard_pair_with_ctx(cond.unspan(), &self.data, Some(&ctx.len_captures));
+                if let Some(pair) = pushed {
+                    ctx.guarded_pairs.push(pair);
+                }
                 self.walk_for_warnings(then_b, ctx);
+                if pushed.is_some() {
+                    ctx.guarded_pairs.pop();
+                }
                 self.walk_for_warnings(else_b, ctx);
             }
-            Value::Set(_, src)
-            | Value::Return(src)
+            Value::Set(local_var, src) => {
+                // Skip-pattern 5 capture — `n = len(vec)` registers `n` as
+                // "the length of vec" for later `if i < n { v[i] }` proofs.
+                if let Some(vec_var) = len_capture_target(src.unspan(), &self.data) {
+                    ctx.len_captures.insert(*local_var, vec_var);
+                }
+                self.walk_for_warnings(src, ctx);
+            }
+            Value::Return(src)
             | Value::Drop(src)
             | Value::BreakWith(_, src)
             | Value::Yield(src)
@@ -1721,8 +1749,119 @@ fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx, data: &Data) ->
             // struct field, a parameter, or a call result is NOT bounded
             // here and still warns (the genuine "could be OOB from data"
             // case).
-            index_loop_bounded(idx, ctx, data)
+            if index_loop_bounded(idx, ctx, data) {
+                return true;
+            }
+            // Skip pattern 5 — `if idx_var < len(vec_var) { ... v[idx_var] ... }`.
+            // When an enclosing If's condition proves `idx < len(vec)`, the
+            // walker has pushed `(idx_var, vec_var)` onto `guarded_pairs`.
+            // Match the indexing's vec arg (first arg) + idx arg (last arg)
+            // against any pushed pair; if both are bare `Var(_)` references
+            // to a guarded pair, the index is safe.
+            // Skip pattern 5 — `if idx_var < len(vec_var)` proves any
+            // indexing `vec_var[expr]` where `expr` is loop/literal/guarded-var
+            // arithmetic over the guard's idx_var.  Strip casts on the idx.
+            if let Some(first) = args.first()
+                && let Value::Var(vec_var) = first.unspan()
+            {
+                let unwrapped = unwrap_cond(idx, data);
+                if let Value::Var(idx_var) = unwrapped
+                    && ctx
+                        .guarded_pairs
+                        .iter()
+                        .any(|(i, v)| i == idx_var && v == vec_var)
+                {
+                    return true;
+                }
+            }
+            false
         }
+    }
+}
+
+/// Recognise `idx_var < len(vec_var)` (canonical bounds check).
+/// Returns `Some((idx_var, vec_var))` on a match, `None` otherwise.
+/// Skip pattern 5 in `is_easy_proof` consults the resulting pair via
+/// `WarnCtx::guarded_pairs`.
+/// Recognise `if idx_var < len(vec_var) { ... }` (or
+/// `if idx_var < n { ... }` where `n` was captured by `n = len(vec_var)`),
+/// returning `(idx_var, vec_var)` on a match.  Skip pattern 5's entry
+/// point for the If walker — pushed onto `WarnCtx::guarded_pairs` for
+/// the duration of the then-block.
+fn guard_pair_with_ctx(
+    v: &Value,
+    data: &Data,
+    captures: Option<&std::collections::HashMap<u16, u16>>,
+) -> Option<(u16, u16)> {
+    let inner = unwrap_cond(v, data);
+    let Value::Call(def_nr, args) = inner else {
+        return None;
+    };
+    let raw = data.def(*def_nr).original_name();
+    let name = raw.strip_suffix("Nullable").unwrap_or(raw.as_str());
+    if name != "LtInt" || args.len() != 2 {
+        return None;
+    }
+    let Value::Var(idx_var) = args[0].unspan() else {
+        return None;
+    };
+    // RHS can be either `len(<vec>)` inline OR a bare Var that was
+    // captured earlier as `<local> = len(<vec>)`.
+    let rhs = args[1].unspan();
+    let vec_var = match rhs {
+        Value::Call(len_def, len_args) => {
+            let len_raw = data.def(*len_def).original_name();
+            let len_name = len_raw.strip_suffix("Nullable").unwrap_or(len_raw.as_str());
+            if !matches!(len_name, "len" | "LengthVector") || len_args.len() != 1 {
+                return None;
+            }
+            let Value::Var(v) = len_args[0].unspan() else {
+                return None;
+            };
+            *v
+        }
+        Value::Var(n) => {
+            let caps = captures?;
+            *caps.get(n)?
+        }
+        _ => return None,
+    };
+    Some((*idx_var, vec_var))
+}
+
+/// True when `src` is a `len(<Var>)` call — used to recognise the
+/// `<local> = len(<vec>)` capture pattern.  Returns the vec var-id.
+fn len_capture_target(src: &Value, data: &Data) -> Option<u16> {
+    let Value::Call(def_nr, args) = src.unspan() else {
+        return None;
+    };
+    let raw = data.def(*def_nr).original_name();
+    let name = raw.strip_suffix("Nullable").unwrap_or(raw.as_str());
+    if !matches!(name, "len" | "LengthVector") || args.len() != 1 {
+        return None;
+    }
+    let Value::Var(v) = args[0].unspan() else {
+        return None;
+    };
+    Some(*v)
+}
+
+/// Strip `ConvBoolFromInt` / `ConvIntFromInt` casts from a condition
+/// expression so the underlying comparison call is reachable.
+fn unwrap_cond<'a>(v: &'a Value, data: &Data) -> &'a Value {
+    let mut cur = v.unspan();
+    loop {
+        let Value::Call(def_nr, args) = cur else {
+            return cur;
+        };
+        if args.len() != 1 {
+            return cur;
+        }
+        let raw = data.def(*def_nr).original_name();
+        if !raw.starts_with("Conv") {
+            return cur;
+        }
+        cur = args[0].unspan();
     }
 }
 

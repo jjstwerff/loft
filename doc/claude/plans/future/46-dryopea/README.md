@@ -5,7 +5,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLAN46 — dryopea: sci-fi free-build / tower-defence game
 
-**Status:** Future (design drafted 2026-05-21; no code). Depends on
+**Status:** **STALLED 2026-05-28** — development paused along with
+moros and bumper-airplanes ([@PLAN50<!--noindex-->](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes))
+until the cross-project library structure is clear.  Three consumers
+share substantial library surface (see
+[lib_plans/12-library-extraction § Cross-project consumers](../../../lib_plans/12-library-extraction/README.md#cross-project-consumers--moros--dryopea--bumper-airplanes));
+picking up consumer work before the shared libraries are factored
+guarantees rework.  Resume when the user lifts the stall — Phase 7p
+(cross-cutting renames + `lib_plans/NN-physics-2body` +
+`lib_plans/NN-particles` slot designs) is the strong signal.
+
+Original status: Future (design drafted 2026-05-21; no code). Depends on
 [lib-plan 20 terrain height-map](../../../lib_plans/future/20-terrain-heightmap/README.md)
 + [lib-plan 19 gridmesh](../../../lib_plans/19-gridmesh/README.md) Phase C.
 **Likely the FIRST real consumer of both** — it validates the

@@ -204,14 +204,18 @@ loft-libs-core   (no chunk deps — leaves of the graph)
   │           ↑                 reuses 2D collision / mesh — verify in 7a)
   ├── loft-libs-net        (crypto / arguments from core)
   ├── moros                depends on graphics + world (+ maybe net)
-  └── dryopea              depends on world
+  ├── dryopea              depends on world + net + (eventual) physics_2body
+  └── bumper-airplanes     depends on world + graphics + net + physics_2body
+                            (loads dryopea-authored MapFiles via world)
 ```
 
 Phase ordering this imposes: core publishes first (everything depends
 on it); graphics + net are independent and can interleave; world (6w)
-needs core + Phase 7a complete; moros (7b) needs graphics + world.
+needs core + Phase 7a complete; moros (7b) needs graphics + world +
+the cross-cutting renames/extractions of Phase 7p (see README.md).
 **Open verification (Phase 1):** does post-7a `world` need `gridmesh`
-from graphics?  Does `moros` need `net` for multiplayer demos?
+from graphics?  Does `moros` need `net` for multiplayer demos?  Three-
+project shared-library matrix in [README.md § Cross-project consumers](README.md#cross-project-consumers--moros--dryopea--bumper-airplanes).
 
 ## Store-allocating cdylib pattern (random's showcase)
 
@@ -260,6 +264,18 @@ chunk's packages and the skip-lists travel as the chunk's own
 `prebuilt/<target>/`) are a PKG.REG follow-on, out of scope for the
 first extraction round (chunks build from source at install time).
 
+### Tests that do NOT key off `lib/<pkg>/tests/*.loft`
+
+The four gates above cover every loft-side test that lives in
+`lib/<name>/tests/`.  Some monorepo Rust harnesses drive library
+code outside that pattern (PNG-tolerance compare, subprocess
+multiplayer orchestration); these need a separate home before
+extraction completes — see [README.md § Phase 6t](README.md#phase-6t--library-test-self-sufficiency).
+The library-side counterpart for a Rust harness is
+`lib/<name>/native/tests/<harness>.rs`, run by the chunk's CI via
+`cd lib/<name>/native && cargo test --release` (added as a new step
+in `library-ci.yml` when a library has a `native/tests/` directory).
+
 ## Per-chunk extraction template
 
 Each chunk extracts in **two stages with a gate between them**: the
@@ -288,9 +304,17 @@ the root:
 
 1. Verify every package has `loft.toml` + passes both gates in-tree;
    note its `*_NATIVE_SKIP` / leak-allowlist entries (they travel).
+   If the library has monorepo Rust-harness coverage (today:
+   `graphics`, `game_protocol`, `server`, `web`), confirm Phase 6t
+   has moved that coverage into `lib/<name>/native/tests/` (or a
+   chunk-level `tests-integration/` workspace member) — extraction
+   without it ships a library that the loft repo could regress
+   silently.
 2. Create the external repo.
 3. Drop in the CI workflow (copy `library-ci.yml` + `chunk-skips.toml`
-   from `loft-libs-core`).
+   from `loft-libs-core`).  If any library in the chunk has a
+   `native/tests/` directory (or the chunk has `tests-integration/`),
+   add a CI step that runs `cargo test --release` over those.
 4. Push library content preserving history (`git filter-repo` /
    `subtree split`).
 5. **Verify chunk CI green on its own** — the "finished and tested"

@@ -938,7 +938,7 @@ fn t_6vector_join(stores: &mut Stores, mut var_self: DbRef, mut var_jn_sep: &str
   } /*block_1: text["jn_result"]*/
 
 fn n_valid_path(stores: &mut Stores, mut var_path: &str) -> bool { //block_1: boolean
-  cr_call_push("valid_path", "/home/lima.guest/loft/default/02_images.loft", 160);
+  cr_call_push("valid_path", "/home/lima.guest/loft/default/02_files.loft", 160);
   let _call_guard = codegen_runtime::CallGuard;
   let mut var_depth: i32 = 0_i32;
   let mut var_start: i32 = 0_i32;
@@ -987,7 +987,7 @@ fn n_valid_path(stores: &mut Stores, mut var_path: &str) -> bool { //block_1: bo
   } /*block_1: boolean*/
 
 fn n_file(stores: &mut Stores, mut var_path: &str, mut var_result: DbRef) -> DbRef { //block_1: ref(File)["result"]
-  cr_call_push("file", "/home/lima.guest/loft/default/02_images.loft", 188);
+  cr_call_push("file", "/home/lima.guest/loft/default/02_files.loft", 188);
   let _call_guard = codegen_runtime::CallGuard;
   var_result = OpDatabase(stores, var_result, 27_i32);
   {{let db = (var_result); let s_val = (var_path).to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_int(db.rec, db.pos + (24_i32) as u32, s_pos as i32);}};
@@ -1005,7 +1005,7 @@ fn n_file(stores: &mut Stores, mut var_path: &str, mut var_result: DbRef) -> DbR
   } /*block_1: ref(File)["result"]*/
 
 fn n_exists(stores: &mut Stores, mut var_path: &str) -> bool { //block_1: boolean
-  cr_call_push("exists", "/home/lima.guest/loft/default/02_images.loft", 200);
+  cr_call_push("exists", "/home/lima.guest/loft/default/02_files.loft", 200);
   let _call_guard = codegen_runtime::CallGuard;
   let mut var___lift_1: DbRef = DbRef { store_nr: u16::MAX, rec: 0, pos: 8 };
   let mut var___ref_1: DbRef = stores.null_named("var___ref_1");
@@ -1023,7 +1023,7 @@ fn t_4File_exists(stores: &mut Stores, mut var_both: DbRef) -> bool { //block_1:
   } /*block_1: boolean*/
 
 fn n_delete(stores: &mut Stores, mut var_path: &str) -> u8 { //block_1: FileResult
-  cr_call_push("delete", "/home/lima.guest/loft/default/02_images.loft", 212);
+  cr_call_push("delete", "/home/lima.guest/loft/default/02_files.loft", 212);
   let _call_guard = codegen_runtime::CallGuard;
   if !(n_exists(stores, var_path)) { //block_2: never
     return 2_u8
@@ -1035,7 +1035,7 @@ fn n_delete(stores: &mut Stores, mut var_path: &str) -> u8 { //block_1: FileResu
   } /*block_1: FileResult*/
 
 fn n_move(stores: &mut Stores, mut var_from: &str, mut var_to: &str) -> u8 { //block_1: FileResult
-  cr_call_push("move", "/home/lima.guest/loft/default/02_images.loft", 221);
+  cr_call_push("move", "/home/lima.guest/loft/default/02_files.loft", 221);
   let _call_guard = codegen_runtime::CallGuard;
   if if !(n_valid_path(stores, var_to)) {true} else {!(n_valid_path(stores, var_from))} { //block_2: never
     return 2_u8
@@ -1053,7 +1053,7 @@ fn n_move(stores: &mut Stores, mut var_from: &str, mut var_to: &str) -> u8 { //b
   } /*block_1: FileResult*/
 
 fn n_mkdir(stores: &mut Stores, mut var_path: &str) -> u8 { //block_1: FileResult
-  cr_call_push("mkdir", "/home/lima.guest/loft/default/02_images.loft", 231);
+  cr_call_push("mkdir", "/home/lima.guest/loft/default/02_files.loft", 231);
   let _call_guard = codegen_runtime::CallGuard;
   if !(n_valid_path(stores, var_path)) { //block_2: never
     return 2_u8
@@ -1065,7 +1065,7 @@ fn n_mkdir(stores: &mut Stores, mut var_path: &str) -> u8 { //block_1: FileResul
   } /*block_1: FileResult*/
 
 fn n_mkdir_all(stores: &mut Stores, mut var_path: &str) -> u8 { //block_1: FileResult
-  cr_call_push("mkdir_all", "/home/lima.guest/loft/default/02_images.loft", 239);
+  cr_call_push("mkdir_all", "/home/lima.guest/loft/default/02_files.loft", 239);
   let _call_guard = codegen_runtime::CallGuard;
   if !(n_valid_path(stores, var_path)) { //block_2: never
     return 2_u8

@@ -29,7 +29,7 @@ Files with a `00-` prefix are excluded from page generation. `doc/00-vs-rust.htm
 
 Parsed by `src/gendoc.rs`, rendered by `src/documentation.rs`.
 
-Reads `default/01_code.loft`, `default/02_images.loft`, `default/03_text.loft`. Public declarations (`pub fn`, `pub struct`, `pub enum`) and their preceding `//` doc comments are extracted and grouped by `// --- Section Name ---` headers. Functions show only the signature; structs and enums include the full body.
+Reads `default/01_code.loft`, `default/02_files.loft`, `default/03_text.loft`. Public declarations (`pub fn`, `pub struct`, `pub enum`) and their preceding `//` doc comments are extracted and grouped by `// --- Section Name ---` headers. Functions show only the signature; structs and enums include the full body.
 
 Each section becomes its own file: `doc/stdlib-types.html`, `doc/stdlib-math.html`, `doc/stdlib-text.html`, `doc/stdlib-collections.html`, `doc/stdlib-output-and-diagnostics.html`, `doc/stdlib-file-system.html`, `doc/stdlib-environment.html`.
 

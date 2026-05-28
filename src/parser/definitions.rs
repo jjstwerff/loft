@@ -466,7 +466,7 @@ impl Parser {
         // every level — same definition kind, same UPPER_CASE check,
         // same code path — so the keyword is purely an explicitness
         // signal at the declaration site (matches the in-fn `const`
-        // syntax and lib/wall.loft's existing usage).
+        // syntax and lib/world/src/wall.loft's existing usage).
         let _explicit_const = self.lexer.has_keyword("const");
         if let Some(id) = self.lexer.has_identifier() {
             // Optional `: type` annotation between the identifier and `=`.

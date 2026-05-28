@@ -1489,6 +1489,73 @@ fee:**
   $99/yr is the *only* recurring cost in the whole picture, and only for
   iOS distribution.
 
+**Verification path — Simulator + golden images (added 2026-05-28):**
+
+iOS verification reuses the existing 3-tier golden-image infrastructure
+rather than building anything new:
+
+- **`tests/gold/`** — software-canvas exact bit-compare.  `gold-*.loft`
+  examples produce PNG via the pure-Rust rasterizer (`Canvas`,
+  `fill_rect`, `draw_text` via `fontdue`) + `save_png`; tests check
+  byte-equality against checked-in goldens.
+- **`tests/golden/`** — desktop GL framebuffer capture under Xvfb.
+  `loft_gl_screenshot` (`lib/graphics/native/src/lib.rs:1231`) +
+  ImageMagick `compare -metric AE` for fuzzy pixel-count tolerance.
+  Wired via `Makefile:test-gl-golden`.
+- **`scripts/browser/golden/`** — WASM→WebGL in headless Chromium,
+  Python PIL diff.  Drives `scripts/browser/run_golden.sh` (capture /
+  check / update modes).
+
+Mapping to iOS, staged:
+
+- **Phase 1 — software-canvas golds (free, no iOS-native GPU work
+  needed):** port `gold-pixels` / `gold-rect` / `gold-blend` /
+  `gold-text` / `gold-line` to an Xcode test target that runs each
+  `.loft` under loft-on-iOS-Simulator and bit-compares the produced PNG
+  to `tests/gold/*.png`.  Same Rust rasterizer → byte-identical output
+  on aarch64-apple-ios.  **Proves the static-link iOS runtime build
+  path before any GPU backend exists** — the right first iOS test to
+  wire up.
+- **Phase 2 — GL/Metal golds (after the wgpu/Metal Renderer lands):**
+  mirror `Makefile:test-gl-golden` with per-platform tolerance
+  constants.  Pixel-exact comparison WILL NOT survive an Apple-GPU vs
+  Mesa/llvmpipe swap; the `compare -metric AE` (mismatched-pixel count
+  with a budget) discipline already used on Linux ports directly.
+  Expect ~50–200 px AE budget on iOS vs the Linux baseline.
+- **Phase 3 — WebGL-in-webview golds (parallel with the webview iOS
+  shell):** point `scripts/browser/run_golden.sh` at `WKWebView` on the
+  Simulator.  On Apple-Silicon Macs the Simulator uses the host Metal,
+  so this is effectively a free re-run of the browser gold against
+  WebKit (different rasterizer than Chromium → needs its own baseline,
+  but the diff machinery is identical).
+
+**Simulator capability boundary — what it CAN and CANNOT verify:**
+
+- **Sufficient for CI:** single-tap / swipe / drag / long-press
+  (mouse → `UITouch` translation is accurate enough that handlers see
+  real `UITouch` event objects with phases, timestamps, and locations
+  matching device hardware), two-finger gestures (Option-drag for
+  pinch/rotate/two-finger-pan), full `XCUITest` scripted flows
+  (`.tap()`, `.swipeLeft()`, `.press(forDuration:thenDragTo:)`,
+  `.twoFingerTap()`), golden PNG capture.  Brick-Buster-class games
+  drive end-to-end here; a GitHub Actions iOS CI gate is viable today.
+- **NOT sufficient — real-device pass required:** 3+ simultaneous
+  touches (Simulator caps at 2), 3D Touch / Apple Pencil pressure /
+  tilt, haptics (Taptic Engine — `UIImpactFeedbackGenerator` calls
+  succeed silently in Simulator), touch latency (Simulator runs in the
+  host loop, materially faster than a real device's ~80 ms
+  touch-to-display — fast-twitch games feel snappier than they will on
+  hardware), touch precision (mouse cursor is pixel-perfect, a
+  fingertip is ~40–60 px with occlusion + palm rejection), GPU thermal
+  throttling, memory pressure, battery drain.
+
+So the Simulator covers *correctness* end-to-end (event plumbing →
+gold PNG → scripted game-flow assertion) but cannot answer ergonomics
+questions ("is this playable with a thumb?", "does the haptic feel
+right?", "does it stay above 60 fps under sustained load?").  Those
+need a one-time bring-your-own-device validation, free with a personal
+Apple ID (7-day signing limit on sideloaded builds).
+
 ---
 
 ## Rust integration notes

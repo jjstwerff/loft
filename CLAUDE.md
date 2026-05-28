@@ -181,7 +181,7 @@ src/main.rs              CLI entry; loads default/ then user file
 
 ```
 default/01_code.loft    — operators, math, text, collections
-default/02_images.loft  — Image, Pixel, File, Format types
+default/02_files.loft   — File I/O, Format, EnvVariable, path helpers
 default/03_text.loft    — text utilities
 ```
 

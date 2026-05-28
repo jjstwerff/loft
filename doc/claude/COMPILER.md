@@ -547,7 +547,7 @@ resolves to a local variable of `Type::Function`; if so, it emits `Value::CallRe
 args)` instead of `Value::Call`. `generate_call_ref` in `state.rs` pushes the arguments,
 computes `fn_var_dist = stack.position - var.stack_pos`, and emits
 `OpCallRef | fn_var_dist: u16 | arg_size: u16` (op_code 252, declared in
-`default/02_images.loft`). At runtime, `fn_call_ref` reads the `d_nr` from the variable,
+`default/02_files.loft`). At runtime, `fn_call_ref` reads the `d_nr` from the variable,
 looks it up in `fn_positions: Vec<u32>` (populated at the start of each execute call), and
 dispatches via `fn_call`.
 
@@ -891,7 +891,7 @@ The default library is loaded before any user source. It is parsed with `default
 
 Files are loaded in alphabetical order:
 - `01_code.loft` — all operators and standard functions
-- `02_images.loft` — image, file, pixel types
+- `02_files.loft` — file I/O, `Format`, `EnvVariable`, path helpers
 - `03_text.loft` — text utility functions
 
 ---

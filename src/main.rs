@@ -167,6 +167,19 @@ fn print_help() {
     println!("                                run the binary (skips @EXPECT_FAIL tests)");
     println!("  --no-warnings                 suppress warnings (in run mode and --tests output)");
     println!(
+        "  --deny-warnings               under --tests/`loft test`, fail any file with an
+                                unexpected warning.  LOFT_DENY_WARNINGS=1 as env equivalent.
+                                Used by extracted library chunks' CI to lock in cleanliness."
+    );
+    println!(
+        "  --deps[=direct|=transitive]   under `loft test`, also run `loft test` in every
+                                dependency directory listed in loft.toml.  Default is
+                                =transitive; =direct walks only first-level deps.  Reads
+                                path-form deps `{{ path = \"...\" }}`; registry-version deps
+                                require a loft.lock (T4 follow-up).  Returns non-zero if
+                                the host project's tests OR any dep's tests fail."
+    );
+    println!(
         "  --check                       parse and compile only; report errors without running
                                 can be combined with --native to also verify rustc compilation"
     );
@@ -243,6 +256,106 @@ fn handle_generate_log_config(path_opt: Option<&str>) {
 ///
 /// Reads loft.toml from `pkg_path`, copies src/*.loft and loft.toml to
 /// the user's library directory.  The package is then available via `use <name>;`.
+/// Phase 6t Tier 4 — walk the current project's dep tree and invoke
+/// `loft test` in each dep's directory.  Direct mode walks only
+/// `manifest.dependencies` of the cwd; transitive mode recurses into
+/// every walked dep's own `loft.toml`.  Returns 1 if any dep failed,
+/// 0 otherwise.
+///
+/// Today this resolves PATH dependencies only (manifest `{ path = ".." }`
+/// form).  Registry-installed deps live at
+/// `~/.loft/registry/<id>-<version>/` but their version lookup needs the
+/// lockfile loader, which is the T4 follow-up (per lib_plans/12 Phase
+/// 6t Tier 4 step T4); without a lockfile, registry-version deps fall
+/// through silently.
+fn run_dep_tests(transitive: bool, native_mode: bool) -> i32 {
+    use std::collections::{HashSet, VecDeque};
+    use std::path::PathBuf;
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let loft_bin = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("loft"));
+
+    // Resolve a dep name + value to a directory.  Path deps win; we
+    // ignore version-only registry refs for now (T4 follow-up).
+    fn resolve_dep(name: &str, value: &str, from_pkg: &std::path::Path) -> Option<PathBuf> {
+        if let Some(p) = crate::manifest::extract_path_dep(value) {
+            let candidate = from_pkg.join(p);
+            if candidate.join("loft.toml").exists() {
+                return Some(candidate.canonicalize().unwrap_or(candidate));
+            }
+        }
+        // Fallback — sibling directory: from_pkg/../<name>/loft.toml.
+        let sibling = from_pkg.join("..").join(name);
+        if sibling.join("loft.toml").exists() {
+            return Some(sibling.canonicalize().unwrap_or(sibling));
+        }
+        None
+    }
+
+    let mut queue: VecDeque<PathBuf> = VecDeque::new();
+    queue.push_back(cwd.clone());
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut total_fail: i32 = 0;
+    let mut tested = 0usize;
+
+    while let Some(pkg) = queue.pop_front() {
+        if !visited.insert(pkg.clone()) {
+            continue;
+        }
+        let manifest_path = pkg.join("loft.toml");
+        let Some(manifest) = crate::manifest::read_manifest(manifest_path.to_str().unwrap_or(""))
+        else {
+            continue;
+        };
+        for (dep_name, dep_value) in &manifest.dependencies {
+            let Some(dep_dir) = resolve_dep(dep_name, dep_value, &pkg) else {
+                if pkg == cwd {
+                    eprintln!(
+                        "  --deps: skipping {dep_name} (no path-dep; registry resolution not yet wired)"
+                    );
+                }
+                continue;
+            };
+            if visited.contains(&dep_dir) {
+                continue;
+            }
+            if dep_dir.join("tests").is_dir() {
+                tested += 1;
+                let mut cmd = std::process::Command::new(&loft_bin);
+                cmd.arg("test").current_dir(&dep_dir);
+                if native_mode {
+                    cmd.arg("--native");
+                }
+                // Suppress warnings inside deps unless the user opts in
+                // via LOFT_DENY_WARNINGS_DEPS=1 — the consumer should
+                // not be blocked by lint debt inside a dep they don't
+                // own.  (Errors still surface via exit code.)
+                cmd.arg("--no-warnings");
+                let label = dep_dir
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| dep_name.clone());
+                println!("  --deps: testing {label}");
+                let status = cmd.status();
+                let ok = status.as_ref().map(|s| s.success()).unwrap_or(false);
+                if !ok {
+                    eprintln!("  --deps: FAILED {label}");
+                    total_fail += 1;
+                }
+            }
+            if transitive {
+                queue.push_back(dep_dir);
+            }
+        }
+    }
+
+    if tested > 0 {
+        println!("  --deps: {tested} dep(s) tested, {total_fail} failed");
+    } else {
+        println!("  --deps: no deps with tests/ directory found");
+    }
+    i32::from(total_fail > 0)
+}
+
 fn install_package(pkg_path: &std::path::Path) {
     let manifest_file = pkg_path.join("loft.toml");
     if !manifest_file.exists() {
@@ -1401,7 +1514,12 @@ fn main() {
     let mut introspect_all_fns = false;
     let mut native_lib_paths: Vec<String> = Vec::new();
     let mut no_warnings = false;
+    let mut deny_warnings = false;
     let mut check_only = false;
+    // Phase 6t Tier 4 — `--deps[=direct|=transitive]` walks the current
+    // project's dep tree and runs `loft test` in each dep.  None = off,
+    // Direct = only manifest.dependencies, Transitive = also deps-of-deps.
+    let mut test_deps: Option<&'static str> = None;
     let mut user_args: Vec<String> = Vec::new();
 
     while i < argv.len() {
@@ -1585,17 +1703,19 @@ fn main() {
             });
         } else if a == "--tests" {
             // Optional directory/file: consume next non-flag arg.
-            // Skip --native/--no-warnings that may appear between --tests and the path.
+            // Skip --native/--no-warnings/--deny-warnings that may appear between --tests and the path.
             let mut path = ".".to_string();
             while argv
                 .get(i)
-                .is_some_and(|s| s == "--native" || s == "--no-warnings")
+                .is_some_and(|s| s == "--native" || s == "--no-warnings" || s == "--deny-warnings")
             {
                 if argv[i] == "--native" {
                     // LibCI: opt into native test compilation (matches --help).
                     native_requested = true;
                 } else if argv[i] == "--no-warnings" {
                     no_warnings = true;
+                } else if argv[i] == "--deny-warnings" {
+                    deny_warnings = true;
                 }
                 i += 1;
             }
@@ -1611,6 +1731,19 @@ fn main() {
             }
         } else if a == "--no-warnings" {
             no_warnings = true;
+        } else if a == "--deps" {
+            test_deps = Some("transitive");
+        } else if a == "--deps=direct" {
+            test_deps = Some("direct");
+        } else if a == "--deps=transitive" {
+            test_deps = Some("transitive");
+        } else if a == "--deny-warnings" {
+            // Lib CI gate: any Warning-level diagnostic on the run becomes
+            // a non-zero exit, just like a parse error.  Used by extracted
+            // library chunk CIs to prevent regression of clean libraries.
+            // Defaults off so existing consumers are unaffected.
+            // Env equivalent: LOFT_DENY_WARNINGS=1
+            deny_warnings = true;
         } else if a == "--timeout" {
             // @PLAN49 T3 — `--timeout <secs>` arms the watchdog.  The
             // graceful T2 fault (when shipped) fires at `<secs>`; the
@@ -1971,16 +2104,35 @@ fn main() {
         // default.  300s is far longer than any single test's compile+run,
         // short enough to catch a true infinite loop.
         crate::timeout::arm(300, crate::timeout::env_grace_secs());
+        // Env-var equivalent so external CI doesn't need to thread the flag
+        // through `loft test` invocations buried in shell loops.
+        let deny_warnings = deny_warnings
+            || std::env::var("LOFT_DENY_WARNINGS")
+                .map(|v| !v.is_empty() && v != "0")
+                .unwrap_or(false);
         let exit_code = run_tests(
             &dir,
             test_dir,
             no_warnings,
+            deny_warnings,
             &lib_dirs,
             project.as_deref(),
             native_mode,
             &native_lib_paths,
         );
-        std::process::exit(exit_code);
+        // Phase 6t Tier 4 — `loft test --deps` walks the current
+        // project's transitive (or direct) dep tree and runs `loft test`
+        // in each dep's directory.  Failures are reported per-dep; the
+        // process exits non-zero if any dep failed OR if the host
+        // project's own tests failed.
+        let final_code = if let Some(mode) = test_deps {
+            let transitive = mode == "transitive";
+            let dep_fail = run_dep_tests(transitive, native_mode);
+            i32::from(exit_code != 0 || dep_fail != 0)
+        } else {
+            exit_code
+        };
+        std::process::exit(final_code);
     }
 
     if file_name.is_empty() {

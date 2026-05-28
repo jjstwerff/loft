@@ -1,8 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @ARGS: --lib lib
-//
 // gridmesh C3 — CrystalIncr two-level reuse.  Validates the FULL-BUILD path:
 //   1. crystal_incr_full_mesh(crystal_incr_new(snap)) produces the SAME SET of
 //      segments as the C1 golden crystal_segments_aged_tuned (same chunk dials).
@@ -101,7 +99,7 @@ fn test_c3_incremental_equals_golden() {
   n = 40 * 40;
   i = 0;
   while i < n {
-    for b in 0..50 {
+    for _b in 0..50 {
       if i < n {
         crystal_incr_paint(inc, snap.xs[i] ?? 0, snap.ys[i] ?? 0, snap.colors[i] ?? 0);
         i = i + 1;

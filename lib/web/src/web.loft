@@ -6,8 +6,8 @@
 
 // The result of an HTTP request.
 pub struct HttpResponse {
-  status: integer,
-  body: text,
+  status:  integer not null,
+  body:    text,
   headers: vector<text>      // each entry "name: value" (name lowercased);
                              // repeated headers (e.g. multiple Set-Cookie)
                              // are separate entries
@@ -287,6 +287,7 @@ pub fn send_binary(self: WsHandler, msg: text) -> boolean {
 // handler.  Use after a successful read to decide whether to
 // interpret the payload as utf-8 text or as a binary blob.
 pub fn last_opcode(self: WsHandler) -> integer {
+  _ = self;  // method-call surface; opcode lives in thread-local state
   ws_client_opcode_native()
 }
 
@@ -420,6 +421,7 @@ pub fn ws_group() -> WsGroup {
 
 // Add a handler to the group.
 pub fn add(self: WsGroup, h: WsHandler) {
+  _ = self;  // group is process-singleton; method-call surface only
   ws_group_add_native(h.id);
 }
 
@@ -427,6 +429,7 @@ pub fn add(self: WsGroup, h: WsHandler) {
 // handle >= 0 and the message if one is ready; handle == -1
 // means nothing is available right now.
 pub fn poll(self: WsGroup) -> WsGroupEvent {
+  _ = self;  // group is process-singleton; method-call surface only
   h = ws_group_poll_native();
   if h < 0 {
     return WsGroupEvent { handle: -1, message: "" };

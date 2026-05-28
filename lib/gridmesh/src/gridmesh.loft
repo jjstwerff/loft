@@ -60,7 +60,7 @@ pub fn step_x(x: integer, y: integer, d: integer, k: integer) -> integer {
   p2 = r2 - (r2 / 2) * 2; if p2 < 0 { p2 = p2 + 2; }
   q2 + (r2 - p2) / 2
 }
-pub fn step_y(x: integer, y: integer, d: integer, k: integer) -> integer {
+pub fn step_y(_x: integer, y: integer, d: integer, k: integer) -> integer {
   y + k * axial_dr(d)
 }
 
@@ -193,7 +193,8 @@ pub struct ChunkField {
   chunk_shift: integer,                // chunk = coord >> chunk_shift (5 = 32×32)
   halo_k:      integer,                // halo radius (border-dirty propagation)
   dirty:       hash<ChunkKey[ck]>,     // WIRED-IN dirty-chunk index (keyed set; dedup)
-  buckets:     hash<ChunkBucket[ck]>,  // WIRED-IN chunk -> owned cell indices,
+  buckets:     hash<ChunkBucket[ck]> not null,
+                                       // WIRED-IN chunk -> owned cell indices,
                                        // maintained incrementally so dirty-chunk
                                        // extraction is O(dirty), not a re-scan.
 }

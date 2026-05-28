@@ -530,7 +530,7 @@ Extra: `format_single`, `format_stack_single`, `format_float`, `format_stack_flo
 `static_call`, `create_stack`, `get_stack_text`, `get_stack_ref`, `set_stack_ref`, `append_stack_text`, `append_stack_character`, `clear_stack_text`
 
 ### Callable fn-refs (op_code 232)
-`call_ref` — `OpCallRef(fn_var_dist: u16, arg_size: u16)`. Reads the `d_nr` stored at the fn-ref variable's stack position (via `get_var(fn_var_dist)`), looks it up in `State::fn_positions`, and dispatches via `fn_call`. Declared in `default/02_images.loft` to avoid renumbering the file-I/O operators in `01_code.loft`.
+`call_ref` — `OpCallRef(fn_var_dist: u16, arg_size: u16)`. Reads the `d_nr` stored at the fn-ref variable's stack position (via `get_var(fn_var_dist)`), looks it up in `State::fn_positions`, and dispatches via `fn_call`. Declared in `default/02_files.loft` to avoid renumbering the file-I/O operators in `01_code.loft`.
 
 `fn_positions: Vec<u32>` on `State` — maps each definition index to its bytecode entry point. Populated at the start of each `execute_argv` / `execute_log` call from `data.definitions`.
 

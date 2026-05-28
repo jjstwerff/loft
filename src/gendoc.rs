@@ -34,7 +34,7 @@ fn main() -> std::io::Result<()> {
     let version = env!("CARGO_PKG_VERSION");
     let files = [
         "default/01_code.loft",
-        "default/02_images.loft",
+        "default/02_files.loft",
         "default/03_text.loft",
     ];
 
