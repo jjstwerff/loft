@@ -26,7 +26,7 @@
 //! **Return-value exemption:** the variable holding the function's return value
 //! (`ret_var`) is never freed — its value is consumed by the caller.
 
-use crate::data::{Block, Context, Data, DefType, Type, Value, v_set};
+use crate::data::{Block, Context, Data, DefType, Type, Value, v_if, v_set};
 use crate::variables::{Function, assign_slots, compute_intervals, size};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -1035,6 +1035,52 @@ impl Scopes {
             result.extend(pre_ops);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Tuple(new_elems))));
+            return result;
+        } else if is_return
+            && !expr_is_terminal
+            && matches!(
+                tp,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            )
+            && matches!(expr.unspan(), Value::If(c, _, _)
+                if matches!(c.unspan(), Value::Insert(ops)
+                    if ops.first().is_some_and(|o| matches!(o,
+                        Value::Set(v, _) if function.name(*v).starts_with("__lift_")))))
+        {
+            // @P378(b) — a heap-returning tail `If` whose CONDITION lifted a
+            // ref-temp (`__lift_N = call()`; the branches were not unified to a
+            // shared work-ref, so `ret_var == u16::MAX`) and which has frees to
+            // run before returning.  The fall-through (below) inserts the If as
+            // a discarded statement + `Return(Null)`: interpret reads the value
+            // off eval-stack-top, but native returns the null DbRef sentinel
+            // (keys.rs:251 OOB in the caller).  A `Set(var, If)` save-to-temp
+            // does NOT work (native voids the if/else branches → E0308); only
+            // `Return(If(...))` value-emits them.  So PRESERVE the Return(If):
+            // pull the condition's lift-preamble out, evaluate the boolean to a
+            // value-typed temp, run the frees (the lift's OpFreeRef), then
+            // `Return(If(Var(cond_tmp), t, f))` — the if/else stays the Return's
+            // value-expression and the lift is freed before (not after) it.
+            let Value::If(cond, t, f) = expr.unspan().clone() else {
+                unreachable!()
+            };
+            let mut result = Vec::new();
+            // split `Insert([__lift = …, …, bool_expr])` into preamble + bool.
+            let bool_expr = if let Value::Insert(ops) = cond.unspan() {
+                let mut ops = ops.clone();
+                let last = ops.pop().expect("non-empty condition Insert");
+                result.extend(ops);
+                last
+            } else {
+                (*cond).clone()
+            };
+            self.ret_temp_counter += 1;
+            let cname = format!("__cond_{}", self.ret_temp_counter);
+            let cond_tmp = function.add_temp_var(&cname, &Type::Boolean);
+            self.var_scope.insert(cond_tmp, self.scope);
+            self.var_order.push(cond_tmp);
+            result.push(v_set(cond_tmp, bool_expr));
+            result.extend(ls);
+            result.push(Value::Return(Box::new(v_if(Value::Var(cond_tmp), *t, *f))));
             return result;
         } else {
             ls.insert(0, expr.clone());
