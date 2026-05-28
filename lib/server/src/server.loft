@@ -124,6 +124,7 @@ pub fn next(self: Server) -> Request {
 }
 
 pub fn respond(self: Request, status: integer, body: text) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   tcp_respond(status, body);
 }
 
@@ -131,29 +132,35 @@ pub fn respond(self: Request, status: integer, body: text) {
 // close the connection.  Use for HTML / CSS / JSON / WASM payloads;
 // `respond` defaults to `text/plain`.
 pub fn respond_typed(self: Request, status: integer, body: text, content_type: text) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   tcp_respond_typed(status, body, content_type);
 }
 
 // Convenience wrappers for the common cases TTT v3 needs.
 pub fn respond_html(self: Request, body: text) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   tcp_respond_typed(200, body, "text/html; charset=utf-8");
 }
 
 pub fn respond_css(self: Request, body: text) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   tcp_respond_typed(200, body, "text/css; charset=utf-8");
 }
 
 pub fn respond_js(self: Request, body: text) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   tcp_respond_typed(200, body, "application/javascript; charset=utf-8");
 }
 
 pub fn respond_loft(self: Request, body: text) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   // No registered MIME for loft source; text/plain reads cleanly in a
   // browser tab and matches what `curl` / fetch consumers expect.
   tcp_respond_typed(200, body, "text/plain; charset=utf-8");
 }
 
 pub fn respond_404(self: Request) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   tcp_respond(404, "Not Found");
 }
 
@@ -189,6 +196,7 @@ pub fn send_binary(self: WebSocket, msg: text) -> boolean {
 // Use after `next` to decide whether to interpret the payload
 // as utf-8 text or as a binary blob.
 pub fn last_opcode(self: WebSocket) -> integer {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   ws_opcode_native()
 }
 
@@ -325,17 +333,21 @@ pub fn poll_event(self: Server) -> WsEvent {
 // Reply to the HTTP request currently parked by a `http` WsEvent and
 // close it.  Call exactly once from the handler for an `ev.http` event.
 pub fn respond_html(self: Server, body: text) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   tcp_respond_typed(200, body, "text/html; charset=utf-8");
 }
 pub fn respond_typed(self: Server, status: integer, body: text, content_type: text) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   tcp_respond_typed(status, body, content_type);
 }
 pub fn respond_404(self: Server) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   tcp_respond_typed(404, "Not Found", "text/plain; charset=utf-8");
 }
 
 // Send a frame to a specific client.  Returns true on success.
 pub fn send_to(self: Server, client_id: integer, msg: text) -> boolean {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   ws_send_native(client_id, msg)
 }
 
@@ -348,5 +360,6 @@ pub fn broadcast(self: Server, msg: text) -> integer {
 // Forcefully close one client's connection.  The slot is freed
 // for reuse by future accepts.
 pub fn disconnect(self: Server, client_id: integer) {
+  _ = self;  // method-call surface; body uses tcp_* thread-local state
   ws_close_native(client_id);
 }
