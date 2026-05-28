@@ -72,6 +72,22 @@ struct Scopes {
     /// runtime store-nr check) instead of the unconditional `OpFreeRef`
     /// — see the comment block around `scan_set`'s witness-pairing branch.
     paired_witness: HashMap<u16, u16>,
+    /// @P378(a) — INVERSE of `paired_witness` for the case where the
+    /// witness `v` is INNER-scoped relative to the `__ref_N` buffer
+    /// `av` (e.g. `bs = alloc_bag(ci, __ref_1)` inside a `for` loop,
+    /// where `bs` lives in the loop body and `__ref_1` is the
+    /// function-scoped return buffer).  Here the buffer must stay
+    /// reserved across iterations; freeing the witness each iteration
+    /// (it adopts the buffer's store) would recycle that store to a
+    /// callee temp next iteration and collide (SIGSEGV at the keyed
+    /// insert).  Maps witness `v` → buffer `av`; consulted by
+    /// `get_free_vars` to emit `OpFreeRefIfDistinct(v, av)` for the
+    /// witness's free — a no-op in the adoption case (store stays
+    /// reserved, freed once via the buffer's function-exit OpFreeRef),
+    /// a real free in the fresh-store case.  Scope-safe for native:
+    /// `av` (outer/function) outlives `v` (inner), so `av`'s Rust
+    /// `let` is still live where `v`'s free fires.
+    witness_buffer: HashMap<u16, u16>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -94,6 +110,7 @@ pub fn check(data: &mut Data) {
             lift_vars: Vec::new(),
             ret_temp_counter: 0,
             paired_witness: HashMap::new(),
+            witness_buffer: HashMap::new(),
         };
         let mut function = Function::copy(&data.def(d_nr).variables);
         for a in function.arguments() {
@@ -662,6 +679,26 @@ impl Scopes {
                             let v_scope = self.var_scope.get(&v).copied().unwrap_or(u16::MAX);
                             if v_scope <= av_scope && v_scope != u16::MAX {
                                 self.paired_witness.entry(av).or_insert(v);
+                            } else if v_scope != u16::MAX
+                                && av_scope != u16::MAX
+                                && v_scope > av_scope
+                            {
+                                // @P378(a) — witness `v` is INNER-scoped (e.g.
+                                // a loop body) while the `__ref_N` buffer `av`
+                                // is OUTER (function).  The buffer is reserved
+                                // once but `v` (which adopts the buffer's
+                                // store) is freed every iteration; that frees
+                                // the buffer's store, which `find_free_slot`
+                                // then recycles to a callee temp next
+                                // iteration — two OpDatabase targets collide on
+                                // one record (self-referential keyed insert →
+                                // SIGSEGV).  Make `v`'s per-iteration free
+                                // conditional on NOT aliasing the buffer:
+                                // adoption → skip (store stays reserved, freed
+                                // once by the buffer's function-exit OpFreeRef);
+                                // fresh-store → real free.  Scope-safe for
+                                // native because `av` (outer) outlives `v`.
+                                self.witness_buffer.entry(v).or_insert(av);
                             }
                         }
                     }
@@ -1252,6 +1289,16 @@ impl Scopes {
                         ls.push(Value::Call(
                             data.def_nr("OpFreeRefIfDistinct"),
                             vec![Value::Var(v), Value::Var(witness)],
+                        ));
+                    } else if let Some(&buffer) = self.witness_buffer.get(&v) {
+                        // @P378(a) — `v` is an inner-scoped witness whose store
+                        // is the outer `__ref_N` buffer (adoption).  Skip the
+                        // per-iteration free when they still alias so the
+                        // buffer stays reserved across iterations; the buffer's
+                        // own function-exit OpFreeRef releases it once.
+                        ls.push(Value::Call(
+                            data.def_nr("OpFreeRefIfDistinct"),
+                            vec![Value::Var(v), Value::Var(buffer)],
                         ));
                     } else {
                         ls.push(call("OpFreeRef", v, data));
