@@ -344,14 +344,92 @@ impl State {
             "fn_call_ref: d_nr={d_nr} out of range (fn_positions.len={})",
             self.fn_positions.len()
         );
+        // PLAN51 V-c interp — when the callee was promoted by `ref_return`
+        // (parser/control.rs:3175) it has hidden Reference / Vector /
+        // struct-Enum attribute(s) appended to its signature, but the
+        // bytecode call site (codegen.rs:2489 generate_call_ref) emits
+        // only the user-visible args (the parser's CallRef IR omits
+        // hidden bufs because injecting them at IR-level conflicts with
+        // the native dispatch's per-candidate handling at emit.rs:670-686
+        // and breaks Flat-struct lambdas whose return doesn't engage
+        // ref_return).  Reconcile here by pushing one EMPTY allocated
+        // DbRef per hidden attr (via `stores.null()`) onto the eval
+        // stack.  The callee's body either:
+        //   (a) reassigns the slot via OpDatabase (struct literal /
+        //       nested call) — OpDatabase's `clear + claim` reuses our
+        //       allocated store; no leak.
+        //   (b) uses the slot directly (vector body's
+        //       `pre_alloc_vector`) — needs a real store_nr; we
+        //       provided one.
+        // We use `null()` (size=u32::MAX dynamic marker) so both shapes
+        // work uniformly.  Sentinel (`store_nr=u16::MAX`) is NOT safe
+        // here: bytecode VM's OpDatabase at src/state/io.rs:708 calls
+        // `clear(db)` unconditionally → OOB on u16::MAX (allocation.rs:421).
+        let mut hidden_bufs_size: u16 = 0;
+        if !self.data_ptr.is_null() {
+            // SAFETY: data_ptr is set in execute_argv and valid throughout
+            // execution; same pattern as the call-stack snapshot path
+            // earlier in this file (line ~375) and drop_text_locals_in_bytes.
+            let data = unsafe { &*self.data_ptr };
+            let attr_count = data.def(d_nr as u32).attributes.len();
+            for a_idx in 0..attr_count {
+                let attr = &data.def(d_nr as u32).attributes[a_idx];
+                if !attr.hidden {
+                    continue;
+                }
+                let buf = match &attr.typedef {
+                    crate::data::Type::Reference(_, _)
+                    | crate::data::Type::Enum(_, true, _) => {
+                        // For struct returns, the body's `cv = Type{...}`
+                        // OpDatabase reuses the slot (clear + claim).
+                        // `null()` provides a real slot with rec=0 — the
+                        // claim succeeds and sets rec=1.
+                        self.database.null()
+                    }
+                    crate::data::Type::Vector(elm_tp, _) => {
+                        // Vector body's `v = []` does NOT OpDatabase var_v;
+                        // it expects rec != 0 (else pre_alloc_vector is a
+                        // no-op, leaving the vector empty — probe 59 INT
+                        // would read seq[0] as null).  Allocate a fresh
+                        // store with a properly-claimed vector record.
+                        let elm_name = elm_tp.name(data);
+                        let tp_name = format!("main_vector<{elm_name}>");
+                        let tp_id = self.database.name(&tp_name);
+                        if tp_id != u16::MAX {
+                            let sz = u32::from(self.database.size(tp_id));
+                            let r = self.database.database(sz);
+                            self.database.allocations[r.store_nr as usize]
+                                .known_type = tp_id;
+                            self.database
+                                .store_mut(&r)
+                                .set_u32_raw(r.rec, 4, u32::from(tp_id));
+                            self.database.set_default_value(tp_id, &r);
+                            r
+                        } else {
+                            self.database.null()
+                        }
+                    }
+                    _ => continue,
+                };
+                self.put_stack(buf);
+                hidden_bufs_size += 12;
+            }
+        }
         // Read closure DbRef from bytes 8..20 of the fn-ref slot.
         // fn_var is distance from fn_ref slot START to TOS; slot+8 = TOS-(fn_var-8).
-        let closure = *self.get_var::<DbRef>(fn_var - 8);
+        // NOTE: read closure BEFORE pushing hidden bufs above would have
+        // worked too, but we read it AFTER so the hidden-buf inserts
+        // don't shift our reference points; fn_var is computed against
+        // the PRE-call TOS, so reading it after any put_stack would use
+        // the wrong offset.  The hidden-buf pushes above DO shift TOS,
+        // so we must read closure AFTER them but compute its offset
+        // against the shifted TOS.  Adjust fn_var by hidden_bufs_size.
+        let closure = *self.get_var::<DbRef>(fn_var + hidden_bufs_size - 8);
         let has_closure = closure.rec != 0;
         if has_closure {
             self.put_stack(closure);
         }
-        let total = arg_size + if has_closure { 12 } else { 0 };
+        let total = arg_size + hidden_bufs_size + if has_closure { 12 } else { 0 };
         let code_pos = i64::from(self.fn_positions[d_nr]);
         self.fn_call(d_nr as u32, total, code_pos);
     }
