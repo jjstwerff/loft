@@ -51,7 +51,7 @@ fn main() {
   assert(px.b >= 0 and px.b <= 255, "b in range");
 
   // Read a pixel at (x=128, y=128) — the center.
-  center = img.data[128 * img.width + 128];
+  center = img.data[128 * img.width + 128] ?? Pixel{r: 0, g: 0, b: 0};
   assert(center.r >= 0, "center pixel r valid");
 
   // ## Scanning Pixels
