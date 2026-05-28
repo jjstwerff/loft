@@ -304,30 +304,12 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    // @P380 — `93-vector-advanced.loft` accumulates vector-store heap
-    // corruption across its many functions on the harness's shared `State`:
-    // `test_merge_sort` (recursive vector-returning merge-sort) SIGSEGVs when
-    // run AFTER the earlier vector functions (it runs fine in isolation), and
-    // `test_format_object` has a failed assertion (line 66).  Both were masked
-    // by the pre-@P369 silent-fault harness (an early fault's lingering
-    // runtime_error short-circuited every later function, so the crashing one
-    // never ran).  @P369 surfaces them; the file is skipped via the dedicated
-    // `#[ignore]` wrapper `vector_advanced_known_broken` until @P380 is fixed.
-    HashSet::from(["93-vector-advanced.loft"])
-}
-
-/// @P380 — known-broken: shared-state heap corruption (SIGSEGV in
-/// `test_merge_sort`) + a failed assertion (`test_format_object`).  `#[ignore]`
-/// so it's not run by default; remove from `ignored_scripts()` when @P380 lands.
-#[test]
-#[ignore = "@P380 — shared-state vector heap corruption SIGSEGV"]
-fn vector_advanced_known_broken() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(
-        PathBuf::from("tests/scripts/93-vector-advanced.loft"),
-        false,
-        false,
-    )
+    // @P380 FIXED 2026-05-28 — `93-vector-advanced.loft` now runs clean in the
+    // shared-State suite (it was SIGSEGVing in `test_vector_of_vectors` on the
+    // `vector<vector<single>>` build, and `test_format_object` had a stale
+    // `sizeof 8` expectation — both fixed), so it's no longer skipped.  Keep
+    // this hook for the next known-broken script.
+    HashSet::new()
 }
 
 /// Part B leak gate — script/doc files with KNOWN, pre-existing store leaks at
