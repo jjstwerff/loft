@@ -235,6 +235,16 @@ impl Stores {
         t_nr: usize,
         in_progress: &mut HashSet<usize>,
     ) {
+        if std::env::var("LOFT_TRACE_FINISH").is_ok()
+            && self.types[t_nr].name.starts_with("__tuple<")
+        {
+            eprintln!(
+                "[finish_type] ENTER t_nr={t_nr} name={} size_before={} groups_before={}",
+                self.types[t_nr].name,
+                self.types[t_nr].size,
+                self.types[t_nr].field_groups.len(),
+            );
+        }
         if !matches!(
             self.types[t_nr].parts,
             Parts::Struct(_) | Parts::Enum(_) | Parts::EnumValue(_, _)
@@ -347,6 +357,15 @@ impl Stores {
             }
             self.types[t_nr].size = size;
             self.types[t_nr].align = alignment;
+        }
+        if std::env::var("LOFT_TRACE_FINISH").is_ok() {
+            eprintln!(
+                "[finish_type] t_nr={t_nr} name={} size={} align={} groups={}",
+                self.types[t_nr].name,
+                self.types[t_nr].size,
+                self.types[t_nr].align,
+                self.types[t_nr].field_groups.len(),
+            );
         }
     }
 
@@ -1139,6 +1158,31 @@ impl Stores {
             .push(Type::new(&name, Parts::Index(content, key_nrs, left), 4));
         self.names.insert(name, num);
         num
+    }
+
+    /// Register a Tuple LinkedFieldGroup on `tp` whose members are the
+    /// attribute indices `members` (in element order).  Used by the native
+    /// codegen's `init()` emission to mirror the parse-time propagation in
+    /// `typedef.rs::fill_database` (line 567-570) — the generated runtime
+    /// would otherwise rebuild the tuple type WITHOUT its group metadata
+    /// and `finish_type` would fall back to the simple alignment-descending
+    /// packer, producing positions/size that diverge from the compile-side
+    /// layout the IR was emitted against (PLAN51 Cluster V-a).
+    ///
+    /// `alignment` / `size` placeholders are recomputed by `finish_type`
+    /// from member storage widths (see `groups_descriptor` construction
+    /// at lines 304-322); the stored values on `LinkedFieldGroup` are
+    /// never read by the storage-layout routine.
+    pub fn add_tuple_group(&mut self, tp: u16, members: &[u16]) {
+        self.types[tp as usize]
+            .field_groups
+            .push(crate::data::LinkedFieldGroup {
+                kind: crate::data::LinkedFieldKind::Tuple,
+                instance: 0,
+                field_indices: members.to_vec(),
+                alignment: 0,
+                size: 0,
+            });
     }
 
     pub(super) fn key_name(&mut self, content: u16, key: &[(u16, bool)], name: &mut String) {

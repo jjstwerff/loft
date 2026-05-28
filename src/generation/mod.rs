@@ -1498,6 +1498,27 @@ extern crate loft;"
                     bare_emitted,
                 )?;
             }
+            // PLAN51 Cluster V-a — re-register the synthetic tuple's
+            // LinkedFieldGroup at runtime.  The parser side propagates
+            // it in `typedef.rs::fill_database` (line 567-570); without
+            // this mirror call, the generated binary's `init()` rebuilds
+            // the tuple Type with empty `field_groups`, `finish_type`
+            // falls back to the simple alignment-descending packer, and
+            // tuple field positions/size diverge from what the compile-
+            // side IR was generated against.  Probes 29, 41, 44, 45,
+            // 48, 50 in the PLAN51 probe suite cover the failure modes.
+            if let Some(group) = self.data.def(dnr).tuple_group() {
+                let idx_list = group
+                    .field_indices
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writeln!(
+                    w,
+                    "    db.add_tuple_group(t{type_id}, &[{idx_list}]);"
+                )?;
+            }
         }
         Ok(())
     }

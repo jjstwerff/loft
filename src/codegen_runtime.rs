@@ -504,6 +504,12 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
     let free_source = raw_tp & 0x8000 != 0;
     let tp = raw_tp & 0x7FFF;
     let size = u32::from(stores.size(tp));
+    if std::env::var("LOFT_TRACE_COPY").is_ok() {
+        eprintln!(
+            "[copy] OpCopyRecord src=#{}@{},{} dst=#{}@{},{} tp={tp} size={size} free_src={free_source}",
+            data.store_nr, data.rec, data.pos, to.store_nr, to.rec, to.pos,
+        );
+    }
     stores.remove_claims(&to, tp);
     stores.copy_block(&data, &to, size);
     stores.copy_claims(&data, &to, tp);
