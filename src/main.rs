@@ -167,6 +167,11 @@ fn print_help() {
     println!("                                run the binary (skips @EXPECT_FAIL tests)");
     println!("  --no-warnings                 suppress warnings (in run mode and --tests output)");
     println!(
+        "  --deny-warnings               under --tests/`loft test`, fail any file with an
+                                unexpected warning.  LOFT_DENY_WARNINGS=1 as env equivalent.
+                                Used by extracted library chunks' CI to lock in cleanliness."
+    );
+    println!(
         "  --check                       parse and compile only; report errors without running
                                 can be combined with --native to also verify rustc compilation"
     );
@@ -1401,6 +1406,7 @@ fn main() {
     let mut introspect_all_fns = false;
     let mut native_lib_paths: Vec<String> = Vec::new();
     let mut no_warnings = false;
+    let mut deny_warnings = false;
     let mut check_only = false;
     let mut user_args: Vec<String> = Vec::new();
 
@@ -1585,17 +1591,18 @@ fn main() {
             });
         } else if a == "--tests" {
             // Optional directory/file: consume next non-flag arg.
-            // Skip --native/--no-warnings that may appear between --tests and the path.
+            // Skip --native/--no-warnings/--deny-warnings that may appear between --tests and the path.
             let mut path = ".".to_string();
-            while argv
-                .get(i)
-                .is_some_and(|s| s == "--native" || s == "--no-warnings")
-            {
+            while argv.get(i).is_some_and(|s| {
+                s == "--native" || s == "--no-warnings" || s == "--deny-warnings"
+            }) {
                 if argv[i] == "--native" {
                     // LibCI: opt into native test compilation (matches --help).
                     native_requested = true;
                 } else if argv[i] == "--no-warnings" {
                     no_warnings = true;
+                } else if argv[i] == "--deny-warnings" {
+                    deny_warnings = true;
                 }
                 i += 1;
             }
@@ -1611,6 +1618,13 @@ fn main() {
             }
         } else if a == "--no-warnings" {
             no_warnings = true;
+        } else if a == "--deny-warnings" {
+            // Lib CI gate: any Warning-level diagnostic on the run becomes
+            // a non-zero exit, just like a parse error.  Used by extracted
+            // library chunk CIs to prevent regression of clean libraries.
+            // Defaults off so existing consumers are unaffected.
+            // Env equivalent: LOFT_DENY_WARNINGS=1
+            deny_warnings = true;
         } else if a == "--timeout" {
             // @PLAN49 T3 — `--timeout <secs>` arms the watchdog.  The
             // graceful T2 fault (when shipped) fires at `<secs>`; the
@@ -1971,10 +1985,17 @@ fn main() {
         // default.  300s is far longer than any single test's compile+run,
         // short enough to catch a true infinite loop.
         crate::timeout::arm(300, crate::timeout::env_grace_secs());
+        // Env-var equivalent so external CI doesn't need to thread the flag
+        // through `loft test` invocations buried in shell loops.
+        let deny_warnings = deny_warnings
+            || std::env::var("LOFT_DENY_WARNINGS")
+                .map(|v| !v.is_empty() && v != "0")
+                .unwrap_or(false);
         let exit_code = run_tests(
             &dir,
             test_dir,
             no_warnings,
+            deny_warnings,
             &lib_dirs,
             project.as_deref(),
             native_mode,

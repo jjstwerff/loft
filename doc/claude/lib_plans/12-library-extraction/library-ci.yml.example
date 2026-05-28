@@ -1,0 +1,89 @@
+# Canonical library-ci.yml for extracted loft library chunk repos.
+#
+# Copy this file into <chunk-repo>/.github/workflows/library-ci.yml and:
+#   1. Replace the `package` matrix list below with the chunk's actual packages.
+#   2. Drop into the chunk's repo root (no other edits needed).
+#
+# Behaviour:
+#   - One job per package — a single-package failure names the package in the
+#     PR check list.
+#   - Builds loft from source (jjstwerff/loft main) and caches against the
+#     loft Cargo.lock SHA, so steady-state cost is `cargo build` no-op after
+#     first install.
+#   - `LOFT_DENY_WARNINGS=1` by default — warnings fail CI.  A package opts
+#     out temporarily by placing a `.allow_warnings` file at its root (visible
+#     in PRs; remove it once warnings are cleaned up).
+#   - Optional Rust integration test step fires only if the package has a
+#     `native/tests/*.rs` directory (Phase 6t Tier 2: graphics gold-image
+#     regression et al.).
+#
+# See doc/claude/lib_plans/12-library-extraction/README.md § Phase 6.5
+# for the design rationale.
+
+name: library-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # ── EDIT THIS LIST per chunk ────────────────────────────────
+        # loft-libs-core  → arguments, random, crypto
+        # loft-libs-net   → web, server, game_protocol
+        # loft-libs-graphics → graphics, imaging, gridmesh, shapes
+        package: [arguments, random, crypto]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mold (loft's pinned linker)
+        run: sudo apt-get update -y && sudo apt-get install -y mold
+
+      - name: Clone loft source
+        uses: actions/checkout@v4
+        with:
+          repository: jjstwerff/loft
+          path: loft-src
+
+      - name: Cache cargo registry + loft build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            loft-src/target
+          key: loft-${{ hashFiles('loft-src/Cargo.lock') }}
+          restore-keys: |
+            loft-
+
+      - name: Build loft from source
+        working-directory: loft-src
+        run: |
+          cargo build --release --bin loft
+          echo "$PWD/target/release" >> $GITHUB_PATH
+
+      - name: Interpreter — loft test
+        working-directory: ${{ matrix.package }}
+        env:
+          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
+        run: loft --interpret --tests tests
+
+      - name: Native — loft --native test
+        working-directory: ${{ matrix.package }}
+        env:
+          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
+        run: loft --native --tests tests
+
+      # Phase 6t Tier 2/3 home — only fires when the library carries
+      # Rust-side integration tests (graphics gold-image, multiplayer
+      # subprocess harnesses, etc.).  Libraries without native/tests/
+      # skip the step cleanly.
+      - name: Rust integration tests (if present)
+        working-directory: ${{ matrix.package }}/native
+        if: hashFiles(format('{0}/native/tests/*.rs', matrix.package)) != ''
+        run: cargo test --release

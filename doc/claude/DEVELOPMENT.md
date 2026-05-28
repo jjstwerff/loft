@@ -729,7 +729,7 @@ Verify: `make run-tests` still passes (documentation changes are non-functional)
 **Never add a new opcode if the problem can be solved by composing existing
 opcodes.**  New opcodes increase the `OPERATORS` array size, the opcode
 dispatch surface, and the maintenance burden in `fill.rs`, `codegen.rs`, and
-`02_images.loft`.
+`02_files.loft`.
 
 Before proposing a new opcode, check whether the compiler can emit a sequence
 of existing opcodes to achieve the same result.  For example, `insert(v, idx,

@@ -1,8 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @ARGS: --lib lib
-//
 // gridmesh C1 — the chunk-driven SegMesh `crystal_segments_aged` must
 // produce the SAME SET of segments as the legacy float `CrystalMesh` build
 // (`crystal_segments_aged_legacy`).  Chunking only REORDERS segments
@@ -35,7 +33,7 @@ fn segvalue(kind: integer, color: integer, cell_ix: integer,
     + qcoord(x1) * 11 + qcoord(y1) * 13 + qcoord(z1) * 17
 }
 
-fn main() {
+fn test_crystal_chunked_equals_legacy() {
   empty = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
   for side in [1, 3, 5, 8] {
     snap = build_block(side);
@@ -62,5 +60,4 @@ fn main() {
     assert(lsum == nsum, "side={side}: checksum sum new={nsum} legacy={lsum}");
     assert(lsq == nsq, "side={side}: checksum sumsq mismatch");
   }
-  print("p130 ok\n");
 }

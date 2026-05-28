@@ -366,8 +366,8 @@ bytes  4..16: closure     (DbRef, 12 bytes; null sentinel if no closure)
 |-----------|----------|------|
 | `gen_set_first_at_tos` | `codegen.rs:843-847` | Delegates to `gen_fn_ref_value` for Function vars |
 | `gen_fn_ref_value` | `codegen.rs:466-490` | Ensures every if-else branch produces 16B |
-| `OpVarFnRef` | `02_images.loft:350` | Push 16B fn-ref from frame variable |
-| `OpPutFnRef` | `02_images.loft:354` | Pop 16B fn-ref into frame variable |
+| `OpVarFnRef` | `02_files.loft:350` | Push 16B fn-ref from frame variable |
+| `OpPutFnRef` | `02_files.loft:354` | Pop 16B fn-ref into frame variable |
 | `OpNullRefSentinel` | `01_code.loft:733` | Pads non-capturing lambdas (4B d_nr → 16B) |
 | `fn_call_ref` | `state/mod.rs:221-249` | Reads d_nr at offset 0, closure at offset+4 |
 

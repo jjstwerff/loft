@@ -26,6 +26,7 @@ pub(crate) fn run_tests(
     default_dir: &str,
     root_dir: &str,
     no_warnings: bool,
+    deny_warnings: bool,
     lib_dirs: &[String],
     project: Option<&str>,
     native_mode: bool,
@@ -602,6 +603,22 @@ pub(crate) fn run_tests(
                 for w in &file_result.warnings {
                     println!("  {w}");
                 }
+            }
+            // --deny-warnings (lib-CI gate): any non-expected warning fails
+            // the file.  Errors and @EXPECT_WARNING / per-fn @EXPECT_WARNING
+            // suppress the gate — those warnings are intentional.
+            if deny_warnings
+                && !has_expect_warning
+                && !has_fn_warnings
+                && !file_result.warnings.is_empty()
+            {
+                println!(
+                    "  FAIL  {display_name}  (--deny-warnings: {} unexpected warning(s))",
+                    file_result.warnings.len()
+                );
+                dir_fail += 1;
+                total_files += 1;
+                continue;
             }
 
             // If the file has errors that were all expected (file-level or

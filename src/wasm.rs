@@ -615,8 +615,8 @@ const DEFAULT_FILES: &[(&str, &str)] = &[
         include_str!("../default/01_code.loft"),
     ),
     (
-        "default/02_images.loft",
-        include_str!("../default/02_images.loft"),
+        "default/02_files.loft",
+        include_str!("../default/02_files.loft"),
     ),
     (
         "default/03_text.loft",

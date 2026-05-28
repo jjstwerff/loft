@@ -834,7 +834,7 @@ generated file compiles inside the crate.
 
 ### Impact
 
-When a new opcode is added to `default/01_code.loft` or `default/02_images.loft`,
+When a new opcode is added to `default/01_code.loft` or `default/02_files.loft`,
 the developer must manually add the operator to `src/fill.rs` — find the right
 position in the OPERATORS array, write the function body, and update the array
 size constant.  This is error-prone (the T2-7 `mkdir` issue showed this).
@@ -904,7 +904,7 @@ fn iterate(s: &mut State) {
 This covers all 52 delegation operators and eliminates the last hand-written
 functions from fill.rs.
 
-**Files:** `default/01_code.loft`, `default/02_images.loft`, `src/create.rs`,
+**Files:** `default/01_code.loft`, `default/02_files.loft`, `src/create.rs`,
 `src/parser/definitions.rs` (parse the new annotation)
 **Effort:** Medium
 

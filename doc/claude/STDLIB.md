@@ -23,7 +23,7 @@ This document describes all public functions, constants, and types available in 
 
 Standard library functions fall into two implementation categories:
 
-- **Loft-implemented** — defined in `default/01_code.loft`, `default/02_images.loft`, or `default/03_text.loft` using the loft language itself. These have a normal function body.
+- **Loft-implemented** — defined in `default/01_code.loft`, `default/02_files.loft`, or `default/03_text.loft` using the loft language itself. These have a normal function body.
 - **Native (Rust)** — declared in the default library with a `#rust "..."` annotation and implemented as hand-written Rust functions in `src/native.rs`. These handle OS interaction and operations that cannot be expressed in loft (file I/O, environment variables, string classification, etc.).
 
 See [INTERNALS.md](INTERNALS.md) for the full list of native functions, their Rust names, and the naming convention (`n_<func>` for globals, `t_<N><Type>_<method>` for methods).

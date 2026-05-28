@@ -796,7 +796,7 @@ fn n_mtime(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 /// @PLAN38 phase 01b — interpreter handler for `store_durable_check`.
-/// Mirrors the `#rust` template in `default/02_images.loft`.
+/// Mirrors the `#rust` template in `default/02_files.loft`.
 #[cfg(feature = "mmap")]
 fn n_store_durable_check(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
@@ -805,7 +805,7 @@ fn n_store_durable_check(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 /// @PLAN38 phase 01b — interpreter handler for `store_durable_seal`.
-/// Mirrors the `#rust` template in `default/02_images.loft`.
+/// Mirrors the `#rust` template in `default/02_files.loft`.
 #[cfg(feature = "mmap")]
 fn n_store_durable_seal(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
@@ -817,7 +817,7 @@ fn n_store_durable_seal(stores: &mut Stores, stack: &mut DbRef) {
 /// path (text) + a reference (DbRef) and re-roots the slot containing
 /// the reference at the file path via mmap.  Returns `true` on success.
 /// See `Stores::bind_path` for the full semantics (fresh-file vs.
-/// existing-file modes) and `default/02_images.loft` for the loft
+/// existing-file modes) and `default/02_files.loft` for the loft
 /// surface.
 #[cfg(feature = "mmap")]
 fn n_store_persist_bind(stores: &mut Stores, stack: &mut DbRef) {

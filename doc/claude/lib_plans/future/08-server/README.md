@@ -1277,6 +1277,91 @@ which depends on the coroutine design (COROUTINE.md).
 
 ---
 
+### Gap 8 — Per-recipient broadcast QoS (sight + rate-LOD + forecast)
+
+Naïve "send the world state to every client every tick" scales as
+`O(N²)`: each tick costs N broadcasts of N peer poses.  At 30 Hz with
+20 audience-demo clients that's 12 000 frames/sec just for pose sync.
+[@PLAN50 bumper-airplanes](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes)
+proves out a substantially better pattern with three layered filters,
+all server-side, all driven by recipient-vs-peer spatial relationship:
+
+1. **Sight cutoff** — beyond `peer_sight_range` (default 80 m) a
+   peer's pose is not sent to this recipient at all.  Drops outbound
+   bandwidth proportional to map size vs. sight radius.
+2. **Three-tier rate-LOD** — within sight, distance-bucketed rate
+   (full / half / outer-factor) cuts another 3-4× on a typical
+   audience-demo player distribution.
+3. **Forecasts for discrete events** — bounces, hits, instant
+   reflections: server sends `(t_event, pos, vel_after)` ahead of
+   the event, client animates locally to hit `t_event` exactly on
+   its own wall clock.  Eliminates the "every viewer sees the bounce
+   at a slightly different time" artifact that pose interpolation
+   alone cannot fix.
+
+Dryopea's planned planet multiplayer + co-op base defence wants the
+same primitive; this is broadcast-throttling-by-distance, not an
+audience-demo-specific trick.
+
+**Where this belongs.**  The QoS layer is generic enough to live in
+`lib/server` as a reusable `BroadcastTopology` API:
+
+```loft
+// Per-recipient view: what should this client receive this tick?
+pub struct PeerView {
+  full_radius:    float,
+  half_radius:    float,
+  sight_range:    float,
+  outer_factor:   integer,   // every Nth tick at outer band
+  forecast_ahead_ms: integer,
+}
+
+// Server tracks `recipient -> (sample_position, PeerView)` and
+// `peer -> sample_position`; per tick, decides which (recipient,
+// peer) pairs get sent at this tick's modulo-position.
+pub fn broadcast_topology_tick(
+  topology:        &BroadcastTopology,
+  tick_idx:        integer,
+  payload_for:     fn(peer_id: integer) -> bytes,
+) -> vector<(recipient_id: integer, payload: bytes)>
+
+// Forecast hook: invoked by game logic when a discrete event will
+// happen at `t_event_ms` server-clock.  Topology delivers it to
+// every in-sight recipient immediately.
+pub fn broadcast_forecast(
+  topology:        &BroadcastTopology,
+  origin_pos:      Vec3,
+  t_event_ms:      integer,
+  payload:         bytes,
+)
+```
+
+The QoS tier-classification logic (Good / OK / Limited based on
+passive RTT/loss estimation from existing input-frame timestamps)
+is a Phase-7 layer in PLAN50; it should also live here as a
+configurable `PerPeerScaling` strategy rather than baked into the
+audience demo.
+
+**Why in `lib/server` and not `lib/game_protocol`:** the topology
+logic is transport-agnostic — it just decides "which (recipient,
+peer, tick) tuples broadcast this iteration."  game_protocol is the
+binary wire format; server is the broadcast engine.  Topology
+belongs where the broadcast pump lives.
+
+**Addition:** mostly loft; one new native symbol for monotonic
+timestamping if not already covered by `n_sleep_until_us`.
+
+```
+n_monotonic_now_ms  → integer (ms since process start, monotonic)
+```
+
+**Phase:** lands during the PLAN50 audience-demo build; reuse by
+dryopea is opportunistic.  Topology API + sight cutoff + static
+rate-LOD ship in `lib/server` first; per-peer tier classification
+is a follow-up once real venue playtest data exists.
+
+---
+
 ### Summary of additions
 
 | # | What | Where | Type |
@@ -1290,6 +1375,8 @@ which depends on the coroutine design (COROUTINE.md).
 | 5 | `n_wasm_load/call/has_export/unload` | native layer | new native symbols (4) |
 | 6 | `game_protocol` shared package | new repo | loft package |
 | 7 | Thread-sizing guidance | `server.loft` docs | documentation |
+| 8a | `BroadcastTopology` + sight + rate-LOD + forecast | `broadcast.loft` (new file) | loft |
+| 8b | `n_monotonic_now_ms` | native layer | new native symbol (if absent) |
 
 Updated native symbol table (additions marked **new**):
 
@@ -1317,5 +1404,7 @@ Updated native symbol table (additions marked **new**):
 | `n_wasm_unload` | **new** — release WASM module |
 | `n_sleep_until_us` | **new** — sleep until absolute microsecond timestamp |
 | `n_spawn_thread` | **new** — run a loft fn on a background thread |
+| `n_monotonic_now_ms` | **new** — monotonic timestamp for broadcast topology (skip if already covered) |
 
-Total: 13 original symbols + 10 new = **23 native symbols**.
+Total: 13 original symbols + 11 new = **24 native symbols** (Gap 8b
+may be subsumed by an existing time symbol — verify before adding).

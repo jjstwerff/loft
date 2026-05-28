@@ -319,7 +319,7 @@ Generated at build time by `ide/scripts/build-base-fs.js`:
     },
     "lib": {
       "01_code.loft":     { "$type": "text", "$content": "..." },
-      "02_images.loft":   { "$type": "text", "$content": "..." },
+      "02_files.loft":   { "$type": "text", "$content": "..." },
       "03_text.loft":     { "$type": "text", "$content": "..." }
     }
   }

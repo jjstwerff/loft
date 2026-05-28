@@ -816,15 +816,20 @@ test-packages:
 		if [ ! -f "$$pkg/loft.toml" ]; then continue; fi; \
 		if [ ! -d "$$pkg/tests" ]; then continue; fi; \
 		pkg_name=$$(basename "$$pkg"); \
+		if [ -f "$$pkg/.allow_warnings" ]; then \
+			deny_env=""; \
+		else \
+			deny_env="LOFT_DENY_WARNINGS=1"; \
+		fi; \
 		for f in "$$pkg"/tests/*.loft; do \
 			[ -f "$$f" ] || continue; \
 			total=$$((total + 1)); \
 			printf "  %-50s" "$$pkg_name/$$(basename $$f)"; \
-			out=$$(cd "$$pkg" && ../../target/release/loft test "$$(basename $$f .loft)" 2>&1); \
+			out=$$(cd "$$pkg" && env $$deny_env ../../target/release/loft test "$$(basename $$f .loft)" 2>&1); \
 			code=$$?; \
 			if [ $$code -ne 0 ] || echo "$$out" | grep -q "^Error:\|panicked"; then \
 				echo "FAILED"; \
-				echo "$$out" | grep -A2 "^Error:\|panicked" | head -5; \
+				echo "$$out" | grep -A2 "^Error:\|panicked\|--deny-warnings" | head -8; \
 				failed=$$((failed + 1)); \
 			else \
 				echo "ok"; \

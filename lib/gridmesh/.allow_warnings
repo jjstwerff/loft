@@ -1,0 +1,4 @@
+# This library has unfixed loft warnings; the lib-CI warning gate
+# (LOFT_DENY_WARNINGS=1 / --deny-warnings) is suspended here.
+# Remove this file once the package is warning-clean.
+# See lib_plans/12-library-extraction/ § Phase 6.5 for the policy.
