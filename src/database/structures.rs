@@ -254,6 +254,19 @@ impl Stores {
             // The other vector has no data
             return;
         }
+        // @P376 — when `known` is "linked" (multiple containers share this
+        // content type), `vector<known>` was promoted to `Array(known)` in
+        // `Stores::finish_type`: storage is a u32 rec-id per element pointing
+        // to a separate record of type `known`, not an inline `size(known)`
+        // payload.  The inline byte-copy below would read garbage past the
+        // 4-byte source pointer slots; route Array→Array appends through a
+        // dedicated path that mirrors `out += [elem]` (claim fresh element
+        // record in dest store, byte-copy from source's element record,
+        // deep-copy nested heap, append u32 rec-id to dest's array).
+        if self.is_linked(known) {
+            self.vector_add_array(db, o_db, known, o_length);
+            return;
+        }
         // Snapshot the source record number BEFORE any resize: if `db` and `o_db` share the
         // same backing store the resize inside `vector_append` / `vector_set_size` may
         // reallocate the vector and invalidate `o_rec`.  Reading it after the resize would
@@ -346,6 +359,80 @@ impl Stores {
                 },
                 known,
             );
+        }
+    }
+
+    /// @P376 — Array(content) → Array(content) append.  When the content
+    /// type is "linked" the vector storage is a u32-per-element rec-id
+    /// table pointing to separately-claimed element records (see
+    /// `Stores::finish_type` for the Vector→Array promotion).  Mirror what
+    /// the IR emits for `out += [elem]`: claim a fresh element record in
+    /// the destination's store, byte-copy the source record's payload,
+    /// deep-copy nested heap, then push the new rec-id into the dest's
+    /// array via `vector_append` (size=4) + `vector_finish`.
+    fn vector_add_array(&mut self, db: &DbRef, o_db: &DbRef, known: u16, o_length: u32) {
+        let elem_size = u32::from(self.size(known));
+        // Source array record (u32 rec-id per slot, header at offset 0/4).
+        let o_rec = keys::store(o_db, &self.allocations).get_u32_raw(o_db.rec, o_db.pos);
+        if o_rec == 0 {
+            return;
+        }
+        // Words to claim per element record: matches `record_new`'s Array
+        // arm — 1 header word + ceil(content_size / 8) data words.
+        let elem_words = 1 + elem_size.div_ceil(8);
+        for i in 0..o_length {
+            let src_rec = keys::store(o_db, &self.allocations).get_u32_raw(o_rec, 8 + 4 * i);
+            // Append a slot to the destination array (4-byte rec-id stride);
+            // `vector_append` allocates / resizes the dest vec_rec as needed.
+            let slot = vector::vector_append(db, 4, &mut self.allocations);
+            if src_rec == 0 {
+                // Preserve null elements as null slots in the destination.
+                self.store_mut(db).set_u32_raw(slot.rec, slot.pos, 0);
+            } else {
+                // Claim a fresh element record in the destination's store and
+                // copy the source record's data + nested heap into it.
+                let new_rec = self.allocations[db.store_nr as usize].claim(elem_words);
+                if db.store_nr == o_db.store_nr {
+                    self.store_mut(db)
+                        .copy_block(src_rec, 8, new_rec, 8, elem_size as isize);
+                } else {
+                    let o_store: &Store;
+                    let db_store: &mut Store;
+                    // Same trick as the inline path: two disjoint mut borrows
+                    // for cross-store copy.
+                    unsafe {
+                        o_store =
+                            keys::store(o_db, &*std::ptr::from_ref::<[Store]>(&self.allocations));
+                        db_store = keys::mut_store(
+                            db,
+                            &mut *std::ptr::from_mut::<[Store]>(&mut self.allocations),
+                        );
+                    }
+                    o_store.copy_block_between(
+                        src_rec,
+                        8,
+                        db_store,
+                        new_rec,
+                        8,
+                        elem_size as isize,
+                    );
+                }
+                self.copy_claims(
+                    &DbRef {
+                        store_nr: o_db.store_nr,
+                        rec: src_rec,
+                        pos: 8,
+                    },
+                    &DbRef {
+                        store_nr: db.store_nr,
+                        rec: new_rec,
+                        pos: 8,
+                    },
+                    known,
+                );
+                self.store_mut(db).set_u32_raw(slot.rec, slot.pos, new_rec);
+            }
+            vector::vector_finish(db, &mut self.allocations);
         }
     }
 

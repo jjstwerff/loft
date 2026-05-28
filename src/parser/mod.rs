@@ -404,6 +404,9 @@ impl Parser {
         if let Some(content) = crate::wasm::virt_fs_get(filename) {
             return self.parse_virtual(&content, filename, default);
         }
+        // @PLAN49 T1 — set the breadcrumb phase + initial file/line so
+        // a watchdog-fired hard-kill localises any parse-time hang.
+        crate::timeout::checkpoint_parse(filename, 0);
         self.default = default;
         self.vars.logging = false;
         self.lexer.switch(filename);

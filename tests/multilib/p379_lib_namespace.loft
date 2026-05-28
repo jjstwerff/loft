@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @P379 regression — two libraries each defining `struct Chunk` (with
+// DIFFERENT field layouts) must load together without the
+// `Double structure type Chunk` panic, and each library's Chunk-bearing
+// collections must resolve to the CORRECT per-library content type
+// (moros_map's Chunk holds vector<Hex>; world's holds vector<Cell>).
+// Run by tests/issues.rs::p379_two_libs_same_struct_name (lib_dirs=["lib"]).
+
+use world;
+use moros_map;
+
+fn main() {
+  // moros_map side — its Chunk holds vector<Hex>
+  m = map_empty();
+  map_set_height(m, 1, 2, 0, 7);
+  map_paint_material(m, 1, 2, 0, 3);
+  mh = map_get_hex(m, 1, 2, 0);
+  assert(mh.h_height == 7, "moros Hex.h_height={mh.h_height} (expected 7)");
+  assert(mh.h_material == 3, "moros Hex.h_material={mh.h_material} (expected 3)");
+
+  // world side — its Chunk holds vector<Cell> with a DIFFERENT layout
+  w = world_empty();
+  c = cell_empty();
+  c.c_color = 9 as u8;
+  c.c_height = 4 as u8;
+  set_cell(w, 5, 6, c);
+  rc = get_cell(w, 5, 6);
+  assert(rc.c_color == 9, "world Cell.c_color={rc.c_color} (expected 9)");
+  assert(rc.c_height == 4, "world Cell.c_height={rc.c_height} (expected 4)");
+
+  println("ok: world::Chunk and moros_map::Chunk are distinct");
+}

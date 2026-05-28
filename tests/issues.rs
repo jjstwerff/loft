@@ -14248,3 +14248,45 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(60));
 }
+
+// ── @P379 — `use` namespaces struct types per library ────────────────────────
+// Two libraries each defining `struct Chunk` with DIFFERENT field layouts
+// (moros_map's holds vector<Hex>, world's holds vector<Cell>) must load
+// together without the `Double structure type Chunk` internal panic, and each
+// library's Chunk-bearing collections must resolve to the CORRECT per-library
+// content type.  Before the fix, `use world; use moros_map;` panicked at
+// src/database/types.rs:53.
+#[test]
+fn p379_two_libs_same_struct_name() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.lib_dirs.push("lib".to_string());
+    p.parse("tests/multilib/p379_lib_namespace.loft", false);
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "parse errors loading two libs: {errors:?}"
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    // production logger so an in-loft assert failure sets had_fatal instead of
+    // aborting the test binary.
+    let config = RuntimeLogConfig {
+        log_path: std::path::PathBuf::from("/dev/null"),
+        production: true,
+        ..Default::default()
+    };
+    state.database.logger = Some(Arc::new(Mutex::new(Logger::new(config, None))));
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "per-library Chunk fields resolved incorrectly (an in-loft assert failed)"
+    );
+}

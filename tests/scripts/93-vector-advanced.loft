@@ -63,7 +63,7 @@ struct VElm { a: integer, b: integer }
 fn test_format_object() {
   v = [VElm{a:1, b:2}, VElm{a:12, b:13}, VElm{a:4, b:5}];
   v[2].b = 6;
-  assert("{v} sizeof {sizeof(VElm)}" == `[{{a:1,b:2}},{{a:12,b:13}},{{a:4,b:6}}] sizeof 8`, "format object");
+  assert("{v} sizeof {sizeof(VElm)}" == `[{{a:1,b:2}},{{a:12,b:13}},{{a:4,b:6}}] sizeof 16`, "format object");
 }
 
 fn vsum(v: vector<integer>) -> integer {

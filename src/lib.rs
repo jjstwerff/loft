@@ -99,6 +99,7 @@ pub mod registry_keys;
 pub mod registry_signing;
 pub mod runtime_error;
 mod stack;
+pub mod timeout;
 
 pub mod documentation;
 pub mod formatter;

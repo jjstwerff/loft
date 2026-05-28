@@ -363,7 +363,20 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
             }
         }
     }
-    let s_type = database.structure(&data.def(d_nr).name, enum_value);
+    // @P379 — struct-type registration is a flat table keyed by name.  When
+    // two libraries each define a struct of the same bare name (different
+    // field layouts), register the second under a library-qualified name
+    // (`moros_map::Chunk`) instead of panicking `Double structure type`.
+    // The bare name stays for the first/only definer, so non-colliding
+    // programs are byte-identical.  The parser already resolves each usage
+    // to the correct per-library `d_nr` (and hence `known_type`); this only
+    // makes the database table tolerate the shared bare name.
+    let reg_name = if database.has_type(&data.def(d_nr).name) {
+        data.qualified_type_name(d_nr)
+    } else {
+        data.def(d_nr).name.clone()
+    };
+    let s_type = database.structure(&reg_name, enum_value);
     data.definitions[d_nr as usize].known_type = s_type;
     if data.def_type(d_nr) == DefType::EnumValue {
         let e_tp = data.def(d_nr).parent;

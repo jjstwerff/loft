@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename, v_block, v_if,
-    v_set,
+    Data, Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename, v_block,
+    v_if, v_set,
 };
 
 /// Check if a Value tree contains a reference to the given variable.
@@ -1407,6 +1407,16 @@ impl Parser {
                 let inner = std::mem::replace(code, Value::Null);
                 *code = Value::with_span(op_pos.clone(), inner);
             }
+            // The result of a binary arithmetic op is a *computed value*, not
+            // a `not null` field read — `/` and `%` can yield null on
+            // divide-by-zero, and parsing the RHS just above re-set
+            // `expr_not_null` to reflect the RHS operand's field-nullness
+            // (e.g. `len(v) / set.stride` where `stride` is `not null`).
+            // Clear it so `a / b ?? default` is NOT flagged "Redundant null
+            // coalescing" — companion to the vector-index clear in
+            // `fields.rs` (a `??` after a fault-prone op is a real defense).
+            self.expr_not_null = false;
+            self.expr_not_null_name.clear();
         }
         None
     }
@@ -1498,7 +1508,7 @@ impl Parser {
                     _ => None,
                 };
                 if let Some(kind) = kind
-                    && !is_easy_proof(kind, args, ctx)
+                    && !is_easy_proof(kind, args, ctx, &self.data)
                 {
                     self.emit_undefended_warning(kind, ctx);
                 }
@@ -1635,7 +1645,7 @@ impl Parser {
 /// Evaluate the easy-proof skip list against a fault-prone call's args.
 /// Returns `true` when a skip pattern matches and the warning should
 /// NOT fire.
-fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx) -> bool {
+fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx, data: &Data) -> bool {
     fn lit_int(v: &Value) -> Option<i64> {
         match v.unspan() {
             Value::Int(n) => Some(i64::from(*n)),
@@ -1647,19 +1657,42 @@ fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx) -> bool {
     // makes divide-by-zero impossible.  Covers float / single literals too
     // (`x / 2.0`, `x / 0.75`), which `lit_int` missed — so the divide-by-zero
     // warning no longer fires on a statically-safe float division.
-    fn lit_nonzero(v: &Value) -> Option<bool> {
+    //
+    // @P368 follow-up — when the dividend is float / single and the divisor
+    // is an integer literal (`x / 3` with `x: float`), the parser wraps the
+    // literal in an `OpConvFloatFromInt` / `OpConvSingleFromInt` cast so the
+    // types match.  Without seeing through that cast, `lit_nonzero` on the
+    // outer Call returns None and the warning fires spuriously.  Add a
+    // recursive look-through for the two widening casts that wrap integer
+    // literals on the divisor path; OpConvFloatFromSingle (single→float)
+    // doesn't apply because no single literal can wrap an integer literal.
+    fn lit_nonzero(v: &Value, data: &Data) -> Option<bool> {
         match v.unspan() {
             Value::Int(n) => Some(*n != 0),
             Value::Long(n) => Some(*n != 0),
             Value::Float(f) => Some(*f != 0.0),
             Value::Single(f) => Some(*f != 0.0),
+            Value::Call(def_nr, call_args) => {
+                // `original_name()` strips the "Op" prefix, so the
+                // names here are without it.
+                let name = data.def(*def_nr).original_name();
+                if (name == "ConvFloatFromInt" || name == "ConvSingleFromInt")
+                    && call_args.len() == 1
+                {
+                    lit_nonzero(&call_args[0], data)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
     match kind {
         FaultKind::Div | FaultKind::Rem => {
             // Skip pattern 1 — divisor is a non-zero literal (int or float).
-            args.get(1).and_then(lit_nonzero).unwrap_or(false)
+            args.get(1)
+                .and_then(|v| lit_nonzero(v, data))
+                .unwrap_or(false)
         }
         FaultKind::VectorIndex | FaultKind::TextIndex => {
             // Index is the LAST arg in both `OpGetVector(coll, size, idx)`
@@ -1677,7 +1710,53 @@ fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx) -> bool {
             {
                 return true;
             }
-            false
+            // Skip pattern 4 — index is *loop-bounded arithmetic*: an
+            // expression built only from active loop-iteration variables
+            // and integer literals (e.g. `mul_k * 4 + mul_row`, `i / 4`,
+            // `row * width + col` where every variable is a loop counter).
+            // This generalises pattern 3 (a bare loop var) to the integer
+            // arithmetic the counters participate in — the developer is
+            // iterating within the loop's bounds, so the computed index is
+            // as trustworthy as the bare counter.  An index that mixes in a
+            // struct field, a parameter, or a call result is NOT bounded
+            // here and still warns (the genuine "could be OOB from data"
+            // case).
+            index_loop_bounded(idx, ctx, data)
         }
+    }
+}
+
+/// True when `v` is an index expression composed solely of active
+/// loop-iteration variables (`ctx.iter_vars`), integer literals, and
+/// integer arithmetic over them — i.e. the index is bounded by the same
+/// loops that produce it.  See `is_easy_proof` skip-pattern 4.
+fn index_loop_bounded(v: &Value, ctx: &WarnCtx, data: &Data) -> bool {
+    match v.unspan() {
+        Value::Int(_) | Value::Long(_) => true,
+        Value::Var(n) => ctx.iter_vars.contains(n),
+        Value::Call(def_nr, call_args) => {
+            // `original_name()` strips the "Op" prefix; arithmetic also
+            // appears in `*Nullable` form when an operand is nullable.
+            let raw = data.def(*def_nr).original_name();
+            let name = raw.strip_suffix("Nullable").unwrap_or(raw.as_str());
+            // Integer arithmetic / bitwise ops ("MinInt" is subtraction —
+            // loft spells minus "Min").  A result built from bounded
+            // operands stays bounded.
+            const ARITH: &[&str] = &[
+                "AddInt",
+                "MinInt",
+                "MulInt",
+                "DivInt",
+                "RemInt",
+                "AbsInt",
+                "EorInt",
+                "LandInt",
+                "LorInt",
+                "SLeftInt",
+                "SRightInt",
+            ];
+            ARITH.contains(&name) && call_args.iter().all(|a| index_loop_bounded(a, ctx, data))
+        }
+        _ => false,
     }
 }

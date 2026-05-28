@@ -2016,6 +2016,68 @@ impl Data {
         }
     }
 
+    /// @P379 — a library-qualified database name for a struct/enum-value
+    /// definition, e.g. `"moros_map::Chunk"`.  Used by database type
+    /// registration to disambiguate two libraries that each define a
+    /// struct of the same bare name (function access is already namespaced
+    /// per library; this gives the flat database type table the same
+    /// namespacing).  Falls back to `"src<N>::<name>"` if the source id
+    /// has no recorded library short-name (keeps the key unique either way).
+    #[must_use]
+    pub fn qualified_type_name(&self, d_nr: u32) -> String {
+        let def = self.def(d_nr);
+        for (lib, &id) in &self.use_names {
+            if id == def.source && !lib.is_empty() && lib != "std" {
+                return format!("{lib}::{}", def.name);
+            }
+        }
+        format!("src{}::{}", def.source, def.name)
+    }
+
+    /// @P379 — the native backend emits each loft function as a flat
+    /// `n_<name>` Rust symbol.  Two libraries that each define a function of
+    /// the same name would produce duplicate-definition Rust (`E0428`).
+    /// Rename the higher-source duplicates to a source-qualified symbol
+    /// (`n_s<N>_<name>`) so generated code has unique names.  Calls resolve
+    /// by `d_nr` → `def.name`, so renaming the definition keeps every call
+    /// site consistent automatically.
+    ///
+    /// No-op unless two distinct sources define the same function name, so
+    /// single-library / non-colliding programs are byte-identical.  The
+    /// lowest-source definer keeps the bare name (stdlib is source 0, so a
+    /// user fn never displaces a stdlib symbol).  Must run AFTER the two-pass
+    /// parse and BEFORE native emit.  Idempotent (a renamed `n_s<N>_…` symbol
+    /// no longer collides, so a second call is a no-op).
+    pub fn namespace_colliding_native_fns(&mut self) {
+        let mut by_name: HashMap<String, Vec<(u32, u16)>> = HashMap::new();
+        for d in 0..self.definitions() {
+            let def = self.def(d);
+            // user loft function: has a body and the `n_` user-fn prefix.
+            if def.code != Value::Null && def.name.starts_with("n_") {
+                by_name
+                    .entry(def.name.clone())
+                    .or_default()
+                    .push((d, def.source));
+            }
+        }
+        for (name, mut defs) in by_name {
+            let mut srcs: Vec<u16> = defs.iter().map(|(_, s)| *s).collect();
+            srcs.sort_unstable();
+            srcs.dedup();
+            if srcs.len() < 2 {
+                continue; // no cross-source collision — nothing to rename
+            }
+            defs.sort_by_key(|(_, s)| *s);
+            let keep_src = defs[0].1; // lowest source keeps the bare name
+            let rest = name.strip_prefix("n_").unwrap_or(&name).to_string();
+            for (d, src) in &defs {
+                if *src != keep_src {
+                    self.definitions[*d as usize].name = format!("n_s{src}_{rest}");
+                }
+            }
+        }
+    }
+
     #[must_use]
     pub fn use_exists(&self, file: &str) -> bool {
         self.use_names.contains_key(file)

@@ -521,7 +521,21 @@ impl Parser {
         self.data.definitions[self.context as usize].variables[nr as usize].uses = 0;
          */
         if let Type::Vector(etp, _) = &t {
-            if let Some(value) = self.parse_vector_index(code, &elm_type, etp) {
+            let iter_value = self.parse_vector_index(code, &elm_type, etp);
+            // A `v[i]` read is nullable — an out-of-bounds index yields the
+            // null sentinel (exactly what the OOB defensive-check warns
+            // about).  Clear `expr_not_null` (mirroring the keyed-collection
+            // arms below, @P285) so `v[i] ?? default` is NOT flagged
+            // "Redundant null coalescing" even when the vector's element
+            // type — or the vector field itself — is `not null`.  Without
+            // this, indexing a `not null` vector hit two contradictory
+            // checks: bare `v[i]` warned OOB while `v[i] ?? d` warned
+            // redundant, leaving no clean idiom.  Covers BOTH the scalar
+            // path (`parse_vector_index` returns `None`, having mutated
+            // `code`) and the iterator path (returns `Some`).
+            self.expr_not_null = false;
+            self.expr_not_null_name.clear();
+            if let Some(value) = iter_value {
                 return value;
             }
         } else if matches!(t, Type::Text(_)) {

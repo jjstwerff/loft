@@ -71,6 +71,7 @@ mod stack;
 mod state;
 mod store;
 mod test_runner;
+mod timeout;
 mod tree;
 mod typedef;
 mod variables;
@@ -111,6 +112,13 @@ fn print_help() {
     println!("  --lib <dir>                   add <dir> to the 'use' import search path; may be");
     println!("                                repeated for multiple directories");
     println!("  --log-conf <path>             use this log config file instead of the default");
+    println!(
+        "  --timeout <secs>              hard-kill the process after <secs>+grace seconds (PLAN49)"
+    );
+    println!(
+        "                                LOFT_TIMEOUT=<secs> as env equivalent; grace defaults to"
+    );
+    println!("                                2s, override via LOFT_TIMEOUT_GRACE=<secs>");
     println!(
         "  --production                  enable production mode (panic/assert log instead of abort)"
     );
@@ -1310,6 +1318,20 @@ fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
     // last-executed opcode before the default handler fires.
     crate::crash_report::install("loft");
+    // @PLAN49 T1+T3 — arm the execution-timeout watchdog from the env
+    // (`LOFT_TIMEOUT=<secs>`) BEFORE we parse argv.  An explicit
+    // `--timeout` later in argv re-arms (no-op — `arm` is idempotent)
+    // but the env value is the floor.  MUST be `crate::timeout` (this
+    // binary's module instance), not `loft::timeout` (the lib crate's
+    // separate copy) — the binary runs its own `crate::` modules
+    // (`crate::state::State` etc.), and the `checkpoint_*` call sites in
+    // them resolve to `crate::timeout`, so the watchdog + breadcrumb must
+    // share that same instance.  Arming `loft::timeout` set a different
+    // set of statics the running code never reads.
+    crate::timeout::arm(
+        crate::timeout::env_timeout_secs(),
+        crate::timeout::env_grace_secs(),
+    );
     // Plan-07 phase 1 step 1.20 / phase 3 — chain a Rust panic hook
     // that surfaces the loft source position of the offending pc
     // before the default panic message.  Reads the per-thread snapshot
@@ -1589,6 +1611,17 @@ fn main() {
             }
         } else if a == "--no-warnings" {
             no_warnings = true;
+        } else if a == "--timeout" {
+            // @PLAN49 T3 — `--timeout <secs>` arms the watchdog.  The
+            // graceful T2 fault (when shipped) fires at `<secs>`; the
+            // hard T1 kill at `<secs> + grace` (default 2s, overridable
+            // via `LOFT_TIMEOUT_GRACE`).  `0` disables.
+            let secs: u64 = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or_else(|| {
+                eprintln!("--timeout requires a non-negative integer (seconds)");
+                std::process::exit(2);
+            });
+            i += 1;
+            crate::timeout::arm(secs, crate::timeout::env_grace_secs());
         } else if a == "--check" || a == "check" {
             check_only = true;
         } else if a == "--help" || a == "-h" || a == "-?" {
@@ -1929,6 +1962,15 @@ fn main() {
 
     // Handle --tests before requiring an input file
     if let Some(ref test_dir) = tests_dir {
+        // @PLAN49 T3 — default the timeout ON under `loft test` / `--tests`.
+        // This is the auto-mode case the watchdog exists for: a hung test or a
+        // looping compile in the suite can't be killed interactively, so a
+        // generous deadline self-kills it with a breadcrumb.  `arm` is
+        // idempotent, so an explicit positive `--timeout <secs>` or
+        // `LOFT_TIMEOUT=<secs>` (armed earlier in `main`) overrides this
+        // default.  300s is far longer than any single test's compile+run,
+        // short enough to catch a true infinite loop.
+        crate::timeout::arm(300, crate::timeout::env_grace_secs());
         let exit_code = run_tests(
             &dir,
             test_dir,
@@ -2198,6 +2240,10 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            // @P379 — qualify native symbols for functions whose name
+            // collides across libraries (no-op without a collision; calls
+            // resolve by d_nr so the renamed def stays consistent).
+            p.data.namespace_colliding_native_fns();
             let mut out = generation::Output {
                 data: &p.data,
                 stores: &state.database,
@@ -2296,6 +2342,10 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            // @P379 — qualify native symbols for functions whose name
+            // collides across libraries (no-op without a collision; calls
+            // resolve by d_nr so the renamed def stays consistent).
+            p.data.namespace_colliding_native_fns();
             let mut out = generation::Output {
                 data: &p.data,
                 stores: &state.database,
@@ -2542,6 +2592,10 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                     std::process::exit(1);
                 }
             };
+            // @P379 — qualify native symbols for functions whose name
+            // collides across libraries (no-op without a collision; calls
+            // resolve by d_nr so the renamed def stays consistent).
+            p.data.namespace_colliding_native_fns();
             let mut out = generation::Output {
                 data: &p.data,
                 stores: &state.database,

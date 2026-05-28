@@ -26,7 +26,7 @@
 //! **Return-value exemption:** the variable holding the function's return value
 //! (`ret_var`) is never freed — its value is consumed by the caller.
 
-use crate::data::{Block, Context, Data, DefType, Type, Value, v_set};
+use crate::data::{Block, Context, Data, DefType, Type, Value, v_if, v_set};
 use crate::variables::{Function, assign_slots, compute_intervals, size};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -72,6 +72,22 @@ struct Scopes {
     /// runtime store-nr check) instead of the unconditional `OpFreeRef`
     /// — see the comment block around `scan_set`'s witness-pairing branch.
     paired_witness: HashMap<u16, u16>,
+    /// @P378(a) — INVERSE of `paired_witness` for the case where the
+    /// witness `v` is INNER-scoped relative to the `__ref_N` buffer
+    /// `av` (e.g. `bs = alloc_bag(ci, __ref_1)` inside a `for` loop,
+    /// where `bs` lives in the loop body and `__ref_1` is the
+    /// function-scoped return buffer).  Here the buffer must stay
+    /// reserved across iterations; freeing the witness each iteration
+    /// (it adopts the buffer's store) would recycle that store to a
+    /// callee temp next iteration and collide (SIGSEGV at the keyed
+    /// insert).  Maps witness `v` → buffer `av`; consulted by
+    /// `get_free_vars` to emit `OpFreeRefIfDistinct(v, av)` for the
+    /// witness's free — a no-op in the adoption case (store stays
+    /// reserved, freed once via the buffer's function-exit OpFreeRef),
+    /// a real free in the fresh-store case.  Scope-safe for native:
+    /// `av` (outer/function) outlives `v` (inner), so `av`'s Rust
+    /// `let` is still live where `v`'s free fires.
+    witness_buffer: HashMap<u16, u16>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -94,6 +110,7 @@ pub fn check(data: &mut Data) {
             lift_vars: Vec::new(),
             ret_temp_counter: 0,
             paired_witness: HashMap::new(),
+            witness_buffer: HashMap::new(),
         };
         let mut function = Function::copy(&data.def(d_nr).variables);
         for a in function.arguments() {
@@ -662,6 +679,26 @@ impl Scopes {
                             let v_scope = self.var_scope.get(&v).copied().unwrap_or(u16::MAX);
                             if v_scope <= av_scope && v_scope != u16::MAX {
                                 self.paired_witness.entry(av).or_insert(v);
+                            } else if v_scope != u16::MAX
+                                && av_scope != u16::MAX
+                                && v_scope > av_scope
+                            {
+                                // @P378(a) — witness `v` is INNER-scoped (e.g.
+                                // a loop body) while the `__ref_N` buffer `av`
+                                // is OUTER (function).  The buffer is reserved
+                                // once but `v` (which adopts the buffer's
+                                // store) is freed every iteration; that frees
+                                // the buffer's store, which `find_free_slot`
+                                // then recycles to a callee temp next
+                                // iteration — two OpDatabase targets collide on
+                                // one record (self-referential keyed insert →
+                                // SIGSEGV).  Make `v`'s per-iteration free
+                                // conditional on NOT aliasing the buffer:
+                                // adoption → skip (store stays reserved, freed
+                                // once by the buffer's function-exit OpFreeRef);
+                                // fresh-store → real free.  Scope-safe for
+                                // native because `av` (outer) outlives `v`.
+                                self.witness_buffer.entry(v).or_insert(av);
                             }
                         }
                     }
@@ -1036,6 +1073,52 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Tuple(new_elems))));
             return result;
+        } else if is_return
+            && !expr_is_terminal
+            && matches!(
+                tp,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            )
+            && matches!(expr.unspan(), Value::If(c, _, _)
+                if matches!(c.unspan(), Value::Insert(ops)
+                    if ops.first().is_some_and(|o| matches!(o,
+                        Value::Set(v, _) if function.name(*v).starts_with("__lift_")))))
+        {
+            // @P378(b) — a heap-returning tail `If` whose CONDITION lifted a
+            // ref-temp (`__lift_N = call()`; the branches were not unified to a
+            // shared work-ref, so `ret_var == u16::MAX`) and which has frees to
+            // run before returning.  The fall-through (below) inserts the If as
+            // a discarded statement + `Return(Null)`: interpret reads the value
+            // off eval-stack-top, but native returns the null DbRef sentinel
+            // (keys.rs:251 OOB in the caller).  A `Set(var, If)` save-to-temp
+            // does NOT work (native voids the if/else branches → E0308); only
+            // `Return(If(...))` value-emits them.  So PRESERVE the Return(If):
+            // pull the condition's lift-preamble out, evaluate the boolean to a
+            // value-typed temp, run the frees (the lift's OpFreeRef), then
+            // `Return(If(Var(cond_tmp), t, f))` — the if/else stays the Return's
+            // value-expression and the lift is freed before (not after) it.
+            let Value::If(cond, t, f) = expr.unspan().clone() else {
+                unreachable!()
+            };
+            let mut result = Vec::new();
+            // split `Insert([__lift = …, …, bool_expr])` into preamble + bool.
+            let bool_expr = if let Value::Insert(ops) = cond.unspan() {
+                let mut ops = ops.clone();
+                let last = ops.pop().expect("non-empty condition Insert");
+                result.extend(ops);
+                last
+            } else {
+                (*cond).clone()
+            };
+            self.ret_temp_counter += 1;
+            let cname = format!("__cond_{}", self.ret_temp_counter);
+            let cond_tmp = function.add_temp_var(&cname, &Type::Boolean);
+            self.var_scope.insert(cond_tmp, self.scope);
+            self.var_order.push(cond_tmp);
+            result.push(v_set(cond_tmp, bool_expr));
+            result.extend(ls);
+            result.push(Value::Return(Box::new(v_if(Value::Var(cond_tmp), *t, *f))));
+            return result;
         } else {
             ls.insert(0, expr.clone());
             if is_return {
@@ -1207,6 +1290,16 @@ impl Scopes {
                             data.def_nr("OpFreeRefIfDistinct"),
                             vec![Value::Var(v), Value::Var(witness)],
                         ));
+                    } else if let Some(&buffer) = self.witness_buffer.get(&v) {
+                        // @P378(a) — `v` is an inner-scoped witness whose store
+                        // is the outer `__ref_N` buffer (adoption).  Skip the
+                        // per-iteration free when they still alias so the
+                        // buffer stays reserved across iterations; the buffer's
+                        // own function-exit OpFreeRef releases it once.
+                        ls.push(Value::Call(
+                            data.def_nr("OpFreeRefIfDistinct"),
+                            vec![Value::Var(v), Value::Var(buffer)],
+                        ));
                     } else {
                         ls.push(call("OpFreeRef", v, data));
                     }
@@ -1234,28 +1327,13 @@ impl Scopes {
                 }
             }
         }
-        // unlock const reference/vector parameters at function exit.
-        // The lock was set in parse_code (expressions.rs:163-178) at function entry.
-        // Arguments live at scope 0 which `variables()` intentionally skips, so
-        // we handle them here as a separate pass.  Only emit when exiting to
-        // the function's top scope (to_scope <= 1).
-        if to_scope <= 1 {
-            let lock_fn = data.def_nr("n_set_store_lock");
-            if lock_fn != u32::MAX {
-                let n_vars = function.next_var();
-                for v_nr in 0..n_vars {
-                    if function.is_argument(v_nr)
-                        && function.is_const_param(v_nr)
-                        && function.tp(v_nr).heap_dep().is_some()
-                    {
-                        ls.push(Value::Call(
-                            lock_fn,
-                            vec![Value::Var(v_nr), Value::Boolean(false)],
-                        ));
-                    }
-                }
-            }
-        }
+        // @P376 follow-up — no const-param unlock emitted anymore (matching
+        // the dropped function-entry lock in `parser/expressions.rs`).  See
+        // there for the rationale: compile-time const checks already cover
+        // every mutation path, and the function-entry lock was a
+        // false-positive trigger on iteration over a const-param's hash
+        // field.  Par-worker `read_only` clones still enforce immutability
+        // independently.
         // scope_debug: also report Reference vars in var_order whose scope is NOT in
         // the current chain — these are "orphaned" vars that should never happen after
         // the A5.6 block-pre-registration fix.

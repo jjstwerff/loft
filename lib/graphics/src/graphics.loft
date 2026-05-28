@@ -37,7 +37,7 @@ pub fn color_a(color: integer) -> integer {
 pub struct Canvas {
   width: integer not null,
   height: integer not null,
-  data: vector<integer>
+  data: vector<integer> not null
 }
 
 // Create a canvas filled with a solid color.
