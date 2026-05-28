@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLAN46 — dryopea: sci-fi free-build / tower-defence game
 
 **Status:** **STALLED 2026-05-28** — development paused along with
-moros and bumper-airplanes ([@PLAN50<!--noindex-->](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes))
+moros and bumper-airplanes ([@PLAN50](../50-bumper-airplanes/README.md))
 until the cross-project library structure is clear.  Three consumers
 share substantial library surface (see
 [lib_plans/12-library-extraction § Cross-project consumers](../../../lib_plans/12-library-extraction/README.md#cross-project-consumers--moros--dryopea--bumper-airplanes));

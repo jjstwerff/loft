@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 cross-project consumer audit in
 [lib-plan 12 § Cross-project consumers](../../12-library-extraction/README.md#cross-project-consumers--moros--dryopea--bumper-airplanes):
 three games (moros, [@PLAN46 dryopea](../../../plans/future/46-dryopea/README.md),
-[@PLAN50<!--noindex--> bumper-airplanes](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes))
+[@PLAN50 bumper-airplanes](../../../plans/future/50-bumper-airplanes/README.md))
 all need 2-body rigid collision + integrator code; without a shared
 package, PLAN50 ships bespoke physics and the others copy-and-modify.
 
@@ -156,7 +156,7 @@ which lives in the consumer.
   — Phase 7p of that plan blocks on this slot existing.
 - [@PLAN46 dryopea](../../../plans/future/46-dryopea/README.md) —
   consumer for vehicle + enemies + scramble rocket.
-- [@PLAN50<!--noindex--> bumper-airplanes](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes)
+- [@PLAN50 bumper-airplanes](../../../plans/future/50-bumper-airplanes/README.md)
   — consumer; sub-arc 4 originally proposed this library.
 - `lib/moros_sim/collide.loft` — existing 2D-ish code that becomes
   Phase 1's initial population once this slot starts.

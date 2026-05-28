@@ -8,7 +8,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Three consumer projects load MapFile JSON: **moros** (RPG, author +
 runtime), **dryopea** ([@PLAN46](../../doc/claude/plans/future/46-dryopea/README.md),
 sci-fi tower-defence — loads moros-authored maps), and
-**bumper-airplanes** ([@PLAN50<!--noindex-->](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes),
+**bumper-airplanes** ([@PLAN50](../../doc/claude/plans/future/50-bumper-airplanes/README.md),
 audience demo — extrudes a moros-authored MapFile into 3D).
 
 This document is the **cross-project contract**: the schema the three
@@ -167,5 +167,5 @@ is the moros_map loft code.
   — the editor that AUTHORS these files.
 - [@PLAN46 dryopea](../../doc/claude/plans/future/46-dryopea/README.md)
   — consumes MapFile + lib-plan 20 height-field overlay.
-- [@PLAN50<!--noindex--> bumper-airplanes](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes)
+- [@PLAN50 bumper-airplanes](../../doc/claude/plans/future/50-bumper-airplanes/README.md)
   — consumes MapFile + extrudes via `md_extrude` palette field.

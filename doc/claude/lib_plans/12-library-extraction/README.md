@@ -173,7 +173,7 @@ player RPG, `lib/moros_*` packages), **dryopea**
 defence / free-build; depends on `lib_plans/20-terrain-heightmap` +
 `lib_plans/19-gridmesh` Phase C; reuses `lib/server` + `lib/web`),
 and **bumper-airplanes**
-([@PLAN50<!--noindex-->](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes),
+([@PLAN50](../../plans/future/50-bumper-airplanes/README.md),
 audience demo on `origin/bumper_plane`; loads dryopea-authored
 MapFiles; proposes `lib/physics_2body`).
 
@@ -662,7 +662,7 @@ spawn, editor/UI/render stay in `moros_*`.  Preserve the existing
 sparse Cell/Chunk shape (TTT v5 + audience demo) alongside the hex
 additions (they share addressing — Open Q #10).  Unblocks dryopea
 ([@PLAN46](../../plans/future/46-dryopea/README.md)) AND
-bumper-airplanes ([@PLAN50<!--noindex-->](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes))
+bumper-airplanes ([@PLAN50](../../plans/future/50-bumper-airplanes/README.md))
 — see [§ Cross-project consumers](#cross-project-consumers--moros--dryopea--bumper-airplanes)
 for the shared-substrate argument.  Phase 7a is described as
 "monorepo-internal" because no user-visible behaviour changes, but
