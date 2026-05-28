@@ -28,6 +28,14 @@ Reverted to baseline.  Future fix must EITHER:
 2. Avoid generating same-store OpCopyRecord at codegen time (track which Call results would alias the destination).
 3. Track ref ownership at runtime via refcounts (the `project_drop_store_refcount` arc).
 
+### Defensive hardening landed (2026-05-28, commit `172171ee`)
+
+Path (1) above shipped as a standalone defensive fix: both backend `OpCopyRecord` implementations (`src/state/io.rs::copy_record` line 1196+ and `src/codegen_runtime.rs::OpCopyRecord` line 490+) now early-return when `data == to` (full DbRef equality).  This closes the destructive-prelude window the previous failed caller-side fix exposed.
+
+**However**, a re-attempt of the caller-side `is_borrowed_view` refinement ON TOP of this hardening still regresses probes 02, 21, 28 with the same `cv_a.data[0] = w_value` corruption — so the corruption is NOT primarily caused by same-store OpCopyRecord.  The true mechanism remains unpinned; pinpointing it would require runtime tracing through the bytecode VM's call / return / scope-exit sequence for probe 02 with the refinement active.
+
+Status: probes 02, 21 stay leak-free (extended S1 commit `ff0b38d4`); probes 03, 04, 07, 11, 25, 26, 28 still leak.  No silent corruption anywhere — all assertions PASS.
+
 ---
 
 **Severity:** Slow leak under repeated calls; linear scaling (1 Canvas per iter, confirmed at 100 iters).  Not silent corruption — `LOFT_STORES=warn` catches it.  But cumulative cost in production loops (dryopea editor: one full-screen Canvas per frame).
