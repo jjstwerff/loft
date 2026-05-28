@@ -403,6 +403,9 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/20-terrain-heightmap/`](lib_plans/future/20-terrain-heightmap/) | M | — | `terrain` — slope-based height-map generation library |
 | [`lib_plans/future/24-universal-editor/`](lib_plans/future/24-universal-editor/) | H | — | `hex_*` universal hex-world editor libraries (moros extraction; dryopea + indie consumers) |
 | [`lib_plans/future/25-ffi-dispatch/`](lib_plans/future/25-ffi-dispatch/) | MH | F | FFI generated-dispatch — `#[loft_native]` proc-macro generates per-fn marshal bridges, deletes the ~98-arm `dispatch_call`; libraries own their FFI typing (supersedes 05-game-infra FFI.1/FFI.3) |
+| [`lib_plans/future/26-physics-2body/`](lib_plans/future/26-physics-2body/) | M | — | `physics_2body` — shared rigid-body collision + integrator for moros / dryopea / bumper-airplanes (sphere/AABB pairwise; no N-body stacking) |
+| [`lib_plans/future/27-particles/`](lib_plans/future/27-particles/) | S | — | `particles` — ribbon trails + point-burst particles (two-flavour scope) for dryopea + bumper-airplanes |
+| [`lib_plans/future/28-test-deps/`](lib_plans/future/28-test-deps/) | S | F | `loft test --deps` — transitive dep-tree test walker driven by loft.toml + loft.lock; wired into chunk CI as a final regression-catch step (T2/T3 SHIPPED 2026-05-28; T4 lockfile driver still open) |
 
 ### Deferred plans
 

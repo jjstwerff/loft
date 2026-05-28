@@ -5,8 +5,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # lib-plan 28 — `loft test --deps`: walk a project's dep tree
 
-**Status:** FUTURE (slot created 2026-05-28).  Driven by the
-library-extraction work in
+**Status:** PARTIAL (T1-T3 + T6 SHIPPED 2026-05-28; T4 lockfile + T5
+`--skip` filter open).  Driven by the library-extraction work in
 [lib_plans/12](../../12-library-extraction/README.md) — once
 libraries extract to external chunk repos, the only way to catch
 "my new release broke a downstream consumer's tests" without

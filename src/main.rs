@@ -349,10 +349,7 @@ fn run_dep_tests(transitive: bool, native_mode: bool) -> i32 {
     }
 
     if tested > 0 {
-        println!(
-            "  --deps: {tested} dep(s) tested, {} failed",
-            total_fail
-        );
+        println!("  --deps: {tested} dep(s) tested, {} failed", total_fail);
     } else {
         println!("  --deps: no deps with tests/ directory found");
     }
@@ -1708,9 +1705,10 @@ fn main() {
             // Optional directory/file: consume next non-flag arg.
             // Skip --native/--no-warnings/--deny-warnings that may appear between --tests and the path.
             let mut path = ".".to_string();
-            while argv.get(i).is_some_and(|s| {
-                s == "--native" || s == "--no-warnings" || s == "--deny-warnings"
-            }) {
+            while argv
+                .get(i)
+                .is_some_and(|s| s == "--native" || s == "--no-warnings" || s == "--deny-warnings")
+            {
                 if argv[i] == "--native" {
                     // LibCI: opt into native test compilation (matches --help).
                     native_requested = true;
