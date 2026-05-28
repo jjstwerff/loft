@@ -32,7 +32,7 @@ pub fn color_a(color: integer) -> integer {
 }
 
 // A 2D pixel canvas backed by a flat vector of RGBA integers.
-// Pixels are stored row-major: (data[y * width + x] ?? 0).
+// Pixels are stored row-major: data[y * width + x].
 
 pub struct Canvas {
   width: integer not null,
@@ -52,7 +52,7 @@ pub fn get_pixel(self: const Canvas, gx: integer, gy: integer) -> integer {
   if gx < 0 or gx >= self.width or gy < 0 or gy >= self.height {
     0
   } else {
-    (self.data[gy * self.width + gx] ?? 0)
+    self.data[gy * self.width + gx]
   }
 }
 
@@ -65,9 +65,8 @@ pub fn set_pixel(self: Canvas, sx: integer, sy: integer, color: integer) {
 
 // Fill the entire canvas with a solid color.
 pub fn clear(self: Canvas, color: integer) {
-  cl_data = self.data;
   for cl_i in 0..self.width * self.height {
-    if cl_i < len(cl_data) { cl_data[cl_i] = color; }
+    self.data[cl_i] = color;
   }
 }
 
@@ -89,7 +88,7 @@ pub fn blend(dst: integer, src: integer) -> integer {
 pub fn blend_pixel(self: Canvas, bx: integer, by: integer, color: integer) {
   if bx >= 0 and bx < self.width and by >= 0 and by < self.height {
     idx = by * self.width + bx;
-    self.data[idx] = blend((self.data[idx] ?? 0), color);
+    self.data[idx] = blend(self.data[idx], color);
   }
 }
 
@@ -303,10 +302,10 @@ pub fn draw_bezier(self: Canvas, bx0: integer, by0: integer, bx1: integer, by1: 
   for _ in 0..1000 {
     if bz_top == 0 { break; }
     // Pop segment (read 4 values, then decrease pointer)
-    bz_p0x = (bz_sx[bz_top - 4] ?? 0); bz_p1x = (bz_sx[bz_top - 3] ?? 0);
-    bz_p2x = (bz_sx[bz_top - 2] ?? 0); bz_p3x = (bz_sx[bz_top - 1] ?? 0);
-    bz_p0y = (bz_sy[bz_top - 4] ?? 0); bz_p1y = (bz_sy[bz_top - 3] ?? 0);
-    bz_p2y = (bz_sy[bz_top - 2] ?? 0); bz_p3y = (bz_sy[bz_top - 1] ?? 0);
+    bz_p0x = bz_sx[bz_top - 4]; bz_p1x = bz_sx[bz_top - 3];
+    bz_p2x = bz_sx[bz_top - 2]; bz_p3x = bz_sx[bz_top - 1];
+    bz_p0y = bz_sy[bz_top - 4]; bz_p1y = bz_sy[bz_top - 3];
+    bz_p2y = bz_sy[bz_top - 2]; bz_p3y = bz_sy[bz_top - 1];
     bz_top -= 4;
     // Flatness test: cross product distances of control points from chord
     bz_dx = bz_p3x - bz_p0x;
@@ -820,7 +819,7 @@ pub fn draw_text(self: Canvas, font: integer, content: text, size: float,
     for dt_bx in 0..dt_bw {
       dt_idx = dt_by * dt_bw + dt_bx;
       if dt_idx >= dt_buf.len() { break; }
-      dt_a = (dt_buf[dt_idx] ?? 0);
+      dt_a = dt_buf[dt_idx];
       if dt_a > 0 {
         self.blend_pixel(dt_x + dt_bx, dt_y + dt_by, rgba(dt_cr, dt_cg, dt_cb, dt_a));
       }
@@ -1046,16 +1045,16 @@ pub fn painter_vao(self: const Painter2D) -> integer { self.p2_vao }
 fn build_mvp_2d(proj: const vector<float>, x: float, y: float, w: float, h: float) -> vector<float> {
   bmn_mvp = [
     // column 0 = proj.col0 * w
-    (proj[0] ?? 0) * w,  (proj[1] ?? 0) * w,  (proj[2] ?? 0) * w,  (proj[3] ?? 0) * w,
+    proj[0] * w,  proj[1] * w,  proj[2] * w,  proj[3] * w,
     // column 1 = proj.col1 * h
-    (proj[4] ?? 0) * h,  (proj[5] ?? 0) * h,  (proj[6] ?? 0) * h,  (proj[7] ?? 0) * h,
+    proj[4] * h,  proj[5] * h,  proj[6] * h,  proj[7] * h,
     // column 2 = proj.col2 (z untouched)
-    (proj[8] ?? 0),      (proj[9] ?? 0),      (proj[10] ?? 0),     (proj[11] ?? 0),
+    proj[8],      proj[9],      proj[10],     proj[11],
     // column 3 = proj.col0 * x + proj.col1 * y + proj.col3
-    (proj[0] ?? 0) * x + (proj[4] ?? 0) * y + (proj[12] ?? 0),
-    (proj[1] ?? 0) * x + (proj[5] ?? 0) * y + (proj[13] ?? 0),
-    (proj[2] ?? 0) * x + (proj[6] ?? 0) * y + (proj[14] ?? 0),
-    (proj[3] ?? 0) * x + (proj[7] ?? 0) * y + (proj[15] ?? 0)
+    proj[0] * x + proj[4] * y + proj[12],
+    proj[1] * x + proj[5] * y + proj[13],
+    proj[2] * x + proj[6] * y + proj[14],
+    proj[3] * x + proj[7] * y + proj[15]
   ];
   bmn_mvp
 }

@@ -1765,14 +1765,13 @@ fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx, data: &Data) ->
                 && let Value::Var(vec_var) = first.unspan()
             {
                 let unwrapped = unwrap_cond(idx, data);
-                if let Value::Var(idx_var) = unwrapped {
-                    if ctx
+                if let Value::Var(idx_var) = unwrapped
+                    && ctx
                         .guarded_pairs
                         .iter()
                         .any(|(i, v)| i == idx_var && v == vec_var)
-                    {
-                        return true;
-                    }
+                {
+                    return true;
                 }
             }
             false
