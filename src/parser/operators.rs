@@ -1454,6 +1454,10 @@ struct WarnCtx {
     /// When a fault op uses `Var(v)` as its index AND `v` ∈ this set, we
     /// skip the warning (skip pattern 3).
     iter_vars: std::collections::HashSet<u16>,
+    /// `(idx_var, vec_var)` pairs proven safe by an enclosing
+    /// `if idx_var < len(vec_var) { ... }` guard.  Pushed on entry to
+    /// the `then` block, popped on exit.  Skip pattern 5.
+    guarded_pairs: Vec<(u16, u16)>,
     /// Position of the innermost enclosing `Value::Span` — used as the
     /// fault site's source location when we emit a warning.
     last_pos: Option<Position>,
@@ -1589,7 +1593,20 @@ impl Parser {
             }
             Value::If(cond, then_b, else_b) => {
                 self.walk_for_warnings(cond, ctx);
+                // Skip pattern 5 — `if idx < len(vec) { ... v[idx] ... }`.
+                // Detect the canonical guard shape and push (idx_var, vec_var)
+                // onto the guarded-pairs stack for the duration of `then_b`,
+                // so a later `GetVector(vec, ..., idx)` or `Set(_, GetVector(...))`
+                // inside the then-block is recognised as safe.  The pair is
+                // popped after walking the then-block.
+                let pushed = guard_pair_from_cond(cond.unspan(), &self.data);
+                if let Some(pair) = pushed {
+                    ctx.guarded_pairs.push(pair);
+                }
                 self.walk_for_warnings(then_b, ctx);
+                if pushed.is_some() {
+                    ctx.guarded_pairs.pop();
+                }
                 self.walk_for_warnings(else_b, ctx);
             }
             Value::Set(_, src)
@@ -1721,8 +1738,86 @@ fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx, data: &Data) ->
             // struct field, a parameter, or a call result is NOT bounded
             // here and still warns (the genuine "could be OOB from data"
             // case).
-            index_loop_bounded(idx, ctx, data)
+            if index_loop_bounded(idx, ctx, data) {
+                return true;
+            }
+            // Skip pattern 5 — `if idx_var < len(vec_var) { ... v[idx_var] ... }`.
+            // When an enclosing If's condition proves `idx < len(vec)`, the
+            // walker has pushed `(idx_var, vec_var)` onto `guarded_pairs`.
+            // Match the indexing's vec arg (first arg) + idx arg (last arg)
+            // against any pushed pair; if both are bare `Var(_)` references
+            // to a guarded pair, the index is safe.
+            if let Value::Var(idx_var) = idx.unspan()
+                && let Some(first) = args.first()
+                && let Value::Var(vec_var) = first.unspan()
+                && ctx
+                    .guarded_pairs
+                    .iter()
+                    .any(|(i, v)| i == idx_var && v == vec_var)
+            {
+                return true;
+            }
+            false
         }
+    }
+}
+
+/// Recognise `idx_var < len(vec_var)` (canonical bounds check).
+/// Returns `Some((idx_var, vec_var))` on a match, `None` otherwise.
+/// Skip pattern 5 in `is_easy_proof` consults the resulting pair via
+/// `WarnCtx::guarded_pairs`.
+fn guard_pair_from_cond(v: &Value, data: &Data) -> Option<(u16, u16)> {
+    // Conditions inside `if` come through wrapped in implicit casts —
+    // `ConvBoolFromInt` wraps a comparison whose underlying result type
+    // is integer (loft's compare ops return integer 0/1 to be cast).
+    // Strip the wrappers so the underlying `LtInt` is reachable.
+    let inner = unwrap_cond(v, data);
+    let Value::Call(def_nr, args) = inner else {
+        return None;
+    };
+    let raw = data.def(*def_nr).original_name();
+    let name = raw.strip_suffix("Nullable").unwrap_or(raw.as_str());
+    if name != "LtInt" || args.len() != 2 {
+        return None;
+    }
+    let Value::Var(idx_var) = args[0].unspan() else {
+        return None;
+    };
+    // RHS: `len(<vec>)` — the user-visible `len` function, which the
+    // parser emits as a Call to `n_len` / `len` (not `LengthVector` —
+    // that's the underlying opcode the loft body of `len` reduces to).
+    // Accept both names so a future inliner that bypasses the wrapper
+    // still keeps the guard active.
+    let Value::Call(len_def, len_args) = args[1].unspan() else {
+        return None;
+    };
+    let len_raw = data.def(*len_def).original_name();
+    let len_name = len_raw.strip_suffix("Nullable").unwrap_or(len_raw.as_str());
+    if !matches!(len_name, "len" | "LengthVector") || len_args.len() != 1 {
+        return None;
+    }
+    let Value::Var(vec_var) = len_args[0].unspan() else {
+        return None;
+    };
+    Some((*idx_var, *vec_var))
+}
+
+/// Strip `ConvBoolFromInt` / `ConvIntFromInt` casts from a condition
+/// expression so the underlying comparison call is reachable.
+fn unwrap_cond<'a>(v: &'a Value, data: &Data) -> &'a Value {
+    let mut cur = v.unspan();
+    loop {
+        let Value::Call(def_nr, args) = cur else {
+            return cur;
+        };
+        if args.len() != 1 {
+            return cur;
+        }
+        let raw = data.def(*def_nr).original_name();
+        if !raw.starts_with("Conv") {
+            return cur;
+        }
+        cur = args[0].unspan();
     }
 }
 
