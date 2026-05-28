@@ -304,31 +304,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    // @P377-CORRUPTION OPEN — silent data corruption when ≥ 2 struct-param
-    // fns coexist in an interleaved interpret loop (`cv_q[0] = null(oob)`
-    // on iter 1).  Pre-existing in interpret; native is clean.  Survives
-    // both with and without S1, so it's a runtime-layer issue separate from
-    // the leak class.  Held behind `p377_corruption_oracle_known_broken`
-    // until a dedicated fix lands.  The leak class @P377-LEAK was fixed by
-    // S1 (parse-time NRVO in `src/parser/control.rs`, commit 6909177e) and
-    // its regression `139-p377-libfree-leak.loft` now runs in `loft_suite`.
-    HashSet::from(["140-p377-corruption-oracle.loft"])
-}
-
-/// @P377 — known-broken: interpret-only silent corruption (assertion oracle).
-/// `cv_q[0] = null(oob)` on iter 1 of the interleaved struct-param loop.
-/// Native passes this oracle (matches the documented backend-asymmetry).
-/// The sibling LEAK class was fixed by S1; this CORRUPTION class survives
-/// independently and is tracked separately.
-#[test]
-#[ignore = "@P377 — interpret-only struct-param silent corruption"]
-fn p377_corruption_oracle_known_broken() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(
-        PathBuf::from("tests/scripts/140-p377-corruption-oracle.loft"),
-        false,
-        false,
-    )
+    HashSet::new()
 }
 
 /// Part B leak gate — script/doc files with KNOWN, pre-existing store leaks at

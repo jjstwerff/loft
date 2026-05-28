@@ -1364,10 +1364,28 @@ impl State {
             // The dep was cleared on first assignment only when codegen will
             // deep-copy (gen_set_first_ref_call_copy). O-B2 adopted stores
             // keep their dep, so this won't fire for them.
+            // @P377-CORRUPTION: skip when this is an S1-substituted call
+            // (`Set(v, Call(fn, [.., Var(v), ..]))` — the inner Call's
+            // hidden-buffer arg has been substituted to be v itself by
+            // `nrvo_collapse_tail_set`).  In that shape, the Call writes
+            // its result INTO v's existing store, so freeing v's old
+            // content here destroys what the Call is about to write into.
+            // Detection: any arg of the RHS Call is `Var(v)`.  Bails for
+            // every other shape (struct-literal RHS, non-S1 calls,
+            // non-tail patterns) — those keep the load-bearing pre-Set
+            // FreeRef intact, so `tests/scripts/130-gridmesh-crystal-equiv.loft`
+            // and the broader moros_* suite stay green.
+            let s1_substituted = if let Value::Call(_, args) = value.unspan() {
+                args.iter()
+                    .any(|a| matches!(a.unspan(), Value::Var(av) if *av == v))
+            } else {
+                false
+            };
             if matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             ) && stack.function.tp(v).depend().is_empty()
+                && !s1_substituted
             {
                 let free_pos = stack.position - stack.function.stack(v);
                 stack.add_op("OpVarRef", self);
