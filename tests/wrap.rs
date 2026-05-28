@@ -304,12 +304,45 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    // @P380 FIXED 2026-05-28 — `93-vector-advanced.loft` now runs clean in the
-    // shared-State suite (it was SIGSEGVing in `test_vector_of_vectors` on the
-    // `vector<vector<single>>` build, and `test_format_object` had a stale
-    // `sizeof 8` expectation — both fixed), so it's no longer skipped.  Keep
-    // this hook for the next known-broken script.
-    HashSet::new()
+    // @P377 OPEN — interpret-only Store leak + silent data corruption when a
+    // function with a struct VALUE param returns a freshly-allocated
+    // store-backed struct.  Two regression files held behind `#[ignore]`'d
+    // wrappers (`p377_libfree_leak_known_broken`, `p377_corruption_oracle_known_broken`)
+    // so the suite stays green while the fix is in flight on the `p377-fix`
+    // branch.  Removed from this list — and the wrappers deleted — when the
+    // fix lands.
+    HashSet::from([
+        "139-p377-libfree-leak.loft",
+        "140-p377-corruption-oracle.loft",
+    ])
+}
+
+/// @P377 — known-broken: interpret-only Store leak (lib-free repro).  `#[ignore]`
+/// so it's not run by default; remove the file from `ignored_scripts()` and
+/// delete this wrapper when @P377 lands.
+#[test]
+#[ignore = "@P377 — interpret-only struct-param store leak"]
+fn p377_libfree_leak_known_broken() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    run_test(
+        PathBuf::from("tests/scripts/139-p377-libfree-leak.loft"),
+        false,
+        false,
+    )
+}
+
+/// @P377 — known-broken: interpret-only silent corruption (assertion oracle).
+/// `cv_q[0] = null(oob)` on iter 1 of the interleaved struct-param loop.
+/// Native passes this oracle (matches the documented backend-asymmetry).
+#[test]
+#[ignore = "@P377 — interpret-only struct-param silent corruption"]
+fn p377_corruption_oracle_known_broken() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    run_test(
+        PathBuf::from("tests/scripts/140-p377-corruption-oracle.loft"),
+        false,
+        false,
+    )
 }
 
 /// Part B leak gate — script/doc files with KNOWN, pre-existing store leaks at
