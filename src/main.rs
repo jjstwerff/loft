@@ -3281,10 +3281,19 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             let mut wp = parser::Parser::new();
             wp.data = p.data;
             wp.database = state.database;
+            // @P381 — capture the definition count BEFORE the wrapper parse so
+            // we compile ONLY the synthesised `main` (and any helper defs the
+            // parse adds) below.  Recompiling the already-compiled test
+            // functions would re-run `Codegen::gen_text` for any long string
+            // literal (≥256 chars) and attempt to write it into `CONST_STORE`,
+            // which the FIRST `byte_code` call at line 2198 has already locked
+            // (`compile.rs::compile (CONST_STORE init)`).  See
+            // `compile::byte_code_from` for the incremental semantics.
+            let wrapper_start_def = wp.data.definitions();
             wp.parse_str(&wrapper, "test_wrapper", false);
             scopes::check(&mut wp.data);
             state.database = wp.database;
-            compile::byte_code(&mut state, &mut wp.data);
+            compile::byte_code_from(&mut state, &mut wp.data, wrapper_start_def);
             p.data = wp.data;
             state.execute_argv("main", &p.data, &[]);
         }
