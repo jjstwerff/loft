@@ -176,9 +176,9 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
             ol_item = is_ol_item(line);
             if ul_item || ol_item {
                 bn = list_item_buf.len();
-                if bn >= 4 && list_item_buf[0] == '[' && list_item_buf[2] == ']' && list_item_buf[3] == ' ' && (list_item_buf[1] == ' ' || list_item_buf[1] == 'x' || list_item_buf[1] == 'X') {
+                if bn >= 4 && (list_item_buf[0] ?? '\0') == '[' && (list_item_buf[2] ?? '\0') == ']' && (list_item_buf[3] ?? '\0') == ' ' && ((list_item_buf[1] ?? '\0') == ' ' || (list_item_buf[1] ?? '\0') == 'x' || (list_item_buf[1] ?? '\0') == 'X') {
                     chk = "";
-                    if list_item_buf[1] != ' ' { chk = " checked"; }
+                    if (list_item_buf[1] ?? '\0') != ' ' { chk = " checked"; }
                     rest = list_item_buf[4..bn];
                     inner = render_inline(rest, base_dir, tag_url_prefix, image_url_prefix);
                     out += "<li><input type=\"checkbox\" disabled{chk}> {inner}</li>";
@@ -201,9 +201,9 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
                 continue;
             }
             bn = list_item_buf.len();
-                if bn >= 4 && list_item_buf[0] == '[' && list_item_buf[2] == ']' && list_item_buf[3] == ' ' && (list_item_buf[1] == ' ' || list_item_buf[1] == 'x' || list_item_buf[1] == 'X') {
+                if bn >= 4 && (list_item_buf[0] ?? '\0') == '[' && (list_item_buf[2] ?? '\0') == ']' && (list_item_buf[3] ?? '\0') == ' ' && ((list_item_buf[1] ?? '\0') == ' ' || (list_item_buf[1] ?? '\0') == 'x' || (list_item_buf[1] ?? '\0') == 'X') {
                     chk = "";
-                    if list_item_buf[1] != ' ' { chk = " checked"; }
+                    if (list_item_buf[1] ?? '\0') != ' ' { chk = " checked"; }
                     rest = list_item_buf[4..bn];
                     inner = render_inline(rest, base_dir, tag_url_prefix, image_url_prefix);
                     out += "<li><input type=\"checkbox\" disabled{chk}> {inner}</li>";
@@ -352,9 +352,9 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
     }
     if list_kind != "" {
         bn = list_item_buf.len();
-                if bn >= 4 && list_item_buf[0] == '[' && list_item_buf[2] == ']' && list_item_buf[3] == ' ' && (list_item_buf[1] == ' ' || list_item_buf[1] == 'x' || list_item_buf[1] == 'X') {
+                if bn >= 4 && (list_item_buf[0] ?? '\0') == '[' && (list_item_buf[2] ?? '\0') == ']' && (list_item_buf[3] ?? '\0') == ' ' && ((list_item_buf[1] ?? '\0') == ' ' || (list_item_buf[1] ?? '\0') == 'x' || (list_item_buf[1] ?? '\0') == 'X') {
                     chk = "";
-                    if list_item_buf[1] != ' ' { chk = " checked"; }
+                    if (list_item_buf[1] ?? '\0') != ' ' { chk = " checked"; }
                     rest = list_item_buf[4..bn];
                     inner = render_inline(rest, base_dir, tag_url_prefix, image_url_prefix);
                     out += "<li><input type=\"checkbox\" disabled{chk}> {inner}</li>";
@@ -385,12 +385,12 @@ fn atx_heading_level(line: text) -> integer {
     if n == 0 { return 0; }
     count = 0;
     i = 0;
-    while i < n && line[i] == '#' {
+    while i < n && (line[i] ?? '\0') == '#' {
         count = count + 1;
         i = i + 1;
     }
     if count < 1 || count > 6 { return 0; }
-    if i < n && line[i] != ' ' { return 0; }
+    if i < n && (line[i] ?? '\0') != ' ' { return 0; }
     count
 }
 
@@ -398,8 +398,8 @@ fn strip_trailing_hashes(s: text) -> text {
     n = s.len();
     if n == 0 { return s; }
     end = n;
-    while end > 0 && s[end - 1] == '#' { end = end - 1; }
-    if end < n && end > 0 && s[end - 1] == ' ' { end = end - 1; }
+    while end > 0 && (s[end - 1] ?? '\0') == '#' { end = end - 1; }
+    if end < n && end > 0 && (s[end - 1] ?? '\0') == ' ' { end = end - 1; }
     s[0..end].trim()
 }
 
@@ -408,7 +408,7 @@ fn is_setext_underline(line: text, ch: character) -> boolean {
     if n < 2 { return false; }
     i = 0;
     while i < n {
-        if line[i] != ch { return false; }
+        if (line[i] ?? '\0') != ch { return false; }
         i = i + 1;
     }
     true
@@ -444,12 +444,12 @@ fn is_ol_item(line: text) -> boolean {
     n = line.len();
     if n < 3 { return false; }
     i = 0;
-    while i < n && line[i] >= '0' && line[i] <= '9' {
+    while i < n && (line[i] ?? '\0') >= '0' && (line[i] ?? '\0') <= '9' {
         i = i + 1;
     }
     if i == 0 { return false; }
     if i + 1 >= n { return false; }
-    line[i] == '.' && line[i + 1] == ' '
+    (line[i] ?? '\0') == '.' && (line[i + 1] ?? '\0') == ' '
 }
 
 fn strip_list_marker(line: text) -> text {
@@ -458,10 +458,10 @@ fn strip_list_marker(line: text) -> text {
         return line[2..n];
     }
     i = 0;
-    while i < n && line[i] >= '0' && line[i] <= '9' {
+    while i < n && (line[i] ?? '\0') >= '0' && (line[i] ?? '\0') <= '9' {
         i = i + 1;
     }
-    if i + 1 < n && line[i] == '.' && line[i + 1] == ' ' {
+    if i + 1 < n && (line[i] ?? '\0') == '.' && (line[i + 1] ?? '\0') == ' ' {
         return line[i + 2..n];
     }
     line
@@ -473,7 +473,7 @@ fn is_table_row(line: text) -> boolean {
     if n < 3 { return false; }
     i = 1;
     while i < n {
-        if line[i] == '|' { return true; }
+        if (line[i] ?? '\0') == '|' { return true; }
         i = i + 1;
     }
     false
@@ -485,7 +485,7 @@ fn is_table_separator(line: text) -> boolean {
     i = 0;
     seen_dash = false;
     while i < n {
-        c = line[i];
+        c = (line[i] ?? '\0');
         if c != '|' && c != '-' && c != ':' && c != ' ' { return false; }
         if c == '-' { seen_dash = true; }
         i = i + 1;
@@ -501,8 +501,8 @@ fn parse_table_align(sep: text) -> text {
         t = cell.trim();
         if t == "" { continue; }
         n = t.len();
-        starts_colon = n > 0 && t[0] == ':';
-        ends_colon = n > 0 && t[n - 1] == ':';
+        starts_colon = n > 0 && (t[0] ?? '\0') == ':';
+        ends_colon = n > 0 && (t[n - 1] ?? '\0') == ':';
         if starts_colon && ends_colon { out += "c"; }
         else if ends_colon { out += "r"; }
         else if starts_colon { out += "l"; }
@@ -567,7 +567,7 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
     n = src.len();
     i = 0;
     while i < n {
-        c = src[i];
+        c = (src[i] ?? '\0');
         // Hard line break: trailing `  \n` is detected at the
         // line-split level (paragraphs join with ' '); this branch
         // catches the literal in-string `\n` in para_buf if any.
@@ -578,7 +578,7 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
         }
         // Backslash escape
         if c == '\\' && i + 1 < n {
-            next_c = src[i + 1];
+            next_c = (src[i + 1] ?? '\0');
             if next_c == '*' || next_c == '_' || next_c == '`' || next_c == '\\'
                 || next_c == '|' || next_c == '[' || next_c == ']'
                 || next_c == '(' || next_c == ')' || next_c == '!'
@@ -592,10 +592,10 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
                 continue;
             }
         }
-        if c == '~' && i + 1 < n && src[i + 1] == '~' {
+        if c == '~' && i + 1 < n && (src[i + 1] ?? '\0') == '~' {
             i = i + 2;
             inner_start = i;
-            while i + 1 < n && !(src[i] == '~' && src[i + 1] == '~') {
+            while i + 1 < n && !((src[i] ?? '\0') == '~' && (src[i + 1] ?? '\0') == '~') {
                 i = i + 1;
             }
             inner = src[inner_start..i];
@@ -606,8 +606,8 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
         if c == '<' {
             close = i + 1;
             ok = true;
-            while close < n && src[close] != '>' {
-                if src[close] == ' ' || src[close] == '\n' { ok = false; break; }
+            while close < n && (src[close] ?? '\0') != '>' {
+                if (src[close] ?? '\0') == ' ' || (src[close] ?? '\0') == '\n' { ok = false; break; }
                 close = close + 1;
             }
             if ok && close < n {
@@ -628,20 +628,20 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
                 }
             }
         }
-        if c == '!' && i + 1 < n && src[i + 1] == '[' {
+        if c == '!' && i + 1 < n && (src[i + 1] ?? '\0') == '[' {
             text_start = i + 2;
             j = text_start;
             depth = 1;
             while j < n && depth > 0 {
-                if src[j] == ']' { depth = depth - 1; if depth == 0 { break; } }
-                else if src[j] == '[' { depth = depth + 1; }
+                if (src[j] ?? '\0') == ']' { depth = depth - 1; if depth == 0 { break; } }
+                else if (src[j] ?? '\0') == '[' { depth = depth + 1; }
                 j = j + 1;
             }
-            if j < n && j + 1 < n && src[j + 1] == '(' {
+            if j < n && j + 1 < n && (src[j + 1] ?? '\0') == '(' {
                 alt_text = src[text_start..j];
                 url_start = j + 2;
                 k = url_start;
-                while k < n && src[k] != ')' {
+                while k < n && (src[k] ?? '\0') != ')' {
                     k = k + 1;
                 }
                 if k < n {
@@ -669,7 +669,7 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
         if c == '@' && tag_url_prefix != "" && i + 1 < n {
             at_boundary = true;
             if i > 0 {
-                prev = src[i - 1];
+                prev = (src[i - 1] ?? '\0');
                 if (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') || (prev >= '0' && prev <= '9') || prev == '_' {
                     at_boundary = false;
                 }
@@ -686,7 +686,7 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
                     bare = "";
                     bi = tag_start;
                     while bi < tag_end {
-                        bare += "{src[bi]}";
+                        bare += "{(src[bi] ?? '\0')}";
                         bi = bi + 1;
                     }
                     esc_bare = html_escape(bare);
@@ -699,7 +699,7 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
         if c == '`' {
             i = i + 1;
             code_start = i;
-            while i < n && src[i] != '`' {
+            while i < n && (src[i] ?? '\0') != '`' {
                 i = i + 1;
             }
             code = src[code_start..i];
@@ -708,10 +708,10 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
             out += "<code>{esc_code}</code>";
             continue;
         }
-        if c == '*' && i + 1 < n && src[i + 1] == '*' {
+        if c == '*' && i + 1 < n && (src[i + 1] ?? '\0') == '*' {
             i = i + 2;
             inner_start = i;
-            while i + 1 < n && !(src[i] == '*' && src[i + 1] == '*') {
+            while i + 1 < n && !((src[i] ?? '\0') == '*' && (src[i + 1] ?? '\0') == '*') {
                 i = i + 1;
             }
             inner = src[inner_start..i];
@@ -723,7 +723,7 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
             open = c;
             looks_like_italic = true;
             if open == '_' && i > 0 {
-                prev = src[i - 1];
+                prev = (src[i - 1] ?? '\0');
                 if (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') || (prev >= '0' && prev <= '9') {
                     looks_like_italic = false;
                 }
@@ -731,7 +731,7 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
             if looks_like_italic {
                 i = i + 1;
                 inner_start = i;
-                while i < n && src[i] != open {
+                while i < n && (src[i] ?? '\0') != open {
                     i = i + 1;
                 }
                 inner = src[inner_start..i];
@@ -745,15 +745,15 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
             j = text_start;
             depth = 1;
             while j < n && depth > 0 {
-                if src[j] == ']' { depth = depth - 1; if depth == 0 { break; } }
-                else if src[j] == '[' { depth = depth + 1; }
+                if (src[j] ?? '\0') == ']' { depth = depth - 1; if depth == 0 { break; } }
+                else if (src[j] ?? '\0') == '[' { depth = depth + 1; }
                 j = j + 1;
             }
-            if j < n && j + 1 < n && src[j + 1] == '(' {
+            if j < n && j + 1 < n && (src[j + 1] ?? '\0') == '(' {
                 link_text = src[text_start..j];
                 url_start = j + 2;
                 k = url_start;
-                while k < n && src[k] != ')' {
+                while k < n && (src[k] ?? '\0') != ')' {
                     k = k + 1;
                 }
                 if k < n {
@@ -795,10 +795,10 @@ fn url_part_of(raw: text) -> text {
     n = raw.len();
     i = 0;
     // Skip leading whitespace
-    while i < n && raw[i] == ' ' { i = i + 1; }
+    while i < n && (raw[i] ?? '\0') == ' ' { i = i + 1; }
     start = i;
     // Read up to first space (which would precede `"title"`).
-    while i < n && raw[i] != ' ' { i = i + 1; }
+    while i < n && (raw[i] ?? '\0') != ' ' { i = i + 1; }
     raw[start..i]
 }
 
@@ -808,12 +808,12 @@ fn title_part_of(raw: text) -> text {
     quote_at = -1;
     i = 0;
     while i < n {
-        if raw[i] == '"' { quote_at = i; break; }
+        if (raw[i] ?? '\0') == '"' { quote_at = i; break; }
         i = i + 1;
     }
     if quote_at < 0 { return ""; }
     end = quote_at + 1;
-    while end < n && raw[end] != '"' { end = end + 1; }
+    while end < n && (raw[end] ?? '\0') != '"' { end = end + 1; }
     if end >= n { return ""; }
     raw[quote_at + 1..end]
 }
@@ -871,24 +871,24 @@ fn parent_dir(p: text) -> text {
 //                          PLAN22-2d-iii.a
 fn match_tracker_tag(src: text, start: integer, n: integer) -> integer {
     if start >= n { return start; }
-    c0 = src[start];
+    c0 = (src[start] ?? '\0');
     if c0 != 'P' { return start; }
     // Try PLAN prefix first (longer match).
-    if start + 4 < n && src[start + 1] == 'L' && src[start + 2] == 'A' && src[start + 3] == 'N' {
+    if start + 4 < n && (src[start + 1] ?? '\0') == 'L' && (src[start + 2] ?? '\0') == 'A' && (src[start + 3] ?? '\0') == 'N' {
         i = start + 4;
         // Must have at least one digit after PLAN.
         digits = 0;
-        while i < n && src[i] >= '0' && src[i] <= '9' {
+        while i < n && (src[i] ?? '\0') >= '0' && (src[i] ?? '\0') <= '9' {
             i = i + 1;
             digits = digits + 1;
         }
         if digits == 0 { return start; }
         // Optionally consume `-segment` parts: -[a-zA-Z0-9_.]+
-        while i < n && src[i] == '-' {
+        while i < n && (src[i] ?? '\0') == '-' {
             j = i + 1;
             seg = 0;
             while j < n {
-                cj = src[j];
+                cj = (src[j] ?? '\0');
                 ok = (cj >= 'a' && cj <= 'z') || (cj >= 'A' && cj <= 'Z') || (cj >= '0' && cj <= '9') || cj == '_' || cj == '.';
                 if !ok { break; }
                 j = j + 1;
@@ -902,12 +902,12 @@ fn match_tracker_tag(src: text, start: integer, n: integer) -> integer {
     // P<digits>([a-z])?
     i = start + 1;
     digits = 0;
-    while i < n && src[i] >= '0' && src[i] <= '9' {
+    while i < n && (src[i] ?? '\0') >= '0' && (src[i] ?? '\0') <= '9' {
         i = i + 1;
         digits = digits + 1;
     }
     if digits == 0 { return start; }
-    if i < n && src[i] >= 'a' && src[i] <= 'z' {
+    if i < n && (src[i] ?? '\0') >= 'a' && (src[i] ?? '\0') <= 'z' {
         i = i + 1;
     }
     i
