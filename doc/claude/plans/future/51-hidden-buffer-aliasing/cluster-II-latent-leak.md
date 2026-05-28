@@ -32,9 +32,57 @@ Reverted to baseline.  Future fix must EITHER:
 
 Path (1) above shipped as a standalone defensive fix: both backend `OpCopyRecord` implementations (`src/state/io.rs::copy_record` line 1196+ and `src/codegen_runtime.rs::OpCopyRecord` line 490+) now early-return when `data == to` (full DbRef equality).  This closes the destructive-prelude window the previous failed caller-side fix exposed.
 
-**However**, a re-attempt of the caller-side `is_borrowed_view` refinement ON TOP of this hardening still regresses probes 02, 21, 28 with the same `cv_a.data[0] = w_value` corruption — so the corruption is NOT primarily caused by same-store OpCopyRecord.  The true mechanism remains unpinned; pinpointing it would require runtime tracing through the bytecode VM's call / return / scope-exit sequence for probe 02 with the refinement active.
+**However**, a re-attempt of the caller-side `is_borrowed_view` refinement ON TOP of this hardening still regresses probes 02, 21, 28 with the same `cv_a.data[0] = w_value` corruption — so the corruption is NOT primarily caused by same-store OpCopyRecord.
+
+### True mechanism pinned via bytecode runtime tracing (2026-05-29)
+
+Added `LOFT_TRACE_DB` (OpDatabase calls) + `LOFT_TRACE_CR` (OpCopyRecord src/dst + vec contents) tracers — both env-var-gated, left in tree.
+
+Probe 02 trace with Step 2 active reveals the cross-iter slot dangling:
+
+```
+iter 0:
+  OpDatabase var=24 (p)    db=#3@0,8       → p at #3
+  OpDatabase var=12 (cv_a) db=#4@0,8       → cv_a at #4
+  OpDatabase var=44 (mlb)  db=#2@0,8       → main_local_buffer (mlb) at #2
+  OpDatabase var=44 (mlb)  db=#2@1,8       → second alloc_canvas reuses #2
+  OpCopyRecord src=#2(w=4,data_ptr=13,vec0=1) dst=#4 free_src=true
+                                            → main's wrap: copy + FREE #2
+  scope-exit frees #4 (cv_a), #3 (p)
+
+iter 1:
+  OpDatabase var=24 (p)    db=#2@0,8       → p NOW at #2 (slot reuse after free)
+  OpDatabase var=12 (cv_a) db=#3@0,8       → cv_a at #3
+  OpDatabase var=44 (mlb)  db=#2@0,8       → mlb's slot still has stale #2!
+                                            → clear(#2) WIPES p's data
+                                            → claim returns rec=1, mlb := #2@1,8
+                                            → mlb and p now alias the SAME RECORD
+  ... render_double's first alloc_canvas writes w=3 into "p's" record
+  ... second alloc_canvas overwrites with w=4
+  OpCopyRecord src=#2(w=4,data_ptr=13,vec0=4) ...
+                                            → vec0=4 because p's data got
+                                              clobbered by the canvas record
+                                              that aliased it
+```
+
+**The cross-iter dangling slot is the root cause.**  My Step 2's `0x8000` source-free at main's wrap frees `main_local_buffer`'s store, but doesn't reset `main_local_buffer`'s slot DbRef.  Next iter, the allocator reuses that store_nr for a different var (`p`); `main_local_buffer`'s slot still points there.  When render_double's `OpDatabase(mlb)` runs, it `clear()`s the store — wiping `p`'s data — and then both slots alias the same record.
+
+### What's needed for a real fix
+
+Source-free of a caller-LOCAL slot's contents requires resetting that caller's slot to a sentinel after the free.  The OpCopyRecord runtime doesn't know which var holds the source DbRef.  Either:
+
+1. **Codegen-side post-call sentinel reset**: in `gen_set_first_ref_call_copy` and the reassignment path, identify the call's hidden-buf args (caller_hidden_buf-marked work-refs) and emit `Set(arg_var, Null)` after the OpCopyRecord wrap.  Adds ops per call.
+2. **Inhibit source-free for caller_hidden_buf args**: detect when the call's hidden-buf arg IS the same DbRef the callee might return (which is the canonical S1 case), and skip source-free.  Detection is tricky without flow analysis.
+3. **Reset slot from runtime**: extend the OpCopyRecord protocol with a "source var index" so the runtime can also reset that slot on free.  Bytecode protocol change.
+4. **Refcount-based ownership** (`project_drop_store_refcount`): subsumes all of this.  L-effort architectural change.
 
 Status: probes 02, 21 stay leak-free (extended S1 commit `ff0b38d4`); probes 03, 04, 07, 11, 25, 26, 28 still leak.  No silent corruption anywhere — all assertions PASS.
+
+Step 2 NOT shipped (would require parallel fix above).  Future investigators have:
+- `LOFT_TRACE_CR=1` — every OpCopyRecord with src/dst + Canvas field contents before/after.
+- `LOFT_TRACE_DB=1` — every OpDatabase call with var/type/DbRef.
+- `LOFT_TRACE_FINISH=1` — every finish_type entry/exit for tuple types.
+- `LOFT_TRACE_COPY=1` — native-side OpCopyRecord trace.
 
 ---
 
