@@ -488,3 +488,105 @@ fn OpConstRef(d_nr: const integer) -> reference;
 fn OpConstStoreText(rec: const integer, pos: const integer) -> text;
 #rust"s.string_from_const_store(@rec as u32, @pos as u32)"
 
+// ── Path helpers (moved from 03_text.loft so they're available
+//    before file-I/O code that wants to compose them) ─────────
+//
+// loft treats paths as plain text; this group adds the four
+// most-needed path operations as methods on text.  Same shape
+// the @PLAN35 viewer, the @PLAN37 indexer, and lib/markdown
+// each rolled their own version of (dir_of / basename /
+// resolve_relative).  Pure-loft, slash-separated.  Windows
+// backslash normalisation is out of scope for this slice.
+// `starts_with` / `ends_with` are dependencies of `join` /
+// `resolve` so they also live here (was 03_text.loft).
+
+// Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).
+pub fn starts_with(self: text, value: text) -> boolean;
+#rust"@self.starts_with(@value)"
+#pure
+// Returns true if self ends with value. Use for suffix matching (e.g., file extension checks).
+pub fn ends_with(self: text, value: text) -> boolean;
+#rust"@self.ends_with(@value)"
+#pure
+
+// Directory part of a path — strips the trailing `/<segment>`.
+//   "doc/claude/PROBLEMS.md".dir() → "doc/claude"
+//   "CLAUDE.md".dir()              → ""   (no `/`)
+//   "/etc/passwd".dir()            → "/etc"
+//   "".dir()                        → ""
+pub fn dir(self: text) -> text {
+  n = self.len();
+  i = n;
+  while i > 0 {
+    if self[i - 1] == '/' { return self[0..i - 1]; }
+    i = i - 1;
+  }
+  ""
+}
+#pure
+// Last segment of a path — the part after the trailing `/`.
+//   "doc/claude/PROBLEMS.md".basename() → "PROBLEMS.md"
+//   "CLAUDE.md".basename()              → "CLAUDE.md"
+//   "/foo/".basename()                   → ""    (trailing slash)
+//   "".basename()                        → ""
+pub fn basename(self: text) -> text {
+  n = self.len();
+  i = n;
+  while i > 0 {
+    if self[i - 1] == '/' { return self[i..n]; }
+    i = i - 1;
+  }
+  self
+}
+#pure
+// Join two paths — `self/other` with a single `/` separator.
+// Special cases:
+//   - other starts with `/` (absolute) → return other unchanged
+//   - self is empty                     → return other
+//   - self ends with `/`                → no extra separator inserted
+pub fn join(self: text, other: text) -> text {
+  if other.starts_with("/") { return other; }
+  if self == "" { return other; }
+  if self.ends_with("/") { return "{self}{other}"; }
+  "{self}/{other}"
+}
+#pure
+// Resolve `target` against `self` (where self is a base directory).
+// Strips leading `./` repeatedly; each `../` segment trims the last
+// component from `self`.  Mirrors scan.loft's `resolve_link_path`.
+//   "doc/claude".resolve("../README.md")     → "doc/README.md"
+//   "doc/claude".resolve("./PROBLEMS.md")    → "doc/claude/PROBLEMS.md"
+//   "a/b/c".resolve("../../x")               → "a/x"
+//   "".resolve("foo")                        → "foo"
+pub fn resolve(self: text, target: text) -> text {
+  base = self;
+  t = target;
+  // Strip leading `./` repeatedly.
+  while t.len() >= 2 && t[0] == '.' && t[1] == '/' {
+    t = t[2..t.len()];
+  }
+  // Apply `../` segments — each one walks up the base dir.
+  while t.len() >= 3 && t[0] == '.' && t[1] == '.' && t[2] == '/' {
+    bn = base.len();
+    cut = bn;
+    walked = false;
+    while cut > 0 {
+      if base[cut - 1] == '/' {
+        cut = cut - 1;
+        walked = true;
+        break;
+      }
+      cut = cut - 1;
+    }
+    if walked {
+      base = base[0..cut];
+    } else {
+      base = "";
+    }
+    t = t[3..t.len()];
+  }
+  if base == "" { return t; }
+  "{base}/{t}"
+}
+#pure
+
