@@ -1282,7 +1282,7 @@ which depends on the coroutine design (COROUTINE.md).
 Naïve "send the world state to every client every tick" scales as
 `O(N²)`: each tick costs N broadcasts of N peer poses.  At 30 Hz with
 20 audience-demo clients that's 12 000 frames/sec just for pose sync.
-[@PLAN50<!--noindex--> bumper-airplanes](https://github.com/jjstwerff/loft/tree/bumper_plane/doc/claude/plans/future/50-bumper-airplanes)
+[@PLAN50 bumper-airplanes](../../../plans/future/50-bumper-airplanes/README.md)
 proves out a substantially better pattern with three layered filters,
 all server-side, all driven by recipient-vs-peer spatial relationship:
 

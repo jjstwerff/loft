@@ -1,0 +1,215 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN50 phase 0a — minimum-viable echo server for protocol probing.
+//
+// Receives INPUT frames from synthetic clients (carrying each client's
+// position directly; no physics in the probe — see § Protocol below).
+// Per broadcast tick (30 Hz), for each recipient client, sends POSE
+// frames for OTHER planes within `SIGHT_RANGE`.  When a peer crosses
+// out of sight, sends a one-shot EXIT.
+//
+// MVP scope: sight-range cutoff + EXIT signaling.  Rate-LOD bands and
+// projector unfiltered-broadcast are deferred to v2 of the probe.
+//
+// Wire format (text, per @PLAN36 framing convention "msg_id:payload"):
+//   client → server   1:cid,x,y,z         INPUT (probe carries position)
+//   server → client   2:plane_id,seq,x,y,z  POSE
+//   server → client   3:plane_id          EXIT (peer left your sight)
+//
+// Run:
+//   ./target/release/loft --interpret --no-warnings --lib lib/ \
+//       tools/audience-demo-50/probe_server.loft
+
+use server;
+use web;
+
+const PORT: integer = 18084;
+const TICK_INTERVAL_US: integer = 33333;   // 30 Hz
+const SIGHT_RANGE: float = 80.0;
+const SIGHT_RANGE_SQ: float = 6400.0;
+
+struct Plane {
+  cid: integer not null,
+  x:   float not null,
+  y:   float not null,
+  z:   float not null,
+  seq: integer not null,   // pose-frame sequence number for this plane
+}
+
+// Per-recipient visibility ledger: for each (recipient, peer) pair, was
+// the peer in range last tick?  Used to fire EXIT exactly once on the
+// transition out, and to fire fade-in implicitly on the transition in
+// (the first POSE-frame is the trigger).
+//
+// For ≤30 clients × ≤30 peers, the inner vector linear-scan is
+// fine — the probe isn't measuring iteration cost.
+struct SightEntry {
+  peer_cid: integer not null,
+  in_range: boolean not null,
+}
+struct Vis {
+  cid:   integer not null,
+  peers: vector<SightEntry>,
+}
+
+struct World {
+  planes:       hash<Plane[cid]>,
+  vis:          hash<Vis[cid]>,
+  srv:          server::Server,
+  last_tick_us: integer not null,
+  tick:         integer not null,
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+fn dist_sq(ax: float, ay: float, az: float, bx: float, by: float, bz: float) -> float {
+  dx = ax - bx; dy = ay - by; dz = az - bz;
+  dx * dx + dy * dy + dz * dz
+}
+
+// Parse "cid,x,y,z" from an INPUT payload.  Returns the four parts as a
+// 4-tuple-shaped struct (loft doesn't do real tuples here so we use a
+// small holder).
+struct InputParts {
+  cid: integer not null,
+  x:   float not null,
+  y:   float not null,
+  z:   float not null,
+  ok:  boolean not null,
+}
+
+fn parse_input(payload: text) -> InputParts {
+  parts = payload.split(',');
+  if parts.len() != 4 {
+    return InputParts { cid: 0, x: 0.0, y: 0.0, z: 0.0, ok: false };
+  }
+  InputParts {
+    cid: parts[0] as integer,
+    x:   parts[1] as float,
+    y:   parts[2] as float,
+    z:   parts[3] as float,
+    ok:  true,
+  }
+}
+
+// ── Sight ledger helpers ────────────────────────────────────────────────
+
+// Look up (or null) the SightEntry inside vis.peers for a given peer_cid.
+// Linear scan — O(n) per peer × O(n) recipients × O(n) peers per tick =
+// O(n³); fine at n=30 for a probe (~27000 ops/tick).
+fn find_or_add_sight(vis: Vis, peer_cid: integer) -> integer {
+  for foa_e in vis.peers {
+    if foa_e.peer_cid == peer_cid { return foa_e#index; }
+  }
+  vis.peers += [SightEntry { peer_cid: peer_cid, in_range: false }];
+  vis.peers.len() - 1
+}
+
+// ── Broadcast tick ──────────────────────────────────────────────────────
+
+fn broadcast_tick(world: World) {
+  // For each pair (R, P), decide visibility now vs. last tick.
+  for bt_r in world.planes {
+    for bt_p in world.planes {
+      if bt_p.cid == bt_r.cid { continue; }
+      d2 = dist_sq(bt_r.x, bt_r.y, bt_r.z, bt_p.x, bt_p.y, bt_p.z);
+      in_range_now = d2 < SIGHT_RANGE_SQ;
+
+      // Locate (or create) the ledger entry for R seeing P.  Bind the
+      // indexed lookup to a local first — loft requires that for any
+      // expression flowing into a reference-position.
+      v_r = world.vis[bt_r.cid];
+      idx = find_or_add_sight(v_r, bt_p.cid);
+      was_in_range = v_r.peers[idx].in_range;
+
+      if in_range_now {
+        // Send POSE.  Tagged with peer's sequence so client can detect
+        // dropped frames or out-of-order arrivals.
+        msg = "2:{bt_p.cid},{bt_p.seq},{bt_p.x},{bt_p.y},{bt_p.z}";
+        world.srv.send_to(bt_r.cid, msg);
+        v_r.peers[idx].in_range = true;
+      } else if was_in_range {
+        // Transition out → fire EXIT exactly once.
+        world.srv.send_to(bt_r.cid, "3:{bt_p.cid}");
+        v_r.peers[idx].in_range = false;
+      }
+    }
+  }
+  // Each plane's sequence number ticks once per broadcast tick.
+  for bt_q in world.planes { bt_q.seq = bt_q.seq + 1; }
+}
+
+// ── Message dispatch ────────────────────────────────────────────────────
+
+fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
+  if msg_id != 1 { return; }
+  parts = parse_input(payload);
+  if !parts.ok { return; }
+  // INPUT updates the sender's position.  We ignore parts.cid (echoed
+  // for logging clarity; the authoritative source is the ws cid).
+  if world.planes[cid] == null { return; }
+  world.planes[cid].x = parts.x;
+  world.planes[cid].y = parts.y;
+  world.planes[cid].z = parts.z;
+}
+
+// ── Main loop ───────────────────────────────────────────────────────────
+
+fn main() {
+  srv = server::listen(PORT);
+  if srv.handle < 0 {
+    println("probe_server: FAILED to listen on port {PORT}");
+    return;
+  }
+  println("probe_server: listening on port {PORT}");
+  println("  ws://127.0.0.1:{PORT}/ws");
+  println("  sight range: {SIGHT_RANGE} m");
+  println("  tick rate:   30 Hz (every {TICK_INTERVAL_US} us)");
+
+  world = World {
+    planes:       [],
+    vis:          [],
+    srv:          srv,
+    last_tick_us: ticks(),
+    tick:         0,
+  };
+
+  while true {
+    work = 0;
+
+    // 1. Drain pump events.
+    while true {
+      ev = srv.poll_event();
+      if ev == null { break; }
+      work = work + 1;
+      if ev.connected {
+        // Register fresh plane at the origin (probe-clients send their
+        // first INPUT immediately after connect; this just reserves the
+        // slot).
+        world.planes += [Plane { cid: ev.cid, x: 0.0, y: 0.0, z: 0.0, seq: 0 }];
+        world.vis    += [Vis    { cid: ev.cid, peers: [] }];
+        println("probe_server: ws client {ev.cid} connected (active: {world.planes.len()})");
+      } else if ev.http {
+        srv.respond_html("<html><body>probe_server v0</body></html>");
+      } else if ev.message {
+        handle_message(world, ev.cid, ev.msg_id, ev.payload);
+      }
+    }
+
+    // 2. Tick advance.
+    now_us = ticks();
+    elapsed = now_us - world.last_tick_us;
+    if elapsed >= TICK_INTERVAL_US {
+      broadcast_tick(world);
+      world.last_tick_us = world.last_tick_us + TICK_INTERVAL_US;
+      world.tick = world.tick + 1;
+      // Heartbeat every 5 sec.
+      if world.tick - (world.tick / 150) * 150 == 0 {
+        println("probe_server: tick={world.tick} planes={world.planes.len()}");
+      }
+    }
+
+    if work == 0 { web::sleep_ms(2); }
+  }
+}

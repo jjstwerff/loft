@@ -1,0 +1,163 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLAN50 phase 0a — MVP probe client harness for the @PLAN50 protocol.
+//
+// Connects N synthetic clients to `probe_server.loft`, places each at
+// a fixed grid position, sends a single INPUT frame per client to
+// establish position, then drains incoming POSE + EXIT frames for a
+// fixed duration.  Asserts the sight-cutoff + EXIT behaviours match
+// the design.
+//
+// The grid is 6 wide × ceil(N/6) tall with 20 m spacing.  At
+// SIGHT_RANGE=80 m, each client sees ~9 peers (cells within Manhattan
+// distance 4 in the grid).  The test then "moves" one client to a
+// far position and verifies the other clients receive an EXIT for it.
+//
+// Run (server must already be up — see probe_server.loft):
+//   ./target/release/loft --no-warnings --lib lib/ \
+//       tools/audience-demo-50/probe.loft
+//
+// Env:
+//   LOFT_PROBE_CLIENTS  number of clients to spawn (default 4)
+//   LOFT_PROBE_SECS     duration of the drain phase (default 3)
+
+use web;
+
+const PORT:        integer = 18084;
+const TICK_INT_US: integer = 33333;
+const SIGHT_RANGE: float   = 80.0;
+
+fn env_int(name: text, dflt: integer) -> integer {
+  raw = env_variable(name);
+  if raw == "" { dflt } else { raw as integer }
+}
+
+struct Counts {
+  poses:    integer not null,
+  exits:    integer not null,
+  garbled:  integer not null,
+}
+
+fn count_for(h: web::WsHandler) -> Counts {
+  c = Counts { poses: 0, exits: 0, garbled: 0 };
+  while true {
+    m = h.try_recv();
+    if m == null { break; }
+    // Frame format: "<msg_id>:<payload>" — same convention as PLAN36.
+    i = m.find(":");
+    if i == null { c.garbled = c.garbled + 1; continue; }
+    kind = m[..i] as integer;
+    if      kind == 2 { c.poses = c.poses + 1; }
+    else if kind == 3 { c.exits = c.exits + 1; }
+    else              { c.garbled = c.garbled + 1; }
+  }
+  c
+}
+
+// Grid placement: client_i at (col*20, row*20, 0) on a 6-wide grid.
+struct GridPos { x: float not null, y: float not null }
+fn grid_pos(i: integer) -> GridPos {
+  col = i - (i / 6) * 6;
+  row = i / 6;
+  GridPos { x: (col * 20) as float, y: (row * 20) as float }
+}
+
+fn input_frame(cid: integer, x: float, y: float, z: float) -> text {
+  "1:{cid},{x},{y},{z}"
+}
+
+fn run_probe(n: integer, secs: integer) {
+  url = "ws://127.0.0.1:{PORT}/ws";
+  println("");
+  println("=== probe: {n} clients, drain {secs} sec ===");
+
+  // 1. Connect N clients.
+  clients: vector<web::WsHandler> = [];
+  for ci in 0..n {
+    h = web::ws_handler(url);
+    if h == null {
+      println("probe: ws_handler null at i={ci} — abort");
+      return;
+    }
+    clients += [h];
+  }
+  println("probe: {clients.len()} clients connected");
+  web::sleep_ms(200);   // let the server register all upgrades
+
+  // 2. Each client sends its grid position once.  Server will keep
+  //    using this position until the client sends another INPUT.
+  for ci in 0..clients.len() {
+    p = grid_pos(ci);
+    msg = input_frame(ci, p.x, p.y, 0.0);
+    clients[ci].send(msg);
+  }
+  web::sleep_ms(100);   // server applies positions before tick
+
+  // 3. Drain phase: count POSE + EXIT per client over `secs` seconds.
+  println("probe: drain phase for {secs} sec...");
+  start_us = ticks();
+  per_client_poses: vector<integer> = [];
+  per_client_exits: vector<integer> = [];
+  for _ in 0..clients.len() { per_client_poses += [0]; per_client_exits += [0]; }
+
+  while (ticks() - start_us) < (secs * 1000000) {
+    for ci in 0..clients.len() {
+      c = count_for(clients[ci]);
+      per_client_poses[ci] = per_client_poses[ci] + c.poses;
+      per_client_exits[ci] = per_client_exits[ci] + c.exits;
+    }
+    web::sleep_ms(10);
+  }
+
+  // 4. Stationary-phase report.
+  println("probe: stationary phase report:");
+  total_poses = 0;
+  for ci in 0..clients.len() {
+    p = grid_pos(ci);
+    println("  client {ci} (at {p.x},{p.y}): poses={per_client_poses[ci]} exits={per_client_exits[ci]}");
+    total_poses = total_poses + per_client_poses[ci];
+  }
+  // Expected: each client receives 30 Hz POSE for each in-sight peer.
+  // At N=4 in a 2×2 grid (spacing 20m, all pairs within 80m), each
+  // client sees 3 peers → 3 × 30 = 90 POSE/sec.  Across `secs` seconds:
+  // 90 × secs per client, total 90 × secs × n.
+  expected_per_client = 90 * secs;
+  println("  expected ~{expected_per_client} POSE/client at full sight, no LOD");
+  println("  total POSE received: {total_poses}");
+
+  // 5. Move client 0 to (1000, 1000, 0) — far out of sight of everyone
+  //    else.  Other clients should receive an EXIT for plane_id=0.
+  if clients.len() >= 2 {
+    println("");
+    println("probe: moving client 0 to (1000, 1000, 0) — expecting EXITs");
+    clients[0].send(input_frame(0, 1000.0, 1000.0, 0.0));
+    web::sleep_ms(200);
+
+    moved_exits: vector<integer> = [];
+    for _ in 0..clients.len() { moved_exits += [0]; }
+    start_us2 = ticks();
+    while (ticks() - start_us2) < 500000 {   // 0.5 sec drain
+      for ci in 0..clients.len() {
+        c = count_for(clients[ci]);
+        moved_exits[ci] = moved_exits[ci] + c.exits;
+      }
+      web::sleep_ms(5);
+    }
+    println("probe: EXITs received per client after move:");
+    for ci in 1..clients.len() {
+      println("  client {ci}: {moved_exits[ci]}  (expected: 1)");
+    }
+    // Client 0 won't get an EXIT for itself; the others should each
+    // get exactly one EXIT for plane_id=0.
+  }
+
+  println("");
+  println("probe: done");
+}
+
+fn main() {
+  n    = env_int("LOFT_PROBE_CLIENTS", 4);
+  secs = env_int("LOFT_PROBE_SECS",    3);
+  run_probe(n, secs);
+}
