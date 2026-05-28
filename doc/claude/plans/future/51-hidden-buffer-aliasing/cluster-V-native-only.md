@@ -1,5 +1,14 @@
 # Cluster V — Native-only failures
 
+**Status: 🟡 NOT STARTED.**  Probe 29's native mechanism is VERIFIED (OpFreeRef-after-OpCopyRecord visible in generated Rust at `/tmp/loft_native_*.rs:2260-2261`; see § Probe 29 below).  Probe 30's mechanism still hypothesized — capture its generated Rust via `LOFT_KEEP_NATIVE_RS=1` (tool 1, in tree) and read the lambda dispatch in `src/generation/`.
+
+**Next-session entry point for probe 29 fix:**
+
+1. Find where `rewrite_tail_tuple_to_synthetic_struct` (`src/parser/control.rs:677-720`) emits the IR — specifically the OpCopyRecord pattern that the generated Rust mirrors.
+2. Read `OpCopyRecord` runtime semantics in `src/codegen_runtime.rs` (native) vs `src/state/io.rs` (bytecode VM) to see WHY interpret escapes (deep-copy semantics? source-free flag `0x8000`?).
+3. Read `src/scopes.rs::get_free_vars` to find where the trailing `OpFreeRef(var_a)` / `OpFreeRef(var_b)` are emitted (scope-exit free vs. tuple-rewrite output).
+4. Fix candidates: (b) suppress trailing OpFreeRef when OpCopyRecord adopted them; (c) use OpCopyRecord-with-source-free-flag (`0x8000`) so the source is freed AS PART of the copy.
+
 **Severity:** Mixed.  Native codegen produces invalid or buggy Rust for specific shapes.  Some shapes work on interpret but fail on native (29).  Some fail on both backends differently (30).
 **Affected probes:** 29 (tuple-return), 30 (lambda-return)
 **Backend asymmetry:** Opposite from clusters II/III — here NATIVE fails (interpret may or may not work).

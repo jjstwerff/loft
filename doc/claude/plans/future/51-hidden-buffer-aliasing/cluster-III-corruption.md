@@ -1,5 +1,9 @@
 # Cluster III — Silent data corruption (interpret-only)
 
+**Status: 🟡 NOT STARTED.**  Investigation agent's recommendation (during Cluster II investigation): **fold Cluster III into Cluster II's fix** since both touch the same `Set(cv, Call)`-into-hidden-buffer codegen path (`src/state/codegen.rs:1367+`).  The proposed recursive child-store-free in `OpDatabase` reuse path may close both Cluster II's leak and Cluster III's corruption simultaneously.  See [`cluster-II-latent-leak.md` § Investigation results](cluster-II-latent-leak.md#investigation-results-2026-05-28-code-only-plan-agent) for the proposed fix.
+
+If Cluster II's fix lands and probe 04 / 28 still corrupt, Cluster III needs its own focused investigation (separately from Cluster II).
+
 **Severity:** Worst data-integrity class — silent wrong-value reads with no warnings.  Only caught by per-iter assertions.
 **Affected probes:** 04 (mixed-lit-call), 28 (only-conditional-set)
 **Backend asymmetry:** `--interpret` corrupts; `--native` clean.
