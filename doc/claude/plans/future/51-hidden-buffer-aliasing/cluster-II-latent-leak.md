@@ -1,5 +1,31 @@
 # Cluster II — Latent leak (interpret-only)
 
+**Status (2026-05-29): 🟢 LARGELY CLOSED — Step 2 + post-call free+reset landed.  Probes 02, 03, 07, 11, 21, 25, 26 are leak-free.  Probes 04 + 28 still leak Canvas×5 (struct-literal-first / default-init-first patterns — caller_hidden_args reset doesn't apply).**
+
+### Step 2 + post-call free + reset (2026-05-29)
+
+Landed in `src/state/codegen.rs` at both `gen_set_first_ref_call_copy` (line 2060+) and the reassignment path (line 1472+):
+
+1. **Step 2 — refined `is_borrowed_view`**: require at least one VISIBLE-arg dep before treating the return as a borrowed view.  Hidden-only deps (ref_return-promoted buffer attrs) now enable `0x8000` source-free.
+2. **Post-call free + reset sequence**: for each caller-hidden-buf arg in the call (filtered to exclude the LHS), emit:
+   ```
+   OpVarRef(slot) → OpFreeRef → OpInitRefSentinel(slot)
+   ```
+   `OpFreeRef` (via `free_named`) is idempotent — it handles sentinel store_nr (no-op) and already-freed stores (no-op).  This makes the sequence safe whether OpCopyRecord's `0x8000` already freed the source OR @P290's `protect_store_frees` blocked it (the placeholder's store is then still live).  The sentinel write stops the next iter's `OpDatabase` from reclaiming a recycled store_nr that the allocator may have handed to a different var.
+
+3. **Bytecode VM OpDatabase sentinel handling** (`src/state/io.rs:723`): when the slot DbRef holds `store_nr == u16::MAX`, allocate a fresh store via `null()` and write the new DbRef back to the slot.  Mirrors the native runtime's `OpDatabase` semantics.
+
+### Validation
+
+- `cargo test --release --test leak_cases leak_cases_interp` — passes (was previously regressing `clean/local_var_return_shifted_var_nr` until the free was added to the reset sequence; that test exercises the @P290-protected placeholder shape where the source store is NOT freed by OpCopyRecord and the codegen MUST emit its own free).
+- 50 V-class probe runs (--interpret + --native) — no regressions.
+
+### Remaining work
+
+Probes 04 (struct-literal first Set, then Call Set) and 28 (default-init first Set inside `cv: Canvas = ...`, then conditional Call Set) still leak Canvas×5 each iter.  Their hidden-buf placeholder is NOT a `caller_hidden_buf`-marked work-ref at the second Set site (the first non-Call Set initialised cv from a struct-literal RHS path, which doesn't go through the call-copy codegen).  Fix likely requires extending S1 to recognise struct-literal-first or default-init-first patterns, OR a parser-side marker that flags every reassignment site downstream of a `caller_hidden_buf` arg.
+
+### Historical record (pre-2026-05-29)
+
 **Status (2026-05-28): 🟡 PARTIAL — probes 02 + 21 closed, 5 still leak.**
 
 Commits:

@@ -713,12 +713,22 @@ impl State {
         // for the parent enum's largest variant.  The parent's size covers
         // all variants; the variant's own size may be smaller (unit variants).
         let size = self.database.enum_parent_size(db_tp);
-        let db = *self.get_var::<DbRef>(var);
+        let mut db = *self.get_var::<DbRef>(var);
         if std::env::var("LOFT_TRACE_DB").is_ok() {
             eprintln!(
                 "[db] OpDatabase var={var} db_tp={db_tp} db=#{}@{},{} size={size}",
                 db.store_nr, db.rec, db.pos,
             );
+        }
+        // @PLAN51 Cluster II Step 2 — handle u16::MAX sentinel inputs.
+        // Mirrors the native runtime (`codegen_runtime.rs::OpDatabase`
+        // line 214) so the bytecode VM's `database` opcode accepts the
+        // same sentinel a caller-side `OpInitRefSentinel` reset
+        // produces.  Without this, `clear()` below would OOB into
+        // `allocations[u16::MAX as usize]`.
+        if db.store_nr == u16::MAX {
+            db = self.database.null();
+            *self.mut_var::<DbRef>(var) = db;
         }
         self.database.clear(&db);
         let r = self.database.claim(&db, u32::from(size));

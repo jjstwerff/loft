@@ -1461,23 +1461,23 @@ impl State {
                     stack.add_op("OpDatabase", self);
                     self.code_add(slot_offset);
                     self.code_add(tp_nr);
-                    // Call, deep-copy into v.  Free the source only if the
-                    // callee has no hidden Ref params (the source is a fresh
-                    // store from O-B2 adoption).  When hidden Ref params exist,
-                    // the source IS __ref_N which is reused across calls.
-                    let has_hidden_ref = stack
-                        .data
-                        .def(*fn_nr)
-                        .attributes
-                        .iter()
-                        .any(|a| a.hidden && a.typedef.heap_dep().is_some());
                     let copy_nr = stack.data.def_nr("OpCopyRecord");
-                    // same gate as `gen_set_first_ref_call_copy`.
-                    // A borrowed-view return (non-empty dep chain) must
-                    // NOT have its source freed — the "source" is a slice
-                    // of the caller-owned arg's store.
-                    let is_borrowed_view = !stack.data.def(*fn_nr).returned.depend().is_empty();
-                    let tp_val = if has_hidden_ref || is_borrowed_view {
+                    // @PLAN51 Cluster II Step 2 — require at least one
+                    // VISIBLE-arg dep for is_borrowed_view.  Hidden-only
+                    // deps (ref_return-promoted buffer attrs) are either
+                    // canonical (same-store no-op gate in OpCopyRecord)
+                    // or fresh S1 — paired with the post-call sentinel
+                    // reset below to clear the caller's slot.
+                    let is_borrowed_view = {
+                        let def = stack.data.def(*fn_nr);
+                        let deps = def.returned.depend();
+                        !deps.is_empty()
+                            && deps.iter().any(|&a| {
+                                (a as usize) >= def.attributes.len()
+                                    || !def.attributes[a as usize].hidden
+                            })
+                    };
+                    let tp_val = if is_borrowed_view {
                         i32::from(tp_nr)
                     } else {
                         i32::from(tp_nr) | 0x8000
@@ -1518,6 +1518,33 @@ impl State {
                     } else {
                         Vec::new()
                     };
+                    // @PLAN51 Cluster II Step 2 — collect caller-hidden-buf
+                    // work-ref args.  After the OpCopyRecord wrap frees
+                    // the source store (via 0x8000), the caller's slot
+                    // for that work-ref still holds the now-stale DbRef
+                    // — across-iter the allocator can recycle the
+                    // store_nr for a different var, and the next call's
+                    // OpDatabase on this slot would clobber that other
+                    // var's record (probe 02's `data[0] = w_value`
+                    // corruption pinned in commit `a957a365`).  Emit
+                    // OpInitRef after the wrap to reset each caller-
+                    // hidden-buf arg's slot to the u16::MAX sentinel.
+                    let caller_hidden_args: Vec<u16> = if let Value::Call(_, args) = value.unspan() {
+                        args.iter()
+                            .filter_map(|a| {
+                                if let Value::Var(av) = a.unspan()
+                                    && *av != v
+                                    && stack.function.is_caller_hidden_buf(*av)
+                                {
+                                    Some(*av)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     // @P290 — protect caller args from being freed by the
                     // callee's source-free in OpCopyRecord, without blocking
                     // writes / claims (which would crash a callee that
@@ -1533,6 +1560,33 @@ impl State {
                     for av in &ref_args {
                         let unprot = Value::Call(unprotect_fn, vec![Value::Var(*av)]);
                         self.generate(&unprot, stack, false);
+                    }
+                    // @PLAN51 Cluster II Step 2 — post-wrap sentinel reset.
+                    // OpInitRefSentinel writes DbRef{store_nr: u16::MAX, ...}
+                    // at the slot — no allocation, no leak.  The next
+                    // call's OpDatabase on this slot (paired with the
+                    // sentinel-handling at `state/io.rs::database` line
+                    // 723+) allocates a fresh store.
+                    // @PLAN51 Cluster II Step 2 — post-wrap free + sentinel
+                    // reset for caller-hidden-buf args.  Sequence:
+                    //   OpVarRef(slot) → OpFreeRef → OpInitRefSentinel(slot)
+                    // OpFreeRef is idempotent — `free_named` handles both
+                    // the sentinel (u16::MAX) and already-freed (`store.free`)
+                    // inputs as no-ops.  This makes the sequence safe whether
+                    // OpCopyRecord 0x8000 already freed the source or @P290
+                    // `protect_store_frees` blocked the free (placeholder
+                    // store still live).  Resetting the slot to sentinel
+                    // afterward stops the next iter's OpDatabase from
+                    // reclaiming a recycled store_nr that the allocator
+                    // may have handed to a different var (probe 02-style
+                    // corruption pinned in commit `a957a365`).
+                    for av in &caller_hidden_args {
+                        let slot_offset = stack.position - stack.function.stack(*av);
+                        stack.add_op("OpVarRef", self);
+                        self.code_add(slot_offset);
+                        stack.add_op("OpFreeRef", self);
+                        stack.add_op("OpInitRefSentinel", self);
+                        self.code_add(slot_offset);
                     }
                     return;
                 }
@@ -1984,6 +2038,25 @@ impl State {
         } else {
             Vec::new()
         };
+        // @PLAN51 Cluster II Step 2 — collect caller-hidden-buf work-ref
+        // args for the post-wrap sentinel reset (see the reassignment
+        // path's matching comment for rationale).
+        let caller_hidden_args: Vec<u16> = if let Value::Call(_, args) = value.unspan() {
+            args.iter()
+                .filter_map(|a| {
+                    if let Value::Var(av) = a.unspan()
+                        && *av != v
+                        && stack.function.is_caller_hidden_buf(*av)
+                    {
+                        Some(*av)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         // @P290 — soft free-protect over the deep-copy; writes / claims
         // from the callee remain legal.  Switched from `n_set_store_lock`
         // (the hard user-facing `d#lock` tripwire) to dedicated
@@ -1995,20 +2068,20 @@ impl State {
             self.generate(&prot, stack, false);
         }
         let copy_nr = stack.data.def_nr("OpCopyRecord");
-        // High bit = free source store after deep copy.
-        // Disabled under WASM: frame yield/resume creates store aliases that rc
-        // alone cannot track yet; freeing causes "Allocating a used store" panics.
-        //
-        // also clear the flag when the callee returns a BORROWED view
-        // (its return type carries a `dep` chain naming one of its args).
-        // In that case the "source" of the CopyRecord is a slice of the
-        // arg's store; freeing it would corrupt the caller.  Return-dep
-        // inference already tags these returns correctly — we just need
-        // to consult it here.
+        // @PLAN51 Cluster II Step 2 — require VISIBLE-arg dep for
+        // is_borrowed_view; hidden-only deps are either canonical
+        // (same-store no-op gate handles) or fresh S1 (0x8000
+        // safely frees, paired with caller_hidden_args reset below).
         #[cfg(not(feature = "wasm"))]
         let tp_with_free = {
             let is_borrowed_view = if let Value::Call(fn_nr, _) = value.unspan() {
-                !stack.data.def(*fn_nr).returned.depend().is_empty()
+                let def = stack.data.def(*fn_nr);
+                let deps = def.returned.depend();
+                !deps.is_empty()
+                    && deps.iter().any(|&a| {
+                        (a as usize) >= def.attributes.len()
+                            || !def.attributes[a as usize].hidden
+                    })
             } else {
                 false
             };
@@ -2028,6 +2101,16 @@ impl State {
         for av in &ref_args {
             let unprot = Value::Call(unprotect_fn, vec![Value::Var(*av)]);
             self.generate(&unprot, stack, false);
+        }
+        // @PLAN51 Cluster II Step 2 — post-wrap free + sentinel reset
+        // (see the reassignment-path comment for rationale).
+        for av in &caller_hidden_args {
+            let slot_offset = stack.position - stack.function.stack(*av);
+            stack.add_op("OpVarRef", self);
+            self.code_add(slot_offset);
+            stack.add_op("OpFreeRef", self);
+            stack.add_op("OpInitRefSentinel", self);
+            self.code_add(slot_offset);
         }
     }
 
