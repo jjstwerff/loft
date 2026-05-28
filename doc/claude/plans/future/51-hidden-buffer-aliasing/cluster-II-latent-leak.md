@@ -125,9 +125,121 @@ This is automatic — Rust's drop handles the child-store recursion.  The interp
 | Slot allocation is CLEAN for all 6 Cluster II probes (02, 03, 07, 11, 25, 26) | ✅ Verified via `LOFT_LOG=slots:n_render` — only is_argument SKIPs for params, no unallocated vars |
 | **The mechanism is RUNTIME, not parse/codegen** | ✅ Slot trace clean → bug is in opcode execution at runtime, consistent with child-store-orphan hypothesis |
 | The child-store-orphan mechanism | 🟢 Hypothesized; consistent with the +1 per iter store trace; probe 36 confirms per-iter-not-per-Set scaling |
-| The exact opcode that overwrites without recursive-free | 🤔 Likely `OpDatabase` (claiming the existing slot for the new record) followed by field-set ops that don't free old field values |
+| The exact opcode that overwrites without recursive-free | ✅ **Verified — `OpDatabase` reuse-path calls `stores.clear()` which only resets store metadata; no recursive walk of Reference-typed fields** |
 | Why probe 07 (explicit-return) leaks identically | 🤔 ref_return doesn't fire on Return-tail bodies; needs source reading at `parse_return` |
 | Why probe 26 leaks when if-false never fires | 🤔 The conditional Set's CODEGEN affects buffer-protocol setup; the if's then-block contains Set(cv, ...) whose presence alone perturbs slot tracking |
+
+## Investigation results (2026-05-28, code-only Plan agent)
+
+A code-only investigation agent walked the relevant source paths.  Key file:line findings:
+
+| File | Lines | What it does | Why it's relevant |
+|---|---|---|---|
+| `src/parser/objects.rs` | 1538-1544 | Struct-literal lowering for `cv = Canvas{…}` when LHS is an existing slot var.  Guards `v_set(Null)` prelude on `!is_argument(v_nr)`.  Emits `OpDatabase(cv, tp)` directly. | For hidden-buffer params (`is_argument == true`), the null-prelude is SKIPPED.  OpDatabase fires on the existing slot. |
+| `src/codegen_runtime.rs` | 210-230 | `OpDatabase` runtime.  Branches on `db.store_nr == u16::MAX` (fresh alloc) vs. reuse.  In reuse path: calls `stores.clear(&db)` then `claim`. | The reuse path is where the leak happens — `clear()` does not free child stores reachable through old record's Reference-typed fields. |
+| `src/database/allocation.rs` | 420-430 | `Stores::clear()` — calls `store.init()`. | `init()` resets the store's allocator metadata (free-list / claims) but does NOT walk the type's Reference fields to free externally-owned child stores. |
+| `src/database/allocation.rs` | 166-295 | `Stores::free_named` — cascade-free walk for child stores.  But the cascade gate at 206-238 **only fires for `__closure_*`-prefixed types**. | Plain user types (Canvas) get NO cascade.  This is why scope-exit `OpFreeRef` on `cv` doesn't free its child vector store either — same gate. |
+| `src/scopes.rs` | 681 | `paired_witness` map insertion uses `entry().or_insert`. | If multiple `__ref_N → witness_v` pairings exist for the same witness (probe 36's 3-Set case), only the FIRST gets recorded.  Subsequent pairings stale → pair-free check fires wrong. |
+
+### Refined mechanism
+
+The original cluster doc hypothesis (V_1 = separate vector child store) was partially imprecise.  `vector_append` actually claims a child **record** within the parent store, not a separate store.  Closer reading:
+
+**For probe 02 (single non-S1 Set + one S1 Set):**
+
+1. **First call** passes `__ref_1 = null` to alloc_canvas.  Inside, `cv = Canvas { data: [], w: 3 }` invokes OpDatabase with `cv.store_nr == u16::MAX`, allocating store `S_a`.  `cv.data += [fill]` claims a child record in `S_a` for the vector.  Returns `DbRef{S_a, …}`.
+
+2. **Set assigns cv = __ref_1's DbRef.**  cv aliases `S_a`.
+
+3. **Second call** (S1-substituted, buffer = cv = `DbRef{S_a}`): alloc_canvas's `cv = Canvas { data: [], w: 4 }` invokes OpDatabase with `cv.store_nr == S_a` (reuse path).  `clear()` calls `store.init()` — wipes `S_a`'s allocator metadata.  Then `claim` allocates a fresh Canvas record in `S_a`, and `cv.data += [fill]` claims a fresh vector child record.  The OLD record's bytes are still in `S_a` but the allocator considers them free.
+
+4. **Scope exit:**
+   - `OpFreeRefIfDistinct(__ref_1, cv)`: both `DbRef{S_a, …}` → skip.  `S_a` is the caller's buffer; caller will free it.
+   - `OpFreeRef(__ref_2)`: __ref_2 is null → no-op.
+
+5. **Caller (main) end-of-iter:** frees `S_a`.
+
+**Where is the per-iter leak then?**  Per the agent's analysis, the leak source isn't reconstructable from the code alone — the per-iter +1 store-count growth needs runtime store-trace analysis to pin which exact store doesn't get freed.
+
+One leading hypothesis from the agent: the `paired_witness::entry().or_insert` issue at `src/scopes.rs:681` may leave `__ref_1` un-pair-freed in multi-Set scenarios, while `__ref_2` (and others) is.  In probe 02, the IR shows only ONE `OpFreeRefIfDistinct(__ref_1, cv)` at scope exit — there's no corresponding free for `__ref_2`'s store (which would be a fresh alloc inside the first alloc_canvas call's internal `__ref_1`, NOT render_double's `__ref_1`).
+
+**The mechanism is partially verified — the orphan opcode site is unclear without a runtime store-trace pinpointing the leaked store_nr.**
+
+## Proposed fix (M effort)
+
+The investigation agent proposed two-part fix:
+
+### Part 1 — Recursive pre-clear free in `OpDatabase` reuse path
+
+`src/codegen_runtime.rs` OpDatabase (lines 210-230).  Before `stores.clear(&db)` reinitialises a non-null store, walk every Reference / Vector / Enum child store held by the OLD record and free them.  Pseudo-Rust:
+
+```rust
+pub fn OpDatabase(cell, mut db: DbRef, db_tp: i32) -> DbRef {
+    let stores = unsafe { &mut *cell.get() };
+    let db_tp = db_tp as u16;
+    let size = stores.size(db_tp);
+    if db.store_nr == u16::MAX {
+        db = stores.null();
+    } else {
+        // NEW: reusing a populated slot.  Walk old record's Struct fields
+        // and free DbRef-holding child stores before clear() wipes metadata.
+        let old_kt = stores.allocations[db.store_nr as usize].known_type;
+        if old_kt != u16::MAX && db.rec != 0 {
+            if let Parts::Struct(fields) = &stores.types[old_kt as usize].parts.clone() {
+                for f in fields {
+                    if matches!(stores.types[f.content as usize].parts, Parts::DbRef) {
+                        let off = db.pos + u32::from(f.position);
+                        let cs = stores.allocations[db.store_nr as usize]
+                            .get_u32_raw(db.rec, off) as u16;
+                        let cr = stores.allocations[db.store_nr as usize]
+                            .get_u32_raw(db.rec, off + 4);
+                        if cs != u16::MAX && cs != db.store_nr && cr != 0 {
+                            stores.free(&DbRef { store_nr: cs, rec: cr, pos: 8 });
+                        }
+                    }
+                    // Inline Vector/keyed fields share the parent store; clear() reclaims them.
+                }
+            }
+        }
+    }
+    stores.clear(&db);
+    let r = stores.claim(&db, u32::from(size));
+    ...
+}
+```
+
+### Part 2 — Symmetric extension of `free_named`'s cascade gate
+
+`src/database/allocation.rs:206-238`.  Extend the `__closure_*` cascade to include plain struct types with Reference-typed fields when those fields point to **distinct stores** (`cs != parent.store_nr`) AND `ref_count <= 1`.  Unifies the recursive-free path so scope-exit OpFreeRef on owned refs also cascades.
+
+### Why this works
+
+Matches native's implicit "old value drops first" semantics — the cluster doc's note that native is clean confirms native's codegen does this via Rust drop.  The fix retrofits the same semantics into the interpret runtime.
+
+### Effort and risk
+
+**Effort: M (1-3 days)** — runtime change touches OpDatabase + free_named on both backends (`src/codegen_runtime.rs` for native runtime + `src/state/io.rs` for the bytecode-VM OpDatabase handler).
+
+**Risks:**
+- **Over-free of aliased child stores.** Deep-slice borrows (probe 39) share child stores between parent records.  Mitigation: only cascade when `cs != db.store_nr` AND the child's `ref_count <= 1`.  Existing rc-aware free at allocation.rs:179-189 already handles this.
+- **`Parts::Array(_)` fields** (per @P376) — vector fields may store linked element records.  Need to verify whether array elements are in-store or cross-store; probably in-store (claim in parent's store at allocation.rs:109).
+- **Interaction with `paired_witness` / `OpFreeRefIfDistinct`.**  If the cascade frees a child store that's also a witness in a pair-free, the subsequent `OpFreeRefIfDistinct` would no-op (double-free guard at allocation.rs:175).  Safe.
+
+### Files to change
+
+1. `src/codegen_runtime.rs` — `OpDatabase` (lines 210-230): add recursive pre-clear free.
+2. `src/database/allocation.rs` — `free_named` (lines 206-238): extend cascade gate beyond `__closure_*`.
+3. `src/state/io.rs` — bytecode-VM `OpDatabase` handler (around line 727): mirror the runtime fix.
+4. (Optional alternative location) `src/parser/objects.rs` (lines 1538-1544): emit a pre-`OpDatabase` cascade-free opcode at parse time instead of runtime.  Runtime fix is cleaner — one location.
+
+### Does this close probe 39 (moros_map leak)?
+
+**No.**  Probe 39's mechanism is structurally different:
+- Pattern: `return gh_c.ck_hexes[idx]` — a deep-slice borrow return out of a nested struct field.
+- The returned value SHARES a store with the outer parameter `m`; the leak (if real) is in how the deep-slice's dep-chain interacts with the hidden buffer.
+- The fix needed is in the deep-slice / iterator-tail return codegen — separate sub-mechanism, likely Cluster III territory.
+
+Probe 39 should be addressed separately after Cluster II's fix lands.
 
 ## Investigation tasks
 
