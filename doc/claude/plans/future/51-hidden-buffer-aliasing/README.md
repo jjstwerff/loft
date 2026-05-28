@@ -51,18 +51,18 @@ This plan exists to **systematically catalogue the shapes** in this class, **und
 | V-b (nested tuple codegen — probe 40) | ✅ VERIFIED — codegen emitted `n_pair(...) as (DbRef, DbRef)`, mixing heap-promoted DbRef with Rust value-tuple | ✅ **FIXED 2026-05-28 (commit `92ebe8dc`)** — `emit_tuple_set_ops` (src/parser/mod.rs:2891) detects Call returning the heap-promoted form of THIS tuple shape and emits a single OpCopyRecord | Graduate probe 40 to `tests/scripts/` |
 | V-c native (lambda dispatch — probes 30, 59, 62) | ✅ VERIFIED — candidate-filter at emit.rs:519 didn't exclude `Attribute.hidden=true` | ✅ **FIXED 2026-05-28 (commit `e4cd328d`)** — filter + per-arm hidden-buf emit at emit.rs:519, 643-684 (pre-allocated `__vc_hbuf` for Vector returns; sentinel for Reference/struct-Enum) | Graduate probes to `tests/scripts/` |
 | V-c interp (lambda dispatch — probes 30, 59, 62) | ✅ VERIFIED — `fn_call_ref` (state/mod.rs:329) didn't push hidden-buffer args expected by ref_return-promoted callees → fn_return overshoot clobbered caller's stack | ✅ **FIXED 2026-05-28 (commit `5eb7d90d`)** — runtime introspects callee's def.attributes via data_ptr and pushes one allocated DbRef per hidden attr (null() for Reference/struct-enum, database(size) for Vector) | Graduate probes to `tests/scripts/` |
-| Probe 39 (moros_map leak) | 🟡 Investigated — caller's `__ref_outer` slot holds stale DbRef after callee free; the leak is the freshly-allocated S1 that nobody frees.  Initial fix attempt (`__ref_1` lookup + OpCopyRecord inject in parse_return) didn't fire — for moros_map's `map_get_hex`, ref_return promotes `gh_c` (Chunk-typed for-iterator binding), not a fresh `__ref_1` work-ref.  Broader "find hidden attr by typedef" extension crashed because the promoted var's TYPE doesn't match the attribute's TYPE | ⏸️ Deferred — assertions PASS (correct values returned); the leak is annoying but visible.  Likely subsumed by future Cluster II Part 2 (extended free_named cascade) if pursued | None for now |
+| Probe 39 (moros_map leak) | ✅ Incidentally closed by Cluster II fix arc (2026-05-29) | ✅ **CLOSED** — probe 39 passes leak-free under `LOFT_STORES=log` (all stores allocated are freed before program exit).  No fix needed — the cluster-II caller-side free+sentinel reset (`db8fd532`) + narrowed `is_hidden_buf_arg` (`e4fca573`) cover the moros_map shape too. | None |
 
-**Status summary (2026-05-29):**
-- 11 commits landed on `p377-fix` for PLAN51 V-class + Cluster II/III work.
+**Status summary (2026-05-29 — PLAN51 IMPLEMENTATION COMPLETE):**
+- 12 commits landed on `p377-fix` for PLAN51 V-class + Cluster II/III work.
 - All 50 V-class probe runs (25 probes × 2 backends) pass.
 - All 9 Cluster II probes leak-free on `--interpret`.  Cluster III probes (4, 28) produce CORRECT values and are leak-free.
+- Probe 39 (moros_map) — incidentally closed by Cluster II fix arc, also leak-free.
 - Full `cargo test --release --no-fail-fast` suite: 0 failures.
-- All Clusters I-V are CLOSED.  Lone open item: probe 39 (moros_map leak, deferred — assertions PASS).
+- ALL CLUSTERS I-V CLOSED.  No open bugs in PLAN51.
 
 **Total Phase D remaining:**
-- V-* + Cluster II/III probe graduation to `tests/scripts/` (~1-2 hours) — task #4.
-- Probe 39 (moros_map leak) — deferred, not corruption.
+- V-* + Cluster II/III probe graduation to `tests/scripts/` (~1-2 hours) — task #4.  Bookkeeping only; no live bug behind it.
 
 **Stage C (fix design): ⏸️ Pending Phase B-finish.**
 
