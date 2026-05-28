@@ -44,7 +44,7 @@ This plan exists to **systematically catalogue the shapes** in this class, **und
 | Cluster | Mechanism status | Fix status | Action needed next |
 |---|---|---|---|
 | I (canonical) | ✅ Fully understood | ✅ SHIPPED (S1+S2 on `p377-fix`) | None |
-| II (latent leak) | ✅ Runtime confirmed; caller/callee free-ownership deadlock pinned | 🟡 **PARTIAL — probes 02 & 21 close cleanly via extended S1 (consecutive-Set shapes, commit `ff0b38d4`).**  Probes 03, 04, 07, 11, 25, 26, 28 still leak — they break the consecutive-Set walk via intervening stmts / If wrappers / Return ops.  An "extend to all Sets" attempt regressed `tests/scripts/87-store-leaks.loft` (NaN); rolled back. | Future work: (a) parser-side branch-aware substitution that handles If wrappers safely, OR (b) runtime-side fix at `OpFreeRefIfDistinct` to recognise reassignment-after-adoption.  Both need probes for the regression-vector class probe 87 illustrates. |
+| II (latent leak) | ✅ Runtime confirmed; caller/callee free-ownership deadlock pinned | ✅ **CLOSED 2026-05-29** — all 9 Cluster II probes (02, 03, 04, 07, 11, 21, 25, 26, 28) pass leak-free on `--interpret`.  Three landed commits: extended S1 (`ff0b38d4`), Step 2 + post-call free+sentinel reset (`db8fd532`), and `is_hidden_buf_arg` narrowed to require S1 substitution (`e4fca573`). | None |
 | III (corruption) | ✅ VERIFIED — pre-Set OpFreeRef freed caller's hidden buffer | ✅ **FIXED 2026-05-28 (commit `d710e399`)** — `src/state/codegen.rs:1384` skips pre-Set OpFreeRef when `v` is a `ref_return`-promoted hidden-buffer arg.  Probes 04 + 28 assertions now produce correct values (silent data-loss class eliminated) | None |
 | IV (codegen panic) | ✅ VERIFIED via slot trace | ✅ **FIXED 2026-05-28 (commit `d630e68b`)** | None |
 | V-a (tuple schema mismatch — probes 29, 41, 44, 45, 48, 50) | ✅ VERIFIED — `field_groups` not propagated from compile-side to native-runtime database | ✅ **FIXED 2026-05-28 (commit `b69a1707`)** — `Stores::add_tuple_group` (src/database/types.rs:1163) + emit site in `emit_def_create_recurse_fields` (src/generation/mod.rs:1500) | Graduate probes to `tests/scripts/` |
@@ -53,15 +53,16 @@ This plan exists to **systematically catalogue the shapes** in this class, **und
 | V-c interp (lambda dispatch — probes 30, 59, 62) | ✅ VERIFIED — `fn_call_ref` (state/mod.rs:329) didn't push hidden-buffer args expected by ref_return-promoted callees → fn_return overshoot clobbered caller's stack | ✅ **FIXED 2026-05-28 (commit `5eb7d90d`)** — runtime introspects callee's def.attributes via data_ptr and pushes one allocated DbRef per hidden attr (null() for Reference/struct-enum, database(size) for Vector) | Graduate probes to `tests/scripts/` |
 | Probe 39 (moros_map leak) | 🟡 Investigated — caller's `__ref_outer` slot holds stale DbRef after callee free; the leak is the freshly-allocated S1 that nobody frees.  Initial fix attempt (`__ref_1` lookup + OpCopyRecord inject in parse_return) didn't fire — for moros_map's `map_get_hex`, ref_return promotes `gh_c` (Chunk-typed for-iterator binding), not a fresh `__ref_1` work-ref.  Broader "find hidden attr by typedef" extension crashed because the promoted var's TYPE doesn't match the attribute's TYPE | ⏸️ Deferred — assertions PASS (correct values returned); the leak is annoying but visible.  Likely subsumed by future Cluster II Part 2 (extended free_named cascade) if pursued | None for now |
 
-**Status summary:**
-- 9 commits landed on `p377-fix` for PLAN51 V-class + Cluster II/III work.
+**Status summary (2026-05-29):**
+- 11 commits landed on `p377-fix` for PLAN51 V-class + Cluster II/III work.
 - All 50 V-class probe runs (25 probes × 2 backends) pass.
-- All 9 Cluster II/III probe runs produce CORRECT values (no corruption); 2 leak-free, 7 still leak.
+- All 9 Cluster II probes leak-free on `--interpret`.  Cluster III probes (4, 28) produce CORRECT values and are leak-free.
 - Full `cargo test --release --no-fail-fast` suite: 0 failures.
+- All Clusters I-V are CLOSED.  Lone open item: probe 39 (moros_map leak, deferred — assertions PASS).
 
 **Total Phase D remaining:**
-- V-* + Cluster II/III probe graduation to `tests/scripts/` (~1-2 hours)
-- Cluster II remaining shapes (probes 03, 04, 07, 11, 25, 26, 28) — needs branch-aware substitution OR runtime-side `OpFreeRefIfDistinct` reassignment-after-adoption detection.  Estimated 1 week.
+- V-* + Cluster II/III probe graduation to `tests/scripts/` (~1-2 hours) — task #4.
+- Probe 39 (moros_map leak) — deferred, not corruption.
 
 **Stage C (fix design): ⏸️ Pending Phase B-finish.**
 
