@@ -830,3 +830,41 @@ fn main() {
         "`??` after an index / division must NOT be flagged redundant; got stderr={diag:?}"
     );
 }
+
+// ── @P368b — a non-zero NAMED-CONSTANT divisor must not warn ─────────────────
+// `const K = 2.0; x / K` used to fire the divide-by-zero warning (the skip-
+// pattern only saw literal divisors).  Const propagation now folds the named
+// constant to its literal value, so a non-zero named const divisor is
+// skip-pattern-1 — no warning.  A genuine variable divisor still warns.
+#[test]
+fn skip_named_const_nonzero_divisor() {
+    let source = "\
+const K = 2.0;
+const N = 4;
+fn main() {
+  x = 10.0; y = 20;
+  a = x / K;
+  b = y / N;
+  print(\"a={a} b={b}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("skip_named_const_div", source);
+    assert!(
+        !diag.contains("division may produce null"),
+        "@P368b: non-zero named-const divisor must NOT warn; got stderr={diag:?}"
+    );
+    // a genuine variable divisor still warns.
+    let source2 = "\
+fn main() {
+  x = 10.0;
+  c = ticks();
+  d = x / c;
+  print(\"d={d}\\n\");
+}
+";
+    let (_o2, diag2, _c2) = run_with_warnings("named_const_div_neg", source2);
+    assert!(
+        diag2.contains("division may produce null"),
+        "a variable divisor must still warn; got stderr={diag2:?}"
+    );
+}
