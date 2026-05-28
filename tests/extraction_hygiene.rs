@@ -170,10 +170,11 @@ fn forbidden_library_symbols() -> Vec<(String, String)> {
                     } else {
                         Some(rest.trim_matches('"').to_string())
                     };
-                    if let Some(sym) = sym {
-                        if sym.starts_with("n_") && !out.iter().any(|(s, _)| *s == sym) {
-                            out.push((sym, owner.clone()));
-                        }
+                    if let Some(sym) = sym
+                        && sym.starts_with("n_")
+                        && !out.iter().any(|(s, _)| *s == sym)
+                    {
+                        out.push((sym, owner.clone()));
                     }
                 }
             }
@@ -542,13 +543,13 @@ fn native_libraries_follow_clean_binding_pattern() {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         // (1) no [native.functions] manifest table.
-        if let Ok(toml) = fs::read_to_string(path.join("loft.toml")) {
-            if toml.lines().any(|l| l.trim() == "[native.functions]") {
-                violations.push(format!(
-                    "lib/{pkg}: loft.toml still has a `[native.functions]` table — \
-                     declare bindings via co-located `#native` annotations instead"
-                ));
-            }
+        if let Ok(toml) = fs::read_to_string(path.join("loft.toml"))
+            && toml.lines().any(|l| l.trim() == "[native.functions]")
+        {
+            violations.push(format!(
+                "lib/{pkg}: loft.toml still has a `[native.functions]` table — \
+                 declare bindings via co-located `#native` annotations instead"
+            ));
         }
         // (2) register list generated, not hand-written.
         let mut rs = Vec::new();
@@ -567,15 +568,16 @@ fn native_libraries_follow_clean_binding_pattern() {
             }
         }
         let excepted = CLEAN_REGISTER_EXCEPTIONS.iter().any(|(p, _)| *p == pkg);
-        if let Some(file) = hand_register {
-            if !has_include && !excepted {
-                violations.push(format!(
-                    "lib/{pkg}: `{file}` hand-maintains `loft_register!` — generate \
-                     it from the `#native` annotations via `build.rs` \
-                     (`loft_ffi_build::generate_register_from_loft(\"../src\")` + \
-                     `include!(\".../loft_register_gen.rs\")`)"
-                ));
-            }
+        if let Some(file) = hand_register
+            && !has_include
+            && !excepted
+        {
+            violations.push(format!(
+                "lib/{pkg}: `{file}` hand-maintains `loft_register!` — generate \
+                 it from the `#native` annotations via `build.rs` \
+                 (`loft_ffi_build::generate_register_from_loft(\"../src\")` + \
+                 `include!(\".../loft_register_gen.rs\")`)"
+            ));
         }
     }
     assert!(

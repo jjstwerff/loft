@@ -87,6 +87,9 @@ struct Breadcrumb {
 /// a no-op (the first deadline + watchdog remain in effect).
 ///
 /// Pass `0` to leave the timeout disarmed.
+///
+/// # Panics
+/// Panics if the OS refuses to spawn the `loft-watchdog` thread.
 pub fn arm(timeout_secs: u64, grace_secs: u64) {
     if timeout_secs == 0 {
         return;

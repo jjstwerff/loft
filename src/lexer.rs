@@ -1275,7 +1275,7 @@ impl Lexer {
             // when it hard-kills.  Throttled so the mutex-try in
             // `checkpoint_parse` isn't on every token.
             bc_throttle = bc_throttle.wrapping_add(1);
-            if bc_throttle % 256 == 0 {
+            if bc_throttle.is_multiple_of(256) {
                 crate::timeout::checkpoint_parse(&self.peek.position.file, self.peek.position.line);
             }
             if matches!(self.peek.has, LexItem::None) {
