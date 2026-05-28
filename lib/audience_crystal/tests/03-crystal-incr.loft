@@ -99,7 +99,7 @@ fn test_c3_incremental_equals_golden() {
   n = 40 * 40;
   i = 0;
   while i < n {
-    for b in 0..50 {
+    for _b in 0..50 {
       if i < n {
         crystal_incr_paint(inc, snap.xs[i] ?? 0, snap.ys[i] ?? 0, snap.colors[i] ?? 0);
         i = i + 1;
