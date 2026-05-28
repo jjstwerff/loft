@@ -661,17 +661,42 @@ since dryopea and bumper both consume it.
 - `lib/wall.loft` (754L) + `lib/overland.loft` (7L) folded into
   `lib/world/src/` (2026-05-28).  These had zero `use` references at
   `lib/` root — physically dead code — so the move is non-breaking.
-  Items inside still need `pub` markers before they can be loaded as
-  modules by the `world.loft` entry; deferred to the integration
-  follow-up so each `pub` flip can be paired with the consumer that
-  needs it.
+- **MapFile schema documented** as a cross-project contract in
+  `lib/world/MAPFILE.md` (2026-05-28) — v1 JSON shape, versioning
+  policy, per-consumer overlays (moros / dryopea / bumper), and a
+  6-step migration plan to `world::load_mapfile()` for when the
+  consumer stall lifts.  Schema is currently enforced by
+  `lib/moros_map`'s `Map` struct (the contract names what's there).
 
-**Remaining:** `pub`-mark the wall/overland items as needed, wire
-`use wall;` / `use overland;` (or fold their content directly) into
-`world.loft`, move the hex / chunk types + geometry collision out of
-`moros_map` / `moros_sim/collide.loft` into the same package, migrate
-`lib/moros_*` to `use world;` for what they currently duplicate
-locally, and verify moros demos render identically.
+**Blocked on consumer stall — pub markers won't parse against
+current loft:**
+
+A speculative `sed` pass marking every wall.loft / overland.loft
+item `pub` was attempted on 2026-05-28 and reverted.  The legacy
+moros syntax in those files uses `enum` for what current loft calls
+`struct` (e.g. `enum Tile { material: u8, ...}` — struct-shaped
+field list, no variants), and the parser rejects it as
+`Expect enum values to be in camel case style`.  Translating the
+files to current loft syntax requires touching consumer logic
+([memory: project_consumer_stall](../../../memory/project_consumer_stall.md)),
+so this is genuinely blocked — not just deferred.
+
+**Remaining (resumes when consumer-stall lifts):**
+
+- Translate wall.loft / overland.loft `enum`-as-struct declarations
+  to current `pub struct ...` syntax; mark every item `pub` as
+  needed by the eventual consumer (paired with the consumer's
+  migration, not in advance).
+- Wire `use wall;` / `use overland;` (or fold content directly) into
+  `world.loft`.
+- Move hex / chunk types + geometry collision out of `moros_map` /
+  `moros_sim/collide.loft` into `lib/world/` per the MAPFILE.md
+  migration plan (steps 1–3).
+- Add `world::load_mapfile()` / `world::save_mapfile()` entry points
+  (MAPFILE.md step 4) and a `pub use world::*;` shim in `moros_map`
+  (step 5).
+- Migrate `lib/moros_*` to `use world;` (step 6); verify moros
+  demos render identically.
 
 **MapFile schema (concrete design — part of 7a):**
 
