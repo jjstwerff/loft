@@ -2356,7 +2356,7 @@ fn main() {
             all_native_libs.push(nlp.clone());
         }
     }
-    extensions::load_all(&mut state, all_native_libs);
+    extensions::load_all(&mut state, all_native_libs.clone());
     // PKG.5: wire auto-marshalled native functions from loaded cdylibs.
     extensions::wire_native_fns(&mut state, &p.data);
 
@@ -3246,15 +3246,27 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
         return;
     }
     if main_nr == u32::MAX && !dump_only {
-        // No main() — wrap each zero-parameter user function in a synthetic
-        // main() that calls it. This ensures proper scope cleanup: stores
-        // allocated by struct-returning functions are freed when the caller's
-        // variables go out of scope, before the leak check runs.
+        // No main() — execute each zero-parameter user `test_*()` function
+        // INDIVIDUALLY with a fresh `state.database` per call.  This
+        // mirrors `src/test_runner.rs`'s per-fn isolation (line 997's
+        // `clean_data.clone() + State::new(clean_db.clone())` pattern) and
+        // is what prevents shared-State accumulation of leaked stores
+        // from one test compounding into a SIGSEGV in a later test.
         //
-        // `--dump` skips this wrap-and-execute path — it wants to see the
-        // bytecode of the user functions as parsed, not a synthetic caller
-        // (and the synthetic caller may itself panic on buggy user code,
-        // aborting before the dump is written).
+        // History: the prior wrapper-synthesis approach (a synthetic
+        // `fn main() { test_a(); test_b(); ... }`) ran every test in the
+        // SAME `State`, so per-call store-lifetime leaks (the @P377
+        // family — `map_get_hex(m: Map, …) -> Hex { return chunk.ck_hexes[idx]; }`
+        // shape, deep-slice-borrows the dep-inference can't track) accumulated
+        // until `cast_vector_from_text` SIGSEGV'd inside the next JSON cast
+        // (@P382).  That synthesis also tripped a CONST_STORE re-lock by
+        // calling `compile::byte_code` a second time (@P381, fixed by
+        // `compile::byte_code_from`).  Both issues vanish with per-test
+        // fresh-State isolation, which also matches the canonical
+        // `loft --tests <file>` invocation.
+        //
+        // `--dump` skips this path — it wants the bytecode of the user
+        // functions as parsed, not a synthetic execution.
         let mut test_names: Vec<String> = Vec::new();
         for d_nr in start_def..p.data.definitions() {
             let def = p.data.def(d_nr);
@@ -3269,33 +3281,29 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 test_names.push(name.to_string());
             }
         }
-        // Build a single main() that calls all test functions in sequence.
-        // This gives each call a proper scope for store cleanup.
-        let mut calls = String::new();
-        for name in &test_names {
-            calls.push_str(name);
-            calls.push_str("();\n");
-        }
-        if !calls.is_empty() {
-            let wrapper = format!("fn main() {{\n{calls}}}");
-            let mut wp = parser::Parser::new();
-            wp.data = p.data;
-            wp.database = state.database;
-            // @P381 — capture the definition count BEFORE the wrapper parse so
-            // we compile ONLY the synthesised `main` (and any helper defs the
-            // parse adds) below.  Recompiling the already-compiled test
-            // functions would re-run `Codegen::gen_text` for any long string
-            // literal (≥256 chars) and attempt to write it into `CONST_STORE`,
-            // which the FIRST `byte_code` call at line 2198 has already locked
-            // (`compile.rs::compile (CONST_STORE init)`).  See
-            // `compile::byte_code_from` for the incremental semantics.
-            let wrapper_start_def = wp.data.definitions();
-            wp.parse_str(&wrapper, "test_wrapper", false);
-            scopes::check(&mut wp.data);
-            state.database = wp.database;
-            compile::byte_code_from(&mut state, &mut wp.data, wrapper_start_def);
-            p.data = wp.data;
-            state.execute_argv("main", &p.data, &[]);
+        if !test_names.is_empty() {
+            // Per-test isolation pattern (mirrors `src/test_runner.rs:997`):
+            // `Stores::clone` only clones the TYPE SCHEMA (allocations + runtime
+            // state are reset to empty by design — see `src/database/mod.rs:412`),
+            // so each test needs a full re-byte_code on its own freshly-cloned
+            // Data + State.  Reset `max` on the clone to 0 because
+            // `Stores::clone` preserves `max` from the source but clears
+            // `free_bits` — `find_free_slot` would then return the stale `max`
+            // value as the first allocation slot, and `State::new`'s initial
+            // `db.database(1000)` would panic with `allocations[max]` OOB.
+            let clean_data = p.data.clone();
+            let clean_db = state.database.clone();
+            for name in &test_names {
+                let mut data_iter = clean_data.clone();
+                let mut db_iter = clean_db.clone();
+                db_iter.max = 0;
+                let mut state_iter = State::new(db_iter);
+                compile::byte_code(&mut state_iter, &mut data_iter);
+                // Preserve native-extension wiring across test iterations.
+                extensions::load_all(&mut state_iter, all_native_libs.clone());
+                extensions::wire_native_fns(&mut state_iter, &data_iter);
+                state_iter.execute_argv(name, &data_iter, &[]);
+            }
         }
     } else if dump_only {
         // --dump: compile to bytecode, dump to stderr, exit (no execution).
