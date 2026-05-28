@@ -21,6 +21,16 @@ This plan exists to **systematically catalogue the shapes** in this class, **und
 
 ---
 
+## Investigation documents
+
+| Document | Coverage |
+|---|---|
+| [`RESULTS.md`](RESULTS.md) | Full 33+ probe matrix, cluster definitions, verified-vs-hypothesized findings, fix-arc options |
+| [`cluster-II-latent-leak.md`](cluster-II-latent-leak.md) | Per-iter Canvas leak (interpret-only) — pinned via IR diff of probes 01 vs 02 |
+| [`cluster-III-corruption.md`](cluster-III-corruption.md) | Silent data corruption (interpret-only) — probes 04 + 28 with distinct mechanisms |
+| [`cluster-IV-codegen-panic.md`](cluster-IV-codegen-panic.md) | Codegen panic on BOTH backends — `unify_if_branches_work_refs` substitution gap; match (probe 18) vs if-tail (probe 08) contrast |
+| [`cluster-V-native-only.md`](cluster-V-native-only.md) | Native codegen gaps — tuple-of-heap-structs (probe 29) + lambda-with-heap-return (probe 30) |
+
 ## Outcome
 
 A choose-one decision artefact:

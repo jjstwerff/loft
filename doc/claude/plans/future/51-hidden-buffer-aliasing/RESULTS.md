@@ -40,6 +40,22 @@
 
 **32 valid probes (1 excluded due to op syntax issue).**
 
+### Stage A-bis: edge-case probes (34-37) from cluster-doc investigation
+
+The detailed cluster-doc investigation raised follow-up questions; probes 34-37 target them:
+
+| # | Probe | Question | Result | Refines understanding |
+|---|---|---|---|---|
+| 34 | if-same-call-both | Does panic depend on arg distinctness? | 💥 PANIC | NO — even identical calls in both branches panic. Confirms it's the UNIFICATION machinery, not arg-shape. |
+| 35 | match-two-arms | Does 2-arm match unify like 2-branch if? | ✅ PASS | NO — match with 2 arms works like 3 arms (per-arm hidden buffer). Match doesn't engage unification. |
+| 36 | three-sets | Does leak scale with Set count? | ⚠️ LEAK ×6 | NO — three Sets leak SAME count as two Sets (6 per 6 iters).  The leak is **per-iter**, not per-Set.  Refines mechanism: only ONE Canvas-record-overwrite per iter orphans, regardless of how many intermediate Sets. |
+| 37 | nested-if-tail | Does else-if chain panic like 2-branch if? | 💥 PANIC | YES — else-if chains engage the same unification path and panic identically. |
+
+Insights for Stage B:
+- Cluster IV's mechanism is **unification-machinery-related**, not arg/value-related (probe 34).
+- Cluster II's leak is **per-iter (per outer call), not per intermediate Set** (probe 36).  The "orphan" is the FIRST intermediate record's child store; subsequent intermediates reuse / overwrite in place.
+- Match's lowering is fundamentally different from if's (probes 18, 35 pass; 08, 22, 27, 33, 34, 37 panic).  Match takes a non-unification path that handles N arms with N hidden buffers cleanly.
+
 ## Cluster summary
 
 | Cluster | Count | Severity | Affected backends |

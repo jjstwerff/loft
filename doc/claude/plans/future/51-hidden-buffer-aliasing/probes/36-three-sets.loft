@@ -1,0 +1,39 @@
+// Probe 36 — three consecutive Sets to cv.
+//
+//   fn render(p: P) -> Canvas {
+//     cv = alloc_canvas(2, 2, p.tag);          // First
+//     cv = alloc_canvas(3, 3, p.tag + 1);      // Second
+//     cv = alloc_canvas(4, 5, p.tag + 2);      // Third (penultimate — S1)
+//     cv
+//   }
+//
+// Probe 02 has 2 Sets (1 leak per iter).  Does 3 Sets produce 2 leaks
+// per iter (the first two each orphan their child store)?  Tests
+// whether the leak scales linearly with Set count.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn render(p: P) -> Canvas {
+  cv = alloc_canvas(2, 2, p.tag);
+  cv = alloc_canvas(3, 3, p.tag + 1);
+  cv = alloc_canvas(4, 5, p.tag + 2);
+  cv
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    cv = render(p);
+    assert(cv.w == 4, "iter {i}: w = {cv.w}");
+    assert(len(cv.data) == 5, "iter {i}: len = {len(cv.data)}");
+    assert(cv.data[0] == i + 2, "iter {i}: data[0] = {cv.data[0]}");
+  }
+  println("probe 36 PASSED");
+}
