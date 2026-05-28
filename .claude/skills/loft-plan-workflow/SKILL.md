@@ -16,7 +16,8 @@ Use this skill when working on **plan organization**:
 
 This skill is **procedural-only**.  Definitions / rationale / templates live in source docs:
 - [`doc/claude/plans/README.md`](../../../doc/claude/plans/README.md) — docs-vs-plans rule, three workflows, value categories (S/R/G/F/U/C/Q/N), closure rule, light-flow lifecycle, roadmap workflow
-- [`doc/claude/plans/_TEMPLATE.md`](../../../doc/claude/plans/_TEMPLATE.md) — canonical new-plan README shape (with the "pick the lightest workflow" gate)
+- [`doc/claude/plans/_TEMPLATE.md`](../../../doc/claude/plans/_TEMPLATE.md) — canonical new-plan README shape (standard implementation plan)
+- [`doc/claude/plans/_INVESTIGATION_TEMPLATE.md`](../../../doc/claude/plans/_INVESTIGATION_TEMPLATE.md) — investigation-plan shape (probes/ + cluster docs + verified-vs-hypothesized accountability; canonical example: `plans/future/51-hidden-buffer-aliasing/`)
 - [`doc/claude/plans/_LIFECYCLE.md`](../../../doc/claude/plans/_LIFECYCLE.md) — 6-step procedure for closing OR deferring plans (Steps 4-6 are shared)
 - [`doc/claude/ROADMAP.md`](../../../doc/claude/ROADMAP.md) — the work tables
 
@@ -38,7 +39,9 @@ The light flow is the **default**.  Promote to a plan only when the work is genu
 
 ---
 
-## Procedure A — Open a new plan
+## Procedure A — Open a new plan (standard implementation shape)
+
+Use when the plan's primary deliverable is a feature ship or fix landing.
 
 1. Pick the next free integer in the relevant tracker (`plans/future/` for core-language; `lib_plans/future/` for libraries — independent counters).
 2. `mkdir doc/claude/{plans,lib_plans}/future/<NN>-<slug>`
@@ -49,6 +52,47 @@ The light flow is the **default**.  Promote to a plan only when the work is genu
 7. **Do NOT add a CLAUDE.md doc index entry by default.**  Plans are discoverable via plans/README.md; per-plan CLAUDE.md entries are redundant.  Add only if the plan introduces a NEW top-level reference concept (vanishingly rare).
 
 Length budget: 100-300 lines.  Longer means reference content is leaking in — extract to `doc/claude/<NAME>.md`.
+
+**When NOT to use Procedure A:** if the plan's first phase is "characterize the problem space" rather than "design + build", use [Procedure F](#procedure-f--open-an-investigation-style-plan) instead.
+
+---
+
+## Procedure F — Open an investigation-style plan
+
+Use when the plan's **primary deliverable is mechanism understanding** before fix design.  Characterized by:
+
+- Multiple sub-mechanisms / failure clusters to catalogue.
+- Need to write deterministic probes (.loft files) to characterize each shape.
+- Source-reading alone won't converge — needs probe-driven hypothesis cycles.
+- The fix-design decision (Path C vs. shape-by-shape vs. hybrid) can't be made without the catalogue.
+
+Canonical example: `plans/future/51-hidden-buffer-aliasing/` — 5 clusters, 39 probes, 4 per-cluster docs, 2 verified mechanisms.
+
+### Steps
+
+1. Pick the next free integer.  Same numbering pool as Procedure A.
+2. `mkdir -p doc/claude/{plans,lib_plans}/future/<NN>-<slug>/probes`
+3. `cp doc/claude/plans/_INVESTIGATION_TEMPLATE.md doc/claude/{plans,lib_plans}/future/<NN>-<slug>/README.md`
+4. **Stage A first** — write `.loft` probes in `probes/` BEFORE source reading.  Be liberal about adding probes; better to attic a redundant variant than to miss a crucial shape (real-library extraction has caught NEW findings synthetic probes missed).
+5. Run every probe on both backends.  Document results in `RESULTS.md` (full matrix).
+6. **Curate A/B/C** in the README's probe table once the suite stabilises (typically when adding new probes stops yielding new failure modes).  A = reference (passes), B = problem (one per failure mode), C = attic (variants).
+7. For each distinct failure mode, write `cluster-<id>-<slug>.md` with the verified-vs-hypothesized accountability table.
+8. **Add Status & next-session roadmap** to the README — per-cluster action items with effort estimates.
+9. **Tool gaps** — add a `Tool gaps` section to the README listing tools added or verified during the work.  Tools added during a plan are part of its output, not separate work.
+10. Add ROADMAP row + tracker README row (same as Procedure A step 5-6).
+
+### Length budgets
+
+- README: 100-300 lines (same as standard plans).
+- `RESULTS.md`: 200-500 lines (probe matrix + cluster summaries).
+- Each `cluster-*.md`: 100-300 lines.
+- Probe `.loft` files: 20-100 lines each (header comment + minimal repro + assertions).
+
+A complete investigation plan with 5 clusters and 40 probes = ~45-50 files.  This is heavy — proportional to investigation depth, NOT a default.  A shallow investigation belongs in `## Open work` on a reference doc (Procedure E).
+
+### Probe migration
+
+Probes stay in `probes/` during investigation.  They migrate to `tests/scripts/NN-<descriptive>.loft` **per cluster, as each cluster's fix lands**, not all at once.  The plan stays open during phased implementation; closes when the last cluster's regression is in `tests/scripts/`.
 
 ---
 
@@ -172,6 +216,16 @@ S sits above R because silent failures have no error message — invisible to us
 
 7. **Time projections rot in both directions.**  "Will take 2-3 weeks" has shipped in 2 days; "quick fix" has taken weeks.  **Lesson:** never use calendar-time language anywhere in ROADMAP, plans, or memory.  Use effort letters (XS-L).  Historical retrospectives that DOCUMENT the rule's validity are fine to keep ("Faster than the 2-3 week original estimate" in finished/09 stays as evidence).
 
+8. **Investigation-plan shape needs its own template** (PLAN51 lesson, 2026-05-28).  The standard `_TEMPLATE.md` assumed feature-ship deliverables: Goal → Sub-arcs → Phase ordering.  When the deliverable is mechanism understanding, the right reading order is Status → Probes → Cluster docs → Roadmap.  Forcing investigation work into the standard template either bloats the README with probe headers or loses the catalogue structure.  **Lesson:** investigation plans get [`_INVESTIGATION_TEMPLATE.md`](../../../doc/claude/plans/_INVESTIGATION_TEMPLATE.md) and Procedure F; standard plans get `_TEMPLATE.md` and Procedure A.  The shapes diverge enough that one template can't serve both.
+
+9. **Probe-first beats source-first for failure-class investigation** (PLAN51 lesson).  Source-reading without a probe to ground it tends to recursively explore code paths without convergence.  A probe suite is the executable spec for what "understood" means — a hypothesis is verified when the probe-pair diff confirms it.  **Lesson:** for failure-class investigations, write probes BEFORE opening the source.  Stage A's deliverable is "every shape we can think of, with a deterministic probe"; Stage B's deliverable is "every cluster's mechanism pinned via probe-diff + source reading".
+
+10. **Be liberal with probes, attic-curate after** (PLAN51 lesson, user-confirmed).  Missing a crucial case is the worst failure mode; carrying a few redundant variants costs nothing because they go to attic when curated and don't pollute the suite.  Real-library extraction (e.g. PLAN51's probe 39 from `lib/moros_map`) is non-negotiable — it surfaced a leak class no synthetic probe found.  **Lesson:** the rule is "make probes liberally, attic them directly"; not "be selective".  Curation happens at the end of Stage A, not during.
+
+11. **Verified-vs-hypothesized accountability prevents drift** (PLAN51 lesson).  Every mechanism statement in a cluster doc is either VERIFIED (with cited trace file path or code-line read) or HYPOTHESIZED (marked with 🤔).  When asked "do we know what's going on?", the table answers honestly instead of waving at "we kinda know".  **Lesson:** investigation plans need an explicit knowledge-accounting column.  Without it, hypotheses drift into the prose as if they were facts.
+
+12. **Tools-as-needed, not tools-upfront** (PLAN51 lesson).  Don't write a debugging framework upfront for an investigation plan.  Check existing toolchain (CLAUDE.md inventory); add the ONE tool blocking progress; keep "nice-to-have" tools as ad-hoc eprintln patches reverted before commit.  Tools added during an investigation plan are part of its output, listed in a `Tool gaps` section.  **Lesson:** PLAN51 added one new env var (`LOFT_KEEP_NATIVE_RS=1`) and verified one existing flag (`LOFT_LOG=slots:`) — sufficient for the whole investigation.  Building more would have been over-engineering.
+
 ---
 
 ## Cross-doc map (quick reference)
@@ -180,7 +234,9 @@ S sits above R because silent failures have no error message — invisible to us
 |---|---|
 | Why docs vs plans split | `plans/README.md § The rule — docs vs plans` |
 | Pick light vs plan vs bug | `plans/README.md § Three workflows` |
-| New plan README shape | `plans/_TEMPLATE.md` |
+| Pick standard plan vs investigation plan | This skill § Procedure A vs F |
+| New plan README shape (standard) | `plans/_TEMPLATE.md` |
+| New plan README shape (investigation) | `plans/_INVESTIGATION_TEMPLATE.md` |
 | Closing or deferring a plan (full procedure) | `plans/_LIFECYCLE.md` |
 | Light-flow lifecycle (open / work / close / defer in `## Open work`) | `plans/README.md § Light flow lifecycle` |
 | Drift detection (broken paths, stale claims, time projections) | `scripts/check_doc_drift.sh` |
