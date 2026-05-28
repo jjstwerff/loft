@@ -111,7 +111,7 @@ pub fn palette_r(idx: integer) -> float {
      63.0/255.0, 208.0/255.0, 223.0/255.0,
     230.0/255.0, 124.0/255.0, 156.0/255.0,
   ];
-  rs[idx]
+  (rs[idx] ?? 0)
 }
 pub fn palette_g(idx: integer) -> float {
   gs: vector<float> = [
@@ -120,7 +120,7 @@ pub fn palette_g(idx: integer) -> float {
     200.0/255.0,  70.0/255.0, 216.0/255.0,
     230.0/255.0, 124.0/255.0, 106.0/255.0,
   ];
-  gs[idx]
+  (gs[idx] ?? 0)
 }
 pub fn palette_b(idx: integer) -> float {
   bs: vector<float> = [
@@ -129,7 +129,7 @@ pub fn palette_b(idx: integer) -> float {
     200.0/255.0, 208.0/255.0,  64.0/255.0,
     236.0/255.0, 138.0/255.0,  60.0/255.0,
   ];
-  bs[idx]
+  (bs[idx] ?? 0)
 }
 
 // ── Cell snapshot — input to all crystal generation ──────────────────
@@ -147,7 +147,7 @@ pub struct CellSnap {
 //
 // Parallel arrays again: one entry per segment.  Each segment is a
 // straight line from (x0, y0, z0) to (x1, y1, z1) in the cell's
-// palette colour.  `kinds[i]` is KIND_MAIN or KIND_SIDE so consumers
+// palette colour.  `(kinds[i] ?? 0)` is KIND_MAIN or KIND_SIDE so consumers
 // can give the two classes different widths / styling.
 
 pub struct CrystalMesh {
@@ -193,10 +193,10 @@ pub struct CrystalState {
 pub fn lookup_main_birth(state: CrystalState,
                          cx: integer, cy: integer, d: integer) -> integer {
   for lb_i in 0..len(state.main_x) {
-    if state.main_x[lb_i] == cx
-       && state.main_y[lb_i] == cy
-       && state.main_d[lb_i] == d {
-      return state.birth_tick[lb_i];
+    if (state.main_x[lb_i] ?? 0) == cx
+       && (state.main_y[lb_i] ?? 0) == cy
+       && (state.main_d[lb_i] ?? 0) == d {
+      return (state.birth_tick[lb_i] ?? 0);
     }
   }
   0 - 1
@@ -209,9 +209,9 @@ pub fn lookup_main_birth(state: CrystalState,
 pub fn update_state(state: &CrystalState, snap: CellSnap, tick: integer) {
   parent = assign_cells(snap);
   for us_i in 0..len(snap.xs) {
-    if parent[us_i] != us_i { continue; }   // skip supporters
-    cx = snap.xs[us_i];
-    cy = snap.ys[us_i];
+    if (parent[us_i] ?? 0) != us_i { continue; }   // skip supporters
+    cx = (snap.xs[us_i] ?? 0);
+    cy = (snap.ys[us_i] ?? 0);
     for d in 0..6 {
       existing = lookup_main_birth(state, cx, cy, d);
       if existing >= 0 { continue; }
@@ -343,7 +343,7 @@ pub fn is_hex_nbr(x1: integer, y1: integer, x2: integer, y2: integer) -> boolean
 pub fn snap_nbr_count(snap: CellSnap, cx: integer, cy: integer) -> integer {
   count = 0;
   for snc_j in 0..len(snap.xs) {
-    if is_hex_nbr(cx, cy, snap.xs[snc_j], snap.ys[snc_j]) { count = count + 1; }
+    if is_hex_nbr(cx, cy, (snap.xs[snc_j] ?? 0), (snap.ys[snc_j] ?? 0)) { count = count + 1; }
   }
   count
 }
@@ -361,8 +361,8 @@ pub fn cell_wz(cy: integer) -> float { cy as float * 1.5 * HEX_SIZE }
 // Per-cell Y height — rises with filled-neighbour count + deterministic
 // jitter (stable across frames).
 pub fn cell_h(snap: CellSnap, ix: integer) -> float {
-  cell_x = snap.xs[ix];
-  cell_y = snap.ys[ix];
+  cell_x = (snap.xs[ix] ?? 0);
+  cell_y = (snap.ys[ix] ?? 0);
   nbr = snap_nbr_count(snap, cell_x, cell_y);
   base = HEIGHT_BASE + nbr as float * HEIGHT_PER_NBR;
   hh = (cell_x * 73856093) ^ (cell_y * 19349663);
@@ -390,8 +390,8 @@ pub fn cell_h(snap: CellSnap, ix: integer) -> float {
 // count.  Public so consumers (the projector) can precompute centres in
 // O(N) instead of O(N²).
 pub fn cell_h_at(snap: CellSnap, cidx: hash<CellRef[ck]>, ix: integer) -> float {
-  cell_x = snap.xs[ix];
-  cell_y = snap.ys[ix];
+  cell_x = (snap.xs[ix] ?? 0);
+  cell_y = (snap.ys[ix] ?? 0);
   nbr = nbr_count_idx(cidx, cell_x, cell_y);
   base = HEIGHT_BASE + nbr as float * HEIGHT_PER_NBR;
   hh = (cell_x * 73856093) ^ (cell_y * 19349663);
@@ -422,16 +422,16 @@ fn nbr_colors_idx(snap: CellSnap, cidx: hash<CellRef[ck]>,
       x2 = (cq + dq) + (r2 - p2) / 2;
       j = idx_at(cidx, x2, r2);
       if j < 0 { continue; }
-      ixs += [j]; cols += [snap.colors[j]];
+      ixs += [j]; cols += [(snap.colors[j] ?? 0)];
     }
   }
   // sort colours by ascending snap index (insertion; ≤ 12 elements)
   m = len(ixs);
-  for sa in 0..m {
+  for _sa in 0..m {
     for sb in 0..(m - 1) {
-      if ixs[sb] > ixs[sb + 1] {
-        ti = ixs[sb];  ixs[sb]  = ixs[sb + 1];  ixs[sb + 1]  = ti;
-        tc = cols[sb]; cols[sb] = cols[sb + 1]; cols[sb + 1] = tc;
+      if (ixs[sb] ?? 0) > (ixs[sb + 1] ?? 0) {
+        ti = (ixs[sb] ?? 0);  ixs[sb]  = (ixs[sb + 1] ?? 0);  ixs[sb + 1]  = ti;
+        tc = (cols[sb] ?? 0); cols[sb] = (cols[sb + 1] ?? 0); cols[sb + 1] = tc;
       }
     }
   }
@@ -453,20 +453,20 @@ pub MAX_AXIS_GAP = 2;
 // hexes of the chain's current furthest supporter.  Otherwise the new
 // paint becomes its own centre.
 //
-// Caller contract: cells must appear in placement order — snap.xs[0]
-// is the oldest paint, snap.xs[len-1] is the most recent.
+// Caller contract: cells must appear in placement order — (snap.xs[0] ?? 0)
+// is the oldest paint, (snap.xs[len-1] ?? 0) is the most recent.
 pub fn assign_cells(snap: CellSnap) -> vector<integer> {
   n = len(snap.xs);
   parent: vector<integer> = [];
-  for ac_m in 0..n { parent += [0 - 1]; }
+  for _ac_m in 0..n { parent += [0 - 1]; }
   for ac_s in 0..n {
-    cx = snap.xs[ac_s];
-    cy = snap.ys[ac_s];
+    cx = (snap.xs[ac_s] ?? 0);
+    cy = (snap.ys[ac_s] ?? 0);
     joined = false;
     for ac_a in 0..ac_s {
-      if parent[ac_a] != ac_a { continue; }   // skip non-centres
-      ax = snap.xs[ac_a];
-      ay = snap.ys[ac_a];
+      if (parent[ac_a] ?? 0) != ac_a { continue; }   // skip non-centres
+      ax = (snap.xs[ac_a] ?? 0);
+      ay = (snap.ys[ac_a] ?? 0);
       d = hex_axis_dir(ax, ay, cx, cy);
       if d < 0 { continue; }
       // Furthest A-axis-d distance among PRIOR cells in A's chain
@@ -474,9 +474,9 @@ pub fn assign_cells(snap: CellSnap) -> vector<integer> {
       furthest = 0;
       for ac_b in 0..ac_s {
         if ac_b == ac_a { continue; }
-        if parent[ac_b] != ac_a { continue; }
-        if hex_axis_dir(ax, ay, snap.xs[ac_b], snap.ys[ac_b]) != d { continue; }
-        dist_b = hex_distance(ax, ay, snap.xs[ac_b], snap.ys[ac_b]);
+        if (parent[ac_b] ?? 0) != ac_a { continue; }
+        if hex_axis_dir(ax, ay, (snap.xs[ac_b] ?? 0), (snap.ys[ac_b] ?? 0)) != d { continue; }
+        dist_b = hex_distance(ax, ay, (snap.xs[ac_b] ?? 0), (snap.ys[ac_b] ?? 0));
         if dist_b > furthest { furthest = dist_b; }
       }
       this_dist = hex_distance(ax, ay, cx, cy);
@@ -495,7 +495,7 @@ pub fn assign_cells(snap: CellSnap) -> vector<integer> {
 pub fn pick_centers(snap: CellSnap) -> vector<boolean> {
   parent = assign_cells(snap);
   out: vector<boolean> = [];
-  for pc_i in 0..len(parent) { out += [parent[pc_i] == pc_i]; }
+  for pc_i in 0..len(parent) { out += [(parent[pc_i] ?? 0) == pc_i]; }
   out
 }
 
@@ -505,15 +505,15 @@ pub fn pick_centers(snap: CellSnap) -> vector<boolean> {
 // `crystal_segments` to extend A's main past the chain's tip.
 pub fn find_furthest_supporter(snap: CellSnap, parent: vector<integer>,
                                a_ix: integer, d: integer) -> integer {
-  ax = snap.xs[a_ix];
-  ay = snap.ys[a_ix];
+  ax = (snap.xs[a_ix] ?? 0);
+  ay = (snap.ys[a_ix] ?? 0);
   best_ix = 0 - 1;
   best_dist = 0;
   for ff_b in 0..len(snap.xs) {
     if ff_b == a_ix { continue; }
-    if parent[ff_b] != a_ix { continue; }
-    bx = snap.xs[ff_b];
-    by = snap.ys[ff_b];
+    if (parent[ff_b] ?? 0) != a_ix { continue; }
+    bx = (snap.xs[ff_b] ?? 0);
+    by = (snap.ys[ff_b] ?? 0);
     axis_d = hex_axis_dir(ax, ay, bx, by);
     if axis_d != d { continue; }
     dist = hex_distance(ax, ay, bx, by);
@@ -530,15 +530,15 @@ pub fn find_furthest_supporter(snap: CellSnap, parent: vector<integer>,
 // main spine reaches across to the next crystal and the structures connect
 // (the supporter-only finder above leaves adjacent centres disconnected).
 pub fn find_furthest_on_axis(snap: CellSnap, a_ix: integer, d: integer) -> integer {
-  ax = snap.xs[a_ix];
-  ay = snap.ys[a_ix];
+  ax = (snap.xs[a_ix] ?? 0);
+  ay = (snap.ys[a_ix] ?? 0);
   best_ix = 0 - 1;
   best_dist = 0;
   for fa_b in 0..len(snap.xs) {
     if fa_b == a_ix { continue; }
-    axis_d = hex_axis_dir(ax, ay, snap.xs[fa_b], snap.ys[fa_b]);
+    axis_d = hex_axis_dir(ax, ay, (snap.xs[fa_b] ?? 0), (snap.ys[fa_b] ?? 0));
     if axis_d != d { continue; }
-    dist = hex_distance(ax, ay, snap.xs[fa_b], snap.ys[fa_b]);
+    dist = hex_distance(ax, ay, (snap.xs[fa_b] ?? 0), (snap.ys[fa_b] ?? 0));
     if dist > best_dist {
       best_dist = dist;
       best_ix = fa_b;
@@ -566,10 +566,10 @@ pub fn find_furthest_on_axis(snap: CellSnap, a_ix: integer, d: integer) -> integ
 fn nbr_colors_at(snap: CellSnap, cx: integer, cy: integer, dist: integer) -> vector<integer> {
   out: vector<integer> = [];
   for nc_i in 0..len(snap.xs) {
-    nx = snap.xs[nc_i];
-    ny = snap.ys[nc_i];
+    nx = (snap.xs[nc_i] ?? 0);
+    ny = (snap.ys[nc_i] ?? 0);
     if nx == cx && ny == cy { continue; }
-    if hex_distance(cx, cy, nx, ny) == dist { out += [snap.colors[nc_i]]; }
+    if hex_distance(cx, cy, nx, ny) == dist { out += [(snap.colors[nc_i] ?? 0)]; }
   }
   out
 }
@@ -596,11 +596,11 @@ pub fn pick_segment_color(self_c: integer,
   two_n = len(two_away);
   if bucket < 95 && one_n > 0 {
     one_ix = pick_seed - (pick_seed / one_n) * one_n;
-    return one_away[one_ix];
+    return (one_away[one_ix] ?? 0);
   }
   if two_n > 0 {
     two_ix = pick_seed - (pick_seed / two_n) * two_n;
-    return two_away[two_ix];
+    return (two_away[two_ix] ?? 0);
   }
   self_c
 }
@@ -646,9 +646,9 @@ pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
   branch_spacing_world = HEX_SIZE * BRANCH_SPACING;
   deg30 = PI / 6.0;
   centre_to_centre = SQRT3 * HEX_SIZE;
-  cell_c = snap.colors[cs_i];
-  cell_x = snap.xs[cs_i];
-  cell_y = snap.ys[cs_i];
+  cell_c = (snap.colors[cs_i] ?? 0);
+  cell_x = (snap.xs[cs_i] ?? 0);
+  cell_y = (snap.ys[cs_i] ?? 0);
   one_away = nbr_colors_idx(snap, cidx, cell_x, cell_y, 1);
   two_away = nbr_colors_idx(snap, cidx, cell_x, cell_y, 2);
   wx = cell_wx(cell_x, cell_y);
@@ -689,9 +689,9 @@ pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
     } else {
       ray_ang = (60.0 * d as float + 180.0) * PI / 180.0;
       ray_len_d = best_dist[d] as float * centre_to_centre;
-      src_x = cell_wx(snap.xs[j], snap.ys[j]);
+      src_x = cell_wx((snap.xs[j] ?? 0), (snap.ys[j] ?? 0));
       src_y = cell_h_at(snap, cidx, j);
-      src_z = cell_wz(snap.ys[j]);
+      src_z = cell_wz((snap.ys[j] ?? 0));
       tip_x = wx; tip_y = cell_yh; tip_z = wz;
     }
     if ray_len_d <= 0.0 { continue; }
@@ -824,8 +824,8 @@ struct ChunkMeshEntry { ck: integer not null, mesh: SegMesh }
 // that contain a dirty chunk (which it learns from collect_dirty_groups).
 pub struct CrystalIncr {
   snap:      CellSnap,                  // source of truth (xs, ys, colors)
-  field:     ChunkField,                // spatial index + buckets + dirty set
-  group_dim: integer,                   // tunable: G=1 per-chunk … G large ~one VBO
+  field:     ChunkField not null,       // spatial index + buckets + dirty set
+  group_dim: integer not null,          // tunable: G=1 per-chunk … G large ~one VBO
   chunks:    hash<ChunkMeshEntry[ck]>,  // per-chunk cached mesh (reused if not dirty)
 }
 
@@ -860,7 +860,7 @@ pub fn crystal_incr_new(snap: CellSnap, chunk_shift: integer, group_dim: integer
     chunks: [],
   };
   for cn_i in 0..len(snap.xs) {
-    field_add_cell(c.field, snap.xs[cn_i] ?? 0, snap.ys[cn_i] ?? 0);
+    field_add_cell(c.field, (snap.xs[cn_i] ?? 0) ?? 0, (snap.ys[cn_i] ?? 0) ?? 0);
   }
   clear_dirty(c.field);   // the per-cell adds marked everything dirty; we full-build below
   // @P312 fixed (2026-05-22): native codegen now hoists a `c.field`-derived argument
@@ -963,9 +963,9 @@ pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
   // seed / the oldest in its crystal) gets a small six-way starburst stub so
   // it is visible while it waits for company.
   for cs_i in 0..n {
-    cell_c = snap.colors[cs_i];
-    cell_x = snap.xs[cs_i];
-    cell_y = snap.ys[cs_i];
+    cell_c = (snap.colors[cs_i] ?? 0);
+    cell_x = (snap.xs[cs_i] ?? 0);
+    cell_y = (snap.ys[cs_i] ?? 0);
     one_away = nbr_colors_idx(snap, cidx, cell_x, cell_y, 1);
     two_away = nbr_colors_idx(snap, cidx, cell_x, cell_y, 2);
     wx = cell_wx(cell_x, cell_y);
@@ -1012,9 +1012,9 @@ pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
       } else {
         ray_ang = (60.0 * d as float + 180.0) * PI / 180.0;
         ray_len_d = best_dist[d] as float * centre_to_centre;
-        src_x = cell_wx(snap.xs[j], snap.ys[j]);
+        src_x = cell_wx((snap.xs[j] ?? 0), (snap.ys[j] ?? 0));
         src_y = cell_h_at(snap, cidx, j);
-        src_z = cell_wz(snap.ys[j]);
+        src_z = cell_wz((snap.ys[j] ?? 0));
         tip_x = wx; tip_y = cell_yh; tip_z = wz;
       }
       if ray_len_d <= 0.0 { continue; }
@@ -1131,12 +1131,12 @@ pub fn hex_at_world(wx: float, wz: float) -> (integer, integer) {
 pub fn crystal_mesh_to_lines(m: SegMesh) -> vector<single> {
   out: vector<single> = [];
   for cml_i in 0..seg_len(m) {
-    ci = m.colors[cml_i] as integer;
+    ci = (m.colors[cml_i] ?? 0) as integer;
     r = palette_r(ci) as single;
     g = palette_g(ci) as single;
     b = palette_b(ci) as single;
-    out += [m.x0s[cml_i], m.y0s[cml_i], m.z0s[cml_i], 0.0f, 0.0f, 0.0f, r, g, b, 1.0f];
-    out += [m.x1s[cml_i], m.y1s[cml_i], m.z1s[cml_i], 0.0f, 0.0f, 0.0f, r, g, b, 1.0f];
+    out += [(m.x0s[cml_i] ?? 0), (m.y0s[cml_i] ?? 0), (m.z0s[cml_i] ?? 0), 0.0f, 0.0f, 0.0f, r, g, b, 1.0f];
+    out += [(m.x1s[cml_i] ?? 0), (m.y1s[cml_i] ?? 0), (m.z1s[cml_i] ?? 0), 0.0f, 0.0f, 0.0f, r, g, b, 1.0f];
   }
   out
 }
@@ -1154,11 +1154,11 @@ pub fn ground_hexes_to_verts(snap: CellSnap, alpha: single) -> vector<single> {
   cdx: vector<float> = [hh, hh, 0.0, 0.0 - hh, 0.0 - hh, 0.0];
   cdz: vector<float> = [0.0 - half, half, HEX_SIZE, half, 0.0 - half, 0.0 - HEX_SIZE];
   for gh_i in 0..len(snap.xs) {
-    ci = snap.colors[gh_i] ?? 0;
+    ci = (snap.colors[gh_i] ?? 0) ?? 0;
     r = palette_r(ci) as single;
     g = palette_g(ci) as single;
     b = palette_b(ci) as single;
-    wx = cell_wx(snap.xs[gh_i] ?? 0, snap.ys[gh_i] ?? 0);
+    wx = cell_wx((snap.xs[gh_i] ?? 0) ?? 0, (snap.ys[gh_i] ?? 0) ?? 0);
     wz = cell_wz(snap.ys[gh_i] ?? 0);
     cxs = wx as single;
     czs = wz as single;
@@ -1167,9 +1167,9 @@ pub fn ground_hexes_to_verts(snap: CellSnap, alpha: single) -> vector<single> {
       if kk > 5 { kk = 0; }
       // triangle: centre, corner k, corner k+1
       out += [cxs, 0.0f, czs, 0.0f, 0.0f, 0.0f, r, g, b, alpha];
-      out += [(wx + cdx[gh_k]) as single, 0.0f, (wz + cdz[gh_k]) as single,
+      out += [(wx + (cdx[gh_k] ?? 0)) as single, 0.0f, (wz + (cdz[gh_k] ?? 0)) as single,
               0.0f, 0.0f, 0.0f, r, g, b, alpha];
-      out += [(wx + cdx[kk]) as single, 0.0f, (wz + cdz[kk]) as single,
+      out += [(wx + (cdx[kk] ?? 0)) as single, 0.0f, (wz + (cdz[kk] ?? 0)) as single,
               0.0f, 0.0f, 0.0f, r, g, b, alpha];
     }
   }
@@ -1207,14 +1207,14 @@ pub fn crystal_mesh_to_beams(m: SegMesh, width: float) -> vector<single> {
   // wedge length so the taper half-angle is exactly 30° (tan 30° = 1/√3).
   tlen = hw * SQRT3;
   for cb_i in 0..seg_len(m) {
-    ci = m.colors[cb_i] as integer;
+    ci = (m.colors[cb_i] ?? 0) as integer;
     r = palette_r(ci) as single;
     g = palette_g(ci) as single;
     b = palette_b(ci) as single;
-    x0 = m.x0s[cb_i] as float;
-    z0 = m.z0s[cb_i] as float;
-    x1 = m.x1s[cb_i] as float;
-    z1 = m.z1s[cb_i] as float;
+    x0 = (m.x0s[cb_i] ?? 0) as float;
+    z0 = (m.z0s[cb_i] ?? 0) as float;
+    x1 = (m.x1s[cb_i] ?? 0) as float;
+    z1 = (m.z1s[cb_i] ?? 0) as float;
     sdx = x1 - x0;
     sdz = z1 - z0;
     len2 = sdx * sdx + sdz * sdz;
@@ -1224,7 +1224,7 @@ pub fn crystal_mesh_to_beams(m: SegMesh, width: float) -> vector<single> {
     uz = sdz / seglen;
     ox = (0.0 - uz) * hw;   // perpendicular offset (× half-width)
     oz = ux * hw;
-    if (m.kinds[cb_i] as integer) == KIND_MAIN {
+    if ((m.kinds[cb_i] ?? 0) as integer) == KIND_MAIN {
       if seglen > tlen {
         wx2 = x0 + ux * tlen;
         wz2 = z0 + uz * tlen;
