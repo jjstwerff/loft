@@ -420,20 +420,29 @@ ratchet.
 | `game_protocol` | 0 | — | clean |
 | `html` | 0 | — | clean |
 | `time` | 0 | — | clean |
-| `imaging` | 1 | yes | XS — single trivial fix |
-| `web` | 4 | yes | XS |
-| `gridmesh` | 7 | yes | XS |
-| `world` | 8 | yes | XS — mostly never-defended field hints |
-| `server` | 13 | yes | XS–S |
-| `moros_editor` | 31 | yes | S |
-| `moros_map` | 34 | yes | S |
-| `markdown` | 50 | yes | S |
-| `shapes` | 118 | yes | M |
-| `audience_crystal` | 127 | yes | M |
-| `graphics` | 209 | yes | M–MH |
-| `moros_ui` | 407 | yes | MH |
-| `moros_render` | 466 | yes | MH |
-| `moros_sim` | 1192 | yes | H |
+| `imaging` | 0 | **removed 2026-05-28** | DONE — one `?? Pixel{...}` |
+| `gridmesh` | 0 | **removed 2026-05-28** | DONE — `_x` rename + 1× `not null` |
+| `server` | 0 | **removed 2026-05-28** | DONE — 13× `_ = self;` (method-call surface) |
+| `web` | 0 | **removed 2026-05-28** | DONE — 1× `not null` + 3× `_ = self;` |
+| `world` | 8 | yes | **BLOCKED** — analyzer false-positive on `if i < len(v) { v[i] = x }` for indexed assignment; needs detector fix before world can lose its opt-out |
+| `moros_editor` | 31 | yes | Tier B; cross-references `moros_map` — pair with Phase 7p (consumer migration) per [memory: project_consumer_stall](../../../memory/project_consumer_stall.md) |
+| `moros_map` | 34 | yes | Same — Tier B; paired with 7p |
+| `markdown` | 50 | yes | Tier B; 50× `s[i]` needs sweep — non-consumer lib so unblocked but bulk |
+| `shapes` | 118 | yes | Tier C; 72× `v[i]` + 44× div-by-zero + 2× mod-by-zero |
+| `audience_crystal` | 127 | yes | Tier C; cross-references audience demo (consumer) |
+| `graphics` | 209 | yes | Tier C |
+| `moros_ui` | 407 | yes | Tier C; consumer-adjacent — pair with 7p |
+| `moros_render` | 466 | yes | Tier C; consumer-adjacent — pair with 7p |
+| `moros_sim` | 1192 | yes | Tier D — paired with Phase 7p migration |
+
+**Progress 2026-05-28:** 4 of 14 opt-outs retired (imaging, gridmesh,
+server, web).  10 remaining: 1 blocked on a loft detector fix (world),
+5 paired with Phase 7p consumer migration (moros_editor / moros_map /
+moros_ui / moros_render / moros_sim — touching them isolated from
+their consumers risks rework when 7p eventually re-shapes the code),
+and 4 unblocked but bulky (markdown / shapes / audience_crystal /
+graphics).  Continue with the unblocked bulk libraries next; world's
+detector issue is its own follow-up.
 
 **Strategy.**
 
