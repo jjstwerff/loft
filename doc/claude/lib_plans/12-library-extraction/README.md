@@ -289,7 +289,7 @@ with ≥1 minor release of soak between consecutive chunks.
 | 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **SHIPPED** 2026-05-24 |
 | 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **OPEN** — S–M; lands before 6w |
 | 6w-w | Retire every `lib/*/.allow_warnings` opt-out — clean each library's warnings until the gate runs strict everywhere | 6.5 (gate landed) | **OPEN** — variable per package; tracks the ratchet to zero |
-| 6t | Library test self-sufficiency — move Rust harness coverage into each library so it survives extraction (gridmesh script copies, `graphics_gold.rs` port, `multiplayer_v{2,5}.rs` port) | 4–6 | **OPEN** — M; blocks Phase 5 (graphics) + Phase 6w (world) extraction |
+| 6t | Library test self-sufficiency — move Rust harness coverage into each library so it survives extraction (Tier 1 gridmesh script copies, Tier 2 `graphics_gold.rs` port, Tier 3 `multiplayer_v{2,5}.rs` port, Tier 4 `loft test --deps`) | 4–6 | **partial** — Tier 1 DONE, Tier 2 DONE; Tiers 3+4 OPEN; blocks Phase 5 (graphics) + Phase 6w (world) extraction |
 | 6w | Extract `loft-libs-world` (world, Phase-7a-expanded) | 7a + 6.5 + 6t | OPEN — M |
 | 7a | Split moros: shared spatial primitives → `lib/world/` (cross-project unlock — feeds dryopea + bumper + moros; subsumes MapFile schema promotion) | 4 | **partial** — `lib/world/` shipped (sparse 32x32 model + save/load, smoke test green); `lib/wall.loft` + `lib/overland.loft` folded into `lib/world/src/` 2026-05-28; remaining: `pub` markers + moros migration + MapFile schema doc |
 | 7p | Cross-cutting primitives extracted before moros leaves: `lib/moros_editor` → `lib/world_editor` rename + `lib_plans/NN-physics-2body` + `lib_plans/NN-particles` slots filed; sequencing matters more than effort | 7a | **OPEN** — XS (rename) + M (new slot designs) |
@@ -593,6 +593,41 @@ deleting both monorepo harnesses leaves coverage intact.
 Tier 2 next (blocks Phase 5 graphics extraction).  Tier 3 last
 (can land alongside Phase 6r since `loft-libs-net` is already
 extracted; the integration suite is additive to that repo).
+
+**Tier 4 — `loft test --deps` (follow-up; S).**  Adds a consumer-side
+walker that runs `loft test` on every dependency in the current
+project's transitive tree (driven by `loft.toml` + `loft.lock`).
+The infrastructure is already there: `manifest::extract_path_dep()`
++ the parser's `probe_user_installed` / `probe_registry_dir` resolvers
+just need lifting out of `&mut Parser` into a free function the
+test runner can call.  Wire `loft test --deps` into the canonical
+`library-ci.yml.example` template as a final step so a chunk repo's
+PR catches "this graphics release broke gridmesh's tests in our
+environment" before it merges, not after a downstream consumer's CI
+flags it.  Proposed surface:
+
+```
+loft test --deps                  # transitive — all deps + their deps
+loft test --deps=direct           # one level only
+loft test --deps --lock=PATH      # pre-flight against a candidate lock
+loft test --deps --skip=name,name # exclude packages (platform-specific holes)
+```
+
+`--deps` implies `--no-warnings` for transitive deps unless
+`--strict-deps` is also passed — the consumer should not be penalised
+by warnings inside a dep it doesn't control.  Implementation steps
+(T1-T6) sized at XS-S each:
+
+| # | What | Effort |
+|---|---|---|
+| T1 | Lift `probe_*` resolvers from `Parser` → `manifest::resolve_dep(name, value, from_pkg) -> Option<PathBuf>` (pure refactor) | XS |
+| T2 | `--deps[=direct]` flag + direct walker; calls existing `run_tests()` per dep | S |
+| T3 | Transitive walk + `HashSet<String>` cycle guard | XS |
+| T4 | `--lock=PATH` driver (read lockfile, resolve each pinned entry) | XS |
+| T5 | `--skip=` allow-list filter | XS |
+| T6 | `library-ci.yml.example` template gains a final `loft test --deps` step | XS |
+
+Not blocking; lands after Tiers 1–3 are clean.
 
 ### Phase 7a — moros world split (cross-project unlock; appears monorepo-internal)
 

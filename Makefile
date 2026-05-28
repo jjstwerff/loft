@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets doctor install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
+.PHONY: all check-targets doctor install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -837,6 +837,32 @@ test-packages:
 		done; \
 	done; \
 	echo "$$total package tests, $$failed failed"; \
+	if [ $$failed -gt 0 ]; then exit 1; fi
+
+# Phase 6t Tier 2 — Rust integration tests living inside each library's
+# `native/tests/`.  These travel with the library when it extracts to a
+# chunk repo (the library-ci.yml.example template runs `cargo test
+# --release` for any package that ships `native/tests/*.rs`).  In the
+# monorepo, this target runs the equivalent so coverage doesn't lapse
+# while the library still lives here.
+test-package-native-tests:
+	@failed=0; total=0; \
+	for pkg in lib/*/native; do \
+		[ -d "$$pkg/tests" ] || continue; \
+		pkg_name=$$(basename $$(dirname "$$pkg")); \
+		printf "  %-50s" "$$pkg_name/native: cargo test"; \
+		total=$$((total + 1)); \
+		out=$$(cd "$$pkg" && cargo test --release 2>&1); \
+		code=$$?; \
+		if [ $$code -ne 0 ]; then \
+			echo "FAILED"; \
+			echo "$$out" | grep -E "FAILED|panicked|^---- " | head -20; \
+			failed=$$((failed + 1)); \
+		else \
+			echo "ok"; \
+		fi; \
+	done; \
+	echo "$$total native test crates, $$failed failed"; \
 	if [ $$failed -gt 0 ]; then exit 1; fi
 
 # Headless GL example tests — tiered:
