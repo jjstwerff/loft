@@ -50,9 +50,9 @@ fn glb_pos_min(verts: vector<mesh::Vertex>) -> math::Vec3 {
   if verts.len() == 0 {
     math::vec3(0.0, 0.0, 0.0)
   } else {
-    mx = verts[0].pos.x;
-    my = verts[0].pos.y;
-    mz = verts[0].pos.z;
+    mx = (verts[0] ?? 0).pos.x;
+    my = (verts[0] ?? 0).pos.y;
+    mz = (verts[0] ?? 0).pos.z;
     for v in verts {
       if v.pos.x < mx { mx = v.pos.x; }
       if v.pos.y < my { my = v.pos.y; }
@@ -67,9 +67,9 @@ fn glb_pos_max(verts: vector<mesh::Vertex>) -> math::Vec3 {
   if verts.len() == 0 {
     math::vec3(0.0, 0.0, 0.0)
   } else {
-    mx = verts[0].pos.x;
-    my = verts[0].pos.y;
-    mz = verts[0].pos.z;
+    mx = (verts[0] ?? 0).pos.x;
+    my = (verts[0] ?? 0).pos.y;
+    mz = (verts[0] ?? 0).pos.z;
     for v in verts {
       if v.pos.x > mx { mx = v.pos.x; }
       if v.pos.y > my { my = v.pos.y; }
@@ -208,20 +208,20 @@ fn glb_material_json(mat: scene::Material) -> text {
 // True if a Mat4 is the identity matrix (within exact float equality).
 fn glb_is_identity_mat4(tr: math::Mat4) -> boolean {
   mm = tr.m;
-  mm[0] == 1.0 && mm[1] == 0.0 && mm[2] == 0.0 && mm[3] == 0.0 &&
-  mm[4] == 0.0 && mm[5] == 1.0 && mm[6] == 0.0 && mm[7] == 0.0 &&
-  mm[8] == 0.0 && mm[9] == 0.0 && mm[10] == 1.0 && mm[11] == 0.0 &&
-  mm[12] == 0.0 && mm[13] == 0.0 && mm[14] == 0.0 && mm[15] == 1.0
+  (mm[0] ?? 0) == 1.0 && (mm[1] ?? 0) == 0.0 && (mm[2] ?? 0) == 0.0 && (mm[3] ?? 0) == 0.0 &&
+  (mm[4] ?? 0) == 0.0 && (mm[5] ?? 0) == 1.0 && (mm[6] ?? 0) == 0.0 && (mm[7] ?? 0) == 0.0 &&
+  (mm[8] ?? 0) == 0.0 && (mm[9] ?? 0) == 0.0 && (mm[10] ?? 0) == 1.0 && (mm[11] ?? 0) == 0.0 &&
+  (mm[12] ?? 0) == 0.0 && (mm[13] ?? 0) == 0.0 && (mm[14] ?? 0) == 0.0 && (mm[15] ?? 0) == 1.0
 }
 
 // Build a glTF "matrix" JSON property from a column-major Mat4.
 // glTF 2.0 also uses column-major order, so emit elements directly.
 fn glb_mat4_json(tr: math::Mat4) -> text {
   mm = tr.m;
-  c0  = mm[0]  as single; c1  = mm[1]  as single; c2  = mm[2]  as single; c3  = mm[3]  as single;
-  c4  = mm[4]  as single; c5  = mm[5]  as single; c6  = mm[6]  as single; c7  = mm[7]  as single;
-  c8  = mm[8]  as single; c9  = mm[9]  as single; c10 = mm[10] as single; c11 = mm[11] as single;
-  c12 = mm[12] as single; c13 = mm[13] as single; c14 = mm[14] as single; c15 = mm[15] as single;
+  c0  = (mm[0] ?? 0)  as single; c1  = (mm[1] ?? 0)  as single; c2  = (mm[2] ?? 0)  as single; c3  = (mm[3] ?? 0)  as single;
+  c4  = (mm[4] ?? 0)  as single; c5  = (mm[5] ?? 0)  as single; c6  = (mm[6] ?? 0)  as single; c7  = (mm[7] ?? 0)  as single;
+  c8  = (mm[8] ?? 0)  as single; c9  = (mm[9] ?? 0)  as single; c10 = (mm[10] ?? 0) as single; c11 = (mm[11] ?? 0) as single;
+  c12 = (mm[12] ?? 0) as single; c13 = (mm[13] ?? 0) as single; c14 = (mm[14] ?? 0) as single; c15 = (mm[15] ?? 0) as single;
   result = "\"matrix\":[{c0:.6},{c1:.6},{c2:.6},{c3:.6},";
   result += "{c4:.6},{c5:.6},{c6:.6},{c7:.6},";
   result += "{c8:.6},{c9:.6},{c10:.6},{c11:.6},";
@@ -352,7 +352,7 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
     acc_norm = mi * 4 + 1;
     acc_uv   = mi * 4 + 2;
     acc_idx  = mi * 4 + 3;
-    mat_idx  = mesh_mat[mi];
+    mat_idx  = (mesh_mat[mi] ?? 0);
     result += "{{\"name\":\"{mename}\",\"primitives\":[{{\"attributes\":{{\"POSITION\":{acc_pos},\"NORMAL\":{acc_norm},\"TEXCOORD_0\":{acc_uv}}},\"indices\":{acc_idx},\"material\":{mat_idx}}}]}}";
     mi = mi + 1;
   }
@@ -394,7 +394,7 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
     norm_bytes = nv * 12;
     uv_bytes   = nv * 8;
     idx_bytes  = nidx * 4;
-    base = bin_offset[mi];
+    base = (bin_offset[mi] ?? 0);
     off_norm = base + pos_bytes;
     off_uv   = base + pos_bytes + norm_bytes;
     off_idx  = base + pos_bytes + norm_bytes + uv_bytes;

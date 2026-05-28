@@ -159,7 +159,7 @@ pub fn mesh_to_floats_uv(mu: const Mesh) -> vector<single> {
   mu_buf: vector<single> = [];
   for mu_tri in mu.triangles {
     for mu_idx in [mu_tri.a, mu_tri.b, mu_tri.c] {
-      mu_v = mu.vertices[mu_idx];
+      mu_v = (mu.vertices[mu_idx] ?? 0);
       mu_buf += [mu_v.pos.x as single, mu_v.pos.y as single, mu_v.pos.z as single];
       mu_buf += [mu_v.normal.x as single, mu_v.normal.y as single, mu_v.normal.z as single];
       mu_buf += [mu_v.uv.x as single, mu_v.uv.y as single];
@@ -173,7 +173,7 @@ pub fn mesh_to_floats(mf: const Mesh) -> vector<single> {
   mf_buf: vector<single> = [];
   for mf_tri in mf.triangles {
     for mf_idx in [mf_tri.a, mf_tri.b, mf_tri.c] {
-      mf_v = mf.vertices[mf_idx];
+      mf_v = (mf.vertices[mf_idx] ?? 0);
       mf_buf += [mf_v.pos.x as single, mf_v.pos.y as single, mf_v.pos.z as single];
       mf_buf += [mf_v.normal.x as single, mf_v.normal.y as single, mf_v.normal.z as single];
     }
