@@ -424,7 +424,7 @@ ratchet.
 | `gridmesh` | 0 | **removed 2026-05-28** | DONE — `_x` rename + 1× `not null` |
 | `server` | 0 | **removed 2026-05-28** | DONE — 13× `_ = self;` (method-call surface) |
 | `web` | 0 | **removed 2026-05-28** | DONE — 1× `not null` + 3× `_ = self;` |
-| `world` | 8 | yes | **BLOCKED** — analyzer false-positive on `if i < len(v) { v[i] = x }` for indexed assignment; needs detector fix before world can lose its opt-out |
+| `world` | 0 | **removed 2026-05-28** | DONE — needed both src/parser/operators.rs skip-pattern 5 (recognise `if i < len(v)` guards for indexed-assign positions) + world.loft idiom rewrites (`cells = X; if i < len(cells) { ... cells[i] }`) + `as u8`/`as u16` width casts on binary writes + `chunks not null` |
 | `moros_editor` | 31 | yes | Tier B; cross-references `moros_map` — pair with Phase 7p (consumer migration) per [memory: project_consumer_stall](../../../memory/project_consumer_stall.md) |
 | `moros_map` | 34 | yes | Same — Tier B; paired with 7p |
 | `markdown` | 50 | yes | Tier B; 50× `s[i]` needs sweep — non-consumer lib so unblocked but bulk |
@@ -435,14 +435,26 @@ ratchet.
 | `moros_render` | 466 | yes | Tier C; consumer-adjacent — pair with 7p |
 | `moros_sim` | 1192 | yes | Tier D — paired with Phase 7p migration |
 
-**Progress 2026-05-28:** 4 of 14 opt-outs retired (imaging, gridmesh,
-server, web).  10 remaining: 1 blocked on a loft detector fix (world),
-5 paired with Phase 7p consumer migration (moros_editor / moros_map /
-moros_ui / moros_render / moros_sim — touching them isolated from
-their consumers risks rework when 7p eventually re-shapes the code),
-and 4 unblocked but bulky (markdown / shapes / audience_crystal /
-graphics).  Continue with the unblocked bulk libraries next; world's
-detector issue is its own follow-up.
+**Progress 2026-05-28:** 6 of 14 opt-outs retired (imaging, gridmesh,
+server, web, markdown, world).  8 remaining: 5 paired with Phase 7p
+consumer migration (moros_editor / moros_map / moros_ui /
+moros_render / moros_sim — touching them isolated from their
+consumers risks rework when 7p eventually re-shapes the code), 2
+need per-callsite semantic review for division-by-zero
+warnings (audience_crystal: 33; graphics: 84 — silencing with `?? 0`
+can mask rendering / decay-math bugs), and 1 inherits graphics's
+remaining warnings (shapes — only reachable via the graphics dep).
+
+The detector fix that closed `world` is reusable: skip-pattern 5
+in `src/parser/operators.rs::is_easy_proof` recognises
+`if idx_var < len(vec_var) { ... v[idx_var] ... }` for both reads
+and indexed assigns inside the then-block, accepting the user-facing
+`len` wrapper and the underlying `LengthVector` opcode and stripping
+the `ConvBoolFromInt` cast the parser emits around the comparison.
+The pattern handles bare `Var` index and `Var` collection; more
+complex shapes (`if i < self.height && j < self.width { ... v[j * w + i] }`,
+which graphics uses) still warn — a Phase-6w-w follow-up could
+extend the detector to recognise field-access bounds too.
 
 **Strategy.**
 
