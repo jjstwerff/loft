@@ -1,0 +1,37 @@
+// Probe 09 — vector return type instead of struct.
+//
+//   fn make_vec(p: P) -> vector<integer> {
+//     v = [];
+//     for k in 0..5 { v += [p.tag + k]; }
+//     v
+//   }
+//
+// ref_return promotes the returned local `v` to a hidden buffer attribute.
+// The body's penultimate is the for-loop, NOT a Set, so S1 doesn't fire.
+// But this is the "for-loop accumulator" shape — very common in user code
+// (gridmesh uses it heavily).  Does the pre-Set FreeRef fire on `v = []`?
+//
+// Expected: ? on --interpret (might leak the empty vector store).
+//
+// Important: this shape doesn't reassign `v` after the initial Set; only
+// modifies `v.data` via `+=`.  So the pre-Set FreeRef is only on the FIRST
+// `v = []` line.  If `v` is null initially (work-ref's typical state),
+// the free is a no-op.  No corruption expected.
+
+struct P { tag: integer not null }
+
+fn make_vec(p: P) -> vector<integer> {
+  v: vector<integer> = [];
+  for k in 0..5 { v += [p.tag + k]; }
+  v
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    v = make_vec(p);
+    assert(len(v) == 5, "iter {i}: len = {len(v)}");
+    for k in 0..5 { assert(v[k] == i + k, "iter {i} k {k}: v[{k}] = {v[k]} (expect {i + k})"); }
+  }
+  println("probe 09 PASSED");
+}

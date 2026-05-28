@@ -1,0 +1,31 @@
+// Probe 32 — vector containing heap-returning call results.
+//
+//   v = [alloc_canvas(1, 2, 0), alloc_canvas(3, 4, 1), alloc_canvas(5, 6, 2)];
+//
+// Tests: a vector literal whose elements are heap-returning calls.
+// Each element call has its own hidden buffer; the vector adopts them.
+// Different from probe 19 (struct wrapping single call) — multiple calls
+// nested inside a collection literal.
+
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn main() {
+  for i in 0..6 {
+    cvs = [
+      alloc_canvas(2, 3, i),
+      alloc_canvas(2, 4, i * 10),
+      alloc_canvas(2, 5, i * 100)
+    ];
+    assert(len(cvs) == 3, "iter {i}: outer len = {len(cvs)}");
+    assert(cvs[0].data[0] == i, "iter {i}: cvs[0][0] = {cvs[0].data[0]}");
+    assert(cvs[1].data[0] == i * 10, "iter {i}: cvs[1][0] = {cvs[1].data[0]}");
+    assert(cvs[2].data[0] == i * 100, "iter {i}: cvs[2][0] = {cvs[2].data[0]}");
+  }
+  println("probe 32 PASSED");
+}

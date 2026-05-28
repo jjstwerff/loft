@@ -1,0 +1,42 @@
+// Probe 14 — field-Set on hidden buffer (cv.field = call()).
+//
+//   fn render_field_set(p: P) -> Canvas {
+//     cv = Canvas { data: [], w: 4 };
+//     cv.data = make_vec(p.tag);    // field reassignment via call return
+//     cv
+//   }
+//
+// Two Sets: the struct-literal Set, then a field-level Set
+// (`cv.data = ...`) whose RHS is a heap-returning call.  Field-level
+// Set is different from variable-level Set — does it go through the
+// same pre-Set FreeRef codegen?  Probably YES (Set on field needs to
+// free the old field value), but the question is whether S2's gate
+// fires when the LHS is `cv.field` rather than `cv`.
+//
+// Expected: ? — depends on field-Set codegen.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn make_vec(seed: integer) -> vector<integer> {
+  v: vector<integer> = [];
+  for k in 0..5 { v += [seed + k]; }
+  v
+}
+
+fn render_field_set(p: P) -> Canvas {
+  cv = Canvas { data: [], w: 4 };
+  cv.data = make_vec(p.tag);
+  cv
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    cv = render_field_set(p);
+    assert(cv.w == 4, "iter {i}: w = {cv.w}");
+    assert(len(cv.data) == 5, "iter {i}: len = {len(cv.data)}");
+    assert(cv.data[0] == i, "iter {i}: data[0] = {cv.data[0]}");
+  }
+  println("probe 14 PASSED");
+}

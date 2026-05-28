@@ -1,0 +1,40 @@
+// Probe 19 — wrap a heap-returning call inside a struct construction.
+//
+//   fn wrap(p: P) -> Wrapper {
+//     Wrapper { canvas: alloc_canvas(4, 5, p.tag), tag: p.tag }
+//   }
+//
+// The hidden-buffer-returning call (alloc_canvas) is nested inside a
+// struct-literal expression, which is itself the function's return.
+// Wrapper.canvas FIELD holds a Canvas; the struct literal's field-init
+// uses alloc_canvas's return.
+//
+// Tests: how the struct-literal codegen path handles a heap-returning
+// call as a field initialiser.  Related to probe 04 (struct-lit-then-call)
+// in that both involve struct literals + heap-call interaction.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+struct Wrapper { canvas: Canvas, tag: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn wrap(p: P) -> Wrapper {
+  Wrapper { canvas: alloc_canvas(4, 5, p.tag), tag: p.tag }
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    w = wrap(p);
+    assert(w.tag == i, "iter {i}: tag = {w.tag}");
+    assert(w.canvas.w == 4, "iter {i}: canvas.w = {w.canvas.w}");
+    assert(len(w.canvas.data) == 5, "iter {i}: canvas len = {len(w.canvas.data)}");
+    assert(w.canvas.data[0] == i, "iter {i}: canvas[0] = {w.canvas.data[0]}");
+  }
+  println("probe 19 PASSED");
+}

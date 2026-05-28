@@ -1,0 +1,62 @@
+// Probe 03 — Set then intervening statement then tail.
+//
+//   fn render_intervening(p: P) -> Canvas {
+//     cv = alloc_canvas(4, 5, p.tag);
+//     _ = p.tag * 2;     // intervening pure expression (or any non-cv stmt)
+//     cv
+//   }
+//
+// S1's preconditions require the `Set(cv, Call(...))` to be the IMMEDIATE
+// penultimate statement (`l[last-1]` in `nrvo_collapse_tail_set`).  Any
+// intervening statement between the Set and the tail Var(cv) defeats S1.
+// Without S1's substitution, the inner call's hidden buffer is a fresh
+// __ref_local (not cv); S2's narrow gate doesn't fire; pre-Set OpFreeRef
+// on cv FIRES.
+//
+// Variants worth probing (each adds its own file as we discover more):
+// - println(...) intervening (side effect)
+// - `_ = expr` intervening (pure)
+// - `local = expr` intervening (introduces unrelated local)
+// - `for x in xs { side_effect(x); }` intervening loop
+// - any of the above with cv-read but no cv-write
+//
+// Expected: FAIL on --interpret in interleaved-fn context (see probe 06
+// for the multi-fn variant).  Native: PASS.
+//
+// Status: known broken.  Same root mechanism as probe 02.
+
+struct P { tag: integer not null }
+struct Q { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn render_intervening(p: P) -> Canvas {
+  cv = alloc_canvas(4, 5, p.tag);
+  _ = p.tag * 2;
+  cv
+}
+
+// Sibling fn to force the ≥ 2 hidden-buffer-fns-coexist condition.
+fn render_direct(q: Q) -> Canvas { cv = alloc_canvas(7, 9, q.tag * 2); cv }
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    q = Q { tag: i + 100 };
+    cv_b = render_intervening(p);
+    cv_d = render_direct(q);
+    assert(cv_b.w == 4, "iter {i}: cv_b.w = {cv_b.w}");
+    assert(len(cv_b.data) == 5, "iter {i}: len(cv_b) = {len(cv_b.data)}");
+    assert(cv_b.data[0] == i, "iter {i}: cv_b[0] = {cv_b.data[0]} (expect {i})");
+
+    assert(cv_d.w == 7, "iter {i}: cv_d.w = {cv_d.w}");
+    assert(len(cv_d.data) == 9, "iter {i}: len(cv_d) = {len(cv_d.data)}");
+    assert(cv_d.data[0] == (i + 100) * 2, "iter {i}: cv_d[0] = {cv_d.data[0]}");
+  }
+  println("probe 03 PASSED");
+}

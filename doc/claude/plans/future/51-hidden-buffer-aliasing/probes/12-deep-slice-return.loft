@@ -1,0 +1,36 @@
+// Probe 12 — deep-slice borrow return (the `moros_map` shape).
+//
+//   fn get_first(m: Container) -> Hex { return m.items[0]; }
+//
+// This is fundamentally different from the others: there's NO assignment
+// to a hidden buffer.  The returned value is a DbRef into the caller's
+// param `m`.  dep-inference doesn't currently record that the return
+// borrows from m (the recorded dep is a hidden work-ref, per the @P377
+// pre-S1 history).  This is the shape that broke the original adopt-path
+// attempt and motivated Path C.
+//
+// Expected behaviour: caller can use the returned ref as long as `m` is
+// alive.  The interesting question is whether iterating-while-reading
+// triggers any corruption.
+
+struct Hex { x: integer not null, y: integer not null }
+struct Container { items: vector<Hex>, name: text }
+
+fn get_first(m: Container) -> Hex {
+  return m.items[0];
+}
+
+fn main() {
+  for i in 0..6 {
+    m = Container {
+      items: [Hex { x: i, y: i * 2 }, Hex { x: i + 10, y: i + 20 }],
+      name: "container"
+    };
+    h = get_first(m);
+    assert(h.x == i, "iter {i}: h.x = {h.x}");
+    assert(h.y == i * 2, "iter {i}: h.y = {h.y}");
+    // m is still alive here; h aliases m.items[0].
+    assert(m.items[0].x == i, "iter {i}: m.items[0].x = {m.items[0].x}");
+  }
+  println("probe 12 PASSED");
+}

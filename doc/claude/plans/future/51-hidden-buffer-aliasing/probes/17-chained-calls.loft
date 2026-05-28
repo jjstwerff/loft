@@ -1,0 +1,50 @@
+// Probe 17 — chain of heap-returning calls in the body.
+//
+//   fn pipeline(p: P) -> Canvas {
+//     a = alloc_canvas(4, 5, p.tag);
+//     b = annotate(a, p.tag * 2);
+//     b
+//   }
+//
+// Two locals (a, b), both heap-returning.  a is reassigned only once;
+// b is the actual tail.  ref_return promotes b (the tail-returning var)
+// to hidden buffer.  a is an intermediate local — its store needs to be
+// freed at scope-exit.
+//
+// Tests: how multiple intermediate heap locals interact with the buffer
+// protocol.  a is NOT the hidden buffer; a is a regular local.  S1's
+// pattern doesn't match either Set (penultimate is Set(b, annotate(a))
+// which IS Set→Var(b) pattern, but a is also a hidden-buffer return).
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn annotate(input: Canvas, extra: integer) -> Canvas {
+  out = Canvas { data: input.data, w: input.w };
+  out.data += [extra];
+  out
+}
+
+fn pipeline(p: P) -> Canvas {
+  a = alloc_canvas(4, 5, p.tag);
+  b = annotate(a, p.tag * 2);
+  b
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    cv = pipeline(p);
+    assert(cv.w == 4, "iter {i}: w = {cv.w}");
+    assert(len(cv.data) == 6, "iter {i}: len = {len(cv.data)} (expect 6)");
+    assert(cv.data[0] == i, "iter {i}: data[0] = {cv.data[0]}");
+    assert(cv.data[5] == i * 2, "iter {i}: data[5] = {cv.data[5]}");
+  }
+  println("probe 17 PASSED");
+}

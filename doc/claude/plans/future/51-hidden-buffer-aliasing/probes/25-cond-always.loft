@@ -1,0 +1,42 @@
+// Probe 25 — conditional reassign with always-true condition.
+//
+//   fn render(p: P) -> Canvas {
+//     cv = alloc_canvas(3, 3, p.tag);     // First Set
+//     if true {                           // ALWAYS-TRUE
+//       cv = alloc_canvas(4, 5, p.tag);
+//     }
+//     cv
+//   }
+//
+// Compare with probe 11 (cond reassign with p.tag > 2).  In probe 11,
+// the leak count was Canvas×6 (one per iter).  Here the condition always
+// fires.  Tests: does the leak count change based on if-frequency?  If
+// leak is per-fire, expect Canvas×6.  If leak is per-iter-with-set,
+// expect Canvas×6 (every iter fires both Sets).
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn render(p: P) -> Canvas {
+  cv = alloc_canvas(3, 3, p.tag);
+  if true {
+    cv = alloc_canvas(4, 5, p.tag);
+  }
+  cv
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    cv = render(p);
+    assert(cv.w == 4, "iter {i}: w = {cv.w}");
+    assert(cv.data[0] == i, "iter {i}: data[0] = {cv.data[0]}");
+  }
+  println("probe 25 PASSED");
+}

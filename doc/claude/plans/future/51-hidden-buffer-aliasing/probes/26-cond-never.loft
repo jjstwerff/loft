@@ -1,0 +1,41 @@
+// Probe 26 — conditional reassign with always-FALSE condition.
+//
+//   fn render(p: P) -> Canvas {
+//     cv = alloc_canvas(4, 5, p.tag);     // First Set
+//     if false {                          // NEVER fires
+//       cv = alloc_canvas(99, 99, 999);
+//     }
+//     cv
+//   }
+//
+// The second Set never fires.  So the body is effectively a single-Set
+// shape, which should match probe 03 (intervening-stmt-then-tail) — but
+// without an actual stmt between.  Tests: leak only happens when the
+// SECOND Set actually fires, or also when its codegen exists?
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn render(p: P) -> Canvas {
+  cv = alloc_canvas(4, 5, p.tag);
+  if false {
+    cv = alloc_canvas(99, 99, 999);
+  }
+  cv
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    cv = render(p);
+    assert(cv.w == 4, "iter {i}: w = {cv.w}");
+    assert(cv.data[0] == i, "iter {i}: data[0] = {cv.data[0]}");
+  }
+  println("probe 26 PASSED");
+}
