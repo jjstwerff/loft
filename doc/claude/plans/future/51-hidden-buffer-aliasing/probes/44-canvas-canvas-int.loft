@@ -1,0 +1,46 @@
+// Probe 44 — (Canvas, Canvas, integer) tuple.
+//
+// Two heap refs at the front + trailing primitive.  Whether the
+// truncation hits depends on whether the SECOND Canvas's nested heap
+// (data@8 within Canvas) lands past the reported `size`.
+//
+//   Stack:   Cv(12,4)@0 → 12. Cv(12,4)@12 → 12. Int(8,8)@24 → 24%8=0,
+//            pos 24, total 32.
+//   Storage: Cv(12,8)@0 → 12. Cv(12,8)@? → 12%8=4, pos=16, +12=28.
+//            Int(8,8)@28 → 28%8=4, pos=32, +8=40.
+//
+// Stack total 32 vs storage total 40 — 8-byte discrepancy.  cb.data
+// (at storage offset 16+8=24) is still WITHIN stack-size 32, so it
+// might be copied OK.  But cc (the int at offset 28-35) may shift.
+//
+// This probe sharpens the diagnosis: is the bug specifically about the
+// last element's NESTED HEAP falling past `size`, or about ANY element
+// falling past `size`?
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn split_cci(p: P) -> (Canvas, Canvas, integer) {
+  a = alloc_canvas(4, 5, p.tag);
+  b = alloc_canvas(7, 9, p.tag * 2);
+  (a, b, p.tag * 100)
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    (ca, cb, k) = split_cci(p);
+    assert(ca.w == 4, "iter {i}: ca.w = {ca.w}");
+    assert(cb.w == 7, "iter {i}: cb.w = {cb.w}");
+    assert(k == i * 100, "iter {i}: k = {k}");
+    assert(ca.data[0] == i, "iter {i}: ca[0] = {ca.data[0]}");
+    assert(cb.data[0] == i * 2, "iter {i}: cb[0] = {cb.data[0]}");
+  }
+  println("probe 44 PASSED");
+}

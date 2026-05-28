@@ -1,0 +1,46 @@
+// Probe 46 — (Flat, Flat) tuple where Flat is a struct of primitives only.
+//
+// Flat layout (storage):
+//   - x: integer not null (8 bytes, align 8) at offset 0
+//   - y: integer not null (8 bytes, align 8) at offset 8
+//   total: 16, align 8
+//
+// element_size for Reference(Flat) is still 12 (DbRef-shaped), but
+// stores.size(Flat) = 16.  Storage align of Flat = 8.
+//
+// Stack tuple_def: (12, 4) × 2 = group_size 24, align 4.
+// Storage finish_type: (16, 8) × 2 = group_size 32, align 8.
+//
+// Wait — that's even worse: stack-widths size=24, storage-widths
+// size=32, a difference of 8 bytes.  If the bug is "tuple size pinned
+// at tuple_def's stack value", we copy 24 bytes and lose the trailing
+// 8 of Flat2.
+//
+// Flat has NO nested heap, so copy_claims has nothing to allocate —
+// the corruption is pure copy_block truncation: Flat2.y reads as 0
+// (uninitialised destination) instead of the source value.
+
+struct P { tag: integer not null }
+struct Flat { x: integer not null, y: integer not null }
+
+fn make_flat(xv: integer, yv: integer) -> Flat {
+  Flat { x: xv, y: yv }
+}
+
+fn split_ff(p: P) -> (Flat, Flat) {
+  a = make_flat(p.tag, p.tag + 1);
+  b = make_flat(p.tag + 10, p.tag + 11);
+  (a, b)
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    (fa, fb) = split_ff(p);
+    assert(fa.x == i, "iter {i}: fa.x = {fa.x}");
+    assert(fa.y == i + 1, "iter {i}: fa.y = {fa.y}");
+    assert(fb.x == i + 10, "iter {i}: fb.x = {fb.x}");
+    assert(fb.y == i + 11, "iter {i}: fb.y = {fb.y}");
+  }
+  println("probe 46 PASSED");
+}

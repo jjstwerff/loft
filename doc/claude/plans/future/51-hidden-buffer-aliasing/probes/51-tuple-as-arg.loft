@@ -1,0 +1,34 @@
+// Probe 51 — pass (Canvas, Canvas) tuple AS AN ARGUMENT (not return).
+//
+// Probes the OTHER half of the function ABI: receiving a tuple param.
+// If the bug is purely about tuple-RETURN's hidden-buffer promotion,
+// passing as arg might be unaffected.  If the bug is about the
+// underlying tuple-type schema mismatch, arg passing should suffer
+// the same way (callee reads from the wrong offsets).
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn check_pair(pair: (Canvas, Canvas), i: integer) {
+  (ca, cb) = pair;
+  assert(ca.w == 4, "arg-iter {i}: ca.w = {ca.w}");
+  assert(cb.w == 7, "arg-iter {i}: cb.w = {cb.w}");
+  assert(ca.data[0] == i, "arg-iter {i}: ca[0] = {ca.data[0]}");
+  assert(cb.data[0] == i * 2, "arg-iter {i}: cb[0] = {cb.data[0]}");
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    a = alloc_canvas(4, 5, p.tag);
+    b = alloc_canvas(7, 9, p.tag * 2);
+    check_pair((a, b), i);
+  }
+  println("probe 51 PASSED");
+}

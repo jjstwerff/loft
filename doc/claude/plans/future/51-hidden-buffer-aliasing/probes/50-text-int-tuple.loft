@@ -1,0 +1,34 @@
+// Probe 50 — (text, integer) tuple.
+//
+// Mixed-alignment primitives.  text storage = 4 bytes (align 4),
+// integer storage = 8 bytes (align 8).
+//
+//   Group-aware layout (compiler IR): [text@0, int@8], total 16,
+//   align 8.  The text field is at the front to match declaration
+//   order (groups freeze field order).
+//
+//   Simple packer (no groups, runtime database): places int FIRST
+//   (largest alignment): [int@0, text@8], total 12.  Field ORDER
+//   gets reordered by the simple packer because it processes by
+//   alignment-descending, not declaration order.
+//
+// If the IR uses [text@0, int@8] (group offsets) and the runtime
+// reads from [int@0, text@8] (simple-packer offsets), reading
+// either field returns the wrong value.
+
+struct P { tag: integer not null }
+
+fn split_ti(p: P) -> (text, integer) {
+  ("tag-{p.tag}", p.tag * 100)
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    (s, k) = split_ti(p);
+    expected_s = "tag-{i}";
+    assert(s == expected_s, "iter {i}: s = '{s}' expected '{expected_s}'");
+    assert(k == i * 100, "iter {i}: k = {k}");
+  }
+  println("probe 50 PASSED");
+}

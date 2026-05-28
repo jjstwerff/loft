@@ -1,0 +1,17 @@
+// Probe 55 — lambda stored in a struct field.
+//
+// Tests dispatch through a fn-ref-typed STRUCT FIELD.  The lambda's
+// d_nr lives in a record on the heap; calling it reads back the d_nr
+// and dispatches.  Could be a different codegen path than a local
+// fn-ref slot.
+
+struct Op { f: fn(integer) -> integer }
+
+fn main() {
+  o = Op { f: fn(x: integer) -> integer { x * 7 } };
+  for i in 0..6 {
+    v = o.f(i);
+    assert(v == i * 7, "iter {i}: v = {v}");
+  }
+  println("probe 55 PASSED");
+}

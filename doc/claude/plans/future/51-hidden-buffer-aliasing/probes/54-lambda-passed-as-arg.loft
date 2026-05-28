@@ -1,0 +1,18 @@
+// Probe 54 — lambda passed as a function argument.
+//
+// Tests dispatch through a fn-ref-typed PARAMETER (not local).  The
+// callee `apply` receives a fn-ref and invokes it.  If the dispatch
+// arms are generated based on locals-only, this would fail; if they're
+// generated globally per registered lambda, this would pass.
+
+fn apply(f: fn(integer) -> integer, x: integer) -> integer {
+  f(x)
+}
+
+fn main() {
+  for i in 0..6 {
+    v = apply(fn(y: integer) -> integer { y + 100 }, i);
+    assert(v == i + 100, "iter {i}: v = {v}");
+  }
+  println("probe 54 PASSED");
+}

@@ -1,0 +1,19 @@
+// Probe 57 — immediate-invocation lambda (IIFE).
+//
+// Tests whether INLINE invocation `(fn(x) -> integer { ... })(arg)`
+// bypasses the fn-ref dispatch entirely.  The parser MAY recognise
+// the immediate-call pattern and emit a direct call to the lambda's
+// d_nr without going through OpCallRef.  If so, this probe escapes
+// V-c regardless of how the general fn-ref dispatch is broken.
+//
+// Useful as a CONTRAST probe: if probe 52 fails but 57 passes,
+// V-c is specifically about FN-REF-DISPATCH (OpCallRef), not lambda
+// codegen in general.
+
+fn main() {
+  for i in 0..6 {
+    v = (fn(x: integer) -> integer { x + 42 })(i);
+    assert(v == i + 42, "iter {i}: v = {v}");
+  }
+  println("probe 57 PASSED");
+}

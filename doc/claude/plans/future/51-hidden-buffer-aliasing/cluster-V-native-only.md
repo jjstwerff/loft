@@ -1,17 +1,70 @@
 # Cluster V — Native-only failures
 
-**Status: 🟡 NOT STARTED.**  Probe 29's native mechanism is VERIFIED (OpFreeRef-after-OpCopyRecord visible in generated Rust at `/tmp/loft_native_*.rs:2260-2261`; see § Probe 29 below).  Probe 30's mechanism still hypothesized — capture its generated Rust via `LOFT_KEEP_NATIVE_RS=1` (tool 1, in tree) and read the lambda dispatch in `src/generation/`.
+**Status: 🟢 MECHANISM VERIFIED (2026-05-28 deep dive).**  Probe 29's root cause is now PINNED at the schema-propagation level — see § Verified root cause (the OpFreeRef-after-OpCopyRecord observation in earlier drafts was a SYMPTOM, not the cause).  Probe 30's mechanism still hypothesised — separate fix surface.  12 new probes (40-51) added to map the scope; see § Probe scope sweep.
 
-**Next-session entry point for probe 29 fix:**
+**Verified root cause (probe 29 & family):**
 
-1. Find where `rewrite_tail_tuple_to_synthetic_struct` (`src/parser/control.rs:677-720`) emits the IR — specifically the OpCopyRecord pattern that the generated Rust mirrors.
-2. Read `OpCopyRecord` runtime semantics in `src/codegen_runtime.rs` (native) vs `src/state/io.rs` (bytecode VM) to see WHY interpret escapes (deep-copy semantics? source-free flag `0x8000`?).
-3. Read `src/scopes.rs::get_free_vars` to find where the trailing `OpFreeRef(var_a)` / `OpFreeRef(var_b)` are emitted (scope-exit free vs. tuple-rewrite output).
-4. Fix candidates: (b) suppress trailing OpFreeRef when OpCopyRecord adopted them; (c) use OpCopyRecord-with-source-free-flag (`0x8000`) so the source is freed AS PART of the copy.
+`src/generation/mod.rs:1528` emits `db.structure("{name}", 0)` into the generated native binary for each loft struct type, then adds attributes via subsequent `db.field(...)` calls.  But it **does NOT propagate `Definition::field_groups`** — the `LinkedFieldGroup::Tuple` entries that `tuple_def` (`src/data.rs:2586`) registers for tuple types so the compiler-side `finish_type` can pack tuple elements as one atomic block via `calculate_positions_with_groups`.
 
-**Severity:** Mixed.  Native codegen produces invalid or buggy Rust for specific shapes.  Some shapes work on interpret but fail on native (29).  Some fail on both backends differently (30).
-**Affected probes:** 29 (tuple-return), 30 (lambda-return)
+Consequence: the compiler's database has tuple positions/size from the **group-aware** layout; the native binary's runtime database (rebuilt at startup by the generated `db.structure` + `db.field` + `db.finish` sequence) has positions/size from the **simple alignment-descending packer** (`calculate_positions`).  The IR is emitted against the compiler-side layout (hardcoded field positions) but executes against the native-side layout (different sizes).
+
+For `(Canvas, Canvas)`:
+- Compiler side (with field_groups): positions `[0, 16]`, size **28**, align 8.
+- Native runtime side (without field_groups): positions `[0, 12]`, size **24**, align 8.
+- IR writes Canvas2 at offset 16 (per compiler).  `OpCopyRecord(_src, dst, tp=66)` at the call site uses `stores.size(66) = 24` (per runtime), copies bytes 0-23 — missing Canvas2.data at 24-27.  Then `copy_claims` walks Parts::Struct using positions [0, 12], reading from src.pos 12 (PADDING in the source's actual layout) and producing a null data pointer.
+
+**Severity:** Mixed.  Native produces silently or loudly wrong values depending on the tuple's element shape.  Some shapes pass by luck (small ints in a `(Canvas, integer)` tuple — bytes 16-19 happen to hold the whole value).  Probe 30 is a separate sub-issue (lambda-return).
+**Affected probes:** 29 (tuple-return), 30 (lambda-return), 40, 41, 44, 45, 48, 50 (all tuple-shape variants confirmed to fail; see § Probe scope sweep).
 **Backend asymmetry:** Opposite from clusters II/III — here NATIVE fails (interpret may or may not work).
+
+## Probe scope sweep (12 probes, 40-51)
+
+After confirming the schema-mismatch mechanism, ran a focused scope sweep.  Trace tools in tree: `LOFT_TRACE_COPY=1` (OpCopyRecord src/dst/size/free_src), `LOFT_TRACE_FINISH=1` (finish_type entry+exit, tuple types only).  Both gated on env vars so they're zero-cost when off.
+
+| # | Probe | Shape | Interp | Native | Why |
+|---|---|---|---|---|---|
+| 29 | tuple-return | `(Canvas, Canvas)` | ✅ | 💥 cb[0]=null(oob) | canonical; Canvas2.data at IR pos 24 > runtime size 24 |
+| 40 | nested-tuple-of-canvases | `((C,C),(C,C))` | (parse) | ❌ rustc E0605 | separate native codegen bug: tries to cast DbRef to `(DbRef,DbRef)` |
+| 41 | three-canvas-tuple | `(Canvas, Canvas, Canvas)` | ✅ | 💥 cc.w=43 (garbage half-i64) | Canvas3 at IR pos 32+12=44 > runtime size 36 |
+| 42 | canvas-then-int (small) | `(Canvas, integer)` (val < 2^32) | ✅ | ✅ PASS BY LUCK | int's lower 4 bytes copied, upper 4 zeroed — invisible when value fits in 32 bits |
+| 43 | int-then-canvas | `(integer, Canvas)` | ✅ | ✅ | element_size matches storage size; layouts agree |
+| 44 | canvas-canvas-int | `(Canvas, Canvas, integer)` | ✅ | 💥 cb[0] | Canvas2.data still truncated; trailing primitive irrelevant |
+| 45 | text-bearing-struct-tuple | `(Named, Named)` with `text` fields | ✅ | 💥 name | text field same shape as vector header (4 bytes); same truncation |
+| 46 | flat-struct-tuple | `(Flat, Flat)` (struct of two i64) | ✅ | ✅ | Flat storage size 16 == stack-side 12 vs storage divergence — actually both layouts agree here because Flat's storage size is a multiple of its align |
+| 47 | tuple-local-not-return | `t = (a, b); (ca, cb) = t` at local | ✅ (leak ×1) | ✅ | bug is ref_return-promoted-tuple-buffer specific; local tuples take a different codegen path |
+| 48 | canvas-bigint | `(Canvas, integer)` (val > 2^32, e.g. 5e9) | ✅ | 💥 k=705032704 | exposes probe 42's silent truncation: lower 32 bits preserved, upper 32 bits zeroed (705032704 = 5e9 mod 2^32) |
+| 49 | int-int-tuple | `(integer, integer)` | ✅ | ✅ | both elements same size/align; group-aware and simple-packer layouts identical |
+| 50 | text-int-tuple | `(text, integer)` | ✅ | 💥 s='' | simple packer **reorders by alignment-descending**: int gets pos 0, text pos 8.  IR writes text at 0; runtime reads it at 8 (where the int's lower bytes sit) → 0 → empty string |
+| 51 | tuple-as-arg | `fn check(pair: (Canvas, Canvas), …)` | ✅ (leak ×1) | ✅ | tuple arg is a native Rust value-tuple `(DbRef, DbRef)` — never serialised through the database; bug only fires on the ref_return path |
+
+**Scope conclusions:**
+
+- **The bug is universal to tuples whose group-aware and simple-packer layouts diverge.**  Probes 29/41/44/45 (≥2 Reference elements) and 50 (mixed-alignment primitives) confirm this.
+- **Probe 48 is the most important new finding** — `(Canvas, integer)` is not "safe": small integers pass by luck because the truncated upper bytes happen to be zero, but any value ≥ 2^32 corrupts silently.  Same risk applies to any tuple slot beyond `runtime_size`.
+- **Probe 50** widens the bug from "truncation" to "**field reordering**": when the simple packer reorders by alignment-descending, IR and runtime disagree about which field is at which offset.  `(text, integer)` is read with int and text swapped.
+- **Probe 46 (Flat, Flat) PASSING** narrows the scope: pure-primitive structs whose total size is a multiple of their alignment don't trip the bug, even though element_size (12) and stack-align (4) differ from storage (16, align 8) — because group-size and simple-packer total both come out to 32 with identical positions.
+- **Probe 47 (local) and 51 (arg) PASSING on native** identifies the trigger path precisely.  Both keep the tuple as a **native Rust value-tuple** (`(DbRef, DbRef)`) on the stack — the codegen emits `let var_t: (DbRef, DbRef) = ...; var_ca = var_t.0` for `(a, b) = t`, and arg-side passes the tuple as a Rust function parameter typed `(DbRef, DbRef)`.  Neither path serialises the tuple through the database (no OpDatabase, no OpCopyRecord on the tuple), so the schema mismatch never matters.  Only `ref_return`'s `rewrite_tail_tuple_with_work_ref` (src/parser/control.rs:1024) materialises a tuple as a database record — that's the unique trigger path.  The interp-side `×1 Canvas` leak in these probes is unrelated to the native bug (it's the local-tuple equivalent of Cluster II's hidden-buffer free-pattern issue).
+
+### Trace evidence
+
+`LOFT_TRACE_FINISH=1` on probe 29:
+
+```
+[ENTER t_nr=66 name=__tuple<Canvas,Canvas> size_before=65535 groups_before=1]
+[finish_type   t_nr=66 size=28 align=8 groups=1]    ← compiler side, CORRECT
+[ENTER t_nr=66 size_before=28 groups_before=1]      ← early-return (already finished)
+[ENTER t_nr=66 size_before=65535 groups_before=0]   ← native binary init, FRESH structure(), no groups
+[finish_type   t_nr=66 size=24 align=8 groups=0]    ← runtime side, WRONG
+```
+
+`LOFT_TRACE_COPY=1` on the same run shows the runtime's wrong size in action:
+
+```
+[copy] OpCopyRecord src=#4@1,8 dst=#1@1,8 tp=66 size=24 free_src=true
+[copy]   after: rec=1 c1_w=4 c1_data=25 c2_w=7 c2_data=0   ← c2_data=0 is the bug
+```
+
+The 24-byte copy clips before Canvas2.data (which IR put at offset 24).
 
 ---
 
@@ -91,11 +144,22 @@ Lambda values in loft are represented as `(d_nr: u32, closure_capture: DbRef)` 1
 
 If the lambda's frame setup oversteps and writes into main's frame's slot (where `i` lives), main's loop variable gets corrupted.
 
-### Symptom analysis — native
+### Symptom analysis — native (verified 2026-05-28)
 
-Native panics at line 2264 of the generated Rust.  Without the file content, the exact bug isn't visible.  Possible causes:
-- Native codegen doesn't handle ref_return-promoted return for lambda bodies.
-- Native's lambda dispatch ABI doesn't pass the hidden buffer through correctly.
+Captured generated Rust via `LOFT_KEEP_NATIVE_RS=1`.  Line 2264 reads:
+
+```rust
+let mut var_cv: DbRef = {
+    let _farg_0 = var_p;
+    match var_make_renderer.0 {
+        _ => unreachable!("invalid fn-ref: {} in make_renderer", var_make_renderer.0)
+    }
+};
+```
+
+**The dispatch match has NO real arms** — only the `_ => unreachable!` fallback.  The native codegen for fn-ref dispatch never emits actual `<lambda_d_nr> => n_<lambda>(...)` arms.  Every fn-ref call panics with the "invalid fn-ref" message regardless of which lambda is being called.
+
+This is unrelated to the schema-mismatch class.  It's a missing-codegen branch in fn-ref dispatch.
 
 ### Hypothesis
 
@@ -114,80 +178,150 @@ Result: the lambda body uses some stack location that overlaps with the caller's
 
 ---
 
-## Common thread
+## Sub-cluster split (post-gap-investigation 2026-05-28)
 
-Both probes 29 and 30 are "specific value-shape" issues:
+The 2026-05-28 gap investigation split Cluster V into three orthogonal sub-clusters:
 
-- **29:** the value-shape is a TUPLE of heap structs (multiple hidden buffers wrapped in a tuple).
-- **30:** the value-shape is a LAMBDA returning a heap struct (different dispatch mechanism).
+| Sub | Probes | Mechanism | Fix surface |
+|---|---|---|---|
+| **V-a — Tuple schema mismatch** | 29, 41, 44, 45, 48, 50 | Native codegen at `src/generation/mod.rs:1528` emits `db.structure / db.field` but does NOT propagate `field_groups`.  Runtime's tuple type uses simple-packer layout; IR uses group-aware layout.  Misalignment → truncation (29/41/44/45/48) or field-reorder (50). | Add `pub fn add_tuple_group(&mut self, tp: u16, members: &[u16])` to `Stores`; native codegen emits it after the field-set sequence for tuple types. |
+| **V-b — Nested tuple codegen** | 40 | `((C,C),(C,C))` codegen emits `n_pair(...) as (DbRef, DbRef)` — casts a heap-promoted tuple DbRef to a Rust value-tuple.  Type-mixup at the call site. | Codegen needs to recognise when a tuple-typed sub-expression is a heap-promoted DbRef (vs a stack value-tuple) and emit destructuring (`{ let _t = n_pair(...); (_t.0, _t.1) }` or equivalent reads).  Distinct from V-a. |
+| **V-c — Lambda dispatch (ref_return shape)** | 30, 59, 62 | Native fn-ref dispatch emits `match var_fnref.0 { _ => unreachable!() }` for lambdas whose return triggers ref_return (struct with nested heap, or bare vector).  Root cause: `src/generation/emit.rs:519-523` candidate-filter excludes only text-RefVar and `__closure` attributes — NOT `Attribute.hidden = true` (the ref_return marker).  So when the lambda's signature has a hidden buffer param, the candidate's `visible_attrs.len()` exceeds the call site's `user_arg_match`, no candidate is collected, no arm is emitted.  Interp side: separate stack-frame corruption mechanism (`iter 65535`). | (1) Extend the filter at `src/generation/emit.rs:519-523` to also exclude `a.hidden`.  (2) Extend the arm-emit loop at `:657-672` to push an appropriate hidden-buffer expression (caller-side work-ref) when the candidate's attribute has `hidden = true` and `Type::Reference / Vector`. |
 
-Native's codegen handles the common cases (named fn calls, struct construction with single heap field) but has gaps for these less-common shapes.
+## Fix surface (V-a — the schema-mismatch class)
 
-## Fix surface
+The verified root cause is in **one** site: `src/generation/mod.rs::emit_type_creation` (line 1508) emits `db.structure / db.field` but skips `field_groups`.  The compiler-side database has the correct group metadata via `tuple_def → fill_database → typedef.rs:569 (extend(groups))`; the runtime-side database (in the native binary's init function) never receives it.
 
-These are **separate from the runtime-ownership class** that Path C addresses.  They're native-codegen-specific shape gaps.
+**Proposed fix:**
 
-**(a) Per-shape native codegen fixes.**  Read the generated Rust for each shape, identify the bug, patch the corresponding codegen path.  Effort: S–M per shape; ~M total.
+1. **New `Stores` method** (`src/database/types.rs`):
+   ```rust
+   pub fn add_tuple_group(&mut self, tp: u16, members: &[u16]) {
+       self.types[tp as usize].field_groups.push(LinkedFieldGroup {
+           kind: LinkedFieldKind::Tuple,
+           instance: 0,
+           field_indices: members.to_vec(),
+           alignment: 0,  // recomputed in finish_type from storage widths
+           size: 0,       // recomputed in finish_type from storage widths
+       });
+   }
+   ```
+   The `alignment` / `size` zeros are safe: `finish_type` rebuilds `groups_descriptor` from member storage widths (types.rs:304-322) and never reads the pre-stored values.
 
-**(b) Bypass — disallow these shapes until fixed.**  Add a parser-level "not yet supported under --native" warning when these shapes appear.  Effort: trivial; ships honesty.
+2. **Codegen call site** (`src/generation/mod.rs::emit_type_fields_mode` or right after, before `db.finish()`):  for each definition whose `Definition::field_groups` contains a Tuple entry, emit:
+   ```rust
+   db.add_tuple_group(t{n}, &[0, 1, ...]);
+   ```
 
-**Most likely best path: (a) per-shape fixes.**  These are native-specific bugs separate from the broader runtime-ownership class; they need their own targeted work.  Probably worth a separate plan slot or absorbing into an existing native plan (`plans/finished/N-native-*` history shows N1-N8 patches).
+3. **No other Stores changes needed.**  Index groups already propagate (the codegen emits `db.index(...)` which internally re-pushes its LinkedFieldGroup).
+
+**Effort:** S (~half day, one method + one codegen emit site + regression test).
+
+**Risk:** very low.  The change only adds metadata the runtime already knows how to use (`calculate_positions_with_groups` is an existing code path).  No new runtime semantics; no IR changes.
+
+## Fix surface (V-b)
+
+Separate sub-cluster — defer to follow-up work.  In the tuple-element codegen path (where a tuple's element is itself a call returning a heap-promoted tuple).  Likely fix: in `output_code_inner` for `Value::Tuple` with element type `Reference(__tuple<…>)`, destructure via field reads instead of `as` casting.
+
+## Fix surface (V-c)
+
+**Verified root cause** (2026-05-28 deep dive via probes 52-62):
+
+The fn-ref candidate-matching filter at `src/generation/emit.rs:519-523` is:
+
+```rust
+let visible_attrs: Vec<&crate::data::Attribute> = def
+    .attributes
+    .iter()
+    .filter(|a| {
+        !matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Text(_)))
+            && a.name != "__closure"
+    })
+    .collect();
+if visible_attrs.len() != user_arg_match {
+    continue;  // skip this candidate
+}
+```
+
+It excludes text work-buffer attrs and the `__closure` attr, but NOT the ref_return-promoted hidden buffer (which loft's parser marks via `Attribute.hidden = true` per src/data.rs:1404).  For a lambda with `fn(p: P) -> Canvas`, the post-ref_return signature is `n___lambda_0(var_p, var_cv: DbRef) -> DbRef` (two attrs).  The call site passes one user arg.  `visible_attrs.len() == 2 != user_arg_match == 1` → `continue` → no candidates → only `_ => unreachable!()` arm.
+
+**Probe scope sweep results (52-62):**
+
+| Probe | Lambda return | Lambda has hidden buf? | Native |
+|---|---|---|---|
+| 52 | `integer` | No | ✅ |
+| 53 | `integer` (+capture) | No | ✅ |
+| 54 | `integer` (passed as arg) | No | ✅ |
+| 55 | `integer` (in struct field) | No | ✅ |
+| 56 | `integer` (multiple lambdas) | No | ✅ |
+| 57 | `integer` (immediate invoke) | No | ✅ |
+| 58 | `integer` (calls named fn) | No | ✅ |
+| 60 | `Flat` (struct, no nested heap) | No (no ref_return) | ✅ |
+| 61 | `(integer, integer)` (value-tuple) | No | ✅ |
+| 30 | `Canvas` | Yes | 💥 |
+| 59 | `vector<integer>` | Yes | 💥 |
+| 62 | `Canvas` (+capture) | Yes | 💥 |
+
+The bug fires iff the lambda's body engages `ref_return`'s hidden-buffer promotion.  Captures don't matter (62 vs 30 same failure shape).  Return-type categorisation:
+- **Heap struct with nested heap** (Canvas, Named) → ref_return engages → V-c fires.
+- **Bare heap collection** (vector<T>, Hash<…>, Sorted<…>) → ref_return engages → V-c fires.
+- **Flat heap struct** (no nested heap fields) → ref_return does NOT engage → V-c does NOT fire.
+- **Value tuple** (no heap) → returned as Rust tuple → V-c does NOT fire.
+- **Primitive** → V-c does NOT fire.
+
+**Proposed fix:**
+
+1. **Extend the filter** at `src/generation/emit.rs:519-523` to also exclude `a.hidden`:
+   ```rust
+   .filter(|a| {
+       !a.hidden  // ref_return / text_return hidden buffer
+           && !matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Text(_)))
+           && a.name != "__closure"
+   })
+   ```
+
+2. **Extend the arm-emit loop** at `src/generation/emit.rs:657-672` to push an appropriate hidden-buffer expression when iterating a candidate's attrs:
+   ```rust
+   for a in &candidate_def.attributes {
+       if a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Vector(_, _) | ...) {
+           // pass a fresh work-ref or the caller's destination buffer
+           synthetic.push(Value::RawExpr("/* TBD: hidden-buffer arg */".to_string()));
+       } else if matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Text(_))) {
+           synthetic.push(Value::RawExpr(work_buf_expr.clone()));
+       } else if a.name == "__closure" { ... }
+       else { ... }
+   }
+   ```
+
+   The "TBD" is the design question: what does the caller pass for the hidden buffer?  Probably either (a) a freshly-allocated DbRef of the right type or (b) the destination LHS the dispatch result is being assigned to.  Direct-call emission (in src/generation/dispatch.rs:117-130) uses a `{ let _src = call(...); OpCopyRecord(_src, dst, ...); }` block; the fn-ref-dispatch arm could mirror that pattern.
+
+3. **V-c interp side** (probe 30 / 59 / 62 `iter 65535`): separate diagnosis — the lambda's frame setup writes into the caller's stack slot for the loop variable.  Needs `LOFT_LOG=ref_debug,type_timeline:i` trace to pin the offending opcode.  Distinct bug from the native dispatch arm gap.
 
 ## What we know vs. don't
 
 | | Status |
 |---|---|
-| Both probes fail on native | ✅ Verified |
-| Probe 29 native runs but assertion fires (codegen-bug-but-not-crash) | ✅ Verified |
-| Probe 30 native crashes earlier in Rust panic | ✅ Verified |
-| Probe 30 interpret corrupts the caller's stack frame | ✅ Verified (iter=65535 evidence) |
-| Probe 29 interpret PASSES | ✅ Verified |
-| Slot allocation on INTERPRET side is clean for both probes | ✅ Verified via `LOFT_LOG=slots:` — no unallocated vars |
-| **Probe 29 native mechanism — generated Rust analysis** | ✅ Verified via `LOFT_KEEP_NATIVE_RS=1` (tool 1) and reading `/tmp/loft_native_*.rs` |
+| Probes 29/41/44/45/48/50 fail on native (V-a schema mismatch) | ✅ Verified |
+| Probe 30 fails differently on native and interpret (V-c lambda dispatch) | ✅ Verified |
+| Probe 40 fails with rustc E0605 (V-b nested tuple codegen) | ✅ Verified |
+| Probes 42/43/46/49 PASS on native (no schema divergence) | ✅ Verified |
+| Probes 47/51 PASS on native (tuple stays a Rust value-tuple, never serialised) | ✅ Verified |
+| **V-a root cause — field_groups not propagated by `src/generation/mod.rs:1528`** | ✅ Verified via dual trace `LOFT_TRACE_FINISH` + `LOFT_TRACE_COPY` |
+| **V-a fix surface — `Stores::add_tuple_group` + codegen emit site** | ✅ Designed |
+| V-b root cause — DbRef cast to Rust tuple at nested-tuple call site | ✅ Pinned (rustc message points at site) |
+| V-c root cause — fn-ref dispatch match has no real arms | ✅ Pinned (generated Rust inspected) |
 
-### Probe 29 — verified native mechanism
+### Earlier mis-hypothesis (kept for history)
 
-With `LOFT_KEEP_NATIVE_RS=1`, the generated Rust at `/tmp/loft_native_242750.rs` shows:
+A pre-investigation draft hypothesised that probe 29's bug was an OpFreeRef-after-OpCopyRecord double-free producing dangling vectors from shallow copies.  This was wrong — `OpCopyRecord` does a real deep copy (allocates fresh records for nested vectors via `copy_claims_seq_vector` at `src/database/allocation.rs:827`).  The actual mechanism is the tuple size/positions mismatch documented in § Verified root cause above.
 
-```rust
-fn n_split(cell, var_p) -> DbRef {
-  let mut var___ref_3: DbRef = DbRef { store_nr: u16::MAX, ... };
-  let mut var___ref_2: DbRef = DbRef { store_nr: u16::MAX, ... };
-  let mut var___ref_1: DbRef = DbRef { store_nr: u16::MAX, ... };
-  let mut var_a: DbRef = n_alloc_canvas(cell, 4, 5, ..., var___ref_1);
-  let mut var_b: DbRef = n_alloc_canvas(cell, 7, 9, ..., var___ref_2);
-  {  // synthetic_tuple_return: ref(__tuple<Canvas,Canvas>)["__ref_3"]
-    var___ref_3 = OpDatabase(cell, var___ref_3, 66_i32);
-    OpCopyRecord(cell, var_a, tuple_field_0(var___ref_3), 65_i32);
-    OpCopyRecord(cell, var_b, tuple_field_16(var___ref_3), 65_i32);
-    OpFreeRef(cell, var_b, "var_b"); var_b.store_nr = u16::MAX;  // <-- BUG
-    OpFreeRef(cell, var_a, "var_a"); var_a.store_nr = u16::MAX;  // <-- BUG
-    if var___ref_1.store_nr != var_a.store_nr { OpFreeRef(...) };
-    if var___ref_2.store_nr != var_b.store_nr { OpFreeRef(...) };
-    return var___ref_3
-  }
-}
-```
+The trace evidence that disproved the shallow-copy theory: `LOFT_TRACE_COPY=1` shows `OpCopyRecord src=#2 dst=#4 tp=65 size=12` correctly deep-copies Canvas, allocating a fresh vector record in dst's store.  The corruption only appears at the OUTER copy (`tp=66 size=24`) which clips before Canvas2's data field — a SIZE problem, not a free-order problem.
 
-**The bug:** after `OpCopyRecord` deep-copies var_a and var_b INTO the tuple's fields, the code emits **`OpFreeRef(var_a)` and `OpFreeRef(var_b)`**.  This deep-frees var_a's data vector (a child store of the Canvas record) — but `OpCopyRecord` produced a **shallow copy** (the tuple's Canvas field's `data` field DbRef-aliases var_a's vector store).  When var_a is freed, that vector is freed too, leaving the tuple's first Canvas's `data` field dangling.
+## Investigation tasks (open)
 
-Then `var_b.store_nr = u16::MAX` zeroes out var_b's slot.  The subsequent `if var___ref_2.store_nr != var_b.store_nr` is `(real) != u16::MAX = true`, so __ref_2 gets freed too — but the tuple's second Canvas's data still aliases __ref_2's vector.  Result: both Canvas fields in the returned tuple have dangling data vectors.
+For V-c (probe 30):
+1. Read `src/generation/` fn-ref dispatch emission (`emit_fn_ref_dispatch` or equivalent) to find why match arms aren't generated for registered lambdas.
+2. Separately, trace probe 30 interpret with `LOFT_LOG=ref_debug,type_timeline:i` to pin which opcode flips `i` to 65535.
 
-Interpret escapes this because OpCopyRecord on interpret apparently does a DEEP copy (allocates fresh stores for children) OR doesn't engage the same free sequence.
-
-### Probe 30 — partially verified
-
-The lambda body's generated Rust would show the same OpCopyRecord-then-free pattern with closure-frame-corruption risk.  Not yet inspected; need to capture probe 30's `.rs` file.
-
-| | Status |
-|---|---|
-| Native codegen path for tuple-of-heap-structs | ✅ Pattern identified in generated Rust |
-| Native codegen path for lambda-with-heap-return | 🤔 Not yet captured |
-| Why interpret escapes the same bytecode pattern | 🤔 OpCopyRecord interpret-side might do deep-copy where native generates shallow |
-
-## Investigation tasks
-
-1. Find a flag or method to keep the `/tmp/loft_native_*.rs` file after run; inspect lines 775 (probe 29) and 2264 (probe 30) for the bugs.
-2. Read `src/generation/` tuple-return path.
-3. Read `src/generation/` lambda-dispatch path; specifically how `OpCallRef` (or whatever the native equivalent is) handles a fn-ref's hidden buffer args.
-4. Trace probe 30 interpret with `LOFT_LOG=ref_debug,type_timeline:i` to pin which opcode corrupts `i`.
+For V-b (probe 40):
+1. Find the codegen site that emits `n_pair(...) as (DbRef, DbRef)`.  Search `src/generation/dispatch.rs` for tuple-element handling.

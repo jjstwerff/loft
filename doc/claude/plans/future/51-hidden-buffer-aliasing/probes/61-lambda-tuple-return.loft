@@ -1,0 +1,19 @@
+// Probe 61 — lambda returning a tuple (V-c × V-a interaction).
+//
+// Tests whether a lambda returning a heap-tuple compounds the two
+// sub-cluster failures.  V-c says heap-returning lambdas have no
+// dispatch arm.  V-a says heap-tuples have schema mismatch.  This
+// probe sits at the intersection.
+//
+// Expected: fails on native — likely V-c's missing dispatch arm fires
+// first (panics before the V-a tuple-copy gets a chance to mis-copy).
+
+fn main() {
+  pair = fn(t: integer) -> (integer, integer) { (t, t * 100) };
+  for i in 0..6 {
+    (a, b) = pair(i);
+    assert(a == i, "iter {i}: a = {a}");
+    assert(b == i * 100, "iter {i}: b = {b}");
+  }
+  println("probe 61 PASSED");
+}

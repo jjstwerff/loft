@@ -1,0 +1,26 @@
+// Probe 62 — capturing lambda returning a heap struct.
+//
+// Combines probe 30's heap-return with probe 53's capture.  If the
+// dispatch-arm-skip is hidden-buffer-related, this would fail the
+// same way as 30.  If it's capture-related, the behaviour differs.
+//
+// Captures the `tag_base` integer; returns a Canvas whose vector
+// data depends on the captured value.
+
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn main() {
+  tag_base = 1000;
+  builder = fn(off: integer) -> Canvas { alloc_canvas(3, 2, tag_base + off) };
+  for i in 0..6 {
+    cv = builder(i);
+    assert(cv.data[0] == 1000 + i, "iter {i}: cv[0] = {cv.data[0]}");
+  }
+  println("probe 62 PASSED");
+}

@@ -1,0 +1,22 @@
+// Probe 60 — lambda returning a flat struct (no nested heap).
+//
+// Bridges between probe 52 (primitive return — passes) and probe 30
+// (Canvas struct with vector field — fails).  Flat has only two i64
+// fields, no nested heap.  But it's still a STRUCT — so loft's
+// ref_return promotes the return to a hidden buffer.
+//
+// If this FAILS: V-c is driven by ref_return-promotion (any struct
+// return through a lambda), not by the presence of nested heap.
+// If this PASSES: V-c needs nested heap to fire.
+
+struct Flat { x: integer not null, y: integer not null }
+
+fn main() {
+  make_flat = fn(t: integer) -> Flat { Flat { x: t, y: t * 10 } };
+  for i in 0..6 {
+    f = make_flat(i);
+    assert(f.x == i, "iter {i}: f.x = {f.x}");
+    assert(f.y == i * 10, "iter {i}: f.y = {f.y}");
+  }
+  println("probe 60 PASSED");
+}

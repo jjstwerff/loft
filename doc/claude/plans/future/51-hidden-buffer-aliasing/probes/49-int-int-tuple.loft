@@ -1,0 +1,22 @@
+// Probe 49 — (integer, integer) tuple.
+//
+// Primitives only, both with same storage size/alignment.  Per the
+// scope model, this should PASS even on native because element_size
+// and element_align match the storage values: group-based layout and
+// simple-packer layout yield identical positions/sizes.
+
+struct P { tag: integer not null }
+
+fn split_ii(p: P) -> (integer, integer) {
+  (p.tag, p.tag * 100)
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    (a, b) = split_ii(p);
+    assert(a == i, "iter {i}: a = {a}");
+    assert(b == i * 100, "iter {i}: b = {b}");
+  }
+  println("probe 49 PASSED");
+}

@@ -153,17 +153,34 @@ iter 2: tag=2, condition `p.tag > 0` IS true, should run `cv = alloc_canvas(4, 5
 
 **Severity:** Slow leak under repeated calls.  Linear scaling (1 Canvas per iter).  The program-exit gate catches this; dryopea-style render loops would accumulate one full-screen Canvas per frame.  Not silent corruption.
 
-### Cluster V — Native-only failure (2 probes)
+### Cluster V — Native-only failure (split into V-a / V-b / V-c after 2026-05-28 deep dive)
 
-**Probe 29** (tuple-return):
+Originally documented as a 2-probe cluster (29 + 30).  The 2026-05-28 deep dive added probes 40-51 and revealed three orthogonal sub-clusters:
 
-`fn split(p: P) -> (Canvas, Canvas) { … (a, b) }`.  Interpret PASSES.  Native panics in the generated Rust at `/tmp/loft_native_*.rs:775:14`.  Native codegen for tuple-of-heap-structs is broken; interpret handles it.
+**V-a — Tuple schema mismatch** (probes 29, 41, 44, 45, 48, 50):
 
-**Probe 30** (lambda-return):
+Native codegen at `src/generation/mod.rs:1528` emits `db.structure` / `db.field` for each loft struct/tuple at runtime init, but does NOT propagate `LinkedFieldGroup` entries (registered by `tuple_def`).  Result: the compile-side database uses `calculate_positions_with_groups` (group-aware atomic placement); the native runtime falls back to `calculate_positions` (simple alignment-descending packer).  Layouts diverge.
 
-`make_renderer = fn(p: P) -> Canvas { … }`.  Interpret CORRUPTS — the iter loop variable `i` reads as `65535` (u16::MAX) after the lambda call, meaning the lambda's frame destruction clobbered main's stack frame.  Native panics in the generated Rust at `/tmp/loft_native_*.rs:2264:89`.
+For `(Canvas, Canvas)`: compile-side gives size=28, positions=[0, 16].  Native runtime gives size=24, positions=[0, 12].  The IR hardcodes the compile-side positions; the OUTER `OpCopyRecord(_src, var___ref_1, tp=66)` uses `stores.size(66) = 24` (runtime value) — clips bytes 24-27 (Canvas2.data).  Then `copy_claims` walks Parts::Struct using positions [0, 12], reading source padding at offset 12 instead of Canvas2 at offset 16.
 
-**Severity:** Mixed.  Probe 29 is "interpret-works native-broken" — opposite asymmetry from the rest of this class.  Probe 30 corrupts the stack frame on interpret (worst kind of corruption) AND breaks native codegen.
+Verified via `LOFT_TRACE_FINISH=1` (shows two finish_type calls per tuple type: one compile-side with groups=1 → size=28, one runtime-side with groups=0 → size=24) and `LOFT_TRACE_COPY=1` (shows the OUTER copy's size=24 and the resulting c2_data=0).
+
+Fix designed: add `Stores::add_tuple_group(tp, members)` API + emit it from native codegen for each tuple def.  S effort.
+
+**V-b — Nested tuple codegen** (probe 40):
+
+`((Canvas, Canvas), (Canvas, Canvas))` triggers `rustc` error E0605: codegen emits `n_pair(cell, …) as (DbRef, DbRef)`.  The inner `pair()` returns a heap-promoted tuple `DbRef`, but the OUTER tuple's element-codegen treats it as a Rust value-tuple `(DbRef, DbRef)` and tries an `as` cast.  Separate codegen site from V-a.
+
+**V-c — Lambda dispatch** (probe 30):
+
+Two orthogonal failures:
+- Native: generated `match var_make_renderer.0 { _ => unreachable!() }` — fn-ref dispatch match has NO real arms.  Every lambda call panics with "invalid fn-ref: <d_nr>".  Codegen never emits the per-lambda dispatch arms.
+- Interpret: lambda call corrupts main's stack frame (`iter 65535` for the loop variable, where `65535 = u16::MAX = null sentinel`).  Separate stack-frame management bug in interp's fn-ref dispatch.
+
+**Severity:**
+- V-a is loud (assertion failures with concrete corruption) but has a SILENT failure mode — probe 48 demonstrates that `(Canvas, integer)` with a value ≥ 2^32 corrupts the integer's upper 4 bytes invisibly.  Any production code using a heap-returning tuple is at risk.
+- V-b is a compile-time error — easy to detect, hard to work around (forces flattening of nested tuples).
+- V-c is a hard runtime panic on native + silent stack corruption on interpret.
 
 ### Cluster OK — clean on both backends (16 probes)
 
@@ -196,8 +213,8 @@ After two runs and 32 valid probes:
 3. **What does parse_return do that defeats S1?**  Read `src/parser/control.rs:3108` parse_return.  Probably the body's tail type sees Void (because the body ends with a Return statement, not an expression), so block_result's ref_return arms don't fire.
 4. **What is `src/state/codegen.rs:2529` asserting?**  Find the assertion and the value-of-65535 condition.  This is the Cluster IV root.
 5. **Why does match (18) succeed where if-tail (08) panics?**  Trace both through `unify_if_branches_work_refs`; identify the arm match takes vs. the arm if doesn't.
-6. **What native codegen path handles tuple-of-heap-structs (probe 29)?**  Read `src/generation/` for tuple-return.
-7. **What does the lambda codegen do (probe 30)?**  The stack corruption suggests fn-ref dispatch / closure frame setup has a buffer-passing bug.
+6. **What native codegen path handles tuple-of-heap-structs (probe 29)?**  Read `src/generation/` for tuple-return.  **✅ ANSWERED 2026-05-28 deep dive.**  Root cause is in `src/generation/mod.rs:1528` (`emit_type_creation`) — emits `db.structure` / `db.field` but doesn't propagate `Definition::field_groups`.  See V-a in [`cluster-V-native-only.md`](cluster-V-native-only.md).
+7. **What does the lambda codegen do (probe 30)?**  The stack corruption suggests fn-ref dispatch / closure frame setup has a buffer-passing bug.  **✅ PARTIALLY ANSWERED.**  Native: generated match has no real dispatch arms (only `_ => unreachable!()`).  Interp: stack corruption mechanism still not pinned.  See V-c in [`cluster-V-native-only.md`](cluster-V-native-only.md).
 
 ## What this means for the fix design (Stage C)
 
