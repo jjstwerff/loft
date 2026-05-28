@@ -2453,7 +2453,14 @@ fn main() {
             wasm_deps_dir.as_deref(),
         );
         let status = cmd.status();
-        let _ = std::fs::remove_file(&rs_path);
+        if std::env::var("LOFT_KEEP_NATIVE_RS").is_err() {
+            let _ = std::fs::remove_file(&rs_path);
+        } else {
+            eprintln!(
+                "loft: wasm source preserved at {} (LOFT_KEEP_NATIVE_RS)",
+                rs_path.display()
+            );
+        }
         match status {
             Ok(s) if s.success() => {}
             Ok(_) => {
@@ -2562,7 +2569,14 @@ fn main() {
             }
         }
         let status = cmd.status();
-        let _ = std::fs::remove_file(&rs_path);
+        if std::env::var("LOFT_KEEP_NATIVE_RS").is_err() {
+            let _ = std::fs::remove_file(&rs_path);
+        } else {
+            eprintln!(
+                "loft: browser-wasm source preserved at {} (LOFT_KEEP_NATIVE_RS)",
+                rs_path.display()
+            );
+        }
         match status {
             Ok(s) if s.success() => {}
             Ok(_) => {
@@ -3168,11 +3182,22 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
         // --native-debug is set so DWARF's `.debug_line` table points
         // at a real file the debugger can show.  Without this, GDB /
         // LLDB show `(no source)` even though debug info is present.
-        if !native_debug {
+        // PLAN51 — also preserve when `LOFT_KEEP_NATIVE_RS=1` is set,
+        // so probe runs that panic in the generated Rust leave the file
+        // readable for post-mortem inspection.  Used by the Cluster V
+        // (native-only) investigation in plans/future/51-hidden-buffer-
+        // aliasing/cluster-V-native-only.md.
+        let keep_rs = std::env::var("LOFT_KEEP_NATIVE_RS").is_ok();
+        if !native_debug && !keep_rs {
             let _ = std::fs::remove_file(&emit_path);
         } else {
+            let reason = if native_debug {
+                "--native-debug"
+            } else {
+                "LOFT_KEEP_NATIVE_RS"
+            };
             eprintln!(
-                "loft: source preserved at {} (--native-debug)",
+                "loft: source preserved at {} ({reason})",
                 emit_path.display()
             );
         }

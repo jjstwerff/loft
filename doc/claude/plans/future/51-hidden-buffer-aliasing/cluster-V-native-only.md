@@ -133,9 +133,48 @@ These are **separate from the runtime-ownership class** that Path C addresses.  
 | Probe 30 native crashes earlier in Rust panic | ✅ Verified |
 | Probe 30 interpret corrupts the caller's stack frame | ✅ Verified (iter=65535 evidence) |
 | Probe 29 interpret PASSES | ✅ Verified |
-| Native codegen path for tuple-of-heap-structs | ❌ Not read |
-| Native codegen path for lambda-with-heap-return | ❌ Not read |
-| Whether `LOFT_KEEP_NATIVE_RS` or similar exists | ❌ Not verified |
+| Slot allocation on INTERPRET side is clean for both probes | ✅ Verified via `LOFT_LOG=slots:` — no unallocated vars |
+| **Probe 29 native mechanism — generated Rust analysis** | ✅ Verified via `LOFT_KEEP_NATIVE_RS=1` (tool 1) and reading `/tmp/loft_native_*.rs` |
+
+### Probe 29 — verified native mechanism
+
+With `LOFT_KEEP_NATIVE_RS=1`, the generated Rust at `/tmp/loft_native_242750.rs` shows:
+
+```rust
+fn n_split(cell, var_p) -> DbRef {
+  let mut var___ref_3: DbRef = DbRef { store_nr: u16::MAX, ... };
+  let mut var___ref_2: DbRef = DbRef { store_nr: u16::MAX, ... };
+  let mut var___ref_1: DbRef = DbRef { store_nr: u16::MAX, ... };
+  let mut var_a: DbRef = n_alloc_canvas(cell, 4, 5, ..., var___ref_1);
+  let mut var_b: DbRef = n_alloc_canvas(cell, 7, 9, ..., var___ref_2);
+  {  // synthetic_tuple_return: ref(__tuple<Canvas,Canvas>)["__ref_3"]
+    var___ref_3 = OpDatabase(cell, var___ref_3, 66_i32);
+    OpCopyRecord(cell, var_a, tuple_field_0(var___ref_3), 65_i32);
+    OpCopyRecord(cell, var_b, tuple_field_16(var___ref_3), 65_i32);
+    OpFreeRef(cell, var_b, "var_b"); var_b.store_nr = u16::MAX;  // <-- BUG
+    OpFreeRef(cell, var_a, "var_a"); var_a.store_nr = u16::MAX;  // <-- BUG
+    if var___ref_1.store_nr != var_a.store_nr { OpFreeRef(...) };
+    if var___ref_2.store_nr != var_b.store_nr { OpFreeRef(...) };
+    return var___ref_3
+  }
+}
+```
+
+**The bug:** after `OpCopyRecord` deep-copies var_a and var_b INTO the tuple's fields, the code emits **`OpFreeRef(var_a)` and `OpFreeRef(var_b)`**.  This deep-frees var_a's data vector (a child store of the Canvas record) — but `OpCopyRecord` produced a **shallow copy** (the tuple's Canvas field's `data` field DbRef-aliases var_a's vector store).  When var_a is freed, that vector is freed too, leaving the tuple's first Canvas's `data` field dangling.
+
+Then `var_b.store_nr = u16::MAX` zeroes out var_b's slot.  The subsequent `if var___ref_2.store_nr != var_b.store_nr` is `(real) != u16::MAX = true`, so __ref_2 gets freed too — but the tuple's second Canvas's data still aliases __ref_2's vector.  Result: both Canvas fields in the returned tuple have dangling data vectors.
+
+Interpret escapes this because OpCopyRecord on interpret apparently does a DEEP copy (allocates fresh stores for children) OR doesn't engage the same free sequence.
+
+### Probe 30 — partially verified
+
+The lambda body's generated Rust would show the same OpCopyRecord-then-free pattern with closure-frame-corruption risk.  Not yet inspected; need to capture probe 30's `.rs` file.
+
+| | Status |
+|---|---|
+| Native codegen path for tuple-of-heap-structs | ✅ Pattern identified in generated Rust |
+| Native codegen path for lambda-with-heap-return | 🤔 Not yet captured |
+| Why interpret escapes the same bytecode pattern | 🤔 OpCopyRecord interpret-side might do deep-copy where native generates shallow |
 
 ## Investigation tasks
 

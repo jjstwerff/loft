@@ -120,6 +120,28 @@ After running 32 probes on both backends, the suite is curated into three groups
 
 **The A + B set (20 probes) is the working investigation suite.**  C stays in the directory but informs decisions less directly.
 
+### Real-library extraction probes (38-39)
+
+Added 2026-05-28 to ground theory in production code shapes:
+
+| File | Source | Status |
+|---|---|---|
+| `38-gridmesh-pattern.loft` | `lib/audience_crystal/audience_crystal.loft::crystal_segments_aged_tuned` + `gridmesh::seg_mesh_*` | ✅ PASS both backends |
+| `39-moros-map-pattern.loft` | `lib/moros_map/moros_map.loft::map_get_hex` (deep-slice borrow into nested struct) | ⚠️ Interp: LEAK Hex×12 (1 per successful query × 12 queries); Native: clean |
+
+**Probe 39 is a NEW finding** — distinct from probe 12 (which used a single-level Container and passed clean).  The TWO-LEVEL nesting (`m.m_chunks[k].ck_hexes[idx]`) and iterator-based access pattern (`for gh_c in m.m_chunks`) trigger a leak.  Likely sub-class of Cluster II (latent leak) but mechanism not yet pinned.  Grounds the @P377 historical citation of moros_map as the underlying shape.
+
+### Debug-tool gaps closed during Stage B
+
+Two tools added/verified for this plan:
+
+| Tool | Status | Used for |
+|---|---|---|
+| `LOFT_KEEP_NATIVE_RS=1` | **NEW** — added in `src/main.rs` (3 cleanup sites gated on the env var) | Capture `/tmp/loft_native_*.rs` for post-mortem; immediately unblocked Cluster V probe 29 mechanism |
+| `LOFT_LOG=slots:<fn>` | Already existed (@PLAN22 02d-vii); verified suitable for Stage B | Pinned Cluster IV mechanism across 7/7 panicking probes (`__ref_2 SKIP` + reason) |
+
+Other Stage-B-useful tools are 5-line eprintln patches that can be added during the actual investigation work.
+
 ### Reference ↔ problem pairings
 
 Each problem probe (B) has a closest-shape reference (A) that PASSES.  Diffing the pair is the diagnostic shortcut for understanding the failure mode.

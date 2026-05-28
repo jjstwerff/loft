@@ -111,15 +111,48 @@ Incorrect var __ref_2[65535] versus 136 on n_main
 
 So in `n_main`, when emitting opcodes to call `render_if(p, __ref_2)`, the codegen tries `generate_var(__ref_2)` but `stack.function.stack(__ref_2) == 65535` (unallocated).
 
-## Hypothesised mechanism
+## Verified mechanism (2026-05-28, via `LOFT_LOG=slots:n_main`)
 
-`unify_if_branches_work_refs` (`src/parser/control.rs:721`) runs in `block_result` for tail-position `If` returning a heap type.  It picks the FIRST branch's terminal work-ref as the "shared" one and rewrites the OTHER branch to use it.  Result: ONE shared work-ref instead of two.
+The slot-allocation trace for probe 08 main shows EXACTLY what happens:
 
-After unification, `render_if` should have ONE hidden buffer attribute (instead of two).  ref_return promotes that one to the signature.
+```
+[slots] fn=n_main local_start=4
+[slots]   ASSIGN  v_nr=4   name=__ref_1   slot=4    size=12  type=Reference(588, [])
+[slots]   SKIP    v_nr=5   name=__ref_2   size=12  type=Reference(588, [1])
+                  reason=no first_def (no Set IR for this var — read-only
+                         or unused — allocator never sees a write to
+                         allocate against)
+```
 
-**Where it breaks:** when main parses `cv = render_if(p);`, it synthesizes `add_defaults` to fill in hidden buffer args.  If `add_defaults` synthesizes work-refs based on the COUNT of hidden buffer attrs in render_if's signature, and the count is one after unification — but somehow main ends up with TWO work-refs (`__ref_1` and `__ref_2`) anyway, with `__ref_2` never properly registered with `set_function_stack_size`.
+**main has `__ref_2` DECLARED but NEVER WRITTEN.**  No `Set(__ref_2, …)` IR exists in main's body.  The slot allocator skips it (correct — it has nothing to allocate against).  Later, codegen's `generate_var(__ref_2)` reads it for the call `render_if(p, …)`, panics at `:2529` because the stack offset is `u16::MAX`.
 
-**Likely path:** the parser detects render_if has two heap-returning branches and pre-allocates two work-refs in main BEFORE `unify_if_branches_work_refs` runs.  Unification removes one buffer from render_if's signature but doesn't remove the corresponding work-ref from main.  Result: `__ref_2` exists in main's variable table but doesn't get a stack slot because nothing references it post-substitution.
+This is THE bug.  The parser created `__ref_2` expecting render_if to need TWO hidden buffer args (one per branch).  Either:
+
+1. `unify_if_branches_work_refs` reduced render_if's buffer count from 2 to 1, but main's pre-synthesised `__ref_2` wasn't removed from main's variable table.
+2. OR `add_defaults` synthesised TWO work-refs for the call but only ONE has a `Set` IR generated (probably because the call site references both but only initialises one).
+
+Note the dep `Reference(588, [1])` on `__ref_2`: it has a dep on var `[1]` (var_nr 1).  That's the `cv` local — main's __ref_2 was supposed to be the buffer for cv (the return value).  The dep is recorded, but the Set is missing.
+
+## Probable parser flow
+
+Before unification, render_if's body had two work-refs (one per branch).  The parser synthesised `add_defaults` arg slots in main for two hidden buffers, creating `__ref_1` and `__ref_2` in main's variable table with corresponding Set IRs.
+
+Then `unify_if_branches_work_refs` runs (or was supposed to run) and reduces render_if's buffer count to one.  Main's __ref_2 becomes leftover — but the cleanup step that should have removed __ref_2 from main's variable table and updated the call's args either:
+
+- Removes the Set IR (leaving __ref_2 unallocated AND still referenced in the call).
+- Or never runs (leaving __ref_2 with valid Set but render_if not expecting it).
+
+Either way, the codegen sees an unallocated variable cited in opcodes → panic.
+
+## Why match (probe 18) doesn't trigger this
+
+Match takes a different IR path:
+
+- match arms are wrapped in `Value::Block` containing a `scalar_match` construct (`#scalar_match` in the dump).
+- ref_return promotes each arm's work-ref independently (no unification).
+- Main synthesizes one work-ref per arm, each with its own Set IR, all get stack slots, all get freed.
+
+If-tail / explicit-return-in-if / recursion all engage `unify_if_branches_work_refs` (or attempt to), which is the broken path.
 
 ## Why match (probe 18) doesn't trigger this
 
@@ -136,12 +169,14 @@ If-tail / explicit-return-in-if / recursion all engage `unify_if_branches_work_r
 | | Status |
 |---|---|
 | The assertion location | ✅ Read at `src/state/codegen.rs:2529-2536` |
-| The trigger shape | ✅ Five probes confirm: BOTH branches must be heap-returning |
-| Match escapes the bug | ✅ Probe 18 vs 08 — same logical shape, different IR path |
+| The trigger shape | ✅ 7 probes confirm: BOTH branches must be heap-returning (incl. probes 22, 27, 33, 34, 37) |
+| Match escapes the bug | ✅ Probe 18 + 35 (2-arm match) — same logical shape, different IR path |
 | One-branch escapes the bug | ✅ Probe 23 — only one branch is heap; one-branch panic doesn't fire |
-| `unify_if_branches_work_refs` is implicated | 🤔 Strong hypothesis, not verified by source reading |
-| Exact substitution miss | ❌ Not pinned — needs reading of `unify_if_branches_work_refs` body and main's `add_defaults` interaction |
-| Whether recursion (probe 13) has the same mechanism | 🤔 Likely (same panic site, same shape family), but recursion's IR is distinct |
+| Slot-trace shows `__ref_2` SKIP'd "no first_def" | ✅ Verified across **7/7 probes (08, 13, 22, 27, 33, 34, 37)** via `LOFT_LOG=slots:n_main` |
+| 3-way ifs leave TWO leftover work-refs | ✅ Probes 27 (if-as-local) and 37 (nested else-if) show BOTH `__ref_2` AND `__ref_3` SKIP'd |
+| `unify_if_branches_work_refs` reduces buffers without removing main's pre-allocated work-refs | 🟢 Strong evidence; consistent with all 7 probes' identical SKIP pattern |
+| Exact substitution miss in unify | 🤔 Hypothesised; needs reading of `unify_if_branches_work_refs` body and `add_defaults` |
+| Whether recursion (probe 13) shares the mechanism | ✅ Yes — probe 13 also shows `__ref_2 SKIP` in n_main with same reason |
 
 ## Investigation tasks
 

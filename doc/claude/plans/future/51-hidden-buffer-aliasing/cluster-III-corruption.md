@@ -194,7 +194,9 @@ The native ABI handles this naturally because Rust's `&mut` reference automatica
 | IR shapes for 04 and 28 | ✅ Dumped (`/tmp/bc_04.txt`, `/tmp/bc_28.txt`) |
 | Both have struct-lit + call sequence | ✅ Verified |
 | Both have S1 not substituting the call | ✅ Visible in IR (call uses `__ref_local`, not `cv`) |
-| The caller-slot-vs-callee-local divergence | 🤔 Hypothesized; consistent with symptom (caller reads default) |
+| Slot allocation is CLEAN for both probes (04, 28) | ✅ Verified via `LOFT_LOG=slots:n_render` — only is_argument SKIPs |
+| **The mechanism is RUNTIME, not parse/codegen** | ✅ Slot trace clean → corruption is runtime opcode behavior, not allocator bug |
+| The caller-slot-vs-callee-local divergence | 🟢 Hypothesized; consistent with symptom (caller reads default/stale) |
 | Why iter 1 works but iter 2 fails | 🤔 Probably first-fit luck on iter 1; iter 2 has more state buildup |
 | Why S1 doesn't fire here when its preconditions seem to match | ❌ Unknown.  l's layout at S1's invocation needs inspection |
 

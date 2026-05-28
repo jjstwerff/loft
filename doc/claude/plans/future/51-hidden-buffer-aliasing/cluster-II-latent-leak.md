@@ -122,7 +122,9 @@ This is automatic — Rust's drop handles the child-store recursion.  The interp
 |---|---|
 | The IR difference between probe 01 and 02 | ✅ Visible in `/tmp/bc_01.txt` and `/tmp/bc_02.txt` |
 | S1 fires on second Set only in probe 02 | ✅ Visible in IR (`__ref_1` vs `cv` arg) |
-| The child-store-orphan mechanism | ✅ Hypothesized; consistent with the +1 per iter store trace |
+| Slot allocation is CLEAN for all 6 Cluster II probes (02, 03, 07, 11, 25, 26) | ✅ Verified via `LOFT_LOG=slots:n_render` — only is_argument SKIPs for params, no unallocated vars |
+| **The mechanism is RUNTIME, not parse/codegen** | ✅ Slot trace clean → bug is in opcode execution at runtime, consistent with child-store-orphan hypothesis |
+| The child-store-orphan mechanism | 🟢 Hypothesized; consistent with the +1 per iter store trace; probe 36 confirms per-iter-not-per-Set scaling |
 | The exact opcode that overwrites without recursive-free | 🤔 Likely `OpDatabase` (claiming the existing slot for the new record) followed by field-set ops that don't free old field values |
 | Why probe 07 (explicit-return) leaks identically | 🤔 ref_return doesn't fire on Return-tail bodies; needs source reading at `parse_return` |
 | Why probe 26 leaks when if-false never fires | 🤔 The conditional Set's CODEGEN affects buffer-protocol setup; the if's then-block contains Set(cv, ...) whose presence alone perturbs slot tracking |
