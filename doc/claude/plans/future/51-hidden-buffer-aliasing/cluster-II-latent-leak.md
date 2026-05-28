@@ -15,6 +15,19 @@ Commits:
 
 An attempt to extend the substitution to ALL `Set(cv, Call(_))` in the body (including descent into If/Block/Return wrappers) regressed `tests/scripts/87-store-leaks.loft` (NaN result).  Rolled back to the consecutive-Set-only version.  Future work: branch-aware substitution that respects probe 87's invariants, OR a runtime-side fix at `OpFreeRefIfDistinct` to detect reassignment-after-adoption.
 
+### Failed approach #2 — caller-side `is_borrowed_view` refinement (2026-05-28)
+
+Tried refining `is_borrowed_view` at `src/state/codegen.rs:1479` and `:2010` to require at least one VISIBLE arg dep, so hidden-only deps would enable 0x8000 source-free.  Theory: for hidden-only deps, source is either (a) the caller's hidden buffer (same-store guard skips free) or (b) a fresh S1 (0x8000 safely frees).
+
+Outcome: closed probes 03, 04, 07, 11, 25, 26 but REGRESSED probes 02, 21, 28 (assertion failures, data corruption).
+
+Root cause: with extended S1 (commit `ff0b38d4`), the canonical multi-Set callee returns the caller's hidden buffer.  The OpCopyRecord's src and dst share a store.  The runtime guard at `src/state/io.rs:1224-1232` skips the `free` call — but does NOT skip the `remove_claims` prelude at line 1208, which frees nested vec records BEFORE `copy_block` reads them.  Same-store OpCopyRecord with nested heap fields is fundamentally broken; the existing `has_hidden_ref` check was protecting against this.
+
+Reverted to baseline.  Future fix must EITHER:
+1. Make OpCopyRecord's same-store path a no-op (skip remove_claims + copy_block + copy_claims when data.store_nr == to.store_nr).
+2. Avoid generating same-store OpCopyRecord at codegen time (track which Call results would alias the destination).
+3. Track ref ownership at runtime via refcounts (the `project_drop_store_refcount` arc).
+
 ---
 
 **Severity:** Slow leak under repeated calls; linear scaling (1 Canvas per iter, confirmed at 100 iters).  Not silent corruption — `LOFT_STORES=warn` catches it.  But cumulative cost in production loops (dryopea editor: one full-screen Canvas per frame).
