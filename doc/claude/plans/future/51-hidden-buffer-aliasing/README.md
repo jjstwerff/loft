@@ -25,11 +25,76 @@ This plan exists to **systematically catalogue the shapes** in this class, **und
 
 | Document | Coverage |
 |---|---|
-| [`RESULTS.md`](RESULTS.md) | Full 33+ probe matrix, cluster definitions, verified-vs-hypothesized findings, fix-arc options |
-| [`cluster-II-latent-leak.md`](cluster-II-latent-leak.md) | Per-iter Canvas leak (interpret-only) — pinned via IR diff of probes 01 vs 02 |
-| [`cluster-III-corruption.md`](cluster-III-corruption.md) | Silent data corruption (interpret-only) — probes 04 + 28 with distinct mechanisms |
-| [`cluster-IV-codegen-panic.md`](cluster-IV-codegen-panic.md) | Codegen panic on BOTH backends — `unify_if_branches_work_refs` substitution gap; match (probe 18) vs if-tail (probe 08) contrast |
-| [`cluster-V-native-only.md`](cluster-V-native-only.md) | Native codegen gaps — tuple-of-heap-structs (probe 29) + lambda-with-heap-return (probe 30) |
+| [`RESULTS.md`](RESULTS.md) | Full 39-probe matrix, cluster definitions, verified-vs-hypothesized findings, fix-arc options |
+| [`cluster-II-latent-leak.md`](cluster-II-latent-leak.md) | Per-iter Canvas leak (interpret-only) — pinned via IR diff of probes 01 vs 02; slot trace confirms RUNTIME mechanism |
+| [`cluster-III-corruption.md`](cluster-III-corruption.md) | Silent data corruption (interpret-only) — probes 04 + 28 with distinct mechanisms; slot trace confirms RUNTIME mechanism |
+| [`cluster-IV-codegen-panic.md`](cluster-IV-codegen-panic.md) | Codegen panic on BOTH backends — **verified mechanism**: `unify_if_branches_work_refs` substitution gap leaves leftover work-refs in main without Set IRs; confirmed across 7/7 probes via `LOFT_LOG=slots:n_main` |
+| [`cluster-V-native-only.md`](cluster-V-native-only.md) | Native codegen gaps — tuple-of-heap-structs (probe 29) **verified** via `LOFT_KEEP_NATIVE_RS` (OpFreeRef-after-OpCopyRecord) + lambda-with-heap-return (probe 30, hypothesized) |
+
+---
+
+## Status & next-session roadmap (2026-05-28)
+
+**Stage A (probe catalogue): ✅ COMPLETE.**  39 probes, 5 clusters, both backends covered, A/B/C curation, real-library extractions (38 gridmesh, 39 moros_map), reference↔problem pairings.
+
+**Stage B (mechanism investigation): 🟡 ~60% COMPLETE.**
+
+| Cluster | Mechanism status | Action needed |
+|---|---|---|
+| I (canonical) | ✅ Fully understood (shipped via S1+S2 on `p377-fix`) | None |
+| II (latent leak) | 🟢 Runtime-only confirmed; child-store-orphan hypothesis | Read `OpDatabase`-into-existing-slot codegen at `src/state/codegen.rs:1367+` — 0.5d |
+| III (corruption) | 🟢 Runtime-only confirmed; callee-modifies-local hypothesis | Same Set-Reference codegen read as Cluster II — 0d additional (same path) |
+| IV (codegen panic) | ✅ VERIFIED (`__ref_N` SKIP "no first_def" across 7/7 probes) | Read `unify_if_branches_work_refs` + `add_defaults` to identify cleanup gap — 0.5d |
+| V probe 29 | ✅ VERIFIED (OpFreeRef-after-OpCopyRecord in generated Rust) | Read native codegen at the emission site — 0.25d |
+| V probe 30 | 🤔 Hypothesized | Capture generated Rust via `LOFT_KEEP_NATIVE_RS`; read lambda dispatch — 0.5d |
+| Probe 39 (moros_map leak) | 🤔 NEW finding; mechanism unknown | Trace with `LOFT_LOG=fn:map_get_hex,alloc_free LOFT_STORES=log` — 0.5d |
+
+**Total Phase B-finish: ~1.5-2 working days of focused source reading.**
+
+**Stage C (fix design): ⏸️ Pending Phase B-finish.**
+
+Write `DESIGN.md` comparing:
+
+| Approach | Effort | Subsumes |
+|---|---|---|
+| (a) Targeted per-cluster fixes | M for IV + M+ for II/III + M each for V | One cluster at a time |
+| (b) Path C — store refcount | L (1-2 weeks) | II + III (+ subset of V) |
+| (c) Hybrid: Path C for II/III + targeted for IV/V | L + M | Most of the class |
+
+**~1 day to write DESIGN.md and decide.**
+
+**Stage D (implementation): ⏸️ Pending Stage C decision.**
+
+Recommended sequence (whichever design wins):
+
+1. **Cluster IV fix first** — smallest, most contained, eliminates the ONLY hard-panic class affecting both backends.  Estimated ~M (3-5 days).  Ship as `@PLAN51-phase-IV-N` commits.
+2. **Cluster V fixes next** — probes 29 + 30, native-specific.  Estimated ~M per shape (~M total).  Ship as `@PLAN51-phase-V-N`.
+3. **Cluster II + III** — either Path C arc (1-2 weeks, one big landed change) or shape-by-shape extension (~M+ cumulative).  Decision from Stage C.
+
+**Each implementation phase migrates its probes** from `probes/` to `tests/scripts/NN-<descriptive>.loft` per the plan's promotion rule.
+
+### Aggregate effort estimate
+
+| Phase | Time |
+|---|---|
+| Phase B-finish (mechanism verification for II/III/V/probe-39) | 1.5-2 days |
+| Phase C (design) | 1 day |
+| Phase D — Cluster IV implementation | 3-5 days |
+| Phase D — Cluster V implementation | 2-3 days |
+| Phase D — Cluster II/III implementation (path-dependent) | 1-2 weeks (Path C) OR 1 week (extended S1) |
+| **Total to fully close PLAN51** | **2-4 weeks** |
+
+**Quickest user-visible win after this point**: Cluster IV alone (~M), eliminates the only HARD-PANIC class.  Could ship as its own focused PR.
+
+### What's already shipped on `p377-fix`
+
+- Cluster I leak (S1, commit `6909177e`) + corruption (S2, commit `d7d6ebcf`).
+- Both regressions auto-running in `loft_suite`.
+- All 32 valid Stage-A probes + 5 edge-case + 2 real-lib probes (39 total) committed in plan dir.
+- 4 cluster investigation docs + `RESULTS.md` + this README.
+- Tool gap closed: `LOFT_KEEP_NATIVE_RS=1` (commit `1f101755`).
+
+13 commits ahead of `origin/main` after rebase.
 
 ## Outcome
 
