@@ -517,7 +517,17 @@ impl Output<'_> {
                 .attributes
                 .iter()
                 .filter(|a| {
-                    !matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Text(_)))
+                    // PLAN51 V-c: `ref_return` (src/parser/control.rs:3203)
+                    // appends a hidden Reference/Vector/struct-enum buffer
+                    // arg to heap-returning user fns.  This filter must
+                    // exclude that synthetic attr to keep arity matching
+                    // against the call site's user-visible arg count —
+                    // without it, every ref_return-promoted lambda fails
+                    // the visible_attrs.len() == user_arg_match check below
+                    // and the fn-ref match arm emits only `_ => unreachable!`
+                    // (probes 30, 59, 62 panicked with `invalid fn-ref`).
+                    !a.hidden
+                        && !matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Text(_)))
                         && a.name != "__closure"
                 })
                 .collect();
@@ -630,6 +640,33 @@ impl Output<'_> {
             // is text after Step 2, but kept as a defensive default.
             String::new()
         };
+        // PLAN51 V-c — vector-returning fn-refs need a PRE-ALLOCATED
+        // hidden buffer because the lambda body's `v = []` init compiles
+        // to `if var_v.rec != 0 { clear }; pre_alloc_vector(&var_v, …)`
+        // WITHOUT an OpDatabase on var_v.  Passing the u16::MAX sentinel
+        // (as Reference-returning lambdas accept) crashes at
+        // `pre_alloc_vector → mut_store(stores[u16::MAX])`.  Mirrors the
+        // pattern direct callers use at `src/generation/dispatch.rs:586-591`
+        // for vector-returning user fns.  Reference/struct-enum returns
+        // chain-allocate via the body's struct literal / nested call so
+        // they still get the sentinel.
+        let vec_hbuf_tp: Option<u16> = if let Type::Vector(elm_tp, _) = &ret_type {
+            let elm_name = elm_tp.name(self.data);
+            let tp = self.data.name_type(&format!("main_vector<{elm_name}>"), 0);
+            (tp != u16::MAX).then_some(tp)
+        } else {
+            None
+        };
+        let heap_hbuf_expr: String = if let Some(tp) = vec_hbuf_tp {
+            write!(
+                w,
+                "let mut __vc_hbuf: DbRef = stores.null_named(\"__vc_hbuf\"); \
+                 __vc_hbuf = OpDatabase(cell, __vc_hbuf, {tp}_i32); "
+            )?;
+            "__vc_hbuf".to_string()
+        } else {
+            "loft::keys::DbRef { store_nr: u16::MAX, rec: 0, pos: 0 }".to_string()
+        };
         // match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
         write!(w, "match var_{var_name}.0 {{")?;
         for (d_nr, _fn_name, has_closure) in &candidates {
@@ -655,7 +692,26 @@ impl Output<'_> {
             let mut synthetic: Vec<Value> = Vec::with_capacity(candidate_def.attributes.len());
             let mut user_idx = 0_usize;
             for a in &candidate_def.attributes {
-                if matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Text(_)))
+                if a.hidden
+                    && matches!(
+                        a.typedef,
+                        Type::Reference(_, _)
+                            | Type::Vector(_, _)
+                            | Type::Enum(_, true, _)
+                    )
+                {
+                    // PLAN51 V-c: ref_return-promoted hidden buffer.
+                    // For Reference / struct-enum returns the sentinel
+                    // DbRef is fine — the callee's struct-literal /
+                    // nested call body chain-allocates via OpDatabase.
+                    // For Vector returns the pre-allocated __vc_hbuf is
+                    // required because the body's `v = []` init does
+                    // NOT emit OpDatabase, and `pre_alloc_vector`
+                    // dereferences var_v.store_nr.  `heap_hbuf_expr`
+                    // was computed above to be either "__vc_hbuf"
+                    // (Vector ret) or the sentinel literal.
+                    synthetic.push(Value::RawExpr(heap_hbuf_expr.clone()));
+                } else if matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Text(_)))
                 {
                     if work_buf_expr.is_empty() {
                         // Defensive — shouldn't happen for text-returning
