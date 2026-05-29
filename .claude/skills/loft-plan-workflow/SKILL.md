@@ -75,8 +75,8 @@ Canonical example: `plans/future/51-hidden-buffer-aliasing/` — 5 clusters, 39 
 3. `cp doc/claude/plans/_INVESTIGATION_TEMPLATE.md doc/claude/{plans,lib_plans}/future/<NN>-<slug>/README.md`
 4. **Stage A first** — write `.loft` probes in `probes/` BEFORE source reading.  Be liberal about adding probes; better to attic a redundant variant than to miss a crucial shape (real-library extraction has caught NEW findings synthetic probes missed).
 5. Run every probe on both backends.  Document results in `RESULTS.md` (full matrix).
-6. **Curate A/B/C** in the README's probe table once the suite stabilises (typically when adding new probes stops yielding new failure modes).  A = reference (passes), B = problem (one per failure mode), C = attic (variants).
-7. For each distinct failure mode, write `cluster-<id>-<slug>.md` with the verified-vs-hypothesized accountability table.
+6. Keep a **flat probe table** in the README (one row per probe: file, shape, cluster, status).  A/B/C curation is OPTIONAL — add it only when the suite exceeds ~15 probes AND multiple investigators read it cold (PLAN51 had A/B/C but investigators worked from cluster docs, not the curation table — the overhead didn't pay back).
+7. For each distinct failure mode, write `cluster-<id>-<slug>.md` with the verified-vs-hypothesized accountability table.  Track Severity as TWO fields — corruption/panic/hang and leak — separately, so "FIXED" can't conflate them (PLAN51's Cluster III was marked FIXED on corruption closure while leaks persisted under Cluster II; that conflation caused two false-fix moments in the follow-up session).
 8. **Add Status & next-session roadmap** to the README — per-cluster action items with effort estimates.
 9. **Tool gaps** — add a `Tool gaps` section to the README listing tools added or verified during the work.  Tools added during a plan are part of its output, not separate work.
 10. Add ROADMAP row + tracker README row (same as Procedure A step 5-6).
@@ -93,6 +93,15 @@ A complete investigation plan with 5 clusters and 40 probes = ~45-50 files.  Thi
 ### Probe migration
 
 Probes stay in `probes/` during investigation.  They migrate to `tests/scripts/NN-<descriptive>.loft` **per cluster, as each cluster's fix lands**, not all at once.  The plan stays open during phased implementation; closes when the last cluster's regression is in `tests/scripts/`.
+
+**Promotion gate** — a probe is graduation-ready only when it passes ALL of:
+
+1. Assertions pass (`probe NN PASSED` prints).
+2. Clean process exit (no SIGSEGV / panic at teardown).  Check the exit code; "PASSED prints" is not enough — PLAN51's probe 08 printed PASSED then SIGSEGV'd during teardown, corrupting the `loft_suite` run during graduation.
+3. No leak warning (`LOFT_STORES=warn` shows zero `stores not freed`, OR the loft_suite leak gate accepts it).
+4. Bounded runtime — completes in seconds, not minutes (PLAN51's probe 22 hangs forever; graduation would have wedged CI).
+
+A probe that passes assertions but fails any other gate stays in `probes/` with a status note; substitute a representative variant from the same cluster when graduating.
 
 ---
 

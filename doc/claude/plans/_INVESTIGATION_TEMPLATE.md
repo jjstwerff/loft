@@ -48,8 +48,18 @@ status table:
 |---|---|
 | A — Probe catalogue | 🟡 in progress / ✅ complete |
 | B — Mechanism investigation | 🔴 not started / 🟡 N/M clusters verified / ✅ complete |
-| C — Fix design | ⏸️ pending Stage B |
+| C — Fix design (OPTIONAL) | ⏸️ pending Stage B / N/A — mechanism uniquely determines fix |
 | D — Implementation | ⏸️ pending Stage C |
+
+**Stage C is OPTIONAL.**  When Stage B's mechanism analysis uniquely
+determines the fix shape (the bug is in one specific gate; the only
+question is the exact predicate change), skip C and go B → D.  Force
+Stage C when the fix shape has multiple viable options worth
+comparing (refcount vs targeted vs hybrid; design choices that
+constrain follow-on work).  PLAN51's clusters II/III/IV/V went
+B → D iteratively; only the Path C refcount alternative warranted
+a Stage C deliverable, and even that was deferred pending real
+need.
 
 Then one paragraph: what triggered this investigation, what the
 scope is, what's already known going in.
@@ -73,35 +83,48 @@ investigation doc.
 
 ## Probe suite (REQUIRED)
 
-Curate into three groups.  Each probe is a self-contained `.loft`
-file in `probes/` with assertions that turn the failure into a
-deterministic test result.
+Each probe is a self-contained `.loft` file in `probes/` with
+assertions that turn the failure into a deterministic test result.
 
-**A — Reference probes** (passes on all backends; used as baselines
-to contrast against problem probes):
+The minimum viable index is a **flat list** keyed by probe number:
+shape, cluster, status.  Use one row per probe regardless of role.
 
-| File | Shape | Why kept |
-|---|---|---|
-| `01-<slug>.loft` | <shape> | <rationale> |
-
-**B — Problem probes** (one per distinct failure mode; the primary
-investigation targets):
-
-| File | Shape | Cluster | Failure |
+| File | Shape | Cluster | Status |
 |---|---|---|---|
-| `02-<slug>.loft` | <shape> | <cluster id> | <symptom> |
+| `01-<slug>.loft` | <shape> | reference | passes — baseline |
+| `02-<slug>.loft` | <shape> | <cluster id> | <fails with X / now PASS> |
 
-**C — Attic probes** (variants and confirmations that don't add
-distinct insight; kept for posterity but not promoted):
-
-| File | Why attic |
-|---|---|
-| `03-<slug>.loft` | Variant of probe 02 — confirms <X>; same failure mode |
+**Optional A/B/C curation**: when the suite grows past ~15 probes,
+the flat list becomes hard to scan and an explicit "primary probe per
+cluster vs everything else" split helps.  PLAN51's experience (62
+probes, formal A/B/C table) showed the curation overhead doesn't pay
+back during implementation — investigators worked from cluster docs,
+not the curation table.  Add the A/B/C split only when probe count
+makes the flat list painful AND multiple investigators are reading
+the suite cold.
 
 **Probe naming**: `NN-<descriptive>.loft`.  Numeric ordering for
 stable references; descriptive suffix.  Probes promote to
 `tests/scripts/NN-<descriptive>.loft` when their cluster's fix
 lands.
+
+**Probe promotion gate**: a probe is graduation-ready only when it
+passes ALL of:
+
+1. **Assertions pass** (`probe NN PASSED` prints).
+2. **Clean process exit** — no SIGSEGV / panic at teardown.  Run the
+   probe and check the exit code; "PASSED prints" is not enough
+   (PLAN51's probe 08 printed PASSED then SIGSEGV'd at process exit,
+   corrupting the loft_suite run during graduation).
+3. **No leak warning** — run with `LOFT_STORES=warn` (or rely on the
+   loft_suite leak gate); zero `stores not freed` lines.
+4. **Bounded runtime** — completes in seconds, not minutes.  An
+   infinite loop in a graduated test hangs the suite (PLAN51's
+   probe 22 hangs forever; graduation would have wedged CI).
+
+A probe that passes assertions but fails any other gate stays in
+`probes/` with a status note; substitute a representative variant
+when graduating.
 
 ## Reference ↔ problem pairings (REQUIRED if probes ≥ 5)
 
@@ -158,7 +181,15 @@ Each `cluster-<id>-<slug>.md` follows this shape:
 ```markdown
 # Cluster <ID> — <name>
 
-**Severity:** <user impact>
+**Severity (split by failure mode):**
+- **Corruption / panic / hang:** <user impact, or NONE if leak-only>
+- **Leak:** <store count per iter / NONE if no leak>
+
+Track these separately.  "FIXED" must be qualified by which failure
+mode is closed (PLAN51's Cluster III was marked FIXED on corruption
+closure while leaks persisted under Cluster II — that conflation
+caused two false-fix moments in the next session).
+
 **Affected probes:** <list>
 **Backend asymmetry:** <which backends fail>
 
@@ -198,14 +229,34 @@ Each `cluster-<id>-<slug>.md` follows this shape:
 Options ranked by effort and scope.  Each option lists what it
 fixes and what it doesn't.
 
+## Fix iterations (REQUIRED when fix attempt count > 1)
+
+A short journal of fix attempts that landed-then-retracted, or
+landed-but-needed-follow-up.  Each entry: what was tried, what
+assumption it corrected, why it was insufficient.  Two paragraphs
+per attempt max.
+
+The commit messages capture each landed change in isolation, but
+the *sequence* (and why attempt N didn't suffice) is the load-
+bearing context for future investigators who hit a similar shape.
+PLAN51's Cluster II took 3 attempts (sentinel-only → free+sentinel
+→ narrowed `is_hidden_buf_arg`); without this journal, the third
+attempt's predicate would look arbitrary.
+
+Drop this section if the fix landed on the first attempt.
+
 ## Why <backend that works> escapes
 
 <contrast: what does the working backend do differently here?>
 ```
 
-Length budget per cluster doc: 100-300 lines.  Longer means
-reference content is leaking in — extract to the parent
-reference doc.
+Length budget per cluster doc: **100-300 lines**.  Longer means
+historical "failed approach" sections are accumulating — push
+closed approaches into a single "Historical: previous attempts"
+appendix at the bottom, summarising each in 2-4 lines.  Reference
+content that drifts in should extract to the parent reference doc.
+PLAN51's cluster-II doc hit 381 lines before pruning; the
+appendix pattern would have held it under budget.
 
 ---
 
@@ -222,26 +273,26 @@ A mechanism hypothesis is verified when a probe-pair diff confirms
 it.  Source reading without a probe to ground it tends to
 recursively explore code paths without convergence.
 
-**A/B/C curation enables liberal probing**: **add probes
-aggressively** — be liberal, not selective.  Missing a crucial
-case (the kind that surfaces in production code, like PLAN51's
-moros_map probe) is the worst failure mode; carrying a few
-redundant variants costs nothing because they go to C (attic)
-when curated and don't pollute the suite.
+**Liberal probing**: **add probes aggressively** — be liberal, not
+selective.  Missing a crucial case (the kind that surfaces in
+production code, like PLAN51's moros_map probe) is the worst failure
+mode; carrying a few redundant variants costs nothing because they
+sit in `probes/` documenting the explored space.
 
 Specifically:
 - If an idea for a probe occurs while reading another probe's
   output, write it.  Don't gate on "will this add insight?" —
   you can only know AFTER running it.
 - Variants that confirm a known mechanism are still valuable
-  evidence; they're attic'd, not deleted.
+  evidence; they don't need to be promoted to `tests/scripts/`
+  but they belong in the probe directory.
 - The cost of a redundant probe is ~10 minutes of probe-writing.
   The cost of a missed shape is the next session re-discovering
   it from scratch + losing the diagnostic continuity.
 
-Curation happens AFTER the suite stabilises (typically at the
-end of Stage A), not during.  The README's A/B/C table is the
-explicit curation artifact.
+The flat probe-suite table covers most cases.  A/B/C curation
+becomes worthwhile only when the suite exceeds ~15 probes AND
+multiple investigators read it cold.
 
 **Real-library extraction**: include at least one probe extracted
 from production code in your subsystem (the canonical loft case:
