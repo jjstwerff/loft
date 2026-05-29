@@ -162,12 +162,83 @@ Pre-decision considerations:
 
 ## Cluster catalogue (REQUIRED — populated during Stage A)
 
-Empty until Stage A starts.  Each UB shape Miri/ASan surfaces gets
-one row + its own `cluster-<id>-<slug>.md` investigation doc.
+First sanitizer findings, 2026-05-29 (Stage A1 spike — ran against
+the PLAN52 working tree, *not* yet a closed-PLAN52 baseline; both
+findings are independent of PLAN52's closure state).  Each UB shape
+gets one row + its own `cluster-<id>-<slug>.md` doc.
 
-| ID | Cluster | Severity | Backend asymmetry | Probes | Doc |
+| ID | Cluster | Severity | Backend asymmetry | Detector | Doc |
 |---|---|---|---|---|---|
-| _(TBD)_ | _to be populated after first sanitizer run against post-PLAN52 main_ | — | — | — | — |
+| **1** ✅ | **Unaligned `&mut T` into the bytecode buffer** — `code_add::<T>` / `code_put::<T>` / the `code<T>()` read accessor cast a `*u8` into the byte-granular `Vec<u8>` code buffer; at odd offsets with `T=u16`/`u32` this constructs an unaligned reference (UB).  Fires inside `byte_code` → universal to every program.  **NEW — not a PLAN52 cluster.  FIX LANDED 2026-05-29** (`write_unaligned`/`read_unaligned`; `code<T>` returns by value) — suite green, Miri re-confirm in progress.  Fixed off-gate (disjoint from PLAN52's surface). | Latent UB (masked on x86-64 rustc 1.95; @P383-class toolchain exposure risk) | Universal (both backends compile via `byte_code`) | **Miri** (ASan blind — alignment UB) | [`cluster-1-unaligned-bytecode.md`](cluster-1-unaligned-bytecode.md) |
+| **2** 🟡 | **Unaligned typed access to the byte-packed eval stack** — `set_string`/stack push-pop write `Str`/`DbRef`/8-byte values via `addr_mut::<T>` at `stack_pos`, which advances byte-granularly with no alignment padding → unaligned `&mut Str` (UB).  **Record fields are aligned by design (user-confirmed) — this is the *stack*, same shape as cluster 1, NOT a record-layout/format bug.**  Surfaced the moment cluster 1's fix let Miri reach execute.  **Fix path chosen: (B)** — unaligned read/write at the ~4-6 typed stack accessors, behind a named `stack_get`/`stack_set` seam (cluster-1 idiom; keeps clear of the fragile slot allocator, unblocks the Miri gate).  **(A)** (align slots in the variable-positioning code) retained as the documented future pivot — trigger: a strict-alignment *interpreter* target (RISC-V SBC).  NOT started. | Latent UB (masked on x86-64 rustc 1.95; @P383-class) | Interpret (native has no byte-packed eval stack) | **Miri** (ASan blind — alignment UB) | [`cluster-2-unaligned-store-access.md`](cluster-2-unaligned-store-access.md) |
+| **(PLAN52-I)** | `??`-on-text value-block returns a `Str` borrowing into block-local `_ncc_N`, freed before the consumer reads → heap-use-after-free at the consumer's `copy_nonoverlapping`.  **Owned by [@PLAN52](../52-value-block-borrow-cleanup/README.md) cluster I — confirmed here under ASan, NOT fixed here.** | Heap-UAF (silent corruption; masked on x86-64 rustc 1.95) | Interpret | **ASan** (Miri couldn't reach it — masked behind cluster 1's compile-stage abort) | PLAN52 `cluster I` |
+
+**Disposition note.** Cluster 1 is a genuine new finding this
+lever surfaced and belongs to PLAN53; its *fix* still waits for the
+fix phase (gated on PLAN52 closure per the plan's hard dependency).
+The PLAN52-I confirmation is recorded for completeness — it is
+PLAN52's to fix; this plan only proves the detector sees it.
+
+## Case-finding strategy — actively hunt, don't wait
+
+The point of this plan is **not** to passively catalogue whatever
+one spike happens to surface and stop.  The @P383 lesson is that
+loft's UB lives latent for many releases and only becomes visible
+when something shifts (a rustc bump, an allocator change, a new
+consumer's access pattern).  So the working posture is **adversarial
+discovery**: assume more problematic cases exist, and go find them
+*before* a toolchain roulette does.  Two clusters fell out of a
+single trivial program in one afternoon — that is a floor, not a
+ceiling.
+
+Active hunting lanes, in priority order:
+
+1. **Sanitizer-driven peeling (in flight).**  Each fix removes a
+   *gating* finding and reveals the next layer (cluster 1's fix
+   immediately exposed cluster 2).  Re-run Miri/ASan after every
+   cluster fix and treat the next abort as the next lead.  Keep
+   peeling until a full suite run is clean, not until the first
+   finding is fixed.
+2. **Differential generation (interpret vs native).**  loft's
+   `cross_mode!` harness already runs both backends; most of the
+   UB family manifests as interpret↔native divergence.  Build a
+   generator that emits random *valid* loft and flags any
+   output/exit divergence.  On rustc 1.95 the masked bugs agree on
+   both backends (no divergence) — so generated programs MUST run
+   under a sanitizer for the masked family; differential alone
+   catches the unmasked divergences (native compile errors, logic
+   mismatches).
+3. **Homegrown arena poison-on-free (the keystone).**  Miri, ASan,
+   and Valgrind are all blind to loft's *store-internal* lifetime —
+   "freeing" a record is loft's own bookkeeping, not a libc `free()`,
+   so the @P377/@P378 dangling-`DbRef` family is invisible to every
+   off-the-shelf tool.  A `LOFT_POISON=1` debug mode that fills
+   freed store records + freed stack slots with a sentinel turns
+   *silent* use-after-free (which on rustc 1.95 reads back stale-
+   but-correct bytes) into *loud, deterministic* garbage at the
+   dangling read — on any rustc, no nightly.  This is the move that
+   makes the arena-internal family machine-detectable; equivalent
+   to teaching ASan/Valgrind about the arena via
+   `__asan_poison_memory_region` / `VALGRIND_MAKE_MEM_NOACCESS`
+   client-requests, but homegrown and zero-dependency.
+4. **Coverage-guided fuzzing (`cargo-fuzz` + `arbitrary`).**  A
+   structure-aware fuzz target over parse → `byte_code` → execute,
+   built with ASan, driving the arena into corner states the
+   hand-written probes miss.  Combine with lane 3's poisoning so
+   masked UAF fails loudly under the fuzzer.
+5. **Targeted slot/stack fuzzing.**  Generate programs with many
+   overlapping variable lifetimes, reused names across scopes
+   (cf. @P344), nested blocks — to stress `validate_slots` and the
+   two-zone slot model directly (a known-fragile subsystem; see
+   [SLOTS.md](../../../SLOTS.md)).
+
+Lanes 1-2 use what already exists.  Lane 3 is the highest value-
+per-effort and covers the blind spot the external tools share —
+build it early.  Lanes 4-5 are heavier and scale coverage once the
+detectors are in place.
+
+**Disposition:** new shapes these lanes surface are clusters in the
+catalogue above (in-plan, per the policy) — never PROBLEMS.md rows.
 
 ## Probe suite (REQUIRED — populated during Stage A)
 
@@ -212,6 +283,12 @@ Empty until probes exist.
 | `RUSTFLAGS=-Zsanitizer=address` runner | Available upstream — not yet wired | Real-allocator UB detector for the full suite |
 | Miri ignore annotations (`#[cfg_attr(miri, ignore)]`) | Available upstream — none in tree yet | Mark FFI-heavy tests Miri cannot run; Stage A audits which tests need this |
 | Sanitizer-only test profile in `Cargo.toml` / `.cargo/config.toml` | **TBD during Stage D** | Avoid contaminating default test runs with sanitizer overhead |
+| `#[cfg(not(miri))]` gate on `crash_report::install` | **Missing** | Lets the loft *binary* run under Miri (`libc::sigemptyset` is unshimmed); only needed for binary-under-Miri, not `cargo miri test` |
+| **`LOFT_POISON=1` arena poison-on-free** (store-record + stack-slot fill on free) | **Missing — recommended homegrown keystone** | Makes store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) detectable on any rustc — the blind spot Miri/ASan/Valgrind all share |
+| Differential generator (random valid loft → interpret vs native diff, run under sanitizer) | **Missing** | Mine the interpret↔native divergence family + masked UB at scale; reuses `cross_mode!` |
+| `cargo-fuzz` target (`fuzz_target!` + `arbitrary` AST gen, ASan) | **Missing** | Coverage-guided structure-aware fuzzing of parse → byte_code → execute |
+| ASan / Valgrind custom-allocator annotations (`__asan_poison_memory_region` / `VALGRIND_MALLOCLIKE_BLOCK`) | **Missing** | Teach the *external* tools about the loft arena (alternative to the homegrown `LOFT_POISON` lane) |
+| Valgrind Memcheck (informational lane) | Available upstream — not wired | Uninitialized-read detection on the full native binary with no rebuild; complements ASan |
 
 Tools added during this plan are part of its output, not separate
 work.  Closing the plan should leave the CI job + any test
