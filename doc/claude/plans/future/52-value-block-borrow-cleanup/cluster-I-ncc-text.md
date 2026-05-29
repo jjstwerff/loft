@@ -187,7 +187,83 @@ Rather than introducing a new scope temp, modify the bytecode emit so the value-
 
 ## Fix iterations (to be filled as attempts land)
 
-_(no attempts yet; this section grows as fix-design lands)_
+### Iteration 1 (2026-05-30) — `skip_free` on `_ncc_N` text temp — INTERPRET CLOSED, NATIVE REGRESSED
+
+**Approach:** name the temp `__ncc_N` (double-underscore), mark it `skip_free`, and let
+`scopes.rs::get_free_vars` (line 1183-1185) suppress the OpFreeText for skip_free text
+vars.  Hypothesis: the existing `has_ret_temp` recognition + `patch_hoisted_returns`
+collapse in `src/generation/pre_eval.rs` would handle the native side if the prefix
+match was extended to `__ncc_`.
+
+**Result:**
+- **Interpret**: Set A all 6 PASS.  Set B all 9 PASS.  Set H baselines unchanged.
+- **Native**: COMPILE-ERR E0597 for all of Set A + Set B.  `var___ncc_2: String`
+  declared inside the block, block returns `&var___ncc_2`, the outer `.to_string()`
+  wrap consumes a borrow that dies at the block's closing brace.
+
+**Why the native fix didn't work:**
+
+`patch_hoisted_returns` at `src/generation/pre_eval.rs:110-240` ONLY collapses the
+`[Set(target, Call), ..., Return(Var(target))]` pattern — i.e. it requires `Return` at
+the block's tail.  Value-block context (`??` with non-Var LHS) emits an `If` at the
+tail, not a `Return`:
+
+```ir
+Block {
+  operators: [
+    Set(__ncc_N, lhs_expr),
+    If(null_check, Var(__ncc_N), rhs),     ← block's tail expression
+  ],
+  result: text,
+}
+```
+
+When this is wrapped by the outer consumer (e.g. `Set(a, <block>)`), the native emit
+declares `var___ncc_N: String` INSIDE the Rust block scope.  The `If` returns
+`&var___ncc_N` (a borrow).  The wrap that adds `.to_string()` on the block (outside
+the closing `}`) creates a borrow that dies before `.to_string()` runs.
+
+The existing `_ret.to_string()` materialisation in `src/generation/emit.rs:1283-1297`
+is gated on `wrap_result && returned == Type::Text` — i.e. it only fires for FUNCTION
+RETURN positions, not value-block positions.
+
+**Reverted commit**: yes — all three edits rolled back; tree clean as of 2026-05-30.
+
+**What the next iteration needs:**
+
+A coordinated native-side change is required.  Three possible directions:
+
+1. **Extend `patch_hoisted_returns`** to recognise the value-block-tail-If shape
+   (`Set(temp, expr); If(check, Var(temp), rhs)`) and substitute `Var(temp)` with the
+   original `expr` (eliminates the temp).  Risk: re-evaluates `expr` (the L6 issue —
+   if `expr` is a side-effecting Call, double-evaluation breaks).  Mitigation: only
+   collapse when `expr` is side-effect-free (Var, simple field/index reads).
+
+2. **Add a parallel pre-eval pass** for value-block tail-If text temps that materialises
+   the `.to_string()` INSIDE the block's tail (mirroring `_ret.to_string()` but for
+   non-return contexts).  This produces:
+   ```rust
+   { let var___ncc_N: String = ...;
+     (if (&var___ncc_N) != STRING_NULL {&*(&var___ncc_N)} else {&*("fallback")}).to_string()
+   }
+   ```
+   The block now produces an owned `String`; the outer consumer takes ownership cleanly.
+
+3. **Hoist the temp's declaration out of the block** in the native emit.  Emit
+   `let var___ncc_N: String = ...;` BEFORE the block, then the block returns
+   `&var___ncc_N` — the borrow now lives at parent scope, surviving the outer
+   `.to_string()`.  Risk: parent scope may not support this hoist (e.g. if the
+   value-block is inside an expression context that can't accept a preceding `let`).
+
+**Recommended next step:** Implement direction (2) — `.to_string()` inside the
+block's tail.  It's localised to native emit (no parser change, no scope-pass change),
+mirrors the existing function-return pattern, and has clear precedent.
+
+**Effort**: 2-3 days for direction 2 (emit.rs changes + verify Set A/B + Set H +
+moros_* suite + check the wrap test suite).
+
+**Risk**: MEDIUM — same domain as the @P323 fix that already shipped; the new
+materialisation path can reuse most of the existing `needs_p205_scratch` logic.
 
 ## Why native escapes
 
