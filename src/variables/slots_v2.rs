@@ -1,25 +1,26 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Plan-04 Phase 2 — single-pool, scope-blind slot allocator.
+//! Plan-04 Phase 2 / @PLAN53 cluster 2 — single-pool, scope-blind,
+//! **aligned** slot allocator.
 //!
 //! Replaces the two-zone design in `slots.rs`.  V2 sorts live
 //! intervals by `(live_start, var_nr)` and greedy-places each at
-//! the lowest slot that does not conflict with any still-live
-//! interval of compatible `SlotKind` and size (see `SPEC.md § 2`
-//! at `doc/claude/plans/finished/04-slot-assignment-redesign/SPEC.md`).
+//! the lowest `align(tp)`-aligned slot that does not conflict with
+//! any still-live interval of compatible `SlotKind` and size (see
+//! `SPEC.md § 2` at
+//! `doc/claude/plans/finished/04-slot-assignment-redesign/SPEC.md`).
+//! Sizes stay tight; alignment is achieved by padding between
+//! values, and the lowest-slot search backfills the padding holes
+//! with smaller locals.
 //!
-//! The module is currently a **scaffolding stub**.  Phase 2c
-//! implements the algorithm; Phase 2d transitions fixtures.
-//!
-//! When `LOFT_SLOT_V2=validate` is set in the environment, the
-//! test harness runs V2 alongside V1 and asserts V2's output
-//! satisfies invariants I1–I6 from SPEC § 5a.  Without the env
-//! var, V2 is inert — V1 continues to drive codegen untouched.
-
-// Stub scaffolding; types and functions are hooked into the
-// `LOFT_SLOT_V2=validate` plumbing in Phase 2c.
-#![allow(dead_code)]
+//! `LOFT_SLOT_V2=mode[:filter]` selects a per-function shadow (see
+//! `v2_mode_for`): `validate` runs V2 alongside V1 and asserts the
+//! invariants (I1–I8 + alignment) then restores V1; `report` dumps
+//! a V1-vs-V2 slot comparison; `drive` keeps the V2 layout (correct
+//! execution requires the S4 eval-TOS switch — see the cluster-2
+//! fix design).  Without the env var, V2 is inert — V1 drives
+//! codegen untouched.
 
 use super::{Function, size};
 use crate::data::{Context, Type};
@@ -35,18 +36,6 @@ use std::collections::HashMap;
 pub enum SlotKind {
     Inline,
     RefSlot,
-}
-
-/// One interval fed into the V2 allocator.  One per placed local
-/// or work-ref; arguments are excluded and handled by
-/// `local_start`.
-#[derive(Clone, Debug)]
-pub struct LocalInterval {
-    pub var_nr: u16,
-    pub live_start: u32,
-    pub live_end: u32,
-    pub size: u16,
-    pub kind: SlotKind,
 }
 
 /// V2's allocator output.
@@ -94,41 +83,25 @@ pub fn slot_kind(tp: &Type) -> SlotKind {
     }
 }
 
-/// V2 entry point — IR-walk-based monotonic slot assignment.
+/// V2 entry point — scope-blind, kind-aware, aligned interval-graph
+/// greedy allocator (the SPEC § 2 design).
 ///
-/// V2 walks the IR tree in the same order codegen emits bytecode.
-/// At every `Set(v, value)` first-assignment, `v.slot = current_TOS`
-/// and `TOS += v.size`.  At scope exit (Block/Loop close),
-/// `TOS` is reset to the scope's `frame_base` — this is the point
-/// where cross-scope slot reuse happens naturally, matching
-/// codegen's `OpFreeStack` semantics.
-///
-/// **Design consequences:**
-/// - No dead-slot reuse *within* a scope.  Two non-overlapping
-///   Inline vars in the same block occupy distinct slots.  This
-///   is a trade-off for codegen simplicity (the fixup-free
-///   invariant `v.slot == codegen.TOS` at first-assignment holds
-///   by construction).
-/// - Cross-scope reuse is automatic via scope exit.
-/// - No sort, no interval-graph colouring, no `placed` table.
-/// - One pass through the IR, O(n) in the number of IR nodes.
+/// Each local is placed at the lowest `align(tp)`-aligned offset
+/// ≥ `local_start` that does NOT conflict with any already-placed
+/// local, where conflict = overlapping slot range AND (overlapping
+/// live interval OR incompatible `SlotKind`/size OR loop-straddle
+/// OR non-exact partial overlap).  Sizes stay tight; alignment is
+/// padding, and the lowest-slot search backfills the holes with
+/// smaller locals.  Argument / SRet slots are pinned as always-live
+/// fixed intervals so locals never collide with them.
 ///
 /// Does not mutate `function`.  The caller applies
 /// `AllocatorResult` via `apply_v2_result`.
-pub fn assign_slots_v2(
-    function: &Function,
-    _code: &crate::data::Value,
-    local_start: u16,
-) -> AllocatorResult {
-    // @PLAN53 cluster 2 — scope-blind, kind-aware, ALIGNED interval-graph
-    // greedy allocator (the SPEC § 2 design).  Replaces the earlier
-    // TOS-reset IR-walk, which reused slots across sibling scopes WITHOUT
+pub fn assign_slots_v2(function: &Function, local_start: u16) -> AllocatorResult {
+    // @PLAN53 cluster 2 — see the fn doc for the algorithm.  This replaced an
+    // earlier TOS-reset IR-walk that reused slots across sibling scopes WITHOUT
     // a kind check and so violated I5 (an int and a ref sharing a slot have
-    // different drop opcodes).  Each local is placed at the lowest
-    // `align(tp)`-aligned offset ≥ `local_start` that does NOT conflict with
-    // any already-placed local, where conflict = overlapping slot range AND
-    // (overlapping live interval OR incompatible `SlotKind`/size).  Tight
-    // sizes; alignment via padding (the lowest-slot search backfills holes).
+    // different drop opcodes).
     struct Iv {
         var_nr: u16,
         ls: u32,
@@ -259,95 +232,6 @@ pub fn assign_slots_v2(
     }
 }
 
-struct WalkState {
-    slots: Vec<SlotAssignment>,
-    assigned: Vec<bool>,
-    per_block_var_size: HashMap<u16, u16>,
-    tos: u16,
-    hwm: u16,
-}
-
-fn walk_node(val: &crate::data::Value, function: &Function, w: &mut WalkState) {
-    use crate::data::Value;
-    match val {
-        Value::Block(bl) | Value::Loop(bl) => {
-            let frame_base = w.tos;
-            for op in &bl.operators {
-                walk_node(op, function, w);
-            }
-            let scope_top = w.tos;
-            let reserve = scope_top.saturating_sub(frame_base);
-            w.per_block_var_size.insert(bl.scope, reserve);
-            // Exit scope: reset TOS.  Matches codegen's OpFreeStack.
-            w.tos = frame_base;
-        }
-        Value::Set(v_nr, inner) => {
-            // Evaluate inner first (codegen does this: RHS is
-            // built on the eval stack before the Set commits).
-            walk_node(inner, function, w);
-            let v = *v_nr as usize;
-            // Skip arguments, zero-sized, already-placed, no-first-def vars.
-            if v >= function.next_var() as usize || function.is_argument(*v_nr) || w.assigned[v] {
-                return;
-            }
-            let fd = function.first_def(*v_nr);
-            if fd == u32::MAX {
-                return;
-            }
-            let sz = size(function.tp(*v_nr), &Context::Variable);
-            if sz == 0 {
-                return;
-            }
-            // @PLAN53 cluster 2: align the slot to its type's natural alignment
-            // so an `addr`/`addr_mut::<T>` into it is sound.  Sizes stay tight;
-            // alignment is padding — the bumped TOS leaves a hole that V2's
-            // lowest-slot search backfills with a smaller var.
-            let al = u16::from(super::align(function.tp(*v_nr))).max(1);
-            w.tos = w.tos.next_multiple_of(al);
-            w.slots.push(SlotAssignment {
-                var_nr: *v_nr,
-                slot: w.tos,
-            });
-            w.assigned[v] = true;
-            w.tos += sz;
-            w.hwm = w.hwm.max(w.tos);
-        }
-        Value::If(cond, t, f) => {
-            walk_node(cond, function, w);
-            // Both branches start at the same TOS; treat each as
-            // a temporary scope.  After the If, TOS returns to
-            // pre-branch position (codegen reconciles via
-            // OpFreeStack / join-point handling).
-            let branch_base = w.tos;
-            walk_node(t, function, w);
-            let t_tos = w.tos;
-            w.tos = branch_base;
-            walk_node(f, function, w);
-            w.hwm = w.hwm.max(t_tos);
-        }
-        Value::Insert(ops) => {
-            for op in ops {
-                walk_node(op, function, w);
-            }
-        }
-        Value::Call(_, args) | Value::CallRef(_, args) => {
-            for a in args {
-                walk_node(a, function, w);
-            }
-        }
-        Value::Drop(inner) | Value::Return(inner) => {
-            walk_node(inner, function, w);
-        }
-        Value::Iter(_, c, n, e) => {
-            walk_node(c, function, w);
-            walk_node(n, function, w);
-            walk_node(e, function, w);
-        }
-        Value::Span(b) => walk_node(&b.1, function, w),
-        _ => {}
-    }
-}
-
 // No synthetic Rust-level unit tests here.  V2 correctness is
 // verified against real `.loft` programs:
 //
@@ -366,21 +250,6 @@ fn walk_node(val: &crate::data::Value, function: &Function, w: &mut WalkState) {
 // asserts structural slot properties — it never hand-constructs
 // `Function` objects, it points to the `.loft` file + function
 // name that holds the problem.
-
-/// Returns true when the runtime environment has opted into V2
-/// shadow validation via `LOFT_SLOT_V2=validate` (or `report`,
-/// `drive`).  The test harness and `assign_slots`' callers check
-/// this to decide whether to run V2 alongside V1.
-#[allow(dead_code)]
-pub fn v2_validate_enabled() -> bool {
-    match std::env::var("LOFT_SLOT_V2") {
-        Ok(val) => {
-            let mode = val.split(':').next().unwrap_or("");
-            mode == "validate" || mode == "drive" || mode == "report"
-        }
-        Err(_) => false,
-    }
-}
 
 /// Per-function V2 switch (@PLAN53 cluster 2).  Parses `LOFT_SLOT_V2` as
 /// `mode` or `mode:filter` and returns the mode (`"validate"` / `"report"`
@@ -482,7 +351,7 @@ pub fn apply_v2_result(
 }
 
 /// Plan-22 02d-vii — explain why `assign_slots_v2` skipped a var.
-/// Mirrors the bail-out conditions in `walk_node`'s `Set` arm.
+/// Mirrors the bail-out conditions in the allocator's interval loop.
 fn slot_skip_reason(function: &Function, v_nr: u16) -> &'static str {
     if (v_nr as usize) >= function.next_var() as usize {
         return "v_nr out of range";
@@ -542,13 +411,4 @@ fn apply_var_size(val: &mut crate::data::Value, sizes: &HashMap<u16, u16>) {
         Value::Span(b) => apply_var_size(&mut b.1, sizes),
         _ => {}
     }
-}
-
-/// Returns true when the runtime environment requests per-function
-/// hwm reporting via `LOFT_SLOT_V2=report`.  Reports V1's and V2's
-/// hwm for every compiled function so the corpus-wide optimality
-/// delta (SPEC § 5a invariant O1) can be aggregated by the caller.
-#[allow(dead_code)]
-pub fn v2_report_enabled() -> bool {
-    matches!(std::env::var("LOFT_SLOT_V2"), Ok(val) if val == "report")
 }

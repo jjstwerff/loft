@@ -209,7 +209,7 @@ pub fn check(data: &mut Data) {
         if let Some(mode) = crate::variables::v2_mode_for(&fn_name) {
             let result = {
                 let d = &data.definitions[d_nr as usize];
-                crate::variables::assign_slots_v2(&d.variables, &d.code, local_start)
+                crate::variables::assign_slots_v2(&d.variables, local_start)
             };
             if mode == "report" {
                 crate::variables::dump_v1_v2_slots(

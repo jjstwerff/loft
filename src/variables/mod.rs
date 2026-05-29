@@ -40,8 +40,8 @@ pub use slots::assign_slots;
 // another mod-public-ing pass.
 #[allow(unused_imports)]
 pub use slots_v2::{
-    AllocatorResult, LocalInterval, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2,
-    dump_v1_v2_slots, v2_mode_for, v2_report_enabled, v2_validate_enabled,
+    AllocatorResult, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2, dump_v1_v2_slots,
+    v2_mode_for,
 };
 pub use validate::dump_variables;
 // Plan-04 Phase 2e: ungate validate_slots so LOFT_SLOT_V2=validate
