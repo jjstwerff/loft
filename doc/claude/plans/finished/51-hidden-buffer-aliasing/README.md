@@ -86,8 +86,8 @@ Template revisions landed in commit `516a9683`; PLAN51's own cluster docs retrof
 
 ## See also
 
-- [`../../DEBUG.md`](../../DEBUG.md) — `LOFT_TRACE_*` tracer reference (added during this plan).
-- [`../../LIFETIME.md`](../../LIFETIME.md) — dep tracking + hidden-buffer-passing semantics that this plan's fixes operate on.
-- [`../../PROBLEMS.md`](../../PROBLEMS.md) — @P377, @P378(a), @P381, @P382 (all closed; PLAN51's clusters are the breadth-extension).
-- [`../_INVESTIGATION_TEMPLATE.md`](../_INVESTIGATION_TEMPLATE.md) — investigation-plan template (revised from PLAN51 lessons).
+- [`../../../DEBUG.md`](../../../DEBUG.md) — `LOFT_TRACE_*` tracer reference (added during this plan).
+- [`../../../LIFETIME.md`](../../../LIFETIME.md) — dep tracking + hidden-buffer-passing semantics that this plan's fixes operate on.
+- [`../../../PROBLEMS.md`](../../../PROBLEMS.md) — @P377, @P378(a), @P381, @P382 (all closed; PLAN51's clusters are the breadth-extension).
+- [`../../_INVESTIGATION_TEMPLATE.md`](../../_INVESTIGATION_TEMPLATE.md) — investigation-plan template (revised from PLAN51 lessons).
 - `project_drop_store_refcount.md` — the documented long-term direction (store-refcount); deferred because PLAN51's targeted fixes closed all clusters without it.
