@@ -187,6 +187,45 @@ Rather than introducing a new scope temp, modify the bytecode emit so the value-
 
 ## Fix iterations (to be filled as attempts land)
 
+### Iteration 2 (2026-05-30) — CLOSED ✅
+
+**Approach:**
+1. Parser (`src/parser/operators.rs::build_null_coalesce_default`): rename temp
+   `_ncc_N` → `__ncc_N` (double-underscore convention) and mark `skip_free` for text.
+2. Scope pass (`src/scopes.rs::get_free_vars` line ~1183): honor `skip_free` for text
+   vars (suppresses `OpFreeText(__ncc_N)` at block-scope exit).
+3. Native emit (`src/generation/emit.rs::output_block` ~line 1114): force
+   `has_trailing_void = true` when the block has a `__ncc_*` skip_free text temp.
+   This triggers the EXISTING @P321e/@P323 `let _ret = ...; ...; _ret.to_string()`
+   block-tail pattern at line ~1382, which materialises an owned String INSIDE the
+   block before the inner `var___ncc_N: String` drops at `}`.
+
+The key insight (vs iteration 1): the existing @P323 fix already does the right
+materialisation — but it's gated on `has_trailing_void` which requires at least one
+trailing void op (typically `OpFreeText`).  My iteration 1 suppressed OpFreeText
+without a substitute, so `has_trailing_void` went false and the materialisation
+stopped firing.  Iteration 2 forces `has_trailing_void = true` for `__ncc_*` blocks
+so the existing machinery runs.
+
+**Result:**
+- Set A (cluster I core, 6 probes): **all PASS** on both backends ✅
+- Set B (garbage variants, 9 probes): **all PASS** on both backends ✅
+- Set C (cluster I-crash SIGBUS, 3 probes): **all PASS** — incidentally closed ✅
+- Set D (cluster III format `??`, 5 probes): **all PASS** — incidentally closed ✅
+- Set G (cluster VII chained-call, 3 probes): all PASS native (no regression);
+  interpret now PASS too (was FAIL via cluster I dangling buffer)
+- Set H (baselines, 11 probes): all PASS unchanged
+- Set I (real-library, 2 probes): all PASS
+- `cargo test --release --test issues`: 681/681 PASS
+- `cargo test --release --test wrap`: 49/49 PASS
+
+**Still open after iteration 2:**
+- Set F (cluster VI closures): interpret PASS, native COMPILE-ERR — cluster VI's
+  separate native E0308 (not addressed by this fix).
+- Set E (cluster IV heap-type interpret): 6 probes FAIL on interpret — different
+  mechanism (heap-DbRef dangling handle, not text Str dangling).
+- Set J probe 97: type-id sync architectural sub-bug.
+
 ### Iteration 1 (2026-05-30) — `skip_free` on `_ncc_N` text temp — INTERPRET CLOSED, NATIVE REGRESSED
 
 **Approach:** name the temp `__ncc_N` (double-underscore), mark it `skip_free`, and let

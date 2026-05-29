@@ -1256,7 +1256,21 @@ impl Parser {
         } else {
             // Non-trivial expression: materialise into a temp to avoid double
             // evaluation (L6 fix).
-            let tmp = self.create_unique("ncc", lhs_type);
+            //
+            // @PLAN52 cluster I iteration 2 (2026-05-30): name `__ncc_N`
+            // (double-underscore, matching loft's hoisted-temp convention)
+            // and mark `skip_free` for text.  The skip_free flag suppresses
+            // `OpFreeText(_ncc_N)` at block-scope exit (interpret side, see
+            // `src/scopes.rs::get_free_vars`), so the present-path Str's
+            // backing String outlives the block.  Native emit recognises
+            // the `__ncc_*` prefix at `src/generation/emit.rs::output_block`
+            // and wraps the tail with `.to_string()` INSIDE the block,
+            // producing an owned String that the outer consumer can copy
+            // safely.
+            let tmp = self.create_unique("_ncc", lhs_type);
+            if matches!(lhs_type, Type::Text(_)) {
+                self.vars.set_skip_free(tmp);
+            }
             let set_tmp = v_set(tmp, code.clone());
             let null_check = null_check_builder(self, &Value::Var(tmp));
             let mut true_branch = Value::Var(tmp);
