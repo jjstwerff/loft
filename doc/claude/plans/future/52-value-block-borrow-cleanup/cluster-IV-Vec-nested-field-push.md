@@ -158,7 +158,29 @@ Applied to `src/parser/expressions.rs` 2026-05-30.
 - Set H (`probes/run_set.sh H`) — all 11 baselines PASS unchanged.
 - `cargo test --release --test issues` — 681/681 pass, no regression.
 
-## Remaining work — the secondary `copy_claims` panic
+## Remaining work — probe 97 only
+
+**LANDED 2026-05-30 (commit d98c32b)**: The field-content `db.vector(...)`
+emission for nested-vector fields was rewritten as a chained
+`{ let _v0 = db.vector(<innermost>); let _v1 = db.vector(_v0); ... }`
+expression that handles any nesting depth.  Closes probes 91, 93, 94,
+95, 96 on both backends.
+
+**Probe 97 (3-deep `vector<vector<vector<integer>>>`) STILL FAILS** —
+distinct sub-bug: `OpCopyRecord(..., LITERAL_TYPE_ID)` is emitted with a
+literal type id the PARSER computed via its database, but the RUNTIME
+database may have a different mapping at that slot (because intervening
+`db.vector(other)` calls in default-lib initialization shift slot
+assignments).  Probe 91/95/96 happen to coincide because the parser's
+slot 66 also lands at runtime slot 66 for `vector<Inner>`; probe 97's
+3-deep case shifts beyond that coincidence.
+
+Fix surface for probe 97: emit symbolic `tN` references (or runtime
+name lookups) for type ids in op-call codegen — broader work than this
+cluster.  Defer to a future PLAN52 sub-arc OR resolve via a parser/runtime
+type-id-table alignment refactor.
+
+### Earlier symptom (now closed)
 
 After the parser fix, the parser correctly emits
 `OpNewRecord/OpCopyRecord/OpFinishRecord` for `field += inner_vec`.  But
