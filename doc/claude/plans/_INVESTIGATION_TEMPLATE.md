@@ -20,6 +20,42 @@ feature ship instead.  The two shapes look different:
 | Length budget | 100-300 lines per file | 100-300 README + ~200 per cluster doc + probe headers |
 | When promoted to tests | When phases ship | When mechanism is pinned and fix lands |
 
+## Primary goal: loft stability, not single-bug closure
+
+The point of an investigation plan is to make loft **stable** —
+to close a failure CLASS so the next session doesn't keep
+re-discovering siblings of the same shape.  Fixing the single
+bug that prompted the investigation is rarely enough on its own.
+Two settings make this acute:
+
+- **Memory management.**  Hidden buffer aliasing, dep tracking,
+  store ownership, and closure capture interact through several
+  code paths at once.  A fix that closes the reported repro often
+  leaves siblings — different shapes that hit the same broken
+  mechanism — silently leaking, corrupting, or panicking on
+  teardown.  The probe suite is the safety net: it catches the
+  siblings the original repro never touched.  PLAN51 (5 clusters,
+  62 probes) and PLAN52 (cluster II/IV/V iteration history) are
+  both stability investigations whose probe coverage outlasted
+  the one-line fix that opened them.
+
+- **New rustc versions.**  Rust's UB definitions, optimiser
+  behaviour, lifetime inference, and clippy lint set shift between
+  toolchain releases.  A pattern that compiled cleanly under one
+  toolchain can produce miscompiled native code, new lint
+  failures, or borrow-checker rejections under the next.  Without
+  the probe suite re-running on toolchain bumps, regressions
+  surface as user reports months later instead of as a red CI on
+  the bump commit.
+
+Investigation plans pay for the higher up-front cost (probes +
+cluster docs + per-cluster commit discipline) by leaving the
+class CLOSED — provably, by the probe sweep — rather than just
+the one shape that prompted the report.  If the goal is "fix
+this bug and move on," use a P-issue.  If the goal is "stop
+seeing this CLASS of bug in this subsystem," use the
+investigation-plan shape.
+
 Investigation plans tend to have **more files** than standard plans
 (probes + cluster docs + RESULTS + README).  This is justified
 *proportionally to the investigation depth* — NOT a default.  A
