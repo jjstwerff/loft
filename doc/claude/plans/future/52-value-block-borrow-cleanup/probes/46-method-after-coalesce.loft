@@ -15,7 +15,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   a = (h.items[0] ?? "fallback").to_uppercase();
   assert(a == "PRESENT", "probe 46: got '{a}', want 'PRESENT'");
   println("probe 46 PASSED");

@@ -19,7 +19,7 @@ struct Outer { lists: vector<vector<Inner>> }
 fn main() {
   o = Outer { lists: [] };
   inner1: vector<Inner> = [Inner { tag: 1 }, Inner { tag: 2 }, Inner { tag: 3 }];
-  o.lists += inner1;
+  o.lists += [inner1];
   fallback: vector<Inner> = [Inner { tag: 99 }];
   count = 0;
   total = 0;

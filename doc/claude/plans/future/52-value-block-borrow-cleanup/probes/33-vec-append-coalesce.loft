@@ -10,7 +10,7 @@ struct H { items: vector<text> }
 
 fn main() {
   src = H { items: [] };
-  src.items += "present";
+  src.items += ["present"];
   dst: vector<text> = [];
   dst += [src.items[0] ?? "fallback"];
   assert(len(dst) == 1, "probe 33: len(dst) = {len(dst)}, want 1");

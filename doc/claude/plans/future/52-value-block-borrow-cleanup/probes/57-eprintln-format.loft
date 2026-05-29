@@ -11,7 +11,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "stderr-present";
+  h.items += ["stderr-present"];
   // Inspect via assignment first (so we can verify), then eprint.
   msg = "err: {h.items[0] ?? \"y\"}";
   assert(msg == "err: stderr-present", "probe 57: got '{msg}', want 'err: stderr-present'");

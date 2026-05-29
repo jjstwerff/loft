@@ -38,7 +38,7 @@ fn test_vec_field_append_bracket_multi() {
 
 fn test_vec_field_append_scalar() {
   b = RBox {};
-  b.items += 1;
+  b.items += [1];
   assert(len(b.items) == 1, "len: {len(b.items)}");
   assert(b.items[0] == 1, "val: {b.items[0]}");
 }

@@ -19,7 +19,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   result = match h.items[0] ?? "missing" {
     "present" => "matched-present",
     "missing" => "matched-missing",

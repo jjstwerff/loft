@@ -23,7 +23,7 @@ struct Vault { items: vector<Holder> }
 
 fn main() {
   v = Vault { items: [] };
-  v.items += Holder { name: "present" };
+  v.items += [Holder { name: "present" }];
   fallback = Holder { name: "fallback" };
   a = v.items[0] ?? fallback;
   assert(a.name == "present", "probe 10: got '{a.name}', want 'present'");

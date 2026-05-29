@@ -216,7 +216,7 @@ fn test_type_cycle_indirect() {
 // --- spacial not implemented ---
 
 struct PEPoint { x: integer, y: integer }
-struct PEWorld { pts: spacial<PEPoint, x, y> }
+struct PEWorld { pts: spacial<PEPoint[x, y]> }
 
 // @EXPECT_ERROR: spacial<T> is planned for 1.1+
 fn test_spacial_not_implemented() {

@@ -18,7 +18,7 @@ struct W { tuples: vector<(text, integer)> }
 
 fn main() {
   w = W { tuples: [] };
-  w.tuples += ("present", 42);
+  w.tuples += [("present", 42)];
   fb = ("fallback", 0);
   a = w.tuples[0] ?? fb;
   assert(a.0 == "present", "probe 40a: got '{a.0}', want 'present'");

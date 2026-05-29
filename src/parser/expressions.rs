@@ -947,19 +947,26 @@ use a separate collection or add after the loop"
             *code = Value::Insert(vec![code.clone(), clear, append]);
             return Type::Void;
         }
-        // P188 — local-var collection `+= elem` for vector/sorted/hash/
-        // index/spacial.  Routes the singleton element through
-        // OpNewRecord + OpFinishRecord (per-kind dispatch via
-        // record_finish: vector_finish / hash::add / sorted_finish /
-        // tree::add / ordered_finish).  Returns Type::Void before
-        // change_var fires the "cannot change type from sorted<…> to T"
-        // diagnostic that would otherwise reject this shape.
+        // P188 — local-var collection `+= elem` for keyed collections
+        // (sorted/hash/index/spacial) ONLY.  Routes the singleton element
+        // through OpNewRecord + OpFinishRecord (per-kind dispatch via
+        // record_finish: hash::add / sorted_finish / tree::add /
+        // ordered_finish).  Returns Type::Void before change_var fires
+        // the "cannot change type from sorted<…> to T" diagnostic that
+        // would otherwise reject this shape.
+        //
+        // @PLAN52 cluster IV-Vec-nested-field-push (2026-05-30): Vector
+        // LHS REMOVED from this branch.  Vector `+= elem` is ambiguous
+        // with concat for nested-vector cases (`vec<vec<T>> += vec<T>` —
+        // bare element type matches both element_type AND a sub-shape of
+        // the LHS type).  Strict rule: vector push MUST use `+= [elem]`
+        // (explicit brackets).  Falls through to the diagnostic below
+        // when the RHS doesn't match the concat shape.
         if op == "+="
             && var_nr != u16::MAX
             && matches!(
                 f_type,
-                Type::Vector(_, _)
-                    | Type::Sorted(_, _, _)
+                Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Spacial(_, _, _)
@@ -989,6 +996,29 @@ use a separate collection or add after the loop"
                 }
                 return Type::Void;
             }
+        }
+        // @PLAN52 cluster IV-Vec-nested-field-push (2026-05-30): strict
+        // rule — VECTOR `+= elem` (bare element) is rejected.  Use
+        // `+= [elem]` to push a single element, or `+= other_vec`
+        // (typeof must equal LHS) to concatenate.  This eliminates the
+        // ambiguity class where `vec<vec<T>> += vec<T>` is BOTH
+        // "push one element of element-type" AND syntactically resembles
+        // "concat" (RHS is vector-typed) — the parser branch order used
+        // to misroute the latter.
+        if op == "+="
+            && let Type::Vector(elm_tp, _) = f_type
+            && !s_type.is_unknown()
+            && (**elm_tp).is_equal(&s_type)
+            && !s_type.is_equal(f_type)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "vector `+= elem` is ambiguous; use `+= [elem]` to push one \
+                 element, or `+= other_vec` (typeof must match) to concatenate"
+            );
+            *code = Value::Insert(Vec::new());
+            return Type::Void;
         }
         // C54.A incremental 2a — if the variable carries an annotated
         // target type `: Long` with a narrower `Integer` RHS
@@ -1368,20 +1398,28 @@ use a separate collection or add after the loop"
         // `lhs += other_vec` where both sides are vectors: append all elements
         // in-place via OpAppendVector.
         //
-        // @PLAN52 cluster IV-Vec-nested-field-push: when the LHS element type
-        // EQUALS the RHS type (e.g. `field: vector<vector<X>> += inner_vec`
-        // where `inner_vec: vector<X>`), this is a SINGLE-ELEMENT PUSH, not a
-        // concatenate.  Skip this branch so the field-`+= elem` lowering
-        // (line ~1389) fires and emits `new_record` / `copy_record` /
-        // `finish_record` — the same shape the LOCAL-var path (P188 branch
-        // at line ~957) already uses.
+        // @PLAN52 cluster IV-Vec-nested-field-push: STRICT rule — concat is
+        // legal only when `typeof(rhs) == typeof(lhs)` exactly.  Any mismatch
+        // (element-type, narrow-type, or otherwise) is rejected.  Single-
+        // element-push case (RHS type == LHS element type) is already caught
+        // by the diagnostic just before this branch.
         if !self.first_pass
             && op == "+="
             && let Type::Vector(elm_tp, _) = &f_type.clone()
             && matches!(s_type, Type::Vector(_, _))
             && !matches!(code, Value::Insert(_))
-            && !(**elm_tp).is_equal(&s_type)
         {
+            if !s_type.is_equal(f_type) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "vector `+= other_vec` requires equal types ({} != {})",
+                    f_type.name(&self.data),
+                    s_type.name(&self.data)
+                );
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
             // @P314 — narrow-aware element type (see `append_elem_tp`).
             let elm = (**elm_tp).clone();
             let rec_tp = self.append_elem_tp(&elm);

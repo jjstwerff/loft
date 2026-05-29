@@ -21,7 +21,7 @@ fn get_default() -> text {
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   a = h.items[0] ?? get_default();
   assert(a == "present", "probe 82a: got '{a}', want 'present'");
 

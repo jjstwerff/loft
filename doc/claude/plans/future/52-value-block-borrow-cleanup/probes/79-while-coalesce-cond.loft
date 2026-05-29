@@ -12,10 +12,10 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "a";
-  h.items += "b";
-  h.items += "stop";
-  h.items += "after";
+  h.items += ["a"];
+  h.items += ["b"];
+  h.items += ["stop"];
+  h.items += ["after"];
   i = 0;
   while (h.items[i] ?? "stop") != "stop" {
     i += 1;

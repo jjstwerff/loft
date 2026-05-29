@@ -23,7 +23,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   cond = true;
   a = if cond { h.items[0] } else { "fallback" };
   assert(a == "present", "probe 07: got '{a}', want 'present'");

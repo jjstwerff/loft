@@ -20,7 +20,7 @@ fn main() {
   // Add three words; both views share the same records.
   for label in ["apple", "banana", "apple"] {
     record = Word { text: label, count: 1 };
-    c.ordered += record;
+    c.ordered += [record];
     c.by_text += record;
   }
   // Vector iteration walks in insertion order.

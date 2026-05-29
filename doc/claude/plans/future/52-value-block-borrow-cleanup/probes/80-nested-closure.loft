@@ -11,7 +11,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   outer = fn() -> text {
     inner = fn() -> text { h.items[0] ?? "fallback" };
     return inner();

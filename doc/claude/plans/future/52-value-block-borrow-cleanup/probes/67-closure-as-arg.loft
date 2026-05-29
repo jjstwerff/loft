@@ -15,8 +15,8 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "alpha";
-  h.items += "beta";
+  h.items += ["alpha"];
+  h.items += ["beta"];
   pick = fn(idx: integer) -> text { h.items[idx] ?? "fallback" };
   a = apply(pick, 0);
   assert(a == "alpha", "probe 67a: got '{a}', want 'alpha'");

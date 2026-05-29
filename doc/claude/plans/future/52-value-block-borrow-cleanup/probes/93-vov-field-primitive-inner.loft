@@ -29,7 +29,7 @@ struct Outer { lists: vector<vector<integer>> }
 fn main() {
   o = Outer { lists: [] };
   inner: vector<integer> = [1, 2, 3];
-  o.lists += inner;
+  o.lists += [inner];
   assert(len(o.lists) == 1, "probe 93: len(o.lists) = {len(o.lists)}, want 1 (got flattened?)");
   a = o.lists[0];
   assert(len(a) == 3, "probe 93: len(a) = {len(a)}, want 3");

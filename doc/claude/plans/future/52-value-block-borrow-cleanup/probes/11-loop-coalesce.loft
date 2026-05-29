@@ -27,9 +27,9 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "a0";
-  h.items += "a1";
-  h.items += "a2";
+  h.items += ["a0"];
+  h.items += ["a1"];
+  h.items += ["a2"];
   for i in 0..3 {
     x = h.items[i] ?? "fallback";
     expected = "a{i}";

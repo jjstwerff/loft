@@ -16,7 +16,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   matched = (h.items[0] ?? "fallback") == "present";
   assert(matched, "probe 34: equality should be true (vec[0]='present')");
   println("probe 34 PASSED");

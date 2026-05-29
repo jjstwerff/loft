@@ -15,7 +15,7 @@ struct Result { value: text }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   r = Result { value: "old" };
   r.value = h.items[0] ?? "fallback";
   assert(r.value == "present", "probe 81: got '{r.value}', want 'present'");

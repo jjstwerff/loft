@@ -11,7 +11,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "hello";
+  h.items += ["hello"];
   print((h.items[0] ?? "x").to_uppercase());
   print("\n");
   println("probe 53 PASSED");

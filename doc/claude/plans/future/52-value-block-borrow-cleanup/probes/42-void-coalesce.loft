@@ -17,7 +17,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   // Discard the value.  Compiler MAY warn "unused expression" but
   // the bytecode should still run cleanly.
   h.items[0] ?? "fallback";

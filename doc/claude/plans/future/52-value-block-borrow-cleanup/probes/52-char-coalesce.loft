@@ -14,7 +14,7 @@ struct S { items: vector<single> }
 
 fn main() {
   c = C { items: [] };
-  c.items += 'X';
+  c.items += ['X'];
   v_c = c.items[0] ?? 'F';
   assert(v_c == 'X', "probe 52a: got '{v_c}', want 'X'");
 

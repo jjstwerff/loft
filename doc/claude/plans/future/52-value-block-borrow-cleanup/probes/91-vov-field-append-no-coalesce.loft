@@ -30,7 +30,7 @@ struct Outer { lists: vector<vector<Inner>> }
 fn main() {
   o = Outer { lists: [] };
   inner: vector<Inner> = [Inner { tag: 42 }];
-  o.lists += inner;                            // single-element push
+  o.lists += [inner];                          // single-element push (strict-rule explicit form)
   assert(len(o.lists) == 1, "probe 91: len(o.lists) = {len(o.lists)}, want 1");
   a = o.lists[0];
   assert(len(a) == 1, "probe 91: len(a) = {len(a)}, want 1");

@@ -16,7 +16,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   k = 1;
   a = match k {
     1 => h.items[0] ?? "miss",

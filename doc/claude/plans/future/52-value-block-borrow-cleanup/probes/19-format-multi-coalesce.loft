@@ -19,8 +19,8 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "alpha";
-  h.items += "beta";
+  h.items += ["alpha"];
+  h.items += ["beta"];
   msg = "{h.items[0] ?? \"x\"} and {h.items[1] ?? \"y\"}";
   assert(msg == "alpha and beta", "probe 19: got '{msg}', want 'alpha and beta'");
   println("probe 19 PASSED");

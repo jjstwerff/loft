@@ -22,7 +22,7 @@ struct Outer { lists: vector<vector<Inner>> }
 fn main() {
   o = Outer { lists: [] };
   inner: vector<Inner> = [Inner { tag: 42 }];
-  o.lists += inner;
+  o.lists += [inner];
   fallback: vector<Inner> = [Inner { tag: 0 }];
   a = o.lists[0] ?? fallback;
   assert(len(a) == 1, "probe 21: len(a) = {len(a)}, want 1");

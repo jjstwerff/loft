@@ -20,7 +20,7 @@ fn read_or<T>(items: vector<T>, idx: integer, fallback: T) -> T {
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   a = read_or(h.items, 0, "fallback");
   assert(a == "present", "probe 76: got '{a}', want 'present'");
   println("probe 76 PASSED");

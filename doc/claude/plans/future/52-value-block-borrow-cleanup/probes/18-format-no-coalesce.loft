@@ -17,7 +17,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   msg = "got: {h.items[0]}";
   assert(msg == "got: present", "probe 18: got '{msg}', want 'got: present'");
   println("probe 18 PASSED");

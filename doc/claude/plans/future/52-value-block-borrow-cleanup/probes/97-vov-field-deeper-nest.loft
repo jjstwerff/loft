@@ -19,10 +19,10 @@ fn main() {
   o = Outer { box: [] };
   mid: vector<vector<integer>> = [];
   inner: vector<integer> = [7, 8];
-  mid += inner;            // local var path — works (probe 92 control)
+  mid += [inner];          // local var single-element push (strict-rule explicit form)
   // Sanity check the mid-vec we will push.
   assert(len(mid) == 1, "probe 97 setup: len(mid) = {len(mid)}, want 1");
-  o.box += mid;             // struct field path — exercises the bug
+  o.box += [mid];          // field single-element push (strict-rule explicit form)
   assert(len(o.box) == 1, "probe 97: len(o.box) = {len(o.box)}, want 1");
   m = o.box[0];
   assert(len(m) == 1, "probe 97: len(m) = {len(m)}, want 1");

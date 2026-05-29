@@ -20,7 +20,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "hello";
+  h.items += ["hello"];
   // SIGBUS: method dispatch reads dangling Str's ptr from stack
   a = (h.items[0] ?? "x").to_uppercase();
   println("probe 49 reached assert (a='{a}')");

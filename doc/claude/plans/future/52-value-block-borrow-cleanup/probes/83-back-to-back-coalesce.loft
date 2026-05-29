@@ -12,8 +12,8 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "alpha";
-  h.items += "beta";
+  h.items += ["alpha"];
+  h.items += ["beta"];
   a = h.items[0] ?? "fa";
   b = h.items[1] ?? "fb";
   assert(a == "alpha", "probe 83a: got '{a}', want 'alpha'");

@@ -21,7 +21,7 @@ struct Vault { items: vector<Holder> }
 
 fn main() {
   v = Vault { items: [] };
-  v.items += Holder { name: "present" };
+  v.items += [Holder { name: "present" }];
   fb = Holder { name: "fallback" };
   ref_val = v.items[0] ?? fb;
   name = ref_val.name;

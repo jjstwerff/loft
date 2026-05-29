@@ -19,7 +19,7 @@ struct Pack { items: vector<Item> }
 
 fn main() {
   p = Pack { items: [] };
-  p.items += Item { name: "present" };
+  p.items += [Item { name: "present" }];
   a = p.items[0].name ?? "fallback";
   assert(a == "present", "probe 15: got '{a}', want 'present'");
   println("probe 15 PASSED");

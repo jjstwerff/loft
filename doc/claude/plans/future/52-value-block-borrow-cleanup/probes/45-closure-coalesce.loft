@@ -13,7 +13,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   // Capture h via a closure that takes idx + returns the coalesce result.
   pick = fn(idx: integer) -> text { h.items[idx] ?? "fallback" };
   a = pick(0);

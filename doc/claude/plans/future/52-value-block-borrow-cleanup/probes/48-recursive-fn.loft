@@ -18,9 +18,9 @@ fn pick(h: H, idx: integer, depth: integer) -> text {
 
 fn main() {
   h = H { items: [] };
-  h.items += "a0";
-  h.items += "a1";
-  h.items += "a2";
+  h.items += ["a0"];
+  h.items += ["a1"];
+  h.items += ["a2"];
   a = pick(h, 0, 3);
   assert(a == "a0", "probe 48a: got '{a}', want 'a0'");
   b = pick(h, 99, 3);

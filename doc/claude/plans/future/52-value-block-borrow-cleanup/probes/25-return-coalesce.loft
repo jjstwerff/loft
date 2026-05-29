@@ -35,7 +35,7 @@ fn extract(h: H, idx: integer) -> text {
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   a = extract(h, 0);
   assert(a == "present", "probe 25a: got '{a}', want 'present'");
 

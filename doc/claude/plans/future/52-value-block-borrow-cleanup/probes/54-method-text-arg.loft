@@ -13,7 +13,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "world";
+  h.items += ["world"];
   base = "hello world";
   found = base.contains(h.items[0] ?? "fallback");
   assert(found, "probe 54: should find 'world' in 'hello world'");

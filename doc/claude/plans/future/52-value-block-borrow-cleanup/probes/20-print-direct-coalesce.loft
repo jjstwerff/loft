@@ -19,7 +19,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   // Print the value; success means we observe the right output, NOT
   // assert.  Use a captured-and-asserted approach by also assigning.
   v = h.items[0] ?? "fallback";

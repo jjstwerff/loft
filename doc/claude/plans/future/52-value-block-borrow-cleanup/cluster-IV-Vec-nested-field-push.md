@@ -102,45 +102,48 @@ Added 2026-05-30 to extend the probe matrix from probes 21/36:
 the ONLY difference is local-var vs struct-field LHS.  Same RHS, same
 types, same `+=`.  This pin-points the parser-side branch divergence.
 
-## Fix (parser side)
+## Fix (parser side) — STRICT RULE landed 2026-05-30
 
-**Site:** `src/parser/expressions.rs::parse_assign_op` line 1370.
+**Site:** `src/parser/expressions.rs::parse_assign_op` lines 957, 1370, 1389.
 
-**One-line addition** — refuse to concatenate when the RHS type equals the
-LHS element type (this is a single-element push, not a concatenate; let
-the field-`+= elem` branch at line 1389 handle it):
+The fix landed as a STRICTER form than originally proposed.  Vector `+=`
+is now unambiguous-by-construction:
 
-```rust
-if !self.first_pass
-    && op == "+="
-    && let Type::Vector(elm_tp, _) = &f_type.clone()
-    && matches!(s_type, Type::Vector(_, _))
-    && !matches!(code, Value::Insert(_))
-    && !(**elm_tp).is_equal(&s_type)     // ← @PLAN52 cluster IV-Vec-nested-field-push
-{
-    ...
-    return Type::Void;
-}
-```
+1. **Push** requires the explicit `[elem]` form: `vec += [elem]`.
+2. **Concat** requires exact type match: `vec += other_vec` only if
+   `typeof(other_vec) == typeof(vec)`.
+3. **Bare `vec += elem`** (without brackets) is a COMPILE ERROR.
+4. **Type-mismatched concat** (`vec<int> += vec<u8>`) is a COMPILE ERROR.
 
-When this branch is skipped, the field-`+= elem` branch at line ~1389
-(which already matches `var_nr == u16::MAX && self.is_field(to) &&
-Type::Vector(elm_tp, _) = f_type && !Insert`) fires and emits the
-correct `new_record / copy_record / finish_record` sequence — identical
-to the local-var P188 path.
+The line-957 P188 branch (local-var push) no longer accepts `Type::Vector`
+— only keyed collections (sorted/hash/index/spacial).  A new diagnostic
+emits "vector `+= elem` is ambiguous; use `+= [elem]` to push one
+element, or `+= other_vec` (typeof must match) to concatenate" when a
+vector LHS receives bare element-typed RHS.
+
+The line-1370 concat branch now requires `s_type.is_equal(f_type)` —
+mismatched-type concat is rejected with "vector `+= other_vec` requires
+equal types (X != Y)".
+
+The line-1389 field-`+= elem` branch still exists but is unreachable for
+vectors after the new diagnostic at line 967+ (always fires first for the
+strict-rule violation).
 
 ### Why this is safe
 
-The added guard only fires when `elm_tp == s_type` (RHS type equals LHS
-element type).  For legitimate concatenation:
+The strict rule eliminates the ambiguity class entirely:
 
-- `vec<int> += vec<int>` — `elm_tp = int`, `s_type = vec<int>`.  Differ.
-  Concat branch still fires. ✅
-- `vec<vec<int>> += vec<vec<int>>` — `elm_tp = vec<int>`, `s_type = vec<vec<int>>`.
-  Differ.  Concat branch still fires. ✅
-- `vec<vec<int>> += vec<int>` — `elm_tp = vec<int>`, `s_type = vec<int>`.
-  Equal.  Concat branch SKIPPED → field-`+= elem` branch fires
-  (correct single-element push). ✅
+- `vec<int> += [42]` — explicit push. Allowed. ✅
+- `vec<int> += [1, 2, 3]` — explicit concat-via-literal. Allowed. ✅
+- `vec<int> += other_vec_int` — concat (typeof match). Allowed. ✅
+- `vec<int> += 42` — bare push. **ERROR** (use `+= [42]`).
+- `vec<int> += vec_of_u8` — type-mismatch concat. **ERROR**.
+- `vec<vec<int>> += inner_vec_int` — bare push of element-type. **ERROR**
+  (use `+= [inner_vec_int]`). Was previously the silent-corruption case.
+
+The keyed-collection bare push (`hash += Entry{}`, `sorted += Score{}`,
+`index += Item{}`) is UNAFFECTED — keyed collections have no concat
+semantics, so the bare form is unambiguous and remains the idiom.
 
 ### Verification
 

@@ -18,7 +18,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   print("direct: '");
   print(h.items[0] ?? "fallback");
   print("'\n");

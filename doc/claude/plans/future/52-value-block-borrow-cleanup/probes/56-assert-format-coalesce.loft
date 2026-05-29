@@ -18,7 +18,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   // Build the format string normally, then inspect it BEFORE asserting.
   msg = "err: {h.items[0] ?? \"y\"}";
   print("msg=[");

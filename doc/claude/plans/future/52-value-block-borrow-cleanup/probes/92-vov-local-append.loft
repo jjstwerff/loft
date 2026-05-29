@@ -21,7 +21,7 @@ struct Inner { tag: integer not null }
 fn main() {
   inner: vector<Inner> = [Inner { tag: 42 }];
   outer: vector<vector<Inner>> = [];
-  outer += inner;
+  outer += [inner];
   assert(len(outer) == 1, "probe 92: len(outer) = {len(outer)}, want 1");
   a = outer[0];
   assert(len(a) == 1, "probe 92: len(a) = {len(a)}, want 1");

@@ -17,7 +17,7 @@ struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   msg = "got: {h.items[0] ?? \"x\"}";
   // Intervening work — allocate other strings, do field reads.
   noise1 = "this is noise";
