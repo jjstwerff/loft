@@ -2459,8 +2459,9 @@ impl State {
         } else if let Some(lib_idx) = lib_nr {
             stack.add_op("OpStaticCall", self);
             self.code_add(lib_idx);
+            // @PLAN53 cluster 2 / S4: args were pushed at stepped spans.
             for a in &stack.data.def(op).attributes {
-                stack.position -= size(&a.typedef, &Context::Argument);
+                stack.position -= stack.step(size(&a.typedef, &Context::Argument));
             }
             // also subtract the extra args pushed beyond declared params.
             if stack.data.def(op).name == "n_parallel_for"
@@ -2477,11 +2478,11 @@ impl State {
                 for extra in parameters.iter().skip(n_declared) {
                     // Extra args are always integer (8 bytes post-2c).
                     let _ = extra;
-                    stack.position -= 8;
+                    stack.position -= stack.step(8);
                 }
             }
             // add the result to the stack
-            stack.position += size(&stack.data.def(op).returned, &Context::Argument);
+            stack.position += stack.step(size(&stack.data.def(op).returned, &Context::Argument));
             stack.data.def(op).returned.clone()
         } else {
             self.calls.entry(op).or_default().push(self.code_pos);
@@ -2493,21 +2494,24 @@ impl State {
                 stack.add_op("OpCall", self);
             }
             self.code_add(i64::from(op)); // d_nr: i64 (stdlib `const i32` widens post-2c)
+            // @PLAN53 cluster 2 / S4: args_size is the runtime frame-base
+            // delta (args_base = stack_pos - args_size); it MUST equal the
+            // per-arg stepped pushes, so sum Σ step(size) — never step(Σ).
             let args_size: u16 = stack
                 .data
                 .def(op)
                 .attributes
                 .iter()
-                .map(|a| size(&a.typedef, &Context::Argument))
+                .map(|a| stack.step(size(&a.typedef, &Context::Argument)))
                 .sum();
             self.code_add(args_size);
             self.code_add(i64::from(stack.data.def(op).code_position));
             // remove the arguments that are already on the stack
             for a in &stack.data.def(op).attributes {
-                stack.position -= size(&a.typedef, &Context::Argument);
+                stack.position -= stack.step(size(&a.typedef, &Context::Argument));
             }
             // add the result to the stack
-            stack.position += size(&stack.data.def(op).returned, &Context::Argument);
+            stack.position += stack.step(size(&stack.data.def(op).returned, &Context::Argument));
             stack.data.def(op).returned.clone()
         }
     }
@@ -2620,12 +2624,13 @@ impl State {
         // fn-ref variable is below all pushed arguments.
         let fn_var_dist = stack.var_pos(v_nr);
         // declared: visible param sizes; extra: work-buf + closure (all 12-byte DbRefs).
+        // @PLAN53 cluster 2 / S4: each arg occupies a stepped span (Σ step).
         let declared_size: u16 = param_types
             .iter()
-            .map(|t| size(t, &Context::Argument))
+            .map(|t| stack.step(size(t, &Context::Argument)))
             .sum();
         let extra = if args.len() > param_types.len() {
-            (args.len() - param_types.len()) as u16 * super::size_ref() as u16
+            (args.len() - param_types.len()) as u16 * stack.step(super::size_ref() as u16)
         } else {
             0
         };
@@ -2634,7 +2639,7 @@ impl State {
         self.code_add(fn_var_dist);
         self.code_add(total_arg_size);
         stack.position -= total_arg_size;
-        stack.position += size(&ret_type, &Context::Argument);
+        stack.position += stack.step(size(&ret_type, &Context::Argument));
         ret_type
     }
 
