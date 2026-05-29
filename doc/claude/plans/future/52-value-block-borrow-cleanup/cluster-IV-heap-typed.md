@@ -213,6 +213,63 @@ Result on Set E after iteration 2:
 - **IV-Tuple (probe 40)**: Tuple isn't heap-DbRef; needs a per-field sentinel.  Open.
 - **Cluster VII (probes 47/48/82)**: text-branch type unification, separate fix surface.
 
+### Iteration 3 (planned 2026-05-30) — interpret-side `skip_free` extension for ALL heap-DbRef `??` temps
+
+After cluster I iteration 2 landed (commit `a193e83`), the text `??` value-block fix uses a `skip_free` flag on the `__ncc_N` temp + a scope-pass guard that suppresses `OpFreeText`.  The SAME mechanism applies to heap-DbRef temps for Set E interpret-side:
+
+**Failing probes (interpret-only, all native PASS post iter-2):**
+- 21 (Vector) — `a[0].tag = 0`
+- 22 (Hash) — `e.value = null`
+- 23 (Enum) — returns fallback variant entirely
+- 36 (Vector iter consumer) — loop wrong count
+- 41 (Sorted) — `e.value = null`
+- 50 (Index) — `e.value = null`
+
+**Mechanism:** identical to cluster I — `??` lowering at `src/parser/operators.rs::build_null_coalesce_default` creates `__ncc_N: <heap-DbRef-type>`; the value-block's tail `If(check, Var(__ncc_N), rhs)` returns the heap DbRef; scope-exit `OpFreeRef(__ncc_N)` frees the underlying heap record before the consumer reads through the stale DbRef.
+
+**Fix (single edit)** at `src/parser/operators.rs::build_null_coalesce_default` — extend the existing `skip_free` mark from `Type::Text(_)` to ALL heap-DbRef LHS types:
+
+```rust
+// BEFORE (cluster I iter 2):
+if matches!(lhs_type, Type::Text(_)) {
+    self.vars.set_skip_free(tmp);
+}
+
+// AFTER (iteration 3):
+if matches!(
+    lhs_type,
+    Type::Text(_)
+        | Type::Reference(_, _)
+        | Type::Vector(_, _)
+        | Type::Sorted(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Index(_, _, _)
+        | Type::Enum(_, true, _),
+) {
+    self.vars.set_skip_free(tmp);
+}
+```
+
+The heap-Free emit at `src/scopes.rs::get_free_vars` line ~1274 ALREADY honors `skip_free`:
+```rust
+let emit = (owns || is_work_ref) && !in_ret && !function.is_skip_free(v);
+```
+
+So **one parser edit suffices** for interpret.
+
+**Native side**: native already had the predicate fix (iter 1) + dep-strip (iter 2).  After cluster I iter 2 forced `has_trailing_void` for `__ncc_*` text temps to keep the @P323 `_ret.to_string()` materialisation firing — the heap-DbRef path does NOT need that wrap (DbRef is a value type, not a borrow into a buffer).  Need to verify probes 21/36 native after the parser change — if regression appears, mirror the `has_ncc_skip_free_temp` block extension to cover heap-DbRef types.
+
+**Expected result:**
+- Set E interpret: 6/6 PASS (21, 22, 23, 36, 41, 50 all close).
+- Set E native: 6/6 PASS unchanged.
+- Set H baselines: 11/11 PASS unchanged.
+
+**Effort**: 1 parser edit + verification.  ~1 hour implementation + 30 min testing.
+
+**Risk**: LOW — same mechanism as cluster I iter 2, just a wider type set.
+
+After this iteration: Set E fully closed; Cluster IV closes on both backends except IV-Tuple probe 40 which already closed via separate first-field null-test (commit `ba6ace8`).
+
 **What iteration 1 fixes:**
 - Cluster IV-Enum (probe 23): **closed** — native compile + runtime PASS.
 - Cluster IV-Vec/Hash/Sorted/Index: predicate compiles; runtime exposes the secondary bug above.
