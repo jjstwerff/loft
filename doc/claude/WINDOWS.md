@@ -5,6 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Windows support — verified state, known gaps, and a VM-validation runbook
 
+> **Looking for "what to do when you finally get Windows access for a day"?**
+> See [WINDOWS_SESSION.md](WINDOWS_SESSION.md) — priority-ordered checklist,
+> time budget, pre-flight steps.  This doc is the reference; the session
+> doc is the action plan.
+
 ## Honest compatibility statement
 
 The CI matrix runs the full test suite on `windows-latest`
