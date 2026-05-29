@@ -26,6 +26,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 
 const argv = process.argv.slice(2);
@@ -172,32 +173,16 @@ function basename(p) {
 
 // Expected host imports for a `loft --html` bundle.  Loose stubs —
 // we don't care what they return; we only care whether a trap fires
-// during loft_start.  The proxy answers anything unrecognised with 0;
-// the explicit imaging_* entries support `lib/imaging` end-to-end.
+// during loft_start.  The proxy answers anything unrecognised with 0.
+//
+// `host_asset_exists` is library-agnostic (any wasm-asset library
+// uses it), so it stays inline here.  Library-specific imports
+// (`imaging_query`, `imaging_copy_rgb`, `imaging_save` for the
+// imaging library) come from `lib/<X>/wasm/host.js` files — same
+// mechanism the production `--html` HTML preamble uses.  Discovered
+// + evaluated below so adding a new wasm-bridge library doesn't
+// require editing the harness.
 const loftGlExplicit = {
-  imaging_query(pp, pl, w_out, h_out) {
-    if (!instance) return 0;
-    const mem = instance.exports.memory;
-    const name = basename(decoder.decode(new Uint8Array(mem.buffer, pp, pl)));
-    const a = assets[name];
-    if (!a) return 0;
-    const m32 = new Uint32Array(mem.buffer);
-    m32[w_out >>> 2] = a.width;
-    m32[h_out >>> 2] = a.height;
-    return 1;
-  },
-  imaging_copy_rgb(pp, pl, dest, dest_len) {
-    if (!instance) return 0;
-    const mem = instance.exports.memory;
-    const name = basename(decoder.decode(new Uint8Array(mem.buffer, pp, pl)));
-    const a = assets[name];
-    if (!a || a.bytes.length > dest_len) return 0;
-    new Uint8Array(mem.buffer, dest, a.bytes.length).set(a.bytes);
-    return 1;
-  },
-  imaging_save(_pp, _pl, _w, _h, _dp, _dl) {
-    return 1;
-  },
   host_asset_exists(pp, pl) {
     if (!instance) return 0;
     const mem = instance.exports.memory;
@@ -228,6 +213,49 @@ const stubs = {
     },
   }),
 };
+
+// @lib_plan-29 W3 — discover + load every `lib/<X>/wasm/host.js` in
+// the workspace.  Each file pushes a registration callback onto
+// `globalThis.LOFT_WASM_EXTENSIONS`; the dispatch loop below applies
+// each to the stubs object so library-specific imports
+// (`imaging_query` etc.) become available without the harness
+// hard-coding them.  Mirrors the production `--html` driver's
+// concatenation step.
+const harnessDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.dirname(harnessDir);
+const libDir = path.join(repoRoot, 'lib');
+globalThis.LOFT_WASM_EXTENSIONS = [];
+try {
+  for (const pkg of fs.readdirSync(libDir).sort()) {
+    const hostJs = path.join(libDir, pkg, 'wasm', 'host.js');
+    if (!fs.existsSync(hostJs)) continue;
+    try {
+      const code = fs.readFileSync(hostJs, 'utf8');
+      // Use indirect eval (`(0, eval)`) so the host.js code runs in
+      // the global scope (where `globalThis.LOFT_WASM_EXTENSIONS` is
+      // the one we just set).
+      (0, eval)(code);
+    } catch (e) {
+      if (enableTrace) console.error(`host.js load failed for ${hostJs}: ${e.message}`);
+    }
+  }
+} catch (_e) {
+  // No lib/ dir — fine, no extensions to load.
+}
+
+// Apply each registered extension to the stubs object BEFORE
+// instantiate, so the imports the wasm sees include everything.
+// `ctrl` wraps the asset table the same way the production preamble
+// does; `getMem` returns the instance's memory once instantiated.
+const reproCtrl = { assets };
+const reproGetMem = () => (instance ? instance.exports.memory : { buffer: new ArrayBuffer(0) });
+for (const reg of globalThis.LOFT_WASM_EXTENSIONS) {
+  try {
+    reg(stubs, reproCtrl, reproGetMem);
+  } catch (e) {
+    if (enableTrace) console.error(`host.js extension dispatch failed: ${e.message}`);
+  }
+}
 
 const mod = new WebAssembly.Module(wasm);
 try {
