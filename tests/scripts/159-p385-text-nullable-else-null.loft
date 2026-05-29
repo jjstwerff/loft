@@ -1,0 +1,43 @@
+// @P385 — `if cond { v[i] ?? null } else { null }` for vector-index `text` element
+//
+// Pre-fix: parser failed with `expected text, got null on else` because the
+// if-branch's type carried vector-index deps (e.g. `Type::Text(deps_from_v_index)`)
+// while `OpConvTextFromNull.returned` is `Type::Text(vec![])`, so the `==` match
+// in `src/parser/mod.rs::convert` (lines 992 / 999) rejected the FromNull
+// conversion.
+//
+// Fix: relax those two `==` checks to `Type::is_equal(...)`, which already
+// treats any `Type::Text(_), Type::Text(_)` pair as structurally equal.
+//
+// This test exercises the three shapes the parser must now accept:
+//   (a) hit-branch returns the vector value
+//   (b) miss-branch returns null
+//   (c) outer `?? "fallback"` resolves a chained-coalesce on the result
+//
+// The mirror shape `if cond { "lit" } else { null }` was always fine
+// (literal text branch carries empty deps); this test pins the
+// vector-element-source case that used to fail.
+
+fn probe(v: vector<text>, idx: integer) -> text {
+  if idx < len(v) {
+    v[idx] ?? null
+  } else {
+    null
+  }
+}
+
+fn main() {
+  // (a) hit branch: should return "a"
+  hit = probe(["a", "b"], 0) ?? "missing";
+  assert(hit == "a", "p385 hit: got '{hit}', want 'a'");
+
+  // (b) miss branch: returns null, then chained ?? gives the fallback
+  miss = probe(["a"], 5) ?? "missing";
+  assert(miss == "missing", "p385 miss: got '{miss}', want 'missing'");
+
+  // (c) chained coalesce on the result
+  fb = probe([], 0) ?? "fallback";
+  assert(fb == "fallback", "p385 fallback: got '{fb}', want 'fallback'");
+
+  println("p385 PASSED");
+}

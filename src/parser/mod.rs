@@ -989,14 +989,14 @@ impl Parser {
                         let sentinel_nr = self.data.def_nr("OpNullRefSentinel");
                         *code = Value::Call(sentinel_nr, vec![]);
                         return true;
-                    } else if self.data.def(dnr).returned == *should {
+                    } else if self.data.def(dnr).returned.is_equal(should) {
                         *code = Value::Call(dnr, vec![]);
                         return true;
                     }
                 }
             } else if self.data.attributes(dnr) > 0
                 && self.data.attr_type(dnr, 0).is_equal(check_type)
-                && self.data.def(dnr).returned == *should
+                && self.data.def(dnr).returned.is_equal(should)
             {
                 *code = Value::Call(dnr, vec![code.clone()]);
                 return true;
