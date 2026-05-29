@@ -46,11 +46,64 @@ tried (33/35/lib-11) and shown to be over-engineering.
 | **Bug fix** | [`../PROBLEMS.md`](../PROBLEMS.md) row + regression test + focused commit | Single root cause, fits in one commit, no design choices, no multi-phase sequencing. |
 | **Light — `## Open work` section** | A `## Open work` section in the relevant `doc/claude/<NAME>.md` reference doc | The normal flow.  TODO is co-located with the architecture it touches; one row per item; closure is "remove the row + update the reference content."  Used by NATIVE.md, PERFORMANCE.md, PACKAGES.md, QUALITY.md today. |
 | **Plan — `plans/<NN>-<slug>/`** | Full directory with README + per-phase files | Multi-session initiative with explicit phasing, design-before-implementation discipline, cross-arc dependencies, or a long arc that needs its own document space.  Capped at 2-3 active per `plans/` (see `feedback_max_three_active_plans`). |
+| **Investigation plan — `plans/<NN>-<slug>/` + `probes/` + per-cluster docs** | Investigation plan (probes + cluster docs + verified-vs-hypothesized accountability) — see the investigation-plan template when it lands.  Canonical example: PLAN51 (62 probes, 5 clusters, 12-commit fix arc). | Failure CLASS with multiple sub-mechanisms; needs probe-driven mechanism investigation BEFORE the fix design is clear.  See § When a problem should escalate to an investigation plan below. |
 
 The light flow is the default.  Promote to a plan only when
 the work is genuinely multi-phase and benefits from its own
 directory — most TODOs don't, even ones that take several
 sessions.
+
+### When a problem should escalate to an investigation plan
+
+The bug-fix workflow (PROBLEMS.md row + regression + commit) handles
+the overwhelming majority of bug reports.  Escalate to an
+investigation plan ONLY when one of these signals fires.  Each
+signal carries an action.
+
+#### Early signals (before opening the fix branch)
+
+| Signal | Action |
+|---|---|
+| Bug description names a SHAPE, not a function ("X returning Y in a Z-typed context", versus "fn `foo` crashes on null") | Stay P-issue; add the shape as a precondition note on the row.  Watch for siblings. |
+| Recent commits in the same subsystem closed similar shapes (`git log --oneline src/<area>` shows ≥2 cluster-fixes in last 30d) | Strong signal — escalate.  The next bug is the 3rd of a class; the catalogue starts paying back. |
+| The mechanism explanation requires ≥3 interacting code paths to articulate | Escalate.  One PROBLEMS.md row can't carry the cross-references; the investigation plan's per-cluster docs do. |
+
+#### Mid-fix signals (after attempt #1)
+
+| Signal | Action |
+|---|---|
+| Fix passes the original repro but regresses OTHER tests | Escalate **immediately** — mechanism isn't pinned. |
+| Fix would force `#[ignore]` on another existing test to ship in isolation | Escalate — the two tests are the same class.  **This is the highest-confidence single signal.** |
+| Investigation agent reports "multiple sub-mechanisms" or "couldn't pin a single root cause" | Escalate; the agent has done the cataloguing work for you. |
+
+#### Late-fix signals (after attempts #2 + #3)
+
+| Signal | Action |
+|---|---|
+| A "way-forward matrix" with ≥3 paths and no clear winner | Escalate now; you're choosing fix design without a mechanism understanding. |
+| Fix-attempt N corrupts something DIFFERENT from fix-attempt N-1 | Escalate; symptom-chasing without convergence. |
+| Effort estimate exceeds 1 week | Escalate; the work is multi-session by definition. |
+
+#### Cost calibration
+
+A P-issue costs ~30 seconds to file.  An investigation plan costs
+~1-2 days to set up (template + probes + initial mechanism
+notes).  The break-even is roughly the **3rd fix attempt** — if
+you've burned 3 sessions on shape-by-shape fixes, the investigation
+cost has already been paid in lost work.
+
+#### One-line decision rule
+
+> **"Would I need to `#[ignore]` an existing test to ship this fix?"**
+> If yes, it's not a P-issue — it's a failure class.  Open the
+> investigation plan, catalogue the shapes, and ship a fix that
+> closes all of them together.
+
+That single rule would have triggered PLAN51 about a week earlier
+than it actually opened (the @P377 fix attempts carried
+`#[ignore]` on tests 139/140 for weeks before PLAN51 emerged).
+The investigation-plan shape adds friction up front; the rule
+above is what makes that friction trip at the right moment.
 
 ## Roadmap workflow
 
