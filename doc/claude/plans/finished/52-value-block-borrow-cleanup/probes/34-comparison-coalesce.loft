@@ -1,0 +1,23 @@
+// Probe 34 — Cluster I consumer border: comparison `(vec[i] ?? "x") == "y"`
+//
+// The consumer of `??` is text equality (`OpEqText`).  Equality reads
+// both Str operands, compares lengths, then memcmp's bytes.  If both
+// reads happen BEFORE any free fires, equality may correctly catch the
+// present value despite the dangling-Str pattern.
+//
+// If 34 PASSES, comparison consumers escape — the fix can ignore them.
+// If 34 FAILS, the equality op reads from the dangling Str AFTER the
+// scope-exit free runs.
+//
+// Pairing: diff against 02 (Set consumer).
+// Status: cluster I consumer-border probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  matched = (h.items[0] ?? "fallback") == "present";
+  assert(matched, "probe 34: equality should be true (vec[0]='present')");
+  println("probe 34 PASSED");
+}

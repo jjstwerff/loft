@@ -774,14 +774,12 @@ fn wgl_load_font(stores: &mut Stores, stack: &mut DbRef) {
             stores.put(stack, -1i64);
             return;
         };
-        let font =
-            match fontdue::Font::from_bytes(bytes.as_slice(), fontdue::FontSettings::default()) {
-                Ok(f) => f,
-                Err(_) => {
-                    stores.put(stack, -1i64);
-                    return;
-                }
-            };
+        let Ok(font) =
+            fontdue::Font::from_bytes(bytes.as_slice(), fontdue::FontSettings::default())
+        else {
+            stores.put(stack, -1i64);
+            return;
+        };
         let idx = FONTS.with(|fonts| {
             let mut fonts = fonts.borrow_mut();
             let idx = fonts.len() as i64;
@@ -906,11 +904,11 @@ fn wgl_rasterize_text_into(stores: &mut Stores, stack: &mut DbRef) {
         if v_rec != 0 {
             let buf_len = store.get_u32_raw(v_rec, 4);
             let count = pixels.len().min(buf_len as usize);
-            for i in 0..count {
-                store.set_int(v_rec, 8 + i as u32 * 8, i64::from(pixels[i]));
+            for (i, &p) in pixels.iter().enumerate().take(count) {
+                store.set_int(v_rec, 8 + i as u32 * 8, i64::from(p));
             }
         }
 
-        stores.put(stack, bw as i64);
+        stores.put(stack, i64::from(bw));
     } // cfg(feature = "wasm")
 }

@@ -1779,6 +1779,48 @@ extern crate loft;"
                     return Ok(());
                 }
             }
+            // @PLAN52 cluster IV-Vec-nested-field-push secondary (2026-05-30):
+            // for nested-vector content `vector<vector<X>>`, `c =
+            // Type::Vector(inner_c)`.  `type_def_nr(Type::Vector)` returns the
+            // GENERIC "vector" d_nr (per `data.rs:3186`); reading its
+            // `known_type` returns garbage (last-assigned value, e.g.
+            // FieldValue's id when the default lib registered `vector<FieldValue>`).
+            // Look up the concrete nested vector type by name (parser's
+            // database has already registered it).  Then emit a chained
+            // `db.vector(db.vector(<inner>))` so the runtime database
+            // registers the nested layers in the same order, regardless of
+            // which other types happened to register `vector<X>` first.
+            if matches!(&**c, Type::Vector(_, _)) {
+                // Count nesting depth and find the innermost non-Vector type.
+                // For `vector<vector<...vector<X>>>`, emit
+                // `{ let _v0 = db.vector(<X_ref>); let _v1 = db.vector(_v0); ...
+                //   db.vector(_vN) }`.  Each layer registers (or retrieves) at
+                // runtime in order, so any prior `db.vector(other_inner)`
+                // (e.g. `vector<FieldValue>` from a default-lib helper) no
+                // longer shifts our nested vectors' slot ids.
+                let mut depth = 1;
+                let mut innermost: &Type = c;
+                while let Type::Vector(next, _) = innermost {
+                    innermost = next;
+                    depth += 1;
+                }
+                let inner_def = self.data.type_def_nr(innermost);
+                if inner_def != u32::MAX {
+                    use std::fmt::Write as _;
+                    let inner_kt = self.data.def(inner_def).known_type;
+                    self.flush_bare_through(w, bare_io, bare_emitted, inner_kt)?;
+                    let inner_type_ref = type_id_ref(inner_kt);
+                    let mut expr = format!("{{ let _v0 = db.vector({inner_type_ref});");
+                    for level in 1..depth {
+                        let prev = level - 1;
+                        write!(&mut expr, " let _v{level} = db.vector(_v{prev});").unwrap();
+                    }
+                    let last = depth - 1;
+                    write!(&mut expr, " _v{last} }}").unwrap();
+                    emit_db_field(w, s_var, field_name, "vec", &expr)?;
+                    return Ok(());
+                }
+            }
             let c_def = self.data.type_def_nr(c);
             if c_def != u32::MAX {
                 let content = self.data.def(c_def).known_type;

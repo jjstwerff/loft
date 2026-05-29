@@ -60,6 +60,14 @@ the overwhelming majority of bug reports.  Escalate to an
 investigation plan ONLY when one of these signals fires.  Each
 signal carries an action.
 
+The escalation triggers below all serve one underlying goal: making
+loft **stable** as a class, not just closing the reported shape.
+Memory-management bugs (closure capture, dep tracking, store
+ownership) and toolchain shifts (new rustc, new clippy) both
+routinely leave siblings behind when fixed one-at-a-time.  See
+[`_INVESTIGATION_TEMPLATE.md` § Primary goal](_INVESTIGATION_TEMPLATE.md#primary-goal-loft-stability-not-single-bug-closure)
+for the full framing.
+
 #### Early signals (before opening the fix branch)
 
 | Signal | Action |

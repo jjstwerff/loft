@@ -1,0 +1,23 @@
+// Probe 13 — Cluster I LHS border: text concatenation `(a + b) ?? "x"`
+//
+// Text `+` builds into a function-scope `__work_N` work-buffer (NOT a
+// block-local).  If `_ncc_N`'s scope-exit free pattern only fires for
+// block-local sources, concat-LHS may ESCAPE the bug — making the
+// failure "non-Var LHS *with block-local source*" rather than "any
+// non-Var LHS".
+//
+// If 13 PASSES while 02/04/05 FAIL, the cluster I fix can be narrower:
+// only treat block-local-sourced text-coalesces.  If 13 FAILS, the
+// non-Var-LHS hypothesis stands — the work-buffer-as-source case has
+// its own dangling read.
+//
+// Pairing: diff against 02 — same `??` consumer, different LHS scope.
+// Status: cluster I LHS-border probe.
+
+fn main() {
+  a = "pre";
+  b = "sent";
+  c = (a + b) ?? "fallback";
+  assert(c == "present", "probe 13: got '{c}', want 'present'");
+  println("probe 13 PASSED");
+}

@@ -1,0 +1,47 @@
+// Probe 71 — Cluster V real-library extraction: dryopea-style consumer
+//
+// dryopea (the sci-fi tower-defence game project; see plans/future/46-dryopea)
+// uses extensive map/struct/JSON-cast machinery.  Its JSON parsing and
+// schema-validation paths will eventually need text fallback patterns —
+// e.g., reading a config field with a default when the JSON omits it.
+//
+// This probe extracts a representative shape: a struct with optional
+// (nullable) text fields, read with a fallback.  The shape exercises the
+// SAME cluster I pattern as probe 02 but in the realistic struct-field-
+// with-default flow that dryopea (and most config consumers) will use.
+//
+// Originally written using `text` literal containing `{}` JSON syntax,
+// which collides with loft's `{expr}` interpolation; rewritten to
+// construct the struct directly with null fields to test the same path
+// without parser complications.
+//
+// Pairing: 04 (field LHS), 24 (config-default).
+// Status: cluster V real-library extraction probe (revised).
+
+struct GameConfig {
+  player_name: text,
+  difficulty: text,
+  level_path: text,
+}
+
+fn main() {
+  // Simulate a partial-load (e.g. after JSON cast where missing fields
+  // come back as null).  Only player_name is set; difficulty and
+  // level_path are null.
+  cfg = GameConfig {
+    player_name: "Ada",
+    difficulty: null,
+    level_path: null,
+  };
+
+  // The user expects defaults when fields are missing.  These reads are
+  // field-access `??` — the cluster I shape.
+  difficulty = cfg.difficulty ?? "easy";
+  level = cfg.level_path ?? "levels/intro.json";
+
+  assert(cfg.player_name == "Ada", "probe 71: player_name = '{cfg.player_name}'");
+  assert(difficulty == "easy", "probe 71: difficulty = '{difficulty}'");
+  assert(level == "levels/intro.json", "probe 71: level = '{level}'");
+
+  println("probe 71 PASSED");
+}

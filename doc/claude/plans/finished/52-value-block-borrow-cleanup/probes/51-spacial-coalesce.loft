@@ -1,0 +1,32 @@
+// Probe 51 — Cluster IV completion: Spacial collection value-block
+//
+// EXCLUDED FROM PLAN52 (2026-05-30): `spacial<X[k]>` is unimplemented
+// (planned for 1.1+).  The parser emits a clean "spacial<T> is planned
+// for 1.1+" diagnostic since commit 1b00325 (IV-Spacial parser-hang
+// fix held).  Re-run this probe when spacial lands as part of 1.1+ work
+// — it will then verify `??` on spacial value-blocks closes the same
+// way IV-Hash/Sorted/Index did.  Not a value-block-borrow-cleanup gap.
+//
+// `spacial<X[k]>` is the 4th keyed-collection type.  Tests whether
+// `spacial` joins IV-Hash/Sorted/Index or escapes via some specialised
+// path.
+//
+// Pairing: 22, 41, 50 — completes the keyed-collection IV matrix.
+// Status: cluster IV completion probe (4th of 4 keyed-collection types).
+
+struct Point { name: text, x: float not null, y: float not null }
+struct W { points: spacial<Point[name]> }
+
+fn fb() -> spacial<Point[name]> {
+  s: spacial<Point[name]> = [];
+  return s;
+}
+
+fn main() {
+  w = W { points: [] };
+  w.points["origin"] = Point { name: "origin", x: 0.0, y: 0.0 };
+  a = w.points ?? fb();
+  e = a["origin"];
+  assert(e.x == 0.0, "probe 51: e.x = {e.x}, want 0.0");
+  println("probe 51 PASSED");
+}

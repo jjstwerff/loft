@@ -1,0 +1,27 @@
+// Probe 42 — Cluster I edge case: void-statement `??` (no consumer)
+//
+// What happens when `vec[i] ?? "x"` is used as a statement with no LHS?
+// The value-block result is computed and discarded — but the `_ncc_N`
+// scope-exit `OpFreeText` still runs.  Does the stack get left in a
+// bad state (next opcode reads garbage from a misaligned slot)?
+//
+// Two failure modes to look for:
+//   (a) Stack-misalignment crash (PANIC at some later opcode).
+//   (b) Silent leak of `_ncc_N`'s String (visible via leak gate).
+//   (c) Clean — the result is discarded properly.
+//
+// Pairing: standalone; tests stack-discipline of the void-stmt path.
+// Status: cluster I edge-case probe; informs leak-gate exposure.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  // Discard the value.  Compiler MAY warn "unused expression" but
+  // the bytecode should still run cleanly.
+  h.items[0] ?? "fallback";
+  // If we get here without a panic, the void-stmt path is clean.
+  // Leak gate (separate run with LOFT_STORES=warn) would catch leak.
+  println("probe 42 PASSED");
+}

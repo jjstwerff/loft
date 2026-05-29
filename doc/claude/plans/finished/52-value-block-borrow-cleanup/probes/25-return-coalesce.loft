@@ -1,0 +1,47 @@
+// Probe 25 — Regression guard: return-position text coalesce
+//
+// `tests/scripts/repro_p356.loft::text_vec_coalesce_fallback` already
+// exercises this shape — `fn f() -> text { tv[0] ?? "fb" }` — and PASSES
+// on both backends today because the return-position B5-L3 fix at
+// src/scopes.rs:998-1015 materialises a `__ret_N` text temp that holds
+// an OWNED copy via OpAppendText before the work-buffer drops.
+//
+// This probe is a REGRESSION GUARD for when cluster I's fix lands.  The
+// cluster I fix (parent-scope `__ret_text_N` temp for is_return=false)
+// must NOT disturb the existing B5-L3 return-path coverage.  If 25
+// regresses to FAIL after the fix, the fix's predicate is too broad and
+// is firing on return contexts it shouldn't touch.
+//
+// Without this probe, the fix could silently break repro_p356 + every
+// real text-returning fn that uses `??` — exactly the PLAN51-style
+// "close one cluster, regress another" failure mode the investigation
+// template warns about.
+//
+// Expected: PASS on both backends BOTH before and after the cluster I
+// fix.  If the fix lands and 25 still passes, the predicate is correctly
+// narrow.
+// Pairing: diff against 02 (value-block context — same `??`, same LHS).
+// Status: regression-guard probe; load-bearing for cluster I fix validation.
+
+struct H { items: vector<text> }
+
+fn extract(h: H, idx: integer) -> text {
+  // Return-position `??` on a vec-index — the B5-L3 path at
+  // src/scopes.rs:998 wraps this with a __ret_N text temp + AppendText
+  // copy, so the returned Str points into the work buffer, not into
+  // the freed __ncc_N.
+  return h.items[idx] ?? "fallback";
+}
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  a = extract(h, 0);
+  assert(a == "present", "probe 25a: got '{a}', want 'present'");
+
+  // Missing index → null → fallback (still through the same B5-L3 path).
+  b = extract(h, 99);
+  assert(b == "fallback", "probe 25b: got '{b}', want 'fallback'");
+
+  println("probe 25 PASSED");
+}

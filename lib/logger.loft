@@ -11,7 +11,7 @@ struct Log {
 }
 
 fn error(self: Log, message: text) {
-  self.messages += "Error: {message}";
+  self.messages += ["Error: {message}"];
   println(message);
   self.errors += 1;
   if self.level < Error {
@@ -23,12 +23,12 @@ fn error(self: Log, message: text) {
 }
 
 fn fatal(self: Log, message: text) {
-  self.messages += "Fatal: {message}";
+  self.messages += ["Fatal: {message}"];
   if self.level < Fatal {
     self.level = Fatal;
   }
 }
 
 fn warning(self: Log, message: text) {
-  self.messages += "Warning: {message}";
+  self.messages += ["Warning: {message}"];
 }

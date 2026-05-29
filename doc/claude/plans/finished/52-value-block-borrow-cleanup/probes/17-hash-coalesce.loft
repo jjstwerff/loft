@@ -1,0 +1,24 @@
+// Probe 17 — Cluster I LHS border: hash-keyed lookup with text ??
+//
+// loft hash collections are struct-based (`hash<Entry[key]>`), not
+// `hash<K, V>`.  Here we look up a struct by key, then coalesce on its
+// text field.  This is structurally similar to the deep-chain probe 15
+// (vec[i].field), but the lookup is keyed rather than indexed.
+//
+// If 17 FAILS like 02/15, opcode-independence is confirmed — `OpHashGet`
+// pushes its result the same way `OpGetVectorNullable` does, and the
+// subsequent field read produces the same dangling-Str pattern.
+//
+// Pairing: diff against 15 (vec-index deep chain).
+// Status: cluster I LHS-border probe; tests opcode-independence.
+
+struct Entry { name: text, value: text }
+struct DB { entries: hash<Entry[name]> }
+
+fn main() {
+  d = DB { entries: [] };
+  d.entries["k"] = Entry { name: "k", value: "present" };
+  a = d.entries["k"].value ?? "fallback";
+  assert(a == "present", "probe 17: got '{a}', want 'present'");
+  println("probe 17 PASSED");
+}

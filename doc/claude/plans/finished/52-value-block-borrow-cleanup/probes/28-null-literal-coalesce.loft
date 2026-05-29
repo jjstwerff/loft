@@ -1,0 +1,33 @@
+// Probe 28 — Edge case: null-literal LHS `null ?? "x"` (compiler crash
+//             documentation)
+//
+// While writing probe 24 with `hash<text, text>` (a non-existent type),
+// `loft --interpret` PANICKED at src/typedef.rs:576:51:
+//
+//     thread 'main' (...) panicked at src/typedef.rs:576:51:
+//     index out of bounds: the len is 29 but the index is 18446744073709551615
+//
+// The `18446744073709551615 = u16::MAX as usize` index suggests the
+// typedef code is using a sentinel value as a Vec index without bounds-
+// checking.  This is a separate compiler bug (worth its own P-issue),
+// but a focused probe documents it within PLAN52's evidence trail so it
+// doesn't get lost.
+//
+// `null ?? "x"` is the simplest shape that exercises a null-typed LHS;
+// if loft's parser refuses to type the null-coalesce uniformly with the
+// non-null path, similar panics or compile errors may surface here.
+//
+// Expected: PASS (`a` should be "x") on both backends if the parser
+// types null-LHS coalesce correctly.  If it FAILS, panics, or compiles
+// to broken bytecode, that's a separate P-issue to file alongside this
+// plan.
+//
+// Pairing: standalone — this probe isn't part of cluster I/III/IV/V
+// but documents an adjacent edge case found during the investigation.
+// Status: edge-case / compiler-robustness probe.
+
+fn main() {
+  a = null ?? "x";
+  assert(a == "x", "probe 28a: got '{a}', want 'x'");
+  println("probe 28 PASSED");
+}

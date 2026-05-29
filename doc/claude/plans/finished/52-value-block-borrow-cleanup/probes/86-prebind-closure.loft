@@ -1,0 +1,30 @@
+// Probe 86 — Cluster VI: closure with PRE-BOUND text (probe 85's workaround)
+//
+// Probe 85 failed with "vector variable 'items' cannot be captured into
+// a closure body".  The diagnostic suggests binding the element BEFORE
+// the lambda.  This probe applies the workaround — bind text first,
+// then capture the bound text in the closure.
+//
+// Expected: PASS (closure captures text — primitive-ish — and `??` on
+// a Var LHS should hit the fast-path).  If FAIL, even pre-bound capture
+// triggers cluster VI's bug.
+//
+// Pairing: 85 (vector capture forbidden), 45 (closure with struct field LHS).
+// Status: cluster VI workaround verification probe.
+
+fn main() {
+  items: vector<text> = ["alpha", "beta"];
+  e0 = items[0];  // pre-bind
+  e1 = items[1];
+
+  pick = fn(which: integer) -> text {
+    if which == 0 { return e0 ?? "fb0"; }
+    return e1 ?? "fb1";
+  };
+
+  a = pick(0);
+  assert(a == "alpha", "probe 86a: got '{a}', want 'alpha'");
+  b = pick(1);
+  assert(b == "beta", "probe 86b: got '{b}', want 'beta'");
+  println("probe 86 PASSED");
+}

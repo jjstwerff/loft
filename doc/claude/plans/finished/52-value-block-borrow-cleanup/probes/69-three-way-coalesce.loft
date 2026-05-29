@@ -1,0 +1,21 @@
+// Probe 69 — Cluster I + VII compound: 3-way `(a ?? b) + (c ?? d) ?? e`
+//
+// Two independent `??` blocks combined with `+` then a final `??`.  Each
+// inner ?? creates its own `_ncc_N`; the `+` concatenates them; the
+// outer ?? coalesces the concat result.  Tests whether the multi-`??`
+// scope interactions compound corruption in new ways.
+//
+// Pairing: 06 (nested `??`), 13 (concat LHS), 47 (chained-call `??`).
+// Status: cluster I + VII compound probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h1 = H { items: [] };
+  h2 = H { items: [] };
+  h1.items += ["hello"];
+  h2.items += [" world"];
+  s = (h1.items[0] ?? "x") + (h2.items[0] ?? "y") ?? "fallback";
+  assert(s == "hello world", "probe 69: got '{s}', want 'hello world'");
+  println("probe 69 PASSED");
+}

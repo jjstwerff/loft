@@ -1,0 +1,33 @@
+// Probe 36 — Cluster IV-Vec chained consumer: `for x in (vec_of_vecs[i] ?? other_vec)`
+//
+// Probe 21 showed IV-Vec FAILS with `a[0].tag = 0` (zeroed element).
+// Iterating over the same expression is a different consumer pattern —
+// the for-loop reads vector length (`OpLength`) and iterates `OpGetVector`
+// over the returned handle.
+//
+// Three failure modes to look for:
+//   (a) Loop runs 0 times (zeroed length) — silent corruption.
+//   (b) Loop runs the wrong number of times (corrupt length).
+//   (c) Loop reads garbage elements.
+//
+// Pairing: diff against 21 (direct element projection).
+// Status: cluster IV chained-consumer probe.
+
+struct Inner { tag: integer not null }
+struct Outer { lists: vector<vector<Inner>> }
+
+fn main() {
+  o = Outer { lists: [] };
+  inner1: vector<Inner> = [Inner { tag: 1 }, Inner { tag: 2 }, Inner { tag: 3 }];
+  o.lists += [inner1];
+  fallback: vector<Inner> = [Inner { tag: 99 }];
+  count = 0;
+  total = 0;
+  for x in (o.lists[0] ?? fallback) {
+    count += 1;
+    total += x.tag;
+  }
+  assert(count == 3, "probe 36 count: got {count}, want 3");
+  assert(total == 6, "probe 36 total: got {total}, want 6 (1+2+3)");
+  println("probe 36 PASSED");
+}

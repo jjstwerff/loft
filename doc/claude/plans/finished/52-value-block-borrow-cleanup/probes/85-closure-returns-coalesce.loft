@@ -1,0 +1,43 @@
+// Probe 85 — Cluster VI variant: closure that RETURNS text via `??`
+//
+// EXCLUDED FROM PLAN52 (2026-05-30): the closure tries to capture
+// `items: vector<text>` (a vector local) — parser rejects with
+// "vector variable 'items' cannot be captured into a closure body;
+// bind the element you need before the lambda".  This is an
+// intentional language-level restriction: the closure record layout
+// doesn't model the content type.  The error message explicitly
+// directs the user to bind the element first
+// (e.g. `x = items[i]; f = fn(...) { ... x ... }`).  Re-open if
+// vector closure-capture support is added.  Not a value-block-
+// borrow-cleanup mechanism gap.
+//
+// Probe 45 captures + returns; probe 65 has Var LHS + returns; probe 67
+// passes closure as arg.  This probe stores the closure in a variable
+// then INVOKES it through a different code path.  Tests whether the
+// closure-invoke ABI propagates the bug.
+//
+// Pairing: 45, 65, 67 (closure variants).
+// Status: cluster VI variant probe.
+
+fn main() {
+  items: vector<text> = ["alpha", "beta"];
+
+  // Closure that captures items + returns coalesce result.
+  pick = fn(idx: integer) -> text {
+    return items[idx] ?? "fallback";
+  };
+
+  // Invoke via direct variable call.
+  a = pick(0);
+  assert(a == "alpha", "probe 85a: got '{a}', want 'alpha'");
+
+  // Invoke again to test repeated invocation.
+  b = pick(1);
+  assert(b == "beta", "probe 85b: got '{b}', want 'beta'");
+
+  // Invoke with OOB index → fallback path.
+  c = pick(99);
+  assert(c == "fallback", "probe 85c: got '{c}', want 'fallback'");
+
+  println("probe 85 PASSED");
+}

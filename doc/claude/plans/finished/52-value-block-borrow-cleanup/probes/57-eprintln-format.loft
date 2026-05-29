@@ -1,0 +1,21 @@
+// Probe 57 — Cluster III variant: eprint with `??` in format
+//
+// `eprint(...)` writes to stderr through a different formatter path
+// than `print(...)` (stdout).  Tests whether the format-buffer reuse
+// mechanism applies to both streams.
+//
+// Pairing: 30 (print/stdout format).
+// Status: cluster III variant probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["stderr-present"];
+  // Inspect via assignment first (so we can verify), then eprint.
+  msg = "err: {h.items[0] ?? \"y\"}";
+  assert(msg == "err: stderr-present", "probe 57: got '{msg}', want 'err: stderr-present'");
+  eprint(msg);
+  eprint("\n");
+  println("probe 57 PASSED");
+}

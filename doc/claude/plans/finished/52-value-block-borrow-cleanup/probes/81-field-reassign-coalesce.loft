@@ -1,0 +1,23 @@
+// Probe 81 — Cluster I consumer border: field reassignment via `??`
+//    `obj.f = vec[i] ?? "x"` — UPDATING an existing field (vs probe 32
+//    which initialised a fresh struct).
+//
+// Field reassignment goes through OpSetField → OpSetText.  If the field
+// already holds a String, the reassign frees the old String first.  Like
+// probe 44 (variable reassign → garbage), this may also produce garbage
+// from the OLD field content rather than NUL.
+//
+// Pairing: 32 (struct literal init), 44 (var reassign).
+// Status: cluster I consumer-border probe.
+
+struct H { items: vector<text> }
+struct Result { value: text }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  r = Result { value: "old" };
+  r.value = h.items[0] ?? "fallback";
+  assert(r.value == "present", "probe 81: got '{r.value}', want 'present'");
+  println("probe 81 PASSED");
+}

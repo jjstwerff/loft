@@ -1,0 +1,21 @@
+// Probe 32 — Cluster I consumer border: struct literal field initialization
+//    `S { name: vec[i] ?? "x" }` — the ncc-block result feeds directly
+//    into struct construction (OpNewRecord + OpSetText path).
+//
+// Struct field initialisation goes through `OpSetText` (text fields)
+// directly to a fresh record's slot.  This is yet another consumer
+// opcode.  If 32 FAILS, struct construction has the same exposure.
+//
+// Pairing: diff against 02 (var Set) and 31 (hash insert).
+// Status: cluster I consumer-border probe.
+
+struct H { items: vector<text> }
+struct Result { label: text, value: text }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  r = Result { label: "v", value: h.items[0] ?? "fallback" };
+  assert(r.value == "present", "probe 32: got '{r.value}', want 'present'");
+  println("probe 32 PASSED");
+}

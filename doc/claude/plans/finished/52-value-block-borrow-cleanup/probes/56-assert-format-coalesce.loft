@@ -1,0 +1,29 @@
+// Probe 56 — Cluster III practical: `??` inside assert-message format
+//
+// `assert(cond, "err: {vec[i] ?? \"y\"}")` — the assert message is a
+// format-string consumer with a `??` interpolation.  This shape is
+// extremely common in user code (error messages reference values
+// safely).  If the assert FIRES (cond=false), the message rendering
+// triggers cluster III's garbage-fill.  If the assert PASSES (cond=true),
+// the message is never rendered and the bug is silent.
+//
+// To force the rendering, use a conditional that's true so cond=false,
+// then capture the assert's message via a try/expected-fail mechanism.
+// Actually simpler: print the format string directly and inspect.
+//
+// Pairing: 30 (format-string with present value).
+// Status: cluster III practical-pattern probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  // Build the format string normally, then inspect it BEFORE asserting.
+  msg = "err: {h.items[0] ?? \"y\"}";
+  print("msg=[");
+  print(msg);
+  print("]\n");
+  assert(msg == "err: present", "probe 56: got '{msg}', want 'err: present'");
+  println("probe 56 PASSED");
+}

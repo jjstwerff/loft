@@ -1181,7 +1181,21 @@ impl Scopes {
                 continue;
             }
             if matches!(function.tp(v), Type::Text(_)) {
-                ls.push(call("OpFreeText", v, data));
+                // @PLAN52 cluster I iteration 2 (2026-05-30): honor skip_free
+                // for text vars too.  The file-level "Text exception"
+                // doc-comment ("OpFreeText is always emitted ... regardless
+                // of deps") remains true for borrowed-from-parameter text
+                // (`dep` non-empty, not skip_free).  The new rule only
+                // suppresses OpFreeText for an EXPLICITLY-set skip_free text
+                // temp — used by the `__ncc_N` null-coalesce temp at
+                // `src/parser/operators.rs::build_null_coalesce_default` so
+                // the present-path Str outlives the block scope.  Native
+                // emit's `needs_ncc_materialise` (in `output_block`)
+                // materialises an owned String inside the block tail so the
+                // outer consumer takes ownership cleanly on both backends.
+                if !function.is_skip_free(v) {
+                    ls.push(call("OpFreeText", v, data));
+                }
             }
             // P193: include keyed collections (Sorted/Hash/Index/Spacial)
             // — `gen_set_first_keyed_null` allocates a fresh store via

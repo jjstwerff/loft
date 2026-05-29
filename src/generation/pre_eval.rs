@@ -885,10 +885,21 @@ impl Output<'_> {
         write!(w, "if ")?;
         let b_true = matches!(*true_v, Value::Block(_));
         let b_false = matches!(*false_v, Value::Block(_));
+        // @PLAN52 cluster VII: see emit.rs::output_if_inner.  Same text-branch
+        // unification — wrap non-Block branches with `&*(...)` to coerce
+        // `&String` / `Str` / `&str` to a common `&str` so rustc accepts the
+        // if-expression.  Without this, recursive-`??` and other chained
+        // text patterns whose test has pre-evals would fail E0308.
+        let text_unify = !b_true
+            && !b_false
+            && !matches!(false_v, Value::Null)
+            && matches!(self.infer_type(true_v), Some(Type::Text(_)));
         // Condition: apply substitution (this is exactly what the pre-evals are for).
         self.output_code_with_subst(w, test, pre_evals)?;
         if b_true {
             write!(w, " ")?;
+        } else if text_unify {
+            write!(w, " {{&*(")?;
         } else {
             write!(w, " {{")?;
         }
@@ -902,11 +913,17 @@ impl Output<'_> {
         self.indent -= u32::from(!b_true);
         if let Value::Block(_) = *true_v {
             write!(w, " else ")?;
+        } else if text_unify {
+            write!(w, ")}} else ")?;
         } else {
             write!(w, "}} else ")?;
         }
         if !b_false {
-            write!(w, "{{")?;
+            if text_unify {
+                write!(w, "{{&*(")?;
+            } else {
+                write!(w, "{{")?;
+            }
         }
         self.indent += u32::from(!b_false);
         if matches!(false_v, Value::Null)
@@ -919,6 +936,9 @@ impl Output<'_> {
         } else {
             // Non-block false branch (else-if chain or leaf): apply substitution.
             self.output_code_with_subst(w, false_v, pre_evals)?;
+        }
+        if text_unify && !b_false {
+            write!(w, ")")?;
         }
         self.indent -= u32::from(!b_false);
         if !b_false {

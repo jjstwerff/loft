@@ -1224,20 +1224,91 @@ impl Parser {
         }
         // `convert(value → result_type)` widens the value branch when widen_ints,
         // and is a no-op otherwise (result_type == lhs_type).
+        // @PLAN52 cluster IV-Tuple (2026-05-30): Tuple values are not heap-DbRef
+        // and have no `.rec != 0` discriminant; testing the WHOLE tuple as a
+        // DbRef (the default `convert(Tuple, Boolean)` path) produces wrong
+        // codegen (native E0308: `expected bool, found tuple`) and silent
+        // corruption on interpret (treating bytes as a DbRef tag).  Convention:
+        // a tuple is null when its FIRST FIELD is its type's null sentinel —
+        // which matches what `OpGetVectorNullable` produces for OOB tuple reads
+        // (each field gets its own null sentinel).
+        let null_check_builder = |this: &mut Self, src: &Value| -> Value {
+            if let Type::Tuple(elems) = lhs_type
+                && !elems.is_empty()
+                && let Value::Var(v) = src
+            {
+                let first_tp = elems[0].clone();
+                let mut nc = Value::TupleGet(*v, 0);
+                this.convert(&mut nc, &first_tp, &Type::Boolean);
+                nc
+            } else if matches!(
+                lhs_type,
+                Type::Reference(_, _)
+                    | Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Enum(_, true, _),
+            ) {
+                // @PLAN52 cluster IV interpret (2026-05-30): heap-DbRef types
+                // have no registered `OpConv*FromX → Boolean` so the generic
+                // `convert(Hash/Vector/..., Boolean)` returns the bare Var.
+                // The interpreter's `if <bare Var(DbRef)>` then tests raw
+                // bytes (not `.rec != 0`) and produces the wrong result.
+                // Force an explicit `OpConvBoolFromRef` call — Reference,
+                // Vector, Hash, Sorted, Index, struct-Enum all share the
+                // 12-byte DbRef representation under the hood.
+                let conv_nr = this.data.def_nr("OpConvBoolFromRef");
+                Value::Call(conv_nr, vec![src.clone()])
+            } else {
+                let mut nc = src.clone();
+                this.convert(&mut nc, lhs_type, &Type::Boolean);
+                nc
+            }
+        };
         if let Value::Var(_) = code {
             // Simple variable: reading twice is side-effect-free.
             let mut lhs = code.clone();
-            let mut null_check = code.clone();
-            self.convert(&mut null_check, lhs_type, &Type::Boolean);
+            let null_check = null_check_builder(self, code);
             self.convert(&mut lhs, lhs_type, &result_type);
             *code = v_if(null_check, lhs, rhs);
         } else {
             // Non-trivial expression: materialise into a temp to avoid double
             // evaluation (L6 fix).
-            let tmp = self.create_unique("ncc", lhs_type);
+            //
+            // @PLAN52 cluster I iteration 2 (2026-05-30): name `__ncc_N`
+            // (double-underscore, matching loft's hoisted-temp convention)
+            // and mark `skip_free` for text.  The skip_free flag suppresses
+            // `OpFreeText(_ncc_N)` at block-scope exit (interpret side, see
+            // `src/scopes.rs::get_free_vars`), so the present-path Str's
+            // backing String outlives the block.  Native emit recognises
+            // the `__ncc_*` prefix at `src/generation/emit.rs::output_block`
+            // and wraps the tail with `.to_string()` INSIDE the block,
+            // producing an owned String that the outer consumer can copy
+            // safely.
+            let tmp = self.create_unique("_ncc", lhs_type);
+            // @PLAN52 cluster IV interpret (2026-05-30, iteration 3): extend
+            // skip_free from Text to ALL heap-DbRef LHS types.  Same
+            // mechanism: the scope-exit free op (`OpFreeText` for text,
+            // `OpFreeRef` for heap-DbRef per `src/scopes.rs::get_free_vars`
+            // heap-Free branch at line ~1274 which ALREADY honors
+            // `is_skip_free`) is suppressed for `__ncc_N` temps so the
+            // present-path value's backing storage outlives the block.
+            // Closes Set E interpret (probes 21, 22, 23, 36, 41, 50).
+            if matches!(
+                lhs_type,
+                Type::Text(_)
+                    | Type::Reference(_, _)
+                    | Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Enum(_, true, _),
+            ) {
+                self.vars.set_skip_free(tmp);
+            }
             let set_tmp = v_set(tmp, code.clone());
-            let mut null_check = Value::Var(tmp);
-            self.convert(&mut null_check, lhs_type, &Type::Boolean);
+            let null_check = null_check_builder(self, &Value::Var(tmp));
             let mut true_branch = Value::Var(tmp);
             self.convert(&mut true_branch, lhs_type, &result_type);
             let if_expr = v_if(null_check, true_branch, rhs);

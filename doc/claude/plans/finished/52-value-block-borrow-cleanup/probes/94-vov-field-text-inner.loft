@@ -1,0 +1,29 @@
+// Probe 94 — Cluster IV-Vec NESTED-FIELD-PUSH: TEXT inner type
+//
+// Variant of probe 93 with text elements.  Probes whether the bug interacts
+// with heap-allocated inner element types (text has a String backing store).
+//
+// Observed (2026-05-29):
+//   len(o.lists) = 2  (flattened: inner has 2 text elements, both copied to tail)
+//   a = o.lists[0]   → len(a) = 1
+//   a[0] = ''        (empty — the bytes interpreted as a text slot read as null)
+//
+// Same root mechanism as probes 91/93.  Distinct symptom because text's
+// 4-byte slot (string-table offset) reads as 0 most of the time.
+//
+// Pairing: 91 (struct-Inner), 93 (integer).
+// Status: cluster IV-Vec-nested-field-push variant.
+
+struct Outer { lists: vector<vector<text>> }
+
+fn main() {
+  o = Outer { lists: [] };
+  inner: vector<text> = ["a", "b"];
+  o.lists += [inner];
+  assert(len(o.lists) == 1, "probe 94: len(o.lists) = {len(o.lists)}, want 1 (got flattened?)");
+  a = o.lists[0];
+  assert(len(a) == 2, "probe 94: len(a) = {len(a)}, want 2");
+  assert(a[0] == "a", "probe 94: a[0] = '{a[0]}', want 'a'");
+  assert(a[1] == "b", "probe 94: a[1] = '{a[1]}', want 'b'");
+  println("probe 94 PASSED");
+}

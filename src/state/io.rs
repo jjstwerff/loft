@@ -45,7 +45,6 @@ impl State {
             } else if let Some(text) = crate::wasm::host_fs_read_text(&file_path) {
                 *buf = text;
             }
-            return;
         }
         // QUALITY Tier 3 #9: explicit stub for `wasm32-unknown-unknown` without
         // the `wasm` host-bridge feature (the `--html` browser build target).
@@ -398,7 +397,6 @@ impl State {
                 );
                 self.dispatch_read_data(val, db_tp, little_endian, data, n);
             }
-            return;
         }
         #[cfg(not(feature = "wasm"))]
         {
@@ -468,7 +466,6 @@ impl State {
             self.database
                 .store_mut(&file)
                 .set_long(file.rec, file.pos + 16, pos);
-            return;
         }
         #[cfg(not(feature = "wasm"))]
         {
@@ -507,7 +504,6 @@ impl State {
             };
             let size = crate::wasm::host_fs_file_size(&file_path);
             self.put_stack(if size < 0 { i64::MIN } else { size });
-            return;
         }
         #[cfg(not(feature = "wasm"))]
         {
@@ -534,7 +530,6 @@ impl State {
         {
             let _ = file;
             self.put_stack(false);
-            return;
         }
         #[cfg(not(feature = "wasm"))]
         {
@@ -579,7 +574,6 @@ impl State {
                 false
             };
             self.put_stack(ok);
-            return;
         }
         #[cfg(not(feature = "wasm"))]
         {

@@ -1,0 +1,25 @@
+// Probe 01 — Reference baseline: simple-Var `??` (no block construction)
+//
+// The parser at src/parser/operators.rs:1227 short-circuits the ncc-block
+// construction when the LHS is a plain `Value::Var(_)`:
+//
+//     if let Value::Var(_) = code {
+//         // Simple variable: reading twice is side-effect-free.
+//         *code = v_if(null_check, lhs, rhs);
+//     }
+//
+// So `v ?? "fallback"` does NOT allocate `_ncc_N`, does NOT build a value-
+// block, does NOT emit OpFreeText on a temporary that the if-result borrows
+// from.  It compiles to a plain `if (v != null) v else "fallback"` whose
+// value is the live local `v`'s Str — the consumer reads bytes from a live
+// String, not a freed one.
+//
+// Expected: PASS on both --interpret and --native.
+// Status: reference baseline for cluster I.
+
+fn main() {
+  v = "present";
+  a = v ?? "fallback";
+  assert(a == "present", "probe 01: got '{a}', want 'present'");
+  println("probe 01 PASSED");
+}

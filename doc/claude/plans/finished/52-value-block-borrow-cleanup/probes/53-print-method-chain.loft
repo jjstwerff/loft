@@ -1,0 +1,18 @@
+// Probe 53 — I-crash variant: `print((vec[i] ?? "x").to_uppercase())`
+//
+// Probe 46 / 49 SIGBUS with assignment consumer; this probes whether
+// the method-chain crash also fires through `print()`.  Distinguishes
+// "method-chain root cause" from "method-chain + assignment root cause".
+//
+// Pairing: 46 / 49 (same chain, assignment consumer).
+// Status: I-crash variant probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["hello"];
+  print((h.items[0] ?? "x").to_uppercase());
+  print("\n");
+  println("probe 53 PASSED");
+}

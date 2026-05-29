@@ -358,6 +358,7 @@ impl Logger {
         self.config.default_level
     }
 
+    #[cfg_attr(feature = "wasm", allow(clippy::unused_self))]
     fn write_line(&mut self, line: &str) {
         #[cfg(not(feature = "wasm"))]
         {

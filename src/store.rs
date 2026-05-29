@@ -187,12 +187,14 @@ pub struct Store {
     /// every non-durable constructor (`new`, `open`, `clone_locked*`,
     /// `borrow_locked_*`, `new_freed_sentinel`).  See
     /// `doc/claude/plans/future/38-loft-store-durable/`.
+    #[cfg_attr(not(feature = "mmap"), allow(dead_code))]
     durable_meta_path: Option<std::path::PathBuf>,
     /// @PLAN38 phase 01 — durability-mode tier on this store.  Tracks
     /// which durability variant the consumer opted into so the Drop
     /// path can apply tier-specific shutdown logic.  `0` for non-durable
     /// stores; `1` for `IntegrityOnly`.  Tiers `2` (`SnapshotEvery`)
     /// and `3` (`WAL`) are reserved for future phases.
+    #[cfg_attr(not(feature = "mmap"), allow(dead_code))]
     durable_tier: u16,
 }
 

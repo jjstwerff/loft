@@ -248,7 +248,19 @@ impl Output<'_> {
                         let returns_local_text = matches!((**val).unspan(), Value::Var(v)
                             if matches!(def.variables.tp(*v), Type::Text(_))
                                 && !def.variables.is_argument(*v));
-                        no_work_buffer || returns_local_text
+                        // @PLAN52 cluster VI (2026-05-30): closures returning text
+                        // have a `__work_ret: &mut String` parameter but the
+                        // closure body's `??` value-block doesn't write into it —
+                        // instead emits `return Str::new(<value-block>)`.  Inner
+                        // block tail materialises a String via cluster I's
+                        // `_ret.to_string()` machinery.  Plain `Str::new(String)`
+                        // fails E0308.  Detect the inner `__ncc_*` skip_free
+                        // pattern and route through scratch so the materialised
+                        // String lives in `stores.scratch` and `Str::new(&str)`
+                        // reads from there.
+                        let returns_ncc_block = matches!((**val).unspan(), Value::Block(b)
+                            if self.block_contains_ncc_skip_free(b));
+                        no_work_buffer || returns_local_text || returns_ncc_block
                     };
                     write!(w, "return ")?;
                     if needs_p205_scratch {
@@ -820,6 +832,40 @@ impl Output<'_> {
         self.output_if_inner(w, test, true_v, false_v, false)
     }
 
+    /// Emit an `if` test value as a Rust bool predicate.
+    ///
+    /// When the test is a heap-DbRef-typed variable (Vector / Hash /
+    /// Sorted / Index / Reference / struct-Enum), the value-block `??`
+    /// lowering at `parser/operators.rs` synthesises `if _ncc_N { _ncc_N }
+    /// else { fallback }` — but `_ncc_N` is a `DbRef`, not a `bool`,
+    /// and rustc rejects it with E0308.  The null sentinel for heap
+    /// DbRefs is `DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }` (see
+    /// `write_typed_null` at line ~807), so `.rec != 0` is the
+    /// canonical present-check (mirrors the existing checks throughout
+    /// `codegen_runtime.rs`).
+    ///
+    /// PLAN52 cluster IV (heap-typed value-block `??`): probes 21 / 22 /
+    /// 23 / 36 / 40 / 41 / 50.
+    fn output_test_predicate(&mut self, w: &mut dyn Write, test: &Value) -> std::io::Result<()> {
+        let heap_dbref = matches!(
+            self.infer_type(test),
+            Some(
+                Type::Reference(_, _)
+                    | Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Enum(_, true, _)
+            ),
+        );
+        if heap_dbref {
+            self.output_code_inner(w, test)?;
+            write!(w, ".rec != 0")
+        } else {
+            self.output_code_inner(w, test)
+        }
+    }
+
     fn output_if_inner(
         &mut self,
         w: &mut dyn Write,
@@ -840,15 +886,28 @@ impl Output<'_> {
                 self.indent(w)?;
             }
             write!(w, "if ")?;
-            self.output_code_inner(w, &ops[ops.len() - 1])?;
+            self.output_test_predicate(w, &ops[ops.len() - 1])?;
         } else {
             write!(w, "if ")?;
-            self.output_code_inner(w, test)?;
+            self.output_test_predicate(w, test)?;
         }
         let b_true = matches!(*true_v, Value::Block(_));
         let b_false = matches!(*false_v, Value::Block(_));
+        // @PLAN52 cluster VII: when the if-result is `Text`, branches can
+        // produce `&String` (text local via Var emit's `&var_x`), `Str`
+        // (text-returning native call), or `&'static str` (literal).  These
+        // do NOT unify at the if-branch level — rustc reports E0308
+        // "expected `&String`, found `Str`".  Wrapping each non-Block
+        // branch with `&*(...)` forces a common `&str` (idempotent on
+        // `&String` and `&str`, valid on `Str` via its `Deref<Target=str>`).
+        let text_unify = !b_true
+            && !b_false
+            && !matches!(false_v, Value::Null)
+            && matches!(self.infer_type(true_v), Some(Type::Text(_)));
         if b_true {
             write!(w, " ")?;
+        } else if text_unify {
+            write!(w, " {{&*(")?;
         } else {
             write!(w, " {{")?;
         }
@@ -861,11 +920,17 @@ impl Output<'_> {
         self.indent -= u32::from(!b_true);
         if let Value::Block(_) = *true_v {
             write!(w, " else ")?;
+        } else if text_unify {
+            write!(w, ")}} else ")?;
         } else {
             write!(w, "}} else ")?;
         }
         if !b_false {
-            write!(w, "{{")?;
+            if text_unify {
+                write!(w, "{{&*(")?;
+            } else {
+                write!(w, "{{")?;
+            }
         }
         self.indent += u32::from(!b_false);
         // When the else branch is Null and the true branch returns a value,
@@ -876,6 +941,9 @@ impl Output<'_> {
             Self::write_typed_null(w, &tp)?;
         } else {
             self.output_code_inner(w, false_v)?;
+        }
+        if text_unify && !b_false {
+            write!(w, ")")?;
         }
         self.indent -= u32::from(!b_false);
         if !b_false {
@@ -951,6 +1019,30 @@ impl Output<'_> {
     ///    that expression is captured into `let _ret` first, then yielded at the end.
     /// 3. **String conversion** — a text-typed block may receive a `Str` from a field read;
     ///    `.to_string()` converts it to an owned `String`.
+    // @PLAN52 cluster I/VI helper: walk a Block's operators (recursively
+    // into nested Block / If / Match values) and report whether any
+    // `Set(v, _)` exists where `v`'s name starts with `__ncc_` and the
+    // variable is marked `skip_free`.  Used to gate scratch-buffer
+    // materialisation for value-block `??` patterns.
+    fn block_contains_ncc_skip_free(&self, bl: &Block) -> bool {
+        fn walk(this: &Output, v: &Value) -> bool {
+            match v.unspan() {
+                Value::Set(var, val) => {
+                    let variables = &this.data.def(this.def_nr).variables;
+                    if variables.name(*var).starts_with("__ncc_") && variables.is_skip_free(*var) {
+                        return true;
+                    }
+                    walk(this, val)
+                }
+                Value::Block(b) => b.operators.iter().any(|op| walk(this, op)),
+                Value::If(c, t, f) => walk(this, c) || walk(this, t) || walk(this, f),
+                Value::Insert(ops) => ops.iter().any(|op| walk(this, op)),
+                _ => false,
+            }
+        }
+        bl.operators.iter().any(|op| walk(self, op))
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn output_block(
         &mut self,
@@ -1055,7 +1147,32 @@ impl Output<'_> {
         } else {
             operators.iter().rposition(|v| !self.is_void_value(v))
         };
-        let has_trailing_void = return_idx.is_some_and(|i| i < last_op_idx);
+        // @PLAN52 cluster I iteration 2 (2026-05-30): force the
+        // `let _ret = ...; ...; _ret.to_string()` block-tail pattern (the
+        // @P323 materialisation at line ~1382) when the block holds a
+        // `__ncc_*` skip_free text temp.  Without the skip_free flag (the
+        // pre-fix shape), an OpFreeText was emitted after the value-op,
+        // making `has_trailing_void = true` via the trailing-void check.
+        // With skip_free suppressing the OpFreeText (interpret-side fix
+        // for the dangling-Str), there's no trailing void op anymore —
+        // but the materialisation is STILL required on native (otherwise
+        // the block returns a borrow that dies at `}`).  Detect the
+        // `__ncc_*` skip_free pattern explicitly and gate has_trailing_void
+        // on for those blocks.
+        // Only force when there's a value-yielding return_idx — otherwise
+        // the close emits `_ret.to_string()` referencing an undeclared
+        // `_ret` (the per-op emit at line ~1189 only fires when
+        // `return_idx == Some(vnr)`; an all-void block has return_idx=None
+        // and skips the declaration).
+        let has_ncc_skip_free_temp = matches!(bl.result, Type::Text(_))
+            && return_idx.is_some()
+            && operators.iter().any(|op| {
+                matches!(op.unspan(), Value::Set(v, _) if
+                    self.data.def(self.def_nr).variables.name(*v).starts_with("__ncc_")
+                    && self.data.def(self.def_nr).variables.is_skip_free(*v))
+            });
+        let has_trailing_void =
+            return_idx.is_some_and(|i| i < last_op_idx) || has_ncc_skip_free_temp;
         // If the captured "return value" is a Return(…) expression, it diverges —
         // we emit it directly and skip the `_ret` tail.
         let return_value_is_return = has_trailing_void
@@ -1225,9 +1342,25 @@ impl Output<'_> {
                         && {
                             let def = self.data.def(self.def_nr);
                             matches!(def.returned, Type::Text(_))
-                            && !def.attributes.iter().any(|a| {
-                                matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
-                            })
+                            && (
+                                !def.attributes.iter().any(|a| {
+                                    matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+                                })
+                                // @PLAN52 cluster VI (2026-05-30): closures (and
+                                // other functions with a `__work_ret: &mut String`
+                                // attribute) declare the buffer but the closure
+                                // body's `??` value-block doesn't write into it —
+                                // the body emits `return Str::new(<value-block>)`
+                                // where the inner block tail materialises a String
+                                // via `_ret.to_string()` (cluster I iteration 2).
+                                // Plain `Str::new(String)` fails E0308 ("expected
+                                // &str, found String").  Route through scratch so
+                                // the materialised String lives in `stores.scratch`
+                                // (program-lifetime) and `Str::new` reads from
+                                // there.  Detect by the `__ncc_*` skip_free temp
+                                // signature.
+                                || self.block_contains_ncc_skip_free(bl)
+                            )
                         };
                     if is_tail_capture_call {
                         write!(w, "let __native_tail_ret: DbRef = ")?;

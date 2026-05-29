@@ -1,0 +1,29 @@
+// Probe 38 — Cluster I consumer border: enum variant constructor field
+//    `Tag.Named { name: vec[i] ?? "x" }` — the ncc-block result feeds
+//    into a struct-variant's field.
+//
+// Struct-enum variants share the underlying record-allocation machinery
+// with structs (probe 32) but go through a different parser path that
+// may type the variant field with the enum's discriminator tag.
+//
+// Pairing: diff against 32 (struct literal field).
+// Status: cluster I consumer-border probe.
+
+enum Tagged {
+  Named { name: text },
+  Anon { dummy: integer not null }
+}
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  t = Named { name: h.items[0] ?? "fallback" };
+  r = match t {
+    Named { name } => name,
+    Anon { dummy } => "anon-{dummy}"
+  };
+  assert(r == "present", "probe 38: got '{r}', want 'present'");
+  println("probe 38 PASSED");
+}

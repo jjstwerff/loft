@@ -1,0 +1,27 @@
+// Probe 19 — Cluster III stress: two `??`s in one format string
+//
+// Tests whether multiple `??`s in a single format-string compound the
+// corruption.  Each `_ncc_N` runs its own scope-exit free.  If their
+// frees interleave with consecutive OpFormatText ops, the second `??`'s
+// result may overwrite the first's freed slot AND get overwritten itself
+// before the buffer reads it.
+//
+// Three possible outcomes:
+//   (a) Both interpolations corrupt — same shape as 09.
+//   (b) Only the first corrupts (the second's _ncc gets a fresh slot).
+//   (c) Both corrupt with worse compounding (e.g., one borrows into the
+//       other's freed slot).
+//
+// Pairing: diff against 09 (single `??` in format).
+// Status: cluster III stress probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["alpha"];
+  h.items += ["beta"];
+  msg = "{h.items[0] ?? \"x\"} and {h.items[1] ?? \"y\"}";
+  assert(msg == "alpha and beta", "probe 19: got '{msg}', want 'alpha and beta'");
+  println("probe 19 PASSED");
+}

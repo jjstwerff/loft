@@ -1,0 +1,24 @@
+// Probe 55 — Cluster I iteration variant: `for x in vec_of_text { y = x ?? "x"; }`
+//
+// Different from probe 11 — here the LHS of `??` IS the loop variable
+// (which is Var, not non-trivial), so the parser's simple-Var fast-path
+// at operators.rs:1227 should fire, skipping the `_ncc_N` block.
+//
+// If 55 PASSES, the fast-path is correctly entered.  If 55 FAILS, the
+// loop-variable case has a separate code path that doesn't get the
+// fast-path treatment.
+//
+// Pairing: 11 (LHS is vec[i] inside loop body — different from this).
+// Status: cluster I fast-path verification probe.
+
+fn main() {
+  items: vector<text> = ["a0", "a1", "a2"];
+  i = 0;
+  for x in items {
+    y = x ?? "fallback";
+    expected = "a{i}";
+    assert(y == expected, "probe 55 iter {i}: got '{y}', want '{expected}'");
+    i += 1;
+  }
+  println("probe 55 PASSED");
+}

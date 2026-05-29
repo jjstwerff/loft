@@ -1,0 +1,27 @@
+// Probe 77 — Cluster I × match-arm: match arm returns `??` result
+//
+// `match k { 1 => vec[i] ?? "x", _ => "default" }` — a match arm where
+// the body is itself a `??` expression on a non-trivial LHS.  The match
+// arm becomes the inner expression of an outer if/match value, which
+// already goes through `unify_if_branches_work_refs`.  Question: does
+// the inner `??` block survive the unification, or does the outer
+// machinery materialise it safely?
+//
+// Pairing: 08 (match-as-value with vec[i] as arm), 02 (bare ?? canonical).
+// Status: cluster I × cluster II interaction probe (cluster II was
+// falsified, but probe 08 only tested `match { _ => vec[i] }` — NOT
+// `match { _ => vec[i] ?? "x" }`).
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  k = 1;
+  a = match k {
+    1 => h.items[0] ?? "miss",
+    _ => "default"
+  };
+  assert(a == "present", "probe 77: got '{a}', want 'present'");
+  println("probe 77 PASSED");
+}

@@ -1,0 +1,27 @@
+// Probe 40 — Cluster IV completion: Tuple value-block via `??`
+//
+// loft supports tuples as multi-value returns + destructuring (TUPLES.md).
+// Does the tuple-as-value-block pattern have its own cluster IV variant?
+//
+// The shape:
+//     a = vec_of_tuples[i] ?? other_tuple;
+//
+// If 40 FAILS like 21 (Vec), 22 (Hash), 23 (Enum), tuples join the IV
+// family — needing the same native-codegen null-check fix.
+// If 40 PASSES, tuples have a different code path (perhaps they're
+// always value-typed if all elements are primitives) and are escape.
+//
+// Pairing: diff against 21/22/23 (other heap-type variants).
+// Status: cluster IV completion probe.
+
+struct W { tuples: vector<(text, integer)> }
+
+fn main() {
+  w = W { tuples: [] };
+  w.tuples += [("present", 42)];
+  fb = ("fallback", 0);
+  a = w.tuples[0] ?? fb;
+  assert(a.0 == "present", "probe 40a: got '{a.0}', want 'present'");
+  assert(a.1 == 42, "probe 40b: got {a.1}, want 42");
+  println("probe 40 PASSED");
+}

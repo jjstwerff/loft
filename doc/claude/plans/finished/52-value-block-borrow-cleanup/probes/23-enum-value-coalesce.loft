@@ -1,0 +1,37 @@
+// Probe 23 — Cluster IV completion: `??` returning a struct-Enum value
+//
+// Struct-enums (enum with field-bearing variants) are the third heap-
+// type family.  @PLAN51 covered them but the value-block-`??` path may
+// not have been exercised directly.
+//
+// The shape:
+//     a = vec_of_enums[i] ?? other_enum;
+//
+// Where the enum has a variant carrying text — exercising the full
+// struct-enum cleanup path on the dangling-store side.
+//
+// If 23 PASSES, the @PLAN51 closure extends to struct-Enum.
+// If 23 FAILS, struct-enum value-blocks need targeted handling.
+//
+// Pairing: diff against 10 (Reference) and 21 (Vector).
+// Status: cluster IV completion probe.
+
+enum Tagged {
+  Named { name: text },
+  Anon { dummy: integer not null }
+}
+
+struct Box { items: vector<Tagged> }
+
+fn main() {
+  b = Box { items: [] };
+  b.items += Named { name: "present" };
+  fallback = Anon { dummy: 0 };
+  a = b.items[0] ?? fallback;
+  r = match a {
+    Named { name } => name,
+    Anon { dummy } => "anon-{dummy}"
+  };
+  assert(r == "present", "probe 23: got '{r}', want 'present'");
+  println("probe 23 PASSED");
+}

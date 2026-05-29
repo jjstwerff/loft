@@ -1,0 +1,34 @@
+// Probe 97 — Cluster IV-Vec NESTED-FIELD-PUSH: 3-deep nesting
+//
+// Probes whether the misroute fires at every nesting depth, not just the
+// 2-deep `vector<vector<X>>` case.  3-deep: `vector<vector<vector<int>>>`
+// field, push a `vector<vector<int>>` value.
+//
+// If 97 also FAILs with the same flatten/garbage pattern: the parser branch
+// at `parser/expressions.rs:1370` mishandles ALL `vector<V>` += `V` where
+// `V` is itself a Vector (`elm_tp.is_equal(&s_type)` && both are Vector).
+//
+// If 97 PASSes: the bug is shape-specific to 2-deep only.
+//
+// Pairing: 91 (2-deep struct field).
+// Status: cluster IV-Vec-nested-field-push depth probe.
+
+struct Outer { box: vector<vector<vector<integer>>> }
+
+fn main() {
+  o = Outer { box: [] };
+  mid: vector<vector<integer>> = [];
+  inner: vector<integer> = [7, 8];
+  mid += [inner];          // local var single-element push (strict-rule explicit form)
+  // Sanity check the mid-vec we will push.
+  assert(len(mid) == 1, "probe 97 setup: len(mid) = {len(mid)}, want 1");
+  o.box += [mid];          // field single-element push (strict-rule explicit form)
+  assert(len(o.box) == 1, "probe 97: len(o.box) = {len(o.box)}, want 1");
+  m = o.box[0];
+  assert(len(m) == 1, "probe 97: len(m) = {len(m)}, want 1");
+  v = m[0];
+  assert(len(v) == 2, "probe 97: len(v) = {len(v)}, want 2");
+  assert(v[0] == 7, "probe 97: v[0] = {v[0]}, want 7");
+  assert(v[1] == 8, "probe 97: v[1] = {v[1]}, want 8");
+  println("probe 97 PASSED");
+}

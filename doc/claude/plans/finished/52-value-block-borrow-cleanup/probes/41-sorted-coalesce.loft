@@ -1,0 +1,25 @@
+// Probe 41 — Cluster IV completion: Sorted collection value-block
+//
+// loft has 4 keyed-collection families: hash (probe 22), index, sorted,
+// spacial.  Probes 22+23+40 hit hash/enum/tuple — does `sorted` join the
+// IV family?
+//
+// Pairing: 21/22/23/40 — completes the IV-Type matrix.
+// Status: cluster IV completion probe.
+
+struct Entry { name: text, value: integer not null }
+struct W { items: sorted<Entry[name]> }
+
+fn fb() -> sorted<Entry[name]> {
+  s: sorted<Entry[name]> = [];
+  return s;
+}
+
+fn main() {
+  w = W { items: [] };
+  w.items["k"] = Entry { name: "k", value: 42 };
+  a = w.items ?? fb();
+  e = a["k"];
+  assert(e.value == 42, "probe 41: e.value = {e.value}, want 42");
+  println("probe 41 PASSED");
+}

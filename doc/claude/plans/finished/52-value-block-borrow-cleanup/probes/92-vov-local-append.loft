@@ -1,0 +1,30 @@
+// Probe 92 — Cluster IV-Vec NESTED-FIELD-PUSH: control — LOCAL VAR works
+//
+// Demonstrates that the bug is FIELD-specific.  Same shape as probe 91 but
+// the outer vector is a LOCAL variable, not a struct field.  Should PASS.
+//
+// Why this passes: the parser at `src/parser/expressions.rs::parse_assign_op`
+// line 957 (P188 branch) checks `var_nr != u16::MAX` (LOCAL var) and
+// `elm_tp.is_equal(&s_type)` — the single-element push intent.  It emits
+// OpNewRecord/OpCopyRecord/OpFinishRecord which correctly claims a fresh
+// element record and deep-copies inner's contents.
+//
+// For struct fields, `var_nr == u16::MAX`, so the P188 branch is skipped
+// and execution falls through to the line-1370 "vector += vector concat"
+// branch which mis-lowers nested-field pushes (probe 91).
+//
+// Pairing: 91 (struct field variant, FAILs).
+// Status: cluster IV-Vec-nested-field-push control / reference probe.
+
+struct Inner { tag: integer not null }
+
+fn main() {
+  inner: vector<Inner> = [Inner { tag: 42 }];
+  outer: vector<vector<Inner>> = [];
+  outer += [inner];
+  assert(len(outer) == 1, "probe 92: len(outer) = {len(outer)}, want 1");
+  a = outer[0];
+  assert(len(a) == 1, "probe 92: len(a) = {len(a)}, want 1");
+  assert(a[0].tag == 42, "probe 92: a[0].tag = {a[0].tag}, want 42");
+  println("probe 92 PASSED");
+}

@@ -1,0 +1,27 @@
+// Probe 37 — Cluster I shape border: tuple destructure `(a, b) = (..., ...)`
+//
+// Tuple destructure has its own lowering (synthetic __tuple struct +
+// per-element Set ops).  When a tuple element is itself a `??` ncc-block,
+// does the destructure consumer trigger cluster I?
+//
+// The shape:
+//     (a, b) = (vec1[0] ?? "x", vec2[0] ?? "y");
+//
+// Each element evaluates a value-block; the synthetic tuple holds the
+// results; destructure pulls them out into the LHS vars.
+//
+// Pairing: diff against 02 (single text Set).
+// Status: cluster I shape-border probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h1 = H { items: [] };
+  h2 = H { items: [] };
+  h1.items += ["alpha"];
+  h2.items += ["beta"];
+  (a, b) = (h1.items[0] ?? "fa", h2.items[0] ?? "fb");
+  assert(a == "alpha", "probe 37a: got '{a}', want 'alpha'");
+  assert(b == "beta", "probe 37b: got '{b}', want 'beta'");
+  println("probe 37 PASSED");
+}

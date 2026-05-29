@@ -1,0 +1,27 @@
+// Probe 76 — Cluster I × bounded-generic interaction
+//
+// Bounded-generic functions (`fn f<T: Trait>(x: T) -> ...`) compile to
+// per-type stubs (`t_<len><Type>_<method>`).  When a generic fn calls
+// `??` on a generic-typed value, the lowering happens AFTER stub
+// specialisation — potentially exposing the cluster I shape in a stub.
+//
+// loft's bounded-generics interact with text via the `Text` interface
+// (or similar).  This probe tests whether a generic over text with `??`
+// behaves the same as a non-generic fn.
+//
+// Pairing: 14 (method-call LHS), 05 (call-result LHS).
+// Status: cluster I bounded-generic interaction probe.
+
+struct H { items: vector<text> }
+
+fn read_or<T>(items: vector<T>, idx: integer, fallback: T) -> T {
+  return items[idx] ?? fallback;
+}
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  a = read_or(h.items, 0, "fallback");
+  assert(a == "present", "probe 76: got '{a}', want 'present'");
+  println("probe 76 PASSED");
+}

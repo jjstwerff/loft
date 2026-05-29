@@ -1,0 +1,37 @@
+// Probe 87 — Cluster VI mechanism trace: minimal closure-body coalesce
+//             for IR capture via LOFT_LOG
+//
+// Probes 45/65/67/86 confirm closure-body `??` fails on both backends.
+// The question that gates the fix design: does the closure-synth fn
+// path bypass the simple-Var fast-path at `src/parser/operators.rs:1227`?
+//
+// This probe is the smallest invocation that exercises the bug.  Run
+// with `LOFT_LOG=fn:main,fn:<synth_name>` to capture both the outer
+// caller's IR and the closure body's IR.  Diff the two:
+//
+// - If `<synth_name>` body shows a `_ncc_N` block (i.e., the non-Var
+//   path), then closure synthesis loses the fast-path; fix touches
+//   `src/parser/control.rs` lambda-lowering.
+// - If `<synth_name>` body shows a bare `if (v != null) v else "x"`
+//   (the simple-Var path), then the bug is downstream — in scopes or
+//   codegen for closure-synth fns; fix touches `src/scopes.rs` /
+//   `src/generation/`.
+//
+// To find the synth name, run with `LOFT_LOG=fn:main` first; the IR
+// dump shows the closure as `n_<descriptive>_<counter>` or similar.
+//
+// Diagnostic invocation:
+//   LOFT_LOG=fn:main LOFT_LOG_DIR=/tmp ./target/release/loft \
+//     --interpret 87-closure-ir-trace.loft
+//
+// Pairing: 65 (closure capturing TEXT Var), 02 (bare ?? canonical).
+// Status: cluster VI mechanism-trace probe.
+
+fn main() {
+  s = "present";
+  pick = fn() -> text { s ?? "fallback" };
+  a = pick();
+  // Fail point: a is dangling-NUL on interpret, native E0308.
+  assert(a == "present", "probe 87: got '{a}', want 'present'");
+  println("probe 87 PASSED");
+}

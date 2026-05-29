@@ -1,0 +1,26 @@
+// Probe 89 — Cluster IV-Spacial parser-hang isolation: bare type
+//             declaration, no use, no struct-wrapper
+//
+// Strip the test down to the minimum: declare a `spacial<Point[name]>`
+// variable in main(), don't insert / read / use it.  If THIS hangs,
+// the parser loop fires on TYPE REGISTRATION alone — neither field
+// access nor `??` nor wrapper-struct nesting required.
+//
+// If 89 PARSES: the loop needs a wrapper-struct or some access
+// operation to trigger.
+// If 89 PARSER-HANGS: it's pure type-registration recursion.
+//
+// Diagnostic invocation:
+//   LOFT_TIMEOUT=8 LOFT_TIMEOUT_CLEAN_EXIT=1 ./target/release/loft \
+//     --interpret 89-spacial-bare-decl.loft
+//
+// Pairing: 51, 62 (both used wrapper-struct fields).
+// Status: cluster IV-Spacial isolation probe.
+
+struct Point { name: text, x: float not null, y: float not null }
+
+fn main() {
+  s: spacial<Point[name]> = [];
+  // No insert; no read.  If we get here, the type registered fine.
+  println("probe 89 PASSED (spacial declared without hang)");
+}

@@ -1,0 +1,22 @@
+// Probe 83 — Cluster I sequence: back-to-back `??` Sets
+//
+// `a = vec[i] ?? "x"; b = vec[j] ?? "y";` — two sequential `??` Sets.
+// Each Set allocates its own `_ncc_N`.  Does the second Set's `_ncc_N+1`
+// land in the slot the first one freed (slot recycling)?  And does the
+// scope-exit free ordering interact in any surprising way?
+//
+// Pairing: 02 (single ??), 37 (tuple destructure of two ??s).
+// Status: cluster I sequencing probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["alpha"];
+  h.items += ["beta"];
+  a = h.items[0] ?? "fa";
+  b = h.items[1] ?? "fb";
+  assert(a == "alpha", "probe 83a: got '{a}', want 'alpha'");
+  assert(b == "beta", "probe 83b: got '{b}', want 'beta'");
+  println("probe 83 PASSED");
+}

@@ -10,12 +10,12 @@ struct P323H { items: vector<text> }
 
 fn test_p323_index_coalesce() {
   h = P323H { items: [] };
-  h.items += "present";
+  h.items += ["present"];
   // LHS is a temporary (the index read) — the shape that broke native compile.
   a = h.items[0] ?? "fallback";
   assert(a == "present", "p323: a={a} (want present)");
   // null element → coalesce to the fallback.
-  h.items += null;
+  h.items += [null];
   b = h.items[1] ?? "fallback";
   assert(b == "fallback", "p323: b={b} (want fallback)");
 }

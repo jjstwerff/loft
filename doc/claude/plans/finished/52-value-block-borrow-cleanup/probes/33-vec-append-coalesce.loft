@@ -1,0 +1,19 @@
+// Probe 33 — Cluster I consumer border: vector append `vec += [vec_src[i] ?? "x"]`
+//
+// Vector append goes through OpAppendVector + OpSetText for the element
+// write.  Another consumer path.
+//
+// Pairing: diff against 31 (hash insert), 32 (struct literal).
+// Status: cluster I consumer-border probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  src = H { items: [] };
+  src.items += ["present"];
+  dst: vector<text> = [];
+  dst += [src.items[0] ?? "fallback"];
+  assert(len(dst) == 1, "probe 33: len(dst) = {len(dst)}, want 1");
+  assert(dst[0] == "present", "probe 33: dst[0] = '{dst[0]}', want 'present'");
+  println("probe 33 PASSED");
+}

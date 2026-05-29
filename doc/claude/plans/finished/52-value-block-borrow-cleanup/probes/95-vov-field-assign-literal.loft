@@ -1,0 +1,33 @@
+// Probe 95 — Cluster IV-Vec NESTED-FIELD-PUSH: FIELD-= literal-vec workaround
+//
+// Suggested workaround: assign a vector-of-vec literal directly to the field,
+// instead of using `+=`.
+//
+// Observed (2026-05-29):
+//   `o.lists = [inner]`  →  --interpret PASSes;  --native PANICs.
+//   The panic is in `database/allocation.rs:1190:32` inside
+//   `copy_claims` Parts::Enum dispatch — the byte-copy of the literal's
+//   vector header reaches a record position whose type metadata is read as
+//   an Enum tag, but the offset is wrong (index 41 into a 7-variant table).
+//
+// So the workaround works on --interpret but is NOT a portable fix.
+//
+// This probe captures both backend behaviors — fix should close BOTH cases.
+//
+// Pairing: 91 (`+=` form, fails BOTH), 96 (struct-ctor literal — also panics
+// on native).
+// Status: cluster IV-Vec-nested-field-push workaround probe.
+
+struct Inner { tag: integer not null }
+struct Outer { lists: vector<vector<Inner>> }
+
+fn main() {
+  o = Outer { lists: [] };
+  inner: vector<Inner> = [Inner { tag: 42 }];
+  o.lists = [inner];
+  assert(len(o.lists) == 1, "probe 95: len(o.lists) = {len(o.lists)}, want 1");
+  a = o.lists[0];
+  assert(len(a) == 1, "probe 95: len(a) = {len(a)}, want 1");
+  assert(a[0].tag == 42, "probe 95: a[0].tag = {a[0].tag}, want 42");
+  println("probe 95 PASSED");
+}

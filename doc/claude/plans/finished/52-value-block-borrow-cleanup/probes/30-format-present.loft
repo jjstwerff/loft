@@ -1,0 +1,27 @@
+// Probe 30 — Cluster III with PRESENT value (probe 09 used a present
+//            value too; this one explicitly verifies the bytes)
+//
+// `"got: {h.items[0] ?? \"x\"}"` where h.items[0] is "present".  Probe
+// 09 produced `'got: ���-�'` — non-zero garbage.  This probe is the
+// reference-point for the cluster III mechanism: format-buffer reuse
+// after `_ncc_N` free.
+//
+// If 30 produces the same garbage shape, cluster III is reproducible.
+// If 30 produces NUL instead, the probe-09 garbage may have been a
+// timing/aliasing fluke and the cluster reduces to cluster I.
+//
+// Pairing: re-do of 09 with explicit byte inspection.
+// Status: cluster III reproducibility probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  msg = "got: {h.items[0] ?? \"x\"}";
+  print("[");
+  print(msg);
+  print("]\n");
+  assert(msg == "got: present", "probe 30: got '{msg}', want 'got: present'");
+  println("probe 30 PASSED");
+}

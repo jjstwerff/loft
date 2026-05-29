@@ -1,0 +1,26 @@
+// Probe 44 — Cluster I sub-mode characterisation: prior-value Set
+//
+// `s = "old"; s = vec[i] ?? "new";` — the LHS already has prior content.
+// Does the second Set:
+//   (a) Free the old `s` first, then write the dangling Str's bytes
+//       (so the OLD bytes get re-used, producing garbage from the old
+//       value)?
+//   (b) Allocate a fresh slot for the new String, write the dangling
+//       bytes (so libmalloc free-fill produces NUL)?
+//
+// Probe 02's NUL fill comes from a fresh assignment.  This probe tests
+// whether reassignment changes the failure shape.
+//
+// Pairing: diff against 02 (fresh Set).
+// Status: cluster I sub-mode characterisation probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += ["present"];
+  s = "old";
+  s = h.items[0] ?? "fallback";
+  assert(s == "present", "probe 44: got '{s}', want 'present'");
+  println("probe 44 PASSED");
+}

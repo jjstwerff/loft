@@ -1,0 +1,23 @@
+// Probe 14 — Cluster I LHS border: method-call result `s.method() ?? "x"`
+//
+// `s.to_uppercase()` resolves to the bounded-generic stub
+// `t_<len>text_to_uppercase` which returns text from its own work
+// buffer.  Stub returns go through the @P205 scratch-routing logic in
+// src/generation/emit.rs:1212-1262 (the `needs_p205_scratch` path).
+// If that scratch-routing applies on the INTERPRETER path too, the
+// consumer reads from `stores.scratch` (program-lifetime) rather than a
+// block-local, and 14 PASSES.
+//
+// If 14 FAILS, the @P205 work-buffer protection is native-only and
+// cluster I extends to method-call returns.
+//
+// Pairing: diff against 05 (raw call) — same shape via the method-call
+// dispatch path.
+// Status: cluster I LHS-border probe; tests dispatch-mechanism independence.
+
+fn main() {
+  s = "present";
+  a = s.to_uppercase() ?? "fallback";
+  assert(a == "PRESENT", "probe 14: got '{a}', want 'PRESENT'");
+  println("probe 14 PASSED");
+}
