@@ -1,0 +1,153 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression tests for lib/imaging — pin the API surface so the
+// library can extract independently of the loft monorepo
+// (lib_plans/12 Phase 6t Tier 5).  The companion doc-example
+// (14-image.loft) demonstrates "load a PNG and read pixels"; this
+// file covers the rest: Pixel.value() packing, save_png + load_png
+// round-trip across small / non-square / extreme / solid-colour
+// shapes, the (x, y) → y*w+x addressing contract, and the save_png
+// failure modes (zero-pixel image, bad output path).
+//
+// Round-trip tests write to `tests/_tmp_*.png`; those names are
+// gitignored.  Each test re-creates its tmp file, so leftover
+// artefacts from a previous run are harmless.
+
+use imaging;
+
+// Construct a deterministic w×h image where pixel (x,y) carries a
+// known colour pattern.  Shared by the round-trip tests.
+fn make_test_image(name: text, w: integer, h: integer) -> Image {
+  img = Image { name: name, width: w, height: h, data: [] };
+  for mty in 0..h {
+    for mtx in 0..w {
+      img.data += [Pixel{r: mtx % 256, g: mty % 256, b: (mtx + mty) % 256}];
+    }
+  }
+  img
+}
+
+// Pixel.value() packs RGB into a 24-bit integer (0xRRGGBB).
+fn test_pixel_value_packed() {
+  px = Pixel{r: 0x12, g: 0x34, b: 0x56};
+  assert(px.value() == 0x123456, "packed 0x123456, got {px.value()}");
+  black = Pixel{r: 0, g: 0, b: 0};
+  assert(black.value() == 0, "black packs to 0, got {black.value()}");
+  white = Pixel{r: 255, g: 255, b: 255};
+  assert(white.value() == 0xFFFFFF, "white packs to 0xFFFFFF, got {white.value()}");
+  red = Pixel{r: 255, g: 0, b: 0};
+  assert(red.value() == 0xFF0000, "red packs to 0xFF0000, got {red.value()}");
+  green = Pixel{r: 0, g: 255, b: 0};
+  assert(green.value() == 0x00FF00, "green packs to 0x00FF00, got {green.value()}");
+  blue = Pixel{r: 0, g: 0, b: 255};
+  assert(blue.value() == 0x0000FF, "blue packs to 0x0000FF, got {blue.value()}");
+}
+
+// Loading a missing file returns null (Format.NotExists → png() returns null).
+fn test_load_missing_returns_null() {
+  bad = file("tests/no_such_file_a8b3c7d.png").png();
+  assert(bad == null, "missing file → null");
+}
+
+// save_png + load_png is byte-exact for small RGB images.
+fn test_save_load_roundtrip_small() {
+  orig = make_test_image("rt4.png", 4, 4);
+  ok = orig.save_png("tests/_tmp_rt4.png");
+  assert(ok, "save_png returned true");
+  loaded = file("tests/_tmp_rt4.png").png();
+  assert(loaded.width == 4, "loaded width 4, got {loaded.width}");
+  assert(loaded.height == 4, "loaded height 4, got {loaded.height}");
+  assert(loaded.data.len() == 16, "loaded pixel count 16, got {loaded.data.len()}");
+  for rti in 0..16 {
+    op = orig.data[rti] ?? Pixel{r: 0, g: 0, b: 0};
+    lp = loaded.data[rti] ?? Pixel{r: 0, g: 0, b: 0};
+    assert(op.r == lp.r && op.g == lp.g && op.b == lp.b,
+           "pixel {rti}: orig=({op.r},{op.g},{op.b}) loaded=({lp.r},{lp.g},{lp.b})");
+  }
+}
+
+// Width ≠ height is preserved across save/load (no row/column swap).
+fn test_save_load_non_square() {
+  orig = make_test_image("rt83.png", 8, 3);
+  ok = orig.save_png("tests/_tmp_rt83.png");
+  assert(ok, "save 8x3 returned true");
+  loaded = file("tests/_tmp_rt83.png").png();
+  assert(loaded.width == 8, "width 8, got {loaded.width}");
+  assert(loaded.height == 3, "height 3, got {loaded.height}");
+  assert(loaded.data.len() == 24, "24 pixels, got {loaded.data.len()}");
+}
+
+// Extreme pixel values (0 and 255 in each channel) round-trip exactly.
+fn test_extreme_pixel_values() {
+  img = Image { name: "extremes.png", width: 2, height: 2, data: [] };
+  img.data += [Pixel{r: 0,   g: 0,   b: 0}];
+  img.data += [Pixel{r: 255, g: 255, b: 255}];
+  img.data += [Pixel{r: 255, g: 0,   b: 0}];
+  img.data += [Pixel{r: 0,   g: 255, b: 0}];
+  ok = img.save_png("tests/_tmp_extremes.png");
+  assert(ok, "save extremes returned true");
+  loaded = file("tests/_tmp_extremes.png").png();
+  assert(loaded.data.len() == 4, "4 pixels, got {loaded.data.len()}");
+  p0 = loaded.data[0] ?? Pixel{r: 1, g: 1, b: 1};
+  p1 = loaded.data[1] ?? Pixel{r: 0, g: 0, b: 0};
+  p2 = loaded.data[2] ?? Pixel{r: 0, g: 1, b: 1};
+  p3 = loaded.data[3] ?? Pixel{r: 1, g: 0, b: 1};
+  assert(p0.r == 0   && p0.g == 0   && p0.b == 0,   "black preserved");
+  assert(p1.r == 255 && p1.g == 255 && p1.b == 255, "white preserved");
+  assert(p2.r == 255 && p2.g == 0   && p2.b == 0,   "pure red preserved");
+  assert(p3.r == 0   && p3.g == 255 && p3.b == 0,   "pure green preserved");
+}
+
+// A solid-colour image round-trips every pixel to the same value.
+fn test_solid_color_image() {
+  img = Image { name: "solid.png", width: 5, height: 5, data: [] };
+  for _ in 0..25 {
+    img.data += [Pixel{r: 100, g: 150, b: 200}];
+  }
+  ok = img.save_png("tests/_tmp_solid.png");
+  assert(ok, "save solid returned true");
+  loaded = file("tests/_tmp_solid.png").png();
+  assert(loaded.data.len() == 25, "25 pixels, got {loaded.data.len()}");
+  for sli in 0..25 {
+    p = loaded.data[sli] ?? Pixel{r: 0, g: 0, b: 0};
+    assert(p.r == 100 && p.g == 150 && p.b == 200,
+           "pixel {sli} is (100,150,200), got ({p.r},{p.g},{p.b})");
+  }
+}
+
+// Pixel addressing is row-major: index = y * width + x.
+fn test_pixel_index_addressing() {
+  // 3x2 image; (x,y) = (2,1) is at index 1*3+2 = 5.
+  img = Image { name: "addr.png", width: 3, height: 2, data: [] };
+  for pay in 0..2 {
+    for pax in 0..3 {
+      img.data += [Pixel{r: pax * 10, g: pay * 10, b: 0}];
+    }
+  }
+  ok = img.save_png("tests/_tmp_addr.png");
+  assert(ok, "save addr returned true");
+  loaded = file("tests/_tmp_addr.png").png();
+  // (2, 1) is at y * width + x = 1 * 3 + 2 = 5
+  p = loaded.data[5] ?? Pixel{r: 0, g: 0, b: 0};
+  assert(p.r == 20 && p.g == 10,
+         "(2,1) pixel = (20,10,0); got ({p.r},{p.g},{p.b})");
+  // (0, 0) is at index 0
+  origin = loaded.data[0] ?? Pixel{r: 99, g: 99, b: 99};
+  assert(origin.r == 0 && origin.g == 0, "(0,0) pixel = (0,0,0)");
+}
+
+// save_png on a 0x0 image fails fast — n_save_png guards w/h/data_rec.
+fn test_save_empty_image_returns_false() {
+  empty = Image { name: "empty.png", width: 0, height: 0, data: [] };
+  ok = empty.save_png("tests/_tmp_empty.png");
+  assert(!ok, "save of 0x0 image returns false");
+}
+
+// save_png to a path inside a non-existent directory returns false
+// (the PNG encoder reports the I/O error back to the caller).
+fn test_save_bad_path_returns_false() {
+  img = make_test_image("bad.png", 2, 2);
+  ok = img.save_png("tests/no_such_dir_qx9z/out.png");
+  assert(!ok, "save to nonexistent dir returns false");
+}

@@ -663,7 +663,7 @@ repos with real tests instead of smoke probes.
 
 | Library | What `lib/<name>/tests/` carries today | Coverage gap | Blocks chunk |
 |---|---|---|---|
-| `imaging` | `tests/14-image.loft` — a doc-example (`@TITLE` block consumed by gendoc) demonstrating "load PNG, read pixels" via `fn main` + asserts | No `save_png` round-trip, no alpha-channel, no width≠height, no malformed-file negative tests, no decode-error surface | Phase 5 (`loft-libs-graphics`) |
+| `imaging` | `tests/14-image.loft` doc-example + `tests/15-regression.loft` (9 tests, **DONE 2026-05-29**): `Pixel.value()` packing, save/load round-trip (4×4 + 8×3 non-square + 5×5 solid + 2×2 extremes), `(x,y) → y*w+x` addressing, `save_png` failure modes (0×0 image, nonexistent dir).  10 tests total green on both gates with `LOFT_DENY_WARNINGS=1`. | — | ~~Phase 5 (`loft-libs-graphics`)~~ unblocked |
 | `world` | `tests/world.loft` smoke — get/set round-trip, chunk count, negative coords (1 `fn main`) | No save/load round-trip; no MapFile schema test (since `world::load_mapfile` doesn't exist yet — pair with the Phase 7a entry-point landing); no sparse-write boundary tests; no chunk-eviction semantics | Phase 6w (`loft-libs-world`) |
 | `server` | `tests/server.loft` — one `srv = listen(); srv.close()` smoke | Real surface (HTTP / WebSocket / TLS / session) only exercised by `multiplayer_v{2,3,5}.rs` (Tier 3).  Once Tier 3 lands in `loft-libs-net/tests-integration/`, server is covered transitively; `lib/server/tests/` itself remains a smoke (acceptable) | Phase 6 re-clean (6r) — **waived if Tier 3 lands first** |
 | `markdown` | `tests/01-render.loft` — one `fn main` sequential script with a `must_contain` helper | A CommonMark parser surface needs ≥30–50 focused per-feature tests (emphasis, lists, code blocks, escapes, links, blockquotes, setext/atx headers, HTML inline) | Markdown extraction (post-6w) |
@@ -673,7 +673,9 @@ repos with real tests instead of smoke probes.
 `server` is explicitly waived because Tier 3 covers it transitively.
 
 *Order of operations.*  `imaging` first (blocks Phase 5 — the
-soonest extraction that needs it).  `world` next (pairs with the
+soonest extraction that needs it; **DONE 2026-05-29** —
+`lib/imaging/tests/15-regression.loft`, 9 tests + the doc-example
+= 10 total green on both gates).  `world` next (pairs with the
 MAPFILE entry-point landing in Phase 7a; co-blocks 6w).
 `markdown` last (independent; no extraction blocker until
 markdown ships externally).
