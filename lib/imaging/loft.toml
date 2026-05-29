@@ -30,7 +30,7 @@ crate = "loft-imaging"
 # wasm_imaging.rs` once the switch is verified.
 [wasm.bridge]
 crate = "loft-imaging-wasm"
-routes = [
-    "n_load_png:imaging_load_png",
-    "n_save_png:imaging_save_png",
-]
+
+[wasm.bridge.routes]
+n_load_png = "imaging_load_png"
+n_save_png = "imaging_save_png"

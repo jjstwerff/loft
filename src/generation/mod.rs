@@ -2313,19 +2313,16 @@ extern crate loft;"
             let returns_loft_ref =
                 matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
             if returns_loft_ref || first_ref_arg.is_some() {
-                // Phase 2: route known #native symbols to their `pub fn`
-                // bridges in `loft::wasm_imaging`.  TODO (lib_plans/12):
-                // replace this hard-coded table with a `[wasm.bridge]`
-                // section in each package's `loft.toml` so the compiler
-                // crate stays library-symbol-agnostic.
-                const WASM_BRIDGE_FNS: &[(&str, &str)] = &[
-                    ("n_load_png", "loft::wasm_imaging::imaging_load_png"),
-                    ("n_save_png", "loft::wasm_imaging::imaging_save_png"),
-                ];
-                let bridge_target = WASM_BRIDGE_FNS
-                    .iter()
-                    .find(|(sym, _)| *sym == def.native)
-                    .map(|(_, target)| *target);
+                // lib_plan-29 W1c (2026-05-29): the routing table is now
+                // built from each library's `[wasm.bridge]` manifest
+                // section (`data.wasm_bridge_routes`).  No library symbols
+                // hard-coded in the compiler crate.
+                let bridge_target = self.data.wasm_bridge_routes.get(&def.native).map(
+                    |(bridge_crate, bridge_fn)| {
+                        let crate_ident = bridge_crate.replace('-', "_");
+                        format!("{crate_ident}::{bridge_fn}")
+                    },
+                );
                 if let Some(target) = bridge_target {
                     // Emit the standard `let stores: &mut Stores = ...`
                     // prelude (mirrors output_native_direct_call's non-

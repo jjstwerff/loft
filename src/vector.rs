@@ -86,9 +86,10 @@ actual change.
 /// Pass `&[]` to allocate without filling — useful when the caller wants
 /// a pre-sized buffer it (or a host bridge) will fill in place.
 ///
-/// `#[allow(dead_code)]` because the only consumer
-/// (`crate::wasm_imaging`) is wasm32-only; native builds compile but
-/// never call it.
+/// `#[allow(dead_code)]` because the consumers (per-library wasm
+/// bridge crates, e.g. `loft-imaging-wasm` at `lib/imaging/wasm/`)
+/// are wasm32-only; native builds compile this helper but never
+/// call it.
 #[allow(dead_code)]
 pub fn alloc_vector_from_bytes(
     store: &mut Store,

@@ -2568,6 +2568,77 @@ fn main() {
                 }
             }
         }
+        // lib_plan-29 W1c (2026-05-29): link each used library's wasm
+        // bridge crate (declared via `[wasm.bridge]` in `loft.toml`).
+        //
+        // Build via rustc directly, not `cargo build`: cargo would
+        // produce a SECOND copy of `loft` (with a different
+        // StableCrateId than the top-level
+        // `target/wasm32-unknown-unknown/release/libloft.rlib` the
+        // standalone-binary `--extern loft=…` references), and rustc
+        // would refuse with "expected DbRef, found DbRef" (two distinct
+        // types from two builds of the same source).  By invoking
+        // rustc with the SAME `--extern loft=…` + deps search path
+        // the standalone build uses, the bridge rlib links against
+        // exactly one copy of loft — eliminating the dup.
+        let loft_wasm_lib_dir = loft_lib_dir_for(Some("wasm32-unknown-unknown"));
+        for (bridge_crate, pkg_dir) in &p.data.wasm_bridge_packages {
+            let wasm_dir = std::path::PathBuf::from(pkg_dir).join("wasm");
+            let bridge_src = wasm_dir.join("src/lib.rs");
+            if !bridge_src.exists() {
+                eprintln!(
+                    "loft: --html: [wasm.bridge] declared `crate = \"{bridge_crate}\"` \
+                     but {} is missing — skipping bridge link",
+                    bridge_src.display()
+                );
+                continue;
+            }
+            let crate_ident = bridge_crate.replace('-', "_");
+            let bridge_rlib = std::env::temp_dir().join(format!("lib{crate_ident}.rlib"));
+            let mut build = std::process::Command::new("rustc");
+            build
+                .arg("--edition=2024")
+                .arg("--target")
+                .arg("wasm32-unknown-unknown")
+                .arg("--crate-type")
+                .arg("rlib")
+                .arg("--crate-name")
+                .arg(&crate_ident)
+                .arg("-O")
+                .arg("-o")
+                .arg(&bridge_rlib)
+                .arg(&bridge_src);
+            if let Some(ref lib_dir) = loft_wasm_lib_dir {
+                build
+                    .arg("--extern")
+                    .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
+                let deps = lib_dir.join("deps");
+                if deps.is_dir() {
+                    build
+                        .arg("-L")
+                        .arg(format!("dependency={}", deps.display()));
+                }
+                if let Some(host_lib_dir) = loft_lib_dir_for(None) {
+                    let host_deps = host_lib_dir.join("deps");
+                    if host_deps.exists() {
+                        build
+                            .arg("-L")
+                            .arg(format!("dependency={}", host_deps.display()));
+                    }
+                }
+            }
+            let status = build.status();
+            if !matches!(status, Ok(s) if s.success()) {
+                eprintln!(
+                    "loft: --html: failed to compile wasm bridge crate {} from {}",
+                    bridge_crate,
+                    bridge_src.display()
+                );
+                std::process::exit(1);
+            }
+            cmd.arg("--extern")
+                .arg(format!("{crate_ident}={}", bridge_rlib.display()));
+        }
         let status = cmd.status();
         if std::env::var("LOFT_KEEP_NATIVE_RS").is_err() {
             let _ = std::fs::remove_file(&rs_path);

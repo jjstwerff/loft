@@ -31,6 +31,15 @@ pub struct Manifest {
     pub native_functions: Vec<(String, String)>,
     /// PKG.5: WASM-specific overrides from `[native.wasm]`.
     pub native_wasm: Vec<(String, String)>,
+    /// lib_plan-29 W1c: bridge crate from `[wasm.bridge] crate = "..."`.
+    /// `None` for libraries with no browser-WASM bridge.  When set, the
+    /// `--html` driver builds `<pkg>/wasm/` (cargo path-rel) to a
+    /// `wasm32-unknown-unknown` rlib and links it via `--extern`.
+    pub wasm_bridge_crate: Option<String>,
+    /// lib_plan-29 W1c: loft `#native` symbol → bridge `pub fn` name from
+    /// `[wasm.bridge.routes]`.  Read by `src/generation/mod.rs::output_
+    /// native_direct_call` (replaces the hard-coded `WASM_BRIDGE_FNS`).
+    pub wasm_bridge_routes: Vec<(String, String)>,
 }
 
 /// Read and parse a `loft.toml` file at `path`.
@@ -69,6 +78,12 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
                 ("native.wasm", _) => {
                     manifest
                         .native_wasm
+                        .push((key.to_string(), value.to_string()));
+                }
+                ("wasm.bridge", "crate") => manifest.wasm_bridge_crate = Some(value.to_string()),
+                ("wasm.bridge.routes", _) => {
+                    manifest
+                        .wasm_bridge_routes
                         .push((key.to_string(), value.to_string()));
                 }
                 _ => {}
@@ -237,6 +252,38 @@ gl_create = "graphics_native::webgl::create_canvas"
                 "gl_create".to_string(),
                 "graphics_native::webgl::create_canvas".to_string()
             )
+        );
+    }
+
+    #[test]
+    fn parses_wasm_bridge_section() {
+        // Use synthetic names rather than real loft-library symbols
+        // (`n_load_png` etc.) so the extraction-hygiene gate doesn't
+        // flag this test as a library-symbol mention in `src/**`.
+        let p = write_temp(
+            "wasm-bridge",
+            r#"[package]
+name = "demo"
+version = "0.1.0"
+
+[wasm.bridge]
+crate = "demo-wasm"
+
+[wasm.bridge.routes]
+n_demo_fn_a = "demo_fn_a"
+n_demo_fn_b = "demo_fn_b"
+"#,
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.wasm_bridge_crate.as_deref(), Some("demo-wasm"));
+        assert_eq!(m.wasm_bridge_routes.len(), 2);
+        assert_eq!(
+            m.wasm_bridge_routes[0],
+            ("n_demo_fn_a".to_string(), "demo_fn_a".to_string())
+        );
+        assert_eq!(
+            m.wasm_bridge_routes[1],
+            ("n_demo_fn_b".to_string(), "demo_fn_b".to_string())
         );
     }
 

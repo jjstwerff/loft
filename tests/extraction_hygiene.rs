@@ -351,23 +351,6 @@ fn forbidden_library_symbols_absent_from_src() {
          If the libraries' manifests changed, re-populate them."
     );
 
-    // @P321(c) Phase 2 (2026-05-29): the `--html` browser-WASM path
-    // needs a routing table that maps store-mutating `#native` symbols
-    // (`n_load_png`, `n_save_png`) to their `loft::wasm_imaging::*` `pub
-    // fn` bridges, because `--html` generates a standalone Rust binary
-    // with no `State` indirection — `replace_native` doesn't apply.  The
-    // table currently lives in `src/generation/mod.rs::output_native_
-    // direct_call` as a hard-coded `WASM_BRIDGE_FNS` const, which the
-    // hygiene gate would otherwise flag.  Exempt those specific
-    // file/symbol pairs.  TODO (lib_plans/12): drive the routing from a
-    // per-library `[wasm.bridge]` section in `lib/<X>/loft.toml` so the
-    // compiler crate stops naming library symbols and this exemption
-    // disappears.
-    const WASM_BRIDGE_ALLOWLIST: &[(&str, &str)] = &[
-        ("src/generation/mod.rs", "n_load_png"),
-        ("src/generation/mod.rs", "n_save_png"),
-    ];
-
     let mut violations: Vec<String> = Vec::new();
     for path in &files {
         let content = match fs::read_to_string(path) {
@@ -398,14 +381,6 @@ fn forbidden_library_symbols_absent_from_src() {
                 continue;
             }
             for (sym, owner) in &forbidden {
-                // Skip allowlisted (file, symbol) pairs — see the
-                // WASM_BRIDGE_ALLOWLIST docstring above.
-                if WASM_BRIDGE_ALLOWLIST
-                    .iter()
-                    .any(|(f, s)| *f == rel && *s == sym.as_str())
-                {
-                    continue;
-                }
                 for (idx, _) in code_part.match_indices(sym.as_str()) {
                     let prev_ok = idx == 0
                         || !code_part.as_bytes()[idx - 1].is_ascii_alphanumeric()

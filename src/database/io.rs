@@ -483,7 +483,7 @@ impl Stores {
         let store = self.store_mut(file);
         store.set_long(file.rec, file.pos + 8, i64::MIN);
         store.set_long(file.rec, file.pos + 16, i64::MIN);
-        if crate::wasm_imaging::asset_exists(&path) {
+        if crate::wasm_assets::asset_exists(&path) {
             store.set_long(file.rec, file.pos, 0);
             store.set_byte(file.rec, file.pos + 32, 0, 1); // TextFile
             true
