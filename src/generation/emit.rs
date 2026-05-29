@@ -182,14 +182,39 @@ impl Output<'_> {
                     let returns_text = matches!(returned, Type::Text(_));
                     let narrow = narrow_int_cast(returned);
                     let wrap_text = returns_text;
+                    // @P386: when an if-branch is a Text-result Block whose
+                    // body contains the `__ncc_*` skip_free pattern (the `??`
+                    // value-block lowering), the block's tail produces an
+                    // OWNED `String` via `_ret.to_string()`.  The outer
+                    // `Str::new(<if>)` wrap then sees `Str::new(String)` which
+                    // fails E0308 ("expected `&str`, found `String`").  Route
+                    // through `stores.scratch` like the non-If path at
+                    // lines ~234-310: convert the if-expression to a String
+                    // via `.to_string()` (accepts `&str` / `String` / `Str`),
+                    // push to scratch (program-lifetime), and emit `Str::new`
+                    // pointing into the scratch entry.
+                    let if_needs_scratch = wrap_text && {
+                        let true_has_ncc = matches!(&**true_v, Value::Block(b)
+                            if self.block_contains_ncc_skip_free(b));
+                        let false_has_ncc = matches!(&**false_v, Value::Block(b)
+                            if self.block_contains_ncc_skip_free(b));
+                        true_has_ncc || false_has_ncc
+                    };
                     write!(w, "return ")?;
-                    if wrap_text {
+                    if if_needs_scratch {
+                        write!(w, "{{ let _tmp = (")?;
+                    } else if wrap_text {
                         write!(w, "Str::new(")?;
                     } else if narrow.is_some() {
                         write!(w, "(")?;
                     }
                     self.output_if_inner(w, test, true_v, false_v, true)?;
-                    if wrap_text {
+                    if if_needs_scratch {
+                        write!(
+                            w,
+                            ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
+                        )?;
+                    } else if wrap_text {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow {
                         write!(w, ") as {cast}")?;
@@ -904,35 +929,60 @@ impl Output<'_> {
             && !b_false
             && !matches!(false_v, Value::Null)
             && matches!(self.infer_type(true_v), Some(Type::Text(_)));
-        if b_true {
+        // @P386: a text-result if-expression where any branch is a Block
+        // containing the `__ncc_*` skip_free pattern produces an OWNED
+        // `String` for that branch (via the `_ret.to_string()` block-tail
+        // materialisation in `output_block`'s trailing-void path).  The
+        // SIBLING branch typically emits a `&str` (a `STRING_NULL` typed
+        // null, an OpConvTextFromNull → `loft::state::STRING_NULL`, or a
+        // bare literal).  The two arms then fail to unify (rustc E0308
+        // "expected `&str`, found `String`").  Force each branch through
+        // `.to_string()` so both produce `String`.  This is idempotent on
+        // an already-`String` value and converts `&str` / `Str` / `&String`
+        // uniformly.  The outer text-return wrap (Return(If(…))'s scratch
+        // routing) then takes `String` via `.to_string()` push.
+        let text_string_unify = !text_unify
+            && (matches!(true_v, Value::Block(b) if self.block_contains_ncc_skip_free(b))
+                || matches!(false_v, Value::Block(b) if self.block_contains_ncc_skip_free(b)))
+            && matches!(self.infer_type(true_v), Some(Type::Text(_)));
+        // For `text_string_unify` we emit `{ (<branch>).to_string() }` around
+        // each arm so the if-expression unifies on `String`.  Rust requires
+        // braces for if-arms regardless of inner expression form, so even if
+        // the branch is itself a `Block` (which emits its own `{…}`), we wrap
+        // the block in `({…}).to_string()` inside an outer `{ … }`.
+        if text_string_unify {
+            write!(w, " {{(")?;
+        } else if b_true {
             write!(w, " ")?;
         } else if text_unify {
             write!(w, " {{&*(")?;
         } else {
             write!(w, " {{")?;
         }
-        self.indent += u32::from(!b_true);
+        self.indent += u32::from(!b_true || text_string_unify);
         // save/restore fn_ref_context — Call arguments inside the branch
         // must NOT inherit it (OpDatabase int args would be misinterpreted).
         let saved_ctx = self.fn_ref_context;
         self.output_code_inner(w, true_v)?;
         self.fn_ref_context = saved_ctx;
-        self.indent -= u32::from(!b_true);
-        if let Value::Block(_) = *true_v {
-            write!(w, " else ")?;
+        self.indent -= u32::from(!b_true || text_string_unify);
+        if text_string_unify {
+            write!(w, ").to_string()}} else ")?;
         } else if text_unify {
             write!(w, ")}} else ")?;
+        } else if let Value::Block(_) = *true_v {
+            write!(w, " else ")?;
         } else {
             write!(w, "}} else ")?;
         }
-        if !b_false {
-            if text_unify {
-                write!(w, "{{&*(")?;
-            } else {
-                write!(w, "{{")?;
-            }
+        if text_string_unify {
+            write!(w, "{{(")?;
+        } else if text_unify {
+            write!(w, "{{&*(")?;
+        } else if !b_false {
+            write!(w, "{{")?;
         }
-        self.indent += u32::from(!b_false);
+        self.indent += u32::from(!b_false || text_string_unify);
         // When the else branch is Null and the true branch returns a value,
         // emit a typed null sentinel instead of () to match the true branch type.
         if matches!(false_v, Value::Null)
@@ -942,13 +992,14 @@ impl Output<'_> {
         } else {
             self.output_code_inner(w, false_v)?;
         }
-        if text_unify && !b_false {
-            write!(w, ")")?;
-        }
-        self.indent -= u32::from(!b_false);
-        if !b_false {
+        if text_string_unify {
+            write!(w, ").to_string()}}")?;
+        } else if text_unify {
+            write!(w, ")}}")?;
+        } else if !b_false {
             write!(w, "}}")?;
         }
+        self.indent -= u32::from(!b_false || text_string_unify);
         Ok(())
     }
 
@@ -1024,7 +1075,7 @@ impl Output<'_> {
     // `Set(v, _)` exists where `v`'s name starts with `__ncc_` and the
     // variable is marked `skip_free`.  Used to gate scratch-buffer
     // materialisation for value-block `??` patterns.
-    fn block_contains_ncc_skip_free(&self, bl: &Block) -> bool {
+    pub(super) fn block_contains_ncc_skip_free(&self, bl: &Block) -> bool {
         fn walk(this: &Output, v: &Value) -> bool {
             match v.unspan() {
                 Value::Set(var, val) => {

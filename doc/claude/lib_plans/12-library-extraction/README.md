@@ -289,7 +289,7 @@ with ≥1 minor release of soak between consecutive chunks.
 | 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **SHIPPED** 2026-05-24 |
 | 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **OPEN** — S–M; lands before 6w |
 | 6w-w | Retire every `lib/*/.allow_warnings` opt-out — clean each library's warnings until the gate runs strict everywhere | 6.5 (gate landed) | **OPEN** — variable per package; tracks the ratchet to zero |
-| 6t | Library test self-sufficiency — move Rust harness coverage into each library so it survives extraction (Tier 1 gridmesh script copies, Tier 2 `graphics_gold.rs` port, Tier 3 `multiplayer_v{2,5}.rs` port, Tier 4 `loft test --deps`) | 4–6 | **partial** — Tier 1 DONE, Tier 2 DONE; Tiers 3+4 OPEN; blocks Phase 5 (graphics) + Phase 6w (world) extraction |
+| 6t | Library test self-sufficiency — Tier 1 gridmesh script copies, Tier 2 `graphics_gold.rs` port, Tier 3 `multiplayer_v{2,3,5}.rs` port, Tier 4 `loft test --deps`, Tier 5 (NEW) coverage gaps with no Rust-harness home (`imaging` / `world` / `markdown`) | 4–6 | **partial** — Tiers 1+2+4 DONE; Tier 3 OPEN; Tier 5 OPEN; blocks Phase 5 (`imaging`), Phase 6r re-clean (Tier 3), Phase 6w (`world`) |
 | 6w | Extract `loft-libs-world` (world, Phase-7a-expanded) | 7a + 6.5 + 6t | OPEN — M |
 | 7a | Split moros: shared spatial primitives → `lib/world/` (cross-project unlock — feeds dryopea + bumper + moros; subsumes MapFile schema promotion) | 4 | **partial** — `lib/world/` shipped (sparse 32x32 model + save/load, smoke test green); `lib/wall.loft` + `lib/overland.loft` folded into `lib/world/src/` 2026-05-28; remaining: `pub` markers + moros migration + MapFile schema doc |
 | 7p | Cross-cutting primitives extracted before moros leaves: `lib/moros_editor` → `lib/world_editor` rename + `lib_plans/NN-physics-2body` + `lib_plans/NN-particles` slots filed; sequencing matters more than effort | 7a | **OPEN** — XS (rename) + M (new slot designs) |
@@ -427,9 +427,9 @@ ratchet.
 | `world` | 0 | **removed 2026-05-28** | DONE — needed both src/parser/operators.rs skip-pattern 5 (recognise `if i < len(v)` guards for indexed-assign positions) + world.loft idiom rewrites (`cells = X; if i < len(cells) { ... cells[i] }`) + `as u8`/`as u16` width casts on binary writes + `chunks not null` |
 | `moros_editor` | 31 | yes | Tier B; cross-references `moros_map` — pair with Phase 7p (consumer migration) per memory: project_consumer_stall (user-side) |
 | `moros_map` | 34 | yes | Same — Tier B; paired with 7p |
-| `markdown` | 50 | yes | Tier B; 50× `s[i]` needs sweep — non-consumer lib so unblocked but bulk |
-| `shapes` | 118 | yes | Tier C; 72× `v[i]` + 44× div-by-zero + 2× mod-by-zero |
-| `audience_crystal` | 127 | yes | Tier C; cross-references audience demo (consumer) |
+| `markdown` | 0 | **removed 2026-05-28** | DONE (already cleaned in the 2026-05-28 sweep; line was stale until the 2026-05-29 audit) |
+| `shapes` | 118 (transitive) | yes | Tier C; **the warnings actually originate in `lib/graphics/src/`** — shapes imports graphics, so its strict-warnings count tracks graphics's count directly.  Closing graphics also closes shapes. |
+| `audience_crystal` | 120 | yes | Tier C; cross-references audience demo (consumer).  Count was 127 on 2026-05-28; partial cleanup landed since. |
 | `graphics` | 209 | yes | Tier C |
 | `moros_ui` | 407 | yes | Tier C; consumer-adjacent — pair with 7p |
 | `moros_render` | 466 | yes | Tier C; consumer-adjacent — pair with 7p |
@@ -521,7 +521,7 @@ but live outside `lib/<name>/tests/`:
 | Cluster | Files | Tests | Library subjects | Why Rust-side |
 |---|---|---|---|---|
 | Graphics gold-image regression | `tests/graphics_gold.rs` + `tests/gold/*.png` | 8 | `lib/graphics` | PNG decode + per-channel MAE tolerance compare against checked-in reference PNGs.  Pure-loft can't replicate the tolerance algorithm; encoder drift means byte-compare is brittle. |
-| Multiplayer integration | `tests/multiplayer_v2.rs` + `tests/multiplayer_v5.rs` | 9 | `lib/server`, `lib/web`, `lib/game_protocol` | Subprocess orchestration to dodge @P245 (single-process `parallel{}` + I/O hangs when one arm accepts and another connects to a loopback port).  Must run client + server as separate processes. |
+| Multiplayer integration | `tests/multiplayer_v{2,3,5}.rs` | 10 (v2: 3, v3: 2, v5: 5) | `lib/server`, `lib/web`, `lib/game_protocol` | Subprocess orchestration to dodge @P245 (single-process `parallel{}` + I/O hangs when one arm accepts and another connects to a loopback port).  Must run client + server as separate processes. |
 
 Plus two thin loft-side gaps (Tier 1, mechanical):
 
@@ -540,19 +540,16 @@ must substitute a synthetic `CellSnap` fixture inside `lib/gridmesh/tests/`.
 compiler/runtime regressions that use library code as a fixture, not
 as the subject under test — they belong to the loft toolchain.
 
-**Tier 1 — mechanical copies (XS, no design needed).**
+**Tier 1 — mechanical copies (XS, no design needed). DONE.**
 
-- Copy `tests/scripts/130-gridmesh-crystal-equiv.loft` →
-  `lib/gridmesh/tests/crystal-equiv.loft`.
-- Copy `tests/scripts/133-crystal-incr.loft` →
-  `lib/gridmesh/tests/crystal-incr.loft`.
-- In each, replace the `use audience_crystal;` block with a small
-  pure-loft helper inside the test that builds an equivalent
-  `CellSnap`-shaped fixture (the tests only need a known input,
-  not the audience_crystal logic).  Delete the originals from
-  `tests/scripts/`.
-- *Verify:* `cd lib/gridmesh && loft --interpret test` runs the new
-  files green; `make ci` still green after removing the originals.
+Outcome (verified 2026-05-29): the two `tests/scripts/13X-...loft`
+files were folded into `lib/gridmesh/tests/segmesh.loft` (the
+crystal-equivalence + incremental-update assertions live alongside
+the segmesh's own tests rather than as separate files).  The
+`use audience_crystal;` block was replaced with a synthetic
+`CellSnap`-shaped fixture as specified.  The originals are gone
+from `tests/scripts/`.  `cd lib/gridmesh && loft test` reports
+20 passed across 4 files.
 
 **Tier 2 — port `graphics_gold.rs` to `lib/graphics/native/tests/` (M).**
 
@@ -579,10 +576,13 @@ coverage intact.
 
 **Tier 3 — port multiplayer harnesses to `loft-libs-net` (MH).**
 
-The 9 subprocess-orchestrated tests across `multiplayer_v2.rs` (4
-tests) and `multiplayer_v5.rs` (5 tests) test the surface that
-`lib/server` + `lib/web` + `lib/game_protocol` *jointly* expose —
-no single library owns them.  Two ship sites are plausible:
+The 10 subprocess-orchestrated tests across `multiplayer_v2.rs`
+(3 tests), `multiplayer_v3.rs` (2 tests), and `multiplayer_v5.rs`
+(5 tests) test the surface that `lib/server` + `lib/web` +
+`lib/game_protocol` *jointly* expose — no single library owns
+them.  (Inventory verified 2026-05-29; earlier drafts of this plan
+named only v2 + v5 and undercounted v2's test count.)  Two ship
+sites are plausible:
 
 (a) **Inside `loft-libs-net` as a workspace integration crate.**
 After extraction, the chunk repo is a Cargo workspace with one
@@ -606,9 +606,10 @@ external repo's `tests-integration/` crate at the same time the
 chunk is re-cleaned (Phase 6r).
 
 *Verify:* `cargo test --manifest-path tests-integration/Cargo.toml`
-(or workspace `cargo test -p ...`) runs all 9 tests against the
+(or workspace `cargo test -p ...`) runs all 10 tests against the
 checked-out `lib/server` + `lib/web` + `lib/game_protocol`;
-deleting both monorepo harnesses leaves coverage intact.
+deleting all three monorepo harnesses
+(`tests/multiplayer_v{2,3,5}.rs`) leaves coverage intact.
 
 **Order of operations.**  Tier 1 first (XS, unlocks gridmesh hygiene).
 Tier 2 next (blocks Phase 5 graphics extraction).  Tier 3 last
@@ -650,6 +651,40 @@ Smoke-tested via `lib/audience_crystal` (declares `gridmesh` as
 path-dep): `loft test --deps=direct` ran 3 audience_crystal test
 files + 4 gridmesh test files, reported `1 dep(s) tested, 0 failed`.
 
+**Tier 5 — coverage gaps that never had a Rust home (S each, NEW).**
+
+Validation run 2026-05-29 (every monorepo library exercised under
+both `loft test` and `loft --native test`) surfaced four libraries
+with **inadequate regression depth** that the original Phase-6t
+framing missed.  Unlike Tiers 2–3, these gaps are *not* about
+migrating coverage out of a Rust harness — the coverage **never
+existed**.  Closing them is the work needed to ship extracted chunk
+repos with real tests instead of smoke probes.
+
+| Library | What `lib/<name>/tests/` carries today | Coverage gap | Blocks chunk |
+|---|---|---|---|
+| `imaging` | `tests/14-image.loft` doc-example + `tests/15-regression.loft` (9 tests, **DONE 2026-05-29**): `Pixel.value()` packing, save/load round-trip (4×4 + 8×3 non-square + 5×5 solid + 2×2 extremes), `(x,y) → y*w+x` addressing, `save_png` failure modes (0×0 image, nonexistent dir).  10 tests total green on both gates with `LOFT_DENY_WARNINGS=1`. | — | ~~Phase 5 (`loft-libs-graphics`)~~ unblocked |
+| `world` | `tests/world.loft` smoke + `tests/02-persist.loft` (15 tests, **DONE 2026-05-29**): `chunk_idx_32`/`hex_idx_32` for positive AND negative inputs, `cell_count` (empty, after-set, overwrite, clear), `neighbour_count` (isolated + 6-axial-neighbours), `world_save`/`world_load` round-trip (empty, single-cell, many-cells-across-chunks, tick-preserved-through-`tick_and_decay`, negative-coords), `world_load` failure modes (missing file → 0, wrong magic → 0, wrong version → 0).  16 tests total, both gates green, `LOFT_DENY_WARNINGS=1` clean.  The MapFile JSON schema entry points (`world::load_mapfile` / `save_mapfile`) are still future work; covered when the schema migrates from `lib/moros_map`. | — | ~~Phase 6w (`loft-libs-world`)~~ unblocked for binary-format chunk extraction; MapFile schema landing is the only remaining 7a-step-4 work for full coverage |
+| `server` | `tests/server.loft` — one `srv = listen(); srv.close()` smoke | Real surface (HTTP / WebSocket / TLS / session) only exercised by `multiplayer_v{2,3,5}.rs` (Tier 3).  Once Tier 3 lands in `loft-libs-net/tests-integration/`, server is covered transitively; `lib/server/tests/` itself remains a smoke (acceptable) | Phase 6 re-clean (6r) — **waived if Tier 3 lands first** |
+| `markdown` | `tests/01-render.loft` — `fn main()` driver with `must_contain` / `must_not_contain` / `must_eq` helpers and 79 grouped assertions across ~25 feature areas (html_escape, slugify, rewrite_link, ATX/setext headings, paragraphs, bold/italic/strike/code, smart underscore, nesting, backslash escapes, images, links + titles, autolinks, hr, blockquote merging + separation, fenced code, lists UL/OL/continuation, task lists, tables + alignment, HTML-comment stripping, CRLF, UTF-8, raw-HTML escaping, tracker-tag autolinks, image URL rewriting, `extract_headings`).  Re-audit **2026-05-29**: this IS the ≥30-test coverage Tier 5 was supposed to add — the original Tier 5 framing was based on counting `fn test_*` (= 0) and missed the `fn main()` driver style. | — | ~~Markdown extraction (post-6w)~~ already covered; only a cosmetic refactor-to-`fn test_*`-discovery would remain |
+
+*Target per library:* `cd lib/<name> && loft test` reports
+≥10 test functions passing for `imaging` / `world` / `markdown`.
+`server` is explicitly waived because Tier 3 covers it transitively.
+
+*Order of operations.*  `imaging` first (blocks Phase 5 — the
+soonest extraction that needs it; **DONE 2026-05-29** —
+`lib/imaging/tests/15-regression.loft`, 9 tests + the doc-example
+= 10 total green on both gates).  `world` next (pairs with the
+MAPFILE entry-point landing in Phase 7a; co-blocks 6w).
+`markdown` last (independent; no extraction blocker until
+markdown ships externally).
+
+*Why this Tier was missed originally:* the 2026-05-28 audit asked
+"which Rust harnesses own library coverage?" — a *migration*
+question.  It did not ask "which libraries lack adequate coverage
+anywhere?" — a *creation* question.  Tier 5 closes the second one.
+
 ### Phase 7a — moros world split (cross-project unlock; appears monorepo-internal)
 
 Move the non-moros-specific spatial primitives into `lib/world/`: hex /
@@ -689,35 +724,89 @@ since dryopea and bumper both consume it.
   consumer stall lifts.  Schema is currently enforced by
   `lib/moros_map`'s `Map` struct (the contract names what's there).
 
-**Blocked on consumer stall — pub markers won't parse against
-current loft:**
+**Remaining work — UNBLOCKED today (re-evaluated 2026-05-29):**
 
-A speculative `sed` pass marking every wall.loft / overland.loft
-item `pub` was attempted on 2026-05-28 and reverted.  The legacy
-moros syntax in those files uses `enum` for what current loft calls
-`struct` (e.g. `enum Tile { material: u8, ...}` — struct-shaped
-field list, no variants), and the parser rejects it as
-`Expect enum values to be in camel case style`.  Translating the
-files to current loft syntax requires touching consumer logic
-(memory: project_consumer_stall (user-side)),
-so this is genuinely blocked — not just deferred.
+A 2026-05-28 `sed` pass marking every wall.loft / overland.loft
+item `pub` was reverted because the legacy moros syntax uses `enum`
+for what current loft calls `struct` (`enum Tile { material: u8,
+... }` — struct-shaped field list, no variants), and the parser
+rejects it as `Expect enum values to be in camel case style`.  At
+the time this was framed as consumer-blocked.  Re-validation 2026-
+05-29 shows the framing was wrong: `grep -rn 'use wall\|use
+world::wall' lib/` returns **zero** — wall.loft and overland.loft
+have **no consumers anywhere in lib/**, so the translation breaks
+nothing.
 
-**Remaining (resumes when consumer-stall lifts):**
+**Scope correction (2026-05-29):** a translation probe found
+wall.loft carries *more* legacy-syntax issues than the
+`enum`-as-struct claim:
 
-- Translate wall.loft / overland.loft `enum`-as-struct declarations
-  to current `pub struct ...` syntax; mark every item `pub` as
-  needed by the eventual consumer (paired with the consumer's
-  migration, not in advance).
+- One `enum Tile { … }` to translate (line 165 — struct-shaped).
+- *Two* duplicate struct names: `WallPoint` declared at lines 250
+  AND 379 (different field shapes); `Line` declared at lines 262
+  AND 393.  Loft rejects the duplicates — at least one of each
+  pair must be renamed (design decision: which is canonical, or
+  do both survive under distinct names).
+- `assert!(...)` Rust-macro syntax at line 211 etc. — translate to
+  `assert(...)`.
+- `if flipped ^(steps < 0)` at line 317 — `^` operator semantics
+  (XOR vs cast-shape) need a per-call check.
+- Likely more once these clear and the parser proceeds further.
+
+So the translation is **mechanical at the per-edit level** but
+**design-shaped at the file level** (the duplicate struct rename
+is a naming decision, not a transliteration).  Since wall.loft
+has zero consumers, the safest path is: rename duplicates by their
+*usage neighbourhood* (e.g. `WallPoint` near `Drawing` becomes
+`DrawingWallPoint`), drop unused dead code, and validate by
+parsing.  Estimated effort: **S–M** (half a day, vs the README's
+prior "mechanical / XS" framing).  Treated as deferred-by-scope
+until either Phase 7b moros migration unsticks (and the consumer
+specifies which structs it needs) or a separate clean-up sub-phase
+is filed.
+
+The remaining mechanical / additive work below is still doable
+today without any external-consumer coordination:
+
+- Translate `enum`-as-struct declarations in wall.loft / overland.loft
+  to current `struct` syntax (mechanical syntax migration; zero
+  consumers to break).
+- Mark items `pub` after translation.
 - Wire `use wall;` / `use overland;` (or fold content directly) into
   `world.loft`.
-- Move hex / chunk types + geometry collision out of `moros_map` /
-  `moros_sim/collide.loft` into `lib/world/` per the MAPFILE.md
-  migration plan (steps 1–3).
+- Move hex / chunk types + geometry collision **additively** from
+  `moros_map` / `moros_sim/collide.loft` into `lib/world/` per
+  MAPFILE.md migration plan steps 1–3 (leave the moros_map originals
+  intact — non-breaking; consumers keep using their own types until
+  ready).
 - Add `world::load_mapfile()` / `world::save_mapfile()` entry points
-  (MAPFILE.md step 4) and a `pub use world::*;` shim in `moros_map`
-  (step 5).
-- Migrate `lib/moros_*` to `use world;` (step 6); verify moros
-  demos render identically.
+  (MAPFILE.md step 4) — additive public API, no consumer surface.
+- Add `pub use world::*;` shim in `moros_map` (MAPFILE.md step 5) —
+  compatibility shim, moros_map's API to its callers unchanged.
+
+Together these are five of MAPFILE.md's six migration steps and
+constitute **the bulk of Phase 7a**.
+
+**Remaining work — genuinely consumer-blocked (one item):**
+
+- Migrate `lib/moros_*` to `use world;` (MAPFILE.md step 6) — this
+  *replaces* `moros_map`'s internal `Hex` / `Chunk` types with
+  `world::*` and changes consumer call sites.  Paired with the
+  external moros project's migration; not done in advance.
+
+The consumer stall affects step 6 only.  Steps 1–5 are unblocked.
+**6w (`loft-libs-world` chunk extraction) depends on steps 1–5 but
+NOT on step 6** — the chunk can ship at `world 0.1.0` carrying the
+additive types + load/save API while moros continues to use its
+own internal copies, then upgrade to `world 0.2.0` when the
+consumer stall lifts.
+
+**Coverage prerequisite (links to Phase 6t Tier 5):** `lib/world`
+currently has only the smoke test.  Before 6w extracts, Tier 5
+adds save/load round-trip + MapFile schema tests against
+`world::load_mapfile` / `world::save_mapfile` (added in step 4
+above) + sparse-write boundary tests.  Coverage growth pairs
+naturally with the API growth.
 
 **MapFile schema (concrete design — part of 7a):**
 

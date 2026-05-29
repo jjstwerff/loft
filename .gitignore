@@ -14,6 +14,14 @@ tests/wasm/assets.json
 tests/test_native_pkg/
 *.glb
 lib/graphics/examples/*.png
+# Imaging regression tests (Phase 6t Tier 5) write small round-trip
+# PNGs into the package's tests/ dir.  Each test recreates its tmp
+# file; leftovers are harmless but should never be committed.
+lib/imaging/tests/_tmp_*.png
+# World save/load regression tests (Phase 6t Tier 5) write binary
+# snapshots into the package's tests/ dir.  Same convention as
+# imaging: each test recreates its tmp file; never commit.
+lib/world/tests/_tmp_*.bin
 # Canvas demo writes this into its CWD (typically repo root) — gold lives at
 # tests/gold/10-canvas-demo.png; the working-directory copy is transient.
 /10-canvas-demo.png
