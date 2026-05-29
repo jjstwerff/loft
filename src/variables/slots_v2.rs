@@ -141,7 +141,9 @@ pub fn assign_slots_v2(function: &Function, local_start: u16) -> AllocatorResult
     // greedy search avoids.  (@PLAN53 cluster 2: without this, V2 placed
     // locals over SRet args' slots → spurious I5/I6.)
     let pinned: Vec<Iv> = (0..function.next_var())
-        .filter(|&v| function.is_argument(v) && function.variables[v as usize].stack_pos != u16::MAX)
+        .filter(|&v| {
+            function.is_argument(v) && function.variables[v as usize].stack_pos != u16::MAX
+        })
         .map(|v| {
             let tp = function.tp(v);
             Iv {
@@ -283,15 +285,25 @@ pub fn dump_v1_v2_slots(v1: &Function, v2: &AllocatorResult, d_nr: u32) {
         v1.name, v2.hwm
     );
     eprintln!(
-        "  {:<24} {:>4} {:>4} {:>8} {:>8}",
-        "name", "sz", "al", "V1", "V2"
+        "  {:<24} {:>4} {:>4} {:>6} {:>8} {:>8}",
+        "name", "sz", "al", "fd", "V1", "V2"
     );
+    // Only arguments are skipped (their slots live in the caller's frame).
+    // `first_def == MAX` vars are deliberately KEPT and flagged with `fd=-`
+    // — they are exactly the class V2 can wrongly skip (vars written by a
+    // Call out-param, not a `Value::Set`, e.g. vector-literal temps), so
+    // hiding them defeats the purpose of the comparison dump.
     for (idx, var) in v1.variables.iter().enumerate() {
-        if var.argument || var.first_def == u32::MAX {
+        if var.argument {
             continue;
         }
         let sz = size(&var.type_def, &Context::Variable);
         let al = super::align(&var.type_def);
+        let fd = if var.first_def == u32::MAX {
+            "-".to_string()
+        } else {
+            var.first_def.to_string()
+        };
         let v1s = if var.stack_pos == u16::MAX {
             "-".to_string()
         } else {
@@ -302,7 +314,10 @@ pub fn dump_v1_v2_slots(v1: &Function, v2: &AllocatorResult, d_nr: u32) {
             .iter()
             .find(|s| s.var_nr == idx as u16)
             .map_or_else(|| "-".to_string(), |s| s.slot.to_string());
-        eprintln!("  {:<24} {sz:>4} {al:>4} {v1s:>8} {v2s:>8}", var.name);
+        eprintln!(
+            "  {:<24} {sz:>4} {al:>4} {fd:>6} {v1s:>8} {v2s:>8}",
+            var.name
+        );
     }
 }
 

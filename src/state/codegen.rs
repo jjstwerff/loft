@@ -354,7 +354,7 @@ impl State {
                     // tuple_def is normally called eagerly during parse).
                     let elem_offset =
                         stored_tuple_field_offset(stack.data, &self.database, elems, idx);
-                    let var_pos = stack.position - stack.function.stack(*var_nr);
+                    let var_pos = stack.var_pos(*var_nr);
                     let code_pos = self.code_pos;
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
@@ -463,7 +463,7 @@ impl State {
                     let elem_tp = elems[idx].clone();
                     let elem_offset =
                         stored_tuple_field_offset(stack.data, &self.database, elems, idx);
-                    let var_pos = stack.position - stack.function.stack(*var_nr);
+                    let var_pos = stack.var_pos(*var_nr);
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     self.generate(value, stack, false);
@@ -550,7 +550,7 @@ impl State {
                     stack.add_op("OpNullRefSentinel", self);
                 } else {
                     // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
-                    let clos_pos = stack.position - stack.function.stack(*clos_var);
+                    let clos_pos = stack.var_pos(*clos_var);
                     stack.add_op("OpVarRef", self);
                     self.code_add(clos_pos);
                 }
@@ -564,7 +564,7 @@ impl State {
                 // i64 d_nr, so this works without a new opcode.  The
                 // closure DbRef component (next 12B) stays untouched in
                 // the slot.
-                let v_pos = stack.position - stack.function.stack(*v_nr);
+                let v_pos = stack.var_pos(*v_nr);
                 stack.add_op("OpVarInt", self);
                 self.code_add(v_pos);
                 crate::data::I64.clone()
@@ -1146,7 +1146,7 @@ impl State {
                 self.code_add(bump);
                 stack.position += bump;
             }
-            let slot_offset = stack.position - stack.function.stack(v);
+            let slot_offset = stack.var_pos(v);
             if stack.function.is_skip_free(v) || stack.function.is_inline_ref(v) {
                 // skip_free bindings borrow; inline_ref lift temporaries are
                 // overwritten before read.  Both want a null sentinel in the
@@ -1178,7 +1178,7 @@ impl State {
                 stack.add_op("OpSetInt4", self);
                 self.code_add(4u16);
                 // OpCreateStack pointing at v's slot (now the real DbRef).
-                let dep_offset = stack.position - stack.function.stack(v);
+                let dep_offset = stack.var_pos(v);
                 self.emit_push_create_stack(stack, dep_offset);
                 stack.add_op("OpConstInt", self);
                 self.code_add(12i64);
@@ -1227,7 +1227,7 @@ impl State {
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.position - stack.function.stack(v);
+        let slot_offset = stack.var_pos(v);
         if stack.function.is_skip_free(v) || stack.function.is_inline_ref(v) {
             // Skip-free / inline-ref keyed locals share an outer-owned store.
             // On first assignment, point the slot at it via the sentinel; on
@@ -1411,7 +1411,7 @@ impl State {
                 && !s1_substituted
                 && !is_hidden_buf_arg
             {
-                let free_pos = stack.position - stack.function.stack(v);
+                let free_pos = stack.var_pos(v);
                 stack.add_op("OpVarRef", self);
                 self.code_add(free_pos);
                 stack.add_op("OpFreeRef", self);
@@ -1450,7 +1450,7 @@ impl State {
                         self.code_add(bump);
                         stack.position += bump;
                     }
-                    let slot_offset = stack.position - stack.function.stack(v);
+                    let slot_offset = stack.var_pos(v);
                     stack.add_op("OpInitRef", self);
                     self.code_add(slot_offset);
                     stack.add_op("OpDatabase", self);
@@ -1577,7 +1577,7 @@ impl State {
                     // may have handed to a different var (probe 02-style
                     // corruption pinned in commit `a957a365`).
                     for av in &caller_hidden_args {
-                        let slot_offset = stack.position - stack.function.stack(*av);
+                        let slot_offset = stack.var_pos(*av);
                         stack.add_op("OpVarRef", self);
                         self.code_add(slot_offset);
                         stack.add_op("OpFreeRef", self);
@@ -1736,7 +1736,7 @@ impl State {
                 // DbRef is pushed onto TOS by `generate`; move it to v's
                 // slot via `OpPutRef(slot_offset)`.
                 self.generate(value, stack, false);
-                let var_pos = stack.position - stack.function.stack(v);
+                let var_pos = stack.var_pos(v);
                 stack.add_op("OpPutRef", self);
                 self.code_add(var_pos);
             }
@@ -1767,7 +1767,7 @@ impl State {
             } else {
                 self.gen_fn_ref_value(value, stack);
             }
-            let var_pos = stack.position - stack.function.stack(v);
+            let var_pos = stack.var_pos(v);
             stack.add_op("OpPutFnRef", self);
             self.code_add(var_pos);
             stack.position -= 4;
@@ -1783,7 +1783,7 @@ impl State {
             if stack.position == before {
                 return;
             }
-            let var_pos = stack.position - stack.function.stack(v);
+            let var_pos = stack.var_pos(v);
             let tp = stack.function.tp(v).clone();
             match tp {
                 Type::Integer(_) => stack.add_op("OpPutInt", self),
@@ -1857,7 +1857,7 @@ impl State {
                 // OpPutRef becomes the mechanism that lands the result in v's
                 // actual slot.
                 self.generate(&args[0], stack, false);
-                let var_pos = stack.position - stack.function.stack(v);
+                let var_pos = stack.var_pos(v);
                 stack.add_op("OpPutRef", self);
                 self.code_add(var_pos);
                 return;
@@ -1874,7 +1874,7 @@ impl State {
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.position - stack.function.stack(v);
+        let slot_offset = stack.var_pos(v);
         stack.add_op("OpInitRef", self);
         self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
@@ -1899,7 +1899,7 @@ impl State {
             && !stack.function.is_argument(src)
             && !stack.function.is_captured(src)
         {
-            let src_pos = stack.position - stack.function.stack(src);
+            let src_pos = stack.var_pos(src);
             stack.add_op("OpVarRef", self);
             self.code_add(src_pos);
             stack.position += size_of::<crate::keys::DbRef>() as u16;
@@ -1910,7 +1910,7 @@ impl State {
             // behavior-preserving bytecode-level overhead (copy onto
             // self).  Once slot-move is removed, this becomes the
             // mechanism that lands the transferred DbRef in v's slot.
-            let var_pos = stack.position - stack.function.stack(v);
+            let var_pos = stack.var_pos(v);
             stack.add_op("OpPutRef", self);
             self.code_add(var_pos);
             return;
@@ -1926,7 +1926,7 @@ impl State {
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.position - stack.function.stack(v);
+        let slot_offset = stack.var_pos(v);
         stack.add_op("OpInitRef", self);
         self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
@@ -1961,7 +1961,7 @@ impl State {
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.position - stack.function.stack(v);
+        let slot_offset = stack.var_pos(v);
         stack.add_op("OpInitRef", self);
         self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
@@ -2003,7 +2003,7 @@ impl State {
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.position - stack.function.stack(v);
+        let slot_offset = stack.var_pos(v);
         stack.add_op("OpInitRef", self);
         self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
@@ -2100,7 +2100,7 @@ impl State {
         // @PLAN51 Cluster II Step 2 — post-wrap free + sentinel reset
         // (see the reassignment-path comment for rationale).
         for av in &caller_hidden_args {
-            let slot_offset = stack.position - stack.function.stack(*av);
+            let slot_offset = stack.var_pos(*av);
             stack.add_op("OpVarRef", self);
             self.code_add(slot_offset);
             stack.add_op("OpFreeRef", self);
@@ -2151,7 +2151,7 @@ impl State {
         for arg_val in &inner_args {
             self.generate(arg_val, stack, false);
         }
-        let dep_offset = stack.position - stack.function.stack(dest_var);
+        let dep_offset = stack.var_pos(dest_var);
         self.emit_push_create_stack(stack, dep_offset);
         stack.add_op("OpStaticCall", self);
         self.code_add(lib_nr);
@@ -2197,7 +2197,7 @@ impl State {
             && let Some(Value::Var(v)) = parameters.first()
             && matches!(stack.function.tp(*v), Type::Function(_, _, _))
         {
-            let var_pos = stack.position - stack.function.stack(*v);
+            let var_pos = stack.var_pos(*v);
             stack.add_op("OpVarRef", self);
             self.code_add(var_pos - 8);
             stack.add_op("OpFreeRef", self);
@@ -2218,7 +2218,7 @@ impl State {
                     && let Value::Var(v) = &parameters[a_nr]
                     && matches!(stack.function.tp(*v), Type::RefVar(_))
                 {
-                    let var_pos = stack.position - stack.function.stack(*v);
+                    let var_pos = stack.var_pos(*v);
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     tps.push(a.typedef.clone());
@@ -2387,7 +2387,7 @@ impl State {
         if name == "OpCreateStack" && !parameters.is_empty() {
             if let Value::Var(wv) = &parameters[0] {
                 // Dep is the named variable at wv.stack_pos.
-                let dep_offset = stack.position - stack.function.stack(*wv);
+                let dep_offset = stack.var_pos(*wv);
                 self.emit_push_create_stack(stack, dep_offset);
             } else {
                 // OpCreateStack with a non-Var expression (e.g.
@@ -2611,7 +2611,7 @@ impl State {
         }
 
         // fn-ref variable is below all pushed arguments.
-        let fn_var_dist = stack.position - stack.function.stack(v_nr);
+        let fn_var_dist = stack.var_pos(v_nr);
         // declared: visible param sizes; extra: work-buf + closure (all 12-byte DbRefs).
         let declared_size: u16 = param_types
             .iter()
@@ -2641,7 +2641,7 @@ impl State {
             stack.position,
             stack.data.def(stack.def_nr).name
         );
-        let var_pos = stack.position - stack.function.stack(variable);
+        let var_pos = stack.var_pos(variable);
         let argument = stack.function.is_argument(variable);
         let code = self.code_pos;
         self.vars.insert(code, variable);
@@ -3004,7 +3004,7 @@ impl State {
                     // OpFormatStack* APPEND to it → text accumulated across
                     // iterations (`[2.5][2.58][2.581]`).  Emit OpClearStackText
                     // (deref) so the buffer is emptied, matching the native path.
-                    let var_pos = stack.position - stack.function.stack(var);
+                    let var_pos = stack.var_pos(var);
                     stack.add_op("OpClearStackText", self);
                     self.code_add(var_pos);
                     return;
@@ -3012,17 +3012,17 @@ impl State {
                 // always clear RefVar(Text) before appending — prevents
                 // text accumulation across reassignments in text-returning functions.
                 {
-                    let var_pos = stack.position - stack.function.stack(var);
+                    let var_pos = stack.var_pos(var);
                     stack.add_op("OpClearStackText", self);
                     self.code_add(var_pos);
                 }
                 self.generate(value, stack, false);
-                let var_pos = stack.position - stack.function.stack(var);
+                let var_pos = stack.var_pos(var);
                 stack.add_op("OpAppendStackText", self);
                 self.code_add(var_pos);
                 return;
             }
-            let var_pos = stack.position - stack.function.stack(var);
+            let var_pos = stack.var_pos(var);
             stack.add_op("OpVarRef", self);
             self.code_add(var_pos);
             self.generate(value, stack, false);
@@ -3089,7 +3089,7 @@ impl State {
                 }
             }
         }
-        let var_pos = stack.position - stack.function.stack(var);
+        let var_pos = stack.var_pos(var);
         match stack.function.tp(var) {
             Type::Integer(_) => stack.add_op("OpPutInt", self),
             Type::Function(_, _, _) => {
@@ -3159,7 +3159,7 @@ impl State {
         for arg_val in args {
             self.generate(arg_val, stack, false);
         }
-        let dep_offset = stack.position - stack.function.stack(var);
+        let dep_offset = stack.var_pos(var);
         self.emit_push_create_stack(stack, dep_offset);
         stack.add_op("OpStaticCall", self);
         self.code_add(lib_nr);

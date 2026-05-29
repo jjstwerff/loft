@@ -74,6 +74,35 @@ impl<'a> Stack<'a> {
         }
     }
 
+    /// Compile-time distance from the current eval-stack top down to
+    /// variable `v`'s frame slot — the `pos` operand emitted for every
+    /// positional var op (`OpPutInt`, `OpVarRef`, `OpFreeText`, …).
+    /// Both terms are `size()`-derived (see @PLAN53 cluster 2 / S1):
+    /// `position` is advanced by `variables::size` as codegen tracks the
+    /// eval stack, and `function.stack(v)` is the slot the allocator gave.
+    ///
+    /// # Panics
+    /// When `v`'s slot exceeds the current eval position — which means
+    /// either the variable was never assigned a slot (`stack_pos ==
+    /// u16::MAX`, e.g. an allocator skipped it) or the eval stack sits
+    /// below its frame slot.  Names the variable + both operands so the
+    /// failure is self-explanatory instead of a bare
+    /// "attempt to subtract with overflow".
+    pub fn var_pos(&self, v: u16) -> u16 {
+        let slot = self.function.stack(v);
+        self.position.checked_sub(slot).unwrap_or_else(|| {
+            panic!(
+                "var_pos underflow in fn '{}': variable '{}' (v_nr={v}) slot={slot} \
+                 exceeds eval position={} — variable has no assigned slot \
+                 (stack_pos==u16::MAX, allocator skipped it?) or the eval stack \
+                 is below its frame slot",
+                self.data.def(self.def_nr).name,
+                self.function.name(v),
+                self.position,
+            )
+        })
+    }
+
     pub fn operator(&mut self, d_nr: u32) {
         let d = self.data.def(d_nr);
         let mut parameters = 0;
