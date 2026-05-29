@@ -552,7 +552,11 @@ fn check_i6_loop_iteration(vars: &[Variable], function: &Function) -> Option<(u1
 /// On the first failure, logs the full variable table and IR code
 /// before panicking with a distinct `[I1]` … `[I6]` prefix so the
 /// failing invariant is self-identifying.
-pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
+/// `scope_blind` — when true (the V2 shadow path), skip I7 (declared-scope
+/// zone-1 frame): V2 is a scope-blind single-pool allocator, so the V1
+/// two-zone "slot within its scope's zone" invariant does not apply.  All
+/// other invariants (I1 overlap, I2, I5, I6, I8) hold for both allocators.
+pub fn validate_slots(function: &Function, data: &Data, def_nr: u32, scope_blind: bool) {
     let vars = &function.variables;
     let local_start = compute_local_start(function);
 
@@ -620,8 +624,10 @@ pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
     }
 
     // ── I7: declared-scope zone-1 frame consistency ─────────────────────
-    if let Some((idx, base, top)) =
-        check_i7_scope_frame(vars, function, &data.def(def_nr).code, local_start)
+    // Skipped for the scope-blind V2 allocator (zone frames are a V1 concept).
+    if let Some((idx, base, top)) = (!scope_blind)
+        .then(|| check_i7_scope_frame(vars, function, &data.def(def_nr).code, local_start))
+        .flatten()
     {
         let v = &vars[idx];
         let sz = size(&v.type_def, &Context::Variable);

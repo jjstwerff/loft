@@ -222,12 +222,17 @@ pub fn check(data: &mut Data) {
             let v1_code = data.definitions[d_nr as usize].code.clone();
             {
                 let d = &mut data.definitions[d_nr as usize];
+                // Reset V1's slots first so validation sees a PURE V2 layout —
+                // otherwise vars V2 skipped retain V1 slots and produce spurious
+                // cross-allocator conflicts.
+                d.variables.reset_local_slots();
                 crate::variables::apply_v2_result(&mut d.variables, &mut d.code, &result);
             }
             crate::variables::validate_slots(
                 &data.definitions[d_nr as usize].variables,
                 data,
                 d_nr,
+                true, // V2 is scope-blind — skip I7 (zone-frame invariant).
             );
             crate::variables::validate_alignment(&data.definitions[d_nr as usize].variables);
             if mode != "drive" {

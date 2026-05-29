@@ -117,22 +117,145 @@ pub fn slot_kind(tp: &Type) -> SlotKind {
 /// `AllocatorResult` via `apply_v2_result`.
 pub fn assign_slots_v2(
     function: &Function,
-    code: &crate::data::Value,
+    _code: &crate::data::Value,
     local_start: u16,
 ) -> AllocatorResult {
-    let mut walk = WalkState {
-        slots: Vec::new(),
-        assigned: vec![false; function.next_var() as usize],
-        per_block_var_size: HashMap::new(),
-        tos: local_start,
-        hwm: local_start,
+    // @PLAN53 cluster 2 — scope-blind, kind-aware, ALIGNED interval-graph
+    // greedy allocator (the SPEC § 2 design).  Replaces the earlier
+    // TOS-reset IR-walk, which reused slots across sibling scopes WITHOUT
+    // a kind check and so violated I5 (an int and a ref sharing a slot have
+    // different drop opcodes).  Each local is placed at the lowest
+    // `align(tp)`-aligned offset ≥ `local_start` that does NOT conflict with
+    // any already-placed local, where conflict = overlapping slot range AND
+    // (overlapping live interval OR incompatible `SlotKind`/size).  Tight
+    // sizes; alignment via padding (the lowest-slot search backfills holes).
+    struct Iv {
+        var_nr: u16,
+        ls: u32,
+        le: u32,
+        size: u16,
+        align: u16,
+        kind: SlotKind,
+        slot: u16,
+    }
+    let mut ivs: Vec<Iv> = Vec::new();
+    for v in 0..function.next_var() {
+        if function.is_argument(v) {
+            continue;
+        }
+        let fd = function.first_def(v);
+        if fd == u32::MAX {
+            continue;
+        }
+        let tp = function.tp(v);
+        let sz = size(tp, &Context::Variable);
+        if sz == 0 {
+            continue;
+        }
+        ivs.push(Iv {
+            var_nr: v,
+            ls: fd,
+            le: function.variables[v as usize].last_use,
+            size: sz,
+            align: u16::from(super::align(tp)).max(1),
+            kind: slot_kind(tp),
+            slot: 0,
+        });
+    }
+    // PINNED: argument-typed vars (incl. hidden SRet return buffers) already
+    // own a fixed slot set by the caller / V1 — V2 must NOT place a local on
+    // top of them.  Treat each as an always-live ([0, MAX]) fixed interval the
+    // greedy search avoids.  (@PLAN53 cluster 2: without this, V2 placed
+    // locals over SRet args' slots → spurious I5/I6.)
+    let pinned: Vec<Iv> = (0..function.next_var())
+        .filter(|&v| function.is_argument(v) && function.variables[v as usize].stack_pos != u16::MAX)
+        .map(|v| {
+            let tp = function.tp(v);
+            Iv {
+                var_nr: v,
+                ls: 0,
+                le: u32::MAX,
+                size: size(tp, &Context::Variable),
+                align: u16::from(super::align(tp)).max(1),
+                kind: slot_kind(tp),
+                slot: function.variables[v as usize].stack_pos,
+            }
+        })
+        .collect();
+    // Greedy by live-start, then var_nr for determinism.
+    ivs.sort_by_key(|i| (i.ls, i.var_nr));
+    // Loop scopes (I6): two vars may share a slot only if, for every loop,
+    // they are BOTH inside `[s,e)` or BOTH outside — never straddling (a
+    // loop-local recurs each iteration, so it conflicts with anything live
+    // across the loop boundary).
+    let loop_ranges: Vec<(u32, u32)> = {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut r = Vec::new();
+        for v in 0..function.next_var() {
+            let sc = function.variables[v as usize].scope;
+            if sc != u16::MAX
+                && function.is_loop_scope(sc)
+                && seen.insert(sc)
+                && let Some(range) = function.loop_seq_range(sc)
+            {
+                r.push(range);
+            }
+        }
+        r
     };
-    walk_node(code, function, &mut walk);
-    walk.slots.sort_by_key(|s| s.var_nr);
+    let mut hwm = local_start;
+    for idx in 0..ivs.len() {
+        let (sz, al, ls, le, kind) = {
+            let i = &ivs[idx];
+            (i.size, i.align, i.ls, i.le, i.kind)
+        };
+        let mut pos = local_start.next_multiple_of(al);
+        'search: loop {
+            let end = pos + sz;
+            for p in pinned.iter().chain(ivs[..idx].iter()) {
+                let overlap_range = pos < p.slot + p.size && p.slot < end;
+                if !overlap_range {
+                    continue;
+                }
+                // Reuse is only valid as an EXACT slot match (same start+size);
+                // any PARTIAL overlap is always a conflict (it would alias only
+                // part of a live value).
+                let exact = pos == p.slot && sz == p.size;
+                let life_overlap = ls <= p.le && p.ls <= le;
+                let incompatible = p.kind != kind || p.size != sz;
+                // I6: forbid sharing that straddles any loop scope.
+                let straddle = loop_ranges.iter().any(|&(s, e)| {
+                    let iv_in = ls >= s && le < e;
+                    let iv_out = le < s || ls >= e;
+                    let p_in = p.ls >= s && p.le < e;
+                    let p_out = p.le < s || p.ls >= e;
+                    !((iv_in && p_in) || (iv_out && p_out))
+                });
+                if !exact || life_overlap || incompatible || straddle {
+                    // Jump past the blocker, re-align, retry.
+                    pos = (p.slot + p.size).next_multiple_of(al);
+                    continue 'search;
+                }
+            }
+            break;
+        }
+        ivs[idx].slot = pos;
+        hwm = hwm.max(pos + sz);
+    }
+    let mut slots: Vec<SlotAssignment> = ivs
+        .iter()
+        .map(|i| SlotAssignment {
+            var_nr: i.var_nr,
+            slot: i.slot,
+        })
+        .collect();
+    slots.sort_by_key(|s| s.var_nr);
+    // Scope-blind: one function-entry reserve (frame_hwm) covers every slot;
+    // no per-block reserves.
     AllocatorResult {
-        slots: walk.slots,
-        hwm: walk.hwm,
-        per_block_var_size: walk.per_block_var_size,
+        slots,
+        hwm,
+        per_block_var_size: HashMap::new(),
     }
 }
 

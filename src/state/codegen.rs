@@ -194,6 +194,7 @@ impl State {
             &data.definitions[def_nr as usize].variables,
             data,
             def_nr,
+            false, // V1 is scope-aware (two-zone) — enforce I7.
         );
     }
 
