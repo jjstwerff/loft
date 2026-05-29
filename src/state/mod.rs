@@ -1093,9 +1093,20 @@ impl State {
                 self.put_stack(Str::new(STRING_NULL));
             }
             _ => {
-                for _ in 0..value_size {
-                    self.put_stack(0u8);
+                // @PLAN53 cluster 2 / S4 (R4): push the value_size zero bytes as
+                // ONE stepped slot.  A per-byte put_stack would round EACH byte
+                // to 8 under LOFT_ALIGN, over-advancing catastrophically.  Off:
+                // step is identity → advances value_size, same as the old loop.
+                let step = self.stack_step(value_size);
+                self.ensure_stack(step);
+                let dst = self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+                unsafe {
+                    std::ptr::write_bytes(dst, 0, value_size as usize);
                 }
+                self.stack_pos += step;
             }
         }
     }
@@ -1152,7 +1163,8 @@ impl State {
         let stack_top = self.stack_pos;
         let frame = self.coroutine_frame_mut(idx);
         let base = frame.stack_base;
-        let value_start = stack_top - value_size;
+        // @PLAN53 cluster 2 / S4: the yielded value sits in a stepped slot at TOS.
+        let value_start = stack_top - self.stack_step(value_size);
         let locals_len = (value_start - base) as usize;
 
         // Serialise locals (CO1.3d: text locals are String objects — bitwise copy is safe
@@ -1250,7 +1262,8 @@ impl State {
         unsafe {
             std::ptr::copy_nonoverlapping(value_bytes.as_ptr(), dest, vs);
         }
-        self.stack_pos = base + value_size;
+        // @PLAN53 cluster 2 / S4: the value slid to `base` occupies a stepped slot.
+        self.stack_pos = base + self.stack_step(value_size);
 
         // Return to consumer.
         self.code_pos = caller_return_pos;
@@ -1364,7 +1377,10 @@ impl State {
             let to_pos = self.stack_cur.plus(fn_stack);
             self.database.copy_block(&from_pos, &to_pos, size);
         }
-        self.stack_pos = fn_stack + size;
+        // @PLAN53 cluster 2 / S4: the returned value occupies a stepped slot
+        // on the caller's TOS (matching codegen's `position += step(ret)`);
+        // the copy itself moves the real `size` bytes.  Identity when off.
+        self.stack_pos = fn_stack + self.stack_step(size);
     }
 
     /**
@@ -1582,9 +1598,13 @@ impl State {
     }
 
     pub fn put_var<T>(&mut self, pos: u16, value: T) {
+        // @PLAN53 cluster 2 / S4: the value's footprint on the stack is its
+        // stepped span (matches the get_stack/put_stack steps it pairs with);
+        // identity when LOFT_ALIGN off.
+        let step = self.stack_step(size_of::<T>() as u32);
         *self.database.store_mut(&self.stack_cur).addr_mut::<T>(
             self.stack_cur.rec,
-            self.stack_cur.pos + self.stack_pos + size_of::<T>() as u32 - u32::from(pos),
+            self.stack_cur.pos + self.stack_pos + step - u32::from(pos),
         ) = value;
     }
 
