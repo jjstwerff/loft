@@ -1,8 +1,30 @@
 # Cluster V — Native-only failures
 
-**Status: 🟢 MECHANISM VERIFIED (2026-05-28 deep dive).**  Probe 29's root cause is now PINNED at the schema-propagation level — see § Verified root cause (the OpFreeRef-after-OpCopyRecord observation in earlier drafts was a SYMPTOM, not the cause).  Probe 30's mechanism still hypothesised — separate fix surface.  12 new probes (40-51) added to map the scope; see § Probe scope sweep.
+**Severity (split by failure mode, per sub-cluster):**
 
-**Verified root cause (probe 29 & family):**
+| Sub-cluster | Corruption / panic / hang | Leak | Status |
+|---|---|---|---|
+| V-a (tuple schema mismatch — probes 29, 41, 44, 45, 48, 50) | Native produced silently or loudly wrong values (Canvas2.data=null, integer truncation, field reordering) | NONE | ✅ FIXED (commit `b69a1707`) |
+| V-b (nested tuple codegen — probe 40) | Native rustc rejected with E0605 (`DbRef` cast to `(DbRef, DbRef)`) | Canvas×24/iter still present on `--interpret` | ✅ Corruption FIXED (commit `92ebe8dc`); leak remains (not graduated) |
+| V-c native (lambda dispatch — probes 30, 59, 62) | Native rustc `unreachable!("invalid fn-ref")` | NONE for 59, 62; Canvas×6/iter for 30 (interp-side, separate from V-c) | ✅ FIXED (commit `e4cd328d`) |
+| V-c interp (lambda dispatch — probes 30, 59, 62) | Interp corrupted main's stack frame (loop var `i = 65535` after lambda return) | Canvas×6/iter for 30 (separate from corruption) | ✅ Corruption FIXED (commit `5eb7d90d`); leak remains for 30 |
+
+**Status (2026-05-28): ✅ ALL CORRUPTION CLOSED.**  Two probes (30, 40) still carry leaks separate from their corruption fixes; both stayed in `probes/` (substitutes graduated to `tests/scripts/`).  See [§ Graduated probes](#graduated-probes) for the substitution rationale.
+
+**Graduated probes:**
+- V-a: probe 29 → `tests/scripts/147-plan51-cluster5a-tuple-return.loft`
+- V-c: probe 53 (lambda-with-captures, clean substitute for probe 30) → `tests/scripts/150-plan51-cluster5c-lambda-with-captures.loft`
+- V-b: not graduated (probe 40 still leaks; no clean substitute available — V-b is sole-probe)
+
+**Backend asymmetry:** Opposite from clusters II/III — here NATIVE was the failing side (interp passed for V-a/V-b; interp also failed for V-c-interp).
+
+---
+
+## Verified root cause (probe 29 & family)
+
+(Probe 30's mechanism: see V-c sub-cluster section below.)  12 new probes (40-51) added during the deep dive to map the scope; see § Probe scope sweep.
+
+**V-a mechanism:**
 
 `src/generation/mod.rs:1528` emits `db.structure("{name}", 0)` into the generated native binary for each loft struct type, then adds attributes via subsequent `db.field(...)` calls.  But it **does NOT propagate `Definition::field_groups`** — the `LinkedFieldGroup::Tuple` entries that `tuple_def` (`src/data.rs:2586`) registers for tuple types so the compiler-side `finish_type` can pack tuple elements as one atomic block via `calculate_positions_with_groups`.
 
@@ -13,9 +35,7 @@ For `(Canvas, Canvas)`:
 - Native runtime side (without field_groups): positions `[0, 12]`, size **24**, align 8.
 - IR writes Canvas2 at offset 16 (per compiler).  `OpCopyRecord(_src, dst, tp=66)` at the call site uses `stores.size(66) = 24` (per runtime), copies bytes 0-23 — missing Canvas2.data at 24-27.  Then `copy_claims` walks Parts::Struct using positions [0, 12], reading from src.pos 12 (PADDING in the source's actual layout) and producing a null data pointer.
 
-**Severity:** Mixed.  Native produces silently or loudly wrong values depending on the tuple's element shape.  Some shapes pass by luck (small ints in a `(Canvas, integer)` tuple — bytes 16-19 happen to hold the whole value).  Probe 30 is a separate sub-issue (lambda-return).
 **Affected probes:** 29 (tuple-return), 30 (lambda-return), 40, 41, 44, 45, 48, 50 (all tuple-shape variants confirmed to fail; see § Probe scope sweep).
-**Backend asymmetry:** Opposite from clusters II/III — here NATIVE fails (interpret may or may not work).
 
 ## Probe scope sweep (12 probes, 40-51)
 

@@ -1,10 +1,15 @@
 # Cluster IV — Codegen panic on two-heap-returning-branches
 
-**Status: ✅ FIXED 2026-05-28** (commit `d630e68b`).  The codegen panic at `src/state/codegen.rs:2529:9` is resolved on both backends.  Native: 6/7 probes pass cleanly (probe 13 recursive now reaches the generated Rust but fails on a recursion-specific issue at a different line, separate from the panic class).  Interpret: probes no longer hit the codegen panic; they expose downstream Cluster II/III runtime issues (separate fixes — see those cluster docs).
+**Severity (split by failure mode):**
+- **Corruption / panic / hang:** WAS hard panic at `src/state/codegen.rs:2529:9` (compile-time, both backends).  CLOSED 2026-05-28 (commit `d630e68b`).  Residual: probe 08 prints `PASSED` then SIGSEGVs at process teardown; probe 22 hangs forever.  Both are unrelated downstream bugs surfaced during probe graduation — filed-and-tracked, NOT part of the codegen-panic class this cluster targeted.
+- **Leak:** Inherited from Cluster II shapes — closed independently via the Cluster II arc.
 
-**Severity:** Worst class — hard panic halts compilation on BOTH backends.
+**Status (2026-05-28): ✅ FIXED.**  The codegen panic is resolved on both backends.  Native: 6/7 probes pass cleanly (probe 13 recursive now reaches the generated Rust but fails on a recursion-specific issue at a different line, separate from the panic class).  Interpret: probes no longer hit the codegen panic.
+
+**Graduated probe:** `tests/scripts/144-plan51-cluster4-match-tail.loft` (probe 18 — the cluster-IV REFERENCE PASS case; probe 08 substituted out because of the teardown SIGSEGV noted above).
+
 **Affected probes:** 08, 13, 22, 27, 33, 34, 37 (7 probes; 34 + 37 added during edge-case sweep)
-**Failure site:** `src/state/codegen.rs:2529:9`
+**Failure site:** `src/state/codegen.rs:2529:9` (pre-fix)
 
 ## Fix landed (S3 — caller_hidden_buf flag)
 
