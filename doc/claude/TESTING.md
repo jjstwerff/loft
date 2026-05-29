@@ -554,6 +554,49 @@ let config = LogConfig {
 
 ---
 
+## Execution timeout (`LOFT_TIMEOUT` / `--timeout`)
+
+Guards against hangs that would wedge `cargo test` or `find_problems.sh`.  The
+deadline mechanism is layered:
+
+- **Cooperative diagnostic check** fires at `T` (the requested deadline) — runs at
+  every loft "checkpoint" (interpreter dispatch entry, native fn-entry, lexer
+  recovery loop, etc.).  Raises a typed `Timeout`, dumps the rich call stack
+  (interpreter: `crash_tail` + `StackFrame`; native: `CALL_STACK` thread-local),
+  exits cleanly.
+- **Watchdog hard-kill** fires at `T + grace` — runs on a background thread and
+  calls `std::process::abort()`, guaranteeing termination even when execution is
+  stuck in arbitrary Rust / native / blocking syscall.  Prints a shared breadcrumb
+  (`phase ∈ {parse, run-interpret, run-native}` + file:line) so the kill is still
+  informative.
+
+Configuration:
+
+| Mechanism | Default | How |
+|---|---|---|
+| Explicit CLI flag | (off) | `loft --timeout <secs> <program.loft>` |
+| Env var | (off) | `LOFT_TIMEOUT=<secs> loft <program.loft>` |
+| Auto-arming under `--tests` / `loft test` | **on, 300s** | `loft --tests <file>` arms 300s unless explicitly overridden |
+
+Implementation lives in `src/timeout.rs` (watchdog thread, deadline atomics,
+breadcrumb store) + checkpoint calls scattered through `src/state/mod.rs`
+(interpreter dispatch), `src/codegen_runtime.rs` (`cr_check_deadline()` injected
+at native fn-entry / loop back-edges), and `src/lexer.rs` (parse-time recovery
+loop).
+
+A hung `--interpret` program exits **124/SIGABRT** at `T+grace` reporting
+`phase=run-interpret`; a hung *compile* reports `phase=parse`.  Subprocess
+isolation for the in-process cargo harness (`tests/wrap.rs::script_suite`) is
+NOT yet wired — a hung script there still wedges the whole `cargo test` run.
+T4 harness subprocess isolation shipped via `.config/nextest.toml`'s
+`slow-timeout` (300s default / 600s ci, `terminate-after = 1`) —
+nextest escalates SIGTERM → SIGKILL on a hung test process,
+localizing the hang to ONE test binary; other test binaries
+continue.  Full closure record at
+[`plans/finished/49-execution-timeout/`](plans/finished/49-execution-timeout/).
+
+---
+
 ## `tests/wrap.rs` — shared runner for docs and scripts tests
 
 `run_test(path, debug)` is the core of every test in `tests/wrap.rs`:

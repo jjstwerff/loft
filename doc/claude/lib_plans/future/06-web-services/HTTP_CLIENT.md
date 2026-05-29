@@ -155,11 +155,12 @@ longer needed**.  `Type.parse()` replaces all of them.
 > thread-local; see `lib/web/src/web.loft` + `lib/web/native/src/lib.rs`), not
 > `default/06_web.loft` / `src/native_http.rs`.
 
-The next consumer-driven enhancement — **response headers + a cookie-jar
-session** (to unblock native Garmin login A2 in the training port) — has its own
-phased plan: **[`../23-http-session-auth/`](../23-http-session-auth/)**.  Related
-items (base64 stdlib helper, the moot `exec()` gap, the deferred TLS/JA3
-impersonation E1) are tracked there too.
+The first consumer-driven enhancement — **response headers + a cookie-jar
+session + base64 helpers** (which unblocked native Garmin login A2 in the
+training port) — shipped via @PLAN23 (closure record at
+[`../../finished/23-http-session-auth/`](../../finished/23-http-session-auth/)).
+The deferred TLS/JA3 impersonation E1 stays conditional (only revisit if
+Garmin's WAF later blocks the plain-TLS credential POST).
 
 ## See also
 

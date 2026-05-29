@@ -855,7 +855,7 @@ extern crate loft;"
                 // @PLAN37 phase 10.3 fix.
                 write!(
                     w,
-                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n"
+                    "\nfn main() {{\n    // @PLAN49 native subprocess arming — the spawned native binary self-arms\n    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent\n    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n"
                 )?;
                 w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
                 writeln!(w, "}}")?;
@@ -870,7 +870,7 @@ extern crate loft;"
         if main_nr < till {
             write!(
                 w,
-                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n"
+                "\nfn main() {{\n    // @PLAN49 native subprocess arming — the spawned native binary self-arms\n    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent\n    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n"
             )?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
             writeln!(w, "}}")?;

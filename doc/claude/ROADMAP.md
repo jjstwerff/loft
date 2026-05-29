@@ -183,7 +183,6 @@ First-time-user experience, daily ergonomics, IDE polish.
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
 | (cross) | Better error messages — `file:line:col` + caret + suggestion | M | ✓ | plans/future/07-error-messages/README.md |
-| (cross) | Execution timeout + on-timeout diagnostics — `--timeout`/`LOFT_TIMEOUT`, default under `--tests`; dumps spinning fn:line + call stack (+ crash_tail on interpret), both backends | M | ✓ | plans/49-execution-timeout/README.md |
 | SH.1 | TextMate grammar for `.loft` | S | ✓ | plans/future/27-developer-experience/README.md |
 | SH.2 | VS Code extension (grammar + snippets + run task) | S | ✓ | plans/future/27-developer-experience/README.md |
 | DX.1 | Quick-start `examples/` directory at repo root | XS | ✓ | plans/future/27-developer-experience/README.md |
@@ -260,7 +259,6 @@ Small specific features, low-priority items.
 |---|---|---|---|---|
 | (cross) | Game asset pipeline (prototype → artist polish → integration) | M | ✓ | lib_plans/future/04-asset-pipeline/README.md |
 | (cross) | Web services — HTTP client + URL handling + auth + SSE/WS | M-H per arc | ✓ | lib_plans/future/06-web-services/README.md |
-| (cross) | `lib/web` response headers + cookie-jar session — unblocks native Garmin login (training A2) | M (P1 XS-S) | ✓ | lib_plans/future/23-http-session-auth/README.md |
 | C57 | Route decorator syntax (`@get`, `@post`, `@ws`) | H | ✓ | plans/future/29-server-features/README.md |
 | I13 | Iterator protocol (`for msg in ws` via `fn next`) | MH | ✓ | plans/future/29-server-features/README.md |
 | AOT | Auto-compile libraries to native shared libs | M | ✓ | (needs plan promotion) |
