@@ -183,7 +183,6 @@ First-time-user experience, daily ergonomics, IDE polish.
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
 | (cross) | Better error messages — `file:line:col` + caret + suggestion | M | ✓ | plans/future/07-error-messages/README.md |
-| (cross) | Execution timeout + on-timeout diagnostics — `--timeout`/`LOFT_TIMEOUT`, default under `--tests`; dumps spinning fn:line + call stack (+ crash_tail on interpret), both backends | M | ✓ | plans/49-execution-timeout/README.md |
 | SH.1 | TextMate grammar for `.loft` | S | ✓ | plans/future/27-developer-experience/README.md |
 | SH.2 | VS Code extension (grammar + snippets + run task) | S | ✓ | plans/future/27-developer-experience/README.md |
 | DX.1 | Quick-start `examples/` directory at repo root | XS | ✓ | plans/future/27-developer-experience/README.md |

@@ -10,6 +10,13 @@
 failure-output   = "immediate"
 success-output   = "never"
 status-level     = "pass"
+# @PLAN49 T4 — kill a hung test process after 300s (terminate-after = 1 ->
+# warn-and-kill at the same period).  Localizes a hung script in loft_suite
+# / a hung native binary spawn / a stuck wasm build to ONE test process;
+# the rest of the suite continues.  Per-process slow-timeout via nextest;
+# stronger guarantee than the in-process `loft --timeout` because nextest
+# escalates to SIGKILL if the process ignores SIGTERM.
+slow-timeout     = { period = "300s", terminate-after = 1 }
 
 [profile.ci]
 # CI runs: retry flaky tests once, emit JUnit for the Actions UI.
@@ -18,6 +25,10 @@ failure-output   = "immediate-final"
 success-output   = "never"
 status-level     = "pass"
 final-status-level = "slow"
+# @PLAN49 T4 — same slow-timeout as default; CI hosts are typically slower
+# so give 600s (the long-running tests like p137_html_* + audience_crystal
+# already run 60-120s on slow runners).
+slow-timeout     = { period = "600s", terminate-after = 1 }
 
 [profile.ci.junit]
 path = "target/nextest/junit.xml"
