@@ -180,9 +180,22 @@ impl Output<'_> {
                     // excluded native fns (E0308 `expected &str, found String`).
                     // `&*` is safe for all text shapes (`String`/`Str`/`&str` are
                     // `Deref<Target=str>`).  `Op*` runtime helpers stay excluded.
+                    // @P386: a text-result `Value::Block` argument whose body
+                    // contains the `__ncc_*` skip_free pattern emits its tail
+                    // as `_ret.to_string()` (owned `String`, see
+                    // `output_block`'s @P321e/@P323 materialisation at
+                    // emit.rs:~1466).  Direct-call `&str` params then trip
+                    // rustc E0308 ("expected `&str`, found `String`").  Wrap
+                    // with `&*` (which derefs both `String` and `Str` to
+                    // `&str`).  Same idea as the existing CallRef detection
+                    // above, just applied at the Block level.
+                    let arg_is_text_block_string = matches!(v_unspanned, Value::Block(b)
+                        if matches!(b.result, Type::Text(_))
+                            && self.block_contains_ncc_skip_free(b));
                     let needs_deref = idx < def_fn.attributes.len()
                         && matches!(def_fn.attributes[idx].typedef, Type::Text(_))
                         && (arg_is_text_callref
+                            || arg_is_text_block_string
                             || matches!(v_unspanned, Value::Call(d, _) if
                                 matches!(self.data.def(*d).returned, Type::Text(_))
                                 && !self.data.def(*d).name.starts_with("Op")));

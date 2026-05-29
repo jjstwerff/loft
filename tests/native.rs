@@ -55,10 +55,6 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     // with `?? <int>` mis-compiled); @P316 is fixed, so 135 now runs natively
     // and doubles as the @P316 regression guard.
     //
-    // @P386 — `if cond { v[i] ?? null } else { null }` returning `text` triggers
-    // a native codegen bug: emitted `_ret.to_string()` where rustc expects `&str`.
-    // Tracked separately; remove from skip list when @P386 is fixed.
-    "159-p385-text-nullable-else-null.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.
