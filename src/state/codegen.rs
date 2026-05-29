@@ -1397,14 +1397,12 @@ impl State {
             // result.  We must fall through to the reassignment path so
             // the pre-Set free runs on `v`.  `s1_substituted` is the
             // already-computed check we need.
-            let is_hidden_buf_arg = s1_substituted
-                && stack.function.is_argument(v)
-                && {
-                    let attrs = &stack.data.def(stack.def_nr).attributes;
-                    attrs
-                        .iter()
-                        .any(|a| a.hidden && stack.function.var(&a.name) == v)
-                };
+            let is_hidden_buf_arg = s1_substituted && stack.function.is_argument(v) && {
+                let attrs = &stack.data.def(stack.def_nr).attributes;
+                attrs
+                    .iter()
+                    .any(|a| a.hidden && stack.function.var(&a.name) == v)
+            };
             if matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
@@ -1525,7 +1523,8 @@ impl State {
                     // corruption pinned in commit `a957a365`).  Emit
                     // OpInitRef after the wrap to reset each caller-
                     // hidden-buf arg's slot to the u16::MAX sentinel.
-                    let caller_hidden_args: Vec<u16> = if let Value::Call(_, args) = value.unspan() {
+                    let caller_hidden_args: Vec<u16> = if let Value::Call(_, args) = value.unspan()
+                    {
                         args.iter()
                             .filter_map(|a| {
                                 if let Value::Var(av) = a.unspan()
@@ -2075,8 +2074,7 @@ impl State {
                 let deps = def.returned.depend();
                 !deps.is_empty()
                     && deps.iter().any(|&a| {
-                        (a as usize) >= def.attributes.len()
-                            || !def.attributes[a as usize].hidden
+                        (a as usize) >= def.attributes.len() || !def.attributes[a as usize].hidden
                     })
             } else {
                 false

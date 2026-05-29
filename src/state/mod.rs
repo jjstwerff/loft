@@ -378,8 +378,7 @@ impl State {
                     continue;
                 }
                 let buf = match &attr.typedef {
-                    crate::data::Type::Reference(_, _)
-                    | crate::data::Type::Enum(_, true, _) => {
+                    crate::data::Type::Reference(_, _) | crate::data::Type::Enum(_, true, _) => {
                         // For struct returns, the body's `cv = Type{...}`
                         // OpDatabase reuses the slot (clear + claim).
                         // `null()` provides a real slot with rec=0 — the
@@ -395,18 +394,17 @@ impl State {
                         let elm_name = elm_tp.name(data);
                         let tp_name = format!("main_vector<{elm_name}>");
                         let tp_id = self.database.name(&tp_name);
-                        if tp_id != u16::MAX {
+                        if tp_id == u16::MAX {
+                            self.database.null()
+                        } else {
                             let sz = u32::from(self.database.size(tp_id));
                             let r = self.database.database(sz);
-                            self.database.allocations[r.store_nr as usize]
-                                .known_type = tp_id;
+                            self.database.allocations[r.store_nr as usize].known_type = tp_id;
                             self.database
                                 .store_mut(&r)
                                 .set_u32_raw(r.rec, 4, u32::from(tp_id));
                             self.database.set_default_value(tp_id, &r);
                             r
-                        } else {
-                            self.database.null()
                         }
                     }
                     _ => continue,

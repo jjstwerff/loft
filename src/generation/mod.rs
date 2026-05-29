@@ -1514,10 +1514,7 @@ extern crate loft;"
                     .map(u16::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
-                writeln!(
-                    w,
-                    "    db.add_tuple_group(t{type_id}, &[{idx_list}]);"
-                )?;
+                writeln!(w, "    db.add_tuple_group(t{type_id}, &[{idx_list}]);")?;
             }
         }
         Ok(())

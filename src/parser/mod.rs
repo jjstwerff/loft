@@ -2900,7 +2900,9 @@ impl Parser {
         // into the host field at `base_pos`.  Mirrors the
         // `Type::Reference(_, deps.is_empty())` arm in
         // `set_field_check` (line 3202-3216).
-        let promoted_src_def: Option<u32> = if !self.first_pass {
+        let promoted_src_def: Option<u32> = if self.first_pass {
+            None
+        } else {
             match val_code.unspan() {
                 Value::Call(d_nr, _) => {
                     if let Type::Reference(d, _) = &self.data.def(*d_nr).returned
@@ -2913,8 +2915,6 @@ impl Parser {
                 }
                 _ => None,
             }
-        } else {
-            None
         };
         if let Some(inner_d) = promoted_src_def {
             let inner_kt = i32::from(self.data.def(inner_d).known_type);
@@ -2926,10 +2926,7 @@ impl Parser {
                     Value::Int(inner_kt),
                 ],
             );
-            return vec![self.cl(
-                "OpCopyRecord",
-                &[val_code, field_ref, Value::Int(inner_kt)],
-            )];
+            return vec![self.cl("OpCopyRecord", &[val_code, field_ref, Value::Int(inner_kt)])];
         }
         // Non-literal source: stash to a work-ref Tuple local, then
         // read each element via `Value::TupleGet`.

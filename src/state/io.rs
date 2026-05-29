@@ -1241,7 +1241,9 @@ impl State {
                 -1
             };
             let src_data_ptr = if data.rec != 0 {
-                self.database.store(&data).get_u32_raw(data.rec, data.pos + 8)
+                self.database
+                    .store(&data)
+                    .get_u32_raw(data.rec, data.pos + 8)
             } else {
                 0
             };
@@ -1262,8 +1264,7 @@ impl State {
             };
             eprintln!(
                 "[cr] OpCopyRecord src=#{}@{},{} (w={src_w} data_ptr={src_data_ptr} vec0={src_vec0}) dst=#{}@{},{} (w_before={dst_w_before}) tp={tp} free_src={free_source}",
-                data.store_nr, data.rec, data.pos,
-                to.store_nr, to.rec, to.pos,
+                data.store_nr, data.rec, data.pos, to.store_nr, to.rec, to.pos,
             );
         }
         let code_pos = self.code_pos;
@@ -1282,18 +1283,13 @@ impl State {
                 to.store_nr, to.rec, to.pos,
             );
             if dst_data_ptr != 0 {
-                let len = self
-                    .database
-                    .store(&to)
-                    .get_u32_raw(dst_data_ptr, 4);
+                let len = self.database.store(&to).get_u32_raw(dst_data_ptr, 4);
                 let first = if len > 0 {
                     self.database.store(&to).get_int(dst_data_ptr, 8)
                 } else {
                     -2
                 };
-                eprintln!(
-                    "[cr]   AFTER copy: dst.vec_rec={dst_data_ptr} len={len} [0]={first}",
-                );
+                eprintln!("[cr]   AFTER copy: dst.vec_rec={dst_data_ptr} len={len} [0]={first}");
             }
         }
         // @P317 — LOFT_LOG=copy_check: warn if the deep copy changed any nested

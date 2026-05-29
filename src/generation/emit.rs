@@ -695,9 +695,7 @@ impl Output<'_> {
                 if a.hidden
                     && matches!(
                         a.typedef,
-                        Type::Reference(_, _)
-                            | Type::Vector(_, _)
-                            | Type::Enum(_, true, _)
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
                     )
                 {
                     // PLAN51 V-c: ref_return-promoted hidden buffer.
