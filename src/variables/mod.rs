@@ -1482,3 +1482,57 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
         _ => 0,
     }
 }
+
+/// Stack alignment (in bytes) a value of type `tp` requires so that an
+/// `addr`/`addr_mut::<T>` into the eval stack / frame slot forms a sound,
+/// aligned reference (@PLAN53 cluster 2).
+///
+/// Unlike [`size`], this is **not** context-dependent: stack `text` is
+/// either an align-8 `String` (Variable context) or an align-8 `Str`
+/// (otherwise) — both contain a raw pointer, so 8 either way.  This is
+/// deliberately STRONGER than `data::element_align` (which aligns the
+/// record-stored `Str` to 4); records keep their own weaker layout on
+/// the `element_align` path and are unaffected.  Not meaningful for
+/// `Context::Constant` (byte-packed bytecode operands) — callers only
+/// use it for stack/frame layout.
+// S2: added ahead of its caller; this `#[allow(dead_code)]` is removed
+// in S3 when frame-slot layout starts calling `align`.
+#[allow(dead_code)]
+pub fn align(tp: &Type) -> u8 {
+    match tp {
+        Type::Boolean | Type::Enum(_, false, _) => 1,
+        Type::Single | Type::Character => 4,
+        Type::Integer(_) | Type::Float | Type::Function(_, _, _) => 8,
+        // String (Variable) and Str (otherwise) both hold a raw pointer → align 8.
+        Type::Text(_) => 8,
+        Type::RefVar(_)
+        | Type::Reference(_, _)
+        | Type::Vector(_, _)
+        | Type::Index(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Sorted(_, _, _)
+        | Type::Enum(_, true, _)
+        | Type::Spacial(_, _, _)
+        | Type::Iterator(_, _) => 4, // DbRef = u16 + u32 + u32 → align 4
+        Type::Tuple(elems) => crate::data::element_align(&Type::Tuple(elems.clone())),
+        _ => 1,
+    }
+}
+
+#[cfg(test)]
+mod align_tests {
+    use super::*;
+
+    // S2 (@PLAN53 cluster 2): the stack-alignment table.  Text is align-8
+    // (both `String` and `Str` hold a raw pointer); small types stay tight
+    // (align 1/4) so they pack into the holes alignment leaves.
+    #[test]
+    fn align_values_for_stack_layout() {
+        assert_eq!(align(&Type::Text(vec![])), 8);
+        assert_eq!(align(&Type::Boolean), 1);
+        assert_eq!(align(&Type::Character), 4);
+        assert_eq!(align(&Type::Single), 4);
+        assert_eq!(align(&Type::Float), 8);
+        assert_eq!(align(&crate::data::I64), 8);
+    }
+}
