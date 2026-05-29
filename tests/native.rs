@@ -478,44 +478,84 @@ fn compile_native_job(
         println!("  cached  {}", job.stem);
         return Ok(true);
     }
-    let mut cmd = std::process::Command::new("rustc");
-    cmd.arg("--edition=2024")
-        .arg("-C")
-        .arg("debuginfo=0")
-        .arg("-C")
-        .arg("opt-level=0");
+    // PLAN49 follow-up — build the rustc args into a file passed via
+    // `rustc @argfile` instead of as a long command line.  Windows
+    // `CreateProcessW` enforces a 32 KB command-line limit; on CI runners
+    // the rustc `--extern <crate>=<rlib-path>` list + `-L` search paths
+    // from `find_native_lib_dirs` (windows-targets build-script outputs)
+    // routinely approaches that limit, and a runner-image bump on
+    // 2026-05-29 pushed it over, killing every native test with
+    // `Os { code: 206, kind: InvalidFilename }`.  The argfile pattern
+    // is cross-platform (Linux + macOS happily accept it too) and
+    // immune to cmdline length.
+    let mut args: Vec<String> = vec![
+        "--edition=2024".to_string(),
+        "-C".to_string(),
+        "debuginfo=0".to_string(),
+        "-C".to_string(),
+        "opt-level=0".to_string(),
+    ];
     // LOFT_CRANELIFT=1 — use the Cranelift codegen backend for much faster compilation.
     // Requires a nightly toolchain with `rustup component add rustc-codegen-cranelift-preview`.
     if std::env::var_os("LOFT_CRANELIFT").is_some() {
-        cmd.arg("-Z").arg("codegen-backend=cranelift");
+        args.push("-Z".to_string());
+        args.push("codegen-backend=cranelift".to_string());
     }
-    cmd.arg("-o").arg(&job.binary).arg(&job.tmp_rs);
+    args.push("-o".to_string());
+    args.push(job.binary.display().to_string());
+    args.push(job.tmp_rs.display().to_string());
     if let Some((rlib, deps_dir)) = rlib_info {
-        cmd.arg("--extern")
-            .arg(format!("loft={}", rlib.display()))
-            .arg("-L")
-            .arg(deps_dir);
+        args.push("--extern".to_string());
+        args.push(format!("loft={}", rlib.display()));
+        args.push("-L".to_string());
+        args.push(deps_dir.display().to_string());
         // S31: pass --extern for optional feature deps (rand_core, rand_pcg, etc.) so that
         // generated code using `random` or `png` features compiles without E0433 errors.
         for (crate_name, rlib_path) in collect_extra_externs(deps_dir) {
-            cmd.arg("--extern")
-                .arg(format!("{crate_name}={}", rlib_path.display()));
+            args.push("--extern".to_string());
+            args.push(format!("{crate_name}={}", rlib_path.display()));
         }
     }
     // On Windows MSVC, build-script output dirs holding native import libs (e.g.
     // `windows.0.48.5.lib` from `windows-sys`) must be passed explicitly to standalone
     // rustc — cargo adds them automatically via `cargo:rustc-link-search`, but we don't.
     for dir in find_native_lib_dirs(rlib_info) {
-        cmd.arg("-L").arg(dir);
+        args.push("-L".to_string());
+        args.push(dir.display().to_string());
     }
-    let compile_out = match cmd.output() {
+    // Write one arg per line.  rustc's argfile parser is whitespace-
+    // separated; newline-separated is a strict subset and is what
+    // every other tool (clang, gcc) accepts too.  Paths containing
+    // whitespace get quoted defensively.
+    let argfile_path = std::env::temp_dir().join(format!("loft_native_{}_args.txt", job.stem));
+    let argfile_contents = args
+        .iter()
+        .map(|s| {
+            if s.contains(char::is_whitespace) {
+                format!("\"{}\"", s.replace('"', "\\\""))
+            } else {
+                s.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&argfile_path, argfile_contents)?;
+    let compile_out = match std::process::Command::new("rustc")
+        .arg(format!("@{}", argfile_path.display()))
+        .output()
+    {
         Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             println!("  rustc not found — skipping native test for {}", job.stem);
+            let _ = std::fs::remove_file(&argfile_path);
             return Ok(false);
         }
-        Err(e) => return Err(e),
+        Err(e) => {
+            let _ = std::fs::remove_file(&argfile_path);
+            return Err(e);
+        }
     };
+    let _ = std::fs::remove_file(&argfile_path);
     if !compile_out.status.success() {
         let stderr = String::from_utf8_lossy(&compile_out.stderr);
         eprintln!("rustc failed for {}:\n{stderr}", job.stem);
