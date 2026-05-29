@@ -85,8 +85,14 @@ fn is_segment_char_b(b: integer) -> boolean {
 // Build the set of valid P-issue numbers from PROBLEMS.md.
 // Each row starts `| <num> | **@P<num>** — ...`; the leading
 // `^| <digits> |` is the source of truth for which P-ids
-// exist.  Returned as a `vector<text>` of bare numeric strings
-// (no `@P` prefix) — same shape scan.sh's `VALID_PIDS` uses.
+// exist.  A row whose first cell is `~~<num>~~` is the closed/
+// fixed form — same convention as the `problems_open_index_matches_quickref`
+// doc-hygiene check (tests/doc_hygiene.rs:947); the bare `<num>`
+// is "still open" and `~~<num>~~` is "resolved".  Both forms are
+// valid P-id DEFINITIONS for backlink-resolution purposes — a
+// fixed row still anchors @P references from other docs.
+// Returned as a `vector<text>` of bare numeric strings (no `@P`
+// prefix) — same shape scan.sh's `VALID_PIDS` uses.
 fn read_valid_pids() -> vector<text> {
     out: vector<text> = [];
     f = file("doc/claude/PROBLEMS.md");
@@ -98,15 +104,26 @@ fn read_valid_pids() -> vector<text> {
     while i <= n {
         if i == n || src[i] == '\n' {
             line = src[line_start..i];
-            // Match `^| <digits> |`.  Pull the digits between
-            // the two pipes.
             ll = line.len();
+            // Match `^| <digits> |` (open form).
             if ll > 4 && line[0] == '|' && line[1] == ' '
                 && ll > 2 && is_digit_leaf(line[2]) {
                 j = 2;
                 while j < ll && is_digit_leaf(line[j]) { j = j + 1; }
                 if j + 2 <= ll && line[j] == ' ' && line[j + 1] == '|' {
                     pid = line[2..j];
+                    out += [pid];
+                }
+            }
+            // Match `^| ~~<digits>~~ |` (closed/fixed form).
+            else if ll > 8 && line[0] == '|' && line[1] == ' '
+                && line[2] == '~' && line[3] == '~'
+                && is_digit_leaf(line[4]) {
+                j = 4;
+                while j < ll && is_digit_leaf(line[j]) { j = j + 1; }
+                if j + 4 <= ll && line[j] == '~' && line[j + 1] == '~'
+                    && line[j + 2] == ' ' && line[j + 3] == '|' {
+                    pid = line[4..j];
                     out += [pid];
                 }
             }
