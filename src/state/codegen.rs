@@ -77,12 +77,15 @@ impl State {
             // arg-frame size from the def's attributes (which exist for
             // native fns even when variables don't) and account for the
             // 4-byte return-PC slot.
+            // @PLAN53 cluster 2 / S4: each arg + the return-address slot
+            // occupies a STEPPED span in aligned mode (step is identity
+            // when LOFT_ALIGN is off → V1 unchanged).
             let mut args_size: u16 = 0;
             for attr in &stack.data.def(def_nr).attributes {
-                args_size += size(&attr.typedef, &Context::Argument);
+                args_size += stack.step(size(&attr.typedef, &Context::Argument));
             }
             self.arguments = args_size;
-            stack.position = args_size + 4; // args + return-address slot
+            stack.position = args_size + stack.step(4); // args + return-address slot
             let start = self.code_pos;
             self.add_return(&mut stack, start);
             data.definitions[def_nr as usize].code_position = start;
@@ -96,11 +99,12 @@ impl State {
         let args = stack.function.arguments();
         for v in &args {
             stack.function.set_stack_pos(*v, stack.position);
-            stack.position += size(stack.function.tp(*v), &Context::Argument);
+            // @PLAN53 cluster 2 / S4: stepped arg span (identity when off).
+            stack.position += stack.step(size(stack.function.tp(*v), &Context::Argument));
         }
         let start = self.code_pos;
         self.arguments = stack.position;
-        stack.position += 4; // keep space for the code return address
+        stack.position += stack.step(4); // keep space for the code return address
         if is_empty_stub {
             self.add_return(&mut stack, start);
             data.definitions[def_nr as usize].code_position = start;
@@ -114,7 +118,10 @@ impl State {
         // Per-block `OpReserveFrame(block.var_size)` is deleted in
         // `generate_block`; first-Set helpers now write positional-init
         // or push-then-`OpPut*` into the pre-reserved slots.
-        let frame_hwm = stack.function.frame_hwm(&Context::Variable);
+        // @PLAN53 cluster 2 / S4: round the frame high-water mark to 8 so the
+        // first eval-TOS push above the reserved frame is 8-aligned (identity
+        // when off).
+        let frame_hwm = stack.step(stack.function.frame_hwm(&Context::Variable));
         if frame_hwm > stack.position {
             let reserve = frame_hwm - stack.position;
             stack.add_op("OpReserveFrame", self);
