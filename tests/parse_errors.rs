@@ -544,7 +544,11 @@ fn spacial_not_implemented() {
     // C7/P22: spacial<T> is a reserved keyword; its diagnostic now
     // surfaces the 1.1+ timeline so a user who typed it knows when
     // the feature ships and which substitute to reach for.
-    code!("struct Point { x: integer, y: integer }\nstruct World { pts: spacial<Point, x, y> }\nfn test() {}")
+    //
+    // @PLAN52 IV-Spacial fix (2026-05-29): use the new bracket-key
+    // syntax `spacial<X[k]>`; the comma-separated form parses with
+    // additional errors after the @PLAN52 fix landed.
+    code!("struct Point { x: integer, y: integer }\nstruct World { pts: spacial<Point[x, y]> }\nfn test() {}")
         .error("spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups at spacial_not_implemented:2:43");
 }
 
@@ -552,7 +556,7 @@ fn spacial_not_implemented() {
 /// variable (not just a struct field) and carries the same hint.
 #[test]
 fn spacial_not_implemented_in_local() {
-    code!("struct Point { x: integer, y: integer }\nfn test() { xs: spacial<Point, x, y> = []; }")
+    code!("struct Point { x: integer, y: integer }\nfn test() { xs: spacial<Point[x, y]> = []; }")
         .error("spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups at spacial_not_implemented_in_local:2:39");
 }
 

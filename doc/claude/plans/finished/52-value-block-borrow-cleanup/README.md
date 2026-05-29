@@ -12,7 +12,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | A — Probe catalogue | ✅ COMPLETE (60+ probes, all run under both backends). |
 | B — Mechanism investigation | ✅ COMPLETE (2026-05-29). |
 | C — Fix design | ✅ COMPLETE (2026-05-30). |
-| D — Implementation | ✅ COMPLETE 2026-05-30.  All 10 sets (A-J) PASS both backends; Set Z all 4 EXCLUDED with rationale (language-level restrictions, not value-block-borrow gap); 9 representative probes graduated to `tests/scripts/150-158-plan52-*.loft`.  Probe 97 spun off as [@P384](../../PROBLEMS.md) (architectural). |
+| D — Implementation | ✅ COMPLETE 2026-05-30.  All 10 sets (A-J) PASS both backends; Set Z all 4 EXCLUDED with rationale (language-level restrictions, not value-block-borrow gap); 9 representative probes graduated to `tests/scripts/150-158-plan52-*.loft`.  Probe 97 spun off as [@P384](../../../PROBLEMS.md) (architectural). |
 
 **PLAN52 is CLOSED 2026-05-30.**  See [the closure summary at the end of this README](#-closure-2026-05-30) for the full landed-commits list, final probe matrix, and binary close-criteria verification.
 
@@ -35,7 +35,7 @@ The failure modes discovered or hypothesised during exploration. Each verified c
 | II ❌ | ~~`if`/`match`-as-value with text from a block-local~~ — **FALSIFIED**: probes 07/08 PASS.  `unify_if_branches_work_refs` (parser/control.rs:728) materialises branch text into shared work-ref before the consumer reads. | n/a | n/a | 07, 08 | _hypothesis closed_ |
 | III ✅ closed 2026-05-30 | Format-string `{x ?? "y"}` interpolation — same root mechanism as cluster I; **CLOSED 2026-05-30** by cluster I iteration 2 (Set D 5/5 PASS).  Format-buffer reads the owned String materialised inside the value-block tail. | n/a (closed) | both backends fixed | 09, 19, 30 | [`cluster-III-format-string.md`](cluster-III-format-string.md) |
 | IV-Ref ❌ | ~~`Reference` value-blocks~~ — **FALSIFIED**: probe 10 PASSES.  @PLAN51's `paired_witness` + S1 NRVO covers the Reference value-block case. | n/a | n/a | 10 | _hypothesis closed_ |
-| IV-Vec-nested-field-push ✅ closed 2026-05-30 (probe 97 spun off as @P384) | `vector<vector<X>>` STRUCT FIELD `+= inner_vec` misrouted to concatenate.  **CLOSED 2026-05-30** by strict-rule `+=` (commits `3a46739` + `d98c32b`).  Probes 21/36/91-96 PASS both backends.  Probe 97 (3-deep nesting) spun off to [@P384](../../PROBLEMS.md#open-issues--quick-reference) (parser/runtime type-id divergence — architectural, not value-block-borrow-cleanup mechanism). | n/a (closed) | both backends fixed | 21, 36, 91, 92, 93, 94, 95, 96 (97 → P384) | [`cluster-IV-Vec-nested-field-push.md`](cluster-IV-Vec-nested-field-push.md) |
+| IV-Vec-nested-field-push ✅ closed 2026-05-30 (probe 97 spun off as @P384) | `vector<vector<X>>` STRUCT FIELD `+= inner_vec` misrouted to concatenate.  **CLOSED 2026-05-30** by strict-rule `+=` (commits `3a46739` + `d98c32b`).  Probes 21/36/91-96 PASS both backends.  Probe 97 (3-deep nesting) spun off to [@P384](../../../PROBLEMS.md#open-issues--quick-reference) (parser/runtime type-id divergence — architectural, not value-block-borrow-cleanup mechanism). | n/a (closed) | both backends fixed | 21, 36, 91, 92, 93, 94, 95, 96 (97 → P384) | [`cluster-IV-Vec-nested-field-push.md`](cluster-IV-Vec-nested-field-push.md) |
 | IV-Hash ✅ closed (native) | `Hash` value-blocks via `??` — **CLOSED on native 2026-05-29** by dep-strip fix in `src/parser/expressions.rs`.  Interpret still FAILs (separate cluster I-class dangling-handle bug). | Interpret only | Native fixed | 22 | _(bundle with IV-Vec)_ |
 | IV-Sorted ✅ closed (native) | `Sorted` value-blocks via `??` — closed on native by same dep-strip fix. | Interpret only | Native fixed | 41 | _(bundle with IV-Vec)_ |
 | IV-Index ✅ closed (native) | `Index` value-blocks via `??` — closed on native by same dep-strip fix. | Interpret only | Native fixed | 50 | _(bundle with IV-Vec)_ |
@@ -125,7 +125,7 @@ Results recorded 2026-05-29 against `main` + `macos-clippy-fixes` branch on rust
 | `94-vov-field-text-inner.loft` | `o.lists += inner` (text inner) | **IV-Vec-nested-field-push** | **FAIL** flat `len=2` (pre); **PASS** (post-fix) | **FAIL** flat (pre); **PASS** (post-fix) |
 | `95-vov-field-assign-literal.loft` | `o.lists = [inner]` (workaround) | secondary bug | PASS | **FAIL** alloc:1190 panic (both pre + post) |
 | `96-vov-struct-ctor-literal.loft` | `Outer{lists:[inner]}` (ctor literal) | secondary bug | PASS | **FAIL** alloc:1190 panic |
-| `97-vov-field-deeper-nest.loft` | 3-deep `vector<vector<vector<int>>>` field-push | **spun off → [@P384](../../PROBLEMS.md#open-issues--quick-reference)** (parser/runtime type-id divergence; out of PLAN52 scope) | **FAIL** alloc:1190 (P384) | **FAIL** alloc:1190 (P384) |
+| `97-vov-field-deeper-nest.loft` | 3-deep `vector<vector<vector<int>>>` field-push | **spun off → [@P384](../../../PROBLEMS.md#open-issues--quick-reference)** (parser/runtime type-id divergence; out of PLAN52 scope) | **FAIL** alloc:1190 (P384) | **FAIL** alloc:1190 (P384) |
 
 **Bytecount-of-failure pattern observation:** Cluster I probes mostly return length-preserved-but-zeroed bytes (the NUL-fill is consistent across all non-Var LHS variants — vec, field, call, concat, method, deep-chain, static-source, hash-deep, direct-print, real-config, return-position).  **Cluster I is shape-only — allocation class doesn't matter** (probe 16: static-literal source still corrupts).
 
@@ -175,7 +175,7 @@ probes/run_set.sh all     # run every set in A..I order (skip Z)
 | **H** | Baselines / regression guards — **MUST always PASS** | 01, 03, 07, 08, 10, 18, 35, 42, 43, 55, 60 | If ANY of these regresses after a fix, the fix introduces a new bug.  Run BEFORE and AFTER every fix attempt | **11/11 PASS** (verified 2026-05-29) |
 | **I** | Real-library / practical | 24, 71 | Production-shape patterns; near-future consumer code | Mixed (24 fails, 71 passes — see notes) |
 | **Z** | EXCLUDED — all 4 probes map to language-level restrictions or unimplemented features, NOT value-block-borrow-cleanup mechanism (audited + rationale added 2026-05-30) | 51, 52, 80, 85 | **51**: spacial unimplemented (planned for 1.1+); re-open when spacial lands.  **52**: char has no null sentinel — parser refusal is correct semantics.  **80**: nested-closure capture not supported — parser rejects ANY reference to outer closure's captures.  **85**: vector closure-capture not supported — error message directs user to bind the element first.  Each probe file has an `EXCLUDED FROM PLAN52` block at the top with the same rationale + re-open condition. | All 4 EXCLUDED; not a PLAN52 closure blocker |
-| **J** | Cluster IV-Vec-nested-field-push (added 2026-05-30) | 91, 92, 93, 94, 95, 96 (97 spun off to @P384) | `field += inner_vec` misroute (closed by strict rule); chained `db.vector` for nested-vector field init.  Probe 97 (3-deep) spun off — parser/runtime type-id divergence is architectural, not value-block-borrow-cleanup. | 6/6 PASS both backends; probe 97 tracked under [@P384](../../PROBLEMS.md#open-issues--quick-reference) |
+| **J** | Cluster IV-Vec-nested-field-push (added 2026-05-30) | 91, 92, 93, 94, 95, 96 (97 spun off to @P384) | `field += inner_vec` misroute (closed by strict rule); chained `db.vector` for nested-vector field init.  Probe 97 (3-deep) spun off — parser/runtime type-id divergence is architectural, not value-block-borrow-cleanup. | 6/6 PASS both backends; probe 97 tracked under [@P384](../../../PROBLEMS.md#open-issues--quick-reference) |
 
 **Recommended fix-attempt workflow:**
 
@@ -248,7 +248,7 @@ Each fix step has a **binary exit criterion** — a probe-set / CI gate that mus
 |---|---|---|
 | **E (interpret)** | 21, 22, 23, 36, 41, 50 | **Step 8 closes** via skip_free extension to heap-DbRef types.  Native is already PASS via iter 1/2 fixes; this completes the matrix. |
 | **Z** | 51, 52, 80, 85 | **Step 9 excludes** all 4 with rationale (language-level restrictions / unimplemented features, not value-block-borrow-cleanup).  See `cluster-IV-heap-typed.md` § Iteration 3 for details. |
-| **J probe 97** | 97 | **Spun off as [@P384](../../PROBLEMS.md#open-issues--quick-reference)** 2026-05-30.  Architectural parser/runtime type-id divergence for 3-deep nested vectors — touches the type-id system, not the value-block-borrow-cleanup mechanism.  Out of PLAN52 scope. |
+| **J probe 97** | 97 | **Spun off as [@P384](../../../PROBLEMS.md#open-issues--quick-reference)** 2026-05-30.  Architectural parser/runtime type-id divergence for 3-deep nested vectors — touches the type-id system, not the value-block-borrow-cleanup mechanism.  Out of PLAN52 scope. |
 
 ### "We know we're clear" — binary close criteria
 
@@ -334,7 +334,7 @@ Total estimate: ~2-3 weeks (in line with @PLAN51's scope, slightly larger becaus
 ## See also
 
 - [`plans/finished/51-hidden-buffer-aliasing/`](../../finished/51-hidden-buffer-aliasing/) — sibling investigation plan; PLAN52 is the text-flavoured 6th cluster of that family.
-- [`doc/claude/PROBLEMS.md`](../../../PROBLEMS.md) §@P383 — the canonical bug report with the full bytecode-trace diagnosis.
+- [`doc/claude/PROBLEMS.md`](../../../../PROBLEMS.md) §@P383 — the canonical bug report with the full bytecode-trace diagnosis.
 - [`src/parser/operators.rs:1227-1247`](../../../../../src/parser/operators.rs) — the `??` lowering; cluster I's source-side root.
 - [`src/scopes.rs:1122-1184`](../../../../../src/scopes.rs) — `free_vars` else-branch + `get_free_vars` text-OpFreeText emission; cluster I's interpreter-side root.
 - [`src/generation/emit.rs:1283-1297`](../../../../../src/generation/emit.rs) — the @P321e/@P323 native fix (`_ret.to_string()` materialisation); the working baseline this plan's interpreter fix should match in semantics.
@@ -409,7 +409,7 @@ architectural type-id divergence).
 ### Out-of-scope / spun off
 
 - **Probe 97** (3-deep `vector<vector<vector<X>>>` type-id divergence) →
-  [@P384](../../PROBLEMS.md).  Architectural parser/runtime type-id system,
+  [@P384](../../../PROBLEMS.md).  Architectural parser/runtime type-id system,
   not value-block-borrow-cleanup mechanism.
 - **Set Z** (4 probes — spacial unimpl, char no-null, nested closure,
   vector closure-capture).  Each probe carries an `EXCLUDED FROM PLAN52`

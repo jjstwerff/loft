@@ -14,7 +14,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | C — Fix design (OPTIONAL) | ⏸️ pending Stage B |
 | D — Implementation (CI job + per-cluster fixes) | ⏸️ pending Stage B |
 
-**Hard dependency: this plan does NOT start until [@PLAN52](../52-value-block-borrow-cleanup/README.md) is closed.**
+**Hard dependency: this plan does NOT start until [@PLAN52](../../finished/52-value-block-borrow-cleanup/README.md) is closed.**
 PLAN52's cluster I (post-consumer `OpFreeText` on a borrowed `Str`)
 is the canonical UB this lever will detect, and running Miri / ASan
 against an unfixed PLAN52 working tree would produce a flood of
@@ -67,7 +67,7 @@ code paths.
 | Plan | Status | Clusters | Probes | Root |
 |---|---|---|---|---|
 | [@PLAN51 hidden-buffer-aliasing](../../finished/51-hidden-buffer-aliasing/README.md) | closed 2026-05-29 | 5 | 62 | `Reference` / heap-buffer borrows freed under the consumer |
-| [@PLAN52 value-block-borrow-cleanup](../52-value-block-borrow-cleanup/README.md) | active | 7 | 84 (33 still failing interpret) | Text borrows from `_ncc_N` value-blocks; self-described "6th cluster of the PLAN51 family" |
+| [@PLAN52 value-block-borrow-cleanup](../../finished/52-value-block-borrow-cleanup/README.md) | active | 7 | 84 (33 still failing interpret) | Text borrows from `_ncc_N` value-blocks; self-described "6th cluster of the PLAN51 family" |
 | Successor (hypothetical) | — | unknown | — | Likely a 7th/8th expression of the same pattern; will keep recurring until detected mechanically |
 
 **What's actually broken on `main` today:**
@@ -295,7 +295,7 @@ Two plan-specific notes:
 
 ## See also
 
-- [`plans/future/52-value-block-borrow-cleanup/`](../52-value-block-borrow-cleanup/README.md) — **hard dependency**; this plan does not start until PLAN52 closes.
+- [`plans/futu../../finished/52-value-block-borrow-cleanup/`](../../finished/52-value-block-borrow-cleanup/README.md) — **hard dependency**; this plan does not start until PLAN52 closes.
 - [`plans/finished/51-hidden-buffer-aliasing/`](../../finished/51-hidden-buffer-aliasing/) — sibling investigation; canonical layout reference for cluster docs and probe organisation.
 - [`doc/claude/PROBLEMS.md`](../../../PROBLEMS.md) §@P383 — the trigger incident; the failure mode this plan's CI lever would have caught months earlier.
 - [`doc/claude/TESTING.md`](../../../TESTING.md) — destination for the sanitizer-CI documentation once D-final ships.

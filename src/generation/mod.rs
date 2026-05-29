@@ -1806,14 +1806,17 @@ extern crate loft;"
                 }
                 let inner_def = self.data.type_def_nr(innermost);
                 if inner_def != u32::MAX {
+                    use std::fmt::Write as _;
                     let inner_kt = self.data.def(inner_def).known_type;
                     self.flush_bare_through(w, bare_io, bare_emitted, inner_kt)?;
-                    let inner_ref = type_id_ref(inner_kt);
-                    let mut expr = format!("{{ let _v0 = db.vector({inner_ref});");
+                    let inner_type_ref = type_id_ref(inner_kt);
+                    let mut expr = format!("{{ let _v0 = db.vector({inner_type_ref});");
                     for level in 1..depth {
-                        expr += &format!(" let _v{level} = db.vector(_v{prev});", prev = level - 1);
+                        let prev = level - 1;
+                        write!(&mut expr, " let _v{level} = db.vector(_v{prev});").unwrap();
                     }
-                    expr += &format!(" _v{} }}", depth - 1);
+                    let last = depth - 1;
+                    write!(&mut expr, " _v{last} }}").unwrap();
                     emit_db_field(w, s_var, field_name, "vec", &expr)?;
                     return Ok(());
                 }

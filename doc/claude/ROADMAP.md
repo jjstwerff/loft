@@ -286,6 +286,7 @@ Every item below must be checked off before the project claims its stability bar
 - [ ] `doc/claude/INCONSISTENCIES.md` reviewed: each entry resolved or explicitly accepted in LOFT.md / CHANGELOG.md
 - [ ] Pre-built binaries on the GitHub release for all four platforms
 - [ ] HTML reference and PDF up to date and linked from the release page
+- [ ] **[@PLAN53 sanitizer-CI-lever](plans/future/53-sanitizer-ci-lever/README.md)** — Miri / ASan / TSan sweep against the post-PLAN52 baseline to catch UB classes that current testing misses (per the @PLAN52 closure tool-gap row)
 
 ---
 

@@ -1019,11 +1019,11 @@ impl Output<'_> {
     ///    that expression is captured into `let _ret` first, then yielded at the end.
     /// 3. **String conversion** — a text-typed block may receive a `Str` from a field read;
     ///    `.to_string()` converts it to an owned `String`.
-    /// @PLAN52 cluster I/VI helper: walk a Block's operators (recursively
-    /// into nested Block / If / Match values) and report whether any
-    /// `Set(v, _)` exists where `v`'s name starts with `__ncc_` and the
-    /// variable is marked `skip_free`.  Used to gate scratch-buffer
-    /// materialisation for value-block `??` patterns.
+    // @PLAN52 cluster I/VI helper: walk a Block's operators (recursively
+    // into nested Block / If / Match values) and report whether any
+    // `Set(v, _)` exists where `v`'s name starts with `__ncc_` and the
+    // variable is marked `skip_free`.  Used to gate scratch-buffer
+    // materialisation for value-block `??` patterns.
     fn block_contains_ncc_skip_free(&self, bl: &Block) -> bool {
         fn walk(this: &Output, v: &Value) -> bool {
             match v.unspan() {
@@ -1159,14 +1159,20 @@ impl Output<'_> {
         // the block returns a borrow that dies at `}`).  Detect the
         // `__ncc_*` skip_free pattern explicitly and gate has_trailing_void
         // on for those blocks.
+        // Only force when there's a value-yielding return_idx — otherwise
+        // the close emits `_ret.to_string()` referencing an undeclared
+        // `_ret` (the per-op emit at line ~1189 only fires when
+        // `return_idx == Some(vnr)`; an all-void block has return_idx=None
+        // and skips the declaration).
         let has_ncc_skip_free_temp = matches!(bl.result, Type::Text(_))
+            && return_idx.is_some()
             && operators.iter().any(|op| {
                 matches!(op.unspan(), Value::Set(v, _) if
                     self.data.def(self.def_nr).variables.name(*v).starts_with("__ncc_")
                     && self.data.def(self.def_nr).variables.is_skip_free(*v))
             });
-        let has_trailing_void = return_idx.is_some_and(|i| i < last_op_idx)
-            || has_ncc_skip_free_temp;
+        let has_trailing_void =
+            return_idx.is_some_and(|i| i < last_op_idx) || has_ncc_skip_free_temp;
         // If the captured "return value" is a Return(…) expression, it diverges —
         // we emit it directly and skip the `_ret` tail.
         let return_value_is_return = has_trailing_void
