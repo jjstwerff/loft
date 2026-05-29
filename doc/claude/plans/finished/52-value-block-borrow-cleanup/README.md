@@ -9,10 +9,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 | Stage | Status |
 |---|---|
-| A — Probe catalogue | ✅ complete (60+ probes, all run under both backends).  Cluster II (if/match-as-value) FALSIFIED.  IV-Ref FALSIFIED (covered by @PLAN51).  IV-Vec / IV-Hash / IV-Enum / IV-Tuple / IV-Sorted / IV-Index / IV-Spacial / IV-Vec-nested-field-push all verified. |
-| B — Mechanism investigation | ✅ complete (2026-05-29).  Cluster I mechanism verified via `LOFT_LOG=fn:main` bytecode trace; Cluster III mechanism (`??`-DEPENDENT format-buffer interleave) verified via probe 18.  Cluster IV mechanism (heap-DbRef predicate emit + dep-strip) verified.  Cluster VI mechanism (closure `return Str::new(<value-block>)` lifetime) verified.  Cluster VII mechanism (chained-call text-branch unification) verified. |
-| C — Fix design | ✅ complete (2026-05-30).  Per-cluster `cluster-*.md` docs all have "Fix iterations" sections with the landed shape. |
-| D — Implementation | 🟡 nearly complete (2026-05-30) — 43/43 probes in Sets A, B, C, D, F, G, H, I PASS both backends.  Remaining: Set E interpret (step 8 below — 1h fix), Set Z audit (step 9 — 30 min), probe graduation (step 10 — 1 day), doc finalisation + move to `plans/finished/` (step 11 — half-day).  Probe 97 spun off as @P384 (architectural). |
+| A — Probe catalogue | ✅ COMPLETE (60+ probes, all run under both backends). |
+| B — Mechanism investigation | ✅ COMPLETE (2026-05-29). |
+| C — Fix design | ✅ COMPLETE (2026-05-30). |
+| D — Implementation | ✅ COMPLETE 2026-05-30.  All 10 sets (A-J) PASS both backends; Set Z all 4 EXCLUDED with rationale (language-level restrictions, not value-block-borrow gap); 9 representative probes graduated to `tests/scripts/150-158-plan52-*.loft`.  Probe 97 spun off as [@P384](../../PROBLEMS.md) (architectural). |
+
+**PLAN52 is CLOSED 2026-05-30.**  See [the closure summary at the end of this README](#-closure-2026-05-30) for the full landed-commits list, final probe matrix, and binary close-criteria verification.
 
 **Trigger (2026-05-29):** P383 — `tests/scripts/repro_p323.loft::test_p323_index_coalesce` regressed under rustc 1.96. Bisect pinned the rustc bump (loft commit `42af45d` PR-CI was green on all 3 platforms on 2026-05-27 under rustc 1.95; rustc 1.96.0 dropped 2026-05-28). The defect itself is latent UB in loft's IR (post-consumer `OpFreeText` on a borrowed Str) that rustc 1.94/1.95 happened to mask via codegen / libmalloc behaviour that left freed bytes intact. rustc 1.96 (LLVM 21) changed that, exposing the bug deterministically on macOS. This plan is the 6th investigation cluster of the @PLAN51 hidden-buffer-aliasing family — same structural shape (borrow into a scope-local that gets freed before the consumer reads), text-flavoured, in value-block context (not return context).
 
@@ -152,7 +154,7 @@ Results recorded 2026-05-29 against `main` + `macos-clippy-fixes` branch on rust
 
 ```bash
 # From the repo root:
-doc/claude/plans/future/52-value-block-borrow-cleanup/probes/run_set.sh <SET>
+doc/claude/plans/finished/52-value-block-borrow-cleanup/probes/run_set.sh <SET>
 
 # Examples:
 probes/run_set.sh A       # cluster I core — non-Var LHS shape coverage
@@ -336,3 +338,80 @@ Total estimate: ~2-3 weeks (in line with @PLAN51's scope, slightly larger becaus
 - [`src/parser/operators.rs:1227-1247`](../../../../../src/parser/operators.rs) — the `??` lowering; cluster I's source-side root.
 - [`src/scopes.rs:1122-1184`](../../../../../src/scopes.rs) — `free_vars` else-branch + `get_free_vars` text-OpFreeText emission; cluster I's interpreter-side root.
 - [`src/generation/emit.rs:1283-1297`](../../../../../src/generation/emit.rs) — the @P321e/@P323 native fix (`_ret.to_string()` materialisation); the working baseline this plan's interpreter fix should match in semantics.
+
+---
+
+## 🟢 Closure (2026-05-30)
+
+**PLAN52 closed.**  Value-block borrow cleanup family fully addressed across
+both backends.
+
+### Landed commits (session 2026-05-29..30)
+
+| Commit | Cluster / step |
+|---|---|
+| `1b00325` | IV-Spacial: fix parser infinite loop |
+| `9d2a311` | IV-Enum: predicate fix (`output_test_predicate`) native |
+| `9b77874` | IV-Hash/Sorted/Index: dep-strip native |
+| `d866cbc` | VII: text-branch unification for chained `??` native |
+| `ba6ace8` | IV-Tuple: close probe 40 via first-field null-test |
+| `3a46739` | IV-Vec: strict rule for vector `+=` (62-site migration) |
+| `d98c32b` | IV-Vec: nested-vector field content_ref emission |
+| `a193e83` | Cluster I + I-crash + III: close text `??` silent corruption |
+| `28ecf3f` | Cluster VI: close closure `??` native E0308 |
+| `a278b65` | Cluster IV interpret (step 8): close Set E via skip_free + Hash→Bool conv |
+| `79332f9` | Step 9: Set Z audit — all 4 probes EXCLUDED with rationale |
+| `ba60f17` | Step 10: graduate 9 representative probes to `tests/scripts/15X-plan52-*.loft` |
+
+### Final probe matrix (2026-05-30)
+
+| Set | Probes | --interpret | --native | Notes |
+|---|---|---|---|---|
+| A (cluster I core) | 6 | 6/6 PASS | 6/6 PASS | ✅ |
+| B (cluster I garbage variants) | 9 | 9/9 PASS | 9/9 PASS | ✅ |
+| C (cluster I-crash SIGBUS) | 3 | 3/3 PASS | 3/3 PASS | ✅ incidentally closed |
+| D (cluster III format `??`) | 5 | 5/5 PASS | 5/5 PASS | ✅ incidentally closed |
+| E (cluster IV heap-type) | 7 | 7/7 PASS | 7/7 PASS | ✅ |
+| F (cluster VI closures) | 4 | 4/4 PASS | 4/4 PASS | ✅ |
+| G (cluster VII chained) | 3 | 3/3 PASS | 3/3 PASS | ✅ |
+| H (baselines) | 11 | 11/11 PASS | 11/11 PASS | ✅ unchanged |
+| I (real-library) | 2 | 2/2 PASS | 2/2 PASS | ✅ |
+| J (IV-Vec nested-field-push) | 6 | 6/6 PASS | 6/6 PASS | ✅ (probe 97 spun off → @P384) |
+| Z (excluded) | 4 | n/a | n/a | EXCLUDED — language-level restrictions |
+
+**Total: 56 PASS probes across both backends.**  4 EXCLUDED (language-level
+restrictions documented in each probe file).  1 spun off (probe 97 → @P384,
+architectural type-id divergence).
+
+### Binary close-criteria verification
+
+1. ✅ **Probe sets A-J all PASS on both backends** — verified above.  Set Z
+   excluded with rationale.
+2. ✅ **`cargo test --release --test issues`**: 681/681 pass.
+3. ✅ **`cargo test --release --test wrap`**: 49/49 pass (includes the 9
+   newly graduated `15X-plan52-*.loft` tests via `loft_suite`).
+4. ✅ **`cargo test --release --test doc_hygiene`**: 20/20 pass.
+5. ✅ **`tests/scripts/repro_p323.loft`** — the original @P383 bug report —
+   passes on macOS interpret (was the canonical cluster-I regression test).
+
+### Graduated regression-guard tests (new in tests/scripts/)
+
+- `150-plan52-text-coalesce.loft` — cluster I (probe 02 lineage)
+- `151-plan52-hash-insert-coalesce.loft` — cluster I garbage variants (probe 31)
+- `152-plan52-method-chain-sigbus.loft` — cluster I-crash SIGBUS (probe 49)
+- `153-plan52-format-coalesce.loft` — cluster III format `??` (probe 09)
+- `154-plan52-vector-value-coalesce.loft` — cluster IV heap-type (probe 21)
+- `155-plan52-closure-coalesce.loft` — cluster VI closure (probe 45)
+- `156-plan52-chained-coalesce.loft` — cluster VII chained (probe 47)
+- `157-plan52-config-default.loft` — cluster V real-library (probe 24)
+- `158-plan52-vov-field-push.loft` — IV-Vec nested-field-push (probe 91)
+
+### Out-of-scope / spun off
+
+- **Probe 97** (3-deep `vector<vector<vector<X>>>` type-id divergence) →
+  [@P384](../../PROBLEMS.md).  Architectural parser/runtime type-id system,
+  not value-block-borrow-cleanup mechanism.
+- **Set Z** (4 probes — spacial unimpl, char no-null, nested closure,
+  vector closure-capture).  Each probe carries an `EXCLUDED FROM PLAN52`
+  comment block with rationale + re-open condition.
+
