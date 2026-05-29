@@ -179,6 +179,37 @@ frame local vs `Str` TOS push) even before S5 restores output
 correctness.  S5 is the only step that flips the suite from
 "sound but wrong text offsets" to "green".  S6/S7 are the gates.
 
+### S1 result — CONFIRMED (2026-05-29)
+
+Codegen computes the operand as
+`var_pos = stack.position − function.stack(v_nr)`
+(`src/state/codegen.rs:356 / 465 / 566`), where **both** terms are
+`size()`-derived: slot offsets come from the allocator (uses
+`size()`), and `stack.position` is advanced by
+`size(_, Context::*)` as codegen tracks the eval stack
+(`codegen.rs:99`).  The linchpin holds — everything routes through
+`size()`.
+
+This also pins down the `pos - N` literals.  A format op pops its
+args (`get_stack` ×N) **then** calls `string_mut(pos - N)`; the
+`- N` exactly **cancels those pops**, so:
+
+> **`N` = total bytes the op's `get_stack` calls pop.**
+
+Hence the round-to-8 spike's SIGSEGV: `format_single` pops
+f32+i64+i64; rounding the f32 pop 4→8 (and `stack.position`) while
+leaving the literal `pos - 20` left it off by 4 → wild pointer.
+
+**Implications locked in:**
+- Under alignment each `N` becomes `Σ aligned_size(popped arg
+  types)` — derivable, not guessed (S5).
+- Codegen's `stack.position` and the runtime `stack_pos` MUST
+  advance identically, so the chosen aligned-advance rule (uniform-8
+  on the TOS) applies in **lockstep** to `size()` / `stack.position`
+  (codegen), the `get_stack`/`put_stack` steps (runtime), and the
+  `N` literals (S5).  The three move together or corrupt.
+- **Proceed to S2.**
+
 ## Out of scope
 
 - **Records on `Str`**: `element_align(Text)=4` while runtime `Str`
