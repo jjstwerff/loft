@@ -102,6 +102,12 @@ pub struct State {
     pub(crate) bytecode: Arc<Vec<u8>>,
     pub(crate) stack_cur: DbRef,
     pub stack_pos: u32,
+    /// @PLAN53 cluster 2 / S4 — when true (`LOFT_ALIGN=1`), the eval-TOS
+    /// push/pop step and frame reserve round to 8 so typed stack writes
+    /// are never unaligned (the cluster-2 Miri finding).  Read once from
+    /// the env at construction; off by default → V1 step is unchanged.
+    /// MUST match codegen's `Stack::aligned` for the same run.
+    pub(crate) aligned_stack: bool,
     /// @P294: cached byte-capacity of the value-stack store (`stack_cur`).
     /// The stack store is allocated once and never re-`claim`s, so its
     /// buffer only grows through `ensure_stack`; this cache lets the hot
@@ -204,6 +210,7 @@ impl State {
             bytecode: Arc::new(Vec::new()),
             stack_cur,
             stack_pos: 4,
+            aligned_stack: crate::variables::aligned_stack_enabled(),
             stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,
@@ -1335,9 +1342,19 @@ impl State {
         self.stack_cap_bytes = store.byte_capacity() as u32;
     }
 
+    /// @PLAN53 cluster 2 / S4 — one eval-TOS / frame-reserve advance,
+    /// rounded to 8 when `aligned_stack` is on (else the real `size`).
+    /// Codegen's `Stack::step` MUST mirror this so emitted `pos`
+    /// operands match the runtime `stack_pos` (S1 lockstep invariant).
+    #[inline]
+    pub(crate) fn stack_step(&self, size: u32) -> u32 {
+        crate::variables::aligned_stack_step(size, self.aligned_stack)
+    }
+
     pub fn reserve_frame(&mut self, size: u16) {
-        self.ensure_stack(u32::from(size));
-        self.stack_pos += u32::from(size);
+        let step = self.stack_step(u32::from(size));
+        self.ensure_stack(step);
+        self.stack_pos += step;
     }
 
     pub(crate) fn copy_result(&mut self, value: u8, pos: u32, fn_stack: u32) {
@@ -1455,7 +1472,7 @@ impl State {
             self.stack_pos,
             size_of::<T>() as u32
         );
-        self.stack_pos -= size_of::<T>() as u32;
+        self.stack_pos -= self.stack_step(size_of::<T>() as u32);
         let r = self
             .database
             .store(&self.stack_cur)
@@ -1659,13 +1676,13 @@ impl State {
                 }
             }
         }
-        self.ensure_stack(size_of::<T>() as u32);
+        self.ensure_stack(self.stack_step(size_of::<T>() as u32));
         let m = self
             .database
             .store_mut(&self.stack_cur)
             .addr_mut::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
         *m = val;
-        self.stack_pos += size_of::<T>() as u32;
+        self.stack_pos += self.stack_step(size_of::<T>() as u32);
     }
 
     /**
@@ -2194,6 +2211,7 @@ impl State {
         State {
             stack_cur,
             stack_pos: 4,
+            aligned_stack: crate::variables::aligned_stack_enabled(),
             stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,
