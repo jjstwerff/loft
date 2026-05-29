@@ -166,7 +166,8 @@ emission for nested-vector fields was rewritten as a chained
 expression that handles any nesting depth.  Closes probes 91, 93, 94,
 95, 96 on both backends.
 
-**Probe 97 (3-deep `vector<vector<vector<integer>>>`) STILL FAILS** —
+**Probe 97 (3-deep `vector<vector<vector<integer>>>`) SPUN OFF as
+[@P384](../../../PROBLEMS.md#open-issues--quick-reference) 2026-05-30** —
 distinct sub-bug: `OpCopyRecord(..., LITERAL_TYPE_ID)` is emitted with a
 literal type id the PARSER computed via its database, but the RUNTIME
 database may have a different mapping at that slot (because intervening
@@ -175,10 +176,12 @@ assignments).  Probe 91/95/96 happen to coincide because the parser's
 slot 66 also lands at runtime slot 66 for `vector<Inner>`; probe 97's
 3-deep case shifts beyond that coincidence.
 
-Fix surface for probe 97: emit symbolic `tN` references (or runtime
-name lookups) for type ids in op-call codegen — broader work than this
-cluster.  Defer to a future PLAN52 sub-arc OR resolve via a parser/runtime
-type-id-table alignment refactor.
+Probe 97 is no longer in PLAN52 scope.  Tracked under @P384 with two
+candidate fix paths (symbolic type-id refs in op-call codegen OR
+parser/runtime type-table alignment refactor); both architectural,
+1-2 weeks each.  Workaround in the meantime: keep nesting ≤2 deep, or
+assign each layer to a separate local var so the working
+`OpNewRecord/OpCopyRecord/OpFinishRecord` local-var path fires.
 
 ### Earlier symptom (now closed)
 
