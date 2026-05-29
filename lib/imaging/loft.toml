@@ -13,3 +13,24 @@ native = "loft_imaging"
 # "no implementation in any registered native crate".
 [native]
 crate = "loft-imaging"
+
+# @lib_plan-29 W1 (2026-05-29) — declares the browser-WASM bridge crate
+# that supplies `pub fn` entry points for the store-mutating `#native`
+# fns (`load_png`, `save_png`).  The `--html` driver (Phase W1c, future)
+# will read this section to:
+#   1. build `lib/imaging/wasm/` to a wasm32-unknown-unknown rlib
+#   2. pass `--extern loft_imaging_wasm=…` to the standalone-binary rustc
+#   3. emit generated bodies calling `loft_imaging_wasm::imaging_load_png`
+#      / `imaging_save_png` instead of `loft::wasm_imaging::*`.
+#
+# Today (Phase W1a + W1b — 2026-05-29) the parallel `lib/imaging/wasm/`
+# crate exists and builds cleanly, but the compiler crate still routes
+# through `src/wasm_imaging.rs` and the `WASM_BRIDGE_FNS` const.  W1c
+# wires the manifest reader + driver switch; W1d deletes `src/
+# wasm_imaging.rs` once the switch is verified.
+[wasm.bridge]
+crate = "loft-imaging-wasm"
+routes = [
+    "n_load_png:imaging_load_png",
+    "n_save_png:imaging_save_png",
+]
