@@ -259,7 +259,6 @@ Small specific features, low-priority items.
 |---|---|---|---|---|
 | (cross) | Game asset pipeline (prototype → artist polish → integration) | M | ✓ | lib_plans/future/04-asset-pipeline/README.md |
 | (cross) | Web services — HTTP client + URL handling + auth + SSE/WS | M-H per arc | ✓ | lib_plans/future/06-web-services/README.md |
-| (cross) | `lib/web` response headers + cookie-jar session — unblocks native Garmin login (training A2) | M (P1 XS-S) | ✓ | lib_plans/future/23-http-session-auth/README.md |
 | C57 | Route decorator syntax (`@get`, `@post`, `@ws`) | H | ✓ | plans/future/29-server-features/README.md |
 | I13 | Iterator protocol (`for msg in ws` via `fn next`) | MH | ✓ | plans/future/29-server-features/README.md |
 | AOT | Auto-compile libraries to native shared libs | M | ✓ | (needs plan promotion) |
