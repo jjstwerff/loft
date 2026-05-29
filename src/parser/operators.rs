@@ -1241,6 +1241,25 @@ impl Parser {
                 let mut nc = Value::TupleGet(*v, 0);
                 this.convert(&mut nc, &first_tp, &Type::Boolean);
                 nc
+            } else if matches!(
+                lhs_type,
+                Type::Reference(_, _)
+                    | Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Enum(_, true, _),
+            ) {
+                // @PLAN52 cluster IV interpret (2026-05-30): heap-DbRef types
+                // have no registered `OpConv*FromX → Boolean` so the generic
+                // `convert(Hash/Vector/..., Boolean)` returns the bare Var.
+                // The interpreter's `if <bare Var(DbRef)>` then tests raw
+                // bytes (not `.rec != 0`) and produces the wrong result.
+                // Force an explicit `OpConvBoolFromRef` call — Reference,
+                // Vector, Hash, Sorted, Index, struct-Enum all share the
+                // 12-byte DbRef representation under the hood.
+                let conv_nr = this.data.def_nr("OpConvBoolFromRef");
+                Value::Call(conv_nr, vec![src.clone()])
             } else {
                 let mut nc = src.clone();
                 this.convert(&mut nc, lhs_type, &Type::Boolean);
@@ -1268,7 +1287,24 @@ impl Parser {
             // producing an owned String that the outer consumer can copy
             // safely.
             let tmp = self.create_unique("_ncc", lhs_type);
-            if matches!(lhs_type, Type::Text(_)) {
+            // @PLAN52 cluster IV interpret (2026-05-30, iteration 3): extend
+            // skip_free from Text to ALL heap-DbRef LHS types.  Same
+            // mechanism: the scope-exit free op (`OpFreeText` for text,
+            // `OpFreeRef` for heap-DbRef per `src/scopes.rs::get_free_vars`
+            // heap-Free branch at line ~1274 which ALREADY honors
+            // `is_skip_free`) is suppressed for `__ncc_N` temps so the
+            // present-path value's backing storage outlives the block.
+            // Closes Set E interpret (probes 21, 22, 23, 36, 41, 50).
+            if matches!(
+                lhs_type,
+                Type::Text(_)
+                    | Type::Reference(_, _)
+                    | Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Enum(_, true, _),
+            ) {
                 self.vars.set_skip_free(tmp);
             }
             let set_tmp = v_set(tmp, code.clone());
