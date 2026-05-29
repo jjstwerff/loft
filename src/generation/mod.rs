@@ -2313,17 +2313,58 @@ extern crate loft;"
             let returns_loft_ref =
                 matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
             if returns_loft_ref || first_ref_arg.is_some() {
+                // Phase 2: route known #native symbols to their `pub fn`
+                // bridges in `loft::wasm_imaging`.  TODO (lib_plans/12):
+                // replace this hard-coded table with a `[wasm.bridge]`
+                // section in each package's `loft.toml` so the compiler
+                // crate stays library-symbol-agnostic.
+                const WASM_BRIDGE_FNS: &[(&str, &str)] = &[
+                    ("n_load_png", "loft::wasm_imaging::imaging_load_png"),
+                    ("n_save_png", "loft::wasm_imaging::imaging_save_png"),
+                ];
+                let bridge_target = WASM_BRIDGE_FNS
+                    .iter()
+                    .find(|(sym, _)| *sym == def.native)
+                    .map(|(_, target)| *target);
+                if let Some(target) = bridge_target {
+                    // Emit the standard `let stores: &mut Stores = ...`
+                    // prelude (mirrors output_native_direct_call's non-
+                    // wasm path) + call into the bridge.
+                    writeln!(w, "{{")?;
+                    writeln!(
+                        w,
+                        "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                    )?;
+                    write!(w, "  {target}(stores")?;
+                    for attr in &def.attributes {
+                        if attr.name.starts_with("__") {
+                            continue;
+                        }
+                        let var = sanitize(&attr.name);
+                        write!(w, ", &var_{var}")?;
+                    }
+                    writeln!(w, ")")?;
+                    writeln!(w, "}}")?;
+                    return Ok(());
+                }
+                // Phase 1 fallback: graceful loft-aware stub for any
+                // store-mutating #native fn that doesn't have a bridge
+                // registered.  Matches loft semantics (`false`/null
+                // return reads as "operation failed" not "trap").
                 writeln!(w, "{{")?;
                 writeln!(
                     w,
-                    "  // @P321c browser-WASM Phase 1 stub: graceful no-op until the wasm-side bridge lands."
+                    "  // @P321c browser-WASM Phase 1 stub: graceful no-op (no bridge registered for {})", def.native
                 )?;
                 match &def.returned {
                     Type::Void => {}
                     Type::Boolean => writeln!(w, "  false")?,
                     Type::Integer(_) | Type::Float | Type::Single => writeln!(w, "  0")?,
                     Type::Text(_) => {
-                        writeln!(w, "  loft::keys::Str::default()")?;
+                        writeln!(
+                            w,
+                            "  loft::keys::Str {{ ptr: std::ptr::null(), len: 0 }}"
+                        )?;
                     }
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
                         writeln!(

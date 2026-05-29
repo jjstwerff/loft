@@ -108,3 +108,4 @@ pub mod migrate_long;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 pub mod wasm_gl;
+pub mod wasm_imaging;

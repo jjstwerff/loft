@@ -287,6 +287,14 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       loft_text_height(fi, sz) { return Math.ceil(sz * 1.2); },
       loft_rasterize_text_into(fi, tp, tl, sz, bp, bc) { return 0; },
       loft_save_png(pp, pl, w, h, dp, dc) { return 0; },
+      // @P321c Phase 2 — imaging library bridge.
+      // Args from src/wasm_imaging.rs::imaging_load_png:
+      //   (path_ptr, path_len, image_store_nr, image_rec, image_pos)
+      // Phase 2 stub returns 0 (false) — Phase 3 wires this to
+      // ctrl.assets[name] decode + struct-field writes.
+      imaging_load_png(pp, pl, store_nr, rec, pos) { return 0; },
+      // Args: (image_store_nr, image_rec, image_pos, path_ptr, path_len)
+      imaging_save_png(store_nr, rec, pos, pp, pl) { return 0; },
       loft_gl_upload_alpha_texture(dp, w, h) { return 0; },
       loft_gl_text_texture(fi, tp, tl, sz, wp, hp) { return 0; },
       // G5: Audio via Web Audio API
