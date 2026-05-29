@@ -440,14 +440,22 @@ const LIB_PKGS_WASM_SKIP: &[&str] = &[
     // listen/accept, so it cannot run there by construction (a genuine
     // platform limit, not a bug — unlike imaging).
     "server",
-    // @P334 (open): world's test traps (`wasm unreachable`, exit 134) on BOTH
-    // wasm runtimes though it passes on interp + native — a wasm-backend
-    // divergence, not yet root-caused.  Un-skip when @P334 is fixed.
-    "world",
 ];
 
 /// Individual `<pkg>/<file>.loft` lib tests skipped for the WASM gate.
 const LIB_TESTS_WASM_SKIP: &[&str] = &[];
+
+/// Packages skipped ONLY on the node (browser, `wasm32-unknown-unknown`) path.
+/// Still run on wasmtime (wasip2) which has a working WASI FS via `--dir`.
+/// Use this for libraries that genuinely need the filesystem — the browser
+/// has none by construction (correct platform behaviour, not a bug to fix).
+const LIB_PKGS_NODE_SKIP: &[&str] = &[
+    // world's tests save+load a binary world file.  Wasmtime can do this via
+    // `--dir <tmp>` (see @P334 fix); the browser has no filesystem at all
+    // without a JS host bridge (out of scope for now).  Un-skip if a future
+    // JS-host VirtFS bridge ships.
+    "world",
+];
 
 /// Collect every `lib/<pkg>/tests/*.loft`, sorted.
 fn collect_lib_wasm_tests() -> Vec<PathBuf> {
@@ -574,7 +582,19 @@ fn run_wasip2_wasm(name: &str, source: &str, lib_dirs: &[&str]) -> Option<(Strin
     if !compile.status.success() {
         return Some((String::from_utf8_lossy(&compile.stderr).into_owned(), false));
     }
-    let run = Command::new(&wasmtime).arg(&wasm).output().ok()?;
+    // @P334 fix (2026-05-29): preopen `--dir <tmp>` so wasip2 file I/O works.
+    // The wasip2 filesystem is sandboxed — without a preopen every file op
+    // fails with "os error 44" and any file-using lib traps the moment it
+    // tries to open a path.  `<tmp>` is the loft `std::env::temp_dir()`
+    // default, which is where `lib/world` saves/loads its test fixture; libs
+    // that write elsewhere either honour env-overrides (LOFT_HOME, etc.) or
+    // use CWD-relative paths.
+    let run = Command::new(&wasmtime)
+        .arg("--dir")
+        .arg(&tmp)
+        .arg(&wasm)
+        .output()
+        .ok()?;
     Some((
         String::from_utf8_lossy(&run.stdout).into_owned(),
         run.status.success(),
@@ -619,7 +639,7 @@ fn wasm_library_suite() {
             .replace(['-', '.'], "_");
         let name = format!("libwasm_{pkg}_{stem}");
 
-        if have_node {
+        if have_node && !LIB_PKGS_NODE_SKIP.contains(&pkg.as_str()) {
             // `run_html_wasm_with_libs` asserts on a `--html` build failure;
             // catch it so one un-buildable lib is recorded, not fatal to the
             // whole suite (and can't mask later libs' results).

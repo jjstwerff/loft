@@ -426,7 +426,18 @@ impl Stores {
         }
     }
 
-    #[cfg(all(not(target_arch = "wasm32"), not(feature = "wasm")))]
+    // Native + `wasm32-wasip2` (WASI filesystem via `--dir` preopens).
+    // @P334 fix (2026-05-29): widen the active-impl cfg from
+    // `not(target_arch = "wasm32")` to also include `target_os = "wasi"`
+    // — std::fs works under wasip2 (proven by OpReadFile/OpWriteFile
+    // at codegen_runtime.rs which were already feature-gated, not
+    // target-gated).  Without this, get_file's wasm-unknown stub
+    // short-circuited every exists()/file() under wasip2 → the
+    // world_load assert in lib/world failed → `wasm unreachable`.
+    #[cfg(all(
+        not(feature = "wasm"),
+        any(not(target_arch = "wasm32"), target_os = "wasi")
+    ))]
     pub fn get_file(&mut self, file: &DbRef) -> bool {
         if file.rec == 0 {
             return false;
@@ -444,7 +455,16 @@ impl Stores {
     /// `std::fs` does in a browser (implementations vary: some
     /// panic, some return Err, some hang).  Matches the stub in
     /// `State::get_file_text` for the content-read path.
-    #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+    ///
+    /// @P334 fix: narrowed from `target_arch = "wasm32"` to also exclude
+    /// `target_os = "wasi"`, so this stub only fires for the actual
+    /// no-filesystem browser target — wasip2 falls through to the
+    /// std::fs impl above.
+    #[cfg(all(
+        target_arch = "wasm32",
+        not(target_os = "wasi"),
+        not(feature = "wasm")
+    ))]
     pub fn get_file(&mut self, file: &DbRef) -> bool {
         if file.rec == 0 {
             return false;
