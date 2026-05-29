@@ -9,6 +9,28 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `loft-libs-core` first all-green chunk under strict CI (2026-05-30)
+
+Landed `loft-lang/loft-libs-core` PR #2 (omnibus): canonical
+`library-ci.yml` refresh, `cargo build --release --lib --bin loft`
+infra fix (closes the `mmap_storage` blocker that broke every
+package's native step), Phase 6r random re-clean (bare `#native`
++ source-scan `build.rs`), `arguments` warning sweep (zero
+warnings under `LOFT_DENY_WARNINGS=1`, no `.allow_warnings`
+opt-out).  All three packages — `arguments`, `crypto`, `random`
+— now green on interpret + native under strict warnings.  Pre-
+landed @P385 (parser type-inference asymmetry) + @P386 (native
+codegen `Str/&str` mismatch) via #231 — both bugs surfaced
+during the warning sweep.  Established three warning-clean
+idioms now documented in `.claude/skills/loft-write/SKILL.md`:
+`not null` on safe-to-default-`[]` vector fields,
+capture-into-local before indexing (skip-pattern 5 needs bare-Var
+vec), capture-and-null-check.  Plan-12 README gained a
+"Bringing a chunk to all-green CI" checklist; REFERENCE.md
+records the per-symbol re-clean decision rule (redundant vs
+genuine override).  Remaining chunks: `loft-libs-net`,
+`loft-libs-graphics`, plus the registry `pr-validate.yml`.
+
 ### @P321c native dimension closed + 8 harvested fixes (2026-05-26)
 
 Dogfood pass against the `../personal/training` Loft port surfaced and fixed a

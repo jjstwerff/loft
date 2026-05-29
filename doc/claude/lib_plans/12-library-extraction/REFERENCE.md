@@ -83,9 +83,27 @@ exports internal `n_*` symbols (`n_save_png`, `n_rasterize_text_into`,
 that the GL / vector-arg paths need registered but **no `#native`
 annotation binds** (the public API uses the `loft_*` symbols).  The
 `#native`-scan can't produce that full list, so graphics keeps its
-hand-written `loft_register!`.  The already-published external repos
-(`loft-libs-core` / `loft-libs-net`) still carry manifests; they convert
-when next released.
+hand-written `loft_register!`.  `loft-libs-core`'s migration to the
+clean source-scan pattern landed via PR #2 (2026-05-30) — random got
+the re-clean, crypto stayed on explicit-override form per the rule
+below.  `loft-libs-net`'s migration remains pending.
+
+**Re-clean is per-symbol, not per-package** (rule from loft-libs-core
+2026-05-30): when a chunk's library has the legacy `#native "n_<fn>"`
+form, audit each annotation individually:
+
+- **Symbol equals fn name → re-clean.**  `pub fn rand(…); #native "n_rand"`
+  → drop the string, use bare `#native`.  The default symbol IS
+  `n_<fn_name>`, so the explicit string is redundant.  Loft #220
+  enforces this — a redundant explicit string is a parse error.
+- **Symbol differs from fn name → keep as-is.**
+  `fn sha256_native(…); #native "n_sha256"` is a GENUINE override:
+  the loft fn is `sha256_native` (a private wrapper) and it binds
+  to the native symbol `n_sha256`.  The explicit string is required.
+
+Random fell into bucket 1 (re-cleaned 2026-05-30); crypto fell into
+bucket 2 (the explicit override is correct, left alone).  Don't sweep
+blindly — read each annotation.
 
 ---
 

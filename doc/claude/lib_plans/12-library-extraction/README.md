@@ -85,7 +85,7 @@ Ordered by readiness.  Each is independently verifiable.
    forbids redundant `#native "n_<fn>"`.  Enforced by the
    `native_libraries_follow_clean_binding_pattern` hygiene gate.
 1r. **Phase 6r — re-clean the already-extracted external repos**
-   (`loft-libs-core`: crypto/random; `loft-libs-net`: web/server).  They
+   (`loft-libs-core`: random; `loft-libs-net`: web/server).  They
    were extracted *before* the clean pattern landed, so they still carry
    the old manifest / hand-written `loft_register!` and stripped
    `#native` annotations.  Re-clean = **re-sync the now-clean monorepo
@@ -94,12 +94,21 @@ Ordered by readiness.  Each is independently verifiable.
    `0.2`.  Prerequisites: (a) `loft-ffi-build 0.2.0` on crates.io —
    **published**; (b) bare-`#native` parser support on `main` —
    **landed** (#220 `clean native binding pattern` merged 2026-05-26,
-   followed by #221/#223/#224).  **Status:** both external PRs
-   (`loft-libs-net#1`, `loft-libs-core#1`) opened 2026-05-26 ~16:14 UTC
-   and failed at 16:16 UTC because they ran against a pre-#220 `main`.
-   *Re-running the failed jobs* is now sufficient to green the
-   interpreter step.  *(The native step is a separate Phase-6.5 gap,
-   not fixed by re-running — see below.)*
+   followed by #221/#223/#224).  **Status:** `loft-libs-core` re-clean
+   landed via PR #2 (2026-05-30) — bundled with the YAML refresh and
+   the arguments warning sweep.  `loft-libs-net`'s re-clean remains
+   pending.
+
+   **Per-symbol decision rule** (learned from loft-libs-core 2026-05-30):
+   the re-clean **only applies where the `#native "n_<fn>"` string is
+   redundant** — i.e. where the symbol equals the function name (loft's
+   default).  Where the symbol genuinely differs from the function name
+   (`fn sha256_native … #native "n_sha256"` — the loft fn is `sha256_native`
+   so it wraps the native `n_sha256`), the explicit string is the
+   correct form and must stay.  Crypto fell into this second bucket
+   and was left alone; random fell into the first and was re-cleaned.
+   When opening a Phase 6r PR, audit each `#native "X"` annotation
+   individually — don't sweep blindly.
 
    **Pre-PR validation — `scripts/verify_external_libs.sh`:** mirrors each
    chunk's `library-ci.yml` (`loft --interpret test` + `loft --native
@@ -319,6 +328,20 @@ same clone+build pattern, roll into all three chunk repos + the
 `library-template` repo, and document the baseline in
 `LIBRARY_BLUEPRINT.md`.
 
+**`mmap_storage` gotcha — `cargo build --release --bin loft` is not enough.**
+First chunk-CI rollout (`loft-libs-core` PR #2, 2026-05-29) failed
+every package's native step with `error[E0463]: can't find crate for
+mmap_storage which loft depends on`.  Diagnosis: without explicit
+`--lib`, cargo emits `libloft.rlib` only into
+`target/release/deps/`, never into the parent `target/release/`.
+`loft_lib_dir()` finds the deps-only rlib but the surrounding
+`-L dependency=` search path then can't resolve transitive crates.
+Fix: `cargo build --release --lib --bin loft`.  Verified by a clean
+fresh-clone build locally — `--bin loft` reproduces the CI failure,
+`--lib --bin loft` makes it green.  The canonical template
+([library-ci.yml.example](library-ci.yml.example)) now carries
+the `--lib` flag and a multi-line comment explaining why.
+
 **Canonical `library-ci.yml` (concrete design):**
 
 ```yaml
@@ -408,12 +431,76 @@ jobs:
   starts warning-free, and the allow-file is a visible IOU that
   shows up in `git status` and `gh pr view --files`.
 
+### Bringing a chunk to all-green CI — checklist
+
+Distilled from loft-libs-core's path to green (PR #2, 2026-05-30).
+Apply this checklist when bringing each remaining chunk (currently
+`loft-libs-net` and `loft-libs-graphics`) to fully-green strict CI.
+
+**Prerequisite:** the loft compiler bugs surfaced by the FIRST chunk's
+warning sweep must be fixed on `jjstwerff/loft:main` before later
+chunks attempt the same sweep.  loft-libs-core surfaced @P385 + @P386;
+new chunks may surface different latent bugs.
+
+**Steps (in order):**
+
+1. **Copy the canonical [library-ci.yml.example](library-ci.yml.example)**
+   to `.github/workflows/library-ci.yml` in the chunk repo.  Replace
+   the matrix list with the chunk's actual packages.  Confirm the
+   `--lib --bin loft` flag is present (load-bearing — see Phase 6.5
+   above for the `mmap_storage` gotcha).
+
+2. **Per-package Phase 6r re-clean** — for each `#native "X"`
+   annotation, check if `X` equals the function name (loft's default).
+   If yes, drop to bare `#native`.  If no (genuine override), leave
+   it alone.  Don't blanket-apply.  Update `loft.toml` to drop the
+   `[native.functions]` manifest if all annotations are now bare;
+   add a `build.rs` calling
+   `loft_ffi_build::generate_register_from_loft("../src")`; bump
+   `loft-ffi-build = "0.2"` build-dep; replace any hand-written
+   `loft_register!` block with `include!(…/loft_register_gen.rs)`.
+
+3. **Per-package warning sweep** under `LOFT_DENY_WARNINGS=1` — use
+   the three idioms documented in `.claude/skills/loft-write/SKILL.md`
+   § Warning-clean idioms:
+   - `not null` on vector fields safe-to-default-to-`[]`
+   - capture-into-local before indexing (skip-pattern 5 needs bare-Var vec)
+   - capture-and-null-check (the `x = v[i]; if x != null` hint)
+
+4. **Verify locally first** via `scripts/verify_external_libs.sh`
+   in the monorepo, which mirrors the chunk's CI but builds loft from
+   the current working tree.  This catches a) compiler bugs that need
+   a `libraries → main` PR first, b) source-syntax issues, c) any
+   YAML drift from the canonical template.
+
+5. **Land as ONE PR per chunk** (omnibus pattern from loft-libs-core
+   PR #2).  Separate PRs for YAML / re-clean / warning sweep are
+   interdependent and individually red — bundling them shows the
+   cumulative-green outcome and avoids 3 review cycles.
+
+**Done when:** all matrix jobs green on the chunk's CI under
+`LOFT_DENY_WARNINGS=1`, no `.allow_warnings` opt-out files in the
+chunk, and `scripts/verify_external_libs.sh --src <chunk>=…` is green
+against the latest monorepo `lib/<name>/` source.
+
 ### Phase 6w-w — retire every `.allow_warnings`
 
 The warning gate landed 2026-05-28 ([Phase 6.5 work above]) with
 **3 of 17 libraries already clean** and the other 14 carrying an
 opt-out file.  Each opt-out is an IOU; this phase tracks the cleanup
 ratchet.
+
+**Strict-warnings is also a compiler-fuzzer.**  Lesson from
+loft-libs-core's `arguments` sweep (2026-05-29): the warning sweep
+surfaced **TWO previously-latent compiler bugs** that had never been
+hit in practice — @P385 (parser type-inference asymmetry on
+`if cond { v[i] ?? null } else { null }` returning text) and @P386
+(native codegen `Str/&str` mismatch for text-nullable returns).
+Both were fixed in jjstwerff/loft #231 (merged 2026-05-30) before
+the arguments PR could land green.  **Plan for this pattern on each
+chunk:** budget time during the first strict sweep to file + fix
+1-2 compiler bugs that surface.  The bugs were always there; the
+strict warnings just give us the test cases that find them.
 
 | Library | Warnings | Opt-out | Trend |
 |---|---|---|---|
