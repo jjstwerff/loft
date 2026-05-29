@@ -277,6 +277,28 @@ pub fn compute_intervals(
             }
             *seq += 1;
         }
+        // @PLAN53 cluster 2: these three variants all carry child `Value`s
+        // and are traversed by V1's slot walker (`place_large_and_recurse`
+        // in slots.rs), but were previously invisible to the interval pass
+        // — they fell to the `_ =>` catch-all below, which advances `seq`
+        // without recursing.  Any `Set` nested inside a `yield`/`break <v>`/
+        // `parallel {}` therefore never got a `first_def`/`last_use`, so the
+        // var stayed `first_def == u32::MAX`.  V1 tolerates that (its `>8B`
+        // zone-2 path ignores intervals; zone-1 + I4 exempt MAX vars), but
+        // the aligned V2 allocator SKIPs MAX vars → codegen `var_pos`
+        // underflow under `LOFT_SLOT_V2=drive` (the coroutine `nums()` in
+        // `p226_vector_literal_in_yield_across_simple_arms`).  Recurse so
+        // yield/break/parallel-interior writes get real live intervals.
+        Value::Yield(inner) | Value::BreakWith(_, inner) => {
+            compute_intervals(inner, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            *seq += 1;
+        }
+        Value::Parallel(arms) => {
+            for arm in arms {
+                compute_intervals(arm, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            }
+            *seq += 1;
+        }
         _ => {
             *seq += 1;
         }
