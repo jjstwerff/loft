@@ -48,6 +48,7 @@ probes_in_set() {
     G) echo "47 48 82" ;;
     H) echo "01 03 07 08 10 18 35 42 43 55 60" ;;
     I) echo "24 71" ;;
+    J) echo "91 92 93 94 95 96 97" ;;
     Z) echo "51 52 80 85" ;;
     *) return 1 ;;
   esac
@@ -64,6 +65,7 @@ set_name() {
     G) echo "cluster-VII-chained-call" ;;
     H) echo "baselines-regression-guard" ;;
     I) echo "real-library" ;;
+    J) echo "cluster-IV-Vec-nested-field-push" ;;
     Z) echo "known-parser-bugs-skip" ;;
     *) echo "?" ;;
   esac
@@ -73,13 +75,13 @@ usage() {
   echo "Usage: $0 <SET> [-v]"
   echo
   echo "Available sets:"
-  for s in A B C D E F G H I Z; do
+  for s in A B C D E F G H I J Z; do
     probes=$(probes_in_set "$s")
     count=$(echo "$probes" | wc -w | tr -d ' ')
     name=$(set_name "$s")
     printf "  %s  (%s)  %d probes\n" "$s" "$name" "$count"
   done
-  echo "  all  — run every set in order A..I (skip Z)"
+  echo "  all  — run every set in order A..J (skip Z)"
   echo
   echo "Options:"
   echo "  -v   Show probe output on FAIL/CRASH (default: just status code)"
@@ -179,12 +181,12 @@ run_set() {
 
 if [[ "$SET_LETTER" == "all" ]]; then
   total_fail=0
-  for s in A B C D E F G H I; do
+  for s in A B C D E F G H I J; do
     run_set "$s"
     total_fail=$((total_fail + $?))
     echo
   done
-  echo "TOTAL: $total_fail non-PASS probes across sets A..I"
+  echo "TOTAL: $total_fail non-PASS probes across sets A..J"
   [[ $total_fail -eq 0 ]] && exit 0 || exit 1
 fi
 

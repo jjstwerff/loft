@@ -1367,11 +1367,20 @@ use a separate collection or add after the loop"
         }
         // `lhs += other_vec` where both sides are vectors: append all elements
         // in-place via OpAppendVector.
+        //
+        // @PLAN52 cluster IV-Vec-nested-field-push: when the LHS element type
+        // EQUALS the RHS type (e.g. `field: vector<vector<X>> += inner_vec`
+        // where `inner_vec: vector<X>`), this is a SINGLE-ELEMENT PUSH, not a
+        // concatenate.  Skip this branch so the field-`+= elem` lowering
+        // (line ~1389) fires and emits `new_record` / `copy_record` /
+        // `finish_record` — the same shape the LOCAL-var path (P188 branch
+        // at line ~957) already uses.
         if !self.first_pass
             && op == "+="
             && let Type::Vector(elm_tp, _) = &f_type.clone()
             && matches!(s_type, Type::Vector(_, _))
             && !matches!(code, Value::Insert(_))
+            && !(**elm_tp).is_equal(&s_type)
         {
             // @P314 — narrow-aware element type (see `append_elem_tp`).
             let elm = (**elm_tp).clone();

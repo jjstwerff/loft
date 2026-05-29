@@ -1,0 +1,40 @@
+// Probe 93 — Cluster IV-Vec NESTED-FIELD-PUSH: PRIMITIVE inner type
+//
+// Probe 91 uses `vector<vector<Inner>>` (struct elements).  This probe uses
+// `vector<vector<integer>>` to see if the bug shape changes when the inner
+// element is a primitive.
+//
+// Observed (2026-05-29):
+//   `o.lists += inner;` where inner = [1, 2, 3] produces:
+//     len(o.lists) = 3  (WANT 1)
+//     a = o.lists[0]    → len(a) = 64 (garbage)
+//     a[0] = 5          (garbage)
+//
+// The flattening is more visible here: len(o.lists) becomes 3 because the
+// concatenate path copies each of inner's 3 elements onto o.lists's tail.
+// Then reading o.lists[0] interprets the first 8-byte slot as a vector-
+// header rec-id which is actually the integer 1, leading to a wild u32 used
+// as a record number and garbage results.
+//
+// Same mechanism as probe 91, more dramatic symptom because the size of
+// `inner`'s element (8 bytes for integer) matches what the outer expects
+// per element (a 4-byte rec-id, padded to 8), so the byte copy "succeeds"
+// silently.
+//
+// Pairing: 91 (struct-Inner inner), 94 (text inner).
+// Status: cluster IV-Vec-nested-field-push variant.
+
+struct Outer { lists: vector<vector<integer>> }
+
+fn main() {
+  o = Outer { lists: [] };
+  inner: vector<integer> = [1, 2, 3];
+  o.lists += inner;
+  assert(len(o.lists) == 1, "probe 93: len(o.lists) = {len(o.lists)}, want 1 (got flattened?)");
+  a = o.lists[0];
+  assert(len(a) == 3, "probe 93: len(a) = {len(a)}, want 3");
+  assert(a[0] == 1, "probe 93: a[0] = {a[0]}, want 1");
+  assert(a[1] == 2, "probe 93: a[1] = {a[1]}, want 2");
+  assert(a[2] == 3, "probe 93: a[2] = {a[2]}, want 3");
+  println("probe 93 PASSED");
+}

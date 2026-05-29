@@ -1,0 +1,29 @@
+// Probe 96 — Cluster IV-Vec NESTED-FIELD-PUSH: struct ctor with non-empty literal
+//
+// Same outcome as probe 95 — initialize the field via the struct constructor
+// with a non-empty literal `[inner]`.
+//
+// Observed (2026-05-29):
+//   `Outer { lists: [inner] }`  →  --interpret PASSes;  --native PANICs at
+//   `database/allocation.rs:1190:32` (Enum dispatch out-of-bounds).
+//
+// Confirms that the native panic is in the DEEP-COPY path for
+// `vector<vector<X>>` literals containing variable inner-vecs, not in
+// the `+=` lowering per se.
+//
+// Pairing: 95 (field= variant — same panic).
+// Status: cluster IV-Vec-nested-field-push variant; surfaces a separate
+//         native deep-copy bug in the same code path family.
+
+struct Inner { tag: integer not null }
+struct Outer { lists: vector<vector<Inner>> }
+
+fn main() {
+  inner: vector<Inner> = [Inner { tag: 42 }];
+  o = Outer { lists: [inner] };
+  assert(len(o.lists) == 1, "probe 96: len(o.lists) = {len(o.lists)}, want 1");
+  a = o.lists[0];
+  assert(len(a) == 1, "probe 96: len(a) = {len(a)}, want 1");
+  assert(a[0].tag == 42, "probe 96: a[0].tag = {a[0].tag}, want 42");
+  println("probe 96 PASSED");
+}
