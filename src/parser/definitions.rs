@@ -1546,10 +1546,21 @@ impl Parser {
                         Type::Sorted(sub_nr, fields, Vec::new())
                     }
                     "spacial" => {
-                        // Consume remaining ", field, ..." tokens up to the closing >.
-                        while !self.lexer.has_closing_angle() {
-                            self.lexer.has_token(",");
-                            self.lexer.has_identifier();
+                        // Consume the optional `[field, ...]` key-spec then
+                        // the closing `>` so the parser advances past the
+                        // spacial type even though we reject it.  The
+                        // previous hand-rolled loop
+                        // (`while !has_closing_angle { has_token(","); has_identifier(); }`)
+                        // hung forever on `spacial<X[name]>` because none
+                        // of the lookahead helpers advance on `[` — see
+                        // @PLAN52 cluster-IV-Spacial-parser.md.  Match the
+                        // grammar of sorted/hash/index, but allow a bare
+                        // `spacial<T>` (no key-spec) since the diagnostic
+                        // also fires from `tests/issues.rs::p22_*`.
+                        if self.lexer.peek_token("[") {
+                            self.parse_fields(false, &mut fields);
+                        } else {
+                            self.lexer.closing_angle();
                         }
                         // Keep the bespoke diagnostic (more helpful than a
                         // generic "unknown type") and surface the milestone

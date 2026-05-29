@@ -58,57 +58,60 @@ Parser hangs at line 0 (per breadcrumb) — never reaches main()'s body.
 | Key type (text vs int) doesn't matter | ✅ Verified — probes 51 (text), 88 (int) |
 | `??` doesn't matter | ✅ Verified — probe 62 |
 | Regular structs without spacial field parse fine | ✅ Verified — probe 90 |
-| Exact source location of the loop | ❌ Not yet pinpointed — needs source-side instrumentation |
-| Does the loop exist in other keyed-collection types (sorted/index/hash)? | ❌ Not directly probed at type-registration level — Set E probes use them with operations that pass.  Likely spacial-specific |
+| Exact source location of the loop | ✅ **Localised 2026-05-29** — `src/parser/definitions.rs:1548-1562`.  The `spacial` arm's hand-rolled `while !has_closing_angle { has_token(","); has_identifier(); }` loop never advances when the next token is `[` (the start of the key-spec) because none of `has_closing_angle` / `has_token(",")` / `has_identifier()` call `cont()` on a non-matching `[`. |
+| Does the loop exist in other keyed-collection types (sorted/index/hash)? | ✅ NO — sorted/hash/index call `parse_fields(true, ...)` which knows how to eat `[fields]>`.  spacial was the only sibling using the hand-rolled loop. |
 
 ## Investigation tasks
 
 1. ~~Confirm hang fires on bare declaration~~ — done (probe 89).
 2. ~~Confirm key-type independence~~ — done (probe 88).
-3. **Locate the parser/typedef loop site**:
-   - Grep `src/parser/` and `src/typedef.rs` for `"spacial"` / `Type::Spacial` / spatial-index-specific code paths.
-   - Add an `eprintln!` at the top of every spacial-related function found above; run probe 89; the eprintln that prints repeatedly localises the loop.
-   - Alternative: use `RUST_LOG=loft::parser=trace` if that lever exists (check `src/log_config.rs`).
-4. **Hypothesise & verify**:
-   - **Hypothesis A**: spacial type-registration recursively expands `Type::Spacial(box T, _)` where T's recursion isn't depth-capped.  Verify by inspecting the recursive call.
-   - **Hypothesis B**: spacial's key-index layout calc loops on a self-referential cycle in the type-field map.
-   - **Hypothesis C**: a `for` loop in spacial's setup uses a counter that's been mis-initialised (e.g. `for i in 0..u16::MAX` where the early-exit condition never fires).
+3. ~~**Locate the parser/typedef loop site**~~ — done 2026-05-29.  Site: `src/parser/definitions.rs:1548-1562`, the `"spacial"` arm of the keyed-collection match in `parse_type`.
+4. ~~**Hypothesise & verify**~~ — done.  None of the three hypothesised options (depth cap / memoisation / counter bug) applied.  The actual cause was simpler: the hand-rolled scanner loop in the `spacial` arm didn't handle the `[fields]` token sequence; the lookahead helpers it called all bail without advancing when the next token is `[`.
 
 ## Fix surface
 
-Depends on the loop site, which Investigation task 3 will localise.  Three likely shapes:
-
-### Option A: depth-cap on recursive type expansion
-
-If hypothesis A holds, add a depth-limit check (similar to existing protections in struct-recursion handling):
+**LANDED 2026-05-29.**  The hand-rolled `while !has_closing_angle { has_token(","); has_identifier(); }` scanner was replaced with a conditional call to the same `parse_fields` helper that sorted/hash/index already use:
 
 ```rust
-fn expand_spacial(t: &Type, depth: usize) -> ... {
-    if depth > MAX_TYPE_DEPTH {
-        return Err(/* clean diagnostic */);
+"spacial" => {
+    if self.lexer.peek_token("[") {
+        self.parse_fields(false, &mut fields);
+    } else {
+        self.lexer.closing_angle();
     }
-    // ... existing logic ... call expand_spacial(.., depth + 1) ...
+    diagnostic!(
+        self.lexer,
+        Level::Error,
+        "spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups"
+    );
+    Type::Unknown(0)
 }
 ```
 
-**Effort**: XS (one-line cap + existing-error-path reuse).
-**Risk**: LOW (depth cap can only reject more, not accept worse).
+The `peek_token("[")` branch handles `spacial<X[name]>` (key-spec present); the `else` branch handles bare `spacial<T>` (no key-spec — required by the existing `tests/issues.rs::p22_spacial_diagnostic_names_milestone_and_substitute` test).
 
-### Option B: memoisation on type-resolution
+### Fix iterations
 
-If hypothesis B holds, cache resolved-type results so the second visit returns the cached value rather than re-resolving.
+**Iteration 1 (2026-05-29) — parser-hang fix landed**
+- Site: `src/parser/definitions.rs:1548-1572` (spacial arm of `parse_type`).
+- Result on Set Z probe 51 + sibling probes:
 
-**Effort**: S (add a HashMap to the resolver context).
-**Risk**: LOW-MEDIUM (cache invalidation rules need care).
+  | Probe | Shape | Before | After |
+  |---|---|---|---|
+  | 51 | `spacial<Point[name]>` value-block via `??` | HANG | PARSE-ERR (clean diagnostic + exit) |
+  | 62 | `spacial<X[k]>` without `??` | HANG | PARSE-ERR |
+  | 88 | `spacial<X[int_key]>` | HANG | PARSE-ERR |
+  | 89 | bare `s: spacial<X[name]> = []` declaration | HANG | PARSE-ERR |
+  | 90 | Reference baseline (no spacial) | PASS | PASS |
 
-### Option C: counter-bug fix
+- Set H baselines: **all PASS** (no regression).
+- `tests/issues.rs::p22_spacial_diagnostic_names_milestone_and_substitute`: continues to PASS (the `else { closing_angle() }` branch preserves the bare-`spacial<T>` behaviour).
+- Full `cargo test --test issues`: 681/681 pass.
 
-If hypothesis C holds, fix the off-by-one or wrong sentinel.
+Probes 51/62/88/89 now emit the "spacial<T> is planned for 1.1+" diagnostic and exit cleanly — they don't fully PASS the probe assertions because that would require spacial itself to be implemented (1.1+ work outside PLAN52's scope).  This cluster's exit criterion ("hang gone, clean diagnostic") is met.
 
-**Effort**: XS.
-**Risk**: LOW.
-
-**Picking between options**: Wait for Investigation task 3's output.  Don't commit to a fix until the loop site is known.
+**Effort**: XS (single arm in `parse_type`; done in ~30 min).
+**Risk**: LOW — diagnostic surface unchanged, no semantic change to types that did parse.
 
 ## In-plan vs spinoff decision
 
