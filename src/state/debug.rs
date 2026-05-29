@@ -794,12 +794,12 @@ impl State {
         a: &Attribute,
     ) -> Result<(), Error> {
         if (def.name == "OpGotoFalseWord" || def.name == "OpGotoWord") && a_nr == 0 {
-            let to = i64::from(p) + 3 + i64::from(*self.code::<i16>()) - i64::from(start_pos);
+            let to = i64::from(p) + 3 + i64::from(self.code::<i16>()) - i64::from(start_pos);
             write!(f, "jump={to}")?;
         } else if def.name == "OpCall" && a_nr == 2 {
             self.fn_name(f, data)?;
         } else if def.name == "OpStaticCall" {
-            let v = *self.code::<u16>();
+            let v = self.code::<u16>();
             for (n, val) in &self.library_names {
                 if *val == v {
                     write!(f, "{n}")?;
@@ -817,7 +817,7 @@ impl State {
                 })
             && self.stack.contains_key(&p)
         {
-            let pos = i32::from(*self.code::<u16>());
+            let pos = i32::from(self.code::<u16>());
             write!(f, "var[{}]", i32::from(self.stack[&p]) - pos)?;
         } else if a.mutable {
             write!(
@@ -860,9 +860,9 @@ impl State {
         )?;
         while self.code_pos < start_pos + data.def(d_nr).code_length {
             let p = self.code_pos;
-            let first = *self.code::<u8>();
+            let first = self.code::<u8>();
             let op: u16 = if first == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 255u16 + u16::from(ext)
             } else {
                 u16::from(first)
@@ -924,7 +924,7 @@ impl State {
     }
 
     pub(super) fn fn_name(&mut self, f: &mut dyn Write, data: &Data) -> Result<(), Error> {
-        let addr = *self.code::<i64>() as u32;
+        let addr = self.code::<i64>() as u32;
         let mut name = format!("Unknown[{addr}]");
         for d in &data.definitions {
             if d.code_position == addr {
@@ -943,22 +943,22 @@ impl State {
     pub(super) fn dump_attribute(&mut self, a: &Attribute) -> String {
         match a.typedef {
             Type::Integer(s) if s.range() - 1 <= 256 && s.min == 0 => {
-                format!("{}", i32::from(*self.code::<u8>()))
+                format!("{}", i32::from(self.code::<u8>()))
             }
             Type::Integer(s) if s.range() - 1 <= 65536 && s.min == 0 => {
-                format!("{}", i32::from(*self.code::<u16>()))
+                format!("{}", i32::from(self.code::<u16>()))
             }
             Type::Integer(s) if s.range() - 1 <= 256 => {
-                format!("{}", i32::from(*self.code::<i8>()))
+                format!("{}", i32::from(self.code::<i8>()))
             }
             Type::Integer(s) if s.range() - 1 <= 65536 => {
-                format!("{}", i32::from(*self.code::<i16>()))
+                format!("{}", i32::from(self.code::<i16>()))
             }
-            Type::Integer(_) => format!("{}", *self.code::<i64>()),
-            Type::Boolean => format!("{}", *self.code::<u8>() == 1),
-            Type::Enum(_, false, _) => format!("{}", *self.code::<u8>()),
-            Type::Single => format!("{}", *self.code::<f32>()),
-            Type::Float => format!("{}", *self.code::<f64>()),
+            Type::Integer(_) => format!("{}", self.code::<i64>()),
+            Type::Boolean => format!("{}", self.code::<u8>() == 1),
+            Type::Enum(_, false, _) => format!("{}", self.code::<u8>()),
+            Type::Single => format!("{}", self.code::<f32>()),
+            Type::Float => format!("{}", self.code::<f64>()),
             Type::Text(_) => {
                 let s = self.code_str();
                 if s == STRING_NULL {
@@ -967,14 +967,14 @@ impl State {
                     format!("\"{s}\"")
                 }
             }
-            Type::Character => format!("{}", *self.code::<char>()),
+            Type::Character => format!("{}", self.code::<char>()),
             Type::Keys => {
-                let len = *self.code::<u8>();
+                let len = self.code::<u8>();
                 let mut keys = Vec::new();
                 for _ in 0..len {
                     keys.push(Key {
-                        type_nr: *self.code::<i8>(),
-                        position: *self.code::<u16>(),
+                        type_nr: self.code::<i8>(),
+                        position: self.code::<u16>(),
                     });
                 }
                 format!("{keys:?}")
@@ -1034,9 +1034,9 @@ impl State {
             // loop misreads the lead byte 255 as a single-byte opcode and
             // dispatches through `OPERATORS[255]` instead of the intended
             // handler.
-            let first = *self.code::<u8>();
+            let first = self.code::<u8>();
             let op = if first == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 255u16 + u16::from(ext)
             } else {
                 u16::from(first)
@@ -1230,7 +1230,7 @@ impl State {
         for (a_nr, a) in def.attributes.iter().enumerate() {
             if !a.mutable {
                 if def.name == "OpStaticCall" {
-                    let nr = *self.code::<i16>();
+                    let nr = self.code::<i16>();
                     write!(log, "{})", FUNCTIONS[nr as usize].0)?;
                     self.code_pos = cur;
                     self.stack_pos = stack;
@@ -1240,7 +1240,7 @@ impl State {
                 } else if def.name == "OpCall" && a_nr == 2 {
                     self.call_name(&mut attr, a_nr, data);
                 } else if def.name.starts_with("OpGoto") && a_nr == 0 {
-                    let to = i64::from(cur) + 2 + i64::from(*self.code::<i16>()) - i64::from(minus);
+                    let to = i64::from(cur) + 2 + i64::from(self.code::<i16>()) - i64::from(minus);
                     attr.insert(a_nr, format!("jump={to}"));
                 } else if def.name == "OpIterate" {
                     self.iterate_args(log)?;
@@ -1257,7 +1257,7 @@ impl State {
                             forced_size: None,
                         })
                 {
-                    let pos = *self.code::<u16>();
+                    let pos = self.code::<u16>();
                     assert!(
                         u32::from(pos) <= self.stack_pos,
                         "Variable {pos} outside stack {}",
@@ -1348,18 +1348,18 @@ impl State {
     }
 
     pub(super) fn iterate_args(&mut self, log: &mut dyn Write) -> Result<(), Error> {
-        let on = *self.code::<u8>();
-        let arg = *self.code::<u16>();
-        let keys_size = *self.code::<u8>();
+        let on = self.code::<u8>();
+        let arg = self.code::<u16>();
+        let keys_size = self.code::<u8>();
         let mut keys = Vec::new();
         for _ in 0..keys_size {
             keys.push(Key {
-                type_nr: *self.code::<i8>(),
-                position: *self.code::<u16>(),
+                type_nr: self.code::<i8>(),
+                position: self.code::<u16>(),
             });
         }
-        let from_key = *self.code::<u8>();
-        let till_key = *self.code::<u8>();
+        let from_key = self.code::<u8>();
+        let till_key = self.code::<u8>();
         let till = self.stack_key(till_key, &keys);
         let from = self.stack_key(from_key, &keys);
         let data = *self.get_stack::<DbRef>();
@@ -1372,10 +1372,10 @@ impl State {
 
     pub(super) fn return_attr(&mut self, attr: &mut BTreeMap<usize, String>, a_nr: usize) {
         let cur_st = self.stack_pos;
-        let ret = u32::from(*self.code::<u16>());
+        let ret = u32::from(self.code::<u16>());
         let cur_code = self.code_pos;
         self.code::<u8>();
-        let discard = *self.code::<u16>();
+        let discard = self.code::<u16>();
         self.stack_pos -= u32::from(discard);
         self.stack_pos += ret;
         let st = self.stack_pos;
@@ -1391,7 +1391,7 @@ impl State {
         a_nr: usize,
         data: &Data,
     ) {
-        let addr = *self.code::<i64>() as u32;
+        let addr = self.code::<i64>() as u32;
         let mut name = format!("Unknown[{addr}]");
         for d in &data.definitions {
             if d.code_position == addr {

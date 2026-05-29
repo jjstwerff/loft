@@ -433,7 +433,7 @@ impl State {
     }
 
     pub fn static_call(&mut self) {
-        let call = *self.code::<u16>();
+        let call = self.code::<u16>();
         // Fix #87: resolve n_stack_trace index lazily, then only snapshot for that call.
         if self.stack_trace_lib_nr == u16::MAX
             && let Some(&nr) = self.library_names.get("n_stack_trace")
@@ -1361,7 +1361,12 @@ impl State {
                 .as_mut_ptr()
                 .offset(on as isize)
                 .cast::<T>();
-            *off.as_mut().expect("code") = value;
+            // The bytecode buffer is byte-granular (`Vec<u8>`); a `T` wider than
+            // 1 byte usually lands at an unaligned offset.  Constructing `&mut T`
+            // there is UB even where the hardware tolerates the access (the
+            // @PLAN53 cluster-1 Miri finding) — write through the unaligned
+            // intrinsic instead, which is defined at any alignment.
+            off.write_unaligned(value);
         }
     }
 
@@ -1383,7 +1388,8 @@ impl State {
         unsafe {
             let off = bc.as_mut_ptr().offset(self.code_pos as isize).cast::<T>();
             self.code_pos += u32::try_from(size_of::<T>()).expect("Problem");
-            *off.as_mut().expect("code") = value;
+            // Unaligned by construction — see code_put (@PLAN53 cluster 1).
+            off.write_unaligned(value);
         }
     }
 
@@ -1404,7 +1410,7 @@ impl State {
     # Panics
     When the position is outside the byte-code
     */
-    pub fn code<T>(&mut self) -> &T {
+    pub fn code<T: Copy>(&mut self) -> T {
         assert!(
             self.code_pos + (size_of::<T>() as u32) <= self.bytecode.len() as u32,
             "Position {} + {} outside generated code {}",
@@ -1419,12 +1425,16 @@ impl State {
                 .offset(self.code_pos as isize)
                 .cast::<T>();
             self.code_pos += size_of::<T>() as u32;
-            off.as_ref().expect("code")
+            // Returns the operand BY VALUE via the unaligned read intrinsic.
+            // The buffer is byte-granular, so a `&T` into it would be an
+            // unaligned reference — UB (the @PLAN53 cluster-1 Miri finding) —
+            // even on x86 where the load itself is tolerated.
+            off.read_unaligned()
         }
     }
 
     pub fn code_str(&mut self) -> &str {
-        let len = *self.code::<u8>();
+        let len = self.code::<u8>();
         unsafe {
             let off = self.bytecode.as_ptr().offset(self.code_pos as isize);
             self.code_pos += u32::from(len);
@@ -1479,14 +1489,14 @@ impl State {
 
     /// `parallel {}` — read the arm count for `parallel_arm`/`parallel_join`.
     pub fn parallel_begin(&mut self) {
-        let n_arms = *self.code::<u8>();
+        let n_arms = self.code::<u8>();
         self.parallel_n_arms = n_arms;
         self.parallel_arm_positions.clear();
     }
 
     /// `parallel {}` — read the arm's bytecode offset and record it.
     pub fn parallel_arm(&mut self) {
-        let offset = *self.code::<u16>();
+        let offset = self.code::<u16>();
         self.parallel_arm_positions.push(offset);
     }
 
@@ -1569,7 +1579,7 @@ impl State {
     ///
     /// `pos` is read from the bytecode stream as a `const u16`.
     pub fn init_ref(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let null_ref = self.database.null();
         *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
             self.stack_cur.rec,
@@ -1587,7 +1597,7 @@ impl State {
     ///
     /// `pos` is read from the bytecode stream as a `const u16`.
     pub fn init_ref_sentinel(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -1611,8 +1621,8 @@ impl State {
     /// Both `pos` and `dep_pos` are read from the bytecode stream
     /// as `const u16`.
     pub fn init_create_stack(&mut self) {
-        let pos = *self.code::<u16>();
-        let dep_pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
+        let dep_pos = self.code::<u16>();
         let db = DbRef {
             store_nr: self.stack_cur.store_nr,
             rec: self.stack_cur.rec,
@@ -1984,7 +1994,7 @@ impl State {
             let op_pos_rt = self.code_pos;
             #[cfg(debug_assertions)]
             let op_pos = self.code_pos;
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             // Publish the current bytecode position + op byte so that a
             // subsequent SIGSEGV/SIGABRT prints the crash location.
             // Cheap: one thread-local store per op.
@@ -1999,7 +2009,7 @@ impl State {
                 trail_head = (trail_head + 1) % 16;
             }
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2121,9 +2131,9 @@ impl State {
         self.database.frame_yield = false;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2258,9 +2268,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2317,9 +2327,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2391,9 +2401,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2470,9 +2480,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2545,9 +2555,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2620,9 +2630,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2696,9 +2706,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2771,9 +2781,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2847,9 +2857,9 @@ impl State {
         self.code_pos = fn_pos;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);

@@ -13,7 +13,7 @@ impl State {
     }
 
     pub fn string_from_code(&mut self) {
-        let size = *self.code::<u8>();
+        let size = self.code::<u8>();
         unsafe {
             self.set_string(
                 i32::from(size),
@@ -77,7 +77,7 @@ impl State {
     #[inline]
     pub fn append_text(&mut self) {
         let text = self.string();
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         if cfg!(debug_assertions) {
             self.text_positions
                 .insert(self.stack_cur.pos + self.stack_pos + size_ptr() - u32::from(pos));
@@ -91,7 +91,7 @@ impl State {
     /// before any field access.
     #[inline]
     pub fn create_stack(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let db = DbRef {
             store_nr: self.stack_cur.store_nr,
             rec: self.stack_cur.rec,
@@ -109,7 +109,7 @@ impl State {
 
     #[inline]
     pub fn get_stack_ref(&mut self) {
-        let fld = *self.code::<u16>();
+        let fld = self.code::<u16>();
         let r = *self.get_stack::<DbRef>();
         let t = self
             .database
@@ -128,13 +128,13 @@ impl State {
 
     pub fn append_stack_text(&mut self) {
         let text = self.string();
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let v1 = self.string_ref_mut(pos - size_ptr() as u16);
         *v1 += text.str();
     }
 
     pub fn append_stack_character(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let c = *self.get_stack::<char>();
         if c as u32 != 0 {
             self.string_ref_mut(pos - 4).push(c);
@@ -142,14 +142,14 @@ impl State {
     }
 
     pub fn clear_stack_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let v1 = self.string_ref_mut(pos);
         v1.clear();
     }
 
     #[inline]
     pub fn append_character(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let c = *self.get_stack::<char>();
         // Plan-07 phase 4e.3 — when a fault tag is set on the
         // preceding `OpTagFault` (4e.1 format-scope swap) AND the
@@ -286,7 +286,7 @@ impl State {
     }
 
     pub fn clear_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         self.string_mut(pos).clear();
     }
 
@@ -296,7 +296,7 @@ impl State {
     When the same variable is freed twice.
     */
     pub fn free_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         if cfg!(debug_assertions) {
             let s = self.string_mut(pos);
             s.clear();
@@ -342,7 +342,7 @@ impl State {
     ///
     /// `pos` is read from the bytecode stream as a `const u16`.
     pub fn init_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         if cfg!(debug_assertions) {
             self.text_positions
                 .insert(self.stack_cur.pos + self.stack_pos - u32::from(pos));
@@ -355,30 +355,30 @@ impl State {
     }
 
     pub fn var_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let new_value = Str::new(self.get_var::<String>(pos));
         self.put_stack(new_value);
     }
 
     pub fn arg_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let new_value = *self.get_var::<Str>(pos);
         self.put_stack(new_value);
     }
 
     pub fn put_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let str_val = self.string(); // pops 16B Str; stack_pos -= 16
         self.put_var(pos, str_val); // writes Str at (stack_pos + 16 - pos) = elem_abs
     }
 
     pub fn format_int(&mut self) {
-        let pos = *self.code::<u16>();
-        let radix = *self.code::<u8>();
-        let token = *self.code::<u8>();
-        let plus = *self.code::<bool>();
-        let note = *self.code::<bool>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let radix = self.code::<u8>();
+        let token = self.code::<u8>();
+        let plus = self.code::<bool>();
+        let note = self.code::<bool>();
+        let dir = self.code::<i8>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<i64>();
         // Plan-07 phase 4e.3 — consume the fault tag set by the
@@ -401,12 +401,12 @@ impl State {
     }
 
     pub fn format_stack_int(&mut self) {
-        let pos = *self.code::<u16>();
-        let radix = *self.code::<u8>();
-        let token = *self.code::<u8>();
-        let plus = *self.code::<bool>();
-        let note = *self.code::<bool>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let radix = self.code::<u8>();
+        let token = self.code::<u8>();
+        let plus = self.code::<bool>();
+        let note = self.code::<bool>();
+        let dir = self.code::<i8>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<i64>();
         let tag = self.database.take_format_fault();
@@ -423,8 +423,8 @@ impl State {
     }
 
     pub fn format_float(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f64>();
@@ -433,8 +433,8 @@ impl State {
     }
 
     pub fn format_stack_float(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f64>();
@@ -443,8 +443,8 @@ impl State {
     }
 
     pub fn format_single(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f32>();
@@ -453,8 +453,8 @@ impl State {
     }
 
     pub fn format_stack_single(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f32>();
@@ -463,9 +463,9 @@ impl State {
     }
 
     pub fn format_text(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
-        let token = *self.code::<u8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
+        let token = self.code::<u8>();
         let width = *self.get_stack::<i64>();
         let val = self.string();
         let s = self.string_mut(pos - 8 - size_ptr() as u16);
@@ -473,9 +473,9 @@ impl State {
     }
 
     pub fn format_stack_text(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
-        let token = *self.code::<u8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
+        let token = self.code::<u8>();
         let width = *self.get_stack::<i64>();
         let val = self.string();
         let s = self.string_ref_mut(pos - 8 - size_ptr() as u16);
