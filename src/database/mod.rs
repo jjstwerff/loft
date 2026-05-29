@@ -183,6 +183,15 @@ pub struct Stores {
     #[cfg(feature = "wasm")]
     pub files: Vec<()>,
     pub max: u16,
+    /// @PLAN53 cluster 2 / S4 — mirror of `State.aligned_stack`, read from
+    /// `LOFT_ALIGN` at construction.  Makes the native marshalling primitives
+    /// `get`/`put` advance `stack.pos` by the SAME stepped width the
+    /// codegen+runtime use for `OpStaticCall` args/results (DbRef 12->16,
+    /// char/bool/single ->8), so native results land at the aligned slot the
+    /// caller expects.  Identity (real `size_of`) when off → flag-OFF
+    /// byte-identical.  MUST be propagated in `Stores::clone` so parallel
+    /// workers inherit it.
+    pub aligned_stack: bool,
     /// S29: bitmap of free store slots — bit `i` is set when `allocations[i]`
     /// is free and eligible for reuse.  `database_named` finds the lowest set bit below `max`
     /// and reuses that slot instead of always growing `max`.  This eliminates the LIFO-order
@@ -420,6 +429,7 @@ impl Clone for Stores {
             allocations: Vec::new(),
             files: Vec::new(),
             max: self.max,
+            aligned_stack: self.aligned_stack,
             free_bits: Vec::new(),
             scratch: Vec::new(),
             const_refs: Vec::new(),
@@ -880,6 +890,7 @@ impl Stores {
             allocations: Vec::new(),
             files: Vec::new(),
             max: 0,
+            aligned_stack: crate::variables::aligned_stack_enabled(),
             free_bits: Vec::new(),
             scratch: Vec::new(),
             const_refs: Vec::new(),
@@ -1184,14 +1195,18 @@ impl Stores {
 
     #[must_use]
     pub fn get<T: 'static>(&mut self, stack: &mut DbRef) -> &T {
+        // @PLAN53 cluster 2 / S4: pop the value's STEPPED span (8-rounded in
+        // aligned mode) so a native arg occupying a stepped slot is reached
+        // correctly; identity (real size_of) when off → flag-OFF unchanged.
+        let step = crate::variables::aligned_stack_step(size_of::<T>() as u32, self.aligned_stack);
         debug_assert!(
-            stack.pos >= size_of::<T>() as u32,
+            stack.pos >= step,
             "Stack underflow in get<{}>: stack.pos={} but need {} bytes",
             std::any::type_name::<T>(),
             stack.pos,
-            size_of::<T>(),
+            step,
         );
-        stack.pos -= size_of::<T>() as u32;
+        stack.pos -= step;
         let r = self.store(stack).addr::<T>(stack.rec, stack.pos);
         #[cfg(debug_assertions)]
         {
@@ -1229,7 +1244,10 @@ impl Stores {
         }
         let m = self.store_mut(stack).addr_mut::<T>(stack.rec, stack.pos);
         *m = val;
-        stack.pos += size_of::<T>() as u32;
+        // @PLAN53 cluster 2 / S4: push the value's STEPPED span so a native
+        // result lands at the aligned slot the caller's codegen expects;
+        // identity when off.
+        stack.pos += crate::variables::aligned_stack_step(size_of::<T>() as u32, self.aligned_stack);
     }
 
     /// Look up a type by index, panicking with a diagnostic if the index is out of range.
