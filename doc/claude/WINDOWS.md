@@ -23,7 +23,7 @@ accurate claim today is:
 | **`--interpret`** (single program, no native libs) | ✅ **Verified** — the bulk of the suite runs + passes on Windows CI |
 | **`--interpret`** with a `#native` library (dlopen the cdylib) | ⚠️ **Mostly** — imaging etc. pass; multi-lib + networking caveated below |
 | **`--native`** linking a native library (rlib link) | ❌ **Unverified** — environmental link failures (see G2/G3), test-skipped |
-| **Server networking** (`server` bind/accept) | ❌ **Known-broken on CI** — `@P229b`, tests `#[ignore]`d |
+| **Server networking** (`server` bind/accept) | ✅ **Verified 2026-05-29** — the v2 probe (PR #228) un-ignored `v2_single_client_completes_game` on Windows and it PASSED; the other 9 P229b ignores were dropped in the follow-up.  `@P229b` closed without code change (incidental fix in a recent Rust toolchain or transitive dep update). |
 | **`parallel { … }`** | ⚠️ **Half-open** — `@P229` worker-stack issue |
 
 RELEASE.md *intends* to ship a `x86_64-pc-windows-msvc` binary with a
@@ -56,29 +56,6 @@ the MSVC toolchain is the missing piece.
   `reference_native_rlib_rebuild`).
 
 ## Known gaps
-
-### G1 — server cannot bind on Windows (`@P229b`)  · networking
-
-- **Symptom:** the `v2`/`v3`/`v5` multiplayer servers fail to start; the test
-  harness's `wait_listening` times out at 60 s.
-- **Skipped:** `tests/multiplayer_v2.rs` (3), `multiplayer_v3.rs` (2),
-  `multiplayer_v5.rs` (5) — all `#[cfg_attr(target_os = "windows", ignore = "P229b…")]`.
-- **Leading hypothesis** (code review, unverified): `pick_free_port`
-  (`tests/multiplayer_v2.rs`) binds `127.0.0.1:0`, drops the listener, and
-  hands the freed port to the spawned server to **re-bind**.  Windows often
-  cannot immediately re-bind a just-closed port (no default `SO_REUSEADDR`;
-  `TIME_WAIT` / exclusive-use), so the child's bind fails and it dies at
-  startup.
-- **VM validation:**
-  1. Remove the `#[cfg_attr(target_os = "windows", ignore)]` on the three
-     `P229b` scenarios in `multiplayer_v2.rs`.
-  2. `cargo nextest run --test multiplayer_v2 -- --test-threads=1` — read the
-     real error (`ServerGuard::diagnose_listen_failure` now drains the child's
-     stdout/stderr + `try_wait` status into the panic).
-  3. If it confirms the bind race: change the **server** to bind `:0` itself
-     and print the chosen port on stdout; the test reads it back (removes the
-     close-then-rebind race).  Re-enable the scenarios.
-- **Tracking:** PROBLEMS.md `@P229`; TESTING.md § Open work `@P229b`.
 
 ### G2 — `--native` `windows-targets` link search path (`LNK1181`)  · native
 
@@ -132,6 +109,14 @@ the MSVC toolchain is the missing piece.
 
 ## Previously fixed Windows-only issues (for context)
 
+- **`@P229b` — server cannot bind on Windows (closed 2026-05-29).** The 10
+  `multiplayer_v{2,3,5}.rs` scenarios marked `#[cfg_attr(target_os = "windows",
+  ignore = "P229b…")]` are all un-ignored.  The v2 probe (PR #228 commit
+  `baa9c3e2`) un-ignored `v2_single_client_completes_game` and CI showed it
+  PASSING on `windows-latest` — the 2026-05-21 "bind-then-drop race"
+  hypothesis was incorrect; @P229b incidentally resolved in some recent
+  Rust toolchain or transitive dep update.  Other 9 dropped in the same
+  cycle.  Linux + macOS still pass; Windows now matches.
 - `@P332` — `install::install_one` return on Windows (fixed 2026-05-26).
 - `@P333` — `/tmp/` hard-coded paths in two lib fixtures → CWD-relative
   (fixed 2026-05-26).
@@ -154,5 +139,4 @@ the MSVC toolchain is the missing piece.
 - `.github/workflows/ci.yml` — the 3-OS matrix.
 - `src/native_utils.rs` — `build_script_native_lib_dirs`, `add_native_extern_flags`
   (the `--native` link/rlib-discovery the gaps live in).
-- PROBLEMS.md `@P229` · TESTING.md § Open work `@P229b` · RELEASE.md (Windows
-  binary intent).
+- PROBLEMS.md `@P229` · RELEASE.md (Windows binary intent).

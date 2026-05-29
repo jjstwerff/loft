@@ -289,10 +289,6 @@ fn spawn_listening_server(script: &str, port: u16, label: &str) -> ServerGuard {
 /// (`WsHandler`).  The 4-byte payload is the smallest non-trivial
 /// frame; the cell layout that plan-36 will use (u8 color + u8
 /// height + u16 age) is exactly 4 bytes.
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "P229b: server cannot bind on Windows CI; investigate via diagnose_listen_failure"
-)]
 #[test]
 fn v5_t1_binary_round_trip() {
     let port = pick_free_port();
@@ -332,10 +328,6 @@ fn v5_t1_binary_round_trip() {
 ///     binary text payload
 ///   - the new-session-id transition triggers a flush on the client
 ///   - no blobs are coalesced or dropped (5 + 1, not 4 + 1 or 5 + 0)
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "P229b: server cannot bind on Windows CI"
-)]
 #[test]
 fn v5_t2_session_blob_grouping() {
     let port = pick_free_port();
@@ -378,10 +370,6 @@ fn v5_t2_session_blob_grouping() {
 /// Compressed from the v5 plan's "30 clients × 5 minutes" — that
 /// scenario is a deployment liveness check, not a CI test.  N=5 ×
 /// ~1 s validates the routing pattern without bloating CI runtime.
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "P229b: server cannot bind on Windows CI"
-)]
 #[test]
 fn v5_t3_n_client_broadcast() {
     const N: usize = 5;
@@ -465,10 +453,6 @@ fn v5_t3_n_client_broadcast() {
 ///     missed sessions)
 ///   - binary blob session ids decode correctly across the
 ///     disconnect boundary
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "P229b: server cannot bind on Windows CI"
-)]
 #[test]
 fn v5_t4_catch_up_after_reconnect() {
     const TOTAL: usize = 5;
@@ -520,10 +504,6 @@ fn v5_t4_catch_up_after_reconnect() {
 /// exercising the full lifecycle: base=10, lease=10, window=5
 /// (production constants are 5 min / 0.5 s / 30 s at 10 Hz —
 /// same algebraic shape, different units).
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "P229b: parity with the other v5 tests; standalone but kept ignored for cross-OS consistency"
-)]
 #[test]
 fn v5_t5_world_tick_and_decay() {
     let mut cmd = Command::new(loft_bin());

@@ -1,0 +1,19 @@
+[package]
+name = "loft-imaging-wasm"
+version = "0.1.0"
+edition = "2024"
+license = "LGPL-3.0-or-later"
+description = "Browser-WASM bridge for the loft imaging library — pub fn entry points called from generated --html standalone Rust binaries."
+
+# rlib: the --html driver links this in via `--extern loft_imaging_wasm=...`
+# so generated code can call its `pub fn`s directly.  No cdylib (no dlopen
+# in a browser).
+[lib]
+crate-type = ["rlib"]
+
+# The loft crate provides Stores + DbRef + Store::* + vector::* — all the
+# host-FFI surface this bridge writes through.  Path-relative dep so the
+# crate works in-repo; will switch to a registry dep when the imaging
+# library extracts (lib_plans/12).
+[dependencies]
+loft = { path = "../../..", default-features = false, features = ["random"] }

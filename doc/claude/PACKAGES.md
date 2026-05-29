@@ -587,14 +587,128 @@ loft --native-wasm out.wasm my_program.loft  # wasm: link wasm variant
 
 ## Target matrix
 
-| Feature | Interpreter | `--native` | `--native-wasm` |
-|---|---|---|---|
-| Pure loft code | ✓ bytecode | ✓ compiled Rust | ✓ compiled WASM |
-| `#rust` inline | ✓ fill.rs dispatch | ✓ emitted inline | ✓ emitted inline |
-| `#native` external | ✓ dlopen rlib | ✓ linked rlib | ✓ linked wasm rlib |
-| File I/O | ✓ OS calls | ✓ OS calls | ✓ VirtFS bridge |
-| OpenGL | ✓ glutin/gl | ✓ glutin/gl | ✗ WebGL (different API) |
-| Threading | ✓ rayon | ✓ rayon | ✗ sequential |
+| Feature | Interpreter | `--native` | `--native-wasm` | `--html` (browser) |
+|---|---|---|---|---|
+| Pure loft code | ✓ bytecode | ✓ compiled Rust | ✓ compiled WASM | ✓ compiled WASM |
+| `#rust` inline | ✓ fill.rs dispatch | ✓ emitted inline | ✓ emitted inline | ✓ emitted inline |
+| `#native` external | ✓ dlopen rlib | ✓ linked rlib | ✓ linked wasm rlib | ✓ wasm.bridge crate (see below) |
+| File I/O | ✓ OS calls | ✓ OS calls | ✓ VirtFS bridge | ✗ embedded assets only |
+| OpenGL | ✓ glutin/gl | ✓ glutin/gl | ✗ WebGL (different API) | ✓ WebGL2 (via loft-gl-wasm.js) |
+| Threading | ✓ rayon | ✓ rayon | ✗ sequential | ✗ sequential |
+
+---
+
+## Wasm bridges (library-owned `--html` extensions)
+
+Scope: `loft --html` produces a standalone browser-WASM binary +
+HTML wrapper, separate from the `--native-wasm` (wasm32-wasip2)
+target above.  A standalone-binary build has no `State` indirection
+at runtime (`replace_native` doesn't apply), and the browser has no
+dlopen, no filesystem, no native OS APIs — every host capability
+must arrive through wasm imports the JS host provides.
+
+Each library that needs browser-specific glue carries it inside
+the library:
+
+```
+lib/<X>/
+  src/                                  # pure loft (unchanged)
+  native/                               # for --native (cdylib, unchanged)
+  wasm/                                 # NEW — for --html
+    src/lib.rs                          # Rust `pub fn` bridges
+    host.js                             # JS host-imports
+    Cargo.toml                          # crate name: loft-<x>-wasm
+  loft.toml                             # declares the bridge
+```
+
+The `[wasm.bridge]` manifest section declares all three artefacts:
+
+```toml
+[wasm.bridge]
+crate = "loft-imaging-wasm"   # Rust bridge crate name
+host_js = "wasm/host.js"      # JS host-imports file
+
+[wasm.bridge.routes]
+n_load_png = "imaging_load_png"   # loft #native symbol → bridge fn name
+n_save_png = "imaging_save_png"
+```
+
+What each part does:
+
+| Part | Compiled / loaded by | Purpose |
+|---|---|---|
+| `wasm/src/lib.rs` (`pub fn`s) | `loft --html` invokes `rustc --crate-type rlib --extern loft=…` directly (NOT `cargo build` — see "Why rustc-direct" below) | Receives the loft store + arg references, calls back into JS via wasm extern imports |
+| `wasm/host.js` (registers via `LOFT_WASM_EXTENSIONS`) | `loft --html` concatenates into the HTML preamble; harness `tools/wasm_repro.mjs` discovers + evals at startup | Implements the wasm extern imports (DOM access, Canvas, asset table lookup, etc.) |
+| `[wasm.bridge.routes]` | `src/generation/mod.rs::output_native_direct_call` reads from `data.wasm_bridge_routes` | Routes a generated `n_<sym>` body to `<crate_ident>::<bridge_fn>` |
+
+### Why rustc-direct (not `cargo build`)
+
+The bridge crate depends on `loft` via a path dep (so it sees the
+same `Stores` / `DbRef` types).  Running `cargo build` from
+`lib/<X>/wasm/` would compile its OWN copy of `loft` into
+`lib/<X>/wasm/target/`, with a different `StableCrateId` than the
+top-level `target/wasm32-unknown-unknown/release/libloft.rlib` that
+the standalone-binary link uses as `--extern loft=…`.  Two copies of
+the same crate → rustc fails: "expected DbRef, found DbRef".
+
+Workaround: the `--html` driver bypasses cargo and invokes `rustc`
+directly on the bridge's `src/lib.rs`, threading the SAME
+`--extern loft=…` + `-L dependency=…` flags through.  The bridge
+rlib lands in `std::env::temp_dir()/lib<crate_ident>.rlib`; the
+final link adds `--extern <crate_ident>=<that rlib>` to the main
+rustc invocation.  One copy of `loft`, zero collisions.
+
+### Self-registration via `LOFT_WASM_EXTENSIONS`
+
+The HTML preamble's load order is:
+
+1. `doc/loft-gl-wasm.js` (generic — defines `buildLoftImports`,
+   `decodeLoftAssets`, asset preload, host_asset_exists)
+2. Each library's `wasm/host.js` (pushes a callback onto
+   `globalThis.LOFT_WASM_EXTENSIONS = (globalThis.LOFT_WASM_EXTENSIONS || [])`)
+3. `const imports = buildLoftImports(canvas, output, () => mem, ctrl)`
+4. Dispatch:
+   ```js
+   for (const reg of (globalThis.LOFT_WASM_EXTENSIONS || [])) {
+     reg(imports, ctrl, () => mem);   // mutates imports.loft_gl
+   }
+   ```
+5. `WebAssembly.instantiate(wasmBytes, imports).then(...)`
+
+Each library's `host.js` callback receives `(imports, ctrl, getMem)`
+and adds its functions via `Object.assign(imports.loft_gl, {...})`.
+Test harnesses use the same dispatch — `tools/wasm_repro.mjs` scans
+`lib/*/wasm/host.js` at startup and runs the dispatch before
+`new WebAssembly.Instance(...)`.
+
+### What stays generic (in the compiler / tooling crate)
+
+- `src/wasm_assets.rs::asset_exists` — checks the JS-side asset
+  table for a basename (used by `database::io::get_file` so PNG
+  assets report as `TextFile` and `file().png()` reaches the
+  bridge instead of short-circuiting to `null`).  Library-
+  agnostic — every wasm-asset library uses it.
+- `doc/loft-gl-wasm.js::decodeLoftAssets` — generic PNG asset
+  preload decoder (`createImageBitmap` + Canvas `getImageData` +
+  RGBA→RGB demux).  Runs before `loft_start` so wasm-side asset
+  lookup is synchronous.
+- `tools/wasm_repro.mjs`'s `node:zlib`-based PNG decoder + the
+  asset-table builder.  Generic test infrastructure.
+
+### Canonical example
+
+`lib/imaging` is the first library to use this pattern end-to-end.
+See:
+- `lib/imaging/wasm/src/lib.rs` — `imaging_load_png` /
+  `imaging_save_png` bridges; field offsets in the `Image` struct;
+  vector allocation via `loft::vector::alloc_vector_from_bytes`.
+- `lib/imaging/wasm/host.js` — `imaging_query` / `imaging_copy_rgb`
+  / `imaging_save` JS implementations.
+- `lib/imaging/loft.toml::[wasm.bridge]` — the manifest declaration.
+
+History + design rationale: [lib_plans/29-library-wasm-bridges](lib_plans/finished/29-library-wasm-bridges/README.md);
+the @P321(c) browser-WASM dimension landing in [PROBLEMS.md](PROBLEMS.md)
+is what surfaced the need.
 
 ---
 

@@ -306,10 +306,6 @@ fn v2_single_client_completes_game() {
 ///
 /// The exact frame *ordering* depends on scheduling, so we assert
 /// on counts, not order.
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "P229b: v2 server can't bind on Windows CI"
-)]
 #[test]
 fn v2_two_clients_with_spectator_routing() {
     let port = pick_free_port();
@@ -404,10 +400,6 @@ fn v2_two_clients_with_spectator_routing() {
 ///
 /// We do NOT require B to receive any spectator frames from A —
 /// A finished before B's MAP arrived, so its events are gone.
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "P229b: v2 server can't bind on Windows CI"
-)]
 #[test]
 fn v2_late_join_independent_games() {
     let port = pick_free_port();

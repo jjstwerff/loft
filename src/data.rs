@@ -1850,6 +1850,24 @@ pub struct Data {
     /// Populated when a package declares `[native] crate` in loft.toml.
     /// Used by native codegen to emit `crate::symbol(args)` calls.
     pub native_symbol_crates: HashMap<String, String>,
+    /// lib_plan-29 W1c: WASM bridge package directories — (`crate_name`,
+    /// `pkg_dir`).  Populated from each loaded package's `[wasm.bridge].crate`.
+    /// The `--html` driver builds `<pkg_dir>/wasm/` to a
+    /// `wasm32-unknown-unknown` rlib and links it via `--extern`.
+    pub wasm_bridge_packages: Vec<(String, String)>,
+    /// lib_plan-29 W1c: WASM bridge routes — loft `#native` symbol
+    /// (e.g. `n_load_png`) → `(crate_name, bridge_fn)`.  Read by
+    /// `src/generation/mod.rs::output_native_direct_call` for the
+    /// `wasm_browser=true` path; replaces the hard-coded `WASM_BRIDGE_FNS`
+    /// const.
+    pub wasm_bridge_routes: HashMap<String, (String, String)>,
+    /// lib_plan-29 W2: absolute paths to per-library JS host-imports
+    /// files (resolved from `[wasm.bridge].host_js` relative to each
+    /// package root).  The `--html` driver reads each file and
+    /// concatenates it into the HTML preamble; the bundled JS pushes
+    /// a registration callback onto `globalThis.LOFT_WASM_EXTENSIONS`
+    /// which the preamble dispatches after `buildLoftImports` returns.
+    pub wasm_bridge_host_js_files: Vec<String>,
     /// Plan-06 phase 5b' (DESIGN.md D12) — lazy caller-graph cache.
     /// Maps callee def_nr → list of caller def_nrs.  Built once on
     /// first `callers_of` call by walking every user fn's body and
@@ -1997,6 +2015,9 @@ impl Data {
             native_symbols: HashMap::new(),
             native_packages: Vec::new(),
             native_symbol_crates: HashMap::new(),
+            wasm_bridge_packages: Vec::new(),
+            wasm_bridge_routes: HashMap::new(),
+            wasm_bridge_host_js_files: Vec::new(),
             caller_index: std::sync::OnceLock::new(),
         }
     }

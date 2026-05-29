@@ -133,7 +133,7 @@ fn assert_wasm_rlib_fresh() {
 /// Node repro harness with stub imports, and return (stdout, stderr,
 /// exit_status).  Returns None when prerequisites are missing.
 fn run_html_wasm(name: &str, source: &str) -> Option<(String, String, bool)> {
-    run_html_wasm_with_libs(name, source, &[])
+    run_html_wasm_with_libs_and_assets(name, source, &[], &[])
 }
 
 /// Same as `run_html_wasm` but also passes a `--lib <dir>` for each
@@ -143,6 +143,20 @@ fn run_html_wasm_with_libs(
     name: &str,
     source: &str,
     lib_dirs: &[&str],
+) -> Option<(String, String, bool)> {
+    run_html_wasm_with_libs_and_assets(name, source, lib_dirs, &[])
+}
+
+/// @P321(c) Phase 3a — extension of `run_html_wasm_with_libs` that also
+/// copies `assets` (sibling resource files like `*.png`) into the same
+/// `/tmp/` dir as the synthesised `.loft`, so the `--html` driver's
+/// asset auto-discovery finds them.  Use from the lib suite, which
+/// synthesises entry .loft's outside their original test dir.
+fn run_html_wasm_with_libs_and_assets(
+    name: &str,
+    source: &str,
+    lib_dirs: &[&str],
+    assets: &[PathBuf],
 ) -> Option<(String, String, bool)> {
     if which("node").is_none() {
         eprintln!("SKIP: node not installed");
@@ -161,12 +175,28 @@ fn run_html_wasm_with_libs(
 
     assert_wasm_rlib_fresh();
 
-    let tmp = std::env::temp_dir();
+    // @P321(c) Phase 3a: per-test subdir so `--html`'s asset
+    // auto-discovery (which scans the dir of the entry .loft) only
+    // finds assets this test asked for — a shared /tmp/ would let
+    // an earlier test's PNGs leak into a later test's bundle.
+    let tmp = std::env::temp_dir().join(format!("loft_html_{name}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).expect("create per-test dir");
     let src = tmp.join(format!("{name}.loft"));
     let html = tmp.join(format!("{name}.html"));
     let wasm = tmp.join(format!("{name}.wasm"));
 
     std::fs::write(&src, source).expect("write source");
+
+    for asset in assets {
+        let Some(fname) = asset.file_name() else {
+            continue;
+        };
+        let dest = tmp.join(fname);
+        if let Err(e) = std::fs::copy(asset, &dest) {
+            eprintln!("warn: could not copy asset {asset:?} → {dest:?}: {e}");
+        }
+    }
 
     // Serialise: the loft `--html` driver writes to a fixed
     // `/tmp/loft_html.rs` path, so parallel test invocations would
@@ -426,28 +456,40 @@ fn p201_poisoned_lock_recovery_pattern() {
 /// Travels with each chunk on extraction, mirroring `LIB_PKGS_WASM_SKIP` in
 /// the plan-12 design.
 const LIB_PKGS_WASM_SKIP: &[&str] = &[
-    // @P321c (OPEN): imaging's store-MUTATING `#native` load_png/save_png has
-    // no working codegen marshalling — the `--html` build emits broken Rust
-    // (`n_load_png` defined multiple times + E0308).  The native gate skips it
-    // for the same @P321c; this WASM gate confirms the browser path is broken
-    // too.  NOTE: imaging SHOULD run in a browser — but the right fix is to
-    // route load_png/save_png to a JS host bridge over the browser's own image
-    // codec (`createImageBitmap` / Canvas `getImageData` / `toBlob`), NOT to
-    // bundle a Rust PNG stack into wasm (same "borrow the platform" design as
-    // the time lib's `js_sys::Date`).  Un-skip when @P321c lands that route.
-    "imaging",
     // server is a native HTTP/socket listener — a browser/WASI guest has no
     // listen/accept, so it cannot run there by construction (a genuine
     // platform limit, not a bug — unlike imaging).
     "server",
-    // @P334 (open): world's test traps (`wasm unreachable`, exit 134) on BOTH
-    // wasm runtimes though it passes on interp + native — a wasm-backend
-    // divergence, not yet root-caused.  Un-skip when @P334 is fixed.
-    "world",
 ];
 
 /// Individual `<pkg>/<file>.loft` lib tests skipped for the WASM gate.
 const LIB_TESTS_WASM_SKIP: &[&str] = &[];
+
+/// Packages skipped ONLY on the node (browser, `wasm32-unknown-unknown`) path.
+/// Still run on wasmtime (wasip2) which has a working WASI FS via `--dir`.
+/// Use this for libraries that genuinely need the filesystem — the browser
+/// has none by construction (correct platform behaviour, not a bug to fix).
+const LIB_PKGS_NODE_SKIP: &[&str] = &[
+    // world's tests save+load a binary world file.  Wasmtime can do this via
+    // `--dir <tmp>` (see @P334 fix); the browser has no filesystem at all
+    // without a JS host bridge (out of scope for now).  Un-skip if a future
+    // JS-host VirtFS bridge ships.
+    "world",
+];
+
+/// Packages skipped ONLY on the wasmtime (wasip2) path.  Use this for
+/// libraries whose host bridge depends on a browser-only API (Canvas,
+/// createImageBitmap, etc.) — wasmtime has no canvas / image codec; the
+/// browser does.
+const LIB_PKGS_WASMTIME_SKIP: &[&str] = &[
+    // @P321(c): imaging's PNG decode is provided by the browser via
+    // `createImageBitmap` + Canvas `getImageData` (see
+    // `lib/imaging/wasm/{src/lib.rs, host.js}` and `doc/loft-gl-wasm.js`).
+    // Wasmtime has no equivalent; the bridge call would always return
+    // false, breaking `assert(img.width == 256)`.  Browsers handle this
+    // fine.
+    "imaging",
+];
 
 /// Collect every `lib/<pkg>/tests/*.loft`, sorted.
 fn collect_lib_wasm_tests() -> Vec<PathBuf> {
@@ -574,7 +616,19 @@ fn run_wasip2_wasm(name: &str, source: &str, lib_dirs: &[&str]) -> Option<(Strin
     if !compile.status.success() {
         return Some((String::from_utf8_lossy(&compile.stderr).into_owned(), false));
     }
-    let run = Command::new(&wasmtime).arg(&wasm).output().ok()?;
+    // @P334 fix (2026-05-29): preopen `--dir <tmp>` so wasip2 file I/O works.
+    // The wasip2 filesystem is sandboxed — without a preopen every file op
+    // fails with "os error 44" and any file-using lib traps the moment it
+    // tries to open a path.  `<tmp>` is the loft `std::env::temp_dir()`
+    // default, which is where `lib/world` saves/loads its test fixture; libs
+    // that write elsewhere either honour env-overrides (LOFT_HOME, etc.) or
+    // use CWD-relative paths.
+    let run = Command::new(&wasmtime)
+        .arg("--dir")
+        .arg(&tmp)
+        .arg(&wasm)
+        .output()
+        .ok()?;
     Some((
         String::from_utf8_lossy(&run.stdout).into_owned(),
         run.status.success(),
@@ -619,12 +673,26 @@ fn wasm_library_suite() {
             .replace(['-', '.'], "_");
         let name = format!("libwasm_{pkg}_{stem}");
 
-        if have_node {
+        // @P321(c) Phase 3a: collect *.png siblings of the source so the
+        // synthesised /tmp/<name>.loft has the same assets next to it as
+        // the original lib test, and the --html driver's auto-discovery
+        // can embed them.
+        let assets: Vec<PathBuf> = entry
+            .parent()
+            .and_then(|d| std::fs::read_dir(d).ok())
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok().map(|d| d.path()))
+            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")))
+            .collect();
+
+        if have_node && !LIB_PKGS_NODE_SKIP.contains(&pkg.as_str()) {
             // `run_html_wasm_with_libs` asserts on a `--html` build failure;
             // catch it so one un-buildable lib is recorded, not fatal to the
             // whole suite (and can't mask later libs' results).
+            let assets_clone = assets.clone();
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_html_wasm_with_libs(&name, &source, &["lib"])
+                run_html_wasm_with_libs_and_assets(&name, &source, &["lib"], &assets_clone)
             }));
             match res {
                 Ok(Some((stdout, stderr, ok))) => {
@@ -647,7 +715,10 @@ fn wasm_library_suite() {
                 }
             }
         }
-        if have_wasmtime && let Some((out, ok)) = run_wasip2_wasm(&name, &source, &["lib"]) {
+        if have_wasmtime
+            && !LIB_PKGS_WASMTIME_SKIP.contains(&pkg.as_str())
+            && let Some((out, ok)) = run_wasip2_wasm(&name, &source, &["lib"])
+        {
             ran += 1;
             println!(
                 "wasm[wasmtime] {pkg}/{file}: {}",

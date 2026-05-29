@@ -2568,6 +2568,77 @@ fn main() {
                 }
             }
         }
+        // lib_plan-29 W1c (2026-05-29): link each used library's wasm
+        // bridge crate (declared via `[wasm.bridge]` in `loft.toml`).
+        //
+        // Build via rustc directly, not `cargo build`: cargo would
+        // produce a SECOND copy of `loft` (with a different
+        // StableCrateId than the top-level
+        // `target/wasm32-unknown-unknown/release/libloft.rlib` the
+        // standalone-binary `--extern loft=…` references), and rustc
+        // would refuse with "expected DbRef, found DbRef" (two distinct
+        // types from two builds of the same source).  By invoking
+        // rustc with the SAME `--extern loft=…` + deps search path
+        // the standalone build uses, the bridge rlib links against
+        // exactly one copy of loft — eliminating the dup.
+        let loft_wasm_lib_dir = loft_lib_dir_for(Some("wasm32-unknown-unknown"));
+        for (bridge_crate, pkg_dir) in &p.data.wasm_bridge_packages {
+            let wasm_dir = std::path::PathBuf::from(pkg_dir).join("wasm");
+            let bridge_src = wasm_dir.join("src/lib.rs");
+            if !bridge_src.exists() {
+                eprintln!(
+                    "loft: --html: [wasm.bridge] declared `crate = \"{bridge_crate}\"` \
+                     but {} is missing — skipping bridge link",
+                    bridge_src.display()
+                );
+                continue;
+            }
+            let crate_ident = bridge_crate.replace('-', "_");
+            let bridge_rlib = std::env::temp_dir().join(format!("lib{crate_ident}.rlib"));
+            let mut build = std::process::Command::new("rustc");
+            build
+                .arg("--edition=2024")
+                .arg("--target")
+                .arg("wasm32-unknown-unknown")
+                .arg("--crate-type")
+                .arg("rlib")
+                .arg("--crate-name")
+                .arg(&crate_ident)
+                .arg("-O")
+                .arg("-o")
+                .arg(&bridge_rlib)
+                .arg(&bridge_src);
+            if let Some(ref lib_dir) = loft_wasm_lib_dir {
+                build
+                    .arg("--extern")
+                    .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
+                let deps = lib_dir.join("deps");
+                if deps.is_dir() {
+                    build
+                        .arg("-L")
+                        .arg(format!("dependency={}", deps.display()));
+                }
+                if let Some(host_lib_dir) = loft_lib_dir_for(None) {
+                    let host_deps = host_lib_dir.join("deps");
+                    if host_deps.exists() {
+                        build
+                            .arg("-L")
+                            .arg(format!("dependency={}", host_deps.display()));
+                    }
+                }
+            }
+            let status = build.status();
+            if !matches!(status, Ok(s) if s.success()) {
+                eprintln!(
+                    "loft: --html: failed to compile wasm bridge crate {} from {}",
+                    bridge_crate,
+                    bridge_src.display()
+                );
+                std::process::exit(1);
+            }
+            cmd.arg("--extern")
+                .arg(format!("{crate_ident}={}", bridge_rlib.display()));
+        }
         let status = cmd.status();
         if std::env::var("LOFT_KEEP_NATIVE_RS").is_err() {
             let _ = std::fs::remove_file(&rs_path);
@@ -2672,7 +2743,86 @@ fn main() {
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Loft Program".to_string());
+        // @P321(c) Phase 3a: auto-discover *.png siblings of the entry .loft
+        // and embed each as a base64 string under `ctrl.assets[basename]`.
+        // Phase 3b's JS preamble decodes them to RGB bytes before
+        // `loft_start()` runs; the imaging bridge then looks up by basename.
+        // Stays a no-op when no PNGs are adjacent (most --html programs).
+        let assets_js = {
+            let entry_dir = std::path::Path::new(&abs_file)
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            let mut entries: Vec<(String, String)> = Vec::new();
+            if let Ok(rd) = std::fs::read_dir(&entry_dir) {
+                let mut pngs: Vec<std::path::PathBuf> = rd
+                    .filter_map(Result::ok)
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")))
+                    .collect();
+                pngs.sort();
+                for p in pngs {
+                    let Some(name) = p.file_name().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+                    let Ok(bytes) = std::fs::read(&p) else {
+                        continue;
+                    };
+                    entries.push((name.to_string(), crate::base64::encode(&bytes)));
+                }
+            }
+            if entries.is_empty() {
+                String::from("{}")
+            } else {
+                let mut s = String::from("{");
+                for (i, (name, b64)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        s.push(',');
+                    }
+                    // Asset names are filesystem basenames — restrict to
+                    // safe chars; reject anything that could break out of
+                    // the JS string literal.  PNG suffix already required.
+                    let safe = name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+                    if !safe {
+                        continue;
+                    }
+                    s.push_str(&format!("\"{name}\":\"{b64}\""));
+                }
+                s.push('}');
+                s
+            }
+        };
         let gl_js = include_str!("../doc/loft-gl-wasm.js");
+        // @lib_plan-29 W2: concatenate every used library's
+        // `[wasm.bridge].host_js` file into the HTML preamble.  Each
+        // file pushes a registration callback onto
+        // `globalThis.LOFT_WASM_EXTENSIONS`; the dispatch loop below
+        // applies each callback to the imports object after
+        // `buildLoftImports` returns, so library-specific JS handlers
+        // (e.g. `imaging_query`) become part of the wasm imports
+        // without the compiler/tooling crate naming them.
+        let host_js_extensions = {
+            let mut s = String::new();
+            for path in &p.data.wasm_bridge_host_js_files {
+                match std::fs::read_to_string(path) {
+                    Ok(content) => {
+                        s.push_str("\n/* === lib_plan-29 W2: host.js from ");
+                        s.push_str(path);
+                        s.push_str(" === */\n");
+                        s.push_str(&content);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "loft: --html: cannot read [wasm.bridge].host_js file '{path}': {e}"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+            s
+        };
         let html = format!(
             r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{title}</title>
@@ -2682,15 +2832,27 @@ fn main() {
 <pre id="out"></pre>
 <script>
 {gl_js}
+{host_js_extensions}
 const wasmB64="{wasm_b64}";
 const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
 const canvas=document.getElementById('c');
 const output=document.getElementById('out');
 let mem;
-const ctrl={{ac:null}};
+// @P321(c) Phase 3a: raw base64 of *.png siblings of the entry .loft
+// (auto-discovered).  Phase 3b decodes each to RGB bytes and replaces
+// the slot with {{width, height, bytes}} before loft_start runs.
+const ctrl={{ac:null,assets:{assets_js}}};
 const imports=buildLoftImports(canvas,output,()=>mem,ctrl);
-WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
+// @lib_plan-29 W2: apply each library's host.js-registered extension
+// to the imports object (mutates `imports.loft_gl` in place).
+for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
+  try{{reg(imports,ctrl,()=>mem);}}catch(e){{console.error('loft host_js extension failed',e);}}
+}}
+WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
   mem=r.instance.exports.memory;
+  // @P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
+  // loft_start so the wasm-side imaging bridge looks them up sync.
+  ctrl.assets=await decodeLoftAssets(ctrl.assets);
   if(r.instance.exports.asyncify_start_unwind){{
     const ac=new AsyncifyCtrl(r.instance);
     ctrl.ac=ac;

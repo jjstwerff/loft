@@ -7,6 +7,40 @@
 // Usage: const ac = new AsyncifyCtrl(instance);
 //        ac.start('loft_start');  // runs until first swap_buffers
 //        // on each rAF: ac.resume('loft_start');
+// @P321c Phase 3b — decode base64-embedded PNG assets to raw RGB bytes.
+// `rawAssets` is `{name: base64String, ...}` (Phase 3a embed in main.rs);
+// resolves to `{name: {width, height, bytes: Uint8Array(rgb)}}` for the
+// imaging bridge to look up sync.  Runs once after `WebAssembly.instantiate`
+// + before `loft_start` so the wasm-side imaging_query/copy is synchronous.
+async function decodeLoftAssets(rawAssets) {
+  if (!rawAssets || typeof rawAssets !== 'object') return {};
+  const out = {};
+  for (const [name, b64] of Object.entries(rawAssets)) {
+    if (typeof b64 !== 'string') { out[name] = b64; continue; }
+    try {
+      const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const blob = new Blob([bin], { type: 'image/png' });
+      const bitmap = await createImageBitmap(blob);
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0);
+      const imgData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+      const rgba = imgData.data;
+      const rgb = new Uint8Array(bitmap.width * bitmap.height * 3);
+      for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+        rgb[j] = rgba[i];
+        rgb[j + 1] = rgba[i + 1];
+        rgb[j + 2] = rgba[i + 2];
+      }
+      out[name] = { width: bitmap.width, height: bitmap.height, bytes: rgb };
+    } catch (e) {
+      // Leave the entry undecoded; bridge will treat as missing.
+      out[name] = null;
+    }
+  }
+  return out;
+}
+
 function AsyncifyCtrl(instance) {
   // Asyncify data area: 16 bytes in WASM memory for the unwind/rewind buffer.
   // We allocate it at the very start of the heap (right after __heap_base).
@@ -287,6 +321,18 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       loft_text_height(fi, sz) { return Math.ceil(sz * 1.2); },
       loft_rasterize_text_into(fi, tp, tl, sz, bp, bc) { return 0; },
       loft_save_png(pp, pl, w, h, dp, dc) { return 0; },
+      // @lib_plan-29 W1d — generic asset-table existence check; used
+      // by `database::io::get_file` so file().png() (and any future
+      // asset-using library) sees auto-discovered PNGs as TextFile
+      // instead of NotExists.  Library-specific imaging fns
+      // (imaging_query / imaging_copy_rgb / imaging_save) live in
+      // their package's own host.js — see lib/imaging/wasm/host.js,
+      // concatenated into the HTML preamble by `--html` via the
+      // `[wasm.bridge].host_js` manifest key.
+      host_asset_exists(pp, pl) {
+        const name = readStr(pp, pl).split(/[\\/]/).pop();
+        return (ctrl.assets && ctrl.assets[name]) ? 1 : 0;
+      },
       loft_gl_upload_alpha_texture(dp, w, h) { return 0; },
       loft_gl_text_texture(fi, tp, tl, sz, wp, hp) { return 0; },
       // G5: Audio via Web Audio API

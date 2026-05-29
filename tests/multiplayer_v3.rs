@@ -273,10 +273,6 @@ fn spawn_client(client_script: &str, port: u16) -> Child {
 ///     branches without crashing.
 ///   - The HTTP body bytes survive round-trip (no truncation, no
 ///     extra bytes from header / CRLF accounting).
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "P229b: server cannot bind on Windows CI"
-)]
 #[test]
 fn v3_http_routing() {
     let port = pick_free_port();
@@ -361,10 +357,6 @@ fn v3_http_routing() {
 ///   - The interactive HTML page in INDEX_HTML embeds the
 ///     equivalent JS protocol logic (verified by string-search of
 ///     the served body for the protocol markers).
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "P229b: server cannot bind on Windows CI"
-)]
 #[test]
 fn v3_full_game_over_websocket() {
     // This is a real two-process integration probe (loft server + loft

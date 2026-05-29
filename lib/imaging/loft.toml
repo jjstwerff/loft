@@ -13,3 +13,25 @@ native = "loft_imaging"
 # "no implementation in any registered native crate".
 [native]
 crate = "loft-imaging"
+
+# @lib_plan-29 (2026-05-29) — declares the browser-WASM bridge for
+# `--html` builds.  Three parts, all owned by this package:
+#   - `crate`: the Rust bridge crate (`lib/imaging/wasm/`).  The
+#     `--html` driver compiles its `src/lib.rs` to a wasm32-unknown-
+#     unknown rlib and links it via `--extern loft_imaging_wasm=…`.
+#     Generated bodies for `n_load_png` / `n_save_png` route to the
+#     `pub fn`s in this crate via the `routes` map below.
+#   - `host_js`: the JS-side host imports (`lib/imaging/wasm/host.js`).
+#     The driver reads + concatenates this file into the HTML
+#     preamble; the file pushes a registration callback onto
+#     `globalThis.LOFT_WASM_EXTENSIONS` which the preamble
+#     dispatches after `buildLoftImports` returns.
+#   - `routes`: loft `#native` symbol → bridge `pub fn` name.  Read
+#     by `src/generation/mod.rs::output_native_direct_call`.
+[wasm.bridge]
+crate = "loft-imaging-wasm"
+host_js = "wasm/host.js"
+
+[wasm.bridge.routes]
+n_load_png = "imaging_load_png"
+n_save_png = "imaging_save_png"

@@ -55,11 +55,19 @@ impl State {
         // that doesn't exist on native — so a `--html` program calling
         // `file("x").content()` reliably gets an empty String instead of
         // racing against an unpredictable runtime error.
-        #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+        //
+        // @P334 fix (2026-05-29): narrowed from `target_arch = "wasm32"` to
+        // also exclude `target_os = "wasi"`, so wasip2 (which HAS a working
+        // FS via WASI preopens) falls through to the std::fs impl.  Mirrors
+        // the same fix at `src/database/io.rs::get_file`.
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
         {
             let _ = (file, r);
         }
-        #[cfg(all(not(target_arch = "wasm32"), not(feature = "wasm")))]
+        #[cfg(all(
+            not(feature = "wasm"),
+            any(not(target_arch = "wasm32"), target_os = "wasi")
+        ))]
         {
             let store = self.database.store(&file);
             let file_path = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));

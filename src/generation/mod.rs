@@ -642,6 +642,24 @@ extern crate loft;"
                 if def.native.is_empty() || declared_natives.contains(&def.native) {
                     continue;
                 }
+                // @P321c browser-WASM (2026-05-29): skip the host-import
+                // declaration for store-mutating `#native` fns — the
+                // matching local body is now a graceful Phase 1 stub (see
+                // `output_native_direct_call`), so the extern would be
+                // unused AND would collide with the local body name
+                // (E0428).  When the lib_plan-29 routing maps these to a
+                // `pub fn` bridge in `<crate_ident>::<bridge_fn>` (e.g.
+                // `loft_imaging_wasm::imaging_load_png`), the bridge
+                // declares its OWN host imports — still no extern needed
+                // at this layer.
+                let stores_loft_ref =
+                    matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
+                let has_ref_arg = def.attributes.iter().any(|a| {
+                    !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _))
+                });
+                if stores_loft_ref || has_ref_arg {
+                    continue;
+                }
                 declared_natives.insert(def.native.clone());
                 // Build the C-ABI signature from loft parameter types.
                 use std::fmt::Write as _;
@@ -2259,6 +2277,105 @@ extern crate loft;"
         qualified_symbol: &str,
     ) -> std::io::Result<()> {
         let def = self.data.def(d_nr);
+        // @P321c browser-WASM fix (2026-05-29): for store-mutating `#native` fns
+        // (those needing a `LoftStore` handle for a Reference arg or Vector/
+        // Reference return), the `--html` lowering path cannot use the cdylib
+        // ABI — `--html` produces a standalone wasm binary (no cdylib to
+        // dlopen), and `loft::native_call` is gated behind
+        // `feature = "native-extensions"` which is NOT enabled for wasm.
+        // Without this guard, codegen emits the cdylib body (uses
+        // `loft::native_call::enter`/`build_store`) alongside the extern
+        // import the wasm-import-module preamble already declared, tripping
+        // E0428 + E0433 + E0061 + E0308.
+        //
+        // Phase 1 (this guard): emit a graceful loft-aware stub matching the
+        // fn's return type — `boolean` → `false`, `integer` → `0`, `text` →
+        // empty `Str`, `reference` → null `DbRef`.  This matches loft's
+        // existing semantics: `lib/imaging/src/imaging.loft::png()` already
+        // null-checks `load_png` (returns null on `false`), and unmapped
+        // file reads are observably the same.  Build succeeds; runtime is a
+        // no-op.  NOT `unimplemented!()` (would trap any consumer the moment
+        // they touch the fn).
+        //
+        // Routed via lib_plan-29: each library's `[wasm.bridge].routes`
+        // map (populated into `data.wasm_bridge_routes`) names the
+        // `pub fn` bridge in its per-library `wasm/src/lib.rs` crate.
+        // The fallback below covers store-mutating `#native` fns with
+        // no `[wasm.bridge]` declared.  Note: `state.replace_native`
+        // does NOT work here — that mechanism is interpreter-only
+        // (mutates `State::library`); `--html` generates a standalone
+        // Rust binary that calls `n_load_png()` as a plain Rust
+        // function with no `State` indirection at runtime.
+        if self.wasm_browser {
+            let first_ref_arg = def
+                .attributes
+                .iter()
+                .find(|a| !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _)));
+            let returns_loft_ref =
+                matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
+            if returns_loft_ref || first_ref_arg.is_some() {
+                // lib_plan-29 W1c (2026-05-29): the routing table is now
+                // built from each library's `[wasm.bridge]` manifest
+                // section (`data.wasm_bridge_routes`).  No library symbols
+                // hard-coded in the compiler crate.
+                let bridge_target = self.data.wasm_bridge_routes.get(&def.native).map(
+                    |(bridge_crate, bridge_fn)| {
+                        let crate_ident = bridge_crate.replace('-', "_");
+                        format!("{crate_ident}::{bridge_fn}")
+                    },
+                );
+                if let Some(target) = bridge_target {
+                    // Emit the standard `let stores: &mut Stores = ...`
+                    // prelude (mirrors output_native_direct_call's non-
+                    // wasm path) + call into the bridge.
+                    writeln!(w, "{{")?;
+                    writeln!(
+                        w,
+                        "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                    )?;
+                    write!(w, "  {target}(stores")?;
+                    for attr in &def.attributes {
+                        if attr.name.starts_with("__") {
+                            continue;
+                        }
+                        let var = sanitize(&attr.name);
+                        write!(w, ", &var_{var}")?;
+                    }
+                    writeln!(w, ")")?;
+                    writeln!(w, "}}")?;
+                    return Ok(());
+                }
+                // Phase 1 fallback: graceful loft-aware stub for any
+                // store-mutating #native fn that doesn't have a bridge
+                // registered.  Matches loft semantics (`false`/null
+                // return reads as "operation failed" not "trap").
+                writeln!(w, "{{")?;
+                writeln!(
+                    w,
+                    "  // @P321c browser-WASM Phase 1 stub: graceful no-op (no bridge registered for {})",
+                    def.native
+                )?;
+                match &def.returned {
+                    Type::Void => {}
+                    Type::Boolean => writeln!(w, "  false")?,
+                    Type::Integer(_) | Type::Float | Type::Single => writeln!(w, "  0")?,
+                    Type::Text(_) => {
+                        writeln!(w, "  loft::keys::Str {{ ptr: std::ptr::null(), len: 0 }}")?;
+                    }
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+                        writeln!(
+                            w,
+                            "  loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }}"
+                        )?;
+                    }
+                    _ => {
+                        writeln!(w, "  Default::default()")?;
+                    }
+                }
+                writeln!(w, "}}")?;
+                return Ok(());
+            }
+        }
         writeln!(w, "{{")?;
         writeln!(
             w,

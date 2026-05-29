@@ -74,6 +74,34 @@ Claim more space in a vector to allow for new records. Return the next reference
 records though do not increase the length yet as we might want to iterate the vector before the
 actual change.
 */
+/// @P321(c): bulk-allocate a vector record and copy raw bytes into it
+/// in one shot.  Returns the new record number; the caller stores it into the
+/// owning struct field via `Store::set_u32_raw`.
+///
+/// `data.len()` must equal `count * elem_size`.  Mirrors
+/// `loft_ffi::LoftStore::alloc_vector_from_bytes` so per-library wasm
+/// bridge crates (e.g. `lib/imaging/wasm/src/lib.rs`) and the cdylib in
+/// `lib/imaging/native/` share the same vector layout (length at offset
+/// 4, payload at offset 8).
+///
+/// Pass `&[]` to allocate without filling — useful when the caller wants
+/// a pre-sized buffer it (or a host bridge) will fill in place.
+///
+/// `#[allow(dead_code)]` because the consumers (per-library wasm
+/// bridge crates, e.g. `loft-imaging-wasm` at `lib/imaging/wasm/`)
+/// are wasm32-only; native builds compile this helper but never
+/// call it.
+#[allow(dead_code)]
+pub fn alloc_vector_from_bytes(store: &mut Store, elem_size: u32, count: u32, data: &[u8]) -> u32 {
+    let words = checked_vec_cap(count.max(11), elem_size);
+    let rec = store.claim(words);
+    store.set_u32_raw(rec, 4, count);
+    if !data.is_empty() {
+        store.buffer(rec)[..data.len()].copy_from_slice(data);
+    }
+    rec
+}
+
 /// O8.1a: Pre-allocate a vector record with capacity for `count` elements.
 /// Sets the vector pointer and length=0.  Subsequent `vector_append` calls
 /// will find enough space and never call `store.resize`.
