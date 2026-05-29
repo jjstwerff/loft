@@ -1,0 +1,213 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression tests for lib/world's save/load + chunk addressing
+// surface (lib_plans/12 Phase 6t Tier 5).  The companion smoke test
+// (world.loft) covers get/set + chunk count + negative-coord get.
+// This file pins:
+//   * world_save / world_load binary round-trip (single cell, many
+//     cells across chunks, negative coords, tick preserved, age
+//     preserved);
+//   * world_load failure modes (missing file → 0, wrong magic → 0,
+//     wrong version → 0) — never panics;
+//   * chunk_idx_32 / hex_idx_32 contract for negative inputs;
+//   * cell_count + neighbour_count aggregates.
+//
+// Round-trip tests write to `tests/_tmp_*.bin`; those names are
+// gitignored.  Each test re-creates its tmp file, so leftover
+// artefacts from a previous run are harmless.
+
+use world;
+
+// ── chunk addressing ─────────────────────────────────────────────
+
+// chunk_idx_32 returns floor(v / 32), correct for negative v.
+fn test_chunk_idx_positive() {
+  assert(chunk_idx_32(0)  == 0,  "0 → 0");
+  assert(chunk_idx_32(31) == 0,  "31 → 0");
+  assert(chunk_idx_32(32) == 1,  "32 → 1");
+  assert(chunk_idx_32(63) == 1,  "63 → 1");
+  assert(chunk_idx_32(64) == 2,  "64 → 2");
+}
+
+fn test_chunk_idx_negative() {
+  assert(chunk_idx_32(-1)  == -1, "-1 → -1 (floor, not trunc)");
+  assert(chunk_idx_32(-31) == -1, "-31 → -1");
+  assert(chunk_idx_32(-32) == -1, "-32 → -1 (boundary)");
+  assert(chunk_idx_32(-33) == -2, "-33 → -2");
+  assert(chunk_idx_32(-64) == -2, "-64 → -2 (boundary)");
+}
+
+fn test_hex_idx_in_range() {
+  assert(hex_idx_32(0)   == 0,  "0 → 0");
+  assert(hex_idx_32(31)  == 31, "31 → 31");
+  assert(hex_idx_32(32)  == 0,  "32 wraps to 0");
+  assert(hex_idx_32(33)  == 1,  "33 → 1");
+  assert(hex_idx_32(-1)  == 31, "-1 → 31 (positive remainder)");
+  assert(hex_idx_32(-32) == 0,  "-32 → 0");
+  assert(hex_idx_32(-33) == 31, "-33 → 31");
+}
+
+// ── aggregates ──────────────────────────────────────────────────
+
+fn test_cell_count_empty() {
+  w = world_empty();
+  assert(cell_count(w) == 0, "empty world has 0 cells");
+}
+
+fn test_cell_count_after_set() {
+  w = world_empty();
+  set_cell(w, 0, 0, Cell{c_color: 1, c_height: 0, c_age: 0});
+  assert(cell_count(w) == 1, "1 set cell counted");
+  set_cell(w, 5, 7, Cell{c_color: 2, c_height: 0, c_age: 0});
+  set_cell(w, -3, 4, Cell{c_color: 3, c_height: 0, c_age: 0});
+  assert(cell_count(w) == 3, "3 set cells counted, got {cell_count(w)}");
+  // overwrite — count unchanged
+  set_cell(w, 0, 0, Cell{c_color: 9, c_height: 0, c_age: 0});
+  assert(cell_count(w) == 3, "overwrite leaves count at 3");
+  // clear by setting c_color = 0
+  set_cell(w, 5, 7, Cell{c_color: 0, c_height: 0, c_age: 0});
+  assert(cell_count(w) == 2, "clearing brings count to 2");
+}
+
+fn test_neighbour_count_isolated() {
+  w = world_empty();
+  set_cell(w, 0, 0, Cell{c_color: 1, c_height: 0, c_age: 0});
+  // Isolated cell — 0 filled neighbours.
+  assert(neighbour_count(w, 0, 0) == 0, "isolated cell: 0 neighbours");
+}
+
+fn test_neighbour_count_full() {
+  w = world_empty();
+  // Centre at (0,0); fill all six axial-hex neighbours.
+  set_cell(w,  1,  0, Cell{c_color: 1, c_height: 0, c_age: 0});
+  set_cell(w, -1,  0, Cell{c_color: 1, c_height: 0, c_age: 0});
+  set_cell(w,  0,  1, Cell{c_color: 1, c_height: 0, c_age: 0});
+  set_cell(w,  0, -1, Cell{c_color: 1, c_height: 0, c_age: 0});
+  set_cell(w,  1, -1, Cell{c_color: 1, c_height: 0, c_age: 0});
+  set_cell(w, -1,  1, Cell{c_color: 1, c_height: 0, c_age: 0});
+  // Centre stays empty — neighbour_count reads neighbours, not centre.
+  assert(neighbour_count(w, 0, 0) == 6, "all 6 axial neighbours filled");
+}
+
+// ── save / load round-trip ───────────────────────────────────────
+
+fn test_save_load_empty_world() {
+  w = world_empty();
+  world_save(w, "tests/_tmp_empty.bin");
+  loaded = world_empty();
+  n = world_load(loaded, "tests/_tmp_empty.bin");
+  assert(n == 0, "empty world loads 0 cells");
+  assert(loaded.tick == 0, "tick preserved (0)");
+  assert(cell_count(loaded) == 0, "loaded has 0 cells");
+}
+
+fn test_save_load_single_cell() {
+  w = world_empty();
+  set_cell(w, 5, 7, Cell{c_color: 42, c_height: 9, c_age: 100});
+  world_save(w, "tests/_tmp_single.bin");
+  loaded = world_empty();
+  n = world_load(loaded, "tests/_tmp_single.bin");
+  assert(n == 1, "1 cell loaded, got {n}");
+  c = get_cell(loaded, 5, 7);
+  assert(c.c_color == 42,  "color preserved, got {c.c_color}");
+  assert(c.c_height == 9,  "height preserved, got {c.c_height}");
+  assert(c.c_age == 100,   "age preserved, got {c.c_age}");
+}
+
+fn test_save_load_many_cells_across_chunks() {
+  w = world_empty();
+  // 4 cells in 4 different chunks (q crosses 32, r crosses 32, and
+  // negatives).
+  set_cell(w,   0,   0, Cell{c_color: 1, c_height: 0, c_age: 1});
+  set_cell(w,  35,   0, Cell{c_color: 2, c_height: 0, c_age: 2});
+  set_cell(w,   0,  35, Cell{c_color: 3, c_height: 0, c_age: 3});
+  set_cell(w, -10, -10, Cell{c_color: 4, c_height: 0, c_age: 4});
+  world_save(w, "tests/_tmp_many.bin");
+  loaded = world_empty();
+  n = world_load(loaded, "tests/_tmp_many.bin");
+  assert(n == 4, "4 cells loaded, got {n}");
+  c1 = get_cell(loaded,   0,   0);
+  c2 = get_cell(loaded,  35,   0);
+  c3 = get_cell(loaded,   0,  35);
+  c4 = get_cell(loaded, -10, -10);
+  assert(c1.c_color == 1 && c1.c_age == 1, "(0,0)   color=1 age=1");
+  assert(c2.c_color == 2 && c2.c_age == 2, "(35,0)  color=2 age=2");
+  assert(c3.c_color == 3 && c3.c_age == 3, "(0,35)  color=3 age=3");
+  assert(c4.c_color == 4 && c4.c_age == 4, "(-10,-10) color=4 age=4");
+}
+
+fn test_save_load_tick_preserved() {
+  w = world_empty();
+  set_cell(w, 0, 0, Cell{c_color: 1, c_height: 0, c_age: 0});
+  // Advance tick by running tick_and_decay once.  base_lifetime large
+  // so nothing decays — we only care that `tick` increments.
+  tick_and_decay(w, 1000, 0, 100);
+  tick_and_decay(w, 1000, 0, 100);
+  tick_and_decay(w, 1000, 0, 100);
+  assert(w.tick == 3, "tick advanced to 3, got {w.tick}");
+  world_save(w, "tests/_tmp_tick.bin");
+  loaded = world_empty();
+  n = world_load(loaded, "tests/_tmp_tick.bin");
+  assert(n == 1, "1 cell loaded after tick");
+  assert(loaded.tick == 3, "tick preserved, got {loaded.tick}");
+}
+
+fn test_save_load_negative_coords() {
+  w = world_empty();
+  set_cell(w, -50, -50, Cell{c_color: 5, c_height: 0, c_age: 50});
+  set_cell(w, -1, -1, Cell{c_color: 6, c_height: 0, c_age: 60});
+  world_save(w, "tests/_tmp_neg.bin");
+  loaded = world_empty();
+  n = world_load(loaded, "tests/_tmp_neg.bin");
+  assert(n == 2, "2 cells loaded, got {n}");
+  ca = get_cell(loaded, -50, -50);
+  cb = get_cell(loaded, -1, -1);
+  assert(ca.c_color == 5, "(-50,-50) color=5, got {ca.c_color}");
+  assert(cb.c_color == 6, "(-1,-1) color=6, got {cb.c_color}");
+}
+
+// ── world_load failure modes ─────────────────────────────────────
+
+fn test_load_missing_returns_zero() {
+  loaded = world_empty();
+  n = world_load(loaded, "tests/no_such_world_a8b3c7d.bin");
+  assert(n == 0, "missing file returns 0, no panic");
+  assert(loaded.tick == 0, "loaded world unchanged");
+  assert(cell_count(loaded) == 0, "no cells loaded");
+}
+
+fn test_load_wrong_magic_returns_zero() {
+  // Write a 16-byte garbage header (wrong magic) and confirm
+  // world_load bails without panicking.
+  {
+    f = file("tests/_tmp_badmagic.bin");
+    f#format = LittleEndian;
+    f.set_file_size(0);
+    f += (0xDEADBEEF as i32);   // wrong magic
+    f += (1 as i32);
+    f += (0 as i32);
+    f += (0 as i32);
+    f.sync();
+  }
+  loaded = world_empty();
+  n = world_load(loaded, "tests/_tmp_badmagic.bin");
+  assert(n == 0, "wrong magic returns 0, no panic");
+}
+
+fn test_load_wrong_version_returns_zero() {
+  // Correct magic, but unsupported version.
+  {
+    f = file("tests/_tmp_badver.bin");
+    f#format = LittleEndian;
+    f.set_file_size(0);
+    f += (0x57524C44 as i32);   // 'WRLD'
+    f += (99 as i32);            // version 99 — not supported
+    f += (0 as i32);
+    f += (0 as i32);
+    f.sync();
+  }
+  loaded = world_empty();
+  n = world_load(loaded, "tests/_tmp_badver.bin");
+  assert(n == 0, "wrong version returns 0, no panic");
+}

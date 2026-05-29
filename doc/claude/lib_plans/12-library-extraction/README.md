@@ -664,7 +664,7 @@ repos with real tests instead of smoke probes.
 | Library | What `lib/<name>/tests/` carries today | Coverage gap | Blocks chunk |
 |---|---|---|---|
 | `imaging` | `tests/14-image.loft` doc-example + `tests/15-regression.loft` (9 tests, **DONE 2026-05-29**): `Pixel.value()` packing, save/load round-trip (4×4 + 8×3 non-square + 5×5 solid + 2×2 extremes), `(x,y) → y*w+x` addressing, `save_png` failure modes (0×0 image, nonexistent dir).  10 tests total green on both gates with `LOFT_DENY_WARNINGS=1`. | — | ~~Phase 5 (`loft-libs-graphics`)~~ unblocked |
-| `world` | `tests/world.loft` smoke — get/set round-trip, chunk count, negative coords (1 `fn main`) | No save/load round-trip; no MapFile schema test (since `world::load_mapfile` doesn't exist yet — pair with the Phase 7a entry-point landing); no sparse-write boundary tests; no chunk-eviction semantics | Phase 6w (`loft-libs-world`) |
+| `world` | `tests/world.loft` smoke + `tests/02-persist.loft` (15 tests, **DONE 2026-05-29**): `chunk_idx_32`/`hex_idx_32` for positive AND negative inputs, `cell_count` (empty, after-set, overwrite, clear), `neighbour_count` (isolated + 6-axial-neighbours), `world_save`/`world_load` round-trip (empty, single-cell, many-cells-across-chunks, tick-preserved-through-`tick_and_decay`, negative-coords), `world_load` failure modes (missing file → 0, wrong magic → 0, wrong version → 0).  16 tests total, both gates green, `LOFT_DENY_WARNINGS=1` clean.  The MapFile JSON schema entry points (`world::load_mapfile` / `save_mapfile`) are still future work; covered when the schema migrates from `lib/moros_map`. | — | ~~Phase 6w (`loft-libs-world`)~~ unblocked for binary-format chunk extraction; MapFile schema landing is the only remaining 7a-step-4 work for full coverage |
 | `server` | `tests/server.loft` — one `srv = listen(); srv.close()` smoke | Real surface (HTTP / WebSocket / TLS / session) only exercised by `multiplayer_v{2,3,5}.rs` (Tier 3).  Once Tier 3 lands in `loft-libs-net/tests-integration/`, server is covered transitively; `lib/server/tests/` itself remains a smoke (acceptable) | Phase 6 re-clean (6r) — **waived if Tier 3 lands first** |
 | `markdown` | `tests/01-render.loft` — one `fn main` sequential script with a `must_contain` helper | A CommonMark parser surface needs ≥30–50 focused per-feature tests (emphasis, lists, code blocks, escapes, links, blockquotes, setext/atx headers, HTML inline) | Markdown extraction (post-6w) |
 
@@ -735,8 +735,38 @@ the time this was framed as consumer-blocked.  Re-validation 2026-
 05-29 shows the framing was wrong: `grep -rn 'use wall\|use
 world::wall' lib/` returns **zero** — wall.loft and overland.loft
 have **no consumers anywhere in lib/**, so the translation breaks
-nothing.  The mechanical work below is doable today without any
-external-consumer coordination:
+nothing.
+
+**Scope correction (2026-05-29):** a translation probe found
+wall.loft carries *more* legacy-syntax issues than the
+`enum`-as-struct claim:
+
+- One `enum Tile { … }` to translate (line 165 — struct-shaped).
+- *Two* duplicate struct names: `WallPoint` declared at lines 250
+  AND 379 (different field shapes); `Line` declared at lines 262
+  AND 393.  Loft rejects the duplicates — at least one of each
+  pair must be renamed (design decision: which is canonical, or
+  do both survive under distinct names).
+- `assert!(...)` Rust-macro syntax at line 211 etc. — translate to
+  `assert(...)`.
+- `if flipped ^(steps < 0)` at line 317 — `^` operator semantics
+  (XOR vs cast-shape) need a per-call check.
+- Likely more once these clear and the parser proceeds further.
+
+So the translation is **mechanical at the per-edit level** but
+**design-shaped at the file level** (the duplicate struct rename
+is a naming decision, not a transliteration).  Since wall.loft
+has zero consumers, the safest path is: rename duplicates by their
+*usage neighbourhood* (e.g. `WallPoint` near `Drawing` becomes
+`DrawingWallPoint`), drop unused dead code, and validate by
+parsing.  Estimated effort: **S–M** (half a day, vs the README's
+prior "mechanical / XS" framing).  Treated as deferred-by-scope
+until either Phase 7b moros migration unsticks (and the consumer
+specifies which structs it needs) or a separate clean-up sub-phase
+is filed.
+
+The remaining mechanical / additive work below is still doable
+today without any external-consumer coordination:
 
 - Translate `enum`-as-struct declarations in wall.loft / overland.loft
   to current `struct` syntax (mechanical syntax migration; zero
