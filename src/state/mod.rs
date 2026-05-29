@@ -2000,7 +2000,12 @@ impl State {
 
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         self.code_pos = pos;
-        self.stack_pos = 4;
+        // @PLAN53 cluster 2 / S4: the entry frame base must be 8-aligned in
+        // aligned mode (step(4)=8) so the entry function's locals — and every
+        // frame it calls — land on their alignment boundary; with the V1 base
+        // of 4 the whole entry frame is misaligned by 4.  Identity when off.
+        let entry_base = crate::variables::aligned_stack_step(4, self.aligned_stack);
+        self.stack_pos = entry_base;
         // Plan-07 phase 1 step 1.20 / phase 3 — publish source_spans
         // to the panic hook so a Rust panic inside any opcode dispatch
         // (e.g. arithmetic overflow in `checked_long!`, the `panic`
@@ -2011,7 +2016,7 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: entry_base,
             args_size: 0,
             line: 0,
         });
