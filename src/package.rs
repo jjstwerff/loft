@@ -41,6 +41,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use flate2::Compression;
+use flate2::GzBuilder;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
 
@@ -125,12 +126,31 @@ pub fn package_create(pkg_dir: &Path, out_dir: Option<&Path>) -> io::Result<Pack
     let out_path = out_dir.unwrap_or(pkg_dir).join(&out_name);
 
     // Build the tarball.
+    //
+    // Determinism: same source bytes → same tarball, regardless of who
+    // ran `loft package` or when.  The registry's gate-3 reproducible-
+    // build re-check relies on this.  We normalise at two layers:
+    //
+    //   1. The OUTER gzip stream uses `GzBuilder::mtime(0)` so the
+    //      gzip-mtime header byte field is fixed, not the wall clock.
+    //   2. The INNER tar entries are written with manually-constructed
+    //      headers that pin `mtime = 0`, `uid = 0`, `gid = 0`, owner
+    //      strings empty, and mode = 0o644 (files) / 0o755 (dirs).
+    //      `tar::Builder::append_path_with_name` defaults to copying
+    //      the on-disk mtime + permissions, which leak through git's
+    //      lack-of-mtime-preservation across clones.
+    //
+    // Files on disk may have arbitrary mtimes (commit time on one
+    // checkout, clone time on another) — that's git's contract.  By
+    // overriding both gzip + tar timestamps we make `loft package`
+    // genuinely content-addressed: the tarball bytes depend only on
+    // the file *contents* and the archive paths, nothing else.
     {
         let tar_gz = fs::File::create(&out_path)?;
-        let enc = GzEncoder::new(tar_gz, Compression::default());
+        let enc = GzBuilder::new()
+            .mtime(0)
+            .write(tar_gz, Compression::default());
         let mut builder = tar::Builder::new(enc);
-        // Follow real on-disk metadata (mode, mtime); don't chase
-        // symlinks (we just store the symlink target as a tar entry).
         builder.follow_symlinks(false);
         add_dir_contents(&mut builder, pkg_dir, &archive_prefix, &out_name)?;
         let enc = builder.into_inner()?;
@@ -214,13 +234,33 @@ fn walk(
         if file_type.is_dir() {
             walk(builder, root, &path, archive_prefix, out_name)?;
         } else if file_type.is_file() {
-            builder.append_path_with_name(&path, &archive_rel)?;
+            // Deterministic file entry: hand-construct the tar header
+            // with mtime=0, uid=0, gid=0, mode=0o644, empty owner
+            // strings.  Skips the `append_path_with_name` defaults
+            // which copy on-disk mtime + uid + gid — those vary
+            // between checkouts (git doesn't preserve mtimes) and
+            // would make the tarball non-reproducible.
+            let metadata = path.metadata()?;
+            let mut header = tar::Header::new_gnu();
+            header.set_size(metadata.len());
+            header.set_mode(0o644);
+            header.set_mtime(0);
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_entry_type(tar::EntryType::Regular);
+            // `username` / `groupname` default to empty for new headers.
+            // `set_cksum()` must be called LAST — it computes the
+            // checksum over every other header byte, so any later
+            // mutation invalidates it.
+            let file = fs::File::open(&path)?;
+            builder.append_data(&mut header, &archive_rel, file)?;
         }
-        // Symlinks: include as symlink entries (default behaviour of
-        // `append_path_with_name` when `follow_symlinks(false)` is
-        // set).  Symlinks pointing outside the package are still
-        // recorded as-is; the consumer extracting them gets the
-        // raw symlink, may be broken — fine for an MVP.
+        // Symlinks: skipped here — a symlinked file caught by
+        // `is_file()` above goes through the deterministic-header
+        // path; a true symlink (`file_type.is_symlink()` true,
+        // `is_file()` false) is dropped silently.  Packages should
+        // not rely on symlinks in the tarball; the MVP behaviour is
+        // unchanged for the regular-file case.
     }
     Ok(())
 }
