@@ -10,10 +10,105 @@ unaligned-accessor attempt.  See
 [`cluster-2-unaligned-store-access.md`](cluster-2-unaligned-store-access.md)
 for the decision + history.
 
-**Status:** design — NOT implemented.  A first blunt "round every
-`size()` to 8" spike is in the working tree and is **superseded by
-this design — revert it first** (it builds but corrupts text
-opcodes; it ignores the reusable machinery below).
+**Status:** FRAME-SLOT HALF DONE (the aligned allocator); EVAL-TOS
+HALF (S4) NOT STARTED.  See **§ SESSION HANDOFF** immediately below
+for the exact current state, what's committed, and the next steps —
+read that first.
+
+---
+
+## SESSION HANDOFF (2026-05-29) — read this first
+
+The session that did this work hit a **broken Bash tool** (every
+shell command errors after a heavy concurrent test sweep; `Read`/
+`Write`/`Edit` still work).  Session is being cleared.  Everything
+below is the state for a fresh session to resume.
+
+### Branch / commits
+- Branch **`plan-53-sanitizer-ci-lever`**, rebased onto the new
+  `main` **`a9bc23fa`** (PLAN52 closed via #230 — the macos-clippy-fixes
+  base was dropped; its content is in main).  Pushed to
+  `origin/plan-53-sanitizer-ci-lever`.
+- HEAD = **`8abfb8e1`** (`feat(@PLAN53 cluster 2, S3): complete the
+  aligned V2 allocator`).  Working tree was CLEAN at that commit; only
+  this doc edit (the handoff) is uncommitted — commit it once Bash works.
+- NO open PR on the branch.  Pushing is OK (branch policy).
+
+### What is DONE (committed + verified)
+- **Cluster 1 — unaligned bytecode buffer: FIXED + Miri-confirmed.**
+  `code_add`/`code_put`/`code<T>` in `src/state/mod.rs` →
+  `write_unaligned`/`read_unaligned`; `code<T>` returns `T` by value;
+  241 `*x.code::<T>()` deref sites destarred.  Miri got past `code_add`
+  into execute.  (Catalogue: `cluster-1-unaligned-bytecode.md`.)
+- **Cluster 2 — FRAME-SLOT half: the aligned V2 allocator is complete
+  and validates CLEAN corpus-wide.**  `assign_slots_v2`
+  (`src/variables/slots_v2.rs`) is now a scope-blind, kind-aware,
+  ALIGNED interval-graph greedy allocator: lowest `align(tp)`-aligned
+  slot with no conflict (conflict = overlapping range AND (life-overlap
+  OR incompatible kind/size OR loop-straddle OR non-exact partial
+  overlap)); **pins argument/SRet slots** as fixed always-live
+  intervals so locals never collide.  Validated via the per-function
+  `LOFT_SLOT_V2=mode[:filter]` shadow (`v2_mode_for`): `scopes.rs`
+  resets slots, applies V2, runs `validate_slots(scope_blind=true)` +
+  `validate_alignment`, then restores V1 (validate/report) so
+  **execution is unchanged**.  Supporting: `validate_alignment` + I8
+  (`check_i8_total_claim`) + `scope_blind` I7-skip in
+  `src/variables/validate.rs`; `align(tp)` + `reset_local_slots` in
+  `src/variables/mod.rs`; `dump_v1_v2_slots` (report mode).
+- **Full-sweep result** (`LOFT_SLOT_V2=validate cargo test --no-fail-fast`):
+  **ZERO `[Ix]`/`[ALIGN]` violations corpus-wide.**  The only failures
+  were native `cc`-link + `p254_cache_poisoning` panics = the **stale
+  `target/release/libloft.rlib`** false-failure (dev-built src vs
+  un-rebuilt release rlib), NOT V2 problems.
+
+### What REMAINS for cluster 2 (in order)
+1. **Native re-sweep**: `cargo build --release --lib`, then re-run the
+   native portion to clear the stale-rlib false-failures (confirms
+   native execution unaffected).
+2. **S4 — eval-TOS / frame-base alignment (THE LOAD-BEARING OTHER
+   HALF).**  `validate_alignment` checks slot offsets RELATIVE to the
+   frame; the runtime address is `stack_cur.pos + args_base + slot`
+   and `args_base = stack_pos − args_size` DRIFTS, so absolute
+   alignment (what the original Miri `Str`-at-TOS finding is about) is
+   NOT achieved by frame-slot alignment alone.  S4 = round the eval-TOS
+   step to 8 in lockstep (runtime `get`/`put`/`get_stack`/`put_stack`/
+   `put_var` AND codegen `stack.position` advances) + `frame_hwm`→8 +
+   args→8 + recompute the `text.rs` `pos − N` offsets (N = Σ
+   `round8(popped sizes)`).  The hard part: codegen's `bump`/`advance =
+   slot_end − stack.position` couples the eval-TOS to slot positions
+   (~dozen sites).  A "round-8 everywhere" spike was tried and REVERTED
+   in S0 (commit history) — the design here keeps tight slots + a
+   round-8 eval-TOS step.  See § 3 + § S1 result for the codegen
+   linchpin (pos operand = `stack.position − function.stack(v)`, both
+   `size()`-derived).
+3. **Drive + Miri**: `LOFT_SLOT_V2=drive:<fn>` to switch one function
+   onto V2's layout, run its tests (execution correctness), then Miri
+   (`MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test --test
+   issues <test>`) to confirm the original `Str`-at-TOS UB clears.
+
+### Sanity commands (once Bash works)
+- `cargo test --test issues --quiet` → 681/0 (normal, V1 drives).
+- `LOFT_SLOT_V2=validate cargo test --test issues --quiet 2>&1 | grep -oE '\[(I[0-9]|ALIGN)\]'` → empty (clean).
+- `LOFT_SLOT_V2=report:<fnname> cargo test <test-using-it> -- --nocapture` → V1-vs-V2 slot dump.
+- `cargo clippy --lib` → clean.
+
+### Cleanup the inspection agent flagged (LOW, do anytime)
+- Remove the now-dead `WalkState` + `walk_node` (the OLD TOS-reset
+  allocator) from `slots_v2.rs`; drop the unused `_code` param from
+  `assign_slots_v2`.
+- `v2_validate_enabled`/`v2_report_enabled` exports are unused (only
+  `v2_mode_for` is wired) — remove or add a caller.
+
+### Decision history (so a fresh session doesn't relitigate)
+- **Full alignment chosen over (B) unaligned-access**: `read_unaligned`
+  doesn't fault but trap-emulates on RISC-V Linux SBCs (a real future
+  target); user wants real sizes + gap-fill, NOT blunt round-to-8.
+- **Reuse the field/tuple mechanics** (`element_offsets`/`element_align`
+  /`calculate_positions_with_groups`) with a context-correct text type
+  (`String` stack / `Str` field) — the String/Str split forces it.
+- **I7 skipped for V2** (scope-blind); V1 keeps I7.
+
+---
 
 ## Core idea
 
