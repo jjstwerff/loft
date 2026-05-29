@@ -484,9 +484,10 @@ const LIB_PKGS_NODE_SKIP: &[&str] = &[
 const LIB_PKGS_WASMTIME_SKIP: &[&str] = &[
     // @P321(c): imaging's PNG decode is provided by the browser via
     // `createImageBitmap` + Canvas `getImageData` (see
-    // `src/wasm_imaging.rs` + `doc/loft-gl-wasm.js`).  Wasmtime has no
-    // equivalent; the bridge call would always return false, breaking
-    // `assert(img.width == 256)`.  Browsers handle this fine.
+    // `lib/imaging/wasm/{src/lib.rs, host.js}` and `doc/loft-gl-wasm.js`).
+    // Wasmtime has no equivalent; the bridge call would always return
+    // false, breaking `assert(img.width == 256)`.  Browsers handle this
+    // fine.
     "imaging",
 ];
 
@@ -682,10 +683,7 @@ fn wasm_library_suite() {
             .into_iter()
             .flatten()
             .filter_map(|e| e.ok().map(|d| d.path()))
-            .filter(|p| {
-                p.extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("png"))
-            })
+            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")))
             .collect();
 
         if have_node && !LIB_PKGS_NODE_SKIP.contains(&pkg.as_str()) {

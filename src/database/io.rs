@@ -460,11 +460,7 @@ impl Stores {
     /// `target_os = "wasi"`, so this stub only fires for the actual
     /// no-filesystem browser target — wasip2 falls through to the
     /// std::fs impl above.
-    #[cfg(all(
-        target_arch = "wasm32",
-        not(target_os = "wasi"),
-        not(feature = "wasm")
-    ))]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
     pub fn get_file(&mut self, file: &DbRef) -> bool {
         if file.rec == 0 {
             return false;

@@ -2758,17 +2758,16 @@ fn main() {
                 let mut pngs: Vec<std::path::PathBuf> = rd
                     .filter_map(Result::ok)
                     .map(|e| e.path())
-                    .filter(|p| {
-                        p.extension()
-                            .is_some_and(|e| e.eq_ignore_ascii_case("png"))
-                    })
+                    .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")))
                     .collect();
                 pngs.sort();
                 for p in pngs {
                     let Some(name) = p.file_name().and_then(|s| s.to_str()) else {
                         continue;
                     };
-                    let Ok(bytes) = std::fs::read(&p) else { continue };
+                    let Ok(bytes) = std::fs::read(&p) else {
+                        continue;
+                    };
                     entries.push((name.to_string(), crate::base64::encode(&bytes)));
                 }
             }
@@ -2783,9 +2782,9 @@ fn main() {
                     // Asset names are filesystem basenames — restrict to
                     // safe chars; reject anything that could break out of
                     // the JS string literal.  PNG suffix already required.
-                    let safe = name.chars().all(|c| {
-                        c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'
-                    });
+                    let safe = name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
                     if !safe {
                         continue;
                     }

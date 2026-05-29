@@ -647,17 +647,16 @@ extern crate loft;"
                 // matching local body is now a graceful Phase 1 stub (see
                 // `output_native_direct_call`), so the extern would be
                 // unused AND would collide with the local body name
-                // (E0428).  When Phase 2 routes these to a `pub fn` bridge
-                // in `loft::wasm_imaging`, the bridge handles host_call
-                // internally — still no extern needed at this layer.
-                let stores_loft_ref = matches!(
-                    &def.returned,
-                    Type::Vector(_, _) | Type::Reference(_, _)
-                );
-                let has_ref_arg = def
-                    .attributes
-                    .iter()
-                    .any(|a| !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _)));
+                // (E0428).  When the lib_plan-29 routing maps these to a
+                // `pub fn` bridge in `<crate_ident>::<bridge_fn>` (e.g.
+                // `loft_imaging_wasm::imaging_load_png`), the bridge
+                // declares its OWN host imports — still no extern needed
+                // at this layer.
+                let stores_loft_ref =
+                    matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
+                let has_ref_arg = def.attributes.iter().any(|a| {
+                    !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _))
+                });
                 if stores_loft_ref || has_ref_arg {
                     continue;
                 }
@@ -2298,13 +2297,15 @@ extern crate loft;"
         // no-op.  NOT `unimplemented!()` (would trap any consumer the moment
         // they touch the fn).
         //
-        // Phase 2 (planned): a `WASM_BRIDGE_FNS` lookup routes known
-        // `def.native` symbols (n_load_png, n_save_png) to a plain `pub fn`
-        // bridge in `loft::wasm_imaging` that calls `host_call_raw(...)` to
-        // JS.  Note: `state.replace_native` does NOT work here — that
-        // mechanism is interpreter-only (mutates `State::library`); `--html`
-        // generates a standalone Rust binary that calls `n_load_png()` as a
-        // plain Rust function with no `State` indirection at runtime.
+        // Routed via lib_plan-29: each library's `[wasm.bridge].routes`
+        // map (populated into `data.wasm_bridge_routes`) names the
+        // `pub fn` bridge in its per-library `wasm/src/lib.rs` crate.
+        // The fallback below covers store-mutating `#native` fns with
+        // no `[wasm.bridge]` declared.  Note: `state.replace_native`
+        // does NOT work here — that mechanism is interpreter-only
+        // (mutates `State::library`); `--html` generates a standalone
+        // Rust binary that calls `n_load_png()` as a plain Rust
+        // function with no `State` indirection at runtime.
         if self.wasm_browser {
             let first_ref_arg = def
                 .attributes
@@ -2351,17 +2352,15 @@ extern crate loft;"
                 writeln!(w, "{{")?;
                 writeln!(
                     w,
-                    "  // @P321c browser-WASM Phase 1 stub: graceful no-op (no bridge registered for {})", def.native
+                    "  // @P321c browser-WASM Phase 1 stub: graceful no-op (no bridge registered for {})",
+                    def.native
                 )?;
                 match &def.returned {
                     Type::Void => {}
                     Type::Boolean => writeln!(w, "  false")?,
                     Type::Integer(_) | Type::Float | Type::Single => writeln!(w, "  0")?,
                     Type::Text(_) => {
-                        writeln!(
-                            w,
-                            "  loft::keys::Str {{ ptr: std::ptr::null(), len: 0 }}"
-                        )?;
+                        writeln!(w, "  loft::keys::Str {{ ptr: std::ptr::null(), len: 0 }}")?;
                     }
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
                         writeln!(

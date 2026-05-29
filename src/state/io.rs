@@ -60,11 +60,7 @@ impl State {
         // also exclude `target_os = "wasi"`, so wasip2 (which HAS a working
         // FS via WASI preopens) falls through to the std::fs impl.  Mirrors
         // the same fix at `src/database/io.rs::get_file`.
-        #[cfg(all(
-            target_arch = "wasm32",
-            not(target_os = "wasi"),
-            not(feature = "wasm")
-        ))]
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
         {
             let _ = (file, r);
         }
