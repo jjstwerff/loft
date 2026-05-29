@@ -132,38 +132,74 @@ Same single fix surface for all 6 heap-type sub-clusters.
 
 1. ~~Verify all 6 sub-types fail uniformly~~ — done.
 2. ~~Confirm Reference is the only escape~~ — done (probe 10).
-3. **Pinpoint the source line(s)** that emit the bad `if var__ncc_N` predicate.  Steps:
-   - `LOFT_KEEP_NATIVE_RS=1 ./target/release/loft --native probe 21` → keep the generated .rs at /tmp/loft_native_*.rs
-   - Read the file; locate the `if var__ncc_3` line
-   - Trace back to `src/generation/emit.rs` (likely `output_block` or `output_set`'s value-block branch) — search for where the predicate is emitted in the heap-type path
-4. Confirm cluster VII bundles — run probes 47/48/82 with the same investigation steps; if the `if-else have incompatible types` originates at the same emit site, the fix covers VII too.
+3. ~~**Pinpoint the source line(s)** that emit the bad `if var__ncc_N` predicate.~~ — done 2026-05-29.  Site: `src/generation/emit.rs::output_if_inner` lines 842-846 (now refactored to call a new `output_test_predicate` helper).
+4. ~~Confirm cluster VII bundles — run probes 47/48/82 with the same investigation steps.~~ — done 2026-05-29.  **Cluster VII does NOT bundle**: probes 47/48/82 fail with `expected &String, found Str` (text-typed branch unification), NOT the DbRef-predicate issue.  Cluster VII has a separate fix surface in the text-branch path.
 
 ## Fix surface
 
-**Single point**: in `src/generation/emit.rs` value-block return path for heap-typed `??`, replace the bare `if var__ncc_N` predicate with a proper null-check:
+**Single point**: `src/generation/emit.rs::output_if_inner` value-block `??` predicate.  Both branches of the `Insert`/non-`Insert` dispatch (was lines 842-846) now route through a new `output_test_predicate` helper that wraps the bare test with `.rec != 0` when `infer_type(test)` returns a heap-DbRef type (`Reference` / `Vector` / `Sorted` / `Hash` / `Index` / struct-`Enum`).
 
 ```rust
-// CURRENT (broken):
-write!(w, "if {} {{{}}} else {{{}}}", ncc, ncc, fallback)?;
-
-// FIX:
-write!(w, "if {}.store_nr != u16::MAX {{{}}} else {{{}}}", ncc, ncc, fallback)?;
+// FIX (landed 2026-05-29):
+fn output_test_predicate(&mut self, w: &mut dyn Write, test: &Value) -> std::io::Result<()> {
+    let heap_dbref = matches!(
+        self.infer_type(test),
+        Some(
+            Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Enum(_, true, _),
+        ),
+    );
+    if heap_dbref {
+        self.output_code_inner(w, test)?;
+        write!(w, ".rec != 0")
+    } else {
+        self.output_code_inner(w, test)
+    }
+}
 ```
 
-(Exact syntax depends on what the `DbRef` null sentinel is — confirm via `src/keys.rs` or `src/state/STRING_NULL`-style constants.)
+**Variant for IV-Tuple**: tuples are `(field_0, field_1, …)` not DbRef; the null-check uses a different sentinel (per-field zero-init).  Probe 40 (tuple) still COMPILE-ERRs after this fix and remains open.
 
-**Variant for IV-Tuple**: tuples are `(field_0, field_1, …)` not DbRef; the null-check may need a different sentinel (per-field zero-init?).  Probe 40's specific case needs re-verification once the Vec/Hash fix lands.
+### Fix iterations
 
-**What it fixes:**
-- Cluster IV-Vec/Hash/Sorted/Index/Enum/Tuple (Set E): yes — all 6 sub-types compile and pass on native.
-- Cluster VII (chained-call): yes (hypothesis) — same code path emits the chained-`if-else` mismatched-types error.
-- Cluster IV-Spacial: NO — that's a parser-hang, different sub-cluster, different fix (`cluster-IV-Spacial-parser.md`).
-- Cluster I (text): NO — text has a separate emit branch (the `_ret.to_string()` path).
-- Interpret-side IV — likely closes incidentally if the interpreter's `OpEqNull` already handles heap DbRef nulls correctly, but verify with Set E re-run.
+**Iteration 1 (2026-05-29) — predicate fix landed**
+- Site: `src/generation/emit.rs::output_test_predicate` (new helper).
+- Result on Set E after fix (rerun against macos-clippy-fixes branch + this edit):
 
-**Effort**: S (2-3 days).  The fix surface is small; the validation surface (Set E + cluster VII probes 47/48/82) is bounded.
+  | Probe | Type | Before | After |
+  |---|---|---|---|
+  | 21 | Vector | COMPILE-ERR | runtime panic (separate `var_a` null-sentinel init bug — see "Remaining work" below) |
+  | 22 | Hash | COMPILE-ERR | runtime panic (same separate bug) |
+  | 23 | struct-Enum | COMPILE-ERR | **PASS** ✅ |
+  | 36 | Vector (iter consumer) | COMPILE-ERR | runtime panic |
+  | 40 | Tuple | COMPILE-ERR | COMPILE-ERR (predicate not heap-DbRef typed — needs Tuple-specific sentinel) |
+  | 41 | Sorted | COMPILE-ERR | runtime panic |
+  | 50 | Index | COMPILE-ERR | runtime panic |
 
-**Risk**: LOW — native compile error is loud; if the fix introduces a different miscompile, the compile error switches shape rather than silent corruption.
+- Set H baselines: **all PASS** (no regression).
+- Sets A / B (cluster I): unchanged (interpret FAIL, native PASS) — fix doesn't touch text path.
+- Interpret-side: unchanged — interpreter wasn't blocked by the predicate-emit bug; its silent-corruption shape is unrelated.
+
+**Remaining work after iteration 1**:
+
+The predicate fix closes struct-Enum but exposes a SECOND latent bug in Vec / Hash / Sorted / Index value-block lowering: `var_a` (the destination of `a = vec[i] ?? other`) is declared as the null-DbRef sentinel BEFORE `OpReplaceKeyed`/equivalent copies the if-result into it.  `OpReplaceKeyed` then crashes on `store_nr=u16::MAX` (out-of-bounds in `stores.allocations`).
+
+This is a separate fix surface: the `??` lowering needs to either (a) allocate a fresh store for `var_a` before emitting the if-result, or (b) emit a direct assignment of the if-result to `var_a` instead of going through `OpReplaceKeyed`.  See `parser/operators.rs` `??` heap-type lowering.
+
+**What iteration 1 fixes:**
+- Cluster IV-Enum (probe 23): **closed** — native compile + runtime PASS.
+- Cluster IV-Vec/Hash/Sorted/Index: predicate compiles; runtime exposes the secondary bug above.
+- Cluster IV-Tuple (probe 40): unaffected — Tuple isn't heap-DbRef-typed.
+- Cluster VII (chained-call): unaffected — different error mode (`&String` vs `Str` text branch unification).
+- Cluster IV-Spacial: unaffected — parser-hang, separate fix.
+- Cluster I (text): unaffected — text uses its own emit branch.
+
+**Effort**: S (~1 day, done).
+**Risk**: LOW — verified: no regression on Set H baselines, no test failure beyond pre-existing P383 cluster-I (`repro_p323.loft`).
 
 ## Why Reference escapes
 

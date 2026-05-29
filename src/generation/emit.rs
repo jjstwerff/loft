@@ -820,6 +820,40 @@ impl Output<'_> {
         self.output_if_inner(w, test, true_v, false_v, false)
     }
 
+    /// Emit an `if` test value as a Rust bool predicate.
+    ///
+    /// When the test is a heap-DbRef-typed variable (Vector / Hash /
+    /// Sorted / Index / Reference / struct-Enum), the value-block `??`
+    /// lowering at `parser/operators.rs` synthesises `if _ncc_N { _ncc_N }
+    /// else { fallback }` — but `_ncc_N` is a `DbRef`, not a `bool`,
+    /// and rustc rejects it with E0308.  The null sentinel for heap
+    /// DbRefs is `DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }` (see
+    /// `write_typed_null` at line ~807), so `.rec != 0` is the
+    /// canonical present-check (mirrors the existing checks throughout
+    /// `codegen_runtime.rs`).
+    ///
+    /// PLAN52 cluster IV (heap-typed value-block `??`): probes 21 / 22 /
+    /// 23 / 36 / 40 / 41 / 50.
+    fn output_test_predicate(&mut self, w: &mut dyn Write, test: &Value) -> std::io::Result<()> {
+        let heap_dbref = matches!(
+            self.infer_type(test),
+            Some(
+                Type::Reference(_, _)
+                    | Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Enum(_, true, _)
+            ),
+        );
+        if heap_dbref {
+            self.output_code_inner(w, test)?;
+            write!(w, ".rec != 0")
+        } else {
+            self.output_code_inner(w, test)
+        }
+    }
+
     fn output_if_inner(
         &mut self,
         w: &mut dyn Write,
@@ -840,10 +874,10 @@ impl Output<'_> {
                 self.indent(w)?;
             }
             write!(w, "if ")?;
-            self.output_code_inner(w, &ops[ops.len() - 1])?;
+            self.output_test_predicate(w, &ops[ops.len() - 1])?;
         } else {
             write!(w, "if ")?;
-            self.output_code_inner(w, test)?;
+            self.output_test_predicate(w, test)?;
         }
         let b_true = matches!(*true_v, Value::Block(_));
         let b_false = matches!(*false_v, Value::Block(_));
