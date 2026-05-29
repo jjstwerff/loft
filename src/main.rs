@@ -2744,8 +2744,11 @@ let mem;
 // the slot with {{width, height, bytes}} before loft_start runs.
 const ctrl={{ac:null,assets:{assets_js}}};
 const imports=buildLoftImports(canvas,output,()=>mem,ctrl);
-WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
+WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
   mem=r.instance.exports.memory;
+  // @P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
+  // loft_start so the wasm-side imaging bridge looks them up sync.
+  ctrl.assets=await decodeLoftAssets(ctrl.assets);
   if(r.instance.exports.asyncify_start_unwind){{
     const ac=new AsyncifyCtrl(r.instance);
     ctrl.ac=ac;

@@ -469,12 +469,29 @@ impl Stores {
         if file.rec == 0 {
             return false;
         }
+        // @P321(c): consult the browser-side asset table so PNGs
+        // auto-discovered by `--html` report as `TextFile` (size 0 — JS
+        // owns the decoded bytes).  Without this the get_file stub
+        // unconditionally short-circuits with NotExists and
+        // `file().png()` never reaches the imaging bridge.
+        let path = {
+            let store = self.store_mut(file);
+            store
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+                .to_owned()
+        };
         let store = self.store_mut(file);
-        store.set_long(file.rec, file.pos, i64::MIN);
         store.set_long(file.rec, file.pos + 8, i64::MIN);
         store.set_long(file.rec, file.pos + 16, i64::MIN);
-        store.set_byte(file.rec, file.pos + 32, 0, 5); // NotExists
-        false
+        if crate::wasm_imaging::asset_exists(&path) {
+            store.set_long(file.rec, file.pos, 0);
+            store.set_byte(file.rec, file.pos + 32, 0, 1); // TextFile
+            true
+        } else {
+            store.set_long(file.rec, file.pos, i64::MIN);
+            store.set_byte(file.rec, file.pos + 32, 0, 5); // NotExists
+            false
+        }
     }
 
     #[cfg(feature = "wasm")]

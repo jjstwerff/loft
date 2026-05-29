@@ -74,7 +74,7 @@ Claim more space in a vector to allow for new records. Return the next reference
 records though do not increase the length yet as we might want to iterate the vector before the
 actual change.
 */
-/// @P321(c) Phase 3c: bulk-allocate a vector record and copy raw bytes into it
+/// @P321(c): bulk-allocate a vector record and copy raw bytes into it
 /// in one shot.  Returns the new record number; the caller stores it into the
 /// owning struct field via `Store::set_u32_raw`.
 ///
@@ -83,8 +83,12 @@ actual change.
 /// `src/wasm_imaging.rs` and the cdylib in `lib/imaging/native/` share the
 /// same vector layout (length at offset 4, payload at offset 8).
 ///
-/// Initial consumer is Phase 3b (browser PNG decode); landed standalone in
-/// Phase 3c so the surface is reviewable / revertible on its own.
+/// Pass `&[]` to allocate without filling — useful when the caller wants
+/// a pre-sized buffer it (or a host bridge) will fill in place.
+///
+/// `#[allow(dead_code)]` because the only consumer
+/// (`crate::wasm_imaging`) is wasm32-only; native builds compile but
+/// never call it.
 #[allow(dead_code)]
 pub fn alloc_vector_from_bytes(
     store: &mut Store,

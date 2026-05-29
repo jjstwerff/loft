@@ -456,16 +456,6 @@ fn p201_poisoned_lock_recovery_pattern() {
 /// Travels with each chunk on extraction, mirroring `LIB_PKGS_WASM_SKIP` in
 /// the plan-12 design.
 const LIB_PKGS_WASM_SKIP: &[&str] = &[
-    // @P321c (OPEN): imaging's store-MUTATING `#native` load_png/save_png has
-    // no working codegen marshalling — the `--html` build emits broken Rust
-    // (`n_load_png` defined multiple times + E0308).  The native gate skips it
-    // for the same @P321c; this WASM gate confirms the browser path is broken
-    // too.  NOTE: imaging SHOULD run in a browser — but the right fix is to
-    // route load_png/save_png to a JS host bridge over the browser's own image
-    // codec (`createImageBitmap` / Canvas `getImageData` / `toBlob`), NOT to
-    // bundle a Rust PNG stack into wasm (same "borrow the platform" design as
-    // the time lib's `js_sys::Date`).  Un-skip when @P321c lands that route.
-    "imaging",
     // server is a native HTTP/socket listener — a browser/WASI guest has no
     // listen/accept, so it cannot run there by construction (a genuine
     // platform limit, not a bug — unlike imaging).
@@ -485,6 +475,19 @@ const LIB_PKGS_NODE_SKIP: &[&str] = &[
     // without a JS host bridge (out of scope for now).  Un-skip if a future
     // JS-host VirtFS bridge ships.
     "world",
+];
+
+/// Packages skipped ONLY on the wasmtime (wasip2) path.  Use this for
+/// libraries whose host bridge depends on a browser-only API (Canvas,
+/// createImageBitmap, etc.) — wasmtime has no canvas / image codec; the
+/// browser does.
+const LIB_PKGS_WASMTIME_SKIP: &[&str] = &[
+    // @P321(c): imaging's PNG decode is provided by the browser via
+    // `createImageBitmap` + Canvas `getImageData` (see
+    // `src/wasm_imaging.rs` + `doc/loft-gl-wasm.js`).  Wasmtime has no
+    // equivalent; the bridge call would always return false, breaking
+    // `assert(img.width == 256)`.  Browsers handle this fine.
+    "imaging",
 ];
 
 /// Collect every `lib/<pkg>/tests/*.loft`, sorted.
@@ -714,7 +717,10 @@ fn wasm_library_suite() {
                 }
             }
         }
-        if have_wasmtime && let Some((out, ok)) = run_wasip2_wasm(&name, &source, &["lib"]) {
+        if have_wasmtime
+            && !LIB_PKGS_WASMTIME_SKIP.contains(&pkg.as_str())
+            && let Some((out, ok)) = run_wasip2_wasm(&name, &source, &["lib"])
+        {
             ran += 1;
             println!(
                 "wasm[wasmtime] {pkg}/{file}: {}",

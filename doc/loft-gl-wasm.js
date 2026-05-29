@@ -7,6 +7,40 @@
 // Usage: const ac = new AsyncifyCtrl(instance);
 //        ac.start('loft_start');  // runs until first swap_buffers
 //        // on each rAF: ac.resume('loft_start');
+// @P321c Phase 3b — decode base64-embedded PNG assets to raw RGB bytes.
+// `rawAssets` is `{name: base64String, ...}` (Phase 3a embed in main.rs);
+// resolves to `{name: {width, height, bytes: Uint8Array(rgb)}}` for the
+// imaging bridge to look up sync.  Runs once after `WebAssembly.instantiate`
+// + before `loft_start` so the wasm-side imaging_query/copy is synchronous.
+async function decodeLoftAssets(rawAssets) {
+  if (!rawAssets || typeof rawAssets !== 'object') return {};
+  const out = {};
+  for (const [name, b64] of Object.entries(rawAssets)) {
+    if (typeof b64 !== 'string') { out[name] = b64; continue; }
+    try {
+      const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const blob = new Blob([bin], { type: 'image/png' });
+      const bitmap = await createImageBitmap(blob);
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0);
+      const imgData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+      const rgba = imgData.data;
+      const rgb = new Uint8Array(bitmap.width * bitmap.height * 3);
+      for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+        rgb[j] = rgba[i];
+        rgb[j + 1] = rgba[i + 1];
+        rgb[j + 2] = rgba[i + 2];
+      }
+      out[name] = { width: bitmap.width, height: bitmap.height, bytes: rgb };
+    } catch (e) {
+      // Leave the entry undecoded; bridge will treat as missing.
+      out[name] = null;
+    }
+  }
+  return out;
+}
+
 function AsyncifyCtrl(instance) {
   // Asyncify data area: 16 bytes in WASM memory for the unwind/rewind buffer.
   // We allocate it at the very start of the heap (right after __heap_base).
@@ -287,14 +321,62 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       loft_text_height(fi, sz) { return Math.ceil(sz * 1.2); },
       loft_rasterize_text_into(fi, tp, tl, sz, bp, bc) { return 0; },
       loft_save_png(pp, pl, w, h, dp, dc) { return 0; },
-      // @P321c Phase 2 — imaging library bridge.
-      // Args from src/wasm_imaging.rs::imaging_load_png:
-      //   (path_ptr, path_len, image_store_nr, image_rec, image_pos)
-      // Phase 2 stub returns 0 (false) — Phase 3 wires this to
-      // ctrl.assets[name] decode + struct-field writes.
-      imaging_load_png(pp, pl, store_nr, rec, pos) { return 0; },
-      // Args: (image_store_nr, image_rec, image_pos, path_ptr, path_len)
-      imaging_save_png(store_nr, rec, pos, pp, pl) { return 0; },
+      // @P321c Phase 3b — imaging library bridge.
+      // `ctrl.assets[basename]` is filled at preload (Phase 3a discovers
+      // *.png siblings of the entry .loft and embeds base64; the
+      // preamble runs `decodeAssets` after instantiate to replace each
+      // slot with `{width, height, bytes}` before loft_start()).
+      //
+      // The Rust bridge in `src/wasm_imaging.rs` calls these in two
+      // steps: imaging_query for dimensions, then imaging_copy_rgb to
+      // fill a pre-allocated vector payload directly.
+      imaging_query(pp, pl, w_out, h_out) {
+        const name = readStr(pp, pl).split(/[\\/]/).pop();
+        const a = ctrl.assets && ctrl.assets[name];
+        if (!a || !a.bytes) return 0;
+        const mem32 = new Uint32Array(getMem().buffer);
+        mem32[w_out >>> 2] = a.width;
+        mem32[h_out >>> 2] = a.height;
+        return 1;
+      },
+      imaging_copy_rgb(pp, pl, dest, dest_len) {
+        const name = readStr(pp, pl).split(/[\\/]/).pop();
+        const a = ctrl.assets && ctrl.assets[name];
+        if (!a || !a.bytes || a.bytes.length > dest_len) return 0;
+        new Uint8Array(getMem().buffer, dest, a.bytes.length).set(a.bytes);
+        return 1;
+      },
+      host_asset_exists(pp, pl) {
+        const name = readStr(pp, pl).split(/[\\/]/).pop();
+        return (ctrl.assets && ctrl.assets[name]) ? 1 : 0;
+      },
+      imaging_save(pp, pl, w, h, dp, dl) {
+        try {
+          const name = readStr(pp, pl).split(/[\\/]/).pop() || 'image.png';
+          const rgb = new Uint8Array(getMem().buffer, dp, dl);
+          const rgba = new Uint8ClampedArray(w * h * 4);
+          for (let i = 0, j = 0; j < rgb.length; i += 4, j += 3) {
+            rgba[i] = rgb[j];
+            rgba[i + 1] = rgb[j + 1];
+            rgba[i + 2] = rgb[j + 2];
+            rgba[i + 3] = 255;
+          }
+          const canvas = new OffscreenCanvas(w, h);
+          const ctx2 = canvas.getContext('2d');
+          ctx2.putImageData(new ImageData(rgba, w, h), 0, 0);
+          canvas.convertToBlob({ type: 'image/png' }).then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = name;
+            a.click();
+            URL.revokeObjectURL(url);
+          });
+          return 1;
+        } catch (e) {
+          return 0;
+        }
+      },
       loft_gl_upload_alpha_texture(dp, w, h) { return 0; },
       loft_gl_text_texture(fi, tp, tl, sz, wp, hp) { return 0; },
       // G5: Audio via Web Audio API
