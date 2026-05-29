@@ -881,8 +881,21 @@ impl Output<'_> {
         }
         let b_true = matches!(*true_v, Value::Block(_));
         let b_false = matches!(*false_v, Value::Block(_));
+        // @PLAN52 cluster VII: when the if-result is `Text`, branches can
+        // produce `&String` (text local via Var emit's `&var_x`), `Str`
+        // (text-returning native call), or `&'static str` (literal).  These
+        // do NOT unify at the if-branch level — rustc reports E0308
+        // "expected `&String`, found `Str`".  Wrapping each non-Block
+        // branch with `&*(...)` forces a common `&str` (idempotent on
+        // `&String` and `&str`, valid on `Str` via its `Deref<Target=str>`).
+        let text_unify = !b_true
+            && !b_false
+            && !matches!(false_v, Value::Null)
+            && matches!(self.infer_type(true_v), Some(Type::Text(_)));
         if b_true {
             write!(w, " ")?;
+        } else if text_unify {
+            write!(w, " {{&*(")?;
         } else {
             write!(w, " {{")?;
         }
@@ -895,11 +908,17 @@ impl Output<'_> {
         self.indent -= u32::from(!b_true);
         if let Value::Block(_) = *true_v {
             write!(w, " else ")?;
+        } else if text_unify {
+            write!(w, ")}} else ")?;
         } else {
             write!(w, "}} else ")?;
         }
         if !b_false {
-            write!(w, "{{")?;
+            if text_unify {
+                write!(w, "{{&*(")?;
+            } else {
+                write!(w, "{{")?;
+            }
         }
         self.indent += u32::from(!b_false);
         // When the else branch is Null and the true branch returns a value,
@@ -910,6 +929,9 @@ impl Output<'_> {
             Self::write_typed_null(w, &tp)?;
         } else {
             self.output_code_inner(w, false_v)?;
+        }
+        if text_unify && !b_false {
+            write!(w, ")")?;
         }
         self.indent -= u32::from(!b_false);
         if !b_false {

@@ -102,37 +102,38 @@ For chained `??` where one or both branches are CALL EXPRESSIONS, the native emi
 
 1. ~~Confirm chain depth ≥ 2 triggers the bug~~ — done.
 2. ~~Confirm recursive fns trigger~~ — done.
-3. **Pinpoint the emit site** — same task as cluster IV (`LOFT_KEEP_NATIVE_RS=1 ./target/release/loft --native probe 47`, read the generated .rs, locate the `if`/`else` with mismatched types).  Likely the same site as cluster IV's bad predicate emit, just a different failure mode.
-4. **Verify shared fix surface with cluster IV**: once cluster IV's predicate fix lands, re-run Set G.  If all 3 probes PASS, cluster VII closes as a free rider on cluster IV's fix.
+3. ~~**Pinpoint the emit site**~~ — done 2026-05-29.  Site: `src/generation/emit.rs::output_if_inner` AND `src/generation/pre_eval.rs::output_if_with_subst` (the two if-emit paths).  Mismatch: then-branch emits `&var__ncc_N` (a `&String`); else-branch emits a Call returning `Str`.  Cluster VII does NOT share cluster IV's predicate fix site — IV is about the *test* DbRef predicate; VII is about the *branch* type unification.
 
 ## Fix surface
 
-**Primary**: same emit site as cluster IV (likely `src/generation/emit.rs::output_block` value-block return path).  Need to:
-1. Compute the unified return type for the value-block (resolve the if-else branches' types to a common type).
-2. Emit branches that produce that common type — possibly wrapping each branch in an explicit conversion if mismatched.
-
-For text specifically, the common type is `String`; both branches should be `_ret.to_string()` regardless of whether they're literal or call.  For chained `??` the inner block already produces `String`; the outer just needs to consume that String correctly.
-
-**Fix shape** (rough):
+**LANDED 2026-05-29 (cycle 4).**  Both if-emit paths now wrap each non-Block branch with `&*(...)` when the if-result is text-typed.  `&*(&String)` → `&str`; `&*(Str)` → `&str` (via `Deref<Target=str>`); `&*(&'static str)` → `&str` (idempotent).  Both branches unify as `&str`, then the surrounding `.to_string()` wrap produces `String`.
 
 ```rust
-// In output_block, for text/heap value-block returns:
-//   - Resolve the common return type for if-else branches
-//   - For text: emit both branches as `String` (literal → `"x".to_string()`, call → as-is)
-//   - For DbRef heap-types: emit both branches as `DbRef` with proper null-sentinel handling (cluster IV fix)
+// emit.rs::output_if_inner and pre_eval.rs::output_if_with_subst:
+let text_unify = !b_true
+    && !b_false
+    && !matches!(false_v, Value::Null)
+    && matches!(self.infer_type(true_v), Some(Type::Text(_)));
+// then emit `{&*(<branch>)}` wrap for each non-Block branch when text_unify
 ```
 
-**What it fixes:**
-- Cluster VII (Set G): yes — chained / recursive call patterns compile cleanly.
-- Cluster IV (Set E): yes — same emit path.
-- Cluster I-interpret side of cluster VII probes: **NO** — still relies on cluster I's `__ret_text_N` materialisation.  Set G's native passes; interpret still fails on cluster I lines.
+### Fix iterations
 
-**Effort**: S, bundled with cluster IV (one fix surface).
+**Iteration 1 (2026-05-29) — text-branch unification landed**
+- Sites: `src/generation/emit.rs::output_if_inner` + `src/generation/pre_eval.rs::output_if_with_subst`.
+- Result on Set G:
 
-**Risk**: LOW — native compile error is loud; if the fix produces a new miscompile, the error shape changes rather than silent corruption.
+  | Probe | Shape | Before | After |
+  |---|---|---|---|
+  | 47 | `lookup1(k) ?? lookup2(k) ?? "default"` | COMPILE-ERR (`&String` vs `Str`) | **PASS** ✅ on native |
+  | 48 | recursive fn `?? pick(...)` (pre-evals present) | COMPILE-ERR | **PASS** ✅ (pre_eval.rs path also fixed) |
+  | 82 | `vec[i] ?? get_default()` | COMPILE-ERR | **PASS** ✅ |
 
-## Why this bundles with cluster IV
+- Set H baselines: all PASS.
+- `cargo test --test issues`: 681/681 pass.
+- Probe 02 (cluster I baseline) still PASS native — the wrap is idempotent on the existing `&String` / `&'static str` cases.
 
-Both cluster IV (heap-type value-blocks with E0308 predicate) and cluster VII (chained-call value-blocks with E0308 if-else types) originate from the SAME emit site in `src/generation/emit.rs`.  Cluster IV's fix unifies the predicate; cluster VII's fix unifies the branch return types.  Same code path, two adjacent improvements.
+**Remaining**: interpret-side for these probes still FAILs on cluster I's dangling-buffer issue (NUL fill or garbage).  Native is closed.
 
-Land both in a single PR.  Validation: Set E + Set G together.
+**Effort**: XS (~30 LOC across two files; done in one cycle).
+**Risk**: LOW — verified no regression on Set H, Set A baselines, or `tests/issues.rs` (681/681).
