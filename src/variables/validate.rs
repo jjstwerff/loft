@@ -272,6 +272,21 @@ fn check_i4_every_var_placed(vars: &[Variable]) -> Option<usize> {
     None
 }
 
+/// I8 — total-claim capacity bound.  Returns the first placed local whose
+/// byte range `[stack_pos, stack_pos + size)` exceeds the u16-addressable
+/// frame (`> u16::MAX`).  Slot offsets are u16, so anything past that has
+/// overflowed the claim a function can address — a sign of alignment-padding
+/// bloat or a runaway offset (@PLAN53 cluster 2).
+fn check_i8_total_claim(vars: &[Variable]) -> Option<usize> {
+    vars.iter().enumerate().find_map(|(idx, v)| {
+        if v.argument || v.stack_pos == u16::MAX {
+            return None;
+        }
+        let end = u32::from(v.stack_pos) + u32::from(size(&v.type_def, &Context::Variable));
+        (end > u32::from(u16::MAX)).then_some(idx)
+    })
+}
+
 /// I5 — kind-consistency on overlapping-slot reuse.  For any pair
 /// of variables whose slot ranges overlap spatially AND whose live
 /// intervals are disjoint (the reuse case), kinds must match; for
@@ -526,6 +541,26 @@ pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
             function.name,
             v.first_def,
             size(&v.type_def, &Context::Variable),
+        );
+    }
+
+    // ── I8: total-claim capacity bound ───────────────────────────────────
+    // Slot offsets are u16, so a slot whose byte range exceeds u16::MAX has
+    // overflowed the claim a function can address (and `frame_hwm`'s
+    // saturating_add would silently mask it).  Guards alignment-padding
+    // bloat / runaway offsets pushing a slot outside the function's total
+    // claim (@PLAN53 cluster 2).
+    if let Some(idx) = check_i8_total_claim(vars) {
+        let v = &vars[idx];
+        let end = u32::from(v.stack_pos) + u32::from(size(&v.type_def, &Context::Variable));
+        panic!(
+            "[I8] variable '{}' (idx={idx}) in function '{}' has slot \
+             [{}, {end}) exceeding the u16-addressable frame claim \
+             (limit {}); likely alignment-padding bloat or a runaway offset",
+            v.name,
+            function.name,
+            v.stack_pos,
+            u16::MAX,
         );
     }
 
@@ -940,6 +975,23 @@ mod invariant_tests {
         assert!(result.is_some());
         let (idx, _base, _top) = result.unwrap();
         assert_eq!(idx, 1);
+    }
+
+    // I8 (@PLAN53 cluster 2): a slot whose byte range exceeds the
+    // u16-addressable frame is flagged; normal slots pass.
+    #[test]
+    fn i8_slot_exceeding_u16_claim_flagged() {
+        let mut f = mk_fn();
+        // INT is 8 bytes; placing at u16::MAX - 4 gives end = u16::MAX + 4.
+        add_local(&mut f, "x", &INT, u16::MAX - 4, 5, 10);
+        assert_eq!(check_i8_total_claim(&f.variables), Some(0));
+    }
+
+    #[test]
+    fn i8_normal_slot_ok() {
+        let mut f = mk_fn();
+        add_local(&mut f, "x", &INT, 12, 5, 10);
+        assert_eq!(check_i8_total_claim(&f.variables), None);
     }
 
     #[test]
