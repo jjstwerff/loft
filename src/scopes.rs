@@ -186,14 +186,20 @@ pub fn check(data: &mut Data) {
         // `doc/claude/plans/finished/04-slot-assignment-redesign/README.md`
         // § Status.  Invariants I1–I7 in `validate.rs` check V1's
         // output at every codegen completion (debug / test builds).
+        // @PLAN53 cluster 2 / S4: in aligned mode each arg + the return-address
+        // slot occupies a STEPPED span, so the locals start at Σ step(arg) +
+        // step(4) — matching codegen's stepped args loop + return slot, which
+        // keeps the frame base (args_base) 8-aligned.  Identity when off.
         let local_start: u16 = {
             let vars = &data.definitions[d_nr as usize].variables;
+            let aligned = crate::variables::aligned_stack_enabled();
+            let step = |s: u16| crate::variables::aligned_stack_step(u32::from(s), aligned) as u16;
             let arg_size: u16 = vars
                 .arguments()
                 .iter()
-                .map(|&a| size(vars.var_type(a), &Context::Argument))
+                .map(|&a| step(size(vars.var_type(a), &Context::Argument)))
                 .sum();
-            arg_size + 4 // 4 bytes for the return-address slot
+            arg_size + step(4) // return-address slot
         };
         {
             let d = &mut data.definitions[d_nr as usize];

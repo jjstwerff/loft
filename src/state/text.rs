@@ -137,7 +137,10 @@ impl State {
         let pos = self.code::<u16>();
         let c = *self.get_stack::<char>();
         if c as u32 != 0 {
-            self.string_ref_mut(pos - 4).push(c);
+            // @PLAN53 cluster 2 / S4: the char pop occupies a stepped span
+            // (4 off, 8 aligned) — N = bytes the op's get_stack popped.
+            let off = pos - self.stack_step(4) as u16;
+            self.string_ref_mut(off).push(c);
         }
     }
 
@@ -151,6 +154,8 @@ impl State {
     pub fn append_character(&mut self) {
         let pos = self.code::<u16>();
         let c = *self.get_stack::<char>();
+        // @PLAN53 cluster 2 / S4: stepped char-pop span (4 off, 8 aligned).
+        let n = self.stack_step(4) as u16;
         // Plan-07 phase 4e.3 — when a fault tag is set on the
         // preceding `OpTagFault` (4e.1 format-scope swap) AND the
         // char is the null sentinel, render `null(<tag>)` so the
@@ -161,14 +166,14 @@ impl State {
         let tag = self.database.take_format_fault();
         if c as u32 == 0 {
             if let Some(label) = tag {
-                let s = self.string_mut(pos - 4);
+                let s = self.string_mut(pos - n);
                 s.push_str("null(");
                 s.push_str(label);
                 s.push(')');
             }
             return;
         }
-        self.string_mut(pos - 4).push(c);
+        self.string_mut(pos - n).push(c);
     }
 
     #[inline]
@@ -448,7 +453,10 @@ impl State {
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f32>();
-        let s = self.string_mut(pos - 20);
+        // @PLAN53 cluster 2 / S4: N = stepped span of the popped i64+i64+f32
+        // (20 off; 24 aligned — the f32 rounds 4->8).
+        let n = (self.stack_step(8) + self.stack_step(8) + self.stack_step(4)) as u16;
+        let s = self.string_mut(pos - n);
         ops::format_single(s, val, width, precision, dir);
     }
 
@@ -458,7 +466,9 @@ impl State {
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f32>();
-        let s = self.string_ref_mut(pos - 20);
+        // @PLAN53 cluster 2 / S4: stepped span of popped i64+i64+f32 (20/24).
+        let n = (self.stack_step(8) + self.stack_step(8) + self.stack_step(4)) as u16;
+        let s = self.string_ref_mut(pos - n);
         ops::format_single(s, val, width, precision, dir);
     }
 

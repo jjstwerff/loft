@@ -684,13 +684,17 @@ impl State {
             return 0;
         };
         let vars = &def.variables;
-        // local_start = total argument bytes + 4-byte return-address slot.
+        // local_start = total argument bytes + return-address slot.
+        // @PLAN53 cluster 2 / S4: stepped spans in aligned mode, mirroring
+        // scopes.rs's local_start (identity when off).
+        let aligned = crate::variables::aligned_stack_enabled();
+        let step = |s: u16| crate::variables::aligned_stack_step(u32::from(s), aligned) as u16;
         let local_start: u16 = vars
             .arguments()
             .iter()
-            .map(|&a| var_size(vars.tp(a), &Context::Argument))
+            .map(|&a| step(var_size(vars.tp(a), &Context::Argument)))
             .sum::<u16>()
-            .saturating_add(4);
+            .saturating_add(step(4));
         // top = absolute end of the last local variable (from frame base 0).
         let mut top: u16 = local_start;
         for v in 0..vars.count() {
