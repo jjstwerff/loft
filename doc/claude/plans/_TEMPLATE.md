@@ -33,7 +33,7 @@ Per [`README.md § Three workflows`](README.md#three-workflows-for-todo-items--p
   class" before fix design — probes/ subdirectory + per-cluster
   investigation docs + verified-vs-hypothesized accountability.
   **Primary deliverable: mechanism understanding + fix-design
-  decision.**  Canonical example: `plans/future/51-hidden-buffer-aliasing/`.
+  decision.**  Canonical example: `plans/finished/51-hidden-buffer-aliasing/`.
 
 All plan shapes capped at 2-3 active per `plans/`.
 

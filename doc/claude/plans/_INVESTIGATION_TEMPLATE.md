@@ -30,9 +30,11 @@ Investigation plans tend to have **more files** than standard plans
 shallow investigation belongs in `## Open work` on a reference doc;
 a deep investigation earns this structure.
 
-The canonical example is `plans/future/51-hidden-buffer-aliasing/`
-(2026-05-28) — 4 clusters, 39 probes, full per-cluster mechanism
-docs.  Use it as a reference for the layout below.
+The canonical example is `plans/finished/51-hidden-buffer-aliasing/`
+(closed 2026-05-29) — 5 clusters, 62 probes, full per-cluster
+mechanism docs + 3-attempt fix-iteration journal in
+[`cluster-II-latent-leak.md`](finished/51-hidden-buffer-aliasing/cluster-II-latent-leak.md).
+Use it as a reference for the layout below.
 
 ---
 
