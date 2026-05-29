@@ -4484,6 +4484,14 @@ impl Parser {
                         .insert(loft_sym.clone(), (bridge_crate.clone(), bridge_fn.clone()));
                 }
             }
+            // lib_plan-29 W2 — host_js mirror.
+            if let Some(ref host_js_rel) = m.wasm_bridge_host_js {
+                let abs = std::path::Path::new(&pkg_dir).join(host_js_rel);
+                let abs_str = abs.to_string_lossy().to_string();
+                if !self.data.wasm_bridge_host_js_files.contains(&abs_str) {
+                    self.data.wasm_bridge_host_js_files.push(abs_str);
+                }
+            }
             // P266: same ownership-driven restriction as
             // `apply_manifest_side_effects` above — only map `#native`
             // symbols whose definition lives in THIS package's source
@@ -4701,6 +4709,17 @@ impl Parser {
                 self.data
                     .wasm_bridge_routes
                     .insert(loft_sym.clone(), (bridge_crate.clone(), bridge_fn.clone()));
+            }
+        }
+        // lib_plan-29 W2 (2026-05-29) — resolve `[wasm.bridge].host_js`
+        // relative to the package root and register the absolute path.
+        // The `--html` driver concatenates each registered file into
+        // the HTML preamble.
+        if let Some(ref host_js_rel) = m.wasm_bridge_host_js {
+            let abs = std::path::Path::new(pkg_dir).join(host_js_rel);
+            let abs_str = abs.to_string_lossy().to_string();
+            if !self.data.wasm_bridge_host_js_files.contains(&abs_str) {
+                self.data.wasm_bridge_host_js_files.push(abs_str);
             }
         }
         // PKG.3: register dirs for dependency resolution.

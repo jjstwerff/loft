@@ -2796,6 +2796,34 @@ fn main() {
             }
         };
         let gl_js = include_str!("../doc/loft-gl-wasm.js");
+        // @lib_plan-29 W2: concatenate every used library's
+        // `[wasm.bridge].host_js` file into the HTML preamble.  Each
+        // file pushes a registration callback onto
+        // `globalThis.LOFT_WASM_EXTENSIONS`; the dispatch loop below
+        // applies each callback to the imports object after
+        // `buildLoftImports` returns, so library-specific JS handlers
+        // (e.g. `imaging_query`) become part of the wasm imports
+        // without the compiler/tooling crate naming them.
+        let host_js_extensions = {
+            let mut s = String::new();
+            for path in &p.data.wasm_bridge_host_js_files {
+                match std::fs::read_to_string(path) {
+                    Ok(content) => {
+                        s.push_str("\n/* === lib_plan-29 W2: host.js from ");
+                        s.push_str(path);
+                        s.push_str(" === */\n");
+                        s.push_str(&content);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "loft: --html: cannot read [wasm.bridge].host_js file '{path}': {e}"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+            s
+        };
         let html = format!(
             r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{title}</title>
@@ -2805,6 +2833,7 @@ fn main() {
 <pre id="out"></pre>
 <script>
 {gl_js}
+{host_js_extensions}
 const wasmB64="{wasm_b64}";
 const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
 const canvas=document.getElementById('c');
@@ -2815,6 +2844,11 @@ let mem;
 // the slot with {{width, height, bytes}} before loft_start runs.
 const ctrl={{ac:null,assets:{assets_js}}};
 const imports=buildLoftImports(canvas,output,()=>mem,ctrl);
+// @lib_plan-29 W2: apply each library's host.js-registered extension
+// to the imports object (mutates `imports.loft_gl` in place).
+for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
+  try{{reg(imports,ctrl,()=>mem);}}catch(e){{console.error('loft host_js extension failed',e);}}
+}}
 WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
   mem=r.instance.exports.memory;
   // @P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before

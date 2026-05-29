@@ -321,61 +321,17 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       loft_text_height(fi, sz) { return Math.ceil(sz * 1.2); },
       loft_rasterize_text_into(fi, tp, tl, sz, bp, bc) { return 0; },
       loft_save_png(pp, pl, w, h, dp, dc) { return 0; },
-      // @P321c Phase 3b — imaging library bridge.
-      // `ctrl.assets[basename]` is filled at preload (Phase 3a discovers
-      // *.png siblings of the entry .loft and embeds base64; the
-      // preamble runs `decodeAssets` after instantiate to replace each
-      // slot with `{width, height, bytes}` before loft_start()).
-      //
-      // The Rust bridge in `src/wasm_imaging.rs` calls these in two
-      // steps: imaging_query for dimensions, then imaging_copy_rgb to
-      // fill a pre-allocated vector payload directly.
-      imaging_query(pp, pl, w_out, h_out) {
-        const name = readStr(pp, pl).split(/[\\/]/).pop();
-        const a = ctrl.assets && ctrl.assets[name];
-        if (!a || !a.bytes) return 0;
-        const mem32 = new Uint32Array(getMem().buffer);
-        mem32[w_out >>> 2] = a.width;
-        mem32[h_out >>> 2] = a.height;
-        return 1;
-      },
-      imaging_copy_rgb(pp, pl, dest, dest_len) {
-        const name = readStr(pp, pl).split(/[\\/]/).pop();
-        const a = ctrl.assets && ctrl.assets[name];
-        if (!a || !a.bytes || a.bytes.length > dest_len) return 0;
-        new Uint8Array(getMem().buffer, dest, a.bytes.length).set(a.bytes);
-        return 1;
-      },
+      // @lib_plan-29 W1d — generic asset-table existence check; used
+      // by `database::io::get_file` so file().png() (and any future
+      // asset-using library) sees auto-discovered PNGs as TextFile
+      // instead of NotExists.  Library-specific imaging fns
+      // (imaging_query / imaging_copy_rgb / imaging_save) live in
+      // their package's own host.js — see lib/imaging/wasm/host.js,
+      // concatenated into the HTML preamble by `--html` via the
+      // `[wasm.bridge].host_js` manifest key.
       host_asset_exists(pp, pl) {
         const name = readStr(pp, pl).split(/[\\/]/).pop();
         return (ctrl.assets && ctrl.assets[name]) ? 1 : 0;
-      },
-      imaging_save(pp, pl, w, h, dp, dl) {
-        try {
-          const name = readStr(pp, pl).split(/[\\/]/).pop() || 'image.png';
-          const rgb = new Uint8Array(getMem().buffer, dp, dl);
-          const rgba = new Uint8ClampedArray(w * h * 4);
-          for (let i = 0, j = 0; j < rgb.length; i += 4, j += 3) {
-            rgba[i] = rgb[j];
-            rgba[i + 1] = rgb[j + 1];
-            rgba[i + 2] = rgb[j + 2];
-            rgba[i + 3] = 255;
-          }
-          const canvas = new OffscreenCanvas(w, h);
-          const ctx2 = canvas.getContext('2d');
-          ctx2.putImageData(new ImageData(rgba, w, h), 0, 0);
-          canvas.convertToBlob({ type: 'image/png' }).then(blob => {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = name;
-            a.click();
-            URL.revokeObjectURL(url);
-          });
-          return 1;
-        } catch (e) {
-          return 0;
-        }
       },
       loft_gl_upload_alpha_texture(dp, w, h) { return 0; },
       loft_gl_text_texture(fi, tp, tl, sz, wp, hp) { return 0; },

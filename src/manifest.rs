@@ -40,6 +40,13 @@ pub struct Manifest {
     /// `[wasm.bridge.routes]`.  Read by `src/generation/mod.rs::output_
     /// native_direct_call` (replaces the hard-coded `WASM_BRIDGE_FNS`).
     pub wasm_bridge_routes: Vec<(String, String)>,
+    /// lib_plan-29 W2: per-library JS host-imports file from
+    /// `[wasm.bridge] host_js = "..."` (path relative to the package
+    /// root).  The `--html` driver reads the file and concatenates it
+    /// into the HTML preamble; the bundled JS is expected to push a
+    /// registration callback onto `globalThis.LOFT_WASM_EXTENSIONS`
+    /// (see `lib/imaging/wasm/host.js` for the canonical shape).
+    pub wasm_bridge_host_js: Option<String>,
 }
 
 /// Read and parse a `loft.toml` file at `path`.
@@ -81,6 +88,9 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
                         .push((key.to_string(), value.to_string()));
                 }
                 ("wasm.bridge", "crate") => manifest.wasm_bridge_crate = Some(value.to_string()),
+                ("wasm.bridge", "host_js") => {
+                    manifest.wasm_bridge_host_js = Some(value.to_string());
+                }
                 ("wasm.bridge.routes", _) => {
                     manifest
                         .wasm_bridge_routes
@@ -268,6 +278,7 @@ version = "0.1.0"
 
 [wasm.bridge]
 crate = "demo-wasm"
+host_js = "wasm/host.js"
 
 [wasm.bridge.routes]
 n_demo_fn_a = "demo_fn_a"
@@ -276,6 +287,7 @@ n_demo_fn_b = "demo_fn_b"
         );
         let m = read_manifest(p.to_str().unwrap()).unwrap();
         assert_eq!(m.wasm_bridge_crate.as_deref(), Some("demo-wasm"));
+        assert_eq!(m.wasm_bridge_host_js.as_deref(), Some("wasm/host.js"));
         assert_eq!(m.wasm_bridge_routes.len(), 2);
         assert_eq!(
             m.wasm_bridge_routes[0],
