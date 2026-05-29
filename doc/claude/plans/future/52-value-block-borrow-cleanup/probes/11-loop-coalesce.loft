@@ -1,0 +1,39 @@
+// Probe 11 — Cluster I stress: `??` in a loop body, accumulation
+//
+// Tests whether the cluster I dangling-Str fires once or every iteration,
+// and whether iteration-to-iteration store recycling exposes additional
+// failure modes (similar to @PLAN51's Cluster II "latent leak across
+// iterations" finding).
+//
+// The shape:
+//     for i in 0..N { x = vec[i] ?? "x"; assert(...); }
+//
+// On each iteration:
+//   - `_ncc_N` is allocated (per-iter, in the loop-body scope).
+//   - The if-result borrows into `_ncc_N`.
+//   - `x = ...` consumes the if-result.
+//   - Scope exit frees `_ncc_N`.
+//
+// Failure shapes to look for:
+//   (a) Iteration 0 PASS, later iterations FAIL — slot-recycling exposure.
+//   (b) All iterations FAIL — fast-path of cluster I.
+//   (c) Iteration 0 FAIL — same as 02, no iteration-specific compounding.
+//
+// Expected (rustc 1.96 / macOS): FAIL on --interpret with shape (b) or (c).
+// Status: cluster I stress probe; informs whether the fix needs
+// loop-body-aware logic or a single-shot fix suffices.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "a0";
+  h.items += "a1";
+  h.items += "a2";
+  for i in 0..3 {
+    x = h.items[i] ?? "fallback";
+    expected = "a{i}";
+    assert(x == expected, "probe 11 iter {i}: got '{x}', want '{expected}'");
+  }
+  println("probe 11 PASSED");
+}

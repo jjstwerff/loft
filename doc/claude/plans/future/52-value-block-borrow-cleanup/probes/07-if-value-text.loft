@@ -1,0 +1,31 @@
+// Probe 07 — Cluster II canonical: `if` as value-expression returning
+//             text borrowing into a block-local
+//
+// The shape:
+//     a = if cond { vec[i] } else { "x" };
+//
+// Where `vec[i]` requires a temp materialisation (or the if itself binds a
+// temp for the branch result).  If scopes::free_vars emits the same
+// post-consumer free pattern as for `??`, this fails identically to
+// cluster I.
+//
+// If 07 fails the same way as 02, cluster II is the same root cause
+// expressed through `if` instead of `??`.  If it passes, cluster II
+// either doesn't exist OR has a different mechanism (the if-as-value
+// lowering may already materialise its branch values into a fresh
+// allocation).
+//
+// Expected (rustc 1.96 / macOS): hypothesised FAIL on --interpret.
+// Pairing: diff against 02.
+// Status: cluster II canonical probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  cond = true;
+  a = if cond { h.items[0] } else { "fallback" };
+  assert(a == "present", "probe 07: got '{a}', want 'present'");
+  println("probe 07 PASSED");
+}

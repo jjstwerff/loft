@@ -1661,6 +1661,7 @@ impl Stores {
     /// `false` so consumers branch into their non-mmap fallback (today,
     /// JSON via `text as Struct`).  Avoids `cfg`-gating every caller.
     #[cfg(not(feature = "mmap"))]
+    #[allow(clippy::unused_self)]
     pub fn bind_path(&mut self, _slot: u16, _path: &std::path::Path) -> bool {
         false
     }

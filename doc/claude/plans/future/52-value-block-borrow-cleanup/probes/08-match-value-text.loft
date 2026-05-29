@@ -1,0 +1,33 @@
+// Probe 08 — Cluster II variant: `match` arm returning text from a
+//             block-local
+//
+// The shape:
+//     a = match k { 1 => vec[i], _ => "x" };
+//
+// match-as-value lowers similarly to if-as-value but goes through a
+// different parser path (parse_match / match_subject machinery in
+// src/parser/control.rs).  Some match paths materialise a synthetic
+// `match_subj` temp; if that temp is the source of the returned text,
+// the same dangling-Str escape applies on scope exit.
+//
+// If 08 fails the same as 07, both `if` and `match` are subsumed by a
+// single cluster II fix.  If 08 passes while 07 fails, match-as-value
+// has a separate escape route worth understanding.
+//
+// Expected (rustc 1.96 / macOS): hypothesised FAIL on --interpret.
+// Pairing: diff against 07.
+// Status: cluster II variant probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  k = 1;
+  a = match k {
+    1 => h.items[0],
+    _ => "fallback"
+  };
+  assert(a == "present", "probe 08: got '{a}', want 'present'");
+  println("probe 08 PASSED");
+}

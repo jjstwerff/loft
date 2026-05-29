@@ -1,0 +1,31 @@
+// Probe 88 — Cluster IV-Spacial parser-hang isolation: integer key
+//
+// Probe 51 hangs the parser on `spacial<Point[name]>` (text key).
+// Probe 62 confirms the hang fires even WITHOUT `??`.  Does the same
+// type with an INTEGER key also hang?
+//
+// If 88 PARSER-HANGS: the bug is in `spacial<>` type resolution
+// generally, NOT key-type-specific.  Localises to whatever loop
+// `spacial<>` triggers during type registration.
+//
+// If 88 PARSES: the bug is in `spacial<>` with text/struct keys
+// specifically — possibly because text keys require recursive type
+// resolution (`text` → its underlying record type → loop).
+//
+// Diagnostic invocation:
+//   LOFT_TIMEOUT=8 LOFT_TIMEOUT_CLEAN_EXIT=1 ./target/release/loft \
+//     --interpret 88-spacial-int-key.loft
+//
+// Pairing: 51 (text key, hangs), 62 (text key without ??, also hangs).
+// Status: cluster IV-Spacial isolation probe.
+
+struct Point { id: integer not null, x: float not null, y: float not null }
+struct W { points: spacial<Point[id]> }
+
+fn main() {
+  w = W { points: [] };
+  w.points[42] = Point { id: 42, x: 0.0, y: 0.0 };
+  e = w.points[42];
+  assert(e.x == 0.0, "probe 88: e.x = {e.x}, want 0.0");
+  println("probe 88 PASSED");
+}

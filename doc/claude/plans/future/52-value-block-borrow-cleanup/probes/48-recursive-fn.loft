@@ -1,0 +1,29 @@
+// Probe 48 — Cluster I shape border: recursive fn with `??`
+//
+// A recursive function that uses `??` at each level.  Tests whether
+// recursion + scope-exit interact with the dangling-Str pattern in any
+// surprising way (e.g., the parent frame's `_ncc_N` slot getting
+// recycled by the recursive call's own scope).
+//
+// Pairing: diff against 02 (single-frame `??`).
+// Status: cluster I shape-border probe; tests recursion/scope interaction.
+
+struct H { items: vector<text> }
+
+fn pick(h: H, idx: integer, depth: integer) -> text {
+  if depth <= 0 { return "deep-default"; }
+  candidate = h.items[idx] ?? pick(h, idx + 1, depth - 1);
+  return candidate;
+}
+
+fn main() {
+  h = H { items: [] };
+  h.items += "a0";
+  h.items += "a1";
+  h.items += "a2";
+  a = pick(h, 0, 3);
+  assert(a == "a0", "probe 48a: got '{a}', want 'a0'");
+  b = pick(h, 99, 3);
+  assert(b == "deep-default", "probe 48b: got '{b}', want 'deep-default'");
+  println("probe 48 PASSED");
+}

@@ -1,0 +1,25 @@
+// Probe 51 — Cluster IV completion: Spacial collection value-block
+//
+// `spacial<X[k]>` is the 4th keyed-collection type.  Tests whether
+// `spacial` joins IV-Hash/Sorted/Index or escapes via some specialised
+// path.
+//
+// Pairing: 22, 41, 50 — completes the keyed-collection IV matrix.
+// Status: cluster IV completion probe (4th of 4 keyed-collection types).
+
+struct Point { name: text, x: float not null, y: float not null }
+struct W { points: spacial<Point[name]> }
+
+fn fb() -> spacial<Point[name]> {
+  s: spacial<Point[name]> = [];
+  return s;
+}
+
+fn main() {
+  w = W { points: [] };
+  w.points["origin"] = Point { name: "origin", x: 0.0, y: 0.0 };
+  a = w.points ?? fb();
+  e = a["origin"];
+  assert(e.x == 0.0, "probe 51: e.x = {e.x}, want 0.0");
+  println("probe 51 PASSED");
+}

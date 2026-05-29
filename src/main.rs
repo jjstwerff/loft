@@ -78,6 +78,8 @@ mod variables;
 mod vector;
 #[cfg(feature = "wasm")]
 mod wasm;
+#[cfg(feature = "wasm")]
+mod wasm_gl;
 
 use crate::diagnostics::Level;
 use crate::native_utils::{

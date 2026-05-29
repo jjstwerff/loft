@@ -1,0 +1,32 @@
+// Probe 12 — Reference baseline: P383 canonical under `--native test`
+//
+// Identical body to probe 02.  Runs under `--native` to confirm that the
+// native backend escapes the dangling-Str shape via the @P321e/@P323 fix
+// at src/generation/emit.rs:1283-1297 (the `_ret.to_string()`
+// materialisation inside the value-block).
+//
+// Verified empirically 2026-05-29: `target/release/loft --native test
+// probe_02_or_12` returns "ok / 1 passed" while `--interpret --tests`
+// returns FAIL — same source file, same toolchain, different backend.
+//
+// This pair (02 vs 12) is the load-bearing diagnostic: the bug is in the
+// interpreter's scope-exit free ordering, NOT in the parser lowering or
+// rustc codegen of the loft binary itself.  Any fix on the interpreter
+// side must achieve the same materialisation semantics as native already
+// does.
+//
+// Expected:
+//   --interpret: FAIL (same as probe 02)
+//   --native:    PASS (the native baseline)
+// Pairing: 02 + 12 are the canonical interpret-vs-native diff.
+// Status: native baseline; identical to probe 02 by design.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  a = h.items[0] ?? "fallback";
+  assert(a == "present", "probe 12: got '{a}', want 'present'");
+  println("probe 12 PASSED");
+}

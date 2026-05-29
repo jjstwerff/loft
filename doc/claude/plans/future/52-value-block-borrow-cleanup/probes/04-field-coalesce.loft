@@ -1,0 +1,23 @@
+// Probe 04 — Cluster I variant: field-access text `??` "fallback"
+//
+// Tests whether the cluster I shape is LHS-shape-independent.  The LHS
+// here is `obj.name` (a field read on a struct), still non-trivial in
+// the parser's view, so the `_ncc_N` block is constructed.
+//
+// If 04 fails identically to 02, the cluster is "any non-trivial LHS,"
+// confirming the diagnosis at PROBLEMS.md @P383 isn't vector-specific.
+// If 04 passes while 02 fails, there's a vector-index-specific code path
+// to investigate separately.
+//
+// Expected (rustc 1.96 / macOS): FAIL on --interpret, PASS on --native.
+// Pairing: diff against probe 02 to confirm shape independence.
+// Status: cluster I variant probe.
+
+struct Holder { name: text }
+
+fn main() {
+  obj = Holder { name: "present" };
+  a = obj.name ?? "fallback";
+  assert(a == "present", "probe 04: got '{a}', want 'present'");
+  println("probe 04 PASSED");
+}

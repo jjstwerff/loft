@@ -1,0 +1,27 @@
+// Probe 52 — Primitive-type baseline: `char` and `single` coalesce
+//
+// Like `bool` (probe 35), `char` (4-byte u32) and `single` (4-byte f32)
+// are value-typed.  No heap allocation, no pointer.  Should PASS.
+//
+// Confirms the heap-vs-primitive boundary further — the fix should
+// type-gate on heap-typed result, not on `??` itself.
+//
+// Pairing: 35 (bool baseline).
+// Status: primitive-type baseline probe.
+
+struct C { items: vector<character> }
+struct S { items: vector<single> }
+
+fn main() {
+  c = C { items: [] };
+  c.items += 'X';
+  v_c = c.items[0] ?? 'F';
+  assert(v_c == 'X', "probe 52a: got '{v_c}', want 'X'");
+
+  s = S { items: [] };
+  s.items += 1.5;
+  v_s = s.items[0] ?? 0.0;
+  assert(v_s == 1.5, "probe 52b: got {v_s}, want 1.5");
+
+  println("probe 52 PASSED");
+}

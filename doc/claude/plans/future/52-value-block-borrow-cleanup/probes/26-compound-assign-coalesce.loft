@@ -1,0 +1,35 @@
+// Probe 26 — Cluster I consumer border: compound assignment `s += vec[i] ?? "x"`
+//
+// Compound assignment `+=` on text lowers via `OpAppendText` (the same
+// op that consumes from the eval stack in cluster I's failing pattern).
+// But the *initial* `s` variable is a function-scope text local, not the
+// block-local `__ncc_N`.  The question: when the consumer is "append to
+// `s`," does the cluster I dangling-Str fire?
+//
+// Two possible outcomes:
+//   (a) FAIL like 02 — OpAppendText reads the dangling Str from the
+//       stack regardless of which target buffer it appends INTO; the
+//       cluster I fix must cover this consumer too.
+//   (b) PASS — `+=` lowers through a different value-block path
+//       (perhaps the `OpAppendText` op already does an implicit
+//       materialisation, similar to format strings's `OpFormatText`
+//       behaviour pre-cluster-III).
+//
+// If (a), the fix surface is "any consumer of a text value-block."
+// If (b), there's a path-specific escape that informs cluster I's fix
+// shape (could materialise via the consumer-side rather than scope-side).
+//
+// Pairing: diff against 02 (assignment-from-scratch) and 20 (direct print
+// argument).
+// Status: cluster I consumer-border probe; informs fix-shape choice.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "world";
+  s = "hello ";
+  s += h.items[0] ?? "fallback";
+  assert(s == "hello world", "probe 26: got '{s}', want 'hello world'");
+  println("probe 26 PASSED");
+}

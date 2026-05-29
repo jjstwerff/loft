@@ -1,0 +1,26 @@
+// Probe 67 — Cluster VI variant: closure with `??` passed AS argument
+//
+// Higher-order function takes a closure that internally uses `??`.  The
+// caller doesn't see the `??`; it dispatches to the closure through the
+// generic fn-call ABI.
+//
+// Pairing: 45 (closure called directly), 65 (closure with simple-Var LHS).
+// Status: cluster VI variant probe.
+
+fn apply(f: fn(integer) -> text, n: integer) -> text {
+  return f(n);
+}
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "alpha";
+  h.items += "beta";
+  pick = fn(idx: integer) -> text { h.items[idx] ?? "fallback" };
+  a = apply(pick, 0);
+  assert(a == "alpha", "probe 67a: got '{a}', want 'alpha'");
+  b = apply(pick, 1);
+  assert(b == "beta", "probe 67b: got '{b}', want 'beta'");
+  println("probe 67 PASSED");
+}

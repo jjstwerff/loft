@@ -1,0 +1,24 @@
+// Probe 18 — Cluster III border: format-string interpolation WITHOUT `??`
+//
+// Tests whether the cluster III garbage-bytes failure (probe 09) requires
+// the `??` operator, or whether plain format-string interpolation of a
+// non-trivial text expression has its OWN dangling-Str bug.
+//
+// If 18 FAILS like 09, the bug is in the format-string buffer machinery,
+// independent of `??` — cluster III is its own root cause.
+// If 18 PASSES while 09 FAILS, the `??` lowering is the load-bearing
+// difference — cluster III is cluster I expressed through a format-
+// string consumer.
+//
+// Pairing: diff against 09 (same format-string consumer, plus `??`).
+// Status: cluster III border probe; isolates `??` from format buffer.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  msg = "got: {h.items[0]}";
+  assert(msg == "got: present", "probe 18: got '{msg}', want 'got: present'");
+  println("probe 18 PASSED");
+}

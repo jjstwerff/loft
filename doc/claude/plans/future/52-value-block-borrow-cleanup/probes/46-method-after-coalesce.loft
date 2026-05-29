@@ -1,0 +1,22 @@
+// Probe 46 — Cluster I shape border: method chain AFTER `??`
+//    `(vec[i] ?? "x").to_uppercase()` — method call on the `??` result
+//
+// The ncc-block result feeds INTO a method call.  Method dispatch reads
+// `self` from the stack (the dangling Str), then runs the method body.
+// Two possible outcomes:
+//   (a) FAIL — method body reads the dangling bytes (returns junk).
+//   (b) PASS — the method's @P205 scratch path materialises the bytes
+//       before dispatch.
+//
+// Pairing: diff against 14 (method-call AS LHS to `??`).
+// Status: cluster I shape-border probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  a = (h.items[0] ?? "fallback").to_uppercase();
+  assert(a == "PRESENT", "probe 46: got '{a}', want 'PRESENT'");
+  println("probe 46 PASSED");
+}

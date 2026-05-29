@@ -1,0 +1,22 @@
+// Probe 80 — Cluster VI nested-closure variant
+//
+// Closure inside a closure, with `??` deep in the inner.  Tests whether
+// closure nesting compounds the cluster VI bug or produces a new shape.
+//
+// Pairing: 45 (single closure), 65 (closure capturing var), 67 (closure
+// as arg).
+// Status: cluster VI nested-closure variant probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  outer = fn() -> text {
+    inner = fn() -> text { h.items[0] ?? "fallback" };
+    return inner();
+  };
+  a = outer();
+  assert(a == "present", "probe 80: got '{a}', want 'present'");
+  println("probe 80 PASSED");
+}

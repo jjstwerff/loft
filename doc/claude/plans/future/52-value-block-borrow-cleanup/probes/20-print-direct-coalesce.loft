@@ -1,0 +1,31 @@
+// Probe 20 — Cluster I/III separator: `print(vec[i] ?? "x")` direct
+//
+// Removes the format-string buffer entirely.  The consumer is `print`
+// directly; the `??` value-block's result is passed as a function
+// argument to print().
+//
+// If 20 FAILS with the cluster I NUL pattern (`'       '` if we could
+// see it printed), the failure is intrinsic to cluster I — the call-
+// argument consumer reads from the dangling Str just like AppendText
+// would.
+// If 20 PASSES while 09 FAILS, the format buffer's OpFormatText is the
+// cluster III specific differentiator.
+//
+// Pairing: diff against 09 (format-string consumer) AND 02 (assignment
+// consumer).
+// Status: cluster I/III separator probe; isolates consumer type.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  // Print the value; success means we observe the right output, NOT
+  // assert.  Use a captured-and-asserted approach by also assigning.
+  v = h.items[0] ?? "fallback";
+  print("direct: ");
+  print(v);
+  print("\n");
+  assert(v == "present", "probe 20: got '{v}', want 'present'");
+  println("probe 20 PASSED");
+}

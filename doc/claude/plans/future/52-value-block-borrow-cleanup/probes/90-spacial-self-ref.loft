@@ -1,0 +1,36 @@
+// Probe 90 — Cluster IV-Spacial parser-hang isolation: self-referential
+//             struct field
+//
+// If `Point` itself contains a `spacial<Point[...]>` field — a self-
+// referential type — the parser may loop trying to recursively resolve
+// `Point`'s layout (Point references spacial<Point>, which references
+// Point, which references spacial<Point>, ...).
+//
+// If 90 PARSER-HANGS even at the type-declaration level: self-reference
+// in keyed-collection types isn't terminated by a depth-cap.  Likely
+// the same root cause as probe 51/62 — `Point[name]` makes the parser
+// resolve `Point.name` (text), then `Point`'s OTHER fields (one of which
+// might transitively reference Point again through some lookup).
+//
+// If 90 PARSES: self-reference isn't required for the hang; the
+// minimal hang shape is probe 51/62 itself.
+//
+// Diagnostic invocation:
+//   LOFT_TIMEOUT=8 LOFT_TIMEOUT_CLEAN_EXIT=1 ./target/release/loft \
+//     --interpret 90-spacial-self-ref.loft
+//
+// Pairing: 51, 62, 88, 89.
+// Status: cluster IV-Spacial isolation probe.
+
+struct Node {
+  name: text,
+  x: float not null,
+  y: float not null,
+  // children: spacial<Node[name]>,   // ← uncomment if probe 89 hangs
+                                       //   to test self-reference dimension
+}
+
+fn main() {
+  n = Node { name: "root", x: 0.0, y: 0.0 };
+  println("probe 90 PASSED (Node declared without spacial self-ref)");
+}

@@ -1,0 +1,34 @@
+// Probe 22 — Cluster IV completion: `??` returning a Hash collection value
+//
+// loft hash collections are struct-keyed (`hash<Entry[name]>`).  The
+// dangling-handle pattern: a hash field inside a vector element gets a
+// fresh handle on read; the cluster IV question is whether the read-
+// then-free pattern fires when `??` is the consumer.
+//
+// The shape:
+//     a = wrapper.maps_field ?? other_hash_collection;
+//
+// Field access on a struct → returns the hash field's collection-handle
+// → `??` lowering tests whether @PLAN51's coverage extends to Hash, or
+// whether Hash value-blocks have a separate cluster.
+//
+// Pairing: diff against 10 (Reference) and 21 (Vector).
+// Status: cluster IV completion probe.
+
+struct Entry { name: text, value: integer not null }
+struct W1 { tag: integer not null, items: hash<Entry[name]> }
+
+fn fallback_hash() -> hash<Entry[name]> {
+  h: hash<Entry[name]> = [];
+  return h;
+}
+
+fn main() {
+  w1 = W1 { tag: 1, items: [] };
+  w1.items["k"] = Entry { name: "k", value: 42 };
+  a = w1.items ?? fallback_hash();
+  // The hash should contain "k" → 42 via Entry.
+  e = a["k"];
+  assert(e.value == 42, "probe 22: e.value = {e.value}, want 42");
+  println("probe 22 PASSED");
+}

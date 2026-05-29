@@ -43,6 +43,7 @@ pub fn host_call_raw(method: &str, args: &js_sys::Array) -> wasm_bindgen::JsValu
 // ── W1.7 / FS-A  File I/O host bridge ────────────────────────────────────────
 
 /// Check whether a path exists in the virtual filesystem.
+#[allow(dead_code)]
 pub fn host_fs_exists(path: &str) -> bool {
     #[cfg(feature = "wasm")]
     {
@@ -260,6 +261,7 @@ pub fn host_fs_file_size(path: &str) -> i64 {
 pub fn host_fs_seek(path: &str, pos: i64) {
     #[cfg(feature = "wasm")]
     {
+        #[allow(clippy::cast_precision_loss)]
         let args = js_sys::Array::of2(&path.into(), &(pos as f64).into());
         host_call("fs_seek", &args);
     }
@@ -274,6 +276,7 @@ pub fn host_fs_read_bytes(path: &str, n: usize) -> Option<Vec<u8>> {
     #[cfg(feature = "wasm")]
     {
         use wasm_bindgen::JsCast;
+        #[allow(clippy::cast_precision_loss)]
         let args = js_sys::Array::of2(&path.into(), &(n as f64).into());
         let v = host_call("fs_read_bytes", &args);
         if v.is_null() || v.is_undefined() {
@@ -309,6 +312,7 @@ pub fn host_fs_write_bytes(path: &str, bytes: &[u8]) -> i32 {
 }
 
 /// Return the current JS-side cursor position for `path`.
+#[allow(dead_code)]
 pub fn host_fs_get_cursor(path: &str) -> i64 {
     #[cfg(feature = "wasm")]
     {
@@ -327,6 +331,7 @@ pub fn host_fs_get_cursor(path: &str) -> i64 {
 // ── W1.6  Time and environment host bridges ──────────────────────────────────
 
 /// Return the current time as milliseconds since the Unix epoch.
+#[allow(dead_code)]
 pub fn host_time_now() -> i64 {
     #[cfg(feature = "wasm")]
     {
@@ -341,6 +346,7 @@ pub fn host_time_now() -> i64 {
 }
 
 /// Return the current time as milliseconds since the Unix epoch (monotonic approximation).
+#[allow(dead_code)]
 pub fn host_time_ticks() -> i64 {
     #[cfg(feature = "wasm")]
     {
@@ -369,6 +375,7 @@ pub fn host_env_variable(name: &str) -> String {
 }
 
 /// Return the command-line arguments (always empty under WASM).
+#[allow(dead_code)]
 pub fn host_arguments() -> Vec<String> {
     #[cfg(feature = "wasm")]
     {
@@ -423,6 +430,7 @@ pub fn host_fs_program_dir() -> String {
 // ── W1.5  Random host bridge ─────────────────────────────────────────────────
 
 /// Return a random integer in `[lo, hi]` inclusive.
+#[allow(dead_code)]
 pub fn host_random_int(lo: i32, hi: i32) -> i32 {
     #[cfg(feature = "wasm")]
     {
@@ -438,6 +446,7 @@ pub fn host_random_int(lo: i32, hi: i32) -> i32 {
 }
 
 /// Reseed the host-side RNG.
+#[allow(dead_code)]
 pub fn host_random_seed(seed: i64) {
     #[cfg(feature = "wasm")]
     {
@@ -483,6 +492,7 @@ pub fn host_log_write(line: &str) {
 // without a separately-loaded cdylib (impossible in the browser).
 
 /// Open a WebSocket to `url`.  Returns the host's slot id (-1 on bad URL).
+#[allow(dead_code)]
 pub fn host_ws_connect(url: &str) -> i32 {
     #[cfg(feature = "wasm")]
     {
@@ -501,6 +511,7 @@ pub fn host_ws_connect(url: &str) -> i32 {
 /// Send `msg` on slot `id`.  `binary=true` ships an opcode-2 frame;
 /// `binary=false` ships opcode-1 (text).  Returns 1 on success, 0 if
 /// the slot is in backoff / disconnected.
+#[allow(dead_code)]
 pub fn host_ws_send(id: i32, msg: &str, binary: bool) -> i32 {
     #[cfg(feature = "wasm")]
     {
@@ -517,6 +528,7 @@ pub fn host_ws_send(id: i32, msg: &str, binary: bool) -> i32 {
 /// Poll slot `id` for an inbound frame.  Returns 1 if a message landed
 /// (then call `host_ws_last_message` + `host_ws_last_opcode`), 0 if
 /// the queue is empty.
+#[allow(dead_code)]
 pub fn host_ws_recv(id: i32) -> i32 {
     #[cfg(feature = "wasm")]
     {
@@ -532,6 +544,7 @@ pub fn host_ws_recv(id: i32) -> i32 {
 
 /// Read the message bytes the most recent successful `host_ws_recv`
 /// surfaced.  Empty string when no recent message.
+#[allow(dead_code)]
 pub fn host_ws_last_message() -> String {
     #[cfg(feature = "wasm")]
     {
@@ -548,6 +561,7 @@ pub fn host_ws_last_message() -> String {
 
 /// Read the opcode of the most recent successful `host_ws_recv`.
 /// 1 = text, 2 = binary, 8 = close, 9 = ping, 10 = pong.
+#[allow(dead_code)]
 pub fn host_ws_last_opcode() -> i32 {
     #[cfg(feature = "wasm")]
     {
@@ -563,6 +577,7 @@ pub fn host_ws_last_opcode() -> i32 {
 }
 
 /// Close slot `id` permanently.
+#[allow(dead_code)]
 pub fn host_ws_close(id: i32) {
     #[cfg(feature = "wasm")]
     {
@@ -751,7 +766,7 @@ struct GameSession {
 }
 
 thread_local! {
-    static GAME_SESSION: RefCell<Option<GameSession>> = RefCell::new(None);
+    static GAME_SESSION: RefCell<Option<GameSession>> = const { RefCell::new(None) };
 }
 
 /// Start a game session: parse, compile, execute until the first frame yield.
@@ -841,7 +856,7 @@ pub fn compile_and_start(files_json: &str) -> String {
             let yielded = session.state.database.frame_yield;
             GAME_SESSION.with(|gs| *gs.borrow_mut() = Some(session));
             if yielded {
-                format!("{{\"ok\":true,\"running\":true}}")
+                "{\"ok\":true,\"running\":true}".to_string()
             } else {
                 let out = output_take();
                 GAME_SESSION.with(|gs| *gs.borrow_mut() = None);
@@ -856,7 +871,7 @@ pub fn compile_and_start(files_json: &str) -> String {
         }
         Err(_panic) => {
             GAME_SESSION.with(|gs| *gs.borrow_mut() = None);
-            format!("{{\"ok\":false,\"error\":\"internal panic\"}}")
+            "{\"ok\":false,\"error\":\"internal panic\"}".to_string()
         }
     }
 }
@@ -871,11 +886,11 @@ pub fn resume_frame() -> String {
         GAME_SESSION.with(|gs| {
             let mut slot = gs.borrow_mut();
             let Some(session) = slot.as_mut() else {
-                return format!("{{\"running\":false}}");
+                return "{\"running\":false}".to_string();
             };
             let still_running = session.state.resume();
             if still_running {
-                format!("{{\"running\":true}}")
+                "{\"running\":true}".to_string()
             } else {
                 let out = output_take();
                 *slot = None;
@@ -892,7 +907,7 @@ pub fn resume_frame() -> String {
                 let args = js_sys::Array::new();
                 host_call_raw("gl_destroy_window", &args);
             }
-            format!("{{\"running\":false,\"error\":\"internal panic\"}}")
+            "{\"running\":false,\"error\":\"internal panic\"}".to_string()
         }
     }
 }
@@ -938,7 +953,7 @@ fn parse_files_json(json: &str) -> Result<Vec<(String, String)>, String> {
 /// Extract a `"key": "value"` pair from a JSON object string starting at `*pos`.
 /// Advances `*pos` to just past the closing `"` of the value.
 fn extract_json_field(json: &str, pos: &mut usize, key: &str) -> Result<String, String> {
-    let key_pat = format!("\"{}\"", key);
+    let key_pat = format!("\"{key}\"");
     if let Some(k) = json[*pos..].find(&key_pat) {
         let after_key = *pos + k + key_pat.len();
         if let Some(colon) = json[after_key..].find(':') {

@@ -145,16 +145,26 @@ debug:
 	sudo ln -f -s ${PWD}/target/debug/loft /usr/local/bin/loft
 
 # Rebuild every derived artefact the test suite depends on.  Covers
-# three classes of stale artefact that each cascade into misleading
-# test failures:
+# four classes of stale artefact that each cascade into misleading
+# test failures (rustc 1.94→1.96 update on 2026-05-29 surfaced #2):
+#   0. The top-level release rlib `target/release/libloft.rlib` —
+#      linked by the native code-gen pipeline (P200/P244 tests).
+#      Cargo's fingerprint detects rustc version bumps, so this is
+#      a no-op when fresh and a forced rebuild after a toolchain
+#      update.
 #   1. Sibling cdylibs under lib/*/native/  (loaded via
 #      extensions::load_all, linked via --native)
 #   2. Test fixture cdylibs under tests/lib/*/native/
 #   3. The wasm32-unknown-unknown rlib the html_wasm suite links
-#      (only when the target already exists, so `make test` doesn't
-#      impose the wasm target on developers who never touch --html)
+#      AND the wasm32-wasip2 rlib the wasm_library_suite uses
+#      (only when the target dir already exists, so `make test`
+#      doesn't impose the wasm targets on developers who never
+#      touch --html / wasip2)
 # Cargo is incremental; each step is ~free on a clean tree.
 rebuild-native-cdylibs:
+	@cargo build --release --lib -q || { \
+	  echo "FAIL: top-level libloft.rlib rebuild"; exit 1; \
+	}
 	@for d in lib/*/native tests/lib/*/native; do \
 	  [ -f "$$d/Cargo.toml" ] || continue; \
 	  (cd "$$d" && cargo build --release -q) || { \
@@ -164,7 +174,13 @@ rebuild-native-cdylibs:
 	@if [ -d target/wasm32-unknown-unknown ]; then \
 	  cargo build --release --target wasm32-unknown-unknown \
 	    --lib --no-default-features --features random -q || { \
-	    echo "FAIL: wasm rlib rebuild"; exit 1; \
+	    echo "FAIL: wasm32-unknown-unknown rlib rebuild"; exit 1; \
+	  }; \
+	fi
+	@if [ -d target/wasm32-wasip2 ]; then \
+	  cargo build --release --target wasm32-wasip2 \
+	    --lib --no-default-features --features random -q || { \
+	    echo "FAIL: wasm32-wasip2 rlib rebuild"; exit 1; \
 	  }; \
 	fi
 
@@ -1037,6 +1053,13 @@ ci: rebuild-native-cdylibs
 	#   2. Clippy     job → cargo clippy -- -D warnings    (no --release,
 	#                       no --tests, no --no-default-features — that
 	#                       matches the remote runner exactly)
+	#                  +  → cargo clippy --all-targets --all-features
+	#                       -- -D warnings (added 2026-05-29 to catch
+	#                       wasm-feature-only defects that the default
+	#                       gate misses: the bin/lib module-cfg mismatch
+	#                       on wasm_gl, latent silent-no-op in
+	#                       parallel.rs, pedantic-lint regressions in
+	#                       src/wasm.rs after rustc updates)
 	#   3. Doc hygiene job → scripts/check_doc_drift.sh (blocking since
 	#                       2026-05-18 — promoted from non-blocking after
 	#                       repeated PR-212 cycles where ignored drift
@@ -1054,6 +1077,7 @@ ci: rebuild-native-cdylibs
 	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
 	cargo fmt -- --check > result.txt 2>&1 && \
 	cargo clippy -- -D warnings >> result.txt 2>&1 && \
+	cargo clippy --all-targets --all-features -- -D warnings >> result.txt 2>&1 && \
 	scripts/check_doc_drift.sh >> result.txt 2>&1 && \
 	cargo build --all-targets >> result.txt 2>&1 && \
 	cargo build --no-default-features >> result.txt 2>&1 && \

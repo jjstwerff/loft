@@ -1,0 +1,29 @@
+// Probe 29 — Cluster I sub-mode: `print(vec[i] ?? "x")` with PRESENT value
+//
+// Probe 20 already showed FAIL for `print(...)` — but the printed value
+// in that case was the present value (h.items[0] = "present"), and the
+// assertion was on a separate variable.  This probe explicitly captures
+// the bytes printed by `print` (via an additional assignment that
+// re-reads from the same `??` call).
+//
+// Together with probe 20 we confirm: the `??` -> print direct path
+// produces NUL fill (the libmalloc free-fill), same as the Set consumer.
+// Distinguishes "consumer doesn't matter" from "specific consumers have
+// the garbage variant" (probe 26's `+=` showed garbage; 20 showed NUL).
+//
+// Pairing: 20 + 29 versus 26 — quantifies the consumer differentiator.
+// Status: cluster I sub-mode probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  print("direct: '");
+  print(h.items[0] ?? "fallback");
+  print("'\n");
+  // Capture by assignment for the assert.
+  v = h.items[0] ?? "fallback";
+  assert(v == "present", "probe 29: got '{v}', want 'present'");
+  println("probe 29 PASSED");
+}

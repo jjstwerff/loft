@@ -1810,7 +1810,10 @@ impl WorkerPool {
 /// Panics if any arm thread panics.
 // See `run_parallel_direct` for the threading-vs-non-threading split rationale.
 // (dead_code already allowed above — only needless_pass_by_value is feature-gated.)
-#[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
+#[cfg_attr(
+    any(not(feature = "threading"), feature = "wasm"),
+    allow(clippy::needless_pass_by_value)
+)]
 pub fn run_parallel_block(
     stores: &Stores,
     program: WorkerProgram,
@@ -1835,7 +1838,7 @@ pub fn run_parallel_block(
             }
         });
     }
-    #[cfg(not(feature = "threading"))]
+    #[cfg(any(not(feature = "threading"), feature = "wasm"))]
     {
         // Sequential fallback (WASM or threading disabled).
         for &pos in arm_positions {

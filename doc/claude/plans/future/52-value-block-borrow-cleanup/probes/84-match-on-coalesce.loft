@@ -1,0 +1,30 @@
+// Probe 84 — Cluster I × match-on-coalesce: `match (vec[i] ?? "x") { ... }`
+//
+// The match SUBJECT is the `??` result.  match-subject evaluation
+// produces a text Str on the stack; the match dispatcher reads it and
+// compares against the arm patterns (text equality).  Tests whether
+// match-on-text-?? has its own failure mode.
+//
+// Three possible outcomes:
+//   (a) FAIL — wildcard arm matches (because the actual value is
+//       dangling NUL/garbage, none of the text patterns match).
+//   (b) PASS — match correctly dispatches to the right arm.
+//   (c) CRASH — match reads dangling pointer.
+//
+// Pairing: 34 (==-comparison), 77 (?? inside match-arm body — opposite
+// direction).
+// Status: cluster I × match interaction probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  result = match h.items[0] ?? "missing" {
+    "present" => "matched-present",
+    "missing" => "matched-missing",
+    _ => "other"
+  };
+  assert(result == "matched-present", "probe 84: got '{result}', want 'matched-present'");
+  println("probe 84 PASSED");
+}

@@ -1,0 +1,24 @@
+// Probe 05 — Cluster I variant: function-call result `??` "fallback"
+//
+// Tests the cluster I shape with a Call as the LHS.  Same parser path as
+// probes 02/04: non-trivial LHS → `_ncc_N` block construction → potential
+// dangling-Str escape.
+//
+// A Call return is more likely to involve text materialisation than a
+// field read (the callee may build a fresh String via format-string ops);
+// if 05 fails with the same shape as 02/04, the cluster is "any non-Var
+// LHS" without an exception for call results.
+//
+// Expected (rustc 1.96 / macOS): FAIL on --interpret, PASS on --native.
+// Pairing: 02 + 04 + 05 form the three-way LHS-shape-independence confirmation.
+// Status: cluster I variant probe.
+
+fn get_text() -> text {
+  return "present";
+}
+
+fn main() {
+  a = get_text() ?? "fallback";
+  assert(a == "present", "probe 05: got '{a}', want 'present'");
+  println("probe 05 PASSED");
+}

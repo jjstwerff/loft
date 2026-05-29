@@ -1,0 +1,31 @@
+// Probe 10 — Cluster IV: the same structural shape on `Reference` types
+//
+// Tests whether the cluster I mechanism (post-consumer scope-exit free
+// of a block-local that the consumer's stack value borrows into) applies
+// uniformly to Reference types — or whether @PLAN51's `paired_witness`
+// + S1 NRVO machinery already escapes the Reference case.
+//
+// The shape:
+//     a = vec_of_ref[0] ?? Holder { name: "fallback" };
+//
+// Where `vec_of_ref[0]` returns a `Reference(Holder, deps)` from a vector
+// index, which is non-trivial LHS → ncc-block.  If @PLAN51's machinery
+// covers this, 10 PASSES — and the cluster IV row in the README can be
+// closed without a separate fix.  If it FAILS, the fix needs to be
+// type-agnostic (apply to text, ref, vector, hash, sorted symmetrically).
+//
+// Expected: unknown.  Both outcomes are diagnostic for fix-design choice.
+// Pairing: diff against 02 — same `??` shape, different element type.
+// Status: cluster IV verification probe.
+
+struct Holder { name: text }
+struct Vault { items: vector<Holder> }
+
+fn main() {
+  v = Vault { items: [] };
+  v.items += Holder { name: "present" };
+  fallback = Holder { name: "fallback" };
+  a = v.items[0] ?? fallback;
+  assert(a.name == "present", "probe 10: got '{a.name}', want 'present'");
+  println("probe 10 PASSED");
+}

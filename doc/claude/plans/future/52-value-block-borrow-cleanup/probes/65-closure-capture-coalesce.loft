@@ -1,0 +1,22 @@
+// Probe 65 — Cluster VI variant: closure capturing outer var + `??`
+//
+// Probe 45 used a closure that captured `h` (a struct) and called `??`
+// on its field.  This probe captures a TEXT var directly and uses `??`
+// on it inside the closure.  Captures interact with closure layout
+// (the captured var lives in a synthetic closure-state struct), so the
+// LHS of `??` is `captured_var` (Var → fast-path?).
+//
+// If 65 PASSES (because LHS is Var), the cluster-VI failure was due to
+// the NON-Var LHS inside the closure body, NOT closure-ness itself.
+// If 65 FAILS, closure synthesis breaks even the simple-Var fast-path.
+//
+// Pairing: 45 (closure with vec[i] LHS).
+// Status: cluster VI border probe.
+
+fn main() {
+  s = "present";
+  pick = fn() -> text { s ?? "fallback" };
+  a = pick();
+  assert(a == "present", "probe 65: got '{a}', want 'present'");
+  println("probe 65 PASSED");
+}

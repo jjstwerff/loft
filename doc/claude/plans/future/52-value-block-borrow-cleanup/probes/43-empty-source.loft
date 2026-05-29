@@ -1,0 +1,27 @@
+// Probe 43 — Cluster I value-content edge: source is an empty string
+//
+// Probe 02 used `"present"` (7 chars).  What if the source string is
+// `""` (zero-length)?  Length-preserved-NUL fill is meaningless when
+// length=0.  Does the bug still surface?
+//
+// Possible outcomes:
+//   (a) PASS — the zero-length read produces "" regardless of dangling
+//       pointer (memcmp of 0 bytes is always equal).
+//   (b) FAIL — the dangling pointer dereference produces garbage even
+//       for length=0 (e.g., the Str's `ptr` is NULL → Str::try_str
+//       returns "" too).
+//
+// This probe documents the boundary at content-size=0.
+//
+// Pairing: contrast with 02 (length=7).
+// Status: cluster I edge-case probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "";
+  v = h.items[0] ?? "fallback";
+  assert(v == "", "probe 43: got '{v}', want '' (empty)");
+  println("probe 43 PASSED");
+}

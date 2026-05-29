@@ -1,0 +1,21 @@
+// Probe 54 — Cluster I consumer border: text as method argument
+//    `s.contains(vec[i] ?? "x")` — method takes text param; the `??`
+//    result is the argument.
+//
+// The method dispatcher reads `self` (the receiver) and each text
+// argument from the stack.  If `??`'s dangling Str is one of those
+// args, the method body may read garbage.
+//
+// Pairing: 14 (method-call AS LHS), 46 (method AFTER ??).
+// Status: cluster I consumer-border probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "world";
+  base = "hello world";
+  found = base.contains(h.items[0] ?? "fallback");
+  assert(found, "probe 54: should find 'world' in 'hello world'");
+  println("probe 54 PASSED");
+}

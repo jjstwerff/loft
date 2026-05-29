@@ -1,0 +1,25 @@
+// Probe 35 — Primitive-type baseline: `vec_of_bool[i] ?? false`
+//
+// `bool` is value-typed (1 byte, no heap allocation, no pointer).  The
+// ncc-block still constructs an `_ncc_N` for non-Var LHS, but the
+// stack value pushed is a literal bool — no dangling pointer possible.
+// Cluster I should NOT fire on primitive types.
+//
+// If 35 PASSES, primitive `??` is safe; the fix can be type-gated to
+// heap-typed results only.
+// If 35 FAILS, the bug is deeper than text — affects all value-block
+// returns regardless of payload type.
+//
+// Pairing: contrast with 02 (text vec-index, fails) — same shape,
+// different element type.
+// Status: type-gating probe; confirms fix scope is heap-only.
+
+struct H { items: vector<boolean> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += true;
+  v = h.items[0] ?? false;
+  assert(v, "probe 35: v should be true");
+  println("probe 35 PASSED");
+}

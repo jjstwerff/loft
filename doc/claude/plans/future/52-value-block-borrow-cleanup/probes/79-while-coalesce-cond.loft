@@ -1,0 +1,26 @@
+// Probe 79 — Cluster I × while-loop condition: `while (vec[i] ?? "x") != "stop"`
+//
+// `while` evaluates its condition each iteration.  The condition is
+// `(vec[i] ?? "x") != "stop"`, which forces a fresh `_ncc_N` block per
+// iteration plus an inequality test.  Tests whether while-condition
+// evaluation has its own scope-exit pattern.
+//
+// Pairing: 34 (comparison consumer outside loop).
+// Status: cluster I × while-cond interaction probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "a";
+  h.items += "b";
+  h.items += "stop";
+  h.items += "after";
+  i = 0;
+  while (h.items[i] ?? "stop") != "stop" {
+    i += 1;
+    if i > 10 { break; }
+  }
+  assert(i == 2, "probe 79: stopped at i={i}, want 2");
+  println("probe 79 PASSED");
+}

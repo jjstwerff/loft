@@ -1,0 +1,29 @@
+// Probe 78 — Cluster III stability: format-then-delay-then-assert
+//
+// Probe 57 (eprint format) PASSED because the assert ran IMMEDIATELY
+// after format-build, before libmalloc reused the freed bytes.  Probe
+// 30 (print then assert) FAILED because intervening `print()` ops
+// disturbed the stack/heap state between format-build and assert.
+//
+// This probe verifies the "intervening-op disturbance" hypothesis: build
+// the format string, do unrelated work (allocate other strings, mutate
+// state), then assert.  If the result depends on what runs between, we
+// confirm cluster III's manifestation is environment-state-dependent.
+//
+// Pairing: 30 (immediate print), 57 (immediate assert, no intervening).
+// Status: cluster III stability characterisation probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  msg = "got: {h.items[0] ?? \"x\"}";
+  // Intervening work — allocate other strings, do field reads.
+  noise1 = "this is noise";
+  noise2 = "more noise: " + noise1;
+  noise3 = noise1 + noise2;
+  // Now assert.
+  assert(msg == "got: present", "probe 78: got '{msg}', want 'got: present'");
+  println("probe 78 PASSED");
+}

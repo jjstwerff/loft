@@ -1,0 +1,24 @@
+// Probe 50 — Cluster IV completion: Index collection value-block
+//
+// `index<X[k]>` is the 4th keyed-collection type (hash / sorted / index /
+// spacial).  Tests whether `index` is in the IV family or escapes.
+//
+// Pairing: 22 (Hash), 41 (Sorted), 51 (Spacial).
+// Status: cluster IV completion probe (3rd of 4 keyed-collection types).
+
+struct Entry { name: text, value: integer not null }
+struct W { items: index<Entry[name]> }
+
+fn fb() -> index<Entry[name]> {
+  s: index<Entry[name]> = [];
+  return s;
+}
+
+fn main() {
+  w = W { items: [] };
+  w.items["k"] = Entry { name: "k", value: 42 };
+  a = w.items ?? fb();
+  e = a["k"];
+  assert(e.value == 42, "probe 50: e.value = {e.value}, want 42");
+  println("probe 50 PASSED");
+}

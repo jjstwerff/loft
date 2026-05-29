@@ -72,6 +72,25 @@ One sentence.  What this plan ships when complete.  For an
 investigation plan, this is typically a fix design + a phased
 implementation — NOT a vague "understand X better".
 
+## In-plan vs spinoff policy (default: in-plan)
+
+Findings discovered during the investigation stay **in-plan** by
+default.  Spin off as a separate P-issue / mini-plan ONLY when one
+of:
+
+1. **Truly an edge case users won't hit** — e.g., parser refusal on
+   a syntactically-invalid construct nobody writes deliberately.
+2. **Needs its own investigation plan** — fix surface is large
+   enough or touches enough unrelated subsystems that bundling
+   would balloon the plan beyond reviewer-friendliness.
+
+Default in-plan is safer because (a) cross-cluster overlap is
+common (fixing X often closes Y too, but only if Y stays in the
+probe-gate); (b) the cumulative probe coverage IS the regression
+guard for the whole class.  See PLAN52's experience with cluster VI
+(closure body) — was almost spun off; kept in-plan because the
+fix likely shares the cluster I surface.
+
 ## Cluster catalogue (REQUIRED — replaces Sub-arcs)
 
 The failure modes discovered during exploration, one row per
@@ -128,6 +147,28 @@ A probe that passes assertions but fails any other gate stays in
 `probes/` with a status note; substitute a representative variant
 when graduating.
 
+### Curated probe sets + runner script (REQUIRED at probe count ≥ 20)
+
+Once the suite exceeds ~20 probes, running everything against
+every fix attempt is impractical.  Curate into **named sets**
+(A, B, … one per cluster + Set H for baselines + Set Z for
+known-broken-skip), each ≤10 probes, plus a `probes/run_set.sh`
+runner that takes the set letter.
+
+PLAN52 found this discipline load-bearing: the runner localises
+fix-validation to <30s per set vs minutes for the full sweep,
+and **Set H (baselines that MUST always PASS)** catches scope-
+handler / codegen regressions that the @PLAN51 history showed
+routinely break adjacent things.  Default the runner to arm
+the project's watchdog (e.g. `LOFT_TIMEOUT`) so probe hangs
+self-terminate with a localised breadcrumb instead of needing
+manual `pkill`.
+
+The set definitions live in the plan README's "Probe suite"
+section as a table mapping set-letter → probes → purpose →
+current status.  Probe-set authoring is a Stage A deliverable,
+not deferred to Stage D fix-validation.
+
 ## Reference ↔ problem pairings (REQUIRED if probes ≥ 5)
 
 Each problem probe paired with its closest passing reference.
@@ -149,6 +190,7 @@ Tools added or verified during this plan's investigation work.
 | Tool | Status | Used for |
 |---|---|---|
 | `LOFT_LOG=<key>` | New / Already-existed / Verified-suitable | <what it pinned> |
+| Watchdog / timeout (e.g. `LOFT_TIMEOUT` + `LOFT_TIMEOUT_CLEAN_EXIT`) | Verified-essential as default for speculative probes | Probe-runner default; localises hangs to `phase=parse` / `phase=run-*` breadcrumb in seconds vs manual `pkill -9` from a human |
 
 Tools added during a plan are part of its output, not separate
 work.  Closing the plan should leave the tools in tree.
@@ -167,6 +209,25 @@ estimate:
 Then prose: aggregate effort estimate (Phase B-finish + Phase C
 + Phase D), recommended sequence, quickest-user-visible-win
 callout.
+
+### Per-step exit criteria (REQUIRED when fix sequencing has > 2 steps)
+
+Each fix step in the sequence gets a binary exit criterion
+mapped to probe-set runs.  The plan is provably closed iff the
+final-step exit criteria hold — no informal "we think it's done".
+
+Minimum form:
+
+| # | Step | Exit criteria (mapped to probe sets) |
+|---|---|---|
+| 1 | Fix cluster X | Set X + Set H all PASS; project CI green |
+| 2 | … | … |
+
+The closing check at the bottom: all sets (except explicitly-
+out-of-scope Z entries) PASS on every backend + project CI green
++ canary suite green.  PLAN52 added this discipline after a user
+prompt — would have been load-bearing earlier; treat as required
+when sequencing > 2 steps.
 
 ## See also (REQUIRED)
 

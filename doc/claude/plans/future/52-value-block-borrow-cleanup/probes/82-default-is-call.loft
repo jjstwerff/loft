@@ -1,0 +1,33 @@
+// Probe 82 — Cluster I default-position border: `vec[i] ?? get_default()`
+//
+// Probes 02 through 78 have used a LITERAL default ("fallback" etc.).
+// What happens when the default is itself a function call?  The else
+// branch evaluates a call, whose return is a text value-block with its
+// own ncc-like materialisation.
+//
+// Two paths:
+//   - true branch: dangling Str from vec[i] (cluster I)
+//   - false branch: call result (its own potential cluster I if the
+//     callee uses ??)
+//
+// Pairing: 47 (call as default, in a chain), 02 (literal default).
+// Status: cluster I default-position probe.
+
+struct H { items: vector<text> }
+
+fn get_default() -> text {
+  return "computed-default";
+}
+
+fn main() {
+  h = H { items: [] };
+  h.items += "present";
+  a = h.items[0] ?? get_default();
+  assert(a == "present", "probe 82a: got '{a}', want 'present'");
+
+  empty: vector<text> = [];
+  b = empty[0] ?? get_default();
+  assert(b == "computed-default", "probe 82b: got '{b}', want 'computed-default'");
+
+  println("probe 82 PASSED");
+}

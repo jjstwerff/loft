@@ -4,6 +4,9 @@
     "filesystem": {
       "allowWrite": ["/tmp"],
       "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"]
+    },
+    "network": {
+      "allowLocalBinding": true
     }
   },
   "hooks": {

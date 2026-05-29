@@ -1,0 +1,30 @@
+// Probe 60 — IV-Ref escape verification + cluster I chained projection
+//
+// Probe 10 confirmed Reference value-blocks pass.  But after the `??`
+// resolves to a Reference, projecting a TEXT field FROM that Reference
+// might re-enter cluster I (the projection result is text from the
+// Ref's internal store, used as a value).
+//
+// The shape:
+//     ref_val = vec_of_refs[i] ?? other_ref;
+//     name = ref_val.text_field;    // ← does this trigger cluster I again?
+//
+// If 60 PASSES, IV-Ref's escape extends through field projection — no
+// cluster compounding.  If 60 FAILS, projecting text from an `??`-derived
+// Reference is a new sub-cluster.
+//
+// Pairing: 10 (Reference baseline), 04 (field-access LHS).
+// Status: IV-Ref + cluster I interaction probe.
+
+struct Holder { name: text }
+struct Vault { items: vector<Holder> }
+
+fn main() {
+  v = Vault { items: [] };
+  v.items += Holder { name: "present" };
+  fb = Holder { name: "fallback" };
+  ref_val = v.items[0] ?? fb;
+  name = ref_val.name;
+  assert(name == "present", "probe 60: got '{name}', want 'present'");
+  println("probe 60 PASSED");
+}

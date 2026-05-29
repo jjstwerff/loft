@@ -1,0 +1,23 @@
+// Probe 39 — Cluster I shape border: `(vec[i] ?? "x") + " suffix"`
+//
+// Text concat AFTER `??`.  The ncc-block result is the LEFT operand of
+// `+`, with a literal as the right operand.  The `+` op reads its left
+// operand (the dangling Str) and appends the right.
+//
+// Possible outcomes:
+//   (a) FAIL — concat reads from the dangling Str.
+//   (b) PASS — concat lowers via a fresh work-buffer that copies BOTH
+//       operands before the scope-exit free fires.
+//
+// Pairing: diff against 02 (Set consumer) and 13 (concat LHS).
+// Status: cluster I shape-border probe.
+
+struct H { items: vector<text> }
+
+fn main() {
+  h = H { items: [] };
+  h.items += "hello";
+  s = (h.items[0] ?? "fallback") + " world";
+  assert(s == "hello world", "probe 39: got '{s}', want 'hello world'");
+  println("probe 39 PASSED");
+}

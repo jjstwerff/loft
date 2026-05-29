@@ -1,0 +1,27 @@
+// Probe 16 — Cluster I LHS border: call returning a literal `"const" ?? "x"`
+//
+// The callee returns a static string literal.  At runtime, the returned
+// Str's ptr points into `.rodata` (program-lifetime), not into a heap
+// String.  If the cluster I bug only fires for HEAP-backed sources, this
+// probe ESCAPES — the OpFreeText on `_ncc_N` runs but the actual bytes
+// live forever in the binary's `.rodata`.
+//
+// If 16 FAILS like 05, the bug is shape-only (not allocation-class):
+// even a static-source `_ncc_N` triggers the dangling-Str escape because
+// the bytecode dispatcher doesn't distinguish heap-vs-static Str at the
+// scope-exit-free site.
+// If 16 PASSES while 05 fails, the bug is allocation-class-dependent —
+// fix can be narrower.
+//
+// Pairing: diff against 05 (call returning a non-static heap String).
+// Status: cluster I LHS-border probe; separates shape from allocation.
+
+fn static_text() -> text {
+  return "present";
+}
+
+fn main() {
+  a = static_text() ?? "fallback";
+  assert(a == "present", "probe 16: got '{a}', want 'present'");
+  println("probe 16 PASSED");
+}
