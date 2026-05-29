@@ -61,7 +61,6 @@ impl<'a> Stack<'a> {
     /// provides the seam + the `aligned` flag; wiring is S4's job.
     #[inline]
     #[must_use]
-    #[allow(dead_code)]
     pub fn step(&self, size: u16) -> u16 {
         variables::aligned_stack_step(u32::from(size), self.aligned) as u16
     }
@@ -129,13 +128,18 @@ impl<'a> Stack<'a> {
 
     pub fn operator(&mut self, d_nr: u32) {
         let d = self.data.def(d_nr);
+        // @PLAN53 cluster 2 / S4: a mutable param / the return value each
+        // occupies one stepped eval-stack slot (`put_stack`/`get_stack`
+        // round to 8 in aligned mode), so sum the STEPPED sizes — Σ step,
+        // never step(Σ) — to stay in lockstep with the per-value pushes.
+        // `step` is identity when LOFT_ALIGN is off → V1 unchanged.
         let mut parameters = 0;
         for p in &d.attributes {
             if p.mutable {
-                parameters += variables::size(&p.typedef, &Context::Argument);
+                parameters += self.step(variables::size(&p.typedef, &Context::Argument));
             }
         }
-        let ret = variables::size(&d.returned, &Context::Argument);
+        let ret = self.step(variables::size(&d.returned, &Context::Argument));
         assert!(
             self.position >= parameters,
             "Incorrect stack {} versus {parameters} in {} operator {d_nr}:{}",
