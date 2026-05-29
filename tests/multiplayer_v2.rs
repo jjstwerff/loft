@@ -247,10 +247,14 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 /// This is the same protocol the v1 client validates, but driving
 /// the v2 server.  Locks in: handshake, namespace registry, basic
 /// click → Placement → GameOver round-trip on the multi-client path.
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "P229b: v2 server can't bind on Windows CI; investigation needed (diagnose_listen_failure should produce signal next run)"
-)]
+//
+// @P229b probe (2026-05-29) — TEMPORARILY un-ignored on Windows to
+// surface the actual failure mode via diagnose_listen_failure.  The
+// 2026-05-21 hypothesis ("bind-then-drop race") was code-review-only
+// and never verified against live Windows output.  This probe answers:
+// is the cause actually port bind, or is it a sibling of PR #228's
+// CreateProcessW spawn issue, or something else entirely?  Re-add the
+// cfg_attr ignore once we have a real Windows error message to act on.
 #[test]
 fn v2_single_client_completes_game() {
     // Note: the current v2 server hardcodes port 7878; if multiple
