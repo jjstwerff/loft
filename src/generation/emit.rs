@@ -248,7 +248,19 @@ impl Output<'_> {
                         let returns_local_text = matches!((**val).unspan(), Value::Var(v)
                             if matches!(def.variables.tp(*v), Type::Text(_))
                                 && !def.variables.is_argument(*v));
-                        no_work_buffer || returns_local_text
+                        // @PLAN52 cluster VI (2026-05-30): closures returning text
+                        // have a `__work_ret: &mut String` parameter but the
+                        // closure body's `??` value-block doesn't write into it —
+                        // instead emits `return Str::new(<value-block>)`.  Inner
+                        // block tail materialises a String via cluster I's
+                        // `_ret.to_string()` machinery.  Plain `Str::new(String)`
+                        // fails E0308.  Detect the inner `__ncc_*` skip_free
+                        // pattern and route through scratch so the materialised
+                        // String lives in `stores.scratch` and `Str::new(&str)`
+                        // reads from there.
+                        let returns_ncc_block = matches!((**val).unspan(), Value::Block(b)
+                            if self.block_contains_ncc_skip_free(b));
+                        no_work_buffer || returns_local_text || returns_ncc_block
                     };
                     write!(w, "return ")?;
                     if needs_p205_scratch {
@@ -1007,6 +1019,30 @@ impl Output<'_> {
     ///    that expression is captured into `let _ret` first, then yielded at the end.
     /// 3. **String conversion** — a text-typed block may receive a `Str` from a field read;
     ///    `.to_string()` converts it to an owned `String`.
+    /// @PLAN52 cluster I/VI helper: walk a Block's operators (recursively
+    /// into nested Block / If / Match values) and report whether any
+    /// `Set(v, _)` exists where `v`'s name starts with `__ncc_` and the
+    /// variable is marked `skip_free`.  Used to gate scratch-buffer
+    /// materialisation for value-block `??` patterns.
+    fn block_contains_ncc_skip_free(&self, bl: &Block) -> bool {
+        fn walk(this: &Output, v: &Value) -> bool {
+            match v.unspan() {
+                Value::Set(var, val) => {
+                    let variables = &this.data.def(this.def_nr).variables;
+                    if variables.name(*var).starts_with("__ncc_") && variables.is_skip_free(*var) {
+                        return true;
+                    }
+                    walk(this, val)
+                }
+                Value::Block(b) => b.operators.iter().any(|op| walk(this, op)),
+                Value::If(c, t, f) => walk(this, c) || walk(this, t) || walk(this, f),
+                Value::Insert(ops) => ops.iter().any(|op| walk(this, op)),
+                _ => false,
+            }
+        }
+        bl.operators.iter().any(|op| walk(self, op))
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn output_block(
         &mut self,
@@ -1300,9 +1336,25 @@ impl Output<'_> {
                         && {
                             let def = self.data.def(self.def_nr);
                             matches!(def.returned, Type::Text(_))
-                            && !def.attributes.iter().any(|a| {
-                                matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
-                            })
+                            && (
+                                !def.attributes.iter().any(|a| {
+                                    matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+                                })
+                                // @PLAN52 cluster VI (2026-05-30): closures (and
+                                // other functions with a `__work_ret: &mut String`
+                                // attribute) declare the buffer but the closure
+                                // body's `??` value-block doesn't write into it —
+                                // the body emits `return Str::new(<value-block>)`
+                                // where the inner block tail materialises a String
+                                // via `_ret.to_string()` (cluster I iteration 2).
+                                // Plain `Str::new(String)` fails E0308 ("expected
+                                // &str, found String").  Route through scratch so
+                                // the materialised String lives in `stores.scratch`
+                                // (program-lifetime) and `Str::new` reads from
+                                // there.  Detect by the `__ncc_*` skip_free temp
+                                // signature.
+                                || self.block_contains_ncc_skip_free(bl)
+                            )
                         };
                     if is_tail_capture_call {
                         write!(w, "let __native_tail_ret: DbRef = ")?;
