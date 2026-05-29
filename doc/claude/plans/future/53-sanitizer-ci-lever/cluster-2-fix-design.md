@@ -210,6 +210,38 @@ leaving the literal `pos - 20` left it off by 4 → wild pointer.
   `N` literals (S5).  The three move together or corrupt.
 - **Proceed to S2.**
 
+### S3 investigation — frame-base coupling (S3 and S4 are NOT independent)
+
+Slot position-assignment sites (where `align`-rounding goes):
+zone-1 interval-colouring `candidate` (`slots.rs:232`) and zone-2
+sequential `*tos += v_size` (`slots.rs:299 / 365 / 475`); `tos`
+starts at `frame_base + zone1_size` (`:254`).
+
+**Frame model (verified):** one stack record (`stack_cur` set once,
+`state/mod.rs:192`, at an 8-aligned record base); a single running
+`stack_pos`; `reserve_frame` advances it by raw `size` (`:1338`); a
+call sets the callee frame base to `args_base = stack_pos −
+args_size` (`:287`).  So a frame slot's **absolute** address is
+`stack_cur.pos + args_base + slot_offset`.
+
+**Consequence — overturns the design's "S3 independently
+Miri-verifiable" claim:** aligning the slot *offset* (S3) only makes
+the *address* aligned if `args_base` is a multiple of 8 — i.e. the
+running `stack_pos` is kept 8-aligned (**S4 / eval-TOS**) **and**
+`args_size` is rounded.  The stack alignment is **holistic**: slot
+offsets + eval-TOS advance + args layout + `reserve_frame` must
+align **together**, or no single frame slot is reliably aligned.
+
+**Revised plan — merge S3+S4 (+args) into one coupled change:**
+"align all stack layout consistently" — frame slots tight per-type
+(gap-filled), eval-TOS + args + `reserve_frame` on the uniform-8
+advance — validated **together** (Miri on owned-`String` local *and*
+`Str` TOS push can only go clean once the frame base is aligned,
+which needs the whole set).  S5 (the `N` offsets) then lands, and
+the suite goes green.  The independence that survives: S0/S1/S2
+stand alone; S3..S5 are one holistic unit with Miri+suite as the
+joint gate.
+
 ## Out of scope
 
 - **Records on `Str`**: `element_align(Text)=4` while runtime `Str`
