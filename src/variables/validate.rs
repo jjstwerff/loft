@@ -287,6 +287,31 @@ fn check_i8_total_claim(vars: &[Variable]) -> Option<usize> {
     })
 }
 
+/// @PLAN53 cluster 2 — alignment invariant for the **aligned V2 layout only**.
+/// Every placed local must sit at an `align(tp)`-aligned slot offset so an
+/// `addr`/`addr_mut::<T>` into it is sound.  Panics on the first violation.
+///
+/// Run ONLY on V2's output via the `LOFT_SLOT_V2=validate` shadow path — NOT
+/// in the unconditional `validate_slots` path, because V1's tight layout is
+/// legitimately unaligned and would trip it.
+pub fn validate_alignment(function: &Function) {
+    for (idx, v) in function.variables.iter().enumerate() {
+        if v.argument || v.stack_pos == u16::MAX {
+            continue;
+        }
+        let al = u16::from(crate::variables::align(&v.type_def)).max(1);
+        assert!(
+            v.stack_pos % al == 0,
+            "[ALIGN] variable '{}' (idx={idx}) in function '{}' at slot {} is not \
+             {al}-aligned (type {}) — aligned-V2-allocator bug",
+            v.name,
+            function.name,
+            v.stack_pos,
+            short_type(&v.type_def),
+        );
+    }
+}
+
 /// I5 — kind-consistency on overlapping-slot reuse.  For any pair
 /// of variables whose slot ranges overlap spatially AND whose live
 /// intervals are disjoint (the reuse case), kinds must match; for

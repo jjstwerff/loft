@@ -41,7 +41,7 @@ pub use slots::assign_slots;
 #[allow(unused_imports)]
 pub use slots_v2::{
     AllocatorResult, LocalInterval, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2,
-    v2_report_enabled, v2_validate_enabled,
+    dump_v1_v2_slots, v2_mode_for, v2_report_enabled, v2_validate_enabled,
 };
 pub use validate::dump_variables;
 // Plan-04 Phase 2e: ungate validate_slots so LOFT_SLOT_V2=validate
@@ -55,7 +55,7 @@ pub use validate::dump_variables;
 // in the hot interpreter path; clippy sees no in-crate caller and
 // would otherwise flag this re-export.
 #[allow(unused_imports)]
-pub use validate::validate_slots;
+pub use validate::{validate_alignment, validate_slots};
 
 use crate::data::{Context, Data, Type, Value};
 use crate::diagnostics::{Level, diagnostic_format};
@@ -1495,9 +1495,7 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
 /// the `element_align` path and are unaffected.  Not meaningful for
 /// `Context::Constant` (byte-packed bytecode operands) — callers only
 /// use it for stack/frame layout.
-// S2: added ahead of its caller; this `#[allow(dead_code)]` is removed
-// in S3 when frame-slot layout starts calling `align`.
-#[allow(dead_code)]
+// S3: called by the aligned V2 allocator (`slots_v2::assign_slots_v2`).
 pub fn align(tp: &Type) -> u8 {
     match tp {
         Type::Boolean | Type::Enum(_, false, _) => 1,

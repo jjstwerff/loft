@@ -175,6 +175,12 @@ fn walk_node(val: &crate::data::Value, function: &Function, w: &mut WalkState) {
             if sz == 0 {
                 return;
             }
+            // @PLAN53 cluster 2: align the slot to its type's natural alignment
+            // so an `addr`/`addr_mut::<T>` into it is sound.  Sizes stay tight;
+            // alignment is padding — the bumped TOS leaves a hole that V2's
+            // lowest-slot search backfills with a smaller var.
+            let al = u16::from(super::align(function.tp(*v_nr))).max(1);
+            w.tos = w.tos.next_multiple_of(al);
             w.slots.push(SlotAssignment {
                 var_nr: *v_nr,
                 slot: w.tos,
@@ -245,8 +251,66 @@ fn walk_node(val: &crate::data::Value, function: &Function, w: &mut WalkState) {
 #[allow(dead_code)]
 pub fn v2_validate_enabled() -> bool {
     match std::env::var("LOFT_SLOT_V2") {
-        Ok(val) => val == "validate" || val == "drive" || val == "report",
+        Ok(val) => {
+            let mode = val.split(':').next().unwrap_or("");
+            mode == "validate" || mode == "drive" || mode == "report"
+        }
         Err(_) => false,
+    }
+}
+
+/// Per-function V2 switch (@PLAN53 cluster 2).  Parses `LOFT_SLOT_V2` as
+/// `mode` or `mode:filter` and returns the mode (`"validate"` / `"report"`
+/// / `"drive"`) **iff it applies to `fn_name`** — no filter means all
+/// functions; a `:filter` suffix restricts to functions whose name
+/// contains `filter`.  This is the per-function command-line switch: e.g.
+/// `LOFT_SLOT_V2=drive:build_chunk` drives only that function onto V2 while
+/// every other function keeps V1.
+pub fn v2_mode_for(fn_name: &str) -> Option<String> {
+    let raw = std::env::var("LOFT_SLOT_V2").ok()?;
+    let (mode, filter) = match raw.split_once(':') {
+        Some((m, f)) => (m, Some(f)),
+        None => (raw.as_str(), None),
+    };
+    if !matches!(mode, "validate" | "report" | "drive") {
+        return None;
+    }
+    match filter {
+        Some(f) if !fn_name.contains(f) => None,
+        _ => Some(mode.to_string()),
+    }
+}
+
+/// @PLAN53 cluster 2 — side-by-side dump of V1 (original, authoritative) vs
+/// the aligned V2 slot assignment, for debugging the aligned allocator.
+/// Triggered by `report` mode.  Shows per-local size, alignment, and both
+/// slot offsets so alignment shifts + gap-fill are visible at a glance.
+pub fn dump_v1_v2_slots(v1: &Function, v2: &AllocatorResult, d_nr: u32) {
+    eprintln!(
+        "[slot-cmp] d_nr={d_nr} fn='{}'  (V2 hwm={})",
+        v1.name, v2.hwm
+    );
+    eprintln!(
+        "  {:<24} {:>4} {:>4} {:>8} {:>8}",
+        "name", "sz", "al", "V1", "V2"
+    );
+    for (idx, var) in v1.variables.iter().enumerate() {
+        if var.argument || var.first_def == u32::MAX {
+            continue;
+        }
+        let sz = size(&var.type_def, &Context::Variable);
+        let al = super::align(&var.type_def);
+        let v1s = if var.stack_pos == u16::MAX {
+            "-".to_string()
+        } else {
+            var.stack_pos.to_string()
+        };
+        let v2s = v2
+            .slots
+            .iter()
+            .find(|s| s.var_nr == idx as u16)
+            .map_or_else(|| "-".to_string(), |s| s.slot.to_string());
+        eprintln!("  {:<24} {sz:>4} {al:>4} {v1s:>8} {v2s:>8}", var.name);
     }
 }
 

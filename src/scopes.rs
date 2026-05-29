@@ -199,6 +199,43 @@ pub fn check(data: &mut Data) {
             let d = &mut data.definitions[d_nr as usize];
             assign_slots(&mut d.variables, &mut d.code, local_start);
         }
+        // @PLAN53 cluster 2 — per-function V2 shadow.  When LOFT_SLOT_V2
+        // selects this function (mode[:filter]), compute the ALIGNED V2
+        // layout, optionally dump it beside V1's (report), and validate it
+        // (I1-I8 + alignment).  validate/report restore V1 afterward so
+        // codegen + execution are UNCHANGED; only `drive` keeps the V2
+        // layout (correct execution requires the S4 eval-TOS switch).
+        let fn_name = data.definitions[d_nr as usize].variables.name.clone();
+        if let Some(mode) = crate::variables::v2_mode_for(&fn_name) {
+            let result = {
+                let d = &data.definitions[d_nr as usize];
+                crate::variables::assign_slots_v2(&d.variables, &d.code, local_start)
+            };
+            if mode == "report" {
+                crate::variables::dump_v1_v2_slots(
+                    &data.definitions[d_nr as usize].variables,
+                    &result,
+                    d_nr,
+                );
+            }
+            let v1_vars = data.definitions[d_nr as usize].variables.clone();
+            let v1_code = data.definitions[d_nr as usize].code.clone();
+            {
+                let d = &mut data.definitions[d_nr as usize];
+                crate::variables::apply_v2_result(&mut d.variables, &mut d.code, &result);
+            }
+            crate::variables::validate_slots(
+                &data.definitions[d_nr as usize].variables,
+                data,
+                d_nr,
+            );
+            crate::variables::validate_alignment(&data.definitions[d_nr as usize].variables);
+            if mode != "drive" {
+                let d = &mut data.definitions[d_nr as usize];
+                d.variables = v1_vars;
+                d.code = v1_code;
+            }
+        }
     }
 }
 
