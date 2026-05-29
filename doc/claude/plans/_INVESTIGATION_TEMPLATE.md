@@ -6,15 +6,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Investigation-plan template
 
 Copy this file to `<NN>-<slug>/README.md` when opening a plan whose
-**primary deliverable is mechanism understanding**, not implementation.
-
-Use this template when the plan's first phases are
-"catalogue + diagnose" rather than "design + build" — when you need
-to characterize a failure class, family of bugs, or unfamiliar
-subsystem before you can commit to a fix shape.
-
-Use the standard [`_TEMPLATE.md`](_TEMPLATE.md) when the primary
-deliverable is a feature ship.  The two shapes look different:
+**primary deliverable is mechanism understanding** — characterising
+a failure class, family of bugs, or unfamiliar subsystem before any
+fix shape can be committed to.  Use the standard
+[`_TEMPLATE.md`](_TEMPLATE.md) when the primary deliverable is a
+feature ship instead.  The two shapes look different:
 
 | | Standard plan | Investigation plan |
 |---|---|---|
@@ -53,15 +49,12 @@ status table:
 | C — Fix design (OPTIONAL) | ⏸️ pending Stage B / N/A — mechanism uniquely determines fix |
 | D — Implementation | ⏸️ pending Stage C |
 
-**Stage C is OPTIONAL.**  When Stage B's mechanism analysis uniquely
-determines the fix shape (the bug is in one specific gate; the only
-question is the exact predicate change), skip C and go B → D.  Force
-Stage C when the fix shape has multiple viable options worth
-comparing (refcount vs targeted vs hybrid; design choices that
-constrain follow-on work).  PLAN51's clusters II/III/IV/V went
-B → D iteratively; only the Path C refcount alternative warranted
-a Stage C deliverable, and even that was deferred pending real
-need.
+**Stage C is OPTIONAL.**  Skip C and go B → D when mechanism
+analysis uniquely determines the fix shape; force C when multiple
+fix options need comparing (refcount vs targeted vs hybrid).
+PLAN51's clusters II/III/IV/V went B → D iteratively — each fix
+landed as its own commit, pushed before the next began (see
+§ Fix-application discipline).
 
 Then one paragraph: what triggered this investigation, what the
 scope is, what's already known going in.
@@ -190,7 +183,7 @@ Tools added or verified during this plan's investigation work.
 | Tool | Status | Used for |
 |---|---|---|
 | `LOFT_LOG=<key>` | New / Already-existed / Verified-suitable | <what it pinned> |
-| Watchdog / timeout (e.g. `LOFT_TIMEOUT` + `LOFT_TIMEOUT_CLEAN_EXIT`) | Verified-essential as default for speculative probes | Probe-runner default; localises hangs to `phase=parse` / `phase=run-*` breadcrumb in seconds vs manual `pkill -9` from a human |
+| Watchdog / timeout (`LOFT_TIMEOUT` + `LOFT_TIMEOUT_CLEAN_EXIT`) | Verified-essential | Probe-runner default; localises hangs to a `phase=…` breadcrumb |
 
 Tools added during a plan are part of its output, not separate
 work.  Closing the plan should leave the tools in tree.
@@ -225,9 +218,62 @@ Minimum form:
 
 The closing check at the bottom: all sets (except explicitly-
 out-of-scope Z entries) PASS on every backend + project CI green
-+ canary suite green.  PLAN52 added this discipline after a user
-prompt — would have been load-bearing earlier; treat as required
-when sequencing > 2 steps.
++ canary suite green.  Required when sequencing > 2 steps.
+
+## Fix-application discipline (REQUIRED)
+
+Fixes land **one cluster per commit, pushed before the next
+cluster begins**.  For each cluster: edit → run Set <cluster> +
+Set H locally → if both green, commit the fix on its own → push
+→ only then start the next cluster.  Bundling two clusters into
+one commit, or letting two cluster fixes accumulate locally before
+pushing, both violate this rule.
+
+Reasons:
+
+- **Causality.**  A green Set X after the commit says cluster X's
+  fix worked.  A green Set X *bundled with* cluster Y's fix says
+  one of them worked; the other may be silently broken in a way
+  Set X doesn't reveal.  Bundling collapses per-cluster signal.
+- **Self-bisect.**  `git diff` between cluster commits is the
+  bisect resolution this project actually has (real `git bisect`
+  is prohibited; see CLAUDE.md § Debugging policy).  One commit
+  per cluster keeps that resolution sharp; bundling collapses it
+  to plan-granularity.
+- **Rollback granularity.**  When a cluster fix turns out wrong
+  (PLAN51 cluster II took 3 attempts to converge), reverting it
+  without losing earlier cluster fixes is only possible when each
+  fix is its own commit.
+- **Set H is the regression canary at the cluster boundary.**
+  Running Set H after each commit catches adjacent-system breakage
+  (scope handler, codegen, store ops) at the cluster boundary
+  where the cause is one commit deep — not after five clusters
+  have piled up and the bisect surface is the whole plan.
+- **Push for durability.**  Investigation plans span sessions;
+  unpushed cluster fixes are one machine failure from gone, and
+  the next session can't see the green checkpoint to resume from.
+  Pushing also lets the user spot a wrong-cluster fix at the
+  boundary instead of after the whole plan lands.  CLAUDE.md
+  § Branch policy rule 2 already requires this on long-lived
+  working branches.
+
+**Exception.**  If an open PR on the branch is mid-review, hold
+the next cluster's push until review concludes — CLAUDE.md
+§ Branch policy rule 2 prohibits disturbing a branch with an
+open PR.  Investigation plans normally run on a long-lived
+working branch with no open PR, so this exception is rare; when
+it applies, accumulate cluster commits locally and push them as
+a batch when the PR closes.
+
+**Anti-pattern to avoid.**  Opening all cluster docs, writing a
+unified fix that touches scope handler + codegen + store ops in
+one commit, running the full probe sweep, observing green, and
+declaring the plan closed.  The sweep will pass; the next
+regression will be unattributable; if one of the fix sites was
+actually wrong, you've lost the ability to isolate it without
+re-deriving the whole plan.  PLAN51's Cluster III "FIXED on
+corruption" status while leaks under Cluster II persisted was a
+mild version of this failure mode — the lesson generalises.
 
 ## See also (REQUIRED)
 
@@ -336,26 +382,15 @@ A mechanism hypothesis is verified when a probe-pair diff confirms
 it.  Source reading without a probe to ground it tends to
 recursively explore code paths without convergence.
 
-**Liberal probing**: **add probes aggressively** — be liberal, not
-selective.  Missing a crucial case (the kind that surfaces in
-production code, like PLAN51's moros_map probe) is the worst failure
-mode; carrying a few redundant variants costs nothing because they
-sit in `probes/` documenting the explored space.
-
-Specifically:
-- If an idea for a probe occurs while reading another probe's
-  output, write it.  Don't gate on "will this add insight?" —
-  you can only know AFTER running it.
-- Variants that confirm a known mechanism are still valuable
-  evidence; they don't need to be promoted to `tests/scripts/`
-  but they belong in the probe directory.
-- The cost of a redundant probe is ~10 minutes of probe-writing.
-  The cost of a missed shape is the next session re-discovering
-  it from scratch + losing the diagnostic continuity.
-
-The flat probe-suite table covers most cases.  A/B/C curation
-becomes worthwhile only when the suite exceeds ~15 probes AND
-multiple investigators read it cold.
+**Liberal probing**: add probes aggressively — missing a crucial
+case (like PLAN51's `moros_map` probe surfacing a leak class no
+synthetic probe caught) is the worst failure mode.  If an idea
+occurs while reading another probe's output, write it; you can
+only judge "does this add insight?" AFTER running it.  Variants
+confirming known mechanisms don't need test-scripts promotion but
+belong in `probes/`.  The cost of a redundant probe is ~10
+minutes; the cost of a missed shape is the next session
+re-discovering it from scratch.
 
 **Real-library extraction**: include at least one probe extracted
 from production code in your subsystem (the canonical loft case:
