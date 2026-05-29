@@ -1,0 +1,49 @@
+// Probe 48 — (Canvas, integer) with a LARGE integer.
+//
+// Probe 42 passes by luck: the int value `p.tag * 100` fits in 32 bits,
+// so even though the schema divergence means only bytes 16-19 of the
+// int's 8-byte slot are copied (bytes 20-23 zeroed), the upper-half-
+// zero is a SAFE truncation when the actual value < 2^32.
+//
+// This probe uses a value > 2^32 to expose the truncation: the upper
+// bytes should NOT be zero.  If the runtime's tuple-schema mismatch
+// truncates the integer slot, we'll read back a value with its upper
+// 32 bits zeroed.
+//
+// Expected (loft compiler IR side): the int slot lives at offset 16
+// (8 bytes), tuple size 24.
+// Actual (native runtime database side, without field_groups): the int
+// slot's "Parts::Struct" position is 12, tuple size 20.  copy_block
+// copies 20 bytes, missing bytes 20-23 of the 8-byte int.
+//
+// On a small int value this is invisible.  On a value > 2^32 it shows.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn split_ci(p: P) -> (Canvas, integer) {
+  a = alloc_canvas(4, 5, p.tag);
+  // 5000000000 > 2^32 (= 4_294_967_296).  The upper bytes are
+  // non-zero — if copy_block truncates to 4 bytes, the upper half
+  // gets clobbered to zero on the read side.
+  big = p.tag + 5000000000;
+  (a, big)
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    (ca, k) = split_ci(p);
+    expected = i + 5000000000;
+    assert(ca.w == 4, "iter {i}: ca.w = {ca.w}");
+    assert(ca.data[0] == i, "iter {i}: ca[0] = {ca.data[0]}");
+    assert(k == expected, "iter {i}: k = {k} expected {expected}");
+  }
+  println("probe 48 PASSED");
+}

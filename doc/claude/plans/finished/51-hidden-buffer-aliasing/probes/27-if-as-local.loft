@@ -1,0 +1,40 @@
+// Probe 27 — assign if-expression to a local, then return.
+//
+//   fn render(p: P) -> Canvas {
+//     x = if p.tag % 2 == 0 { alloc_canvas(4, 5, p.tag) } else { alloc_canvas(4, 5, p.tag * 10) };
+//     x
+//   }
+//
+// Probe 08 panicked: tail-position if-expression with calls in both
+// branches.  Probe 22 confirmed it's shape-based, not arg-based.
+// This probe assigns the if-expression to a local first, then returns
+// the local.  Tests: does the panic move when the if isn't the
+// immediate tail?
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn render(p: P) -> Canvas {
+  x = if p.tag % 2 == 0 {
+    alloc_canvas(4, 5, p.tag)
+  } else {
+    alloc_canvas(4, 5, p.tag * 10)
+  };
+  x
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    cv = render(p);
+    expected = if i % 2 == 0 { i } else { i * 10 };
+    assert(cv.data[0] == expected, "iter {i}: data[0] = {cv.data[0]} (expect {expected})");
+  }
+  println("probe 27 PASSED");
+}

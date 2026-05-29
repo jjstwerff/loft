@@ -1,0 +1,37 @@
+// Probe 15 — `&mut` reference argument (not return).
+//
+//   fn fill_canvas(cv: &Canvas, p: P) {
+//     cv.data = [];
+//     for k in 0..5 { cv.data += [p.tag + k]; }
+//   }
+//
+// The `&Canvas` arg is an explicit mutable reference (the user-facing
+// equivalent of a buffer).  No ref_return here — the fn returns void.
+// Caller pre-allocates the Canvas, callee fills it via field-mutation.
+//
+// This is the EXPLICIT version of the hidden-buffer protocol — what
+// users would do if they manually mimicked ref_return's behaviour.
+// Testing this confirms the explicit mutable-ref path works correctly
+// (it should — it's been used throughout lib code for years).
+//
+// Expected: PASS on both backends.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn fill_canvas(cv: &Canvas, p: P) {
+  cv.data = [];
+  for k in 0..5 { cv.data += [p.tag + k]; }
+}
+
+fn main() {
+  cv = Canvas { data: [], w: 4 };
+  for i in 0..6 {
+    p = P { tag: i };
+    fill_canvas(cv, p);
+    assert(cv.w == 4, "iter {i}: w = {cv.w}");
+    assert(len(cv.data) == 5, "iter {i}: len = {len(cv.data)}");
+    assert(cv.data[0] == i, "iter {i}: data[0] = {cv.data[0]}");
+  }
+  println("probe 15 PASSED");
+}

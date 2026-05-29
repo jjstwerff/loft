@@ -1,0 +1,64 @@
+// Probe 05 — nested ref-returning calls in the RHS.
+//
+//   fn render_nested(p: P) -> Canvas {
+//     cv = outer_pass(p, alloc_canvas(4, 5, p.tag));
+//     cv
+//   }
+//
+//   fn outer_pass(p: P, c: Canvas) -> Canvas {
+//     c.data += [p.tag];
+//     c
+//   }
+//
+// The outer Call (outer_pass) is the immediate-penultimate-Set RHS, so
+// S1 substitutes outer_pass's hidden buffer arg with cv.  S2 then sees
+// `args` containing `Var(cv)` and skips the pre-Set OpFreeRef.
+//
+// But the INNER call (alloc_canvas) sits as an ARG of outer_pass.  Its
+// own hidden buffer is a fresh __ref_local synthesized at parse time;
+// alloc_canvas writes into __ref_local, then outer_pass receives the
+// resulting DbRef as its `c` parameter.  Inside outer_pass, `c` is
+// promoted to a hidden buffer? — NO, c is a regular ref parameter, not
+// ref_return-promoted (the body doesn't reassign c via `c = …`; it
+// only does `c.data += …` which is field-write).
+//
+// Important: outer_pass DOES `c.data += [p.tag]` — that's a mutation on
+// c's contents.  It works because c is a Reference param; the underlying
+// store is shared.  The hidden buffer for outer_pass's RETURN is what
+// gets unified with cv via S1.
+//
+// Expected: PASS on both backends (S1+S2 cover the outermost Set; inner
+// call's __ref_local is a normal work-ref freed at scope-exit).
+// Status: regression-tracking probe — confirms S1+S2 keep working as we
+// extend coverage.  If this fails, we've broken the canonical case.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn outer_pass(p: P, c: Canvas) -> Canvas {
+  c.data += [p.tag];
+  c
+}
+
+fn render_nested(p: P) -> Canvas {
+  cv = outer_pass(p, alloc_canvas(4, 5, p.tag));
+  cv
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    cv_n = render_nested(p);
+    assert(cv_n.w == 4, "iter {i}: cv_n.w = {cv_n.w}");
+    assert(len(cv_n.data) == 6, "iter {i}: len(cv_n) = {len(cv_n.data)} (expect 6: 5 from alloc_canvas + 1 from outer_pass)");
+    for k in 0..5 { assert(cv_n.data[k] == i, "iter {i} k {k}: cv_n[{k}] = {cv_n.data[k]} (expect {i})"); }
+    assert(cv_n.data[5] == i, "iter {i}: cv_n[5] = {cv_n.data[5]} (expect {i})");
+  }
+  println("probe 05 PASSED");
+}

@@ -1,0 +1,43 @@
+// Probe 24 — deep-slice borrow + heap-call interaction (the moros_map shape).
+//
+//   for i in 0..N {
+//     h = get_first(m);              // deep-slice borrow into m
+//     c = alloc_canvas(4, 5, h.x);    // separate heap-returning call
+//     // ... read both h and c ...
+//   }
+//
+// Probe 12 (deep-slice in isolation) passed.  This probe adds an
+// interleaving heap-call on every iter — testing whether the deep-slice
+// borrow stays valid across other allocations.  This mirrors the
+// `lib/moros_map/map_get_hex` shape inside a render loop.
+
+struct Hex { x: integer not null, y: integer not null }
+struct Container { items: vector<Hex>, name: text }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn get_first(m: Container) -> Hex {
+  return m.items[0];
+}
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn main() {
+  for i in 0..6 {
+    m = Container {
+      items: [Hex { x: i, y: i * 2 }, Hex { x: i + 10, y: i + 20 }],
+      name: "container"
+    };
+    h = get_first(m);
+    c = alloc_canvas(4, 5, h.x);
+    // Both h (borrow into m) and c (fresh canvas) should be uncorrupted.
+    assert(h.x == i, "iter {i}: h.x = {h.x}");
+    assert(c.data[0] == i, "iter {i}: c.data[0] = {c.data[0]} (expect {i})");
+    // Read m.items[0] AFTER alloc_canvas — does the interleaving corrupt?
+    assert(m.items[0].x == i, "iter {i}: m.items[0].x = {m.items[0].x}");
+  }
+  println("probe 24 PASSED");
+}

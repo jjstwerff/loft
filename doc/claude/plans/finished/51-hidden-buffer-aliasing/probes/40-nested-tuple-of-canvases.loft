@@ -1,0 +1,45 @@
+// Probe 40 — nested-tuple-of-canvases: ((Canvas, Canvas), (Canvas, Canvas)).
+//
+// Loft has no single-element tuple syntax (`(Canvas)` is a parenthesised
+// expression, not a 1-tuple) — so this slot now probes whether nesting
+// the broken (Canvas, Canvas) shape COMPOUNDS the truncation.
+//
+// Each inner (Canvas, Canvas) is itself a Tuple-typed element of the
+// outer tuple.  element_size for Type::Tuple recurses; element_align
+// for Type::Tuple returns the max element-align inside.  Layout
+// computations should consistently use stack widths at one site and
+// storage widths at another, exactly the divergence that probe 29
+// hypothesises.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn pair(t: integer, off: integer) -> (Canvas, Canvas) {
+  a = alloc_canvas(4, 5, t + off);
+  b = alloc_canvas(7, 9, t + off + 1);
+  (a, b)
+}
+
+fn nested(p: P) -> ((Canvas, Canvas), (Canvas, Canvas)) {
+  (pair(p.tag, 0), pair(p.tag, 100))
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    (left, right) = nested(p);
+    (la, lb) = left;
+    (ra, rb) = right;
+    assert(la.data[0] == i, "iter {i}: la[0] = {la.data[0]}");
+    assert(lb.data[0] == i + 1, "iter {i}: lb[0] = {lb.data[0]}");
+    assert(ra.data[0] == i + 100, "iter {i}: ra[0] = {ra.data[0]}");
+    assert(rb.data[0] == i + 101, "iter {i}: rb[0] = {rb.data[0]}");
+  }
+  println("probe 40 PASSED");
+}

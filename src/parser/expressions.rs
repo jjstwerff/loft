@@ -296,8 +296,17 @@ impl Parser {
             }
             for r in self.vars.work_references() {
                 if !self.vars.is_argument(r)
-                    && self.vars.tp(r).depend().is_empty()
                     && !self.vars.is_inline_ref(r)
+                    // @PLAN51 Cluster IV: also null-init caller-side hidden-
+                    // buffer work-refs even when their typedef carries a
+                    // non-empty dep list (e.g. Reference(td, [arg_idx]) for
+                    // if-tail / recursion / explicit-return-in-if shapes).
+                    // Without it, the slot allocator skips them ("no
+                    // first_def") and codegen panics at codegen.rs:2529.
+                    // Empty-dep refs still take this path (the original
+                    // arm); caller_hidden_buf is the additional gate.
+                    && (self.vars.tp(r).depend().is_empty()
+                        || self.vars.is_caller_hidden_buf(r))
                 {
                     ls.insert(0, v_set(r, Value::Null));
                 }

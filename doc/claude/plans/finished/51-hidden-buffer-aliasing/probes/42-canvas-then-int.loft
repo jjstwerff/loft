@@ -1,0 +1,41 @@
+// Probe 42 — (Canvas, integer) tuple.
+//
+// Heap first, primitive second.  The primitive at offset 12 (stack) =
+// offset 12 (storage, since int's align 8 is no different) has no
+// nested heap to truncate.  Likely PASSES — the bug needs the LAST
+// element to be a Reference whose nested heap lands past the tuple's
+// reported `size`.
+//
+//   Stack offsets:   Canvas@0 (size 12), int@12 (8-aligned but 12%8=4
+//                    → pos=16), total 24 — wait, int needs 8-align,
+//                    so stack offset is 16, total 24.  Same as storage.
+//   Storage offsets: Canvas@0 (size 12, align 8), int@16 (align 8),
+//                    total 24.
+//
+// So this layout SHOULD be consistent.  Failing here would mean the
+// bug is broader than just "consecutive Refs".
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn split_ci(p: P) -> (Canvas, integer) {
+  a = alloc_canvas(4, 5, p.tag);
+  (a, p.tag * 100)
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    (ca, k) = split_ci(p);
+    assert(ca.w == 4, "iter {i}: ca.w = {ca.w}");
+    assert(ca.data[0] == i, "iter {i}: ca[0] = {ca.data[0]}");
+    assert(k == i * 100, "iter {i}: k = {k}");
+  }
+  println("probe 42 PASSED");
+}

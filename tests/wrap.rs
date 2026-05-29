@@ -304,11 +304,6 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    // @P380 FIXED 2026-05-28 — `93-vector-advanced.loft` now runs clean in the
-    // shared-State suite (it was SIGSEGVing in `test_vector_of_vectors` on the
-    // `vector<vector<single>>` build, and `test_format_object` had a stale
-    // `sizeof 8` expectation — both fixed), so it's no longer skipped.  Keep
-    // this hook for the next known-broken script.
     HashSet::new()
 }
 

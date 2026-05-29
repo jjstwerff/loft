@@ -1,0 +1,49 @@
+// Probe 06 — two distinct hidden-buffer-returning fns interleaved.
+//
+// Mirror of tests/scripts/140-p377-corruption-oracle.loft.  Two struct-
+// param fns (render_p, render_q) called in interleaved order inside a
+// for-loop, with assertions on the returned data on every iteration.
+//
+// Pre-S1+S2: corrupted at iter 1 (`cv_q[0] = null(oob)`).  The corruption
+// surfaces because main's hidden buffer slots accumulate stale DbRefs
+// across iters (each call frees the caller's buffer mid-call, then the
+// freed slot is reused for OTHER variables — main's __ref slot still
+// holds the freed DbRef, now aliasing the wrong store).
+//
+// Post-S1+S2: closed — both calls match the immediate-Set-then-tail
+// shape that S1 substitutes for; S2's narrow gate then skips the mid-
+// call OpFreeRef.
+//
+// Expected: PASS on both backends.
+// Status: regression-tracking probe (also lives at
+// tests/scripts/140-p377-corruption-oracle.loft as the primary
+// regression).
+
+struct P { tag: integer not null }
+struct Q { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn render_p(p: P) -> Canvas { cv = alloc_canvas(4, 5, p.tag); cv }
+fn render_q(q: Q) -> Canvas { cv = alloc_canvas(7, 9, q.tag * 2); cv }
+
+fn main() {
+  for i in 0..12 {
+    p = P { tag: i };
+    q = Q { tag: i + 100 };
+    cv_p = render_p(p);
+    cv_q = render_q(q);
+    assert(cv_p.w == 4, "iter {i}: cv_p.w = {cv_p.w}");
+    assert(cv_q.w == 7, "iter {i}: cv_q.w = {cv_q.w}");
+    assert(len(cv_p.data) == 5, "iter {i}: len(cv_p) = {len(cv_p.data)}");
+    assert(len(cv_q.data) == 9, "iter {i}: len(cv_q) = {len(cv_q.data)}");
+    for k in 0..5 { assert(cv_p.data[k] == i, "iter {i} k {k}: cv_p[{k}] = {cv_p.data[k]}"); }
+    for k in 0..9 { assert(cv_q.data[k] == (i + 100) * 2, "iter {i} k {k}: cv_q[{k}] = {cv_q.data[k]}"); }
+  }
+  println("probe 06 PASSED");
+}

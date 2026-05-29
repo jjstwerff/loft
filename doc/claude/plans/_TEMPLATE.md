@@ -13,7 +13,7 @@ The sections below are the canonical shape.  Sections marked
 **(REQUIRED)** must be present in every plan; sections marked
 **(OPTIONAL)** depend on plan shape.
 
-## Before you copy — pick the lightest workflow
+## Before you copy — pick the right shape
 
 Per [`README.md § Three workflows`](README.md#three-workflows-for-todo-items--pick-the-lightest-that-fits):
 
@@ -22,11 +22,20 @@ Per [`README.md § Three workflows`](README.md#three-workflows-for-todo-items--p
 - **Light TODO** — add a row to `## Open work` in the relevant
   `doc/claude/<NAME>.md` reference doc.  This is the default;
   most TODOs fit here even when they take several sessions.
-- **Plan** — this template.  Reserve for genuinely multi-phase
-  work that benefits from its own directory: explicit phasing,
-  design-before-implementation discipline, cross-arc
-  dependencies, multiple sub-files (DESIGN.md, ARC.md, per-phase
-  files).  Capped at 2-3 active per `plans/`.
+- **Standard plan** — this template.  For genuinely multi-phase
+  feature work or fix arcs that benefit from their own directory:
+  explicit phasing, design-before-implementation discipline,
+  cross-arc dependencies, multiple sub-files (DESIGN.md, ARC.md,
+  per-phase files).  **Primary deliverable: code shipped.**
+- **Investigation plan** — see
+  [`_INVESTIGATION_TEMPLATE.md`](_INVESTIGATION_TEMPLATE.md).
+  For plans whose first phases are "characterize a failure
+  class" before fix design — probes/ subdirectory + per-cluster
+  investigation docs + verified-vs-hypothesized accountability.
+  **Primary deliverable: mechanism understanding + fix-design
+  decision.**  Canonical example: `plans/finished/51-hidden-buffer-aliasing/`.
+
+All plan shapes capped at 2-3 active per `plans/`.
 
 If your TODO fits in one row of a reference-doc table with one
 sentence of design, you don't need a plan — close this template

@@ -1,0 +1,21 @@
+// Probe 56 — multiple lambdas in the same scope.
+//
+// Tests whether the dispatch arms are emitted per-callsite (one fn-ref
+// var → one match arm) or globally (one match per fn-ref type → N
+// arms for N registered lambdas with that type).
+//
+// If the dispatch is per-callsite: BOTH `add5` and `mul3` invocations
+// might fail because each only sees the OTHER lambda's d_nr (or none).
+// If globally with all arms: this passes.
+// If always-no-arms (probe 30's symptom): this fails the same way.
+
+fn main() {
+  add5 = fn(x: integer) -> integer { x + 5 };
+  mul3 = fn(x: integer) -> integer { x * 3 };
+  for i in 0..6 {
+    v = add5(i) + mul3(i);
+    expected = (i + 5) + (i * 3);
+    assert(v == expected, "iter {i}: v = {v} expected {expected}");
+  }
+  println("probe 56 PASSED");
+}

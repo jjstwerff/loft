@@ -1,0 +1,19 @@
+// Probe 52 — lambda returning a primitive (no heap allocation).
+//
+// Probe 30 tests a lambda returning a heap struct (Canvas).  This probe
+// strips out the heap-return aspect to isolate the lambda dispatch
+// itself: a non-allocating lambda returning an integer.
+//
+// If this passes: V-c is heap-return-specific (overlaps with V-a's
+// hidden-buffer mechanism).
+// If this fails: V-c is a universal lambda-dispatch bug, independent
+// of return type.
+
+fn main() {
+  doubler = fn(x: integer) -> integer { x * 2 };
+  for i in 0..6 {
+    v = doubler(i);
+    assert(v == i * 2, "iter {i}: v = {v}");
+  }
+  println("probe 52 PASSED");
+}

@@ -1,0 +1,33 @@
+// Probe 22 — simplest possible if-tail (variation on 08 which panicked).
+//
+//   fn render(p: P) -> Canvas {
+//     if p.tag == 0 { alloc_canvas(4, 5, 0) } else { alloc_canvas(4, 5, 1) }
+//   }
+//
+// Same as probe 08 in shape, but with constant fills instead of computed.
+// Tests: is the panic in probe 08 specific to the IR shape (if-tail with
+// call-in-both-branches), or does it depend on the args?  If this also
+// panics, confirms it's the shape; if not, args matter.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn render(p: P) -> Canvas {
+  if p.tag == 0 { alloc_canvas(4, 5, 0) } else { alloc_canvas(4, 5, 1) }
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    cv = render(p);
+    expected = if i == 0 { 0 } else { 1 };
+    assert(cv.data[0] == expected, "iter {i}: data[0] = {cv.data[0]} (expect {expected})");
+  }
+  println("probe 22 PASSED");
+}

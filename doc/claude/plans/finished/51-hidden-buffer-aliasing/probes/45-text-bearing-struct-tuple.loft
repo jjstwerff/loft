@@ -1,0 +1,39 @@
+// Probe 45 — (Named, Named) where Named has a text field (not vector).
+//
+// Confirms the bug is not vector-specific: a text field is also a heap-
+// owned reference (interned string pointer).  If the bug is "tuple size
+// truncates Canvas2's data field", a struct with `name: text` should
+// also have its second copy's `name` truncated.
+//
+// Named layout (storage):
+//   - id: integer (8 bytes, align 8) at offset 0
+//   - name: text   (4-byte interned ptr, align 4) at offset 8
+//   total: 12, align 8
+//
+// Identical to Canvas (vector header is also 4-byte u32) — so the same
+// stack/storage divergence applies.
+
+struct P { tag: integer not null }
+struct Named { id: integer not null, name: text }
+
+fn make_named(id_in: integer, label: text) -> Named {
+  Named { id: id_in, name: label }
+}
+
+fn split_nn(p: P) -> (Named, Named) {
+  a = make_named(p.tag, "alpha");
+  b = make_named(p.tag * 2, "beta");
+  (a, b)
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    (na, nb) = split_nn(p);
+    assert(na.id == i, "iter {i}: na.id = {na.id}");
+    assert(nb.id == i * 2, "iter {i}: nb.id = {nb.id}");
+    assert(na.name == "alpha", "iter {i}: na.name = '{na.name}'");
+    assert(nb.name == "beta", "iter {i}: nb.name = '{nb.name}'");
+  }
+  println("probe 45 PASSED");
+}

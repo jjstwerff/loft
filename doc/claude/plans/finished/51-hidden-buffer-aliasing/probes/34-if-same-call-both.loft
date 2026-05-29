@@ -1,0 +1,45 @@
+// Probe 34 — if-tail with the SAME call in both branches.
+//
+//   fn render(p: P) -> Canvas {
+//     if p.tag % 2 == 0 {
+//       alloc_canvas(4, 5, 999)
+//     } else {
+//       alloc_canvas(4, 5, 999)    // IDENTICAL — same args
+//     }
+//   }
+//
+// From Cluster IV investigation: probe 18 (match-tail) succeeds because
+// match creates DISTINCT hidden buffer attrs per arm.  Probe 08 (if-tail)
+// panics because unify_if_branches_work_refs tries to unify two work-refs
+// and fails the propagation.
+//
+// This probe tests: even when both branches are IDENTICAL calls (the
+// same fn with the same args), does the unification still panic?
+// If yes, the panic isn't about argument distinctness; it's about the
+// unification machinery itself.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn render(p: P) -> Canvas {
+  if p.tag % 2 == 0 {
+    alloc_canvas(4, 5, 999)
+  } else {
+    alloc_canvas(4, 5, 999)
+  }
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    cv = render(p);
+    assert(cv.data[0] == 999, "iter {i}: data[0] = {cv.data[0]}");
+  }
+  println("probe 34 PASSED");
+}

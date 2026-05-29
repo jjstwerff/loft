@@ -1,0 +1,45 @@
+// Probe 37 — nested if (else-if chain) as tail.
+//
+//   fn render(p: P) -> Canvas {
+//     if p.tag == 0 {
+//       alloc_canvas(4, 5, 100)
+//     } else if p.tag == 1 {
+//       alloc_canvas(4, 5, 200)
+//     } else {
+//       alloc_canvas(4, 5, 300)
+//     }
+//   }
+//
+// Probe 08 (2-branch if-tail) panics.  Probe 18 (3-arm match) passes
+// (no unification).  This is the "3-branch if as nested else-if chain"
+// — does it panic like 08 (multi-branch unification fails) or pass
+// like 18 (per-arm separate buffers)?
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn render(p: P) -> Canvas {
+  if p.tag == 0 {
+    alloc_canvas(4, 5, 100)
+  } else if p.tag == 1 {
+    alloc_canvas(4, 5, 200)
+  } else {
+    alloc_canvas(4, 5, 300)
+  }
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    cv = render(p);
+    expected = if i == 0 { 100 } else if i == 1 { 200 } else { 300 };
+    assert(cv.data[0] == expected, "iter {i}: data[0] = {cv.data[0]}");
+  }
+  println("probe 37 PASSED");
+}

@@ -1,0 +1,40 @@
+// Probe 47 — tuple assembled as a LOCAL (no fn return).
+//
+// Confirms whether the size mismatch is specifically about ref_return's
+// tuple-promotion to a hidden buffer, or whether ANY (Canvas, Canvas)
+// tuple value suffers the same truncation.
+//
+//   t = (alloc_canvas(...), alloc_canvas(...))
+//   (ca, cb) = t
+//
+// If this passes but probe 29 fails: the bug is in the ref_return /
+// synthetic-tuple-return path specifically (the rewrite that promotes
+// the tail tuple to a hidden buffer).
+//
+// If this also fails: the bug is in the underlying tuple-type
+// registration (`tuple_def` size mismatching `finish_type` positions),
+// independent of return-path.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    a = alloc_canvas(4, 5, p.tag);
+    b = alloc_canvas(7, 9, p.tag * 2);
+    t = (a, b);
+    (ca, cb) = t;
+    assert(ca.w == 4, "iter {i}: ca.w = {ca.w}");
+    assert(cb.w == 7, "iter {i}: cb.w = {cb.w}");
+    assert(ca.data[0] == i, "iter {i}: ca[0] = {ca.data[0]}");
+    assert(cb.data[0] == i * 2, "iter {i}: cb[0] = {cb.data[0]}");
+  }
+  println("probe 47 PASSED");
+}

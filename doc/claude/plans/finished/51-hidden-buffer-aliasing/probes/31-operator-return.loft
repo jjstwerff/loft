@@ -1,0 +1,36 @@
+// Probe 31 — operator overload returning a heap struct.
+//
+//   fn OpAdd(a: Canvas, b: Canvas) -> Canvas { ... }
+//
+// Usage: `c = a + b`.  Operator overloading is common loft pattern.
+// Tests: does the operator-dispatch codegen path produce the same hidden
+// buffer shape as a regular fn call?
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn OpAdd(a: Canvas, b: Canvas) -> Canvas {
+  out = Canvas { data: a.data, w: a.w + b.w };
+  for k in 0..len(b.data) { out.data += [b.data[k]]; }
+  out
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    a = alloc_canvas(2, 3, p.tag);
+    b = alloc_canvas(2, 4, p.tag * 10);
+    c = a + b;
+    assert(c.w == 4, "iter {i}: w = {c.w}");
+    assert(len(c.data) == 7, "iter {i}: len = {len(c.data)} (expect 7)");
+    assert(c.data[0] == i, "iter {i}: c[0] = {c.data[0]}");
+    assert(c.data[3] == i * 10, "iter {i}: c[3] = {c.data[3]}");
+  }
+  println("probe 31 PASSED");
+}

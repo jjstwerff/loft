@@ -17,17 +17,41 @@ use std::io::{Error, Write};
 /// emits its bytecode into `state`, then materialises constant
 /// vectors into `CONST_STORE`.
 pub fn byte_code(state: &mut State, data: &mut Data) {
-    native::init(state);
-    register_native_stubs(state, data);
-    for d_nr in 0..data.definitions() {
+    byte_code_from(state, data, 0);
+}
+
+/// Incremental variant of [`byte_code`] — only emit bytecode for
+/// functions whose `d_nr >= start_d_nr`, and skip the one-time init
+/// (`native::init`, `register_native_stubs`, `build_const_vectors`,
+/// `CONST_STORE` lock) when `start_d_nr > 0`.
+///
+/// @P381 — fixes the "Claim on read-only store (locked by: compile.rs
+/// CONST_STORE init)" panic when the test wrapper synthesis at
+/// `src/main.rs:3135` calls `byte_code` a SECOND time over the same
+/// `Data`/`State` to compile a freshly-parsed `fn main()` wrapper that
+/// drives all `test_*()` functions.  The first call (from
+/// `src/main.rs:2198`) emitted bytecode for every user fn, materialised
+/// constant vectors into `CONST_STORE`, and locked the store.  A second
+/// full call re-emitted bytecode for already-compiled fns, and
+/// `Codegen::gen_text` (which writes long string literals into
+/// `CONST_STORE` via `set_str`) tripped the assertion on the now-locked
+/// store.  Compiling only the new wrapper avoids the re-emission entirely.
+pub fn byte_code_from(state: &mut State, data: &mut Data, start_d_nr: u32) {
+    if start_d_nr == 0 {
+        native::init(state);
+        register_native_stubs(state, data);
+    }
+    for d_nr in start_d_nr..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).is_operator() {
             continue;
         }
         state.def_code(d_nr, data);
     }
-    build_const_vectors(state, data);
-    state.database.allocations[crate::database::CONST_STORE as usize]
-        .lock_with_origin("compile.rs::compile (CONST_STORE init)");
+    if start_d_nr == 0 {
+        build_const_vectors(state, data);
+        state.database.allocations[crate::database::CONST_STORE as usize]
+            .lock_with_origin("compile.rs::compile (CONST_STORE init)");
+    }
 }
 
 /// Extract literal values from vector constant Block IR and build

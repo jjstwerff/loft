@@ -713,7 +713,23 @@ impl State {
         // for the parent enum's largest variant.  The parent's size covers
         // all variants; the variant's own size may be smaller (unit variants).
         let size = self.database.enum_parent_size(db_tp);
-        let db = *self.get_var::<DbRef>(var);
+        let mut db = *self.get_var::<DbRef>(var);
+        if std::env::var("LOFT_TRACE_DB").is_ok() {
+            eprintln!(
+                "[db] OpDatabase var={var} db_tp={db_tp} db=#{}@{},{} size={size}",
+                db.store_nr, db.rec, db.pos,
+            );
+        }
+        // @PLAN51 Cluster II Step 2 — handle u16::MAX sentinel inputs.
+        // Mirrors the native runtime (`codegen_runtime.rs::OpDatabase`
+        // line 214) so the bytecode VM's `database` opcode accepts the
+        // same sentinel a caller-side `OpInitRefSentinel` reset
+        // produces.  Without this, `clear()` below would OOB into
+        // `allocations[u16::MAX as usize]`.
+        if db.store_nr == u16::MAX {
+            db = self.database.null();
+            *self.mut_var::<DbRef>(var) = db;
+        }
         self.database.clear(&db);
         let r = self.database.claim(&db, u32::from(size));
         self.database.allocations[r.store_nr as usize].created_at = code_pos;
@@ -1200,6 +1216,57 @@ impl State {
         let tp = raw_tp & 0x7FFF;
         let to = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
+        // @PLAN51 Cluster II — true alias copy is a no-op.  When data
+        // and to refer to the SAME slot (full DbRef equality), the
+        // remove_claims + copy_block + copy_claims sequence would
+        // destroy and rebuild the same nested vectors / texts (because
+        // remove_claims's prelude frees nested heap records BEFORE
+        // copy_block can read them — corrupting same-store callers
+        // like extended-S1 inner Sets).  Short-circuit before any
+        // destructive op so callers that pass aliased src/dst (e.g.
+        // ref_return-promoted callees whose return aliases their
+        // hidden buffer arg) get safe semantics.  Mirrors the safety
+        // gate the native runtime needs at codegen_runtime.rs:OpCopyRecord.
+        if data == to {
+            // free_source is suppressed (data.store_nr == to.store_nr
+            // is already the existing skip-free condition at line 1225);
+            // nothing more to do.
+            let _ = free_source;
+            return;
+        }
+        if std::env::var("LOFT_TRACE_CR").is_ok() {
+            let src_w = if data.rec != 0 {
+                self.database.store(&data).get_int(data.rec, data.pos)
+            } else {
+                -1
+            };
+            let src_data_ptr = if data.rec != 0 {
+                self.database
+                    .store(&data)
+                    .get_u32_raw(data.rec, data.pos + 8)
+            } else {
+                0
+            };
+            let src_vec0 = if src_data_ptr != 0 {
+                let len = self.database.store(&data).get_u32_raw(src_data_ptr, 4);
+                if len > 0 {
+                    self.database.store(&data).get_int(src_data_ptr, 8)
+                } else {
+                    -3
+                }
+            } else {
+                -4
+            };
+            let dst_w_before = if to.rec != 0 {
+                self.database.store(&to).get_int(to.rec, to.pos)
+            } else {
+                -1
+            };
+            eprintln!(
+                "[cr] OpCopyRecord src=#{}@{},{} (w={src_w} data_ptr={src_data_ptr} vec0={src_vec0}) dst=#{}@{},{} (w_before={dst_w_before}) tp={tp} free_src={free_source}",
+                data.store_nr, data.rec, data.pos, to.store_nr, to.rec, to.pos,
+            );
+        }
         let code_pos = self.code_pos;
         let size = u32::from(self.database.size(tp));
         // free any nested vectors/strings already owned by the destination
@@ -1208,6 +1275,23 @@ impl State {
         self.database.remove_claims(&to, tp);
         self.database.copy_block(&data, &to, size);
         self.database.copy_claims(&data, &to, tp);
+        if std::env::var("LOFT_TRACE_CR").is_ok() {
+            let dst_w = self.database.store(&to).get_int(to.rec, to.pos);
+            let dst_data_ptr = self.database.store(&to).get_u32_raw(to.rec, to.pos + 8);
+            eprintln!(
+                "[cr]   AFTER copy: dst=#{}@{},{} w={dst_w} data_ptr={dst_data_ptr}",
+                to.store_nr, to.rec, to.pos,
+            );
+            if dst_data_ptr != 0 {
+                let len = self.database.store(&to).get_u32_raw(dst_data_ptr, 4);
+                let first = if len > 0 {
+                    self.database.store(&to).get_int(dst_data_ptr, 8)
+                } else {
+                    -2
+                };
+                eprintln!("[cr]   AFTER copy: dst.vec_rec={dst_data_ptr} len={len} [0]={first}");
+            }
+        }
         // @P317 — LOFT_LOG=copy_check: warn if the deep copy changed any nested
         // collection length (before the source-free below, so src is intact).
         // Call-site-gated so production pays only a branch-predicted cached

@@ -1,0 +1,20 @@
+// Probe 58 — lambda body calls a NAMED function.
+//
+// Tests whether the lambda's body — which uses a named function call
+// (whose dispatch is direct, not OpCallRef) — affects the outer
+// fn-ref dispatch.  This isolates the LAMBDA-CALL site from the
+// inside-lambda calls.
+//
+// If probe 52 fails and this also fails: confirms the fn-ref CALL
+// SITE is the problem, not anything inside the lambda body.
+
+fn helper(x: integer) -> integer { x * 11 }
+
+fn main() {
+  wrap = fn(x: integer) -> integer { helper(x) };
+  for i in 0..6 {
+    v = wrap(i);
+    assert(v == i * 11, "iter {i}: v = {v}");
+  }
+  println("probe 58 PASSED");
+}

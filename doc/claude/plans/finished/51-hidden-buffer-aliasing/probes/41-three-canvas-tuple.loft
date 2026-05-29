@@ -1,0 +1,44 @@
+// Probe 41 — three-element tuple (Canvas, Canvas, Canvas).
+//
+// Tests whether the size-mismatch truncation scales with arity: with
+// stack widths (12, 4) per Reference vs. storage widths (12, 8), the
+// running offsets diverge more as N grows.
+//
+//   Stack offsets:   0, 12, 24  (total 36)
+//   Storage offsets: 0, 16, 32  (total 44)
+//
+// If the bug is "tuple's stored `size` = stack-widths total, but field
+// positions = storage-widths offsets", the LAST element's nested heap
+// field will live well past the recorded `size` and be silently dropped
+// on copy.  Expect Canvas3.data to be `null(oob)`; Canvas2.data may also
+// be affected depending on copy ordering.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn split3(p: P) -> (Canvas, Canvas, Canvas) {
+  a = alloc_canvas(4, 5, p.tag);
+  b = alloc_canvas(7, 9, p.tag * 2);
+  c = alloc_canvas(11, 3, p.tag * 3);
+  (a, b, c)
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    (ca, cb, cc) = split3(p);
+    assert(ca.w == 4, "iter {i}: ca.w = {ca.w}");
+    assert(cb.w == 7, "iter {i}: cb.w = {cb.w}");
+    assert(cc.w == 11, "iter {i}: cc.w = {cc.w}");
+    assert(ca.data[0] == i, "iter {i}: ca[0] = {ca.data[0]}");
+    assert(cb.data[0] == i * 2, "iter {i}: cb[0] = {cb.data[0]}");
+    assert(cc.data[0] == i * 3, "iter {i}: cc[0] = {cc.data[0]}");
+  }
+  println("probe 41 PASSED");
+}

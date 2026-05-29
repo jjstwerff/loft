@@ -2888,6 +2888,46 @@ impl Parser {
             }
             return ops;
         }
+        // PLAN51 V-b — when the source is a Call returning the
+        // heap-promoted form of THIS tuple shape (i.e.
+        // `Type::Reference(__tuple<…>, _)` whose def_nr matches
+        // tuple_d_nr we just resolved), the native codegen would
+        // otherwise stash a `DbRef` return into a `Type::Tuple` work-ref
+        // and emit an illegal Rust `as (DbRef, DbRef)` cast at
+        // `src/generation/dispatch.rs:459-468` (rustc E0605).  Skip
+        // the per-element TupleGet stash and emit a SINGLE
+        // OpCopyRecord that deep-copies the entire inner-tuple struct
+        // into the host field at `base_pos`.  Mirrors the
+        // `Type::Reference(_, deps.is_empty())` arm in
+        // `set_field_check` (line 3202-3216).
+        let promoted_src_def: Option<u32> = if self.first_pass {
+            None
+        } else {
+            match val_code.unspan() {
+                Value::Call(d_nr, _) => {
+                    if let Type::Reference(d, _) = &self.data.def(*d_nr).returned
+                        && *d == tuple_d_nr
+                    {
+                        Some(tuple_d_nr)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        };
+        if let Some(inner_d) = promoted_src_def {
+            let inner_kt = i32::from(self.data.def(inner_d).known_type);
+            let field_ref = self.cl(
+                "OpGetField",
+                &[
+                    ref_code.clone(),
+                    Value::Int(i32::from(base_pos)),
+                    Value::Int(inner_kt),
+                ],
+            );
+            return vec![self.cl("OpCopyRecord", &[val_code, field_ref, Value::Int(inner_kt)])];
+        }
         // Non-literal source: stash to a work-ref Tuple local, then
         // read each element via `Value::TupleGet`.
         let tup_tp = Type::Tuple(elems_vec.clone());
@@ -3659,6 +3699,12 @@ impl Parser {
                     } else {
                         self.vars.work_refs(&tp, &mut self.lexer)
                     };
+                    // @PLAN51 Cluster IV: tag this work-ref so parse_code's
+                    // preamble emits Set(vr, Null) regardless of vr's
+                    // typedef dep list.  Without it, if-tail / recursion
+                    // shapes leave vr without a first_def → slot allocator
+                    // skips → codegen panics.
+                    self.vars.mark_caller_hidden_buf(vr);
                     self.data.vector_def(&mut self.lexer, content);
                     all_types[a_nr] = Type::Vector(content.clone(), vec![vr]);
                     actual[a_nr] = Value::Var(vr);
@@ -3673,6 +3719,7 @@ impl Parser {
                     } else {
                         self.vars.work_refs(&tp, &mut self.lexer)
                     };
+                    self.vars.mark_caller_hidden_buf(vr);
                     all_types[a_nr] = Type::Reference(content, vec![vr]);
                     actual[a_nr] = Value::Var(vr);
                 } else if let Type::Enum(content, true, _) = tp {
@@ -3695,6 +3742,7 @@ impl Parser {
                     } else {
                         self.vars.work_refs(&tp, &mut self.lexer)
                     };
+                    self.vars.mark_caller_hidden_buf(vr);
                     all_types[a_nr] = Type::Enum(content, true, vec![vr]);
                     actual[a_nr] = Value::Var(vr);
                 } else if let Type::RefVar(vtp) = &tp {

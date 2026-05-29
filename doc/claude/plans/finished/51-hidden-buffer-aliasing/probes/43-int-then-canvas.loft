@@ -1,0 +1,38 @@
+// Probe 43 — (integer, Canvas) tuple.
+//
+// Primitive first, heap second.  The Canvas is LAST — its nested
+// vector header lives at the tuple's tail.  Compute:
+//
+//   Stack:   int(8,8)@0 → pos 8. Canvas(12,4) → 8%4=0, offset=8,
+//            total 20.
+//   Storage: int(8,8)@0 → pos 8. Canvas(12,8) → 8%8=0, offset=8,
+//            total 20.
+//   Match → no truncation.  Likely PASSES.
+//
+// Failing here would mean the tuple-size logic miscomputes single-Ref
+// trailing tuples.
+
+struct P { tag: integer not null }
+struct Canvas { data: vector<integer>, w: integer not null }
+
+fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
+  cv = Canvas { data: [], w: w };
+  for _i in 0..h { cv.data += [fill]; }
+  cv
+}
+
+fn split_ic(p: P) -> (integer, Canvas) {
+  a = alloc_canvas(4, 5, p.tag);
+  (p.tag * 100, a)
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    (k, ca) = split_ic(p);
+    assert(k == i * 100, "iter {i}: k = {k}");
+    assert(ca.w == 4, "iter {i}: ca.w = {ca.w}");
+    assert(ca.data[0] == i, "iter {i}: ca[0] = {ca.data[0]}");
+  }
+  println("probe 43 PASSED");
+}

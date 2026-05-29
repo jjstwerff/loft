@@ -1,0 +1,22 @@
+// Probe 59 — lambda returning a vector (heap allocation, but NOT a struct).
+//
+// Probe 30 returns Canvas (struct-with-vector-field).  This probe
+// returns a bare vector<integer>.  If V-c is about ref_return /
+// hidden-buffer-promotion engaging only on struct returns, this
+// might behave differently.
+//
+// Triangulates the heap-vs-primitive boundary (probe 52 = primitive,
+// probe 59 = bare vector, probe 30 = struct-with-heap-field).
+
+fn main() {
+  make_seq = fn(n: integer) -> vector<integer> {
+    v = [];
+    for i in 0..n { v += [i * i]; }
+    v
+  };
+  for i in 1..6 {
+    seq = make_seq(i);
+    assert(seq[0] == 0, "iter {i}: seq[0] = {seq[0]}");
+  }
+  println("probe 59 PASSED");
+}

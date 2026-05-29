@@ -655,6 +655,9 @@ impl Parser {
                 self.text_return(ls);
             } else if let Type::Vector(_, ls) = t {
                 self.ref_return(ls);
+                // @P377 / S1: collapse `cv = inner_call(...); cv` so the
+                // inner call's hidden buffer arg points at cv directly.
+                self.nrvo_collapse_tail_set(l, ls);
             } else if let Type::Reference(_, ls) = t {
                 // Issue #120: when filter_hidden stripped the deps from a
                 // Reference return type, recover work-ref variables from the
@@ -665,9 +668,13 @@ impl Parser {
                     let extra = Self::collect_hidden_ref_args(last, &self.data);
                     if !extra.is_empty() {
                         self.ref_return(&extra);
+                        // @P377 / S1: see above.
+                        self.nrvo_collapse_tail_set(l, &extra);
                     }
                 } else {
                     self.ref_return(ls);
+                    // @P377 / S1: see above.
+                    self.nrvo_collapse_tail_set(l, ls);
                 }
             }
         }
@@ -883,6 +890,184 @@ impl Parser {
                     *v = to;
                 }
             }
+        }
+    }
+
+    /// @P377 / S1 — parse-time NRVO for the intermediate-local return shape.
+    ///
+    /// After `ref_return` has promoted `cv` to the function's hidden return
+    /// buffer attribute, an inner heap-returning call inside the body still
+    /// targets its own parser-synthesised `__ref_N` work-ref, and the
+    /// `Set(cv, …)` then copies that into `cv`.  `__ref_N`'s store has no
+    /// remaining owner — that's the @P377 leak.
+    ///
+    /// S1 substitutes `__ref_N → cv` in the inner Call's hidden-buffer arg
+    /// (and anywhere else `__ref_N` is referenced inside the inner Call)
+    /// so the inner Call writes directly into the outer fn's hidden buffer.
+    /// `Set(cv, …)` becomes a same-store self-copy — already a no-op in
+    /// `OpCopyRecord` and exercised today by every direct-return shape.
+    ///
+    /// Preconditions — fires only when ALL hold:
+    ///   1. `cv` is in `ls` (just promoted by `ref_return` immediately above).
+    ///   2. Block tail is `Var(cv)` or `Return(Var(cv))` (modulo `Span`).
+    ///   3. Penultimate statement is `Set(cv, Call(fn_nr, args))`.
+    ///   4. `fn_nr` has a hidden Reference / Vector / struct-Enum attribute
+    ///      at some index `i`.
+    ///   5. `args[i]` is `Value::Var(work_ref)` and `vars.name(work_ref)`
+    ///      starts with `__ref_` / `__rref_` (parser-internal, not a
+    ///      user-named alias).
+    ///   6. `work_ref != cv` (idempotency).
+    ///
+    /// Bails silently on any mismatch.  No warnings, no errors.  The
+    /// Set/Var pair is left in place — the codegen treats a same-store
+    /// `OpCopyRecord` as a no-op, so the IR shape stays uniform with the
+    /// direct-return path.
+    pub(crate) fn nrvo_collapse_tail_set(&mut self, l: &mut [Value], ls: &[u16]) {
+        if self.first_pass || l.is_empty() || ls.is_empty() {
+            return;
+        }
+        let last = l.len() - 1;
+
+        // (1) Tail must be `Var(cv)` or `Return(Var(cv))`, modulo Span.
+        let Some(cv) = Self::tail_var(&l[last]) else {
+            return;
+        };
+        if !ls.contains(&cv) {
+            return;
+        }
+
+        if last == 0 {
+            // No prior op to substitute — only the tail Var(cv).
+            return;
+        }
+
+        // (2) Penultimate must be `Set(cv, Call(fn_nr, args))`, modulo Span.
+        let prev = l[last - 1].unspan_mut();
+        let Value::Set(slot, rhs) = prev else { return };
+        if *slot != cv {
+            return;
+        }
+        let rhs_inner = rhs.unspan_mut();
+        let Value::Call(fn_nr, args) = rhs_inner else {
+            return;
+        };
+        let fn_nr_val = *fn_nr;
+
+        // (3) Find the first hidden buffer attribute index on the callee
+        //     whose typedef is heap-allocated (Reference / Vector / struct-Enum).
+        let hidden_idx = {
+            let def = self.data.def(fn_nr_val);
+            def.attributes.iter().enumerate().find_map(|(i, a)| {
+                if !a.hidden {
+                    return None;
+                }
+                if !matches!(
+                    &a.typedef,
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                ) {
+                    return None;
+                }
+                Some(i)
+            })
+        };
+        let Some(i) = hidden_idx else { return };
+
+        // (4) args[i] must be a parser-internal __ref_N / __rref_N work-ref,
+        //     distinct from cv.
+        if args.len() <= i {
+            return;
+        }
+        let work_ref = match args[i].unspan() {
+            Value::Var(v) => *v,
+            _ => return,
+        };
+        if work_ref == cv {
+            return;
+        }
+        let nm = self.vars.name(work_ref);
+        if !nm.starts_with("__ref_") && !nm.starts_with("__rref_") {
+            return;
+        }
+
+        // (5) Substitute work_ref → cv inside the call's args.
+        for a in args.iter_mut() {
+            Self::substitute_work_ref(a, work_ref, cv);
+        }
+
+        // (6) @PLAN51 Cluster II — extend the substitution backwards to
+        //     EARLIER consecutive `Set(cv, Call(_))` ops (probes 02, 21).
+        //     Stops at any non-Set/non-Line op (intervening stmt, If,
+        //     etc.) — those are unsafe to swap through (the discard's
+        //     RHS may read cv; conditional Sets need branch-aware
+        //     reasoning).  Probes 03, 04, 07, 11, 25, 26, 28 remain
+        //     leaky; their substitution requires extending into IR
+        //     wrappers which is parser-invasive (an earlier attempt
+        //     broke tests/scripts/87-store-leaks.loft because
+        //     conditional Sets to cv interact with paired_witness in
+        //     ways that a blanket "substitute every Set(cv, Call)"
+        //     doesn't handle correctly).
+        let mut idx = last - 1;
+        while idx > 0 {
+            idx -= 1;
+            if matches!(l[idx], Value::Line(_)) {
+                continue;
+            }
+            let earlier = l[idx].unspan_mut();
+            let Value::Set(eslot, erhs) = earlier else {
+                break;
+            };
+            if *eslot != cv {
+                break;
+            }
+            let erhs_inner = erhs.unspan_mut();
+            let Value::Call(efn, eargs) = erhs_inner else {
+                break;
+            };
+            let efn = *efn;
+            let ehidden_idx = {
+                let def = self.data.def(efn);
+                def.attributes.iter().enumerate().find_map(|(i, a)| {
+                    if !a.hidden {
+                        return None;
+                    }
+                    if !matches!(
+                        &a.typedef,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    ) {
+                        return None;
+                    }
+                    Some(i)
+                })
+            };
+            let Some(ei) = ehidden_idx else { break };
+            if eargs.len() <= ei {
+                break;
+            }
+            let ework_ref = match eargs[ei].unspan() {
+                Value::Var(v) => *v,
+                _ => break,
+            };
+            if ework_ref == cv {
+                continue;
+            }
+            let enm = self.vars.name(ework_ref);
+            if !enm.starts_with("__ref_") && !enm.starts_with("__rref_") {
+                break;
+            }
+            for a in eargs.iter_mut() {
+                Self::substitute_work_ref(a, ework_ref, cv);
+            }
+        }
+    }
+
+    /// Walk past `Span` / `Return` wrappers to find a tail `Var(v)`.
+    /// Used by `nrvo_collapse_tail_set` to recognise the two shapes the
+    /// parser produces for "the body returns variable `v`".
+    fn tail_var(v: &Value) -> Option<u16> {
+        match v.unspan() {
+            Value::Var(v) => Some(*v),
+            Value::Return(inner) => Self::tail_var(inner),
+            _ => None,
         }
     }
 
@@ -3245,6 +3430,22 @@ impl Parser {
                         return;
                     }
                 }
+                // @PLAN51 probe 39 — Reference parallel of the Vector
+                // arm above.  A function returning a heap struct that
+                // has been ref_return-promoted to a caller-side hidden
+                // buffer (`__ref_1`) leaks ONE store per mid-body
+                // `return borrowed_slice` when the returned DbRef is
+                // NOT backed by `__ref_1`.  `OpReturn` then writes the
+                // borrowed 12-byte DbRef into the caller's buffer slot
+                // — orphaning the buffer's pre-allocated store.
+                //
+                // Pattern: `for x in vec { ... return x.field[i]; } default`.
+                // probe 39's `map_get_hex` is the canonical case
+                // (lib/moros_map's deep-slice borrow).
+                //
+                // Fix: deep-copy the borrowed slice into `__ref_1` via
+                // OpCopyRecord, then return `__ref_1`.  Mirrors the
+                // Vector arm's OpAppendVector treatment.
             }
         } else if !self.first_pass && r_type != Type::Void {
             diagnostic!(self.lexer, Level::Error, "Expect expression after return");
