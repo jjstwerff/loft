@@ -9,11 +9,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Surfaced:** 2026-05-29, immediately after cluster 1 was fixed —
 removing the `code_add` abort let Miri reach execution.
 **Status:** mechanism VERIFIED; root cause pinned (user-confirmed:
-record fields ARE aligned, the **stack** is not).  **Fix path
-chosen: (B) unaligned typed stack access, behind a named accessor
-seam** (user, 2026-05-29); (A) retained below as the documented
-future pivot.  Implementation pending an explicit go.  Disjoint
-from PLAN52's surface — lands off-gate like cluster 1.
+record fields ARE aligned, the **stack** is not; owned `String`
+locals live on the stack and can't be value-copied).  **Fix path
+chosen: FULL STACK ALIGNMENT** (user, 2026-05-29) — round every
+stack footprint up to 8 so `stack_pos` stays 8-aligned and all
+`addr`/`addr_mut` on the stack are aligned.  The earlier (B)
+attempt was reverted (couldn't cover owned `String`).
+Implementation in progress.  Disjoint from PLAN52's surface.
 
 ## Root cause (corrected — NOT a record-field-layout bug)
 
@@ -64,13 +66,81 @@ Confirmed via the interpreter Miri run.
 | `Str` is 8-byte aligned (`ptr: *const u8`) | ✅ VERIFIED | `src/keys.rs:49` |
 | Record fields + store base ARE aligned (so records are NOT the bug) | ✅ VERIFIED (user-confirmed) | `Layout::from_size_align(size*8, 8)` `src/store.rs:281`; field layout aligned by design |
 
-## Fix path — CHOSEN: (B) now, (A) retained as future pivot
+## Fix path — CHOSEN: full stack alignment
 
-**Decision (user, 2026-05-29): take (B) — unaligned typed stack
-access — behind a named accessor seam.  (A) is kept fully
-documented below as the future pivot.**
+**Decision (user, 2026-05-29): full alignment.**  The earlier (B)
+attempt (unaligned accessors) was **reverted** — it cannot cover the
+owned `String` stack locals (a `std::String` owns its heap
+allocation and can't be value-copied/`read_unaligned`'d; only
+*slices* are `Str`), and the owned `String` is reached through the
+*drifting* `stack_pos` (`stack_cur.pos + stack_pos - pos`), so
+selectively aligning just its slot is impossible without aligning
+the whole addressing chain — at which point you've done full
+alignment anyway.  One uniform rule beats a special case fighting
+the slot allocator.
 
-> Detailed implementation design: [`cluster-2-fix-design.md`](cluster-2-fix-design.md).
+### Design — reuse the field/tuple alignment mechanics
+
+**Detailed design: [`cluster-2-fix-design.md`](cluster-2-fix-design.md).**
+
+Refined from the first "blunt round-to-8" spike: instead of a new
+rounding, **reuse loft's existing field/tuple alignment machinery**
+(`element_offsets` / `element_align` / `calculate_positions_with_groups`
+/ `group_size`) to lay out the stack, feeding it the **context-correct
+text type** — `String` (align 8) in stack context, `Str` in field
+context.  `size(tp, Context::Variable)` already context-splits text
+*size*; extend the same split to *alignment*.  Then every stack
+`addr`/`addr_mut::<T>` is aligned on all targets (incl. RISC-V),
+`String` included, and the hard-coded `pos - N` offsets get *derived*
+from the mechanic rather than hand-maintained.  (The blunt round-to-8
+spike currently in the tree is superseded — revert before
+implementing.)
+
+**Two size notions to change (they agree by construction today):**
+
+1. **loft `size(tp, Context::Variable)`** (`src/variables/mod.rs:1462`)
+   — the slot allocator's per-type frame footprint.  Round the
+   result up to a multiple of 8 (1→8, 4→8, 12→16, 20→24; 8/16/24
+   unchanged).
+2. **Rust `size_of::<T>()` at the eval-stack push/pop** —
+   `get_stack`/`put_stack`/`get`/`put`/`get_var`/`put_var` advance
+   `stack_pos` by `size_of::<T>()`.  Route through an
+   `aligned_stack_size::<T>() = (size_of::<T>() + 7) & !7` helper so
+   they advance in 8-aligned steps consistently with (1).
+
+**Blast radius (the real work):**
+
+- **`size()` `Context::Constant` cases must NOT round** (lines
+  1464-1465) — those are bytecode operand widths (cluster-1 /
+  byte-packed bytecode buffer), nothing to do with the stack.
+- **Hard-coded `pos - N` offset arithmetic** in `fill.rs` / `text.rs`
+  (`string_mut(pos - 4)`, `pos - 16/20/24`, etc.) is byte-exact
+  today and is **not** compiler-checked — it must be recomputed for
+  the rounded sizes, or it silently corrupts.  This is the part that
+  needs test + Miri validation, not just a green build.
+- **Codegen** (`src/state/codegen.rs`) must emit slot offsets / push
+  widths from the *same* rounded sizes the runtime uses — codegen
+  and runtime share `size()`, so rounding there propagates, but any
+  codegen site using a raw width needs the rounded one.
+- **`validate_slots`** should assert 8-alignment of every slot once
+  the rule is in.
+- **Cost:** small stack-footprint growth (sub-8 values padded to 8;
+  `DbRef` 12→16) + marginally larger frame copies.  No per-access
+  cost; aligned access is the fast path.  See `cluster-2-fix-design.md`
+  for the worked padding/perf analysis.
+
+**Out of scope:** cluster 1 (bytecode buffer) stays on
+`read_unaligned`/`write_unaligned` — opcodes are legitimately
+byte-packed and must not be padded.
+
+### History — (A)/(B) options considered
+
+The reverted (B) design + the original (A)/(B) trade-off remain
+below and in [`cluster-2-fix-design.md`](cluster-2-fix-design.md)
+for the record.  Full alignment is essentially (A) generalised from
+"align named slots" to "align the whole stack", which is what the
+owned-`String`-via-drifting-`stack_pos` analysis showed is actually
+required.
 
 Rationale: (B) is quick and localized (~4-6 funnel helpers, all
 whole-value read/write, no stack RMW), uses the proven cluster-1
