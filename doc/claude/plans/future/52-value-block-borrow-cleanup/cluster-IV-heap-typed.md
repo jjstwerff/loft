@@ -184,11 +184,34 @@ fn output_test_predicate(&mut self, w: &mut dyn Write, test: &Value) -> std::io:
 - Sets A / B (cluster I): unchanged (interpret FAIL, native PASS) — fix doesn't touch text path.
 - Interpret-side: unchanged — interpreter wasn't blocked by the predicate-emit bug; its silent-corruption shape is unrelated.
 
-**Remaining work after iteration 1**:
+**Iteration 2 (2026-05-29) — Hash / Sorted / Index dep-strip fix landed**
 
-The predicate fix closes struct-Enum but exposes a SECOND latent bug in Vec / Hash / Sorted / Index value-block lowering: `var_a` (the destination of `a = vec[i] ?? other`) is declared as the null-DbRef sentinel BEFORE `OpReplaceKeyed`/equivalent copies the if-result into it.  `OpReplaceKeyed` then crashes on `store_nr=u16::MAX` (out-of-bounds in `stores.allocations`).
+The predicate fix closes struct-Enum but exposes a secondary bug in keyed-collection `??` lowering: `var_a` (the destination of `a = collection[i] ?? other`) was declared as the null-DbRef sentinel because `emit_null_dbref` in `src/generation/dispatch.rs` saw `owns_store=false` (its dep list pointed at the borrow source `[w1]`, not self).  `OpReplaceKeyed` then crashed on `stores.allocations[u16::MAX]`.
 
-This is a separate fix surface: the `??` lowering needs to either (a) allocate a fresh store for `var_a` before emitting the if-result, or (b) emit a direct assignment of the if-result to `var_a` instead of going through `OpReplaceKeyed`.  See `parser/operators.rs` `??` heap-type lowering.
+The dep-stripping at `src/parser/expressions.rs::parse_assign_op` previously only fired for **Var-RHS** (the `s = ns` deep-copy form).  For the `??` form the RHS is a `Block`, so the dep stayed in place — the lifetime tracker treated `var_a` as a borrow when it should have been an owner.
+
+Fix: extend the dep-strip to fire for ANY non-Var RHS — after `OpReplaceKeyed` runs, `var_a` always owns its store, regardless of how the RHS was shaped.
+
+Result on Set E after iteration 2:
+
+| Probe | Type | After iter 1 | After iter 2 |
+|---|---|---|---|
+| 21 | Vector | runtime panic | runtime FAIL (Vector uses a different deep-copy path, not OpReplaceKeyed — open) |
+| 22 | Hash | runtime panic | **PASS** ✅ |
+| 23 | struct-Enum | PASS | PASS |
+| 36 | Vector (iter consumer) | runtime panic | runtime FAIL (same as 21) |
+| 40 | Tuple | COMPILE-ERR | COMPILE-ERR (Tuple sentinel) |
+| 41 | Sorted | runtime panic | **PASS** ✅ |
+| 50 | Index | runtime panic | **PASS** ✅ |
+
+- Set H baselines: all PASS (no regression).
+- `cargo test --test issues`: 681/681 pass.
+
+**Remaining work after iteration 2**:
+
+- **IV-Vec / IV-Vec-iter (probes 21, 36)**: Vector deep-copy doesn't go through `OpReplaceKeyed`.  Needs a similar fix in the vector path (likely `OpCopyVector` or analogous emission in `parser/expressions.rs::parse_assign_op`'s Vector branch).  Open.
+- **IV-Tuple (probe 40)**: Tuple isn't heap-DbRef; needs a per-field sentinel.  Open.
+- **Cluster VII (probes 47/48/82)**: text-branch type unification, separate fix surface.
 
 **What iteration 1 fixes:**
 - Cluster IV-Enum (probe 23): **closed** — native compile + runtime PASS.

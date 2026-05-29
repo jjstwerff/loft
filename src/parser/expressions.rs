@@ -1304,8 +1304,28 @@ use a separate collection or add after the loop"
             // suppresses its own `OpFreeRef` (store leak) while deferring the
             // RHS's free (loop accumulation).  Mirrors the Reference var-to-
             // var deep-copy dep-strip in `scopes.rs::scan_set`.
+            //
+            // @PLAN52 cluster IV (Vec/Hash/Sorted/Index `??`): the original
+            // form below only stripped a single Var-RHS dep, but `??` lowers
+            // to a `Block` RHS, so the dep stays in place.  Native
+            // `emit_null_dbref` then sees `owns_store=false` and emits the
+            // null-DbRef sentinel, which crashes `OpReplaceKeyed`'s
+            // `stores.allocations[u16::MAX]` lookup.  Strip ALL deps for
+            // any non-Var RHS — after the deep copy `var_nr` owns its store
+            // regardless of how the RHS was shaped.
             if let Value::Var(rhs) = code.unspan() {
                 self.vars.make_independent(var_nr, *rhs);
+            } else {
+                let deps: Vec<u16> = match self.vars.tp(var_nr) {
+                    Type::Sorted(_, _, d)
+                    | Type::Hash(_, _, d)
+                    | Type::Index(_, _, d)
+                    | Type::Spacial(_, _, d) => d.clone(),
+                    _ => Vec::new(),
+                };
+                for d in deps {
+                    self.vars.make_independent(var_nr, d);
+                }
             }
             // @P300 — prepend `Set(v, Null)` so the destination keeps a
             // recordable `Value::Set` node.  `compute_intervals` only
