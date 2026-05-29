@@ -24,6 +24,8 @@ impl State {
     }
 
     pub(super) unsafe fn set_string(&mut self, size: i32, off: *const u8) {
+        #[cfg(debug_assertions)]
+        self.check_stack_align::<Str>(self.stack_cur.pos + self.stack_pos);
         let m = self
             .database
             .store_mut(&self.stack_cur)
@@ -57,6 +59,8 @@ impl State {
     #[must_use]
     pub fn string(&mut self) -> Str {
         self.stack_pos -= size_ptr();
+        #[cfg(debug_assertions)]
+        self.check_stack_align::<Str>(self.stack_cur.pos + self.stack_pos);
         *self
             .database
             .store(&self.stack_cur)
@@ -322,6 +326,8 @@ impl State {
     When an unknown internal string format is found.
     */
     pub fn string_mut(&mut self, pos: u16) -> &mut String {
+        #[cfg(debug_assertions)]
+        self.check_stack_align::<String>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         self.database.store_mut(&self.stack_cur).addr_mut::<String>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -329,6 +335,8 @@ impl State {
     }
 
     pub(super) fn string_ref_mut(&mut self, pos: u16) -> &mut String {
+        #[cfg(debug_assertions)]
+        self.check_stack_align::<DbRef>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         let r = *self.database.store(&self.stack_cur).addr::<DbRef>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),

@@ -1368,6 +1368,33 @@ impl State {
         crate::variables::aligned_stack_step(size, self.aligned_stack)
     }
 
+    /// @PLAN53 cluster 2 / S4 — homegrown alignment guard (debug + aligned only).
+    /// `pos` is the byte offset passed to `addr`/`addr_mut` on the stack store
+    /// (i.e. `stack_cur.pos + frame_offset`).  A typed `T` accessed there must
+    /// sit on its natural alignment boundary; an unaligned `&T` is the cluster-2
+    /// UB.  Asserts it loudly AT the access site on ANY rustc — no Miri needed.
+    /// The store buffer base + `rec*8` are 8-aligned, so `(rec*8 + pos) % align`
+    /// is the true access alignment.  NB: this checks the SLOT address, never
+    /// `Str.ptr` (string slices legitimately start at any byte).
+    /// Debug-only; the method does not exist in release builds (its callers
+    /// gate the call — and the `pos` argument computation — on the same
+    /// `cfg`, so there is ZERO footprint on the hot push/pop path in release).
+    #[cfg(debug_assertions)]
+    #[inline]
+    pub(crate) fn check_stack_align<T>(&self, pos: u32) {
+        if self.aligned_stack {
+            let al = std::mem::align_of::<T>() as u32;
+            let abs = self.stack_cur.rec * 8 + pos;
+            debug_assert_eq!(
+                abs % al,
+                0,
+                "S4 unaligned stack access: {} at abs offset {abs} (align {al}) — \
+                 cluster-2 UB: a typed value landed off its alignment boundary",
+                std::any::type_name::<T>(),
+            );
+        }
+    }
+
     pub fn reserve_frame(&mut self, size: u16) {
         let step = self.stack_step(u32::from(size));
         self.ensure_stack(step);
@@ -1493,6 +1520,8 @@ impl State {
             size_of::<T>() as u32
         );
         self.stack_pos -= self.stack_step(size_of::<T>() as u32);
+        #[cfg(debug_assertions)]
+        self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos);
         let r = self
             .database
             .store(&self.stack_cur)
@@ -1583,6 +1612,8 @@ impl State {
             "get_var: pos={pos} exceeds stack_pos={} (frame underflow)",
             self.stack_pos
         );
+        #[cfg(debug_assertions)]
+        self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         self.database.store(&self.stack_cur).addr::<T>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -1595,6 +1626,8 @@ impl State {
             "mut_var: pos={pos} exceeds stack_pos={} (frame underflow)",
             self.stack_pos
         );
+        #[cfg(debug_assertions)]
+        self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         self.database.store_mut(&self.stack_cur).addr_mut::<T>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -1606,6 +1639,8 @@ impl State {
         // stepped span (matches the get_stack/put_stack steps it pairs with);
         // identity when LOFT_ALIGN off.
         let step = self.stack_step(size_of::<T>() as u32);
+        #[cfg(debug_assertions)]
+        self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos + step - u32::from(pos));
         *self.database.store_mut(&self.stack_cur).addr_mut::<T>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos + step - u32::from(pos),
@@ -1701,6 +1736,8 @@ impl State {
             }
         }
         self.ensure_stack(self.stack_step(size_of::<T>() as u32));
+        #[cfg(debug_assertions)]
+        self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos);
         let m = self
             .database
             .store_mut(&self.stack_cur)
@@ -2059,6 +2096,22 @@ impl State {
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
+            }
+            // @PLAN53 cluster 2 / S4 — alignment invariant guard.  In aligned
+            // mode the entry base is 8 and every push/pop/reserve advances by a
+            // multiple of 8, so `stack_pos` must stay 8-aligned after EVERY op.
+            // The first op that leaves it unaligned is the bug — name it with
+            // its pc + fn instead of waiting for a distant garbage-deref SIGSEGV.
+            #[cfg(debug_assertions)]
+            if self.aligned_stack {
+                debug_assert_eq!(
+                    self.stack_pos % 8,
+                    0,
+                    "S4 alignment broken: op_code={op} at pc={op_pos_rt} left \
+                     stack_pos={} (not 8-aligned), fn_d_nr={}",
+                    self.stack_pos,
+                    self.call_stack.last().map_or(u32::MAX, |f| f.d_nr),
+                );
             }
             // FY.1: frame yield — return to caller (JS requestAnimationFrame).
             if self.database.frame_yield {

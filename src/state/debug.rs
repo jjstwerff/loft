@@ -996,22 +996,24 @@ impl State {
         self.def_pos = self.code_pos;
         // Fix #88 (parity): push a synthetic CallFrame for the entry function so that
         // stack_trace() returns the same frame count as execute_argv.
+        // @PLAN53 cluster 2 / S4: match execute_argv's aligned entry base.
+        let entry_base = crate::variables::aligned_stack_step(4, self.aligned_stack);
         self.call_stack.push(super::CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: entry_base,
             args_size: 0,
             line: 0,
         });
         // Write the return address of the main function but do not override the record size.
-        self.stack_pos = 4;
+        self.stack_pos = entry_base;
         self.put_stack(u32::MAX);
 
         // Compute the initial frame offset for the bridging invariant check.
         // At runtime we start at stack_pos=4 (the return address); the compile-time
         // tracking in self.stack may start at a different value (usually 0).
         let root_compile_start = self.stack.get(&self.code_pos).copied().map_or(0, i64::from);
-        let mut frame_offset = 4i64 - root_compile_start;
+        let mut frame_offset = i64::from(entry_base) - root_compile_start;
         let mut prev_fn_start = self.code_pos;
 
         // TODO Allow command line parameters on main functions
@@ -1060,6 +1062,16 @@ impl State {
                 self.log_step(log, op, code, &(cur_d_nr, frame_offset), config, data)?;
             }
             OPERATORS[op as usize](self);
+            // @PLAN53 cluster 2 / S4 — alignment invariant guard (trace path).
+            if self.aligned_stack {
+                debug_assert_eq!(
+                    self.stack_pos % 8,
+                    0,
+                    "S4 alignment broken (trace): op_code={op} at pc={code} left \
+                     stack_pos={} (not 8-aligned)",
+                    self.stack_pos,
+                );
+            }
             if trace_this {
                 self.log_result(log, op, code, data)?;
             }
