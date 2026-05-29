@@ -1,5 +1,12 @@
 // Probe 51 — Cluster IV completion: Spacial collection value-block
 //
+// EXCLUDED FROM PLAN52 (2026-05-30): `spacial<X[k]>` is unimplemented
+// (planned for 1.1+).  The parser emits a clean "spacial<T> is planned
+// for 1.1+" diagnostic since commit 1b00325 (IV-Spacial parser-hang
+// fix held).  Re-run this probe when spacial lands as part of 1.1+ work
+// — it will then verify `??` on spacial value-blocks closes the same
+// way IV-Hash/Sorted/Index did.  Not a value-block-borrow-cleanup gap.
+//
 // `spacial<X[k]>` is the 4th keyed-collection type.  Tests whether
 // `spacial` joins IV-Hash/Sorted/Index or escapes via some specialised
 // path.

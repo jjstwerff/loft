@@ -66,7 +66,7 @@ set_name() {
     H) echo "baselines-regression-guard" ;;
     I) echo "real-library" ;;
     J) echo "cluster-IV-Vec-nested-field-push" ;;
-    Z) echo "known-parser-bugs-skip" ;;
+    Z) echo "excluded-language-level-restrictions" ;;
     *) echo "?" ;;
   esac
 }

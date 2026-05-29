@@ -1,5 +1,13 @@
 // Probe 52 — Primitive-type baseline: `char` and `single` coalesce
 //
+// EXCLUDED FROM PLAN52 (2026-05-30): `char` has no null sentinel —
+// the parser rejects `??` on character with "Field access not supported
+// on type character".  This is the correct semantics: a value-only
+// type with no null has nothing to coalesce.  Re-open if loft ever
+// gains a nullable-char concept or relaxes the parser refusal (e.g.
+// via a separate design decision).  Not a value-block-borrow-cleanup
+// mechanism gap.
+//
 // Like `bool` (probe 35), `char` (4-byte u32) and `single` (4-byte f32)
 // are value-typed.  No heap allocation, no pointer.  Should PASS.
 //

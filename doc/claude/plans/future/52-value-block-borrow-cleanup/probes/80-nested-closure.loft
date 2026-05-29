@@ -1,5 +1,13 @@
 // Probe 80 — Cluster VI nested-closure variant
 //
+// EXCLUDED FROM PLAN52 (2026-05-30): parses as "Unknown variable" —
+// the inner closure cannot see the outer closure's captured variable.
+// This is a language-level restriction on closure capture through
+// NESTED closures (independent of `??`); the same parse error would
+// fire for ANY reference to the outer closure's captures, not specific
+// to value-blocks.  Re-open if loft adds nested-closure capture support.
+// Not a value-block-borrow-cleanup mechanism gap.
+//
 // Closure inside a closure, with `??` deep in the inner.  Tests whether
 // closure nesting compounds the cluster VI bug or produces a new shape.
 //

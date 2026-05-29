@@ -1,5 +1,16 @@
 // Probe 85 — Cluster VI variant: closure that RETURNS text via `??`
 //
+// EXCLUDED FROM PLAN52 (2026-05-30): the closure tries to capture
+// `items: vector<text>` (a vector local) — parser rejects with
+// "vector variable 'items' cannot be captured into a closure body;
+// bind the element you need before the lambda".  This is an
+// intentional language-level restriction: the closure record layout
+// doesn't model the content type.  The error message explicitly
+// directs the user to bind the element first
+// (e.g. `x = items[i]; f = fn(...) { ... x ... }`).  Re-open if
+// vector closure-capture support is added.  Not a value-block-
+// borrow-cleanup mechanism gap.
+//
 // Probe 45 captures + returns; probe 65 has Var LHS + returns; probe 67
 // passes closure as arg.  This probe stores the closure in a variable
 // then INVOKES it through a different code path.  Tests whether the
