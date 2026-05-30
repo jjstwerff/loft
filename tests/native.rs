@@ -491,6 +491,14 @@ fn compile_native_job(
 ) -> std::io::Result<bool> {
     if binary_cache_valid(job, rlib_info) {
         println!("  cached  {}", job.stem);
+        // BUILD2: bump the binary's mtime on a cache HIT so its timestamp
+        // tracks last-USE, not last-compile.  A long-lived cache entry is
+        // hit (not recompiled) run after run, so without this its mtime
+        // would freeze at first-compile time and an age-based reaper would
+        // delete exactly the entries the cache most wants to keep warm.
+        let now = std::time::SystemTime::now();
+        let _ = std::fs::File::open(&job.binary).and_then(|f| f.set_modified(now));
+        let _ = std::fs::File::open(&job.key_file).and_then(|f| f.set_modified(now));
         return Ok(true);
     }
     // Preflight (Layer 2): never start a compile that could overflow a

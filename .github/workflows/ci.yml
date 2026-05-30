@@ -142,17 +142,22 @@ jobs:
       - name: Test
         run: cargo nextest run --profile ci
 
-      # BUILD2: bound the persisted native-binary cache.  Each fixture keeps a
-      # single fixed-named binary (overwritten on change, not duplicated), so
-      # the live set is stable (~190MB), but a removed/renamed fixture leaves an
-      # orphan that is never re-hit.  Drop anything not touched this run so the
-      # cached `target/` entry can't creep upward across months of churn.
-      # Best-effort + cross-platform via a tiny inline script (skip on Windows
-      # where `find` differs; the Linux/macOS runs keep it trimmed for all).
-      - name: Prune stale native-binary cache
+      # BUILD2: reap ABANDONED native-binary cache entries.  Each fixture keeps
+      # a single fixed-named binary (overwritten on change, not duplicated), so
+      # the live set is self-bounding (~300 binaries, ~300MB); the dir only
+      # creeps when a fixture is deleted/renamed and leaves an orphan.  The
+      # cache-HIT path touches each binary's mtime (see compile_native_job), so
+      # mtime = last-USE: a 30-day threshold reaps only genuinely-dead orphans
+      # and can never delete a binary the suite still hits (even fixtures that
+      # run on only one OS are touched well within 30 days).  Deliberately NOT
+      # an aggressive per-run prune — that would delete long-lived warm entries
+      # whose whole purpose is to survive across runs.  Best-effort; skipped on
+      # Windows (find(1) differs) — the Linux/macOS runs keep the shared dir
+      # trimmed for everyone.
+      - name: Reap abandoned native-binary cache entries
         if: runner.os != 'Windows'
         continue-on-error: true
-        run: find "${{ github.workspace }}/target/loft-native-cache" -type f -mmin +180 -delete || true
+        run: find "${{ github.workspace }}/target/loft-native-cache" -type f -mtime +30 -delete || true
 
   clippy:
     name: Clippy
