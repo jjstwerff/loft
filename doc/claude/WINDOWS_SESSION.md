@@ -46,7 +46,13 @@ If any pre-flight step fails, that's the FIRST gap to investigate — base-toolc
 
 ## Priority queue — investigate in this order
 
-### Priority 1 — verify the v2 probe result (5 min if pre-flight clean)
+### Priority 1 — verify the v2 probe result ✅ DONE (2026-05-30, local host)
+
+**Outcome: PASSES.**  Re-ran on a real Windows host (rustc 1.96.0 MSVC):
+`multiplayer_v2` 3/3, `multiplayer_v3` 2/2, `multiplayer_v5` 5/5 — all 10
+P229b tests green, no code change, no `cfg_attr(windows, ignore)` gate left.
+@P229b confirmed incidentally fixed.  (Original probe text retained below for
+context.)
 
 A probe commit (libraries3 `baa9c3e2`, 2026-05-29) temporarily un-ignored `v2_single_client_completes_game` on Windows to surface real `diagnose_listen_failure` output.
 
@@ -59,6 +65,18 @@ Three outcomes:
 - **PASSES** → @P229b was incidentally fixed sometime in the last 3 weeks.  Un-ignore all 10 P229b tests across `multiplayer_v{2,3,5}.rs`.  Update G1 in WINDOWS.md.
 - **FAILS with port-bind error** in the captured stderr → the 2026-05-21 hypothesis confirms; apply the SO_REUSEADDR / server-binds-:0-itself fix described in WINDOWS.md G1.
 - **FAILS with `code: 206` or another spawn error** → same problem space as PR #228 (cmdline overflow).  The spawn-cmdline of the server subprocess is short, so this would point to something else like a missing DLL path or working-dir issue.  Capture the full stderr and investigate.
+
+> **2026-05-30 blocker for ALL `--native` priorities below (G2/G3/G4-native).**
+> On the local host these could not be exercised end-to-end: (1) the
+> pre-existing `libloft.rlib` was a stale **gnu**-target build → `E0461` under
+> the msvc `--native` compile (cleared by `rustup run
+> stable-x86_64-pc-windows-msvc cargo build --release`); then (2) the rebuilt
+> **unsigned** `loft.exe` is blocked by the host's **WDAC code-integrity
+> policy** (CodeIntegrity 3077, "blocked by an application control policy").
+> `cargo test` works (cached verdict); standalone `loft --native …` does not.
+> **Code-sign `loft.exe` after each build** (user validates with a YubiKey)
+> before attempting G2/G3/G4-native.  Detail: WINDOWS.md § The 2026-05-30
+> native-execution wall.
 
 ### Priority 2 — G2 LNK1181 (15-30 min reproduce + decide)
 
@@ -86,6 +104,14 @@ If `error: crate `ureq` required to be available in rlib format` fires:
 ### Priority 4 — G4 `parallel { }` worker stack snapshot (variable effort)
 
 The Linux half of @P229 was fixed 2026-05-10.  The Windows half remains.  Lower priority than G1-G3 because no user has reported a regression from it.
+
+**2026-05-30 update — interpreter half VERIFIED CLEAN on a local host.**
+`tests/scripts/80-parallel-block.loft` + `81-parallel-outer-vars.loft` exit 0
+under `--interpret`, and `tests/threading.rs` passes 47/47 (incl. the
+`par_ref_buffer_stack_*` worker-stack-snapshot cells).  The residual G4 gap is
+now scoped to the **`--native`** parallel path, which is blocked behind the
+WDAC signing wall above — re-run both scripts under `--native` once `loft.exe`
+is signed.
 
 ### Priority 5 — opportunistic checks
 
