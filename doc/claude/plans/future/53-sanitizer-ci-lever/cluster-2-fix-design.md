@@ -787,3 +787,53 @@ guard-clean) waits on 2j (guard silent) + a Miri pass.
   `par` (e.g. `(character, integer)`) returns 0 in production; and sequential
   `for p in pairs { f(p) }` tuple-arg fails `expected (int,int), got
   __tuple<int,int>` flag-OFF.  Surfaced while probing 2i; recorded here.
+
+---
+
+## 2j — LANDED 2026-05-30 (aligned interpreter now GUARD-CLEAN)
+
+**Fix:** the par-worker dispatchers hardcoded the frame base `args_base: 4` /
+`stack_pos = 4` instead of the stepped `aligned_stack_step(4)` = 8 that the real
+fn entry (`execute_argv`) uses.  The frame is self-consistent at base 4 (output
+correct — hence 685/0 functional) but every typed slot lands at `base + slot ≡
+4 (mod 8)` → off its 8-boundary → the access guard fires.  Var addressing is
+purely frame-relative (`get_var` reads `stack_cur.pos + stack_pos − pos`; the
+`base` term cancels), so bumping the base 4 → 8 shifts the whole frame up 4
+bytes uniformly: output unchanged, every slot now 8-aligned.  Existence proof:
+`execute_argv` ALREADY runs at base 8 and the suite passes.
+
+**Investigation under-scoped (caught by checking).** The agent hypothesised 2
+dispatchers; reading the file showed **8** sharing the identical
+`args_base: 4` / `stack_pos = 4` pattern: `execute_at`, `execute_at_raw`,
+`execute_at_raw_primitive_input`, `execute_at_raw_primitive_input_wide`,
+`execute_at_raw_to`, `execute_at_raw_text_input`, `execute_at_ref`,
+`execute_at_text`.  All eight bumped to `self.stack_step(4)` (the wide one also
+at its post-copy `stack_pos = … + stepped_size` advance).  `args_base` is u32
+and consumed only by `stack_trace()` introspection (`debug.rs`) — bumped in
+lockstep so an in-worker stack trace stays correct.  Identity flag-OFF
+(`aligned_stack_step(4,false)=4`).
+
+**Left untouched:** `execute_at_void_with_snapshot` (L2985, the `parallel {}`
+block worker) — it overlays the PARENT's stack snapshot with offset-4 semantics
+tied to the parent layout; distinct from the `par()` dispatchers and not part of
+2j.  The full `issues` suite is guard-clean including its parallel cases; the
+`tests/scripts` `parallel {}` suites were not run under the guard here, so the
+snapshot path's guard-cleanliness there is unverified — candidate follow-up if a
+guard run over scripts surfaces it.
+
+**Result — the S4 guard criterion is MET:**
+- `run_guard.sh 2j`: all reproducers FIRES → **SILENT**; references stay SILENT;
+  functional PASS/PASS throughout.
+- **Full `issues` suite under the `stack_align_guard` test binary, aligned,
+  per-test isolated: 685 / 0 — ZERO guard fires.**  The homegrown
+  Miri-for-the-stack is fully silent across the whole interpreter.
+- Aligned functional 685/0; flag-OFF `issues` 681/0; clippy clean (with and
+  without the `stack_align_guard` feature); full functional probe sweep CLEAN.
+
+### Switch-readiness after 2j
+
+Three of the four S4 DoD criteria now hold: aligned 685/0, flag-OFF 681/0,
+**guard-clean (685/0 armed)**.  The LAST gate is the **Miri** run — the
+gold-standard external detector — against the now-guard-silent aligned
+interpreter.  Only after Miri is clean is the switch (flip default vs keep
+behind `LOFT_ALIGN`) a tool-validated decision.

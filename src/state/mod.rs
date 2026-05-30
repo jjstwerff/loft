@@ -2379,11 +2379,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 12,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.put_stack(*arg); // 12 bytes → stack_pos = 16
         self.put_stack(u32::MAX); // 4 bytes  → stack_pos = 20
         self.code_pos = fn_pos;
@@ -2430,11 +2430,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 12,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         // Push extra context args first (they precede the element arg in the
         // function's parameter list: fn worker(element, extra1, extra2, ...)).
         // The stack grows upward; the function reads params from low to high offset.
@@ -2501,11 +2501,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: input_size as u16,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         // Push the primitive input value at its native byte width.
         // `put_stack` advances stack_pos by `size_of::<T>()`, so we
         // pick the type by `input_size` to match the worker's
@@ -2592,11 +2592,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: stepped_size as u16,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.ensure_stack(stepped_size);
         // @PLAN53 cluster 2 / 2h: copy the input bytes as ONE CONTIGUOUS chunk.
         // A byte-by-byte `put_stack::<u8>` advanced stack_pos by stack_step(1) = 8
@@ -2616,7 +2616,7 @@ impl State {
         }
         // Advance past the STEPPED arg span (not the raw byte count) so locals /
         // extra args / the return sentinel land where the body's frame expects them.
-        self.stack_pos = 4 + stepped_size;
+        self.stack_pos = self.stack_step(4) + stepped_size;
         for &extra in extra_args {
             self.put_stack(extra as i64);
         }
@@ -2686,11 +2686,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 12,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.put_stack(*arg);
         for &extra in extra_args {
             self.put_stack(extra as i64);
@@ -2761,11 +2761,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 16,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.put_stack(input_str); // 16 bytes
         for &extra in extra_args {
             self.put_stack(extra as i64);
@@ -2829,11 +2829,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 12,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.put_stack(*arg);
         for &dest in hidden_dests {
             // ARC.md A6.a — push hidden destination DbRefs as 12 bytes
@@ -2893,7 +2893,7 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 12,
             line: 0,
         });
@@ -2912,7 +2912,7 @@ impl State {
             work_crs.push(cr);
         }
 
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.put_stack(*arg);
         for &extra in extra_args {
             self.put_stack(extra as i64);

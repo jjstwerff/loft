@@ -227,7 +227,7 @@ aligned-mode failures from the sweep, plus references and edges:
 | 2d composite-format/misc | 9 | p145, p159, p193, n2, n4, n5, n8×2 | ✅ **FIXED 2026-05-30** |
 | 2h tuple-in-par (byte smear) | 6 | p189c | ✅ **FIXED 2026-05-30** |
 | 2i tuple-in-par (non-8-mult total) | 5 | — (probe-discovered) | ✅ **FIXED 2026-05-30** |
-| 2j par-worker entry base (GUARD) | 4 | — (guard-only) | OPEN — guard fires, blocks switch |
+| 2j par-worker entry base (GUARD) | 4 | — (guard-only) | ✅ **FIXED 2026-05-30** (guard-clean) |
 
 **Aligned `issues` suite is now 685 / 0** (zero failures/crashes/hangs, down
 from 27 at session start).  2h+2i fix: `execute_at_raw_primitive_input_wide`
