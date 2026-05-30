@@ -425,14 +425,17 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     // Only write the .rs file when the content has changed.  This keeps the file's
     // content stable across runs where the loft source hasn't changed, which
     // means cache_key() produces the same hash and compile_native_job stays cached.
-    let tmp_rs = std::env::temp_dir().join(format!("loft_native_{stem}.rs"));
+    // scratch_dir honours LOFT_TMPDIR so the whole native run can be kept off a
+    // small /tmp tmpfs; all of these must agree on the same directory.
+    let scratch = loft::platform::scratch_dir();
+    let tmp_rs = scratch.join(format!("loft_native_{stem}.rs"));
     let existing = std::fs::read(&tmp_rs).unwrap_or_default();
     if existing != buf {
         std::fs::write(&tmp_rs, &buf)?;
     }
 
-    let binary = std::env::temp_dir().join(format!("loft_native_{stem}_bin"));
-    let key_file = std::env::temp_dir().join(format!("loft_native_{stem}_bin.key"));
+    let binary = scratch.join(format!("loft_native_{stem}_bin"));
+    let key_file = scratch.join(format!("loft_native_{stem}_bin.key"));
     Ok(NativeJob {
         stem,
         tmp_rs,
@@ -478,6 +481,18 @@ fn compile_native_job(
         println!("  cached  {}", job.stem);
         return Ok(true);
     }
+    // Preflight (Layer 2): never start a compile that could overflow a
+    // RAM-backed tmpfs and exhaust memory.  Reclaims loft's own stale
+    // artefacts first; skips (not fails) the test if space is still low.
+    let scratch = loft::platform::scratch_dir();
+    if !loft::platform::native_compile_space_ok(&scratch) {
+        println!(
+            "  SKIP {} — low temp space in {} (set LOFT_TMPFS_MIN_FREE_MB to tune)",
+            job.stem,
+            scratch.display()
+        );
+        return Ok(false);
+    }
     // PLAN49 follow-up — build the rustc args into a file passed via
     // `rustc @argfile` instead of as a long command line.  Windows
     // `CreateProcessW` enforces a 32 KB command-line limit; on CI runners
@@ -495,6 +510,14 @@ fn compile_native_job(
         "-C".to_string(),
         "opt-level=0".to_string(),
     ];
+    // Layer 1: strip the linked binary (~36MB → ~1MB; the bulk is debug info
+    // from libloft.rlib + std, useless to a run-and-check test).  Opt out with
+    // LOFT_NATIVE_KEEP_SYMBOLS=1 when debugging a native crash (the generated
+    // .rs is always kept for recompilation).
+    if loft::platform::native_strip_symbols() {
+        args.push("-C".to_string());
+        args.push("strip=symbols".to_string());
+    }
     // LOFT_CRANELIFT=1 — use the Cranelift codegen backend for much faster compilation.
     // Requires a nightly toolchain with `rustup component add rustc-codegen-cranelift-preview`.
     if std::env::var_os("LOFT_CRANELIFT").is_some() {
@@ -527,7 +550,7 @@ fn compile_native_job(
     // separated; newline-separated is a strict subset and is what
     // every other tool (clang, gcc) accepts too.  Paths containing
     // whitespace get quoted defensively.
-    let argfile_path = std::env::temp_dir().join(format!("loft_native_{}_args.txt", job.stem));
+    let argfile_path = scratch.join(format!("loft_native_{}_args.txt", job.stem));
     let argfile_contents = args
         .iter()
         .map(|s| {
@@ -595,10 +618,21 @@ fn run_native_jobs(
     jobs: Vec<NativeJob>,
     rlib_info: Option<(PathBuf, PathBuf)>,
 ) -> std::io::Result<()> {
-    let concurrency = std::thread::available_parallelism()
+    // Layer 3: scale worker count to temp-fs headroom.  On a roomy disk this is
+    // just min(cpus, jobs); on a tight RAM-backed tmpfs it clamps down so N
+    // concurrent compiles can't exhaust memory and hang the machine.  Each
+    // in-flight compile peaks at ~1.2GB of temp (rustc intermediates dominate;
+    // the stripped output binary is ~1MB), so reserve that per worker.
+    let cpu_max = std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(4)
-        .min(jobs.len().max(1));
+        .unwrap_or(4);
+    const PER_WORKER_TMP: u64 = 1280 * 1024 * 1024;
+    let concurrency = loft::platform::native_worker_count(
+        cpu_max,
+        jobs.len(),
+        &loft::platform::scratch_dir(),
+        PER_WORKER_TMP,
+    );
     let rlib_ref = &rlib_info;
 
     // Phase 2: compile all jobs in parallel chunks.
@@ -765,8 +799,11 @@ fn native_tuple_script() -> std::io::Result<()> {
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
     let job = prepare_native_test(entry)?;
-    let compiled = compile_native_job(&job, &rlib_info)?;
-    assert!(compiled, "50-tuples.loft failed to compile under --native");
+    // Ok(false) = skipped (rustc absent, or Layer-2 low-space guard) — not a
+    // failure; a real compile error returns Err.  Skip the run in that case.
+    if !compile_native_job(&job, &rlib_info)? {
+        return Ok(());
+    }
     run_native_job(&job)
 }
 
@@ -783,8 +820,11 @@ fn native_binary_script() -> std::io::Result<()> {
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/20-binary.loft");
     let job = prepare_native_test(entry)?;
-    let compiled = compile_native_job(&job, &rlib_info)?;
-    assert!(compiled, "20-binary.loft failed to compile under --native");
+    // Ok(false) = skipped (rustc absent, or Layer-2 low-space guard) — not a
+    // failure; a real compile error returns Err.  Skip the run in that case.
+    if !compile_native_job(&job, &rlib_info)? {
+        return Ok(());
+    }
     run_native_job(&job)
 }
 
@@ -801,11 +841,11 @@ fn native_tuple_return_script() -> std::io::Result<()> {
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
     let job = prepare_native_test(entry)?;
-    let compiled = compile_native_job(&job, &rlib_info)?;
-    assert!(
-        compiled,
-        "50-tuples.loft (with tuple return) failed to compile under --native"
-    );
+    // Ok(false) = skipped (rustc absent, or Layer-2 low-space guard) — not a
+    // failure; a real compile error returns Err.  Skip the run in that case.
+    if !compile_native_job(&job, &rlib_info)? {
+        return Ok(());
+    }
     run_native_job(&job)
 }
 

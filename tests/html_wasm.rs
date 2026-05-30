@@ -616,23 +616,54 @@ fn run_wasip2_wasm(name: &str, source: &str, lib_dirs: &[&str]) -> Option<(Strin
     if !compile.status.success() {
         return Some((String::from_utf8_lossy(&compile.stderr).into_owned(), false));
     }
-    // @P334 fix (2026-05-29): preopen `--dir <tmp>` so wasip2 file I/O works.
-    // The wasip2 filesystem is sandboxed — without a preopen every file op
-    // fails with "os error 44" and any file-using lib traps the moment it
-    // tries to open a path.  `<tmp>` is the loft `std::env::temp_dir()`
-    // default, which is where `lib/world` saves/loads its test fixture; libs
-    // that write elsewhere either honour env-overrides (LOFT_HOME, etc.) or
-    // use CWD-relative paths.
-    let run = Command::new(&wasmtime)
-        .arg("--dir")
-        .arg(&tmp)
-        .arg(&wasm)
-        .output()
-        .ok()?;
-    Some((
-        String::from_utf8_lossy(&run.stdout).into_owned(),
-        run.status.success(),
-    ))
+    // @P334 fix (2026-05-29): preopen the dirs a test program may touch so
+    // wasip2 file I/O works.  The wasip2 filesystem is sandboxed — without a
+    // preopen every file op fails with "os error 44" and any file-using lib
+    // traps the moment it opens a path.
+    //
+    // Robustness: preopen a SET of roots, not just `std::env::temp_dir()`.
+    // A test that hardcodes a `/tmp/...` literal (e.g. lib/world's save/load
+    // fixture) traps when the harness's TMPDIR points elsewhere
+    // (`/tmp/claude-1000`, a CI sandbox dir, …) and only that dir is preopened.
+    // Preopening the literal `/tmp` mount AND the temp dir AND the CWD covers
+    // /tmp-literal, temp-default, and CWD-relative file paths alike, so a lib
+    // test no longer has to know how the harness configured TMPDIR.  Each dir
+    // is mapped host==guest; duplicates and missing dirs are skipped.
+    let mut preopens: Vec<std::path::PathBuf> = Vec::new();
+    let mut add = |d: std::path::PathBuf| {
+        if d.is_dir() && !preopens.contains(&d) {
+            preopens.push(d);
+        }
+    };
+    add(tmp.clone());
+    #[cfg(unix)]
+    add(std::path::PathBuf::from("/tmp"));
+    if let Ok(cwd) = std::env::current_dir() {
+        add(cwd);
+    }
+    let mut cmd = Command::new(&wasmtime);
+    for dir in &preopens {
+        cmd.arg("--dir").arg(dir);
+    }
+    let run = cmd.arg(&wasm).output().ok()?;
+    // On failure, surface stderr too — a wasip2 trap (sandbox denial, missing
+    // preopen, panic) writes its diagnostic to stderr, and reporting only
+    // stdout left earlier failures with an empty, undiagnosable message.
+    let report = if run.status.success() {
+        String::from_utf8_lossy(&run.stdout).into_owned()
+    } else {
+        let mut s = String::from_utf8_lossy(&run.stdout).into_owned();
+        let err = String::from_utf8_lossy(&run.stderr);
+        if !err.trim().is_empty() {
+            if !s.is_empty() {
+                s.push('\n');
+            }
+            s.push_str("stderr: ");
+            s.push_str(err.trim());
+        }
+        s
+    };
+    Some((report, run.status.success()))
 }
 
 /// WASM gate over `lib/<pkg>/tests/*.loft` — runs each main()-bearing lib test
