@@ -78,12 +78,16 @@ alignment bug; no probe authored (a clean probe must PASS flag-OFF).
 
 ## Sub-cluster 2b — sorted-collection iteration (PASS 2)
 
-**Mechanism.** Iterating a `sorted<T[key]>` corrupts the per-element gather
-(OpNext / gather_key) span under LOFT_ALIGN, so the iterator reports exhausted
-immediately and the `for` body never runs — distinct from 2a (which shifts a
-*value*); here the *cursor* is corrupted and NO elements are seen.  Even a
-single element triggers it (`2b-04`); an empty collection is fine (`2b-03`, no
-gather); a plain vector is fine (`2b-02`, different path).
+**Mechanism (PINNED, see cluster-2-fix-design.md § Stage C).** `State::step()`
+(`src/state/io.rs`) walks the iterator-state block at hard-coded raw byte
+deltas (`state_var - 4` = finish, `-8` = next cur, `-12` = done); under
+LOFT_ALIGN those state words are `stack_step(4)`-spaced (8 apart, written by
+`iterate()`'s `put_stack`), so `finish` reads from the wrong (padding) slot and
+`pos >= finish` is immediately true → the `for` body never runs.  The
+`iterate()` *setup* is correct (trace: start=MAX, finish=1); the fault is the
+`step()` delta arithmetic.  Distinct from 2a (which shifts a *value*); here the
+*cursor* dies and NO elements are seen.  Even a single element triggers it
+(`2b-04`); empty is fine (`2b-03`, no `step`); plain vector is fine (`2b-02`).
 
 | Probe | Shape | Aligned now | Role |
 |---|---|---|---|
@@ -100,12 +104,16 @@ Maps to: `inc02`, `inc12`×2, `p190`, `p277`, `p295`, `p300`, `p4d_b`, `n2`.
 
 ## Sub-cluster 2c — hash-collection iteration (PASS 3)
 
-**Mechanism.** Iterating a `hash<T[key]>` mis-offsets the per-element gather by
-one slot, emitting a SPURIOUS LEADING element (empty/zero) before the real
-ones: `,apple,mango,zebra,` instead of `apple,mango,zebra,`, a count of 4 for
-3 entries.  Mirror image of 2b: 2b (sorted) DROPS all elements; 2c (hash) ADDS
-a phantom one.  Empty hash is fine (`2c-02`, no gather); a single element
-already triggers it (`2c-04`).
+**Mechanism (PINNED — shares 2b's root, see cluster-2-fix-design.md § Stage C).**
+Hash iteration materialises a scratch rec-nr vector (`{id}#hash_scratch`,
+`parser/collections.rs`) and walks it through the SAME `step()` (case 3) — so
+the same raw `state_var - N` deltas mis-address the cursor, here producing a
+SPURIOUS LEADING element (empty/zero): `,apple,mango,zebra,` instead of
+`apple,mango,zebra,`, a count of 4 for 3 entries.  Mirror image of 2b: 2b
+(sorted) DROPS all elements; 2c (hash) ADDS a phantom — both from `step()`.
+The 2b fix is expected to close 2c; one open check (the scratch-vector build)
+noted in the design.  Empty hash is fine (`2c-02`, no `step`); a single
+element already triggers it (`2c-04`).
 
 | Probe | Shape | Aligned now | Role |
 |---|---|---|---|

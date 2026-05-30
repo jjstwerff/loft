@@ -394,10 +394,14 @@ the four sub-clusters into two fix shapes:
 
 | Sub-cluster | Guard | Mechanism class | Site | Design state |
 |---|---|---|---|---|
-| **2a** generator-arg | **FIRES** | raw misalignment (frame drift) | `coroutine_next` (op 252) | **pinned + seed** |
-| **2b** sorted-iter | silent | span-logic (dead cursor) | `OpNext` / sorted gather | class only |
-| **2c** hash-iter | silent | span-logic (off-by-one) | `OpNext` / hash gather | class only |
-| **2d** composite-format | **FIRES** | raw misalignment (handle read) | `text.rs` format read | **pinned + seed** |
+| **2a** generator-arg | **FIRES** | raw misalignment (frame drift) | `coroutine_next` (op 252) | **pinned** → Stage C |
+| **2b** sorted-iter | silent | span-logic (dead cursor) | `step()` raw deltas (io.rs) | **pinned via trace** → Stage C |
+| **2c** hash-iter | silent | span-logic (off-by-one) | `step()` case 3 (shares 2b) | **pinned via trace** → Stage C |
+| **2d** composite-format | **FIRES** | raw misalignment (handle read) | `text.rs` 489/499 | **pinned** → Stage C |
+
+(The "span-logic, not yet pinned" prose for 2b/2c just below was the
+guard-pass state; the follow-up `LOFT_ITERATE_TRACE` pass pinned both to
+`step()`'s raw `state_var - N` deltas — see § Stage C.)
 
 ### 2a — `coroutine_next` frame drift (PINNED)
 
@@ -443,3 +447,142 @@ Of the four sub-clusters, **2a and 2d have pinned sites + fix-design seeds**
 (both are the stepped-slot/raw-width pattern); **2b and 2c have a verified
 symptom and mechanism class but no pinned site** — they need one more
 investigation pass (cursor-stride diff) before a fix design.
+
+---
+
+## Stage C — fix designs, all four sub-clusters (2026-05-30)
+
+2b/2c were pinned by tracing `LOFT_ITERATE_TRACE` (the `iterate()` setup is
+byte-identical aligned vs flag-OFF, so the bug is downstream in the per-element
+`step()`), 2a by the frame guard (op 252), 2d by the access guard (`String` at
+offset 68).  Two of the four share one root cause.
+
+### 2a — coroutine resume advances TOS by a raw frame length
+
+**Site:** `State::coroutine_next` — `src/state/mod.rs` ~1043
+(`self.stack_pos += bytes.len()`), with the saved frame produced by
+`coroutine_create` (~865, `stack_bytes = vec![0u8; args_size]`) and
+`coroutine_yield` (~1176, `locals_bytes` of length `value_start - base`).
+
+**Mechanism (verified):** the guard fires
+`op_code=252 … stack_pos=84 (not 8-aligned)`.  On resume, TOS is advanced by
+the RAW byte length of the saved frame.  The generator body then reads its
+argument at the codegen-stepped var offset (8-aligned), but the restored TOS /
+arg region sits 4 bytes off, so `n=42` reads as `42<<32`.  No-arg generators
+have no argument to mis-read (2a-02/03 PASS).
+
+**Fix:** make the saved-frame length and the resume advance agree with
+codegen's stepped frame layout.  Two options:
+
+- **(A) recompute TOS from the stepped frame extent** — after the restore
+  `copy_nonoverlapping`, set `self.stack_pos = stack_base + <stepped frame
+  size>` using the same stepped `local_start` / `generator_zone2_size` math
+  already in the file, instead of `+= bytes.len()`.  Preferred — single
+  authoritative advance, independent of how the bytes were captured.
+- **(B) capture the frame at a stepped length** — pad `stack_bytes` /
+  `locals_bytes` to `stack_step(len)` in create/yield so `bytes.len()` is
+  already 8-aligned.  Simpler diff but spreads the invariant across three
+  functions.
+
+Recommend (A).  Identity when `aligned_stack` is off (`stack_step` = identity),
+so flag-OFF is byte-for-byte unchanged.
+
+**Validation:** `probes/run.sh 2a` → all 11 PASS (incl. the HANG/CRASH
+variants); frame guard silent; flag-OFF `issues` 681/0.
+
+### 2b — iterator `step()` walks a stepped state block at raw byte deltas
+
+**Site:** `State::step` — `src/state/io.rs` 963–1052.  Lines 968, 989, 997,
+1011, 1013, 1017, 1020, 1041 (and the sibling `remove`/reverse paths at
+~1092, 1119, 1133, 1135, 1153, 1172) access the iterator-state block at
+HARD-CODED raw deltas: `state_var - 4` (finish), `state_var - 8` (next cur),
+`state_var - 12` (done flag), `state_var - 16` (reverse finish).
+
+**Mechanism (verified):** `iterate()` writes the state words with
+`put_stack(start); put_stack(finish)` (`io.rs` ~934) — under `LOFT_ALIGN` each
+`put_stack` advances `stack_step(4) = 8`, so the state words are 8-spaced.
+`step()` then reads `finish = get_var(state_var - 4)` — the RAW 4 lands on the
+wrong (padding) slot.  In the sorted case (`on&63 == 2`, line 1018) `finish`
+reads as a small/zero value, so `pos >= finish` is immediately true →
+`pos = i32::MAX` → done before the first element → **every element dropped**.
+The `iterate()` bounds themselves are correct (trace: start=MAX, finish=1),
+confirming the fault is purely the `step()` delta arithmetic.
+
+**Fix:** replace the raw constants with stepped deltas.  The block is a
+sequence of logical 4-byte words each occupying `stack_step(4)` bytes:
+
+```
+finish  : state_var - 1*stack_step(4) as u16   // was -4
+next cur: state_var - 2*stack_step(4) as u16   // was -8
+done    : state_var - 3*stack_step(4) as u16   // was -12
+rev fin : state_var - 4*stack_step(4) as u16   // was -16
+```
+
+Introduce a small local `let w = self.stack_step(4) as u16;` and express the
+offsets as `state_var - w`, `state_var - 2*w`, … .  Identity when off (`w==4`).
+Apply uniformly across `step()` AND the `remove`/reverse siblings that share
+the layout.
+
+**Validation:** `probes/run.sh 2b` → all 8 PASS; flag-OFF unchanged.
+
+### 2c — hash iteration shares 2b's `step()` (via the scratch rec-nr vector)
+
+**Site:** hash iteration does NOT walk the hash directly: the parser
+substitutes a scratch rec-nr vector (`{id}#hash_scratch`,
+`src/parser/collections.rs` ~828) and iterates THAT through the SAME
+`step()` (`on&63 == 3`, `io.rs` 1032–1047, which also writes
+`state_var - 8` raw).
+
+**Mechanism (high-confidence shared root, one open check):** the off-by-one
+"phantom leading element" is the case-3 manifestation of the same raw-delta
+read — the cursor/finish bookkeeping is shifted by a slot, so the scratch
+iteration starts one early.  Because 2b and 2c go through the same function,
+the 2b fix above is expected to close 2c as well.
+
+**Fix:** apply the 2b `step()` stepping fix (case 3 inherits the same
+`state_var - 2*w` for its `put_var(state_var - 8, …)`).  THEN re-run
+`probes/run.sh 2c`.  **Open check:** if a phantom survives, inspect the
+`{id}#hash_scratch` BUILD (does the scratch vector itself get a spurious
+leading entry under aligned?) and the case-3 start-sentinel (`cur` init) — but
+the leading hypothesis is that 2b's fix closes 2c with no extra change.
+
+**Validation:** `probes/run.sh 2c` → all 7 PASS after the shared fix.
+
+### 2d — composite format reads the value handle at a raw offset
+
+**Site:** `src/state/text.rs` — the composite/ref format ops at lines 489 and
+499 (`string_mut(pos - 8 - size_ptr() as u16)` /
+`string_ref_mut(pos - 8 - size_ptr() …)`), reached when interpolating a
+vector / struct / enum value (`"{v}"` / `"{v:j}"`).  The access guard fires
+here: `String at abs offset 68 (align 8)`.
+
+**Mechanism (verified misalignment):** SCALAR interpolation works (2d-02
+PASSES), so the pure `format_int` (`pos - 16`) path is already correct.  The
+COMPOSITE path pops a value + a pointer and addresses the destination/handle at
+`pos - 8 - size_ptr()` — a RAW composite of two widths.  Under `LOFT_ALIGN` the
+popped value and the pointer each occupy a stepped span, so `8 + size_ptr()`
+(=16 raw) under-counts the real popped distance and the `String`/`DbRef` handle
+is read off its 8-boundary → misaligned read → empty render.
+
+**Fix:** step the composite-format offsets:
+`pos - stack_step(8) - stack_step(size_ptr())` (or the appropriate
+`stack_step` of the combined popped layout) at lines 489/499 — mirroring the
+already-stepped read at line 146 (`pos - self.stack_step(4)`).  Leave the
+scalar `format_int`/`format_float` offsets alone (they pass).  Confirm by
+re-arming the access guard: it must fall silent on 2d-01.
+
+**Validation:** `probes/run.sh 2d` → all 9 PASS; access guard silent on the
+composite probes.
+
+### Landing order
+
+1. **2b+2c together** — one `step()` stepping commit closes both families
+   (15 probes); re-run 2c to confirm the shared fix suffices.
+2. **2a** — coroutine_next stepped resume advance (11 probes; clears the
+   HANG/CRASH variants — the dangerous family).
+3. **2d** — text.rs composite-format stepping (9 probes).
+
+Each is the same one-line-family pattern (raw width where a stepped width
+belongs), each gated behind `aligned_stack` so flag-OFF stays byte-identical,
+each validated by `probes/run.sh <id>` flipping its aligned column to PASS.
+One sub-cluster per commit per the plan's fix-application discipline.
