@@ -5,11 +5,18 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # On-demand: lets the Windows-capability probe (the Windows-only step at
-  # the end of the `test` job) be run against any branch without opening a
-  # PR.  Diagnostic only — see that step's comment.  Safe to delete with the
-  # probe once the Windows gaps (G2/G3/G4-native) are settled.
-  workflow_dispatch: {}
+  # On-demand: lets the Windows-only probe step at the end of the `test`
+  # job be run against any branch without opening a PR.  Diagnostic only.
+  # `skip_test: true` skips the heavy build + nextest section so the probe
+  # runs in a fast (~5-8 min) loop — used while iterating on the G2
+  # diagnostic.  Safe to delete with the probe once the Windows gaps are
+  # settled.
+  workflow_dispatch:
+    inputs:
+      skip_test:
+        description: "Skip the heavy build + nextest Test section (probe-only fast loop)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -59,6 +66,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build
+        if: ${{ github.event.inputs.skip_test != 'true' }}
         run: cargo build --all-targets
 
       # Defensive build step: some integration tests spawn
@@ -118,89 +126,106 @@ jobs:
       # state still serialise per-process, but the rest parallelise
       # across cores.
       - name: Install cargo-nextest
+        if: ${{ github.event.inputs.skip_test != 'true' }}
         uses: taiki-e/install-action@nextest
 
       - name: Test
+        if: ${{ github.event.inputs.skip_test != 'true' }}
         run: cargo nextest run --profile ci
 
-      # ── Windows-capability probe (DIAGNOSTIC — never blocks a merge) ──────
-      # Runs ONLY on the windows-latest matrix leg (`runner.os == 'Windows'`)
-      # and `continue-on-error`, so it reports without ever failing CI.
-      # `if: always()` means it still runs (and prints its table) even when the
-      # main Test step above fails on an unrelated case.
+      # ── Windows G2 (LNK1181) link DIAGNOSTIC — never blocks a merge ───────
+      # Runs ONLY on the windows-latest leg (`runner.os == 'Windows'`),
+      # `continue-on-error` + `if: always()` so it always reports.
       #
-      # Why: the main suite green-lights two things DISHONESTLY on Windows —
-      # `tests/codegen_emitter.rs` silently passes when the `--native`
-      # multi-lib link throws LNK1181 (gap G2) or "required to be available in
-      # rlib format" (gap G3).  This step runs that exact link un-silenced and
-      # classifies the stderr, and re-checks the parallel scripts under
-      # `--interpret` and `--native` (gap G4), writing a ✅/❌ truth table to
-      # the job summary.  GitHub's windows-latest runner does NOT enforce the
-      # WDAC code-signing policy that blocked the 2026-05-30 local-host session
-      # (CodeIntegrity 3077), so it CAN execute freshly-built unsigned binaries
-      # — making CI the right place to learn the real native-Windows status.
-      # When a gap probe reads ✅ for several runs, close it in WINDOWS.md and
-      # delete its branch here (the @P229b precedent).  Reuses the
-      # `target/release/loft.exe` + canonical rlib built two steps above.
-      - name: Windows capability probe (diagnostic, non-blocking)
+      # The capability verdicts are already known (run 26689698213): G4-native
+      # ✅, G2 ❌ LNK1181, G3 indeterminate behind G2.  This step pivots from
+      # verdict → ROOT CAUSE: it reproduces the failing `--check --lib lib`
+      # link, extracts the missing `.lib` name(s), replicates what
+      # `src/native_utils.rs::build_script_native_lib_dirs` harvests (the `-L`
+      # dirs from top-level `target/release/build/*/output`), then locates the
+      # missing lib on disk and reports whether its directory is in the
+      # harvested set.  "lib exists on disk but its dir is NOT harvested" is the
+      # actionable gap (the harvest scans only the top-level build root; the
+      # windows-targets `.lib` likely ships in a registry-src or per-package
+      # tree it never reads).  Reuses the loft.exe built above.
+      - name: Windows G2 link diagnostic (non-blocking)
         if: always() && runner.os == 'Windows'
         continue-on-error: true
         shell: pwsh
         run: |
           $loft = "target/release/loft.exe"
-          $rows = New-Object System.Collections.Generic.List[object]
-          function Record($name, $gap, $status, $note) {
-            $rows.Add([pscustomobject]@{ Probe = $name; Gap = $gap; Status = $status; Note = $note })
-            Write-Host "[$status] $name ($gap) — $note"
-          }
+          $md = "## Windows G2 (LNK1181) link diagnostic`n`n"
 
-          # P0  interpret baseline (expected ✅)
-          & $loft --interpret tests/scripts/01-integers.loft 2>&1 | Out-Null
-          if ($LASTEXITCODE -eq 0) { Record "interpret baseline" "—" "✅ PASS" "exit 0" }
-          else { Record "interpret baseline" "—" "❌ FAIL" "exit $LASTEXITCODE" }
-
-          # P1  parallel under --interpret (G4-interp; branch validated by hand)
-          $ok = $true
-          foreach ($s in @("80-parallel-block","81-parallel-outer-vars")) {
-            & $loft --interpret "tests/scripts/$s.loft" 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) { $ok = $false }
-          }
-          if ($ok) { Record "parallel (--interpret)" "G4-interp" "✅ PASS" "80 + 81 exit 0" }
-          else { Record "parallel (--interpret)" "G4-interp" "❌ FAIL" "a parallel script exited non-zero" }
-
-          # P2  parallel under --native (G4-native; the WDAC-blocked unknown)
-          $ok = $true; $detail = ""
-          foreach ($s in @("80-parallel-block","81-parallel-outer-vars")) {
-            $o = & $loft --native "tests/scripts/$s.loft" 2>&1
-            if ($LASTEXITCODE -ne 0) { $ok = $false; $detail = ($o | Select-Object -Last 1) }
-          }
-          if ($ok) { Record "parallel (--native)" "G4-native" "✅ PASS" "80 + 81 compiled + ran, exit 0" }
-          else { Record "parallel (--native)" "G4-native" "❌ FAIL" "$detail" }
-
-          # P3  native single-lib script
-          $o = & $loft --native tests/scripts/97-native-vectors.loft 2>&1
-          if ($LASTEXITCODE -eq 0) { Record "native single-lib" "—" "✅ PASS" "exit 0" }
-          else { Record "native single-lib" "—" "❌ FAIL" ($o | Select-Object -Last 1) }
-
-          # P4  native multi-lib link, un-silenced (G2 LNK1181 / G3 rlib-format)
+          # 1. Reproduce the failing link, capture combined output.
           $o = & $loft --check --lib lib tests/fixtures/p310_save_png.loft 2>&1
-          $code = $LASTEXITCODE; $txt = ($o | Out-String)
-          if ($code -eq 0) {
-            Record "native multi-lib link" "G2/G3" "✅ PASS" "--check --lib lib linked clean — G2 AND G3 appear fixed"
-          } elseif ($txt -match "LNK1181") {
-            Record "native multi-lib link" "G2" "❌ FAIL" "LNK1181 still reproduces (windows-targets search path)"
-          } elseif ($txt -match "required to be available in rlib format") {
-            Record "native multi-lib link" "G3" "❌ FAIL" "ureq/rustls rlib-format link still reproduces"
-          } else {
-            Record "native multi-lib link" "G2/G3" "❌ FAIL" "non-zero exit, NEW failure shape — see log above"
+          $txt = ($o | Out-String)
+          $md += "**``--check --lib lib`` exit code:** $LASTEXITCODE`n`n"
+
+          # 2. LNK1181 / link context lines.
+          $lnk = ($txt -split "`n" | Select-String -Pattern "LNK1181|cannot open input file|windows-targets|link.exe|rlib format")
+          $md += "### Link error context`n`n``````n"
+          $md += (($lnk | ForEach-Object { $_.ToString().Trim() }) -join "`n")
+          $md += "`n```````n`n"
+
+          # 3. Extract missing .lib name(s).
+          $missing = [regex]::Matches($txt, "cannot open input file '([^']+)'") |
+                     ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+          $md += "### Missing libs`n`n"
+          if ($missing.Count -eq 0) { $md += "_none parsed (link may now fail with a different shape — see context)_`n`n" }
+          else { $md += (($missing | ForEach-Object { "- ``$_``" }) -join "`n") + "`n`n" }
+
+          # 4. Replicate build_script_native_lib_dirs: harvest -L dirs from
+          #    top-level target/release/build/*/output rustc-link-search lines.
+          $harvested = New-Object System.Collections.Generic.HashSet[string]
+          $winSearch = New-Object System.Collections.Generic.List[string]
+          Get-ChildItem -Path target/release/build -Filter output -Recurse -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              Get-Content $_.FullName -ErrorAction SilentlyContinue | ForEach-Object {
+                $line = $_ -replace '^cargo::?',''
+                if ($line -match '^rustc-link-search=(native=)?(.+)$' -and
+                    $line -notmatch '^rustc-link-search=(framework|dependency|crate)=') {
+                  [void]$harvested.Add($Matches[2])
+                  if ($line -match 'windows') { $winSearch.Add($line) }
+                }
+              }
+            }
+          $md += "### Harvested -L dirs loft passes: $($harvested.Count)`n`n"
+          $md += "rustc-link-search lines mentioning 'windows':`n`n``````n"
+          $md += (($winSearch | Sort-Object -Unique) -join "`n")
+          $md += "`n```````n`n"
+
+          # 5. Locate each missing lib on disk + check coverage.
+          $md += "### Where the missing libs actually live`n`n"
+          foreach ($lib in $missing) {
+            $md += "**``$lib``**`n`n"
+            $hits = @()
+            foreach ($root in @("$env:USERPROFILE\.cargo\registry", "target", "lib")) {
+              if (Test-Path $root) {
+                $hits += Get-ChildItem -Path $root -Filter $lib -Recurse -File -ErrorAction SilentlyContinue |
+                         Select-Object -ExpandProperty FullName
+              }
+            }
+            $hits = $hits | Sort-Object -Unique
+            if ($hits.Count -eq 0) {
+              $md += "- NOT FOUND under registry/target/lib — name may be versioned or wrong.`n`n"
+            } else {
+              foreach ($h in $hits) {
+                $dir = Split-Path $h -Parent
+                $md += "- ``$h``  →  dir harvested by loft? **$($harvested.Contains($dir))**`n"
+              }
+              $md += "`n"
+            }
           }
 
-          # Emit the truth table to the job summary.
-          $md = "## Windows capability probe`n`n"
-          $md += "| Probe | Gap | Status | Note |`n|---|---|---|---|`n"
-          foreach ($r in $rows) { $md += "| $($r.Probe) | $($r.Gap) | $($r.Status) | $($r.Note) |`n" }
+          # 6. All windows*.lib under the registry (where windows-targets ships them).
+          $md += "### windows*.lib in the cargo registry (first 40)`n`n``````n"
+          $reglibs = Get-ChildItem -Path "$env:USERPROFILE\.cargo\registry\src" -Filter "*.lib" -Recurse -File -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -match 'windows' } | Select-Object -ExpandProperty FullName -First 40
+          $md += (($reglibs) -join "`n")
+          $md += "`n```````n"
+
           $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-          Write-Host "`n$md"
+          Write-Host $md
 
   clippy:
     name: Clippy
