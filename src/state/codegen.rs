@@ -2308,11 +2308,14 @@ impl State {
                 self.gather_key(stack, &parameters, 3, &mut tps);
             }
             "OpIterate" => {
-                // @PLAN53 cluster 2 / S4: OpIterate pushes TWO u32s (start+finish)
-                // and consumes the iterable DbRef — each is a separately-stepped
-                // span (2*step(4), NOT step(8)), so account them individually.
-                was_stack = stack.position + stack.step(4) + stack.step(4)
-                    - stack.step(super::size_ref() as u16);
+                // @PLAN53 cluster 2 / S4 (2b+2c): OpIterate pushes the start+finish
+                // pair as ONE contiguous 8-byte i64 (see io.rs `iterate`) and
+                // consumes the iterable DbRef.  Account the result as a single
+                // step(8) span, not 2*step(4): under LOFT_ALIGN two separate u32
+                // slots would be 16 bytes (8+8) and leave a 4-byte gap the i64
+                // read-back can't see.  Identity flag-OFF (step(8) == 2*step(4) == 8).
+                was_stack =
+                    stack.position + stack.step(8) - stack.step(super::size_ref() as u16);
                 if let Value::Int(parameter_length) = parameters[4] {
                     self.gather_key(stack, &parameters, 4, &mut tps);
                     self.gather_key(stack, &parameters, 5 + parameter_length, &mut tps);

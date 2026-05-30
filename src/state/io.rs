@@ -931,8 +931,17 @@ impl State {
             }
             _ => panic!("Not implemented on {on}"),
         }
-        self.put_stack(start);
-        self.put_stack(finish);
+        // @PLAN53 cluster 2 / S4 (2b+2c): push the iterator state as ONE
+        // contiguous 8-byte value, not two separate u32s.  The consumer stores
+        // it into a single I64 var (`{id}#iter_state`, "cur<<32|finish") via an
+        // i64 read.  Under LOFT_ALIGN each `put_stack::<u32>` advances a stepped
+        // (8-byte) slot, so two pushes leave start@P and finish@P+8 with a 4-byte
+        // gap — the i64 read-back then takes [finish | padding] and drops `start`,
+        // killing the sorted cursor (2b) and shifting the hash cursor (2c).  A
+        // single u64 push writes the 8 bytes contiguously in BOTH modes; the
+        // little-endian layout (low=start, high=finish) is byte-identical to the
+        // old two-u32 push when the step is identity (flag-OFF).
+        self.put_stack((u64::from(finish) << 32) | u64::from(start));
     }
 
     pub(super) fn stack_key(&mut self, size: u8, keys: &[Key]) -> Vec<Content> {

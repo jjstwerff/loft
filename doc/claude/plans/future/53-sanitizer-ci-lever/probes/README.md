@@ -157,16 +157,26 @@ Maps to: `p145`, `p159`, `p189c`, `p193`, `n4`, `n5`, `n8`×2.
 All four sub-families authored — **35 probes** covering every one of the 27
 aligned-mode failures from the sweep, plus references and edges:
 
-| Sub-cluster | Probes | Failing issues tests covered |
-|---|---|---|
-| 2a generator-arg | 11 | p210, p211, p218×2, p225, p328 |
-| 2b sorted-iter | 8 | inc02, inc12×2, p190, p277, p295, p300, p4d_b, n2 |
-| 2c hash-iter | 7 | c60×4 |
-| 2d composite-format/misc | 9 | p145, p159, p189c, p193, n4, n5, n8×2 |
+| Sub-cluster | Probes | Failing issues tests covered | Aligned status |
+|---|---|---|---|
+| 2a generator-arg | 11 | p210, p211, p218×2, p225, p328 | OPEN (designed) |
+| 2b sorted-iter | 8 | inc02, inc12×2, p190, p277, p295, p300, p4d_b | ✅ **FIXED 2026-05-30** |
+| 2c hash-iter | 7 | c60×4 | ✅ **FIXED 2026-05-30** |
+| 2d composite-format/misc | 9 | p145, p159, p189c, p193, n4, n5, n8×2 | partial (p193 ✅ via 2b+2c fix) |
 
 `run.sh` exits 0 — every probe PASSES flag-OFF and every `*-ref*` PASSES
-aligned.  The aligned FAIL/HANG/CRASH column is what the cluster-2 fix closes;
-re-run `run.sh` after each fix to watch the column flip to PASS.
+aligned.  The aligned column is what each cluster fix closes; re-run `run.sh`
+after each fix to watch it flip to PASS.
+
+**2b+2c LANDED 2026-05-30** (one fix — pack the iterator-state i64 in
+`iterate()`; see cluster-2-fix-design.md § "2b+2c — LANDED").  All 15 `2b-*` /
+`2c-*` probes (and `2d-09`, a hash-iter case) now PASS aligned; aligned
+`issues` sweep 27→14 failures, zero regressions, flag-OFF 681/0.
+
+**Note — `n2` is NOT a 2b case.**  `n2_sorted_field_content_type_registered_
+first` was loosely listed under 2b but is a *separate* mechanism (sorted-field
+content-type registration order, not iteration); the 2b+2c fix did not close it
+and it has no dedicated probe yet.  Tracked as a future sub-cluster.
 
 ## Promotion gate
 

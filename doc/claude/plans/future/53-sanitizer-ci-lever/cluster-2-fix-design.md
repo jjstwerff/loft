@@ -586,3 +586,50 @@ Each is the same one-line-family pattern (raw width where a stepped width
 belongs), each gated behind `aligned_stack` so flag-OFF stays byte-identical,
 each validated by `probes/run.sh <id>` flipping its aligned column to PASS.
 One sub-cluster per commit per the plan's fix-application discipline.
+
+---
+
+## 2b+2c — LANDED 2026-05-30
+
+**Fix (single root cause, NOT the Stage-C "step the deltas" design above — a
+read-only investigation refuted that and pinned the bug one slot earlier):**
+the iterator state is a single packed I64 var (`{id}#iter_state`, "cur<<32 |
+finish", `parser/collections.rs:384`).  `iterate()` produced it as TWO separate
+`put_stack::<u32>` pushes (`io.rs` ~934).  Under `LOFT_ALIGN` each `put_stack`
+advances a stepped 8-byte slot, so `start@P` and `finish@P+8` with a 4-byte
+gap; the consumer's single `get_stack::<i64>()` then reads `[finish | padding]`
+and DROPS `start` — killing the sorted cursor (2b) and shifting the hash cursor
+(2c, via the `{id}#hash_scratch` vector that walks the same path).
+
+Two-line change, gated by `stack_step` (identity flag-OFF, so byte-identical):
+
+- `src/state/io.rs` ~934 — replace `put_stack(start); put_stack(finish)` with a
+  single `put_stack((u64::from(finish) << 32) | u64::from(start))`.
+- `src/state/codegen.rs` ~2314 — `OpIterate` `was_stack`:
+  `step(4) + step(4)` → `step(8)` (one i64 push, not two u32s).
+
+**Result (verified):**
+- `probes/run.sh` exit 0 — all 8 `2b-*` and all 7 `2c-*` aligned columns flip
+  FAIL/HANG → PASS; references unchanged; flag-OFF all PASS.
+- Aligned `issues` sweep (per-test isolation): **27 → 14 failures**, a STRICT
+  SUBSET (zero regressions).  Closed: all of 2b (inc02, inc12×2, p190, p277,
+  p295, p300, p4d_b) + all of 2c (c60×4) + `p193`/`2d-09` (a hash-iter case
+  mis-grouped into 2d).
+- Flag-OFF `issues` 681/0; clippy clean; full flag-OFF suite no new failures
+  (native-lib `ring`/`rustls`/`ureq` rlib errors are pre-existing environment).
+
+### Follow-up findings (in-plan, recorded NOT filed as P-issues)
+
+- **`n2_sorted_field_content_type_registered_first` is a SEPARATE mechanism.**
+  It was loosely grouped under 2b but the iterate fix did NOT close it (still
+  FAILs aligned), and it is about sorted-field *content-type registration
+  order*, not iteration.  Needs its own probe + investigation — currently has
+  no dedicated probe.  Re-bucket: 2e (or fold into 2d).
+- **Latent `remove()` aligned corruption (NOT exercised by any test/probe).**
+  The investigation found `State::remove()` (`src/state/io.rs` ~1059) reads
+  cur/finish AFTER popping the DbRef and uses `get_var`/`put_var::<i64>` deltas
+  (`state_var-4` at :1092, `state_var-16` at :1135) whose raw constants do NOT
+  survive alignment the way `step()`'s post-pop `-8`/`-12` do.  `#remove` during
+  keyed iteration has no probe and no `issues`/script test, so it is OUT OF
+  SCOPE for 2b/2c — but should get a probe + fix before keyed iteration is
+  declared alignment-clean.  Candidate sub-cluster 2f.
