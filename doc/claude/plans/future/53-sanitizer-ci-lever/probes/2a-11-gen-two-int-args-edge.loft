@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — EDGE CASE (two integer arguments).
+//
+// Probes whether the mis-offset is a single boundary shift affecting the
+// whole argument region (both `a` and `b` shift together) or a per-argument
+// error.  Observed aligned: 34359738368 = 8 << 32 — i.e. the sum a+b=8 lands
+// in the high word, so BOTH arguments read 4 bytes high uniformly.  This pins
+// the bug to ONE shifted args/locals boundary, not per-slot padding — which
+// tells the fix it's a single advance, not a per-argument stepping loop.
+//
+// Status aligned: CURRENTLY FAIL (8<<32) ; AFTER 2a FIX -> PASS.  Flag-OFF: PASS.
+
+fn pair_args(a: integer, b: integer) -> iterator<integer> {
+  yield a;
+  yield b;
+}
+
+fn main() {
+  s = 0;
+  for v in pair_args(3, 5) {
+    s = s + v;
+  }
+  assert(s == 8, "2a-11: got {s}, want 8 (3+5)");
+  println("2a-11 PASSED");
+}

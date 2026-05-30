@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — VARIANT (`tests/issues.rs::p211_*_while`).
+//
+// A `while i < n` generator (arg bound `n`) that yields a CONSTANT text each
+// iteration.  The yielded value is fine; the corrupted read is the loop bound
+// `n`, so the loop runs the wrong number of times (or never terminates).
+// Distinct from 2a-05 (int yield) in that the yield type is text but the
+// trigger is still the integer argument `n`.
+//
+// Status aligned: CURRENTLY FAIL/HANG ; AFTER 2a FIX -> PASS.  Flag-OFF: PASS.
+
+fn tick_n(n: integer) -> iterator<text> {
+  i = 0;
+  while i < n {
+    yield "tick";
+    i = i + 1;
+  }
+}
+
+fn main() {
+  seen = 0;
+  for t in tick_n(3) {
+    if t == "tick" { seen = seen + 1; }
+  }
+  assert(seen == 3, "2a-08: got {seen}, want 3");
+  println("2a-08 PASSED");
+}

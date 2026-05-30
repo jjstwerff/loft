@@ -57,13 +57,24 @@ argument is used:
 | `2a-05-gen-arg-while-hang` | `while i<n` (p210 shape) | **HANG** | bound re-read → never terminates |
 | `2a-06-gen-arg-for-range-hang` | `for i in 0..n` | HANG | same, range desugar |
 | `2a-07-gen-text-arg-format-crash` | `text` arg + format (p218 shape) | **CRASH** (SIGSEGV) | corrupted `Str` ptr deref |
+| `2a-08-gen-text-arg-const-yield-while` | `while i<n` yield const text (p211 shape) | HANG | text yield, int-arg bound |
+| `2a-09-gen-yield-from-delegation` | `yield from inner(s)` (p225 shape) | CRASH | nested frame + text arg |
+| `2a-10-gen-yield-closure-capture` | yield closure capturing `base`, manual `next()` (p328) | FAIL (`100<<32\|5`) | 20-byte fn-ref yield + capture |
+| `2a-11-gen-two-int-args-edge` | two int args, `yield a; yield b` | FAIL (`8<<32`) | EDGE — both args shift uniformly (one boundary) |
 
 The reference pair (`2a-02` constant-yield PASS vs `2a-01` arg-yield FAIL;
 `2a-03` no-arg-loop PASS vs `2a-05` arg-loop HANG) pins the trigger to the
-argument read, not the yield machinery.
+argument read, not the yield machinery.  `2a-11` pins it to a *single*
+shifted args/locals boundary (both args move together), not per-slot padding.
 
 Maps to the failing `tests/issues.rs` cases: `p210`/`p211` (HANG),
 `p218`×2/`p225` (CRASH), `p328` (wrong value).
+
+**Incidental finding (not cluster 2):** a float-yielding generator
+(`fn f(x: float) -> iterator<float> { yield x; }`) produces NO output even
+flag-OFF — coroutines appear to lack a `next_float` path (only `next_i64` /
+`next_text` exist, cf. p211's history).  A separate limitation, not an
+alignment bug; no probe authored (a clean probe must PASS flag-OFF).
 
 ## Later passes (not yet authored)
 
