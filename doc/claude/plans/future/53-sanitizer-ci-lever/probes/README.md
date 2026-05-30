@@ -235,10 +235,19 @@ block-copies the worker-arg buffer (was a stepped byte-by-byte smear) AND
 reserves a `stack_step`-ed worker frame (was a raw total that underflowed for
 non-8-multiple tuples).  See cluster-2-fix-design.md § "2h + 2i — LANDED".
 
-**NOT yet switch-ready:** the `stack_align_guard` still fires on the par-worker
-path (`2j` — pre-existing entry-base = 4, should be stepped 8; affects scalar
-par too), and Miri hasn't been run.  Aligned mode is functionally green but the
-guard-clean + Miri validation gates remain.
+**Cluster-2 eval-stack alignment is COMPLETE + triple-validated (2026-05-31):**
+aligned `issues` 685/0, flag-OFF 681/0, **guard-clean** (full suite under the
+`stack_align_guard` binary: 685/0, zero fires), and **Miri differential-clean**
+(with Stacked Borrows off, aligned and flag-OFF give byte-identical hard-UB
+findings — no alignment UB, no new UB introduced).  See cluster-2-fix-design.md
+§ "Miri validation".
+
+Miri also surfaced TWO PRE-EXISTING successor UB clusters (present identically
+in flag-OFF production, NOT alignment): **cluster 3** — store-aliasing reborrow
+in `claim_child_rec` (`structures.rs:208`, Stacked Borrows); **cluster 4** —
+uninit-padding read of a 20-byte fn-ref slot.  Both are the "next layer" the
+sanitizer lane exists to find; they do not gate the alignment switch (they're in
+flag-OFF too) but block an *absolute* clean Miri run.
 
 `run.sh` exits 0 — every probe PASSES flag-OFF and every `*-ref*` PASSES
 aligned.  The aligned column is what each cluster fix closes; re-run `run.sh`

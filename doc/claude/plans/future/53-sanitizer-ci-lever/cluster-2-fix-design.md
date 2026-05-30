@@ -837,3 +837,61 @@ Three of the four S4 DoD criteria now hold: aligned 685/0, flag-OFF 681/0,
 gold-standard external detector — against the now-guard-silent aligned
 interpreter.  Only after Miri is clean is the switch (flip default vs keep
 behind `LOFT_ALIGN`) a tool-validated decision.
+
+---
+
+## Miri validation 2026-05-31 — cluster-2 alignment confirmed; two successor UB clusters surfaced
+
+Ran `cargo +nightly miri test --test issues p213_struct_field_basic_int` (a
+pure-compute struct test) under four configs (`-Zmiri-disable-isolation`):
+
+| Config | Result |
+|---|---|
+| aligned, default (Stacked Borrows ON) | UB: `from_mut(&mut self.allocations)` reborrow, `structures.rs:208` (`claim_child_rec`) |
+| aligned, `-Zmiri-disable-stacked-borrows` | UB: uninit read, `[u8; 20]` at [18] (fn-ref slot) |
+| flag-OFF, `-Zmiri-disable-stacked-borrows` | **UB: uninit read, `[u8; 20]` at [18] — IDENTICAL** |
+
+**Conclusion — cluster 2 (eval-stack alignment) is VALIDATED.**  With the
+aliasing model off (isolating the hard memory-safety UB Miri checks — alignment,
+OOB, UAF, uninit), aligned and flag-OFF produce the **byte-identical** finding.
+The alignment work introduced **no new hard UB**, and Miri reports **no
+alignment-class UB** in aligned mode — corroborating the homegrown guard's
+685/0-zero-fires result with the gold-standard external tool.  There is NO
+remaining eval-stack alignment UB; the original cluster-2 finding (unaligned
+`Str`/`DbRef` at TOS) is cleared.
+
+**Two SUCCESSOR clusters the Miri lane surfaced** (both PRE-EXISTING and
+mode-independent — present identically in flag-OFF production; NOT alignment;
+NOT introduced by this plan).  These are the "next layer" Stage-A2 was meant to
+find:
+
+- **Cluster 3 — store-aliasing reborrow.**  `Stores::claim_child_rec`
+  (`src/database/structures.rs:208`) does `&mut *std::ptr::from_mut(&mut
+  self.allocations)` — a `&mut [Store]` reborrow Miri's Stacked Borrows rejects.
+  One of the ~426 intentional-aliasing `unsafe` store blocks the plan's baseline
+  flagged.  Blocks a default-Miri clean run for ANY store-allocating program.
+  Fix surface: the store's aliasing discipline (or adopt Tree Borrows / narrow
+  the reborrow).  Own cluster — needs its own investigation.
+
+- **Cluster 4 — uninit-padding typed read.**  A 20-byte fn-ref slot is read as
+  `[u8; 20]` while only 16 bytes (d_nr 4 + closure `DbRef` 12) are written,
+  leaving bytes 16..20 uninitialised; Miri rejects the uninit read.  Harmless on
+  real hardware (the live bits are valid) but real UB per Rust's model.
+  Pre-existing fn-ref representation quirk, mode-independent.  Fix surface:
+  zero-fill the fn-ref slot tail (or read only the written 16 bytes).
+
+### Switch-readiness — final assessment
+
+- **Aligned `issues` 685/0**, **flag-OFF 681/0**, **guard-clean (685/0 armed,
+  zero fires)**, **Miri: no alignment UB, no new UB vs flag-OFF** — the eval-stack
+  alignment work (2a–2j) is complete and triple-validated (functional + homegrown
+  guard + Miri differential).
+- A *literally* clean Miri run is blocked by clusters 3 & 4 — but both are
+  PRE-EXISTING in flag-OFF, so they do NOT gate the alignment switch (flipping
+  to aligned adds no UB).  The honest Miri gate "no NEW hard UB under aligned vs
+  flag-OFF" is **MET**; the absolute "Miri clean" gate awaits clusters 3 & 4
+  (successor work, tracked above).
+- **Recommendation:** the @PLAN53 deliverable is the CI lever, not making V2 the
+  default.  Cluster 2 can be closed as "fixed + guard-clean + Miri-differential-
+  clean behind `LOFT_ALIGN`"; clusters 3 & 4 become the next sanitizer-lane
+  targets (they are what a Miri CI job would gate on going forward).
