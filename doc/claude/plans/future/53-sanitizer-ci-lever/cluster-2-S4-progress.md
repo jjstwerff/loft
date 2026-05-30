@@ -18,11 +18,17 @@ stack alignment) work. Companion docs:
 ## TL;DR
 
 S4 makes loft's byte-packed eval stack 8-aligned, gated behind env
-`LOFT_ALIGN`.  It went from *instant SIGSEGV* → the aligned suite now
-runs from the start through ~`p117`.  Flag-OFF (default, no `LOFT_ALIGN`)
+`LOFT_ALIGN`.  It went from *instant SIGSEGV* → through ~`p117` →
+**the aligned suite now RUNS TO COMPLETION with NO crashes**:
+`LOFT_ALIGN=1 LOFT_SLOT_V2=drive` is **630 passed / 51 failed / 0
+crashes** (was an abort at `p117`).  Flag-OFF (default, no `LOFT_ALIGN`)
 is **byte-for-byte identical** to before at every commit — `main`-quality
-is untouched.  Two crashers remain (`non-empty c60_*`, `p117`), both
-well-characterized below.
+is untouched (681/0).  The two remaining crashers are GONE
+(`p117` fixed, see below; the `non-empty c60_*` family no longer
+SIGSEGVs — it is now a wrong-value assertion failure inside the 51).
+The 51 remaining failures are **all assertion-level (wrong value), no
+SIGSEGV, no guard fire** — fully visible at once instead of one-crash-
+at-a-time peeling.  See § WHAT REMAINS for the inventory.
 
 ## HOW TO RUN / TEST (read before doing anything)
 
@@ -110,38 +116,80 @@ alone tells you which kind of bug you're chasing.
 | `ea459261` | **a8 — `gen_text_dest_call` pops stepped** (the twin of `try_text_dest_pass` I'd missed; raw DbRef pop `12` vs `step(12)=16` → −4 drift → garbage var read) |
 | `be516ec9` | **guards re-gated on the `stack_align_guard` feature** (was dead under `cfg(debug_assertions)`) — and proven to fire |
 | `8c0a5e72` | **c60/R6 — `OpStart`/`OpIterate` `was_stack` spans stepped** (OpIterate pushes TWO u32s = `step(4)+step(4)`, not `step(8)`) |
+| _(uncommitted)_ | **p117 — `copy_result` reads the return value from the LOW end of its stepped slot** (`from_pos = pos.min(step(size))`, was `min(size)`).  A struct/`Reference` return is a 12-byte `DbRef` in a 16-byte aligned slot; backing up by raw 12 read 4 bytes into the padding → a 4-byte-garbled `DbRef` whose `OpFreeRef` corrupted the heap → `pc=0 depth=0` runaway / `free(): invalid size`.  Caller `stack_pos` was already correct (line 1421 stepped), so the guard stayed silent — a wrong-VALUE bug.  Fixes p117 and UNCRASHES the whole suite. |
 
 **Verification at every commit:** flag-OFF `issues` 681/0, `drive` 681/0,
 flag-ON canary passing, clippy clean.
 
-## WHAT REMAINS (the two open crashers)
+## p117 — FIXED (the last crasher; the suite no longer aborts)
 
-### 1. Non-empty `c60_*` hash iteration — WRONG VALUE (not a crash)
-`c60_hash_iter_single_field_asc`, `_multi_field_lex`, + 2 more.  Under
-`LOFT_ALIGN=1 LOFT_SLOT_V2=drive` they produce an **extra leading
-element**: `,apple,mango,zebra,` vs `apple,mango,zebra,`.  Guard silent
-(it's a wrong-value, not misalignment).  `c60_hash_iter_empty` is FIXED.
-Likely the per-element key-gather (`OpNext` / `gather_key`) path under
-aligned, or a residual `was_stack`/start-position off-by-one for the
-non-empty case.  `OpStart` appears to be a dead codegen arm — confirm
-which ops the non-empty for-loop actually emits (`LOFT_IR=test`).
+**Root cause:** `copy_result` (`src/state/mod.rs` ~1411) read the
+return value back from `pos.min(size)` — i.e. it backed up by the RAW
+`size` (12 for a `Reference`/`DbRef`).  But `put_stack` had written the
+12-byte `DbRef` at the LOW end of a **stepped 16-byte** aligned slot and
+advanced TOS by `step(12)=16`.  Backing up by 12 (not 16) read 4 bytes
+into the slot's padding → a `DbRef` whose three `u32` fields are all
+shifted by 4 bytes (garbage `store_nr`/`rec`/`pos`).  The caller then
+`OpFreeRef`s that garbage handle → heap corruption → `free(): invalid
+size` and a `pc=0 depth=0` interpreter runaway (call-stack underflow,
+op 5 looping with `stack_pos` climbing 8/iter).
 
-### 2. `p117_gl_multi_text_struct_per_frame` — ACCUMULATING DRIFT (hardest)
-`struct FileRef { name: text, found: boolean }`; `lookup` returns a
-`FileRef` (a `Reference`/DbRef); in a 1000-iteration loop 3 lookups +
-3 `.found` boolean reads + 3 string interpolations.  SIGSEGV in
-`ops::format_text` (a work-buffer `String` accessed at a drifted offset
-→ garbage `Str` → `push_str` derefs garbage).  Guard SILENT (wrong-value,
-the access stays 8-aligned but lands on the wrong/clobbered slot).
+The caller's `stack_pos` was ALREADY correct (line 1421 uses
+`fn_stack + step(size)`), which is why the **frame guard stayed silent**
+— a wrong-VALUE bug, not a misalignment.  The fix:
 
-**Diagnosis so far:** the real `execute` path drifts a few bytes per
-loop iteration; the trace path masks it (process rule 3).  The first
-iteration's work-buffer slots are correct; a later iteration's access is
-off.  Prime suspect: the struct-`Reference` `lookup` return path under
-aligned — `copy_result`/`fn_return`/`PutRef`, or the `.found` **boolean**
-(1 byte → `step(1)=8`) read/push.  **Next step:** instrument the REAL
-`execute_argv` loop (NOT `execute_log`) — print `stack_pos` at the
-loop-back op each iteration and bisect which op leaves the extra bytes.
+```rust
+let from_pos = self.stack_cur.plus(pos).min(self.stack_step(size));
+```
+
+`copy_block` still moves the real `size` bytes; only the back-up
+distance is stepped.  Identity when off (`step==identity`).
+
+**Minimal reproducer** (`/tmp/p_followups/m2.loft`) — needs exactly:
+mixed-size struct (pointer-sized field + 1-byte `boolean`), returned by
+value from a fn, called in a **loop** (≥2 iters; sequential calls don't
+trigger — the garbage handle is freed across the loop body), and a text
+arg long enough that the corrupted `free` hits a bad page
+(`"tex/d.png"` crashes; `"d.png"` limps).  The bug is present for ANY
+non-8-multiple return size; the SEGV/abort manifestation is layout-
+dependent (string length, struct name), which is why it looked flaky.
+
+```loft
+struct R { name: text, found: boolean }
+fn lookup(p: text) -> R { R { name: p, found: true } }
+fn test() { for i in 0..4 { a = lookup("tex/d.png"); } }
+```
+
+Verify: `LOFT_ALIGN=1 LOFT_SLOT_V2=drive loft --interpret m2.loft`
+(NOTE: `--interpret` — the binary defaults to NATIVE, which has no
+byte-packed stack and never exercises this path; the bug only shows
+under the interpreter or `cargo test --test issues`).
+
+## WHAT REMAINS — 51 aligned-mode wrong-value failures (no crashes)
+
+`LOFT_ALIGN=1 LOFT_SLOT_V2=drive cargo test --test issues` →
+**630 passed, 51 failed, 0 crashes** (full list in
+`/tmp/p_followups/fail_names.txt`).  All are assertion-level (wrong
+value); the guard never fires.  They cluster:
+
+- **Coroutine / `yield` (~20)** — `p210`–`p230`, `p327_*_yield`,
+  `p328_*`.  Generator frames live in a separate `stack_bytes` zone;
+  likely a stepped/raw span mismatch in the yield-save/restore or the
+  generator-zone base.  Biggest single family — start here.
+- **Sorted-collection iteration (~8)** — `inc02`, `inc12_*`, `p190`,
+  `p277`, `p295`, `p300`, `p4d_b`.  Same shape as the c60 hash family.
+- **`c60_*` hash iteration (4)** — `single_field_asc`, `multi_field_lex`,
+  `filter_clause`, `loop_attributes`.  Extra leading element
+  (`,apple,…`); the per-element key-gather (`OpNext`/`gather_key`) span.
+- **`p235_par_half_*` (3)** — parallel half-arg marshalling.
+- **struct / tuple / vector (rest)** — `p145`, `p159`, `p189c`,
+  `p322`/`p324`/`p325`/`p326`, `n2`/`n4`/`n5`/`n8`.
+
+**Next step:** the suite now completes, so triage by family — pick the
+coroutine cluster first (largest, single shared zone).  For each, the
+`stack_align_guard` feature + a wrong-value diff localises it; the
+`copy_result` fix above is the template for "value pushed into a stepped
+slot, read back with a raw width".
 
 ## ARCHITECTURE QUICK MAP (where the stepping lives)
 

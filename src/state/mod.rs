@@ -1411,7 +1411,14 @@ impl State {
     pub(crate) fn copy_result(&mut self, value: u8, pos: u32, fn_stack: u32) {
         let size = u32::from(value);
         if value > 0 {
-            let from_pos = self.stack_cur.plus(pos).min(size);
+            // @PLAN53 cluster 2 / S4: the returned value sits at the LOW end of
+            // a stepped slot on the callee's TOS — `put_stack` wrote the real
+            // `size` bytes at `pos - step(size)` and advanced TOS by `step(size)`
+            // (e.g. a 12-byte `Reference` in a 16-byte slot, 4 bytes padding on
+            // top).  Back up by `step(size)`, NOT the raw `size`, or the read is
+            // shifted into the padding → a 4-byte-garbled `DbRef` whose later
+            // `OpFreeRef` corrupts the heap (the p117 runaway).  Identity off.
+            let from_pos = self.stack_cur.plus(pos).min(self.stack_step(size));
             let to_pos = self.stack_cur.plus(fn_stack);
             self.database.copy_block(&from_pos, &to_pos, size);
         }
