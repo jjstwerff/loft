@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # On-demand: lets the Windows-capability probe (the Windows-only step at
+  # the end of the `test` job) be run against any branch without opening a
+  # PR.  Diagnostic only — see that step's comment.  Safe to delete with the
+  # probe once the Windows gaps (G2/G3/G4-native) are settled.
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -117,6 +122,85 @@ jobs:
 
       - name: Test
         run: cargo nextest run --profile ci
+
+      # ── Windows-capability probe (DIAGNOSTIC — never blocks a merge) ──────
+      # Runs ONLY on the windows-latest matrix leg (`runner.os == 'Windows'`)
+      # and `continue-on-error`, so it reports without ever failing CI.
+      # `if: always()` means it still runs (and prints its table) even when the
+      # main Test step above fails on an unrelated case.
+      #
+      # Why: the main suite green-lights two things DISHONESTLY on Windows —
+      # `tests/codegen_emitter.rs` silently passes when the `--native`
+      # multi-lib link throws LNK1181 (gap G2) or "required to be available in
+      # rlib format" (gap G3).  This step runs that exact link un-silenced and
+      # classifies the stderr, and re-checks the parallel scripts under
+      # `--interpret` and `--native` (gap G4), writing a ✅/❌ truth table to
+      # the job summary.  GitHub's windows-latest runner does NOT enforce the
+      # WDAC code-signing policy that blocked the 2026-05-30 local-host session
+      # (CodeIntegrity 3077), so it CAN execute freshly-built unsigned binaries
+      # — making CI the right place to learn the real native-Windows status.
+      # When a gap probe reads ✅ for several runs, close it in WINDOWS.md and
+      # delete its branch here (the @P229b precedent).  Reuses the
+      # `target/release/loft.exe` + canonical rlib built two steps above.
+      - name: Windows capability probe (diagnostic, non-blocking)
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $loft = "target/release/loft.exe"
+          $rows = New-Object System.Collections.Generic.List[object]
+          function Record($name, $gap, $status, $note) {
+            $rows.Add([pscustomobject]@{ Probe = $name; Gap = $gap; Status = $status; Note = $note })
+            Write-Host "[$status] $name ($gap) — $note"
+          }
+
+          # P0  interpret baseline (expected ✅)
+          & $loft --interpret tests/scripts/01-integers.loft 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) { Record "interpret baseline" "—" "✅ PASS" "exit 0" }
+          else { Record "interpret baseline" "—" "❌ FAIL" "exit $LASTEXITCODE" }
+
+          # P1  parallel under --interpret (G4-interp; branch validated by hand)
+          $ok = $true
+          foreach ($s in @("80-parallel-block","81-parallel-outer-vars")) {
+            & $loft --interpret "tests/scripts/$s.loft" 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { $ok = $false }
+          }
+          if ($ok) { Record "parallel (--interpret)" "G4-interp" "✅ PASS" "80 + 81 exit 0" }
+          else { Record "parallel (--interpret)" "G4-interp" "❌ FAIL" "a parallel script exited non-zero" }
+
+          # P2  parallel under --native (G4-native; the WDAC-blocked unknown)
+          $ok = $true; $detail = ""
+          foreach ($s in @("80-parallel-block","81-parallel-outer-vars")) {
+            $o = & $loft --native "tests/scripts/$s.loft" 2>&1
+            if ($LASTEXITCODE -ne 0) { $ok = $false; $detail = ($o | Select-Object -Last 1) }
+          }
+          if ($ok) { Record "parallel (--native)" "G4-native" "✅ PASS" "80 + 81 compiled + ran, exit 0" }
+          else { Record "parallel (--native)" "G4-native" "❌ FAIL" "$detail" }
+
+          # P3  native single-lib script
+          $o = & $loft --native tests/scripts/97-native-vectors.loft 2>&1
+          if ($LASTEXITCODE -eq 0) { Record "native single-lib" "—" "✅ PASS" "exit 0" }
+          else { Record "native single-lib" "—" "❌ FAIL" ($o | Select-Object -Last 1) }
+
+          # P4  native multi-lib link, un-silenced (G2 LNK1181 / G3 rlib-format)
+          $o = & $loft --check --lib lib tests/fixtures/p310_save_png.loft 2>&1
+          $code = $LASTEXITCODE; $txt = ($o | Out-String)
+          if ($code -eq 0) {
+            Record "native multi-lib link" "G2/G3" "✅ PASS" "--check --lib lib linked clean — G2 AND G3 appear fixed"
+          } elseif ($txt -match "LNK1181") {
+            Record "native multi-lib link" "G2" "❌ FAIL" "LNK1181 still reproduces (windows-targets search path)"
+          } elseif ($txt -match "required to be available in rlib format") {
+            Record "native multi-lib link" "G3" "❌ FAIL" "ureq/rustls rlib-format link still reproduces"
+          } else {
+            Record "native multi-lib link" "G2/G3" "❌ FAIL" "non-zero exit, NEW failure shape — see log above"
+          }
+
+          # Emit the truth table to the job summary.
+          $md = "## Windows capability probe`n`n"
+          $md += "| Probe | Gap | Status | Note |`n|---|---|---|---|`n"
+          foreach ($r in $rows) { $md += "| $($r.Probe) | $($r.Gap) | $($r.Status) | $($r.Note) |`n" }
+          $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          Write-Host "`n$md"
 
   clippy:
     name: Clippy
