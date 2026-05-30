@@ -378,3 +378,68 @@ offset arithmetic + codegen — broad but uniform.  Corruption-based
 validation (offsets aren't compiler-checked), so it's test/Miri
 driven.  Rollback: `git reset --hard origin/plan-53-sanitizer-ci-lever`
 (the pushed checkpoint).
+
+---
+
+## Stage B mechanism findings — per sub-cluster (2026-05-30)
+
+After the [`probes/`](probes/) suite landed (35 probes, all 27 aligned-mode
+failures reproduced), each sub-cluster's minimal reproducer was run through the
+`stack_align_guard` release binary
+(`cargo build --release --bin loft --features stack_align_guard`, then
+`LOFT_ALIGN=1 LOFT_SLOT_V2=drive loft --interpret <probe>`).  The guard fires
+at the exact site for a *raw misalignment* and stays silent for a *span-logic*
+miscount that happens to land on an 8-aligned boundary — which cleanly forks
+the four sub-clusters into two fix shapes:
+
+| Sub-cluster | Guard | Mechanism class | Site | Design state |
+|---|---|---|---|---|
+| **2a** generator-arg | **FIRES** | raw misalignment (frame drift) | `coroutine_next` (op 252) | **pinned + seed** |
+| **2b** sorted-iter | silent | span-logic (dead cursor) | `OpNext` / sorted gather | class only |
+| **2c** hash-iter | silent | span-logic (off-by-one) | `OpNext` / hash gather | class only |
+| **2d** composite-format | **FIRES** | raw misalignment (handle read) | `text.rs` format read | **pinned + seed** |
+
+### 2a — `coroutine_next` frame drift (PINNED)
+
+Guard output: `S4 alignment broken: op_code=252 ... stack_pos=84 (not
+8-aligned), fn_d_nr=588`.  Op 252 is `coroutine_next` (the RESUME path).  After
+resume, `stack_pos` is left at a non-multiple-of-8 because the restore advances
+by the RAW saved-frame byte length (`self.stack_pos += bytes.len()`,
+src/state/mod.rs ~1043) rather than a stepped length — so the generator's
+argument region, which the body then reads at its stepped var offset, sits 4
+bytes off (`n=42` → `42<<32`).  **Design seed:** step the resume advance (and/or
+ensure the saved `stack_bytes` / `locals_bytes` length is captured stepped in
+`coroutine_create` / `coroutine_yield`), so TOS after `coroutine_next` is
+8-aligned and the args/locals boundary matches codegen's stepped layout.  This
+is the p117 template (value in a stepped slot, advanced by a raw width) applied
+to the coroutine frame round-trip.
+
+### 2d — composite handle read at unaligned offset (PINNED)
+
+Guard output: `S4 unaligned stack access: alloc::string::String at abs offset
+68 (align 8)`.  The format path (`"{v}"` / `"{v:j}"`) reads the composite
+value's `String`/`Str` handle from a stack slot whose offset (68) is computed
+at a raw width, not stepped — so under alignment it reads a misaligned handle
+and renders empty.  **Design seed:** route the format opcode's value-slot read
+through `stack_step` (the same `text.rs` offset arithmetic the fix-design §5
+already targets); confirm the `pos-N` derivation for the format read is stepped.
+
+### 2b / 2c — span-logic miscounts (NOT yet pinned)
+
+The guard is SILENT for both: the sorted/hash gather lands on aligned
+boundaries but advances the iteration cursor by the wrong *number of elements*
+— 2b skips them all (dead cursor → empty), 2c starts one early (phantom
+leading element → count+1).  Because there's no misalignment, the guard cannot
+localize these; the next step is the wrong-value-diff: instrument the sorted /
+hash `OpNext` (and the iterator materialisation / `gather_key` span) under
+`LOFT_ALIGN` vs flag-OFF and diff the per-element cursor advance.  Likely a
+stepped-vs-raw mismatch in the element stride that, unlike 2a/2d, preserves
+alignment while corrupting the count.  **No fix design yet** — site must be
+pinned first.
+
+### Summary
+
+Of the four sub-clusters, **2a and 2d have pinned sites + fix-design seeds**
+(both are the stepped-slot/raw-width pattern); **2b and 2c have a verified
+symptom and mechanism class but no pinned site** — they need one more
+investigation pass (cursor-stride diff) before a fix design.
