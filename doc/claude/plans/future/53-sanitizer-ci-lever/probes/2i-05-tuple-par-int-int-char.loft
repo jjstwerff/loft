@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2i — VARIANT (3-element, non-8-multiple).
+//
+// (integer, integer, character) = 8 + 8 + 4 = 20 bytes — confirms the
+// frame-shortfall scales with arity and isn't specific to a 2-tuple.
+//
+// Status aligned: CURRENTLY PANIC ; AFTER 2i FIX -> PASS.  Flag-OFF: PASS.
+
+fn f(p: const (integer, integer, character)) -> integer { p.0 + p.1 }
+
+fn main() {
+  ps: vector<(integer, integer, character)> = [(1, 2, 'a'), (3, 4, 'b')];
+  sum = 0;
+  for p in ps par(r = f(p), 4) { sum += r; }
+  assert(sum == 10, "2i-05: got {sum}, want 10");
+  println("2i-05 PASSED");
+}

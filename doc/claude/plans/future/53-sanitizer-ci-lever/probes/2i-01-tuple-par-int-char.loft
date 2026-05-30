@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2i — MINIMAL REPRODUCER.
+//
+// A par tuple whose total Argument-size is NOT a multiple of 8:
+// (integer, character) = 8 + 4 = 12 bytes.  The worker body's frame (codegen'd
+// aligned) expects the tuple arg to occupy a STEPPED span (rounded to 16), but
+// the par marshaller (read_tuple_at_wide / prim_in) provides the RAW 12-byte
+// total — a 4-byte frame shortfall that underflows the worker stack ("No
+// elements left on the stack 8 < 8", src/state/mod.rs get_stack).
+//
+// SEPARATE from 2h's byte-smear (already fixed): this is the tuple-TOTAL-SIZE
+// facet.  8-multiple totals (2h int tuples, and 2i-03 (char,char)=8) are fine;
+// only a non-8-multiple total trips it.
+//
+// Status aligned: CURRENTLY PANIC ; AFTER 2i FIX -> PASS.  Flag-OFF: PASS.
+
+fn pick(p: const (integer, character)) -> integer { p.0 }
+
+fn main() {
+  ps: vector<(integer, character)> = [(5, 'a'), (9, 'b')];
+  sum = 0;
+  for p in ps par(r = pick(p), 4) { sum += r; }
+  assert(sum == 14, "2i-01: got {sum}, want 14");
+  println("2i-01 PASSED");
+}

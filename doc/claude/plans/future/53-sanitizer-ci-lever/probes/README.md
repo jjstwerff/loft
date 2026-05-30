@@ -190,7 +190,19 @@ aligned-mode failures from the sweep, plus references and edges:
 | 2b sorted-iter | 8 | inc02, inc12×2, p190, p277, p295, p300, p4d_b | ✅ **FIXED 2026-05-30** |
 | 2c hash-iter | 7 | c60×4 | ✅ **FIXED 2026-05-30** |
 | 2d composite-format/misc | 9 | p145, p159, p193, n2, n4, n5, n8×2 | ✅ **FIXED 2026-05-30** |
-| 2h tuple-in-par | 6 | p189c | OPEN — the last one |
+| 2h tuple-in-par (byte smear) | 6 | p189c | ✅ **FIXED 2026-05-30** |
+| 2i tuple-in-par (non-8-mult total) | 5 | — (probe-discovered) | ✅ **FIXED 2026-05-30** |
+
+**Aligned `issues` suite is now 685 / 0** (zero failures/crashes/hangs, down
+from 27 at session start).  2h+2i fix: `execute_at_raw_primitive_input_wide`
+block-copies the worker-arg buffer (was a stepped byte-by-byte smear) AND
+reserves a `stack_step`-ed worker frame (was a raw total that underflowed for
+non-8-multiple tuples).  See cluster-2-fix-design.md § "2h + 2i — LANDED".
+
+**NOT yet switch-ready:** the `stack_align_guard` still fires on the par-worker
+path (`2j` — pre-existing entry-base = 4, should be stepped 8; affects scalar
+par too), and Miri hasn't been run.  Aligned mode is functionally green but the
+guard-clean + Miri validation gates remain.
 
 `run.sh` exits 0 — every probe PASSES flag-OFF and every `*-ref*` PASSES
 aligned.  The aligned column is what each cluster fix closes; re-run `run.sh`

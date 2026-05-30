@@ -728,3 +728,62 @@ worker (a tuple-element read in the par-marshalled worker frame), NOT the
 composite-format path.  Candidate sub-cluster **2h** (par/tuple worker-frame
 alignment); needs its own investigation.  After 2a+2b+2c+2d the cluster-2
 aligned `issues` surface is down to this single case.
+
+---
+
+## 2h + 2i — LANDED 2026-05-30 (aligned `issues` suite now 685/0)
+
+Tuple-in-`par` had TWO facets, both in the worker-arg setup
+(`State::execute_at_raw_primitive_input_wide`, `src/state/mod.rs`):
+
+**2h (byte smear).** The wide worker-arg buffer was pushed BYTE-BY-BYTE via
+`put_stack::<u8>`; under LOFT_ALIGN each byte advanced `stack_step(1)=8`,
+smearing the packed tuple across 16 separate 8-byte slots → the worker read
+padding zeros → result collected as 0.  Fix: one contiguous `copy_nonoverlapping`
+block copy (mirrors the coroutine-restore at ~1041).
+
+**2i (frame shortfall).** The worker frame reserved `args_size = input_size`
+(RAW tuple total), but the body's codegen lays the tuple arg at a STEPPED span
+(`stack_step(size)`), so a non-8-multiple tuple (e.g. `(integer,character)`=12)
+left the frame 4 bytes short and underflowed the worker stack.  Fix: reserve
+`stack_step(input_bytes.len())` for `args_size` and advance TOS by the stepped
+span; the copied DATA stays the raw bytes (trailing slack unread).
+
+Both identity flag-OFF (`stack_step(1)=1`, `stack_step(n)=n`).
+
+**Result:** all 6 `2h-*` and all 5 `2i-*` probes PASS aligned; full probe sweep
+ALL CLEAN; **aligned `issues` per-test sweep = 685 / 0** (zero failures, crashes,
+hangs — down from 27 at session start); flag-OFF `issues` 681/0, `wrap` 49/0;
+clippy clean; full flag-OFF regression no new failures; zero regressions.
+
+### NOT yet switch-ready — two validation gaps remain
+
+The S4 DEFINITION OF DONE also requires the `stack_align_guard` SILENT and a
+Miri run.  Neither holds yet:
+
+- **2j — par-worker entry base (PRE-EXISTING, guard-cleanliness, NOT functional).**
+  Both worker dispatchers (`execute_at_raw_primitive_input` ~2508 scalar,
+  `execute_at_raw_primitive_input_wide` ~2592 wide) hardcode `stack_pos = 4` /
+  `args_base = 4` instead of `aligned_stack_step(4)` = 8 (what the real entry
+  `execute_argv` ~2066 uses).  The frame is self-consistent at base 4 so results
+  are CORRECT (685/0), but every access lands 4-off an 8-boundary, so the
+  access guard fires (`mod.rs:1403`) on ALL par workers — scalar included
+  (predates 2h/2i).  Fixing it (set both bases to the stepped `aligned_stack_step(4)`
+  and place args there) is what makes the par path guard-clean.  Needs its own
+  probe/verification — candidate sub-cluster 2j.
+- **Miri** — the gold-standard detector has not been pointed at the aligned
+  interpreter yet (`MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test
+  --test issues <pure-compute-test>` under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive`).
+
+So: aligned mode is FUNCTIONALLY green, but the switch (flip default / declare
+guard-clean) waits on 2j (guard silent) + a Miri pass.
+
+### Other in-plan follow-ups recorded this session (unexercised, separate fixes)
+
+- **2e** sorted content-type registration (`n2` — turned out to be closed by 2d).
+- **2f** `remove()` keyed-iteration aligned deltas (no test exercises `#remove`).
+- **2g** `serialise_text_args` raw offset (sub-8-byte arg before a text arg).
+- **Separate flag-OFF bugs (NOT alignment):** char-first / boolean-first tuple
+  `par` (e.g. `(character, integer)`) returns 0 in production; and sequential
+  `for p in pairs { f(p) }` tuple-arg fails `expected (int,int), got
+  __tuple<int,int>` flag-OFF.  Surfaced while probing 2i; recorded here.

@@ -2581,19 +2581,42 @@ impl State {
             .iter()
             .position(|&p| p == fn_pos)
             .map_or(u32::MAX, |i| i as u32);
-        let input_size = input_bytes.len() as u16;
+        // @PLAN53 cluster 2 / 2i: the worker body's frame reserves the tuple arg
+        // at a STEPPED span (codegen advances each arg by stack_step(size)), so a
+        // tuple whose raw total is not a multiple of 8 (e.g. (integer, character) =
+        // 12) must occupy stack_step(12) = 16 here too.  Providing the raw 12 left
+        // the body's frame 4 bytes short and underflowed the worker stack.  The
+        // copied DATA is still the raw `input_bytes`; only the reserved frame span
+        // (args_size + the TOS advance) is rounded up.  Identity flag-OFF (step==id).
+        let stepped_size = self.stack_step(input_bytes.len() as u32);
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
             args_base: 4,
-            args_size: input_size,
+            args_size: stepped_size as u16,
             line: 0,
         });
         self.stack_pos = 4;
-        // Push the input bytes as a single chunk into slot 0.
-        for &b in input_bytes {
-            self.put_stack(b);
+        self.ensure_stack(stepped_size);
+        // @PLAN53 cluster 2 / 2h: copy the input bytes as ONE CONTIGUOUS chunk.
+        // A byte-by-byte `put_stack::<u8>` advanced stack_pos by stack_step(1) = 8
+        // PER BYTE under LOFT_ALIGN, smearing the packed tuple buffer (p.0@0, p.1@8)
+        // across 16 separate 8-byte slots; the worker body then reads tuple fields at
+        // the raw `element_offsets` [0, 8] into that smeared layout → padding zeros →
+        // every worker returned 0 (sum collected as 0).  A block copy keeps the buffer
+        // byte-identical to `read_tuple_at_wide`'s raw layout the worker reads.
+        // Identity when off (step(1) == 1, so the old byte loop was already contiguous).
+        self.ensure_stack(input_bytes.len() as u32);
+        let dst = self
+            .database
+            .store_mut(&self.stack_cur)
+            .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+        unsafe {
+            std::ptr::copy_nonoverlapping(input_bytes.as_ptr(), dst, input_bytes.len());
         }
+        // Advance past the STEPPED arg span (not the raw byte count) so locals /
+        // extra args / the return sentinel land where the body's frame expects them.
+        self.stack_pos = 4 + stepped_size;
         for &extra in extra_args {
             self.put_stack(extra as i64);
         }
