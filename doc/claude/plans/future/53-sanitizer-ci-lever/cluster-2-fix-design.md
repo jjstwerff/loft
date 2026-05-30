@@ -10,10 +10,15 @@ unaligned-accessor attempt.  See
 [`cluster-2-unaligned-store-access.md`](cluster-2-unaligned-store-access.md)
 for the decision + history.
 
-**Status:** FRAME-SLOT HALF DONE (the aligned allocator); EVAL-TOS
-HALF (S4) NOT STARTED.  See **§ SESSION HANDOFF** immediately below
-for the exact current state, what's committed, and the next steps —
-read that first.
+**Status (2026-05-30):** BOTH HALVES SUBSTANTIALLY DONE.  Frame-slot
+half (aligned V2 allocator) complete; EVAL-TOS half (S4) implemented
+(E1–E7 + R2 native marshalling + frame-base + working alignment guards
++ a8 + c60/R6) — the aligned suite runs from the start through ~`p117`
+with two characterized crashers left.  **The authoritative current
+state + how-to-test + the three hard-won process rules are in
+[`cluster-2-S4-progress.md`](cluster-2-S4-progress.md) — READ THAT
+FIRST.**  The handoff below is the older (2026-05-29) frame-slot-half
+snapshot, kept for history.
 
 ---
 
