@@ -871,10 +871,18 @@ impl State {
         // S25.1 (CO1.3d / P2-R1): serialise text args to owned Strings before the
         // caller's OpFreeText can free the backing allocations.
         let text_owned = self.serialise_text_args(d_nr, &mut stack_bytes, args_size);
-        // CO1.3d: append the 4-byte return-address slot expected by the function body.
+        // CO1.3d: append the return-address slot expected by the function body.
         // fn_call pushes this slot for regular calls; coroutines must include it so that
         // get_var offsets computed at codegen time remain valid after resume.
-        stack_bytes.extend_from_slice(&[0u8; 4]);
+        // @PLAN53 cluster 2 / S4 (2a): codegen lays the return slot at a STEPPED span
+        // (codegen.rs frame setup: `position += step(4)`), so the captured frame must
+        // reserve step(4) bytes here too.  With a raw 4 the captured `bytes.len()` is
+        // `args_size + 4`, which is step(4)-4 = 4 bytes short of the stepped `local_start`;
+        // the Created-resume TOS in `coroutine_next` then under-advances and every
+        // argument reads 4 bytes high (n=42 → 42<<32).  Identity when LOFT_ALIGN is off
+        // (step(4) == 4), so flag-OFF is byte-for-byte unchanged.
+        let ret_slot = self.stack_step(4) as usize;
+        stack_bytes.resize(stack_bytes.len() + ret_slot, 0);
         self.stack_pos = args_base;
 
         let frame = CoroutineFrame {

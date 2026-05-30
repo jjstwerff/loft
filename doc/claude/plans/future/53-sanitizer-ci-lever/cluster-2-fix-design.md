@@ -633,3 +633,51 @@ Two-line change, gated by `stack_step` (identity flag-OFF, so byte-identical):
   keyed iteration has no probe and no `issues`/script test, so it is OUT OF
   SCOPE for 2b/2c — but should get a probe + fix before keyed iteration is
   declared alignment-clean.  Candidate sub-cluster 2f.
+
+---
+
+## 2a — LANDED 2026-05-30
+
+**Fix (corrected by a read-only investigation; the Stage-C Option (A) was WRONG
+— it would have broken Suspended resumes).**  The defect is NOT
+`coroutine_next`'s `stack_pos += bytes.len()` (correct as-is) but the
+return-address-slot append in `coroutine_create` (`src/state/mod.rs` ~877),
+which reserved a RAW 4 bytes.  Codegen lays that slot out at a STEPPED span
+(`local_start = Σ step(arg) + step(4)`), so a raw-4 append makes the captured
+`bytes.len() = args_size + 4`, which is `step(4)-4 = 4` bytes short of
+`local_start`.  On a `Created`-status resume `coroutine_next` advances TOS by
+that short length, so the generator body reads every argument 4 bytes high
+(`n=42` → `42<<32`; both args of a 2-arg generator shift uniformly because the
+single short boundary under-advances TOS by exactly 4 regardless of arg count).
+Integer args (8 B = `step(8)` both modes) don't themselves diverge — the
+return-slot was the only divergent term.
+
+One-line change, identity flag-OFF (`step(4)==4`):
+
+- `src/state/mod.rs` ~877 — `extend_from_slice(&[0u8; 4])` →
+  `let ret_slot = self.stack_step(4) as usize; stack_bytes.resize(len + ret_slot, 0)`.
+
+`coroutine_next` (`+= bytes.len()`) and `coroutine_yield` are left unchanged —
+yield already steps (`value_start = stack_top - step(value_size)`;
+`stack_pos = base + step(value_size)`), and a Suspended frame's `bytes.len()`
+is the true stepped extent (includes live locals above `local_start`, which is
+exactly why Option (A)'s fixed-extent recompute would have dropped them).
+
+**Result (verified):**
+- `probes/run.sh 2a` exit 0 — all 11 `2a-*` aligned columns flip FAIL/HANG/CRASH
+  → PASS; `stack_align_guard` binary SILENT on 2a-01/07/11 (genuine alignment,
+  not coincidence).
+- Aligned `issues` sweep: **14 → 8 failures, and 0 CRASH / 0 HANG** (was 3+2 —
+  the dangerous coroutine family is entirely closed: p210, p211, p218×2, p225,
+  p328).  Strict subset, zero regressions.
+- Flag-OFF `issues` 681/0; clippy clean.
+
+### Follow-up found (in-plan, recorded NOT filed): `serialise_text_args` raw offset
+
+`serialise_text_args` (`src/state/mod.rs` ~826-857) advances `byte_offset` by
+RAW `var_size(attr, Argument)`, not stepped.  Harmless for the 2a probes (text
+16 B + integer 8 B args are both 8-multiples), but a generator with a <8-byte
+arg (`character`/`boolean`/`single`/small `enum`) positioned BEFORE a `text`
+arg would mis-locate the captured Str under LOFT_ALIGN.  Same root pattern,
+different fix site, no probe exercises it — candidate sub-cluster 2g
+(reproducer: `fn g(c: character, s: text) -> iterator<text>`).

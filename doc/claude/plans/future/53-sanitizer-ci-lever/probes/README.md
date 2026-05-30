@@ -159,7 +159,7 @@ aligned-mode failures from the sweep, plus references and edges:
 
 | Sub-cluster | Probes | Failing issues tests covered | Aligned status |
 |---|---|---|---|
-| 2a generator-arg | 11 | p210, p211, p218×2, p225, p328 | OPEN (designed) |
+| 2a generator-arg | 11 | p210, p211, p218×2, p225, p328 | ✅ **FIXED 2026-05-30** |
 | 2b sorted-iter | 8 | inc02, inc12×2, p190, p277, p295, p300, p4d_b | ✅ **FIXED 2026-05-30** |
 | 2c hash-iter | 7 | c60×4 | ✅ **FIXED 2026-05-30** |
 | 2d composite-format/misc | 9 | p145, p159, p189c, p193, n4, n5, n8×2 | partial (p193 ✅ via 2b+2c fix) |
@@ -172,6 +172,15 @@ after each fix to watch it flip to PASS.
 `iterate()`; see cluster-2-fix-design.md § "2b+2c — LANDED").  All 15 `2b-*` /
 `2c-*` probes (and `2d-09`, a hash-iter case) now PASS aligned; aligned
 `issues` sweep 27→14 failures, zero regressions, flag-OFF 681/0.
+
+**2a LANDED 2026-05-30** (one line — `coroutine_create` reserves the
+return-address slot at `stack_step(4)` instead of a raw 4; see
+cluster-2-fix-design.md § "2a — LANDED").  All 11 `2a-*` probes PASS aligned;
+aligned `issues` 14→8 failures with **0 CRASH / 0 HANG** (the coroutine family
+p210/p211/p218×2/p225/p328 closed), zero regressions, flag-OFF 681/0.
+
+After 2a+2b+2c, the remaining aligned `issues` failures are the 7 genuine 2d
+composite-format cases + `n2` (a separate content-type-registration mechanism).
 
 **Note — `n2` is NOT a 2b case.**  `n2_sorted_field_content_type_registered_
 first` was loosely listed under 2b but is a *separate* mechanism (sorted-field
