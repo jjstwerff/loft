@@ -218,15 +218,18 @@ fn w1_1_html_export_produces_file() {
 #[test]
 fn p171_native_copy_record_high_bit_does_not_panic() {
     let script = workspace_root().join("lib/moros_render/examples/isolated_stair.loft");
-    // The script writes to a fixed path; remove any stale output first.
-    let _ = std::fs::remove_file("/tmp/isolated_stair.glb");
+    // The script writes `isolated_stair.glb` CWD-relative (portable — Windows
+    // has no /tmp), so run it in a temp working dir and read the GLB from
+    // there.  Mirrors the moros_glb_cli_end_to_end pattern below.
+    let glb_path = std::env::temp_dir().join("isolated_stair.glb");
+    let _ = std::fs::remove_file(&glb_path);
     let path_arg = format!("{}/", workspace_root().display());
     let out = Command::new(loft_bin())
         .arg("--native")
         .arg("--path")
         .arg(&path_arg)
         .arg(&script)
-        .current_dir(workspace_root())
+        .current_dir(std::env::temp_dir())
         .output()
         .expect("invoke loft");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -244,23 +247,18 @@ fn p171_native_copy_record_high_bit_does_not_panic() {
     // migration against a fresh cdylib, or vice versa).  A clean
     // rebuild of both crates resolves it; it is never a regression
     // in the code under test.
+    // @P229 G2 (Windows LNK1181 windows-targets link-search) was fixed
+    // 2026-05-30 in src/native_utils.rs, so the previous LNK1181 skip branch
+    // is removed — this test now exercises the native multi-lib link on
+    // Windows too.  The remaining skips are genuine toolchain-availability
+    // cases (E0514 rustc-version mismatch, E0463 missing rlib, the i32/i64
+    // layout-mismatch from a stale cdylib) — never code-under-test bugs.
     if stderr.contains("rustc not found")
         || stderr.contains("E0514")
         || stderr.contains("E0463")
         || (stderr.contains("E0308")
             && stderr.contains("*const i32")
             && stderr.contains("*const i64"))
-        // Windows: windows-targets crate emits a search path that
-        // doesn't survive the test-binary link step.  Mirror of the
-        // `build_script_native_lib_dirs` workaround in src/native_utils.rs
-        // (applied to loft's invocation, not to tests).  Environmental,
-        // not a code-under-test regression.  loft may report the wrapper
-        // text "exit code: 1181" without the raw "LNK1181" symbol if cc's
-        // stderr is buffered separately from the test's captured stream.
-        || stderr.contains("LNK1181")
-        || stderr.contains("link.exe` failed: exit code: 1181")
-        || stdout.contains("LNK1181")
-        || stdout.contains("link.exe` failed: exit code: 1181")
     {
         eprintln!("SKIP: native toolchain not ready — {stderr}");
         return;
@@ -278,9 +276,10 @@ fn p171_native_copy_record_high_bit_does_not_panic() {
         "output must match interpreter (96-vert default-rise stair); \
          stdout={stdout:?}"
     );
-    // The script writes a GLB to /tmp; verify it has the glTF magic.
-    let glb = std::fs::read("/tmp/isolated_stair.glb").expect("GLB written");
+    // Verify the GLB the script wrote has the glTF magic.
+    let glb = std::fs::read(&glb_path).expect("GLB written");
     assert_eq!(&glb[0..4], b"glTF", "GLB magic must be 'glTF'");
+    let _ = std::fs::remove_file(&glb_path);
 }
 
 // ── P166: file().content() on a binary file must surface a warning ────────

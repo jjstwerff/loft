@@ -648,6 +648,20 @@ pub(crate) fn add_native_extern_flags(
                     }
                 }
             }
+            // @P229 (G2): harvest build-script `rustc-link-search` dirs from
+            // THIS native package's own target tree, not just the top-level
+            // one.  A diamond-dep can pull a second `windows_x86_64_msvc`
+            // version (e.g. graphics → winit/glutin pulls 0.52.6) built under
+            // `<pkg>/native/target/release/build`, whose `windows.0.52.0.lib`
+            // the top-level harvest at the call site never sees — so its
+            // `/LIBPATH` is missing and the link fails `LNK1181: cannot open
+            // input file 'windows.0.52.0.lib'`.  `rlib_path.parent()` is the
+            // package's `<profile>` dir, exactly what the helper expects.
+            if let Some(profile_dir) = rlib_path.parent() {
+                for nd in build_script_native_lib_dirs(profile_dir) {
+                    cmd.arg("-L").arg(format!("native={}", nd.display()));
+                }
+            }
         }
     }
 }

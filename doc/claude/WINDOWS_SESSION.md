@@ -46,7 +46,13 @@ If any pre-flight step fails, that's the FIRST gap to investigate — base-toolc
 
 ## Priority queue — investigate in this order
 
-### Priority 1 — verify the v2 probe result (5 min if pre-flight clean)
+### Priority 1 — verify the v2 probe result ✅ DONE (2026-05-30, local host)
+
+**Outcome: PASSES.**  Re-ran on a real Windows host (rustc 1.96.0 MSVC):
+`multiplayer_v2` 3/3, `multiplayer_v3` 2/2, `multiplayer_v5` 5/5 — all 10
+P229b tests green, no code change, no `cfg_attr(windows, ignore)` gate left.
+@P229b confirmed incidentally fixed.  (Original probe text retained below for
+context.)
 
 A probe commit (libraries3 `baa9c3e2`, 2026-05-29) temporarily un-ignored `v2_single_client_completes_game` on Windows to surface real `diagnose_listen_failure` output.
 
@@ -60,32 +66,68 @@ Three outcomes:
 - **FAILS with port-bind error** in the captured stderr → the 2026-05-21 hypothesis confirms; apply the SO_REUSEADDR / server-binds-:0-itself fix described in WINDOWS.md G1.
 - **FAILS with `code: 206` or another spawn error** → same problem space as PR #228 (cmdline overflow).  The spawn-cmdline of the server subprocess is short, so this would point to something else like a missing DLL path or working-dir issue.  Capture the full stderr and investigate.
 
-### Priority 2 — G2 LNK1181 (15-30 min reproduce + decide)
+> **2026-05-30 blocker for ALL `--native` priorities below (G2/G3/G4-native).**
+> On the local host these could not be exercised end-to-end: (1) the
+> pre-existing `libloft.rlib` was a stale **gnu**-target build → `E0461` under
+> the msvc `--native` compile (cleared by `rustup run
+> stable-x86_64-pc-windows-msvc cargo build --release`); then (2) the rebuilt
+> **unsigned** `loft.exe` is blocked by the host's **WDAC code-integrity
+> policy** (CodeIntegrity 3077, "blocked by an application control policy").
+> `cargo test` works (cached verdict); standalone `loft --native …` does not.
+> **Code-sign `loft.exe` after each build** (user validates with a YubiKey)
+> before attempting G2/G3/G4-native.  Detail: WINDOWS.md § The 2026-05-30
+> native-execution wall.
 
-```powershell
-cargo run --release -- --check --lib lib tests/fixtures/p310_save_png.loft
-```
+### Priority 2 — ~~G2 LNK1181~~ — FIXED 2026-05-30 (windows-latest CI)
 
-If LNK1181 fires:
-- Confirm whether `build_script_native_lib_dirs` (`src/native_utils.rs`) covers the missing `windows-targets` search dir for the `--check` path.
-- The `loft` binary's own invocation works (it adds the dirs); the `--check` STANDALONE codegen path may not.
+**Root cause found + fixed on `windows-validation` branch.**  Two versions of
+`windows_x86_64_msvc` (0.48.5 top-level, 0.52.6 in graphics stack) were in
+play; `build_script_native_lib_dirs` only harvested the top-level build root,
+so the 0.52.6 lib dir was never passed as a linker `/LIBPATH`.  Fix:
+`src/native_utils.rs::add_native_extern_flags` now also calls
+`build_script_native_lib_dirs(rlib_path.parent())` for each native package's
+own build dir.  Verified: `--check --lib lib tests/fixtures/p310_save_png.loft`
+exits 0 on `windows-latest` (CI run 26690846366).
 
-### Priority 3 — G3 multi-lib transitive-rlib (30-60 min reproduce + decide)
+Note: validated on the GitHub runner (no WDAC), NOT on the local WDAC-blocked
+host.
 
-```powershell
-cargo run --release -- --check --lib lib tests/fixtures/p310_save_png.loft
-```
+**Done in this change:** the `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean`
+LNK1181 silent-skip branch is removed; `p310` now asserts `out.status.success()` on
+every platform.  Remaining: full Windows `nextest` validation runs on this PR's
+`windows-latest` CI leg.
 
-If `error: crate `ureq` required to be available in rlib format` fires:
-- Check `lib/web/native/target/release/deps/libureq-*.rlib` exists.
-- Check whether its hash matches what `loft_web.rlib` was linked against.
-- Likely fix: lockfile-consistent build resolution, OR restrict `--lib lib` to only the packages the program uses (so a graphics fixture doesn't pull in web's TLS stack).
+### Priority 3 — ~~G3 transitive-rlib~~ — FIXED 2026-05-30
 
-**Possible PR #228 connection** — if the rustc link command-line for `--native` multi-lib also exceeds Windows' 32 KB `CreateProcessW` limit, the same argfile pattern (`rustc @argfile`) we used in `tests/native.rs::compile_native_job` (PR #228, commit `da1e5e51`) would apply at the production `--native` codegen path.  Worth checking — the link cmdline includes `--extern X=path` for every native dep transitively.  See `src/main.rs` near the `--native` rustc invocation; mirror the argfile pattern from `tests/native.rs:481+` if applicable.
+Root cause (proven): concurrency artefact in `src/extensions.rs::auto_build_native`.
+`auto_build_native` runs `cargo build` with no `--locked`/`--frozen`, re-resolving the
+full dependency tree on every on-demand build.  Under parallel nextest, concurrent
+re-resolution races with a standalone `loft --check --lib lib` rustc link → ureq/rustls
+rlibs transiently mid-rebuild → "required to be available in rlib format".  The earlier
+"environmental / no longer reproduces" framing was WRONG: a cold CI run (rust-cache
+"No cache found") still failed p310 on G3; a rust-cache trial did NOT help.
 
-### Priority 4 — G4 `parallel { }` worker stack snapshot (variable effort)
+Fix: CI pre-builds all four native lib packages SEQUENTIALLY in `.github/workflows/ci.yml`
+before the nextest step, so `auto_build_native` is a no-op during the suite.
 
-The Linux half of @P229 was fixed 2026-05-10.  The Windows half remains.  Lower priority than G1-G3 because no user has reported a regression from it.
+Verified: CI run 26694041810 — 2268/2268 Windows, 0 failures; `p310` dropped from
+~86-113s to 2.7s.  The `tests/codegen_emitter.rs` "required to be available in rlib
+format" silent-skip branch is removed; `p310` asserts `out.status.success()` on every
+platform.
+
+Residual latent concern → @P388: the underlying unlocked re-resolution is still present
+and can bite end users running parallel `loft --native`/`--check` invocations.
+
+### Priority 4 — ~~G4 `parallel { }` worker stack snapshot~~ — FULLY CLOSED 2026-05-30
+
+Both halves verified clean:
+- Interpreter half: local Windows host (2026-05-30) — `80-parallel-block.loft`
+  + `81-parallel-outer-vars.loft` exit 0; `tests/threading.rs` 47/47.
+- Native half: `windows-latest` CI runner (run 26689698213, 2026-05-30) — both
+  scripts compiled + executed under `--native`, exit 0.  The runner does not
+  enforce WDAC, so unsigned binaries run normally.
+
+`@P229` G4 is fully closed.  No action needed here.
 
 ### Priority 5 — opportunistic checks
 
@@ -106,7 +148,7 @@ For each gap touched, update:
 1. WINDOWS.md — move from `## Known gaps` to `## Previously fixed Windows-only issues` if closed.
 2. PROBLEMS.md — close the P-issue with the verified diagnosis.
 3. `tests/multiplayer_v{2,3,5}.rs` — un-ignore the affected tests if G1 fixed.
-4. `tests/native.rs:960` — drop the LNK1181 runtime-skip branch if G2 fixed.
+4. `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean` — ✅ Done in this change: the LNK1181 (G2) and "required to be available in rlib format" (G3) silent-skip branches are removed; `p310` is now the cross-platform regression guard.  Remaining: full Windows CI run on this PR validates the fix.
 5. CHANGELOG_TECHNICAL.md — note the Windows-specific fix.
 
 If gaps were verified-but-not-fixed (real error captured, fix needs more time), update the corresponding WINDOWS.md gap section with the captured error message so the next session starts from real data, not hypothesis.

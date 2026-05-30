@@ -71,6 +71,24 @@ jobs:
       - name: Build (release loft binary + lib for integration tests)
         run: cargo build --release --lib --bin loft
 
+      # @P229 G3 reliability fix: pre-build every native lib package
+      # SEQUENTIALLY here, before the parallel nextest run.  Root cause: tests
+      # that run `loft --native`/`--check` call `auto_build_native`, which runs
+      # an UNLOCKED `cargo build` that re-resolves the whole dep tree
+      # ("Locking N packages / Adding ureq …").  Under parallel nextest, many
+      # of these fire at once, churning the shared ~/.cargo + target while a
+      # standalone `--check --lib lib` rustc link needs ureq/rustls rlibs →
+      # "required to be available in rlib format" (G3).  Pre-building here means
+      # `auto_build_native` sees the rlibs already exist and is a no-op during
+      # the suite — no concurrent re-resolution.  Same command + manifest
+      # `auto_build_native` uses, so the artefacts match.
+      - name: Pre-build native lib packages (avoid concurrent auto_build — G3)
+        run: |
+          cargo build --release --manifest-path lib/graphics/native/Cargo.toml
+          cargo build --release --manifest-path lib/web/native/Cargo.toml
+          cargo build --release --manifest-path lib/server/native/Cargo.toml
+          cargo build --release --manifest-path lib/imaging/native/Cargo.toml
+
       # no-default-features check only needs to run on one OS — ubuntu
       # covers it at a fraction of the Windows job's time.  Use `cargo
       # check`, NOT `cargo build`: a `build --no-default-features` rewrites
