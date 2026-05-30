@@ -2830,6 +2830,72 @@ are suppressed with `#[allow(dead_code)]` + a comment pointing here.
 
 ---
 
+## Design: BUILD2 — Persist the native-test binary cache across CI runs
+
+**Symptom.**  The Windows CI leg is the long pole at ~25 min (Build
+311s + Build-release 149s + Test 1010s).  A large slice of the Test step
+is native compiles: `native_library_suite` + `native_scripts` + the two
+`exit_codes` native cases + `codegen_emitter` + `p244` recompile **every
+fixture to a native binary from scratch on every CI run** (~565s of CPU,
+on all three OSes).
+
+**Why the existing cache doesn't survive CI.**  An in-run binary cache
+already exists — `compile_native_job` skips recompilation when a
+content-hash sidecar (`{binary}.key`) matches (`binary_cache_valid` in
+tests/native.rs; `native_cache_key` in src/native_utils.rs).  But the
+binaries + sidecars are written to `scratch_dir()`, which defaults to
+`std::env::temp_dir()`.  `actions/cache` (`.github/workflows/ci.yml`)
+persists only `~/.cargo` + `target/`, so the temp dir is **never
+cached** and the in-run cache starts empty every run.
+
+**The blocker a naive "just relocate" misses — the key folds rlib
+MTIME.**  Both cache-key functions mix in `libloft.rlib`'s *modification
+time* (`native_utils::fold_mtime`; the inline mtime block in
+tests/native.rs `cache_key`), and the `@P341` extension also folds each
+native-PACKAGE rlib's mtime.  ci.yml runs `cargo build --release --lib`
+**every run**, which rewrites `libloft.rlib` with a fresh mtime even on a
+no-op rebuild.  Fresh mtime → every key misses → every binary recompiles
+**even if the dir were cached**.  So relocation alone buys ~nothing.
+
+**Fix — two parts (both required):**
+1. **Relocate** the cache under `target/` so `actions/cache` persists it.
+   The plumbing already exists: `scratch_dir()` honours `LOFT_TMPDIR`
+   (added with the tmpfs safeguards), so this is just
+   `LOFT_TMPDIR=target/loft-native-cache` in ci.yml — no code change.
+2. **Content-hash the rlib instead of mtime** in BOTH key functions:
+   hash the rlib *bytes* (or reuse `LOFT_BUILD_ID`) so an unchanged rlib
+   (same bytes, new mtime) is a cache HIT.  This preserves the
+   invalidation invariant the mtime was chosen for ("a recompiled rlib
+   with a different binary must invalidate") — a different binary has
+   different bytes → different hash — while being mtime-stable.  Likewise
+   fold each native-package rlib by content, not mtime (keeps @P341's
+   guarantee that a cdylib fix invalidates the cached test binary).
+
+**Expected win.**  Warm runs with an unchanged rlib skip the native
+recompiles outright — likely several minutes off the Test step, on all
+three OSes.  Same tests, same assertions, same binaries — purely faster.
+
+**Effort / risk.**  S–M test-infra change.  Risks to handle:
+- **Cross-run correctness:** a persisted cache raises the stakes on key
+  completeness — an in-run miss only wastes the current run; a persisted
+  wrong key can mask a regression across runs.  The key must cover
+  *everything the binary links* (generated Rust + loft rlib + every
+  native-package rlib) by content before it's trusted across runs.
+- **Parallel-safety:** the suite compiles fixtures concurrently into the
+  shared dir; the content-hash sidecar already makes this safe in-run,
+  but verify no races on the relocated path.
+- **Cache growth / cleanup:** `target/loft-native-cache/` accumulates
+  ~1MB (stripped) per fixture across rlib versions; cap it (LRU or
+  wipe-on-rlib-change) so it doesn't bloat the `actions/cache` entry.
+- **Hashing cost:** hashing a ~14MB rlib per cache check — measure; fold
+  once per run (the rlib is constant within a run) rather than per
+  fixture.
+
+**Discovered** 2026-05-30 (CI long-pole analysis, after the tmpfs
+safeguards landed).  Independent of BUILD1.
+
+---
+
 ## See also
 - Optimisations section below — Runtime optimisation audit
 - [PERFORMANCE.md](PERFORMANCE.md) — Benchmark data and root-cause analysis
@@ -2860,6 +2926,7 @@ plan-cleanup audits:
 | **N5** — Inline `integer` arithmetic when operands are non-null | § Design: N5 | — | Native | Open — discovered alongside N4 (2026-05-18) while inspecting `--native-emit` output for scan.loft's byte loop.  Folds into N3 (same nullability classifier, parallel application to `integer`). |
 | **W1** — wasm string representation | § Design: W1 | — | WASM | Open — design ready, scheduled for wasm-priority workloads (game-client + browser-IDE consumers). |
 | **BUILD1** — Eliminate lib/bin double compilation | § Design: BUILD1 | — | Build-time | Open — discovered 2026-05-30 wiring the tmpfs safeguards.  `main.rs` re-declares 41 modules already in `lib.rs` (~38,520 LOC of single-file modules) → whole crate compiled twice (rlib + bin).  Fix = thin-binary lib/bin split.  M–L, crate-wide; needs its own change.  Until then, shared `platform` helpers used only by `tests/` carry `#[allow(dead_code)]` in the binary view. |
+| **BUILD2** — Persist native-test binary cache across CI runs | § Design: BUILD2 | — | Build-time (CI) | Open — discovered 2026-05-30 (CI long-pole analysis).  Native fixtures recompile every CI run (~565s/OS) because the binary cache lives in temp (uncached) AND its key folds rlib **mtime** (ci rebuilds the rlib → fresh mtime → miss).  Fix = relocate via `LOFT_TMPDIR=target/loft-native-cache` (plumbing already exists) **+** switch both cache keys from rlib-mtime to rlib-content-hash.  S–M; cross-run key-completeness + cache-growth care.  NB: `libraries4` `f73e58a0 @P334` fixes the world.loft wasip2 stub at the source — supersedes the harness preopen workaround when it merges. |
 
 Other ROADMAP rows that conceptually belong here but lack
 PERFORMANCE.md design content yet — A12 (lazy work-variable
