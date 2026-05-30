@@ -228,28 +228,40 @@ fn fnv64(data: &[u8]) -> u64 {
 /// Build the cache key from the current `.rs` content and rlib identity.
 ///
 /// The key captures both what was compiled (`.rs` bytes) and what it was
-/// linked against (rlib path + modification time).  If either changes the
-/// key changes and the binary is recompiled.
+/// linked against (rlib path + CONTENT hash).  If either changes the key
+/// changes and the binary is recompiled.
+///
+/// BUILD2: keyed on rlib bytes, not mtime.  `actions/cache` persists `target/`
+/// but every CI run reruns `cargo build --release --lib`, which rewrites
+/// `libloft.rlib` with a fresh mtime even on a no-op rebuild — an mtime fold
+/// then misses and recompiles every native fixture.  rustc's rlib output is
+/// byte-deterministic for unchanged sources, so a content hash is stable across
+/// the no-op rebuild (warm-cache hit) while still invalidating when the binary
+/// actually changes (different bytes → different hash).  The rlib is read once
+/// per process via `rlib_content_hash`, not once per fixture.
 fn cache_key(rs_content: &[u8], rlib_info: &Option<(PathBuf, PathBuf)>) -> u64 {
     let mut key = fnv64(rs_content);
     if let Some((rlib, _)) = rlib_info {
         key ^= fnv64(rlib.to_string_lossy().as_bytes());
-        if let Ok(mtime) = std::fs::metadata(rlib).and_then(|m| m.modified()) {
-            // Mix in the rlib modification time so a recompiled rlib (same path,
-            // different binary) also invalidates the cache.
-            let nanos = mtime
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
-                .unwrap_or(0);
-            let secs = mtime
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            key ^= fnv64(&secs.to_le_bytes());
-            key ^= fnv64(&nanos.to_le_bytes());
-        }
+        key ^= rlib_content_hash(rlib);
     }
     key
+}
+
+/// FNV-1a hash of a file's bytes, memoised per path (the rlib is ~14MB and the
+/// same within a run).  Missing file → 0, matching the old no-op-on-missing.
+fn rlib_content_hash(path: &Path) -> u64 {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(&h) = guard.get(path) {
+        return h;
+    }
+    let h = std::fs::read(path).map(|b| fnv64(&b)).unwrap_or(0);
+    guard.insert(path.to_path_buf(), h);
+    h
 }
 
 /// Phase 1 — parse the `.loft` file and generate its Rust source.

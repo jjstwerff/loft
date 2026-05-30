@@ -208,11 +208,11 @@ pub(crate) fn native_cache_key(
     if let Some(ld) = lib_dir {
         let rlib = ld.join("libloft.rlib");
         key ^= fnv64(rlib.to_string_lossy().as_bytes());
-        fold_mtime(&mut key, &rlib);
+        fold_file_content(&mut key, &rlib);
     }
-    // @P341: also fold each native PACKAGE rlib's path + mtime, so rebuilding a
-    // library's `#native` crate (`lib/<pkg>/native/...`) invalidates the cached
-    // test binary — which links those rlibs via `add_native_extern_flags`.
+    // @P341: also fold each native PACKAGE rlib's path + content, so rebuilding
+    // a library's `#native` crate (`lib/<pkg>/native/...`) invalidates the
+    // cached test binary — which links those rlibs via `add_native_extern_flags`.
     // Without this, a cdylib fix is silently masked by a stale cached binary.
     if let Some(d) = data {
         for (crate_name, pkg_dir) in &d.native_packages {
@@ -223,21 +223,42 @@ pub(crate) fn native_cache_key(
                 .join("release")
                 .join(&rlib_name);
             key ^= fnv64(rlib.to_string_lossy().as_bytes());
-            fold_mtime(&mut key, &rlib);
+            fold_file_content(&mut key, &rlib);
         }
     }
     key
 }
 
-/// Fold a file's modification time into `key` (no-op if the file is missing).
-fn fold_mtime(key: &mut u64, path: &std::path::Path) {
-    if let Ok(mtime) = std::fs::metadata(path).and_then(|m| m.modified()) {
-        let d = mtime
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default();
-        *key ^= fnv64(&d.as_secs().to_le_bytes());
-        *key ^= fnv64(&d.subsec_nanos().to_le_bytes());
-    }
+/// Fold a file's CONTENT hash into `key` (no-op if the file is missing).
+///
+/// BUILD2: keyed on bytes, not mtime, so the cache survives across CI runs.
+/// `actions/cache` persists `target/` but every CI run reruns `cargo build
+/// --release --lib`, which rewrites `libloft.rlib` with a fresh mtime even on a
+/// no-op rebuild — an mtime fold then misses every time and recompiles every
+/// native fixture from scratch.  rustc's rlib output is byte-deterministic for
+/// unchanged sources (verified: a touch-and-rebuild yields an identical
+/// sha256), so a content hash is stable across the no-op rebuild → warm-cache
+/// hit, while still invalidating when the binary actually changes (different
+/// bytes → different hash).  Results are memoised per path so a 14MB rlib is
+/// hashed once per process, not once per fixture.
+fn fold_file_content(key: &mut u64, path: &std::path::Path) {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<std::path::PathBuf, u64>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let hash = {
+        let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(&h) = guard.get(path) {
+            h
+        } else {
+            // Missing file hashes to 0 (matches the old no-op-on-missing
+            // behaviour: a not-yet-built rlib contributes nothing).
+            let h = std::fs::read(path).map(|b| fnv64(&b)).unwrap_or(0);
+            guard.insert(path.to_path_buf(), h);
+            h
+        }
+    };
+    *key ^= hash;
 }
 
 /// Return true if `s` looks like an explicit output path rather than a flag or loft source file.

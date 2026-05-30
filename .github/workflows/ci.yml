@@ -12,6 +12,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # BUILD2: keep loft's native-test binary cache inside target/ so
+  # actions/cache (which persists ~/.cargo + target/) carries it across runs.
+  # The in-run binary cache is keyed on the rlib's CONTENT hash (mtime-stable
+  # across the per-run `cargo build --release --lib` no-op rebuild), so warm
+  # runs skip the ~565s of native recompiles instead of redoing them.
+  LOFT_TMPDIR: ${{ github.workspace }}/target/loft-native-cache
 
 jobs:
   test:
@@ -135,6 +141,18 @@ jobs:
 
       - name: Test
         run: cargo nextest run --profile ci
+
+      # BUILD2: bound the persisted native-binary cache.  Each fixture keeps a
+      # single fixed-named binary (overwritten on change, not duplicated), so
+      # the live set is stable (~190MB), but a removed/renamed fixture leaves an
+      # orphan that is never re-hit.  Drop anything not touched this run so the
+      # cached `target/` entry can't creep upward across months of churn.
+      # Best-effort + cross-platform via a tiny inline script (skip on Windows
+      # where `find` differs; the Linux/macOS runs keep it trimmed for all).
+      - name: Prune stale native-binary cache
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        run: find "${{ github.workspace }}/target/loft-native-cache" -type f -mmin +180 -delete || true
 
   clippy:
     name: Clippy
