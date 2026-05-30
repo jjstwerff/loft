@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2c — VARIANT (multi-field key).
+//
+// `tests/issues.rs::c60_hash_iter_multi_field_lex` shape: a hash keyed on TWO
+// fields (region, score).  Confirms the off-by-one gather is independent of
+// key arity — a wider composite key still emits the phantom leading element.
+//
+// Status aligned: CURRENTLY FAIL (n 5) ; AFTER 2c FIX -> PASS.  Flag-OFF: PASS.
+
+struct R2 { region: text, score: integer }
+struct Bag { data: hash<R2[region, score]> }
+
+fn main() {
+  b = Bag { data: [
+    R2{region:"east", score:10},
+    R2{region:"west", score:30},
+    R2{region:"east", score:50},
+    R2{region:"west", score:20},
+  ] };
+  n = 0;
+  for r in b.data { n = n + 1; }
+  assert(n == 4, "2c-05: counted {n}, want 4");
+  println("2c-05 PASSED");
+}

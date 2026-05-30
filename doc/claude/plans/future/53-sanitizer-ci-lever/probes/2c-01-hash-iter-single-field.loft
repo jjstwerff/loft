@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2c — MINIMAL REPRODUCER.
+//
+// Iterating a `hash<T[key]>` collection.  Under LOFT_ALIGN the per-element
+// key-gather span is off by one slot, so the iteration emits a SPURIOUS
+// LEADING element (empty/zero) before the real ones: the output comes back
+// ",apple,mango,zebra," instead of "apple,mango,zebra,".  Contrast 2b
+// (sorted) where the gather corruption drops ALL elements; here it ADDS a
+// phantom leading one.
+//
+// Maps to tests/issues.rs::c60_hash_iter_single_field_asc.
+// Status aligned: CURRENTLY FAIL (leading ',') ; AFTER 2c FIX -> PASS.  Flag-OFF: PASS.
+
+struct Entry { name: text, count: integer }
+struct Bag { data: hash<Entry[name]> }
+
+fn main() {
+  b = Bag { data: [
+    Entry{name:"zebra", count:1},
+    Entry{name:"apple", count:5},
+    Entry{name:"mango", count:3},
+  ] };
+  out = "";
+  for e in b.data { out = out + e.name + ","; }
+  assert(out == "apple,mango,zebra,", "2c-01: got '{out}'");
+  println("2c-01 PASSED");
+}

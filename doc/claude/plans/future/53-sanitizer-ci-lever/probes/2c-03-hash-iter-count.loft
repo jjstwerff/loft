@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2c — VARIANT (element count).
+//
+// Counts iterations directly.  The phantom leading element makes the count
+// come back 4 for a 3-element hash — the cleanest numeric statement of the
+// "extra leading element" symptom (no string formatting in the way).
+//
+// Status aligned: CURRENTLY FAIL (n 4) ; AFTER 2c FIX -> PASS.  Flag-OFF: PASS.
+
+struct Entry { name: text, count: integer }
+struct Bag { data: hash<Entry[name]> }
+
+fn main() {
+  b = Bag { data: [
+    Entry{name:"zebra", count:1},
+    Entry{name:"apple", count:5},
+    Entry{name:"mango", count:3},
+  ] };
+  n = 0;
+  for e in b.data { n = n + 1; }
+  assert(n == 3, "2c-03: counted {n}, want 3");
+  println("2c-03 PASSED");
+}

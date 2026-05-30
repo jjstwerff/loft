@@ -98,12 +98,32 @@ gather); a plain vector is fine (`2b-02`, different path).
 
 Maps to: `inc02`, `inc12`×2, `p190`, `p277`, `p295`, `p300`, `p4d_b`, `n2`.
 
+## Sub-cluster 2c — hash-collection iteration (PASS 3)
+
+**Mechanism.** Iterating a `hash<T[key]>` mis-offsets the per-element gather by
+one slot, emitting a SPURIOUS LEADING element (empty/zero) before the real
+ones: `,apple,mango,zebra,` instead of `apple,mango,zebra,`, a count of 4 for
+3 entries.  Mirror image of 2b: 2b (sorted) DROPS all elements; 2c (hash) ADDS
+a phantom one.  Empty hash is fine (`2c-02`, no gather); a single element
+already triggers it (`2c-04`).
+
+| Probe | Shape | Aligned now | Role |
+|---|---|---|---|
+| `2c-01-hash-iter-single-field` | string-join iteration | **FAIL** (`,apple,…`) | minimal reproducer |
+| `2c-02-hash-empty-ref` | empty hash | PASS | reference — no gather |
+| `2c-03-hash-iter-count` | count elements | FAIL (`n=4`) | numeric statement of the phantom |
+| `2c-04-hash-single-elem` | one element | FAIL (`n=2`) | edge — first gather breaks |
+| `2c-05-hash-multi-field-key` | two-field key (c60 multi) | FAIL | variant — key arity invariant |
+| `2c-06-hash-iter-filter-clause` | `for … if` (c60 filter) | FAIL (garbage) | phantom feeds a guard |
+| `2c-07-hash-iter-loop-index` | `e#index` (c60 loop-attr) | FAIL (`20` vs `14`) | phantom shifts every index |
+
+Maps to: `c60_hash_iter_{single_field_asc, multi_field_lex, filter_clause,
+loop_attributes}`.
+
 ## Later passes (not yet authored)
 
-Remaining cluster-2 sub-families from the 2026-05-30 sweep:
+Remaining cluster-2 sub-family from the 2026-05-30 sweep:
 
-- **2c — hash iteration (`c60`)**: `c60_hash_iter_{single_field_asc,
-  multi_field_lex,filter_clause,loop_attributes}`.
 - **2d — struct / tuple / vector / misc**: `p145`, `p159`, `p189c`, `p193`,
   `n4`, `n5`, `n8_*`.
 

@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2c — EDGE (single element already breaks).
+//
+// One entry, yet the phantom leading element makes the count 2.  Pins the
+// off-by-one to the very first gather.
+//
+// Status aligned: CURRENTLY FAIL (n 2) ; AFTER 2c FIX -> PASS.  Flag-OFF: PASS.
+
+struct Entry { name: text, count: integer }
+struct Bag { data: hash<Entry[name]> }
+
+fn main() {
+  b = Bag { data: [Entry{name:"solo", count:7}] };
+  n = 0;
+  for e in b.data { n = n + 1; }
+  assert(n == 1, "2c-04: counted {n}, want 1");
+  println("2c-04 PASSED");
+}
