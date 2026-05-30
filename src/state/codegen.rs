@@ -2298,7 +2298,10 @@ impl State {
                 self.gather_key(stack, &parameters, 2, &mut tps);
             }
             "OpStart" => {
-                was_stack = stack.position + 4 - super::size_ref() as u16;
+                // @PLAN53 cluster 2 / S4: the iterator-pushed value (+4) and the
+                // consumed iterable DbRef (size_ref) each occupy a stepped span.
+                was_stack =
+                    stack.position + stack.step(4) - stack.step(super::size_ref() as u16);
                 self.gather_key(stack, &parameters, 2, &mut tps);
             }
             "OpNext" => {
@@ -2306,7 +2309,11 @@ impl State {
                 self.gather_key(stack, &parameters, 3, &mut tps);
             }
             "OpIterate" => {
-                was_stack = stack.position + 8 - super::size_ref() as u16;
+                // @PLAN53 cluster 2 / S4: OpIterate pushes TWO u32s (start+finish)
+                // and consumes the iterable DbRef — each is a separately-stepped
+                // span (2*step(4), NOT step(8)), so account them individually.
+                was_stack = stack.position + stack.step(4) + stack.step(4)
+                    - stack.step(super::size_ref() as u16);
                 if let Value::Int(parameter_length) = parameters[4] {
                     self.gather_key(stack, &parameters, 4, &mut tps);
                     self.gather_key(stack, &parameters, 5 + parameter_length, &mut tps);
