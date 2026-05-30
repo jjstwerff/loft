@@ -52,15 +52,23 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri
 
-      - name: Cache cargo registry and build
-        uses: actions/cache@v4
+      # @P229 G3 reliability trial: replace the hand-rolled actions/cache with
+      # Swatinem/rust-cache.  The G3 flake (ureq/rustls "required to be
+      # available in rlib format") is a partial-cache artefact — the old cache
+      # could restore a dependency's `.rmeta` without its `.rlib`, and cargo's
+      # fingerprint check then skipped regenerating the rlib, so loft's
+      # standalone `--check --lib lib` rustc couldn't find it.  rust-cache keys
+      # the cache more strictly (rustc version + lockfile) and manages target
+      # contents to avoid stale/partial dependency artefacts.
+      - name: Cache cargo (rust-cache)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          # Distinct cache per matrix OS; the diagnostic probe + skip_test mode
+          # share the same key so warm restores are exercised.
+          key: g3-trial
+          # Save the cache even when the suite fails, so the *next* run gets a
+          # warm restore to exercise (the G3 flake only shows on warm restore).
+          cache-on-failure: true
 
       - name: Build
         if: ${{ github.event.inputs.skip_test != 'true' }}
