@@ -30,6 +30,30 @@ The 51 remaining failures are **all assertion-level (wrong value), no
 SIGSEGV, no guard fire** — fully visible at once instead of one-crash-
 at-a-time peeling.  See § WHAT REMAINS for the inventory.
 
+## SAFETY HARNESS (landed 2026-05-30 — the pivot that unblocks this work)
+
+Running the alignment suite under load kept exhausting the 7.5G `/tmp`
+tmpfs (native compiles write ~36MB binaries × dozens in parallel) and
+HANGING THE MACHINE — that is why this branch detoured into CI/build
+infrastructure before finishing S4.  That harness is now landed and
+green (`make ci`: 1922 passed), so the machine is safe under load and
+the original alignment work can resume freely.  What changed:
+
+- **tmpfs lockup fixed** (`src/platform.rs`): native binaries stripped
+  36MB→1MB (L1), a preflight free-space guard (L2,
+  `LOFT_TMPFS_MIN_FREE_MB`), adaptive worker count (L3).  Full native
+  suite now ~190MB scratch, tmpfs ~6%.  `--test native` is SAFE again.
+- **thin binary** (BUILD1, PERFORMANCE.md): `main.rs` no longer
+  double-compiles the crate — incremental bin rebuild ~16.5s→~3.2s.
+- **native test cache** (BUILD2, PERFORMANCE.md): cache key now folds
+  rlib CONTENT (not mtime), so a `cargo build --release --lib` no
+  longer busts the native binary cache — faster `make ci`/`make test`
+  locally too.
+
+Commits `2dd0a142`..`ce489c01`.  Full design: PERFORMANCE.md
+§ Design: BUILD1 / BUILD2.  None of this touched the alignment code
+paths — S4 state below is exactly as handed off.
+
 ## HOW TO RUN / TEST (read before doing anything)
 
 ```bash
@@ -221,8 +245,12 @@ slot, read back with a raw width".
   detector; Miri is the gold-standard final check.)
 - **R2 native push width (the `--native` backend)**: OUT of scope —
   `codegen_runtime.rs` natives use real Rust values, not the byte-packed
-  stack.  Confirm unaffected (do NOT run `--test native`: the 7.5G
-  `/tmp` tmpfs + concurrent `cc` links exhaust it and BREAK THE SHELL).
+  stack.  Confirm unaffected.  (`--test native` is now SAFE to run —
+  the old "7.5G `/tmp` tmpfs + concurrent `cc` links exhaust it and
+  break the shell" hazard was FIXED 2026-05-30 by the safety-harness
+  work below: native binaries are stripped 36MB→1MB + a preflight
+  space guard + adaptive parallelism keep the full native suite at ~6%
+  tmpfs.  See § SAFETY HARNESS.)
 - The `o`/`p`-range and later suite past `p117` is unexplored under
   aligned — expect a few more distinct crashers, each now self-locating
   (alignment) or instrument-the-execute-path (wrong-value).
