@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # TEMPORARY @P229 G3 diagnostic scaffolding (remove before PR merge).
+  # `skip_test: true` skips the heavy build+nextest section so the Windows G3
+  # probe runs in a ~5-8 min loop.
+  workflow_dispatch:
+    inputs:
+      skip_test:
+        description: "Skip the heavy build + nextest Test section (probe-only fast loop)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,6 +63,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build
+        if: ${{ github.event.inputs.skip_test != 'true' }}
         run: cargo build --all-targets
 
       # Defensive build step: some integration tests spawn
@@ -113,10 +123,66 @@ jobs:
       # state still serialise per-process, but the rest parallelise
       # across cores.
       - name: Install cargo-nextest
+        if: ${{ github.event.inputs.skip_test != 'true' }}
         uses: taiki-e/install-action@nextest
 
       - name: Test
+        if: ${{ github.event.inputs.skip_test != 'true' }}
         run: cargo nextest run --profile ci
+
+      # ── TEMPORARY @P229 G3 diagnostic (Windows only; remove before merge) ──
+      # G3 = `--check --lib lib` links the whole lib/ stack (incl. web's
+      # ureq/rustls) but those rlibs only exist if some earlier test auto-built
+      # the `web` package into its (never-cached) `lib/web/native/target`.  This
+      # probe FORCES the cold state (rm web's target) so G3 reproduces
+      # deterministically, then captures: loft's full stderr (incl. the rustc
+      # invocation loft now dumps on the rlib-format error), and where
+      # ureq/rustls .rlib vs .rmeta actually live.
+      - name: Windows G3 link diagnostic (non-blocking)
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $loft = "target/release/loft.exe"
+          $md = "## Windows G3 (rlib-format) diagnostic`n`n"
+
+          # 1. Force the cold state: remove web's (never-cached) native target.
+          if (Test-Path lib/web/native/target) {
+            Remove-Item -Recurse -Force lib/web/native/target
+            $md += "Removed lib/web/native/target to force the cold repro.`n`n"
+          } else {
+            $md += "lib/web/native/target was already absent.`n`n"
+          }
+
+          # 2. Reproduce + capture full stderr (loft now dumps the rustc
+          #    invocation on the rlib-format error too).
+          $o = & $loft --check --lib lib tests/fixtures/p310_save_png.loft 2>&1
+          $txt = ($o | Out-String)
+          $md += "**exit code:** $LASTEXITCODE`n`n"
+          $md += "### loft stderr (rlib-format error + dumped rustc invocation)`n`n``````n"
+          $lines = $txt -split "`n" | Where-Object {
+            $_ -match 'rlib format|required to be available|rustc invocation|dependency=|--extern|Deps directory|\.rlib|could not resolve|native compilation failed|ureq|rustls'
+          }
+          $md += (($lines | Select-Object -First 120) -join "`n")
+          $md += "`n```````n`n"
+
+          # 3. Did loft (re)build web?  Where are ureq/rustls .rlib vs .rmeta?
+          $md += "### web native target after the run`n`n"
+          if (Test-Path lib/web/native/target) {
+            foreach ($pat in @("*ureq*","*rustls*","libloft_web*")) {
+              $md += "**$pat**`n`n``````n"
+              $hits = Get-ChildItem -Path lib/web/native/target -Recurse -File -ErrorAction SilentlyContinue |
+                      Where-Object { $_.Name -like $pat -and ($_.Extension -eq ".rlib" -or $_.Extension -eq ".rmeta") } |
+                      Select-Object -ExpandProperty FullName -First 20
+              $md += (($hits) -join "`n")
+              $md += "`n```````n`n"
+            }
+          } else {
+            $md += "lib/web/native/target does NOT exist after the run — loft did not build the `web` package, so its ureq/rustls rlibs are absent (root cause confirmed).`n`n"
+          }
+
+          $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          Write-Host $md
 
   clippy:
     name: Clippy

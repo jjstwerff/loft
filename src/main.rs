@@ -3237,7 +3237,14 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                     && (stderr_utf8.contains("rand_core")
                         || stderr_utf8.contains("possibly newer version of crate")
                         || stderr_utf8.contains("can't find crate"));
-                if crate_resolution_failure {
+                // @P229 G3: a transitive native dep (e.g. web's `ureq`/`rustls`
+                // under `--check --lib lib`) resolved its rmeta but not its
+                // rlib — usually the package was never built, so its deps/ has
+                // no `.rlib`.  Dump the same invocation + deps listing so the
+                // missing search path / unbuilt package is visible.
+                let rlib_format_failure =
+                    stderr_utf8.contains("required to be available in rlib format");
+                if crate_resolution_failure || rlib_format_failure {
                     // Print the rustc invocation + the deps directory listing
                     // so the diagnostic shows what was actually attempted.
                     // Surfaces the Windows latent issue + any future
