@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2j — MINIMAL REPRODUCER (GUARD-detector probe).
+//
+// 2j is NOT a functional bug — results are CORRECT (this PASSES under the normal
+// binary in both modes).  It is detectable ONLY under the `stack_align_guard`
+// binary: the par-worker entry base is hardcoded `stack_pos = 4` / `args_base = 4`
+// (src/state/mod.rs execute_at_raw_primitive_input{,_wide}) instead of the
+// stepped `aligned_stack_step(4)` = 8 the real fn entry (execute_argv) uses.  The
+// frame is self-consistent at base 4 (correct output) but every access lands 4
+// off an 8-boundary, so the access guard fires (mod.rs check_stack_align).
+//
+// This SCALAR par exercises the narrow dispatcher (execute_at_raw_primitive_input).
+//
+// Detector: run under the `stack_align_guard` binary (run_guard.sh):
+//   CURRENTLY guard FIRES ; AFTER 2j FIX -> guard SILENT.
+// Under the normal binary: PASS aligned AND flag-OFF (2j is not functional).
+
+fn dbl(x: const integer) -> integer { x * 2 }
+
+fn main() {
+  xs: vector<integer> = [1, 2, 3, 4];
+  sum = 0;
+  for x in xs par(r = dbl(x), 4) { sum += r; }
+  assert(sum == 20, "2j-01: got {sum}, want 20");
+  println("2j-01 PASSED");
+}

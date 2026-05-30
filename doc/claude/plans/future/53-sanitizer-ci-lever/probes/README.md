@@ -179,6 +179,41 @@ loop var's type doesn't unify with the tuple param.  The `par` form works
 flag-OFF, so this is a sequential-tuple-arg-passing gap, unrelated to cluster 2.
 Noted, not probed (a clean 2h probe must PASS flag-OFF).
 
+## Sub-cluster 2j — par-worker entry base (GUARD-detector probes)
+
+**2j is not a FUNCTIONAL bug** — par results are correct (the aligned `issues`
+suite is 685/0).  Both par dispatchers
+(`execute_at_raw_primitive_input{,_wide}`, src/state/mod.rs) hardcode the worker
+entry `stack_pos = 4` / `args_base = 4` instead of the stepped
+`aligned_stack_step(4)` = 8 the real fn entry (`execute_argv`) uses.  The frame
+is self-consistent at base 4, so output is right, but every access lands 4 off
+an 8-boundary — detectable ONLY by the `stack_align_guard`, not by output.
+
+This needs a different probe lane: **`run_guard.sh`** runs each probe under a
+`stack_align_guard` binary (built as `target/release/loft-guard` so it doesn't
+clobber `run.sh`'s normal binary) and reports `SILENT` vs `FIRES`, plus the
+normal-binary functional columns (which stay PASS/PASS — 2j is not functional).
+This is the homegrown analogue of the Miri lane: a probe "passes" iff it emits
+ZERO guard diagnostics under LOFT_ALIGN.
+
+```bash
+doc/claude/plans/future/53-sanitizer-ci-lever/probes/run_guard.sh 2j        # table
+doc/claude/plans/future/53-sanitizer-ci-lever/probes/run_guard.sh 2j -v     # + panic line
+```
+
+| Probe | Dispatcher | GUARD now | Role |
+|---|---|---|---|
+| `2j-01-scalar-par-guard` | narrow (`execute_at_raw_primitive_input`) | **FIRES** | reproducer |
+| `2j-02-tuple-par-guard` | wide (`..._wide`) | **FIRES** | reproducer — both dispatchers share the base |
+| `2j-03-nonpar-sorted-ref` | — (sorted iter, 2b) | SILENT | reference — guard otherwise clean |
+| `2j-04-nonpar-compute-ref` | — (range loop) | SILENT | reference — simplest silent baseline |
+
+After the 2j fix (set both worker bases to `aligned_stack_step(4)` and place
+args there) the reproducers flip FIRES → SILENT.  `run_guard.sh 2j` exits 0
+today (invariant: all functional PASS/PASS, references SILENT); when every
+reproducer is also SILENT, the par path is guard-clean and the Miri lane can
+run against a fully-silent aligned interpreter.
+
 ## Coverage status (2026-05-30)
 
 Five sub-families authored — **41 probes** covering every one of the 27
@@ -192,6 +227,7 @@ aligned-mode failures from the sweep, plus references and edges:
 | 2d composite-format/misc | 9 | p145, p159, p193, n2, n4, n5, n8×2 | ✅ **FIXED 2026-05-30** |
 | 2h tuple-in-par (byte smear) | 6 | p189c | ✅ **FIXED 2026-05-30** |
 | 2i tuple-in-par (non-8-mult total) | 5 | — (probe-discovered) | ✅ **FIXED 2026-05-30** |
+| 2j par-worker entry base (GUARD) | 4 | — (guard-only) | OPEN — guard fires, blocks switch |
 
 **Aligned `issues` suite is now 685 / 0** (zero failures/crashes/hangs, down
 from 27 at session start).  2h+2i fix: `execute_at_raw_primitive_input_wide`

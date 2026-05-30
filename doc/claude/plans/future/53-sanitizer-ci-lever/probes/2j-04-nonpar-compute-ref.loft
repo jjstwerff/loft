@@ -1,0 +1,15 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2j — REFERENCE (guard must be SILENT).
+//
+// Plain scalar compute with a range loop — no par, no collection.  The simplest
+// guard-silent baseline; if this ever fires, the guard or the eval-TOS stepping
+// has regressed independently of par.
+
+fn main() {
+  s = 0;
+  for i in 0..5 { s += i * 2; }
+  assert(s == 20, "2j-04: got {s}, want 20");
+  println("2j-04 PASSED");
+}
