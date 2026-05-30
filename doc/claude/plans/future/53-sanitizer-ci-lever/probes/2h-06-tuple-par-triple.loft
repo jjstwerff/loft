@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2h — VARIANT (3-element tuple).
+//
+// A three-element tuple through par.  Confirms the fault scales with tuple
+// arity (not specific to a 2-tuple) — useful once the fix lands to verify the
+// stepped marshalling handles arbitrary tuple layouts.
+//
+// Status aligned: CURRENTLY FAIL (0) ; AFTER 2h FIX -> PASS.  Flag-OFF: PASS.
+
+fn tsum(p: const (integer, integer, integer)) -> integer { p.0 + p.1 + p.2 }
+
+fn main() {
+  ps: vector<(integer, integer, integer)> = [(1, 2, 3), (4, 5, 6)];
+  sum = 0;
+  for p in ps par(r = tsum(p), 4) { sum += r; }
+  assert(sum == 21, "2h-06: got {sum}, want 21");
+  println("2h-06 PASSED");
+}

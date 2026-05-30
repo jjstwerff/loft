@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2h — VARIANT (mixed-width tuple).
+//
+// A tuple with a non-8-multiple element (integer + character) marshalled
+// through par.  Confirms the worker-frame tuple read fails regardless of the
+// element widths (a 1-byte `character` next to an 8-byte `integer`).
+//
+// Status aligned: CURRENTLY FAIL (0) ; AFTER 2h FIX -> PASS.  Flag-OFF: PASS.
+
+fn pick(p: const (integer, character)) -> integer { p.0 }
+
+fn main() {
+  ps: vector<(integer, character)> = [(5, 'a'), (9, 'b')];
+  sum = 0;
+  for p in ps par(r = pick(p), 4) { sum += r; }
+  assert(sum == 14, "2h-05: got {sum}, want 14");
+  println("2h-05 PASSED");
+}

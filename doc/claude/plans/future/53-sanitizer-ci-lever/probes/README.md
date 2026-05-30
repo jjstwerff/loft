@@ -152,9 +152,36 @@ slot.
 
 Maps to: `p145`, `p159`, `p189c`, `p193`, `n4`, `n5`, `n8`×2.
 
+## Sub-cluster 2h — tuple in a parallel `par` worker frame (PASS 5)
+
+**The last open cluster-2 aligned failure** (`p189c`, was mis-filed as 2d-08).
+A `vector<tuple>` consumed by `par(...)` reads its tuple argument from a
+mis-stepped offset in the marshalled worker frame under LOFT_ALIGN — the
+`stack_align_guard` fires `i64 at offset 132` in `get_var` ← `var_int` ←
+`execute_at_raw_primitive_input_wide` inside a worker — so every worker sees
+garbage and the result collects as 0.  NOT composite format (2d) and NOT par in
+general: `2h-02` (scalar par) PASSES, isolating the trigger to the tuple.
+
+| Probe | Shape | Aligned now | Role |
+|---|---|---|---|
+| `2h-01-tuple-par-min` | `vector<(int,int)>` + `par(...,4)` (p189c) | **FAIL** (sum 0) | minimal reproducer |
+| `2h-02-scalar-par-ref` | `vector<int>` + `par` | PASS | reference — par-in-general is sound |
+| `2h-03-tuple-par-single-elem` | one tuple | FAIL | edge — per-worker read, not accumulation |
+| `2h-04-tuple-par-one-worker` | `par(...,1)` | FAIL | edge — worker-count independent |
+| `2h-05-tuple-par-mixed-width` | `(integer, character)` | FAIL | variant — any element widths |
+| `2h-06-tuple-par-triple` | `(int,int,int)` | FAIL | variant — arity-independent |
+
+**Incidental finding (separate, NOT alignment — flag-OFF bug):** calling a
+`fn f(p: const (integer,integer))` with a tuple loop var in a *sequential*
+(non-par) `for p in pairs { f(p) }` fails flag-OFF with
+`expected (integer, integer), got __tuple<integer,integer>` — the materialised
+loop var's type doesn't unify with the tuple param.  The `par` form works
+flag-OFF, so this is a sequential-tuple-arg-passing gap, unrelated to cluster 2.
+Noted, not probed (a clean 2h probe must PASS flag-OFF).
+
 ## Coverage status (2026-05-30)
 
-All four sub-families authored — **35 probes** covering every one of the 27
+Five sub-families authored — **41 probes** covering every one of the 27
 aligned-mode failures from the sweep, plus references and edges:
 
 | Sub-cluster | Probes | Failing issues tests covered | Aligned status |
@@ -162,7 +189,8 @@ aligned-mode failures from the sweep, plus references and edges:
 | 2a generator-arg | 11 | p210, p211, p218×2, p225, p328 | ✅ **FIXED 2026-05-30** |
 | 2b sorted-iter | 8 | inc02, inc12×2, p190, p277, p295, p300, p4d_b | ✅ **FIXED 2026-05-30** |
 | 2c hash-iter | 7 | c60×4 | ✅ **FIXED 2026-05-30** |
-| 2d composite-format/misc | 9 | p145, p159, p189c, p193, n4, n5, n8×2 | ✅ **FIXED 2026-05-30** (8/9; p189c=2h) |
+| 2d composite-format/misc | 9 | p145, p159, p193, n2, n4, n5, n8×2 | ✅ **FIXED 2026-05-30** |
+| 2h tuple-in-par | 6 | p189c | OPEN — the last one |
 
 `run.sh` exits 0 — every probe PASSES flag-OFF and every `*-ref*` PASSES
 aligned.  The aligned column is what each cluster fix closes; re-run `run.sh`
@@ -186,8 +214,9 @@ probes flip to PASS aligned; aligned `issues` 8→1, closing n4, n5, n8×2, p145
 p159 AND `n2` (which formats a composite — NOT a separate mechanism after all).
 
 After 2a+2b+2c+2d the cluster-2 aligned `issues` surface is a SINGLE remaining
-failure: `p189c` / `2d-08-vector-tuple-par` — a separate tuple-in-`par`
-worker-frame root cause (candidate sub-cluster 2h), not composite format.
+failure: `p189c` — a tuple-in-`par` worker-frame root cause, now probed as
+sub-cluster **2h** (`2h-01`…`2h-06`; `run.sh 2h`).  `2d-08-vector-tuple-par`
+is the original 2d-filed reproducer, superseded by the focused 2h set.
 
 **Note — `n2` is NOT a 2b case.**  `n2_sorted_field_content_type_registered_
 first` was loosely listed under 2b but is a *separate* mechanism (sorted-field

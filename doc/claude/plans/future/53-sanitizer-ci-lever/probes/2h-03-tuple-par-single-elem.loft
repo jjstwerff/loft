@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2h — EDGE (single element).
+//
+// One tuple is enough to trigger it — confirms the fault is the per-worker
+// tuple read, not an accumulation across elements.
+//
+// Status aligned: CURRENTLY FAIL (0) ; AFTER 2h FIX -> PASS.  Flag-OFF: PASS.
+
+fn pair_sum(p: const (integer, integer)) -> integer { p.0 + p.1 }
+
+fn main() {
+  pairs: vector<(integer, integer)> = [(7, 100)];
+  sum = 0;
+  for p in pairs par(r = pair_sum(p), 4) { sum += r; }
+  assert(sum == 107, "2h-03: got {sum}, want 107");
+  println("2h-03 PASSED");
+}

@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2h — MINIMAL REPRODUCER.
+//
+// A `vector<(integer,integer)>` consumed by a parallel `par(...)` loop.  Under
+// LOFT_ALIGN the worker reads its tuple argument from a mis-stepped offset in
+// the par-marshalled worker frame (the `stack_align_guard` fires "i64 at offset
+// 132" in get_var <- var_int <- execute_at_raw_primitive_input_wide inside a
+// worker), so every `pair_sum` sees garbage / the result collects as 0.
+//
+// This is tests/issues.rs::p189c_vector_tuple_element_bytes_written and the
+// LAST open cluster-2 aligned failure after 2a/2b/2c/2d.  Distinct from 2d
+// (composite FORMAT) — this is tuple element layout in the PARALLEL worker
+// frame, not formatting.
+//
+// Status aligned: CURRENTLY FAIL (sum 0) ; AFTER 2h FIX -> PASS.  Flag-OFF: PASS.
+
+fn pair_sum(p: const (integer, integer)) -> integer { p.0 + p.1 }
+
+fn main() {
+  pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30), (4, 40)];
+  sum = 0;
+  for p in pairs par(r = pair_sum(p), 4) { sum += r; }
+  assert(sum == 110, "2h-01: got {sum}, want 110");
+  println("2h-01 PASSED");
+}
