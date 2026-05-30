@@ -2769,6 +2769,67 @@ mutable store references.
 
 ---
 
+## Design: BUILD1 — Eliminate the lib/bin double compilation
+
+**Symptom.**  `src/main.rs` declares `mod <name>;` for **41 modules
+that `src/lib.rs` already declares as `pub mod`** — `platform`,
+`database`, `state`, `parser`, `compile`, `generation`, … the bulk of
+the crate.  Because loft is a dual `[lib]` + `[[bin]]` crate, every one
+of those modules is compiled **twice**: once into `libloft.rlib`, and
+again, from scratch, into the `loft` binary.  That is **~38,520 LOC of
+single-file modules recompiled on every build** (plus the large
+dir-modules `state/`, `parser/`, `database/`, which the LOC count
+excludes — the true figure is higher).  Only **two** modules are
+legitimately binary-only: `native_utils` and `test_runner`.
+
+**Why it exists.**  `main.rs` already links the library (`use loft::…`
+appears 26 times), so the inline `mod` declarations are redundant — the
+code is reachable through the lib.  The duplicate `mod` set is an
+accident of how `main.rs` grew, not a design requirement.
+
+**Cost / impact.**
+- **Build time:** the binary half recompiles ~the entire crate
+  needlessly — roughly a 2× penalty on the bin's share of a clean
+  build, and it defeats incremental reuse between `cargo build --lib`
+  (e.g. `ensure_rlib_fresh` / the native rlib refresh) and
+  `cargo build --bin loft`.
+- **Dead-code noise:** the binary's *copy* of a module is linted
+  against what the binary calls, not against the lib's public API.  A
+  lib function that is real API (used by `tests/*.rs` via `loft::…`)
+  shows up as `dead_code` in the binary view, forcing `#[allow(dead_code)]`
+  annotations that wouldn't be needed under a single compilation.  The
+  tmpfs-safeguard work (`platform::native_worker_count`, etc.) hit
+  exactly this.
+
+**Fix (the standard lib+bin split).**  Make `main.rs` a *thin* binary:
+remove the 41 redundant `mod` lines, move any bin-only logic that other
+code needs into the lib, and rewrite `main.rs`'s bare `foo::` paths to
+`loft::foo::` (or `crate::` for the genuinely bin-only `native_utils` /
+`test_runner`).  Each module then compiles once; the binary shrinks to
+argument parsing + a call into a `loft::run()` entry point; dead-code is
+judged only against the lib's public API.
+
+**Effort / risk.**  M–L and crate-wide: 41 `mod` removals, every
+affected path reference in a 3,500-line `main.rs` rewritten, and likely
+a migration of `main.rs` logic into a new `lib::run` surface.  Touches
+the whole module graph, so it wants its own focused change with a green
+`make ci` gate — **not** to be folded into an unrelated fix.  Until it
+lands, the binary-only dead-code warnings on shared `platform` helpers
+are suppressed with `#[allow(dead_code)]` + a comment pointing here.
+
+**Investigation checklist when this unpauses.**
+1. Confirm the overlap set is current:
+   `comm -12 <(grep -oE '^mod ([a-z_]+)' src/main.rs|awk '{print $2}'|sort) <(grep -oE '^(pub )?mod ([a-z_]+)' src/lib.rs|awk '{print $NF}'|sort)`.
+2. Audit `main.rs` for items it defines that the lib needs (must move
+   into the lib before the `mod` lines can be dropped).
+3. Remove redundant `mod`s, fix paths, add `loft::run()` if main shrinks
+   that far.
+4. Measure: clean-build wall-time before/after; confirm the
+   `#[allow(dead_code)]` suppressions added for BUILD1's sake can be
+   removed.
+
+---
+
 ## See also
 - Optimisations section below — Runtime optimisation audit
 - [PERFORMANCE.md](PERFORMANCE.md) — Benchmark data and root-cause analysis
@@ -2798,6 +2859,7 @@ plan-cleanup audits:
 | **N4** — Suppress `cr_call_push` on `#pure` leaf functions | § Design: N4 | — | Native | Open — discovered while optimising @PLAN37 scan.loft (2026-05-18).  Small change; reuses N2's purity classifier with a leaf check. |
 | **N5** — Inline `integer` arithmetic when operands are non-null | § Design: N5 | — | Native | Open — discovered alongside N4 (2026-05-18) while inspecting `--native-emit` output for scan.loft's byte loop.  Folds into N3 (same nullability classifier, parallel application to `integer`). |
 | **W1** — wasm string representation | § Design: W1 | — | WASM | Open — design ready, scheduled for wasm-priority workloads (game-client + browser-IDE consumers). |
+| **BUILD1** — Eliminate lib/bin double compilation | § Design: BUILD1 | — | Build-time | Open — discovered 2026-05-30 wiring the tmpfs safeguards.  `main.rs` re-declares 41 modules already in `lib.rs` (~38,520 LOC of single-file modules) → whole crate compiled twice (rlib + bin).  Fix = thin-binary lib/bin split.  M–L, crate-wide; needs its own change.  Until then, shared `platform` helpers used only by `tests/` carry `#[allow(dead_code)]` in the binary view. |
 
 Other ROADMAP rows that conceptually belong here but lack
 PERFORMANCE.md design content yet — A12 (lazy work-variable
