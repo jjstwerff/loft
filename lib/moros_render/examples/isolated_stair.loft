@@ -27,5 +27,7 @@ fn main() {
       println("    y range: {y_min} → {y_max} (world units)");
     }
   }
-  map_export_glb(m, "/tmp/isolated_stair.glb");
+  // CWD-relative so the example is portable (Windows has no /tmp); the
+  // caller chooses the working directory.
+  map_export_glb(m, "isolated_stair.glb");
 }
