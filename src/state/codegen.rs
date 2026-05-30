@@ -3189,10 +3189,15 @@ impl State {
         self.emit_push_create_stack(stack, dep_offset);
         stack.add_op("OpStaticCall", self);
         self.code_add(lib_nr);
+        // @PLAN53 cluster 2 / S4: the args + the create-stack dest DbRef each
+        // occupy a STEPPED span (DbRef 12 -> 16 in aligned mode), matching the
+        // native get<T> pops; identity when off.  (Twin of try_text_dest_pass —
+        // this is the set_var `r = text_dest_native(...)` path; missing the
+        // step here drifted the frame -4 and corrupted the var read — a8.)
         for attr_type in &attr_types {
-            stack.position -= size(attr_type, &Context::Argument);
+            stack.position -= stack.step(size(attr_type, &Context::Argument));
         }
-        stack.position -= size_of::<crate::keys::DbRef>() as u16;
+        stack.position -= stack.step(size_of::<crate::keys::DbRef>() as u16);
     }
 }
 
