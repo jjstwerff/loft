@@ -97,14 +97,26 @@ LNK1181 silent-skip branch is removed; `p310` now asserts `out.status.success()`
 every platform.  Remaining: full Windows `nextest` validation runs on this PR's
 `windows-latest` CI leg.
 
-### Priority 3 — ~~G3 transitive-rlib~~ — NO LONGER REPRODUCES (2026-05-30)
+### Priority 3 — ~~G3 transitive-rlib~~ — FIXED 2026-05-30
 
-With G2 fixed, `--check --lib lib` completes clean (exit 0) on `windows-latest`
-(CI run 26690846366).  G3 did not reproduce — it was always environmental, not
-a codegen bug.
+Root cause (proven): concurrency artefact in `src/extensions.rs::auto_build_native`.
+`auto_build_native` runs `cargo build` with no `--locked`/`--frozen`, re-resolving the
+full dependency tree on every on-demand build.  Under parallel nextest, concurrent
+re-resolution races with a standalone `loft --check --lib lib` rustc link → ureq/rustls
+rlibs transiently mid-rebuild → "required to be available in rlib format".  The earlier
+"environmental / no longer reproduces" framing was WRONG: a cold CI run (rust-cache
+"No cache found") still failed p310 on G3; a rust-cache trial did NOT help.
 
-**Done in this change:** the `tests/codegen_emitter.rs` silent-skip branch for
-"required to be available in rlib format" is removed (same PR as the G2 fix above).
+Fix: CI pre-builds all four native lib packages SEQUENTIALLY in `.github/workflows/ci.yml`
+before the nextest step, so `auto_build_native` is a no-op during the suite.
+
+Verified: CI run 26694041810 — 2268/2268 Windows, 0 failures; `p310` dropped from
+~86-113s to 2.7s.  The `tests/codegen_emitter.rs` "required to be available in rlib
+format" silent-skip branch is removed; `p310` asserts `out.status.success()` on every
+platform.
+
+Residual latent concern → @P388: the underlying unlocked re-resolution is still present
+and can bite end users running parallel `loft --native`/`--check` invocations.
 
 ### Priority 4 — ~~G4 `parallel { }` worker stack snapshot~~ — FULLY CLOSED 2026-05-30
 

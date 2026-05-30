@@ -22,7 +22,7 @@ accurate claim today is:
 |---|---|
 | **`--interpret`** (single program, no native libs) | ✅ **Verified** — the bulk of the suite runs + passes on Windows CI |
 | **`--interpret`** with a `#native` library (dlopen the cdylib) | ⚠️ **Mostly** — imaging etc. pass; multi-lib + networking caveated below |
-| **`--native`** linking a native library (rlib link) | ✅ **Verified 2026-05-30 (CI)** — G2 fixed (per-package link-search harvest in `native_utils.rs`); G3 no longer reproduces; `--check --lib lib` exits 0 on `windows-latest` (CI run 26690846366).  `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean` LNK1181 + G3 silent-skip branches removed; `p310` now asserts `out.status.success()` on every platform and is the cross-platform regression guard for the G2 fix.  Remaining: full Windows `nextest` validation runs on this PR's CI (`windows-latest` leg of `ci.yml`). |
+| **`--native`** linking a native library (rlib link) | ✅ **Verified 2026-05-30 (CI)** — G2 fixed (per-package link-search harvest in `native_utils.rs`); G3 fixed (CI pre-build eliminates concurrent `auto_build_native` re-resolution race; CI run 26694041810: 2268/2268 Windows, 0 failures); `--check --lib lib` exits 0 on `windows-latest`.  `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean` LNK1181 + G3 silent-skip branches removed; `p310` asserts `out.status.success()` on every platform.  Residual latent concern: @P388 (end-user parallel invocations). |
 | **Server networking** (`server` bind/accept) | ✅ **Verified 2026-05-29 (CI), re-verified 2026-05-30 (local host)** — the v2 probe (PR #228) un-ignored `v2_single_client_completes_game` on Windows and it PASSED; the other 9 P229b ignores were dropped in the follow-up.  `@P229b` closed without code change (incidental fix in a recent Rust toolchain or transitive dep update).  Independently re-confirmed on a real Windows host (rustc 1.96.0 MSVC): all 10 P229b tests across `multiplayer_v{2,3,5}.rs` pass (v2: 3, v3: 2, v5: 5) when each suite runs in isolation. |
 | **`parallel { … }`** (`--interpret`) | ✅ **Verified 2026-05-30 (local host)** — `tests/scripts/80-parallel-block.loft` + `81-parallel-outer-vars.loft` (the @P245 outer-var snapshot guard) both exit 0; `tests/threading.rs` 47/47 pass incl. the `par_ref_buffer_stack_*` worker-stack-snapshot cells. |
 | **`parallel { … }`** (`--native`) | ✅ **Verified 2026-05-30 (CI, windows-latest)** — `80-parallel-block.loft` + `81-parallel-outer-vars.loft` compiled + executed under `--native`, exit 0 (CI run 26689698213).  G4 fully closed. |
@@ -94,19 +94,41 @@ the MSVC toolchain is the missing piece.
   link succeeds on Windows; run a full Windows nextest suite to confirm no
   regressions.
 
-### ~~G3~~ — `--native` multi-lib transitive-rlib not found (`ureq`/`rustls`) — NO LONGER REPRODUCES
+### ~~G3~~ — `--native` multi-lib transitive-rlib not found (`ureq`/`rustls`) — FIXED 2026-05-30
 
-- **Status (2026-05-30):** With G2 fixed, the full `--check --lib lib` multi-lib
-  link completes clean (exit 0) on `windows-latest` (CI run 26690846366).  G3
-  did not reproduce with the current toolchain.  It was always environmental
-  (resolve/build order), not a codegen bug — the leading hypothesis (lockfile
-  inconsistency across packages) was never confirmed.  Treat as
-  resolved-on-current-toolchain.
-- **Open follow-up:** `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean`
-  still carries a silent-skip branch matching `"required to be available in rlib
-  format"`.  Now that the link succeeds, this branch masks a passing case.
-  Remove it (together with the LNK1181 branch — see ~~G2~~ above) and assert
-  the link exits clean on Windows.
+- **Root cause (proven, not the earlier cache/environmental theory):** concurrency
+  artefact in `src/extensions.rs::auto_build_native`.  `auto_build_native` runs
+  `cargo build --release` with no `--locked`/`--frozen`; each on-demand native-package
+  build re-resolves the full dependency tree ("Locking 169 packages / Adding ureq
+  v2.12.1 / Blocking waiting for file lock on package cache").  Under parallel nextest,
+  many tests triggered `auto_build_native` concurrently; the concurrent re-resolution
+  churned the shared `~/.cargo` + target dirs while a standalone `loft --check --lib
+  lib` rustc link needed ureq/rustls rlibs from `target/release/deps` → they were
+  transiently mid-rebuild / wrong form → "required to be available in rlib format".
+  The `taiki-e/install-action@nextest` "bash startup failure" flake amplified the
+  failure by triggering a concurrent cargo-install fallback — why G3 correlated with
+  truncated CI runs.  The earlier "G3 no longer reproduces / environmental" claim was
+  WRONG: a genuinely cold CI run (rust-cache logged "No cache found") still failed p310
+  on G3; a rust-cache trial did NOT help.
+- **Fix:** CI now pre-builds all four native lib packages (graphics, web, server,
+  imaging) SEQUENTIALLY in a "Pre-build native lib packages" step in
+  `.github/workflows/ci.yml`, BEFORE the parallel nextest Test step.  `auto_build_native`
+  finds the rlibs already present and is a no-op during the suite — no concurrent
+  re-resolution.  Side diagnostic improvement: `src/main.rs` also dumps the rustc
+  invocation on the "required to be available in rlib format" error (previously only
+  on E0460/E0463).
+- **Verified:** CI run 26694041810 — full Windows suite ran UNTRUNCATED, 2268/2268
+  passed, 0 failures; `p310_graphics_vector_ffi_checks_clean` dropped from ~86-113s
+  to 2.7s (mechanistic proof `auto_build` is now a no-op).  ubuntu + macOS also green.
+- **codegen_emitter skip branches removed:** the `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean`
+  silent-skip branches for LNK1181 and "required to be available in rlib format" are
+  removed; `p310` asserts `out.status.success()` on every platform.
+- **Residual latent concern → @P388:** the underlying `auto_build_native` unlocked
+  re-resolution is still present and can bite end users running parallel `loft
+  --native`/`--check` invocations (same concurrent-cargo race, same rlib-format error).
+  Builds are also non-deterministic (may pick newer dep versions).  Fix direction:
+  `--locked`/`--frozen` + committed `Cargo.lock` per lib native package, and/or
+  serialise `auto_build_native`.
 
 ### ~~G4~~ — `parallel { … }` worker stack snapshot (`@P229`) — FULLY CLOSED 2026-05-30
 
@@ -156,16 +178,17 @@ blockers, both **environmental** (not loft bugs):
   with a YubiKey-backed signing key), then re-run the `--native` checks.
 
 **Note (2026-05-30 follow-up):** Although the local host remained WDAC-blocked,
-the `--native` gaps (G2 root-cause + fix, G3 non-reproduction, G4-native
-verification) were subsequently addressed on the GitHub `windows-latest` CI
+all `--native` gaps (G2 root-cause + fix, G3 concurrency root-cause + CI pre-build
+fix, G4-native verification) were addressed on the GitHub `windows-latest` CI
 runner, which does NOT enforce WDAC and runs freshly-built unsigned binaries
 normally.  CI run 26689698213 confirmed G4-native clean; CI run 26690846366
 confirmed the G2 fix (per-package link-search harvest) makes `--check --lib lib`
-exit 0.  G2 and G4 are now closed; G3 no longer reproduces.  The
-`tests/codegen_emitter.rs` silent-skip branches for LNK1181 and "required to
-be available in rlib format" are removed in this change; `p310` is now the
-cross-platform regression guard.  Remaining: full Windows `nextest`
-validation runs on this PR's `windows-latest` CI leg.
+exit 0; CI run 26694041810 confirmed G3 fixed (2268/2268 Windows, 0 failures;
+`p310_graphics_vector_ffi_checks_clean` dropped from ~86-113s to 2.7s).
+G2, G3, and G4 are all closed.  The `tests/codegen_emitter.rs` silent-skip
+branches for LNK1181 and "required to be available in rlib format" are removed;
+`p310` is the cross-platform regression guard.  Residual latent concern: @P388
+(end-user parallel `auto_build_native` race).
 
 ## Previously fixed Windows-only issues (for context)
 
@@ -201,9 +224,9 @@ validation runs on this PR's `windows-latest` CI leg.
 3. Apply the fix; re-run; confirm green on Windows.
 4. **Remove the skip/ignore** (the gate is the lie — deleting it is the proof).
 5. Move the gap to "Previously fixed"; update PROBLEMS.md / TESTING.md.
-6. G2 + G3 are closed; the `--native` row in § compatibility is now ✅.
-   The codegen_emitter skip removal is done in this change; update RELEASE.md
-   once the full Windows CI run on this PR completes clean.
+6. G2, G3, and G4 are closed; the `--native` row in § compatibility is ✅.
+   The codegen_emitter skip removal is done; CI run 26694041810 (2268/2268 Windows)
+   confirms all three gaps closed.  Residual latent concern: @P388.
 
 ## See also
 
