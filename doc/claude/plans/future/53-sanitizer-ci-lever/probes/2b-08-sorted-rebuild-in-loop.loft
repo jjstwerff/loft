@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2b — VARIANT (`tests/issues.rs::p295`).
+//
+// A sorted collection REBUILT each loop iteration from a loop-local sorted
+// collection (nested sorted iteration + reassignment).  The inner
+// `for it in s` gather is the corrupted one; the whole rebuild collapses to an
+// empty result.  The heaviest 2b shape — nested gather + reassign.
+//
+// Status aligned: CURRENTLY FAIL (empty) ; AFTER 2b FIX -> PASS.  Flag-OFF: PASS.
+
+struct Item { k: integer not null }
+
+fn main() {
+  s: sorted<Item[k]> = [];
+  s += [Item{k:100}];
+  for i in 1..5 {
+    ns: sorted<Item[k]> = [];
+    for it in s { ns += [Item{k:it.k}]; }
+    ns += [Item{k:i}];
+    s = ns;
+  }
+  out = "";
+  for it in s { out = out + "{it.k} "; }
+  assert(out == "1 2 3 4 100 ", "2b-08: got '{out}'");
+  println("2b-08 PASSED");
+}

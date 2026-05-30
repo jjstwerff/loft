@@ -76,13 +76,32 @@ flag-OFF — coroutines appear to lack a `next_float` path (only `next_i64` /
 `next_text` exist, cf. p211's history).  A separate limitation, not an
 alignment bug; no probe authored (a clean probe must PASS flag-OFF).
 
+## Sub-cluster 2b — sorted-collection iteration (PASS 2)
+
+**Mechanism.** Iterating a `sorted<T[key]>` corrupts the per-element gather
+(OpNext / gather_key) span under LOFT_ALIGN, so the iterator reports exhausted
+immediately and the `for` body never runs — distinct from 2a (which shifts a
+*value*); here the *cursor* is corrupted and NO elements are seen.  Even a
+single element triggers it (`2b-04`); an empty collection is fine (`2b-03`, no
+gather); a plain vector is fine (`2b-02`, different path).
+
+| Probe | Shape | Aligned now | Role |
+|---|---|---|---|
+| `2b-01-sorted-int-iter` | `for e in sorted<int key>` sum | **FAIL** (`total 0`) | minimal reproducer |
+| `2b-02-vector-iter-ref` | same, plain `vector` | PASS | reference — isolates *sorted* gather |
+| `2b-03-sorted-empty-ref` | empty sorted | PASS | reference — no gather |
+| `2b-04-sorted-single-elem` | one element | FAIL | edge — first gather already breaks |
+| `2b-05-sorted-text-key` | text key, order (inc12) | FAIL (empty) | variant |
+| `2b-06-sorted-int-ordering` | out-of-order insert, asc check | FAIL (empty) | variant |
+| `2b-07-sorted-return-from-fn` | sorted returned from fn (p300) | FAIL (empty) | variant |
+| `2b-08-sorted-rebuild-in-loop` | nested gather + reassign (p295) | FAIL (empty) | variant |
+
+Maps to: `inc02`, `inc12`×2, `p190`, `p277`, `p295`, `p300`, `p4d_b`, `n2`.
+
 ## Later passes (not yet authored)
 
-The other cluster-2 sub-families from the 2026-05-30 aligned-mode sweep
-(658 ok / 22 FAIL / 3 CRASH / 2 HANG), to be probed in subsequent passes:
+Remaining cluster-2 sub-families from the 2026-05-30 sweep:
 
-- **2b — sorted-collection iteration**: `inc02`, `inc12_*`, `p190`, `p277`,
-  `p295`, `p300`, `p4d_b`, `n2`.
 - **2c — hash iteration (`c60`)**: `c60_hash_iter_{single_field_asc,
   multi_field_lex,filter_clause,loop_attributes}`.
 - **2d — struct / tuple / vector / misc**: `p145`, `p159`, `p189c`, `p193`,

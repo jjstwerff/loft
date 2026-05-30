@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2b — VARIANT (text key, ordering).
+//
+// `tests/issues.rs::inc12_*` shape: a sorted collection keyed by TEXT, built
+// out of insertion order, iterated to confirm ascending key order.  Under
+// LOFT_ALIGN the gather is corrupted so the output string comes back empty
+// instead of the sorted "Alpha,Mid,Omega,".
+//
+// Status aligned: CURRENTLY FAIL (empty) ; AFTER 2b FIX -> PASS.  Flag-OFF: PASS.
+
+struct Ent { key: text, value: integer }
+
+fn main() {
+  m: sorted<Ent[key]> = [];
+  m += [Ent{key:"Omega", value:3}];
+  m += [Ent{key:"Alpha", value:1}];
+  m += [Ent{key:"Mid",   value:2}];
+  out = "";
+  for v in m { out = out + "{v.key},"; }
+  assert(out == "Alpha,Mid,Omega,", "2b-05: got '{out}'");
+  println("2b-05 PASSED");
+}

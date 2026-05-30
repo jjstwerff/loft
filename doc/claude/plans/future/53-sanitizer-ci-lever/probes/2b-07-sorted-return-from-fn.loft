@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2b — VARIANT (`tests/issues.rs::p300`).
+//
+// A sorted collection BUILT and RETURNED from a function, then iterated at the
+// call site.  Exercises the gather on a sorted value that crossed a return
+// boundary.  Same corrupted-cursor symptom (empty iteration).
+//
+// Status aligned: CURRENTLY FAIL (empty) ; AFTER 2b FIX -> PASS.  Flag-OFF: PASS.
+
+struct Item { k: integer not null }
+
+fn build() -> sorted<Item[k]> {
+  s: sorted<Item[k]> = [];
+  s += [Item{k:3}];
+  s += [Item{k:1}];
+  s += [Item{k:2}];
+  s
+}
+
+fn main() {
+  x = build();
+  out = "";
+  for it in x { out = out + "{it.k} "; }
+  assert(out == "1 2 3 ", "2b-07: got '{out}'");
+  println("2b-07 PASSED");
+}

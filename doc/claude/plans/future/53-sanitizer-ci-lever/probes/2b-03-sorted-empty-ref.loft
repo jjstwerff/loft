@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2b — REFERENCE (must always PASS).
+//
+// An EMPTY sorted collection iterates zero times.  No key-gather happens, so
+// the corrupted span is never exercised — the loop body is correctly skipped.
+// Pairs with 2b-04 (single element): the delta between this PASS and that
+// FAIL is the first gather.
+//
+// Status aligned: PASS ; Flag-OFF: PASS.
+
+struct Elm { k: integer, v: integer }
+
+fn main() {
+  s: sorted<Elm[k]> = [];
+  n = 0;
+  for e in s { n = n + 1; }
+  assert(n == 0, "2b-03: got {n}, want 0");
+  println("2b-03 PASSED");
+}

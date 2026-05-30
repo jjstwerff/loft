@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2b — MINIMAL REPRODUCER.
+//
+// Iterating a `sorted<T[key]>` collection.  Under LOFT_ALIGN the per-element
+// key-gather (OpNext / gather_key) advances by a wrong span, so the iterator
+// reports exhausted immediately and the `for` body never runs: `total` stays
+// 0 instead of 60.  Distinct from 2a (which SHIFTS a value) — here the
+// iteration cursor is corrupted so NO elements are seen.
+//
+// Maps to tests/issues.rs: inc02, inc12, p190 (and the 2b family generally).
+// Status aligned: CURRENTLY FAIL (total 0) ; AFTER 2b FIX -> PASS.  Flag-OFF: PASS.
+
+struct Elm { k: integer, v: integer }
+
+fn main() {
+  s: sorted<Elm[k]> = [];
+  s += [Elm{k:1, v:10}];
+  s += [Elm{k:2, v:20}];
+  s += [Elm{k:3, v:30}];
+  total = 0;
+  for e in s { total = total + e.v; }
+  assert(total == 60, "2b-01: got {total}, want 60");
+  println("2b-01 PASSED");
+}

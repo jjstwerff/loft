@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2b — EDGE (single element already breaks).
+//
+// A ONE-element sorted collection.  Even a single gather is enough to corrupt
+// the cursor: the body never runs and `total` stays 0 instead of 42.  Pins
+// the bug to the very first per-element gather, not an accumulation drift.
+//
+// Status aligned: CURRENTLY FAIL (total 0) ; AFTER 2b FIX -> PASS.  Flag-OFF: PASS.
+
+struct Elm { k: integer, v: integer }
+
+fn main() {
+  s: sorted<Elm[k]> = [];
+  s += [Elm{k:7, v:42}];
+  total = 0;
+  for e in s { total = total + e.v; }
+  assert(total == 42, "2b-04: got {total}, want 42");
+  println("2b-04 PASSED");
+}
