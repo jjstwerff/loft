@@ -1063,8 +1063,9 @@ impl State {
             }
             OPERATORS[op as usize](self);
             // @PLAN53 cluster 2 / S4 — alignment invariant guard (trace path).
+            #[cfg(feature = "stack_align_guard")]
             if self.aligned_stack {
-                debug_assert_eq!(
+                assert_eq!(
                     self.stack_pos % 8,
                     0,
                     "S4 alignment broken (trace): op_code={op} at pc={code} left \

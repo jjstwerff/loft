@@ -1376,16 +1376,23 @@ impl State {
     /// The store buffer base + `rec*8` are 8-aligned, so `(rec*8 + pos) % align`
     /// is the true access alignment.  NB: this checks the SLOT address, never
     /// `Str.ptr` (string slices legitimately start at any byte).
-    /// Debug-only; the method does not exist in release builds (its callers
-    /// gate the call — and the `pos` argument computation — on the same
-    /// `cfg`, so there is ZERO footprint on the hot push/pop path in release).
-    #[cfg(debug_assertions)]
+    ///
+    /// Gated on the `stack_align_guard` cargo feature — NOT `debug_assertions`,
+    /// because `[profile.dev.package.loft]` sets `debug-assertions = false`
+    /// (so `cfg(debug_assertions)` is off inside this crate even under `cargo
+    /// test`, which silently disabled an earlier version of this guard).  The
+    /// method (and its callers' `pos` computation) does not exist unless the
+    /// feature is on, so the hot push/pop path has ZERO footprint by default.
+    /// Run the S4 aligned-stack work with `cargo test --features
+    /// stack_align_guard` to arm it.  Uses `assert_eq!` (not `debug_assert!`)
+    /// since this crate's debug-assertions are off.
+    #[cfg(feature = "stack_align_guard")]
     #[inline]
     pub(crate) fn check_stack_align<T>(&self, pos: u32) {
         if self.aligned_stack {
             let al = std::mem::align_of::<T>() as u32;
             let abs = self.stack_cur.rec * 8 + pos;
-            debug_assert_eq!(
+            assert_eq!(
                 abs % al,
                 0,
                 "S4 unaligned stack access: {} at abs offset {abs} (align {al}) — \
@@ -1520,7 +1527,7 @@ impl State {
             size_of::<T>() as u32
         );
         self.stack_pos -= self.stack_step(size_of::<T>() as u32);
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "stack_align_guard")]
         self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos);
         let r = self
             .database
@@ -1612,7 +1619,7 @@ impl State {
             "get_var: pos={pos} exceeds stack_pos={} (frame underflow)",
             self.stack_pos
         );
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "stack_align_guard")]
         self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         self.database.store(&self.stack_cur).addr::<T>(
             self.stack_cur.rec,
@@ -1626,7 +1633,7 @@ impl State {
             "mut_var: pos={pos} exceeds stack_pos={} (frame underflow)",
             self.stack_pos
         );
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "stack_align_guard")]
         self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         self.database.store_mut(&self.stack_cur).addr_mut::<T>(
             self.stack_cur.rec,
@@ -1639,7 +1646,7 @@ impl State {
         // stepped span (matches the get_stack/put_stack steps it pairs with);
         // identity when LOFT_ALIGN off.
         let step = self.stack_step(size_of::<T>() as u32);
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "stack_align_guard")]
         self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos + step - u32::from(pos));
         *self.database.store_mut(&self.stack_cur).addr_mut::<T>(
             self.stack_cur.rec,
@@ -1736,7 +1743,7 @@ impl State {
             }
         }
         self.ensure_stack(self.stack_step(size_of::<T>() as u32));
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "stack_align_guard")]
         self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos);
         let m = self
             .database
@@ -2102,9 +2109,9 @@ impl State {
             // multiple of 8, so `stack_pos` must stay 8-aligned after EVERY op.
             // The first op that leaves it unaligned is the bug — name it with
             // its pc + fn instead of waiting for a distant garbage-deref SIGSEGV.
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "stack_align_guard")]
             if self.aligned_stack {
-                debug_assert_eq!(
+                assert_eq!(
                     self.stack_pos % 8,
                     0,
                     "S4 alignment broken: op_code={op} at pc={op_pos_rt} left \
