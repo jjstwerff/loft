@@ -1153,22 +1153,13 @@ impl Stores {
                         self.store_mut(to)
                             .copy_block(src_rec, 8, new_rec, 8, size as isize);
                     } else {
-                        let src_store: &Store;
-                        let dst_store: &mut Store;
-                        unsafe {
-                            src_store = crate::keys::store(
-                                &src_db,
-                                &*std::ptr::from_ref::<[Store]>(&self.allocations),
-                            );
-                            dst_store = crate::keys::mut_store(
-                                to,
-                                &mut *std::ptr::from_mut::<[Store]>(&mut self.allocations),
-                            );
-                        }
-                        src_store.copy_block_between(
+                        // @PLAN53 cluster 3: sound disjoint-borrow cross-store copy
+                        // (src_db.store_nr == rec.store_nr != to.store_nr in this else).
+                        self.copy_block_cross_store(
+                            src_db.store_nr,
                             src_rec,
                             8,
-                            dst_store,
+                            to.store_nr,
                             new_rec,
                             8,
                             size as isize,
