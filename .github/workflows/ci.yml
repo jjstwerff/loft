@@ -52,23 +52,15 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri
 
-      # @P229 G3 reliability trial: replace the hand-rolled actions/cache with
-      # Swatinem/rust-cache.  The G3 flake (ureq/rustls "required to be
-      # available in rlib format") is a partial-cache artefact — the old cache
-      # could restore a dependency's `.rmeta` without its `.rlib`, and cargo's
-      # fingerprint check then skipped regenerating the rlib, so loft's
-      # standalone `--check --lib lib` rustc couldn't find it.  rust-cache keys
-      # the cache more strictly (rustc version + lockfile) and manages target
-      # contents to avoid stale/partial dependency artefacts.
-      - name: Cache cargo (rust-cache)
-        uses: Swatinem/rust-cache@v2
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
         with:
-          # Distinct cache per matrix OS; the diagnostic probe + skip_test mode
-          # share the same key so warm restores are exercised.
-          key: g3-trial
-          # Save the cache even when the suite fails, so the *next* run gets a
-          # warm restore to exercise (the G3 flake only shows on warm restore).
-          cache-on-failure: true
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build
         if: ${{ github.event.inputs.skip_test != 'true' }}
@@ -88,6 +80,25 @@ jobs:
       # like rand_core (E0463 on macOS/Windows).
       - name: Build (release loft binary + lib for integration tests)
         run: cargo build --release --lib --bin loft
+
+      # @P229 G3 reliability fix trial: pre-build every native lib package
+      # SEQUENTIALLY here, before the parallel nextest run.  Root cause: tests
+      # that run `loft --native`/`--check` call `auto_build_native`, which runs
+      # an UNLOCKED `cargo build` that re-resolves the whole dep tree
+      # ("Locking N packages / Adding ureq …").  Under parallel nextest, many
+      # of these fire at once, churning the shared ~/.cargo + target while a
+      # standalone `--check --lib lib` rustc link needs ureq/rustls rlibs →
+      # "required to be available in rlib format" (G3).  Pre-building here means
+      # `auto_build_native` sees the rlibs already exist and is a no-op during
+      # the suite — no concurrent re-resolution.  Same command + manifest
+      # `auto_build_native` uses, so the artefacts match.
+      - name: Pre-build native lib packages (avoid concurrent auto_build — G3)
+        if: ${{ github.event.inputs.skip_test != 'true' }}
+        run: |
+          cargo build --release --manifest-path lib/graphics/native/Cargo.toml
+          cargo build --release --manifest-path lib/web/native/Cargo.toml
+          cargo build --release --manifest-path lib/server/native/Cargo.toml
+          cargo build --release --manifest-path lib/imaging/native/Cargo.toml
 
       # no-default-features check only needs to run on one OS — ubuntu
       # covers it at a fraction of the Windows job's time.  Use `cargo
