@@ -575,43 +575,23 @@ fn p310_graphics_vector_ffi_checks_clean() {
         .output()
         .expect("run --check on the @P310 graphics save_png fixture");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    // Windows toolchain: the windows-targets crate emits a search path
-    // pointing into its registry source dir (not OUT_DIR), so the test
-    // binary's link step fails with `LNK1181: cannot open input file
-    // 'windows.0.NN.0.lib'`.  This is an environmental issue (mirror of
-    // the `build_script_native_lib_dirs` workaround in src/native_utils.rs
-    // for loft's own invocation), not a regression in the test code.
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    if stderr.contains("LNK1181")
-        || stderr.contains("link.exe` failed: exit code: 1181")
-        || stdout.contains("LNK1181")
-        || stdout.contains("link.exe` failed: exit code: 1181")
-    {
-        eprintln!("SKIP: Windows windows-targets link search path issue — {stderr}");
-        return;
-    }
-    // Same class of Windows-only `--native` environmental fragility: this test
-    // does `--check --lib lib`, which links the WHOLE `lib/` native stack
-    // (graphics + web + server + imaging) under one rustc invocation.  On the
-    // Windows runner the fresh dep resolve can leave a transitive runtime dep
-    // (web's `ureq`/`rustls`) in a form the final link can't consume —
-    // `error: crate `ureq` required to be available in rlib format, but was
-    // not found in this form`.  This is the multi-lib rlib-discovery
-    // environment issue (mirror of the LNK1181 case above), NOT a codegen
-    // regression — the generated Rust + the bridges compile fine (ubuntu +
-    // macos pass; the bridges compiled on Windows too before the link step).
-    // Tracked + with a VM-validation runbook in doc/claude/WINDOWS.md § G3.
-    let combined = format!("{stderr}{stdout}");
-    if combined.contains("required to be available in rlib format") {
-        eprintln!("SKIP: Windows multi-lib transitive-rlib link issue (WINDOWS.md G3) — {stderr}");
-        return;
-    }
+    // This `--check --lib lib` links the WHOLE `lib/` native stack (graphics +
+    // web + server + imaging) under one rustc invocation, so it doubles as the
+    // Windows multi-lib link guard.  The previous Windows-only silent-skip
+    // branches (LNK1181 / "required to be available in rlib format") were
+    // removed 2026-05-30: @P229 G2 was fixed in src/native_utils.rs (each
+    // native package's own build-script link-search dirs are now harvested, so
+    // the second `windows_x86_64_msvc` version's `.lib` resolves), and G3 no
+    // longer reproduces.  The test now asserts the link on every platform.
+    // See doc/claude/WINDOWS.md § G2.
     assert!(
         out.status.success(),
-        "P310: graphics save_png fixture failed `--check` — the \
+        "P310: graphics save_png fixture failed `--check`.  Either the \
          vector_elem_rust_type storage-stride fix (src/generation/mod.rs) \
-         regressed (vector<integer> lowered to *const i32 vs the vec<i64> wrapper).  \
-         stderr={stderr:?}"
+         regressed (vector<integer> lowered to *const i32 vs the vec<i64> \
+         wrapper), or — on Windows (LNK1181) — the @P229 G2 per-package \
+         link-search harvest (src/native_utils.rs::add_native_extern_flags) \
+         regressed.  stderr={stderr:?}"
     );
 }
 

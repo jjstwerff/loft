@@ -5,18 +5,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # On-demand: lets the Windows-only probe step at the end of the `test`
-  # job be run against any branch without opening a PR.  Diagnostic only.
-  # `skip_test: true` skips the heavy build + nextest section so the probe
-  # runs in a fast (~5-8 min) loop — used while iterating on the G2
-  # diagnostic.  Safe to delete with the probe once the Windows gaps are
-  # settled.
-  workflow_dispatch:
-    inputs:
-      skip_test:
-        description: "Skip the heavy build + nextest Test section (probe-only fast loop)"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -66,7 +54,6 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build
-        if: ${{ github.event.inputs.skip_test != 'true' }}
         run: cargo build --all-targets
 
       # Defensive build step: some integration tests spawn
@@ -126,106 +113,10 @@ jobs:
       # state still serialise per-process, but the rest parallelise
       # across cores.
       - name: Install cargo-nextest
-        if: ${{ github.event.inputs.skip_test != 'true' }}
         uses: taiki-e/install-action@nextest
 
       - name: Test
-        if: ${{ github.event.inputs.skip_test != 'true' }}
         run: cargo nextest run --profile ci
-
-      # ── Windows G2 (LNK1181) link DIAGNOSTIC — never blocks a merge ───────
-      # Runs ONLY on the windows-latest leg (`runner.os == 'Windows'`),
-      # `continue-on-error` + `if: always()` so it always reports.
-      #
-      # The capability verdicts are already known (run 26689698213): G4-native
-      # ✅, G2 ❌ LNK1181, G3 indeterminate behind G2.  This step pivots from
-      # verdict → ROOT CAUSE: it reproduces the failing `--check --lib lib`
-      # link, extracts the missing `.lib` name(s), replicates what
-      # `src/native_utils.rs::build_script_native_lib_dirs` harvests (the `-L`
-      # dirs from top-level `target/release/build/*/output`), then locates the
-      # missing lib on disk and reports whether its directory is in the
-      # harvested set.  "lib exists on disk but its dir is NOT harvested" is the
-      # actionable gap (the harvest scans only the top-level build root; the
-      # windows-targets `.lib` likely ships in a registry-src or per-package
-      # tree it never reads).  Reuses the loft.exe built above.
-      - name: Windows G2 link diagnostic (non-blocking)
-        if: always() && runner.os == 'Windows'
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $loft = "target/release/loft.exe"
-          $md = "## Windows G2 (LNK1181) link diagnostic`n`n"
-
-          # 1. Reproduce the failing link, capture combined output.
-          $o = & $loft --check --lib lib tests/fixtures/p310_save_png.loft 2>&1
-          $txt = ($o | Out-String)
-          $md += "**``--check --lib lib`` exit code:** $LASTEXITCODE`n`n"
-
-          # 2. LNK1181 / link context lines.
-          $lnk = ($txt -split "`n" | Select-String -Pattern "LNK1181|cannot open input file|windows-targets|link.exe|rlib format")
-          $md += "### Link error context`n`n``````n"
-          $md += (($lnk | ForEach-Object { $_.ToString().Trim() }) -join "`n")
-          $md += "`n```````n`n"
-
-          # 3. Extract missing .lib name(s).
-          $missing = [regex]::Matches($txt, "cannot open input file '([^']+)'") |
-                     ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
-          $md += "### Missing libs`n`n"
-          if ($missing.Count -eq 0) { $md += "_none parsed (link may now fail with a different shape — see context)_`n`n" }
-          else { $md += (($missing | ForEach-Object { "- ``$_``" }) -join "`n") + "`n`n" }
-
-          # 4. Replicate build_script_native_lib_dirs: harvest -L dirs from
-          #    top-level target/release/build/*/output rustc-link-search lines.
-          $harvested = New-Object System.Collections.Generic.HashSet[string]
-          $winSearch = New-Object System.Collections.Generic.List[string]
-          Get-ChildItem -Path target/release/build -Filter output -Recurse -ErrorAction SilentlyContinue |
-            ForEach-Object {
-              Get-Content $_.FullName -ErrorAction SilentlyContinue | ForEach-Object {
-                $line = $_ -replace '^cargo::?',''
-                if ($line -match '^rustc-link-search=(native=)?(.+)$' -and
-                    $line -notmatch '^rustc-link-search=(framework|dependency|crate)=') {
-                  [void]$harvested.Add($Matches[2])
-                  if ($line -match 'windows') { $winSearch.Add($line) }
-                }
-              }
-            }
-          $md += "### Harvested -L dirs loft passes: $($harvested.Count)`n`n"
-          $md += "rustc-link-search lines mentioning 'windows':`n`n``````n"
-          $md += (($winSearch | Sort-Object -Unique) -join "`n")
-          $md += "`n```````n`n"
-
-          # 5. Locate each missing lib on disk + check coverage.
-          $md += "### Where the missing libs actually live`n`n"
-          foreach ($lib in $missing) {
-            $md += "**``$lib``**`n`n"
-            $hits = @()
-            foreach ($root in @("$env:USERPROFILE\.cargo\registry", "target", "lib")) {
-              if (Test-Path $root) {
-                $hits += Get-ChildItem -Path $root -Filter $lib -Recurse -File -ErrorAction SilentlyContinue |
-                         Select-Object -ExpandProperty FullName
-              }
-            }
-            $hits = $hits | Sort-Object -Unique
-            if ($hits.Count -eq 0) {
-              $md += "- NOT FOUND under registry/target/lib — name may be versioned or wrong.`n`n"
-            } else {
-              foreach ($h in $hits) {
-                $dir = Split-Path $h -Parent
-                $md += "- ``$h``  →  dir harvested by loft? **$($harvested.Contains($dir))**`n"
-              }
-              $md += "`n"
-            }
-          }
-
-          # 6. All windows*.lib under the registry (where windows-targets ships them).
-          $md += "### windows*.lib in the cargo registry (first 40)`n`n``````n"
-          $reglibs = Get-ChildItem -Path "$env:USERPROFILE\.cargo\registry\src" -Filter "*.lib" -Recurse -File -ErrorAction SilentlyContinue |
-                     Where-Object { $_.Name -match 'windows' } | Select-Object -ExpandProperty FullName -First 40
-          $md += (($reglibs) -join "`n")
-          $md += "`n```````n"
-
-          $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-          Write-Host $md
 
   clippy:
     name: Clippy

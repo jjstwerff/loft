@@ -22,17 +22,18 @@ accurate claim today is:
 |---|---|
 | **`--interpret`** (single program, no native libs) | ✅ **Verified** — the bulk of the suite runs + passes on Windows CI |
 | **`--interpret`** with a `#native` library (dlopen the cdylib) | ⚠️ **Mostly** — imaging etc. pass; multi-lib + networking caveated below |
-| **`--native`** linking a native library (rlib link) | ✅ **Verified 2026-05-30 (CI)** — G2 fixed (per-package link-search harvest in `native_utils.rs`); G3 no longer reproduces; `--check --lib lib` exits 0 on `windows-latest` (CI run 26690846366).  Follow-up: remove codegen_emitter LNK1181/G3 silent-skip branches; run full nextest suite on Windows. |
+| **`--native`** linking a native library (rlib link) | ✅ **Verified 2026-05-30 (CI)** — G2 fixed (per-package link-search harvest in `native_utils.rs`); G3 no longer reproduces; `--check --lib lib` exits 0 on `windows-latest` (CI run 26690846366).  `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean` LNK1181 + G3 silent-skip branches removed; `p310` now asserts `out.status.success()` on every platform and is the cross-platform regression guard for the G2 fix.  Remaining: full Windows `nextest` validation runs on this PR's CI (`windows-latest` leg of `ci.yml`). |
 | **Server networking** (`server` bind/accept) | ✅ **Verified 2026-05-29 (CI), re-verified 2026-05-30 (local host)** — the v2 probe (PR #228) un-ignored `v2_single_client_completes_game` on Windows and it PASSED; the other 9 P229b ignores were dropped in the follow-up.  `@P229b` closed without code change (incidental fix in a recent Rust toolchain or transitive dep update).  Independently re-confirmed on a real Windows host (rustc 1.96.0 MSVC): all 10 P229b tests across `multiplayer_v{2,3,5}.rs` pass (v2: 3, v3: 2, v5: 5) when each suite runs in isolation. |
 | **`parallel { … }`** (`--interpret`) | ✅ **Verified 2026-05-30 (local host)** — `tests/scripts/80-parallel-block.loft` + `81-parallel-outer-vars.loft` (the @P245 outer-var snapshot guard) both exit 0; `tests/threading.rs` 47/47 pass incl. the `par_ref_buffer_stack_*` worker-stack-snapshot cells. |
 | **`parallel { … }`** (`--native`) | ✅ **Verified 2026-05-30 (CI, windows-latest)** — `80-parallel-block.loft` + `81-parallel-outer-vars.loft` compiled + executed under `--native`, exit 0 (CI run 26689698213).  G4 fully closed. |
 
 RELEASE.md *intends* to ship a `x86_64-pc-windows-msvc` binary with a
 "hands-on smoke test before publishing."  The `--native` and server paths
-are now CI-verified.  Remaining follow-up: drop the two silent-skip branches
-in `tests/codegen_emitter.rs` (LNK1181 and "required to be available in rlib
-format") and run a full nextest regression suite on Windows before the next
-release.
+are now CI-verified.  The two silent-skip branches in
+`tests/codegen_emitter.rs` (LNK1181 and "required to be available in rlib
+format") are dropped in this change; `p310` now guards the fix on every
+platform.  Remaining: the full Windows `nextest` regression suite runs
+automatically on this PR's `windows-latest` CI leg.
 
 This doc is the runbook to close that gap.  The user can spin up a Windows
 VM and work each gap → reproduce → capture the real error → fix → un-skip.
@@ -160,10 +161,11 @@ verification) were subsequently addressed on the GitHub `windows-latest` CI
 runner, which does NOT enforce WDAC and runs freshly-built unsigned binaries
 normally.  CI run 26689698213 confirmed G4-native clean; CI run 26690846366
 confirmed the G2 fix (per-package link-search harvest) makes `--check --lib lib`
-exit 0.  G2 and G4 are now closed; G3 no longer reproduces.  Remaining open
-work: remove the `tests/codegen_emitter.rs` silent-skip branches for LNK1181
-and "required to be available in rlib format", then run a full Windows nextest
-regression to confirm clean.
+exit 0.  G2 and G4 are now closed; G3 no longer reproduces.  The
+`tests/codegen_emitter.rs` silent-skip branches for LNK1181 and "required to
+be available in rlib format" are removed in this change; `p310` is now the
+cross-platform regression guard.  Remaining: full Windows `nextest`
+validation runs on this PR's `windows-latest` CI leg.
 
 ## Previously fixed Windows-only issues (for context)
 
@@ -200,8 +202,8 @@ regression to confirm clean.
 4. **Remove the skip/ignore** (the gate is the lie — deleting it is the proof).
 5. Move the gap to "Previously fixed"; update PROBLEMS.md / TESTING.md.
 6. G2 + G3 are closed; the `--native` row in § compatibility is now ✅.
-   Adjust the RELEASE.md Windows note once the codegen_emitter skip removal
-   and full-suite regression are done.
+   The codegen_emitter skip removal is done in this change; update RELEASE.md
+   once the full Windows CI run on this PR completes clean.
 
 ## See also
 

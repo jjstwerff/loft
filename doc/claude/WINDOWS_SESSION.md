@@ -92,9 +92,10 @@ exits 0 on `windows-latest` (CI run 26690846366).
 Note: validated on the GitHub runner (no WDAC), NOT on the local WDAC-blocked
 host.
 
-**Remaining follow-up:** remove the `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean`
-LNK1181 silent-skip branch (it now masks a passing case) and run a full
-Windows nextest regression.
+**Done in this change:** the `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean`
+LNK1181 silent-skip branch is removed; `p310` now asserts `out.status.success()` on
+every platform.  Remaining: full Windows `nextest` validation runs on this PR's
+`windows-latest` CI leg.
 
 ### Priority 3 — ~~G3 transitive-rlib~~ — NO LONGER REPRODUCES (2026-05-30)
 
@@ -102,9 +103,8 @@ With G2 fixed, `--check --lib lib` completes clean (exit 0) on `windows-latest`
 (CI run 26690846366).  G3 did not reproduce — it was always environmental, not
 a codegen bug.
 
-**Remaining follow-up:** remove the `tests/codegen_emitter.rs` silent-skip
-branch for "required to be available in rlib format" (same PR as the G2
-skip removal above).
+**Done in this change:** the `tests/codegen_emitter.rs` silent-skip branch for
+"required to be available in rlib format" is removed (same PR as the G2 fix above).
 
 ### Priority 4 — ~~G4 `parallel { }` worker stack snapshot~~ — FULLY CLOSED 2026-05-30
 
@@ -136,7 +136,7 @@ For each gap touched, update:
 1. WINDOWS.md — move from `## Known gaps` to `## Previously fixed Windows-only issues` if closed.
 2. PROBLEMS.md — close the P-issue with the verified diagnosis.
 3. `tests/multiplayer_v{2,3,5}.rs` — un-ignore the affected tests if G1 fixed.
-4. `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean` — drop the LNK1181 (G2) and "required to be available in rlib format" (G3) silent-skip branches now that both link clean.  **This is the primary remaining follow-up as of 2026-05-30.**
+4. `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean` — ✅ Done in this change: the LNK1181 (G2) and "required to be available in rlib format" (G3) silent-skip branches are removed; `p310` is now the cross-platform regression guard.  Remaining: full Windows CI run on this PR validates the fix.
 5. CHANGELOG_TECHNICAL.md — note the Windows-specific fix.
 
 If gaps were verified-but-not-fixed (real error captured, fix needs more time), update the corresponding WINDOWS.md gap section with the captured error message so the next session starts from real data, not hypothesis.
