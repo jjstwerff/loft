@@ -1247,7 +1247,8 @@ impl Stores {
         // @PLAN53 cluster 2 / S4: push the value's STEPPED span so a native
         // result lands at the aligned slot the caller's codegen expects;
         // identity when off.
-        stack.pos += crate::variables::aligned_stack_step(size_of::<T>() as u32, self.aligned_stack);
+        stack.pos +=
+            crate::variables::aligned_stack_step(size_of::<T>() as u32, self.aligned_stack);
     }
 
     /// Look up a type by index, panicking with a diagnostic if the index is out of range.

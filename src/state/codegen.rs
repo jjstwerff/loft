@@ -2300,8 +2300,7 @@ impl State {
             "OpStart" => {
                 // @PLAN53 cluster 2 / S4: the iterator-pushed value (+4) and the
                 // consumed iterable DbRef (size_ref) each occupy a stepped span.
-                was_stack =
-                    stack.position + stack.step(4) - stack.step(super::size_ref() as u16);
+                was_stack = stack.position + stack.step(4) - stack.step(super::size_ref() as u16);
                 self.gather_key(stack, &parameters, 2, &mut tps);
             }
             "OpNext" => {
