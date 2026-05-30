@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2d — VARIANT (`tests/issues.rs::p193`).
+//
+// Build a `hash<T[id]>` by += in a loop, then check len() and iterate.  This
+// is the 2c phantom-leading-element mechanism reached via a loop-built hash:
+// the iteration count comes back 11 for 10 entries.  (A plain sum check is
+// NOT a reliable reproducer here — the phantom's `value` field is whatever
+// garbage the slot holds, sometimes 0, so the count is the deterministic
+// signal; len() itself is unaffected.)
+//
+// Status aligned: CURRENTLY FAIL (count 11) ; AFTER FIX -> PASS.  Flag-OFF: PASS.
+
+struct Sc { id: integer not null, value: integer }
+
+fn main() {
+  h: hash<Sc[id]> = [];
+  for i in 0..10 { h += Sc { id: i, value: i }; }
+  assert(len(h) == 10, "2d-09: len {len(h)}, want 10");
+  cnt = 0;
+  for s in h { cnt = cnt + 1; }
+  assert(cnt == 10, "2d-09: iterated {cnt} elements, want 10 (phantom leading element)");
+  println("2d-09 PASSED");
+}

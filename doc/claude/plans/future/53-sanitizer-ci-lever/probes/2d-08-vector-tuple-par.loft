@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2d — VARIANT (`tests/issues.rs::p189c`).
+//
+// A `vector<(integer, integer)>` consumed by a parallel `par(...)` loop where
+// each tuple element's bytes are read in the worker.  Combines tuple-element
+// layout with the par marshalling path; aligned mode reads the tuple bytes
+// from a mis-stepped slot.
+//
+// Status aligned: CURRENTLY FAIL ; AFTER 2d FIX -> PASS.  Flag-OFF: PASS.
+
+fn pair_sum(p: const (integer, integer)) -> integer { p.0 + p.1 }
+
+fn main() {
+  pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30), (4, 40)];
+  sum = 0;
+  for p in pairs par(r = pair_sum(p), 4) { sum += r; }
+  assert(sum == 110, "2d-08: got {sum}, want 110");
+  println("2d-08 PASSED");
+}

@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2d — REFERENCE (must always PASS).
+//
+// Interpolating a SCALAR into a format string works under LOFT_ALIGN — the
+// value sits inline, no composite DbRef handle to mis-read.  Pairs with 2d-01
+// (composite -> empty): the delta is the composite handle read.
+//
+// Status aligned: PASS ; Flag-OFF: PASS.
+
+fn main() {
+  x = 42;
+  s = "val={x}";
+  assert(s == "val=42", "2d-02: got '{s}'");
+  println("2d-02 PASSED");
+}

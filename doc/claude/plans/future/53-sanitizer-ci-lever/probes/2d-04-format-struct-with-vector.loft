@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2d — VARIANT (`tests/issues.rs::n8_no_empty_pre_eval_binding`).
+//
+// Format a struct that has a vector field, after mutating it through a
+// `&Data = null` default ref-param.  Empty under aligned.
+//
+// Status aligned: CURRENTLY FAIL (empty) ; AFTER 2d FIX -> PASS.  Flag-OFF: PASS.
+
+struct Data { num: integer, values: vector<integer> }
+
+fn add(r: &Data = null, val: integer) {
+  if !r { r = Data { num: 0 }; }
+  r.num += val;
+  r.values += [val];
+}
+
+fn main() {
+  v = Data { num: 1 };
+  add(v, 2);
+  add(v, 3);
+  s = "{v}";
+  assert(s == "{{num:6,values:[2,3]}}", "2d-04: got '{s}'");
+  println("2d-04 PASSED");
+}

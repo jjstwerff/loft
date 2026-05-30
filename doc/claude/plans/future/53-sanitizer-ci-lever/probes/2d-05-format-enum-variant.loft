@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2d — VARIANT (`tests/issues.rs::n4`).
+//
+// Parse text into a struct-enum variant, then format it back.  The variant
+// carries fields (left, right); formatting reads the variant's composite
+// handle and renders empty under aligned.
+//
+// Status aligned: CURRENTLY FAIL (empty) ; AFTER 2d FIX -> PASS.  Flag-OFF: PASS.
+
+enum Op { Nop, Add { left: integer, right: integer } }
+
+fn main() {
+  v = "Add {{left:1,right:2}}" as Op;
+  s = "{v}";
+  assert(s == "Add {{left:1,right:2}}", "2d-05: got '{s}'");
+  println("2d-05 PASSED");
+}

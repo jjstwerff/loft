@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2d — MINIMAL REPRODUCER (composite format).
+//
+// Interpolating a COMPOSITE value (vector / struct / enum) into a format
+// string returns an EMPTY string under LOFT_ALIGN: the format path reads the
+// value's DbRef from a mis-stepped slot, sees a null/garbage handle, and
+// renders nothing.  Scalars format fine (see 2d-02) — the trigger is the
+// composite handle read.  This is the smallest form: format a sorted int
+// vector (`tests/issues.rs::n8_codegen_runtime_vector_ops_exist`).
+//
+// Status aligned: CURRENTLY FAIL (empty) ; AFTER 2d FIX -> PASS.  Flag-OFF: PASS.
+
+fn sort_it() -> vector<integer> { v = [3, 1, 2]; sort(v); v }
+
+fn main() {
+  s = "{sort_it()}";
+  assert(s == "[1,2,3]", "2d-01: got '{s}', want '[1,2,3]'");
+  println("2d-01 PASSED");
+}

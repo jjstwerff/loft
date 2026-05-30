@@ -272,8 +272,14 @@ See [`probes/README.md`](probes/README.md) for the full table + mechanism.
 | `2a-06-gen-arg-for-range-hang.loft` | `for i in 0..n` | 2a | HANG | PASS |
 | `2a-07-gen-text-arg-format-crash.loft` | text arg + format (p218) | 2a | **CRASH** | PASS |
 
-Later passes (2b sorted-iter, 2c hash-iter, 2d struct/tuple) not yet
-authored — see `probes/README.md` § Later passes for the test-name map.
+**All four sub-families now authored — 35 probes covering all 27 aligned-mode
+failures** (2a generator-arg ×11, 2b sorted-iter ×8, 2c hash-iter ×7, 2d
+composite-format/misc ×9).  `probes/run.sh` exits 0 (every probe PASSES
+flag-OFF; every reference PASSES aligned).  Full per-family tables + verified
+mechanisms in [`probes/README.md`](probes/README.md).  Distinct mechanisms:
+2a shifts an argument value 4 bytes; 2b drops all sorted elements (dead
+cursor); 2c adds a phantom leading hash element (off-by-one gather); 2d renders
+composite format/json as empty (mis-stepped DbRef handle).
 
 **Probe naming**: `<sub-cluster><NN>-<descriptive>.loft` (e.g. `2a-01-…`);
 sub-cluster prefix groups the cluster-2 sub-families.  Bare `NN-…` for

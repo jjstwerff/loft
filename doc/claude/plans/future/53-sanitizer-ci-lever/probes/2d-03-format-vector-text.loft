@@ -1,0 +1,18 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2d — VARIANT (`tests/issues.rs::n5`).
+//
+// Format a `vector<text>` returned from a function.  Same empty-string symptom
+// as 2d-01 with a text element type (Str elements rather than inline ints).
+//
+// Status aligned: CURRENTLY FAIL (empty) ; AFTER 2d FIX -> PASS.  Flag-OFF: PASS.
+
+fn fill() -> vector<text> { result = []; result += ["aa", "bb"]; result }
+
+fn main() {
+  t = fill();
+  s = "{t}";
+  assert(s == "[\"aa\",\"bb\"]", "2d-03: got '{s}'");
+  println("2d-03 PASSED");
+}

@@ -120,12 +120,45 @@ already triggers it (`2c-04`).
 Maps to: `c60_hash_iter_{single_field_asc, multi_field_lex, filter_clause,
 loop_attributes}`.
 
-## Later passes (not yet authored)
+## Sub-cluster 2d — composite format / tuple / par / misc (PASS 4)
 
-Remaining cluster-2 sub-family from the 2026-05-30 sweep:
+**Mechanism (dominant shape).** Interpolating a COMPOSITE value (vector /
+struct / enum) into a format string — `"{v}"` or `"{v:j}"` — returns an EMPTY
+string under LOFT_ALIGN: the format path reads the value's DbRef from a
+mis-stepped slot and renders nothing.  Scalars format fine (`2d-02`).  A few
+2d members are distinct shapes (tuple+`par` marshalling, hash-loop build,
+struct-enum json round-trip) but all read a composite handle from a stepped
+slot.
 
-- **2d — struct / tuple / vector / misc**: `p145`, `p159`, `p189c`, `p193`,
-  `n4`, `n5`, `n8_*`.
+| Probe | Shape | Aligned now | Role |
+|---|---|---|---|
+| `2d-01-format-vector-int` | `"{sort_it()}"` (n8a) | **FAIL** (empty) | minimal reproducer |
+| `2d-02-format-scalar-ref` | `"val={x}"` scalar | PASS | reference — scalar vs composite |
+| `2d-03-format-vector-text` | `vector<text>` (n5) | FAIL (empty) | variant |
+| `2d-04-format-struct-with-vector` | struct + `&Data=null` (n8b) | FAIL (empty) | variant |
+| `2d-05-format-enum-variant` | parse+format variant (n4) | FAIL (empty) | variant |
+| `2d-06-struct-multivec-to-json` | 2-vector struct `:j` (p145) | FAIL (empty) | variant — single-file p145 |
+| `2d-07-struct-enum-json-roundtrip` | json round-trip + match (p159) | FAIL | variant |
+| `2d-08-vector-tuple-par` | `vector<(int,int)>` + `par` (p189c) | FAIL | variant — tuple + par marshalling |
+| `2d-09-hash-loop-build-iterate` | loop-built hash, count (p193) | FAIL (count 11) | variant — 2c phantom via loop build |
+
+Maps to: `p145`, `p159`, `p189c`, `p193`, `n4`, `n5`, `n8`×2.
+
+## Coverage status (2026-05-30)
+
+All four sub-families authored — **35 probes** covering every one of the 27
+aligned-mode failures from the sweep, plus references and edges:
+
+| Sub-cluster | Probes | Failing issues tests covered |
+|---|---|---|
+| 2a generator-arg | 11 | p210, p211, p218×2, p225, p328 |
+| 2b sorted-iter | 8 | inc02, inc12×2, p190, p277, p295, p300, p4d_b, n2 |
+| 2c hash-iter | 7 | c60×4 |
+| 2d composite-format/misc | 9 | p145, p159, p189c, p193, n4, n5, n8×2 |
+
+`run.sh` exits 0 — every probe PASSES flag-OFF and every `*-ref*` PASSES
+aligned.  The aligned FAIL/HANG/CRASH column is what the cluster-2 fix closes;
+re-run `run.sh` after each fix to watch the column flip to PASS.
 
 ## Promotion gate
 
