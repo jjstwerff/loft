@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — VARIANT (wrong value).
+//
+// The argument is read on two separate yields, so the corruption is
+// exercised across a real suspend/resume cycle (not just the first yield).
+// Both reads are mis-offset by 4, so the sum is garbage rather than 21.
+//
+// Status under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive --interpret`:
+//   CURRENTLY FAIL (observed 85899345931, want 21) ; AFTER 2a FIX -> PASS
+// Status flag-OFF: PASS.
+
+fn pair(n: integer) -> iterator<integer> {
+  yield n;
+  yield n + 1;
+}
+
+fn main() {
+  s = 0;
+  for v in pair(10) {
+    s = s + v;
+  }
+  assert(s == 21, "2a-04: got {s}, want 21 (10+11)");
+  println("2a-04 PASSED");
+}

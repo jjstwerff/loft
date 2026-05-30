@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — VARIANT (HANG / runaway).
+//
+// This is the `tests/issues.rs::p210_native_coroutine_while_yield` shape.
+// The loop bound `n` is the generator argument; the loop condition `i < n`
+// re-reads `n` on every resume.  Because `n` reads back corrupted (4 bytes
+// high -> a huge value), `i < n` never goes false and the generator spins
+// forever, which under cargo-test parallelism instead corrupts a neighbour
+// thread's heap and SIGSEGVs (why a single-threaded run hangs but a parallel
+// run crashes -- the same root cause, two surface manifestations).
+//
+// RUN WITH A TIMEOUT — it does not terminate on its own when broken:
+//   LOFT_TIMEOUT=5 LOFT_ALIGN=1 LOFT_SLOT_V2=drive loft --interpret <this>
+//
+// Status under aligned: CURRENTLY HANG ; AFTER 2a FIX -> PASS
+// Status flag-OFF: PASS.
+
+fn count_to(n: integer) -> iterator<integer> {
+  i = 0;
+  while i < n {
+    yield i;
+    i = i + 1;
+  }
+}
+
+fn main() {
+  s = 0;
+  for v in count_to(5) {
+    s = s + v;
+  }
+  assert(s == 10, "2a-05: got {s}, want 10 (0+1+2+3+4)");
+  println("2a-05 PASSED");
+}

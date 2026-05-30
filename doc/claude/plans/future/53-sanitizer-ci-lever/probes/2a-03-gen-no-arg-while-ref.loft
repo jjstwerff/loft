@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — REFERENCE (must always PASS).
+//
+// A multi-yield `while`-loop generator that drives the loop from a LOCAL
+// counter with a hard-coded bound (no argument).  This proves the yield/
+// resume cycle itself — saving and restoring the generator frame's locals
+// across several suspensions — is sound under LOFT_ALIGN.  The only thing
+// 2a breaks is the ARGUMENT region; locals survive the round-trip.
+//
+// Contrast with 2a-05 (same loop but bound `i < n` is an argument): that one
+// HANGS.  The delta between this PASS and that HANG is the argument read.
+//
+// Status under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive --interpret`: PASS (verified).
+// Status flag-OFF: PASS.
+
+fn upto_three() -> iterator<integer> {
+  i = 0;
+  while i < 3 {
+    yield i;
+    i = i + 1;
+  }
+}
+
+fn main() {
+  s = 0;
+  for v in upto_three() {
+    s = s + v;
+  }
+  assert(s == 3, "2a-03: got {s}, want 3 (0+1+2)");
+  println("2a-03 PASSED");
+}

@@ -189,7 +189,45 @@ Verify: `LOFT_ALIGN=1 LOFT_SLOT_V2=drive loft --interpret m2.loft`
 byte-packed stack and never exercises this path; the bug only shows
 under the interpreter or `cargo test --test issues`).
 
-## WHAT REMAINS — 51 aligned-mode wrong-value failures (no crashes)
+## WHAT REMAINS — corrected inventory 2026-05-30 (27 failures, NOT 51)
+
+> ⚠️ The "630/51/0 crashes" figure below this note is STALE and was
+> mis-measured.  `cargo test --test issues` cannot inventory aligned
+> mode: in-process, a heap-corrupting test SIGSEGVs the whole binary
+> under thread parallelism, and a runaway generator HANGS a
+> `--test-threads=1` run (18 min at 100% CPU on `p210`).  The real
+> ground truth comes from **per-test subprocess isolation** (each
+> `issues-<hash> --exact NAME` under `timeout 8`):
+>
+> **658 ok / 22 FAIL / 3 CRASH / 2 HANG = 27 failures.**  Four families:
+>
+> | Sub-cluster | Tests | Severity |
+> |---|---|---|
+> | **2a coroutine/`yield`** | `p210`,`p211` (HANG) · `p218`×2,`p225` (CRASH) · `p328` (wrong-val) | heap-UB / runaway |
+> | **2b sorted-iter** | `inc02`,`inc12`×2,`p190`,`p277`,`p295`,`p300`,`p4d_b`,`n2` | wrong-value |
+> | **2c hash-iter `c60`** | `c60`×4 | wrong-value |
+> | **2d struct/tuple/misc** | `p145`,`p159`,`p189c`,`p193`,`n4`,`n5`,`n8`×2 | wrong-value |
+>
+> The handoff mis-classified 2a as "~20 wrong-value coroutine" — under
+> isolation they are HANGs/CRASHes (the dangerous family), and the
+> *root cause is narrower than "the coroutine zone"*: **a generator
+> reading its own ARGUMENT after a `yield` reads it 4 bytes high**
+> (`n=42` → `42<<32`).  No-argument generators round-trip fine.  This
+> is the p117 template exactly — value in a stepped slot, read back at
+> a raw width — applied to the args/locals boundary in the coroutine
+> create/yield/restore path.
+>
+> **Probes authored (pass 1):** [`probes/2a-*.loft`](probes/) +
+> [`probes/run.sh`](probes/run.sh) + [`probes/README.md`](probes/README.md).
+> `2a-01-gen-arg-single-yield.loft` is the minimal deterministic
+> reproducer (FAIL aligned, PASS flag-off).  References `2a-02`/`2a-03`
+> pin the trigger to the argument read.
+>
+> **Next step:** fix the 2a args/locals stepping in `coroutine_create` /
+> `coroutine_yield` / `coroutine_next` (`src/state/mod.rs`), re-run
+> `probes/run.sh 2a` to green, then author 2b/2c/2d probes.
+
+### (STALE — kept for diff history) original 51-failure note
 
 `LOFT_ALIGN=1 LOFT_SLOT_V2=drive cargo test --test issues` →
 **630 passed, 51 failed, 0 crashes** (full list in

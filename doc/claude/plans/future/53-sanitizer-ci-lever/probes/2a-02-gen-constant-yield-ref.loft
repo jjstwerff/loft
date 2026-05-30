@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — REFERENCE (must always PASS).
+//
+// Identical generator/consumer shape to 2a-01 but the generator yields a
+// CONSTANT literal instead of its argument.  This isolates the trigger: the
+// bug is reading the generator ARGUMENT across the yield, not the yield/
+// resume machinery itself.  A no-argument generator round-trips correctly.
+//
+// Status under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive --interpret`: PASS (verified).
+// Status flag-OFF: PASS.  If this probe ever FAILS the 2a diagnosis is wrong.
+
+fn seven() -> iterator<integer> {
+  yield 7;
+}
+
+fn main() {
+  s = 0;
+  for v in seven() {
+    s = s + v;
+  }
+  assert(s == 7, "2a-02: got {s}, want 7");
+  println("2a-02 PASSED");
+}

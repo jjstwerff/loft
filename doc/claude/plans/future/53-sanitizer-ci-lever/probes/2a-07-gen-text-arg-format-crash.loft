@@ -1,0 +1,36 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — VARIANT (CRASH, SIGSEGV).
+//
+// This is the `tests/issues.rs::p218_coroutine_while_yield_format` shape.
+// The generator takes a TEXT argument `label` and an integer `n`, and yields
+// a formatted string each iteration.  The text argument is a 16-byte `Str`
+// (ptr + len); reading it mis-offset corrupts the pointer, and the format /
+// consumer then dereferences a wild address -> SIGSEGV (signal 11).  This is
+// the cluster-2 UB at its loudest, and exactly the silent-corruption-becomes-
+// hard-crash escalation the sanitizer lever exists to catch.
+//
+// RUN WITH A TIMEOUT (it crashes, does not hang):
+//   LOFT_ALIGN=1 LOFT_SLOT_V2=drive loft --interpret <this>
+//
+// Status under aligned: CURRENTLY CRASH (SIGSEGV) ; AFTER 2a FIX -> PASS
+// Status flag-OFF: PASS.
+
+fn each_label(label: text, n: integer) -> iterator<text> {
+  i = 0;
+  while i < n {
+    yield "{label}={i}";
+    i = i + 1;
+  }
+}
+
+fn main() {
+  c = 0;
+  for s in each_label("k", 3) {
+    c = c + s.len();
+  }
+  // "k=0","k=1","k=2" -> 3 chars each.
+  assert(c == 9, "2a-07: got {c}, want 9");
+  println("2a-07 PASSED");
+}

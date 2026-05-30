@@ -249,13 +249,35 @@ that turns a finding into a deterministic PASS/FAIL.  The probe is
 not "loft program that produces wrong output" but "loft program
 that, under sanitizer, produces zero diagnostics".
 
-Empty until Stage A starts.
+For the homegrown cluster-2 (eval-stack alignment) work the "sanitizer
+invocation" is simpler: run under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive
+loft --interpret`, one probe per subprocess under `LOFT_TIMEOUT` so a
+runaway aborts cleanly.  Probes live in [`probes/`](probes/); run them
+with [`probes/run.sh`](probes/run.sh).  Invariant: every probe PASSES
+flag-OFF (production is clean); the aligned column is what the fix
+closes.
 
-| File | Shape | Cluster | Status under Miri | Status under ASan |
+**Pass 1 — sub-cluster 2a (generator argument mis-offset across `yield`),
+authored 2026-05-30.**  Verified mechanism: a generator reading its own
+argument after a `yield` reads it back 4 bytes high (`n=42` → `42<<32`).
+See [`probes/README.md`](probes/README.md) for the full table + mechanism.
+
+| File | Shape | Cluster | Aligned now | Flag-OFF |
 |---|---|---|---|---|
-| _(TBD)_ | _to be populated_ | — | — | — |
+| `2a-01-gen-arg-single-yield.loft` | `yield n` once — MIN REPRO | 2a | **FAIL** (`42<<32`) | PASS |
+| `2a-02-gen-constant-yield-ref.loft` | `yield 7` (no arg) — ref | 2a | PASS | PASS |
+| `2a-03-gen-no-arg-while-ref.loft` | `while i<3` (no arg) — ref | 2a | PASS | PASS |
+| `2a-04-gen-arg-two-yields.loft` | `yield n; yield n+1` | 2a | FAIL | PASS |
+| `2a-05-gen-arg-while-hang.loft` | `while i<n` (p210) | 2a | **HANG** | PASS |
+| `2a-06-gen-arg-for-range-hang.loft` | `for i in 0..n` | 2a | HANG | PASS |
+| `2a-07-gen-text-arg-format-crash.loft` | text arg + format (p218) | 2a | **CRASH** | PASS |
 
-**Probe naming**: `NN-<descriptive>.loft` matching PLAN51 / PLAN52.
+Later passes (2b sorted-iter, 2c hash-iter, 2d struct/tuple) not yet
+authored — see `probes/README.md` § Later passes for the test-name map.
+
+**Probe naming**: `<sub-cluster><NN>-<descriptive>.loft` (e.g. `2a-01-…`);
+sub-cluster prefix groups the cluster-2 sub-families.  Bare `NN-…` for
+single-cluster plans, matching PLAN51 / PLAN52.
 
 **Promotion gate**: a probe graduates to `tests/scripts/NN-plan53-…`
 only when it passes the standard four gates (assertions, clean exit,
