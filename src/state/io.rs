@@ -644,13 +644,23 @@ impl State {
     pub fn format_database(&mut self) {
         let pos = self.code::<u16>();
         let s = self.format_db();
-        self.string_mut(pos - size_ref() as u16).push_str(&s);
+        // @PLAN53 cluster 2 / S4 (2d): format_db pops the composite value's 12-byte
+        // DbRef, which advances TOS by stack_step(12) = 16 under LOFT_ALIGN (12 off).
+        // The destination-buffer offset must back up by the SAME stepped width, else
+        // the String slot is read 4 bytes low and the composite renders empty.  The
+        // DbRef (size_ref=12) is the only non-8-multiple here, so it is the lone
+        // divergent term.  Identity flag-OFF (stack_step(12) == 12).
+        let off = pos - self.stack_step(size_ref()) as u16;
+        self.string_mut(off).push_str(&s);
     }
 
     pub fn format_stack_database(&mut self) {
         let pos = self.code::<u16>();
         let s = self.format_db();
-        self.string_ref_mut(pos - size_ref() as u16).push_str(&s);
+        // @PLAN53 cluster 2 / S4 (2d): see format_database — back up by the stepped
+        // DbRef width so the destination String slot is read on its 8-byte boundary.
+        let off = pos - self.stack_step(size_ref()) as u16;
+        self.string_ref_mut(off).push_str(&s);
     }
 
     pub fn sizeof_ref(&mut self) {

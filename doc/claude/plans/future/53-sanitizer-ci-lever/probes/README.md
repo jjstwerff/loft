@@ -162,7 +162,7 @@ aligned-mode failures from the sweep, plus references and edges:
 | 2a generator-arg | 11 | p210, p211, p218×2, p225, p328 | ✅ **FIXED 2026-05-30** |
 | 2b sorted-iter | 8 | inc02, inc12×2, p190, p277, p295, p300, p4d_b | ✅ **FIXED 2026-05-30** |
 | 2c hash-iter | 7 | c60×4 | ✅ **FIXED 2026-05-30** |
-| 2d composite-format/misc | 9 | p145, p159, p189c, p193, n4, n5, n8×2 | partial (p193 ✅ via 2b+2c fix) |
+| 2d composite-format/misc | 9 | p145, p159, p189c, p193, n4, n5, n8×2 | ✅ **FIXED 2026-05-30** (8/9; p189c=2h) |
 
 `run.sh` exits 0 — every probe PASSES flag-OFF and every `*-ref*` PASSES
 aligned.  The aligned column is what each cluster fix closes; re-run `run.sh`
@@ -179,8 +179,15 @@ cluster-2-fix-design.md § "2a — LANDED").  All 11 `2a-*` probes PASS aligned;
 aligned `issues` 14→8 failures with **0 CRASH / 0 HANG** (the coroutine family
 p210/p211/p218×2/p225/p328 closed), zero regressions, flag-OFF 681/0.
 
-After 2a+2b+2c, the remaining aligned `issues` failures are the 7 genuine 2d
-composite-format cases + `n2` (a separate content-type-registration mechanism).
+**2d LANDED 2026-05-30** (one term, two sites — `format_database`/
+`format_stack_database` back up by `stack_step(size_ref())` not raw
+`size_ref()`; see cluster-2-fix-design.md § "2d — LANDED").  6 composite-format
+probes flip to PASS aligned; aligned `issues` 8→1, closing n4, n5, n8×2, p145,
+p159 AND `n2` (which formats a composite — NOT a separate mechanism after all).
+
+After 2a+2b+2c+2d the cluster-2 aligned `issues` surface is a SINGLE remaining
+failure: `p189c` / `2d-08-vector-tuple-par` — a separate tuple-in-`par`
+worker-frame root cause (candidate sub-cluster 2h), not composite format.
 
 **Note — `n2` is NOT a 2b case.**  `n2_sorted_field_content_type_registered_
 first` was loosely listed under 2b but is a *separate* mechanism (sorted-field

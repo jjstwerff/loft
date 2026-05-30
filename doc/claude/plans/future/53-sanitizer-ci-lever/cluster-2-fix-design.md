@@ -681,3 +681,50 @@ arg (`character`/`boolean`/`single`/small `enum`) positioned BEFORE a `text`
 arg would mis-locate the captured Str under LOFT_ALIGN.  Same root pattern,
 different fix site, no probe exercises it — candidate sub-cluster 2g
 (reproducer: `fn g(c: character, s: text) -> iterator<text>`).
+
+---
+
+## 2d — LANDED 2026-05-30
+
+**Fix (investigation corrected BOTH the file and the divergent term in the
+Stage-C design).**  The Stage-C design named `text.rs:489/499`
+(`format_text`/`format_stack_text`, which pop `Str(16)+i64(8)` — all
+8-multiples, so alignment-safe and NEVER the bug) and blamed `size_ptr()=16`.
+The real site is `format_database`/`format_stack_database`
+(`src/state/io.rs:647`/`653`): `OpFormatDatabase` pops the composite value's
+12-byte `DbRef` (`format_db` → `get_stack::<DbRef>`), then addresses the
+destination `String` at `pos - size_ref()`.  `size_ref()=12` is the LONE
+divergent term (`stack_step(12)=16` aligned vs `12` off); the raw `pos - 12`
+backs up too little under alignment, so the destination `String` is read 4
+bytes low and the composite renders empty.  Scalars (`format_int`, `pos-16`
+from `i64+i64`) are 8-multiples → unaffected (2d-02 passes).
+
+One-term change at two sites, identity flag-OFF (`stack_step(12)==12`):
+
+- `src/state/io.rs:647`/`653` — `pos - size_ref()` →
+  `pos - self.stack_step(size_ref())`.
+
+No codegen co-change: `Stack::operator()` already decrements `position` by
+`step(size_ref())` for the mutable `reference` param, so only the runtime
+destination-offset literal was unstepped.
+
+**Result (verified):**
+- `probes/run.sh 2d`: 2d-01,03,04,05,06,07 (+2d-09) PASS aligned;
+  `stack_align_guard` SILENT on 2d-01.
+- Aligned `issues` sweep: **8 → 1 failure** (684 ok).  Closed all six composite
+  shapes (n4, n5, n8×2, p145, p159) PLUS **n2** (`n2_sorted_field_content_type_
+  registered_first` was NOT a separate mechanism after all — it formats a
+  composite and the same fix closed it; the earlier "separate" note is
+  retracted).  Strict subset, zero regressions.
+- Flag-OFF `issues` 681/0, `format` 11/0, `wrap` 49/0, `strings` 11/0; clippy
+  clean.
+
+### Only remaining aligned failure: `p189c` (2d-08, tuple-in-`par`)
+
+`2d-08-vector-tuple-par` / `p189c_vector_tuple_element_bytes_written` is a
+SEPARATE root cause — the `stack_align_guard` fires `i64 at offset 132` in
+`get_var` ← `var_int` ← `execute_at_raw_primitive_input_wide` inside a parallel
+worker (a tuple-element read in the par-marshalled worker frame), NOT the
+composite-format path.  Candidate sub-cluster **2h** (par/tuple worker-frame
+alignment); needs its own investigation.  After 2a+2b+2c+2d the cluster-2
+aligned `issues` surface is down to this single case.
