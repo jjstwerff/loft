@@ -166,6 +166,9 @@ fn print_help() {
     println!("  pin <script.loft>             pin every registry library the script uses");
     println!("                                writes <script>.loft.lock next to the script;");
     println!("                                subsequent runs use the pinned versions");
+    println!("  list-installed                list every registry package installed locally");
+    println!("                                (from ~/.loft/registry/), annotated with sha256");
+    println!("                                + size + index status (active / yanked / orphan)");
     println!("  registry <subcommand>         manage the local package registry");
     println!(
         "                                sync             — pull latest registry from source URL"
@@ -576,6 +579,148 @@ fn package_info(name: &str) {
         };
         println!("    {}{tag_str}", ver.semver);
     }
+}
+
+/// @PLAN12 Phase 6.6 — `loft list-installed` enumerates packages
+/// in `~/.loft/registry/` and annotates each with its sha256 +
+/// size + index status (active / yanked / orphan-from-index).
+///
+/// Pure query — touches no network, writes nothing.  Useful for
+/// "what's in my cache?" investigations + as a starting point for
+/// `loft audit` once Phase 6.7's advisory channel ships.
+#[cfg(feature = "registry")]
+fn list_installed() {
+    use loft::install::InstallOptions;
+    use loft::registry_index;
+    use std::path::PathBuf;
+
+    let cache = registry_index::cache_dir();
+    if !cache.exists() {
+        println!("No registry cache at {}.", cache.display());
+        return;
+    }
+
+    // Collect `<pkg>-<ver>/` dirs.  Format is `<name>-<semver>/` where
+    // semver may contain dots and dashes (prerelease tags), so split
+    // on the LAST dash followed by a digit — but the names we ship
+    // don't contain dashes today, so split on the first dash works.
+    // Robust version: find the last segment that starts with a digit.
+    let mut entries: Vec<(String, String, PathBuf)> = Vec::new();
+    let read = match std::fs::read_dir(&cache) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("loft list-installed: cannot read {}: {e}", cache.display());
+            std::process::exit(1);
+        }
+    };
+    for ent in read.filter_map(Result::ok) {
+        let path = ent.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dirname = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        // Last `-<digit>` boundary splits name from version.
+        let mut split: Option<usize> = None;
+        let bytes = dirname.as_bytes();
+        let mut i = 1;
+        while i < bytes.len() {
+            if bytes[i - 1] == b'-' && bytes[i].is_ascii_digit() {
+                split = Some(i - 1);
+                break;
+            }
+            i += 1;
+        }
+        let Some(at) = split else { continue };
+        let (name, rest) = dirname.split_at(at);
+        let version = rest.trim_start_matches('-').to_string();
+        if name.is_empty() || version.is_empty() {
+            continue;
+        }
+        entries.push((name.to_string(), version, path));
+    }
+
+    if entries.is_empty() {
+        println!("No registry packages installed (cache: {}).", cache.display());
+        return;
+    }
+
+    // Sort by name then version (lex order is good enough for display).
+    entries.sort();
+
+    // Try to load the cached index so we can show sha256 + size +
+    // status.  If the index isn't cached (cold loft binary), skip
+    // the annotations but still list the dirs.
+    let opts = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: true, // never hit the network for this query
+        allow_prerelease: false,
+        lock_path: None,
+    };
+    let index = loft_install_load_index(&opts).ok();
+
+    println!("Installed packages (in {}):", cache.display());
+    for (name, version, path) in &entries {
+        let on_disk_bytes = dir_size_bytes(path).unwrap_or(0);
+        let mut sha = String::new();
+        let mut status_tag = String::new();
+        if let Some(idx) = &index {
+            if let Some(pkg) = idx.packages.get(name) {
+                if let Some(v) = pkg.versions.get(version) {
+                    sha = v.sha256.clone();
+                    if pkg.yanked.iter().any(|y| y == version) {
+                        status_tag.push_str(" [YANKED]");
+                    }
+                } else {
+                    status_tag.push_str(" [version not in current index]");
+                }
+            } else {
+                status_tag.push_str(" [orphan: package not in current index]");
+            }
+        }
+        let sha_short: String = sha.chars().take(12).collect();
+        let sha_disp = if sha_short.is_empty() {
+            "(unknown sha)".to_string()
+        } else {
+            format!("sha256:{sha_short}…")
+        };
+        println!(
+            "  {name} {version}{status_tag} — {} bytes on disk, {sha_disp}",
+            on_disk_bytes
+        );
+    }
+    println!("{} package(s) total", entries.len());
+}
+
+/// Total size in bytes of a directory's contents (recursive).
+/// Used by `list-installed`; cheap enough for the typical
+/// ~/.loft/registry/<pkg>-<ver>/ layout (a few hundred files at
+/// most per package).  Returns None on read errors so callers
+/// can degrade to "size unknown" rather than failing the whole
+/// listing.
+#[cfg(feature = "registry")]
+fn dir_size_bytes(dir: &std::path::Path) -> Option<u64> {
+    let mut total: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let read = std::fs::read_dir(&d).ok()?;
+        for ent in read.filter_map(Result::ok) {
+            let p = ent.path();
+            let m = match ent.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if m.is_dir() {
+                stack.push(p);
+            } else if m.is_file() {
+                total += m.len();
+            }
+        }
+    }
+    Some(total)
 }
 
 /// @PLAN12 Phase 6.6 — `loft pin <script>` writes a sidecar
@@ -2069,6 +2214,19 @@ fn main() {
             #[cfg(not(feature = "registry"))]
             {
                 eprintln!("loft info: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "list-installed" {
+            // @PLAN12 Phase 6.6 — enumerate ~/.loft/registry/<pkg>-<ver>/
+            // dirs, annotate with sha256 + size from the cached index.
+            #[cfg(feature = "registry")]
+            {
+                list_installed();
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft list-installed: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
         } else if a == "pin" {
