@@ -386,7 +386,7 @@ addresses the categories it cannot yet see.  Priorities, in order:
    pairs with the fuzzers.
 
 6. **Differential fuzzing (interpret ≡ native ≡ wasm).**  Fold fuzzing into
-   Goal C (cross-backend parity): the same program-level fuzzer from item 4, run
+   Goal D (cross-backend parity): the same program-level fuzzer from item 4, run
    on all three backends, flags output divergence as a finding.  Reuses
    `cross_mode!` infrastructure.  **Spun off to @PLAN55 (F3) — see
    [`plans/future/55-program-level-fuzzing/`](../55-program-level-fuzzing/README.md).**
