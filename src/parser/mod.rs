@@ -89,10 +89,14 @@ pub struct Parser {
     /// PKG.3: package dependencies discovered during manifest reading.
     /// Each entry is (name, dir) — sibling packages are searched in `dir`.
     pending_pkg_deps: Vec<(String, String)>,
-    /// Tier-0 auto-`use` per-file scan cache: a file's `lib::` reference set is
-    /// deterministic, so it is read + scanned at most once (keyed by path) and
-    /// reused across the second pass and any `todo_files` re-parse.
-    auto_use_scan_cache: std::collections::HashMap<String, Vec<String>>,
+    /// Auto-`use` per-file scan cache: a file's `(lib:: refs, .method() calls)`
+    /// are deterministic, so it is read + scanned at most once (keyed by path)
+    /// and reused across the second pass and any `todo_files` re-parse.
+    auto_use_scan_cache: std::collections::HashMap<String, (Vec<String>, Vec<String>)>,
+    /// Tier-1 text-method trigger map: `method name -> providing package`,
+    /// derived once per top-level parse from the current package's (and its
+    /// trigger-enabled dependencies') declared triggers.  `None` until built.
+    auto_use_trigger_map: Option<std::collections::HashMap<String, String>>,
     /// Is this the first pass on parsing:
     /// - Do not assume that all struct / enum types are already parsed.
     /// - Define variables, try to determine their type (can become clear from later code).
@@ -376,6 +380,7 @@ impl Parser {
             pending_native_libs: Vec::new(),
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
+            auto_use_trigger_map: None,
             pending_imports: Vec::new(),
             applied_imports: Vec::new(),
             deferred_unknown: Vec::new(),
@@ -4009,26 +4014,55 @@ impl Parser {
         // entirely — the author manages their libraries by hand there.  Read +
         // scan each remaining file at most once (cache keyed by path).
         if !had_use && self.lexer.pos().file == auto_use_scan_file {
-            let refs = if let Some(c) = self.auto_use_scan_cache.get(&auto_use_scan_file) {
+            let (refs, calls) = if let Some(c) = self.auto_use_scan_cache.get(&auto_use_scan_file) {
                 c.clone()
             } else {
                 let src = self.read_source(&auto_use_scan_file);
-                let r = crate::libscan::scan_qualified_lib_refs(&src);
+                let pair = (
+                    crate::libscan::scan_qualified_lib_refs(&src),
+                    crate::libscan::scan_method_calls(&src),
+                );
                 self.auto_use_scan_cache
-                    .insert(auto_use_scan_file.clone(), r.clone());
-                r
+                    .insert(auto_use_scan_file.clone(), pair.clone());
+                pair
             };
-            let mut to_load: Vec<(String, String)> = Vec::new();
+            // Tier-0: `lib::x` — the library is named directly.
+            let mut to_load: Vec<String> = Vec::new();
             for name in refs {
                 if self.data.use_exists(&name) || self.data.def_nr(&name) != u32::MAX {
                     continue;
                 }
-                let f = self.lib_path(&name);
-                if std::path::Path::new(&f).exists() {
-                    to_load.push((name, f));
+                if !to_load.contains(&name) {
+                    to_load.push(name);
                 }
             }
-            for (name, f) in to_load {
+            // Tier-1: `obj.method(…)` — map the method to its providing package
+            // via the trigger surface of the current package (+ trigger-enabled
+            // deps), derived once and cached.
+            if !calls.is_empty() {
+                let map = self.trigger_map(&auto_use_scan_file);
+                for m in calls {
+                    if let Some(pkg) = map.get(&m)
+                        && !self.data.use_exists(pkg)
+                        && !to_load.contains(pkg)
+                    {
+                        to_load.push(pkg.clone());
+                    }
+                }
+            }
+            // Resolve every path first (before a `switch` changes the cwd), then
+            // load with the proven todo_files + use_add + switch shape.
+            let mut resolved: Vec<(String, String)> = Vec::new();
+            for n in to_load {
+                if self.data.use_exists(&n) {
+                    continue;
+                }
+                let f = self.lib_path(&n);
+                if std::path::Path::new(&f).exists() {
+                    resolved.push((n, f));
+                }
+            }
+            for (name, f) in resolved {
                 if self.data.use_exists(&name) {
                     continue;
                 }
@@ -4177,6 +4211,62 @@ impl Parser {
             return c;
         }
         std::fs::read_to_string(filename).unwrap_or_default()
+    }
+
+    /// Tier-1: build (once, cached) the `method name -> providing package` map
+    /// from the current package's declared triggers — `[triggers] enabled` plus
+    /// the text-methods derived from its source — and those of its
+    /// trigger-enabled dependencies.  The package is located by walking up from
+    /// `from_file` to the nearest `loft.toml`.
+    fn trigger_map(&mut self, from_file: &str) -> std::collections::HashMap<String, String> {
+        if let Some(m) = &self.auto_use_trigger_map {
+            return m.clone();
+        }
+        let mut map = std::collections::HashMap::new();
+        let mut dir = std::path::Path::new(from_file)
+            .parent()
+            .map(std::path::Path::to_path_buf);
+        while let Some(d) = dir {
+            let toml = d.join("loft.toml");
+            if toml.exists() {
+                Self::add_pkg_triggers(&toml, &d, &mut map);
+                if let Some(man) = crate::manifest::read_manifest(&toml.to_string_lossy()) {
+                    for (dep, _ver) in &man.dependencies {
+                        if let Some(entry) = self.lib_path_manifest(&d.to_string_lossy(), dep)
+                            && let Some(root) =
+                                std::path::Path::new(&entry).parent().and_then(|p| p.parent())
+                        {
+                            Self::add_pkg_triggers(&root.join("loft.toml"), root, &mut map);
+                        }
+                    }
+                }
+                break;
+            }
+            dir = d.parent().map(std::path::Path::to_path_buf);
+        }
+        self.auto_use_trigger_map = Some(map.clone());
+        map
+    }
+
+    /// Add a package's derived text-method triggers (`method -> package`) to
+    /// `map`, when the package opts in via `[triggers] enabled`.
+    fn add_pkg_triggers(
+        toml: &std::path::Path,
+        pkg_root: &std::path::Path,
+        map: &mut std::collections::HashMap<String, String>,
+    ) {
+        let Some(man) = crate::manifest::read_manifest(&toml.to_string_lossy()) else {
+            return;
+        };
+        if !man.trigger_enabled {
+            return;
+        }
+        let Some(name) = man.name else { return };
+        let entry = man.entry.unwrap_or_else(|| format!("src/{name}.loft"));
+        let src = std::fs::read_to_string(pkg_root.join(&entry)).unwrap_or_default();
+        for mt in crate::triggers::derive_triggers(&src).methods {
+            map.entry(mt.name).or_insert_with(|| name.clone());
+        }
     }
 
     fn lib_path(&mut self, id: &str) -> String {

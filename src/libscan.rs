@@ -114,9 +114,106 @@ pub fn scan_qualified_lib_refs(content: &str) -> Vec<String> {
     refs
 }
 
+/// Collect the distinct method names invoked as `.name(` in `content` —
+/// the Tier-1 trigger candidates (`line.matches(…)` → `matches`).  Same
+/// scanning discipline as [`scan_qualified_lib_refs`]: code + format-string
+/// interpolations, skipping comments, plain string text, and `..` ranges.
+/// Order-preserving, de-duplicated.  Over-collects (every `.method(` call,
+/// including stdlib ones); the caller filters against the trigger map.
+#[must_use]
+pub fn scan_method_calls(content: &str) -> Vec<String> {
+    let b = content.as_bytes();
+    let n = b.len();
+    let mut calls: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    let mut in_string = false;
+    let mut brace_depth = 0usize;
+
+    let record = |name: &str, calls: &mut Vec<String>| {
+        if !name.is_empty() && !calls.iter().any(|c| c == name) {
+            calls.push(name.to_string());
+        }
+    };
+    // A `.name(` whose `.` is not part of `..` (range) or a float.
+    let try_method = |i: &mut usize, calls: &mut Vec<String>| {
+        // at b[*i] == b'.'
+        if *i + 1 < n && b[*i + 1] == b'.' {
+            *i += 2; // `..` range — skip
+            return;
+        }
+        let mut j = *i + 1;
+        let start = j;
+        while j < n && is_ident_char(b[j]) {
+            j += 1;
+        }
+        if j > start && j < n && b[j] == b'(' {
+            record(&content[start..j], calls);
+        }
+        *i = if j > start { j } else { *i + 1 };
+    };
+
+    while i < n {
+        let c = b[i];
+        if !in_string {
+            if c == b'/' && i + 1 < n && b[i + 1] == b'/' {
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if c == b'"' {
+                in_string = true;
+                brace_depth = 0;
+                i += 1;
+                continue;
+            }
+            if c == b'.' {
+                try_method(&mut i, &mut calls);
+                continue;
+            }
+            i += 1;
+        } else {
+            match c {
+                b'\\' => i += 2,
+                b'{' => {
+                    brace_depth += 1;
+                    i += 1;
+                }
+                b'}' => {
+                    brace_depth = brace_depth.saturating_sub(1);
+                    i += 1;
+                }
+                b'"' if brace_depth == 0 => {
+                    in_string = false;
+                    i += 1;
+                }
+                b'.' if brace_depth > 0 => try_method(&mut i, &mut calls),
+                _ => i += 1,
+            }
+        }
+    }
+    calls
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_method_calls() {
+        assert_eq!(
+            scan_method_calls("fn f() { x = line.matches(\"a\"); n = v.len() }"),
+            vec!["matches".to_string(), "len".to_string()]
+        );
+    }
+
+    #[test]
+    fn method_calls_in_format_string_and_skip_ranges() {
+        assert_eq!(
+            scan_method_calls("print(\"{s.matches(p)}\"); for i in 0..3 {}"),
+            vec!["matches".to_string()]
+        );
+    }
 
     #[test]
     fn finds_plain_code_reference() {
