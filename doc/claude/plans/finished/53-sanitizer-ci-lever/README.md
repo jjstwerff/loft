@@ -7,14 +7,24 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Wave 1 — SHIPPED.**  All five UB clusters fixed + the full sanitizer CI stack
-live on `main`.  The plan is intentionally kept open to host Wave 2 and will be
-moved to `finished/` after the next wave lands.
+**CLOSED** — 2026-05-31.  All deliverables shipped.  Remaining Wave-2
+sanitizer-coverage items (not owned by @PLAN55) routed to
+[@PLAN56](../../future/56-sanitizer-coverage-expansion/README.md).
 
 | Wave | Status |
 |---|---|
 | **Wave 1** — clusters 1-5 fixed + V2-aligned-stack production default + sanitizer CI stack (per-PR guard + nightly Miri/ASan/toolchain-matrix + sticky-comment reporter) | ✅ **SHIPPED** — PR #235 (aligned default + sanitizer engine) + PR #236 (V1 removal + CI stack) |
-| **Wave 2** — macOS-ARM nightly leg, ThreadSanitizer, fuzzing, `LOFT_POISON` keystone, + further coverage expansion | 🔵 **OPEN** — see [§ Wave 2](#wave-2--next-wave-open) below |
+| **Wave 2 kickoff** — cargo-fuzz engine (`fuzz/`) with `store_alloc` + `vector_collection` direct structure targets; found 4 real latent bugs (headlined: OOB read in `vector::remove_vector`); per-PR ASan gate; cluster-3/4/5 regression guards; Miri curated set grown 1→4 tests; ASan gate fixed to use explicit nightly toolchain | ✅ **SHIPPED** — PR #237 |
+| **Spun off** — program-level fuzzing → @PLAN55 (`plans/future/55-program-level-fuzzing/`); remaining sanitizer-coverage items → @PLAN56 (`plans/future/56-sanitizer-coverage-expansion/`) | — |
+
+**Closure summary:**
+- Sanitizer CI (nightly Miri + per-PR ASan guard + per-PR `stack_align_guard`) is live on `main`.
+- Five UB clusters fixed (clusters 1-5); PLAN52-I owned/closed by PLAN52 (#230).
+- Curated Miri set covers p213 + clusters 3/4/5 (4 tests); locks the hard-UB fixes.
+- `fuzz/` cargo-fuzz crate exists with two direct structure targets.
+- dogfood/standard suite stays green; no new regressions.
+- Wave-2 coverage items not fuzzing-related continue in @PLAN56 (macOS-ARM leg, TSan, LSan triage, native-ASan, MSan, failure-notifier, growing Miri set).
+- `LOFT_POISON` keystone (W2-3) moved to @PLAN56; @PLAN55 F4 remains blocked on it.
 
 *Historical note:* PLAN52 was the founding hard dependency (its cluster I was the
 dominant noise that would have drowned out any other sanitizer finding).  PLAN52
@@ -486,9 +496,10 @@ Two plan-specific notes:
 
 ## See also
 
-- [`plans/future/55-program-level-fuzzing/`](../55-program-level-fuzzing/README.md) — spinoff plan; owns program-level loft-source fuzzing, schema-coupled collection fuzzing (tree/hash/sorted via real programs), differential fuzzing, and OSS-Fuzz onboarding (Wave-2 items #4, #6, #10).
-- [`plans/finished/52-value-block-borrow-cleanup/`](../../finished/52-value-block-borrow-cleanup/README.md) — founding hard dependency (now satisfied, closed via PR #230); the cluster-I heap-UAF was the dominant noise that had to be removed before this plan's sweep was meaningful.
-- [`plans/finished/51-hidden-buffer-aliasing/`](../../finished/51-hidden-buffer-aliasing/) — sibling investigation; canonical layout reference for cluster docs and probe organisation.
+- [`plans/future/55-program-level-fuzzing/`](../../future/55-program-level-fuzzing/README.md) — spinoff plan; owns program-level loft-source fuzzing, schema-coupled collection fuzzing (tree/hash/sorted via real programs), differential fuzzing, and OSS-Fuzz onboarding (Wave-2 items #4, #6, #10).
+- [`plans/future/56-sanitizer-coverage-expansion/`](../../future/56-sanitizer-coverage-expansion/README.md) — successor plan; owns remaining Wave-2 sanitizer-coverage items (macOS-ARM leg, TSan, LSan triage, native-ASan, growing Miri set, MSan, failure-notifier, `LOFT_POISON` keystone).
+- [`plans/finished/52-value-block-borrow-cleanup/`](../52-value-block-borrow-cleanup/README.md) — founding hard dependency (now satisfied, closed via PR #230); the cluster-I heap-UAF was the dominant noise that had to be removed before this plan's sweep was meaningful.
+- [`plans/finished/51-hidden-buffer-aliasing/`](../51-hidden-buffer-aliasing/) — sibling investigation; canonical layout reference for cluster docs and probe organisation.
 - [`doc/claude/PROBLEMS.md`](../../../PROBLEMS.md) §@P383 — the trigger incident; the failure mode this plan's CI lever would have caught months earlier.
 - [`doc/claude/TESTING.md`](../../../TESTING.md) — sanitizer-CI documentation (shipped D-final, PR #236).
 - [`.github/workflows/ci.yml`](../../../../../.github/workflows/ci.yml) — per-PR `stack_align_guard` job + nightly-status sticky-comment reporter (shipped).
