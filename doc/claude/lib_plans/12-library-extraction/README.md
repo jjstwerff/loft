@@ -40,8 +40,16 @@ Shipped so far:
   removed from the monorepo (residual `lib/random/native/target/`
   build cache cleaned 2026-05-28).
 - **`loft-libs-net` SHIPPED** (Phase 6): `web`, `server`,
-  `game_protocol` 0.1.0; transitive `loft install` + lockfile merge
-  smoke-tested.
+  `game_protocol` 0.1.0 (initial); transitive `loft install` +
+  lockfile merge smoke-tested.  **v0.1.1 patch release shipped
+  2026-05-31** (registry PR #5, all three validator gates green
+  including the reproducible-build re-check) bundling Phase 6r
+  + 6.5 + warning sweep + the new `byte_at.loft` coverage.
+  Chain that landed it: jjstwerff/loft #234 (deterministic
+  `loft package` — zero mtime in gzip + tar headers) → net #2
+  (omnibus) → net #3 (version bump) → 3 tags + 3 GitHub releases →
+  registry #4 (validator multi-package homepage fix) → registry #5
+  (the version entries).
 - **`loft-libs-graphics` partial** (Phase 5): `shapes` 0.2.0 +
   `gridmesh` 0.1.0 published.  `graphics` + `imaging` remain in the
   monorepo but their native-codegen blocker is **gone** (see below).
@@ -96,14 +104,14 @@ Ordered by readiness.  Each is independently verifiable.
    **landed** (#220 `clean native binding pattern` merged 2026-05-26,
    followed by #221/#223/#224).  **Status:** `loft-libs-core` re-clean
    landed via PR #2 (2026-05-30) — bundled with the YAML refresh and
-   the arguments warning sweep.  `loft-libs-net`'s re-clean is
-   **in flight** as `loft-libs-net` PR #2 (all-green CI as of
-   2026-05-31, awaiting merge) — same omnibus shape as core: canonical
-   YAML + per-symbol 6r re-clean (9 `tcp_*` sites; the 16 `ws_*` sites
-   kept because the loft fn name differs from the native symbol) +
-   warning sweep (16 `_ = self;` insertions across web/server) + new
-   `web/tests/byte_at.loft` (5 tests for the previously-uncovered
-   `byte_at` helper).
+   the arguments warning sweep.  `loft-libs-net`'s re-clean **landed
+   2026-05-31** in net PR #2 (omnibus: canonical YAML + per-symbol
+   6r re-clean — 9 `tcp_*` sites stripped to bare `#native`, 16 `ws_*`
+   sites kept because the loft fn name genuinely differs from the
+   native symbol; warning sweep — 16 `_ = self;` insertions across
+   web/server; new `web/tests/byte_at.loft` — 5 tests).  Shipped to
+   the registry as `web/server/game_protocol 0.1.1`; gate-3
+   reproducible-build re-check green on all three.
 
    **Per-symbol decision rule** (learned from loft-libs-core 2026-05-30):
    the re-clean **only applies where the `#native "n_<fn>"` string is
@@ -302,7 +310,7 @@ with ≥1 minor release of soak between consecutive chunks.
 | 4 | Extract `loft-libs-core` (arguments, random, crypto) | 1–3 + 3.5 | **SHIPPED** 2026-05-24 |
 | 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, shapes) | 4 + [`../02-graphics/`](../02-graphics/) | **partial** — shapes/gridmesh shipped; graphics+imaging **now unblocked** |
 | 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **SHIPPED** 2026-05-24 |
-| 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **partial** — `loft-libs-core` green (PR #2 2026-05-30); `loft-libs-net` green and **awaiting merge** (PR #2 2026-05-31); `loft-libs-graphics` + registry `pr-validate.yml` still pending |
+| 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **partial** — `loft-libs-core` green (PR #2 2026-05-30); `loft-libs-net` green + v0.1.1 SHIPPED to registry (PRs #2 + #3 + tags + releases + registry #5 all merged 2026-05-31); `loft-libs-graphics` + registry `pr-validate.yml` refresh still pending |
 | 6w-w | Retire every `lib/*/.allow_warnings` opt-out — clean each library's warnings until the gate runs strict everywhere | 6.5 (gate landed) | **OPEN** — variable per package; tracks the ratchet to zero |
 | 6t | Library test self-sufficiency — Tier 1 gridmesh script copies, Tier 2 `graphics_gold.rs` port, Tier 3 `multiplayer_v{2,3,5}.rs` port, Tier 4 `loft test --deps`, Tier 5 (NEW) coverage gaps with no Rust-harness home (`imaging` / `world` / `markdown`) | 4–6 | **partial** — Tiers 1+2+4 DONE; Tier 3 OPEN; Tier 5 OPEN; blocks Phase 5 (`imaging`), Phase 6r re-clean (Tier 3), Phase 6w (`world`) |
 | 6w | Extract `loft-libs-world` (world, Phase-7a-expanded) | 7a + 6.5 + 6t | OPEN — M |
@@ -439,9 +447,11 @@ jobs:
 
 ### Bringing a chunk to all-green CI — checklist
 
-Distilled from loft-libs-core's path to green (PR #2, 2026-05-30).
-Apply this checklist when bringing each remaining chunk (currently
-`loft-libs-net` and `loft-libs-graphics`) to fully-green strict CI.
+Distilled from loft-libs-core's path to green (PR #2, 2026-05-30)
+and reapplied successfully to loft-libs-net (PRs #2 + #3 + tags +
+releases + registry #4 + #5, all merged 2026-05-31).  Apply this
+checklist when bringing the remaining chunk (`loft-libs-graphics`)
+to fully-green strict CI.
 
 **Prerequisite:** the loft compiler bugs surfaced by the FIRST chunk's
 warning sweep must be fixed on `jjstwerff/loft:main` before later
@@ -488,6 +498,42 @@ new chunks may surface different latent bugs.
 `LOFT_DENY_WARNINGS=1`, no `.allow_warnings` opt-out files in the
 chunk, and `scripts/verify_external_libs.sh --src <chunk>=…` is green
 against the latest monorepo `lib/<name>/` source.
+
+**Release-loop lessons from loft-libs-net v0.1.1 (2026-05-31).**
+Applying the loft-libs-core path-to-green to net surfaced two
+hidden dependencies that the first chunk didn't expose:
+
+- **Deterministic packaging is a registry prerequisite, not a
+  nice-to-have.**  loft-libs-core's first releases happened to
+  hash-match by accident (the build environment was identical
+  between author and validator).  Net's release would have failed
+  gate-3 reproducible-build re-check on every PR because
+  `loft package` baked the current `mtime` into both the gzip
+  header and every tar entry.  Fix shipped in jjstwerff/loft #234:
+  `GzBuilder::new().mtime(0)` + `header.set_mtime(0)` +
+  `set_uid(0)` + `set_gid(0)`.  Two consecutive `loft package`
+  runs on the same source now produce byte-identical tarballs.
+  Verified locally + by the registry validator on PR #5.
+- **The registry validator only handled single-package chunk
+  repos.**  loft-libs-core's homepage points at
+  `loft-libs-core/tree/main/random` and the tag is `random-v0.1.0`;
+  the validator's original logic cloned the homepage URL verbatim
+  (a `tree/main/random` path) with a `v0.1.0` tag — both wrong for
+  multi-package chunks.  Fix shipped in registry #4 (validator
+  multi-package homepage handling): parse the URL, cd into the
+  subpath, use `<pkg>-v<version>` as the tag.  Without this fix,
+  every multi-package chunk release would fail gate-3 even with
+  deterministic packaging.
+
+**Order of operations for the third chunk** (`loft-libs-graphics`):
+both fixes are already on registry main + jjstwerff/loft main as
+of 2026-05-31, so the third chunk only needs the omnibus PR
+itself.  Estimated path-to-green: ~1 work-day for the omnibus
++ 1 hour for the release sequence + ~5 min for the registry
+PR.  The first two chunks each surfaced 1-2 compiler bugs
+during the warning sweep (loft-libs-core: @P385/@P386; net: none
+new); budget 1 day per chunk for "fix surfaced compiler bug, land
+on monorepo main, rebase chunk PR" rounds.
 
 ### Phase 6w-w — retire every `.allow_warnings`
 
