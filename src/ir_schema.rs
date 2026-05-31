@@ -36,7 +36,7 @@
 //! numbers.  S1 lands shells first.
 
 use crate::data::{
-    Attribute, Block, DefType, Definition, ImpureCategory, IntegerSpec, LinkedFieldGroup,
+    Attribute, Block, Data, DefType, Definition, ImpureCategory, IntegerSpec, LinkedFieldGroup,
     LinkedFieldKind, ParForBody, Purity, Type, Value,
 };
 use crate::database::Stores;
@@ -1235,6 +1235,69 @@ fn definition_from_parsed(p: &Parsed) -> Result<Definition, TypeDecodeError> {
         name,
         position,
     })
+}
+
+// ─── Data JSON (Step 2 container slice C3) ────────────────────────────────────
+//
+// The whole-`Data` document — the reviewable `stdlib.json` artifact.  It ties
+// the per-`Definition` codec (C2) into one array plus the small amount of
+// `Data`-level state the snapshot needs.
+//
+//   stored  : definitions[] (each via the C2 codec), source
+//   rebuilt : def_names / operators / op_codes / possible / use_names — all
+//             re-derived by `Data::rebuild_indices` from the definitions
+//             (pure functions of `definitions`; never stored)
+//   omitted : transient parse state (used_definitions / used_attributes /
+//             referenced / statics) and package/wasm metadata (native_* /
+//             wasm_bridge_*), which are empty for a stdlib/bundle snapshot;
+//             caller_index stays a lazy OnceLock
+//
+// This is the whole-bundle image: absolute `def_nr` / `known_type` indices are
+// stored verbatim (mutually consistent by construction — no relocation).
+//
+// `Data` has no `PartialEq`, so round-trip is proven by re-encode equality
+// (encode → decode → encode is stable), as for `Attribute` / `Definition`.
+
+/// Serialise a whole [`Data`] to JSON — the snapshot document.
+#[must_use]
+pub fn data_to_json(data: &Data) -> String {
+    let mut out = String::new();
+    let _ = write!(out, "{{\"source\":{},\"definitions\":[", data.source);
+    for (i, d_nr) in (0..data.definitions()).enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        write_definition(&mut out, data.def(d_nr));
+    }
+    out.push_str("]}");
+    out
+}
+
+/// Parse a whole [`Data`] from JSON, rebuilding all derived indices.
+///
+/// The returned `Data` starts from [`Data::new`], has its `definitions` and
+/// `source` restored, then [`Data::rebuild_indices`] re-derives `def_names` /
+/// `operators` / `op_codes` / `possible` / `use_names`.  Codegen-derived state
+/// (slots, bytecode) is recomputed by the normal compile pass, not here.
+///
+/// # Errors
+/// Malformed JSON, wrong field shape, or an unknown tag in a nested
+/// `Type` / `Value` / `Definition`.
+pub fn data_from_json(src: &str) -> Result<Data, TypeDecodeError> {
+    let parsed = crate::json::parse(src)
+        .map_err(|e| TypeDecodeError::Shape(format!("json parse: {e:?}")))?;
+    let mut data = Data::new();
+    data.source = as_u16(field(&parsed, "source")?)?;
+    let defs = field(&parsed, "definitions")?;
+    let Parsed::Array(items) = defs else {
+        return Err(TypeDecodeError::Shape("definitions: expected array".into()));
+    };
+    for it in items {
+        let def = definition_from_parsed(it)?;
+        data.definitions.push(def);
+    }
+    data.rebuild_indices();
+    Ok(data)
 }
 
 #[cfg(test)]

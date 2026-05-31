@@ -2028,6 +2028,55 @@ impl Data {
         self.use_names.insert("std".to_string(), 0);
     }
 
+    /// @PLAN28 Step 2 (C3) — rebuild the derived lookup indices from
+    /// `definitions` alone, for the startup-cache load path.
+    ///
+    /// These indices are pure functions of `definitions` and are never
+    /// stored in the JSON snapshot; after a decoder restores `definitions`
+    /// (and each `Definition.op_code`, serialised by the Definition codec)
+    /// this re-derives them so the loaded `Data` matches a fresh parse:
+    ///
+    /// * `def_names` — `(name, source) -> def_nr`, inserted in definition
+    ///   order so a duplicate `(name, source)` resolves last-wins, exactly
+    ///   as repeated `add_def` calls do during parsing.
+    /// * `operators` — `op_code -> def_nr`, and `op_codes` — the
+    ///   next-free counter (`max assigned op_code + 1`).  `op_code` values
+    ///   themselves are restored from each `Definition` (not recomputed).
+    /// * `possible` — operator overload sets, mirroring `add_op`'s fill
+    ///   (operator defs only, walked in definition order).
+    ///
+    /// `caller_index` is intentionally left as its lazy `OnceLock` — it
+    /// rebuilds on first `callers_of`.  Cross-source import bindings (the
+    /// `insert_or_replace_stub` path) are NOT reproduced here: a
+    /// whole-stdlib / whole-bundle snapshot is single-pass and uniform, so
+    /// the `add_def`-level inserts are sufficient.  Multi-library import
+    /// reconciliation is a later extension if per-library snapshots land.
+    pub(crate) fn rebuild_indices(&mut self) {
+        self.def_names.clear();
+        self.operators.clear();
+        self.possible.clear();
+        let mut max_op: i32 = -1;
+        for d_nr in 0..self.definitions.len() as u32 {
+            let def = &self.definitions[d_nr as usize];
+            self.def_names.insert((def.name.clone(), def.source), d_nr);
+            if def.is_operator() {
+                if def.op_code != u16::MAX {
+                    self.operators.insert(def.op_code, d_nr);
+                    max_op = max_op.max(i32::from(def.op_code));
+                }
+                for op in OPERATORS {
+                    if def.name.starts_with(op) {
+                        self.possible.entry((*op).to_string()).or_default().push(d_nr);
+                    }
+                }
+            }
+        }
+        self.op_codes = (max_op + 1) as u16;
+        if self.use_names.is_empty() {
+            self.use_names.insert("std".to_string(), 0);
+        }
+    }
+
     #[must_use]
     pub fn get_source(&self, name: &str) -> u16 {
         if let Some(nr) = self.use_names.get(name) {

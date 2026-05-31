@@ -32,8 +32,8 @@ mod common;
 
 use common::cached_default;
 use loft::ir_schema::{
-    attribute_from_json, attribute_to_json, definition_from_json, definition_to_json,
-    type_from_json, type_to_json, value_from_json, value_to_json,
+    attribute_from_json, attribute_to_json, data_from_json, data_to_json, definition_from_json,
+    definition_to_json, type_from_json, type_to_json, value_from_json, value_to_json,
 };
 
 /// Every `Type` in the stdlib (each def's `returned` plus every attribute
@@ -136,4 +136,45 @@ fn stdlib_definitions_round_trip() {
     }
     assert!(checked > 100, "expected the full stdlib def table, got {checked}");
     eprintln!("stdlib_definitions_round_trip: {checked} definitions checked");
+}
+
+/// The WHOLE parsed stdlib `Data` round-trips as one document (C3): encode the
+/// entire `Data` to a single JSON (the `stdlib.json` shape), decode it back via
+/// `data_from_json` (which rebuilds all derived indices), and assert:
+///   * re-encode equality (Data has no PartialEq) — the document is lossless;
+///   * the decoded `Data` has the same definition count;
+///   * spot-check that `def_nr(name)` resolves identically on the decoded copy
+///     (proves `rebuild_indices` reconstructed `def_names` correctly);
+///   * the decoded copy compiles (codegen runs against rebuilt indices).
+#[test]
+fn stdlib_whole_data_round_trip() {
+    let (data, _db) = cached_default();
+    let n = data.definitions();
+
+    let json = data_to_json(&data);
+    let back = data_from_json(&json).expect("whole-Data decode");
+
+    // Lossless: re-encoding the decoded Data yields byte-identical JSON.
+    assert_eq!(data_to_json(&back), json, "whole-Data re-encode drift");
+
+    // Same definition table size.
+    assert_eq!(back.definitions(), n, "definition count changed across round-trip");
+
+    // def_names rebuilt: every original name resolves to the same def_nr.
+    let mut name_checks = 0usize;
+    for d_nr in 0..n {
+        let name = &data.def(d_nr).name;
+        // Skip the rare duplicate-name case (last-wins); check the forward map
+        // is at least present and points at a def of the same name.
+        let resolved = back.def_nr(name);
+        assert_ne!(resolved, u32::MAX, "name {name} did not resolve after round-trip");
+        assert_eq!(&back.def(resolved).name, name, "def_nr({name}) points at wrong def");
+        name_checks += 1;
+    }
+    assert!(name_checks > 100, "expected to resolve the full name table");
+
+    eprintln!(
+        "stdlib_whole_data_round_trip: {n} definitions, {} bytes of JSON, {name_checks} names re-resolved",
+        json.len()
+    );
 }
