@@ -115,7 +115,7 @@ mod tests {
 
     /// Mirrors the `regex` library's public surface: free functions
     /// (`find`/`split`, pattern-first) plus the three text methods.
-    const REGEX_SRC: &str = r#"
+    const REGEX_SRC: &str = r"
 // internal — not pub, must be ignored
 fn match_start(pattern: text, input: text) -> integer;
 #native
@@ -138,7 +138,7 @@ pub fn regex_find(self: text, pattern: text) -> integer {
 pub fn regex_split(self: text, pattern: text) -> iterator<text> {
   yield from split_iter(pattern, self);
 }
-"#;
+";
 
     #[test]
     fn derives_only_text_method_triggers() {

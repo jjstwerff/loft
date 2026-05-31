@@ -58,32 +58,7 @@ pub fn scan_qualified_lib_refs(content: &str) -> Vec<String> {
 
     while i < n {
         let c = b[i];
-        if !in_string {
-            // line comment
-            if c == b'/' && i + 1 < n && b[i + 1] == b'/' {
-                while i < n && b[i] != b'\n' {
-                    i += 1;
-                }
-                continue;
-            }
-            if c == b'"' {
-                in_string = true;
-                brace_depth = 0;
-                i += 1;
-                continue;
-            }
-            if is_ident_start(c) {
-                let start = i;
-                while i < n && is_ident_char(b[i]) {
-                    i += 1;
-                }
-                if i + 1 < n && b[i] == b':' && b[i + 1] == b':' {
-                    record(&content[start..i], &mut refs);
-                }
-                continue;
-            }
-            i += 1;
-        } else {
+        if in_string {
             match c {
                 b'\\' => i += 2, // escape — skip the next byte
                 b'{' => {
@@ -109,6 +84,31 @@ pub fn scan_qualified_lib_refs(content: &str) -> Vec<String> {
                 }
                 _ => i += 1,
             }
+        } else {
+            // line comment
+            if c == b'/' && i + 1 < n && b[i + 1] == b'/' {
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if c == b'"' {
+                in_string = true;
+                brace_depth = 0;
+                i += 1;
+                continue;
+            }
+            if is_ident_start(c) {
+                let start = i;
+                while i < n && is_ident_char(b[i]) {
+                    i += 1;
+                }
+                if i + 1 < n && b[i] == b':' && b[i + 1] == b':' {
+                    record(&content[start..i], &mut refs);
+                }
+                continue;
+            }
+            i += 1;
         }
     }
     refs
@@ -154,25 +154,7 @@ pub fn scan_method_calls(content: &str) -> Vec<String> {
 
     while i < n {
         let c = b[i];
-        if !in_string {
-            if c == b'/' && i + 1 < n && b[i + 1] == b'/' {
-                while i < n && b[i] != b'\n' {
-                    i += 1;
-                }
-                continue;
-            }
-            if c == b'"' {
-                in_string = true;
-                brace_depth = 0;
-                i += 1;
-                continue;
-            }
-            if c == b'.' {
-                try_method(&mut i, &mut calls);
-                continue;
-            }
-            i += 1;
-        } else {
+        if in_string {
             match c {
                 b'\\' => i += 2,
                 b'{' => {
@@ -190,6 +172,24 @@ pub fn scan_method_calls(content: &str) -> Vec<String> {
                 b'.' if brace_depth > 0 => try_method(&mut i, &mut calls),
                 _ => i += 1,
             }
+        } else {
+            if c == b'/' && i + 1 < n && b[i + 1] == b'/' {
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if c == b'"' {
+                in_string = true;
+                brace_depth = 0;
+                i += 1;
+                continue;
+            }
+            if c == b'.' {
+                try_method(&mut i, &mut calls);
+                continue;
+            }
+            i += 1;
         }
     }
     calls

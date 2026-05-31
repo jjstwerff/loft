@@ -4025,7 +4025,7 @@ impl Parser {
             let (refs, calls) = if let Some(c) = self.auto_use_scan_cache.get(&auto_use_scan_file) {
                 c.clone()
             } else {
-                let src = self.read_source(&auto_use_scan_file);
+                let src = Self::read_source(&auto_use_scan_file);
                 let pair = (
                     crate::libscan::scan_qualified_lib_refs(&src),
                     crate::libscan::scan_method_calls(&src),
@@ -4224,7 +4224,7 @@ impl Parser {
     /// Read a source file's content for the Tier-0 auto-`use` pre-scan.
     /// Honours the wasm VirtFS; an empty string on a read error (the scan then
     /// finds nothing and normal resolution proceeds unchanged).
-    fn read_source(&self, filename: &str) -> String {
+    fn read_source(filename: &str) -> String {
         #[cfg(feature = "wasm")]
         if let Some(c) = crate::wasm::virt_fs_get(filename) {
             return c;
