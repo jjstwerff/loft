@@ -338,6 +338,8 @@ with ≥1 minor release of soak between consecutive chunks.
 | 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **partial — Stage A only** — 0.1.0 (2026-05-24) + 0.1.1 (2026-05-31) shipped to registry; **monorepo `lib/web/` + `lib/server/` + `lib/game_protocol/` still present** (Stage B not run; consumers in `tools/audience-demo*`, `tools/viewer`, `lib/audience_crystal` still path-resolve them) |
 | 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **DONE (chunk side)** — all three chunks on canonical YAML + at least one patch release published: `loft-libs-core` (PR #2 2026-05-30); `loft-libs-net` v0.1.1 (PRs #2 + #3 + registry #5, 2026-05-31); `loft-libs-graphics` gridmesh 0.1.1 (PR #1 + registry #6, 2026-05-31).  Remaining: registry `pr-validate.yml` already aligned (registry #4 multi-package homepage fix merged 2026-05-31); macOS / Windows matrix expansion is the only chunk-CI delta still on the to-do list (currently Linux-only by design until a Linux baseline soaks) |
 | 6.6 | Auto-install on `use` — parser auto-installs from registry when an unresolved `use X;` matches a name in the signed index; one-line announcement on cold cache, silent on cache hit; works WITHOUT a `loft.toml` (script mode) and WITH one (project mode); offline opt-out via `LOFT_OFFLINE=1`/`--offline` | 3 (registry MVP), 6.5 | **OPEN — S (~1 day)** — designed 2026-05-31; unblocks Stage B for any chunk with single-file-script consumers (net's `tools/audience-demo`, graphics's `lib/graphics/examples/25-brick-buster.loft`); see [§ Phase 6.6 detail](#phase-66--auto-install-on-use-proposed-2026-05-31) below |
+| 6.7 | Security advisory channel — typed `status` field on registry entries (severity tier + advisory ID + summary), separate `advisories.json` feed with 24h TTL, loft binary checks installed versions against the feed on every invocation and refuses-or-warns by severity | 6.6 (auto-install — yanked-fix paths invoke the same machinery) | **OPEN — S (~1-2 days)** — designed 2026-05-31; ships the trust signal that lets the registry recall a vulnerable version effectively; see [§ Phase 6.7 detail](#phase-67--security-advisory-channel-proposed-2026-05-31) below |
+| 6.8 | `loft update` command — `loft update` refreshes lockfile to latest active versions of all declared deps; `loft update <pkg>` targets one package; project-mode explicit upgrade path that pairs with the 6.7 yank channel | 6.6 (lockfile primitives), 6.7 (advisory feed for "is the new version safe to pick") | **OPEN — S (~1 day)** — designed 2026-05-31; closes the loop "registry says you're outdated → user has a one-command fix"; see [§ Phase 6.8 detail](#phase-68--loft-update-command-proposed-2026-05-31) below |
 | 6w-w | Retire every `lib/*/.allow_warnings` opt-out — clean each library's warnings until the gate runs strict everywhere | 6.5 (gate landed) | **OPEN** — variable per package; tracks the ratchet to zero |
 | 6t | Library test self-sufficiency — Tier 1 gridmesh script copies, Tier 2 `graphics_gold.rs` port, Tier 3 `multiplayer_v{2,3,5}.rs` port, Tier 4 `loft test --deps`, Tier 5 (NEW) coverage gaps with no Rust-harness home (`imaging` / `world` / `markdown`) | 4–6 | **partial** — Tiers 1+2+4 DONE; Tier 3 OPEN; Tier 5 OPEN; blocks Phase 5 (`imaging`), Phase 6r re-clean (Tier 3), Phase 6w (`world`) |
 | 6w | Extract `loft-libs-world` (world, Phase-7a-expanded) | 7a + 6.5 + 6t | OPEN — M |
@@ -774,6 +776,323 @@ prints a few `[registry]` lines as the auto-install fires for
 each migrated consumer; subsequent runs silent.  No new
 `loft.toml` needed in `tools/audience-demo/` or per-example dirs.
 
+### Phase 6.7 — security advisory channel (proposed 2026-05-31)
+
+**Trigger.**  6.6 ships auto-install, which makes adoption
+broader.  Broader adoption + a YEAR-old cached version + a CVE
+filed today = users running known-vulnerable code with no
+mechanism for the registry to tell them.  The package format
+already has a `yanked` field on each entry, but (a) the schema
+is untyped (no severity tier), (b) there's no separate
+fast-refresh feed (the full `index.json` is large and only
+refreshed periodically), and (c) the loft binary doesn't check
+the yank list on every invocation.  This phase closes those
+gaps.
+
+**Schema bump.**  Each version entry gains an optional typed
+`status`:
+
+```json
+"0.1.1": {
+  ...,
+  "status": {
+    "kind": "yanked",
+    "severity": "security_critical",
+    "advisory": "GHSA-xxxx-yyyy-zzzz",
+    "summary": "TLS bypass in ws_client_connect"
+  }
+}
+```
+
+Severity tiers, with default loft-binary behaviour:
+
+| Tier | Behavior |
+|---|---|
+| `security_critical` | **Refuse to build / run.**  Exit non-zero with the advisory URL.  Override: `LOFT_SECURITY_OVERRIDE=<advisory-id>` (env var, audit-trail). |
+| `security_high` | **Warn loudly** at start of every run; non-zero exit only under `--strict-security` (CI flag). |
+| `security_low` / `bug` | One-line warning per run. |
+| `deprecated` | One-line note per day (suppressed by daily-cadence state). |
+
+**Advisory feed — `advisories.json`.**  Sibling to `index.json`
+in the registry, signed by the same Ed25519 key.  Schema:
+
+```json
+{
+  "schema_version": 1,
+  "updated": "2026-05-31T12:00:00Z",
+  "retention_days": 90,
+  "advisories": [
+    {
+      "id": "GHSA-xxxx-yyyy-zzzz",
+      "packages": [{"name": "web", "affected": ">=0.1.0, <0.1.2", "fixed_in": "0.1.2"}],
+      "severity": "security_critical",
+      "summary": "TLS bypass in ws_client_connect",
+      "published": "2026-05-30T08:00:00Z",
+      "references": ["https://github.com/loft-lang/loft-libs-net/security/advisories/..."]
+    }
+  ]
+}
+```
+
+Two reasons it's separate from `index.json`:
+
+- **Refresh cadence.**  `advisories.json` is small (~kilobytes;
+  90-day retention) → cheap to refresh every 24h on the user's
+  loft binary.  `index.json` is the full catalog → refresh every
+  7d, batched with cold install.
+- **Audit shape.**  Retained advisories are append-only; old
+  entries don't churn when a new package version ships.  Easier
+  to mirror, monitor, and audit independently of the active
+  catalog.
+
+**Loft-binary check.**  On every invocation that resolves a
+package (cached install OR fresh auto-install):
+
+1. Compute (package_name, version) tuples for each loaded
+   library.
+2. Load `~/.loft/registry/advisories.json` (refresh if >24h
+   old AND online).
+3. For each tuple, check the affected range against advisory
+   entries; classify by severity.
+4. Apply the severity table above.
+
+**Output examples.**
+
+```
+# security_critical — fail
+$ loft my_script.loft
+error: gridmesh 0.1.1 was yanked for a security vulnerability
+  advisory: GHSA-xxxx-yyyy-zzzz
+  summary:  TLS bypass in ws_client_connect
+  fix:      gridmesh >=0.1.2 (run `loft install gridmesh@0.1.2`)
+  override (audit-trail required): LOFT_SECURITY_OVERRIDE=GHSA-xxxx-yyyy-zzzz
+
+# security_high — warn loud
+$ loft my_script.loft
+warning: web 0.1.0 has a known security issue
+  advisory: GHSA-aaaa-bbbb-cccc
+  summary:  Memory disclosure in HTTP parser
+  fix:      web >=0.1.2 (run `loft install web@0.1.2`)
+hello world
+
+# bug (yanked but non-security)
+$ loft my_script.loft
+warning: gridmesh 0.1.0 was yanked (bug)
+  fix: gridmesh >=0.1.1
+hello world
+```
+
+**Implementation outline (~1-2 work-days):**
+
+1. **Registry schema bump.**  `tools/validate.py` in
+   `loft-lang/registry` accepts the new typed `status` field;
+   keep the old free-form string accepted in input but normalise
+   on emit.  Add `advisories.json` + `advisories.json.sig` to
+   the gate-1 schema lint.
+2. **Advisory feed maintenance.**  Document the workflow in
+   `REGISTRY_SUBMIT.md`: when yanking a version for security,
+   author submits a PR adding both the per-version `status` AND
+   an `advisories.json` entry referencing the GHSA.  CI verifies
+   the cross-reference.
+3. **Loft binary — advisory loader.**  New
+   `src/registry_advisories.rs`: load + verify signature +
+   cache `advisories.json` with 24h TTL.  Honours
+   `LOFT_OFFLINE=1` (use cache; error if cache empty).
+4. **Loft binary — runtime check.**  Hook in the package
+   resolution path (mirror `probe_registry_installed`'s
+   trigger surface): after a (name, version) tuple lands,
+   classify it against the cached advisories.  Defer fail/warn
+   emission until `main`'s pre-execute point so we never warn
+   for the same package twice in one run.
+5. **Override mechanism.**  `LOFT_SECURITY_OVERRIDE=<id>` env
+   var allows running with a `security_critical` yanked
+   version, but emits a stderr audit line: `[security] override
+   applied: GHSA-xxxx-yyyy-zzzz (gridmesh 0.1.1)`.  Used for
+   incident response: if the user is the one INVESTIGATING the
+   CVE, they need to run the vulnerable version locally.
+6. **`loft audit` command.**  Explicit query — scans the
+   current lockfile (project mode) or the global cache (script
+   mode) and reports every affected package without running
+   anything.  Exit code reflects worst severity.
+
+**Tests** (in `tests/registry_advisories.rs`):
+
+- Advisory matches version → fail/warn per severity.
+- Advisory doesn't match → silent.
+- Cached advisories.json absent + offline → fall through with
+  diagnostic warning (don't refuse, but tell user "advisory
+  feed unavailable; could not check security status").
+- Cached advisories.json present + offline → use cache.
+- Tampered signature → refuse to use the feed; surface the
+  error.
+- Override env var → run + audit-log to stderr.
+- `loft audit` against a fixture lockfile with multiple severities
+  → exit code matches worst.
+
+**Open questions:**
+
+1. **Override audit storage.**  Just stderr, or also a file
+   (`~/.loft/security_overrides.log`)?  Recommendation: stderr
+   only — file logging adds a maintenance burden and we already
+   write to stderr; users / CI who care can capture it.
+2. **Range syntax for `affected`.**  Cargo's semver, Python's
+   PEP 440, or a simple form?  Recommendation: pin to the
+   existing loft.toml range syntax (`>=X, <Y`) for consistency.
+3. **Multi-advisory aggregation.**  If 3 advisories hit one
+   package, do we print all 3 or only the most-severe?
+   Recommendation: print all; one line each.  Users investigating
+   want the full picture.
+4. **Retention beyond 90 days.**  Should advisories for
+   long-ago-yanked versions stay in the feed indefinitely, or
+   move to a separate "archive" file?  Recommendation: 90-day
+   active + archive in `advisories-archive.json` for queries
+   targeting old versions.
+
+**Why this isn't deferred to a future plan.**  PLAN12 is the
+*adoption* arc; security advisory is the trust signal that
+makes wider adoption defensible.  Without 6.7, every published
+loft library is one CVE away from a manual disclosure
+campaign.  WITH 6.7, the registry recall mechanism is
+mechanical and audit-friendly.
+
+**`"package": "loft"` is a valid advisory entry.**  The same
+schema covers the loft binary itself: a CVE in the parser, in
+native codegen, in the runtime, or in any `default/*.loft`
+stdlib file that didn't drain (per Phase 3.6) becomes an
+advisory entry with `"package": "loft"`, version range, and
+fix-in version.  The classifier in step 4 uses the SAME logic
+for binary and library tuples — only the lookup key changes.
+This is what permanently covers the non-drainable stdlib
+floor (operators, base types, control flow, format strings,
+core collection ops, bootstrap I/O) — the parts of the stdlib
+3.6 deliberately leaves embedded.  Practical example:
+
+```
+$ loft my_script.loft
+error: loft 0.8.4 was yanked for a security vulnerability
+  advisory: GHSA-zzzz-yyyy-xxxx
+  summary:  Format string evaluator allows arbitrary read in user-controlled payloads
+  fix:      loft >=0.8.5 (run `loft self-update`)
+```
+
+The `loft self-update` referenced in the fix line is shipped
+by [`lib_plans/30-loft-distribution/`](../30-loft-distribution/README.md)
+— Phase 6.7 produces the advisory, Phase 30 provides the
+mechanical fix path.  Both halves are required to make the
+trust chain useful for the binary; 6.7 alone surfaces the
+problem, 30 alone has no signal to act on.
+
+### Phase 6.8 — `loft update` command (proposed 2026-05-31)
+
+**Trigger.**  6.7 surfaces "you have an outdated version" but
+the user's next move is awkward: edit `loft.toml` to bump the
+version range, then re-run `loft install <pkg>@<new>`, then
+maybe edit the lockfile.  Project-mode lacks an explicit
+"update everything to the latest version that satisfies my
+range constraints" command.  6.6 ships the install primitives;
+6.7 ships the yank signal; 6.8 is the explicit user-driven
+update flow that closes the loop.
+
+**Scope.**
+
+```
+loft update                  # refresh every dep in loft.lock to latest active
+                             # that satisfies its loft.toml range
+loft update <pkg>            # refresh one package
+loft update --major          # allow major-version bumps that step outside
+                             # the current range (writes new range to loft.toml)
+loft update --dry-run        # report what would change without writing
+loft update --check          # exit non-zero if any updates are available
+                             # (CI gate)
+```
+
+**Behaviour matrix.**
+
+| Invocation | Reads | Writes | Network |
+|---|---|---|---|
+| `loft update` (project mode) | loft.toml, loft.lock | loft.lock | one HTTP per affected pkg |
+| `loft update` (script mode) | `~/.loft/global.lock` (or sidecar) | same | same |
+| `loft update <pkg>` | as above, scoped to one pkg | same | one HTTP |
+| `loft update --major` | as above | loft.toml (range bump) + loft.lock | same |
+| `loft update --dry-run` | as above | nothing | catalog refresh only |
+| `loft update --check` | as above | nothing | catalog refresh only |
+
+**Range-bump semantics.**  Without `--major`, `loft update`
+respects the existing `loft.toml` range:
+
+- `gridmesh = ">=0.1"`  →  picks the highest active 0.x.y
+- `gridmesh = ">=0.1, <0.2"`  →  picks the highest active 0.1.y
+- `gridmesh = "0.1.1"`  →  no change (range is exact)
+
+With `--major`, the range itself can be bumped — useful when a
+library publishes 1.0 and the user wants to follow.  Always
+prints what changed.
+
+**Implementation outline (~1 work-day):**
+
+1. **Range parser.**  Already exists at `loft-ffi-build`'s
+   manifest resolver; reuse for `loft update`.
+2. **`loft update` driver.**  Walk lockfile entries; for each,
+   call `loft::install::install_one(name, latest_in_range)`;
+   write updated lockfile.  Emit a per-package diff: `gridmesh
+   0.1.1 → 0.1.2 (security fix GHSA-xxxx)`.
+3. **`--major` mode.**  Allowed-to-bump range write requires
+   editing `loft.toml`.  Use the manifest read/write helper
+   from `src/manifest.rs`; preserve comments and ordering
+   (PKG_REGISTRY.md § Manifest editing).
+4. **`--check` mode.**  Exit codes: 0 if all up-to-date, 1 if
+   updates available, 2 if YANKED versions are present (calls
+   into 6.7's classifier).  Used as a CI gate by chunk repos
+   that want "fail PRs that introduce stale deps."
+5. **Integration with 6.7.**  When 6.7's classifier reports a
+   `security_*` yank, `loft update <pkg>` automatically picks
+   a version that ISN'T yanked, even if the current range
+   would otherwise include the yanked version.  Behavior is
+   "fix the security issue first; respect the range constraint
+   second."  Audit line: `[update] gridmesh 0.1.1 → 0.1.2
+   (skipping yanked 0.1.1)`.
+
+**Tests** (in `tests/update.rs`):
+
+- Project mode + range satisfied by newer version → updates,
+  rewrites loft.lock.
+- Project mode + range satisfied only by current version →
+  no change, prints "already latest in range".
+- Script mode + sidecar → updates sidecar.
+- Script mode + global lock → updates global lock.
+- `--dry-run` → prints diff, doesn't write.
+- `--check` + updates available → exit 1.
+- `--check` + yanked version → exit 2.
+- `--major` → rewrites loft.toml range; preserves surrounding
+  formatting.
+- Integration with 6.7: yanked version in current range →
+  skipped + audit line.
+
+**Open questions:**
+
+1. **Lockfile diff format.**  Per-pkg one-liner ("`gridmesh
+   0.1.1 → 0.1.2`") or unified-diff over the lockfile?
+   Recommendation: per-pkg lines for human reading; a
+   `--format=json` flag for tooling.
+2. **Pre-update hook for breaking changes.**  Should `loft
+   update` consult a `[breaking_changes]` field on the version
+   entry (from registry) and print a heads-up before
+   updating?  Recommendation: file as 6.9 if/when the registry
+   schema supports it; out of scope here.
+3. **Concurrent invocation safety.**  Two `loft update` runs
+   in parallel against the same loft.lock — file lock or
+   last-writer-wins?  Recommendation: simple file lock on
+   `loft.lock.lck`; concurrent invocation is rare.
+
+**Why this is small.**  Most of the machinery already exists:
+- `install_one` (6.6) does the fetch + extract.
+- Lockfile read/write (`src/lockfile.rs`) is done.
+- Range parser is in `loft-ffi-build`.
+- 6.7's classifier provides the yank skip logic.
+
+6.8 is the user-facing glue + a thin `--major` mode.  One day
+of focused work.
+
 ### Phase 6w-w — retire every `.allow_warnings`
 
 The warning gate landed 2026-05-28 ([Phase 6.5 work above]) with
@@ -870,24 +1189,63 @@ red naming `test (crypto)` specifically.
 
 ### Phase 3.6 — stdlib drain
 
-Shrink `default/*.loft` to genuine universal stdlib.  Moves:
-**`escape_html` → new `lib/html/` — DONE 2026-05-27** (with its test
-migrated from `tests/scripts/106` to `lib/html/tests/01-escape.loft`,
-now `use html;`); Image / Pixel already live in `lib/imaging/src/`
-(Format stays in default — it's file-related and `lib/imaging` depends
-on it at load time); **`02_images.loft` → `02_files.loft` rename DONE
-2026-05-28** — `src/wasm.rs DEFAULT_FILES`, `src/gendoc.rs`, the test
-fixtures (`tests/generated/default.rs`, `tests/lib/p145_repro.rs`),
-the load-order block in `CLAUDE.md`, and current-state references in
+**Dual purpose** (re-articulated 2026-05-31, after the Phase 6.7
+security-channel design surfaced the asymmetry between drainable
+and embedded stdlib):
+
+1. **Scope hygiene** — move surfaces that are NOT language
+   primitives out of `default/*.loft` into purpose-named
+   libraries (HTML escaping doesn't belong in the language
+   core; image types don't either).
+2. **CVE-surface lever** — every surface that leaves the
+   embedded stdlib becomes patchable on the library release
+   cadence instead of the binary release cadence.  Faster
+   security fixes for drainable territory.  The non-drainable
+   floor (operators / base types / control flow / format
+   strings / core collection ops / minimum bootstrap I/O) stays
+   in the binary permanently and is covered by Phase 6.7's
+   advisory channel for `"package": "loft"` entries.
+
+**The drain does NOT shrink to zero.**  Phase 6.7 covers the
+permanent floor.  3.6 is "move what should never have been in
+the floor"; it isn't a strategy to externalise the entire
+stdlib.
+
+Done so far: **`escape_html` → new `lib/html/` — DONE 2026-05-27**
+(with its test migrated from `tests/scripts/106` to
+`lib/html/tests/01-escape.loft`, now `use html;`); Image / Pixel
+already live in `lib/imaging/src/` (Format stays in default — it's
+file-related and `lib/imaging` depends on it at load time);
+**`02_images.loft` → `02_files.loft` rename DONE 2026-05-28** —
+`src/wasm.rs DEFAULT_FILES`, `src/gendoc.rs`, the test fixtures
+(`tests/generated/default.rs`, `tests/lib/p145_repro.rs`), the
+load-order block in `CLAUDE.md`, and current-state references in
 STDLIB.md / COMPILER.md / DOC.md / NATIVE.md / LIFETIME.md /
 INTERMEDIATE.md / WASM.md / DEVELOPMENT.md updated; `path_sep()`
-already lived there.  **Remaining:** move
-`dir`/`basename`/`join(text,text)`/`resolve` from `03_text.loft` →
-`02_files.loft` (load-order safe — they only use primitives defined in
-`01_code.loft`; needs an audit that no `02_files.loft` declaration is
-shadowed).  JSON STAYS (the `{x:j}` format specifier + `text as Foo`
-cast are shipped language behaviour — pulling JSON out breaks both).
-Audit call sites for new `use html;` lines.
+already lived there.
+
+**Remaining (active):**
+
+- Move `dir`/`basename`/`join(text,text)`/`resolve` from
+  `03_text.loft` → `02_files.loft` (load-order safe — they only
+  use primitives defined in `01_code.loft`; needs an audit that
+  no `02_files.loft` declaration is shadowed).
+- Audit call sites for new `use html;` lines.
+- Future candidates as they mature: regex, JSON, CSV, base64,
+  date/time helpers — each becomes a library package the same
+  way `lib/html` did.  Schedule by maturity, not by clock.
+
+**STAYS in stdlib permanently** (covered by Phase 6.7 advisories,
+NOT by 3.6 drain):
+- Operators, base type definitions, control flow primitives.
+- Format strings (the `{x}` / `{x:j}` interpolation surface is
+  shipped language behaviour).
+- Core collection ops (`push`, `len`, hash insert/remove).
+- The `null` sentinel and `??` operator.
+- The bootstrap I/O surface needed by `01_code.loft`.
+- JSON `{x:j}` format specifier + `text as Foo` cast (these
+  ARE language behaviour, not library API — pulling JSON out
+  breaks both).
 
 ### Phase 6t — library test self-sufficiency
 
