@@ -316,13 +316,14 @@ impl Drop for Test {
             byte_code(&mut state, &mut p.data);
         }))
         .err();
-        // @PLAN53 — under LOFT_ALIGN the V2 aligned layout is in force;
-        // assert the V2 spec when one was supplied, else fall back to
-        // the V1 spec (so a test with only `.slots(...)` still checks
-        // *something* under V2 — and red-flags if it drifts).
-        let aligned = matches!(
+        // @PLAN53 — the V2 aligned layout is the production default; assert the
+        // V2 spec when one was supplied, else fall back to the V1 spec (so a
+        // test with only `.slots(...)` still checks *something* — and red-flags
+        // if it drifts).  Mirrors `variables::aligned_stack_enabled()`:
+        // `LOFT_ALIGN=0`/`off`/`false` is the V1 escape hatch.
+        let aligned = !matches!(
             std::env::var("LOFT_ALIGN").as_deref(),
-            Ok("1" | "on" | "true")
+            Ok("0" | "off" | "false")
         );
         let active_slots = if aligned {
             self.expected_slots_v2

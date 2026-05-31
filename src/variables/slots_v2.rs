@@ -261,7 +261,20 @@ pub fn assign_slots_v2(function: &Function, local_start: u16) -> AllocatorResult
 /// `LOFT_SLOT_V2=drive:build_chunk` drives only that function onto V2 while
 /// every other function keeps V1.
 pub fn v2_mode_for(fn_name: &str) -> Option<String> {
-    let raw = std::env::var("LOFT_SLOT_V2").ok()?;
+    let raw = match std::env::var("LOFT_SLOT_V2") {
+        Ok(r) => r,
+        // @PLAN53 — default (no LOFT_SLOT_V2): drive V2 for every function
+        // whenever the aligned stack is enabled (the production default).
+        // Coupled to `aligned_stack_enabled()` so the allocator and the
+        // eval-TOS stepping move together; `LOFT_ALIGN=0` opts both back to V1.
+        Err(_) => {
+            return if super::aligned_stack_enabled() {
+                Some("drive".to_string())
+            } else {
+                None
+            };
+        }
+    };
     let (mode, filter) = match raw.split_once(':') {
         Some((m, f)) => (m, Some(f)),
         None => (raw.as_str(), None),

@@ -1539,9 +1539,14 @@ pub fn align(tp: &Type) -> u8 {
 /// `stack_pos` advances.
 #[must_use]
 pub fn aligned_stack_enabled() -> bool {
-    matches!(
+    // @PLAN53 — the aligned eval stack is the production default.  Only an
+    // explicit `LOFT_ALIGN=0`/`off`/`false` opts back to the legacy V1
+    // unaligned layout (the escape hatch until the V1 paths are removed in
+    // the follow-up cleanup).  Kept as the single source of truth so the
+    // eval-TOS stepping and the V2 slot allocator never desync.
+    !matches!(
         std::env::var("LOFT_ALIGN").as_deref(),
-        Ok("1" | "on" | "true")
+        Ok("0" | "off" | "false")
     )
 }
 
