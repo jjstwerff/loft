@@ -416,46 +416,43 @@ string fields.  The database is lending one escape helper, not doing the
 serialization.  (When plan-54 moves the IR into store records, *that*
 encode becomes the database path; until then it is a native-IR walk.)
 
-**Per-library JSON is a build-time side deliverable, and that buys
-first-landing speed (user nuance, 2026-05-31).**  The snapshot is not
-only a runtime cache keyed per-script — a **library emits its own
-compiled-`Data` JSON when it is packaged/built**, shipped beside its
-source.  So the **first** run of a brand-new script that `use`s
-already-built libraries is *also* fast: core ships its JSON, each
-library ships its own, and only the user's own (small) script parses
-fresh.  This kills the "first run of a new `use` combination parses
-everything" caveat — it parses only genuinely-uncompiled user code.
-mmap (plan-54) is quicker per access, but a *runtime whole-bundle* mmap
-cache is warm only on the **second** run; per-library JSON deliverables
-win on the **first**.  Both layers coexist: JSON-per-lib for
-first-landing, mmap-bundle for repeats.
+#### Per-library JSON — DEFERRED, probably not worth it (user, 2026-05-31)
 
-**Why per-library JSON composes (where per-library mmap can't):** the
-load path **replays `add_def` in order into the current `Data`**, which
-*is* a relocation.  So a library's JSON must encode cross-references
-**by name, never by absolute global `def_nr`** (those depend on
-parse-order prefix).  Given that, the rebuild remaps every reference to
-the live global index as it appends — a library JSON drops into whatever
-prefix is already loaded.  This is exactly the property plan-54's mmap
-path *lacks* (absolute offsets, fixed at snapshot time → whole-prefix
-only), and the reason per-library is a JSON-stop-gap capability, not an
-mmap one.
+A per-library build-time JSON deliverable *would* buy first-landing
+speed (the first run of a brand-new `use` combination parses only the
+user's own code, because each library ships its own compiled snapshot).
+**But it is deferred — likely dropped — because it is the brittlest
+thing in the whole plan and the case it optimizes is the least common.**
 
-**The relocation map — PER-LIBRARY JSON ONLY.**  Relocation is needed
-**only** for the independent per-library JSON deliverable, because that
-file drops into an arbitrary already-loaded prefix.  The **whole-stdlib
-/ whole-bundle** JSON snapshot does **not** relocate — like the mmap
-image, it is one complete image whose absolute `def_nr` / `known_type` /
-offsets are internally consistent and stored as-is.  So:
+Why it's brittle: a per-library file drops into an arbitrary
+already-loaded prefix, so it **cannot** store absolute `def_nr` /
+`known_type`; it must encode every cross-reference **by name** and
+re-resolve on load — re-implementing part of the parser's
+`resolve_deferred_unknowns` machinery, with a new silent-corruption
+surface if any reference kind is missed (a `def_nr` that means a
+*different* def in the new prefix).  See the per-library relocation map
+below — that map *is* the brittleness, kept only as reference if this is
+ever revisited.
 
-- whole-stdlib / whole-bundle JSON → store absolute indices verbatim (no
-  remap), same as the runnable image / mmap.
-- per-library JSON → emit cross-references **by name** and re-resolve on
-  load (the map below).
+Why the payoff is small: the **whole-bundle** cache already covers the
+common, repeated-run case; the first run of a *new* combination is rare
+and one-time; and a library author can ship a per-lib JSON that drifts
+from its source — a footgun the content-keyed whole-bundle path doesn't
+have.
 
-For the **per-library** case, these are the reference kinds the encoder
-must rewrite (audit before implementing; grep `def_nr` / `known_type`
-producers in `src/data.rs`):
+**Decision: S1–S4 build the whole-stdlib / whole-bundle image only**
+(absolute indices, verbatim, no relocation).  Per-library JSON stays
+documented as a deferred idea, not a build target.  The "first-landing"
+gap it would have closed is accepted as a known limitation of the
+stop-gap (and is moot once plan-54's bundle mmap lands).
+
+**The relocation map — DEFERRED reference for per-library JSON only.**
+Not part of the S1–S4 build (per-library JSON is deferred, above).  Kept
+only so that *if* per-library is ever revisited, the brittleness is
+already mapped.  The whole-stdlib / whole-bundle image stores absolute
+indices verbatim and needs none of this.  The reference kinds a
+per-library encoder would have to rewrite (and the reason it is brittle —
+miss one and you get silent cross-prefix corruption):
 
 | In native `Data` | Emitted in JSON as | Re-resolved on load by |
 |---|---|---|

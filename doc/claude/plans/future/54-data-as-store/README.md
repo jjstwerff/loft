@@ -53,26 +53,22 @@ arbitrary libs on demand.  Not needed — caching the whole bundle
 sidesteps it.
 
 **Interim stop-gap (precedes this plan):** @PLAN28 Step 2 ships a
-**per-library JSON snapshot** (loft's own database JSON, not serde —
-user-accepted 2026-05-31) that re-parses + rebuilds native `Data` on
+**whole-stdlib / whole-bundle JSON snapshot** (loft's own database JSON,
+not serde — user-accepted 2026-05-31) that rebuilds native `Data` on
 load.  Second-class (JSON is re-parsed, not mmap'd) but delivers the
-cold-start win without the IR rewrite.  This plan **supersedes** it for
-the stdlib/bundle path: the store struct-enum format replaces JSON and
-turns the rebuild into a zero-copy mmap.
+cold-start win without the IR rewrite.  This plan **supersedes** it: the
+store struct-enum format replaces JSON and turns the rebuild into a
+zero-copy mmap of the same whole bundle.
 
-**One thing the JSON stop-gap does that this plan's mmap does NOT:
-per-library first-landing.**  Because JSON loads by *replaying*
-`add_def` into the current `Data` (a relocation), a library can ship its
-own JSON snapshot as a build-time side deliverable encoded with
-name/source-relative refs, and it drops into *any* prefix — so even the
-**first** run of a new script using already-built libraries is fast.
-This plan's mmap is whole-prefix and position-fixed (absolute offsets at
-snapshot time), so its runtime bundle cache is warm only on the
-**second** run.  Consequence: the relocatable per-library JSON
-deliverable may **coexist with / outlive** the mmap path as the
-first-landing + cross-arch fallback, rather than being fully replaced.
-@PLAN28 builds the stop-gap format-agnostic so this plan swaps the
-*bundle* encoder underneath without touching startup wiring.
+**Per-library JSON was considered and deferred** (likely dropped — user,
+2026-05-31): a per-library deliverable would close the first-landing gap
+for a brand-new `use` combination, but it needs name-based relocation
+(it drops into an arbitrary prefix), which is the brittlest part of the
+stop-gap and optimizes the least-common case.  So neither @PLAN28 nor
+this plan does per-library: both operate on the **whole bundle as one
+image** with absolute, internally-consistent indices — no relocation
+anywhere.  @PLAN28 builds the stop-gap format-agnostic so this plan
+swaps the bundle encoder underneath without touching startup wiring.
 
 ## Why the global-index model is fine for this scope
 
