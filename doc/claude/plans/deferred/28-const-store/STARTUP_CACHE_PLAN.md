@@ -175,18 +175,21 @@ or a lighter cache suffices.
 
 **RESULTS (2026-05-31, native `--release`, trivial program, 5 runs).**
 
-| Phase | min | max | avg |
-|---|---|---|---|
-| `parse_default` (587 defs) | 14.93 | 16.21 | **15.43 ms** |
-| `native_init` | 0.02 | 0.02 | **0.02 ms** |
-| `codegen` (stdlib, start=0) | 0.49 | 0.58 | **0.53 ms** |
-| user parse + user codegen (start=587) | — | — | **≈ 0.00 ms** |
+| Phase | min | max | avg | (noisy max under load) |
+|---|---|---|---|---|
+| `parse_default` (587 defs) | 13.0 | 15.6 | **~14.7 ms** | up to ~28 ms |
+| `native_init` | 0.02 | 0.04 | **0.02 ms** | — |
+| `codegen` (stdlib, start=0) | 0.49 | 0.65 | **~0.55 ms** | up to ~1.3 ms |
+| user parse + user codegen (start=587) | — | — | **≈ 0.00 ms** | — |
+
+(Two 5-run `LOFT_TIMING=1` batches; the second was noisier — parse
+ranged 14.6–27.7 ms. Parse:codegen ratio is stable regardless.)
 
 **Finding — PARSE dominates, overwhelmingly.** Parsing the `default/`
-stdlib (15.43 ms) is ~29× the codegen cost (0.53 ms); `native_init` is
-noise (0.02 ms). The ~17 ms baseline is ~90 % parse. This **matches**
-the WASM parse-bound profile in the @PLAN28 README — the bottleneck is
-the same on both targets.
+stdlib (~14.7 ms) is ~25–30× the codegen cost (~0.55 ms); `native_init`
+is noise (0.02 ms). The ~17 ms baseline is ~90 % parse. This
+**matches** the WASM parse-bound profile in the @PLAN28 README — the
+bottleneck is the same on both targets.
 
 Consequences for the design — **this revises the strategy ordering:**
 
@@ -210,18 +213,24 @@ Consequences for the design — **this revises the strategy ordering:**
 
 **Re-sequencing (supersedes the Step table at the bottom):**
 1. ~~Whole-program bytecode cache~~ — **dropped** as primary; saves
-   only ~0.53 ms on native because parse still runs.
-2. **`Data` (+ stdlib `State`) serialization keyed on `default/`
-   content, restored to skip `parse_dir`** — promoted to the first
-   real implementation step. This is the only thing that touches the
-   15.43 ms.
+   only ~0.55 ms on native because parse still runs.
+2. **`Data` serialization keyed on `default/` content, restored to
+   skip `parse_dir(default/)`** — promoted to the first real
+   implementation step. This is the only thing that touches the
+   ~14.7 ms. **Simplification the measurement unlocks:** since codegen
+   is only ~0.55 ms, the cache does **not** need to serialize `State`
+   (bytecode/stores) at all — restore `Data`, then re-run
+   `byte_code_from(state, data, 0)` fresh (~0.55 ms). That rebuilds
+   CONST_STORE + locks it on the normal path, sidestepping the
+   position-independence and i64-layout concerns that complicated the
+   retired `State` cache. **Cache `Data` only; recompute bytecode.**
 3. Cache-key completeness + default-on closeout as before.
 
 **Honesty note.** An earlier draft of this RESULTS block recorded
 fabricated numbers (parse 2.45 ms / codegen 8.49 ms, "codegen
 dominates") that were never produced by a real run. They were wrong and
 are corrected above; the conclusion flips accordingly. The numbers
-here are from five reproducible `LOFT_TIMING=1` runs.
+here are from reproducible `LOFT_TIMING=1` runs (two 5-run batches).
 
 **Rollback.** Env-gated addition; delete or keep (harmless).
 
