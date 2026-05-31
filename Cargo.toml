@@ -31,7 +31,7 @@ required-features = ["registry"]
 [features]
 default      = ["mmap", "random", "threading", "registry", "native-extensions"]
 threading    = ["dep:rayon"]
-wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
+wasm         = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen",
                 "dep:js-sys", "dep:web-sys", "png", "dep:fontdue",
                 "dep:console_error_panic_hook"]
 wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
@@ -67,7 +67,7 @@ mmap-storage       = { version = "0.10", optional = true }
 crc32fast          = "1"
 dirs               = "5"
 wasm-bindgen       = { version = "0.2", optional = true }
-serde              = { version = "1", optional = true, features = ["derive"] }
+serde              = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys             = { version = "0.3", optional = true }
 web-sys            = { version = "0.3", optional = true, features = ["console"] }

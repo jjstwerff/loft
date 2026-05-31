@@ -20,6 +20,80 @@
 
 use sha2::{Digest, Sha256};
 
+/// Serde helper for `&'static str` fields (e.g. `Block.name`,
+/// `Definition.synthetic`).  Serialises as a plain string; on
+/// deserialise it `Box::leak`s the owned string to recover a
+/// `&'static str`.
+///
+/// The leak is intentional and bounded: it happens once per cached
+/// stdlib load, over the fixed set of compiler-internal block-kind
+/// labels and synthesis tags (a few hundred short strings at most),
+/// and is reclaimed at process exit.  For a startup-cache load this is
+/// a negligible, one-shot cost — the standard pattern for restoring
+/// interned `&'static str` from a serialised form.
+pub mod static_str {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(s: &&'static str, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<&'static str, D::Error> {
+        let owned = String::deserialize(de)?;
+        Ok(Box::leak(owned.into_boxed_str()))
+    }
+}
+
+/// Serde helper for `Option<&'static str>` fields.
+pub mod opt_static_str {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(s: &Option<&'static str>, ser: S) -> Result<S::Ok, S::Error> {
+        match s {
+            Some(v) => ser.serialize_some(v),
+            None => ser.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        de: D,
+    ) -> Result<Option<&'static str>, D::Error> {
+        let owned = Option::<String>::deserialize(de)?;
+        Ok(owned.map(|s| &*Box::leak(s.into_boxed_str())))
+    }
+}
+
+/// Serde helper for `HashMap<K, &'static str>` value fields
+/// (e.g. `Function.scope_origins`).
+pub mod map_static_str {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::HashMap;
+    use std::hash::Hash;
+
+    pub fn serialize<S, K>(m: &HashMap<K, &'static str>, ser: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        K: Serialize + Eq + Hash,
+    {
+        // Serialise as a Vec of (K, String) pairs — order-independent
+        // round-trip (the map is rebuilt on load).
+        let pairs: Vec<(&K, &str)> = m.iter().map(|(k, v)| (k, *v)).collect();
+        pairs.serialize(ser)
+    }
+
+    pub fn deserialize<'de, D, K>(de: D) -> Result<HashMap<K, &'static str>, D::Error>
+    where
+        D: Deserializer<'de>,
+        K: Deserialize<'de> + Eq + Hash,
+    {
+        let pairs: Vec<(K, String)> = Vec::deserialize(de)?;
+        Ok(pairs
+            .into_iter()
+            .map(|(k, v)| (k, &*Box::leak(v.into_boxed_str())))
+            .collect())
+    }
+}
+
 /// Format-version byte.  Bump whenever the on-disk snapshot layout
 /// changes so old caches are rejected rather than misread.
 const CACHE_FORMAT_VERSION: u8 = 1;
