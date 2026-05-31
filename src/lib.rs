@@ -85,12 +85,11 @@ pub use extensions::native_call;
 #[cfg(feature = "registry")]
 pub mod install;
 pub mod introspect;
+pub mod libscan;
 pub mod lockfile;
 pub mod log_config;
 pub mod logger;
-pub mod libscan;
 pub mod manifest;
-pub mod triggers;
 #[cfg(feature = "registry")]
 pub mod package;
 pub mod registry;
@@ -104,6 +103,7 @@ pub mod registry_signing;
 pub mod runtime_error;
 mod stack;
 pub mod timeout;
+pub mod triggers;
 
 pub mod documentation;
 pub mod formatter;

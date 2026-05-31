@@ -1603,6 +1603,38 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
 /// Auto-PR open via `gh pr create` against `loft-lang/registry`
 /// is a follow-up; today the author copies the emitted block
 /// into a manual PR.
+/// Author-side pre-check for `loft publish`: warn when any trigger the package
+/// is about to claim is already owned by a DIFFERENT package in the locally
+/// cached registry catalog.  The registry CI (`validate.py` gate 4) enforces the
+/// same uniqueness as a hard error; this is the early, offline heads-up so the
+/// author fixes the clash before opening the PR.  Best-effort: silent when no
+/// catalog is cached (nothing to check against) or the index won't parse.
+#[cfg(feature = "registry")]
+fn warn_trigger_collisions(pkg_name: &str, triggers: &[String]) {
+    if triggers.is_empty() {
+        return;
+    }
+    let (idx_path, _, _) = loft::registry_index::index_paths();
+    let Ok(content) = std::fs::read_to_string(&idx_path) else {
+        return;
+    };
+    let Ok(index) = loft::registry_index::parse_index(&content) else {
+        return;
+    };
+    let owners = loft::registry_index::trigger_owners(&index);
+    for trig in triggers {
+        if let Some(owner) = owners.get(trig)
+            && owner != pkg_name
+        {
+            eprintln!(
+                "warning: trigger `{trig}` is already claimed by `{owner}` in the registry; the \
+                 submission PR will be REJECTED — a method-on-type trigger must be unique. Rename \
+                 the method in `{pkg_name}` or drop its `[triggers]` opt-in."
+            );
+        }
+    }
+}
+
 #[cfg(feature = "registry")]
 fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
     use loft::package;
@@ -1706,12 +1738,14 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
             .clone()
             .unwrap_or_else(|| format!("src/{}.loft", pkg.name));
         let src = std::fs::read_to_string(pkg_path.join(&entry)).unwrap_or_default();
-        let methods: Vec<String> = loft::triggers::derive_triggers(&src)
+        let triggers: Vec<String> = loft::triggers::derive_triggers(&src)
             .methods
             .iter()
-            .map(|m| format!("\"{}:{}\"", m.name, m.receiver))
+            .map(|m| format!("{}:{}", m.name, m.receiver))
             .collect();
-        println!("  \"triggers\": [{}],", methods.join(", "));
+        warn_trigger_collisions(&pkg.name, &triggers);
+        let quoted: Vec<String> = triggers.iter().map(|t| format!("\"{t}\"")).collect();
+        println!("  \"triggers\": [{}],", quoted.join(", "));
     }
     println!("  \"published\": \"{published}\"");
     println!("}}");

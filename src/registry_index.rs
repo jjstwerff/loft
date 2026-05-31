@@ -31,7 +31,7 @@
 
 #![cfg(feature = "registry")]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::json::{Parsed, parse as parse_json};
@@ -495,6 +495,80 @@ pub fn extract_dir(pkg: &str, version: &str) -> PathBuf {
     cache_dir().join(format!("{pkg}-{version}"))
 }
 
+/// Build the Tier-1 lazy-load `method -> package` map from a parsed catalog.
+///
+/// Each version's `triggers` are `"name:receiver"` strings; the map keys on the
+/// method `name` (the receiver is irrelevant to *which package* to load).  This
+/// is the catalog-wide fallback consulted when a consumer calls `obj.method()`
+/// against a package it has NOT declared as a dependency — the resolver looks
+/// the method up here, gets the package name, and hands it to the normal
+/// `lib_path` resolution (lockfile → installed → auto-install).
+///
+/// **Ambiguity policy:** a method provided by exactly one package maps to it; a
+/// method provided by two or more *distinct* packages is OMITTED — auto-loading
+/// would have to guess, so the consumer must disambiguate with an explicit
+/// `use`.  Versions of the SAME package collapse to one provider, so a
+/// multi-version package is never self-ambiguous.  This omit is a safety net:
+/// the registry CI rejects a submission whose full `method:receiver` trigger
+/// collides with another package (`validate.py` gate 4, mirrored locally by the
+/// [`trigger_owners`] publish pre-check), so a true `text.matches` vs
+/// `text.matches` clash never reaches the catalog.  The net still fires for the
+/// rarer name-only collision (`matches:text` vs `matches:Foo`), which the
+/// receiver-blind pre-scan cannot tell apart.
+#[must_use]
+pub fn trigger_providers(index: &RegistryIndex) -> BTreeMap<String, String> {
+    let mut providers: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (pname, pkg) in &index.packages {
+        for ver in pkg.versions.values() {
+            for trig in &ver.triggers {
+                let method = trig.split(':').next().unwrap_or(trig);
+                if method.is_empty() {
+                    continue;
+                }
+                providers
+                    .entry(method.to_string())
+                    .or_default()
+                    .insert(pname.clone());
+            }
+        }
+    }
+    providers
+        .into_iter()
+        .filter_map(|(method, pkgs)| {
+            // Unique provider → map it; ambiguous → omit (require explicit `use`).
+            (pkgs.len() == 1)
+                .then(|| pkgs.into_iter().next().map(|p| (method, p)))
+                .flatten()
+        })
+        .collect()
+}
+
+/// Map every `method:receiver` trigger in the catalog to its owning package.
+///
+/// A `text.matches` trigger may be owned by exactly one package across the whole
+/// registry — a consumer auto-loads on the bare `.matches()` call and the
+/// language can hold only one `text.matches` method.  That uniqueness is a hard
+/// gate at submission (`validate.py` gate 4); this map is the *author-side*
+/// pre-check: `loft publish` looks each trigger it is about to claim up here and
+/// warns when another package already owns it, so the author learns before the
+/// PR is opened rather than after CI rejects it.  The registry guarantees one
+/// owner per trigger; should a corrupt catalog ever carry two, the
+/// alphabetically-first package wins (deterministic `BTreeMap` order).
+#[must_use]
+pub fn trigger_owners(index: &RegistryIndex) -> BTreeMap<String, String> {
+    let mut owner: BTreeMap<String, String> = BTreeMap::new();
+    for (pname, pkg) in &index.packages {
+        for ver in pkg.versions.values() {
+            for trig in &ver.triggers {
+                if !trig.is_empty() {
+                    owner.entry(trig.clone()).or_insert_with(|| pname.clone());
+                }
+            }
+        }
+    }
+    owner
+}
+
 // ── HTTPS fetcher ─────────────────────────────────────────────────
 
 /// Result of fetching the registry index.
@@ -685,6 +759,84 @@ mod tests {
             v.triggers,
             vec!["matches:text".to_string(), "regex_find:text".to_string()]
         );
+    }
+
+    #[test]
+    fn trigger_providers_unique_maps_ambiguous_omits() {
+        // `matches` is on text in two DISTINCT packages → receiver-blind
+        // pre-scan can't choose → omitted.  `regex_find` is unique → mapped.
+        // `slugify` lives in two VERSIONS of one package → collapses, mapped.
+        let doc = r#"{
+            "schema_version": 1,
+            "updated": "2026-05-31T00:00:00Z",
+            "packages": {
+                "regex": {
+                    "categories": [], "yanked": [],
+                    "versions": {
+                        "0.1.0": {
+                            "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+                            "triggers": ["matches:text", "regex_find:text"],
+                            "published": "2026-05-31T00:00:00Z"
+                        }
+                    }
+                },
+                "glob": {
+                    "categories": [], "yanked": [],
+                    "versions": {
+                        "0.2.0": {
+                            "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+                            "triggers": ["matches:text"],
+                            "published": "2026-05-31T00:00:00Z"
+                        }
+                    }
+                },
+                "slug": {
+                    "categories": [], "yanked": [],
+                    "versions": {
+                        "0.1.0": {
+                            "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+                            "triggers": ["slugify:text"],
+                            "published": "2026-05-31T00:00:00Z"
+                        },
+                        "0.2.0": {
+                            "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+                            "triggers": ["slugify:text"],
+                            "published": "2026-05-31T00:00:00Z"
+                        }
+                    }
+                }
+            }
+        }"#;
+        let idx = parse_index(doc).expect("parse");
+        let map = trigger_providers(&idx);
+        assert_eq!(map.get("regex_find"), Some(&"regex".to_string()));
+        assert_eq!(map.get("slugify"), Some(&"slug".to_string()));
+        assert_eq!(map.get("matches"), None, "ambiguous method must be omitted");
+    }
+
+    #[test]
+    fn trigger_owners_maps_each_trigger_to_its_package() {
+        // Full `method:receiver` -> package map, used by the publish pre-check.
+        // The same package across two versions collapses to one owner.
+        let doc = r#"{
+            "schema_version": 1, "updated": "x",
+            "packages": {
+                "regex": { "categories": [], "yanked": [], "versions": {
+                    "0.1.0": { "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+                        "triggers": ["matches:text"], "published": "x" },
+                    "0.2.0": { "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+                        "triggers": ["matches:text", "regex_find:text"], "published": "x" } } },
+                "slug": { "categories": [], "yanked": [], "versions": {
+                    "0.1.0": { "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+                        "triggers": ["slugify:text"], "published": "x" } } }
+            }
+        }"#;
+        let idx = parse_index(doc).expect("parse");
+        let owners = trigger_owners(&idx);
+        assert_eq!(owners.get("matches:text"), Some(&"regex".to_string()));
+        assert_eq!(owners.get("regex_find:text"), Some(&"regex".to_string()));
+        assert_eq!(owners.get("slugify:text"), Some(&"slug".to_string()));
+        assert_eq!(owners.get("nope:text"), None);
     }
 
     #[test]

@@ -97,6 +97,13 @@ pub struct Parser {
     /// derived once per top-level parse from the current package's (and its
     /// trigger-enabled dependencies') declared triggers.  `None` until built.
     auto_use_trigger_map: Option<std::collections::HashMap<String, String>>,
+    /// Tier-1 lazy *catalog* fallback: `method name -> providing package`,
+    /// derived once from the cached registry `index.json` (`triggers` field).
+    /// Consulted only for methods the local `auto_use_trigger_map` did not
+    /// resolve — i.e. a package the user has NOT declared as a dependency but
+    /// that the registry says provides the method.  `None` until first miss;
+    /// cached empty when the catalog is absent or the registry feature is off.
+    auto_use_catalog_map: Option<std::collections::HashMap<String, String>>,
     /// Is this the first pass on parsing:
     /// - Do not assume that all struct / enum types are already parsed.
     /// - Define variables, try to determine their type (can become clear from later code).
@@ -381,6 +388,7 @@ impl Parser {
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
             auto_use_trigger_map: None,
+            auto_use_catalog_map: None,
             pending_imports: Vec::new(),
             applied_imports: Vec::new(),
             deferred_unknown: Vec::new(),
@@ -4041,12 +4049,23 @@ impl Parser {
             // deps), derived once and cached.
             if !calls.is_empty() {
                 let map = self.trigger_map(&auto_use_scan_file);
+                // Catalog fallback is built lazily — only read index.json once a
+                // method misses the local (current package + deps) trigger map.
+                let mut catalog: Option<std::collections::HashMap<String, String>> = None;
                 for m in calls {
-                    if let Some(pkg) = map.get(&m)
-                        && !self.data.use_exists(pkg)
-                        && !to_load.contains(pkg)
+                    let pkg = if let Some(p) = map.get(&m) {
+                        Some(p.clone())
+                    } else {
+                        if catalog.is_none() {
+                            catalog = Some(self.catalog_trigger_map());
+                        }
+                        catalog.as_ref().and_then(|c| c.get(&m).cloned())
+                    };
+                    if let Some(pkg) = pkg
+                        && !self.data.use_exists(&pkg)
+                        && !to_load.contains(&pkg)
                     {
-                        to_load.push(pkg.clone());
+                        to_load.push(pkg);
                     }
                 }
             }
@@ -4233,8 +4252,9 @@ impl Parser {
                 if let Some(man) = crate::manifest::read_manifest(&toml.to_string_lossy()) {
                     for (dep, _ver) in &man.dependencies {
                         if let Some(entry) = self.lib_path_manifest(&d.to_string_lossy(), dep)
-                            && let Some(root) =
-                                std::path::Path::new(&entry).parent().and_then(|p| p.parent())
+                            && let Some(root) = std::path::Path::new(&entry)
+                                .parent()
+                                .and_then(|p| p.parent())
                         {
                             Self::add_pkg_triggers(&root.join("loft.toml"), root, &mut map);
                         }
@@ -4267,6 +4287,41 @@ impl Parser {
         for mt in crate::triggers::derive_triggers(&src).methods {
             map.entry(mt.name).or_insert_with(|| name.clone());
         }
+    }
+
+    /// Tier-1 lazy *catalog* fallback (`method -> package`), read once from the
+    /// cached registry `index.json`.  This is what makes `line.matches(p)` work
+    /// against a package the user has NOT declared as a dependency: the local
+    /// `trigger_map` misses, so we look the method up across the whole catalog,
+    /// get the package name, and hand it to `lib_path` — which resolves it via
+    /// the same lockfile → installed → auto-install chain an explicit `use`
+    /// would take.  Ambiguity is dropped by `trigger_providers` (registry
+    /// submission already rejects true collisions).  Cached (empty on absent
+    /// catalog) so the file read happens at most once per parse.
+    #[cfg(feature = "registry")]
+    fn catalog_trigger_map(&mut self) -> std::collections::HashMap<String, String> {
+        if let Some(m) = &self.auto_use_catalog_map {
+            return m.clone();
+        }
+        let mut map = std::collections::HashMap::new();
+        let (idx_path, _, _) = crate::registry_index::index_paths();
+        if let Ok(content) = std::fs::read_to_string(&idx_path)
+            && let Ok(index) = crate::registry_index::parse_index(&content)
+        {
+            map = crate::registry_index::trigger_providers(&index)
+                .into_iter()
+                .collect();
+        }
+        self.auto_use_catalog_map = Some(map.clone());
+        map
+    }
+
+    /// No-op when the registry feature is off — there is no cached catalog to
+    /// consult, so Tier-1 resolves only via declared dependencies.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn catalog_trigger_map(&mut self) -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::new()
     }
 
     fn lib_path(&mut self, id: &str) -> String {
