@@ -203,8 +203,19 @@ without touching others).  A per-subsystem **equivalence assertion**
 
 **Plan shape:** the seam is one small plan; each subsystem swap is its
 own follow-up plan (or `## Open work` row if it stays small).  None of
-them is the whole arc — that is the point.  They are sequenced here but
-opened one at a time, capped at the usual ≤3 active.
+them is the whole arc — that is the point.
+
+**Pacing discipline (the real constraint — user, 2026-05-31):** the plan
+document is long-lived and that is fine; what matters is that **every
+pass finishes fully — lands as a complete, reviewed, merged PR with CI
+green — before the next pass begins.**  This is stronger than "one plan
+at a time": no pass may start while a previous pass is half-done on a
+branch.  One pass = one PR = `main` is releasable again.  A "pass" is a
+single seam-conversion-of-one-subsystem, or a single subsystem's
+representation swap — sized so it completes and merges as a unit.  The
+dual-backing + equivalence assertion exist precisely so each such PR is
+independently mergeable without the rest of the arc.  This same
+finish-before-continue rule governs @PLAN28's S1–S5 rungs.
 
 ## Open design questions
 
