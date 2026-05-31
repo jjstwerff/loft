@@ -184,6 +184,9 @@ fn print_help() {
     println!("  publish [pkg]                 author helper: repackage locally + verify the");
     println!("                                GitHub release exists + emit the index.json");
     println!("                                entry to paste into a registry PR");
+    println!("  new <name> [opts]             scaffold a fresh library: loft.toml + src/ +");
+    println!("                                tests/ + README; --native adds native/ skeleton;");
+    println!("                                --chunk adds .github/workflows/library-ci.yml");
     println!("  registry <subcommand>         manage the local package registry");
     println!(
         "                                sync             — pull latest registry from source URL"
@@ -1258,6 +1261,190 @@ fn chrono_iso8601_utc() -> String {
         minute = minute,
         second = second
     )
+}
+
+/// @PLAN12 — `loft new <name>` scaffolds a fresh loft library
+/// package, ready for development + `loft publish`.
+///
+/// Layout produced:
+///
+/// ```
+/// <name>/
+/// ├── loft.toml           — package manifest with [package] + [library]
+/// ├── README.md           — placeholder header pointing at the registry
+/// ├── src/<name>.loft     — empty entry file with a `pub fn hello()` stub
+/// └── tests/
+///     └── 01-smoke.loft   — single `test_smoke` exercising the stub
+/// ```
+///
+/// With `--native`: also creates `native/Cargo.toml` + `native/src/lib.rs`
+/// + `native/build.rs` for the cdylib bindings.
+///
+/// With `--chunk`: also creates `.github/workflows/library-ci.yml`
+/// using the canonical template from
+/// `doc/claude/lib_plans/12-library-extraction/library-ci.yml.example`
+/// — for when the dir is becoming a fresh chunk-repo's first
+/// library.
+///
+/// Refuses if `<name>/` already exists.
+#[cfg(feature = "registry")]
+fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
+    use std::io::Write as _;
+
+    // Sanity-check name (lowercase + alphanumeric + underscore;
+    // matches loft's identifier rules).
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        eprintln!(
+            "loft new: library name must be lowercase ascii + digits + underscore (got `{name}`)"
+        );
+        return 1;
+    }
+
+    let pkg_dir = std::path::PathBuf::from(name);
+    if pkg_dir.exists() {
+        eprintln!("loft new: `{name}/` already exists; refusing to overwrite");
+        return 1;
+    }
+
+    // Helper closures.
+    let write_file = |rel: &str, content: &str| -> std::io::Result<()> {
+        let path = pkg_dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut f = std::fs::File::create(&path)?;
+        f.write_all(content.as_bytes())?;
+        Ok(())
+    };
+
+    // loft.toml — includes [native] declaration when --native.
+    let loft_toml = if native {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\n\
+             [library]\nentry = \"src/{name}.loft\"\nnative = \"loft_{name}\"\n\n\
+             [native]\ncrate = \"loft-{name}\"\n\n[dependencies]\n"
+        )
+    } else {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\n\
+             [library]\nentry = \"src/{name}.loft\"\n\n[dependencies]\n"
+        )
+    };
+
+    // src/<name>.loft — placeholder stub.
+    let src_loft = format!(
+        "// Copyright (c) 2026\n// SPDX-License-Identifier: LGPL-3.0-or-later\n\n\
+         // {name} — replace with a one-line description of the library.\n\n\
+         // Returns the greeting.  Replace with the library's actual API.\n\
+         pub fn hello() -> text {{\n  \"hello from {name}\"\n}}\n"
+    );
+
+    // tests/01-smoke.loft — minimal regression guard.
+    let test_loft = format!(
+        "// Smoke test for {name}.\n\
+         use {name};\n\n\
+         fn test_hello() {{\n  \
+           greeting = {name}::hello();\n  \
+           assert(greeting == \"hello from {name}\", \"hello() returned {{greeting ?? \\\"null\\\"}}\");\n\
+         }}\n"
+    );
+
+    let readme = format!(
+        "# {name}\n\n\
+         <One-line description of the library.>\n\n\
+         ## Install\n\n\
+         ```\n\
+         loft install {name}\n\
+         ```\n\n\
+         ## Usage\n\n\
+         ```loft\n\
+         use {name};\n\n\
+         fn main() {{\n  \
+           println({name}::hello());\n\
+         }}\n\
+         ```\n"
+    );
+
+    if let Err(e) = (|| -> std::io::Result<()> {
+        write_file("loft.toml", &loft_toml)?;
+        write_file(&format!("src/{name}.loft"), &src_loft)?;
+        write_file("tests/01-smoke.loft", &test_loft)?;
+        write_file("README.md", &readme)?;
+        if native {
+            let cargo_toml = format!(
+                "[package]\nname = \"loft-{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"LGPL-3.0-or-later\"\n\n\
+                 [lib]\ncrate-type = [\"cdylib\", \"rlib\"]\n\n\
+                 [dependencies]\nloft-ffi = \"0.1\"\n\n\
+                 [build-dependencies]\nloft-ffi-build = \"0.2\"\n"
+            );
+            let build_rs = "fn main() {\n    loft_ffi_build::generate_register_from_loft(\"../src\");\n}\n";
+            let lib_rs = "// Native bindings for the loft library.\n\
+                 // Add `#[unsafe(no_mangle)] pub extern \"C\" fn n_<name>(...)` here for each\n\
+                 // function whose loft signature is annotated `#native`.\n\n\
+                 include!(concat!(env!(\"OUT_DIR\"), \"/loft_register_gen.rs\"));\n";
+            write_file("native/Cargo.toml", &cargo_toml)?;
+            write_file("native/build.rs", build_rs)?;
+            write_file("native/src/lib.rs", lib_rs)?;
+        }
+        if chunk {
+            // Canonical CI YAML — single-package matrix; user edits when adding more.
+            let yml = format!(
+                "name: library-ci\n\n\
+                 on:\n  push:\n    branches: [main]\n  pull_request:\n\n\
+                 jobs:\n  test:\n    runs-on: ubuntu-latest\n    \
+                 strategy:\n      fail-fast: false\n      matrix:\n        package: [{name}]\n    \
+                 steps:\n      - uses: actions/checkout@v4\n\n      \
+                 - name: Install mold (loft's pinned linker)\n        \
+                 run: sudo apt-get update -y && sudo apt-get install -y mold\n\n      \
+                 - name: Clone loft source\n        uses: actions/checkout@v4\n        \
+                 with:\n          repository: jjstwerff/loft\n          path: loft-src\n\n      \
+                 - name: Cache cargo registry + loft build\n        uses: actions/cache@v4\n        \
+                 with:\n          path: |\n            ~/.cargo/registry\n            ~/.cargo/git\n            loft-src/target\n          \
+                 key: loft-${{{{ hashFiles('loft-src/Cargo.lock') }}}}\n\n      \
+                 - name: Build loft\n        working-directory: loft-src\n        \
+                 run: |\n          cargo build --release --lib --bin loft\n          \
+                 echo \"$PWD/target/release\" >> $GITHUB_PATH\n\n      \
+                 - name: Interpreter — loft test\n        working-directory: ${{{{ matrix.package }}}}\n        \
+                 env:\n          LOFT_DENY_WARNINGS: ${{{{ hashFiles(format('{{0}}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}}}\n        \
+                 run: loft --interpret --tests tests\n\n      \
+                 - name: Native — loft --native test\n        working-directory: ${{{{ matrix.package }}}}\n        \
+                 env:\n          LOFT_DENY_WARNINGS: ${{{{ hashFiles(format('{{0}}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}}}\n        \
+                 run: loft --native --tests tests\n"
+            );
+            write_file(".github/workflows/library-ci.yml", &yml)?;
+        }
+        Ok(())
+    })() {
+        eprintln!("loft new: failed to write scaffolding: {e}");
+        // Best-effort cleanup
+        let _ = std::fs::remove_dir_all(&pkg_dir);
+        return 1;
+    }
+
+    println!("Created library `{name}/`:");
+    println!("  loft.toml");
+    println!("  src/{name}.loft");
+    println!("  tests/01-smoke.loft");
+    println!("  README.md");
+    if native {
+        println!("  native/Cargo.toml");
+        println!("  native/build.rs");
+        println!("  native/src/lib.rs");
+    }
+    if chunk {
+        println!("  .github/workflows/library-ci.yml");
+    }
+    println!();
+    println!("Next steps:");
+    println!("  cd {name}");
+    println!("  loft test           # exercises the smoke test");
+    println!("  $EDITOR src/{name}.loft   # add your library's API");
+    println!("  loft publish        # when ready to ship (after tag + GH release)");
+    0
 }
 
 /// @PLAN12 Phase 6.16 — `loft publish` author helper.
@@ -3209,6 +3396,36 @@ fn main() {
                 eprintln!("loft update: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
+        } else if a == "new" {
+            // @PLAN12 — `loft new <name>` scaffolds a fresh library
+            // package: loft.toml + src/<name>.loft stub + tests/ +
+            // canonical library-ci.yml (when --chunk is set).
+            let mut native = false;
+            let mut chunk = false;
+            let mut name: Option<String> = None;
+            while i < argv.len() {
+                let a2 = argv[i].as_str();
+                if a2 == "--native" {
+                    native = true;
+                    i += 1;
+                } else if a2 == "--chunk" {
+                    chunk = true;
+                    i += 1;
+                } else if !a2.starts_with('-') && name.is_none() {
+                    name = Some(a2.to_string());
+                    i += 1;
+                } else {
+                    eprintln!("loft new: unknown argument `{a2}`");
+                    std::process::exit(1);
+                }
+            }
+            let Some(name) = name else {
+                eprintln!("loft new: library name required");
+                eprintln!("  Usage: loft new <name> [--native] [--chunk]");
+                std::process::exit(1);
+            };
+            let code = scaffold_library(&name, native, chunk);
+            std::process::exit(code);
         } else if a == "publish" {
             // @PLAN12 Phase 6.16 — author-side publish helper.
             // Repackages locally (deterministic), verifies the

@@ -147,6 +147,54 @@ Four chunks + a default-policy revision:
   Air-gap deployment loop verified end-to-end with an
   isolated `LOFT_HOME` simulating the air-gap target.
 
+## 2026-05-31 — `loft new <name>` scaffolder
+
+Author scaffolding companion to `loft publish`.  Creates a
+fresh loft library package, ready for development +
+`loft publish`.
+
+src/main.rs:
+- New `new` subcommand + help text + `scaffold_library`
+  implementation.
+- Validates the name (lowercase ASCII + digits + underscore;
+  matches loft's identifier rules).  Refuses if `<name>/`
+  already exists.
+- Always writes:
+  - loft.toml (package + library + empty dependencies)
+  - src/<name>.loft (placeholder `pub fn hello() -> text`)
+  - tests/01-smoke.loft (single test_hello regression guard)
+  - README.md (install + usage snippets)
+- `--native` flag also writes:
+  - native/Cargo.toml (cdylib + rlib; registry-version
+    loft-ffi + loft-ffi-build deps)
+  - native/build.rs (`loft_ffi_build::generate_register_from_loft`)
+  - native/src/lib.rs (include the generated register file)
+- `--chunk` flag writes `.github/workflows/library-ci.yml` (the
+  canonical template with the new library as the only matrix
+  entry).  For first-library-in-a-fresh-chunk-repo cases.
+- Prints a "Next steps" block after creation.
+
+Smoke-tested:
+- Pure-loft scaffold `loft new foo_lib` → 01-smoke test passes
+  immediately (no edits needed).
+- `--native` scaffold writes the native crate skeleton.
+- `--chunk` scaffold writes the CI YAML.
+- Name with mixed case (`FooLib`) refused with clear error.
+- Collision (`loft new foo_lib` after dir exists) refused.
+
+Together with `loft publish`, gives the library author this
+loop:
+
+  $ loft new my_lib              # scaffold
+  $ cd my_lib
+  # ... edit src/my_lib.loft ... add real API
+  $ loft test                    # exercise the tests
+  $ git init && gh repo create   # publish source
+  $ git tag my_lib-v0.1.0 && git push --tags
+  $ loft package && gh release create my_lib-v0.1.0 my_lib-0.1.0.tar.gz
+  $ loft publish                 # emit registry index entry
+  # paste into loft-lang/registry PR
+
 ## 2026-05-31 — Phase 6.16 — `loft publish` author helper
 
 src/main.rs:
