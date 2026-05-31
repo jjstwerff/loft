@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2f — MINIMAL REPRODUCER (predicted, now real).
+//
+// `#remove` during keyed/vector iteration.  The `remove()` / iterator-step path
+// (`src/state/io.rs` `remove`, and the `keys.rs` DbRef helper) accesses the
+// iterator-state block at deltas that were hand-tuned for the V1 byte-packed
+// stack and do NOT survive the V2 stepping — so removing the current element
+// while iterating panics at `src/keys.rs:251` under
+// `LOFT_ALIGN=1 LOFT_SLOT_V2=drive`.
+//
+// 2f was flagged as a known-open switch-blocker in cluster-2-fix-design.md
+// (no test exercised `#remove` when the cluster-2 sweep ran); the V2 full-suite
+// validation surfaced it via `tests/slots.rs::vector_iteration_index_inside_vec_slot`.
+//
+// Status aligned: CURRENTLY PANIC (keys.rs:251) ; AFTER 2f FIX -> PASS.
+// Status flag-OFF (production / V1): PASS.
+
+fn main() {
+  v = [for i in 0..10 { i }];
+  for x in v {
+    x#remove;
+  }
+  assert(len(v) == 0, "2f-01: len {len(v)}, want 0 after remove-all");
+  println("2f-01 PASSED");
+}

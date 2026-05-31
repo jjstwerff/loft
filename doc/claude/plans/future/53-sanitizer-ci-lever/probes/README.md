@@ -286,3 +286,31 @@ A probe graduates to `tests/scripts/NN-plan53-…` only once it PASSES under
 both flag-OFF and aligned mode (i.e. the cluster fix has landed) AND passes
 the standard four gates (assertions, clean exit, no leak, bounded runtime).
 Until then it lives here as a fix-validation reproducer.
+
+## V2 full-suite validation findings (2026-05-31) — new probe set
+
+The first full-suite run under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive` (local
+`nextest --no-fail-fast`: 1922 run, **11 failed**) surfaced the V2 gaps beyond
+`issues` (which `issues` 685/0 never reached).  Triaged:
+
+| Failing test(s) | Category | Action |
+|---|---|---|
+| `slots::vector_iteration_index_inside_vec_slot` | **2f — real V2 bug** (`#remove` during iteration → PANIC `keys.rs:251`) | **probed**: `2f-01` repro + `2f-02` ref; fix the `remove()`/iterator-state deltas |
+| `strings::loop_variable`, `strings::string_scope` | **NOT a bug** — `.slots("…")` assertions pin the V1 layout; the *result* is correct under V2 (verified) | give the tests V2-aware slot expectations or skip the `.slots()` check under V2 |
+| `threading_chars::par_struct_to_fn_t4` | par worker returning a **fn-ref** | needs a clean reproducer (naive one panics flag-OFF too — re-derive from the test) |
+| `native::native_tuple_script`, `native_tuple_return_script`, `native_scripts`, `native_library_suite` | **native backend** tuples (2h/2i were interpreter-only) | separate investigation (native marshalling under V2) |
+| `wrap::dir`, `wrap::stress`, `wrap::vectors`, `wrap::loft_suite` | interpreter scripts under V2 | identify which `tests/scripts/*.loft` fails (likely overlaps 2f) |
+| `html_wasm::moros_editor_html_smoke` | likely env/wasm, not V2 | confirm |
+
+### Sub-cluster 2f — `#remove` during iteration (predicted known-open, now real)
+
+| Probe | Shape | Aligned now | Role |
+|---|---|---|---|
+| `2f-01-vector-remove-during-iter` | `for x in v { x#remove; }` | **PANIC** (`keys.rs:251`) | reproducer (= `slots::vector_iteration_index_inside_vec_slot`) |
+| `2f-02-vector-iter-noremove-ref` | same loop, no `#remove` | PASS | reference — isolates `#remove` |
+
+The `remove()`/iterator-step path (`io.rs::remove`, `keys.rs`) accesses the
+iterator-state block at V1-tuned deltas that don't survive V2 stepping — the
+2f the cluster-2 sweep predicted but had no test for.  This is the start of a
+new probe pass over the V2 full-suite failures; more sub-clusters (native
+tuple, par-fn-ref) to follow.
