@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets doctor install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
+.PHONY: ci-miri all check-targets doctor install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -1049,6 +1049,20 @@ test-gl-headless:
 	done; \
 	echo "$$total tested, $$skipped skipped, $$failed failed"; \
 	if [ $$failed -gt 0 ]; then exit 1; fi
+
+ci-miri:  ## @PLAN53: run the loft interpreter under Miri (hard-UB gate). SLOW (~15 min/test).
+	@# Mirror of .github/workflows/miri.yml.  Catches alignment / OOB / UAF /
+	@# uninitialised / leak UB the homegrown stack_align_guard can't see.
+	@# Needs nightly + miri:  rustup toolchain install nightly --component miri
+	@# -Zmiri-disable-stacked-borrows gates the HARD memory UB, not the aliasing
+	@# model (loft's store layer aliases distinct records by design).  Runs on the
+	@# aligned interpreter (the hard-UB-clean configuration).  Add validated tests
+	@# to the curated list below as the lever closes more clusters.
+	cargo +nightly miri setup
+	LOFT_ALIGN=1 LOFT_SLOT_V2=drive \
+		MIRIFLAGS='-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows' \
+		cargo +nightly miri test --test issues -- --exact \
+		p213_struct_field_basic_int
 
 ci:
 	@# Fresh header FIRST so result.txt can never be mistaken for a stale
