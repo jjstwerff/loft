@@ -130,7 +130,9 @@ fn tuple_elem_read(t: &Type, off: usize) -> String {
         ),
         Type::Single => format!("_ts.get_single(elm.rec, elm.pos + {off})"),
         Type::Float => format!("_ts.get_float(elm.rec, elm.pos + {off})"),
-        other => format!("compile_error!(\"par tuple worker: unsupported by-value element type {other:?}\")"),
+        other => format!(
+            "compile_error!(\"par tuple worker: unsupported by-value element type {other:?}\")"
+        ),
     }
 }
 
