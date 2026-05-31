@@ -1,0 +1,58 @@
+// 164 — @PLAN53 cluster 4: regression guard for the fn-ref slot uninit-padding UB.
+//
+// Bug (fixed in commit 37109ccf): OpVarFnRef and OpPutFnRef read/wrote a
+// 20-byte fn-ref slot as `[u8; 20]`.  A fn-ref slot holds [d_nr: i64 (8B)]
+// + [closure DbRef (12B)] = 20 bytes.  DbRef has no #[repr(C)] and is
+// field-reordered to {rec, pos, store_nr}, leaving 2-byte tail padding at
+// DbRef offset 10..12 = slot bytes 18..20.  A typed `*m = DbRef` store only
+// initialises the struct's valid bytes — the 2-byte padding stays uninit.
+// Reading the whole 20-byte slot as `[u8; 20]` constructs a value that
+// requires every byte initialised, including the uninit padding -> Miri hard-
+// UB: "encountered uninitialized memory" at [18].
+//
+// Fix (cluster 4): use `[std::mem::MaybeUninit<u8>; 20]` instead of
+// `[u8; 20]` -- moves the 20 bytes without requiring them initialised.
+//
+// Trigger: store a function reference in a local variable, then pass it to a
+// higher-order function.  This path emits OpPutFnRef (write the fn-ref slot
+// when `f = double`) and OpVarFnRef (read the slot when `f` is passed as
+// argument), exercising both sides of the uninit-padding bug.
+//
+// On the pre-fix code this executes silently correctly on x86-64 (the uninit
+// bytes happen to be zero from the zeroed store backing), but Miri aborts
+// with "uninitialized memory" because it tracks init status per byte.
+// On the fixed (MaybeUninit) code, Miri accepts the copy unconditionally.
+
+fn double(x: integer) -> integer { x * 2 }
+fn triple(x: integer) -> integer { x * 3 }
+
+fn apply(f: fn(integer) -> integer, v: integer) -> integer { f(v) }
+
+fn main() {
+  // Non-capturing function reference stored in a local variable.
+  // OpPutFnRef writes the 20-byte slot (d_nr=double, closure=null sentinel).
+  // OpVarFnRef reads it when passing `f` to `apply`.
+  f = double;
+  r = apply(f, 7);
+  assert(r == 14, "fn-ref non-capturing double: got {r}, want 14");
+
+  // A different function reference stored in a separate variable.
+  // Exercises the PutFnRef path for a second d_nr value.
+  g = triple;
+  s = apply(g, 5);
+  assert(s == 15, "fn-ref non-capturing triple: got {s}, want 15");
+
+  // Non-capturing lambda stored in a variable and called directly.
+  // The lambda has no captures (x is the parameter, 100 is a literal),
+  // so the closure DbRef in the slot is the null sentinel.
+  // OpVarFnRef reads the 20-byte slot including the (uninit-padded) closure.
+  add100 = fn(x: integer) -> integer { x + 100 };
+  t = add100(3);
+  assert(t == 103, "fn-ref non-capturing lambda: got {t}, want 103");
+
+  // Passed as argument: OpVarFnRef fires again on the `add100` slot.
+  u = apply(add100, 42);
+  assert(u == 142, "fn-ref lambda via apply: got {u}, want 142");
+
+  println("164-plan53-fn-ref-slot-uninit PASSED");
+}

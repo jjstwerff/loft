@@ -14290,3 +14290,112 @@ fn p379_two_libs_same_struct_name() {
         "per-library Chunk fields resolved incorrectly (an in-loft assert failed)"
     );
 }
+
+// ── @PLAN53 clusters 3-5 — Miri-found UB regression guards ──────────────────
+//
+// These three tests guard the soundness fixes landed in commit batch on
+// 2026-05-31 (PR #236).  Each is pure interpreter (no FFI, no threads) so
+// it can run under `cargo +nightly miri test --test issues -- --exact <name>`.
+//
+// All three use `p213_struct_field_basic_int`'s idiom (same `code!` macro,
+// same `cached_default()` harness) so Miri's per-process stdlib-parse cost is
+// shared.
+//
+// Cluster overview:
+//   3 — aliasing reborrow in cross-store copy (Stacked-Borrows UB)
+//   4 — reading uninitialised padding bytes in the fn-ref slot (uninit UB)
+//   5 — String buffer leak via free_text without clear() (leak UB)
+
+/// @PLAN53 cluster 3 — cross-store copy aliasing.
+///
+/// Pre-fix code (commit c7755122): `vector_add` formed `&[Store]` (from_ref)
+/// AND `&mut [Store]` (from_mut) over the same `self.allocations` slice
+/// simultaneously — overlapping whole-slice borrows, UB under Miri's Stacked
+/// Borrows even though the two indices are distinct.
+///
+/// Fix: `copy_block_cross_store` helper uses `get_disjoint_mut([i,j])` to get
+/// two non-aliasing `&mut Store` from disjoint sub-ranges.
+///
+/// Trigger: two instances of the same struct type each live in their own store.
+/// Appending one's vector field to the other's (`c1.data += c2.data`) hits
+/// `Stores::vector_add` with `v_r.store_nr != v_other.store_nr`.
+///
+/// Miri gate: `cargo +nightly miri test --test issues -- --exact
+/// plan53_cluster3_cross_store_vector_add`
+#[test]
+fn plan53_cluster3_cross_store_vector_add() {
+    code!(
+        "struct Bag { data: vector<integer> }
+fn run() -> integer {
+    c1 = Bag { data: [1, 2, 3] };
+    c2 = Bag { data: [40, 50] };
+    c1.data += c2.data;
+    len(c1.data)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(5));
+}
+
+/// @PLAN53 cluster 4 — uninitialised padding in fn-ref slot read.
+///
+/// Pre-fix code (commit 37109ccf): OpVarFnRef / OpPutFnRef read/wrote the
+/// 20-byte fn-ref slot as `[u8; 20]`.  DbRef's 2-byte tail padding (slot
+/// bytes 18..20) is never initialised by a typed DbRef store, so reading the
+/// slot as an integer array requires bytes 18..20 to be initialised — Miri
+/// hard-UB: "encountered uninitialized memory" at byte [18].
+///
+/// Fix: use `[std::mem::MaybeUninit<u8>; 20]` — copies the bytes without
+/// requiring them initialised.  Byte-identical on all concrete hardware.
+///
+/// Trigger: `f = double` emits OpPutFnRef (write the 20-byte slot); passing
+/// `f` to `apply` emits OpVarFnRef (read the slot).  Both ops touch the
+/// uninit-padded DbRef tail.
+///
+/// Miri gate: `cargo +nightly miri test --test issues -- --exact
+/// plan53_cluster4_fn_ref_slot_uninit_padding`
+#[test]
+fn plan53_cluster4_fn_ref_slot_uninit_padding() {
+    code!(
+        "fn double(x: integer) -> integer { x * 2 }
+fn apply(f: fn(integer) -> integer, v: integer) -> integer { f(v) }
+fn run() -> integer {
+    f = double;
+    apply(f, 7)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(14));
+}
+
+/// @PLAN53 cluster 5 — `free_text` String buffer leak.
+///
+/// Pre-fix code (commit e0e094f7): `free_text` called `shrink_to(0)` WITHOUT
+/// a preceding `clear()`.  `shrink_to(0)` only shrinks capacity down to
+/// `max(capacity, len)` — on a non-empty String, `len > 0` so the buffer
+/// survives and leaks (the store holds String as raw bytes and never runs
+/// Drop; `free_text` is the sole deallocation point).  Miri's leak checker
+/// caught it during p213 teardown.
+///
+/// Fix: call `clear()` unconditionally before `shrink_to(0)` — `len=0` lets
+/// `shrink_to(0)` drop capacity to 0 and free the buffer.
+///
+/// Trigger: assign a non-empty text variable, then reassign it.  Each
+/// reassignment calls `free_text` on the old String.  On the pre-fix code
+/// Miri's `-Zmiri-leak-check` flags the retained allocation; on the fixed
+/// code the buffer is freed.
+///
+/// Miri gate: `cargo +nightly miri test --test issues -- --exact
+/// plan53_cluster5_free_text_buffer_dealloc`
+#[test]
+fn plan53_cluster5_free_text_buffer_dealloc() {
+    code!(
+        "fn run() -> text {
+    msg = \"hello\";
+    msg = \"world\";
+    msg
+}"
+    )
+    .expr("run()")
+    .result(Value::Text("world".to_string()));
+}
