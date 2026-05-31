@@ -2716,13 +2716,19 @@ impl State {
         // Copy `return_size` bytes from the top of the worker
         // stack to `dst`.  Stack grows upward; the return value
         // occupies the topmost `return_size` bytes.
+        // @PLAN53 cluster 2: the worker's `copy_result`/`fn_return` advanced TOS by
+        // the STEPPED width (`fn_stack + stack_step(size)` = +24 for a 20-byte fn-ref
+        // under V2), so the real value sits at the LOW end of a stepped slot with
+        // padding on top.  Backing up by the RAW `return_size` read 4 bytes into the
+        // value → a 4-byte-shifted (garbage) closure DbRef → OOB free.  Back up by the
+        // stepped width to land on the real bytes.  Identity flag-OFF (step == size).
         assert!(
-            return_size <= self.stack_pos,
+            self.stack_step(return_size) <= self.stack_pos,
             "execute_at_raw_to: return_size {} exceeds stack_pos {}",
             return_size,
             self.stack_pos
         );
-        let src_offset = self.stack_pos - return_size;
+        let src_offset = self.stack_pos - self.stack_step(return_size);
         let store = self.database.store(&self.stack_cur);
         unsafe {
             let src = store.base_ptr().offset(
