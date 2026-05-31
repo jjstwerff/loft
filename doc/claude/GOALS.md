@@ -6,8 +6,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # GOALS.md — what "loft stable" means, made concrete
 
 The north star for loft is **stability**.  This document splits that one word
-into four goals, each with a *measurable criterion*, so "are we there yet?"
-always has a yes/no — or, for the continuous goals, a healthy/stalled — answer.
+into four goals.  Each goal carries a **Check** — a command to run or a fact to
+observe — so progress is something you *evaluate*, not something you assert.  The
+Check is timeless; its result is not recorded here (run it to find out where you
+stand today).
 
 ## North star
 
@@ -40,22 +42,18 @@ The two engines feed four goals: **A** (soundness) is the sanitizer engine;
 ## Goal A — Soundness (no silent corruption)
 
 **Definition.** loft never produces wrong or corrupt results from undefined
-behaviour, and stays that way across toolchain bumps.
+behaviour, and stays that way across toolchain bumps.  This is a **continuous**
+property: it is satisfied by a sanitizer engine that runs and keeps catching new
+UB, not by a single clean run.
 
-This is a **continuous** property, not a one-time checkbox: it is satisfied by a
-sanitizer engine that runs and keeps catching new UB, not by a single clean run.
+**Check.**
+- `ci.yml`'s per-PR `guard` and `asan` jobs are green on `main` (and on the PR
+  under review).
+- `cargo test --features stack_align_guard` zero-fires across the whole corpus
+  (every test binary, not just `issues`).
+- The nightly `miri.yml` Miri gate is green.
 
-**Healthy when:**
-1. The interpreter execution path is **Miri-clean for hard UB** (alignment /
-   OOB / use-after-free / uninitialised / leak) on a representative corpus.
-2. `stack_align_guard` **zero-fires corpus-wide** (every test binary, not just
-   `issues`).
-3. A **Miri + guard + ASan CI gate is green on `main`**, so new UB lands red the
-   day it is committed — and continues to fire on UB introduced later.
-
-The aligned eval-stack layout (8-byte transient TOS stepping, byte-packed
-locals) is a settled design decision that removes the cluster of stack-alignment
-UB structurally; soundness work builds on it rather than re-litigating it.
+Met-and-healthy when all three hold *and keep holding* as new code lands.
 
 ---
 
@@ -65,13 +63,15 @@ UB structurally; soundness work builds on it rather than re-litigating it.
 not write it.  A language that never reaches a stable release, or that only its
 authors can run, is not stable in any sense that matters.
 
-**Healthy when:**
-1. Minor releases keep shipping, each bundling the dogfood harvest, with
-   user-facing release notes (CHANGELOG.md).
-2. External consumers can install and depend on loft libraries through the
-   package registry without building from the monorepo.
-3. There is a documented, low-friction on-ramp (install, first program, library
-   use) that someone outside the project can follow.
+**Check.**
+- A release tag exists within the project's release cadence (`git tag` →
+  latest), each carrying a CHANGELOG.md entry.
+- `loft install <name>` resolves and fetches a published library end-to-end
+  against the registry.
+- A clean-machine on-ramp — install → first program → `use` a library —
+  completes from the docs alone.
+- *Adoption proxy* (no clean counter exists): at least one library has been
+  published by someone outside the project.
 
 ---
 
@@ -80,11 +80,14 @@ authors can run, is not stable in any sense that matters.
 **Definition.** loft keeps gaining the features and ergonomics real consumers
 need, and the canonical consumers keep building and running.
 
-**Healthy when** the dogfood loop continues to drive releases — the
-branch-review viewer, tracker indexer, `lib/markdown`, and the games
-moros/dryopea build, run, and their lessons land as language/stdlib improvements
-before each minor release.  (This goal is never "finished"; it is "healthy" or
-"stalled.")
+**Check** — the consumer build matrix; each row is a command, score it `N/total`:
+- branch-review viewer builds and runs on HEAD;
+- tracker indexer (`make index`) succeeds;
+- `lib/markdown` suite passes;
+- the games moros / dryopea build and run against current loft;
+- the last release's CHANGELOG carries a consumer-driven harvest section.
+
+Never "finished"; it reads as a fraction, and a falling fraction is the alarm.
 
 ---
 
@@ -96,13 +99,44 @@ backend-specific divergence.  macOS-ARM is the strict-alignment platform where
 unaligned reads are real faults; the three backends are three independent
 implementations of the same language semantics.
 
-**Done when:**
-1. **Platform leg.** The standard 3-OS CI matrix (`ci.yml`) is green on `main`.
-2. **Backend leg.** A cross-backend differential harness proves
-   **interpret ≡ native ≡ wasm** on a shared corpus: the same program produces
-   the same output (and the same diagnostics) on all three backends.  Parity is
-   the *criterion*, not "each backend passes its own tests" — divergence between
-   backends on identical input is the bug class this goal exists to catch.
+**Check.**
+- The 3-OS CI matrix (`ci.yml`) is green on `main`.
+- A differential run executes one shared corpus on interpret / native / wasm and
+  asserts **identical output and diagnostics** — zero divergences.  Per-backend
+  green is *not* the criterion; agreement between backends on identical input is.
+
+---
+
+## The two floors — why dogfood is paused, and when it resumes
+
+The dogfood loop is the agenda-setter (CLAUDE.md § "Development cadence"), but it
+is currently **paused by deliberate decision** — because the loop did its job and
+hit two walls:
+
+- it **kept surfacing instability** → the **soundness floor** (Goal A);
+- it **fought the lib/package structure** → the **structure floor** (Goal B's
+  packaging half).
+
+Building a game on either un-cleared floor is building on sand.  So Goal C (and
+the game work specifically) is gated on A and B — *by choice, not neglect*.
+
+The danger of a deliberate pause is that open-ended floors make it permanent by
+inertia: soundness can always absorb one more sanitizer leg, packaging one more
+polish.  So each floor has an **explicit resume-bar tied to what a game actually
+needs** — not "all of A" or "all of B":
+
+- **Soundness floor — cleared when:** the sanitizer gate is green on `main`
+  **and** the curated Miri/ASan set covers the surfaces the games exercise (eval
+  stack, store claim/copy/resize, vectors, fn-refs, text).  *Not* "every Goal-A
+  coverage leg shipped."
+- **Structure floor — cleared when:** the libraries a game depends on (graphics,
+  game_client / game_protocol, server) are extracted, installable, and
+  version-stable through the registry.  *Not* "the whole package toolchain
+  polished."
+
+When both bars read true, the pause ends and the dogfood loop goes back to
+setting the agenda.  Until then, A and B are the work *because* C and D asked for
+them.
 
 ---
 
@@ -110,14 +144,17 @@ implementations of the same language semantics.
 
 ```
             useful ──────────────────► safe
-   C (dogfood capability)      A (soundness)
-   B (release & adoption)      D (cross-backend parity)
-        └── "is loft worth using?" ──┘   └── "is loft safe to keep using
-                                              as the world changes?" ──┘
+   C (dogfood capability)      A (soundness)  ┐
+   B (release & adoption)      D (parity)     ├── the two floors C/D
+        │                                     ┘   are gated on
+        └── paused until the soundness floor (A) and
+            structure floor (B) clear, then resumes as agenda-setter
 ```
 
 Dogfood makes loft *worth using*; the sanitizer makes it *safe to keep using*.
-A language that is only one of those is not stable.
+A language that is only one of those is not stable — and right now the dogfood
+loop is deliberately waiting on the two floors it asked the sanitizer/packaging
+work to build.
 
 ## See also
 
@@ -129,5 +166,6 @@ A language that is only one of those is not stable.
   cross-backend differential.
 - [plans/future/56-sanitizer-coverage-expansion/](plans/future/56-sanitizer-coverage-expansion/README.md)
   — Goal A continuing: remaining sanitizer-coverage items.
+- [lib_plans/12-library-extraction/](lib_plans/12-library-extraction/README.md) — Goal B's structure floor: the package-ecosystem extraction.
 - [PKG_REGISTRY.md](PKG_REGISTRY.md) / [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md) — Goal B's registry on-ramp.
 - [ROADMAP.md](ROADMAP.md) / [PLANNING.md](PLANNING.md) — feature backlog feeding Goal C.
