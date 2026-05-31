@@ -895,3 +895,49 @@ find:
   default.  Cluster 2 can be closed as "fixed + guard-clean + Miri-differential-
   clean behind `LOFT_ALIGN`"; clusters 3 & 4 become the next sanitizer-lane
   targets (they are what a Miri CI job would gate on going forward).
+
+---
+
+## Clusters 3 & 4 — LANDED + Miri-validated 2026-05-31; cluster 5 (leak) surfaced
+
+**Cluster 3 (store-aliasing reborrow) — FIXED** (commit bca761fe).  All 4
+`from_ref::<[Store]>`/`from_mut::<[Store]>` sites (`claim_child_rec`,
+`vector_add`, `vector_add_array`, `copy_claims`) replaced by one sound
+`Stores::copy_block_cross_store` using stable `<[Store]>::get_disjoint_mut`.
+Miri-confirmed: the cluster-3 run no longer aborts at `claim_child_rec` — it
+proceeded to cluster 4.
+
+**Cluster 4 (uninit fn-ref padding) — FIXED** (commit 8ba675eb).  Root cause:
+the 20-byte fn-ref slot = i64 d_nr (0..8) + closure `DbRef` (8..20); `DbRef` has
+no `#[repr(C)]`, reorders to `{rec,pos,store_nr}`, leaving 2 bytes of tail
+padding at slot 18..20 that the typed `*m = DbRef` store never defines.
+`OpVarFnRef`/`OpPutFnRef` read the whole slot as `[u8; 20]` (integer array → all
+bytes must be init) → Miri uninit abort at [18].  Fix: read/write the slot as
+`[MaybeUninit<u8>; 20]` (propagates bytes without an init requirement),
+byte-identical.  Edited the generator source (`default/02_files.loft`) and
+regenerated `src/fill.rs`.
+
+**Miri validation (p213, aligned, `-Zmiri-disable-stacked-borrows`):
+`test result: ok. 1 passed; 0 failed`** — the test BODY executes with ZERO
+hard UB.  Clusters 2 (alignment), 3 (aliasing), 4 (uninit) are all cleared for
+the interpreter execution path.
+
+**Cluster 5 (NEW, surfaced now) — a memory LEAK, not UB.**  After the test
+passes, Miri's leak checker reports a 20-byte `String` leaked during teardown:
+`free_text` (`src/state/text.rs:316`, `String::shrink_to`) ← `Test::drop`'s
+cleanup `execute`.  PRE-EXISTING (masked until clusters 3/4 let Miri reach the
+leak check), mode-independent, lower severity than UB (a leak cannot corrupt
+data), and suppressible with `-Zmiri-ignore-leaks`.  NOT introduced by clusters
+3/4 (they don't touch text/String allocation).  Candidate next sanitizer-lane
+target — investigate whether it's a real teardown leak (text not freed on
+program exit / store drop) or a test-harness `Test::drop` artifact.
+
+### Validation status after clusters 3 & 4
+
+The loft interpreter's execution path is now Miri-clean for hard UB
+(alignment + aliasing + uninit) on the p213 reproducer.  The only Miri signals
+left are (a) the cluster-5 teardown leak (leak-class, suppressible) and (b)
+Stacked-Borrows reports on the remaining intentional-aliasing store blocks when
+SB is ON (the store layer's design; out of scope for a hard-UB gate).  A Miri
+CI job would run with `-Zmiri-disable-stacked-borrows` (hard-UB gate) and either
+`-Zmiri-ignore-leaks` or after cluster 5 lands.
