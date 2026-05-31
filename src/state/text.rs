@@ -306,14 +306,19 @@ impl State {
     */
     pub fn free_text(&mut self) {
         let pos = self.code::<u16>();
-        if cfg!(debug_assertions) {
-            let s = self.string_mut(pos);
-            s.clear();
-            for _ in 0..s.len() {
-                *s += "*";
-            }
-        }
-        self.string_mut(pos).shrink_to(0);
+        // @PLAN53 cluster 5: deallocate the String's heap buffer.  `clear()` sets
+        // len=0 so the following `shrink_to(0)` drops capacity to 0 and frees the
+        // buffer.  Previously `clear()` ran ONLY under debug-assertions, so in
+        // release — and under Miri, where the lib disables debug-assertions — a
+        // non-empty String reached `shrink_to(0)`, which shrinks capacity only down
+        // to `len` (never below), leaving the buffer allocated and LEAKED (the store
+        // holds the String as raw bytes and never runs its Drop; `free_text` is the
+        // sole deallocation point).  Miri's leak checker caught it (cluster 5).
+        // (The old debug-only `for _ in 0..s.len()` poison loop was dead code — it
+        // ran after `clear()`, so `s.len()` was already 0 and it never executed.)
+        let s = self.string_mut(pos);
+        s.clear();
+        s.shrink_to(0);
         if cfg!(debug_assertions) {
             let var_pos = self.stack_cur.pos + self.stack_pos - u32::from(pos);
             let remove = self.text_positions.remove(&var_pos);
