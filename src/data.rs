@@ -57,7 +57,7 @@ pub static I64: Type = Type::Integer(IntegerSpec::wide());
 /// to match integer-valued types uniformly.  Code that cares about
 /// the storage width reads `spec.forced_size` or calls
 /// `spec.byte_width()` directly.
-#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy)]
 pub struct IntegerSpec {
     /// Inclusive lower bound.  `i32::MIN` is reserved as the null
     /// sentinel; plain-integer templates use `i32::MIN + 1`.
@@ -272,10 +272,8 @@ impl std::hash::Hash for IntegerSpec {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(bound = "")]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Block {
-    #[serde(with = "crate::cache::static_str")]
     pub name: &'static str,
     pub operators: Vec<Value>,
     pub result: Type,
@@ -286,8 +284,7 @@ pub struct Block {
 }
 
 /// A value that can be assigned to attributes on a definition of instance
-#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(bound = "")]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Value {
     Null,
     /// Line number inside the source file
@@ -427,8 +424,7 @@ pub enum Value {
 
 /// Plan-06 PRIORITY.md spine step 3 — payload for `Value::ParFor`.
 /// Heap-boxed so the variant fits the 32-byte budget.
-#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(bound = "")]
+#[derive(Debug, PartialEq, Clone)]
 pub struct ParForBody {
     pub input: Value,
     pub x_var: u16,
@@ -547,7 +543,7 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
 /// Static type of a parsed expression or variable.
 ///

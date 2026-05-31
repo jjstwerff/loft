@@ -167,7 +167,7 @@ impl PartialOrd<Str> for &str {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Key {
     pub type_nr: i8,
     pub position: u16,
