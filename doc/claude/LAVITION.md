@@ -70,17 +70,22 @@ Lavition's library landscape splits into four kinds:
 Live in `loft-lang/loft-libs-*`.  Bare descriptive names.  Games
 import these and ship them in their runtime binary.
 
-| Library | Purpose | Chunk |
-|---|---|---|
-| `hexworld` | sparse 32×32 chunked hex grid + addressing + save/load | loft-libs-world (planned) |
-| `hex_walls` | wall segment data (24 sub-hex directions) + read APIs | loft-libs-world |
-| `terrain` | heightmap + material palette | loft-libs-world |
-| `items` | item-instance data (position, type, rotation, animation state) | loft-libs-world |
-| `particles` | ribbon trails + point-burst particles | loft-libs-world |
-| `physics_2body` | rigid-body collision + integrator | loft-libs-world |
-| `graphics` | 2D canvas + 3D rendering + OpenGL bindings | loft-libs-graphics |
-| `imaging` | PNG load/save + pixel manipulation | loft-libs-graphics |
-| `shapes` / `gridmesh` | geometry primitives | loft-libs-graphics |
+**Finalized names — the `hex_*` family.**  Naming intent: each library
+covers ONE data axis of the hex world.  The `hex_*` prefix marks the
+family + leaves room for parallel `voxel_*` / `tile_*` families later
+without naming collisions.
+
+| Library | Purpose | Chunk | Status |
+|---|---|---|---|
+| `hexworld` | sparse 32×32 chunked hex grid + addressing + save/load | loft-libs-world (planned) | exists as `lib/world/` in monorepo; rename + extract is next-up |
+| `hex_walls` | wall segment data (24 sub-hex directions) + curve detection + read APIs | loft-libs-world | currently folded into `lib/world/src/wall.loft`; split + extract after hexworld |
+| `hex_terrain` | per-hex heightmap + material palette + slope rules | loft-libs-world | NEW — needs design + ship |
+| `hex_items` | item-instance data (placement, orientation among 12 directions, animation state, vertical layer) | loft-libs-world | NEW — needs design + ship |
+| `particles` | ribbon trails + point-burst particles | loft-libs-world | planned slot ([`lib_plans/future/27-particles/`](lib_plans/future/27-particles/)) |
+| `physics_2body` | rigid-body collision + integrator | loft-libs-world | planned slot ([`lib_plans/future/26-physics-2body/`](lib_plans/future/26-physics-2body/)) |
+| `graphics` | 2D canvas + 3D rendering + OpenGL bindings | loft-libs-graphics | shipped 0.1.0 |
+| `imaging` | PNG load/save + pixel manipulation | loft-libs-graphics | shipped 0.1.0 |
+| `shapes` / `gridmesh` | geometry primitives | loft-libs-graphics | shipped |
 
 These libraries know nothing about lavition.  They're equally usable by
 a pure-loft CLI tool, a game built on lavition, or a third-party engine
@@ -155,6 +160,193 @@ graph) that have no value to other games.
 | Pattern | Example |
 |---|---|
 | `<project>_<thing>` | `moros_map`, `moros_sim`, `moros_render`, `dryopea_*` (planned) |
+
+## Hex-family libraries — per-library narrative
+
+Sketches of each `hex_*` data library covering: what data it owns,
+which lavition plugin authors it, which game roles consume it, and an
+API outline.  These are the source material for the eventual
+`lavition.io/docs/<lib>/` pages (which own the "lavition + generic-term"
+search space — see [Discoverability](#discoverability--the-practical-reason-for-brand-visibility)).
+
+### `hexworld` — the addressing primitive
+
+**Owns:** the hex grid itself.  Sparse 32×32 chunked storage so a 5000-hex
+world is mostly empty chunks; load/save round-trips the whole structure.
+
+**Lavition pairing:** loaded by `lavition_core` as the canonical world
+coordinate system; every plugin reads/writes against `hexworld`
+addresses (`HexId { col, row }` or chunk-relative
+`(ChunkId, sub_col, sub_row)`).
+
+**Game roles:**
+- Runtime address space for the game's world data.
+- Save/load primitive (the engine reads `world_save` / `world_load`
+  state from this library).
+- Iteration helper (`hexes_in_chunk`, `neighbors_of(hex)`,
+  `bbox_of_chunks(region)`).
+
+**API sketch:**
+```loft
+pub struct HexId { col: integer not null, row: integer not null }
+pub struct ChunkId { x: integer not null, y: integer not null }
+pub struct ChunkedWorld { /* sparse storage */ }
+
+pub fn world_new(name: text) -> ChunkedWorld
+pub fn world_save(w: const ChunkedWorld, path: text) -> boolean
+pub fn world_load(path: text) -> ChunkedWorld
+pub fn neighbors_of(h: HexId) -> vector<HexId>     // 6 neighbors
+pub fn chunk_of(h: HexId) -> ChunkId
+pub fn hexes_in_chunk(c: ChunkId) -> iterator<HexId>
+```
+
+### `hex_walls` — linear features at sub-hex resolution
+
+**Owns:** wall / cliff / road segments between or along hex edges.  Each
+hex edge has 4 sub-segments per side (so 6 edges × 4 sub-segments = 24
+orientations per hex).  Segments carry material, height range, and
+vertical layer.
+
+**Lavition pairing:** authored by the `lavition_hex_editor` plugin.
+The plugin's curve-detection pass reads `hex_walls` data and renders
+chains of straight segments as smooth shapes for preview + final render.
+
+**Game roles:**
+- Collision data for the physics layer (`physics_2body` reads
+  `hex_walls` to know what's solid).
+- Render input for the game's wall renderer (read-only iteration over
+  visible segments).
+- Pathfinding input (segments block movement between hexes).
+
+**API sketch:**
+```loft
+pub struct WallSegment {
+  hex: hexworld::HexId not null,
+  orientation: integer not null,   // 0..23
+  layer: integer not null,         // basement/ground/2nd/roof/free
+  material: integer not null,
+  height_min: float,
+  height_max: float
+}
+
+pub fn walls_at(w: const ChunkedWorld, h: hexworld::HexId) -> vector<WallSegment>
+pub fn walls_between(w: const ChunkedWorld, a: hexworld::HexId, b: hexworld::HexId) -> vector<WallSegment>
+pub fn add_wall(w: ChunkedWorld, seg: WallSegment)
+pub fn remove_wall(w: ChunkedWorld, hex: hexworld::HexId, orientation: integer)
+
+// Curve detection — derived view, no separate storage.
+pub fn detect_curves(w: const ChunkedWorld, layer: integer) -> vector<CurveChain>
+```
+
+### `hex_terrain` — heights + materials per hex
+
+**Owns:** per-hex height + material palette.  Slope rules between
+adjacent hexes so the renderer knows whether to draw a cliff (handled
+as walls) or a smooth ramp.  Material palette indexed by integer so
+storage per hex is one byte for material + one for height.
+
+**Lavition pairing:** authored by the `lavition_terrain_paint` plugin
+(brush, raise/lower, palette swap, smoothing).
+
+**Game roles:**
+- Surface render (the game's ground renderer reads height + material
+  per hex and meshes the visible region).
+- Movement cost (steeper slopes = more cost; material affects speed).
+- Spawn site selection (palette type → spawnable items / NPCs).
+
+**API sketch:**
+```loft
+pub struct HexTerrain {
+  height: integer,                     // 0..255, mapped to world Z by game
+  material: integer not null           // index into MaterialPalette
+}
+
+pub struct MaterialPalette {
+  materials: vector<MaterialDef> not null
+}
+
+pub fn terrain_at(w: const ChunkedWorld, h: hexworld::HexId) -> HexTerrain
+pub fn set_terrain(w: ChunkedWorld, h: hexworld::HexId, t: HexTerrain)
+pub fn slope_between(w: const ChunkedWorld, a: hexworld::HexId, b: hexworld::HexId) -> float
+pub fn palette_of(w: const ChunkedWorld) -> MaterialPalette
+```
+
+### `hex_items` — placed instances
+
+**Owns:** item instances anchored at one of the 12 building-placement
+directions per hex.  Each item carries type, orientation, optional
+animation state, and the vertical layer it lives on (including
+"free placement" layers that don't participate in collision).
+
+**Lavition pairing:** authored by the `lavition_item_placer` plugin.
+Stencils placed as items (smaller render scale) write into this library.
+
+**Game roles:**
+- World population at runtime (the game iterates `items_in_region` per
+  frame to render + tick animations).
+- Interaction targets (item type → interaction script).
+- Save/load (items round-trip with the rest of the world via
+  `hexworld::world_save`).
+
+**API sketch:**
+```loft
+pub struct HexItem {
+  hex: hexworld::HexId not null,
+  direction: integer not null,        // 0..11 (12-direction placement)
+  item_type: integer not null,
+  orientation: integer,                // optional rotation around vertical axis
+  layer: integer not null,             // basement/ground/2nd/roof/free
+  anim_state: integer                  // optional animation track + frame
+}
+
+pub fn items_at(w: const ChunkedWorld, h: hexworld::HexId) -> vector<HexItem>
+pub fn items_in_region(w: const ChunkedWorld, region: ChunkRegion) -> iterator<HexItem>
+pub fn place_item(w: ChunkedWorld, item: HexItem)
+pub fn remove_item(w: ChunkedWorld, hex: hexworld::HexId, direction: integer)
+pub fn tick_animations(w: ChunkedWorld, dt_ms: integer)
+```
+
+### Cross-cutting: `physics_2body` and `particles`
+
+Not hex-prefixed because they're general-purpose primitives consumable
+by any spatial library (`hex_walls`, future `voxel_walls`, 2D
+collision games).  See their plan slots:
+[`lib_plans/future/26-physics-2body/`](lib_plans/future/26-physics-2body/),
+[`lib_plans/future/27-particles/`](lib_plans/future/27-particles/).
+
+## Next library work — execution order
+
+The `loft-libs-world` chunk is the next chunk to ship.  Order is
+foundation-first: hexworld blocks everything downstream because every
+other lib references its addressing.
+
+Each sub-step is a self-contained Stage A → Stage B mini-cycle (same
+pattern Phase 5b just ran: tarball + chunk-repo + registry PR +
+consumer migration + monorepo cleanup).
+
+| # | Step | Effort | Depends on |
+|---|---|---|---|
+| W.1 | Rename `lib/world` → `lib/hexworld` in monorepo + update consumer loft.tomls + path-deps + `src/wasm.rs` `include_str!` paths.  Pre-extraction churn, all internal. | S | — |
+| W.2 | Extract `hexworld` Stage A → Stage B (publish to `loft-libs-world/hexworld`, swap monorepo `lib/moros_*` consumers to registry deps, remove `lib/hexworld/`). | M | W.1 + lavition design clarification (data shape stable enough to ship 0.1.0) |
+| W.3 | Split `hex_walls` out of `lib/hexworld/src/wall.loft` into its own monorepo library `lib/hex_walls/`.  Defines the API boundary between the addressing primitive and the wall data. | M | W.2 |
+| W.4 | Extract `hex_walls` Stage A → Stage B. | M | W.3 + curve-detection pass design |
+| W.5 | Design + implement `hex_terrain` as a new monorepo library `lib/hex_terrain/` (heightmap + materials).  Migrate moros's existing terrain code if any. | MH | W.2 (uses hexworld addressing) |
+| W.6 | Extract `hex_terrain` Stage A → Stage B. | M | W.5 |
+| W.7 | Design + implement `hex_items` as a new monorepo library `lib/hex_items/`. | MH | W.2 + W.3 (item placement uses 12 directions, layer model shared with hex_walls) |
+| W.8 | Extract `hex_items` Stage A → Stage B. | M | W.7 |
+| W.9 | Ship `physics_2body` (from existing plan slot) to the same chunk.  Reads hex_walls for collision geometry. | MH | W.4, plan-26 design |
+| W.10 | Ship `particles` (from existing plan slot) to the same chunk.  Independent. | M | plan-27 design |
+
+**Total:** ~10 sub-phases, each self-contained.  Realistic shipping
+cadence: 1-2 sub-phases per session, so the full `loft-libs-world`
+chunk lands across 5-10 sessions.  After W.10, lavition can start
+implementing its plugins against the stable data layer.
+
+**Branch model:** continue the established pattern — one cross-theme
+branch (`doc-updates` or successor) accumulates the work; a PR opens
+per chunk milestone (e.g. when hexworld + hex_walls both ship → PR
+"`loft-libs-world` foundation"; when terrain + items ship → next PR;
+etc.).  The 6-PR-per-game-data-lib model would be too much PR overhead.
 
 ## Discoverability — the practical reason for brand visibility
 
