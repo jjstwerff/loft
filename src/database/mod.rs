@@ -7,6 +7,7 @@ mod allocation;
 mod format;
 mod io;
 mod search;
+pub mod snapshot;
 mod structures;
 mod types;
 
