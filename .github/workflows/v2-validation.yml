@@ -72,7 +72,7 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       - name: Test (V2)
-        run: cargo nextest run --profile ci
+        run: cargo nextest run --no-fail-fast --profile ci
 
   # STEP 3 — the homegrown stack_align_guard sweep under V2.  The guard asserts
   # every typed stack slot lands on its alignment boundary; it is arch-
@@ -100,7 +100,7 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       - name: Test (V2 + stack_align_guard, zero fires expected)
-        run: cargo nextest run --profile ci --features stack_align_guard
+        run: cargo nextest run --no-fail-fast --profile ci --features stack_align_guard
 
   # STEP 4 — Miri hard-UB on a curated subset under V2.  Interpreter-on-Miri is
   # ~15 min/test, so this is a small representative set, not the full suite.
