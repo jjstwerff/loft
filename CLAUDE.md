@@ -7,6 +7,28 @@
 Loft is a statically typed, expression-oriented language with struct/enum support, a
 store-based heap, and a standard library loaded from `default/*.loft`.
 
+### Where loft sits — the three-layer stack
+
+loft is the **language** layer of a larger project:
+
+- **lavition** — the **engine**: an editor with loft as its built-in scripting
+  language, positioned as a **rapid-prototyping game engine for indie game
+  developers and studios**.  This is the long-term destination, built out over
+  time, and is the engine's own name — **not** a former name for loft.  (The
+  language used the `.lav` extension while it lived inside the engine; the
+  2026-03-08 "move to the loft name" split gave the *language* its own identity
+  — `.lav` → `.loft` — distinct from the engine.)
+- **loft** — the **language** (this repo): the statically-typed scripting
+  language embedded in the engine.  The name was chosen for being **easy and
+  descriptive**, deliberately *not* a unique or trademarkable brand word — the
+  distinctive, ownable identity lives in *lavition*.  So it doesn't matter that
+  "loft" is a common word (and already taken on crates.io by an unrelated
+  project): the language ships under the lavition umbrella, never as a
+  standalone brand.
+- **moros** (RPG) and **dryopea** (sci-fi tower-defence) — **games built on the
+  lavition engine**, written in loft.  They are the canonical dogfood consumers
+  that drive language work (see the development cadence below).
+
 ---
 
 ## Development cadence — the dogfood loop
