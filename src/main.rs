@@ -169,6 +169,9 @@ fn print_help() {
     println!("  list-installed                list every registry package installed locally");
     println!("                                (from ~/.loft/registry/), annotated with sha256");
     println!("                                + size + index status (active / yanked / orphan)");
+    println!("  audit                         check every installed package against the");
+    println!("                                advisory feed; exit 0 if clean, 1 if any low/bug,");
+    println!("                                2 if any high, 3 if any security_critical");
     println!("  registry <subcommand>         manage the local package registry");
     println!(
         "                                sync             — pull latest registry from source URL"
@@ -693,6 +696,152 @@ fn list_installed() {
         );
     }
     println!("{} package(s) total", entries.len());
+}
+
+/// @PLAN12 Phase 6.7 — `loft audit` walks every installed package
+/// in `~/.loft/registry/` and classifies each against the cached
+/// advisory feed.  Exit code reflects worst severity found:
+/// - 0 → clean (no matches)
+/// - 1 → at least one low / bug / deprecated match
+/// - 2 → at least one security_high match
+/// - 3 → at least one security_critical match
+///
+/// Refreshes the advisory feed if stale (24h TTL) UNLESS
+/// `LOFT_OFFLINE=1` is set, in which case it falls back to the
+/// cached copy (or warns + returns code 0 if no cache).
+///
+/// Pure deep scan — no installs, no writes.  The natural
+/// companion to `loft list-installed`.
+#[cfg(feature = "registry")]
+fn audit_installed() -> i32 {
+    use loft::registry_advisories::{self, LoadOptions, Severity};
+
+    let offline = std::env::var("LOFT_OFFLINE").is_ok();
+    let opts = LoadOptions {
+        allow_unsigned: true,
+        offline,
+        refresh: false,
+    };
+    let feed = match registry_advisories::load_or_fetch(&opts) {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            if offline {
+                eprintln!(
+                    "[audit] advisory feed not cached and offline; can't audit (exit 0 as no-evidence)"
+                );
+            } else {
+                eprintln!(
+                    "[audit] advisory feed unavailable (registry may not host one yet); nothing to check"
+                );
+            }
+            return 0;
+        }
+        Err(e) => {
+            eprintln!("loft audit: {e}");
+            return 4;
+        }
+    };
+
+    // Enumerate cached installs (same logic as list-installed).
+    let cache = loft::registry_index::cache_dir();
+    let read = match std::fs::read_dir(&cache) {
+        Ok(r) => r,
+        Err(_) => {
+            println!("No registry cache; nothing to audit.");
+            return 0;
+        }
+    };
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for ent in read.filter_map(Result::ok) {
+        let path = ent.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dirname = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let mut split: Option<usize> = None;
+        let bytes = dirname.as_bytes();
+        let mut i = 1;
+        while i < bytes.len() {
+            if bytes[i - 1] == b'-' && bytes[i].is_ascii_digit() {
+                split = Some(i - 1);
+                break;
+            }
+            i += 1;
+        }
+        let Some(at) = split else { continue };
+        let (name, rest) = dirname.split_at(at);
+        let version = rest.trim_start_matches('-').to_string();
+        if !name.is_empty() && !version.is_empty() {
+            entries.push((name.to_string(), version));
+        }
+    }
+    entries.sort();
+
+    let mut all_classifications = Vec::new();
+    for (name, version) in &entries {
+        let hits = registry_advisories::classify(name, version, &feed);
+        for hit in hits {
+            all_classifications.push(hit);
+        }
+    }
+
+    if all_classifications.is_empty() {
+        println!(
+            "{} installed package(s) audited against {} advisory entries — clean",
+            entries.len(),
+            feed.advisories.len()
+        );
+        return 0;
+    }
+
+    // Compute worst severity → exit code.
+    let mut worst = 0u8;
+    println!(
+        "Audit found {} advisory match(es) across {} installed package(s):",
+        all_classifications.len(),
+        entries.len()
+    );
+    for hit in &all_classifications {
+        worst = worst.max(hit.severity.rank());
+        let prefix = match hit.severity {
+            Severity::SecurityCritical => "ERROR",
+            Severity::SecurityHigh => "WARN",
+            Severity::SecurityLow | Severity::Bug => "NOTE",
+            Severity::Deprecated => "INFO",
+        };
+        println!(
+            "  [{prefix}] {pkg} {ver}  {sev}  {summary}",
+            pkg = hit.package,
+            ver = hit.version,
+            sev = hit.severity.as_str(),
+            summary = hit.summary,
+        );
+        println!("         advisory: {}", hit.advisory_id);
+        if let Some(fix) = &hit.fixed_in {
+            println!(
+                "         fix: {pkg} >= {fix} (run `loft install {pkg}@{fix}`)",
+                pkg = hit.package
+            );
+        }
+        for r in &hit.references {
+            println!("         reference: {r}");
+        }
+    }
+
+    // Worst severity → exit code:
+    //   Deprecated (rank 1) → 1
+    //   Low / Bug (rank 2)  → 1
+    //   High (rank 3)       → 2
+    //   Critical (rank 4)   → 3
+    match worst {
+        1 | 2 => 1,
+        3 => 2,
+        4 => 3,
+        _ => 0,
+    }
 }
 
 /// Total size in bytes of a directory's contents (recursive).
@@ -2214,6 +2363,20 @@ fn main() {
             #[cfg(not(feature = "registry"))]
             {
                 eprintln!("loft info: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "audit" {
+            // @PLAN12 Phase 6.7 — explicit deep scan: every cached
+            // package vs the advisory feed.  Exit code reflects
+            // worst severity.
+            #[cfg(feature = "registry")]
+            {
+                let code = audit_installed();
+                std::process::exit(code);
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft audit: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
         } else if a == "list-installed" {
