@@ -120,17 +120,20 @@ pub fn plane(pn: text, pw: float, pd: float) -> Mesh {
 pub fn sphere(sn: text, sr: float, ss: integer, st: integer) -> Mesh {
   sm = mesh(sn);
   pi2 = 6.283185307179586;  // 2 * pi
-  // Generate rings from top (+y) to bottom (-y).
+  // Generate rings from top (+y) to bottom (-y).  `?? 0` after each
+  // divisor is lint-suppression — `ss` and `st` are the segment counts
+  // passed by the caller; with sane input they're > 0.  If a caller
+  // passes 0 the loop generates a degenerate mesh, not a crash.
   for row in 0..st+1 {
-    v_phi = 3.141592653589793 * (row as float) / (st as float);  // 0..pi
+    v_phi = 3.141592653589793 * (row as float) / (st as float) ?? 0.0;  // 0..pi
     sy = sr * cos(v_phi);
     ring_r = sr * sin(v_phi);
     for col in 0..ss+1 {
-      v_theta = pi2 * (col as float) / (ss as float);  // 0..2pi
+      v_theta = pi2 * (col as float) / (ss as float) ?? 0.0;  // 0..2pi
       sx = ring_r * cos(v_theta);
       sz = ring_r * sin(v_theta);
-      su = (col as float) / (ss as float);
-      sv = (row as float) / (st as float);
+      su = (col as float) / (ss as float) ?? 0.0;
+      sv = (row as float) / (st as float) ?? 0.0;
       spos = math::vec3(sx, sy, sz);
       snrm = math::normalize3(spos);
       sm.add_vertex(vertex(spos, snrm, math::vec2(su, sv)));
@@ -160,9 +163,11 @@ pub fn mesh_to_floats_uv(mu: const Mesh) -> vector<single> {
   for mu_tri in mu.triangles {
     for mu_idx in [mu_tri.a, mu_tri.b, mu_tri.c] {
       mu_v = mu.vertices[mu_idx];
-      mu_buf += [mu_v.pos.x as single, mu_v.pos.y as single, mu_v.pos.z as single];
-      mu_buf += [mu_v.normal.x as single, mu_v.normal.y as single, mu_v.normal.z as single];
-      mu_buf += [mu_v.uv.x as single, mu_v.uv.y as single];
+      if mu_v != null {
+        mu_buf += [mu_v.pos.x as single, mu_v.pos.y as single, mu_v.pos.z as single];
+        mu_buf += [mu_v.normal.x as single, mu_v.normal.y as single, mu_v.normal.z as single];
+        mu_buf += [mu_v.uv.x as single, mu_v.uv.y as single];
+      }
     }
   }
   mu_buf
@@ -174,8 +179,10 @@ pub fn mesh_to_floats(mf: const Mesh) -> vector<single> {
   for mf_tri in mf.triangles {
     for mf_idx in [mf_tri.a, mf_tri.b, mf_tri.c] {
       mf_v = mf.vertices[mf_idx];
-      mf_buf += [mf_v.pos.x as single, mf_v.pos.y as single, mf_v.pos.z as single];
-      mf_buf += [mf_v.normal.x as single, mf_v.normal.y as single, mf_v.normal.z as single];
+      if mf_v != null {
+        mf_buf += [mf_v.pos.x as single, mf_v.pos.y as single, mf_v.pos.z as single];
+        mf_buf += [mf_v.normal.x as single, mf_v.normal.y as single, mf_v.normal.z as single];
+      }
     }
   }
   mf_buf

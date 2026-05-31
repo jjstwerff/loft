@@ -208,10 +208,13 @@ fn glb_material_json(mat: scene::Material) -> text {
 // True if a Mat4 is the identity matrix (within exact float equality).
 fn glb_is_identity_mat4(tr: math::Mat4) -> boolean {
   mm = tr.m;
-  mm[0] == 1.0 && mm[1] == 0.0 && mm[2] == 0.0 && mm[3] == 0.0 &&
-  mm[4] == 0.0 && mm[5] == 1.0 && mm[6] == 0.0 && mm[7] == 0.0 &&
-  mm[8] == 0.0 && mm[9] == 0.0 && mm[10] == 1.0 && mm[11] == 0.0 &&
-  mm[12] == 0.0 && mm[13] == 0.0 && mm[14] == 0.0 && mm[15] == 1.0
+  // `?? 0.0` is OOB-lint suppression — `Mat4.m` is always 16 floats by
+  // construction (see math::mat4_identity et al.); the fallback path is
+  // unreachable.
+  (mm[0] ?? 0.0) == 1.0 && (mm[1] ?? 0.0) == 0.0 && (mm[2] ?? 0.0) == 0.0 && (mm[3] ?? 0.0) == 0.0 &&
+  (mm[4] ?? 0.0) == 0.0 && (mm[5] ?? 0.0) == 1.0 && (mm[6] ?? 0.0) == 0.0 && (mm[7] ?? 0.0) == 0.0 &&
+  (mm[8] ?? 0.0) == 0.0 && (mm[9] ?? 0.0) == 0.0 && (mm[10] ?? 0.0) == 1.0 && (mm[11] ?? 0.0) == 0.0 &&
+  (mm[12] ?? 0.0) == 0.0 && (mm[13] ?? 0.0) == 0.0 && (mm[14] ?? 0.0) == 0.0 && (mm[15] ?? 0.0) == 1.0
 }
 
 // Build a glTF "matrix" JSON property from a column-major Mat4.
@@ -248,7 +251,7 @@ fn glb_light_node_json(lt: scene::Light, li: integer) -> text {
     } else {
       half = 1.0 + dot_val;
       ax = dy; ay = -dx; az = 0.0;
-      inv_len = 1.0 / sqrt(ax * ax + ay * ay + az * az + half * half);
+      inv_len = 1.0 / sqrt(ax * ax + ay * ay + az * az + half * half) ?? 0.0;
       qx = (ax * inv_len) as single;
       qy = (ay * inv_len) as single;
       qz = (az * inv_len) as single;
@@ -268,13 +271,20 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
 
   // Build per-mesh material index: for each mesh, the material used by the
   // first node that references it.  In glTF 2.0, material lives on the mesh
-  // primitive (not on the node).
-  mesh_mat = [];
+  // primitive (not on the node).  Two-pass build so the indexed-assignment
+  // OOB lint stays quiet: first pre-fill a node→mesh lookup, then emit one
+  // entry per mesh by scanning the lookup.
+  mesh_mat: vector<integer> = [];
+  mm_i = 0;
   for _ in sc.meshes {
-    mesh_mat += [0];
-  }
-  for nd in sc.nodes {
-    mesh_mat[nd.mesh_idx] = nd.material_idx;
+    found = 0;
+    for nd in sc.nodes {
+      if nd.mesh_idx == mm_i {
+        found = nd.material_idx;
+      }
+    }
+    mesh_mat += [found];
+    mm_i = mm_i + 1;
   }
 
   n_lights = sc.lights.len();
@@ -352,7 +362,7 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
     acc_norm = mi * 4 + 1;
     acc_uv   = mi * 4 + 2;
     acc_idx  = mi * 4 + 3;
-    mat_idx  = mesh_mat[mi];
+    mat_idx  = mesh_mat[mi] ?? 0;
     result += "{{\"name\":\"{mename}\",\"primitives\":[{{\"attributes\":{{\"POSITION\":{acc_pos},\"NORMAL\":{acc_norm},\"TEXCOORD_0\":{acc_uv}}},\"indices\":{acc_idx},\"material\":{mat_idx}}}]}}";
     mi = mi + 1;
   }
@@ -394,7 +404,7 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
     norm_bytes = nv * 12;
     uv_bytes   = nv * 8;
     idx_bytes  = nidx * 4;
-    base = bin_offset[mi];
+    base = bin_offset[mi] ?? 0;
     off_norm = base + pos_bytes;
     off_uv   = base + pos_bytes + norm_bytes;
     off_idx  = base + pos_bytes + norm_bytes + uv_bytes;

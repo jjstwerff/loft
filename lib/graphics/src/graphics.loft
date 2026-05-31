@@ -65,7 +65,8 @@ pub fn set_pixel(self: Canvas, sx: integer, sy: integer, color: integer) {
 
 // Fill the entire canvas with a solid color.
 pub fn clear(self: Canvas, color: integer) {
-  for cl_i in 0..self.width * self.height {
+  cl_n = len(self.data);
+  for cl_i in 0..cl_n {
     self.data[cl_i] = color;
   }
 }
