@@ -143,8 +143,12 @@ only when `start_d_nr == 0` — so a prefix-restore path that supplies a
 non-zero `start_def` with CONST_STORE pre-populated is already
 structurally supported.
 
-**Recommendation:** ship Strategy 1 first (real win for repeated CLI
-runs, revives the format), then Strategy 2 (universal win).
+**Recommendation (revised after Step 0):** **skip Strategy 1, build
+Strategy 2.**  Step 0 measured codegen at ~0.5 ms vs parse at ~14.7 ms,
+so a whole-program `State` cache (which only skips codegen) saves
+almost nothing — the Step-0 RESULTS block says so directly.  Live
+sequence: Step 0 (done) → Step 2 → Step 3 → Step 4 → Step 5.  Strategy 1
+/ Step 1 are kept below as superseded context only.
 
 ---
 
@@ -236,7 +240,12 @@ here are from reproducible `LOFT_TIMING=1` runs (two 5-run batches).
 
 ---
 
-### Step 1 — Whole-program cache with a correct key (Strategy 1)
+### Step 1 — Whole-program cache (SUPERSEDED — not being built)
+
+> **Dropped after Step 0.**  A whole-program `State` cache only skips
+> codegen (~0.5 ms measured); the dominant ~14.7 ms is parse, which it
+> does not touch.  Kept here as context for the retired-Phase-D format;
+> the live path is Step 2 → Step 3.  Do not implement.
 
 **Design.** Re-add `src/cache.rs` from `864dafe^` with two fixes:
 (a) restore hashing via the `sha2` crate (ungate it for this feature)
@@ -289,13 +298,25 @@ recursive `Value`/`Type` graph, and the recursion is `Box<Self>`, not
 index-based as an earlier draft of this step wrongly claimed).
 
 **Stop-gap decision (user, 2026-05-31): a per-library JSON snapshot is
-fine as the interim format.**  Serialise `Data` by hand using **loft's
-own database JSON** (`write_json_escaped` + the `src/database/` path for
-encode, `src/json.rs::parse` → `Parsed` tree for decode) — never serde /
-bincode.  Emit the compiled stdlib prefix and the per-`use`d library
-segments as JSON, load them back, and rebuild native `Data`.
-Acknowledged second-class — JSON is re-parsed, not mmap'd, and gets
-discarded — but it ships the cold-start win without the IR rewrite.
+fine as the interim format.**  Serialise `Data` by hand to JSON, decode
+with **loft's own JSON parser** (`src/json.rs::parse` → `Parsed` tree) —
+never serde / bincode.  Emit the compiled stdlib prefix and the
+per-`use`d library segments as JSON, load them back, and rebuild native
+`Data`.  Acknowledged second-class — JSON is re-parsed, not mmap'd, and
+gets discarded — but it ships the cold-start win without the IR rewrite.
+
+**What "loft's own JSON" reuses — and what it does NOT (corrected
+2026-05-31).**  Decode is genuine reuse: `json::parse` turns the cache
+file into a `Parsed` tree for free.  **Encode is net-new code.**  The
+database JSON path (`Stores::show_json`, `src/database/format.rs`) walks
+**store records via `DbRef`** — it cannot see native `Data` /
+`Vec<Definition>` / `Box<Value>`, which is where the IR actually lives.
+So the writer is a hand-rolled walk over the native `Value` (34
+variants) / `Type` (24) / `Definition` graph that emits JSON text,
+reusing only `write_json_escaped` (`src/database/format.rs:1215`) for
+string fields.  The database is lending one escape helper, not doing the
+serialization.  (When plan-54 moves the IR into store records, *that*
+encode becomes the database path; until then it is a native-IR walk.)
 
 **Per-library JSON is a build-time side deliverable, and that buys
 first-landing speed (user nuance, 2026-05-31).**  The snapshot is not
@@ -314,13 +335,34 @@ first-landing, mmap-bundle for repeats.
 **Why per-library JSON composes (where per-library mmap can't):** the
 load path **replays `add_def` in order into the current `Data`**, which
 *is* a relocation.  So a library's JSON must encode cross-references
-**by name or source-relative position, never by absolute global
-`def_nr`** (those depend on parse-order prefix).  Given that, the rebuild
-remaps every reference to the live global index as it appends — a
-library JSON drops into whatever prefix is already loaded.  This is
-exactly the property plan-54's mmap path *lacks* (absolute offsets,
-fixed at snapshot time → whole-prefix only), and the reason per-library
-is a JSON-stop-gap capability, not an mmap one.
+**by name, never by absolute global `def_nr`** (those depend on
+parse-order prefix).  Given that, the rebuild remaps every reference to
+the live global index as it appends — a library JSON drops into whatever
+prefix is already loaded.  This is exactly the property plan-54's mmap
+path *lacks* (absolute offsets, fixed at snapshot time → whole-prefix
+only), and the reason per-library is a JSON-stop-gap capability, not an
+mmap one.
+
+**The relocation map — every absolute index must be emitted as a name
+and re-resolved on load.**  These are the reference kinds the encoder
+must rewrite (audit before implementing; grep `def_nr` / `known_type`
+producers in `src/data.rs`):
+
+| In native `Data` | Emitted in JSON as | Re-resolved on load by |
+|---|---|---|
+| `Value::Call(u32 def_nr, …)` | callee qualified name | `data.def_nr(name)` after the callee is loaded |
+| `Type::Reference(u32, …)`, `Type::Enum(u32, …)`, `Routine/Sorted/Index/Spacial/Hash(u32, …)` | target type's qualified name | `data.def_nr(name)` |
+| `Definition.known_type: u16` | the type def's name (or `u16::MAX` sentinel kept as-is) | re-derive after `fill_database` registers the type |
+| `Definition.parent: u32`, `closure_record: u32`, `bounds: Vec<u32>` | parent/record/bound names | `data.def_nr(name)` |
+| `Value::Enum(u8, u16 known_type)` | type name + the u8 ordinal (ordinal is intra-type, stable) | name → `known_type`; ordinal verbatim |
+| `Value::Var(u16)`, `Set(u16,…)`, `Block.scope` etc. | **verbatim** — these are intra-function slot/scope indices, not global; stable within a `Definition` | no remap |
+
+Forward references (callee parsed after caller) resolve the same way the
+parser already handles them: emit the name, and if `def_nr(name)` is not
+yet present at load time, defer via the existing `deferred_unknown` /
+`resolve_deferred_unknowns` mechanism (`src/parser/mod.rs`).  The
+load path therefore mirrors the two-pass parse: append all defs (names
+resolvable), then a reconcile pass rewrites any still-pending name → index.
 
 It is **superseded for the bundle/stdlib path by**
 [plan-54 `Data` as a store](../../future/54-data-as-store/README.md),
@@ -333,16 +375,24 @@ stop-gap as the cross-arch / first-landing fallback even after mmap
 lands.)
 
 **Implementation.**
-- Emit `Data` → JSON via the database JSON path (no serde); key the
+- **Encode (net-new):** a hand-rolled walk over native `Value` / `Type`
+  / `Definition` emitting JSON, reusing `write_json_escaped` for
+  strings.  Every global `def_nr` / `known_type` reference is emitted as
+  a **name** per the relocation map above — not as a raw index.  Key the
   file with `stdlib_cache_key` (already built, `src/cache.rs`).
-- Load JSON → `Parsed` (`src/json.rs::parse`) → rebuild native `Data`
-  (re-`add_def` in parse order; derived indices `def_names` /
-  `possible` / `operators` / `caller_index` rebuild from the
-  definitions — never stored).
-- Field audit before encode: `Block.name` / `Definition.synthetic`
-  (`&'static str` → emit as string, intern on load); `OnceLock`
-  caller-index (skip + rebuild); any `DbRef` into CONST_STORE
-  (re-derive on load).
+- **Decode (reuse):** JSON → `Parsed` (`src/json.rs::parse`) → rebuild
+  native `Data` by replaying `add_def` in order, then resolving each
+  emitted name to the live `def_nr` (deferring forward refs through the
+  existing `resolve_deferred_unknowns` path).  Derived indices
+  (`def_names` / `possible` / `operators` / `caller_index`) rebuild from
+  the definitions — never stored.
+- **Field audit before encode:** `Block.name` / `Definition.synthetic`
+  (`&'static str` → emit as string, intern on load via `Box::leak`);
+  `OnceLock` caller-index (skip + rebuild); `Definition.const_ref:
+  Option<DbRef>` into CONST_STORE (drop + re-derive when `build_const_vectors`
+  runs); `Definition.code_position` / `code_length` (codegen output —
+  recompute fresh, the ~0.5 ms is cheap, so the JSON carries IR only,
+  not bytecode).
 
 **Acceptance test.**
 ```
@@ -362,7 +412,8 @@ flag to revert.
 
 ### Step 3 — Stdlib-prefix cache (Strategy 2, the universal win)
 
-**Design.** Combine Step 1's `State` cache + Step 2's `Data` cache,
+**Design.** Use Step 2's `Data` cache (no Step-1 `State` cache —
+codegen is recomputed fresh, ~0.5 ms),
 keyed on **version + flags + `default/` content only** (user file
 excluded). Split point = `start_def` (`src/main.rs:2274`). Shared
 cache dir (`~/.cache/loft/stdlib-<key>.bin`), not beside the script.
@@ -435,7 +486,7 @@ cargo test cache_key_sensitivity
 #   no Instant/random in the hash)
 ```
 
-**Rollback.** Pure function; no runtime effect without Steps 1/3.
+**Rollback.** Pure function; no runtime effect without Step 3.
 
 ---
 
@@ -471,16 +522,16 @@ Expected: documented before/after (e.g. "1.72 s → X s / 100 runs, N×"),
 
 | Step | Effort | Ships value? | Blocks |
 |---|---|---|---|
-| 0 Phase attribution | XS | informs design | — |
-| 1 Whole-program cache | S | yes (repeated runs) | — |
-| 2 `Data` serialization | M | enabler | Step 3 |
+| 0 Phase attribution | XS | done — informs design | — |
+| ~~1 Whole-program cache~~ | — | **dropped** (saves only ~0.5 ms codegen; see Step 0) | — |
+| 2 `Data` JSON (encode-walk + name-replay decode) | M | enabler | Step 3 |
 | 3 Stdlib-prefix cache | M | **yes (universal)** | 2, 4 |
-| 4 Key completeness | S | correctness | 1, 3 |
-| 5 Default-on + closeout | XS | yes | 1-4 |
+| 4 Key completeness | S | correctness | 3 |
+| 5 Default-on + closeout | XS | yes | 2-4 |
 
-Total ≈ MH, matching the @PLAN28 Phase C estimate. Steps 0-1 are
-independently shippable and de-risk the rest; **Step 3 is the
-headline** — the universal cold-start win on the always-loaded `default`.
+Total ≈ M (Step 1 dropped). Step 2 (`Data` JSON) is the load-bearing
+enabler; **Step 3 is the headline** — the universal cold-start win on
+the always-loaded `default`.
 
 ## What "done" looks like
 
