@@ -52,6 +52,15 @@ parse-order prefixes* — never independent per-library files:
 arbitrary libs on demand.  Not needed — caching the whole bundle
 sidesteps it.
 
+**Interim stop-gap (precedes this plan):** @PLAN28 Step 2 ships a
+**per-library JSON snapshot** (loft's own database JSON, not serde —
+user-accepted 2026-05-31) that re-parses + rebuilds native `Data` on
+load.  Second-class (JSON is re-parsed, not mmap'd) but delivers the
+cold-start win without the IR rewrite.  This plan **supersedes** it:
+the store struct-enum format replaces JSON and turns the rebuild into a
+zero-copy mmap.  @PLAN28 builds the stop-gap format-agnostic so this
+plan swaps the encoder underneath without touching startup wiring.
+
 ## Why the global-index model is fine for this scope
 
 `Data.definitions` is one global `Vec`; core and every `use`d library
