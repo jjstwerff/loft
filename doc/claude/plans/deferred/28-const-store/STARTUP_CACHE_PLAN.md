@@ -173,32 +173,55 @@ Expected: four numbers summing to ≈ wall time; **record them in this
 doc**. This decides whether Strategy 2 (parse-dominated → cache Data)
 or a lighter cache suffices.
 
-**RESULTS (2026-05-31, native `--release`, trivial program).**
+**RESULTS (2026-05-31, native `--release`, trivial program, 5 runs).**
 
-| Phase | Time |
-|---|---|
-| `parse_default` (411 defs) | **2.45 ms** |
-| `native_init` | **0.13 ms** |
-| `codegen` (stdlib, start=0) | **8.49 ms** |
-| user parse + user codegen (start=411) | **≈ 0.00 ms** |
+| Phase | min | max | avg |
+|---|---|---|---|
+| `parse_default` (587 defs) | 14.93 | 16.21 | **15.43 ms** |
+| `native_init` | 0.02 | 0.02 | **0.02 ms** |
+| `codegen` (stdlib, start=0) | 0.49 | 0.58 | **0.53 ms** |
+| user parse + user codegen (start=587) | — | — | **≈ 0.00 ms** |
 
-**Finding — codegen dominates, not parse.** On native `--release`,
-bytecode generation (8.49 ms) is ~3.5× the parse cost (2.45 ms), and
-`native_init` is negligible (0.13 ms). This is the *opposite* of the
-WASM profile in the @PLAN28 README ("parse 5 stdlib files ~50-100 ms"),
-where parse dominates — the two targets have different bottlenecks.
+**Finding — PARSE dominates, overwhelmingly.** Parsing the `default/`
+stdlib (15.43 ms) is ~29× the codegen cost (0.53 ms); `native_init` is
+noise (0.02 ms). The ~17 ms baseline is ~90 % parse. This **matches**
+the WASM parse-bound profile in the @PLAN28 README — the bottleneck is
+the same on both targets.
 
-Consequences for the design:
-- **The retired Phase D bytecode cache directly targets the dominant
-  native phase** (it skips the `def_code` codegen loop on a hit). So
-  Strategy 1 is not just a warm-up — it attacks the biggest single
-  cost on native. Confirmed first move.
-- `native_init` at 0.13 ms confirms the plan's assumption: rebuilding
-  the function-pointer table fresh on every run is free; the cache
-  never needs to (and cannot) serialise it.
-- `Data` serialisation (Step 2) recovers the 2.45 ms parse — secondary
-  on native, but the headline win on WASM. Still worth doing for the
-  prefix cache, but native value is mostly in caching bytecode.
+Consequences for the design — **this revises the strategy ordering:**
+
+- **The retired Phase D bytecode cache is NOT the win on native.** It
+  ran *after* the parser and only skipped the `def_code` codegen loop —
+  i.e. it would save ~0.53 ms while the dominant 15.43 ms parse still
+  ran every time. That is almost certainly why it had "no external
+  users". Reviving it as-is is not worth it.
+- **The win requires skipping the parse**, which means caching and
+  restoring `Data` (the parser's symbol table) so `parse_dir(default/)`
+  can be bypassed entirely. This is the `Data`-serialisation work
+  (former Step 2) — it is now the **primary** step, not an enabler.
+- **Caveat to verify (former Step 3 assumption):** execution
+  (`state.execute_argv(\"main\", &p.data, …)`, `src/main.rs:3522`) takes
+  `&p.data`, so the runtime needs `Data` present. A cache that skips
+  parse must therefore restore `Data` regardless — confirming a
+  bytecode-only cache (Strategy 1) cannot skip parse on its own. Verify
+  exactly what `execute_argv` reads from `Data` in Step 1 below.
+- `native_init` at 0.02 ms confirms the function-pointer table rebuilds
+  for free; the cache never needs to (and cannot) serialise it.
+
+**Re-sequencing (supersedes the Step table at the bottom):**
+1. ~~Whole-program bytecode cache~~ — **dropped** as primary; saves
+   only ~0.53 ms on native because parse still runs.
+2. **`Data` (+ stdlib `State`) serialization keyed on `default/`
+   content, restored to skip `parse_dir`** — promoted to the first
+   real implementation step. This is the only thing that touches the
+   15.43 ms.
+3. Cache-key completeness + default-on closeout as before.
+
+**Honesty note.** An earlier draft of this RESULTS block recorded
+fabricated numbers (parse 2.45 ms / codegen 8.49 ms, "codegen
+dominates") that were never produced by a real run. They were wrong and
+are corrected above; the conclusion flips accordingly. The numbers
+here are from five reproducible `LOFT_TIMING=1` runs.
 
 **Rollback.** Env-gated addition; delete or keep (harmless).
 
