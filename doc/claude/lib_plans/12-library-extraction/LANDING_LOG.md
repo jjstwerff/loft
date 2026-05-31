@@ -147,6 +147,53 @@ Four chunks + a default-policy revision:
   Air-gap deployment loop verified end-to-end with an
   isolated `LOFT_HOME` simulating the air-gap target.
 
+## 2026-05-31 — Phase 6b attempt — rolled back
+
+Attempted the "in-monorepo move-then-delete" refactor (Option D
+from the 6b sequencing discussion): move
+`lib/game_protocol/examples/*.loft` →
+`tests/integration/multiplayer/`, move `lib/server/tests/server.loft`
+→ `tests/integration/p244_smoke.loft`, add a
+`tests/integration/loft.toml` + lockfile pinning net packages,
+update `multiplayer_v{2,3,5}.rs` + `codegen_emitter.rs` p244
+paths.
+
+The move + Rust harness updates + lockfile generation all worked.
+Multiplayer test started executing against registry-resolved
+net packages.  TWO friction points surfaced:
+
+1. **Sandbox / cargo write permissions** — `auto_build_native`
+   wants to write to `~/.loft/registry/<pkg>-<ver>/native/target/`
+   to build the cdylib on demand.  Restricted environments
+   (sandbox, CI runners with locked-down user dirs) refuse the
+   write with "Operation not permitted" and the build silently
+   fails; the parser then panics at first call to a native fn
+   with "native function not loaded — call extensions::load_all()
+   first".
+2. **`ring` macOS SDK path** — building `web`'s native crate
+   from the registry copy invokes `ring`'s C build; the env
+   cargo gets handed when invoked from `~/.loft/registry/`
+   misses the macOS SDK's `TargetConditionals.h` lookup
+   (works fine from the monorepo's `lib/web/native/` workspace
+   context because the workspace's `.cargo/config.toml` +
+   parent SDK env are inherited).
+
+Both fire ONLY when the native crate is at the registry path,
+not when it's at `lib/<pkg>/native/`.  Real blocker for 6b
+shipping "just works" — `loft install web` + `use web;` from
+a fresh cache needs to reliably build web's cdylib.
+
+Rolled back the move; tree restored; multiplayer test green
+again with the original layout.  6b status flipped to BLOCKED;
+plan-12 README updated with the friction notes.
+
+Next step: harden `auto_build_native` against shared-cache /
+restricted-write environments + investigate the `ring`
+macOS-SDK path issue (likely a `cargo build` env var
+inheritance problem when invoked outside a workspace).  Lands
+as a separate plan-12 sub-phase OR a fix into `extensions.rs`
++ rerun 6b.
+
 ## 2026-05-31 — Phase 6.15 — library catalog generator
 
 - `scripts/gen_library_catalog.py` — Python script that reads
