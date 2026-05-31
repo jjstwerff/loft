@@ -717,8 +717,10 @@ fn write_parforbody(out: &mut String, b: &ParForBody) {
     let _ = write!(out, ",\"stitch_id\":{}}}", b.stitch_id);
 }
 
-/// Parse a JSON string into a `Value`.  V1 decodes leaf variants; recursive
-/// variants return [`TypeDecodeError::Unsupported`] until V2–V4 wire them.
+/// Parse a JSON string into a `Value`.  V1 decodes leaf variants; V2 adds the
+/// recursive variants with `Value` / `Vec<Value>` / scalar payloads.  The
+/// remaining variants (`Block`/`Loop`/`Span`/`FnRef`/`ParFor`) return
+/// [`TypeDecodeError::Unsupported`] until V3–V4 wire them.
 ///
 /// # Errors
 /// Malformed JSON, wrong field shape, unknown tag, or a not-yet-wired
@@ -765,6 +767,20 @@ fn key_list(p: &Parsed) -> Result<Vec<Key>, TypeDecodeError> {
     }
 }
 
+/// Decode a JSON array of `Value` nodes (V2 — the recursive payload helper).
+fn value_list(p: &Parsed) -> Result<Vec<Value>, TypeDecodeError> {
+    if let Parsed::Array(items) = p {
+        items.iter().map(value_from_parsed).collect()
+    } else {
+        Err(TypeDecodeError::Shape("expected array".into()))
+    }
+}
+
+/// Decode the `Value` at object field `name`, boxed (V2 convenience).
+fn boxed(p: &Parsed, name: &str) -> Result<Box<Value>, TypeDecodeError> {
+    Ok(Box::new(value_from_parsed(field(p, name)?)?))
+}
+
 fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
     let tag = as_str(field(p, "k")?)?;
     Ok(match tag.as_str() {
@@ -785,10 +801,29 @@ fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
         "FnRefDnr" => Value::FnRefDnr(as_u16(field(p, "n")?)?),
         "TupleGet" => Value::TupleGet(as_u16(field(p, "var")?)?, as_u16(field(p, "idx")?)?),
         "Keys" => Value::Keys(key_list(field(p, "keys")?)?),
-        // ── recursive variants — wired in later chunks (V2–V4) ──
-        "Call" | "CallRef" | "Insert" | "Tuple" | "Parallel" | "Set" | "Return" | "Drop"
-        | "Yield" | "BreakWith" | "TuplePut" | "If" | "Iter" | "Span" | "Block" | "Loop"
-        | "FnRef" | "ParFor" => {
+        // ── recursive variants (V2): Value / Vec<Value> / scalar payloads ──
+        "Call" => Value::Call(as_u32(field(p, "d")?)?, value_list(field(p, "args")?)?),
+        "CallRef" => Value::CallRef(as_u16(field(p, "var")?)?, value_list(field(p, "args")?)?),
+        "Insert" => Value::Insert(value_list(field(p, "items")?)?),
+        "Tuple" => Value::Tuple(value_list(field(p, "items")?)?),
+        "Parallel" => Value::Parallel(value_list(field(p, "arms")?)?),
+        "Set" => Value::Set(as_u16(field(p, "var")?)?, boxed(p, "v")?),
+        "Return" => Value::Return(boxed(p, "v")?),
+        "Drop" => Value::Drop(boxed(p, "v")?),
+        "Yield" => Value::Yield(boxed(p, "v")?),
+        "BreakWith" => Value::BreakWith(as_u16(field(p, "n")?)?, boxed(p, "v")?),
+        "TuplePut" => {
+            Value::TuplePut(as_u16(field(p, "var")?)?, as_u16(field(p, "idx")?)?, boxed(p, "v")?)
+        }
+        "If" => Value::If(boxed(p, "cond")?, boxed(p, "t")?, boxed(p, "f")?),
+        "Iter" => Value::Iter(
+            as_u16(field(p, "var")?)?,
+            boxed(p, "create")?,
+            boxed(p, "next")?,
+            boxed(p, "init")?,
+        ),
+        // ── recursive variants — wired in later chunks (V3–V4) ──
+        "Span" | "Block" | "Loop" | "FnRef" | "ParFor" => {
             return Err(TypeDecodeError::Unsupported(tag));
         }
         other => return Err(TypeDecodeError::UnknownTag(other.to_string())),
@@ -1117,13 +1152,73 @@ mod tests {
         }
     }
 
-    /// Recursive tags decode to `Unsupported` (not `UnknownTag`) until V2–V4.
+    /// V2 round-trips the recursive variants whose payload is only
+    /// `Value` / `Vec<Value>` / scalars (Block/Loop/Span/FnRef/ParFor wait
+    /// for V3–V4).  Nesting is exercised so the recursion is real.
     #[test]
-    fn value_recursive_tags_are_unsupported_for_now() {
-        let json = value_to_json(&Value::Set(1, Box::new(Value::Int(2))));
+    fn value_recursive_round_trip() {
+        let samples = [
+            Value::Call(5, vec![Value::Int(1), Value::Var(0)]),
+            Value::Call(0, vec![]),
+            Value::CallRef(2, vec![Value::Null]),
+            Value::Insert(vec![Value::Int(1), Value::Int(2)]),
+            Value::Tuple(vec![Value::Boolean(true), Value::Text("x".into())]),
+            Value::Parallel(vec![Value::Var(1), Value::Var(2)]),
+            Value::Set(3, Box::new(Value::Int(9))),
+            Value::Return(Box::new(Value::Null)),
+            Value::Drop(Box::new(Value::Var(0))),
+            Value::Yield(Box::new(Value::Int(7))),
+            Value::BreakWith(2, Box::new(Value::Boolean(false))),
+            Value::TuplePut(1, 4, Box::new(Value::Int(3))),
+            Value::If(
+                Box::new(Value::Boolean(true)),
+                Box::new(Value::Call(1, vec![Value::Int(0)])),
+                Box::new(Value::Set(2, Box::new(Value::Int(5)))),
+            ),
+            Value::Iter(
+                3,
+                Box::new(Value::Var(0)),
+                Box::new(Value::Call(9, vec![])),
+                Box::new(Value::Null),
+            ),
+        ];
+        for v in &samples {
+            let json = value_to_json(v);
+            let back = value_from_json(&json)
+                .unwrap_or_else(|e| panic!("decode failed for {json}: {e:?}"));
+            assert_eq!(&back, v, "round trip mismatch via {json}");
+        }
+    }
+
+    /// Pin the exact emitted JSON for a representative recursive variant.
+    #[test]
+    fn value_golden_recursive_format() {
+        assert_eq!(
+            value_to_json(&Value::Call(5, vec![Value::Int(1), Value::Var(0)])),
+            r#"{"k":"Call","d":5,"args":[{"k":"Int","n":1},{"k":"Var","n":0}]}"#
+        );
+        assert_eq!(
+            value_to_json(&Value::Set(3, Box::new(Value::Int(9)))),
+            r#"{"k":"Set","var":3,"v":{"k":"Int","n":9}}"#
+        );
+        assert_eq!(
+            value_to_json(&Value::If(
+                Box::new(Value::Boolean(true)),
+                Box::new(Value::Int(1)),
+                Box::new(Value::Int(0)),
+            )),
+            r#"{"k":"If","cond":{"k":"Boolean","b":true},"t":{"k":"Int","n":1},"f":{"k":"Int","n":0}}"#
+        );
+    }
+
+    /// Variants still deferred to V3–V4 decode to `Unsupported` (not
+    /// `UnknownTag`) — they are valid tags whose decoder is not wired yet.
+    #[test]
+    fn value_v3_v4_tags_are_unsupported_for_now() {
+        let json = value_to_json(&Value::FnRef(2, 1, Box::new(Type::Boolean)));
         assert_eq!(
             value_from_json(&json),
-            Err(TypeDecodeError::Unsupported("Set".to_string()))
+            Err(TypeDecodeError::Unsupported("FnRef".to_string()))
         );
     }
 
