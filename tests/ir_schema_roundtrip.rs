@@ -19,14 +19,15 @@
 //!   * `Attribute` / `Definition` — re-encode equality (encode → decode →
 //!     encode is stable), since neither derives PartialEq.
 //!
-//! What this does NOT prove (later steps):
+//! The `Definition` codec includes the per-function **variable table** (C4):
+//! debug symbols + each variable's final `stack_pos` (the fields codegen
+//! reads).  Re-encode equality therefore also covers the variable table.
+//!
+//! What this does NOT prove (later step):
 //!   * S3 equivalence — that a decoded `Data` recompiles to byte-identical
 //!     bytecode.  This test is codec self-consistency on real data, not
-//!     end-to-end snapshot correctness.
-//!   * The function-body **variable table** (debug symbols) is intentionally
-//!     not part of the C2 Definition codec, so Definition re-encode equality
-//!     covers only the encoded portable-IR subset (which is the point: that
-//!     subset is what the snapshot stores; slots/vars are recomputed).
+//!     end-to-end snapshot correctness.  (Deferred — manual readable-output
+//!     inspection is the current verification path.)
 
 mod common;
 

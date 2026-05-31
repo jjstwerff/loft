@@ -1094,6 +1094,59 @@ fn write_definition(out: &mut String, d: &Definition) {
     // synthetic: Option<&'static str>; reasons are non-empty idents → "" = None.
     out.push_str(",\"synthetic\":");
     write_str(out, d.synthetic.unwrap_or(""));
+    // variables (C4): the per-function variable table as DEBUG SYMBOLS + the
+    // final stack_pos.  Only the fields codegen reads are stored (see the
+    // snapshot seam in src/variables/mod.rs).  Empty for type-level defs.
+    out.push_str(",\"variables\":");
+    write_variables(out, &d.variables);
+    out.push('}');
+}
+
+/// Encode the per-function variable table (C4): the codegen-read fields of
+/// each `Variable`, plus the `names` lookup map and `inline_ref_vars` set.
+/// The function's own `name`/`file` are NOT stored — they equal the owning
+/// `Definition.name` / `position.file` (set at `add_def`) and are reconstructed
+/// on decode; codegen uses them only for diagnostics.
+fn write_variables(out: &mut String, f: &crate::variables::Function) {
+    out.push_str("{\"vars\":[");
+    for i in 0..f.snapshot_len() {
+        if i > 0 {
+            out.push(',');
+        }
+        let v = f.snapshot_var(i);
+        out.push_str("{\"name\":");
+        write_str(out, v.name);
+        out.push_str(",\"type_def\":");
+        write_type(out, v.type_def);
+        let _ = write!(
+            out,
+            ",\"stack_pos\":{},\"uses\":{},\"argument\":{},\"stack_allocated\":{},\"skip_free\":{},\"captured\":{},\"caller_hidden_buf\":{}}}",
+            v.stack_pos,
+            v.uses,
+            v.argument,
+            v.stack_allocated,
+            v.skip_free,
+            v.captured,
+            v.caller_hidden_buf
+        );
+    }
+    out.push_str("],\"names\":[");
+    // Sort the names map by var_nr for a deterministic emission (HashMap
+    // iteration order is otherwise unstable → would break golden / re-encode).
+    let mut names = f.snapshot_names();
+    names.sort_by_key(|&(_, nr)| nr);
+    for (i, (name, nr)) in names.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"name\":");
+        write_str(out, name);
+        let _ = write!(out, ",\"nr\":{nr}}}");
+    }
+    out.push_str("],\"inline_refs\":");
+    let mut refs = f.snapshot_inline_refs();
+    refs.sort_unstable();
+    write_u16_list(out, &refs);
     out.push('}');
 }
 
@@ -1185,6 +1238,50 @@ fn field_group_list(p: &Parsed) -> Result<Vec<LinkedFieldGroup>, TypeDecodeError
     }
 }
 
+/// Decode a per-function variable table (C4).  `fn_name` / `fn_file` are the
+/// owning definition's name / source file — the `Function`'s own name/file are
+/// not stored (they equal these).
+fn variables_from_parsed(
+    p: &Parsed,
+    fn_name: &str,
+    fn_file: &str,
+) -> Result<crate::variables::Function, TypeDecodeError> {
+    let vars_arr = field(p, "vars")?;
+    let Parsed::Array(items) = vars_arr else {
+        return Err(TypeDecodeError::Shape("variables.vars: expected array".into()));
+    };
+    let mut vars = Vec::with_capacity(items.len());
+    for it in items {
+        vars.push(crate::variables::RestoredVar {
+            name: as_str(field(it, "name")?)?,
+            type_def: type_from_parsed(field(it, "type_def")?)?,
+            stack_pos: as_u16(field(it, "stack_pos")?)?,
+            uses: as_u16(field(it, "uses")?)?,
+            argument: as_bool(field(it, "argument")?)?,
+            stack_allocated: as_bool(field(it, "stack_allocated")?)?,
+            skip_free: as_bool(field(it, "skip_free")?)?,
+            captured: as_bool(field(it, "captured")?)?,
+            caller_hidden_buf: as_bool(field(it, "caller_hidden_buf")?)?,
+        });
+    }
+    let names_arr = field(p, "names")?;
+    let Parsed::Array(name_items) = names_arr else {
+        return Err(TypeDecodeError::Shape("variables.names: expected array".into()));
+    };
+    let mut names = Vec::with_capacity(name_items.len());
+    for it in name_items {
+        names.push((as_str(field(it, "name")?)?, as_u16(field(it, "nr")?)?));
+    }
+    let inline_refs = dep_list(field(p, "inline_refs")?)?;
+    Ok(crate::variables::Function::from_snapshot(
+        fn_name,
+        fn_file,
+        vars,
+        names,
+        inline_refs,
+    ))
+}
+
 fn definition_from_parsed(p: &Parsed) -> Result<Definition, TypeDecodeError> {
     let name = as_str(field(p, "name")?)?;
     let position = position_from_parsed(field(p, "position")?)?;
@@ -1198,10 +1295,12 @@ fn definition_from_parsed(p: &Parsed) -> Result<Definition, TypeDecodeError> {
         .collect();
     let forced = as_u32(field(p, "forced_size")?)? as u8;
     let synthetic_s = as_str(field(p, "synthetic")?)?;
+    // variables (C4): the per-function debug-symbol table.  The function's
+    // name/file equal this def's name/position.file (set at add_def), so they
+    // are reconstructed here rather than stored.
+    let variables = variables_from_parsed(field(p, "variables")?, &name, &position.file)?;
     Ok(Definition {
-        // variables (Function): reconstructed empty — correct for type-level
-        // defs; function-body variable tables are the next slice (C-functions).
-        variables: crate::variables::Function::new(&name, &position.file),
+        variables,
         attr_names,
         // codegen-derived: recomputed by byte_code_from on load.
         code_position: 0,
